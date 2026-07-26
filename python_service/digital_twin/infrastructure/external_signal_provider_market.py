@@ -52,6 +52,16 @@ def dart_document_text(raw: object, limit: int) -> str:
 
 
 class ExternalSignalMarketMixin:
+    def fred_timeout_seconds(self) -> float:
+        # FRED periodically exceeds the generic fast-quote timeout. It runs
+        # in the collection path, never inline in the reasoning worker.
+        return self.provider_timeout_seconds(
+            "externalFredTimeoutSeconds",
+            8.0,
+            minimum=2.0,
+            maximum=20.0,
+        )
+
     def dart_document_text_enabled(self) -> bool:
         return str(self.settings.get("externalDartDocumentTextEnabled") or "0").strip().lower() not in {"0", "false", "no", "off", "disabled"}
 
@@ -128,6 +138,7 @@ class ExternalSignalMarketMixin:
         )
         macro = signals.setdefault("macro", {})
         macro["series"] = {}
+        timeout_seconds = self.fred_timeout_seconds()
         for series_id in series_ids:
             try:
                 def fetch_series():
@@ -138,7 +149,14 @@ class ExternalSignalMarketMixin:
                         "limit": "2",
                         "sort_order": "desc",
                     })
-                    payload = self.fetch_json(url, {"Accept": "application/json"})
+                    payload = self.fetch_json_with_timeout(
+                        url,
+                        {"Accept": "application/json"},
+                        "externalFredTimeoutSeconds",
+                        fallback_timeout=timeout_seconds,
+                        minimum_timeout=2.0,
+                        maximum_timeout=20.0,
+                    )
                     observations = payload.get("observations") if isinstance(payload.get("observations"), list) else []
                     latest = next((item for item in observations if number(item.get("value"))), None)
                     if not latest:

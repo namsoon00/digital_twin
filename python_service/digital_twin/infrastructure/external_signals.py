@@ -48,6 +48,9 @@ class ExternalSignalProvider(
         self.settings = settings or runtime_settings()
         self.cache = cache or external_signal_cache(self.settings)
         self.evidence_store = evidence_store or research_evidence_store(self.settings)
+        # Provider-specific timeouts use the standard transport only. Test
+        # and vendor adapters keep their existing two-argument contract.
+        self._uses_default_json_fetcher = fetch_json is None
         self.fetch_json = fetch_json or self.default_fetch_json
         self.fetch_text = fetch_text or self.default_fetch_text
         self.fetch_bytes = fetch_bytes or self.default_fetch_bytes

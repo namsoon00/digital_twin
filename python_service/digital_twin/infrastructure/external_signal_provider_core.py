@@ -24,6 +24,38 @@ from .external_signal_utils import (
 
 
 class ExternalSignalCoreMixin:
+    def provider_timeout_seconds(
+        self,
+        setting_key: str,
+        fallback: float,
+        minimum: float = 1.0,
+        maximum: float = 30.0,
+    ) -> float:
+        """Resolve a bounded timeout for one slower external provider."""
+        configured = number(self.settings.get(setting_key))
+        timeout = float(configured) if configured and configured > 0 else float(fallback)
+        return max(float(minimum), min(float(maximum), timeout))
+
+    def fetch_json_with_timeout(
+        self,
+        url: str,
+        headers: Dict[str, str] = None,
+        setting_key: str = "",
+        fallback_timeout: float = 3.0,
+        minimum_timeout: float = 1.0,
+        maximum_timeout: float = 30.0,
+    ) -> Dict[str, object]:
+        """Use a provider timeout without changing injected fetcher APIs."""
+        if getattr(self, "_uses_default_json_fetcher", False):
+            timeout = self.provider_timeout_seconds(
+                setting_key,
+                fallback_timeout,
+                minimum_timeout,
+                maximum_timeout,
+            )
+            return default_json_fetcher(url, headers, timeout=timeout)
+        return self.fetch_json(url, headers)
+
     def default_fetch_json(self, url: str, headers: Dict[str, str] = None) -> Dict[str, object]:
         timeout = number(self.settings.get("externalApiTimeoutSeconds")) or 3.0
         return default_json_fetcher(url, headers, timeout=timeout)
@@ -237,6 +269,7 @@ class ExternalSignalCoreMixin:
             "alphaRelatedMaxSymbols": str(self.settings.get("externalAlphaRelatedMaxSymbols") or "8"),
             "cryptoIds": symbol_list(self.settings.get("externalCryptoIds") or "bitcoin,ethereum") if self.external_api_enabled("externalCoinGeckoEnabled") else [],
             "fredSeries": symbol_list(self.settings.get("externalFredSeries") or "DGS10,DGS2,DFF") if self.external_api_enabled("externalFredEnabled") else [],
+            "fredTimeoutSeconds": str(self.settings.get("externalFredTimeoutSeconds") or "8"),
             "fxRates": str(self.settings.get("fxRates") or ""),
             "secSymbols": self.sec_symbols(positions),
             "dartSymbols": self.dart_symbols(positions),
@@ -245,6 +278,7 @@ class ExternalSignalCoreMixin:
             "secMax": str(self.settings.get("externalSecMaxSymbols") or "3"),
             "secDocumentText": str(self.settings.get("externalSecDocumentTextEnabled") or "1"),
             "secDocumentTextMaxChars": str(self.settings.get("externalSecDocumentTextMaxChars") or "6000"),
+            "secDocumentAccess": "contact-configured" if self.sec_document_access_configured() else "metadata-only",
             "newsProvider": self.news_provider(),
             "newsMax": str(self.settings.get("externalNewsMaxSymbols") or "3"),
             "newsLookbackHours": str(self.settings.get("externalNewsLookbackHours") or "48"),

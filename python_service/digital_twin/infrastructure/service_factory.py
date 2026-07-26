@@ -742,6 +742,7 @@ def build_flow_lens_service(settings=None) -> FlowLensService:
 
     flow_lens_external_settings["externalApiRetryAttempts"] = "1"
     flow_lens_external_settings["externalApiTimeoutSeconds"] = str(min(2.0, number(flow_lens_external_settings.get("externalApiTimeoutSeconds")) or 2.0))
+    flow_lens_external_settings["externalFredTimeoutSeconds"] = str(min(2.0, number(flow_lens_external_settings.get("externalFredTimeoutSeconds")) or 2.0))
     flow_lens_external_settings["externalAlphaMaxSymbols"] = capped_int("externalAlphaMaxSymbols", 1, 1)
     flow_lens_external_settings["externalSecMaxSymbols"] = capped_int("externalSecMaxSymbols", 1, 1)
     flow_lens_external_settings["externalDartMaxSymbols"] = capped_int("externalDartMaxSymbols", 1, 1)

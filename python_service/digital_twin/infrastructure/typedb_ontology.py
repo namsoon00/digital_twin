@@ -3092,7 +3092,7 @@ class ScopedABoxManifestMixin:
             self.write_query_max_bytes(settings),
         )
         queries = [*node_queries, *relation_queries]
-        batch_size = self.abox_write_transaction_query_count()
+        batch_size = self.abox_write_transaction_query_count(settings)
         query_durations_ms: List[float] = []
         for offset in range(0, len(queries), batch_size):
             query_batch = queries[offset: offset + batch_size]
@@ -3127,6 +3127,7 @@ class ScopedABoxManifestMixin:
             "insertedCountsByScope": inserted_counts_by_scope,
             "reusedCountsByScope": reused_counts_by_scope,
             "relationBatchSize": relation_batch_size,
+            "transactionQueryCount": batch_size,
             "transactionCount": (len(queries) + batch_size - 1) // batch_size if queries else 0,
             "slowestQueryMs": max(query_durations_ms) if query_durations_ms else 0.0,
             "totalQueryMs": round(sum(query_durations_ms), 1),
@@ -8075,13 +8076,14 @@ class TypeDBOntologyGraphRepository(GraphStoreOntologyRowMapperMixin, ScopedABox
         raw = (settings or runtime_settings()).get("typedbABoxWriteTransactionQueryCount")
         parsed = number_or_none(raw)
         if parsed is None:
-            parsed = 8
+            parsed = 16
         # A single ABox refresh can produce dozens of insert queries. Keeping
         # fifty of them in one transaction made the TypeDB writer hold its lock
         # for several minutes under live market load, which starved the next
-        # reasoning and notification cycle. The caller clears a partial ABox on
-        # failure, so short committed chunks are the safer operational boundary.
-        return max(1, min(50, int(parsed)))
+        # reasoning and notification cycle. Sixteen keeps commit overhead
+        # bounded without bringing back the long writer lock; larger explicit
+        # settings are capped at twenty-four for the same reason.
+        return max(1, min(24, int(parsed)))
 
     def abox_relation_batch_size(self, settings: Dict[str, object] = None) -> int:
         configured_settings = runtime_settings() if settings is None else settings

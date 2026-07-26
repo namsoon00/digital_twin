@@ -210,6 +210,28 @@ class OntologyProjectionStabilityTests(unittest.TestCase):
         self.assertEqual(300, runner.execution_timeout_guard_remaining_seconds(cursor.load()))
         self.assertEqual("open", runner.execution_timeout_guard_state(cursor.load())["status"])
 
+    def test_elapsed_execution_timeout_guard_is_non_blocking_but_not_false_success(self):
+        cursor = CursorStore({
+            "executionTimeoutGuard": {
+                "status": "open",
+                "consecutiveTimeouts": 1,
+                "lastTimeoutAt": "2026-07-21T23:00:00Z",
+                "retryAfterAt": "2026-07-21T23:05:00Z",
+                "retryAfterSeconds": 300,
+            },
+        })
+        runner = self.runner(cursor)
+
+        status = runner.status()
+        result = runner.run_once()
+
+        self.assertEqual("cooldown-elapsed", status["executionTimeoutGuard"]["status"])
+        self.assertFalse(status["executionTimeoutGuard"]["blocking"])
+        self.assertTrue(status["executionTimeoutGuardCooldownElapsed"])
+        self.assertEqual("idle", result["status"])
+        self.assertEqual("cooldown-elapsed", cursor.payload["executionTimeoutGuard"]["status"])
+        self.assertIn("lastCooldownElapsedAt", cursor.payload["executionTimeoutGuard"])
+
     def test_subjectless_global_event_is_reconciled_one_live_symbol_at_a_time(self):
         cursor = CursorStore()
         runner = self.runner(

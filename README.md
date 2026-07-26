@@ -40,8 +40,10 @@ COINGECKO_API_KEY=...
 FRED_API_KEY=...
 OPENDART_API_KEY=...
 EXTERNAL_FRED_SERIES=DGS10,DGS2,DFF
+EXTERNAL_FRED_TIMEOUT_SECONDS=8
 EXTERNAL_CRYPTO_IDS=bitcoin,ethereum
 EXTERNAL_DART_CORP_CODES="005930=00126380;000660=00164779"
+EXTERNAL_SEC_CONTACT_EMAIL=operations@example.com # SEC filing body collection only
 ```
 
 관계 분석 데이터를 그래프 저장소에 저장하려면 `.env.local`에 아래 값을 추가합니다. 그래프 저장소는 TypeDB 단일 경로로 동작합니다.

@@ -16,9 +16,24 @@ from digital_twin.domain.portfolio import Position
 from digital_twin.infrastructure.external_signal_utils import ExternalApiGuard, ExternalRateLimited
 from digital_twin.infrastructure.external_signals import ExternalSignalProvider
 from digital_twin.infrastructure.news_sources import NewsSourceGateway, default_text_fetcher, provider_empty_status
+from digital_twin.infrastructure.admin_preview import configured_runtime_flags, public_runtime_settings
 
 
 class RuntimeResilienceTests(unittest.TestCase):
+    def test_static_admin_preview_masks_sec_contact_configuration(self):
+        settings = {
+            "externalSecContactEmail": "operations@example.com",
+            "externalSecUserAgent": "OrbitAlpha operations@example.com",
+        }
+
+        public = public_runtime_settings(settings)
+        configured = configured_runtime_flags(settings)
+
+        self.assertNotIn("externalSecContactEmail", public)
+        self.assertNotIn("externalSecUserAgent", public)
+        self.assertTrue(configured["externalSecContactEmail"])
+        self.assertTrue(configured["externalSecUserAgent"])
+
     def test_cache_only_reasoning_path_reuses_stale_external_signals_without_fetching(self):
         class MemoryCache:
             def __init__(self):
@@ -246,6 +261,94 @@ class RuntimeResilienceTests(unittest.TestCase):
 
         self.assertNotIn("company_tickers", " ".join(calls))
         self.assertEqual({"MSTR", "STRC", "CPNG"}, set(signals["secFilings"]))
+
+    def test_sec_document_fetch_is_deferred_without_contact_email(self):
+        document_calls = []
+
+        def fetch_json(url, _headers=None):
+            if "submissions" in url:
+                return {
+                    "name": "Strategy",
+                    "filings": {"recent": {
+                        "form": ["10-Q"],
+                        "filingDate": ["2026-07-22"],
+                        "reportDate": ["2026-06-30"],
+                        "accessionNumber": ["0001050446-26-000001"],
+                        "primaryDocument": ["report.htm"],
+                    }},
+                }
+            if "companyfacts" in url:
+                return {"entityName": "Strategy", "facts": {"us-gaap": {}}}
+            raise AssertionError("unexpected SEC endpoint: " + url)
+
+        provider = ExternalSignalProvider(
+            settings={
+                "externalSecEnabled": "1",
+                "externalSecDocumentTextEnabled": "1",
+                "externalSecMaxSymbols": "1",
+                "externalApiRetryAttempts": "1",
+                "externalApiRateLimitSeconds": "0",
+            },
+            fetch_json=fetch_json,
+            fetch_text=lambda url, _headers=None: document_calls.append(url) or "<p>filing body</p>",
+        )
+        signals = {"secFilings": {}, "statuses": []}
+
+        provider.add_sec_edgar(
+            signals,
+            [Position(symbol="MSTR", name="Strategy", market="US", currency="USD")],
+        )
+
+        filing = signals["secFilings"]["MSTR"]["latestFiling"]
+        status = next(item for item in signals["statuses"] if item.get("configurationKey") == "externalSecContactEmail")
+        self.assertEqual([], document_calls)
+        self.assertEqual("deferred-contact", filing["documentTextQuality"])
+        self.assertTrue(status["dataUsable"])
+        self.assertTrue(status["deferred"])
+        self.assertFalse(status["documentTextDataUsable"])
+
+    def test_sec_contact_email_enables_document_fetch_with_compliant_user_agent(self):
+        headers = []
+
+        def fetch_json(url, _headers=None):
+            if "submissions" in url:
+                return {
+                    "name": "Strategy",
+                    "filings": {"recent": {
+                        "form": ["10-Q"],
+                        "filingDate": ["2026-07-22"],
+                        "reportDate": ["2026-06-30"],
+                        "accessionNumber": ["0001050446-26-000001"],
+                        "primaryDocument": ["report.htm"],
+                    }},
+                }
+            if "companyfacts" in url:
+                return {"entityName": "Strategy", "facts": {"us-gaap": {}}}
+            raise AssertionError("unexpected SEC endpoint: " + url)
+
+        provider = ExternalSignalProvider(
+            settings={
+                "externalSecEnabled": "1",
+                "externalSecDocumentTextEnabled": "1",
+                "externalSecContactEmail": "operations@example.com",
+                "externalSecMaxSymbols": "1",
+                "externalApiRetryAttempts": "1",
+                "externalApiRateLimitSeconds": "0",
+            },
+            fetch_json=fetch_json,
+            fetch_text=lambda _url, request_headers=None: headers.append(request_headers) or "<p>" + ("verified filing body " * 12) + "</p>",
+        )
+        signals = {"secFilings": {}, "statuses": []}
+
+        provider.add_sec_edgar(
+            signals,
+            [Position(symbol="MSTR", name="Strategy", market="US", currency="USD")],
+        )
+
+        filing = signals["secFilings"]["MSTR"]["latestFiling"]
+        self.assertEqual("body", filing["documentTextQuality"])
+        self.assertEqual(1, len(headers))
+        self.assertIn("operations@example.com", headers[0]["User-Agent"])
 
     def test_body_fetch_failure_is_reported_before_budget_exhaustion(self):
         self.assertEqual(

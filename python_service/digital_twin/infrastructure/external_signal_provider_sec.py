@@ -19,6 +19,11 @@ DEFAULT_SEC_COMPANY_CIKS = {
     "TSLA": "0001318605",
 }
 
+SEC_CONTACT_EMAIL_PATTERN = re.compile(
+    r"([A-Z0-9._%+\-]+@[A-Z0-9.\-]+\.[A-Z]{2,63})",
+    re.IGNORECASE,
+)
+
 
 class SecDocumentTextParser(HTMLParser):
     def __init__(self):
@@ -55,8 +60,29 @@ class ExternalSignalSecMixin:
     def sec_enabled(self) -> bool:
         return self.external_api_enabled("externalSecEnabled")
 
+    def configured_sec_user_agent(self) -> str:
+        return str(self.settings.get("externalSecUserAgent") or "").strip()
+
+    def sec_contact_email(self) -> str:
+        direct = str(self.settings.get("externalSecContactEmail") or "").strip()
+        direct_match = SEC_CONTACT_EMAIL_PATTERN.search(direct)
+        if direct_match:
+            return direct_match.group(1)
+        configured = self.configured_sec_user_agent()
+        if "local-contact" in configured.lower():
+            return ""
+        agent_match = SEC_CONTACT_EMAIL_PATTERN.search(configured)
+        return agent_match.group(1) if agent_match else ""
+
     def sec_user_agent(self) -> str:
-        return str(self.settings.get("externalSecUserAgent") or "DigitalTwin/1.0 local-contact").strip() or "DigitalTwin/1.0 local-contact"
+        configured = self.configured_sec_user_agent()
+        if configured and "local-contact" not in configured.lower() and SEC_CONTACT_EMAIL_PATTERN.search(configured):
+            return configured
+        contact = self.sec_contact_email()
+        if contact:
+            application = configured if configured and "local-contact" not in configured.lower() else "OrbitAlpha/1.0"
+            return application + " " + contact
+        return configured or "OrbitAlpha/1.0 local-contact"
 
     def sec_headers(self) -> Dict[str, str]:
         return {"Accept": "application/json", "User-Agent": self.sec_user_agent()}
@@ -70,10 +96,12 @@ class ExternalSignalSecMixin:
     def sec_document_text_max_chars(self) -> int:
         return max(500, min(20000, int(number(self.settings.get("externalSecDocumentTextMaxChars")) or 6000)))
 
+    def sec_document_access_configured(self) -> bool:
+        return bool(self.sec_contact_email())
+
     def sec_ticker_lookup_configured(self) -> bool:
         """SEC rejects anonymous generic agents; known CIKs remain usable."""
-        agent = self.sec_user_agent().lower()
-        return "@" in agent and "local-contact" not in agent
+        return self.sec_document_access_configured()
 
     def sec_symbol_key(self, symbol: str) -> str:
         return str(symbol or "").upper().replace(".", "-").strip()
@@ -103,6 +131,20 @@ class ExternalSignalSecMixin:
         symbols = self.limited_targets(signals, "SEC EDGAR", self.sec_symbols(positions), "externalSecMaxSymbols", 3)
         if not symbols:
             return
+        document_text_enabled = self.sec_document_text_enabled()
+        document_access_configured = self.sec_document_access_configured()
+        if document_text_enabled and not document_access_configured:
+            self.status(
+                signals,
+                "SEC EDGAR",
+                True,
+                "filing 본문 조회 보류 · SEC 연락처 이메일을 설정하면 원문 검증을 재개합니다.",
+                dataUsable=True,
+                deferred=True,
+                operationalAlert=False,
+                documentTextDataUsable=False,
+                configurationKey="externalSecContactEmail",
+            )
         mappings = {
             self.sec_symbol_key(symbol): self.normalize_cik(cik)
             for symbol, cik in DEFAULT_SEC_COMPANY_CIKS.items()
@@ -145,21 +187,30 @@ class ExternalSignalSecMixin:
 
                 submissions = self.guarded_call("SEC EDGAR", "submissions:" + symbol, fetch_submissions)
                 filing = self.latest_sec_filing(submissions, cik)
-                if filing and self.sec_document_text_enabled() and filing.get("url"):
-                    try:
-                        def fetch_filing_document():
-                            return self.fetch_text(str(filing["url"]), self.sec_document_headers())
-
-                        raw_document = self.guarded_call("SEC EDGAR", "filing-document:" + symbol, fetch_filing_document)
-                        document_text = sec_document_text(raw_document, self.sec_document_text_max_chars())
+                if filing and document_text_enabled and filing.get("url"):
+                    if not document_access_configured:
                         filing.update({
-                            "documentText": document_text,
-                            "documentTextPreview": document_text[:700],
-                            "documentTextQuality": "body" if len(document_text) >= 120 else "insufficient",
+                            "documentText": "",
+                            "documentTextPreview": "",
+                            "documentTextQuality": "deferred-contact",
+                            "documentTextStatus": "deferred-contact",
+                            "documentTextReason": "SEC 연락처 이메일 설정 후 원문을 수집합니다.",
                         })
-                    except Exception as error:  # noqa: BLE001 - retain filing metadata and surface document fallback.
-                        filing.update({"documentText": "", "documentTextPreview": "", "documentTextQuality": "unavailable"})
-                        self.status_for_error(signals, "SEC EDGAR", symbol + " filing document ", error)
+                    else:
+                        try:
+                            def fetch_filing_document():
+                                return self.fetch_text(str(filing["url"]), self.sec_document_headers())
+
+                            raw_document = self.guarded_call("SEC EDGAR", "filing-document:" + symbol, fetch_filing_document)
+                            document_text = sec_document_text(raw_document, self.sec_document_text_max_chars())
+                            filing.update({
+                                "documentText": document_text,
+                                "documentTextPreview": document_text[:700],
+                                "documentTextQuality": "body" if len(document_text) >= 120 else "insufficient",
+                            })
+                        except Exception as error:  # noqa: BLE001 - retain filing metadata and surface document fallback.
+                            filing.update({"documentText": "", "documentTextPreview": "", "documentTextQuality": "unavailable"})
+                            self.status_for_error(signals, "SEC EDGAR", symbol + " filing document ", error)
 
                 def fetch_facts():
                     return self.fetch_json("https://data.sec.gov/api/xbrl/companyfacts/CIK" + cik + ".json", self.sec_headers())

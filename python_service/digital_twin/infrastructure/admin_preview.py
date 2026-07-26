@@ -124,6 +124,7 @@ PUBLIC_SETTING_KEYS = [
     "externalCoinGeckoEnabled",
     "externalFredEnabled",
     "externalFredSeries",
+    "externalFredTimeoutSeconds",
     "externalCryptoIds",
     "externalAlphaMaxSymbols",
     "externalAlphaDailyRequestBudget",
@@ -131,7 +132,6 @@ PUBLIC_SETTING_KEYS = [
     "externalSecEnabled",
     "externalSecMaxSymbols",
     "externalSecCompanyCiks",
-    "externalSecUserAgent",
     "externalSecDocumentTextEnabled",
     "externalSecDocumentTextMaxChars",
     "externalDartEnabled",
@@ -288,6 +288,8 @@ def configured_runtime_flags(settings: Dict[str, str]) -> Dict[str, bool]:
         "coingeckoApiKey": configured(settings.get("coingeckoApiKey")),
         "fredApiKey": configured(settings.get("fredApiKey")),
         "opendartApiKey": configured(settings.get("opendartApiKey")),
+        "externalSecContactEmail": configured(settings.get("externalSecContactEmail")),
+        "externalSecUserAgent": configured(settings.get("externalSecUserAgent")),
     }
 
 
@@ -405,6 +407,7 @@ def admin_preview_config() -> Dict[str, object]:
                     {"key": "externalCoinGeckoEnabled", "label": "CoinGecko 수집 사용", "type": "toggle", "default": "1"},
                     {"key": "fredApiKey", "label": "FRED API Key", "type": "secret", "masked": True},
                     {"key": "externalFredEnabled", "label": "FRED 수집 사용", "type": "toggle", "default": "1"},
+                    {"key": "externalFredTimeoutSeconds", "label": "FRED 요청 시간 제한", "type": "number", "default": "8", "unit": "seconds"},
                     {"key": "opendartApiKey", "label": "OpenDART API Key", "type": "secret", "masked": True},
                     {"key": "externalDartEnabled", "label": "OpenDART 수집 사용", "type": "toggle", "default": "1"},
                     {"key": "externalDartDocumentTextEnabled", "label": "OpenDART 원문 본문 수집", "type": "toggle", "default": "1"},
@@ -429,6 +432,8 @@ def admin_preview_config() -> Dict[str, object]:
                     {"key": "externalFredSeries", "label": "FRED 지표", "type": "text"},
                     {"key": "externalCryptoIds", "label": "CoinGecko 코인 ID", "type": "text"},
                     {"key": "externalDartCorpCodes", "label": "OpenDART 종목 매핑", "type": "assignmentText"},
+                    {"key": "externalSecContactEmail", "label": "SEC 연락처 이메일", "type": "email"},
+                    {"key": "externalSecUserAgent", "label": "SEC User-Agent", "type": "text"},
                     {"key": "externalSecDocumentTextEnabled", "label": "SEC filing 본문 수집", "type": "toggle", "default": "1"},
                     {"key": "externalSecDocumentTextMaxChars", "label": "SEC filing 최대 글자", "type": "number", "default": "6000"},
                     {"key": "externalNewsMaxSymbols", "label": "뉴스 조회 종목 수", "type": "number", "default": "3"},

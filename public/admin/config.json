@@ -13,7 +13,7 @@
     "공유 미리보기에서는 서버 설정과 계정 DB 쓰기를 차단합니다."
   ],
   "localData": {
-    "generatedAt": "2026-07-21T21:55:30.485688Z",
+    "generatedAt": "2026-07-26T10:20:28.815298Z",
     "sources": {
       "settings": "data/settings.json",
       "settingsExists": true
@@ -91,7 +91,7 @@
       "dataFreshnessQuoteMaxAgeMinutes": "10",
       "dataFreshnessKisPriceMaxAgeMinutes": "3",
       "dataFreshnessKisMicrostructureMaxAgeMinutes": "2",
-      "dataFreshnessKisInvestorMaxAgeMinutes": "5",
+      "dataFreshnessKisInvestorMaxAgeMinutes": "30",
       "dataFreshnessExternalMaxAgeMinutes": "10",
       "dataFreshnessExternalEquityMaxAgeMinutes": "10",
       "dataFreshnessExternalCryptoMaxAgeMinutes": "10",
@@ -119,15 +119,21 @@
       "externalCoinGeckoEnabled": "1",
       "externalFredEnabled": "1",
       "externalFredSeries": "DGS10,DGS2,DFF",
+      "externalFredTimeoutSeconds": "8",
       "externalCryptoIds": "bitcoin,ethereum",
       "externalAlphaMaxSymbols": "3",
+      "externalAlphaDailyRequestBudget": "20",
+      "externalAlphaQuotaCooldownMinutes": "1440",
       "externalSecEnabled": "1",
       "externalSecMaxSymbols": "3",
       "externalSecCompanyCiks": "AAPL=0000320193\nMSFT=0000789019\nNVDA=0001045810\nTSLA=0001318605\nAMD=0000002488\nMSTR=0001050446",
-      "externalSecUserAgent": "DigitalTwin/1.0 local-contact",
+      "externalSecDocumentTextEnabled": "1",
+      "externalSecDocumentTextMaxChars": "6000",
       "externalDartEnabled": "1",
       "externalDartLookbackDays": "14",
       "externalDartCorpCodes": "005930=00126380\n000660=00164779\n035420=00266961",
+      "externalDartDocumentTextEnabled": "1",
+      "externalDartDocumentTextMaxChars": "6000",
       "externalNewsEnabled": "0",
       "externalNewsProvider": "auto",
       "externalNewsMaxSymbols": "3",
@@ -135,10 +141,15 @@
       "externalResearchEvidenceMaxItems": "8",
       "newsCollectionEnabled": "1",
       "newsCollectionIntervalSeconds": "60",
+      "newsCollectionRunBudgetSeconds": "45",
       "newsCollectionMaxSymbols": "3",
       "newsCollectionLookbackMinutes": "180",
       "newsCollectionPerSymbolLimit": "8",
       "newsCollectionProviders": "yahoo_search,yahoo_finance",
+      "newsCollectionKoreanProviders": "google_rss_kr",
+      "newsCollectionGoogleOriginalUrlResolveEnabled": "1",
+      "newsCollectionGoogleOriginalUrlMaxPerTarget": "2",
+      "newsCollectionGoogleOriginalUrlMaxPerRun": "6",
       "newsCollectionMinimumRelevanceState": "context",
       "newsDigestMinimumRelevanceState": "direct",
       "newsDigestMinimumMaterialityState": "notable",
@@ -152,6 +163,15 @@
       "newsAiAnalysisEnabled": "1",
       "newsAiAnalysisUseCodex": "1",
       "newsAiAnalysisTimeoutSeconds": "90",
+      "newsAiAnalysisInlineTimeoutSeconds": "8",
+      "investmentCalendarAiResearchEnabled": "1",
+      "investmentCalendarAiResearchRunCollection": "1",
+      "investmentCalendarAiResearchEvidenceLimit": "120",
+      "investmentCalendarAiResearchCandidateLimit": "50",
+      "investmentCalendarDiscoveryEnabled": "1",
+      "investmentCalendarDiscoveryIntervalHours": "12",
+      "investmentCalendarDiscoveryMaxSymbols": "12",
+      "investmentCalendarDiscoveryHorizonDays": "180",
       "investmentCalendarOfficialMacroSyncEnabled": "1",
       "investmentCalendarOfficialMacroSyncIntervalHours": "12",
       "investmentCalendarOfficialMacroSyncRateLimitSeconds": "600",
@@ -163,8 +183,27 @@
       "ontologyReasoningIntervalSeconds": "10",
       "ontologyReasoningBatchSize": "200",
       "ontologyReasoningMaxSymbolsPerRun": "3",
+      "ontologySharedMarketWorldAsyncProjectionEnabled": "1",
+      "ontologyReasoningMailboxEnabled": "1",
+      "ontologyReasoningMailboxBatchSize": "200",
+      "ontologyReasoningMailboxRetentionHours": "72",
+      "ontologyReasoningSourceFreshnessEnabled": "1",
+      "ontologyReasoningRealtimeEventMaxAgeMinutes": "15",
+      "ontologyReasoningResearchEventMaxAgeMinutes": "360",
+      "ontologyReasoningTelemetryHistoryLimit": "80",
       "ontologyReasoningMinIntervalSeconds": "180",
       "ontologyReasoningUrgentMinIntervalSeconds": "60",
+      "ontologyReasoningFairnessMaxWaitSeconds": "900",
+      "ontologyReasoningFairnessDrainEnabled": "1",
+      "ontologyReasoningQueueAlertEnabled": "1",
+      "ontologyReasoningQueueWarningAgeMinutes": "30",
+      "ontologyReasoningQueueCriticalAgeMinutes": "90",
+      "ontologyReasoningQueueWarningPendingCount": "100",
+      "ontologyReasoningQueueCriticalPendingCount": "200",
+      "ontologyReasoningQueueWarningOverdueSymbols": "3",
+      "ontologyReasoningQueueCriticalOverdueSymbols": "8",
+      "ontologyReasoningQueueConsecutiveObservations": "3",
+      "ontologyReasoningQueueAlertReminderMinutes": "60",
       "ontologyReasoningUrgentReviewLevels": "act,immediate",
       "ontologyLabEnabled": "1",
       "ontologyLabIntervalSeconds": "300",
@@ -173,6 +212,7 @@
       "materialityGateEnabled": "1",
       "marketMaterialityPriceChangePct": "0.6",
       "marketMaterialityTrendDistancePct": "2",
+      "marketMaterialityTrendDistanceChangePct": "1",
       "marketMaterialityVolumeRatio": "1.5",
       "dartDisclosureAiAnalysisEnabled": "1",
       "dartDisclosureAiUseCodex": "1",
@@ -187,7 +227,9 @@
       "alphaVantageApiKey": true,
       "coingeckoApiKey": true,
       "fredApiKey": true,
-      "opendartApiKey": true
+      "opendartApiKey": true,
+      "externalSecContactEmail": false,
+      "externalSecUserAgent": true
     },
     "notification": {
       "alertRules": [
@@ -223,6 +265,11 @@
         },
         {
           "key": "ontologyInferenceMissing",
+          "default": 1,
+          "unit": ""
+        },
+        {
+          "key": "ontologyReasoningQueue",
           "default": 1,
           "unit": ""
         },
@@ -508,6 +555,11 @@
           "unit": "minutes"
         },
         {
+          "key": "ontologyReasoningQueue",
+          "default": 60,
+          "unit": "minutes"
+        },
+        {
           "key": "monitorHeartbeat",
           "default": 10,
           "unit": "minutes"
@@ -675,6 +727,19 @@
           "default": "8"
         },
         {
+          "key": "externalAlphaDailyRequestBudget",
+          "label": "Alpha Vantage 일일 호출 예산",
+          "type": "number",
+          "default": "20"
+        },
+        {
+          "key": "externalAlphaQuotaCooldownMinutes",
+          "label": "Alpha Vantage 제한 후 대기",
+          "type": "number",
+          "default": "1440",
+          "unit": "minutes"
+        },
+        {
           "key": "externalAlphaFundamentalsEnabled",
           "label": "Alpha Vantage 펀더멘털 수집",
           "type": "toggle",
@@ -812,6 +877,13 @@
           "default": "1"
         },
         {
+          "key": "externalFredTimeoutSeconds",
+          "label": "FRED 요청 시간 제한",
+          "type": "number",
+          "default": "8",
+          "unit": "seconds"
+        },
+        {
           "key": "opendartApiKey",
           "label": "OpenDART API Key",
           "type": "secret",
@@ -822,6 +894,18 @@
           "label": "OpenDART 수집 사용",
           "type": "toggle",
           "default": "1"
+        },
+        {
+          "key": "externalDartDocumentTextEnabled",
+          "label": "OpenDART 원문 본문 수집",
+          "type": "toggle",
+          "default": "1"
+        },
+        {
+          "key": "externalDartDocumentTextMaxChars",
+          "label": "OpenDART 원문 최대 글자",
+          "type": "number",
+          "default": "6000"
         },
         {
           "key": "externalNewsEnabled",
@@ -959,6 +1043,28 @@
           "type": "assignmentText"
         },
         {
+          "key": "externalSecContactEmail",
+          "label": "SEC 연락처 이메일",
+          "type": "email"
+        },
+        {
+          "key": "externalSecUserAgent",
+          "label": "SEC User-Agent",
+          "type": "text"
+        },
+        {
+          "key": "externalSecDocumentTextEnabled",
+          "label": "SEC filing 본문 수집",
+          "type": "toggle",
+          "default": "1"
+        },
+        {
+          "key": "externalSecDocumentTextMaxChars",
+          "label": "SEC filing 최대 글자",
+          "type": "number",
+          "default": "6000"
+        },
+        {
           "key": "externalNewsMaxSymbols",
           "label": "뉴스 조회 종목 수",
           "type": "number",
@@ -996,10 +1102,17 @@
           "unit": "seconds"
         },
         {
-          "key": "newsCollectionMaxSymbols",
-          "label": "뉴스 수집 종목 수",
+          "key": "newsCollectionRunBudgetSeconds",
+          "label": "뉴스 수집 실행 시간 상한",
           "type": "number",
-          "default": "40"
+          "default": "45",
+          "unit": "seconds"
+        },
+        {
+          "key": "newsCollectionMaxSymbols",
+          "label": "한 주기에 수집할 뉴스 종목 수",
+          "type": "number",
+          "default": "3"
         },
         {
           "key": "newsCollectionLookbackMinutes",
@@ -1019,6 +1132,37 @@
           "label": "뉴스 수집 채널",
           "type": "text",
           "default": "yahoo_search,yahoo_finance"
+        },
+        {
+          "key": "newsCollectionKoreanProviders",
+          "label": "국내 종목 우선 뉴스 채널",
+          "type": "text",
+          "default": "google_rss_kr"
+        },
+        {
+          "key": "newsCollectionGoogleOriginalUrlResolveEnabled",
+          "label": "Google RSS 원문 주소 해석",
+          "type": "toggle",
+          "default": "1"
+        },
+        {
+          "key": "newsCollectionGoogleOriginalUrlMaxPerTarget",
+          "label": "종목별 Google 원문 주소 해석 상한",
+          "type": "number",
+          "default": "2"
+        },
+        {
+          "key": "newsCollectionGoogleOriginalUrlMaxPerRun",
+          "label": "실행당 Google 원문 주소 해석 상한",
+          "type": "number",
+          "default": "6"
+        },
+        {
+          "key": "newsCollectionArticleBodyMinimumChars",
+          "label": "투자 근거 최소 본문 길이",
+          "type": "number",
+          "default": "280",
+          "unit": "characters"
         },
         {
           "key": "newsCollectionMinimumRelevanceState",
@@ -1059,6 +1203,43 @@
             "trusted"
           ],
           "default": "standard"
+        },
+        {
+          "key": "researchClaimRequireVerifiedForInvestment",
+          "label": "검증된 주장만 투자 판단에 사용",
+          "type": "toggle",
+          "default": "1"
+        },
+        {
+          "key": "researchClaimOfficialVerificationEnabled",
+          "label": "뉴스-공식문서 자동 대조",
+          "type": "toggle",
+          "default": "1"
+        },
+        {
+          "key": "researchClaimMinimumIndependentSources",
+          "label": "교차검증 최소 독립 출처 수",
+          "type": "number",
+          "default": "2"
+        },
+        {
+          "key": "researchClaimCrossSourceWindowHours",
+          "label": "교차검증 시간 범위",
+          "type": "number",
+          "default": "72",
+          "unit": "hours"
+        },
+        {
+          "key": "researchClaimSimilarityThreshold",
+          "label": "주장 일치 기준",
+          "type": "number",
+          "default": "0.48"
+        },
+        {
+          "key": "researchClaimSourceRegistry",
+          "label": "출처 정책 레지스트리",
+          "type": "assignmentText",
+          "placeholder": "reuters=trusted,origin=reuters\nopendart=trusted,primary"
         },
         {
           "key": "investmentBrainOutcomeObservationMinutes",
@@ -1123,6 +1304,63 @@
           "unit": "seconds"
         },
         {
+          "key": "newsAiAnalysisInlineTimeoutSeconds",
+          "label": "수집 중 기사 AI 시간 상한",
+          "type": "number",
+          "default": "8",
+          "unit": "seconds"
+        },
+        {
+          "key": "investmentCalendarAiResearchEnabled",
+          "label": "뉴스 기반 일정 후보 분석",
+          "type": "toggle",
+          "default": "1"
+        },
+        {
+          "key": "investmentCalendarAiResearchRunCollection",
+          "label": "후보 분석 전 뉴스 수집",
+          "type": "toggle",
+          "default": "1"
+        },
+        {
+          "key": "investmentCalendarAiResearchEvidenceLimit",
+          "label": "후보 분석 근거 상한",
+          "type": "number",
+          "default": "120"
+        },
+        {
+          "key": "investmentCalendarAiResearchCandidateLimit",
+          "label": "후보 분석 저장 상한",
+          "type": "number",
+          "default": "50"
+        },
+        {
+          "key": "investmentCalendarDiscoveryEnabled",
+          "label": "정기 투자 일정 탐색",
+          "type": "toggle",
+          "default": "1"
+        },
+        {
+          "key": "investmentCalendarDiscoveryIntervalHours",
+          "label": "일정 탐색 주기",
+          "type": "number",
+          "default": "12",
+          "unit": "hours"
+        },
+        {
+          "key": "investmentCalendarDiscoveryMaxSymbols",
+          "label": "일정 탐색 종목 수",
+          "type": "number",
+          "default": "12"
+        },
+        {
+          "key": "investmentCalendarDiscoveryHorizonDays",
+          "label": "일정 탐색 범위",
+          "type": "number",
+          "default": "180",
+          "unit": "days"
+        },
+        {
           "key": "investmentCalendarOfficialMacroSyncEnabled",
           "label": "공식 거시 일정 동기화",
           "type": "toggle",
@@ -1179,10 +1417,73 @@
           "default": "3"
         },
         {
+          "key": "ontologyReasoningMailboxEnabled",
+          "label": "실시간 최신 상태 메일박스",
+          "type": "toggle",
+          "default": "1"
+        },
+        {
+          "key": "ontologyReasoningMailboxBatchSize",
+          "label": "메일박스 한 번 처리 수",
+          "type": "number",
+          "default": "200"
+        },
+        {
+          "key": "ontologyReasoningMailboxRetentionHours",
+          "label": "완료 메일박스 이력 보관",
+          "type": "number",
+          "default": "72",
+          "unit": "hours"
+        },
+        {
+          "key": "ontologyReasoningSourceFreshnessEnabled",
+          "label": "추론 입력 원천 시각 검증",
+          "type": "toggle",
+          "default": "1"
+        },
+        {
+          "key": "ontologyReasoningRealtimeEventMaxAgeMinutes",
+          "label": "실시간 입력 최대 경과",
+          "type": "number",
+          "default": "15",
+          "unit": "minutes"
+        },
+        {
+          "key": "ontologyReasoningResearchEventMaxAgeMinutes",
+          "label": "리서치 입력 최대 경과",
+          "type": "number",
+          "default": "360",
+          "unit": "minutes"
+        },
+        {
+          "key": "ontologyReasoningTelemetryHistoryLimit",
+          "label": "추론 실행 이력 보관 수",
+          "type": "number",
+          "default": "80"
+        },
+        {
           "key": "typedbNativeRuleTargetSymbolLimit",
           "label": "TypeDB 네이티브 추론 대상 종목 상한",
           "type": "number",
           "default": "1"
+        },
+        {
+          "key": "typedbNativeRuleTargetParallelism",
+          "label": "TypeDB 대상 종목 읽기 병렬 수",
+          "type": "number",
+          "default": "1"
+        },
+        {
+          "key": "typedbNativeRuleSelectionEnabled",
+          "label": "변경 범위 기반 RuleBox 선택",
+          "type": "toggle",
+          "default": "1"
+        },
+        {
+          "key": "typedbNativeRuleParallelism",
+          "label": "TypeDB 규칙 병렬 실행 수",
+          "type": "number",
+          "default": "4"
         },
         {
           "key": "ontologyReasoningMinIntervalSeconds",
@@ -1196,6 +1497,149 @@
           "label": "긴급 추론 최소 간격",
           "type": "number",
           "default": "60",
+          "unit": "seconds"
+        },
+        {
+          "key": "ontologyReasoningFairnessMaxWaitSeconds",
+          "label": "추론 대기 종목 우선 처리 시간",
+          "type": "number",
+          "default": "900",
+          "unit": "seconds"
+        },
+        {
+          "key": "ontologyReasoningFairnessDrainEnabled",
+          "label": "대기 한도 초과 종목 우선 처리",
+          "type": "toggle",
+          "default": "1"
+        },
+        {
+          "key": "ontologyReasoningFairnessDrainMinIntervalSeconds",
+          "label": "우선 처리 최소 보호 대기",
+          "type": "number",
+          "default": "60",
+          "unit": "seconds"
+        },
+        {
+          "key": "ontologyReasoningQueueAlertEnabled",
+          "label": "추론 대기 지연 운영 알림",
+          "type": "toggle",
+          "default": "1"
+        },
+        {
+          "key": "ontologyReasoningQueueWarningAgeMinutes",
+          "label": "대기 지연 경고 시간",
+          "type": "number",
+          "default": "30",
+          "unit": "minutes"
+        },
+        {
+          "key": "ontologyReasoningQueueCriticalAgeMinutes",
+          "label": "대기 심각 시간",
+          "type": "number",
+          "default": "90",
+          "unit": "minutes"
+        },
+        {
+          "key": "ontologyReasoningQueueWarningPendingCount",
+          "label": "대기 요청 경고 수",
+          "type": "number",
+          "default": "100"
+        },
+        {
+          "key": "ontologyReasoningQueueCriticalPendingCount",
+          "label": "대기 요청 심각 수",
+          "type": "number",
+          "default": "200"
+        },
+        {
+          "key": "ontologyReasoningQueueWarningOverdueSymbols",
+          "label": "대기 한도 초과 종목 경고 수",
+          "type": "number",
+          "default": "3"
+        },
+        {
+          "key": "ontologyReasoningQueueCriticalOverdueSymbols",
+          "label": "대기 한도 초과 종목 심각 수",
+          "type": "number",
+          "default": "8"
+        },
+        {
+          "key": "ontologyReasoningQueueConsecutiveObservations",
+          "label": "지연 연속 확인 횟수",
+          "type": "number",
+          "default": "3"
+        },
+        {
+          "key": "ontologyReasoningQueueAlertReminderMinutes",
+          "label": "지연 운영 알림 재전송",
+          "type": "number",
+          "default": "60",
+          "unit": "minutes"
+        },
+        {
+          "key": "ontologyReasoningBackpressureEnabled",
+          "label": "추론 런타임 기반 백프레셔",
+          "type": "toggle",
+          "default": "1"
+        },
+        {
+          "key": "ontologyReasoningBackpressureFactor",
+          "label": "백프레셔 런타임 배수",
+          "type": "number",
+          "default": "1.15"
+        },
+        {
+          "key": "ontologyReasoningBackpressureMaxSeconds",
+          "label": "백프레셔 최대 대기",
+          "type": "number",
+          "default": "900",
+          "unit": "seconds"
+        },
+        {
+          "key": "ontologyReasoningProcessIsolationEnabled",
+          "label": "추론 실행 프로세스 격리",
+          "type": "toggle",
+          "default": "1"
+        },
+        {
+          "key": "ontologyReasoningExecutionTimeoutSeconds",
+          "label": "추론 실행 시간 상한",
+          "type": "number",
+          "default": "240",
+          "unit": "seconds"
+        },
+        {
+          "key": "ontologyReasoningExecutionTimeoutGraceSeconds",
+          "label": "시간 상한 종료 유예",
+          "type": "number",
+          "default": "10",
+          "unit": "seconds"
+        },
+        {
+          "key": "ontologyReasoningExecutionTimeoutBackoffSeconds",
+          "label": "시간 초과 후 재시도 대기",
+          "type": "number",
+          "default": "300",
+          "unit": "seconds"
+        },
+        {
+          "key": "ontologyProjectionAuditStaleAfterSeconds",
+          "label": "중단 투영 감사 정리 기준(0=자동)",
+          "type": "number",
+          "default": "0",
+          "unit": "seconds"
+        },
+        {
+          "key": "ontologyReasoningMaintenanceEnabled",
+          "label": "유휴 온톨로지 정리",
+          "type": "toggle",
+          "default": "1"
+        },
+        {
+          "key": "ontologyReasoningMaintenanceIntervalSeconds",
+          "label": "그래프 정리 주기",
+          "type": "number",
+          "default": "300",
           "unit": "seconds"
         },
         {
@@ -1250,6 +1694,13 @@
           "unit": "%"
         },
         {
+          "key": "marketMaterialityTrendDistanceChangePct",
+          "label": "추세 이격 추가 변화",
+          "type": "number",
+          "default": "1",
+          "unit": "%p"
+        },
+        {
           "key": "marketMaterialityVolumeRatio",
           "label": "거래량 중요 배율",
           "type": "number",
@@ -1287,6 +1738,12 @@
           "default": "1"
         },
         {
+          "key": "ontologySharedMarketWorldAsyncProjectionEnabled",
+          "label": "공유 시장 비동기 갱신",
+          "type": "toggle",
+          "default": "1"
+        },
+        {
           "key": "typedbAddress",
           "label": "TypeDB 주소",
           "type": "text",
@@ -1303,6 +1760,12 @@
           "label": "TypeDB Password",
           "type": "secret",
           "masked": true
+        },
+        {
+          "key": "typedbAllowDefaultPassword",
+          "label": "로컬 TypeDB 기본 비밀번호 허용",
+          "type": "toggle",
+          "default": "0"
         },
         {
           "key": "typedbDatabase",
@@ -1330,6 +1793,44 @@
           "default": "2"
         },
         {
+          "key": "typedbProcessSchemaFunctionCacheEnabled",
+          "label": "TypeDB 함수 검증 프로세스 캐시",
+          "type": "toggle",
+          "default": "1"
+        },
+        {
+          "key": "typedbSchemaFunctionProbeIntervalSeconds",
+          "label": "TypeDB 함수 전수 검증 간격",
+          "type": "number",
+          "default": "300",
+          "unit": "seconds"
+        },
+        {
+          "key": "typedbSchemaFunctionProvisionBatchSize",
+          "label": "TypeDB 함수 배포 배치 규칙 수",
+          "type": "number",
+          "default": "3"
+        },
+        {
+          "key": "typedbSchemaFunctionProvisionTimeoutSeconds",
+          "label": "TypeDB 함수 배포 제한",
+          "type": "number",
+          "default": "30",
+          "unit": "seconds"
+        },
+        {
+          "key": "typedbStaticNodeBatchSize",
+          "label": "TypeDB 정적 온톨로지 노드 배치",
+          "type": "number",
+          "default": "1"
+        },
+        {
+          "key": "typedbStaticWriteTransactionQueryCount",
+          "label": "TypeDB 정적 온톨로지 트랜잭션 질의 수",
+          "type": "number",
+          "default": "16"
+        },
+        {
           "key": "typedbInferenceGenerationKeepCount",
           "label": "InferenceBox 보관 세대",
           "type": "number",
@@ -1337,13 +1838,13 @@
         },
         {
           "key": "typedbAutoResetEnabled",
-          "label": "TypeDB 자동 재생성",
+          "label": "TypeDB 용량 점검",
           "type": "toggle",
-          "default": "1"
+          "default": "0"
         },
         {
           "key": "typedbAgeResetEnabled",
-          "label": "TypeDB 보관 시간 초과 재생성",
+          "label": "TypeDB 보관 시간 점검",
           "type": "toggle",
           "default": "0"
         },
@@ -1359,6 +1860,13 @@
           "label": "TypeDB 최대 용량",
           "type": "number",
           "default": "2048",
+          "unit": "MB"
+        },
+        {
+          "key": "typedbMinimumFreeSpaceMb",
+          "label": "TypeDB 최소 디스크 여유",
+          "type": "number",
+          "default": "4096",
           "unit": "MB"
         }
       ]
@@ -1413,6 +1921,11 @@
           },
           {
             "key": "ontologyInferenceMissing",
+            "default": 1,
+            "unit": ""
+          },
+          {
+            "key": "ontologyReasoningQueue",
             "default": 1,
             "unit": ""
           },
@@ -1698,6 +2211,11 @@
             "unit": "minutes"
           },
           {
+            "key": "ontologyReasoningQueue",
+            "default": 60,
+            "unit": "minutes"
+          },
+          {
             "key": "monitorHeartbeat",
             "default": 10,
             "unit": "minutes"
@@ -1874,6 +2392,7 @@
       "localEndpoints": [
         "GET /api/ontology/experiments",
         "GET /api/ontology/experiments/status",
+        "GET /api/ontology/reasoning/status",
         "POST /api/ontology/experiments",
         "POST /api/ontology/experiments/once",
         "POST /api/ontology/experiments/suggest",
@@ -1972,5 +2491,5 @@
       ]
     }
   ],
-  "buildId": "1c99c0db6d1c"
+  "buildId": "766fd6fc1b19"
 }

@@ -2870,6 +2870,19 @@ class TypeDBOntologyRepositoryTests(unittest.TestCase):
             "typedbABoxDeleteBatchSize": "99999",
         }))
 
+    def test_typedb_abox_write_transaction_query_count_uses_bounded_default(self):
+        repository = TypeDBOntologyGraphRepository("127.0.0.1:1729")
+
+        self.assertEqual(16, repository.abox_write_transaction_query_count({
+            "typedbABoxWriteTransactionQueryCount": "",
+        }))
+        self.assertEqual(1, repository.abox_write_transaction_query_count({
+            "typedbABoxWriteTransactionQueryCount": "1",
+        }))
+        self.assertEqual(24, repository.abox_write_transaction_query_count({
+            "typedbABoxWriteTransactionQueryCount": "999",
+        }))
+
     def test_typedb_incremental_abox_cleanup_uses_small_bounded_defaults(self):
         repository = TypeDBOntologyGraphRepository("127.0.0.1:1729")
 

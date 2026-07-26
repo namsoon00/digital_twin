@@ -546,6 +546,53 @@ class OntologyReasoningRunner:
             return 0
         return self.seconds_until(str(guard.get("retryAfterAt") or ""))
 
+    def execution_timeout_guard_display_state(self, payload: Dict[str, object] = None) -> Dict[str, object]:
+        """Expose an expired cooldown as non-blocking without claiming recovery."""
+        guard = self.execution_timeout_guard_state(payload)
+        if (
+            str(guard.get("status") or "") == "open"
+            and self.execution_timeout_guard_remaining_seconds(payload) <= 0
+        ):
+            return {
+                **guard,
+                "status": "cooldown-elapsed",
+                "blocking": False,
+                "reason": "이전 TypeDB 추론 timeout의 재시도 대기가 끝났습니다. 다음 안전 투영이 성공하면 timeout 이력이 초기화됩니다.",
+            }
+        if guard:
+            return {**guard, "blocking": str(guard.get("status") or "") == "open"}
+        return {}
+
+    def mark_execution_timeout_cooldown_elapsed(self) -> Dict[str, object]:
+        """Persist elapsed timeout state before a new worker cycle starts.
+
+        This deliberately does not close the timeout incident. Only a verified
+        ABox/InferenceBox projection can do that in ``mark_successful_projection``.
+        """
+        if not hasattr(self.cursor_store, "load") or not hasattr(self.cursor_store, "save"):
+            return {}
+        payload = self.cursor_payload()
+        guard = self.execution_timeout_guard_state(payload)
+        if (
+            str(guard.get("status") or "") != "open"
+            or self.execution_timeout_guard_remaining_seconds(payload) > 0
+        ):
+            return {}
+        now = self.now_provider()
+        if now.tzinfo is None:
+            now = now.replace(tzinfo=timezone.utc)
+        elapsed = {
+            **guard,
+            "status": "cooldown-elapsed",
+            "retryAfterAt": "",
+            "retryAfterSeconds": 0,
+            "lastCooldownElapsedAt": now.astimezone(timezone.utc).isoformat().replace("+00:00", "Z"),
+            "reason": "이전 TypeDB 추론 timeout의 재시도 대기가 끝났습니다. 다음 안전 투영 성공 전까지 이력만 유지합니다.",
+        }
+        payload["executionTimeoutGuard"] = elapsed
+        self.save_cursor_payload(payload)
+        return elapsed
+
     def projection_circuit_remaining_seconds(self, payload: Dict[str, object] = None) -> int:
         state = self.projection_circuit_state(payload)
         return self.seconds_until(str(state.get("openUntil") or ""))
@@ -1936,7 +1983,14 @@ class OntologyReasoningRunner:
                 stages.get("aboxPersistenceMs") or stages.get("persistenceMs"),
                 0.0,
             )),
+            "ruleboxBootstrapMs": int(float_value(stages.get("ruleboxBootstrapMs"), 0.0)),
+            "pendingAboxActivationRecoveryMs": int(float_value(stages.get("pendingAboxActivationRecoveryMs"), 0.0)),
+            "scopedAboxIdentityMs": int(float_value(stages.get("scopedAboxIdentityMs"), 0.0)),
+            "activeAboxReadMs": int(float_value(stages.get("activeAboxReadMs"), 0.0)),
+            "projectionAuditCreateMs": int(float_value(stages.get("projectionAuditCreateMs"), 0.0)),
             "aboxChangedScopeQueryCount": int(float_value(stages.get("aboxChangedScopeQueryCount"), 0.0)),
+            "aboxChangedScopeTransactionCount": int(float_value(stages.get("aboxChangedScopeTransactionCount"), 0.0)),
+            "aboxChangedScopeTransactionQueryCount": int(float_value(stages.get("aboxChangedScopeTransactionQueryCount"), 0.0)),
             "aboxManifestVerificationReadCount": int(float_value(
                 stages.get("aboxManifestVerificationReadCount"),
                 0.0,
@@ -2383,7 +2437,10 @@ class OntologyReasoningRunner:
                 key: projection_runtime.get(key)
                 for key in [
                     "durationMs", "impactPlanningMs", "aboxPersistenceMs", "nativeInferenceMs",
-                    "aboxChangedScopeQueryCount", "aboxManifestVerificationReadCount",
+                    "ruleboxBootstrapMs", "pendingAboxActivationRecoveryMs", "scopedAboxIdentityMs",
+                    "activeAboxReadMs", "projectionAuditCreateMs", "aboxChangedScopeQueryCount",
+                    "aboxChangedScopeTransactionCount", "aboxChangedScopeTransactionQueryCount",
+                    "aboxManifestVerificationReadCount",
                     "aboxReusedPhysicalRowCount", "aboxInsertedNodeCount", "aboxInsertedRelationCount",
                     "status", "targetSymbolCount", "candidateRuleCount", "enabledRuleCount",
                     "candidateRuleRatioPct", "executedRuleCount", "executedRuleWorkCount",
@@ -2466,6 +2523,7 @@ class OntologyReasoningRunner:
     def _run_once(self, limit: int = 0, force: bool = False) -> Dict[str, object]:
         if not self.enabled():
             return {"status": "disabled", "processedCount": 0, "alertCount": 0}
+        elapsed_timeout_guard = self.mark_execution_timeout_cooldown_elapsed()
         work = self.pending_work(limit)
         terminal_mailbox = self.persist_terminal_mailbox_events(
             {
@@ -2499,6 +2557,7 @@ class OntologyReasoningRunner:
                 "alertCount": 0,
                 "coalescedEventCount": len(durable_superseded_ids),
                 "maintenance": maintenance,
+                **({"executionTimeoutGuard": elapsed_timeout_guard} if elapsed_timeout_guard else {}),
                 **queue_metadata,
             }
         execution_timeout_remaining = self.execution_timeout_guard_remaining_seconds()
@@ -3059,7 +3118,7 @@ class OntologyReasoningRunner:
         )
         storage_guard = self.storage_guard_state()
         projection_circuit = self.projection_circuit_state()
-        execution_timeout_guard = self.execution_timeout_guard_state(cursor_payload)
+        execution_timeout_guard = self.execution_timeout_guard_display_state(cursor_payload)
         execution_timeout_remaining = self.execution_timeout_guard_remaining_seconds(cursor_payload)
         mailbox = self.mailbox_summary()
         queue_status = "healthy"
@@ -3130,6 +3189,9 @@ class OntologyReasoningRunner:
             "executionTimeoutBackoffSeconds": self.execution_timeout_backoff_seconds(),
             "executionTimeoutGuard": execution_timeout_guard,
             "executionTimeoutRetryAfterSeconds": execution_timeout_remaining,
+            "executionTimeoutGuardCooldownElapsed": (
+                str(execution_timeout_guard.get("status") or "") == "cooldown-elapsed"
+            ),
             "storageGuard": storage_guard,
             "queueHealth": {"status": queue_status, "reason": queue_reason},
             "queueDispatch": queue_dispatch,

@@ -701,7 +701,11 @@ class PortfolioOntologyProjectionRecorder:
             }
             self.store_projection_result(snapshot, result)
             return result
+        pending_recovery_started = time.perf_counter()
         pending_activation_recovery = self.recover_pending_abox_activation(portfolio_world_context.world_id)
+        runtime_stages["pendingAboxActivationRecoveryMs"] = int(
+            (time.perf_counter() - pending_recovery_started) * 1000
+        )
         recovery_status = str(pending_activation_recovery.get("status") or "skipped")
         if recovery_status not in {
             "skipped",
@@ -731,9 +735,17 @@ class PortfolioOntologyProjectionRecorder:
         # repair, then this cycle stages the current manifest. Avoid reading
         # historical InferenceBox rows before that bounded retry begins.
         if recovery_status not in {"retry-required", "staged", "finalized-empty-target"}:
+            audit_recovery_started = time.perf_counter()
             self.reconcile_interrupted_projection_audit(portfolio_world_context.world_id)
+            runtime_stages["interruptedProjectionAuditRecoveryMs"] = int(
+                (time.perf_counter() - audit_recovery_started) * 1000
+            )
         try:
+            rulebox_bootstrap_started = time.perf_counter()
             rulebox_bootstrap = self.ensure_rulebox_ready()
+            runtime_stages["ruleboxBootstrapMs"] = int(
+                (time.perf_counter() - rulebox_bootstrap_started) * 1000
+            )
             if str(rulebox_bootstrap.get("status") or "") not in {"ready", "seeded"}:
                 result = {
                     "saved": False,
@@ -784,12 +796,16 @@ class PortfolioOntologyProjectionRecorder:
             # while persistence gets independent immutable generations for
             # each owning scope.  The manifest id remains the compatibility
             # ABox generation id used by InferenceBox alignment and audits.
+            scoped_identity_started = time.perf_counter()
             scoped_identity = apply_scoped_abox_identity(
                 persistence_graph,
                 snapshot.account_id,
                 world_id=portfolio_world_context.world_id,
                 tenant_id=portfolio_world_context.tenant_id,
                 world_type=portfolio_world_context.world_type,
+            )
+            runtime_stages["scopedAboxIdentityMs"] = int(
+                (time.perf_counter() - scoped_identity_started) * 1000
             )
             material_snapshot_id = str(scoped_identity.get("manifestId") or material_snapshot_id)
             runtime_stages["graphBuildMs"] = int((time.perf_counter() - graph_build_started) * 1000)
@@ -806,7 +822,11 @@ class PortfolioOntologyProjectionRecorder:
                 }
                 self.store_projection_result(snapshot, result, projection_run)
                 return result
+            active_abox_started = time.perf_counter()
             active_abox = self.active_abox_metadata(portfolio_world_context.world_id)
+            runtime_stages["activeAboxReadMs"] = int(
+                (time.perf_counter() - active_abox_started) * 1000
+            )
             evidence_index_upgrade = {}
             active_abox_complete = str(active_abox.get("status") or "ok") == "ok"
             active_abox_is_scoped_manifest = (
@@ -1080,6 +1100,7 @@ class PortfolioOntologyProjectionRecorder:
                     )
                 self.store_projection_result(snapshot, result)
                 return result
+            projection_audit_started = time.perf_counter()
             projection_run, audit_error = self.begin_projection_audit_run(
                 snapshot,
                 persistence_graph,
@@ -1088,6 +1109,9 @@ class PortfolioOntologyProjectionRecorder:
                 inference_symbols=inference_symbols,
                 rulebox_metadata=rulebox_bootstrap,
                 reasoning_context=compact_reasoning_context,
+            )
+            runtime_stages["projectionAuditCreateMs"] = int(
+                (time.perf_counter() - projection_audit_started) * 1000
             )
             if audit_error:
                 result = {
@@ -2831,6 +2855,7 @@ class PortfolioOntologyProjectionRecorder:
                 "slowestQueryMs": "aboxChangedScopeSlowestQueryMs",
                 "queryCount": "aboxChangedScopeQueryCount",
                 "transactionCount": "aboxChangedScopeTransactionCount",
+                "transactionQueryCount": "aboxChangedScopeTransactionQueryCount",
                 "insertedNodeCount": "aboxInsertedNodeCount",
                 "insertedRelationCount": "aboxInsertedRelationCount",
                 "reusedNodeCount": "aboxReusedNodeCount",

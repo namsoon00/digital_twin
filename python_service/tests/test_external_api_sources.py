@@ -3,6 +3,7 @@ import unittest
 from datetime import datetime, timezone
 from pathlib import Path
 from types import SimpleNamespace
+from unittest.mock import patch
 
 sys.path.insert(0, str(Path(__file__).resolve().parents[1]))
 
@@ -25,6 +26,34 @@ from digital_twin.infrastructure.toss_snapshots import TossProvider, normalize_p
 
 
 class ExternalApiSourceTests(unittest.TestCase):
+    def test_fred_uses_dedicated_timeout_on_default_transport(self):
+        settings = {
+            "externalAlphaEnabled": "0",
+            "externalCoinGeckoEnabled": "0",
+            "externalFredEnabled": "1",
+            "externalFredSeries": "DGS10",
+            "externalFredMaxSeries": "1",
+            "externalFredTimeoutSeconds": "7",
+            "fredApiKey": "fred-key",
+            "externalYFinanceEnabled": "0",
+            "externalSecEnabled": "0",
+            "externalDartEnabled": "0",
+            "externalNewsEnabled": "0",
+            "externalFxRateEnabled": "0",
+            "externalApiRetryAttempts": "1",
+            "externalApiRateLimitSeconds": "0",
+        }
+        provider = ExternalSignalProvider(settings=settings)
+
+        with patch(
+            "digital_twin.infrastructure.external_signal_provider_core.default_json_fetcher",
+            return_value={"observations": [{"date": "2026-07-01", "value": "4.35"}]},
+        ) as fetch:
+            signals = provider.fetch_signals([])
+
+        self.assertEqual(4.35, signals["macro"]["series"]["DGS10"]["value"])
+        self.assertEqual(7.0, fetch.call_args.kwargs["timeout"])
+
     def test_toss_price_outside_market_session_is_labeled_last_close_reference(self):
         quote = normalize_price_payload(
             {

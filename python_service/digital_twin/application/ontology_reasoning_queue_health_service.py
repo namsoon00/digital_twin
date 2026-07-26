@@ -80,14 +80,20 @@ class OntologyReasoningQueueHealthService:
         )
         return (now - last_alert.astimezone(timezone.utc)).total_seconds() >= interval * 60
 
-    def record(self, snapshot: Dict[str, object]) -> Tuple[Dict[str, object], DomainEvent]:
-        previous = self.previous()
-        current = self.now_provider()
+    def observe(
+        self,
+        snapshot: Dict[str, object],
+        previous: Dict[str, object] = None,
+        now: datetime = None,
+    ) -> Dict[str, object]:
+        """Evaluate current queue health without persisting or emitting an event."""
+        prior = dict(previous or {}) if isinstance(previous, dict) else self.previous()
+        current = now or self.now_provider()
         if current.tzinfo is None:
             current = current.replace(tzinfo=timezone.utc)
         health = evaluate_ontology_reasoning_queue_health(
             snapshot,
-            previous,
+            prior,
             warning_age_minutes=int_setting(self.settings, "ontologyReasoningQueueWarningAgeMinutes", 30, 1, 10080),
             critical_age_minutes=int_setting(self.settings, "ontologyReasoningQueueCriticalAgeMinutes", 90, 1, 10080),
             warning_pending_count=int_setting(self.settings, "ontologyReasoningQueueWarningPendingCount", 100, 1, 100000),
@@ -97,7 +103,14 @@ class OntologyReasoningQueueHealthService:
             required_consecutive_observations=int_setting(self.settings, "ontologyReasoningQueueConsecutiveObservations", 3, 1, 120),
             now=current,
         )
-        payload = health.to_dict()
+        return health.to_dict()
+
+    def record(self, snapshot: Dict[str, object]) -> Tuple[Dict[str, object], DomainEvent]:
+        previous = self.previous()
+        current = self.now_provider()
+        if current.tzinfo is None:
+            current = current.replace(tzinfo=timezone.utc)
+        payload = self.observe(snapshot, previous=previous, now=current)
         should_alert = bool(payload.get("alertRequired"))
         alert_kind = ""
         if should_alert:

@@ -337,6 +337,7 @@ class NotificationQueueRunner:
         now_provider: Callable = None,
         operator_reports_enabled: bool = False,
         settings: Dict[str, object] = None,
+        operational_state_resolver: Callable = None,
     ):
         self.queue = queue
         self.account_repository = account_repository
@@ -351,6 +352,7 @@ class NotificationQueueRunner:
         self.operator_reports_enabled = bool(operator_reports_enabled)
         self.dispatch_freshness_enabled = settings is not None
         self.settings = dict(settings or {})
+        self.operational_state_resolver = operational_state_resolver
         self.last_run_details = []
 
     def account_map(self) -> Dict[str, object]:
@@ -387,6 +389,9 @@ class NotificationQueueRunner:
                 continue
             if not self.dry_run and not use_claim:
                 self.queue.mark_processing(job)
+            if not self.apply_operational_state_gate(job, "AI 판단 전"):
+                processed += 1
+                continue
             if not self.apply_dispatch_freshness_gate(job, "AI 판단 전"):
                 processed += 1
                 continue
@@ -394,6 +399,9 @@ class NotificationQueueRunner:
             if not message:
                 self.queue.mark_failed(job, "empty rendered notification text")
                 self.last_run_details.append(self.job_detail(job, "failed", "empty rendered text"))
+                continue
+            if not self.apply_operational_state_gate(job, "발송 직전"):
+                processed += 1
                 continue
             if not self.apply_dispatch_freshness_gate(job, "발송 직전"):
                 processed += 1
@@ -415,6 +423,68 @@ class NotificationQueueRunner:
             if self.send_gap_seconds and processed < len(jobs):
                 time.sleep(self.send_gap_seconds)
         return processed
+
+    def apply_operational_state_gate(self, job: NotificationJob, stage: str) -> bool:
+        """Suppress an obsolete queue incident after live state has changed.
+
+        Queue delay messages are event notifications, so their text reflects
+        the observation that created the job. Re-reading the queue immediately
+        before delivery prevents an already recovered critical incident from
+        reaching operations minutes later as a false current page.
+        """
+        if str(job.message_type or "") != ONTOLOGY_REASONING_QUEUE:
+            return True
+        if not callable(self.operational_state_resolver):
+            return True
+        context = dict(job.context or {})
+        expected = context.get("queueDelayHealth")
+        expected = expected if isinstance(expected, dict) else {}
+        expected_state = str(expected.get("state") or "").strip().lower()
+        if not expected_state:
+            return True
+        try:
+            current = self.operational_state_resolver()
+        except Exception as error:  # noqa: BLE001 - failure to re-read must not hide an incident.
+            context["operationalDispatchState"] = {
+                "status": "unavailable",
+                "stage": stage,
+                "reason": str(error)[:180],
+            }
+            job.context = context
+            return True
+        current = dict(current or {}) if isinstance(current, dict) else {}
+        current_state = str(current.get("state") or "").strip().lower()
+        context["operationalDispatchState"] = {
+            "status": "checked" if current_state else "unknown",
+            "stage": stage,
+            "expectedState": expected_state,
+            "currentState": current_state,
+            "checkedAt": str(current.get("checkedAt") or ""),
+        }
+        job.context = context
+        if not current_state or current_state == expected_state:
+            return True
+        expected_active = expected_state in {"delayed", "critical"}
+        current_active = current_state in {"delayed", "critical"}
+        obsolete = (expected_active and not current_active) or (
+            expected_state == "healthy" and current_active
+        ) or (expected_active and current_active and expected_state != current_state)
+        if not obsolete:
+            return True
+        reason = (
+            stage + " 운영 상태 재검증: 추론 대기열이 "
+            + expected_state + "에서 " + current_state
+            + "로 변경되어 이전 상태 알림을 발송하지 않았습니다."
+        )
+        context["deliverySuppressionReason"] = "obsolete_queue_health_at_dispatch"
+        context["operationalDispatchState"]["status"] = "suppressed-obsolete"
+        job.context = context
+        if hasattr(self.queue, "mark_suppressed"):
+            self.queue.mark_suppressed(job, reason)
+        else:
+            self.queue.mark_failed(job, reason)
+        self.last_run_details.append(self.job_detail(job, "suppressed", reason[:160]))
+        return False
 
     def apply_dispatch_freshness_gate(self, job: NotificationJob, stage: str) -> bool:
         if not self.dispatch_freshness_enabled:

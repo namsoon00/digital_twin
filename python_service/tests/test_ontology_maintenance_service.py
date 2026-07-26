@@ -105,6 +105,42 @@ class OntologyMaintenanceRunnerTests(unittest.TestCase):
         self.assertEqual("deferred", result["maintenance"]["health"]["state"])
         self.assertIsNone(result["maintenance"]["health"]["inactiveManifestCount"])
 
+    def test_maintenance_yields_to_pending_reasoning_work(self):
+        repository = FakeOntologyRepository()
+        runner = OntologyMaintenanceRunner(
+            repository,
+            state_store=FakeStateStore(),
+            reasoning_queue_probe=lambda: {
+                "status": "healthy",
+                "effectivePendingCount": 2,
+                "pendingSymbolCount": 1,
+            },
+        )
+
+        result = runner.run_once()
+
+        self.assertEqual("deferred-reasoning-queue", result["status"])
+        self.assertEqual(2, result["reasoningQueue"]["effectivePendingCount"])
+        self.assertEqual([], repository.calls)
+
+    def test_maintenance_yields_when_another_world_owns_typedb_writer(self):
+        class BusyCoordinatorRepository(FakeOntologyRepository):
+            def acquire_projection_coordinator_lease(self, _owner, world_id=""):
+                return {
+                    "acquired": False,
+                    "status": "held",
+                    "requestedWorldId": world_id,
+                    "recommendedRetryAfterSeconds": 9,
+                    "reason": "another TypeDB projection is active",
+                }
+
+        repository = BusyCoordinatorRepository()
+        result = OntologyMaintenanceRunner(repository, state_store=FakeStateStore()).run_once()
+
+        self.assertEqual("deferred-projection-coordinator", result["status"])
+        self.assertEqual(9, result["retryAfterSeconds"])
+        self.assertEqual([], repository.calls)
+
     def test_persistent_critical_backlog_gradually_increases_only_delete_batches(self):
         class CriticalRepository(FakeOntologyRepository):
             def list_ontology_worlds(self):

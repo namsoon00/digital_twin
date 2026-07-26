@@ -4,6 +4,7 @@ import re
 import tempfile
 import time
 import unittest
+from datetime import datetime, timedelta, timezone
 from pathlib import Path
 from threading import Event, Lock
 from types import SimpleNamespace
@@ -45,6 +46,7 @@ from digital_twin.infrastructure.typedb_ontology import (
     TypeDBOntologyGraphRepository,
     TYPEDB_NATIVE_REASONING_PROFILE_VERSION,
     TYPEDB_NATIVE_RULE_ENGINE_VERSION,
+    TYPEDB_PROJECTION_COORDINATOR_WORLD_ID,
     TYPEDB_PROMOTED_NUMERIC_ATTRIBUTES,
     TYPEDB_PROMOTED_TEXT_ATTRIBUTES,
     node_boxes,
@@ -5187,6 +5189,96 @@ class TypeDBOntologyRepositoryTests(unittest.TestCase):
         self.assertEqual("deferred-inference-write-lease", result["status"])
         self.assertEqual("deferred-inference-write-lease", result["inferenceBox"]["status"])
 
+    def test_projection_recorder_never_runs_inference_for_another_manifest_candidate(self):
+        class FakeRepository:
+            store_key = "typedb"
+
+            def __init__(self):
+                self.calls = []
+
+            def save_graph(self, _graph):
+                self.calls.append("save")
+                return {
+                    "saved": False,
+                    "status": "deferred-pending-scoped-manifest",
+                    "graphStore": "typedb",
+                    "reason": "another writer owns the pending candidate",
+                }
+
+            def rulebox_snapshot(self):
+                rules = rulebox_rules_to_payload(default_graph_inference_rules())
+                return {"configured": True, "status": "ok", "rules": rules, "ruleCount": len(rules)}
+
+            def run_rulebox(self, _payload):
+                self.calls.append("run-rulebox")
+                raise AssertionError("a different pending Manifest must never receive this input graph")
+
+        snapshot = AccountSnapshot(
+            "main", "메인", "toss", "live", "ok", utc_now_iso(),
+            PortfolioSummary(total=1000, invested=1000, cash=0, markets=[], sectors=[], concentration=0),
+            positions=[Position("AAPL", "Apple", market="US", currency="USD", quantity=1, current_price=100, market_value=100, market_value_krw=140000)],
+        )
+        repository = FakeRepository()
+
+        result = PortfolioOntologyProjectionRecorder(repository).record_snapshot(snapshot)
+
+        self.assertEqual("deferred-pending-scoped-manifest", result["status"])
+        self.assertTrue(result["retryable"])
+        self.assertEqual("another-projection", result["pendingManifestOwner"])
+        self.assertEqual(["save"], repository.calls)
+
+    def test_target_scoped_patch_defers_overdue_full_reconciliation_only_with_backlog(self):
+        graph = PortfolioOntology(
+            "main",
+            entities=[
+                OntologyEntity("stock:005930", "삼성전자", "stock", {"ontologyBox": "ABox", "symbol": "005930"}),
+                OntologyEntity("stock:MSTR", "Strategy", "stock", {"ontologyBox": "ABox", "symbol": "MSTR"}),
+            ],
+        )
+        first = apply_scoped_abox_identity(graph)
+        snapshot = SimpleNamespace(
+            positions=[SimpleNamespace(symbol="005930"), SimpleNamespace(symbol="MSTR")],
+            watchlist=[],
+        )
+        recorder = PortfolioOntologyProjectionRecorder(
+            SimpleNamespace(store_key="typedb"),
+            settings={
+                "typedbNativeRuleTargetSymbolLimit": "1",
+                "ontologyScopedFullReconcileMinutes": "30",
+                "ontologyScopedFullReconcileMaxDeferralMinutes": "60",
+            },
+        )
+        active = {
+            "status": "ok",
+            "lastFullScopeReconcileAt": (
+                datetime.now(timezone.utc) - timedelta(minutes=35)
+            ).isoformat().replace("+00:00", "Z"),
+            "scopedAboxManifestVersion": SCOPED_ABOX_MANIFEST_VERSION,
+            "scopeTopologyVersion": SCOPED_ABOX_SCOPE_TOPOLOGY_VERSION,
+            "scopePlan": [dict(item) for item in first["scopePlan"]],
+            "scopeGenerationIds": dict(first["scopeGenerationIds"]),
+            "scopeFingerprints": dict(first["scopeFingerprints"]),
+        }
+
+        deferred = recorder.target_scoped_patch_targets(
+            snapshot,
+            active,
+            first,
+            ["005930"],
+            reasoning_context={"queuePressure": {
+                "effectivePendingCount": 3,
+                "selectedRequestCount": 1,
+                "hasDeferredWork": True,
+            }},
+        )
+        regular = recorder.target_scoped_patch_targets(snapshot, active, first, ["005930"])
+
+        self.assertTrue(deferred["eligible"])
+        self.assertTrue(deferred["fullReconcileDeferred"])
+        self.assertEqual("target-scoped-full-reconciliation-deferred", deferred["status"])
+        self.assertFalse(regular["eligible"])
+        self.assertEqual("full-reconciliation-due", regular["status"])
+
     def test_projection_recorder_restores_prior_generation_while_functions_provision(self):
         class FakeRepository:
             store_key = "typedb"
@@ -7382,6 +7474,65 @@ class TypeDBOntologyRepositoryTests(unittest.TestCase):
         run_unlocked.assert_called_once()
         self.assertEqual("ok", result["status"])
         self.assertEqual("adopted", result["inferenceWriteLease"]["status"])
+
+    def test_production_rulebox_write_scope_claims_and_releases_global_coordinator(self):
+        repository = TypeDBOntologyGraphRepository(
+            "127.0.0.1:1729",
+            projection_coordinator_write_enforced=True,
+        )
+        lease = {
+            "acquired": True,
+            "status": "acquired",
+            "leaseOwner": "projection-coordinator:test",
+            "leaseToken": "test-token",
+            "requestedWorldId": "portfolio:local:default",
+        }
+        with patch.object(repository, "acquire_projection_coordinator_lease", return_value=lease) as acquire, \
+                patch.object(repository, "release_projection_coordinator_lease", return_value={"status": "released"}) as release, \
+                patch.object(repository, "_run_rulebox_unlocked", return_value={"status": "ok"}) as run_unlocked:
+            result = repository.run_rulebox({
+                "worldId": "portfolio:local:default",
+                "typedbNativeRuleExecutionEnabled": False,
+            })
+
+        acquire.assert_called_once_with("native-rule-run", world_id="portfolio:local:default")
+        release.assert_called_once_with(lease)
+        run_unlocked.assert_called_once()
+        self.assertEqual("ok", result["status"])
+        self.assertEqual("acquired", result["projectionCoordinator"]["status"])
+
+    def test_nested_production_write_scope_adopts_outer_global_coordinator(self):
+        repository = TypeDBOntologyGraphRepository(
+            "127.0.0.1:1729",
+            projection_coordinator_write_enforced=True,
+        )
+        physical_lease = {
+            "acquired": True,
+            "status": "acquired",
+            "leaseOwner": "scoped-abox:test",
+            "leaseToken": "outer-token",
+            "propertiesJson": "{}",
+            "worldId": TYPEDB_PROJECTION_COORDINATOR_WORLD_ID,
+        }
+        with patch.object(repository, "typedb_projection_coordinator_enabled", return_value=True), \
+                patch.object(repository, "acquire_scoped_abox_write_lease", return_value=physical_lease) as acquire, \
+                patch.object(repository, "release_scoped_abox_write_lease", return_value={"status": "released"}) as release, \
+                patch.object(repository, "_run_rulebox_unlocked", return_value={"status": "ok"}) as run_unlocked:
+            outer = repository.acquire_projection_coordinator_lease(
+                "outer-projection",
+                world_id="portfolio:local:default",
+            )
+            result = repository.run_rulebox({
+                "worldId": "portfolio:local:default",
+                "typedbNativeRuleExecutionEnabled": False,
+            })
+            repository.release_projection_coordinator_lease(outer)
+
+        self.assertEqual(1, acquire.call_count)
+        run_unlocked.assert_called_once()
+        release.assert_called_once_with(outer)
+        self.assertEqual("ok", result["status"])
+        self.assertEqual("adopted", result["projectionCoordinator"]["status"])
 
     def test_typedb_rulebox_empty_result_materializes_aligned_no_match_generation(self):
         repository = TypeDBOntologyGraphRepository("127.0.0.1:1729")

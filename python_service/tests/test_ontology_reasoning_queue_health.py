@@ -349,6 +349,57 @@ class OntologyReasoningQueueHealthTests(unittest.TestCase):
         with self.assertRaisesRegex(RuntimeError, "계정 채널로 대체 발송하지 않았습니다"):
             runner.deliver(job, {}, job.text)
 
+    def test_delivery_suppresses_an_obsolete_queue_incident_after_recovery(self):
+        class DeliveryQueue:
+            def __init__(self, job):
+                self.jobs = [job]
+
+            def pending(self, limit=10):
+                return [job for job in self.jobs if job.status in {"pending", "failed"}][:limit]
+
+            def mark_processing(self, job):
+                job.status = "processing"
+                job.attempts += 1
+
+            def mark_done(self, job):
+                job.status = "done"
+
+            def mark_failed(self, job, reason):
+                job.status = "failed"
+                job.last_error = str(reason)
+
+            def mark_suppressed(self, job, reason):
+                job.status = "suppressed"
+                job.last_error = str(reason)
+
+        class EmptyAccounts:
+            def load_all(self):
+                return []
+
+        job = NotificationJob.create(
+            "[운영] 이전 critical 알림",
+            message_type=ONTOLOGY_REASONING_QUEUE,
+            context={"queueDelayHealth": {"state": "critical", "checkedAt": "2026-07-25T00:00:00Z"}},
+        )
+        queue = DeliveryQueue(job)
+        runner = NotificationQueueRunner(
+            queue=queue,
+            account_repository=EmptyAccounts(),
+            notifier_factory=lambda _account: None,
+            operations_notifier_factory=lambda _account: None,
+            operational_state_resolver=lambda: {
+                "state": "healthy",
+                "checkedAt": "2026-07-25T00:02:00Z",
+            },
+        )
+
+        processed = runner.run_once()
+
+        self.assertEqual(1, processed)
+        self.assertEqual("suppressed", job.status)
+        self.assertIn("critical에서 healthy", job.last_error)
+        self.assertEqual("obsolete_queue_health_at_dispatch", job.context["deliverySuppressionReason"])
+
     def test_service_reminds_only_after_the_configured_interval(self):
         now = datetime(2026, 7, 25, 2, 0, tzinfo=UTC)
         store = MemoryStore({

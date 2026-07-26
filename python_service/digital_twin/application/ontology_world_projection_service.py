@@ -36,11 +36,19 @@ class OntologyWorldProjectionRunner:
     change the originating investment judgement.
     """
 
-    def __init__(self, outbox, projection_recorder, settings: Dict[str, object] = None, worker_id: str = ""):
+    def __init__(
+        self,
+        outbox,
+        projection_recorder,
+        settings: Dict[str, object] = None,
+        worker_id: str = "",
+        reasoning_queue_probe=None,
+    ):
         self.outbox = outbox
         self.projection_recorder = projection_recorder
         self.settings = dict(settings or {})
         self.worker_id = str(worker_id or "ontology-world-" + uuid.uuid4().hex[:12])
+        self.reasoning_queue_probe = reasoning_queue_probe
         self.last_run_details = []
 
     def batch_size(self) -> int:
@@ -67,6 +75,39 @@ class OntologyWorldProjectionRunner:
     def execution_timeout_grace_seconds(self) -> int:
         return _integer_setting(self.settings, "ontologyWorldProjectionExecutionTimeoutGraceSeconds", 10, 1, 60)
 
+    def defer_while_reasoning_pending(self) -> bool:
+        value = str(
+            self.settings.get("ontologyWorldProjectionDeferWhenReasoningPending") or "1"
+        ).strip().lower()
+        return value not in {"0", "false", "no", "off", "disabled"}
+
+    def reasoning_queue_state(self) -> Dict[str, object]:
+        if not callable(self.reasoning_queue_probe):
+            return {"status": "not-configured", "effectivePendingCount": 0}
+        try:
+            value = self.reasoning_queue_probe()
+        except Exception as error:  # noqa: BLE001 - a probe fault must not stall the shared read model forever.
+            return {
+                "status": "error",
+                "effectivePendingCount": 0,
+                "reason": str(error)[:180],
+            }
+        return dict(value or {}) if isinstance(value, dict) else {
+            "status": "invalid",
+            "effectivePendingCount": 0,
+        }
+
+    @staticmethod
+    def reasoning_pending_count(state: Dict[str, object]) -> int:
+        for key in ["effectivePendingCount", "pendingEntryCount", "pendingCount"]:
+            try:
+                value = int(float((state or {}).get(key) or 0))
+            except (TypeError, ValueError):
+                continue
+            if value >= 0:
+                return value
+        return 0
+
     def status(self) -> Dict[str, object]:
         summary = dict(self.outbox.summary() or {})
         return {
@@ -75,6 +116,8 @@ class OntologyWorldProjectionRunner:
             "leaseSeconds": self.lease_seconds(),
             "maxAttempts": self.max_attempts(),
             "completedRetentionHours": self.completed_retention_hours(),
+            "deferWhenReasoningPending": self.defer_while_reasoning_pending(),
+            "reasoningQueue": self.reasoning_queue_state(),
             "maxPayloadBytes": int(getattr(self.outbox, "max_payload_bytes", lambda: 0)() or 0),
             "outbox": summary,
         }
@@ -121,6 +164,26 @@ class OntologyWorldProjectionRunner:
         purge = getattr(self.outbox, "purge_oversized_superseded", None)
         if callable(purge):
             purged_oversized = int(purge() or 0)
+        reasoning_queue = self.reasoning_queue_state()
+        reasoning_pending = self.reasoning_pending_count(reasoning_queue)
+        if self.defer_while_reasoning_pending() and reasoning_pending > 0:
+            self.last_run_details = ["deferred-reasoning-queue"]
+            return {
+                "status": "deferred-reasoning-queue",
+                "workerId": self.worker_id,
+                "claimedCount": 0,
+                "completedCount": 0,
+                "retryCount": 0,
+                "reasoningQueue": reasoning_queue,
+                "reason": (
+                    "투자 판단을 위한 라이브 TypeDB 추론 요청이 "
+                    + str(reasoning_pending)
+                    + "건 남아 있어 공유 MarketWorld/KnowledgeWorld 투영을 양보합니다."
+                ),
+                "supersededOversizedPendingCount": superseded_oversized,
+                "purgedOversizedSupersededCount": purged_oversized,
+                "durationMs": int((time.monotonic() - started) * 1000),
+            }
         jobs = list(self.outbox.claim(self.worker_id, bounded, self.lease_seconds()) or [])
         completed, retried = [], []
         details = []
@@ -185,6 +248,7 @@ class OntologyWorldProjectionRunner:
             "retryCount": len(retried),
             "completedJobIds": completed,
             "retries": retried,
+            "reasoningQueue": reasoning_queue,
             "prunedCompletedCount": pruned,
             "supersededOversizedPendingCount": superseded_oversized,
             "purgedOversizedSupersededCount": purged_oversized,

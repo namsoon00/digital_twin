@@ -35,10 +35,17 @@ class OntologyMaintenanceRunner:
 
     state_contract = "ontology-maintenance-state-v2"
 
-    def __init__(self, ontology_repository, state_store=None, settings: Dict[str, object] = None):
+    def __init__(
+        self,
+        ontology_repository,
+        state_store=None,
+        settings: Dict[str, object] = None,
+        reasoning_queue_probe=None,
+    ):
         self.ontology_repository = ontology_repository
         self.state_store = state_store
         self.settings = dict(settings or {})
+        self.reasoning_queue_probe = reasoning_queue_probe
 
     def policy(self) -> Dict[str, object]:
         return scoped_abox_maintenance_policy(self.settings)
@@ -73,6 +80,64 @@ class OntologyMaintenanceRunner:
             for item in raw.split(",")
             if item.strip()
         }
+
+    def defer_while_reasoning_pending(self) -> bool:
+        value = text(self.settings.get("ontologyAboxMaintenanceDeferWhenReasoningPending") or "1").lower()
+        return value not in DISABLED_VALUES
+
+    def reasoning_queue_state(self) -> Dict[str, object]:
+        if not callable(self.reasoning_queue_probe):
+            return {"status": "not-configured", "effectivePendingCount": 0}
+        try:
+            value = self.reasoning_queue_probe()
+        except Exception as error:  # noqa: BLE001 - uncertainty must not block low-priority cleanup forever.
+            return {"status": "error", "effectivePendingCount": 0, "reason": str(error)[:180]}
+        return dict(value or {}) if isinstance(value, dict) else {"status": "invalid", "effectivePendingCount": 0}
+
+    @staticmethod
+    def queue_pending_count(state: Dict[str, object]) -> int:
+        for key in ["effectivePendingCount", "pendingEntryCount", "pendingCount"]:
+            value = integer((state or {}).get(key), -1)
+            if value >= 0:
+                return value
+        return 0
+
+    def projection_coordinator_summary(self, lease: Dict[str, object]) -> Dict[str, object]:
+        allowed = {
+            "acquired", "status", "coordinator", "coordinatorVersion",
+            "requestedWorldId", "leaseOwner", "leaseRemainingSeconds",
+            "recommendedRetryAfterSeconds", "reason",
+        }
+        return {
+            key: value
+            for key, value in dict(lease or {}).items()
+            if key in allowed and value not in (None, "", [], {})
+        }
+
+    def acquire_projection_coordinator_lease(self, world_id: str) -> Dict[str, object]:
+        acquire = getattr(self.ontology_repository, "acquire_projection_coordinator_lease", None)
+        if not callable(acquire):
+            return {"acquired": True, "status": "unsupported"}
+        try:
+            return dict(acquire("maintenance", world_id=world_id) or {})
+        except Exception as error:  # noqa: BLE001 - maintenance remains deferrable.
+            return {
+                "acquired": False,
+                "status": "error",
+                "recommendedRetryAfterSeconds": 10,
+                "reason": str(error)[:180],
+            }
+
+    def release_projection_coordinator_lease(self, lease: Dict[str, object]) -> Dict[str, object]:
+        if not bool((lease or {}).get("acquired")):
+            return {"status": "not-owner"}
+        release = getattr(self.ontology_repository, "release_projection_coordinator_lease", None)
+        if not callable(release):
+            return {"status": "unsupported"}
+        try:
+            return dict(release(lease) or {})
+        except Exception as error:  # noqa: BLE001 - expiry is the final fallback.
+            return {"status": "error", "reason": str(error)[:180]}
 
     def state(self) -> Dict[str, object]:
         if not self.state_store or not hasattr(self.state_store, "load"):
@@ -223,6 +288,8 @@ class OntologyMaintenanceRunner:
             "intervalSeconds": self.interval_seconds(),
             "processIsolationEnabled": self.process_isolation_enabled(),
             "executionTimeoutSeconds": self.execution_timeout_seconds(),
+            "deferWhenReasoningPending": self.defer_while_reasoning_pending(),
+            "reasoningQueue": self.reasoning_queue_state(),
             "policy": policy,
             "lastRunAt": text(state.get("lastRunAt")),
             "lastResult": dict(last_result),
@@ -242,6 +309,23 @@ class OntologyMaintenanceRunner:
                 "policy": policy,
                 "reason": "Graph store has no scoped ABox maintenance adapter.",
             }
+        queue_state = self.reasoning_queue_state()
+        if self.defer_while_reasoning_pending() and self.queue_pending_count(queue_state) > 0:
+            result = {
+                "status": "deferred-reasoning-queue",
+                "contract": self.state_contract,
+                "policy": policy,
+                "reason": "활성 추론 요청이 남아 있어 ABox 정리를 유휴 시간으로 미룹니다.",
+                "reasoningQueue": queue_state,
+                "retryAfterSeconds": self.interval_seconds(),
+            }
+            previous = self.state()
+            self.save_state({
+                **previous,
+                "lastRunAt": utc_now_iso(),
+                "lastResult": result,
+            })
+            return result
         worlds = self.worlds()
         if not worlds:
             return {
@@ -254,6 +338,26 @@ class OntologyMaintenanceRunner:
         selected, next_world_id = self.next_world(worlds, previous)
         world_id = text(selected.get("worldId"))
         adaptive_drain = self.adaptive_drain(policy, previous, world_id)
+        coordinator_lease = self.acquire_projection_coordinator_lease(world_id)
+        if not bool(coordinator_lease.get("acquired")):
+            result = {
+                "status": "deferred-projection-coordinator",
+                "contract": self.state_contract,
+                "policy": policy,
+                "worldId": world_id,
+                "reason": str(
+                    coordinator_lease.get("reason")
+                    or "다른 TypeDB World 투영이 데이터베이스 쓰기 경계를 사용 중입니다."
+                )[:220],
+                "retryAfterSeconds": int(coordinator_lease.get("recommendedRetryAfterSeconds") or 10),
+                "projectionCoordinator": self.projection_coordinator_summary(coordinator_lease),
+            }
+            self.save_state({
+                **previous,
+                "lastRunAt": utc_now_iso(),
+                "lastResult": result,
+            })
+            return result
         try:
             result = dict(runner({
                 "worldId": world_id,
@@ -264,6 +368,10 @@ class OntologyMaintenanceRunner:
             }) or {})
         except Exception as error:  # noqa: BLE001 - a maintenance fault must not affect native inference.
             result = {"status": "error", "reason": str(error)[:220]}
+        finally:
+            coordinator_release = self.release_projection_coordinator_lease(coordinator_lease)
+        result["projectionCoordinator"] = self.projection_coordinator_summary(coordinator_lease)
+        result["projectionCoordinatorRelease"] = coordinator_release
         result_status = text(result.get("status") or "unknown")
         abox = result.get("abox") if isinstance(result.get("abox"), dict) else {}
         inventory_available = bool(abox)

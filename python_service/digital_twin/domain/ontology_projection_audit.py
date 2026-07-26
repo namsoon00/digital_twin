@@ -66,6 +66,15 @@ def compact_reasoning_request_context(
                     result[symbol] = cleaned[:160]
         return dict(sorted(result.items()))
 
+    raw_queue_pressure = values.get("queuePressure")
+    queue_pressure = raw_queue_pressure if isinstance(raw_queue_pressure, Mapping) else {}
+
+    def non_negative_integer(value: object) -> int:
+        try:
+            return max(0, int(float(value or 0)))
+        except (TypeError, ValueError):
+            return 0
+
     return {
         "version": str(values.get("version") or REASONING_REQUEST_CONTEXT_VERSION),
         "requestEventIds": clean_list(values.get("requestEventIds"), limit=80),
@@ -77,6 +86,15 @@ def compact_reasoning_request_context(
         "sourceObservedAt": str(values.get("sourceObservedAt") or "").strip()[:80],
         "changedFieldsBySymbol": symbol_map(values.get("changedFieldsBySymbol"), list_values=True),
         "factRevisionsBySymbol": symbol_map(values.get("factRevisionsBySymbol"), list_values=False),
+        # Scheduler pressure remains operational provenance. It can decide
+        # whether a periodic full reconciliation yields to queued work, but is
+        # never exposed as a TypeDB RuleBox condition or investment fact.
+        "queuePressure": {
+            "effectivePendingCount": non_negative_integer(queue_pressure.get("effectivePendingCount")),
+            "selectedRequestCount": non_negative_integer(queue_pressure.get("selectedRequestCount")),
+            "omittedSymbolCount": non_negative_integer(queue_pressure.get("omittedSymbolCount")),
+            "hasDeferredWork": bool(queue_pressure.get("hasDeferredWork")),
+        },
     }
 
 

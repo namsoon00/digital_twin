@@ -12,6 +12,7 @@ import uuid
 from concurrent.futures import ThreadPoolExecutor, as_completed
 from contextlib import contextmanager
 from decimal import Decimal, InvalidOperation
+from functools import wraps
 from typing import Dict, Iterable, List, Tuple
 
 from ..domain.ontology_contracts import OntologyEntity, OntologyEvidence, OntologyRelation, PortfolioOntology, entity_id
@@ -161,6 +162,109 @@ def typedb_world_kwargs(world_id: str = "") -> Dict[str, str]:
 def typedb_call_for_world(callback, *args, world_id: str = "", **kwargs):
     """Invoke a world-aware repository method without mutating legacy calls."""
     return callback(*args, **kwargs, **typedb_world_kwargs(world_id))
+
+
+def typedb_projection_coordinator_summary(lease: Dict[str, object] = None) -> Dict[str, object]:
+    """Expose coordinator state without returning the durable lease payload."""
+    allowed = {
+        "acquired",
+        "status",
+        "coordinator",
+        "coordinatorVersion",
+        "requestedWorldId",
+        "leaseOwner",
+        "leaseExpiresAtEpoch",
+        "leaseRemainingSeconds",
+        "recommendedRetryAfterSeconds",
+        "reason",
+    }
+    return {
+        key: value
+        for key, value in dict(lease or {}).items()
+        if key in allowed and value not in (None, "", [], {})
+    }
+
+
+def typedb_projection_world_from_graph(args, kwargs) -> str:
+    graph = kwargs.get("graph") if isinstance(kwargs, dict) else None
+    if graph is None and args:
+        graph = args[0]
+    worldview = getattr(graph, "worldview", {}) if graph is not None else {}
+    return str((worldview or {}).get("worldId") or "").strip()
+
+
+def typedb_projection_world_from_payload(args, kwargs) -> str:
+    payload = kwargs.get("payload") if isinstance(kwargs, dict) else None
+    if payload is None and args:
+        payload = args[0]
+    values = dict(payload or {}) if isinstance(payload, dict) else {}
+    return str(values.get("worldId") or values.get("ontologyWorldId") or "").strip()
+
+
+def typedb_projection_world_from_recovery(args, kwargs) -> str:
+    if isinstance(kwargs, dict) and str(kwargs.get("world_id") or "").strip():
+        return str(kwargs.get("world_id") or "").strip()
+    return str(args[0] if args else "").strip()
+
+
+def typedb_projection_world_from_manifest_index(args, kwargs) -> str:
+    if isinstance(kwargs, dict) and str(kwargs.get("world_id") or "").strip():
+        return str(kwargs.get("world_id") or "").strip()
+    graph = kwargs.get("graph") if isinstance(kwargs, dict) else None
+    if graph is None and args:
+        graph = args[0]
+    worldview = getattr(graph, "worldview", {}) if graph is not None else {}
+    return str((worldview or {}).get("worldId") or "").strip()
+
+
+def coordinated_typedb_projection_write(owner_prefix: str, world_resolver=None):
+    """Apply the production TypeDB writer boundary to every mutating entrypoint.
+
+    The coordinator is intentionally enabled only by the production repository
+    factory. Bare adapters used by deterministic unit tests preserve their
+    lightweight behavior, while every runtime adapter serializes physical
+    TypeDB writes across logical ontology worlds.
+    """
+    def decorate(method):
+        @wraps(method)
+        def wrapped(self, *args, **kwargs):
+            enabled = getattr(self, "projection_coordinator_write_enforced", None)
+            scope = getattr(self, "projection_coordinator_write_scope", None)
+            if not callable(enabled) or not enabled() or not callable(scope):
+                return method(self, *args, **kwargs)
+            world_id = ""
+            if callable(world_resolver):
+                try:
+                    world_id = str(world_resolver(args, kwargs) or "").strip()
+                except Exception:
+                    world_id = ""
+            with scope(owner_prefix, world_id) as lease:
+                if not bool((lease or {}).get("acquired")):
+                    return {
+                        "configured": bool(getattr(self, "address", "")),
+                        "saved": False,
+                        "status": "deferred-projection-coordinator",
+                        "graphStore": "typedb",
+                        "preservedActiveGeneration": True,
+                        "retryable": True,
+                        "recommendedRetryAfterSeconds": int(
+                            (lease or {}).get("recommendedRetryAfterSeconds") or 10
+                        ),
+                        "reason": str(
+                            (lease or {}).get("reason")
+                            or "다른 TypeDB 투영 또는 규칙 실행이 데이터베이스 쓰기 경계를 사용 중입니다."
+                        )[:220],
+                        "projectionCoordinator": typedb_projection_coordinator_summary(lease),
+                    }
+                result = method(self, *args, **kwargs)
+                if isinstance(result, dict):
+                    result.setdefault(
+                        "projectionCoordinator",
+                        typedb_projection_coordinator_summary(lease),
+                    )
+                return result
+        return wrapped
+    return decorate
 
 
 def typedb_native_rule_planner_topology_for_execution(
@@ -1176,6 +1280,11 @@ TYPEDB_LEGACY_SCHEMA_FUNCTION_PREFIX = "orbit_rule_active_manifest_subject_v6_"
 SCOPED_ABOX_WRITE_LEASE_ID = "scoped-abox-write-lease"
 SCOPED_ABOX_WRITE_LEASE_BOX = "ABoxLease"
 SCOPED_ABOX_WRITE_LEASE_VERSION = "scoped-abox-write-lease-v1"
+# TypeDB accepts separate logical worlds, but its write path still has one
+# database-wide contention domain.  This synthetic world owns that narrow
+# physical-write coordinator without becoming an ABox fact or a user world.
+TYPEDB_PROJECTION_COORDINATOR_WORLD_ID = "system:typedb-projection-coordinator"
+TYPEDB_PROJECTION_COORDINATOR_VERSION = "typedb-projection-coordinator-v1"
 # The production RuleBox currently plans up to 75 native functions for one
 # material symbol. A verified live ABox replay prunes most of them, but an
 # applicable Manifest-scoped function can still take several seconds on the
@@ -1747,6 +1856,31 @@ class ScopedABoxManifestMixin:
         # local worker instead of blocking the graph indefinitely.
         return max(120, min(3600, int(parsed)))
 
+    def typedb_projection_coordinator_enabled(self, settings: Dict[str, object] = None) -> bool:
+        """Whether one physical TypeDB writer coordinates logical worlds."""
+        value = str((settings or runtime_settings()).get(
+            "typedbProjectionCoordinatorEnabled",
+            "1",
+        ) or "").strip().lower()
+        return value not in {"0", "false", "no", "off", "disabled"}
+
+    def typedb_projection_coordinator_lease_seconds(self, settings: Dict[str, object] = None) -> int:
+        raw = (settings or runtime_settings()).get("typedbProjectionCoordinatorLeaseSeconds")
+        parsed = number_or_none(raw)
+        if parsed is None:
+            parsed = 600
+        # A complete scoped write plus native-rule materialization can take a
+        # few minutes. Keep recovery materially faster than the per-world
+        # 15-minute safety lease without expiring a healthy live cycle.
+        return max(300, min(1800, int(parsed)))
+
+    def typedb_projection_coordinator_retry_seconds(self, settings: Dict[str, object] = None) -> int:
+        raw = (settings or runtime_settings()).get("typedbProjectionCoordinatorRetrySeconds")
+        parsed = number_or_none(raw)
+        if parsed is None:
+            parsed = 10
+        return max(5, min(120, int(parsed)))
+
     def scoped_abox_orphan_cleanup_max_generations(self, settings: Dict[str, object] = None) -> int:
         raw = (settings or runtime_settings()).get("typedbScopedABoxOrphanCleanupMaxGenerations")
         parsed = number_or_none(raw)
@@ -1849,9 +1983,12 @@ class ScopedABoxManifestMixin:
             "leaseBox": SCOPED_ABOX_WRITE_LEASE_BOX,
             "worldId": str(world_id or ""),
             "leaseOwner": owner,
+            "leaseToken": str(payload.get("leaseToken") or ""),
             "leaseHost": lease_host,
             "leaseProcessId": int(lease_process_id) if lease_process_id is not None else None,
+            "leaseAcquiredAtEpoch": float(number_or_none(payload.get("leaseAcquiredAtEpoch")) or 0),
             "leaseExpiresAtEpoch": expires_at,
+            "leaseRemainingSeconds": max(0, int(expires_at - time.time())),
             "updatedAt": str(row.get("updatedAt") or ""),
             "propertiesJson": str(row.get("json") or "{}"),
         }
@@ -1875,6 +2012,7 @@ class ScopedABoxManifestMixin:
             "tboxClass": "ScopedABoxWriteLease",
             "leaseVersion": SCOPED_ABOX_WRITE_LEASE_VERSION,
             "leaseOwner": str(owner or ""),
+            "leaseToken": uuid.uuid4().hex,
             "leaseManifestId": str(manifest_id or ""),
             "worldId": str(world_id or ""),
             # A durable lease can outlive a force-stopped local worker.  These
@@ -1898,6 +2036,7 @@ class ScopedABoxManifestMixin:
         row = self.node_rows(graph)[0]
         return graph, {
             "owner": str(owner or ""),
+            "leaseToken": str(properties.get("leaseToken") or ""),
             "manifestId": str(manifest_id or ""),
             "worldId": str(world_id or ""),
             "storageId": self.scoped_abox_write_lease_storage_id(world_id),
@@ -1940,7 +2079,12 @@ class ScopedABoxManifestMixin:
         self.with_typedb_retries(operation)
         return {"status": "released", "leaseOwner": owner}
 
-    def acquire_scoped_abox_write_lease(self, manifest_id: str = "", world_id: str = "") -> Dict[str, object]:
+    def acquire_scoped_abox_write_lease(
+        self,
+        manifest_id: str = "",
+        world_id: str = "",
+        lease_seconds: int = 0,
+    ) -> Dict[str, object]:
         """Serialize multi-transaction scoped writes across local workers.
 
         A TypeDB write transaction protects only one batch. Without this lease,
@@ -1985,7 +2129,12 @@ class ScopedABoxManifestMixin:
                 "status": "driver-missing",
                 "reason": str(imported[1])[:180],
             }
-        graph, lease = self.scoped_abox_write_lease_graph(owner, manifest_id, world_id=world_id)
+        graph, lease = self.scoped_abox_write_lease_graph(
+            owner,
+            manifest_id,
+            lease_seconds=lease_seconds,
+            world_id=world_id,
+        )
 
         def operation():
             driver = self.open_driver(imported)
@@ -2025,6 +2174,7 @@ class ScopedABoxManifestMixin:
                 "acquired": True,
                 "status": "acquired",
                 "leaseOwner": owner,
+                "leaseToken": str(lease.get("leaseToken") or ""),
                 "leaseExpiresAtEpoch": float(lease.get("expiresAtEpoch") or 0),
                 "propertiesJson": str(lease.get("propertiesJson") or "{}"),
                 "worldId": str(world_id or ""),
@@ -2032,6 +2182,139 @@ class ScopedABoxManifestMixin:
             }
 
         return self.with_typedb_retries(operation)
+
+    def projection_coordinator_lease_status(self) -> Dict[str, object]:
+        """Expose the database-wide projection owner without exposing ABox facts."""
+        result = self.scoped_abox_write_lease_status(TYPEDB_PROJECTION_COORDINATOR_WORLD_ID)
+        return {
+            **dict(result or {}),
+            "coordinator": "typedb-projection",
+            "coordinatorVersion": TYPEDB_PROJECTION_COORDINATOR_VERSION,
+            "coordinatorWorldId": TYPEDB_PROJECTION_COORDINATOR_WORLD_ID,
+        }
+
+    def projection_coordinator_write_enforced(self) -> bool:
+        """Whether public repository mutations must take the global writer lease."""
+        return bool(getattr(self, "_projection_coordinator_write_enforced", False))
+
+    def active_projection_coordinator_lease(self) -> Dict[str, object]:
+        leases = list(getattr(self._projection_coordinator_local, "leases", []) or [])
+        if not leases:
+            return {}
+        return dict(leases[-1] or {})
+
+    def track_projection_coordinator_lease(self, lease: Dict[str, object]) -> None:
+        if not bool((lease or {}).get("acquired")):
+            return
+        leases = list(getattr(self._projection_coordinator_local, "leases", []) or [])
+        leases.append(dict(lease or {}))
+        self._projection_coordinator_local.leases = leases
+
+    def forget_projection_coordinator_lease(self, lease: Dict[str, object]) -> None:
+        leases = list(getattr(self._projection_coordinator_local, "leases", []) or [])
+        if not leases:
+            return
+        target_token = str((lease or {}).get("leaseToken") or "")
+        target_owner = str((lease or {}).get("leaseOwner") or "")
+        target_status = str((lease or {}).get("status") or "")
+        for index in range(len(leases) - 1, -1, -1):
+            candidate = dict(leases[index] or {})
+            if target_token and str(candidate.get("leaseToken") or "") == target_token:
+                leases.pop(index)
+                self._projection_coordinator_local.leases = leases
+                return
+            if (
+                not target_token
+                and target_owner
+                and str(candidate.get("leaseOwner") or "") == target_owner
+            ):
+                leases.pop(index)
+                self._projection_coordinator_local.leases = leases
+                return
+            if not target_token and not target_owner and target_status == "disabled":
+                leases.pop(index)
+                self._projection_coordinator_local.leases = leases
+                return
+
+    @contextmanager
+    def projection_coordinator_write_scope(self, owner: str, world_id: str = ""):
+        """Reuse an outer coordinator lease or release the one acquired here."""
+        lease = self.acquire_projection_coordinator_lease(owner, world_id=world_id)
+        adopted = bool(lease.get("adopted"))
+        try:
+            yield lease
+        finally:
+            if bool(lease.get("acquired")) and not adopted:
+                self.release_projection_coordinator_lease(lease)
+
+    def acquire_projection_coordinator_lease(
+        self,
+        owner: str,
+        world_id: str = "",
+    ) -> Dict[str, object]:
+        """Serialize physical TypeDB writes across portfolio and shared worlds.
+
+        Per-world ABox leases protect semantic generation ownership. This
+        outer lease protects the TypeDB database's single writer so a Market
+        World merge cannot contend with a PortfolioWorld activation halfway
+        through its native InferenceBox lifecycle.
+        """
+        active = self.active_projection_coordinator_lease()
+        if bool(active.get("acquired")):
+            return {
+                **active,
+                "status": "adopted",
+                "adopted": True,
+                "requestedWorldId": str(world_id or ""),
+            }
+        if not self.typedb_projection_coordinator_enabled():
+            response = {
+                "acquired": True,
+                "status": "disabled",
+                "coordinator": "typedb-projection",
+                "coordinatorVersion": TYPEDB_PROJECTION_COORDINATOR_VERSION,
+                "requestedWorldId": str(world_id or ""),
+            }
+            self.track_projection_coordinator_lease(response)
+            return response
+        try:
+            lease = self.acquire_scoped_abox_write_lease(
+                "projection-coordinator:" + str(owner or "unknown")[:160],
+                world_id=TYPEDB_PROJECTION_COORDINATOR_WORLD_ID,
+                lease_seconds=self.typedb_projection_coordinator_lease_seconds(),
+            )
+        except Exception as error:  # noqa: BLE001 - callers keep the prior active generation on a failed claim.
+            return {
+                "acquired": False,
+                "status": "error",
+                "coordinator": "typedb-projection",
+                "coordinatorVersion": TYPEDB_PROJECTION_COORDINATOR_VERSION,
+                "requestedWorldId": str(world_id or ""),
+                "recommendedRetryAfterSeconds": self.typedb_projection_coordinator_retry_seconds(),
+                "reason": str(error)[:180],
+            }
+        response = dict(lease or {})
+        response.update({
+            "coordinator": "typedb-projection",
+            "coordinatorVersion": TYPEDB_PROJECTION_COORDINATOR_VERSION,
+            "coordinatorWorldId": TYPEDB_PROJECTION_COORDINATOR_WORLD_ID,
+            "requestedWorldId": str(world_id or ""),
+        })
+        if not response.get("acquired"):
+            response["recommendedRetryAfterSeconds"] = self.typedb_projection_coordinator_retry_seconds()
+        else:
+            self.track_projection_coordinator_lease(response)
+        return response
+
+    def release_projection_coordinator_lease(self, lease: Dict[str, object]) -> Dict[str, object]:
+        if bool((lease or {}).get("adopted")):
+            return {"status": "adopted-by-caller"}
+        try:
+            if str((lease or {}).get("status") or "") == "disabled":
+                return {"status": "disabled"}
+            return self.release_scoped_abox_write_lease(lease)
+        finally:
+            self.forget_projection_coordinator_lease(lease)
 
     def release_scoped_abox_write_lease(self, lease: Dict[str, object]) -> Dict[str, object]:
         if not (lease or {}).get("acquired"):
@@ -3560,6 +3843,10 @@ class ScopedABoxManifestMixin:
         finally:
             release_write_lease()
 
+    @coordinated_typedb_projection_write(
+        "manifest-evidence-index",
+        typedb_projection_world_from_manifest_index,
+    )
     def ensure_scoped_manifest_evidence_read_index(
         self,
         graph: PortfolioOntology,
@@ -3864,6 +4151,10 @@ class ScopedABoxManifestMixin:
             entities=pending_entities,
         )
 
+    @coordinated_typedb_projection_write(
+        "scoped-abox-save",
+        typedb_projection_world_from_graph,
+    )
     def save_scoped_abox_graph(
         self,
         graph: PortfolioOntology,
@@ -5141,6 +5432,10 @@ class ScopedABoxManifestMixin:
                 "reason": str(error)[:220],
             }
 
+    @coordinated_typedb_projection_write(
+        "deferred-maintenance",
+        typedb_projection_world_from_payload,
+    )
     def run_deferred_maintenance(self, payload: Dict[str, object] = None) -> Dict[str, object]:
         """Prune inactive graph generations after a verified cycle or while idle.
 
@@ -5617,6 +5912,7 @@ class TypeDBOntologyGraphRepository(GraphStoreOntologyRowMapperMixin, ScopedABox
         schema_function_probe_interval_seconds: float = 300.0,
         schema_function_provision_batch_size: int = DEFAULT_TYPEDB_SCHEMA_FUNCTION_PROVISION_BATCH_SIZE,
         schema_function_provision_timeout_seconds: float = DEFAULT_TYPEDB_SCHEMA_FUNCTION_PROVISION_TIMEOUT_SECONDS,
+        projection_coordinator_write_enforced: bool = False,
     ):
         self.address = str(address or "").strip()
         self.user = str(user or "admin").strip() or "admin"
@@ -5718,6 +6014,12 @@ class TypeDBOntologyGraphRepository(GraphStoreOntologyRowMapperMixin, ScopedABox
         self._rulebox_snapshot_cache_result: Dict[str, object] = {}
         self._query_metrics: List[Dict[str, object]] = []
         self._query_metrics_lock = threading.Lock()
+        # Nested repository calls in one worker must share the coordinator
+        # acquired by their outer projection. A thread-local stack keeps that
+        # adoption local to the request and never bypasses the durable TypeDB
+        # lease held by another process.
+        self._projection_coordinator_local = threading.local()
+        self._projection_coordinator_write_enforced = bool(projection_coordinator_write_enforced)
 
     def with_typedb_retries(self, operation):
         attempts = max(1, self.retry_count + 1)
@@ -5942,6 +6244,10 @@ class TypeDBOntologyGraphRepository(GraphStoreOntologyRowMapperMixin, ScopedABox
         })
         return metadata
 
+    @coordinated_typedb_projection_write(
+        "graph-save",
+        typedb_projection_world_from_graph,
+    )
     def save_graph(self, graph: PortfolioOntology) -> Dict[str, object]:
         if not self.address:
             return NullTypeDBOntologyGraphRepository().save_graph(graph)
@@ -9525,6 +9831,10 @@ class TypeDBOntologyGraphRepository(GraphStoreOntologyRowMapperMixin, ScopedABox
         actual = set(clean_symbols_from_payload((inferencebox or {}).get("targetSymbols") or []))
         return not expected or expected.issubset(actual)
 
+    @coordinated_typedb_projection_write(
+        "pending-abox-recovery",
+        typedb_projection_world_from_recovery,
+    )
     def recover_pending_abox_activation(self, world_id: str = "") -> Dict[str, object]:
         """Finish or roll back an interrupted ABox-to-InferenceBox hand-off."""
         try:
@@ -11867,6 +12177,10 @@ relation ontology-assertion,
             "staticSeedFingerprint": metadata.get("staticSeedFingerprint"),
         }
 
+    @coordinated_typedb_projection_write(
+        "ontology-seed",
+        typedb_projection_world_from_payload,
+    )
     def seed_ontology(self, payload: Dict[str, object] = None) -> Dict[str, object]:
         payload = payload or {}
         try:
@@ -12234,6 +12548,10 @@ relation ontology-assertion,
         self._rulebox_snapshot_cache_result = copy.deepcopy(snapshot)
         return snapshot
 
+    @coordinated_typedb_projection_write(
+        "rulebox-save",
+        typedb_projection_world_from_payload,
+    )
     def save_rulebox(self, payload: Dict[str, object] = None) -> Dict[str, object]:
         try:
             rules = rulebox_rules_from_payload(payload or {})
@@ -12307,6 +12625,7 @@ relation ontology-assertion,
         })
         return snapshot
 
+    @coordinated_typedb_projection_write("rulebox-version-append")
     def append_rulebox_version(self, version: Dict[str, object]) -> Dict[str, object]:
         """Append immutable RuleBox governance history without replacing it.
 
@@ -14881,6 +15200,10 @@ relation ontology-assertion,
         self.cache_schema_function_sync_result(sync_fingerprint, result)
         return result
 
+    @coordinated_typedb_projection_write(
+        "native-rule-run",
+        typedb_projection_world_from_payload,
+    )
     def run_rulebox(self, payload: Dict[str, object] = None) -> Dict[str, object]:
         """Run native rules under the same durable writer boundary as ABox swaps.
 
@@ -20348,4 +20671,7 @@ def typedb_repository_from_settings(settings: Dict[str, str] = None):
         schema_function_provision_timeout_seconds=number_or_none(
             settings.get("typedbSchemaFunctionProvisionTimeoutSeconds")
         ) or DEFAULT_TYPEDB_SCHEMA_FUNCTION_PROVISION_TIMEOUT_SECONDS,
+        projection_coordinator_write_enforced=typedb_bool(
+            settings.get("typedbProjectionCoordinatorEnabled", "1")
+        ),
     )

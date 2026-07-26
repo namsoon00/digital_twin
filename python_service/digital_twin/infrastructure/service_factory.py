@@ -238,6 +238,20 @@ def build_notification_queue_runner(dry_run: bool = False) -> NotificationQueueR
     settings = runtime_settings()
     monitor_store = stores.monitor_store(settings)
     investment_brain_service = build_investment_brain_service(settings)
+
+    def queue_health_at_dispatch():
+        # Do not trust the event payload alone: an operations job can wait
+        # behind outbound delivery work while the reasoning queue already
+        # recovered. This read-only observation intentionally does not emit a
+        # second queue-health event.
+        runner = build_ontology_reasoning_runner(settings)
+        status = dict(runner.status() or {})
+        service = getattr(runner, "queue_health_service", None)
+        if service and hasattr(service, "observe"):
+            return service.observe(status)
+        health = status.get("queueDelayHealth")
+        return dict(health or {}) if isinstance(health, dict) else {}
+
     return NotificationQueueRunner(
         queue=stores.notification_job_store(settings),
         account_repository=stores.account_registry(settings),
@@ -269,6 +283,7 @@ def build_notification_queue_runner(dry_run: bool = False) -> NotificationQueueR
         ),
         operator_reports_enabled=str(settings.get("operatorReasoningReportEnabled", "1")).strip().lower() not in {"0", "false", "no", "off"},
         settings=settings,
+        operational_state_resolver=queue_health_at_dispatch,
     )
 
 
@@ -597,6 +612,33 @@ def typedb_projection_recovery_health(ontology_repository, world_id: str) -> Dic
 def build_ontology_world_projection_runner(settings=None) -> OntologyWorldProjectionRunner:
     """Build the independent durable shared-world projection worker."""
     configured_settings = settings or runtime_settings()
+    reasoning_runner_cache = {}
+
+    def reasoning_queue_probe():
+        # Shared worlds are derived read models. A pending PortfolioWorld
+        # inference always has priority because it can produce a user-facing
+        # investment decision while a shared-world refresh cannot.
+        runner = reasoning_runner_cache.get("runner")
+        if runner is None:
+            runner = build_ontology_reasoning_runner(configured_settings)
+            reasoning_runner_cache["runner"] = runner
+        status = dict(runner.status() or {})
+        queue_health = status.get("queueHealth") if isinstance(status.get("queueHealth"), dict) else {}
+
+        def safe_int(value) -> int:
+            try:
+                return max(0, int(float(value or 0)))
+            except (TypeError, ValueError):
+                return 0
+
+        return {
+            "status": str(queue_health.get("status") or status.get("status") or "unknown"),
+            "effectivePendingCount": safe_int(status.get("effectivePendingCount")),
+            "pendingEntryCount": safe_int(status.get("mailboxPendingEntryCount")),
+            "pendingSymbolCount": len(status.get("pendingSymbols") or []),
+            "queueMode": str((status.get("queueDispatch") or {}).get("mode") or ""),
+        }
+
     return OntologyWorldProjectionRunner(
         outbox=stores.ontology_world_projection_outbox_store(configured_settings),
         projection_recorder=PortfolioOntologyProjectionRecorder(
@@ -606,6 +648,7 @@ def build_ontology_world_projection_runner(settings=None) -> OntologyWorldProjec
         ),
         settings=configured_settings,
         worker_id=os.environ.get("ONTOLOGY_WORLD_PROJECTION_WORKER_ID") or "",
+        reasoning_queue_probe=reasoning_queue_probe,
     )
 
 
@@ -613,10 +656,38 @@ def build_ontology_maintenance_runner(settings=None) -> OntologyMaintenanceRunne
     """Build the isolated, low-priority scoped ABox retention worker."""
 
     configured_settings = settings or runtime_settings()
+    reasoning_runner_cache = {}
+
+    def reasoning_queue_probe():
+        # The maintenance worker must yield to both mailbox and direct source
+        # requests. Use the scheduler's read-only status path, not an
+        # approximation based only on one MySQL table.
+        def safe_int(value) -> int:
+            try:
+                return max(0, int(float(value or 0)))
+            except (TypeError, ValueError):
+                return 0
+
+        runner = reasoning_runner_cache.get("runner")
+        if runner is None:
+            runner = build_ontology_reasoning_runner(configured_settings)
+            reasoning_runner_cache["runner"] = runner
+        status = dict(runner.status() or {})
+        queue_health = status.get("queueHealth") if isinstance(status.get("queueHealth"), dict) else {}
+        return {
+            "status": str(queue_health.get("status") or status.get("status") or "unknown"),
+            "effectivePendingCount": safe_int(status.get("effectivePendingCount")),
+            "pendingEntryCount": safe_int(status.get("mailboxPendingEntryCount")),
+            "pendingSymbolCount": len(status.get("pendingSymbols") or []),
+            "overduePendingSymbolCount": safe_int(status.get("overduePendingSymbolCount")),
+            "queueMode": str((status.get("queueDispatch") or {}).get("mode") or ""),
+        }
+
     return OntologyMaintenanceRunner(
         ontology_repository=ontology_repository_from_settings(configured_settings),
         state_store=stores.ontology_maintenance_state_store(configured_settings),
         settings=configured_settings,
+        reasoning_queue_probe=reasoning_queue_probe,
     )
 
 
@@ -725,6 +796,11 @@ def build_ontology_reasoning_runner(settings=None, event_publisher=None) -> Onto
         queue_health_service=OntologyReasoningQueueHealthService(
             store=cursor_store,
             settings=configured_settings,
+        ),
+        projection_coordinator_probe=(
+            getattr(ontology_repository, "projection_coordinator_lease_status")
+            if callable(getattr(ontology_repository, "projection_coordinator_lease_status", None))
+            else None
         ),
     )
 

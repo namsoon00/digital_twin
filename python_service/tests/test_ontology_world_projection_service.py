@@ -109,6 +109,28 @@ class OntologyWorldProjectionRunnerTests(unittest.TestCase):
         self.assertEqual("market:shared:us", world.world_id)
         self.assertEqual("market", kind)
 
+    def test_pending_live_reasoning_yields_before_claiming_shared_world_work(self):
+        outbox = FakeOutbox([projection_job()])
+        recorder = FakeRecorder({"status": "ok", "saved": True})
+        runner = OntologyWorldProjectionRunner(
+            outbox,
+            recorder,
+            reasoning_queue_probe=lambda: {
+                "status": "healthy",
+                "effectivePendingCount": 2,
+                "pendingSymbolCount": 2,
+                "queueMode": "priority-selected",
+            },
+        )
+
+        result = runner.run_once(limit=1)
+
+        self.assertEqual("deferred-reasoning-queue", result["status"])
+        self.assertEqual(0, result["claimedCount"])
+        self.assertEqual(1, len(outbox.jobs))
+        self.assertEqual([], recorder.calls)
+        self.assertEqual(2, result["reasoningQueue"]["effectivePendingCount"])
+
     def test_saved_shared_projection_defers_routine_maintenance(self):
         outbox = FakeOutbox([projection_job()])
         repository = FakeMaintenanceRepository()

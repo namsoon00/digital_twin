@@ -363,6 +363,7 @@ class OntologyReasoningRunner:
         storage_guard: Callable = None,
         mailbox_store=None,
         queue_health_service=None,
+        projection_coordinator_probe: Callable = None,
     ):
         self.event_reader = event_reader
         self.cursor_store = cursor_store
@@ -378,6 +379,7 @@ class OntologyReasoningRunner:
         self.storage_guard = storage_guard
         self.mailbox_store = mailbox_store
         self.queue_health_service = queue_health_service
+        self.projection_coordinator_probe = projection_coordinator_probe
 
     def enabled(self) -> bool:
         return truthy(self.settings.get("ontologyReasoningEnabled"), True)
@@ -1539,6 +1541,25 @@ class OntologyReasoningRunner:
         state.setdefault("status", "ready" if state["ready"] else "blocked")
         return state
 
+    def projection_coordinator_state(self) -> Dict[str, object]:
+        """Read physical TypeDB writer ownership for operations diagnostics."""
+        if not callable(self.projection_coordinator_probe):
+            return {"status": "not-configured"}
+        try:
+            result = self.projection_coordinator_probe()
+        except Exception as error:  # noqa: BLE001 - diagnostics must not delay reasoning.
+            return {"status": "error", "reason": str(error)[:180]}
+        value = dict(result or {}) if isinstance(result, dict) else {"status": "invalid"}
+        allowed = {
+            "status", "coordinator", "coordinatorVersion", "requestedWorldId",
+            "worldId", "leaseOwner", "leaseRemainingSeconds", "updatedAt", "reason",
+        }
+        return {
+            key: item
+            for key, item in value.items()
+            if key in allowed and item not in (None, "", [], {})
+        }
+
     def publish(self, event) -> None:
         if not self.event_publisher:
             return
@@ -1787,8 +1808,11 @@ class OntologyReasoningRunner:
             # lease.  Another local worker holding it is back-pressure, not
             # a failed graph projection, so do not open the error circuit.
             "deferred-scoped-write-lease",
+            "deferred-projection-coordinator",
             "deferred-inference-write-lease",
             "deferred-pending-scoped-manifest",
+            "blocked-pending-abox-activation",
+            "pending-abox-activation",
             # A cold TypeDB server compiles the RuleBox in bounded candidate
             # batches. Keep source events pending while the prior aligned
             # generation remains active; this is controlled back-pressure, not
@@ -1828,13 +1852,25 @@ class OntologyReasoningRunner:
         failures: List[Dict[str, str]] = []
         retryable: List[Dict[str, str]] = []
 
-        def add_result(account_id: object, stage: str, status: str, reason: object) -> None:
+        def add_result(
+            account_id: object,
+            stage: str,
+            status: str,
+            reason: object,
+            retry_after_seconds: object = 0,
+        ) -> None:
+            try:
+                retry_after = max(0, int(float(retry_after_seconds or 0)))
+            except (TypeError, ValueError):
+                retry_after = 0
             item = {
                 "accountId": str(account_id or ""),
                 "stage": stage,
                 "status": status,
                 "reason": str(reason or "TypeDB ABox 투영이 완료되지 않았습니다."),
             }
+            if retry_after:
+                item["retryAfterSeconds"] = retry_after
             if status in retryable_projection_statuses:
                 retryable.append(item)
             else:
@@ -1849,6 +1885,7 @@ class OntologyReasoningRunner:
                     "projection",
                     projection_status,
                     result.get("reason") or "TypeDB ABox 투영이 완료되지 않았습니다.",
+                    result.get("recommendedRetryAfterSeconds") or result.get("retryAfterSeconds"),
                 )
                 continue
             execution = result.get("ruleboxExecution") if isinstance(result.get("ruleboxExecution"), dict) else {}
@@ -1859,6 +1896,7 @@ class OntologyReasoningRunner:
                     "native-rule",
                     execution_status,
                     execution.get("reason") or "TypeDB native rule 실행이 완료되지 않았습니다.",
+                    execution.get("recommendedRetryAfterSeconds") or execution.get("retryAfterSeconds"),
                 )
                 continue
             inference = result.get("inferenceBox") if isinstance(result.get("inferenceBox"), dict) else {}
@@ -1873,6 +1911,7 @@ class OntologyReasoningRunner:
                     "inferencebox",
                     inference_status,
                     inference.get("reason") or result.get("reason") or "TypeDB InferenceBox 응답이 없습니다.",
+                    inference.get("recommendedRetryAfterSeconds") or inference.get("retryAfterSeconds"),
                 )
                 continue
             if inference_status == "empty":
@@ -1921,6 +1960,9 @@ class OntologyReasoningRunner:
                 "retryable": True,
                 "reason": "TypeDB " + first["stage"] + " 직렬화 대기: " + first["reason"][:180],
                 "results": retryable,
+                "retryAfterSeconds": max(
+                    [int(item.get("retryAfterSeconds") or 0) for item in retryable] or [0]
+                ),
             }
         return {"ready": True, "results": []}
 
@@ -2605,6 +2647,15 @@ class OntologyReasoningRunner:
             omitted_symbol_count=omitted_symbol_count,
         )
         reasoning_context = reasoning_request_provenance(selected_requests, symbols)
+        reasoning_context["queuePressure"] = {
+            "effectivePendingCount": len(requests),
+            "selectedRequestCount": len(selected_requests),
+            "omittedSymbolCount": omitted_symbol_count,
+            "hasDeferredWork": bool(
+                omitted_symbol_count
+                or len(requests) > len(selected_requests)
+            ),
+        }
         # A pending mailbox slot can be temporarily ineligible because its
         # symbol-level interval or retry protection has not elapsed.  Never
         # invoke the monitor with an empty subject filter in that case: older
@@ -2703,7 +2754,10 @@ class OntologyReasoningRunner:
                     "configuredMaxSymbolsPerRun": self.max_symbols_per_run(),
                     "nativeTypeDbTargetSymbolLimit": self.native_typedb_target_symbol_limit() if self.native_typedb_rule_execution_enabled() else None,
                     "omittedSymbolCount": omitted_symbol_count,
-                    "retryAfterSeconds": self.projection_retry_seconds(),
+                    "retryAfterSeconds": int(
+                        projection_gate.get("retryAfterSeconds")
+                        or self.projection_retry_seconds()
+                    ),
                     "deferredReason": str(projection_gate.get("reason") or "TypeDB graph cycle is serialized by another writer."),
                     "projectionFailures": list(projection_gate.get("results") or []),
                     "projectionCircuit": self.projection_circuit_state(),
@@ -3193,6 +3247,7 @@ class OntologyReasoningRunner:
                 str(execution_timeout_guard.get("status") or "") == "cooldown-elapsed"
             ),
             "storageGuard": storage_guard,
+            "projectionCoordinator": self.projection_coordinator_state(),
             "queueHealth": {"status": queue_status, "reason": queue_reason},
             "queueDispatch": queue_dispatch,
             "queueDelayHealth": (

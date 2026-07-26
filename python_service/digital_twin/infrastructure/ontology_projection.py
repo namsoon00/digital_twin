@@ -1132,52 +1132,98 @@ class PortfolioOntologyProjectionRecorder:
             # verify that the eventual native InferenceBox covered the exact
             # requested incremental scope before predecessor cleanup.
             persistence_graph.worldview["inferenceTargetSymbols"] = list(inference_symbols)
-            abox_persistence_started = time.perf_counter()
-            result = self.repository.save_graph(persistence_graph)
-            runtime_stages["aboxPersistenceMs"] = int((time.perf_counter() - abox_persistence_started) * 1000)
-            if not isinstance(result, dict):
-                result = {"saved": False, "status": "error", "reason": "ontology repository returned non-dict result"}
-            self.attach_abox_persistence_runtime_stages(runtime_stages, result)
-            result["projectionMode"] = "abox-facts-only-typedb-native-rules"
-            result["materialFingerprint"] = material_fingerprint
-            result["aboxSnapshotId"] = material_snapshot_id
-            result["nativeRulePlannerTopology"] = dict(
-                persistence_graph.worldview.get("nativeRulePlannerTopology") or {}
+            coordinator_lease = self.acquire_projection_coordinator_lease(
+                "portfolio:" + material_snapshot_id,
+                portfolio_world_context.world_id,
             )
-            result["materialChangeDetected"] = True
-            result["projectionScope"] = projection_scope
-            result["inferenceImpactPlan"] = compact_impact_plan
-            result["reasoningContext"] = compact_reasoning_context
-            result["aboxValidation"] = validation.to_dict()
-            result["runtimeStages"] = runtime_stages
-            result["ontologyWorld"] = world_metadata(portfolio_world_context)
-            if rulebox_bootstrap:
-                result["ruleboxBootstrap"] = rulebox_bootstrap
-            if pending_activation_recovery:
-                result["pendingAboxActivationRecovery"] = pending_activation_recovery
-            if result.get("saved") or str(result.get("status") or "") in {
-                "staged-scoped-manifest",
-                "deferred-pending-scoped-manifest",
-            }:
-                pending = result.get("pendingAboxActivation") if isinstance(result.get("pendingAboxActivation"), dict) else {}
-                self.attach_graph_store_inference_result(
-                    result,
-                    snapshot,
-                    pending.get("targetSymbols") or inference_symbols,
-                    compact_impact_plan,
-                    world_id=portfolio_world_context.world_id,
-                    candidate_scope_plan=scoped_identity.get("scopePlan") or [],
-                    rulebox_rules_hash=str(rulebox_bootstrap.get("ruleboxRulesHash") or ""),
-                    tbox_fingerprint=str(
-                        ((persistence_graph.worldview or {}).get("activeTBox") or {}).get("fingerprint")
-                        or ""
+            if not bool(coordinator_lease.get("acquired")):
+                result = {
+                    "saved": False,
+                    "status": "deferred-projection-coordinator",
+                    "reason": str(
+                        coordinator_lease.get("reason")
+                        or "다른 World 투영이 TypeDB 데이터베이스 쓰기 경계를 사용 중입니다."
+                    )[:220],
+                    "retryable": True,
+                    "recommendedRetryAfterSeconds": int(
+                        coordinator_lease.get("recommendedRetryAfterSeconds") or 10
                     ),
-                    preflight_graph=persistence_graph,
-                    preflight_manifest_id=str(
-                        (persistence_graph.worldview or {}).get("worldviewManifestId")
-                        or material_snapshot_id
-                    ),
+                    "preservedActiveGeneration": True,
+                    "materialFingerprint": material_fingerprint,
+                    "aboxSnapshotId": material_snapshot_id,
+                    "projectionScope": projection_scope,
+                    "inferenceImpactPlan": compact_impact_plan,
+                    "reasoningContext": compact_reasoning_context,
+                    "aboxValidation": validation.to_dict(),
+                    "runtimeStages": runtime_stages,
+                    "ontologyWorld": world_metadata(portfolio_world_context),
+                    "projectionCoordinator": self.projection_coordinator_summary(coordinator_lease),
+                }
+                self.store_projection_result(snapshot, result, projection_run)
+                return result
+            result: Dict[str, object] = {}
+            coordinator_release = {}
+            try:
+                abox_persistence_started = time.perf_counter()
+                result = self.repository.save_graph(persistence_graph)
+                runtime_stages["aboxPersistenceMs"] = int((time.perf_counter() - abox_persistence_started) * 1000)
+                if not isinstance(result, dict):
+                    result = {"saved": False, "status": "error", "reason": "ontology repository returned non-dict result"}
+                self.attach_abox_persistence_runtime_stages(runtime_stages, result)
+                result["projectionMode"] = "abox-facts-only-typedb-native-rules"
+                result["materialFingerprint"] = material_fingerprint
+                result["aboxSnapshotId"] = material_snapshot_id
+                result["nativeRulePlannerTopology"] = dict(
+                    persistence_graph.worldview.get("nativeRulePlannerTopology") or {}
                 )
+                result["materialChangeDetected"] = True
+                result["projectionScope"] = projection_scope
+                result["inferenceImpactPlan"] = compact_impact_plan
+                result["reasoningContext"] = compact_reasoning_context
+                result["aboxValidation"] = validation.to_dict()
+                result["runtimeStages"] = runtime_stages
+                result["ontologyWorld"] = world_metadata(portfolio_world_context)
+                result["_projectionCoordinatorLease"] = coordinator_lease
+                if rulebox_bootstrap:
+                    result["ruleboxBootstrap"] = rulebox_bootstrap
+                if pending_activation_recovery:
+                    result["pendingAboxActivationRecovery"] = pending_activation_recovery
+                save_status = str(result.get("status") or "")
+                if result.get("saved") or save_status == "staged-scoped-manifest":
+                    pending = result.get("pendingAboxActivation") if isinstance(result.get("pendingAboxActivation"), dict) else {}
+                    self.attach_graph_store_inference_result(
+                        result,
+                        snapshot,
+                        pending.get("targetSymbols") or inference_symbols,
+                        compact_impact_plan,
+                        world_id=portfolio_world_context.world_id,
+                        candidate_scope_plan=scoped_identity.get("scopePlan") or [],
+                        rulebox_rules_hash=str(rulebox_bootstrap.get("ruleboxRulesHash") or ""),
+                        tbox_fingerprint=str(
+                            ((persistence_graph.worldview or {}).get("activeTBox") or {}).get("fingerprint")
+                            or ""
+                        ),
+                        preflight_graph=persistence_graph,
+                        preflight_manifest_id=str(
+                            (persistence_graph.worldview or {}).get("worldviewManifestId")
+                            or material_snapshot_id
+                        ),
+                    )
+                elif save_status == "deferred-pending-scoped-manifest":
+                    # This input did not stage the pending candidate. Running
+                    # native rules with its graph would compare a new Manifest
+                    # to another writer's journal and create a false rollback.
+                    result["retryable"] = True
+                    result["recommendedRetryAfterSeconds"] = int(
+                        result.get("recommendedRetryAfterSeconds") or 10
+                    )
+                    result["pendingManifestOwner"] = "another-projection"
+            finally:
+                coordinator_release = self.release_projection_coordinator_lease(coordinator_lease)
+                if isinstance(result, dict):
+                    result.pop("_projectionCoordinatorLease", None)
+                    result["projectionCoordinator"] = self.projection_coordinator_summary(coordinator_lease)
+                    result["projectionCoordinatorRelease"] = coordinator_release
             market_projection_started = time.perf_counter()
             if bool(result.get("saved")):
                 # MarketWorld is an account-independent derived mirror.  It
@@ -2029,6 +2075,26 @@ class PortfolioOntologyProjectionRecorder:
                 "projectionKind": kind,
                 "reason": "The active graph adapter cannot update a shared " + world_label + " through scoped Manifests yet.",
             }
+        coordinator_lease = self.acquire_projection_coordinator_lease(
+            kind + "-world-merge",
+            shared_world.world_id,
+        )
+        if not bool(coordinator_lease.get("acquired")):
+            return {
+                **world_metadata(shared_world),
+                "status": "deferred-projection-coordinator",
+                "preservedActiveGeneration": True,
+                "projectionKind": kind,
+                "retryable": True,
+                "recommendedRetryAfterSeconds": int(
+                    coordinator_lease.get("recommendedRetryAfterSeconds") or 10
+                ),
+                "projectionCoordinator": self.projection_coordinator_summary(coordinator_lease),
+                "reason": str(
+                    coordinator_lease.get("reason")
+                    or "다른 TypeDB World 투영이 데이터베이스 쓰기 경계를 사용 중입니다."
+                )[:220],
+            }
         merge_lease: Dict[str, object] = {}
         acquire_lease = getattr(self.repository, "acquire_scoped_abox_write_lease", None)
         release_lease = getattr(self.repository, "release_scoped_abox_write_lease", None)
@@ -2326,11 +2392,11 @@ class PortfolioOntologyProjectionRecorder:
                 "status": "invalid-save-result",
             }
             activation = {}
-            if manifest_id and str(save_result.get("status") or "") in {
-                "ok",
-                "staged-scoped-manifest",
-                "deferred-pending-scoped-manifest",
-            }:
+            if (
+                manifest_id
+                and str(save_result.get("status") or "") in {"ok", "staged-scoped-manifest"}
+                and str(save_result.get("aboxSnapshotId") or manifest_id) == manifest_id
+            ):
                 activation = self.repository_world_call(
                     "activate_scoped_abox_manifest",
                     manifest_id,
@@ -2365,6 +2431,7 @@ class PortfolioOntologyProjectionRecorder:
                     for key, value in dict(merge_lease or {}).items()
                     if key != "propertiesJson"
                 },
+                "projectionCoordinator": self.projection_coordinator_summary(coordinator_lease),
             }
         except Exception as error:  # noqa: BLE001 - market sharing must never suppress account reasoning.
             return {
@@ -2382,6 +2449,7 @@ class PortfolioOntologyProjectionRecorder:
                     # short-lived shared lease will expire if a runtime stop
                     # prevents its normal release.
                     pass
+            self.release_projection_coordinator_lease(coordinator_lease)
 
     def attach_graph_store_inference_result(
         self,
@@ -2417,13 +2485,25 @@ class PortfolioOntologyProjectionRecorder:
                 lease_summary = {
                     key: value
                     for key, value in dict(inference_write_lease or {}).items()
-                    if key != "propertiesJson"
+                    if key != "propertiesJson" and not key.startswith("_")
+                    and key != "projectionCoordinatorLeaseOwned"
                 }
                 result["inferenceWriteLease"] = lease_summary
-                reason = "다른 ABox 활성화 또는 TypeDB 네이티브 추론 세대가 실행 중입니다."
+                deferred_status = str(
+                    inference_write_lease.get("status") or "deferred-inference-write-lease"
+                ).strip()
+                if deferred_status not in {
+                    "deferred-projection-coordinator",
+                    "deferred-inference-write-lease",
+                }:
+                    deferred_status = "deferred-inference-write-lease"
+                reason = str(
+                    inference_write_lease.get("reason")
+                    or "다른 ABox 활성화 또는 TypeDB 네이티브 추론 세대가 실행 중입니다."
+                )
                 result["ruleboxExecution"] = {
                     "configured": True,
-                    "status": "deferred-inference-write-lease",
+                    "status": deferred_status,
                     "graphStore": "typedb",
                     "source": "typedbNativeRule",
                     "nativeTypeDbReasoningUsed": False,
@@ -2431,7 +2511,7 @@ class PortfolioOntologyProjectionRecorder:
                 }
                 result["inferenceBox"] = {
                     "configured": True,
-                    "status": "deferred-inference-write-lease",
+                    "status": deferred_status,
                     "graphStore": "typedb",
                     "source": "typedbInferenceBox",
                     "nativeTypeDbReasoningUsed": False,
@@ -2439,15 +2519,20 @@ class PortfolioOntologyProjectionRecorder:
                 }
                 result["aboxStaged"] = bool(result.get("saved"))
                 result["saved"] = False
-                result["status"] = "deferred-inference-write-lease"
+                result["status"] = deferred_status
                 result["preservedActiveGeneration"] = True
+                result["retryable"] = True
+                result["recommendedRetryAfterSeconds"] = int(
+                    inference_write_lease.get("recommendedRetryAfterSeconds") or 10
+                )
                 result["reason"] = reason
                 return
             if inference_write_lease:
                 result["inferenceWriteLease"] = {
                     key: value
                     for key, value in dict(inference_write_lease or {}).items()
-                    if key != "propertiesJson"
+                    if key != "propertiesJson" and not key.startswith("_")
+                    and key != "projectionCoordinatorLeaseOwned"
                 }
             if bool(compact_impact_plan.get("nativeRuleSelectionEligible")):
                 # Read the old aligned InferenceBox only after owning the
@@ -2681,18 +2766,36 @@ class PortfolioOntologyProjectionRecorder:
             runtime_stages["aboxActivationFinalizationMs"] = int((time.perf_counter() - finalization_started) * 1000)
         finally:
             if inference_write_lease.get("acquired"):
-                releaser = getattr(self.repository, "release_scoped_abox_write_lease", None)
-                if callable(releaser):
-                    try:
-                        result["inferenceWriteLeaseRelease"] = releaser(inference_write_lease)
-                    except Exception as error:  # noqa: BLE001 - expiry/recovery remains available.
-                        result["inferenceWriteLeaseRelease"] = {"status": "error", "reason": str(error)[:180]}
+                result["inferenceWriteLeaseRelease"] = self.release_inference_write_lease(inference_write_lease)
 
     def acquire_inference_write_lease(self, result: Dict[str, object], world_id: str = "") -> Dict[str, object]:
         """Serialize ABox preparation and native InferenceBox publication."""
         acquire = getattr(self.repository, "acquire_scoped_abox_write_lease", None)
         if not callable(acquire):
             return {"status": "unsupported"}
+        adopted_coordinator = result.get("_projectionCoordinatorLease")
+        adopted_coordinator = dict(adopted_coordinator or {}) if isinstance(adopted_coordinator, dict) else {}
+        coordinator_owned_here = False
+        coordinator_lease = adopted_coordinator
+        if not bool(coordinator_lease.get("acquired")):
+            coordinator_lease = self.acquire_projection_coordinator_lease(
+                "native-inference",
+                world_id,
+            )
+            coordinator_owned_here = bool(coordinator_lease.get("acquired"))
+        if not bool(coordinator_lease.get("acquired")):
+            return {
+                "acquired": False,
+                "status": "deferred-projection-coordinator",
+                "reason": str(
+                    coordinator_lease.get("reason")
+                    or "다른 TypeDB World 투영이 데이터베이스 쓰기 경계를 사용 중입니다."
+                )[:220],
+                "recommendedRetryAfterSeconds": int(
+                    coordinator_lease.get("recommendedRetryAfterSeconds") or 10
+                ),
+                "projectionCoordinator": self.projection_coordinator_summary(coordinator_lease),
+            }
         pending = result.get("pendingAboxActivation") if isinstance(result.get("pendingAboxActivation"), dict) else {}
         candidate_id = str(
             pending.get("candidateAboxSnapshotId")
@@ -2701,13 +2804,49 @@ class PortfolioOntologyProjectionRecorder:
             or "native-rule"
         ).strip()
         try:
-            return dict(self.repository_world_call(
+            lease = dict(self.repository_world_call(
                 "acquire_scoped_abox_write_lease",
                 "inference:" + candidate_id,
                 world_id=world_id,
             ) or {})
         except Exception as error:  # noqa: BLE001 - do not activate without the writer boundary.
-            return {"acquired": False, "status": "error", "reason": str(error)[:180]}
+            lease = {"acquired": False, "status": "error", "reason": str(error)[:180]}
+        coordinator_release = {}
+        if not bool(lease.get("acquired")) and coordinator_owned_here:
+            coordinator_release = self.release_projection_coordinator_lease(coordinator_lease)
+            coordinator_lease = {
+                **coordinator_lease,
+                "acquired": False,
+                "status": "released-after-world-lease-failure",
+            }
+        return {
+            **lease,
+            "projectionCoordinator": {
+                **self.projection_coordinator_summary(coordinator_lease),
+                **({"release": coordinator_release} if coordinator_release else {}),
+            },
+            "_projectionCoordinatorLease": coordinator_lease,
+            "projectionCoordinatorLeaseOwned": coordinator_owned_here,
+        }
+
+    def release_inference_write_lease(self, lease: Dict[str, object]) -> Dict[str, object]:
+        """Release the per-world lease first, then this call's global lease."""
+        release = {"status": "not-owner"}
+        releaser = getattr(self.repository, "release_scoped_abox_write_lease", None)
+        if callable(releaser):
+            try:
+                release = dict(releaser(lease) or {})
+            except Exception as error:  # noqa: BLE001 - the global release still must be attempted.
+                release = {"status": "error", "reason": str(error)[:180]}
+        coordinator_release = {"status": "adopted-by-caller"}
+        coordinator = lease.get("_projectionCoordinatorLease") if isinstance(lease, dict) else {}
+        if bool(lease.get("projectionCoordinatorLeaseOwned")) and isinstance(coordinator, dict):
+            coordinator_release = self.release_projection_coordinator_lease(coordinator)
+        return {
+            "status": str(release.get("status") or "unknown"),
+            "worldLease": release,
+            "projectionCoordinator": coordinator_release,
+        }
 
     def reconcile_abox_activation_after_inference(
         self,
@@ -3276,21 +3415,91 @@ class PortfolioOntologyProjectionRecorder:
 
     def scoped_full_reconcile_due(self, active_metadata: Dict[str, object]) -> bool:
         """Require a periodic whole-world pass instead of hiding deferred facts."""
+        age_minutes = self.scoped_full_reconcile_age_minutes(active_metadata)
+        return age_minutes is None or age_minutes >= self.scoped_full_reconcile_minutes()
+
+    def scoped_full_reconcile_age_minutes(self, active_metadata: Dict[str, object]):
+        """Return active full-scope age, or ``None`` when no baseline exists."""
         stamp = str(
             (active_metadata or {}).get("lastFullScopeReconcileAt")
             or (active_metadata or {}).get("asOf")
             or ""
         ).strip()
         if not stamp:
-            return True
+            return None
         try:
             parsed = datetime.fromisoformat(stamp.replace("Z", "+00:00"))
             if parsed.tzinfo is None:
                 parsed = parsed.replace(tzinfo=timezone.utc)
         except ValueError:
-            return True
+            return None
         age_minutes = (datetime.now(timezone.utc) - parsed.astimezone(timezone.utc)).total_seconds() / 60.0
-        return age_minutes >= self.scoped_full_reconcile_minutes()
+        return max(0.0, age_minutes)
+
+    def scoped_full_reconcile_defer_when_queue_active(self) -> bool:
+        value = str(
+            self.settings.get("ontologyScopedFullReconcileDeferWhenQueueActive") or "1"
+        ).strip().lower()
+        return value not in {"0", "false", "no", "off", "disabled"}
+
+    def scoped_full_reconcile_max_deferral_minutes(self) -> float:
+        try:
+            value = float(str(
+                self.settings.get("ontologyScopedFullReconcileMaxDeferralMinutes") or "60"
+            ))
+        except (TypeError, ValueError):
+            value = 60.0
+        return max(5.0, min(24.0 * 60.0, value))
+
+    @staticmethod
+    def reasoning_queue_pressure(reasoning_context: Dict[str, object] = None) -> Dict[str, object]:
+        context = reasoning_context if isinstance(reasoning_context, dict) else {}
+        pressure = context.get("queuePressure")
+        pressure = pressure if isinstance(pressure, dict) else {}
+
+        def number(key: str) -> int:
+            try:
+                return max(0, int(float(pressure.get(key) or 0)))
+            except (TypeError, ValueError):
+                return 0
+
+        effective_pending = number("effectivePendingCount")
+        selected = number("selectedRequestCount")
+        omitted_symbols = number("omittedSymbolCount")
+        return {
+            "effectivePendingCount": effective_pending,
+            "selectedRequestCount": selected,
+            "omittedSymbolCount": omitted_symbols,
+            "hasDeferredWork": bool(
+                pressure.get("hasDeferredWork")
+                or omitted_symbols > 0
+                or effective_pending > selected
+            ),
+        }
+
+    def defer_scoped_full_reconcile(
+        self,
+        active_metadata: Dict[str, object],
+        reasoning_context: Dict[str, object] = None,
+    ) -> bool:
+        """Yield an overdue expensive pass only while other work is queued.
+
+        The first full projection must never be skipped because it establishes
+        the Manifest baseline. Once a baseline exists, live market work may
+        continue as target-scoped patches for a bounded extra period. The hard
+        deferral cap prevents a busy stream from hiding stale untouched scopes.
+        """
+        if not self.scoped_full_reconcile_defer_when_queue_active():
+            return False
+        age_minutes = self.scoped_full_reconcile_age_minutes(active_metadata)
+        if age_minutes is None:
+            return False
+        if age_minutes > (
+            self.scoped_full_reconcile_minutes()
+            + self.scoped_full_reconcile_max_deferral_minutes()
+        ):
+            return False
+        return bool(self.reasoning_queue_pressure(reasoning_context).get("hasDeferredWork"))
 
     def target_scoped_patch_targets(
         self,
@@ -3330,6 +3539,9 @@ class PortfolioOntologyProjectionRecorder:
             "explicitTargetSymbols": list(explicit),
             "availableSymbolCount": len(available),
             "fullReconcileMinutes": self.scoped_full_reconcile_minutes(),
+            "fullReconcileMaxDeferralMinutes": self.scoped_full_reconcile_max_deferral_minutes(),
+            "fullReconcileAgeMinutes": self.scoped_full_reconcile_age_minutes(active_metadata),
+            "queuePressure": self.reasoning_queue_pressure(reasoning_context),
             "fallbackReason": "",
         }
         # A reasoning worker can intentionally schedule one subject even when
@@ -3345,7 +3557,12 @@ class PortfolioOntologyProjectionRecorder:
                 "eligible": False,
                 "fallbackReason": "global-value-context-without-explicit-subject",
             }
-        if self.scoped_full_reconcile_due(active_metadata):
+        full_reconcile_due = self.scoped_full_reconcile_due(active_metadata)
+        full_reconcile_deferred = (
+            full_reconcile_due
+            and self.defer_scoped_full_reconcile(active_metadata, reasoning_context)
+        )
+        if full_reconcile_due and not full_reconcile_deferred:
             return {
                 **base,
                 "status": "full-reconciliation-due",
@@ -3369,6 +3586,9 @@ class PortfolioOntologyProjectionRecorder:
         return {
             **base,
             "status": (
+                "target-scoped-full-reconciliation-deferred"
+                if full_reconcile_deferred
+                else
                 "target-scoped-explicit-global-context"
                 if preliminary.get("globalImpact")
                 else "target-scoped-quality-global-context"
@@ -3376,6 +3596,12 @@ class PortfolioOntologyProjectionRecorder:
                 else "target-scoped"
             ),
             "eligible": True,
+            "fullReconcileDeferred": full_reconcile_deferred,
+            "fallbackReason": (
+                "periodic-full-scope-reconciliation-deferred-for-active-queue"
+                if full_reconcile_deferred
+                else ""
+            ),
         }
 
     def inference_impact_plan(
@@ -3439,6 +3665,61 @@ class PortfolioOntologyProjectionRecorder:
     def active_graph_store_key(self, result: Dict[str, object] = None) -> str:
         key = str(getattr(self.repository, "store_key", "") or "").strip()
         return key or "graph-store"
+
+    @staticmethod
+    def projection_coordinator_summary(lease: Dict[str, object]) -> Dict[str, object]:
+        """Keep TypeDB coordination visible without leaking control JSON."""
+        allowed = {
+            "acquired",
+            "status",
+            "coordinator",
+            "coordinatorVersion",
+            "requestedWorldId",
+            "leaseOwner",
+            "leaseExpiresAtEpoch",
+            "leaseRemainingSeconds",
+            "recommendedRetryAfterSeconds",
+            "reason",
+        }
+        return {
+            key: value
+            for key, value in dict(lease or {}).items()
+            if key in allowed and value not in (None, "", [], {})
+        }
+
+    def acquire_projection_coordinator_lease(
+        self,
+        owner: str,
+        world_id: str,
+    ) -> Dict[str, object]:
+        """Claim the narrow TypeDB physical-write boundary when available."""
+        if self.active_graph_store_key() != "typedb":
+            return {"acquired": True, "status": "not-typedb"}
+        acquire = getattr(self.repository, "acquire_projection_coordinator_lease", None)
+        if not callable(acquire):
+            # Compatibility adapters retain their existing per-world lease.
+            return {"acquired": True, "status": "unsupported"}
+        try:
+            return dict(acquire(owner, world_id=world_id) or {})
+        except Exception as error:  # noqa: BLE001 - never replace the active generation without this boundary.
+            return {
+                "acquired": False,
+                "status": "error",
+                "requestedWorldId": str(world_id or ""),
+                "recommendedRetryAfterSeconds": 10,
+                "reason": str(error)[:180],
+            }
+
+    def release_projection_coordinator_lease(self, lease: Dict[str, object]) -> Dict[str, object]:
+        if not bool((lease or {}).get("acquired")):
+            return {"status": "not-owner"}
+        releaser = getattr(self.repository, "release_projection_coordinator_lease", None)
+        if not callable(releaser):
+            return {"status": "unsupported"}
+        try:
+            return dict(releaser(lease) or {})
+        except Exception as error:  # noqa: BLE001 - durable expiry remains the final recovery path.
+            return {"status": "error", "reason": str(error)[:180]}
 
     def begin_projection_audit_run(
         self,

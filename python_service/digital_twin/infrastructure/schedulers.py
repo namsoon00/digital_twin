@@ -562,6 +562,44 @@ class NewsCollectionScheduler:
             wait_until_running(lambda: self.running, end_at)
 
 
+class NewsAnalysisEnrichmentScheduler:
+    def __init__(self, runner, interval_seconds: int, error_reporter=None):
+        self.runner = runner
+        self.interval_seconds = max(15, int(interval_seconds or 60))
+        self.error_reporter = error_reporter or operational_error_reporter()
+        self.running = True
+
+    def stop(self, *_args) -> None:
+        self.running = False
+
+    def run_forever(self) -> None:
+        install_stop_handlers(self.stop)
+        print("Python news analysis worker started. interval=" + str(self.interval_seconds) + "s")
+        while self.running:
+            started = time.monotonic()
+            try:
+                result = self.runner.run_once()
+                if result.get("processedCount") or result.get("pendingCount"):
+                    print(
+                        "News analysis "
+                        + str(result.get("status"))
+                        + " processed="
+                        + str(result.get("processedCount") or 0)
+                        + " saved="
+                        + str(result.get("savedCount") or 0)
+                        + " translated="
+                        + str(result.get("translatedCount") or 0)
+                        + " pending="
+                        + str(result.get("pendingCount") or 0),
+                        flush=True,
+                    )
+            except Exception as error:  # noqa: BLE001 - analysis must not stop collection or later retries.
+                print("Python news analysis worker error: " + str(error), flush=True)
+                report_runtime_error(self.error_reporter, "Python news analysis worker", error, "analysis cycle")
+            end_at = time.monotonic() + max(1.0, self.interval_seconds - (time.monotonic() - started))
+            wait_until_running(lambda: self.running, end_at)
+
+
 class InvestmentResearchScheduler:
     def __init__(self, runner, interval_seconds: int, batch_size: int = 3, error_reporter=None):
         self.runner = runner

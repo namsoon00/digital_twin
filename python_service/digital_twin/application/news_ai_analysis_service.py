@@ -66,6 +66,16 @@ class NewsAiAnalysisService:
     def inline_timeout_seconds(self) -> int:
         return int_setting(self.settings, "newsAiAnalysisInlineTimeoutSeconds", 8, 1, 120)
 
+    def inline_enabled(self) -> bool:
+        # Collection must remain a bounded I/O operation.  The dedicated
+        # enrichment worker performs the slower model call by default.
+        # Keep direct service callers that have not adopted the runtime
+        # setting backward compatible; runtime_settings always supplies the
+        # new key with the production default of false.
+        if "newsAiAnalysisInlineEnabled" not in self.settings:
+            return True
+        return truthy(self.settings.get("newsAiAnalysisInlineEnabled"), False)
+
     def analysis_needs_work(self, evidence: ResearchEvidence) -> bool:
         if evidence.kind != "news":
             return False
@@ -101,12 +111,18 @@ class NewsAiAnalysisService:
             ]
         return apply_news_ai_analysis(evidence, analysis_payload)
 
-    def local_analyze_evidence(self, target: NewsCollectionTarget, evidence: ResearchEvidence, reason: str = "") -> ResearchEvidence:
+    def local_analyze_evidence(
+        self,
+        target: NewsCollectionTarget,
+        evidence: ResearchEvidence,
+        reason: str = "",
+        status: str = "",
+    ) -> ResearchEvidence:
         if not self.enabled() or not self.analysis_needs_work(evidence):
             return evidence
         analysis_payload = local_news_ai_analysis(target, evidence).to_dict()
         if reason:
-            analysis_payload["status"] = "fallback"
+            analysis_payload["status"] = status or "fallback"
             analysis_payload["reasoningLimitations"] = list(analysis_payload.get("reasoningLimitations") or []) + [reason]
         return apply_news_ai_analysis(evidence, analysis_payload)
 
@@ -120,6 +136,16 @@ class NewsAiAnalysisService:
         rows = list(items or [])
         if not rows or not self.enabled():
             return rows
+        if not self.inline_enabled():
+            return [
+                self.local_analyze_evidence(
+                    target,
+                    item,
+                    "뉴스 수집과 분리된 AI 분석 대기열에서 본문 기반 요약·번역을 보강합니다.",
+                    status="deferred",
+                ) if self.analysis_needs_work(item) else item
+                for item in rows
+            ]
         max_per_target = int_setting(self.settings, "newsAiAnalysisMaxPerTarget", len(rows), 0, 1000)
         max_per_run = int_setting(self.settings, "newsAiAnalysisMaxPerRun", 10000, 0, 10000)
         remaining_run_budget = max(0, max_per_run - self._external_analysis_used)
@@ -149,5 +175,5 @@ class NewsAiAnalysisService:
                 analyzed.append(self.analyze_evidence(target, item, external_timeout_seconds=max(1, remaining_seconds)))
                 self._external_analysis_used += 1
             else:
-                analyzed.append(self.local_analyze_evidence(target, item, skipped_reason))
+                analyzed.append(self.local_analyze_evidence(target, item, skipped_reason, status="deferred"))
         return analyzed

@@ -45,6 +45,13 @@ BASE_WORKERS = {
         "command": [sys.executable, "-u", "python_service/service.py", "news", "watch"],
         "needle": "python_service/service.py news watch",
     },
+    "news-analysis": {
+        "label": "Python news analysis worker",
+        "pid": data_dir() / "python-news-analysis.pid",
+        "log": data_dir() / "python-news-analysis.log",
+        "command": [sys.executable, "-u", "python_service/service.py", "news-analysis", "watch"],
+        "needle": "python_service/service.py news-analysis watch",
+    },
     "investment-research": {
         "label": "Python investment research worker",
         "pid": data_dir() / "python-investment-research.pid",

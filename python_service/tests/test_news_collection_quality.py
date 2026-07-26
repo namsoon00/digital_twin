@@ -1,7 +1,9 @@
 import sys
 import unittest
+from datetime import datetime, timezone
 from pathlib import Path
 from types import SimpleNamespace
+from unittest.mock import patch
 
 
 sys.path.insert(0, str(Path(__file__).resolve().parents[1]))
@@ -13,6 +15,8 @@ from digital_twin.domain.investment_research import NewsCollectionTarget, Resear
 from digital_twin.domain.materiality import evidence_materiality
 from digital_twin.domain.news_ai_analysis import article_text_parts, local_news_ai_analysis
 from digital_twin.domain.news_analysis import article_analysis_facts, article_quality_gate
+from digital_twin.infrastructure.external_signal_utils import ExternalCircuitOpen
+from digital_twin.infrastructure import news_sources
 from digital_twin.infrastructure.news_sources import NewsSourceGateway, article_metadata_from_html, extract_article_text
 
 
@@ -205,6 +209,121 @@ class NewsCollectionQualityTests(unittest.TestCase):
 
         self.assertEqual("degraded", health.state)
         self.assertEqual("article-original-url-budget-exhausted", health.reason_code)
+
+    def test_gdelt_uses_a_provider_level_circuit_across_symbol_queries(self):
+        news_sources.NEWS_API_GUARD_STATE.clear()
+        settings = {
+            "externalApiCircuitFailures": "2",
+            "externalApiCircuitCooldownMinutes": "30",
+        }
+        urls = [
+            "https://api.gdeltproject.org/api/v2/doc/doc?query=NVDA",
+            "https://api.gdeltproject.org/api/v2/doc/doc?query=TSLA",
+            "https://api.gdeltproject.org/api/v2/doc/doc?query=AAPL",
+        ]
+        try:
+            with patch("digital_twin.infrastructure.news_sources.default_json_fetcher", side_effect=TimeoutError("gdelt timeout")):
+                gateway = NewsSourceGateway(settings)
+                with self.assertRaises(RuntimeError):
+                    gateway.fetch_json(urls[0], {})
+                with self.assertRaises(RuntimeError):
+                    gateway.fetch_json(urls[1], {})
+                with self.assertRaises(ExternalCircuitOpen):
+                    gateway.fetch_json(urls[2], {})
+        finally:
+            news_sources.NEWS_API_GUARD_STATE.clear()
+
+    def test_collection_governs_retained_and_new_claims_across_cycles(self):
+        observed_at = datetime.now(timezone.utc).replace(microsecond=0).isoformat().replace("+00:00", "Z")
+
+        def claim(evidence_id, source, url):
+            return ResearchEvidence(
+                evidence_id,
+                "AAPL",
+                "news",
+                source,
+                "Apple announces a $1 billion share buyback",
+                "Apple announced a $1 billion share buyback plan on Tuesday.",
+                url,
+                observed_at,
+                "support",
+                published_at=observed_at,
+                raw_payload={
+                    "relationScope": "direct",
+                    "eventType": "capital_policy",
+                    "articleReadStatus": "body",
+                    "articleText": "Apple announced a $1 billion share buyback plan on Tuesday.",
+                    "articleFacts": {"bodyAvailable": True, "bodyQualityPassed": True},
+                },
+            )
+
+        retained = claim("research:AAPL:news:retained", "Reuters", "https://reuters.example.test/apple-buyback")
+        current = claim("research:AAPL:news:current", "Bloomberg", "https://bloomberg.example.test/apple-buyback")
+
+        class Store:
+            def __init__(self):
+                self.persisted = []
+                self.last_changed_items = []
+                self.last_changed_symbols = []
+
+            def latest(self, **_kwargs):
+                return [retained]
+
+            def upsert_many(self, rows):
+                self.persisted = list(rows)
+                self.last_changed_items = list(rows)
+                self.last_changed_symbols = ["AAPL"]
+                return len(self.persisted)
+
+            def summary(self):
+                return {"total": len(self.persisted)}
+
+        class Gateway:
+            def begin_run(self):
+                return {}
+
+            def collect_for_target(self, _target):
+                return [current], [{"source": "test", "ok": True}]
+
+            def providers(self):
+                return ["test"]
+
+            def korean_providers(self):
+                return []
+
+        store = Store()
+        runner = NewsCollectionRunner(
+            account_repository=SimpleNamespace(load=lambda: []),
+            monitor_store=SimpleNamespace(previous={}),
+            symbol_store=SimpleNamespace(),
+            evidence_store=store,
+            gateway=Gateway(),
+            settings={
+                "newsEvidenceCleanupEnabled": "0",
+                "researchClaimRequireVerifiedForInvestment": "1",
+                "researchClaimMinimumIndependentSources": "2",
+                "researchClaimCrossSourceWindowHours": "72",
+                "researchClaimSimilarityThreshold": "0.32",
+            },
+        )
+        runner.target_plan = lambda: {
+            "targets": [self.target()],
+            "candidateCount": 1,
+            "selectedCount": 1,
+            "maxSymbols": 1,
+            "rotationSlot": 0,
+            "rotationStartIndex": 0,
+            "nextRotationAt": observed_at,
+            "selectedSymbols": ["AAPL"],
+            "omittedSymbolCount": 0,
+        }
+
+        result = runner.run_once(force=True)
+
+        self.assertEqual(2, result["savedCount"])
+        self.assertEqual({retained.evidence_id, current.evidence_id}, {item.evidence_id for item in store.persisted})
+        self.assertEqual(2, retained.raw_payload["evidenceGovernance"]["independentSourceCount"])
+        self.assertTrue(retained.raw_payload["evidenceGovernance"]["investmentJudgmentEligible"])
 
 
 if __name__ == "__main__":

@@ -142,11 +142,17 @@
       "newsCollectionEnabled": "1",
       "newsCollectionIntervalSeconds": "60",
       "newsCollectionRunBudgetSeconds": "45",
-      "newsCollectionMaxSymbols": "3",
+      "newsCollectionMaxSymbols": "6",
       "newsCollectionLookbackMinutes": "180",
       "newsCollectionPerSymbolLimit": "8",
-      "newsCollectionProviders": "yahoo_search,yahoo_finance",
-      "newsCollectionKoreanProviders": "google_rss_kr",
+      "newsCollectionProviders": "google_rss_us,yahoo_search,yahoo_finance,gdelt",
+      "newsCollectionInternationalProviders": "google_rss_us,yahoo_search,yahoo_finance,gdelt",
+      "newsCollectionKoreanProviders": "google_rss_kr,yahoo_search,yahoo_finance,gdelt",
+      "newsCollectionGoogleKrEnabled": "1",
+      "newsCollectionGoogleUsEnabled": "1",
+      "newsCollectionYahooSearchEnabled": "1",
+      "newsCollectionYahooRssEnabled": "1",
+      "newsCollectionGdeltSyncEnabled": "1",
       "newsCollectionGoogleOriginalUrlResolveEnabled": "1",
       "newsCollectionGoogleOriginalUrlMaxPerTarget": "2",
       "newsCollectionGoogleOriginalUrlMaxPerRun": "6",
@@ -160,10 +166,18 @@
       "newsCollectionIncludeWatchlist": "1",
       "newsCollectionIncludeHoldings": "1",
       "newsCollectionRateLimitSeconds": "0.25",
+      "newsEvidenceMaxAgeMinutes": "4320",
       "newsAiAnalysisEnabled": "1",
-      "newsAiAnalysisUseCodex": "1",
+      "newsAiAnalysisUseCodex": "0",
       "newsAiAnalysisTimeoutSeconds": "90",
       "newsAiAnalysisInlineTimeoutSeconds": "8",
+      "newsAiAnalysisInlineEnabled": "0",
+      "newsAiAnalysisAsyncEnabled": "1",
+      "newsAiAnalysisWorkerIntervalSeconds": "60",
+      "newsAiAnalysisWorkerBatchSize": "1",
+      "newsAiAnalysisWorkerScanLimit": "160",
+      "newsAiAnalysisRetryMinutes": "30",
+      "researchClaimCorpusLimit": "500",
       "investmentCalendarAiResearchEnabled": "1",
       "investmentCalendarAiResearchRunCollection": "1",
       "investmentCalendarAiResearchEvidenceLimit": "120",
@@ -1112,7 +1126,7 @@
           "key": "newsCollectionMaxSymbols",
           "label": "한 주기에 수집할 뉴스 종목 수",
           "type": "number",
-          "default": "3"
+          "default": "6"
         },
         {
           "key": "newsCollectionLookbackMinutes",
@@ -1129,15 +1143,51 @@
         },
         {
           "key": "newsCollectionProviders",
-          "label": "뉴스 수집 채널",
+          "label": "해외 뉴스 수집 채널(호환)",
           "type": "text",
-          "default": "yahoo_search,yahoo_finance"
+          "default": "google_rss_us,yahoo_search,yahoo_finance,gdelt"
+        },
+        {
+          "key": "newsCollectionInternationalProviders",
+          "label": "해외 뉴스 수집 채널",
+          "type": "text",
+          "default": "google_rss_us,yahoo_search,yahoo_finance,gdelt"
         },
         {
           "key": "newsCollectionKoreanProviders",
           "label": "국내 종목 우선 뉴스 채널",
           "type": "text",
-          "default": "google_rss_kr"
+          "default": "google_rss_kr,yahoo_search,yahoo_finance,gdelt"
+        },
+        {
+          "key": "newsCollectionGoogleKrEnabled",
+          "label": "Google News KR 사용",
+          "type": "toggle",
+          "default": "1"
+        },
+        {
+          "key": "newsCollectionGoogleUsEnabled",
+          "label": "Google News US 사용",
+          "type": "toggle",
+          "default": "1"
+        },
+        {
+          "key": "newsCollectionYahooSearchEnabled",
+          "label": "Yahoo Finance 검색 사용",
+          "type": "toggle",
+          "default": "1"
+        },
+        {
+          "key": "newsCollectionYahooRssEnabled",
+          "label": "Yahoo Finance RSS 사용",
+          "type": "toggle",
+          "default": "1"
+        },
+        {
+          "key": "newsCollectionGdeltSyncEnabled",
+          "label": "GDELT 뉴스 사용",
+          "type": "toggle",
+          "default": "1"
         },
         {
           "key": "newsCollectionGoogleOriginalUrlResolveEnabled",
@@ -1230,6 +1280,12 @@
           "unit": "hours"
         },
         {
+          "key": "researchClaimCorpusLimit",
+          "label": "교차검증 보존 근거 상한",
+          "type": "number",
+          "default": "500"
+        },
+        {
           "key": "researchClaimSimilarityThreshold",
           "label": "주장 일치 기준",
           "type": "number",
@@ -1268,6 +1324,13 @@
           "default": "1"
         },
         {
+          "key": "newsEvidenceMaxAgeMinutes",
+          "label": "뉴스 근거 보존 기간",
+          "type": "number",
+          "default": "4320",
+          "unit": "minutes"
+        },
+        {
           "key": "newsCollectionIncludeWatchlist",
           "label": "관심종목 뉴스 포함",
           "type": "toggle",
@@ -1289,7 +1352,7 @@
           "key": "newsAiAnalysisUseCodex",
           "label": "기사 분석 Codex 사용",
           "type": "toggle",
-          "default": "1"
+          "default": "0"
         },
         {
           "key": "newsAiAnalysisCommand",
@@ -1309,6 +1372,44 @@
           "type": "number",
           "default": "8",
           "unit": "seconds"
+        },
+        {
+          "key": "newsAiAnalysisInlineEnabled",
+          "label": "수집 중 기사 AI 분석",
+          "type": "toggle",
+          "default": "0"
+        },
+        {
+          "key": "newsAiAnalysisAsyncEnabled",
+          "label": "비동기 기사 요약·번역 워커",
+          "type": "toggle",
+          "default": "1"
+        },
+        {
+          "key": "newsAiAnalysisWorkerIntervalSeconds",
+          "label": "기사 요약·번역 워커 주기",
+          "type": "number",
+          "default": "60",
+          "unit": "seconds"
+        },
+        {
+          "key": "newsAiAnalysisWorkerBatchSize",
+          "label": "기사 요약·번역 워커 배치",
+          "type": "number",
+          "default": "1"
+        },
+        {
+          "key": "newsAiAnalysisWorkerScanLimit",
+          "label": "기사 요약·번역 대기열 조회 상한",
+          "type": "number",
+          "default": "160"
+        },
+        {
+          "key": "newsAiAnalysisRetryMinutes",
+          "label": "기사 요약·번역 재시도 간격",
+          "type": "number",
+          "default": "30",
+          "unit": "minutes"
         },
         {
           "key": "investmentCalendarAiResearchEnabled",

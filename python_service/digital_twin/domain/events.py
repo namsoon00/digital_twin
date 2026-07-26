@@ -304,7 +304,7 @@ def research_evidence_collected_event(payload: Dict[str, object]) -> DomainEvent
         name=RESEARCH_EVIDENCE_COLLECTED,
         aggregate_id="news:" + (",".join(str(symbol) for symbol in symbols) or "all")[:180],
         payload={
-            "source": "news-collection",
+            "source": str(payload.get("source") or "news-collection"),
             "status": str(payload.get("status") or ""),
             "targetCount": int(payload.get("targetCount") or 0),
             "fetchedCount": int(payload.get("fetchedCount") or 0),

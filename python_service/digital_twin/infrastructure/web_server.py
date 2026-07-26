@@ -76,7 +76,7 @@ from ..domain.investment_ubiquitous_language import (
 )
 from ..domain.investment_research import NewsCollectionTarget
 from ..domain.investment_evidence_governance import claim_quality_summary
-from ..domain.news_ai_analysis import local_news_ai_analysis, apply_news_ai_analysis, news_ai_analysis_is_current
+from ..domain.news_ai_analysis import has_mojibake, local_news_ai_analysis, apply_news_ai_analysis, news_ai_analysis_is_current
 from ..domain.parsing import parse_assignments
 from ..domain.portfolio import utc_now_iso
 from ..domain.symbol_universe import symbol_search_symbol_candidates
@@ -713,7 +713,13 @@ def settings_status_payload() -> Dict[str, object]:
         "newsCollectionLookbackMinutes",
         "newsCollectionPerSymbolLimit",
         "newsCollectionProviders",
+        "newsCollectionInternationalProviders",
         "newsCollectionKoreanProviders",
+        "newsCollectionGoogleKrEnabled",
+        "newsCollectionGoogleUsEnabled",
+        "newsCollectionYahooSearchEnabled",
+        "newsCollectionYahooRssEnabled",
+        "newsCollectionGdeltSyncEnabled",
         "newsCollectionGoogleOriginalUrlResolveEnabled",
         "newsCollectionGoogleOriginalUrlMaxPerTarget",
         "newsCollectionGoogleOriginalUrlMaxPerRun",
@@ -742,6 +748,13 @@ def settings_status_payload() -> Dict[str, object]:
         "newsAiAnalysisCommand",
         "newsAiAnalysisTimeoutSeconds",
         "newsAiAnalysisInlineTimeoutSeconds",
+        "newsAiAnalysisInlineEnabled",
+        "newsAiAnalysisAsyncEnabled",
+        "newsAiAnalysisWorkerIntervalSeconds",
+        "newsAiAnalysisWorkerBatchSize",
+        "newsAiAnalysisWorkerScanLimit",
+        "newsAiAnalysisRetryMinutes",
+        "researchClaimCorpusLimit",
         "investmentCalendarEnabled",
         "investmentCalendarIntervalSeconds",
         "investmentCalendarDefaultWindowDays",
@@ -2039,10 +2052,17 @@ def research_evidence_payload(query: Dict[str, List[str]]) -> Dict[str, object]:
     search = configured(first_query(query, "query") or first_query(query, "q"))
     store = stores.research_evidence_store()
     items, total = store.latest_page(symbol=symbol, kind=kind, limit=limit, offset=offset, query=search)
+    analysis_rows = []
+    if hasattr(store, "latest"):
+        try:
+            analysis_rows = list(store.latest(kind="news", limit=500) or [])
+        except Exception:  # noqa: BLE001 - the evidence list is still useful when aggregate diagnostics fail.
+            analysis_rows = []
     return {
         "items": [research_evidence_list_payload(item) for item in items],
         "summary": store.summary(),
         "claimQuality": claim_quality_summary(items),
+        "articleAnalysis": research_evidence_article_analysis_summary(analysis_rows),
         "symbol": symbol,
         "kind": kind,
         "limit": limit,
@@ -2050,6 +2070,52 @@ def research_evidence_payload(query: Dict[str, List[str]]) -> Dict[str, object]:
         "total": total,
         "query": search,
     }
+
+
+def research_evidence_article_analysis_summary(items) -> Dict[str, object]:
+    """Expose a bounded, display-only quality funnel for retained news."""
+    rows = [item for item in items or [] if str(getattr(item, "kind", "")) == "news"]
+    counts = {
+        "newsCount": len(rows),
+        "bodyReadCount": 0,
+        "translationCompleteCount": 0,
+        "translationPendingCount": 0,
+        "translationUnavailableCount": 0,
+        "summaryReadyCount": 0,
+        "summaryNeedsReviewCount": 0,
+        "summaryBlockedCount": 0,
+        "analysisFallbackCount": 0,
+        "analysisDeferredCount": 0,
+    }
+    for item in rows:
+        raw = item.raw_payload if isinstance(getattr(item, "raw_payload", None), dict) else {}
+        facts = raw.get("articleFacts") if isinstance(raw.get("articleFacts"), dict) else {}
+        if str(raw.get("articleReadStatus") or facts.get("readStatus") or "") == "body" or bool(facts.get("bodyAvailable")):
+            counts["bodyReadCount"] += 1
+        language = str(raw.get("sourceLanguage") or "").strip().lower()
+        translation_status = str(raw.get("translationStatus") or "").strip().lower()
+        if language == "en":
+            if translation_status == "complete":
+                counts["translationCompleteCount"] += 1
+            elif translation_status == "unavailable":
+                counts["translationUnavailableCount"] += 1
+            else:
+                counts["translationPendingCount"] += 1
+        quality = raw.get("articleSummaryQuality") if isinstance(raw.get("articleSummaryQuality"), dict) else {}
+        quality_state = str(quality.get("state") or raw.get("summaryQualityState") or "").strip().lower()
+        if quality_state == "ready":
+            counts["summaryReadyCount"] += 1
+        elif quality_state == "blocked":
+            counts["summaryBlockedCount"] += 1
+        else:
+            counts["summaryNeedsReviewCount"] += 1
+        analysis = raw.get("aiAnalysis") if isinstance(raw.get("aiAnalysis"), dict) else {}
+        status = str(analysis.get("status") or "").strip().lower()
+        if status == "fallback":
+            counts["analysisFallbackCount"] += 1
+        elif status == "deferred":
+            counts["analysisDeferredCount"] += 1
+    return counts
 
 
 def revalidate_research_evidence_payload(payload: Dict[str, object]) -> Dict[str, object]:
@@ -2076,8 +2142,16 @@ def research_evidence_list_payload(item) -> Dict[str, object]:
     governance = raw.get("evidenceGovernance") if isinstance(raw.get("evidenceGovernance"), dict) else {}
     claim_ledger = raw.get("claimLedger") if isinstance(raw.get("claimLedger"), dict) else {}
     claim_summary = claim_ledger.get("summary") if isinstance(claim_ledger.get("summary"), dict) else {}
+    article_summary_ko = str(raw.get("articleSummaryKo") or "")
+    article_summary_quality = raw.get("articleSummaryQuality") if isinstance(raw.get("articleSummaryQuality"), dict) else {}
+    summary_issues = list(article_summary_quality.get("issues") or [])
+    if has_mojibake(article_summary_ko) or "text-encoding-corrupt" in summary_issues:
+        # Never pass unreadable legacy source text to compact feed cards. The
+        # raw article remains auditable in storage and the async worker can
+        # retry it when a clean source becomes available.
+        article_summary_ko = "원문 인코딩 점검으로 요약을 보류했습니다."
     compact_raw = {}
-    for key in ["name", "provider", "articleType", "analysisStatus", "relevanceState", "impactLabel", "impactSummary", "koreanSummary", "priceImpact", "sourceTrustState", "materialityState", "dataState", "validationState", "articleReadStatus", "stockImpact", "stockImpactLabel", "stockImpactPolarity", "stockImpactReasonKo"]:
+    for key in ["name", "provider", "articleType", "analysisStatus", "relevanceState", "impactLabel", "impactSummary", "koreanSummary", "priceImpact", "sourceTrustState", "materialityState", "dataState", "validationState", "articleReadStatus", "stockImpact", "stockImpactLabel", "stockImpactPolarity", "stockImpactReasonKo", "originalTitle", "translatedTitleKo", "sourceLanguage", "translationStatus", "summaryQualityState", "articleSummaryQuality"]:
         if raw.get(key) not in (None, "", [], {}):
             compact_raw[key] = raw.get(key)
     return {
@@ -2099,7 +2173,14 @@ def research_evidence_list_payload(item) -> Dict[str, object]:
         "dataState": states["dataState"],
         "validationState": states["validationState"],
         "analysisSummary": str(raw.get("analysisSummary") or ""),
-        "articleSummaryKo": str(raw.get("articleSummaryKo") or ""),
+        "articleSummaryKo": article_summary_ko,
+        "originalTitle": str(raw.get("originalTitle") or item.title or ""),
+        "translatedTitleKo": str(raw.get("translatedTitleKo") or ""),
+        "sourceLanguage": str(raw.get("sourceLanguage") or ""),
+        "translationStatus": str(raw.get("translationStatus") or ""),
+        "summaryQualityState": str(raw.get("summaryQualityState") or ""),
+        "articleSummaryQuality": article_summary_quality,
+        "analysisStatus": str((raw.get("aiAnalysis") or {}).get("status") or raw.get("analysisStatus") or "") if isinstance(raw.get("aiAnalysis") or {}, dict) else str(raw.get("analysisStatus") or ""),
         "articleReadStatus": str(raw.get("articleReadStatus") or ""),
         "stockImpact": str(raw.get("stockImpact") or ""),
         "stockImpactLabel": str(raw.get("stockImpactLabel") or ""),
@@ -2137,7 +2218,11 @@ def projected_research_evidence(item):
     adapter keeps old rows truthful until their normal retention cycle ends.
     """
     raw = item.raw_payload if isinstance(getattr(item, "raw_payload", None), dict) else {}
-    has_legacy_analysis = bool(raw.get("articleSummaryKo")) and bool(raw.get("stockImpactPolarity"))
+    has_legacy_analysis = (
+        bool(raw.get("articleSummaryKo"))
+        and bool(raw.get("stockImpactPolarity"))
+        and not has_mojibake(raw.get("articleSummaryKo"))
+    )
     if getattr(item, "kind", "") != "news" or news_ai_analysis_is_current(item) or has_legacy_analysis:
         return item, "stored"
     target = NewsCollectionTarget(

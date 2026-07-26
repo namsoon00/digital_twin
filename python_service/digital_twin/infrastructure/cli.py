@@ -35,6 +35,7 @@ from .service_factory import (
     build_market_data_collection_runner,
     build_model_review_runner,
     build_monitor_runner,
+    build_news_analysis_enrichment_runner,
     build_news_collection_runner,
     build_notification_queue_runner,
     build_official_calendar_sync_service,
@@ -53,6 +54,7 @@ from .schedulers import (
     MarketDataCollectionScheduler,
     ModelReviewScheduler,
     NewsCollectionScheduler,
+    NewsAnalysisEnrichmentScheduler,
     NotificationQueueScheduler,
     IsolatedOntologyReasoningCycle,
     OntologyLabScheduler,
@@ -820,6 +822,21 @@ def news_command(args) -> int:
     return 1
 
 
+def news_analysis_command(args) -> int:
+    settings = runtime_settings()
+    runner = build_news_analysis_enrichment_runner(settings)
+    if args.news_analysis_action == "status":
+        print(json.dumps(runner.status(), ensure_ascii=False))
+        return 0
+    if args.news_analysis_action == "once":
+        print(json.dumps(runner.run_once(limit=int(args.limit or 0)), ensure_ascii=False))
+        return 0
+    if args.news_analysis_action == "watch":
+        NewsAnalysisEnrichmentScheduler(runner, runner.interval_seconds()).run_forever()
+        return 0
+    return 1
+
+
 def investment_research_command(args) -> int:
     settings = runtime_settings()
     runner = build_investment_research_queue_runner(settings)
@@ -1196,6 +1213,14 @@ def build_parser() -> argparse.ArgumentParser:
     news_actions.add_parser("watch")
     news_actions.add_parser("status")
     news.set_defaults(func=news_command)
+
+    news_analysis = subparsers.add_parser("news-analysis", help="Enrich stored news with Korean summaries and title translations")
+    news_analysis_actions = news_analysis.add_subparsers(dest="news_analysis_action", required=True)
+    analysis_once = news_analysis_actions.add_parser("once")
+    analysis_once.add_argument("--limit", default="")
+    news_analysis_actions.add_parser("watch")
+    news_analysis_actions.add_parser("status")
+    news_analysis.set_defaults(func=news_analysis_command)
 
     investment_research = subparsers.add_parser("investment-research", help="Process queued hypothesis research runs")
     investment_research_actions = investment_research.add_subparsers(dest="investment_research_action", required=True)

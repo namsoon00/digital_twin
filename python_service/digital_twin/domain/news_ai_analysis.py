@@ -8,8 +8,8 @@ from .investment_research import NewsCollectionTarget, ResearchEvidence
 from . import news_analysis as news_domain
 
 
-NEWS_AI_ANALYSIS_VERSION = "news-ai-analysis-v5-full-body"
-NEWS_AI_PROMPT_VERSION = "news-ai-prompt-v5-full-body"
+NEWS_AI_ANALYSIS_VERSION = "news-ai-analysis-v8-stable-source-hash"
+NEWS_AI_PROMPT_VERSION = "news-ai-prompt-v8-stable-source-hash"
 
 IMPACT_LABELS = {
     "support": "호재",
@@ -155,6 +155,120 @@ SUMMARY_STOP_WORDS = {
     "있습니다", "합니다", "됩니다", "입니다", "그리고", "하지만", "대한", "위한",
     "with", "from", "that", "this", "into", "after", "before", "about", "stock", "shares",
 }
+
+GENERIC_SUMMARY_PATTERNS = (
+    re.compile(r"^(?:실적과 이익 전망 변화|자금 조달과 주식 가치 희석 가능성)이 핵심$"),
+    re.compile(r"^AI[·ㆍ]데이터센터 수요가 실적 기대에 연결되는지 확인할 뉴스$"),
+    re.compile(r"^(?:.+ )?관련 새 정보지만 방향성은 중립입니다$"),
+)
+
+NUMBER_TOKEN_PATTERN = re.compile(
+    r"(?<![A-Za-z가-힣0-9])(?:[$€£]\s*)?\d[\d,]*(?:\.\d+)?\s*(?:trillion|billion|million|thousand|percent|bp|%|조|억|만|천|원|달러|주)?",
+    re.IGNORECASE,
+)
+
+
+def normalized_numeric_values(value: object) -> List[Tuple[str, float]]:
+    """Normalize English and Korean magnitude words for summary grounding."""
+    values: List[Tuple[str, float]] = []
+    multipliers = {
+        "trillion": 1_000_000_000_000.0,
+        "billion": 1_000_000_000.0,
+        "million": 1_000_000.0,
+        "thousand": 1_000.0,
+        "조": 1_000_000_000_000.0,
+        "억": 100_000_000.0,
+        "만": 10_000.0,
+        "천": 1_000.0,
+    }
+    for match in NUMBER_TOKEN_PATTERN.finditer(str(value or "")):
+        token = match.group(0).strip()
+        numeric = re.search(r"\d[\d,]*(?:\.\d+)?", token)
+        if not numeric:
+            continue
+        try:
+            amount = float(numeric.group(0).replace(",", ""))
+        except ValueError:
+            continue
+        suffix = token[numeric.end():].strip().casefold()
+        prefix = token[:numeric.start()]
+        if "%" in suffix or "percent" in suffix:
+            values.append(("percent", amount))
+            continue
+        if "bp" in suffix:
+            values.append(("basis-point", amount))
+            continue
+        multiplier = next((scale for unit, scale in multipliers.items() if unit in suffix), 1.0)
+        is_amount = bool(prefix.strip() or any(unit in suffix for unit in [*multipliers, "원", "달러"]))
+        values.append(("amount" if is_amount else "plain", amount * multiplier))
+    return values
+
+
+def numeric_value_is_grounded(value: Tuple[str, float], source_values: Iterable[Tuple[str, float]]) -> bool:
+    kind, amount = value
+    for source_kind, source_amount in source_values:
+        if source_kind != kind:
+            continue
+        tolerance = max(0.01, abs(source_amount) * 0.015)
+        if abs(amount - source_amount) <= tolerance:
+            return True
+    return False
+
+
+def source_language(value: object) -> str:
+    """Return a stable display language without treating finance tickers as text."""
+    text = str(value or "")
+    hangul = len(re.findall(r"[가-힣]", text))
+    latin = len(re.findall(r"[A-Za-z]", text))
+    if hangul >= max(2, latin // 3):
+        return "ko"
+    if latin >= 12:
+        return "en"
+    return "unknown"
+
+
+def has_mojibake(value: object) -> bool:
+    text = str(value or "")
+    return "\ufffd" in text or bool(re.search(r"(?:Ã.|Â.|â..){2,}", text))
+
+
+def summary_quality_payload(summary: object, source_text: object, target_name: object = "") -> Dict[str, object]:
+    """Keep display-quality checks separate from investment claim verification."""
+    text = clean_summary_text(summary, 520)
+    source = str(source_text or "")
+    issues: List[str] = []
+    advisories: List[str] = []
+    if not text:
+        issues.append("summary-missing")
+    if text and len(text) < 28:
+        issues.append("summary-too-short")
+    if has_mojibake(text) or has_mojibake(source):
+        issues.append("text-encoding-corrupt")
+    if any(pattern.match(text) for pattern in GENERIC_SUMMARY_PATTERNS):
+        issues.append("summary-generic-template")
+    if re.search(r"(?:cookie|advertisement|subscribe|sign up|관련기사|무단전재|저작권)", text, re.IGNORECASE):
+        issues.append("summary-boilerplate")
+    source_numbers = normalized_numeric_values(source)
+    summary_numbers = normalized_numeric_values(text)
+    if summary_numbers and source_numbers and any(
+        not numeric_value_is_grounded(number, source_numbers)
+        for number in summary_numbers
+    ):
+        issues.append("summary-number-not-grounded")
+    target = str(target_name or "").strip()
+    target_key = target.casefold()
+    if target and source_language(text) == "ko" and len(text) >= 28 and target_key not in text.casefold() and target_key not in source.casefold():
+        # The check is advisory because company aliases can differ across markets.
+        advisories.append("summary-target-name-omitted")
+    blocking = {"summary-missing", "text-encoding-corrupt", "summary-boilerplate", "summary-number-not-grounded"}
+    return {
+        "state": "ready" if not issues else ("blocked" if blocking.intersection(issues) else "needs-review"),
+        "passed": not bool(blocking.intersection(issues)),
+        "issues": issues[:8],
+        "advisories": advisories[:8],
+        "summaryLength": len(text),
+        "checkedAtVersion": NEWS_AI_ANALYSIS_VERSION,
+    }
 
 
 def clean_summary_text(value: object, limit: int = 760) -> str:
@@ -382,7 +496,8 @@ def article_text_parts(evidence: ResearchEvidence) -> Tuple[str, str, str, str]:
         5000,
     )
     feed_summary = compact_text(
-        facts.get("feedSummaryPreview")
+        payload.get("articleSourceSummary")
+        or facts.get("feedSummaryPreview")
         or payload.get("normalizedSummary")
         or evidence.summary
         or payload.get("articleSummaryKo")
@@ -401,6 +516,10 @@ class NewsAiAnalysis:
     model: str = "local-news-semantic-analyzer-v1"
     read_scope: str = "title+rss-summary"
     source_text_hash: str = ""
+    source_language: str = "unknown"
+    original_title: str = ""
+    translated_title_ko: str = ""
+    translation_status: str = "not-required"
     relation_scope: str = ""
     event_type: str = "general"
     impact_polarity: str = "neutral"
@@ -431,6 +550,10 @@ class NewsAiAnalysis:
             "model": self.model,
             "readScope": self.read_scope,
             "sourceTextHash": self.source_text_hash,
+            "sourceLanguage": self.source_language,
+            "originalTitle": compact_text(self.original_title, 520),
+            "translatedTitleKo": compact_text(self.translated_title_ko, 520),
+            "translationStatus": self.translation_status,
             "relationScope": self.relation_scope,
             "eventType": self.event_type,
             "impactPolarity": self.impact_polarity,
@@ -467,6 +590,44 @@ def normalize_ai_analysis(payload: Dict[str, object], fallback: NewsAiAnalysis =
     state_payload = dict(fallback.to_dict())
     state_payload.update(payload)
     states = news_domain.news_state_payload(state_payload)
+    normalized_language = str(
+        payload.get("sourceLanguage")
+        or payload.get("source_language")
+        or fallback.source_language
+        or "unknown"
+    ).strip().lower()
+    if normalized_language not in {"ko", "en", "unknown"}:
+        normalized_language = "unknown"
+    original_title = compact_text(
+        payload.get("originalTitle")
+        or payload.get("original_title")
+        or fallback.original_title,
+        520,
+    )
+    translated_title = clean_summary_text(
+        payload.get("translatedTitleKo")
+        or payload.get("translated_title_ko")
+        or payload.get("titleKo")
+        or payload.get("title_ko")
+        or fallback.translated_title_ko,
+        520,
+    )
+    translation_status = str(
+        payload.get("translationStatus")
+        or payload.get("translation_status")
+        or fallback.translation_status
+        or ""
+    ).strip().lower()
+    if normalized_language == "ko":
+        translated_title = translated_title or original_title
+        translation_status = "not-required"
+    elif normalized_language == "en":
+        if translated_title and source_language(translated_title) == "ko":
+            translation_status = "complete"
+        elif translation_status not in {"pending", "unavailable"}:
+            translation_status = "pending"
+    elif translation_status not in {"complete", "pending", "unavailable", "not-required"}:
+        translation_status = "not-required"
     return NewsAiAnalysis(
         status=str(payload.get("status") or fallback.status or "ok"),
         version=str(payload.get("version") or fallback.version or NEWS_AI_ANALYSIS_VERSION),
@@ -474,6 +635,10 @@ def normalize_ai_analysis(payload: Dict[str, object], fallback: NewsAiAnalysis =
         model=str(payload.get("model") or fallback.model or "local-news-semantic-analyzer-v1"),
         read_scope=str(payload.get("readScope") or payload.get("read_scope") or fallback.read_scope or "title+rss-summary"),
         source_text_hash=str(payload.get("sourceTextHash") or payload.get("source_text_hash") or fallback.source_text_hash or ""),
+        source_language=normalized_language,
+        original_title=original_title,
+        translated_title_ko=translated_title,
+        translation_status=translation_status,
         relation_scope=str(payload.get("relationScope") or payload.get("relation_scope") or fallback.relation_scope or ""),
         event_type=str(payload.get("eventType") or payload.get("event_type") or fallback.event_type or "general"),
         impact_polarity=polarity,
@@ -662,6 +827,7 @@ def local_news_ai_analysis(target: NewsCollectionTarget, evidence: ResearchEvide
         one_line = article_takeaway or target_name + " 관련 새 정보지만 방향성은 중립입니다."
         fallback_brief = impact_reason
     source_is_korean = news_domain.contains_hangul(body or feed_summary or title)
+    article_language = source_language(title + " " + (body or feed_summary))
     brief_source = (article_summary if source_is_korean else article_takeaway) or article_summary
     brief = compact_text(brief_source, 520) or fallback_brief
     takeaways = summary_sentence_candidates(article_summary)[1:4] if source_is_korean else []
@@ -684,9 +850,21 @@ def local_news_ai_analysis(target: NewsCollectionTarget, evidence: ResearchEvide
         "whyItMatters": compact_text(news_domain.impact_channel_text(event_type, source_text), 360),
         "watchPoints": watch_points,
     }, {})
+    summary_quality = summary_quality_payload(
+        normalized_summary.get("briefKo") or normalized_summary.get("oneLineKo"),
+        source_text,
+        target_name,
+    )
+    translation_pending = article_language == "en"
+    deferred = translation_pending or str(summary_quality.get("state") or "") != "ready"
     return NewsAiAnalysis(
+        status="deferred" if deferred else "local",
         read_scope=read_scope,
         source_text_hash=source_text_hash(title, body, feed_summary),
+        source_language=article_language,
+        original_title=title,
+        translated_title_ko=title if article_language == "ko" else "",
+        translation_status="not-required" if article_language == "ko" else ("pending" if translation_pending else "unavailable"),
         relation_scope=relation_scope,
         event_type=event_type,
         impact_polarity=polarity,
@@ -715,8 +893,12 @@ def local_news_ai_analysis(target: NewsCollectionTarget, evidence: ResearchEvide
         portfolio_implication_ko=portfolio_implication,
         action_boundary_ko=action_boundary,
         validation_reason_ko=validation_reason,
-        needs_review=read_scope != "body" or polarity in {"mixed", "unknown"},
-        reasoning_limitations=unique_texts(limitations, 5),
+        needs_review=read_scope != "body" or polarity in {"mixed", "unknown"} or deferred,
+        reasoning_limitations=unique_texts([
+            *limitations,
+            *( ["영문 원제 번역 대기"] if translation_pending else []),
+            *( ["요약 품질 점검 필요: " + ", ".join(summary_quality.get("issues") or [])] if summary_quality.get("issues") else []),
+        ], 5),
     )
 
 
@@ -750,6 +932,14 @@ def news_ai_analysis_retryable(evidence: ResearchEvidence) -> bool:
 
 def apply_news_ai_analysis(evidence: ResearchEvidence, analysis_payload: Dict[str, object]) -> ResearchEvidence:
     payload = dict(evidence.raw_payload or {})
+    original_facts = article_facts(payload)
+    payload["articleSourceSummary"] = compact_text(
+        payload.get("articleSourceSummary")
+        or original_facts.get("feedSummaryPreview")
+        or payload.get("normalizedSummary")
+        or evidence.summary,
+        1600,
+    )
     fallback = local_news_ai_analysis(
         NewsCollectionTarget(evidence.symbol, evidence.symbol),
         evidence,
@@ -822,11 +1012,45 @@ def apply_news_ai_analysis(evidence: ResearchEvidence, analysis_payload: Dict[st
         payload.update(conflict_payload)
     payload["aiAnalysis"] = analysis_dict
     payload["articleAiAnalysisVersion"] = NEWS_AI_ANALYSIS_VERSION
+    payload["originalTitle"] = analysis_dict.get("originalTitle") or payload.get("originalTitle") or evidence.title
+    payload["sourceLanguage"] = analysis_dict.get("sourceLanguage") or payload.get("sourceLanguage") or source_language(evidence.title)
+    payload["translatedTitleKo"] = analysis_dict.get("translatedTitleKo") or payload.get("translatedTitleKo") or (
+        evidence.title if payload.get("sourceLanguage") == "ko" else ""
+    )
+    payload["translationStatus"] = analysis_dict.get("translationStatus") or payload.get("translationStatus") or "pending"
     # Persist the read boundary independently of articleFacts.  Legacy RSS
     # rows often have no fact packet, but the UI still must distinguish a
     # body read from a title/RSS interpretation.
     payload["articleReadStatus"] = "body" if str(analysis_dict.get("readScope") or "") == "body" else "feed-summary"
     payload["articleSummaryKo"] = summary.get("briefKo") or summary.get("oneLineKo") or payload.get("articleSummaryKo") or evidence.summary
+    title, body, feed_summary, _read_scope = article_text_parts(evidence)
+    payload["articleSummaryQuality"] = summary_quality_payload(
+        payload["articleSummaryKo"],
+        " ".join(part for part in [title, body or feed_summary] if part),
+        payload.get("name") or evidence.symbol,
+    )
+    payload["summaryQualityState"] = payload["articleSummaryQuality"].get("state") or "needs-review"
+    if (
+        str(analysis_dict.get("status") or "").lower() == "deferred"
+        and str(payload.get("translationStatus") or "").lower() in {"complete", "not-required", "unavailable"}
+        and payload["summaryQualityState"] == "ready"
+    ):
+        # Deferred local analysis is only a queue marker. Once the display
+        # quality gate is clear and no translation is pending, it should not
+        # keep spending external-analysis budget on every worker cycle.
+        analysis_dict["status"] = "local"
+        analysis_dict["needsReview"] = bool(analysis_dict.get("needsReview")) and bool(
+            analysis_dict.get("reasoningLimitations")
+        )
+    if payload["articleSummaryQuality"].get("issues"):
+        analysis_dict["needsReview"] = True
+        analysis_dict["reasoningLimitations"] = unique_texts([
+            *(analysis_dict.get("reasoningLimitations") or []),
+            "요약 품질 점검 필요: " + ", ".join(payload["articleSummaryQuality"].get("issues") or []),
+        ], 5)
+        payload["aiAnalysis"] = analysis_dict
+    else:
+        payload["aiAnalysis"] = analysis_dict
     payload["stockImpact"] = STOCK_IMPACT_VALUES.get(impact_polarity, "neutral")
     payload["stockImpactLabel"] = analysis_dict.get("impactLabelKo") or IMPACT_LABELS.get(impact_polarity, "중립")
     payload["stockImpactPolarity"] = impact_polarity if impact_polarity in {"support", "risk"} else "context"
@@ -895,6 +1119,10 @@ def build_news_ai_analysis_prompt(target: NewsCollectionTarget, evidence: Resear
         "requiredJsonOnly": True,
         "schema": {
             "status": "ok|error",
+            "sourceLanguage": "ko|en|unknown",
+            "originalTitle": "publisher headline without rewriting",
+            "translatedTitleKo": "natural Korean translation of the publisher headline; required when sourceLanguage is en",
+            "translationStatus": "complete|not-required|unavailable",
             "impactPolarity": "support|risk|neutral|mixed|unknown",
             "impactLabelKo": "호재|악재|중립|혼재|미확인",
             "relevanceState": "direct|related|context|unrelated",
@@ -924,12 +1152,14 @@ def build_news_ai_analysis_prompt(target: NewsCollectionTarget, evidence: Resear
         "guardrails": [
             "Do not create buy, sell, add, trim, or hold decisions.",
             "Use only the provided title, feed summary, body preview, and existing metadata.",
+            "Preserve article.originalTitle exactly. For English titles, produce translatedTitleKo as a faithful Korean headline, not a stock recommendation.",
             "summary.oneLineKo and summary.briefKo must summarize article facts first; keep stock impact reasoning in rationaleKo.",
             "summary.briefKo must state who did what, the material number or condition when present, and why the event matters; do not merely name an event category.",
             "Do not repeat the same fact across oneLineKo, briefKo, keyTakeaways, whyItMatters, and watchPoints. Each field has a distinct role: core fact, supporting facts, investment impact, and verification condition.",
             "whyItMatters must explain the causal path to revenue, cost, valuation, regulation, liquidity, or investor sentiment. Do not restate the headline.",
             "watchPoints must name a measurable follow-up such as an official filing, guidance number, price reaction, or volume confirmation. Avoid generic phrases when a specific condition is available.",
             "Write the Korean summary as complete natural sentences. Do not repeat the title, source name, relation status, or phrases such as 확인할 뉴스, 관련 뉴스입니다, 핵심 내용은.",
+            "Never invent a number, company action, counterparty, or date. Omit uncertain details rather than guessing.",
             "Do not use generic sector templates such as AI/data-center demand unless that fact is present in the title, feed summary, or body preview.",
             "If the body is missing, set dataState to partial and validationState to conditional.",
             "A phrase such as 실적 by itself is not positive; 실적 우려, 붕괴, 하락, 덮은 are risk context.",

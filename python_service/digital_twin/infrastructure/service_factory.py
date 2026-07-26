@@ -30,6 +30,7 @@ from ..application.market_data_collection_service import MarketDataCollectionRun
 from ..application.model_review_service import ModelReviewRunner
 from ..application.news_collection_service import NewsCollectionRunner
 from ..application.news_ai_analysis_service import NewsAiAnalysisService
+from ..application.news_analysis_enrichment_service import NewsAnalysisEnrichmentRunner
 from ..application.news_digest_service import NewsDigestEnqueuer
 from ..application.monitoring_service import MonitorRunner
 from ..application.notification_service import (
@@ -420,6 +421,19 @@ def build_news_collection_runner(settings=None, event_publisher=None) -> NewsCol
             stores.data_pipeline_health_store(configured_settings),
             configured_settings,
         ),
+    )
+
+
+def build_news_analysis_enrichment_runner(settings=None, event_publisher=None) -> NewsAnalysisEnrichmentRunner:
+    configured_settings = settings or runtime_settings()
+    return NewsAnalysisEnrichmentRunner(
+        evidence_store=stores.research_evidence_store(configured_settings),
+        analysis_service=NewsAiAnalysisService(
+            news_ai_analyzer_from_settings(configured_settings),
+            configured_settings,
+        ),
+        settings=configured_settings,
+        event_publisher=event_publisher or news_event_bus(configured_settings),
     )
 
 

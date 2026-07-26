@@ -72,6 +72,28 @@ class ConsoleListPayloadTests(unittest.TestCase):
         self.assertEqual("feed-summary", payload["articleReadStatus"])
         self.assertIn(payload["stockImpactPolarity"], {"support", "risk", "context"})
 
+    def test_research_list_blocks_corrupt_legacy_summary_before_rendering(self):
+        evidence = ResearchEvidence(
+            evidence_id="evidence-corrupt-legacy-news",
+            symbol="000660",
+            kind="news",
+            source="Legacy RSS",
+            title="SK하이닉스 키옥시아 지분 기사",
+            summary="\ufffd\ufffd\ufffd encoded source text",
+            raw_payload={
+                "articleSummaryKo": "\ufffd\ufffd\ufffd encoded source text",
+                "stockImpactPolarity": "context",
+                "relationScope": "direct",
+            },
+        )
+
+        payload = research_evidence_list_payload(evidence)
+
+        self.assertEqual("legacy-projection", payload["analysisSource"])
+        self.assertEqual("blocked", payload["summaryQualityState"])
+        self.assertIn("text-encoding-corrupt", payload["articleSummaryQuality"]["issues"])
+        self.assertEqual("원문 인코딩 점검으로 요약을 보류했습니다.", payload["articleSummaryKo"])
+
     def test_research_list_exposes_claim_verification_without_full_claim_text(self):
         evidence = ResearchEvidence(
             evidence_id="evidence-claim-state",

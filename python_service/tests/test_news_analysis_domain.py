@@ -24,6 +24,7 @@ from digital_twin.domain.news_ai_analysis import (
     apply_news_ai_analysis,
     local_news_ai_analysis,
     normalize_ai_analysis,
+    summary_quality_payload,
     summary_texts_similar,
 )
 from digital_twin.domain.ontology_contracts import PortfolioOntology
@@ -34,6 +35,17 @@ from digital_twin.infrastructure.news_ai_analyzer import FallbackNewsAiAnalyzer,
 
 
 class NewsAnalysisDomainTests(unittest.TestCase):
+    def test_summary_quality_accepts_korean_magnitude_translation_and_keeps_target_as_advisory(self):
+        quality = summary_quality_payload(
+            "시가총액은 5조 달러를 넘었고 올해 AI 데이터센터 구축에는 약 7,000억 달러가 투입됩니다.",
+            "Nvidia market capitalization surpassed $5 trillion. Big tech companies are spending close to $700 billion this year building AI data centers.",
+            "NVIDIA",
+        )
+
+        self.assertEqual("ready", quality["state"])
+        self.assertNotIn("summary-number-not-grounded", quality["issues"])
+        self.assertNotIn("summary-target-name-omitted", quality["issues"])
+
     def test_news_analysis_setting_accepts_numeric_text(self):
         self.assertEqual(12, int_setting({"newsAiAnalysisLimit": "12"}, "newsAiAnalysisLimit", 5))
 

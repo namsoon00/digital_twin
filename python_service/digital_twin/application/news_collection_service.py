@@ -302,6 +302,41 @@ class NewsCollectionRunner:
                 stale.append(item)
         return fresh, stale
 
+    def governance_corpus_limit(self) -> int:
+        return int_setting(self.settings, "researchClaimCorpusLimit", 500, 20, 5000)
+
+    def governance_corpus_for_target(
+        self,
+        target: NewsCollectionTarget,
+        current_items: Iterable[ResearchEvidence],
+    ) -> List[ResearchEvidence]:
+        """Merge this collection with retained evidence for cross-cycle claims.
+
+        Independent reports normally arrive in separate one-minute collection
+        windows.  Governing only the current list makes the configured 72-hour
+        corroboration policy impossible to satisfy in normal operation.
+        """
+        existing: List[ResearchEvidence] = []
+        if hasattr(self.evidence_store, "latest"):
+            try:
+                existing = list(self.evidence_store.latest(
+                    symbol=target.normalized_symbol(),
+                    kind="news",
+                    limit=self.governance_corpus_limit(),
+                ) or [])
+            except Exception:  # noqa: BLE001 - collection can still govern the current batch.
+                existing = []
+        merged: Dict[str, ResearchEvidence] = {}
+        for item in [*existing, *(current_items or [])]:
+            if not isinstance(item, ResearchEvidence):
+                continue
+            evidence_id = str(item.evidence_id or "").strip()
+            if evidence_id:
+                # Current fetches contain richer body/analysis payloads than a
+                # stored snapshot, so they deliberately take precedence.
+                merged[evidence_id] = item
+        return list(merged.values())
+
     def article_analysis_health(self, items: Iterable[ResearchEvidence], stale_skipped_count: int, cleanup: Dict[str, object]) -> Dict[str, object]:
         news_items = [item for item in items or [] if getattr(item, "kind", "") == "news"]
         body_read = 0
@@ -312,6 +347,13 @@ class NewsCollectionRunner:
         body_quality_usable = 0
         ai_analyzed = 0
         ai_fallback = 0
+        ai_deferred = 0
+        translation_complete = 0
+        translation_pending = 0
+        translation_unavailable = 0
+        summary_ready = 0
+        summary_needs_review = 0
+        summary_blocked = 0
         for item in news_items:
             payload = getattr(item, "raw_payload", {}) if isinstance(getattr(item, "raw_payload", {}), dict) else {}
             facts = payload.get("articleFacts") if isinstance(payload.get("articleFacts"), dict) else {}
@@ -332,8 +374,28 @@ class NewsCollectionRunner:
             analysis = payload.get("aiAnalysis") if isinstance(payload.get("aiAnalysis"), dict) else {}
             if analysis:
                 ai_analyzed += 1
-                if str(analysis.get("status") or "") == "fallback":
+                analysis_status = str(analysis.get("status") or "").strip().lower()
+                if analysis_status == "fallback":
                     ai_fallback += 1
+                elif analysis_status == "deferred":
+                    ai_deferred += 1
+            language = str(payload.get("sourceLanguage") or "").strip().lower()
+            translation_status = str(payload.get("translationStatus") or "").strip().lower()
+            if language == "en":
+                if translation_status == "complete":
+                    translation_complete += 1
+                elif translation_status == "unavailable":
+                    translation_unavailable += 1
+                else:
+                    translation_pending += 1
+            summary_quality = payload.get("articleSummaryQuality") if isinstance(payload.get("articleSummaryQuality"), dict) else {}
+            summary_state = str(summary_quality.get("state") or payload.get("summaryQualityState") or "").strip().lower()
+            if summary_state == "ready":
+                summary_ready += 1
+            elif summary_state == "blocked":
+                summary_blocked += 1
+            else:
+                summary_needs_review += 1
         total = len(news_items)
         body_quality_failure_count = body_missing + body_quality_limited
         body_failure_rate = (body_quality_failure_count / total) if total else 0.0
@@ -354,7 +416,14 @@ class NewsCollectionRunner:
             "bodyFailureWarnRate": warn_rate,
             "aiAnalyzedCount": ai_analyzed,
             "aiFallbackCount": ai_fallback,
+            "aiDeferredCount": ai_deferred,
             "aiMissingCount": max(0, total - ai_analyzed),
+            "translationCompleteCount": translation_complete,
+            "translationPendingCount": translation_pending,
+            "translationUnavailableCount": translation_unavailable,
+            "summaryReadyCount": summary_ready,
+            "summaryNeedsReviewCount": summary_needs_review,
+            "summaryBlockedCount": summary_blocked,
             "staleSkippedCount": int(stale_skipped_count or 0),
             "staleDeletedCount": int((cleanup or {}).get("deleted") or 0),
             "freshnessMaxAgeMinutes": self.max_news_age_minutes(),
@@ -479,6 +548,7 @@ class NewsCollectionRunner:
         if not targets:
             return self.with_health({"status": "noTargets", "targetCount": 0, "fetchedCount": 0, "savedCount": 0, "staleDeletedCount": cleanup.get("deleted", 0), "staleCleanup": cleanup, "feedOnlyRssCleanup": feed_only_cleanup, "targetSelection": selection_metadata, "collectionRun": collection_run})
         collected: List[ResearchEvidence] = []
+        governed_for_persistence: List[ResearchEvidence] = []
         stale_items: List[ResearchEvidence] = []
         statuses: List[Dict[str, object]] = []
         target_failures: List[Dict[str, object]] = []
@@ -516,17 +586,28 @@ class NewsCollectionRunner:
                     if accepts_kwargs or "monotonic_fn" in parameter_names:
                         analysis_kwargs["monotonic_fn"] = self.monotonic_fn
                     items = analyze_many(target, items, **analysis_kwargs)
+                items, target_stale = self.fresh_news_items(items)
                 # Persist unverified claims for audit and web review, but the
                 # strict governance policy keeps them out of investment input.
+                # The corpus includes stored rows so independently reported
+                # facts can be corroborated across collection rotations.
                 if items:
+                    corpus = self.governance_corpus_for_target(target, items)
                     governed_evidence(
-                        items,
+                        corpus,
                         target,
                         self.max_news_age_minutes(),
                         str(self.settings.get("investmentBrainResearchMinimumSourceTrustState") or "standard"),
                         policy=claim_policy(self.settings),
                     )
-                items, target_stale = self.fresh_news_items(items)
+                    governed_for_persistence.extend(corpus)
+                    statuses.append({
+                        "source": "claim-governance",
+                        "symbol": target.symbol,
+                        "ok": True,
+                        "count": len(corpus),
+                        "status": "cross-cycle-corpus",
+                    })
                 collected.extend(items)
                 stale_items.extend(target_stale)
                 statuses.extend(target_statuses)
@@ -654,7 +735,7 @@ class NewsCollectionRunner:
                 event_state["events"] = events
                 return events
 
-            saved, recorded_events = self.evidence_store.upsert_many_with_events(collected, event_builder)
+            saved, recorded_events = self.evidence_store.upsert_many_with_events(governed_for_persistence or collected, event_builder)
             result = event_state.get("result")
             if not isinstance(result, dict):
                 result = build_collection_result(
@@ -666,7 +747,7 @@ class NewsCollectionRunner:
                 self.event_publisher.dispatch_recorded(event)
             return self.with_health(result)
 
-        saved = self.evidence_store.upsert_many(collected) if collected else 0
+        saved = self.evidence_store.upsert_many(governed_for_persistence or collected) if collected else 0
         result = build_collection_result(
             saved,
             list(getattr(self.evidence_store, "last_changed_symbols", []) or []),
@@ -685,6 +766,15 @@ class NewsCollectionRunner:
         targets = list(target_plan.get("targets") or [])
         selection_metadata = {key: value for key, value in target_plan.items() if key != "targets"}
         summary = self.evidence_store.summary() if hasattr(self.evidence_store, "summary") else {}
+        retained_news = []
+        if hasattr(self.evidence_store, "latest"):
+            try:
+                retained_news = list(self.evidence_store.latest(
+                    kind="news",
+                    limit=self.governance_corpus_limit(),
+                ) or [])
+            except Exception:  # noqa: BLE001 - status must remain readable when the evidence store is degraded.
+                retained_news = []
         return {
             "enabled": self.enabled(),
             "targetCount": len(targets),
@@ -695,6 +785,7 @@ class NewsCollectionRunner:
             "koreanProviders": self.gateway.korean_providers() if hasattr(self.gateway, "korean_providers") else [],
             "symbols": [target.symbol for target in targets[:50]],
             "evidence": summary,
+            "articleAnalysisHealth": self.article_analysis_health(retained_news, 0, {}),
             "staleCleanup": {
                 "enabled": self.cleanup_enabled(),
                 "maxAgeMinutes": self.max_news_age_minutes(),

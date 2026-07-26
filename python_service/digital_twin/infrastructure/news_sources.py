@@ -32,7 +32,8 @@ JSON_LD_SCRIPT_RE = re.compile(
 )
 DISABLED_VALUES = {"0", "false", "no", "off", "disabled"}
 ARTICLE_TEXT_LIMIT = 5000
-DEFAULT_NEWS_COLLECTION_PROVIDERS = ["yahoo_search", "yahoo_finance"]
+DEFAULT_NEWS_COLLECTION_PROVIDERS = ["google_rss_us", "yahoo_search", "yahoo_finance", "gdelt"]
+DEFAULT_KOREAN_NEWS_COLLECTION_PROVIDERS = ["google_rss_kr", "yahoo_search", "yahoo_finance", "gdelt"]
 NEWS_API_GUARD_STATE: Dict[str, object] = {}
 RSS_PROVIDER_NAMES = {
     "google_rss_kr",
@@ -500,10 +501,14 @@ class NewsSourceGateway:
     def guarded_json_fetcher(self, timeout: float) -> JsonFetcher:
         def fetch(url: str, headers: Dict[str, str] = None) -> object:
             source = news_source_for_url(url)
+            # GDELT queries differ for every symbol.  A request-specific key
+            # would therefore never accumulate failures and could fan out a
+            # provider outage across the complete collection rotation.
+            guard_target = "api.gdeltproject.org/provider" if source == "GDELT News" else external_call_target(url)
             return guarded_external_call(
                 self.settings,
                 source,
-                external_call_target(url),
+                guard_target,
                 lambda: default_json_fetcher(url, headers, timeout=timeout),
                 state=NEWS_API_GUARD_STATE,
                 attempts=1 if source == "GDELT News" else 2,
@@ -546,19 +551,38 @@ class NewsSourceGateway:
         providers = [
             item.lower().replace("-", "_")
             for item in split_csv(
-                self.settings.get("newsCollectionProviders"),
+                self.settings.get("newsCollectionInternationalProviders") or self.settings.get("newsCollectionProviders"),
                 DEFAULT_NEWS_COLLECTION_PROVIDERS,
             )
         ]
-        if not truthy(self.settings.get("newsCollectionGdeltSyncEnabled"), False):
-            providers = [item for item in providers if item != "gdelt"]
-        return providers
+        return [item for item in providers if self.provider_enabled(item)]
 
     def korean_providers(self) -> List[str]:
-        return [
+        providers = [
             item.lower().replace("-", "_")
-            for item in split_csv(self.settings.get("newsCollectionKoreanProviders"), ["google_rss_kr"])
+            for item in split_csv(self.settings.get("newsCollectionKoreanProviders"), DEFAULT_KOREAN_NEWS_COLLECTION_PROVIDERS)
         ]
+        return [item for item in providers if self.provider_enabled(item)]
+
+    def provider_enabled(self, provider: str) -> bool:
+        normalized = str(provider or "").strip().lower().replace("-", "_")
+        setting_by_provider = {
+            "google_rss_kr": "newsCollectionGoogleKrEnabled",
+            "rss_kr": "newsCollectionGoogleKrEnabled",
+            "google_rss_us": "newsCollectionGoogleUsEnabled",
+            "rss_us": "newsCollectionGoogleUsEnabled",
+            "yahoo_search": "newsCollectionYahooSearchEnabled",
+            "yahoo_finance_search": "newsCollectionYahooSearchEnabled",
+            "yahoo_finance": "newsCollectionYahooRssEnabled",
+            "yahoo_finance_rss": "newsCollectionYahooRssEnabled",
+            "yahoo_rss": "newsCollectionYahooRssEnabled",
+            "gdelt": "newsCollectionGdeltSyncEnabled",
+        }
+        setting = setting_by_provider.get(normalized)
+        if not setting:
+            return True
+        default = False if normalized == "gdelt" else True
+        return truthy(self.settings.get(setting), default)
 
     def providers_for_target(self, target: NewsCollectionTarget) -> List[str]:
         configured = self.providers()

@@ -8,8 +8,8 @@ from .investment_research import NewsCollectionTarget, ResearchEvidence
 from . import news_analysis as news_domain
 
 
-NEWS_AI_ANALYSIS_VERSION = "news-ai-analysis-v9-target-scoped-signals"
-NEWS_AI_PROMPT_VERSION = "news-ai-prompt-v9-target-scoped-signals"
+NEWS_AI_ANALYSIS_VERSION = "news-ai-analysis-v10-target-scoped-signals"
+NEWS_AI_PROMPT_VERSION = "news-ai-prompt-v10-target-scoped-signals"
 
 IMPACT_LABELS = {
     "support": "호재",
@@ -761,7 +761,7 @@ def impact_reason_text(
         return compact_text(target_name + "에는 " + event_label + " 관련 우호 재료가 확인됩니다. " + signals + "가 실제 가격·거래량 반응으로 이어지는지 봐야 합니다." + number_text, 520)
     if polarity == "mixed":
         return compact_text(target_name + "에는 우호 논리와 위험 신호가 함께 있습니다. " + signals + "가 충돌해 다음 가격 반응 전까지 방향을 단정하기 어렵습니다." + number_text, 520)
-    return compact_text(target_name + " 관련 새 정보지만 기사 안의 가격 방향성은 제한적입니다. " + event_label + " 이슈가 실제 수급 변화로 이어지는지 확인하는 근거로 봅니다." + number_text, 520)
+    return compact_text(target_name + " 관련 새 정보지만 기사 안의 가격 방향성은 제한적입니다. " + event_label + " 관련 변화가 실제 수급 변화로 이어지는지 확인하는 근거로 봅니다." + number_text, 520)
 
 
 def portfolio_implication_text(target_name: str, polarity: str, event_type: str) -> str:

@@ -115,6 +115,7 @@ class NewsAnalysisDomainTests(unittest.TestCase):
         self.assertNotIn("급락", analysis["impactReasonKo"])
         self.assertNotIn("64조", analysis["impactReasonKo"])
         self.assertNotIn("75%", analysis["impactReasonKo"])
+        self.assertNotIn("일반 이슈 이슈", analysis["impactReasonKo"])
         self.assertNotIn("한화오션", updated.raw_payload["stockImpactReasonKo"])
         self.assertNotIn("엔비디아", json.dumps(prompt, ensure_ascii=False))
         self.assertNotIn("64조", json.dumps(prompt, ensure_ascii=False))

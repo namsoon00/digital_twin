@@ -608,9 +608,11 @@ class OntologyReasoningRunner:
     def fairness_drain_enabled(self) -> bool:
         """Drain an overdue target without adding another idle scheduler wait.
 
-        TypeDB materialization remains serialised at one target per
-        projection. This only removes the cooldown between successful runs
-        after the configured fairness deadline has already been exceeded.
+        TypeDB materialization remains serialised as one ABox/InferenceBox
+        generation per projection. A bounded set of read-only native rule
+        targets may run within that generation. This only removes the
+        cooldown between successful runs after the configured fairness
+        deadline has already been exceeded.
         """
         return truthy(self.settings.get("ontologyReasoningFairnessDrainEnabled"), True)
 
@@ -1422,9 +1424,10 @@ class OntologyReasoningRunner:
 
     def request_symbol_batches(self, requests: Iterable[object]) -> Tuple[Dict[str, List[str]], List[str], int]:
         # Snapshot construction still preserves all portfolio and market
-        # entities.  Only the native schema-function subjects are serialized;
-        # a multi-symbol function batch can otherwise exceed the realtime
-        # boundary and repeatedly roll back the candidate ABox generation.
+        # entities. Native schema-function subjects remain bounded by the
+        # configured realtime cap; one coherent ABox/InferenceBox generation
+        # can safely include the highest-priority subjects from more than one
+        # source event.
         max_symbols = self.effective_max_symbols_per_run()
         cursor_payload = self.cursor_payload()
         progress = self.event_symbol_progress(cursor_payload)
@@ -1467,7 +1470,6 @@ class OntologyReasoningRunner:
                 )
                 event_candidates.append((rank, event_id, due_symbols))
             if event_candidates:
-                _rank, event_id, due_symbols = max(event_candidates, key=lambda item: item[0])
                 snapshot_limit = self.coherent_snapshot_max_symbols()
                 # Coherence refers to the full ABox retained for context, not
                 # an unbounded schema-function request. Native TypeDB rules
@@ -1475,8 +1477,30 @@ class OntologyReasoningRunner:
                 # broad market event cannot monopolize the realtime worker.
                 if max_symbols > 0:
                     snapshot_limit = min(snapshot_limit, max_symbols)
-                selected = list(due_symbols[:snapshot_limit])
-                batches[event_id] = selected
+                selected = []
+                selected_set = set()
+                # Preserve event-level review/trigger priority, then retain
+                # the fairness ordering already applied inside each event.
+                # The former single-event selection made a target cap of two
+                # ineffective whenever each source event carried one symbol.
+                for _rank, event_id, due_symbols in sorted(
+                    event_candidates,
+                    key=lambda item: item[0],
+                    reverse=True,
+                ):
+                    selected_for_event = []
+                    for symbol in due_symbols:
+                        if symbol in selected_set:
+                            continue
+                        if snapshot_limit > 0 and len(selected) >= snapshot_limit:
+                            break
+                        selected.append(symbol)
+                        selected_set.add(symbol)
+                        selected_for_event.append(symbol)
+                    if selected_for_event:
+                        batches[event_id] = selected_for_event
+                    if snapshot_limit > 0 and len(selected) >= snapshot_limit:
+                        break
                 return batches, selected, max(0, len(all_due_symbols) - len(selected))
             if global_events:
                 # A subject-less operational/macro update still needs one full

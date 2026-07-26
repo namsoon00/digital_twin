@@ -471,6 +471,29 @@ class OntologyReasoningMailboxTests(unittest.TestCase):
         self.assertEqual(1, len(publisher.events[0].payload["triggerEventIds"]))
         self.assertEqual(1, len(self.cursor.ids))
 
+    def test_coherent_snapshot_fills_the_native_target_cap_across_source_events(self):
+        first = realtime_request("first", ["AAPL"], "2026-07-24T00:00:00Z")
+        second = realtime_request("second", ["MSFT"], "2026-07-24T00:01:00Z")
+        third = realtime_request("third", ["NVDA"], "2026-07-24T00:02:00Z")
+        runner = self.build_runner(
+            [first, second, third],
+            settings={
+                "ontologyReasoningMaxSymbolsPerRun": "2",
+                "typedbNativeRuleTargetSymbolLimit": "2",
+            },
+        )
+
+        result = runner.run_once(force=True)
+
+        self.assertEqual("ok", result["status"])
+        self.assertEqual(2, result["scheduledRequestCount"])
+        self.assertEqual(2, len(result["symbols"]))
+        self.assertEqual(1, result["omittedSymbolCount"])
+        self.assertEqual(1, len(self.monitor.calls))
+        self.assertEqual(set(result["symbols"]), set(self.monitor.calls[0]))
+        self.assertEqual(2, len(self.cursor.ids))
+        self.assertEqual(1, result["mailbox"]["pendingEntryCount"])
+
     def test_pending_mailbox_slot_without_a_due_symbol_does_not_run_the_whole_portfolio(self):
         event = realtime_request("waiting", ["AAPL"], "2026-07-24T00:04:00Z")
         runner = self.build_runner(

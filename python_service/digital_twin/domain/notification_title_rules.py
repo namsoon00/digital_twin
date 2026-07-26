@@ -4,6 +4,7 @@ from typing import List
 
 from .message_types import MESSAGE_TYPE_EMOJIS
 from .notification_ontology_sections import ontology_relation_context
+from .operational_notification_presentation import operational_notification_presentation
 from .notification_text_formatting import (
     data_value,
     dominant_signed_direction,
@@ -120,6 +121,16 @@ def notification_title_icon(rule: str, raw_lines: List[str], event: AlertEvent) 
     change = data_value(raw_lines, "변화")
     signal = data_value(raw_lines, "신호")
     title_text = str(getattr(event, "title", "") or "")
+    metadata = dict(getattr(event, "metadata", {}) or {})
+    operational_presentation = operational_notification_presentation(key, {
+        "messageType": key,
+        "rawLines": list(raw_lines or []),
+        "title": title_text,
+        "severity": str(getattr(event, "severity", "") or ""),
+        "metadata": metadata,
+    })
+    if operational_presentation:
+        return operational_presentation.icon
 
     if key in {"modelBuy", "watchlistBuyCandidate"}:
         return "🟢"
@@ -282,7 +293,6 @@ def notification_title_headline(rule: str, raw_lines: List[str], event: AlertEve
         equity_change = data_value(raw_lines, "미장 가격 변동")
         return title_from_change(equity_change, "미장 가격 급등", "미장 가격 급락", "미장 가격·거래량 급변")
     if key == "externalCryptoMove":
-        metadata = dict(getattr(event, "metadata", {}) or {})
         crypto_model = metadata.get("cryptoMoveModel") if isinstance(metadata.get("cryptoMoveModel"), dict) else {}
         model_title = str(crypto_model.get("titleLabel") or metadata.get("cryptoMoveTitle") or "").strip()
         if model_title:

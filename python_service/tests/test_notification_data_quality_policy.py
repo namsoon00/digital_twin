@@ -485,7 +485,7 @@ class NotificationDataQualityPolicyTests(unittest.TestCase):
     def test_message_start_badge_adds_work_handoff_keyword(self):
         message = prepend_message_start_badge("작업 완료\n- 요약: 테스트", context={"messageType": "workHandoff"})
 
-        self.assertTrue(message.startswith("🔔 새 알림 · 작업완료\n\n작업 완료"))
+        self.assertTrue(message.startswith("📦 운영 알림 · 작업완료\n\n작업 완료"))
 
     def test_topline_change_summary_shows_profit_loss_improvement_delta(self):
         summary = notification_topline_change_summary({

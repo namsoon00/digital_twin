@@ -85,6 +85,10 @@ from .notification_title_rules import (
 )
 from .notifications import notification_debug_number
 from .notification_start_badge import labeled_message_start_badge
+from .operational_notification_presentation import (
+    operational_message_start_badge,
+    operational_presentation_context,
+)
 from .portfolio import AlertEvent
 from .notification_signal_classification import notification_signal_categories
 
@@ -1072,18 +1076,24 @@ def prepend_message_start_badge(rendered: str, rich: bool = False, context: Dict
         return text
     if context_message_type(context or {}) == OPERATOR_REASONING_REPORT:
         return text
-    plain_badge = labeled_message_start_badge(MESSAGE_START_BADGE, context or {})
-    if text.startswith("<b>" + MESSAGE_START_BADGE):
-        first, rest = (text.split("\n", 1) + [""])[:2]
-        if " · " in first and plain_badge == MESSAGE_START_BADGE:
-            return text
-        html_badge = "<b>" + html.escape(plain_badge, quote=False) + "</b>"
-        return html_badge + (("\n" + rest) if rest else "")
-    if text.startswith(MESSAGE_START_BADGE):
-        first, rest = (text.split("\n", 1) + [""])[:2]
-        if " · " in first and plain_badge == MESSAGE_START_BADGE:
-            return text
-        return plain_badge + (("\n" + rest) if rest else "")
+    base_badge = operational_message_start_badge(context or {}, MESSAGE_START_BADGE)
+    plain_badge = labeled_message_start_badge(base_badge, context or {})
+    known_badges = [base_badge]
+    if base_badge != MESSAGE_START_BADGE:
+        known_badges.append(MESSAGE_START_BADGE)
+    for known_badge in known_badges:
+        if text.startswith("<b>" + known_badge):
+            first, rest = (text.split("\n", 1) + [""])[:2]
+            first_text = re.sub(r"<[^>]+>", "", first).strip()
+            if first_text == plain_badge:
+                return text
+            html_badge = "<b>" + html.escape(plain_badge, quote=False) + "</b>"
+            return html_badge + (("\n" + rest) if rest else "")
+        if text.startswith(known_badge):
+            first, rest = (text.split("\n", 1) + [""])[:2]
+            if first.strip() == plain_badge:
+                return text
+            return plain_badge + (("\n" + rest) if rest else "")
     badge = "<b>" + html.escape(plain_badge, quote=False) + "</b>" if rich else plain_badge
     return badge + "\n\n" + text
 
@@ -1132,7 +1142,7 @@ def compact_investment_notification(rendered: str, context: Dict[str, object], m
 
 
 def render_notification(template: NotificationTemplate, context: Dict[str, object]) -> str:
-    values = context_with_reasoning_explanation(context)
+    values = context_with_reasoning_explanation(operational_presentation_context(context))
     if context_message_type(values) == OPERATOR_REASONING_REPORT:
         configured_template = template.template if template and template.enabled else BODY_TEMPLATE
         rendered = render_template(configured_template, values)
@@ -1162,6 +1172,10 @@ def render_notification(template: NotificationTemplate, context: Dict[str, objec
 def template_variables() -> List[str]:
     return [
         "messageType",
+        "operationalIcon",
+        "operationalTone",
+        "operationalState",
+        "operationalBadge",
         "accountId",
         "accountLabel",
         "severity",

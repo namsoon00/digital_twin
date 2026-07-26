@@ -6,6 +6,7 @@ import time
 from typing import Callable, Dict
 
 from ..domain.events import system_error_reported_event
+from ..domain.operational_notification_presentation import operational_notification_presentation
 from .external_signal_utils import sanitize_sensitive_text
 from .notifications import notifier_for_operations
 from .settings import SECRET_SETTING_KEYS, runtime_settings, utc_now
@@ -97,8 +98,16 @@ class OperationalErrorReporter:
                 "message": message,
             }
 
+        presentation = operational_notification_presentation("systemError", {
+            "messageType": "systemError",
+            "errorType": error_type,
+            "errorMessage": message,
+            "errorStatus": getattr(error, "code", ""),
+            "stage": stage_text,
+        })
+        icon = presentation.icon if presentation else "🚨"
         lines = [
-            "🚨 시스템 오류",
+            icon + " 시스템 오류",
             "• 구성요소: " + component_text,
             "• 오류 유형: " + error_type,
             "• 오류 내용: " + message,

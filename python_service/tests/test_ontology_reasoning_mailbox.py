@@ -555,6 +555,21 @@ class OntologyReasoningMailboxTests(unittest.TestCase):
         self.assertIn("sourceFreshness", status)
         self.assertTrue(status["executionTelemetry"]["last"])
 
+    def test_lightweight_queue_state_avoids_account_priority_and_reports_pending_work(self):
+        event = realtime_request("lightweight", ["AAPL"], "2026-07-24T00:00:00Z")
+        runner = self.build_runner([event])
+        runner.priority_symbols_provider = lambda: (_ for _ in ()).throw(
+            AssertionError("lightweight queue probe must not load account priority")
+        )
+
+        state = runner.lightweight_queue_state()
+
+        self.assertEqual("pending", state["status"])
+        self.assertEqual("lightweight-event-mailbox", state["probeMode"])
+        self.assertEqual(1, state["effectivePendingCount"])
+        self.assertEqual(["AAPL"], state["pendingSymbols"])
+        self.assertEqual("2026-07-24T00:00:00Z", state["oldestRequestAt"])
+
     def test_queue_dispatch_explains_selected_work_without_changing_priority(self):
         market = realtime_request("market", ["AAPL"], "2026-07-24T00:00:00Z")
         source = DomainEvent(

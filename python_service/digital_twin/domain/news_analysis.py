@@ -887,8 +887,16 @@ def keyword_hits(text: object, terms: Iterable[str], limit: int = 4) -> List[str
 
 def numeric_highlights(text: object, limit: int = 4) -> List[str]:
     rows: List[str] = []
-    for match in NUMERIC_TOKEN_RE.findall(str(text or "")):
-        value = str(match or "").strip()
+    source = str(text or "")
+    for match in NUMERIC_TOKEN_RE.finditer(source):
+        value = str(match.group(0) or "").strip()
+        before = source[match.start() - 1] if match.start() else ""
+        after = source[match.end()] if match.end() < len(source) else ""
+        lowered = value.casefold()
+        has_unit = bool(re.search(r"[$₩%]|달러|원|조|억|만|million|billion|trillion|mn|bn", lowered))
+        has_grouped_amount = bool(re.search(r"\d{1,3}(?:,\d{3})+(?:\.\d+)?", value))
+        if (before.isascii() and before.isalnum()) or (after.isascii() and after.isalpha()) or not (has_unit or has_grouped_amount):
+            continue
         if value and value not in rows:
             rows.append(value)
         if len(rows) >= limit:
@@ -987,11 +995,31 @@ def strip_feed_summary_prefix(value: object) -> str:
     return re.sub(r"^\s*(?:RSS/제공\s*요약|제공\s*요약|RSS\s*summary)\s*[:：]\s*", "", text, flags=re.IGNORECASE).strip()
 
 
-def article_sentence_candidates(text: object, target: object, analysis: Dict[str, object] = None, limit: int = 3) -> List[str]:
+def trim_repeated_headline_tail(sentence: object, headline: object = "") -> str:
+    """Drop a repeated headline where article navigation begins after body text."""
+    text = str(sentence or "").strip()
+    probe = clean_article_title(headline)[:18].strip()
+    if len(text) < 80 or len(probe) < 8:
+        return text
+    match = re.search(re.escape(probe), text[max(60, len(probe) * 2):], re.IGNORECASE)
+    if not match:
+        return text
+    start = max(60, len(probe) * 2) + match.start()
+    return re.sub(r"(?:평가는|관련|등은)$", "", text[:start].rstrip(" ,·:-")).rstrip()
+
+
+def article_sentence_candidates(
+    text: object,
+    target: object,
+    analysis: Dict[str, object] = None,
+    limit: int = 3,
+    headline: object = "",
+) -> List[str]:
     analysis = analysis if isinstance(analysis, dict) else {}
     source_text = str(text or "")
     if not source_text.strip():
         return []
+    source_navigation_heavy = source_text.count("…") + source_text.count("...") >= 3
     raw_parts = re.split(r"(?<=[.!?。！？])\s+|\n+", source_text)
     terms = [
         *target_aliases(target),
@@ -1000,21 +1028,37 @@ def article_sentence_candidates(text: object, target: object, analysis: Dict[str
         *RISK_KEYWORDS,
         *EVENT_TYPE_KEYWORDS.get(str(analysis.get("eventType") or ""), []),
     ]
-    ranked: List[Tuple[float, int, str]] = []
+    direct_aliases = [
+        alias for alias in target_aliases(target)
+        if len(str(alias or "").strip()) >= 2 and not str(alias or "").strip().isdigit()
+    ]
+    ranked: List[Tuple[float, int, str, bool, bool]] = []
     for index, raw in enumerate(raw_parts[:80]):
-        sentence = compact_text(raw, 180)
+        raw_sentence = compact_text(raw, 420)
+        navigation_headline_run = raw_sentence.count("…") >= 2
+        sentence = trim_repeated_headline_tail(raw_sentence, headline)
+        sentence = compact_text(sentence, 180)
         if len(sentence) < 24:
             continue
         if is_news_boilerplate_sentence(sentence):
             continue
         lowered = _lower_text(sentence)
+        direct_target_hit = any(_keyword_in_lowered_text(alias, lowered) for alias in direct_aliases)
         priority = max(0.0, 12.0 - index * 0.25)
+        if direct_target_hit:
+            priority += 12.0
         priority += sum(4.0 for term in terms if _keyword_in_lowered_text(term, lowered))
         priority += min(8.0, len(numeric_highlights(sentence, 4)) * 2.0)
-        ranked.append((priority, index, sentence))
+        ranked.append((priority, index, sentence, direct_target_hit, navigation_headline_run))
     ranked.sort(key=lambda item: (-item[0], item[1]))
+    if source_navigation_heavy:
+        direct_body_rows = [item for item in ranked if item[3] and not item[4]]
+        if not direct_body_rows:
+            direct_body_rows = [item for item in ranked if item[3]]
+        if direct_body_rows:
+            ranked = direct_body_rows
     result: List[str] = []
-    for _priority, _index, sentence in ranked:
+    for _priority, _index, sentence, _direct_target_hit, _navigation_headline_run in ranked:
         if sentence not in result:
             result.append(sentence)
         if len(result) >= limit:
@@ -1328,12 +1372,19 @@ def korean_article_summary(
         return ""
     article_text_for_summary = strip_feed_summary_prefix(source_text) or source_text
     event_label = event_type_label(analysis.get("eventType") or classify_news_event_type(title, source_text))
-    topics = detected_topic_labels(str(title or "") + " " + article_text_for_summary)
-    numbers = numeric_highlights(article_text_for_summary)
     body_status = "본문" if body else "RSS/제공"
-    sentences = [clean_article_title(article_text_for_summary)] if fallback_from_title and not body else article_sentence_candidates(article_text_for_summary, target, analysis, 3)
+    sentences = [clean_article_title(article_text_for_summary)] if fallback_from_title and not body else article_sentence_candidates(
+        article_text_for_summary,
+        target,
+        analysis,
+        3,
+        headline=title,
+    )
     if sentences and contains_hangul(article_text_for_summary):
         sentence_text = join_korean_summary_parts(sentences)
+        summary_fact_text = str(title or "") + " " + sentence_text
+        topics = detected_topic_labels(summary_fact_text)
+        numbers = numeric_highlights(summary_fact_text)
         details = []
         if topics:
             details.append("핵심 키워드: " + ", ".join(topics))
@@ -1341,6 +1392,8 @@ def korean_article_summary(
             details.append("확인된 수치: " + ", ".join(numbers))
         suffix = (" " + " / ".join(details) + ".") if details else ""
         return compact_text(body_status + " 요약: " + sentence_text + suffix, 760)
+    topics = detected_topic_labels(str(title or "") + " " + article_text_for_summary)
+    numbers = numeric_highlights(article_text_for_summary)
     detail_parts = factual_english_article_summary_parts(target, title, article_text_for_summary, event_label)
     if topics:
         detail_parts.append("핵심 키워드는 " + ", ".join(topics) + "입니다")

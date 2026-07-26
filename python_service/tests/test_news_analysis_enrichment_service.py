@@ -160,6 +160,39 @@ class NewsAnalysisEnrichmentRunnerTests(unittest.TestCase):
         self.assertTrue(news_ai_analysis_is_current(applied))
         self.assertFalse(runner.should_retry(applied))
 
+    def test_worker_retries_stored_summary_with_navigation_headline_contamination(self):
+        evidence = ResearchEvidence(
+            "research:066570:news:navigation-contamination",
+            "066570",
+            "news",
+            "Example News",
+            "LG전자, 미국 주방가전 신뢰도 1위",
+            "LG전자가 미국 주방가전 시장 공략을 강화합니다.",
+            "https://example.test/lg-kitchen",
+            "2026-07-25T01:00:00Z",
+            "context",
+            published_at="2026-07-25T01:00:00Z",
+            raw_payload={
+                "name": "LG전자",
+                "relationScope": "direct",
+                "articleReadStatus": "body",
+                "articleText": "LG전자가 미국 소비자 평가에서 주방가전 신뢰도 1위에 올랐습니다.",
+                "articleFacts": {"bodyAvailable": True, "bodyQualityPassed": True},
+            },
+        )
+        target = NewsCollectionTarget("066570", "LG전자", "KOSPI", "KRW", "가전/전자")
+        applied = apply_news_ai_analysis(evidence, local_news_ai_analysis(target, evidence).to_dict())
+        applied.raw_payload["articleSummaryKo"] = "한화오션 수주… 방산 확대… 엔비디아 메모리… LG전자 주방가전"
+        applied.raw_payload["articleSummaryQuality"] = {"state": "ready", "issues": []}
+        applied.raw_payload["summaryQualityState"] = "ready"
+        runner = NewsAnalysisEnrichmentRunner(
+            evidence_store=object(),
+            analysis_service=None,
+            settings={"newsAiAnalysisAsyncEnabled": "1"},
+        )
+
+        self.assertTrue(runner.should_retry(applied))
+
 
 if __name__ == "__main__":
     unittest.main()

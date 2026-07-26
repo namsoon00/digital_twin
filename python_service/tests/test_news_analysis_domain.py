@@ -14,6 +14,7 @@ from digital_twin.domain.news_analysis import (
     clean_article_summary_noise,
     english_fragment_to_korean,
     korean_article_summary,
+    numeric_highlights,
     news_state_payload,
     relation_scope_is_investable,
     source_trust_state_for_source,
@@ -45,6 +46,35 @@ class NewsAnalysisDomainTests(unittest.TestCase):
         self.assertEqual("ready", quality["state"])
         self.assertNotIn("summary-number-not-grounded", quality["issues"])
         self.assertNotIn("summary-target-name-omitted", quality["issues"])
+
+    def test_korean_summary_uses_direct_target_body_and_flags_navigation_headlines(self):
+        target = NewsCollectionTarget("066570", "LG전자", "KOSPI", "KRW", "가전/전자")
+        body = (
+            "LG전자가 미국 소비자 평가에서 가장 신뢰할 수 있는 주방가전 브랜드로 선정된 데 힘입어 "
+            "현지 빌트인 시장 공략을 강화한다. LG전자, 美 신뢰 주방가전 1위…빌더시장 3위권 정조준 "
+            "한화오션, 칠레 호위함 수주전 진출…남미 방산 영토확장 "
+            "엔비디아, AI 메모리 공급 확보 유력…반도체 투자 확대"
+        )
+
+        summary = korean_article_summary(target, "LG전자, 美 신뢰 주방가전 1위…빌더시장 3위권 정조준", body, "")
+        quality = summary_quality_payload(
+            "한화오션 수주전… 남미 방산 확대… 엔비디아 메모리 공급… LG전자 주방가전",
+            body,
+            "LG전자",
+        )
+
+        self.assertIn("LG전자", summary)
+        self.assertNotIn("한화오션", summary)
+        self.assertNotIn("메모리", summary)
+        self.assertNotIn("AI", summary)
+        self.assertNotIn("확인된 수치", summary)
+        self.assertEqual("needs-review", quality["state"])
+        self.assertIn("summary-navigation-contamination", quality["issues"])
+
+    def test_numeric_highlights_ignores_ranks_dates_and_b2b_labels(self):
+        values = numeric_highlights("B2B 시장 1위는 26일 $700 billion 투자와 731조원 수주를 발표했다.")
+
+        self.assertEqual(["$700 billion", "731조"], values)
 
     def test_news_analysis_setting_accepts_numeric_text(self):
         self.assertEqual(12, int_setting({"newsAiAnalysisLimit": "12"}, "newsAiAnalysisLimit", 5))

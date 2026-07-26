@@ -14,9 +14,11 @@ from ..domain.investment_research import NewsCollectionTarget, ResearchEvidence
 from ..domain.materiality import evidence_materiality
 from ..domain.news_ai_analysis import (
     apply_news_ai_analysis,
+    article_text_parts,
     news_ai_analysis_is_current,
     news_ai_analysis_retryable,
     source_language,
+    summary_quality_payload,
 )
 from ..domain import news_analysis as news_domain
 
@@ -94,7 +96,16 @@ class NewsAnalysisEnrichmentRunner:
         language = str(payload.get("sourceLanguage") or source_language(item.title)).lower()
         translation_status = str(payload.get("translationStatus") or "").lower()
         needs_translation = language == "en" and translation_status != "complete"
-        needs_summary_review = str(summary_quality.get("state") or "") in {"blocked", "needs-review"}
+        title, body, feed_summary, _read_scope = article_text_parts(item)
+        refreshed_quality = summary_quality_payload(
+            payload.get("articleSummaryKo") or item.summary,
+            " ".join(part for part in [title, body or feed_summary] if part),
+            str(payload.get("name") or payload.get("companyName") or item.symbol),
+        )
+        needs_summary_review = (
+            str(summary_quality.get("state") or "") in {"blocked", "needs-review"}
+            or str(refreshed_quality.get("state") or "") in {"blocked", "needs-review"}
+        )
         analysis_status = str(analysis.get("status") or "").lower()
         retryable_analysis = (
             analysis_status in {"fallback", "error", ""}

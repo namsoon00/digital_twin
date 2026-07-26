@@ -246,6 +246,8 @@ def summary_quality_payload(summary: object, source_text: object, target_name: o
         issues.append("text-encoding-corrupt")
     if any(pattern.match(text) for pattern in GENERIC_SUMMARY_PATTERNS):
         issues.append("summary-generic-template")
+    if text.count("…") >= 3:
+        issues.append("summary-navigation-contamination")
     if re.search(r"(?:cookie|advertisement|subscribe|sign up|관련기사|무단전재|저작권)", text, re.IGNORECASE):
         issues.append("summary-boilerplate")
     source_numbers = normalized_numeric_values(source)

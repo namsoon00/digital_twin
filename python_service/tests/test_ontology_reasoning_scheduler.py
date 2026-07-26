@@ -40,6 +40,29 @@ class FakeSuccessProcess:
         return '{"status":"ok","processedCount":1,"alertCount":0}\n', ""
 
 
+class FakeStopProcess:
+    pid = 999997
+    returncode = None
+
+    def __init__(self):
+        self.signals = []
+        self.calls = 0
+        self.cycle = None
+
+    def poll(self):
+        return self.returncode
+
+    def send_signal(self, value):
+        self.signals.append(value)
+        self.returncode = -int(value)
+
+    def communicate(self, timeout=None):
+        self.calls += 1
+        if self.calls == 1 and self.cycle:
+            self.cycle.stop()
+        return "", ""
+
+
 class FakeRunner:
     def __init__(self):
         self.timeouts = []
@@ -91,6 +114,21 @@ class OntologyReasoningSchedulerTests(unittest.TestCase):
         self.assertEqual(60, result["retryAfterSeconds"])
         self.assertEqual(1, len(runner.timeouts))
         self.assertEqual(12, runner.timeouts[0]["timeoutSeconds"])
+        self.assertIn(signal_value("SIGTERM"), process.signals)
+
+    def test_stop_only_signals_the_child_while_communicate_owns_pipe_cleanup(self):
+        process = FakeStopProcess()
+        cycle = IsolatedOntologyReasoningCycle(
+            ["python", "service.py", "ontology-reasoning", "once"],
+            process_factory=lambda *_args, **_kwargs: process,
+        )
+        process.cycle = cycle
+
+        result = cycle.run_once(limit=1, timeout_seconds=12, grace_seconds=1)
+
+        self.assertEqual("stopped", result["status"])
+        self.assertTrue(result["stopRequested"])
+        self.assertEqual(1, process.calls)
         self.assertIn(signal_value("SIGTERM"), process.signals)
 
 

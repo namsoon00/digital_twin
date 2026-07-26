@@ -15,7 +15,8 @@ from typing import Dict, Iterable, List, Mapping
 ONTOLOGY_RUNTIME_OBSERVATION_VERSION = "ontology-runtime-observation-v1"
 NATIVE_RULE_TIMING_PROFILE_VERSION = "typedb-native-rule-timing-v1"
 NATIVE_REPLAY_VALIDATION_VERSION = "typedb-native-replay-validation-v1"
-SCOPED_ABOX_MAINTENANCE_POLICY_VERSION = "typedb-scoped-abox-maintenance-policy-v1"
+SCOPED_ABOX_MAINTENANCE_POLICY_VERSION = "typedb-scoped-abox-maintenance-policy-v2"
+DISABLED_VALUES = {"0", "false", "no", "off", "disabled"}
 
 
 def _text(value: object) -> str:
@@ -115,6 +116,16 @@ def scoped_abox_maintenance_policy(settings: Mapping[str, object] = None) -> Dic
             50000,
         )),
     )
+    max_delete_batches = _integer(_setting_number(
+        configured,
+        "ontologyAboxMaintenanceMaxDeleteBatchesPerRun",
+        2,
+        1,
+        50,
+    ))
+    adaptive_enabled = _text(
+        configured.get("ontologyAboxMaintenanceAdaptiveDrainEnabled")
+    ).lower() not in DISABLED_VALUES
     return {
         "version": SCOPED_ABOX_MAINTENANCE_POLICY_VERSION,
         "intervalSeconds": _integer(_setting_number(
@@ -131,13 +142,7 @@ def scoped_abox_maintenance_policy(settings: Mapping[str, object] = None) -> Dic
             1,
             10,
         )),
-        "maxDeleteBatchesPerRun": _integer(_setting_number(
-            configured,
-            "ontologyAboxMaintenanceMaxDeleteBatchesPerRun",
-            2,
-            1,
-            50,
-        )),
+        "maxDeleteBatchesPerRun": max_delete_batches,
         "deleteBatchSize": _integer(_setting_number(
             configured,
             "ontologyAboxMaintenanceDeleteBatchSize",
@@ -154,6 +159,28 @@ def scoped_abox_maintenance_policy(settings: Mapping[str, object] = None) -> Dic
         )),
         "warningInactiveManifestCount": warning_count,
         "criticalInactiveManifestCount": critical_count,
+        # A prolonged critical backlog can receive a modestly larger physical
+        # delete budget only after confirmed lease-owning cleanup passes.
+        # This remains an operational retention control, never an investment
+        # RuleBox threshold.
+        "adaptiveDrainEnabled": adaptive_enabled,
+        "adaptiveDrainMaxDeleteBatchesPerRun": max(
+            max_delete_batches,
+            _integer(_setting_number(
+                configured,
+                "ontologyAboxMaintenanceAdaptiveDrainMaxDeleteBatchesPerRun",
+                4,
+                1,
+                50,
+            )),
+        ),
+        "adaptiveDrainCriticalRunsBeforeIncrease": _integer(_setting_number(
+            configured,
+            "ontologyAboxMaintenanceAdaptiveDrainCriticalRunsBeforeIncrease",
+            2,
+            1,
+            20,
+        )),
     }
 
 

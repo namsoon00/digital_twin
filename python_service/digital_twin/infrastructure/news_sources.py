@@ -19,7 +19,12 @@ from ..domain import news_analysis as news_domain
 from ..domain.investment_research import NewsCollectionTarget, ResearchEvidence, classify_news_relevance, compact_text, keyword_polarity, stable_evidence_token
 from ..domain.market_data import number
 from ..domain.portfolio import utc_now_iso
-from .external_signal_utils import external_call_target, guarded_external_call
+from .external_signal_utils import (
+    ExternalCircuitOpen,
+    ExternalRateLimited,
+    external_call_target,
+    guarded_external_call,
+)
 
 
 JsonFetcher = Callable[[str, Dict[str, str]], object]
@@ -464,6 +469,7 @@ class NewsSourceGateway:
         self._google_original_url_fetches_used = 0
         self._google_original_url_fetches_for_target = 0
         self._current_provider_diagnostics: Dict[str, int] = {}
+        self._suppressed_providers: Dict[str, Dict[str, str]] = {}
 
     def begin_run(self) -> Dict[str, int]:
         """Reset counters whose configured limit is explicitly per collection run."""
@@ -471,10 +477,12 @@ class NewsSourceGateway:
         self._article_body_fetches_for_target = 0
         self._google_original_url_fetches_used = 0
         self._google_original_url_fetches_for_target = 0
+        self._suppressed_providers = {}
         self.reset_provider_diagnostics()
         return {
             "articleBodyFetchesUsed": self._article_body_fetches_used,
             "googleOriginalUrlFetchesUsed": self._google_original_url_fetches_used,
+            "suppressedProviderCount": len(self._suppressed_providers),
         }
 
     def reset_provider_diagnostics(self) -> None:
@@ -995,6 +1003,19 @@ class NewsSourceGateway:
             remaining = max(0, limit - len(items))
             if remaining <= 0:
                 break
+            suppressed = self._suppressed_providers.get(provider)
+            if suppressed:
+                statuses.append({
+                    "source": provider,
+                    "symbol": target.normalized_symbol(),
+                    "ok": True,
+                    "count": 0,
+                    "status": str(suppressed.get("status") or "provider-suppressed"),
+                    "providerSuppressed": True,
+                    "circuitOpen": str(suppressed.get("kind") or "") == "circuit-open",
+                    "message": str(suppressed.get("message") or "")[:180],
+                })
+                continue
             try:
                 self.reset_provider_diagnostics()
                 with self.provider_deadline(provider):
@@ -1017,6 +1038,29 @@ class NewsSourceGateway:
                     "count": saved,
                     **diagnostics,
                     "status": "ok" if saved else provider_empty_status(diagnostics),
+                })
+            except (ExternalCircuitOpen, ExternalRateLimited) as error:
+                # The external guard already decided this provider must pause.
+                # Do not fan the same known outage across every symbol or let
+                # the operational health model mistake the intentional bypass
+                # for several new provider failures.
+                kind = "circuit-open" if isinstance(error, ExternalCircuitOpen) else "rate-limited"
+                status = kind + "-suppressed"
+                message = str(error)[:180]
+                self._suppressed_providers[provider] = {
+                    "kind": kind,
+                    "status": status,
+                    "message": message,
+                }
+                statuses.append({
+                    "source": provider,
+                    "symbol": target.normalized_symbol(),
+                    "ok": True,
+                    "count": 0,
+                    "status": status,
+                    "providerSuppressed": True,
+                    "circuitOpen": kind == "circuit-open",
+                    "message": message,
                 })
             except Exception as error:  # noqa: BLE001 - one feed must not stop the collection cycle.
                 statuses.append({"source": provider, "symbol": target.normalized_symbol(), "ok": False, "message": str(error)[:180]})

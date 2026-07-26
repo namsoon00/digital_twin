@@ -32,6 +32,49 @@ class DataPipelineHealthTests(unittest.TestCase):
         self.assertEqual(health.reason_code, "no-new-evidence")
         self.assertFalse(health.alert_required)
 
+    def test_optional_circuit_suppression_does_not_degrade_successful_fallback_news(self):
+        health = evaluate_news_collection_health({
+            "status": "ok",
+            "targetCount": 1,
+            "fetchedCount": 2,
+            "savedCount": 1,
+            "statuses": [
+                {"source": "google_rss_us", "ok": True, "count": 2, "candidateCount": 2},
+                {
+                    "source": "gdelt",
+                    "ok": True,
+                    "count": 0,
+                    "providerSuppressed": True,
+                    "circuitOpen": True,
+                    "message": "circuit open until 2026-07-26T13:30:00Z",
+                },
+            ],
+        })
+
+        self.assertEqual("healthy", health.state)
+        self.assertEqual(0, health.provider_failure_count)
+        self.assertEqual(1, health.provider_suppressed_count)
+        self.assertEqual(1, health.provider_rows[1]["circuitOpenCount"])
+
+    def test_all_suppressed_news_providers_remain_visible_as_degraded(self):
+        health = evaluate_news_collection_health({
+            "status": "ok",
+            "targetCount": 1,
+            "fetchedCount": 0,
+            "savedCount": 0,
+            "statuses": [{
+                "source": "gdelt",
+                "ok": True,
+                "count": 0,
+                "providerSuppressed": True,
+                "circuitOpen": True,
+                "message": "circuit open until 2026-07-26T13:30:00Z",
+            }],
+        })
+
+        self.assertEqual("degraded", health.state)
+        self.assertEqual("all-providers-suppressed", health.reason_code)
+
     def test_repeated_quality_rejection_becomes_degraded(self):
         previous = {
             "state": "idle",

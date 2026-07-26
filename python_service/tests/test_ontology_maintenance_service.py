@@ -105,6 +105,43 @@ class OntologyMaintenanceRunnerTests(unittest.TestCase):
         self.assertEqual("deferred", result["maintenance"]["health"]["state"])
         self.assertIsNone(result["maintenance"]["health"]["inactiveManifestCount"])
 
+    def test_persistent_critical_backlog_gradually_increases_only_delete_batches(self):
+        class CriticalRepository(FakeOntologyRepository):
+            def list_ontology_worlds(self):
+                return [{"worldId": "market:shared:kr", "worldType": "market"}]
+
+            def run_deferred_maintenance(self, payload):
+                self.calls.append(dict(payload or {}))
+                return {
+                    "status": "partial",
+                    "worldId": payload.get("worldId"),
+                    "abox": {
+                        "completedInactiveManifestCount": 180,
+                        "remainingInactiveManifestCount": 180,
+                        "removedManifestIds": [],
+                        "deletedBatchCount": payload.get("maxAboxDeleteBatches"),
+                    },
+                }
+
+        repository = CriticalRepository()
+        runner = OntologyMaintenanceRunner(
+            repository,
+            state_store=FakeStateStore(),
+            settings={
+                "ontologyAboxMaintenanceMaxDeleteBatchesPerRun": "2",
+                "ontologyAboxMaintenanceAdaptiveDrainMaxDeleteBatchesPerRun": "4",
+                "ontologyAboxMaintenanceAdaptiveDrainCriticalRunsBeforeIncrease": "2",
+            },
+        )
+
+        first = runner.run_once()
+        second = runner.run_once()
+        third = runner.run_once()
+
+        self.assertEqual([2, 2, 3], [call["maxAboxDeleteBatches"] for call in repository.calls])
+        self.assertEqual("adaptive-drain", third["maintenance"]["adaptiveDrain"]["mode"])
+        self.assertEqual(3, third["maintenance"]["adaptiveDrain"]["criticalDrainRuns"])
+
 
 if __name__ == "__main__":
     unittest.main()

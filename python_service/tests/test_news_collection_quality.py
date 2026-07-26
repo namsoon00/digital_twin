@@ -233,6 +233,31 @@ class NewsCollectionQualityTests(unittest.TestCase):
         finally:
             news_sources.NEWS_API_GUARD_STATE.clear()
 
+    def test_circuit_open_provider_is_suppressed_for_the_rest_of_a_collection_run(self):
+        calls = []
+
+        def blocked_json(_url, _headers=None):
+            calls.append("gdelt")
+            raise ExternalCircuitOpen("circuit open until 2026-07-26T13:30:00Z")
+
+        gateway = NewsSourceGateway(
+            {"newsCollectionProviders": "gdelt", "newsCollectionGdeltSyncEnabled": "1"},
+            fetch_json=blocked_json,
+        )
+        gateway.begin_run()
+        first_items, first_statuses = gateway.collect_for_target(self.target())
+        second_items, second_statuses = gateway.collect_for_target(
+            NewsCollectionTarget("MSFT", "Microsoft", "NASDAQ", "USD", "Technology")
+        )
+
+        self.assertEqual([], first_items)
+        self.assertEqual([], second_items)
+        self.assertEqual(["gdelt"], calls)
+        self.assertTrue(first_statuses[0]["providerSuppressed"])
+        self.assertEqual("circuit-open-suppressed", first_statuses[0]["status"])
+        self.assertTrue(second_statuses[0]["providerSuppressed"])
+        self.assertTrue(second_statuses[0]["circuitOpen"])
+
     def test_collection_governs_retained_and_new_claims_across_cycles(self):
         observed_at = datetime.now(timezone.utc).replace(microsecond=0).isoformat().replace("+00:00", "Z")
 

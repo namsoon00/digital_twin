@@ -1,3 +1,4 @@
+import errno
 import json
 import os
 import signal
@@ -54,6 +55,7 @@ class IsolatedOntologyReasoningCycle:
         self.working_directory = str(working_directory or "")
         self.process_factory = process_factory or subprocess.Popen
         self.process = None
+        self._stop_requested = False
 
     def command_for_limit(self, limit: int):
         command = list(self.command)
@@ -62,10 +64,20 @@ class IsolatedOntologyReasoningCycle:
         return command
 
     def stop(self, grace_seconds: int = 5) -> None:
+        """Request child shutdown without re-entering ``Popen.communicate``.
+
+        Python invokes signal handlers in the same main thread that is often
+        blocked in ``communicate``.  Calling ``communicate`` again from this
+        handler closes the same stdout pipe twice and can surface as
+        ``[Errno 9] Bad file descriptor``.  The active ``run_once`` call owns
+        waiting and pipe cleanup; shutdown only sends a process-group signal.
+        """
+        del grace_seconds  # Waiting belongs to the active run, never the signal handler.
+        self._stop_requested = True
         process = self.process
         if process is None or process.poll() is not None:
             return
-        self._terminate(process, grace_seconds)
+        self._signal_group(process, signal.SIGTERM)
 
     @staticmethod
     def _signal_group(process, sig) -> None:
@@ -93,6 +105,29 @@ class IsolatedOntologyReasoningCycle:
                 return partial + _output_text(output)
             except subprocess.TimeoutExpired as final_error:
                 return partial + _output_text(getattr(final_error, "output", ""))
+            except OSError as final_error:
+                if getattr(final_error, "errno", None) == errno.EBADF:
+                    return partial
+                raise
+        except OSError as error:
+            # A child can close stdout while a terminating TypeDB client exits.
+            # It is safe to preserve the timeout result because the process was
+            # already signalled and this path never owns an investment decision.
+            if getattr(error, "errno", None) == errno.EBADF:
+                return ""
+            raise
+
+    @staticmethod
+    def _stopped_result(process, started: float, output: str = "") -> dict:
+        return {
+            "status": "stopped",
+            "processedCount": 0,
+            "alertCount": 0,
+            "stopRequested": True,
+            "durationMs": int((time.monotonic() - started) * 1000),
+            "childExitCode": int(getattr(process, "returncode", 0) or 0),
+            "workerOutput": _output_text(output)[-1200:],
+        }
 
     def run_once(self, limit: int, timeout_seconds: int, grace_seconds: int) -> dict:
         if not self.command:
@@ -103,6 +138,7 @@ class IsolatedOntologyReasoningCycle:
                 "deferredReason": "추론 격리 실행 명령이 구성되지 않았습니다.",
             }
         started = time.monotonic()
+        self._stop_requested = False
         kwargs = {
             "stdin": subprocess.DEVNULL,
             "stdout": subprocess.PIPE,
@@ -115,9 +151,14 @@ class IsolatedOntologyReasoningCycle:
             kwargs["start_new_session"] = True
         process = self.process_factory(self.command_for_limit(limit), **kwargs)
         self.process = process
+        if self._stop_requested:
+            self._signal_group(process, signal.SIGTERM)
         try:
             output, _ = process.communicate(timeout=max(1, int(timeout_seconds or 1)))
         except subprocess.TimeoutExpired as error:
+            if self._stop_requested:
+                output = _output_text(getattr(error, "output", "")) + self._terminate(process, grace_seconds)
+                return self._stopped_result(process, started, output)
             output = _output_text(getattr(error, "output", "")) + self._terminate(process, grace_seconds)
             return {
                 "status": "timeout",
@@ -128,10 +169,17 @@ class IsolatedOntologyReasoningCycle:
                 "durationMs": int((time.monotonic() - started) * 1000),
                 "workerOutput": output[-1200:],
             }
+        except OSError as error:
+            if self._stop_requested and getattr(error, "errno", None) == errno.EBADF:
+                return self._stopped_result(process, started)
+            raise
         finally:
-            self.process = None
+            if self.process is process:
+                self.process = None
 
         output = _output_text(output)
+        if self._stop_requested:
+            return self._stopped_result(process, started, output)
         result = _last_json_object(output)
         if result is None:
             return {
@@ -643,7 +691,9 @@ class NewsCollectionScheduler:
                     + " zeroStreak="
                     + str(health.get("consecutiveZeroRuns") or 0)
                     + " providerFailures="
-                    + str(health.get("providerFailureCount") or 0),
+                    + str(health.get("providerFailureCount") or 0)
+                    + " suppressedProviders="
+                    + str(health.get("providerSuppressedCount") or 0),
                     flush=True,
                 )
             except Exception as error:  # noqa: BLE001 - long-running collector must continue after provider failures.

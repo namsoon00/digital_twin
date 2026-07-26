@@ -24,6 +24,8 @@ def provider_health_rows(statuses: Iterable[Dict[str, object]]) -> List[Dict[str
             "requestCount": 0,
             "successCount": 0,
             "failureCount": 0,
+            "suppressedCount": 0,
+            "circuitOpenCount": 0,
             "itemCount": 0,
             "candidateCount": 0,
             "bodyMissingCount": 0,
@@ -35,7 +37,13 @@ def provider_health_rows(statuses: Iterable[Dict[str, object]]) -> List[Dict[str
             "messages": [],
         })
         row["requestCount"] += 1
-        if status.get("ok") is False:
+        if status.get("providerSuppressed"):
+            row["suppressedCount"] += 1
+            row["circuitOpenCount"] += int(bool(status.get("circuitOpen")))
+            message = str(status.get("message") or status.get("reason") or "provider temporarily suppressed").strip()
+            if message and message not in row["messages"]:
+                row["messages"].append(message[:180])
+        elif status.get("ok") is False:
             row["failureCount"] += 1
             message = str(status.get("message") or status.get("reason") or "provider request failed").strip()
             if message and message not in row["messages"]:
@@ -96,6 +104,7 @@ class DataPipelineHealth:
     saved_count: int
     provider_failure_count: int
     provider_candidate_count: int
+    provider_suppressed_count: int = 0
     provider_rows: List[Dict[str, object]] = field(default_factory=list)
     previous_state: str = ""
     state_changed: bool = False
@@ -122,6 +131,7 @@ class DataPipelineHealth:
             "fetchedCount": payload["fetched_count"],
             "savedCount": payload["saved_count"],
             "providerFailureCount": payload["provider_failure_count"],
+            "providerSuppressedCount": payload["provider_suppressed_count"],
             "providerCandidateCount": payload["provider_candidate_count"],
             "providers": payload["provider_rows"],
             "previousState": payload["previous_state"],
@@ -237,8 +247,10 @@ def evaluate_news_collection_health(
     zero_runs = 0 if fetched_count else integer(previous.get("consecutiveZeroRuns")) + 1
     last_non_zero_at = checked_at if fetched_count else str(previous.get("lastNonZeroAt") or "")
     providers = provider_health_rows(result.get("statuses") or [])
-    provider_failures = sum(integer(row.get("failureCount")) for row in providers)
-    provider_successes = sum(integer(row.get("successCount")) for row in providers)
+    provider_rows = [row for row in providers if str(row.get("source") or "") != "claim-governance"]
+    provider_failures = sum(integer(row.get("failureCount")) for row in provider_rows)
+    provider_successes = sum(integer(row.get("successCount")) for row in provider_rows)
+    provider_suppressed = sum(integer(row.get("suppressedCount")) for row in provider_rows)
     provider_candidates = sum(integer(row.get("candidateCount")) for row in providers)
     body_missing_count = sum(integer(row.get("bodyMissingCount")) for row in providers)
     original_url_failure_count = sum(integer(row.get("googleOriginalUrlResolveFailedCount")) for row in providers)
@@ -264,6 +276,8 @@ def evaluate_news_collection_health(
         state, reason_code, reason = "idle", "no-targets", "수집 대상 보유·관심종목이 없어 대기 중입니다."
     elif provider_failures and not provider_successes:
         state, reason_code, reason = "failed", "all-providers-failed", "구성된 뉴스 공급자 요청이 모두 실패했습니다."
+    elif provider_suppressed and not provider_successes:
+        state, reason_code, reason = "degraded", "all-providers-suppressed", "보호 회로가 뉴스 공급자 요청을 일시 중지했고 대체 공급자도 이번 실행에서 확보하지 못했습니다."
     elif provider_failures:
         state, reason_code, reason = "degraded", "partial-provider-failure", "일부 뉴스 공급자 요청이 실패해 나머지 공급자 데이터만 사용합니다."
     elif ungoverned_evidence_count or unsafe_syndicated_count:
@@ -323,6 +337,7 @@ def evaluate_news_collection_health(
         saved_count=saved_count,
         provider_failure_count=provider_failures,
         provider_candidate_count=provider_candidates,
+        provider_suppressed_count=provider_suppressed,
         provider_rows=providers,
         previous_state=previous_state,
         state_changed=state_changed,

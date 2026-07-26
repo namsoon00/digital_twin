@@ -33,7 +33,7 @@ class OntologyMaintenanceRunner:
     state in MySQL so restarts continue the round-robin world order.
     """
 
-    state_contract = "ontology-maintenance-state-v1"
+    state_contract = "ontology-maintenance-state-v2"
 
     def __init__(self, ontology_repository, state_store=None, settings: Dict[str, object] = None):
         self.ontology_repository = ontology_repository
@@ -123,6 +123,93 @@ class OntologyMaintenanceRunner:
         following = rows[(index + 1) % len(rows)]
         return selected, text(following.get("worldId"))
 
+    @staticmethod
+    def backlog_by_world(state: Dict[str, object]) -> Dict[str, Dict[str, object]]:
+        raw = state.get("backlogByWorld") if isinstance(state, dict) else {}
+        if not isinstance(raw, dict):
+            return {}
+        return {
+            text(world_id): dict(value or {})
+            for world_id, value in raw.items()
+            if text(world_id) and isinstance(value, dict)
+        }
+
+    def adaptive_drain(self, policy: Dict[str, object], state: Dict[str, object], world_id: str) -> Dict[str, object]:
+        """Select a bounded physical-delete budget from prior safe passes.
+
+        We deliberately use only persisted results from the same world.  A
+        live writer lease, timeout, or error never raises the next budget.
+        This prevents retention from competing with active ABox projection.
+        """
+        base_batches = max(1, integer(policy.get("maxDeleteBatchesPerRun"), 1))
+        maximum_batches = max(
+            base_batches,
+            integer(policy.get("adaptiveDrainMaxDeleteBatchesPerRun"), base_batches),
+        )
+        required_runs = max(1, integer(policy.get("adaptiveDrainCriticalRunsBeforeIncrease"), 2))
+        world_state = self.backlog_by_world(state).get(world_id, {})
+        critical_runs = max(0, integer(world_state.get("criticalDrainRuns")))
+        enabled = bool(policy.get("adaptiveDrainEnabled"))
+        increase_steps = 0
+        if enabled and critical_runs >= required_runs:
+            increase_steps = 1 + ((critical_runs - required_runs) // required_runs)
+        effective_batches = min(maximum_batches, base_batches + increase_steps)
+        return {
+            "enabled": enabled,
+            "baseMaxDeleteBatches": base_batches,
+            "effectiveMaxDeleteBatches": effective_batches,
+            "maximumMaxDeleteBatches": maximum_batches,
+            "criticalRunsBeforeIncrease": required_runs,
+            "criticalDrainRunsBefore": critical_runs,
+            "mode": "adaptive-drain" if effective_batches > base_batches else "bounded-base",
+        }
+
+    def updated_backlog_by_world(
+        self,
+        previous: Dict[str, object],
+        world_id: str,
+        result_status: str,
+        inventory_available: bool,
+        health: Dict[str, object],
+        inactive_before: int,
+        inactive_remaining: int,
+        removed_manifest_count: int,
+        deleted_batch_count: int,
+        valid_world_ids: Iterable[str],
+    ) -> Dict[str, Dict[str, object]]:
+        rows = self.backlog_by_world(previous)
+        allowed = {text(item) for item in valid_world_ids if text(item)}
+        rows = {key: value for key, value in rows.items() if key in allowed}
+        current = dict(rows.get(world_id) or {})
+        if not inventory_available:
+            current["lastStatus"] = result_status
+            current["inventoryAvailable"] = False
+            rows[world_id] = current
+            return rows
+
+        critical = text(health.get("state")) == "critical"
+        safe_pass = result_status in {"ok", "partial"}
+        progress = bool(
+            deleted_batch_count
+            or removed_manifest_count
+            or inactive_remaining < inactive_before
+        )
+        if critical and safe_pass:
+            critical_runs = max(0, integer(current.get("criticalDrainRuns"))) + 1
+        elif result_status in {"error", "timeout"}:
+            critical_runs = 0
+        else:
+            critical_runs = 0
+        rows[world_id] = {
+            "criticalDrainRuns": critical_runs,
+            "lastStatus": result_status,
+            "inventoryAvailable": True,
+            "lastInactiveManifestCount": inactive_remaining,
+            "lastProgress": progress,
+            "lastDeletedBatchCount": deleted_batch_count,
+        }
+        return rows
+
     def status(self) -> Dict[str, object]:
         policy = self.policy()
         state = self.state()
@@ -140,6 +227,7 @@ class OntologyMaintenanceRunner:
             "lastRunAt": text(state.get("lastRunAt")),
             "lastResult": dict(last_result),
             "nextWorldId": text(state.get("nextWorldId")),
+            "backlogByWorld": self.backlog_by_world(state),
         }
 
     def run_once(self) -> Dict[str, object]:
@@ -165,11 +253,12 @@ class OntologyMaintenanceRunner:
         previous = self.state()
         selected, next_world_id = self.next_world(worlds, previous)
         world_id = text(selected.get("worldId"))
+        adaptive_drain = self.adaptive_drain(policy, previous, world_id)
         try:
             result = dict(runner({
                 "worldId": world_id,
                 "maxInactiveManifests": integer(policy.get("maxManifestsPerRun"), 1),
-                "maxAboxDeleteBatches": integer(policy.get("maxDeleteBatchesPerRun"), 1),
+                "maxAboxDeleteBatches": integer(adaptive_drain.get("effectiveMaxDeleteBatches"), 1),
                 "aboxDeleteBatchSize": integer(policy.get("deleteBatchSize"), 50),
                 "keepInactiveManifests": integer(policy.get("keepInactiveManifestCount"), 0),
             }) or {})
@@ -216,16 +305,39 @@ class OntologyMaintenanceRunner:
             "inactiveManifestCountRemaining": inactive_remaining,
             "removedManifestCount": removed_manifest_count,
             "deletedBatchCount": max(0, integer(abox.get("deletedBatchCount"))),
-            "maxDeleteBatches": max(0, integer(abox.get("maxDeleteBatches"))),
+            "maxDeleteBatches": max(
+                0,
+                integer(abox.get("maxDeleteBatches"), integer(adaptive_drain.get("effectiveMaxDeleteBatches"), 0)),
+            ),
             "deleteBatchSize": max(0, integer(abox.get("deleteBatchSize"), integer(policy.get("deleteBatchSize"), 50))),
             "health": health,
+            "adaptiveDrain": adaptive_drain,
             "reason": text(result.get("reason"))[:220],
+        }
+        backlog_by_world = self.updated_backlog_by_world(
+            previous,
+            world_id,
+            result_status,
+            inventory_available,
+            health,
+            inactive_before,
+            inactive_remaining,
+            removed_manifest_count,
+            compact["deletedBatchCount"],
+            [item.get("worldId") for item in worlds],
+        )
+        current_backlog = dict(backlog_by_world.get(world_id) or {})
+        compact["adaptiveDrain"] = {
+            **adaptive_drain,
+            "criticalDrainRuns": integer(current_backlog.get("criticalDrainRuns")),
+            "lastProgress": bool(current_backlog.get("lastProgress")),
         }
         self.save_state({
             "contract": self.state_contract,
             "lastRunAt": utc_now_iso(),
             "nextWorldId": next_world_id,
             "lastResult": compact,
+            "backlogByWorld": backlog_by_world,
         })
         return {
             "contract": self.state_contract,

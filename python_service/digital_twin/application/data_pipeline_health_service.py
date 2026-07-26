@@ -162,6 +162,7 @@ class DataPipelineHealthNotificationEnqueuer:
         display_name = labels.get(pipeline, pipeline)
         title = display_name + (" 정상화" if recovered else " 품질 점검 필요")
         provider_failures = int(payload.get("providerFailureCount") or 0)
+        provider_suppressed = int(payload.get("providerSuppressedCount") or 0)
         text = "\n".join([
             "[운영] " + title,
             "• 파이프라인: " + pipeline,
@@ -169,6 +170,7 @@ class DataPipelineHealthNotificationEnqueuer:
             "• 이유: " + str(payload.get("reason") or ""),
             "• 연속 0건: " + str(payload.get("consecutiveZeroRuns") or 0) + "회",
             "• 공급자 실패: " + str(provider_failures) + "건",
+            "• 보호 차단 공급자: " + str(provider_suppressed) + "건",
             "• 확인시각: " + str(payload.get("checkedAt") or ""),
         ])
         return {

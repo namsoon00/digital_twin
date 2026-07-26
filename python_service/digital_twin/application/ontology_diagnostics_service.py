@@ -992,10 +992,14 @@ class OntologyDiagnosticsService:
                 continue
             try:
                 entity_count = int(float(item.get("entityCount") or 0))
-                relation_count = int(float(item.get("relationCount") or 0))
             except (TypeError, ValueError):
                 continue
-            if entity_count > 0 and relation_count > 0:
+            # Scoped projection stores macro observations in immutable macro
+            # scopes, while the cross-scope links live in the separate link
+            # scope. Requiring a relation inside the macro scope therefore
+            # reports a false coverage gap for an otherwise active portfolio
+            # macro context.
+            if entity_count > 0:
                 return True
         return False
 

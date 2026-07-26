@@ -619,7 +619,7 @@ class OntologyDiagnosticsServiceTests(unittest.TestCase):
                                 "scopeId": "macro:market:world:test",
                                 "scopeType": "macro",
                                 "entityCount": 2,
-                                "relationCount": 3,
+                                "relationCount": 0,
                             },
                         ],
                     },

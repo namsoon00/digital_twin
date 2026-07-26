@@ -135,6 +135,83 @@ class ExternalApiSourceTests(unittest.TestCase):
         self.assertEqual("market-close-reference", coverage["cadence"])
         self.assertEqual("market-closed-reference", coverage["latencyStatus"])
 
+    def test_kis_last_close_does_not_replace_fresh_toss_premarket_quote(self):
+        provider = KISMarketSignalProvider(settings={"kisMarketSignalsEnabled": "0"})
+        position = normalize_position({
+            "symbol": "035420",
+            "name": "NAVER",
+            "market": "KR",
+            "currency": "KRW",
+            "currentPrice": 231500,
+            "changeRate": 11.57,
+            "quoteSource": "Toss /api/v1/prices",
+            "quoteStatus": "토스 prices 반영",
+            "quoteMessage": "현재가는 토스 prices 기준입니다.",
+            "updatedAt": "2026-07-26T23:49:15Z",
+            "freshnessStatus": "fresh",
+            "marketSession": "open",
+            "ma20": 197595,
+            "ma60": 213982,
+            "volume": 1234,
+        })
+        signal = {
+            "currentPrice": 207500,
+            "changeRate": 0,
+            "volume": 70,
+            "quoteSource": "KIS Open API",
+            "quoteStatus": "KIS 현재가 반영",
+            "quoteMessage": "KIS 장 마감 기준값입니다.",
+            "updatedAt": "2026-07-26T23:50:13Z",
+            "marketSignalCoverage": {
+                "price": {
+                    "status": "available",
+                    "freshnessStatus": "last-close",
+                    "cadence": "market-close-reference",
+                    "latencyStatus": "market-closed-reference",
+                },
+                "orderbook": {"status": "available", "fields": ["orderbookBidVolume"]},
+            },
+        }
+
+        merged = provider.merge_position(position, signal)
+
+        self.assertEqual(231500, merged.current_price)
+        self.assertEqual(11.57, merged.change_rate)
+        self.assertEqual(1234, merged.volume)
+        self.assertEqual("Toss /api/v1/prices", merged.quote_source)
+        self.assertEqual("토스 prices 반영", merged.quote_status)
+        self.assertEqual("2026-07-26T23:49:15Z", merged.updated_at)
+        self.assertIn("신선한 현재가", merged.quote_message)
+        self.assertAlmostEqual(8.19, merged.ma60_distance, places=2)
+
+    def test_kis_last_close_fills_nonfresh_position_quote(self):
+        provider = KISMarketSignalProvider(settings={"kisMarketSignalsEnabled": "0"})
+        position = normalize_position({
+            "symbol": "035420",
+            "name": "NAVER",
+            "market": "KR",
+            "currency": "KRW",
+            "currentPrice": 205000,
+            "freshnessStatus": "last-close",
+        })
+        signal = {
+            "currentPrice": 207500,
+            "quoteSource": "KIS Open API",
+            "updatedAt": "2026-07-26T23:50:13Z",
+            "marketSignalCoverage": {
+                "price": {
+                    "status": "available",
+                    "freshnessStatus": "last-close",
+                    "cadence": "market-close-reference",
+                },
+            },
+        }
+
+        merged = provider.merge_position(position, signal)
+
+        self.assertEqual(207500, merged.current_price)
+        self.assertEqual("KIS Open API", merged.quote_source)
+
     def test_repeated_kis_investor_totals_remain_important_reference_evidence(self):
         provider = KISMarketSignalProvider(
             settings={"kisMarketSignalUnchangedStaleCount": "3"},

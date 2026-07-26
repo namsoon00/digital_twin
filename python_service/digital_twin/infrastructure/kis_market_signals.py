@@ -341,6 +341,30 @@ def coverage_has_fields(coverage: Dict[str, object], stage: str, keys: Iterable[
     return any(key in set(str(field) for field in fields or []) for key in keys)
 
 
+def price_stage_is_reference(signal: Dict[str, object]) -> bool:
+    """Return whether KIS supplied a last-close price rather than a live quote."""
+    coverage = signal.get("marketSignalCoverage") if isinstance(signal.get("marketSignalCoverage"), dict) else {}
+    price = coverage.get("price") if isinstance(coverage, dict) and isinstance(coverage.get("price"), dict) else {}
+    if not price:
+        return False
+    freshness = str(price.get("freshnessStatus") or "").strip().lower()
+    cadence = str(price.get("cadence") or "").strip().lower()
+    latency = str(price.get("latencyStatus") or "").strip().lower()
+    return (
+        freshness in {"last-close", "reference", "cached", "stale"}
+        or cadence in {"market-close-reference", "rest-reference"}
+        or latency in {"market-closed-reference", "last-close"}
+    )
+
+
+def keep_fresh_position_quote(position: Position, signal: Dict[str, object]) -> bool:
+    """A KIS last-close reference must not replace a fresher account quote."""
+    if not position.current_price or not price_stage_is_reference(signal):
+        return False
+    freshness = str(position.freshness_status or "").strip().lower()
+    return bool(position.real_time) or freshness in {"fresh", "realtime", "live"}
+
+
 def fresh_websocket_stage(payload: Dict[str, object], stage: str, max_age_seconds: int) -> bool:
     coverage = payload.get("marketSignalCoverage") if isinstance(payload.get("marketSignalCoverage"), dict) else {}
     item = coverage.get(stage) if isinstance(coverage, dict) and isinstance(coverage.get(stage), dict) else {}
@@ -1154,8 +1178,9 @@ class KISMarketSignalProvider:
         individual_net_volume = optional_investor_net_volume(individual_net_volume, individual_buy_volume, individual_sell_volume)
         market_signal_coverage = signal.get("marketSignalCoverage") if isinstance(signal.get("marketSignalCoverage"), dict) else position.market_signal_coverage
         investor_values_reliable = investor_stage_values_usable_for_judgement(market_signal_coverage)
+        preserve_fresh_quote = keep_fresh_position_quote(position, signal)
 
-        merged_price = current_price if current_price is not None else position.current_price
+        merged_price = current_price if current_price is not None and not preserve_fresh_quote else position.current_price
         market_value = position.market_value
         if not market_value and position.quantity and merged_price:
             market_value = position.quantity * merged_price
@@ -1163,6 +1188,13 @@ class KISMarketSignalProvider:
         data_quality = combine_quality(position.data_quality, signal.get("dataQuality"))
         ma20_distance = pct_distance(merged_price, position.ma20) if merged_price and position.ma20 else position.ma20_distance
         ma60_distance = pct_distance(merged_price, position.ma60) if merged_price and position.ma60 else position.ma60_distance
+        quote_source = position.quote_source if preserve_fresh_quote else append_source(position.quote_source, str(signal.get("quoteSource") or ""))
+        quote_status = position.quote_status if preserve_fresh_quote else str(signal.get("quoteStatus") or position.quote_status)
+        quote_message = append_message(
+            position.quote_message,
+            "KIS 장 마감 기준 가격은 신선한 현재가를 덮어쓰지 않고 참고값으로 유지했습니다.",
+        ) if preserve_fresh_quote else append_message(position.quote_message, str(signal.get("quoteMessage") or ""))
+        updated_at = position.updated_at if preserve_fresh_quote else str(signal.get("updatedAt") or position.updated_at)
 
         return replace(
             position,
@@ -1171,18 +1203,18 @@ class KISMarketSignalProvider:
             market=str(signal.get("market") or position.market or "KR"),
             currency=str(signal.get("currency") or position.currency or "KRW"),
             current_price=merged_price,
-            change_rate=change_rate if change_rate is not None else position.change_rate,
-            quote_source=append_source(position.quote_source, str(signal.get("quoteSource") or "")),
-            quote_status=str(signal.get("quoteStatus") or position.quote_status),
-            quote_message=append_message(position.quote_message, str(signal.get("quoteMessage") or "")),
+            change_rate=change_rate if change_rate is not None and not preserve_fresh_quote else position.change_rate,
+            quote_source=quote_source,
+            quote_status=quote_status,
+            quote_message=quote_message,
             data_quality=data_quality or position.data_quality,
             market_signal_coverage=dict(market_signal_coverage or {}) if isinstance(market_signal_coverage, dict) else {},
-            updated_at=str(signal.get("updatedAt") or position.updated_at),
+            updated_at=updated_at,
             market_value=market_value,
             trade_strength=trade_strength if trade_strength is not None else position.trade_strength,
-            trading_value=trading_value if trading_value is not None else position.trading_value,
-            volume=volume if volume is not None else position.volume,
-            volume_ratio=volume_ratio if volume_ratio is not None else position.volume_ratio,
+            trading_value=trading_value if trading_value is not None and not preserve_fresh_quote else position.trading_value,
+            volume=volume if volume is not None and not preserve_fresh_quote else position.volume,
+            volume_ratio=volume_ratio if volume_ratio is not None and not preserve_fresh_quote else position.volume_ratio,
             buy_volume=buy_volume if buy_volume is not None else position.buy_volume,
             sell_volume=sell_volume if sell_volume is not None else position.sell_volume,
             orderbook_bid_volume=orderbook_bid_volume if orderbook_bid_volume is not None else position.orderbook_bid_volume,

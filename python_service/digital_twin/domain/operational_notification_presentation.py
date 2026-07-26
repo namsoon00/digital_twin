@@ -19,6 +19,7 @@ SYSTEM_ERROR = "systemError"
 HEALTHY_STATES = {"healthy", "idle", "ok", "normal", "recovered"}
 FAILED_STATES = {"failed", "critical", "blocked", "error", "unhealthy"}
 DEGRADED_STATES = {"degraded", "stale", "warning", "warn", "retrying", "circuit-open"}
+PREVIOUS_ALERT_STATES = FAILED_STATES | DEGRADED_STATES | {"delayed"}
 AUTH_HTTP_STATUS_CODES = {401, 403}
 RATE_LIMIT_HTTP_STATUS_CODES = {429}
 AUTH_MARKERS = (
@@ -181,7 +182,7 @@ def is_recovery(context: Dict[str, object], state: str) -> bool:
     return (
         alert_kind == "recovered"
         or bool({"connectionRecovered", "queueDelayRecovered"} & signal_values)
-        or (state in HEALTHY_STATES and previous_state(context) in FAILED_STATES | DEGRADED_STATES | {"delayed"})
+        or (state in HEALTHY_STATES and previous_state(context) in PREVIOUS_ALERT_STATES)
     )
 
 
@@ -254,7 +255,7 @@ def operational_notification_presentation(
         state = normalized_state(values)
         if state in FAILED_STATES or contains_any(all_text_values(values), FAILURE_MARKERS):
             return presentation("🚨", "critical", state or "failed")
-        return presentation("ℹ️", "info", state or "healthy")
+        return presentation("💓", "info", state or "healthy")
 
     if key in {EXTERNAL_DATA_CONNECTION, MONITOR_CONNECTION}:
         state = normalized_state(values)
@@ -275,7 +276,8 @@ def operational_notification_presentation(
             return presentation("🚨", "critical", state)
         if state in DEGRADED_STATES or is_rate_limited(values) or contains_any(all_text_values(values), FAILURE_MARKERS):
             return presentation("⚠️", "degraded", state or "degraded")
-        return presentation("ℹ️", "info", state or "healthy")
+        icon = "🔌" if key == MONITOR_CONNECTION else "🛰️"
+        return presentation(icon, "info", state or "healthy")
 
     return presentation("ℹ️", "info", normalized_state(values) or "unknown")
 

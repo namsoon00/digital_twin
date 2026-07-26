@@ -52,11 +52,11 @@ from ..domain.message_types import (
     DEFAULT_ALERT_RULES,
     DEFAULT_CADENCE,
     INVESTMENT_INSIGHT,
-    MESSAGE_TYPE_EMOJIS,
     public_message_catalog,
     user_managed_notification_types,
     visible_notification_template_types,
 )
+from ..domain.notification_icon_policy import notification_message_icon
 from ..domain.data_freshness import age_minutes
 from ..domain.market_hours import DEFAULT_MARKET_HOUR_SESSIONS
 from ..domain.monitoring import RealtimeMonitor
@@ -1862,7 +1862,7 @@ def notification_job_public_payload(job: NotificationJob, detail: bool = False, 
         "jobId": job.job_id,
         "messageType": job.message_type,
         "messageTypeLabel": MESSAGE_TYPE_LABELS.get(job.message_type, job.message_type),
-        "messageTypeIcon": MESSAGE_TYPE_EMOJIS.get(job.message_type, "🔔"),
+        "messageTypeIcon": notification_message_icon(job.message_type, context),
         "status": job.status,
         "accountId": job.account_id,
         "accountLabel": job.account_label,
@@ -2354,7 +2354,7 @@ def notification_schedules_payload(include_internal: bool = False) -> Dict[str, 
         schedules.append({
             "messageType": message_type,
             "label": MESSAGE_TYPE_LABELS.get(message_type, message_type),
-            "icon": MESSAGE_TYPE_EMOJIS.get(message_type, "🔔"),
+            "icon": notification_message_icon(message_type),
             "enabled": enabled,
             "status": status,
             "cadenceMinutes": max(10, minutes) if minutes else 0,

@@ -2,8 +2,8 @@ import re
 from datetime import datetime, timedelta, timezone
 from typing import List
 
-from .message_types import MESSAGE_TYPE_EMOJIS
 from .notification_ontology_sections import ontology_relation_context
+from .notification_icon_policy import notification_message_icon
 from .operational_notification_presentation import operational_notification_presentation
 from .notification_text_formatting import (
     data_value,
@@ -100,6 +100,13 @@ def has_investment_profit_signal(value: str) -> bool:
     return any(term in str(value or "") for term in ["분할매도", "익절", "수익", "리밸런싱", "profit_take", "PROFIT"])
 
 
+def has_investment_risk_signal(value: str) -> bool:
+    return has_investment_loss_signal(value) or any(
+        term in str(value or "")
+        for term in ["리스크", "위험", "회피", "차단", "riskWatch", "RISK"]
+    )
+
+
 def has_entry_wait_signal(value: str) -> bool:
     return any(term in str(value or "") for term in [
         "entryWait",
@@ -132,9 +139,18 @@ def notification_title_icon(rule: str, raw_lines: List[str], event: AlertEvent) 
     if operational_presentation:
         return operational_presentation.icon
 
-    if key in {"modelBuy", "watchlistBuyCandidate"}:
+    if key == "modelBuy":
         return "🟢"
+    if key == "watchlistBuyCandidate":
+        return "🎯"
     if key == "watchlistOntologySignal":
+        blob = investment_insight_signal_blob(raw_lines, event)
+        if has_investment_risk_signal(blob):
+            return "🛡️"
+        if has_investment_profit_signal(blob):
+            return "💰"
+        if any(term in blob for term in ["분할매수", "매수 후보", "기회 후보", "opportunityDetected", "entry.pullback.supported"]):
+            return "🎯"
         return "🧭"
     if key == "investmentInsight":
         blob = investment_insight_signal_blob(raw_lines, event)
@@ -166,6 +182,16 @@ def notification_title_icon(rule: str, raw_lines: List[str], event: AlertEvent) 
         if any(term in status_blob for term in ["분할", "익절", "수익"]):
             return "💰"
         return "⚖️"
+    if key == "watchlistQuote":
+        direction = dominant_signed_direction(change)
+        return "📈" if direction > 0 else "📉" if direction < 0 else "👀"
+    if key == "monitorPositionChange":
+        position_blob = " ".join(raw_lines)
+        if any(term in position_blob for term in ["신규", "매수 완료", "수량 증가"]):
+            return "➕"
+        if any(term in position_blob for term in ["제외", "청산", "매도 완료", "수량 감소"]):
+            return "➖"
+        return "↔️"
     if key == "monitorPnlChange":
         return "📈" if dominant_signed_direction(change) > 0 else "📉" if dominant_signed_direction(change) < 0 else "📊"
     if key == "monitorValueChange":
@@ -176,6 +202,9 @@ def notification_title_icon(rule: str, raw_lines: List[str], event: AlertEvent) 
         if "상향" in signal or "돌파" in signal:
             return "📈"
         return "📊"
+    if key == "monitorCashChange":
+        direction = dominant_signed_direction(change)
+        return "💵" if direction > 0 else "💸" if direction < 0 else "💳"
     if key == "monitorDecisionChange":
         current = data_value(raw_lines, "현재")
         action = data_value(raw_lines, "권장 액션")
@@ -189,7 +218,12 @@ def notification_title_icon(rule: str, raw_lines: List[str], event: AlertEvent) 
         return "🔁"
     if key == "externalCryptoMove":
         return "🪙"
-    return MESSAGE_TYPE_EMOJIS.get(key, "🔔")
+    return notification_message_icon(key, {
+        "messageType": key,
+        "rawLines": list(raw_lines or []),
+        "title": title_text,
+        "metadata": metadata,
+    })
 
 
 def notification_title_headline(rule: str, raw_lines: List[str], event: AlertEvent, fallback: str) -> str:

@@ -341,7 +341,14 @@ class MySQLMarketTimeSeriesStore(MySQLOperationalConnection):
             windows: Dict[str, List[Dict[str, object]]] = {}
             for definition in definition_rows:
                 window_key = str(getattr(definition, "key", "") or "").upper()
-                required_sessions = required_session_count(getattr(definition, "lookback_days", 1))
+                required_sessions = int(
+                    getattr(
+                        definition,
+                        "required_sessions",
+                        required_session_count(getattr(definition, "lookback_days", 1)),
+                    )
+                    or 1
+                )
                 selected: List[Dict[str, object]] = []
                 best: List[Dict[str, object]] = []
                 for granularity in preference_by_window.get(window_key) or []:

@@ -144,10 +144,13 @@
     ontologyReasoningResearchEventMaxAgeMinutes: "360",
     ontologyReasoningTelemetryHistoryLimit: "80",
     temporalWindowPeriods: [
-      "1D=1:2",
-      "3D=3:3",
-      "5D=5:4",
-      "20D=20:5"
+      "15M=15m:4",
+      "1H=1h:12",
+      "SESSION=session:8",
+      "1D=1d:2",
+      "3D=3d:3",
+      "5D=5d:4",
+      "20D=20d:5"
     ].join("\n"),
     temporalWindowHistoryLimit: "96",
     ontologyRuleCandidateAiEnabled: "1",

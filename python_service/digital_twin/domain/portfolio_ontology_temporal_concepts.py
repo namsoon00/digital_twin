@@ -1,17 +1,26 @@
 from dataclasses import dataclass
 from datetime import datetime, timedelta, timezone
+import re
 from typing import Dict, Iterable, List, Optional
 
 from .investment_research import research_evidence_from_external_signals
 from .market_data import number
-from .market_time_series import market_session_date
+from .market_time_series import market_session_date, market_timezone
 from .ontology_contracts import PortfolioOntology
 from .ontology_observation_quality import profile_for_domain
 from .ontology_schema import add_entity, add_relation
 from .portfolio import Position
 
 
-DEFAULT_TEMPORAL_WINDOWS_TEXT = "1D=1:2\n3D=3:3\n5D=5:4\n20D=20:5"
+DEFAULT_TEMPORAL_WINDOWS_TEXT = (
+    "15M=15m:4\n"
+    "1H=1h:12\n"
+    "SESSION=session:8\n"
+    "1D=1d:2\n"
+    "3D=3d:3\n"
+    "5D=5d:4\n"
+    "20D=20d:5"
+)
 
 
 @dataclass(frozen=True)
@@ -19,6 +28,60 @@ class TemporalWindowDefinition:
     key: str
     lookback_days: float
     min_samples: int
+    duration_unit: str = "day"
+    duration_value: float = 0.0
+
+    @property
+    def is_session_window(self) -> bool:
+        return self.duration_unit == "session"
+
+    @property
+    def is_intraday(self) -> bool:
+        return self.duration_unit in {"minute", "hour", "session"}
+
+    @property
+    def lookback_minutes(self) -> float:
+        if self.duration_unit == "minute":
+            return self.duration_value
+        if self.duration_unit == "hour":
+            return self.duration_value * 60.0
+        return 0.0
+
+    @property
+    def required_sessions(self) -> int:
+        return 1 if self.is_intraday else max(1, int(round(self.lookback_days)))
+
+    @property
+    def tbox_class(self) -> str:
+        if self.is_intraday:
+            return "IntradayWindow"
+        return "MultiDayWindow" if self.lookback_days > 1 else "DailyWindow"
+
+    @property
+    def window_type(self) -> str:
+        if self.is_session_window:
+            return "market-session"
+        if self.is_intraday:
+            return "fixed-intraday"
+        return "multi-day" if self.lookback_days > 1 else "daily"
+
+
+def temporal_duration(raw: object) -> tuple:
+    text = str(raw or "").strip().lower()
+    if text in {"session", "market-session", "day-session"}:
+        return (1.0 / 24.0, "session", 1.0)
+    matched = re.fullmatch(r"([0-9]+(?:\.[0-9]+)?)\s*([mhd]?)", text)
+    if not matched:
+        return (0.0, "", 0.0)
+    value = number(matched.group(1))
+    unit = matched.group(2) or "d"
+    if value <= 0:
+        return (0.0, "", 0.0)
+    if unit == "m":
+        return (value / 1440.0, "minute", value)
+    if unit == "h":
+        return (value / 24.0, "hour", value)
+    return (value, "day", value)
 
 
 def parse_temporal_windows(text: object = None) -> List[TemporalWindowDefinition]:
@@ -30,12 +93,18 @@ def parse_temporal_windows(text: object = None) -> List[TemporalWindowDefinition
             continue
         key, raw_value = line.split("=", 1)
         parts = [item.strip() for item in raw_value.split(":")]
-        days = number(parts[0])
+        days, duration_unit, duration_value = temporal_duration(parts[0])
         min_samples = int(number(parts[1] if len(parts) > 1 else 2) or 2)
         key = key.strip().upper()
         if not key or days <= 0:
             continue
-        rows.append(TemporalWindowDefinition(key, float(days), max(2, min_samples)))
+        rows.append(TemporalWindowDefinition(
+            key,
+            float(days),
+            max(2, min_samples),
+            duration_unit,
+            float(duration_value),
+        ))
     return rows or parse_temporal_windows(DEFAULT_TEMPORAL_WINDOWS_TEXT)
 
 
@@ -205,19 +274,65 @@ def percentage_change(start: float, end: float) -> float:
 def window_rows(rows: List[Dict[str, object]], definition: TemporalWindowDefinition, current_time: Optional[datetime]) -> List[Dict[str, object]]:
     if not rows:
         return []
-    if current_time:
-        cutoff = current_time - timedelta(days=definition.lookback_days)
+    ordered = sorted(
+        rows,
+        key=lambda row: parse_timestamp(row_timestamp(row)) or datetime.min.replace(tzinfo=timezone.utc),
+    )
+    effective_time = current_time or parse_timestamp(row_timestamp(ordered[-1]))
+    if definition.is_session_window:
+        current_session = str(
+            ordered[-1].get("marketSessionDate")
+            or market_session_date(
+                row_timestamp(ordered[-1]),
+                ordered[-1].get("market"),
+                ordered[-1].get("currency"),
+            )
+            or ""
+        )
+        selected = [
+            row for row in ordered
+            if str(
+                row.get("marketSessionDate")
+                or market_session_date(row_timestamp(row), row.get("market"), row.get("currency"))
+                or ""
+            ) == current_session
+        ]
+        return selected or ordered[-max(definition.min_samples, 2):]
+    if definition.is_intraday and effective_time and definition.lookback_minutes > 0:
+        cutoff = effective_time - timedelta(minutes=definition.lookback_minutes)
+        selected = [
+            row
+            for row in ordered
+            if cutoff <= (parse_timestamp(row_timestamp(row)) or effective_time) <= effective_time
+        ]
+        return selected or ordered[-max(definition.min_samples, 2):]
+    if effective_time:
+        cutoff = effective_time - timedelta(days=definition.lookback_days)
         filtered = [
             row
-            for row in rows
-            if (parse_timestamp(row.get("generatedAt") or row.get("updated_at") or row.get("updatedAt")) or current_time) >= cutoff
+            for row in ordered
+            if (parse_timestamp(row_timestamp(row)) or effective_time) >= cutoff
         ]
         if filtered:
             return filtered
-    return rows[-max(definition.min_samples, 2):]
+    return ordered[-max(definition.min_samples, 2):]
 
 
 STALE_DATA_QUALITY_STATES = {"stale", "poor", "invalid", "missing", "unavailable", "error"}
+REFERENCE_DATA_QUALITY_STATES = {
+    "reference",
+    "last-close",
+    "last close",
+    "previous-close",
+    "previous close",
+    "no-tick",
+    "no tick",
+    "market-closed",
+    "market closed",
+    "closed",
+    "off-hours",
+    "off hours",
+}
 
 
 def row_timestamp(row: Dict[str, object]) -> str:
@@ -231,7 +346,14 @@ def row_timestamp(row: Dict[str, object]) -> str:
 
 
 def normalized_data_quality(row: Dict[str, object]) -> str:
-    quality = str(camel_or_snake(row, "dataQuality", "data_quality") or "").strip().lower()
+    quality = " ".join([
+        str(camel_or_snake(row, "dataQuality", "data_quality") or ""),
+        str(camel_or_snake(row, "freshnessStatus", "freshness_status") or ""),
+        str(camel_or_snake(row, "quoteStatus", "quote_status") or ""),
+        str(camel_or_snake(row, "marketSession", "market_session") or ""),
+    ]).strip().lower()
+    if any(state in quality for state in REFERENCE_DATA_QUALITY_STATES):
+        return "reference"
     if any(state in quality for state in STALE_DATA_QUALITY_STATES):
         return "stale"
     if any(state in quality for state in {"actual", "live", "fresh", "verified"}):
@@ -239,6 +361,52 @@ def normalized_data_quality(row: Dict[str, object]) -> str:
     if any(state in quality for state in {"cached", "manual", "synthetic", "partial"}):
         return "partial"
     return "unknown"
+
+
+def observation_is_valid(row: Dict[str, object]) -> bool:
+    return normalized_data_quality(row) not in {"stale", "reference"}
+
+
+def market_session_phase(
+    observed_at: object,
+    market: object = "",
+    currency: object = "",
+) -> Dict[str, str]:
+    parsed = parse_timestamp(observed_at)
+    if not parsed:
+        return {}
+    local = parsed.astimezone(market_timezone(market, currency))
+    minute = local.hour * 60 + local.minute
+    market_code = str(market or "").upper().strip()
+    currency_code = str(currency or "").upper().strip()
+    is_kr = market_code in {"KR", "KOR", "KOREA", "KOSPI", "KOSDAQ", "KONEX", "KRX", "XKRX"} or currency_code == "KRW"
+    if is_kr:
+        ranges = [
+            (8 * 60, 9 * 60, "pre-market", "장전"),
+            (9 * 60, 10 * 60, "opening", "개장 구간"),
+            (10 * 60, 14 * 60 + 30, "regular", "정규장"),
+            (14 * 60 + 30, 15 * 60 + 30, "closing", "마감 구간"),
+            (15 * 60 + 30, 18 * 60, "after-hours", "시간외"),
+        ]
+    else:
+        ranges = [
+            (4 * 60, 9 * 60 + 30, "pre-market", "프리마켓"),
+            (9 * 60 + 30, 10 * 60 + 30, "opening", "개장 구간"),
+            (10 * 60 + 30, 15 * 60, "regular", "정규장"),
+            (15 * 60, 16 * 60, "closing", "마감 구간"),
+            (16 * 60, 20 * 60, "after-hours", "애프터마켓"),
+        ]
+    phase_key, phase_label = "closed", "장 마감"
+    for start, end, candidate_key, candidate_label in ranges:
+        if start <= minute < end:
+            phase_key, phase_label = candidate_key, candidate_label
+            break
+    return {
+        "phaseKey": phase_key,
+        "phaseLabel": phase_label,
+        "marketSessionDate": local.date().isoformat(),
+        "marketTimezone": str(local.tzinfo),
+    }
 
 
 def has_row_field(row: Dict[str, object], *fields: str) -> bool:
@@ -314,8 +482,8 @@ def temporal_window_values(rows: List[Dict[str, object]], definition: TemporalWi
     priced_rows = [row for row in rows if row_number(row, "currentPrice", "current_price") > 0]
     first = priced_rows[0] if priced_rows else {}
     last = priced_rows[-1] if priced_rows else {}
-    first_time = parse_timestamp(first.get("generatedAt") or first.get("updated_at") or first.get("updatedAt"))
-    last_time = parse_timestamp(last.get("generatedAt") or last.get("updated_at") or last.get("updatedAt"))
+    first_time = parse_timestamp(row_timestamp(first))
+    last_time = parse_timestamp(row_timestamp(last))
     prices = [row_number(row, "currentPrice", "current_price") for row in priced_rows]
     ma20_distances = [
         row_number(row, "ma20Distance", "ma20_distance")
@@ -328,7 +496,7 @@ def temporal_window_values(rows: List[Dict[str, object]], definition: TemporalWi
     smart_money_rows = [
         row for row in priced_rows
         if has_investor_flow_observation(row)
-        and normalized_data_quality(row) != "stale"
+        and observation_is_valid(row)
     ]
     smart_money_first = smart_money_rows[0] if smart_money_rows else {}
     smart_money_last = smart_money_rows[-1] if smart_money_rows else {}
@@ -356,12 +524,22 @@ def temporal_window_values(rows: List[Dict[str, object]], definition: TemporalWi
         if row
     }
     session_dates.discard("")
-    required_sessions = max(1, int(round(definition.lookback_days)))
-    sample_coverage = len(priced_rows) / max(1.0, definition.min_samples)
+    required_sessions = definition.required_sessions
+    valid_rows = [row for row in priced_rows if observation_is_valid(row)]
+    sample_coverage = len(valid_rows) / max(1.0, definition.min_samples)
     session_coverage = len(session_dates) / max(1.0, required_sessions)
-    sufficient = len(priced_rows) >= definition.min_samples and len(session_dates) >= required_sessions
-    valid_rows = [row for row in priced_rows if normalized_data_quality(row) != "stale"]
     stale_count = len(priced_rows) - len(valid_rows)
+    elapsed_minutes = elapsed_hours * 60.0
+    time_coverage = (
+        min(1.0, elapsed_minutes / max(1.0, definition.lookback_minutes))
+        if definition.is_intraday and not definition.is_session_window
+        else 1.0
+    )
+    sufficient = (
+        len(valid_rows) >= definition.min_samples
+        and len(session_dates) >= required_sessions
+        and (definition.is_session_window or not definition.is_intraday or time_coverage >= 0.5)
+    )
     midpoint_index = max(1, len(prices) // 2) if len(prices) >= 2 else 0
     midpoint_price = prices[midpoint_index] if prices else 0.0
     peak_price = max(prices) if prices else 0.0
@@ -376,7 +554,9 @@ def temporal_window_values(rows: List[Dict[str, object]], definition: TemporalWi
     )
     values = {
         "windowKey": definition.key,
+        "windowType": definition.window_type,
         "lookbackDays": definition.lookback_days,
+        "lookbackMinutes": round(definition.lookback_minutes, 2),
         "requiredSampleCount": definition.min_samples,
         "sampleCount": len(priced_rows),
         "validObservationCount": len(valid_rows),
@@ -387,7 +567,8 @@ def temporal_window_values(rows: List[Dict[str, object]], definition: TemporalWi
         "requiredSessionCount": required_sessions,
         "coveredSessionCount": len(session_dates),
         "hasSufficientHistory": sufficient,
-        "coverageRatio": round(min(1.0, sample_coverage, session_coverage), 3),
+        "coverageRatio": round(min(1.0, sample_coverage, session_coverage, time_coverage), 3),
+        "timeCoverageRatio": round(time_coverage, 3),
         "observationSource": observation_source,
         "observationGranularity": observation_granularity,
         "firstObservedAt": first_time.isoformat().replace("+00:00", "Z") if first_time else "",
@@ -451,12 +632,24 @@ def temporal_observation_anchors(rows: List[Dict[str, object]]) -> List[tuple]:
     priced_rows = [row for row in rows if row_number(row, "currentPrice", "current_price") > 0]
     if not priced_rows:
         return []
+    prices = [row_number(row, "currentPrice", "current_price") for row in priced_rows]
     candidates = [("first", 0)]
+    if len(priced_rows) > 1:
+        candidates.extend([
+            ("peak", prices.index(max(prices))),
+            ("trough", prices.index(min(prices))),
+        ])
     if len(priced_rows) > 2:
         candidates.append(("middle", len(priced_rows) // 2))
     if len(priced_rows) > 1:
         candidates.append(("latest", len(priced_rows) - 1))
-    return [(role, index, priced_rows[index]) for role, index in candidates]
+    roles_by_index: Dict[int, List[str]] = {}
+    for role, index in candidates:
+        roles_by_index.setdefault(index, []).append(role)
+    return [
+        ("+".join(roles_by_index[index]), index, priced_rows[index])
+        for index in sorted(roles_by_index)[:5]
+    ]
 
 
 def add_temporal_observation_anchors(
@@ -469,7 +662,7 @@ def add_temporal_observation_anchors(
     previous_id = ""
     for role, index, row in temporal_observation_anchors(rows):
         observed_at = row_timestamp(row)
-        has_flow = has_investor_flow_observation(row) and normalized_data_quality(row) != "stale"
+        has_flow = has_investor_flow_observation(row) and observation_is_valid(row)
         tbox_classes = ["Observation", "PriceObservation", "TemporalWindowObservation"]
         properties = {
             "tboxClass": "TemporalWindowObservation",
@@ -507,7 +700,7 @@ def add_temporal_observation_anchors(
             "field": "temporalObservation",
             "polarity": "context",
             "evidenceRole": "context",
-            "dataState": "sufficient" if normalized_data_quality(row) != "stale" else "stale",
+            "dataState": "sufficient" if observation_is_valid(row) else normalized_data_quality(row),
             "aiInfluenceLabel": definition.key + " " + role + " 관측",
         }
         add_relation(graph, window_id, observation_id, "WINDOW_CONTAINS_OBSERVATION", properties=relation_properties)
@@ -536,7 +729,7 @@ def add_temporal_coverage_gap(
         "sampleCount": sample_count,
         "requiredSampleCount": definition.min_samples,
         "coveredSessionCount": covered_session_count,
-        "requiredSessionCount": max(1, int(round(definition.lookback_days))),
+        "requiredSessionCount": definition.required_sessions,
         "reviewLevel": "blocked",
         "dataState": "insufficient",
         "evidenceRole": "blocking",
@@ -580,10 +773,15 @@ def add_position_temporal_concepts(
         if stored_rows is None:
             selected = window_rows(rows, definition, current_time)
         else:
-            selected = trim_to_recent_sessions(dedupe_temporal_rows(
+            available = dedupe_temporal_rows(
                 stored_rows + [position_payload(position, str(runtime_context.get("asOf") or ""))],
                 symbol,
-            ), max(1, int(round(definition.lookback_days))))
+            )
+            selected = (
+                window_rows(available, definition, current_time)
+                if definition.is_intraday
+                else trim_to_recent_sessions(available, definition.required_sessions)
+            )
             if isinstance(external_signals, dict) and selected:
                 selected[-1] = {**selected[-1], "externalSignals": external_signals}
         values = temporal_window_values(selected, definition)
@@ -591,10 +789,18 @@ def add_position_temporal_concepts(
         values["symbol"] = symbol
         values["source"] = str(values.get("observationSource") or "monitor-snapshot-history")
         values["retentionTier"] = str(values.get("observationGranularity") or "snapshot")
+        phase = market_session_phase(
+            row_timestamp(selected[-1]) if selected else current_time,
+            position.market,
+            position.currency,
+        ) if definition.is_intraday else {}
+        if phase:
+            values["sessionPhase"] = phase.get("phaseKey")
+            values["sessionPhaseLabel"] = phase.get("phaseLabel")
 
         window_id = add_entity(graph, "temporal-window", symbol + ":" + definition.key, symbol + " " + definition.key + " 기간 흐름", {
-            "tboxClass": "MultiDayWindow" if definition.lookback_days > 1 else "DailyWindow",
-            "tboxClasses": ["Observation", "TemporalWindow", "MultiDayWindow" if definition.lookback_days > 1 else "DailyWindow", "TemporalMateriality"],
+            "tboxClass": definition.tbox_class,
+            "tboxClasses": ["Observation", "TemporalWindow", definition.tbox_class, "TemporalMateriality"],
             "field": "temporalWindow",
             "value": values.get("priceChangePct", 0),
             **values,
@@ -611,6 +817,30 @@ def add_position_temporal_concepts(
             "dataState": data_state,
             "aiInfluenceLabel": definition.key + " 기간 흐름",
         })
+        if phase:
+            phase_id = add_entity(
+                graph,
+                "market-session-phase",
+                symbol + ":" + phase["marketSessionDate"] + ":" + phase["phaseKey"],
+                symbol + " " + phase["phaseLabel"],
+                {
+                    "tboxClass": "MarketSessionPhase",
+                    "tboxClasses": ["Observation", "MarketSessionPhase"],
+                    "symbol": symbol,
+                    **phase,
+                    "observedAt": row_timestamp(selected[-1]) if selected else "",
+                    "source": values["source"],
+                },
+            )
+            add_relation(graph, window_id, phase_id, "OCCURS_IN_SESSION_PHASE", properties={
+                "source": values["source"],
+                "windowKey": definition.key,
+                "phaseKey": phase["phaseKey"],
+                "polarity": "context",
+                "evidenceRole": "context",
+                "dataState": data_state,
+                "aiInfluenceLabel": definition.key + " " + phase["phaseLabel"],
+            })
         add_temporal_observation_anchors(graph, window_id, symbol, definition, selected)
 
         if not values.get("hasSufficientHistory"):

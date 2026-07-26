@@ -1284,6 +1284,8 @@ TYPEDB_PROMOTED_NUMERIC_ATTRIBUTES = {
     "elapsedHours": "ontology-elapsed-hours",
     "startPrice": "ontology-start-price",
     "priceChangePct": "ontology-price-change-pct",
+    "relativeReturnPct": "ontology-relative-return-pct",
+    "proxyChangeRate": "ontology-proxy-change-rate",
     "peakPrice": "ontology-peak-price",
     "troughPrice": "ontology-trough-price",
     "peakReturnPct": "ontology-peak-return-pct",
@@ -1448,6 +1450,7 @@ TYPEDB_FUNCTION_TARGET_FILTERS = {
     "materialityState",
     "relevanceState",
     "sourceTrustState",
+    "dataState",
     "valuationDataState",
     "minValue",
     "maxValue",
@@ -9773,6 +9776,8 @@ attribute ontology-coverage-ratio, value double;
 attribute ontology-elapsed-hours, value double;
 attribute ontology-start-price, value double;
 attribute ontology-price-change-pct, value double;
+attribute ontology-relative-return-pct, value double;
+attribute ontology-proxy-change-rate, value double;
 attribute ontology-peak-price, value double;
 attribute ontology-trough-price, value double;
 attribute ontology-peak-return-pct, value double;
@@ -10025,6 +10030,8 @@ entity ontology-node @abstract,
     owns ontology-elapsed-hours,
     owns ontology-start-price,
     owns ontology-price-change-pct,
+    owns ontology-relative-return-pct,
+    owns ontology-proxy-change-rate,
     owns ontology-peak-price,
     owns ontology-trough-price,
     owns ontology-peak-return-pct,
@@ -19232,6 +19239,7 @@ def typedb_target_attribute(field: str) -> str:
         "materialityState": "ontology-materiality-state",
         "relevanceState": "ontology-relevance-state",
         "sourceTrustState": "ontology-source-trust-state",
+        "dataState": "ontology-data-state",
         "value": "ontology-value-number",
         "tboxClass": "ontology-tbox-class",
         "tboxClasses": "ontology-tbox-class",

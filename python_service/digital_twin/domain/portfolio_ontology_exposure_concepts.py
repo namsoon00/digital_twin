@@ -8,6 +8,7 @@ from .investment_ubiquitous_language import (
 )
 
 from .market_data import known_stock, number
+from .market_time_series import parse_timestamp
 from .instrument_profiles import (
     InstrumentProfile,
     instrument_profile_for_position,
@@ -278,6 +279,7 @@ def add_stock_market_proxy_context_concepts(
     graph: PortfolioOntology,
     stock_id: str,
     portfolio_node_id: str,
+    position: Position,
     profile: InstrumentProfile,
     runtime_context: Dict[str, object] = None,
 ) -> None:
@@ -315,6 +317,83 @@ def add_stock_market_proxy_context_concepts(
             **market_proxy_observation_metadata(quote),
             "aiInfluenceLabel": profile.label + " 시장 프록시 관측",
         })
+        stock_as_of = str(position.source_as_of or position.updated_at or "")
+        proxy_as_of = str(quote.get("sourceAsOf") or quote.get("updatedAt") or "")
+        stock_time = parse_timestamp(stock_as_of)
+        proxy_time = parse_timestamp(proxy_as_of)
+        clock_skew_minutes = (
+            abs((stock_time - proxy_time).total_seconds()) / 60.0
+            if stock_time and proxy_time
+            else None
+        )
+        clocks_aligned = clock_skew_minutes is not None and clock_skew_minutes <= 15
+        stock_change_available = position.change_rate is not None
+        proxy_change_available = quote.get("changeRate") not in (None, "")
+        proxy_usable = bool(quote.get("judgementEvidenceUsable"))
+        comparison_usable = bool(
+            stock_change_available
+            and proxy_change_available
+            and clocks_aligned
+            and proxy_usable
+        )
+        stock_change = number(position.change_rate)
+        proxy_change = number(quote.get("changeRate"))
+        relative_return = stock_change - proxy_change
+        relative_id = add_entity(
+            graph,
+            "relative-performance-observation",
+            str(position.symbol or "").upper() + ":" + proxy_profile.symbol,
+            profile.label + "의 " + proxy_profile.label + " 대비 상대성과",
+            {
+                "tboxClass": "RelativePerformanceObservation",
+                "tboxClasses": ["Observation", "PriceObservation", "RelativePerformanceObservation"],
+                "symbol": str(position.symbol or "").upper(),
+                "proxySymbol": proxy_profile.symbol,
+                "overlapFactors": overlap,
+                "comparisonWindow": "session-change",
+                "stockChangeRate": round(stock_change, 4),
+                "proxyChangeRate": round(proxy_change, 4),
+                "relativeReturnPct": round(relative_return, 4),
+                "sourceAsOf": stock_as_of,
+                "proxySourceAsOf": proxy_as_of,
+                "clockSkewMinutes": round(clock_skew_minutes, 2) if clock_skew_minutes is not None else None,
+                "timestampsAligned": clocks_aligned,
+                "judgementEvidenceUsable": comparison_usable,
+                "dataState": "sufficient" if comparison_usable else "partial",
+                "reviewLevel": "observe",
+                "evidenceRole": "context",
+                "polarity": "context",
+                "source": "market-proxy-relative-performance",
+            },
+        )
+        relation_metadata = {
+            "source": "market-proxy-relative-performance",
+            "overlapFactors": overlap,
+            "dataState": "sufficient" if comparison_usable else "partial",
+            "reviewLevel": "observe",
+            "evidenceRole": "context",
+            "polarity": "context",
+        }
+        add_relation(
+            graph,
+            stock_id,
+            relative_id,
+            "HAS_RELATIVE_PERFORMANCE",
+            properties={
+                **relation_metadata,
+                "aiInfluenceLabel": profile.label + " 시장 대비 상대성과",
+            },
+        )
+        add_relation(
+            graph,
+            relative_id,
+            observation_id,
+            "COMPARES_WITH_MARKET_PROXY",
+            properties={
+                **relation_metadata,
+                "aiInfluenceLabel": proxy_profile.label + "와 동일 시각 비교",
+            },
+        )
 
 
 def add_instrument_profile_concepts(
@@ -426,7 +505,7 @@ def add_instrument_profile_concepts(
     })
     if is_market_proxy_profile(profile):
         add_market_proxy_profile_concepts(graph, portfolio_node_id, profile, source_id=stock_id, source="instrument-profile")
-    add_stock_market_proxy_context_concepts(graph, stock_id, portfolio_node_id, profile, runtime_context)
+    add_stock_market_proxy_context_concepts(graph, stock_id, portfolio_node_id, position, profile, runtime_context)
 
 
 def benchmark_for_position(position: Position) -> (str, str):

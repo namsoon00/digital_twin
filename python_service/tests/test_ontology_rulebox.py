@@ -1,6 +1,7 @@
 import json
 import sys
 import unittest
+from datetime import datetime
 from pathlib import Path
 
 sys.path.insert(0, str(Path(__file__).resolve().parents[1]))
@@ -18,7 +19,11 @@ from digital_twin.domain.portfolio_ontology_market_concepts import missing_marke
 from digital_twin.domain.portfolio_ontology_temporal_concepts import (
     TemporalWindowDefinition,
     add_temporal_observation_anchors,
+    market_session_phase,
+    parse_temporal_windows,
+    temporal_observation_anchors,
     temporal_window_values,
+    window_rows,
 )
 from digital_twin.domain.ontology_contracts import PortfolioOntology
 from digital_twin.domain.security_lines import related_market_symbols_for_positions, security_lines_for_symbol
@@ -39,6 +44,73 @@ from digital_twin.domain.ontology_rulebox_governance import rulebox_governance_c
 
 
 class OntologyRuleBoxTests(unittest.TestCase):
+    def test_intraday_window_contract_parses_duration_and_session_phase(self):
+        definitions = {item.key: item for item in parse_temporal_windows()}
+        rows = [
+            {
+                "bucketAt": "2026-07-20T00:00:00Z",
+                "marketSessionDate": "2026-07-20",
+                "currentPrice": 100,
+                "dataQuality": "actual",
+            },
+            {
+                "bucketAt": "2026-07-20T00:06:00Z",
+                "marketSessionDate": "2026-07-20",
+                "currentPrice": 98,
+                "dataQuality": "actual",
+            },
+            {
+                "bucketAt": "2026-07-20T00:12:00Z",
+                "marketSessionDate": "2026-07-20",
+                "currentPrice": 101,
+                "dataQuality": "actual",
+            },
+            {
+                "bucketAt": "2026-07-20T00:15:00Z",
+                "marketSessionDate": "2026-07-20",
+                "currentPrice": 102,
+                "dataQuality": "actual",
+            },
+        ]
+
+        selected = window_rows(
+            rows,
+            definitions["15M"],
+            datetime.fromisoformat("2026-07-20T00:15:00+00:00"),
+        )
+        values = temporal_window_values(selected, definitions["15M"])
+        anchors = temporal_observation_anchors(selected)
+        phase = market_session_phase("2026-07-20T00:15:00Z", "KR", "KRW")
+
+        self.assertEqual(15, definitions["15M"].lookback_minutes)
+        self.assertTrue(definitions["SESSION"].is_session_window)
+        self.assertEqual("IntradayWindow", definitions["1H"].tbox_class)
+        self.assertTrue(values["hasSufficientHistory"])
+        self.assertEqual(1.0, values["timeCoverageRatio"])
+        self.assertLessEqual(len(anchors), 5)
+        self.assertTrue(any("peak" in role for role, _index, _row in anchors))
+        self.assertTrue(any("trough" in role for role, _index, _row in anchors))
+        self.assertEqual("opening", phase["phaseKey"])
+
+    def test_intraday_reference_quote_does_not_satisfy_history(self):
+        definition = parse_temporal_windows("15M=15m:4")[0]
+        rows = [
+            {
+                "bucketAt": "2026-07-20T00:" + str(index * 5).zfill(2) + ":00Z",
+                "marketSessionDate": "2026-07-20",
+                "currentPrice": 100 + index,
+                "dataQuality": "actual",
+                "marketSession": "market-closed",
+            }
+            for index in range(4)
+        ]
+
+        values = temporal_window_values(rows, definition)
+
+        self.assertFalse(values["hasSufficientHistory"])
+        self.assertEqual("reference", values["latestObservationQuality"])
+        self.assertEqual(0, values["validObservationCount"])
+
     def test_external_raw_fact_rules_compile_to_native_typedb_queries(self):
         rules_by_id = {item.rule_id: item for item in default_graph_inference_rules()}
         expected_rule_ids = {
@@ -48,6 +120,12 @@ class OntologyRuleBoxTests(unittest.TestCase):
             "graph.earnings.surprise.risk.v1",
             "graph.earnings.surprise.support.v1",
             "graph.regulatory.event.risk.v1",
+            "graph.temporal.intraday_downside_acceleration.risk.v1",
+            "graph.temporal.intraday_reversal.defense.v1",
+            "graph.temporal.risk_event_absorption.support.v1",
+            "graph.temporal.support_event_rejection.risk.v1",
+            "graph.market_proxy.relative_underperformance.risk.v1",
+            "graph.market_proxy.relative_resilience.support.v1",
         }
 
         for rule_id in expected_rule_ids:
@@ -593,6 +671,9 @@ class OntologyRuleBoxTests(unittest.TestCase):
             bid_ask_imbalance=12,
             trading_value=100000000,
             sector="디지털자산" if symbol == "MSTR" else "모빌리티",
+            updated_at="2026-07-16T00:00:00Z",
+            source_as_of="2026-07-16T00:00:00Z",
+            data_quality="actual",
         )
         portfolio = portfolio_summary([position], account_cash=10000, fx_rates={"USD": 1400})
         return build_portfolio_ontology(
@@ -1604,6 +1685,8 @@ class OntologyRuleBoxTests(unittest.TestCase):
                         "volumeRatio": 1.4,
                         "quoteSource": "CoinGecko/Toss market proxy cache",
                         "updatedAt": "2026-07-16T00:00:00Z",
+                        "sourceAsOf": "2026-07-16T00:00:00Z",
+                        "judgementEvidenceUsable": True,
                     }
                 }
             },
@@ -1618,6 +1701,12 @@ class OntologyRuleBoxTests(unittest.TestCase):
             for item in graph.relations
             if item.source == "stock:MSTR" and item.target == observation.entity_id and item.relation_type == "HAS_OBSERVATION"
         )
+        relative = next(
+            item
+            for item in graph.entities
+            if item.kind == "relative-performance-observation"
+            and (item.properties or {}).get("proxySymbol") == "BTC"
+        )
 
         self.assertEqual("context", observation.properties["polarity"])
         self.assertEqual("context", observation.properties["evidenceRole"])
@@ -1625,6 +1714,16 @@ class OntologyRuleBoxTests(unittest.TestCase):
         self.assertEqual(-5.5, observation.properties["ma20Distance"])
         self.assertEqual("context", stock_relation.properties["polarity"])
         self.assertIn("btc", stock_relation.properties["overlapFactors"])
+        self.assertEqual(5.4, relative.properties["relativeReturnPct"])
+        self.assertEqual("sufficient", relative.properties["dataState"])
+        self.assertTrue(any(
+            item.relation_type == "HAS_RELATIVE_PERFORMANCE" and item.target == relative.entity_id
+            for item in graph.relations
+        ))
+        self.assertTrue(any(
+            item.relation_type == "COMPARES_WITH_MARKET_PROXY" and item.source == relative.entity_id
+            for item in graph.relations
+        ))
 
     def test_portfolio_exposure_abox_keeps_raw_currency_and_sector_facts(self):
         position = Position(

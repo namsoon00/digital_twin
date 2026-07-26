@@ -13,6 +13,9 @@ GRANULARITY_SECONDS = {
 }
 
 WINDOW_GRANULARITY_PREFERENCES = {
+    "15M": ["3m", "15m", "1h", "1d"],
+    "1H": ["3m", "15m", "1h", "1d"],
+    "SESSION": ["3m", "15m", "1h", "1d"],
     "1D": ["3m", "15m", "1h", "1d"],
     "3D": ["15m", "1h", "1d", "3m"],
     "5D": ["1h", "15m", "1d", "3m"],

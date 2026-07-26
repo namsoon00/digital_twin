@@ -947,7 +947,11 @@ def runtime_settings() -> Dict[str, str]:
         "typedbInferenceBoxRelationBatchSize": value("typedbInferenceBoxRelationBatchSize", "TYPEDB_INFERENCEBOX_RELATION_BATCH_SIZE", "1"),
         "typedbInferenceBoxWriteTransactionQueryCount": value("typedbInferenceBoxWriteTransactionQueryCount", "TYPEDB_INFERENCEBOX_WRITE_TRANSACTION_QUERY_COUNT", "8"),
         "typedbWriteMaxQueryBytes": value("typedbWriteMaxQueryBytes", "TYPEDB_WRITE_MAX_QUERY_BYTES", "192000"),
-        "temporalWindowPeriods": value("temporalWindowPeriods", "TEMPORAL_WINDOW_PERIODS", "1D=1:2\n3D=3:3\n5D=5:4\n20D=20:5"),
+        "temporalWindowPeriods": value(
+            "temporalWindowPeriods",
+            "TEMPORAL_WINDOW_PERIODS",
+            "15M=15m:4\n1H=1h:12\nSESSION=session:8\n1D=1d:2\n3D=3d:3\n5D=5d:4\n20D=20d:5",
+        ),
         "ontologyLabEnabled": value("ontologyLabEnabled", "ONTOLOGY_LAB_ENABLED", "1"),
         "ontologyLabIntervalSeconds": value("ontologyLabIntervalSeconds", "ONTOLOGY_LAB_INTERVAL_SECONDS", "300"),
         "ontologyLabBatchSize": value("ontologyLabBatchSize", "ONTOLOGY_LAB_BATCH_SIZE", "5"),

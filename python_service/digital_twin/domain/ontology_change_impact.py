@@ -276,7 +276,7 @@ def family_for_entity(kind: object, properties: Mapping[str, object] = None, ent
         return "position"
     if _matches_any(text, ["security-line", "instrument-profile", "instrument-identity", "company", "adr", "depositary", "leveraged-etf", "single-stock-etf", "risk-budget", "profit-policy", "risk-management", "strategy-profile", "investment-strategy", "investment-archetype", "account-delivery-profile"]):
         return "profile"
-    if _matches_any(text, ["factor", "exposure", "peer", "correlation", "sensitivity", "sector"]):
+    if _matches_any(text, ["factor", "exposure", "peer", "correlation", "sensitivity", "sector", "relative-performance"]):
         return "exposure"
     if _matches_any(text, ["price", "technical", "key-level", "market-microstructure", "trend-scenario", "scenario"]):
         return "market"
@@ -344,7 +344,7 @@ def family_for_relation(
         return "exposure"
     if _matches_any(text, ["exposed_to_fx", "has_fx", "fx_rate"]):
         return "exposure"
-    if _matches_any(text, ["interest", "yield", "macro_regime", "market_proxy", "factor_exposure", "correlation", "sensitivity"]):
+    if _matches_any(text, ["interest", "yield", "macro_regime", "market_proxy", "factor_exposure", "correlation", "sensitivity", "relative_performance"]):
         return "exposure"
     if _matches_any(text, ["external_signal", "evidence", "news", "disclosure", "research", "provenance", "mentions", "asserts", "verified"]):
         return "evidence"

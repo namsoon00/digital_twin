@@ -227,6 +227,48 @@ class MarketTimeSeriesTests(unittest.TestCase):
         self.assertEqual("mysql-market-time-series", window.properties["source"])
         self.assertEqual("1d", window.properties["retentionTier"])
 
+    def test_ontology_projects_bounded_intraday_window_and_session_phase(self):
+        rows = []
+        for minute, price in [(0, 100), (3, 98), (6, 97), (9, 99), (12, 101)]:
+            stamp = "2026-07-20T00:" + str(minute).zfill(2) + ":00Z"
+            rows.append({
+                "generatedAt": stamp,
+                "bucketAt": stamp,
+                "marketSessionDate": "2026-07-20",
+                "symbol": "005930",
+                "market": "KR",
+                "currency": "KRW",
+                "currentPrice": price,
+                "dataQuality": "actual",
+                "observationSource": "mysql-market-time-series",
+                "observationGranularity": "3m",
+            })
+        graph = build_portfolio_ontology(
+            [position(102)],
+            portfolio_summary(),
+            portfolio_id="main",
+            runtime_context={
+                "asOf": "2026-07-20T00:15:00Z",
+                "settings": {"temporalWindowPeriods": "15M=15m:4"},
+                "temporalObservationWindows": {"005930": {"15M": rows}},
+            },
+        )
+        window = next(
+            item for item in graph.entities
+            if item.kind == "temporal-window" and item.properties.get("windowKey") == "15M"
+        )
+        anchors = [
+            item for item in graph.entities
+            if item.kind == "temporal-observation"
+            and item.properties.get("windowKey") == "15M"
+        ]
+
+        self.assertEqual("IntradayWindow", window.properties["tboxClass"])
+        self.assertEqual("opening", window.properties["sessionPhase"])
+        self.assertTrue(window.properties["hasSufficientHistory"])
+        self.assertLessEqual(len(anchors), 5)
+        self.assertTrue(any(item.relation_type == "OCCURS_IN_SESSION_PHASE" for item in graph.relations))
+
     def test_same_day_snapshots_do_not_satisfy_multi_day_history(self):
         state_history = []
         for minute in range(6):

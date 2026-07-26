@@ -262,7 +262,7 @@ Temporal ontology reasoning groups repeated monitor snapshots before RuleBox der
 
 Configuration:
 
-- `TEMPORAL_WINDOW_PERIODS`: semicolon/newline-separated `label=lookbackDays:minSamples`, default `1D=1:2;3D=3:3;5D=5:4;20D=20:5`.
+- `TEMPORAL_WINDOW_PERIODS`: semicolon/newline-separated `label=duration:minSamples`. Durations accept minutes (`15m`), hours (`1h`), market session (`session`), or days (`3d`). Default: `15M=15m:4;1H=1h:12;SESSION=session:8;1D=1d:2;3D=3d:3;5D=5d:4;20D=20d:5`.
 - `TEMPORAL_WINDOW_HISTORY_LIMIT`: max monitor snapshots loaded into the ontology builder per account, default `96`, clamped to 6-500.
 
 ## Event Sourcing and Outbox

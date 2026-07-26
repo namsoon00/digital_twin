@@ -4112,6 +4112,12 @@ class TypeDBOntologyRepositoryTests(unittest.TestCase):
                 "graph.earnings.surprise.risk.v1",
                 "graph.earnings.surprise.support.v1",
                 "graph.regulatory.event.risk.v1",
+                "graph.temporal.intraday_downside_acceleration.risk.v1",
+                "graph.temporal.intraday_reversal.defense.v1",
+                "graph.temporal.risk_event_absorption.support.v1",
+                "graph.temporal.support_event_rejection.risk.v1",
+                "graph.market_proxy.relative_underperformance.risk.v1",
+                "graph.market_proxy.relative_resilience.support.v1",
             },
             set(migration["addedRuleIds"]),
         )

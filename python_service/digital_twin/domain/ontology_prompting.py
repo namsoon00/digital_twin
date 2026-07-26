@@ -260,7 +260,10 @@ def build_ai_inference_packet(graph: PortfolioOntology) -> Dict[str, object]:
     valuation_context_count = len([item for item in graph.entities if item.kind in {"valuation-assumption", "revenue-exposure", "analyst-revision"}])
     temporal_window_count = len([item for item in graph.entities if item.kind == "temporal-window"])
     temporal_episode_count = len([item for item in graph.entities if item.kind == "trend-episode"])
-    market_proxy_count = len([item for item in graph.entities if item.kind in {"market-proxy-instrument", "market-proxy-observation"}])
+    market_proxy_count = len([
+        item for item in graph.entities
+        if item.kind in {"market-proxy-instrument", "market-proxy-observation", "relative-performance-observation"}
+    ])
     investment_question_count = len([item for item in graph.entities if item.kind in {"investment-question", "self-question"}])
     competing_hypothesis_count = len([item for item in graph.entities if item.kind == "competing-hypothesis"])
     decision_episode_count = len([item for item in graph.entities if item.kind == "decision-episode"])
@@ -486,11 +489,20 @@ def prompt_payload(graph: PortfolioOntology) -> Dict[str, object]:
         "coverageGaps": compact_entities_by_kind(graph, ["coverage-gap", "temporal-coverage-gap"], 80),
         "temporalWindows": compact_entities_by_kind(
             graph,
-            ["temporal-window", "temporal-observation"],
+            ["temporal-window", "temporal-observation", "market-session-phase"],
             120,
         ),
         "macroRegimes": compact_entities_by_kind(graph, ["macro-regime", "interest-rate", "yield-curve", "fx-rate"], 60),
-        "marketProxyContext": compact_entities_by_kind(graph, ["market-proxy-instrument", "market-proxy-theme", "market-proxy-observation"], 140),
+        "marketProxyContext": compact_entities_by_kind(
+            graph,
+            [
+                "market-proxy-instrument",
+                "market-proxy-theme",
+                "market-proxy-observation",
+                "relative-performance-observation",
+            ],
+            160,
+        ),
         "cryptoExposures": compact_entities_by_kind(graph, ["crypto-asset", "crypto-market-signal", "crypto-exposure", "price-path"], 80),
         "valuationContext": compact_entities_by_kind(
             graph,

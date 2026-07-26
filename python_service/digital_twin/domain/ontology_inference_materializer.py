@@ -805,7 +805,7 @@ def inferred_time_sensitive_observation(properties: Dict[str, object]) -> bool:
         "article", "corporate-action", "coverage-gap", "cross-market", "data-quality",
         "disclosure", "event-impact", "execution-capacity", "execution-metric", "external-signal",
         "fact-change", "flow", "freshness", "interest-rate", "investor", "key-level",
-        "loss-defense", "macro", "margin-of-safety", "market-proxy-observation", "missing-data",
+        "loss-defense", "macro", "margin-of-safety", "market-proxy-observation", "relative-performance", "missing-data",
         "news", "price", "quote", "recovery", "research-evidence", "smart-money", "technical",
         "temporal", "trend", "valuation",
     }

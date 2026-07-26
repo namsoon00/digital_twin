@@ -44,6 +44,8 @@ _SYMBOL_PREFIXES = (
     "key-level:",
     "trend-",
     "temporal-",
+    "market-session-phase:",
+    "relative-performance-observation:",
     "liquidity-",
     "slippage-estimate:",
     "smart-money-",

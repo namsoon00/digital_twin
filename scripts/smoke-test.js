@@ -713,7 +713,7 @@ function checkFrontendAdminRender() {
         typedbDatabase: "orbit_alpha_ontology",
         typedbTlsEnabled: "0",
         typedbTimeoutSeconds: "20",
-        temporalWindowPeriods: "1D=1:2\n3D=3:3\n5D=5:4\n20D=20:5",
+        temporalWindowPeriods: "15M=15m:4\n1H=1h:12\nSESSION=session:8\n1D=1d:2\n3D=3d:3\n5D=5d:4\n20D=20d:5",
         temporalWindowHistoryLimit: "96",
         ontologyRuleCandidateAiEnabled: "1",
         ontologyRuleCandidateAiUseCodex: "1",
@@ -2285,7 +2285,7 @@ async function checkNormalMode(port, context) {
   assertOk(Object.prototype.hasOwnProperty.call(settingsPayload.settings, "aiPromptTemplates"), "설정 API에 AI 프롬프트 템플릿 필드가 없습니다.");
   assertOk(Object.prototype.hasOwnProperty.call(settingsPayload.settings, "aiPromptPolicy"), "설정 API에 AI 프롬프트 정책 필드가 없습니다.");
   assertOk(settingsPayload.settings.ontologyRelationRules.indexOf("holding.loss_guard.breakdown.v1") >= 0, "설정 API의 기본 관계 규칙이 비어 있습니다.");
-  assertOk(String(settingsPayload.settings.temporalWindowPeriods || "").indexOf("1D=1:2") >= 0, "설정 API의 기간 판단 구간 기본값이 비어 있습니다.");
+  assertOk(String(settingsPayload.settings.temporalWindowPeriods || "").indexOf("15M=15m:4") >= 0, "설정 API의 장중 기간 판단 구간 기본값이 비어 있습니다.");
   assertOk(String(settingsPayload.settings.temporalWindowHistoryLimit || "") === "96", "설정 API의 기간 히스토리 제한 기본값이 맞지 않습니다.");
   assertOk(settingsPayload.settings.ontologyReasoningUrgentReviewLevels === "act,immediate", "설정 API의 긴급 확인 단계 기본값이 맞지 않습니다.");
   assertOk(settingsPayload.settings.investmentBrainResearchMinimumSourceTrustState === "standard", "설정 API의 최소 출처 신뢰 상태 기본값이 맞지 않습니다.");

@@ -10198,7 +10198,7 @@ relation ontology-assertion,
     owns ontology-delta-pct,
     owns ontology-exposure-ratio,
     owns ontology-position-count;
-""".strip() + "\n\n" + semantic_typeql_schema().strip()
+""".strip() + "\n\n" + semantic_typeql_schema().replace("define\n", "", 1).strip()
 
     def delete_queries(self, boxes: Iterable[str]) -> List[str]:
         queries = []

@@ -135,6 +135,8 @@ RULEBOX_PLATFORM_RELEASE_ADDITION_IDS = {
 # TypeDB reasoning even when the active catalog currently reads aggregate
 # window properties only.
 ABOX_STRUCTURAL_RELATION_TYPES = {
+    "COMPARES_WITH_MARKET_PROXY",
+    "OCCURS_IN_SESSION_PHASE",
     "WINDOW_CONTAINS_OBSERVATION",
     "PRECEDES",
 }

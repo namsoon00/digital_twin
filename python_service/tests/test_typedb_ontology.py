@@ -300,6 +300,7 @@ class TypeDBOntologyRepositoryTests(unittest.TestCase):
         self.assertIn("owns ontology-window-key", schema)
         self.assertNotIn("ontology-temporal-risk-score", schema)
         self.assertNotIn("ontology-temporal-support-score", schema)
+        self.assertEqual(1, len(re.findall(r"(?m)^define\s*$", schema)))
 
     def test_typedb_schema_declares_every_promoted_text_attribute_used_by_nodes(self):
         repository = TypeDBOntologyGraphRepository("127.0.0.1:1729")
@@ -4057,24 +4058,38 @@ class TypeDBOntologyRepositoryTests(unittest.TestCase):
             OntologyEntity("window:000660:5D", "5-day window", "temporal-window", {"ontologyBox": "ABox"}),
             OntologyEntity("observation:000660:first", "First observation", "temporal-observation", {"ontologyBox": "ABox"}),
             OntologyEntity("observation:000660:latest", "Latest observation", "temporal-observation", {"ontologyBox": "ABox"}),
+            OntologyEntity("phase:000660:opening", "Opening phase", "market-session-phase", {"ontologyBox": "ABox"}),
+            OntologyEntity("relative:000660:SOXX", "Relative performance", "relative-performance-observation", {"ontologyBox": "ABox"}),
+            OntologyEntity("proxy:SOXX", "SOXX observation", "market-proxy-observation", {"ontologyBox": "ABox"}),
         ])
         graph.relations.extend([
             OntologyRelation("stock:000660", "window:000660:5D", "HAS_TEMPORAL_WINDOW", properties={"ontologyBox": "ABox"}),
             OntologyRelation("window:000660:5D", "observation:000660:first", "WINDOW_CONTAINS_OBSERVATION", properties={"ontologyBox": "ABox"}),
             OntologyRelation("window:000660:5D", "observation:000660:latest", "WINDOW_CONTAINS_OBSERVATION", properties={"ontologyBox": "ABox"}),
             OntologyRelation("observation:000660:first", "observation:000660:latest", "PRECEDES", properties={"ontologyBox": "ABox"}),
+            OntologyRelation("window:000660:5D", "phase:000660:opening", "OCCURS_IN_SESSION_PHASE", properties={"ontologyBox": "ABox"}),
+            OntologyRelation("stock:000660", "relative:000660:SOXX", "HAS_RELATIVE_PERFORMANCE", properties={"ontologyBox": "ABox"}),
+            OntologyRelation("relative:000660:SOXX", "proxy:SOXX", "COMPARES_WITH_MARKET_PROXY", properties={"ontologyBox": "ABox"}),
         ])
 
         persisted = PortfolioOntologyProjectionRecorder(None).graph_for_graph_store_persistence(
             graph,
-            {"inputRelationTypes": ["HAS_TEMPORAL_WINDOW"]},
+            {"inputRelationTypes": ["HAS_TEMPORAL_WINDOW", "HAS_RELATIVE_PERFORMANCE"]},
         )
 
-        self.assertEqual(4, len(persisted.entities))
+        self.assertEqual(7, len(persisted.entities))
         self.assertEqual(
-            ["HAS_TEMPORAL_WINDOW", "WINDOW_CONTAINS_OBSERVATION", "WINDOW_CONTAINS_OBSERVATION", "PRECEDES"],
-            [item.relation_type for item in persisted.relations],
+            {
+                "HAS_TEMPORAL_WINDOW",
+                "WINDOW_CONTAINS_OBSERVATION",
+                "PRECEDES",
+                "OCCURS_IN_SESSION_PHASE",
+                "HAS_RELATIVE_PERFORMANCE",
+                "COMPARES_WITH_MARKET_PROXY",
+            },
+            {item.relation_type for item in persisted.relations},
         )
+        self.assertEqual(7, len(persisted.relations))
 
     def test_typedb_rule_catalog_migration_removes_shadow_and_fills_known_policy(self):
         bootstrap = rulebox_rules_to_payload(default_graph_inference_rules())

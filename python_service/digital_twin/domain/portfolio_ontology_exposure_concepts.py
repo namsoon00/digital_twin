@@ -275,6 +275,35 @@ def add_market_proxy_universe_concepts(
         add_market_proxy_profile_concepts(graph, portfolio_node_id, profile, quote=quotes.get(profile.symbol))
 
 
+def stock_relative_performance_evidence_usable(position: Position) -> bool:
+    if not str(position.source_as_of or position.updated_at or "").strip():
+        return False
+    state = " ".join([
+        str(position.market_session or ""),
+        str(position.freshness_status or ""),
+        str(position.source_timestamp_state or ""),
+        str(position.data_quality or ""),
+        str(position.quote_status or ""),
+        str(position.quote_message or ""),
+    ]).strip().lower()
+    blocked_tokens = (
+        "closed",
+        "last-close",
+        "last close",
+        "reference",
+        "stale",
+        "cached",
+        "fallback",
+        "expired",
+        "unavailable",
+        "missing",
+        "휴장",
+        "종가",
+        "지연",
+    )
+    return not any(token in state for token in blocked_tokens)
+
+
 def add_stock_market_proxy_context_concepts(
     graph: PortfolioOntology,
     stock_id: str,
@@ -329,11 +358,13 @@ def add_stock_market_proxy_context_concepts(
         clocks_aligned = clock_skew_minutes is not None and clock_skew_minutes <= 15
         stock_change_available = position.change_rate is not None
         proxy_change_available = quote.get("changeRate") not in (None, "")
+        stock_usable = stock_relative_performance_evidence_usable(position)
         proxy_usable = bool(quote.get("judgementEvidenceUsable"))
         comparison_usable = bool(
             stock_change_available
             and proxy_change_available
             and clocks_aligned
+            and stock_usable
             and proxy_usable
         )
         stock_change = number(position.change_rate)
@@ -358,6 +389,8 @@ def add_stock_market_proxy_context_concepts(
                 "proxySourceAsOf": proxy_as_of,
                 "clockSkewMinutes": round(clock_skew_minutes, 2) if clock_skew_minutes is not None else None,
                 "timestampsAligned": clocks_aligned,
+                "stockEvidenceUsable": stock_usable,
+                "proxyEvidenceUsable": proxy_usable,
                 "judgementEvidenceUsable": comparison_usable,
                 "dataState": "sufficient" if comparison_usable else "partial",
                 "reviewLevel": "observe",

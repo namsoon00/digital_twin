@@ -1725,6 +1725,57 @@ class OntologyRuleBoxTests(unittest.TestCase):
             for item in graph.relations
         ))
 
+    def test_market_proxy_relative_performance_blocks_closed_stock_reference(self):
+        position = Position(
+            symbol="MSTR",
+            name="Strategy",
+            market="US",
+            currency="USD",
+            quantity=10,
+            average_price=88,
+            current_price=105,
+            market_value=1050,
+            profit_loss_rate=19.3,
+            change_rate=2.2,
+            sector="디지털자산",
+            updated_at="2026-07-16T00:00:00Z",
+            source_as_of="2026-07-16T00:00:00Z",
+            freshness_status="last-close",
+            market_session="closed",
+            data_quality="reference",
+        )
+        portfolio = portfolio_summary([position], account_cash=10000, fx_rates={"USD": 1400})
+        graph = build_portfolio_ontology(
+            [position],
+            portfolio,
+            portfolio_id="closed-relative-performance",
+            runtime_context={
+                "metadata": {
+                    "marketProxyQuotes": {
+                        "BTC": {
+                            "symbol": "BTC",
+                            "currentPrice": 64000,
+                            "changeRate": -3.2,
+                            "updatedAt": "2026-07-16T00:00:00Z",
+                            "sourceAsOf": "2026-07-16T00:00:00Z",
+                            "judgementEvidenceUsable": True,
+                        }
+                    }
+                }
+            },
+        )
+        relative = next(
+            item
+            for item in graph.entities
+            if item.kind == "relative-performance-observation"
+            and (item.properties or {}).get("proxySymbol") == "BTC"
+        )
+
+        self.assertFalse(relative.properties["stockEvidenceUsable"])
+        self.assertTrue(relative.properties["proxyEvidenceUsable"])
+        self.assertFalse(relative.properties["judgementEvidenceUsable"])
+        self.assertEqual("partial", relative.properties["dataState"])
+
     def test_portfolio_exposure_abox_keeps_raw_currency_and_sector_facts(self):
         position = Position(
             symbol="MSTR",

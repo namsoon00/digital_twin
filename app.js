@@ -23824,7 +23824,7 @@
         renderSettingField("ontologyReasoningQueueConsecutiveObservations", "지연 연속 확인 횟수", "number", "3"),
         renderSettingField("ontologyReasoningQueueAlertReminderMinutes", "지연 운영 알림 재전송(분)", "number", "60"),
         renderSettingField("temporalWindowHistoryLimit", "기간 판단 히스토리 수", "number", "96"),
-        '<label><span>기간 판단 구간</span><div class="form-control-shell"><textarea data-setting="temporalWindowPeriods" rows="4" autocomplete="off" placeholder="1D=1:2">' + escapeHtml(settingValue("temporalWindowPeriods") || defaultSettings.temporalWindowPeriods) + '</textarea></div></label>'
+        '<label><span>기간 판단 구간</span><div class="form-control-shell"><textarea data-setting="temporalWindowPeriods" rows="7" autocomplete="off" placeholder="15M=15m:4">' + escapeHtml(settingValue("temporalWindowPeriods") || defaultSettings.temporalWindowPeriods) + '</textarea></div></label>'
       ].join(""), "gate feed-wide"),
       renderSettingsGroup("변화 게이트", "실제 가격·추세·거래량 변화와 뉴스 상태가 알림 후보로 들어가는 조건입니다.", [
         renderSettingSelect("materialityGateEnabled", "중요 변경 게이트", [

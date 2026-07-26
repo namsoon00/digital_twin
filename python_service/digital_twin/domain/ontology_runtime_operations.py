@@ -15,6 +15,7 @@ from typing import Dict, Iterable, List, Mapping
 ONTOLOGY_RUNTIME_OBSERVATION_VERSION = "ontology-runtime-observation-v1"
 NATIVE_RULE_TIMING_PROFILE_VERSION = "typedb-native-rule-timing-v1"
 NATIVE_REPLAY_VALIDATION_VERSION = "typedb-native-replay-validation-v1"
+SCOPED_ABOX_MAINTENANCE_POLICY_VERSION = "typedb-scoped-abox-maintenance-policy-v1"
 
 
 def _text(value: object) -> str:
@@ -42,7 +43,8 @@ def _setting_number(
     minimum: float,
     maximum: float,
 ) -> float:
-    value = _number((settings or {}).get(key), fallback)
+    raw_value = (settings or {}).get(key)
+    value = fallback if raw_value in (None, "") else _number(raw_value, fallback)
     return max(minimum, min(maximum, value))
 
 
@@ -84,6 +86,127 @@ def runtime_slo_policy(settings: Mapping[str, object] = None) -> Dict[str, objec
             5,
             500,
         )),
+    }
+
+
+def scoped_abox_maintenance_policy(settings: Mapping[str, object] = None) -> Dict[str, object]:
+    """Return bounded retention policy for immutable scoped ABox manifests.
+
+    These are operational limits, not RuleBox thresholds.  They control how
+    quickly obsolete immutable manifest generations are reclaimed after their
+    active replacement has passed native inference verification.
+    """
+
+    configured = settings or {}
+    warning_count = _integer(_setting_number(
+        configured,
+        "ontologyAboxMaintenanceWarningInactiveManifestCount",
+        40,
+        1,
+        20000,
+    ))
+    critical_count = max(
+        warning_count + 1,
+        _integer(_setting_number(
+            configured,
+            "ontologyAboxMaintenanceCriticalInactiveManifestCount",
+            120,
+            2,
+            50000,
+        )),
+    )
+    return {
+        "version": SCOPED_ABOX_MAINTENANCE_POLICY_VERSION,
+        "intervalSeconds": _integer(_setting_number(
+            configured,
+            "ontologyAboxMaintenanceIntervalSeconds",
+            60,
+            15,
+            3600,
+        )),
+        "maxManifestsPerRun": _integer(_setting_number(
+            configured,
+            "ontologyAboxMaintenanceMaxManifestsPerRun",
+            8,
+            1,
+            10,
+        )),
+        "maxDeleteBatchesPerRun": _integer(_setting_number(
+            configured,
+            "ontologyAboxMaintenanceMaxDeleteBatchesPerRun",
+            2,
+            1,
+            50,
+        )),
+        "deleteBatchSize": _integer(_setting_number(
+            configured,
+            "ontologyAboxMaintenanceDeleteBatchSize",
+            50,
+            10,
+            500,
+        )),
+        "keepInactiveManifestCount": _integer(_setting_number(
+            configured,
+            "ontologyAboxMaintenanceKeepInactiveManifestCount",
+            0,
+            0,
+            5,
+        )),
+        "warningInactiveManifestCount": warning_count,
+        "criticalInactiveManifestCount": critical_count,
+    }
+
+
+def scoped_abox_maintenance_health(
+    storage: Mapping[str, object] = None,
+    policy: Mapping[str, object] = None,
+) -> Dict[str, object]:
+    """Classify scoped ABox retention without affecting investment inference."""
+
+    values = dict(storage or {}) if isinstance(storage, Mapping) else {}
+    resolved_policy = dict(policy or {}) if isinstance(policy, Mapping) else scoped_abox_maintenance_policy()
+    storage_status = _text(values.get("status") or "ok").lower()
+    inactive_count = max(0, _integer(values.get("inactiveManifestCount")))
+    warning_count = max(1, _integer(resolved_policy.get("warningInactiveManifestCount") or 40))
+    critical_count = max(warning_count + 1, _integer(
+        resolved_policy.get("criticalInactiveManifestCount") or 120
+    ))
+    if storage_status in {"error", "disabled", "driver-missing", "unavailable"}:
+        return {
+            "status": "warning",
+            "state": "unavailable",
+            "inactiveManifestCount": inactive_count,
+            "warningInactiveManifestCount": warning_count,
+            "criticalInactiveManifestCount": critical_count,
+            "drainRequired": False,
+            "recommendedMaxManifests": 0,
+            "reason": "Scoped ABox retention inventory is unavailable.",
+        }
+    if inactive_count >= critical_count:
+        state = "critical"
+        reason = "Inactive scoped ABox manifests exceeded the critical retention backlog threshold."
+    elif inactive_count >= warning_count:
+        state = "warning"
+        reason = "Inactive scoped ABox manifests exceeded the warning retention backlog threshold."
+    elif inactive_count:
+        state = "draining"
+        reason = "Inactive scoped ABox manifests are waiting for bounded background retention."
+    else:
+        state = "ok"
+        reason = "No inactive scoped ABox manifest requires retention."
+    return {
+        "status": "ok" if state in {"ok", "draining"} else state,
+        "state": state,
+        "inactiveManifestCount": inactive_count,
+        "warningInactiveManifestCount": warning_count,
+        "criticalInactiveManifestCount": critical_count,
+        "drainRequired": inactive_count > 0,
+        "recommendedMaxManifests": (
+            max(1, _integer(resolved_policy.get("maxManifestsPerRun") or 1))
+            if inactive_count
+            else 0
+        ),
+        "reason": reason,
     }
 
 

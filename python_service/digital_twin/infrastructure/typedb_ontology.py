@@ -4768,8 +4768,16 @@ class ScopedABoxManifestMixin:
         manifest_id: str,
         protected_generation_ids: Iterable[str] = None,
         world_id: str = "",
+        max_delete_batches: int = None,
+        delete_batch_size: int = None,
     ) -> Dict[str, object]:
-        """Delete a non-active Manifest and only generations no other Manifest needs."""
+        """Delete a non-active Manifest and only generations no other Manifest needs.
+
+        A bounded deletion may leave the Manifest marker in place. That is
+        intentional: the next retention pass resumes the same immutable
+        candidate, and the marker is removed only after all of its unshared
+        scope generations have been reclaimed.
+        """
         clean_manifest_id = str(manifest_id or "").strip()
         metadata = self.scoped_manifest_metadata(clean_manifest_id, world_id)
         if str(metadata.get("status") or "") != "ok":
@@ -4800,6 +4808,34 @@ class ScopedABoxManifestMixin:
         deleted_batches = 0
         removed_generations = []
         retained_generations = []
+        scope_cleanup_rows = []
+        remaining_batch_budget = (
+            None
+            if max_delete_batches is None
+            else max(0, min(1000, int(max_delete_batches or 0)))
+        )
+        bounded_delete_batch_size = (
+            self.deferred_maintenance_abox_delete_batch_size()
+            if delete_batch_size is None
+            else max(10, min(500, int(delete_batch_size or 0)))
+        )
+
+        def delete_snapshot(snapshot_id: str) -> Dict[str, object]:
+            nonlocal deleted_batches, remaining_batch_budget
+            cleanup = self.delete_box_snapshot_rows_in_batches(
+                driver,
+                imported,
+                "ABox",
+                snapshot_id,
+                batch_size=bounded_delete_batch_size,
+                max_batches=remaining_batch_budget,
+            )
+            deleted = int(number_or_none(cleanup.get("deletedBatchCount")) or 0)
+            deleted_batches += deleted
+            if remaining_batch_budget is not None:
+                remaining_batch_budget = max(0, remaining_batch_budget - deleted)
+            return cleanup
+
         for generation_id in sorted({
             str(item or "").strip()
             for item in dict(metadata.get("scopeGenerationIds") or {}).values()
@@ -4808,18 +4844,84 @@ class ScopedABoxManifestMixin:
             if generation_id in protected:
                 retained_generations.append(generation_id)
                 continue
-            cleanup = self.delete_box_snapshot_rows_in_batches(driver, imported, "ABox", generation_id)
-            deleted_batches += int(number_or_none(cleanup.get("deletedBatchCount")) or 0)
+            # Once a physical delete has spent the per-run budget, do not
+            # keep opening read/delete transactions for later scopes merely
+            # to discover the same limit. The immutable Manifest marker stays
+            # intact and the next background pass resumes from this scope.
+            if remaining_batch_budget is not None and remaining_batch_budget <= 0:
+                return {
+                    "status": "partial",
+                    "aboxSnapshotId": clean_manifest_id,
+                    "worldviewManifestId": clean_manifest_id,
+                    "removedScopeGenerationIds": removed_generations,
+                    "retainedSharedScopeGenerationIds": retained_generations,
+                    "deferredScopeGenerationIds": [generation_id],
+                    "scopeCleanup": scope_cleanup_rows,
+                    "deletedBatchCount": deleted_batches,
+                    "maxDeleteBatches": max_delete_batches,
+                    "deleteBatchSize": bounded_delete_batch_size,
+                    "remainingDeleteBatchBudget": remaining_batch_budget,
+                    "reason": "Scoped Manifest retention will resume after the bounded delete batch budget.",
+                }
+            cleanup = delete_snapshot(generation_id)
+            scope_cleanup_rows.append(cleanup)
+            if str(cleanup.get("status") or "") != "ok":
+                return {
+                    "status": "partial" if str(cleanup.get("status") or "") == "partial" else str(cleanup.get("status") or "error"),
+                    "aboxSnapshotId": clean_manifest_id,
+                    "worldviewManifestId": clean_manifest_id,
+                    "removedScopeGenerationIds": removed_generations,
+                    "retainedSharedScopeGenerationIds": retained_generations,
+                    "scopeCleanup": scope_cleanup_rows,
+                    "deletedBatchCount": deleted_batches,
+                    "maxDeleteBatches": max_delete_batches,
+                    "deleteBatchSize": bounded_delete_batch_size,
+                    "remainingDeleteBatchBudget": remaining_batch_budget,
+                    "reason": "Scoped Manifest retention will resume after the bounded delete batch budget.",
+                }
             removed_generations.append(generation_id)
-        marker_cleanup = self.delete_box_snapshot_rows_in_batches(driver, imported, "ABox", clean_manifest_id)
-        deleted_batches += int(number_or_none(marker_cleanup.get("deletedBatchCount")) or 0)
+        if remaining_batch_budget is not None and remaining_batch_budget <= 0:
+            return {
+                "status": "partial",
+                "aboxSnapshotId": clean_manifest_id,
+                "worldviewManifestId": clean_manifest_id,
+                "removedScopeGenerationIds": removed_generations,
+                "retainedSharedScopeGenerationIds": retained_generations,
+                "scopeCleanup": scope_cleanup_rows,
+                "deletedBatchCount": deleted_batches,
+                "maxDeleteBatches": max_delete_batches,
+                "deleteBatchSize": bounded_delete_batch_size,
+                "remainingDeleteBatchBudget": remaining_batch_budget,
+                "reason": "Scoped Manifest marker retention will resume after the bounded delete batch budget.",
+            }
+        marker_cleanup = delete_snapshot(clean_manifest_id)
+        if str(marker_cleanup.get("status") or "") != "ok":
+            return {
+                "status": "partial" if str(marker_cleanup.get("status") or "") == "partial" else str(marker_cleanup.get("status") or "error"),
+                "aboxSnapshotId": clean_manifest_id,
+                "worldviewManifestId": clean_manifest_id,
+                "removedScopeGenerationIds": removed_generations,
+                "retainedSharedScopeGenerationIds": retained_generations,
+                "scopeCleanup": scope_cleanup_rows,
+                "markerCleanup": marker_cleanup,
+                "deletedBatchCount": deleted_batches,
+                "maxDeleteBatches": max_delete_batches,
+                "deleteBatchSize": bounded_delete_batch_size,
+                "remainingDeleteBatchBudget": remaining_batch_budget,
+                "reason": "Scoped Manifest marker retention will resume after the bounded delete batch budget.",
+            }
         return {
             "status": "ok",
             "aboxSnapshotId": clean_manifest_id,
             "worldviewManifestId": clean_manifest_id,
             "removedScopeGenerationIds": removed_generations,
             "retainedSharedScopeGenerationIds": retained_generations,
+            "scopeCleanup": scope_cleanup_rows,
+            "markerCleanup": marker_cleanup,
             "deletedBatchCount": deleted_batches,
+            "maxDeleteBatches": max_delete_batches,
+            "deleteBatchSize": bounded_delete_batch_size,
+            "remainingDeleteBatchBudget": remaining_batch_budget,
         }
 
     def discard_scoped_abox_manifest(self, manifest_id: str, world_id: str = "") -> Dict[str, object]:
@@ -4860,6 +4962,8 @@ class ScopedABoxManifestMixin:
         active_manifest_id: str = "",
         keep_inactive_count: int = None,
         max_manifests: int = None,
+        max_delete_batches: int = None,
+        delete_batch_size: int = None,
         world_id: str = "",
     ) -> Dict[str, object]:
         """Prune immutable Manifests without deleting generations still referenced.
@@ -4895,6 +4999,16 @@ class ScopedABoxManifestMixin:
             if max_manifests is None
             else max(0, min(10, int(max_manifests or 0)))
         )
+        max_batch_count = (
+            self.deferred_maintenance_abox_max_delete_batches()
+            if max_delete_batches is None
+            else max(1, min(50, int(max_delete_batches or 1)))
+        )
+        bounded_delete_batch_size = (
+            self.deferred_maintenance_abox_delete_batch_size()
+            if delete_batch_size is None
+            else max(10, min(500, int(delete_batch_size or 0)))
+        )
         manifests: Dict[str, Dict[str, object]] = {}
         for marker in self.worldview_manifest_marker_rows(world_id):
             metadata = self.scoped_abox_metadata_from_manifest_marker(marker)
@@ -4929,7 +5043,10 @@ class ScopedABoxManifestMixin:
         removed = []
         deleted_batches = 0
         cleanup_rows = []
+        remaining_batch_budget = max_batch_count
         for metadata in removable:
+            if remaining_batch_budget <= 0:
+                break
             manifest_id = str(metadata.get("worldviewManifestId") or metadata.get("aboxSnapshotId") or "").strip()
             if not manifest_id:
                 continue
@@ -4939,17 +5056,30 @@ class ScopedABoxManifestMixin:
                 manifest_id,
                 protected_generation_ids=protected_generation_ids,
                 world_id=world_id,
+                max_delete_batches=remaining_batch_budget,
+                delete_batch_size=bounded_delete_batch_size,
             )
             cleanup_rows.append(cleanup)
+            deleted = int(number_or_none(cleanup.get("deletedBatchCount")) or 0)
+            deleted_batches += deleted
+            remaining_batch_budget = max(0, remaining_batch_budget - deleted)
             if str(cleanup.get("status") or "") == "ok":
                 removed.append(manifest_id)
-                deleted_batches += int(number_or_none(cleanup.get("deletedBatchCount")) or 0)
+            if str(cleanup.get("status") or "") == "partial":
+                break
+        cleanup_partial = any(
+            str(item.get("status") or "") != "ok"
+            for item in cleanup_rows
+        )
         return {
-            "status": "ok",
+            "status": "partial" if cleanup_partial else "ok",
             "persistenceMode": SCOPED_ABOX_PERSISTENCE_MODE,
             "activeAboxSnapshotId": active_id,
             "keepInactiveManifestCount": keep_count,
             "maxManifestsPerRun": max_count,
+            "maxDeleteBatches": max_batch_count,
+            "deleteBatchSize": bounded_delete_batch_size,
+            "remainingDeleteBatchBudget": remaining_batch_budget,
             "completedInactiveManifestCount": len(ordered),
             "retainedInactiveManifestIds": [
                 str(item.get("worldviewManifestId") or item.get("aboxSnapshotId") or "")
@@ -4966,6 +5096,8 @@ class ScopedABoxManifestMixin:
         world_id: str = "",
         keep_inactive_count: int = None,
         max_manifests: int = None,
+        max_delete_batches: int = None,
+        delete_batch_size: int = None,
     ) -> Dict[str, object]:
         """Run one bounded, reference-aware scoped ABox maintenance pass."""
         imported = self.driver_imports()
@@ -4991,6 +5123,8 @@ class ScopedABoxManifestMixin:
                         ),
                         keep_inactive_count=keep_inactive_count,
                         max_manifests=max_manifests,
+                        max_delete_batches=max_delete_batches,
+                        delete_batch_size=delete_batch_size,
                         world_id=world_id,
                     )
                 finally:
@@ -5042,6 +5176,26 @@ class ScopedABoxManifestMixin:
             self.deferred_maintenance_abox_max_manifests()
             if requested_manifest_limit is None
             else max(1, min(10, int(requested_manifest_limit)))
+        )
+        requested_delete_batch_limit = number_or_none(
+            options.get("maxAboxDeleteBatches")
+            if options.get("maxAboxDeleteBatches") is not None
+            else options.get("maxDeleteBatches")
+        )
+        maintenance_delete_batch_limit = (
+            self.deferred_maintenance_abox_max_delete_batches()
+            if requested_delete_batch_limit is None
+            else max(1, min(50, int(requested_delete_batch_limit)))
+        )
+        requested_delete_batch_size = number_or_none(
+            options.get("aboxDeleteBatchSize")
+            if options.get("aboxDeleteBatchSize") is not None
+            else options.get("deleteBatchSize")
+        )
+        maintenance_delete_batch_size = (
+            self.deferred_maintenance_abox_delete_batch_size()
+            if requested_delete_batch_size is None
+            else max(10, min(500, int(requested_delete_batch_size)))
         )
         requested_keep_inactive = number_or_none(
             options.get("keepInactiveManifests")
@@ -5137,14 +5291,33 @@ class ScopedABoxManifestMixin:
                 "durationMs": int((time.perf_counter() - started_at) * 1000),
             }
         try:
-            orphan_result = self.prune_orphan_scoped_abox_candidates(
-                requested_world_id,
-                max_generation_count=maintenance_orphan_limit,
+            # Orphan candidates are a separate repair concern. Treating the
+            # default zero as the adapter's "delete four" default made a
+            # normal manifest-retention pass perform an unrelated, expensive
+            # scan and deletion before it could reclaim one retired Manifest.
+            # Only an explicit repair request may spend this maintenance slot
+            # on orphan generations.
+            orphan_result = (
+                self.prune_orphan_scoped_abox_candidates(
+                    requested_world_id,
+                    max_generation_count=maintenance_orphan_limit,
+                )
+                if maintenance_orphan_limit > 0
+                else {
+                    "configured": True,
+                    "status": "not-requested",
+                    "graphStore": "typedb",
+                    "worldId": requested_world_id,
+                    "reason": "Routine scoped ABox retention skips orphan-candidate repair.",
+                    "maxGenerationCount": 0,
+                }
             )
             abox_result = self.prune_inactive_scoped_abox_manifests(
                 requested_world_id,
                 keep_inactive_count=maintenance_keep_inactive,
                 max_manifests=maintenance_manifest_limit,
+                max_delete_batches=maintenance_delete_batch_limit,
+                delete_batch_size=maintenance_delete_batch_size,
             )
             legacy_result: Dict[str, object] = {
                 "status": "not-required",
@@ -5217,7 +5390,9 @@ class ScopedABoxManifestMixin:
                 "worldId": requested_world_id,
                 "maintenanceMode": "legacy-global" if not requested_world_id else "world-scoped",
                 "maxInactiveManifests": maintenance_manifest_limit,
-                "maxOrphanGenerations": maintenance_orphan_limit or self.scoped_abox_orphan_cleanup_max_generations(),
+                "maxAboxDeleteBatches": maintenance_delete_batch_limit,
+                "aboxDeleteBatchSize": maintenance_delete_batch_size,
+                "maxOrphanGenerations": maintenance_orphan_limit,
                 "orphanScopedAbox": orphan_result,
                 "abox": abox_result,
                 "legacyAbox": legacy_result,
@@ -8071,6 +8246,27 @@ class TypeDBOntologyGraphRepository(GraphStoreOntologyRowMapperMixin, ScopedABox
         if parsed is None:
             parsed = 10
         return max(1, min(10, int(parsed)))
+
+    def deferred_maintenance_abox_max_delete_batches(self, settings: Dict[str, object] = None) -> int:
+        """Bound physical TypeDB deletes independently from Manifest count.
+
+        One immutable Manifest can own several scope generations and each
+        generation can require many TypeDB delete transactions. This budget
+        is the real latency guard for a low-priority retention pass.
+        """
+        raw = (settings or runtime_settings()).get("ontologyAboxMaintenanceMaxDeleteBatchesPerRun")
+        parsed = number_or_none(raw)
+        if parsed is None:
+            parsed = 2
+        return max(1, min(50, int(parsed)))
+
+    def deferred_maintenance_abox_delete_batch_size(self, settings: Dict[str, object] = None) -> int:
+        """Use short deletes for deferred retention, independent of ABox replacement."""
+        raw = (settings or runtime_settings()).get("ontologyAboxMaintenanceDeleteBatchSize")
+        parsed = number_or_none(raw)
+        if parsed is None:
+            return self.abox_incremental_cleanup_batch_size(settings)
+        return max(10, min(500, int(parsed)))
 
     def abox_write_transaction_query_count(self, settings: Dict[str, object] = None) -> int:
         raw = (settings or runtime_settings()).get("typedbABoxWriteTransactionQueryCount")

@@ -1254,11 +1254,11 @@ class TypeDBOntologyRepositoryTests(unittest.TestCase):
             repository,
             "prune_orphan_scoped_abox_candidates",
             return_value={"status": "ok", "removedGenerationIds": []},
-        ), patch.object(
+        ) as prune_orphans, patch.object(
             repository,
             "prune_inactive_scoped_abox_manifests",
             return_value={"status": "ok", "removedManifestIds": ["abox-manifest:old"]},
-        ), patch.object(repository, "list_ontology_worlds", return_value=[]), patch.object(
+        ) as prune_abox, patch.object(repository, "list_ontology_worlds", return_value=[]), patch.object(
             repository,
             "active_abox_metadata",
             return_value={},
@@ -1271,12 +1271,90 @@ class TypeDBOntologyRepositoryTests(unittest.TestCase):
             "prune_inferencebox_generations",
             return_value={"status": "ok", "deletedGenerationCount": 2},
         ) as prune_inference:
-            result = repository.run_deferred_maintenance()
+            result = repository.run_deferred_maintenance({"aboxDeleteBatchSize": 25})
 
         self.assertEqual("ok", result["status"])
+        self.assertEqual("not-requested", result["orphanScopedAbox"]["status"])
         self.assertEqual("ok", result["abox"]["status"])
         self.assertEqual("ok", result["inference"]["status"])
+        prune_orphans.assert_not_called()
+        self.assertEqual(2, prune_abox.call_args.kwargs["max_delete_batches"])
+        self.assertEqual(25, prune_abox.call_args.kwargs["delete_batch_size"])
         prune_inference.assert_called_once_with("inference:active", keep_count=2)
+
+    def test_scoped_manifest_retention_stops_at_delete_batch_budget(self):
+        repository = TypeDBOntologyGraphRepository("127.0.0.1:1729")
+        metadata = {
+            "status": "ok",
+            "worldviewManifestId": "abox-manifest:old",
+            "scopeGenerationIds": {"symbol:TSLA": "scope:old"},
+        }
+        partial_cleanup = {
+            "status": "partial",
+            "aboxSnapshotId": "scope:old",
+            "deletedBatchCount": 2,
+            "remainingRowTypes": ["ontology-assertion"],
+        }
+        with patch.object(repository, "scoped_manifest_metadata", return_value=metadata), patch.object(
+            repository,
+            "active_abox_metadata",
+            return_value={"status": "ok", "worldviewManifestId": "abox-manifest:active", "scopeGenerationIds": {}},
+        ), patch.object(
+            repository,
+            "delete_box_snapshot_rows_in_batches",
+            return_value=partial_cleanup,
+        ) as delete_rows:
+            result = repository.discard_scoped_abox_manifest_in_driver(
+                object(),
+                (object, object, object, object, object),
+                "abox-manifest:old",
+                max_delete_batches=2,
+                delete_batch_size=25,
+            )
+
+        self.assertEqual("partial", result["status"])
+        self.assertEqual(2, result["deletedBatchCount"])
+        self.assertEqual(0, result["remainingDeleteBatchBudget"])
+        self.assertEqual(2, delete_rows.call_args.kwargs["max_batches"])
+        self.assertEqual(25, delete_rows.call_args.kwargs["batch_size"])
+
+    def test_scoped_manifest_retention_does_not_scan_later_scopes_after_batch_budget(self):
+        repository = TypeDBOntologyGraphRepository("127.0.0.1:1729")
+        metadata = {
+            "status": "ok",
+            "worldviewManifestId": "abox-manifest:old",
+            "scopeGenerationIds": {
+                "symbol:one": "scope:one",
+                "symbol:two": "scope:two",
+            },
+        }
+        completed_cleanup = {
+            "status": "ok",
+            "aboxSnapshotId": "scope:one",
+            "deletedBatchCount": 2,
+            "remainingRowTypes": [],
+        }
+        with patch.object(repository, "scoped_manifest_metadata", return_value=metadata), patch.object(
+            repository,
+            "active_abox_metadata",
+            return_value={"status": "ok", "worldviewManifestId": "abox-manifest:active", "scopeGenerationIds": {}},
+        ), patch.object(
+            repository,
+            "delete_box_snapshot_rows_in_batches",
+            return_value=completed_cleanup,
+        ) as delete_rows:
+            result = repository.discard_scoped_abox_manifest_in_driver(
+                object(),
+                (object, object, object, object, object),
+                "abox-manifest:old",
+                max_delete_batches=2,
+                delete_batch_size=50,
+            )
+
+        self.assertEqual("partial", result["status"])
+        self.assertEqual(["scope:one"], result["removedScopeGenerationIds"])
+        self.assertEqual(["scope:two"], result["deferredScopeGenerationIds"])
+        self.assertEqual(1, delete_rows.call_count)
 
     def test_deferred_maintenance_can_be_scoped_to_portfolio_worlds(self):
         repository = TypeDBOntologyGraphRepository("127.0.0.1:1729")
@@ -5000,7 +5078,10 @@ class TypeDBOntologyRepositoryTests(unittest.TestCase):
         try:
             result = recorder.record_snapshot(snapshot)
             elapsed = time.monotonic() - started
-            self.assertLess(elapsed, 1.5)
+            # The synchronous slow paths wait for two seconds. Leave modest
+            # scheduler headroom for the full suite while still proving the
+            # recorder returns before either deferred path can complete.
+            self.assertLess(elapsed, 1.75)
             self.assertEqual("queued-coalesced-market-world-projection", result["marketWorld"]["status"])
             self.assertTrue(result["marketWorld"]["eventuallyConsistent"])
             self.assertEqual("queued-coalesced-quality-record", result["qualityRecord"]["status"])

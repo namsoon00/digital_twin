@@ -135,7 +135,53 @@ class OntologyValidatorTests(unittest.TestCase):
         self.assertTrue(coverage_gaps)
         self.assertIn("externalEvidence", coverage_gaps[0].properties["missingCategories"])
         self.assertTrue(coverage_relations)
+        self.assertFalse(any(
+            item.relation_type == "HAS_DATA_QUALITY" and item.target == coverage_gaps[0].entity_id
+            for item in graph.relations
+        ))
         self.assertEqual("CoverageGap", coverage_gaps[0].properties["tboxClass"])
+        self.assertEqual("valid", validate_ontology(graph).status)
+
+    def test_shared_macro_context_avoids_a_false_stock_coverage_gap(self):
+        position = Position(
+            symbol="000660",
+            name="SK하이닉스",
+            market="KR",
+            currency="KRW",
+            market_value=1000000,
+            quantity=1,
+            current_price=1000000,
+            ma20=980000,
+            ma60=960000,
+            sector="기타 제조업",
+        )
+        graph = build_portfolio_ontology(
+            [position],
+            portfolio_summary([position], fx_rates={"KRW": 1}),
+            external_signals={
+                "macro": {
+                    "series": {"DGS10": {"provider": "FRED", "value": 4.56}},
+                    "yieldSpread10y2y": 0.35,
+                },
+                "fxRates": {
+                    "USDKRW": {
+                        "provider": "RuntimeSettings",
+                        "base": "USD",
+                        "quote": "KRW",
+                        "rate": 1400,
+                    },
+                },
+            },
+        )
+
+        coverage_gaps = [item for item in graph.entities if item.kind == "coverage-gap"]
+
+        self.assertTrue(coverage_gaps)
+        self.assertTrue(all(
+            "macroRegime" not in list((item.properties or {}).get("missingCategories") or [])
+            for item in coverage_gaps
+        ))
+        self.assertFalse(any(item.relation_type == "HAS_MACRO_REGIME" for item in graph.relations))
         self.assertEqual("valid", validate_ontology(graph).status)
 
     def test_portfolio_ontology_materializes_crypto_macro_and_valuation_contexts(self):

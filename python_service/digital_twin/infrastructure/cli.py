@@ -40,6 +40,7 @@ from .service_factory import (
     build_notification_queue_runner,
     build_official_calendar_sync_service,
     build_ontology_lab_service,
+    build_ontology_maintenance_runner,
     build_ontology_reasoning_runner,
     build_ontology_world_projection_runner,
     build_rule_change_candidate_service,
@@ -58,6 +59,7 @@ from .schedulers import (
     NotificationQueueScheduler,
     IsolatedOntologyReasoningCycle,
     OntologyLabScheduler,
+    OntologyMaintenanceScheduler,
     OntologyReasoningScheduler,
     OntologyWorldProjectionScheduler,
     RealtimeScheduler,
@@ -419,6 +421,39 @@ def ontology_world_projection_command(args) -> int:
                 working_directory=str(project_root),
             )
         OntologyWorldProjectionScheduler(runner, interval, isolated_cycle=isolated_cycle).run_forever(limit=limit)
+        return 0
+    return 1
+
+
+def ontology_maintenance_command(args) -> int:
+    settings = runtime_settings()
+    runner = build_ontology_maintenance_runner(settings)
+    if args.ontology_maintenance_action == "status":
+        print(json.dumps(runner.status(), ensure_ascii=False))
+        return 0
+    if args.ontology_maintenance_action == "once":
+        print(json.dumps(runner.run_once(), ensure_ascii=False))
+        return 0
+    if args.ontology_maintenance_action == "watch":
+        interval = int(
+            os.environ.get("ONTOLOGY_ABOX_MAINTENANCE_INTERVAL_SECONDS")
+            or settings.get("ontologyAboxMaintenanceIntervalSeconds")
+            or runner.interval_seconds()
+        )
+        isolated_cycle = None
+        if runner.process_isolation_enabled():
+            project_root = Path(__file__).resolve().parents[3]
+            isolated_cycle = IsolatedOntologyReasoningCycle(
+                [
+                    sys.executable,
+                    "-u",
+                    str(project_root / "python_service" / "service.py"),
+                    "ontology-maintenance",
+                    "once",
+                ],
+                working_directory=str(project_root),
+            )
+        OntologyMaintenanceScheduler(runner, interval, isolated_cycle=isolated_cycle).run_forever()
         return 0
     return 1
 
@@ -1059,6 +1094,19 @@ def build_parser() -> argparse.ArgumentParser:
     ontology_world_projection_retry.add_argument("--limit", default="")
     ontology_world_projection_actions.add_parser("status")
     ontology_world_projection.set_defaults(func=ontology_world_projection_command)
+
+    ontology_maintenance = subparsers.add_parser(
+        "ontology-maintenance",
+        help="Run bounded background retention for inactive scoped ABox manifests",
+    )
+    ontology_maintenance_actions = ontology_maintenance.add_subparsers(
+        dest="ontology_maintenance_action",
+        required=True,
+    )
+    ontology_maintenance_actions.add_parser("once")
+    ontology_maintenance_actions.add_parser("watch")
+    ontology_maintenance_actions.add_parser("status")
+    ontology_maintenance.set_defaults(func=ontology_maintenance_command)
 
     ontology = subparsers.add_parser("ontology", help="Manage ontology graph projection")
     ontology_actions = ontology.add_subparsers(dest="ontology_action", required=True)

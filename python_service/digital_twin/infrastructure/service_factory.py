@@ -44,6 +44,7 @@ from ..application.notification_service import (
 )
 from ..application.official_calendar_sync_service import OfficialCalendarSyncService
 from ..application.ontology_reasoning_service import OntologyReasoningRunner
+from ..application.ontology_maintenance_service import OntologyMaintenanceRunner
 from ..application.ontology_world_projection_service import OntologyWorldProjectionRunner
 from ..application.ontology_lab_service import OntologyLabService
 from ..application.ontology_rule_candidate_service import RuleChangeCandidateProposalService
@@ -608,6 +609,17 @@ def build_ontology_world_projection_runner(settings=None) -> OntologyWorldProjec
     )
 
 
+def build_ontology_maintenance_runner(settings=None) -> OntologyMaintenanceRunner:
+    """Build the isolated, low-priority scoped ABox retention worker."""
+
+    configured_settings = settings or runtime_settings()
+    return OntologyMaintenanceRunner(
+        ontology_repository=ontology_repository_from_settings(configured_settings),
+        state_store=stores.ontology_maintenance_state_store(configured_settings),
+        settings=configured_settings,
+    )
+
+
 def build_ontology_reasoning_runner(settings=None, event_publisher=None) -> OntologyReasoningRunner:
     configured_settings = settings or runtime_settings()
     reasoning_store_settings = dict(configured_settings)
@@ -672,17 +684,20 @@ def build_ontology_reasoning_runner(settings=None, event_publisher=None) -> Onto
             "accounts": rows,
         }
 
-    def portfolio_world_maintenance():
-        maintenance = getattr(ontology_repository, "run_deferred_maintenance", None)
-        if not callable(maintenance):
-            return {
-                "status": "not-supported",
-                "reason": "Graph store has no deferred maintenance adapter.",
-            }
-        # Shared worlds have a dedicated projection worker and writer lease.
-        # The reasoning worker only owns PortfolioWorld retention so an idle
-        # account scan cannot block a MarketWorld or KnowledgeWorld update.
-        return maintenance({"worldTypes": ["portfolio"]})
+    def reasoning_worker_maintenance():
+        """Keep legacy reasoning cadence free of TypeDB physical deletes.
+
+        The dedicated ``ontology-maintenance`` worker owns all immutable ABox
+        retention across portfolio, market, and knowledge worlds.  The
+        reasoning runner still invokes this compatibility hook so it can prune
+        its durable mailbox on the existing cadence, but it must never take
+        the TypeDB writer lease after a live investment projection.
+        """
+        return {
+            "status": "delegated",
+            "maintenanceMode": "dedicated-abox-worker",
+            "reason": "Scoped ABox retention is owned by the ontology-maintenance worker.",
+        }
 
     return OntologyReasoningRunner(
         event_reader=event_log,
@@ -704,7 +719,7 @@ def build_ontology_reasoning_runner(settings=None, event_publisher=None) -> Onto
         research_store=stores.investment_research_store(reasoning_store_settings),
         priority_symbols_provider=lambda: ontology_reasoning_priority_symbols(registry, reasoning_store_settings),
         projection_recovery_probe=projection_recovery_probe,
-        maintenance_runner=portfolio_world_maintenance,
+        maintenance_runner=reasoning_worker_maintenance,
         storage_guard=lambda: typedb_storage_health(configured_settings),
         mailbox_store=stores.ontology_reasoning_mailbox_store(reasoning_store_settings),
         queue_health_service=OntologyReasoningQueueHealthService(

@@ -151,6 +151,8 @@ The `python:service:*` commands run all background workers:
 - investment calendar worker: `data/python-investment-calendar.pid`, `data/python-investment-calendar.log`
 - model review worker: `data/python-model-review.pid`, `data/python-model-review.log`
 - ontology reasoning worker: `data/python-ontology-reasoning.pid`, `data/python-ontology-reasoning.log`
+- ontology shared-world projection worker: `data/python-ontology-world-projection.pid`, `data/python-ontology-world-projection.log`
+- ontology ABox maintenance worker: `data/python-ontology-maintenance.pid`, `data/python-ontology-maintenance.log`
 - ontology lab worker: `data/python-ontology-lab.pid`, `data/python-ontology-lab.log`
 - notification worker: `data/python-notifications.pid`, `data/python-notifications.log`
 - TypeDB graph store: `data/typedb.pid`, `data/typedb.log`, `data/typedb-data/`, `data/typedb-logs/`

@@ -1,0 +1,238 @@
+"""Low-priority, lease-safe retention for immutable TypeDB ABox manifests."""
+
+from typing import Dict, Iterable, List
+
+from ..domain.ontology_runtime_operations import (
+    scoped_abox_maintenance_health,
+    scoped_abox_maintenance_policy,
+)
+from ..domain.portfolio import utc_now_iso
+
+
+DISABLED_VALUES = {"0", "false", "no", "off", "disabled"}
+
+
+def text(value: object) -> str:
+    return str(value or "").strip()
+
+
+def integer(value: object, fallback: int = 0) -> int:
+    if value in (None, ""):
+        return fallback
+    try:
+        return int(float(value or 0))
+    except (TypeError, ValueError):
+        return fallback
+
+
+class OntologyMaintenanceRunner:
+    """Drain one TypeDB ontology world at a time outside investment latency.
+
+    The repository owns the writer lease and performs reference-aware cleanup.
+    This runner only schedules a bounded pass and stores compact operational
+    state in MySQL so restarts continue the round-robin world order.
+    """
+
+    state_contract = "ontology-maintenance-state-v1"
+
+    def __init__(self, ontology_repository, state_store=None, settings: Dict[str, object] = None):
+        self.ontology_repository = ontology_repository
+        self.state_store = state_store
+        self.settings = dict(settings or {})
+
+    def policy(self) -> Dict[str, object]:
+        return scoped_abox_maintenance_policy(self.settings)
+
+    def enabled(self) -> bool:
+        value = text(self.settings.get("ontologyAboxMaintenanceEnabled"))
+        return value.lower() not in DISABLED_VALUES
+
+    def interval_seconds(self) -> int:
+        return max(15, integer(self.policy().get("intervalSeconds"), 60))
+
+    def execution_timeout_seconds(self) -> int:
+        return max(30, min(1800, integer(
+            self.settings.get("ontologyAboxMaintenanceExecutionTimeoutSeconds"),
+            180,
+        )))
+
+    def execution_timeout_grace_seconds(self) -> int:
+        return max(1, min(120, integer(
+            self.settings.get("ontologyAboxMaintenanceExecutionTimeoutGraceSeconds"),
+            10,
+        )))
+
+    def process_isolation_enabled(self) -> bool:
+        value = text(self.settings.get("ontologyAboxMaintenanceProcessIsolationEnabled"))
+        return value.lower() not in DISABLED_VALUES
+
+    def configured_world_types(self) -> set:
+        raw = text(self.settings.get("ontologyAboxMaintenanceWorldTypes") or "portfolio,market,knowledge")
+        return {
+            item.strip().lower()
+            for item in raw.split(",")
+            if item.strip()
+        }
+
+    def state(self) -> Dict[str, object]:
+        if not self.state_store or not hasattr(self.state_store, "load"):
+            return {}
+        try:
+            value = self.state_store.load()
+            return dict(value or {}) if isinstance(value, dict) else {}
+        except Exception:  # noqa: BLE001 - a missing operational audit store must not block cleanup.
+            return {}
+
+    def save_state(self, payload: Dict[str, object]) -> None:
+        if not self.state_store:
+            return
+        writer = getattr(self.state_store, "replace", None)
+        if not callable(writer):
+            writer = getattr(self.state_store, "save", None)
+        if not callable(writer):
+            return
+        writer(dict(payload or {}))
+
+    def worlds(self) -> List[Dict[str, object]]:
+        reader = getattr(self.ontology_repository, "list_ontology_worlds", None)
+        if not callable(reader):
+            return []
+        try:
+            raw = list(reader() or [])
+        except Exception:  # noqa: BLE001 - the caller reports the repository failure in its result.
+            return []
+        allowed_types = self.configured_world_types()
+        rows = []
+        for item in raw:
+            value = dict(item or {}) if isinstance(item, dict) else {}
+            world_id = text(value.get("worldId"))
+            world_type = text(value.get("worldType") or world_id.split(":", 1)[0]).lower()
+            if not world_id or (allowed_types and world_type not in allowed_types):
+                continue
+            rows.append({"worldId": world_id, "worldType": world_type})
+        return sorted(rows, key=lambda item: (item["worldType"], item["worldId"]))
+
+    @staticmethod
+    def next_world(worlds: Iterable[Dict[str, object]], state: Dict[str, object]) -> tuple:
+        rows = list(worlds or [])
+        if not rows:
+            return {}, ""
+        next_id = text((state or {}).get("nextWorldId"))
+        index = next((idx for idx, item in enumerate(rows) if item.get("worldId") == next_id), 0)
+        selected = rows[index]
+        following = rows[(index + 1) % len(rows)]
+        return selected, text(following.get("worldId"))
+
+    def status(self) -> Dict[str, object]:
+        policy = self.policy()
+        state = self.state()
+        worlds = self.worlds()
+        last_result = state.get("lastResult") if isinstance(state.get("lastResult"), dict) else {}
+        return {
+            "contract": self.state_contract,
+            "enabled": self.enabled(),
+            "worldTypes": sorted(self.configured_world_types()),
+            "worldCount": len(worlds),
+            "intervalSeconds": self.interval_seconds(),
+            "processIsolationEnabled": self.process_isolation_enabled(),
+            "executionTimeoutSeconds": self.execution_timeout_seconds(),
+            "policy": policy,
+            "lastRunAt": text(state.get("lastRunAt")),
+            "lastResult": dict(last_result),
+            "nextWorldId": text(state.get("nextWorldId")),
+        }
+
+    def run_once(self) -> Dict[str, object]:
+        policy = self.policy()
+        if not self.enabled():
+            return {"status": "disabled", "contract": self.state_contract, "policy": policy}
+        runner = getattr(self.ontology_repository, "run_deferred_maintenance", None)
+        if not callable(runner):
+            return {
+                "status": "not-supported",
+                "contract": self.state_contract,
+                "policy": policy,
+                "reason": "Graph store has no scoped ABox maintenance adapter.",
+            }
+        worlds = self.worlds()
+        if not worlds:
+            return {
+                "status": "idle",
+                "contract": self.state_contract,
+                "policy": policy,
+                "reason": "No active ontology world matches the maintenance scope.",
+            }
+        previous = self.state()
+        selected, next_world_id = self.next_world(worlds, previous)
+        world_id = text(selected.get("worldId"))
+        try:
+            result = dict(runner({
+                "worldId": world_id,
+                "maxInactiveManifests": integer(policy.get("maxManifestsPerRun"), 1),
+                "maxAboxDeleteBatches": integer(policy.get("maxDeleteBatchesPerRun"), 1),
+                "aboxDeleteBatchSize": integer(policy.get("deleteBatchSize"), 50),
+                "keepInactiveManifests": integer(policy.get("keepInactiveManifestCount"), 0),
+            }) or {})
+        except Exception as error:  # noqa: BLE001 - a maintenance fault must not affect native inference.
+            result = {"status": "error", "reason": str(error)[:220]}
+        result_status = text(result.get("status") or "unknown")
+        abox = result.get("abox") if isinstance(result.get("abox"), dict) else {}
+        inventory_available = bool(abox)
+        inactive_before = max(0, integer(abox.get("completedInactiveManifestCount")))
+        inactive_remaining = max(
+            0,
+            integer(abox.get("remainingInactiveManifestCount"), inactive_before),
+        )
+        removed_manifest_count = len([
+            item for item in abox.get("removedManifestIds") or [] if text(item)
+        ])
+        health = (
+            scoped_abox_maintenance_health({
+                "status": "ok" if result_status not in {"error", "disabled"} else result_status,
+                "inactiveManifestCount": inactive_remaining,
+            }, policy)
+            if inventory_available
+            else {
+                "status": "ok" if result_status == "deferred-write-lease" else "warning",
+                "state": "deferred" if result_status == "deferred-write-lease" else "unavailable",
+                "inactiveManifestCount": None,
+                "warningInactiveManifestCount": integer(policy.get("warningInactiveManifestCount")),
+                "criticalInactiveManifestCount": integer(policy.get("criticalInactiveManifestCount")),
+                "drainRequired": None,
+                "recommendedMaxManifests": 0,
+                "reason": (
+                    "Scoped ABox inventory was not read because a live writer lease has priority."
+                    if result_status == "deferred-write-lease"
+                    else "Scoped ABox retention inventory is unavailable for this maintenance result."
+                ),
+            }
+        )
+        compact = {
+            "status": result_status,
+            "worldId": world_id,
+            "worldType": text(selected.get("worldType")),
+            "inventoryAvailable": inventory_available,
+            "inactiveManifestCountBefore": inactive_before,
+            "inactiveManifestCountRemaining": inactive_remaining,
+            "removedManifestCount": removed_manifest_count,
+            "deletedBatchCount": max(0, integer(abox.get("deletedBatchCount"))),
+            "maxDeleteBatches": max(0, integer(abox.get("maxDeleteBatches"))),
+            "deleteBatchSize": max(0, integer(abox.get("deleteBatchSize"), integer(policy.get("deleteBatchSize"), 50))),
+            "health": health,
+            "reason": text(result.get("reason"))[:220],
+        }
+        self.save_state({
+            "contract": self.state_contract,
+            "lastRunAt": utc_now_iso(),
+            "nextWorldId": next_world_id,
+            "lastResult": compact,
+        })
+        return {
+            "contract": self.state_contract,
+            "status": result_status,
+            "worldId": world_id,
+            "worldType": text(selected.get("worldType")),
+            "policy": policy,
+            "maintenance": compact,
+            "repository": result,
+        }

@@ -9,6 +9,10 @@ from ..domain.notifications import NotificationJob, notification_debug_number
 from ..domain.ontology_inference_ledger import inference_trace_ledger_payload
 from ..domain.portfolio import utc_now_iso
 from ..domain.portfolio_ontology_coverage import CATEGORY_LABELS, CATEGORY_RELATIONS
+from ..domain.ontology_runtime_operations import (
+    scoped_abox_maintenance_health,
+    scoped_abox_maintenance_policy,
+)
 
 
 class OntologyDiagnosticsService:
@@ -23,6 +27,7 @@ class OntologyDiagnosticsService:
         decision_episode_store=None,
         projection_run_store=None,
         world_projection_outbox=None,
+        maintenance_state_store=None,
         runtime_identity_provider=None,
     ):
         self.ontology_repository = ontology_repository
@@ -34,6 +39,7 @@ class OntologyDiagnosticsService:
         self.decision_episode_store = decision_episode_store
         self.projection_run_store = projection_run_store
         self.world_projection_outbox = world_projection_outbox
+        self.maintenance_state_store = maintenance_state_store
         self.runtime_identity_provider = runtime_identity_provider
 
     def status(
@@ -64,6 +70,7 @@ class OntologyDiagnosticsService:
         notification_boundary = self.notification_boundary()
         runtime_observability = self.runtime_observation_boundary(clean_world_id)
         shared_world_projection = self.shared_world_projection_boundary()
+        abox_maintenance = self.abox_maintenance_boundary(abox_storage)
         inference_summary = self.inferencebox_summary(inference)
         latest_runtime_inference = (
             (runtime_observability.get("latest") or {}).get("inference")
@@ -185,6 +192,7 @@ class OntologyDiagnosticsService:
             "tbox": self.tbox_summary(tbox),
             "rulebox": self.rulebox_summary(rulebox),
             "aboxStorage": self.abox_storage_summary(abox_storage),
+            "aboxMaintenance": abox_maintenance,
             "aboxCoverage": abox_coverage,
             "inferenceBox": inference_summary,
             "reasoningBoundary": self.reasoning_boundary(rulebox, inference),
@@ -207,6 +215,43 @@ class OntologyDiagnosticsService:
             return dict(value) if isinstance(value, dict) else {"status": "unavailable"}
         except Exception as error:  # noqa: BLE001 - diagnostics must survive identity lookup failures.
             return {"status": "error", "reason": str(error)[:180]}
+
+    def abox_maintenance_boundary(self, storage: Dict[str, object]) -> Dict[str, object]:
+        """Expose retention backlog separately from investment data coverage."""
+
+        policy = scoped_abox_maintenance_policy(self.settings)
+        storage_payload = dict(storage or {}) if isinstance(storage, dict) else {}
+        health = scoped_abox_maintenance_health({
+            "status": storage_payload.get("status"),
+            "inactiveManifestCount": storage_payload.get("inactiveManifestCount"),
+        }, policy)
+        state = {}
+        if self.maintenance_state_store and hasattr(self.maintenance_state_store, "load"):
+            try:
+                value = self.maintenance_state_store.load()
+                state = dict(value or {}) if isinstance(value, dict) else {}
+            except Exception as error:  # noqa: BLE001 - audit remains available without MySQL state.
+                state = {"status": "error", "reason": str(error)[:180]}
+        last_result = state.get("lastResult") if isinstance(state.get("lastResult"), dict) else {}
+        return {
+            **health,
+            "policy": policy,
+            "storageStatus": str(storage_payload.get("status") or ""),
+            "lastRunAt": str(state.get("lastRunAt") or ""),
+            "nextWorldId": str(state.get("nextWorldId") or ""),
+            "lastResult": self.pick(last_result, [
+                "status",
+                "worldId",
+                "worldType",
+                "inactiveManifestCountBefore",
+                "inactiveManifestCountRemaining",
+                "removedManifestCount",
+                "deletedBatchCount",
+                "maxDeleteBatches",
+                "deleteBatchSize",
+                "reason",
+            ]),
+        }
 
     def decision_performance_boundary(self, symbols: Iterable[str]) -> Dict[str, object]:
         if not self.decision_episode_store or not hasattr(self.decision_episode_store, "performance"):
@@ -693,6 +738,9 @@ class OntologyDiagnosticsService:
                 "contextCoverageRatio": 0.0,
                 "requiredCategories": sorted(CATEGORY_RELATIONS.keys()),
                 "coverageGapCount": 0,
+                "coverageGapCategoryCount": 0,
+                "materializedCoverageGapEntityCount": 0,
+                "materializedCoverageGapRelationCount": 0,
                 "symbols": [],
                 "primarySymbols": [],
                 "contextSymbols": [],
@@ -714,6 +762,7 @@ class OntologyDiagnosticsService:
         relation_types_by_symbol: Dict[str, set] = {}
         relations = []
         relation_count = 0
+        shared_macro_context_available = self.active_abox_macro_context_available(storage_payload)
         topology_reader = getattr(self.ontology_repository, "active_abox_relation_types_by_symbol", None)
         source_entity_reader = getattr(self.ontology_repository, "read_entity_rows_by_ids", None)
         storage_entity_reader = getattr(self.ontology_repository, "read_abox_entity_rows_by_storage_ids", None)
@@ -847,6 +896,9 @@ class OntologyDiagnosticsService:
                 source_by_symbol.get(symbol) or "",
             )
             present = sorted(name for name in required if relation_types.intersection(CATEGORY_RELATIONS.get(name, set())))
+            if shared_macro_context_available and "macroRegime" in required and "macroRegime" not in present:
+                present.append("macroRegime")
+                present.sort()
             missing = sorted(name for name in required if name not in present)
             total_present += len(present)
             total_expected += len(required)
@@ -875,12 +927,27 @@ class OntologyDiagnosticsService:
         coverage_ratio = round(total_present / max(1, total_expected), 3)
         primary_coverage_ratio = round(primary_present / max(1, primary_expected), 3)
         context_coverage_ratio = round(context_present / max(1, context_expected), 3)
-        status = "ok" if primary_rows and primary_coverage_ratio >= 0.75 else ("warning" if primary_rows or stock_symbols else "empty")
-        coverage_gap_count = len([
+        missing_rows = [item for item in rows if item.get("missing")]
+        coverage_gap_count = len(missing_rows)
+        coverage_gap_category_count = sum(len(item.get("missing") or []) for item in missing_rows)
+        materialized_coverage_gap_entity_count = len([
             item for item in entities
             if str(item.get("kind") or item.get("nodeKind") or "") == "coverage-gap"
             or str(item.get("tboxClass") or "") == "CoverageGap"
         ])
+        materialized_coverage_gap_relation_count = sum(
+            1
+            for relation_types in relation_types_by_symbol.values()
+            if "HAS_COVERAGE_GAP" in relation_types
+        )
+        # The compact active-manifest index reads stock roots, not every gap
+        # target. One active gap relation maps to one active CoverageGap fact,
+        # so use it when the target entity was deliberately not hydrated.
+        materialized_coverage_gap_entity_count = max(
+            materialized_coverage_gap_entity_count,
+            materialized_coverage_gap_relation_count,
+        )
+        status = "ok" if primary_rows and primary_coverage_ratio >= 1.0 else ("warning" if primary_rows or stock_symbols else "empty")
         return {
             "status": status,
             "entityCount": len(entities),
@@ -893,12 +960,44 @@ class OntologyDiagnosticsService:
             "contextCoverageRatio": context_coverage_ratio,
             "requiredCategories": all_required_categories,
             "coverageGapCount": coverage_gap_count,
+            "coverageGapCategoryCount": coverage_gap_category_count,
+            "materializedCoverageGapEntityCount": materialized_coverage_gap_entity_count,
+            "materializedCoverageGapRelationCount": materialized_coverage_gap_relation_count,
+            "sharedMacroContextAvailable": shared_macro_context_available,
             "coverageReadMode": coverage_read_mode,
             "interpretation": self.coverage_interpretation(status, primary_coverage_ratio, len(primary_rows), len(context_rows)),
             "symbols": rows[:80],
             "primarySymbols": primary_rows[:80],
             "contextSymbols": context_rows[:80],
         }
+
+    @staticmethod
+    def active_abox_macro_context_available(storage: Dict[str, object]) -> bool:
+        """Read shared macro availability from the verified active scope plan.
+
+        Macro and FX observations are stored once in PortfolioWorld scopes to
+        avoid re-writing every stock on an external-data refresh. Their
+        presence completes the context coverage dimension, but it does not
+        invent a stock-level sensitivity relation for TypeDB rules.
+        """
+        payload = dict(storage or {}) if isinstance(storage, dict) else {}
+        metadata = payload.get("_activeAboxMetadata")
+        metadata = dict(metadata or {}) if isinstance(metadata, dict) else {}
+        for item in metadata.get("scopePlan") or []:
+            if not isinstance(item, dict):
+                continue
+            scope_type = str(item.get("scopeType") or "").strip().lower()
+            scope_id = str(item.get("scopeId") or "").strip().lower()
+            if scope_type != "macro" and not scope_id.startswith("macro:"):
+                continue
+            try:
+                entity_count = int(float(item.get("entityCount") or 0))
+                relation_count = int(float(item.get("relationCount") or 0))
+            except (TypeError, ValueError):
+                continue
+            if entity_count > 0 and relation_count > 0:
+                return True
+        return False
 
     def abox_coverage_relations(
         self,

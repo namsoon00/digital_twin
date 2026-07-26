@@ -87,6 +87,13 @@ BASE_WORKERS = {
         "command": [sys.executable, "-u", "python_service/service.py", "ontology-world-projection", "watch"],
         "needle": "python_service/service.py ontology-world-projection watch",
     },
+    "ontology-maintenance": {
+        "label": "Python ontology ABox maintenance worker",
+        "pid": data_dir() / "python-ontology-maintenance.pid",
+        "log": data_dir() / "python-ontology-maintenance.log",
+        "command": [sys.executable, "-u", "python_service/service.py", "ontology-maintenance", "watch"],
+        "needle": "python_service/service.py ontology-maintenance watch",
+    },
     "ontology-lab": {
         "label": "Python ontology lab worker",
         "pid": data_dir() / "python-ontology-lab.pid",

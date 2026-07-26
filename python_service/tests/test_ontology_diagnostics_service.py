@@ -589,6 +589,77 @@ class OntologyDiagnosticsServiceTests(unittest.TestCase):
         self.assertEqual(1, coverage["primarySymbolCount"])
         self.assertEqual(0, coverage["contextSymbolCount"])
 
+    def test_abox_coverage_counts_computed_missing_categories_without_gap_nodes(self):
+        class MissingMacroRepository(PrimaryCoverageRepository):
+            def read_relation_rows(self, boxes=None):
+                return [
+                    row for row in super().read_relation_rows(boxes)
+                    if row.get("type") != "HAS_MACRO_REGIME"
+                ]
+
+        coverage = OntologyDiagnosticsService(
+            ontology_repository=MissingMacroRepository(),
+        ).status(symbols=["AAPL"])["aboxCoverage"]
+
+        self.assertEqual("warning", coverage["status"])
+        self.assertEqual(1, coverage["coverageGapCount"])
+        self.assertEqual(1, coverage["coverageGapCategoryCount"])
+        self.assertEqual(0, coverage["materializedCoverageGapEntityCount"])
+        self.assertEqual(["macroRegime"], coverage["primarySymbols"][0]["missing"])
+
+    def test_abox_coverage_recognizes_shared_macro_scope_without_stock_macro_relation(self):
+        class SharedMacroRepository(PrimaryCoverageRepository):
+            def scoped_abox_storage_diagnostics(self, *args, **kwargs):
+                return {
+                    "configured": True,
+                    "status": "ok",
+                    "_activeAboxMetadata": {
+                        "scopePlan": [
+                            {
+                                "scopeId": "macro:market:world:test",
+                                "scopeType": "macro",
+                                "entityCount": 2,
+                                "relationCount": 3,
+                            },
+                        ],
+                    },
+                }
+
+            def read_relation_rows(self, boxes=None):
+                return [
+                    row for row in super().read_relation_rows(boxes)
+                    if row.get("type") != "HAS_MACRO_REGIME"
+                ]
+
+        coverage = OntologyDiagnosticsService(
+            ontology_repository=SharedMacroRepository(),
+        ).status(symbols=["AAPL"])["aboxCoverage"]
+
+        self.assertEqual("ok", coverage["status"])
+        self.assertTrue(coverage["sharedMacroContextAvailable"])
+        self.assertNotIn("macroRegime", coverage["primarySymbols"][0]["missing"])
+
+    def test_abox_coverage_counts_materialized_gap_from_active_relation_index(self):
+        class MaterializedGapRepository(PrimaryCoverageRepository):
+            def read_relation_rows(self, boxes=None):
+                return [
+                    *super().read_relation_rows(boxes),
+                    {
+                        "source": "stock:AAPL",
+                        "target": "coverage-gap:AAPL",
+                        "type": "HAS_COVERAGE_GAP",
+                        "ontologyBox": "ABox",
+                        "symbol": "AAPL",
+                    },
+                ]
+
+        coverage = OntologyDiagnosticsService(
+            ontology_repository=MaterializedGapRepository(),
+        ).status(symbols=["AAPL"])["aboxCoverage"]
+
+        self.assertEqual(1, coverage["materializedCoverageGapEntityCount"])
+        self.assertEqual(1, coverage["materializedCoverageGapRelationCount"])
+
     def test_empty_scoped_abox_skips_expensive_graph_coverage_read(self):
         class EmptyAboxRepository(FakeOntologyRepository):
             def scoped_abox_storage_diagnostics(self):

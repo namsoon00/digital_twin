@@ -286,6 +286,12 @@ class MySQLDataPipelineHealthStore(MySQLAppStore):
     store_id = "data_pipeline_health"
 
 
+class MySQLOntologyMaintenanceStateStore(MySQLAppStore):
+    """Keeps only the cursor and latest result for background ABox retention."""
+
+    store_id = "ontology_maintenance_state"
+
+
 class MySQLOntologyReasoningCursorStore(MySQLAppStore):
     store_id = "ontology_reasoning_cursor"
 

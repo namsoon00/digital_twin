@@ -406,6 +406,97 @@ class OntologyWorldProjectionScheduler:
             wait_until_running(lambda: self.running, end_at)
 
 
+class OntologyMaintenanceScheduler:
+    """Run low-priority scoped ABox retention outside the reasoning worker.
+
+    Each cycle handles one world only. The repository still owns the TypeDB
+    writer lease, so a busy live projection wins and retention retries later.
+    """
+
+    def __init__(self, runner, interval_seconds: int, error_reporter=None, isolated_cycle=None):
+        self.runner = runner
+        self.interval_seconds = max(15, int(interval_seconds or 60))
+        self.error_reporter = error_reporter or operational_error_reporter()
+        self.isolated_cycle = isolated_cycle
+        self.last_signature = ""
+        self.last_report_at = 0.0
+        self.running = True
+
+    def stop(self, *_args) -> None:
+        self.running = False
+        if self.isolated_cycle:
+            self.isolated_cycle.stop(self.execution_timeout_grace_seconds())
+
+    def process_isolation_enabled(self) -> bool:
+        configured = getattr(self.runner, "process_isolation_enabled", None)
+        return bool(self.isolated_cycle) and (not callable(configured) or bool(configured()))
+
+    def execution_timeout_seconds(self) -> int:
+        configured = getattr(self.runner, "execution_timeout_seconds", None)
+        return max(30, int(configured() if callable(configured) else 180))
+
+    def execution_timeout_grace_seconds(self) -> int:
+        configured = getattr(self.runner, "execution_timeout_grace_seconds", None)
+        return max(1, int(configured() if callable(configured) else 10))
+
+    def run_once(self):
+        if not self.process_isolation_enabled():
+            return self.runner.run_once()
+        return self.isolated_cycle.run_once(
+            0,
+            self.execution_timeout_seconds(),
+            self.execution_timeout_grace_seconds(),
+        )
+
+    def should_report(self, result: dict, started: float) -> bool:
+        maintenance = result.get("maintenance") if isinstance(result.get("maintenance"), dict) else {}
+        removed = int(maintenance.get("removedManifestCount") or 0)
+        status = str(result.get("status") or "unknown")
+        if removed:
+            self.last_signature = ""
+            self.last_report_at = 0.0
+            return True
+        if status in {"error", "partial", "deferred-write-lease", "timeout"}:
+            signature = status + "|" + str(maintenance.get("reason") or result.get("reason") or "")[:180]
+            if signature != self.last_signature or started - self.last_report_at >= 300.0:
+                self.last_signature = signature
+                self.last_report_at = started
+                return True
+        return False
+
+    def run_forever(self) -> None:
+        install_stop_handlers(self.stop)
+        mode = "isolated" if self.process_isolation_enabled() else "in-process"
+        print(
+            "Python ontology ABox maintenance worker started. interval="
+            + str(self.interval_seconds)
+            + "s mode="
+            + mode
+        )
+        while self.running:
+            started = time.monotonic()
+            try:
+                result = self.run_once()
+                if self.should_report(result, started):
+                    maintenance = result.get("maintenance") if isinstance(result.get("maintenance"), dict) else {}
+                    print(
+                        "Ontology ABox maintenance "
+                        + str(result.get("status") or "unknown")
+                        + " world="
+                        + str(result.get("worldId") or maintenance.get("worldId") or "")
+                        + " removed="
+                        + str(maintenance.get("removedManifestCount") or 0)
+                        + " remaining="
+                        + str(maintenance.get("inactiveManifestCountRemaining") or 0),
+                        flush=True,
+                    )
+            except Exception as error:  # noqa: BLE001 - retention never stops live inference.
+                print("Python ontology ABox maintenance worker error: " + str(error), flush=True)
+                report_runtime_error(self.error_reporter, "Python ontology ABox maintenance worker", error, "scoped ABox retention")
+            end_at = time.monotonic() + max(1.0, self.interval_seconds - (time.monotonic() - started))
+            wait_until_running(lambda: self.running, end_at)
+
+
 class OntologyLabScheduler:
     def __init__(self, service, interval_seconds: int, error_reporter=None):
         self.service = service

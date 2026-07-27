@@ -530,6 +530,7 @@ def admin_preview_config() -> Dict[str, object]:
                     {"key": "ontologyReasoningAdaptiveBatchPendingThreshold", "label": "다종목 배치 대기 요청 기준", "type": "number", "default": "4"},
                     {"key": "ontologyReasoningAdaptiveBatchAgeSeconds", "label": "다종목 배치 대기 시간 기준", "type": "number", "default": "60", "unit": "seconds"},
                     {"key": "ontologyReasoningAdaptiveBatchRuntimeGuardSeconds", "label": "느린 추론 시 단일 종목 복귀 기준", "type": "number", "default": "180", "unit": "seconds"},
+                    {"key": "ontologyReasoningAdaptiveBatchBudgetSeconds", "label": "다종목 추론 실행 예산", "type": "number", "default": "150", "unit": "seconds"},
                     {"key": "ontologyReasoningMailboxEnabled", "label": "실시간 최신 상태 메일박스", "type": "toggle", "default": "1"},
                     {"key": "ontologyReasoningMailboxIngressEnabled", "label": "이벤트 기록과 메일박스 동시 ingress", "type": "toggle", "default": "1"},
                     {"key": "ontologyReasoningMailboxBatchSize", "label": "메일박스 한 번 처리 수", "type": "number", "default": "200"},

@@ -1945,6 +1945,43 @@ class OntologyReasoningRunner:
             ages.append(max(0, int((now.astimezone(timezone.utc) - observed.astimezone(timezone.utc)).total_seconds())))
         return max(ages or [0])
 
+    def batch_runtime_evidence(self) -> Dict[str, object]:
+        """Return the latest real projection turn for adaptive batch sizing.
+
+        A quick cooldown probe often follows an expensive TypeDB generation.
+        It must not hide that generation from the next batch decision, or a
+        queue-pressure burst can repeat the same timeout. This remains
+        scheduler telemetry only; no investment fact or RuleBox condition is
+        derived from it.
+        """
+        telemetry = self.execution_telemetry()
+        samples = []
+        for source, values in (
+            ("history", telemetry.get("history") or []),
+            ("last", [telemetry.get("last") or {}]),
+        ):
+            for value in values:
+                if not isinstance(value, dict):
+                    continue
+                candidate = dict(value)
+                candidate["batchRuntimeEvidenceSource"] = source
+                samples.append(candidate)
+        for candidate in reversed(samples):
+            status = str(candidate.get("status") or "").strip().lower()
+            if status in {"timeout", "error", "partial", "circuit-open"}:
+                return candidate
+            if status in {"cooldown", "idle", "disabled", "deferred"}:
+                continue
+            stage = candidate.get("stageTiming")
+            stage = stage if isinstance(stage, dict) else {}
+            projection = candidate.get("projectionRuntime")
+            projection = projection if isinstance(projection, dict) else {}
+            if float_value(stage.get("monitorAndProjectionMs"), 0.0) > 0:
+                return candidate
+            if float_value(projection.get("durationMs"), 0.0) > 0:
+                return candidate
+        return {}
+
     def reasoning_batch_plan(self, requests: Iterable[object]) -> Dict[str, object]:
         """Choose a bounded multi-subject TypeDB turn from queue pressure.
 
@@ -1969,7 +2006,7 @@ class OntologyReasoningRunner:
                 "runtimeGuard": False,
                 "reasonCodes": ["nonnative-unbounded-symbol-limit"],
             }
-        telemetry = self.execution_telemetry().get("last") or {}
+        telemetry = self.batch_runtime_evidence()
         return adaptive_reasoning_batch_plan(
             self.settings,
             native_rule_execution=self.native_typedb_rule_execution_enabled(),

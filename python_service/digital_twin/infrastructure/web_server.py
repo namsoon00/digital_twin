@@ -592,6 +592,7 @@ def settings_status_payload() -> Dict[str, object]:
         "ontologyReasoningAdaptiveBatchPendingThreshold",
         "ontologyReasoningAdaptiveBatchAgeSeconds",
         "ontologyReasoningAdaptiveBatchRuntimeGuardSeconds",
+        "ontologyReasoningAdaptiveBatchBudgetSeconds",
         "ontologyReasoningMailboxEnabled",
         "ontologyReasoningMailboxIngressEnabled",
         "ontologyReasoningMailboxBatchSize",

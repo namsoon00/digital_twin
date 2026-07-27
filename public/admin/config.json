@@ -1556,6 +1556,13 @@
           "unit": "seconds"
         },
         {
+          "key": "ontologyReasoningAdaptiveBatchBudgetSeconds",
+          "label": "다종목 추론 실행 예산",
+          "type": "number",
+          "default": "150",
+          "unit": "seconds"
+        },
+        {
           "key": "ontologyReasoningMailboxEnabled",
           "label": "실시간 최신 상태 메일박스",
           "type": "toggle",

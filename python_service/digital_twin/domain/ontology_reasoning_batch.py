@@ -35,6 +35,13 @@ def _recent_runtime_ms(execution: Mapping[str, object]) -> int:
     return _integer(raw, 0, 0, 60 * 60 * 1000)
 
 
+def _recent_target_symbol_count(execution: Mapping[str, object]) -> int:
+    values = dict(execution or {}) if isinstance(execution, Mapping) else {}
+    projection = values.get("projectionRuntime")
+    projection = projection if isinstance(projection, Mapping) else {}
+    return _integer(projection.get("targetSymbolCount"), 1, 1, 200)
+
+
 def adaptive_reasoning_batch_plan(
     settings: Mapping[str, object],
     *,
@@ -60,10 +67,13 @@ def adaptive_reasoning_batch_plan(
     execution = dict(recent_execution or {}) if isinstance(recent_execution, Mapping) else {}
     recent_status = str(execution.get("status") or "").strip().lower()
     recent_runtime = _recent_runtime_ms(execution)
+    recent_execution_source = str(execution.get("batchRuntimeEvidenceSource") or "").strip()[:40]
 
     adaptive_enabled = bool(native_rule_execution) and _enabled(
         configured.get("ontologyReasoningAdaptiveBatchEnabled"),
-        True,
+        # Runtime settings opt in by default. Direct compatibility callers
+        # without the new key retain their existing static target cap.
+        False,
     )
     steady_limit = min(
         hard_limit,
@@ -91,6 +101,12 @@ def adaptive_reasoning_batch_plan(
         10,
         1800,
     )
+    execution_budget_seconds = _integer(
+        configured.get("ontologyReasoningAdaptiveBatchBudgetSeconds"),
+        150,
+        30,
+        1800,
+    )
     pressure = bool(
         pending_requests >= pending_threshold
         or pending_symbols >= pending_threshold
@@ -99,6 +115,26 @@ def adaptive_reasoning_batch_plan(
     runtime_guard = bool(
         recent_status in {"error", "timeout", "partial", "circuit-open"}
         or recent_runtime >= runtime_guard_seconds * 1000
+    )
+    baseline_target_symbol_count = _recent_target_symbol_count(execution)
+    estimated_per_target_runtime_ms = (
+        max(1, int((recent_runtime + baseline_target_symbol_count - 1) / baseline_target_symbol_count))
+        if recent_runtime > 0
+        else 0
+    )
+    budget_target_limit = hard_limit
+    if estimated_per_target_runtime_ms > 0:
+        budget_target_limit = max(
+            1,
+            min(
+                hard_limit,
+                int((execution_budget_seconds * 1000) / estimated_per_target_runtime_ms),
+            ),
+        )
+    estimated_burst_runtime_ms = (
+        estimated_per_target_runtime_ms * burst_limit
+        if estimated_per_target_runtime_ms > 0
+        else 0
     )
     reason_codes = []
 
@@ -113,6 +149,17 @@ def adaptive_reasoning_batch_plan(
             reason_codes.append("recent-status-" + recent_status)
         if recent_runtime >= runtime_guard_seconds * 1000:
             reason_codes.append("recent-runtime-guard")
+    elif pressure and not recent_runtime:
+        # A new runtime has no observed per-target cost yet. Record one
+        # ordinary generation first instead of spending the isolation timeout
+        # budget on an unmeasured burst.
+        mode = "baseline-collection"
+        target_limit = steady_limit
+        reason_codes.append("runtime-baseline-unavailable")
+    elif pressure and budget_target_limit < burst_limit:
+        mode = "runtime-budget-limited"
+        target_limit = min(burst_limit, budget_target_limit)
+        reason_codes.append("estimated-batch-runtime-budget")
     elif pressure:
         mode = "queue-pressure"
         target_limit = burst_limit
@@ -141,8 +188,14 @@ def adaptive_reasoning_batch_plan(
         "pendingThreshold": pending_threshold,
         "ageThresholdSeconds": age_threshold,
         "runtimeGuardSeconds": runtime_guard_seconds,
+        "executionBudgetSeconds": execution_budget_seconds,
         "recentStatus": recent_status,
+        "recentExecutionSource": recent_execution_source,
         "recentRuntimeMs": recent_runtime,
+        "baselineTargetSymbolCount": baseline_target_symbol_count if recent_runtime else 0,
+        "estimatedPerTargetRuntimeMs": estimated_per_target_runtime_ms,
+        "estimatedBurstRuntimeMs": estimated_burst_runtime_ms,
+        "budgetTargetSymbolLimit": budget_target_limit,
         "pressure": pressure,
         "runtimeGuard": runtime_guard,
         "reasonCodes": reason_codes,

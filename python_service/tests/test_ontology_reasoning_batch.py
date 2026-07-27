@@ -11,6 +11,20 @@ from digital_twin.domain.ontology_projection_audit import compact_reasoning_requ
 from digital_twin.domain.ontology_reasoning_batch import adaptive_reasoning_batch_plan
 
 
+class MemoryCursor:
+    def __init__(self, payload=None):
+        self.payload = dict(payload or {})
+
+    def load(self):
+        return dict(self.payload)
+
+    def save(self, payload):
+        self.payload = dict(payload or {})
+
+    def processed_event_ids(self):
+        return []
+
+
 class AdaptiveOntologyReasoningBatchTests(unittest.TestCase):
     def test_queue_pressure_expands_to_the_bounded_burst_target_set(self):
         plan = adaptive_reasoning_batch_plan(
@@ -33,6 +47,33 @@ class AdaptiveOntologyReasoningBatchTests(unittest.TestCase):
         self.assertEqual(3, plan["targetSymbolLimit"])
         self.assertTrue(plan["pressure"])
         self.assertFalse(plan["runtimeGuard"])
+
+    def test_observed_per_target_cost_limits_a_pressure_batch_before_timeout(self):
+        plan = adaptive_reasoning_batch_plan(
+            {
+                "ontologyReasoningAdaptiveBatchEnabled": "1",
+                "ontologyReasoningAdaptiveBatchSteadySymbols": "1",
+                "ontologyReasoningAdaptiveBatchBurstSymbols": "3",
+                "ontologyReasoningAdaptiveBatchPendingThreshold": "2",
+                "ontologyReasoningAdaptiveBatchAgeSeconds": "10",
+                "ontologyReasoningAdaptiveBatchBudgetSeconds": "150",
+            },
+            native_rule_execution=True,
+            hard_target_symbol_limit=3,
+            pending_request_count=8,
+            pending_symbol_count=5,
+            oldest_wait_seconds=120,
+            recent_execution={
+                "status": "ok",
+                "stageTiming": {"monitorAndProjectionMs": 120000},
+                "projectionRuntime": {"targetSymbolCount": 1},
+            },
+        )
+
+        self.assertEqual("runtime-budget-limited", plan["mode"])
+        self.assertEqual(1, plan["targetSymbolLimit"])
+        self.assertEqual(1, plan["budgetTargetSymbolLimit"])
+        self.assertEqual(120000, plan["estimatedPerTargetRuntimeMs"])
 
     def test_slow_or_failed_projection_returns_to_the_steady_target_set(self):
         plan = adaptive_reasoning_batch_plan(
@@ -119,9 +160,16 @@ class AdaptiveOntologyReasoningBatchTests(unittest.TestCase):
             event_id="batch-request",
             occurred_at="2026-07-24T00:00:00Z",
         )
+        cursor = MemoryCursor({
+            "lastReasoningExecution": {
+                "status": "ok",
+                "stageTiming": {"monitorAndProjectionMs": 40000},
+                "projectionRuntime": {"targetSymbolCount": 1},
+            },
+        })
         runner = OntologyReasoningRunner(
             event_reader=None,
-            cursor_store=None,
+            cursor_store=cursor,
             monitor_runner_factory=lambda: None,
             now_provider=lambda: datetime(2026, 7, 24, 0, 5, tzinfo=timezone.utc),
             settings={
@@ -147,6 +195,31 @@ class AdaptiveOntologyReasoningBatchTests(unittest.TestCase):
         self.assertEqual({"005930", "000660", "035420"}, set(batches[request.event_id]))
         self.assertEqual(set(["005930", "000660", "035420"]), set(symbols))
         self.assertEqual(0, omitted)
+
+    def test_batch_runtime_evidence_ignores_a_later_cooldown_probe(self):
+        cursor = MemoryCursor({
+            "reasoningExecutionHistory": [{
+                "status": "ok",
+                "stageTiming": {"monitorAndProjectionMs": 120000},
+                "projectionRuntime": {"targetSymbolCount": 1},
+            }],
+            "lastReasoningExecution": {
+                "status": "cooldown",
+                "durationMs": 1000,
+            },
+        })
+        runner = OntologyReasoningRunner(
+            event_reader=None,
+            cursor_store=cursor,
+            monitor_runner_factory=lambda: None,
+            settings={"ontologyReasoningTypeDbNativeRuleExecutionEnabled": "1"},
+        )
+
+        evidence = runner.batch_runtime_evidence()
+
+        self.assertEqual("ok", evidence["status"])
+        self.assertEqual(120000, evidence["stageTiming"]["monitorAndProjectionMs"])
+        self.assertEqual("history", evidence["batchRuntimeEvidenceSource"])
 
     def test_projection_audit_retains_batch_policy_without_turning_it_into_a_rule(self):
         compact = compact_reasoning_request_context({

@@ -16,7 +16,7 @@ from typing import Dict, Iterable, List, Mapping
 from urllib.parse import parse_qsl, urlencode, urlsplit, urlunsplit
 
 
-RELATION_DELIVERY_FINGERPRINT_VERSION = "ontology-relation-delivery-v1"
+RELATION_DELIVERY_FINGERPRINT_VERSION = "ontology-relation-delivery-v2"
 VOLATILE_EVENT_SUFFIX = re.compile(r":[+-]?\d+(?:\.\d+)?%?$")
 TRACKING_QUERY_KEYS = {"fbclid", "gclid", "mc_cid", "mc_eid", "ref", "source"}
 
@@ -184,6 +184,7 @@ def relation_delivery_components(
     relation = _mapping(relation_context)
     context = _mapping(notification_context)
     decision = _mapping(relation.get("decision"))
+    action_envelope = _mapping(relation.get("actionEnvelope")) or _mapping(decision.get("actionEnvelope"))
     state = _mapping(relation.get("decisionState"))
     if not state:
         state = {
@@ -217,6 +218,20 @@ def relation_delivery_components(
             "actionGroup": _normalized(_first(decision, "actionGroup", "action_group")),
             "actionPolicy": _normalized(_first(decision, "actionPolicy", "action_policy")),
             "primaryAction": _normalized(_first(_mapping(relation.get("executionPlan")), "primaryAction", "action")),
+            "candidateAction": _normalized(_first(decision, "candidateAction", "candidate_action")),
+            "decisionEffect": _normalized(_first(decision, "decisionEffect", "decision_effect")),
+        },
+        "actionEnvelope": {
+            "status": _normalized(_first(action_envelope, "status")),
+            "preferredAction": _normalized(_first(action_envelope, "preferredAction")),
+            "selectedRuleId": _normalized(_first(action_envelope, "selectedRuleId")),
+            "selectedDecisionEffect": _normalized(_first(action_envelope, "selectedDecisionEffect")),
+            "drivingRuleIds": sorted(_normalized(item) for item in _items(action_envelope.get("drivingRuleIds")) if _normalized(item)),
+            "supportRuleIds": sorted(_normalized(item) for item in _items(action_envelope.get("supportRuleIds")) if _normalized(item)),
+            "deferRuleIds": sorted(_normalized(item) for item in _items(action_envelope.get("deferRuleIds")) if _normalized(item)),
+            "constraintRuleIds": sorted(_normalized(item) for item in _items(action_envelope.get("constraintRuleIds")) if _normalized(item)),
+            "blockingRuleIds": sorted(_normalized(item) for item in _items(action_envelope.get("blockingRuleIds")) if _normalized(item)),
+            "dataReadiness": _normalized(_first(_mapping(action_envelope.get("dataReadiness")), "state", "dataState")),
         },
         "state": {
             key: _normalized(state.get(key))
@@ -227,6 +242,56 @@ def relation_delivery_components(
         "traces": _trace_rows(graph.get("traces")),
         "evidenceKeys": sorted(set(source_evidence)),
         "inferenceEvidenceKeys": sorted(set(inference_evidence)),
+    }
+
+
+def _decision_transition(
+    current_components: Mapping[str, object],
+    previous_components: Mapping[str, object] = None,
+) -> Dict[str, object]:
+    current_components = _mapping(current_components)
+    previous_components = _mapping(previous_components)
+    current_decision = _mapping(current_components.get("decision"))
+    previous_decision = _mapping(previous_components.get("decision"))
+    current_envelope = _mapping(current_components.get("actionEnvelope"))
+    previous_envelope = _mapping(previous_components.get("actionEnvelope"))
+    current_action = _first(current_envelope, "preferredAction") or _first(current_decision, "candidateAction", "primaryAction")
+    previous_action = _first(previous_envelope, "preferredAction") or _first(previous_decision, "candidateAction", "primaryAction")
+    current_status = _first(current_envelope, "status")
+    previous_status = _first(previous_envelope, "status")
+    first = not bool(previous_components)
+    action_changed = bool(not first and current_action != previous_action)
+    status_changed = bool(not first and current_status != previous_status)
+    readiness_changed = bool(
+        not first
+        and _first(current_envelope, "dataReadiness") != _first(previous_envelope, "dataReadiness")
+    )
+    if first:
+        kind = "initial"
+        summary = "새 조건이 처음 생성됐습니다."
+    elif action_changed:
+        kind = "action-changed"
+        summary = (previous_action or "이전 판단") + "에서 " + (current_action or "현재 판단") + "으로 바뀌었습니다."
+    elif status_changed:
+        kind = "envelope-changed"
+        summary = (previous_status or "이전 조건") + "에서 " + (current_status or "현재 조건") + "으로 바뀌었습니다."
+    elif readiness_changed:
+        kind = "readiness-changed"
+        summary = "판단에 쓸 자료 상태가 바뀌었습니다."
+    else:
+        kind = "unchanged"
+        summary = "실행 판단 범위는 이전과 같습니다."
+    return {
+        "changed": bool(first or action_changed or status_changed or readiness_changed),
+        "material": bool(first or action_changed or status_changed or readiness_changed),
+        "kind": kind,
+        "summary": summary,
+        "previousAction": previous_action,
+        "currentAction": current_action,
+        "previousStatus": previous_status,
+        "currentStatus": current_status,
+        "previousDataReadiness": _first(previous_envelope, "dataReadiness"),
+        "currentDataReadiness": _first(current_envelope, "dataReadiness"),
     }
 
 
@@ -250,9 +315,28 @@ def relation_delivery_metadata(
     }
     raw = json.dumps(fingerprint_components, ensure_ascii=True, sort_keys=True, separators=(",", ":"))
     fingerprint = hashlib.sha256(raw.encode("utf-8")).hexdigest()[:24]
+    envelope = _mapping(components.get("actionEnvelope"))
+    decision = _mapping(components.get("decision"))
+    has_envelope_state = any(
+        envelope.get(key) not in (None, "", [], {})
+        for key in ("status", "preferredAction", "dataReadiness")
+    )
+    if has_envelope_state:
+        state_signature = "|".join(part for part in [
+            str(envelope.get("status") or ""),
+            str(envelope.get("preferredAction") or ""),
+            str(envelope.get("dataReadiness") or ""),
+            str(decision.get("actionPolicy") or ""),
+        ] if part)
+    else:
+        # Keep the legacy behavior only until a TypeDB action envelope is
+        # present. New relation-row or trace churn must never become a new
+        # cooldown group once the bounded envelope is available.
+        state_signature = "legacy|" + fingerprint
     return {
         "version": RELATION_DELIVERY_FINGERPRINT_VERSION,
         "fingerprint": fingerprint,
+        "stateSignature": state_signature,
         "components": components,
         "signature": "rule=" + str(components["decision"]["selectedRuleId"] or "-")
         + ";rules=" + str(len(components["activeRules"]))
@@ -274,8 +358,12 @@ def relation_delivery_diff(
             "material": False,
             "changeClass": "unavailable",
             "reason": "No graph-backed relation context is available.",
+            "addedEvidenceKeys": [],
+            "removedEvidenceKeys": [],
         }
     if not previous:
+        current_components = current.get("components") or {}
+        transition = _decision_transition(current_components)
         return {
             "changed": True,
             "material": True,
@@ -284,6 +372,11 @@ def relation_delivery_diff(
             "currentFingerprint": current.get("fingerprint"),
             "previousFingerprint": "",
             "changedComponents": ["initial"],
+            "materialComponents": ["initial"],
+            "contextComponents": [],
+            "addedEvidenceKeys": list(current_components.get("evidenceKeys") or []),
+            "removedEvidenceKeys": [],
+            "decisionTransition": transition,
         }
     if current.get("fingerprint") == previous.get("fingerprint"):
         current_components = current.get("components") or {}
@@ -312,20 +405,37 @@ def relation_delivery_diff(
             "changedComponents": context_components,
             "materialComponents": [],
             "contextComponents": context_components,
+            "addedEvidenceKeys": [],
+            "removedEvidenceKeys": [],
+            "decisionTransition": _decision_transition(current_components, previous_components),
         }
     changed = []
     current_components = current.get("components") or {}
     previous_components = previous.get("components") or {}
     material_components = []
     context_components = []
-    for key in ["decision", "state", "activeRules", "relations", "evidenceKeys"]:
+    transition = _decision_transition(current_components, previous_components)
+    current_evidence = set(current_components.get("evidenceKeys") or [])
+    previous_evidence = set(previous_components.get("evidenceKeys") or [])
+    for key in ["decision", "actionEnvelope", "state", "activeRules", "relations", "evidenceKeys"]:
         if current_components.get(key) != previous_components.get(key):
-            material_components.append(key)
+            # Rule-set churn alone must not reopen a cooldown.  It becomes
+            # material only when it changed the bounded action, readiness, or
+            # introduced a new source document.
+            if key in {"decision", "actionEnvelope"} and transition.get("material"):
+                material_components.append(key)
+            elif key == "state" and transition.get("kind") == "readiness-changed":
+                material_components.append(key)
+            elif key == "evidenceKeys":
+                material_components.append(key)
+            else:
+                context_components.append(key)
     for key in ["traces", "inferenceEvidenceKeys"]:
         if current_components.get(key) != previous_components.get(key):
             context_components.append(key)
     labels = {
         "decision": "결정 단계",
+        "actionEnvelope": "실행 범위",
         "state": "관계 상태",
         "activeRules": "성립 규칙",
         "relations": "추론 관계",
@@ -350,4 +460,7 @@ def relation_delivery_diff(
         "changedComponents": changed,
         "materialComponents": material_components,
         "contextComponents": context_components,
+        "addedEvidenceKeys": sorted(current_evidence - previous_evidence),
+        "removedEvidenceKeys": sorted(previous_evidence - current_evidence),
+        "decisionTransition": transition,
     }

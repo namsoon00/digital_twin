@@ -504,6 +504,7 @@ class GraphStoreOntologyRowMapperMixin:
                 "derivationActionGroup": str(derivation.get("action_group") or ""),
                 "derivationActionLevel": str(derivation.get("action_level") or ""),
                 "derivationDecisionStage": derivation_decision_stage(derivation),
+                "derivationDecisionEffect": str(derivation.get("decision_effect") or derivation.get("decisionEffect") or ""),
                 "derivationDecisionLabel": str(derivation.get("decision_label") or derivation.get("decisionLabel") or ""),
                 "derivationDecisionTone": str(derivation.get("decision_tone") or derivation.get("decisionTone") or ""),
                 "derivationTargetRole": str(derivation.get("target_role") or derivation.get("targetRole") or ""),

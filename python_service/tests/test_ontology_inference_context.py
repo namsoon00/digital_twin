@@ -4,7 +4,12 @@ from pathlib import Path
 
 sys.path.insert(0, str(Path(__file__).resolve().parents[1]))
 
-from digital_twin.domain.ontology_inference_context import decision_from_inference, matches_from_inference, relation_contexts_from_snapshot
+from digital_twin.domain.ontology_inference_context import (
+    action_envelope_from_inference,
+    decision_from_inference,
+    matches_from_inference,
+    relation_contexts_from_snapshot,
+)
 from digital_twin.domain.ontology_relation_contracts import OntologyRuleMatch
 from digital_twin.domain.ontology_relation_execution_plan import decision_drivers_from_relation_context, execution_plan_from_relation_context
 from digital_twin.domain.ontology_relation_facts import position_signal_facts
@@ -141,6 +146,102 @@ class OntologyInferenceContextTests(unittest.TestCase):
         context["decision"]["candidateAction"] = "SELL"
 
         self.assertEqual("HOLD", choose_action(position, context, conflict_state="support-only"))
+
+    def test_entry_support_is_not_hidden_by_a_macro_constraint(self):
+        facts = {"symbol": "NVDA", "source": "watchlist", "isWatchlist": True}
+        policy = {
+            "targetRole": "watchlist",
+            "actionPolicy": "ENTRY_ONLY",
+            "allowedActions": ["BUY", "HOLD", "AVOID"],
+            "blockedActions": ["ADD", "TRIM", "SELL"],
+        }
+        relations = [
+            {
+                "type": "HAS_INFERRED_ENTRY_OPPORTUNITY",
+                "ruleId": "graph.entry.confirmed.v1",
+                "targetLabel": "NVIDIA 진입 조건 확인",
+                "polarity": "support",
+                "decisionStage": "ENTRY_SPLIT_BUY",
+                "decisionLabel": "소액 진입 검토",
+                "decisionTone": "caution",
+                "actionGroup": "entry",
+                "actionLevel": "action",
+                "candidateAction": "BUY",
+                "decisionEffect": "support",
+                **policy,
+            },
+            {
+                "type": "HAS_INFERRED_RISK",
+                "ruleId": "graph.macro.regime.risk.v1",
+                "targetLabel": "거시 환경 제약",
+                "polarity": "risk",
+                "decisionStage": "MACRO_REGIME",
+                "decisionLabel": "거시 환경 점검",
+                "decisionTone": "caution",
+                "actionGroup": "macro",
+                "actionLevel": "review",
+                "candidateAction": "HOLD",
+                "decisionEffect": "constrain",
+                **policy,
+            },
+        ]
+
+        matches = matches_from_inference(relations, [], facts)
+        envelope = action_envelope_from_inference(facts, matches, relations)
+        decision = decision_from_inference(facts, matches, relations, [])
+
+        self.assertEqual("ENTRY_ELIGIBLE", envelope["status"])
+        self.assertEqual("BUY", envelope["preferredAction"])
+        self.assertEqual(["graph.entry.confirmed.v1"], envelope["supportRuleIds"])
+        self.assertEqual(["graph.macro.regime.risk.v1"], envelope["constraintRuleIds"])
+        self.assertEqual("graph.entry.confirmed.v1", decision["selectedRuleId"])
+        self.assertEqual("BUY", decision["candidateAction"])
+
+    def test_entry_defer_narrows_an_entry_support_without_turning_it_into_avoid(self):
+        facts = {"symbol": "NVDA", "source": "watchlist", "isWatchlist": True}
+        policy = {
+            "targetRole": "watchlist",
+            "actionPolicy": "ENTRY_ONLY",
+            "allowedActions": ["BUY", "HOLD", "AVOID"],
+            "blockedActions": ["ADD", "TRIM", "SELL"],
+        }
+        relations = [
+            {
+                "type": "HAS_INFERRED_ENTRY_OPPORTUNITY",
+                "ruleId": "graph.entry.confirmed.v1",
+                "targetLabel": "NVIDIA 진입 조건 확인",
+                "polarity": "support",
+                "decisionStage": "ENTRY_SPLIT_BUY",
+                "decisionLabel": "소액 진입 검토",
+                "decisionTone": "caution",
+                "actionGroup": "entry",
+                "actionLevel": "action",
+                "candidateAction": "BUY",
+                "decisionEffect": "support",
+                **policy,
+            },
+            {
+                "type": "HAS_INFERRED_ENTRY_WAIT",
+                "ruleId": "graph.entry.wait.v1",
+                "targetLabel": "NVIDIA 확인 자료 부족",
+                "polarity": "context",
+                "decisionStage": "ENTRY_WAIT",
+                "decisionLabel": "진입 전 추가 확인",
+                "decisionTone": "watch",
+                "actionGroup": "entryWait",
+                "actionLevel": "watch",
+                "candidateAction": "HOLD",
+                "decisionEffect": "defer",
+                **policy,
+            },
+        ]
+
+        matches = matches_from_inference(relations, [], facts)
+        envelope = action_envelope_from_inference(facts, matches, relations)
+
+        self.assertEqual("ENTRY_DEFERRED", envelope["status"])
+        self.assertEqual("HOLD", envelope["preferredAction"])
+        self.assertEqual(["graph.entry.wait.v1"], envelope["deferRuleIds"])
 
     def test_missing_data_driver_preserves_stale_value_reason(self):
         drivers = decision_drivers_from_relation_context(

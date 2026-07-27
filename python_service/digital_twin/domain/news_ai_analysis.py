@@ -8,8 +8,8 @@ from .investment_research import NewsCollectionTarget, ResearchEvidence
 from . import news_analysis as news_domain
 
 
-NEWS_AI_ANALYSIS_VERSION = "news-ai-analysis-v11-content-boundary"
-NEWS_AI_PROMPT_VERSION = "news-ai-prompt-v11-content-boundary"
+NEWS_AI_ANALYSIS_VERSION = "news-ai-analysis-v12-inline-decision-contract"
+NEWS_AI_PROMPT_VERSION = "news-ai-prompt-v12-inline-decision-contract"
 
 IMPACT_LABELS = {
     "support": "호재",
@@ -143,6 +143,12 @@ def unique_texts(values: Iterable[object], limit: int = 6) -> List[str]:
         if len(rows) >= limit:
             break
     return rows
+
+
+def boolean_value(value: object) -> bool:
+    if value is True:
+        return True
+    return str(value or "").strip().casefold() in {"1", "true", "yes", "y"}
 
 
 SUMMARY_PREFIX_PATTERN = re.compile(
@@ -557,6 +563,8 @@ class NewsAiAnalysis:
     materiality_state: str = "context"
     data_state: str = "partial"
     validation_state: str = "conditional"
+    decision_inline_eligible: bool = False
+    decision_inline_reason_ko: str = ""
     summary: Dict[str, object] = field(default_factory=dict)
     risk_signals: List[str] = field(default_factory=list)
     support_signals: List[str] = field(default_factory=list)
@@ -591,6 +599,8 @@ class NewsAiAnalysis:
             "materialityState": self.materiality_state,
             "dataState": self.data_state,
             "validationState": self.validation_state,
+            "decisionInlineEligible": bool(self.decision_inline_eligible),
+            "decisionInlineReasonKo": compact_text(self.decision_inline_reason_ko, 360),
             "summary": dict(self.summary or {}),
             "riskSignals": list(self.risk_signals or []),
             "supportSignals": list(self.support_signals or []),
@@ -656,12 +666,44 @@ def normalize_ai_analysis(payload: Dict[str, object], fallback: NewsAiAnalysis =
             translation_status = "pending"
     elif translation_status not in {"complete", "pending", "unavailable", "not-required"}:
         translation_status = "not-required"
+    read_scope = str(
+        payload.get("readScope")
+        or payload.get("read_scope")
+        or fallback.read_scope
+        or "title+rss-summary"
+    ).strip().lower()
+    needs_review = boolean_value(payload.get("needsReview")) if "needsReview" in payload else boolean_value(fallback.needs_review)
+    inline_reason = compact_text(
+        payload.get("decisionInlineReasonKo")
+        or payload.get("decision_inline_reason_ko")
+        or fallback.decision_inline_reason_ko,
+        360,
+    )
+    inline_requested = boolean_value(
+        payload.get("decisionInlineEligible")
+        if "decisionInlineEligible" in payload
+        else payload.get("decision_inline_eligible")
+        if "decision_inline_eligible" in payload
+        else fallback.decision_inline_eligible
+    )
+    inline_eligible = bool(
+        inline_requested
+        and inline_reason
+        and read_scope == "body"
+        and polarity in {"support", "risk"}
+        and states["relevanceState"] == "direct"
+        and states["materialityState"] == "material"
+        and states["dataState"] == "sufficient"
+        and states["validationState"] == "ready"
+        and states["sourceTrustState"] in {"trusted", "standard"}
+        and not needs_review
+    )
     return NewsAiAnalysis(
         status=str(payload.get("status") or fallback.status or "ok"),
         version=str(payload.get("version") or fallback.version or NEWS_AI_ANALYSIS_VERSION),
         prompt_version=str(payload.get("promptVersion") or payload.get("prompt_version") or fallback.prompt_version or NEWS_AI_PROMPT_VERSION),
         model=str(payload.get("model") or fallback.model or "local-news-semantic-analyzer-v1"),
-        read_scope=str(payload.get("readScope") or payload.get("read_scope") or fallback.read_scope or "title+rss-summary"),
+        read_scope=read_scope,
         source_text_hash=str(payload.get("sourceTextHash") or payload.get("source_text_hash") or fallback.source_text_hash or ""),
         source_language=normalized_language,
         original_title=original_title,
@@ -676,6 +718,8 @@ def normalize_ai_analysis(payload: Dict[str, object], fallback: NewsAiAnalysis =
         materiality_state=states["materialityState"],
         data_state=states["dataState"],
         validation_state=states["validationState"],
+        decision_inline_eligible=inline_eligible,
+        decision_inline_reason_ko=inline_reason,
         summary=normalized_summary,
         risk_signals=unique_texts(payload.get("riskSignals") or payload.get("risk_signals") or fallback.risk_signals, 6),
         support_signals=unique_texts(payload.get("supportSignals") or payload.get("support_signals") or fallback.support_signals, 6),
@@ -693,7 +737,7 @@ def normalize_ai_analysis(payload: Dict[str, object], fallback: NewsAiAnalysis =
             or fallback.validation_reason_ko,
             360,
         ),
-        needs_review=bool(payload.get("needsReview") if "needsReview" in payload else fallback.needs_review),
+        needs_review=needs_review,
         reasoning_limitations=unique_texts(payload.get("reasoningLimitations") or payload.get("reasoning_limitations") or fallback.reasoning_limitations, 5),
     )
 
@@ -1028,6 +1072,8 @@ def apply_news_ai_analysis(evidence: ResearchEvidence, analysis_payload: Dict[st
             "materialityState": "context",
             "dataState": "insufficient",
             "validationState": "blocked",
+            "decisionInlineEligible": False,
+            "decisionInlineReasonKo": "기업의 실제 사건이 아닌 방송·해설성 기사라 판단 변화 기사로 쓰지 않습니다.",
             "summary": summary,
             "needsReview": True,
             "reasoningLimitations": unique_texts([
@@ -1103,6 +1149,7 @@ def apply_news_ai_analysis(evidence: ResearchEvidence, analysis_payload: Dict[st
         )
     if payload["articleSummaryQuality"].get("issues"):
         analysis_dict["needsReview"] = True
+        analysis_dict["decisionInlineEligible"] = False
         analysis_dict["reasoningLimitations"] = unique_texts([
             *(analysis_dict.get("reasoningLimitations") or []),
             "요약 품질 점검 필요: " + ", ".join(payload["articleSummaryQuality"].get("issues") or []),
@@ -1110,6 +1157,8 @@ def apply_news_ai_analysis(evidence: ResearchEvidence, analysis_payload: Dict[st
         payload["aiAnalysis"] = analysis_dict
     else:
         payload["aiAnalysis"] = analysis_dict
+    payload["decisionInlineEligible"] = bool(analysis_dict.get("decisionInlineEligible"))
+    payload["decisionInlineReasonKo"] = analysis_dict.get("decisionInlineReasonKo") or ""
     payload["stockImpact"] = STOCK_IMPACT_VALUES.get(impact_polarity, "neutral")
     payload["stockImpactLabel"] = analysis_dict.get("impactLabelKo") or IMPACT_LABELS.get(impact_polarity, "중립")
     payload["stockImpactPolarity"] = impact_polarity if impact_polarity in {"support", "risk"} else "context"
@@ -1144,6 +1193,8 @@ def apply_news_ai_analysis(evidence: ResearchEvidence, analysis_payload: Dict[st
             "stockImpactLabel": payload["stockImpactLabel"],
             "stockImpactPolarity": payload["stockImpactPolarity"],
             "stockImpactReasonKo": payload["stockImpactReasonKo"],
+            "decisionInlineEligible": payload["decisionInlineEligible"],
+            "decisionInlineReasonKo": payload["decisionInlineReasonKo"],
         },
         source=evidence.source,
         provider=original_facts.get("provider") or payload.get("provider") or "",
@@ -1251,6 +1302,8 @@ def build_news_ai_analysis_prompt(target: NewsCollectionTarget, evidence: Resear
             "materialityState": "material|notable|context",
             "dataState": "sufficient|partial|insufficient|unavailable",
             "validationState": "ready|conditional|blocked",
+            "decisionInlineEligible": "true only for a new, target-specific, verified event that should appear inline because it directly changed the investment judgment; otherwise false",
+            "decisionInlineReasonKo": "when true, state the verified target-specific fact and why it changes the judgment; otherwise explain briefly why it must stay out of the inline alert",
             "summary": {
                 "oneLineKo": "기사에서 실제로 일어난 일과 종목 관련성을 담은 한 문장",
                 "briefKo": "핵심 사실만 담은 자연스러운 한국어 2-3문장",
@@ -1287,6 +1340,8 @@ def build_news_ai_analysis_prompt(target: NewsCollectionTarget, evidence: Resear
             "Ignore newsletter or CTA boilerplate such as Never miss important updates, Simply Wall St tools, make better investment decisions, and cut through noise.",
             "The word miss is a risk signal only in earnings or estimate-miss context, not in Never miss important updates.",
             "impactReasonKo and portfolioImplicationKo must explain the investment impact plainly before any generic summary.",
+            "Set decisionInlineEligible to false for a partner, supplier, customer, peer, or ecosystem company's standalone result; analyst or price commentary; a long-term scenario; a duplicate story; or a target mention without a new verified target-specific fact.",
+            "Set decisionInlineEligible to true only when the full body confirms a new event directly about the target, with a clear support or risk direction and a concrete path to revenue, cost, regulation, capital, operations, or a legal obligation.",
         ],
         "target": {
             "symbol": target.symbol,

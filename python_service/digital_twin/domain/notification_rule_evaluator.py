@@ -522,10 +522,11 @@ def notification_state_group_key(
         parts.append(relation_signature)
     relation_delivery = ontology_relation_delivery_metadata(context)
     if include_relation_delivery and relation_delivery.get("fingerprint"):
-        # Price, P&L, timestamps, and generation ids are deliberately absent
-        # from this key. A new group exists only when the graph's decision,
-        # active rule/evidence set, or relation topology materially changes.
-        parts.append("graph=" + str(relation_delivery["fingerprint"]))
+        # The TypeDB action envelope is the delivery state. Relation rows,
+        # traces, and selected-rule provenance can be rebuilt without a new
+        # action, so they must not create a fresh cooldown group.
+        signature = str(relation_delivery.get("stateSignature") or relation_delivery["fingerprint"])
+        parts.append("graph=" + signature)
     return "|".join(parts)
 
 
@@ -537,14 +538,24 @@ def ontology_relation_state_signature(context: Dict[str, object]) -> str:
     conflict = relation_context.get("signalConflicts") if isinstance(relation_context.get("signalConflicts"), dict) else {}
     why_now = relation_context.get("whyNow") if isinstance(relation_context.get("whyNow"), dict) else {}
     decision = relation_context.get("decision") if isinstance(relation_context.get("decision"), dict) else {}
+    envelope = relation_context.get("actionEnvelope") if isinstance(relation_context.get("actionEnvelope"), dict) else {}
+    if not envelope and isinstance(decision.get("actionEnvelope"), dict):
+        envelope = decision.get("actionEnvelope")
     parts: List[str] = []
-    state_key = normalize_fingerprint_part(timeline.get("currentStateKey"))
-    if state_key:
-        parts.append("timeline=" + state_key)
+    envelope_status = normalize_fingerprint_part(envelope.get("status"))
+    envelope_action = normalize_fingerprint_part(envelope.get("preferredAction"))
+    readiness = envelope.get("dataReadiness") if isinstance(envelope.get("dataReadiness"), dict) else {}
+    envelope_readiness = normalize_fingerprint_part(readiness.get("state") or readiness.get("dataState"))
+    if envelope_status or envelope_action or envelope_readiness:
+        parts.append("envelope=" + ":".join(item for item in [envelope_status, envelope_action, envelope_readiness] if item))
     else:
-        selected_rule = normalize_fingerprint_part(decision.get("selectedRuleId"))
-        if selected_rule:
-            parts.append("rule=" + selected_rule)
+        state_key = normalize_fingerprint_part(timeline.get("currentStateKey"))
+        if state_key:
+            parts.append("timeline=" + state_key)
+        else:
+            selected_rule = normalize_fingerprint_part(decision.get("selectedRuleId"))
+            if selected_rule:
+                parts.append("rule=" + selected_rule)
     conflict_type = normalize_fingerprint_part(conflict.get("conflictType"))
     if conflict_type and conflict_type != "none":
         parts.append("conflict=" + conflict_type)
@@ -965,7 +976,23 @@ def apply_state_cooldown_rule(
         decision.state_reason = "상태 fingerprint 없음"
         return decision
     previous_context = previous_context or {}
-    if apply_typedb_profit_loss_delivery(
+    job_context = job.context if job is not None and isinstance(job.context, dict) else {}
+    relation_diff = job_context.get("ontologyRelationDiff") if isinstance(job_context.get("ontologyRelationDiff"), dict) else {}
+    transition = relation_diff.get("decisionTransition") if isinstance(relation_diff.get("decisionTransition"), dict) else {}
+    has_graph_transition = bool(transition)
+    transition_is_material = bool(transition.get("material"))
+    transition_kind = str(transition.get("kind") or "")
+    if has_graph_transition and transition_is_material and transition_kind != "initial" and decision.state_recent_sent_count > 0:
+        decision.state_decision = "meaningful-change"
+        decision.state_reason = "실행 판단 전이: " + str(transition.get("summary") or "현재 실행 범위가 바뀌었습니다.")
+        decision.similarity_bypassed = True
+        decision.similarity_bypass_reason = decision.state_reason
+        decision.reasons.append("상태 정책: " + decision.state_reason)
+        return decision
+    # For graph-backed alerts, a raw P&L or moving-average fluctuation must
+    # not bypass the cooldown when the TypeDB action envelope stayed the same.
+    graph_state_static = bool(has_graph_transition and not transition_is_material)
+    if not graph_state_static and apply_typedb_profit_loss_delivery(
         decision,
         job,
         previous_context=previous_context,
@@ -980,6 +1007,8 @@ def apply_state_cooldown_rule(
     if job is not None:
         for condition in config.similarity_bypass_conditions or []:
             if not condition.enabled:
+                continue
+            if graph_state_static:
                 continue
             matched, reason = similarity_bypass_match(
                 condition,

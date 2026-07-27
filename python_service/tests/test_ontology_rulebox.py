@@ -1579,6 +1579,15 @@ class OntologyRuleBoxTests(unittest.TestCase):
 
         self.assertEqual([], missing)
 
+    def test_every_default_derivation_persists_an_explicit_decision_effect(self):
+        missing = [
+            rule.rule_id
+            for rule in default_graph_inference_rules()
+            if any(derivation.decision_effect not in {"support", "defer", "constrain", "block"} for derivation in rule.derivations)
+        ]
+
+        self.assertEqual([], missing)
+
     def test_rulebox_payload_rejects_derivation_without_decision_stage(self):
         payload = rulebox_rules_to_payload(default_graph_inference_rules()[:1])
         payload[0]["derivations"][0]["decision_stage"] = ""
@@ -1944,6 +1953,7 @@ class OntologyRuleBoxTests(unittest.TestCase):
         self.assertEqual("ENTRY_ONLY", template_rows[0]["derivationActionPolicy"])
         self.assertEqual(["BUY", "HOLD", "AVOID"], template_rows[0]["derivationAllowedActions"])
         self.assertEqual(["ADD", "TRIM", "SELL"], template_rows[0]["derivationBlockedActions"])
+        self.assertEqual("support", template_rows[0]["derivationDecisionEffect"])
 
     def test_rulebox_snapshot_reconstructs_rules_from_typedb_rows(self):
         default_rules = default_graph_inference_rules()

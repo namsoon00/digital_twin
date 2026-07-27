@@ -18761,6 +18761,64 @@
     };
   }
 
+  function notificationActionFlowActionLabel(value) {
+    var labels = {
+      BUY: "소액 진입 검토",
+      ADD: "소액 추가매수 검토",
+      HOLD: "유지",
+      TRIM: "분할축소 검토",
+      SELL: "매도 검토",
+      AVOID: "신규 진입 회피"
+    };
+    return labels[String(value || "").toUpperCase()] || "조건 확인";
+  }
+
+  function notificationActionFlowStatusLabel(value) {
+    var labels = {
+      ENTRY_ELIGIBLE: "소액 진입 조건 성립",
+      ENTRY_DEFERRED: "진입 조건 추가 확인",
+      ENTRY_OBSERVING: "관심 유지",
+      ENTRY_BLOCKED: "진입 판단 보류",
+      HOLDING_REVIEW: "보유 판단 재확인",
+      JUDGEMENT_BLOCKED: "판단 보류"
+    };
+    return labels[String(value || "")] || "조건 확인";
+  }
+
+  function renderNotificationActionFlow(job) {
+    var flow = job && job.actionFlow && typeof job.actionFlow === "object" ? job.actionFlow : {};
+    if (!Object.keys(flow).length) return "";
+    var transition = flow.transition && typeof flow.transition === "object" ? flow.transition : {};
+    var readiness = flow.dataReadiness && typeof flow.dataReadiness === "object" ? flow.dataReadiness : {};
+    var news = flow.newsImpact && typeof flow.newsImpact === "object" ? flow.newsImpact : {};
+    var nextChecks = Array.isArray(flow.nextChecks) ? flow.nextChecks : [];
+    var invalidation = Array.isArray(flow.invalidationConditions) ? flow.invalidationConditions : [];
+    var effects = Array.isArray(flow.effects) ? flow.effects : [];
+    var currentAction = flow.currentActionLabel || notificationActionFlowActionLabel(flow.currentAction);
+    var status = flow.statusLabel || notificationActionFlowStatusLabel(flow.status);
+    var rows = [
+      '<div class="notification-detail-metrics">',
+      renderNotificationDetailMetric("지금 행동", currentAction, flow.status === "ENTRY_ELIGIBLE" ? "watch" : "hold"),
+      renderNotificationDetailMetric("현재 조건", status, flow.status === "JUDGEMENT_BLOCKED" || flow.status === "ENTRY_BLOCKED" ? "caution" : "muted"),
+      readiness.dataState ? renderNotificationDetailMetric("자료 상태", readiness.dataState === "sufficient" ? "판단 가능" : (readiness.dataState === "partial" ? "일부 확인" : "판단 보류"), readiness.dataState === "sufficient" ? "watch" : "caution") : "",
+      '</div>'
+    ].join("");
+    var change = transition.summary || "이전 알림과 같은 판단 범위입니다.";
+    return [
+      '<section class="notification-detail-section notification-action-flow-section">',
+      '<strong>판단 흐름</strong>',
+      rows,
+      '<div class="notification-detail-reasons">',
+      '<p><b>이번 변화</b> ' + escapeHtml(change) + '</p>',
+      nextChecks.length ? '<p><b>다음 행동</b> ' + escapeHtml(nextChecks.slice(0, 2).join(" / ")) + '</p>' : '',
+      invalidation.length ? '<p><b>바뀌는 조건</b> ' + escapeHtml(invalidation.slice(0, 2).join(" / ")) + '</p>' : '',
+      news.headline ? '<p><b>결정에 반영한 뉴스</b> ' + escapeHtml([news.source, news.headline].filter(Boolean).join(": ")) + '</p>' : '',
+      '</div>',
+      effects.length ? '<div class="notification-detail-tags">' + effects.map(function (item) { return '<span>' + escapeHtml(item) + '</span>'; }).join("") + '</div>' : '',
+      '</section>'
+    ].join("");
+  }
+
   function notificationJobResearchEvidence(job) {
     var symbol = notificationJobResolvedSymbol(job);
     if (!symbol) return [];
@@ -19027,6 +19085,7 @@
       '<strong>판단 요약</strong>',
       '<p>' + escapeHtml(payload.preview) + '</p>',
       '</section>',
+      renderNotificationActionFlow(job),
       !compact ? renderNotificationReverseReasoning(job) : '',
       visibleGateRows.length ? '<section class="notification-detail-section"><strong>게이트와 보류 조건</strong><div class="notification-detail-tags">' + visibleGateRows.map(function (row) {
         return '<span>' + escapeHtml(textWithKnownDisplaySymbols(row, payload.resolvedSymbol, job)) + '</span>';

@@ -8399,6 +8399,7 @@ class TypeDBOntologyGraphRepository(GraphStoreOntologyRowMapperMixin, ScopedABox
             "derivationActionGroup": str(derivation.get("action_group") or merged.get("derivationActionGroup") or ""),
             "derivationActionLevel": str(derivation.get("action_level") or merged.get("derivationActionLevel") or ""),
             "derivationDecisionStage": str(derivation.get("decision_stage") or derivation.get("decisionStage") or merged.get("derivationDecisionStage") or ""),
+            "derivationDecisionEffect": str(derivation.get("decision_effect") or derivation.get("decisionEffect") or merged.get("derivationDecisionEffect") or ""),
             "derivationDecisionLabel": str(derivation.get("decision_label") or derivation.get("decisionLabel") or merged.get("derivationDecisionLabel") or ""),
             "derivationDecisionTone": str(derivation.get("decision_tone") or derivation.get("decisionTone") or merged.get("derivationDecisionTone") or ""),
             "derivationTargetRole": str(derivation.get("target_role") or derivation.get("targetRole") or merged.get("derivationTargetRole") or ""),

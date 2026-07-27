@@ -42,6 +42,7 @@ class OntologyRuleMatch:
     review_label: str
     data_state: str
     evidence_role: str
+    decision_effect: str = ""
     evidence: List[str] = field(default_factory=list)
     missing: List[str] = field(default_factory=list)
     reference_only: bool = False

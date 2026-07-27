@@ -6,6 +6,8 @@ from digital_twin.domain.sent_article_filter import (
     article_identity_keys,
     collect_article_identity_keys_from_context,
     filter_sent_articles_from_context,
+    news_story_changes_decision,
+    news_story_impact_from_context,
 )
 from digital_twin.infrastructure.mysql_notification_jobs import MySQLNotificationJobStore
 
@@ -157,6 +159,107 @@ class SentArticleFilterTests(unittest.TestCase):
         job = NotificationJob.create(text="news digest", message_type=NEWS_DIGEST)
 
         self.assertTrue(store.article_driven_job(job))
+
+    def test_syndicated_story_is_filtered_by_claim_root_but_new_fact_is_kept(self):
+        original = {
+            "kind": "news",
+            "title": "NVIDIA announces a new AI partnership",
+            "url": "https://first.example/nvda-partnership",
+            "claimId": "claim:nvda-partnership-origin",
+            "readStatus": "body",
+            "eventTakeaway": "NVIDIA signed a multi-year AI infrastructure partnership.",
+        }
+        syndicated_copy = {
+            "kind": "news",
+            "title": "엔비디아, 인공지능 인프라 협력 발표",
+            "url": "https://second.example/nvda-partnership-copy",
+            "duplicateOfClaimId": "claim:nvda-partnership-origin",
+            "readStatus": "body",
+            "eventTakeaway": "엔비디아가 인공지능 인프라 협력 계약을 발표했습니다.",
+        }
+        sent = article_identity_keys(original)
+
+        duplicate_result = filter_sent_articles_from_context({"researchEvidence": [syndicated_copy]}, sent)
+        self.assertEqual(1, duplicate_result.removed_count)
+        self.assertEqual([], duplicate_result.context["researchEvidence"])
+
+        followup = dict(syndicated_copy, factId="fact:nvda-partnership-contract-value")
+        followup_result = filter_sent_articles_from_context({"researchEvidence": [followup]}, sent)
+        self.assertEqual(0, followup_result.removed_count)
+        self.assertEqual([followup], followup_result.context["researchEvidence"])
+
+    def test_compact_news_impact_requires_body_read_material_directional_story(self):
+        context = {
+            "researchEvidence": [
+                {
+                    "kind": "news",
+                    "title": "NVIDIA wins a data-center supply contract",
+                    "source": "Reuters",
+                    "readStatus": "body",
+                    "materialityState": "material",
+                    "relevanceState": "direct",
+                    "sourceTrustState": "trusted",
+                    "dataState": "sufficient",
+                    "validationState": "ready",
+                    "stockImpactPolarity": "support",
+                    "decisionInlineEligible": True,
+                    "decisionInlineReasonKo": "공개된 신규 공급 계약이 엔비디아의 수요 근거를 직접 강화합니다.",
+                    "eventTakeaway": "NVIDIA won a new data-center supply contract with disclosed demand support.",
+                },
+                {
+                    "kind": "news",
+                    "title": "NVIDIA commentary feed",
+                    "readStatus": "feed-summary",
+                    "materialityState": "material",
+                    "relevanceState": "direct",
+                    "stockImpactPolarity": "risk",
+                },
+            ]
+        }
+
+        impact = news_story_impact_from_context(context)
+
+        self.assertEqual("Reuters", impact["source"])
+        self.assertIn("data-center supply contract", impact["headline"])
+        self.assertTrue(impact["verified"])
+        self.assertTrue(impact["decisionInlineEligible"])
+
+    def test_compact_news_impact_rejects_partner_story_without_explicit_inline_contract(self):
+        context = {
+            "researchEvidence": [{
+                "kind": "news",
+                "title": "Partner company reports a quantum milestone with NVIDIA support",
+                "source": "Yahoo Finance",
+                "readStatus": "body",
+                "materialityState": "material",
+                "relevanceState": "direct",
+                "sourceTrustState": "standard",
+                "dataState": "sufficient",
+                "validationState": "ready",
+                "stockImpactPolarity": "support",
+                "decisionInlineEligible": False,
+                "decisionInlineReasonKo": "파트너사 자체 결과라 엔비디아의 신규 실적·계약 사실은 아닙니다.",
+                "eventTakeaway": "파트너사의 독자적 성과를 설명한 기사입니다.",
+            }]
+        }
+
+        self.assertEqual({}, news_story_impact_from_context(context))
+
+    def test_compact_news_requires_new_relation_evidence_for_this_decision(self):
+        impact = {
+            "decisionInlineEligible": True,
+            "evidenceKeys": ["research:nvda:news:contract"],
+            "identityKeys": ["url:other"],
+        }
+        relation_diff = {
+            "materialComponents": ["evidenceKeys", "actionEnvelope"],
+            "addedEvidenceKeys": ["research:nvda:news:contract"],
+            "decisionTransition": {"material": True, "kind": "action-changed"},
+        }
+
+        self.assertTrue(news_story_changes_decision(impact, relation_diff))
+        relation_diff["addedEvidenceKeys"] = ["research:nvda:news:other"]
+        self.assertFalse(news_story_changes_decision(impact, relation_diff))
 
 
 if __name__ == "__main__":

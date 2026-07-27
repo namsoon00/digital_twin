@@ -89,6 +89,17 @@ def notification_context():
             "decision": {
                 "label": "공시 이벤트 위험 점검",
                 "selectedRuleId": "graph.disclosure.event-risk.v1",
+                "candidateAction": "TRIM",
+            },
+            "actionEnvelope": {
+                "status": "HOLDING_REVIEW",
+                "statusLabel": "보유 판단 재확인",
+                "preferredAction": "TRIM",
+                "targetRole": "holding",
+                "dataReadiness": {"state": "ready", "dataState": "sufficient", "usable": True},
+                "effectLabels": [{"effect": "constrain", "label": "제약 조건", "ruleIds": ["graph.disclosure.event-risk.v1"]}],
+                "nextChecks": ["공시 원문과 다음 가격 반응을 확인"],
+                "invalidationConditions": ["공시 위험 관계가 사라지고 가격 회복 관계가 생기면 재검토"],
             },
             "executionPlan": {"primaryActionLabel": "분할축소 우선 검토"},
             "activeRules": [{
@@ -151,6 +162,13 @@ def notification_context():
                 },
             },
         },
+        "decisionTransition": {
+            "kind": "action-changed",
+            "summary": "보유 유지에서 분할축소 검토로 바뀌었습니다.",
+            "previousAction": "HOLD",
+            "currentAction": "TRIM",
+            "material": True,
+        },
     }
 
 
@@ -201,7 +219,10 @@ class NotificationReverseReasoningTests(unittest.TestCase):
 
         self.assertIn("reasoningTrace", detail["job"])
         self.assertEqual("ready", detail["job"]["reasoningTrace"]["status"])
+        self.assertEqual("분할축소", detail["job"]["actionFlow"]["currentActionLabel"])
+        self.assertEqual("action-changed", detail["job"]["actionFlow"]["transition"]["kind"])
         self.assertNotIn("reasoningTrace", notification_job_list_payload(job, stale_minutes=30))
+        self.assertNotIn("actionFlow", notification_job_list_payload(job, stale_minutes=30))
 
 
 if __name__ == "__main__":

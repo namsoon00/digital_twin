@@ -175,6 +175,8 @@ RULEBOX_EXECUTION_GUIDANCE_BY_STAGE: Dict[str, Dict[str, object]] = {
         "primaryActionLabel": "거시 레짐과 종목 노출의 연결 점검",
         "candidateAction": "HOLD",
         "blockedActionLabels": ["레짐 확인 없는 민감 팩터 비중 확대"],
+        "strengthenConditions": ["거시 부담이 유지되고 진입 지지 관계가 새로 생기지 않으면 관심 유지를 이어감"],
+        "weakenConditions": ["거시 부담 관계가 사라지고 진입 지지 관계가 새로 성립하면 소액 진입 여부를 다시 검토"],
         "nextChecks": ["금리, 환율, 지수, 크립토와 종목 반응을 함께 확인"],
     },
     "MARKET_PROXY_CONTEXT": {
@@ -278,6 +280,63 @@ RULEBOX_EXECUTION_GUIDANCE_BY_STAGE: Dict[str, Dict[str, object]] = {
 }
 
 
+# This is bootstrap RuleBox authoring data.  ``with_rulebox_execution_guidance``
+# writes the value into every derivation before the rule is saved to TypeDB;
+# readers never map a stage to an effect at runtime.  A constraint narrows the
+# way an action is executed, while a defer asks for another observation.  Only
+# an explicit block invalidates the current action envelope.
+RULEBOX_DECISION_EFFECT_BY_STAGE: Dict[str, str] = {
+    "ADD_BUY_REVIEW": "support",
+    "ENTRY_SPLIT_BUY": "support",
+    "ENTRY_READY": "support",
+    "FLOW_DEFENSE": "support",
+    "RECOVERY_CONFIRM": "support",
+    "SUPPORT_RETEST": "support",
+    "TEMPORAL_DEFENSE": "support",
+    "VALUATION_OPPORTUNITY": "support",
+    "NEWS_CONFIRMATION": "support",
+    "DATA_CONFLICT": "block",
+    "ENTRY_WATCH": "defer",
+    "ENTRY_WAIT": "defer",
+    "ENTRY_REVIEW": "defer",
+    "ADD_BUY_BLOCKED": "defer",
+    "DISCLOSURE_REVIEW": "defer",
+    "NEWS_RISK": "defer",
+    "RELATION_WATCH": "defer",
+    "HOLD_REVIEW": "defer",
+    "LOSS_WATCH": "defer",
+    "MACRO_REGIME": "constrain",
+    "RATE_REVIEW": "constrain",
+    "RATE_ACTION": "constrain",
+    "FX_REVIEW": "constrain",
+    "FX_ACTION": "constrain",
+    "MARKET_PROXY_CONTEXT": "constrain",
+    "MARKET_STRUCTURE": "constrain",
+    "LIQUIDITY_REVIEW": "constrain",
+    "LIQUIDITY_ACTION": "constrain",
+    "EXECUTION_OK": "constrain",
+    "DISTRIBUTION_REVIEW": "constrain",
+    "FACTOR_CROWDING": "constrain",
+    "LOSS_REDUCE": "constrain",
+    "LOSS_CUT": "constrain",
+    "BREAKDOWN_ACCELERATION": "constrain",
+    "BREAKOUT_FAILURE": "constrain",
+    "SUPPORT_RETEST_FAILED": "constrain",
+    "TEMPORAL_RISK": "constrain",
+    "TEMPORAL_ACTION": "constrain",
+    "PROFIT_PARTIAL": "constrain",
+    "PROFIT_SPLIT": "constrain",
+    "PROFIT_PROTECT": "constrain",
+    "REBALANCE_REVIEW": "constrain",
+    "REBALANCE_ACTION": "constrain",
+    "BTC_REVIEW": "constrain",
+    "BTC_REDUCE": "constrain",
+    "INCOME_RATE_REVIEW": "constrain",
+    "VALUATION_REVIEW": "constrain",
+    "VALUATION_RISK": "constrain",
+}
+
+
 # Alerting is a RuleBox delivery attribute.  The default is deliberately
 # non-interruptive; only stages which require prompt risk review are promoted
 # to ``ALERT`` when the bootstrap catalog is persisted to TypeDB.
@@ -315,6 +374,8 @@ def with_rulebox_execution_guidance(rules: List[GraphInferenceRule]) -> List[Gra
         for derivation in rule.derivations or []:
             stage = str(derivation.decision_stage or "").strip()
             guidance = dict(RULEBOX_EXECUTION_GUIDANCE_BY_STAGE.get(stage) or {})
+            evidence_role = str(derivation.evidence_role or derivation.polarity or "context").strip().lower()
+            default_effect = "support" if evidence_role == "support" else ("constrain" if evidence_role in {"risk", "counter", "blocking"} else "defer")
             notification_severity = (
                 derivation.notification_severity
                 or str(guidance.get("notificationSeverity") or "")
@@ -327,6 +388,12 @@ def with_rulebox_execution_guidance(rules: List[GraphInferenceRule]) -> List[Gra
                     derivation.decision_tone
                     or str(guidance.get("decisionTone") or "")
                     or RULEBOX_DECISION_TONE_BY_ACTION_LEVEL.get(str(derivation.action_level or rule.action_level).lower(), "watch")
+                ),
+                decision_effect=(
+                    derivation.decision_effect
+                    or str(guidance.get("decisionEffect") or "")
+                    or RULEBOX_DECISION_EFFECT_BY_STAGE.get(stage)
+                    or default_effect
                 ),
                 primary_action=derivation.primary_action or str(guidance.get("primaryAction") or stage),
                 primary_action_label=derivation.primary_action_label or str(guidance.get("primaryActionLabel") or derivation.decision_label or rule.label),

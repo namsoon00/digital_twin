@@ -88,6 +88,8 @@ class OntologyRelationDeliveryTests(unittest.TestCase):
         self.assertNotEqual(notification_state_group_key(self.job(before)), notification_state_group_key(self.job(after)))
         self.assertTrue(diff["changed"])
         self.assertIn("evidenceKeys", diff["changedComponents"])
+        self.assertIn("main:news:005930:article-2", diff["addedEvidenceKeys"])
+        self.assertIn("main:news:005930:article-1", diff["removedEvidenceKeys"])
 
     def test_inference_generation_id_does_not_change_delivery_identity(self):
         before = self.context()
@@ -149,6 +151,51 @@ class OntologyRelationDeliveryTests(unittest.TestCase):
         self.assertEqual(notification_subject_group_key(self.job(before)), notification_subject_group_key(self.job(after)))
         self.assertNotEqual(notification_state_group_key(self.job(before)), notification_state_group_key(self.job(after)))
         self.assertIn("activeRules", ontology_relation_delivery_diff(after, before)["changedComponents"])
+
+    def test_relation_row_churn_keeps_one_cooldown_group_when_action_envelope_is_static(self):
+        before = self.context()
+        before["ontologyRelationContext"]["actionEnvelope"] = {
+            "status": "HOLDING_REVIEW",
+            "preferredAction": "TRIM",
+            "selectedRuleId": "graph.holding.trend.risk.v1",
+            "dataReadiness": {"state": "ready", "dataState": "sufficient"},
+        }
+        after = self.context()
+        after["ontologyRelationContext"]["actionEnvelope"] = dict(before["ontologyRelationContext"]["actionEnvelope"])
+        after["ontologyRelationContext"]["decision"]["selectedRuleId"] = "graph.holding.liquidity.risk.v1"
+        after["ontologyRelationContext"]["activeRules"][0]["ruleId"] = "graph.holding.liquidity.risk.v1"
+        after["ontologyRelationContext"]["graphStoreInference"]["relations"][0]["ruleId"] = "graph.holding.liquidity.risk.v1"
+
+        diff = ontology_relation_delivery_diff(after, before)
+
+        self.assertNotEqual(
+            ontology_relation_delivery_metadata(before)["fingerprint"],
+            ontology_relation_delivery_metadata(after)["fingerprint"],
+        )
+        self.assertEqual(notification_state_group_key(self.job(before)), notification_state_group_key(self.job(after)))
+        self.assertFalse(diff["material"])
+        self.assertEqual("context-drift", diff["changeClass"])
+        self.assertEqual("unchanged", diff["decisionTransition"]["kind"])
+
+    def test_action_envelope_transition_is_material(self):
+        before = self.context()
+        before["ontologyRelationContext"]["actionEnvelope"] = {
+            "status": "ENTRY_DEFERRED",
+            "preferredAction": "HOLD",
+            "dataReadiness": {"state": "partial", "dataState": "partial"},
+        }
+        after = self.context()
+        after["ontologyRelationContext"]["actionEnvelope"] = {
+            "status": "ENTRY_ELIGIBLE",
+            "preferredAction": "BUY",
+            "dataReadiness": {"state": "ready", "dataState": "sufficient"},
+        }
+
+        diff = ontology_relation_delivery_diff(after, before)
+
+        self.assertTrue(diff["material"])
+        self.assertEqual("action-changed", diff["decisionTransition"]["kind"])
+        self.assertIn("actionEnvelope", diff["materialComponents"])
 
 
 if __name__ == "__main__":

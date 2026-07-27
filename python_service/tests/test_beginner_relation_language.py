@@ -69,7 +69,8 @@ class BeginnerRelationLanguageTests(unittest.TestCase):
         )
 
         self.assertEqual("HOLD", opinion.action)
-        self.assertIn("TypeDB RuleBox", opinion.thesis)
+        self.assertIn("실행 가능 용량 확인", opinion.thesis)
+        self.assertNotIn("TypeDB", opinion.thesis)
 
     def test_strategy_guide_never_invents_price_or_quantity_rules_from_raw_lines(self):
         response = NotificationAIValidatedResponse(
@@ -179,7 +180,7 @@ class BeginnerRelationLanguageTests(unittest.TestCase):
         self.assertIn("팔아야 한다는 뜻이 아니라", joined)
         self.assertIn("매도해야 한다는 뜻은 아닙니다", joined)
 
-    def test_absolute_beginner_strategy_guide_compacts_repeated_detail_for_one_message(self):
+    def test_absolute_beginner_message_compacts_to_action_flow(self):
         response = NotificationAIValidatedResponse(
             action="HOLD",
             action_label="보유",
@@ -234,27 +235,24 @@ class BeginnerRelationLanguageTests(unittest.TestCase):
         )
 
         for expected in [
-            "<b>판단</b>",
-            "<b>핵심 근거</b>",
-            "<b>다음 조건</b>",
+            "<b>지금 행동</b>",
+            "<b>이번 변화</b>",
+            "<b>바뀐 이유</b>",
+            "<b>다음 행동</b>",
+            "<b>판단 변경 조건</b>",
+            "<b>자료 상태</b>",
             "근거 1",
             "근거 2",
-            "근거 3",
-            "반대 신호: 반대 1",
-            "다시 판단할 조건",
-            "확인 1",
             "부족 1",
-            "부족 2",
         ]:
             self.assertIn(expected, message)
-        for hidden in ["[AI]", "근거 4", "근거 5", "반대 2", "반대 3", "확인 3", "확인 4", "부족 3", "부족 4", "부족 5", "검증 3", "고객이 실제 투자 판단 전에"]:
+        for hidden in ["근거 3", "근거 4", "근거 5", "반대 1", "확인 1", "부족 2", "부족 3", "검증 3", "고객이 실제 투자 판단 전에", "<b>밸류에이션</b>"]:
             self.assertNotIn(hidden, message)
-        self.assertIn("AI 검증", message)
+        self.assertIn("[AI]", message)
         self.assertNotIn("<b>점수 안내</b>", message)
-        self.assertIn("관계 분석 규칙", message)
-        self.assertIn("실행 조건", message)
+        self.assertNotIn("<b>전략 가이드</b>", message)
 
-    def test_beginner_message_adds_term_hints_and_compacts_strategy_guide(self):
+    def test_beginner_message_uses_compact_action_flow(self):
         response = NotificationAIValidatedResponse(
             action="HOLD",
             action_label="보유",
@@ -278,33 +276,33 @@ class BeginnerRelationLanguageTests(unittest.TestCase):
             response,
         )
 
-        self.assertIn("<b>판단</b>", message)
-        self.assertIn("<b>핵심 근거</b>", message)
-        self.assertIn("<b>다음 조건</b>", message)
+        self.assertIn("<b>지금 행동</b>", message)
+        self.assertIn("<b>바뀐 이유</b>", message)
+        self.assertIn("<b>다음 행동</b>", message)
         self.assertIn("근거 1", message)
         self.assertIn("근거 2", message)
-        self.assertIn("근거 3", message)
+        self.assertNotIn("근거 3", message)
         self.assertNotIn("근거 4", message)
         self.assertNotIn("근거 5", message)
-        self.assertIn("반대 1", message)
+        self.assertNotIn("반대 1", message)
         self.assertNotIn("반대 2", message)
         self.assertNotIn("반대 3", message)
         self.assertNotIn("반대 4", message)
-        self.assertIn("확인 1", message)
+        self.assertNotIn("확인 1", message)
         self.assertNotIn("확인 2", message)
         self.assertNotIn("확인 3", message)
         self.assertNotIn("확인 4", message)
         self.assertIn("부족 1", message)
-        self.assertIn("부족 2", message)
+        self.assertNotIn("부족 2", message)
         self.assertNotIn("부족 3", message)
         self.assertNotIn("부족 4", message)
         self.assertNotIn("부족 5", message)
-        self.assertIn("AI 검증", message)
+        self.assertIn("[AI]", message)
         self.assertNotIn("<b>점수 안내</b>", message)
         self.assertNotIn("관계 강도", message)
         self.assertIn("RuleBox(관계 분석 규칙)", message)
 
-    def test_beginner_message_shows_available_investor_flow_when_raw_lines_omit_it(self):
+    def test_beginner_message_keeps_full_investor_breakdown_out_of_compact_alert(self):
         response = NotificationAIValidatedResponse(
             action="HOLD",
             action_label="관심 유지",
@@ -344,11 +342,10 @@ class BeginnerRelationLanguageTests(unittest.TestCase):
             response,
         )
 
-        self.assertIn("<b>투자자</b>", message)
-        self.assertIn("KIS 당일 누적 수급 · 이전 조회와 같은 값 23회", message)
-        self.assertIn("외국인: 순매도 203,232주 (매수 449,185주 / 매도 652,417주)", message)
-        self.assertIn("기관: 순매수 675,178주 (매수 831,845주 / 매도 156,667주)", message)
-        self.assertIn("개인: 순매도 491,993주 (매수 592,017주 / 매도 1,084,010주)", message)
+        self.assertIn("<b>현재 흐름</b>", message)
+        self.assertIn("체결강도 59.5", message)
+        self.assertNotIn("<b>투자자</b>", message)
+        self.assertNotIn("외국인: 순매도 203,232주", message)
 
     def test_execution_message_includes_relation_axis_summary(self):
         response = NotificationAIValidatedResponse(
@@ -405,14 +402,9 @@ class BeginnerRelationLanguageTests(unittest.TestCase):
             response,
         )
 
-        self.assertIn("<b>핵심 근거</b>", message)
-        self.assertIn("가격 회복·약화", message)
-        self.assertIn("수급 심리", message)
-        self.assertIn("투자 성향·정책", message)
+        self.assertIn("<b>바뀐 이유</b>", message)
         self.assertIn("20일 평균보다 12.9%", message)
-        self.assertIn("확인 단계", message)
         self.assertIn("자료 상태", message)
-        self.assertIn("AI 검증", message)
         self.assertNotIn("점수 안내", message)
         self.assertNotIn("/100점", message)
 
@@ -482,11 +474,8 @@ class BeginnerRelationLanguageTests(unittest.TestCase):
         message = execution_telegram_message(context, response)
 
         self.assertTrue(any(line.startswith("밸류에이션") for line in axes))
-        self.assertIn("<b>밸류에이션</b>", message)
-        self.assertIn("기준 적정가", message)
-        self.assertIn("99,000원", message)
-        self.assertIn("계정 기준 +20.0% 충족", message)
-        self.assertIn("사용자 입력", message)
+        self.assertNotIn("<b>밸류에이션</b>", message)
+        self.assertNotIn("99,000원", message)
         self.assertIn("자료 상태", message)
         self.assertIn("사용자 적정가 기준 안전마진", message)
         self.assertNotIn("대입값", message)
@@ -545,11 +534,8 @@ class BeginnerRelationLanguageTests(unittest.TestCase):
             response,
         )
 
-        self.assertIn("<b>밸류에이션</b>", message)
+        self.assertNotIn("<b>밸류에이션</b>", message)
         self.assertIn("AI 제안", message)
-        self.assertIn("사용자 검토 전", message)
-        self.assertIn("연간 배당", message)
-        self.assertIn("요구수익률", message)
         self.assertIn("배당수익률 기준", message)
         self.assertNotIn("데이터 우선순위", message)
 
@@ -591,10 +577,9 @@ class BeginnerRelationLanguageTests(unittest.TestCase):
             response,
         )
 
-        self.assertIn("<b>밸류에이션</b>", message)
-        self.assertIn("기준 적정가", message)
-        self.assertIn("계산 불가", message)
-        self.assertIn("적정가 · 예상 EPS · 목표 PER", message)
+        self.assertNotIn("<b>밸류에이션</b>", message)
+        self.assertIn("자료 상태", message)
+        self.assertNotIn("기준 적정가", message)
         self.assertNotIn("계산 상태", message)
 
     def test_template_message_includes_relation_axis_summary(self):

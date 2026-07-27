@@ -39,6 +39,35 @@ from digital_twin.infrastructure.news_ai_analyzer import FallbackNewsAiAnalyzer,
 
 
 class NewsAnalysisDomainTests(unittest.TestCase):
+    def test_inline_decision_contract_requires_verified_direct_body_event(self):
+        eligible = normalize_ai_analysis({
+            "readScope": "body",
+            "impactPolarity": "support",
+            "relevanceState": "direct",
+            "sourceTrustState": "trusted",
+            "materialityState": "material",
+            "dataState": "sufficient",
+            "validationState": "ready",
+            "decisionInlineEligible": True,
+            "decisionInlineReasonKo": "회사가 공식적으로 공개한 신규 공급 계약이 수요 전망을 직접 강화합니다.",
+            "needsReview": False,
+        }).to_dict()
+        partner_story = normalize_ai_analysis({
+            "readScope": "body",
+            "impactPolarity": "support",
+            "relevanceState": "related",
+            "sourceTrustState": "trusted",
+            "materialityState": "material",
+            "dataState": "sufficient",
+            "validationState": "ready",
+            "decisionInlineEligible": True,
+            "decisionInlineReasonKo": "파트너사 자체 성과입니다.",
+            "needsReview": False,
+        }).to_dict()
+
+        self.assertTrue(eligible["decisionInlineEligible"])
+        self.assertFalse(partner_story["decisionInlineEligible"])
+
     def test_summary_quality_accepts_korean_magnitude_translation_and_keeps_target_as_advisory(self):
         quality = summary_quality_payload(
             "시가총액은 5조 달러를 넘었고 올해 AI 데이터센터 구축에는 약 7,000억 달러가 투입됩니다.",

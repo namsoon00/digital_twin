@@ -70,6 +70,7 @@ from digital_twin.infrastructure.typedb_ontology import (
     typedb_native_rule_target_work_plan,
     typedb_native_rule_evidence_read_index_for_execution,
     typedb_native_rule_planner_topology_for_execution,
+    materialize_typedb_native_matches,
     typedb_projection_preflight_graph_for_execution,
     typedb_native_rule_profile,
     typedb_native_reasoning_profile,
@@ -3996,6 +3997,60 @@ class TypeDBOntologyRepositoryTests(unittest.TestCase):
         self.assertEqual(1, len(inference_graph.relations))
         self.assertEqual(1.0, inference_graph.relations[0].weight)
         self.assertEqual(["evidence:1"], inference_graph.relations[0].evidence_ids)
+
+    def test_native_materialization_preserves_rulebox_decision_effect(self):
+        graph = PortfolioOntology("typedb-decision-effect")
+        stock = OntologyEntity(
+            "stock:NVDA",
+            "NVIDIA",
+            "stock",
+            {"ontologyBox": "ABox", "symbol": "NVDA", "source": "watchlist"},
+        )
+        graph.entities.append(stock)
+        rule = GraphInferenceRule(
+            rule_id="graph.test.entry.support.v1",
+            label="진입 지지",
+            version="v1",
+            source_kind="watchlist",
+            conditions=[],
+            derivations=[GraphRuleDerivation(
+                relation_type="HAS_INFERRED_SUPPORT",
+                target_kind="entry-support",
+                target_key="{symbol}:entry-support",
+                target_label="{displayName} 진입 지지",
+                tbox_class="EntrySupport",
+                polarity="support",
+                evidence_role="support",
+                decision_effect="support",
+                decision_stage="ENTRY_REVIEW",
+                target_role="watchlist",
+                action_policy="ENTRY_ONLY",
+                allowed_actions=["BUY", "HOLD", "AVOID"],
+                blocked_actions=["ADD", "TRIM", "SELL"],
+                candidate_action="BUY",
+            )],
+            action_group="entry",
+            action_level="check",
+            prompt_hint="진입 조건을 확인합니다.",
+        )
+
+        materialize_typedb_native_matches(
+            graph,
+            [rule],
+            {"matches": [{"ruleId": rule.rule_id, "sourceId": stock.entity_id}]},
+        )
+        generated = typedb_inferencebox_graph(
+            graph,
+            generation_id="inference-generation:decision-effect",
+            generation_at="2026-07-27T00:00:00Z",
+        )
+
+        inferred = next(
+            item for item in generated.relations
+            if item.relation_type == "HAS_INFERRED_SUPPORT"
+        )
+        self.assertEqual("support", inferred.properties["decisionEffect"])
+        self.assertEqual("BUY", inferred.properties["candidateAction"])
 
     def test_typedb_repository_factory_inherits_ontology_reasoning_native_rule_setting(self):
         direct = TypeDBOntologyGraphRepository("127.0.0.1:1729")

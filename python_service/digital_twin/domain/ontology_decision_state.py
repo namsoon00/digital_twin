@@ -20,6 +20,12 @@ CHANGE_STATES = (
 EVIDENCE_ROLES = ("risk", "support", "counter", "context", "blocking")
 CONFLICT_STATES = ("risk-only", "support-only", "mixed", "context-only")
 VALIDATION_STATES = ("ready", "conditional", "blocked")
+# A RuleBox derivation states how it participates in an action envelope.  It
+# is deliberately independent from evidence polarity: a broad macro risk can
+# constrain position sizing without invalidating an otherwise verified entry.
+# These values are authored with the RuleBox derivation and travel through the
+# InferenceBox relation; runtime code only combines the materialized values.
+DECISION_EFFECTS = ("support", "defer", "constrain", "block")
 
 RETIRED_AGGREGATE_FIELDS = {
     "confidenceImpact",
@@ -97,6 +103,24 @@ VALIDATION_STATE_LABELS = {
     "ready": "검증 완료",
     "conditional": "조건부 사용",
     "blocked": "판단 보류",
+}
+
+DECISION_EFFECT_LABELS = {
+    "support": "실행 근거",
+    "defer": "추가 확인 필요",
+    "constrain": "실행 범위 제한",
+    "block": "현재 실행 차단",
+}
+
+# Presentation labels for a TypeDB-materialized action envelope. They do not
+# participate in action selection, but keep storage keys out of alerts and UI.
+ACTION_ENVELOPE_STATUS_LABELS = {
+    "ENTRY_ELIGIBLE": "소액 진입 조건 성립",
+    "ENTRY_DEFERRED": "진입 조건 추가 확인",
+    "ENTRY_OBSERVING": "관심 유지",
+    "ENTRY_BLOCKED": "진입 판단 보류",
+    "HOLDING_REVIEW": "보유 판단 재확인",
+    "JUDGEMENT_BLOCKED": "판단 보류",
 }
 
 # ``blocked`` describes unavailable judgement, not a stronger investment
@@ -184,6 +208,34 @@ def evidence_role_from_relation(relation: Dict[str, object]) -> str:
     # A missing polarity is an incomplete RuleBox payload, not a reason to
     # recreate a hidden Python action-group policy. Keep it non-directional.
     return "context"
+
+
+def decision_effect_from_relation(relation: Dict[str, object]) -> str:
+    """Read a TypeDB-authored action-envelope effect from a relation.
+
+    Existing persisted generations did not include ``decisionEffect``.  For
+    those rows only, use a deliberately non-escalating compatibility value
+    based on their already materialized evidence role.  This avoids treating a
+    static risk context as a hidden action veto while a RuleBox rematerializes
+    the explicit field.
+    """
+
+    relation = relation or {}
+    explicit = str(
+        relation.get("decisionEffect")
+        or relation.get("decision_effect")
+        or ""
+    ).strip().lower()
+    if explicit in DECISION_EFFECTS:
+        return explicit
+    role = evidence_role_from_relation(relation)
+    if role == "support":
+        return "support"
+    if role == "blocking":
+        return "block"
+    if role in {"risk", "counter"}:
+        return "constrain"
+    return "defer"
 
 
 def conflict_state_from_roles(roles: Iterable[object]) -> str:

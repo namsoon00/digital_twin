@@ -367,17 +367,25 @@ def execution_plan_from_relation_context(
 ) -> Dict[str, object]:
     facts = facts or {}
     decision = decision or {}
+    action_envelope = decision.get("actionEnvelope") if isinstance(decision.get("actionEnvelope"), dict) else {}
     target_role = str(decision.get("targetRole") or ("watchlist" if facts.get("isWatchlist") else "") or "").strip()
     action_policy = str(decision.get("actionPolicy") or (WATCHLIST_ACTION_POLICY if target_role == WATCHLIST_TARGET_ROLE else "") or "").strip()
-    allowed_action_codes = _list_of_strings(decision.get("allowedActions"))
-    blocked_action_codes = _list_of_strings(decision.get("blockedActions"))
+    allowed_action_codes = _list_of_strings(action_envelope.get("allowedActions") or decision.get("allowedActions"))
+    blocked_action_codes = _list_of_strings(action_envelope.get("blockedActions") or decision.get("blockedActions"))
     if target_role == WATCHLIST_TARGET_ROLE:
         allowed_action_codes = allowed_action_codes or list(WATCHLIST_ALLOWED_ACTIONS)
         blocked_action_codes = blocked_action_codes or list(WATCHLIST_BLOCKED_ACTIONS)
 
     primary_action = str(decision.get("primaryAction") or "HOLD").strip()
     primary_label = str(decision.get("primaryActionLabel") or decision.get("label") or "관계 결과 확인").strip()
-    raw_candidate_action = decision.get("candidateAction")
+    # ``sourceCandidateAction`` is TypeDB-authored metadata. It is kept
+    # separately from the envelope so a holding-only action cannot look like
+    # a valid watchlist entry after the envelope safely narrows it to HOLD.
+    raw_candidate_action = (
+        decision.get("sourceCandidateAction")
+        or action_envelope.get("preferredAction")
+        or decision.get("candidateAction")
+    )
     candidate_action_provided = raw_candidate_action not in (None, "")
     candidate_action = str(raw_candidate_action or "HOLD").strip().upper()
     candidate_action_label = str(decision.get("candidateActionLabel") or "").strip()
@@ -456,6 +464,10 @@ def execution_plan_from_relation_context(
         "tboxClass": "ExecutionPlan",
         "subject": {"symbol": facts.get("symbol"), "name": facts.get("name"), "market": facts.get("market"), "source": facts.get("source")},
         "decisionStage": decision.get("decisionStage"),
+        "actionEnvelope": action_envelope,
+        "actionEnvelopeStatus": str(action_envelope.get("status") or ""),
+        "actionEnvelopeStatusLabel": str(action_envelope.get("statusLabel") or ""),
+        "actionEnvelopeEffectLabels": list(action_envelope.get("effectLabels") or [])[:4],
         "targetRole": target_role,
         "actionPolicy": action_policy,
         "allowedActions": allowed_action_codes,
@@ -473,6 +485,7 @@ def execution_plan_from_relation_context(
         "counterSignals": counter_signals[:5],
         "strengthenConditions": strengthen_conditions[:5],
         "weakenConditions": weaken_conditions[:5],
+        "invalidationConditions": list(action_envelope.get("invalidationConditions") or weaken_conditions)[:5],
         "nextChecks": next_checks[:5],
         "missingDataImpact": missing_impact[:5],
         "notificationCategory": str(decision.get("notificationCategory") or "relationshipChange"),

@@ -192,6 +192,10 @@ class GraphRuleDerivation:
     # Empty means "inherit the derivation polarity".  Defaulting this to
     # context silently flattened risk/support rules into neutral evidence.
     evidence_role: str = ""
+    # RuleBox-owned effect in the action envelope.  It is intentionally not
+    # inferred from the stage at runtime: support, defer, constrain and block
+    # are editable derivation semantics persisted to TypeDB.
+    decision_effect: str = ""
     belief_label: str = ""
     ai_influence_label: str = ""
     action_group: str = ""
@@ -240,6 +244,7 @@ class GraphRuleDerivation:
             tbox_classes=[str(item) for item in (payload.get("tbox_classes") or payload.get("tboxClasses") or [])],
             polarity=str(payload.get("polarity") or "context"),
             evidence_role=str(payload.get("evidence_role") or payload.get("evidenceRole") or payload.get("polarity") or "context"),
+            decision_effect=str(payload.get("decision_effect") or payload.get("decisionEffect") or ""),
             belief_label=str(payload.get("belief_label") or payload.get("beliefLabel") or ""),
             ai_influence_label=str(payload.get("ai_influence_label") or payload.get("aiInfluenceLabel") or ""),
             action_group=str(payload.get("action_group") or payload.get("actionGroup") or ""),

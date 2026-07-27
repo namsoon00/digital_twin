@@ -1821,6 +1821,84 @@ def compact_notification_text(value: str, limit: int = 260) -> str:
     return text[: max(0, limit - 1)].rstrip() + "…"
 
 
+def notification_action_label(action: object, target_role: object = "") -> str:
+    code = str(action or "").strip().upper()
+    watchlist = str(target_role or "").strip().lower() == "watchlist"
+    labels = {
+        "BUY": "소액 진입 검토",
+        "ADD": "소액 추가매수 검토",
+        "HOLD": "관심 유지" if watchlist else "보유 유지",
+        "TRIM": "분할축소 검토",
+        "SELL": "매도 검토",
+        "AVOID": "신규 진입 회피",
+    }
+    return labels.get(code, code or "조건 확인")
+
+
+def notification_action_flow(context: Dict[str, object]) -> Dict[str, object]:
+    """Expose the user-facing TypeDB action flow without raw debug payloads."""
+
+    context = context if isinstance(context, dict) else {}
+    relation = context.get("ontologyRelationContext") if isinstance(context.get("ontologyRelationContext"), dict) else {}
+    if not relation:
+        relation = context.get("relationContext") if isinstance(context.get("relationContext"), dict) else {}
+    decision = relation.get("decision") if isinstance(relation.get("decision"), dict) else {}
+    envelope = relation.get("actionEnvelope") if isinstance(relation.get("actionEnvelope"), dict) else {}
+    if not envelope:
+        envelope = decision.get("actionEnvelope") if isinstance(decision.get("actionEnvelope"), dict) else {}
+    relation_diff = context.get("ontologyRelationDiff") if isinstance(context.get("ontologyRelationDiff"), dict) else {}
+    transition = context.get("decisionTransition") if isinstance(context.get("decisionTransition"), dict) else {}
+    if not transition:
+        transition = relation_diff.get("decisionTransition") if isinstance(relation_diff.get("decisionTransition"), dict) else {}
+    validated = context.get("notificationAiValidatedResponse") if isinstance(context.get("notificationAiValidatedResponse"), dict) else {}
+    target_role = str(envelope.get("targetRole") or decision.get("targetRole") or relation.get("targetRole") or "")
+    action = str(validated.get("action") or envelope.get("preferredAction") or decision.get("candidateAction") or "")
+    action_label = str(validated.get("actionLabel") or "") or notification_action_label(action, target_role)
+    if not any([envelope, transition, action]):
+        return {}
+
+    effect_rows = envelope.get("effectLabels") if isinstance(envelope.get("effectLabels"), list) else []
+    effects = []
+    for item in effect_rows:
+        if not isinstance(item, dict):
+            continue
+        label = str(item.get("label") or "").strip()
+        if label and label not in effects:
+            effects.append(label)
+    news_impact = context.get("newsImpact") if isinstance(context.get("newsImpact"), dict) else {}
+    inline_news = {}
+    if news_impact.get("decisionChanging") and news_impact.get("decisionInlineEligible") is True:
+        inline_news = {
+            "headline": compact_notification_text(str(news_impact.get("headline") or ""), 180),
+            "source": str(news_impact.get("source") or "")[:80],
+            "impact": str(news_impact.get("impact") or "")[:80],
+        }
+    readiness = envelope.get("dataReadiness") if isinstance(envelope.get("dataReadiness"), dict) else {}
+    return {
+        "status": str(envelope.get("status") or ""),
+        "statusLabel": str(envelope.get("statusLabel") or "조건 확인"),
+        "currentAction": action,
+        "currentActionLabel": action_label,
+        "transition": {
+            "kind": str(transition.get("kind") or ""),
+            "summary": compact_notification_text(str(transition.get("summary") or ""), 180),
+            "previousAction": str(transition.get("previousAction") or ""),
+            "currentAction": str(transition.get("currentAction") or action),
+            "previousStatus": str(transition.get("previousStatus") or ""),
+            "currentStatus": str(transition.get("currentStatus") or envelope.get("status") or ""),
+        },
+        "effects": effects[:4],
+        "nextChecks": [compact_notification_text(str(item or ""), 180) for item in (envelope.get("nextChecks") or []) if str(item or "").strip()][:3],
+        "invalidationConditions": [compact_notification_text(str(item or ""), 180) for item in (envelope.get("invalidationConditions") or []) if str(item or "").strip()][:3],
+        "dataReadiness": {
+            "state": str(readiness.get("state") or ""),
+            "dataState": str(readiness.get("dataState") or relation.get("dataState") or ""),
+            "usable": bool(readiness.get("usable")) if readiness else None,
+        },
+        "newsImpact": inline_news,
+    }
+
+
 def full_notification_text(value: str) -> str:
     text = str(value or "")
     text = re.sub(r"(?i)<br\s*/?>", "\n", text)
@@ -1970,6 +2048,7 @@ def notification_job_public_payload(job: NotificationJob, detail: bool = False, 
     }
     if detail:
         payload["fullText"] = full_notification_text(job.text)
+        payload["actionFlow"] = notification_action_flow(context)
         # The trace is rebuilt from the immutable context captured with this
         # job, never from the currently active graph generation.
         payload["reasoningTrace"] = build_notification_reverse_reasoning_trace(

@@ -16,6 +16,7 @@ from ..domain.external_api_sources import external_api_source_line
 from ..domain.notification_ai_gate_contracts import ACTION_LABELS, MESSAGE_START_BADGE, NotificationAIValidatedResponse
 from ..domain.investment_ubiquitous_language import user_facing_investment_language
 from ..domain.ontology_decision_state import (
+    ACTION_ENVELOPE_STATUS_LABELS,
     CHANGE_STATE_LABELS,
     DATA_STATE_LABELS,
     REVIEW_LEVEL_LABELS,
@@ -328,6 +329,18 @@ def notification_topline_change_summary(context: Dict[str, object]) -> str:
     profit_loss_summary = "" if is_watchlist_context(context) else _profit_loss_change_summary(context, reason)
     if profit_loss_summary:
         return profit_loss_summary
+    transition = context.get("decisionTransition") if isinstance(context.get("decisionTransition"), dict) else {}
+    if not transition:
+        relation_diff = context.get("ontologyRelationDiff") if isinstance(context.get("ontologyRelationDiff"), dict) else {}
+        transition = relation_diff.get("decisionTransition") if isinstance(relation_diff.get("decisionTransition"), dict) else {}
+    if transition.get("material"):
+        kind = str(transition.get("kind") or "").strip().lower()
+        if kind == "action-changed":
+            return "행동 변경"
+        if kind in {"initial", "envelope-changed"}:
+            return "새 판단 조건"
+        if kind == "readiness-changed":
+            return "자료 상태 변경"
     if "손익률 추가 악화" in reason:
         return "손익률 악화"
     if "필수 발송 구간" in reason or "손실률" in reason or "수익률" in reason:
@@ -1446,8 +1459,8 @@ def _derived_position_sizing(context: Dict[str, object], response: NotificationA
     if explicit:
         return explicit
     if is_watchlist_context(context):
-        return "진입 금액·비중 기준은 TypeDB 실행 계획에 없어 계정 한도 확인이 필요합니다."
-    return "수량·비중 기준은 TypeDB 실행 계획에 없어 사용자 손실 허용선과 매도 가능 수량 확인이 필요합니다."
+        return "진입 금액·비중은 계정 한도 안에서 정하세요."
+    return "수량·비중은 손실 허용선과 매도 가능 수량을 함께 확인하세요."
 
 
 def _derived_interpretation(context: Dict[str, object], response: NotificationAIValidatedResponse) -> str:
@@ -1477,7 +1490,7 @@ def _derived_execution_criteria(context: Dict[str, object], response: Notificati
         rows.append("다음 확인: " + " / ".join(next_checks[:2]))
     if rows:
         return ". ".join(rows)
-    return "다음 TypeDB 추론 세대에서 현재 관계와 반대 관계를 다시 확인합니다."
+    return "다음 데이터 업데이트에서 현재 근거와 반대 근거를 다시 확인합니다."
 
 
 def _derived_invalidation_condition(context: Dict[str, object], response: NotificationAIValidatedResponse) -> str:
@@ -1487,7 +1500,7 @@ def _derived_invalidation_condition(context: Dict[str, object], response: Notifi
     weaken = _execution_plan_list(context, "weakenConditions")
     if weaken:
         return watchlist_friendly_text(context, " / ".join(weaken[:2]))
-    return "다음 TypeDB 추론 세대에서 현재 관계가 사라지거나 반대 관계가 새로 성립하면 의견을 재검토합니다."
+    return "현재 근거가 사라지거나 반대 근거가 새로 확인되면 의견을 다시 봅니다."
 
 
 def _strategy_validation_limiters(context: Dict[str, object], response: NotificationAIValidatedResponse) -> List[str]:
@@ -2070,33 +2083,217 @@ def execution_telegram_message_compact_beginner(
     target = str(context.get("displayTarget") or context.get("target") or "").strip()
     sent = str(context.get("sentTime") or "").strip()
     reference = response.reference_date or reference_date(context)
-    current_state_rows = beginner_current_state_rows(context)
     parts = [
         "<b>" + html.escape(headline, quote=False) + "</b>",
         ("<code>" + html.escape(target, quote=False) + "</code>") if target else "",
         "",
-        "<b>판단</b>",
-        *compact_beginner_judgment_rows(context, response, level),
+        "<b>지금 행동</b>",
+        _html_bullet(
+            "[AI] "
+            + (action_label_for_action(response.action, context) or response.action_label)
+            + (". " + compact_sentence_count(response.summary, 1) if str(response.summary or "").strip() else ""),
+            level,
+        ),
     ]
-    reason_rows = compact_beginner_reason_rows(context, level)
-    if reason_rows:
-        parts.extend(["", "<b>왜 알림이 왔나요?</b>", *reason_rows])
-    if current_state_rows:
-        parts.extend(["", "<b>현재 상황</b>", *current_state_rows])
-    valuation_rows = compact_valuation_detail_rows(context, level)
-    if valuation_rows:
-        parts.extend(["", "<b>밸류에이션</b>", *valuation_rows])
-    evidence_rows = compact_beginner_evidence_rows(context, response, level)
-    if evidence_rows:
-        parts.extend(["", "<b>핵심 근거</b>", *evidence_rows])
-    next_rows = compact_beginner_next_rows(context, response, level)
-    if next_rows:
-        parts.extend(["", "<b>다음 조건</b>", *next_rows])
-    if response.source_urls:
-        parts.extend(["", "<b>뉴스·공시 요약</b>"])
-        parts.extend(source_url_rows(response.source_urls, context))
-    parts.extend(execution_footer(context, response, reference, sent))
+    transition = compact_decision_transition(context, response)
+    if transition:
+        parts.extend(["", "<b>이번 변화</b>", _html_bullet(transition, level)])
+    flow = compact_current_flow_line(context)
+    if flow:
+        parts.extend(["", "<b>현재 흐름</b>", _html_bullet(flow, level)])
+    reasons = compact_action_reason_rows(context, response)
+    if reasons:
+        parts.extend(["", "<b>바뀐 이유</b>", *[_html_bullet(item, level) for item in reasons]])
+    next_action = compact_next_action_line(context, response)
+    if next_action:
+        parts.extend(["", "<b>다음 행동</b>", _html_bullet(next_action, level)])
+    invalidation = compact_invalidation_line(context, response)
+    if invalidation:
+        parts.extend(["", "<b>판단 변경 조건</b>", _html_bullet(invalidation, level)])
+    data_line = compact_data_status_line(context, response)
+    if data_line:
+        parts.extend(["", "<b>자료 상태</b>", _html_bullet(data_line, level)])
+    news_line = compact_news_impact_line(context)
+    if news_line:
+        parts.extend(["", "<b>뉴스 영향</b>", _html_bullet(news_line, level)])
+    footer = " · ".join(part for part in ["기준 " + str(reference) if reference else "", "발송 " + sent if sent else ""] if part)
+    if footer:
+        parts.extend(["", "<i>" + html.escape(footer, quote=False) + "</i>"])
     return "\n".join(part for part in parts if str(part).strip() or part == "").strip()
+
+
+def compact_decision_transition(context: Dict[str, object], response: NotificationAIValidatedResponse) -> str:
+    transition = context.get("decisionTransition") if isinstance(context.get("decisionTransition"), dict) else {}
+    if not transition:
+        diff = context.get("ontologyRelationDiff") if isinstance(context.get("ontologyRelationDiff"), dict) else {}
+        transition = diff.get("decisionTransition") if isinstance(diff.get("decisionTransition"), dict) else {}
+    previous = str(transition.get("previousAction") or "").strip().upper()
+    current = str(transition.get("currentAction") or response.action or "").strip().upper()
+    if previous and current and previous != current:
+        return action_label_for_action(previous, context) + "에서 " + action_label_for_action(current, context) + "으로 바뀌었습니다."
+    previous_status = str(transition.get("previousStatus") or "").strip().upper()
+    current_status = str(transition.get("currentStatus") or "").strip().upper()
+    if current_status:
+        current_label = ACTION_ENVELOPE_STATUS_LABELS.get(current_status, "")
+        previous_label = ACTION_ENVELOPE_STATUS_LABELS.get(previous_status, "")
+        if previous_label and previous_label != current_label:
+            return previous_label + "에서 " + current_label + "로 바뀌었습니다."
+        if current_label:
+            return "새로 확인된 조건: " + current_label + "."
+    summary = compact_sentence_count(transition.get("summary") or "", 1)
+    if summary:
+        return summary
+    envelope = relation_context_value(context).get("actionEnvelope") if isinstance(relation_context_value(context), dict) else {}
+    label = str(envelope.get("statusLabel") or "").strip() if isinstance(envelope, dict) else ""
+    return label or "새 판단 조건을 확인했습니다."
+
+
+def compact_current_flow_line(context: Dict[str, object]) -> str:
+    current = _plain_value(context, "현재가")
+    pnl = _plain_value(context, "수익률") or _plain_value(context, "손익")
+    trend = _plain_value(context, "추세")
+    flow = _plain_value(context, "수급")
+    rows = []
+    if current:
+        rows.append("현재가 " + current)
+    if pnl:
+        rows.append("수익률 " + pnl)
+    if trend:
+        rows.append(compact_sentence_count(trend, 1))
+    elif flow:
+        rows.append(compact_sentence_count(flow, 1))
+    return " · ".join(rows[:3])
+
+
+def compact_action_reason_rows(
+    context: Dict[str, object],
+    response: NotificationAIValidatedResponse,
+) -> List[str]:
+    rows: List[str] = []
+    summary = compact_sentence_count(_message_text(response.summary, "beginner"), 1)
+    summary_key = re.sub(r"[^0-9a-z가-힣]+", "", summary.casefold())
+    envelope_rows = compact_envelope_reason_rows(context)
+    relation_context = relation_context_value(context)
+    envelope = relation_context.get("actionEnvelope") if isinstance(relation_context.get("actionEnvelope"), dict) else {}
+    status = str(envelope.get("status") or "").strip().upper()
+    if status == "ENTRY_OBSERVING" and "진입 근거" in summary and "아직" in summary:
+        envelope_rows = [row for row in envelope_rows if "진입 근거" not in row]
+    elif status == "ENTRY_DEFERRED" and "진입" in summary and "조건" in summary:
+        envelope_rows = [row for row in envelope_rows if "진입" not in row]
+    elif status in {"ENTRY_BLOCKED", "JUDGEMENT_BLOCKED"} and ("보류" in summary or "필수 자료" in summary):
+        envelope_rows = [row for row in envelope_rows if "판단을 보류" not in row]
+    values = (
+        envelope_rows
+        + compact_effect_driver_rows(context)
+        + list(response.evidence or [])
+        + list(relation_axis_summary_lines(context, 5))
+    )
+    for item in values:
+        text = compact_sentence_count(_message_text(item, "beginner"), 1)
+        if compact_reason_is_internal(text):
+            continue
+        normalized = re.sub(r"[^0-9a-z가-힣]+", "", text.casefold())
+        if summary_key and normalized and (normalized in summary_key or summary_key in normalized):
+            continue
+        if text and not any(normalized and (normalized in existing or existing in normalized) for existing in [re.sub(r"[^0-9a-z가-힣]+", "", row.casefold()) for row in rows]):
+            rows.append(text)
+        if len(rows) >= 2:
+            break
+    return rows
+
+
+def compact_envelope_reason_rows(context: Dict[str, object]) -> List[str]:
+    relation_context = relation_context_value(context)
+    envelope = relation_context.get("actionEnvelope") if isinstance(relation_context.get("actionEnvelope"), dict) else {}
+    effect = str(envelope.get("selectedDecisionEffect") or "").strip().lower()
+    status = str(envelope.get("status") or "").strip().upper()
+    if status == "ENTRY_OBSERVING":
+        rows = ["매수로 바꿀 진입 근거는 아직 충분하지 않습니다."]
+        if effect == "constrain":
+            rows.append("현재 제약 조건은 진입 시점과 금액을 보수적으로 보게 합니다.")
+        return rows
+    if status == "ENTRY_DEFERRED":
+        return ["진입을 뒷받침하는 근거는 있지만, 추가 확인 조건이 남아 있습니다."]
+    if status in {"ENTRY_BLOCKED", "JUDGEMENT_BLOCKED"}:
+        return ["필수 자료나 반대 조건 때문에 지금은 판단을 보류합니다."]
+    if effect == "support":
+        return ["현재 행동을 뒷받침하는 근거가 확인됐습니다."]
+    if effect == "defer":
+        return ["추가 확인 조건이 남아 있어 지금 바로 행동을 바꾸지 않습니다."]
+    if effect == "constrain":
+        return ["현재 제약 조건은 행동의 시점과 금액을 보수적으로 보게 합니다."]
+    if effect == "block":
+        return ["필수 자료나 반대 조건 때문에 지금은 판단을 보류합니다."]
+    return []
+
+
+def compact_effect_driver_rows(context: Dict[str, object]) -> List[str]:
+    relation_context = relation_context_value(context)
+    envelope = relation_context.get("actionEnvelope") if isinstance(relation_context.get("actionEnvelope"), dict) else {}
+    effect = str(envelope.get("selectedDecisionEffect") or "").strip().lower()
+    categories = {
+        "support": ["trend", "news", "valuation", "flow"],
+        "defer": ["news", "disclosure", "trend", "flow"],
+        "constrain": ["macro", "fx", "rate", "market", "flow"],
+        "block": ["dataQuality"],
+    }.get(effect, ["trend", "macro", "news", "flow"])
+    execution_plan = relation_context.get("executionPlan") if isinstance(relation_context.get("executionPlan"), dict) else {}
+    drivers = execution_plan.get("decisionDrivers") if isinstance(execution_plan.get("decisionDrivers"), list) else []
+    for category in categories:
+        for driver in drivers:
+            if not isinstance(driver, dict) or str(driver.get("category") or "") != category:
+                continue
+            text = str(driver.get("summary") or driver.get("text") or driver.get("label") or "").strip()
+            if text and not compact_reason_is_internal(text):
+                return [text]
+    return []
+
+
+def compact_reason_is_internal(value: object) -> bool:
+    text = str(value or "").lower()
+    return any(token in text for token in [
+        "typedb", "rulebox", "inferencebox", "관계 분석 규칙", "관계 분석 실행 계획",
+        "관계가 새로 감지", "관계 신호 관계",
+    ])
+
+
+def compact_next_action_line(context: Dict[str, object], response: NotificationAIValidatedResponse) -> str:
+    value = compact_sentence_count(
+        watchlist_friendly_text(context, _derived_execution_criteria(context, response)),
+        1,
+    )
+    if value:
+        return value
+    if response.next_checks:
+        return compact_sentence_count(watchlist_friendly_text(context, response.next_checks[0]), 1)
+    return "다음 데이터 업데이트에서 현재 조건이 유지되는지 확인합니다."
+
+
+def compact_invalidation_line(context: Dict[str, object], response: NotificationAIValidatedResponse) -> str:
+    value = compact_sentence_count(_derived_invalidation_condition(context, response), 1)
+    return value or "현재 근거가 사라지거나 반대 근거가 새로 확인되면 이 판단을 다시 봅니다."
+
+
+def compact_data_status_line(context: Dict[str, object], response: NotificationAIValidatedResponse) -> str:
+    state = relation_state_values(context)
+    label = str(state.get("dataLabel") or response.data_state_label or "").strip()
+    missing = customer_data_note_rows(list(response.missing_data_impact))
+    if missing:
+        return label + ". " + " / ".join(missing[:1])
+    return label
+
+
+def compact_news_impact_line(context: Dict[str, object]) -> str:
+    impact = context.get("newsImpact") if isinstance(context.get("newsImpact"), dict) else {}
+    if not impact:
+        relation = relation_context_value(context)
+        impact = relation.get("newsImpact") if isinstance(relation.get("newsImpact"), dict) else {}
+    if not impact or not impact.get("decisionChanging") or impact.get("decisionInlineEligible") is not True:
+        return ""
+    headline = str(impact.get("headline") or impact.get("summary") or "").strip()
+    source = str(impact.get("source") or "").strip()
+    prefix = (source + ": ") if source else ""
+    return prefix + compact_sentence_count(headline, 1)
 
 def beginner_current_state_rows(context: Dict[str, object]) -> List[str]:
     values = [

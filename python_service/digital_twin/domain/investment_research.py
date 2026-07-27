@@ -1025,7 +1025,7 @@ def thesis_from_inference(position: Position, relation_context: Dict[str, object
         or (labels[0] if labels else "관계 추론 결과")
     ).strip()
     rule_text = " · ".join(labels[:2])
-    result = name + "에서 TypeDB RuleBox가 '" + relation_label + "' 관계를 생성했습니다."
+    result = name + "에서 '" + relation_label + "' 조건이 확인됐습니다."
     if rule_text:
         result += " 근거 관계: " + rule_text + "."
     return result
@@ -1036,7 +1036,7 @@ def inference_invalidation(relation_context: Dict[str, object]) -> str:
     weaken = _string_rows(execution_plan.get("weakenConditions"))
     if weaken:
         return " / ".join(weaken[:2])
-    return "다음 TypeDB 추론 세대에서 현재 관계가 더 이상 성립하지 않거나 반대 관계가 새로 성립하면 다시 검토합니다."
+    return "현재 근거가 사라지거나 반대 근거가 새로 확인되면 다시 검토합니다."
 
 
 def inference_next_check(relation_context: Dict[str, object]) -> str:
@@ -1044,7 +1044,7 @@ def inference_next_check(relation_context: Dict[str, object]) -> str:
     next_checks = _string_rows(execution_plan.get("nextChecks"))
     if next_checks:
         return " / ".join(next_checks[:2])
-    return "다음 데이터 업데이트에서 같은 TypeDB 관계와 반대 근거가 유지되는지 확인합니다."
+    return "다음 데이터 업데이트에서 현재 근거와 반대 근거를 다시 확인합니다."
 
 
 def missing_data_rows(relation_context: Dict[str, object]) -> List[Dict[str, object]]:

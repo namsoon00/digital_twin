@@ -33,6 +33,8 @@ from ..domain.sent_article_filter import (
     article_filter_context_summary,
     collect_article_identity_keys_from_context,
     filter_sent_articles_from_context,
+    news_story_changes_decision,
+    news_story_impact_from_context,
 )
 from .mysql_operational_connection import MySQLOperationalConnection
 from .mysql_operational_helpers import _is_duplicate_key_error, _json_loads
@@ -495,7 +497,9 @@ class MySQLNotificationJobStore(MySQLOperationalConnection):
             status = str(row["status"] or "").strip()
             if status != "done" and not notification_history_is_recent_in_flight(row):
                 continue
-            return dict(previous.context or {})
+            context = dict(previous.context or {})
+            context["_relationPredecessorSentAt"] = str(row["created_at"] or previous.created_at or "")
+            return context
         return {}
 
     def evaluate_job_with_connection(self, connection, job: NotificationJob):
@@ -518,10 +522,28 @@ class MySQLNotificationJobStore(MySQLOperationalConnection):
             decision.fingerprint,
         )
         relation_previous_context = self.relation_predecessor_with_connection(connection, job, rule)
+        predecessor_sent_at = str(relation_previous_context.get("_relationPredecessorSentAt") or "")
+        if predecessor_sent_at and not last_sent_at:
+            # A changed graph fingerprint can be a harmless relation-row
+            # rebuild. Keep the most recent same-subject timestamp so the
+            # state cooldown can distinguish that case from a true new alert.
+            last_sent_at = predecessor_sent_at
+            recent_count = max(1, int(recent_count or 0))
         relation_diff = ontology_relation_delivery_diff(job.context or {}, relation_previous_context)
         if relation_delivery:
             context = dict(job.context or {})
             context["ontologyRelationDiff"] = relation_diff
+            transition = relation_diff.get("decisionTransition") if isinstance(relation_diff.get("decisionTransition"), dict) else {}
+            if transition:
+                context["decisionTransition"] = transition
+            context.pop("newsImpact", None)
+            news_impact = news_story_impact_from_context(context)
+            if news_impact:
+                decision_changing = news_story_changes_decision(news_impact, relation_diff)
+                news_impact["decisionChanging"] = decision_changing
+                news_impact["deliveryMode"] = "decision-inline" if decision_changing else "event-digest"
+                if decision_changing:
+                    context["newsImpact"] = news_impact
             job.context = context
         if relation_diff.get("material") and relation_diff.get("changedComponents") not in ([], ["initial"]):
             reason = "관계 그래프 변화: " + str(relation_diff.get("reason") or "의미 있는 관계 변화")

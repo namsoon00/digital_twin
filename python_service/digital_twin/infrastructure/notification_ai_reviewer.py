@@ -8,7 +8,7 @@ from ..domain.notification_ai_gate_validation import (
     local_validated_ai_response,
     validated_response_from_text,
 )
-from .model_reviewer import codex_command
+from .model_reviewer import codex_command, codex_model_label
 from .settings import ROOT_DIR, runtime_settings
 
 
@@ -70,14 +70,10 @@ class FallbackNotificationAIReviewer(NotificationAIReviewer):
 
 def notification_ai_reviewer_from_settings(settings: Dict[str, str] = None) -> NotificationAIReviewer:
     settings = settings or runtime_settings()
-    command = str(settings.get("notificationAiCommand") or os.environ.get("NOTIFICATION_AI_COMMAND") or "").strip()
     use_codex = str(settings.get("notificationAiUseCodex") or os.environ.get("NOTIFICATION_AI_USE_CODEX") or "1").strip() != "0"
     timeout = int(settings.get("notificationAiTimeoutSeconds") or os.environ.get("NOTIFICATION_AI_TIMEOUT_SECONDS") or 120)
-    model = str(settings.get("notificationAiModel") or os.environ.get("NOTIFICATION_AI_MODEL") or "gpt-5.4").strip()
-    if command:
-        return FallbackNotificationAIReviewer(CommandNotificationAIReviewer(command, timeout, "AI 명령"))
     if use_codex:
-        command = codex_command(model)
+        command = codex_command()
         if command:
-            return FallbackNotificationAIReviewer(CommandNotificationAIReviewer(command, timeout, "Codex AI"))
+            return FallbackNotificationAIReviewer(CommandNotificationAIReviewer(command, timeout, "Codex AI (" + codex_model_label() + ")"))
     return LocalNotificationAIReviewer()

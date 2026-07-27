@@ -8,6 +8,10 @@ from ..domain.model_review import ModelReviewJob, build_model_review_prompt, loc
 from .settings import ROOT_DIR, runtime_settings
 
 
+ENFORCED_CODEX_MODEL = "gpt-5.6-sol"
+ENFORCED_CODEX_REASONING_EFFORT = "max"
+
+
 class ModelReviewer:
     def review(self, job: ModelReviewJob) -> str:
         raise NotImplementedError
@@ -56,15 +60,37 @@ class FallbackModelReviewer(ModelReviewer):
             return self.fallback.review(job) + "\n- LLM 상태: 외부 분석 실패로 로컬 진단 사용 (" + str(error)[:160] + ")"
 
 
-def codex_command(model: str = "") -> str:
+def codex_model_label() -> str:
+    return "GPT-5.6 Sol · max"
+
+
+def codex_cli_arguments() -> list:
+    """Return the non-negotiable model policy for every app-owned Codex call."""
+
+    return [
+        "--model",
+        ENFORCED_CODEX_MODEL,
+        "--config",
+        'model_reasoning_effort="' + ENFORCED_CODEX_REASONING_EFFORT + '"',
+    ]
+
+
+def codex_command(_requested_model: str = "") -> str:
+    """Build a read-only command with the project-wide quality-first model policy.
+
+    The argument is retained for compatibility with older callers, but model
+    selection is intentionally not caller-configurable.  A mixed model policy
+    made alert, article, disclosure, and review output difficult to audit.
+    """
+
     executable = shutil.which("codex")
     if not executable:
         return ""
     parts = [
         shlex.quote(executable),
     ]
-    if str(model or "").strip():
-        parts.extend(["--model", shlex.quote(str(model).strip())])
+    for argument in codex_cli_arguments():
+        parts.append(shlex.quote(argument))
     parts.extend([
         "-a",
         "never",
@@ -81,11 +107,8 @@ def codex_command(model: str = "") -> str:
 
 def reviewer_from_settings(settings: Dict[str, str] = None) -> ModelReviewer:
     settings = settings or runtime_settings()
-    command = str(settings.get("modelReviewCommand") or os.environ.get("MODEL_REVIEW_COMMAND") or "").strip()
     use_codex = str(settings.get("modelReviewUseCodex") or os.environ.get("MODEL_REVIEW_USE_CODEX") or "1").strip() != "0"
     timeout = int(settings.get("modelReviewTimeoutSeconds") or os.environ.get("MODEL_REVIEW_TIMEOUT_SECONDS") or 180)
-    if command:
-        return FallbackModelReviewer(CommandModelReviewer(command, timeout))
     if use_codex:
         command = codex_command()
         if command:

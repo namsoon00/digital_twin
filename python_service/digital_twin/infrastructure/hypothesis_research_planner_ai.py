@@ -84,17 +84,11 @@ def hypothesis_research_planning_advisor_from_settings(settings: Dict[str, objec
     enabled = str(settings.get("investmentBrainHypothesisResearchPlannerAiEnabled", "1")).strip().lower()
     if enabled in {"0", "false", "off", "disabled"}:
         return LocalHypothesisResearchPlanningAdvisor()
-    command = str(
-        settings.get("investmentBrainHypothesisResearchPlannerAiCommand")
-        or os.environ.get("INVESTMENT_BRAIN_HYPOTHESIS_RESEARCH_PLANNER_AI_COMMAND")
-        or ""
-    ).strip()
     try:
         timeout = int(settings.get("investmentBrainHypothesisResearchPlannerAiTimeoutSeconds") or 120)
     except (TypeError, ValueError):
         timeout = 120
-    if not command:
-        command = codex_command(str(settings.get("notificationAiModel") or "gpt-5.4")) or ""
+    command = codex_command() or ""
     if command:
         return CommandHypothesisResearchPlanningAdvisor(command, timeout)
     return LocalHypothesisResearchPlanningAdvisor()

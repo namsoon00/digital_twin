@@ -304,14 +304,14 @@ The model-review worker processes that queue separately and enqueues a second no
 
 Configuration:
 
-- `MODEL_REVIEW_COMMAND`: optional command that receives the model-review prompt on stdin and returns the message on stdout.
-- `MODEL_REVIEW_USE_CODEX`: defaults to `1`; when no explicit command is set and `codex` is available on PATH, the worker attempts a read-only Codex analysis command.
+- `MODEL_REVIEW_USE_CODEX`: defaults to `1`; when `codex` is available on PATH, the worker uses the read-only `gpt-5.6-sol` command with `model_reasoning_effort="max"`.
+- All application-owned AI paths (article analysis, disclosure interpretation, notification validation, model review, and hypothesis/rule advisers) use the same fixed model policy. Legacy custom-command settings are retained only for configuration compatibility and are ignored.
 - `MODEL_REVIEW_TIMEOUT_SECONDS`: defaults to `180`.
 - `MODEL_REVIEW_INTERVAL_SECONDS`: defaults to `300`.
 - `MODEL_REVIEW_BATCH_SIZE`: defaults to `1`.
 - `MODEL_REVIEW_TELEGRAM_MODE`: defaults to `actionableOnly`. `actionableOnly` stores every review but sends Telegram only for SELL/TRIM/AVOID follow-up reviews. Use `all` to send every review or `off` to store reviews without Telegram delivery.
 
-If the configured LLM command fails or is unavailable, the worker enqueues a local deterministic model review instead of blocking the queue.
+If Codex fails or is unavailable, the worker enqueues a local deterministic model review instead of blocking the queue.
 
 ## Model Development
 

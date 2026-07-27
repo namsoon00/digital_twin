@@ -8,8 +8,8 @@ from .investment_research import NewsCollectionTarget, ResearchEvidence
 from . import news_analysis as news_domain
 
 
-NEWS_AI_ANALYSIS_VERSION = "news-ai-analysis-v12-inline-decision-contract"
-NEWS_AI_PROMPT_VERSION = "news-ai-prompt-v12-inline-decision-contract"
+NEWS_AI_ANALYSIS_VERSION = "news-ai-analysis-v13-context-safe-risk"
+NEWS_AI_PROMPT_VERSION = "news-ai-prompt-v13-context-safe-risk"
 
 IMPACT_LABELS = {
     "support": "호재",
@@ -50,7 +50,18 @@ RISK_PHRASES = [
     "손실",
     "소송",
     "규제",
-    "조사",
+    "당국 조사",
+    "금감원 조사",
+    "공정위 조사",
+    "검찰 조사",
+    "조사 착수",
+    "조사에 착수",
+    "조사 대상",
+    "조사받",
+    "조사 받",
+    "세무조사",
+    "압수수색",
+    "수사",
     "downgrade",
     "miss",
     "missed",
@@ -842,6 +853,48 @@ def validation_reason_text(read_scope: str, relation_scope: str, risk_hits: Iter
     return ", ".join(parts)
 
 
+def employment_preference_survey_analysis_guard(
+    analysis: Dict[str, object],
+    title: object,
+    source_text: object,
+) -> Dict[str, object]:
+    """Keep employer-preference surveys out of regulatory and directional analysis."""
+    if not news_domain.employment_preference_survey_context(title, source_text):
+        return analysis
+    guarded = dict(analysis or {})
+    limitations = unique_texts([
+        *(guarded.get("reasoningLimitations") or []),
+        "채용 선호도 설문은 실적·계약·규제처럼 투자 판단을 바꾸는 기업 사건으로 해석하지 않음",
+    ], 5)
+    guarded.update({
+        "eventType": "general",
+        "impactPolarity": "neutral",
+        "impactLabelKo": "중립",
+        "materialityState": "context",
+        "validationState": "conditional",
+        "decisionInlineEligible": False,
+        "decisionInlineReasonKo": "채용 선호도 설문은 투자 판단을 바꾸는 직접 기업 사건이 아닙니다.",
+        "riskSignals": [],
+        "supportSignals": [],
+        "contrastSignals": [],
+        "summary": {
+            "oneLineKo": "대학생·구직자 대상 채용 선호도 조사 결과입니다.",
+            "briefKo": "채용 선호도 조사 결과로, 실적·계약·규제 등 투자 판단을 바꿀 기업 사건은 확인되지 않았습니다.",
+            "keyTakeaways": [],
+            "whyItMatters": "고용 브랜드 참고 정보이며 주가 방향성이나 규제 리스크 근거로 사용하지 않습니다.",
+            "watchPoints": ["실적·공시 등 직접 기업 사건 확인"],
+        },
+        "rationaleKo": "채용 선호도 설문 결과이며 투자 판단용 기업 사건으로 분류하지 않습니다.",
+        "impactReasonKo": "채용 선호도 조사 결과는 고용 브랜드 참고 정보로, 단기 실적·규제·현금흐름 영향 근거로 사용하지 않습니다.",
+        "portfolioImplicationKo": "포트폴리오 판단을 바꾸는 근거가 아니라 기업 인지도 참고 정보로만 봅니다.",
+        "actionBoundaryKo": "실적·공시·계약처럼 직접적인 기업 사건이 확인될 때만 별도로 판단합니다.",
+        "validationReasonKo": "채용 선호도 설문은 규제 조사나 투자 방향 신호가 아닙니다.",
+        "needsReview": False,
+        "reasoningLimitations": limitations,
+    })
+    return guarded
+
+
 def local_news_ai_analysis(target: NewsCollectionTarget, evidence: ResearchEvidence) -> NewsAiAnalysis:
     payload = analysis_payload_from_evidence(evidence)
     facts = article_facts(payload)
@@ -865,6 +918,13 @@ def local_news_ai_analysis(target: NewsCollectionTarget, evidence: ResearchEvide
     if has_navigation_contamination(body or feed_summary):
         event_type = str(news_domain.classify_news_event_type(title, source_text) or existing_event_type)
     polarity, risk_hits, support_hits, contrast_hits = infer_impact_polarity(source_text)
+    employment_survey = news_domain.employment_preference_survey_context(title, raw_source_text)
+    if employment_survey:
+        event_type = "general"
+        polarity = "neutral"
+        risk_hits = []
+        support_hits = []
+        contrast_hits = []
     relation_scope = str(payload.get("relationScope") or facts.get("relationScope") or "").strip()
     state_source = {
         **payload,
@@ -885,6 +945,9 @@ def local_news_ai_analysis(target: NewsCollectionTarget, evidence: ResearchEvide
     if read_scope != "body" and states["dataState"] == "sufficient":
         states["dataState"] = "partial"
     if read_scope != "body" or polarity in {"mixed", "unknown"}:
+        states["validationState"] = "conditional"
+    if employment_survey:
+        states["materialityState"] = "context"
         states["validationState"] = "conditional"
     key_numbers = news_domain.numeric_highlights(source_text, 6)
     target_name = target.name or evidence.symbol or "대상 종목"
@@ -945,7 +1008,7 @@ def local_news_ai_analysis(target: NewsCollectionTarget, evidence: ResearchEvide
     )
     translation_pending = article_language == "en"
     deferred = translation_pending or str(summary_quality.get("state") or "") != "ready"
-    return NewsAiAnalysis(
+    result = NewsAiAnalysis(
         status="deferred" if deferred else "local",
         read_scope=read_scope,
         source_text_hash=source_text_hash(title, body, feed_summary),
@@ -984,10 +1047,17 @@ def local_news_ai_analysis(target: NewsCollectionTarget, evidence: ResearchEvide
         needs_review=read_scope != "body" or polarity in {"mixed", "unknown"} or deferred,
         reasoning_limitations=unique_texts([
             *limitations,
+            *( ["채용 선호도 설문은 실적·계약·규제처럼 투자 판단을 바꾸는 기업 사건으로 해석하지 않음"] if employment_survey else []),
             *( ["영문 원제 번역 대기"] if translation_pending else []),
             *( ["요약 품질 점검 필요: " + ", ".join(summary_quality.get("issues") or [])] if summary_quality.get("issues") else []),
         ], 5),
     )
+    if employment_survey:
+        return normalize_ai_analysis(
+            employment_preference_survey_analysis_guard(result.to_dict(), title, raw_source_text),
+            result,
+        )
+    return result
 
 
 def ai_analysis_existing_hash(payload: Dict[str, object]) -> str:
@@ -1049,6 +1119,11 @@ def apply_news_ai_analysis(evidence: ResearchEvidence, analysis_payload: Dict[st
     )
     analysis = normalize_ai_analysis(analysis_payload, fallback)
     analysis_dict = analysis.to_dict()
+    title, body, feed_summary, _read_scope = article_text_parts(evidence)
+    employment_survey = news_domain.employment_preference_survey_context(title, body or feed_summary)
+    if employment_survey:
+        analysis_dict = employment_preference_survey_analysis_guard(analysis_dict, title, body or feed_summary)
+        payload["eventType"] = "general"
     summary = analysis_dict.get("summary") if isinstance(analysis_dict.get("summary"), dict) else {}
     impact_polarity = str(analysis_dict.get("impactPolarity") or "neutral")
     article_facts_payload = article_facts(payload)
@@ -1097,7 +1172,7 @@ def apply_news_ai_analysis(evidence: ResearchEvidence, analysis_payload: Dict[st
         article_facts_payload["readStatusLabel"] = news_domain.article_read_status_label("feed-summary")
         article_facts_payload["missingBodyReason"] = article_facts_payload.get("missingBodyReason") or news_domain.article_missing_body_reason("feed-summary", "")
         payload["articleFacts"] = article_facts_payload
-    conflict_payload = news_analysis_conflict_payload(payload, article_facts_payload, impact_polarity)
+    conflict_payload = {} if employment_survey else news_analysis_conflict_payload(payload, article_facts_payload, impact_polarity)
     for key in [
         "analysisConflict",
         "analysisConflictSource",
@@ -1128,7 +1203,6 @@ def apply_news_ai_analysis(evidence: ResearchEvidence, analysis_payload: Dict[st
     # body read from a title/RSS interpretation.
     payload["articleReadStatus"] = "body" if str(analysis_dict.get("readScope") or "") == "body" else "feed-summary"
     payload["articleSummaryKo"] = summary.get("briefKo") or summary.get("oneLineKo") or payload.get("articleSummaryKo") or evidence.summary
-    title, body, feed_summary, _read_scope = article_text_parts(evidence)
     payload["articleSummaryQuality"] = summary_quality_payload(
         payload["articleSummaryKo"],
         " ".join(part for part in [title, body or feed_summary] if part),

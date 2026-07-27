@@ -29,9 +29,10 @@ def insert_analysis_block(message: str, block: str, rich: bool = False) -> str:
     text = str(message or "").strip()
     if not text or not block or "AI 공시 해석" in text:
         return text
-    marker = "\n\n<b>발송 기준</b>" if rich else "\n\n발송 기준"
-    if marker in text:
-        return text.replace(marker, "\n\n" + block + marker, 1)
+    markers = ["\n\n<b>발송 기준</b>", "\n\n<b>시장 확인</b>"] if rich else ["\n\n발송 기준", "\n\n시장 확인"]
+    for marker in markers:
+        if marker in text:
+            return text.replace(marker, "\n\n" + block + marker, 1)
     return text + "\n\n" + block
 
 
@@ -47,8 +48,11 @@ def context_with_disclosure_analysis(context: Dict[str, object], result: Disclos
     values["disclosureAnalysisVersion"] = DISCLOSURE_ANALYSIS_PROMPT_VERSION
     original_telegram = str(values.get("telegramMessage") or "").strip()
     original_readable = str(values.get("readableMessage") or "").strip()
+    original_body = str(values.get("body") or "").strip()
     values["telegramMessage"] = insert_analysis_block(original_telegram, telegram_block, True)
     values["readableMessage"] = insert_analysis_block(original_readable, plain_block, False)
-    if not values.get("body") or str(values.get("body") or "").strip() == original_telegram:
+    if original_body:
+        values["body"] = insert_analysis_block(original_body, plain_block, False)
+    elif not values.get("body") or str(values.get("body") or "").strip() == original_telegram:
         values["body"] = values["telegramMessage"]
     return values

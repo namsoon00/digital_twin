@@ -114,6 +114,17 @@ class NotificationIconPolicyTests(unittest.TestCase):
         }))
         self.assertEqual("💸", notification_message_icon("monitorCashChange", {"titleIcon": "💸"}))
 
+    def test_news_icons_distinguish_disclosures_updates_and_breaking_events(self):
+        self.assertEqual("📄", notification_message_icon("newsDigest", {
+            "newsDigest": {"eventKind": "disclosure"},
+        }))
+        self.assertEqual("↻", notification_message_icon("newsDigest", {
+            "newsDigest": {"deliveryMode": "story-update"},
+        }))
+        self.assertEqual("⚡", notification_message_icon("newsDigest", {
+            "newsDigest": {"urgency": "breaking"},
+        }))
+
     def test_investment_icons_follow_structured_action_and_data_states(self):
         cases = [
             (investment_context("BUY", "HOLD", "ENTRY_DEFERRED"), "⏸️"),

@@ -3,7 +3,7 @@ import subprocess
 from typing import Dict, List
 
 from ..domain.ontology_rulebox_governance import build_rule_change_candidate_prompt, rule_change_candidates_from_text
-from .model_reviewer import codex_command
+from .model_reviewer import codex_command, codex_model_label
 from .settings import ROOT_DIR, runtime_settings
 
 
@@ -96,13 +96,10 @@ class FallbackRuleChangeCandidateAdvisor(RuleChangeCandidateAdvisor):
 
 def rule_change_candidate_advisor_from_settings(settings: Dict[str, str] = None) -> RuleChangeCandidateAdvisor:
     settings = settings or runtime_settings()
-    command = str(settings.get("ontologyRuleCandidateAiCommand") or os.environ.get("ONTOLOGY_RULE_CANDIDATE_AI_COMMAND") or "").strip()
     use_codex = str(settings.get("ontologyRuleCandidateAiUseCodex") or os.environ.get("ONTOLOGY_RULE_CANDIDATE_AI_USE_CODEX") or "1").strip() != "0"
     timeout = int(settings.get("ontologyRuleCandidateAiTimeoutSeconds") or os.environ.get("ONTOLOGY_RULE_CANDIDATE_AI_TIMEOUT_SECONDS") or 120)
-    if command:
-        return FallbackRuleChangeCandidateAdvisor(CommandRuleChangeCandidateAdvisor(command, timeout, "AI 명령"))
     if use_codex:
         command = codex_command()
         if command:
-            return FallbackRuleChangeCandidateAdvisor(CommandRuleChangeCandidateAdvisor(command, timeout, "Codex AI"))
+            return FallbackRuleChangeCandidateAdvisor(CommandRuleChangeCandidateAdvisor(command, timeout, "Codex AI (" + codex_model_label() + ")"))
     return LocalRuleChangeCandidateAdvisor()

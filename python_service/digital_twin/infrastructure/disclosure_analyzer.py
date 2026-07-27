@@ -8,7 +8,7 @@ from ..domain.disclosure_analysis import (
     local_disclosure_analysis,
     normalize_disclosure_analysis_output,
 )
-from .model_reviewer import codex_command
+from .model_reviewer import codex_command, codex_model_label
 from .settings import ROOT_DIR, runtime_settings
 
 
@@ -74,11 +74,8 @@ def enabled_setting(settings: Dict[str, str], key: str, default: str = "1") -> b
 def disclosure_analyzer_from_settings(settings: Dict[str, str] = None) -> DisclosureAnalyzer:
     settings = settings or runtime_settings()
     timeout = int_setting(settings, "dartDisclosureAiTimeoutSeconds", int_setting(settings, "modelReviewTimeoutSeconds", 90))
-    command = str(settings.get("dartDisclosureAiCommand") or settings.get("modelReviewCommand") or "").strip()
-    if command:
-        return FallbackDisclosureAnalyzer(CommandDisclosureAnalyzer(command, timeout, "공시 AI 명령"))
     if enabled_setting(settings, "dartDisclosureAiUseCodex", str(settings.get("modelReviewUseCodex") or "1")):
         command = codex_command()
         if command:
-            return FallbackDisclosureAnalyzer(CommandDisclosureAnalyzer(command, timeout, "Codex AI"))
+            return FallbackDisclosureAnalyzer(CommandDisclosureAnalyzer(command, timeout, "Codex AI (" + codex_model_label() + ")"))
     return LocalDisclosureAnalyzer()

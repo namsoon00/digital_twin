@@ -5,7 +5,7 @@ from typing import Dict, Iterable, List, Tuple
 from .market_data import clamp, number
 
 
-NEWS_ANALYSIS_VERSION = "news-analysis-v5-content-boundary"
+NEWS_ANALYSIS_VERSION = "news-analysis-v6-context-safe-risk"
 ARTICLE_DIGEST_VERSION = "article-digest-ko-v4"
 ARTICLE_FACTS_VERSION = "article-facts-v3-content-boundary"
 
@@ -72,7 +72,18 @@ RISK_KEYWORDS = (
     "repayment",
     "하향",
     "소송",
-    "조사",
+    "당국 조사",
+    "금감원 조사",
+    "공정위 조사",
+    "검찰 조사",
+    "조사 착수",
+    "조사에 착수",
+    "조사 대상",
+    "조사받",
+    "조사 받",
+    "세무조사",
+    "압수수색",
+    "수사",
     "리콜",
     "유상증자",
     "감자",
@@ -173,7 +184,7 @@ EVENT_TYPE_KEYWORDS = {
     "guidance": ["guidance", "전망", "가이던스", "목표주가", "estimate", "forecast"],
     "supply_chain": ["공급", "supply", "supplier", "생산", "fab", "foundry", "라인", "공장"],
     "product": ["launch", "출시", "roadmap", "제품", "서비스", "chip", "GPU", "AI"],
-    "regulation": ["regulation", "규제", "소송", "lawsuit", "sue", "sues", "sued", "accuse", "accuses", "accused", "stealing", "stolen", "trade secret", "trade secrets", "legal", "litigation", "antitrust", "probe", "investigation", "조사", "제재"],
+    "regulation": ["regulation", "규제", "소송", "lawsuit", "sue", "sues", "sued", "accuse", "accuses", "accused", "stealing", "stolen", "trade secret", "trade secrets", "legal", "litigation", "antitrust", "probe", "investigation", "당국 조사", "금감원 조사", "공정위 조사", "검찰 조사", "조사 착수", "조사에 착수", "조사 대상", "조사받", "조사 받", "세무조사", "압수수색", "수사", "제재"],
     "capital_policy": ["buyback", "dividend", "자사주", "배당", "증자", "신주", "신주발행", "new shares", "newly issued", "share issuance", "offering", "dilution", "debt", "convertible debt", "repayment", "상환"],
     "listing": ["listing", "상장", "ADR", "나스닥", "IPO"],
     "macro_sector": ["금리", "환율", "inflation", "FOMC", "업황", "수요", "demand"],
@@ -1728,6 +1739,8 @@ def source_is_social_feed(source: object, provider: object = "") -> bool:
 
 
 def keyword_polarity(text: object) -> str:
+    if employment_preference_survey_context(text):
+        return "context"
     lowered = _lower_text(text)
     support_hits = sum(1 for item in SUPPORT_KEYWORDS if _keyword_in_lowered_text(item, lowered))
     risk_hits = sum(1 for item in RISK_KEYWORDS if _keyword_in_lowered_text(item, lowered))
@@ -1739,6 +1752,8 @@ def keyword_polarity(text: object) -> str:
 
 
 def classify_news_event_type(title: object, summary: object = "") -> str:
+    if employment_preference_survey_context(title, summary):
+        return "general"
     text = _lower_text(str(title or "") + " " + str(summary or ""))
     best = ("general", 0)
     for event_type, keywords in EVENT_TYPE_KEYWORDS.items():
@@ -1746,6 +1761,26 @@ def classify_news_event_type(title: object, summary: object = "") -> str:
         if hits > best[1]:
             best = (event_type, hits)
     return best[0]
+
+
+def employment_preference_survey_context(title: object, summary: object = "") -> bool:
+    """Recognize employment-preference surveys before generic 조사 becomes a risk cue."""
+    text = _lower_text(str(title or "") + " " + str(summary or ""))
+    if not text:
+        return False
+    regulatory_markers = (
+        "당국", "금감원", "공정위", "검찰", "경찰", "수사", "규제", "제재", "위반", "담합", "소송",
+    )
+    if any(marker in text for marker in regulatory_markers):
+        return False
+    audience_markers = ("대학생", "취업준비생", "구직자", "직장인", "취업")
+    preference_markers = ("일하고 싶은", "취업하고 싶은", "선호 기업", "선호하는 기업")
+    survey_markers = ("설문", "조사", "리서치")
+    return (
+        any(marker in text for marker in audience_markers)
+        and any(marker in text for marker in preference_markers)
+        and any(marker in text for marker in survey_markers)
+    )
 
 
 def editorial_preview_context(title: object, summary: object = "") -> bool:

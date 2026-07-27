@@ -9,7 +9,7 @@ from ..domain.events import DomainEvent, RESEARCH_EVIDENCE_COLLECTED
 from ..domain.market_data import number
 from ..domain.message_types import NEWS_DIGEST
 from ..domain.investment_research import NewsCollectionTarget
-from ..domain.investment_strategy_guidance import merge_strategy_context, strategy_message_lines
+from ..domain.investment_strategy_guidance import merge_strategy_context
 from ..domain.news_analysis import (
     NEWS_MATERIALITY_STATE_LABELS,
     NEWS_RELEVANCE_STATE_LABELS,
@@ -26,7 +26,9 @@ from ..domain.notifications import NotificationJob, notification_debug_number
 from ..domain.portfolio import utc_now_iso
 from ..domain.sent_article_filter import (
     article_digest_context_item,
+    article_has_new_story_fact,
     article_identity_keys,
+    article_story_cluster_id,
     collect_article_identity_keys_from_context,
 )
 
@@ -40,6 +42,10 @@ IMPACT_LABELS = {
     "context": "중립",
     "neutral": "중립",
 }
+
+DISCLOSURE_EVIDENCE_KINDS = {"disclosure", "filing", "sec-filing", "sec_filing"}
+NEWS_EVIDENCE_KINDS = {"news", "article", "news-article", "rss"}
+MAX_SOURCES_PER_EVENT = 3
 
 
 def clean_text(value: object, fallback: str = "") -> str:
@@ -96,6 +102,210 @@ def short_datetime_text(value: object) -> str:
 def item_news_states(item: Dict[str, object]) -> Dict[str, str]:
     payload = item.get("payload") if isinstance(item.get("payload"), dict) else {}
     return news_state_payload({**payload, **item})
+
+
+def item_payload(item: Dict[str, object]) -> Dict[str, object]:
+    return item.get("payload") if isinstance(item.get("payload"), dict) else {}
+
+
+def item_event_kind(item: Dict[str, object]) -> str:
+    raw = clean_text(item.get("kind") or item_payload(item).get("kind") or item.get("evidenceKind")).lower()
+    if raw in DISCLOSURE_EVIDENCE_KINDS:
+        return "disclosure"
+    if raw in NEWS_EVIDENCE_KINDS:
+        return "news"
+    return ""
+
+
+def event_label(items: List[Dict[str, object]]) -> str:
+    return "공시" if items and item_event_kind(items[0]) == "disclosure" else "뉴스"
+
+
+def item_original_title(item: Dict[str, object]) -> str:
+    payload = item_payload(item)
+    analysis = ai_analysis(item)
+    return bounded_text(
+        analysis.get("originalTitle")
+        or item.get("originalTitle")
+        or payload.get("originalTitle")
+        or item.get("title"),
+        520,
+    )
+
+
+def item_translated_title(item: Dict[str, object]) -> str:
+    payload = item_payload(item)
+    analysis = ai_analysis(item)
+    translated = bounded_text(
+        analysis.get("translatedTitleKo")
+        or item.get("translatedTitleKo")
+        or payload.get("translatedTitleKo"),
+        520,
+    )
+    original = item_original_title(item)
+    return "" if translated and summary_texts_similar(translated, original) else translated
+
+
+def item_source_language(item: Dict[str, object]) -> str:
+    payload = item_payload(item)
+    analysis = ai_analysis(item)
+    return clean_text(analysis.get("sourceLanguage") or item.get("sourceLanguage") or payload.get("sourceLanguage")).lower()
+
+
+def title_needs_korean_translation(item: Dict[str, object]) -> bool:
+    title = item_original_title(item)
+    language = item_source_language(item)
+    if language.startswith("en"):
+        return True
+    return bool(title and re.search(r"[A-Za-z]", title) and not re.search(r"[가-힣]", title))
+
+
+def item_title_translation_ready(item: Dict[str, object]) -> bool:
+    return item_event_kind(item) != "news" or not title_needs_korean_translation(item) or bool(item_translated_title(item))
+
+
+def item_importance_label(item: Dict[str, object]) -> str:
+    state = item_news_states(item).get("materialityState")
+    return {"material": "높음", "notable": "보통", "context": "참고"}.get(state, "확인 필요")
+
+
+def item_confidence_label(item: Dict[str, object]) -> str:
+    states = item_news_states(item)
+    payload = item_payload(item)
+    if item_event_kind(item) == "disclosure":
+        if clean_text(payload.get("officialDocumentText") or item.get("officialDocumentText")):
+            return "공식 원문 확인됨"
+        return "공식 공시 확인됨"
+    read_status = article_read_status(item)
+    trust = states.get("sourceTrustState")
+    if read_status == "body" and trust == "trusted":
+        return "본문·출처 확인됨"
+    if read_status == "body" and trust == "standard":
+        return "본문 확인됨"
+    if read_status == "body":
+        return "본문 추가 확인 필요"
+    return "제목·RSS 기반"
+
+
+def freshness_text(value: object, reference: object = "") -> str:
+    published = parse_datetime(value)
+    if not published:
+        return "시각 확인 중"
+    compared_at = parse_datetime(reference) or datetime.now(timezone.utc)
+    minutes = max(0, int((compared_at - published).total_seconds() // 60))
+    if minutes < 1:
+        relative = "방금 전"
+    elif minutes < 60:
+        relative = str(minutes) + "분 전"
+    elif minutes < 24 * 60:
+        relative = str(minutes // 60) + "시간 전"
+    elif minutes < 7 * 24 * 60:
+        relative = str(minutes // (24 * 60)) + "일 전"
+    else:
+        relative = short_datetime_text(value)
+    return relative + " · " + short_datetime_text(value)
+
+
+def event_is_story_update(items: List[Dict[str, object]]) -> bool:
+    return any(bool(item.get("storyUpdate")) for item in items or [])
+
+
+def event_icon(items: List[Dict[str, object]], reference: object = "") -> str:
+    if event_is_story_update(items):
+        return "↻"
+    if items and item_event_kind(items[0]) == "disclosure":
+        return "📄"
+    primary = items[0] if items else {}
+    states = item_news_states(primary)
+    published = parse_datetime(primary.get("publishedAt") or primary.get("observedAt"))
+    compared_at = parse_datetime(reference) or datetime.now(timezone.utc)
+    age_minutes = (compared_at - published).total_seconds() / 60 if published else 10_000
+    if (
+        states.get("materialityState") == "material"
+        and states.get("relevanceState") == "direct"
+        and states.get("sourceTrustState") in {"trusted", "standard"}
+        and article_read_status(primary) == "body"
+        and 0 <= age_minutes <= 60
+    ):
+        return "⚡"
+    return "📰"
+
+
+def event_group_key(item: Dict[str, object]) -> str:
+    kind = item_event_kind(item) or "news"
+    payload = item_payload(item)
+    if kind == "disclosure":
+        receipt = clean_text(item.get("receiptNo") or payload.get("receiptNo") or payload.get("receipt_no"))
+        if receipt:
+            return kind + ":receipt:" + receipt
+    cluster = article_story_cluster_id(item)
+    if cluster:
+        return kind + ":" + cluster
+    return kind + ":" + item_evidence_id(item)
+
+
+def source_names(items: List[Dict[str, object]]) -> List[str]:
+    rows: List[str] = []
+    for item in items or []:
+        source = clean_text(item.get("source") or item.get("domain") or item_payload(item).get("sourcePublisher"))
+        if source and source not in rows:
+            rows.append(source)
+    return rows
+
+
+def event_source_items(items: List[Dict[str, object]]) -> List[Dict[str, object]]:
+    """Keep one best article per publisher for a single reported event."""
+
+    selected: List[Dict[str, object]] = []
+    seen = set()
+    for item in items or []:
+        source = clean_text(item.get("source") or item.get("domain") or item_payload(item).get("sourcePublisher"))
+        key = source.casefold() or item_evidence_id(item)
+        if not key or key in seen:
+            continue
+        selected.append(item)
+        seen.add(key)
+        if len(selected) >= MAX_SOURCES_PER_EVENT:
+            break
+    return selected
+
+
+def grouped_event_items(items: List[Dict[str, object]]) -> List[List[Dict[str, object]]]:
+    """Group syndicated copies into one user-visible event, in importance order."""
+
+    groups: Dict[str, List[Dict[str, object]]] = {}
+    for item in sorted(items or [], key=item_sort_key, reverse=True):
+        groups.setdefault(event_group_key(item), []).append(item)
+    return [event_source_items(group) for group in groups.values() if group]
+
+
+def confirmed_fact_lines(item: Dict[str, object]) -> List[str]:
+    payload = item_payload(item)
+    if item_event_kind(item) == "disclosure":
+        rows = []
+        receipt_date = clean_text(item.get("receiptDate") or payload.get("receiptDate") or payload.get("receipt_date") or item.get("publishedAt"))
+        receipt_no = clean_text(item.get("receiptNo") or payload.get("receiptNo") or payload.get("receipt_no"))
+        if receipt_date:
+            rows.append("접수일 " + receipt_date)
+        if receipt_no:
+            rows.append("접수번호 " + receipt_no)
+        if clean_text(payload.get("officialDocumentText") or item.get("officialDocumentText")):
+            rows.append("공식 원문을 확보했습니다.")
+        elif rows:
+            rows.append("공식 공시 메타데이터를 확인했습니다. 세부 원문은 추가 확인이 필요합니다.")
+        return rows[:3]
+
+    facts = article_facts(item)
+    rows = []
+    takeaway = bounded_text(facts.get("eventTakeaway"), 220)
+    if takeaway:
+        rows.append(takeaway)
+    numbers = article_fact_list(facts, "numbers", 3)
+    if numbers:
+        rows.append("본문 수치: " + ", ".join(numbers))
+    if not rows:
+        rows.append("원문에서 추출한 구조화된 사실을 준비 중입니다.")
+    return rows[:3]
 
 
 def state_at_least(value: object, minimum: object, order: Tuple[str, ...]) -> bool:
@@ -232,7 +442,6 @@ def item_summary(item: Dict[str, object]) -> str:
         or bounded_text(clean_article_summary_noise(item.get("analysisSummary")), 260)
         or bounded_text(clean_article_summary_noise(item.get("summary")), 360)
         or bounded_text(clean_article_summary_noise(payload.get("articleSummaryKo")), 360)
-        or bounded_text(item.get("title"), 180)
     )
 
 
@@ -371,7 +580,7 @@ def alert_reason_lines(items: List[Dict[str, object]]) -> List[str]:
         )
     else:
         lines.append("• " + html_text(target) + "의 새 기사가 보유/관심 종목 기준을 통과했습니다.")
-    lines.append("• 기사 한 건만으로 매수·매도를 결정하지 않고, 기사 상세의 확인 조건과 함께 판단합니다.")
+    lines.append("• 기사 한 건만으로 매수·매도를 결정하지 않고, 시장 확인 항목과 함께 판단합니다.")
     if len(items) > 1:
         lines.append("• 함께 들어온 새 뉴스가 " + str(len(items)) + "건이라 기사 상세에서 각각 확인할 수 있습니다.")
     return lines
@@ -446,6 +655,12 @@ class NewsDigestEnqueuer:
             return True
         return str(value).strip().lower() not in {"0", "false", "no", "off", "disabled"}
 
+    def require_korean_title_translation(self) -> bool:
+        value = self.settings.get("newsDigestRequireKoreanTitleTranslation")
+        if value in (None, ""):
+            return True
+        return str(value).strip().lower() not in {"0", "false", "no", "off", "disabled"}
+
     def quality_gate_enabled(self) -> bool:
         value = self.settings.get("newsDigestHighQualityOnly")
         if value in (None, ""):
@@ -478,6 +693,8 @@ class NewsDigestEnqueuer:
         return clean_text(item.get("relationScope") or payload.get("relationScope")).lower()
 
     def refresh_item_analysis(self, item: Dict[str, object]) -> Dict[str, object]:
+        if item_event_kind(item) != "news":
+            return item
         payload = item.get("payload") if isinstance(item.get("payload"), dict) else {}
         title = clean_text(item.get("title"))
         merged_payload = {**payload, **{key: value for key, value in item.items() if key not in {"payload"}}}
@@ -511,10 +728,16 @@ class NewsDigestEnqueuer:
             return True
         if not relation_scope_is_investable(self.item_relation_scope(item)):
             return False
+        states = item_news_states(item)
+        if item_event_kind(item) == "disclosure":
+            return (
+                state_at_least(states["sourceTrustState"], self.minimum_source_trust_state(), ("unknown", "limited", "standard", "trusted"))
+                and state_at_least(states["materialityState"], self.minimum_materiality_state(), ("context", "notable", "material"))
+                and states["validationState"] != "blocked"
+            )
         summary = item_summary(item)
         if not summary or "Comprehensive" in summary or "Google News입니다" in summary or "상승-으로-date" in summary:
             return False
-        states = item_news_states(item)
         polarity = clean_text(item.get("stockImpactPolarity") or item.get("polarity")).lower()
         label = impact_label(item)
         required_materiality = self.minimum_neutral_materiality_state() if label == "중립" or polarity in {"context", "neutral"} else self.minimum_materiality_state()
@@ -558,7 +781,16 @@ class NewsDigestEnqueuer:
         sent_keys = self.previously_sent_article_keys(account)
         if not sent_keys:
             return items
-        return [item for item in items if not article_identity_keys(item).intersection(sent_keys)]
+        allowed = []
+        for item in items:
+            if not article_identity_keys(item).intersection(sent_keys):
+                allowed.append(item)
+                continue
+            if article_has_new_story_fact(item, sent_keys):
+                follow_up = dict(item)
+                follow_up["storyUpdate"] = True
+                allowed.append(follow_up)
+        return allowed
 
     def event_items(self, event: DomainEvent) -> List[Dict[str, object]]:
         payload = event.payload or {}
@@ -568,10 +800,17 @@ class NewsDigestEnqueuer:
             raw_items = payload.get("changedItems") or []
         if not isinstance(raw_items, list):
             return []
-        items = [self.refresh_item_analysis(dict(item)) for item in raw_items if isinstance(item, dict)]
+        items = [dict(item) for item in raw_items if isinstance(item, dict)]
+        items = [item for item in items if item_event_kind(item) in {"news", "disclosure"}]
+        items = [self.refresh_item_analysis(item) for item in items]
         items = [item for item in items if relation_scope_is_investable(self.item_relation_scope(item))]
         if self.require_article_body():
-            items = [item for item in items if article_read_status(item) == "body"]
+            items = [
+                item for item in items
+                if item_event_kind(item) == "disclosure" or article_read_status(item) == "body"
+            ]
+        if self.require_korean_title_translation():
+            items = [item for item in items if item_title_translation_ready(item)]
         if self.quality_gate_enabled():
             items = [item for item in items if self.item_passes_quality_gate(item)]
         items.sort(key=item_sort_key, reverse=True)
@@ -607,7 +846,7 @@ class NewsDigestEnqueuer:
         holdings, watchlist = self.account_symbols(account)
         known_symbols = set(holdings) | set(watchlist)
         if not known_symbols:
-            return self.exclude_previously_sent_articles(account, items)[: self.max_items]
+            return self.exclude_previously_sent_articles(account, items)
         scoped = []
         for item in items:
             symbol = normalized_symbol(item.get("symbol"))
@@ -616,13 +855,17 @@ class NewsDigestEnqueuer:
                 item["portfolioBucket"] = "보유" if symbol in holdings else "관심"
                 item["displayName"] = holdings.get(symbol) or watchlist.get(symbol) or symbol
                 scoped.append(item)
-        return self.exclude_previously_sent_articles(account, scoped)[: self.max_items]
+        return self.exclude_previously_sent_articles(account, scoped)
 
     def enqueue_account_digest(self, account: AccountConfig, items: List[Dict[str, object]], event: DomainEvent) -> None:
+        for event_items in grouped_event_items(items)[: self.max_items]:
+            self.enqueue_account_event(account, event_items, event)
+
+    def enqueue_account_event(self, account: AccountConfig, items: List[Dict[str, object]], event: DomainEvent) -> None:
         primary = items[0]
         primary_id = item_evidence_id(primary)
         article_keys = sorted({key for item in items for key in article_identity_keys(item)})
-        primary_token = "|".join(sorted(article_identity_keys(primary))) or primary_id
+        primary_token = "|".join(article_keys) or primary_id
         context = self.context(account, items, event)
         job = NotificationJob.create(
             "",
@@ -636,9 +879,9 @@ class NewsDigestEnqueuer:
         )
         context["sentArticleFilter"] = {
             "enabled": self.sent_article_filter_enabled(),
-            "policy": "sent-article-once",
+            "policy": "sent-article-once-with-verified-story-updates",
             "articleKeyCount": len(article_keys),
-            "reason": "이미 발송한 기사 또는 같은 제목의 기사 근거는 다시 판단하지 않습니다.",
+            "reason": "이미 알린 기사·사건은 다시 보내지 않고, 검증된 새 사실이 추가된 경우만 후속 알림으로 보냅니다.",
         }
         text = self.message_text(account, items, event, notification_debug_number(job.job_id))
         context["body"] = text
@@ -648,26 +891,59 @@ class NewsDigestEnqueuer:
 
     def context(self, account: AccountConfig, items: List[Dict[str, object]], event: DomainEvent) -> Dict[str, object]:
         primary = items[0]
+        event_kind = item_event_kind(primary) or "news"
+        reference = latest_timestamp(items)
+        icon = event_icon(items, reference)
+        sources = source_names(items)
+        delivery_mode = "story-update" if event_is_story_update(items) else "new-event"
         symbols = [normalized_symbol(item.get("symbol")) for item in items if normalized_symbol(item.get("symbol"))]
         materiality_states = [item_news_states(item)["materialityState"] for item in items]
         severity = "ALERT" if "material" in materiality_states or impact_label(primary) == "위험" else "WATCH"
         article_items = [article_digest_context_item(item) for item in items]
         article_keys = sorted({key for item in items for key in article_identity_keys(item)})
+        payload = item_payload(primary)
+        report_name = item_original_title(primary)
+        receipt_no = clean_text(primary.get("receiptNo") or payload.get("receiptNo") or payload.get("receipt_no"))
+        receipt_date = clean_text(primary.get("receiptDate") or payload.get("receiptDate") or payload.get("receipt_date") or primary.get("publishedAt"))
+        raw_lines = []
+        if event_kind == "disclosure":
+            raw_lines = [
+                "공시명: " + report_name,
+                "접수일: " + (receipt_date or "확인 필요"),
+                "접수번호: " + (receipt_no or "확인 필요"),
+                "출처: " + (clean_text(primary.get("source")) or "OpenDART"),
+            ]
+            document_preview = bounded_text(payload.get("officialDocumentPreview") or payload.get("officialDocumentText"), 6000)
+            if document_preview:
+                raw_lines.append("공시 원문: " + document_preview)
         context = {
             "messageType": NEWS_DIGEST,
             "accountId": account.account_id,
             "accountLabel": account.label,
             "severity": severity,
             "symbol": normalized_symbol(primary.get("symbol")),
-            "title": "뉴스/피드 새 정보",
+            "title": event_label(items),
+            "notificationIcon": icon,
+            "titleIcon": icon,
             "body": "",
-            "referenceDate": latest_timestamp(items),
+            "referenceDate": reference,
             "generatedAt": event.occurred_at,
             "notificationSignals": ["important", "confirmingData", "actionable"],
             "messageDeliveryLevel": account.message_delivery_profile()["level"],
             "messageDeliveryLevelLabel": account.message_delivery_profile()["label"],
+            "reportName": report_name if event_kind == "disclosure" else "",
+            "receiptNo": receipt_no if event_kind == "disclosure" else "",
+            "receiptDate": receipt_date if event_kind == "disclosure" else "",
+            "provider": clean_text(primary.get("source")) if event_kind == "disclosure" else "",
+            "rawLines": raw_lines,
             "newsDigest": {
+                "eventKind": event_kind,
+                "eventIcon": icon,
+                "eventClusterId": event_group_key(primary),
+                "deliveryMode": delivery_mode,
                 "itemCount": len(items),
+                "sourceCount": len(sources),
+                "sources": sources,
                 "symbols": symbols,
                 "items": article_items,
                 "articleKeys": article_keys,
@@ -676,6 +952,9 @@ class NewsDigestEnqueuer:
                 "primaryTitle": clean_text(primary.get("title")),
                 "primaryPublishedAt": clean_text(primary.get("publishedAt") or primary.get("observedAt")),
                 "primaryArticleReadStatus": article_read_status(primary),
+                "primarySourceLanguage": item_source_language(primary),
+                "primaryOriginalTitle": item_original_title(primary),
+                "primaryTranslatedTitleKo": item_translated_title(primary),
                 "materialityStates": materiality_states,
             },
         }
@@ -683,70 +962,81 @@ class NewsDigestEnqueuer:
 
     def message_text(self, account: AccountConfig, items: List[Dict[str, object]], event: DomainEvent, tracking_number: str = "") -> str:
         reference = latest_timestamp(items)
-        strategy_context = merge_strategy_context({}, account)
-        strategy_lines = strategy_message_lines(strategy_context)
+        primary = items[0]
+        label = event_label(items)
+        icon = event_icon(items, reference)
+        symbol = normalized_symbol(primary.get("symbol"))
+        name = clean_text(primary.get("displayName") or symbol or "종목")
+        target = name + (" / " + symbol if symbol and symbol != name else "")
+        sources = source_names(items)
+        source = sources[0] if sources else "출처 미확인"
+        original_title = item_original_title(primary) or clean_text(primary.get("title"))
+        translated_title = item_translated_title(primary)
+        summary = item_summary(primary)
+        facts = confirmed_fact_lines(primary)
+        interpretations: List[str] = []
+        for value in [item_investment_impact(primary), item_impact_reason(primary)]:
+            text = bounded_text(value, 360)
+            if text and not any(summary_texts_similar(text, existing) for existing in interpretations):
+                interpretations.append(text)
+        if not interpretations:
+            if item_event_kind(primary) == "disclosure":
+                interpretations.append("공시 메타데이터만으로 방향을 단정하지 않고, 원문 세부 내용과 시장 반응을 함께 확인합니다.")
+            else:
+                interpretations.append("원문과 가격 반응을 추가로 확인한 뒤 조건부 해석을 보완합니다.")
+        watch_line = item_watch_text(primary)
+        action_boundary = item_action_boundary(primary)
+        url = clean_text(primary.get("url"))
+        link = '<a href="' + html_attr(url) + '">원문 보기</a>' if url else "원문 링크 없음"
         reason_lines = alert_reason_lines(items)
-        item_lines = []
-        for index, item in enumerate(items, start=1):
-            symbol = normalized_symbol(item.get("symbol"))
-            name = clean_text(item.get("displayName") or symbol or "종목")
-            title = clean_text(item.get("title"))
-            source = clean_text(item.get("source") or "출처 미확인")
-            published_at = short_datetime_text(item.get("publishedAt") or item.get("observedAt")) or "기사일 미확인"
-            states = item_news_states(item)
-            relevance = NEWS_RELEVANCE_STATE_LABELS.get(states["relevanceState"], "확인 필요")
-            importance = NEWS_MATERIALITY_STATE_LABELS.get(states["materialityState"], "참고 정보")
-            reliability = NEWS_SOURCE_TRUST_STATE_LABELS.get(states["sourceTrustState"], "출처 확인 필요").replace("신뢰도 ", "")
-            url = clean_text(item.get("url"))
-            link = '<a href="' + html_attr(url) + '">원문 보기</a>' if url else "원문 없음"
-            item_lines.extend([
-                str(index) + ". " + html_text(name + (" / " + symbol if symbol and symbol != name else "")),
-                "• 제목: " + html_text(title),
-                "• 기사일: " + html_text(published_at) + ", 출처: " + html_text(source),
-                "• 분석: " + html_text(article_analysis_label(item)),
-            ])
-            summary_line = item_summary(item)
-            investment_impact = item_investment_impact(item)
-            action_boundary = item_action_boundary(item)
-            watch_line = item_watch_text(item)
-            item_lines.extend([
-                "• 판단: 영향 " + html_text(impact_label(item)) + ", 신뢰도 " + html_text(reliability)
-                + (", 관련성 " + html_text(relevance) if relevance else "")
-                + (", 중요도 " + html_text(importance) if importance else ""),
-            ])
-            seen_detail_lines: List[str] = []
-            for line in [
-                compact_digest_line("핵심 사실", summary_line, seen_detail_lines),
-                compact_digest_line("투자 영향", investment_impact, seen_detail_lines),
-                compact_digest_line("확인할 점", watch_line or action_boundary, seen_detail_lines, limit=320),
-            ]:
-                if line:
-                    item_lines.append(line)
-            item_lines.append("• 원문: " + link)
-            if index < len(items):
-                item_lines.append("")
         number = tracking_number or notification_debug_number(event.event_id)
         parts = [
-            "🔔 새 알림 · 새 뉴스 " + str(len(items)) + "건",
+            icon + " " + label + " · " + html_text(target),
+            "중요도 " + html_text(item_importance_label(primary))
+            + " · 영향 " + html_text(impact_label(primary))
+            + " · 신뢰도 " + html_text(item_confidence_label(primary)),
+            html_text(freshness_text(primary.get("publishedAt") or primary.get("observedAt"), reference))
+            + " · " + html_text(source),
             "",
-            "[관찰] 🗞️ 뉴스/피드 새 정보",
-            "보유/관심 종목 새 근거 감지",
+            "원문 제목",
+            "• " + html_text(original_title or "제목 확인 중"),
+        ]
+        if translated_title:
+            parts.extend(["한국어 제목", "• " + html_text(translated_title)])
+        elif title_needs_korean_translation(primary):
+            parts.extend(["한국어 제목", "• 번역 생성 중"])
+        parts.extend([
             "",
-            "요약",
-            "• 기준시각: " + html_text(kst_datetime_text(reference)),
-            "• 신규 중요 뉴스: " + str(len(items)) + "건",
-            "• 목적: 다음 장 시작 전 가격 반응과 거래량을 확인하기 위한 준비 알림입니다.",
+            "한 줄 요약",
+            "• " + html_text(summary or "본문 요약 생성 전입니다."),
             "",
-            "계정 성향 기준",
-            *(html_text(line) for line in strategy_lines),
+            "확인된 사실",
+            *("• " + html_text(line) for line in facts),
             "",
-            "기사 상세",
-            *item_lines,
+            "AI 해석 · 조건부",
+            *("• " + html_text(line) for line in interpretations[:2]),
+            "",
+            "시장 확인",
+            "• 다음 확인: " + html_text(watch_line),
+        ])
+        if action_boundary and not summary_texts_similar(action_boundary, watch_line):
+            parts.append("• 판단 경계: " + html_text(action_boundary))
+        parts.extend([
+            "",
+            "출처",
+            "• 원문: " + link,
+        ])
+        if len(sources) > 1:
+            parts.append("• 함께 수집된 출처 " + str(len(sources)) + "곳: " + html_text(", ".join(sources)))
+        if event_is_story_update(items):
+            parts.append("• 기존 사건의 검증된 새 사실이 추가된 후속 알림입니다.")
+        parts.extend([
             "",
             "알림이 온 이유",
             *reason_lines,
             "",
             "알림 추적",
             "• 번호: " + html_text(number),
-        ]
+            "• 수집 기준시각: " + html_text(kst_datetime_text(reference)),
+        ])
         return "\n".join(parts).strip()

@@ -92,6 +92,7 @@ from ..domain.symbol_universe import symbol_search_symbol_candidates
 from ..infrastructure.event_bus import EventBus, JsonEventLog, default_event_bus
 from ..infrastructure.external_signal_utils import ExternalCircuitOpen, ExternalRateLimited, external_call_target, guarded_external_call
 from ..infrastructure.mock_market import mock_market_payload, mock_market_scenario_list
+from ..infrastructure.model_reviewer import codex_cli_arguments
 from ..infrastructure.ontology_graph_store import ontology_repository_from_settings
 from ..infrastructure.ontology_projection import PortfolioOntologyProjectionRecorder
 from ..infrastructure.runtime_identity import runtime_identity
@@ -771,6 +772,7 @@ def settings_status_payload() -> Dict[str, object]:
         "newsDigestMinimumMaterialityState",
         "newsDigestMinimumNeutralMaterialityState",
         "newsDigestMinimumSourceTrustState",
+        "newsDigestRequireKoreanTitleTranslation",
         "newsCollectionRequireArticleBodyForRss",
         "newsCollectionIncludeWatchlist",
         "newsCollectionIncludeHoldings",
@@ -3508,6 +3510,7 @@ def run_local_codex(message: str) -> str:
         result = subprocess.run(
             [
                 codex,
+                *codex_cli_arguments(),
                 "-a",
                 "never",
                 "--sandbox",

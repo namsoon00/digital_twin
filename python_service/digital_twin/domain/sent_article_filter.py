@@ -23,7 +23,7 @@ TRACKING_QUERY_KEYS = {
     "utm_term",
     "yclid",
 }
-ARTICLE_KIND_VALUES = {"news", "article", "news-article", "rss", "research"}
+ARTICLE_KIND_VALUES = {"news", "article", "news-article", "rss", "research", "disclosure", "filing", "sec-filing", "sec_filing"}
 ARTICLE_CONTEXT_KEYS = {
     "newsDigest",
     "newsHeadlines",
@@ -223,6 +223,8 @@ def article_story_cluster_id(item: Dict[str, object]) -> str:
         return ""
     explicit = _first_nested_value(item, STORY_CLUSTER_KEYS)
     if explicit:
+        if explicit.startswith("story:"):
+            return explicit
         return _hash_key("story", explicit)
     # Evidence governance marks syndicated copies with the first claim they
     # repeat. Keeping that root means an original and its reprints share one
@@ -308,11 +310,13 @@ def news_digest_article_item(context: Dict[str, object]) -> Dict[str, object]:
     if not digest:
         return {}
     return {
-        "kind": "news",
+        "kind": digest.get("eventKind") or "news",
         "evidenceId": digest.get("primaryEvidenceId"),
         "url": digest.get("primaryUrl"),
         "title": digest.get("primaryTitle"),
         "publishedAt": digest.get("primaryPublishedAt"),
+        "storyClusterId": digest.get("eventClusterId"),
+        "storyUpdate": digest.get("deliveryMode") == "story-update",
     }
 
 
@@ -391,20 +395,24 @@ def article_filter_context_summary(result: SentArticleFilterResult, sent_keys: S
 
 def article_digest_context_item(item: Dict[str, object]) -> Dict[str, object]:
     payload = item.get("payload") if isinstance(item.get("payload"), dict) else {}
+    kind = _first_nested_value(item, ["kind", "type", "sourceKind"]) or "news"
     return {
-        "kind": "news",
+        "kind": kind,
         "evidenceId": _first_nested_value(item, ["evidenceId", "evidence_id", "id"]),
         "symbol": _first_nested_value(item, ["symbol"]),
         "source": _first_nested_value(item, ["source", "domain", "provider"]),
         "title": _first_nested_value(item, ["title", "headline"]),
         "url": _first_nested_value(item, URL_KEYS),
         "publishedAt": _first_nested_value(item, ["publishedAt", "published_at", "observedAt", "observed_at"]),
+        "receiptNo": _first_nested_value(item, ["receiptNo", "receipt_no"]),
+        "receiptDate": _first_nested_value(item, ["receiptDate", "receipt_date"]),
         "articleReadStatus": (
             _first_nested_value(item, ["articleReadStatus", "readStatus"])
             or _text(payload.get("articleReadStatus") or payload.get("readStatus"))
         ),
         "storyClusterId": article_story_cluster_id(item),
         "storyFactKeys": sorted(article_story_fact_keys(item)),
+        "storyUpdate": _truthy(item.get("storyUpdate")),
         "identityKeys": sorted(article_identity_keys(item)),
     }
 

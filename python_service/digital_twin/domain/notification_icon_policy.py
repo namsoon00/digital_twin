@@ -130,6 +130,25 @@ def investment_notification_icon(message_type: object, context: Dict[str, object
     return ""
 
 
+def news_digest_notification_icon(message_type: object, context: Dict[str, object] = None) -> str:
+    """Choose a presentation icon for event-style news alerts saved before a title icon."""
+
+    if str(message_type or _context_value(context or {}, "messageType") or "").strip() != "newsDigest":
+        return ""
+    digest = _context_value(context or {}, "newsDigest")
+    digest = digest if isinstance(digest, dict) else {}
+    icon = str(digest.get("eventIcon") or "").strip()
+    if icon:
+        return icon
+    if str(digest.get("deliveryMode") or "").strip() == "story-update":
+        return "↻"
+    if str(digest.get("eventKind") or "").strip() == "disclosure":
+        return "📄"
+    if str(digest.get("urgency") or "").strip() == "breaking":
+        return "⚡"
+    return ""
+
+
 def notification_title_with_context_icon(
     message_type: object,
     title: object,
@@ -140,7 +159,7 @@ def notification_title_with_context_icon(
     text = str(title or "").strip()
     if not text:
         return text
-    icon = investment_notification_icon(message_type, context)
+    icon = investment_notification_icon(message_type, context) or news_digest_notification_icon(message_type, context)
     if not icon:
         return text
     previous = str(_context_value(context or {}, "titleIcon") or "").strip()
@@ -163,6 +182,9 @@ def notification_message_icon(message_type: object, context: Dict[str, object] =
     icon = str(values.get("notificationIcon") or "").strip()
     if icon:
         return icon
+    news_icon = news_digest_notification_icon(message_type, values)
+    if news_icon:
+        return news_icon
     investment_icon = investment_notification_icon(message_type, values)
     if investment_icon:
         return investment_icon

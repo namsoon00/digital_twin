@@ -1,7 +1,8 @@
 import unittest
 from types import SimpleNamespace
 
-from digital_twin.application.news_digest_service import NewsDigestEnqueuer
+from digital_twin.application.news_digest_service import NewsDigestEnqueuer, item_summary
+from digital_twin.application.notification_service import DisclosureAnalysisNotificationEnricher
 from digital_twin.domain.accounts import AccountConfig
 from digital_twin.domain.events import DomainEvent, RESEARCH_EVIDENCE_COLLECTED
 from digital_twin.domain.investment_research import ResearchEvidence
@@ -68,6 +69,12 @@ class NewsDigestEnqueuerTests(unittest.TestCase):
                 "articleReadStatus": "body",
                 "articleAnalysisSource": "article-body",
                 "articleSummaryKo": "애플을 직접 다룬 법적 이슈로 다음 장 가격 반응 확인이 필요합니다.",
+                "aiAnalysis": {
+                    "sourceLanguage": "en",
+                    "originalTitle": "Apple OpenAI lawsuit highlights broader tensions",
+                    "translatedTitleKo": "애플과 OpenAI 소송이 더 큰 긴장을 부각",
+                    "translationStatus": "complete",
+                },
                 "articleFacts": {
                     "readStatus": "body",
                     "readStatusLabel": "전체 본문 읽음",
@@ -115,17 +122,20 @@ class NewsDigestEnqueuerTests(unittest.TestCase):
         self.assertEqual("AAPL", job.context["symbol"])
         self.assertEqual("research:AAPL:news:apple-openai", job.context["newsDigest"]["primaryEvidenceId"])
         self.assertIn('href="https://example.test/apple?utm_source=news&amp;ref=long">원문 보기</a>', job.text)
-        self.assertTrue(job.text.startswith("🔔 새 알림 · 새 뉴스 1건"))
+        self.assertTrue(job.text.startswith("📰 뉴스 · Apple / AAPL"))
         self.assertNotIn("• 원문: https://example.test", job.text)
-        self.assertIn("기사일: 07/11 09:00 KST", job.text)
-        self.assertIn("분석: 기사 본문 읽음", job.text)
-        self.assertIn("핵심 사실: 애플을 직접 다룬 법적 이슈", job.text)
-        self.assertIn("확인할 점: 다음 장 가격 반응과 거래량 동반 여부", job.text)
+        self.assertIn("07/11 09:00 KST", job.text)
+        self.assertIn("확인된 사실", job.text)
+        self.assertIn("애플 관련 소송·규제 이슈가 투자심리 부담으로 부각", job.text)
+        self.assertIn("본문 수치: 12%", job.text)
+        self.assertIn("시장 확인", job.text)
+        self.assertIn("다음 장 가격 반응과 거래량 동반 여부", job.text)
         self.assertNotIn("판단 근거:", job.text)
-        self.assertIn("계정 성향 기준", job.text)
-        self.assertIn("계정 성향: 균형형", job.text)
+        self.assertNotIn("계정 성향 기준", job.text)
         self.assertEqual("balanced", job.context["investmentStrategyProfile"])
         self.assertIn("investmentStrategyGuidance", job.context)
+        self.assertEqual("news", job.context["newsDigest"]["eventKind"])
+        self.assertEqual("new-event", job.context["newsDigest"]["deliveryMode"])
         self.assertEqual(1, len(job.context["newsDigest"]["items"]))
         self.assertTrue(job.context["newsDigest"]["items"][0]["identityKeys"])
         self.assertTrue(job.context["newsDigest"]["articleKeys"])
@@ -177,6 +187,9 @@ class NewsDigestEnqueuerTests(unittest.TestCase):
         evidence = self.evidence()
         evidence.raw_payload["aiAnalysis"] = {
             "version": "news-ai-analysis-v1",
+            "sourceLanguage": "en",
+            "originalTitle": "Apple OpenAI lawsuit highlights broader tensions",
+            "translatedTitleKo": "애플과 OpenAI 소송이 더 큰 긴장을 부각",
             "impactPolarity": "risk",
             "impactLabelKo": "악재",
             "confidence": 0.82,
@@ -206,9 +219,12 @@ class NewsDigestEnqueuerTests(unittest.TestCase):
 
         job = queue.jobs[0]
         self.assertNotIn("이번 뉴스 핵심", job.text)
-        self.assertIn("판단: 영향 악재", job.text)
-        self.assertIn("핵심 사실: 애플 관련 법적 이슈", job.text)
-        self.assertIn("투자 영향: Apple 보유·관심 기준", job.text)
+        self.assertIn("한국어 제목", job.text)
+        self.assertIn("애플과 OpenAI 소송이 더 큰 긴장을 부각", job.text)
+        self.assertIn("한 줄 요약", job.text)
+        self.assertIn("확인된 사실", job.text)
+        self.assertIn("AI 해석 · 조건부", job.text)
+        self.assertIn("Apple 보유·관심 기준", job.text)
         self.assertNotIn("대응 경계:", job.text)
         self.assertNotIn("핵심 근거:", job.text)
         self.assertIn("알림이 온 이유", job.text)
@@ -217,10 +233,8 @@ class NewsDigestEnqueuerTests(unittest.TestCase):
         self.assertIn("기사 한 건만으로 매수·매도를 결정하지 않고", job.text)
         self.assertNotIn("실제 영향 요약", job.text)
         self.assertNotIn("먼저 볼 것", job.text)
-        self.assertNotIn("영향 해석:", job.text)
-        self.assertNotIn("보유/관심 영향:", job.text)
-        self.assertNotIn("내용 요약:", job.text)
-        self.assertIn("확인할 점: 원문 본문 확보, 다음 장 가격 반응", job.text)
+        self.assertNotIn("투자 영향:", job.text)
+        self.assertIn("다음 확인: 원문 본문 확보, 다음 장 가격 반응", job.text)
 
     def test_news_digest_groups_plain_impact_before_article_details(self):
         queue = MemoryNotificationQueue()
@@ -229,6 +243,10 @@ class NewsDigestEnqueuerTests(unittest.TestCase):
             "version": "news-ai-analysis-v1",
             "impactPolarity": "risk",
             "impactLabelKo": "악재",
+            "sourceLanguage": "en",
+            "originalTitle": "Coupang (CPNG) Slides Ahead Of Earnings As The Valuation Debate Heats Up",
+            "translatedTitleKo": "쿠팡, 실적 발표를 앞두고 밸류에이션 논쟁 속 하락",
+            "translationStatus": "complete",
             "confidence": 0.76,
             "materialityScore": 86,
             "summary": {"briefKo": "실적 발표 전 주가 하락과 밸류에이션 논쟁이 핵심입니다.", "watchPoints": ["다음 장 가격 반응"]},
@@ -268,7 +286,8 @@ class NewsDigestEnqueuerTests(unittest.TestCase):
 
         job = queue.jobs[0]
         self.assertNotIn("이번 뉴스 핵심", job.text)
-        self.assertIn("투자 영향: 쿠팡 보유 기준", job.text)
+        self.assertIn("AI 해석 · 조건부", job.text)
+        self.assertIn("쿠팡 보유 기준", job.text)
 
     def test_ignores_feed_only_article_by_default(self):
         queue = MemoryNotificationQueue()
@@ -386,15 +405,52 @@ class NewsDigestEnqueuerTests(unittest.TestCase):
 
         self.assertNotIn("AI 의견", rendered)
         self.assertNotIn("모델 판단", rendered)
-        self.assertIn("뉴스/피드 새 정보", rendered)
+        self.assertIn("뉴스 · Apple / AAPL", rendered)
 
-    def test_news_digest_omits_repeated_first_watch_section(self):
+    def test_news_digest_sends_unrelated_events_separately(self):
         queue = MemoryNotificationQueue()
         first = self.evidence()
         second = self.evidence()
         second.evidence_id = "research:AAPL:news:apple-openai-2"
         second.title = "Apple OpenAI lawsuit follow-up"
         second.url = "https://example.test/apple-2"
+        second.raw_payload["articleFacts"]["eventTakeaway"] = "애플의 별도 서비스 가격 정책 변경이 매출 전망에 미치는 영향"
+        event = DomainEvent(
+            name=RESEARCH_EVIDENCE_COLLECTED,
+            aggregate_id="news:AAPL",
+            payload={"materialChangedItems": [first.to_dict(), second.to_dict()]},
+        )
+
+        self.enqueuer(queue).handle(event)
+
+        self.assertEqual(2, len(queue.jobs))
+        self.assertTrue(all("기사 상세" not in job.text for job in queue.jobs))
+        self.assertTrue(all("먼저 볼 것" not in job.text for job in queue.jobs))
+
+    def test_same_event_clusters_sources_and_shows_korean_translation(self):
+        queue = MemoryNotificationQueue()
+        first = self.evidence()
+        first.raw_payload.update({
+            "storyClusterId": "apple-openai-lawsuit-20260711",
+            "aiAnalysis": {
+                "sourceLanguage": "en",
+                "originalTitle": "Apple OpenAI lawsuit highlights broader tensions",
+                "translatedTitleKo": "애플과 OpenAI 소송이 더 큰 긴장을 부각",
+                "summary": {"briefKo": "애플 관련 법적 이슈의 후속 보도가 추가됐습니다."},
+            },
+        })
+        second = self.evidence()
+        second.evidence_id = "research:AAPL:news:apple-openai-reuters"
+        second.source = "Reuters"
+        second.title = "Apple and OpenAI lawsuit draws regulatory attention"
+        second.url = "https://example.test/reuters-apple-openai"
+        second.raw_payload.update({"storyClusterId": "apple-openai-lawsuit-20260711"})
+        second.raw_payload["aiAnalysis"] = {
+            "sourceLanguage": "en",
+            "originalTitle": "Apple and OpenAI lawsuit draws regulatory attention",
+            "translatedTitleKo": "애플과 OpenAI 소송이 규제 당국의 관심을 받다",
+            "translationStatus": "complete",
+        }
         event = DomainEvent(
             name=RESEARCH_EVIDENCE_COLLECTED,
             aggregate_id="news:AAPL",
@@ -404,10 +460,115 @@ class NewsDigestEnqueuerTests(unittest.TestCase):
         self.enqueuer(queue).handle(event)
 
         self.assertEqual(1, len(queue.jobs))
-        self.assertNotIn("먼저 볼 것", queue.jobs[0].text)
-        self.assertIn("기사 상세", queue.jobs[0].text)
-        self.assertIn("1. Apple / AAPL", queue.jobs[0].text)
-        self.assertIn("2. Apple / AAPL", queue.jobs[0].text)
+        job = queue.jobs[0]
+        self.assertEqual(2, job.context["newsDigest"]["sourceCount"])
+        self.assertEqual(["Semafor", "Reuters"], job.context["newsDigest"]["sources"])
+        self.assertIn("한국어 제목", job.text)
+        self.assertIn("애플과 OpenAI 소송이 더 큰 긴장을 부각", job.text)
+        self.assertIn("함께 수집된 출처 2곳: Semafor, Reuters", job.text)
+
+    def test_verified_new_fact_reopens_a_sent_story_as_update(self):
+        initial_queue = MemoryNotificationQueue()
+        first = self.evidence()
+        first.raw_payload.update({
+            "storyClusterId": "apple-openai-lawsuit-20260711",
+            "keyFacts": ["Apple lawsuit filing alleges trade secret misuse"],
+        })
+        first_event = DomainEvent(
+            name=RESEARCH_EVIDENCE_COLLECTED,
+            aggregate_id="news:AAPL",
+            payload={"materialChangedItems": [first.to_dict()]},
+        )
+        self.enqueuer(initial_queue).handle(first_event)
+        previous = initial_queue.jobs[0]
+        previous.status = "done"
+
+        update_queue = MemoryNotificationQueue([previous])
+        follow_up = self.evidence()
+        follow_up.evidence_id = "research:AAPL:news:apple-openai-followup"
+        follow_up.source = "Reuters"
+        follow_up.raw_payload.update({
+            "storyClusterId": "apple-openai-lawsuit-20260711",
+            "keyFacts": ["Apple lawsuit filing adds a new requested damages amount"],
+        })
+        update_event = DomainEvent(
+            name=RESEARCH_EVIDENCE_COLLECTED,
+            aggregate_id="news:AAPL",
+            payload={"materialChangedItems": [follow_up.to_dict()]},
+        )
+
+        self.enqueuer(update_queue).handle(update_event)
+
+        self.assertEqual(1, len(update_queue.jobs))
+        job = update_queue.jobs[0]
+        self.assertEqual("story-update", job.context["newsDigest"]["deliveryMode"])
+        self.assertEqual("↻", job.context["notificationIcon"])
+        self.assertTrue(job.text.startswith("↻ 뉴스"))
+        self.assertIn("검증된 새 사실이 추가된 후속 알림", job.text)
+
+    def test_disclosure_is_a_separate_event_and_gets_disclosure_analysis(self):
+        queue = MemoryNotificationQueue()
+        disclosure = ResearchEvidence(
+            "research:AAPL:dart:202607270001",
+            "AAPL",
+            "disclosure",
+            "OpenDART",
+            "자기주식 취득 결정",
+            "접수일 20260727",
+            "https://dart.fss.or.kr/dsaf001/main.do?rcpNo=202607270001",
+            "2026-07-27T00:10:00Z",
+            "support",
+            published_at="2026-07-27T00:10:00Z",
+            raw_payload={
+                "relationScope": "direct",
+                "eventType": "capital_policy",
+                "sourceTrustState": "trusted",
+                "materialityState": "material",
+                "dataState": "sufficient",
+                "validationState": "ready",
+                "receiptNo": "202607270001",
+                "receiptDate": "20260727",
+                "officialDocumentText": "회사는 보통주 100만주를 취득하기로 결정했다.",
+            },
+        )
+        event = DomainEvent(
+            name=RESEARCH_EVIDENCE_COLLECTED,
+            aggregate_id="disclosure:AAPL",
+            payload={"materialChangedItems": [disclosure.to_dict()]},
+        )
+
+        self.enqueuer(queue).handle(event)
+
+        self.assertEqual(1, len(queue.jobs))
+        job = queue.jobs[0]
+        self.assertEqual("disclosure", job.context["newsDigest"]["eventKind"])
+        self.assertEqual("📄", job.context["notificationIcon"])
+        self.assertTrue(job.text.startswith("📄 공시 · Apple / AAPL"))
+        self.assertIn("접수번호 202607270001", job.text)
+        DisclosureAnalysisNotificationEnricher(settings={})(job)
+        self.assertIn("AI 공시 해석", job.context["body"])
+        self.assertLess(job.context["body"].index("AI 공시 해석"), job.context["body"].index("시장 확인"))
+
+    def test_summary_does_not_fall_back_to_the_headline(self):
+        self.assertEqual("", item_summary({"title": "Headline must not become a summary"}))
+
+    def test_english_event_waits_for_a_completed_korean_title_translation(self):
+        queue = MemoryNotificationQueue()
+        pending = self.evidence()
+        pending.raw_payload["aiAnalysis"] = {
+            "sourceLanguage": "en",
+            "originalTitle": "Apple OpenAI lawsuit highlights broader tensions",
+            "translationStatus": "pending",
+        }
+        event = DomainEvent(
+            name=RESEARCH_EVIDENCE_COLLECTED,
+            aggregate_id="news:AAPL",
+            payload={"materialChangedItems": [pending.to_dict()]},
+        )
+
+        self.enqueuer(queue).handle(event)
+
+        self.assertEqual([], queue.jobs)
 
     def test_ignores_collection_event_without_material_items(self):
         queue = MemoryNotificationQueue()

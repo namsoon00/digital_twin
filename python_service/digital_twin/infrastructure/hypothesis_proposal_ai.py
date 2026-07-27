@@ -86,10 +86,8 @@ def hypothesis_proposal_advisor_from_settings(settings: Dict[str, object] = None
     enabled = str(settings.get("investmentBrainNovelHypothesisAiEnabled", "1")).strip().lower() not in {"0", "false", "off", "disabled"}
     if not enabled:
         return LocalHypothesisProposalAdvisor()
-    command = str(settings.get("investmentBrainNovelHypothesisAiCommand") or os.environ.get("INVESTMENT_BRAIN_HYPOTHESIS_AI_COMMAND") or "").strip()
     timeout = int(settings.get("investmentBrainNovelHypothesisAiTimeoutSeconds") or 120)
-    if not command:
-        command = codex_command(str(settings.get("notificationAiModel") or "gpt-5.4")) or ""
+    command = codex_command() or ""
     if command:
         return FallbackHypothesisProposalAdvisor(CommandHypothesisProposalAdvisor(command, timeout))
     return LocalHypothesisProposalAdvisor()

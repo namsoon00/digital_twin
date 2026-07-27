@@ -42,11 +42,13 @@ class DisclosureAnalysisNotificationEnricher:
         self.settings = settings or {}
 
     def __call__(self, job: NotificationJob) -> None:
-        if str(job.message_type or "") != "externalDartDisclosure":
+        context = dict(job.context or {})
+        digest = context.get("newsDigest") if isinstance(context.get("newsDigest"), dict) else {}
+        is_disclosure_digest = str(job.message_type or "") == "newsDigest" and digest.get("eventKind") == "disclosure"
+        if str(job.message_type or "") != "externalDartDisclosure" and not is_disclosure_digest:
             return
         if str(self.settings.get("dartDisclosureAiAnalysisEnabled", "1")).strip() == "0":
             return
-        context = dict(job.context or {})
         if context.get("disclosureAnalysis") or "AI 공시 해석" in str(context.get("telegramMessage") or ""):
             return
         try:

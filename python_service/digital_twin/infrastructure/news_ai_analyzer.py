@@ -5,7 +5,7 @@ from typing import Dict
 
 from ..domain.investment_research import NewsCollectionTarget, ResearchEvidence
 from ..domain.news_ai_analysis import build_news_ai_analysis_prompt, local_news_ai_analysis, normalize_ai_analysis
-from .model_reviewer import codex_command
+from .model_reviewer import codex_command, codex_model_label
 from .settings import ROOT_DIR, runtime_settings
 
 
@@ -96,19 +96,10 @@ class FallbackNewsAiAnalyzer(NewsAiAnalyzer):
 
 def news_ai_analyzer_from_settings(settings: Dict[str, str] = None) -> NewsAiAnalyzer:
     configured = settings or runtime_settings()
-    command = str(configured.get("newsAiAnalysisCommand") or os.environ.get("NEWS_AI_ANALYSIS_COMMAND") or "").strip()
     use_codex = str(configured.get("newsAiAnalysisUseCodex") or os.environ.get("NEWS_AI_ANALYSIS_USE_CODEX") or "1").strip() not in {"0", "false", "no", "off"}
     timeout = int(configured.get("newsAiAnalysisTimeoutSeconds") or os.environ.get("NEWS_AI_ANALYSIS_TIMEOUT_SECONDS") or 90)
-    if command:
-        return FallbackNewsAiAnalyzer(CommandNewsAiAnalyzer(command, timeout, "External article AI"))
     if use_codex:
-        model = str(
-            configured.get("newsAiAnalysisModel")
-            or os.environ.get("NEWS_AI_ANALYSIS_MODEL")
-            or configured.get("notificationAiModel")
-            or "gpt-5.5"
-        ).strip()
-        command = codex_command(model)
+        command = codex_command()
         if command:
-            return FallbackNewsAiAnalyzer(CommandNewsAiAnalyzer(command, timeout, "Codex AI (" + model + ")"))
+            return FallbackNewsAiAnalyzer(CommandNewsAiAnalyzer(command, timeout, "Codex AI (" + codex_model_label() + ")"))
     return LocalNewsAiAnalyzer()

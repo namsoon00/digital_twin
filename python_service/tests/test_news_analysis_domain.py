@@ -15,6 +15,7 @@ from digital_twin.domain.news_analysis import (
     clean_article_body_text,
     clean_article_summary_noise,
     english_fragment_to_korean,
+    keyword_polarity,
     korean_article_summary,
     numeric_highlights,
     news_state_payload,
@@ -210,7 +211,7 @@ class NewsAnalysisDomainTests(unittest.TestCase):
     def test_news_analysis_setting_accepts_numeric_text(self):
         self.assertEqual(12, int_setting({"newsAiAnalysisLimit": "12"}, "newsAiAnalysisLimit", 5))
 
-    def test_news_ai_analyzer_uses_explicit_compatible_codex_model(self):
+    def test_news_ai_analyzer_uses_the_enforced_codex_model_policy(self):
         with patch("digital_twin.infrastructure.news_ai_analyzer.codex_command", return_value="codex --model gpt-test exec -") as command:
             analyzer = news_ai_analyzer_from_settings({
                 "newsAiAnalysisUseCodex": "1",
@@ -219,7 +220,7 @@ class NewsAnalysisDomainTests(unittest.TestCase):
             })
 
         self.assertIsInstance(analyzer, FallbackNewsAiAnalyzer)
-        command.assert_called_once_with("gpt-test")
+        command.assert_called_once_with()
 
     def test_normalizes_article_summary_fields_without_repeating_the_same_fact(self):
         fallback = NewsAiAnalysis(
@@ -866,6 +867,70 @@ class NewsAnalysisDomainTests(unittest.TestCase):
     def test_english_legal_keyword_uses_word_boundary(self):
         self.assertEqual("regulation", classify_news_event_type("Apple sues OpenAI", "legal dispute"))
         self.assertNotEqual("regulation", classify_news_event_type("Apple issues software update", "general product release"))
+        self.assertEqual("regulation", classify_news_event_type("금감원 조사 착수", "회사를 조사 대상으로 지정"))
+        self.assertEqual("risk", keyword_polarity("금감원 조사 착수"))
+
+    def test_employment_preference_survey_is_not_regulatory_risk(self):
+        target = NewsCollectionTarget("000660", "SK하이닉스", "KOSPI", "KRW", "반도체")
+        title = "SK하이닉스, 대학생이 일하고 싶은 기업 2년 연속 1위"
+        body = (
+            "SK하이닉스가 대학생이 일하고 싶은 기업 조사에서 2년 연속 1위에 올랐다. "
+            "채용 플랫폼이 대학생을 대상으로 실시한 설문조사 결과이며 급여와 보상 체계가 주요 선호 이유로 꼽혔다."
+        )
+        evidence = ResearchEvidence(
+            "research:000660:news:employment-preference-survey",
+            "000660",
+            "news",
+            "연합뉴스",
+            title,
+            body,
+            "https://example.test/skhynix-employment-survey",
+            "2026-07-27T01:00:00Z",
+            "risk",
+            published_at="2026-07-27T01:00:00Z",
+            raw_payload={
+                "name": "SK하이닉스",
+                "relationScope": "direct",
+                "eventType": "regulation",
+                "stockImpactPolarity": "risk",
+                "stockImpactLabel": "악재",
+                "materialityState": "material",
+                "articleReadStatus": "body",
+                "articleText": body,
+                "articleFacts": {
+                    "bodyAvailable": True,
+                    "bodyQualityPassed": True,
+                    "bodyPreview": body,
+                    "eventType": "regulation",
+                    "stockImpactPolarity": "risk",
+                },
+            },
+        )
+
+        self.assertEqual("general", classify_news_event_type(title, body))
+        self.assertEqual("context", keyword_polarity(title + " " + body))
+
+        local = local_news_ai_analysis(target, evidence).to_dict()
+        updated = apply_news_ai_analysis(evidence, {
+            "status": "ok",
+            "eventType": "regulation",
+            "impactPolarity": "risk",
+            "impactLabelKo": "악재",
+            "materialityState": "material",
+            "summary": {"briefKo": "규제 조사 부담이 투자심리에 악영향을 줍니다."},
+            "riskSignals": ["조사"],
+        })
+
+        self.assertEqual("general", local["eventType"])
+        self.assertEqual("neutral", local["impactPolarity"])
+        self.assertEqual("context", local["materialityState"])
+        self.assertEqual([], local["riskSignals"])
+        self.assertEqual("general", updated.raw_payload["eventType"])
+        self.assertEqual("general", updated.raw_payload["aiAnalysis"]["eventType"])
+        self.assertEqual("neutral", updated.raw_payload["aiAnalysis"]["impactPolarity"])
+        self.assertEqual("context", updated.raw_payload["stockImpactPolarity"])
+        self.assertEqual("context", updated.raw_payload["materialityState"])
+        self.assertFalse(updated.raw_payload.get("analysisConflict"))
 
     def test_news_analysis_downgrades_social_feed_source(self):
         target = NewsCollectionTarget("AAPL", "Apple", "NASDAQ", "USD", "AI")

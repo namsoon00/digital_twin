@@ -25,7 +25,7 @@ from digital_twin.domain.notification_reasoning_report import (
 from digital_twin.domain.notification_rules import default_notification_rule
 from digital_twin.domain.notification_templates import NotificationTemplate, render_notification
 from digital_twin.domain.notifications import NotificationJob, notification_debug_number
-from digital_twin.infrastructure.model_reviewer import codex_command
+from digital_twin.infrastructure.model_reviewer import codex_cli_arguments, codex_command
 
 
 def relation_context():
@@ -246,11 +246,17 @@ class AccountRepository:
 
 
 class NotificationReasoningReportTests(unittest.TestCase):
-    def test_notification_ai_can_pin_a_cli_compatible_model(self):
+    def test_notification_ai_forces_the_project_codex_model_and_reasoning_effort(self):
         with mock.patch("digital_twin.infrastructure.model_reviewer.shutil.which", return_value="/usr/local/bin/codex"):
             command = codex_command("gpt-5.4")
 
-        self.assertIn("--model gpt-5.4", command)
+        self.assertEqual(
+            ["--model", "gpt-5.6-sol", "--config", 'model_reasoning_effort="max"'],
+            codex_cli_arguments(),
+        )
+        self.assertIn("--model gpt-5.6-sol", command)
+        self.assertIn("model_reasoning_effort", command)
+        self.assertNotIn("gpt-5.4", command)
         self.assertIn("exec --skip-git-repo-check", command)
 
     def test_operator_message_type_uses_system_delivery_policy_and_raw_template(self):

@@ -13,6 +13,7 @@ from digital_twin.domain.external_signal_quality import attach_external_signal_q
 from digital_twin.domain.ontology_external_abox import external_quality_data_state
 from digital_twin.domain.ontology_relation_facts import _external_quality_facts
 from digital_twin.domain.portfolio import Position
+from digital_twin.application.market_data_collection_service import MarketDataCollectionRunner
 from digital_twin.infrastructure.external_signal_utils import ExternalApiGuard, ExternalRateLimited
 from digital_twin.infrastructure.external_signals import ExternalSignalProvider
 from digital_twin.infrastructure.news_sources import NewsSourceGateway, default_text_fetcher, provider_empty_status
@@ -98,6 +99,65 @@ class RuntimeResilienceTests(unittest.TestCase):
         self.assertTrue(status["cacheOnly"])
         self.assertTrue(status["deferred"])
         self.assertFalse(status["dataUsable"])
+
+    def test_account_snapshot_cache_survives_per_symbol_cache_eviction(self):
+        provider = ExternalSignalProvider(settings={"externalSignalCacheMaxEntries": "3"})
+        payload = provider.next_cache_payload(
+            {},
+            "account-snapshot",
+            {"fetchedAt": "2026-07-27T00:00:00Z"},
+            cache_scope="account-snapshot",
+            subject_count=4,
+        )
+        for index in range(4):
+            payload = provider.next_cache_payload(
+                payload,
+                "research-" + str(index),
+                {"fetchedAt": "2026-07-27T00:0" + str(index + 1) + ":00Z"},
+                cache_scope="research",
+                subject_count=1,
+            )
+
+        entries = payload["entries"]
+        self.assertIn("account-snapshot", entries)
+        self.assertEqual("account-snapshot", entries["account-snapshot"]["cacheScope"])
+        self.assertEqual(3, len(entries))
+
+    def test_market_data_external_refresh_is_summarized_without_exposing_payload(self):
+        calls = []
+
+        def refresh(positions):
+            calls.extend(position.symbol for position in positions)
+            return {
+                "fetchedAt": "2026-07-27T00:00:00Z",
+                "statuses": [
+                    {"source": "provider-a", "ok": True},
+                    {"source": "provider-b", "ok": False},
+                    {"source": "provider-c", "ok": True, "deferred": True},
+                ],
+                "privatePayload": {"large": "not included"},
+            }
+
+        runner = MarketDataCollectionRunner(
+            None,
+            None,
+            None,
+            {},
+            None,
+            external_signal_refresher=refresh,
+        )
+        result = runner.refresh_external_signal_cache([
+            Position(symbol="AAPL", name="Apple", market="NASDAQ", currency="USD"),
+            Position(symbol="", name="", market="", currency=""),
+        ])
+
+        self.assertEqual(["AAPL"], calls)
+        self.assertEqual("ok", result["status"])
+        self.assertEqual(1, result["symbolCount"])
+        self.assertEqual(3, result["providerStatusCount"])
+        self.assertEqual(1, result["providerFailureCount"])
+        self.assertEqual(1, result["providerDeferredCount"])
+        self.assertNotIn("privatePayload", result)
 
     def test_alpha_provider_quota_stops_remaining_fanout_requests(self):
         now = datetime(2026, 7, 23, 7, 0, tzinfo=timezone.utc)

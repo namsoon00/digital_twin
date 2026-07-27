@@ -1219,7 +1219,10 @@ def build_snapshot(account: AccountConfig, external_settings: Optional[Dict[str,
     positions, watchlist = enrich_snapshot_position_identities(positions, watchlist)
     kis_provider = KISMarketSignalProvider()
     positions, watchlist = kis_provider.enrich_collections(positions, watchlist)
-    external_signals = ExternalSignalProvider(settings=settings).signals_for_positions(positions + watchlist)
+    external_signals = ExternalSignalProvider(settings=settings).signals_for_positions(
+        positions + watchlist,
+        cache_scope="account-snapshot",
+    )
     external_signals = kis_provider.attach_fundamentals_to_external_signals(external_signals, positions + watchlist)
     account_context = account.ontology_account_context()
     fx_rates = currency_rates_from_external_signals(settings, external_signals)

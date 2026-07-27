@@ -82,6 +82,7 @@ from .notifications import notifier_for_account
 from .notifications import notifier_for_operations
 from .news_sources import NewsSourceGateway
 from .news_ai_analyzer import news_ai_analyzer_from_settings
+from .external_signals import ExternalSignalProvider
 from .settings import currency_rates, runtime_settings
 from .symbol_sources import RemoteSymbolSourceGateway
 from .toss_snapshots import TossProvider, build_snapshot, demo_positions
@@ -186,6 +187,11 @@ def build_monitor_runner(
 ) -> MonitorRunner:
     configured_settings = dict(settings or runtime_settings())
     configured_settings["typedbNativeRuleExecutionEnabled"] = "1" if typedb_native_rule_execution_enabled else "0"
+    monitor_snapshot_settings = dict(configured_settings)
+    # The dedicated market-data worker owns slow external refreshes. The
+    # realtime monitor consumes its cache so a vendor timeout cannot hold a
+    # price/technical alert behind yfinance, news, or disclosure collection.
+    monitor_snapshot_settings["_externalSignalsCacheOnly"] = "1"
     store = stores.monitor_store(configured_settings)
     market_time_series_store = stores.market_time_series_store(configured_settings)
     ontology_quality_store = stores.ontology_quality_sample_store(configured_settings)
@@ -195,7 +201,7 @@ def build_monitor_runner(
         accounts,
         store=store,
         monitor=RealtimeMonitor(configured_settings),
-        snapshot_builder=lambda account: build_snapshot(account, external_settings=configured_settings),
+        snapshot_builder=lambda account: build_snapshot(account, external_settings=monitor_snapshot_settings),
         event_sender=send_events,
         event_publisher=publisher,
         cycle_recorder=stores.monitoring_cycle_recorder(
@@ -401,6 +407,9 @@ def build_market_data_collection_runner(settings=None, event_publisher=None) -> 
             configured_settings,
         ),
         decision_episode_store=stores.investment_decision_episode_store(configured_settings),
+        external_signal_refresher=lambda positions: ExternalSignalProvider(
+            settings=configured_settings,
+        ).signals_for_positions(positions, cache_scope="account-snapshot"),
     )
 
 

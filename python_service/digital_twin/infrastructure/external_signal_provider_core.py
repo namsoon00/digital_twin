@@ -68,8 +68,13 @@ class ExternalSignalCoreMixin:
         timeout = number(self.settings.get("externalApiTimeoutSeconds")) or 3.0
         return default_bytes_fetcher(url, headers, timeout=timeout)
 
-    def signals_for_positions(self, positions: Iterable[Position]) -> Dict[str, object]:
+    def signals_for_positions(
+        self,
+        positions: Iterable[Position],
+        cache_scope: str = "general",
+    ) -> Dict[str, object]:
         position_list = list(positions)
+        normalized_cache_scope = str(cache_scope or "general").strip().lower() or "general"
         cache_key = self.cache_key_for_positions(position_list)
         cached = self.cache.load()
         self.provider_state = self.provider_state_from(cached)
@@ -111,7 +116,17 @@ class ExternalSignalCoreMixin:
         self.refresh_broker_fx_rates(signals, position_list)
         self.record_research_evidence(position_list, signals)
         self.attach_stored_research_evidence(position_list, signals)
-        self.cache.replace(self.next_cache_payload(cached, cache_key, signals))
+        self.cache.replace(self.next_cache_payload(
+            cached,
+            cache_key,
+            signals,
+            cache_scope=normalized_cache_scope,
+            subject_count=len({
+                str(getattr(position, "symbol", "") or "").upper().strip()
+                for position in position_list
+                if str(getattr(position, "symbol", "") or "").strip()
+            }),
+        ))
         return signals
 
     def external_signal_cache_only(self) -> bool:
@@ -230,12 +245,21 @@ class ExternalSignalCoreMixin:
             return payload
         return {}
 
-    def next_cache_payload(self, cached: Dict[str, object], cache_key: str, signals: Dict[str, object]) -> Dict[str, object]:
+    def next_cache_payload(
+        self,
+        cached: Dict[str, object],
+        cache_key: str,
+        signals: Dict[str, object],
+        cache_scope: str = "general",
+        subject_count: int = 0,
+    ) -> Dict[str, object]:
         entries = cached.get("entries") if isinstance(cached.get("entries"), dict) else {}
         entries = dict(entries)
         entries[cache_key] = {
             "fetchedAt": signals.get("fetchedAt") or utc_now_iso(),
             "signals": signals,
+            "cacheScope": str(cache_scope or "general").strip().lower() or "general",
+            "subjectCount": max(0, int(subject_count or 0)),
         }
         try:
             max_entries = int(float(str(self.settings.get("externalSignalCacheMaxEntries") or "6")))
@@ -246,8 +270,20 @@ class ExternalSignalCoreMixin:
             entries.items(),
             key=lambda item: str(item[1].get("fetchedAt") if isinstance(item[1], dict) else ""),
             reverse=True,
-        )[:max_entries]
-        return {"schemaVersion": 1, "entries": dict(ordered), "providerState": dict(self.provider_state)}
+        )
+        # Account snapshots are the only cache entries used by the realtime
+        # monitor. Keep the newest two even when per-symbol research refreshes
+        # create more cache entries than the normal cap.
+        pinned_scopes = {"account-snapshot", "market-monitor"}
+        pinned = [
+            item for item in ordered
+            if isinstance(item[1], dict)
+            and str(item[1].get("cacheScope") or "").strip().lower() in pinned_scopes
+        ][:max_entries]
+        pinned_keys = {key for key, _entry in pinned}
+        remaining = [item for item in ordered if item[0] not in pinned_keys]
+        selected = pinned + remaining[:max(0, max_entries - len(pinned))]
+        return {"schemaVersion": 1, "entries": dict(selected), "providerState": dict(self.provider_state)}
 
     def provider_state_from(self, payload: Dict[str, object]) -> Dict[str, object]:
         state = payload.get("providerState") if isinstance(payload.get("providerState"), dict) else {}

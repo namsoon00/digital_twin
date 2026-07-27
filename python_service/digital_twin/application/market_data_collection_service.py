@@ -1,5 +1,5 @@
 import time
-from typing import Dict, Iterable, List, Tuple
+from typing import Callable, Dict, Iterable, List, Tuple
 
 from ..domain.accounts import AccountConfig
 from ..domain.data_freshness import age_minutes
@@ -134,6 +134,7 @@ class MarketDataCollectionRunner:
         time_series_store=None,
         health_service=None,
         decision_episode_store=None,
+        external_signal_refresher: Callable[[Iterable[Position]], Dict[str, object]] = None,
     ):
         self.account_repository = account_repository
         self.symbol_service = symbol_service
@@ -145,6 +146,7 @@ class MarketDataCollectionRunner:
         self.time_series_store = time_series_store
         self.health_service = health_service
         self.decision_episode_store = decision_episode_store
+        self.external_signal_refresher = external_signal_refresher
 
     def attach_pipeline_health(self, result: Dict[str, object]) -> Dict[str, object]:
         if not self.health_service or not hasattr(self.health_service, "record_market_data_collection"):
@@ -512,6 +514,34 @@ class MarketDataCollectionRunner:
                 "reason": str(error)[:180],
             }
 
+    def refresh_external_signal_cache(self, positions: Iterable[Position]) -> Dict[str, object]:
+        """Refresh slower vendor data outside the realtime alert path."""
+        if not self.external_signal_refresher:
+            return {"status": "disabled", "reason": "external signal refresher is not configured"}
+        if not truthy(self.settings.get("externalSignalCollectionEnabled"), True):
+            return {"status": "disabled", "reason": "external signal collection is disabled"}
+        selected = [
+            position for position in positions or []
+            if position and not position.is_cash() and str(position.symbol or "").strip()
+        ]
+        if not selected:
+            return {"status": "skipped", "reason": "no account symbols"}
+        try:
+            signals = self.external_signal_refresher(selected) or {}
+        except Exception as error:  # noqa: BLE001 - slow external data must not invalidate a quote collection.
+            return {"status": "error", "reason": str(error)[:180], "symbolCount": len(selected)}
+        statuses = signals.get("statuses") if isinstance(signals.get("statuses"), list) else []
+        failures = [row for row in statuses if isinstance(row, dict) and row.get("ok") is False]
+        deferred = [row for row in statuses if isinstance(row, dict) and row.get("deferred")]
+        return {
+            "status": "ok",
+            "symbolCount": len(selected),
+            "fetchedAt": str(signals.get("fetchedAt") or ""),
+            "providerStatusCount": len(statuses),
+            "providerFailureCount": len(failures),
+            "providerDeferredCount": len(deferred),
+        }
+
     def run_once(self, force: bool = False) -> Dict[str, object]:
         if not self.enabled() and not force:
             return self.attach_pipeline_health({"status": "disabled", "savedCount": 0})
@@ -765,6 +795,16 @@ class MarketDataCollectionRunner:
                         fact_revisions_by_symbol={symbol: fact_revisions_by_symbol[symbol] for symbol in ontology_symbols if fact_revisions_by_symbol.get(symbol)},
                         changed_fields_by_symbol={symbol: changed_fields_by_symbol[symbol] for symbol in ontology_symbols if symbol in changed_fields_by_symbol},
                     ))
+        # Quote changes have already entered the event stream. A slow
+        # fundamentals/news refresh is deliberately best-effort and cannot
+        # delay the monitor that turns those quote changes into alerts.
+        result["externalSignalRefresh"] = self.refresh_external_signal_cache(
+            [
+                position
+                for entry in focused_by_account
+                for position in (entry.get("positions") or [])
+            ]
+        )
         return result
 
     def status(self) -> Dict[str, object]:

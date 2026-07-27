@@ -1685,7 +1685,7 @@ class OntologyReasoningRunner:
         trigger = str(event_payload(event).get("trigger") or "").strip()
         if trigger in COALESCIBLE_REALTIME_TRIGGERS:
             maximum = self.realtime_event_max_age_minutes()
-        elif "research" in trigger or trigger == "investment-calendar-update":
+        elif trigger in COALESCIBLE_RESEARCH_TRIGGERS or "research" in trigger or trigger == "investment-calendar-update":
             maximum = self.research_event_max_age_minutes()
         else:
             return {"status": "not-required", "reason": "이 요청은 원본 시각 만료 대상이 아닙니다.", "shouldProcess": True}

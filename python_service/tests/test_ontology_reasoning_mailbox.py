@@ -685,6 +685,30 @@ class OntologyReasoningMailboxTests(unittest.TestCase):
         self.assertEqual(1, result["staleRequestCount"])
         self.assertEqual(0, result["mailbox"]["pendingEntryCount"])
 
+    def test_stale_news_enrichment_is_expired_before_projection(self):
+        stale = research_evidence_request(
+            "stale-news",
+            ["AAPL"],
+            "2026-07-23T00:00:00Z",
+            trigger="news-analysis-enrichment",
+        )
+        runner = self.build_runner(
+            [stale],
+            settings={
+                "ontologyReasoningSourceFreshnessEnabled": "1",
+                "ontologyReasoningResearchEventMaxAgeMinutes": "60",
+            },
+        )
+
+        result = runner.run_once(force=True)
+
+        self.assertEqual("idle", result["status"])
+        self.assertEqual([], self.monitor.calls)
+        self.assertIn("stale-news", self.cursor.superseded)
+        self.assertEqual("expired", self.mailbox.events["stale-news"]["state"])
+        self.assertEqual(1, result["staleRequestCount"])
+        self.assertEqual(0, result["mailbox"]["pendingEntryCount"])
+
     def test_old_projection_acknowledgement_cannot_delete_a_newer_mailbox_observation(self):
         old = realtime_request("old", ["AAPL"], "2026-07-24T00:00:00Z")
         newest = realtime_request("new", ["AAPL"], "2026-07-24T00:01:00Z")

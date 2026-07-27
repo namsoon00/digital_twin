@@ -1585,6 +1585,70 @@ class OntologyReasoningRunner:
             return []
         return [self.mailbox_virtual_event(entry) for entry in entries if isinstance(entry, dict)]
 
+    @staticmethod
+    def is_research_generation_handoff_request(event: object) -> bool:
+        """Return whether a direct request needs a generation acknowledgement.
+
+        These events are deliberately not fungible mailbox slots.  A research
+        run must be connected to a later, aligned InferenceBox in its own
+        account world before its evidence becomes eligible for use.  They can
+        nevertheless be completed by a shared full-world projection when the
+        same strict generation contract is met.
+        """
+        payload = event_payload(event)
+        handoff = payload.get("reasoningHandoff")
+        return bool(
+            str(payload.get("researchRunId") or "").strip()
+            and isinstance(handoff, dict)
+            and str(handoff.get("requestId") or "").strip()
+        )
+
+    def pending_research_handoff_requests(
+        self,
+        source_requests: Iterable[object] = None,
+        limit: int = 0,
+    ) -> List[object]:
+        """Read direct research handoffs independently of symbol cooldowns.
+
+        ``pending_requests`` correctly applies cadence limits to scheduling.
+        It may therefore omit an older direct handoff after a newer generic
+        request for the same symbol was projected.  The current account-world
+        projection can satisfy that handoff without another TypeDB cycle, so
+        keep a bounded reconciliation view of direct ingress rows here.
+        """
+        candidates = list(source_requests or [])
+        ingress_reader = getattr(self.event_reader, "unmaterialized_reasoning_events", None)
+        if self.durable_mailbox_ingress_enabled() and callable(ingress_reader):
+            try:
+                candidates.extend(ingress_reader(limit=self.event_scan_limit(limit)) or [])
+            except Exception:
+                # The normal scheduled source list remains a safe fallback.
+                pass
+        processed = set()
+        if hasattr(self.cursor_store, "processed_event_ids"):
+            try:
+                processed = {
+                    str(event_id or "").strip()
+                    for event_id in self.cursor_store.processed_event_ids() or []
+                    if str(event_id or "").strip()
+                }
+            except Exception:
+                processed = set()
+        result = []
+        seen = set()
+        for event in candidates:
+            event_id = str(getattr(event, "event_id", "") or "").strip()
+            if (
+                not event_id
+                or event_id in seen
+                or event_id in processed
+                or not self.is_research_generation_handoff_request(event)
+            ):
+                continue
+            seen.add(event_id)
+            result.append(event)
+        return result
+
     def recent_terminal_mailbox_events(self) -> Dict[str, str]:
         """Recover source cursors after a process stops between ack and save."""
         if not self.mailbox_enabled():
@@ -1994,6 +2058,10 @@ class OntologyReasoningRunner:
             event for event in source_requests
             if str(getattr(event, "event_id", "") or "").strip() not in handled_ids
         ]
+        research_handoff_requests = self.pending_research_handoff_requests(
+            direct_source_requests,
+            limit=limit,
+        )
         direct_work = self.coalesced_work(direct_source_requests)
         mailbox_requests = self.mailbox_pending_requests() if mailbox.get("enabled") else []
         mailbox_compaction = self.compact_generic_research_mailbox_requests(
@@ -2015,6 +2083,8 @@ class OntologyReasoningRunner:
                 if key not in {"requests", "discardedEntries"}
             },
             "mailbox": mailbox,
+            "researchHandoffRequests": research_handoff_requests,
+            "pendingResearchHandoffCount": len(research_handoff_requests),
             "terminalMailboxEventStates": {
                 **dict(mailbox.get("terminalEventStates") or {}),
                 **dict(mailbox_compaction.get("terminalEventStates") or {}),
@@ -3290,6 +3360,7 @@ class OntologyReasoningRunner:
         queue_metadata = {
             "rawRequestCount": int(work.get("rawRequestCount") or 0),
             "effectivePendingCount": len(requests),
+            "pendingResearchHandoffCount": int(work.get("pendingResearchHandoffCount") or 0),
             "mailboxPendingEntryCount": int(mailbox_summary.get("actionablePendingEntryCount") or 0),
             "mailboxStoredEntryCount": int(mailbox_summary.get("storedPendingEntryCount") or 0),
             "semanticSupersededMailboxEntryCount": int(
@@ -3589,12 +3660,44 @@ class OntologyReasoningRunner:
             source_event_id = self.mailbox_source_event_id(event)
             if source_event_id and source_event_id not in trigger_event_ids:
                 trigger_event_ids.append(source_event_id)
+        research_refresh_requests = []
+        seen_research_request_ids = set()
+        for event in list(selected_requests) + list(work.get("researchHandoffRequests") or []):
+            event_id = str(getattr(event, "event_id", "") or "").strip()
+            if not event_id or event_id in seen_research_request_ids:
+                continue
+            seen_research_request_ids.add(event_id)
+            research_refresh_requests.append(event)
         research_refresh = self.research_generation_refresh_results(
-            selected_requests,
+            research_refresh_requests,
             getattr(runner, "last_ontology_projection_results", {}),
         )
         projection_outcomes = self.projection_alert_outcomes(runner)
-        blocked_request_ids = set(research_refresh.get("blockedRequestEventIds") or [])
+        selected_request_ids = {
+            str(getattr(event, "event_id", "") or "").strip()
+            for event in selected_requests
+            if str(getattr(event, "event_id", "") or "").strip()
+        }
+        # A shared full-world projection may satisfy older direct research
+        # handoffs that were not selected as the scheduling trigger.  Only a
+        # blocked request selected for this turn should make this turn partial.
+        blocked_request_ids = {
+            event_id
+            for event_id in research_refresh.get("blockedRequestEventIds") or []
+            if event_id in selected_request_ids
+        }
+        refreshed_research_request_ids = {
+            str(event_id or "").strip()
+            for event_id in research_refresh.get("refreshedRequestEventIds") or []
+            if str(event_id or "").strip()
+        }
+        reconciled_research_request_ids = refreshed_research_request_ids - selected_request_ids
+        research_handoff_terminal = self.persist_terminal_mailbox_events(
+            {
+                event_id: "completed"
+                for event_id in reconciled_research_request_ids
+            },
+        )
         cursor_requests = [
             event for event in selected_requests
             if str(getattr(event, "event_id", "") or "") not in blocked_request_ids
@@ -3756,8 +3859,19 @@ class OntologyReasoningRunner:
             "accountIds": [item for item in account_ids if item],
             "ruleCandidateResult": rule_candidate_result,
             "refreshedResearchRunIds": research_refresh.get("refreshedRunIds") or [],
+            "refreshedResearchRequestEventIds": sorted(refreshed_research_request_ids),
+            "reconciledResearchRequestEventIds": sorted(reconciled_research_request_ids),
+            "reconciledResearchHandoffTerminalEvents": research_handoff_terminal,
+            "pendingResearchHandoffCount": int(work.get("pendingResearchHandoffCount") or 0),
             "blockedResearchRunIds": research_refresh.get("blockedRunIds") or [],
             "blockedResearchRequestEventIds": sorted(blocked_request_ids),
+            "unresolvedResearchHandoffRequestEventIds": sorted(
+                {
+                    str(event_id or "").strip()
+                    for event_id in research_refresh.get("blockedRequestEventIds") or []
+                    if str(event_id or "").strip()
+                } - selected_request_ids
+            ),
             "researchGenerationRefresh": research_refresh,
             "projectionOutcomes": projection_outcomes,
             "lastProjectionRuntime": self.last_projection_runtime(),
@@ -3802,6 +3916,7 @@ class OntologyReasoningRunner:
         """
         outcome = {
             "refreshedRunIds": [],
+            "refreshedRequestEventIds": [],
             "blockedRunIds": [],
             "blockedRequestEventIds": [],
             "transitions": [],
@@ -3824,6 +3939,8 @@ class OntologyReasoningRunner:
                 # research events must pass the strict branch below.
                 if self.persist_research_refresh(run_id, True, None):
                     outcome["refreshedRunIds"].append(run_id)
+                    if event_id:
+                        outcome["refreshedRequestEventIds"].append(event_id)
                 continue
             handoff = ResearchReasoningHandoff.from_dict(handoff_payload)
             applied_generation, generation_reason = self.applied_generation_for_research_request(
@@ -3850,11 +3967,14 @@ class OntologyReasoningRunner:
             outcome["transitions"].append(transition)
             if refreshed and persisted:
                 outcome["refreshedRunIds"].append(run_id)
+                if event_id:
+                    outcome["refreshedRequestEventIds"].append(event_id)
                 continue
             outcome["blockedRunIds"].append(run_id)
             if event_id:
                 outcome["blockedRequestEventIds"].append(event_id)
         outcome["refreshedRunIds"] = sorted(set(outcome["refreshedRunIds"]))
+        outcome["refreshedRequestEventIds"] = sorted(set(outcome["refreshedRequestEventIds"]))
         outcome["blockedRunIds"] = sorted(set(outcome["blockedRunIds"]))
         outcome["blockedRequestEventIds"] = sorted(set(outcome["blockedRequestEventIds"]))
         return outcome

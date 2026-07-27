@@ -2,6 +2,7 @@ import sys
 import unittest
 from datetime import datetime, timezone
 from pathlib import Path
+from types import SimpleNamespace
 
 sys.path.insert(0, str(Path(__file__).resolve().parents[1]))
 
@@ -51,6 +52,7 @@ class MemoryMailbox:
     def __init__(self):
         self.events = {}
         self.slots = {}
+        self.direct_terminalizations = []
 
     def known_event_ids(self, event_ids):
         return [event_id for event_id in event_ids or [] if event_id in self.events]
@@ -178,6 +180,19 @@ class MemoryMailbox:
 
     def prune_terminal(self, *_args, **_kwargs):
         return 0
+
+    def terminalize_direct_events(self, events, state="completed", reason=""):
+        event_ids = [
+            str(getattr(event, "event_id", event) or "").strip()
+            for event in events or []
+        ]
+        event_ids = [event_id for event_id in event_ids if event_id]
+        self.direct_terminalizations.append({
+            "eventIds": event_ids,
+            "state": state,
+            "reason": reason,
+        })
+        return event_ids
 
 
 class FastStateMailbox:
@@ -559,6 +574,103 @@ class OntologyReasoningMailboxTests(unittest.TestCase):
         runner = self.build_runner([event])
 
         self.assertEqual([], runner.mailbox_entries_for_event(event))
+
+    def test_shared_world_projection_completes_an_older_direct_research_handoff(self):
+        class IngressReader(Reader):
+            def unmaterialized_reasoning_events(self, limit=0):
+                del limit
+                return list(self.events)
+
+        class ResearchStore:
+            def __init__(self):
+                self.refreshes = []
+
+            def mark_reasoning_refreshed(self, run_id, refreshed=True, reasoning_handoff=None):
+                self.refreshes.append((run_id, bool(refreshed), dict(reasoning_handoff or {})))
+                return {"runId": run_id, "reasoningRefreshed": bool(refreshed)}
+
+        class ProjectionMonitor:
+            def __init__(self):
+                self.accounts = [SimpleNamespace(account_id="default")]
+                self.calls = []
+                self.last_ontology_projection_results = {
+                    "default": {
+                        "status": "ok",
+                        "aboxSnapshotId": "abox:new",
+                        "ontologyWorld": {
+                            "accountId": "default",
+                            "worldId": "portfolio:local:default",
+                        },
+                        "inferenceBox": {
+                            "status": "ok",
+                            "generationAligned": True,
+                            "sourceAboxSnapshotId": "abox:new",
+                            "inferenceGenerationId": "inference:new",
+                            "worldId": "portfolio:local:default",
+                            "inferenceGenerationAt": "2026-07-24T00:05:00Z",
+                        },
+                    },
+                }
+
+            def run_once(self, force=False, symbol_filter=None, **_kwargs):
+                del force
+                self.calls.append(list(symbol_filter or []))
+                return []
+
+        generic = research_evidence_request(
+            "current-generic",
+            ["AAPL"],
+            "2026-07-24T00:04:00Z",
+        )
+        old_handoff = research_evidence_request(
+            "old-handoff",
+            ["005930"],
+            "2026-07-24T00:00:00Z",
+            trigger="hypothesis-research-update",
+            research_run_id="research-run-old",
+            reasoning_handoff={
+                "requestId": "handoff-old",
+                "status": "pending",
+                "changedEvidenceIds": ["evidence-old"],
+                "sourceGeneration": {
+                    "inferenceGenerationId": "inference:old",
+                    "sourceAboxSnapshotId": "abox:old",
+                    "worldId": "portfolio:local:default",
+                    "generationAligned": True,
+                    "observedAt": "2026-07-24T00:00:00Z",
+                },
+            },
+        )
+        old_handoff = DomainEvent(
+            name=old_handoff.name,
+            aggregate_id=old_handoff.aggregate_id,
+            event_id=old_handoff.event_id,
+            occurred_at=old_handoff.occurred_at,
+            payload={**old_handoff.payload, "accountId": "default"},
+        )
+        runner = self.build_runner([])
+        self.monitor = ProjectionMonitor()
+        runner.event_reader = IngressReader([old_handoff, generic])
+        runner.monitor_runner_factory = lambda: self.monitor
+        store = ResearchStore()
+        runner.research_store = store
+        # The older direct handoff is not due as a scheduler trigger, but a
+        # successful shared-world projection must still reconcile it.
+        self.cursor.payload["lastReasonedAtBySymbol"] = {"005930": "2026-07-24T00:04:00Z"}
+
+        result = runner.run_once(force=True)
+
+        self.assertEqual("ok", result["status"])
+        self.assertEqual([["AAPL"]], self.monitor.calls)
+        self.assertIn("old-handoff", self.cursor.ids)
+        self.assertEqual(["research-run-old"], result["refreshedResearchRunIds"])
+        self.assertEqual(["old-handoff"], result["reconciledResearchRequestEventIds"])
+        self.assertTrue(store.refreshes[-1][1])
+        self.assertEqual("applied", store.refreshes[-1][2]["status"])
+        self.assertTrue(any(
+            item["eventIds"] == ["old-handoff"] and item["state"] == "completed"
+            for item in self.mailbox.direct_terminalizations
+        ))
 
     def test_news_analysis_enrichment_coalesces_to_the_latest_evidence_state(self):
         event = research_evidence_request(

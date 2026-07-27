@@ -328,11 +328,12 @@ class MySQLEventLog(MySQLOperationalConnection):
                     pass
 
     def unmaterialized_reasoning_events(self, limit: int = 0) -> List[DomainEvent]:
-        """Read only reasoning events not atomically projected into mailbox.
+        """Read only legacy reasoning events missing a mailbox ingress row.
 
-        This is a bounded repair path for legacy rows, non-fungible requests,
-        or an interrupted ingress transaction.  Normal realtime work is read
-        from the mailbox state table instead of repeatedly scanning payloads.
+        This is a bounded, low-frequency repair path for an interrupted
+        ingress transaction. Direct/non-fungible work has its own indexed
+        mailbox-event query below, so normal scheduler and status reads do
+        not need to scan the append-only event log.
         """
         bounded = max(1, min(1000, int(limit or 200)))
         with self.connect() as connection:
@@ -344,13 +345,44 @@ class MySQLEventLog(MySQLOperationalConnection):
                 LEFT JOIN ontology_reasoning_mailbox_events mailbox
                   ON mailbox.event_id = events.event_id
                 WHERE events.name = %s
-                  AND (mailbox.event_id IS NULL OR mailbox.state = 'direct-pending')
+                  AND mailbox.event_id IS NULL
                 ORDER BY events.occurred_at DESC, events.event_id DESC
                 LIMIT %s
                 """,
                 (ONTOLOGY_REASONING_REQUESTED, bounded),
             ).fetchall()
         return [domain_event_from_row(row) for row in reversed(rows)]
+
+    def direct_pending_reasoning_events(self, limit: int = 0) -> List[DomainEvent]:
+        """Read non-fungible reasoning handoffs from their durable marker.
+
+        Direct handoffs store the complete source event in
+        ``ontology_reasoning_mailbox_events``. Querying the marker by state
+        avoids repeatedly joining and scanning the append-only event log just
+        to find a handful of pending research acknowledgements.
+        """
+        bounded = max(1, min(250, int(limit or 50)))
+        with self.connect() as connection:
+            rows = connection.execute(
+                """
+                SELECT event_id, occurred_at, event_json
+                FROM ontology_reasoning_mailbox_events
+                WHERE state = 'direct-pending'
+                ORDER BY occurred_at, event_id
+                LIMIT %s
+                """,
+                (bounded,),
+            ).fetchall()
+        events = []
+        for row in rows or []:
+            payload = _json_loads(row.get("event_json"), {})
+            if not payload:
+                continue
+            event = DomainEvent.from_dict(payload)
+            if str(event.name or "") != ONTOLOGY_REASONING_REQUESTED:
+                continue
+            events.append(event)
+        return events
 
     def insert_event_dict(self, event: Dict[str, object]) -> None:
         self.handle(DomainEvent.from_dict(event))

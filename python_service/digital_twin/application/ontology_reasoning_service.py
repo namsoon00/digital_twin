@@ -752,6 +752,17 @@ class OntologyReasoningRunner:
         fallback = max(1500, int(requested_limit or self.batch_size()) * 40)
         return int_setting(self.settings, "ontologyReasoningEventScanLimit", fallback, 50, 10000)
 
+    def direct_handoff_scan_limit(self, requested_limit: int = 0) -> int:
+        fallback = max(20, min(100, int(requested_limit or self.batch_size())))
+        return int_setting(self.settings, "ontologyReasoningDirectHandoffScanLimit", fallback, 10, 250)
+
+    def ingress_repair_scan_limit(self, requested_limit: int = 0) -> int:
+        fallback = max(20, min(100, int(requested_limit or self.batch_size())))
+        return int_setting(self.settings, "ontologyReasoningIngressRepairScanLimit", fallback, 10, 250)
+
+    def ingress_repair_interval_seconds(self) -> int:
+        return int_setting(self.settings, "ontologyReasoningIngressRepairIntervalSeconds", 300, 30, 24 * 3600)
+
     def min_interval_seconds(self) -> int:
         return int_setting(self.settings, "ontologyReasoningMinIntervalSeconds", 180, 0, 3600)
 
@@ -1330,21 +1341,55 @@ class OntologyReasoningRunner:
         processed = set(progress.get(str(getattr(event, "event_id", "") or ""), []) or [])
         return [symbol for symbol in symbols if symbol not in processed]
 
+    def ingress_repair_due(self, payload: Dict[str, object] = None) -> bool:
+        payload = self.cursor_payload() if payload is None else dict(payload or {})
+        return self.timestamp_due(
+            str(payload.get("lastReasoningIngressRepairAt") or ""),
+            self.ingress_repair_interval_seconds(),
+        )
+
+    def mark_ingress_repair_scanned(self) -> None:
+        payload = self.cursor_payload()
+        now = self.now_provider()
+        if now.tzinfo is None:
+            now = now.replace(tzinfo=timezone.utc)
+        payload["lastReasoningIngressRepairAt"] = now.astimezone(timezone.utc).isoformat().replace("+00:00", "Z")
+        self.save_cursor_payload(payload)
+
     def source_reasoning_events(
         self,
         limit: int = 0,
         processed_event_ids: Iterable[str] = None,
+        include_ingress_repair: bool = True,
     ) -> List[object]:
         """Return the bounded ingress view shared by scheduling and handoffs.
 
         Direct research handoffs must remain visible even when their symbols
-        are inside a cadence cooldown.  Reading this MySQL repair view once
-        per runner cycle keeps that guarantee without making status checks or
-        normal scheduling issue the same payload-heavy query twice.
+        are inside a cadence cooldown. Direct markers are read from their
+        indexed mailbox state; the append-only log is only consulted on a
+        periodic recovery pass for interrupted ingress transactions.
         """
         ingress_reader = getattr(self.event_reader, "unmaterialized_reasoning_events", None)
+        direct_reader = getattr(self.event_reader, "direct_pending_reasoning_events", None)
         reader = getattr(self.event_reader, "recent_events", None)
-        if self.durable_mailbox_ingress_enabled() and callable(ingress_reader):
+        source_events = []
+        if self.durable_mailbox_ingress_enabled() and callable(direct_reader):
+            try:
+                source_events.extend(direct_reader(limit=self.direct_handoff_scan_limit(limit)) or [])
+            except Exception:
+                # The normal mailbox remains available; do not let an
+                # operational read failure block regular TypeDB work.
+                pass
+            if include_ingress_repair and callable(ingress_reader) and self.ingress_repair_due():
+                try:
+                    source_events.extend(ingress_reader(limit=self.ingress_repair_scan_limit(limit)) or [])
+                except Exception:
+                    pass
+                else:
+                    self.mark_ingress_repair_scanned()
+        elif self.durable_mailbox_ingress_enabled() and callable(ingress_reader):
+            # Compatibility path for older stores that have not yet exposed
+            # the direct-marker reader.
             source_events = ingress_reader(limit=self.event_scan_limit(limit))
         elif callable(reader):
             source_events = reader(
@@ -1356,7 +1401,12 @@ class OntologyReasoningRunner:
                 name=ONTOLOGY_REASONING_REQUESTED,
                 limit=self.event_scan_limit(limit),
             )
-        source_events = list(source_events or [])
+        deduplicated = {}
+        for event in source_events or []:
+            event_id = str(getattr(event, "event_id", "") or "").strip()
+            if event_id:
+                deduplicated.setdefault(event_id, event)
+        source_events = list(deduplicated.values())
         if self.durable_mailbox_ingress_enabled():
             # Pre-ingress rows that were already consumed by the legacy cursor
             # should be sealed once, otherwise they remain at the front of the
@@ -2076,7 +2126,12 @@ class OntologyReasoningRunner:
                     continue
         return {"completed": completed, "discarded": discarded}
 
-    def pending_work(self, limit: int = 0, hydrate_mailbox: bool = True) -> Dict[str, object]:
+    def pending_work(
+        self,
+        limit: int = 0,
+        hydrate_mailbox: bool = True,
+        include_ingress_repair: bool = True,
+    ) -> Dict[str, object]:
         """Collapse redundant, lower-materiality realtime snapshot requests.
 
         A newer market observation may supersede an older one only when it
@@ -2084,7 +2139,10 @@ class OntologyReasoningRunner:
         family. The older cursor is advanced only after the newer snapshot has
         completed TypeDB projection and inference.
         """
-        source_events = self.source_reasoning_events(limit)
+        source_events = self.source_reasoning_events(
+            limit,
+            include_ingress_repair=include_ingress_repair,
+        )
         source_requests = self.pending_requests(limit, source_events=source_events)
         if hydrate_mailbox and self.durable_mailbox_ingress_enabled():
             mailbox_sources = [event for event in source_requests if self.mailbox_entries_for_event(event)]
@@ -4152,7 +4210,11 @@ class OntologyReasoningRunner:
         self.cursor_store.save(payload)
 
     def status(self) -> Dict[str, object]:
-        work = self.pending_work(self.batch_size(), hydrate_mailbox=False)
+        work = self.pending_work(
+            self.batch_size(),
+            hydrate_mailbox=False,
+            include_ingress_repair=False,
+        )
         pending, stale_preview = self.split_stale_requests(work.get("requests") or [])
         cursor_payload = self.cursor_payload()
         progress = self.event_symbol_progress()
@@ -4233,6 +4295,12 @@ class OntologyReasoningRunner:
                 "enabled": self.source_freshness_enabled(),
                 "realtimeEventMaxAgeMinutes": self.realtime_event_max_age_minutes(),
                 "researchEventMaxAgeMinutes": self.research_event_max_age_minutes(),
+            },
+            "ingressRepair": {
+                "intervalSeconds": self.ingress_repair_interval_seconds(),
+                "scanLimit": self.ingress_repair_scan_limit(self.batch_size()),
+                "lastScannedAt": str(cursor_payload.get("lastReasoningIngressRepairAt") or ""),
+                "due": self.ingress_repair_due(cursor_payload),
             },
             "pendingSymbols": pending_symbols,
             "nextSymbols": next_symbols,

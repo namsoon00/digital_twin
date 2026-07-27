@@ -84,6 +84,13 @@ MYSQL_OPERATIONAL_INDEXES: Dict[str, Sequence[MySQLIndexDefinition]] = {
             "`name`, `aggregate_id`, `occurred_at`, `event_id`",
         ),
     ),
+    "ontology_reasoning_mailbox_events": (
+        MySQLIndexDefinition(
+            "ontology_reasoning_mailbox_events",
+            "idx_reasoning_mailbox_events_state_occurred",
+            "`state`, `occurred_at`, `event_id`",
+        ),
+    ),
     "monitor_snapshot_history": (
         MySQLIndexDefinition(
             "monitor_snapshot_history",

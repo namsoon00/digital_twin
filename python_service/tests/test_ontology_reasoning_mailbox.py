@@ -576,16 +576,22 @@ class OntologyReasoningMailboxTests(unittest.TestCase):
         self.assertEqual([], runner.mailbox_entries_for_event(event))
         self.assertEqual(1, runner.status()["pendingResearchHandoffCount"])
 
-    def test_status_reuses_one_ingress_read_for_direct_research_handoffs(self):
+    def test_status_reads_direct_handoffs_without_running_event_log_repair(self):
         class CountingIngressReader(Reader):
             def __init__(self, events):
                 super().__init__(events)
-                self.ingress_reads = 0
+                self.direct_reads = 0
+                self.repair_reads = 0
+
+            def direct_pending_reasoning_events(self, limit=0):
+                del limit
+                self.direct_reads += 1
+                return list(self.events)
 
             def unmaterialized_reasoning_events(self, limit=0):
                 del limit
-                self.ingress_reads += 1
-                return list(self.events)
+                self.repair_reads += 1
+                raise AssertionError("status must not scan the append-only event log")
 
         event = research_evidence_request(
             "counted-hypothesis-research",
@@ -601,8 +607,44 @@ class OntologyReasoningMailboxTests(unittest.TestCase):
 
         status = runner.status()
 
-        self.assertEqual(1, reader.ingress_reads)
+        self.assertEqual(1, reader.direct_reads)
+        self.assertEqual(0, reader.repair_reads)
         self.assertEqual(1, status["pendingResearchHandoffCount"])
+
+    def test_scheduler_runs_bounded_ingress_repair_once_per_interval(self):
+        class CountingIngressReader(Reader):
+            def __init__(self, events):
+                super().__init__(events)
+                self.direct_reads = 0
+                self.repair_reads = 0
+
+            def direct_pending_reasoning_events(self, limit=0):
+                del limit
+                self.direct_reads += 1
+                return []
+
+            def unmaterialized_reasoning_events(self, limit=0):
+                self.repair_reads += 1
+                self.asserted_limit = limit
+                return list(self.events)
+
+        event = research_evidence_request(
+            "legacy-ingress-repair",
+            ["AAPL"],
+            "2026-07-24T00:00:00Z",
+        )
+        runner = self.build_runner([])
+        reader = CountingIngressReader([event])
+        runner.event_reader = reader
+
+        first = runner.source_reasoning_events()
+        second = runner.source_reasoning_events()
+
+        self.assertEqual([event.event_id], [item.event_id for item in first])
+        self.assertEqual([], second)
+        self.assertEqual(2, reader.direct_reads)
+        self.assertEqual(1, reader.repair_reads)
+        self.assertLessEqual(reader.asserted_limit, 100)
 
     def test_shared_world_projection_completes_an_older_direct_research_handoff(self):
         class IngressReader(Reader):

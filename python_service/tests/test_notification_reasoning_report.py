@@ -258,6 +258,7 @@ class NotificationReasoningReportTests(unittest.TestCase):
         self.assertIn("model_reasoning_effort", command)
         self.assertNotIn("gpt-5.4", command)
         self.assertIn("exec --skip-git-repo-check", command)
+        self.assertIn("--ephemeral", command)
 
     def test_operator_message_type_uses_system_delivery_policy_and_raw_template(self):
         rule = default_notification_rule(OPERATOR_REASONING_REPORT)

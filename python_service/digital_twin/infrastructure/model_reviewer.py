@@ -100,6 +100,7 @@ def codex_command(_requested_model: str = "") -> str:
         shlex.quote(str(ROOT_DIR)),
         "exec",
         "--skip-git-repo-check",
+        "--ephemeral",
         "-",
     ])
     return " ".join(parts)

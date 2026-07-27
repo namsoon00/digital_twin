@@ -1,4 +1,5 @@
 import os
+import time
 import uuid
 from typing import Callable, Dict, Iterable
 
@@ -636,20 +637,38 @@ def build_ontology_reasoning_queue_probe(settings=None):
     event_reader = stores.event_log(store_settings)
     cursor_store = stores.ontology_reasoning_cursor_store(store_settings)
     mailbox_store = stores.ontology_reasoning_mailbox_store(store_settings)
+    try:
+        cache_seconds = float(str(configured_settings.get("ontologyReasoningQueueProbeCacheSeconds") or "5").strip())
+    except ValueError:
+        cache_seconds = 5.0
+    cache_seconds = max(0.0, min(60.0, cache_seconds))
+    cache = {"at": 0.0, "value": None}
 
     def probe():
+        now = time.monotonic()
+        cached = cache.get("value")
+        age = now - float(cache.get("at") or 0.0)
+        if cached is not None and age >= 0 and age < cache_seconds:
+            value = dict(cached or {})
+            value["probeCached"] = True
+            value["probeCacheAgeMs"] = int(age * 1000)
+            return value
         try:
-            return lightweight_ontology_reasoning_queue_state(
+            value = lightweight_ontology_reasoning_queue_state(
                 event_reader,
                 cursor_store,
                 mailbox_store=mailbox_store,
                 settings=configured_settings,
             )
+            cache["at"] = time.monotonic()
+            cache["value"] = dict(value or {})
+            return value
         except Exception as error:  # noqa: BLE001 - the global TypeDB lease remains the final safety boundary.
             return {
                 "status": "error",
                 "effectivePendingCount": 0,
-                "queueHealth": {"status": "degraded", "reason": str(error)[:180]},
+                "probeHealth": {"status": "degraded", "reason": str(error)[:180]},
+                "queueHealth": {"status": "degraded", "reason": str(error)[:180], "scope": "probe-connectivity"},
             }
 
     return probe

@@ -7,6 +7,7 @@ sys.path.insert(0, str(Path(__file__).resolve().parents[1]))
 
 from digital_twin.application.ontology_reasoning_service import OntologyReasoningRunner
 from digital_twin.domain.events import DomainEvent, ONTOLOGY_REASONING_REQUESTED, ontology_reasoning_requested_event
+from digital_twin.domain.ontology_reasoning_queue import durable_mailbox_entries
 from digital_twin.infrastructure.mysql_reasoning_mailbox import MySQLOntologyReasoningMailboxStore
 
 
@@ -175,6 +176,38 @@ class MemoryMailbox:
         return 0
 
 
+class FastStateMailbox:
+    def __init__(self):
+        self.calls = 0
+
+    def fast_state(self):
+        self.calls += 1
+        return {
+            "enabled": True,
+            "pendingEntryCount": 2,
+            "runningEntryCount": 1,
+            "retryingEntryCount": 1,
+            "pendingSymbolCount": 2,
+            "pendingSymbols": ["AAPL", "MSFT"],
+            "oldestPendingAt": "2026-07-24T00:00:00Z",
+            "lastStage": "typedb-projection-complete",
+        }
+
+
+class TimeoutRecoveringMailbox(MemoryMailbox):
+    def __init__(self):
+        super().__init__()
+        self.recoveries = []
+        self.timeouts = []
+
+    def recover_worker_timeout(self, worker_id, retry_after_seconds, reason):
+        self.recoveries.append((worker_id, retry_after_seconds, reason))
+        return 1
+
+    def record_timeout(self, details):
+        self.timeouts.append(dict(details or {}))
+
+
 class MySQLCursor:
     def __init__(self, row=None):
         self.row = dict(row or {}) if row else None
@@ -221,6 +254,23 @@ class MySQLMailboxConnection:
                 "event_json": str(values[5]),
             }
             return MySQLCursor()
+        if query.startswith("UPDATE ontology_reasoning_mailbox_events SET occurred_at"):
+            event = self.events[str(values[6])]
+            event.update({
+                "state": str(values[1]),
+                "unresolved": int(values[2]),
+                "reason": str(values[3]),
+                "event_json": str(values[4]),
+            })
+            return MySQLCursor()
+        if query.startswith("INSERT IGNORE INTO ontology_reasoning_mailbox_events"):
+            self.events.setdefault(str(values[0]), {
+                "state": str(values[2]),
+                "unresolved": 0,
+                "reason": str(values[3]),
+                "event_json": str(values[4]),
+            })
+            return MySQLCursor()
         if query.startswith("INSERT INTO ontology_reasoning_mailbox ("):
             self.slots[str(values[0])] = {
                 "source_event_id": str(values[1]),
@@ -236,6 +286,11 @@ class Reader:
 
     def recent_events(self, **_kwargs):
         return list(self.events)
+
+
+class FailingReader:
+    def recent_events(self, **_kwargs):
+        raise AssertionError("durable queue probe must not scan domain events")
 
 
 class Monitor:
@@ -383,6 +438,22 @@ class OntologyReasoningMailboxTests(unittest.TestCase):
 
         self.assertEqual([], runner.mailbox_entries_for_event(event))
 
+    def test_news_analysis_enrichment_coalesces_to_the_latest_evidence_state(self):
+        event = research_evidence_request(
+            "news-analysis",
+            ["AAPL"],
+            "2026-07-24T00:00:00Z",
+            trigger="news-analysis-enrichment",
+        )
+        runner = self.build_runner([])
+
+        application_entry = runner.mailbox_entries_for_event(event)[0]
+        ingress_entry = durable_mailbox_entries(event)[0]
+
+        self.assertEqual(application_entry["mailboxKey"], ingress_entry["mailboxKey"])
+        self.assertEqual("AAPL", ingress_entry["symbol"])
+        self.assertEqual("news-analysis-enrichment", ingress_entry["trigger"])
+
     def test_same_fact_revision_keeps_existing_pending_mailbox_slot(self):
         old = realtime_request("old-revision", ["AAPL"], "2026-07-24T00:00:00Z", fact_revision="fact-revision:aapl-v1")
         duplicate = realtime_request("duplicate-revision", ["AAPL"], "2026-07-24T00:01:00Z", fact_revision="fact-revision:aapl-v1")
@@ -420,6 +491,93 @@ class OntologyReasoningMailboxTests(unittest.TestCase):
         self.assertEqual({"mysql-duplicate": "superseded"}, second["terminalEventStates"])
         self.assertEqual("mysql-old", connection.slots[old_entry["mailboxKey"]]["source_event_id"])
         self.assertEqual("same fact revision already owns every mailbox slot", connection.events["mysql-duplicate"]["reason"])
+
+    def test_atomic_ingress_marks_non_fungible_request_as_direct_pending(self):
+        event = research_evidence_request(
+            "handoff-direct",
+            ["AAPL"],
+            "2026-07-24T00:00:00Z",
+            trigger="hypothesis-research-update",
+            research_run_id="research-run-1",
+            reasoning_handoff={"status": "requested", "requestId": "handoff-1"},
+        )
+        connection = MySQLMailboxConnection()
+
+        result = MySQLOntologyReasoningMailboxStore.ingress_event_with_connection(connection, event)
+
+        self.assertEqual("direct", result["ingressKind"])
+        self.assertEqual("direct-pending", connection.events["handoff-direct"]["state"])
+
+    def test_legacy_direct_news_marker_migrates_into_a_latest_state_mailbox_slot(self):
+        event = research_evidence_request(
+            "legacy-news-direct",
+            ["AAPL"],
+            "2026-07-24T00:00:00Z",
+            trigger="news-analysis-enrichment",
+        )
+        connection = MySQLMailboxConnection()
+        store = MySQLOntologyReasoningMailboxStore.__new__(MySQLOntologyReasoningMailboxStore)
+        store.transaction = lambda: MySQLTransaction(connection)
+
+        # Simulate a row written by the pre-coalescing ingress version.
+        store._record_direct_event_with_connection(
+            connection,
+            event,
+            state="direct-pending",
+            reason="legacy generic research event",
+        )
+        migrated = store.enqueue(durable_mailbox_entries(event))
+        entry = durable_mailbox_entries(event)[0]
+
+        self.assertEqual([entry["mailboxKey"]], migrated["acceptedEntryKeys"])
+        self.assertEqual("pending", connection.events["legacy-news-direct"]["state"])
+        self.assertEqual("legacy-news-direct", connection.slots[entry["mailboxKey"]]["source_event_id"])
+
+    def test_claim_store_error_defers_instead_of_running_unleased_typedb_work(self):
+        class FailingClaimMailbox(MemoryMailbox):
+            def claim(self, *_args, **_kwargs):
+                return {"enabled": False, "claimed": [], "blocked": [], "reason": "MySQL unavailable"}
+
+        event = realtime_request("lease-error", ["AAPL"], "2026-07-24T00:00:00Z")
+        runner = self.build_runner([event])
+        runner.mailbox_store = FailingClaimMailbox()
+
+        result = runner.run_once(force=True)
+
+        self.assertEqual("deferred", result["status"])
+        self.assertEqual([], self.monitor.calls)
+        self.assertIn("lease", result["deferredReason"])
+
+    def test_durable_fast_state_avoids_any_event_log_scan(self):
+        mailbox = FastStateMailbox()
+        runner = OntologyReasoningRunner(
+            event_reader=FailingReader(),
+            cursor_store=MemoryCursor(),
+            monitor_runner_factory=lambda: Monitor(),
+            settings={"ontologyReasoningEnabled": "1", "ontologyReasoningMailboxEnabled": "1"},
+            mailbox_store=mailbox,
+        )
+
+        state = runner.lightweight_queue_state()
+
+        self.assertEqual("durable-mailbox-state-v2", state["probeMode"])
+        self.assertEqual(2, state["effectivePendingCount"])
+        self.assertEqual(1, state["runningEntryCount"])
+        self.assertEqual(["AAPL", "MSFT"], state["pendingSymbols"])
+        self.assertEqual(1, mailbox.calls)
+
+    def test_timeout_recovers_only_the_isolated_worker_lease(self):
+        runner = self.build_runner([])
+        mailbox = TimeoutRecoveringMailbox()
+        runner.mailbox_store = mailbox
+
+        result = runner.record_execution_timeout(240, worker_id="reasoning-watch:test")
+
+        self.assertEqual("timeout", result["status"])
+        self.assertEqual(1, result["executionTelemetry"]["mailboxTimeoutRecoveryCount"])
+        self.assertEqual("reasoning-watch:test", mailbox.recoveries[0][0])
+        self.assertEqual(300, mailbox.recoveries[0][1])
+        self.assertEqual(1, len(mailbox.timeouts))
 
     def test_actionable_quote_snapshots_still_keep_only_the_latest_state(self):
         old = realtime_request("old-act", ["AAPL"], "2026-07-24T00:00:00Z", review_level="act")

@@ -11,6 +11,11 @@ from __future__ import annotations
 from datetime import datetime, timedelta, timezone
 from typing import Dict, Iterable, List, Mapping
 
+from ..domain.ontology_reasoning_queue import (
+    durable_mailbox_entries,
+    event_as_dict,
+    event_changed_count,
+)
 from .mysql_operational_connection import MySQLOperationalConnection
 from .mysql_operational_helpers import _json_loads
 from .operational_common import json_dumps
@@ -82,7 +87,8 @@ class MySQLOntologyReasoningMailboxStore(MySQLOperationalConnection):
                 batch = clean[start:start + 400]
                 placeholders = ", ".join(["%s"] * len(batch))
                 rows = connection.execute(
-                    "SELECT event_id FROM ontology_reasoning_mailbox_events WHERE event_id IN (" + placeholders + ")",
+                    "SELECT event_id FROM ontology_reasoning_mailbox_events "
+                    "WHERE state <> 'direct-pending' AND event_id IN (" + placeholders + ")",
                     batch,
                 ).fetchall()
                 found.extend(_text(row.get("event_id")) for row in rows or [])
@@ -114,6 +120,89 @@ class MySQLOntologyReasoningMailboxStore(MySQLOperationalConnection):
 
     def enqueue(self, entries: Iterable[Mapping[str, object]]) -> Dict[str, object]:
         """Insert only newer rows and terminally resolve displaced source events."""
+        with self.transaction() as connection:
+            return self.enqueue_with_connection(connection, entries)
+
+    @classmethod
+    def enqueue_event_with_connection(cls, connection, event) -> Dict[str, object]:
+        """Persist a coalescible reasoning request with its domain event.
+
+        ``MySQLEventLog`` invokes this inside the same transaction that writes
+        the audit event.  A successful event therefore cannot be invisible to
+        the live queue, while an unsupported non-fungible event remains on the
+        normal audited event path.
+        """
+        entries = durable_mailbox_entries(event)
+        if not entries:
+            return {
+                "acceptedEntryKeys": [],
+                "sameRevisionEntryKeys": [],
+                "knownEventIds": [],
+                "terminalEventStates": {},
+                "enqueuedEventIds": [],
+            }
+        store = cls.__new__(cls)
+        return store.enqueue_with_connection(connection, entries)
+
+    @classmethod
+    def ingress_event_with_connection(cls, connection, event) -> Dict[str, object]:
+        """Register every actionable reasoning event in the durable ingress.
+
+        Fungible realtime observations become latest-state mailbox slots.  A
+        non-fungible request intentionally keeps its own ``direct-pending``
+        marker so the repair reader never needs to rediscover completed events
+        by scanning the entire domain-event history.
+        """
+        store = cls.__new__(cls)
+        entries = durable_mailbox_entries(event)
+        if entries:
+            result = store.enqueue_with_connection(connection, entries)
+            result["ingressKind"] = "mailbox"
+            return result
+
+        state = "direct-pending" if event_changed_count(event) > 0 else "expired"
+        store._record_direct_event_with_connection(
+            connection,
+            event,
+            state=state,
+            reason=("non-fungible reasoning request" if state == "direct-pending" else "no changed facts"),
+        )
+        return {
+            "acceptedEntryKeys": [],
+            "sameRevisionEntryKeys": [],
+            "knownEventIds": [],
+            "terminalEventStates": ({str(getattr(event, "event_id", "") or ""): state} if state in TERMINAL_STATES else {}),
+            "enqueuedEventIds": [str(getattr(event, "event_id", "") or "")],
+            "ingressKind": "direct",
+        }
+
+    @staticmethod
+    def _record_direct_event_with_connection(connection, event, state: str, reason: str = "") -> None:
+        event_id = _text(getattr(event, "event_id", ""))
+        if not event_id:
+            return
+        stamp = utc_now()
+        source_event = event_as_dict(event)
+        connection.execute(
+            """
+            INSERT IGNORE INTO ontology_reasoning_mailbox_events (
+                event_id, occurred_at, state, unresolved_entry_count, terminal_reason,
+                event_json, created_at, updated_at
+            ) VALUES (%s, %s, %s, 0, %s, %s, %s, %s)
+            """,
+            (
+                event_id,
+                _text(getattr(event, "occurred_at", "")),
+                _text(state) or "direct-pending",
+                _text(reason)[:255],
+                json_dumps(source_event),
+                stamp,
+                stamp,
+            ),
+        )
+
+    def enqueue_with_connection(self, connection, entries: Iterable[Mapping[str, object]]) -> Dict[str, object]:
+        """Transaction-aware form used by durable event ingress."""
         grouped = _entries_by_event(entries)
         result = {
             "acceptedEntryKeys": [],
@@ -125,76 +214,91 @@ class MySQLOntologyReasoningMailboxStore(MySQLOperationalConnection):
         if not grouped:
             return result
         stamp = utc_now()
-        with self.transaction() as connection:
-            for event_id, event_entries in grouped.items():
-                existing_event = connection.execute(
-                    "SELECT state FROM ontology_reasoning_mailbox_events WHERE event_id = %s FOR UPDATE",
-                    (event_id,),
+        for event_id, event_entries in grouped.items():
+            existing_event = connection.execute(
+                "SELECT state FROM ontology_reasoning_mailbox_events WHERE event_id = %s FOR UPDATE",
+                (event_id,),
+            ).fetchone()
+            existing_direct_marker = bool(existing_event and _text(existing_event.get("state")) == "direct-pending")
+            if existing_event and not existing_direct_marker:
+                state = _text(existing_event.get("state"))
+                result["knownEventIds"].append(event_id)
+                if state in TERMINAL_STATES:
+                    result["terminalEventStates"][event_id] = state
+                continue
+
+            accepted = 0
+            same_revision_skips = 0
+            first = event_entries[0]
+            for entry in event_entries:
+                mailbox_key = _text(entry.get("mailboxKey"))
+                current = connection.execute(
+                    "SELECT mailbox.source_event_id, mailbox.occurred_at, events.event_json "
+                    "FROM ontology_reasoning_mailbox mailbox "
+                    "LEFT JOIN ontology_reasoning_mailbox_events events ON events.event_id = mailbox.source_event_id "
+                    "WHERE mailbox.mailbox_key = %s FOR UPDATE",
+                    (mailbox_key,),
                 ).fetchone()
-                if existing_event:
-                    state = _text(existing_event.get("state"))
-                    result["knownEventIds"].append(event_id)
-                    if state in TERMINAL_STATES:
-                        result["terminalEventStates"][event_id] = state
+                incoming_revision = _entry_fact_revision(entry)
+                current_event = _json_loads(current.get("event_json"), {}) if current else {}
+                current_revision = _event_fact_revision(current_event, entry.get("symbol"))
+                if current and incoming_revision and incoming_revision == current_revision:
+                    same_revision_skips += 1
+                    result["sameRevisionEntryKeys"].append(mailbox_key)
                     continue
+                if current and not _newer(
+                    entry.get("occurredAt"), event_id, current.get("occurred_at"), current.get("source_event_id"),
+                ):
+                    continue
+                if current:
+                    displaced = _text(current.get("source_event_id"))
+                    connection.execute(
+                        """
+                        UPDATE ontology_reasoning_mailbox
+                        SET source_event_id = %s, account_scope = %s, symbol = %s, fact_family = %s,
+                            trigger_name = %s, review_level = %s, priority_hint = %s, occurred_at = %s, updated_at = %s
+                        WHERE mailbox_key = %s
+                        """,
+                        self._entry_values(entry, stamp) + (mailbox_key,),
+                    )
+                    if displaced and displaced != event_id:
+                        terminal = self._decrement_source_event(connection, displaced, "superseded", "newer fungible observation")
+                        if terminal:
+                            result["terminalEventStates"][displaced] = terminal
+                else:
+                    connection.execute(
+                        """
+                        INSERT INTO ontology_reasoning_mailbox (
+                            mailbox_key, source_event_id, account_scope, symbol, fact_family, trigger_name,
+                            review_level, priority_hint, occurred_at, created_at, updated_at
+                        ) VALUES (%s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s)
+                        """,
+                        (mailbox_key,) + self._entry_values(entry, stamp) + (stamp,),
+                    )
+                self._replace_work_item_with_connection(connection, entry, stamp)
+                accepted += 1
+                result["acceptedEntryKeys"].append(mailbox_key)
 
-                accepted = 0
-                same_revision_skips = 0
-                first = event_entries[0]
-                for entry in event_entries:
-                    mailbox_key = _text(entry.get("mailboxKey"))
-                    current = connection.execute(
-                        "SELECT mailbox.source_event_id, mailbox.occurred_at, events.event_json "
-                        "FROM ontology_reasoning_mailbox mailbox "
-                        "LEFT JOIN ontology_reasoning_mailbox_events events ON events.event_id = mailbox.source_event_id "
-                        "WHERE mailbox.mailbox_key = %s FOR UPDATE",
-                        (mailbox_key,),
-                    ).fetchone()
-                    incoming_revision = _entry_fact_revision(entry)
-                    current_event = _json_loads(current.get("event_json"), {}) if current else {}
-                    current_revision = _event_fact_revision(current_event, entry.get("symbol"))
-                    if current and incoming_revision and incoming_revision == current_revision:
-                        same_revision_skips += 1
-                        result["sameRevisionEntryKeys"].append(mailbox_key)
-                        continue
-                    if current and not _newer(
-                        entry.get("occurredAt"), event_id, current.get("occurred_at"), current.get("source_event_id"),
-                    ):
-                        continue
-                    if current:
-                        displaced = _text(current.get("source_event_id"))
-                        connection.execute(
-                            """
-                            UPDATE ontology_reasoning_mailbox
-                            SET source_event_id = %s, account_scope = %s, symbol = %s, fact_family = %s,
-                                trigger_name = %s, review_level = %s, priority_hint = %s, occurred_at = %s, updated_at = %s
-                            WHERE mailbox_key = %s
-                            """,
-                            self._entry_values(entry, stamp) + (mailbox_key,),
-                        )
-                        if displaced and displaced != event_id:
-                            terminal = self._decrement_source_event(connection, displaced, "superseded", "newer fungible observation")
-                            if terminal:
-                                result["terminalEventStates"][displaced] = terminal
-                    else:
-                        connection.execute(
-                            """
-                            INSERT INTO ontology_reasoning_mailbox (
-                                mailbox_key, source_event_id, account_scope, symbol, fact_family, trigger_name,
-                                review_level, priority_hint, occurred_at, created_at, updated_at
-                            ) VALUES (%s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s)
-                            """,
-                            (mailbox_key,) + self._entry_values(entry, stamp) + (stamp,),
-                        )
-                    accepted += 1
-                    result["acceptedEntryKeys"].append(mailbox_key)
-
-                state = "pending" if accepted else "superseded"
-                terminal_reason = "" if accepted else (
-                    "same fact revision already owns every mailbox slot"
-                    if same_revision_skips == len(event_entries)
-                    else "newer observation already owns every mailbox slot"
+            state = "pending" if accepted else "superseded"
+            terminal_reason = "" if accepted else (
+                "same fact revision already owns every mailbox slot"
+                if same_revision_skips == len(event_entries)
+                else "newer observation already owns every mailbox slot"
+            )
+            if existing_direct_marker:
+                connection.execute(
+                    """
+                    UPDATE ontology_reasoning_mailbox_events
+                    SET occurred_at = %s, state = %s, unresolved_entry_count = %s,
+                        terminal_reason = %s, event_json = %s, updated_at = %s
+                    WHERE event_id = %s AND state = 'direct-pending'
+                    """,
+                    (
+                        _text(first.get("occurredAt")), state, accepted, terminal_reason,
+                        json_dumps(first.get("sourceEvent") or {}), stamp, event_id,
+                    ),
                 )
+            else:
                 connection.execute(
                     """
                     INSERT INTO ontology_reasoning_mailbox_events (
@@ -213,9 +317,10 @@ class MySQLOntologyReasoningMailboxStore(MySQLOperationalConnection):
                         stamp,
                     ),
                 )
-                result["enqueuedEventIds"].append(event_id)
-                if state in TERMINAL_STATES:
-                    result["terminalEventStates"][event_id] = state
+            result["enqueuedEventIds"].append(event_id)
+            if state in TERMINAL_STATES:
+                result["terminalEventStates"][event_id] = state
+        self._refresh_queue_state_with_connection(connection)
         result["acceptedEntryKeys"] = list(dict.fromkeys(result["acceptedEntryKeys"]))
         result["sameRevisionEntryKeys"] = list(dict.fromkeys(result["sameRevisionEntryKeys"]))
         result["knownEventIds"] = list(dict.fromkeys(result["knownEventIds"]))
@@ -235,6 +340,392 @@ class MySQLOntologyReasoningMailboxStore(MySQLOperationalConnection):
             _text(entry.get("occurredAt")),
             stamp,
         )
+
+    @staticmethod
+    def _replace_work_item_with_connection(connection, entry: Mapping[str, object], stamp: str) -> None:
+        """Reset only the durable work record for a newer mailbox revision.
+
+        The mailbox row remains the source of truth.  This checkpoint record
+        is intentionally best-effort so an operational telemetry migration
+        can never reject a valid market event.
+        """
+        try:
+            connection.execute(
+                """
+                INSERT INTO ontology_reasoning_work_items (
+                    mailbox_key, source_event_id, work_state, lease_owner, lease_until, not_before_at,
+                    attempt_count, last_stage, stage_started_at, heartbeat_at, checkpoint_json,
+                    last_error, created_at, updated_at
+                ) VALUES (%s, %s, 'queued', '', '', '', 0, 'queued', '', %s, %s, '', %s, %s)
+                ON DUPLICATE KEY UPDATE
+                    source_event_id = VALUES(source_event_id), work_state = 'queued', lease_owner = '',
+                    lease_until = '', not_before_at = '', attempt_count = 0, last_stage = 'queued',
+                    stage_started_at = '', heartbeat_at = VALUES(heartbeat_at),
+                    checkpoint_json = VALUES(checkpoint_json), last_error = '', updated_at = VALUES(updated_at)
+                """,
+                (
+                    _text(entry.get("mailboxKey")),
+                    _text(entry.get("sourceEventId")),
+                    stamp,
+                    json_dumps({
+                        "version": "reasoning-work-checkpoint-v1",
+                        "sourceEventId": _text(entry.get("sourceEventId")),
+                        "stage": "queued",
+                        "updatedAt": stamp,
+                    }),
+                    stamp,
+                    stamp,
+                ),
+            )
+        except Exception:
+            return
+
+    @staticmethod
+    def _remove_work_item_with_connection(connection, mailbox_key: str, source_event_id: str) -> None:
+        try:
+            connection.execute(
+                "DELETE FROM ontology_reasoning_work_items "
+                "WHERE mailbox_key = %s AND source_event_id = %s",
+                (mailbox_key, source_event_id),
+            )
+        except Exception:
+            return
+
+    @staticmethod
+    def _refresh_queue_state_with_connection(connection) -> Dict[str, object]:
+        """Materialize an O(1) queue summary outside the hot probe path."""
+        try:
+            row = connection.execute(
+                """
+                SELECT COUNT(*) AS pending_count,
+                       MIN(mailbox.occurred_at) AS oldest_pending_at,
+                       COUNT(DISTINCT mailbox.symbol) AS pending_symbol_count,
+                       SUM(CASE WHEN work.work_state = 'running' THEN 1 ELSE 0 END) AS running_count,
+                       SUM(CASE WHEN work.work_state = 'retrying' THEN 1 ELSE 0 END) AS retrying_count
+                FROM ontology_reasoning_mailbox mailbox
+                LEFT JOIN ontology_reasoning_work_items work
+                  ON work.mailbox_key = mailbox.mailbox_key
+                 AND work.source_event_id = mailbox.source_event_id
+                """
+            ).fetchone() or {}
+            symbols = connection.execute(
+                """
+                SELECT symbol, MIN(occurred_at) AS oldest_at FROM ontology_reasoning_mailbox
+                WHERE symbol <> '' GROUP BY symbol ORDER BY oldest_at, symbol LIMIT 80
+                """
+            ).fetchall()
+            active = connection.execute(
+                """
+                SELECT lease_owner, lease_until, last_stage, heartbeat_at
+                FROM ontology_reasoning_work_items
+                WHERE work_state = 'running'
+                ORDER BY heartbeat_at DESC, updated_at DESC LIMIT 1
+                """
+            ).fetchone() or {}
+            previous = connection.execute(
+                "SELECT last_completed_at, last_timeout_at, version FROM ontology_reasoning_queue_state "
+                "WHERE state_id = 'global' FOR UPDATE"
+            ).fetchone() or {}
+            stamp = utc_now()
+            values = {
+                "pending": max(0, int(row.get("pending_count") or 0)),
+                "running": max(0, int(row.get("running_count") or 0)),
+                "retrying": max(0, int(row.get("retrying_count") or 0)),
+                "symbols": [
+                    _text(item.get("symbol")).upper()
+                    for item in symbols or []
+                    if _text(item.get("symbol"))
+                ],
+                "oldest": _text(row.get("oldest_pending_at")),
+                "activeWorker": _text(active.get("lease_owner")),
+                "activeLease": _text(active.get("lease_until")),
+                "lastStage": _text(active.get("last_stage")),
+                "lastStageAt": _text(active.get("heartbeat_at")),
+                "lastCompleted": _text(previous.get("last_completed_at")),
+                "lastTimeout": _text(previous.get("last_timeout_at")),
+                "version": int(previous.get("version") or 0) + 1,
+                "updatedAt": stamp,
+            }
+            connection.execute(
+                """
+                INSERT INTO ontology_reasoning_queue_state (
+                    state_id, pending_entry_count, running_entry_count, retrying_entry_count,
+                    pending_symbol_count, oldest_pending_at, pending_symbols_json,
+                    active_worker_id, active_lease_until, last_stage, last_stage_at,
+                    last_completed_at, last_timeout_at, version, updated_at
+                ) VALUES ('global', %s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s)
+                ON DUPLICATE KEY UPDATE
+                    pending_entry_count = VALUES(pending_entry_count),
+                    running_entry_count = VALUES(running_entry_count),
+                    retrying_entry_count = VALUES(retrying_entry_count),
+                    pending_symbol_count = VALUES(pending_symbol_count),
+                    oldest_pending_at = VALUES(oldest_pending_at),
+                    pending_symbols_json = VALUES(pending_symbols_json),
+                    active_worker_id = VALUES(active_worker_id),
+                    active_lease_until = VALUES(active_lease_until),
+                    last_stage = VALUES(last_stage), last_stage_at = VALUES(last_stage_at),
+                    last_completed_at = VALUES(last_completed_at), last_timeout_at = VALUES(last_timeout_at),
+                    version = VALUES(version), updated_at = VALUES(updated_at)
+                """,
+                (
+                    values["pending"], values["running"], values["retrying"], len(values["symbols"]),
+                    values["oldest"], json_dumps(values["symbols"]), values["activeWorker"],
+                    values["activeLease"], values["lastStage"], values["lastStageAt"],
+                    values["lastCompleted"], values["lastTimeout"], values["version"], values["updatedAt"],
+                ),
+            )
+            return values
+        except Exception:
+            return {}
+
+    def fast_state(self) -> Dict[str, object]:
+        """Read the compact durable queue summary in one indexed lookup."""
+        columns = (
+            "pending_entry_count, running_entry_count, retrying_entry_count, pending_symbol_count, "
+            "oldest_pending_at, pending_symbols_json, active_worker_id, active_lease_until, "
+            "last_stage, last_stage_at, last_completed_at, last_timeout_at, version, updated_at"
+        )
+        try:
+            with self.connect() as connection:
+                row = connection.execute(
+                    "SELECT " + columns + " FROM ontology_reasoning_queue_state WHERE state_id = 'global'"
+                ).fetchone() or {}
+            if not _text(row.get("updated_at")):
+                with self.transaction() as connection:
+                    self._refresh_queue_state_with_connection(connection)
+                with self.connect() as connection:
+                    row = connection.execute(
+                        "SELECT " + columns + " FROM ontology_reasoning_queue_state WHERE state_id = 'global'"
+                    ).fetchone() or {}
+            symbols = _json_loads(row.get("pending_symbols_json"), [])
+            if not isinstance(symbols, list):
+                symbols = []
+            return {
+                "enabled": True,
+                "stateVersion": "durable-queue-state-v2",
+                "pendingEntryCount": max(0, int(row.get("pending_entry_count") or 0)),
+                "runningEntryCount": max(0, int(row.get("running_entry_count") or 0)),
+                "retryingEntryCount": max(0, int(row.get("retrying_entry_count") or 0)),
+                "pendingSymbolCount": max(0, int(row.get("pending_symbol_count") or 0)),
+                "pendingSymbols": [str(item or "").upper().strip() for item in symbols if str(item or "").strip()],
+                "oldestPendingAt": _text(row.get("oldest_pending_at")),
+                "activeWorkerId": _text(row.get("active_worker_id")),
+                "activeLeaseUntil": _text(row.get("active_lease_until")),
+                "lastStage": _text(row.get("last_stage")),
+                "lastStageAt": _text(row.get("last_stage_at")),
+                "lastCompletedAt": _text(row.get("last_completed_at")),
+                "lastTimeoutAt": _text(row.get("last_timeout_at")),
+                "version": int(row.get("version") or 0),
+                "updatedAt": _text(row.get("updated_at")),
+            }
+        except Exception as error:
+            return {
+                "enabled": True,
+                "status": "error",
+                "reason": str(error)[:180],
+                "pendingEntryCount": 0,
+                "pendingSymbolCount": 0,
+                "pendingSymbols": [],
+                "oldestPendingAt": "",
+            }
+
+    def claim(self, entries: Iterable[Mapping[str, object]], worker_id: str, lease_seconds: int = 300) -> Dict[str, object]:
+        """Lease selected latest-state rows without ever deleting newer work."""
+        clean = []
+        for item in entries or []:
+            key = _text(item.get("mailboxKey") or item.get("mailbox_key"))
+            event_id = _text(item.get("sourceEventId") or item.get("source_event_id"))
+            if key and event_id and (key, event_id) not in clean:
+                clean.append((key, event_id))
+        result = {"enabled": True, "claimed": [], "blocked": [], "leaseOwner": _text(worker_id)}
+        if not clean:
+            return result
+        try:
+            seconds = max(30, min(3600, int(lease_seconds or 300)))
+            now = datetime.now(timezone.utc)
+            stamp = now.isoformat().replace("+00:00", "Z")
+            lease_until = (now + timedelta(seconds=seconds)).isoformat().replace("+00:00", "Z")
+            with self.transaction() as connection:
+                for key, event_id in clean:
+                    current = connection.execute(
+                        "SELECT source_event_id FROM ontology_reasoning_mailbox WHERE mailbox_key = %s FOR UPDATE",
+                        (key,),
+                    ).fetchone()
+                    if not current or _text(current.get("source_event_id")) != event_id:
+                        result["blocked"].append({"mailboxKey": key, "sourceEventId": event_id, "reason": "newer-source"})
+                        continue
+                    work = connection.execute(
+                        "SELECT source_event_id, work_state, lease_owner, lease_until, not_before_at FROM ontology_reasoning_work_items "
+                        "WHERE mailbox_key = %s FOR UPDATE",
+                        (key,),
+                    ).fetchone()
+                    if work and _text(work.get("source_event_id")) != event_id:
+                        result["blocked"].append({"mailboxKey": key, "sourceEventId": event_id, "reason": "work-revision"})
+                        continue
+                    if (
+                        work
+                        and _text(work.get("work_state")) == "retrying"
+                        and _text(work.get("not_before_at")) > stamp
+                    ):
+                        result["blocked"].append({"mailboxKey": key, "sourceEventId": event_id, "reason": "retry-not-before"})
+                        continue
+                    if work and _text(work.get("work_state")) == "running" and _text(work.get("lease_until")) > stamp and _text(work.get("lease_owner")) not in {"", _text(worker_id)}:
+                        result["blocked"].append({"mailboxKey": key, "sourceEventId": event_id, "reason": "leased"})
+                        continue
+                    connection.execute(
+                        """
+                        INSERT INTO ontology_reasoning_work_items (
+                            mailbox_key, source_event_id, work_state, lease_owner, lease_until, not_before_at,
+                            attempt_count, last_stage, stage_started_at, heartbeat_at, checkpoint_json,
+                            last_error, created_at, updated_at
+                        ) VALUES (%s, %s, 'running', %s, %s, '', 1, 'snapshot-preparation', %s, %s, %s, '', %s, %s)
+                        ON DUPLICATE KEY UPDATE
+                            source_event_id = VALUES(source_event_id), work_state = 'running',
+                            lease_owner = VALUES(lease_owner), lease_until = VALUES(lease_until), not_before_at = '',
+                            attempt_count = attempt_count + 1, last_stage = 'snapshot-preparation',
+                            stage_started_at = VALUES(stage_started_at), heartbeat_at = VALUES(heartbeat_at),
+                            checkpoint_json = VALUES(checkpoint_json), last_error = '', updated_at = VALUES(updated_at)
+                        """,
+                        (
+                            key, event_id, _text(worker_id), lease_until, stamp, stamp,
+                            json_dumps({"version": "reasoning-work-checkpoint-v1", "stage": "snapshot-preparation", "startedAt": stamp}),
+                            stamp, stamp,
+                        ),
+                    )
+                    result["claimed"].append({"mailboxKey": key, "sourceEventId": event_id})
+                self._refresh_queue_state_with_connection(connection)
+            return result
+        except Exception as error:
+            return {**result, "enabled": False, "reason": str(error)[:180]}
+
+    def checkpoint(
+        self,
+        entries: Iterable[Mapping[str, object]],
+        stage: str,
+        details: Mapping[str, object] = None,
+        worker_id: str = "",
+    ) -> None:
+        clean = [
+            (_text(item.get("mailboxKey") or item.get("mailbox_key")), _text(item.get("sourceEventId") or item.get("source_event_id")))
+            for item in entries or [] if isinstance(item, Mapping)
+        ]
+        clean = [(key, event_id) for key, event_id in clean if key and event_id]
+        if not clean:
+            return
+        stamp = utc_now()
+        try:
+            with self.transaction() as connection:
+                for key, event_id in clean:
+                    owner_clause = " AND lease_owner = %s AND work_state = 'running'" if _text(worker_id) else ""
+                    parameters = [
+                        _text(stage)[:64], stamp,
+                        json_dumps({"version": "reasoning-work-checkpoint-v1", "stage": _text(stage)[:64], "updatedAt": stamp, "details": dict(details or {})}),
+                        stamp, key, event_id,
+                    ]
+                    if _text(worker_id):
+                        parameters.append(_text(worker_id))
+                    connection.execute(
+                        """
+                        UPDATE ontology_reasoning_work_items
+                        SET last_stage = %s, heartbeat_at = %s, checkpoint_json = %s, updated_at = %s
+                        WHERE mailbox_key = %s AND source_event_id = %s
+                        """ + owner_clause,
+                        parameters,
+                    )
+                self._refresh_queue_state_with_connection(connection)
+        except Exception:
+            return
+
+    def release(
+        self,
+        entries: Iterable[Mapping[str, object]],
+        reason: str,
+        retry_after_seconds: int = 30,
+        worker_id: str = "",
+    ) -> None:
+        clean = [
+            (_text(item.get("mailboxKey") or item.get("mailbox_key")), _text(item.get("sourceEventId") or item.get("source_event_id")))
+            for item in entries or [] if isinstance(item, Mapping)
+        ]
+        clean = [(key, event_id) for key, event_id in clean if key and event_id]
+        if not clean:
+            return
+        now = datetime.now(timezone.utc)
+        stamp = now.isoformat().replace("+00:00", "Z")
+        retry_at = (now + timedelta(seconds=max(1, min(3600, int(retry_after_seconds or 30))))).isoformat().replace("+00:00", "Z")
+        try:
+            with self.transaction() as connection:
+                for key, event_id in clean:
+                    owner_clause = " AND lease_owner = %s AND work_state = 'running'" if _text(worker_id) else ""
+                    parameters = [retry_at, stamp, _text(reason)[:255], stamp, key, event_id]
+                    if _text(worker_id):
+                        parameters.append(_text(worker_id))
+                    connection.execute(
+                        """
+                        UPDATE ontology_reasoning_work_items
+                        SET work_state = 'retrying', lease_owner = '', lease_until = '', not_before_at = %s,
+                            last_stage = 'retry-scheduled', heartbeat_at = %s, last_error = %s, updated_at = %s
+                        WHERE mailbox_key = %s AND source_event_id = %s
+                        """ + owner_clause,
+                        parameters,
+                    )
+                self._refresh_queue_state_with_connection(connection)
+        except Exception:
+            return
+
+    def recover_worker_timeout(
+        self,
+        worker_id: str,
+        retry_after_seconds: int,
+        reason: str = "isolated reasoning worker exceeded its execution deadline",
+    ) -> int:
+        """Release only the killed isolated worker's leases after its parent confirms timeout."""
+        owner = _text(worker_id)
+        if not owner:
+            return 0
+        now = datetime.now(timezone.utc)
+        stamp = now.isoformat().replace("+00:00", "Z")
+        retry_at = (now + timedelta(seconds=max(5, min(3600, int(retry_after_seconds or 30))))).isoformat().replace("+00:00", "Z")
+        try:
+            with self.transaction() as connection:
+                cursor = connection.execute(
+                    """
+                    UPDATE ontology_reasoning_work_items
+                    SET work_state = 'retrying', lease_owner = '', lease_until = '', not_before_at = %s,
+                        last_stage = 'timeout-retry-scheduled', heartbeat_at = %s,
+                        last_error = %s, updated_at = %s
+                    WHERE work_state = 'running' AND lease_owner = %s
+                    """,
+                    (retry_at, stamp, _text(reason)[:255], stamp, owner),
+                )
+                self._refresh_queue_state_with_connection(connection)
+                return int(cursor.rowcount or 0)
+        except Exception:
+            return 0
+
+    def record_timeout(self, details: Mapping[str, object] = None) -> None:
+        stamp = utc_now()
+        try:
+            with self.transaction() as connection:
+                connection.execute(
+                    "UPDATE ontology_reasoning_queue_state SET last_timeout_at = %s, last_stage = %s, "
+                    "last_stage_at = %s, updated_at = %s, version = version + 1 WHERE state_id = 'global'",
+                    (stamp, _text((details or {}).get("stage") or "timeout")[:64], stamp, stamp),
+                )
+        except Exception:
+            return
+
+    def record_completion(self, details: Mapping[str, object] = None) -> None:
+        stamp = utc_now()
+        try:
+            with self.transaction() as connection:
+                connection.execute(
+                    "UPDATE ontology_reasoning_queue_state SET last_completed_at = %s, last_stage = %s, "
+                    "last_stage_at = %s, updated_at = %s, version = version + 1 WHERE state_id = 'global'",
+                    (stamp, _text((details or {}).get("stage") or "completed")[:64], stamp, stamp),
+                )
+        except Exception:
+            return
 
     def _decrement_source_event(self, connection, event_id: str, terminal_state: str, reason: str) -> str:
         row = connection.execute(
@@ -260,6 +751,7 @@ class MySQLOntologyReasoningMailboxStore(MySQLOperationalConnection):
 
     def pending(self, limit: int = 100) -> List[Dict[str, object]]:
         bounded = max(1, min(1000, int(limit or 100)))
+        stamp = utc_now()
         with self.connect() as connection:
             rows = connection.execute(
                 """
@@ -268,11 +760,20 @@ class MySQLOntologyReasoningMailboxStore(MySQLOperationalConnection):
                        mailbox.occurred_at, events.event_json
                 FROM ontology_reasoning_mailbox mailbox
                 INNER JOIN ontology_reasoning_mailbox_events events ON events.event_id = mailbox.source_event_id
+                LEFT JOIN ontology_reasoning_work_items work
+                  ON work.mailbox_key = mailbox.mailbox_key
+                 AND work.source_event_id = mailbox.source_event_id
                 WHERE events.state = 'pending'
+                  AND (
+                    work.mailbox_key IS NULL
+                    OR work.work_state = 'queued'
+                    OR (work.work_state = 'retrying' AND (work.not_before_at = '' OR work.not_before_at <= %s))
+                    OR (work.work_state = 'running' AND (work.lease_until = '' OR work.lease_until <= %s))
+                  )
                 ORDER BY mailbox.priority_hint DESC, mailbox.occurred_at ASC, mailbox.mailbox_key ASC
                 LIMIT %s
                 """,
-                (bounded,),
+                (stamp, stamp, bounded),
             ).fetchall()
         result = []
         for row in rows or []:
@@ -330,25 +831,87 @@ class MySQLOntologyReasoningMailboxStore(MySQLOperationalConnection):
                 if expected and event_id != expected:
                     continue
                 connection.execute("DELETE FROM ontology_reasoning_mailbox WHERE mailbox_key = %s", (mailbox_key,))
+                self._remove_work_item_with_connection(connection, mailbox_key, event_id)
                 final_state = self._decrement_source_event(connection, event_id, terminal_state, reason or terminal_state)
                 if final_state:
                     terminal[event_id] = final_state
+            self._refresh_queue_state_with_connection(connection)
         return terminal
 
+    def terminalize_direct_events(
+        self,
+        events: Iterable[object],
+        state: str = "completed",
+        reason: str = "",
+    ) -> List[str]:
+        """Seal direct-ingress rows so they never re-enter repair scans.
+
+        Existing mailbox-backed events are intentionally untouched.  The same
+        helper also seals already-cursor-processed legacy rows that predate
+        atomic ingress, which makes rollout self-healing without a bulk scan.
+        """
+        terminal_state = state if state in TERMINAL_STATES else "completed"
+        candidates = []
+        for event in events or []:
+            event_id = _text(getattr(event, "event_id", event if isinstance(event, str) else ""))
+            if not event_id or event_id.startswith("mailbox:"):
+                continue
+            occurred_at = _text(getattr(event, "occurred_at", ""))
+            source_event = event_as_dict(event) if not isinstance(event, str) else {}
+            candidates.append((event_id, occurred_at, source_event))
+        if not candidates:
+            return []
+        stamp = utc_now()
+        sealed = []
+        try:
+            with self.transaction() as connection:
+                for event_id, occurred_at, source_event in candidates:
+                    connection.execute(
+                        """
+                        INSERT IGNORE INTO ontology_reasoning_mailbox_events (
+                            event_id, occurred_at, state, unresolved_entry_count, terminal_reason,
+                            event_json, created_at, updated_at
+                        ) VALUES (%s, %s, %s, 0, %s, %s, %s, %s)
+                        """,
+                        (
+                            event_id, occurred_at, terminal_state, _text(reason or terminal_state)[:255],
+                            json_dumps(source_event), stamp, stamp,
+                        ),
+                    )
+                    cursor = connection.execute(
+                        """
+                        UPDATE ontology_reasoning_mailbox_events
+                        SET state = %s, terminal_reason = %s, updated_at = %s
+                        WHERE event_id = %s AND state = 'direct-pending'
+                        """,
+                        (terminal_state, _text(reason or terminal_state)[:255], stamp, event_id),
+                    )
+                    if int(cursor.rowcount or 0) > 0:
+                        sealed.append(event_id)
+        except Exception:
+            return sealed
+        return sealed
+
     def summary(self) -> Dict[str, object]:
-        with self.connect() as connection:
-            mailbox_row = connection.execute(
-                "SELECT COUNT(*) AS count, MIN(occurred_at) AS oldest_at FROM ontology_reasoning_mailbox"
-            ).fetchone() or {}
-            state_rows = connection.execute(
-                "SELECT state, COUNT(*) AS count FROM ontology_reasoning_mailbox_events GROUP BY state"
-            ).fetchall()
-        states = {_text(row.get("state")): int(row.get("count") or 0) for row in state_rows or []}
+        state = self.fast_state()
         return {
             "enabled": True,
-            "pendingEntryCount": int(mailbox_row.get("count") or 0),
-            "oldestPendingAt": _text(mailbox_row.get("oldest_at")),
-            "eventStateCounts": states,
+            "pendingEntryCount": int(state.get("pendingEntryCount") or 0),
+            "runningEntryCount": int(state.get("runningEntryCount") or 0),
+            "retryingEntryCount": int(state.get("retryingEntryCount") or 0),
+            "pendingSymbolCount": int(state.get("pendingSymbolCount") or 0),
+            "pendingSymbols": list(state.get("pendingSymbols") or []),
+            "oldestPendingAt": _text(state.get("oldestPendingAt")),
+            "activeWorkerId": _text(state.get("activeWorkerId")),
+            "activeLeaseUntil": _text(state.get("activeLeaseUntil")),
+            "lastStage": _text(state.get("lastStage")),
+            "lastStageAt": _text(state.get("lastStageAt")),
+            "lastCompletedAt": _text(state.get("lastCompletedAt")),
+            "lastTimeoutAt": _text(state.get("lastTimeoutAt")),
+            "stateVersion": _text(state.get("stateVersion")),
+            "updatedAt": _text(state.get("updatedAt")),
+            "eventStateCounts": {},
+            **({"status": "error", "reason": _text(state.get("reason"))} if _text(state.get("status")) == "error" else {}),
         }
 
     def prune_terminal(self, retention_hours: int = 72, limit: int = 1000) -> int:

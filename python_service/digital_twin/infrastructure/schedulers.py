@@ -50,10 +50,11 @@ class IsolatedOntologyReasoningCycle:
     limit. The child still owns normal cursor and mailbox transactions.
     """
 
-    def __init__(self, command, working_directory="", process_factory=None):
+    def __init__(self, command, working_directory="", process_factory=None, environment=None):
         self.command = list(command or [])
         self.working_directory = str(working_directory or "")
         self.process_factory = process_factory or subprocess.Popen
+        self.environment = dict(environment or {})
         self.process = None
         self._stop_requested = False
 
@@ -147,6 +148,8 @@ class IsolatedOntologyReasoningCycle:
         }
         if self.working_directory:
             kwargs["cwd"] = self.working_directory
+        if self.environment:
+            kwargs["env"] = {**os.environ, **self.environment}
         if os.name != "nt":
             kwargs["start_new_session"] = True
         process = self.process_factory(self.command_for_limit(limit), **kwargs)
@@ -282,6 +285,10 @@ class OntologyReasoningScheduler:
         self.interval_seconds = max(5, int(interval_seconds or 10))
         self.error_reporter = error_reporter or operational_error_reporter()
         self.isolated_cycle = isolated_cycle
+        # The parent passes this stable id to each short-lived child.  If the
+        # child times out, only this invocation's mailbox lease is released;
+        # a different scheduler instance cannot be accidentally reclaimed.
+        self.worker_id = "reasoning-watch:" + str(os.getpid())
         self.last_deferred_signature = ""
         self.last_deferred_report_at = 0.0
         self.running = True
@@ -307,6 +314,9 @@ class OntologyReasoningScheduler:
     def run_once(self, limit: int = 0):
         if not self.process_isolation_enabled():
             return self.runner.run_once(limit=limit)
+        current_environment = dict(getattr(self.isolated_cycle, "environment", {}) or {})
+        current_environment["ONTOLOGY_REASONING_WORKER_ID"] = self.worker_id
+        self.isolated_cycle.environment = current_environment
         result = self.isolated_cycle.run_once(
             limit,
             self.execution_timeout_seconds(),
@@ -317,10 +327,18 @@ class OntologyReasoningScheduler:
         recorder = getattr(self.runner, "record_execution_timeout", None)
         if not callable(recorder):
             return result
-        recorded = recorder(
-            int(result.get("timeoutSeconds") or self.execution_timeout_seconds()),
-            output=str(result.get("workerOutput") or ""),
-        )
+        try:
+            recorded = recorder(
+                int(result.get("timeoutSeconds") or self.execution_timeout_seconds()),
+                output=str(result.get("workerOutput") or ""),
+                worker_id=self.worker_id,
+            )
+        except TypeError:
+            # Compatibility runners predate durable work leases.
+            recorded = recorder(
+                int(result.get("timeoutSeconds") or self.execution_timeout_seconds()),
+                output=str(result.get("workerOutput") or ""),
+            )
         return {
             **recorded,
             "isolatedExecution": True,

@@ -78,8 +78,8 @@ class FakeRunner:
     def execution_timeout_grace_seconds(self):
         return 1
 
-    def record_execution_timeout(self, timeout_seconds, started_at="", output=""):
-        self.timeouts.append({"timeoutSeconds": timeout_seconds, "output": output})
+    def record_execution_timeout(self, timeout_seconds, started_at="", output="", worker_id=""):
+        self.timeouts.append({"timeoutSeconds": timeout_seconds, "output": output, "workerId": worker_id})
         return {
             "status": "timeout",
             "processedCount": 0,
@@ -142,6 +142,8 @@ class OntologyReasoningSchedulerTests(unittest.TestCase):
         self.assertEqual(60, result["retryAfterSeconds"])
         self.assertEqual(1, len(runner.timeouts))
         self.assertEqual(12, runner.timeouts[0]["timeoutSeconds"])
+        self.assertEqual(scheduler.worker_id, runner.timeouts[0]["workerId"])
+        self.assertEqual(scheduler.worker_id, cycle.environment["ONTOLOGY_REASONING_WORKER_ID"])
         self.assertIn(signal_value("SIGTERM"), process.signals)
 
     def test_stop_only_signals_the_child_while_communicate_owns_pipe_cleanup(self):

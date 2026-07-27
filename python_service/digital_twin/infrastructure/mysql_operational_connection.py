@@ -799,4 +799,48 @@ MYSQL_SCHEMA = [
         KEY idx_reasoning_mailbox_source_event (source_event_id)
     ) ENGINE=InnoDB DEFAULT CHARSET=utf8mb4 COLLATE=utf8mb4_unicode_ci
     """,
+    """
+    CREATE TABLE IF NOT EXISTS ontology_reasoning_work_items (
+        mailbox_key VARCHAR(191) PRIMARY KEY,
+        source_event_id VARCHAR(191) NOT NULL,
+        work_state VARCHAR(32) NOT NULL DEFAULT 'queued',
+        lease_owner VARCHAR(191) NOT NULL DEFAULT '',
+        lease_until VARCHAR(40) NOT NULL DEFAULT '',
+        not_before_at VARCHAR(40) NOT NULL DEFAULT '',
+        attempt_count INT NOT NULL DEFAULT 0,
+        last_stage VARCHAR(64) NOT NULL DEFAULT 'queued',
+        stage_started_at VARCHAR(40) NOT NULL DEFAULT '',
+        heartbeat_at VARCHAR(40) NOT NULL DEFAULT '',
+        checkpoint_json LONGTEXT NOT NULL,
+        last_error VARCHAR(255) NOT NULL DEFAULT '',
+        created_at VARCHAR(40) NOT NULL,
+        updated_at VARCHAR(40) NOT NULL,
+        KEY idx_reasoning_work_ready (work_state, not_before_at, lease_until, updated_at),
+        KEY idx_reasoning_work_source (source_event_id)
+    ) ENGINE=InnoDB DEFAULT CHARSET=utf8mb4 COLLATE=utf8mb4_unicode_ci
+    """,
+    """
+    CREATE TABLE IF NOT EXISTS ontology_reasoning_queue_state (
+        state_id VARCHAR(64) PRIMARY KEY,
+        pending_entry_count INT NOT NULL DEFAULT 0,
+        running_entry_count INT NOT NULL DEFAULT 0,
+        retrying_entry_count INT NOT NULL DEFAULT 0,
+        pending_symbol_count INT NOT NULL DEFAULT 0,
+        oldest_pending_at VARCHAR(40) NOT NULL DEFAULT '',
+        pending_symbols_json LONGTEXT NOT NULL,
+        active_worker_id VARCHAR(191) NOT NULL DEFAULT '',
+        active_lease_until VARCHAR(40) NOT NULL DEFAULT '',
+        last_stage VARCHAR(64) NOT NULL DEFAULT '',
+        last_stage_at VARCHAR(40) NOT NULL DEFAULT '',
+        last_completed_at VARCHAR(40) NOT NULL DEFAULT '',
+        last_timeout_at VARCHAR(40) NOT NULL DEFAULT '',
+        version BIGINT NOT NULL DEFAULT 0,
+        updated_at VARCHAR(40) NOT NULL
+    ) ENGINE=InnoDB DEFAULT CHARSET=utf8mb4 COLLATE=utf8mb4_unicode_ci
+    """,
+    """
+    INSERT IGNORE INTO ontology_reasoning_queue_state (
+        state_id, pending_symbols_json, updated_at
+    ) VALUES ('global', '[]', '')
+    """,
 ]

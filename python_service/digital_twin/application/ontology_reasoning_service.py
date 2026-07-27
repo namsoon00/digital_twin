@@ -1,8 +1,9 @@
 import hashlib
 import inspect
+import os
 import time
 from datetime import datetime, timezone
-from typing import Callable, Dict, Iterable, List, Tuple
+from typing import Callable, Dict, Iterable, List, Mapping, Tuple
 
 from ..domain.events import DomainEvent, ONTOLOGY_REASONING_REQUESTED, ontology_reasoning_completed_event
 from ..domain.ontology_change_impact import requested_scope_families_for_event_fact_types
@@ -169,6 +170,8 @@ REVIEW_LEVEL_ORDER = {
 
 TRIGGER_ORDER = {
     "research-evidence-update": 6,
+    "news-analysis-enrichment": 6,
+    "research-evidence-lifecycle": 6,
     "investment-calendar-update": 5,
     "market-data-update": 4,
     "kis-realtime-websocket": 3,
@@ -195,6 +198,8 @@ COALESCIBLE_REALTIME_TRIGGERS = {
 
 COALESCIBLE_RESEARCH_TRIGGERS = {
     "research-evidence-update",
+    "news-analysis-enrichment",
+    "research-evidence-lifecycle",
 }
 
 OFF_SESSION_REFERENCE_FIELDS = {
@@ -326,12 +331,66 @@ def lightweight_ontology_reasoning_queue_state(
             "pendingSymbolCount": 0,
             "overduePendingSymbolCount": 0,
         },
-        "queueHealth": {"status": "healthy", "reason": ""},
+        "queueHealth": {"status": "healthy", "reason": "", "scope": "probe-connectivity"},
+        "probeHealth": {"status": "healthy", "reason": ""},
         "mailbox": {"enabled": bool(mailbox_store)},
     }
     if not enabled:
         result.update({"status": "disabled", "probeDurationMs": 0})
         return result
+
+    # A durable queue-state row is maintained when a source event enters or
+    # leaves the mailbox.  Lower-priority workers must never scan event JSON
+    # or the large reasoning cursor just to decide whether they should yield.
+    # The legacy path remains for test doubles and rolling migration recovery.
+    mailbox_enabled = bool(mailbox_store) and truthy(
+        configured.get("ontologyReasoningMailboxEnabled"),
+        True,
+    )
+    fast_state_reader = getattr(mailbox_store, "fast_state", None) if mailbox_enabled else None
+    if callable(fast_state_reader):
+        try:
+            mailbox = dict(fast_state_reader() or {})
+        except Exception as error:  # noqa: BLE001 - legacy bounded scan remains the recovery path.
+            mailbox = {"enabled": True, "status": "error", "reason": str(error)[:180]}
+        if str(mailbox.get("status") or "") != "error":
+            mailbox["enabled"] = True
+            pending = max(0, int(float(mailbox.get("pendingEntryCount") or 0)))
+            symbols = [
+                str(symbol or "").upper().strip()
+                for symbol in mailbox.get("pendingSymbols") or []
+                if str(symbol or "").strip()
+            ]
+            oldest = str(mailbox.get("oldestPendingAt") or "").strip()
+            result.update({
+                "status": "pending" if pending else "idle",
+                "probeMode": "durable-mailbox-state-v2",
+                # The event-log count is an audit metric.  It is deliberately
+                # not read on the scheduling hot path.
+                "rawRequestCount": 0,
+                "auditRequestCount": None,
+                "effectivePendingCount": pending,
+                "mailboxPendingEntryCount": pending,
+                "runningEntryCount": max(0, int(float(mailbox.get("runningEntryCount") or 0))),
+                "retryingEntryCount": max(0, int(float(mailbox.get("retryingEntryCount") or 0))),
+                "pendingSymbolCount": max(0, int(float(mailbox.get("pendingSymbolCount") or len(symbols)))),
+                "pendingSymbols": symbols,
+                "oldestRequestAt": oldest,
+                "queueDispatch": {
+                    "mode": "durable-queue-state",
+                    "oldestRequestAt": oldest,
+                    "pendingSymbolCount": max(0, int(float(mailbox.get("pendingSymbolCount") or len(symbols)))),
+                    "overduePendingSymbolCount": 0,
+                },
+                # ``probeHealth`` means the read model was available.  It is
+                # distinct from queue-delay health, which is evaluated by the
+                # operational health service from age and throughput.
+                "probeHealth": {"status": "healthy", "reason": ""},
+                "queueHealth": {"status": "healthy", "reason": "", "scope": "probe-connectivity"},
+                "mailbox": mailbox,
+                "probeDurationMs": max(0, int((time.perf_counter() - started) * 1000)),
+            })
+            return result
 
     errors = []
     processed = set()
@@ -365,10 +424,6 @@ def lightweight_ontology_reasoning_queue_state(
         pending.append(event)
     pending.sort(key=event_time_key)
 
-    mailbox_enabled = bool(mailbox_store) and truthy(
-        configured.get("ontologyReasoningMailboxEnabled"),
-        True,
-    )
     mailbox = {"enabled": mailbox_enabled}
     if mailbox_enabled:
         summary = getattr(mailbox_store, "summary", None)
@@ -422,6 +477,11 @@ def lightweight_ontology_reasoning_queue_state(
             "overduePendingSymbolCount": 0,
         },
         "queueHealth": {
+            "status": "degraded" if errors else "healthy",
+            "reason": " · ".join(errors),
+            "scope": "probe-connectivity",
+        },
+        "probeHealth": {
             "status": "degraded" if errors else "healthy",
             "reason": " · ".join(errors),
         },
@@ -573,6 +633,85 @@ class OntologyReasoningRunner:
 
     def mailbox_retention_hours(self) -> int:
         return int_setting(self.settings, "ontologyReasoningMailboxRetentionHours", 72, 1, 24 * 90)
+
+    def mailbox_work_lease_seconds(self) -> int:
+        configured = int_setting(self.settings, "ontologyReasoningWorkLeaseSeconds", 600, 30, 3600)
+        # A parent can only reclaim a child after its hard timeout and grace
+        # window. Keep the durable lease beyond that boundary so a surviving
+        # native TypeDB call cannot be raced by the next scheduler turn.
+        protected = (
+            self.execution_timeout_seconds()
+            + self.execution_timeout_grace_seconds()
+            + self.execution_timeout_backoff_seconds()
+        )
+        return min(3600, max(configured, protected))
+
+    def mailbox_work_retry_seconds(self) -> int:
+        return int_setting(self.settings, "ontologyReasoningWorkRetrySeconds", 30, 5, 900)
+
+    def mailbox_worker_id(self) -> str:
+        configured = str(
+            self.settings.get("ontologyReasoningWorkerId")
+            or os.environ.get("ONTOLOGY_REASONING_WORKER_ID")
+            or ""
+        ).strip()
+        return configured or "reasoning:" + str(os.getpid())
+
+    def mailbox_entries_for_requests(self, requests: Iterable[object]) -> List[Dict[str, str]]:
+        entries = []
+        for event in requests or []:
+            metadata = self.mailbox_metadata(event)
+            mailbox_key = str(metadata.get("mailboxKey") or "").strip()
+            source_event_id = str(metadata.get("sourceEventId") or "").strip()
+            if mailbox_key and source_event_id and not any(
+                item["mailboxKey"] == mailbox_key and item["sourceEventId"] == source_event_id
+                for item in entries
+            ):
+                entries.append({"mailboxKey": mailbox_key, "sourceEventId": source_event_id})
+        return entries
+
+    def claim_mailbox_work(self, entries: Iterable[Mapping[str, object]]) -> Dict[str, object]:
+        claim = getattr(self.mailbox_store, "claim", None) if self.mailbox_enabled() else None
+        if not callable(claim):
+            return {"enabled": False, "claimed": list(entries or []), "blocked": []}
+        try:
+            return dict(claim(entries, self.mailbox_worker_id(), self.mailbox_work_lease_seconds()) or {})
+        except Exception as error:  # noqa: BLE001 - existing mailbox safety still prevents a stale acknowledgement.
+            return {"enabled": False, "claimed": list(entries or []), "blocked": [], "reason": str(error)[:180]}
+
+    def checkpoint_mailbox_work(
+        self,
+        entries: Iterable[Mapping[str, object]],
+        stage: str,
+        details: Mapping[str, object] = None,
+    ) -> None:
+        checkpoint = getattr(self.mailbox_store, "checkpoint", None) if self.mailbox_enabled() else None
+        if not callable(checkpoint):
+            return
+        try:
+            checkpoint(entries, stage, details or {}, worker_id=self.mailbox_worker_id())
+        except TypeError:
+            # Older store adapters are still safe because mailbox rows are
+            # source-revision guarded at acknowledgement time.
+            checkpoint(entries, stage, details or {})
+        except Exception:
+            return
+
+    def release_mailbox_work(self, entries: Iterable[Mapping[str, object]], reason: str, retry_after_seconds: int = 0) -> None:
+        release = getattr(self.mailbox_store, "release", None) if self.mailbox_enabled() else None
+        if not callable(release):
+            return
+        try:
+            release(
+                entries,
+                reason,
+                retry_after_seconds or self.mailbox_work_retry_seconds(),
+                worker_id=self.mailbox_worker_id(),
+            )
+        except TypeError:
+            release(entries, reason, retry_after_seconds or self.mailbox_work_retry_seconds())
+        except Exception:
+            return
 
     def source_freshness_enabled(self) -> bool:
         # Runtime settings explicitly enable this. Keeping compatibility
@@ -1176,8 +1315,11 @@ class OntologyReasoningRunner:
         cursor_payload = self.cursor_payload()
         progress = self.event_symbol_progress(cursor_payload)
         priority_symbols = self.priority_symbols()
+        ingress_reader = getattr(self.event_reader, "unmaterialized_reasoning_events", None)
         reader = getattr(self.event_reader, "recent_events", None)
-        if callable(reader):
+        if self.durable_mailbox_ingress_enabled() and callable(ingress_reader):
+            source_events = ingress_reader(limit=self.event_scan_limit(limit))
+        elif callable(reader):
             source_events = reader(
                 name=ONTOLOGY_REASONING_REQUESTED,
                 limit=self.event_scan_limit(limit),
@@ -1187,6 +1329,21 @@ class OntologyReasoningRunner:
                 name=ONTOLOGY_REASONING_REQUESTED,
                 limit=self.event_scan_limit(limit),
             )
+        if self.durable_mailbox_ingress_enabled():
+            # Pre-ingress rows that were already consumed by the legacy cursor
+            # should be sealed once, otherwise they remain at the front of the
+            # bounded repair query forever.
+            terminalize = getattr(self.mailbox_store, "terminalize_direct_events", None)
+            already_processed = [event for event in source_events if event.event_id in processed]
+            if callable(terminalize) and already_processed:
+                try:
+                    terminalize(
+                        already_processed,
+                        state="completed",
+                        reason="already processed before durable reasoning ingress",
+                    )
+                except Exception:
+                    pass
         ranked_events = []
         for event in source_events:
             if event.event_id in processed or event_changed_count(event) <= 0:
@@ -1209,6 +1366,13 @@ class OntologyReasoningRunner:
         )
         return [item[1] for item in ranked_events[: max(1, int(limit or self.batch_size()))]]
 
+    def durable_mailbox_ingress_enabled(self) -> bool:
+        """Whether coalescible events enter MySQL mailbox at publish time."""
+        value = self.settings.get("ontologyReasoningMailboxIngressEnabled")
+        if not truthy(value, True):
+            return False
+        return callable(getattr(self.event_reader, "unmaterialized_reasoning_events", None))
+
     def mailbox_source_requests(self, limit: int = 0) -> List[object]:
         """Read unprocessed fungible events before cadence filtering.
 
@@ -1219,6 +1383,11 @@ class OntologyReasoningRunner:
         due.
         """
         if not self.mailbox_enabled():
+            return []
+        if self.durable_mailbox_ingress_enabled():
+            # The normal path is atomically ingressed with the source event.
+            # ``pending_work`` passes any unmaterialized repair candidates to
+            # ``synchronize_mailbox`` without reopening the event-log scan.
             return []
         processed = set(self.cursor_store.processed_event_ids())
         reader = getattr(self.event_reader, "recent_events", None)
@@ -1606,6 +1775,19 @@ class OntologyReasoningRunner:
             self.cursor_store.mark_processed(completed)
         if discarded:
             self.persist_superseded_events(discarded)
+        # Direct/non-fungible requests do not own a mailbox slot, but they do
+        # own an ingress marker. Seal it together with cursor progress so the
+        # bounded repair reader cannot replay it after a restart.
+        terminalize = getattr(self.mailbox_store, "terminalize_direct_events", None) if self.mailbox_enabled() else None
+        if callable(terminalize):
+            for state in {"completed", "superseded", "expired"}:
+                event_ids = [event_id for event_id, candidate in values.items() if candidate == state]
+                if not event_ids:
+                    continue
+                try:
+                    terminalize(event_ids, state=state, reason="reasoning cursor terminal state")
+                except Exception:
+                    continue
         return {"completed": completed, "discarded": discarded}
 
     def pending_work(self, limit: int = 0, hydrate_mailbox: bool = True) -> Dict[str, object]:
@@ -1617,7 +1799,10 @@ class OntologyReasoningRunner:
         completed TypeDB projection and inference.
         """
         source_requests = self.pending_requests(limit)
-        mailbox_sources = self.mailbox_source_requests(limit) if hydrate_mailbox else source_requests
+        if hydrate_mailbox and self.durable_mailbox_ingress_enabled():
+            mailbox_sources = [event for event in source_requests if self.mailbox_entries_for_event(event)]
+        else:
+            mailbox_sources = self.mailbox_source_requests(limit) if hydrate_mailbox else source_requests
         mailbox = self.synchronize_mailbox(mailbox_sources, enqueue_new=hydrate_mailbox)
         handled_ids = set(mailbox.get("handledEventIds") or []) if mailbox.get("enabled") else set()
         direct_source_requests = [
@@ -2388,12 +2573,19 @@ class OntologyReasoningRunner:
             if int(runtime.get("durationMs") or 0) > 0:
                 payload["lastProjectionRuntime"] = runtime
         self.save_cursor_payload(payload)
+        completion = getattr(self.mailbox_store, "record_completion", None) if self.mailbox_enabled() else None
+        if callable(completion):
+            try:
+                completion({"stage": "typedb-inference-verified"})
+            except Exception:
+                pass
 
     def record_execution_timeout(
         self,
         timeout_seconds: int,
         started_at: str = "",
         output: str = "",
+        worker_id: str = "",
     ) -> Dict[str, object]:
         """Persist a durable cooldown after the isolated worker is terminated.
 
@@ -2423,6 +2615,24 @@ class OntologyReasoningRunner:
             "retryAfterSeconds": backoff_seconds,
             "reason": "격리된 TypeDB 추론 실행이 시간 상한을 넘어 중지되었습니다. 보류된 ABox 후보는 다음 안전 재시도에서 복구합니다.",
         }
+        mailbox_checkpoint = self.mailbox_summary()
+        timeout_recovery_count = 0
+        timeout_recovery = getattr(self.mailbox_store, "recover_worker_timeout", None) if self.mailbox_enabled() else None
+        if callable(timeout_recovery):
+            try:
+                timeout_recovery_count = int(timeout_recovery(
+                    str(worker_id or self.mailbox_worker_id()),
+                    backoff_seconds,
+                    "isolated reasoning execution timeout",
+                ) or 0)
+            except Exception:
+                timeout_recovery_count = 0
+        timeout_recorder = getattr(self.mailbox_store, "record_timeout", None) if self.mailbox_enabled() else None
+        if callable(timeout_recorder):
+            try:
+                timeout_recorder({"stage": str(mailbox_checkpoint.get("lastStage") or "timeout")})
+            except Exception:
+                pass
         payload["executionTimeoutGuard"] = guard
         summary = {
             "startedAt": str(started_at or ""),
@@ -2433,6 +2643,12 @@ class OntologyReasoningRunner:
             "alertCount": 0,
             "deferredReason": guard["reason"],
             "timeoutOutput": str(output or "")[-240:],
+            "mailboxCheckpoint": {
+                key: mailbox_checkpoint.get(key)
+                for key in ["pendingEntryCount", "runningEntryCount", "retryingEntryCount", "lastStage", "lastStageAt", "activeWorkerId"]
+                if mailbox_checkpoint.get(key) not in (None, "", [], {})
+            },
+            "mailboxTimeoutRecoveryCount": timeout_recovery_count,
         }
         history = [
             dict(item)
@@ -2888,6 +3104,53 @@ class OntologyReasoningRunner:
                 "coalescedEventCount": len(durable_superseded_ids),
                 **queue_metadata,
             }
+        mailbox_work_entries = self.mailbox_entries_for_requests(selected_requests)
+        mailbox_lease = self.claim_mailbox_work(mailbox_work_entries)
+        # A real durable lease store failed while claiming the selected
+        # revision. Running anyway would turn a transient operational fault
+        # into concurrent TypeDB work, so defer and keep the source rows
+        # intact. Lightweight/legacy adapters without ``claim`` deliberately
+        # retain their compatibility path below.
+        if (
+            mailbox_work_entries
+            and not mailbox_lease.get("enabled")
+            and str(mailbox_lease.get("reason") or "").strip()
+        ):
+            return {
+                "status": "deferred",
+                "processedCount": 0,
+                "alertCount": 0,
+                "symbols": symbols,
+                "retryAfterSeconds": self.mailbox_work_retry_seconds(),
+                "deferredReason": "영속 추론 작업 lease를 확보하지 못해 안전 재시도합니다.",
+                "mailboxWorkLease": mailbox_lease,
+                "coalescedEventCount": len(durable_superseded_ids),
+                **queue_metadata,
+            }
+        claimed_mailbox_entries = list(mailbox_lease.get("claimed") or []) if mailbox_lease.get("enabled") else list(mailbox_work_entries)
+        blocked_mailbox_entries = list(mailbox_lease.get("blocked") or []) if mailbox_lease.get("enabled") else []
+        if blocked_mailbox_entries:
+            self.release_mailbox_work(
+                claimed_mailbox_entries,
+                "A newer or actively leased mailbox revision owns this reasoning turn.",
+                self.mailbox_work_retry_seconds(),
+            )
+            return {
+                "status": "deferred",
+                "processedCount": 0,
+                "alertCount": 0,
+                "symbols": symbols,
+                "retryAfterSeconds": self.mailbox_work_retry_seconds(),
+                "deferredReason": "영속 추론 작업이 최신 revision 또는 다른 안전 lease를 기다리고 있습니다.",
+                "mailboxWorkLease": mailbox_lease,
+                "coalescedEventCount": len(durable_superseded_ids),
+                **queue_metadata,
+            }
+        self.checkpoint_mailbox_work(
+            claimed_mailbox_entries,
+            "snapshot-preparation",
+            {"symbols": symbols, "selectedRequestCount": len(selected_requests)},
+        )
         stage_timing: Dict[str, int] = {}
         monitor_started = time.perf_counter()
         runner = self.monitor_runner_factory()
@@ -2901,12 +3164,30 @@ class OntologyReasoningRunner:
             runner_kwargs["symbol_filter"] = symbols
         if "reasoning_context" in runner_parameters or runner_accepts_kwargs:
             runner_kwargs["reasoning_context"] = reasoning_context
-        alerts = runner.run_once(**runner_kwargs)
+        try:
+            alerts = runner.run_once(**runner_kwargs)
+        except Exception:
+            self.release_mailbox_work(
+                claimed_mailbox_entries,
+                "The monitor/projection stage raised before a verified TypeDB result.",
+                self.mailbox_work_retry_seconds(),
+            )
+            raise
         stage_timing["monitorAndProjectionMs"] = int((time.perf_counter() - monitor_started) * 1000)
+        self.checkpoint_mailbox_work(
+            claimed_mailbox_entries,
+            "typedb-projection-complete",
+            {"monitorAndProjectionMs": stage_timing["monitorAndProjectionMs"]},
+        )
         projection_gate = self.projection_gate(runner)
         if not projection_gate.get("ready"):
             self.mark_projection_attempt(symbols)
             if projection_gate.get("retryable"):
+                self.release_mailbox_work(
+                    claimed_mailbox_entries,
+                    str(projection_gate.get("reason") or "TypeDB writer is not ready."),
+                    int(projection_gate.get("retryAfterSeconds") or self.projection_retry_seconds()),
+                )
                 return {
                     "status": "deferred",
                     "processedCount": 0,
@@ -2927,6 +3208,11 @@ class OntologyReasoningRunner:
                     "coalescedEventCount": len(durable_superseded_ids),
                     **queue_metadata,
                 }
+            self.release_mailbox_work(
+                claimed_mailbox_entries,
+                str(projection_gate.get("reason") or "TypeDB graph cycle is not ready."),
+                self.projection_circuit_remaining_seconds() or self.projection_retry_seconds(),
+            )
             circuit = self.record_projection_failure(
                 str(projection_gate.get("reason") or "TypeDB graph cycle is not ready."),
                 projection_gate.get("results") or [],
@@ -2974,6 +3260,16 @@ class OntologyReasoningRunner:
             event for event in cursor_requests
             if self.mailbox_metadata(event).get("mailboxKey")
         ]
+        if blocked_request_ids:
+            blocked_mailbox = self.mailbox_entries_for_requests(
+                event for event in selected_requests
+                if str(getattr(event, "event_id", "") or "") in blocked_request_ids
+            )
+            self.release_mailbox_work(
+                blocked_mailbox,
+                "Research evidence requires an aligned ABox/InferenceBox generation before acknowledgement.",
+                self.projection_retry_seconds(),
+            )
         completed = ontology_reasoning_completed_event(
             trigger_event_ids,
             account_ids,
@@ -2994,6 +3290,28 @@ class OntologyReasoningRunner:
             symbol_batches,
             superseded_by_lead=work.get("supersededByLead"),
         )
+        direct_terminalize = getattr(self.mailbox_store, "terminalize_direct_events", None) if self.mailbox_enabled() else None
+        if callable(direct_terminalize):
+            direct_by_id = {
+                str(getattr(event, "event_id", "") or "").strip(): event
+                for event in direct_cursor_requests
+                if str(getattr(event, "event_id", "") or "").strip()
+            }
+            for state, result_key in (("completed", "completedEventIds"), ("superseded", "supersededEventIds")):
+                terminal_events = [
+                    direct_by_id[event_id]
+                    for event_id in progress_result.get(result_key) or []
+                    if event_id in direct_by_id
+                ]
+                if terminal_events:
+                    try:
+                        direct_terminalize(
+                            terminal_events,
+                            state=state,
+                            reason="TypeDB projection and native inference completed",
+                        )
+                    except Exception:
+                        pass
         mailbox_entries = []
         for event in mailbox_cursor_requests:
             event_id = str(getattr(event, "event_id", "") or "").strip()
@@ -3019,6 +3337,11 @@ class OntologyReasoningRunner:
                 mailbox_completion = self.persist_terminal_mailbox_events(terminal_states)
             except Exception as error:  # noqa: BLE001 - retain the mailbox entry for a safe retry.
                 mailbox_ack_error = str(error)[:180]
+                self.release_mailbox_work(
+                    claimed_mailbox_entries,
+                    "Mailbox acknowledgement failed after a verified graph cycle: " + mailbox_ack_error,
+                    self.mailbox_work_retry_seconds(),
+                )
         processed_symbols = []
         for event in cursor_requests:
             for symbol in symbol_batches.get(str(getattr(event, "event_id", "") or ""), []) or []:
@@ -3410,7 +3733,16 @@ class OntologyReasoningRunner:
             ),
             "storageGuard": storage_guard,
             "projectionCoordinator": self.projection_coordinator_state(),
-            "queueHealth": {"status": queue_status, "reason": queue_reason},
+            # Scheduler readiness, durable probe connectivity, and actual
+            # queue-delay SLO are intentionally separate signals. A readable
+            # queue can still be delayed, and a normal fairness drain is not
+            # a TypeDB failure.
+            "queueHealth": {"status": queue_status, "reason": queue_reason, "scope": "scheduler-readiness"},
+            "probeHealth": {
+                "status": "degraded" if mailbox.get("status") == "error" else "healthy",
+                "reason": str(mailbox.get("reason") or "") if mailbox.get("status") == "error" else "",
+                "scope": "durable-queue-read-model",
+            },
             "queueDispatch": queue_dispatch,
             "queueDelayHealth": (
                 dict(cursor_payload.get("queueDelayHealth") or {})

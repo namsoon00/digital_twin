@@ -8,6 +8,7 @@ from ..domain.accounts import AccountConfig, split_symbols
 from ..domain.data_freshness import evaluate_notification_data_freshness
 from ..domain.events import (
     DomainEvent,
+    ONTOLOGY_REASONING_REQUESTED,
     alerts_detected_event,
     monitoring_cycle_completed_event,
     snapshot_collected_event,
@@ -48,6 +49,7 @@ from .settings import read_json, settings_path, utc_now
 from .mysql_notification_jobs import MySQLNotificationJobStore
 from .mysql_operational_connection import MYSQL_SCHEMA, MySQLConnectionProxy, MySQLOperationalConnection
 from .mysql_operational_events import domain_event_from_row, insert_domain_event_with_connection
+from .mysql_reasoning_mailbox import MySQLOntologyReasoningMailboxStore
 from .mysql_operational_helpers import (
     _is_duplicate_key_error,
     _json_loads,
@@ -316,6 +318,39 @@ class MySQLEventLog(MySQLOperationalConnection):
     def handle(self, event: DomainEvent) -> None:
         with self.transaction() as connection:
             insert_domain_event_with_connection(connection, event)
+            if str(getattr(event, "name", "") or "") == ONTOLOGY_REASONING_REQUESTED:
+                try:
+                    MySQLOntologyReasoningMailboxStore.ingress_event_with_connection(connection, event)
+                except Exception:
+                    # The event remains durable and the runner's bounded
+                    # reconciliation query will recover it.  A queue-summary
+                    # migration must never reject a source fact.
+                    pass
+
+    def unmaterialized_reasoning_events(self, limit: int = 0) -> List[DomainEvent]:
+        """Read only reasoning events not atomically projected into mailbox.
+
+        This is a bounded repair path for legacy rows, non-fungible requests,
+        or an interrupted ingress transaction.  Normal realtime work is read
+        from the mailbox state table instead of repeatedly scanning payloads.
+        """
+        bounded = max(1, min(1000, int(limit or 200)))
+        with self.connect() as connection:
+            rows = connection.execute(
+                """
+                SELECT events.event_id, events.name, events.aggregate_id, events.occurred_at,
+                       events.correlation_id, events.payload_json, events.event_json
+                FROM domain_events events
+                LEFT JOIN ontology_reasoning_mailbox_events mailbox
+                  ON mailbox.event_id = events.event_id
+                WHERE events.name = %s
+                  AND (mailbox.event_id IS NULL OR mailbox.state = 'direct-pending')
+                ORDER BY events.occurred_at DESC, events.event_id DESC
+                LIMIT %s
+                """,
+                (ONTOLOGY_REASONING_REQUESTED, bounded),
+            ).fetchall()
+        return [domain_event_from_row(row) for row in reversed(rows)]
 
     def insert_event_dict(self, event: Dict[str, object]) -> None:
         self.handle(DomainEvent.from_dict(event))

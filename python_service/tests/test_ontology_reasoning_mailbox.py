@@ -616,17 +616,25 @@ class OntologyReasoningMailboxTests(unittest.TestCase):
             def __init__(self, events):
                 super().__init__(events)
                 self.direct_reads = 0
-                self.repair_reads = 0
+                self.repair_pages = []
 
             def direct_pending_reasoning_events(self, limit=0):
                 del limit
                 self.direct_reads += 1
                 return []
 
+            def reasoning_ingress_repair_page(self, after_occurred_at="", after_event_id="", limit=0):
+                self.repair_pages.append((after_occurred_at, after_event_id, limit))
+                return {
+                    "events": list(self.events),
+                    "cursor": {"occurredAt": "2026-07-24T00:00:00Z", "eventId": "legacy-ingress-repair"},
+                    "scannedCount": 20,
+                    "recoveredEventCount": len(self.events),
+                    "exhausted": True,
+                }
+
             def unmaterialized_reasoning_events(self, limit=0):
-                self.repair_reads += 1
-                self.asserted_limit = limit
-                return list(self.events)
+                raise AssertionError("indexed repair page should replace the legacy anti-join")
 
         event = research_evidence_request(
             "legacy-ingress-repair",
@@ -643,8 +651,11 @@ class OntologyReasoningMailboxTests(unittest.TestCase):
         self.assertEqual([event.event_id], [item.event_id for item in first])
         self.assertEqual([], second)
         self.assertEqual(2, reader.direct_reads)
-        self.assertEqual(1, reader.repair_reads)
-        self.assertLessEqual(reader.asserted_limit, 100)
+        self.assertEqual([("", "", 100)], reader.repair_pages)
+        repair = runner.status()["ingressRepair"]
+        self.assertEqual("paged-index-scan", repair["mode"])
+        self.assertEqual(20, repair["lastScannedCount"])
+        self.assertEqual("legacy-ingress-repair", repair["cursor"]["eventId"])
 
     def test_failed_ingress_repair_waits_for_the_next_repair_interval(self):
         class FailingRepairReader(Reader):

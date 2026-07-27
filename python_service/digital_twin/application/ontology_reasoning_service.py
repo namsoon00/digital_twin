@@ -761,7 +761,7 @@ class OntologyReasoningRunner:
         return int_setting(self.settings, "ontologyReasoningIngressRepairScanLimit", fallback, 10, 250)
 
     def ingress_repair_interval_seconds(self) -> int:
-        return int_setting(self.settings, "ontologyReasoningIngressRepairIntervalSeconds", 300, 30, 24 * 3600)
+        return int_setting(self.settings, "ontologyReasoningIngressRepairIntervalSeconds", 60, 30, 24 * 3600)
 
     def min_interval_seconds(self) -> int:
         return int_setting(self.settings, "ontologyReasoningMinIntervalSeconds", 180, 0, 3600)
@@ -1343,22 +1343,52 @@ class OntologyReasoningRunner:
 
     def ingress_repair_due(self, payload: Dict[str, object] = None) -> bool:
         payload = self.cursor_payload() if payload is None else dict(payload or {})
+        state = payload.get("lastReasoningIngressRepair")
+        if isinstance(state, dict) and state and not str(state.get("mode") or "").strip():
+            # Upgrade the previous anti-join record to the indexed cursor
+            # path immediately once, then apply the normal retry interval.
+            return True
         return self.timestamp_due(
             str(payload.get("lastReasoningIngressRepairAt") or ""),
             self.ingress_repair_interval_seconds(),
         )
 
-    def mark_ingress_repair_attempt(self, error: object = "") -> None:
+    def ingress_repair_cursor(self, payload: Dict[str, object] = None) -> Dict[str, str]:
+        payload = self.cursor_payload() if payload is None else dict(payload or {})
+        raw = payload.get("reasoningIngressRepairCursor")
+        raw = raw if isinstance(raw, dict) else {}
+        return {
+            "occurredAt": str(raw.get("occurredAt") or ""),
+            "eventId": str(raw.get("eventId") or ""),
+        }
+
+    def mark_ingress_repair_attempt(
+        self,
+        error: object = "",
+        repair_page: Dict[str, object] = None,
+        mode: str = "legacy-anti-join",
+    ) -> None:
         payload = self.cursor_payload()
         now = self.now_provider()
         if now.tzinfo is None:
             now = now.replace(tzinfo=timezone.utc)
         stamp = now.astimezone(timezone.utc).isoformat().replace("+00:00", "Z")
         message = str(error or "").strip()[:180]
+        page = dict(repair_page or {}) if isinstance(repair_page, dict) else {}
+        cursor = page.get("cursor") if isinstance(page.get("cursor"), dict) else {}
+        if cursor:
+            payload["reasoningIngressRepairCursor"] = {
+                "occurredAt": str(cursor.get("occurredAt") or ""),
+                "eventId": str(cursor.get("eventId") or ""),
+            }
         payload["lastReasoningIngressRepairAt"] = stamp
         payload["lastReasoningIngressRepair"] = {
             "status": "error" if message else "ok",
             "error": message,
+            "mode": str(mode or "legacy-anti-join"),
+            "scannedCount": int(page.get("scannedCount") or 0),
+            "recoveredEventCount": int(page.get("recoveredEventCount") or 0),
+            "exhausted": bool(page.get("exhausted")),
         }
         self.save_cursor_payload(payload)
 
@@ -1376,6 +1406,7 @@ class OntologyReasoningRunner:
         periodic recovery pass for interrupted ingress transactions.
         """
         ingress_reader = getattr(self.event_reader, "unmaterialized_reasoning_events", None)
+        repair_page_reader = getattr(self.event_reader, "reasoning_ingress_repair_page", None)
         direct_reader = getattr(self.event_reader, "direct_pending_reasoning_events", None)
         reader = getattr(self.event_reader, "recent_events", None)
         source_events = []
@@ -1386,13 +1417,29 @@ class OntologyReasoningRunner:
                 # The normal mailbox remains available; do not let an
                 # operational read failure block regular TypeDB work.
                 pass
-            if include_ingress_repair and callable(ingress_reader) and self.ingress_repair_due():
-                try:
-                    source_events.extend(ingress_reader(limit=self.ingress_repair_scan_limit(limit)) or [])
-                except Exception as error:
-                    self.mark_ingress_repair_attempt(error)
-                else:
-                    self.mark_ingress_repair_attempt()
+            if include_ingress_repair and self.ingress_repair_due():
+                if callable(repair_page_reader):
+                    cursor = self.ingress_repair_cursor()
+                    try:
+                        page = repair_page_reader(
+                            after_occurred_at=cursor["occurredAt"],
+                            after_event_id=cursor["eventId"],
+                            limit=self.ingress_repair_scan_limit(limit),
+                        )
+                        if not isinstance(page, dict):
+                            raise ValueError("ingress repair page must be a mapping")
+                        source_events.extend(page.get("events") or [])
+                    except Exception as error:
+                        self.mark_ingress_repair_attempt(error, mode="paged-index-scan")
+                    else:
+                        self.mark_ingress_repair_attempt(repair_page=page, mode="paged-index-scan")
+                elif callable(ingress_reader):
+                    try:
+                        source_events.extend(ingress_reader(limit=self.ingress_repair_scan_limit(limit)) or [])
+                    except Exception as error:
+                        self.mark_ingress_repair_attempt(error)
+                    else:
+                        self.mark_ingress_repair_attempt()
         elif self.durable_mailbox_ingress_enabled() and callable(ingress_reader):
             # Compatibility path for older stores that have not yet exposed
             # the direct-marker reader.
@@ -4308,6 +4355,11 @@ class OntologyReasoningRunner:
                 "lastAttemptAt": str(cursor_payload.get("lastReasoningIngressRepairAt") or ""),
                 "lastStatus": str((cursor_payload.get("lastReasoningIngressRepair") or {}).get("status") or ""),
                 "lastError": str((cursor_payload.get("lastReasoningIngressRepair") or {}).get("error") or ""),
+                "mode": str((cursor_payload.get("lastReasoningIngressRepair") or {}).get("mode") or ""),
+                "lastScannedCount": int((cursor_payload.get("lastReasoningIngressRepair") or {}).get("scannedCount") or 0),
+                "lastRecoveredEventCount": int((cursor_payload.get("lastReasoningIngressRepair") or {}).get("recoveredEventCount") or 0),
+                "lastPageExhausted": bool((cursor_payload.get("lastReasoningIngressRepair") or {}).get("exhausted")),
+                "cursor": self.ingress_repair_cursor(cursor_payload),
                 "due": self.ingress_repair_due(cursor_payload),
             },
             "pendingSymbols": pending_symbols,

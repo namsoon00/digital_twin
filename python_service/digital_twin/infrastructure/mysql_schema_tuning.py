@@ -80,6 +80,11 @@ MYSQL_OPERATIONAL_INDEXES: Dict[str, Sequence[MySQLIndexDefinition]] = {
         MySQLIndexDefinition("domain_events", "idx_domain_events_time", "`occurred_at`, `event_id`"),
         MySQLIndexDefinition(
             "domain_events",
+            "idx_domain_events_name_time_event",
+            "`name`, `occurred_at`, `event_id`",
+        ),
+        MySQLIndexDefinition(
+            "domain_events",
             "idx_domain_events_name_aggregate_time",
             "`name`, `aggregate_id`, `occurred_at`, `event_id`",
         ),

@@ -353,6 +353,88 @@ class MySQLEventLog(MySQLOperationalConnection):
             ).fetchall()
         return [domain_event_from_row(row) for row in reversed(rows)]
 
+    def reasoning_ingress_repair_page(
+        self,
+        after_occurred_at: str = "",
+        after_event_id: str = "",
+        limit: int = 0,
+    ) -> Dict[str, object]:
+        """Advance a small indexed page of legacy mailbox-ingress recovery.
+
+        Event ingress is atomic in the normal path, so recovery is exceptional.
+        The former anti-join scanned the append-only event log on every retry.
+        This cursor page scans only event identifiers in index order, then
+        loads full payloads solely for rows that genuinely lack a mailbox
+        marker. The cursor advances even when every scanned event is already
+        materialized.
+        """
+        bounded = max(1, min(250, int(limit or 100)))
+        after_time = str(after_occurred_at or "")
+        after_id = str(after_event_id or "")
+        with self.connect() as connection:
+            rows = connection.execute(
+                """
+                SELECT event_id, occurred_at
+                FROM domain_events
+                WHERE name = %s
+                  AND (
+                    occurred_at > %s
+                    OR (occurred_at = %s AND event_id > %s)
+                  )
+                ORDER BY occurred_at, event_id
+                LIMIT %s
+                """,
+                (ONTOLOGY_REASONING_REQUESTED, after_time, after_time, after_id, bounded),
+            ).fetchall()
+            event_ids = [str(row.get("event_id") or "").strip() for row in rows or []]
+            event_ids = [event_id for event_id in event_ids if event_id]
+            materialized = set()
+            if event_ids:
+                placeholders = ", ".join(["%s"] * len(event_ids))
+                marker_rows = connection.execute(
+                    "SELECT event_id FROM ontology_reasoning_mailbox_events "
+                    "WHERE event_id IN (" + placeholders + ")",
+                    tuple(event_ids),
+                ).fetchall()
+                materialized = {
+                    str(row.get("event_id") or "").strip()
+                    for row in marker_rows or []
+                    if str(row.get("event_id") or "").strip()
+                }
+            missing_ids = [event_id for event_id in event_ids if event_id not in materialized]
+            event_rows = []
+            if missing_ids:
+                placeholders = ", ".join(["%s"] * len(missing_ids))
+                event_rows = connection.execute(
+                    """
+                    SELECT event_id, name, aggregate_id, occurred_at,
+                           correlation_id, payload_json, event_json
+                    FROM domain_events
+                    WHERE event_id IN (""" + placeholders + ")",
+                    tuple(missing_ids),
+                ).fetchall()
+        rows_by_id = {
+            str(row.get("event_id") or "").strip(): row
+            for row in event_rows or []
+            if str(row.get("event_id") or "").strip()
+        }
+        events = [
+            domain_event_from_row(rows_by_id[event_id])
+            for event_id in missing_ids
+            if event_id in rows_by_id
+        ]
+        last = (rows or [])[-1] if rows else {}
+        return {
+            "events": events,
+            "cursor": {
+                "occurredAt": str(last.get("occurred_at") or after_time),
+                "eventId": str(last.get("event_id") or after_id),
+            },
+            "scannedCount": len(event_ids),
+            "recoveredEventCount": len(events),
+            "exhausted": len(rows or []) < bounded,
+        }
+
     def direct_pending_reasoning_events(self, limit: int = 0) -> List[DomainEvent]:
         """Read non-fungible reasoning handoffs from their durable marker.
 

@@ -8,6 +8,7 @@ from typing import Callable, Dict, Iterable, List, Mapping, Tuple
 
 from ..domain.events import DomainEvent, ONTOLOGY_REASONING_REQUESTED, ontology_reasoning_completed_event
 from ..domain.ontology_change_impact import requested_scope_families_for_event_fact_types
+from ..domain.ontology_reasoning_batch import adaptive_reasoning_batch_plan
 from ..domain.ontology_runtime_operations import native_replay_validation
 from ..domain.market_data import known_stock
 from ..domain.market_hours import evaluate_market_hours
@@ -1925,13 +1926,79 @@ class OntologyReasoningRunner:
                     symbols.append(symbol)
         return symbols
 
-    def request_symbol_batches(self, requests: Iterable[object]) -> Tuple[Dict[str, List[str]], List[str], int]:
+    def oldest_request_wait_seconds(self, requests: Iterable[object]) -> int:
+        """Return the oldest durable request age for operational batching only."""
+        now = self.now_provider()
+        if now.tzinfo is None:
+            now = now.replace(tzinfo=timezone.utc)
+        ages = []
+        for event in requests or []:
+            raw = str(getattr(event, "occurred_at", "") or "").strip()
+            if not raw:
+                continue
+            try:
+                observed = datetime.fromisoformat(raw.replace("Z", "+00:00"))
+            except ValueError:
+                continue
+            if observed.tzinfo is None:
+                observed = observed.replace(tzinfo=timezone.utc)
+            ages.append(max(0, int((now.astimezone(timezone.utc) - observed.astimezone(timezone.utc)).total_seconds())))
+        return max(ages or [0])
+
+    def reasoning_batch_plan(self, requests: Iterable[object]) -> Dict[str, object]:
+        """Choose a bounded multi-subject TypeDB turn from queue pressure.
+
+        This is an operational throughput decision. TypeDB continues to own
+        all investment-rule evaluation for every selected subject.
+        """
+        pending = list(requests or [])
+        hard_limit = self.effective_max_symbols_per_run()
+        if not self.native_typedb_rule_execution_enabled() and hard_limit <= 0:
+            return {
+                "version": "adaptive-reasoning-batch-v1",
+                "enabled": False,
+                "mode": "static-unbounded",
+                "targetSymbolLimit": 0,
+                "hardTargetSymbolLimit": 0,
+                "steadyTargetSymbolLimit": 0,
+                "burstTargetSymbolLimit": 0,
+                "pendingRequestCount": len(pending),
+                "pendingSymbolCount": len(self.request_symbols(pending)),
+                "oldestWaitSeconds": self.oldest_request_wait_seconds(pending),
+                "pressure": False,
+                "runtimeGuard": False,
+                "reasonCodes": ["nonnative-unbounded-symbol-limit"],
+            }
+        telemetry = self.execution_telemetry().get("last") or {}
+        return adaptive_reasoning_batch_plan(
+            self.settings,
+            native_rule_execution=self.native_typedb_rule_execution_enabled(),
+            hard_target_symbol_limit=hard_limit,
+            pending_request_count=len(pending),
+            pending_symbol_count=len(self.request_symbols(pending)),
+            oldest_wait_seconds=self.oldest_request_wait_seconds(pending),
+            recent_execution=telemetry,
+        )
+
+    def request_symbol_batches(
+        self,
+        requests: Iterable[object],
+        max_symbols_override: int = None,
+    ) -> Tuple[Dict[str, List[str]], List[str], int]:
         # Snapshot construction still preserves all portfolio and market
         # entities. Native schema-function subjects remain bounded by the
         # configured realtime cap; one coherent ABox/InferenceBox generation
         # can safely include the highest-priority subjects from more than one
         # source event.
-        max_symbols = self.effective_max_symbols_per_run()
+        hard_limit = self.effective_max_symbols_per_run()
+        if max_symbols_override is None:
+            max_symbols = hard_limit
+        else:
+            requested_limit = int(max_symbols_override or 0)
+            if hard_limit <= 0:
+                max_symbols = 0
+            else:
+                max_symbols = max(1, min(hard_limit, requested_limit or hard_limit))
         cursor_payload = self.cursor_payload()
         progress = self.event_symbol_progress(cursor_payload)
         priority_symbols = self.priority_symbols()
@@ -2452,6 +2519,7 @@ class OntologyReasoningRunner:
         cursor_payload: Dict[str, object] = None,
         fairness_drain: Dict[str, object] = None,
         omitted_symbol_count: int = 0,
+        batch_plan: Dict[str, object] = None,
     ) -> Dict[str, object]:
         """Expose the existing adaptive scheduler without changing priority.
 
@@ -2524,6 +2592,7 @@ class OntologyReasoningRunner:
             "effectiveIntervalSeconds": effective_interval,
             "oldestRequestAt": min(requested_at) if requested_at else "",
             "oldestSourceObservedAt": min(observed_at) if observed_at else "",
+            "batchPlan": dict(batch_plan or {}),
         }
 
     def projection_alert_outcomes(self, monitor_runner) -> List[Dict[str, object]]:
@@ -2900,7 +2969,7 @@ class OntologyReasoningRunner:
                     "fairnessDrainActive", "fairnessDrainReason", "backpressureActive",
                     "configuredIntervalSeconds", "effectiveIntervalSeconds",
                     "oldestRequestAt", "oldestSourceObservedAt", "pendingSymbolCount",
-                    "overduePendingSymbolCount", "unseenPendingSymbolCount",
+                    "overduePendingSymbolCount", "unseenPendingSymbolCount", "batchPlan",
                 ]
                 if key in queue_dispatch
             }
@@ -3028,7 +3097,15 @@ class OntologyReasoningRunner:
                 "coalescedEventCount": len(durable_superseded_ids),
                 **queue_metadata,
             }
-        symbol_batches, symbols, omitted_symbol_count = self.request_symbol_batches(requests)
+        batch_plan = self.reasoning_batch_plan(requests)
+        queue_metadata["batchPlan"] = dict(batch_plan)
+        symbol_batches, symbols, omitted_symbol_count = self.request_symbol_batches(
+            requests,
+            # ``0`` remains the historical non-native unbounded setting. Do
+            # not coerce it to one while passing the operational plan through
+            # this compatibility path.
+            max_symbols_override=int(batch_plan.get("targetSymbolLimit") or 0),
+        )
         selected_request_ids = {
             str(event_id or "").strip()
             for event_id in symbol_batches
@@ -3043,6 +3120,7 @@ class OntologyReasoningRunner:
             selected_requests,
             symbols,
             omitted_symbol_count=omitted_symbol_count,
+            batch_plan=batch_plan,
         )
         reasoning_context = reasoning_request_provenance(selected_requests, symbols)
         reasoning_context["queuePressure"] = {
@@ -3054,6 +3132,7 @@ class OntologyReasoningRunner:
                 or len(requests) > len(selected_requests)
             ),
         }
+        reasoning_context["batchPlan"] = dict(batch_plan)
         # A pending mailbox slot can be temporarily ineligible because its
         # symbol-level interval or retry protection has not elapsed.  Never
         # invoke the monitor with an empty subject filter in that case: older
@@ -3104,6 +3183,7 @@ class OntologyReasoningRunner:
             cursor_payload=cursor_payload,
             fairness_drain=fairness_drain,
             omitted_symbol_count=omitted_symbol_count,
+            batch_plan=batch_plan,
         )
         if not force and not self.projection_due(requests, cursor_payload, symbols):
             retry_after_seconds = self.projection_cooldown_remaining_seconds(requests, cursor_payload, symbols)
@@ -3654,7 +3734,11 @@ class OntologyReasoningRunner:
         pending = list(work.get("requests") or [])
         cursor_payload = self.cursor_payload()
         progress = self.event_symbol_progress()
-        batches, next_symbols, omitted_count = self.request_symbol_batches(pending)
+        batch_plan = self.reasoning_batch_plan(pending)
+        batches, next_symbols, omitted_count = self.request_symbol_batches(
+            pending,
+            max_symbols_override=int(batch_plan.get("targetSymbolLimit") or 0),
+        )
         selected_request_ids = {
             str(event_id or "").strip()
             for event_id in batches
@@ -3674,6 +3758,7 @@ class OntologyReasoningRunner:
             cursor_payload=cursor_payload,
             fairness_drain=fairness_drain,
             omitted_symbol_count=omitted_count,
+            batch_plan=batch_plan,
         )
         storage_guard = self.storage_guard_state()
         projection_circuit = self.projection_circuit_state()
@@ -3723,6 +3808,7 @@ class OntologyReasoningRunner:
             "pendingSymbols": pending_symbols,
             "nextSymbols": next_symbols,
             "nextOmittedSymbolCount": omitted_count,
+            "adaptiveBatchPlan": batch_plan,
             "fairnessMaxWaitSeconds": self.fairness_max_wait_seconds(),
             "fairnessDrainEnabled": self.fairness_drain_enabled(),
             "fairnessDrainMinIntervalSeconds": self.fairness_drain_min_interval_seconds(),

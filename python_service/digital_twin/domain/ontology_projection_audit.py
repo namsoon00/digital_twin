@@ -68,6 +68,8 @@ def compact_reasoning_request_context(
 
     raw_queue_pressure = values.get("queuePressure")
     queue_pressure = raw_queue_pressure if isinstance(raw_queue_pressure, Mapping) else {}
+    raw_batch_plan = values.get("batchPlan")
+    batch_plan = raw_batch_plan if isinstance(raw_batch_plan, Mapping) else {}
 
     def non_negative_integer(value: object) -> int:
         try:
@@ -94,6 +96,23 @@ def compact_reasoning_request_context(
             "selectedRequestCount": non_negative_integer(queue_pressure.get("selectedRequestCount")),
             "omittedSymbolCount": non_negative_integer(queue_pressure.get("omittedSymbolCount")),
             "hasDeferredWork": bool(queue_pressure.get("hasDeferredWork")),
+        },
+        # This is scheduler provenance only. It explains why several symbols
+        # shared one coherent TypeDB generation without becoming a RuleBox
+        # condition or a user-facing investment signal.
+        "batchPlan": {
+            "version": str(batch_plan.get("version") or "")[:80],
+            "enabled": bool(batch_plan.get("enabled")),
+            "mode": str(batch_plan.get("mode") or "")[:80],
+            "targetSymbolLimit": non_negative_integer(batch_plan.get("targetSymbolLimit")),
+            "hardTargetSymbolLimit": non_negative_integer(batch_plan.get("hardTargetSymbolLimit")),
+            "steadyTargetSymbolLimit": non_negative_integer(batch_plan.get("steadyTargetSymbolLimit")),
+            "burstTargetSymbolLimit": non_negative_integer(batch_plan.get("burstTargetSymbolLimit")),
+            "pendingRequestCount": non_negative_integer(batch_plan.get("pendingRequestCount")),
+            "pendingSymbolCount": non_negative_integer(batch_plan.get("pendingSymbolCount")),
+            "oldestWaitSeconds": non_negative_integer(batch_plan.get("oldestWaitSeconds")),
+            "runtimeGuard": bool(batch_plan.get("runtimeGuard")),
+            "reasonCodes": clean_list(batch_plan.get("reasonCodes"), limit=12),
         },
     }
 

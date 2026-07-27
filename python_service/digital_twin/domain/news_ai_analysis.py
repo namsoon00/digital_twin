@@ -8,8 +8,8 @@ from .investment_research import NewsCollectionTarget, ResearchEvidence
 from . import news_analysis as news_domain
 
 
-NEWS_AI_ANALYSIS_VERSION = "news-ai-analysis-v10-target-scoped-signals"
-NEWS_AI_PROMPT_VERSION = "news-ai-prompt-v10-target-scoped-signals"
+NEWS_AI_ANALYSIS_VERSION = "news-ai-analysis-v11-content-boundary"
+NEWS_AI_PROMPT_VERSION = "news-ai-prompt-v11-content-boundary"
 
 IMPACT_LABELS = {
     "support": "호재",
@@ -490,14 +490,14 @@ def article_text_parts(evidence: ResearchEvidence) -> Tuple[str, str, str, str]:
     payload = analysis_payload_from_evidence(evidence)
     facts = article_facts(payload)
     title = compact_text(evidence.title, 360)
-    body = compact_text(
+    body = news_domain.clean_article_body_text(
         payload.get("articleText")
         or payload.get("articleTextPreview")
         or facts.get("bodyPreview")
         or "",
         5000,
     )
-    feed_summary = compact_text(
+    feed_summary = news_domain.clean_article_body_text(
         payload.get("articleSourceSummary")
         or facts.get("feedSummaryPreview")
         or payload.get("normalizedSummary")
@@ -976,6 +976,21 @@ def news_ai_analysis_retryable(evidence: ResearchEvidence) -> bool:
 
 def apply_news_ai_analysis(evidence: ResearchEvidence, analysis_payload: Dict[str, object]) -> ResearchEvidence:
     payload = dict(evidence.raw_payload or {})
+    # Re-enrichment also repairs legacy rows collected before the article
+    # boundary filter existed, so stale publisher chrome cannot reappear in a
+    # later notification source snapshot.
+    for key, limit in (("articleText", 5000), ("articleTextPreview", 5000), ("articleSourceSummary", 1600)):
+        value = payload.get(key)
+        if isinstance(value, str) and value.strip():
+            payload[key] = news_domain.clean_article_body_text(value, limit)
+    existing_facts = payload.get("articleFacts")
+    if isinstance(existing_facts, dict):
+        cleaned_facts = dict(existing_facts)
+        for key, limit in (("bodyPreview", 700), ("feedSummaryPreview", 360)):
+            value = cleaned_facts.get(key)
+            if isinstance(value, str) and value.strip():
+                cleaned_facts[key] = news_domain.clean_article_body_text(value, limit)
+        payload["articleFacts"] = cleaned_facts
     original_facts = article_facts(payload)
     payload["articleSourceSummary"] = compact_text(
         payload.get("articleSourceSummary")
@@ -1108,29 +1123,49 @@ def apply_news_ai_analysis(evidence: ResearchEvidence, analysis_payload: Dict[st
         payload["relationScope"] = analysis_dict.get("relationScope")
     if analysis_dict.get("eventType") and not payload.get("eventType"):
         payload["eventType"] = analysis_dict.get("eventType")
-    if article_facts_payload:
-        article_facts_payload.setdefault("preAiStockImpact", article_facts_payload.get("stockImpact"))
-        article_facts_payload.setdefault("preAiStockImpactPolarity", article_facts_payload.get("stockImpactPolarity") or article_facts_payload.get("impactPolarity"))
-        article_facts_payload.setdefault("preAiStockImpactLabel", article_facts_payload.get("stockImpactLabel"))
-        article_facts_payload.update({
-            "relationScope": str(payload.get("relationScope") or article_facts_payload.get("relationScope") or ""),
-            "relationScopeLabel": news_domain.relation_scope_label(payload.get("relationScope")),
-            "relevanceState": payload.get("relevanceState"),
-            "materialityState": payload.get("materialityState"),
-            "dataState": payload.get("dataState"),
-            "validationState": payload.get("validationState"),
-            "summaryKo": payload["articleSummaryKo"],
-            "eventTakeaway": summary.get("oneLineKo") or article_facts_payload.get("eventTakeaway") or "",
-            "impactReasonKo": payload["stockImpactReasonKo"],
+    facts_target = NewsCollectionTarget(
+        evidence.symbol,
+        str(payload.get("name") or payload.get("companyName") or evidence.symbol),
+        str(payload.get("market") or ""),
+        str(payload.get("currency") or ""),
+        str(payload.get("sector") or ""),
+    )
+    facts_analysis = dict(analysis_dict)
+    facts_analysis["relationScope"] = str(payload.get("relationScope") or facts_analysis.get("relationScope") or "")
+    facts_analysis["eventType"] = str(payload.get("eventType") or facts_analysis.get("eventType") or "general")
+    refreshed_facts = news_domain.article_analysis_facts(
+        facts_target,
+        title,
+        body,
+        feed_summary,
+        facts_analysis,
+        {
             "stockImpact": payload["stockImpact"],
-            "stockImpactPolarity": payload["stockImpactPolarity"],
             "stockImpactLabel": payload["stockImpactLabel"],
+            "stockImpactPolarity": payload["stockImpactPolarity"],
             "stockImpactReasonKo": payload["stockImpactReasonKo"],
-            "analysisConflict": bool(conflict_payload),
-        })
-        if conflict_payload:
-            article_facts_payload.update(conflict_payload)
-        payload["articleFacts"] = article_facts_payload
+        },
+        source=evidence.source,
+        provider=original_facts.get("provider") or payload.get("provider") or "",
+        url=evidence.url or original_facts.get("url") or "",
+        published=evidence.published_at or original_facts.get("publishedAt") or "",
+        read_status=payload.get("articleReadStatus"),
+        analysis_source=original_facts.get("analysisSource") or "article-ai-analysis",
+        analysis_quality=original_facts.get("analysisQuality") or "body-read",
+        summary_ko=payload["articleSummaryKo"],
+    )
+    refreshed_facts["preAiStockImpact"] = article_facts_payload.get("preAiStockImpact") or article_facts_payload.get("stockImpact") or ""
+    refreshed_facts["preAiStockImpactPolarity"] = (
+        article_facts_payload.get("preAiStockImpactPolarity")
+        or article_facts_payload.get("stockImpactPolarity")
+        or article_facts_payload.get("impactPolarity")
+        or ""
+    )
+    refreshed_facts["preAiStockImpactLabel"] = article_facts_payload.get("preAiStockImpactLabel") or article_facts_payload.get("stockImpactLabel") or ""
+    refreshed_facts["analysisConflict"] = bool(conflict_payload)
+    if conflict_payload:
+        refreshed_facts.update(conflict_payload)
+    payload["articleFacts"] = refreshed_facts
     payload = news_domain.public_news_payload(payload)
     evidence_polarity = impact_polarity if impact_polarity in {"support", "risk"} else "context"
     states = news_domain.news_state_payload(payload)
@@ -1167,15 +1202,38 @@ def build_news_ai_analysis_prompt(target: NewsCollectionTarget, evidence: Resear
     )
     prompt_body = body
     prompt_feed_summary = feed_summary
-    prompt_facts = dict(facts)
     if navigation_heavy:
         if body:
             prompt_body = scoped_article_text
             prompt_feed_summary = ""
         else:
             prompt_feed_summary = scoped_article_text
-        prompt_facts["bodyPreview"] = prompt_body
-        prompt_facts["feedSummaryPreview"] = prompt_feed_summary
+    # Rebuild derived fields from the bounded text. Older rows can retain
+    # publisher chrome in articleFacts even when the primary body is clean.
+    prompt_analysis = {
+        "relationScope": payload.get("relationScope") or facts.get("relationScope") or "",
+        "eventType": payload.get("eventType") or facts.get("eventType") or "general",
+        "impactPolarity": payload.get("impactPolarity") or facts.get("impactPolarity") or "context",
+        "relevanceState": payload.get("relevanceState") or facts.get("relevanceState") or "",
+        "sourceTrustState": payload.get("sourceTrustState") or facts.get("sourceTrustState") or "",
+        "materialityState": payload.get("materialityState") or facts.get("materialityState") or "",
+        "dataState": payload.get("dataState") or facts.get("dataState") or "",
+        "validationState": payload.get("validationState") or facts.get("validationState") or "",
+    }
+    prompt_facts = news_domain.article_analysis_facts(
+        target,
+        title,
+        prompt_body,
+        prompt_feed_summary,
+        prompt_analysis,
+        source=evidence.source,
+        provider=facts.get("provider") or "",
+        url=evidence.url or facts.get("url") or "",
+        published=evidence.published_at or facts.get("publishedAt") or "",
+        read_status="body" if prompt_body else (facts.get("readStatus") or "feed-summary"),
+        analysis_source=facts.get("analysisSource") or "prompt-cleaned-body",
+        analysis_quality=facts.get("analysisQuality") or "body-read",
+    )
     prompt_payload = {
         "task": "Analyze a collected investment news article as metadata, not as a buy/sell recommendation.",
         "outputLanguage": "ko",

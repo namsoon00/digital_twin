@@ -5,9 +5,9 @@ from typing import Dict, Iterable, List, Tuple
 from .market_data import clamp, number
 
 
-NEWS_ANALYSIS_VERSION = "news-analysis-v4-editorial-boundary"
-ARTICLE_DIGEST_VERSION = "article-digest-ko-v3"
-ARTICLE_FACTS_VERSION = "article-facts-v2"
+NEWS_ANALYSIS_VERSION = "news-analysis-v5-content-boundary"
+ARTICLE_DIGEST_VERSION = "article-digest-ko-v4"
+ARTICLE_FACTS_VERSION = "article-facts-v3-content-boundary"
 
 SUPPORT_KEYWORDS = (
     "beat",
@@ -174,11 +174,11 @@ EVENT_TYPE_KEYWORDS = {
     "supply_chain": ["공급", "supply", "supplier", "생산", "fab", "foundry", "라인", "공장"],
     "product": ["launch", "출시", "roadmap", "제품", "서비스", "chip", "GPU", "AI"],
     "regulation": ["regulation", "규제", "소송", "lawsuit", "sue", "sues", "sued", "accuse", "accuses", "accused", "stealing", "stolen", "trade secret", "trade secrets", "legal", "litigation", "antitrust", "probe", "investigation", "조사", "제재"],
-    "capital_policy": ["buyback", "dividend", "자사주", "배당", "증자", "offering", "dilution", "debt", "convertible debt", "repayment", "상환"],
+    "capital_policy": ["buyback", "dividend", "자사주", "배당", "증자", "신주", "신주발행", "new shares", "newly issued", "share issuance", "offering", "dilution", "debt", "convertible debt", "repayment", "상환"],
     "listing": ["listing", "상장", "ADR", "나스닥", "IPO"],
     "macro_sector": ["금리", "환율", "inflation", "FOMC", "업황", "수요", "demand"],
     "crypto_linked": ["bitcoin", "비트코인", "crypto", "암호화폐", "digital asset"],
-    "price_commentary": ["주가", "shares", "stock", "목표주가", "급등", "급락", "plunge", "trading volume", "거래량", "거래대금"],
+    "price_commentary": ["주가", "stock", "목표주가", "급등", "급락", "plunge", "trading volume", "거래량", "거래대금"],
 }
 
 SOCIAL_SOURCE_TERMS = [
@@ -346,6 +346,18 @@ TOPIC_LABELS = [
 NUMERIC_TOKEN_RE = re.compile(
     r"(?:[$₩]?\d[\d,.]*(?:\.\d+)?\s?(?:%|달러|원|조|억|만|million|billion|trillion|mn|bn|M|B)?)",
     re.IGNORECASE,
+)
+INVISIBLE_ARTICLE_TEXT_RE = re.compile(r"[\u200b\u200c\u200d\u2060\ufeff]")
+YAHOO_FINANCE_INTRO_RE = re.compile(
+    r"^\s*At Yahoo Finance,\s*you get free stock quotes,.*?financial life\.\s*",
+    re.IGNORECASE,
+)
+REUTERS_BYLINE_RE = re.compile(
+    r"\(\s*Reporting\s+by\b[^)]{0,360}?\bEditing\s+by\b[^)]{0,240}\)",
+    re.IGNORECASE,
+)
+MARKET_WIDGET_QUOTE_RE = re.compile(
+    r"\b(?:[A-Z]{1,6}(?:=[A-Z])?|[A-Z]{2,10}-USD)\s+(?:(?:[A-Za-z][A-Za-z.&'-]*\s+){0,5})\d[\d,]*(?:\.\d+)?"
 )
 
 NEWS_RELEVANCE_STATE_LABELS = {
@@ -683,6 +695,25 @@ def compact_text(value: object, limit: int = 220) -> str:
     return text
 
 
+def clean_article_body_text(value: object, limit: int = 5000) -> str:
+    """Remove publisher chrome and quote widgets from an extracted article body."""
+    text = INVISIBLE_ARTICLE_TEXT_RE.sub("", str(value or ""))
+    text = compact_text(text, max(1, int(limit or 5000)))
+    if not text:
+        return ""
+    text = YAHOO_FINANCE_INTRO_RE.sub("", text)
+    byline = REUTERS_BYLINE_RE.search(text)
+    if byline:
+        return compact_text(text[:byline.end()], limit)
+    quote_matches = list(MARKET_WIDGET_QUOTE_RE.finditer(text))
+    for index, match in enumerate(quote_matches):
+        if match.start() < 120:
+            continue
+        if len(quote_matches) - index >= 2:
+            return compact_text(text[:match.start()], limit)
+    return compact_text(text, limit)
+
+
 def contains_hangul(value: object) -> bool:
     return bool(re.search(r"[가-힣]", str(value or "")))
 
@@ -928,7 +959,7 @@ def is_news_boilerplate_sentence(value: object) -> bool:
 
 
 def clean_article_summary_noise(value: object, limit: int = 1200) -> str:
-    text = compact_text(value, max(1, int(limit or 1200)))
+    text = clean_article_body_text(value, max(1, int(limit or 1200)))
     if not text:
         return ""
     parts = re.split(r"(?<=입니다[.。])\s+|(?<=다[.。])\s+|(?<=[.!?。！？])\s+", text)
@@ -938,7 +969,7 @@ def clean_article_summary_noise(value: object, limit: int = 1200) -> str:
 
 def article_body_quality(article_text: object, minimum_chars: int = 280) -> Dict[str, object]:
     """Classify extraction adequacy before the text becomes investment evidence."""
-    text = compact_text(article_text, 5000)
+    text = clean_article_body_text(article_text, 5000)
     if not text:
         return {
             "state": "unavailable",
@@ -1363,7 +1394,7 @@ def korean_article_summary(
     analysis: Dict[str, object] = None,
 ) -> str:
     analysis = analysis if isinstance(analysis, dict) else {}
-    body = clean_article_summary_noise(compact_text(article_text, 2500))
+    body = clean_article_summary_noise(clean_article_body_text(article_text, 2500))
     fallback_from_title = not str(feed_summary or "").strip()
     fallback_source = feed_summary if not fallback_from_title else clean_article_title(title)
     fallback = clean_article_summary_noise(compact_text(fallback_source, 900))
@@ -1410,7 +1441,9 @@ def korean_article_summary(
 
 
 def article_event_takeaway(target: object, title: object, article_text: object = "", feed_summary: object = "") -> str:
-    text = strip_feed_summary_prefix(clean_article_summary_noise(compact_text(str(article_text or feed_summary or title or ""), 1600)))
+    text = strip_feed_summary_prefix(clean_article_summary_noise(
+        clean_article_body_text(article_text or feed_summary or title, 1600)
+    ))
     title_text = clean_article_title(title)
     combined = title_text + " " + text
     lowered = _lower_text(combined)
@@ -1523,7 +1556,9 @@ def stock_impact_analysis(
     polarity: str = "",
 ) -> Dict[str, object]:
     analysis = analysis if isinstance(analysis, dict) else {}
-    text = str(title or "") + " " + str(article_text or feed_summary or "")
+    body_text = clean_article_body_text(article_text, 5000)
+    feed_text = clean_article_summary_noise(feed_summary, 1600)
+    text = str(title or "") + " " + str(body_text or feed_text or "")
     detected_polarity = str(polarity or "").strip() or keyword_polarity(text)
     if detected_polarity == "support":
         impact = "positive"
@@ -1541,7 +1576,7 @@ def stock_impact_analysis(
     event_label = event_type_label(analysis.get("eventType") or classify_news_event_type(title, text))
     event_type = str(analysis.get("eventType") or classify_news_event_type(title, text))
     states = news_state_payload(analysis)
-    takeaway = article_event_takeaway(target, title, article_text, feed_summary)
+    takeaway = article_event_takeaway(target, title, body_text, feed_text)
     channel = impact_channel_text(event_type, text)
     watch = impact_watch_text(impact, states["materialityState"], text)
     reason_parts = []
@@ -1612,7 +1647,7 @@ def article_analysis_facts(
     analysis = analysis if isinstance(analysis, dict) else {}
     stock_impact = stock_impact if isinstance(stock_impact, dict) else {}
     title_text = clean_article_title(title)
-    body_text = clean_article_summary_noise(compact_text(article_text, 5000), 5000)
+    body_text = clean_article_summary_noise(clean_article_body_text(article_text, 5000), 5000)
     feed_text = clean_article_summary_noise(compact_text(feed_summary, 1600))
     source_text = body_text or feed_text or title_text
     status = str(read_status or ("body" if body_text else "feed-summary")).strip()

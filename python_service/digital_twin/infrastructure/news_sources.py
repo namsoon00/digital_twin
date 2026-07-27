@@ -893,7 +893,7 @@ class NewsSourceGateway:
         elif not article_source_allowed:
             self.record_provider_diagnostic("sourceBlockedCount")
         article_content = self.article_content_for_url(article_link) if article_source_allowed else {}
-        article_text = str(article_content.get("text") or "")
+        article_text = news_domain.clean_article_body_text(article_content.get("text") or "", ARTICLE_TEXT_LIMIT)
         article_canonical_url = str(article_content.get("canonicalUrl") or article_link)
         article_publisher = str(article_content.get("publisher") or "")
         if not article_text and self.provider_requires_article_body(provider):

@@ -156,6 +156,47 @@ class NewsCollectionQualityTests(unittest.TestCase):
         self.assertEqual("https://www.example.test/markets/apple-update?utm_source=rss", metadata["canonicalUrl"])
         self.assertEqual("Example Journal", metadata["publisher"])
 
+    def test_gateway_removes_yahoo_quote_widget_before_persisting_article_facts(self):
+        target = NewsCollectionTarget("035420", "NAVER", "KOSPI", "KRW", "플랫폼")
+        title = "Nvidia to acquire $1 billion of new shares of South Korea's Naver"
+        url = "https://finance.yahoo.com/technology/articles/nvidia-acquire-1-billion-shares-230439371.html"
+        raw_body = (
+            "At Yahoo Finance, you get free stock quotes, up-to-date news, portfolio management resources, "
+            "international market data, social interaction and mortgage rates that help you manage your financial life. "
+            + title
+            + " SEOUL, July 27 (Reuters) - South Korea's Naver said in a regulatory filing that Nvidia will acquire "
+            "$1 billion of its shares to be newly issued as part of an investment partnership to build a new data center. "
+            "(Reporting by Jack Kim; Editing by Chris Reese) "
+            "NQ=F Nasdaq 100 Sep 26 28,622.75 +340.50 (+1.20%) "
+            "BTC-USD Bitcoin USD 65,334.60 +1,038.99 (+1.62%) "
+            "ETH-USD Ethereum USD 1,955.38 +82.37 (+4.40%)"
+        )
+        gateway = NewsSourceGateway({"newsCollectionArticleBodyMaxPerTarget": "1"})
+        gateway.article_content_for_url = lambda _url: {
+            "text": raw_body,
+            "canonicalUrl": url,
+            "publisher": "Reuters",
+        }
+
+        evidence = gateway.news_evidence_from_article(
+            target,
+            "Yahoo Finance Search",
+            "Reuters",
+            title,
+            "",
+            url,
+            "2026-07-26T23:04:39Z",
+        )
+
+        self.assertIsNotNone(evidence)
+        payload = evidence.raw_payload
+        facts = payload["articleFacts"]
+        self.assertNotIn("BTC-USD", payload["articleText"])
+        self.assertNotIn("Bitcoin USD", payload["articleText"])
+        self.assertNotIn("비트코인", payload["articleSummaryKo"])
+        self.assertNotIn("비트코인", facts["topics"])
+        self.assertEqual("capital_policy", facts["eventType"])
+
     def test_full_article_text_is_used_and_short_body_is_blocked_from_materiality(self):
         full_body = "Apple described services revenue, customer retention, operating margins, and its outlook for the coming quarter. " * 24
         evidence = self.evidence({

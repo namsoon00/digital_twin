@@ -12,6 +12,7 @@ from digital_twin.domain.news_analysis import (
     article_analysis_facts,
     classify_news_relevance,
     classify_news_event_type,
+    clean_article_body_text,
     clean_article_summary_noise,
     english_fragment_to_korean,
     korean_article_summary,
@@ -77,6 +78,63 @@ class NewsAnalysisDomainTests(unittest.TestCase):
         values = numeric_highlights("B2B 시장 1위는 26일 $700 billion 투자와 731조원 수주를 발표했다.")
 
         self.assertEqual(["$700 billion", "731조"], values)
+
+    def test_yahoo_quote_widget_is_excluded_before_news_analysis(self):
+        target = NewsCollectionTarget("035420", "NAVER", "KOSPI", "KRW", "플랫폼")
+        title = "Nvidia to acquire $1 billion of new shares of South Korea's Naver"
+        raw_body = (
+            "At Yahoo Finance, you get free stock quotes, up-to-date news, portfolio management resources, "
+            "international market data, social interaction and mortgage rates that help you manage your financial life. "
+            + title
+            + " SEOUL, July 27 (Reuters) - South Korea's Naver said in a regulatory filing that Nvidia will acquire "
+            "$1 billion of its shares to be newly issued as part of an investment partnership to build a new data center. "
+            "(Reporting by\u200b Jack Kim; Editing by Chris Reese) "
+            "NQ=F Nasdaq 100 Sep 26 28,622.75 +340.50 (+1.20%) "
+            "BTC-USD Bitcoin USD 65,334.60 +1,038.99 (+1.62%) "
+            "ETH-USD Ethereum USD 1,955.38 +82.37 (+4.40%)"
+        )
+        evidence = ResearchEvidence(
+            "research:035420:news:yahoo-widget",
+            "035420",
+            "news",
+            "Reuters",
+            title,
+            title,
+            "https://finance.yahoo.com/technology/articles/nvidia-acquire-1-billion-shares-230439371.html",
+            "2026-07-26T23:04:39Z",
+            "context",
+            published_at="2026-07-26T23:04:39Z",
+            raw_payload={
+                "name": "NAVER",
+                "relationScope": "direct",
+                "articleReadStatus": "body",
+                "articleText": raw_body,
+                "articleFacts": {
+                    "bodyAvailable": True,
+                    "bodyQualityPassed": True,
+                    "bodyPreview": raw_body,
+                    "topics": ["비트코인"],
+                    "numbers": ["65,334.60"],
+                    "keySentences": [raw_body],
+                },
+            },
+        )
+
+        cleaned = clean_article_body_text(raw_body)
+        analysis = local_news_ai_analysis(target, evidence).to_dict()
+        updated = apply_news_ai_analysis(evidence, analysis)
+        prompt = json.loads(build_news_ai_analysis_prompt(target, evidence))
+
+        self.assertIn("Nvidia will acquire $1 billion", cleaned)
+        self.assertNotIn("BTC-USD", cleaned)
+        self.assertNotIn("Bitcoin USD", cleaned)
+        self.assertNotIn("비트코인", json.dumps(analysis, ensure_ascii=False))
+        self.assertEqual("capital_policy", analysis["eventType"])
+        self.assertNotIn("BTC-USD", json.dumps(prompt, ensure_ascii=False))
+        self.assertNotIn("Bitcoin USD", json.dumps(prompt, ensure_ascii=False))
+        self.assertNotIn("BTC-USD", updated.raw_payload["articleText"])
+        self.assertNotIn("Bitcoin USD", updated.raw_payload["articleFacts"]["bodyPreview"])
+        self.assertNotIn("비트코인", updated.raw_payload["articleFacts"]["topics"])
 
     def test_navigation_contamination_is_excluded_from_impact_signals_and_ai_prompt(self):
         target = NewsCollectionTarget("066570", "LG전자", "KOSPI", "KRW", "가전/전자")

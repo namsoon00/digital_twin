@@ -574,6 +574,7 @@ class OntologyReasoningMailboxTests(unittest.TestCase):
         runner = self.build_runner([event])
 
         self.assertEqual([], runner.mailbox_entries_for_event(event))
+        self.assertEqual(1, runner.status()["pendingResearchHandoffCount"])
 
     def test_shared_world_projection_completes_an_older_direct_research_handoff(self):
         class IngressReader(Reader):

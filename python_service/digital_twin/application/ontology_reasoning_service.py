@@ -4180,6 +4180,7 @@ class OntologyReasoningRunner:
             "processedCount": len(self.cursor_store.processed_event_ids()),
             "rawPendingCount": int(work.get("rawRequestCount") or len(pending)),
             "effectivePendingCount": len(pending),
+            "pendingResearchHandoffCount": int(work.get("pendingResearchHandoffCount") or 0),
             "coalescedPendingEventCount": len(work.get("coalescedEventIds") or []),
             "mailboxPendingEntryCount": int(mailbox.get("actionablePendingEntryCount") or 0),
             "mailboxStoredEntryCount": int(mailbox.get("storedPendingEntryCount") or 0),

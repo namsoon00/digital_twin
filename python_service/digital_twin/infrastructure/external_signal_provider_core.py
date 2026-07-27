@@ -75,6 +75,11 @@ class ExternalSignalCoreMixin:
     ) -> Dict[str, object]:
         position_list = list(positions)
         normalized_cache_scope = str(cache_scope or "general").strip().lower() or "general"
+        subject_count = len({
+            str(getattr(position, "symbol", "") or "").upper().strip()
+            for position in position_list
+            if str(getattr(position, "symbol", "") or "").strip()
+        })
         cache_key = self.cache_key_for_positions(position_list)
         cached = self.cache.load()
         self.provider_state = self.provider_state_from(cached)
@@ -84,8 +89,21 @@ class ExternalSignalCoreMixin:
         if cache_fresh or cache_only:
             signals = entry.get("signals") if isinstance(entry, dict) else None
             if isinstance(signals, dict):
+                if cache_fresh and self.should_promote_cache_scope(entry, normalized_cache_scope):
+                    # Older aggregate entries predate cacheScope. Promote the
+                    # metadata on first use so symbol-level research refreshes
+                    # cannot evict the cache the realtime monitor depends on.
+                    self.cache.replace(self.next_cache_payload(
+                        cached,
+                        cache_key,
+                        signals,
+                        cache_scope=normalized_cache_scope,
+                        subject_count=subject_count,
+                    ))
                 # Cache-only callers are the reasoning path. They must never
-                # mutate a persisted cached payload or refresh a vendor inline.
+                # refresh a vendor inline. The metadata-only legacy promotion
+                # above preserves a pre-existing cache entry without changing
+                # any vendor payload.
                 signals = deepcopy(signals)
                 if cache_only:
                     self.status(
@@ -121,17 +139,21 @@ class ExternalSignalCoreMixin:
             cache_key,
             signals,
             cache_scope=normalized_cache_scope,
-            subject_count=len({
-                str(getattr(position, "symbol", "") or "").upper().strip()
-                for position in position_list
-                if str(getattr(position, "symbol", "") or "").strip()
-            }),
+            subject_count=subject_count,
         ))
         return signals
 
     def external_signal_cache_only(self) -> bool:
         value = str(self.settings.get("_externalSignalsCacheOnly") or "").strip().lower()
         return value in {"1", "true", "yes", "on"}
+
+    @staticmethod
+    def should_promote_cache_scope(entry: Dict[str, object], requested_scope: str) -> bool:
+        """Keep legacy aggregate entries from being evicted before refresh."""
+        pinned_scopes = {"account-snapshot", "market-monitor"}
+        target = str(requested_scope or "").strip().lower()
+        current = str((entry or {}).get("cacheScope") or "").strip().lower()
+        return target in pinned_scopes and current not in pinned_scopes
 
     def empty_cache_only_signals(self) -> Dict[str, object]:
         signals = {

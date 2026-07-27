@@ -123,6 +123,51 @@ class RuntimeResilienceTests(unittest.TestCase):
         self.assertEqual("account-snapshot", entries["account-snapshot"]["cacheScope"])
         self.assertEqual(3, len(entries))
 
+    def test_fresh_legacy_cache_is_promoted_for_account_snapshot_reuse(self):
+        class MemoryCache:
+            def __init__(self):
+                self.payload = {}
+
+            def load(self):
+                return self.payload
+
+            def replace(self, payload):
+                self.payload = payload
+
+        cache = MemoryCache()
+        position = Position(symbol="AAPL", name="Apple", market="US", currency="USD")
+        provider = ExternalSignalProvider(
+            settings={"externalApiFetchIntervalMinutes": "10"},
+            cache=cache,
+        )
+        cache_key = provider.cache_key_for_positions([position])
+        fetched_at = datetime.now(timezone.utc).isoformat().replace("+00:00", "Z")
+        signals = {
+            "fetchedAt": fetched_at,
+            "equityQuotes": {},
+            "cryptoMarkets": {},
+            "macro": {},
+            "fxRates": {},
+            "secFilings": {},
+            "dartDisclosures": {},
+            "newsHeadlines": {},
+            "companyOverviews": {},
+            "earningsReports": {},
+            "yfinanceData": {},
+            "researchEvidence": {},
+            "statuses": [],
+        }
+        cache.replace({"schemaVersion": 1, "entries": {
+            cache_key: {"fetchedAt": fetched_at, "signals": signals},
+        }})
+
+        with patch.object(provider, "fetch_signals", side_effect=AssertionError("fresh cache must not fetch")):
+            provider.signals_for_positions([position], cache_scope="account-snapshot")
+
+        entry = cache.load()["entries"][cache_key]
+        self.assertEqual("account-snapshot", entry["cacheScope"])
+        self.assertEqual(1, entry["subjectCount"])
+
     def test_market_data_external_refresh_is_summarized_without_exposing_payload(self):
         calls = []
 

@@ -345,6 +345,186 @@ def action_envelope_status_from_transition(transition: Dict[str, object]) -> str
             return status
     return ""
 
+
+def decision_transition_from_context(context: Dict[str, object]) -> Dict[str, object]:
+    context = context if isinstance(context, dict) else {}
+    transition = context.get("decisionTransition") if isinstance(context.get("decisionTransition"), dict) else {}
+    if transition:
+        return dict(transition)
+    relation_diff = context.get("ontologyRelationDiff") if isinstance(context.get("ontologyRelationDiff"), dict) else {}
+    transition = relation_diff.get("decisionTransition") if isinstance(relation_diff.get("decisionTransition"), dict) else {}
+    return dict(transition or {})
+
+
+def _normalized_action_envelope_status(value: object) -> str:
+    raw = str(value or "").strip()
+    if not raw:
+        return ""
+    normalized = raw.replace("-", "_").replace(" ", "_")
+    if not normalized.isupper():
+        normalized = re.sub(r"(?<!^)(?=[A-Z])", "_", normalized)
+    return normalized.upper()
+
+
+def _transition_action(context: Dict[str, object], transition: Dict[str, object], current_action: object = "") -> str:
+    current = str(transition.get("currentAction") or current_action or "").strip().upper()
+    if current:
+        return current
+    validated = context.get("notificationAiValidatedResponse") if isinstance(context.get("notificationAiValidatedResponse"), dict) else {}
+    return str(validated.get("action") or "").strip().upper()
+
+
+def _watchlist_status_transition_presentation(
+    current_action: str,
+    current_status: str,
+    previous_status: str,
+    context: Dict[str, object],
+) -> Dict[str, str]:
+    action_label = action_label_for_action(current_action or "HOLD", context)
+    current_label = action_envelope_status_label(current_status)
+    previous_label = action_envelope_status_label(previous_status)
+    prefix = (previous_label + "에서 " + current_label + "로 바뀌었습니다. ") if previous_label and previous_label != current_label else ""
+    if current_status == "ENTRY_ELIGIBLE":
+        return {
+            "category": "entry-eligible",
+            "label": "소액 진입 조건 성립",
+            "summary": prefix + "현재 행동은 " + action_label + "입니다. 한 번에 크게 사라는 뜻이 아니라, 정한 한도 안에서만 진입을 검토할 수 있다는 뜻입니다.",
+        }
+    if current_status == "ENTRY_DEFERRED":
+        return {
+            "category": "entry-check-needed",
+            "label": "진입 조건 추가 확인",
+            "summary": prefix + "현재 행동은 " + action_label + "입니다. 새로 사기 전에 확인할 조건이 남아 있습니다.",
+        }
+    if current_status == "ENTRY_OBSERVING":
+        return {
+            "category": "entry-observing",
+            "label": "관심 유지",
+            "summary": prefix + "현재 행동은 관심 유지입니다. 매수 판단으로 바뀐 것은 아닙니다.",
+        }
+    if current_status in {"ENTRY_BLOCKED", "JUDGEMENT_BLOCKED"}:
+        return {
+            "category": "entry-blocked",
+            "label": "신규 진입 판단 보류",
+            "summary": prefix + "필수 자료나 반대 조건 때문에 지금은 새로 사지 않습니다.",
+        }
+    return {}
+
+
+def decision_transition_presentation(context: Dict[str, object], current_action: object = "") -> Dict[str, str]:
+    """Translate a stored decision transition into an explicit customer-facing change.
+
+    The raw transition remains the delivery contract used by cooldown and
+    dispatch. This helper only explains whether a change narrows entry, starts
+    entry review, strengthens a sale decision, or merely changes data status.
+    """
+
+    context = context if isinstance(context, dict) else {}
+    transition = decision_transition_from_context(context)
+    if not transition:
+        return {}
+    kind = str(transition.get("kind") or "").strip().lower()
+    previous_action = str(transition.get("previousAction") or "").strip().upper()
+    next_action = _transition_action(context, transition, current_action)
+    previous_status = _normalized_action_envelope_status(transition.get("previousStatus"))
+    current_status = _normalized_action_envelope_status(action_envelope_status_from_transition(transition))
+    watchlist = is_watchlist_context(context)
+
+    if previous_action and next_action and previous_action != next_action:
+        previous_label = action_label_for_action(previous_action, context)
+        next_label = action_label_for_action(next_action, context)
+        change = previous_label + "에서 " + next_label + "로 바뀌었습니다."
+        if watchlist:
+            if previous_action in {"BUY", "ADD"} and next_action == "HOLD":
+                return {
+                    "category": "entry-paused",
+                    "label": "신규 매수 보류",
+                    "summary": change + " 매도 신호가 아니라, 진입 조건을 더 확인하는 동안 새로 사지 않는다는 뜻입니다.",
+                }
+            if previous_action in {"HOLD", "AVOID", "SELL", "TRIM"} and next_action in {"BUY", "ADD"}:
+                return {
+                    "category": "entry-review-started",
+                    "label": "소액 진입 검토 시작",
+                    "summary": change + " 새로 살 조건이 생겼지만, 한 번에 크게 사라는 뜻은 아닙니다.",
+                }
+            if next_action in {"AVOID", "SELL", "TRIM"}:
+                return {
+                    "category": "entry-avoidance",
+                    "label": "신규 진입 회피",
+                    "summary": change + " 지금은 새로 사지 않고 위험 요인이나 자료 상태가 바뀌는지 확인합니다.",
+                }
+            if previous_action in {"AVOID", "SELL", "TRIM"} and next_action == "HOLD":
+                return {
+                    "category": "entry-avoidance-eased",
+                    "label": "진입 회피 완화",
+                    "summary": change + " 바로 사라는 뜻은 아니며, 관심을 유지하면서 조건을 더 확인합니다.",
+                }
+            return {
+                "category": "entry-decision-changed",
+                "label": "신규 매수 판단 변경",
+                "summary": change + " 현재 행동과 다음 확인 조건을 함께 봐야 합니다.",
+            }
+        if next_action == "SELL":
+            return {
+                "category": "sale-review-started",
+                "label": "매도 검토 시작",
+                "summary": change + " 자동 매도가 아니라, 보유 이유와 줄일 수량을 다시 확인하라는 뜻입니다.",
+            }
+        if next_action == "TRIM":
+            return {
+                "category": "trim-review-started",
+                "label": "분할축소 검토 시작",
+                "summary": change + " 전량 매도보다 일부를 줄일지 먼저 검토하는 단계입니다.",
+            }
+        if previous_action in {"SELL", "TRIM"} and next_action == "HOLD":
+            return {
+                "category": "sale-review-eased",
+                "label": "매도 판단 완화",
+                "summary": change + " 바로 더 사라는 뜻은 아니며, 현재 보유 이유를 다시 확인하는 단계입니다.",
+            }
+        if next_action in {"BUY", "ADD"}:
+            return {
+                "category": "buy-review-started",
+                "label": "매수 검토 시작",
+                "summary": change + " 정한 투자 한도와 다음 확인 조건 안에서만 검토해야 합니다.",
+            }
+        return {
+            "category": "holding-decision-changed",
+            "label": "보유 판단 변경",
+            "summary": change + " 자동 주문이 아니라 현재 보유 판단을 다시 확인하라는 뜻입니다.",
+        }
+
+    if kind == "action-changed":
+        status_presentation = _watchlist_status_transition_presentation(next_action, current_status, previous_status, context) if watchlist else {}
+        if status_presentation:
+            return status_presentation
+        return {
+            "category": "decision-changed",
+            "label": "판단 변경",
+            "summary": "현재 행동이 바뀌었지만 이전 행동 정보가 완전하지 않아 자세한 차이는 확인할 수 없습니다.",
+        }
+
+    if watchlist and current_status:
+        status_presentation = _watchlist_status_transition_presentation(next_action, current_status, previous_status, context)
+        if status_presentation:
+            return status_presentation
+
+    if kind == "readiness-changed":
+        action_label = action_label_for_action(next_action, context) if next_action else "현재 판단"
+        return {
+            "category": "data-readiness-changed",
+            "label": "판단 자료 상태 변경",
+            "summary": "현재 행동은 " + action_label + "이며, 매수·매도 판단 자체가 바뀐 것은 아닙니다. 자료 상태가 바뀌어 다음 판단의 확신도만 달라졌습니다.",
+        }
+    if kind in {"initial", "envelope-changed"}:
+        return {
+            "category": "decision-condition-changed",
+            "label": "새 판단 조건",
+            "summary": "새 판단 조건이 확인됐습니다. 현재 행동과 다음 확인 조건을 함께 봐야 합니다.",
+        }
+    return {}
+
+
 def notification_topline_change_summary(context: Dict[str, object]) -> str:
     context = context or {}
     reason = str(
@@ -357,18 +537,18 @@ def notification_topline_change_summary(context: Dict[str, object]) -> str:
     profit_loss_summary = "" if is_watchlist_context(context) else _profit_loss_change_summary(context, reason)
     if profit_loss_summary:
         return profit_loss_summary
-    transition = context.get("decisionTransition") if isinstance(context.get("decisionTransition"), dict) else {}
-    if not transition:
-        relation_diff = context.get("ontologyRelationDiff") if isinstance(context.get("ontologyRelationDiff"), dict) else {}
-        transition = relation_diff.get("decisionTransition") if isinstance(relation_diff.get("decisionTransition"), dict) else {}
+    transition = decision_transition_from_context(context)
     if transition:
+        presentation = decision_transition_presentation(context)
+        if presentation.get("label"):
+            return presentation["label"]
         kind = str(transition.get("kind") or "").strip().lower()
         if kind == "action-changed":
-            return "행동 변경"
+            return "판단 변경"
         if kind in {"initial", "envelope-changed"}:
             return "새 판단 조건"
         if kind == "readiness-changed":
-            return "자료 상태 변경"
+            return "판단 자료 상태 변경"
         if action_envelope_status_label(action_envelope_status_from_transition(transition)):
             return "새 판단 조건"
     if "손익률 추가 악화" in reason:
@@ -2153,10 +2333,10 @@ def execution_telegram_message_compact_beginner(
 
 
 def compact_decision_transition(context: Dict[str, object], response: NotificationAIValidatedResponse) -> str:
-    transition = context.get("decisionTransition") if isinstance(context.get("decisionTransition"), dict) else {}
-    if not transition:
-        diff = context.get("ontologyRelationDiff") if isinstance(context.get("ontologyRelationDiff"), dict) else {}
-        transition = diff.get("decisionTransition") if isinstance(diff.get("decisionTransition"), dict) else {}
+    presentation = decision_transition_presentation(context, response.action)
+    if presentation.get("summary"):
+        return "[" + presentation.get("label", "판단 변경") + "] " + presentation["summary"]
+    transition = decision_transition_from_context(context)
     previous = str(transition.get("previousAction") or "").strip().upper()
     current = str(transition.get("currentAction") or response.action or "").strip().upper()
     if previous and current and previous != current:

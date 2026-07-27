@@ -24,7 +24,11 @@ from pathlib import Path
 from typing import Dict, List
 
 from ..application.account_service import AccountApplicationService
-from ..application.notification_ai_gate_message import execution_telegram_message, prepend_execution_start_badge
+from ..application.notification_ai_gate_message import (
+    decision_transition_presentation,
+    execution_telegram_message,
+    prepend_execution_start_badge,
+)
 from ..application.notification_replay_service import NotificationReplayService
 from ..application.ontology_diagnostics_service import OntologyDiagnosticsService
 from ..application.research_evidence_governance_service import ResearchEvidenceGovernanceService
@@ -1882,6 +1886,7 @@ def notification_action_flow(context: Dict[str, object]) -> Dict[str, object]:
             "impact": str(news_impact.get("impact") or "")[:80],
         }
     readiness = envelope.get("dataReadiness") if isinstance(envelope.get("dataReadiness"), dict) else {}
+    transition_presentation = decision_transition_presentation(context, action)
     return {
         "status": str(envelope.get("status") or ""),
         "statusLabel": str(envelope.get("statusLabel") or ACTION_ENVELOPE_STATUS_LABELS.get(str(envelope.get("status") or "").upper(), "조건 확인")),
@@ -1889,7 +1894,12 @@ def notification_action_flow(context: Dict[str, object]) -> Dict[str, object]:
         "currentActionLabel": action_label,
         "transition": {
             "kind": str(transition.get("kind") or ""),
-            "summary": compact_notification_text(user_friendly_ai_text(transition.get("summary") or "", 180), 180),
+            "category": str(transition_presentation.get("category") or ""),
+            "label": str(transition_presentation.get("label") or ""),
+            "summary": compact_notification_text(
+                str(transition_presentation.get("summary") or user_friendly_ai_text(transition.get("summary") or "", 180)),
+                220,
+            ),
             "previousAction": str(transition.get("previousAction") or ""),
             "currentAction": str(transition.get("currentAction") or action),
             "previousStatus": str(transition.get("previousStatus") or ""),

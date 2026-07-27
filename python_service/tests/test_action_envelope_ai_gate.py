@@ -201,7 +201,7 @@ class ActionEnvelopeAiGateTests(unittest.TestCase):
 
         message = execution_telegram_message(context, response)
 
-        self.assertIn("새로 확인된 조건: 관심 유지", message)
+        self.assertIn("[관심 유지] 현재 행동은 관심 유지입니다. 매수 판단으로 바뀐 것은 아닙니다.", message)
         self.assertIn("진입 시점과 금액을 보수적으로", message)
         self.assertNotIn("ENTRY_OBSERVING", message)
         self.assertNotIn("TypeDB", message)
@@ -247,8 +247,8 @@ class ActionEnvelopeAiGateTests(unittest.TestCase):
 
         message = execution_telegram_message(context, response)
 
-        self.assertEqual("새 판단 조건", notification_topline_change_summary(context))
-        self.assertIn("새로 확인된 조건: 관심 유지", message)
+        self.assertEqual("관심 유지", notification_topline_change_summary(context))
+        self.assertIn("[관심 유지] 현재 행동은 관심 유지입니다. 매수 판단으로 바뀐 것은 아닙니다.", message)
         self.assertEqual(
             "미국 10년 금리 4.71%가 유지되어 거시 부담이 확인됐습니다.",
             user_friendly_ai_text(response.evidence[0]),
@@ -294,7 +294,7 @@ class ActionEnvelopeAiGateTests(unittest.TestCase):
         })(job)
 
         message = job.context["telegramMessage"]
-        self.assertIn("새로 확인된 조건: 관심 유지", message)
+        self.assertIn("[관심 유지] 현재 행동은 관심 유지입니다. 매수 판단으로 바뀐 것은 아닙니다.", message)
         self.assertIn("새 뉴스·조사 근거가 아직 갱신되지 않아 기존 정보만 참고합니다.", message)
         for internal in ["old rendered message", "entry_observing", "supportingEvidenceIds", "relation-evidence", "changedEvidenceCount", "reasoningRefreshed"]:
             self.assertNotIn(internal, message)
@@ -307,11 +307,57 @@ class ActionEnvelopeAiGateTests(unittest.TestCase):
             }),
         )
         self.assertEqual(
-            "행동 변경",
+            "판단 변경",
             notification_topline_change_summary({
                 "decisionTransition": {"kind": "action-changed", "material": True},
             }),
         )
+
+    def test_watchlist_entry_pause_is_not_presented_as_a_sale_signal(self):
+        context = entry_context()
+        context.update({
+            "messageDeliveryLevel": "beginner",
+            "decisionTransition": {
+                "kind": "action-changed",
+                "previousAction": "BUY",
+                "currentAction": "HOLD",
+                "previousStatus": "ENTRY_ELIGIBLE",
+                "currentStatus": "ENTRY_DEFERRED",
+                "material": True,
+            },
+        })
+        context["ontologyRelationContext"]["actionEnvelope"].update({
+            "status": "ENTRY_DEFERRED",
+            "preferredAction": "HOLD",
+        })
+        response = NotificationAIValidatedResponse(
+            action="HOLD",
+            action_label="관심 유지",
+            data_state_label="판단에 필요한 자료 있음",
+            summary="지금은 새로 사기보다 다음 조건을 확인합니다.",
+        )
+
+        message = execution_telegram_message(context, response)
+
+        self.assertEqual("신규 매수 보류", notification_topline_change_summary(context))
+        self.assertIn("[신규 매수 보류] 소액 진입 검토에서 관심 유지로 바뀌었습니다.", message)
+        self.assertIn("매도 신호가 아니라, 진입 조건을 더 확인하는 동안 새로 사지 않는다는 뜻입니다.", message)
+        self.assertNotIn("매도 검토 시작", message)
+
+    def test_watchlist_entry_review_start_is_explicitly_limited(self):
+        context = entry_context()
+        context.update({
+            "decisionTransition": {
+                "kind": "action-changed",
+                "previousAction": "HOLD",
+                "currentAction": "BUY",
+                "previousStatus": "ENTRY_OBSERVING",
+                "currentStatus": "ENTRY_ELIGIBLE",
+                "material": True,
+            },
+        })
+
+        self.assertEqual("소액 진입 검토 시작", notification_topline_change_summary(context))
 
     def test_compact_message_hides_stale_or_unlinked_news_impact(self):
         context = entry_context()

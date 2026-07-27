@@ -13,6 +13,7 @@ from digital_twin.domain.notification_reverse_reasoning import (  # noqa: E402
 )
 from digital_twin.domain.notifications import NotificationJob  # noqa: E402
 from digital_twin.infrastructure.web_server import (  # noqa: E402
+    notification_action_flow,
     notification_job_detail_payload,
     notification_job_list_payload,
     notification_job_public_payload,
@@ -222,8 +223,38 @@ class NotificationReverseReasoningTests(unittest.TestCase):
         self.assertEqual("ready", detail["job"]["reasoningTrace"]["status"])
         self.assertEqual("분할축소", detail["job"]["actionFlow"]["currentActionLabel"])
         self.assertEqual("action-changed", detail["job"]["actionFlow"]["transition"]["kind"])
+        self.assertEqual("분할축소 검토 시작", detail["job"]["actionFlow"]["transition"]["label"])
         self.assertNotIn("reasoningTrace", notification_job_list_payload(job, stale_minutes=30))
         self.assertNotIn("actionFlow", notification_job_list_payload(job, stale_minutes=30))
+
+    def test_action_flow_explains_watchlist_entry_pause_without_sale_language(self):
+        context = notification_context()
+        relation = context["ontologyRelationContext"]
+        relation["facts"].update({"source": "watchlist", "isWatchlist": True})
+        relation.update({"targetRole": "watchlist", "actionPolicy": "ENTRY_ONLY"})
+        relation["decision"].update({"candidateAction": "HOLD", "targetRole": "watchlist", "actionPolicy": "ENTRY_ONLY"})
+        relation["actionEnvelope"].update({
+            "status": "ENTRY_DEFERRED",
+            "statusLabel": "진입 조건 추가 확인",
+            "preferredAction": "HOLD",
+            "targetRole": "watchlist",
+            "actionPolicy": "ENTRY_ONLY",
+        })
+        context["notificationAiValidatedResponse"].update({"action": "HOLD", "actionLabel": "관심 유지"})
+        context["decisionTransition"] = {
+            "kind": "action-changed",
+            "previousAction": "BUY",
+            "currentAction": "HOLD",
+            "previousStatus": "ENTRY_ELIGIBLE",
+            "currentStatus": "ENTRY_DEFERRED",
+            "material": True,
+        }
+
+        transition = notification_action_flow(context)["transition"]
+
+        self.assertEqual("entry-paused", transition["category"])
+        self.assertEqual("신규 매수 보류", transition["label"])
+        self.assertIn("매도 신호가 아니라", transition["summary"])
 
     def test_web_uses_current_safe_presentation_for_persisted_ai_alert(self):
         context = notification_context()
@@ -253,7 +284,7 @@ class NotificationReverseReasoningTests(unittest.TestCase):
 
         payload = notification_job_public_payload(job, detail=True)
 
-        self.assertIn("새로 확인된 조건: 관심 유지", payload["fullText"])
+        self.assertIn("[관심 유지] 현재 행동은 관심 유지입니다. 매수 판단으로 바뀐 것은 아닙니다.", payload["fullText"])
         self.assertIn("새 뉴스·조사 근거가 아직 갱신되지 않아 기존 정보만 참고합니다.", payload["fullText"])
         for internal in ["old rendered message", "entry_observing", "supportingEvidenceIds", "relation-evidence", "changedEvidenceCount", "reasoningRefreshed"]:
             self.assertNotIn(internal, payload["fullText"])

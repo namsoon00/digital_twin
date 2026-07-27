@@ -140,17 +140,22 @@ def source_signal_types(context: Dict[str, object]) -> List[str]:
 def is_watchlist_context(context: Dict[str, object]) -> bool:
     relation_context = relation_context_value(context or {})
     facts = relation_context.get("facts") if isinstance(relation_context.get("facts"), dict) else {}
+    decision = relation_context.get("decision") if isinstance(relation_context.get("decision"), dict) else {}
+    plan = relation_context.get("executionPlan") if isinstance(relation_context.get("executionPlan"), dict) else {}
+    envelope = relation_context.get("actionEnvelope") if isinstance(relation_context.get("actionEnvelope"), dict) else {}
+    if not envelope:
+        envelope = decision.get("actionEnvelope") if isinstance(decision.get("actionEnvelope"), dict) else {}
     if facts.get("isWatchlist") is True:
         return True
     if str(facts.get("source") or "").strip().lower() == "watchlist":
         return True
     if str(relation_context.get("targetRole") or relation_context.get("sourceRole") or "").strip().lower() == "watchlist":
         return True
+    if str(envelope.get("targetRole") or "").strip().lower() == "watchlist":
+        return True
     if str(relation_context.get("actionPolicy") or "").strip() == WATCHLIST_ACTION_POLICY:
         return True
-    decision = relation_context.get("decision") if isinstance(relation_context.get("decision"), dict) else {}
-    plan = relation_context.get("executionPlan") if isinstance(relation_context.get("executionPlan"), dict) else {}
-    if str(decision.get("actionPolicy") or plan.get("actionPolicy") or "").strip() == WATCHLIST_ACTION_POLICY:
+    if str(decision.get("actionPolicy") or plan.get("actionPolicy") or envelope.get("actionPolicy") or "").strip() == WATCHLIST_ACTION_POLICY:
         return True
     insight = (context or {}).get("ontologyInsight") if isinstance((context or {}).get("ontologyInsight"), dict) else {}
     metadata = (context or {}).get("metadata") if isinstance((context or {}).get("metadata"), dict) else {}

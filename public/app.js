@@ -18804,12 +18804,13 @@
       '</div>'
     ].join("");
     var change = transition.summary || "이전 알림과 같은 판단 범위입니다.";
+    var changeLabel = transition.label ? '<b>[' + escapeHtml(transition.label) + ']</b> ' : '';
     return [
       '<section class="notification-detail-section notification-action-flow-section">',
       '<strong>판단 흐름</strong>',
       rows,
       '<div class="notification-detail-reasons">',
-      '<p><b>이번 변화</b> ' + escapeHtml(change) + '</p>',
+      '<p><b>이번 변화</b> ' + changeLabel + escapeHtml(change) + '</p>',
       nextChecks.length ? '<p><b>다음 행동</b> ' + escapeHtml(nextChecks.slice(0, 2).join(" / ")) + '</p>' : '',
       invalidation.length ? '<p><b>바뀌는 조건</b> ' + escapeHtml(invalidation.slice(0, 2).join(" / ")) + '</p>' : '',
       news.headline ? '<p><b>결정에 반영한 뉴스</b> ' + escapeHtml([news.source, news.headline].filter(Boolean).join(": ")) + '</p>' : '',

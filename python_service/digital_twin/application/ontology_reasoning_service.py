@@ -1348,12 +1348,18 @@ class OntologyReasoningRunner:
             self.ingress_repair_interval_seconds(),
         )
 
-    def mark_ingress_repair_scanned(self) -> None:
+    def mark_ingress_repair_attempt(self, error: object = "") -> None:
         payload = self.cursor_payload()
         now = self.now_provider()
         if now.tzinfo is None:
             now = now.replace(tzinfo=timezone.utc)
-        payload["lastReasoningIngressRepairAt"] = now.astimezone(timezone.utc).isoformat().replace("+00:00", "Z")
+        stamp = now.astimezone(timezone.utc).isoformat().replace("+00:00", "Z")
+        message = str(error or "").strip()[:180]
+        payload["lastReasoningIngressRepairAt"] = stamp
+        payload["lastReasoningIngressRepair"] = {
+            "status": "error" if message else "ok",
+            "error": message,
+        }
         self.save_cursor_payload(payload)
 
     def source_reasoning_events(
@@ -1383,10 +1389,10 @@ class OntologyReasoningRunner:
             if include_ingress_repair and callable(ingress_reader) and self.ingress_repair_due():
                 try:
                     source_events.extend(ingress_reader(limit=self.ingress_repair_scan_limit(limit)) or [])
-                except Exception:
-                    pass
+                except Exception as error:
+                    self.mark_ingress_repair_attempt(error)
                 else:
-                    self.mark_ingress_repair_scanned()
+                    self.mark_ingress_repair_attempt()
         elif self.durable_mailbox_ingress_enabled() and callable(ingress_reader):
             # Compatibility path for older stores that have not yet exposed
             # the direct-marker reader.
@@ -4299,7 +4305,9 @@ class OntologyReasoningRunner:
             "ingressRepair": {
                 "intervalSeconds": self.ingress_repair_interval_seconds(),
                 "scanLimit": self.ingress_repair_scan_limit(self.batch_size()),
-                "lastScannedAt": str(cursor_payload.get("lastReasoningIngressRepairAt") or ""),
+                "lastAttemptAt": str(cursor_payload.get("lastReasoningIngressRepairAt") or ""),
+                "lastStatus": str((cursor_payload.get("lastReasoningIngressRepair") or {}).get("status") or ""),
+                "lastError": str((cursor_payload.get("lastReasoningIngressRepair") or {}).get("error") or ""),
                 "due": self.ingress_repair_due(cursor_payload),
             },
             "pendingSymbols": pending_symbols,

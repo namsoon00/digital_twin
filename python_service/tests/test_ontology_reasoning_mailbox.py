@@ -646,6 +646,34 @@ class OntologyReasoningMailboxTests(unittest.TestCase):
         self.assertEqual(1, reader.repair_reads)
         self.assertLessEqual(reader.asserted_limit, 100)
 
+    def test_failed_ingress_repair_waits_for_the_next_repair_interval(self):
+        class FailingRepairReader(Reader):
+            def __init__(self):
+                super().__init__([])
+                self.repair_reads = 0
+
+            def direct_pending_reasoning_events(self, limit=0):
+                del limit
+                return []
+
+            def unmaterialized_reasoning_events(self, limit=0):
+                del limit
+                self.repair_reads += 1
+                raise RuntimeError("temporary event-log repair failure")
+
+        runner = self.build_runner([])
+        reader = FailingRepairReader()
+        runner.event_reader = reader
+
+        self.assertEqual([], runner.source_reasoning_events())
+        self.assertEqual([], runner.source_reasoning_events())
+        status = runner.status()
+
+        self.assertEqual(1, reader.repair_reads)
+        self.assertEqual("error", status["ingressRepair"]["lastStatus"])
+        self.assertFalse(status["ingressRepair"]["due"])
+        self.assertIn("temporary event-log repair failure", status["ingressRepair"]["lastError"])
+
     def test_shared_world_projection_completes_an_older_direct_research_handoff(self):
         class IngressReader(Reader):
             def unmaterialized_reasoning_events(self, limit=0):

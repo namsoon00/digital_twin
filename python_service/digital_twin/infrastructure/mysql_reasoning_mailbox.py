@@ -32,16 +32,17 @@ def _text(value: object) -> str:
 
 
 def local_reasoning_watch_pid(owner: object, hostname: str = "") -> int:
-    """Return a local scheduler PID encoded in a durable lease owner.
+    """Return a local scheduler or one-shot PID encoded in a durable lease owner.
 
     A PID alone is only safe to inspect on the machine that created it. New
-    owners include a hostname; the legacy ``reasoning-watch:<pid>`` shape is
-    retained as a local-only compatibility case for leases created before the
-    host component existed.
+    owners include a hostname; the legacy ``reasoning-watch:<pid>`` and
+    ``reasoning:<pid>`` shapes are retained as local-only compatibility cases
+    for leases created before the host component existed.
     """
     value = _text(owner)
-    prefix = "reasoning-watch:"
-    if not value.startswith(prefix):
+    prefixes = ("reasoning-watch:", "reasoning:")
+    prefix = next((candidate for candidate in prefixes if value.startswith(candidate)), "")
+    if not prefix:
         return 0
     remainder = value[len(prefix):]
     parts = remainder.rsplit(":", 1)
@@ -459,18 +460,20 @@ class MySQLOntologyReasoningMailboxStore(MySQLOperationalConnection):
     def _refresh_queue_state_with_connection(connection) -> Dict[str, object]:
         """Materialize an O(1) queue summary outside the hot probe path."""
         try:
+            stamp = utc_now()
             row = connection.execute(
                 """
                 SELECT COUNT(*) AS pending_count,
                        MIN(mailbox.occurred_at) AS oldest_pending_at,
                        COUNT(DISTINCT mailbox.symbol) AS pending_symbol_count,
-                       SUM(CASE WHEN work.work_state = 'running' THEN 1 ELSE 0 END) AS running_count,
+                       SUM(CASE WHEN work.work_state = 'running' AND work.lease_until > %s THEN 1 ELSE 0 END) AS running_count,
                        SUM(CASE WHEN work.work_state = 'retrying' THEN 1 ELSE 0 END) AS retrying_count
                 FROM ontology_reasoning_mailbox mailbox
                 LEFT JOIN ontology_reasoning_work_items work
                   ON work.mailbox_key = mailbox.mailbox_key
                  AND work.source_event_id = mailbox.source_event_id
-                """
+                """,
+                (stamp,),
             ).fetchone() or {}
             symbols = connection.execute(
                 """
@@ -482,15 +485,15 @@ class MySQLOntologyReasoningMailboxStore(MySQLOperationalConnection):
                 """
                 SELECT lease_owner, lease_until, last_stage, heartbeat_at
                 FROM ontology_reasoning_work_items
-                WHERE work_state = 'running'
+                WHERE work_state = 'running' AND lease_until > %s
                 ORDER BY heartbeat_at DESC, updated_at DESC LIMIT 1
-                """
+                """,
+                (stamp,),
             ).fetchone() or {}
             previous = connection.execute(
                 "SELECT last_completed_at, last_timeout_at, version FROM ontology_reasoning_queue_state "
                 "WHERE state_id = 'global' FOR UPDATE"
             ).fetchone() or {}
-            stamp = utc_now()
             values = {
                 "pending": max(0, int(row.get("pending_count") or 0)),
                 "running": max(0, int(row.get("running_count") or 0)),
@@ -790,10 +793,11 @@ class MySQLOntologyReasoningMailboxStore(MySQLOperationalConnection):
                     """
                     SELECT mailbox_key, source_event_id, lease_owner, heartbeat_at, updated_at
                     FROM ontology_reasoning_work_items
-                    WHERE work_state = 'running' AND lease_owner LIKE %s
+                    WHERE work_state = 'running'
+                      AND (lease_owner LIKE %s OR lease_owner LIKE %s)
                     FOR UPDATE
                     """,
-                    ("reasoning-watch:%",),
+                    ("reasoning-watch:%", "reasoning:%"),
                 ).fetchall()
                 for row in rows or []:
                     owner = _text(row.get("lease_owner"))

@@ -515,6 +515,8 @@ class OntologyReasoningMailboxTests(unittest.TestCase):
     def test_orphan_recovery_only_accepts_confirmed_dead_local_scheduler_owners(self):
         self.assertEqual(451, local_reasoning_watch_pid("reasoning-watch:local:451", hostname="local"))
         self.assertEqual(452, local_reasoning_watch_pid("reasoning-watch:452", hostname="local"))
+        self.assertEqual(453, local_reasoning_watch_pid("reasoning:local:453", hostname="local"))
+        self.assertEqual(454, local_reasoning_watch_pid("reasoning:454", hostname="local"))
         self.assertEqual(0, local_reasoning_watch_pid("reasoning-watch:remote:453", hostname="local"))
         self.assertTrue(
             local_reasoning_watch_is_dead(

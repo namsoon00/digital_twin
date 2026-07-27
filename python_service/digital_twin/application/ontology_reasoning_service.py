@@ -1,6 +1,7 @@
 import hashlib
 import inspect
 import os
+import socket
 import time
 from datetime import datetime, timezone
 from typing import Callable, Dict, Iterable, List, Mapping, Tuple
@@ -655,7 +656,7 @@ class OntologyReasoningRunner:
             or os.environ.get("ONTOLOGY_REASONING_WORKER_ID")
             or ""
         ).strip()
-        return configured or "reasoning:" + str(os.getpid())
+        return configured or "reasoning:" + socket.gethostname() + ":" + str(os.getpid())
 
     def mailbox_entries_for_requests(self, requests: Iterable[object]) -> List[Dict[str, str]]:
         entries = []

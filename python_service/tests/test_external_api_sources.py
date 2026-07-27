@@ -212,6 +212,66 @@ class ExternalApiSourceTests(unittest.TestCase):
         self.assertEqual(207500, merged.current_price)
         self.assertEqual("KIS Open API", merged.quote_source)
 
+    def test_kis_rest_price_does_not_replace_fresh_toss_quote_without_websocket_tick(self):
+        provider = KISMarketSignalProvider(settings={"kisMarketSignalsEnabled": "0"})
+        position = normalize_position({
+            "symbol": "035420",
+            "name": "NAVER",
+            "market": "KR",
+            "currency": "KRW",
+            "currentPrice": 223500,
+            "freshnessStatus": "fresh",
+            "quoteSource": "Toss /api/v1/prices",
+        })
+        signal = {
+            "currentPrice": 207500,
+            "quoteSource": "KIS Open API",
+            "marketSignalCoverage": {
+                "price": {
+                    "status": "available",
+                    "freshnessStatus": "near-live",
+                    "transport": "rest",
+                },
+                "ccnl": {"status": "unavailable", "fields": []},
+            },
+        }
+
+        merged = provider.merge_position(position, signal)
+
+        self.assertEqual(223500, merged.current_price)
+        self.assertEqual("Toss /api/v1/prices", merged.quote_source)
+
+    def test_kis_websocket_price_replaces_fresh_toss_quote(self):
+        provider = KISMarketSignalProvider(settings={"kisMarketSignalsEnabled": "0"})
+        position = normalize_position({
+            "symbol": "035420",
+            "name": "NAVER",
+            "market": "KR",
+            "currency": "KRW",
+            "currentPrice": 223500,
+            "freshnessStatus": "fresh",
+            "quoteSource": "Toss /api/v1/prices",
+        })
+        signal = {
+            "currentPrice": 220000,
+            "quoteSource": "KIS Open API + KIS WebSocket",
+            "marketSignalCoverage": {
+                "price": {"status": "available", "freshnessStatus": "near-live", "transport": "rest"},
+                "ccnl": {
+                    "status": "available",
+                    "fields": ["currentPrice", "tradeStrength"],
+                    "cadence": "websocket",
+                    "realTime": True,
+                    "freshnessStatus": "realtime",
+                },
+            },
+        }
+
+        merged = provider.merge_position(position, signal)
+
+        self.assertEqual(220000, merged.current_price)
+        self.assertIn("KIS Open API", merged.quote_source)
+
     def test_repeated_kis_investor_totals_remain_important_reference_evidence(self):
         provider = KISMarketSignalProvider(
             settings={"kisMarketSignalUnchangedStaleCount": "3"},

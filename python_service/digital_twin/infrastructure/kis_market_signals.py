@@ -358,11 +358,26 @@ def price_stage_is_reference(signal: Dict[str, object]) -> bool:
 
 
 def keep_fresh_position_quote(position: Position, signal: Dict[str, object]) -> bool:
-    """A KIS last-close reference must not replace a fresher account quote."""
-    if not position.current_price or not price_stage_is_reference(signal):
+    """Prefer the account quote unless KIS has a genuine WebSocket price tick."""
+    if not position.current_price:
         return False
     freshness = str(position.freshness_status or "").strip().lower()
-    return bool(position.real_time) or freshness in {"fresh", "realtime", "live"}
+    account_quote_is_fresh = bool(position.real_time) or freshness in {"fresh", "realtime", "live"}
+    if not account_quote_is_fresh:
+        return False
+    if price_stage_is_reference(signal):
+        return True
+    coverage = signal.get("marketSignalCoverage") if isinstance(signal.get("marketSignalCoverage"), dict) else {}
+    ccnl = coverage.get("ccnl") if isinstance(coverage, dict) and isinstance(coverage.get("ccnl"), dict) else {}
+    fields = {str(field) for field in ccnl.get("fields") or []}
+    websocket_price = (
+        str(ccnl.get("status") or "") == "available"
+        and "currentPrice" in fields
+        and (str(ccnl.get("cadence") or "") == "websocket" or str(ccnl.get("transport") or "") == "websocket")
+        and ccnl.get("realTime") is not False
+        and str(ccnl.get("freshnessStatus") or "").strip().lower() == "realtime"
+    )
+    return not websocket_price
 
 
 def fresh_websocket_stage(payload: Dict[str, object], stage: str, max_age_seconds: int) -> bool:

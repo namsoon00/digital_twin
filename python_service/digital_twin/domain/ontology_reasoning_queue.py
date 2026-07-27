@@ -52,6 +52,13 @@ COALESCIBLE_RESEARCH_TRIGGERS = {
     "research-evidence-lifecycle",
 }
 
+# A generic research update causes a new projection of the complete current
+# ResearchEvidence set. It is not a request to replay only the article
+# analysis, news event, or lifecycle fact family that happened to trigger it.
+# Keep one latest-state mailbox slot per account/symbol so those equivalent
+# triggers cannot accumulate behind a slow TypeDB projection.
+GENERIC_RESEARCH_LATEST_STATE_SLOT = "ResearchEvidenceLatestState"
+
 
 def event_payload(event: object) -> Dict[str, object]:
     return dict(getattr(event, "payload", {}) or {})
@@ -103,16 +110,41 @@ def event_fact_revision(event: object, symbol: object) -> str:
     return str(value or "").strip()[:160]
 
 
+def is_generic_research_latest_state(event: object) -> bool:
+    """Whether an event may replace an older generic research trigger.
+
+    Hypothesis research handoffs remain non-fungible: each carries a
+    run-to-generation acknowledgement contract and must not be collapsed into
+    the ordinary current ResearchEvidence observation.
+    """
+    payload = event_payload(event)
+    trigger = str(payload.get("trigger") or "").strip()
+    return bool(
+        trigger in COALESCIBLE_RESEARCH_TRIGGERS
+        and not str(payload.get("researchRunId") or "").strip()
+        and not bool(payload.get("reasoningHandoff"))
+        and event_review_level(event) != "immediate"
+    )
+
+
+def mailbox_slot_family(event: object, fact_types: Tuple[str, ...]) -> str:
+    """Return the durable latest-state identity without losing event facts.
+
+    ``factFamily`` remains on the mailbox row for audit/readability. This
+    value is used only to build the slot key. Generic research updates share
+    one slot because TypeDB reads the whole current evidence set on the next
+    projection.
+    """
+    if is_generic_research_latest_state(event):
+        return GENERIC_RESEARCH_LATEST_STATE_SLOT
+    return ",".join(fact_types) or "MarketQuote"
+
+
 def realtime_coalescing_key(event: object) -> Tuple[str, str, Tuple[str, ...]]:
     """Return the durable latest-state identity for fungible observations."""
     payload = event_payload(event)
     trigger = str(payload.get("trigger") or "").strip()
-    handoff = payload.get("reasoningHandoff")
-    generic_research = (
-        trigger in COALESCIBLE_RESEARCH_TRIGGERS
-        and not str(payload.get("researchRunId") or "").strip()
-        and not bool(handoff)
-    )
+    generic_research = is_generic_research_latest_state(event)
     if trigger not in COALESCIBLE_REALTIME_TRIGGERS and not generic_research:
         return ()
     if event_review_level(event) == "immediate":
@@ -174,6 +206,7 @@ def durable_mailbox_entries(event: DomainEvent) -> List[Dict[str, object]]:
     source_event["event_id"] = event_id
     source_event.setdefault("occurred_at", str(getattr(event, "occurred_at", "") or ""))
     family = ",".join(fact_types) or "MarketQuote"
+    slot_family = mailbox_slot_family(event, fact_types)
     priority = (
         REVIEW_LEVEL_ORDER.get(event_review_level(event), 0) * 1000
         + TRIGGER_ORDER.get(trigger, 0) * 100
@@ -181,7 +214,7 @@ def durable_mailbox_entries(event: DomainEvent) -> List[Dict[str, object]]:
     )
     entries = []
     for symbol in event_symbols(event):
-        seed = "|".join([account_scope, symbol, family])
+        seed = "|".join([account_scope, symbol, slot_family])
         entries.append({
             "mailboxKey": hashlib.sha256(seed.encode("utf-8")).hexdigest(),
             "sourceEventId": event_id,
@@ -189,6 +222,7 @@ def durable_mailbox_entries(event: DomainEvent) -> List[Dict[str, object]]:
             "accountScope": account_scope,
             "symbol": symbol,
             "factFamily": family,
+            "mailboxSlotFamily": slot_family,
             "trigger": trigger,
             "reviewLevel": event_review_level(event),
             "priorityHint": priority,

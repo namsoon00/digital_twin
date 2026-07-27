@@ -341,6 +341,7 @@ def research_evidence_request(
     trigger="research-evidence-update",
     research_run_id="",
     reasoning_handoff=None,
+    fact_types=None,
 ):
     source = DomainEvent(
         name="research.evidence.collected",
@@ -353,7 +354,7 @@ def research_evidence_request(
         trigger,
         symbols,
         changed_count=len(symbols),
-        fact_types=["NewsEvent", "ResearchEvidence"],
+        fact_types=list(fact_types or ["NewsEvent", "ResearchEvidence"]),
     )
     payload = dict(request.payload or {})
     if research_run_id:
@@ -428,6 +429,123 @@ class OntologyReasoningMailboxTests(unittest.TestCase):
         self.assertEqual(0, second["mailbox"]["pendingEntryCount"])
         self.assertIn("research-aapl", self.cursor.ids)
         self.assertIn("research-msft", self.cursor.ids)
+
+    def test_generic_research_fact_families_share_one_latest_state_slot(self):
+        article = research_evidence_request(
+            "article-analysis",
+            ["AAPL"],
+            "2026-07-24T00:00:00Z",
+            trigger="news-analysis-enrichment",
+            fact_types=["NewsArticleAnalysis", "ResearchEvidence"],
+        )
+        evidence = research_evidence_request(
+            "evidence-refresh",
+            ["AAPL"],
+            "2026-07-24T00:01:00Z",
+            trigger="research-evidence-update",
+            fact_types=["NewsEvent", "ResearchEvidence"],
+        )
+        runner = self.build_runner([article, evidence])
+
+        article_entry = runner.mailbox_entries_for_event(article)[0]
+        evidence_entry = runner.mailbox_entries_for_event(evidence)[0]
+        ingress_article_entry = durable_mailbox_entries(article)[0]
+        ingress_evidence_entry = durable_mailbox_entries(evidence)[0]
+        result = runner.run_once(force=True)
+
+        self.assertEqual(article_entry["mailboxKey"], evidence_entry["mailboxKey"])
+        self.assertEqual(ingress_article_entry["mailboxKey"], ingress_evidence_entry["mailboxKey"])
+        self.assertEqual(article_entry["mailboxKey"], ingress_article_entry["mailboxKey"])
+        self.assertNotEqual(article_entry["factFamily"], evidence_entry["factFamily"])
+        self.assertEqual("ResearchEvidenceLatestState", article_entry["mailboxSlotFamily"])
+        self.assertEqual("ResearchEvidenceLatestState", evidence_entry["mailboxSlotFamily"])
+        self.assertEqual([["AAPL"]], self.monitor.calls)
+        self.assertEqual("superseded", self.mailbox.events["article-analysis"]["state"])
+        self.assertEqual("completed", self.mailbox.events["evidence-refresh"]["state"])
+        self.assertEqual("ok", result["status"])
+
+    def test_legacy_generic_research_slot_is_superseded_by_newer_evidence(self):
+        article = research_evidence_request(
+            "legacy-article",
+            ["AAPL"],
+            "2026-07-24T00:00:00Z",
+            trigger="news-analysis-enrichment",
+            fact_types=["NewsArticleAnalysis", "ResearchEvidence"],
+        )
+        evidence = research_evidence_request(
+            "current-evidence",
+            ["AAPL"],
+            "2026-07-24T00:01:00Z",
+            trigger="research-evidence-update",
+            fact_types=["NewsEvent", "ResearchEvidence"],
+        )
+        runner = self.build_runner([evidence])
+        legacy_entry = runner.mailbox_entries_for_event(article)[0]
+        # Reproduce a row created before the generic-research slot identity
+        # was introduced: it used the visible fact family as its key.
+        legacy_entry["mailboxKey"] = "legacy-research:" + legacy_entry["mailboxKey"]
+        self.mailbox.enqueue([legacy_entry])
+
+        result = runner.run_once(force=True)
+
+        self.assertEqual([["AAPL"]], self.monitor.calls)
+        self.assertEqual("superseded", self.mailbox.events["legacy-article"]["state"])
+        self.assertEqual("completed", self.mailbox.events["current-evidence"]["state"])
+        self.assertEqual(1, result["semanticSupersededMailboxEntryCount"])
+        self.assertEqual(0, result["mailbox"]["pendingEntryCount"])
+
+    def test_orphaned_research_retry_is_retired_after_a_later_successful_generation(self):
+        article = research_evidence_request(
+            "orphaned-research",
+            ["AAPL"],
+            "2026-07-24T00:00:00Z",
+            trigger="news-analysis-enrichment",
+            fact_types=["NewsArticleAnalysis", "ResearchEvidence"],
+        )
+        runner = self.build_runner([])
+        legacy_entry = runner.mailbox_entries_for_event(article)[0]
+        legacy_entry["mailboxKey"] = "orphaned-research:" + legacy_entry["mailboxKey"]
+        self.mailbox.enqueue([legacy_entry])
+        self.cursor.payload["lastReasonedAtBySymbol"] = {"AAPL": "2026-07-24T00:01:00Z"}
+
+        result = runner.run_once(force=True)
+
+        self.assertEqual("idle", result["status"])
+        self.assertEqual([], self.monitor.calls)
+        self.assertEqual("superseded", self.mailbox.events["orphaned-research"]["state"])
+        self.assertIn("orphaned-research", self.cursor.superseded)
+        self.assertEqual(1, result["semanticSupersededMailboxEntryCount"])
+
+    def test_status_excludes_legacy_research_slot_from_actionable_queue_delay(self):
+        article = research_evidence_request(
+            "legacy-status-article",
+            ["AAPL"],
+            "2026-07-24T00:00:00Z",
+            trigger="news-analysis-enrichment",
+            fact_types=["NewsArticleAnalysis", "ResearchEvidence"],
+        )
+        evidence = research_evidence_request(
+            "current-status-evidence",
+            ["AAPL"],
+            "2026-07-24T00:01:00Z",
+            trigger="research-evidence-update",
+            fact_types=["NewsEvent", "ResearchEvidence"],
+        )
+        runner = self.build_runner([])
+        legacy_entry = runner.mailbox_entries_for_event(article)[0]
+        legacy_entry["mailboxKey"] = "legacy-status:" + legacy_entry["mailboxKey"]
+        self.mailbox.enqueue([legacy_entry])
+        self.mailbox.enqueue(runner.mailbox_entries_for_event(evidence))
+
+        status = runner.status()
+
+        self.assertEqual(1, status["effectivePendingCount"])
+        self.assertEqual(1, status["mailboxPendingEntryCount"])
+        self.assertEqual(2, status["mailboxStoredEntryCount"])
+        self.assertEqual(1, status["semanticSupersededMailboxEntryCount"])
+        self.assertEqual("preview", status["mailboxSemanticCompaction"]["status"])
+        self.assertEqual("2026-07-24T00:01:00Z", status["queueDispatch"]["oldestRequestAt"])
+        self.assertEqual("pending", self.mailbox.events["legacy-status-article"]["state"])
 
     def test_hypothesis_research_handoff_does_not_enter_latest_state_mailbox(self):
         event = research_evidence_request(

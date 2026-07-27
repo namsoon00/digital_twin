@@ -18,6 +18,10 @@ from ..domain.investment_evidence_governance import (
     ResearchReasoningHandoff,
     complete_reasoning_handoff,
 )
+from ..domain.ontology_reasoning_queue import (
+    is_generic_research_latest_state,
+    mailbox_slot_family,
+)
 
 
 DISABLED_VALUES = {"0", "false", "no", "off", "disabled"}
@@ -498,12 +502,7 @@ def realtime_coalescing_key(event: object) -> Tuple[str, str, Tuple[str, ...]]:
     payload = event_payload(event)
     trigger = str(payload.get("trigger") or "").strip()
     review_level = event_review_level(event)
-    handoff = payload.get("reasoningHandoff")
-    is_generic_research_update = (
-        trigger in COALESCIBLE_RESEARCH_TRIGGERS
-        and not str(payload.get("researchRunId") or "").strip()
-        and not bool(handoff)
-    )
+    is_generic_research_update = is_generic_research_latest_state(event)
     if trigger not in COALESCIBLE_REALTIME_TRIGGERS and not is_generic_research_update:
         return ()
     if review_level == "immediate":
@@ -1449,7 +1448,7 @@ class OntologyReasoningRunner:
         }
 
     def mailbox_entries_for_event(self, event: object) -> List[Dict[str, object]]:
-        """Expand a fungible realtime event into account/symbol mailbox slots."""
+        """Expand a fungible observation into one latest-state mailbox slot."""
         coalescing_key = realtime_coalescing_key(event)
         if not coalescing_key:
             return []
@@ -1461,6 +1460,7 @@ class OntologyReasoningRunner:
         source_event["event_id"] = event_id
         source_event.setdefault("occurred_at", str(getattr(event, "occurred_at", "") or ""))
         family = ",".join(fact_types) or "MarketQuote"
+        slot_family = mailbox_slot_family(event, fact_types)
         priority = (
             event_subject_priority(event, self.priority_symbols()) * 10000
             + REVIEW_LEVEL_ORDER.get(event_review_level(event), 0) * 1000
@@ -1469,7 +1469,7 @@ class OntologyReasoningRunner:
         )
         entries = []
         for symbol in event_symbols(event):
-            seed = "|".join([account_scope, symbol, family])
+            seed = "|".join([account_scope, symbol, slot_family])
             mailbox_key = hashlib.sha256(seed.encode("utf-8")).hexdigest()
             entries.append({
                 "mailboxKey": mailbox_key,
@@ -1478,6 +1478,7 @@ class OntologyReasoningRunner:
                 "accountScope": account_scope,
                 "symbol": symbol,
                 "factFamily": family,
+                "mailboxSlotFamily": slot_family,
                 "trigger": trigger,
                 "reviewLevel": event_review_level(event),
                 "priorityHint": priority,
@@ -1639,6 +1640,169 @@ class OntologyReasoningRunner:
             if value:
                 return value
         return str(getattr(event, "occurred_at", "") or "").strip()
+
+    def generic_research_mailbox_subject(self, event: object) -> Tuple[str, str]:
+        """Return the current-state subject for one fungible research slot.
+
+        Mailbox rows are already expanded to one symbol. The explicit
+        ``_reasoningMailbox`` metadata prevents a direct/non-fungible research
+        request from being discarded merely because it mentions the same
+        symbol.
+        """
+        metadata = self.mailbox_metadata(event)
+        if not metadata or not is_generic_research_latest_state(event):
+            return ()
+        symbols = event_symbols(event)
+        symbol = str(symbols[0] if symbols else "").upper().strip()
+        if not symbol:
+            return ()
+        account_scope = str(metadata.get("accountScope") or "market").strip() or "market"
+        return account_scope, symbol
+
+    def generic_research_mailbox_order_key(self, event: object) -> Tuple[str, str, str]:
+        """Choose the newest evidence observation, not the noisiest trigger."""
+        return (
+            self.event_source_observed_at(event),
+            str(getattr(event, "occurred_at", "") or ""),
+            self.mailbox_source_event_id(event),
+        )
+
+    @staticmethod
+    def timestamp_at_or_after(candidate: object, reference: object) -> bool:
+        """Compare operational timestamps without trusting malformed values."""
+        candidate_text = str(candidate or "").strip()
+        reference_text = str(reference or "").strip()
+        if not candidate_text or not reference_text:
+            return False
+        try:
+            candidate_at = datetime.fromisoformat(candidate_text.replace("Z", "+00:00"))
+            reference_at = datetime.fromisoformat(reference_text.replace("Z", "+00:00"))
+        except ValueError:
+            return False
+        if candidate_at.tzinfo is None:
+            candidate_at = candidate_at.replace(tzinfo=timezone.utc)
+        if reference_at.tzinfo is None:
+            reference_at = reference_at.replace(tzinfo=timezone.utc)
+        return candidate_at.astimezone(timezone.utc) >= reference_at.astimezone(timezone.utc)
+
+    def compact_generic_research_mailbox_requests(
+        self,
+        requests: Iterable[object],
+        persist: bool = False,
+    ) -> Dict[str, object]:
+        """Keep only the newest generic ResearchEvidence request per subject.
+
+        The active ABox is rebuilt from the full current research repository.
+        A later generic research observation for the same account/symbol
+        therefore supersedes an older article-analysis or lifecycle trigger,
+        even when their fact families differ. This is queue semantics only;
+        it never removes the underlying ResearchEvidence facts or a
+        non-fungible hypothesis-research handoff.
+        """
+        original = list(requests or [])
+        groups: Dict[Tuple[str, str], List[object]] = {}
+        for event in original:
+            subject = self.generic_research_mailbox_subject(event)
+            if subject:
+                groups.setdefault(subject, []).append(event)
+
+        discarded_entries: List[Dict[str, str]] = []
+        discarded_keys = set()
+        retained_by_subject: Dict[str, str] = {}
+        already_reasoned_subjects = []
+        last_reasoned_at = self.last_reasoned_at_by_symbol()
+
+        def discard(candidate: object) -> None:
+            metadata = self.mailbox_metadata(candidate)
+            mailbox_key = str(metadata.get("mailboxKey") or "").strip()
+            source_event_id = str(metadata.get("sourceEventId") or "").strip()
+            if not mailbox_key or mailbox_key in discarded_keys:
+                return
+            discarded_keys.add(mailbox_key)
+            discarded_entries.append({
+                "mailboxKey": mailbox_key,
+                "sourceEventId": source_event_id,
+            })
+
+        for subject, candidates in groups.items():
+            lead = max(candidates, key=self.generic_research_mailbox_order_key)
+            source_observed_at = self.event_source_observed_at(lead)
+            if self.timestamp_at_or_after(last_reasoned_at.get(subject[1]), source_observed_at):
+                # Every TypeDB projection rebuilds the current ABox, so a
+                # verified later generation already includes this evidence.
+                # This specifically clears orphaned retries from an earlier
+                # scheduler process without replaying stale research.
+                for candidate in candidates:
+                    discard(candidate)
+                already_reasoned_subjects.append("|".join(subject))
+                continue
+            if len(candidates) < 2:
+                continue
+            lead_metadata = self.mailbox_metadata(lead)
+            lead_key = str(lead_metadata.get("mailboxKey") or "").strip()
+            retained_by_subject["|".join(subject)] = self.mailbox_source_event_id(lead)
+            for candidate in candidates:
+                if candidate is lead:
+                    continue
+                mailbox_key = str(self.mailbox_metadata(candidate).get("mailboxKey") or "").strip()
+                if not mailbox_key or mailbox_key == lead_key:
+                    continue
+                discard(candidate)
+
+        active = [
+            event for event in original
+            if str(self.mailbox_metadata(event).get("mailboxKey") or "").strip() not in discarded_keys
+        ]
+        result = {
+            "status": "not-needed",
+            "requests": active,
+            "storedEntryCount": len(original),
+            "actionableEntryCount": len(active),
+            "discardedEntryCount": len(discarded_entries),
+            "discardedEntries": discarded_entries,
+            "terminalEventStates": {},
+            "retainedSourceEventIdsBySubject": retained_by_subject,
+            "alreadyReasonedSubjects": already_reasoned_subjects,
+        }
+        if not discarded_entries:
+            return result
+        if not persist:
+            result["status"] = "preview"
+            return result
+        acknowledge = getattr(self.mailbox_store, "acknowledge", None) if self.mailbox_enabled() else None
+        if not callable(acknowledge):
+            # A store that cannot atomically acknowledge old revisions must
+            # retain them; hiding them here would create a permanent queue
+            # leak in compatibility environments.
+            result.update({
+                "status": "unsupported",
+                "requests": original,
+                "actionableEntryCount": len(original),
+                "discardedEntryCount": 0,
+                "discardedEntries": [],
+            })
+            return result
+        try:
+            terminal = acknowledge(
+                discarded_entries,
+                state="superseded",
+                reason="newer generic ResearchEvidence state or a later TypeDB generation owns this account/symbol mailbox slot",
+            ) or {}
+        except Exception as error:  # noqa: BLE001 - retain work when durable acknowledgement is uncertain.
+            result.update({
+                "status": "error",
+                "reason": str(error)[:180],
+                "requests": original,
+                "actionableEntryCount": len(original),
+                "discardedEntryCount": 0,
+                "discardedEntries": [],
+            })
+            return result
+        result.update({
+            "status": "compacted",
+            "terminalEventStates": dict(terminal),
+        })
+        return result
 
     def is_off_session_reference_transition(self, event: object) -> bool:
         """Discard an old close-transition request before it occupies TypeDB.
@@ -1832,14 +1996,29 @@ class OntologyReasoningRunner:
         ]
         direct_work = self.coalesced_work(direct_source_requests)
         mailbox_requests = self.mailbox_pending_requests() if mailbox.get("enabled") else []
+        mailbox_compaction = self.compact_generic_research_mailbox_requests(
+            mailbox_requests,
+            persist=bool(hydrate_mailbox and mailbox.get("enabled")),
+        )
+        mailbox_requests = list(mailbox_compaction.get("requests") or [])
         active_requests = list(mailbox_requests) + list(direct_work.get("requests") or [])
         return {
             "requests": active_requests,
             "rawRequestCount": len(source_requests),
             "sourceRequestCount": len(source_requests),
             "mailboxPendingEntryCount": len(mailbox_requests),
+            "mailboxStoredEntryCount": int(mailbox_compaction.get("storedEntryCount") or 0),
+            "semanticSupersededMailboxEntryCount": int(mailbox_compaction.get("discardedEntryCount") or 0),
+            "mailboxSemanticCompaction": {
+                key: value
+                for key, value in mailbox_compaction.items()
+                if key not in {"requests", "discardedEntries"}
+            },
             "mailbox": mailbox,
-            "terminalMailboxEventStates": dict(mailbox.get("terminalEventStates") or {}),
+            "terminalMailboxEventStates": {
+                **dict(mailbox.get("terminalEventStates") or {}),
+                **dict(mailbox_compaction.get("terminalEventStates") or {}),
+            },
             "coalescedEventIds": list(direct_work.get("coalescedEventIds") or []),
             "supersededByLead": dict(direct_work.get("supersededByLead") or {}),
         }
@@ -2915,6 +3094,31 @@ class OntologyReasoningRunner:
         result["enabled"] = True
         return result
 
+    def mailbox_actionability_summary(
+        self,
+        work: Dict[str, object],
+        requests: Iterable[object],
+        stale_requests: Iterable[Tuple[object, Dict[str, object]]] = None,
+    ) -> Dict[str, object]:
+        """Expose durable rows separately from actionable queue pressure."""
+        summary = self.mailbox_summary()
+        summary = dict(summary or {}) if isinstance(summary, dict) else {"enabled": self.mailbox_enabled()}
+        active = list(requests or [])
+        stale = list(stale_requests or [])
+        active_mailbox = [event for event in active if self.mailbox_metadata(event)]
+        stale_mailbox = [event for event, _freshness in stale if self.mailbox_metadata(event)]
+        summary.update({
+            "storedPendingEntryCount": int(
+                work.get("mailboxStoredEntryCount")
+                or summary.get("pendingEntryCount")
+                or 0
+            ),
+            "actionablePendingEntryCount": len(active_mailbox),
+            "semanticSupersededEntryCount": int(work.get("semanticSupersededMailboxEntryCount") or 0),
+            "stalePreviewEntryCount": len(stale_mailbox),
+        })
+        return summary
+
     def lightweight_queue_state(self, scan_limit: int = 0) -> Dict[str, object]:
         """Return a bounded queue signal without building the full scheduler view.
 
@@ -3082,13 +3286,19 @@ class OntologyReasoningRunner:
         stale_terminal = self.persist_terminal_mailbox_events(
             self.discard_stale_requests(stale_requests),
         )
+        mailbox_summary = self.mailbox_actionability_summary(work, requests, stale_requests)
         queue_metadata = {
             "rawRequestCount": int(work.get("rawRequestCount") or 0),
             "effectivePendingCount": len(requests),
-            "mailboxPendingEntryCount": int(work.get("mailboxPendingEntryCount") or 0),
+            "mailboxPendingEntryCount": int(mailbox_summary.get("actionablePendingEntryCount") or 0),
+            "mailboxStoredEntryCount": int(mailbox_summary.get("storedPendingEntryCount") or 0),
+            "semanticSupersededMailboxEntryCount": int(
+                work.get("semanticSupersededMailboxEntryCount") or 0
+            ),
+            "mailboxSemanticCompaction": dict(work.get("mailboxSemanticCompaction") or {}),
             "sameRevisionEntryCount": len((work.get("mailbox") or {}).get("sameRevisionEntryKeys") or []),
             "staleRequestCount": len(stale_requests),
-            "mailbox": self.mailbox_summary(),
+            "mailbox": mailbox_summary,
             "mailboxTerminalEvents": {
                 "completed": list(terminal_mailbox.get("completed") or []) + list(stale_terminal.get("completed") or []),
                 "discarded": list(terminal_mailbox.get("discarded") or []) + list(stale_terminal.get("discarded") or []),
@@ -3504,9 +3714,25 @@ class OntologyReasoningRunner:
             maintenance = self.run_maintenance_if_due()
         stage_timing["maintenanceMs"] = int((time.perf_counter() - maintenance_started) * 1000)
         status = "partial" if blocked_request_ids or mailbox_ack_error else "ok"
-        queue_metadata["mailbox"] = self.mailbox_summary()
+        post_mailbox = self.mailbox_summary()
+        post_mailbox.update({
+            "storedPendingEntryCount": int(post_mailbox.get("pendingEntryCount") or 0),
+            # This turn has acknowledged the selected mailbox revisions. A
+            # newly ingressed event may arrive concurrently and is counted on
+            # the next durable read rather than guessed here.
+            "actionablePendingEntryCount": max(
+                0,
+                int(queue_metadata["mailbox"].get("actionablePendingEntryCount") or 0)
+                - len(mailbox_cursor_requests),
+            ),
+            "semanticSupersededEntryCount": int(
+                queue_metadata["mailbox"].get("semanticSupersededEntryCount") or 0
+            ),
+            "stalePreviewEntryCount": int(queue_metadata["mailbox"].get("stalePreviewEntryCount") or 0),
+        })
+        queue_metadata["mailbox"] = post_mailbox
         queue_metadata["mailboxPendingEntryCount"] = int(
-            queue_metadata["mailbox"].get("pendingEntryCount") or 0
+            queue_metadata["mailbox"].get("actionablePendingEntryCount") or 0
         )
         return {
             "status": status,
@@ -3768,7 +3994,7 @@ class OntologyReasoningRunner:
 
     def status(self) -> Dict[str, object]:
         work = self.pending_work(self.batch_size(), hydrate_mailbox=False)
-        pending = list(work.get("requests") or [])
+        pending, stale_preview = self.split_stale_requests(work.get("requests") or [])
         cursor_payload = self.cursor_payload()
         progress = self.event_symbol_progress()
         batch_plan = self.reasoning_batch_plan(pending)
@@ -3801,7 +4027,7 @@ class OntologyReasoningRunner:
         projection_circuit = self.projection_circuit_state()
         execution_timeout_guard = self.execution_timeout_guard_display_state(cursor_payload)
         execution_timeout_remaining = self.execution_timeout_guard_remaining_seconds(cursor_payload)
-        mailbox = self.mailbox_summary()
+        mailbox = self.mailbox_actionability_summary(work, pending, stale_preview)
         queue_status = "healthy"
         queue_reason = ""
         if not storage_guard.get("ready"):
@@ -3835,7 +4061,13 @@ class OntologyReasoningRunner:
             "rawPendingCount": int(work.get("rawRequestCount") or len(pending)),
             "effectivePendingCount": len(pending),
             "coalescedPendingEventCount": len(work.get("coalescedEventIds") or []),
-            "mailboxPendingEntryCount": int(work.get("mailboxPendingEntryCount") or 0),
+            "mailboxPendingEntryCount": int(mailbox.get("actionablePendingEntryCount") or 0),
+            "mailboxStoredEntryCount": int(mailbox.get("storedPendingEntryCount") or 0),
+            "semanticSupersededMailboxEntryCount": int(
+                work.get("semanticSupersededMailboxEntryCount") or 0
+            ),
+            "mailboxSemanticCompaction": dict(work.get("mailboxSemanticCompaction") or {}),
+            "stalePreviewRequestCount": len(stale_preview),
             "mailbox": mailbox,
             "sourceFreshness": {
                 "enabled": self.source_freshness_enabled(),

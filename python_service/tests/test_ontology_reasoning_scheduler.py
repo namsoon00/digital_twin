@@ -110,6 +110,12 @@ class DeferredLowPriorityRunner:
         raise AssertionError("low-priority TypeDB child must not start while reasoning is pending")
 
 
+class GraceRecoveryRunner(FakeRunner):
+    def recover_orphaned_mailbox_work(self):
+        self.orphan_recoveries += 1
+        return {"enabled": True, "recovered": [], "waitingForGraceCount": 1, "retryAfterSeconds": 12}
+
+
 class CountingIsolatedCycle:
     def __init__(self):
         self.calls = 0
@@ -167,6 +173,22 @@ class OntologyReasoningSchedulerTests(unittest.TestCase):
         self.assertTrue(result["stopRequested"])
         self.assertEqual(1, process.calls)
         self.assertIn(signal_value("SIGTERM"), process.signals)
+
+    def test_orphan_lease_grace_defers_before_starting_a_new_typedb_child(self):
+        started = []
+        cycle = IsolatedOntologyReasoningCycle(
+            ["python", "service.py", "ontology-reasoning", "once"],
+            process_factory=lambda *_args, **_kwargs: started.append(True) or FakeSuccessProcess(),
+        )
+        runner = GraceRecoveryRunner()
+        scheduler = OntologyReasoningScheduler(runner, 10, isolated_cycle=cycle)
+
+        result = scheduler.run_once(limit=1)
+
+        self.assertEqual("deferred", result["status"])
+        self.assertEqual(12, result["retryAfterSeconds"])
+        self.assertEqual([], started)
+        self.assertEqual(1, runner.orphan_recoveries)
 
     def test_shared_world_scheduler_skips_isolated_child_when_live_reasoning_is_pending(self):
         runner = DeferredLowPriorityRunner()

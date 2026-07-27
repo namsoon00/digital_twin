@@ -322,6 +322,16 @@ class OntologyReasoningScheduler:
                 recovery = dict(recover_orphaned() or {})
             except Exception:
                 recovery = {"enabled": False, "recovered": []}
+        grace_wait = max(0, int(recovery.get("waitingForGraceCount") or 0))
+        if grace_wait:
+            return {
+                "status": "deferred",
+                "processedCount": 0,
+                "alertCount": 0,
+                "retryAfterSeconds": max(1, int(recovery.get("retryAfterSeconds") or self.interval_seconds)),
+                "deferredReason": "이전 로컬 추론 워커 종료 유예를 확인한 뒤 영속 작업 lease를 회수합니다.",
+                "mailboxOrphanLeaseRecovery": recovery,
+            }
         current_environment = dict(getattr(self.isolated_cycle, "environment", {}) or {})
         current_environment["ONTOLOGY_REASONING_WORKER_ID"] = self.worker_id
         self.isolated_cycle.environment = current_environment

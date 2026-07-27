@@ -94,6 +94,20 @@ def _older_than(value: object, now: datetime, seconds: int) -> bool:
     return (now - parsed.astimezone(timezone.utc)).total_seconds() >= max(0, int(seconds or 0))
 
 
+def _age_grace_remaining_seconds(value: object, now: datetime, seconds: int) -> int:
+    stamp = _text(value)
+    if not stamp:
+        return 0
+    try:
+        parsed = datetime.fromisoformat(stamp.replace("Z", "+00:00"))
+    except ValueError:
+        return 0
+    if parsed.tzinfo is None:
+        parsed = parsed.replace(tzinfo=timezone.utc)
+    remaining = max(0.0, float(max(0, int(seconds or 0))) - (now - parsed.astimezone(timezone.utc)).total_seconds())
+    return int(remaining + 0.999999) if remaining else 0
+
+
 def _entries_by_event(entries: Iterable[Mapping[str, object]]) -> Dict[str, List[Dict[str, object]]]:
     grouped: Dict[str, List[Dict[str, object]]] = {}
     for item in entries or []:
@@ -786,7 +800,13 @@ class MySQLOntologyReasoningMailboxStore(MySQLOperationalConnection):
         now = datetime.now(timezone.utc)
         stamp = now.isoformat().replace("+00:00", "Z")
         retry_at = (now + timedelta(seconds=max(5, min(900, int(retry_after_seconds or 30))))).isoformat().replace("+00:00", "Z")
-        result = {"enabled": True, "recovered": [], "protected": 0}
+        result = {
+            "enabled": True,
+            "recovered": [],
+            "protected": 0,
+            "waitingForGraceCount": 0,
+            "retryAfterSeconds": 0,
+        }
         try:
             with self.transaction() as connection:
                 rows = connection.execute(
@@ -806,7 +826,10 @@ class MySQLOntologyReasoningMailboxStore(MySQLOperationalConnection):
                         result["protected"] += 1
                         continue
                     if not _older_than(observed_at, now, minimum_age_seconds):
-                        result["protected"] += 1
+                        remaining = max(1, _age_grace_remaining_seconds(observed_at, now, minimum_age_seconds))
+                        result["waitingForGraceCount"] += 1
+                        current = int(result.get("retryAfterSeconds") or 0)
+                        result["retryAfterSeconds"] = remaining if not current else min(current, remaining)
                         continue
                     key = _text(row.get("mailbox_key"))
                     event_id = _text(row.get("source_event_id"))

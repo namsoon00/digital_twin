@@ -25,6 +25,8 @@ from typing import Dict, List
 
 from ..application.account_service import AccountApplicationService
 from ..application.notification_ai_gate_message import (
+    compact_invalidation_line,
+    compact_next_action_line,
     decision_transition_presentation,
     execution_headline,
     execution_telegram_message,
@@ -1890,6 +1892,20 @@ def notification_action_flow(context: Dict[str, object]) -> Dict[str, object]:
         }
     readiness = envelope.get("dataReadiness") if isinstance(envelope.get("dataReadiness"), dict) else {}
     transition_presentation = decision_transition_presentation(context, action)
+    response = (
+        NotificationAIValidatedResponse.from_dict(validated)
+        if validated
+        else NotificationAIValidatedResponse(action=action, action_label=action_label)
+    )
+    execution_plan = relation.get("executionPlan") if isinstance(relation.get("executionPlan"), dict) else {}
+    has_next_check = bool(response.next_checks or envelope.get("nextChecks") or execution_plan.get("nextChecks"))
+    has_invalidation = bool(
+        response.invalidation_condition
+        or envelope.get("invalidationConditions")
+        or execution_plan.get("weakenConditions")
+    )
+    next_action = compact_next_action_line(context, response) if has_next_check else ""
+    invalidation = compact_invalidation_line(context, response) if has_invalidation else ""
     return {
         "status": str(envelope.get("status") or ""),
         "statusLabel": str(envelope.get("statusLabel") or ACTION_ENVELOPE_STATUS_LABELS.get(str(envelope.get("status") or "").upper(), "조건 확인")),
@@ -1909,8 +1925,8 @@ def notification_action_flow(context: Dict[str, object]) -> Dict[str, object]:
             "currentStatus": str(transition.get("currentStatus") or envelope.get("status") or ""),
         },
         "effects": effects[:4],
-        "nextChecks": [compact_notification_text(str(item or ""), 180) for item in (envelope.get("nextChecks") or []) if str(item or "").strip()][:3],
-        "invalidationConditions": [compact_notification_text(str(item or ""), 180) for item in (envelope.get("invalidationConditions") or []) if str(item or "").strip()][:3],
+        "nextChecks": [compact_notification_text(next_action, 180)] if next_action else [],
+        "invalidationConditions": [compact_notification_text(invalidation, 180)] if invalidation else [],
         "dataReadiness": {
             "state": str(readiness.get("state") or ""),
             "dataState": str(readiness.get("dataState") or relation.get("dataState") or ""),

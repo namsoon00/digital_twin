@@ -169,6 +169,56 @@ class ActionEnvelopeAiGateTests(unittest.TestCase):
         self.assertNotIn("API 조회 정보", message)
         self.assertNotIn("뉴스·공시 요약", message)
 
+    def test_compact_message_explains_macro_constraint_with_observed_rates(self):
+        context = entry_context()
+        context.update({
+            "messageDeliveryLevel": "beginner",
+            "displayTarget": "Apple / AAPL",
+            "rawLines": [
+                "현재가: $334.15",
+                "추세: 5일선 $328.5보다 1.7% 높음, 20일선 $316.91보다 5.4% 높음, 60일선 $303.57보다 10.1% 높음",
+            ],
+        })
+        context["ontologyRelationContext"]["facts"].update({
+            "ma5Distance": 1.7,
+            "ma20Distance": 5.4,
+            "ma60Distance": 10.1,
+            "macroDgs10": 4.71,
+            "macroDgs2": 4.37,
+            "instrumentSensitivities": {"rate": "medium"},
+        })
+        context["ontologyRelationContext"]["activeRules"] = [
+            {"ruleId": "graph.price.reclaim.thesis_support.v1", "actionGroup": "entry"},
+            {"ruleId": "graph.macro.regime.risk.v1", "actionGroup": "macroRegime"},
+        ]
+        context["ontologyRelationContext"]["executionPlan"]["decisionDrivers"] = [
+            {
+                "category": "trend",
+                "summary": "현재가는 5일선 대비 +1.7%, 20일선 대비 +5.4%, 60일선 대비 +10.1%입니다.",
+            },
+        ]
+        response = NotificationAIValidatedResponse(
+            action="BUY",
+            action_label="소액 진입 검토",
+            data_state_label="판단에 필요한 자료 있음",
+            summary="진입을 뒷받침하는 근거가 확인돼 소액 진입을 검토할 수 있습니다.",
+            invalidation_condition="거시 부담 관계가 사라지고 진입 지지 관계가 새로 성립하면 소액 진입 여부를 다시 검토",
+            next_checks=[
+                "가격 회복, 거래 확인, 반대 이벤트 해소를 확인 / 금리, 환율, 지수, 크립토와 종목 반응을 함께 확인",
+            ],
+            reference_date="2026-07-27 22:03 KST",
+        )
+
+        message = execution_telegram_message(context, response)
+
+        self.assertIn("미국 10년 금리 4.71%", message)
+        self.assertIn("미국 2년 금리 4.37%", message)
+        self.assertIn("Apple은 금리 변화의 영향을 받는 종목으로 분류돼", message)
+        self.assertIn("Apple 가격이 5일선·20일선·60일선 위를 유지하는지", message)
+        self.assertIn("진입 제한을 완화할 조건", message)
+        for internal in ["거시 부담 관계", "진입 지지 관계", "원시"]:
+            self.assertNotIn(internal, message)
+
     def test_compact_message_hides_internal_envelope_status(self):
         context = entry_context()
         context.update({

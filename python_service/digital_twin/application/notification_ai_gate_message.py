@@ -1692,6 +1692,181 @@ def _derived_interpretation(context: Dict[str, object], response: NotificationAI
     return " ".join(part for part in [str(response.summary or "").strip(), str(response.opinion or "").strip()] if part)
 
 
+def _macro_constraint_rule_ids(context: Dict[str, object]) -> set:
+    relation_context = relation_context_value(context or {})
+    envelope = relation_context.get("actionEnvelope") if isinstance(relation_context.get("actionEnvelope"), dict) else {}
+    rule_ids = set()
+    for key in ["constraintRuleIds", "deferRuleIds", "blockingRuleIds"]:
+        values = envelope.get(key) if isinstance(envelope.get(key), list) else []
+        for value in values:
+            text = str(value or "").strip().casefold()
+            if text:
+                rule_ids.add(text)
+    rules = relation_context.get("activeRules") or relation_context.get("matchedRules") or []
+    if isinstance(rules, list):
+        for item in rules:
+            if not isinstance(item, dict):
+                continue
+            role = str(item.get("evidenceRole") or item.get("evidence_role") or "").strip().casefold()
+            effect = str(item.get("decisionEffect") or item.get("decision_effect") or "").strip().casefold()
+            if role not in {"risk", "blocking"} and effect not in {"constrain", "defer", "block"}:
+                continue
+            text = str(item.get("ruleId") or item.get("rule_id") or "").strip().casefold()
+            if text:
+                rule_ids.add(text)
+    return rule_ids
+
+
+def _macro_constraint_state(context: Dict[str, object]) -> Dict[str, bool]:
+    rule_ids = _macro_constraint_rule_ids(context)
+    return {
+        "rate": any(rule_id.startswith("graph.macro.") for rule_id in rule_ids),
+        "fx": any(rule_id.startswith("graph.fx.") for rule_id in rule_ids),
+    }
+
+
+def _compact_decimal(value: object, digits: int = 2) -> str:
+    amount = _number(value)
+    if not amount:
+        return ""
+    return ("{0:,." + str(digits) + "f}").format(amount).rstrip("0").rstrip(".")
+
+
+def _macro_rate_observation(context: Dict[str, object]) -> str:
+    facts = relation_facts(context or {})
+    parts = []
+    ten_year = _compact_decimal(facts.get("macroDgs10") or facts.get("us10yYield") or facts.get("tenYearYield"))
+    two_year = _compact_decimal(facts.get("macroDgs2") or facts.get("us2yYield") or facts.get("twoYearYield"))
+    if ten_year:
+        parts.append("미국 10년 금리 " + ten_year + "%")
+    if two_year:
+        parts.append("미국 2년 금리 " + two_year + "%")
+    return " · ".join(parts)
+
+
+def _macro_fx_observation(context: Dict[str, object]) -> str:
+    facts = relation_facts(context or {})
+    value = (
+        facts.get("fxRateToKrw")
+        or facts.get("usdKrwRate")
+        or facts.get("fxMarketRate")
+        or facts.get("usdKrw")
+    )
+    rate = _compact_decimal(value, 2)
+    return ("USD/KRW " + rate + "원") if rate else ""
+
+
+def _macro_constraint_reference(context: Dict[str, object]) -> str:
+    state = _macro_constraint_state(context)
+    rate = _macro_rate_observation(context) if state["rate"] else ""
+    fx = _macro_fx_observation(context) if state["fx"] else ""
+    if rate and fx:
+        return rate.replace(" · ", ", ") + "와 " + fx + "로 나타난 금리·환율 부담"
+    if rate:
+        return rate.replace(" · ", ", ") + "로 나타난 금리 부담"
+    if fx:
+        return fx + "로 나타난 환율 부담"
+    if state["rate"]:
+        return "금리·장단기 금리 차이 부담"
+    if state["fx"]:
+        return "환율 부담"
+    return ""
+
+
+def compact_macro_constraint_reason(context: Dict[str, object]) -> str:
+    """Explain a TypeDB macro constraint with only its materialized facts.
+
+    This is presentation only.  It does not infer a rate threshold or alter the
+    action: the active TypeDB rule establishes the constraint, while this
+    function turns its already-stored facts into customer-facing language.
+    """
+
+    state = _macro_constraint_state(context)
+    if not state["rate"] and not state["fx"]:
+        return ""
+    rate = _macro_rate_observation(context) if state["rate"] else ""
+    fx = _macro_fx_observation(context) if state["fx"] else ""
+    target = target_name_for_headline(context.get("displayTarget") or context.get("target") or "") or "이 종목"
+    scope = "진입 금액과 시점" if is_watchlist_context(context) else "추가 매수·매도 판단의 시점과 규모"
+    if rate and fx:
+        observation = rate + "와 " + fx
+        sensitivity = "금리와 환율 변화"
+        environment = "현재 금리·환율 환경"
+    elif rate:
+        observation = rate
+        sensitivity = "금리 변화"
+        environment = "현재 금리 환경"
+    elif fx:
+        observation = fx
+        sensitivity = "환율 변화"
+        environment = "현재 환율 환경"
+    else:
+        return ""
+    return (
+        observation
+        + "가 "
+        + environment
+        + "으로 확인됐습니다. "
+        + target
+        + "은 "
+        + sensitivity
+        + "의 영향을 받는 종목으로 분류돼, 이 환경이 유지되는 동안에는 "
+        + scope
+        + "을 보수적으로 봅니다."
+    )
+
+
+def _customer_condition_terms(value: object) -> str:
+    text = str(value or "").strip()
+    replacements = [
+        ("거시 부담 관계", "금리·수익률곡선 부담"),
+        ("거시 부담", "금리·수익률곡선 부담"),
+        ("진입 지지 관계", "가격·거래 흐름의 진입 근거"),
+        ("가격 회복 관계", "가격 회복 근거"),
+        ("회복 관계", "가격 회복 근거"),
+    ]
+    for before, after in replacements:
+        text = text.replace(before, after)
+    return text
+
+
+def _customer_invalidation_condition(context: Dict[str, object], value: object) -> str:
+    text = watchlist_friendly_text(context, value)
+    if not text:
+        return ""
+    if "거시 부담" not in text:
+        return _customer_condition_terms(text)
+    reference = _macro_constraint_reference(context)
+    if not reference:
+        return _customer_condition_terms(text)
+    if "소액 진입" in text:
+        return (
+            reference
+            + "이 완화되고, 가격 흐름과 거래량 확인이 다음 조회에서도 이어지면 "
+            + "소액 진입 범위를 다시 검토합니다."
+        )
+    if "관심 유지" in text:
+        return (
+            reference
+            + "이 유지되고, 가격 흐름과 거래량의 진입 근거가 추가로 확인되지 않으면 "
+            + "관심 유지를 이어갑니다."
+        )
+    return _customer_condition_terms(text)
+
+
+def _condition_presentation_label(
+    context: Dict[str, object],
+    response: NotificationAIValidatedResponse,
+    condition: object,
+) -> str:
+    text = str(condition or "")
+    if is_watchlist_context(context) and "소액 진입" in text:
+        if str(response.action or "").upper() in {"BUY", "ADD"}:
+            return "진입 제한을 완화할 조건"
+        return "소액 진입을 검토할 조건"
+    return "판단 변경 조건"
+
+
 def _derived_execution_criteria(context: Dict[str, object], response: NotificationAIValidatedResponse) -> str:
     explicit = _strategy_guide_value(response, "executionCriteria") or _execution_plan_value(
         context,
@@ -1701,8 +1876,14 @@ def _derived_execution_criteria(context: Dict[str, object], response: Notificati
     if explicit:
         return explicit
     rows: List[str] = []
-    weaken = _execution_plan_list(context, "weakenConditions")
-    strengthen = _execution_plan_list(context, "strengthenConditions")
+    weaken = [
+        _customer_invalidation_condition(context, item)
+        for item in _execution_plan_list(context, "weakenConditions")
+    ]
+    strengthen = [
+        _customer_invalidation_condition(context, item)
+        for item in _execution_plan_list(context, "strengthenConditions")
+    ]
     next_checks = _execution_plan_list(context, "nextChecks")
     if weaken:
         rows.append("의견 완화 조건: " + " / ".join(weaken[:2]))
@@ -1718,10 +1899,10 @@ def _derived_execution_criteria(context: Dict[str, object], response: Notificati
 def _derived_invalidation_condition(context: Dict[str, object], response: NotificationAIValidatedResponse) -> str:
     explicit = _strategy_guide_value(response, "invalidationCondition") or response.invalidation_condition
     if explicit:
-        return watchlist_friendly_text(context, explicit)
+        return _customer_invalidation_condition(context, explicit)
     weaken = _execution_plan_list(context, "weakenConditions")
     if weaken:
-        return watchlist_friendly_text(context, " / ".join(weaken[:2]))
+        return _customer_invalidation_condition(context, " / ".join(weaken[:2]))
     return "현재 근거가 사라지거나 반대 근거가 새로 확인되면 의견을 다시 봅니다."
 
 
@@ -1814,7 +1995,7 @@ def strategy_guide_rows(context: Dict[str, object], response: NotificationAIVali
         append_unique_text(rows, "AI 가설: " + hypothesis + " " + _ai_hypothesis_boundary(response), 0)
     invalidation = _derived_invalidation_condition(context, response)
     if invalidation:
-        append_unique_text(rows, "의견이 약해지는 조건: " + invalidation, 0)
+        append_unique_text(rows, _condition_presentation_label(context, response, invalidation) + ": " + invalidation, 0)
     return [_html_bullet(_ai_marked_value(row), level) for row in rows if row]
 
 def compact_ai_opinion_rows(context: Dict[str, object], response: NotificationAIValidatedResponse, level: str) -> List[str]:
@@ -2327,11 +2508,17 @@ def execution_telegram_message_compact_beginner(
     if reasons:
         parts.extend(["", "<b>바뀐 이유</b>", *[_html_bullet(item, level) for item in reasons]])
     next_action = compact_next_action_line(context, response)
+    invalidation = compact_invalidation_line(context, response)
+    if next_action and _same_compact_message_text(next_action, invalidation):
+        next_action = ""
     if next_action:
         parts.extend(["", "<b>다음 행동</b>", _html_bullet(next_action, level)])
-    invalidation = compact_invalidation_line(context, response)
     if invalidation:
-        parts.extend(["", "<b>판단 변경 조건</b>", _html_bullet(invalidation, level)])
+        parts.extend([
+            "",
+            "<b>" + _condition_presentation_label(context, response, invalidation) + "</b>",
+            _html_bullet(invalidation, level),
+        ])
     data_line = compact_data_status_line(context, response)
     if data_line:
         parts.extend(["", "<b>자료 상태</b>", _html_bullet(data_line, level)])
@@ -2569,6 +2756,88 @@ def compact_current_flow_line(context: Dict[str, object]) -> str:
     return " · ".join(compact_current_flow_rows(context)[:2])
 
 
+def compact_trend_reason_line(context: Dict[str, object]) -> str:
+    facts = relation_facts(context or {})
+    comparisons = []
+    for key, label in [("ma5Distance", "5일선"), ("ma20Distance", "20일선"), ("ma60Distance", "60일선")]:
+        if facts.get(key) in (None, ""):
+            continue
+        distance = _number(facts.get(key))
+        if not distance:
+            continue
+        direction = "위" if distance > 0 else "아래"
+        comparisons.append(label + "보다 " + _compact_decimal(abs(distance), 1) + "% " + direction)
+    if not comparisons:
+        return ""
+    return "현재가는 " + ", ".join(comparisons) + "에 있습니다."
+
+
+def _price_confirmation_check(context: Dict[str, object]) -> str:
+    facts = relation_facts(context or {})
+    labels = []
+    for key, label in [("ma5Distance", "5일선"), ("ma20Distance", "20일선"), ("ma60Distance", "60일선")]:
+        if facts.get(key) not in (None, ""):
+            labels.append(label)
+    target = target_name_for_headline(context.get("displayTarget") or context.get("target") or "") or "이 종목"
+    if labels:
+        return target + " 가격이 " + "·".join(labels) + " 위를 유지하는지"
+    return target + " 가격 흐름이 유지되는지"
+
+
+def _friendly_next_check_text(context: Dict[str, object], value: object) -> str:
+    text = watchlist_friendly_text(context, value)
+    replacements = [
+        ("가격 회복, 거래 확인, 반대 이벤트 해소를 확인", "가격 흐름, 거래량, 새 악재 여부를 확인"),
+        ("금리, 환율, 지수, 크립토와 종목 반응을 함께 확인", "금리·환율 등 외부 환경과 종목 가격 움직임을 함께 확인"),
+        ("진입 지지 관계", "가격·거래 흐름의 진입 근거"),
+        ("가격 회복 관계", "가격 회복 근거"),
+        ("회복 관계", "가격 회복 근거"),
+    ]
+    for before, after in replacements:
+        text = text.replace(before, after)
+    return text
+
+
+def _macro_next_action_line(context: Dict[str, object], checks: List[str]) -> str:
+    state = _macro_constraint_state(context)
+    if not state["rate"] and not state["fx"]:
+        return ""
+    check_text = " ".join(str(item or "") for item in checks).casefold()
+    components = []
+    if any(token in check_text for token in ["가격", "회복", "진입"]):
+        components.append(_price_confirmation_check(context))
+    needs_flow = "거래" in check_text or "수급" in check_text
+    needs_news_check = any(token in check_text for token in ["반대 이벤트", "악재", "뉴스", "공시"])
+    if needs_flow and needs_news_check:
+        components.append("거래량과 새 악재 여부")
+    elif needs_flow:
+        components.append("거래량")
+    elif needs_news_check:
+        components.append("새 악재 여부")
+    observation_parts = []
+    if state["rate"]:
+        rate = _macro_rate_observation(context)
+        if rate:
+            observation_parts.append(rate.replace(" · ", "와 "))
+    if state["fx"]:
+        fx = _macro_fx_observation(context)
+        if fx:
+            observation_parts.append(fx)
+    if observation_parts:
+        components.append("와 ".join(observation_parts) + "의 변화")
+    if not components:
+        return ""
+    if len(components) == 1:
+        return "다음 조회에서 " + components[0] + "를 확인합니다."
+    return "다음 조회에서 " + ", ".join(components) + "를 함께 확인합니다."
+
+
+def _same_compact_message_text(left: object, right: object) -> bool:
+    left_key = re.sub(r"[^0-9a-z가-힣]+", "", str(left or "").casefold())
+    right_key = re.sub(r"[^0-9a-z가-힣]+", "", str(right or "").casefold())
+    return bool(left_key and right_key and (left_key in right_key or right_key in left_key))
+
+
 def compact_action_reason_rows(
     context: Dict[str, object],
     response: NotificationAIValidatedResponse,
@@ -2586,17 +2855,16 @@ def compact_action_reason_rows(
         envelope_rows = [row for row in envelope_rows if "진입" not in row]
     elif status in {"ENTRY_BLOCKED", "JUDGEMENT_BLOCKED"} and ("보류" in summary or "필수 자료" in summary):
         envelope_rows = [row for row in envelope_rows if "판단을 보류" not in row]
-    # Keep one sentence that explains the allowed action range, then prefer a
-    # concrete market fact over a second generic envelope sentence. This makes
-    # the compact alert explain *why now* without exposing the rule payload.
-    values = (
-        envelope_rows[:1]
-        + compact_effect_driver_rows(context)
+    # Prefer a concrete market fact, then a materialized macro constraint,
+    # before falling back to a generic action-envelope sentence.
+    concrete_values = (
+        compact_effect_driver_rows(context)
         + list(response.evidence or [])
         + list(relation_axis_summary_lines(context, 5))
-        + envelope_rows[1:]
     )
-    for item in values:
+    macro_reason = compact_macro_constraint_reason(context)
+    concrete_limit = 1 if macro_reason else 2
+    for item in concrete_values:
         text = compact_sentence_count(_message_text(customer_visible_ai_text(item), "beginner"), 1)
         if compact_reason_is_internal(text):
             continue
@@ -2605,9 +2873,22 @@ def compact_action_reason_rows(
             continue
         if text and not any(normalized and (normalized in existing or existing in normalized) for existing in [re.sub(r"[^0-9a-z가-힣]+", "", row.casefold()) for row in rows]):
             rows.append(text)
+        if len(rows) >= concrete_limit:
+            break
+    if macro_reason and not any(_same_compact_message_text(macro_reason, row) for row in rows):
+        rows.append(macro_reason)
+    for item in envelope_rows:
         if len(rows) >= 2:
             break
-    return rows
+        text = compact_sentence_count(_message_text(customer_visible_ai_text(item), "beginner"), 1)
+        if not text or compact_reason_is_internal(text):
+            continue
+        normalized = re.sub(r"[^0-9a-z가-힣]+", "", text.casefold())
+        if summary_key and normalized and (normalized in summary_key or summary_key in normalized):
+            continue
+        if not any(normalized and (normalized in existing or existing in normalized) for existing in [re.sub(r"[^0-9a-z가-힣]+", "", row.casefold()) for row in rows]):
+            rows.append(text)
+    return rows[:2]
 
 
 def compact_envelope_reason_rows(context: Dict[str, object]) -> List[str]:
@@ -2652,6 +2933,10 @@ def compact_effect_driver_rows(context: Dict[str, object]) -> List[str]:
             if not isinstance(driver, dict) or str(driver.get("category") or "") != category:
                 continue
             text = customer_visible_ai_text(driver.get("summary") or driver.get("text") or driver.get("label") or "")
+            if category == "trend":
+                text = compact_trend_reason_line(context) or text
+            elif category in {"macro", "fx", "rate"}:
+                text = compact_macro_constraint_reason(context) or text
             if text and not compact_reason_is_internal(text):
                 return [text]
     return []
@@ -2669,6 +2954,23 @@ def compact_reason_is_internal(value: object) -> bool:
 
 
 def compact_next_action_line(context: Dict[str, object], response: NotificationAIValidatedResponse) -> str:
+    relation_context = relation_context_value(context or {})
+    has_materialized_plan = any(
+        isinstance(relation_context.get(key), dict) and relation_context.get(key)
+        for key in ["actionEnvelope", "executionPlan"]
+    )
+    next_checks: List[str] = []
+    if has_materialized_plan:
+        next_checks = [str(item or "").strip() for item in list(response.next_checks or []) if str(item or "").strip()]
+        next_checks.extend(
+            item for item in _execution_plan_list(context, "nextChecks")
+            if item and item not in next_checks
+        )
+    macro_value = _macro_next_action_line(context, next_checks)
+    if macro_value:
+        return macro_value
+    if next_checks:
+        return compact_sentence_count(_friendly_next_check_text(context, next_checks[0]), 1)
     value = compact_sentence_count(
         watchlist_friendly_text(context, _derived_execution_criteria(context, response)),
         1,

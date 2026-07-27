@@ -9,7 +9,14 @@ from ..domain.notification_ai_gate_contracts import (
     NOTIFICATION_AI_GATE_VERSION,
     NotificationAIValidatedResponse,
 )
-from .notification_ai_gate_message import execution_headline, execution_telegram_message, prepend_execution_start_badge, strategy_guide_quality
+from .notification_ai_gate_message import (
+    compact_invalidation_line,
+    compact_next_action_line,
+    execution_headline,
+    execution_telegram_message,
+    prepend_execution_start_badge,
+    strategy_guide_quality,
+)
 from ..domain.notification_ai_gate_sources import source_labels_from_context
 from ..domain.notification_ai_gate_text import _text, reference_date
 from ..domain.notification_ai_gate_validation import ai_decision_input_packet, delivery_profile_from_context
@@ -246,10 +253,25 @@ def context_with_validated_ai_response(
         lines.append("근거: " + " / ".join(response.evidence[:3]))
     if response.counter_evidence:
         lines.append("반대 근거: " + " / ".join(response.counter_evidence[:3]))
-    if response.invalidation_condition:
-        lines.append("의견이 약해지는 조건: " + response.invalidation_condition)
-    if response.next_checks:
-        lines.append("다음 확인: " + " / ".join(response.next_checks[:3]))
+    relation_context = relation_context_value(enriched)
+    action_envelope = relation_context.get("actionEnvelope") if isinstance(relation_context.get("actionEnvelope"), dict) else {}
+    execution_plan = relation_context.get("executionPlan") if isinstance(relation_context.get("executionPlan"), dict) else {}
+    has_invalidation = bool(
+        response.invalidation_condition
+        or action_envelope.get("invalidationConditions")
+        or execution_plan.get("weakenConditions")
+    )
+    has_next_check = bool(
+        response.next_checks
+        or action_envelope.get("nextChecks")
+        or execution_plan.get("nextChecks")
+    )
+    invalidation = compact_invalidation_line(enriched, response) if has_invalidation else ""
+    if invalidation:
+        lines.append("다음 판단 조건: " + invalidation)
+    next_action = compact_next_action_line(enriched, response) if has_next_check else ""
+    if next_action:
+        lines.append("다음 확인: " + next_action)
     if response.missing_data_impact:
         lines.append("부족 데이터: " + " / ".join(response.missing_data_impact[:3]))
     lines.append("분석출처: " + AI_DECISION_SOURCE_LABEL + " / " + response.source)

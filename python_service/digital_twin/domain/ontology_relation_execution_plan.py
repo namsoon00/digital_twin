@@ -241,8 +241,8 @@ def decision_drivers_from_relation_context(
             trend_rows.append(label + " 대비 " + _signed_pct(facts.get(key)))
     if trend_rows:
         _append_driver(
-            rows, seen, "trend", "neutral", "평균 가격 위치",
-            "현재가의 평균 가격 대비 원시 괴리값은 " + ", ".join(trend_rows) + "입니다.",
+            rows, seen, "trend", "neutral", "현재 가격과 평균선",
+            "현재가는 " + ", ".join(trend_rows) + "입니다.",
             ["currentPrice", "ma5Distance", "ma20Distance", "ma60Distance", "ma20Slope", "ma60Slope"],
             "ABox raw observation",
         )
@@ -280,7 +280,7 @@ def decision_drivers_from_relation_context(
         if facts.get("usdKrwRate") not in (None, "", 0, 0.0):
             macro_rows.append("USD/KRW " + _plain_number(facts.get("usdKrwRate")))
         _append_driver(
-            rows, seen, "macro", "neutral", "거시 원시 관측", ", ".join(macro_rows) + "입니다.",
+            rows, seen, "macro", "neutral", "현재 금리·환율", ", ".join(macro_rows) + "입니다.",
             ["macroDgs10", "macroDgs2", "macroYieldSpread10y2y", "usdKrwRate", "fxExposureRatio"],
             "ABox raw observation",
         )

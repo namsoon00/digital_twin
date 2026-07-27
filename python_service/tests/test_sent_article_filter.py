@@ -7,6 +7,7 @@ from digital_twin.domain.sent_article_filter import (
     collect_article_identity_keys_from_context,
     filter_sent_articles_from_context,
     news_story_changes_decision,
+    news_story_is_decision_driver,
     news_story_impact_from_context,
 )
 from digital_twin.infrastructure.mysql_notification_jobs import MySQLNotificationJobStore
@@ -256,10 +257,46 @@ class SentArticleFilterTests(unittest.TestCase):
             "addedEvidenceKeys": ["research:nvda:news:contract"],
             "decisionTransition": {"material": True, "kind": "action-changed"},
         }
+        context = {
+            "ontologyRelationContext": {
+                "executionPlan": {
+                    "decisionDrivers": [{
+                        "category": "news",
+                        "dataKeys": ["researchEvidence"],
+                    }],
+                },
+            },
+        }
 
-        self.assertTrue(news_story_changes_decision(impact, relation_diff))
+        self.assertTrue(news_story_is_decision_driver(impact, context))
+        self.assertTrue(news_story_changes_decision(impact, relation_diff, context))
         relation_diff["addedEvidenceKeys"] = ["research:nvda:news:other"]
-        self.assertFalse(news_story_changes_decision(impact, relation_diff))
+        self.assertFalse(news_story_changes_decision(impact, relation_diff, context))
+
+    def test_compact_news_does_not_attach_article_to_macro_or_trend_decision(self):
+        impact = {
+            "decisionInlineEligible": True,
+            "evidenceKeys": ["research:hyundai:news:australia-sales"],
+            "identityKeys": ["url:hyundai-australia-sales"],
+        }
+        relation_diff = {
+            "materialComponents": ["evidenceKeys", "actionEnvelope"],
+            "addedEvidenceKeys": ["research:hyundai:news:australia-sales"],
+            "decisionTransition": {"material": True, "kind": "envelope-changed"},
+        }
+        context = {
+            "ontologyRelationContext": {
+                "executionPlan": {
+                    "decisionDrivers": [
+                        {"category": "macro", "dataKeys": ["macroDgs10"]},
+                        {"category": "trend", "dataKeys": ["ma20Distance"]},
+                    ],
+                },
+            },
+        }
+
+        self.assertFalse(news_story_is_decision_driver(impact, context))
+        self.assertFalse(news_story_changes_decision(impact, relation_diff, context))
 
 
 if __name__ == "__main__":

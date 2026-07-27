@@ -24,6 +24,7 @@ from pathlib import Path
 from typing import Dict, List
 
 from ..application.account_service import AccountApplicationService
+from ..application.notification_ai_gate_message import execution_telegram_message, prepend_execution_start_badge
 from ..application.notification_replay_service import NotificationReplayService
 from ..application.ontology_diagnostics_service import OntologyDiagnosticsService
 from ..application.research_evidence_governance_service import ResearchEvidenceGovernanceService
@@ -57,6 +58,9 @@ from ..domain.message_types import (
     visible_notification_template_types,
 )
 from ..domain.notification_icon_policy import notification_message_icon
+from ..domain.notification_ai_gate_text import user_friendly_ai_text
+from ..domain.notification_ai_gate_contracts import NotificationAIValidatedResponse
+from ..domain.ontology_decision_state import ACTION_ENVELOPE_STATUS_LABELS
 from ..domain.data_freshness import age_minutes
 from ..domain.market_hours import DEFAULT_MARKET_HOUR_SESSIONS
 from ..domain.monitoring import RealtimeMonitor
@@ -1867,21 +1871,25 @@ def notification_action_flow(context: Dict[str, object]) -> Dict[str, object]:
             effects.append(label)
     news_impact = context.get("newsImpact") if isinstance(context.get("newsImpact"), dict) else {}
     inline_news = {}
-    if news_impact.get("decisionChanging") and news_impact.get("decisionInlineEligible") is True:
+    if (
+        news_impact.get("decisionChanging")
+        and news_impact.get("decisionInlineEligible") is True
+        and news_impact.get("decisionDriverConfirmed") is True
+    ):
         inline_news = {
-            "headline": compact_notification_text(str(news_impact.get("headline") or ""), 180),
-            "source": str(news_impact.get("source") or "")[:80],
+            "headline": compact_notification_text(user_friendly_ai_text(news_impact.get("headline") or "", 180), 180),
+            "source": user_friendly_ai_text(news_impact.get("source") or "", 80),
             "impact": str(news_impact.get("impact") or "")[:80],
         }
     readiness = envelope.get("dataReadiness") if isinstance(envelope.get("dataReadiness"), dict) else {}
     return {
         "status": str(envelope.get("status") or ""),
-        "statusLabel": str(envelope.get("statusLabel") or "조건 확인"),
+        "statusLabel": str(envelope.get("statusLabel") or ACTION_ENVELOPE_STATUS_LABELS.get(str(envelope.get("status") or "").upper(), "조건 확인")),
         "currentAction": action,
         "currentActionLabel": action_label,
         "transition": {
             "kind": str(transition.get("kind") or ""),
-            "summary": compact_notification_text(str(transition.get("summary") or ""), 180),
+            "summary": compact_notification_text(user_friendly_ai_text(transition.get("summary") or "", 180), 180),
             "previousAction": str(transition.get("previousAction") or ""),
             "currentAction": str(transition.get("currentAction") or action),
             "previousStatus": str(transition.get("previousStatus") or ""),
@@ -1906,6 +1914,22 @@ def full_notification_text(value: str) -> str:
     text = re.sub(r"\r\n?", "\n", text)
     text = re.sub(r"\n{3,}", "\n\n", text)
     return text.strip()
+
+
+def notification_customer_text(job: NotificationJob) -> str:
+    """Render persisted AI decisions with the current customer-safe format."""
+
+    context = job.context if isinstance(job.context, dict) else {}
+    payload = context.get("notificationAiValidatedResponse") if isinstance(context.get("notificationAiValidatedResponse"), dict) else {}
+    if payload:
+        try:
+            response = NotificationAIValidatedResponse.from_dict(payload)
+            rendered = prepend_execution_start_badge(execution_telegram_message(context, response), context)
+            if rendered:
+                return rendered
+        except Exception:  # noqa: BLE001 - an old incomplete payload must not hide a ledger item.
+            pass
+    return str(job.text or "")
 
 
 def notification_processing_age_minutes(job: NotificationJob) -> float:
@@ -1978,6 +2002,7 @@ def notification_job_diagnostics(jobs: List[NotificationJob]) -> Dict[str, objec
 
 def notification_job_public_payload(job: NotificationJob, detail: bool = False, stale_minutes: int = None) -> Dict[str, object]:
     context = job.context or {}
+    customer_text = notification_customer_text(job)
     reasons = context.get("deliveryReasons") if isinstance(context.get("deliveryReasons"), list) else []
     title = str(context.get("title") or context.get("headline") or "").strip()
     processing_age = notification_processing_age_minutes(job)
@@ -2001,7 +2026,7 @@ def notification_job_public_payload(job: NotificationJob, detail: bool = False, 
         "symbol": str(context.get("symbol") or "").strip(),
         "rawSymbol": str(context.get("rawSymbol") or context.get("symbol") or "").strip(),
         "symbolName": str(context.get("symbolDisplayName") or context.get("displaySymbolName") or "").strip(),
-        "textPreview": compact_notification_text(job.text),
+        "textPreview": compact_notification_text(customer_text),
         "lastError": job.last_error,
         "suppressionSummary": notification_suppression_summary(job),
         "nextEligibleAt": notification_next_eligible_at(context),
@@ -2047,7 +2072,7 @@ def notification_job_public_payload(job: NotificationJob, detail: bool = False, 
         "quietHoursTimezone": context.get("quietHoursTimezone") or "",
     }
     if detail:
-        payload["fullText"] = full_notification_text(job.text)
+        payload["fullText"] = full_notification_text(customer_text)
         payload["actionFlow"] = notification_action_flow(context)
         # The trace is rebuilt from the immutable context captured with this
         # job, never from the currently active graph generation.

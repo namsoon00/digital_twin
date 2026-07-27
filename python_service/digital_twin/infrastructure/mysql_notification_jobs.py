@@ -34,6 +34,7 @@ from ..domain.sent_article_filter import (
     collect_article_identity_keys_from_context,
     filter_sent_articles_from_context,
     news_story_changes_decision,
+    news_story_is_decision_driver,
     news_story_impact_from_context,
 )
 from .mysql_operational_connection import MySQLOperationalConnection
@@ -539,7 +540,9 @@ class MySQLNotificationJobStore(MySQLOperationalConnection):
             context.pop("newsImpact", None)
             news_impact = news_story_impact_from_context(context)
             if news_impact:
-                decision_changing = news_story_changes_decision(news_impact, relation_diff)
+                decision_driver_confirmed = news_story_is_decision_driver(news_impact, context)
+                decision_changing = news_story_changes_decision(news_impact, relation_diff, context)
+                news_impact["decisionDriverConfirmed"] = decision_driver_confirmed
                 news_impact["decisionChanging"] = decision_changing
                 news_impact["deliveryMode"] = "decision-inline" if decision_changing else "event-digest"
                 if decision_changing:

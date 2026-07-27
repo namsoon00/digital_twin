@@ -93,6 +93,45 @@ class NotificationAIValidatedResponse:
     source: str = "local"
     raw_response: str = ""
 
+    @classmethod
+    def from_dict(cls, payload: Dict[str, object]) -> "NotificationAIValidatedResponse":
+        """Restore a persisted validated decision without trusting old presentation text."""
+
+        payload = payload if isinstance(payload, dict) else {}
+        aliases = {
+            "actionLabel": "action_label",
+            "validationState": "validation_state",
+            "validationLabel": "validation_label",
+            "dataState": "data_state",
+            "dataStateLabel": "data_state_label",
+            "reviewLevel": "review_level",
+            "reviewLabel": "review_label",
+            "counterEvidence": "counter_evidence",
+            "invalidationCondition": "invalidation_condition",
+            "nextChecks": "next_checks",
+            "missingDataImpact": "missing_data_impact",
+            "sourceUrls": "source_urls",
+            "precomputedAction": "precomputed_action",
+            "disagreementReason": "disagreement_reason",
+            "validationReasons": "validation_reasons",
+            "referenceDate": "reference_date",
+            "validationWarnings": "validation_warnings",
+            "strategyGuide": "strategy_guide",
+            "selectedHypothesisId": "selected_hypothesis_id",
+            "hypothesisComparisonState": "hypothesis_comparison_state",
+            "hypothesisSelectionSource": "hypothesis_selection_source",
+            "unresolvedQuestions": "unresolved_questions",
+            "epistemicSummary": "epistemic_summary",
+            "rawResponse": "raw_response",
+        }
+        allowed = set(cls.__dataclass_fields__)
+        values = {
+            aliases.get(str(key), str(key)): value
+            for key, value in payload.items()
+            if aliases.get(str(key), str(key)) in allowed
+        }
+        return cls(**values)
+
     def to_dict(self) -> Dict[str, object]:
         payload = asdict(self)
         payload["engineVersion"] = NOTIFICATION_AI_GATE_VERSION

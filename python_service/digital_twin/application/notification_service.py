@@ -14,7 +14,7 @@ from ..domain.message_types import (
 )
 from ..domain.monitoring import RealtimeMonitor
 from ..domain.notification_ai import enrich_notification_ai_context
-from ..domain.notification_ai_gate_contracts import ai_gate_enabled_for_message_type
+from ..domain.notification_ai_gate_contracts import NotificationAIValidatedResponse, ai_gate_enabled_for_message_type
 from ..domain.notification_ai_gate_validation import local_validated_ai_response
 from ..domain.notifications import NotificationJob, notification_debug_number
 from ..domain.notification_reasoning_report import build_notification_reasoning_report, render_operator_reasoning_report
@@ -256,7 +256,11 @@ class NotificationAIValidatedGateEnricher:
         quality_gate = ontology_quality_gate_context(context, self.settings)
         context["ontologyQualityGate"] = quality_gate
         if context.get("notificationAiValidatedResponse"):
-            job.context = context
+            # A persisted telegramMessage is a presentation cache. Rebuild it
+            # from the validated decision so replayed or delayed jobs receive
+            # the current customer-facing format and sanitization rules.
+            response = NotificationAIValidatedResponse.from_dict(context.get("notificationAiValidatedResponse"))
+            job.context = context_with_validated_ai_response(context, response, self.settings)
             return
         try:
             response = self.reviewer.review(context) if self.reviewer else local_validated_ai_response(context)
@@ -530,8 +534,15 @@ class NotificationQueueRunner:
         if self.context_enricher:
             self.context_enricher(job)
         if self.template_renderer:
-            return str(self.template_renderer(job) or "").strip()
-        return job.text.strip()
+            rendered = str(self.template_renderer(job) or "").strip()
+        else:
+            rendered = job.text.strip()
+        # Store the exact customer-facing text that will be sent. This keeps
+        # the notification ledger and Telegram delivery aligned instead of
+        # leaving the pre-rendered source text in completed jobs.
+        if rendered:
+            job.text = rendered
+        return rendered
 
     def apply_send_time_context(self, job: NotificationJob) -> None:
         now = self.now_provider()

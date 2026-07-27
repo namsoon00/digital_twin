@@ -15,6 +15,7 @@ from digital_twin.domain.notifications import NotificationJob  # noqa: E402
 from digital_twin.infrastructure.web_server import (  # noqa: E402
     notification_job_detail_payload,
     notification_job_list_payload,
+    notification_job_public_payload,
 )
 
 
@@ -223,6 +224,39 @@ class NotificationReverseReasoningTests(unittest.TestCase):
         self.assertEqual("action-changed", detail["job"]["actionFlow"]["transition"]["kind"])
         self.assertNotIn("reasoningTrace", notification_job_list_payload(job, stale_minutes=30))
         self.assertNotIn("actionFlow", notification_job_list_payload(job, stale_minutes=30))
+
+    def test_web_uses_current_safe_presentation_for_persisted_ai_alert(self):
+        context = notification_context()
+        context["messageDeliveryLevel"] = "beginner"
+        context["decisionTransition"] = {
+            "kind": "envelope-changed",
+            "currentStatus": "entry_observing",
+            "summary": "이전 조건에서 entry_observing으로 바뀌었습니다.",
+            "material": True,
+        }
+        context["notificationAiValidatedResponse"].update({
+            "action": "HOLD",
+            "actionLabel": "관심 유지",
+            "evidence": ["거시 부담이 유지됩니다. supportingEvidenceIds: relation-evidence:abc"],
+            "missingDataImpact": [
+                "연구 사이클에서 changedEvidenceCount가 0이고 reasoningRefreshed도 false라, "
+                "기존 뉴스·조사 내용을 새 판단 근거처럼 강화할 수 없습니다.",
+            ],
+        })
+        context["ontologyRelationContext"]["actionEnvelope"].update({
+            "status": "ENTRY_OBSERVING",
+            "statusLabel": "관심 유지",
+            "preferredAction": "HOLD",
+            "targetRole": "watchlist",
+        })
+        job = NotificationJob.create("old rendered message", message_type="investmentInsight", context=context)
+
+        payload = notification_job_public_payload(job, detail=True)
+
+        self.assertIn("새로 확인된 조건: 관심 유지", payload["fullText"])
+        self.assertIn("새 뉴스·조사 근거가 아직 갱신되지 않아 기존 정보만 참고합니다.", payload["fullText"])
+        for internal in ["old rendered message", "entry_observing", "supportingEvidenceIds", "relation-evidence", "changedEvidenceCount", "reasoningRefreshed"]:
+            self.assertNotIn(internal, payload["fullText"])
 
 
 if __name__ == "__main__":

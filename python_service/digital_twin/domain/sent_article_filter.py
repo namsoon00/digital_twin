@@ -67,6 +67,24 @@ SOURCE_URL_LIST_KEYS = {"sourceUrls", "source_urls"}
 DEFAULT_CONTEXT_SCAN_MAX_DEPTH = 8
 DEFAULT_CONTEXT_SCAN_MAX_NODES = 1200
 DEFAULT_CONTEXT_SCAN_MAX_KEYS = 800
+NEWS_DECISION_DRIVER_CATEGORIES = {
+    "news",
+    "article",
+    "disclosure",
+    "research",
+    "research-evidence",
+    "research_evidence",
+    "source-alert-event",
+    "source_alert_event",
+}
+NEWS_DECISION_DRIVER_DATA_KEY_TOKENS = {
+    "news",
+    "article",
+    "disclosure",
+    "research",
+    "sourceevent",
+    "source_event",
+}
 
 
 @dataclass
@@ -505,13 +523,64 @@ def news_story_impact_from_context(context: Dict[str, object]) -> Dict[str, obje
     }
 
 
-def news_story_changes_decision(impact: Dict[str, object], relation_diff: Dict[str, object]) -> bool:
+def _relation_context_from_notification_context(context: Dict[str, object]) -> Dict[str, object]:
+    context = context if isinstance(context, dict) else {}
+    relation = context.get("ontologyRelationContext")
+    if not isinstance(relation, dict):
+        relation = context.get("relationContext")
+    return relation if isinstance(relation, dict) else {}
+
+
+def news_story_is_decision_driver(impact: Dict[str, object], context: Dict[str, object]) -> bool:
+    """Require the action plan itself to name news/research as a driver.
+
+    A directly related article can be useful context without being the reason
+    to send an investment action alert. This guard prevents the compact alert
+    from attaching the most recent article to a macro/trend-driven decision.
+    The relation-diff check below then ties the selected article to this exact
+    decision generation.
+    """
+
+    impact = impact if isinstance(impact, dict) else {}
+    if not impact.get("decisionInlineEligible"):
+        return False
+    relation = _relation_context_from_notification_context(context)
+    plan = relation.get("executionPlan") if isinstance(relation.get("executionPlan"), dict) else {}
+    drivers = plan.get("decisionDrivers") if isinstance(plan.get("decisionDrivers"), list) else []
+    for driver in drivers:
+        if not isinstance(driver, dict):
+            continue
+        category = str(driver.get("category") or "").strip().casefold()
+        data_keys = {
+            str(item or "").strip().casefold()
+            for item in (driver.get("dataKeys") or [])
+            if str(item or "").strip()
+        }
+        direct_category = category in NEWS_DECISION_DRIVER_CATEGORIES
+        direct_data_key = any(
+            any(token in key for token in NEWS_DECISION_DRIVER_DATA_KEY_TOKENS)
+            for key in data_keys
+        )
+        if direct_category or direct_data_key:
+            return True
+    return False
+
+
+def news_story_changes_decision(
+    impact: Dict[str, object],
+    relation_diff: Dict[str, object],
+    context: Dict[str, object] = None,
+) -> bool:
     """Allow an inline story only when it is new evidence for this change."""
 
     impact = impact if isinstance(impact, dict) else {}
     relation_diff = relation_diff if isinstance(relation_diff, dict) else {}
     transition = relation_diff.get("decisionTransition") if isinstance(relation_diff.get("decisionTransition"), dict) else {}
-    if not impact.get("decisionInlineEligible") or not transition.get("material"):
+    if (
+        not impact.get("decisionInlineEligible")
+        or not transition.get("material")
+        or not news_story_is_decision_driver(impact, context or {})
+    ):
         return False
     added = {str(item or "").strip().casefold() for item in relation_diff.get("addedEvidenceKeys") or [] if str(item or "").strip()}
     story_keys = {

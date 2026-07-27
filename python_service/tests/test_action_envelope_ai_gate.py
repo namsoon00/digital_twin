@@ -11,10 +11,13 @@ from digital_twin.domain.notification_ai_gate_validation import (  # noqa: E402
     validated_response_from_payload,
 )
 from digital_twin.domain.notification_ai_gate_contracts import NotificationAIValidatedResponse  # noqa: E402
+from digital_twin.domain.notification_ai_gate_text import user_friendly_ai_text  # noqa: E402
 from digital_twin.application.notification_ai_gate_message import (  # noqa: E402
     execution_telegram_message,
     notification_topline_change_summary,
 )
+from digital_twin.application.notification_service import NotificationAIValidatedGateEnricher  # noqa: E402
+from digital_twin.domain.notifications import NotificationJob  # noqa: E402
 
 
 def entry_context():
@@ -136,6 +139,7 @@ class ActionEnvelopeAiGateTests(unittest.TestCase):
             "newsImpact": {
                 "decisionChanging": True,
                 "decisionInlineEligible": True,
+                "decisionDriverConfirmed": True,
                 "source": "Reuters",
                 "headline": "NVIDIA won a new data-center supply contract.",
             },
@@ -201,6 +205,99 @@ class ActionEnvelopeAiGateTests(unittest.TestCase):
         self.assertIn("진입 시점과 금액을 보수적으로", message)
         self.assertNotIn("ENTRY_OBSERVING", message)
         self.assertNotIn("TypeDB", message)
+
+    def test_compact_message_strips_ai_trace_ids_and_research_cycle_variables(self):
+        context = entry_context()
+        context.update({
+            "messageDeliveryLevel": "beginner",
+            "decisionTransition": {
+                "kind": "envelope-changed",
+                "currentAction": "hold",
+                "currentStatus": "entry_observing",
+                "summary": "이전 조건에서 entry_observing으로 바뀌었습니다.",
+                "material": True,
+            },
+            "newsImpact": {
+                "decisionChanging": True,
+                "decisionInlineEligible": True,
+                "source": "더구루",
+                "headline": "현대차 호주 판매 관련 기사",
+            },
+        })
+        context["ontologyRelationContext"]["actionEnvelope"].update({
+            "status": "ENTRY_OBSERVING",
+            "preferredAction": "HOLD",
+            "selectedDecisionEffect": "constrain",
+        })
+        response = NotificationAIValidatedResponse(
+            action="HOLD",
+            action_label="관심 유지",
+            data_state_label="일부 자료만 있음",
+            summary="지금은 관심종목으로 계속 지켜보는 판단이 맞습니다.",
+            evidence=[
+                "미국 10년 금리 4.71%가 유지되어 거시 부담이 확인됐습니다. "
+                "supportingEvidenceIds: relation-evidence:abc, relation-evidence:def",
+            ],
+            missing_data_impact=[
+                "연구 사이클에서 changedEvidenceCount가 0이고 reasoningRefreshed도 false라, "
+                "기존 뉴스·조사 내용을 새 판단 근거처럼 강화할 수 없습니다.",
+            ],
+            reference_date="2026-07-27 16:03 KST",
+        )
+
+        message = execution_telegram_message(context, response)
+
+        self.assertEqual("새 판단 조건", notification_topline_change_summary(context))
+        self.assertIn("새로 확인된 조건: 관심 유지", message)
+        self.assertEqual(
+            "미국 10년 금리 4.71%가 유지되어 거시 부담이 확인됐습니다.",
+            user_friendly_ai_text(response.evidence[0]),
+        )
+        self.assertIn("새 뉴스·조사 근거가 아직 갱신되지 않아 기존 정보만 참고합니다.", message)
+        self.assertNotIn("뉴스 영향", message)
+        for internal in ["entry_observing", "supportingEvidenceIds", "relation-evidence", "changedEvidenceCount", "reasoningRefreshed"]:
+            self.assertNotIn(internal, message)
+
+    def test_existing_validated_response_rebuilds_stale_presentation_cache(self):
+        context = entry_context()
+        context.update({
+            "messageDeliveryLevel": "beginner",
+            "telegramMessage": "old rendered message entry_observing",
+            "decisionTransition": {
+                "kind": "envelope-changed",
+                "currentStatus": "entry_observing",
+                "summary": "이전 조건에서 entry_observing으로 바뀌었습니다.",
+                "material": True,
+            },
+            "notificationAiValidatedResponse": NotificationAIValidatedResponse(
+                action="HOLD",
+                action_label="관심 유지",
+                data_state_label="일부 자료만 있음",
+                summary="관심 유지가 맞습니다.",
+                evidence=["거시 부담이 남아 있습니다. supportingEvidenceIds: relation-evidence:abc"],
+                missing_data_impact=[
+                    "연구 사이클에서 changedEvidenceCount가 0이고 reasoningRefreshed도 false라, "
+                    "기존 뉴스·조사 내용을 새 판단 근거처럼 강화할 수 없습니다.",
+                ],
+            ).to_dict(),
+        })
+        job = NotificationJob.create(
+            "old rendered message",
+            account_id="main",
+            message_type="investmentInsight",
+            context=context,
+        )
+
+        NotificationAIValidatedGateEnricher(settings={
+            "notificationAiGateEnabled": "1",
+            "notificationAiGateMessageTypes": "investmentInsight",
+        })(job)
+
+        message = job.context["telegramMessage"]
+        self.assertIn("새로 확인된 조건: 관심 유지", message)
+        self.assertIn("새 뉴스·조사 근거가 아직 갱신되지 않아 기존 정보만 참고합니다.", message)
+        for internal in ["old rendered message", "entry_observing", "supportingEvidenceIds", "relation-evidence", "changedEvidenceCount", "reasoningRefreshed"]:
+            self.assertNotIn(internal, message)
 
     def test_topline_uses_human_decision_change_labels(self):
         self.assertEqual(

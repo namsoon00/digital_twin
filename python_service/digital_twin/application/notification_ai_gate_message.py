@@ -35,6 +35,7 @@ from ..domain.notification_ai_gate_text import (
     _raw_lines,
     _text,
     append_unique_text,
+    customer_visible_ai_text,
     reference_date,
 )
 from ..domain.notification_ai_gate_validation import (
@@ -308,14 +309,41 @@ def _ai_marked_value(value: object) -> str:
 def customer_data_note_rows(values: List[object]) -> List[str]:
     rows: List[str] = []
     for item in values or []:
-        text = _text(item, 0)
+        text = customer_visible_ai_text(_text(item, 0))
         if not text:
             continue
         lowered = text.lower()
         if any(term.lower() in lowered for term in CUSTOMER_HIDDEN_DATA_NOTE_TERMS):
             continue
+        if compact_reason_is_internal(text):
+            continue
         append_unique_text(rows, text, 0)
     return rows
+
+
+def action_envelope_status_label(value: object) -> str:
+    raw = str(value or "").strip()
+    if not raw:
+        return ""
+    normalized = raw.replace("-", "_").replace(" ", "_")
+    if not normalized.isupper():
+        normalized = re.sub(r"(?<!^)(?=[A-Z])", "_", normalized)
+    normalized = normalized.upper()
+    return ACTION_ENVELOPE_STATUS_LABELS.get(normalized, "")
+
+
+def action_envelope_status_from_transition(transition: Dict[str, object]) -> str:
+    transition = transition if isinstance(transition, dict) else {}
+    for key in ["currentStatus", "status", "nextStatus"]:
+        value = str(transition.get(key) or "").strip()
+        if action_envelope_status_label(value):
+            return value
+    summary = str(transition.get("summary") or "")
+    for status in ACTION_ENVELOPE_STATUS_LABELS:
+        pattern = r"(?<![A-Za-z0-9_])" + re.escape(status).replace("_", "[_-]?") + r"(?![A-Za-z0-9_])"
+        if re.search(pattern, summary, flags=re.IGNORECASE):
+            return status
+    return ""
 
 def notification_topline_change_summary(context: Dict[str, object]) -> str:
     context = context or {}
@@ -333,7 +361,7 @@ def notification_topline_change_summary(context: Dict[str, object]) -> str:
     if not transition:
         relation_diff = context.get("ontologyRelationDiff") if isinstance(context.get("ontologyRelationDiff"), dict) else {}
         transition = relation_diff.get("decisionTransition") if isinstance(relation_diff.get("decisionTransition"), dict) else {}
-    if transition.get("material"):
+    if transition:
         kind = str(transition.get("kind") or "").strip().lower()
         if kind == "action-changed":
             return "행동 변경"
@@ -341,6 +369,8 @@ def notification_topline_change_summary(context: Dict[str, object]) -> str:
             return "새 판단 조건"
         if kind == "readiness-changed":
             return "자료 상태 변경"
+        if action_envelope_status_label(action_envelope_status_from_transition(transition)):
+            return "새 판단 조건"
     if "손익률 추가 악화" in reason:
         return "손익률 악화"
     if "필수 발송 구간" in reason or "손실률" in reason or "수익률" in reason:
@@ -355,8 +385,8 @@ def notification_topline_change_summary(context: Dict[str, object]) -> str:
         return "새 근거"
     if "새 뉴스/공시/관계 근거" in reason or "새 관계 이벤트" in reason:
         return "새 뉴스·공시"
-    if "관계 강도 변화" in reason or "확인 단계 변화" in reason:
-        return "확인 단계 변화"
+    if "관계 강도 변화" in reason or "확인 단계 변화" in reason or "지금 얼마나 주의" in reason:
+        return "새 판단 조건"
     if "신규성 변화" in reason:
         return "신규성 변화"
     if "인사이트 유형 변경" in reason:
@@ -2131,17 +2161,17 @@ def compact_decision_transition(context: Dict[str, object], response: Notificati
     current = str(transition.get("currentAction") or response.action or "").strip().upper()
     if previous and current and previous != current:
         return action_label_for_action(previous, context) + "에서 " + action_label_for_action(current, context) + "으로 바뀌었습니다."
-    previous_status = str(transition.get("previousStatus") or "").strip().upper()
-    current_status = str(transition.get("currentStatus") or "").strip().upper()
+    previous_status = str(transition.get("previousStatus") or "").strip()
+    current_status = action_envelope_status_from_transition(transition)
     if current_status:
-        current_label = ACTION_ENVELOPE_STATUS_LABELS.get(current_status, "")
-        previous_label = ACTION_ENVELOPE_STATUS_LABELS.get(previous_status, "")
+        current_label = action_envelope_status_label(current_status)
+        previous_label = action_envelope_status_label(previous_status)
         if previous_label and previous_label != current_label:
             return previous_label + "에서 " + current_label + "로 바뀌었습니다."
         if current_label:
             return "새로 확인된 조건: " + current_label + "."
-    summary = compact_sentence_count(transition.get("summary") or "", 1)
-    if summary:
+    summary = compact_sentence_count(customer_visible_ai_text(transition.get("summary") or ""), 1)
+    if summary and not compact_reason_is_internal(summary):
         return summary
     envelope = relation_context_value(context).get("actionEnvelope") if isinstance(relation_context_value(context), dict) else {}
     label = str(envelope.get("statusLabel") or "").strip() if isinstance(envelope, dict) else ""
@@ -2182,14 +2212,18 @@ def compact_action_reason_rows(
         envelope_rows = [row for row in envelope_rows if "진입" not in row]
     elif status in {"ENTRY_BLOCKED", "JUDGEMENT_BLOCKED"} and ("보류" in summary or "필수 자료" in summary):
         envelope_rows = [row for row in envelope_rows if "판단을 보류" not in row]
+    # Keep one sentence that explains the allowed action range, then prefer a
+    # concrete market fact over a second generic envelope sentence. This makes
+    # the compact alert explain *why now* without exposing the rule payload.
     values = (
-        envelope_rows
+        envelope_rows[:1]
         + compact_effect_driver_rows(context)
         + list(response.evidence or [])
         + list(relation_axis_summary_lines(context, 5))
+        + envelope_rows[1:]
     )
     for item in values:
-        text = compact_sentence_count(_message_text(item, "beginner"), 1)
+        text = compact_sentence_count(_message_text(customer_visible_ai_text(item), "beginner"), 1)
         if compact_reason_is_internal(text):
             continue
         normalized = re.sub(r"[^0-9a-z가-힣]+", "", text.casefold())
@@ -2243,7 +2277,7 @@ def compact_effect_driver_rows(context: Dict[str, object]) -> List[str]:
         for driver in drivers:
             if not isinstance(driver, dict) or str(driver.get("category") or "") != category:
                 continue
-            text = str(driver.get("summary") or driver.get("text") or driver.get("label") or "").strip()
+            text = customer_visible_ai_text(driver.get("summary") or driver.get("text") or driver.get("label") or "")
             if text and not compact_reason_is_internal(text):
                 return [text]
     return []
@@ -2254,6 +2288,9 @@ def compact_reason_is_internal(value: object) -> bool:
     return any(token in text for token in [
         "typedb", "rulebox", "inferencebox", "관계 분석 규칙", "관계 분석 실행 계획",
         "관계가 새로 감지", "관계 신호 관계",
+        "supportingevidenceid", "counterevidenceid", "reviewedsupportingevidenceid",
+        "reviewedcounterevidenceid", "causalpathid", "relation-evidence", "relation_근거",
+        "relation-근거", "changedevidencecount", "reasoningrefreshed",
     ])
 
 
@@ -2276,7 +2313,7 @@ def compact_invalidation_line(context: Dict[str, object], response: Notification
 
 def compact_data_status_line(context: Dict[str, object], response: NotificationAIValidatedResponse) -> str:
     state = relation_state_values(context)
-    label = str(state.get("dataLabel") or response.data_state_label or "").strip()
+    label = customer_visible_ai_text(state.get("dataLabel") or response.data_state_label or "")
     missing = customer_data_note_rows(list(response.missing_data_impact))
     if missing:
         return label + ". " + " / ".join(missing[:1])
@@ -2288,10 +2325,15 @@ def compact_news_impact_line(context: Dict[str, object]) -> str:
     if not impact:
         relation = relation_context_value(context)
         impact = relation.get("newsImpact") if isinstance(relation.get("newsImpact"), dict) else {}
-    if not impact or not impact.get("decisionChanging") or impact.get("decisionInlineEligible") is not True:
+    if (
+        not impact
+        or not impact.get("decisionChanging")
+        or impact.get("decisionInlineEligible") is not True
+        or impact.get("decisionDriverConfirmed") is not True
+    ):
         return ""
-    headline = str(impact.get("headline") or impact.get("summary") or "").strip()
-    source = str(impact.get("source") or "").strip()
+    headline = customer_visible_ai_text(impact.get("headline") or impact.get("summary") or "")
+    source = customer_visible_ai_text(impact.get("source") or "")
     prefix = (source + ": ") if source else ""
     return prefix + compact_sentence_count(headline, 1)
 

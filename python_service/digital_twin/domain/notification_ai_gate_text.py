@@ -75,6 +75,78 @@ USER_FRIENDLY_REPLACEMENTS = [
     ("무효화 조건", "의견이 약해지는 조건"),
 ]
 
+# These values are useful inside the reasoning/audit payload, but are never a
+# customer-facing explanation. Keep the transformation at the boundary used by
+# every AI response so a model response cannot leak a storage key into an
+# alert, detail screen, or generated strategy guide.
+INTERNAL_ACTION_STATUS_LABELS = {
+    "ENTRY_ELIGIBLE": "소액 진입 조건 성립",
+    "ENTRY_DEFERRED": "진입 조건 추가 확인",
+    "ENTRY_OBSERVING": "관심 유지",
+    "ENTRY_BLOCKED": "진입 판단 보류",
+    "HOLDING_REVIEW": "보유 판단 재확인",
+    "JUDGEMENT_BLOCKED": "판단 보류",
+}
+INTERNAL_METADATA_TAIL_PATTERN = re.compile(
+    r"(?:\s*(?:[·,;]|/)\s*)?"
+    r"(?:supportingEvidenceIds?|counterEvidenceIds?|reviewedSupportingEvidenceIds?|"
+    r"reviewedCounterEvidenceIds?|causalPathIds?|evidenceIds?|sourceEventKeys?|"
+    r"hypothesisIds?|relation[-_ ]?(?:evidence|근거)(?:Ids?)?)\s*[:=]\s*[^\n]*",
+    re.IGNORECASE,
+)
+INTERNAL_IDENTIFIER_ONLY_PATTERN = re.compile(
+    r"^\s*(?:relation[-_ ]?(?:evidence|근거)|evidence|hypothesis|trace|fact|claim)"
+    r"(?:Ids?)?\s*:\s*[A-Za-z0-9:_\-,.\s]+\s*$",
+    re.IGNORECASE,
+)
+RESEARCH_CYCLE_METADATA_PATTERN = re.compile(
+    r"(?:연구\s*사이클에서\s*)?changedEvidenceCount\s*(?:가|는|이)?\s*(?:=|:)?\s*0\s*"
+    r"(?:이고|이며|and|,)?\s*reasoningRefreshed\s*(?:도|는|이)?\s*(?:=|:)?\s*"
+    r"(?:false|아니오)[^.!?]*(?:[.!?]|$)",
+    re.IGNORECASE,
+)
+RESEARCH_CYCLE_VARIABLE_PATTERN = re.compile(r"\b(?:changedEvidenceCount|reasoningRefreshed)\b", re.IGNORECASE)
+
+
+def _camel_case(value: str) -> str:
+    parts = [part.lower() for part in str(value or "").split("_") if part]
+    if not parts:
+        return ""
+    return parts[0] + "".join(part.title() for part in parts[1:])
+
+
+def customer_visible_ai_text(value: object) -> str:
+    """Remove internal trace metadata while retaining the preceding explanation."""
+
+    result = " ".join(str(value or "").split()).strip()
+    if not result:
+        return ""
+    result = RESEARCH_CYCLE_METADATA_PATTERN.sub(
+        "새 뉴스·조사 근거가 아직 갱신되지 않아 기존 정보만 참고합니다.",
+        result,
+    )
+    if RESEARCH_CYCLE_VARIABLE_PATTERN.search(result):
+        # A partial or differently worded research-cycle diagnostic must not
+        # leave an implementation field in customer text.
+        result = re.sub(
+            r"[^.!?]*\b(?:changedEvidenceCount|reasoningRefreshed)\b[^.!?]*(?:[.!?]|$)",
+            "새 뉴스·조사 근거의 갱신 여부를 아직 확인하지 못했습니다.",
+            result,
+            flags=re.IGNORECASE,
+        )
+    result = INTERNAL_METADATA_TAIL_PATTERN.sub("", result).strip(" ·,;/: ")
+    if INTERNAL_IDENTIFIER_ONLY_PATTERN.match(result):
+        return ""
+    for status, label in INTERNAL_ACTION_STATUS_LABELS.items():
+        variants = "|".join(re.escape(item) for item in {status, status.lower(), _camel_case(status)})
+        result = re.sub(
+            r"(?<![A-Za-z0-9_])(?:" + variants + r")(?![A-Za-z0-9_])",
+            label,
+            result,
+            flags=re.IGNORECASE,
+        )
+    return re.sub(r"\s+", " ", result).strip()
+
 def _raw_lines(context: Dict[str, object]) -> List[str]:
     raw = context.get("rawLines") if isinstance(context, dict) else ""
     if isinstance(raw, list):
@@ -176,7 +248,7 @@ def fallback_action_from_label(value: object) -> str:
 
 
 def user_friendly_ai_text(value: object, limit: int = 220) -> str:
-    result = _text(value, limit)
+    result = _text(customer_visible_ai_text(value), limit)
     if not result:
         return ""
     for pattern, replacement in INTERNAL_VARIABLE_REPLACEMENTS:

@@ -576,6 +576,34 @@ class OntologyReasoningMailboxTests(unittest.TestCase):
         self.assertEqual([], runner.mailbox_entries_for_event(event))
         self.assertEqual(1, runner.status()["pendingResearchHandoffCount"])
 
+    def test_status_reuses_one_ingress_read_for_direct_research_handoffs(self):
+        class CountingIngressReader(Reader):
+            def __init__(self, events):
+                super().__init__(events)
+                self.ingress_reads = 0
+
+            def unmaterialized_reasoning_events(self, limit=0):
+                del limit
+                self.ingress_reads += 1
+                return list(self.events)
+
+        event = research_evidence_request(
+            "counted-hypothesis-research",
+            ["AAPL"],
+            "2026-07-24T00:00:00Z",
+            trigger="hypothesis-research-update",
+            research_run_id="research-run-counted",
+            reasoning_handoff={"status": "requested", "requestId": "handoff-counted"},
+        )
+        runner = self.build_runner([])
+        reader = CountingIngressReader([event])
+        runner.event_reader = reader
+
+        status = runner.status()
+
+        self.assertEqual(1, reader.ingress_reads)
+        self.assertEqual(1, status["pendingResearchHandoffCount"])
+
     def test_shared_world_projection_completes_an_older_direct_research_handoff(self):
         class IngressReader(Reader):
             def unmaterialized_reasoning_events(self, limit=0):

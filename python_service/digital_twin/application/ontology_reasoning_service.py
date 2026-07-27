@@ -1330,11 +1330,18 @@ class OntologyReasoningRunner:
         processed = set(progress.get(str(getattr(event, "event_id", "") or ""), []) or [])
         return [symbol for symbol in symbols if symbol not in processed]
 
-    def pending_requests(self, limit: int = 0) -> List[object]:
-        processed = set(self.cursor_store.processed_event_ids())
-        cursor_payload = self.cursor_payload()
-        progress = self.event_symbol_progress(cursor_payload)
-        priority_symbols = self.priority_symbols()
+    def source_reasoning_events(
+        self,
+        limit: int = 0,
+        processed_event_ids: Iterable[str] = None,
+    ) -> List[object]:
+        """Return the bounded ingress view shared by scheduling and handoffs.
+
+        Direct research handoffs must remain visible even when their symbols
+        are inside a cadence cooldown.  Reading this MySQL repair view once
+        per runner cycle keeps that guarantee without making status checks or
+        normal scheduling issue the same payload-heavy query twice.
+        """
         ingress_reader = getattr(self.event_reader, "unmaterialized_reasoning_events", None)
         reader = getattr(self.event_reader, "recent_events", None)
         if self.durable_mailbox_ingress_enabled() and callable(ingress_reader):
@@ -1349,11 +1356,20 @@ class OntologyReasoningRunner:
                 name=ONTOLOGY_REASONING_REQUESTED,
                 limit=self.event_scan_limit(limit),
             )
+        source_events = list(source_events or [])
         if self.durable_mailbox_ingress_enabled():
             # Pre-ingress rows that were already consumed by the legacy cursor
             # should be sealed once, otherwise they remain at the front of the
             # bounded repair query forever.
             terminalize = getattr(self.mailbox_store, "terminalize_direct_events", None)
+            if processed_event_ids is None:
+                processed = set(self.cursor_store.processed_event_ids())
+            else:
+                processed = {
+                    str(event_id or "").strip()
+                    for event_id in processed_event_ids
+                    if str(event_id or "").strip()
+                }
             already_processed = [event for event in source_events if event.event_id in processed]
             if callable(terminalize) and already_processed:
                 try:
@@ -1364,6 +1380,24 @@ class OntologyReasoningRunner:
                     )
                 except Exception:
                     pass
+        return source_events
+
+    def pending_requests(
+        self,
+        limit: int = 0,
+        source_events: Iterable[object] = None,
+    ) -> List[object]:
+        processed = set(self.cursor_store.processed_event_ids())
+        cursor_payload = self.cursor_payload()
+        progress = self.event_symbol_progress(cursor_payload)
+        priority_symbols = self.priority_symbols()
+        if source_events is None:
+            source_events = self.source_reasoning_events(
+                limit,
+                processed_event_ids=processed,
+            )
+        else:
+            source_events = list(source_events or [])
         ranked_events = []
         for event in source_events:
             if event.event_id in processed or event_changed_count(event) <= 0:
@@ -1606,6 +1640,7 @@ class OntologyReasoningRunner:
     def pending_research_handoff_requests(
         self,
         source_requests: Iterable[object] = None,
+        source_events: Iterable[object] = None,
         limit: int = 0,
     ) -> List[object]:
         """Read direct research handoffs independently of symbol cooldowns.
@@ -1617,8 +1652,10 @@ class OntologyReasoningRunner:
         keep a bounded reconciliation view of direct ingress rows here.
         """
         candidates = list(source_requests or [])
+        if source_events is not None:
+            candidates.extend(source_events)
         ingress_reader = getattr(self.event_reader, "unmaterialized_reasoning_events", None)
-        if self.durable_mailbox_ingress_enabled() and callable(ingress_reader):
+        if source_events is None and self.durable_mailbox_ingress_enabled() and callable(ingress_reader):
             try:
                 candidates.extend(ingress_reader(limit=self.event_scan_limit(limit)) or [])
             except Exception:
@@ -2047,7 +2084,8 @@ class OntologyReasoningRunner:
         family. The older cursor is advanced only after the newer snapshot has
         completed TypeDB projection and inference.
         """
-        source_requests = self.pending_requests(limit)
+        source_events = self.source_reasoning_events(limit)
+        source_requests = self.pending_requests(limit, source_events=source_events)
         if hydrate_mailbox and self.durable_mailbox_ingress_enabled():
             mailbox_sources = [event for event in source_requests if self.mailbox_entries_for_event(event)]
         else:
@@ -2060,6 +2098,7 @@ class OntologyReasoningRunner:
         ]
         research_handoff_requests = self.pending_research_handoff_requests(
             direct_source_requests,
+            source_events=source_events,
             limit=limit,
         )
         direct_work = self.coalesced_work(direct_source_requests)

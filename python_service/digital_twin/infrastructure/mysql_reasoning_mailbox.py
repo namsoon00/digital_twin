@@ -9,6 +9,8 @@ data.
 from __future__ import annotations
 
 from datetime import datetime, timedelta, timezone
+import os
+import socket
 from typing import Dict, Iterable, List, Mapping
 
 from ..domain.ontology_reasoning_queue import (
@@ -27,6 +29,68 @@ TERMINAL_STATES = {"completed", "superseded", "expired"}
 
 def _text(value: object) -> str:
     return str(value or "").strip()
+
+
+def local_reasoning_watch_pid(owner: object, hostname: str = "") -> int:
+    """Return a local scheduler PID encoded in a durable lease owner.
+
+    A PID alone is only safe to inspect on the machine that created it. New
+    owners include a hostname; the legacy ``reasoning-watch:<pid>`` shape is
+    retained as a local-only compatibility case for leases created before the
+    host component existed.
+    """
+    value = _text(owner)
+    prefix = "reasoning-watch:"
+    if not value.startswith(prefix):
+        return 0
+    remainder = value[len(prefix):]
+    parts = remainder.rsplit(":", 1)
+    local_hostname = _text(hostname) or socket.gethostname()
+    if len(parts) == 2:
+        owner_hostname, raw_pid = parts
+        if _text(owner_hostname) != local_hostname:
+            return 0
+    else:
+        raw_pid = remainder
+    try:
+        return max(0, int(raw_pid))
+    except (TypeError, ValueError):
+        return 0
+
+
+def local_reasoning_watch_is_dead(owner: object, hostname: str = "", process_alive=None) -> bool:
+    pid = local_reasoning_watch_pid(owner, hostname)
+    if pid <= 0:
+        return False
+    alive = process_alive
+    if not callable(alive):
+        def alive(candidate: int) -> bool:
+            try:
+                os.kill(candidate, 0)
+                return True
+            except PermissionError:
+                return True
+            except OSError:
+                return False
+    try:
+        return not bool(alive(pid))
+    except Exception:
+        # An uncertain process check must retain the lease until its normal
+        # expiry; never recover work based on an inspection failure.
+        return False
+
+
+def _older_than(value: object, now: datetime, seconds: int) -> bool:
+    stamp = _text(value)
+    if not stamp:
+        return True
+    try:
+        parsed = datetime.fromisoformat(stamp.replace("Z", "+00:00"))
+    except ValueError:
+        return True
+    if parsed.tzinfo is None:
+        parsed = parsed.replace(tzinfo=timezone.utc)
+    return (now - parsed.astimezone(timezone.utc)).total_seconds() >= max(0, int(seconds or 0))
 
 
 def _entries_by_event(entries: Iterable[Mapping[str, object]]) -> Dict[str, List[Dict[str, object]]]:
@@ -702,6 +766,67 @@ class MySQLOntologyReasoningMailboxStore(MySQLOperationalConnection):
                 return int(cursor.rowcount or 0)
         except Exception:
             return 0
+
+    def recover_dead_local_worker_leases(
+        self,
+        retry_after_seconds: int = 30,
+        minimum_age_seconds: int = 30,
+    ) -> Dict[str, object]:
+        """Recover only leases whose local scheduler parent is confirmed dead.
+
+        A controlled service restart terminates the isolated child through its
+        parent process group. Its durable work lease should not block the new
+        parent for the full lease period. The age guard gives that child its
+        signal grace window; remote or unrecognised owners are left untouched
+        for normal lease-expiry recovery.
+        """
+        now = datetime.now(timezone.utc)
+        stamp = now.isoformat().replace("+00:00", "Z")
+        retry_at = (now + timedelta(seconds=max(5, min(900, int(retry_after_seconds or 30))))).isoformat().replace("+00:00", "Z")
+        result = {"enabled": True, "recovered": [], "protected": 0}
+        try:
+            with self.transaction() as connection:
+                rows = connection.execute(
+                    """
+                    SELECT mailbox_key, source_event_id, lease_owner, heartbeat_at, updated_at
+                    FROM ontology_reasoning_work_items
+                    WHERE work_state = 'running' AND lease_owner LIKE %s
+                    FOR UPDATE
+                    """,
+                    ("reasoning-watch:%",),
+                ).fetchall()
+                for row in rows or []:
+                    owner = _text(row.get("lease_owner"))
+                    observed_at = _text(row.get("heartbeat_at")) or _text(row.get("updated_at"))
+                    if not local_reasoning_watch_is_dead(owner):
+                        result["protected"] += 1
+                        continue
+                    if not _older_than(observed_at, now, minimum_age_seconds):
+                        result["protected"] += 1
+                        continue
+                    key = _text(row.get("mailbox_key"))
+                    event_id = _text(row.get("source_event_id"))
+                    cursor = connection.execute(
+                        """
+                        UPDATE ontology_reasoning_work_items
+                        SET work_state = 'retrying', lease_owner = '', lease_until = '', not_before_at = %s,
+                            last_stage = 'orphaned-worker-retry-scheduled', heartbeat_at = %s,
+                            last_error = %s, updated_at = %s
+                        WHERE mailbox_key = %s AND source_event_id = %s
+                          AND work_state = 'running' AND lease_owner = %s
+                        """,
+                        (
+                            retry_at, stamp, "previous local reasoning scheduler is no longer running",
+                            stamp, key, event_id, owner,
+                        ),
+                    )
+                    if int(cursor.rowcount or 0) > 0:
+                        result["recovered"].append({"mailboxKey": key, "sourceEventId": event_id, "leaseOwner": owner})
+                if result["recovered"]:
+                    self._refresh_queue_state_with_connection(connection)
+            return result
+        except Exception as error:
+            return {**result, "enabled": False, "reason": str(error)[:180]}
 
     def record_timeout(self, details: Mapping[str, object] = None) -> None:
         stamp = utc_now()

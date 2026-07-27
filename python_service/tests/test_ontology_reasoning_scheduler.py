@@ -68,6 +68,7 @@ class FakeStopProcess:
 class FakeRunner:
     def __init__(self):
         self.timeouts = []
+        self.orphan_recoveries = 0
 
     def process_isolation_enabled(self):
         return True
@@ -86,6 +87,10 @@ class FakeRunner:
             "alertCount": 0,
             "retryAfterSeconds": 60,
         }
+
+    def recover_orphaned_mailbox_work(self):
+        self.orphan_recoveries += 1
+        return {"enabled": True, "recovered": [{"mailboxKey": "key"}]}
 
 
 class DeferredLowPriorityRunner:
@@ -144,6 +149,8 @@ class OntologyReasoningSchedulerTests(unittest.TestCase):
         self.assertEqual(12, runner.timeouts[0]["timeoutSeconds"])
         self.assertEqual(scheduler.worker_id, runner.timeouts[0]["workerId"])
         self.assertEqual(scheduler.worker_id, cycle.environment["ONTOLOGY_REASONING_WORKER_ID"])
+        self.assertEqual(1, runner.orphan_recoveries)
+        self.assertEqual(1, len(result["mailboxOrphanLeaseRecovery"]["recovered"]))
         self.assertIn(signal_value("SIGTERM"), process.signals)
 
     def test_stop_only_signals_the_child_while_communicate_owns_pipe_cleanup(self):

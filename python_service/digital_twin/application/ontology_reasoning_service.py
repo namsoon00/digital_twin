@@ -713,6 +713,25 @@ class OntologyReasoningRunner:
         except Exception:
             return
 
+    def recover_orphaned_mailbox_work(self) -> Dict[str, object]:
+        """Resume work left by a confirmed-dead local isolated scheduler.
+
+        This is operational recovery only. It changes no ABox or RuleBox
+        fact, and unrecognised or remote worker owners remain lease-protected.
+        """
+        recover = getattr(self.mailbox_store, "recover_dead_local_worker_leases", None) if self.mailbox_enabled() else None
+        if not callable(recover):
+            return {"enabled": False, "recovered": []}
+        try:
+            return dict(recover(
+                retry_after_seconds=self.mailbox_work_retry_seconds(),
+                minimum_age_seconds=max(30, self.execution_timeout_grace_seconds() * 2),
+            ) or {})
+        except TypeError:
+            return dict(recover(self.mailbox_work_retry_seconds()) or {})
+        except Exception as error:  # noqa: BLE001 - normal lease expiry remains a safe fallback.
+            return {"enabled": False, "recovered": [], "reason": str(error)[:180]}
+
     def source_freshness_enabled(self) -> bool:
         # Runtime settings explicitly enable this. Keeping compatibility
         # callers opt-in avoids treating synthetic unit-test timestamps as

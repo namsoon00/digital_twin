@@ -2,6 +2,7 @@ import errno
 import json
 import os
 import signal
+import socket
 import subprocess
 import time
 
@@ -288,7 +289,7 @@ class OntologyReasoningScheduler:
         # The parent passes this stable id to each short-lived child.  If the
         # child times out, only this invocation's mailbox lease is released;
         # a different scheduler instance cannot be accidentally reclaimed.
-        self.worker_id = "reasoning-watch:" + str(os.getpid())
+        self.worker_id = "reasoning-watch:" + socket.gethostname() + ":" + str(os.getpid())
         self.last_deferred_signature = ""
         self.last_deferred_report_at = 0.0
         self.running = True
@@ -314,6 +315,13 @@ class OntologyReasoningScheduler:
     def run_once(self, limit: int = 0):
         if not self.process_isolation_enabled():
             return self.runner.run_once(limit=limit)
+        recovery = {}
+        recover_orphaned = getattr(self.runner, "recover_orphaned_mailbox_work", None)
+        if callable(recover_orphaned):
+            try:
+                recovery = dict(recover_orphaned() or {})
+            except Exception:
+                recovery = {"enabled": False, "recovered": []}
         current_environment = dict(getattr(self.isolated_cycle, "environment", {}) or {})
         current_environment["ONTOLOGY_REASONING_WORKER_ID"] = self.worker_id
         self.isolated_cycle.environment = current_environment
@@ -322,6 +330,8 @@ class OntologyReasoningScheduler:
             self.execution_timeout_seconds(),
             self.execution_timeout_grace_seconds(),
         )
+        if recovery:
+            result = {**dict(result or {}), "mailboxOrphanLeaseRecovery": recovery}
         if not result.get("timeout"):
             return result
         recorder = getattr(self.runner, "record_execution_timeout", None)
@@ -344,6 +354,7 @@ class OntologyReasoningScheduler:
             "isolatedExecution": True,
             "isolatedDurationMs": int(result.get("durationMs") or 0),
             "workerOutput": str(result.get("workerOutput") or "")[-1200:],
+            **({"mailboxOrphanLeaseRecovery": recovery} if recovery else {}),
         }
 
     def run_forever(self, limit: int = 0) -> None:

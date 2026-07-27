@@ -8,7 +8,11 @@ sys.path.insert(0, str(Path(__file__).resolve().parents[1]))
 from digital_twin.application.ontology_reasoning_service import OntologyReasoningRunner
 from digital_twin.domain.events import DomainEvent, ONTOLOGY_REASONING_REQUESTED, ontology_reasoning_requested_event
 from digital_twin.domain.ontology_reasoning_queue import durable_mailbox_entries
-from digital_twin.infrastructure.mysql_reasoning_mailbox import MySQLOntologyReasoningMailboxStore
+from digital_twin.infrastructure.mysql_reasoning_mailbox import (
+    MySQLOntologyReasoningMailboxStore,
+    local_reasoning_watch_is_dead,
+    local_reasoning_watch_pid,
+)
 
 
 class MemoryCursor:
@@ -507,6 +511,32 @@ class OntologyReasoningMailboxTests(unittest.TestCase):
 
         self.assertEqual("direct", result["ingressKind"])
         self.assertEqual("direct-pending", connection.events["handoff-direct"]["state"])
+
+    def test_orphan_recovery_only_accepts_confirmed_dead_local_scheduler_owners(self):
+        self.assertEqual(451, local_reasoning_watch_pid("reasoning-watch:local:451", hostname="local"))
+        self.assertEqual(452, local_reasoning_watch_pid("reasoning-watch:452", hostname="local"))
+        self.assertEqual(0, local_reasoning_watch_pid("reasoning-watch:remote:453", hostname="local"))
+        self.assertTrue(
+            local_reasoning_watch_is_dead(
+                "reasoning-watch:local:451",
+                hostname="local",
+                process_alive=lambda _pid: False,
+            )
+        )
+        self.assertFalse(
+            local_reasoning_watch_is_dead(
+                "reasoning-watch:local:451",
+                hostname="local",
+                process_alive=lambda _pid: True,
+            )
+        )
+        self.assertFalse(
+            local_reasoning_watch_is_dead(
+                "reasoning-watch:remote:453",
+                hostname="local",
+                process_alive=lambda _pid: False,
+            )
+        )
 
     def test_legacy_direct_news_marker_migrates_into_a_latest_state_mailbox_slot(self):
         event = research_evidence_request(

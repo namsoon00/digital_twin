@@ -8,7 +8,7 @@ except ImportError:  # pragma: no cover - Python 3.8 compatibility guard.
     ZoneInfo = None
 
 from ..domain.accounts import investment_strategy_profile, message_delivery_profile
-from ..domain.alert_formatting import compact_number, price_money, signed_pct
+from ..domain.alert_formatting import compact_number, price_money, signed_pct, trade_strength_label
 from ..domain.notification_ai import criterion_lines, notification_ai_prompt_context, relation_context_value
 from ..domain.notification_ai_context import relation_facts
 from ..domain.notification_ai_context import is_watchlist_context
@@ -2128,9 +2128,9 @@ def execution_telegram_message_compact_beginner(
     transition = compact_decision_transition(context, response)
     if transition:
         parts.extend(["", "<b>이번 변화</b>", _html_bullet(transition, level)])
-    flow = compact_current_flow_line(context)
-    if flow:
-        parts.extend(["", "<b>현재 흐름</b>", _html_bullet(flow, level)])
+    flow_rows = compact_current_flow_rows(context)
+    if flow_rows:
+        parts.extend(["", "<b>현재 흐름</b>", *[_html_bullet(row, level) for row in flow_rows]])
     reasons = compact_action_reason_rows(context, response)
     if reasons:
         parts.extend(["", "<b>바뀐 이유</b>", *[_html_bullet(item, level) for item in reasons]])
@@ -2178,21 +2178,203 @@ def compact_decision_transition(context: Dict[str, object], response: Notificati
     return label or "새 판단 조건을 확인했습니다."
 
 
-def compact_current_flow_line(context: Dict[str, object]) -> str:
+def _market_signal_stage(context: Dict[str, object], stage: str) -> Dict[str, object]:
+    facts = relation_facts(context or {})
+    coverage = facts.get("marketSignalCoverage") if isinstance(facts.get("marketSignalCoverage"), dict) else {}
+    payload = coverage.get(stage) if isinstance(coverage.get(stage), dict) else {}
+    return dict(payload or {})
+
+
+def _market_signal_stage_visible(context: Dict[str, object], stage: str) -> bool:
+    payload = _market_signal_stage(context, stage)
+    if not payload:
+        # Legacy contexts do not retain per-stage freshness metadata. Their
+        # raw lines were already sanitized by the dispatch freshness gate.
+        return True
+    status = str(payload.get("status") or "").strip().lower()
+    if status and status not in {"available", "partial", "proxy"}:
+        return False
+    return payload.get("judgementEvidenceUsable") is not False
+
+
+def _market_signal_basis_label(context: Dict[str, object], stage: str) -> str:
+    payload = _market_signal_stage(context, stage)
+    if not payload:
+        return ""
+    freshness = str(payload.get("freshnessStatus") or "").strip().lower()
+    latency = str(payload.get("latencyStatus") or "").strip().lower()
+    if stage == "investor" and (
+        payload.get("realTime") is False
+        or freshness in {"reference-only", "reference-repeat"}
+        or latency in {"delayed-or-batched", "unchanged-repeat"}
+        or _number(payload.get("unchangedCount")) > 0
+    ):
+        return "당일 누적 참고"
+    if freshness == "last-close" or latency == "market-closed-reference":
+        return "최근 마감 기준"
+    return ""
+
+
+def _market_signal_exclusion_note(context: Dict[str, object], stage: str) -> str:
+    payload = _market_signal_stage(context, stage)
+    if not payload or _market_signal_stage_visible(context, stage):
+        return ""
+    status = str(payload.get("status") or "").strip().lower()
+    if status in {"stale", "stale-at-dispatch"}:
+        return "최신값이 아니어서 이번 판단에서는 제외"
+    if status in {"unavailable", "missing", "empty"}:
+        session = str(payload.get("marketSession") or "").strip().lower()
+        if session in {"pre_open", "post_close", "closed"}:
+            return "정규장 체결값이 없어 이번 판단에서는 제외"
+        return "확인 가능한 값이 없어 이번 판단에서는 제외"
+    return ""
+
+
+def _compact_trend_from_facts(context: Dict[str, object]) -> str:
+    facts = relation_facts(context or {})
+    current = _number(facts.get("currentPrice"))
+    currency = str(facts.get("currency") or "KRW")
+    rows = []
+    for period in [5, 20, 60]:
+        average = _number(facts.get("ma" + str(period)))
+        if average <= 0:
+            continue
+        distance_key = "ma" + str(period) + "Distance"
+        distance = _number(facts.get(distance_key))
+        if distance == 0 and current:
+            distance = ((current / average) - 1) * 100
+        direction = "높음" if distance >= 0 else "낮음"
+        rows.append(
+            str(period)
+            + "일선 "
+            + price_money(average, currency)
+            + "보다 "
+            + str(abs(round(distance, 1)))
+            + "% "
+            + direction
+        )
+    return ", ".join(rows)
+
+
+def _compact_investor_fact(label: str, prefix: str, facts: Dict[str, object]) -> str:
+    buy = _number(facts.get(prefix + "BuyVolume"))
+    sell = _number(facts.get(prefix + "SellVolume"))
+    reported_net = _number(facts.get(prefix + "NetVolume"))
+    net = buy - sell if buy or sell else reported_net
+    if not any([buy, sell, net]):
+        return ""
+    direction = "순매수" if net > 0 else "순매도" if net < 0 else "매수·매도 균형"
+    if net:
+        return label + " " + direction + " " + compact_number(abs(net)) + "주"
+    return label + " " + direction
+
+
+def _compact_investor_rows_from_raw_lines(context: Dict[str, object]) -> List[str]:
+    rows = []
+    for label in ["외국인", "기관"]:
+        value = ""
+        for line in _raw_lines(context):
+            text = str(line or "").strip()
+            if not (text.startswith(label) or text.startswith("투자자")):
+                continue
+            direction_match = re.search(r"(?:^|[,:\s])" + re.escape(label) + r"\s*:?\s*(순매수|순매도)\s*([+\-]?\s*[0-9][0-9,\.]*)\s*주?", text)
+            if direction_match:
+                value = label + " " + direction_match.group(1) + " " + re.sub(r"\s+", "", direction_match.group(2)) + "주"
+                break
+            signed_match = re.search(r"(?:^|[,:\s])" + re.escape(label) + r"\s*:?\s*([+\-])\s*([0-9][0-9,\.]*)", text)
+            if signed_match:
+                direction = "순매수" if signed_match.group(1) == "+" else "순매도"
+                value = label + " " + direction + " " + signed_match.group(2) + "주"
+                break
+        if value:
+            rows.append(value)
+    return rows
+
+
+def compact_investor_flow_line(context: Dict[str, object]) -> str:
+    if not _market_signal_stage_visible(context, "investor"):
+        return ""
+    facts = relation_facts(context or {})
+    rows = [
+        _compact_investor_fact("외국인", "foreign", facts),
+        _compact_investor_fact("기관", "institution", facts),
+    ]
+    rows = [row for row in rows if row]
+    if not rows:
+        rows = _compact_investor_rows_from_raw_lines(context)
+    if not rows:
+        return ""
+    basis = _market_signal_basis_label(context, "investor")
+    return " · ".join(rows) + ((" (" + basis + ")") if basis else "")
+
+
+def _compact_execution_from_raw_flow(flow: str) -> List[str]:
+    parts = []
+    strength = re.search(r"체결강도\s*([0-9][0-9,\.]*)", str(flow or ""))
+    if strength:
+        value = _number(strength.group(1).replace(",", ""))
+        label = trade_strength_label(value)
+        parts.append("체결강도 " + compact_number(value) + (("(" + label + ")") if label else ""))
+    buy = re.search(r"매수\s*체결(?:량)?\s*([0-9][0-9,\.]*)\s*주?", str(flow or ""))
+    sell = re.search(r"매도\s*체결(?:량)?\s*([0-9][0-9,\.]*)\s*주?", str(flow or ""))
+    if buy and sell:
+        parts.append("매수 체결 " + buy.group(1) + "주 / 매도 체결 " + sell.group(1) + "주")
+    return parts
+
+
+def compact_execution_flow_line(context: Dict[str, object]) -> str:
+    if not _market_signal_stage_visible(context, "ccnl"):
+        return ""
+    facts = relation_facts(context or {})
+    strength = _number(facts.get("tradeStrength"))
+    buy = _number(facts.get("buyVolume"))
+    sell = _number(facts.get("sellVolume"))
+    parts = []
+    if strength > 0:
+        label = trade_strength_label(strength)
+        parts.append("체결강도 " + compact_number(strength) + (("(" + label + ")") if label else ""))
+    if buy > 0 and sell > 0:
+        parts.append("매수 체결 " + compact_number(buy) + "주 / 매도 체결 " + compact_number(sell) + "주")
+    if not parts:
+        parts = _compact_execution_from_raw_flow(_plain_value(context, "수급"))
+    if not parts:
+        return ""
+    basis = _market_signal_basis_label(context, "ccnl")
+    return " · ".join(parts) + ((" (" + basis + ")") if basis else "")
+
+
+def compact_current_flow_rows(context: Dict[str, object]) -> List[str]:
     current = _plain_value(context, "현재가")
     pnl = _plain_value(context, "수익률") or _plain_value(context, "손익")
-    trend = _plain_value(context, "추세")
-    flow = _plain_value(context, "수급")
+    trend = _plain_value(context, "추세") or _compact_trend_from_facts(context)
     rows = []
     if current:
         rows.append("현재가 " + current)
     if pnl:
         rows.append("수익률 " + pnl)
     if trend:
-        rows.append(compact_sentence_count(trend, 1))
-    elif flow:
-        rows.append(compact_sentence_count(flow, 1))
-    return " · ".join(rows[:3])
+        rows.append("가격 흐름: " + compact_sentence_count(trend, 1))
+    investor = compact_investor_flow_line(context)
+    if investor:
+        rows.append("투자자 수급: " + investor)
+    else:
+        investor_exclusion = _market_signal_exclusion_note(context, "investor")
+        if investor_exclusion:
+            rows.append("투자자 수급: " + investor_exclusion)
+    execution = compact_execution_flow_line(context)
+    if execution:
+        rows.append("체결 흐름: " + execution)
+    else:
+        execution_exclusion = _market_signal_exclusion_note(context, "ccnl")
+        if execution_exclusion:
+            rows.append("체결 흐름: " + execution_exclusion)
+    return rows
+
+
+def compact_current_flow_line(context: Dict[str, object]) -> str:
+    """Compatibility summary for callers that still expect one compact row."""
+
+    return " · ".join(compact_current_flow_rows(context)[:2])
 
 
 def compact_action_reason_rows(

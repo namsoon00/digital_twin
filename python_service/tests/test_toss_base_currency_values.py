@@ -508,6 +508,22 @@ class TossBaseCurrencyValueTests(unittest.TestCase):
         self.assertIn("제공 거래대금과 차이가 커서 가격×거래량으로 다시 계산", line)
         self.assertIn("거래액 $5,237,755", line)
 
+    def test_flow_context_line_includes_directional_execution_volumes(self):
+        monitor = RealtimeMonitor()
+        position = {
+            "symbol": "005930",
+            "market": "KR",
+            "currency": "KRW",
+            "tradeStrength": 89.2,
+            "buyVolume": 1250000,
+            "sellVolume": 2110000,
+        }
+
+        line = monitor.flow_context_line(position)
+
+        self.assertIn("체결강도 89.2(매도 체결 우세)", line)
+        self.assertIn("매수 체결 1,250,000주/매도 체결 2,110,000주", line)
+
 
 if __name__ == "__main__":
     unittest.main()

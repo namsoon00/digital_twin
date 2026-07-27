@@ -1,6 +1,6 @@
 from typing import Dict, Iterable, List
 
-from .alert_formatting import compact_number, money, pct_delta, price_money, signed_pct
+from .alert_formatting import compact_number, money, pct_delta, price_money, signed_pct, trade_strength_label
 from .market_data import investor_net_volume, number
 from .ontology_threshold_policy import default_ontology_threshold_policy
 from .ontology_relation_reasoning import relation_rule_context_summary_lines
@@ -485,13 +485,12 @@ class MonitoringPositionContextMixin:
             parts.append(label)
         trade_strength = self.position_trade_strength(position)
         if trade_strength > 0:
-            if trade_strength >= 110:
-                trade_label = "매수 체결 강함"
-            elif trade_strength >= 100:
-                trade_label = "매수 체결 약간 우세"
-            else:
-                trade_label = "매수 체결 우위 약함"
-            parts.append("체결강도 " + compact_number(trade_strength) + "(" + trade_label + ")")
+            trade_label = trade_strength_label(trade_strength)
+            parts.append("체결강도 " + compact_number(trade_strength) + ("(" + trade_label + ")" if trade_label else ""))
+        buy_volume = number(position.get("buy_volume") if "buy_volume" in position else position.get("buyVolume"))
+        sell_volume = number(position.get("sell_volume") if "sell_volume" in position else position.get("sellVolume"))
+        if buy_volume > 0 and sell_volume > 0:
+            parts.append("매수 체결 " + compact_number(buy_volume) + "주/매도 체결 " + compact_number(sell_volume) + "주")
         orderbook_bid = number(position.get("orderbook_bid_volume")) or number(position.get("orderbookBidVolume"))
         orderbook_ask = number(position.get("orderbook_ask_volume")) or number(position.get("orderbookAskVolume"))
         bid_ask_imbalance = number(position.get("bid_ask_imbalance")) or number(position.get("bidAskImbalance"))

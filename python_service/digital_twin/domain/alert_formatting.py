@@ -55,6 +55,23 @@ def compact_number(value: float) -> str:
     return format(rounded, ",")
 
 
+def trade_strength_label(value: float) -> str:
+    """Explain the KIS buy/sell execution ratio without implying a price forecast."""
+
+    strength = number(value)
+    if strength <= 0:
+        return ""
+    if strength >= 120:
+        return "매수 체결 강함"
+    if strength >= 105:
+        return "매수 체결 우세"
+    if strength >= 95:
+        return "매수·매도 비슷"
+    if strength >= 80:
+        return "매도 체결 우세"
+    return "매도 체결 강함"
+
+
 def signed_number(value: float) -> str:
     amount = number(value)
     if not amount:

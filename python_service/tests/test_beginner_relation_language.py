@@ -302,7 +302,7 @@ class BeginnerRelationLanguageTests(unittest.TestCase):
         self.assertNotIn("관계 강도", message)
         self.assertIn("RuleBox(관계 분석 규칙)", message)
 
-    def test_beginner_message_keeps_full_investor_breakdown_out_of_compact_alert(self):
+    def test_beginner_message_includes_compact_investor_and_execution_flow(self):
         response = NotificationAIValidatedResponse(
             action="HOLD",
             action_label="관심 유지",
@@ -317,9 +317,12 @@ class BeginnerRelationLanguageTests(unittest.TestCase):
                 "messageDeliveryLevel": "beginner",
                 "title": "NAVER 알림",
                 "target": "NAVER / 035420",
-                "rawLines": "현재가: 207,500원\n수급: 체결강도 59.5",
+                "rawLines": "현재가: 207,500원\n추세: 5일선 210,000원보다 1.2% 낮음, 20일선 205,000원보다 1.2% 높음, 60일선 198,000원보다 4.8% 높음",
                 "ontologyRelationContext": {
                     "facts": {
+                        "tradeStrength": 89.2,
+                        "buyVolume": 1250000,
+                        "sellVolume": 2110000,
                         "foreignBuyVolume": 449185,
                         "foreignSellVolume": 652417,
                         "foreignNetVolume": -203232,
@@ -330,6 +333,10 @@ class BeginnerRelationLanguageTests(unittest.TestCase):
                         "individualSellVolume": 1084010,
                         "individualNetVolume": -491993,
                         "marketSignalCoverage": {
+                            "ccnl": {
+                                "status": "available",
+                                "fields": ["tradeStrength", "buyVolume", "sellVolume"],
+                            },
                             "investor": {
                                 "status": "available",
                                 "judgementEvidenceUsable": True,
@@ -343,9 +350,49 @@ class BeginnerRelationLanguageTests(unittest.TestCase):
         )
 
         self.assertIn("<b>현재 흐름</b>", message)
-        self.assertIn("체결강도 59.5", message)
+        self.assertIn("가격 흐름: 5일선 210,000원보다 1.2% 낮음", message)
+        self.assertIn("체결강도 89.2(매도 체결 우세)", message)
+        self.assertIn("매수 체결 1,250,000주 / 매도 체결 2,110,000주", message)
         self.assertNotIn("<b>투자자</b>", message)
-        self.assertNotIn("외국인: 순매도 203,232주", message)
+        self.assertIn("투자자 수급: 외국인 순매도 203,232주", message)
+        self.assertIn("기관 순매수 675,178주", message)
+        self.assertIn("당일 누적 참고", message)
+
+    def test_beginner_message_hides_investor_values_excluded_by_freshness_gate(self):
+        response = NotificationAIValidatedResponse(
+            action="HOLD",
+            action_label="관심 유지",
+            validation_state="conditional",
+            data_state="partial",
+            review_level="check",
+            summary="가격 흐름을 먼저 확인합니다.",
+        )
+
+        message = execution_telegram_message(
+            {
+                "messageDeliveryLevel": "beginner",
+                "title": "NAVER 알림",
+                "target": "NAVER / 035420",
+                "rawLines": "현재가: 207,500원\n투자자: 외국인: 순매도 203,232주, 기관: 순매수 675,178주",
+                "ontologyRelationContext": {
+                    "facts": {
+                        "foreignNetVolume": -203232,
+                        "institutionNetVolume": 675178,
+                        "marketSignalCoverage": {
+                            "investor": {
+                                "status": "stale-at-dispatch",
+                                "judgementEvidenceUsable": False,
+                            },
+                        },
+                    },
+                },
+            },
+            response,
+        )
+
+        self.assertNotIn("외국인 순매도 203,232주", message)
+        self.assertNotIn("기관 순매수 675,178주", message)
+        self.assertIn("투자자 수급: 최신값이 아니어서 이번 판단에서는 제외", message)
 
     def test_execution_message_includes_relation_axis_summary(self):
         response = NotificationAIValidatedResponse(

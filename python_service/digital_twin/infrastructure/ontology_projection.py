@@ -730,6 +730,21 @@ class PortfolioOntologyProjectionRecorder:
             }
             self.store_projection_result(snapshot, result)
             return result
+        if recovery_status == "staged":
+            resume_started = time.perf_counter()
+            result = self.resume_staged_pending_abox_activation(
+                snapshot,
+                portfolio_world_context.world_id,
+                pending_activation_recovery,
+            )
+            runtime_stages["pendingAboxActivationResumeMs"] = int(
+                (time.perf_counter() - resume_started) * 1000
+            )
+            result["pendingAboxActivationRecovery"] = pending_activation_recovery
+            runtime_stages["totalMs"] = int((time.perf_counter() - projection_started) * 1000)
+            result.setdefault("runtimeStages", runtime_stages)
+            self.store_projection_result(snapshot, result, projection_run)
+            return result
         # A staged or targetless legacy activation has no bounded InferenceBox
         # proof to reconcile yet. The latter is finalized as control-only
         # repair, then this cycle stages the current manifest. Avoid reading
@@ -1326,6 +1341,93 @@ class PortfolioOntologyProjectionRecorder:
             "status": "error",
             "reason": "Graph store returned an invalid ABox activation recovery result.",
         }
+
+    def resume_staged_pending_abox_activation(
+        self,
+        snapshot: AccountSnapshot,
+        world_id: str,
+        recovery: Dict[str, object],
+    ) -> Dict[str, object]:
+        """Complete a staged candidate before allowing a newer Manifest.
+
+        A process can stop after staging an immutable ABox candidate but before
+        native inference begins. Rebuilding the latest snapshot cannot replace
+        that candidate safely, so resume the exact staged target set first.
+        """
+        recovery = dict(recovery or {})
+        pending = recovery.get("pendingActivation")
+        pending = dict(pending or {}) if isinstance(pending, dict) else {}
+        candidate_id = str(
+            pending.get("candidateAboxSnapshotId")
+            or recovery.get("candidateAboxSnapshotId")
+            or ""
+        ).strip()
+        previous_id = str(
+            pending.get("previousAboxSnapshotId")
+            or recovery.get("previousAboxSnapshotId")
+            or ""
+        ).strip()
+        target_symbols = [
+            str(symbol or "").upper().strip()
+            for symbol in (pending.get("targetSymbols") or recovery.get("targetSymbols") or [])
+            if str(symbol or "").strip()
+        ]
+        target_symbols = list(dict.fromkeys(target_symbols))
+        if not candidate_id or not target_symbols:
+            return {
+                "saved": False,
+                "status": "blocked-pending-abox-activation",
+                "graphStore": self.active_graph_store_key(),
+                "worldId": str(world_id or ""),
+                "pendingAboxActivation": pending,
+                "preservedActiveGeneration": True,
+                "retryable": True,
+                "recommendedRetryAfterSeconds": 10,
+                "reason": "스테이징된 TypeDB ABox 후보의 대상 종목을 확인하지 못해 안전하게 재개하지 않았습니다.",
+            }
+
+        result = {
+            "saved": False,
+            "status": "resuming-pending-abox-activation",
+            "graphStore": self.active_graph_store_key(),
+            "worldId": str(world_id or ""),
+            "aboxSnapshotId": candidate_id,
+            "worldviewManifestId": candidate_id,
+            "pendingAboxActivation": {
+                **pending,
+                "candidateAboxSnapshotId": candidate_id,
+                "previousAboxSnapshotId": previous_id,
+                "targetSymbols": target_symbols,
+            },
+            "preservedActiveGeneration": True,
+        }
+        self.attach_graph_store_inference_result(
+            result,
+            snapshot,
+            target_symbols=target_symbols,
+            world_id=world_id,
+        )
+        finalization = result.get("aboxActivationFinalization")
+        finalization = dict(finalization or {}) if isinstance(finalization, dict) else {}
+        if str(finalization.get("status") or "") == "ok":
+            result.update({
+                "saved": True,
+                "status": "ok",
+                "resumedPendingAboxActivation": True,
+                "reason": "중단된 TypeDB ABox 후보의 네이티브 추론과 완료 처리를 재개했습니다.",
+            })
+        elif str(result.get("status") or "") == "resuming-pending-abox-activation":
+            result.update({
+                "saved": False,
+                "status": "blocked-pending-abox-activation",
+                "retryable": True,
+                "recommendedRetryAfterSeconds": 10,
+                "reason": str(
+                    finalization.get("reason")
+                    or "스테이징된 TypeDB ABox 후보의 네이티브 추론 완료를 다시 확인해야 합니다."
+                )[:220],
+            })
+        return result
 
     def reconcile_interrupted_projection_audit(self, world_id: str = "") -> Dict[str, object]:
         """Finish one audit row only when TypeDB already proves activation.

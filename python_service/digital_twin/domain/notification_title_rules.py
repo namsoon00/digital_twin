@@ -3,7 +3,7 @@ from datetime import datetime, timedelta, timezone
 from typing import List
 
 from .notification_ontology_sections import ontology_relation_context
-from .notification_icon_policy import notification_message_icon
+from .notification_icon_policy import investment_notification_icon, notification_message_icon
 from .operational_notification_presentation import operational_notification_presentation
 from .notification_text_formatting import (
     data_value,
@@ -138,6 +138,10 @@ def notification_title_icon(rule: str, raw_lines: List[str], event: AlertEvent) 
     })
     if operational_presentation:
         return operational_presentation.icon
+
+    contextual_icon = investment_notification_icon(key, metadata)
+    if contextual_icon:
+        return contextual_icon
 
     if key == "modelBuy":
         return "🟢"

@@ -26,6 +26,7 @@ from typing import Dict, List
 from ..application.account_service import AccountApplicationService
 from ..application.notification_ai_gate_message import (
     decision_transition_presentation,
+    execution_headline,
     execution_telegram_message,
     prepend_execution_start_badge,
 )
@@ -61,7 +62,7 @@ from ..domain.message_types import (
     user_managed_notification_types,
     visible_notification_template_types,
 )
-from ..domain.notification_icon_policy import notification_message_icon
+from ..domain.notification_icon_policy import notification_message_icon, notification_title_with_context_icon
 from ..domain.notification_ai_gate_text import user_friendly_ai_text
 from ..domain.notification_ai_gate_contracts import NotificationAIValidatedResponse
 from ..domain.ontology_decision_state import ACTION_ENVELOPE_STATUS_LABELS
@@ -2014,7 +2015,19 @@ def notification_job_public_payload(job: NotificationJob, detail: bool = False, 
     context = job.context or {}
     customer_text = notification_customer_text(job)
     reasons = context.get("deliveryReasons") if isinstance(context.get("deliveryReasons"), list) else []
-    title = str(context.get("title") or context.get("headline") or "").strip()
+    title_source = context.get("headline") if job.message_type == INVESTMENT_INSIGHT else (context.get("title") or context.get("headline") or "")
+    if job.message_type == INVESTMENT_INSIGHT:
+        validated = context.get("notificationAiValidatedResponse") if isinstance(context.get("notificationAiValidatedResponse"), dict) else {}
+        if validated:
+            try:
+                title_source = execution_headline(context, NotificationAIValidatedResponse.from_dict(validated))
+            except Exception:  # noqa: BLE001 - old incomplete alert payloads keep their saved title.
+                pass
+    title = notification_title_with_context_icon(
+        job.message_type,
+        title_source,
+        context,
+    )
     processing_age = notification_processing_age_minutes(job)
     if stale_minutes is None:
         try:

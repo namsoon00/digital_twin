@@ -9,10 +9,11 @@ from ..domain.notification_ai_gate_contracts import (
     NOTIFICATION_AI_GATE_VERSION,
     NotificationAIValidatedResponse,
 )
-from .notification_ai_gate_message import execution_telegram_message, prepend_execution_start_badge, strategy_guide_quality
+from .notification_ai_gate_message import execution_headline, execution_telegram_message, prepend_execution_start_badge, strategy_guide_quality
 from ..domain.notification_ai_gate_sources import source_labels_from_context
 from ..domain.notification_ai_gate_text import _text, reference_date
 from ..domain.notification_ai_gate_validation import ai_decision_input_packet, delivery_profile_from_context
+from ..domain.notification_icon_policy import investment_notification_icon
 
 
 def _ontology_id(kind: str, value: object) -> str:
@@ -195,6 +196,10 @@ def context_with_validated_ai_response(
         if isinstance(item, dict) and item.get("tboxClass") == "AIJudgmentAudit"
     ]
     enriched["notificationAiValidatedResponse"] = payload
+    icon = investment_notification_icon(enriched.get("messageType") or enriched.get("rule") or "", enriched)
+    if icon:
+        enriched["headline"] = execution_headline(enriched, response)
+        enriched["titleIcon"] = icon
     enriched["notificationAiDecisionAudit"] = audit
     enriched["notificationAiGate"] = {
         "enabled": True,

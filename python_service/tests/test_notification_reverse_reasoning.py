@@ -229,6 +229,8 @@ class NotificationReverseReasoningTests(unittest.TestCase):
 
     def test_action_flow_explains_watchlist_entry_pause_without_sale_language(self):
         context = notification_context()
+        context["displayTarget"] = "NVIDIA / NVDA"
+        context["symbol"] = "NVDA"
         relation = context["ontologyRelationContext"]
         relation["facts"].update({"source": "watchlist", "isWatchlist": True})
         relation.update({"targetRole": "watchlist", "actionPolicy": "ENTRY_ONLY"})
@@ -241,6 +243,8 @@ class NotificationReverseReasoningTests(unittest.TestCase):
             "actionPolicy": "ENTRY_ONLY",
         })
         context["notificationAiValidatedResponse"].update({"action": "HOLD", "actionLabel": "관심 유지"})
+        context["headline"] = "[관찰] 🧭 NVIDIA: 신규 진입 대기: 조건 재확인"
+        context["titleIcon"] = "🧭"
         context["decisionTransition"] = {
             "kind": "action-changed",
             "previousAction": "BUY",
@@ -255,6 +259,11 @@ class NotificationReverseReasoningTests(unittest.TestCase):
         self.assertEqual("entry-paused", transition["category"])
         self.assertEqual("신규 매수 보류", transition["label"])
         self.assertIn("매도 신호가 아니라", transition["summary"])
+
+        job = NotificationJob.create("알림 본문", message_type="investmentInsight", context=context)
+        payload = notification_job_public_payload(job, detail=True)
+        self.assertEqual("⏸️", payload["messageTypeIcon"])
+        self.assertIn("⏸️ NVIDIA", payload["title"])
 
     def test_web_uses_current_safe_presentation_for_persisted_ai_alert(self):
         context = notification_context()

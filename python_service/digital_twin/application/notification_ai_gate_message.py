@@ -14,6 +14,7 @@ from ..domain.notification_ai_context import relation_facts
 from ..domain.notification_ai_context import is_watchlist_context
 from ..domain.external_api_sources import external_api_source_line
 from ..domain.notification_ai_gate_contracts import ACTION_LABELS, MESSAGE_START_BADGE, NotificationAIValidatedResponse
+from ..domain.notification_icon_policy import investment_notification_icon, notification_title_with_context_icon
 from ..domain.investment_ubiquitous_language import user_facing_investment_language
 from ..domain.ontology_decision_state import (
     ACTION_ENVELOPE_STATUS_LABELS,
@@ -835,8 +836,19 @@ def action_headline(response: NotificationAIValidatedResponse, context: Dict[str
     return response.action_label or "대응 기준 점검"
 
 def execution_headline(context: Dict[str, object], response: NotificationAIValidatedResponse) -> str:
-    headline = str(context.get("headline") or context.get("title") or "알림").strip()
+    presentation_context = dict(context or {})
+    presentation_context["notificationAiValidatedResponse"] = response.to_dict()
+    headline = notification_title_with_context_icon(
+        presentation_context.get("messageType") or presentation_context.get("rule") or "",
+        presentation_context.get("headline") or presentation_context.get("title") or "알림",
+        presentation_context,
+    )
     prefix = title_prefix_from_headline(headline)
+    if not prefix:
+        prefix = investment_notification_icon(
+            presentation_context.get("messageType") or presentation_context.get("rule") or "",
+            presentation_context,
+        )
     target = target_name_for_headline(context.get("displayTarget") or context.get("target") or context.get("title") or "")
     action = action_headline(response, context)
     if target:

@@ -13,7 +13,7 @@
     "공유 미리보기에서는 서버 설정과 계정 DB 쓰기를 차단합니다."
   ],
   "localData": {
-    "generatedAt": "2026-07-26T10:20:28.815298Z",
+    "generatedAt": "2026-07-27T12:27:17.505325Z",
     "sources": {
       "settings": "data/settings.json",
       "settingsExists": true
@@ -155,12 +155,13 @@
       "newsCollectionGdeltSyncEnabled": "1",
       "newsCollectionGoogleOriginalUrlResolveEnabled": "1",
       "newsCollectionGoogleOriginalUrlMaxPerTarget": "2",
-      "newsCollectionGoogleOriginalUrlMaxPerRun": "6",
+      "newsCollectionGoogleOriginalUrlMaxPerRun": "12",
       "newsCollectionMinimumRelevanceState": "context",
       "newsDigestMinimumRelevanceState": "direct",
       "newsDigestMinimumMaterialityState": "notable",
       "newsDigestMinimumNeutralMaterialityState": "material",
       "newsDigestMinimumSourceTrustState": "standard",
+      "newsDigestRequireKoreanTitleTranslation": "1",
       "investmentBrainResearchMinimumSourceTrustState": "standard",
       "newsCollectionRequireArticleBodyForRss": "1",
       "newsCollectionIncludeWatchlist": "1",
@@ -168,7 +169,7 @@
       "newsCollectionRateLimitSeconds": "0.25",
       "newsEvidenceMaxAgeMinutes": "4320",
       "newsAiAnalysisEnabled": "1",
-      "newsAiAnalysisUseCodex": "0",
+      "newsAiAnalysisUseCodex": "1",
       "newsAiAnalysisTimeoutSeconds": "90",
       "newsAiAnalysisInlineTimeoutSeconds": "8",
       "newsAiAnalysisInlineEnabled": "0",
@@ -199,8 +200,12 @@
       "ontologyReasoningMaxSymbolsPerRun": "3",
       "ontologySharedMarketWorldAsyncProjectionEnabled": "1",
       "ontologyReasoningMailboxEnabled": "1",
+      "ontologyReasoningMailboxIngressEnabled": "1",
       "ontologyReasoningMailboxBatchSize": "200",
       "ontologyReasoningMailboxRetentionHours": "72",
+      "ontologyReasoningWorkLeaseSeconds": "600",
+      "ontologyReasoningWorkRetrySeconds": "30",
+      "ontologyReasoningQueueProbeCacheSeconds": "5",
       "ontologyReasoningSourceFreshnessEnabled": "1",
       "ontologyReasoningRealtimeEventMaxAgeMinutes": "15",
       "ontologyReasoningResearchEventMaxAgeMinutes": "360",
@@ -1245,6 +1250,12 @@
           "default": "standard"
         },
         {
+          "key": "newsDigestRequireKoreanTitleTranslation",
+          "label": "영문 기사 한국어 제목 완료 후 알림",
+          "type": "toggle",
+          "default": "1"
+        },
+        {
           "key": "investmentBrainResearchMinimumSourceTrustState",
           "label": "리서치 최소 출처 상태",
           "type": "select",
@@ -1350,13 +1361,13 @@
         },
         {
           "key": "newsAiAnalysisUseCodex",
-          "label": "기사 분석 Codex 사용",
+          "label": "기사 분석 GPT-5.6 Sol · max 사용",
           "type": "toggle",
-          "default": "0"
+          "default": "1"
         },
         {
           "key": "newsAiAnalysisCommand",
-          "label": "기사 분석 명령",
+          "label": "기사 분석 외부 명령 (고정 모델 정책에서 사용 안 함)",
           "type": "text"
         },
         {
@@ -1569,6 +1580,12 @@
           "default": "1"
         },
         {
+          "key": "ontologyReasoningMailboxIngressEnabled",
+          "label": "이벤트 기록과 메일박스 동시 ingress",
+          "type": "toggle",
+          "default": "1"
+        },
+        {
           "key": "ontologyReasoningMailboxBatchSize",
           "label": "메일박스 한 번 처리 수",
           "type": "number",
@@ -1580,6 +1597,27 @@
           "type": "number",
           "default": "72",
           "unit": "hours"
+        },
+        {
+          "key": "ontologyReasoningWorkLeaseSeconds",
+          "label": "추론 작업 lease 보호 시간",
+          "type": "number",
+          "default": "600",
+          "unit": "seconds"
+        },
+        {
+          "key": "ontologyReasoningWorkRetrySeconds",
+          "label": "작업 실패 재시도 최소 대기",
+          "type": "number",
+          "default": "30",
+          "unit": "seconds"
+        },
+        {
+          "key": "ontologyReasoningQueueProbeCacheSeconds",
+          "label": "저우선 워커 큐 상태 캐시",
+          "type": "number",
+          "default": "5",
+          "unit": "seconds"
         },
         {
           "key": "ontologyReasoningSourceFreshnessEnabled",
@@ -1776,17 +1814,49 @@
           "unit": "seconds"
         },
         {
+          "key": "ontologyScopedFullReconcileMinutes",
+          "label": "전체 범위 재조정 주기",
+          "type": "number",
+          "default": "30",
+          "unit": "minutes"
+        },
+        {
+          "key": "ontologyScopedFullReconcileDeferWhenQueueActive",
+          "label": "대기열 중 전체 재조정 유예",
+          "type": "toggle",
+          "default": "1"
+        },
+        {
+          "key": "ontologyScopedFullReconcileMaxDeferralMinutes",
+          "label": "전체 재조정 최대 유예",
+          "type": "number",
+          "default": "60",
+          "unit": "minutes"
+        },
+        {
           "key": "ontologyReasoningMaintenanceEnabled",
-          "label": "유휴 온톨로지 정리",
+          "label": "추론 메일박스 정리",
           "type": "toggle",
           "default": "1"
         },
         {
           "key": "ontologyReasoningMaintenanceIntervalSeconds",
-          "label": "그래프 정리 주기",
+          "label": "추론 메일박스 정리 주기",
           "type": "number",
           "default": "300",
           "unit": "seconds"
+        },
+        {
+          "key": "ontologyWorldProjectionDeferWhenReasoningPending",
+          "label": "추론 대기 중 공유 세계 투영 유예",
+          "type": "toggle",
+          "default": "1"
+        },
+        {
+          "key": "ontologyAboxMaintenanceDeferWhenReasoningPending",
+          "label": "추론 대기 중 ABox 정리 유예",
+          "type": "toggle",
+          "default": "1"
         },
         {
           "key": "ontologyReasoningUrgentReviewLevels",
@@ -1861,13 +1931,13 @@
         },
         {
           "key": "dartDisclosureAiUseCodex",
-          "label": "공시 해석 Codex 사용",
+          "label": "공시 해석 GPT-5.6 Sol · max 사용",
           "type": "toggle",
           "default": "1"
         },
         {
           "key": "dartDisclosureAiCommand",
-          "label": "공시 해석 명령",
+          "label": "공시 해석 외부 명령 (고정 모델 정책에서 사용 안 함)",
           "type": "text"
         },
         {
@@ -1962,6 +2032,26 @@
           "label": "TypeDB 함수 배포 제한",
           "type": "number",
           "default": "30",
+          "unit": "seconds"
+        },
+        {
+          "key": "typedbProjectionCoordinatorEnabled",
+          "label": "TypeDB 전역 투영 조정",
+          "type": "toggle",
+          "default": "1"
+        },
+        {
+          "key": "typedbProjectionCoordinatorLeaseSeconds",
+          "label": "TypeDB 전역 투영 lease",
+          "type": "number",
+          "default": "600",
+          "unit": "seconds"
+        },
+        {
+          "key": "typedbProjectionCoordinatorRetrySeconds",
+          "label": "TypeDB 전역 투영 재시도",
+          "type": "number",
+          "default": "10",
           "unit": "seconds"
         },
         {
@@ -2493,12 +2583,12 @@
       "settings": [
         {
           "key": "modelReviewUseCodex",
-          "label": "Codex 분석 사용",
+          "label": "GPT-5.6 Sol · max 리뷰 사용",
           "default": "1"
         },
         {
           "key": "modelReviewCommand",
-          "label": "외부 리뷰 명령",
+          "label": "외부 리뷰 명령 (고정 모델 정책에서 사용 안 함)",
           "default": ""
         },
         {
@@ -2637,5 +2727,5 @@
       ]
     }
   ],
-  "buildId": "766fd6fc1b19"
+  "buildId": "8e7e911feb8c"
 }

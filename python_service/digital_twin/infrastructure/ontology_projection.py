@@ -702,7 +702,10 @@ class PortfolioOntologyProjectionRecorder:
             self.store_projection_result(snapshot, result)
             return result
         pending_recovery_started = time.perf_counter()
-        pending_activation_recovery = self.recover_pending_abox_activation(portfolio_world_context.world_id)
+        pending_activation_recovery = self.recover_pending_abox_activation(
+            portfolio_world_context.world_id,
+            max_staged_target_symbols=self.scheduler_target_symbol_limit(compact_reasoning_context),
+        )
         runtime_stages["pendingAboxActivationRecoveryMs"] = int(
             (time.perf_counter() - pending_recovery_started) * 1000
         )
@@ -714,6 +717,7 @@ class PortfolioOntologyProjectionRecorder:
             "finalized-empty-target",
             "restored",
             "cleared-stale",
+            "discarded-staged-batch",
             "retry-required",
             "staged",
         }:
@@ -1002,10 +1006,12 @@ class PortfolioOntologyProjectionRecorder:
                 snapshot,
                 inference_impact_plan.get("inferenceTargetSymbols") or target_symbols,
             )
+            scheduler_target_limit = self.scheduler_target_symbol_limit(compact_reasoning_context)
             inference_symbols = self.bounded_native_inference_symbols(
                 snapshot,
                 inference_symbols,
                 target_symbols,
+                scheduler_target_symbol_limit=scheduler_target_limit,
             )
             runtime_stages["impactPlanningMs"] = int((time.perf_counter() - impact_planning_started) * 1000)
             persistence_graph.worldview["scopeDelta"] = dict(compact_impact_plan.get("scopeDelta") or {})
@@ -1013,6 +1019,7 @@ class PortfolioOntologyProjectionRecorder:
             projection_scope = {
                 "triggerMode": "scope-change-impact-native",
                 "targetSymbols": list(inference_symbols),
+                "schedulerTargetSymbolLimit": scheduler_target_limit,
                 "explicitTargetSymbols": list(compact_impact_plan.get("explicitTargetSymbols") or []),
                 "persistenceMode": SCOPED_ABOX_PERSISTENCE_MODE,
                 "atomicActivation": True,
@@ -1327,14 +1334,36 @@ class PortfolioOntologyProjectionRecorder:
             return {}
         return dict(result or {}) if isinstance(result, dict) else {}
 
-    def recover_pending_abox_activation(self, world_id: str = "") -> Dict[str, object]:
+    def recover_pending_abox_activation(
+        self,
+        world_id: str = "",
+        max_staged_target_symbols: int = 0,
+    ) -> Dict[str, object]:
         if self.active_graph_store_key() != "typedb":
             return {"status": "skipped", "reason": "Active graph store is not TypeDB."}
         recovery = getattr(self.repository, "recover_pending_abox_activation", None)
         if not callable(recovery):
             return {"status": "skipped", "reason": "Graph store has no pending ABox activation journal."}
         try:
-            result = self.repository_world_call("recover_pending_abox_activation", world_id=world_id)
+            staged_cap = max(0, min(200, int(float(max_staged_target_symbols or 0))))
+        except (TypeError, ValueError):
+            staged_cap = 0
+        try:
+            result = self.repository_world_call(
+                "recover_pending_abox_activation",
+                world_id=world_id,
+                max_staged_target_symbols=staged_cap,
+            )
+        except TypeError as error:
+            # Lightweight compatibility repositories may not yet accept the
+            # operational cap. Their legacy recovery behavior remains safe;
+            # production TypeDB performs the comparison under its write lock.
+            if "max_staged_target_symbols" not in str(error) and "unexpected keyword" not in str(error):
+                return {"status": "error", "reason": str(error)[:180]}
+            try:
+                result = self.repository_world_call("recover_pending_abox_activation", world_id=world_id)
+            except Exception as fallback_error:  # noqa: BLE001 - do not replace a potentially recoverable active generation.
+                return {"status": "error", "reason": str(fallback_error)[:180]}
         except Exception as error:  # noqa: BLE001 - do not replace a potentially recoverable active generation.
             return {"status": "error", "reason": str(error)[:180]}
         return dict(result or {}) if isinstance(result, dict) else {
@@ -3487,6 +3516,7 @@ class PortfolioOntologyProjectionRecorder:
         snapshot: AccountSnapshot,
         inferred_symbols: List[str],
         requested_symbols: List[str] = None,
+        scheduler_target_symbol_limit: int = 0,
     ) -> List[str]:
         """Prioritize triggering subjects without dropping global ABox context.
 
@@ -3498,6 +3528,12 @@ class PortfolioOntologyProjectionRecorder:
         limit = self.native_inference_symbol_limit()
         if not limit:
             return list(inferred_symbols or [])
+        try:
+            scheduled_limit = max(0, min(200, int(float(scheduler_target_symbol_limit or 0))))
+        except (TypeError, ValueError):
+            scheduled_limit = 0
+        if scheduled_limit:
+            limit = min(limit, scheduled_limit)
         requested = self.inference_symbols(snapshot, requested_symbols)
         available = self.snapshot_symbols(snapshot)
         ordered = []
@@ -3506,6 +3542,30 @@ class PortfolioOntologyProjectionRecorder:
             if clean and clean in available and clean not in ordered:
                 ordered.append(clean)
         return ordered[:limit]
+
+    @staticmethod
+    def scheduler_target_symbol_limit(reasoning_context: Dict[str, object] = None) -> int:
+        """Read the runner's operational cap without changing investment meaning.
+
+        The adaptive queue decides how many requested subjects may share one
+        coherent generation. The projection layer must enforce that same cap;
+        otherwise its configured native limit can refill a one-subject retry
+        with unrelated impact-plan symbols.
+        """
+        context = reasoning_context if isinstance(reasoning_context, dict) else {}
+        targets = [
+            str(symbol or "").upper().strip()
+            for symbol in context.get("targetSymbols") or []
+            if str(symbol or "").strip()
+        ]
+        plan = context.get("batchPlan")
+        plan = plan if isinstance(plan, dict) else {}
+        if not targets or not plan:
+            return 0
+        try:
+            return max(0, min(200, int(float(plan.get("targetSymbolLimit") or 0))))
+        except (TypeError, ValueError):
+            return 0
 
     def scoped_full_reconcile_minutes(self) -> float:
         """Bound deferred-symbol freshness during target-scoped projection."""
@@ -3630,7 +3690,12 @@ class PortfolioOntologyProjectionRecorder:
             snapshot,
             preliminary.get("inferenceTargetSymbols") or requested_symbols,
         )
-        inferred = self.bounded_native_inference_symbols(snapshot, inferred, requested_symbols)
+        inferred = self.bounded_native_inference_symbols(
+            snapshot,
+            inferred,
+            requested_symbols,
+            scheduler_target_symbol_limit=self.scheduler_target_symbol_limit(reasoning_context),
+        )
         # ``inference_symbols`` falls back to the full snapshot when its
         # argument is empty. This branch needs the literal scheduler request
         # to distinguish a chosen subject from a whole-world cycle.

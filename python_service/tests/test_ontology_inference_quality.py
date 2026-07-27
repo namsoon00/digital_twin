@@ -503,6 +503,49 @@ class OntologyInferenceQualityTests(unittest.TestCase):
 
         self.assertEqual(["000660"], symbols)
 
+    def test_scheduler_batch_cap_overrides_native_target_refill(self):
+        first_position = normalize_position({
+            "symbol": "005930",
+            "name": "삼성전자",
+            "market": "KR",
+            "currency": "KRW",
+            "source": "holding",
+            "quantity": 10,
+            "currentPrice": 70000,
+            "marketValue": 700000,
+        })
+        second_position = normalize_position({
+            "symbol": "000660",
+            "name": "SK하이닉스",
+            "market": "KR",
+            "currency": "KRW",
+            "source": "holding",
+            "quantity": 7,
+            "currentPrice": 180000,
+            "marketValue": 1260000,
+        })
+        snapshot = self.snapshot_with_positions(
+            [first_position, second_position],
+            "2026-07-20T00:01:00Z",
+        )
+        recorder = PortfolioOntologyProjectionRecorder(
+            MemoryProjectionRepository(),
+            settings={"typedbNativeRuleTargetSymbolLimit": "3"},
+        )
+        context = {
+            "targetSymbols": ["000660"],
+            "batchPlan": {"targetSymbolLimit": 1},
+        }
+
+        symbols = recorder.bounded_native_inference_symbols(
+            snapshot,
+            ["000660", "005930"],
+            ["000660"],
+            scheduler_target_symbol_limit=recorder.scheduler_target_symbol_limit(context),
+        )
+
+        self.assertEqual(["000660"], symbols)
+
     def test_explicit_symbol_projection_reuses_other_active_scopes_under_global_context_change(self):
         class ScopeAwareRepository(MemoryProjectionRepository):
             def __init__(self):

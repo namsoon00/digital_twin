@@ -2685,7 +2685,11 @@ class ScopedABoxManifestMixin:
         """
         return self.recover_all_dead_local_scoped_abox_write_leases()
 
-    def recover_pending_abox_activation(self) -> Dict[str, object]:
+    def recover_pending_abox_activation(
+        self,
+        world_id: str = "",
+        max_staged_target_symbols: int = 0,
+    ) -> Dict[str, object]:
         return {
             "configured": False,
             "status": "disabled",
@@ -9835,7 +9839,11 @@ class TypeDBOntologyGraphRepository(GraphStoreOntologyRowMapperMixin, ScopedABox
         "pending-abox-recovery",
         typedb_projection_world_from_recovery,
     )
-    def recover_pending_abox_activation(self, world_id: str = "") -> Dict[str, object]:
+    def recover_pending_abox_activation(
+        self,
+        world_id: str = "",
+        max_staged_target_symbols: int = 0,
+    ) -> Dict[str, object]:
         """Finish or roll back an interrupted ABox-to-InferenceBox hand-off."""
         try:
             pending = self.pending_abox_activation(world_id)
@@ -9865,6 +9873,10 @@ class TypeDBOntologyGraphRepository(GraphStoreOntologyRowMapperMixin, ScopedABox
         candidate_id = str(pending.get("candidateAboxSnapshotId") or "").strip()
         previous_id = str(pending.get("previousAboxSnapshotId") or "").strip()
         target_symbols = clean_symbols_from_payload(pending.get("targetSymbols") or [])
+        try:
+            staged_target_cap = max(0, min(200, int(float(max_staged_target_symbols or 0))))
+        except (TypeError, ValueError):
+            staged_target_cap = 0
         active = self.active_abox_metadata(world_id)
         active_id = str(active.get("aboxSnapshotId") or "").strip()
         activation_status = str(pending.get("activationStatus") or "pending-native-inference")
@@ -9890,6 +9902,37 @@ class TypeDBOntologyGraphRepository(GraphStoreOntologyRowMapperMixin, ScopedABox
             }
         if active_id != candidate_id:
             if activation_status == "staged-native-inference":
+                if (
+                    staged_target_cap
+                    and len(target_symbols) > staged_target_cap
+                    and previous_id
+                    and active_id == previous_id
+                ):
+                    # The candidate never became active.  Retain the verified
+                    # predecessor and clear only this journal while the
+                    # projection coordinator is held, so a later scheduler
+                    # cannot resume an interrupted wider batch.
+                    control = typedb_call_for_world(
+                        self.activate_abox_generation,
+                        active_id,
+                        world_id=world_id,
+                    )
+                    return {
+                        "configured": True,
+                        "status": "discarded-staged-batch" if str(control.get("status") or "") == "ok" else "error",
+                        "graphStore": "typedb",
+                        "candidateAboxSnapshotId": candidate_id,
+                        "previousAboxSnapshotId": previous_id,
+                        "activeAboxSnapshotId": active_id,
+                        "targetSymbols": target_symbols,
+                        "maxStagedTargetSymbols": staged_target_cap,
+                        "control": control,
+                        "reason": (
+                            "An interrupted staged ABox batch exceeded the current scheduler target cap and was discarded before native inference."
+                            if str(control.get("status") or "") == "ok"
+                            else str(control.get("reason") or "ABox control restoration failed.")
+                        ),
+                    }
                 return {
                     "configured": True,
                     "status": "staged",

@@ -99,9 +99,10 @@ def setting_truthy(value: object, default: bool = True) -> bool:
     return text not in DISABLED_SETTING_VALUES
 
 
-def monitor_event_bus() -> EventBus:
+def monitor_event_bus(settings=None) -> EventBus:
+    configured_settings = settings or runtime_settings()
     bus = default_event_bus()
-    bus.subscribe_all(ModelReviewEnqueuer(stores.model_review_job_store()).handle)
+    bus.subscribe_all(ModelReviewEnqueuer(stores.model_review_job_store(configured_settings)).handle)
     return bus
 
 
@@ -197,7 +198,7 @@ def build_monitor_runner(
     market_time_series_store = stores.market_time_series_store(configured_settings)
     ontology_quality_store = stores.ontology_quality_sample_store(configured_settings)
     interval_seconds = int(os.environ.get("PYTHON_REALTIME_INTERVAL_SECONDS") or os.environ.get("REALTIME_NOTIFY_INTERVAL_SECONDS") or configured_settings.get("monitorAccountIntervalSeconds") or 180)
-    publisher = event_publisher or monitor_event_bus()
+    publisher = event_publisher or monitor_event_bus(configured_settings)
     return MonitorRunner(
         accounts,
         store=store,
@@ -632,8 +633,10 @@ def build_ontology_reasoning_queue_probe(settings=None):
     configured_settings = settings or runtime_settings()
     store_settings = dict(configured_settings)
     # This probe is called by isolated low-priority workers.  Do not let its
-    # construction run operational-history retention before it can yield.
+    # construction run schema DDL or operational-history retention before it
+    # can yield.
     store_settings["_skipOperationalHistoryRetention"] = "1"
+    store_settings["_skipOperationalSchemaBootstrap"] = "1"
     event_reader = stores.event_log(store_settings)
     cursor_store = stores.ontology_reasoning_cursor_store(store_settings)
     mailbox_store = stores.ontology_reasoning_mailbox_store(store_settings)
@@ -677,9 +680,12 @@ def build_ontology_reasoning_queue_probe(settings=None):
 def build_ontology_world_projection_runner(settings=None) -> OntologyWorldProjectionRunner:
     """Build the independent durable shared-world projection worker."""
     configured_settings = settings or runtime_settings()
+    store_settings = dict(configured_settings)
+    store_settings["_skipOperationalHistoryRetention"] = "1"
+    store_settings["_skipOperationalSchemaBootstrap"] = "1"
 
     return OntologyWorldProjectionRunner(
-        outbox=stores.ontology_world_projection_outbox_store(configured_settings),
+        outbox=stores.ontology_world_projection_outbox_store(store_settings),
         projection_recorder=PortfolioOntologyProjectionRecorder(
             ontology_repository_from_settings(configured_settings),
             settings=configured_settings,
@@ -695,10 +701,13 @@ def build_ontology_maintenance_runner(settings=None) -> OntologyMaintenanceRunne
     """Build the isolated, low-priority scoped ABox retention worker."""
 
     configured_settings = settings or runtime_settings()
+    store_settings = dict(configured_settings)
+    store_settings["_skipOperationalHistoryRetention"] = "1"
+    store_settings["_skipOperationalSchemaBootstrap"] = "1"
 
     return OntologyMaintenanceRunner(
         ontology_repository=ontology_repository_from_settings(configured_settings),
-        state_store=stores.ontology_maintenance_state_store(configured_settings),
+        state_store=stores.ontology_maintenance_state_store(store_settings),
         settings=configured_settings,
         reasoning_queue_probe=build_ontology_reasoning_queue_probe(configured_settings),
     )
@@ -708,8 +717,10 @@ def build_ontology_reasoning_runner(settings=None, event_publisher=None) -> Onto
     configured_settings = settings or runtime_settings()
     reasoning_store_settings = dict(configured_settings)
     reasoning_store_settings["_skipOperationalHistoryRetention"] = "1"
+    reasoning_store_settings["_skipOperationalSchemaBootstrap"] = "1"
     reasoning_monitor_settings = dict(configured_settings)
     reasoning_monitor_settings["_skipOperationalHistoryRetention"] = "1"
+    reasoning_monitor_settings["_skipOperationalSchemaBootstrap"] = "1"
     # External collection is owned by dedicated workers. Re-running it while
     # materializing an ABox can block TypeDB reasoning on a vendor response.
     reasoning_monitor_settings["_externalSignalsCacheOnly"] = "1"
@@ -791,14 +802,14 @@ def build_ontology_reasoning_runner(settings=None, event_publisher=None) -> Onto
             settings=reasoning_monitor_settings,
             typedb_native_rule_execution_enabled=reasoning_native_rule_execution_enabled,
         ),
-        event_publisher=event_publisher or ontology_reasoning_event_bus(configured_settings),
+        event_publisher=event_publisher or ontology_reasoning_event_bus(reasoning_store_settings),
         settings=configured_settings,
         rule_candidate_service=RuleChangeCandidateProposalService(
             ontology_repository=ontology_repository,
             advisor=rule_change_candidate_advisor_from_settings(configured_settings),
             event_reader=event_log,
-            settings=configured_settings,
-            strategy_proposal_service=build_investment_strategy_proposal_service(configured_settings, event_publisher=event_publisher),
+            settings=reasoning_store_settings,
+            strategy_proposal_service=build_investment_strategy_proposal_service(reasoning_store_settings, event_publisher=event_publisher),
         ),
         research_store=stores.investment_research_store(reasoning_store_settings),
         priority_symbols_provider=lambda: ontology_reasoning_priority_symbols(registry, reasoning_store_settings),

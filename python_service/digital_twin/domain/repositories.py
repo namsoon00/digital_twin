@@ -1,5 +1,5 @@
 import inspect
-from dataclasses import dataclass
+from dataclasses import dataclass, field
 from typing import Callable, Dict, Iterable, List, Optional, Protocol, Tuple, runtime_checkable
 
 from .accounts import AccountConfig
@@ -80,6 +80,11 @@ class MonitoringCycleRecordResult:
     delivered: bool
     queued: int = 0
     reason: str = ""
+    # The transactional delivery guard may remove an obsolete mailbox revision
+    # immediately before outbox creation. Keep that outcome visible to the
+    # reasoning worker so it never reports a suppressed alert as sent.
+    delivered_events: List[AlertEvent] = field(default_factory=list)
+    details: Dict[str, object] = field(default_factory=dict)
 
 
 class MonitoringCycleRecorder(Protocol):
@@ -89,6 +94,7 @@ class MonitoringCycleRecorder(Protocol):
         snapshots: List[AccountSnapshot],
         alert_events: List[AlertEvent],
         dry_run: bool = False,
+        delivery_guard=None,
     ) -> MonitoringCycleRecordResult:
         ...
 

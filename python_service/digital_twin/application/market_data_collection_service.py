@@ -757,12 +757,25 @@ class MarketDataCollectionRunner:
         # not investment subjects by themselves. Only account holdings and
         # watchlist names may enqueue an investment-reasoning cycle; otherwise
         # proxy refreshes can make a live holding wait behind background ticks.
+        #
+        # ``market_change_materiality`` remains useful operational provenance
+        # (priority, diagnostics and later policy review), but it must not
+        # decide whether a real market fact reaches the investment ABox. A
+        # small price move can satisfy a TypeDB rule only in the context of an
+        # existing hypothesis, position or macro fact. The durable mailbox
+        # coalesces repeated revisions into the newest state before TypeDB
+        # executes it.
         focus_symbols = {str(symbol or "").upper().strip() for symbol in focused_symbols if str(symbol or "").strip()}
-        reasoning_candidates = material_symbol_set | bootstrap_symbol_set
-        ontology_symbols = [symbol for symbol in changed_symbols if symbol in focus_symbols and symbol in reasoning_candidates]
+        fact_revision_symbol_set = set(changed_symbols)
+        ontology_symbols = [symbol for symbol in changed_symbols if symbol in focus_symbols]
         result["investmentReasoningSymbols"] = ontology_symbols
+        result["factRevisionReasoningSymbols"] = ontology_symbols
+        result["investmentReasoningScheduling"] = "fact-revision-first"
         result["backgroundMaterialSymbolCount"] = len([symbol for symbol in material_symbols if symbol not in focus_symbols])
         result["backgroundBootstrapSymbolCount"] = len([symbol for symbol in bootstrap_symbols if symbol not in focus_symbols])
+        result["backgroundFactRevisionSymbolCount"] = len([
+            symbol for symbol in fact_revision_symbol_set if symbol not in focus_symbols
+        ])
         if self.event_publisher and saved:
             event = market_data_collected_event(result)
             if hasattr(self.event_publisher, "publish"):
@@ -775,7 +788,7 @@ class MarketDataCollectionRunner:
                         changed_count=len(ontology_symbols),
                         observed_count=saved,
                         fact_types=["MarketQuote", "TechnicalIndicator"],
-                        reason="보유·관심 종목의 첫 기준선 또는 중요 변경만 TypeDB ABox와 네이티브 규칙 추론에 반영합니다.",
+                        reason="보유·관심 종목의 실제 시장 사실 변경을 최신 상태 메일박스로 합류한 뒤 TypeDB ABox와 네이티브 규칙 추론에 반영합니다. 중요도 평가는 우선순위 참고용이며 입구 차단에는 사용하지 않습니다.",
                         materiality_assessments=[materiality_assessments[symbol] for symbol in ontology_symbols if symbol in materiality_assessments],
                         fact_revisions_by_symbol={symbol: fact_revisions_by_symbol[symbol] for symbol in ontology_symbols if fact_revisions_by_symbol.get(symbol)},
                         changed_fields_by_symbol={symbol: changed_fields_by_symbol[symbol] for symbol in ontology_symbols if symbol in changed_fields_by_symbol},
@@ -790,7 +803,7 @@ class MarketDataCollectionRunner:
                         changed_count=len(ontology_symbols),
                         observed_count=saved,
                         fact_types=["MarketQuote", "TechnicalIndicator"],
-                        reason="보유·관심 종목의 첫 기준선 또는 중요 변경만 TypeDB ABox와 네이티브 규칙 추론에 반영합니다.",
+                        reason="보유·관심 종목의 실제 시장 사실 변경을 최신 상태 메일박스로 합류한 뒤 TypeDB ABox와 네이티브 규칙 추론에 반영합니다. 중요도 평가는 우선순위 참고용이며 입구 차단에는 사용하지 않습니다.",
                         materiality_assessments=[materiality_assessments[symbol] for symbol in ontology_symbols if symbol in materiality_assessments],
                         fact_revisions_by_symbol={symbol: fact_revisions_by_symbol[symbol] for symbol in ontology_symbols if fact_revisions_by_symbol.get(symbol)},
                         changed_fields_by_symbol={symbol: changed_fields_by_symbol[symbol] for symbol in ontology_symbols if symbol in changed_fields_by_symbol},

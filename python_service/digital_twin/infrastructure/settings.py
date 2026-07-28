@@ -651,11 +651,14 @@ def normalized_ontology_reasoning_urgent_review_levels(value: object) -> str:
     return ",".join(selected or list(allowed))
 
 
-def read_settings_store() -> Dict[str, str]:
+def read_settings_store(fast_operational_read: bool = False) -> Dict[str, str]:
     try:
         from .mysql_operational import MySQLRuntimeSettingsStore
 
-        return MySQLRuntimeSettingsStore({"_skipOperationalHistoryRetention": "1"}).load()
+        store_settings = {"_skipOperationalHistoryRetention": "1"}
+        if fast_operational_read:
+            store_settings["_skipOperationalSchemaBootstrap"] = "1"
+        return MySQLRuntimeSettingsStore(store_settings).load()
     except Exception:
         return read_json(settings_path(), {})
 
@@ -732,9 +735,9 @@ def save_runtime_settings(input_settings: Dict[str, object]) -> Dict[str, str]:
     return runtime_settings()
 
 
-def runtime_settings() -> Dict[str, str]:
+def runtime_settings(fast_operational_read: bool = False) -> Dict[str, str]:
     load_local_env()
-    store = read_settings_store()
+    store = read_settings_store(fast_operational_read=fast_operational_read)
 
     def value(key: str, env_name: str, fallback: str = "") -> str:
         # Runtime secrets are deployment credentials, not editable business

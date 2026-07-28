@@ -8,8 +8,14 @@ from digital_twin.domain.ontology_change_impact import (
     rule_dependency_profile,
     scope_delta,
 )
-from digital_twin.domain.ontology_contracts import OntologyEntity, OntologyRelation, PortfolioOntology
-from digital_twin.domain.ontology_scopes import apply_scoped_abox_identity
+from digital_twin.domain.ontology_contracts import OntologyEntity, OntologyEvidence, OntologyRelation, PortfolioOntology
+from digital_twin.domain.ontology_scopes import (
+    _scope_fragment_payload,
+    _scope_fragment_payloads,
+    _scope_semantic_fingerprints,
+    _scope_semantic_fingerprints_by_scope,
+    apply_scoped_abox_identity,
+)
 from digital_twin.domain.ontology_tbox import tbox_class_def, tbox_relation_def
 from digital_twin.infrastructure.graph_store_rulebox import rulebox_graph_from_rules
 from digital_twin.domain.ontology_rulebox_catalog import default_graph_inference_rules
@@ -80,6 +86,53 @@ class OntologyChangeImpactTests(unittest.TestCase):
         self.assertEqual(first_generations["symbol:005930:market"], second_generations["symbol:005930:market"])
         self.assertEqual(first_generations["symbol:005930:state"], second_generations["symbol:005930:state"])
         self.assertEqual(first_generations["macro:market"], second_generations["macro:market"])
+
+    def test_one_pass_scope_identity_helpers_match_per_scope_contract(self):
+        graph = self.scope_graph()
+        graph.evidence.append(OntologyEvidence(
+            "evidence:005930:market-context",
+            "stock:005930",
+            "market-context",
+            "test",
+            "시장 배경 근거",
+            {"ontologyBox": "ABox", "symbol": "005930"},
+        ))
+        apply_scoped_abox_identity(graph)
+        scope_ids = sorted({
+            item.properties.get("aboxScopeId")
+            for item in graph.entities
+            if item.properties.get("aboxScopeId")
+        } | {
+            item.properties.get("aboxScopeId")
+            for item in graph.relations
+            if item.properties.get("aboxScopeId")
+        } | {
+            item.value.get("aboxScopeId")
+            for item in graph.evidence
+            if item.value.get("aboxScopeId")
+        })
+        support_relations = [{
+            "scopeId": "symbol:005930:evidence",
+            "source": "stock:005930",
+            "target": "evidence:005930:market-context",
+            "type": "HAS_EVIDENCE",
+            "impactFamilies": ["evidence"],
+            "properties": {"source": "test"},
+        }]
+
+        legacy_payloads = {
+            scope_id: _scope_fragment_payload(graph, scope_id, support_relations)
+            for scope_id in scope_ids
+        }
+        one_pass_payloads = _scope_fragment_payloads(graph, scope_ids, support_relations)
+        legacy_semantics = {
+            scope_id: _scope_semantic_fingerprints(graph, scope_id, support_relations)
+            for scope_id in scope_ids
+        }
+        one_pass_semantics = _scope_semantic_fingerprints_by_scope(graph, scope_ids, support_relations)
+
+        self.assertEqual(legacy_payloads, one_pass_payloads)
+        self.assertEqual(legacy_semantics, one_pass_semantics)
 
     def test_change_impact_limits_symbol_flow_but_expands_macro_change(self):
         before = [

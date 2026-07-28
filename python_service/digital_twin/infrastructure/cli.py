@@ -42,6 +42,7 @@ from .service_factory import (
     build_ontology_lab_service,
     build_ontology_maintenance_runner,
     build_ontology_reasoning_runner,
+    build_ontology_reasoning_queue_probe,
     build_ontology_world_projection_runner,
     build_rule_change_candidate_service,
     build_symbol_universe_service,
@@ -61,6 +62,7 @@ from .schedulers import (
     OntologyLabScheduler,
     OntologyMaintenanceScheduler,
     OntologyReasoningScheduler,
+    OperationalHistoryRetentionScheduler,
     OntologyWorldProjectionScheduler,
     RealtimeScheduler,
 )
@@ -328,7 +330,7 @@ def notifications_command(args) -> int:
 
 
 def ontology_reasoning_command(args) -> int:
-    settings = runtime_settings()
+    settings = runtime_settings(fast_operational_read=True)
     limit = int(args.limit or settings.get("ontologyReasoningBatchSize") or 20) if hasattr(args, "limit") else int(settings.get("ontologyReasoningBatchSize") or 20)
     local_lease_recovery = {}
     if args.ontology_reasoning_action in {"once", "watch"}:
@@ -383,7 +385,7 @@ def ontology_reasoning_command(args) -> int:
 
 
 def ontology_world_projection_command(args) -> int:
-    settings = runtime_settings()
+    settings = runtime_settings(fast_operational_read=True)
     runner = build_ontology_world_projection_runner(settings)
     limit = int(getattr(args, "limit", "") or settings.get("ontologyWorldProjectionBatchSize") or 6)
     if args.ontology_world_projection_action == "status":
@@ -430,7 +432,7 @@ def ontology_world_projection_command(args) -> int:
 
 
 def ontology_maintenance_command(args) -> int:
-    settings = runtime_settings()
+    settings = runtime_settings(fast_operational_read=True)
     runner = build_ontology_maintenance_runner(settings)
     if args.ontology_maintenance_action == "status":
         print(json.dumps(runner.status(), ensure_ascii=False))
@@ -739,13 +741,15 @@ def app_store_command(args) -> int:
     return 1
 
 
-def maintenance_command(args) -> int:
-    """Run explicit storage maintenance outside the realtime worker path."""
-    settings = dict(runtime_settings())
+def run_mysql_operational_cleanup(
+    settings: Dict[str, object],
+    optimize: bool = False,
+    drop_ephemeral_databases: bool = False,
+) -> Dict[str, object]:
+    """Run one bounded cleanup pass outside the realtime inference path."""
+    settings = dict(settings or {})
     settings["_skipOperationalHistoryRetention"] = True
     store = MySQLOperationalConnection(settings)
-    if args.maintenance_action != "mysql-cleanup":
-        return 1
     with store.connect() as connection:
         result = apply_mysql_operational_history_retention(
             connection,
@@ -753,7 +757,7 @@ def maintenance_command(args) -> int:
             use_lock=True,
         )
         result["compactionCandidates"] = mysql_operational_compaction_tables(result)
-        if bool(args.optimize):
+        if optimize:
             # Explicit maintenance runs while workers are paused; include the
             # small current-state tables too because they can retain old pages
             # after large payloads were replaced in place.
@@ -761,13 +765,53 @@ def maintenance_command(args) -> int:
                 connection,
                 sorted(MYSQL_OPERATIONAL_COMPACTION_TABLES),
             )
-        if bool(args.drop_ephemeral_databases):
+        if drop_ephemeral_databases:
             result["ephemeralDatabaseCleanup"] = drop_ephemeral_mysql_databases(
                 connection,
                 protected_databases=[str(settings.get("mysqlDatabase") or "")],
             )
-    print(json.dumps(result, ensure_ascii=False))
-    return 0 if str(result.get("status") or "ok") != "error" else 1
+    return result
+
+
+def maintenance_command(args) -> int:
+    """Run storage maintenance outside the realtime inference path."""
+    settings = dict(runtime_settings())
+    if args.maintenance_action == "mysql-cleanup":
+        result = run_mysql_operational_cleanup(
+            settings,
+            optimize=bool(args.optimize),
+            drop_ephemeral_databases=bool(args.drop_ephemeral_databases),
+        )
+        print(json.dumps(result, ensure_ascii=False))
+        return 0 if str(result.get("status") or "ok") != "error" else 1
+    if args.maintenance_action == "watch":
+        configured_interval = int(
+            getattr(args, "interval", "")
+            or os.environ.get("OPERATIONAL_HISTORY_RETENTION_CHECK_INTERVAL_SECONDS")
+            or settings.get("operationalHistoryRetentionCheckIntervalSeconds")
+            or 300
+        )
+
+        reasoning_queue_probe = build_ontology_reasoning_queue_probe(settings)
+
+        def cleanup_once():
+            queue_state = dict(reasoning_queue_probe() or {})
+            try:
+                pending_count = int(queue_state.get("effectivePendingCount") or 0)
+            except (TypeError, ValueError):
+                pending_count = 0
+            if pending_count > 0:
+                return {
+                    "status": "deferred",
+                    "skipped": "reasoning-queue-active",
+                    "reason": "추론 대기열이 비어 있을 때까지 MySQL 이력 정리를 미룹니다.",
+                    "reasoningQueue": queue_state,
+                }
+            return run_mysql_operational_cleanup(settings)
+
+        OperationalHistoryRetentionScheduler(cleanup_once, configured_interval).run_forever()
+        return 0
+    return 1
 
 
 def templates_command(args) -> int:
@@ -1219,6 +1263,8 @@ def build_parser() -> argparse.ArgumentParser:
     mysql_cleanup = maintenance_actions.add_parser("mysql-cleanup")
     mysql_cleanup.add_argument("--optimize", action="store_true")
     mysql_cleanup.add_argument("--drop-ephemeral-databases", action="store_true")
+    mysql_retention_watch = maintenance_actions.add_parser("watch")
+    mysql_retention_watch.add_argument("--interval", default="")
     maintenance.set_defaults(func=maintenance_command)
 
     templates = subparsers.add_parser("templates", help="Manage notification message templates")

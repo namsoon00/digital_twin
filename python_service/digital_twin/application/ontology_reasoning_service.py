@@ -664,11 +664,17 @@ class OntologyReasoningRunner:
             metadata = self.mailbox_metadata(event)
             mailbox_key = str(metadata.get("mailboxKey") or "").strip()
             source_event_id = str(metadata.get("sourceEventId") or "").strip()
+            symbols = event_symbols(event)
+            symbol = symbols[0] if len(symbols) == 1 else ""
             if mailbox_key and source_event_id and not any(
                 item["mailboxKey"] == mailbox_key and item["sourceEventId"] == source_event_id
                 for item in entries
             ):
-                entries.append({"mailboxKey": mailbox_key, "sourceEventId": source_event_id})
+                entries.append({
+                    "mailboxKey": mailbox_key,
+                    "sourceEventId": source_event_id,
+                    "symbol": symbol,
+                })
         return entries
 
     def claim_mailbox_work(self, entries: Iterable[Mapping[str, object]]) -> Dict[str, object]:
@@ -697,6 +703,208 @@ class OntologyReasoningRunner:
             checkpoint(entries, stage, details or {})
         except Exception:
             return
+
+    @staticmethod
+    def mailbox_guard_stale_symbols(guard_result: Mapping[str, object]) -> set:
+        """Return symbols whose claimed mailbox revision no longer owns delivery."""
+        values = dict(guard_result or {}) if isinstance(guard_result, Mapping) else {}
+        symbols = set()
+        for key in ["superseded", "missing"]:
+            for item in values.get(key) or []:
+                symbol = str((item or {}).get("symbol") or "").upper().strip()
+                if symbol:
+                    symbols.add(symbol)
+        return symbols
+
+    def mailbox_delivery_guard(self, claimed_entries: Iterable[Mapping[str, object]]):
+        """Build an atomic latest-revision guard for notification outbox writes.
+
+        The guard is intentionally operational. It checks only whether the
+        source revision still owns its mailbox slot; it never decides whether a
+        TypeDB relation should produce an investment alert.
+        """
+        entries = [dict(item) for item in claimed_entries or [] if isinstance(item, Mapping)]
+
+        def guard(connection, events):
+            current_entries = getattr(self.mailbox_store, "current_entries_with_connection", None)
+            if not callable(current_entries):
+                return list(events or []), {
+                    "status": "not-supported",
+                    "reason": "Mailbox adapter does not expose transactional revision currentness.",
+                    "inputEventCount": len(events or []),
+                    "deliveredEventCount": len(events or []),
+                }
+            try:
+                currentness = dict(current_entries(connection, entries, lock_rows=True) or {})
+            except Exception as error:  # noqa: BLE001 - do not deliver an unverified revision.
+                raise RuntimeError(
+                    "Mailbox revision currentness could not be verified: " + str(error)[:180]
+                ) from error
+            if str(currentness.get("status") or "ok") != "ok":
+                raise RuntimeError(
+                    "Mailbox revision currentness returned an error: "
+                    + str(currentness.get("reason") or currentness.get("status") or "unknown")[:180]
+                )
+            stale_symbols = self.mailbox_guard_stale_symbols(currentness)
+            delivered = [
+                event
+                for event in events or []
+                if not str(getattr(event, "symbol", "") or "").upper().strip() in stale_symbols
+            ]
+            return delivered, {
+                **currentness,
+                "status": "applied",
+                "staleSymbols": sorted(stale_symbols),
+                "inputEventCount": len(events or []),
+                "deliveredEventCount": len(delivered),
+                "suppressedEventCount": max(0, len(events or []) - len(delivered)),
+            }
+
+        return guard
+
+    @staticmethod
+    def mailbox_entry_identity(entry: Mapping[str, object]) -> Tuple[str, str]:
+        value = dict(entry or {}) if isinstance(entry, Mapping) else {}
+        return (
+            str(value.get("mailboxKey") or value.get("mailbox_key") or "").strip(),
+            str(value.get("sourceEventId") or value.get("source_event_id") or "").strip(),
+        )
+
+    def can_resume_post_monitor_commit(
+        self,
+        selected_requests: Iterable[object],
+        mailbox_entries: Iterable[Mapping[str, object]],
+        lease: Mapping[str, object],
+    ) -> bool:
+        """Whether every selected request has a durable post-monitor checkpoint.
+
+        This branch only finalizes work that has already passed TypeDB,
+        alert construction, and monitor-cycle persistence. It is not a
+        shortcut for an in-flight inference result.
+        """
+        selected = list(selected_requests or [])
+        claimed = {
+            self.mailbox_entry_identity(item)
+            for item in mailbox_entries or []
+            if all(self.mailbox_entry_identity(item))
+        }
+        resumed = {
+            self.mailbox_entry_identity(item)
+            for item in (dict(lease or {}).get("resumed") or [])
+            if all(self.mailbox_entry_identity(item))
+        }
+        if not selected or not claimed or claimed != resumed:
+            return False
+        request_entries = {
+            self.mailbox_entry_identity(item)
+            for item in self.mailbox_entries_for_requests(selected)
+            if all(self.mailbox_entry_identity(item))
+        }
+        return bool(request_entries) and request_entries == claimed
+
+    def finalize_resumed_mailbox_work(
+        self,
+        selected_requests: Iterable[object],
+        symbols: Iterable[str],
+        mailbox_entries: Iterable[Mapping[str, object]],
+        queue_metadata: Dict[str, object],
+        durable_superseded_ids: Iterable[str] = (),
+        terminal_mailbox: Mapping[str, Iterable[str]] = None,
+        stale_terminal: Mapping[str, Iterable[str]] = None,
+    ) -> Dict[str, object]:
+        """Acknowledge a monitor-committed revision without rebuilding TypeDB.
+
+        The source row is still compared during acknowledgement. If a newer
+        fact revision arrived after the checkpoint, it remains in the mailbox
+        and is processed normally by the next turn.
+        """
+        selected = list(selected_requests or [])
+        entries = [
+            {
+                "mailboxKey": key,
+                "sourceEventId": event_id,
+            }
+            for key, event_id in [self.mailbox_entry_identity(item) for item in mailbox_entries or []]
+            if key and event_id
+        ]
+        source_event_ids = []
+        symbols_by_source = {}
+        for event in selected:
+            source_event_id = self.mailbox_source_event_id(event)
+            if source_event_id and source_event_id not in source_event_ids:
+                source_event_ids.append(source_event_id)
+            if source_event_id:
+                symbols_by_source[source_event_id] = event_symbols(event)
+        completion = {"completed": [], "discarded": []}
+        acknowledge_error = ""
+        try:
+            states = self.mailbox_store.acknowledge(
+                entries,
+                state="completed",
+                reason="Recovered post-monitor TypeDB inference checkpoint",
+            ) or {}
+            completion = self.persist_terminal_mailbox_events(states)
+        except Exception as error:  # noqa: BLE001 - keep the completed checkpoint for a safe retry.
+            acknowledge_error = str(error)[:180]
+            self.release_mailbox_work(
+                entries,
+                "Mailbox acknowledgement failed while finalizing a verified inference checkpoint: " + acknowledge_error,
+                self.mailbox_work_retry_seconds(),
+            )
+
+        completed_sources = set(completion.get("completed") or [])
+        processed_symbols = []
+        for source_event_id in completed_sources:
+            for symbol in symbols_by_source.get(source_event_id) or []:
+                clean = str(symbol or "").upper().strip()
+                if clean and clean not in processed_symbols:
+                    processed_symbols.append(clean)
+        if processed_symbols:
+            self.mark_symbols_reasoned(processed_symbols)
+
+        completed = ontology_reasoning_completed_event(
+            source_event_ids,
+            [],
+            processed_symbols,
+            0,
+            status="ok",
+            reason="모니터 저장까지 완료된 TypeDB 추론 체크포인트를 재사용해 최신 메일박스 작업을 완료 처리했습니다.",
+        )
+        self.publish(completed)
+        post_mailbox = self.mailbox_summary()
+        queue_metadata["mailbox"] = post_mailbox
+        queue_metadata["mailboxPendingEntryCount"] = int(post_mailbox.get("pendingEntryCount") or 0)
+        queue_metadata["mailboxStoredEntryCount"] = int(post_mailbox.get("pendingEntryCount") or 0)
+        terminal_mailbox = dict(terminal_mailbox or {})
+        stale_terminal = dict(stale_terminal or {})
+        return {
+            "status": "partial" if acknowledge_error else "ok",
+            "processedCount": len(source_event_ids),
+            "scheduledRequestCount": len(selected),
+            "completedEventCount": len(completion.get("completed") or []),
+            "partialEventCount": max(0, len(entries) - len(completion.get("completed") or [])),
+            "coalescedEventCount": len(
+                set(durable_superseded_ids or [])
+                | set(terminal_mailbox.get("discarded") or [])
+                | set(stale_terminal.get("discarded") or [])
+                | set(completion.get("discarded") or [])
+            ),
+            "alertCount": 0,
+            "symbols": [str(symbol or "").upper().strip() for symbol in symbols or [] if str(symbol or "").strip()],
+            "resumedFromCheckpoint": {
+                "status": "post-monitor-inference-verified",
+                "reusedMailboxEntryCount": len(entries),
+                "reason": "TypeDB 추론, 알림 판정, 모니터 저장은 이미 완료되어 완료 처리만 재개했습니다.",
+            },
+            "ruleCandidateResult": self.deferred_rule_candidate_result(symbols),
+            "mailboxAcknowledgeError": acknowledge_error,
+            "maintenance": {
+                "status": "deferred",
+                "reason": "체크포인트 완료 처리 중에는 저우선 TypeDB 정리를 실행하지 않습니다.",
+            },
+            "stageTiming": {"resumePostMonitorMs": 0},
+            **queue_metadata,
+        }
 
     def release_mailbox_work(self, entries: Iterable[Mapping[str, object]], reason: str, retry_after_seconds: int = 0) -> None:
         release = getattr(self.mailbox_store, "release", None) if self.mailbox_enabled() else None
@@ -3714,14 +3922,80 @@ class OntologyReasoningRunner:
                 "coalescedEventCount": len(durable_superseded_ids),
                 **queue_metadata,
             }
+        resumed_mailbox_entries = list(mailbox_lease.get("resumed") or [])
+        if self.can_resume_post_monitor_commit(
+            selected_requests,
+            claimed_mailbox_entries,
+            mailbox_lease,
+        ):
+            return self.finalize_resumed_mailbox_work(
+                selected_requests,
+                symbols,
+                claimed_mailbox_entries,
+                queue_metadata,
+                durable_superseded_ids=durable_superseded_ids,
+                terminal_mailbox=terminal_mailbox,
+                stale_terminal=stale_terminal,
+            )
         self.checkpoint_mailbox_work(
             claimed_mailbox_entries,
             "snapshot-preparation",
-            {"symbols": symbols, "selectedRequestCount": len(selected_requests)},
+            {
+                "symbols": symbols,
+                "selectedRequestCount": len(selected_requests),
+                "resumeAfterVerifiedInferenceCount": len(resumed_mailbox_entries),
+            },
         )
         stage_timing: Dict[str, int] = {}
         monitor_started = time.perf_counter()
         runner = self.monitor_runner_factory()
+        if resumed_mailbox_entries:
+            reasoning_context["mailboxResume"] = {
+                "mode": "rebuild-current-snapshot-from-intermediate-inference-checkpoint",
+                "entryCount": len(resumed_mailbox_entries),
+                "entries": resumed_mailbox_entries[:20],
+            }
+        expected_projection_accounts = {
+            str(getattr(account, "account_id", "") or "").strip()
+            for account in getattr(runner, "accounts", []) or []
+            if str(getattr(account, "account_id", "") or "").strip()
+        }
+        verified_projection_accounts = set()
+        inherited_progress_callback = getattr(runner, "progress_callback", None)
+
+        def mailbox_checkpoint_progress(stage: str, payload: Mapping[str, object] = None) -> None:
+            if callable(inherited_progress_callback):
+                try:
+                    inherited_progress_callback(stage, dict(payload or {}))
+                except Exception:
+                    pass
+            if stage != "ontology_projection.verified":
+                return
+            account_id = str(dict(payload or {}).get("accountId") or "").strip()
+            if account_id:
+                verified_projection_accounts.add(account_id)
+            if expected_projection_accounts and not expected_projection_accounts.issubset(verified_projection_accounts):
+                self.checkpoint_mailbox_work(
+                    claimed_mailbox_entries,
+                    "typedb-inference-account-verified",
+                    {
+                        "verifiedAccountIds": sorted(verified_projection_accounts),
+                        "expectedAccountIds": sorted(expected_projection_accounts),
+                    },
+                )
+                return
+            self.checkpoint_mailbox_work(
+                claimed_mailbox_entries,
+                "typedb-generation-verified",
+                {
+                    "verifiedAccountIds": sorted(verified_projection_accounts),
+                    "expectedAccountIds": sorted(expected_projection_accounts),
+                    "symbols": symbols,
+                },
+            )
+
+        if hasattr(runner, "progress_callback"):
+            runner.progress_callback = mailbox_checkpoint_progress
         runner_parameters = inspect.signature(runner.run_once).parameters
         runner_accepts_kwargs = any(
             parameter.kind == inspect.Parameter.VAR_KEYWORD
@@ -3732,6 +4006,8 @@ class OntologyReasoningRunner:
             runner_kwargs["symbol_filter"] = symbols
         if "reasoning_context" in runner_parameters or runner_accepts_kwargs:
             runner_kwargs["reasoning_context"] = reasoning_context
+        if "delivery_guard" in runner_parameters or runner_accepts_kwargs:
+            runner_kwargs["delivery_guard"] = self.mailbox_delivery_guard(claimed_mailbox_entries)
         try:
             alerts = runner.run_once(**runner_kwargs)
         except Exception:
@@ -3803,6 +4079,16 @@ class OntologyReasoningRunner:
                 **queue_metadata,
             }
         self.mark_successful_projection(runner)
+        self.checkpoint_mailbox_work(
+            claimed_mailbox_entries,
+            "post-monitor-inference-verified",
+            {
+                "symbols": symbols,
+                "projectionGate": "ready",
+                "verifiedAccountIds": sorted(verified_projection_accounts),
+                "deliveryGuard": dict(getattr(runner, "last_delivery_guard_result", {}) or {}),
+            },
+        )
         post_projection_started = time.perf_counter()
         account_ids = [getattr(account, "account_id", "") for account in getattr(runner, "accounts", [])]
         trigger_event_ids = []
@@ -3848,9 +4134,17 @@ class OntologyReasoningRunner:
                 for event_id in reconciled_research_request_ids
             },
         )
+        delivery_revision_guard = dict(getattr(runner, "last_delivery_guard_result", {}) or {})
+        stale_delivery_symbols = self.mailbox_guard_stale_symbols(delivery_revision_guard)
         cursor_requests = [
             event for event in selected_requests
-            if str(getattr(event, "event_id", "") or "") not in blocked_request_ids
+            if (
+                str(getattr(event, "event_id", "") or "") not in blocked_request_ids
+                and (
+                    not self.mailbox_metadata(event).get("mailboxKey")
+                    or not set(event_symbols(event)).intersection(stale_delivery_symbols)
+                )
+            )
         ]
         direct_cursor_requests = [
             event for event in cursor_requests
@@ -3883,7 +4177,13 @@ class OntologyReasoningRunner:
             research_generation_refreshes=research_refresh,
             projection_outcomes=projection_outcomes,
         )
-        rule_candidate_result = self.propose_rule_candidates(symbols, selected_requests, alerts, force=False)
+        # Rule candidate generation can call an external AI model and then
+        # create sandbox experiments. It is useful governance work, but it is
+        # never a prerequisite for applying an already verified live ABox /
+        # InferenceBox generation. Keep it on the dedicated ontology-lab
+        # worker so a slow candidate proposal cannot hold fresh fact revisions
+        # in the realtime reasoning mailbox.
+        rule_candidate_result = self.deferred_rule_candidate_result(symbols)
         self.publish(completed)
         progress_result = self.mark_requests_processed(
             direct_cursor_requests,
@@ -4026,6 +4326,8 @@ class OntologyReasoningRunner:
             "projectionOutcomes": projection_outcomes,
             "lastProjectionRuntime": self.last_projection_runtime(),
             "reasoningContext": reasoning_context,
+            "deliveryRevisionGuard": delivery_revision_guard,
+            "staleDeliverySymbolCount": len(stale_delivery_symbols),
             "mailboxAcknowledgeError": mailbox_ack_error,
             "maintenance": maintenance,
             "stageTiming": stage_timing,
@@ -4235,6 +4537,19 @@ class OntologyReasoningRunner:
             result = {"status": "error", "reason": str(error)[:180], "candidateCount": 0, "savedCount": 0}
         self.mark_rule_candidate_run(result)
         return result
+
+    def deferred_rule_candidate_result(self, symbols: Iterable[str] = None) -> Dict[str, object]:
+        if not self.rule_candidate_ai_enabled():
+            return {"status": "disabled", "candidateCount": 0, "savedCount": 0}
+        if not self.rule_candidate_service:
+            return {"status": "not-configured", "candidateCount": 0, "savedCount": 0}
+        return {
+            "status": "deferred-to-ontology-lab",
+            "candidateCount": 0,
+            "savedCount": 0,
+            "symbols": [str(symbol or "").upper().strip() for symbol in symbols or [] if str(symbol or "").strip()][:40],
+            "reason": "AI 규칙 후보 제안은 실시간 TypeDB 추론 완료 후 별도 ontology-lab 워커가 처리합니다.",
+        }
 
     def rule_candidate_due(self) -> bool:
         if not hasattr(self.cursor_store, "load"):

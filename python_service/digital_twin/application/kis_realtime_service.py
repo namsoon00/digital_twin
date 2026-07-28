@@ -238,23 +238,31 @@ class KISRealtimeWebSocketRunner:
                 if callable(fallback_symbols):
                     focus_symbols = [str(item or "").upper().strip() for item in fallback_symbols() if str(item or "").strip()]
             focus_set = set(focus_symbols)
-            reasoning_candidates = material_symbol_set | bootstrap_symbol_set
-            investment_material_symbols = [symbol for symbol in changed_symbols if symbol in focus_set and symbol in reasoning_candidates]
-            result["investmentReasoningSymbols"] = investment_material_symbols
+            # Materiality is preserved as priority telemetry only. Every
+            # canonical fact revision for a holding/watchlist symbol enters
+            # the latest-state mailbox; TypeDB evaluates whether it changes an
+            # investment relation once the complete ABox context is available.
+            investment_fact_revision_symbols = [symbol for symbol in changed_symbols if symbol in focus_set]
+            result["investmentReasoningSymbols"] = investment_fact_revision_symbols
+            result["factRevisionReasoningSymbols"] = investment_fact_revision_symbols
+            result["investmentReasoningScheduling"] = "fact-revision-first"
             result["backgroundMaterialSymbolCount"] = len([symbol for symbol in material_symbols if symbol not in focus_set])
             result["backgroundBootstrapSymbolCount"] = len([symbol for symbol in bootstrap_symbols if symbol not in focus_set])
-            if investment_material_symbols:
+            result["backgroundFactRevisionSymbolCount"] = len([
+                symbol for symbol in changed_symbols if symbol not in focus_set
+            ])
+            if investment_fact_revision_symbols:
                 reasoning = ontology_reasoning_requested_event(
                     event,
                     "kis-realtime-websocket",
-                    investment_material_symbols,
-                    changed_count=len(investment_material_symbols),
+                    investment_fact_revision_symbols,
+                    changed_count=len(investment_fact_revision_symbols),
                     observed_count=len(changed_symbols),
                     fact_types=["MarketQuote", "ExecutionFlow", "OrderBook"],
-                    reason="보유·관심 종목의 첫 기준선 또는 중요도가 확인된 KIS WebSocket 체결·호가 변경만 TypeDB ABox와 네이티브 규칙 추론에 반영합니다.",
-                    materiality_assessments=[materiality_assessments[symbol] for symbol in investment_material_symbols],
-                    fact_revisions_by_symbol={symbol: fact_revisions_by_symbol[symbol] for symbol in investment_material_symbols if fact_revisions_by_symbol.get(symbol)},
-                    changed_fields_by_symbol={symbol: changed_fields_by_symbol[symbol] for symbol in investment_material_symbols if symbol in changed_fields_by_symbol},
+                    reason="보유·관심 종목의 실제 KIS 체결·호가 사실 변경을 최신 상태 메일박스로 합류한 뒤 TypeDB ABox와 네이티브 규칙 추론에 반영합니다. 중요도 평가는 우선순위 참고용이며 입구 차단에는 사용하지 않습니다.",
+                    materiality_assessments=[materiality_assessments[symbol] for symbol in investment_fact_revision_symbols],
+                    fact_revisions_by_symbol={symbol: fact_revisions_by_symbol[symbol] for symbol in investment_fact_revision_symbols if fact_revisions_by_symbol.get(symbol)},
+                    changed_fields_by_symbol={symbol: changed_fields_by_symbol[symbol] for symbol in investment_fact_revision_symbols if symbol in changed_fields_by_symbol},
                 )
             if hasattr(self.event_publisher, "publish"):
                 self.event_publisher.publish(event)

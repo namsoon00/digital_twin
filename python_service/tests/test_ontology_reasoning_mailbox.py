@@ -9,6 +9,7 @@ sys.path.insert(0, str(Path(__file__).resolve().parents[1]))
 from digital_twin.application.ontology_reasoning_service import OntologyReasoningRunner
 from digital_twin.domain.events import DomainEvent, ONTOLOGY_REASONING_REQUESTED, ontology_reasoning_requested_event
 from digital_twin.domain.ontology_reasoning_queue import durable_mailbox_entries
+from digital_twin.domain.portfolio import AlertEvent
 from digital_twin.infrastructure.mysql_reasoning_mailbox import (
     MySQLOntologyReasoningMailboxStore,
     local_reasoning_watch_is_dead,
@@ -178,6 +179,31 @@ class MemoryMailbox:
             },
         }
 
+    def current_entries_with_connection(self, _connection, entries, lock_rows=True):
+        del lock_rows
+        result = {"status": "ok", "current": [], "superseded": [], "missing": []}
+        for entry in entries or []:
+            key = str(entry.get("mailboxKey") or "")
+            expected = str(entry.get("sourceEventId") or "")
+            current = self.slots.get(key)
+            symbol = str((current or entry).get("symbol") or "").upper()
+            item = {
+                "mailboxKey": key,
+                "sourceEventId": expected,
+                "currentSourceEventId": str((current or {}).get("sourceEventId") or ""),
+                "symbol": symbol,
+            }
+            if not current:
+                result["missing"].append({**item, "reason": "mailbox-row-missing"})
+            elif item["currentSourceEventId"] == expected:
+                result["current"].append(item)
+            else:
+                result["superseded"].append({**item, "reason": "newer-source-event"})
+        result["currentCount"] = len(result["current"])
+        result["supersededCount"] = len(result["superseded"])
+        result["missingCount"] = len(result["missing"])
+        return result
+
     def prune_terminal(self, *_args, **_kwargs):
         return 0
 
@@ -225,6 +251,26 @@ class TimeoutRecoveringMailbox(MemoryMailbox):
 
     def record_timeout(self, details):
         self.timeouts.append(dict(details or {}))
+
+
+class PostMonitorCheckpointMailbox(MemoryMailbox):
+    """Mailbox double that models a retry after monitor persistence committed."""
+
+    def claim(self, entries, _worker_id, _lease_seconds):
+        claimed = [dict(item) for item in entries or []]
+        return {
+            "enabled": True,
+            "claimed": claimed,
+            "blocked": [],
+            "resumed": [{
+                **item,
+                "resumedFrom": "post-monitor-inference-verified",
+                "checkpoint": {"stage": "post-monitor-inference-verified"},
+            } for item in claimed],
+        }
+
+    def checkpoint(self, *_args, **_kwargs):
+        return None
 
 
 class MySQLCursor:
@@ -424,6 +470,21 @@ class OntologyReasoningMailboxTests(unittest.TestCase):
         self.assertEqual("superseded", self.mailbox.events["old"]["state"])
         self.assertEqual(0, result["mailbox"]["pendingEntryCount"])
         self.assertEqual("ok", result["executionTelemetry"]["status"])
+
+    def test_post_monitor_checkpoint_finishes_without_rebuilding_typedb(self):
+        event = realtime_request("resume-current", ["AAPL"], "2026-07-24T00:00:00Z")
+        runner = self.build_runner([event])
+        mailbox = PostMonitorCheckpointMailbox()
+        runner.mailbox_store = mailbox
+        self.mailbox = mailbox
+
+        result = runner.run_once(force=True)
+
+        self.assertEqual("ok", result["status"])
+        self.assertEqual([], self.monitor.calls)
+        self.assertEqual("post-monitor-inference-verified", result["resumedFromCheckpoint"]["status"])
+        self.assertIn("resume-current", self.cursor.ids)
+        self.assertEqual("completed", mailbox.events["resume-current"]["state"])
 
     def test_generic_research_evidence_updates_coalesce_per_symbol_before_typedb(self):
         old = research_evidence_request("research-old", ["AAPL", "MSFT"], "2026-07-24T00:00:00Z")
@@ -1097,6 +1158,27 @@ class OntologyReasoningMailboxTests(unittest.TestCase):
         current = self.mailbox.pending(1)[0]
         self.assertEqual({}, terminal)
         self.assertEqual("new", current["sourceEventId"])
+
+    def test_delivery_guard_suppresses_an_alert_from_a_superseded_revision(self):
+        old = realtime_request("old", ["AAPL"], "2026-07-24T00:00:00Z")
+        newest = realtime_request("new", ["AAPL"], "2026-07-24T00:01:00Z")
+        runner = self.build_runner([old])
+
+        runner.synchronize_mailbox([old])
+        old_entry = self.mailbox.pending(1)[0]
+        runner.synchronize_mailbox([newest])
+        guarded_events, details = runner.mailbox_delivery_guard([old_entry])(
+            None,
+            [
+                AlertEvent("main", "메인", "관찰", "investmentInsight", "aapl", "AAPL", [], symbol="AAPL"),
+                AlertEvent("main", "메인", "관찰", "investmentInsight", "msft", "MSFT", [], symbol="MSFT"),
+            ],
+        )
+
+        self.assertEqual("applied", details["status"])
+        self.assertEqual(["AAPL"], details["staleSymbols"])
+        self.assertEqual(1, details["suppressedEventCount"])
+        self.assertEqual(["MSFT"], [event.symbol for event in guarded_events])
 
     def test_status_exposes_mailbox_freshness_and_execution_history(self):
         event = realtime_request("status", ["AAPL"], "2026-07-24T00:00:00Z")

@@ -13,6 +13,31 @@ from .mysql_schema_tuning import ensure_mysql_operational_schema_tuning, mysql_p
 from .mysql_connection_pool import pooled_mysql_connection
 
 
+_FALSEY_VALUES = {"", "0", "false", "no", "off", "disabled"}
+
+
+def mysql_operational_schema_bootstrap_enabled(settings: Dict[str, str] = None) -> bool:
+    """Whether this connection may run the full schema bootstrap.
+
+    Short-lived, isolated workers already run behind the service manager's
+    schema bootstrap. Repeating DDL and index checks in every child adds
+    avoidable startup work to the realtime reasoning path.
+    """
+    value = str((settings or {}).get("_skipOperationalSchemaBootstrap") or "").strip().lower()
+    return value in _FALSEY_VALUES
+
+
+def mysql_operational_constructor_retention_enabled(settings: Dict[str, str] = None) -> bool:
+    """Keep destructive-ish history cleanup out of ordinary store creation.
+
+    Retention is now owned by the dedicated low-priority maintenance worker.
+    The opt-in flag remains for a one-off tool that intentionally needs the
+    old constructor behaviour.
+    """
+    value = str((settings or {}).get("_runOperationalHistoryRetentionOnInit") or "").strip().lower()
+    return value not in _FALSEY_VALUES
+
+
 def mysql_operation_timeout_seconds(settings: Dict[str, str]) -> int:
     try:
         parsed = int(float(str((settings or {}).get("mysqlOperationTimeoutSeconds") or "").strip()))
@@ -62,8 +87,10 @@ class MySQLOperationalConnection:
         self.runtime_settings = dict(settings or {})
         self.mysql_config = mysql_settings(settings)
         ensure_mysql_database_exists(self.mysql_config)
-        self.ensure_schema()
-        self.ensure_history_retention()
+        if mysql_operational_schema_bootstrap_enabled(self.runtime_settings):
+            self.ensure_schema()
+        if mysql_operational_constructor_retention_enabled(self.runtime_settings):
+            self.ensure_history_retention()
 
     def raw_connection(self, autocommit: bool = True):
         try:

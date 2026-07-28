@@ -16,6 +16,13 @@ class MySQLDependencyError(RuntimeError):
 
 
 _MYSQL_DATABASE_READY = set()
+_FALSEY_VALUES = {"", "0", "false", "no", "off", "disabled"}
+
+
+def mysql_monitoring_schema_bootstrap_enabled(settings: Dict[str, str] = None) -> bool:
+    """Avoid repeating monitor-job DDL in isolated realtime children."""
+    value = str((settings or {}).get("_skipOperationalSchemaBootstrap") or "").strip().lower()
+    return value in _FALSEY_VALUES
 
 
 def mysql_settings(settings: Dict[str, str] = None) -> Dict[str, object]:
@@ -123,7 +130,8 @@ class MySQLMonitorAccountJobStore:
         self.runtime_settings = dict(settings or {})
         self.settings = mysql_settings(settings)
         ensure_mysql_database_exists(self.settings)
-        self.ensure_schema()
+        if mysql_monitoring_schema_bootstrap_enabled(self.runtime_settings):
+            self.ensure_schema()
 
     def raw_connection(self, autocommit: bool = False):
         try:

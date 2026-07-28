@@ -12,6 +12,8 @@ from pathlib import Path
 from typing import Dict, List
 
 from .infrastructure.mysql_monitoring import mysql_settings
+from .infrastructure.mysql_monitoring import MySQLMonitorAccountJobStore
+from .infrastructure.mysql_operational_connection import MySQLOperationalConnection
 from .infrastructure.settings import ROOT_DIR, data_dir, runtime_settings
 from .infrastructure.typedb_storage_guard import typedb_storage_health
 
@@ -107,6 +109,13 @@ BASE_WORKERS = {
         "log": data_dir() / "python-notifications.log",
         "command": [sys.executable, "-u", "python_service/service.py", "notifications", "watch"],
         "needle": "python_service/service.py notifications watch",
+    },
+    "operational-maintenance": {
+        "label": "Python operational history maintenance worker",
+        "pid": data_dir() / "python-operational-maintenance.pid",
+        "log": data_dir() / "python-operational-maintenance.log",
+        "command": [sys.executable, "-u", "python_service/service.py", "maintenance", "watch"],
+        "needle": "python_service/service.py maintenance watch",
     },
 }
 
@@ -261,8 +270,32 @@ def mysql_worker_spec(settings: Dict[str, object]) -> Dict[str, object]:
         "mysqlUser": str(connection_settings.get("user") or ""),
         "mysqlPassword": str(connection_settings.get("password") or ""),
         "mysqlDatabase": str(connection_settings.get("database") or "orbit_alpha"),
+        "operationalSettings": dict(settings or {}),
         "missingReason": "" if command else "MySQL executable was not found. Set MYSQLD_COMMAND.",
     }
+
+
+def ensure_mysql_operational_schema(spec: Dict[str, object]) -> bool:
+    """Bootstrap MySQL once before workers use fast store construction.
+
+    Isolated TypeDB cycles intentionally skip schema DDL so a fresh child does
+    not spend its inference deadline on metadata work. The service manager is
+    the durable startup boundary that guarantees those tables exist first.
+    """
+    settings = dict(spec.get("operationalSettings") or {})
+    settings["_skipOperationalHistoryRetention"] = "1"
+    settings.pop("_skipOperationalSchemaBootstrap", None)
+    try:
+        MySQLOperationalConnection(settings)
+        MySQLMonitorAccountJobStore(settings)
+    except Exception as error:  # noqa: BLE001 - dependent workers cannot safely run without their tables.
+        message = "operational schema bootstrap failed: " + str(error)[:300]
+        append_log(spec["log"], message)
+        print(str(spec["label"]) + " " + message)
+        return False
+    append_log(spec["log"], "operational schema bootstrap ready")
+    print(str(spec["label"]) + " operational schema ready.")
+    return True
 
 
 def web_worker_spec(settings: Dict[str, object]) -> Dict[str, object]:
@@ -1039,6 +1072,9 @@ def start_worker(spec: Dict[str, object]) -> int:
             return 1
         if role == "mysql" and fresh_mysql_data_path and not ensure_mysql_runtime_application_user(spec):
             print(str(spec["label"]) + " application user provisioning failed after fresh initialization.")
+            return 1
+        if role == "mysql" and not ensure_mysql_operational_schema(spec):
+            print(str(spec["label"]) + " operational schema bootstrap failed.")
             return 1
     return 0
 

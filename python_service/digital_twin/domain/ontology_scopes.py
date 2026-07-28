@@ -542,6 +542,78 @@ def _scope_fragment_payload(
     }
 
 
+def _scope_fragment_payloads(
+    graph: PortfolioOntology,
+    scope_ids: Iterable[str],
+    support_relations: Iterable[Mapping[str, object]] = (),
+) -> Dict[str, Dict[str, object]]:
+    """Build every scoped persistence payload in one graph pass.
+
+    ``apply_scoped_abox_identity`` previously called
+    :func:`_scope_fragment_payload` once per scope.  A live portfolio can have
+    well over one hundred independently versioned scopes, which made one
+    target-symbol update repeatedly scan the same complete graph before any
+    TypeDB work began.  This helper preserves the exact payload shape and sort
+    order while grouping the source rows only once.
+    """
+    expected = {str(scope_id or "").strip() for scope_id in scope_ids or [] if str(scope_id or "").strip()}
+    grouped: Dict[str, Dict[str, List[Dict[str, object]]]] = {
+        scope_id: {"entities": [], "relations": [], "evidence": []}
+        for scope_id in expected
+    }
+
+    for entity in graph.entities:
+        scope_id = _clean((entity.properties or {}).get("aboxScopeId"))
+        if scope_id not in grouped:
+            continue
+        grouped[scope_id]["entities"].append({
+            "id": entity.entity_id,
+            "kind": entity.kind,
+            "properties": stable_value(entity.properties),
+        })
+    for relation in graph.relations:
+        scope_id = _clean((relation.properties or {}).get("aboxScopeId"))
+        if scope_id not in grouped:
+            continue
+        grouped[scope_id]["relations"].append({
+            "source": relation.source,
+            "target": relation.target,
+            "type": relation.relation_type,
+            "properties": stable_value(relation.properties),
+        })
+    for evidence in graph.evidence:
+        scope_id = _clean((evidence.value or {}).get("aboxScopeId"))
+        if scope_id not in grouped:
+            continue
+        grouped[scope_id]["evidence"].append({
+            "id": evidence.evidence_id,
+            "subject": evidence.subject,
+            "kind": evidence.kind,
+            "source": evidence.source,
+            "summary": evidence.summary,
+            "value": stable_value(evidence.value),
+        })
+    for relation in support_relations:
+        scope_id = _clean(relation.get("scopeId"))
+        if scope_id not in grouped:
+            continue
+        grouped[scope_id]["relations"].append({
+            "source": _clean(relation.get("source")),
+            "target": _clean(relation.get("target")),
+            "type": _clean(relation.get("type")),
+            "properties": stable_value(dict(relation.get("properties") or {})),
+        })
+
+    return {
+        scope_id: {
+            "entities": sorted(payload["entities"], key=lambda item: (str(item["kind"]), str(item["id"]))),
+            "relations": sorted(payload["relations"], key=lambda item: (str(item["type"]), str(item["source"]), str(item["target"]))),
+            "evidence": sorted(payload["evidence"], key=lambda item: (str(item["kind"]), str(item["id"]))),
+        }
+        for scope_id, payload in grouped.items()
+    }
+
+
 def _semantic_property_family(field: object, fallback_family: object) -> str:
     normalized = re.sub(r"[^a-z0-9]", "", _clean(field).lower())
     if normalized in _QUALITY_TIMESTAMP_FIELDS:
@@ -688,6 +760,119 @@ def _scope_semantic_fingerprints(
     }
 
 
+def _scope_semantic_fingerprints_by_scope(
+    graph: PortfolioOntology,
+    scope_ids: Iterable[str],
+    support_relations: Iterable[Mapping[str, object]] = (),
+) -> Dict[str, Dict[str, str]]:
+    """Calculate semantic scope fingerprints without repeated full scans.
+
+    This is deliberately a structural optimization only: each grouped item is
+    built with the same fields and family rules as
+    :func:`_scope_semantic_fingerprints`.  The resulting hashes therefore stay
+    compatible with existing active scoped manifests.
+    """
+    expected = {str(scope_id or "").strip() for scope_id in scope_ids or [] if str(scope_id or "").strip()}
+    groups_by_scope: Dict[str, Dict[str, List[Dict[str, object]]]] = {
+        scope_id: defaultdict(list)
+        for scope_id in expected
+    }
+    entities_by_id = {
+        _clean(entity.entity_id): entity
+        for entity in graph.entities
+        if _clean(entity.entity_id)
+    }
+
+    for entity in graph.entities:
+        properties = dict(entity.properties or {})
+        scope_id = _clean(properties.get("aboxScopeId"))
+        groups = groups_by_scope.get(scope_id)
+        if groups is None:
+            continue
+        fallback = family_for_entity(entity.kind, properties, entity.entity_id)
+        groups[fallback].append({
+            "entity": _clean(entity.entity_id),
+            "kind": _clean(entity.kind),
+            "label": _clean(entity.label),
+        })
+        for field, value in _semantic_properties(properties).items():
+            groups[_semantic_property_family(field, fallback)].append({
+                "entity": _clean(entity.entity_id),
+                "field": field,
+                "value": value,
+            })
+
+    for relation in graph.relations:
+        properties = dict(relation.properties or {})
+        scope_id = _clean(properties.get("aboxScopeId"))
+        groups = groups_by_scope.get(scope_id)
+        if groups is None:
+            continue
+        source = entities_by_id.get(_clean(relation.source))
+        target = entities_by_id.get(_clean(relation.target))
+        family = family_for_relation(
+            relation.relation_type,
+            properties,
+            source_family=scope_family((getattr(source, "properties", {}) or {}).get("aboxScopeId")),
+            target_family=scope_family((getattr(target, "properties", {}) or {}).get("aboxScopeId")),
+            source_kind=getattr(source, "kind", ""),
+            target_kind=getattr(target, "kind", ""),
+        )
+        groups[family].append({
+            "source": _clean(relation.source),
+            "target": _clean(relation.target),
+            "type": _clean(relation.relation_type),
+            "properties": _semantic_properties(properties),
+        })
+
+    for evidence in graph.evidence:
+        values = dict(evidence.value or {})
+        groups = groups_by_scope.get(_clean(values.get("aboxScopeId")))
+        if groups is None:
+            continue
+        groups["evidence"].append({
+            "id": _clean(evidence.evidence_id),
+            "subject": _clean(evidence.subject),
+            "kind": _clean(evidence.kind),
+            "source": _clean(evidence.source),
+            "summary": _clean(evidence.summary),
+            "value": _semantic_properties(values),
+        })
+
+    for relation in support_relations:
+        groups = groups_by_scope.get(_clean(relation.get("scopeId")))
+        if groups is None:
+            continue
+        families = [
+            _clean(value)
+            for value in relation.get("impactFamilies") or []
+            if _clean(value)
+        ]
+        family = families[0] if families else "evidence"
+        groups[family].append({
+            "source": _clean(relation.get("source")),
+            "target": _clean(relation.get("target")),
+            "type": _clean(relation.get("type")),
+            "properties": _semantic_properties(dict(relation.get("properties") or {})),
+        })
+
+    return {
+        scope_id: {
+            family: hashlib.sha256(
+                json.dumps(
+                    sorted(items, key=lambda item: json.dumps(item, ensure_ascii=False, sort_keys=True)),
+                    ensure_ascii=False,
+                    sort_keys=True,
+                    separators=(",", ":"),
+                ).encode("utf-8")
+            ).hexdigest()
+            for family, items in groups.items()
+            if family and items
+        }
+        for scope_id, groups in groups_by_scope.items()
+    }
+
+
 def scoped_generation_id(scope_id: str, fingerprint: str) -> str:
     digest = hashlib.sha256((scope_id + "|" + fingerprint).encode("utf-8")).hexdigest()[:20]
     return "abox-scope:" + digest
@@ -825,14 +1010,16 @@ def apply_scoped_abox_identity(
     # rolls when either endpoint's local fact generation changes, but it never
     # rolls an endpoint's entity scope in return. Legacy embedded cross-scope
     # ownership still uses the conservative recursive closure below.
-    payloads = {
-        scope_id: _scope_fragment_payload(clone, scope_id, support_relations)
-        for scope_id in scope_ids
-    }
-    semantic_fingerprints = {
-        scope_id: _scope_semantic_fingerprints(clone, scope_id, support_relations)
-        for scope_id in scope_ids
-    }
+    # Build the exact same immutable scope fragments and semantic fingerprints
+    # in a single graph pass. A target-scoped cycle normally has many retained
+    # scopes, so repeatedly scanning the complete graph once per scope made
+    # identity preparation dominate the TypeDB write itself.
+    payloads = _scope_fragment_payloads(clone, scope_ids, support_relations)
+    semantic_fingerprints = _scope_semantic_fingerprints_by_scope(
+        clone,
+        scope_ids,
+        support_relations,
+    )
     base_fingerprints = {
         scope_id: hashlib.sha256(
             json.dumps(payload, ensure_ascii=False, sort_keys=True, separators=(",", ":")).encode("utf-8")

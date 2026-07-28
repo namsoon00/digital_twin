@@ -618,7 +618,13 @@ class MySQLOntologyReasoningMailboxStore(MySQLOperationalConnection):
             event_id = _text(item.get("sourceEventId") or item.get("source_event_id"))
             if key and event_id and (key, event_id) not in clean:
                 clean.append((key, event_id))
-        result = {"enabled": True, "claimed": [], "blocked": [], "leaseOwner": _text(worker_id)}
+        result = {
+            "enabled": True,
+            "claimed": [],
+            "blocked": [],
+            "resumed": [],
+            "leaseOwner": _text(worker_id),
+        }
         if not clean:
             return result
         try:
@@ -636,7 +642,7 @@ class MySQLOntologyReasoningMailboxStore(MySQLOperationalConnection):
                         result["blocked"].append({"mailboxKey": key, "sourceEventId": event_id, "reason": "newer-source"})
                         continue
                     work = connection.execute(
-                        "SELECT source_event_id, work_state, lease_owner, lease_until, not_before_at FROM ontology_reasoning_work_items "
+                        "SELECT source_event_id, work_state, lease_owner, lease_until, not_before_at, last_stage, checkpoint_json FROM ontology_reasoning_work_items "
                         "WHERE mailbox_key = %s FOR UPDATE",
                         (key,),
                     ).fetchone()
@@ -653,31 +659,131 @@ class MySQLOntologyReasoningMailboxStore(MySQLOperationalConnection):
                     if work and _text(work.get("work_state")) == "running" and _text(work.get("lease_until")) > stamp and _text(work.get("lease_owner")) not in {"", _text(worker_id)}:
                         result["blocked"].append({"mailboxKey": key, "sourceEventId": event_id, "reason": "leased"})
                         continue
+                    previous_stage = _text(work.get("last_stage")) if work else ""
+                    previous_checkpoint = _json_loads(work.get("checkpoint_json"), {}) if work else {}
+                    # Only a checkpoint written after the monitor cycle has
+                    # committed its snapshot and notification outbox may skip
+                    # TypeDB work on retry. Earlier native-inference
+                    # checkpoints are intentionally replayed because alert
+                    # construction or durable delivery may not have run yet.
+                    resumed_from_verified_inference = previous_stage == "post-monitor-inference-verified"
+                    claim_stage = (
+                        "resume-after-monitor-commit"
+                        if resumed_from_verified_inference
+                        else "snapshot-preparation"
+                    )
+                    checkpoint = {
+                        "version": "reasoning-work-checkpoint-v1",
+                        "stage": claim_stage,
+                        "startedAt": stamp,
+                    }
+                    if resumed_from_verified_inference:
+                        checkpoint["resumedFrom"] = "post-monitor-inference-verified"
+                        checkpoint["previousCheckpoint"] = previous_checkpoint
                     connection.execute(
                         """
                         INSERT INTO ontology_reasoning_work_items (
                             mailbox_key, source_event_id, work_state, lease_owner, lease_until, not_before_at,
                             attempt_count, last_stage, stage_started_at, heartbeat_at, checkpoint_json,
                             last_error, created_at, updated_at
-                        ) VALUES (%s, %s, 'running', %s, %s, '', 1, 'snapshot-preparation', %s, %s, %s, '', %s, %s)
+                        ) VALUES (%s, %s, 'running', %s, %s, '', 1, %s, %s, %s, %s, '', %s, %s)
                         ON DUPLICATE KEY UPDATE
                             source_event_id = VALUES(source_event_id), work_state = 'running',
                             lease_owner = VALUES(lease_owner), lease_until = VALUES(lease_until), not_before_at = '',
-                            attempt_count = attempt_count + 1, last_stage = 'snapshot-preparation',
+                            attempt_count = attempt_count + 1, last_stage = VALUES(last_stage),
                             stage_started_at = VALUES(stage_started_at), heartbeat_at = VALUES(heartbeat_at),
                             checkpoint_json = VALUES(checkpoint_json), last_error = '', updated_at = VALUES(updated_at)
                         """,
                         (
-                            key, event_id, _text(worker_id), lease_until, stamp, stamp,
-                            json_dumps({"version": "reasoning-work-checkpoint-v1", "stage": "snapshot-preparation", "startedAt": stamp}),
+                            key, event_id, _text(worker_id), lease_until, claim_stage, stamp, stamp,
+                            json_dumps(checkpoint),
                             stamp, stamp,
                         ),
                     )
                     result["claimed"].append({"mailboxKey": key, "sourceEventId": event_id})
+                    if resumed_from_verified_inference:
+                        result["resumed"].append({
+                            "mailboxKey": key,
+                            "sourceEventId": event_id,
+                            "resumedFrom": "post-monitor-inference-verified",
+                            "checkpoint": previous_checkpoint,
+                        })
                 self._refresh_queue_state_with_connection(connection)
             return result
         except Exception as error:
             return {**result, "enabled": False, "reason": str(error)[:180]}
+
+    @staticmethod
+    def current_entries_with_connection(
+        connection,
+        entries: Iterable[Mapping[str, object]],
+        lock_rows: bool = True,
+    ) -> Dict[str, object]:
+        """Prove that a claimed latest-state revision is still current.
+
+        This is an operational delivery guard, not an investment decision. It
+        runs inside the same MySQL transaction that creates notification jobs,
+        so a newer mailbox ingress either wins before the guard or waits until
+        the obsolete result has been explicitly classified. A stale inference
+        is never allowed to enqueue an alert for the revision it no longer
+        represents.
+        """
+        clean = []
+        for item in entries or []:
+            if not isinstance(item, Mapping):
+                continue
+            key = _text(item.get("mailboxKey") or item.get("mailbox_key"))
+            event_id = _text(item.get("sourceEventId") or item.get("source_event_id"))
+            symbol = _text(item.get("symbol")).upper()
+            if key and event_id and (key, event_id, symbol) not in clean:
+                clean.append((key, event_id, symbol))
+        result = {"status": "ok", "current": [], "superseded": [], "missing": []}
+        for key, expected_event_id, symbol in clean:
+            query = "SELECT source_event_id, symbol FROM ontology_reasoning_mailbox WHERE mailbox_key = %s"
+            if lock_rows:
+                query += " FOR UPDATE"
+            row = connection.execute(query, (key,)).fetchone()
+            if not row:
+                result["missing"].append({
+                    "mailboxKey": key,
+                    "sourceEventId": expected_event_id,
+                    "symbol": symbol,
+                    "reason": "mailbox-row-missing",
+                })
+                continue
+            actual_event_id = _text(row.get("source_event_id"))
+            actual_symbol = _text(row.get("symbol")).upper() or symbol
+            item = {
+                "mailboxKey": key,
+                "sourceEventId": expected_event_id,
+                "currentSourceEventId": actual_event_id,
+                "symbol": actual_symbol,
+            }
+            if actual_event_id == expected_event_id:
+                result["current"].append(item)
+            else:
+                result["superseded"].append({**item, "reason": "newer-source-event"})
+        result["currentCount"] = len(result["current"])
+        result["supersededCount"] = len(result["superseded"])
+        result["missingCount"] = len(result["missing"])
+        return result
+
+    def current_entries(self, entries: Iterable[Mapping[str, object]]) -> Dict[str, object]:
+        """Read currentness outside a delivery transaction for diagnostics."""
+        try:
+            with self.connect() as connection:
+                return self.current_entries_with_connection(connection, entries, lock_rows=False)
+        except Exception as error:
+            return {
+                "status": "error",
+                "reason": str(error)[:180],
+                "current": [],
+                "superseded": [],
+                "missing": [],
+                "currentCount": 0,
+                "supersededCount": 0,
+                "missingCount": 0,
+            }
 
     def checkpoint(
         self,

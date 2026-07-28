@@ -9,6 +9,12 @@ from digital_twin.infrastructure.mysql_retention import (
     operational_projection_run_keep_count,
     optimize_mysql_operational_tables,
 )
+from digital_twin.infrastructure.mysql_monitoring import mysql_monitoring_schema_bootstrap_enabled
+from digital_twin.infrastructure.mysql_operational_connection import (
+    mysql_operational_constructor_retention_enabled,
+    mysql_operational_schema_bootstrap_enabled,
+)
+from digital_twin.infrastructure.schedulers import OperationalHistoryRetentionScheduler
 from digital_twin.infrastructure.typedb_ontology import TypeDBOntologyGraphRepository
 
 
@@ -31,6 +37,27 @@ class RecordingConnection:
 
 
 class MySQLStorageMaintenanceTests(unittest.TestCase):
+    def test_realtime_fast_path_skips_schema_and_constructor_retention(self):
+        self.assertTrue(mysql_operational_schema_bootstrap_enabled({}))
+        self.assertTrue(mysql_monitoring_schema_bootstrap_enabled({}))
+        self.assertFalse(mysql_operational_schema_bootstrap_enabled({"_skipOperationalSchemaBootstrap": "1"}))
+        self.assertFalse(mysql_monitoring_schema_bootstrap_enabled({"_skipOperationalSchemaBootstrap": "true"}))
+        self.assertFalse(mysql_operational_constructor_retention_enabled({}))
+        self.assertTrue(mysql_operational_constructor_retention_enabled({"_runOperationalHistoryRetentionOnInit": "1"}))
+
+    def test_dedicated_retention_scheduler_runs_cleanup_without_store_construction(self):
+        calls = []
+        scheduler = OperationalHistoryRetentionScheduler(
+            lambda: calls.append("cleanup") or {"deleted": 3},
+            interval_seconds=1,
+        )
+
+        result = scheduler.run_once()
+
+        self.assertEqual(["cleanup"], calls)
+        self.assertEqual(3, result["deleted"])
+        self.assertEqual(60, scheduler.interval_seconds)
+
     def test_projection_audit_retention_is_bounded_per_world(self):
         connection = RecordingConnection()
         result = apply_mysql_operational_history_retention(

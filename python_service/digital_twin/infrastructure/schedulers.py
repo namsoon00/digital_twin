@@ -280,6 +280,58 @@ class NotificationQueueScheduler:
             wait_until_running(lambda: self.running, end_at)
 
 
+class OperationalHistoryRetentionScheduler:
+    """Run bounded MySQL retention only when no realtime code creates stores.
+
+    Cleanup may scan and delete historical rows. Keeping it in a separate
+    low-priority worker prevents a transient lock or slow query from becoming
+    part of the TypeDB inference deadline.
+    """
+
+    def __init__(self, cleanup_once, interval_seconds: int, error_reporter=None):
+        self.cleanup_once = cleanup_once
+        self.interval_seconds = max(60, int(interval_seconds or 300))
+        self.error_reporter = error_reporter or operational_error_reporter()
+        self.running = True
+
+    def stop(self, *_args) -> None:
+        self.running = False
+
+    def run_once(self) -> dict:
+        return dict(self.cleanup_once() or {})
+
+    def run_forever(self) -> None:
+        install_stop_handlers(self.stop)
+        print(
+            "Python operational history maintenance worker started. interval="
+            + str(self.interval_seconds)
+            + "s"
+        )
+        while self.running:
+            started = time.monotonic()
+            try:
+                result = self.run_once()
+                deleted = int(result.get("deleted") or 0)
+                skipped = str(result.get("skipped") or "")
+                if deleted or skipped:
+                    print(
+                        "Operational history maintenance deleted="
+                        + str(deleted)
+                        + (" skipped=" + skipped if skipped else ""),
+                        flush=True,
+                    )
+            except Exception as error:  # noqa: BLE001 - retention must never stop runtime processing.
+                print("Python operational history maintenance error: " + str(error), flush=True)
+                report_runtime_error(
+                    self.error_reporter,
+                    "Python operational history maintenance worker",
+                    error,
+                    "MySQL history retention",
+                )
+            end_at = time.monotonic() + max(1.0, self.interval_seconds - (time.monotonic() - started))
+            wait_until_running(lambda: self.running, end_at)
+
+
 class OntologyReasoningScheduler:
     def __init__(self, runner, interval_seconds: int, error_reporter=None, isolated_cycle=None):
         self.runner = runner

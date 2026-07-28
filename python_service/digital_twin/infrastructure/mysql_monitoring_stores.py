@@ -199,12 +199,25 @@ class MySQLMonitorStore(MySQLOperationalConnection):
             entries = self.mark_sent_with_connection(connection, events, stamp)
         self.sent.update(entries)
 
-    def record_cycle(self, account_ids: List[str], snapshots: List[AccountSnapshot], alert_events: List[AlertEvent], dry_run: bool = False):
+    def record_cycle(
+        self,
+        account_ids: List[str],
+        snapshots: List[AccountSnapshot],
+        alert_events: List[AlertEvent],
+        dry_run: bool = False,
+        delivery_guard=None,
+    ):
         return MySQLMonitoringCycleRecorder(
             self.runtime_settings,
             monitor_store=self,
             market_time_series_store=MySQLMarketTimeSeriesStore(self.runtime_settings),
-        ).record_cycle(account_ids, snapshots, alert_events, dry_run=dry_run)
+        ).record_cycle(
+            account_ids,
+            snapshots,
+            alert_events,
+            dry_run=dry_run,
+            delivery_guard=delivery_guard,
+        )
 
     def write(self) -> None:
         pass
@@ -259,7 +272,14 @@ class MySQLMonitoringCycleRecorder(MySQLOperationalConnection):
             accounts[account.account_id] = account
         return accounts
 
-    def record_cycle(self, account_ids: List[str], snapshots: List[AccountSnapshot], alert_events: List[AlertEvent], dry_run: bool = False):
+    def record_cycle(
+        self,
+        account_ids: List[str],
+        snapshots: List[AccountSnapshot],
+        alert_events: List[AlertEvent],
+        dry_run: bool = False,
+        delivery_guard=None,
+    ):
         if dry_run:
             return MonitoringCycleRecordResult(False, 0, "dry-run")
         snapshot_states = {
@@ -270,21 +290,51 @@ class MySQLMonitoringCycleRecorder(MySQLOperationalConnection):
             for snapshot in snapshots
         }
         live_snapshots = [snapshot for snapshot in snapshots if snapshot.has_live_account_data()]
-        delivered = bool(alert_events)
-        alert_source_event = alerts_detected_event(alert_events) if alert_events else None
         stamp = datetime.now(timezone.utc).isoformat().replace("+00:00", "Z")
         queued = 0
         sent_entries: Dict[str, str] = {}
         notification_store = MySQLNotificationJobStore(self.runtime_settings)
         model_review_store = MySQLModelReviewJobStore(self.runtime_settings)
         account_contexts = self.account_context_map() if alert_events else {}
+        guarded_events = list(alert_events or [])
+        delivery_guard_result: Dict[str, object] = {"status": "not-applied"}
         with self.transaction() as connection:
+            if callable(delivery_guard) and guarded_events:
+                try:
+                    guard_value = delivery_guard(connection, list(guarded_events))
+                    if isinstance(guard_value, tuple) and len(guard_value) == 2:
+                        candidate_events, candidate_details = guard_value
+                        guarded_events = list(candidate_events or [])
+                        delivery_guard_result = dict(candidate_details or {})
+                    elif isinstance(guard_value, dict):
+                        candidate_events = guard_value.get("events")
+                        if candidate_events is not None:
+                            guarded_events = list(candidate_events or [])
+                        delivery_guard_result = {
+                            key: value
+                            for key, value in guard_value.items()
+                            if key != "events"
+                        }
+                    elif guard_value is not None:
+                        guarded_events = list(guard_value or [])
+                        delivery_guard_result = {"status": "applied"}
+                    delivery_guard_result.setdefault("status", "applied")
+                except Exception as error:  # noqa: BLE001 - retain the source work for a safe retry.
+                    # Continuing would persist the new monitor state while
+                    # discarding its only delivery candidate. Roll the cycle
+                    # back instead: the reasoning worker releases the mailbox
+                    # lease and retries the same latest fact revision.
+                    raise RuntimeError(
+                        "Notification delivery revision guard failed: " + str(error)[:180]
+                    ) from error
+            delivered = bool(guarded_events)
+            alert_source_event = alerts_detected_event(guarded_events) if guarded_events else None
             self.market_time_series_store.record_snapshots_with_connection(connection, live_snapshots)
             for snapshot in live_snapshots:
                 insert_domain_event_with_connection(connection, snapshot_collected_event(snapshot))
             if alert_source_event:
                 insert_domain_event_with_connection(connection, alert_source_event)
-                for event in alert_events:
+                for event in guarded_events:
                     account_context = account_contexts.get(event.account_id)
                     context = merge_strategy_context(alert_context(event), account_context, self.runtime_settings)
                     if str(event.rule or "") == "investmentInsight":
@@ -303,16 +353,27 @@ class MySQLMonitoringCycleRecorder(MySQLOperationalConnection):
                     if notification_store.enqueue_with_connection(connection, job):
                         queued += 1
                 model_review_store.enqueue_from_event_with_connection(connection, alert_source_event)
-                sent_entries = self.monitor_store.mark_sent_with_connection(connection, alert_events, stamp)
+                sent_entries = self.monitor_store.mark_sent_with_connection(connection, guarded_events, stamp)
             insert_domain_event_with_connection(
                 connection,
-                monitoring_cycle_completed_event(list(account_ids or []), len(snapshots), len(alert_events), False, delivered),
+                monitoring_cycle_completed_event(list(account_ids or []), len(snapshots), len(guarded_events), False, delivered),
             )
             for account_id, state in snapshot_states.items():
                 self.monitor_store.upsert_snapshot_state_with_connection(connection, account_id, state, stamp)
         self.monitor_store.previous.update(snapshot_states)
         self.monitor_store.sent.update(sent_entries)
-        return MonitoringCycleRecordResult(delivered, queued, "queued=" + str(queued))
+        return MonitoringCycleRecordResult(
+            delivered,
+            queued,
+            "queued=" + str(queued),
+            delivered_events=list(guarded_events),
+            details={
+                "deliveryGuard": delivery_guard_result,
+                "inputEventCount": len(alert_events or []),
+                "deliveredEventCount": len(guarded_events),
+                "suppressedEventCount": max(0, len(alert_events or []) - len(guarded_events)),
+            },
+        )
 
 class MySQLEventLog(MySQLOperationalConnection):
     def handle(self, event: DomainEvent) -> None:

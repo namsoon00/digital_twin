@@ -47,6 +47,8 @@ class MonitorRunner:
         # The reasoning worker advances its event cursor only after this
         # projection has a usable TypeDB result.
         self.last_ontology_projection_results: Dict[str, Dict[str, object]] = {}
+        self.last_cycle_record_result = None
+        self.last_delivery_guard_result: Dict[str, object] = {}
 
     def run_once(
         self,
@@ -54,6 +56,7 @@ class MonitorRunner:
         force: bool = False,
         symbol_filter: Iterable[str] = None,
         reasoning_context: Dict[str, object] = None,
+        delivery_guard=None,
     ) -> List[AlertEvent]:
         if self.use_account_job_queue(dry_run, force, symbol_filter):
             return self.run_due_account_jobs()
@@ -62,6 +65,7 @@ class MonitorRunner:
             force=force,
             symbol_filter=symbol_filter,
             reasoning_context=reasoning_context,
+            delivery_guard=delivery_guard,
         )
 
     def progress(self, stage: str, **payload) -> None:
@@ -81,6 +85,7 @@ class MonitorRunner:
         force: bool = False,
         symbol_filter: Iterable[str] = None,
         reasoning_context: Dict[str, object] = None,
+        delivery_guard=None,
     ) -> List[AlertEvent]:
         self.last_ontology_projection_results = {}
         self.progress("monitor.start", accountCount=len(self.accounts), dryRun=bool(dry_run), force=bool(force))
@@ -105,15 +110,36 @@ class MonitorRunner:
             for snapshot in snapshots:
                 snapshot.metadata.pop("previousMonitorState", None)
                 snapshot.metadata.pop("monitorStateHistory", None)
-            self.cycle_recorder.record_cycle(
+            recorder = self.cycle_recorder.record_cycle
+            parameters = inspect.signature(recorder).parameters
+            accepts_kwargs = any(
+                parameter.kind == inspect.Parameter.VAR_KEYWORD
+                for parameter in parameters.values()
+            )
+            kwargs = {"dry_run": dry_run}
+            if delivery_guard is not None and ("delivery_guard" in parameters or accepts_kwargs):
+                kwargs["delivery_guard"] = delivery_guard
+            cycle_result = recorder(
                 [account.account_id for account in self.accounts],
                 snapshots,
                 all_events,
-                dry_run=dry_run,
+                **kwargs,
             )
+            self.last_cycle_record_result = cycle_result
+            details = getattr(cycle_result, "details", {}) if cycle_result is not None else {}
+            self.last_delivery_guard_result = dict((details or {}).get("deliveryGuard") or {})
+            delivered_events = getattr(cycle_result, "delivered_events", None) if cycle_result is not None else None
+            if delivered_events is not None:
+                all_events = list(delivered_events or [])
             if not all_events:
                 self.progress("monitor.no_events")
-            self.progress("monitor.completed", snapshotCount=len(snapshots), eventCount=len(all_events), cycleRecorder=True)
+            self.progress(
+                "monitor.completed",
+                snapshotCount=len(snapshots),
+                eventCount=len(all_events),
+                cycleRecorder=True,
+                deliveryGuard=self.last_delivery_guard_result,
+            )
             return all_events
         if all_events:
             alert_event = alerts_detected_event(all_events)
@@ -241,6 +267,14 @@ class MonitorRunner:
             status=projection.get("status") if isinstance(projection, dict) else "",
             graphStore=projection.get("graphStore") if isinstance(projection, dict) else "",
         )
+        if self.projection_inference_verified(projection):
+            inference = projection.get("inferenceBox") if isinstance(projection, dict) else {}
+            self.progress(
+                "ontology_projection.verified",
+                accountId=account.account_id,
+                sourceAboxSnapshotId=str((inference or {}).get("sourceAboxSnapshotId") or ""),
+                inferenceGenerationId=str((inference or {}).get("inferenceGenerationId") or ""),
+            )
         self.record_hypothesis_lifecycle(snapshot)
         events = self.monitor.events_for_snapshot(snapshot, previous)
         if force and hasattr(self.monitor, "forced_holdings_snapshot_events"):
@@ -335,6 +369,33 @@ class MonitorRunner:
         snapshot.metadata.setdefault("ontology", {})["alertPipeline"] = payload
         if isinstance(projection, dict):
             projection["alertPipeline"] = payload
+
+    @staticmethod
+    def projection_inference_verified(projection: object) -> bool:
+        """Return only a transport checkpoint, never a Python judgement.
+
+        This mirrors the minimum TypeDB generation proof needed to safely
+        persist a worker checkpoint. Rule matching and investment action stay
+        entirely in the projection/InferenceBox path.
+        """
+        values = dict(projection or {}) if isinstance(projection, dict) else {}
+        if str(values.get("status") or "").lower() not in {
+            "ok",
+            "partial",
+            "unchanged-material-facts",
+            "unchanged-material-facts-reasoning-retry",
+        }:
+            return False
+        inference = values.get("inferenceBox") if isinstance(values.get("inferenceBox"), dict) else {}
+        return bool(
+            inference
+            and (
+                inference.get("nativeTypeDbReasoningCompleted")
+                or inference.get("typedbNativeRuleEvaluationCompleted")
+            )
+            and inference.get("generationAligned")
+            and str(inference.get("sourceAboxSnapshotId") or "").strip()
+        )
 
     def next_account_run_at(self, seconds: int) -> str:
         return (datetime.now(timezone.utc) + timedelta(seconds=max(1, int(seconds or 1)))).isoformat().replace("+00:00", "Z")

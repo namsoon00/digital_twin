@@ -148,7 +148,7 @@ class OntologyRuleCandidateAITests(unittest.TestCase):
             for entity in repository.saved_graph.entities
         ))
 
-    def test_reasoning_runner_invokes_candidate_service_when_due(self):
+    def test_reasoning_runner_defers_candidate_service_to_lab_worker_when_due(self):
         event = DomainEvent(
             name=ONTOLOGY_REASONING_REQUESTED,
             aggregate_id="ontology:AAPL",
@@ -172,7 +172,9 @@ class OntologyRuleCandidateAITests(unittest.TestCase):
         result = runner.run_once()
 
         self.assertEqual("ok", result["status"])
-        self.assertEqual(1, result["ruleCandidateResult"]["savedCount"])
+        self.assertEqual("deferred-to-ontology-lab", result["ruleCandidateResult"]["status"])
+        self.assertEqual(0, result["ruleCandidateResult"]["savedCount"])
+        self.assertEqual([], repository.saved_candidates)
 
 
 def ai_candidate_json():

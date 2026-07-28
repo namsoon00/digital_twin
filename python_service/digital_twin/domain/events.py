@@ -549,7 +549,11 @@ def ontology_reasoning_requested_event(
             # before an expensive TypeDB cycle.
             "sourceObservedAt": source_observed_at,
             "dispatchMode": "data-update-driven",
-            "importanceGate": "materiality-first",
+            # A canonical source fact revision is the ingress contract. The
+            # materiality assessment below remains advisory scheduling
+            # provenance, not a Python investment-decision gate.
+            "importanceGate": "fact-revision-first",
+            "materialityRole": "advisory-priority-only",
             "materialityAssessments": materiality_assessments if materiality_assessments is not None else [],
             # Fact revisions are scheduling provenance only. They let the
             # durable mailbox keep the existing pending slot when a provider

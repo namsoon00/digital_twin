@@ -359,7 +359,7 @@ class PythonServiceTests(unittest.TestCase):
         self.assertEqual(1, result["backgroundMaterialSymbolCount"])
         self.assertEqual(["005930"], result["investmentReasoningSymbols"])
 
-    def test_kis_realtime_runner_does_not_reason_over_immaterial_ticks(self):
+    def test_kis_realtime_runner_enqueues_immaterial_fact_revisions_for_typedb(self):
         cache = TestMarketQuoteCache(test_store_seed(self.temp.name))
         events = EventBus()
         runner = KISRealtimeWebSocketRunner(
@@ -378,7 +378,12 @@ class PythonServiceTests(unittest.TestCase):
         result = runner.flush_events(force=True)
 
         self.assertEqual(0, result["materialChangedCount"])
-        self.assertEqual([MARKET_DATA_COLLECTED], [event.name for event in events.published])
+        self.assertEqual([MARKET_DATA_COLLECTED, ONTOLOGY_REASONING_REQUESTED], [event.name for event in events.published])
+        self.assertEqual(["005930"], result["investmentReasoningSymbols"])
+        self.assertEqual(["005930"], result["factRevisionReasoningSymbols"])
+        self.assertEqual("fact-revision-first", result["investmentReasoningScheduling"])
+        self.assertEqual("fact-revision-first", events.published[-1].payload["importanceGate"])
+        self.assertEqual("advisory-priority-only", events.published[-1].payload["materialityRole"])
 
     def test_kis_market_signal_provider_preserves_fresh_websocket_ccnl_and_orderbook(self):
         cache = TestMarketQuoteCache(test_store_seed(self.temp.name))
@@ -6914,9 +6919,12 @@ class PythonServiceTests(unittest.TestCase):
         self.assertEqual(5, repeat["accountSavedCount"])
         self.assertEqual(3, repeat["changedCount"])
         self.assertEqual(0, repeat["materialChangedCount"])
-        self.assertEqual([], repeat["investmentReasoningSymbols"])
+        self.assertEqual(["AAPL", "TSLA", "MSFT"], repeat["investmentReasoningSymbols"])
+        self.assertEqual(["AAPL", "TSLA", "MSFT"], repeat["factRevisionReasoningSymbols"])
+        self.assertEqual("fact-revision-first", repeat["investmentReasoningScheduling"])
         self.assertEqual(3, repeat["immaterialChangedSymbolCount"])
-        self.assertEqual([MARKET_DATA_COLLECTED], [event.name for event in events.published])
+        self.assertEqual([MARKET_DATA_COLLECTED, ONTOLOGY_REASONING_REQUESTED], [event.name for event in events.published])
+        self.assertEqual(["AAPL", "MSFT", "TSLA"], events.published[-1].payload["symbols"])
 
     def test_market_data_collection_runner_collects_market_signal_proxies(self):
         db_path = test_store_seed(self.temp.name)

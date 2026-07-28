@@ -98,6 +98,27 @@ class TypeDBServiceManagerTests(unittest.TestCase):
         self.assertEqual("test-secret", spec["mysqlPassword"])
         self.assertEqual("'a\\\\b\\'c'", service_manager.mysql_sql_literal("a\\b'c"))
 
+    def test_mysql_schema_bootstrap_is_explicit_before_fast_workers_start(self):
+        spec = {
+            "label": "MySQL operational store",
+            "log": Path("/tmp/orbit-alpha-mysql-schema-bootstrap.log"),
+            "operationalSettings": {
+                "mysqlHost": "127.0.0.1",
+                "mysqlDatabase": "orbit_alpha",
+                "_skipOperationalSchemaBootstrap": "1",
+            },
+        }
+        with patch.object(service_manager, "MySQLOperationalConnection") as connection, \
+                patch.object(service_manager, "MySQLMonitorAccountJobStore") as monitor_store, \
+                patch.object(service_manager, "append_log"):
+            self.assertTrue(service_manager.ensure_mysql_operational_schema(spec))
+
+        connection.assert_called_once()
+        monitor_store.assert_called_once()
+        bootstrap_settings = connection.call_args.args[0]
+        self.assertEqual("1", bootstrap_settings["_skipOperationalHistoryRetention"])
+        self.assertNotIn("_skipOperationalSchemaBootstrap", bootstrap_settings)
+
 
 if __name__ == "__main__":
     unittest.main()

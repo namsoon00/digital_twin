@@ -506,10 +506,14 @@
     hypothesisWorkspaceLoading: false,
     hypothesisWorkspaceLoaded: false,
     hypothesisWorkspaceError: "",
+    hypothesisWorkspaceDetails: {},
+    hypothesisWorkspaceDetailLoading: {},
+    hypothesisWorkspaceDetailErrors: {},
     activeHypothesisLifecycleKey: "",
     hypothesisPolicySaving: "",
     hypothesisPolicyPreview: {},
     hypothesisPolicyVersions: null,
+    hypothesisPolicyVersionsLoading: false,
     hypothesisPolicyVersionsError: "",
     hypothesisReplay: null,
     hypothesisReplayLoading: false,
@@ -559,6 +563,7 @@
     ontologyStrategyDetailLoaded: false,
     ontologyStrategyDetailError: "",
     ontologyAudit: null,
+    ontologyAuditSections: {},
     ontologyAuditLoading: false,
     ontologyAuditLoaded: false,
     ontologyAuditError: "",
@@ -750,7 +755,11 @@
     }
   }
 
-  function sendJson(path, method, payload) {
+  function sendJson(path, method, payload, options) {
+    options = options || {};
+    var controller = typeof window.AbortController === "function" ? new window.AbortController() : null;
+    var timeoutMs = Math.max(1000, Number(options.timeoutMs || 30000));
+    var timeout = controller ? setTimeout(function () { controller.abort(); }, timeoutMs) : null;
     return fetch(path, {
       method: method,
       headers: {
@@ -758,12 +767,20 @@
         "Content-Type": "application/json"
       },
       cache: "no-store",
-      body: JSON.stringify(payload || {})
+      body: JSON.stringify(payload || {}),
+      signal: controller ? controller.signal : undefined
     }).then(function (response) {
       return response.json().then(function (body) {
         if (!response.ok) throw new Error(body.error || "요청 실패");
         return body;
       });
+    }).catch(function (error) {
+      if (error && error.name === "AbortError") {
+        throw new Error("작업 응답 시간이 초과되었습니다. 서버 작업이 완료됐을 수 있으니 상태를 새로고침해 확인하세요.");
+      }
+      throw error;
+    }).finally(function () {
+      if (timeout) clearTimeout(timeout);
     });
   }
 
@@ -2432,7 +2449,10 @@
   function loadNotificationJobDetail(jobId) {
     var key = String(jobId || "").trim();
     if (!key || state.notificationJobDetails[key] || isStaticPreviewHost()) return Promise.resolve();
-    return requestJson("/api/notification-jobs/" + encodeURIComponent(key), { key: "notification-job:" + key })
+    return requestJson("/api/notification-jobs/" + encodeURIComponent(key), {
+      key: "notification-job:" + key,
+      timeoutMs: 30000
+    })
       .then(function (payload) {
         var detail = payload && payload.job;
         if (!detail) return;
@@ -3543,10 +3563,14 @@
       render();
       return Promise.resolve();
     }
+    var directInvestmentTest = messageType === "investmentInsight";
+    var confirmation = directInvestmentTest
+      ? "실제 투자 인사이트 알림을 정책 우회로 발송합니다. 투자 판단과 별개인 테스트 메시지가 외부 채널에 전달됩니다. 계속할까요?"
+      : "테스트 알림이 실제 외부 채널에 전달됩니다. 계속할까요?";
+    if (!window.confirm(confirmation)) return Promise.resolve();
     state.notificationTemplateSending = messageType;
     state.notificationTemplatesError = "";
     render();
-    var directInvestmentTest = messageType === "investmentInsight";
     return sendJson("/api/notification-templates/test-send", "POST", { messageType: messageType, bypassPolicy: directInvestmentTest })
       .then(function (payload) {
         var event = payload.event || {};
@@ -3768,6 +3792,7 @@
       return Promise.resolve();
     }
     if (!id) return Promise.resolve();
+    if (!window.confirm("계정을 삭제하면 연결 정보와 계정별 관심 종목이 제거됩니다. 계속할까요?")) return Promise.resolve();
     state.serviceAccountsLoading = true;
     state.serviceAccountsError = "";
     render();
@@ -4294,6 +4319,7 @@
       render();
       return Promise.resolve(null);
     }
+    if (!window.confirm("TypeDB 온톨로지를 기본 RuleBox로 다시 시드하고 현재 추론 결과를 초기화합니다. 계속할까요?")) return Promise.resolve(null);
     state.ontologySeedRunning = true;
     state.ontologyRuleboxError = "";
     render();
@@ -4328,7 +4354,16 @@
   }
 
   function shouldLoadOntologyStrategyDetail() {
-    return state.activeTab === "modeling" || state.activeTab === "experiments";
+    var detail = state.workDetailLayer || {};
+    return [
+      "strategy-evidence-board",
+      "strategy-graphs-board",
+      "strategy-trace-board",
+      "strategy-trace-detail",
+      "experiment-validation-board",
+      "experiment-promotion-board",
+      "experiment-audit-board"
+    ].indexOf(String(detail.type || "")) >= 0;
   }
 
   function shouldLoadStrategyProposals() {
@@ -4353,7 +4388,7 @@
     state.ontologyStrategyDetailLoading = true;
     state.ontologyStrategyDetailError = "";
     if (state.snapshot) render();
-    return requestJson(tossLensPath({ detail: "full" }))
+    return requestJson(tossLensPath({ detail: "full" }), { key: "flow-lens-detail", timeoutMs: 30000 })
       .then(function (payload) {
         state.snapshot = payload;
         state.snapshotFromCache = false;
@@ -4380,6 +4415,12 @@
     if (String(filters.symbol || "").trim()) params.set("symbol", String(filters.symbol || "").trim().toUpperCase());
     appendOntologyAccountQuery(params);
     return "/api/ontology/audit?" + params.toString();
+  }
+
+  function ontologyAuditSectionPath(sectionId) {
+    var base = ontologyAuditPath();
+    var query = base.indexOf("?") >= 0 ? base.slice(base.indexOf("?")) : "";
+    return "/api/ontology/audit/" + encodeURIComponent(String(sectionId || "")) + query;
   }
 
   function activeOntologyAccountId() {
@@ -4514,6 +4555,7 @@
   function loadOntologyAudit(force) {
     if (isStaticPreviewHost()) {
       state.ontologyAudit = staticOntologyAuditPayload(state.snapshot || {});
+      state.ontologyAuditSections = {};
       state.ontologyAuditLoaded = true;
       state.ontologyAuditError = "";
       if (state.snapshot) render();
@@ -4527,6 +4569,7 @@
     return requestJson(ontologyAuditPath())
       .then(function (payload) {
         state.ontologyAudit = payload || {};
+        state.ontologyAuditSections = {};
         state.ontologyAuditLoaded = true;
         state.ontologyAuditError = "";
       })
@@ -4537,6 +4580,30 @@
         state.ontologyAuditLoading = false;
         if (state.snapshot) render();
       });
+  }
+
+  function loadOntologyAuditSection(sectionId) {
+    var key = String(sectionId || "").trim().toLowerCase();
+    if (!key || isStaticPreviewHost()) return Promise.resolve(state.ontologyAudit);
+    state.ontologyAuditLoading = true;
+    state.ontologyAuditError = "";
+    if (state.snapshot) render();
+    return requestJson(ontologyAuditSectionPath(key), {
+      key: "ontology-audit:" + key,
+      timeoutMs: 30000,
+      force: true
+    }).then(function (payload) {
+      var detailPayload = payload && typeof payload === "object" ? payload : {};
+      var section = detailPayload.sections && detailPayload.sections[key];
+      if (section && typeof section === "object") state.ontologyAuditSections[key] = section;
+      return detailPayload;
+    }).catch(function (error) {
+      state.ontologyAuditError = error.message || "온톨로지 감사 상세를 읽지 못했습니다.";
+      return null;
+    }).finally(function () {
+      state.ontologyAuditLoading = false;
+      if (state.snapshot) render();
+    });
   }
 
   function shouldLoadOntologyInferenceLedger() {
@@ -4659,6 +4726,9 @@
         return;
       }
     }
+    if (!window.confirm(seedDefaults
+      ? "기본 RuleBox를 TypeDB에 다시 시드하고 현재 추론 결과를 초기화합니다. 계속할까요?"
+      : "RuleBox 규칙을 TypeDB 운영 저장소에 반영하고 현재 추론 결과를 초기화합니다. 계속할까요?")) return;
     state.ontologyRuleboxSaving = true;
     state.ontologyRuleboxError = "";
     render();
@@ -5036,26 +5106,20 @@
       return Promise.resolve(state.hypothesisWorkspace);
     }
     if (state.hypothesisWorkspaceLoading && !force) return Promise.resolve(state.hypothesisWorkspace);
+    if (force) {
+      state.hypothesisWorkspaceDetails = {};
+      state.hypothesisWorkspaceDetailLoading = {};
+      state.hypothesisWorkspaceDetailErrors = {};
+    }
     state.hypothesisWorkspaceLoading = true;
     state.hypothesisWorkspaceError = "";
-    state.hypothesisPolicyVersionsError = "";
-    return Promise.all([
-      requestJson("/api/investment-brain/hypotheses?limit=100&eventLimit=100", {
-        key: "hypothesis-workspace",
-        force: Boolean(force)
-      }),
-      requestJson("/api/investment-brain/hypothesis-policy-versions?limit=20", {
-        key: "hypothesis-policy-versions",
-        force: Boolean(force)
-      }).catch(function (error) {
-        state.hypothesisPolicyVersionsError = error.message || "RuleBox 버전 이력을 읽지 못했습니다.";
-        return { status: "unavailable", versions: [] };
-      })
-    ])
-      .then(function (responses) {
-        var payload = responses[0];
+    return requestJson("/api/investment-brain/hypotheses?view=summary&limit=40", {
+      key: "hypothesis-workspace",
+      force: Boolean(force),
+      timeoutMs: 30000
+    })
+      .then(function (payload) {
         state.hypothesisWorkspace = payload && typeof payload === "object" ? payload : {};
-        state.hypothesisPolicyVersions = responses[1] && typeof responses[1] === "object" ? responses[1] : { versions: [] };
         state.hypothesisWorkspaceLoaded = true;
         syncActiveHypothesisLifecycleKey();
         return state.hypothesisWorkspace;
@@ -5068,6 +5132,56 @@
         state.hypothesisWorkspaceLoading = false;
         if (state.snapshot) render();
       });
+  }
+
+  function loadHypothesisPolicyVersions(force) {
+    if (isStaticPreviewHost()) {
+      state.hypothesisPolicyVersions = { status: "preview", versions: [] };
+      state.hypothesisPolicyVersionsError = "";
+      return Promise.resolve(state.hypothesisPolicyVersions);
+    }
+    if (state.hypothesisPolicyVersionsLoading && !force) return Promise.resolve(state.hypothesisPolicyVersions);
+    if (state.hypothesisPolicyVersions && !force) return Promise.resolve(state.hypothesisPolicyVersions);
+    state.hypothesisPolicyVersionsLoading = true;
+    state.hypothesisPolicyVersionsError = "";
+    render();
+    return requestJson("/api/investment-brain/hypothesis-policy-versions?limit=20", {
+      key: "hypothesis-policy-versions",
+      force: Boolean(force),
+      timeoutMs: 30000
+    }).then(function (payload) {
+      state.hypothesisPolicyVersions = payload && typeof payload === "object" ? payload : { versions: [] };
+      return state.hypothesisPolicyVersions;
+    }).catch(function (error) {
+      state.hypothesisPolicyVersionsError = error.message || "RuleBox 버전 이력을 읽지 못했습니다.";
+      return null;
+    }).finally(function () {
+      state.hypothesisPolicyVersionsLoading = false;
+      if (state.snapshot) render();
+    });
+  }
+
+  function loadHypothesisWorkspaceDetail(lifecycleKey) {
+    var key = String(lifecycleKey || "").trim();
+    if (!key || isStaticPreviewHost()) return Promise.resolve(null);
+    if (state.hypothesisWorkspaceDetails[key]) return Promise.resolve(state.hypothesisWorkspaceDetails[key]);
+    if (state.hypothesisWorkspaceDetailLoading[key]) return Promise.resolve(null);
+    state.hypothesisWorkspaceDetailLoading[key] = true;
+    state.hypothesisWorkspaceDetailErrors[key] = "";
+    render();
+    return requestJson("/api/investment-brain/hypotheses/" + encodeURIComponent(key), {
+      key: "hypothesis-workspace:" + key,
+      timeoutMs: 30000
+    }).then(function (payload) {
+      state.hypothesisWorkspaceDetails[key] = payload && typeof payload === "object" ? payload : {};
+      return state.hypothesisWorkspaceDetails[key];
+    }).catch(function (error) {
+      state.hypothesisWorkspaceDetailErrors[key] = error.message || "가설 상세를 읽지 못했습니다.";
+      return null;
+    }).finally(function () {
+      delete state.hypothesisWorkspaceDetailLoading[key];
+      if (state.snapshot) render();
+    });
   }
 
   function hypothesisLifecycleTone(stateValue) {
@@ -5159,6 +5273,7 @@
   }
 
   function hypothesisQualityForItem(item) {
+    if (item && item.qualityReview && typeof item.qualityReview === "object") return item.qualityReview;
     var payload = hypothesisWorkspacePayload();
     var review = payload.qualityReview && typeof payload.qualityReview === "object" ? payload.qualityReview : {};
     var key = String(item && item.lifecycleKey || "");
@@ -5200,6 +5315,19 @@
     ].join("");
   }
 
+  function hypothesisGovernanceWorkDetailPayload() {
+    var payload = hypothesisWorkspacePayload();
+    var body = state.hypothesisPolicyVersionsLoading
+      ? '<div class="work-detail-loading"><span class="spinner"></span><p>RuleBox 정책 버전 이력을 읽는 중입니다.</p></div>'
+      : renderHypothesisGovernancePanel(payload);
+    return editorWorkDetailPayload(
+      "Hypothesis Governance",
+      "가설 검증 운영",
+      "사후 결과 재생과 RuleBox 버전 관리를 별도 레이어에서 처리합니다.",
+      body
+    );
+  }
+
   function renderHypothesisPolicyVersions(rows, readOnly) {
     if (!rows.length) {
       return [
@@ -5230,7 +5358,6 @@
     var payload = hypothesisWorkspacePayload();
     var summary = payload.summary && typeof payload.summary === "object" ? payload.summary : {};
     var items = hypothesisWorkspaceItems();
-    var active = activeHypothesisWorkspaceItem();
     var outcomeCounts = summary.outcomeStateCounts && typeof summary.outcomeStateCounts === "object" ? summary.outcomeStateCounts : {};
     return [
       '<article class="panel hypothesis-workspace-panel">',
@@ -5242,6 +5369,7 @@
       '</div>',
       '<div class="settings-actions">',
       '<span class="tone-chip ' + escapeHtml(Number(summary.materialChangeCount || 0) ? "caution" : "hold") + '">' + escapeHtml(Number(summary.materialChangeCount || 0) ? summary.materialChangeCount + "건 변화" : "변화 없음") + '</span>',
+      renderWorkDetailButton("hypothesis-governance", "", "검증 운영", "text-button"),
       '<button class="text-button" type="button" data-action="refresh-hypothesis-workspace"' + (state.hypothesisWorkspaceLoading ? ' disabled' : '') + '>' + escapeHtml(state.hypothesisWorkspaceLoading ? "조회 중" : "새로고침") + '</button>',
       '</div>',
       '</div>',
@@ -5251,18 +5379,22 @@
       renderHypothesisMetric("지지됨", outcomeCounts.supported || 0, "사후 관측", Number(outcomeCounts.supported || 0) ? "watch" : "hold"),
       renderHypothesisMetric("반증됨", outcomeCounts.contradicted || 0, "사후 관측", Number(outcomeCounts.contradicted || 0) ? "danger" : "hold"),
       '</div>',
-      renderHypothesisGovernancePanel(payload),
       state.hypothesisWorkspaceError ? '<p class="form-error">' + escapeHtml(state.hypothesisWorkspaceError) + '</p>' : '',
       state.hypothesisWorkspaceLoading && !state.hypothesisWorkspaceLoaded ? '<div class="rule-strip"><span>TypeDB 가설 수명주기와 사후 관측을 읽는 중입니다.</span></div>' : '',
       '<div class="hypothesis-workspace-layout">',
-      renderHypothesisWorkspaceList(items, active),
-      renderHypothesisWorkspaceDetail(active),
+      renderHypothesisWorkspaceList(items),
+      '<section class="hypothesis-workspace-detail hypothesis-workspace-detail-placeholder">',
+      '<div class="hypothesis-workspace-empty">',
+      '<strong>가설을 선택해 상세 검토를 엽니다.</strong>',
+      '<span>목록은 상태와 변경 여부만 유지합니다. 근거, 사후 결과, 전이 이력, 정책 편집은 선택한 가설의 상세 리포트에서 확인합니다.</span>',
+      '</div>',
+      '</section>',
       '</div>',
       '</article>'
     ].join("");
   }
 
-  function renderHypothesisWorkspaceList(items, active) {
+  function renderHypothesisWorkspaceList(items) {
     if (!items.length) {
       return [
         '<section class="hypothesis-workspace-list">',
@@ -5277,7 +5409,6 @@
       '<section class="hypothesis-workspace-list" aria-label="가설 목록">',
       items.map(function (item) {
         var lifecycleKey = String(item.lifecycleKey || "");
-        var selected = active && String(active.lifecycleKey || "") === lifecycleKey;
         var outcome = item.outcomeAssessment && typeof item.outcomeAssessment === "object" ? item.outcomeAssessment : {};
         var meta = [
           item.scopeLabel || "가설",
@@ -5285,13 +5416,14 @@
           item.lastTransitionAt ? formatClock(item.lastTransitionAt) : ""
         ].filter(Boolean).join(" · ");
         return [
-          '<button class="hypothesis-workspace-card' + (selected ? " active" : "") + '" type="button" data-hypothesis-lifecycle-select="' + escapeHtml(lifecycleKey) + '">',
+          '<button class="hypothesis-workspace-card" type="button" data-work-detail="hypothesis-review" data-work-detail-key="' + escapeHtml(lifecycleKey) + '">',
           '<div class="hypothesis-workspace-card-top">',
           '<span class="tone-chip ' + escapeHtml(hypothesisLifecycleTone(item.state)) + '">' + escapeHtml(item.stateLabel || item.state || "관찰됨") + '</span>',
           '<span class="tone-chip ' + escapeHtml(hypothesisOutcomeTone(outcome.outcomeState)) + '">' + escapeHtml(outcome.outcomeStateLabel || "표본 부족") + '</span>',
           '</div>',
           '<strong>' + escapeHtml(item.symbol || "종목") + '</strong>',
           '<em>' + escapeHtml(meta || "현재 세대") + '</em>',
+          '<span class="hypothesis-workspace-card-action">상세 검토</span>',
           '</button>'
         ].join("");
       }).join(""),
@@ -5508,6 +5640,34 @@
     ].join("");
   }
 
+  function hypothesisReviewWorkDetailPayload(lifecycleKey) {
+    var key = String(lifecycleKey || "").trim();
+    var detail = state.hypothesisWorkspaceDetails[key] && typeof state.hypothesisWorkspaceDetails[key] === "object"
+      ? state.hypothesisWorkspaceDetails[key]
+      : null;
+    var loading = Boolean(state.hypothesisWorkspaceDetailLoading[key]);
+    var error = String(state.hypothesisWorkspaceDetailErrors[key] || "");
+    var item = detail && Array.isArray(detail.items) ? detail.items[0] : null;
+    var review = detail && detail.qualityReview && typeof detail.qualityReview === "object" ? detail.qualityReview : {};
+    if (item && Array.isArray(review.items)) {
+      item = Object.assign({}, item, {
+        qualityReview: review.items.filter(function (entry) {
+          return String(entry && entry.lifecycleKey || "") === String(item.lifecycleKey || "");
+        })[0] || null
+      });
+    }
+    return editorWorkDetailPayload(
+      "Hypothesis Review",
+      item ? ((item.symbol || "종목") + " 가설 검증") : "가설 검증 상세",
+      item ? "TypeDB 수명주기, 사후 관측, RuleBox 정책" : "선택한 가설만 상세 조회합니다.",
+      loading
+        ? '<div class="work-detail-loading"><span class="spinner"></span><p>가설 근거와 사후 결과를 읽는 중입니다.</p></div>'
+        : (error
+          ? '<p class="form-error">' + escapeHtml(error) + '</p>'
+          : (item ? renderHypothesisWorkspaceDetail(item) : '<div class="ontology-empty">표시할 가설 상세가 없습니다.</div>'))
+    );
+  }
+
   function hypothesisFormValue(form, name) {
     var field = form && form.querySelector('[name="' + name + '"]');
     return field ? String(field.value || "").trim() : "";
@@ -5622,6 +5782,7 @@
       showSnackbar(error.message || "정책 입력값을 확인하세요.", "caution");
       return;
     }
+    if (!window.confirm("검증한 가설 수명주기 정책을 새 RuleBox 버전으로 저장합니다. 다음 TypeDB 추론 세대부터 적용됩니다. 계속할까요?")) return;
     state.hypothesisPolicySaving = String(ruleId || "");
     state.hypothesisWorkspaceError = "";
     render();
@@ -5634,7 +5795,7 @@
       .then(function () {
         state.hypothesisPolicyPreview = {};
         showSnackbar("RuleBox 정책을 승인해 저장했습니다. 새 추론 세대에서만 정책을 읽습니다.");
-        return loadHypothesisWorkspace(true);
+        return Promise.all([loadHypothesisWorkspace(true), loadHypothesisPolicyVersions(true)]);
       })
       .catch(function (error) {
         state.hypothesisWorkspaceError = error.message || "RuleBox 정책을 승인하지 못했습니다.";
@@ -5661,7 +5822,7 @@
       .then(function () {
         state.hypothesisPolicyPreview = {};
         showSnackbar("RuleBox 이전 버전을 검증 후 복원했습니다.");
-        return loadHypothesisWorkspace(true);
+        return Promise.all([loadHypothesisWorkspace(true), loadHypothesisPolicyVersions(true)]);
       })
       .catch(function (error) {
         state.hypothesisWorkspaceError = error.message || "RuleBox 버전을 복원하지 못했습니다.";
@@ -5681,7 +5842,7 @@
     sendJson("/api/investment-brain/hypothesis-policy-versions/baseline", "POST", { author: "web-main" })
       .then(function (result) {
         showSnackbar(result && result.status === "unchanged" ? "이미 RuleBox 기준선 버전이 있습니다." : "현재 RuleBox 기준선 버전을 기록했습니다.");
-        return loadHypothesisWorkspace(true);
+        return Promise.all([loadHypothesisWorkspace(true), loadHypothesisPolicyVersions(true)]);
       })
       .catch(function (error) {
         state.hypothesisWorkspaceError = error.message || "RuleBox 기준선 버전을 기록하지 못했습니다.";
@@ -5762,6 +5923,7 @@
       showSnackbar("운영 반영 또는 폐기된 제안은 승인 상태로 되돌리지 않습니다.", "caution");
       return;
     }
+    if (!window.confirm("전략 제안을 승인 기록으로 남기고 운영 반영 후보 상태로 바꿉니다. 계속할까요?")) return;
     strategyProposalCommand(proposalId, "approve", "전략 제안을 승인했습니다.", {
       reviewedBy: "web-main",
       reviewReason: "웹 전략 제안 화면에서 수동 승인"
@@ -8829,6 +8991,16 @@
     if (state.workDetailLayer.type === "research-evidence") {
       loadResearchEvidenceDetail(state.workDetailLayer.key);
     }
+    if (state.workDetailLayer.type === "hypothesis-review") {
+      state.activeHypothesisLifecycleKey = state.workDetailLayer.key;
+      loadHypothesisWorkspaceDetail(state.workDetailLayer.key);
+    }
+    if (state.workDetailLayer.type === "hypothesis-governance") {
+      loadHypothesisPolicyVersions(false);
+    }
+    if (state.workDetailLayer.type === "ontology-audit-section") {
+      loadOntologyAuditSection(state.workDetailLayer.key);
+    }
     writeWorkDetailHistory(type, key);
     render();
   }
@@ -8952,7 +9124,9 @@
       "experiment-promotion-board",
       "experiment-audit-board",
       "experiment-proposals-board",
-      "ontology-audit-section"
+      "ontology-audit-section",
+      "hypothesis-review",
+      "hypothesis-governance"
     ];
     var largeDetails = [
       "today-work-queue",
@@ -9054,6 +9228,8 @@
     if (type === "strategy-model-policy-editor") return strategyModelPolicyWorkDetailPayload();
     if (type === "settings-investment-language") return investmentLanguageWorkDetailPayload();
     if (type === "strategy-trace-detail") return strategyTraceWorkDetailPayload(key);
+    if (type === "hypothesis-review") return hypothesisReviewWorkDetailPayload(key);
+    if (type === "hypothesis-governance") return hypothesisGovernanceWorkDetailPayload();
     if (type === "ontology-audit-section") return ontologyAuditSectionWorkDetailPayload(key);
     if (type === "ontology-audit-row") return ontologyAuditRowWorkDetailPayload(key);
     if (type === "notification-delivery-settings") return notificationDeliveryWorkDetailPayload();
@@ -11402,6 +11578,8 @@
   }
 
   function ontologyAuditSection(sectionId) {
+    var loaded = state.ontologyAuditSections && state.ontologyAuditSections[sectionId];
+    if (loaded && typeof loaded === "object") return loaded;
     var payload = ontologyAuditPayload();
     var sections = payload.sections || {};
     return sections[sectionId] || ontologyAuditClientSection(sectionId, sectionId, "", []);
@@ -11506,7 +11684,7 @@
 
   function renderOntologyAuditSectionCard(sectionId) {
     var section = ontologyAuditSection(sectionId);
-    var sampled = ontologyAuditPayload().summaryMode === "sampled";
+    var sampled = ontologyAuditPayload().summaryMode === "sampled" && !(state.ontologyAuditSections && state.ontologyAuditSections[sectionId]);
     var rows = Array.isArray(section.rows) ? section.rows : [];
     var visible = rows.slice(0, 5);
     return [
@@ -24355,6 +24533,35 @@
   function researchEvidenceImpactMeta(item) {
     item = item || {};
     var payload = item.payload && typeof item.payload === "object" ? item.payload : {};
+    var analysisStatus = String(item.analysisStatus || payload.analysisStatus || "").trim().toLowerCase();
+    var articleReadStatus = String(item.articleReadStatus || payload.articleReadStatus || "").trim().toLowerCase();
+    var pendingAnalysis = ["deferred", "pending", "missing", "error", "unavailable"].indexOf(analysisStatus) >= 0;
+    var fallbackAnalysis = analysisStatus === "fallback";
+    var feedSummaryOnly = ["feed-summary", "summary-only", "preview"].indexOf(articleReadStatus) >= 0;
+    if (pendingAnalysis || fallbackAnalysis || feedSummaryOnly) {
+      var stateLabel = pendingAnalysis
+        ? "분석 대기"
+        : (fallbackAnalysis ? "임시 분류" : "본문 확인 전");
+      var stateSummary = pendingAnalysis
+        ? "기사 본문 분석이 아직 완료되지 않았습니다. 영향 방향은 검증 전까지 판단하지 않습니다."
+        : (fallbackAnalysis
+          ? "임시 분류 결과입니다. 본문 분석이 완료되기 전까지 투자 판단 근거로 사용하지 않습니다."
+          : "피드 요약만 확보됐습니다. 기사 본문을 확인한 뒤에만 주가 영향 방향을 판단합니다.");
+      return {
+        tone: "hold",
+        label: stateLabel,
+        analysisStatus: analysisStatus || (feedSummaryOnly ? "feed-summary" : "pending"),
+        judgementEligible: false,
+        relevanceState: researchEvidenceState(item, "relevanceState", "context"),
+        relevanceLabel: newsStateSettingLabel("relevance", researchEvidenceState(item, "relevanceState", "context")),
+        materialityState: researchEvidenceState(item, "materialityState", "notable"),
+        materialityLabel: newsStateSettingLabel("materiality", researchEvidenceState(item, "materialityState", "notable")),
+        sourceTrustState: researchEvidenceState(item, "sourceTrustState", "standard"),
+        sourceTrustLabel: newsStateSettingLabel("trust", researchEvidenceState(item, "sourceTrustState", "standard")),
+        validationState: researchEvidenceState(item, "validationState", "conditional"),
+        summary: stateSummary
+      };
+    }
     var explicitPolarity = String(item.stockImpactPolarity || payload.stockImpactPolarity || "").toLowerCase();
     var hasExplicitImpact = ["risk", "support", "context", "mixed", "neutral"].indexOf(explicitPolarity) >= 0;
     var polarity = String(explicitPolarity || item.polarity || item.sentiment || item.direction || "").toLowerCase();
@@ -24382,6 +24589,8 @@
     return {
       tone: tone,
       label: label,
+      analysisStatus: analysisStatus || "ok",
+      judgementEligible: true,
       relevanceState: relevanceState,
       relevanceLabel: newsStateSettingLabel("relevance", relevanceState),
       materialityState: materialityState,

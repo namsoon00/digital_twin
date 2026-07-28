@@ -298,8 +298,14 @@ def confirmed_fact_lines(item: Dict[str, object]) -> List[str]:
     facts = article_facts(item)
     rows = []
     takeaway = bounded_text(facts.get("eventTakeaway"), 220)
-    if takeaway:
+    summary = item_summary(item)
+    if takeaway and not summary_texts_similar(takeaway, summary):
         rows.append(takeaway)
+    if not rows:
+        for sentence in article_fact_list(facts, "keySentences", 4):
+            if not summary_texts_similar(sentence, summary):
+                rows.append(sentence)
+                break
     numbers = article_fact_list(facts, "numbers", 3)
     if numbers:
         rows.append("본문 수치: " + ", ".join(numbers))

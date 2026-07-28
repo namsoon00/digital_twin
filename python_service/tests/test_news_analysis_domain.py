@@ -10,6 +10,7 @@ from digital_twin.domain.investment_research import NewsCollectionTarget, Resear
 from digital_twin.application.news_ai_analysis_service import int_setting
 from digital_twin.domain.news_analysis import (
     article_analysis_facts,
+    article_sentence_candidates,
     classify_news_relevance,
     classify_news_event_type,
     clean_article_body_text,
@@ -103,6 +104,112 @@ class NewsAnalysisDomainTests(unittest.TestCase):
         self.assertNotIn("확인된 수치", summary)
         self.assertEqual("needs-review", quality["state"])
         self.assertIn("summary-navigation-contamination", quality["issues"])
+
+    def test_korean_wire_article_prioritizes_target_merger_review_over_unrelated_company_noise(self):
+        target = NewsCollectionTarget("035420", "NAVER", "KOSPI", "KRW", "플랫폼")
+        title = '美 쿠팡 보고서에…주병기 "배민·네이버에도 같은 잣대"(종합) - 연합뉴스'
+        body = (
+            "[연합뉴스 자료사진. 재판매 및 DB 금지] (세종=연합뉴스) 김수현 기자 = "
+            "미국 측이 쿠팡 관련 조사를 비판한 데 대해 공정위는 쿠팡뿐 아니라 배달의민족, "
+            "네이버 등 플랫폼 사업자를 같은 잣대로 제재한다고 밝혔다. "
+            "이해진 네이버 이사회 의장이 행사에서 발언하고 있다. "
+            "[네이버 제공. 연합뉴스 자료사진. 재판매 및 DB 금지] "
+            "네이버와 두나무 합병 심사와 관련해선 \"연말 안에 완료할 수 있을 것\"이라고 전망했다. "
+            "주 위원장은 \"네이버에 관련 자료 요청을 13회나 했고, 관련 산업·이해 관계자 의견 청취도 "
+            "8월 말까지 상당 부분 완료된다\"며 연내 심사 완료 의지를 내비쳤다. "
+            "배민 3천억·쿠팡 600억 규모 상생안 퇴짜와 관련해선 법 위반이 중대했다고 설명했다."
+        )
+
+        cleaned = clean_article_body_text(body)
+        candidates = article_sentence_candidates(cleaned, target, {"eventType": "regulation"}, 5, headline=title)
+        summary = korean_article_summary(target, title, cleaned, "", {"eventType": "regulation"})
+        facts = article_analysis_facts(
+            target,
+            title,
+            cleaned,
+            "",
+            {"eventType": "regulation", "relationScope": "direct"},
+            source="연합뉴스",
+            read_status="body",
+        )
+
+        self.assertNotIn("재판매", cleaned)
+        self.assertNotIn("기자 =", cleaned)
+        self.assertEqual("regulation", classify_news_event_type(title, cleaned))
+        self.assertIn("합병 심사", candidates[0])
+        self.assertIn("자료 요청", " ".join(candidates))
+        self.assertNotIn("600억", " ".join(candidates))
+        self.assertIn("합병 심사", summary)
+        self.assertIn("자료 요청", summary)
+        self.assertNotIn("600억", summary)
+        self.assertNotIn("쿠팡 600억", facts["eventTakeaway"])
+        self.assertNotIn("600억", facts["numbers"])
+
+    def test_merger_review_status_guard_rejects_generic_guidance_summary(self):
+        target = NewsCollectionTarget("035420", "NAVER", "KOSPI", "KRW", "플랫폼")
+        title = '美 쿠팡 보고서에…주병기 "배민·네이버에도 같은 잣대"(종합) - 연합뉴스'
+        body = (
+            "[재판매 및 DB 금지] (세종=연합뉴스) 김수현 기자 = "
+            "공정위는 쿠팡뿐 아니라 배달의민족, 네이버 등 플랫폼 사업자를 같은 잣대로 제재한다고 밝혔다. "
+            "네이버와 두나무 합병 심사와 관련해선 \"연말 안에 완료할 수 있을 것\"이라고 전망했다. "
+            "주 위원장은 \"네이버에 관련 자료 요청을 13회나 했고 관련 산업·이해 관계자 의견 청취도 "
+            "8월 말까지 상당 부분 완료된다\"며 연내 심사 완료 의지를 내비쳤다. 쿠팡 600억 상생안도 언급됐다."
+        )
+        evidence = ResearchEvidence(
+            "research:035420:news:merger-review-status",
+            "035420",
+            "news",
+            "연합뉴스",
+            title,
+            title,
+            "https://example.test/naver-merger-review",
+            "2026-07-28T10:46:07Z",
+            "context",
+            published_at="2026-07-28T10:46:07Z",
+            raw_payload={
+                "name": "NAVER",
+                "market": "KOSPI",
+                "currency": "KRW",
+                "sector": "플랫폼",
+                "relationScope": "direct",
+                "eventType": "regulation",
+                "articleReadStatus": "body",
+                "articleText": body,
+                "articleFacts": {"bodyAvailable": True, "bodyQualityPassed": True},
+            },
+        )
+
+        local = local_news_ai_analysis(target, evidence).to_dict()
+        updated = apply_news_ai_analysis(evidence, {
+            "status": "ok",
+            "model": "test-external",
+            "eventType": "guidance",
+            "impactPolarity": "neutral",
+            "impactLabelKo": "중립",
+            "summary": {
+                "oneLineKo": "쿠팡 600억 상생안이 향후 매출 전망을 바꿉니다.",
+                "briefKo": "재판매 및 DB 금지] 쿠팡 600억 상생안으로 NAVER 매출 전망이 바뀝니다.",
+                "whyItMatters": "앞으로의 매출·이익 눈높이를 바꾸는 재료입니다.",
+                "watchPoints": ["실적 전망 변화"],
+            },
+            "keyNumbers": ["600억"],
+        })
+        prompt = json.loads(build_news_ai_analysis_prompt(target, updated))
+        analysis = updated.raw_payload["aiAnalysis"]
+        facts = updated.raw_payload["articleFacts"]
+
+        self.assertEqual("regulation", local["eventType"])
+        self.assertEqual("neutral", local["impactPolarity"])
+        self.assertIn("합병 심사", local["summary"]["briefKo"])
+        self.assertEqual("regulation", analysis["eventType"])
+        self.assertEqual("neutral", analysis["impactPolarity"])
+        self.assertIn("합병 심사", analysis["summary"]["briefKo"])
+        self.assertNotIn("600억", analysis["summary"]["briefKo"])
+        self.assertNotIn("재판매", analysis["summary"]["briefKo"])
+        self.assertNotIn("매출", analysis["summary"]["whyItMatters"])
+        self.assertEqual([], facts["numbers"])
+        self.assertNotIn("600억", prompt["article"]["targetRelevantBodyPreview"])
+        self.assertNotIn("재판매", prompt["article"]["bodyPreview"])
 
     def test_numeric_highlights_ignores_ranks_dates_and_b2b_labels(self):
         values = numeric_highlights("B2B 시장 1위는 26일 $700 billion 투자와 731조원 수주를 발표했다.")

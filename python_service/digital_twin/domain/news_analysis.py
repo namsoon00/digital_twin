@@ -5,9 +5,9 @@ from typing import Dict, Iterable, List, Tuple
 from .market_data import clamp, number
 
 
-NEWS_ANALYSIS_VERSION = "news-analysis-v6-context-safe-risk"
-ARTICLE_DIGEST_VERSION = "article-digest-ko-v4"
-ARTICLE_FACTS_VERSION = "article-facts-v3-content-boundary"
+NEWS_ANALYSIS_VERSION = "news-analysis-v7-target-scoped-summary"
+ARTICLE_DIGEST_VERSION = "article-digest-ko-v5-target-scoped"
+ARTICLE_FACTS_VERSION = "article-facts-v4-target-scoped"
 
 SUPPORT_KEYWORDS = (
     "beat",
@@ -370,6 +370,49 @@ REUTERS_BYLINE_RE = re.compile(
 MARKET_WIDGET_QUOTE_RE = re.compile(
     r"\b(?:[A-Z]{1,6}(?:=[A-Z])?|[A-Z]{2,10}-USD)\s+(?:(?:[A-Za-z][A-Za-z.&'-]*\s+){0,5})\d[\d,]*(?:\.\d+)?"
 )
+KOREAN_NEWS_RIGHTS_BLOCK_RE = re.compile(
+    r"\[[^\]\n]{0,180}(?:재판매\s*(?:및|·|/)?\s*DB\s*금지|무단전재\s*(?:및|·|/)?\s*재배포\s*금지)[^\]\n]{0,180}\]",
+    re.IGNORECASE,
+)
+KOREAN_NEWS_RIGHTS_FRAGMENT_RE = re.compile(
+    r"\[?\s*(?:재판매\s*(?:및|·|/)?\s*DB\s*금지|무단전재\s*(?:및|·|/)?\s*재배포\s*금지)\s*\]?",
+    re.IGNORECASE,
+)
+KOREAN_NEWS_BYLINE_RE = re.compile(
+    r"(?:^|\s)\((?:[^()\n]{1,40}=)?(?:연합뉴스|뉴스1|뉴시스|연합인포맥스)\)\s*[가-힣]{2,5}\s*기자\s*=\s*"
+)
+KOREAN_NEWS_LEADING_BYLINE_RE = re.compile(r"^\s*[가-힣]{2,5}\s*기자\s*=\s*")
+KOREAN_NEWS_CAPTION_MARKERS = ("자료사진", "왼쪽부터", "사진=", "제공 사진")
+TARGET_CONTEXT_REFERENCE_MARKERS = (
+    "뿐 아니라",
+    "뿐만 아니라",
+    "같은 잣대",
+    "동일한 잣대",
+    "등 플랫폼",
+    "등 기업",
+    "등 사업자",
+)
+TARGET_SPECIFIC_ACTION_MARKERS = (
+    "합병 심사",
+    "기업결합 심사",
+    "결합 심사",
+    "자료 요청",
+    "자료요청",
+    "의견 청취",
+    "의견청취",
+    "심사 완료",
+    "승인 조건",
+    "승인 결정",
+    "공시",
+    "계약",
+    "투자",
+    "실적 발표",
+    "제재 결정",
+    "조사 착수",
+)
+MERGER_REVIEW_MARKERS = ("합병 심사", "기업결합 심사", "결합 심사", "합병 승인")
+MERGER_REVIEW_STATUS_MARKERS = ("연내", "연말", "자료 요청", "자료요청", "의견 청취", "의견청취", "진행", "완료할 수", "예정")
+MERGER_REVIEW_OUTCOME_MARKERS = ("승인 결정", "불허", "불승인", "조건부 승인", "시정조치")
 
 NEWS_RELEVANCE_STATE_LABELS = {
     "direct": "종목 직접 관련",
@@ -706,9 +749,21 @@ def compact_text(value: object, limit: int = 220) -> str:
     return text
 
 
+def strip_korean_news_wire_noise(value: object) -> str:
+    """Remove Korean wire-service rights notices and leading reporter bylines."""
+    text = str(value or "")
+    if not text:
+        return ""
+    text = KOREAN_NEWS_RIGHTS_BLOCK_RE.sub(" ", text)
+    text = KOREAN_NEWS_RIGHTS_FRAGMENT_RE.sub(" ", text)
+    text = KOREAN_NEWS_BYLINE_RE.sub(" ", text)
+    text = KOREAN_NEWS_LEADING_BYLINE_RE.sub("", text)
+    return re.sub(r"\[\s*\]", " ", text)
+
+
 def clean_article_body_text(value: object, limit: int = 5000) -> str:
     """Remove publisher chrome and quote widgets from an extracted article body."""
-    text = INVISIBLE_ARTICLE_TEXT_RE.sub("", str(value or ""))
+    text = INVISIBLE_ARTICLE_TEXT_RE.sub("", strip_korean_news_wire_noise(value))
     text = compact_text(text, max(1, int(limit or 5000)))
     if not text:
         return ""
@@ -722,7 +777,7 @@ def clean_article_body_text(value: object, limit: int = 5000) -> str:
             continue
         if len(quote_matches) - index >= 2:
             return compact_text(text[:match.start()], limit)
-    return compact_text(text, limit)
+    return compact_text(strip_korean_news_wire_noise(text), limit)
 
 
 def contains_hangul(value: object) -> bool:
@@ -950,6 +1005,10 @@ def is_news_boilerplate_sentence(value: object) -> bool:
     lowered = _lower_text(value)
     if not lowered:
         return False
+    if re.search(r"(?:재판매\s*(?:및|·|/)?\s*db\s*금지|무단전재\s*(?:및|·|/)?\s*재배포\s*금지)", lowered):
+        return True
+    if re.match(r"^\s*(?:\([^)]{1,48}=(?:연합뉴스|뉴스1|뉴시스|연합인포맥스)\)\s*)?[가-힣]{2,5}\s*기자\s*=", str(value or "")):
+        return True
     if "google news" in lowered and any(token in lowered for token in ["comprehensive", "coverage", "aggregated", "all over the world"]):
         return True
     if "comprehensive up-to-date news coverage" in lowered:
@@ -1032,8 +1091,8 @@ def article_quality_gate(article_facts: Dict[str, object]) -> Dict[str, object]:
     }
 
 
-def strip_feed_summary_prefix(value: object) -> str:
-    text = compact_text(value, 1600)
+def strip_feed_summary_prefix(value: object, limit: int = 1600) -> str:
+    text = compact_text(value, max(1, int(limit or 1600)))
     return re.sub(r"^\s*(?:RSS/제공\s*요약|제공\s*요약|RSS\s*summary)\s*[:：]\s*", "", text, flags=re.IGNORECASE).strip()
 
 
@@ -1050,6 +1109,39 @@ def trim_repeated_headline_tail(sentence: object, headline: object = "") -> str:
     return re.sub(r"(?:평가는|관련|등은)$", "", text[:start].rstrip(" ,·:-")).rstrip()
 
 
+def is_article_caption_sentence(value: object) -> bool:
+    text = compact_text(value, 320)
+    lowered = _lower_text(text)
+    if any(marker in text for marker in KOREAN_NEWS_CAPTION_MARKERS):
+        return True
+    return bool(re.match(r"^(?:사진|그래픽|왼쪽부터)\b", lowered))
+
+
+def target_context_reference_sentence(value: object, target: object) -> bool:
+    """Detect a target named only as one member of a broad policy/company list."""
+    text = compact_text(value, 420)
+    lowered = _lower_text(text)
+    aliases = [alias for alias in target_aliases(target) if len(str(alias or "").strip()) >= 2]
+    if not aliases or not any(_keyword_in_lowered_text(alias, lowered) for alias in aliases):
+        return False
+    if any(_keyword_in_lowered_text(marker, lowered) for marker in TARGET_SPECIFIC_ACTION_MARKERS):
+        return False
+    if any(marker in lowered for marker in TARGET_CONTEXT_REFERENCE_MARKERS):
+        return True
+    for alias in aliases:
+        alias_text = _lower_text(alias)
+        if re.search(re.escape(alias_text) + r"\s*(?:등|에도|도)(?:\s|$|[,.])", lowered, re.IGNORECASE):
+            return True
+    return False
+
+
+def target_specific_action_sentence(value: object, target: object) -> bool:
+    lowered = _lower_text(value)
+    if not _target_mentioned_in_text(value, target):
+        return False
+    return any(_keyword_in_lowered_text(marker, lowered) for marker in TARGET_SPECIFIC_ACTION_MARKERS)
+
+
 def article_sentence_candidates(
     text: object,
     target: object,
@@ -1058,10 +1150,10 @@ def article_sentence_candidates(
     headline: object = "",
 ) -> List[str]:
     analysis = analysis if isinstance(analysis, dict) else {}
-    source_text = str(text or "")
+    source_text = clean_article_summary_noise(text, 5000)
     if not source_text.strip():
         return []
-    source_navigation_heavy = source_text.count("…") + source_text.count("...") >= 3
+    source_navigation_heavy = source_text.count("…") + source_text.count("...") >= 2
     raw_parts = re.split(r"(?<=[.!?。！？])\s+|\n+", source_text)
     terms = [
         *target_aliases(target),
@@ -1074,33 +1166,52 @@ def article_sentence_candidates(
         alias for alias in target_aliases(target)
         if len(str(alias or "").strip()) >= 2 and not str(alias or "").strip().isdigit()
     ]
-    ranked: List[Tuple[float, int, str, bool, bool]] = []
+    ranked: List[Tuple[float, int, str, bool, bool, bool, bool]] = []
     for index, raw in enumerate(raw_parts[:80]):
         raw_sentence = compact_text(raw, 420)
-        navigation_headline_run = raw_sentence.count("…") >= 2
+        navigation_headline_run = raw_sentence.count("…") + raw_sentence.count("...") >= 2
         sentence = trim_repeated_headline_tail(raw_sentence, headline)
         sentence = compact_text(sentence, 180)
         if len(sentence) < 24:
             continue
         if is_news_boilerplate_sentence(sentence):
             continue
+        if is_article_caption_sentence(sentence):
+            continue
         lowered = _lower_text(sentence)
         direct_target_hit = any(_keyword_in_lowered_text(alias, lowered) for alias in direct_aliases)
+        contextual_reference = target_context_reference_sentence(sentence, target)
+        target_action = target_specific_action_sentence(sentence, target)
         priority = max(0.0, 12.0 - index * 0.25)
         if direct_target_hit:
             priority += 12.0
+        if target_action:
+            priority += 16.0
+        if contextual_reference:
+            priority -= 18.0
+        if navigation_headline_run:
+            priority -= 14.0
         priority += sum(4.0 for term in terms if _keyword_in_lowered_text(term, lowered))
-        priority += min(8.0, len(numeric_highlights(sentence, 4)) * 2.0)
-        ranked.append((priority, index, sentence, direct_target_hit, navigation_headline_run))
+        if direct_target_hit and not contextual_reference:
+            priority += min(8.0, len(numeric_highlights(sentence, 4)) * 2.0)
+        ranked.append((priority, index, sentence, direct_target_hit, navigation_headline_run, contextual_reference, target_action))
     ranked.sort(key=lambda item: (-item[0], item[1]))
+    target_action_rows = [item for item in ranked if item[3] and item[6] and not item[4]]
+    direct_subject_rows = [item for item in ranked if item[3] and not item[4] and not item[5]]
+    if target_action_rows:
+        ranked = target_action_rows
+    elif direct_subject_rows:
+        ranked = direct_subject_rows
     if source_navigation_heavy:
-        direct_body_rows = [item for item in ranked if item[3] and not item[4]]
+        direct_body_rows = [item for item in ranked if item[3] and item[6] and not item[4]]
+        if not direct_body_rows:
+            direct_body_rows = [item for item in ranked if item[3] and not item[4] and not item[5]]
         if not direct_body_rows:
             direct_body_rows = [item for item in ranked if item[3]]
         if direct_body_rows:
             ranked = direct_body_rows
     result: List[str] = []
-    for _priority, _index, sentence, _direct_target_hit, _navigation_headline_run in ranked:
+    for _priority, _index, sentence, _direct_target_hit, _navigation_headline_run, _contextual_reference, _target_action in ranked:
         if sentence not in result:
             result.append(sentence)
         if len(result) >= limit:
@@ -1111,6 +1222,29 @@ def article_sentence_candidates(
     if is_news_boilerplate_sentence(fallback):
         return []
     return [fallback] if fallback else []
+
+
+def target_relevant_article_text(
+    target: object,
+    title: object,
+    article_text: object = "",
+    feed_summary: object = "",
+    analysis: Dict[str, object] = None,
+    limit: int = 1200,
+) -> str:
+    """Return a bounded set of factual sentences about the requested security."""
+    analysis = analysis if isinstance(analysis, dict) else {}
+    source = clean_article_summary_noise(article_text or feed_summary or title, 5000)
+    if not source:
+        return ""
+    candidates = article_sentence_candidates(
+        source,
+        target,
+        analysis,
+        4,
+        headline=title,
+    )
+    return compact_text(" ".join(candidates), max(1, int(limit or 1200))) or compact_text(source, limit)
 
 
 def clean_article_title(value: object) -> str:
@@ -1350,6 +1484,16 @@ def factual_english_article_summary_parts(
 ) -> List[str]:
     sentences = [clean_article_title(title)]
     sentences.extend(article_sentence_candidates(source_text, target, {"eventType": ""}, 3))
+    # A short follow-on sentence can use a pronoun rather than repeat the
+    # company name. Keep only bounded market/policy continuations, never a
+    # broad unrelated sentence from the same syndicated page.
+    for raw in re.split(r"(?<=[.!?。！？])\s+|\n+", str(source_text or "")):
+        sentence = compact_text(raw, 360)
+        lowered = _lower_text(sentence)
+        if not sentence or is_news_boilerplate_sentence(sentence) or sentence in sentences:
+            continue
+        if re.search(r"\bshares?\s+(?:were\s+)?little changed\b|\bbitcoin reserve policy\b|\breserve policy\s+remains?\b", lowered):
+            sentences.append(sentence)
     rows: List[str] = []
     seen = set()
     for sentence in sentences:
@@ -1424,7 +1568,7 @@ def korean_article_summary(
     )
     if sentences and contains_hangul(article_text_for_summary):
         sentence_text = join_korean_summary_parts(sentences)
-        summary_fact_text = str(title or "") + " " + sentence_text
+        summary_fact_text = sentence_text
         topics = detected_topic_labels(summary_fact_text)
         numbers = numeric_highlights(summary_fact_text)
         details = []
@@ -1451,14 +1595,26 @@ def korean_article_summary(
     )
 
 
-def article_event_takeaway(target: object, title: object, article_text: object = "", feed_summary: object = "") -> str:
+def article_event_takeaway(
+    target: object,
+    title: object,
+    article_text: object = "",
+    feed_summary: object = "",
+    analysis: Dict[str, object] = None,
+) -> str:
+    analysis = analysis if isinstance(analysis, dict) else {}
     text = strip_feed_summary_prefix(clean_article_summary_noise(
-        clean_article_body_text(article_text or feed_summary or title, 1600)
-    ))
+        clean_article_body_text(article_text or feed_summary or title, 5000),
+        5000,
+    ), 5000)
     title_text = clean_article_title(title)
     combined = title_text + " " + text
     lowered = _lower_text(combined)
     target_name = _target_name_for_summary(target)
+    if merger_review_context(title_text, text):
+        sentences = article_sentence_candidates(text or title_text, target, analysis, 1, headline=title_text)
+        if sentences:
+            return clean_article_summary_noise(sentences[0]).rstrip(".")
     stock_sale = re.search(
         r"(?:may|plans?\s+to|will)\s+sell\s+([$€£]?\d[\d,.]*(?:\.\d+)?\s?(?:billion|million|trillion|bn|mn|B|M)?)\s+(?:of\s+)?(?:its\s+)?(?:[A-Z]{1,6}\s+)?(?:stock|shares?)",
         combined,
@@ -1509,7 +1665,7 @@ def article_event_takeaway(target: object, title: object, article_text: object =
         return "비트코인·가상자산 가격 민감도가 핵심"
     if re.search(r"\bAI\b|artificial intelligence|gpu|data center|cloud|AI", combined, re.IGNORECASE):
         return "AI·데이터센터 수요가 실적 기대에 연결되는지 확인할 뉴스"
-    sentences = article_sentence_candidates(text or title_text, target, {}, 1)
+    sentences = article_sentence_candidates(text or title_text, target, analysis, 1, headline=title_text)
     if sentences:
         return clean_article_summary_noise(sentences[0]).rstrip(".")
     return target_name + " 투자 판단에 영향을 줄 수 있는 새 정보"
@@ -1527,6 +1683,8 @@ def impact_channel_text(event_type: object, text: object) -> str:
     if event == "product":
         return "제품 경쟁력과 실제 매출 전환 가능성을 확인해야 합니다"
     if event == "regulation":
+        if merger_review_context("", text):
+            return "심사 일정과 승인 조건은 거래 진행 가능성과 사업 통합 시점에 영향을 줄 수 있습니다"
         return "소송 비용, 사업 제약, 투자심리 악화로 연결될 수 있습니다"
     if event == "capital_policy":
         if re.search(r"repayment|상환|debt|전환사채", lowered):
@@ -1547,6 +1705,8 @@ def impact_channel_text(event_type: object, text: object) -> str:
 
 def impact_watch_text(impact: str, materiality_state: object, text: object) -> str:
     lowered = _lower_text(text)
+    if merger_review_context("", text):
+        return "공식 심사 결론과 승인 조건, 이해관계자 의견청취 진행 여부를 확인하세요"
     if impact == "positive":
         return "호재라면 가격 상승이 거래량 증가와 함께 이어지는지 확인하세요"
     if impact == "negative":
@@ -1569,7 +1729,8 @@ def stock_impact_analysis(
     analysis = analysis if isinstance(analysis, dict) else {}
     body_text = clean_article_body_text(article_text, 5000)
     feed_text = clean_article_summary_noise(feed_summary, 1600)
-    text = str(title or "") + " " + str(body_text or feed_text or "")
+    target_text = target_relevant_article_text(target, title, body_text, feed_text, analysis, 1600)
+    text = str(title or "") + " " + str(target_text or body_text or feed_text or "")
     detected_polarity = str(polarity or "").strip() or keyword_polarity(text)
     if detected_polarity == "support":
         impact = "positive"
@@ -1587,7 +1748,7 @@ def stock_impact_analysis(
     event_label = event_type_label(analysis.get("eventType") or classify_news_event_type(title, text))
     event_type = str(analysis.get("eventType") or classify_news_event_type(title, text))
     states = news_state_payload(analysis)
-    takeaway = article_event_takeaway(target, title, body_text, feed_text)
+    takeaway = article_event_takeaway(target, title, body_text, feed_text, analysis)
     channel = impact_channel_text(event_type, text)
     watch = impact_watch_text(impact, states["materialityState"], text)
     reason_parts = []
@@ -1671,6 +1832,8 @@ def article_analysis_facts(
         feed_text,
         analysis,
     )
+    key_sentences = article_sentence_candidates(source_text, target, analysis, 5, headline=title_text)
+    target_fact_text = " ".join(key_sentences)
     combined_text = title_text + " " + source_text
     states = news_state_payload({
         **analysis,
@@ -1700,7 +1863,7 @@ def article_analysis_facts(
         "relationScopeLabel": relation_scope_label(analysis.get("relationScope")),
         **states,
         "summaryKo": compact_text(summary_text, 760),
-        "eventTakeaway": compact_text(article_event_takeaway(target, title_text, body_text, feed_text), 260),
+        "eventTakeaway": compact_text(article_event_takeaway(target, title_text, body_text, feed_text, analysis), 260),
         "impactReasonKo": compact_text(stock_impact.get("stockImpactReasonKo") or "", 520),
         "stockImpact": str(stock_impact.get("stockImpact") or "").strip(),
         "stockImpactLabel": str(stock_impact.get("stockImpactLabel") or "").strip(),
@@ -1708,8 +1871,8 @@ def article_analysis_facts(
         "decisionInlineEligible": bool(stock_impact.get("decisionInlineEligible")),
         "decisionInlineReasonKo": compact_text(stock_impact.get("decisionInlineReasonKo") or "", 360),
         "topics": detected_topic_labels(combined_text, 6),
-        "numbers": numeric_highlights(source_text, 6),
-        "keySentences": article_sentence_candidates(source_text, target, analysis, 5),
+        "numbers": numeric_highlights(target_fact_text, 6),
+        "keySentences": key_sentences,
         "bodyPreview": compact_text(body_text, 700) if body_text else "",
         "feedSummaryPreview": compact_text(feed_text, 360) if feed_text else "",
         "missingBodyReason": article_missing_body_reason(status, body_text),
@@ -1751,9 +1914,27 @@ def keyword_polarity(text: object) -> str:
     return "context"
 
 
+def merger_review_context(title: object, summary: object = "") -> bool:
+    text = _lower_text(str(title or "") + " " + str(summary or ""))
+    if not any(marker in text for marker in MERGER_REVIEW_MARKERS):
+        return False
+    return any(marker in text for marker in ("심사", "공정위", "공정거래위원회", "당국", "승인"))
+
+
+def merger_review_status_update_context(title: object, summary: object = "") -> bool:
+    text = _lower_text(str(title or "") + " " + str(summary or ""))
+    if not merger_review_context(title, summary):
+        return False
+    if any(marker in text for marker in MERGER_REVIEW_OUTCOME_MARKERS):
+        return False
+    return any(marker in text for marker in MERGER_REVIEW_STATUS_MARKERS)
+
+
 def classify_news_event_type(title: object, summary: object = "") -> str:
     if employment_preference_survey_context(title, summary):
         return "general"
+    if merger_review_context(title, summary):
+        return "regulation"
     text = _lower_text(str(title or "") + " " + str(summary or ""))
     best = ("general", 0)
     for event_type, keywords in EVENT_TYPE_KEYWORDS.items():

@@ -8,8 +8,8 @@ from .investment_research import NewsCollectionTarget, ResearchEvidence
 from . import news_analysis as news_domain
 
 
-NEWS_AI_ANALYSIS_VERSION = "news-ai-analysis-v13-context-safe-risk"
-NEWS_AI_PROMPT_VERSION = "news-ai-prompt-v13-context-safe-risk"
+NEWS_AI_ANALYSIS_VERSION = "news-ai-analysis-v14-target-scoped-summary"
+NEWS_AI_PROMPT_VERSION = "news-ai-prompt-v14-target-scoped-summary"
 
 IMPACT_LABELS = {
     "support": "호재",
@@ -265,7 +265,7 @@ def summary_quality_payload(summary: object, source_text: object, target_name: o
         issues.append("summary-generic-template")
     if text.count("…") >= 3:
         issues.append("summary-navigation-contamination")
-    if re.search(r"(?:cookie|advertisement|subscribe|sign up|관련기사|무단전재|저작권)", text, re.IGNORECASE):
+    if re.search(r"(?:cookie|advertisement|subscribe|sign up|관련기사|무단전재|저작권|재판매\s*(?:및|·|/)?\s*db\s*금지|기자\s*=|자료사진)", text, re.IGNORECASE):
         issues.append("summary-boilerplate")
     source_numbers = normalized_numeric_values(source)
     summary_numbers = normalized_numeric_values(text)
@@ -539,18 +539,19 @@ def target_scoped_article_text(
     feed_summary: object,
     event_type: object = "",
 ) -> str:
-    """Keep navigation snippets from becoming stock-impact signals or AI input."""
+    """Keep unrelated article sections from becoming stock-impact signals or AI input."""
     primary_text = compact_text(body or feed_summary, 5000)
-    if not primary_text or not has_navigation_contamination(primary_text):
-        return primary_text
-    candidates = news_domain.article_sentence_candidates(
-        primary_text,
+    if not primary_text:
+        return ""
+    scoped_text = news_domain.target_relevant_article_text(
         target,
+        title,
+        primary_text,
+        "",
         {"eventType": str(event_type or "")},
-        4,
-        headline=title,
+        1200,
     )
-    return compact_text(" ".join(candidates), 1200) or primary_text
+    return scoped_text or primary_text
 
 
 @dataclass(frozen=True)
@@ -803,11 +804,19 @@ def impact_reason_text(
     support_hits: Iterable[str],
     contrast_hits: Iterable[str],
     key_numbers: Iterable[str],
+    source_text: object = "",
 ) -> str:
     event_label = news_domain.event_type_label(event_type)
     signals = signal_summary_text(risk_hits, support_hits, contrast_hits)
     numbers = unique_texts(key_numbers, 3)
     number_text = (" 확인 수치: " + ", ".join(numbers) + ".") if numbers else ""
+    if news_domain.merger_review_status_update_context("", source_text):
+        return compact_text(
+            target_name
+            + "의 합병 심사 일정 업데이트입니다. 승인 여부와 조건은 아직 확정되지 않아, 거래 진행 가능성과 사업 통합 시점만 확인하는 중립 정보로 봅니다."
+            + number_text,
+            520,
+        )
     if polarity == "risk":
         risk_rows = {str(item or "").casefold() for item in risk_hits or []}
         price_drop_prefix = "주가 하락과 " if risk_rows.intersection({"slide", "slides", "slid", "decline", "declines", "down", "drop", "drops", "falls", "fell", "plunge"}) else ""
@@ -819,8 +828,10 @@ def impact_reason_text(
     return compact_text(target_name + " 관련 새 정보지만 기사 안의 가격 방향성은 제한적입니다. " + event_label + " 관련 변화가 실제 수급 변화로 이어지는지 확인하는 근거로 봅니다." + number_text, 520)
 
 
-def portfolio_implication_text(target_name: str, polarity: str, event_type: str) -> str:
+def portfolio_implication_text(target_name: str, polarity: str, event_type: str, source_text: object = "") -> str:
     event_label = news_domain.event_type_label(event_type)
+    if news_domain.merger_review_status_update_context("", source_text):
+        return target_name + " 보유·관심 기준으로는 당장 방향성 근거보다 심사 일정과 승인 조건을 확인하는 정보에 가깝습니다."
     if polarity == "risk":
         return target_name + " 보유·관심 기준으로는 " + event_label + " 부담이 가격 하락이나 변동성 확대로 이어지는지 먼저 확인해야 합니다."
     if polarity == "support":
@@ -830,8 +841,10 @@ def portfolio_implication_text(target_name: str, polarity: str, event_type: str)
     return target_name + " 보유·관심 기준으로는 당장 방향성 근거보다 이벤트 확인용 정보에 가깝습니다."
 
 
-def action_boundary_text(polarity: str, read_scope: str) -> str:
+def action_boundary_text(polarity: str, read_scope: str, source_text: object = "") -> str:
     scope_note = "본문 기반" if read_scope == "body" else "제목/RSS 기반"
+    if news_domain.merger_review_status_update_context("", source_text):
+        return scope_note + " 확인 신호입니다. 심사 결과와 승인 조건이 공식 발표되기 전까지 투자 방향을 단정하지 않습니다."
     if polarity == "risk":
         return scope_note + " 경계 신호입니다. 자동 매매 판단이 아니라 다음 장 가격, 거래량, 반대 뉴스 확인 조건입니다."
     if polarity == "support":
@@ -841,7 +854,13 @@ def action_boundary_text(polarity: str, read_scope: str) -> str:
     return scope_note + " 확인 신호입니다. 투자 방향을 단정하지 않고 후속 가격·거래량 반응만 점검합니다."
 
 
-def validation_reason_text(read_scope: str, relation_scope: str, risk_hits: Iterable[str], support_hits: Iterable[str]) -> str:
+def validation_reason_text(
+    read_scope: str,
+    relation_scope: str,
+    risk_hits: Iterable[str],
+    support_hits: Iterable[str],
+    source_text: object = "",
+) -> str:
     parts = []
     parts.append("본문을 읽음" if read_scope == "body" else "본문 미확보")
     if relation_scope:
@@ -850,6 +869,8 @@ def validation_reason_text(read_scope: str, relation_scope: str, risk_hits: Iter
         parts.append("방향 키워드 확인")
     else:
         parts.append("방향 키워드 약함")
+    if news_domain.merger_review_status_update_context("", source_text):
+        parts.append("심사 일정은 승인·불허 결론과 구분")
     return ", ".join(parts)
 
 
@@ -895,6 +916,43 @@ def employment_preference_survey_analysis_guard(
     return guarded
 
 
+def merger_review_status_analysis_guard(
+    analysis: Dict[str, object],
+    title: object,
+    source_text: object,
+    fallback: NewsAiAnalysis,
+) -> Dict[str, object]:
+    """Keep a review-timeline update distinct from guidance or an approval outcome."""
+    if not news_domain.merger_review_status_update_context(title, source_text):
+        return analysis
+    guarded = dict(analysis or {})
+    fallback_summary = dict(fallback.summary or {})
+    limitations = unique_texts([
+        *(guarded.get("reasoningLimitations") or []),
+        "합병 심사 일정은 승인·불허 결론과 구분",
+    ], 5)
+    guarded.update({
+        "eventType": "regulation",
+        "impactPolarity": "neutral",
+        "impactLabelKo": "중립",
+        "decisionInlineEligible": False,
+        "decisionInlineReasonKo": "합병 심사 일정 업데이트이며 승인 여부나 조건이 확정된 사건은 아닙니다.",
+        "summary": fallback_summary,
+        "riskSignals": [],
+        "supportSignals": [],
+        "contrastSignals": [],
+        "keyNumbers": list(fallback.key_numbers or []),
+        "rationaleKo": fallback.rationale_ko,
+        "impactReasonKo": fallback.impact_reason_ko,
+        "portfolioImplicationKo": fallback.portfolio_implication_ko,
+        "actionBoundaryKo": fallback.action_boundary_ko,
+        "validationReasonKo": fallback.validation_reason_ko,
+        "needsReview": bool(fallback.needs_review),
+        "reasoningLimitations": limitations,
+    })
+    return guarded
+
+
 def local_news_ai_analysis(target: NewsCollectionTarget, evidence: ResearchEvidence) -> NewsAiAnalysis:
     payload = analysis_payload_from_evidence(evidence)
     facts = article_facts(payload)
@@ -917,6 +975,8 @@ def local_news_ai_analysis(target: NewsCollectionTarget, evidence: ResearchEvide
     event_type = existing_event_type
     if has_navigation_contamination(body or feed_summary):
         event_type = str(news_domain.classify_news_event_type(title, source_text) or existing_event_type)
+    if news_domain.merger_review_context(title, scoped_article_text):
+        event_type = "regulation"
     polarity, risk_hits, support_hits, contrast_hits = infer_impact_polarity(source_text)
     employment_survey = news_domain.employment_preference_survey_context(title, raw_source_text)
     if employment_survey:
@@ -958,13 +1018,26 @@ def local_news_ai_analysis(target: NewsCollectionTarget, evidence: ResearchEvide
         "eventType": event_type,
         **states,
     }
-    article_summary = news_domain.korean_article_summary(target, title, body, feed_summary, analysis_context)
-    article_takeaway = news_domain.article_event_takeaway(target, title, scoped_article_text)
+    article_source_is_korean = news_domain.contains_hangul(body or feed_summary or title)
+    article_summary = news_domain.korean_article_summary(
+        target,
+        title,
+        scoped_article_text if article_source_is_korean else (body or scoped_article_text),
+        "",
+        analysis_context,
+    )
+    article_takeaway = news_domain.article_event_takeaway(
+        target,
+        title,
+        scoped_article_text if article_source_is_korean else (body or scoped_article_text),
+        "",
+        analysis_context,
+    )
     signal_text = signal_summary_text(risk_hits, support_hits, contrast_hits)
-    impact_reason = impact_reason_text(target_name, polarity, event_type, risk_hits, support_hits, contrast_hits, key_numbers)
-    portfolio_implication = portfolio_implication_text(target_name, polarity, event_type)
-    action_boundary = action_boundary_text(polarity, read_scope)
-    validation_reason = validation_reason_text(read_scope, relation_scope, risk_hits, support_hits)
+    impact_reason = impact_reason_text(target_name, polarity, event_type, risk_hits, support_hits, contrast_hits, key_numbers, source_text)
+    portfolio_implication = portfolio_implication_text(target_name, polarity, event_type, source_text)
+    action_boundary = action_boundary_text(polarity, read_scope, source_text)
+    validation_reason = validation_reason_text(read_scope, relation_scope, risk_hits, support_hits, source_text)
     if polarity == "risk":
         one_line = article_takeaway or target_name + " 기사에서 위험 신호가 더 강하게 확인됩니다."
         fallback_brief = impact_reason
@@ -977,16 +1050,22 @@ def local_news_ai_analysis(target: NewsCollectionTarget, evidence: ResearchEvide
     else:
         one_line = article_takeaway or target_name + " 관련 새 정보지만 방향성은 중립입니다."
         fallback_brief = impact_reason
-    source_is_korean = news_domain.contains_hangul(body or feed_summary or title)
+    source_is_korean = article_source_is_korean
     article_language = source_language(title + " " + (body or feed_summary))
     brief_source = (article_summary if source_is_korean else article_takeaway) or article_summary
     brief = compact_text(brief_source, 520) or fallback_brief
     takeaways = summary_sentence_candidates(article_summary)[1:4] if source_is_korean else []
-    watch_points = [news_domain.impact_watch_text(
-        STOCK_IMPACT_VALUES.get(polarity, "neutral"),
-        states["materialityState"],
-        source_text,
-    )]
+    if news_domain.merger_review_status_update_context(title, scoped_article_text):
+        watch_points = [
+            "공정위의 심사 결론과 승인 조건",
+            "이해관계자 의견청취 완료와 연내 심사 일정",
+        ]
+    else:
+        watch_points = [news_domain.impact_watch_text(
+            STOCK_IMPACT_VALUES.get(polarity, "neutral"),
+            states["materialityState"],
+            source_text,
+        )]
     if read_scope != "body":
         watch_points.insert(0, "원문 본문 확보")
     if event_type in {"earnings", "guidance"}:
@@ -1057,6 +1136,11 @@ def local_news_ai_analysis(target: NewsCollectionTarget, evidence: ResearchEvide
             employment_preference_survey_analysis_guard(result.to_dict(), title, raw_source_text),
             result,
         )
+    if news_domain.merger_review_status_update_context(title, scoped_article_text):
+        return normalize_ai_analysis(
+            merger_review_status_analysis_guard(result.to_dict(), title, scoped_article_text, result),
+            result,
+        )
     return result
 
 
@@ -1106,24 +1190,38 @@ def apply_news_ai_analysis(evidence: ResearchEvidence, analysis_payload: Dict[st
                 cleaned_facts[key] = news_domain.clean_article_body_text(value, limit)
         payload["articleFacts"] = cleaned_facts
     original_facts = article_facts(payload)
-    payload["articleSourceSummary"] = compact_text(
+    payload["articleSourceSummary"] = news_domain.clean_article_body_text(
         payload.get("articleSourceSummary")
         or original_facts.get("feedSummaryPreview")
         or payload.get("normalizedSummary")
         or evidence.summary,
         1600,
     )
-    fallback = local_news_ai_analysis(
-        NewsCollectionTarget(evidence.symbol, evidence.symbol),
-        evidence,
+    analysis_target = NewsCollectionTarget(
+        evidence.symbol,
+        str(payload.get("name") or payload.get("companyName") or evidence.symbol),
+        str(payload.get("market") or ""),
+        str(payload.get("currency") or ""),
+        str(payload.get("sector") or ""),
     )
+    fallback = local_news_ai_analysis(analysis_target, evidence)
     analysis = normalize_ai_analysis(analysis_payload, fallback)
     analysis_dict = analysis.to_dict()
     title, body, feed_summary, _read_scope = article_text_parts(evidence)
     employment_survey = news_domain.employment_preference_survey_context(title, body or feed_summary)
+    scoped_article_text = target_scoped_article_text(
+        analysis_target,
+        title,
+        body,
+        feed_summary,
+        analysis_dict.get("eventType") or payload.get("eventType"),
+    )
     if employment_survey:
         analysis_dict = employment_preference_survey_analysis_guard(analysis_dict, title, body or feed_summary)
         payload["eventType"] = "general"
+    elif news_domain.merger_review_status_update_context(title, scoped_article_text):
+        analysis_dict = merger_review_status_analysis_guard(analysis_dict, title, scoped_article_text, fallback)
+        payload["eventType"] = "regulation"
     summary = analysis_dict.get("summary") if isinstance(analysis_dict.get("summary"), dict) else {}
     impact_polarity = str(analysis_dict.get("impactPolarity") or "neutral")
     article_facts_payload = article_facts(payload)
@@ -1205,7 +1303,7 @@ def apply_news_ai_analysis(evidence: ResearchEvidence, analysis_payload: Dict[st
     payload["articleSummaryKo"] = summary.get("briefKo") or summary.get("oneLineKo") or payload.get("articleSummaryKo") or evidence.summary
     payload["articleSummaryQuality"] = summary_quality_payload(
         payload["articleSummaryKo"],
-        " ".join(part for part in [title, body or feed_summary] if part),
+        " ".join(part for part in [title, scoped_article_text or body or feed_summary] if part),
         payload.get("name") or evidence.symbol,
     )
     payload["summaryQualityState"] = payload["articleSummaryQuality"].get("state") or "needs-review"
@@ -1317,7 +1415,6 @@ def build_news_ai_analysis_prompt(target: NewsCollectionTarget, evidence: Resear
     payload = analysis_payload_from_evidence(evidence)
     facts = article_facts(payload)
     title, body, feed_summary, read_scope = article_text_parts(evidence)
-    navigation_heavy = has_navigation_contamination(body or feed_summary)
     scoped_article_text = target_scoped_article_text(
         target,
         title,
@@ -1325,14 +1422,8 @@ def build_news_ai_analysis_prompt(target: NewsCollectionTarget, evidence: Resear
         feed_summary,
         payload.get("eventType") or facts.get("eventType"),
     )
-    prompt_body = body
-    prompt_feed_summary = feed_summary
-    if navigation_heavy:
-        if body:
-            prompt_body = scoped_article_text
-            prompt_feed_summary = ""
-        else:
-            prompt_feed_summary = scoped_article_text
+    prompt_body = scoped_article_text if body else ""
+    prompt_feed_summary = "" if body else scoped_article_text
     # Rebuild derived fields from the bounded text. Older rows can retain
     # publisher chrome in articleFacts even when the primary body is clean.
     prompt_analysis = {
@@ -1400,6 +1491,7 @@ def build_news_ai_analysis_prompt(target: NewsCollectionTarget, evidence: Resear
         "guardrails": [
             "Do not create buy, sell, add, trim, or hold decisions.",
             "Use only the provided title, feed summary, body preview, and existing metadata.",
+            "Use targetRelevantBodyPreview as the factual boundary for target-specific claims, keyNumbers, and stock impact. Ignore an unrelated company, amount, or policy quote elsewhere in a syndicated article.",
             "Preserve article.originalTitle exactly. For English titles, produce translatedTitleKo as a faithful Korean headline, not a stock recommendation.",
             "summary.oneLineKo and summary.briefKo must summarize article facts first; keep stock impact reasoning in rationaleKo.",
             "summary.briefKo must state who did what, the material number or condition when present, and why the event matters; do not merely name an event category.",
@@ -1408,7 +1500,9 @@ def build_news_ai_analysis_prompt(target: NewsCollectionTarget, evidence: Resear
             "watchPoints must name a measurable follow-up such as an official filing, guidance number, price reaction, or volume confirmation. Avoid generic phrases when a specific condition is available.",
             "Write the Korean summary as complete natural sentences. Do not repeat the title, source name, relation status, or phrases such as 확인할 뉴스, 관련 뉴스입니다, 핵심 내용은.",
             "Never invent a number, company action, counterparty, or date. Omit uncertain details rather than guessing.",
+            "Never include publisher rights notices, photo credits, reporter bylines, or navigation headlines in any summary field.",
             "Do not use generic sector templates such as AI/data-center demand unless that fact is present in the title, feed summary, or body preview.",
+            "A merger-review timeline, data request, or stakeholder-hearing update is a regulatory-process status. Do not call it guidance, revenue or earnings change, approval, or rejection unless the target-specific text explicitly says so.",
             "If the body is missing, set dataState to partial and validationState to conditional.",
             "A phrase such as 실적 by itself is not positive; 실적 우려, 붕괴, 하락, 덮은 are risk context.",
             "Ignore newsletter or CTA boilerplate such as Never miss important updates, Simply Wall St tools, make better investment decisions, and cut through noise.",
@@ -1427,6 +1521,7 @@ def build_news_ai_analysis_prompt(target: NewsCollectionTarget, evidence: Resear
             "title": title,
             "feedSummary": prompt_feed_summary,
             "bodyPreview": prompt_body,
+            "targetRelevantBodyPreview": scoped_article_text,
             "readScope": read_scope,
             "source": evidence.source,
             "url": evidence.url,

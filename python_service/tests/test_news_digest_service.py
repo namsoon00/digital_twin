@@ -1,7 +1,7 @@
 import unittest
 from types import SimpleNamespace
 
-from digital_twin.application.news_digest_service import NewsDigestEnqueuer, item_summary
+from digital_twin.application.news_digest_service import NewsDigestEnqueuer, confirmed_fact_lines, item_summary
 from digital_twin.application.notification_service import DisclosureAnalysisNotificationEnricher
 from digital_twin.domain.accounts import AccountConfig
 from digital_twin.domain.events import DomainEvent, RESEARCH_EVIDENCE_COLLECTED
@@ -101,6 +101,31 @@ class NewsDigestEnqueuerTests(unittest.TestCase):
             queue=queue,
             settings={},
         )
+
+    def test_confirmed_facts_use_a_distinct_target_sentence_when_takeaway_matches_summary(self):
+        item = {
+            "kind": "news",
+            "summary": "공정위가 네이버와 두나무 합병 심사를 연내 마무리할 수 있다고 밝혔다.",
+            "payload": {
+                "aiAnalysis": {
+                    "summary": {
+                        "briefKo": "공정위가 네이버와 두나무 합병 심사를 연내 마무리할 수 있다고 밝혔다.",
+                    },
+                },
+                "articleFacts": {
+                    "eventTakeaway": "공정위가 네이버와 두나무 합병 심사를 연내 마무리할 수 있다고 밝혔다.",
+                    "keySentences": [
+                        "공정위가 네이버와 두나무 합병 심사를 연내 마무리할 수 있다고 밝혔다.",
+                        "네이버에 자료를 13회 요청했고 이해관계자 의견청취도 8월 말까지 진행한다.",
+                    ],
+                    "numbers": [],
+                },
+            },
+        }
+
+        lines = confirmed_fact_lines(item)
+
+        self.assertEqual(["네이버에 자료를 13회 요청했고 이해관계자 의견청취도 8월 말까지 진행한다."], lines)
 
     def test_enqueues_news_digest_with_short_source_link(self):
         queue = MemoryNotificationQueue()

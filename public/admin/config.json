@@ -13,7 +13,7 @@
     "공유 미리보기에서는 서버 설정과 계정 DB 쓰기를 차단합니다."
   ],
   "localData": {
-    "generatedAt": "2026-07-27T12:27:17.505325Z",
+    "generatedAt": "2026-07-28T23:22:10.368774Z",
     "sources": {
       "settings": "data/settings.json",
       "settingsExists": true
@@ -1807,6 +1807,13 @@
           "unit": "seconds"
         },
         {
+          "key": "ontologyReasoningTimeoutRecoveryRetrySeconds",
+          "label": "종료 워커 잠금 회수 후 빠른 재시도",
+          "type": "number",
+          "default": "30",
+          "unit": "seconds"
+        },
+        {
           "key": "ontologyProjectionAuditStaleAfterSeconds",
           "label": "중단 투영 감사 정리 기준(0=자동)",
           "type": "number",
@@ -2727,5 +2734,5 @@
       ]
     }
   ],
-  "buildId": "8e7e911feb8c"
+  "buildId": "dbc3a21a4333"
 }

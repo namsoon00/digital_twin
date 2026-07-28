@@ -384,6 +384,29 @@ class OntologyReasoningScheduler:
                 "deferredReason": "이전 로컬 추론 워커 종료 유예를 확인한 뒤 영속 작업 lease를 회수합니다.",
                 "mailboxOrphanLeaseRecovery": recovery,
             }
+        preflight = {}
+        preflight_check = getattr(self.runner, "isolated_execution_preflight", None)
+        if callable(preflight_check):
+            try:
+                preflight = dict(preflight_check() or {})
+            except Exception as error:  # noqa: BLE001 - the child remains the authoritative scheduler path.
+                preflight = {"ready": True, "status": "preflight-error", "reason": str(error)[:180]}
+        if preflight and not bool(preflight.get("ready", True)):
+            return {
+                "status": str(preflight.get("status") or "deferred"),
+                "processedCount": 0,
+                "alertCount": 0,
+                "retryAfterSeconds": max(
+                    1,
+                    int(preflight.get("retryAfterSeconds") or self.interval_seconds),
+                ),
+                "deferredReason": str(
+                    preflight.get("reason")
+                    or "TypeDB 투영 경계를 확인한 뒤 추론 워커를 다시 시작합니다."
+                )[:220],
+                "isolatedExecutionPreflight": preflight,
+                **({"mailboxOrphanLeaseRecovery": recovery} if recovery else {}),
+            }
         current_environment = dict(getattr(self.isolated_cycle, "environment", {}) or {})
         current_environment["ONTOLOGY_REASONING_WORKER_ID"] = self.worker_id
         self.isolated_cycle.environment = current_environment

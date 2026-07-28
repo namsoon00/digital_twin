@@ -1640,6 +1640,18 @@ class TypeDBOntologyRepositoryTests(unittest.TestCase):
         self.assertEqual([call("")], recover.call_args_list[:1])
         self.assertEqual([call(world_id)], recover.call_args_list[1:])
 
+    def test_projection_coordinator_recovery_checks_only_the_global_writer_world(self):
+        repository = TypeDBOntologyGraphRepository("127.0.0.1:1729")
+        with patch.object(
+            repository,
+            "recover_dead_local_scoped_abox_write_lease",
+            return_value={"status": "cleared", "worldId": TYPEDB_PROJECTION_COORDINATOR_WORLD_ID},
+        ) as recover:
+            result = repository.recover_dead_projection_coordinator_lease()
+
+        self.assertEqual("cleared", result["status"])
+        recover.assert_called_once_with(TYPEDB_PROJECTION_COORDINATOR_WORLD_ID)
+
     def test_scoped_abox_write_lease_local_recovery_does_not_steal_live_or_legacy_owner(self):
         repository = TypeDBOntologyGraphRepository("127.0.0.1:1729")
         live = {

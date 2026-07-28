@@ -646,6 +646,7 @@ def settings_status_payload() -> Dict[str, object]:
         "ontologyReasoningExecutionTimeoutSeconds",
         "ontologyReasoningExecutionTimeoutGraceSeconds",
         "ontologyReasoningExecutionTimeoutBackoffSeconds",
+        "ontologyReasoningTimeoutRecoveryRetrySeconds",
         "ontologyProjectionAuditStaleAfterSeconds",
         "ontologyReasoningMaintenanceEnabled",
         "ontologyReasoningMaintenanceIntervalSeconds",

@@ -568,6 +568,8 @@ class OntologyReasoningRunner:
         mailbox_store=None,
         queue_health_service=None,
         projection_coordinator_probe: Callable = None,
+        projection_lease_recovery: Callable = None,
+        projection_coordinator_lease_recovery: Callable = None,
     ):
         self.event_reader = event_reader
         self.cursor_store = cursor_store
@@ -584,6 +586,8 @@ class OntologyReasoningRunner:
         self.mailbox_store = mailbox_store
         self.queue_health_service = queue_health_service
         self.projection_coordinator_probe = projection_coordinator_probe
+        self.projection_lease_recovery = projection_lease_recovery
+        self.projection_coordinator_lease_recovery = projection_coordinator_lease_recovery
 
     def enabled(self) -> bool:
         return truthy(self.settings.get("ontologyReasoningEnabled"), True)
@@ -2516,6 +2520,137 @@ class OntologyReasoningRunner:
             if key in allowed and item not in (None, "", [], {})
         }
 
+    def recover_dead_projection_leases(self) -> Dict[str, object]:
+        """Reclaim only TypeDB leases whose local owner is proven dead.
+
+        The isolated scheduler can terminate a child while it owns a durable
+        TypeDB coordinator or world lease.  A normal lease expiry is much
+        longer than the child timeout, so waiting for expiry turns one failed
+        cycle into a queue-wide stall.  The infrastructure probe verifies the
+        host and PID before deleting anything; this application service only
+        records a bounded operational summary.
+        """
+        if not callable(self.projection_lease_recovery):
+            return {"status": "not-configured", "clearedCount": 0}
+        try:
+            raw = self.projection_lease_recovery()
+        except Exception as error:  # noqa: BLE001 - recovery must not hide the timeout incident.
+            return {
+                "status": "error",
+                "clearedCount": 0,
+                "reason": str(error)[:180],
+            }
+        value = dict(raw or {}) if isinstance(raw, dict) else {"status": "invalid"}
+        cleared_worlds = [
+            str(item or "")
+            for item in value.get("clearedWorldIds") or []
+            if str(item or "").strip()
+        ]
+        return {
+            "status": str(value.get("status") or "unknown"),
+            "clearedCount": max(0, int(float_value(value.get("clearedCount"), 0.0))),
+            "clearedWorldIds": cleared_worlds[:20],
+            "worldCount": max(0, int(float_value(value.get("worldCount"), 0.0))),
+            "reason": str(value.get("reason") or "")[:180],
+        }
+
+    def recover_dead_projection_coordinator_lease(self) -> Dict[str, object]:
+        """Recover just the global TypeDB writer lease when it is provably stale.
+
+        The scheduler calls this while a coordinator is held.  Enumerating
+        every account-world lease in that hot path would contend with the
+        projection we are waiting for, so the infrastructure adapter checks
+        only the synthetic global coordinator world.  Full inventory recovery
+        remains reserved for a child timeout, when that child may have left
+        both global and account-world leases behind.
+        """
+        if not callable(self.projection_coordinator_lease_recovery):
+            return {"status": "not-configured", "clearedCount": 0}
+        try:
+            raw = self.projection_coordinator_lease_recovery()
+        except Exception as error:  # noqa: BLE001 - a live writer must still be allowed to finish.
+            return {
+                "status": "error",
+                "clearedCount": 0,
+                "reason": str(error)[:180],
+            }
+        value = dict(raw or {}) if isinstance(raw, dict) else {"status": "invalid"}
+        cleared = str(value.get("status") or "") == "cleared"
+        return {
+            "status": str(value.get("status") or "unknown"),
+            "clearedCount": 1 if cleared else 0,
+            "worldId": str(value.get("worldId") or "")[:180],
+            "reason": str(value.get("reason") or "")[:180],
+        }
+
+    def timeout_recovery_retry_seconds(self) -> int:
+        """Return the short retry interval only after a dead lease is cleared."""
+        return int_setting(
+            self.settings,
+            "ontologyReasoningTimeoutRecoveryRetrySeconds",
+            30,
+            5,
+            300,
+        )
+
+    def isolated_execution_preflight(self) -> Dict[str, object]:
+        """Avoid spawning a killable child while another TypeDB writer owns it.
+
+        This is an operational gate, not an investment filter.  It does not
+        inspect facts, select rules, or acknowledge mailbox work.  It first
+        uses the inexpensive durable queue probe so an idle scheduler never
+        adds a TypeDB control-plane read.
+        """
+        try:
+            queue = self.lightweight_queue_state()
+        except Exception as error:  # noqa: BLE001 - the child retains the authoritative queue path.
+            return {"ready": True, "status": "queue-probe-unavailable", "reason": str(error)[:180]}
+        pending_count = max(
+            int(float_value(queue.get("effectivePendingCount"), 0.0)),
+            int(float_value(queue.get("mailboxPendingEntryCount"), 0.0)),
+        )
+        if pending_count <= 0:
+            return {
+                "ready": True,
+                "status": "idle",
+                "pendingCount": 0,
+            }
+        coordinator = self.projection_coordinator_state()
+        coordinator_status = str(coordinator.get("status") or "not-configured")
+        recovery = {}
+        if coordinator_status == "held":
+            recovery = self.recover_dead_projection_coordinator_lease()
+            if int(recovery.get("clearedCount") or 0) > 0:
+                coordinator = self.projection_coordinator_state()
+                coordinator_status = str(coordinator.get("status") or "not-configured")
+        if coordinator_status == "held":
+            remaining = max(0, int(float_value(coordinator.get("leaseRemainingSeconds"), 0.0)))
+            return {
+                "ready": False,
+                "status": "deferred-projection-coordinator",
+                "pendingCount": pending_count,
+                "retryAfterSeconds": max(5, min(30, remaining or 10)),
+                "reason": "다른 TypeDB 투영이 실행 중이라 새 추론 워커를 시작하지 않습니다.",
+                "projectionCoordinator": coordinator,
+                **({"deadCoordinatorLeaseRecovery": recovery} if recovery else {}),
+            }
+        if coordinator_status == "error":
+            return {
+                "ready": False,
+                "status": "deferred-projection-coordinator",
+                "pendingCount": pending_count,
+                "retryAfterSeconds": 30,
+                "reason": str(coordinator.get("reason") or "TypeDB 투영 잠금 상태를 확인하지 못했습니다.")[:180],
+                "projectionCoordinator": coordinator,
+            }
+        return {
+            "ready": True,
+            "status": "ready",
+            "pendingCount": pending_count,
+            "projectionCoordinator": coordinator,
+            **({"deadCoordinatorLeaseRecovery": recovery} if recovery else {}),
+        }
+
     def publish(self, event) -> None:
         if not self.event_publisher:
             return
@@ -3339,7 +3474,18 @@ class OntologyReasoningRunner:
             now = now.replace(tzinfo=timezone.utc)
         now = now.astimezone(timezone.utc)
         consecutive = int(prior.get("consecutiveTimeouts") or 0) + 1
-        backoff_seconds = self.execution_timeout_backoff_seconds()
+        configured_backoff_seconds = self.execution_timeout_backoff_seconds()
+        dead_lease_recovery = self.recover_dead_projection_leases()
+        recovered_dead_lease = int(dead_lease_recovery.get("clearedCount") or 0) > 0
+        # A known-dead child cannot still own the recovered TypeDB boundary.
+        # Retry its durable pending ABox candidate promptly instead of adding
+        # the normal long failure backoff to every queued symbol. If recovery
+        # did not prove a dead lease, retain the conservative original delay.
+        backoff_seconds = (
+            min(configured_backoff_seconds, self.timeout_recovery_retry_seconds())
+            if recovered_dead_lease
+            else configured_backoff_seconds
+        )
         retry_at = datetime.fromtimestamp(
             now.timestamp() + backoff_seconds,
             timezone.utc,
@@ -3387,6 +3533,7 @@ class OntologyReasoningRunner:
                 if mailbox_checkpoint.get(key) not in (None, "", [], {})
             },
             "mailboxTimeoutRecoveryCount": timeout_recovery_count,
+            "typedbDeadLeaseRecovery": dead_lease_recovery,
         }
         history = [
             dict(item)
@@ -3404,6 +3551,7 @@ class OntologyReasoningRunner:
             "retryAfterSeconds": backoff_seconds,
             "deferredReason": guard["reason"],
             "executionTimeoutGuard": guard,
+            "typedbDeadLeaseRecovery": dead_lease_recovery,
             "executionTelemetry": summary,
         }
 

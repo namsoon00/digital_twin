@@ -116,6 +116,16 @@ class GraceRecoveryRunner(FakeRunner):
         return {"enabled": True, "recovered": [], "waitingForGraceCount": 1, "retryAfterSeconds": 12}
 
 
+class CoordinatorBlockedRunner(FakeRunner):
+    def isolated_execution_preflight(self):
+        return {
+            "ready": False,
+            "status": "deferred-projection-coordinator",
+            "retryAfterSeconds": 20,
+            "reason": "another TypeDB projection is active",
+        }
+
+
 class CountingIsolatedCycle:
     def __init__(self):
         self.calls = 0
@@ -189,6 +199,17 @@ class OntologyReasoningSchedulerTests(unittest.TestCase):
         self.assertEqual(12, result["retryAfterSeconds"])
         self.assertEqual([], started)
         self.assertEqual(1, runner.orphan_recoveries)
+
+    def test_coordinator_preflight_defers_before_starting_a_new_typedb_child(self):
+        child = CountingIsolatedCycle()
+        runner = CoordinatorBlockedRunner()
+        scheduler = OntologyReasoningScheduler(runner, 10, isolated_cycle=child)
+
+        result = scheduler.run_once(limit=1)
+
+        self.assertEqual("deferred-projection-coordinator", result["status"])
+        self.assertEqual(20, result["retryAfterSeconds"])
+        self.assertEqual(0, child.calls)
 
     def test_shared_world_scheduler_skips_isolated_child_when_live_reasoning_is_pending(self):
         runner = DeferredLowPriorityRunner()

@@ -36,7 +36,15 @@ class CursorStore:
 
 
 class OntologyProjectionStabilityTests(unittest.TestCase):
-    def runner(self, cursor=None, maintenance_runner=None, priority_symbols_provider=None):
+    def runner(
+        self,
+        cursor=None,
+        maintenance_runner=None,
+        priority_symbols_provider=None,
+        projection_coordinator_probe=None,
+        projection_lease_recovery=None,
+        projection_coordinator_lease_recovery=None,
+    ):
         return OntologyReasoningRunner(
             event_reader=EmptyEventReader(),
             cursor_store=cursor or CursorStore(),
@@ -52,6 +60,9 @@ class OntologyProjectionStabilityTests(unittest.TestCase):
             },
             maintenance_runner=maintenance_runner,
             priority_symbols_provider=priority_symbols_provider,
+            projection_coordinator_probe=projection_coordinator_probe,
+            projection_lease_recovery=projection_lease_recovery,
+            projection_coordinator_lease_recovery=projection_coordinator_lease_recovery,
             now_provider=lambda: datetime(2026, 7, 22, tzinfo=timezone.utc),
         )
 
@@ -209,6 +220,52 @@ class OntologyProjectionStabilityTests(unittest.TestCase):
         self.assertEqual(300, recorded["retryAfterSeconds"])
         self.assertEqual(300, runner.execution_timeout_guard_remaining_seconds(cursor.load()))
         self.assertEqual("open", runner.execution_timeout_guard_state(cursor.load())["status"])
+
+    def test_timeout_recovers_proven_dead_typedb_lease_before_short_retry(self):
+        cursor = CursorStore()
+        calls = []
+        runner = self.runner(
+            cursor,
+            projection_lease_recovery=lambda: calls.append(True) or {
+                "status": "cleared",
+                "clearedCount": 2,
+                "clearedWorldIds": ["portfolio:local:default", "system:typedb-projection-coordinator"],
+                "worldCount": 2,
+            },
+        )
+        runner.settings["ontologyReasoningTimeoutRecoveryRetrySeconds"] = "15"
+
+        recorded = runner.record_execution_timeout(240, started_at="2026-07-22T00:00:00Z")
+
+        self.assertEqual(15, recorded["retryAfterSeconds"])
+        self.assertEqual("cleared", recorded["typedbDeadLeaseRecovery"]["status"])
+        self.assertEqual(2, recorded["executionTelemetry"]["typedbDeadLeaseRecovery"]["clearedCount"])
+        self.assertEqual([True], calls)
+
+    def test_isolated_preflight_defers_while_a_live_typedb_writer_holds_the_coordinator(self):
+        runner = self.runner(
+            projection_coordinator_probe=lambda: {
+                "status": "held",
+                "leaseOwner": "scoped-abox:active",
+                "leaseRemainingSeconds": 240,
+            },
+            projection_lease_recovery=lambda: (_ for _ in ()).throw(
+                AssertionError("preflight must not inventory every account-world lease")
+            ),
+            projection_coordinator_lease_recovery=lambda: {
+                "status": "skipped",
+            },
+        )
+        runner.lightweight_queue_state = lambda: {
+            "effectivePendingCount": 1,
+            "mailboxPendingEntryCount": 1,
+        }
+
+        result = runner.isolated_execution_preflight()
+
+        self.assertFalse(result["ready"])
+        self.assertEqual("deferred-projection-coordinator", result["status"])
+        self.assertEqual(30, result["retryAfterSeconds"])
 
     def test_elapsed_execution_timeout_guard_is_non_blocking_but_not_false_success(self):
         cursor = CursorStore({

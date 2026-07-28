@@ -783,6 +783,25 @@ def build_ontology_reasoning_runner(settings=None, event_publisher=None) -> Onto
             "accounts": rows,
         }
 
+    def projection_lease_recovery():
+        """Recover only verified-dead local TypeDB writers after a timeout.
+
+        The reasoning parent invokes this only when the coordinator is already
+        held or a killable child has exceeded its hard timeout. The repository
+        validates hostname and PID before it removes any durable lease.
+        """
+        recover = getattr(ontology_repository, "recover_all_dead_local_scoped_abox_write_leases", None)
+        if not callable(recover):
+            return {"status": "unsupported", "clearedCount": 0, "worldCount": 0}
+        return dict(recover() or {})
+
+    def projection_coordinator_lease_recovery():
+        """Probe only the global writer lease while a live writer may run."""
+        recover = getattr(ontology_repository, "recover_dead_projection_coordinator_lease", None)
+        if not callable(recover):
+            return {"status": "unsupported"}
+        return dict(recover() or {})
+
     def reasoning_worker_maintenance():
         """Keep legacy reasoning cadence free of TypeDB physical deletes.
 
@@ -838,6 +857,8 @@ def build_ontology_reasoning_runner(settings=None, event_publisher=None) -> Onto
             if callable(getattr(ontology_repository, "projection_coordinator_lease_status", None))
             else None
         ),
+        projection_lease_recovery=projection_lease_recovery,
+        projection_coordinator_lease_recovery=projection_coordinator_lease_recovery,
     )
 
 

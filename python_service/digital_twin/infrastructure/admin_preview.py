@@ -569,6 +569,7 @@ def admin_preview_config() -> Dict[str, object]:
                     {"key": "ontologyReasoningExecutionTimeoutSeconds", "label": "추론 실행 시간 상한", "type": "number", "default": "240", "unit": "seconds"},
                     {"key": "ontologyReasoningExecutionTimeoutGraceSeconds", "label": "시간 상한 종료 유예", "type": "number", "default": "10", "unit": "seconds"},
                     {"key": "ontologyReasoningExecutionTimeoutBackoffSeconds", "label": "시간 초과 후 재시도 대기", "type": "number", "default": "300", "unit": "seconds"},
+                    {"key": "ontologyReasoningTimeoutRecoveryRetrySeconds", "label": "종료 워커 잠금 회수 후 빠른 재시도", "type": "number", "default": "30", "unit": "seconds"},
                     {"key": "ontologyProjectionAuditStaleAfterSeconds", "label": "중단 투영 감사 정리 기준(0=자동)", "type": "number", "default": "0", "unit": "seconds"},
                     {"key": "ontologyScopedFullReconcileMinutes", "label": "전체 범위 재조정 주기", "type": "number", "default": "30", "unit": "minutes"},
                     {"key": "ontologyScopedFullReconcileDeferWhenQueueActive", "label": "대기열 중 전체 재조정 유예", "type": "toggle", "default": "1"},

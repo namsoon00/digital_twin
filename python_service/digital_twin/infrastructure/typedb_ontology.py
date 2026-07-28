@@ -2234,6 +2234,12 @@ class ScopedABoxManifestMixin:
             "coordinatorWorldId": TYPEDB_PROJECTION_COORDINATOR_WORLD_ID,
         }
 
+    def recover_dead_projection_coordinator_lease(self) -> Dict[str, object]:
+        """Recover only the synthetic global writer lease when its PID is dead."""
+        return self.recover_dead_local_scoped_abox_write_lease(
+            TYPEDB_PROJECTION_COORDINATOR_WORLD_ID,
+        )
+
     def projection_coordinator_write_enforced(self) -> bool:
         """Whether public repository mutations must take the global writer lease."""
         return bool(getattr(self, "_projection_coordinator_write_enforced", False))

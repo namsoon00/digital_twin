@@ -213,11 +213,10 @@ def evidence_role_from_relation(relation: Dict[str, object]) -> str:
 def decision_effect_from_relation(relation: Dict[str, object]) -> str:
     """Read a TypeDB-authored action-envelope effect from a relation.
 
-    Existing persisted generations did not include ``decisionEffect``.  For
-    those rows only, use a deliberately non-escalating compatibility value
-    based on their already materialized evidence role.  This avoids treating a
-    static risk context as a hidden action veto while a RuleBox rematerializes
-    the explicit field.
+    ``decisionEffect`` is executable RuleBox policy. It must survive the
+    RuleBox -> InferenceBox round trip exactly; deriving it from evidence role
+    would silently turn a TypeDB contract failure into a different action
+    policy. Callers treat an empty return value as a blocked judgement.
     """
 
     relation = relation or {}
@@ -228,14 +227,7 @@ def decision_effect_from_relation(relation: Dict[str, object]) -> str:
     ).strip().lower()
     if explicit in DECISION_EFFECTS:
         return explicit
-    role = evidence_role_from_relation(relation)
-    if role == "support":
-        return "support"
-    if role == "blocking":
-        return "block"
-    if role in {"risk", "counter"}:
-        return "constrain"
-    return "defer"
+    return ""
 
 
 def conflict_state_from_roles(roles: Iterable[object]) -> str:

@@ -1595,6 +1595,23 @@ class OntologyRuleBoxTests(unittest.TestCase):
         with self.assertRaisesRegex(ValueError, "requires decision_stage"):
             rulebox_rules_from_payload({"rules": payload})
 
+    def test_rulebox_payload_rejects_derivation_without_decision_effect(self):
+        payload = rulebox_rules_to_payload(default_graph_inference_rules()[:1])
+        payload[0]["derivations"][0]["decision_effect"] = ""
+
+        with self.assertRaisesRegex(ValueError, "requires a valid decision_effect"):
+            rulebox_rules_from_payload({"rules": payload})
+
+    def test_trend_thesis_weakening_is_an_explicit_constraint(self):
+        rule = next(
+            item
+            for item in default_graph_inference_rules()
+            if item.rule_id == "graph.holding.trend_transition.risk.v1"
+        )
+        weakening = next(item for item in rule.derivations if item.relation_type == "WEAKENS_THESIS")
+
+        self.assertEqual("constrain", weakening.decision_effect)
+
     def test_rulebox_hash_is_independent_of_rule_read_order(self):
         payload = rulebox_rules_to_payload(default_graph_inference_rules())
 
@@ -1993,6 +2010,7 @@ class OntologyRuleBoxTests(unittest.TestCase):
         self.assertTrue(loss_guard["conditions"])
         self.assertTrue(loss_guard["derivations"])
         self.assertEqual("LOSS_REDUCE", loss_guard["derivations"][0]["decision_stage"])
+        self.assertEqual("constrain", loss_guard["derivations"][0]["decision_effect"])
         self.assertEqual("review", loss_guard["derivations"][0]["action_level"])
         self.assertEqual("risk", loss_guard["derivations"][0]["evidence_role"])
         self.assertEqual("bidAskImbalance", ask_pressure["target_property_filters"]["field"])
@@ -2000,6 +2018,36 @@ class OntologyRuleBoxTests(unittest.TestCase):
         self.assertIn("HAS_INFERRED_RISK", snapshot["relationTypes"])
         self.assertEqual("test001", snapshot["versions"][0]["versionLabel"])
         self.assertTrue(snapshot["changeCandidates"])
+
+    def test_rulebox_snapshot_fails_closed_when_decision_effect_is_lost_on_read(self):
+        default_rules = default_graph_inference_rules()
+        graph = ontology_seed_graph(default_rules)
+        repository = TypeDBOntologyGraphRepository("http://typedb.example.test")
+        entity_rows = repository.rows_for_entities(graph)
+        derivations = [
+            dict(item)
+            for item in entity_rows
+            if item["kind"] == "relation-template" and item["ontologyBox"] == "RuleBox"
+        ]
+        broken = derivations[0]
+        broken["decisionEffect"] = ""
+        broken["derivationDecisionEffect"] = ""
+        properties = json.loads(str(broken["propertiesJson"]))
+        properties["derivation"]["decision_effect"] = ""
+        broken["propertiesJson"] = json.dumps(properties, ensure_ascii=False)
+        rowsets = {
+            "rules": [item for item in entity_rows if item["kind"] == "rule" and item["ontologyBox"] == "RuleBox"],
+            "conditions": [item for item in entity_rows if item["kind"] == "rule-condition" and item["ontologyBox"] == "RuleBox"],
+            "derivations": derivations,
+            "relationTypes": [],
+            "versions": [],
+        }
+
+        snapshot = rulebox_snapshot_from_rows(rowsets, source="test")
+
+        self.assertEqual("invalid-rulebox", snapshot["status"])
+        self.assertEqual([], snapshot["rules"])
+        self.assertIn("decision_effect", snapshot["reason"])
 
     def test_rulebox_governance_versions_and_candidates_are_reviewable(self):
         rules = default_graph_inference_rules()

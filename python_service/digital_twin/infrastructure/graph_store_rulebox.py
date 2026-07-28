@@ -3,6 +3,7 @@ import re
 from typing import Dict, Iterable, List
 
 from ..domain.ontology_contracts import OntologyEntity, OntologyRelation, PortfolioOntology, entity_id
+from ..domain.ontology_decision_state import DECISION_EFFECTS
 from ..domain.investment_ubiquitous_language import add_investment_language_governance_concepts
 from ..domain.ontology_rulebox_catalog import default_graph_inference_rules
 from ..domain.ontology_rulebox_contracts import GRAPH_REASONER_VERSION, GraphInferenceRule
@@ -52,6 +53,20 @@ def rulebox_rules_from_payload(payload: Dict[str, object]) -> List[GraphInferenc
     ]
     if missing_policy:
         raise ValueError("Every TypeDB rule derivation requires decision_stage: " + ", ".join(missing_policy[:10]))
+    invalid_effects = [
+        rule.rule_id
+        for rule in rules
+        if any(
+            str(derivation.decision_effect or "").strip().lower() not in DECISION_EFFECTS
+            for derivation in rule.derivations
+        )
+    ]
+    if invalid_effects:
+        raise ValueError(
+            "Every TypeDB rule derivation requires a valid decision_effect "
+            "(support, defer, constrain, block): "
+            + ", ".join(invalid_effects[:10])
+        )
     return rules
 
 def rulebox_graph_from_rules(
@@ -167,6 +182,17 @@ def rulebox_snapshot_from_rows(rowsets: Dict[str, List[Dict[str, object]]], sour
         return rulebox_store_snapshot_unavailable(
             "empty",
             "TypeDB RuleBox rows are empty. Seed or save RuleBox rules before running graph reasoning.",
+            source=source,
+        )
+    try:
+        # A TypeDB read is executable RuleBox policy, not merely an admin
+        # display. An incomplete derivation must not reach native inference
+        # and be silently reconstructed by Python.
+        rules = rulebox_rules_from_payload({"rules": rulebox_rules_to_payload(rules)})
+    except ValueError as error:
+        return rulebox_store_snapshot_unavailable(
+            "invalid-rulebox",
+            "TypeDB RuleBox decision contract is incomplete: " + str(error),
             source=source,
         )
     relation_types = sorted(set(
@@ -402,6 +428,13 @@ def derivation_payload_from_row(row: Dict[str, object]) -> Dict[str, object]:
         "action_group": str(row.get("actionGroup") or derivation.get("action_group") or ""),
         "action_level": str(row.get("actionLevel") or derivation.get("action_level") or ""),
         "decision_stage": str(row.get("decisionStage") or row.get("derivationDecisionStage") or derivation.get("decision_stage") or derivation.get("decisionStage") or ""),
+        "decision_effect": str(
+            row.get("decisionEffect")
+            or row.get("derivationDecisionEffect")
+            or derivation.get("decision_effect")
+            or derivation.get("decisionEffect")
+            or ""
+        ),
         "decision_label": str(row.get("decisionLabel") or row.get("derivationDecisionLabel") or derivation.get("decision_label") or derivation.get("decisionLabel") or ""),
         "decision_tone": str(row.get("decisionTone") or row.get("derivationDecisionTone") or derivation.get("decision_tone") or derivation.get("decisionTone") or ""),
         "target_role": str(row.get("targetRole") or row.get("derivationTargetRole") or derivation.get("target_role") or derivation.get("targetRole") or ""),

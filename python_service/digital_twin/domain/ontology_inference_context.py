@@ -489,17 +489,32 @@ def matches_from_inference(
         evidence_state = inference_evidence_state(relation, facts or {}, trace)
         data_state = str(evidence_state.get("dataState") or "partial")
         stage = decision_stage_from_relation(relation)
-        policy_missing = stage is None
-        if policy_missing:
+        decision_effect = decision_effect_from_relation(relation)
+        policy_reason_code = ""
+        if stage is None:
+            policy_reason_code = "missing-decision-stage"
+        elif not decision_effect:
+            policy_reason_code = "missing-decision-effect"
+        if policy_reason_code:
+            policy_reason = (
+                "TypeDB 추론 관계에 판단 단계·행동 그룹·행동 수준이 완전하지 않습니다."
+                if policy_reason_code == "missing-decision-stage"
+                else "TypeDB 추론 관계에 decisionEffect가 없어 실행 범위를 안전하게 결정할 수 없습니다."
+            )
             evidence_state.update({
                 "dataState": "unavailable",
                 "evidenceUsableForJudgement": False,
                 "judgementBlocked": True,
-                "freshnessGateReason": "TypeDB 추론 관계에 판단 단계·행동 그룹·행동 수준이 완전하지 않습니다.",
-                "drivers": ["TypeDB 판단 정책 누락"],
+                "freshnessGateReason": policy_reason,
+                "policyReasonCode": policy_reason_code,
+                "drivers": [
+                    "TypeDB 판단 정책 누락"
+                    if policy_reason_code == "missing-decision-stage"
+                    else "TypeDB 판단 효과 누락"
+                ],
             })
             data_state = "unavailable"
-        review_level = "blocked" if policy_missing else review_level_for(stage.action_level, data_state)
+        review_level = "blocked" if policy_reason_code else review_level_for(stage.action_level, data_state)
         role = evidence_role_from_relation(relation)
         label = str(relation.get("aiInfluenceLabel") or relation.get("targetLabel") or trace.get("label") or rule_id)
         evidence = [
@@ -522,7 +537,7 @@ def matches_from_inference(
             review_label=REVIEW_LEVEL_LABELS[review_level],
             data_state=data_state,
             evidence_role=role,
-            decision_effect=decision_effect_from_relation(relation),
+            decision_effect=decision_effect,
             evidence=evidence,
             missing=list((facts or {}).get("missingData") or []),
             reference_only=bool(evidence_state.get("judgementBlocked")),
@@ -956,18 +971,40 @@ def action_envelope_from_inference(
 
     facts = facts or {}
     entries: List[Dict[str, object]] = []
+    blocked_policy_entries: List[Dict[str, object]] = []
     for match in matches or []:
-        if not match.matched or match.reference_only:
+        if not match.matched:
             continue
         relation = relation_for_match(match, relations)
+        if match.reference_only:
+            if bool((match.evidence_state or {}).get("judgementBlocked")):
+                blocked_policy_entries.append({
+                    "match": match,
+                    "relation": relation,
+                    "reason": str((match.evidence_state or {}).get("policyReasonCode") or "judgement-blocked"),
+                })
+            continue
         stage = decision_stage_from_relation(relation)
         if stage is None:
+            blocked_policy_entries.append({
+                "match": match,
+                "relation": relation,
+                "reason": "missing-decision-stage",
+            })
+            continue
+        effect = decision_effect_from_relation(relation)
+        if not effect:
+            blocked_policy_entries.append({
+                "match": match,
+                "relation": relation,
+                "reason": "missing-decision-effect",
+            })
             continue
         entries.append({
             "match": match,
             "relation": relation,
             "stage": stage,
-            "effect": decision_effect_from_relation(relation),
+            "effect": effect,
             "policy": action_policy_from_relation_or_facts(facts, relation),
         })
 
@@ -1010,7 +1047,7 @@ def action_envelope_from_inference(
     ]
     partial = [item for item in entries if str(item["match"].data_state or "").lower() == "partial"]
 
-    if unusable:
+    if blocked_policy_entries or unusable:
         status = "JUDGEMENT_BLOCKED"
         driving = unusable
         preferred_action = "HOLD"
@@ -1059,12 +1096,21 @@ def action_envelope_from_inference(
     if not ai_allowed_actions and preferred_action:
         ai_allowed_actions = [preferred_action]
 
-    data_state = "unavailable" if unusable else ("partial" if partial else "sufficient")
+    blocked_rule_ids = unique_texts(
+        [item["match"].rule_id for item in unusable]
+        + [item["match"].rule_id for item in blocked_policy_entries]
+    )[:8]
+    missing_effect_rule_ids = unique_texts(
+        item["match"].rule_id
+        for item in blocked_policy_entries
+        if item.get("reason") == "missing-decision-effect"
+    )[:8]
+    data_state = "unavailable" if (unusable or blocked_policy_entries) else ("partial" if partial else "sufficient")
     data_readiness = {
-        "state": "blocked" if unusable else ("partial" if partial else "ready"),
+        "state": "blocked" if (unusable or blocked_policy_entries) else ("partial" if partial else "ready"),
         "dataState": data_state,
-        "usable": not bool(unusable),
-        "blockedRuleIds": unique_texts([item["match"].rule_id for item in unusable])[:8],
+        "usable": not bool(unusable or blocked_policy_entries),
+        "blockedRuleIds": blocked_rule_ids,
         "partialRuleIds": unique_texts([item["match"].rule_id for item in partial])[:8],
         "requiredDomains": unique_texts(
             domain
@@ -1101,8 +1147,9 @@ def action_envelope_from_inference(
         "aiAllowedActions": ai_allowed_actions,
         "aiMayUpgradeToBuy": bool(target_role == WATCHLIST_TARGET_ROLE and status == "ENTRY_ELIGIBLE"),
         "aiMayDowngrade": bool(preferred_action and len(ai_allowed_actions) > 1),
-        "judgementBlocked": bool(unusable or by_effect["block"]),
+        "judgementBlocked": bool(unusable or blocked_policy_entries or by_effect["block"]),
         "dataReadiness": data_readiness,
+        "missingDecisionEffectRuleIds": missing_effect_rule_ids,
         "supportRuleIds": rule_ids("support"),
         "deferRuleIds": rule_ids("defer"),
         "constraintRuleIds": rule_ids("constrain"),
@@ -1134,16 +1181,27 @@ def decision_from_inference(
         if item.matched
         and not item.reference_only
         and decision_stage_from_relation(relation_for_match(item, relations)) is not None
+        and decision_effect_from_relation(relation_for_match(item, relations))
     ]
     candidates = active
     action_envelope = action_envelope_from_inference(facts, matches, relations)
     if not candidates:
+        missing_effect_rule_ids = list(action_envelope.get("missingDecisionEffectRuleIds") or [])
+        missing_stage = any(
+            str((item.evidence_state or {}).get("policyReasonCode") or "") == "missing-decision-stage"
+            for item in matches
+            if item.matched
+        )
         return {
-            "label": "TypeDB 판단 정책 누락",
+            "label": "TypeDB 판단 효과 누락" if missing_effect_rule_ids else "TypeDB 판단 정책 누락",
             "tone": "caution",
             "basis": source_name,
             "selectedRuleId": "",
-            "selectionRole": "blocked-missing-typedb-decision-policy",
+            "selectionRole": (
+                "blocked-missing-typedb-decision-effect"
+                if missing_effect_rule_ids
+                else "blocked-missing-typedb-decision-policy"
+            ),
             "finalDecisionOwner": "typedb-schema-function-rules",
             "candidateRuleIds": unique_texts([item.rule_id for item in matches if item.matched])[:12],
             "candidateDecisionStages": [],
@@ -1157,7 +1215,11 @@ def decision_from_inference(
             "dataStateLabel": DATA_STATE_LABELS["unavailable"],
             "evidenceRole": "blocking",
             "sourceRelationType": "",
-            "stagePolicySource": "missingTypeDbDecisionStage",
+            "stagePolicySource": (
+                "missingTypeDbDecisionEffect"
+                if missing_effect_rule_ids
+                else ("missingTypeDbDecisionStage" if missing_stage else "typedbActionEnvelopeBlocked")
+            ),
             "judgementBlocked": True,
             "actionPolicyApplied": False,
             "nativeTypeDbReasoned": False,
@@ -1171,6 +1233,7 @@ def decision_from_inference(
             "nextChecks": [],
             "notificationCategory": "",
             "notificationSeverity": "",
+            "missingDecisionEffectRuleIds": missing_effect_rule_ids,
             "actionEnvelope": action_envelope,
         }
     selected_rule_id = str(action_envelope.get("selectedRuleId") or "").strip()

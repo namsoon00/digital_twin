@@ -514,6 +514,7 @@ def rulebox_rules_missing_decision_stage(rules: List[Dict[str, object]]) -> List
 
 
 RULEBOX_DERIVATION_GUIDANCE_FIELDS = (
+    "decision_effect",
     "decision_label",
     "decision_tone",
     "primary_action",

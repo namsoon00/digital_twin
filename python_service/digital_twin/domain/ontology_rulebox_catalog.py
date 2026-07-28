@@ -3770,6 +3770,7 @@ def default_graph_inference_rules() -> List[GraphInferenceRule]:
                     action_group="lossControl",
                     action_level="review",
                     decision_stage="FLOW_DEFENSE",
+                    decision_effect="constrain",
                 )
             ],
         ),

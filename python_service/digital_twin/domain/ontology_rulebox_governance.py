@@ -3,6 +3,7 @@ import json
 import re
 from typing import Dict, Iterable, List
 
+from .ontology_decision_state import DECISION_EFFECTS
 from .ontology_rulebox_contracts import GRAPH_REASONER_VERSION, GraphInferenceRule, GraphRuleCondition, GraphRuleDerivation
 
 
@@ -232,7 +233,7 @@ def build_rule_change_candidate_prompt(context: Dict[str, object]) -> str:
         "- proposedRule.enabled는 반드시 false다.",
         "- ABox에 없는 데이터가 필요하면 proposedRule을 비우고 requiresData에 적는다.",
         "- relation_type, condition field, target filters는 제공된 RuleBox/InferenceBox/TBox에서 확인 가능한 형태를 우선 사용한다.",
-        "- derivations에는 decision_stage와 evidence_role을 포함한다.",
+        "- derivations에는 decision_stage, evidence_role, decision_effect을 포함한다.",
         "- 중복 rule_id를 만들지 않는다.",
         "- 응답은 설명 없이 JSON 하나만 반환한다.",
         "JSON 계약:",
@@ -411,6 +412,8 @@ def missing_decision_policy_count(rules_payload: List[Dict[str, object]]) -> int
             if not (derivation.get("decision_stage") or derivation.get("decisionStage")):
                 count += 1
             elif not (derivation.get("evidence_role") or derivation.get("evidenceRole") or derivation.get("polarity")):
+                count += 1
+            elif str(derivation.get("decision_effect") or derivation.get("decisionEffect") or "").strip().lower() not in DECISION_EFFECTS:
                 count += 1
     return count
 

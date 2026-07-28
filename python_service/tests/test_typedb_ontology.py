@@ -4138,6 +4138,26 @@ class TypeDBOntologyRepositoryTests(unittest.TestCase):
         self.assertEqual("support", inferred.properties["decisionEffect"])
         self.assertEqual("BUY", inferred.properties["candidateAction"])
 
+        repository = TypeDBOntologyGraphRepository("127.0.0.1:1729")
+        persisted = next(
+            item
+            for item in repository.rows_for_relations(generated)
+            if item["type"] == "HAS_INFERRED_SUPPORT"
+        )
+        restored = repository.relation_row_from_typeql({
+            "id": "relation:decision-effect",
+            "sourceId": persisted["source"],
+            "targetId": persisted["target"],
+            "type": persisted["type"],
+            "ruleId": persisted["ruleId"],
+            "updatedAt": "2026-07-27T00:00:00Z",
+            "weight": persisted["weight"],
+            "json": persisted["propertiesJson"],
+        }, "InferenceBox")
+
+        self.assertEqual("support", persisted["decisionEffect"])
+        self.assertEqual("support", restored["decisionEffect"])
+
     def test_typedb_repository_factory_inherits_ontology_reasoning_native_rule_setting(self):
         direct = TypeDBOntologyGraphRepository("127.0.0.1:1729")
         factory_default = typedb_repository_from_settings({"ontologyTypeDbEnabled": "1", "typedbAddress": "127.0.0.1:1729"})
@@ -4351,6 +4371,7 @@ class TypeDBOntologyRepositoryTests(unittest.TestCase):
         stored = [dict(item) for item in bootstrap[:2]]
         stored[0]["derivations"] = [dict(item) for item in stored[0]["derivations"]]
         stored[0]["derivations"][0]["decision_stage"] = ""
+        stored[0]["derivations"][0]["decision_effect"] = ""
         stored.append({
             "rule_id": "shadow.market_psychology.state.v1",
             "derivations": [{"decision_stage": ""}],
@@ -4361,6 +4382,7 @@ class TypeDBOntologyRepositoryTests(unittest.TestCase):
         self.assertTrue(migration["changed"])
         self.assertEqual(["shadow.market_psychology.state.v1"], migration["removedRuleIds"])
         self.assertEqual("LOSS_REDUCE", migration["rules"][0]["derivations"][0]["decision_stage"])
+        self.assertEqual("constrain", migration["rules"][0]["derivations"][0]["decision_effect"])
 
     def test_typedb_rule_catalog_migration_adds_platform_native_rules_without_overwriting_edits(self):
         bootstrap = rulebox_rules_to_payload(default_graph_inference_rules())

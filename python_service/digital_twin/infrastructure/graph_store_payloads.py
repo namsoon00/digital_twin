@@ -566,6 +566,10 @@ class GraphStoreOntologyRowMapperMixin:
                 "materialityState": str(properties.get("materialityState") or ""),
                 "evidenceRole": str(properties.get("evidenceRole") or properties.get("polarity") or "context"),
                 "decisionStage": str(properties.get("decisionStage") or ""),
+                # ``decisionEffect`` is derivation-owned executable policy.
+                # Keep it in the generic row contract as well as JSON so every
+                # graph-store adapter carries the same action-envelope input.
+                "decisionEffect": str(properties.get("decisionEffect") or properties.get("decision_effect") or ""),
                 "reviewLevel": str(properties.get("reviewLevel") or ""),
                 "dataState": str(properties.get("dataState") or ""),
                 "changeState": str(properties.get("changeState") or ""),

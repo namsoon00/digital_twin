@@ -573,6 +573,7 @@ class OntologyInferenceContextTests(unittest.TestCase):
                                     "aiInfluenceLabel": "손실 방어 추론",
                                     "inferenceTraceId": "inference-trace:005930:graph.loss_guard.breakdown.v1",
                                     "decisionStage": "LOSS_REDUCE",
+                                    "decisionEffect": "constrain",
                                     "decisionTone": "caution",
                                     "actionGroup": "lossControl",
                                     "actionLevel": "review",
@@ -645,6 +646,35 @@ class OntologyInferenceContextTests(unittest.TestCase):
         self.assertTrue(decision["judgementBlocked"])
         self.assertEqual("missingTypeDbDecisionStage", decision["stagePolicySource"])
         self.assertEqual("", decision["decisionStage"])
+
+    def test_missing_typedb_decision_effect_blocks_action_envelope(self):
+        relations = [{
+            "type": "HAS_INFERRED_RISK",
+            "source": "stock:005930",
+            "target": "risk:005930:test",
+            "ruleId": "graph.loss_guard.breakdown.v1",
+            "derivationIndex": 0,
+            "polarity": "risk",
+            "decisionStage": "LOSS_REDUCE",
+            "actionGroup": "lossControl",
+            "actionLevel": "review",
+            "decisionTone": "caution",
+            "candidateAction": "TRIM",
+            "nativeTypeDbReasoned": True,
+        }]
+        facts = {"symbol": "005930", "source": "holding", "isHolding": True}
+        matches = matches_from_inference(relations, [], facts=facts)
+
+        envelope = action_envelope_from_inference(facts, matches, relations)
+        decision = decision_from_inference(facts, matches, relations, [], source_name="typedbInferenceBox")
+
+        self.assertTrue(matches[0].reference_only)
+        self.assertEqual("missing-decision-effect", matches[0].evidence_state["policyReasonCode"])
+        self.assertEqual("JUDGEMENT_BLOCKED", envelope["status"])
+        self.assertTrue(envelope["judgementBlocked"])
+        self.assertEqual(["graph.loss_guard.breakdown.v1"], envelope["missingDecisionEffectRuleIds"])
+        self.assertEqual("missingTypeDbDecisionEffect", decision["stagePolicySource"])
+        self.assertTrue(decision["judgementBlocked"])
 
     def test_strict_decision_path_blocks_python_relation_rule_fallback(self):
         position = Position(
@@ -766,6 +796,7 @@ class OntologyInferenceContextTests(unittest.TestCase):
                                     "riskImpact": 8,
                                     "weight": 0.72,
                                     "decisionStage": "ENTRY_WAIT",
+                                    "decisionEffect": "defer",
                                     "decisionLabel": "신규 진입 대기",
                                     "decisionTone": "watch",
                                     "stagePriority": 31,
@@ -842,6 +873,7 @@ class OntologyInferenceContextTests(unittest.TestCase):
                                     "supportImpact": 12,
                                     "weight": 0.82,
                                     "decisionStage": "ENTRY_READY",
+                                    "decisionEffect": "support",
                                     "decisionLabel": "소액 분할매수 검토",
                                     "decisionTone": "caution",
                                     "stagePriority": 37,
@@ -962,6 +994,7 @@ class OntologyInferenceContextTests(unittest.TestCase):
                                     "riskImpact": 12,
                                     "weight": 0.84,
                                     "decisionStage": "LOSS_REDUCE",
+                                    "decisionEffect": "constrain",
                                     "decisionLabel": "손실 축소 기준 점검",
                                     "decisionTone": "caution",
                                     "primaryAction": "TRIM_REVIEW",
@@ -1028,6 +1061,7 @@ class OntologyInferenceContextTests(unittest.TestCase):
                                         "supportImpact": 0,
                                         "weight": 0.86,
                                         "decisionStage": "LOSS_REDUCE",
+                                        "decisionEffect": "constrain",
                                         "decisionTone": "caution",
                                         "stagePriority": 40,
                                         "actionGroup": "lossControl",
@@ -1148,6 +1182,7 @@ class OntologyInferenceContextTests(unittest.TestCase):
                                     "riskImpact": 13,
                                     "weight": 0.86,
                                     "decisionStage": "LOSS_REDUCE",
+                                    "decisionEffect": "constrain",
                                     "decisionTone": "caution",
                                     "stagePriority": 40,
                                     "actionGroup": "lossControl",

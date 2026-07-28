@@ -3595,6 +3595,31 @@ class TypeDBOntologyRepositoryTests(unittest.TestCase):
         self.assertEqual("restored", result["status"])
         restore.assert_called_once_with("abox-material:previous")
 
+    def test_typedb_pending_abox_recovery_keeps_initial_retry_targets_for_resume(self):
+        repository = TypeDBOntologyGraphRepository("127.0.0.1:1729")
+        pending = {
+            "status": "pending",
+            "activationStatus": "pending-native-inference",
+            "candidateAboxSnapshotId": "abox-material:first",
+            "previousAboxSnapshotId": "",
+            "targetSymbols": ["000660"],
+        }
+        with patch.object(repository, "pending_abox_activation", return_value=pending), \
+                patch.object(repository, "active_abox_metadata", return_value={
+                    "status": "ok", "aboxSnapshotId": "abox-material:first",
+                }), \
+                patch.object(repository, "inferencebox_snapshot", return_value={
+                    "status": "stale-generation",
+                    "sourceAboxSnapshotId": "",
+                    "generationAligned": False,
+                }):
+            result = repository.recover_pending_abox_activation()
+
+        self.assertEqual("retry-required", result["status"])
+        self.assertEqual("abox-material:first", result["candidateAboxSnapshotId"])
+        self.assertEqual(["000660"], result["targetSymbols"])
+        self.assertEqual(pending, result["pendingActivation"])
+
     def test_typedb_pending_abox_recovery_finalizes_aligned_inference(self):
         repository = TypeDBOntologyGraphRepository("127.0.0.1:1729")
         pending = {

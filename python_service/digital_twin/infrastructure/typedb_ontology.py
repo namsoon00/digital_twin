@@ -10090,6 +10090,9 @@ class TypeDBOntologyGraphRepository(GraphStoreOntologyRowMapperMixin, ScopedABox
                 "status": "retry-required",
                 "graphStore": "typedb",
                 "candidateAboxSnapshotId": candidate_id,
+                "previousAboxSnapshotId": previous_id,
+                "targetSymbols": target_symbols,
+                "pendingActivation": pending,
                 "inferenceBox": inferencebox,
                 "reason": "Initial ABox activation is awaiting a retry of TypeDB native inference.",
             }

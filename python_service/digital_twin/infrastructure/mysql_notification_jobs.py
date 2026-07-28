@@ -133,12 +133,62 @@ class MySQLNotificationJobStore(MySQLOperationalConnection):
         summary = {row["status"]: int(row["count"] or 0) for row in summary_rows}
         return [self.job_from_row(row) for row in rows], total, summary
 
+    def recent_list_page_with_summary(
+        self,
+        limit: int = 40,
+        offset: int = 0,
+        message_type: str = "",
+        status: str = "",
+        query: str = "",
+        scope: str = "all",
+    ) -> Tuple[List[NotificationJob], int, Dict[str, int]]:
+        """Read a ledger page without deserializing each immutable audit payload.
+
+        Notification payloads intentionally retain the complete graph-backed
+        reasoning trace.  A ledger needs only transport metadata and the saved
+        message preview, so selecting ``payload_json`` here made opening the
+        notification screen proportional to historical graph size.  The full
+        payload remains available through :meth:`get` for the detail report.
+        """
+        clauses, params = self._recent_filters(
+            message_type,
+            status,
+            query,
+            scope,
+            include_payload_query=False,
+        )
+        where = (" WHERE " + " AND ".join(clauses)) if clauses else ""
+        page_size = max(1, min(100, int(limit or 40)))
+        page_offset = max(0, int(offset or 0))
+        columns = (
+            "job_id, account_id, account_label, message_type, source_event_id, "
+            "source_event_name, status, attempts, created_at, updated_at, last_error, text"
+        )
+        with self.connect() as connection:
+            total_row = connection.execute(
+                "SELECT COUNT(*) AS count FROM notification_jobs" + where,
+                params,
+            ).fetchone()
+            rows = connection.execute(
+                "SELECT " + columns + " FROM notification_jobs" + where
+                + " ORDER BY created_at DESC, job_id DESC LIMIT %s OFFSET %s",
+                params + [page_size, page_offset],
+            ).fetchall()
+            summary_rows = connection.execute(
+                "SELECT status, COUNT(*) AS count FROM notification_jobs" + where + " GROUP BY status",
+                params,
+            ).fetchall()
+        total = int(total_row["count"] or 0) if total_row else 0
+        summary = {row["status"]: int(row["count"] or 0) for row in summary_rows}
+        return [self.list_job_from_row(row) for row in rows], total, summary
+
     @staticmethod
     def _recent_filters(
         message_type: str = "",
         status: str = "",
         query: str = "",
         scope: str = "all",
+        include_payload_query: bool = True,
     ) -> Tuple[List[str], List[object]]:
         clauses = []
         params = []
@@ -166,7 +216,11 @@ class MySQLNotificationJobStore(MySQLOperationalConnection):
             params.append(str(status or "").strip())
         needle = str(query or "").strip()
         if needle:
-            clauses.append("(text LIKE %s OR payload_json LIKE %s OR message_type LIKE %s)")
+            clauses.append(
+                "(text LIKE %s OR source_event_name LIKE %s OR message_type LIKE %s)"
+                if not include_payload_query
+                else "(text LIKE %s OR payload_json LIKE %s OR message_type LIKE %s)"
+            )
             like = "%" + needle[:120] + "%"
             params.extend([like, like, like])
         return clauses, params
@@ -199,6 +253,30 @@ class MySQLNotificationJobStore(MySQLOperationalConnection):
         if not payload.get("text"):
             payload["text"] = str(row.get("text") or "")
         return NotificationJob.from_dict(payload)
+
+    @staticmethod
+    def list_job_from_row(row) -> NotificationJob:
+        """Build the small read model used by the outbox list.
+
+        This deliberately does not inspect ``payload_json``.  A missing graph
+        context is represented as an empty mapping; the selected job is then
+        re-read through ``get`` before its reasoning detail is rendered.
+        """
+        return NotificationJob(
+            job_id=str(row.get("job_id") or ""),
+            account_id=str(row.get("account_id") or ""),
+            account_label=str(row.get("account_label") or ""),
+            message_type=str(row.get("message_type") or "notification"),
+            text=str(row.get("text") or ""),
+            context={},
+            status=str(row.get("status") or "pending"),
+            attempts=int(row.get("attempts") or 0),
+            created_at=str(row.get("created_at") or ""),
+            updated_at=str(row.get("updated_at") or ""),
+            last_error=str(row.get("last_error") or ""),
+            source_event_id=str(row.get("source_event_id") or ""),
+            source_event_name=str(row.get("source_event_name") or ""),
+        )
 
     def upsert_job_with_connection(self, connection, job: NotificationJob) -> None:
         payload = self.compact_job_payload(job)

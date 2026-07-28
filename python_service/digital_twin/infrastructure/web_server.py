@@ -111,6 +111,7 @@ from ..infrastructure.service_factory import (
     build_notification_queue_runner,
     build_official_calendar_sync_service,
     build_ontology_lab_service,
+    build_ontology_reasoning_queue_probe,
     build_ontology_reasoning_runner,
     build_rule_change_candidate_service,
     build_symbol_universe_service,
@@ -142,6 +143,18 @@ NON_CADENCE_MESSAGE_GUIDES = {
 
 def now() -> str:
     return utc_now_iso()
+
+
+def operational_read_settings() -> Dict[str, object]:
+    """Return runtime settings for a read-only web request.
+
+    History retention is a scheduled maintenance concern.  Running it while a
+    screen is opening turns a simple read into an unbounded write path and can
+    leave the first Flow Lens response waiting on a busy MySQL connection.
+    """
+    settings = dict(runtime_settings())
+    settings["_skipOperationalHistoryRetention"] = "1"
+    return settings
 
 
 def flow_lens_data_freshness(generated_at: object, settings: Dict[str, object] = None) -> Dict[str, object]:
@@ -1672,7 +1685,10 @@ def ontology_experiments_status_payload() -> Dict[str, object]:
 def ontology_reasoning_status_payload() -> Dict[str, object]:
     """Expose scheduler-only queue health without running a TypeDB cycle."""
     try:
-        return build_ontology_reasoning_runner(runtime_settings()).status()
+        # The full runner status evaluates account priority and TypeDB health.
+        # The settings screen needs only queue liveness, so use the bounded
+        # read probe instead of constructing the operational worker.
+        return build_ontology_reasoning_queue_probe(operational_read_settings())()
     except Exception as error:  # noqa: BLE001 - diagnostics must remain readable during store recovery.
         return {"enabled": False, "queueHealth": {"status": "error", "reason": str(error)[:240]}}
 
@@ -1768,7 +1784,7 @@ def notification_store():
 
 
 def notification_queue_store():
-    return stores.notification_job_store()
+    return stores.notification_job_store(operational_read_settings())
 
 
 def notification_rule_store():
@@ -2133,16 +2149,14 @@ def notification_job_list_payload(job: NotificationJob, stale_minutes: int) -> D
     full notification text and cooldown metadata.
     """
     payload = notification_job_public_payload(job, detail=False, stale_minutes=stale_minutes)
+    if not payload.get("title"):
+        headline = full_notification_text(job.text).split("\n", 1)[0].strip()
+        payload["title"] = compact_notification_text(job.source_event_name or headline, 120)
     fields = {
         "jobId", "messageType", "messageTypeLabel", "messageTypeIcon", "status",
         "createdAt", "updatedAt", "sourceEventName", "title", "symbol", "rawSymbol",
         "symbolName", "textPreview", "lastError", "suppressionSummary", "nextEligibleAt",
-        "processingAgeMinutes", "recoverableProcessing", "deliveryDecision", "deliveryGateState",
-        "deliveryGateReason", "deliveryReasons", "deliveryReviewLevel", "deliveryDataState",
-        "deliveryChangeState", "deliveryConflictState", "deliveryValidationState", "repeatRecentCount",
-        "repeatWindowMinutes", "repeatBypassed", "repeatBypassReason", "marketHoursEnabled",
-        "marketHoursStatus", "marketHoursDecision", "marketHoursReason", "quietHoursSuppressed",
-        "quietHoursReason",
+        "processingAgeMinutes", "recoverableProcessing", "deliveryDecision",
     }
     return {key: value for key, value in payload.items() if key in fields}
 
@@ -2163,7 +2177,16 @@ def notification_jobs_payload(query: Dict[str, List[str]]) -> Dict[str, object]:
         except (TypeError, ValueError):
             stale_minutes = 30
         store = notification_queue_store()
-        if hasattr(store, "recent_page_with_summary"):
+        if hasattr(store, "recent_list_page_with_summary"):
+            jobs, total, summary = store.recent_list_page_with_summary(
+                limit=limit,
+                offset=offset,
+                message_type=message_type,
+                status=status,
+                query=search,
+                scope=scope,
+            )
+        elif hasattr(store, "recent_page_with_summary"):
             jobs, total, summary = store.recent_page_with_summary(
                 limit=limit,
                 offset=offset,
@@ -3296,12 +3319,13 @@ def compact_flow_lens_payload(payload: Dict[str, object]) -> Dict[str, object]:
 def persisted_flow_lens_snapshot(watchlist_symbols: str = "") -> Dict[str, object]:
     """Read the latest verified monitor projection without calling vendors."""
     try:
-        states = stores.monitor_store(runtime_settings()).previous
+        settings = operational_read_settings()
+        states = stores.monitor_store(settings).previous
         candidates = [item for item in states.values() if isinstance(item, dict) and item]
         if not candidates:
             return {}
         latest = sorted(candidates, key=lambda item: str(item.get("generatedAt") or ""), reverse=True)[0]
-        return build_flow_lens_service(runtime_settings()).snapshot_from_monitor_state(
+        return build_flow_lens_service(settings).snapshot_from_monitor_state(
             latest,
             watchlist_symbols=watchlist_symbols,
         )
@@ -4306,13 +4330,20 @@ class DigitalTwinHandler(BaseHTTPRequestHandler):
                 event_limit = int(first_query(query, "eventLimit") or 100)
             except ValueError:
                 event_limit = 100
-            return self.send_payload(200, build_investment_brain_service().hypothesis_workspace(
+            return self.send_payload(200, build_investment_brain_service(operational_read_settings()).hypothesis_workspace(
                 account_id=first_query(query, "accountId"),
                 symbol=first_query(query, "symbol"),
                 market_id=first_query(query, "marketId"),
                 scope=first_query(query, "scope"),
                 limit=limit,
                 event_limit=event_limit,
+                view=first_query(query, "view"),
+            ))
+
+        hypothesis_detail_match = re.match(r"^/api/investment-brain/hypotheses/([^/]+)$", path)
+        if hypothesis_detail_match and self.command == "GET":
+            return self.send_payload(200, build_investment_brain_service(operational_read_settings()).hypothesis_workspace_detail(
+                urllib.parse.unquote(hypothesis_detail_match.group(1)),
             ))
 
         if path == "/api/investment-brain/hypothesis-policy-versions" and self.command == "GET":
@@ -4320,7 +4351,7 @@ class DigitalTwinHandler(BaseHTTPRequestHandler):
                 limit = int(first_query(query, "limit") or 40)
             except ValueError:
                 limit = 40
-            return self.send_payload(200, build_investment_brain_service().hypothesis_policy_versions(limit=limit))
+            return self.send_payload(200, build_investment_brain_service(operational_read_settings()).hypothesis_policy_versions(limit=limit))
 
         if path == "/api/investment-brain/hypothesis-policy-versions/baseline" and self.command == "POST":
             if not self.ensure_writable("공유 모드에서는 RuleBox 기준선 버전을 기록할 수 없습니다."):

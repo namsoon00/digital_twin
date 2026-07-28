@@ -110,8 +110,24 @@ class FakeLifecycleStore:
     def list_current(self, **_kwargs):
         return list(self.records)
 
+    def list_current_summary(self, **_kwargs):
+        return [{
+            key: value
+            for key, value in item.items()
+            if key != "snapshot"
+        } for item in self.records]
+
     def list_events(self, **_kwargs):
-        return list(self.events)
+        lifecycle_key = _kwargs.get("lifecycle_key") or ""
+        return [item for item in self.events if not lifecycle_key or item.get("lifecycleKey") == lifecycle_key]
+
+    def current_for_keys(self, keys):
+        values = {
+            item.get("lifecycleKey"): item
+            for item in self.records
+            if item.get("lifecycleKey") in set(keys or [])
+        }
+        return values
 
 
 class FakeEpisodeStore:
@@ -179,6 +195,23 @@ class HypothesisReviewTests(unittest.TestCase):
         self.assertEqual("inconclusive", items["market"]["outcomeAssessment"]["outcomeState"])
         self.assertEqual("supported", items["account"]["outcomeAssessment"]["outcomeState"])
         self.assertEqual("2026-07-23T01:00:00Z", items["account"]["outcomeAssessment"]["latestObservedAt"])
+
+    def test_summary_and_selected_detail_keep_heavy_history_out_of_inbox(self):
+        records = [market_lifecycle(), account_lifecycle()]
+        service = HypothesisReviewService(
+            hypothesis_lifecycle_store=FakeLifecycleStore(records),
+            decision_episode_store=FakeEpisodeStore([self.account_one, self.account_two]),
+            settings={"hypothesisOutcomeReviewMinimumSamples": "1"},
+        )
+
+        summary = service.workspace_summary(account_id="account-1", symbol="AAPL")
+        detail = service.workspace_for_lifecycle_key(records[1]["lifecycleKey"])
+
+        self.assertEqual("summary", summary["view"])
+        self.assertEqual([], summary["items"][0]["sourceRuleIds"])
+        self.assertEqual("detail", detail["view"])
+        self.assertEqual("account", detail["items"][0]["scope"])
+        self.assertEqual(["graph.aapl.trend-recovery.v1"], detail["items"][0]["sourceRuleIds"])
 
     def test_lifecycle_item_has_expiry_and_freshness_without_mutating_state(self):
         item = lifecycle_review_item(account_lifecycle())

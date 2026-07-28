@@ -696,6 +696,7 @@ class InvestmentBrainService:
         scope: str = "",
         limit: int = 100,
         event_limit: int = 100,
+        view: str = "detail",
     ) -> Dict[str, object]:
         if not self.hypothesis_review_service:
             return {
@@ -705,6 +706,26 @@ class InvestmentBrainService:
                 "events": [],
                 "reason": "가설 검토 읽기 모델이 구성되지 않았습니다.",
             }
+        summary_view = str(view or "").strip().lower() in {"summary", "list", "inbox"}
+        if summary_view:
+            workspace = {
+                "engine": "ontology-investment-brain",
+                **self.hypothesis_review_service.workspace_summary(
+                    account_id=account_id,
+                    symbol=symbol,
+                    market_id=market_id,
+                    scope=scope,
+                    limit=limit,
+                ),
+            }
+            workspace["qualityReview"] = {
+                "status": "on-demand",
+                "decisionEligibility": "quality-review-only",
+                "automaticDeployment": False,
+                "items": [],
+                "reason": "가설 품질 검토는 선택한 상세 리포트에서 계산합니다.",
+            }
+            return workspace
         workspace = {
             "engine": "ontology-investment-brain",
             **self.hypothesis_review_service.workspace(
@@ -720,6 +741,32 @@ class InvestmentBrainService:
             try:
                 workspace["qualityReview"] = self.hypothesis_quality_review_service.assess(workspace)
             except Exception as error:  # noqa: BLE001 - the read model remains usable when review storage is unavailable.
+                workspace["qualityReview"] = {
+                    "status": "unavailable",
+                    "decisionEligibility": "quality-review-only",
+                    "automaticDeployment": False,
+                    "reason": str(error)[:180],
+                    "items": [],
+                }
+        return workspace
+
+    def hypothesis_workspace_detail(self, lifecycle_key: str) -> Dict[str, object]:
+        if not self.hypothesis_review_service:
+            return {
+                "status": "unavailable",
+                "engine": "ontology-investment-brain",
+                "items": [],
+                "events": [],
+                "reason": "가설 검토 읽기 모델이 구성되지 않았습니다.",
+            }
+        workspace = {
+            "engine": "ontology-investment-brain",
+            **self.hypothesis_review_service.workspace_for_lifecycle_key(lifecycle_key),
+        }
+        if self.hypothesis_quality_review_service and workspace.get("items"):
+            try:
+                workspace["qualityReview"] = self.hypothesis_quality_review_service.assess(workspace)
+            except Exception as error:  # noqa: BLE001 - the report remains usable without quality aggregation.
                 workspace["qualityReview"] = {
                     "status": "unavailable",
                     "decisionEligibility": "quality-review-only",

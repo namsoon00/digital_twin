@@ -97,6 +97,36 @@ class HypothesisReviewService:
         )
         return unique_rows(rows, "lifecycleKey")
 
+    def current_record_summaries(
+        self,
+        account_id: str = "",
+        symbol: str = "",
+        market_id: str = "",
+        scope: str = "",
+        limit: int = 100,
+    ) -> List[Dict[str, object]]:
+        """Read the hypothesis inbox without loading graph snapshots.
+
+        Detailed evidence paths, policy contracts and transition records are
+        intentionally fetched for one selected lifecycle only.  This keeps the
+        modeling tab useful even when historical TypeDB audit payloads are
+        large.
+        """
+        store = self.hypothesis_lifecycle_store
+        if not store:
+            return []
+        reader = getattr(store, "list_current_summary", None) or getattr(store, "list_current", None)
+        if not reader:
+            return []
+        rows = reader(
+            account_id=account_id,
+            symbol=symbol,
+            market_id=market_id,
+            scope=scope,
+            limit=max(1, min(1000, int(limit or 100))),
+        )
+        return unique_rows(rows, "lifecycleKey")
+
     def lifecycle_events(
         self,
         account_id: str = "",
@@ -428,5 +458,116 @@ class HypothesisReviewService:
                 "note": "가설 검토는 종목별 제한된 사후 관측을 읽으며, 현재 투자 판단을 변경하지 않습니다.",
             },
             "items": items,
+            "events": events,
+        }
+
+    def workspace_summary(
+        self,
+        account_id: str = "",
+        symbol: str = "",
+        market_id: str = "",
+        scope: str = "",
+        limit: int = 40,
+    ) -> Dict[str, object]:
+        """Return a compact lifecycle inbox suitable for the first paint."""
+        records = self.current_record_summaries(account_id, symbol, market_id, scope, limit)
+        items = [lifecycle_review_item(record, {}) for record in records]
+        state_counts: Dict[str, int] = {}
+        for item in items:
+            state = text(item.get("state")) or "observed"
+            state_counts[state] = int(state_counts.get(state, 0)) + 1
+        return {
+            "version": HYPOTHESIS_DECISION_BRIEF_VERSION,
+            "status": "ok" if self.hypothesis_lifecycle_store else "unavailable",
+            "source": "typedb-hypothesis-lifecycle-summary",
+            "view": "summary",
+            "decisionEligibility": "review-only-not-action-selector",
+            "automaticDeployment": False,
+            "accountId": account_id,
+            "symbol": upper(symbol),
+            "marketId": market_id,
+            "scope": scope,
+            "count": len(items),
+            "eventCount": 0,
+            "summary": {
+                "stateCounts": state_counts,
+                "outcomeStateCounts": {},
+                "materialChangeCount": sum(1 for item in items if item.get("materialChange")),
+                "activeCount": sum(1 for item in items if item.get("state") not in {"invalidated", "expired"}),
+            },
+            "operational": {
+                "recordLimit": max(1, min(1000, int(limit or 40))),
+                "detailLoading": "selected-lifecycle-only",
+                "bounded": True,
+                "note": "목록은 상태와 변경 여부만 읽습니다. 근거와 사후 결과는 선택한 가설 상세에서 조회합니다.",
+            },
+            "items": items,
+            "events": [],
+        }
+
+    def workspace_for_lifecycle_key(self, lifecycle_key: str) -> Dict[str, object]:
+        """Build one complete review report without scanning the inbox."""
+        key = text(lifecycle_key)
+        store = self.hypothesis_lifecycle_store
+        if not key or not store or not hasattr(store, "current_for_keys"):
+            return {
+                "status": "unavailable",
+                "view": "detail",
+                "items": [],
+                "events": [],
+                "reason": "선택한 가설 이력을 읽을 수 없습니다.",
+            }
+        records = unique_rows((store.current_for_keys([key]) or {}).values(), "lifecycleKey")
+        if not records:
+            return {
+                "status": "not-found",
+                "view": "detail",
+                "items": [],
+                "events": [],
+                "reason": "선택한 가설 이력이 없거나 보존 기간이 지났습니다.",
+            }
+        record = records[0]
+        events = []
+        if hasattr(store, "list_events"):
+            events = unique_rows(store.list_events(lifecycle_key=key, limit=20), "transitionId")
+        item_symbol = upper(record.get("symbol"))
+        record_account_id = text(record.get("accountId"))
+        market_episodes = self.episodes_for_symbols([item_symbol], limit_per_symbol=self.episode_limit()).get(item_symbol) or []
+        account_episodes = self.episodes_for_symbols(
+            [item_symbol],
+            account_id=record_account_id,
+            limit_per_symbol=self.episode_limit(),
+        ).get(item_symbol) if record_account_id else []
+        assessment = self.assessment_for_record(record, record_account_id, market_episodes, account_episodes)
+        item = lifecycle_review_item(record, assessment)
+        item["transitions"] = events[:8]
+        policy_by_rule = self.rule_policy_map()
+        item["editablePolicies"] = [
+            policy_by_rule[rule_id]
+            for rule_id in item.get("sourceRuleIds") or []
+            if rule_id in policy_by_rule
+        ]
+        return {
+            "version": HYPOTHESIS_DECISION_BRIEF_VERSION,
+            "status": "ok",
+            "source": "typedb-hypothesis-lifecycle+decision-episode-outcome",
+            "view": "detail",
+            "decisionEligibility": "review-only-not-action-selector",
+            "automaticDeployment": False,
+            "accountId": record_account_id,
+            "symbol": item_symbol,
+            "marketId": text(record.get("marketId")),
+            "scope": text(record.get("scope")),
+            "count": 1,
+            "eventCount": len(events),
+            "summary": {
+                "stateCounts": {text(item.get("state")) or "observed": 1},
+                "outcomeStateCounts": {
+                    text((item.get("outcomeAssessment") or {}).get("outcomeState")) or "insufficient-sample": 1,
+                },
+                "materialChangeCount": 1 if item.get("materialChange") else 0,
+                "activeCount": 0 if item.get("state") in {"invalidated", "expired"} else 1,
+            },
+            "items": [item],
             "events": events,
         }

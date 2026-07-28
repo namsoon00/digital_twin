@@ -64,6 +64,49 @@ class MySQLHypothesisLifecycleStore(MySQLOperationalConnection):
             rows = connection.execute(sql, tuple(params)).fetchall()
         return [self.record_from_row(row) for row in rows or []]
 
+    def list_current_summary(
+        self,
+        account_id: str = "",
+        symbol: str = "",
+        market_id: str = "",
+        scope: str = "",
+        limit: int = 100,
+    ) -> List[HypothesisLifecycleRecord]:
+        """Return lifecycle list metadata without pulling historical snapshots.
+
+        ``payload_json`` includes the full graph path and evidence delta.  It
+        belongs to the selected hypothesis report, not the initial list view.
+        """
+        where: List[str] = []
+        params: List[object] = []
+        if account_id:
+            where.append("(account_id = %s OR scope = 'market')")
+            params.append(str(account_id))
+        if symbol:
+            where.append("symbol = %s")
+            params.append(str(symbol).upper())
+        if market_id:
+            where.append("market_id = %s")
+            params.append(str(market_id))
+        if scope:
+            where.append("scope = %s")
+            params.append(str(scope))
+        params.append(max(1, min(1000, int(limit or 100))))
+        columns = (
+            "lifecycle_key, lifecycle_id, scope, account_id, portfolio_world_id, "
+            "market_world_id, market_id, symbol, family_id, state, first_observed_at, "
+            "last_observed_at, last_transition_at, inference_generation_id, "
+            "inference_generation_at, previous_generation_id, semantic_fingerprint, "
+            "transition_reason, material_change"
+        )
+        sql = "SELECT " + columns + " FROM investment_hypothesis_lifecycle_states"
+        if where:
+            sql += " WHERE " + " AND ".join(where)
+        sql += " ORDER BY updated_at DESC, lifecycle_key ASC LIMIT %s"
+        with self.connect() as connection:
+            rows = connection.execute(sql, tuple(params)).fetchall()
+        return [self.record_from_summary_row(row) for row in rows or []]
+
     def current_for_subjects(
         self,
         account_id: str,
@@ -249,6 +292,30 @@ class MySQLHypothesisLifecycleStore(MySQLOperationalConnection):
             "materialChange": payload.get("materialChange") if "materialChange" in payload else bool(row.get("material_change")),
         })
         return HypothesisLifecycleRecord.from_dict(payload)
+
+    @staticmethod
+    def record_from_summary_row(row: Dict[str, object]) -> HypothesisLifecycleRecord:
+        return HypothesisLifecycleRecord.from_dict({
+            "lifecycleKey": row.get("lifecycle_key"),
+            "lifecycleId": row.get("lifecycle_id"),
+            "scope": row.get("scope"),
+            "accountId": row.get("account_id"),
+            "portfolioWorldId": row.get("portfolio_world_id"),
+            "marketWorldId": row.get("market_world_id"),
+            "marketId": row.get("market_id"),
+            "symbol": row.get("symbol"),
+            "familyId": row.get("family_id"),
+            "state": row.get("state"),
+            "firstObservedAt": row.get("first_observed_at"),
+            "lastObservedAt": row.get("last_observed_at"),
+            "lastTransitionAt": row.get("last_transition_at"),
+            "inferenceGenerationId": row.get("inference_generation_id"),
+            "inferenceGenerationAt": row.get("inference_generation_at"),
+            "previousGenerationId": row.get("previous_generation_id"),
+            "semanticFingerprint": row.get("semantic_fingerprint"),
+            "transitionReason": row.get("transition_reason"),
+            "materialChange": bool(row.get("material_change")),
+        })
 
     def transition_from_row(self, row: Dict[str, object]) -> HypothesisLifecycleTransition:
         payload = _json_loads(row.get("payload_json"), {})

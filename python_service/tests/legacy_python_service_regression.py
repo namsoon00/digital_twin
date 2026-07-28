@@ -9017,23 +9017,23 @@ class PythonServiceTests(unittest.TestCase):
         self.assertIn("발송 우선도", jobs[0].last_error)
         self.assertLess(jobs[0].context["honeyScore"], jobs[0].context["honeyThreshold"])
 
-    def test_notification_jobs_payload_exposes_honey_decisions(self):
+    def test_notification_jobs_payload_keeps_heavy_delivery_trace_out_of_ledger(self):
         queue = TestNotificationJobStore()
         event = AlertEvent("main", "메인", "INFO", "monitorHeartbeat", "main:heartbeat", "상태 확인", ["모니터링 정상 작동", "보유 5개"], "")
         send_events([event], queue=queue)
 
-        payload = notification_jobs_payload({"limit": ["10"]})
+        payload = notification_jobs_payload({"limit": ["10"], "scope": ["all"]})
 
         self.assertEqual(1, len(payload["jobs"]))
         item = payload["jobs"][0]
         self.assertEqual("monitorHeartbeat", item["messageType"])
         self.assertEqual("suppressed", item["status"])
-        self.assertEqual("suppressed", item["honeyDecision"])
-        self.assertIn("발송 우선도", item["lastError"])
-        self.assertIn("모니터링 정상 작동", item["fullText"])
-        self.assertNotIn("<b>", item["fullText"])
-        self.assertLess(item["honeyScore"], item["honeyThreshold"])
-        self.assertTrue(item["honeyReasons"])
+        self.assertEqual("suppressed", item["deliveryDecision"])
+        self.assertTrue(item["lastError"])
+        self.assertIn("모니터링 정상 작동", item["textPreview"])
+        self.assertNotIn("fullText", item)
+        self.assertNotIn("honeyScore", item)
+        self.assertNotIn("deliveryReasons", item)
         self.assertIn("suppressionSummary", item)
         self.assertIn("diagnostics", payload)
         self.assertTrue(payload["diagnostics"]["suppressionReasons"])

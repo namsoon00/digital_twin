@@ -192,6 +192,68 @@ class AccountSnapshot:
     def has_live_account_data(self) -> bool:
         return monitor_state_has_live_account_data({"mode": self.mode, "status": self.status})
 
+    def projection_observation_input(self, target_symbols=None) -> Dict[str, object]:
+        """Return a bounded observation set for an incremental ABox update.
+
+        ``referencePositions`` always retains the complete account view for
+        portfolio-wide facts such as cash, sector exposure, and market
+        sessions.  ``positions`` only contains the requested subjects when a
+        reasoning worker has already selected a bounded target set.  This is
+        an input-shaping concern, not a materiality or investment decision.
+        """
+        reference_positions = [
+            item
+            for item in list(self.positions or []) + list(self.watchlist or [])
+            if not item.is_cash()
+        ]
+        requested = {
+            str(symbol or "").upper().strip()
+            for symbol in target_symbols or []
+            if str(symbol or "").strip()
+        }
+        available = {
+            item.key()
+            for item in reference_positions
+            if item.key()
+        }
+        if not requested:
+            return {
+                "mode": "full",
+                "reason": "no-target-symbols",
+                "positions": reference_positions,
+                "referencePositions": reference_positions,
+                "targetSymbols": [],
+                "availableSymbols": sorted(available),
+            }
+        selected = [item for item in reference_positions if item.key() in requested]
+        selected_symbols = {item.key() for item in selected if item.key()}
+        if not selected_symbols:
+            return {
+                "mode": "full",
+                "reason": "target-symbols-not-in-snapshot",
+                "positions": reference_positions,
+                "referencePositions": reference_positions,
+                "targetSymbols": sorted(requested),
+                "availableSymbols": sorted(available),
+            }
+        if available and available.issubset(requested):
+            return {
+                "mode": "full",
+                "reason": "target-set-covers-snapshot",
+                "positions": reference_positions,
+                "referencePositions": reference_positions,
+                "targetSymbols": sorted(selected_symbols),
+                "availableSymbols": sorted(available),
+            }
+        return {
+            "mode": "target-scoped",
+            "reason": "bounded-target-symbols",
+            "positions": selected,
+            "referencePositions": reference_positions,
+            "targetSymbols": sorted(selected_symbols),
+            "availableSymbols": sorted(available),
+        }
+
     def to_monitor_state(self) -> Dict[str, object]:
         return {
             "accountId": self.account_id,

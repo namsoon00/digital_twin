@@ -86,6 +86,7 @@ def build_portfolio_ontology(
     include_tbox: bool = True,
     include_presentation: bool = True,
     include_derived_decision_items: bool = True,
+    reference_positions: Iterable[Position] = None,
 ) -> PortfolioOntology:
     """Build an ontology graph for a portfolio snapshot.
 
@@ -110,6 +111,20 @@ def build_portfolio_ontology(
         if previous is None or (is_watchlist_position(previous) and is_holding_position(item)):
             observed_by_symbol[key] = item
     observed_positions = list(observed_by_symbol.values())
+    reference_by_symbol: Dict[str, Position] = {}
+    reference_source_positions = reference_positions if reference_positions is not None else observed_positions
+    for item in reference_source_positions:
+        if not observable_position(item):
+            continue
+        key = symbol_key(item)
+        previous = reference_by_symbol.get(key)
+        if previous is None or (is_watchlist_position(previous) and is_holding_position(item)):
+            reference_by_symbol[key] = item
+    # A target-scoped projection still owns the target observation even when
+    # a caller supplied an incomplete reference collection.
+    for key, item in observed_by_symbol.items():
+        reference_by_symbol.setdefault(key, item)
+    reference_observed_positions = list(reference_by_symbol.values())
     graph = PortfolioOntology(portfolio_id=portfolio_id)
     if include_tbox:
         graph.entities.extend(tbox_entities())
@@ -166,19 +181,19 @@ def build_portfolio_ontology(
             properties=abox_properties(),
         ))
     add_market_exposure_concepts(graph, portfolio_node_id, portfolio)
-    add_portfolio_factor_exposure_concepts(graph, portfolio_node_id, portfolio, observed_positions, runtime_context)
+    add_portfolio_factor_exposure_concepts(graph, portfolio_node_id, portfolio, reference_observed_positions, runtime_context)
     add_runtime_setting_concepts(graph, portfolio_node_id, runtime_context)
     add_runtime_metadata_concepts(graph, portfolio_node_id, runtime_context)
-    add_operational_world_concepts(graph, portfolio_node_id, runtime_context, observed_positions)
+    add_operational_world_concepts(graph, portfolio_node_id, runtime_context, reference_observed_positions)
     strategy_id = add_strategy_world_concepts(graph, portfolio_node_id, runtime_context)
     if strategy_context.get("profileId"):
         add_relation(graph, strategy_id, str(strategy_context.get("profileId")), "USES_INVESTMENT_STRATEGY_PROFILE", weight=1.0, properties={"source": "account-context"})
     add_external_signal_concepts(graph, portfolio_node_id, external_signals, runtime_context)
     watchlist_id = ""
-    if any(is_watchlist_position(item) for item in observed_positions):
+    if any(is_watchlist_position(item) for item in reference_observed_positions):
         watchlist_id = add_entity(graph, "watchlist", portfolio_id, "관심 종목 목록", {
             "tboxClass": "Watchlist",
-            "candidateCount": len([item for item in observed_positions if is_watchlist_position(item)]),
+            "candidateCount": len([item for item in reference_observed_positions if is_watchlist_position(item)]),
         })
         add_relation(graph, portfolio_node_id, watchlist_id, "HAS_WATCHLIST", weight=1.0, properties={"source": "watchlist"})
     sector_weights: Dict[str, float] = {}
@@ -193,7 +208,7 @@ def build_portfolio_ontology(
             weight=round(number(sector.get("ratio")) / 100, 4),
             properties=abox_properties({"basis": "sector-weight", "polarity": "context"}),
         ))
-    for position in observed_positions:
+    for position in reference_observed_positions:
         label = str(position.sector or "기타").strip() or "기타"
         if label in sector_weights:
             continue
@@ -307,7 +322,7 @@ def build_portfolio_ontology(
         add_metric_concepts(graph, stock_id, position, source, observation_profiles)
         add_position_pipeline_quality_concepts(graph, stock_id, position, runtime_context)
         add_price_level_and_liquidity_concepts(graph, stock_id, position, source, observation_profiles)
-        add_security_line_concepts(graph, stock_id, position, observed_positions, external_signals, runtime_context)
+        add_security_line_concepts(graph, stock_id, position, reference_observed_positions, external_signals, runtime_context)
         add_position_temporal_concepts(graph, stock_id, position, external_signals, runtime_context, observation_profiles)
         add_symbol_external_signal_concepts(graph, stock_id, symbol, external_signals)
         add_position_valuation_concepts(graph, stock_id, position, external_signals, runtime_context, observation_profiles)
@@ -359,8 +374,8 @@ def build_portfolio_ontology(
         "model": "ontology-abox-facts",
         "runtimeProjectionMode": "abox-facts-only-typedb-native-rules",
         "description": "Runtime ABox facts are projected for TypeDB schema-function inference. Python graph reasoning is not available in this path.",
-        "positionCount": len([item for item in observed_positions if is_holding_position(item)]),
-        "watchlistCount": len([item for item in observed_positions if is_watchlist_position(item)]),
+        "positionCount": len([item for item in reference_observed_positions if is_holding_position(item)]),
+        "watchlistCount": len([item for item in reference_observed_positions if is_watchlist_position(item)]),
         "aboxLifecycle": dict(lifecycle_metadata),
         "activeTBox": dict(runtime_context.get("activeTBox") or {}),
         "presentationDeferred": not include_presentation,

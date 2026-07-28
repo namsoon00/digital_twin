@@ -776,72 +776,38 @@ class PortfolioOntologyProjectionRecorder:
                 }
                 self.store_projection_result(snapshot, result, projection_run)
                 return result
-            graph_build_started = time.perf_counter()
-            graph, persistence_graph, graph_assembly = self.build_graph_assembly(
+            projection_graph = self.build_projection_graph(
                 snapshot,
                 rulebox_bootstrap,
+                portfolio_world_context,
+                market_world_context=market_world_context,
+                target_symbols=target_symbols,
+                target_scoped_input=bool(target_symbols),
             )
-            runtime_stages.update(dict(graph_assembly.get("runtimeStages") or {}))
-            runtime_stages["graphAssemblyCacheHit"] = (
-                1 if str(graph_assembly.get("status") or "") == "hit" else 0
+            graph = projection_graph["graph"]
+            persistence_graph = projection_graph["persistenceGraph"]
+            graph_assembly = projection_graph["assembly"]
+            planner_topology = projection_graph["plannerTopology"]
+            material_fingerprint = projection_graph["materialFingerprint"]
+            material_snapshot_id = projection_graph["materialSnapshotId"]
+            scoped_identity = projection_graph["scopedIdentity"]
+            runtime_stages.update(dict(projection_graph.get("runtimeStages") or {}))
+            graph_input = {
+                "mode": str(graph_assembly.get("inputMode") or "full"),
+                "targetSymbols": list(graph_assembly.get("targetSymbols") or []),
+                "requestedTargetSymbols": sorted({
+                    str(symbol or "").upper().strip()
+                    for symbol in target_symbols or []
+                    if str(symbol or "").strip()
+                }),
+                "sourcePositionCount": int(graph_assembly.get("sourcePositionCount") or 0),
+                "referencePositionCount": int(graph_assembly.get("referencePositionCount") or 0),
+                "fallback": False,
+                "fallbackReason": "",
+            }
+            runtime_stages["targetScopedInputUsed"] = (
+                1 if graph_input["mode"] == "target-scoped" else 0
             )
-            if graph_assembly.get("ageMs") is not None:
-                runtime_stages["graphAssemblyCacheAgeMs"] = int(graph_assembly.get("ageMs") or 0)
-            # This is a structural index from the exact graph being persisted.
-            # It only bounds TypeDB function scheduling; TypeDB still evaluates
-            # all selected rule conditions and materializes the result.
-            planner_topology = native_rule_planner_topology(persistence_graph)
-            persistence_graph.worldview["nativeRulePlannerTopology"] = planner_topology
-            graph.worldview.update({
-                **world_metadata(portfolio_world_context),
-                "marketWorldId": market_world_context.world_id,
-                "marketContextMode": "shared-market-world-with-portfolio-rule-mirror",
-            })
-            persistence_graph.worldview.update({
-                **world_metadata(portfolio_world_context),
-                "marketWorldId": market_world_context.world_id,
-                "marketContextMode": "shared-market-world-with-portfolio-rule-mirror",
-            })
-            material_fingerprint = native_rule_planner_manifest_fingerprint(
-                material_graph_fingerprint(persistence_graph),
-                planner_topology,
-            )
-            material_snapshot_id = apply_material_graph_identity(
-                persistence_graph,
-                snapshot.account_id,
-                material_fingerprint,
-                world_id=portfolio_world_context.world_id,
-            )
-            # The full in-memory graph remains the validation and AI context,
-            # while persistence gets independent immutable generations for
-            # each owning scope.  The manifest id remains the compatibility
-            # ABox generation id used by InferenceBox alignment and audits.
-            scoped_identity_started = time.perf_counter()
-            scoped_identity = apply_scoped_abox_identity(
-                persistence_graph,
-                snapshot.account_id,
-                world_id=portfolio_world_context.world_id,
-                tenant_id=portfolio_world_context.tenant_id,
-                world_type=portfolio_world_context.world_type,
-            )
-            runtime_stages["scopedAboxIdentityMs"] = int(
-                (time.perf_counter() - scoped_identity_started) * 1000
-            )
-            material_snapshot_id = str(scoped_identity.get("manifestId") or material_snapshot_id)
-            runtime_stages["graphBuildMs"] = int((time.perf_counter() - graph_build_started) * 1000)
-            validation_started = time.perf_counter()
-            validation = validate_ontology(persistence_graph)
-            runtime_stages["aboxValidationMs"] = int((time.perf_counter() - validation_started) * 1000)
-            if validation.error_count:
-                result = {
-                    "saved": False,
-                    "status": "invalid-abox",
-                    "reason": "ABox validation failed before graph-store persistence.",
-                    "graphStore": self.active_graph_store_key(),
-                    "aboxValidation": validation.to_dict(),
-                }
-                self.store_projection_result(snapshot, result, projection_run)
-                return result
             active_abox_started = time.perf_counter()
             active_abox = self.active_abox_metadata(portfolio_world_context.world_id)
             runtime_stages["activeAboxReadMs"] = int(
@@ -860,6 +826,67 @@ class PortfolioOntologyProjectionRecorder:
                 target_symbols,
                 reasoning_context=compact_reasoning_context,
             )
+            # A first projection, a scheduled complete reconciliation, or a
+            # shared-scope shape that cannot be retained must keep the full
+            # source graph. The target input is merely a bounded assembly
+            # optimization; it must never turn an unsafe patch into a partial
+            # ABox replacement.
+            if (
+                str(graph_input.get("mode") or "") == "target-scoped"
+                and not bool(target_scoped_patch.get("eligible"))
+            ):
+                target_attempt_stages = dict(projection_graph.get("runtimeStages") or {})
+                full_projection_graph = self.build_projection_graph(
+                    snapshot,
+                    rulebox_bootstrap,
+                    portfolio_world_context,
+                    market_world_context=market_world_context,
+                    target_symbols=target_symbols,
+                    target_scoped_input=False,
+                )
+                graph = full_projection_graph["graph"]
+                persistence_graph = full_projection_graph["persistenceGraph"]
+                graph_assembly = full_projection_graph["assembly"]
+                planner_topology = full_projection_graph["plannerTopology"]
+                material_fingerprint = full_projection_graph["materialFingerprint"]
+                material_snapshot_id = full_projection_graph["materialSnapshotId"]
+                scoped_identity = full_projection_graph["scopedIdentity"]
+                full_runtime_stages = dict(full_projection_graph.get("runtimeStages") or {})
+                for stage, value in full_runtime_stages.items():
+                    if stage == "graphBuildMs":
+                        continue
+                    runtime_stages["fullInput" + stage[:1].upper() + stage[1:]] = value
+                runtime_stages["targetScopedInputUsed"] = 1
+                runtime_stages["targetScopedInputAttemptGraphBuildMs"] = int(
+                    target_attempt_stages.get("graphBuildMs") or 0
+                )
+                runtime_stages["targetScopedInputFallbackGraphBuildMs"] = int(
+                    full_runtime_stages.get("graphBuildMs") or 0
+                )
+                runtime_stages["targetScopedInputFallback"] = 1
+                runtime_stages["graphBuildMs"] = (
+                    runtime_stages["targetScopedInputAttemptGraphBuildMs"]
+                    + runtime_stages["targetScopedInputFallbackGraphBuildMs"]
+                )
+                graph_input.update({
+                    "mode": "full",
+                    "targetSymbols": list(graph_assembly.get("targetSymbols") or []),
+                    "sourcePositionCount": int(graph_assembly.get("sourcePositionCount") or 0),
+                    "referencePositionCount": int(graph_assembly.get("referencePositionCount") or 0),
+                    "fallback": True,
+                    "fallbackReason": str(
+                        target_scoped_patch.get("fallbackReason")
+                        or target_scoped_patch.get("status")
+                        or "target-scoped-input-not-eligible"
+                    ),
+                })
+                target_scoped_patch = self.target_scoped_patch_targets(
+                    snapshot,
+                    active_abox,
+                    scoped_identity,
+                    target_symbols,
+                    reasoning_context=compact_reasoning_context,
+                )
             if target_scoped_patch.get("eligible"):
                 target_patch_started = time.perf_counter()
                 applied_target_patch = merge_target_scoped_abox_manifest(
@@ -908,6 +935,65 @@ class PortfolioOntologyProjectionRecorder:
                         "fullReconcileMinutes": self.scoped_full_reconcile_minutes(),
                     }
                     persistence_graph.worldview["targetScopedManifestPatch"] = dict(target_scoped_patch)
+                elif str(graph_input.get("mode") or "") == "target-scoped":
+                    # The target-only graph was valid locally but could not
+                    # retain every required active link or scope. Rebuild the
+                    # complete graph for this one cycle instead of persisting
+                    # a partial manifest.
+                    target_attempt_stages = dict(projection_graph.get("runtimeStages") or {})
+                    full_projection_graph = self.build_projection_graph(
+                        snapshot,
+                        rulebox_bootstrap,
+                        portfolio_world_context,
+                        market_world_context=market_world_context,
+                        target_symbols=target_symbols,
+                        target_scoped_input=False,
+                    )
+                    graph = full_projection_graph["graph"]
+                    persistence_graph = full_projection_graph["persistenceGraph"]
+                    graph_assembly = full_projection_graph["assembly"]
+                    planner_topology = full_projection_graph["plannerTopology"]
+                    material_fingerprint = full_projection_graph["materialFingerprint"]
+                    material_snapshot_id = full_projection_graph["materialSnapshotId"]
+                    scoped_identity = full_projection_graph["scopedIdentity"]
+                    full_runtime_stages = dict(full_projection_graph.get("runtimeStages") or {})
+                    for stage, value in full_runtime_stages.items():
+                        if stage == "graphBuildMs":
+                            continue
+                        runtime_stages["fullInput" + stage[:1].upper() + stage[1:]] = value
+                    runtime_stages["targetScopedInputUsed"] = 1
+                    runtime_stages["targetScopedInputAttemptGraphBuildMs"] = int(
+                        target_attempt_stages.get("graphBuildMs") or 0
+                    )
+                    runtime_stages["targetScopedInputFallbackGraphBuildMs"] = int(
+                        full_runtime_stages.get("graphBuildMs") or 0
+                    )
+                    runtime_stages["targetScopedInputFallback"] = 1
+                    runtime_stages["graphBuildMs"] = (
+                        runtime_stages["targetScopedInputAttemptGraphBuildMs"]
+                        + runtime_stages["targetScopedInputFallbackGraphBuildMs"]
+                    )
+                    graph_input.update({
+                        "mode": "full",
+                        "targetSymbols": list(graph_assembly.get("targetSymbols") or []),
+                        "sourcePositionCount": int(graph_assembly.get("sourcePositionCount") or 0),
+                        "referencePositionCount": int(graph_assembly.get("referencePositionCount") or 0),
+                        "fallback": True,
+                        "fallbackReason": str(
+                            applied_target_patch.get("fallbackReason")
+                            or applied_target_patch.get("status")
+                            or "target-scoped-manifest-patch-not-applied"
+                        ),
+                    })
+                    target_scoped_patch = {
+                        "status": "full-input-fallback",
+                        "mode": "full-manifest-fallback",
+                        "targetSymbols": list(
+                            target_scoped_patch.get("targetSymbols") or []
+                        ),
+                        "fallbackReason": graph_input["fallbackReason"],
+                        "fullReconcileMinutes": self.scoped_full_reconcile_minutes(),
+                    }
                 else:
                     target_scoped_patch = {
                         "status": str(applied_target_patch.get("status") or "skipped"),
@@ -925,6 +1011,20 @@ class PortfolioOntologyProjectionRecorder:
                             applied_target_patch.get("deferredScopeIds") or []
                         ),
                     }
+            validation_started = time.perf_counter()
+            validation = validate_ontology(persistence_graph)
+            runtime_stages["aboxValidationMs"] = int((time.perf_counter() - validation_started) * 1000)
+            if validation.error_count:
+                result = {
+                    "saved": False,
+                    "status": "invalid-abox",
+                    "reason": "ABox validation failed before graph-store persistence.",
+                    "graphStore": self.active_graph_store_key(),
+                    "aboxValidation": validation.to_dict(),
+                    "graphInput": graph_input,
+                }
+                self.store_projection_result(snapshot, result, projection_run)
+                return result
             # Preserve the exact incremental path or safe fallback in the
             # manifest, so operational diagnostics do not infer it later.
             persistence_graph.worldview["targetScopedManifestPatch"] = dict(target_scoped_patch)
@@ -1031,6 +1131,7 @@ class PortfolioOntologyProjectionRecorder:
                 "scopeFamilyCounts": dict(scoped_identity.get("scopeFamilyCounts") or {}),
                 "scopeTopologyVersion": str(persistence_graph.worldview.get("scopeTopologyVersion") or ""),
                 "targetScopedManifestPatch": dict(target_scoped_patch or {}),
+                "graphInput": dict(graph_input),
                 "inferenceImpactPlan": compact_impact_plan,
                 "reasoningContext": compact_reasoning_context,
                 "reason": (
@@ -1201,6 +1302,7 @@ class PortfolioOntologyProjectionRecorder:
                 )
                 result["materialChangeDetected"] = True
                 result["projectionScope"] = projection_scope
+                result["graphInput"] = dict(graph_input)
                 result["inferenceImpactPlan"] = compact_impact_plan
                 result["reasoningContext"] = compact_reasoning_context
                 result["aboxValidation"] = validation.to_dict()
@@ -1909,6 +2011,8 @@ class PortfolioOntologyProjectionRecorder:
         snapshot: AccountSnapshot,
         rule_catalog: Dict[str, object],
         active_tbox: Dict[str, object],
+        target_symbols: List[str] = None,
+        input_mode: str = "full",
     ) -> str:
         """Hash only source inputs; no graph result or credentials are persisted."""
         source_snapshot = projection_source_snapshot(snapshot)
@@ -1924,12 +2028,14 @@ class PortfolioOntologyProjectionRecorder:
             metadata.pop("investmentBrain", None)
         source_snapshot["metadata"] = metadata
         payload = {
-            "version": "portfolio-graph-assembly-cache-v1",
+            "version": "portfolio-graph-assembly-cache-v2",
             "namespace": self.graph_assembly_cache_namespace(),
             "sourceSnapshot": stable_value(source_snapshot),
             "settings": stable_value(self.settings),
             "activeTBox": stable_value(active_tbox),
             "ruleboxRulesHash": str((rule_catalog or {}).get("ruleboxRulesHash") or ""),
+            "targetSymbols": sorted({str(symbol or "").upper().strip() for symbol in target_symbols or [] if str(symbol or "").strip()}),
+            "inputMode": str(input_mode or "full"),
         }
         encoded = json.dumps(payload, ensure_ascii=False, sort_keys=True, separators=(",", ":"), default=str)
         return hashlib.sha256(encoded.encode("utf-8")).hexdigest()
@@ -1938,14 +2044,27 @@ class PortfolioOntologyProjectionRecorder:
         self,
         snapshot: AccountSnapshot,
         rule_catalog: Dict[str, object],
+        target_symbols: List[str] = None,
+        target_scoped_input: bool = False,
     ) -> tuple:
         """Build or safely clone the immutable pre-identity ABox graph pair."""
         stage_timings: Dict[str, int] = {}
+        observation_input = snapshot.projection_observation_input(
+            target_symbols if target_scoped_input else None
+        )
+        input_mode = str(observation_input.get("mode") or "full")
+        input_symbols = list(observation_input.get("targetSymbols") or [])
         active_tbox_started = time.perf_counter()
         active_tbox = self.active_tbox_context()
         stage_timings["activeTBoxReadMs"] = int((time.perf_counter() - active_tbox_started) * 1000)
         cache_enabled = self.graph_assembly_cache_enabled()
-        cache_key = self.graph_assembly_cache_key(snapshot, rule_catalog, active_tbox) if cache_enabled else ""
+        cache_key = self.graph_assembly_cache_key(
+            snapshot,
+            rule_catalog,
+            active_tbox,
+            target_symbols=input_symbols,
+            input_mode=input_mode,
+        ) if cache_enabled else ""
         cache_read_started = time.perf_counter()
         cache_result = SHARED_PORTFOLIO_GRAPH_ASSEMBLY_CACHE.get(
             cache_key,
@@ -1961,16 +2080,24 @@ class PortfolioOntologyProjectionRecorder:
                 {
                     "status": "hit",
                     "ageMs": int(cache_result.get("ageMs") or 0),
+                    "inputMode": input_mode,
+                    "targetSymbols": input_symbols,
+                    "sourcePositionCount": len(observation_input.get("positions") or []),
+                    "referencePositionCount": len(observation_input.get("referencePositions") or []),
                     "runtimeStages": stage_timings,
                 },
             )
 
         runtime_context_started = time.perf_counter()
-        runtime_context = self.runtime_context(snapshot, active_tbox=active_tbox)
+        runtime_context = self.runtime_context(
+            snapshot,
+            active_tbox=active_tbox,
+            target_symbols=input_symbols if input_mode == "target-scoped" else None,
+        )
         stage_timings["runtimeContextMs"] = int((time.perf_counter() - runtime_context_started) * 1000)
         assembly_started = time.perf_counter()
         graph = build_portfolio_ontology(
-            list(snapshot.positions or []) + list(snapshot.watchlist or []),
+            observation_input.get("positions") or [],
             snapshot.portfolio,
             # Current decisions are derived from a preceding TypeDB/AI
             # pass. Native rules must start from observed portfolio and
@@ -1985,6 +2112,7 @@ class PortfolioOntologyProjectionRecorder:
             include_tbox=False,
             include_presentation=False,
             include_derived_decision_items=False,
+            reference_positions=observation_input.get("referencePositions") or [],
         )
         persistence_graph = self.graph_for_graph_store_persistence(graph, rule_catalog)
         stage_timings["ontologyGraphAssemblyMs"] = int((time.perf_counter() - assembly_started) * 1000)
@@ -1997,7 +2125,81 @@ class PortfolioOntologyProjectionRecorder:
             )
         return graph, persistence_graph, {
             "status": "miss" if cache_enabled else "disabled",
+            "inputMode": input_mode,
+            "targetSymbols": input_symbols,
+            "sourcePositionCount": len(observation_input.get("positions") or []),
+            "referencePositionCount": len(observation_input.get("referencePositions") or []),
             "runtimeStages": stage_timings,
+        }
+
+    def build_projection_graph(
+        self,
+        snapshot: AccountSnapshot,
+        rule_catalog: Dict[str, object],
+        portfolio_world_context,
+        market_world_context=None,
+        target_symbols: List[str] = None,
+        target_scoped_input: bool = False,
+    ) -> Dict[str, object]:
+        """Assemble one immutable projection graph and its scoped identity."""
+        graph_build_started = time.perf_counter()
+        graph, persistence_graph, graph_assembly = self.build_graph_assembly(
+            snapshot,
+            rule_catalog,
+            target_symbols=target_symbols,
+            target_scoped_input=target_scoped_input,
+        )
+        runtime_stages = dict(graph_assembly.get("runtimeStages") or {})
+        runtime_stages["graphAssemblyCacheHit"] = (
+            1 if str(graph_assembly.get("status") or "") == "hit" else 0
+        )
+        if graph_assembly.get("ageMs") is not None:
+            runtime_stages["graphAssemblyCacheAgeMs"] = int(graph_assembly.get("ageMs") or 0)
+        planner_topology = native_rule_planner_topology(persistence_graph)
+        persistence_graph.worldview["nativeRulePlannerTopology"] = planner_topology
+        resolved_market_world = market_world_context or market_world(
+            portfolio_world_context.market_id,
+            self.settings.get("ontologySharedMarketTenantId") or "shared",
+        )
+        world_metadata_payload = {
+            **world_metadata(portfolio_world_context),
+            "marketWorldId": resolved_market_world.world_id,
+            "marketContextMode": "shared-market-world-with-portfolio-rule-mirror",
+        }
+        graph.worldview.update(world_metadata_payload)
+        persistence_graph.worldview.update(world_metadata_payload)
+        material_fingerprint = native_rule_planner_manifest_fingerprint(
+            material_graph_fingerprint(persistence_graph),
+            planner_topology,
+        )
+        material_snapshot_id = apply_material_graph_identity(
+            persistence_graph,
+            snapshot.account_id,
+            material_fingerprint,
+            world_id=portfolio_world_context.world_id,
+        )
+        scoped_identity_started = time.perf_counter()
+        scoped_identity = apply_scoped_abox_identity(
+            persistence_graph,
+            snapshot.account_id,
+            world_id=portfolio_world_context.world_id,
+            tenant_id=portfolio_world_context.tenant_id,
+            world_type=portfolio_world_context.world_type,
+        )
+        runtime_stages["scopedAboxIdentityMs"] = int(
+            (time.perf_counter() - scoped_identity_started) * 1000
+        )
+        material_snapshot_id = str(scoped_identity.get("manifestId") or material_snapshot_id)
+        runtime_stages["graphBuildMs"] = int((time.perf_counter() - graph_build_started) * 1000)
+        return {
+            "graph": graph,
+            "persistenceGraph": persistence_graph,
+            "assembly": graph_assembly,
+            "plannerTopology": planner_topology,
+            "materialFingerprint": material_fingerprint,
+            "materialSnapshotId": material_snapshot_id,
+            "scopedIdentity": scoped_identity,
+            "runtimeStages": runtime_stages,
         }
 
     def async_quality_record_enabled(self) -> bool:
@@ -4054,12 +4256,33 @@ class PortfolioOntologyProjectionRecorder:
         self,
         snapshot: AccountSnapshot,
         active_tbox: Dict[str, object] = None,
+        target_symbols: List[str] = None,
     ) -> Dict[str, object]:
         if active_tbox is None:
             active_tbox = self.active_tbox_context()
         as_of = str(snapshot.generated_at or "").strip()
         snapshot_seed = "|".join([str(snapshot.account_id or ""), as_of or "unknown"])
-        decision_episodes = self.decision_episode_context(snapshot)
+        selected_symbols = {
+            str(symbol or "").upper().strip()
+            for symbol in target_symbols or []
+            if str(symbol or "").strip()
+        }
+        available_symbols = {
+            str(getattr(position, "symbol", "") or "").upper().strip()
+            for position in list(snapshot.positions or []) + list(snapshot.watchlist or [])
+            if str(getattr(position, "symbol", "") or "").strip() and not position.is_cash()
+        }
+        selected_symbols.intersection_update(available_symbols)
+        all_decision_episodes = self.decision_episode_context(snapshot)
+        decision_episodes = (
+            [
+                item
+                for item in all_decision_episodes
+                if str(item.get("symbol") or "").upper().strip() in selected_symbols
+            ]
+            if selected_symbols
+            else all_decision_episodes
+        )
         metadata = self.factual_runtime_metadata(snapshot.metadata)
         # Projection output is derived state, not a new market observation.
         # Feeding the previous ABox result back into the next ABox makes an
@@ -4067,7 +4290,7 @@ class PortfolioOntologyProjectionRecorder:
         metadata.pop("ontology", None)
         account_context = metadata.get("accountContext") if isinstance(metadata.get("accountContext"), dict) else {}
         decision_performance = evaluate_decision_performance(
-            decision_episodes,
+            all_decision_episodes,
             minimum_sample_count=int(self.performance_setting("investmentBrainPerformanceMinimumSamples", 5)),
         )
         return {
@@ -4090,14 +4313,23 @@ class PortfolioOntologyProjectionRecorder:
             "decisionItems": [],
             "decisionEpisodes": decision_episodes,
             "decisionPerformance": decision_performance,
-            "hypothesisProposals": self.hypothesis_proposal_context(snapshot),
-            "hypothesisLifecycles": self.hypothesis_lifecycle_context(snapshot),
+            "hypothesisProposals": self.hypothesis_proposal_context(
+                snapshot,
+                target_symbols=selected_symbols,
+            ),
+            "hypothesisLifecycles": self.hypothesis_lifecycle_context(
+                snapshot,
+                target_symbols=selected_symbols,
+            ),
             # A live pipeline health row may change while a delayed retry is
             # rebuilding the same account snapshot. Only health captured with
             # the snapshot is causal ABox input; current worker telemetry is
             # exposed through operational monitoring instead.
             "dataPipelineHealth": self.data_pipeline_health_context(snapshot),
-            "temporalObservationWindows": self.temporal_observation_windows(snapshot),
+            "temporalObservationWindows": self.temporal_observation_windows(
+                snapshot,
+                target_symbols=selected_symbols,
+            ),
         }
 
     @staticmethod
@@ -4142,7 +4374,11 @@ class PortfolioOntologyProjectionRecorder:
             ]
         return values
 
-    def temporal_observation_windows(self, snapshot: AccountSnapshot) -> Dict[str, object]:
+    def temporal_observation_windows(
+        self,
+        snapshot: AccountSnapshot,
+        target_symbols=None,
+    ) -> Dict[str, object]:
         if not self.market_time_series_store or not hasattr(self.market_time_series_store, "load_temporal_windows"):
             return {}
         symbols = {
@@ -4150,6 +4386,13 @@ class PortfolioOntologyProjectionRecorder:
             for position in list(snapshot.positions or []) + list(snapshot.watchlist or [])
             if str(getattr(position, "symbol", "") or "").strip() and not position.is_cash()
         }
+        requested = {
+            str(symbol or "").upper().strip()
+            for symbol in target_symbols or []
+            if str(symbol or "").strip()
+        }
+        if requested:
+            symbols.intersection_update(requested)
         if not symbols:
             return {}
         definitions = parse_temporal_windows(self.settings.get("temporalWindowPeriods"))
@@ -4205,7 +4448,11 @@ class PortfolioOntologyProjectionRecorder:
         except Exception:  # noqa: BLE001 - projection remains valid without historical memory.
             return []
 
-    def hypothesis_proposal_context(self, snapshot: AccountSnapshot) -> List[Dict[str, object]]:
+    def hypothesis_proposal_context(
+        self,
+        snapshot: AccountSnapshot,
+        target_symbols=None,
+    ) -> List[Dict[str, object]]:
         if not self.hypothesis_proposal_store or not hasattr(self.hypothesis_proposal_store, "list_hypothesis_proposals"):
             return []
         symbols = {
@@ -4213,6 +4460,13 @@ class PortfolioOntologyProjectionRecorder:
             for position in list(snapshot.positions or []) + list(snapshot.watchlist or [])
             if str(getattr(position, "symbol", "") or "").strip()
         }
+        requested = {
+            str(symbol or "").upper().strip()
+            for symbol in target_symbols or []
+            if str(symbol or "").strip()
+        }
+        if requested:
+            symbols.intersection_update(requested)
         try:
             rows = self.hypothesis_proposal_store.list_hypothesis_proposals("", "", 200)
         except Exception:  # noqa: BLE001 - proposal memory must not block ABox projection.
@@ -4225,7 +4479,11 @@ class PortfolioOntologyProjectionRecorder:
             and str(item.get("symbol") or "").upper().strip() in symbols
         ]
 
-    def hypothesis_lifecycle_context(self, snapshot: AccountSnapshot) -> List[Dict[str, object]]:
+    def hypothesis_lifecycle_context(
+        self,
+        snapshot: AccountSnapshot,
+        target_symbols=None,
+    ) -> List[Dict[str, object]]:
         if not self.hypothesis_lifecycle_store or not hasattr(self.hypothesis_lifecycle_store, "current_for_subjects"):
             return []
         symbols = {
@@ -4233,6 +4491,13 @@ class PortfolioOntologyProjectionRecorder:
             for position in list(snapshot.positions or []) + list(snapshot.watchlist or [])
             if str(getattr(position, "symbol", "") or "").strip() and not position.is_cash()
         }
+        requested = {
+            str(symbol or "").upper().strip()
+            for symbol in target_symbols or []
+            if str(symbol or "").strip()
+        }
+        if requested:
+            symbols.intersection_update(requested)
         if not symbols:
             return []
         try:

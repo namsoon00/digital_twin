@@ -503,6 +503,134 @@ class OntologyInferenceQualityTests(unittest.TestCase):
 
         self.assertEqual(["000660"], symbols)
 
+    def test_target_scoped_graph_assembly_limits_symbol_facts_and_keeps_portfolio_context(self):
+        samsung = normalize_position({
+            "symbol": "005930",
+            "name": "삼성전자",
+            "market": "KR",
+            "currency": "KRW",
+            "source": "holding",
+            "quantity": 10,
+            "currentPrice": 70000,
+            "marketValue": 700000,
+        })
+        hynix = normalize_position({
+            "symbol": "000660",
+            "name": "SK하이닉스",
+            "market": "KR",
+            "currency": "KRW",
+            "source": "holding",
+            "quantity": 7,
+            "currentPrice": 180000,
+            "marketValue": 1260000,
+        })
+        snapshot = self.snapshot_with_positions(
+            [samsung, hynix],
+            "2026-07-20T00:01:00Z",
+        )
+        recorder = PortfolioOntologyProjectionRecorder(MemoryProjectionRepository())
+
+        graph, persistence_graph, assembly = recorder.build_graph_assembly(
+            snapshot,
+            {
+                "ruleboxRulesHash": "target-input-test",
+                "rules": [item.to_dict() for item in default_graph_inference_rules()],
+            },
+            target_symbols=["005930"],
+            target_scoped_input=True,
+        )
+
+        graph_entity_ids = {item.entity_id for item in graph.entities}
+        persistence_entity_ids = {item.entity_id for item in persistence_graph.entities}
+        self.assertEqual("target-scoped", assembly["inputMode"])
+        self.assertEqual(["005930"], assembly["targetSymbols"])
+        self.assertEqual(1, assembly["sourcePositionCount"])
+        self.assertEqual(2, assembly["referencePositionCount"])
+        self.assertIn("stock:005930", graph_entity_ids)
+        self.assertNotIn("stock:000660", graph_entity_ids)
+        self.assertIn("stock:005930", persistence_entity_ids)
+        self.assertNotIn("stock:000660", persistence_entity_ids)
+        self.assertEqual(2, graph.worldview["positionCount"])
+
+    def test_target_scoped_runtime_context_reads_only_target_temporal_history(self):
+        samsung = normalize_position({
+            "symbol": "005930",
+            "name": "삼성전자",
+            "market": "KR",
+            "currency": "KRW",
+            "source": "holding",
+            "quantity": 10,
+            "currentPrice": 70000,
+            "marketValue": 700000,
+        })
+        hynix = normalize_position({
+            "symbol": "000660",
+            "name": "SK하이닉스",
+            "market": "KR",
+            "currency": "KRW",
+            "source": "holding",
+            "quantity": 7,
+            "currentPrice": 180000,
+            "marketValue": 1260000,
+        })
+        snapshot = self.snapshot_with_positions(
+            [samsung, hynix],
+            "2026-07-20T00:01:00Z",
+        )
+
+        class TemporalStore:
+            def __init__(self):
+                self.symbols = set()
+
+            def load_temporal_windows(self, _account_id, symbols, _definitions, as_of=""):
+                self.symbols = set(symbols)
+                return {}
+
+        temporal_store = TemporalStore()
+        recorder = PortfolioOntologyProjectionRecorder(
+            None,
+            market_time_series_store=temporal_store,
+        )
+
+        recorder.runtime_context(snapshot, active_tbox={}, target_symbols=["005930"])
+
+        self.assertEqual({"005930"}, temporal_store.symbols)
+
+    def test_first_target_projection_falls_back_to_a_complete_graph(self):
+        samsung = normalize_position({
+            "symbol": "005930",
+            "name": "삼성전자",
+            "market": "KR",
+            "currency": "KRW",
+            "source": "holding",
+            "quantity": 10,
+            "currentPrice": 70000,
+            "marketValue": 700000,
+        })
+        hynix = normalize_position({
+            "symbol": "000660",
+            "name": "SK하이닉스",
+            "market": "KR",
+            "currency": "KRW",
+            "source": "holding",
+            "quantity": 7,
+            "currentPrice": 180000,
+            "marketValue": 1260000,
+        })
+        snapshot = self.snapshot_with_positions(
+            [samsung, hynix],
+            "2026-07-20T00:01:00Z",
+        )
+        recorder = PortfolioOntologyProjectionRecorder(MemoryProjectionRepository())
+
+        result = recorder.record_snapshot(snapshot, target_symbols=["005930"])
+
+        self.assertTrue(result["saved"])
+        self.assertEqual("full", result["graphInput"]["mode"])
+        self.assertTrue(result["graphInput"]["fallback"])
+        self.assertEqual(["005930"], result["graphInput"]["requestedTargetSymbols"])
+        self.assertEqual(2, result["graphInput"]["sourcePositionCount"])
+
     def test_scheduler_batch_cap_overrides_native_target_refill(self):
         first_position = normalize_position({
             "symbol": "005930",
@@ -626,6 +754,9 @@ class OntologyInferenceQualityTests(unittest.TestCase):
 
         self.assertTrue(first["saved"])
         self.assertTrue(second["saved"])
+        self.assertEqual("target-scoped", second["graphInput"]["mode"])
+        self.assertEqual(1, second["graphInput"]["sourcePositionCount"])
+        self.assertEqual(2, second["graphInput"]["referencePositionCount"])
         self.assertEqual("applied", patch["status"])
         self.assertEqual(["005930"], patch["targetSymbols"])
         self.assertNotEqual(first_generations[samsung_market_scope], final_generations[samsung_market_scope])

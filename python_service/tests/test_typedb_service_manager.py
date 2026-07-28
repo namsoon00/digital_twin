@@ -1,6 +1,7 @@
 import tempfile
 import unittest
 from pathlib import Path
+from types import SimpleNamespace
 from unittest.mock import patch
 
 from digital_twin import service_manager
@@ -42,8 +43,46 @@ class TypeDBServiceManagerTests(unittest.TestCase):
                 result = service_manager.run_typedb_data_retention(spec, force=True)
                 self.assertEqual("reset", result["status"])
                 self.assertTrue(service_manager.typedb_credentials_bootstrap_pending())
+                self.assertTrue(service_manager.typedb_shared_world_projection_rebuild_pending())
                 service_manager.clear_typedb_credentials_bootstrap_pending()
+                service_manager.clear_typedb_shared_world_projection_rebuild_pending()
                 self.assertFalse(service_manager.typedb_credentials_bootstrap_pending())
+                self.assertFalse(service_manager.typedb_shared_world_projection_rebuild_pending())
+
+    def test_shared_world_rebuild_runs_once_for_a_fresh_typedb_marker(self):
+        with tempfile.TemporaryDirectory() as temp:
+            marker_path = Path(temp) / "marker.json"
+            spec = {
+                "label": "TypeDB ontology graph store",
+                "role": "typedb",
+                "log": Path(temp) / "typedb.log",
+                "sharedWorldProjectionRebuildTimeoutSeconds": "30",
+                "sharedWorldProjectionRebuildLimit": "12",
+            }
+            with patch.object(service_manager, "typedb_retention_marker_path", return_value=marker_path), \
+                    patch.object(service_manager.subprocess, "run", return_value=SimpleNamespace(
+                        returncode=0,
+                        stdout='{"status":"ok","replayedCount":2}',
+                        stderr="",
+                    )) as run:
+                service_manager.write_typedb_retention_marker({
+                    "sharedWorldProjectionRebuildPending": True,
+                    "sharedWorldProjectionRebuildReason": "fresh-data-directory",
+                })
+
+                self.assertTrue(service_manager.ensure_typedb_shared_world_projection_rebuilt(spec))
+
+                command = run.call_args[0][0]
+                self.assertEqual([
+                    service_manager.sys.executable,
+                    "-u",
+                    "python_service/service.py",
+                    "ontology-world-projection",
+                    "rebuild",
+                    "--limit",
+                    "12",
+                ], command)
+                self.assertFalse(service_manager.typedb_shared_world_projection_rebuild_pending())
 
     def test_mysql_runtime_spec_carries_local_application_provisioning_input(self):
         spec = service_manager.mysql_worker_spec({

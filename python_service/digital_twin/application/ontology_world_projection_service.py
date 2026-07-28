@@ -173,9 +173,74 @@ class OntologyWorldProjectionRunner:
         except Exception as error:  # noqa: BLE001 - a rebuilt active world remains valid if cleanup is delayed.
             return {"status": "error", "reason": str(error)[:180]}
 
-    def run_once(self, limit: int = 0) -> Dict[str, object]:
+    def rebuild_after_typedb_reset(self, limit: int = 0) -> Dict[str, object]:
+        """Restore shared worlds before live reasoning resumes after a data reset.
+
+        Live reasoning normally takes precedence over shared-world materialized
+        views.  That ordering becomes a deadlock after TypeDB is rebuilt: the
+        reasoning queue needs the shared worlds, while the lower-priority
+        worker waits for that queue to drain.  This explicit recovery path
+        replays only the newest completed packet for each source boundary and
+        bypasses that one scheduling preference until the worlds exist again.
+        """
+        requeue = getattr(self.outbox, "requeue_latest_completed", None)
+        if not callable(requeue):
+            return {
+                "status": "unsupported",
+                "reason": "The shared-world outbox cannot replay its latest completed projections.",
+            }
+        bounded = max(1, min(5000, int(limit or 100)))
+        try:
+            replay = dict(requeue(limit=bounded) or {})
+        except Exception as error:  # noqa: BLE001 - expose the durable replay failure to startup.
+            return {"status": "error", "reason": str(error)[:180]}
+        requeued_ids = {
+            str(job_id or "").strip()
+            for job_id in replay.get("requeuedJobIds") or []
+            if str(job_id or "").strip()
+        }
+        if not requeued_ids:
+            return {
+                "status": "empty",
+                "replay": replay,
+                "reason": "No completed shared-world projection packet is available to replay.",
+            }
+
+        completed_ids = set()
+        retry_count = 0
+        runs = []
+        # A reset is performed before dependent workers start, so these jobs
+        # are normally the only pending work. The loop remains bounded in
+        # case a manual operator recovery races with a normal outbox update.
+        for _index in range(len(requeued_ids) + 4):
+            if requeued_ids.issubset(completed_ids):
+                break
+            run = self.run_once(limit=1, bypass_reasoning_queue=True)
+            runs.append(run)
+            completed_ids.update(
+                str(job_id or "").strip()
+                for job_id in run.get("completedJobIds") or []
+                if str(job_id or "").strip()
+            )
+            retry_count += int(run.get("retryCount") or 0)
+            if int(run.get("claimedCount") or 0) <= 0 or int(run.get("retryCount") or 0) > 0:
+                break
+        restored_ids = sorted(requeued_ids.intersection(completed_ids))
+        missing_ids = sorted(requeued_ids.difference(completed_ids))
+        return {
+            "status": "ok" if not missing_ids and retry_count == 0 else "retry-required",
+            "replay": replay,
+            "replayedCount": len(restored_ids),
+            "replayedJobIds": restored_ids,
+            "remainingJobIds": missing_ids,
+            "retryCount": retry_count,
+            "runs": runs,
+            "reasoningQueueBypassed": True,
+        }
+
+    def run_once(self, limit: int = 0, bypass_reasoning_queue: bool = False) -> Dict[str, object]:
         started = time.monotonic()
-        deferred = self.reasoning_queue_deferral()
+        deferred = {} if bypass_reasoning_queue else self.reasoning_queue_deferral()
         if deferred:
             self.last_run_details = ["deferred-reasoning-queue"]
             return {
@@ -259,6 +324,7 @@ class OntologyWorldProjectionRunner:
             "completedJobIds": completed,
             "retries": retried,
             "reasoningQueue": reasoning_queue,
+            "reasoningQueueBypassed": bool(bypass_reasoning_queue),
             "prunedCompletedCount": pruned,
             "supersededOversizedPendingCount": superseded_oversized,
             "purgedOversizedSupersededCount": purged_oversized,

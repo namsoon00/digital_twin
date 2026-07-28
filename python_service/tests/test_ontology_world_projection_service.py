@@ -12,6 +12,8 @@ class FakeOutbox:
         self.completed = []
         self.retries = []
         self.pruned = 0
+        self.rebuild_requeue_result = None
+        self.rebuild_requeue_limits = []
 
     def claim(self, worker_id, limit, lease_seconds):
         claimed = self.jobs[:limit]
@@ -40,6 +42,14 @@ class FakeOutbox:
 
     def max_payload_bytes(self):
         return 5 * 1024 * 1024
+
+    def requeue_latest_completed(self, limit):
+        self.rebuild_requeue_limits.append(limit)
+        return dict(self.rebuild_requeue_result or {
+            "status": "ok",
+            "requeuedCount": 0,
+            "requeuedJobIds": [],
+        })
 
 
 class FakeRecorder:
@@ -130,6 +140,31 @@ class OntologyWorldProjectionRunnerTests(unittest.TestCase):
         self.assertEqual(1, len(outbox.jobs))
         self.assertEqual([], recorder.calls)
         self.assertEqual(2, result["reasoningQueue"]["effectivePendingCount"])
+
+    def test_reset_rebuild_replays_latest_durable_job_before_live_reasoning(self):
+        job = projection_job()
+        outbox = FakeOutbox([job])
+        outbox.rebuild_requeue_result = {
+            "status": "ok",
+            "requeuedCount": 1,
+            "requeuedJobIds": [job["jobId"]],
+            "selection": "latest-completed-per-dedupe-key",
+        }
+        recorder = FakeRecorder({"status": "ok", "saved": True})
+        runner = OntologyWorldProjectionRunner(
+            outbox,
+            recorder,
+            reasoning_queue_probe=lambda: {"effectivePendingCount": 3},
+        )
+
+        result = runner.rebuild_after_typedb_reset(limit=10)
+
+        self.assertEqual("ok", result["status"])
+        self.assertEqual([10], outbox.rebuild_requeue_limits)
+        self.assertEqual([job["jobId"]], result["replayedJobIds"])
+        self.assertEqual([], result["remainingJobIds"])
+        self.assertTrue(result["reasoningQueueBypassed"])
+        self.assertEqual(1, len(recorder.calls))
 
     def test_saved_shared_projection_defers_routine_maintenance(self):
         outbox = FakeOutbox([projection_job()])

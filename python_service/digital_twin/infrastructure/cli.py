@@ -393,6 +393,10 @@ def ontology_world_projection_command(args) -> int:
         requeued = runner.outbox.requeue_failed(limit=limit)
         print(json.dumps({"status": "ok", "requeuedFailedCount": requeued, "outbox": runner.outbox.summary()}, ensure_ascii=False))
         return 0
+    if args.ontology_world_projection_action == "rebuild":
+        result = runner.rebuild_after_typedb_reset(limit=limit)
+        print(json.dumps(result, ensure_ascii=False))
+        return 0 if str(result.get("status") or "") in {"ok", "empty"} else 1
     if args.ontology_world_projection_action == "once":
         print(json.dumps(runner.run_once(limit=limit), ensure_ascii=False))
         return 0
@@ -1092,6 +1096,8 @@ def build_parser() -> argparse.ArgumentParser:
     ontology_world_projection_watch.add_argument("--limit", default="")
     ontology_world_projection_retry = ontology_world_projection_actions.add_parser("retry-failed")
     ontology_world_projection_retry.add_argument("--limit", default="")
+    ontology_world_projection_rebuild = ontology_world_projection_actions.add_parser("rebuild")
+    ontology_world_projection_rebuild.add_argument("--limit", default="")
     ontology_world_projection_actions.add_parser("status")
     ontology_world_projection.set_defaults(func=ontology_world_projection_command)
 

@@ -342,6 +342,59 @@ class MySQLOntologyWorldProjectionOutboxStore(MySQLOperationalConnection):
             )
         return int(getattr(cursor, "rowcount", 0) or 0)
 
+    def requeue_latest_completed(self, limit: int = 100) -> Dict[str, object]:
+        """Replay one newest durable projection per source after a TypeDB reset.
+
+        TypeDB stores the materialized shared worlds, while this outbox is the
+        durable source for their verified inputs.  A fresh TypeDB data
+        directory therefore needs the latest completed packet for every
+        source-world boundary replayed once.  Replaying every historical job
+        would be slow and could resurrect expired market observations, so the
+        newest completed job for each dedupe key is the only safe candidate.
+        """
+        bounded = max(1, min(5000, int(limit or 100)))
+        stamp = utc_now()
+        selected: List[str] = []
+        with self.transaction() as connection:
+            rows = connection.execute(
+                """
+                SELECT job_id, dedupe_key
+                FROM ontology_world_projection_outbox
+                WHERE status = %s
+                ORDER BY updated_at DESC, job_id DESC
+                FOR UPDATE
+                """,
+                (COMPLETED,),
+            ).fetchall()
+            seen_dedupe_keys = set()
+            for row in rows or []:
+                dedupe_key = _clean(row.get("dedupe_key")) or _clean(row.get("job_id"))
+                job_id = _clean(row.get("job_id"))
+                if not job_id or dedupe_key in seen_dedupe_keys:
+                    continue
+                seen_dedupe_keys.add(dedupe_key)
+                selected.append(job_id)
+                if len(selected) >= bounded:
+                    break
+            for job_id in selected:
+                connection.execute(
+                    """
+                    UPDATE ontology_world_projection_outbox
+                    SET status = %s, attempts = 0, available_at = %s,
+                        lease_owner = '', lease_expires_at = '',
+                        last_error = 'requeued after TypeDB shared-world rebuild',
+                        result_json = '{}', updated_at = %s, completed_at = ''
+                    WHERE job_id = %s AND status = %s
+                    """,
+                    (PENDING, stamp, stamp, job_id, COMPLETED),
+                )
+        return {
+            "status": "ok",
+            "requeuedCount": len(selected),
+            "requeuedJobIds": selected,
+            "selection": "latest-completed-per-dedupe-key",
+        }
+
     def supersede_oversized_pending(self, limit: int = 500) -> int:
         """Retire packets produced by an older unbounded projection shape."""
         bounded = max(1, min(5000, int(limit or 500)))

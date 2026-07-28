@@ -188,6 +188,16 @@ def typedb_worker_spec(settings: Dict[str, object]) -> Dict[str, object]:
         "seedKeepInference": str((settings or {}).get("typedbSeedKeepInference") or os.environ.get("TYPEDB_SEED_KEEP_INFERENCE") or "1"),
         "seedTimeoutSeconds": str((settings or {}).get("typedbSeedTimeoutSeconds") or os.environ.get("TYPEDB_SEED_TIMEOUT_SECONDS") or "360"),
         "seedRetryCount": str((settings or {}).get("typedbSeedRetryCount") or os.environ.get("TYPEDB_SEED_RETRY_COUNT") or "2"),
+        "sharedWorldProjectionRebuildTimeoutSeconds": str(
+            (settings or {}).get("typedbSharedWorldProjectionRebuildTimeoutSeconds")
+            or os.environ.get("TYPEDB_SHARED_WORLD_PROJECTION_REBUILD_TIMEOUT_SECONDS")
+            or "900"
+        ),
+        "sharedWorldProjectionRebuildLimit": str(
+            (settings or {}).get("typedbSharedWorldProjectionRebuildLimit")
+            or os.environ.get("TYPEDB_SHARED_WORLD_PROJECTION_REBUILD_LIMIT")
+            or "100"
+        ),
         "missingReason": (
             "TypeDB executable was not found. Install TypeDB or set TYPEDB_COMMAND."
             if not executable
@@ -467,6 +477,10 @@ def run_typedb_data_retention(spec: Dict[str, object], force: bool = False) -> D
         # documented initial password. Reapply the configured local password
         # before dependent workers are allowed to connect.
         "credentialsBootstrapPending": True,
+        # TypeDB holds materialized shared worlds while the verified inputs
+        # remain durable in MySQL. Rebuild them before live reasoning starts.
+        "sharedWorldProjectionRebuildPending": True,
+        "sharedWorldProjectionRebuildReason": "forced-data-reset",
     })
     return {"status": "reset", **decision, "dataPath": str(data_path)}
 
@@ -715,6 +729,19 @@ def clear_typedb_credentials_bootstrap_pending() -> None:
     write_typedb_retention_marker(marker)
 
 
+def typedb_shared_world_projection_rebuild_pending() -> bool:
+    return bool(read_typedb_retention_marker().get("sharedWorldProjectionRebuildPending"))
+
+
+def clear_typedb_shared_world_projection_rebuild_pending() -> None:
+    marker = read_typedb_retention_marker()
+    if not marker.get("sharedWorldProjectionRebuildPending"):
+        return
+    marker["sharedWorldProjectionRebuildPending"] = False
+    marker["sharedWorldProjectionRebuildCompletedAt"] = iso_now()
+    write_typedb_retention_marker(marker)
+
+
 def bootstrap_typedb_credentials_after_reset(spec: Dict[str, object]) -> bool:
     """Restore local TypeDB credentials after an intentional empty-store boot.
 
@@ -808,6 +835,19 @@ def typedb_seed_command(spec: Dict[str, object]) -> List[str]:
     return command
 
 
+def typedb_shared_world_projection_rebuild_command(spec: Dict[str, object]) -> List[str]:
+    limit = int_value(spec.get("sharedWorldProjectionRebuildLimit"), 100, 1)
+    return [
+        sys.executable,
+        "-u",
+        "python_service/service.py",
+        "ontology-world-projection",
+        "rebuild",
+        "--limit",
+        str(limit),
+    ]
+
+
 def append_log_text(path: Path, label: str, text: str) -> None:
     append_log(path, label)
     if not text:
@@ -860,6 +900,40 @@ def ensure_typedb_seeded(spec: Dict[str, object]) -> bool:
             time.sleep(1.0)
     print(str(spec["label"]) + " RuleBox seed failed after " + str(attempts) + " attempts.")
     return False
+
+
+def ensure_typedb_shared_world_projection_rebuilt(spec: Dict[str, object]) -> bool:
+    """Restore MySQL-backed shared-world inputs before dependent workers run."""
+    if str(spec.get("role") or "") != "typedb" or not typedb_shared_world_projection_rebuild_pending():
+        return True
+    command = typedb_shared_world_projection_rebuild_command(spec)
+    timeout_seconds = int_value(spec.get("sharedWorldProjectionRebuildTimeoutSeconds"), 900, 30)
+    append_log(spec["log"], "shared-world rebuild start")
+    print(str(spec["label"]) + " rebuilding shared MarketWorld/KnowledgeWorld from durable outbox.")
+    try:
+        result = subprocess.run(
+            command,
+            cwd=str(ROOT_DIR),
+            env=dict(os.environ, PYTHONUNBUFFERED="1"),
+            stdin=subprocess.DEVNULL,
+            capture_output=True,
+            text=True,
+            timeout=timeout_seconds,
+        )
+    except subprocess.TimeoutExpired as error:
+        output = (error.stdout or "") + ("\n" if error.stdout and error.stderr else "") + (error.stderr or "")
+        append_log_text(spec["log"], "shared-world rebuild timeout", output)
+        print(str(spec["label"]) + " shared-world rebuild timed out after " + str(timeout_seconds) + "s.")
+        return False
+    output = (result.stdout or "") + ("\n" if result.stdout and result.stderr else "") + (result.stderr or "")
+    if result.returncode != 0:
+        append_log_text(spec["log"], "shared-world rebuild failed exit=" + str(result.returncode), output)
+        print(str(spec["label"]) + " shared-world rebuild failed. exit=" + str(result.returncode))
+        return False
+    append_log_text(spec["log"], "shared-world rebuild ok", output)
+    clear_typedb_shared_world_projection_rebuild_pending()
+    print(str(spec["label"]) + " shared-world rebuild ok.")
+    return True
 
 
 def recover_typedb_scoped_write_lease_after_worker_restart(spec: Dict[str, object]) -> bool:
@@ -931,6 +1005,8 @@ def start_worker(spec: Dict[str, object]) -> int:
             marker = read_typedb_retention_marker()
             marker["credentialsBootstrapPending"] = True
             marker["credentialsBootstrapReason"] = "fresh-data-directory"
+            marker["sharedWorldProjectionRebuildPending"] = True
+            marker["sharedWorldProjectionRebuildReason"] = "fresh-data-directory"
             write_typedb_retention_marker(marker)
     log_path.parent.mkdir(parents=True, exist_ok=True)
     append_log(log_path, "start")
@@ -954,6 +1030,8 @@ def start_worker(spec: Dict[str, object]) -> int:
         if not wait_for_typedb_ready(spec):
             return 1
         if not ensure_typedb_seeded(spec):
+            return 1
+        if not ensure_typedb_shared_world_projection_rebuilt(spec):
             return 1
     elif role in {"mysql", "web"}:
         if not wait_for_tcp_service(spec):

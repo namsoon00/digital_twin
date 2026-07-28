@@ -217,7 +217,11 @@ def typedb_projection_world_from_manifest_index(args, kwargs) -> str:
     return str((worldview or {}).get("worldId") or "").strip()
 
 
-def coordinated_typedb_projection_write(owner_prefix: str, world_resolver=None):
+def coordinated_typedb_projection_write(
+    owner_prefix: str,
+    world_resolver=None,
+    bootstrap_schema: bool = False,
+):
     """Apply the production TypeDB writer boundary to every mutating entrypoint.
 
     The coordinator is intentionally enabled only by the production repository
@@ -232,6 +236,41 @@ def coordinated_typedb_projection_write(owner_prefix: str, world_resolver=None):
             scope = getattr(self, "projection_coordinator_write_scope", None)
             if not callable(enabled) or not enabled() or not callable(scope):
                 return method(self, *args, **kwargs)
+            schema_bootstrap = {}
+            if bootstrap_schema:
+                synchronize_schema = getattr(self, "sync_base_schema_contract", None)
+                if not callable(synchronize_schema):
+                    return {
+                        "configured": bool(getattr(self, "address", "")),
+                        "saved": False,
+                        "status": "schema-bootstrap-unavailable",
+                        "graphStore": "typedb",
+                        "preservedActiveGeneration": True,
+                        "reason": "TypeDB static seed requires a base schema synchronizer.",
+                    }
+                try:
+                    schema_bootstrap = dict(synchronize_schema() or {})
+                except Exception as error:  # noqa: BLE001 - preserve the active graph when bootstrap cannot run.
+                    schema_bootstrap = {
+                        "configured": bool(getattr(self, "address", "")),
+                        "saved": False,
+                        "status": "error",
+                        "reason": str(error)[:220],
+                    }
+                if not bool(schema_bootstrap.get("saved")):
+                    return {
+                        "configured": bool(getattr(self, "address", "")),
+                        "saved": False,
+                        "status": "schema-bootstrap-failed",
+                        "graphStore": "typedb",
+                        "preservedActiveGeneration": True,
+                        "retryable": True,
+                        "reason": str(
+                            schema_bootstrap.get("reason")
+                            or "TypeDB static seed could not prepare the base schema."
+                        )[:220],
+                        "schemaBootstrap": schema_bootstrap,
+                    }
             world_id = ""
             if callable(world_resolver):
                 try:
@@ -258,6 +297,8 @@ def coordinated_typedb_projection_write(owner_prefix: str, world_resolver=None):
                     }
                 result = method(self, *args, **kwargs)
                 if isinstance(result, dict):
+                    if schema_bootstrap:
+                        result.setdefault("schemaBootstrap", schema_bootstrap)
                     result.setdefault(
                         "projectionCoordinator",
                         typedb_projection_coordinator_summary(lease),
@@ -12224,6 +12265,7 @@ relation ontology-assertion,
     @coordinated_typedb_projection_write(
         "ontology-seed",
         typedb_projection_world_from_payload,
+        bootstrap_schema=True,
     )
     def seed_ontology(self, payload: Dict[str, object] = None) -> Dict[str, object]:
         payload = payload or {}

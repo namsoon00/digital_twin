@@ -4,6 +4,7 @@ import re
 import tempfile
 import time
 import unittest
+from contextlib import contextmanager
 from datetime import datetime, timedelta, timezone
 from pathlib import Path
 from threading import Event, Lock
@@ -72,6 +73,7 @@ from digital_twin.infrastructure.typedb_ontology import (
     typedb_native_rule_planner_topology_for_execution,
     materialize_typedb_native_matches,
     typedb_projection_preflight_graph_for_execution,
+    coordinated_typedb_projection_write,
     typedb_native_rule_profile,
     typedb_native_reasoning_profile,
     typedb_scoped_manifest_member_clause,
@@ -80,6 +82,65 @@ from digital_twin.infrastructure.typedb_ontology import (
 
 
 class TypeDBOntologyRepositoryTests(unittest.TestCase):
+    def test_seed_write_bootstraps_schema_before_claiming_projection_coordinator(self):
+        calls = []
+
+        class SeedRepository:
+            address = "127.0.0.1:1729"
+
+            def projection_coordinator_write_enforced(self):
+                return True
+
+            def sync_base_schema_contract(self):
+                calls.append("schema")
+                return {"configured": True, "saved": True, "status": "ok"}
+
+            @contextmanager
+            def projection_coordinator_write_scope(self, owner, world_id):
+                calls.append("lease:" + owner + ":" + world_id)
+                yield {"acquired": True, "status": "acquired"}
+                calls.append("released")
+
+            @coordinated_typedb_projection_write(
+                "ontology-seed",
+                bootstrap_schema=True,
+            )
+            def seed(self):
+                calls.append("seed")
+                return {"configured": True, "saved": True, "status": "ok"}
+
+        result = SeedRepository().seed()
+
+        self.assertEqual(["schema", "lease:ontology-seed:", "seed", "released"], calls)
+        self.assertEqual("ok", result["schemaBootstrap"]["status"])
+
+    def test_seed_write_does_not_claim_projection_coordinator_when_schema_bootstrap_fails(self):
+        class SeedRepository:
+            address = "127.0.0.1:1729"
+
+            def projection_coordinator_write_enforced(self):
+                return True
+
+            def sync_base_schema_contract(self):
+                return {"configured": True, "saved": False, "reason": "schema unavailable"}
+
+            @contextmanager
+            def projection_coordinator_write_scope(self, _owner, _world_id):
+                raise AssertionError("coordinator lease must not be claimed before schema bootstrap")
+                yield {}
+
+            @coordinated_typedb_projection_write(
+                "ontology-seed",
+                bootstrap_schema=True,
+            )
+            def seed(self):
+                raise AssertionError("seed body must not run when schema bootstrap fails")
+
+        result = SeedRepository().seed()
+
+        self.assertEqual("schema-bootstrap-failed", result["status"])
+        self.assertEqual("schema unavailable", result["reason"])
+
     def test_any_condition_parallelism_is_bounded_by_native_rule_parallelism(self):
         repository = TypeDBOntologyGraphRepository(
             "127.0.0.1:1729",

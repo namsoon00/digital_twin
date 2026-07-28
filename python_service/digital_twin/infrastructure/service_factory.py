@@ -87,6 +87,7 @@ from .external_signals import ExternalSignalProvider
 from .settings import currency_rates, runtime_settings
 from .symbol_sources import RemoteSymbolSourceGateway
 from .toss_snapshots import TossProvider, build_snapshot, demo_positions
+from .reasoning_snapshot_source import LatestMonitorSnapshotReasoningSource
 
 
 DISABLED_SETTING_VALUES = {"0", "false", "no", "off", "disabled"}
@@ -186,6 +187,7 @@ def build_monitor_runner(
     progress_callback: Callable[[str, Dict[str, object]], None] = None,
     settings=None,
     typedb_native_rule_execution_enabled: bool = False,
+    snapshot_builder: Callable = None,
 ) -> MonitorRunner:
     configured_settings = dict(settings or runtime_settings())
     configured_settings["typedbNativeRuleExecutionEnabled"] = "1" if typedb_native_rule_execution_enabled else "0"
@@ -203,7 +205,9 @@ def build_monitor_runner(
         accounts,
         store=store,
         monitor=RealtimeMonitor(configured_settings),
-        snapshot_builder=lambda account: build_snapshot(account, external_settings=monitor_snapshot_settings),
+        snapshot_builder=snapshot_builder or (
+            lambda account: build_snapshot(account, external_settings=monitor_snapshot_settings)
+        ),
         event_sender=send_events,
         event_publisher=publisher,
         cycle_recorder=stores.monitoring_cycle_recorder(
@@ -794,14 +798,22 @@ def build_ontology_reasoning_runner(settings=None, event_publisher=None) -> Onto
             "reason": "Scoped ABox retention is owned by the ontology-maintenance worker.",
         }
 
-    return OntologyReasoningRunner(
-        event_reader=event_log,
-        cursor_store=cursor_store,
-        monitor_runner_factory=lambda: build_monitor_runner(
+    def reasoning_monitor_runner():
+        runner = build_monitor_runner(
             registry.load(),
             settings=reasoning_monitor_settings,
             typedb_native_rule_execution_enabled=reasoning_native_rule_execution_enabled,
-        ),
+        )
+        runner.snapshot_builder = LatestMonitorSnapshotReasoningSource(
+            runner.store,
+            settings=reasoning_monitor_settings,
+        )
+        return runner
+
+    return OntologyReasoningRunner(
+        event_reader=event_log,
+        cursor_store=cursor_store,
+        monitor_runner_factory=reasoning_monitor_runner,
         event_publisher=event_publisher or ontology_reasoning_event_bus(reasoning_store_settings),
         settings=configured_settings,
         rule_candidate_service=RuleChangeCandidateProposalService(

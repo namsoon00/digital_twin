@@ -4111,6 +4111,9 @@ class PortfolioOntologyProjectionRecorder:
         """
         values = deepcopy(dict(metadata or {}))
         values.pop("ontology", None)
+        # This marker describes how the worker acquired the snapshot. It is
+        # operational replay provenance, not a market fact for the ABox.
+        values.pop("reasoningSnapshotReplay", None)
 
         def factual_state(state: object) -> object:
             if not isinstance(state, dict):
@@ -4121,6 +4124,7 @@ class PortfolioOntologyProjectionRecorder:
             if isinstance(nested, dict):
                 nested = dict(nested)
                 nested.pop("ontology", None)
+                nested.pop("reasoningSnapshotReplay", None)
                 nested.pop("previousMonitorState", None)
                 nested.pop("monitorStateHistory", None)
                 result["metadata"] = nested

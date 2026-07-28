@@ -1,4 +1,5 @@
-from dataclasses import asdict, dataclass, field
+import copy
+from dataclasses import asdict, dataclass, field, fields
 from datetime import datetime, timezone
 from typing import Dict, List, Optional
 
@@ -218,6 +219,57 @@ class AccountSnapshot:
             },
             "metadata": dict(self.metadata or {}),
         }
+
+
+def account_snapshot_from_monitor_state(state: Dict[str, object]) -> Optional[AccountSnapshot]:
+    """Rehydrate one immutable monitoring read-model snapshot.
+
+    The realtime monitor persists source facts before TypeDB projection.  A
+    reasoning worker can safely rebuild its ABox from that verified state
+    without issuing another provider collection cycle.  Keep this conversion
+    in the domain layer so every reader preserves the same portfolio contract.
+    """
+    if not isinstance(state, dict) or not isinstance(state.get("portfolio"), dict):
+        return None
+
+    def from_mapping(cls, value: object):
+        payload = copy.deepcopy(value) if isinstance(value, dict) else {}
+        allowed = {item.name for item in fields(cls)}
+        return cls(**{key: value for key, value in payload.items() if key in allowed})
+
+    def values_from_map(value: object):
+        if isinstance(value, dict):
+            return list(value.values())
+        if isinstance(value, list):
+            return list(value)
+        return []
+
+    return AccountSnapshot(
+        account_id=str(state.get("accountId") or state.get("account_id") or "portfolio"),
+        account_label=str(state.get("accountLabel") or state.get("account_label") or "투자 계좌"),
+        provider=str(state.get("provider") or ""),
+        mode=str(state.get("mode") or ""),
+        status=str(state.get("status") or ""),
+        generated_at=str(state.get("generatedAt") or state.get("generated_at") or ""),
+        portfolio=from_mapping(PortfolioSummary, state.get("portfolio")),
+        positions=[
+            from_mapping(Position, item)
+            for item in values_from_map(state.get("positions"))
+            if isinstance(item, dict)
+        ],
+        decisions=[
+            from_mapping(DecisionItem, item)
+            for item in values_from_map(state.get("decisions"))
+            if isinstance(item, dict)
+        ],
+        external_signals=copy.deepcopy(state.get("externalSignals") or {}),
+        watchlist=[
+            from_mapping(Position, item)
+            for item in values_from_map(state.get("watchlist"))
+            if isinstance(item, dict)
+        ],
+        metadata=copy.deepcopy(state.get("metadata") or {}),
+    )
 
 
 @dataclass

@@ -119,6 +119,12 @@ class MonitorRunner:
             kwargs = {"dry_run": dry_run}
             if delivery_guard is not None and ("delivery_guard" in parameters or accepts_kwargs):
                 kwargs["delivery_guard"] = delivery_guard
+            source_snapshot_replay = bool(snapshots) and all(
+                self.reasoning_snapshot_replay(snapshot) is not None
+                for snapshot in snapshots
+            )
+            if source_snapshot_replay and ("source_snapshot_replay" in parameters or accepts_kwargs):
+                kwargs["source_snapshot_replay"] = True
             cycle_result = recorder(
                 [account.account_id for account in self.accounts],
                 snapshots,
@@ -139,6 +145,7 @@ class MonitorRunner:
                 eventCount=len(all_events),
                 cycleRecorder=True,
                 deliveryGuard=self.last_delivery_guard_result,
+                sourceSnapshotReplay=source_snapshot_replay,
             )
             return all_events
         if all_events:
@@ -236,7 +243,7 @@ class MonitorRunner:
         reasoning_context: Dict[str, object] = None,
     ):
         self.progress("snapshot.start", accountId=account.account_id)
-        snapshot = self.snapshot_builder(account)
+        snapshot = self.build_snapshot(account, reasoning_context=reasoning_context)
         self.progress(
             "snapshot.done",
             accountId=account.account_id,
@@ -245,6 +252,28 @@ class MonitorRunner:
             positionCount=len(snapshot.positions or []),
             watchlistCount=len(snapshot.watchlist or []),
         )
+        replay = self.reasoning_snapshot_replay(snapshot)
+        if replay is not None and str(replay.get("status") or "") != "ready":
+            projection = {
+                "saved": False,
+                "status": "deferred-source-snapshot",
+                "reason": str(
+                    replay.get("reason")
+                    or "The latest verified monitor snapshot is not ready for this fact revision."
+                )[:220],
+                "retryable": True,
+                "recommendedRetryAfterSeconds": int(replay.get("retryAfterSeconds") or 30),
+                "sourceSnapshotReplay": dict(replay),
+            }
+            snapshot.metadata.setdefault("ontology", {})["projection"] = projection
+            self.last_ontology_projection_results[account.account_id] = projection
+            self.progress(
+                "ontology_projection.deferred",
+                accountId=account.account_id,
+                status=projection["status"],
+                reason=projection["reason"],
+            )
+            return snapshot, []
         previous = self.store.previous.get(snapshot.account_id) or {}
         snapshot.metadata["previousMonitorState"] = self.compact_previous_state(previous)
         snapshot.metadata["monitorStateHistory"] = self.compact_monitor_history(
@@ -297,6 +326,35 @@ class MonitorRunner:
         )
         self.progress("events.ready", accountId=account.account_id, eventCount=len(events), force=bool(force))
         return snapshot, events
+
+    def build_snapshot(self, account: AccountConfig, reasoning_context: Dict[str, object] = None) -> AccountSnapshot:
+        """Pass request provenance to snapshot adapters that support replay.
+
+        Normal provider builders keep their one-argument compatibility
+        contract.  The ontology worker's persisted-snapshot adapter receives
+        bounded provenance only to verify source freshness; it never uses it
+        as investment evidence.
+        """
+        if reasoning_context is None:
+            return self.snapshot_builder(account)
+        try:
+            parameters = inspect.signature(self.snapshot_builder).parameters
+            accepts_kwargs = any(
+                parameter.kind == inspect.Parameter.VAR_KEYWORD
+                for parameter in parameters.values()
+            )
+        except (TypeError, ValueError):
+            parameters = {}
+            accepts_kwargs = False
+        if "reasoning_context" in parameters or accepts_kwargs:
+            return self.snapshot_builder(account, reasoning_context=dict(reasoning_context or {}))
+        return self.snapshot_builder(account)
+
+    @staticmethod
+    def reasoning_snapshot_replay(snapshot: AccountSnapshot) -> Dict[str, object]:
+        metadata = snapshot.metadata if isinstance(getattr(snapshot, "metadata", None), dict) else {}
+        replay = metadata.get("reasoningSnapshotReplay") if isinstance(metadata.get("reasoningSnapshotReplay"), dict) else None
+        return dict(replay) if replay else None
 
     def record_investment_alert_pipeline(
         self,

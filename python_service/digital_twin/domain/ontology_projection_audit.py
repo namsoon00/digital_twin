@@ -256,7 +256,7 @@ def projection_source_snapshot(snapshot: AccountSnapshot) -> Dict[str, object]:
     # change and reopened the same RuleBox slice on the next worker cycle.
     payload.pop("decisions", None)
     metadata = dict(payload.get("metadata") or {})
-    for key in ["previousMonitorState", "monitorStateHistory", "ontology"]:
+    for key in ["previousMonitorState", "monitorStateHistory", "ontology", "reasoningSnapshotReplay"]:
         metadata.pop(key, None)
     payload["metadata"] = metadata
     return payload

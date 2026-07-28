@@ -95,6 +95,7 @@ class MonitoringCycleRecorder(Protocol):
         alert_events: List[AlertEvent],
         dry_run: bool = False,
         delivery_guard=None,
+        source_snapshot_replay: bool = False,
     ) -> MonitoringCycleRecordResult:
         ...
 

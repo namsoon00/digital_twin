@@ -64,6 +64,22 @@ class OntologyRuntimeOperationsTests(unittest.TestCase):
         self.assertTrue(result["retryable"])
         self.assertEqual("inference-failed-rolled-back", result["results"][0]["status"])
 
+    def test_projection_gate_treats_waiting_for_a_newer_source_snapshot_as_retryable(self):
+        service = OntologyReasoningRunner.__new__(OntologyReasoningRunner)
+        waiting = SimpleNamespace(last_ontology_projection_results={
+            "main": {
+                "status": "deferred-source-snapshot",
+                "reason": "The latest monitor snapshot predates the requested fact revision.",
+                "recommendedRetryAfterSeconds": 30,
+            },
+        })
+
+        result = service.projection_gate(waiting)
+
+        self.assertFalse(result["ready"])
+        self.assertTrue(result["retryable"])
+        self.assertEqual("deferred-source-snapshot", result["results"][0]["status"])
+
     def test_verified_recovery_clears_only_the_projection_circuit_latch(self):
         class Cursor:
             def __init__(self):

@@ -2870,6 +2870,11 @@ class OntologyReasoningRunner:
             "deferred-projection-coordinator",
             "deferred-inference-write-lease",
             "deferred-pending-scoped-manifest",
+            # The isolated reasoning worker consumes only a verified monitor
+            # snapshot. Waiting for the source monitor to persist a newer
+            # revision is controlled freshness back-pressure, not a failed
+            # TypeDB projection.
+            "deferred-source-snapshot",
             "blocked-pending-abox-activation",
             "pending-abox-activation",
             # A cold TypeDB server compiles the RuleBox in bounded candidate

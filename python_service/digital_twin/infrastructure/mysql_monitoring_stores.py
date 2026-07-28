@@ -206,6 +206,7 @@ class MySQLMonitorStore(MySQLOperationalConnection):
         alert_events: List[AlertEvent],
         dry_run: bool = False,
         delivery_guard=None,
+        source_snapshot_replay: bool = False,
     ):
         return MySQLMonitoringCycleRecorder(
             self.runtime_settings,
@@ -217,6 +218,7 @@ class MySQLMonitorStore(MySQLOperationalConnection):
             alert_events,
             dry_run=dry_run,
             delivery_guard=delivery_guard,
+            source_snapshot_replay=source_snapshot_replay,
         )
 
     def write(self) -> None:
@@ -279,17 +281,21 @@ class MySQLMonitoringCycleRecorder(MySQLOperationalConnection):
         alert_events: List[AlertEvent],
         dry_run: bool = False,
         delivery_guard=None,
+        source_snapshot_replay: bool = False,
     ):
         if dry_run:
             return MonitoringCycleRecordResult(False, 0, "dry-run")
-        snapshot_states = {
-            snapshot.account_id: snapshot_state_for_persistence(
-                snapshot,
-                self.monitor_store.previous.get(snapshot.account_id),
-            )
-            for snapshot in snapshots
-        }
-        live_snapshots = [snapshot for snapshot in snapshots if snapshot.has_live_account_data()]
+        snapshot_states = {}
+        live_snapshots = []
+        if not source_snapshot_replay:
+            snapshot_states = {
+                snapshot.account_id: snapshot_state_for_persistence(
+                    snapshot,
+                    self.monitor_store.previous.get(snapshot.account_id),
+                )
+                for snapshot in snapshots
+            }
+            live_snapshots = [snapshot for snapshot in snapshots if snapshot.has_live_account_data()]
         stamp = datetime.now(timezone.utc).isoformat().replace("+00:00", "Z")
         queued = 0
         sent_entries: Dict[str, str] = {}
@@ -372,6 +378,7 @@ class MySQLMonitoringCycleRecorder(MySQLOperationalConnection):
                 "inputEventCount": len(alert_events or []),
                 "deliveredEventCount": len(guarded_events),
                 "suppressedEventCount": max(0, len(alert_events or []) - len(guarded_events)),
+                "sourceSnapshotReplay": bool(source_snapshot_replay),
             },
         )
 

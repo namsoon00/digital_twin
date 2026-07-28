@@ -4158,6 +4158,13 @@ class TypeDBOntologyRepositoryTests(unittest.TestCase):
         self.assertEqual("support", persisted["decisionEffect"])
         self.assertEqual("support", restored["decisionEffect"])
 
+        snapshot = repository.inferencebox_snapshot_from_graph(generated, ["NVDA"])
+        visible = next(
+            item for item in snapshot["relations"]
+            if item["type"] == "HAS_INFERRED_SUPPORT"
+        )
+        self.assertEqual("support", visible["decisionEffect"])
+
     def test_typedb_repository_factory_inherits_ontology_reasoning_native_rule_setting(self):
         direct = TypeDBOntologyGraphRepository("127.0.0.1:1729")
         factory_default = typedb_repository_from_settings({"ontologyTypeDbEnabled": "1", "typedbAddress": "127.0.0.1:1729"})

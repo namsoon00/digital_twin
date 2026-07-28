@@ -110,6 +110,7 @@ def inferencebox_relation_payload(row: Dict[str, object]) -> Dict[str, object]:
         "actionGroup": str(row.get("actionGroup") or ""),
         "actionLevel": str(row.get("actionLevel") or ""),
         "decisionStage": str(row.get("decisionStage") or ""),
+        "decisionEffect": str(properties.get("decisionEffect") or properties.get("decision_effect") or row.get("decisionEffect") or ""),
         "decisionLabel": str(properties.get("decisionLabel") or row.get("decisionLabel") or ""),
         "decisionTone": str(properties.get("decisionTone") or row.get("decisionTone") or ""),
         "reviewLevel": str(properties.get("reviewLevel") or row.get("reviewLevel") or "observe"),

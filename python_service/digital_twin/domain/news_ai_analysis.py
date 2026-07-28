@@ -8,8 +8,8 @@ from .investment_research import NewsCollectionTarget, ResearchEvidence
 from . import news_analysis as news_domain
 
 
-NEWS_AI_ANALYSIS_VERSION = "news-ai-analysis-v14-target-scoped-summary"
-NEWS_AI_PROMPT_VERSION = "news-ai-prompt-v14-target-scoped-summary"
+NEWS_AI_ANALYSIS_VERSION = "news-ai-analysis-v15-target-scoped-summary"
+NEWS_AI_PROMPT_VERSION = "news-ai-prompt-v15-target-scoped-summary"
 
 IMPACT_LABELS = {
     "support": "호재",
@@ -943,7 +943,7 @@ def merger_review_status_analysis_guard(
         "contrastSignals": [],
         "keyNumbers": list(fallback.key_numbers or []),
         "rationaleKo": fallback.rationale_ko,
-        "impactReasonKo": fallback.impact_reason_ko,
+        "impactReasonKo": fallback_summary.get("whyItMatters") or fallback.impact_reason_ko,
         "portfolioImplicationKo": fallback.portfolio_implication_ko,
         "actionBoundaryKo": fallback.action_boundary_ko,
         "validationReasonKo": fallback.validation_reason_ko,
@@ -1197,9 +1197,15 @@ def apply_news_ai_analysis(evidence: ResearchEvidence, analysis_payload: Dict[st
         or evidence.summary,
         1600,
     )
+    target_name = str(
+        payload.get("name")
+        or payload.get("companyName")
+        or (news_domain.KNOWN_COMPANY_ALIASES.get(evidence.symbol, [""]) or [""])[0]
+        or evidence.symbol
+    )
     analysis_target = NewsCollectionTarget(
         evidence.symbol,
-        str(payload.get("name") or payload.get("companyName") or evidence.symbol),
+        target_name,
         str(payload.get("market") or ""),
         str(payload.get("currency") or ""),
         str(payload.get("sector") or ""),
@@ -1346,7 +1352,7 @@ def apply_news_ai_analysis(evidence: ResearchEvidence, analysis_payload: Dict[st
         payload["eventType"] = analysis_dict.get("eventType")
     facts_target = NewsCollectionTarget(
         evidence.symbol,
-        str(payload.get("name") or payload.get("companyName") or evidence.symbol),
+        target_name,
         str(payload.get("market") or ""),
         str(payload.get("currency") or ""),
         str(payload.get("sector") or ""),

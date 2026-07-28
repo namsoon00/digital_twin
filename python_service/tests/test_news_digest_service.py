@@ -127,6 +127,23 @@ class NewsDigestEnqueuerTests(unittest.TestCase):
 
         self.assertEqual(["네이버에 자료를 13회 요청했고 이해관계자 의견청취도 8월 말까지 진행한다."], lines)
 
+    def test_confirmed_facts_keeps_last_direct_fact_when_brief_contains_every_fact(self):
+        first = "공정위가 네이버와 두나무 합병 심사를 연내 마무리할 수 있다고 밝혔다."
+        second = "네이버에 자료를 13회 요청했고 이해관계자 의견청취도 8월 말까지 진행한다."
+        item = {
+            "kind": "news",
+            "payload": {
+                "aiAnalysis": {"summary": {"briefKo": first + " " + second}},
+                "articleFacts": {
+                    "eventTakeaway": first,
+                    "keySentences": [first, second],
+                    "numbers": [],
+                },
+            },
+        }
+
+        self.assertEqual([second], confirmed_fact_lines(item))
+
     def test_enqueues_news_digest_with_short_source_link(self):
         queue = MemoryNotificationQueue()
         event = DomainEvent(

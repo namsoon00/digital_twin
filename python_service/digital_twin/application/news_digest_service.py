@@ -306,6 +306,12 @@ def confirmed_fact_lines(item: Dict[str, object]) -> List[str]:
             if not summary_texts_similar(sentence, summary):
                 rows.append(sentence)
                 break
+    if not rows:
+        fallback_sentences = article_fact_list(facts, "keySentences", 4)
+        if fallback_sentences:
+            # A brief summary can legitimately contain every extracted fact.
+            # Prefer its second concrete sentence over an empty placeholder.
+            rows.append(fallback_sentences[-1])
     numbers = article_fact_list(facts, "numbers", 3)
     if numbers:
         rows.append("본문 수치: " + ", ".join(numbers))

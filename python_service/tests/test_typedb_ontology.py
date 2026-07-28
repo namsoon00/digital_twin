@@ -5434,6 +5434,79 @@ class TypeDBOntologyRepositoryTests(unittest.TestCase):
         self.assertTrue(result["resumedPendingAboxActivation"])
         self.assertEqual(["prepare", "run-rulebox", "readback", "finalize"], repository.calls)
 
+    def test_projection_recorder_retries_initial_active_manifest_before_new_snapshot(self):
+        class FakeRepository:
+            store_key = "typedb"
+
+            def __init__(self):
+                self.calls = []
+                self.pending = {
+                    "status": "pending",
+                    "activationStatus": "pending-native-inference",
+                    "candidateAboxSnapshotId": "abox-manifest:first",
+                    "previousAboxSnapshotId": "",
+                    "targetSymbols": ["AAPL"],
+                }
+
+            def recover_pending_abox_activation(self, **_kwargs):
+                return {
+                    "status": "retry-required",
+                    "candidateAboxSnapshotId": "abox-manifest:first",
+                    "previousAboxSnapshotId": "",
+                    "pendingActivation": self.pending,
+                }
+
+            def acquire_scoped_abox_write_lease(self, *_args, **_kwargs):
+                return {"acquired": True, "leaseOwner": "resume-worker"}
+
+            def release_scoped_abox_write_lease(self, _lease):
+                return {"status": "released"}
+
+            def prepare_pending_abox_activation_for_inference(self, **_kwargs):
+                self.calls.append("prepare")
+                return {"status": "ready"}
+
+            def run_rulebox(self, payload):
+                self.calls.append("run-rulebox")
+                if payload["symbols"] != ["AAPL"]:
+                    raise AssertionError("active candidate must retain its original target symbol")
+                return {"status": "ok"}
+
+            def inferencebox_snapshot(self, *_args, **_kwargs):
+                self.calls.append("readback")
+                return {
+                    "status": "ok",
+                    "nativeTypeDbReasoningUsed": True,
+                    "generationAligned": True,
+                    "sourceAboxSnapshotId": "abox-manifest:first",
+                    "targetSymbols": ["AAPL"],
+                }
+
+            def pending_abox_activation(self, **_kwargs):
+                return self.pending
+
+            def finalize_abox_generation(self, active_snapshot_id, previous_snapshot_id, **_kwargs):
+                self.calls.append("finalize")
+                if active_snapshot_id != "abox-manifest:first" or previous_snapshot_id:
+                    raise AssertionError("initial active candidate finalization used the wrong generation")
+                return {"status": "ok"}
+
+            def save_graph(self, _graph):
+                raise AssertionError("a retry-required active candidate must resume before a new graph is saved")
+
+        snapshot = AccountSnapshot(
+            "main", "메인", "toss", "live", "ok", utc_now_iso(),
+            PortfolioSummary(total=1000, invested=1000, cash=0, markets=[], sectors=[], concentration=0),
+            positions=[Position("AAPL", "Apple", market="US", currency="USD", quantity=1, current_price=100, market_value=100, market_value_krw=140000)],
+        )
+        repository = FakeRepository()
+
+        result = PortfolioOntologyProjectionRecorder(repository).record_snapshot(snapshot)
+
+        self.assertEqual("ok", result["status"])
+        self.assertTrue(result["resumedPendingAboxActivation"])
+        self.assertEqual(["prepare", "run-rulebox", "readback", "finalize"], repository.calls)
+
     def test_target_scoped_patch_defers_overdue_full_reconciliation_only_with_backlog(self):
         graph = PortfolioOntology(
             "main",

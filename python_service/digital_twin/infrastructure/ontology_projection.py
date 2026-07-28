@@ -734,7 +734,7 @@ class PortfolioOntologyProjectionRecorder:
             }
             self.store_projection_result(snapshot, result)
             return result
-        if recovery_status == "staged":
+        if recovery_status in {"staged", "retry-required"}:
             resume_started = time.perf_counter()
             result = self.resume_staged_pending_abox_activation(
                 snapshot,
@@ -1377,11 +1377,12 @@ class PortfolioOntologyProjectionRecorder:
         world_id: str,
         recovery: Dict[str, object],
     ) -> Dict[str, object]:
-        """Complete a staged candidate before allowing a newer Manifest.
+        """Complete a pending candidate before allowing a newer Manifest.
 
-        A process can stop after staging an immutable ABox candidate but before
-        native inference begins. Rebuilding the latest snapshot cannot replace
-        that candidate safely, so resume the exact staged target set first.
+        A process can stop either after staging an immutable ABox candidate or
+        after activating the initial candidate but before native inference
+        completes. Rebuilding the latest snapshot cannot replace that
+        candidate safely, so resume its exact target set first.
         """
         recovery = dict(recovery or {})
         pending = recovery.get("pendingActivation")

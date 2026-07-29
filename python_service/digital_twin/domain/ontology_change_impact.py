@@ -9,13 +9,17 @@ investment conclusion in Python.
 from __future__ import annotations
 
 from collections import defaultdict
+import re
 from typing import Dict, Iterable, List, Mapping, Optional, Sequence, Set
 
 
-# v6 separates a global factual-value mutation from a global data-quality
-# mutation. The distinction is routing telemetry only; TypeDB still evaluates
-# the selected RuleBox functions against the complete active ABox.
-CHANGE_IMPACT_VERSION = "abox-change-impact-v6"
+# v8 keeps the v6 global quality/value distinction and makes dependency
+# fingerprints distinguish structural changes from a value change inside the
+# same kind or relation. TypeDB still evaluates every selected RuleBox
+# function; Python only avoids scheduling rules whose actual inputs did not
+# change.
+CHANGE_IMPACT_VERSION = "abox-change-impact-v8"
+DEPENDENCY_FINGERPRINT_VERSION = "rule-input-v2"
 
 SYMBOL_SCOPE_FAMILIES = {
     "state",
@@ -379,6 +383,105 @@ def _condition_value(condition: object, snake: str, camel: str = "") -> object:
     return getattr(condition, snake, getattr(condition, camel, None))
 
 
+def _dependency_token(value: object) -> str:
+    return re.sub(r"[^a-z0-9]+", "-", _lower(value)).strip("-")
+
+
+def _dependency_field_key(value: object) -> str:
+    token = re.sub(r"[^a-z0-9]", "", _lower(value))
+    return "field:" + token if token else ""
+
+
+def _dependency_kind_field_key(kind: object, field: object) -> str:
+    kind_token = _dependency_token(kind)
+    field_token = re.sub(r"[^a-z0-9]", "", _lower(field))
+    if not kind_token or not field_token:
+        return ""
+    return "kind:" + kind_token + ":field:" + field_token
+
+
+def _dependency_relation_field_key(relation_type: object, field: object) -> str:
+    relation_token = _dependency_token(relation_type)
+    field_token = re.sub(r"[^a-z0-9]", "", _lower(field))
+    if not relation_token or not field_token:
+        return ""
+    return "relation:" + relation_token + ":field:" + field_token
+
+
+def _filter_property_fields(filters: Mapping[str, object]) -> Set[str]:
+    """Return stored properties read by a RuleBox filter expression.
+
+    ``minValue`` and ``maxValue`` are RuleBox comparison operators over the
+    stored ``value`` property, not independent ABox fields. Keeping that
+    distinction lets a key-level value change rerun its rule without treating
+    every key-level property update as structural churn.
+    """
+    helper_keys = {
+        "equals", "operator", "values", "contains", "not", "any", "all",
+        "oneof", "range",
+    }
+    fields: Set[str] = set()
+    for raw_key in dict(filters or {}):
+        normalized = re.sub(r"[^a-z0-9]", "", _lower(raw_key))
+        if not normalized or normalized in helper_keys:
+            continue
+        if normalized in {"minvalue", "maxvalue", "value"}:
+            fields.add("value")
+        else:
+            fields.add(_clean(raw_key))
+    return {field for field in fields if field}
+
+
+def _condition_dependency_keys(
+    condition_kind: str,
+    field: str,
+    relation_type: str,
+    target_kind: str,
+    target_filters: Mapping[str, object],
+    relation_filters: Mapping[str, object],
+) -> Set[str]:
+    """Map a RuleBox condition to value-free ABox dependency identities.
+
+    The key set intentionally names only observable ABox structure, never a
+    threshold or a conclusion. A rule with a missing structural identity
+    remains conservative and is selected by its broad family.
+    """
+    keys: Set[str] = set()
+    relation_token = _dependency_token(relation_type)
+    kind_token = _dependency_token(target_kind)
+
+    def add_property_key(value: object) -> None:
+        if target_kind:
+            key = _dependency_kind_field_key(target_kind, value)
+        elif relation_type:
+            key = _dependency_relation_field_key(relation_type, value)
+        elif condition_kind in {"subject_property", "property", "field"}:
+            # RuleBox subject-property conditions are evaluated on the stock
+            # subject, rather than on an unrelated macro or evidence entity
+            # that happens to expose a field with the same name.
+            key = _dependency_kind_field_key("stock", value)
+        else:
+            key = _dependency_field_key(value)
+        if key:
+            keys.add(key)
+    for value in _list(field):
+        add_property_key(value)
+    if relation_token:
+        keys.add("relation:" + relation_token)
+    if kind_token:
+        keys.add("kind:" + kind_token)
+        # A relation that names only a target kind has no narrower property
+        # contract. Any value change on that exact kind can alter the native
+        # result, while a change on another kind must not reopen it.
+        if not field and not target_filters and not relation_filters:
+            keys.add("kind:" + kind_token + ":values")
+    for value in _filter_property_fields(target_filters):
+        add_property_key(value)
+    for value in _filter_property_fields(relation_filters):
+        add_property_key(value)
+    return keys
+
+
 def rule_condition_dependency_profile(condition: object) -> Dict[str, object]:
     """Describe the factual scope families a RuleBox condition may consume."""
     condition_id = _clean(_condition_value(condition, "condition_id", "conditionId"))
@@ -434,6 +537,14 @@ def rule_condition_dependency_profile(condition: object) -> Dict[str, object]:
         "field": field,
         "relationType": relation_type,
         "targetKind": target_kind,
+        "dependencyKeys": sorted(_condition_dependency_keys(
+            kind,
+            field,
+            relation_type,
+            target_kind,
+            target_filters,
+            relation_filters,
+        )),
         "role": _clean(_condition_value(condition, "role", "conditionRole")) or "required",
         "conservative": conservative,
     }
@@ -450,6 +561,12 @@ def rule_dependency_profile(rule: object) -> Dict[str, object]:
         enabled = bool(getattr(rule, "enabled", True))
     condition_profiles = [rule_condition_dependency_profile(item) for item in conditions]
     families = sorted({family for item in condition_profiles for family in item["scopeFamilies"]})
+    dependency_keys = sorted({
+        key
+        for item in condition_profiles
+        for key in item.get("dependencyKeys") or []
+        if _clean(key)
+    })
     conservative = any(bool(item.get("conservative")) for item in condition_profiles) or not families
     if conservative and "unknown" not in families:
         families.append("unknown")
@@ -457,6 +574,7 @@ def rule_dependency_profile(rule: object) -> Dict[str, object]:
         "ruleId": rule_id,
         "enabled": enabled,
         "scopeFamilies": sorted(families),
+        "dependencyKeys": dependency_keys,
         "conditionProfiles": condition_profiles,
         "conservative": conservative,
     }
@@ -514,6 +632,21 @@ def _semantic_fingerprints(item: Mapping[str, object]) -> Dict[str, str]:
     }
 
 
+def _semantic_dependency_fingerprints(item: Mapping[str, object]) -> Dict[str, str]:
+    if _clean(item.get("semanticDependencyFingerprintVersion")) != DEPENDENCY_FINGERPRINT_VERSION:
+        return {}
+    raw = (
+        dict(item.get("semanticDependencyFingerprints") or {})
+        if isinstance(item, Mapping)
+        else {}
+    )
+    return {
+        _clean(key): _clean(fingerprint)
+        for key, fingerprint in raw.items()
+        if _clean(key) and _clean(fingerprint)
+    }
+
+
 def _semantic_scope_changes(
     before: Mapping[str, object],
     after: Mapping[str, object],
@@ -530,6 +663,22 @@ def _semantic_scope_changes(
     }
 
 
+def _semantic_dependency_changes(
+    before: Mapping[str, object],
+    after: Mapping[str, object],
+) -> Optional[Set[str]]:
+    """Return changed RuleBox dependency identities or ``None`` for legacy scopes."""
+    before_fingerprints = _semantic_dependency_fingerprints(before)
+    after_fingerprints = _semantic_dependency_fingerprints(after)
+    if not before_fingerprints or not after_fingerprints:
+        return None
+    return {
+        key
+        for key in set(before_fingerprints) | set(after_fingerprints)
+        if before_fingerprints.get(key) != after_fingerprints.get(key)
+    }
+
+
 def scope_delta(previous_scope_plan: Iterable[object], next_scope_plan: Iterable[object]) -> Dict[str, object]:
     """Compare immutable scope generations and retain dependency impact."""
     previous = _scope_plan_index(previous_scope_plan)
@@ -543,6 +692,8 @@ def scope_delta(previous_scope_plan: Iterable[object], next_scope_plan: Iterable
     generation_changed = []
     unchanged = []
     semantic_changes_by_scope: Dict[str, List[str]] = {}
+    dependency_changes_by_scope: Dict[str, List[str]] = {}
+    dependency_fingerprint_missing_scope_ids: List[str] = []
     for scope_id in sorted(current_ids & previous_ids):
         before = previous[scope_id]
         after = current[scope_id]
@@ -559,7 +710,24 @@ def scope_delta(previous_scope_plan: Iterable[object], next_scope_plan: Iterable
         changed.append(scope_id)
         if semantic_changes:
             semantic_changes_by_scope[scope_id] = sorted(semantic_changes)
+        dependency_changes = _semantic_dependency_changes(before, after)
+        if dependency_changes is None:
+            dependency_fingerprint_missing_scope_ids.append(scope_id)
+        elif dependency_changes:
+            dependency_changes_by_scope[scope_id] = sorted(dependency_changes)
     direct_changed = sorted(set(added + removed + changed))
+    for scope_id in added:
+        after_dependencies = _semantic_dependency_fingerprints(current.get(scope_id) or {})
+        if after_dependencies:
+            dependency_changes_by_scope[scope_id] = sorted(after_dependencies)
+        else:
+            dependency_fingerprint_missing_scope_ids.append(scope_id)
+    for scope_id in removed:
+        before_dependencies = _semantic_dependency_fingerprints(previous.get(scope_id) or {})
+        if before_dependencies:
+            dependency_changes_by_scope[scope_id] = sorted(before_dependencies)
+        else:
+            dependency_fingerprint_missing_scope_ids.append(scope_id)
     dependency_graph: Dict[str, Set[str]] = defaultdict(set)
     for source in [previous, current]:
         for scope_id, item in source.items():
@@ -605,6 +773,12 @@ def scope_delta(previous_scope_plan: Iterable[object], next_scope_plan: Iterable
             or _scope_plan_family_tokens(scope_id, current.get(scope_id) or previous.get(scope_id) or {})
         )
     })
+    direct_dependency_keys = sorted({
+        key
+        for scope_id in direct_changed
+        for key in dependency_changes_by_scope.get(scope_id) or []
+        if _clean(key)
+    })
     affected_families = sorted({
         token
         for scope_id in affected
@@ -647,6 +821,12 @@ def scope_delta(previous_scope_plan: Iterable[object], next_scope_plan: Iterable
         "changedScopeFamilies": direct_families,
         "directChangedScopeFamilies": direct_families,
         "semanticChangedFamiliesByScope": semantic_changes_by_scope,
+        "semanticChangedDependencyKeysByScope": dependency_changes_by_scope,
+        "directChangedDependencyKeys": direct_dependency_keys,
+        "dependencyFingerprintCoverageComplete": bool(
+            direct_changed and not dependency_fingerprint_missing_scope_ids
+        ),
+        "dependencyFingerprintMissingScopeIds": sorted(set(dependency_fingerprint_missing_scope_ids)),
         "dependencyAffectedScopeFamilies": sorted(set(affected_families) - set(direct_families)),
         "affectedScopeFamilies": affected_families,
         "changedSymbols": direct_symbols,
@@ -658,16 +838,49 @@ def scope_delta(previous_scope_plan: Iterable[object], next_scope_plan: Iterable
     }
 
 
-def _rule_may_depend_on(profile: Mapping[str, object], changed_families: Set[str]) -> bool:
+def _families_intersect(left: Iterable[object], right: Iterable[object]) -> bool:
+    left_values = {str(value or "") for value in left or []}
+    right_values = {str(value or "") for value in right or []}
+    if left_values & right_values:
+        return True
+    if "macro" in right_values and any(value.startswith("macro-") or value == "macro" for value in left_values):
+        return True
+    return "macro" in left_values and any(value.startswith("macro-") for value in right_values)
+
+
+def _rule_may_depend_on(
+    profile: Mapping[str, object],
+    changed_families: Set[str],
+    changed_dependency_keys: Set[str] = None,
+    dependency_fingerprint_coverage_complete: bool = False,
+) -> bool:
     families = {str(value or "") for value in profile.get("scopeFamilies") or []}
     if not changed_families or "unknown" in families or "state" in changed_families:
         return True
-    if families & changed_families:
+    if not _families_intersect(families, changed_families):
+        return False
+    if not dependency_fingerprint_coverage_complete:
         return True
-    if "macro" in changed_families and any(value.startswith("macro-") or value == "macro" for value in families):
-        return True
-    if "macro" in families and any(value.startswith("macro-") for value in changed_families):
-        return True
+    changed_keys = {str(value or "") for value in changed_dependency_keys or [] if _clean(value)}
+    if not changed_keys:
+        return False
+    conditions = [
+        item for item in profile.get("conditionProfiles") or []
+        if isinstance(item, Mapping)
+        and _families_intersect(item.get("scopeFamilies") or [], changed_families)
+    ]
+    if not conditions:
+        return False
+    for condition in conditions:
+        if bool(condition.get("conservative")):
+            return True
+        dependency_keys = {
+            str(value or "")
+            for value in condition.get("dependencyKeys") or []
+            if _clean(value)
+        }
+        if not dependency_keys or dependency_keys & changed_keys:
+            return True
     return False
 
 
@@ -759,6 +972,8 @@ def inference_impact_diagnostics(
     candidate_rule_count: int,
     enabled_rule_count: int,
     selection_eligibility_reason: str,
+    changed_dependency_key_count: int = 0,
+    dependency_fingerprint_coverage_complete: bool = False,
 ) -> Dict[str, object]:
     """Explain why a native cycle is broad without deciding what it means.
 
@@ -795,6 +1010,8 @@ def inference_impact_diagnostics(
         reason_codes.append("candidate-catalog-is-complete")
     if requested and unexpected:
         reason_codes.append("snapshot-change-broader-than-event")
+    if dependency_fingerprint_coverage_complete:
+        reason_codes.append("dependency-fingerprint-routing")
     if not reason_codes:
         reason_codes.append("local-fact-change")
     if not requested:
@@ -829,6 +1046,8 @@ def inference_impact_diagnostics(
         "directChangedScopeCount": len(delta.get("directChangedScopeIds") or []),
         "affectedScopeCount": len(delta.get("affectedScopeIds") or []),
         "changedFamilyCount": len(changed),
+        "changedDependencyKeyCount": max(0, int(changed_dependency_key_count or 0)),
+        "dependencyFingerprintCoverageComplete": bool(dependency_fingerprint_coverage_complete),
         "targetSymbolCount": len([symbol for symbol in target_symbols or [] if _clean(symbol)]),
         "candidateRuleCount": max(0, int(candidate_rule_count or 0)),
         "enabledRuleCount": max(0, int(enabled_rule_count or 0)),
@@ -903,9 +1122,16 @@ def build_inference_impact_plan(
     profiles = rule_dependency_profiles(rules or [])
     enabled_profiles = [profile for profile in profiles if profile.get("enabled")]
     changed_families = set(delta.get("directChangedScopeFamilies") or delta.get("changedScopeFamilies") or [])
+    changed_dependency_keys = set(delta.get("directChangedDependencyKeys") or [])
+    dependency_fingerprint_coverage_complete = bool(delta.get("dependencyFingerprintCoverageComplete"))
     candidate_profiles = [
         profile for profile in enabled_profiles
-        if _rule_may_depend_on(profile, changed_families)
+        if _rule_may_depend_on(
+            profile,
+            changed_families,
+            changed_dependency_keys,
+            dependency_fingerprint_coverage_complete,
+        )
     ]
     deferred_profiles = [
         profile for profile in enabled_profiles
@@ -935,6 +1161,8 @@ def build_inference_impact_plan(
         candidate_rule_count=len(candidate_profiles),
         enabled_rule_count=len(enabled_profiles),
         selection_eligibility_reason=selection_eligibility_reason,
+        changed_dependency_key_count=len(changed_dependency_keys),
+        dependency_fingerprint_coverage_complete=dependency_fingerprint_coverage_complete,
     )
     return {
         "version": CHANGE_IMPACT_VERSION,
@@ -953,6 +1181,8 @@ def build_inference_impact_plan(
         "ruleDependencyCount": len(profiles),
         "enabledRuleCount": len(enabled_profiles),
         "changedScopeFamilies": sorted(changed_families),
+        "changedDependencyKeys": sorted(changed_dependency_keys),
+        "dependencyFingerprintCoverageComplete": dependency_fingerprint_coverage_complete,
         "requestedFactFamilies": _clean_family_values(requested_fact_families),
         "relationContextSymbols": list(delta.get("relationContextSymbols") or []),
         "unresolvedRelationScopeIds": list(delta.get("unresolvedRelationScopeIds") or []),
@@ -1010,6 +1240,8 @@ def compact_inference_impact_plan(plan: Mapping[str, object], limit: int = 80) -
         "ruleDependencyCount": int(values.get("ruleDependencyCount") or 0),
         "enabledRuleCount": int(values.get("enabledRuleCount") or 0),
         "changedScopeFamilies": list(values.get("changedScopeFamilies") or [])[:bounded],
+        "changedDependencyKeys": list(values.get("changedDependencyKeys") or [])[:bounded],
+        "dependencyFingerprintCoverageComplete": bool(values.get("dependencyFingerprintCoverageComplete")),
         "requestedFactFamilies": list(values.get("requestedFactFamilies") or [])[:bounded],
         "relationContextSymbols": list(values.get("relationContextSymbols") or [])[:bounded],
         "unresolvedRelationScopeIds": list(values.get("unresolvedRelationScopeIds") or [])[:bounded],
@@ -1035,6 +1267,8 @@ def compact_inference_impact_plan(plan: Mapping[str, object], limit: int = 80) -
             "directChangedScopeCount": int(diagnostics.get("directChangedScopeCount") or 0),
             "affectedScopeCount": int(diagnostics.get("affectedScopeCount") or 0),
             "changedFamilyCount": int(diagnostics.get("changedFamilyCount") or 0),
+            "changedDependencyKeyCount": int(diagnostics.get("changedDependencyKeyCount") or 0),
+            "dependencyFingerprintCoverageComplete": bool(diagnostics.get("dependencyFingerprintCoverageComplete")),
             "targetSymbolCount": int(diagnostics.get("targetSymbolCount") or 0),
             "candidateRuleCount": int(diagnostics.get("candidateRuleCount") or 0),
             "enabledRuleCount": int(diagnostics.get("enabledRuleCount") or 0),
@@ -1063,6 +1297,14 @@ def compact_inference_impact_plan(plan: Mapping[str, object], limit: int = 80) -
                 for scope_id, families in dict(delta.get("semanticChangedFamiliesByScope") or {}).items()
                 if str(scope_id or "").strip()
             },
+            "semanticChangedDependencyKeysByScope": {
+                str(scope_id or ""): list(keys or [])[:bounded]
+                for scope_id, keys in dict(delta.get("semanticChangedDependencyKeysByScope") or {}).items()
+                if str(scope_id or "").strip()
+            },
+            "directChangedDependencyKeys": list(delta.get("directChangedDependencyKeys") or [])[:bounded],
+            "dependencyFingerprintCoverageComplete": bool(delta.get("dependencyFingerprintCoverageComplete")),
+            "dependencyFingerprintMissingScopeIds": list(delta.get("dependencyFingerprintMissingScopeIds") or [])[:bounded],
             "dependencyAffectedScopeFamilies": list(delta.get("dependencyAffectedScopeFamilies") or [])[:bounded],
             "affectedScopeFamilies": list(delta.get("affectedScopeFamilies") or [])[:bounded],
             "changedSymbols": list(delta.get("changedSymbols") or [])[:bounded],

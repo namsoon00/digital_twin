@@ -2805,6 +2805,14 @@ class ScopedABoxManifestMixin:
                     for family, fingerprint in dict(item.get("semanticFingerprints") or {}).items()
                     if str(family or "").strip() and str(fingerprint or "").strip()
                 },
+                "semanticDependencyFingerprintVersion": str(
+                    item.get("semanticDependencyFingerprintVersion") or ""
+                ).strip(),
+                "semanticDependencyFingerprints": {
+                    str(key or "").strip(): str(fingerprint or "").strip()
+                    for key, fingerprint in dict(item.get("semanticDependencyFingerprints") or {}).items()
+                    if str(key or "").strip() and str(fingerprint or "").strip()
+                },
                 "fingerprint": str(item.get("fingerprint") or ""),
                 "baseFingerprint": str(item.get("baseFingerprint") or ""),
                 "dependencyScopeIds": [

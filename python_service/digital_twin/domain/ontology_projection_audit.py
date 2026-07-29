@@ -138,6 +138,7 @@ def inference_reuse_scope_plan(scope_plan: Iterable[object], limit: int = 260) -
         if not scope_id:
             continue
         semantic_fingerprints = item.get("semanticFingerprints")
+        semantic_dependency_fingerprints = item.get("semanticDependencyFingerprints")
         dependencies = item.get("dependencyScopeIds")
         rows.append({
             "scopeId": scope_id,
@@ -151,6 +152,14 @@ def inference_reuse_scope_plan(scope_plan: Iterable[object], limit: int = 260) -
             "semanticFingerprints": {
                 str(key or "").strip(): str(value or "").strip()
                 for key, value in dict(semantic_fingerprints or {}).items()
+                if str(key or "").strip() and str(value or "").strip()
+            },
+            "semanticDependencyFingerprintVersion": str(
+                item.get("semanticDependencyFingerprintVersion") or ""
+            ).strip(),
+            "semanticDependencyFingerprints": {
+                str(key or "").strip(): str(value or "").strip()
+                for key, value in dict(semantic_dependency_fingerprints or {}).items()
                 if str(key or "").strip() and str(value or "").strip()
             },
             "generationId": str(item.get("generationId") or "").strip(),

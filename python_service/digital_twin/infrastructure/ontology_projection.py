@@ -1865,11 +1865,35 @@ class PortfolioOntologyProjectionRecorder:
                 or str(item.get("worldId") or "").strip() == str(world_id or "").strip()
             )
         ), None)
+        recovery_mode = "interrupted-audit"
         if not row:
-            return {"status": "skipped", "reason": "No interrupted projection audit matches the active ABox."}
+            # Older workers could prove a TypeDB activation after their
+            # process was interrupted, but persisted only a thin recovery
+            # audit. That loses the reusable native-rule coverage proof and
+            # makes every later target run fall back to the full catalogue.
+            # Repair only the active run, and only from the same aligned
+            # TypeDB InferenceBox proof used for an interrupted audit.
+            row = next((
+                item for item in rows or []
+                if isinstance(item, dict)
+                and str(item.get("runId") or "") == run_id
+                and str(item.get("status") or "").lower() == "ok"
+                and (
+                    not str(world_id or "").strip()
+                    or str(item.get("worldId") or "").strip() == str(world_id or "").strip()
+                )
+                and str(
+                    ((item.get("result") or {}).get("inferenceReuseProof") or {}).get("status")
+                    if isinstance(item.get("result"), dict)
+                    else ""
+                ) != "verified"
+            ), None)
+            recovery_mode = "reuse-proof-repair"
+        if not row:
+            return {"status": "skipped", "reason": "No interrupted audit or missing active reuse proof matches the active ABox."}
         run = projection_run_from_payload(row)
         if not run.run_id or run.abox_snapshot_id != active_snapshot_id:
-            return {"status": "skipped", "reason": "Interrupted audit ABox identity does not match the active ABox."}
+            return {"status": "skipped", "reason": "Active ABox identity does not match the recoverable projection audit."}
         try:
             inferencebox = self.repository_world_call(
                 "inferencebox_snapshot",
@@ -1885,10 +1909,19 @@ class PortfolioOntologyProjectionRecorder:
                 "reason": "Active InferenceBox is not aligned with the interrupted ABox audit row.",
                 "runId": run.run_id,
             }
+        prior_result = row.get("result") if isinstance(row.get("result"), dict) else {}
+        prior_execution = prior_result.get("ruleboxExecution") if isinstance(prior_result.get("ruleboxExecution"), dict) else {}
+        prior_reuse = prior_result.get("priorInferenceReuse") if isinstance(prior_result.get("priorInferenceReuse"), dict) else {}
+        matched_rule_ids = self.matched_rule_ids_from_inference_payload(inferencebox)
+        selection_applied = bool(prior_execution.get("nativeRuleSelectionApplied"))
         result = {
             "saved": True,
             "status": "ok",
-            "reason": "TypeDB ABox와 InferenceBox 정합성을 확인해 중단된 투영 감사를 복구했습니다.",
+            "reason": (
+                "TypeDB ABox와 InferenceBox 정합성을 확인해 중단된 투영 감사를 복구했습니다."
+                if recovery_mode == "interrupted-audit"
+                else "활성 TypeDB ABox와 InferenceBox에서 누락된 규칙 재사용 증명을 복구했습니다."
+            ),
             "graphStore": "typedb",
             "projectionMode": run.projection_mode,
             "aboxSnapshotId": active_snapshot_id,
@@ -1899,7 +1932,17 @@ class PortfolioOntologyProjectionRecorder:
             "ruleboxExecution": {
                 "status": "ok",
                 "reason": "Recovered from active TypeDB InferenceBox alignment.",
-                "matchedRuleCount": int(inferencebox.get("traceCount") or 0),
+                "nativeInferenceEvaluationComplete": bool(
+                    inferencebox.get("nativeTypeDbReasoningCompleted")
+                    or inferencebox.get("typedbNativeRuleEvaluationCompleted")
+                    or inferencebox.get("nativeTypeDbReasoningUsed")
+                ),
+                "nativeRuleSelectionApplied": selection_applied,
+                "typedbNativeRuleMatchedRuleIds": matched_rule_ids,
+                "typedbNativeRuleMatchedCount": max(
+                    len(matched_rule_ids),
+                    int(inferencebox.get("traceCount") or 0),
+                ),
             },
             "aboxPersistenceVerification": {
                 "activePointer": {
@@ -1915,16 +1958,23 @@ class PortfolioOntologyProjectionRecorder:
             },
             "recoveredAfterRuntimeInterruption": True,
         }
+        if prior_reuse:
+            result["priorInferenceReuse"] = prior_reuse
+        # A recovery must preserve the same verified coverage contract as an
+        # uninterrupted projection. Without this, the next narrow change
+        # cannot reuse unaffected TypeDB matches and re-runs the full catalog.
+        self.attach_inference_reuse_proof(run, result)
         try:
             completed = complete_ontology_projection_run(run, result)
             self.projection_run_store.complete(completed)
         except Exception as error:  # noqa: BLE001 - a later cycle can prove and retry the same row.
             return {"status": "error", "reason": str(error)[:180], "runId": run.run_id}
         return {
-            "status": "recovered",
+            "status": "recovered" if recovery_mode == "interrupted-audit" else "reuse-proof-repaired",
             "runId": run.run_id,
             "aboxSnapshotId": active_snapshot_id,
             "inferenceGenerationId": str(inferencebox.get("inferenceGenerationId") or ""),
+            "inferenceReuseProof": dict(result.get("inferenceReuseProof") or {}),
         }
 
     def ensure_rulebox_ready(self) -> Dict[str, object]:

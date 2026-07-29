@@ -1,6 +1,7 @@
 import unittest
 
 from digital_twin.domain.ontology_change_impact import (
+    DEPENDENCY_FINGERPRINT_VERSION,
     build_inference_impact_plan,
     compact_inference_impact_plan,
     family_for_relation,
@@ -87,6 +88,18 @@ class OntologyChangeImpactTests(unittest.TestCase):
         self.assertEqual(first_generations["symbol:005930:market"], second_generations["symbol:005930:market"])
         self.assertEqual(first_generations["symbol:005930:state"], second_generations["symbol:005930:state"])
         self.assertEqual(first_generations["macro:market"], second_generations["macro:market"])
+
+    def test_scope_identity_ignores_display_label_only_changes(self):
+        graph = self.scope_graph()
+        first = apply_scoped_abox_identity(graph)
+        first_generations = dict(first["scopeGenerationIds"])
+
+        stock = next(item for item in graph.entities if item.entity_id == "stock:005930")
+        stock.label = "삼성전자 현재가 70,000원"
+
+        second = apply_scoped_abox_identity(graph)
+
+        self.assertEqual(first_generations, second["scopeGenerationIds"])
 
     def test_one_pass_scope_identity_helpers_match_per_scope_contract(self):
         graph = self.scope_graph()
@@ -283,6 +296,205 @@ class OntologyChangeImpactTests(unittest.TestCase):
         self.assertEqual(["symbol:005930:link"], delta["generationChangedScopeIds"])
         self.assertEqual(["symbol:005930:link"], delta["reboundScopeIds"])
         self.assertEqual([], delta["changedScopeFamilies"])
+
+    def test_dependency_fingerprints_select_only_rules_reading_changed_fact(self):
+        before = [{
+            "scopeId": "symbol:005930:state",
+            "generationId": "state-a",
+            "semanticFingerprints": {"market": "market-a", "flow": "flow-a"},
+            "semanticDependencyFingerprintVersion": DEPENDENCY_FINGERPRINT_VERSION,
+            "semanticDependencyFingerprints": {
+                "field:currentprice": "price-a",
+                "kind:price-metric": "price-metric-a",
+                "kind:flow-metric": "flow-metric-a",
+            },
+        }]
+        after = [{
+            **before[0],
+            "generationId": "state-b",
+            "semanticFingerprints": {"market": "market-b", "flow": "flow-a"},
+            "semanticDependencyFingerprints": {
+                "field:currentprice": "price-b",
+                "kind:price-metric": "price-metric-a",
+                "kind:flow-metric": "flow-metric-a",
+            },
+        }]
+        rules = [
+            {
+                "ruleId": "graph.test.current-price.v1",
+                "conditions": [{"field": "currentPrice", "operator": ">", "value": 0}],
+            },
+            {
+                "ruleId": "graph.test.key-level.v1",
+                "conditions": [{
+                    "kind": "relation",
+                    "relationType": "HAS_TECHNICAL_INDICATOR",
+                    "targetKind": "key-level",
+                }],
+            },
+            {
+                "ruleId": "graph.test.flow.v1",
+                "conditions": [{
+                    "kind": "relation",
+                    "relationType": "HAS_TRADE_FLOW",
+                    "targetKind": "flow-metric",
+                }],
+            },
+        ]
+
+        plan = build_inference_impact_plan(
+            before,
+            after,
+            ["005930"],
+            explicit_target_symbols=["005930"],
+            rules=rules,
+        )
+
+        self.assertTrue(plan["dependencyFingerprintCoverageComplete"])
+        self.assertEqual(["field:currentprice"], plan["changedDependencyKeys"])
+        self.assertEqual(["graph.test.current-price.v1"], plan["candidateRuleIds"])
+        self.assertTrue(plan["nativeRuleSelectionEligible"])
+
+    def test_subject_property_dependency_does_not_collide_with_macro_field(self):
+        before = [{
+            "scopeId": "macro:fx",
+            "generationId": "fx-a",
+            "semanticFingerprints": {"macro-fx": "fx-a"},
+            "semanticDependencyFingerprintVersion": DEPENDENCY_FINGERPRINT_VERSION,
+            "semanticDependencyFingerprints": {
+                "kind:fx-rate:field:source": "source-a",
+                "kind:fx-rate": "fx-rate",
+            },
+        }]
+        after = [{
+            **before[0],
+            "generationId": "fx-b",
+            "semanticFingerprints": {"macro-fx": "fx-b"},
+            "semanticDependencyFingerprints": {
+                "kind:fx-rate:field:source": "source-b",
+                "kind:fx-rate": "fx-rate",
+            },
+        }]
+        rules = [{
+            "ruleId": "graph.test.holding-source.v1",
+            "conditions": [{
+                "kind": "subject_property",
+                "field": "source",
+                "operator": "==",
+                "value": "holding",
+            }],
+        }]
+
+        plan = build_inference_impact_plan(before, after, ["005930"], rules=rules)
+
+        self.assertTrue(plan["dependencyFingerprintCoverageComplete"])
+        self.assertEqual(["kind:fx-rate:field:source"], plan["changedDependencyKeys"])
+        self.assertEqual([], plan["candidateRuleIds"])
+
+    def test_target_filter_value_change_selects_rule_without_kind_churn(self):
+        before = [{
+            "scopeId": "symbol:005930:market",
+            "generationId": "market-a",
+            "semanticFingerprints": {"market": "market-a"},
+            "semanticDependencyFingerprintVersion": DEPENDENCY_FINGERPRINT_VERSION,
+            "semanticDependencyFingerprints": {
+                "kind:key-level": "key-level-present",
+                "relation:has-technical-indicator": "technical-link-present",
+                "kind:key-level:field:leveltype": "ma20",
+                "kind:key-level:field:value": "distance-a",
+            },
+        }]
+        after = [{
+            **before[0],
+            "generationId": "market-b",
+            "semanticFingerprints": {"market": "market-b"},
+            "semanticDependencyFingerprints": {
+                "kind:key-level": "key-level-present",
+                "relation:has-technical-indicator": "technical-link-present",
+                "kind:key-level:field:leveltype": "ma20",
+                "kind:key-level:field:value": "distance-b",
+            },
+        }]
+        rules = [{
+            "ruleId": "graph.test.ma-break.v1",
+            "conditions": [{
+                "kind": "relation",
+                "relationType": "HAS_TECHNICAL_INDICATOR",
+                "targetKind": "key-level",
+                "targetPropertyFilters": {"levelType": "ma20", "maxValue": -5},
+            }],
+        }]
+
+        plan = build_inference_impact_plan(before, after, ["005930"], rules=rules)
+
+        self.assertTrue(plan["dependencyFingerprintCoverageComplete"])
+        self.assertIn("kind:key-level:field:value", plan["changedDependencyKeys"])
+        self.assertEqual(["graph.test.ma-break.v1"], plan["candidateRuleIds"])
+
+    def test_scoped_dependency_kind_hash_ignores_value_only_change(self):
+        graph = self.scope_graph()
+        first = apply_scoped_abox_identity(graph)
+        first_market = next(
+            item for item in first["scopePlan"]
+            if item["scopeId"] == "symbol:005930:market"
+        )
+        metric = next(
+            item for item in graph.entities
+            if item.entity_id == "price-metric:005930:currentPrice"
+        )
+        metric.properties["currentPrice"] = 70100
+        second = apply_scoped_abox_identity(graph)
+        second_market = next(
+            item for item in second["scopePlan"]
+            if item["scopeId"] == "symbol:005930:market"
+        )
+
+        self.assertEqual(
+            DEPENDENCY_FINGERPRINT_VERSION,
+            second_market["semanticDependencyFingerprintVersion"],
+        )
+        self.assertEqual(
+            first_market["semanticDependencyFingerprints"]["kind:price-metric"],
+            second_market["semanticDependencyFingerprints"]["kind:price-metric"],
+        )
+        self.assertNotEqual(
+            first_market["semanticDependencyFingerprints"]["kind:price-metric:field:currentprice"],
+            second_market["semanticDependencyFingerprints"]["kind:price-metric:field:currentprice"],
+        )
+
+    def test_legacy_scope_without_dependency_fingerprints_keeps_family_fallback(self):
+        before = [{
+            "scopeId": "symbol:005930:state",
+            "generationId": "state-a",
+            "semanticFingerprints": {"market": "market-a"},
+        }]
+        after = [{
+            **before[0],
+            "generationId": "state-b",
+            "semanticFingerprints": {"market": "market-b"},
+        }]
+        rules = [
+            {
+                "ruleId": "graph.test.price.v1",
+                "conditions": [{"field": "currentPrice", "operator": ">", "value": 0}],
+            },
+            {
+                "ruleId": "graph.test.level.v1",
+                "conditions": [{
+                    "kind": "relation",
+                    "relationType": "HAS_TECHNICAL_INDICATOR",
+                    "targetKind": "key-level",
+                }],
+            },
+        ]
+
+        plan = build_inference_impact_plan(before, after, ["005930"], rules=rules)
+
+        self.assertFalse(plan["dependencyFingerprintCoverageComplete"])
+        self.assertEqual(
+            ["graph.test.level.v1", "graph.test.price.v1"],
+            sorted(plan["candidateRuleIds"]),
+        )
 
     def test_changed_relation_scope_uses_its_symbol_context_without_global_impact(self):
         before = [
@@ -847,7 +1059,7 @@ class OntologyChangeImpactTests(unittest.TestCase):
 
         trace = inference.entities[0]
         self.assertEqual("inference:test", trace.properties["inferenceGenerationId"])
-        self.assertEqual("abox-change-impact-v6", trace.properties["impactPlanVersion"])
+        self.assertEqual("abox-change-impact-v8", trace.properties["impactPlanVersion"])
         self.assertEqual(["005930"], trace.properties["inferenceImpactPlan"]["inferenceTargetSymbols"])
         self.assertEqual("dependency-selected-native-evaluation", trace.properties["ruleExecutionScope"])
         self.assertFalse(trace.properties["nativeRuleSelectionApplied"])

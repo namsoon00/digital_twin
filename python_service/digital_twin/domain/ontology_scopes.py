@@ -15,6 +15,7 @@ from copy import deepcopy
 from typing import Dict, Iterable, List, Mapping, MutableMapping, Set, Tuple
 
 from .ontology_change_impact import (
+    DEPENDENCY_FINGERPRINT_VERSION,
     family_for_field,
     family_for_entity,
     family_for_relation,
@@ -660,6 +661,53 @@ def _semantic_properties(values: Mapping[str, object]) -> Dict[str, object]:
     }
 
 
+def _semantic_dependency_token(value: object) -> str:
+    """Return a stable key for a RuleBox-readable fact dependency.
+
+    Scope-family hashes answer whether a broad fact category changed. Native
+    rule scheduling additionally needs a narrower, value-free identity such
+    as ``field:profitlossrate`` or ``relation:has-external-signal``. Labels
+    deliberately never appear here: they are display metadata and are not
+    persisted as ABox facts.
+    """
+    return re.sub(r"[^a-z0-9]+", "-", _clean(value).lower()).strip("-")
+
+
+def _semantic_dependency_field_key(field: object) -> str:
+    return "field:" + re.sub(r"[^a-z0-9]", "", _clean(field).lower())
+
+
+def _semantic_dependency_kind_field_key(kind: object, field: object) -> str:
+    kind_token = _semantic_dependency_token(kind)
+    field_token = re.sub(r"[^a-z0-9]", "", _clean(field).lower())
+    if not kind_token or not field_token:
+        return ""
+    return "kind:" + kind_token + ":field:" + field_token
+
+
+def _semantic_dependency_relation_field_key(relation_type: object, field: object) -> str:
+    relation_token = _semantic_dependency_token(relation_type)
+    field_token = re.sub(r"[^a-z0-9]", "", _clean(field).lower())
+    if not relation_token or not field_token:
+        return ""
+    return "relation:" + relation_token + ":field:" + field_token
+
+
+def _fingerprint_semantic_groups(groups: Mapping[str, Iterable[Mapping[str, object]]]) -> Dict[str, str]:
+    return {
+        key: hashlib.sha256(
+            json.dumps(
+                sorted(items, key=lambda item: json.dumps(item, ensure_ascii=False, sort_keys=True)),
+                ensure_ascii=False,
+                sort_keys=True,
+                separators=(",", ":"),
+            ).encode("utf-8")
+        ).hexdigest()
+        for key, items in groups.items()
+        if key and items
+    }
+
+
 def _scope_semantic_fingerprints(
     graph: PortfolioOntology,
     scope_id: str,
@@ -687,7 +735,6 @@ def _scope_semantic_fingerprints(
         groups[fallback].append({
             "entity": _clean(entity.entity_id),
             "kind": _clean(entity.kind),
-            "label": _clean(entity.label),
         })
         for field, value in _semantic_properties(properties).items():
             groups[_semantic_property_family(field, fallback)].append({
@@ -746,18 +793,7 @@ def _scope_semantic_fingerprints(
             "properties": _semantic_properties(dict(relation.get("properties") or {})),
         })
 
-    return {
-        family: hashlib.sha256(
-            json.dumps(
-                sorted(items, key=lambda item: json.dumps(item, ensure_ascii=False, sort_keys=True)),
-                ensure_ascii=False,
-                sort_keys=True,
-                separators=(",", ":"),
-            ).encode("utf-8")
-        ).hexdigest()
-        for family, items in groups.items()
-        if family and items
-    }
+    return _fingerprint_semantic_groups(groups)
 
 
 def _scope_semantic_fingerprints_by_scope(
@@ -793,7 +829,6 @@ def _scope_semantic_fingerprints_by_scope(
         groups[fallback].append({
             "entity": _clean(entity.entity_id),
             "kind": _clean(entity.kind),
-            "label": _clean(entity.label),
         })
         for field, value in _semantic_properties(properties).items():
             groups[_semantic_property_family(field, fallback)].append({
@@ -857,35 +892,24 @@ def _scope_semantic_fingerprints_by_scope(
         })
 
     return {
-        scope_id: {
-            family: hashlib.sha256(
-                json.dumps(
-                    sorted(items, key=lambda item: json.dumps(item, ensure_ascii=False, sort_keys=True)),
-                    ensure_ascii=False,
-                    sort_keys=True,
-                    separators=(",", ":"),
-                ).encode("utf-8")
-            ).hexdigest()
-            for family, items in groups.items()
-            if family and items
-        }
+        scope_id: _fingerprint_semantic_groups(groups)
         for scope_id, groups in groups_by_scope.items()
     }
 
 
-def _scope_fragment_payloads_with_semantic_fingerprints(
+def _scope_fragment_payloads_with_semantic_fingerprints_and_dependencies(
     graph: PortfolioOntology,
     scope_ids: Iterable[str],
     support_relations: Iterable[Mapping[str, object]] = (),
-) -> tuple[Dict[str, Dict[str, object]], Dict[str, Dict[str, str]]]:
+) -> tuple[Dict[str, Dict[str, object]], Dict[str, Dict[str, str]], Dict[str, Dict[str, str]]]:
     """Build persistence and semantic scope hashes from one normalized pass.
 
     A scoped projection needs two views of the same ABox rows: the complete
-    fragment that determines storage identity and the fact-family fragment
-    used by incremental native-rule routing.  Building them independently
-    repeated deep ``stable_value`` work for every entity, relation, and
-    evidence row before TypeDB was even called.  This helper preserves both
-    existing payload contracts while sharing the normalized values.
+    fragment that determines storage identity, the fact-family fragment used
+    by incremental native-rule routing, and a narrower dependency fragment
+    used to select only RuleBox conditions whose actual input changed.
+    Building them independently repeated deep ``stable_value`` work for every
+    entity, relation, and evidence row before TypeDB was even called.
     """
     expected = {
         str(scope_id or "").strip()
@@ -897,6 +921,10 @@ def _scope_fragment_payloads_with_semantic_fingerprints(
         for scope_id in expected
     }
     semantic_groups_by_scope: Dict[str, Dict[str, List[Dict[str, object]]]] = {
+        scope_id: defaultdict(list)
+        for scope_id in expected
+    }
+    dependency_groups_by_scope: Dict[str, Dict[str, List[Dict[str, object]]]] = {
         scope_id: defaultdict(list)
         for scope_id in expected
     }
@@ -922,7 +950,8 @@ def _scope_fragment_payloads_with_semantic_fingerprints(
         scope_id = _clean(properties.get("aboxScopeId"))
         payload = payloads_by_scope.get(scope_id)
         semantic_groups = semantic_groups_by_scope.get(scope_id)
-        if payload is None or semantic_groups is None:
+        dependency_groups = dependency_groups_by_scope.get(scope_id)
+        if payload is None or semantic_groups is None or dependency_groups is None:
             continue
         stable_properties = stable_value(properties)
         payload["entities"].append({
@@ -931,12 +960,36 @@ def _scope_fragment_payloads_with_semantic_fingerprints(
             "properties": stable_properties,
         })
         fallback = family_for_entity(entity.kind, properties, entity.entity_id)
+        semantic_properties = semantic_properties_from_stable(properties, stable_properties)
         semantic_groups[fallback].append({
             "entity": _clean(entity.entity_id),
             "kind": _clean(entity.kind),
-            "label": _clean(entity.label),
         })
-        for field, value in semantic_properties_from_stable(properties, stable_properties).items():
+        entity_structure = {
+            "entity": _clean(entity.entity_id),
+            "kind": _clean(entity.kind),
+        }
+        entity_values = {
+            **entity_structure,
+            "properties": semantic_properties,
+        }
+        kind_token = _semantic_dependency_token(entity.kind)
+        if kind_token:
+            dependency_groups["kind:" + kind_token].append(entity_structure)
+            dependency_groups["kind:" + kind_token + ":values"].append(entity_values)
+        for field, value in semantic_properties.items():
+            field_key = _semantic_dependency_field_key(field)
+            if field_key != "field:":
+                field_dependency = {
+                    "entity": _clean(entity.entity_id),
+                    "field": field,
+                    "value": value,
+                }
+                dependency_groups[field_key].append(field_dependency)
+                kind_field_key = _semantic_dependency_kind_field_key(entity.kind, field)
+                if kind_field_key:
+                    dependency_groups[kind_field_key].append(field_dependency)
+        for field, value in semantic_properties.items():
             semantic_groups[_semantic_property_family(field, fallback)].append({
                 "entity": _clean(entity.entity_id),
                 "field": field,
@@ -948,7 +1001,8 @@ def _scope_fragment_payloads_with_semantic_fingerprints(
         scope_id = _clean(properties.get("aboxScopeId"))
         payload = payloads_by_scope.get(scope_id)
         semantic_groups = semantic_groups_by_scope.get(scope_id)
-        if payload is None or semantic_groups is None:
+        dependency_groups = dependency_groups_by_scope.get(scope_id)
+        if payload is None or semantic_groups is None or dependency_groups is None:
             continue
         stable_properties = stable_value(properties)
         payload["relations"].append({
@@ -967,19 +1021,39 @@ def _scope_fragment_payloads_with_semantic_fingerprints(
             source_kind=getattr(source, "kind", ""),
             target_kind=getattr(target, "kind", ""),
         )
-        semantic_groups[family].append({
+        relation_structure = {
             "source": _clean(relation.source),
             "target": _clean(relation.target),
             "type": _clean(relation.relation_type),
-            "properties": semantic_properties_from_stable(properties, stable_properties),
+        }
+        relation_properties = semantic_properties_from_stable(properties, stable_properties)
+        semantic_groups[family].append({
+            **relation_structure,
+            "properties": relation_properties,
         })
+        relation_token = _semantic_dependency_token(relation.relation_type)
+        if relation_token:
+            dependency_groups["relation:" + relation_token].append(relation_structure)
+        for field, value in relation_properties.items():
+            field_key = _semantic_dependency_field_key(field)
+            field_dependency = {
+                **relation_structure,
+                "field": field,
+                "value": value,
+            }
+            if field_key != "field:":
+                dependency_groups[field_key].append(field_dependency)
+            relation_field_key = _semantic_dependency_relation_field_key(relation.relation_type, field)
+            if relation_field_key:
+                dependency_groups[relation_field_key].append(field_dependency)
 
     for evidence in graph.evidence:
         values = dict(evidence.value or {})
         scope_id = _clean(values.get("aboxScopeId"))
         payload = payloads_by_scope.get(scope_id)
         semantic_groups = semantic_groups_by_scope.get(scope_id)
-        if payload is None or semantic_groups is None:
+        dependency_groups = dependency_groups_by_scope.get(scope_id)
+        if payload is None or semantic_groups is None or dependency_groups is None:
             continue
         stable_values = stable_value(values)
         payload["evidence"].append({
@@ -990,20 +1064,47 @@ def _scope_fragment_payloads_with_semantic_fingerprints(
             "summary": evidence.summary,
             "value": stable_values,
         })
-        semantic_groups["evidence"].append({
+        evidence_structure = {
             "id": _clean(evidence.evidence_id),
             "subject": _clean(evidence.subject),
             "kind": _clean(evidence.kind),
+        }
+        evidence_properties = {
+            **semantic_properties_from_stable(values, stable_values),
             "source": _clean(evidence.source),
             "summary": _clean(evidence.summary),
+        }
+        semantic_groups["evidence"].append({
+            **evidence_structure,
             "value": semantic_properties_from_stable(values, stable_values),
+            "source": evidence_properties["source"],
+            "summary": evidence_properties["summary"],
         })
+        evidence_token = _semantic_dependency_token(evidence.kind)
+        if evidence_token:
+            dependency_groups["evidence:" + evidence_token].append(evidence_structure)
+        for field, value in evidence_properties.items():
+            field_key = _semantic_dependency_field_key(field)
+            if field_key == "field:":
+                continue
+            field_dependency = {
+                **evidence_structure,
+                "field": field,
+                "value": value,
+            }
+            dependency_groups[field_key].append(field_dependency)
+            evidence_field_key = "evidence:" + evidence_token + ":field:" + re.sub(
+                r"[^a-z0-9]", "", _clean(field).lower()
+            ) if evidence_token else ""
+            if evidence_field_key:
+                dependency_groups[evidence_field_key].append(field_dependency)
 
     for relation in support_relations:
         scope_id = _clean(relation.get("scopeId"))
         payload = payloads_by_scope.get(scope_id)
         semantic_groups = semantic_groups_by_scope.get(scope_id)
-        if payload is None or semantic_groups is None:
+        dependency_groups = dependency_groups_by_scope.get(scope_id)
+        if payload is None or semantic_groups is None or dependency_groups is None:
             continue
         properties = dict(relation.get("properties") or {})
         stable_properties = stable_value(properties)
@@ -1018,12 +1119,31 @@ def _scope_fragment_payloads_with_semantic_fingerprints(
             for value in relation.get("impactFamilies") or []
             if _clean(value)
         ]
-        semantic_groups[families[0] if families else "evidence"].append({
+        relation_structure = {
             "source": _clean(relation.get("source")),
             "target": _clean(relation.get("target")),
             "type": _clean(relation.get("type")),
-            "properties": semantic_properties_from_stable(properties, stable_properties),
+        }
+        relation_properties = semantic_properties_from_stable(properties, stable_properties)
+        semantic_groups[families[0] if families else "evidence"].append({
+            **relation_structure,
+            "properties": relation_properties,
         })
+        relation_token = _semantic_dependency_token(relation.get("type"))
+        if relation_token:
+            dependency_groups["relation:" + relation_token].append(relation_structure)
+        for field, value in relation_properties.items():
+            field_key = _semantic_dependency_field_key(field)
+            field_dependency = {
+                **relation_structure,
+                "field": field,
+                "value": value,
+            }
+            if field_key != "field:":
+                dependency_groups[field_key].append(field_dependency)
+            relation_field_key = _semantic_dependency_relation_field_key(relation.get("type"), field)
+            if relation_field_key:
+                dependency_groups[relation_field_key].append(field_dependency)
 
     payloads = {
         scope_id: {
@@ -1034,20 +1154,29 @@ def _scope_fragment_payloads_with_semantic_fingerprints(
         for scope_id, payload in payloads_by_scope.items()
     }
     semantic_fingerprints = {
-        scope_id: {
-            family: hashlib.sha256(
-                json.dumps(
-                    sorted(items, key=lambda item: json.dumps(item, ensure_ascii=False, sort_keys=True)),
-                    ensure_ascii=False,
-                    sort_keys=True,
-                    separators=(",", ":"),
-                ).encode("utf-8")
-            ).hexdigest()
-            for family, items in groups.items()
-            if family and items
-        }
+        scope_id: _fingerprint_semantic_groups(groups)
         for scope_id, groups in semantic_groups_by_scope.items()
     }
+    semantic_dependency_fingerprints = {
+        scope_id: _fingerprint_semantic_groups(groups)
+        for scope_id, groups in dependency_groups_by_scope.items()
+    }
+    return payloads, semantic_fingerprints, semantic_dependency_fingerprints
+
+
+def _scope_fragment_payloads_with_semantic_fingerprints(
+    graph: PortfolioOntology,
+    scope_ids: Iterable[str],
+    support_relations: Iterable[Mapping[str, object]] = (),
+) -> tuple[Dict[str, Dict[str, object]], Dict[str, Dict[str, str]]]:
+    """Preserve the two-value helper contract used by existing callers."""
+    payloads, semantic_fingerprints, _dependencies = (
+        _scope_fragment_payloads_with_semantic_fingerprints_and_dependencies(
+            graph,
+            scope_ids,
+            support_relations,
+        )
+    )
     return payloads, semantic_fingerprints
 
 
@@ -1192,10 +1321,12 @@ def apply_scoped_abox_identity(
     # in a single graph pass. A target-scoped cycle normally has many retained
     # scopes, so repeatedly scanning the complete graph once per scope made
     # identity preparation dominate the TypeDB write itself.
-    payloads, semantic_fingerprints = _scope_fragment_payloads_with_semantic_fingerprints(
+    payloads, semantic_fingerprints, semantic_dependency_fingerprints = (
+        _scope_fragment_payloads_with_semantic_fingerprints_and_dependencies(
         clone,
         scope_ids,
         support_relations,
+        )
     )
     base_fingerprints = {
         scope_id: hashlib.sha256(
@@ -1288,6 +1419,8 @@ def apply_scoped_abox_identity(
             "scopeFamily": scope_family(scope_id),
             "impactScopeFamilies": sorted(scope_impact_families.get(scope_id) or {scope_family(scope_id)}),
             "semanticFingerprints": dict(sorted(semantic_fingerprints.get(scope_id, {}).items())),
+            "semanticDependencyFingerprintVersion": DEPENDENCY_FINGERPRINT_VERSION,
+            "semanticDependencyFingerprints": dict(sorted(semantic_dependency_fingerprints.get(scope_id, {}).items())),
             "fingerprint": fingerprint,
             "baseFingerprint": base_fingerprints[scope_id],
             "dependencyScopeIds": dependencies,

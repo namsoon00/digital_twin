@@ -863,6 +863,85 @@ class OntologyProjectionAuditTests(unittest.TestCase):
         self.assertEqual("ok", completed[0].status)
         self.assertEqual("inference-generation:recovered", completed[0].inference_generation_id)
 
+    def test_recorder_repairs_missing_reuse_proof_for_active_recovered_audit(self):
+        _snapshot, _graph, _fingerprint, run = self.build_run()
+        scope_plan = [{
+            "scopeId": "symbol:005930:market",
+            "scopeType": "symbol",
+            "scopeFamily": "market",
+            "impactScopeFamilies": ["market"],
+            "semanticFingerprints": {"market": "market-a"},
+            "semanticDependencyFingerprintVersion": "rule-input-v2",
+            "semanticDependencyFingerprints": {"field:currentprice": "price-a"},
+            "generationId": "market-a",
+            "fingerprint": "market-a",
+            "baseFingerprint": "market-a",
+            "dependencyScopeIds": [],
+        }]
+        reusable_plan = inference_reuse_scope_plan_for_targets(scope_plan, ["005930"])
+        run.context_payload["scopeTopology"] = {
+            "inferenceReuseScopePlan": reusable_plan,
+            "inferenceReuseScopePlanFingerprint": inference_reuse_scope_plan_fingerprint(reusable_plan),
+        }
+        stored_row = {
+            "runId": run.run_id,
+            "portfolioId": run.portfolio_id,
+            "accountId": run.account_id,
+            "sourceSnapshotAt": run.source_snapshot_at,
+            "sourceSnapshotFingerprint": run.source_snapshot_fingerprint,
+            "firstObservedAt": run.first_observed_at,
+            "lastObservedAt": run.last_observed_at,
+            "startedAt": run.started_at,
+            "status": "ok",
+            "graphStore": "typedb",
+            "projectionMode": run.projection_mode,
+            "materialFingerprint": run.material_fingerprint,
+            "aboxSnapshotId": run.abox_snapshot_id,
+            "tboxVersion": run.tbox_version,
+            "tboxFingerprint": run.tbox_fingerprint,
+            "ruleboxRulesHash": run.rulebox_rules_hash,
+            "entityCount": run.entity_count,
+            "relationCount": run.relation_count,
+            "sourceSymbols": ["005930"],
+            "context": run.context_payload,
+            "result": {},
+        }
+        completed = []
+        store = SimpleNamespace(
+            latest=lambda limit=0: [stored_row],
+            complete=lambda item: completed.append(item),
+        )
+        repository = SimpleNamespace(
+            store_key="typedb",
+            active_abox_metadata=lambda: {
+                "status": "ok",
+                "aboxSnapshotId": run.abox_snapshot_id,
+                "materialFingerprint": run.material_fingerprint,
+                "projectionRunId": run.run_id,
+            },
+            inferencebox_snapshot=lambda symbols, limit: {
+                "status": "ok",
+                "nativeTypeDbReasoningUsed": True,
+                "generationAligned": True,
+                "sourceAboxSnapshotId": run.abox_snapshot_id,
+                "targetSymbols": list(symbols),
+                "inferenceGenerationId": "inference-generation:repaired",
+                "matchedRuleIds": ["graph.test.market.v1"],
+                "traceCount": 1,
+            },
+        )
+        recorder = PortfolioOntologyProjectionRecorder(repository, projection_run_store=store)
+
+        result = recorder.reconcile_interrupted_projection_audit()
+
+        self.assertEqual("reuse-proof-repaired", result["status"])
+        self.assertEqual("verified", result["inferenceReuseProof"]["status"])
+        self.assertEqual(1, len(completed))
+        self.assertEqual(
+            "verified",
+            completed[0].result_payload["inferenceReuseProof"]["status"],
+        )
+
 
 if __name__ == "__main__":
     unittest.main()

@@ -1,4 +1,4 @@
-from typing import Dict, List
+from typing import Dict, Iterable, List, Mapping, Tuple
 
 from .data_freshness import age_minutes
 from .market_data import number
@@ -27,9 +27,16 @@ def materialize_rule_inference(
     rule: GraphInferenceRule,
     stock: OntologyEntity,
     context: Dict[str, object],
+    evidence_index: Dict[str, object] = None,
 ) -> None:
     properties = stock.properties or {}
-    context = grounded_inference_context(graph, rule, stock, context)
+    context = grounded_inference_context(
+        graph,
+        rule,
+        stock,
+        context,
+        evidence_index=evidence_index,
+    )
     subject_key = stock.entity_id.replace(":", "-")
     symbol = str(properties.get("symbol") or subject_key).upper()
     display_name = stock.label or symbol
@@ -454,6 +461,7 @@ def grounded_inference_context(
     rule: GraphInferenceRule,
     stock: OntologyEntity,
     context: Dict[str, object],
+    evidence_index: Dict[str, object] = None,
 ) -> Dict[str, object]:
     payload = dict(context or {})
     conditions_by_id = {
@@ -482,7 +490,13 @@ def grounded_inference_context(
                 item.update(observation_metadata(stock_observation_properties, observed_value))
                 item["field"] = field
             elif str(getattr(condition, "kind", "") or "") == "relation":
-                relation, target = matching_evidence_relation(graph, stock.entity_id, condition)
+                relation, target = matching_evidence_relation(
+                    graph,
+                    stock.entity_id,
+                    condition,
+                    evidence_relation_ids=evidence_relation_ids,
+                    evidence_index=evidence_index,
+                )
                 if relation:
                     relation_id = str((relation.properties or {}).get("_relationId") or "")
                     if relation_id:
@@ -579,20 +593,109 @@ def rule_condition_shape(condition) -> Dict[str, object]:
     return payload
 
 
-def matching_evidence_relation(graph: PortfolioOntology, stock_id: str, condition):
+def evidence_relation_index(graph: PortfolioOntology) -> Dict[str, object]:
+    """Build one immutable ABox relation index for native match grounding.
+
+    TypeDB already returned the rule match.  The materializer only enriches
+    that result with human/audit evidence metadata; it must not repeatedly
+    scan every graph relation for every matched condition.  The index stays
+    local to one materialization call and is never written into the ontology
+    worldview, so it cannot become an ABox or InferenceBox fact.
+    """
+    entities = {item.entity_id: item for item in graph.entities}
+    by_subject_direction_type: Dict[Tuple[str, str, str], List[Tuple[OntologyRelation, OntologyEntity]]] = {}
+    by_relation_id: Dict[str, List[OntologyRelation]] = {}
+    for relation in graph.relations:
+        relation_type = str(getattr(relation, "relation_type", "") or "")
+        source = str(getattr(relation, "source", "") or "")
+        target = str(getattr(relation, "target", "") or "")
+        if not relation_type or not source or not target:
+            continue
+        by_subject_direction_type.setdefault(
+            (source, "out", relation_type),
+            [],
+        ).append((relation, entities.get(target)))
+        by_subject_direction_type.setdefault(
+            (target, "in", relation_type),
+            [],
+        ).append((relation, entities.get(source)))
+        relation_id = str((getattr(relation, "properties", {}) or {}).get("_relationId") or "")
+        if relation_id:
+            by_relation_id.setdefault(relation_id, []).append(relation)
+
+    def candidate_key(item: Tuple[OntologyRelation, OntologyEntity]) -> Tuple[str, str]:
+        relation, _target = item
+        return (
+            str((getattr(relation, "properties", {}) or {}).get("_relationId") or ""),
+            str(getattr(relation, "target", "") or ""),
+        )
+
+    for values in by_subject_direction_type.values():
+        values.sort(key=candidate_key)
+    return {
+        "entities": entities,
+        "bySubjectDirectionType": by_subject_direction_type,
+        "byRelationId": by_relation_id,
+    }
+
+
+def matching_evidence_relation(
+    graph: PortfolioOntology,
+    stock_id: str,
+    condition,
+    *,
+    evidence_relation_ids: Iterable[str] = (),
+    evidence_index: Mapping[str, object] = None,
+):
     relation_type = str(getattr(condition, "relation_type", "") or "")
     direction = str(getattr(condition, "direction", "") or "out").lower()
-    entities = {item.entity_id: item for item in graph.entities}
+    index = (
+        dict(evidence_index or {})
+        if isinstance(evidence_index, Mapping)
+        and isinstance(evidence_index.get("bySubjectDirectionType"), dict)
+        else evidence_relation_index(graph)
+    )
+    entities = index.get("entities") if isinstance(index.get("entities"), dict) else {}
+    by_subject = (
+        index.get("bySubjectDirectionType")
+        if isinstance(index.get("bySubjectDirectionType"), dict)
+        else {}
+    )
+    by_relation_id = index.get("byRelationId") if isinstance(index.get("byRelationId"), dict) else {}
+    indexed_candidates = list(by_subject.get((stock_id, direction, relation_type), []) or [])
+    requested_relation_ids = {
+        str(item or "").strip()
+        for item in evidence_relation_ids or []
+        if str(item or "").strip()
+    }
+    if requested_relation_ids:
+        exact_relations = []
+        for relation_id in requested_relation_ids:
+            exact_relations.extend(by_relation_id.get(relation_id, []) or [])
+        exact_candidates = []
+        for relation in exact_relations:
+            if str(getattr(relation, "relation_type", "") or "") != relation_type:
+                continue
+            if direction == "in" and str(getattr(relation, "target", "") or "") != stock_id:
+                continue
+            if direction != "in" and str(getattr(relation, "source", "") or "") != stock_id:
+                continue
+            target_id = relation.source if direction == "in" else relation.target
+            exact_candidates.append((relation, entities.get(target_id)))
+        # Prefer the exact evidence IDs returned by the TypeDB rule query;
+        # fall back to the subject/type index for legacy rows that do not yet
+        # include relation identities.
+        if exact_candidates:
+            indexed_candidates = sorted(
+                exact_candidates,
+                key=lambda item: (
+                    str((getattr(item[0], "properties", {}) or {}).get("_relationId") or ""),
+                    str(getattr(item[0], "target", "") or ""),
+                ),
+            )
+
     candidates = []
-    for relation in graph.relations:
-        if relation.relation_type != relation_type:
-            continue
-        if direction == "in" and relation.target != stock_id:
-            continue
-        if direction != "in" and relation.source != stock_id:
-            continue
-        target_id = relation.source if direction == "in" else relation.target
-        target = entities.get(target_id)
+    for relation, target in indexed_candidates:
         target_kind = str(getattr(condition, "target_kind", "") or "")
         if target_kind and (not target or target.kind != target_kind):
             continue
@@ -609,13 +712,7 @@ def matching_evidence_relation(graph: PortfolioOntology, stock_id: str, conditio
         candidates.append((relation, target))
     if not candidates:
         return None, None
-    return sorted(
-        candidates,
-        key=lambda item: (
-            str((item[0].properties or {}).get("_relationId") or ""),
-            str(item[0].target or ""),
-        ),
-    )[0]
+    return candidates[0]
 
 
 def ontology_properties_match(properties: Dict[str, object], filters: Dict[str, object]) -> bool:

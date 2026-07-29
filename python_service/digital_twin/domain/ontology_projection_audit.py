@@ -114,6 +114,14 @@ def compact_reasoning_request_context(
             "executionBudgetSeconds": non_negative_integer(batch_plan.get("executionBudgetSeconds")),
             "baselineTargetSymbolCount": non_negative_integer(batch_plan.get("baselineTargetSymbolCount")),
             "estimatedPerTargetRuntimeMs": non_negative_integer(batch_plan.get("estimatedPerTargetRuntimeMs")),
+            "runtimeEstimateBasis": str(batch_plan.get("runtimeEstimateBasis") or "")[:80],
+            "runtimeEstimateBasisMs": non_negative_integer(batch_plan.get("runtimeEstimateBasisMs")),
+            "targetParallelism": non_negative_integer(batch_plan.get("targetParallelism")),
+            "estimatedFixedRuntimeMs": non_negative_integer(batch_plan.get("estimatedFixedRuntimeMs")),
+            "estimatedIncrementalTargetRuntimeMs": non_negative_integer(
+                batch_plan.get("estimatedIncrementalTargetRuntimeMs")
+            ),
+            "rampTargetSymbolLimit": non_negative_integer(batch_plan.get("rampTargetSymbolLimit")),
             "estimatedBurstRuntimeMs": non_negative_integer(batch_plan.get("estimatedBurstRuntimeMs")),
             "budgetTargetSymbolLimit": non_negative_integer(batch_plan.get("budgetTargetSymbolLimit")),
             "recentExecutionSource": str(batch_plan.get("recentExecutionSource") or "")[:40],

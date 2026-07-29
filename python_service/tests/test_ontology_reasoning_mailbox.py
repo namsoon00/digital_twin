@@ -1233,6 +1233,58 @@ class OntologyReasoningMailboxTests(unittest.TestCase):
         self.assertEqual(1, details["suppressedEventCount"])
         self.assertEqual(["MSFT"], [event.symbol for event in guarded_events])
 
+    def test_superseded_delivery_revision_advances_fairness_without_acknowledging_newer_work(self):
+        old = realtime_request("old", ["AAPL"], "2026-07-24T00:00:00Z")
+        other = realtime_request("other", ["MSFT"], "2026-07-24T00:00:00Z")
+        newest = realtime_request("new", ["AAPL"], "2026-07-24T00:01:00Z")
+        runner = self.build_runner([old, other])
+
+        class SupersedingMonitor(Monitor):
+            def __init__(self, inject_new_revision):
+                super().__init__()
+                self.inject_new_revision = inject_new_revision
+
+            def run_once(self, force=False, symbol_filter=None, delivery_guard=None, **_kwargs):
+                del force
+                self.calls.append(list(symbol_filter or []))
+                if self.inject_new_revision:
+                    self.inject_new_revision = False
+                    runner.synchronize_mailbox([newest])
+                    _events, details = delivery_guard(None, [])
+                    self.last_delivery_guard_result = details
+                else:
+                    self.last_delivery_guard_result = {}
+                return []
+
+        self.monitor = SupersedingMonitor(inject_new_revision=True)
+        runner.monitor_runner_factory = lambda: self.monitor
+
+        first = runner.run_once(force=True)
+
+        # The old revision is unsafe to deliver and the newer AAPL revision
+        # remains queued, but a verified TypeDB generation did serve AAPL.
+        # Fairness must therefore move on to MSFT instead of repeatedly
+        # re-running AAPL while the mailbox keeps receiving fresh snapshots.
+        self.assertEqual([['AAPL']], self.monitor.calls)
+        self.assertEqual(0, first["processedCount"])
+        self.assertEqual(1, first["servedSymbolCount"])
+        self.assertEqual(["AAPL"], first["servedSymbols"])
+        self.assertEqual(1, first["staleDeliverySymbolCount"])
+        self.assertEqual(1, first["executionTelemetry"]["servedSymbolCount"])
+        self.assertEqual(0, first["executionTelemetry"]["processedCount"])
+        self.assertEqual("2026-07-24T00:05:00Z", self.cursor.payload["lastReasonedAtBySymbol"]["AAPL"])
+        pending_by_symbol = {
+            item["symbol"]: item["sourceEventId"]
+            for item in self.mailbox.pending(10)
+        }
+        self.assertEqual("new", pending_by_symbol["AAPL"])
+
+        second = runner.run_once(force=True)
+
+        self.assertEqual([["AAPL"], ["MSFT"]], self.monitor.calls)
+        self.assertEqual(1, second["processedCount"])
+        self.assertEqual(["MSFT"], second["servedSymbols"])
+
     def test_status_exposes_mailbox_freshness_and_execution_history(self):
         event = realtime_request("status", ["AAPL"], "2026-07-24T00:00:00Z")
         runner = self.build_runner([event])

@@ -4,11 +4,15 @@ from datetime import datetime, timezone
 
 from digital_twin.domain.ontology_contracts import OntologyEntity, OntologyRelation, PortfolioOntology
 from digital_twin.domain.ontology_inference_context import inference_evidence_state, matches_from_inference
-from digital_twin.domain.ontology_inference_materializer import materialize_rule_inference
+from digital_twin.domain.ontology_inference_materializer import (
+    evidence_relation_index,
+    matching_evidence_relation,
+    materialize_rule_inference,
+)
 from digital_twin.domain.ontology_observation_quality import position_observation_profiles
 from digital_twin.domain.ontology_projection_fingerprint import material_graph_fingerprint
 from digital_twin.domain.ontology_rulebox_catalog import default_graph_inference_rules
-from digital_twin.domain.ontology_rulebox_contracts import GraphInferenceRule
+from digital_twin.domain.ontology_rulebox_contracts import GraphInferenceRule, GraphRuleCondition
 from digital_twin.domain.portfolio_ontology_builder import build_portfolio_ontology
 from digital_twin.domain.portfolio import AccountSnapshot, Position, utc_now_iso
 from digital_twin.domain.portfolio_calculations import portfolio_summary
@@ -120,6 +124,52 @@ class OntologyInferenceQualityTests(unittest.TestCase):
         )
         primary_relation = next(item for item in graph.relations if item.relation_type == "HAS_INFERRED_RISK")
         self.assertEqual("loss-guard-breakdown", primary_relation.properties["hypothesisFamilyKey"])
+
+    def test_type_db_evidence_relation_id_is_preferred_over_another_matching_abox_relation(self):
+        graph = PortfolioOntology("evidence-index-test")
+        stock = OntologyEntity("stock:AAPL", "Apple", "stock", {"ontologyBox": "ABox"})
+        first = OntologyEntity("level:AAPL:first", "첫 번째 20일선", "key-level", {
+            "ontologyBox": "ABox",
+            "levelType": "ma20",
+        })
+        preferred = OntologyEntity("level:AAPL:preferred", "선택된 20일선", "key-level", {
+            "ontologyBox": "ABox",
+            "levelType": "ma20",
+        })
+        graph.entities.extend([stock, first, preferred])
+        graph.relations.extend([
+            OntologyRelation(
+                stock.entity_id,
+                first.entity_id,
+                "HAS_TECHNICAL_INDICATOR",
+                properties={"_relationId": "relation:alpha"},
+            ),
+            OntologyRelation(
+                stock.entity_id,
+                preferred.entity_id,
+                "HAS_TECHNICAL_INDICATOR",
+                properties={"_relationId": "relation:typedb-selected"},
+            ),
+        ])
+        condition = GraphRuleCondition(
+            condition_id="ma20",
+            kind="relation",
+            description="20일선 관계",
+            relation_type="HAS_TECHNICAL_INDICATOR",
+            target_kind="key-level",
+            target_property_filters={"levelType": "ma20"},
+        )
+
+        relation, target = matching_evidence_relation(
+            graph,
+            stock.entity_id,
+            condition,
+            evidence_relation_ids=["relation:typedb-selected"],
+            evidence_index=evidence_relation_index(graph),
+        )
+
+        self.assertEqual("relation:typedb-selected", relation.properties["_relationId"])
+        self.assertEqual(preferred.entity_id, target.entity_id)
 
     def test_position_observation_profile_requires_provider_clock_and_open_session(self):
         open_at = datetime(2026, 7, 20, 1, 0, tzinfo=timezone.utc)

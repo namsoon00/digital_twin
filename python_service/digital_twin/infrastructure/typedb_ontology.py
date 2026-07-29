@@ -27,6 +27,7 @@ from ..domain.ontology_semantics import (
 )
 from ..domain.investment_ubiquitous_language import investment_language_registry
 from ..domain.ontology_inference_materializer import (
+    evidence_relation_index,
     materialize_rule_inference,
     ontology_property_value_matches,
 )
@@ -17832,6 +17833,10 @@ def materialize_typedb_native_matches(
 ) -> None:
     entities_by_id = {item.entity_id: item for item in graph.entities}
     rules_by_id = {str(rule.rule_id or ""): rule for rule in (rules or [])}
+    # Native TypeDB has already identified the matching facts. Build the
+    # ABox relation lookup once for this generation so per-rule explanation
+    # grounding does not repeatedly rescan the full graph.
+    evidence_index = evidence_relation_index(graph)
     for match in native_matches.get("matches") or []:
         if not isinstance(match, dict):
             continue
@@ -17843,7 +17848,7 @@ def materialize_typedb_native_matches(
             "matchedConditions": list(match.get("matchedConditions") or []),
             "evidenceRelationIds": list(match.get("evidenceRelationIds") or []),
             "conditionDetailSource": str(match.get("conditionDetailSource") or "schema-function-match"),
-        })
+        }, evidence_index=evidence_index)
 
 
 def typedb_native_matched_conditions(

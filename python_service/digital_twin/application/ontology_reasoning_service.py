@@ -2840,7 +2840,7 @@ class OntologyReasoningRunner:
         hard_limit = self.effective_max_symbols_per_run()
         if not self.native_typedb_rule_execution_enabled() and hard_limit <= 0:
             return {
-                "version": "adaptive-reasoning-batch-v1",
+                "version": "adaptive-reasoning-batch-v2",
                 "enabled": False,
                 "mode": "static-unbounded",
                 "targetSymbolLimit": 0,
@@ -3892,6 +3892,10 @@ class OntologyReasoningRunner:
             "durationMs": max(0, int((time.perf_counter() - started_monotonic) * 1000)),
             "status": str(result.get("status") or ("error" if error else "unknown")),
             "processedCount": int(result.get("processedCount") or 0),
+            "projectedRequestCount": int(result.get("projectedRequestCount") or 0),
+            "servedSymbolCount": int(result.get("servedSymbolCount") or 0),
+            "completedEventCount": int(result.get("completedEventCount") or 0),
+            "staleDeliverySymbolCount": int(result.get("staleDeliverySymbolCount") or 0),
             "alertCount": int(result.get("alertCount") or 0),
             "rawRequestCount": int(result.get("rawRequestCount") or 0),
             "mailboxPendingEntryCount": int(result.get("mailboxPendingEntryCount") or 0),
@@ -4453,14 +4457,28 @@ class OntologyReasoningRunner:
         )
         delivery_revision_guard = dict(getattr(runner, "last_delivery_guard_result", {}) or {})
         stale_delivery_symbols = self.mailbox_guard_stale_symbols(delivery_revision_guard)
-        cursor_requests = [
+        # Delivery currentness is deliberately narrower than a successful
+        # TypeDB generation. A newer mailbox revision must suppress an alert
+        # for the obsolete source event, but it must not make the already
+        # verified symbol appear never to have been served. Otherwise a symbol
+        # with frequent snapshots remains permanently overdue and repeatedly
+        # wins the fairness queue while every other target starves.
+        served_requests = [
             event for event in selected_requests
+            if str(getattr(event, "event_id", "") or "") not in blocked_request_ids
+        ]
+        served_symbols = []
+        for event in served_requests:
+            event_id = str(getattr(event, "event_id", "") or "").strip()
+            for symbol in symbol_batches.get(event_id, []) or []:
+                clean_symbol = str(symbol or "").upper().strip()
+                if clean_symbol and clean_symbol not in served_symbols:
+                    served_symbols.append(clean_symbol)
+        cursor_requests = [
+            event for event in served_requests
             if (
-                str(getattr(event, "event_id", "") or "") not in blocked_request_ids
-                and (
-                    not self.mailbox_metadata(event).get("mailboxKey")
-                    or not set(event_symbols(event)).intersection(stale_delivery_symbols)
-                )
+                not self.mailbox_metadata(event).get("mailboxKey")
+                or not set(event_symbols(event)).intersection(stale_delivery_symbols)
             )
         ]
         direct_cursor_requests = [
@@ -4559,12 +4577,11 @@ class OntologyReasoningRunner:
                     "Mailbox acknowledgement failed after a verified graph cycle: " + mailbox_ack_error,
                     self.mailbox_work_retry_seconds(),
                 )
-        processed_symbols = []
-        for event in cursor_requests:
-            for symbol in symbol_batches.get(str(getattr(event, "event_id", "") or ""), []) or []:
-                if symbol not in processed_symbols:
-                    processed_symbols.append(symbol)
-        self.mark_symbols_reasoned(processed_symbols)
+        # Always advance the scheduling watermark for a verified generation,
+        # even when a newer revision arrived after the worker claimed its
+        # mailbox row. The newer row remains pending because acknowledgement
+        # still compares its exact source-event id.
+        self.mark_symbols_reasoned(served_symbols)
         stage_timing["postProjectionMs"] = int((time.perf_counter() - post_projection_started) * 1000)
         maintenance_started = time.perf_counter()
         # Retention owns the same TypeDB writer lease as ABox activation. It
@@ -4604,11 +4621,22 @@ class OntologyReasoningRunner:
         queue_metadata["mailboxPendingEntryCount"] = int(
             queue_metadata["mailbox"].get("actionablePendingEntryCount") or 0
         )
+        completed_event_ids = list(dict.fromkeys(
+            list(progress_result.get("completedEventIds") or [])
+            + list(mailbox_completion.get("completed") or [])
+        ))
         return {
             "status": status,
-            "processedCount": len(trigger_event_ids),
+            # ``processedCount`` is queue completion, not merely a TypeDB
+            # invocation. A generation superseded during delivery is still
+            # observable through ``servedSymbolCount`` without overstating
+            # mailbox drain throughput.
+            "processedCount": len(completed_event_ids),
+            "projectedRequestCount": len(trigger_event_ids),
+            "servedSymbolCount": len(served_symbols),
+            "servedSymbols": served_symbols,
             "scheduledRequestCount": len(selected_requests),
-            "completedEventCount": len(progress_result.get("completedEventIds") or []) + len(mailbox_completion.get("completed") or []),
+            "completedEventCount": len(completed_event_ids),
             "partialEventCount": len(progress_result.get("partialEventIds") or []) + max(0, len(mailbox_entries) - len(mailbox_completion.get("completed") or [])),
             "coalescedEventCount": len(
                 set(durable_superseded_ids)

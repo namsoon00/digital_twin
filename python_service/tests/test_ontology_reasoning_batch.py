@@ -75,6 +75,76 @@ class AdaptiveOntologyReasoningBatchTests(unittest.TestCase):
         self.assertEqual(1, plan["budgetTargetSymbolLimit"])
         self.assertEqual(120000, plan["estimatedPerTargetRuntimeMs"])
 
+    def test_coherent_generation_prices_shared_work_once_and_ramps_targets(self):
+        plan = adaptive_reasoning_batch_plan(
+            {
+                "ontologyReasoningAdaptiveBatchEnabled": "1",
+                "ontologyReasoningAdaptiveBatchSteadySymbols": "1",
+                "ontologyReasoningAdaptiveBatchBurstSymbols": "3",
+                "ontologyReasoningAdaptiveBatchPendingThreshold": "2",
+                "ontologyReasoningAdaptiveBatchAgeSeconds": "10",
+                "ontologyReasoningAdaptiveBatchBudgetSeconds": "150",
+                "typedbNativeRuleTargetParallelism": "2",
+            },
+            native_rule_execution=True,
+            hard_target_symbol_limit=3,
+            pending_request_count=8,
+            pending_symbol_count=5,
+            oldest_wait_seconds=120,
+            recent_execution={
+                "status": "ok",
+                "stageTiming": {"monitorAndProjectionMs": 153000},
+                "projectionRuntime": {
+                    "durationMs": 123000,
+                    "nativeInferenceMs": 18000,
+                    "targetSymbolCount": 1,
+                },
+            },
+        )
+
+        # A single target contains 105s of generation work and 18s of native
+        # target work. Two targets share the same native-parallel wave, so the
+        # first pressure turn expands safely to two rather than pricing every
+        # target as a 123s full generation.
+        self.assertEqual("queue-pressure-ramp", plan["mode"])
+        self.assertEqual(2, plan["targetSymbolLimit"])
+        self.assertEqual(3, plan["budgetTargetSymbolLimit"])
+        self.assertEqual("projection-runtime", plan["runtimeEstimateBasis"])
+        self.assertEqual(105000, plan["estimatedFixedRuntimeMs"])
+        self.assertEqual(18000, plan["estimatedIncrementalTargetRuntimeMs"])
+        self.assertEqual(141000, plan["estimatedBurstRuntimeMs"])
+
+    def test_measured_two_target_batch_can_ramp_to_the_configured_burst(self):
+        plan = adaptive_reasoning_batch_plan(
+            {
+                "ontologyReasoningAdaptiveBatchEnabled": "1",
+                "ontologyReasoningAdaptiveBatchSteadySymbols": "1",
+                "ontologyReasoningAdaptiveBatchBurstSymbols": "3",
+                "ontologyReasoningAdaptiveBatchPendingThreshold": "2",
+                "ontologyReasoningAdaptiveBatchAgeSeconds": "10",
+                "ontologyReasoningAdaptiveBatchBudgetSeconds": "150",
+                "typedbNativeRuleTargetParallelism": "2",
+            },
+            native_rule_execution=True,
+            hard_target_symbol_limit=3,
+            pending_request_count=8,
+            pending_symbol_count=5,
+            oldest_wait_seconds=120,
+            recent_execution={
+                "status": "ok",
+                "stageTiming": {"monitorAndProjectionMs": 150000},
+                "projectionRuntime": {
+                    "durationMs": 126000,
+                    "nativeInferenceMs": 21000,
+                    "targetSymbolCount": 2,
+                },
+            },
+        )
+
+        self.assertEqual("queue-pressure", plan["mode"])
+        self.assertEqual(3, plan["targetSymbolLimit"])
+        self.assertEqual(3, plan["rampTargetSymbolLimit"])
+
     def test_slow_or_failed_projection_returns_to_the_steady_target_set(self):
         plan = adaptive_reasoning_batch_plan(
             {
@@ -225,7 +295,7 @@ class AdaptiveOntologyReasoningBatchTests(unittest.TestCase):
         compact = compact_reasoning_request_context({
             "targetSymbols": ["005930", "000660"],
             "batchPlan": {
-                "version": "adaptive-reasoning-batch-v1",
+                "version": "adaptive-reasoning-batch-v2",
                 "enabled": True,
                 "mode": "queue-pressure",
                 "targetSymbolLimit": 3,
@@ -236,12 +306,21 @@ class AdaptiveOntologyReasoningBatchTests(unittest.TestCase):
                 "pendingSymbolCount": 5,
                 "oldestWaitSeconds": 120,
                 "runtimeGuard": False,
+                "runtimeEstimateBasis": "projection-runtime",
+                "runtimeEstimateBasisMs": 123000,
+                "targetParallelism": 2,
+                "estimatedFixedRuntimeMs": 105000,
+                "estimatedIncrementalTargetRuntimeMs": 18000,
+                "rampTargetSymbolLimit": 2,
                 "reasonCodes": ["pending-request-threshold"],
             },
         })
 
         self.assertEqual("queue-pressure", compact["batchPlan"]["mode"])
         self.assertEqual(3, compact["batchPlan"]["targetSymbolLimit"])
+        self.assertEqual("projection-runtime", compact["batchPlan"]["runtimeEstimateBasis"])
+        self.assertEqual(105000, compact["batchPlan"]["estimatedFixedRuntimeMs"])
+        self.assertEqual(18000, compact["batchPlan"]["estimatedIncrementalTargetRuntimeMs"])
         self.assertEqual(["pending-request-threshold"], compact["batchPlan"]["reasonCodes"])
 
 

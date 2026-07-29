@@ -5544,6 +5544,30 @@ class TypeDBOntologyRepositoryTests(unittest.TestCase):
         self.assertEqual("another-projection", result["pendingManifestOwner"])
         self.assertEqual(["save"], repository.calls)
 
+    def test_projection_recovery_skips_writer_when_activation_journal_is_empty(self):
+        class FakeRepository:
+            store_key = "typedb"
+
+            def __init__(self):
+                self.calls = []
+
+            def pending_abox_activation(self, **_kwargs):
+                self.calls.append("read-pending")
+                return {"status": "empty"}
+
+            def recover_pending_abox_activation(self, **_kwargs):
+                self.calls.append("recover")
+                raise AssertionError("empty activation journal must not acquire the writer recovery path")
+
+        repository = FakeRepository()
+        result = PortfolioOntologyProjectionRecorder(repository).recover_pending_abox_activation(
+            "portfolio:local:default"
+        )
+
+        self.assertEqual("skipped", result["status"])
+        self.assertEqual("empty-journal", result["recoveryPreflight"])
+        self.assertEqual(["read-pending"], repository.calls)
+
     def test_projection_recorder_resumes_a_staged_pending_manifest_before_new_snapshot(self):
         class FakeRepository:
             store_key = "typedb"

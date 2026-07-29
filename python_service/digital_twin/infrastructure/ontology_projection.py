@@ -1690,6 +1690,26 @@ class PortfolioOntologyProjectionRecorder:
         recovery = getattr(self.repository, "recover_pending_abox_activation", None)
         if not callable(recovery):
             return {"status": "skipped", "reason": "Graph store has no pending ABox activation journal."}
+        # Recovery mutates the activation journal and therefore takes the
+        # database-wide TypeDB writer lease. Most realtime cycles have no
+        # pending candidate at all; perform the cheap read first so an empty
+        # journal does not spend the entire alert budget contending for a
+        # write lease.
+        pending_reader = getattr(self.repository, "pending_abox_activation", None)
+        if callable(pending_reader):
+            try:
+                pending = self.repository_world_call(
+                    "pending_abox_activation",
+                    world_id=world_id,
+                )
+            except Exception:
+                pending = None
+            if isinstance(pending, dict) and str(pending.get("status") or "").strip() == "empty":
+                return {
+                    "status": "skipped",
+                    "reason": "No pending ABox activation exists.",
+                    "recoveryPreflight": "empty-journal",
+                }
         try:
             staged_cap = max(0, min(200, int(float(max_staged_target_symbols or 0))))
         except (TypeError, ValueError):

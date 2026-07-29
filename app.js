@@ -7169,7 +7169,17 @@
     var candidates = currentInvestmentCalendarCandidates().candidates || [];
     var candidate = candidates.filter(function (item) { return item.candidateId === id; })[0] || {};
     var startsAt = candidate.startsAt || "";
-    if (!startsAt && window.prompt) {
+    var payload = investmentCalendarPayload(candidate);
+    var automaticCandidate = Boolean(payload.autoDetected);
+    var needsOfficialConfirmation = automaticCandidate && (!payload.officialSource || payload.reviewRequired || payload.scheduleState !== "confirmed");
+    var officialSourceUrl = "";
+    if (needsOfficialConfirmation && window.prompt) {
+      var scheduledDate = String(startsAt || "").slice(0, 10);
+      startsAt = window.prompt("공식 공시에 기재된 발표 날짜와 시각을 입력하세요. 예: 2026-08-20T09:00", scheduledDate ? scheduledDate + "T" : "");
+      if (!startsAt) return Promise.resolve();
+      officialSourceUrl = window.prompt("확인한 공식 IR·공시 URL을 입력하세요.", "");
+      if (!officialSourceUrl) return Promise.resolve();
+    } else if (!startsAt && window.prompt) {
       startsAt = window.prompt("후보 승인 날짜/시간을 입력하세요. 예: 2026-08-20T09:00", "");
     }
     if (!startsAt) return Promise.resolve();
@@ -7178,6 +7188,7 @@
     render();
     return sendJson("/api/investment-calendar/candidates/" + encodeURIComponent(id) + "/approve", "POST", {
       startsAt: startsAt,
+      officialSourceUrl: officialSourceUrl,
       reviewNote: "UI 승인"
     })
       .then(function () {
@@ -11306,6 +11317,12 @@
     var busy = state.investmentCalendarCandidateReviewing === id;
     var payload = investmentCalendarPayload(candidate);
     var aiRecommended = Boolean(payload.aiResearchRecommended);
+    var automaticCandidate = Boolean(payload.autoDetected);
+    var needsOfficialConfirmation = automaticCandidate && (!payload.officialSource || payload.reviewRequired || payload.scheduleState !== "confirmed");
+    var dateOnly = Boolean(candidate.allDay) || payload.scheduleState === "estimated";
+    var scheduleText = candidate.startsAt
+      ? (dateOnly ? String(candidate.startsAt).slice(0, 10) + " · 시각 확인 필요" : formatClock(candidate.startsAt))
+      : "날짜 필요";
     var reviewReason = String(candidate.reviewReason || "");
     var reason = {
       missingDate: "날짜 확인 필요",
@@ -11324,7 +11341,7 @@
       '<section class="investment-calendar-event watch"' + cardTypeAttrs("calendar-event", "watch") + cardFormatAttrs("summary-list-card", "compact") + '>',
       '<div class="investment-calendar-event-main">',
       '<div class="investment-calendar-event-date">',
-      '<strong>' + escapeHtml(candidate.startsAt ? formatClock(candidate.startsAt) : "날짜 필요") + '</strong>',
+      '<strong>' + escapeHtml(scheduleText) + '</strong>',
       '<span>' + escapeHtml(decisionStateMeta("data", candidateDataState, "partial").label) + '</span>',
       '</div>',
       '<div class="investment-calendar-event-copy">',
@@ -11341,7 +11358,7 @@
       '</div>',
       '</div>',
       '<div class="investment-calendar-event-actions">',
-      '<button class="mini-button primary" type="button" data-calendar-candidate-approve="' + escapeHtml(id) + '"' + (busy ? ' disabled' : '') + '>' + escapeHtml(busy ? "처리 중" : "승인") + '</button>',
+      '<button class="mini-button primary" type="button" data-calendar-candidate-approve="' + escapeHtml(id) + '"' + (busy ? ' disabled' : '') + '>' + escapeHtml(busy ? "처리 중" : (needsOfficialConfirmation ? "공식 확인 후 승인" : "승인")) + '</button>',
       '<button class="mini-button danger" type="button" data-calendar-candidate-reject="' + escapeHtml(id) + '"' + (busy ? ' disabled' : '') + '>거절</button>',
       '</div>',
       '</section>'

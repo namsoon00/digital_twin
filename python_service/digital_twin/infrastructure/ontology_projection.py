@@ -3,7 +3,7 @@ from copy import deepcopy
 from dataclasses import replace
 from datetime import datetime, timezone
 from threading import Lock, Thread
-from typing import Dict, List, Set
+from typing import Callable, Dict, List, Set
 import hashlib
 import json
 import time
@@ -110,6 +110,17 @@ RULEBOX_RAW_ABOX_RUNTIME_RULE_IDS = {
     "graph.execution.capacity_safe.v1",
 }
 
+# This is migration metadata, not a second decision policy.  Runtime
+# investment judgement continues to come from the stored TypeDB RuleBox.  The
+# version map only identifies a persisted rule shape that cannot safely read
+# the current raw ABox contract and therefore must be upgraded from the
+# bootstrap catalog before native execution starts.
+RULEBOX_RAW_ABOX_RUNTIME_RULE_VERSIONS = {
+    rule_id: "v2"
+    for rule_id in RULEBOX_RAW_ABOX_RUNTIME_RULE_IDS
+}
+RULEBOX_RAW_ABOX_RUNTIME_RULE_VERSIONS["graph.execution.capacity_safe.v1"] = "v3"
+
 # These native-rule templates were added after RuleBox had already become the
 # persisted source of truth.  A controlled release migration appends only
 # these missing platform rules; it never replaces an existing edited rule or
@@ -130,6 +141,59 @@ RULEBOX_PLATFORM_RELEASE_ADDITION_IDS = {
     "graph.market_proxy.relative_underperformance.risk.v1",
     "graph.market_proxy.relative_resilience.support.v1",
 }
+
+
+_RULEBOX_BOOTSTRAP_CATALOG_LOCK = Lock()
+_RULEBOX_BOOTSTRAP_CATALOG: Dict[str, object] = {}
+
+
+def bootstrap_rule_catalog() -> Dict[str, object]:
+    """Return the code bootstrap only for an empty or incompatible catalog.
+
+    TypeDB RuleBox rows are the runtime source of truth.  Constructing and
+    canonicalising all default rules before every projection used CPU on a
+    code fallback that a healthy persisted catalog never needs.  Keep one
+    immutable process-local bootstrap for seeding and explicit compatibility
+    repair paths only.
+    """
+    global _RULEBOX_BOOTSTRAP_CATALOG
+    if _RULEBOX_BOOTSTRAP_CATALOG:
+        return _RULEBOX_BOOTSTRAP_CATALOG
+    with _RULEBOX_BOOTSTRAP_CATALOG_LOCK:
+        if not _RULEBOX_BOOTSTRAP_CATALOG:
+            rules = rulebox_rules_to_payload(default_graph_inference_rules())
+            _RULEBOX_BOOTSTRAP_CATALOG = {
+                "rules": rules,
+                "ruleboxRulesHash": rulebox_rules_hash(rules),
+                "ruleCount": len(rules),
+            }
+    return _RULEBOX_BOOTSTRAP_CATALOG
+
+
+def rulebox_catalog_requires_bootstrap_repair(stored_rules: List[Dict[str, object]]) -> bool:
+    """Identify only structural RuleBox states that need code bootstrap data.
+
+    Presentation-only differences are owned by the persisted RuleBox and do
+    not justify rebuilding the default catalog on each realtime projection.
+    The checks below mirror the historical automatic migration cases that can
+    make a native rule incompatible with the current ABox shape.
+    """
+    rules = [item for item in stored_rules or [] if isinstance(item, dict)]
+    if not rules:
+        return True
+    rule_ids = {rule_id_from_payload(item) for item in rules if rule_id_from_payload(item)}
+    if rule_ids.intersection(DEPRECATED_TYPEDB_RULE_IDS):
+        return True
+    if not RULEBOX_PLATFORM_RELEASE_ADDITION_IDS.issubset(rule_ids):
+        return True
+    if rulebox_rules_missing_decision_stage(rules):
+        return True
+    for item in rules:
+        rule_id = rule_id_from_payload(item)
+        expected_version = RULEBOX_RAW_ABOX_RUNTIME_RULE_VERSIONS.get(rule_id)
+        if expected_version and str(item.get("version") or "").strip() != expected_version:
+            return True
+    return False
 
 # These edges preserve the factual shape needed to inspect and extend native
 # TypeDB reasoning even when the active catalog currently reads aggregate
@@ -634,6 +698,7 @@ class PortfolioOntologyProjectionRecorder:
         projection_run_store=None,
         world_projection_outbox=None,
         outcome_observation_service=None,
+        graph_assembly_cache_store=None,
         settings: Dict[str, object] = None,
         source: str = "monitoring",
     ):
@@ -646,6 +711,7 @@ class PortfolioOntologyProjectionRecorder:
         self.market_time_series_store = market_time_series_store
         self.projection_run_store = projection_run_store
         self.world_projection_outbox = world_projection_outbox
+        self.graph_assembly_cache_store = graph_assembly_cache_store
         self.settings = dict(settings or {})
         self.outcome_observation_service = outcome_observation_service or InvestmentOutcomeObservationService(
             decision_episode_store=decision_episode_store,
@@ -659,11 +725,29 @@ class PortfolioOntologyProjectionRecorder:
         snapshot: AccountSnapshot,
         target_symbols: List[str] = None,
         reasoning_context: Dict[str, object] = None,
+        progress_callback: Callable[[str, Dict[str, object]], None] = None,
     ) -> Dict[str, object]:
         projection_started = time.perf_counter()
         runtime_stages: Dict[str, int] = {}
         projection_run = None
         pending_activation_recovery: Dict[str, object] = {}
+
+        def emit_progress(stage: str, **details) -> None:
+            if not callable(progress_callback):
+                return
+            payload = dict(details or {})
+            payload.setdefault("accountId", str(snapshot.account_id or ""))
+            payload.setdefault("elapsedMs", int((time.perf_counter() - projection_started) * 1000))
+            try:
+                progress_callback("ontology_projection." + str(stage or "unknown"), payload)
+            except Exception:
+                return
+
+        emit_progress(
+            "start",
+            targetSymbolCount=len(target_symbols or []),
+            source=str(self.source or "monitoring"),
+        )
         compact_reasoning_context = compact_reasoning_request_context(
             reasoning_context,
             target_symbols=target_symbols,
@@ -678,6 +762,7 @@ class PortfolioOntologyProjectionRecorder:
             self.settings.get("ontologySharedMarketTenantId") or "shared",
         )
         if not self.repository:
+            emit_progress("skipped", status="repository-unavailable")
             return {}
         if not self.has_projectable_data(snapshot):
             result = {
@@ -690,6 +775,7 @@ class PortfolioOntologyProjectionRecorder:
                 "ontologyWorld": world_metadata(portfolio_world_context),
             }
             self.store_projection_result(snapshot, result)
+            emit_progress("rejected", status=result["status"])
             return result
         if self.typedb_projection_deferred():
             result = {
@@ -701,7 +787,9 @@ class PortfolioOntologyProjectionRecorder:
                 "ontologyWorld": world_metadata(portfolio_world_context),
             }
             self.store_projection_result(snapshot, result)
+            emit_progress("deferred", status=result["status"])
             return result
+        emit_progress("pending_activation_recovery.start")
         pending_recovery_started = time.perf_counter()
         pending_activation_recovery = self.recover_pending_abox_activation(
             portfolio_world_context.world_id,
@@ -711,6 +799,11 @@ class PortfolioOntologyProjectionRecorder:
             (time.perf_counter() - pending_recovery_started) * 1000
         )
         recovery_status = str(pending_activation_recovery.get("status") or "skipped")
+        emit_progress(
+            "pending_activation_recovery.done",
+            status=recovery_status,
+            runtimeMs=runtime_stages["pendingAboxActivationRecoveryMs"],
+        )
         if recovery_status not in {
             "skipped",
             "disabled",
@@ -734,6 +827,7 @@ class PortfolioOntologyProjectionRecorder:
                 "pendingAboxActivationRecovery": pending_activation_recovery,
             }
             self.store_projection_result(snapshot, result)
+            emit_progress("blocked", status=result["status"])
             return result
         if recovery_status in {"staged", "retry-required"}:
             resume_started = time.perf_counter()
@@ -749,6 +843,7 @@ class PortfolioOntologyProjectionRecorder:
             runtime_stages["totalMs"] = int((time.perf_counter() - projection_started) * 1000)
             result.setdefault("runtimeStages", runtime_stages)
             self.store_projection_result(snapshot, result, projection_run)
+            emit_progress("completed", status=str(result.get("status") or ""))
             return result
         # A staged or targetless legacy activation has no bounded InferenceBox
         # proof to reconcile yet. The latter is finalized as control-only
@@ -761,10 +856,16 @@ class PortfolioOntologyProjectionRecorder:
                 (time.perf_counter() - audit_recovery_started) * 1000
             )
         try:
+            emit_progress("rule_catalog.start")
             rulebox_bootstrap_started = time.perf_counter()
             rulebox_bootstrap = self.ensure_rulebox_ready()
             runtime_stages["ruleboxBootstrapMs"] = int(
                 (time.perf_counter() - rulebox_bootstrap_started) * 1000
+            )
+            emit_progress(
+                "rule_catalog.done",
+                status=str(rulebox_bootstrap.get("status") or ""),
+                runtimeMs=runtime_stages["ruleboxBootstrapMs"],
             )
             if str(rulebox_bootstrap.get("status") or "") not in {"ready", "seeded"}:
                 result = {
@@ -775,7 +876,9 @@ class PortfolioOntologyProjectionRecorder:
                     "ruleCatalog": rulebox_bootstrap,
                 }
                 self.store_projection_result(snapshot, result, projection_run)
+                emit_progress("blocked", status=result["status"])
                 return result
+            emit_progress("graph_assembly.start")
             projection_graph = self.build_projection_graph(
                 snapshot,
                 rulebox_bootstrap,
@@ -792,6 +895,12 @@ class PortfolioOntologyProjectionRecorder:
             material_snapshot_id = projection_graph["materialSnapshotId"]
             scoped_identity = projection_graph["scopedIdentity"]
             runtime_stages.update(dict(projection_graph.get("runtimeStages") or {}))
+            emit_progress(
+                "graph_assembly.done",
+                cacheLayer=str((graph_assembly or {}).get("cacheLayer") or "none"),
+                cacheStatus=str((graph_assembly or {}).get("status") or ""),
+                runtimeMs=int(runtime_stages.get("graphBuildMs") or 0),
+            )
             graph_input = {
                 "mode": str(graph_assembly.get("inputMode") or "full"),
                 "targetSymbols": list(graph_assembly.get("targetSymbols") or []),
@@ -808,10 +917,16 @@ class PortfolioOntologyProjectionRecorder:
             runtime_stages["targetScopedInputUsed"] = (
                 1 if graph_input["mode"] == "target-scoped" else 0
             )
+            emit_progress("active_abox_read.start")
             active_abox_started = time.perf_counter()
             active_abox = self.active_abox_metadata(portfolio_world_context.world_id)
             runtime_stages["activeAboxReadMs"] = int(
                 (time.perf_counter() - active_abox_started) * 1000
+            )
+            emit_progress(
+                "active_abox_read.done",
+                status=str(active_abox.get("status") or ""),
+                runtimeMs=runtime_stages["activeAboxReadMs"],
             )
             evidence_index_upgrade = {}
             active_abox_complete = str(active_abox.get("status") or "ok") == "ok"
@@ -1288,6 +1403,11 @@ class PortfolioOntologyProjectionRecorder:
             result: Dict[str, object] = {}
             coordinator_release = {}
             try:
+                emit_progress(
+                    "abox_persistence.start",
+                    targetSymbolCount=len(inference_symbols or []),
+                    inputMode=str(graph_input.get("mode") or "full"),
+                )
                 abox_persistence_started = time.perf_counter()
                 result = self.repository.save_graph(persistence_graph)
                 runtime_stages["aboxPersistenceMs"] = int((time.perf_counter() - abox_persistence_started) * 1000)
@@ -1314,8 +1434,18 @@ class PortfolioOntologyProjectionRecorder:
                 if pending_activation_recovery:
                     result["pendingAboxActivationRecovery"] = pending_activation_recovery
                 save_status = str(result.get("status") or "")
+                emit_progress(
+                    "abox_persistence.done",
+                    status=save_status,
+                    saved=bool(result.get("saved")),
+                    runtimeMs=runtime_stages["aboxPersistenceMs"],
+                )
                 if result.get("saved") or save_status == "staged-scoped-manifest":
                     pending = result.get("pendingAboxActivation") if isinstance(result.get("pendingAboxActivation"), dict) else {}
+                    emit_progress(
+                        "native_inference.start",
+                        targetSymbolCount=len(pending.get("targetSymbols") or inference_symbols or []),
+                    )
                     self.attach_graph_store_inference_result(
                         result,
                         snapshot,
@@ -1333,6 +1463,15 @@ class PortfolioOntologyProjectionRecorder:
                             (persistence_graph.worldview or {}).get("worldviewManifestId")
                             or material_snapshot_id
                         ),
+                    )
+                    emit_progress(
+                        "native_inference.done",
+                        status=str(
+                            ((result.get("inferenceBox") or {}).get("status"))
+                            if isinstance(result.get("inferenceBox"), dict)
+                            else result.get("status") or ""
+                        ),
+                        runtimeMs=int((result.get("runtimeStages") or {}).get("nativeInferenceMs") or 0),
                     )
                 elif save_status == "deferred-pending-scoped-manifest":
                     # This input did not stage the pending candidate. Running
@@ -1402,9 +1541,16 @@ class PortfolioOntologyProjectionRecorder:
                     )
         except Exception as error:  # noqa: BLE001 - ontology projection must not block realtime monitoring.
             result = {"saved": False, "status": "error", "reason": str(error)[:180]}
+            emit_progress("error", status="error", reason=str(error)[:180])
         runtime_stages["totalMs"] = int((time.perf_counter() - projection_started) * 1000)
         result.setdefault("runtimeStages", runtime_stages)
         self.store_projection_result(snapshot, result, projection_run)
+        emit_progress(
+            "completed",
+            status=str(result.get("status") or ""),
+            saved=bool(result.get("saved")),
+            runtimeMs=runtime_stages["totalMs"],
+        )
         return result
 
     def repository_world_call(self, method_name: str, *args, world_id: str = "", **kwargs):
@@ -1668,25 +1814,40 @@ class PortfolioOntologyProjectionRecorder:
         self._rulebox_impact_rules = None
         if not hasattr(self.repository, "rulebox_snapshot"):
             return {}
-        expected_rules = rulebox_rules_to_payload(default_graph_inference_rules())
-        expected_hash = rulebox_rules_hash(expected_rules)
-        expected_count = len(expected_rules)
         try:
             snapshot = self.repository.rulebox_snapshot()
         except Exception as error:  # noqa: BLE001 - projection will still expose the persistence error later.
             return {"status": "error", "reason": str(error)[:180]}
         if not isinstance(snapshot, dict):
             return {"status": "invalid", "reason": "RuleBox snapshot returned non-dict result."}
-        self._rulebox_impact_rules = [
+        stored_rules = [
             dict(item) for item in snapshot.get("rules") or []
             if isinstance(item, dict)
         ]
+        self._rulebox_impact_rules = stored_rules
         if not snapshot.get("configured"):
             return {
                 "status": "disabled",
                 "reason": str(snapshot.get("reason") or "Ontology graph storage is not configured."),
             }
-        migration = self.migrate_typedb_rule_catalog(snapshot, expected_rules)
+        bootstrap = None
+        requires_bootstrap_repair = rulebox_catalog_requires_bootstrap_repair(stored_rules)
+        if requires_bootstrap_repair:
+            bootstrap = bootstrap_rule_catalog()
+            migration = self.migrate_typedb_rule_catalog(
+                snapshot,
+                list(bootstrap.get("rules") or []),
+            )
+        else:
+            # The persisted TypeDB catalog is already structurally compatible
+            # with the active raw ABox. Do not spend a realtime cycle
+            # rebuilding code defaults merely to compare presentation fields.
+            migration = {
+                "status": "stored-catalog-ready",
+                "required": False,
+                "saved": False,
+                "bootstrapChecked": False,
+            }
         if migration.get("required") and not migration.get("saved"):
             return {
                 "status": "not-ready",
@@ -1703,11 +1864,12 @@ class PortfolioOntologyProjectionRecorder:
                 dict(item) for item in snapshot.get("rules") or []
                 if isinstance(item, dict)
             ]
+            stored_rules = list(self._rulebox_impact_rules)
         stored_count = int(snapshot.get("ruleboxRuleCount") or snapshot.get("ruleCount") or 0)
         stored_hash = str(snapshot.get("ruleboxRulesHash") or snapshot.get("rulesHash") or "").strip()
-        if not stored_hash and isinstance(snapshot.get("rules"), list) and snapshot.get("rules"):
-            stored_hash = rulebox_rules_hash(snapshot.get("rules") or [])
-        missing_decision_policy = rulebox_rules_missing_decision_stage(snapshot.get("rules") or [])
+        if not stored_hash and stored_rules:
+            stored_hash = rulebox_rules_hash(stored_rules)
+        missing_decision_policy = rulebox_rules_missing_decision_stage(stored_rules)
         if missing_decision_policy:
             return {
                 "status": "not-ready",
@@ -1723,10 +1885,19 @@ class PortfolioOntologyProjectionRecorder:
                 "ruleboxRulesHash": stored_hash,
                 "sourceOfTruth": "typedb-schema-function-rules",
                 "ruleCatalogStore": "typedb",
-                "inputRelationTypes": rulebox_input_relation_types(snapshot.get("rules") or []),
-                "bootstrapRuleCount": expected_count,
-                "bootstrapRulesHash": expected_hash,
-                "codeDefaultHashMismatch": bool(stored_hash and stored_hash != expected_hash),
+                "inputRelationTypes": rulebox_input_relation_types(stored_rules),
+                "bootstrapRuleCount": int(
+                    (bootstrap or {}).get("ruleCount")
+                    or snapshot.get("bootstrapRuleCount")
+                    or 0
+                ),
+                "bootstrapRulesHash": str((bootstrap or {}).get("ruleboxRulesHash") or ""),
+                "bootstrapCatalogChecked": bool(bootstrap),
+                "codeDefaultHashMismatch": bool(
+                    bootstrap
+                    and stored_hash
+                    and stored_hash != str(bootstrap.get("ruleboxRulesHash") or "")
+                ),
                 "ruleCatalogMigration": migration,
             }
             if result["codeDefaultHashMismatch"]:
@@ -1735,6 +1906,10 @@ class PortfolioOntologyProjectionRecorder:
                     "저장된 규칙을 덮어쓰지 않습니다."
                 )
             return result
+        bootstrap = bootstrap or bootstrap_rule_catalog()
+        expected_rules = list(bootstrap.get("rules") or [])
+        expected_hash = str(bootstrap.get("ruleboxRulesHash") or "")
+        expected_count = int(bootstrap.get("ruleCount") or len(expected_rules))
         if str(snapshot.get("status") or "") != "empty":
             return {
                 "status": "not-ready",
@@ -1989,6 +2164,82 @@ class PortfolioOntologyProjectionRecorder:
             value = 16
         return max(1, min(128, value))
 
+    def graph_assembly_persistent_cache_enabled(self) -> bool:
+        """Enable only when the managed runtime supplies a local MySQL cache.
+
+        Focused recorder tests intentionally construct no durable store. This
+        keeps their graph assertions deterministic while production isolated
+        workers can reuse an exact source assembly across process boundaries.
+        """
+        value = self.settings.get("ontologyProjectionGraphPersistentCacheEnabled")
+        if value is None or not self.graph_assembly_cache_store:
+            return False
+        return str(value).strip().lower() not in {"", "0", "false", "no", "off", "disabled"}
+
+    def graph_assembly_persistent_cache_ttl_seconds(self) -> float:
+        try:
+            value = float(str(self.settings.get("ontologyProjectionGraphPersistentCacheTtlSeconds") or "120"))
+        except (TypeError, ValueError):
+            value = 120.0
+        return max(1.0, min(300.0, value))
+
+    def graph_assembly_persistent_cache_max_entries(self) -> int:
+        try:
+            value = int(float(str(self.settings.get("ontologyProjectionGraphPersistentCacheMaxEntries") or "64")))
+        except (TypeError, ValueError):
+            value = 64
+        return max(1, min(256, value))
+
+    def graph_assembly_persistent_cache_max_payload_bytes(self) -> int:
+        try:
+            value = int(float(str(self.settings.get("ontologyProjectionGraphPersistentCacheMaxPayloadBytes") or 8 * 1024 * 1024)))
+        except (TypeError, ValueError):
+            value = 8 * 1024 * 1024
+        return max(64 * 1024, min(32 * 1024 * 1024, value))
+
+    def persistent_graph_assembly_cache_get(self, cache_key: str) -> Dict[str, object]:
+        if not self.graph_assembly_persistent_cache_enabled():
+            return {"status": "disabled"}
+        getter = getattr(self.graph_assembly_cache_store, "get", None)
+        if not callable(getter):
+            return {"status": "unsupported"}
+        try:
+            result = getter(cache_key, self.graph_assembly_persistent_cache_ttl_seconds())
+        except Exception as error:  # noqa: BLE001 - exact-cache loss must not block TypeDB reasoning.
+            return {"status": "miss", "reason": str(error)[:180]}
+        values = dict(result or {}) if isinstance(result, dict) else {}
+        if (
+            str(values.get("status") or "") == "hit"
+            and isinstance(values.get("graph"), PortfolioOntology)
+            and isinstance(values.get("persistenceGraph"), PortfolioOntology)
+        ):
+            return values
+        return {"status": "miss", **({"reason": str(values.get("reason") or "")[:180]} if values.get("reason") else {})}
+
+    def persistent_graph_assembly_cache_put(
+        self,
+        cache_key: str,
+        graph: PortfolioOntology,
+        persistence_graph: PortfolioOntology,
+    ) -> Dict[str, object]:
+        if not self.graph_assembly_persistent_cache_enabled():
+            return {"status": "disabled"}
+        saver = getattr(self.graph_assembly_cache_store, "put", None)
+        if not callable(saver):
+            return {"status": "unsupported"}
+        try:
+            result = saver(
+                cache_key,
+                graph,
+                persistence_graph,
+                self.graph_assembly_persistent_cache_ttl_seconds(),
+                self.graph_assembly_persistent_cache_max_entries(),
+                self.graph_assembly_persistent_cache_max_payload_bytes(),
+            )
+        except Exception as error:  # noqa: BLE001 - durable cache writes are best effort.
+            return {"status": "error", "reason": str(error)[:180]}
+        return dict(result or {}) if isinstance(result, dict) else {"status": "invalid"}
+
     def graph_assembly_cache_namespace(self) -> str:
         """Keep test doubles isolated while sharing a real TypeDB runtime."""
         store_key = str(getattr(self.repository, "store_key", "") or "repository")
@@ -2079,7 +2330,40 @@ class PortfolioOntologyProjectionRecorder:
                 cache_result["persistenceGraph"],
                 {
                     "status": "hit",
+                    "cacheLayer": "memory",
                     "ageMs": int(cache_result.get("ageMs") or 0),
+                    "inputMode": input_mode,
+                    "targetSymbols": input_symbols,
+                    "sourcePositionCount": len(observation_input.get("positions") or []),
+                    "referencePositionCount": len(observation_input.get("referencePositions") or []),
+                    "runtimeStages": stage_timings,
+                },
+            )
+
+        persistent_cache_started = time.perf_counter()
+        persistent_cache_result = self.persistent_graph_assembly_cache_get(cache_key) if cache_enabled else {"status": "disabled"}
+        stage_timings["graphAssemblyPersistentCacheReadMs"] = int(
+            (time.perf_counter() - persistent_cache_started) * 1000
+        )
+        stage_timings["graphAssemblyPersistentCacheHit"] = (
+            1 if str(persistent_cache_result.get("status") or "") == "hit" else 0
+        )
+        if str(persistent_cache_result.get("status") or "") == "hit":
+            graph = persistent_cache_result["graph"]
+            persistence_graph = persistent_cache_result["persistenceGraph"]
+            SHARED_PORTFOLIO_GRAPH_ASSEMBLY_CACHE.put(
+                cache_key,
+                graph,
+                persistence_graph,
+                self.graph_assembly_cache_max_entries(),
+            )
+            return (
+                deepcopy(graph),
+                deepcopy(persistence_graph),
+                {
+                    "status": "hit",
+                    "cacheLayer": "persistent",
+                    "ageMs": int(persistent_cache_result.get("ageMs") or 0),
                     "inputMode": input_mode,
                     "targetSymbols": input_symbols,
                     "sourcePositionCount": len(observation_input.get("positions") or []),
@@ -2123,8 +2407,20 @@ class PortfolioOntologyProjectionRecorder:
                 persistence_graph,
                 self.graph_assembly_cache_max_entries(),
             )
+            persistent_cache_write_started = time.perf_counter()
+            persistent_cache_write = self.persistent_graph_assembly_cache_put(
+                cache_key,
+                graph,
+                persistence_graph,
+            )
+            stage_timings["graphAssemblyPersistentCacheWriteMs"] = int(
+                (time.perf_counter() - persistent_cache_write_started) * 1000
+            )
+            if str(persistent_cache_write.get("status") or "") == "stored":
+                stage_timings["graphAssemblyPersistentCacheStored"] = 1
         return graph, persistence_graph, {
             "status": "miss" if cache_enabled else "disabled",
+            "cacheLayer": "none",
             "inputMode": input_mode,
             "targetSymbols": input_symbols,
             "sourcePositionCount": len(observation_input.get("positions") or []),

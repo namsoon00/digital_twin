@@ -23,6 +23,7 @@ from .mysql_operational import (
     MySQLNotificationRuleStore,
     MySQLNotificationTemplateStore,
     MySQLOntologyProjectionRunStore,
+    MySQLOntologyGraphAssemblyCacheStore,
     MySQLOntologyWorldProjectionOutboxStore,
     MySQLOntologyQualitySampleStore,
     MySQLOntologyMaintenanceStateStore,
@@ -163,6 +164,11 @@ def ontology_quality_sample_store(settings: Dict[str, str] = None):
 def ontology_projection_run_store(settings: Dict[str, str] = None):
     configured = configured_settings(settings)
     return MySQLOntologyProjectionRunStore(configured)
+
+
+def ontology_graph_assembly_cache_store(settings: Dict[str, str] = None):
+    configured = configured_settings(settings)
+    return MySQLOntologyGraphAssemblyCacheStore(configured)
 
 
 def ontology_world_projection_outbox_store(settings: Dict[str, str] = None):

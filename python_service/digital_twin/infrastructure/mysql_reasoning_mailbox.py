@@ -805,7 +805,7 @@ class MySQLOntologyReasoningMailboxStore(MySQLOperationalConnection):
                 for key, event_id in clean:
                     owner_clause = " AND lease_owner = %s AND work_state = 'running'" if _text(worker_id) else ""
                     parameters = [
-                        _text(stage)[:64], stamp,
+                        _text(stage)[:64], stamp, _text(stage)[:64], stamp,
                         json_dumps({"version": "reasoning-work-checkpoint-v1", "stage": _text(stage)[:64], "updatedAt": stamp, "details": dict(details or {})}),
                         stamp, key, event_id,
                     ]
@@ -814,7 +814,11 @@ class MySQLOntologyReasoningMailboxStore(MySQLOperationalConnection):
                     connection.execute(
                         """
                         UPDATE ontology_reasoning_work_items
-                        SET last_stage = %s, heartbeat_at = %s, checkpoint_json = %s, updated_at = %s
+                        SET stage_started_at = CASE
+                                WHEN last_stage <> %s OR stage_started_at = '' THEN %s
+                                ELSE stage_started_at
+                            END,
+                            last_stage = %s, heartbeat_at = %s, checkpoint_json = %s, updated_at = %s
                         WHERE mailbox_key = %s AND source_event_id = %s
                         """ + owner_clause,
                         parameters,
@@ -1152,6 +1156,7 @@ class MySQLOntologyReasoningMailboxStore(MySQLOperationalConnection):
 
     def summary(self) -> Dict[str, object]:
         state = self.fast_state()
+        active_checkpoint = self.active_checkpoint() if int(state.get("runningEntryCount") or 0) else {}
         return {
             "enabled": True,
             "pendingEntryCount": int(state.get("pendingEntryCount") or 0),
@@ -1168,9 +1173,59 @@ class MySQLOntologyReasoningMailboxStore(MySQLOperationalConnection):
             "lastTimeoutAt": _text(state.get("lastTimeoutAt")),
             "stateVersion": _text(state.get("stateVersion")),
             "updatedAt": _text(state.get("updatedAt")),
+            **({"activeCheckpoint": active_checkpoint} if active_checkpoint else {}),
             "eventStateCounts": {},
             **({"status": "error", "reason": _text(state.get("reason"))} if _text(state.get("status")) == "error" else {}),
         }
+
+    def active_checkpoint(self) -> Dict[str, object]:
+        """Read the active durable stage without widening the hot queue probe.
+
+        The scheduler invokes this only for a timeout or operator summary, so
+        the normal queue probe remains a single indexed queue-state lookup.
+        """
+        stamp = utc_now()
+        try:
+            with self.connect() as connection:
+                row = connection.execute(
+                    """
+                    SELECT mailbox_key, source_event_id, lease_owner, lease_until, last_stage,
+                           stage_started_at, heartbeat_at, checkpoint_json
+                    FROM ontology_reasoning_work_items
+                    WHERE work_state = 'running' AND lease_until > %s
+                    ORDER BY heartbeat_at DESC, updated_at DESC
+                    LIMIT 1
+                    """,
+                    (stamp,),
+                ).fetchone() or {}
+            if not row:
+                return {}
+            checkpoint = _json_loads(row.get("checkpoint_json"), {})
+            if not isinstance(checkpoint, dict):
+                checkpoint = {}
+            started = _text(row.get("stage_started_at"))
+            age_seconds = 0
+            if started:
+                try:
+                    parsed = datetime.fromisoformat(started.replace("Z", "+00:00"))
+                    if parsed.tzinfo is None:
+                        parsed = parsed.replace(tzinfo=timezone.utc)
+                    age_seconds = max(0, int((datetime.now(timezone.utc) - parsed.astimezone(timezone.utc)).total_seconds()))
+                except ValueError:
+                    age_seconds = 0
+            return {
+                "mailboxKey": _text(row.get("mailbox_key")),
+                "sourceEventId": _text(row.get("source_event_id")),
+                "workerId": _text(row.get("lease_owner")),
+                "leaseUntil": _text(row.get("lease_until")),
+                "stage": _text(row.get("last_stage")),
+                "stageStartedAt": started,
+                "heartbeatAt": _text(row.get("heartbeat_at")),
+                "stageElapsedSeconds": age_seconds,
+                "details": dict(checkpoint.get("details") or {}),
+            }
+        except Exception:
+            return {}
 
     def prune_terminal(self, retention_hours: int = 72, limit: int = 1000) -> int:
         hours = max(1, min(24 * 90, int(retention_hours or 72)))

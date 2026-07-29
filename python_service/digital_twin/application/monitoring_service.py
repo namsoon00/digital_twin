@@ -510,6 +510,13 @@ class MonitorRunner:
                 kwargs["target_symbols"] = sorted(selected_symbols)
             if reasoning_context and ("reasoning_context" in parameters or accepts_kwargs):
                 kwargs["reasoning_context"] = dict(reasoning_context)
+            if "progress_callback" in parameters or accepts_kwargs:
+                def projection_progress(stage: str, payload: Dict[str, object] = None) -> None:
+                    details = dict(payload or {}) if isinstance(payload, dict) else {}
+                    details.setdefault("accountId", snapshot.account_id)
+                    self.progress(str(stage or "ontology_projection.unknown"), **details)
+
+                kwargs["progress_callback"] = projection_progress
             recorder(snapshot, **kwargs)
         except Exception as error:  # noqa: BLE001 - graph persistence must not block monitoring.
             result = {"saved": False, "status": "error", "reason": str(error)[:180]}

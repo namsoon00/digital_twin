@@ -15,6 +15,7 @@ from digital_twin.infrastructure.mysql_reasoning_mailbox import (
     local_reasoning_watch_is_dead,
     local_reasoning_watch_pid,
 )
+from digital_twin.infrastructure.mysql_schema_tuning import MYSQL_OPERATIONAL_COLUMNS
 
 
 class MemoryCursor:
@@ -251,6 +252,21 @@ class TimeoutRecoveringMailbox(MemoryMailbox):
 
     def record_timeout(self, details):
         self.timeouts.append(dict(details or {}))
+
+
+class CheckpointTimeoutRecoveringMailbox(TimeoutRecoveringMailbox):
+    """Timeout mailbox double with an active durable reasoning checkpoint."""
+
+    def __init__(self, stage):
+        super().__init__()
+        self.stage = str(stage or "")
+
+    def summary(self):
+        return {
+            **super().summary(),
+            "runningEntryCount": 1,
+            "activeCheckpoint": {"stage": self.stage},
+        }
 
 
 class PostMonitorCheckpointMailbox(MemoryMailbox):
@@ -1011,6 +1027,43 @@ class OntologyReasoningMailboxTests(unittest.TestCase):
         self.assertEqual("reasoning-watch:test", mailbox.recoveries[0][0])
         self.assertEqual(300, mailbox.recoveries[0][1])
         self.assertEqual(1, len(mailbox.timeouts))
+
+    def test_timeout_retries_pre_native_graph_assembly_without_long_global_cooldown(self):
+        runner = self.build_runner([], settings={
+            "ontologyReasoningExecutionTimeoutBackoffSeconds": "300",
+            "ontologyReasoningPreNativeTimeoutBackoffSeconds": "45",
+        })
+        mailbox = CheckpointTimeoutRecoveringMailbox("typedb-graph-assembly-start")
+        runner.mailbox_store = mailbox
+
+        result = runner.record_execution_timeout(240, worker_id="reasoning-watch:pre-native")
+
+        self.assertEqual(45, result["retryAfterSeconds"])
+        self.assertEqual(45, mailbox.recoveries[0][1])
+        self.assertEqual("pre-native-fast-retry", result["executionTelemetry"]["timeoutRetryPolicy"]["mode"])
+        self.assertEqual("typedb-graph-assembly-start", mailbox.timeouts[0]["stage"])
+
+    def test_timeout_keeps_native_boundary_protection_after_persistence_starts(self):
+        runner = self.build_runner([], settings={
+            "ontologyReasoningExecutionTimeoutBackoffSeconds": "300",
+            "ontologyReasoningPreNativeTimeoutBackoffSeconds": "45",
+        })
+        mailbox = CheckpointTimeoutRecoveringMailbox("typedb-native-inference-start")
+        runner.mailbox_store = mailbox
+
+        result = runner.record_execution_timeout(240, worker_id="reasoning-watch:native")
+
+        self.assertEqual(300, result["retryAfterSeconds"])
+        self.assertEqual(300, mailbox.recoveries[0][1])
+        self.assertEqual("native-boundary-protection", result["executionTelemetry"]["timeoutRetryPolicy"]["mode"])
+
+    def test_timeout_checkpoint_column_migrates_existing_mailbox_table(self):
+        columns = {
+            definition.name: definition.definition_sql
+            for definition in MYSQL_OPERATIONAL_COLUMNS["ontology_reasoning_work_items"]
+        }
+
+        self.assertEqual("VARCHAR(40) NOT NULL DEFAULT ''", columns["stage_started_at"])
 
     def test_actionable_quote_snapshots_still_keep_only_the_latest_state(self):
         old = realtime_request("old-act", ["AAPL"], "2026-07-24T00:00:00Z", review_level="act")

@@ -2,7 +2,9 @@
 
 import json
 import re
-from dataclasses import asdict, dataclass, field
+from copy import deepcopy
+from dataclasses import dataclass, field
+from functools import lru_cache
 from typing import Dict, Iterable, List, Optional
 
 from .ontology_contracts import OntologyEntity, OntologyRelation, PortfolioOntology, entity_id
@@ -53,20 +55,19 @@ class InvestmentLanguageTerm:
     replacement_term_id: str = ""
 
     def to_dict(self) -> Dict[str, object]:
-        payload = asdict(self)
         return {
-            "termId": payload["term_id"],
-            "category": payload["category"],
-            "preferredLabel": payload["preferred_label"],
-            "definition": payload["definition"],
-            "renderings": dict(payload["renderings"]),
-            "aliases": list(payload["aliases"]),
-            "forbiddenExpressions": list(payload["forbidden_expressions"]),
-            "status": payload["status"],
-            "version": payload["version"],
-            "owner": payload["owner"],
-            "source": payload["source"],
-            "replacementTermId": payload["replacement_term_id"],
+            "termId": self.term_id,
+            "category": self.category,
+            "preferredLabel": self.preferred_label,
+            "definition": self.definition,
+            "renderings": dict(self.renderings),
+            "aliases": list(self.aliases),
+            "forbiddenExpressions": list(self.forbidden_expressions),
+            "status": self.status,
+            "version": self.version,
+            "owner": self.owner,
+            "source": self.source,
+            "replacementTermId": self.replacement_term_id,
         }
 
 
@@ -333,29 +334,75 @@ def normalize_investment_language_registry(payload: Dict[str, object] = None) ->
     }
 
 
-def investment_language_registry(settings: Dict[str, object] = None) -> Dict[str, object]:
-    settings = settings if isinstance(settings, dict) else {}
-    raw = settings.get(LANGUAGE_REGISTRY_SETTING_KEY)
+def _language_registry_source(settings: Dict[str, object] = None) -> Dict[str, object]:
+    """Read one registry override without exposing caller-owned mutable data."""
+    values = settings if isinstance(settings, dict) else {}
+    raw = values.get(LANGUAGE_REGISTRY_SETTING_KEY)
     if isinstance(raw, dict):
-        return normalize_investment_language_registry(raw)
-    if str(raw or "").strip():
-        try:
-            parsed = json.loads(str(raw))
-            if isinstance(parsed, dict):
-                return normalize_investment_language_registry(parsed)
-        except (TypeError, ValueError):
-            pass
-    return normalize_investment_language_registry()
+        return raw
+    text = str(raw or "").strip()
+    if not text:
+        return {}
+    try:
+        parsed = json.loads(text)
+    except (TypeError, ValueError):
+        return {}
+    return parsed if isinstance(parsed, dict) else {}
+
+
+def _language_registry_cache_key(source: Dict[str, object]) -> str:
+    """Canonicalise settings so each distinct governance revision compiles once."""
+    try:
+        return json.dumps(source or {}, ensure_ascii=False, sort_keys=True, separators=(",", ":"), default=str)
+    except (TypeError, ValueError):
+        return "{}"
+
+
+@lru_cache(maxsize=64)
+def _compiled_investment_language_registry(cache_key: str):
+    """Compile default plus override terms once per immutable settings revision.
+
+    Investment projection can ask for the same term hundreds of times while
+    materialising an ABox. The registry is governance metadata, so a stable
+    serialised revision is a safe process-local cache boundary. Public
+    functions below always return copies and never expose this cached value.
+    """
+    try:
+        source = json.loads(cache_key or "{}")
+    except (TypeError, ValueError):
+        source = {}
+    normalized = normalize_investment_language_registry(source if isinstance(source, dict) else {})
+    terms_by_id = {
+        str(term.get("termId") or "").strip(): term
+        for term in normalized.get("terms") or []
+        if isinstance(term, dict) and str(term.get("termId") or "").strip()
+    }
+    return normalized, terms_by_id
+
+
+def clear_investment_language_registry_cache() -> None:
+    """Expose a narrow test/maintenance hook without mutating live output."""
+    _compiled_investment_language_registry.cache_clear()
+
+
+def investment_language_registry(settings: Dict[str, object] = None) -> Dict[str, object]:
+    source = _language_registry_source(settings)
+    registry, _terms_by_id = _compiled_investment_language_registry(
+        _language_registry_cache_key(source)
+    )
+    return deepcopy(registry)
 
 
 def investment_language_term(identifier: object, settings: Dict[str, object] = None) -> Optional[Dict[str, object]]:
     key = str(identifier or "").strip()
     if not key:
         return None
-    for term in investment_language_registry(settings).get("terms") or []:
-        if str(term.get("termId") or "") == key:
-            return term
-    return None
+    source = _language_registry_source(settings)
+    _registry, terms_by_id = _compiled_investment_language_registry(
+        _language_registry_cache_key(source)
+    )
+    term = terms_by_id.get(key)
+    return deepcopy(term) if isinstance(term, dict) else None
 
 
 def investment_language_label(identifier: object, level: str = "beginner", settings: Dict[str, object] = None) -> str:

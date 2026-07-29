@@ -873,6 +873,184 @@ def _scope_semantic_fingerprints_by_scope(
     }
 
 
+def _scope_fragment_payloads_with_semantic_fingerprints(
+    graph: PortfolioOntology,
+    scope_ids: Iterable[str],
+    support_relations: Iterable[Mapping[str, object]] = (),
+) -> tuple[Dict[str, Dict[str, object]], Dict[str, Dict[str, str]]]:
+    """Build persistence and semantic scope hashes from one normalized pass.
+
+    A scoped projection needs two views of the same ABox rows: the complete
+    fragment that determines storage identity and the fact-family fragment
+    used by incremental native-rule routing.  Building them independently
+    repeated deep ``stable_value`` work for every entity, relation, and
+    evidence row before TypeDB was even called.  This helper preserves both
+    existing payload contracts while sharing the normalized values.
+    """
+    expected = {
+        str(scope_id or "").strip()
+        for scope_id in scope_ids or []
+        if str(scope_id or "").strip()
+    }
+    payloads_by_scope: Dict[str, Dict[str, List[Dict[str, object]]]] = {
+        scope_id: {"entities": [], "relations": [], "evidence": []}
+        for scope_id in expected
+    }
+    semantic_groups_by_scope: Dict[str, Dict[str, List[Dict[str, object]]]] = {
+        scope_id: defaultdict(list)
+        for scope_id in expected
+    }
+    entities_by_id = {
+        _clean(entity.entity_id): entity
+        for entity in graph.entities
+        if _clean(entity.entity_id)
+    }
+
+    def semantic_properties_from_stable(
+        raw_values: Mapping[str, object],
+        stable_values: Mapping[str, object],
+    ) -> Dict[str, object]:
+        return {
+            str(key): stable_values.get(str(key))
+            for key in dict(raw_values or {})
+            if re.sub(r"[^a-z0-9]", "", str(key or "").lower()) not in _GENERATED_SCOPE_PROPERTY_KEYS
+            and re.sub(r"[^a-z0-9]", "", str(key or "").lower()) not in _IMMATERIAL_OBSERVATION_PROPERTY_KEYS
+        }
+
+    for entity in graph.entities:
+        properties = dict(entity.properties or {})
+        scope_id = _clean(properties.get("aboxScopeId"))
+        payload = payloads_by_scope.get(scope_id)
+        semantic_groups = semantic_groups_by_scope.get(scope_id)
+        if payload is None or semantic_groups is None:
+            continue
+        stable_properties = stable_value(properties)
+        payload["entities"].append({
+            "id": entity.entity_id,
+            "kind": entity.kind,
+            "properties": stable_properties,
+        })
+        fallback = family_for_entity(entity.kind, properties, entity.entity_id)
+        semantic_groups[fallback].append({
+            "entity": _clean(entity.entity_id),
+            "kind": _clean(entity.kind),
+            "label": _clean(entity.label),
+        })
+        for field, value in semantic_properties_from_stable(properties, stable_properties).items():
+            semantic_groups[_semantic_property_family(field, fallback)].append({
+                "entity": _clean(entity.entity_id),
+                "field": field,
+                "value": value,
+            })
+
+    for relation in graph.relations:
+        properties = dict(relation.properties or {})
+        scope_id = _clean(properties.get("aboxScopeId"))
+        payload = payloads_by_scope.get(scope_id)
+        semantic_groups = semantic_groups_by_scope.get(scope_id)
+        if payload is None or semantic_groups is None:
+            continue
+        stable_properties = stable_value(properties)
+        payload["relations"].append({
+            "source": relation.source,
+            "target": relation.target,
+            "type": relation.relation_type,
+            "properties": stable_properties,
+        })
+        source = entities_by_id.get(_clean(relation.source))
+        target = entities_by_id.get(_clean(relation.target))
+        family = family_for_relation(
+            relation.relation_type,
+            properties,
+            source_family=scope_family((getattr(source, "properties", {}) or {}).get("aboxScopeId")),
+            target_family=scope_family((getattr(target, "properties", {}) or {}).get("aboxScopeId")),
+            source_kind=getattr(source, "kind", ""),
+            target_kind=getattr(target, "kind", ""),
+        )
+        semantic_groups[family].append({
+            "source": _clean(relation.source),
+            "target": _clean(relation.target),
+            "type": _clean(relation.relation_type),
+            "properties": semantic_properties_from_stable(properties, stable_properties),
+        })
+
+    for evidence in graph.evidence:
+        values = dict(evidence.value or {})
+        scope_id = _clean(values.get("aboxScopeId"))
+        payload = payloads_by_scope.get(scope_id)
+        semantic_groups = semantic_groups_by_scope.get(scope_id)
+        if payload is None or semantic_groups is None:
+            continue
+        stable_values = stable_value(values)
+        payload["evidence"].append({
+            "id": evidence.evidence_id,
+            "subject": evidence.subject,
+            "kind": evidence.kind,
+            "source": evidence.source,
+            "summary": evidence.summary,
+            "value": stable_values,
+        })
+        semantic_groups["evidence"].append({
+            "id": _clean(evidence.evidence_id),
+            "subject": _clean(evidence.subject),
+            "kind": _clean(evidence.kind),
+            "source": _clean(evidence.source),
+            "summary": _clean(evidence.summary),
+            "value": semantic_properties_from_stable(values, stable_values),
+        })
+
+    for relation in support_relations:
+        scope_id = _clean(relation.get("scopeId"))
+        payload = payloads_by_scope.get(scope_id)
+        semantic_groups = semantic_groups_by_scope.get(scope_id)
+        if payload is None or semantic_groups is None:
+            continue
+        properties = dict(relation.get("properties") or {})
+        stable_properties = stable_value(properties)
+        payload["relations"].append({
+            "source": _clean(relation.get("source")),
+            "target": _clean(relation.get("target")),
+            "type": _clean(relation.get("type")),
+            "properties": stable_properties,
+        })
+        families = [
+            _clean(value)
+            for value in relation.get("impactFamilies") or []
+            if _clean(value)
+        ]
+        semantic_groups[families[0] if families else "evidence"].append({
+            "source": _clean(relation.get("source")),
+            "target": _clean(relation.get("target")),
+            "type": _clean(relation.get("type")),
+            "properties": semantic_properties_from_stable(properties, stable_properties),
+        })
+
+    payloads = {
+        scope_id: {
+            "entities": sorted(payload["entities"], key=lambda item: (str(item["kind"]), str(item["id"]))),
+            "relations": sorted(payload["relations"], key=lambda item: (str(item["type"]), str(item["source"]), str(item["target"]))),
+            "evidence": sorted(payload["evidence"], key=lambda item: (str(item["kind"]), str(item["id"]))),
+        }
+        for scope_id, payload in payloads_by_scope.items()
+    }
+    semantic_fingerprints = {
+        scope_id: {
+            family: hashlib.sha256(
+                json.dumps(
+                    sorted(items, key=lambda item: json.dumps(item, ensure_ascii=False, sort_keys=True)),
+                    ensure_ascii=False,
+                    sort_keys=True,
+                    separators=(",", ":"),
+                ).encode("utf-8")
+            ).hexdigest()
+            for family, items in groups.items()
+            if family and items
+        }
+        for scope_id, groups in semantic_groups_by_scope.items()
+    }
+    return payloads, semantic_fingerprints
+
+
 def scoped_generation_id(scope_id: str, fingerprint: str) -> str:
     digest = hashlib.sha256((scope_id + "|" + fingerprint).encode("utf-8")).hexdigest()[:20]
     return "abox-scope:" + digest
@@ -1014,8 +1192,7 @@ def apply_scoped_abox_identity(
     # in a single graph pass. A target-scoped cycle normally has many retained
     # scopes, so repeatedly scanning the complete graph once per scope made
     # identity preparation dominate the TypeDB write itself.
-    payloads = _scope_fragment_payloads(clone, scope_ids, support_relations)
-    semantic_fingerprints = _scope_semantic_fingerprints_by_scope(
+    payloads, semantic_fingerprints = _scope_fragment_payloads_with_semantic_fingerprints(
         clone,
         scope_ids,
         support_relations,

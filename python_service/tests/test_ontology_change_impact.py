@@ -12,6 +12,7 @@ from digital_twin.domain.ontology_contracts import OntologyEntity, OntologyEvide
 from digital_twin.domain.ontology_scopes import (
     _scope_fragment_payload,
     _scope_fragment_payloads,
+    _scope_fragment_payloads_with_semantic_fingerprints,
     _scope_semantic_fingerprints,
     _scope_semantic_fingerprints_by_scope,
     apply_scoped_abox_identity,
@@ -130,9 +131,16 @@ class OntologyChangeImpactTests(unittest.TestCase):
             for scope_id in scope_ids
         }
         one_pass_semantics = _scope_semantic_fingerprints_by_scope(graph, scope_ids, support_relations)
+        combined_payloads, combined_semantics = _scope_fragment_payloads_with_semantic_fingerprints(
+            graph,
+            scope_ids,
+            support_relations,
+        )
 
         self.assertEqual(legacy_payloads, one_pass_payloads)
         self.assertEqual(legacy_semantics, one_pass_semantics)
+        self.assertEqual(legacy_payloads, combined_payloads)
+        self.assertEqual(legacy_semantics, combined_semantics)
 
     def test_change_impact_limits_symbol_flow_but_expands_macro_change(self):
         before = [

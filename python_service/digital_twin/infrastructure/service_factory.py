@@ -226,6 +226,7 @@ def build_monitor_runner(
             data_pipeline_health_store=stores.data_pipeline_health_store(configured_settings),
             market_time_series_store=market_time_series_store,
             world_projection_outbox=stores.ontology_world_projection_outbox_store(configured_settings),
+            graph_assembly_cache_store=stores.ontology_graph_assembly_cache_store(configured_settings),
             settings=configured_settings,
         ),
         hypothesis_lifecycle_service=build_hypothesis_lifecycle_service(configured_settings, publisher),
@@ -694,6 +695,7 @@ def build_ontology_world_projection_runner(settings=None) -> OntologyWorldProjec
         outbox=stores.ontology_world_projection_outbox_store(store_settings),
         projection_recorder=PortfolioOntologyProjectionRecorder(
             ontology_repository_from_settings(configured_settings),
+            graph_assembly_cache_store=stores.ontology_graph_assembly_cache_store(store_settings),
             settings=configured_settings,
             source="ontology-world-projection",
         ),

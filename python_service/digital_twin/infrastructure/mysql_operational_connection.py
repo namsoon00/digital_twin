@@ -627,6 +627,17 @@ MYSQL_SCHEMA = [
     ) ENGINE=InnoDB DEFAULT CHARSET=utf8mb4 COLLATE=utf8mb4_unicode_ci
     """,
     """
+    CREATE TABLE IF NOT EXISTS ontology_graph_assembly_cache (
+        cache_key VARCHAR(64) PRIMARY KEY,
+        payload_json LONGTEXT NOT NULL,
+        payload_bytes INT NOT NULL DEFAULT 0,
+        created_at VARCHAR(40) NOT NULL,
+        expires_at VARCHAR(40) NOT NULL,
+        updated_at VARCHAR(40) NOT NULL,
+        KEY idx_ontology_graph_assembly_cache_expiry (expires_at, updated_at)
+    ) ENGINE=InnoDB DEFAULT CHARSET=utf8mb4 COLLATE=utf8mb4_unicode_ci
+    """,
+    """
     CREATE TABLE IF NOT EXISTS ontology_world_projection_outbox (
         job_id VARCHAR(191) PRIMARY KEY,
         dedupe_key VARCHAR(64) NOT NULL,

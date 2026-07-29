@@ -1047,6 +1047,92 @@ class OntologyReasoningRunner:
             3600,
         )
 
+    def execution_timeout_pre_native_backoff_seconds(self) -> int:
+        """Return the short retry delay allowed before TypeDB owns a write.
+
+        A child killed while assembling an in-memory graph has not yet crossed
+        the durable ABox/native-rule boundary.  Replaying that work is safe
+        once the child exits, so it should not hold the whole mailbox behind
+        the longer native-execution cooldown.  The value stays bounded below
+        the normal timeout backoff in the retry policy below.
+        """
+        return int_setting(
+            self.settings,
+            "ontologyReasoningPreNativeTimeoutBackoffSeconds",
+            45,
+            5,
+            900,
+        )
+
+    def execution_timeout_retry_policy(
+        self,
+        active_checkpoint: Dict[str, object] = None,
+        configured_backoff_seconds: int = None,
+    ) -> Dict[str, object]:
+        """Choose a conservative retry delay from the durable progress stage.
+
+        The mailbox checkpoint is an operational boundary, not an investment
+        rule.  Only stages known to precede ABox persistence can use the
+        shorter retry.  Missing or unknown stages deliberately retain the
+        normal backoff so a surviving TypeDB call is never raced.
+        """
+        checkpoint = dict(active_checkpoint or {}) if isinstance(active_checkpoint, dict) else {}
+        stage = str(checkpoint.get("stage") or "").strip()
+        normalized_stage = stage.lower()
+        standard_backoff = int(
+            configured_backoff_seconds
+            if configured_backoff_seconds is not None
+            else self.execution_timeout_backoff_seconds()
+        )
+        native_boundary_prefixes = (
+            "typedb-abox-persistence",
+            "typedb-native-inference",
+        )
+        pre_native_prefixes = (
+            "typedb-graph-assembly",
+            "typedb-active-abox-read",
+        )
+        verified_stages = {
+            "typedb-verified",
+            "typedb-inference-verified",
+            "typedb-inference-account-verified",
+            "typedb-generation-verified",
+        }
+
+        if normalized_stage.startswith(native_boundary_prefixes):
+            return {
+                "mode": "native-boundary-protection",
+                "checkpointStage": stage,
+                "backoffSeconds": standard_backoff,
+                "configuredBackoffSeconds": standard_backoff,
+                "reason": "ABox 저장 또는 TypeDB 네이티브 추론 중 시간 초과되어 기존 보호 대기를 유지합니다.",
+            }
+        if normalized_stage.startswith(pre_native_prefixes):
+            short_backoff = min(standard_backoff, self.execution_timeout_pre_native_backoff_seconds())
+            return {
+                "mode": "pre-native-fast-retry",
+                "checkpointStage": stage,
+                "backoffSeconds": short_backoff,
+                "configuredBackoffSeconds": standard_backoff,
+                "reason": "TypeDB 저장 전 그래프 준비 단계에서 시간 초과되어 짧은 재시도로 복구합니다.",
+            }
+        if normalized_stage in verified_stages:
+            short_backoff = min(standard_backoff, self.execution_timeout_pre_native_backoff_seconds())
+            return {
+                "mode": "verified-generation-fast-retry",
+                "checkpointStage": stage,
+                "backoffSeconds": short_backoff,
+                "configuredBackoffSeconds": standard_backoff,
+                "reason": "TypeDB 추론 검증 후 후속 처리에서 시간 초과되어 짧은 재시도로 복구합니다.",
+            }
+        return {
+            "mode": "standard-backoff",
+            "checkpointStage": stage,
+            "backoffSeconds": standard_backoff,
+            "configuredBackoffSeconds": standard_backoff,
+            "reason": "시간 초과 시점의 TypeDB 경계를 확인할 수 없어 기존 보호 대기를 유지합니다.",
+        }
+
     def maintenance_enabled(self) -> bool:
         return truthy(self.settings.get("ontologyReasoningMaintenanceEnabled"), True)
 
@@ -3475,17 +3561,34 @@ class OntologyReasoningRunner:
         now = now.astimezone(timezone.utc)
         consecutive = int(prior.get("consecutiveTimeouts") or 0) + 1
         configured_backoff_seconds = self.execution_timeout_backoff_seconds()
+        mailbox_checkpoint = self.mailbox_summary()
+        active_checkpoint = (
+            mailbox_checkpoint.get("activeCheckpoint")
+            if isinstance(mailbox_checkpoint.get("activeCheckpoint"), dict)
+            else {}
+        )
+        retry_policy = self.execution_timeout_retry_policy(
+            active_checkpoint,
+            configured_backoff_seconds=configured_backoff_seconds,
+        )
         dead_lease_recovery = self.recover_dead_projection_leases()
         recovered_dead_lease = int(dead_lease_recovery.get("clearedCount") or 0) > 0
         # A known-dead child cannot still own the recovered TypeDB boundary.
         # Retry its durable pending ABox candidate promptly instead of adding
-        # the normal long failure backoff to every queued symbol. If recovery
-        # did not prove a dead lease, retain the conservative original delay.
+        # the normal long failure backoff to every queued symbol. A stage
+        # known to precede TypeDB persistence gets the same safe recovery
+        # benefit; unknown/native stages retain the configured delay.
+        stage_backoff_seconds = int(retry_policy.get("backoffSeconds") or configured_backoff_seconds)
         backoff_seconds = (
-            min(configured_backoff_seconds, self.timeout_recovery_retry_seconds())
+            min(stage_backoff_seconds, self.timeout_recovery_retry_seconds())
             if recovered_dead_lease
-            else configured_backoff_seconds
+            else stage_backoff_seconds
         )
+        retry_policy = {
+            **retry_policy,
+            "deadLeaseRecovered": recovered_dead_lease,
+            "effectiveBackoffSeconds": backoff_seconds,
+        }
         retry_at = datetime.fromtimestamp(
             now.timestamp() + backoff_seconds,
             timezone.utc,
@@ -3497,9 +3600,11 @@ class OntologyReasoningRunner:
             "lastTimeoutSeconds": int(timeout_seconds or self.execution_timeout_seconds()),
             "retryAfterAt": retry_at,
             "retryAfterSeconds": backoff_seconds,
-            "reason": "격리된 TypeDB 추론 실행이 시간 상한을 넘어 중지되었습니다. 보류된 ABox 후보는 다음 안전 재시도에서 복구합니다.",
+            "retryPolicy": retry_policy,
+            "reason": "격리된 TypeDB 추론 실행이 시간 상한을 넘어 중지되었습니다. "
+            + str(retry_policy.get("reason") or "")
+            + " 보류된 ABox 후보는 다음 안전 재시도에서 복구합니다.",
         }
-        mailbox_checkpoint = self.mailbox_summary()
         timeout_recovery_count = 0
         timeout_recovery = getattr(self.mailbox_store, "recover_worker_timeout", None) if self.mailbox_enabled() else None
         if callable(timeout_recovery):
@@ -3507,14 +3612,17 @@ class OntologyReasoningRunner:
                 timeout_recovery_count = int(timeout_recovery(
                     str(worker_id or self.mailbox_worker_id()),
                     backoff_seconds,
-                    "isolated reasoning execution timeout",
+                    "isolated reasoning execution timeout"
+                    + (" at " + str(retry_policy.get("checkpointStage") or "") if retry_policy.get("checkpointStage") else ""),
                 ) or 0)
             except Exception:
                 timeout_recovery_count = 0
         timeout_recorder = getattr(self.mailbox_store, "record_timeout", None) if self.mailbox_enabled() else None
         if callable(timeout_recorder):
             try:
-                timeout_recorder({"stage": str(mailbox_checkpoint.get("lastStage") or "timeout")})
+                timeout_recorder({
+                    "stage": str(active_checkpoint.get("stage") or mailbox_checkpoint.get("lastStage") or "timeout"),
+                })
             except Exception:
                 pass
         payload["executionTimeoutGuard"] = guard
@@ -3529,11 +3637,15 @@ class OntologyReasoningRunner:
             "timeoutOutput": str(output or "")[-240:],
             "mailboxCheckpoint": {
                 key: mailbox_checkpoint.get(key)
-                for key in ["pendingEntryCount", "runningEntryCount", "retryingEntryCount", "lastStage", "lastStageAt", "activeWorkerId"]
+                for key in [
+                    "pendingEntryCount", "runningEntryCount", "retryingEntryCount",
+                    "lastStage", "lastStageAt", "activeWorkerId", "activeCheckpoint",
+                ]
                 if mailbox_checkpoint.get(key) not in (None, "", [], {})
             },
             "mailboxTimeoutRecoveryCount": timeout_recovery_count,
             "typedbDeadLeaseRecovery": dead_lease_recovery,
+            "timeoutRetryPolicy": retry_policy,
         }
         history = [
             dict(item)
@@ -4117,14 +4229,30 @@ class OntologyReasoningRunner:
         inherited_progress_callback = getattr(runner, "progress_callback", None)
 
         def mailbox_checkpoint_progress(stage: str, payload: Mapping[str, object] = None) -> None:
+            stage = str(stage or "")
+            progress_payload = dict(payload or {}) if isinstance(payload, Mapping) else {}
             if callable(inherited_progress_callback):
                 try:
-                    inherited_progress_callback(stage, dict(payload or {}))
+                    inherited_progress_callback(stage, progress_payload)
                 except Exception:
                     pass
+            if stage.startswith("ontology_projection."):
+                checkpoint_details = dict(progress_payload)
+                checkpoint_details["projectionStage"] = stage
+                if "reason" in checkpoint_details:
+                    checkpoint_details["reason"] = str(checkpoint_details.get("reason") or "")[:180]
+                checkpoint_stage = (
+                    "typedb-"
+                    + stage[len("ontology_projection."):].replace("_", "-").replace(".", "-")
+                )[:64]
+                self.checkpoint_mailbox_work(
+                    claimed_mailbox_entries,
+                    checkpoint_stage,
+                    checkpoint_details,
+                )
             if stage != "ontology_projection.verified":
                 return
-            account_id = str(dict(payload or {}).get("accountId") or "").strip()
+            account_id = str(progress_payload.get("accountId") or "").strip()
             if account_id:
                 verified_projection_accounts.add(account_id)
             if expected_projection_accounts and not expected_projection_accounts.issubset(verified_projection_accounts):
@@ -4857,6 +4985,7 @@ class OntologyReasoningRunner:
             "executionTimeoutSeconds": self.execution_timeout_seconds(),
             "executionTimeoutGraceSeconds": self.execution_timeout_grace_seconds(),
             "executionTimeoutBackoffSeconds": self.execution_timeout_backoff_seconds(),
+            "executionTimeoutPreNativeBackoffSeconds": self.execution_timeout_pre_native_backoff_seconds(),
             "executionTimeoutGuard": execution_timeout_guard,
             "executionTimeoutRetryAfterSeconds": execution_timeout_remaining,
             "executionTimeoutGuardCooldownElapsed": (

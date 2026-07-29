@@ -4,6 +4,7 @@ import re
 import tempfile
 import time
 import unittest
+from copy import deepcopy
 from contextlib import contextmanager
 from datetime import datetime, timedelta, timezone
 from pathlib import Path
@@ -329,6 +330,119 @@ class TypeDBOntologyRepositoryTests(unittest.TestCase):
         self.assertEqual("hit", second["status"])
         self.assertNotIn("callerMutation", second_graph.worldview)
         self.assertNotIn("callerMutation", second_persistence.worldview)
+
+    def test_projection_graph_assembly_reuses_exact_persistent_cache_after_worker_restart(self):
+        class Repository:
+            store_key = "typedb"
+            address = "persistent-cache-unit-test"
+            database = "persistent-cache-unit-test"
+
+            def active_tbox_metadata(self):
+                return {"status": "ok", "fingerprint": "tbox-persistent-cache-unit-test"}
+
+        class DurableCache:
+            def __init__(self):
+                self.rows = {}
+
+            def get(self, key, _ttl_seconds):
+                value = self.rows.get(key)
+                if not value:
+                    return {"status": "miss"}
+                return {
+                    "status": "hit",
+                    "ageMs": 1,
+                    "graph": deepcopy(value[0]),
+                    "persistenceGraph": deepcopy(value[1]),
+                }
+
+            def put(self, key, graph, persistence_graph, *_args):
+                self.rows[key] = (deepcopy(graph), deepcopy(persistence_graph))
+                return {"status": "stored"}
+
+        snapshot = AccountSnapshot(
+            "main",
+            "메인",
+            "toss",
+            "live",
+            "ok",
+            "2026-07-23T00:00:00Z",
+            PortfolioSummary(total=1000, invested=1000, cash=0, markets=[], sectors=[], concentration=0),
+            positions=[Position(
+                "AAPL",
+                "Apple",
+                market="US",
+                currency="USD",
+                quantity=1,
+                current_price=100,
+                market_value=100,
+                market_value_krw=140000,
+            )],
+        )
+        catalog = {
+            "ruleboxRulesHash": "persistent-cache-unit-rule-catalog",
+            "rules": rulebox_rules_to_payload(default_graph_inference_rules()),
+        }
+        settings = {
+            "ontologyProjectionGraphCacheEnabled": "1",
+            "ontologyProjectionGraphCacheTtlSeconds": "60",
+            "ontologyProjectionGraphCacheMaxEntries": "4",
+            "ontologyProjectionGraphPersistentCacheEnabled": "1",
+            "ontologyProjectionGraphPersistentCacheTtlSeconds": "60",
+        }
+        durable_cache = DurableCache()
+        with SHARED_PORTFOLIO_GRAPH_ASSEMBLY_CACHE.lock:
+            SHARED_PORTFOLIO_GRAPH_ASSEMBLY_CACHE.entries.clear()
+
+        first = PortfolioOntologyProjectionRecorder(
+            Repository(),
+            graph_assembly_cache_store=durable_cache,
+            settings=settings,
+        )
+        _, _, first_result = first.build_graph_assembly(snapshot, catalog)
+        with SHARED_PORTFOLIO_GRAPH_ASSEMBLY_CACHE.lock:
+            SHARED_PORTFOLIO_GRAPH_ASSEMBLY_CACHE.entries.clear()
+
+        # A new recorder models an isolated reasoning child after it has
+        # restarted. It must reuse only the exact durable source assembly.
+        restarted = PortfolioOntologyProjectionRecorder(
+            Repository(),
+            graph_assembly_cache_store=durable_cache,
+            settings=settings,
+        )
+        graph, persistence_graph, restarted_result = restarted.build_graph_assembly(snapshot, catalog)
+
+        self.assertEqual("miss", first_result["status"])
+        self.assertEqual("hit", restarted_result["status"])
+        self.assertEqual("persistent", restarted_result["cacheLayer"])
+        graph.worldview["callerMutation"] = True
+        self.assertNotIn("callerMutation", persistence_graph.worldview)
+
+    def test_projection_recorder_uses_ready_typedb_rulebox_without_bootstrap_rebuild(self):
+        rules = rulebox_rules_to_payload(default_graph_inference_rules())
+
+        class Repository:
+            store_key = "typedb"
+
+            def rulebox_snapshot(self):
+                return {
+                    "configured": True,
+                    "status": "ok",
+                    "rules": rules,
+                    "ruleCount": len(rules),
+                    "ruleboxRuleCount": len(rules),
+                    "ruleboxRulesHash": "typedb-stored-rulebox-hash",
+                }
+
+        recorder = PortfolioOntologyProjectionRecorder(Repository())
+        with patch(
+            "digital_twin.infrastructure.ontology_projection.bootstrap_rule_catalog",
+            side_effect=AssertionError("ready TypeDB RuleBox must not rebuild code bootstrap"),
+        ):
+            result = recorder.ensure_rulebox_ready()
+
+        self.assertEqual("ready", result["status"])
+        self.assertFalse(result["bootstrapCatalogChecked"])
+        self.assertEqual("stored-catalog-ready", result["ruleCatalogMigration"]["status"])
 
     def test_typedb_schema_defines_nodes_assertions_and_storage_keys(self):
         repository = TypeDBOntologyGraphRepository("127.0.0.1:1729")

@@ -291,6 +291,13 @@ MYSQL_OPERATIONAL_COLUMNS: Dict[str, Sequence[MySQLColumnDefinition]] = {
             "VARCHAR(191) NOT NULL DEFAULT ''",
         ),
     ),
+    "ontology_reasoning_work_items": (
+        MySQLColumnDefinition(
+            "ontology_reasoning_work_items",
+            "stage_started_at",
+            "VARCHAR(40) NOT NULL DEFAULT ''",
+        ),
+    ),
     "investment_decision_episodes": (
         MySQLColumnDefinition(
             "investment_decision_episodes",

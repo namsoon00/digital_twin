@@ -3635,14 +3635,14 @@ class PortfolioOntologyProjectionRecorder:
                 result["reason"] = reason
                 return
             if str(execution.get("status") or "") == "deferred-schema-function-provisioning":
-                # Native functions are compiled from the durable RuleBox, but
-                # only a fully deployed candidate set may produce investment
-                # inference. Restore the prior aligned ABox/InferenceBox while
-                # a bounded deployment batch makes progress, rather than
-                # exposing a new ABox against stale deductions.
+                # Native functions are compiled from the durable RuleBox by a
+                # dedicated background prewarm worker. Only a fully prepared
+                # set may produce investment inference, so restore the prior
+                # aligned ABox/InferenceBox rather than exposing a new ABox
+                # against stale deductions.
                 reason = str(
                     execution.get("reason")
-                    or "TypeDB schema function deployment is still in progress."
+                    or "TypeDB schema function prewarm is still in progress."
                 )
                 result["inferenceBox"] = {
                     "configured": True,
@@ -3662,7 +3662,7 @@ class PortfolioOntologyProjectionRecorder:
                 result["status"] = "deferred-schema-function-provisioning"
                 result["retryable"] = True
                 result["recommendedRetryAfterSeconds"] = int(
-                    execution.get("recommendedRetryAfterSeconds") or 30
+                    execution.get("recommendedRetryAfterSeconds") or 10
                 )
                 result["reason"] = reason
                 result["saved"] = False

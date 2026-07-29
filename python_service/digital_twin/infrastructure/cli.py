@@ -42,6 +42,7 @@ from .service_factory import (
     build_ontology_lab_service,
     build_ontology_inference_detail_runner,
     build_ontology_maintenance_runner,
+    build_ontology_rulebox_prewarm_runner,
     build_ontology_reasoning_runner,
     build_ontology_reasoning_queue_probe,
     build_ontology_world_projection_runner,
@@ -63,6 +64,7 @@ from .schedulers import (
     OntologyLabScheduler,
     OntologyInferenceDetailScheduler,
     OntologyMaintenanceScheduler,
+    OntologyRuleboxPrewarmScheduler,
     OntologyReasoningScheduler,
     OperationalHistoryRetentionScheduler,
     OntologyWorldProjectionScheduler,
@@ -476,6 +478,51 @@ def ontology_inference_detail_command(args) -> int:
                 working_directory=str(project_root),
             )
         OntologyInferenceDetailScheduler(runner, interval, isolated_cycle=isolated_cycle).run_forever(limit=limit)
+        return 0
+    return 1
+
+
+def ontology_rulebox_prewarm_command(args) -> int:
+    settings = runtime_settings(fast_operational_read=True)
+    runner = build_ontology_rulebox_prewarm_runner(settings)
+    if args.ontology_rulebox_prewarm_action == "status":
+        print(json.dumps(runner.status(), ensure_ascii=False))
+        return 0
+    if args.ontology_rulebox_prewarm_action == "once":
+        print(json.dumps(
+            runner.run_once(force=bool(getattr(args, "force", False))),
+            ensure_ascii=False,
+        ))
+        return 0
+    if args.ontology_rulebox_prewarm_action == "watch":
+        interval = int(
+            os.environ.get("ONTOLOGY_RULEBOX_PREWARM_INTERVAL_SECONDS")
+            or settings.get("ontologyRuleboxPrewarmIntervalSeconds")
+            or runner.interval_seconds()
+        )
+        isolated_cycle = None
+        isolation_value = str(
+            os.environ.get("ONTOLOGY_RULEBOX_PREWARM_PROCESS_ISOLATION_ENABLED")
+            or settings.get("ontologyRuleboxPrewarmProcessIsolationEnabled")
+            or "1"
+        ).strip().lower()
+        if isolation_value not in {"0", "false", "no", "off", "disabled"}:
+            project_root = Path(__file__).resolve().parents[3]
+            isolated_cycle = IsolatedOntologyReasoningCycle(
+                [
+                    sys.executable,
+                    "-u",
+                    str(project_root / "python_service" / "service.py"),
+                    "ontology-rulebox-prewarm",
+                    "once",
+                ],
+                working_directory=str(project_root),
+            )
+        OntologyRuleboxPrewarmScheduler(
+            runner,
+            interval,
+            isolated_cycle=isolated_cycle,
+        ).run_forever()
         return 0
     return 1
 
@@ -1211,6 +1258,20 @@ def build_parser() -> argparse.ArgumentParser:
     ontology_inference_detail_retry.add_argument("--limit", default="")
     ontology_inference_detail_actions.add_parser("status")
     ontology_inference_detail.set_defaults(func=ontology_inference_detail_command)
+
+    ontology_rulebox_prewarm = subparsers.add_parser(
+        "ontology-rulebox-prewarm",
+        help="Prewarm active RuleBox TypeDB schema functions outside live inference",
+    )
+    ontology_rulebox_prewarm_actions = ontology_rulebox_prewarm.add_subparsers(
+        dest="ontology_rulebox_prewarm_action",
+        required=True,
+    )
+    ontology_rulebox_prewarm_once = ontology_rulebox_prewarm_actions.add_parser("once")
+    ontology_rulebox_prewarm_once.add_argument("--force", action="store_true")
+    ontology_rulebox_prewarm_actions.add_parser("watch")
+    ontology_rulebox_prewarm_actions.add_parser("status")
+    ontology_rulebox_prewarm.set_defaults(func=ontology_rulebox_prewarm_command)
 
     ontology_maintenance = subparsers.add_parser(
         "ontology-maintenance",

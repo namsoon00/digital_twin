@@ -96,6 +96,13 @@ BASE_WORKERS = {
         "command": [sys.executable, "-u", "python_service/service.py", "ontology-inference-detail", "watch"],
         "needle": "python_service/service.py ontology-inference-detail watch",
     },
+    "ontology-rulebox-prewarm": {
+        "label": "Python TypeDB RuleBox schema-function prewarm worker",
+        "pid": data_dir() / "python-ontology-rulebox-prewarm.pid",
+        "log": data_dir() / "python-ontology-rulebox-prewarm.log",
+        "command": [sys.executable, "-u", "python_service/service.py", "ontology-rulebox-prewarm", "watch"],
+        "needle": "python_service/service.py ontology-rulebox-prewarm watch",
+    },
     "ontology-maintenance": {
         "label": "Python ontology ABox maintenance worker",
         "pid": data_dir() / "python-ontology-maintenance.pid",

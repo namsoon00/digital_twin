@@ -382,6 +382,11 @@ NATIVE_RULE_INDEXED_QUERY_MAX_STORAGE_IDS = NATIVE_RULE_EVIDENCE_READ_INDEX_BATC
 TYPEDB_SCHEMA_FUNCTION_DEPLOYMENT_BOX = "FunctionRegistry"
 TYPEDB_SCHEMA_FUNCTION_DEPLOYMENT_KIND = "typedb-schema-function-deployment"
 TYPEDB_SCHEMA_FUNCTION_DEPLOYMENT_VERSION = "typedb-schema-function-deployment-v1"
+# A generated schema function has two stable namespaces: legacy global ABox
+# functions and parameterized Worldview functions.  Any non-empty world id
+# compiles to the latter namespace, so this sentinel lets the background
+# prewarmer install that shared catalogue without depending on a live account.
+TYPEDB_SCHEMA_FUNCTION_PREWARM_PARAMETERIZED_WORLD_ID = "__orbit_schema_function_prewarm__"
 
 
 def native_rule_evidence_read_index_from_rows(
@@ -5884,6 +5889,19 @@ class ScopedABoxManifestMixin:
             "reason": "TypeDB ontology storage is not configured.",
             "statementCount": 0,
         }
+
+    def schema_function_prewarm_status(self) -> Dict[str, object]:
+        return {
+            "configured": False,
+            "status": "disabled",
+            "graphStore": "typedb",
+            "functionsReady": False,
+            "reason": "TypeDB ontology storage is not configured.",
+        }
+
+    def prewarm_typedb_native_rule_functions(self, force: bool = False) -> Dict[str, object]:
+        del force
+        return self.schema_function_prewarm_status()
 
     def validate_rulebox_materialization(self, payload: Dict[str, object] = None) -> Dict[str, object]:
         return {
@@ -12737,16 +12755,16 @@ relation ontology-assertion,
         result: Dict[str, object],
         rules: Iterable[GraphInferenceRule],
     ) -> Dict[str, object]:
-        """Record native-function deployment as a deferred runtime concern.
+        """Record native-function deployment as a dedicated background concern.
 
         RuleBox rows are the durable investment-policy contract. Generated
         TypeDB functions are a compiled view of that contract and can be much
         more expensive to install than the static TBox/RuleBox seed itself.
         Keeping a fresh server restart behind a whole-catalogue compilation
         caused worker startup to time out and left TypeDB busy after the client
-        had already given up. Runtime execution now provisions only its exact
-        candidate rules in small, verified batches; the seed must remain a
-        successful static deployment while that work is pending.
+        had already given up. A dedicated prewarm worker now compiles the full
+        catalogue in small, verified batches. Live native inference only reads
+        its deployment receipts; it never starts a schema definition.
         """
         completed = dict(result or {})
         if not completed.get("saved"):
@@ -12761,12 +12779,13 @@ relation ontology-assertion,
             "configured": True,
             "graphStore": "typedb",
             "engineVersion": TYPEDB_NATIVE_RULE_ENGINE_VERSION,
-            "deploymentMode": "candidate-scoped-staged",
+            "deploymentMode": "dedicated-rulebox-prewarm-worker",
             "ruleCount": len(rule_ids),
             "provisionBatchSize": self.schema_function_provision_batch_size(),
             "reason": (
-                "TypeDB schema functions are provisioned by the first eligible "
-                "native RuleBox execution in bounded candidate batches."
+                "TypeDB schema functions are provisioned by the dedicated "
+                "RuleBox prewarm worker in bounded batches; live native "
+                "execution only checks the prepared receipt."
             ),
         }
         return completed
@@ -15429,7 +15448,7 @@ relation ontology-assertion,
                 "skippedRules": skipped[:40],
                 "pendingRuleCount": len(pending_rule_ids),
                 "pendingFunctionCount": len(pending_definitions),
-                "pendingRuleIds": pending_rule_ids[:80],
+                "pendingRuleIds": pending_rule_ids[:20],
                 "functionProbe": probe_result,
                 "functionDefinitionProbe": definition_probe,
                 "provisioningReceipt": provisioning_receipt,
@@ -15498,6 +15517,368 @@ relation ontology-assertion,
         self._schema_function_sync_cache_result = dict(result)
         self.cache_schema_function_sync_result(sync_fingerprint, result)
         return result
+
+    @staticmethod
+    def schema_function_prewarm_namespace(world_id: str = "") -> str:
+        return "world-parameterized" if str(world_id or "").strip() else "legacy"
+
+    @staticmethod
+    def schema_function_prewarm_namespaces() -> List[Dict[str, str]]:
+        """Return every generated-function namespace used by live inference.
+
+        Explicit ontology worlds share one parameterized TypeDB function body,
+        while an older global ABox uses its own legacy function name. Preparing
+        both avoids making the first request in either path compile a schema.
+        """
+        return [
+            {
+                "namespace": "world-parameterized",
+                "worldId": TYPEDB_SCHEMA_FUNCTION_PREWARM_PARAMETERIZED_WORLD_ID,
+            },
+            {"namespace": "legacy", "worldId": ""},
+        ]
+
+    @staticmethod
+    def schema_function_prewarm_probe_summary(probe_result: Dict[str, object]) -> Dict[str, object]:
+        """Keep readiness diagnostics bounded on the live inference payload."""
+        probe = dict(probe_result or {})
+        missing_rule_ids = [
+            str(item or "").strip()
+            for item in probe.get("missingRuleIds") or []
+            if str(item or "").strip()
+        ]
+        verified_rule_ids = [
+            str(item or "").strip()
+            for item in probe.get("verifiedRuleIds") or []
+            if str(item or "").strip()
+        ]
+        return {
+            "status": str(probe.get("status") or ""),
+            "available": bool(probe.get("available")),
+            "probeMode": str(probe.get("probeMode") or ""),
+            "probedCount": int(number_or_none(probe.get("probedCount")) or 0),
+            "verifiedRuleCount": int(number_or_none(probe.get("verifiedRuleCount")) or len(verified_rule_ids)),
+            "missingRuleCount": len(missing_rule_ids),
+            "verifiedRuleIds": verified_rule_ids[:20],
+            "missingRuleIds": missing_rule_ids[:20],
+            "reasonCode": str(probe.get("reasonCode") or ""),
+            "reason": str(probe.get("reason") or "")[:180],
+        }
+
+    def schema_function_prewarm_readiness(
+        self,
+        rules: Iterable[GraphInferenceRule],
+        world_id: str = "",
+    ) -> Dict[str, object]:
+        """Check receipt-backed function readiness without mutating TypeDB.
+
+        This method is deliberately the only schema-function operation used by
+        live inference. It reads the small immutable deployment receipts for
+        the current native slice and hands any missing work to the dedicated
+        RuleBox prewarm worker instead of opening a schema transaction.
+        """
+        if not self.address:
+            return {
+                "configured": False,
+                "status": "disabled",
+                "graphStore": "typedb",
+                "schemaFunctionPrewarmReadinessChecked": True,
+                "schemaFunctionPrewarmReady": False,
+                "schemaFunctionSyncUsed": False,
+                "syncedCount": 0,
+                "syncedFunctionCount": 0,
+                "skippedCount": 0,
+                "failedCount": 0,
+                "pendingRuleCount": 0,
+                "pendingRuleIds": [],
+                "reason": "TypeDB ontology storage is not configured.",
+            }
+        rule_list = list(rules or [])
+        ready_rules = []
+        for rule in rule_list:
+            rule_payload = rule.to_dict() if hasattr(rule, "to_dict") else dict(rule or {})
+            if typedb_native_rule_profile(rule_payload).get("status") == "ready":
+                ready_rules.append(rule)
+        namespace = self.schema_function_prewarm_namespace(world_id)
+        if not ready_rules:
+            return {
+                "configured": True,
+                "status": "ok",
+                "graphStore": "typedb",
+                "engineVersion": TYPEDB_NATIVE_RULE_ENGINE_VERSION,
+                "schemaFunctionPrewarmReadinessChecked": True,
+                "schemaFunctionPrewarmReady": True,
+                "schemaFunctionPrewarmNamespace": namespace,
+                "schemaFunctionSyncUsed": False,
+                "schemaFunctionSyncBypassed": True,
+                "syncedCount": 0,
+                "syncedFunctionCount": 0,
+                "skippedCount": len(rule_list),
+                "failedCount": 0,
+                "pendingRuleCount": 0,
+                "pendingRuleIds": [],
+                "reason": "The current native execution slice has no generated TypeDB schema function.",
+            }
+        probe_result = self.probe_typedb_native_rule_functions(ready_rules, world_id)
+        if probe_result.get("available"):
+            verified_rule_ids = [
+                str(item or "").strip()
+                for item in probe_result.get("verifiedRuleIds") or []
+                if str(item or "").strip()
+            ]
+            return {
+                "configured": True,
+                "status": "ok",
+                "graphStore": "typedb",
+                "engineVersion": TYPEDB_NATIVE_RULE_ENGINE_VERSION,
+                "schemaFunctionPrewarmReadinessChecked": True,
+                "schemaFunctionPrewarmReady": True,
+                "schemaFunctionPrewarmNamespace": namespace,
+                "schemaFunctionSyncUsed": False,
+                "schemaFunctionProbeUsed": True,
+                "syncedCount": len(verified_rule_ids),
+                "syncedFunctionCount": int(number_or_none(probe_result.get("probedCount")) or len(verified_rule_ids)),
+                "skippedCount": max(0, len(rule_list) - len(ready_rules)),
+                "failedCount": 0,
+                "pendingRuleCount": 0,
+                "pendingRuleIds": [],
+                "syncedRules": [{"ruleId": item} for item in verified_rule_ids[:40]],
+                "functionProbe": self.schema_function_prewarm_probe_summary(probe_result),
+                "reason": "TypeDB schema-function deployment receipts are ready; live inference will not compile functions.",
+            }
+        probe_status = str(probe_result.get("status") or "").strip()
+        pending_rule_ids = [
+            str(item or "").strip()
+            for item in probe_result.get("missingRuleIds") or []
+            if str(item or "").strip()
+        ]
+        if probe_status == "missing":
+            return {
+                "configured": True,
+                "status": "provisioning",
+                "graphStore": "typedb",
+                "engineVersion": TYPEDB_NATIVE_RULE_ENGINE_VERSION,
+                "schemaFunctionPrewarmReadinessChecked": True,
+                "schemaFunctionPrewarmReady": False,
+                "schemaFunctionPrewarmRequired": True,
+                "schemaFunctionPrewarmNamespace": namespace,
+                "schemaFunctionSyncUsed": False,
+                "schemaFunctionProbeUsed": True,
+                "syncedCount": int(number_or_none(probe_result.get("probedCount")) or 0),
+                "syncedFunctionCount": int(number_or_none(probe_result.get("probedCount")) or 0),
+                "skippedCount": max(0, len(rule_list) - len(ready_rules)),
+                "failedCount": 0,
+                "pendingRuleCount": len(pending_rule_ids),
+                "pendingRuleIds": pending_rule_ids[:80],
+                "functionProbe": self.schema_function_prewarm_probe_summary(probe_result),
+                "reasonCode": str(probe_result.get("reasonCode") or "typedbSchemaFunctionPrewarmPending"),
+                "reason": (
+                    "The dedicated RuleBox prewarm worker has not yet verified every required "
+                    "TypeDB schema function. Live inference did not start a deployment."
+                ),
+                "retryable": True,
+            }
+        return {
+            "configured": True,
+            "status": "error",
+            "graphStore": "typedb",
+            "engineVersion": TYPEDB_NATIVE_RULE_ENGINE_VERSION,
+            "schemaFunctionPrewarmReadinessChecked": True,
+            "schemaFunctionPrewarmReady": False,
+            "schemaFunctionPrewarmNamespace": namespace,
+            "schemaFunctionSyncUsed": False,
+            "schemaFunctionProbeUsed": True,
+            "syncedCount": int(number_or_none(probe_result.get("probedCount")) or 0),
+            "syncedFunctionCount": int(number_or_none(probe_result.get("probedCount")) or 0),
+            "skippedCount": max(0, len(rule_list) - len(ready_rules)),
+            "failedCount": 1,
+            "pendingRuleCount": len(pending_rule_ids),
+            "pendingRuleIds": pending_rule_ids[:20],
+            "functionProbe": self.schema_function_prewarm_probe_summary(probe_result),
+            "reasonCode": str(probe_result.get("reasonCode") or "typedbSchemaFunctionPrewarmReadinessError"),
+            "reason": str(probe_result.get("reason") or "TypeDB schema-function prewarm readiness could not be checked.")[:220],
+        }
+
+    def schema_function_prewarm_rulebox(self) -> Dict[str, object]:
+        """Read the active RuleBox once for a background prewarm pass."""
+        try:
+            snapshot = self.rulebox_snapshot()
+        except Exception as error:  # noqa: BLE001 - prewarm can retry on the next isolated cycle.
+            return {
+                "status": "error",
+                "reasonCode": typedb_error_code(error),
+                "reason": str(error)[:220],
+                "rules": [],
+                "snapshot": {},
+            }
+        if str(snapshot.get("status") or "") != "ok":
+            return {
+                "status": "error",
+                "reasonCode": str(snapshot.get("reasonCode") or "typedbRuleBoxUnavailable"),
+                "reason": str(snapshot.get("reason") or "Active RuleBox is unavailable.")[:220],
+                "rules": [],
+                "snapshot": snapshot,
+            }
+        rows = snapshot.get("rules") if isinstance(snapshot.get("rules"), list) else []
+        try:
+            rules = rulebox_rules_from_payload({"rules": rows})
+        except ValueError as error:
+            return {
+                "status": "error",
+                "reasonCode": "typedbRuleBoxInvalid",
+                "reason": str(error)[:220],
+                "rules": [],
+                "snapshot": snapshot,
+            }
+        return {
+            "status": "ok",
+            "rules": list(rules),
+            "snapshot": snapshot,
+        }
+
+    def schema_function_prewarm_status(self) -> Dict[str, object]:
+        """Report both function namespaces without opening a schema write."""
+        if not self.address:
+            return NullTypeDBOntologyGraphRepository().schema_function_prewarm_status()
+        rulebox = self.schema_function_prewarm_rulebox()
+        if str(rulebox.get("status") or "") != "ok":
+            return {
+                "configured": True,
+                "status": "error",
+                "graphStore": "typedb",
+                "functionsReady": False,
+                "reasonCode": str(rulebox.get("reasonCode") or "typedbRuleBoxUnavailable"),
+                "reason": str(rulebox.get("reason") or "Active RuleBox is unavailable.")[:220],
+                "namespaceResults": [],
+            }
+        rules = list(rulebox.get("rules") or [])
+        namespace_results = []
+        for namespace in self.schema_function_prewarm_namespaces():
+            result = self.schema_function_prewarm_readiness(
+                rules,
+                world_id=str(namespace.get("worldId") or ""),
+            )
+            namespace_results.append({
+                "namespace": str(namespace.get("namespace") or ""),
+                "result": result,
+            })
+        statuses = {
+            str(item.get("result", {}).get("status") or "")
+            for item in namespace_results
+        }
+        if statuses == {"ok"}:
+            status = "ok"
+        elif "provisioning" in statuses:
+            status = "provisioning"
+        else:
+            status = "error"
+        snapshot = dict(rulebox.get("snapshot") or {})
+        return {
+            "configured": True,
+            "status": status,
+            "graphStore": "typedb",
+            "functionsReady": status == "ok",
+            "ruleCount": len(rules),
+            "ruleboxMetadata": rulebox_runtime_metadata(
+                snapshot.get("rules") if isinstance(snapshot.get("rules"), list) else []
+            ),
+            "namespaceResults": namespace_results,
+            "retryable": status == "provisioning",
+        }
+
+    @coordinated_typedb_projection_write("schema-function-prewarm")
+    def prewarm_typedb_native_rule_functions(self, force: bool = False) -> Dict[str, object]:
+        """Compile the complete active RuleBox outside the live inference path."""
+        if not self.address:
+            return NullTypeDBOntologyGraphRepository().prewarm_typedb_native_rule_functions(force)
+        self.reset_query_metrics()
+        started_at = time.perf_counter()
+        rulebox = self.schema_function_prewarm_rulebox()
+        if str(rulebox.get("status") or "") != "ok":
+            return {
+                "configured": True,
+                "status": "error",
+                "graphStore": "typedb",
+                "source": "typedbSchemaFunctionPrewarm",
+                "functionsReady": False,
+                "reasonCode": str(rulebox.get("reasonCode") or "typedbRuleBoxUnavailable"),
+                "reason": str(rulebox.get("reason") or "Active RuleBox is unavailable.")[:220],
+                "durationMs": int((time.perf_counter() - started_at) * 1000),
+                "typedbQueryMetrics": self.query_metrics_snapshot(),
+            }
+        rules = list(rulebox.get("rules") or [])
+        namespace_results = []
+        namespaces = self.schema_function_prewarm_namespaces()
+        for index, namespace in enumerate(namespaces):
+            namespace_started_at = time.perf_counter()
+            result = self.sync_typedb_native_rule_functions(
+                rules,
+                force=bool(force),
+                world_id=str(namespace.get("worldId") or ""),
+            )
+            namespace_results.append({
+                "namespace": str(namespace.get("namespace") or ""),
+                "result": result,
+                "durationMs": int((time.perf_counter() - namespace_started_at) * 1000),
+            })
+            # A cold schema definition can consume the TypeDB compiler for its
+            # bounded timeout. Prepare the normal Worldview namespace first,
+            # then yield after one unfinished batch so a live request observes
+            # a short coordinator deferral rather than two back-to-back schema
+            # compiles. The following namespace is resumed next cycle once the
+            # priority namespace is fully ready.
+            if str(result.get("status") or "") != "ok":
+                for queued_namespace in namespaces[index + 1:]:
+                    namespace_results.append({
+                        "namespace": str(queued_namespace.get("namespace") or ""),
+                        "result": {
+                            "status": "queued",
+                            "reason": "A higher-priority RuleBox function namespace is still being prewarmed.",
+                        },
+                        "durationMs": 0,
+                    })
+                break
+        statuses = {
+            str(item.get("result", {}).get("status") or "")
+            for item in namespace_results
+        }
+        if statuses == {"ok"}:
+            status = "ok"
+        elif statuses.issubset({"ok", "provisioning", "queued"}):
+            status = "provisioning"
+        else:
+            status = "error"
+        snapshot = dict(rulebox.get("snapshot") or {})
+        pending_rule_ids = sorted({
+            str(rule_id or "").strip()
+            for item in namespace_results
+            for rule_id in dict(item.get("result") or {}).get("pendingRuleIds") or []
+            if str(rule_id or "").strip()
+        })
+        return {
+            "configured": True,
+            "status": status,
+            "graphStore": "typedb",
+            "source": "typedbSchemaFunctionPrewarm",
+            "background": True,
+            "functionsReady": status == "ok",
+            "force": bool(force),
+            "ruleCount": len(rules),
+            "ruleboxMetadata": rulebox_runtime_metadata(
+                snapshot.get("rules") if isinstance(snapshot.get("rules"), list) else []
+            ),
+            "namespaceResults": namespace_results,
+            "pendingRuleCount": len(pending_rule_ids),
+            "pendingRuleIds": pending_rule_ids[:80],
+            "retryable": status == "provisioning",
+            "reason": (
+                "The complete active RuleBox is prewarmed in bounded TypeDB schema batches."
+                if status == "provisioning"
+                else ""
+            ),
+            "durationMs": int((time.perf_counter() - started_at) * 1000),
+            "typedbQueryMetrics": self.query_metrics_snapshot(),
+        }
 
     @coordinated_typedb_projection_write(
         "native-rule-run",
@@ -15954,18 +16335,26 @@ relation ontology-assertion,
             )
             schema_function_rules = list(function_sync_plan.get("schemaFunctionRules") or [])
             # Exact active-Manifest predicates are still evaluated by TypeDB,
-            # but they do not require a generated schema function. Sync only
-            # the remaining complete execution slice after factual preflight;
-            # this prevents unrelated RuleBox definitions from delaying a
-            # current holding's InferenceBox generation.
-            function_sync_started = time.perf_counter()
+            # but they do not require a generated schema function. A dedicated
+            # worker prewarms the complete RuleBox after policy changes. The
+            # live path only checks the small receipt slice it can invoke and
+            # must never open a TypeDB schema transaction itself.
+            function_prewarm_check_started = time.perf_counter()
             if schema_function_rules:
                 function_sync_result = typedb_call_for_world(
-                    self.sync_typedb_native_rule_functions,
+                    self.schema_function_prewarm_readiness,
                     schema_function_rules,
-                    force=force_schema_function_sync,
                     world_id=world_id,
                 )
+                if force_schema_function_sync:
+                    function_sync_result = {
+                        **dict(function_sync_result or {}),
+                        "forceSchemaFunctionSyncRequested": True,
+                        "reason": (
+                            str(function_sync_result.get("reason") or "")
+                            + " A live force request is delegated to the RuleBox prewarm worker."
+                        ).strip(),
+                    }
             else:
                 function_sync_result = {
                     "configured": True,
@@ -15979,10 +16368,13 @@ relation ontology-assertion,
                     "failedCount": 0,
                     "pendingRuleCount": 0,
                     "pendingRuleIds": [],
+                    "schemaFunctionPrewarmReadinessChecked": True,
+                    "schemaFunctionPrewarmReady": True,
                     "reason": "Every current native RuleBox predicate is anchored by the verified active Manifest evidence index.",
                 }
-            native_stage_timings["schemaFunctionSyncMs"] = int(
-                (time.perf_counter() - function_sync_started) * 1000
+            native_stage_timings["schemaFunctionSyncMs"] = 0
+            native_stage_timings["schemaFunctionPrewarmCheckMs"] = int(
+                (time.perf_counter() - function_prewarm_check_started) * 1000
             )
             schema_function_sync_used = bool(schema_function_rules) and (
                 str(function_sync_result.get("status") or "") == "ok"
@@ -16002,6 +16394,10 @@ relation ontology-assertion,
                 "typedbSchemaFunctionSyncStatus": str(function_sync_result.get("status") or ""),
                 "typedbSchemaFunctionSyncCached": bool(function_sync_result.get("schemaFunctionSyncCached")),
                 "typedbSchemaFunctionSyncBypassed": bool(function_sync_result.get("schemaFunctionSyncBypassed")),
+                "typedbSchemaFunctionPrewarmReadinessChecked": bool(function_sync_result.get("schemaFunctionPrewarmReadinessChecked")),
+                "typedbSchemaFunctionPrewarmReady": bool(function_sync_result.get("schemaFunctionPrewarmReady")),
+                "typedbSchemaFunctionPrewarmRequired": bool(function_sync_result.get("schemaFunctionPrewarmRequired")),
+                "typedbSchemaFunctionPrewarmNamespace": str(function_sync_result.get("schemaFunctionPrewarmNamespace") or ""),
                 "typedbSchemaFunctionSyncedCount": int(number_or_none(function_sync_result.get("syncedCount")) or 0),
                 "typedbSchemaFunctionSkippedCount": int(number_or_none(function_sync_result.get("skippedCount")) or 0),
                 "typedbSchemaFunctionFailedCount": int(number_or_none(function_sync_result.get("failedCount")) or 0),
@@ -16027,7 +16423,7 @@ relation ontology-assertion,
                     "reasoningMode": TYPEDB_NATIVE_BLOCKED_MODE,
                     "reasonCode": str(function_sync_result.get("reasonCode") or "typedbSchemaFunctionProvisioning"),
                     "reason": (
-                        "TypeDB schema function deployment is still being staged; "
+                        "TypeDB schema function prewarm is still being staged; "
                         "the previous verified InferenceBox is retained. "
                         + str(function_sync_result.get("reason") or "")[:180]
                     ),
@@ -16041,7 +16437,7 @@ relation ontology-assertion,
                     "pythonCompatibilityReasonerUsed": False,
                     "preservedPreviousInference": True,
                     "retryable": True,
-                    "recommendedRetryAfterSeconds": 30,
+                    "recommendedRetryAfterSeconds": 10,
                     "clearResult": clear_result,
                     "nativeReasoningProfile": native_profile,
                     "functionSyncResult": function_sync_result,
@@ -20456,6 +20852,10 @@ def inference_rulebox_metadata(
         "typedbSchemaFunctionSyncStatus",
         "typedbSchemaFunctionSyncCached",
         "typedbSchemaFunctionSyncBypassed",
+        "typedbSchemaFunctionPrewarmReadinessChecked",
+        "typedbSchemaFunctionPrewarmReady",
+        "typedbSchemaFunctionPrewarmRequired",
+        "typedbSchemaFunctionPrewarmNamespace",
         "typedbSchemaFunctionSyncedCount",
         "typedbSchemaFunctionSkippedCount",
         "typedbSchemaFunctionFailedCount",

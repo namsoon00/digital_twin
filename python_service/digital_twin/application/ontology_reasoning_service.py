@@ -3128,10 +3128,10 @@ class OntologyReasoningRunner:
             "deferred-source-snapshot",
             "blocked-pending-abox-activation",
             "pending-abox-activation",
-            # A cold TypeDB server compiles the RuleBox in bounded candidate
-            # batches. Keep source events pending while the prior aligned
-            # generation remains active; this is controlled back-pressure, not
-            # an investment inference failure.
+            # The dedicated RuleBox prewarm worker compiles a cold TypeDB
+            # catalogue outside live inference. Keep source events pending
+            # while the prior aligned generation remains active; this is
+            # controlled back-pressure, not an investment inference failure.
             "deferred-schema-function-provisioning",
             # The candidate was safely rolled back to its predecessor because
             # durable InferenceBox readback did not prove the same generation.

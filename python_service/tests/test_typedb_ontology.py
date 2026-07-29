@@ -50,6 +50,7 @@ from digital_twin.infrastructure.typedb_ontology import (
     TYPEDB_NATIVE_REASONING_PROFILE_VERSION,
     TYPEDB_NATIVE_RULE_ENGINE_VERSION,
     TYPEDB_PROJECTION_COORDINATOR_WORLD_ID,
+    TYPEDB_SCHEMA_FUNCTION_PREWARM_PARAMETERIZED_WORLD_ID,
     TYPEDB_PROMOTED_NUMERIC_ATTRIBUTES,
     TYPEDB_PROMOTED_TEXT_ATTRIBUTES,
     node_boxes,
@@ -2665,7 +2666,7 @@ class TypeDBOntologyRepositoryTests(unittest.TestCase):
                     "nativeRulePlannerTopology": topology,
                 }), \
                 patch.object(repository, "rulebox_snapshot", return_value=rule_snapshot), \
-                patch.object(repository, "sync_typedb_native_rule_functions", return_value={"status": "ok"}), \
+                patch.object(repository, "schema_function_prewarm_readiness", return_value={"status": "ok"}), \
                 patch.object(repository, "match_typedb_native_rules", return_value=native_match), \
                 patch.object(repository, "load_graph_for_native_matches") as graph_load:
             result = repository.run_rulebox({"symbols": ["005930"]})
@@ -6531,6 +6532,64 @@ class TypeDBOntologyRepositoryTests(unittest.TestCase):
         self.assertEqual(1, len(repository.fake_driver.queries))
         self.assertTrue(repository.fake_driver.queries[0].lstrip().startswith("define"))
 
+    def test_typedb_schema_function_prewarm_readiness_never_starts_a_schema_sync(self):
+        repository = TypeDBOntologyGraphRepository("127.0.0.1:1729")
+        rule = default_graph_inference_rules()[0]
+
+        with patch.object(repository, "probe_typedb_native_rule_functions", return_value={
+            "status": "missing",
+            "available": False,
+            "probedCount": 0,
+            "missingRuleIds": [rule.rule_id],
+            "reasonCode": "typedbSchemaFunctionMissing",
+        }) as probe, patch.object(repository, "sync_typedb_native_rule_functions") as sync:
+            result = repository.schema_function_prewarm_readiness([rule])
+
+        probe.assert_called_once_with([rule], "")
+        sync.assert_not_called()
+        self.assertEqual("provisioning", result["status"])
+        self.assertTrue(result["schemaFunctionPrewarmRequired"])
+        self.assertFalse(result["schemaFunctionSyncUsed"])
+        self.assertEqual([rule.rule_id], result["pendingRuleIds"])
+
+    def test_typedb_rulebox_prewarm_prepares_legacy_and_parameterized_namespaces(self):
+        repository = TypeDBOntologyGraphRepository("127.0.0.1:1729")
+        rule = default_graph_inference_rules()[0]
+        snapshot = {
+            "configured": True,
+            "saved": True,
+            "status": "ok",
+            "graphStore": "typedb",
+            "rules": [rule.to_dict()],
+            "ruleCount": 1,
+        }
+        parameterized = {
+            "status": "provisioning",
+            "pendingRuleIds": [rule.rule_id],
+            "pendingRuleCount": 1,
+        }
+        legacy = {
+            "status": "ok",
+            "syncedCount": 1,
+            "syncedFunctionCount": 1,
+        }
+        with patch.object(repository, "rulebox_snapshot", return_value=snapshot), patch.object(
+            repository,
+            "sync_typedb_native_rule_functions",
+            side_effect=[parameterized, legacy],
+        ) as sync:
+            result = repository.prewarm_typedb_native_rule_functions()
+
+        self.assertEqual("provisioning", result["status"])
+        self.assertTrue(result["background"])
+        self.assertEqual([rule.rule_id], result["pendingRuleIds"])
+        self.assertEqual(1, sync.call_count)
+        self.assertEqual(
+            TYPEDB_SCHEMA_FUNCTION_PREWARM_PARAMETERIZED_WORLD_ID,
+            sync.call_args_list[0].kwargs["world_id"],
+        )
+        self.assertEqual("queued", result["namespaceResults"][1]["result"]["status"])
+
     def test_typedb_null_repository_is_explicitly_disabled(self):
         result = NullTypeDBOntologyGraphRepository().save_graph(PortfolioOntology("empty"))
 
@@ -7586,7 +7645,7 @@ class TypeDBOntologyRepositoryTests(unittest.TestCase):
         self.assertTrue(result["seeded"])
         self.assertEqual("ok", result["status"])
         self.assertEqual("deferred", result["schemaFunctionSync"]["status"])
-        self.assertEqual("candidate-scoped-staged", result["schemaFunctionSync"]["deploymentMode"])
+        self.assertEqual("dedicated-rulebox-prewarm-worker", result["schemaFunctionSync"]["deploymentMode"])
         self.assertEqual(1, result["schemaFunctionSync"]["ruleCount"])
 
     def test_typedb_rule_condition_rows_keep_node_kind_separate_from_condition_kind(self):
@@ -7961,7 +8020,7 @@ class TypeDBOntologyRepositoryTests(unittest.TestCase):
             captured["graph"] = inference_graph
             return {"configured": True, "saved": True, "status": "ok", "graphStore": "typedb"}
 
-        with patch.object(repository, "has_box_rows", return_value=True), patch.object(repository, "active_abox_metadata", return_value={"status": "ok", "aboxSnapshotId": "abox-snapshot:test"}), patch.object(repository, "rulebox_snapshot", return_value=rule_snapshot), patch.object(repository, "sync_typedb_native_rule_functions", return_value={"status": "ok", "syncedCount": 1, "syncedFunctionCount": 1, "skippedCount": 0, "failedCount": 0}), patch.object(repository, "match_typedb_native_rules", return_value=native_match), patch.object(repository, "clear_inferencebox", return_value={"status": "ok", "graphStore": "typedb"}), patch.object(repository, "load_graph_for_native_matches", return_value=graph), patch.object(repository, "write_inferencebox_graph", side_effect=capture_inferencebox):
+        with patch.object(repository, "has_box_rows", return_value=True), patch.object(repository, "active_abox_metadata", return_value={"status": "ok", "aboxSnapshotId": "abox-snapshot:test"}), patch.object(repository, "rulebox_snapshot", return_value=rule_snapshot), patch.object(repository, "schema_function_prewarm_readiness", return_value={"status": "ok", "syncedCount": 1, "syncedFunctionCount": 1, "skippedCount": 0, "failedCount": 0}), patch.object(repository, "match_typedb_native_rules", return_value=native_match), patch.object(repository, "clear_inferencebox", return_value={"status": "ok", "graphStore": "typedb"}), patch.object(repository, "load_graph_for_native_matches", return_value=graph), patch.object(repository, "write_inferencebox_graph", side_effect=capture_inferencebox):
             result = repository.run_rulebox({"clearInference": True})
 
         self.assertEqual("ok", result["status"])
@@ -8036,7 +8095,8 @@ class TypeDBOntologyRepositoryTests(unittest.TestCase):
                     "aboxSnapshotId": "abox-snapshot:test",
                 }), \
                 patch.object(repository, "rulebox_snapshot", return_value=rule_snapshot), \
-                patch.object(repository, "sync_typedb_native_rule_functions", return_value=function_sync) as sync, \
+                patch.object(repository, "schema_function_prewarm_readiness", return_value=function_sync) as readiness, \
+                patch.object(repository, "sync_typedb_native_rule_functions") as sync, \
                 patch.object(repository, "match_typedb_native_rules") as match:
             result = repository.run_rulebox({"symbols": ["005930"]})
 
@@ -8045,7 +8105,8 @@ class TypeDBOntologyRepositoryTests(unittest.TestCase):
         self.assertTrue(result["retryable"])
         self.assertEqual(3, result["typedbSchemaFunctionPendingCount"])
         self.assertEqual(function_sync, result["functionSyncResult"])
-        self.assertEqual([rule.rule_id], [item.rule_id for item in sync.call_args.args[0]])
+        self.assertEqual([rule.rule_id], [item.rule_id for item in readiness.call_args.args[0]])
+        sync.assert_not_called()
         match.assert_not_called()
 
     def test_typedb_rulebox_accepts_scoped_source_generations_through_one_worldview_manifest(self):
@@ -8136,7 +8197,7 @@ class TypeDBOntologyRepositoryTests(unittest.TestCase):
                     "nativeRuleEvidenceReadIndex": scoped_evidence_index,
                 }), \
                 patch.object(repository, "rulebox_snapshot", return_value=rule_snapshot), \
-                patch.object(repository, "sync_typedb_native_rule_functions", return_value={
+                patch.object(repository, "schema_function_prewarm_readiness", return_value={
                     "status": "ok", "syncedCount": 1, "syncedFunctionCount": 1,
                     "skippedCount": 0, "failedCount": 0,
                 }), \
@@ -8280,7 +8341,7 @@ class TypeDBOntologyRepositoryTests(unittest.TestCase):
             captured["graph"] = graph
             return {"configured": True, "saved": True, "status": "ok", "graphStore": "typedb"}
 
-        with patch.object(repository, "has_box_rows", return_value=True), patch.object(repository, "active_abox_metadata", return_value={"status": "ok", "aboxSnapshotId": "abox-snapshot:test"}), patch.object(repository, "rulebox_snapshot", return_value=rule_snapshot), patch.object(repository, "sync_typedb_native_rule_functions", return_value={"status": "ok", "syncedCount": 1, "skippedCount": 0, "failedCount": 0}), patch.object(repository, "match_typedb_native_rules", return_value=native_match), patch.object(repository, "load_graph_for_native_matches", return_value=PortfolioOntology("empty")), patch.object(repository, "write_inferencebox_graph", side_effect=save_empty_generation) as write_mock, patch.object(repository, "clear_inferencebox") as clear_mock:
+        with patch.object(repository, "has_box_rows", return_value=True), patch.object(repository, "active_abox_metadata", return_value={"status": "ok", "aboxSnapshotId": "abox-snapshot:test"}), patch.object(repository, "rulebox_snapshot", return_value=rule_snapshot), patch.object(repository, "schema_function_prewarm_readiness", return_value={"status": "ok", "syncedCount": 1, "skippedCount": 0, "failedCount": 0}), patch.object(repository, "match_typedb_native_rules", return_value=native_match), patch.object(repository, "load_graph_for_native_matches", return_value=PortfolioOntology("empty")), patch.object(repository, "write_inferencebox_graph", side_effect=save_empty_generation) as write_mock, patch.object(repository, "clear_inferencebox") as clear_mock:
             result = repository.run_rulebox({"forceClearInference": True, "allowDestructiveInferenceClear": True})
 
         write_mock.assert_called_once()
@@ -8466,7 +8527,7 @@ class TypeDBOntologyRepositoryTests(unittest.TestCase):
             }],
         }
 
-        with patch.object(repository, "has_box_rows", return_value=True), patch.object(repository, "active_abox_metadata", return_value={"status": "ok", "aboxSnapshotId": "abox-snapshot:save-failure"}), patch.object(repository, "rulebox_snapshot", return_value=rule_snapshot), patch.object(repository, "sync_typedb_native_rule_functions", return_value={"status": "ok", "syncedCount": 1, "syncedFunctionCount": 1, "skippedCount": 0, "failedCount": 0}), patch.object(repository, "match_typedb_native_rules", return_value=native_match), patch.object(repository, "clear_inferencebox", return_value={"status": "ok", "graphStore": "typedb"}), patch.object(repository, "load_graph_for_native_matches", return_value=graph), patch.object(repository, "write_inferencebox_graph", return_value={"configured": True, "saved": False, "status": "error", "reason": "write failed"}):
+        with patch.object(repository, "has_box_rows", return_value=True), patch.object(repository, "active_abox_metadata", return_value={"status": "ok", "aboxSnapshotId": "abox-snapshot:save-failure"}), patch.object(repository, "rulebox_snapshot", return_value=rule_snapshot), patch.object(repository, "schema_function_prewarm_readiness", return_value={"status": "ok", "syncedCount": 1, "syncedFunctionCount": 1, "skippedCount": 0, "failedCount": 0}), patch.object(repository, "match_typedb_native_rules", return_value=native_match), patch.object(repository, "clear_inferencebox", return_value={"status": "ok", "graphStore": "typedb"}), patch.object(repository, "load_graph_for_native_matches", return_value=graph), patch.object(repository, "write_inferencebox_graph", return_value={"configured": True, "saved": False, "status": "error", "reason": "write failed"}):
             result = repository.run_rulebox({"clearInference": True})
 
         self.assertEqual("error", result["status"])

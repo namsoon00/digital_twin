@@ -50,6 +50,7 @@ from ..application.ontology_reasoning_service import (
 )
 from ..application.ontology_maintenance_service import OntologyMaintenanceRunner
 from ..application.ontology_inference_detail_service import OntologyInferenceDetailRunner
+from ..application.ontology_rulebox_prewarm_service import OntologyRuleboxPrewarmRunner
 from ..application.ontology_world_projection_service import OntologyWorldProjectionRunner
 from ..application.ontology_lab_service import OntologyLabService
 from ..application.ontology_rule_candidate_service import RuleChangeCandidateProposalService
@@ -741,6 +742,15 @@ def build_ontology_inference_detail_runner(settings=None) -> OntologyInferenceDe
         settings=configured_settings,
         worker_id=os.environ.get("ONTOLOGY_INFERENCE_DETAIL_WORKER_ID") or "",
         reasoning_queue_probe=build_ontology_reasoning_queue_probe(configured_settings),
+    )
+
+
+def build_ontology_rulebox_prewarm_runner(settings=None) -> OntologyRuleboxPrewarmRunner:
+    """Build the isolated compiler worker for the active TypeDB RuleBox."""
+    configured_settings = settings or runtime_settings()
+    return OntologyRuleboxPrewarmRunner(
+        ontology_repository=ontology_repository_from_settings(configured_settings),
+        settings=configured_settings,
     )
 
 

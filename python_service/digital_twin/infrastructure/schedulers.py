@@ -616,6 +616,91 @@ class OntologyInferenceDetailScheduler(OntologyWorldProjectionScheduler):
             wait_until_running(lambda: self.running, end_at)
 
 
+class OntologyRuleboxPrewarmScheduler:
+    """Run bounded RuleBox compilation outside the live inference worker."""
+
+    def __init__(self, runner, interval_seconds: int, error_reporter=None, isolated_cycle=None):
+        self.runner = runner
+        self.interval_seconds = max(5, int(interval_seconds or 10))
+        self.error_reporter = error_reporter or operational_error_reporter()
+        self.isolated_cycle = isolated_cycle
+        self.last_signature = ""
+        self.last_report_at = 0.0
+        self.running = True
+
+    def stop(self, *_args) -> None:
+        self.running = False
+        if self.isolated_cycle:
+            self.isolated_cycle.stop(self.execution_timeout_grace_seconds())
+
+    def process_isolation_enabled(self) -> bool:
+        configured = getattr(self.runner, "process_isolation_enabled", None)
+        return bool(self.isolated_cycle) and (not callable(configured) or bool(configured()))
+
+    def execution_timeout_seconds(self) -> int:
+        configured = getattr(self.runner, "execution_timeout_seconds", None)
+        return max(30, int(configured() if callable(configured) else 180))
+
+    def execution_timeout_grace_seconds(self) -> int:
+        configured = getattr(self.runner, "execution_timeout_grace_seconds", None)
+        return max(1, int(configured() if callable(configured) else 10))
+
+    def run_once(self):
+        if not self.process_isolation_enabled():
+            return self.runner.run_once()
+        return self.isolated_cycle.run_once(
+            0,
+            self.execution_timeout_seconds(),
+            self.execution_timeout_grace_seconds(),
+        )
+
+    def should_report(self, result: dict, started: float) -> bool:
+        status = str(result.get("status") or "unknown")
+        try:
+            pending = int(result.get("pendingRuleCount") or 0)
+        except (TypeError, ValueError):
+            pending = 0
+        signature = status + "|" + str(pending) + "|" + str(result.get("reason") or "")[:120]
+        if signature != self.last_signature or started - self.last_report_at >= 300.0:
+            self.last_signature = signature
+            self.last_report_at = started
+            return status not in {"disabled"}
+        return False
+
+    def run_forever(self) -> None:
+        install_stop_handlers(self.stop)
+        print(
+            "Python ontology RuleBox prewarm worker started. interval="
+            + str(self.interval_seconds)
+            + "s mode="
+            + ("isolated" if self.process_isolation_enabled() else "in-process")
+        )
+        while self.running:
+            started = time.monotonic()
+            try:
+                result = self.run_once()
+                if self.should_report(result, started):
+                    print(
+                        "Ontology RuleBox prewarm "
+                        + str(result.get("status") or "unknown")
+                        + " pending="
+                        + str(result.get("pendingRuleCount") or 0)
+                        + " ready="
+                        + str(bool(result.get("functionsReady"))),
+                        flush=True,
+                    )
+            except Exception as error:  # noqa: BLE001 - live inference keeps its own safe prior generation.
+                print("Python ontology RuleBox prewarm worker error: " + str(error), flush=True)
+                report_runtime_error(
+                    self.error_reporter,
+                    "Python ontology RuleBox prewarm worker",
+                    error,
+                    "TypeDB RuleBox schema function prewarm",
+                )
+            end_at = time.monotonic() + max(1.0, self.interval_seconds - (time.monotonic() - started))
+            wait_until_running(lambda: self.running, end_at)
+
+
 class OntologyMaintenanceScheduler:
     """Run low-priority scoped ABox retention outside the reasoning worker.
 

@@ -1053,7 +1053,8 @@ class OntologyRuleBoxTests(unittest.TestCase):
             def clear_inferencebox(self):
                 return {"configured": True, "status": "ok", "graphStore": "typedb", "clearedBox": "InferenceBox"}
 
-            def sync_typedb_native_rule_functions(self, rules, force=False):
+            def schema_function_prewarm_readiness(self, rules, world_id=""):
+                del world_id
                 rule_list = list(rules or [])
                 return {
                     "configured": True,

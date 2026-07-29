@@ -918,6 +918,7 @@ def build_ontology_lab_service(settings=None) -> OntologyLabService:
         rule_candidate_service=build_rule_change_candidate_service(configured_settings),
         strategy_proposal_service=build_investment_strategy_proposal_service(configured_settings),
         notification_queue=stores.notification_job_store(configured_settings),
+        reasoning_queue_probe=build_ontology_reasoning_queue_probe(configured_settings),
         settings=configured_settings,
     )
 

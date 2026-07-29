@@ -6254,6 +6254,54 @@ class TypeDBOntologyGraphRepository(GraphStoreOntologyRowMapperMixin, ScopedABox
     def active_tbox_metadata(self) -> Dict[str, object]:
         if not self.address:
             return NullTypeDBOntologyGraphRepository().active_tbox_metadata()
+        # A static-seed manifest is a keyed, content-addressed record written
+        # only after the matching TBox generation and schema contract are
+        # ready. Reading every static TBox node and relation here made each
+        # live ABox projection pay for an unbounded TypeQL graph scan.
+        manifest = self.read_seed_static_manifest()
+        manifest_metadata = dict(manifest.get("metadata") or {})
+        manifest_status = str(manifest.get("status") or "")
+        tbox_version = str(manifest_metadata.get("tboxVersion") or "")
+        tbox_fingerprint = str(manifest_metadata.get("tboxFingerprint") or "")
+        if manifest_status == "ok" and tbox_version and tbox_fingerprint:
+            box_counts = manifest_metadata.get("boxCounts")
+            tbox_counts = dict(box_counts.get("TBox") or {}) if isinstance(box_counts, dict) else {}
+            fallback = default_tbox_metadata()
+            expected_schema = self.base_schema_contract_metadata()
+            stored_schema_version = str(manifest_metadata.get("schemaContractVersion") or "")
+            stored_schema_fingerprint = str(manifest_metadata.get("schemaContractFingerprint") or "")
+            schema_current = (
+                stored_schema_version == str(expected_schema.get("schemaContractVersion") or "")
+                and stored_schema_fingerprint == str(expected_schema.get("schemaContractFingerprint") or "")
+            )
+            metadata = active_tbox_metadata_from_rows(
+                {
+                    "entities": [{
+                        "entityCount": int(tbox_counts.get("entityCount") or fallback.get("entityCount") or 1),
+                        "version": tbox_version,
+                        "fingerprint": tbox_fingerprint,
+                        "updatedAt": str(manifest_metadata.get("updatedAt") or ""),
+                    }],
+                    "relations": [{
+                        "relationCount": int(tbox_counts.get("relationCount") or fallback.get("relationCount") or 0),
+                    }],
+                },
+                "typedb-static-seed-manifest",
+            )
+            metadata.update({
+                "graphStore": "typedb",
+                "source": "typedb-static-seed-manifest",
+                "storeSource": "typedb-static-seed-manifest",
+                "semanticStorage": {
+                    "contractVersion": SEMANTIC_STORAGE_CONTRACT_VERSION,
+                    "physicalStorage": "typedb-logical-tbox-subtypes",
+                    "physicalClassTypeCount": len(semantic_class_types()),
+                    "physicalRelationTypeCount": len(semantic_relation_types()),
+                    "schemaContractStatus": "current" if schema_current else "stale",
+                    "schemaContractFingerprint": str(expected_schema.get("schemaContractFingerprint") or ""),
+                },
+            })
+            return metadata
         try:
             entity_rows = self.read_entity_rows(["TBox"])
             relation_rows = self.read_relation_rows(["TBox"])
@@ -8101,25 +8149,46 @@ class TypeDBOntologyGraphRepository(GraphStoreOntologyRowMapperMixin, ScopedABox
         so the hand-off must survive a worker or server restart. A control row
         makes that otherwise transient state observable and recoverable.
         """
+        clean_world_id = str(world_id or "").strip()
+        # The pending-control entity has a deterministic ID per world.  The
+        # old kind/world scan touched every ontology-node on each live
+        # projection merely to prove that no interrupted activation existed.
+        # A keyed lookup preserves the same journal semantics without making
+        # an empty recovery check compete with market inference.
+        if clean_world_id:
+            world_suffix = ":world:" + hashlib.sha256(clean_world_id.encode("utf-8")).hexdigest()[:16]
+            control_id = "abox-activation-pending" + world_suffix
+            id_clause = "has ontology-id " + typedb_string(control_id) + ", "
+        else:
+            control_id = ""
+            id_clause = "has ontology-id $id, "
         query = (
             "match $n isa ontology-node, "
-            "has ontology-id $id, "
-            "has ontology-label $label, "
+            + id_clause
+            + "has ontology-label $label, "
             "has ontology-kind \"abox-activation-pending\", "
             "has ontology-box \"ABoxControl\", "
-            + ("has ontology-world-id " + typedb_string(world_id) + ", " if str(world_id or "").strip() else "")
+            + ("has ontology-world-id " + typedb_string(clean_world_id) + ", " if clean_world_id else "")
             + "has ontology-snapshot-id $snapshotId, "
             "has ontology-updated-at $updatedAt, "
             "has ontology-json $json;"
         )
-        return self.entity_rows_from_typeql(
-            self.read_rows(
-                query,
-                ["id", "label", "kind", "snapshotId", "updatedAt", "json"],
-                label="typedb.abox-activation-pending",
-            ),
-            "ABoxControl",
+        columns = ["label", "kind", "snapshotId", "updatedAt", "json"] if control_id else [
+            "id", "label", "kind", "snapshotId", "updatedAt", "json",
+        ]
+        rows = self.read_rows(
+            query,
+            columns,
+            label="typedb.abox-activation-pending",
         )
+        # A literal ``ontology-id`` is a keyed TypeQL lookup, so TypeDB does
+        # not bind an ``$id`` variable for the generic row mapper. Restore the
+        # known deterministic control id before mapping; otherwise the mapper
+        # correctly filters the row as unidentified and a staged candidate
+        # appears to have vanished.
+        if control_id:
+            rows = [{**dict(row or {}), "id": control_id} for row in rows or []]
+        return self.entity_rows_from_typeql(rows, "ABoxControl")
 
     def pending_abox_activation(self, world_id: str = "") -> Dict[str, object]:
         rows = sorted(

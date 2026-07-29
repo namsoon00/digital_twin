@@ -1,7 +1,7 @@
 import hashlib
 import json
 from dataclasses import fields
-from typing import Dict, Iterable, List
+from typing import Callable, Dict, Iterable, List
 
 from ..domain.ontology_contracts import OntologyEntity, OntologyRelation, PortfolioOntology, entity_id
 from ..domain.ontology_experiments import (
@@ -84,6 +84,7 @@ class OntologyLabService:
         rule_candidate_service=None,
         strategy_proposal_service=None,
         notification_queue=None,
+        reasoning_queue_probe: Callable[[], Dict[str, object]] = None,
         settings: Dict[str, object] = None,
     ):
         self.ontology_repository = ontology_repository
@@ -92,6 +93,7 @@ class OntologyLabService:
         self.rule_candidate_service = rule_candidate_service
         self.strategy_proposal_service = strategy_proposal_service
         self.notification_queue = notification_queue
+        self.reasoning_queue_probe = reasoning_queue_probe
         self.settings = dict(settings or {})
 
     def list(self, limit: int = 8, offset: int = 0, summary: bool = True) -> Dict[str, object]:
@@ -184,6 +186,49 @@ class OntologyLabService:
     def notification_configured(self) -> bool:
         return bool(self.notification_queue and hasattr(self.notification_queue, "enqueue"))
 
+    def defer_while_reasoning_pending(self) -> bool:
+        return truthy(self.settings.get("ontologyLabDeferWhenReasoningPending"), True)
+
+    def reasoning_queue_state(self) -> Dict[str, object]:
+        if not callable(self.reasoning_queue_probe):
+            return {"status": "not-configured", "effectivePendingCount": 0}
+        try:
+            value = self.reasoning_queue_probe()
+        except Exception as error:  # noqa: BLE001 - lab work must never block live reasoning on a probe failure.
+            return {"status": "error", "effectivePendingCount": 0, "reason": str(error)[:180]}
+        return dict(value or {}) if isinstance(value, dict) else {
+            "status": "invalid",
+            "effectivePendingCount": 0,
+        }
+
+    @staticmethod
+    def reasoning_pending_count(state: Dict[str, object]) -> int:
+        for key in ["effectivePendingCount", "pendingEntryCount", "pendingCount"]:
+            if key not in (state or {}) or (state or {}).get(key) in (None, ""):
+                continue
+            try:
+                value = int(float((state or {}).get(key)))
+            except (TypeError, ValueError):
+                continue
+            if value >= 0:
+                return value
+        return 0
+
+    def reasoning_queue_deferral(self) -> Dict[str, object]:
+        queue = self.reasoning_queue_state()
+        pending = self.reasoning_pending_count(queue)
+        if not self.defer_while_reasoning_pending() or pending <= 0:
+            return {}
+        return {
+            "status": "deferred-reasoning-queue",
+            "processedCount": 0,
+            "runCount": 0,
+            "skippedCount": 0,
+            "experiments": [],
+            "reasoningQueue": queue,
+            "reason": "라이브 투자 판단 추론이 " + str(pending) + "건 대기 중이라 온톨로지 실험 작업을 뒤로 미룹니다.",
+        }
+
     def status(self) -> Dict[str, object]:
         experiments = self.experiment_store.list()
         statuses: Dict[str, int] = {}
@@ -210,6 +255,8 @@ class OntologyLabService:
             "autoApplyNeedsReviewEnabled": self.auto_apply_needs_review_enabled(),
             "autoNotifyEnabled": self.auto_notify_enabled(),
             "notificationConfigured": self.notification_configured(),
+            "deferWhenReasoningPending": self.defer_while_reasoning_pending(),
+            "reasoningQueue": self.reasoning_queue_state(),
             "latestRun": latest_run,
             "promotionSummary": ontology_promotion_summary(experiments),
             "experiments": [self.experiment_summary_payload(item) for item in experiments[:8]],
@@ -335,6 +382,9 @@ class OntologyLabService:
     def auto_suggest(self, symbols: Iterable[str] = None, trigger: str = "ontology-lab-auto-suggest") -> Dict[str, object]:
         if not self.enabled():
             return {"status": "disabled", "reason": "Ontology lab is disabled.", "createdCount": 0}
+        queue_deferral = self.reasoning_queue_deferral()
+        if queue_deferral:
+            return {**queue_deferral, "createdCount": 0, "autoSuggest": True}
         if not self.auto_suggest_enabled():
             return {"status": "disabled", "reason": "Ontology rule candidate AI is disabled.", "createdCount": 0}
         if not self.auto_suggest_configured():
@@ -687,6 +737,9 @@ class OntologyLabService:
     def run_once(self, limit: int = 0, force: bool = False) -> Dict[str, object]:
         if not self.enabled():
             return {"status": "disabled", "processedCount": 0, "runCount": 0, "skippedCount": 0, "experiments": []}
+        queue_deferral = self.reasoning_queue_deferral()
+        if queue_deferral:
+            return queue_deferral
         active = [item for item in self.experiment_store.list() if item.status == ACTIVE_STATUS]
         if not active:
             return {"status": "idle", "processedCount": 0, "runCount": 0, "skippedCount": 0, "experiments": []}

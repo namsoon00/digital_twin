@@ -255,6 +255,13 @@ MYSQL_OPERATIONAL_INDEXES: Dict[str, Sequence[MySQLIndexDefinition]] = {
 
 
 MYSQL_OPERATIONAL_COLUMNS: Dict[str, Sequence[MySQLColumnDefinition]] = {
+    "monitor_snapshot_history": (
+        MySQLColumnDefinition(
+            "monitor_snapshot_history",
+            "projection_payload_json",
+            "LONGTEXT NULL",
+        ),
+    ),
     "service_accounts": (
         MySQLColumnDefinition(
             "service_accounts",

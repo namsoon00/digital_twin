@@ -3438,13 +3438,15 @@ class OntologyReasoningRunner:
             for symbol in selected_symbols or []
             if str(symbol or "").strip()
         ]
-        classes = ["research", "realtime-market", "portfolio", "global", "other"]
+        classes = ["verified-snapshot", "research", "realtime-market", "portfolio", "global", "other"]
         pending_counts = {work_class: 0 for work_class in classes}
         selected_counts = {work_class: 0 for work_class in classes}
         observed_at = []
         requested_at = []
         for event in pending:
-            pending_counts[event_work_class(event)] += 1
+            work_class = event_work_class(event)
+            pending_counts.setdefault(work_class, 0)
+            pending_counts[work_class] += 1
             stamp = self.event_source_observed_at(event)
             if stamp:
                 observed_at.append(stamp)
@@ -3452,7 +3454,9 @@ class OntologyReasoningRunner:
             if request_stamp:
                 requested_at.append(request_stamp)
         for event in selected:
-            selected_counts[event_work_class(event)] += 1
+            work_class = event_work_class(event)
+            selected_counts.setdefault(work_class, 0)
+            selected_counts[work_class] += 1
         fairness = fairness_drain or self.fairness_drain_state(selected_symbols, payload)
         configured_interval = self.projection_min_interval_seconds(pending)
         effective_interval = self.effective_projection_min_interval_seconds(

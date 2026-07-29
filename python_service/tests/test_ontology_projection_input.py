@@ -5,6 +5,7 @@ from copy import deepcopy
 from digital_twin.domain.investment_research import research_evidence_from_external_signals
 from digital_twin.domain.ontology_projection_input import (
     compact_external_signals_for_ontology,
+    compact_monitor_state_for_ontology,
     projection_input_summary,
     temporal_research_signals_for_symbol,
 )
@@ -204,6 +205,43 @@ class OntologyProjectionInputTests(unittest.TestCase):
         self.assertNotIn("NVDA", history_signals["researchEvidence"])
         self.assertNotIn("articleText", history_signals["researchEvidence"]["AAPL"][0]["payload"])
         self.assertEqual(original, metadata)
+
+    def test_monitor_history_projection_excludes_decisions_and_provider_archives(self):
+        source = self.source_signals()
+        state = {
+            "generatedAt": "2026-07-29T01:00:00Z",
+            "portfolio": {"totalValue": 1000},
+            "positions": {"AAPL": {"currentPrice": 200}},
+            "watchlist": {"NVDA": {"currentPrice": 180}},
+            "decisions": {"AAPL": {"decision": "매수"}},
+            "externalSignals": source,
+        }
+
+        projected = compact_monitor_state_for_ontology(state, target_symbols=["AAPL"])
+
+        self.assertEqual("2026-07-29T01:00:00Z", projected["generatedAt"])
+        self.assertIn("AAPL", projected["positions"])
+        self.assertNotIn("decisions", projected)
+        self.assertEqual({"AAPL"}, set(projected["externalSignals"]["researchEvidence"]))
+        self.assertNotIn("articleText", projected["externalSignals"]["researchEvidence"]["AAPL"][0]["payload"])
+
+    def test_monitor_history_projection_keeps_only_temporal_article_facts(self):
+        state = {
+            "generatedAt": "2026-07-29T01:00:00Z",
+            "positions": {"AAPL": {"currentPrice": 200}},
+            "externalSignals": self.source_signals(),
+        }
+
+        projected = compact_monitor_state_for_ontology(state, target_symbols=["AAPL"])
+        evidence_row = projected["externalSignals"]["researchEvidence"]["AAPL"][0]
+        parsed = research_evidence_from_external_signals("AAPL", projected["externalSignals"])
+
+        self.assertEqual("research:aapl:1", evidence_row["evidenceId"])
+        self.assertEqual("direct", evidence_row["payload"]["relationScope"])
+        self.assertNotIn("summary", evidence_row)
+        self.assertNotIn("aiAnalysis", evidence_row["payload"])
+        self.assertTrue(any(item.evidence_id == "research:aapl:1" for item in parsed))
+        self.assertLess(len(json.dumps(projected, ensure_ascii=False)), 20000)
 
 
 if __name__ == "__main__":

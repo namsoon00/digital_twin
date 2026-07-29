@@ -906,6 +906,7 @@ class PortfolioOntologyProjectionRecorder:
                 market_world_context=market_world_context,
                 target_symbols=target_symbols,
                 target_scoped_input=bool(target_symbols),
+                progress_callback=emit_progress,
             )
             graph = projection_graph["graph"]
             persistence_graph = projection_graph["persistenceGraph"]
@@ -2474,18 +2475,31 @@ class PortfolioOntologyProjectionRecorder:
         rule_catalog: Dict[str, object],
         target_symbols: List[str] = None,
         target_scoped_input: bool = False,
+        progress_callback: Callable[..., None] = None,
     ) -> tuple:
         """Build or safely clone the immutable pre-identity ABox graph pair."""
         stage_timings: Dict[str, int] = {}
+
+        def emit(stage: str, **details) -> None:
+            if not callable(progress_callback):
+                return
+            try:
+                progress_callback("graph_assembly." + str(stage or "unknown"), **details)
+            except Exception:
+                return
+
+        emit("observation_input.start")
         observation_input = snapshot.projection_observation_input(
             target_symbols if target_scoped_input else None
         )
         input_mode = str(observation_input.get("mode") or "full")
         input_symbols = list(observation_input.get("targetSymbols") or [])
+        emit("observation_input.done", inputMode=input_mode, targetSymbolCount=len(input_symbols))
         # TypeDB rules consume facts, research claims, and bounded summaries.
         # The full provider archive stays on the monitor snapshot for the
         # research/notification read models and is never copied into this live
         # ABox assembly path.
+        emit("external_signal_compaction.start")
         projection_external_signals = compact_external_signals_for_ontology(
             snapshot.external_signals,
             target_symbols=input_symbols if input_mode == "target-scoped" else None,
@@ -2496,11 +2510,19 @@ class PortfolioOntologyProjectionRecorder:
             projection_external_signals,
             target_symbols=input_symbols if input_mode == "target-scoped" else [],
         )
+        emit(
+            "external_signal_compaction.done",
+            retainedBytes=int(input_projection.get("projectedExternalSignalBytes") or 0),
+            sourceBytes=int(input_projection.get("sourceExternalSignalBytes") or 0),
+        )
         graph_input_snapshot = replace(snapshot, external_signals=projection_external_signals)
+        emit("active_tbox.start")
         active_tbox_started = time.perf_counter()
         active_tbox = self.active_tbox_context()
         stage_timings["activeTBoxReadMs"] = int((time.perf_counter() - active_tbox_started) * 1000)
+        emit("active_tbox.done", runtimeMs=stage_timings["activeTBoxReadMs"], status=str(active_tbox.get("status") or ""))
         cache_enabled = self.graph_assembly_cache_enabled()
+        emit("cache_key.start")
         cache_key = self.graph_assembly_cache_key(
             graph_input_snapshot,
             rule_catalog,
@@ -2508,6 +2530,8 @@ class PortfolioOntologyProjectionRecorder:
             target_symbols=input_symbols,
             input_mode=input_mode,
         ) if cache_enabled else ""
+        emit("cache_key.done", enabled=cache_enabled)
+        emit("memory_cache.start")
         cache_read_started = time.perf_counter()
         cache_result = SHARED_PORTFOLIO_GRAPH_ASSEMBLY_CACHE.get(
             cache_key,
@@ -2516,6 +2540,7 @@ class PortfolioOntologyProjectionRecorder:
         stage_timings["graphAssemblyCacheReadMs"] = int(
             (time.perf_counter() - cache_read_started) * 1000
         )
+        emit("memory_cache.done", runtimeMs=stage_timings["graphAssemblyCacheReadMs"], status=str(cache_result.get("status") or ""))
         if str(cache_result.get("status") or "") == "hit":
             return (
                 cache_result["graph"],
@@ -2533,6 +2558,7 @@ class PortfolioOntologyProjectionRecorder:
                 },
             )
 
+        emit("persistent_cache.start")
         persistent_cache_started = time.perf_counter()
         persistent_cache_result = self.persistent_graph_assembly_cache_get(cache_key) if cache_enabled else {"status": "disabled"}
         stage_timings["graphAssemblyPersistentCacheReadMs"] = int(
@@ -2541,6 +2567,7 @@ class PortfolioOntologyProjectionRecorder:
         stage_timings["graphAssemblyPersistentCacheHit"] = (
             1 if str(persistent_cache_result.get("status") or "") == "hit" else 0
         )
+        emit("persistent_cache.done", runtimeMs=stage_timings["graphAssemblyPersistentCacheReadMs"], status=str(persistent_cache_result.get("status") or ""))
         if str(persistent_cache_result.get("status") or "") == "hit":
             graph = persistent_cache_result["graph"]
             persistence_graph = persistent_cache_result["persistenceGraph"]
@@ -2566,18 +2593,22 @@ class PortfolioOntologyProjectionRecorder:
                 },
             )
 
+        emit("runtime_context.start")
         runtime_context_started = time.perf_counter()
         runtime_context = self.runtime_context(
             snapshot,
             active_tbox=active_tbox,
             target_symbols=input_symbols if input_mode == "target-scoped" else None,
+            progress_callback=lambda stage, **details: emit("runtime_context." + str(stage or "unknown"), **details),
         )
         stage_timings["runtimeContextMs"] = int((time.perf_counter() - runtime_context_started) * 1000)
+        emit("runtime_context.done", runtimeMs=stage_timings["runtimeContextMs"])
         decision_memory = runtime_context.get("decisionEpisodeProjection") if isinstance(runtime_context, dict) else {}
         if isinstance(decision_memory, dict):
             stage_timings["decisionEpisodeSourceCount"] = int(decision_memory.get("sourceEpisodeCount") or 0)
             stage_timings["decisionEpisodeIncludedCount"] = int(decision_memory.get("includedEpisodeCount") or 0)
             stage_timings["decisionEpisodeDroppedCount"] = int(decision_memory.get("droppedEpisodeCount") or 0)
+        emit("ontology_graph.start")
         assembly_started = time.perf_counter()
         graph = build_portfolio_ontology(
             observation_input.get("positions") or [],
@@ -2597,8 +2628,11 @@ class PortfolioOntologyProjectionRecorder:
             include_derived_decision_items=False,
             reference_positions=observation_input.get("referencePositions") or [],
         )
+        emit("ontology_graph.done", runtimeMs=int((time.perf_counter() - assembly_started) * 1000))
+        emit("persistence_graph.start")
         persistence_graph = self.graph_for_graph_store_persistence(graph, rule_catalog)
         stage_timings["ontologyGraphAssemblyMs"] = int((time.perf_counter() - assembly_started) * 1000)
+        emit("persistence_graph.done", runtimeMs=stage_timings["ontologyGraphAssemblyMs"])
         if cache_enabled:
             SHARED_PORTFOLIO_GRAPH_ASSEMBLY_CACHE.put(
                 cache_key,
@@ -2606,6 +2640,7 @@ class PortfolioOntologyProjectionRecorder:
                 persistence_graph,
                 self.graph_assembly_cache_max_entries(),
             )
+            emit("persistent_cache_write.start")
             persistent_cache_write_started = time.perf_counter()
             persistent_cache_write = self.persistent_graph_assembly_cache_put(
                 cache_key,
@@ -2617,6 +2652,7 @@ class PortfolioOntologyProjectionRecorder:
             )
             if str(persistent_cache_write.get("status") or "") == "stored":
                 stage_timings["graphAssemblyPersistentCacheStored"] = 1
+            emit("persistent_cache_write.done", runtimeMs=stage_timings["graphAssemblyPersistentCacheWriteMs"], status=str(persistent_cache_write.get("status") or ""))
         return graph, persistence_graph, {
             "status": "miss" if cache_enabled else "disabled",
             "cacheLayer": "none",
@@ -2636,6 +2672,7 @@ class PortfolioOntologyProjectionRecorder:
         market_world_context=None,
         target_symbols: List[str] = None,
         target_scoped_input: bool = False,
+        progress_callback: Callable[..., None] = None,
     ) -> Dict[str, object]:
         """Assemble one immutable projection graph and its scoped identity."""
         graph_build_started = time.perf_counter()
@@ -2644,6 +2681,7 @@ class PortfolioOntologyProjectionRecorder:
             rule_catalog,
             target_symbols=target_symbols,
             target_scoped_input=target_scoped_input,
+            progress_callback=progress_callback,
         )
         runtime_stages = dict(graph_assembly.get("runtimeStages") or {})
         runtime_stages["graphAssemblyCacheHit"] = (
@@ -4783,7 +4821,16 @@ class PortfolioOntologyProjectionRecorder:
         snapshot: AccountSnapshot,
         active_tbox: Dict[str, object] = None,
         target_symbols: List[str] = None,
+        progress_callback: Callable[..., None] = None,
     ) -> Dict[str, object]:
+        def emit(stage: str, **details) -> None:
+            if not callable(progress_callback):
+                return
+            try:
+                progress_callback(str(stage or "unknown"), **details)
+            except Exception:
+                return
+
         if active_tbox is None:
             active_tbox = self.active_tbox_context()
         as_of = str(snapshot.generated_at or "").strip()
@@ -4800,25 +4847,52 @@ class PortfolioOntologyProjectionRecorder:
         }
         selected_symbols.intersection_update(available_symbols)
         decision_memory_symbols = selected_symbols or available_symbols
+        emit("decision_episodes.start", symbolCount=len(decision_memory_symbols))
         decision_memory = self.decision_episode_projection_context(
             snapshot,
             target_symbols=decision_memory_symbols,
         )
         decision_episodes = list(decision_memory.get("episodes") or [])
+        emit("decision_episodes.done", episodeCount=len(decision_episodes))
+        emit("metadata.start")
         metadata = self.factual_runtime_metadata(
             snapshot.metadata,
             target_symbols=selected_symbols or available_symbols,
             settings=self.settings,
         )
+        emit("metadata.done", metadataKeyCount=len(metadata))
         # Projection output is derived state, not a new market observation.
         # Feeding the previous ABox result back into the next ABox makes an
         # otherwise unchanged snapshot look materially different.
         metadata.pop("ontology", None)
         account_context = metadata.get("accountContext") if isinstance(metadata.get("accountContext"), dict) else {}
+        emit("decision_performance.start")
         decision_performance = evaluate_decision_performance(
             decision_episodes,
             minimum_sample_count=int(self.performance_setting("investmentBrainPerformanceMinimumSamples", 5)),
         )
+        emit("decision_performance.done")
+        emit("hypothesis_proposals.start")
+        hypothesis_proposals = self.hypothesis_proposal_context(
+            snapshot,
+            target_symbols=selected_symbols,
+        )
+        emit("hypothesis_proposals.done", proposalCount=len(hypothesis_proposals))
+        emit("hypothesis_lifecycles.start")
+        hypothesis_lifecycles = self.hypothesis_lifecycle_context(
+            snapshot,
+            target_symbols=selected_symbols,
+        )
+        emit("hypothesis_lifecycles.done", lifecycleCount=len(hypothesis_lifecycles))
+        emit("pipeline_health.start")
+        data_pipeline_health = self.data_pipeline_health_context(snapshot)
+        emit("pipeline_health.done")
+        emit("temporal_windows.start")
+        temporal_windows = self.temporal_observation_windows(
+            snapshot,
+            target_symbols=selected_symbols,
+        )
+        emit("temporal_windows.done", symbolCount=len(temporal_windows))
         return {
             "settings": dict(self.settings),
             "snapshotId": "abox-snapshot:" + hashlib.sha256(snapshot_seed.encode("utf-8")).hexdigest()[:16],
@@ -4840,23 +4914,14 @@ class PortfolioOntologyProjectionRecorder:
             "decisionEpisodes": decision_episodes,
             "decisionEpisodeProjection": dict(decision_memory.get("projection") or {}),
             "decisionPerformance": decision_performance,
-            "hypothesisProposals": self.hypothesis_proposal_context(
-                snapshot,
-                target_symbols=selected_symbols,
-            ),
-            "hypothesisLifecycles": self.hypothesis_lifecycle_context(
-                snapshot,
-                target_symbols=selected_symbols,
-            ),
+            "hypothesisProposals": hypothesis_proposals,
+            "hypothesisLifecycles": hypothesis_lifecycles,
             # A live pipeline health row may change while a delayed retry is
             # rebuilding the same account snapshot. Only health captured with
             # the snapshot is causal ABox input; current worker telemetry is
             # exposed through operational monitoring instead.
-            "dataPipelineHealth": self.data_pipeline_health_context(snapshot),
-            "temporalObservationWindows": self.temporal_observation_windows(
-                snapshot,
-                target_symbols=selected_symbols,
-            ),
+            "dataPipelineHealth": data_pipeline_health,
+            "temporalObservationWindows": temporal_windows,
         }
 
     @staticmethod
@@ -4886,7 +4951,7 @@ class PortfolioOntologyProjectionRecorder:
             result = {
                 key: deepcopy(value)
                 for key, value in state.items()
-                if key not in {"decisions"}
+                if key not in {"decisions", "externalSignals"}
             }
             signals = state.get("externalSignals")
             if isinstance(signals, dict):
@@ -4901,6 +4966,7 @@ class PortfolioOntologyProjectionRecorder:
                 nested.pop("ontology", None)
                 nested.pop("reasoningSnapshotReplay", None)
                 nested.pop("previousMonitorState", None)
+                nested.pop("previousState", None)
                 nested.pop("monitorStateHistory", None)
                 result["metadata"] = nested
             return result

@@ -30,6 +30,7 @@ from ..domain.notification_rules import (
 from ..domain.notification_templates import DEFAULT_NOTIFICATION_TEMPLATES, NotificationTemplate, alert_context, render_notification
 from ..domain.notifications import NotificationJob, notification_debug_number
 from ..domain.ontology_quality import OntologyQualitySample, build_ontology_quality_sample
+from ..domain.ontology_projection_input import compact_monitor_state_for_ontology
 from ..domain.portfolio import AccountSnapshot, AlertEvent, monitor_state_has_live_account_data
 from ..domain.repositories import MonitoringCycleRecordResult
 from ..domain.symbol_universe import ListedSymbol, normalize_market, normalize_symbol, utc_now_iso as symbol_utc_now_iso
@@ -107,15 +108,30 @@ class MySQLMonitorStore(MySQLOperationalConnection):
 
     def load_history(self, account_id: str, limit: int = 6) -> List[Dict[str, object]]:
         with self.connect() as connection:
+            # New rows carry a compact temporal projection.  Do not deserialize
+            # the research archive for every historical snapshot in the live
+            # TypeDB path.  A small raw fallback keeps pre-migration history
+            # usable until fresh monitor cycles replace it.
             rows = connection.execute(
                 """
-                SELECT payload_json FROM monitor_snapshot_history
+                SELECT projection_payload_json AS payload_json FROM monitor_snapshot_history
                 WHERE account_id = %s
+                  AND projection_payload_json <> ''
                 ORDER BY generated_at DESC
                 LIMIT %s
                 """,
                 (str(account_id or ""), max(1, int(limit or 6))),
             ).fetchall()
+            if not rows:
+                rows = connection.execute(
+                    """
+                    SELECT payload_json FROM monitor_snapshot_history
+                    WHERE account_id = %s
+                    ORDER BY generated_at DESC
+                    LIMIT %s
+                    """,
+                    (str(account_id or ""), min(6, max(1, int(limit or 6)))),
+                ).fetchall()
         history = [_json_loads(row["payload_json"], {}) for row in reversed(rows)]
         return [item for item in history if item]
 
@@ -135,6 +151,10 @@ class MySQLMonitorStore(MySQLOperationalConnection):
     def upsert_snapshot_state_with_connection(self, connection, account_id: str, state: Dict[str, object], stamp: str = "") -> None:
         updated_at = stamp or utc_now()
         generated_at = str(state.get("generatedAt") or updated_at)
+        temporal_projection = compact_monitor_state_for_ontology(
+            state,
+            settings=self.runtime_settings,
+        )
         connection.execute(
             """
             INSERT INTO monitor_snapshots (
@@ -158,11 +178,14 @@ class MySQLMonitorStore(MySQLOperationalConnection):
         )
         connection.execute(
             """
-            INSERT INTO monitor_snapshot_history (account_id, generated_at, payload_json, created_at)
-            VALUES (%s, %s, %s, %s)
-            ON DUPLICATE KEY UPDATE payload_json = VALUES(payload_json), created_at = VALUES(created_at)
+            INSERT INTO monitor_snapshot_history (
+                account_id, generated_at, payload_json, projection_payload_json, created_at
+            )
+            VALUES (%s, %s, %s, %s, %s)
+            ON DUPLICATE KEY UPDATE payload_json = VALUES(payload_json),
+                projection_payload_json = VALUES(projection_payload_json), created_at = VALUES(created_at)
             """,
-            (account_id, generated_at, json_dumps(state), updated_at),
+            (account_id, generated_at, json_dumps(state), json_dumps(temporal_projection), updated_at),
         )
 
     def upsert_snapshot_state(self, account_id: str, state: Dict[str, object]) -> None:

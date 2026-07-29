@@ -156,6 +156,19 @@ class VerifiedSnapshotReasoningTests(unittest.TestCase):
         self.assertEqual(1, len(entries))
         self.assertEqual("InvestmentCalendarEvent", entries[0]["mailboxSlotFamily"])
 
+    def test_queue_status_counts_verified_snapshot_work_without_a_key_error(self):
+        barrier = verified_monitor_snapshot_reasoning_event(snapshot())
+        runner = OntologyReasoningRunner(
+            event_reader=None,
+            cursor_store=None,
+            monitor_runner_factory=lambda: None,
+        )
+
+        dispatch = runner.queue_dispatch_summary([barrier], selected_requests=[barrier], selected_symbols=["AAPL"])
+
+        self.assertEqual(1, dispatch["pendingByClass"]["verified-snapshot"])
+        self.assertEqual(1, dispatch["selectedByClass"]["verified-snapshot"])
+
     def test_kis_tick_is_retained_as_source_data_without_starting_an_unreplayable_turn(self):
         events = EventBus()
         runner = KISRealtimeWebSocketRunner(

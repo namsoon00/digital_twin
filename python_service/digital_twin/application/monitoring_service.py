@@ -5,6 +5,7 @@ from typing import Callable, Dict, Iterable, List
 
 from ..domain.accounts import AccountConfig
 from ..domain.events import alerts_detected_event, monitoring_cycle_completed_event, snapshot_collected_event
+from ..domain.ontology_projection_input import compact_monitor_state_for_ontology
 from ..domain.portfolio import AccountSnapshot, AlertEvent
 from ..domain.repositories import MonitorAccountJob, MonitorAccountJobRepository, MonitorStateRepository, MonitoringCycleRecorder, OntologyProjectionRecorder, SnapshotMonitor
 
@@ -554,14 +555,13 @@ class MonitorRunner:
     def compact_previous_state(self, previous: dict) -> dict:
         if not isinstance(previous, dict) or not previous:
             return {}
-        return {
-            "generatedAt": previous.get("generatedAt"),
-            "portfolio": previous.get("portfolio") if isinstance(previous.get("portfolio"), dict) else {},
-            "positions": previous.get("positions") if isinstance(previous.get("positions"), dict) else {},
-            "watchlist": previous.get("watchlist") if isinstance(previous.get("watchlist"), dict) else {},
-            "decisions": previous.get("decisions") if isinstance(previous.get("decisions"), dict) else {},
-            "externalSignals": previous.get("externalSignals") if isinstance(previous.get("externalSignals"), dict) else {},
-        }
+        # Historical temporal concepts need facts, not the full provider
+        # archive.  Persisting raw article bodies here previously made every
+        # live projection decode the archive once per history row.
+        return compact_monitor_state_for_ontology(
+            previous,
+            settings=getattr(self.monitor, "settings", None),
+        )
 
     def load_snapshot_history(self, account_id: str) -> List[dict]:
         if hasattr(self.store, "load_history"):

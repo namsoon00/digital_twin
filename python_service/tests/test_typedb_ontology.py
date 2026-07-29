@@ -27,6 +27,7 @@ from digital_twin.domain.ontology_scopes import (
     merge_target_scoped_abox_manifest,
 )
 from digital_twin.domain.ontology_native_rule_planning import native_rule_planner_topology
+from digital_twin.domain.ontology_schema import default_tbox_metadata
 from digital_twin.domain.portfolio import AccountSnapshot, PortfolioSummary, Position, utc_now_iso
 from digital_twin.domain.ontology_worlds import market_world
 from digital_twin.domain.repositories import (
@@ -83,6 +84,61 @@ from digital_twin.infrastructure.typedb_ontology import (
 
 
 class TypeDBOntologyRepositoryTests(unittest.TestCase):
+    def test_pending_abox_activation_lookup_uses_the_world_scoped_control_id(self):
+        repository = TypeDBOntologyGraphRepository("127.0.0.1:1729")
+        world_id = "portfolio:local:default"
+        expected_id = "abox-activation-pending:world:" + hashlib.sha256(
+            world_id.encode("utf-8")
+        ).hexdigest()[:16]
+
+        with patch.object(repository, "read_rows", return_value=[{
+            "label": "activation pending",
+            "kind": "abox-activation-pending",
+            "snapshotId": "abox-manifest:next",
+            "updatedAt": "2026-07-29T00:00:00Z",
+            "json": json.dumps({
+                "candidateAboxSnapshotId": "abox-manifest:next",
+                "targetSymbols": ["AAPL"],
+            }),
+        }]) as read_rows:
+            rows = repository.abox_pending_activation_rows(world_id)
+
+        self.assertEqual(expected_id, rows[0]["id"])
+        self.assertEqual("abox-manifest:next", rows[0]["candidateAboxSnapshotId"])
+        query = read_rows.call_args.args[0]
+        self.assertIn('has ontology-id "' + expected_id + '"', query)
+        self.assertNotIn("has ontology-id $id", query)
+
+    def test_active_tbox_metadata_uses_keyed_static_manifest_without_scanning_tbox_rows(self):
+        repository = TypeDBOntologyGraphRepository("127.0.0.1:1729")
+        expected = default_tbox_metadata()
+        schema = repository.base_schema_contract_metadata()
+        manifest = {
+            "status": "ok",
+            "metadata": {
+                "tboxVersion": expected["version"],
+                "tboxFingerprint": expected["fingerprint"],
+                "schemaContractVersion": schema["schemaContractVersion"],
+                "schemaContractFingerprint": schema["schemaContractFingerprint"],
+                "boxCounts": {
+                    "TBox": {
+                        "entityCount": expected["entityCount"],
+                        "relationCount": expected["relationCount"],
+                    },
+                },
+            },
+        }
+
+        with patch.object(repository, "read_seed_static_manifest", return_value=manifest), \
+                patch.object(repository, "read_entity_rows", side_effect=AssertionError("TBox scan must not run")), \
+                patch.object(repository, "read_relation_rows", side_effect=AssertionError("TBox scan must not run")):
+            result = repository.active_tbox_metadata()
+
+        self.assertEqual("ok", result["status"])
+        self.assertEqual("typedb-static-seed-manifest", result["source"])
+        self.assertEqual(expected["fingerprint"], result["fingerprint"])
+        self.assertEqual("current", result["semanticStorage"]["schemaContractStatus"])
+
     def test_seed_write_bootstraps_schema_before_claiming_projection_coordinator(self):
         calls = []
 
@@ -5328,6 +5384,7 @@ class TypeDBOntologyRepositoryTests(unittest.TestCase):
         release_market_world = Event()
         quality_started = Event()
         release_quality = Event()
+        slow_path_wait_seconds = 8
 
         class FakeRepository:
             store_key = "typedb"
@@ -5362,14 +5419,14 @@ class TypeDBOntologyRepositoryTests(unittest.TestCase):
         class SlowMarketWorldRecorder(PortfolioOntologyProjectionRecorder):
             def project_market_world(self, _graph, _shared_world):
                 market_world_started.set()
-                if not release_market_world.wait(2):
+                if not release_market_world.wait(slow_path_wait_seconds):
                     raise AssertionError("slow market world test did not release")
                 return {"status": "ok", "materialFingerprint": "market-world-test"}
 
         class SlowQualityStore:
             def record_graph(self, _graph, source="monitoring", created_at=""):
                 quality_started.set()
-                if not release_quality.wait(2):
+                if not release_quality.wait(slow_path_wait_seconds):
                     raise AssertionError("slow quality record test did not release")
                 return SimpleNamespace(sample_id="quality-test", overall_state="ready")
 
@@ -5397,10 +5454,11 @@ class TypeDBOntologyRepositoryTests(unittest.TestCase):
         try:
             result = recorder.record_snapshot(snapshot)
             elapsed = time.monotonic() - started
-            # The synchronous slow paths wait for two seconds. Leave modest
-            # scheduler headroom for the full suite while still proving the
-            # recorder returns before either deferred path can complete.
-            self.assertLess(elapsed, 1.75)
+            # The synchronous slow paths wait much longer than this bound.
+            # The graph assembly itself can take a few seconds on a cold
+            # interpreter, so this verifies the non-blocking contract rather
+            # than a machine-dependent microbenchmark.
+            self.assertLess(elapsed, 4.0)
             self.assertEqual("queued-coalesced-market-world-projection", result["marketWorld"]["status"])
             self.assertTrue(result["marketWorld"]["eventuallyConsistent"])
             self.assertEqual("queued-coalesced-quality-record", result["qualityRecord"]["status"])

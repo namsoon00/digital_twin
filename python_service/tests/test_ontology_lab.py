@@ -200,6 +200,31 @@ def mark_native_materialization_ready(experiment, readiness_status="promote-cand
 
 
 class OntologyLabTests(unittest.TestCase):
+    def test_run_once_defers_to_live_reasoning_queue(self):
+        service = OntologyLabService(
+            FakeOntologyRepository(),
+            MemoryExperimentStore(),
+            reasoning_queue_probe=lambda: {"effectivePendingCount": 4, "status": "pending"},
+        )
+
+        result = service.run_once()
+
+        self.assertEqual("deferred-reasoning-queue", result["status"])
+        self.assertEqual(0, result["runCount"])
+        self.assertEqual(4, result["reasoningQueue"]["effectivePendingCount"])
+
+    def test_auto_suggest_defers_to_live_reasoning_queue(self):
+        service = OntologyLabService(
+            FakeOntologyRepository(),
+            MemoryExperimentStore(),
+            reasoning_queue_probe=lambda: {"pendingEntryCount": 2, "status": "pending"},
+        )
+
+        result = service.auto_suggest()
+
+        self.assertEqual("deferred-reasoning-queue", result["status"])
+        self.assertTrue(result["autoSuggest"])
+
     def test_strategy_proposal_hides_legacy_aggregate_scores_at_the_boundary(self):
         proposal = InvestmentStrategyProposal.from_dict({
             "id": "proposal-score-cleanup",

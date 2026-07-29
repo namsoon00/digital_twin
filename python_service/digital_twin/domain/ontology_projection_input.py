@@ -15,6 +15,7 @@ notification read models through the original monitor snapshot and stores.
 
 from __future__ import annotations
 
+from copy import deepcopy
 import json
 from typing import Dict, Iterable, Mapping, Set
 
@@ -36,6 +37,8 @@ SYMBOL_SIGNAL_GROUPS = {
 
 RESEARCH_ITEM_LIMIT = 12
 TEXT_LIMIT = 1200
+TEMPORAL_RESEARCH_ITEM_LIMIT = 3
+TEMPORAL_RESEARCH_TEXT_LIMIT = 420
 
 
 def _symbols(values: Iterable[object]) -> Set[str]:
@@ -305,6 +308,81 @@ def compact_research_evidence_item(value: object) -> Dict[str, object]:
     ]:
         if compact:
             result[key] = compact
+    return result
+
+
+def _compact_temporal_research_evidence_item(value: object) -> Dict[str, object]:
+    """Keep only the facts needed to compare an article across snapshots.
+
+    A temporal window needs to know whether a direct event existed and its
+    direction. It does not need the article summary, claim ledger, or AI
+    analysis again for every historical monitor row; those remain on the
+    source snapshot and are still available for the current decision.
+    """
+
+    source = value if isinstance(value, Mapping) else {}
+    result = _selected(
+        source,
+        [
+            "evidenceId", "evidence_id", "symbol", "kind", "source", "title", "url",
+            "polarity", "observedAt", "observed_at", "publishedAt", "published_at",
+            "eventType", "relationScope", "sourceKind", "sourceOrigin", "sourcePlatform",
+            "sourcePublisher", "materialityState", "sourceTrustState", "validationState",
+            "lifecycleState", "lifecycleChangedAt", "stockImpact", "stockImpactLabel",
+            "stockImpactPolarity", "stockImpactScore", "articleReadStatus",
+        ],
+        text_limit=TEMPORAL_RESEARCH_TEXT_LIMIT,
+        list_limit=4,
+        depth=1,
+    )
+    nested = source.get("payload") or source.get("rawPayload") or source.get("raw_payload")
+    payload_source = nested if isinstance(nested, Mapping) else source
+    payload = _selected(
+        payload_source,
+        [
+            "relationScope", "eventType", "sourceTrustState", "materialityState",
+            "validationState", "dataState", "sourceKind", "sourceOrigin", "sourcePlatform",
+            "sourcePublisher", "stockImpact", "stockImpactLabel", "stockImpactPolarity",
+            "stockImpactScore", "articleReadStatus", "bodyQualityState", "bodyQualityPassed",
+        ],
+        text_limit=240,
+        list_limit=4,
+        depth=1,
+    )
+    # Older stored evidence can carry these fields only on its envelope.
+    for key in [
+        "relationScope", "eventType", "sourceTrustState", "materialityState",
+        "validationState", "dataState", "sourceKind", "sourceOrigin", "sourcePlatform",
+        "sourcePublisher", "stockImpact", "stockImpactLabel", "stockImpactPolarity",
+        "stockImpactScore", "articleReadStatus", "bodyQualityState", "bodyQualityPassed",
+    ]:
+        if key not in payload and key in source:
+            payload[key] = _bounded_value(source.get(key), text_limit=240, list_limit=4, depth=1)
+    if payload:
+        result["payload"] = payload
+    return result
+
+
+def _compact_temporal_research_group(
+    value: object,
+    allowed_symbols: Set[str],
+) -> Dict[str, object]:
+    """Bound historical article facts independently from live research input."""
+
+    source = value if isinstance(value, Mapping) else {}
+    result = {}
+    for raw_symbol in sorted(source, key=lambda item: str(item)):
+        symbol = str(raw_symbol or "").upper().strip()
+        if not symbol or (allowed_symbols and symbol not in allowed_symbols):
+            continue
+        rows = source.get(raw_symbol) if isinstance(source.get(raw_symbol), list) else []
+        compact_rows = [
+            _compact_temporal_research_evidence_item(row)
+            for row in rows[:TEMPORAL_RESEARCH_ITEM_LIMIT]
+            if isinstance(row, Mapping) and str(row.get("title") or "").strip()
+        ]
+        if compact_rows:
+            result[symbol] = compact_rows
     return result
 
 
@@ -611,6 +689,53 @@ def compact_external_signals_for_ontology(
         compact = _compact_symbol_group(group, source.get(group), allowed_symbols)
         if compact:
             result[group] = compact
+    return result
+
+
+def compact_monitor_state_for_ontology(
+    state: Mapping[str, object] = None,
+    *,
+    target_symbols: Iterable[object] = None,
+    settings: Mapping[str, object] = None,
+) -> Dict[str, object]:
+    """Create the small historical state used by temporal ABox concepts.
+
+    Full monitor snapshots deliberately retain provider archives so research
+    and notification detail can be reconstructed later.  Those archives do
+    not belong in every historical row read by live reasoning: a 96-row
+    history of article bodies can turn a single quote update into hundreds of
+    megabytes of JSON decoding before TypeDB receives one fact.
+
+    This is a factual projection only.  It preserves the position, watchlist,
+    portfolio, and bounded research facts needed by temporal concepts and
+    omits derived decisions and provider document archives.
+    """
+
+    source = state if isinstance(state, Mapping) else {}
+    result: Dict[str, object] = {}
+    for key in ("generatedAt", "portfolio", "positions", "watchlist"):
+        value = source.get(key)
+        if value not in (None, ""):
+            result[key] = deepcopy(value)
+    signals = source.get("externalSignals")
+    if isinstance(signals, Mapping):
+        compact_signals = compact_external_signals_for_ontology(
+            signals,
+            target_symbols=target_symbols,
+            settings=settings,
+        )
+        # Historical windows only count and compare events. Keep the full
+        # compact research payload for the live snapshot, but store a much
+        # smaller evidence envelope for every prior monitor generation.
+        temporal_research = _compact_temporal_research_group(
+            signals.get("researchEvidence"),
+            projection_signal_symbols(target_symbols, settings),
+        )
+        if temporal_research:
+            compact_signals["researchEvidence"] = temporal_research
+        else:
+            compact_signals.pop("researchEvidence", None)
+        result["externalSignals"] = compact_signals
     return result
 
 

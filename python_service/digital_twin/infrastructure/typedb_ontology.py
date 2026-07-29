@@ -1355,10 +1355,11 @@ DEFAULT_TYPEDB_NATIVE_RULE_PARALLELISM = 4
 DEFAULT_TYPEDB_NATIVE_RULE_TARGET_PARALLELISM = 1
 # TypeDB recompiles the schema function graph at each deployment transaction.
 # A full RuleBox has dozens of generated functions, so a restart must never
-# submit that entire catalogue as one uninterruptible schema operation.  Three
-# functions keep the deployment transaction below the normal schema timeout on
-# the local runtime while still making deterministic progress on every retry.
-DEFAULT_TYPEDB_SCHEMA_FUNCTION_PROVISION_BATCH_SIZE = 3
+# submit that entire catalogue as one uninterruptible schema operation.  A
+# cold local compiler can retain a timed-out multi-function transaction after
+# the client exits; deploy one complete rule at a time so the next bounded
+# pass can make progress without keeping live inference behind a stale batch.
+DEFAULT_TYPEDB_SCHEMA_FUNCTION_PROVISION_BATCH_SIZE = 1
 # Large ABox migrations may need a long schema timeout. Generated functions do
 # not: their driver deadline stays short so a stalled compiler cannot retain
 # local TypeDB CPU after the deployment caller has stopped waiting.

@@ -53,6 +53,10 @@ from ..domain.ontology_projection_audit import (
     projection_source_snapshot,
     projection_run_from_payload,
 )
+from ..domain.ontology_projection_input import (
+    compact_external_signals_for_ontology,
+    projection_input_summary,
+)
 from ..domain.ontology_runtime_operations import (
     build_projection_runtime_observation,
     native_replay_validation,
@@ -927,6 +931,9 @@ class PortfolioOntologyProjectionRecorder:
                 }),
                 "sourcePositionCount": int(graph_assembly.get("sourcePositionCount") or 0),
                 "referencePositionCount": int(graph_assembly.get("referencePositionCount") or 0),
+                "externalSignalProjection": dict(
+                    graph_assembly.get("externalSignalProjection") or {}
+                ),
                 "fallback": False,
                 "fallbackReason": "",
             }
@@ -1034,6 +1041,9 @@ class PortfolioOntologyProjectionRecorder:
                     "targetSymbols": list(graph_assembly.get("targetSymbols") or []),
                     "sourcePositionCount": int(graph_assembly.get("sourcePositionCount") or 0),
                     "referencePositionCount": int(graph_assembly.get("referencePositionCount") or 0),
+                    "externalSignalProjection": dict(
+                        graph_assembly.get("externalSignalProjection") or {}
+                    ),
                     "fallback": True,
                     "fallbackReason": str(
                         target_scoped_patch.get("fallbackReason")
@@ -2446,7 +2456,7 @@ class PortfolioOntologyProjectionRecorder:
             metadata.pop("investmentBrain", None)
         source_snapshot["metadata"] = metadata
         payload = {
-            "version": "portfolio-graph-assembly-cache-v3",
+            "version": "portfolio-graph-assembly-cache-v4",
             "namespace": self.graph_assembly_cache_namespace(),
             "sourceSnapshot": stable_value(source_snapshot),
             "settings": stable_value(self.settings),
@@ -2472,12 +2482,27 @@ class PortfolioOntologyProjectionRecorder:
         )
         input_mode = str(observation_input.get("mode") or "full")
         input_symbols = list(observation_input.get("targetSymbols") or [])
+        # TypeDB rules consume facts, research claims, and bounded summaries.
+        # The full provider archive stays on the monitor snapshot for the
+        # research/notification read models and is never copied into this live
+        # ABox assembly path.
+        projection_external_signals = compact_external_signals_for_ontology(
+            snapshot.external_signals,
+            target_symbols=input_symbols if input_mode == "target-scoped" else None,
+            settings=self.settings,
+        )
+        input_projection = projection_input_summary(
+            snapshot.external_signals,
+            projection_external_signals,
+            target_symbols=input_symbols if input_mode == "target-scoped" else [],
+        )
+        graph_input_snapshot = replace(snapshot, external_signals=projection_external_signals)
         active_tbox_started = time.perf_counter()
         active_tbox = self.active_tbox_context()
         stage_timings["activeTBoxReadMs"] = int((time.perf_counter() - active_tbox_started) * 1000)
         cache_enabled = self.graph_assembly_cache_enabled()
         cache_key = self.graph_assembly_cache_key(
-            snapshot,
+            graph_input_snapshot,
             rule_catalog,
             active_tbox,
             target_symbols=input_symbols,
@@ -2503,6 +2528,7 @@ class PortfolioOntologyProjectionRecorder:
                     "targetSymbols": input_symbols,
                     "sourcePositionCount": len(observation_input.get("positions") or []),
                     "referencePositionCount": len(observation_input.get("referencePositions") or []),
+                    "externalSignalProjection": input_projection,
                     "runtimeStages": stage_timings,
                 },
             )
@@ -2535,6 +2561,7 @@ class PortfolioOntologyProjectionRecorder:
                     "targetSymbols": input_symbols,
                     "sourcePositionCount": len(observation_input.get("positions") or []),
                     "referencePositionCount": len(observation_input.get("referencePositions") or []),
+                    "externalSignalProjection": input_projection,
                     "runtimeStages": stage_timings,
                 },
             )
@@ -2559,7 +2586,7 @@ class PortfolioOntologyProjectionRecorder:
             # pass. Native rules must start from observed portfolio and
             # market facts, not use their own previous output as evidence.
             legacy_by_symbol={},
-            external_signals=snapshot.external_signals,
+            external_signals=projection_external_signals,
             portfolio_id=snapshot.account_id,
             runtime_context=runtime_context,
             # The realtime path persists only ABox facts. Static TBox
@@ -2597,6 +2624,7 @@ class PortfolioOntologyProjectionRecorder:
             "targetSymbols": input_symbols,
             "sourcePositionCount": len(observation_input.get("positions") or []),
             "referencePositionCount": len(observation_input.get("referencePositions") or []),
+            "externalSignalProjection": input_projection,
             "runtimeStages": stage_timings,
         }
 
@@ -4777,7 +4805,11 @@ class PortfolioOntologyProjectionRecorder:
             target_symbols=decision_memory_symbols,
         )
         decision_episodes = list(decision_memory.get("episodes") or [])
-        metadata = self.factual_runtime_metadata(snapshot.metadata)
+        metadata = self.factual_runtime_metadata(
+            snapshot.metadata,
+            target_symbols=selected_symbols or available_symbols,
+            settings=self.settings,
+        )
         # Projection output is derived state, not a new market observation.
         # Feeding the previous ABox result back into the next ABox makes an
         # otherwise unchanged snapshot look materially different.
@@ -4828,7 +4860,11 @@ class PortfolioOntologyProjectionRecorder:
         }
 
     @staticmethod
-    def factual_runtime_metadata(metadata: Dict[str, object] = None) -> Dict[str, object]:
+    def factual_runtime_metadata(
+        metadata: Dict[str, object] = None,
+        target_symbols=None,
+        settings: Dict[str, object] = None,
+    ) -> Dict[str, object]:
         """Keep historical market facts while removing derived decision output.
 
         Trend and change concepts still need the prior positions/watchlist
@@ -4836,17 +4872,29 @@ class PortfolioOntologyProjectionRecorder:
         output are rendered results, however, so carrying them into the next
         ABox would create a self-triggering inference loop.
         """
-        values = deepcopy(dict(metadata or {}))
-        values.pop("ontology", None)
+        source = dict(metadata or {})
+        values = {}
+        for key, value in source.items():
+            if key in {"ontology", "reasoningSnapshotReplay", "previousMonitorState", "previousState", "monitorStateHistory"}:
+                continue
+            values[key] = deepcopy(value)
         # This marker describes how the worker acquired the snapshot. It is
         # operational replay provenance, not a market fact for the ABox.
-        values.pop("reasoningSnapshotReplay", None)
-
         def factual_state(state: object) -> object:
             if not isinstance(state, dict):
                 return state
-            result = dict(state)
-            result.pop("decisions", None)
+            result = {
+                key: deepcopy(value)
+                for key, value in state.items()
+                if key not in {"decisions"}
+            }
+            signals = state.get("externalSignals")
+            if isinstance(signals, dict):
+                result["externalSignals"] = compact_external_signals_for_ontology(
+                    signals,
+                    target_symbols=target_symbols,
+                    settings=settings,
+                )
             nested = result.get("metadata")
             if isinstance(nested, dict):
                 nested = dict(nested)
@@ -4857,14 +4905,14 @@ class PortfolioOntologyProjectionRecorder:
                 result["metadata"] = nested
             return result
 
-        if "previousMonitorState" in values:
-            values["previousMonitorState"] = factual_state(values.get("previousMonitorState"))
-        if isinstance(values.get("previousState"), dict):
-            values["previousState"] = factual_state(values.get("previousState"))
-        if isinstance(values.get("monitorStateHistory"), list):
+        if "previousMonitorState" in source:
+            values["previousMonitorState"] = factual_state(source.get("previousMonitorState"))
+        if isinstance(source.get("previousState"), dict):
+            values["previousState"] = factual_state(source.get("previousState"))
+        if isinstance(source.get("monitorStateHistory"), list):
             values["monitorStateHistory"] = [
                 factual_state(item)
-                for item in values.get("monitorStateHistory") or []
+                for item in source.get("monitorStateHistory") or []
                 if isinstance(item, dict)
             ]
         return values

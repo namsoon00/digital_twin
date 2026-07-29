@@ -8,6 +8,7 @@ from .market_data import number
 from .market_time_series import market_session_date, market_timezone
 from .ontology_contracts import PortfolioOntology
 from .ontology_observation_quality import profile_for_domain
+from .ontology_projection_input import temporal_research_signals_for_symbol
 from .ontology_schema import add_entity, add_relation
 from .portfolio import Position
 
@@ -162,7 +163,10 @@ def state_position_payload(state: Dict[str, object], symbol: str) -> Dict[str, o
         if isinstance(payload, dict):
             row = dict(payload)
             row["generatedAt"] = state.get("generatedAt")
-            row["externalSignals"] = state.get("externalSignals") if isinstance(state.get("externalSignals"), dict) else {}
+            row["externalSignals"] = temporal_research_signals_for_symbol(
+                state.get("externalSignals") if isinstance(state.get("externalSignals"), dict) else {},
+                normalized,
+            )
             return row
     return {}
 
@@ -764,8 +768,9 @@ def add_position_temporal_concepts(
     rows = temporal_history_rows(position, runtime_context)
     symbol = str(position.symbol or "").upper().strip()
     current_time = parse_timestamp(runtime_context.get("asOf") or (rows[-1].get("generatedAt") if rows else ""))
+    temporal_signals = temporal_research_signals_for_symbol(external_signals, symbol)
     if rows and isinstance(external_signals, dict):
-        rows[-1] = {**rows[-1], "externalSignals": external_signals}
+        rows[-1] = {**rows[-1], "externalSignals": temporal_signals}
     trend_observation = profile_for_domain(observation_profiles or {}, "trend")
 
     for definition in definitions:
@@ -783,7 +788,7 @@ def add_position_temporal_concepts(
                 else trim_to_recent_sessions(available, definition.required_sessions)
             )
             if isinstance(external_signals, dict) and selected:
-                selected[-1] = {**selected[-1], "externalSignals": external_signals}
+                selected[-1] = {**selected[-1], "externalSignals": temporal_signals}
         values = temporal_window_values(selected, definition)
         values.update(event_counts(symbol, selected))
         values["symbol"] = symbol

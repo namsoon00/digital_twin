@@ -11,6 +11,10 @@ import hashlib
 from typing import Dict, List, Mapping, Tuple
 
 from .events import DomainEvent, ONTOLOGY_REASONING_REQUESTED
+from .verified_snapshot_reasoning import (
+    VERIFIED_MONITOR_SNAPSHOT_SLOT_FAMILY,
+    VERIFIED_MONITOR_SNAPSHOT_TRIGGER,
+)
 
 
 REVIEW_LEVEL_ORDER = {
@@ -23,6 +27,7 @@ REVIEW_LEVEL_ORDER = {
 }
 
 TRIGGER_ORDER = {
+    VERIFIED_MONITOR_SNAPSHOT_TRIGGER: 7,
     "research-evidence-update": 6,
     "news-analysis-enrichment": 6,
     "research-evidence-lifecycle": 6,
@@ -35,10 +40,18 @@ TRIGGER_ORDER = {
 }
 
 COALESCIBLE_REALTIME_TRIGGERS = {
+    VERIFIED_MONITOR_SNAPSHOT_TRIGGER,
     "market-data-update",
     "kis-realtime-update",
     "kis-realtime-websocket",
     "portfolio-snapshot-update",
+}
+
+# Investment-calendar mutations are latest-state source facts too. A later
+# calendar snapshot replaces the older calendar fact set for the same
+# account/symbol; it must not accumulate as direct replay work behind TypeDB.
+COALESCIBLE_LATEST_STATE_TRIGGERS = COALESCIBLE_REALTIME_TRIGGERS | {
+    "investment-calendar-update",
 }
 
 # These updates mutate durable ResearchEvidence facts. The ABox projection
@@ -127,6 +140,17 @@ def is_generic_research_latest_state(event: object) -> bool:
     )
 
 
+def is_verified_monitor_snapshot_event(event: object) -> bool:
+    """Whether a request is anchored to the snapshot the worker replays."""
+
+    payload = event_payload(event)
+    return bool(
+        str(payload.get("trigger") or "").strip() == VERIFIED_MONITOR_SNAPSHOT_TRIGGER
+        and isinstance(payload.get("verifiedSourceSnapshot"), Mapping)
+        and str((payload.get("verifiedSourceSnapshot") or {}).get("generatedAt") or "").strip()
+    )
+
+
 def mailbox_slot_family(event: object, fact_types: Tuple[str, ...]) -> str:
     """Return the durable latest-state identity without losing event facts.
 
@@ -137,6 +161,8 @@ def mailbox_slot_family(event: object, fact_types: Tuple[str, ...]) -> str:
     """
     if is_generic_research_latest_state(event):
         return GENERIC_RESEARCH_LATEST_STATE_SLOT
+    if is_verified_monitor_snapshot_event(event):
+        return VERIFIED_MONITOR_SNAPSHOT_SLOT_FAMILY
     return ",".join(fact_types) or "MarketQuote"
 
 
@@ -145,7 +171,7 @@ def realtime_coalescing_key(event: object) -> Tuple[str, str, Tuple[str, ...]]:
     payload = event_payload(event)
     trigger = str(payload.get("trigger") or "").strip()
     generic_research = is_generic_research_latest_state(event)
-    if trigger not in COALESCIBLE_REALTIME_TRIGGERS and not generic_research:
+    if trigger not in COALESCIBLE_LATEST_STATE_TRIGGERS and not generic_research:
         return ()
     if event_review_level(event) == "immediate":
         return ()

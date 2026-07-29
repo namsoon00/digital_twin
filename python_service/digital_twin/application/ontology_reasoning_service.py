@@ -19,7 +19,9 @@ from ..domain.investment_evidence_governance import (
     complete_reasoning_handoff,
 )
 from ..domain.ontology_reasoning_queue import (
+    VERIFIED_MONITOR_SNAPSHOT_TRIGGER,
     is_generic_research_latest_state,
+    is_verified_monitor_snapshot_event,
     mailbox_slot_family,
 )
 
@@ -175,6 +177,7 @@ REVIEW_LEVEL_ORDER = {
 }
 
 TRIGGER_ORDER = {
+    VERIFIED_MONITOR_SNAPSHOT_TRIGGER: 7,
     "research-evidence-update": 6,
     "news-analysis-enrichment": 6,
     "research-evidence-lifecycle": 6,
@@ -196,10 +199,15 @@ TRIGGER_ORDER = {
 # acknowledged explicitly. ``immediate`` remains outside the mailbox for a
 # separately modelled emergency event, rather than a normal quote update.
 COALESCIBLE_REALTIME_TRIGGERS = {
+    VERIFIED_MONITOR_SNAPSHOT_TRIGGER,
     "market-data-update",
     "kis-realtime-update",
     "kis-realtime-websocket",
     "portfolio-snapshot-update",
+}
+
+COALESCIBLE_LATEST_STATE_TRIGGERS = COALESCIBLE_REALTIME_TRIGGERS | {
+    "investment-calendar-update",
 }
 
 COALESCIBLE_RESEARCH_TRIGGERS = {
@@ -503,7 +511,7 @@ def realtime_coalescing_key(event: object) -> Tuple[str, str, Tuple[str, ...]]:
     trigger = str(payload.get("trigger") or "").strip()
     review_level = event_review_level(event)
     is_generic_research_update = is_generic_research_latest_state(event)
-    if trigger not in COALESCIBLE_REALTIME_TRIGGERS and not is_generic_research_update:
+    if trigger not in COALESCIBLE_LATEST_STATE_TRIGGERS and not is_generic_research_update:
         return ()
     if review_level == "immediate":
         return ()
@@ -539,6 +547,8 @@ def event_work_class(event: object) -> str:
     }
     if not event_symbols(event):
         return "global"
+    if is_verified_monitor_snapshot_event(event):
+        return "verified-snapshot"
     if "research" in trigger or fact_types & {"researchevidence", "verifiedclaim", "verificationrun", "newsevent"}:
         return "research"
     if trigger in COALESCIBLE_REALTIME_TRIGGERS or fact_types & {
@@ -1530,6 +1540,12 @@ class OntologyReasoningRunner:
 
     def event_min_interval_seconds(self, event: object) -> int:
         trigger = str(event_payload(event).get("trigger") or "data-update").strip()
+        if is_verified_monitor_snapshot_event(event):
+            # This is an operational source-consistency boundary, not an
+            # investment escalation. One committed snapshot may run sooner
+            # than the ordinary background cadence without admitting raw
+            # provider ticks into TypeDB.
+            return self.urgent_min_interval_seconds()
         if trigger in {"research-evidence-update", "investment-calendar-update"}:
             return self.urgent_min_interval_seconds()
         if event_review_level(event) in self.urgent_review_levels():
@@ -1556,6 +1572,8 @@ class OntologyReasoningRunner:
     ) -> int:
         configured = self.projection_min_interval_seconds(requests)
         urgent = any(
+            is_verified_monitor_snapshot_event(event)
+            or
             event_review_level(event) in self.urgent_review_levels()
             or str(event_payload(event).get("trigger") or "") in {"research-evidence-update", "investment-calendar-update"}
             for event in requests or []
@@ -1806,20 +1824,22 @@ class OntologyReasoningRunner:
             if event_symbols(event) and not self.due_event_symbols(event, progress, cursor_payload, priority_symbols):
                 continue
             ranked_events.append((
+                1 if is_verified_monitor_snapshot_event(event) else 0,
                 self.event_fairness_rank(event, progress, cursor_payload, priority_symbols),
                 event,
             ))
         ranked_events.sort(
             key=lambda item: (
-                *item[0],
-                *event_order_key(item[1], priority_symbols),
-                1 if str(getattr(item[1], "event_id", "") or "") in progress else 0,
-                getattr(item[1], "occurred_at", ""),
-                getattr(item[1], "event_id", ""),
+                item[0],
+                *item[1],
+                *event_order_key(item[2], priority_symbols),
+                1 if str(getattr(item[2], "event_id", "") or "") in progress else 0,
+                getattr(item[2], "occurred_at", ""),
+                getattr(item[2], "event_id", ""),
             ),
             reverse=True,
         )
-        return [item[1] for item in ranked_events[: max(1, int(limit or self.batch_size()))]]
+        return [item[2] for item in ranked_events[: max(1, int(limit or self.batch_size()))]]
 
     def durable_mailbox_ingress_enabled(self) -> bool:
         """Whether coalescible events enter MySQL mailbox at publish time."""
@@ -2895,6 +2915,7 @@ class OntologyReasoningRunner:
                 fact_types = {str(item or "").strip() for item in event_payload(event).get("factTypes") or []}
                 fairness_rank = max([self.symbol_fairness_rank(symbol, cursor_payload) for symbol in due_symbols] or [(0, 0)])
                 rank = (
+                    1 if is_verified_monitor_snapshot_event(event) else 0,
                     *fairness_rank,
                     max([int(priority_symbols.get(symbol, 0) or 0) for symbol in due_symbols] or [0]),
                     REVIEW_LEVEL_ORDER.get(event_review_level(event), 0),
@@ -2961,6 +2982,7 @@ class OntologyReasoningRunner:
                 continue
             for symbol_index, symbol in enumerate(remaining):
                 rank = (
+                    1 if is_verified_monitor_snapshot_event(event) else 0,
                     *self.symbol_fairness_rank(symbol, cursor_payload),
                     int(priority_symbols.get(symbol, 0) or 0),
                     REVIEW_LEVEL_ORDER.get(event_review_level(event), 0),

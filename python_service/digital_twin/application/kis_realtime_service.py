@@ -1,7 +1,7 @@
 import time
 from typing import Dict, List
 
-from ..domain.events import market_data_collected_event, ontology_reasoning_requested_event
+from ..domain.events import market_data_collected_event
 from ..domain.fact_changes import market_fact_change
 from ..domain.market_hours import evaluate_market_hours
 from ..domain.message_types import INVESTMENT_INSIGHT
@@ -225,7 +225,6 @@ class KISRealtimeWebSocketRunner:
         }
         if self.event_publisher:
             event = market_data_collected_event(result)
-            reasoning = None
             focus_symbols = []
             reasoning_symbols = getattr(self.symbol_selector, "reasoning_symbols", None)
             if callable(reasoning_symbols):
@@ -245,33 +244,22 @@ class KISRealtimeWebSocketRunner:
             investment_fact_revision_symbols = [symbol for symbol in changed_symbols if symbol in focus_set]
             result["investmentReasoningSymbols"] = investment_fact_revision_symbols
             result["factRevisionReasoningSymbols"] = investment_fact_revision_symbols
-            result["investmentReasoningScheduling"] = "fact-revision-first"
+            # A WebSocket tick updates the quote cache, but it is not the
+            # durable snapshot that the isolated TypeDB worker replays. The
+            # next monitor commit creates one verified latest-state request
+            # for all changed facts. This prevents a tick stream from
+            # continuously outrunning the snapshot and starving alerts.
+            result["investmentReasoningScheduling"] = "verified-monitor-snapshot-barrier"
+            result["reasoningDispatch"] = "next-verified-monitor-snapshot"
             result["backgroundMaterialSymbolCount"] = len([symbol for symbol in material_symbols if symbol not in focus_set])
             result["backgroundBootstrapSymbolCount"] = len([symbol for symbol in bootstrap_symbols if symbol not in focus_set])
             result["backgroundFactRevisionSymbolCount"] = len([
                 symbol for symbol in changed_symbols if symbol not in focus_set
             ])
-            if investment_fact_revision_symbols:
-                reasoning = ontology_reasoning_requested_event(
-                    event,
-                    "kis-realtime-websocket",
-                    investment_fact_revision_symbols,
-                    changed_count=len(investment_fact_revision_symbols),
-                    observed_count=len(changed_symbols),
-                    fact_types=["MarketQuote", "ExecutionFlow", "OrderBook"],
-                    reason="보유·관심 종목의 실제 KIS 체결·호가 사실 변경을 최신 상태 메일박스로 합류한 뒤 TypeDB ABox와 네이티브 규칙 추론에 반영합니다. 중요도 평가는 우선순위 참고용이며 입구 차단에는 사용하지 않습니다.",
-                    materiality_assessments=[materiality_assessments[symbol] for symbol in investment_fact_revision_symbols],
-                    fact_revisions_by_symbol={symbol: fact_revisions_by_symbol[symbol] for symbol in investment_fact_revision_symbols if fact_revisions_by_symbol.get(symbol)},
-                    changed_fields_by_symbol={symbol: changed_fields_by_symbol[symbol] for symbol in investment_fact_revision_symbols if symbol in changed_fields_by_symbol},
-                )
             if hasattr(self.event_publisher, "publish"):
                 self.event_publisher.publish(event)
-                if reasoning:
-                    self.event_publisher.publish(reasoning)
             else:
                 self.event_publisher.handle(event)
-                if reasoning:
-                    self.event_publisher.handle(reasoning)
         return {"status": "ok", "published": bool(self.event_publisher), **result}
 
     def run_once(self, duration_seconds: int = 0, force: bool = False) -> Dict[str, object]:

@@ -33,6 +33,7 @@ from ..domain.ontology_quality import OntologyQualitySample, build_ontology_qual
 from ..domain.portfolio import AccountSnapshot, AlertEvent, monitor_state_has_live_account_data
 from ..domain.repositories import MonitoringCycleRecordResult
 from ..domain.symbol_universe import ListedSymbol, normalize_market, normalize_symbol, utc_now_iso as symbol_utc_now_iso
+from ..domain.verified_snapshot_reasoning import verified_monitor_snapshot_reasoning_event
 from .model_review_queue import model_review_payloads_from_event
 from .mysql_monitoring import MySQLDependencyError, MySQLMonitorAccountJobStore, ensure_mysql_database_exists, mysql_settings
 from .operational_common import (
@@ -338,6 +339,27 @@ class MySQLMonitoringCycleRecorder(MySQLOperationalConnection):
             self.market_time_series_store.record_snapshots_with_connection(connection, live_snapshots)
             for snapshot in live_snapshots:
                 insert_domain_event_with_connection(connection, snapshot_collected_event(snapshot))
+            # Persist the source snapshot before publishing its replayable
+            # TypeDB work. The two writes share this transaction, so a worker
+            # can never see a barrier without the exact snapshot it names.
+            for account_id, state in snapshot_states.items():
+                self.monitor_store.upsert_snapshot_state_with_connection(connection, account_id, state, stamp)
+            for snapshot in live_snapshots:
+                reasoning_event = verified_monitor_snapshot_reasoning_event(
+                    snapshot,
+                    self.monitor_store.previous.get(snapshot.account_id),
+                    self.runtime_settings,
+                )
+                if not reasoning_event:
+                    continue
+                insert_domain_event_with_connection(connection, reasoning_event)
+                try:
+                    MySQLOntologyReasoningMailboxStore.ingress_event_with_connection(connection, reasoning_event)
+                except Exception:
+                    # The event remains durable and the bounded repair path
+                    # can recreate its mailbox row after an interrupted
+                    # operational write.
+                    pass
             if alert_source_event:
                 insert_domain_event_with_connection(connection, alert_source_event)
                 for event in guarded_events:
@@ -364,8 +386,6 @@ class MySQLMonitoringCycleRecorder(MySQLOperationalConnection):
                 connection,
                 monitoring_cycle_completed_event(list(account_ids or []), len(snapshots), len(guarded_events), False, delivered),
             )
-            for account_id, state in snapshot_states.items():
-                self.monitor_store.upsert_snapshot_state_with_connection(connection, account_id, state, stamp)
         self.monitor_store.previous.update(snapshot_states)
         self.monitor_store.sent.update(sent_entries)
         return MonitoringCycleRecordResult(

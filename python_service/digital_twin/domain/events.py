@@ -1,6 +1,6 @@
 import uuid
 from dataclasses import asdict, dataclass, field
-from typing import Dict, Iterable, List
+from typing import Dict, Iterable, List, Mapping
 
 from .accounts import AccountConfig
 from .portfolio import AccountSnapshot, AlertEvent, utc_now_iso
@@ -497,6 +497,7 @@ def ontology_reasoning_requested_event(
     fact_revisions_by_symbol: Dict[str, object] = None,
     changed_fields_by_symbol: Dict[str, Iterable[str]] = None,
     evidence_deltas: Iterable[Dict[str, object]] = None,
+    snapshot_barrier: Mapping[str, object] = None,
 ) -> DomainEvent:
     clean_symbols = sorted(set(str(symbol or "").upper().strip() for symbol in (symbols or []) if str(symbol or "").strip()))
     clean_fact_types = sorted(set(str(item or "").strip() for item in (fact_types or []) if str(item or "").strip()))
@@ -566,6 +567,11 @@ def ontology_reasoning_requested_event(
             "evidenceDeltas": deltas[:200],
             "reasoningHandoff": handoff,
             "hypothesisResearchBrief": research_brief,
+            # A monitor snapshot barrier is operational provenance. It lets
+            # the worker distinguish a replayable persisted boundary from a
+            # raw provider tick without turning that distinction into an
+            # investment rule condition.
+            "verifiedSourceSnapshot": dict(snapshot_barrier or {}) if isinstance(snapshot_barrier, Mapping) else {},
         },
     )
 

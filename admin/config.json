@@ -13,7 +13,7 @@
     "공유 미리보기에서는 서버 설정과 계정 DB 쓰기를 차단합니다."
   ],
   "localData": {
-    "generatedAt": "2026-07-28T23:22:10.368774Z",
+    "generatedAt": "2026-07-29T01:24:49.448707Z",
     "sources": {
       "settings": "data/settings.json",
       "settingsExists": true
@@ -191,6 +191,10 @@
       "investmentCalendarOfficialMacroSyncIntervalHours": "12",
       "investmentCalendarOfficialMacroSyncRateLimitSeconds": "600",
       "investmentCalendarOfficialMacroSyncTimeoutSeconds": "8",
+      "investmentCalendarOfficialEarningsSyncEnabled": "1",
+      "investmentCalendarOfficialEarningsLookbackDays": "180",
+      "investmentCalendarOfficialEarningsMaxSymbols": "20",
+      "investmentCalendarOfficialEarningsRateLimitSeconds": "0",
       "investmentCalendarBokPolicyDecisionEnabled": "1",
       "investmentCalendarBokPolicyDecisionTimeKst": "09:00",
       "investmentCalendarBokPolicyDecisionLookaheadYears": "1",
@@ -1486,6 +1490,25 @@
           "unit": "hours"
         },
         {
+          "key": "investmentCalendarOfficialEarningsSyncEnabled",
+          "label": "OpenDART 공식 실적 일정 동기화",
+          "type": "toggle",
+          "default": "1"
+        },
+        {
+          "key": "investmentCalendarOfficialEarningsLookbackDays",
+          "label": "공식 실적 공시 확인 범위",
+          "type": "number",
+          "default": "180",
+          "unit": "days"
+        },
+        {
+          "key": "investmentCalendarOfficialEarningsMaxSymbols",
+          "label": "공식 실적 일정 대상 종목 수",
+          "type": "number",
+          "default": "20"
+        },
+        {
           "key": "investmentCalendarBokPolicyDecisionEnabled",
           "label": "한국은행 금리 결정 일정",
           "type": "toggle",
@@ -1502,6 +1525,51 @@
           "label": "한국은행 일정 조회 연수",
           "type": "number",
           "default": "1"
+        },
+        {
+          "key": "ontologyProjectionGraphCacheEnabled",
+          "label": "동일 입력 메모리 그래프 조립 캐시",
+          "type": "toggle",
+          "default": "1"
+        },
+        {
+          "key": "ontologyProjectionGraphCacheTtlSeconds",
+          "label": "메모리 그래프 조립 캐시 유지",
+          "type": "number",
+          "default": "45",
+          "unit": "seconds"
+        },
+        {
+          "key": "ontologyProjectionGraphCacheMaxEntries",
+          "label": "메모리 그래프 조립 캐시 최대 건수",
+          "type": "number",
+          "default": "16"
+        },
+        {
+          "key": "ontologyProjectionGraphPersistentCacheEnabled",
+          "label": "재시작 간 그래프 조립 캐시",
+          "type": "toggle",
+          "default": "1"
+        },
+        {
+          "key": "ontologyProjectionGraphPersistentCacheTtlSeconds",
+          "label": "재시작 간 그래프 조립 캐시 유지",
+          "type": "number",
+          "default": "120",
+          "unit": "seconds"
+        },
+        {
+          "key": "ontologyProjectionGraphPersistentCacheMaxEntries",
+          "label": "재시작 간 그래프 조립 캐시 최대 건수",
+          "type": "number",
+          "default": "64"
+        },
+        {
+          "key": "ontologyProjectionGraphPersistentCacheMaxPayloadBytes",
+          "label": "재시작 간 그래프 조립 캐시 최대 크기",
+          "type": "number",
+          "default": "8388608",
+          "unit": "bytes"
         },
         {
           "key": "ontologyReasoningEnabled",
@@ -1804,6 +1872,13 @@
           "label": "시간 초과 후 재시도 대기",
           "type": "number",
           "default": "300",
+          "unit": "seconds"
+        },
+        {
+          "key": "ontologyReasoningPreNativeTimeoutBackoffSeconds",
+          "label": "TypeDB 저장 전 시간 초과 재시도 대기",
+          "type": "number",
+          "default": "45",
           "unit": "seconds"
         },
         {
@@ -2734,5 +2809,5 @@
       ]
     }
   ],
-  "buildId": "dbc3a21a4333"
+  "buildId": "bb404d9cfa09"
 }

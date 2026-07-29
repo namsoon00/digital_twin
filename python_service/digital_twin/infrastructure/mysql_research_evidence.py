@@ -21,6 +21,48 @@ from .mysql_operational_events import insert_domain_event_with_connection
 
 
 class MySQLResearchEvidenceStore(MySQLOperationalConnection):
+    def write_batch_size(self) -> int:
+        try:
+            configured = int(float(str(self.runtime_settings.get("researchEvidenceWriteBatchSize") or "50").strip()))
+        except (TypeError, ValueError):
+            configured = 50
+        return max(1, min(50, configured))
+
+    @staticmethod
+    def _ordered_items(items: Iterable[ResearchEvidence]) -> List[ResearchEvidence]:
+        """Deduplicate and sort writes so competing workers lock rows alike."""
+        by_id = {}
+        for item in items or []:
+            evidence_id = str(getattr(item, "evidence_id", "") or "").strip()
+            if evidence_id:
+                by_id[evidence_id] = item
+        return [by_id[evidence_id] for evidence_id in sorted(by_id)]
+
+    def _item_batches(self, items: Iterable[ResearchEvidence]) -> List[List[ResearchEvidence]]:
+        ordered = self._ordered_items(items)
+        batch_size = self.write_batch_size()
+        return [ordered[index:index + batch_size] for index in range(0, len(ordered), batch_size)]
+
+    @staticmethod
+    def _merged_mutation(mutations: Iterable[EvidenceMutation]) -> EvidenceMutation:
+        merged = EvidenceMutation()
+        changed_ids = set()
+        for mutation in mutations or []:
+            merged.written_count += int(getattr(mutation, "written_count", 0) or 0)
+            merged.expired_count += int(getattr(mutation, "expired_count", 0) or 0)
+            merged.retracted_count += int(getattr(mutation, "retracted_count", 0) or 0)
+            for symbol in list(getattr(mutation, "changed_symbols", []) or []):
+                if symbol and symbol not in merged.changed_symbols:
+                    merged.changed_symbols.append(symbol)
+            for item in list(getattr(mutation, "changed_items", []) or []):
+                evidence_id = str(getattr(item, "evidence_id", "") or "").strip()
+                if evidence_id and evidence_id not in changed_ids:
+                    changed_ids.add(evidence_id)
+                    merged.changed_items.append(item)
+            merged.deltas.extend(list(getattr(mutation, "deltas", []) or []))
+            merged.eligible_set_revisions.update(dict(getattr(mutation, "eligible_set_revisions", {}) or {}))
+        return merged.with_revisions()
+
     def _row_lifecycle_state(self, row) -> str:
         keys = set(row.keys()) if hasattr(row, "keys") else set()
         return clean_lifecycle_state(row["lifecycle_state"] if "lifecycle_state" in keys else "active")
@@ -217,34 +259,65 @@ class MySQLResearchEvidenceStore(MySQLOperationalConnection):
             ))
         return self._finalize_mutation(connection, mutation)
 
-    def _active_rows_by_ids(self, connection, evidence_ids: Iterable[str]):
+    def _active_rows_by_ids(self, connection, evidence_ids: Iterable[str], skip_locked: bool = False):
         ids = sorted({str(value or "").strip() for value in evidence_ids or [] if str(value or "").strip()})
         if not ids:
             return []
         placeholders = ", ".join(["%s"] * len(ids))
         return connection.execute(
-            "SELECT * FROM research_evidence WHERE lifecycle_state = 'active' AND evidence_id IN (" + placeholders + ") FOR UPDATE",
+            "SELECT * FROM research_evidence WHERE lifecycle_state = 'active' AND evidence_id IN ("
+            + placeholders
+            + ") ORDER BY evidence_id ASC FOR UPDATE"
+            + (" SKIP LOCKED" if skip_locked else ""),
             ids,
         ).fetchall()
 
-    def _stale_news_rows(self, connection, cutoff: str, row_limit: int):
+    def _stale_news_candidate_ids(self, cutoff: str, row_limit: int) -> List[str]:
+        candidate_limit = max(row_limit, min(300, row_limit * 3))
+        with self.connect() as connection:
+            rows = connection.execute(
+                """
+                SELECT evidence_id
+                FROM research_evidence
+                WHERE lifecycle_state = 'active'
+                  AND kind = 'news'
+                  AND COALESCE(NULLIF(published_at, ''), NULLIF(observed_at, ''), NULLIF(last_seen_at, '')) < %s
+                ORDER BY last_seen_at ASC, evidence_id ASC
+                LIMIT %s
+                """,
+                (cutoff, candidate_limit),
+            ).fetchall()
+        return [str(row.get("evidence_id") or "").strip() for row in rows if str(row.get("evidence_id") or "").strip()]
+
+    def _stale_news_rows(self, connection, cutoff: str, row_limit: int, candidate_ids: Iterable[str]):
+        ids = sorted({str(value or "").strip() for value in candidate_ids or [] if str(value or "").strip()})
+        if not ids:
+            return []
+        placeholders = ", ".join(["%s"] * len(ids))
         return connection.execute(
             """
             SELECT * FROM research_evidence
             WHERE lifecycle_state = 'active'
               AND kind = 'news'
               AND COALESCE(NULLIF(published_at, ''), NULLIF(observed_at, ''), NULLIF(last_seen_at, '')) < %s
-            ORDER BY last_seen_at ASC, evidence_id ASC
+              AND evidence_id IN (""" + placeholders + """
+              )
+            ORDER BY evidence_id ASC
             LIMIT %s
-            FOR UPDATE
+            FOR UPDATE SKIP LOCKED
             """,
-            (cutoff, row_limit),
+            [cutoff, *ids, row_limit],
         ).fetchall()
 
     def upsert_many(self, items: Iterable[ResearchEvidence]) -> int:
-        stamp = utc_now()
-        with self.transaction() as connection:
-            mutation = self._upsert_many_with_connection(connection, items, stamp)
+        mutations = []
+        for batch in self._item_batches(items):
+            mutation = self.transaction_with_deadlock_retry(
+                "research-evidence-upsert",
+                lambda connection, rows=batch: self._upsert_many_with_connection(connection, rows, utc_now()),
+            )
+            mutations.append(mutation)
+        mutation = self._merged_mutation(mutations)
         self._remember_mutation(mutation)
         return mutation.written_count
 
@@ -253,16 +326,27 @@ class MySQLResearchEvidenceStore(MySQLOperationalConnection):
         items: Iterable[ResearchEvidence],
         event_builder: Callable[[EvidenceMutation], Iterable[DomainEvent]],
     ) -> Tuple[int, List[DomainEvent]]:
-        stamp = utc_now()
-        with self.transaction() as connection:
-            mutation = self._upsert_many_with_connection(connection, items, stamp)
-            # Pass the immutable transaction result directly. Reading a
-            # process-wide ``last_*`` field here would let concurrently
-            # collected symbols leak their evidence revisions into this
-            # transaction's durable reasoning request.
-            events = list(event_builder(mutation) or [])
-            for event in events:
-                insert_domain_event_with_connection(connection, event)
+        mutations = []
+        events = []
+        for batch in self._item_batches(items):
+            def persist(connection, rows=batch):
+                mutation = self._upsert_many_with_connection(connection, rows, utc_now())
+                # Pass the immutable transaction result directly. Reading a
+                # process-wide ``last_*`` field here would let concurrently
+                # collected symbols leak their evidence revisions into this
+                # transaction's durable reasoning request.
+                batch_events = list(event_builder(mutation) or [])
+                for event in batch_events:
+                    insert_domain_event_with_connection(connection, event)
+                return mutation, batch_events
+
+            mutation, batch_events = self.transaction_with_deadlock_retry(
+                "research-evidence-upsert-with-events",
+                persist,
+            )
+            mutations.append(mutation)
+            events.extend(batch_events)
+        mutation = self._merged_mutation(mutations)
         self._remember_mutation(mutation)
         return mutation.written_count, events
 
@@ -275,20 +359,29 @@ class MySQLResearchEvidenceStore(MySQLOperationalConnection):
         cutoff = str(cutoff_iso or "").strip()
         if not cutoff:
             return EvidenceMutation(), []
-        row_limit = max(1, min(5000, int(limit or 500)))
-        stamp = utc_now()
-        with self.transaction() as connection:
+        row_limit = max(1, min(50, int(limit or 50)))
+        candidate_ids = self._stale_news_candidate_ids(cutoff, row_limit)
+        if not candidate_ids:
+            return EvidenceMutation(), []
+
+        def persist(connection):
             mutation = self._transition_rows_with_connection(
                 connection,
-                self._stale_news_rows(connection, cutoff, row_limit),
+                self._stale_news_rows(connection, cutoff, row_limit, candidate_ids),
                 "expired",
                 "expiration",
-                stamp,
+                utc_now(),
                 "news-age-expired",
             )
             events = list(event_builder(mutation) or []) if mutation.lifecycle_changed_count else []
             for event in events:
                 insert_domain_event_with_connection(connection, event)
+            return mutation, events
+
+        mutation, events = self.transaction_with_deadlock_retry(
+            "research-evidence-expire-stale-news",
+            persist,
+        )
         self._remember_mutation(mutation)
         return mutation, events
 
@@ -298,19 +391,24 @@ class MySQLResearchEvidenceStore(MySQLOperationalConnection):
         reason: str,
         event_builder: Callable[[EvidenceMutation], Iterable[DomainEvent]],
     ) -> Tuple[EvidenceMutation, List[DomainEvent]]:
-        stamp = utc_now()
-        with self.transaction() as connection:
+        def persist(connection):
             mutation = self._transition_rows_with_connection(
                 connection,
-                self._active_rows_by_ids(connection, evidence_ids),
+                self._active_rows_by_ids(connection, evidence_ids, skip_locked=True),
                 "retracted",
                 "retraction",
-                stamp,
+                utc_now(),
                 reason or "evidence-retracted",
             )
             events = list(event_builder(mutation) or []) if mutation.lifecycle_changed_count else []
             for event in events:
                 insert_domain_event_with_connection(connection, event)
+            return mutation, events
+
+        mutation, events = self.transaction_with_deadlock_retry(
+            "research-evidence-retract-many",
+            persist,
+        )
         self._remember_mutation(mutation)
         return mutation, events
 
@@ -359,16 +457,17 @@ class MySQLResearchEvidenceStore(MySQLOperationalConnection):
         normalized_id = str(evidence_id or "").strip()
         if not normalized_id:
             return False
-        stamp = utc_now()
-        with self.transaction() as connection:
-            mutation = self._transition_rows_with_connection(
+        mutation = self.transaction_with_deadlock_retry(
+            "research-evidence-retract-one",
+            lambda connection: self._transition_rows_with_connection(
                 connection,
                 self._active_rows_by_ids(connection, [normalized_id]),
                 "retracted",
                 "retraction",
-                stamp,
+                utc_now(),
                 "manual-evidence-retraction",
-            )
+            ),
+        )
         self._remember_mutation(mutation)
         return bool(mutation.retracted_count)
 
@@ -376,17 +475,21 @@ class MySQLResearchEvidenceStore(MySQLOperationalConnection):
         cutoff = str(cutoff_iso or "").strip()
         if not cutoff:
             return 0
-        row_limit = max(1, min(5000, int(limit or 500)))
-        stamp = utc_now()
-        with self.transaction() as connection:
-            mutation = self._transition_rows_with_connection(
+        row_limit = max(1, min(50, int(limit or 50)))
+        candidate_ids = self._stale_news_candidate_ids(cutoff, row_limit)
+        if not candidate_ids:
+            return 0
+        mutation = self.transaction_with_deadlock_retry(
+            "research-evidence-expire-stale-news",
+            lambda connection: self._transition_rows_with_connection(
                 connection,
-                self._stale_news_rows(connection, cutoff, row_limit),
+                self._stale_news_rows(connection, cutoff, row_limit, candidate_ids),
                 "expired",
                 "expiration",
-                stamp,
+                utc_now(),
                 "news-age-expired",
-            )
+            ),
+        )
         self._remember_mutation(mutation)
         return mutation.expired_count
 

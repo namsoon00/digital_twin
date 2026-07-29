@@ -146,6 +146,7 @@ class NewsCollectionRunner:
         self.sleep_fn = sleep_fn
         self.now_provider = now_provider or (lambda: datetime.now(timezone.utc))
         self.monotonic_fn = monotonic_fn
+        self._last_evidence_cleanup_at = None
 
     def with_health(self, result: Dict[str, object]) -> Dict[str, object]:
         if not self.health_service or not hasattr(self.health_service, "record_news_collection"):
@@ -191,7 +192,26 @@ class NewsCollectionRunner:
         return int_setting(self.settings, "newsEvidenceMaxAgeMinutes", fallback, 5, 1440 * 30)
 
     def cleanup_batch_size(self) -> int:
-        return int_setting(self.settings, "newsEvidenceCleanupBatchSize", 500, 1, 5000)
+        return int_setting(self.settings, "newsEvidenceCleanupBatchSize", 50, 1, 50)
+
+    def cleanup_interval_seconds(self) -> int:
+        return int_setting(self.settings, "newsEvidenceCleanupIntervalSeconds", 900, 60, 86400)
+
+    def cleanup_now(self) -> datetime:
+        now = self.now_provider()
+        if not isinstance(now, datetime):
+            now = datetime.now(timezone.utc)
+        if now.tzinfo is None:
+            now = now.replace(tzinfo=timezone.utc)
+        return now.astimezone(timezone.utc)
+
+    def cleanup_due(self, now: datetime = None) -> bool:
+        if not self.cleanup_enabled():
+            return False
+        current = now or self.cleanup_now()
+        if self._last_evidence_cleanup_at is None:
+            return True
+        return (current - self._last_evidence_cleanup_at).total_seconds() >= self.cleanup_interval_seconds()
 
     def keep_undated_news(self) -> bool:
         return truthy(self.settings.get("newsEvidenceKeepUndated"), False)
@@ -200,7 +220,27 @@ class NewsCollectionRunner:
         return truthy(self.settings.get("newsCollectionRequireArticleBodyForRss"), True)
 
     def stale_cutoff_iso(self) -> str:
-        return utc_iso(datetime.now(timezone.utc) - timedelta(minutes=self.max_news_age_minutes()))
+        return utc_iso(self.cleanup_now() - timedelta(minutes=self.max_news_age_minutes()))
+
+    def due_evidence_cleanup(self) -> Dict[str, object]:
+        now = self.cleanup_now()
+        if not self.cleanup_due(now):
+            return {
+                "due": False,
+                "nextDueAt": utc_iso((self._last_evidence_cleanup_at or now) + timedelta(seconds=self.cleanup_interval_seconds())),
+                "stale": {"enabled": self.cleanup_enabled(), "deleted": 0, "status": "deferred"},
+                "feedOnlyRss": {"enabled": self.cleanup_enabled() and self.require_article_body_for_rss(), "deleted": 0, "status": "deferred"},
+            }
+        # Mark the schedule before doing database work. A transient failure is
+        # retried on the next maintenance interval instead of competing with
+        # the active collector and analysis worker every minute.
+        self._last_evidence_cleanup_at = now
+        return {
+            "due": True,
+            "nextDueAt": utc_iso(now + timedelta(seconds=self.cleanup_interval_seconds())),
+            "stale": self.delete_stale_news(),
+            "feedOnlyRss": self.delete_feed_only_rss_news(),
+        }
 
     def delete_stale_news(self) -> Dict[str, object]:
         if not self.cleanup_enabled() or not hasattr(self.evidence_store, "delete_stale_news"):
@@ -540,13 +580,14 @@ class NewsCollectionRunner:
         if not self.enabled() and not force:
             return self.with_health({"status": "disabled", "targetCount": 0, "fetchedCount": 0, "savedCount": 0})
         collection_run = self.begin_collection_run()
-        cleanup = self.delete_stale_news()
-        feed_only_cleanup = self.delete_feed_only_rss_news()
+        maintenance = self.due_evidence_cleanup()
+        cleanup = dict(maintenance.get("stale") or {})
+        feed_only_cleanup = dict(maintenance.get("feedOnlyRss") or {})
         target_plan = self.target_plan()
         targets = list(target_plan.get("targets") or [])
         selection_metadata = {key: value for key, value in target_plan.items() if key != "targets"}
         if not targets:
-            return self.with_health({"status": "noTargets", "targetCount": 0, "fetchedCount": 0, "savedCount": 0, "staleDeletedCount": cleanup.get("deleted", 0), "staleCleanup": cleanup, "feedOnlyRssCleanup": feed_only_cleanup, "targetSelection": selection_metadata, "collectionRun": collection_run})
+            return self.with_health({"status": "noTargets", "targetCount": 0, "fetchedCount": 0, "savedCount": 0, "staleDeletedCount": cleanup.get("deleted", 0), "staleCleanup": cleanup, "feedOnlyRssCleanup": feed_only_cleanup, "evidenceMaintenance": maintenance, "targetSelection": selection_metadata, "collectionRun": collection_run})
         collected: List[ResearchEvidence] = []
         governed_for_persistence: List[ResearchEvidence] = []
         stale_items: List[ResearchEvidence] = []
@@ -676,6 +717,7 @@ class NewsCollectionRunner:
                 "staleDeletedCount": cleanup.get("deleted", 0),
                 "staleCleanup": cleanup,
                 "feedOnlyRssCleanup": feed_only_cleanup,
+                "evidenceMaintenance": maintenance,
                 "changedSymbols": symbols,
                 "materialChangedCount": len(material_items),
                 "materialChangedSymbols": material_symbols,
@@ -715,7 +757,6 @@ class NewsCollectionRunner:
                 ))
             return events
 
-        event_state: Dict[str, object] = {}
         if (
             collected
             and self.event_publisher
@@ -731,18 +772,14 @@ class NewsCollectionRunner:
                     mutation=mutation,
                 )
                 events = collection_events(built)
-                event_state["result"] = built
-                event_state["events"] = events
                 return events
 
             saved, recorded_events = self.evidence_store.upsert_many_with_events(governed_for_persistence or collected, event_builder)
-            result = event_state.get("result")
-            if not isinstance(result, dict):
-                result = build_collection_result(
-                    saved,
-                    list(getattr(self.evidence_store, "last_changed_symbols", []) or []),
-                    list(getattr(self.evidence_store, "last_changed_items", []) or []),
-                )
+            result = build_collection_result(
+                saved,
+                list(getattr(self.evidence_store, "last_changed_symbols", []) or []),
+                list(getattr(self.evidence_store, "last_changed_items", []) or []),
+            )
             for event in recorded_events:
                 self.event_publisher.dispatch_recorded(event)
             return self.with_health(result)
@@ -789,6 +826,7 @@ class NewsCollectionRunner:
             "staleCleanup": {
                 "enabled": self.cleanup_enabled(),
                 "maxAgeMinutes": self.max_news_age_minutes(),
+                "cleanupIntervalSeconds": self.cleanup_interval_seconds(),
                 "cleanupBatchSize": self.cleanup_batch_size(),
             },
             "pipelineHealth": self.health_service.pipeline_state("newsCollection") if self.health_service and hasattr(self.health_service, "pipeline_state") else {},

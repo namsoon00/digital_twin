@@ -1,6 +1,9 @@
 from contextlib import contextmanager
+from dataclasses import dataclass
 from datetime import datetime, timezone
-from typing import Dict
+import random
+import time
+from typing import Callable, Dict, Tuple
 import warnings
 
 from .mysql_monitoring import MySQLDependencyError, ensure_mysql_database_exists, mysql_settings
@@ -14,6 +17,130 @@ from .mysql_connection_pool import pooled_mysql_connection
 
 
 _FALSEY_VALUES = {"", "0", "false", "no", "off", "disabled"}
+MYSQL_DEADLOCK_ERROR_CODE = 1213
+
+
+@dataclass(frozen=True)
+class MySQLDeadlockRetryReceipt:
+    operation: str
+    attempts: int
+    retry_count: int
+    recovered: bool
+    delays_ms: Tuple[int, ...] = ()
+
+    def to_dict(self) -> Dict[str, object]:
+        return {
+            "operation": self.operation,
+            "attempts": self.attempts,
+            "retryCount": self.retry_count,
+            "recovered": self.recovered,
+            "delaysMs": list(self.delays_ms),
+        }
+
+
+class MySQLDeadlockRetryExhausted(RuntimeError):
+    def __init__(self, operation: str, receipt: MySQLDeadlockRetryReceipt, error: Exception):
+        self.operation = str(operation or "mysql-transaction")
+        self.receipt = receipt
+        self.error = error
+        super().__init__(
+            "MySQL deadlock retries exhausted"
+            + " operation=" + self.operation
+            + " attempts=" + str(receipt.attempts)
+            + " error=" + str(error)
+        )
+
+
+def mysql_error_code(error: Exception) -> int:
+    for value in list(getattr(error, "args", ()) or []):
+        try:
+            return int(value)
+        except (TypeError, ValueError):
+            continue
+    return 0
+
+
+def mysql_is_deadlock(error: Exception) -> bool:
+    return mysql_error_code(error) == MYSQL_DEADLOCK_ERROR_CODE
+
+
+def mysql_deadlock_retry_count(settings: Dict[str, object] = None) -> int:
+    try:
+        parsed = int(float(str((settings or {}).get("mysqlDeadlockRetryCount") or "3").strip()))
+    except (TypeError, ValueError):
+        parsed = 3
+    return max(0, min(8, parsed))
+
+
+def mysql_deadlock_retry_base_milliseconds(settings: Dict[str, object] = None) -> int:
+    try:
+        parsed = int(float(str((settings or {}).get("mysqlDeadlockRetryBaseMilliseconds") or "30").strip()))
+    except (TypeError, ValueError):
+        parsed = 30
+    return max(1, min(1000, parsed))
+
+
+def mysql_deadlock_retry_max_milliseconds(settings: Dict[str, object] = None) -> int:
+    try:
+        parsed = int(float(str((settings or {}).get("mysqlDeadlockRetryMaxMilliseconds") or "250").strip()))
+    except (TypeError, ValueError):
+        parsed = 250
+    return max(mysql_deadlock_retry_base_milliseconds(settings), min(5000, parsed))
+
+
+def mysql_deadlock_retry_delay_milliseconds(
+    settings: Dict[str, object],
+    retry_number: int,
+    random_fn: Callable[[], float] = None,
+) -> int:
+    base = mysql_deadlock_retry_base_milliseconds(settings)
+    maximum = mysql_deadlock_retry_max_milliseconds(settings)
+    exponential = min(maximum, base * (2 ** max(0, int(retry_number or 1) - 1)))
+    try:
+        random_value = float((random_fn or random.random)())
+    except (TypeError, ValueError):
+        random_value = 0.5
+    jitter = 0.75 + min(1.0, max(0.0, random_value)) * 0.5
+    return max(1, int(round(exponential * jitter)))
+
+
+def run_mysql_deadlock_retry(
+    settings: Dict[str, object],
+    operation: str,
+    callback: Callable[[], object],
+    sleep_fn: Callable[[float], None] = None,
+    random_fn: Callable[[], float] = None,
+):
+    """Retry a complete, idempotent transaction after MySQL error 1213 only."""
+    retry_count = mysql_deadlock_retry_count(settings)
+    attempts = 0
+    delays = []
+    while True:
+        attempts += 1
+        try:
+            value = callback()
+            return value, MySQLDeadlockRetryReceipt(
+                operation=str(operation or "mysql-transaction"),
+                attempts=attempts,
+                retry_count=max(0, attempts - 1),
+                recovered=bool(delays),
+                delays_ms=tuple(delays),
+            )
+        except Exception as error:
+            if not mysql_is_deadlock(error):
+                raise
+            if attempts > retry_count:
+                receipt = MySQLDeadlockRetryReceipt(
+                    operation=str(operation or "mysql-transaction"),
+                    attempts=attempts,
+                    retry_count=max(0, attempts - 1),
+                    recovered=False,
+                    delays_ms=tuple(delays),
+                )
+                raise MySQLDeadlockRetryExhausted(operation, receipt, error) from error
+            delay_ms = mysql_deadlock_retry_delay_milliseconds(settings, attempts, random_fn=random_fn)
+            delays.append(delay_ms)
+            (sleep_fn or time.sleep)(delay_ms / 1000.0)
 
 
 def mysql_operational_schema_bootstrap_enabled(settings: Dict[str, str] = None) -> bool:
@@ -86,6 +213,7 @@ class MySQLOperationalConnection:
     def __init__(self, settings: Dict[str, str] = None):
         self.runtime_settings = dict(settings or {})
         self.mysql_config = mysql_settings(settings)
+        self.last_transaction_retry: Dict[str, object] = {}
         ensure_mysql_database_exists(self.mysql_config)
         if mysql_operational_schema_bootstrap_enabled(self.runtime_settings):
             self.ensure_schema()
@@ -148,6 +276,29 @@ class MySQLOperationalConnection:
             raise
         finally:
             proxy.close()
+
+    def transaction_with_deadlock_retry(self, operation: str, callback: Callable[[MySQLConnectionProxy], object]):
+        """Run one database mutation in a fresh transaction on every retry.
+
+        A deadlock rolls back the complete InnoDB transaction. Retrying an
+        individual statement would leave the mutation and its outbox event out
+        of sync, so the callback always owns the whole atomic unit.
+        """
+        def invoke():
+            with self.transaction() as connection:
+                return callback(connection)
+
+        try:
+            result, receipt = run_mysql_deadlock_retry(
+                self.runtime_settings,
+                operation,
+                invoke,
+            )
+        except MySQLDeadlockRetryExhausted as error:
+            self.last_transaction_retry = error.receipt.to_dict()
+            raise
+        self.last_transaction_retry = receipt.to_dict()
+        return result
 
     def schema_key(self):
         return (
@@ -485,7 +636,8 @@ MYSQL_SCHEMA = [
         payload_json LONGTEXT NOT NULL,
         KEY idx_research_evidence_symbol_last_seen (symbol, last_seen_at, evidence_id),
         KEY idx_research_evidence_kind_time (kind, last_seen_at),
-        KEY idx_research_evidence_lifecycle_kind_time (lifecycle_state, kind, published_at, evidence_id)
+        KEY idx_research_evidence_lifecycle_kind_time (lifecycle_state, kind, published_at, evidence_id),
+        KEY idx_research_evidence_lifecycle_kind_seen (lifecycle_state, kind, last_seen_at, evidence_id)
     ) ENGINE=InnoDB DEFAULT CHARSET=utf8mb4 COLLATE=utf8mb4_unicode_ci
     """,
     """

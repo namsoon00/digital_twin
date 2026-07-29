@@ -1,6 +1,6 @@
 import sys
 import unittest
-from datetime import datetime, timezone
+from datetime import datetime, timedelta, timezone
 from pathlib import Path
 from types import SimpleNamespace
 from unittest.mock import patch
@@ -90,6 +90,43 @@ class NewsCollectionQualityTests(unittest.TestCase):
         self.assertEqual("noTargets", result["status"])
         self.assertEqual(1, gateway.begin_calls)
         self.assertEqual(1, analyzer.begin_calls)
+
+    def test_evidence_cleanup_runs_on_its_own_interval_not_every_collection_cycle(self):
+        now = {"value": datetime(2026, 7, 29, 8, 0, tzinfo=timezone.utc)}
+
+        class Store:
+            def __init__(self):
+                self.cleanup_calls = []
+
+            def delete_stale_news(self, cutoff_iso, limit=500):
+                self.cleanup_calls.append({"cutoff": cutoff_iso, "limit": limit})
+                return 0
+
+        store = Store()
+        runner = NewsCollectionRunner(
+            account_repository=SimpleNamespace(load=lambda: []),
+            monitor_store=SimpleNamespace(previous={}),
+            symbol_store=SimpleNamespace(),
+            evidence_store=store,
+            gateway=SimpleNamespace(providers=lambda: []),
+            settings={
+                "newsEvidenceCleanupEnabled": "1",
+                "newsEvidenceCleanupIntervalSeconds": "900",
+                "newsEvidenceCleanupBatchSize": "500",
+            },
+            now_provider=lambda: now["value"],
+        )
+
+        first = runner.run_once(force=True)
+        second = runner.run_once(force=True)
+        now["value"] += timedelta(minutes=15)
+        third = runner.run_once(force=True)
+
+        self.assertEqual(2, len(store.cleanup_calls))
+        self.assertEqual(50, store.cleanup_calls[0]["limit"])
+        self.assertTrue(first["evidenceMaintenance"]["due"])
+        self.assertFalse(second["evidenceMaintenance"]["due"])
+        self.assertTrue(third["evidenceMaintenance"]["due"])
 
     def test_ai_fallback_is_retried_after_the_next_run_starts(self):
         calls = []

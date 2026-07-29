@@ -9,7 +9,8 @@ from digital_twin.domain.investment_research import ResearchEvidence
 from digital_twin.domain.market_data import normalize_position
 from digital_twin.domain.portfolio import utc_now_iso
 from digital_twin.infrastructure.external_signals import ExternalSignalProvider
-from mysql_fixtures import TestResearchEvidenceStore, reset_mysql_test_database, test_store_seed
+from digital_twin.infrastructure.mysql_research_evidence import MySQLResearchEvidenceStore
+from mysql_fixtures import TestResearchEvidenceStore, mysql_test_settings, reset_mysql_test_database, test_store_seed
 
 
 class MemoryExternalSignalCache:
@@ -30,6 +31,76 @@ class FixedCacheKeyExternalSignalProvider(ExternalSignalProvider):
 
 
 class ResearchEvidenceStoreTests(unittest.TestCase):
+    @staticmethod
+    def news_evidence(evidence_id: str, published_at: str = "2026-07-08T01:00:00Z") -> ResearchEvidence:
+        return ResearchEvidence(
+            evidence_id,
+            "005930",
+            "news",
+            "Reuters",
+            "뉴스 " + evidence_id,
+            "본문 " + evidence_id,
+            "https://example.test/news/" + evidence_id,
+            published_at,
+            "context",
+            published_at=published_at,
+        )
+
+    def test_upsert_sorts_and_splits_large_evidence_writes_into_short_transactions(self):
+        with tempfile.TemporaryDirectory() as temp:
+            reset_mysql_test_database(temp)
+            settings = mysql_test_settings(test_store_seed(temp))
+            settings["researchEvidenceWriteBatchSize"] = "2"
+            store = MySQLResearchEvidenceStore(settings)
+            captured = []
+
+            saved, events = store.upsert_many_with_events(
+                [
+                    self.news_evidence("research:005930:news:3"),
+                    self.news_evidence("research:005930:news:1"),
+                    self.news_evidence("research:005930:news:4"),
+                    self.news_evidence("research:005930:news:2"),
+                ],
+                lambda mutation: captured.append(mutation) or [],
+            )
+
+            self.assertEqual(4, saved)
+            self.assertEqual([], events)
+            self.assertEqual(2, len(captured))
+            self.assertEqual(
+                [
+                    ["research:005930:news:1", "research:005930:news:2"],
+                    ["research:005930:news:3", "research:005930:news:4"],
+                ],
+                [[item.evidence_id for item in mutation.changed_items] for mutation in captured],
+            )
+            self.assertEqual(
+                ["research:005930:news:1", "research:005930:news:2", "research:005930:news:3", "research:005930:news:4"],
+                [item.evidence_id for item in store.last_changed_items],
+            )
+
+    def test_stale_cleanup_skips_a_row_locked_by_another_worker(self):
+        with tempfile.TemporaryDirectory() as temp:
+            reset_mysql_test_database(temp)
+            store = TestResearchEvidenceStore(test_store_seed(temp))
+            locked = self.news_evidence("research:005930:news:locked")
+            available = self.news_evidence("research:005930:news:available")
+            self.assertEqual(2, store.upsert_many([locked, available]))
+            connection = store.raw_connection(autocommit=False)
+            try:
+                with connection.cursor() as cursor:
+                    cursor.execute(
+                        "SELECT evidence_id FROM research_evidence WHERE evidence_id = %s FOR UPDATE",
+                        (locked.evidence_id,),
+                    )
+                    self.assertEqual(1, store.delete_stale_news("2026-07-10T00:00:00Z", limit=2))
+            finally:
+                connection.rollback()
+                connection.close()
+
+            self.assertEqual("active", store.get(locked.evidence_id).lifecycle_state)
+            self.assertEqual("expired", store.get(available.evidence_id).lifecycle_state)
+
     def test_research_evidence_store_upserts_and_summarizes(self):
         with tempfile.TemporaryDirectory() as temp:
             reset_mysql_test_database(temp)

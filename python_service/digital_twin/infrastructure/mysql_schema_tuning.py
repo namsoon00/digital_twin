@@ -163,6 +163,11 @@ MYSQL_OPERATIONAL_INDEXES: Dict[str, Sequence[MySQLIndexDefinition]] = {
             "idx_research_evidence_lifecycle_kind_time",
             "`lifecycle_state`, `kind`, `published_at`, `evidence_id`",
         ),
+        MySQLIndexDefinition(
+            "research_evidence",
+            "idx_research_evidence_lifecycle_kind_seen",
+            "`lifecycle_state`, `kind`, `last_seen_at`, `evidence_id`",
+        ),
     ),
     "ontology_ai_opinion_samples": (
         MySQLIndexDefinition("ontology_ai_opinion_samples", "idx_ontology_quality_created", "`created_at`, `sample_id`"),

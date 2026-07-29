@@ -9182,6 +9182,59 @@ class TypeDBOntologyRepositoryTests(unittest.TestCase):
         self.assertEqual([rule.rule_id], result["recoveredRuleIds"])
         self.assertTrue(result["deploymentReceipt"]["saved"])
 
+    def test_typedb_pending_schema_function_receipt_retries_when_typedb_cannot_resolve_function(self):
+        rule = default_graph_inference_rules()[0]
+        repository = TypeDBOntologyGraphRepository("127.0.0.1:1729", retry_count=0)
+        definition = typedb_native_function_definition(rule.to_dict(), "portfolio:local:default")
+        deployment_definition = {
+            **(definition.get("functionDefinitions") or [definition])[0],
+            "ruleId": rule.rule_id,
+            "nativeRuleId": definition.get("nativeRuleId"),
+            "rootFunctionName": definition.get("functionName"),
+        }
+        pending_receipt = repository.schema_function_deployment_marker(
+            deployment_definition,
+            deployment_state="provisioning",
+        )["properties"]
+
+        with patch.object(
+            repository,
+            "read_schema_function_deployment_markers",
+            return_value={str(deployment_definition.get("functionName") or ""): pending_receipt},
+        ), patch.object(
+            repository,
+            "probe_typedb_schema_function_calls",
+            return_value={
+                "status": "missing",
+                "available": False,
+                "verifiedRuleIds": [],
+                "missingRuleIds": [rule.rule_id],
+                "erroredRuleIds": [],
+            },
+        ) as call_probe, patch.object(
+            repository,
+            "save_schema_function_deployment_markers",
+        ) as save_receipt:
+            result = repository.recover_pending_schema_function_deployment_receipts(
+                [rule],
+                [deployment_definition],
+                "portfolio:local:default",
+            )
+
+        call_probe.assert_called_once_with([rule], "portfolio:local:default")
+        save_receipt.assert_not_called()
+        self.assertEqual("not-deployed", result["status"])
+        self.assertEqual([rule.rule_id], result["remainingRuleIds"])
+        self.assertTrue(result["retryable"])
+
+    def test_typedb_schema_function_missing_classifier_recognizes_typedb_rep4_resolution_error(self):
+        error = RuntimeError(
+            "[REP4] Could not resolve function with name 'orbit_rule_example'. "
+            "Caused: [QEX7] Error in provided query."
+        )
+
+        self.assertTrue(TypeDBOntologyGraphRepository.schema_function_call_reports_missing(error))
+
 
 if __name__ == "__main__":
     unittest.main()

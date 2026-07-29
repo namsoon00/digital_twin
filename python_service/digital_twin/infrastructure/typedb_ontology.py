@@ -14580,6 +14580,12 @@ relation ontology-assertion,
             "unknown function",
             "function not found",
             "no function",
+            # TypeDB 3 reports an unresolved call as REP4/QEX7 rather than
+            # using one of the older "unknown function" phrases.  A pending
+            # deployment receipt with this response was never committed, so
+            # it must be retried by the background prewarmer instead of being
+            # treated as an indefinitely in-flight schema transaction.
+            "could not resolve function",
         ])
 
     def probe_typedb_schema_function_calls(

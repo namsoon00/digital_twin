@@ -14,6 +14,7 @@ from digital_twin.domain.monitoring import RealtimeMonitor
 from digital_twin.domain.portfolio import AccountSnapshot, utc_now_iso
 from digital_twin.domain.portfolio_calculations import portfolio_summary
 from digital_twin.domain.strategy import decisions_for_positions
+from digital_twin.infrastructure.mysql_monitoring_stores import snapshot_state_for_persistence
 
 
 class MemoryMonitorStore:
@@ -138,6 +139,42 @@ class MonitoringForceSnapshotTests(unittest.TestCase):
         baseline = updated_state["metadata"]["marketObservationBaselines"]["AAPL"]
         self.assertEqual(100.7, baseline["price"])
         self.assertEqual("USD", baseline["currency"])
+
+    def test_market_observation_bootstraps_a_cumulative_baseline_without_an_alert(self):
+        first_position = normalize_position({
+            "symbol": "AAPL", "name": "Apple", "market": "US", "currency": "USD",
+            "quantity": 1, "currentPrice": 100.0, "updatedAt": utc_now_iso(),
+        })
+        intermediate_position = normalize_position({
+            "symbol": "AAPL", "name": "Apple", "market": "US", "currency": "USD",
+            "quantity": 1, "currentPrice": 100.4, "updatedAt": utc_now_iso(),
+        })
+        current_position = normalize_position({
+            "symbol": "AAPL", "name": "Apple", "market": "US", "currency": "USD",
+            "quantity": 1, "currentPrice": 100.7, "updatedAt": utc_now_iso(),
+        })
+        first = AccountSnapshot(
+            "main", "메인", "toss", "live", "ok", utc_now_iso(),
+            portfolio_summary([first_position]), [first_position], [], metadata={},
+        )
+        intermediate = AccountSnapshot(
+            "main", "메인", "toss", "live", "ok", utc_now_iso(),
+            portfolio_summary([intermediate_position]), [intermediate_position], [], metadata={},
+        )
+        current = AccountSnapshot(
+            "main", "메인", "toss", "live", "ok", utc_now_iso(),
+            portfolio_summary([current_position]), [current_position], [], metadata={},
+        )
+
+        intermediate_state = snapshot_state_for_persistence(intermediate, first.to_monitor_state())
+        self.assertEqual(100.0, intermediate_state["metadata"]["marketObservationBaselines"]["AAPL"]["price"])
+
+        observations = [
+            event for event in RealtimeMonitor().events_for_snapshot(current, intermediate_state)
+            if event.rule == MARKET_OBSERVATION
+        ]
+        self.assertEqual(1, len(observations))
+        self.assertAlmostEqual(0.7, observations[0].metadata["marketObservation"]["changePct"])
 
     def test_verified_native_no_match_is_not_reported_as_an_inference_failure(self):
         reason_code, reason, detail = RealtimeMonitor().ontology_inference_missing_reason_from_metadata({

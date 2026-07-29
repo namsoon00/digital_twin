@@ -16,7 +16,7 @@ from ..domain.events import (
 from ..domain.fact_changes import fact_signature, research_evidence_fact_payload
 from ..domain.investment_research import ResearchEvidence
 from ..domain.investment_strategy_guidance import append_strategy_block, merge_strategy_context
-from ..domain.market_observations import apply_market_observation_outbox_baselines
+from ..domain.market_observations import apply_market_observation_outbox_baselines, hydrate_market_observation_baselines
 from ..domain.model_review import ModelReviewJob
 from ..domain.notification_rules import (
     DEFAULT_NOTIFICATION_RULES,
@@ -76,6 +76,8 @@ def snapshot_state_for_persistence(snapshot: AccountSnapshot, previous: Dict[str
     still count consecutive failures and report recovery.
     """
     current = snapshot.to_monitor_state()
+    if snapshot.has_live_account_data():
+        current = hydrate_market_observation_baselines(current, previous or {})
     if snapshot.has_live_account_data() or not monitor_state_has_live_account_data(previous or {}):
         return current
 

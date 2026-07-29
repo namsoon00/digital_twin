@@ -17,6 +17,35 @@ from .portfolio import AlertEvent
 MARKET_OBSERVATION_BASELINES_KEY = "marketObservationBaselines"
 
 
+def _state_positions(state: Dict[str, object]) -> Dict[str, Dict[str, object]]:
+    """Return current holding/watchlist rows keyed by symbol."""
+
+    result: Dict[str, Dict[str, object]] = {}
+    for group_name in ("positions", "watchlist"):
+        group = state.get(group_name) if isinstance(state, dict) else {}
+        values = group.values() if isinstance(group, dict) else group if isinstance(group, list) else []
+        for item in values:
+            if not isinstance(item, dict):
+                continue
+            symbol = str(item.get("symbol") or "").upper().strip()
+            if not symbol or symbol == "CASH" or (group_name == "watchlist" and symbol in result):
+                continue
+            result[symbol] = dict(item)
+    return result
+
+
+def _position_price(item: Dict[str, object]) -> float:
+    return number(item.get("current_price") if "current_price" in item else item.get("currentPrice"))
+
+
+def _position_currency(item: Dict[str, object]) -> str:
+    return str(item.get("currency") or "").upper().strip()
+
+
+def _position_source(item: Dict[str, object]) -> str:
+    return str(item.get("quote_source") or item.get("quoteSource") or item.get("source") or "").strip()
+
+
 def market_observation_baselines(state: Dict[str, object]) -> Dict[str, Dict[str, object]]:
     """Read valid per-symbol alert anchors from one persisted monitor state."""
 
@@ -51,6 +80,60 @@ def market_observation_baseline(
     if stored_currency and current_currency and stored_currency != current_currency:
         return {}
     return value
+
+
+def hydrate_market_observation_baselines(
+    state: Dict[str, object],
+    previous_state: Dict[str, object],
+) -> Dict[str, object]:
+    """Carry alert anchors across ordinary monitor snapshots.
+
+    A new subject is anchored to the immediately preceding verified price when
+    available (otherwise its current first-seen price).  That one-time anchor
+    lets sub-threshold ticks accumulate until the next outbox-accepted alert,
+    instead of requiring a single three-minute jump to bootstrap the feature.
+    """
+
+    updated = deepcopy(state or {})
+    current_positions = _state_positions(updated)
+    if not current_positions:
+        return updated
+    previous_positions = _state_positions(previous_state or {})
+    inherited = market_observation_baselines(previous_state or {})
+    inherited.update(market_observation_baselines(updated))
+    baselines: Dict[str, Dict[str, object]] = {}
+    for symbol, item in current_positions.items():
+        currency = _position_currency(item)
+        current_price = _position_price(item)
+        baseline = dict(inherited.get(symbol) or {})
+        baseline_currency = str(baseline.get("currency") or "").upper().strip()
+        if baseline_currency and currency and baseline_currency != currency:
+            baseline = {}
+        if number(baseline.get("price")) <= 0:
+            previous_item = previous_positions.get(symbol) or {}
+            previous_currency = _position_currency(previous_item)
+            previous_price = _position_price(previous_item)
+            if previous_currency and currency and previous_currency != currency:
+                previous_price = 0.0
+            anchor_price = previous_price or current_price
+            if anchor_price <= 0:
+                continue
+            baseline = {
+                "price": anchor_price,
+                "currency": currency,
+                "source": _position_source(item),
+                "initializedAt": str(updated.get("generatedAt") or ""),
+            }
+        else:
+            baseline["price"] = number(baseline.get("price"))
+            baseline["currency"] = currency or baseline_currency
+            baseline.setdefault("source", _position_source(item))
+        baselines[symbol] = baseline
+    if baselines:
+        metadata = dict(updated.get("metadata") or {})
+        metadata[MARKET_OBSERVATION_BASELINES_KEY] = baselines
+        updated["metadata"] = metadata
+    return updated
 
 
 def apply_market_observation_outbox_baselines(

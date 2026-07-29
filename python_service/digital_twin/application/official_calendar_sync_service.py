@@ -28,11 +28,13 @@ class OfficialCalendarSyncService:
         self,
         calendar_service,
         sources: Iterable[object] = None,
+        candidate_service=None,
         settings: Dict[str, object] = None,
         now=None,
     ):
         self.calendar_service = calendar_service
         self.sources = list(sources or [])
+        self.candidate_service = candidate_service
         self.settings = dict(settings or {})
         self.now = now or (lambda: datetime.now(timezone.utc))
         self.last_synced_at = None
@@ -65,6 +67,8 @@ class OfficialCalendarSyncService:
         saved = 0
         superseded = 0
         quarantined = 0
+        candidate_repair: Dict[str, object] = {}
+        candidate_superseded = 0
         errors: List[str] = []
         event_ids: List[str] = []
         source_results: List[Dict[str, object]] = []
@@ -75,6 +79,11 @@ class OfficialCalendarSyncService:
                 quarantined = int((quarantine_result or {}).get("quarantinedCount") or 0)
             except Exception as error:  # noqa: BLE001 - source synchronization can still proceed.
                 errors.append("legacy-auto-quarantine: " + str(error)[:240])
+        if self.candidate_service and hasattr(self.candidate_service, "reconcile_all_candidates"):
+            try:
+                candidate_repair = self.candidate_service.reconcile_all_candidates()
+            except Exception as error:  # noqa: BLE001 - official schedules still have priority.
+                errors.append("legacy-candidate-repair: " + str(error)[:240])
         for source in self.sources:
             label = source.__class__.__name__
             try:
@@ -97,6 +106,9 @@ class OfficialCalendarSyncService:
                     if hasattr(self.calendar_service, "reconcile_unverified_events"):
                         reconciliation = self.calendar_service.reconcile_unverified_events(event)
                         superseded += int((reconciliation or {}).get("supersededCount") or 0)
+                    if self.candidate_service and hasattr(self.candidate_service, "reconcile_official_event"):
+                        candidate_result = self.candidate_service.reconcile_official_event(event)
+                        candidate_superseded += int((candidate_result or {}).get("superseded") or 0)
                 except Exception as error:  # noqa: BLE001 - keep syncing other events.
                     errors.append(event.event_id + ": " + str(error)[:240])
             source_results.append({
@@ -118,6 +130,8 @@ class OfficialCalendarSyncService:
             "savedCount": saved,
             "supersededCount": superseded,
             "quarantinedCount": quarantined,
+            "candidateRepair": candidate_repair,
+            "candidateSupersededCount": candidate_superseded,
             "eventIds": event_ids[:200],
             "sources": source_results,
             "errors": errors[:10],

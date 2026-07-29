@@ -98,14 +98,19 @@ def event_timezone(name: object = ""):
         return ZoneInfo(DEFAULT_EVENT_TIMEZONE)
 
 
-def parse_event_datetime(value: object, timezone_name: str = DEFAULT_EVENT_TIMEZONE, all_day: bool = False):
+def parse_event_datetime(
+    value: object,
+    timezone_name: str = DEFAULT_EVENT_TIMEZONE,
+    all_day: bool = False,
+    canonical_utc: bool = False,
+):
     text = str(value or "").strip()
     if not text:
         return None
     # A provider date is a calendar date in the event's local market, not
     # midnight UTC. Preserve that distinction so a date-only estimate cannot
     # surface as an invented 09:00 KST appointment.
-    if all_day:
+    if all_day and not canonical_utc:
         date_match = re.match(r"(\d{4}-\d{2}-\d{2})", text)
         if not date_match:
             return None
@@ -124,8 +129,6 @@ def parse_event_datetime(value: object, timezone_name: str = DEFAULT_EVENT_TIMEZ
         return None
     if parsed.tzinfo is None:
         parsed = parsed.replace(tzinfo=event_timezone(timezone_name))
-    if all_day:
-        parsed = parsed.replace(hour=0, minute=0, second=0, microsecond=0)
     return parsed.astimezone(timezone.utc)
 
 
@@ -142,6 +145,25 @@ def utc_iso(value: datetime) -> str:
 
 def parse_utc(value: object):
     return parse_event_datetime(value, "UTC")
+
+
+def local_date_text(value: object, timezone_name: str = DEFAULT_EVENT_TIMEZONE) -> str:
+    parsed = parse_utc(value)
+    if not parsed:
+        return ""
+    return parsed.astimezone(event_timezone(timezone_name)).date().isoformat()
+
+
+def calendar_timezone_for(symbols: Iterable[object], markets: Iterable[object]) -> str:
+    normalized_symbols = [normalize_symbol(symbol) for symbol in symbols or []]
+    normalized_markets = set(normalized_list(markets, normalize_market, 50))
+    if any(re.fullmatch(r"\d{6}", symbol or "") for symbol in normalized_symbols):
+        return "Asia/Seoul"
+    if normalized_markets.intersection({"US", "NASDAQ", "NYSE", "AMEX"}):
+        return "America/New_York"
+    if any(symbol and not re.fullmatch(r"\d{6}", symbol) for symbol in normalized_symbols):
+        return "America/New_York"
+    return DEFAULT_EVENT_TIMEZONE
 
 
 def reminder_offsets_from_payload(value: object) -> List[int]:
@@ -226,10 +248,21 @@ class InvestmentCalendarEvent:
         event_id = clean_text(payload.get("eventId") or payload.get("event_id") or "", 191) or uuid.uuid4().hex
         timezone_name = clean_text(payload.get("timezone") or DEFAULT_EVENT_TIMEZONE, 80)
         all_day = bool_value(payload.get("allDay") if "allDay" in payload else payload.get("all_day"), False)
-        starts_at = parse_event_datetime(payload.get("startsAt") or payload.get("starts_at"), timezone_name, all_day)
+        canonical_utc = bool_value(payload.get("_canonicalUtc") or payload.get("_canonical_utc"), False)
+        starts_at = parse_event_datetime(
+            payload.get("startsAt") or payload.get("starts_at"),
+            timezone_name,
+            all_day,
+            canonical_utc=canonical_utc,
+        )
         if not starts_at:
             raise ValueError("startsAt은 ISO 날짜 또는 날짜시간이어야 합니다.")
-        ends_at = parse_event_datetime(payload.get("endsAt") or payload.get("ends_at"), timezone_name, all_day)
+        ends_at = parse_event_datetime(
+            payload.get("endsAt") or payload.get("ends_at"),
+            timezone_name,
+            all_day,
+            canonical_utc=canonical_utc,
+        )
         title = clean_text(payload.get("title"), 255)
         if not title:
             raise ValueError("title은 필요합니다.")
@@ -271,7 +304,9 @@ class InvestmentCalendarEvent:
 
     @classmethod
     def from_dict(cls, payload: Dict[str, object]):
-        return cls.from_payload(payload)
+        values = dict(payload or {})
+        values["_canonicalUtc"] = True
+        return cls.from_payload(values)
 
     def to_dict(self) -> Dict[str, object]:
         payload = asdict(self)
@@ -281,6 +316,7 @@ class InvestmentCalendarEvent:
             "eventType": payload["event_type"],
             "eventTypeLabel": event_type_label(payload["event_type"]),
             "startsAt": payload["starts_at"],
+            "localDate": local_date_text(payload["starts_at"], payload["timezone"]),
             "endsAt": payload["ends_at"],
             "timezone": payload["timezone"],
             "allDay": payload["all_day"],

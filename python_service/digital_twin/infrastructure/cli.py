@@ -985,6 +985,7 @@ def investment_calendar_command(args) -> int:
         candidate_service = build_investment_calendar_candidate_service(settings)
         print(json.dumps(candidate_service.approve_candidate(args.candidate_id, {
             "startsAt": args.starts_at,
+            "officialSourceUrl": args.official_source_url,
             "reviewNote": args.note,
         }), ensure_ascii=False))
         return 0
@@ -1356,6 +1357,7 @@ def build_parser() -> argparse.ArgumentParser:
     calendar_candidate_approve = investment_calendar_actions.add_parser("approve-candidate")
     calendar_candidate_approve.add_argument("--candidate-id", required=True)
     calendar_candidate_approve.add_argument("--starts-at", default="")
+    calendar_candidate_approve.add_argument("--official-source-url", default="")
     calendar_candidate_approve.add_argument("--note", default="")
     calendar_candidate_reject = investment_calendar_actions.add_parser("reject-candidate")
     calendar_candidate_reject.add_argument("--candidate-id", required=True)

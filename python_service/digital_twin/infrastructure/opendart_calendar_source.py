@@ -1,7 +1,10 @@
+import io
 import re
 import urllib.parse
+import zipfile
 from datetime import datetime, timedelta, timezone
 from typing import Callable, Dict, List, Optional
+from xml.etree import ElementTree
 
 from ..domain.official_calendar import OfficialCalendarEvent, kst_datetime
 from ..domain.investment_calendar import utc_iso
@@ -19,6 +22,7 @@ from .external_signal_utils import (
 
 OPENDART_LIST_URL = "https://opendart.fss.or.kr/api/list.json"
 OPENDART_DOCUMENT_URL = "https://opendart.fss.or.kr/api/document.xml"
+OPENDART_CORP_CODE_URL = "https://opendart.fss.or.kr/api/corpCode.xml"
 DART_VIEWER_URL = "https://dart.fss.or.kr/dsaf001/main.do"
 
 
@@ -39,6 +43,36 @@ def bounded_int(value: object, fallback: int, lower: int, upper: int) -> int:
 
 def opendart_document_url(receipt_no: str) -> str:
     return DART_VIEWER_URL + "?" + urllib.parse.urlencode({"rcpNo": str(receipt_no or "").strip()})
+
+
+def parse_opendart_corp_codes(raw: object, target_symbols: List[str] = None) -> Dict[str, str]:
+    data = bytes(raw or b"")
+    if not data:
+        return {}
+    try:
+        with zipfile.ZipFile(io.BytesIO(data)) as archive:
+            names = [name for name in archive.namelist() if name.lower().endswith(".xml")]
+            data = archive.read(names[0]) if names else b""
+    except (OSError, zipfile.BadZipFile):
+        pass
+    if not data:
+        return {}
+    wanted = {str(symbol or "").zfill(6) for symbol in target_symbols or [] if str(symbol or "").strip()}
+    try:
+        root = ElementTree.fromstring(data)
+    except ElementTree.ParseError:
+        return {}
+    assignments = {}
+    for row in root.findall(".//list"):
+        stock_code = str(row.findtext("stock_code") or "").strip().zfill(6)
+        corp_code = str(row.findtext("corp_code") or "").strip().zfill(8)
+        if (
+            stock_code != "000000"
+            and corp_code != "00000000"
+            and (not wanted or stock_code in wanted)
+        ):
+            assignments[stock_code] = corp_code
+    return assignments
 
 
 def is_earnings_ir_report(row: Dict[str, object]) -> bool:
@@ -115,19 +149,25 @@ class OpenDartEarningsCalendarSource:
         fetch_bytes: Callable[[str, Dict[str, str], float], bytes] = None,
         now: Callable[[], datetime] = None,
         guard_state: Dict[str, object] = None,
+        target_symbols: List[str] = None,
     ):
         self.settings = dict(settings or {})
         self.fetch_json = fetch_json or default_json_fetcher
         self.fetch_bytes = fetch_bytes or default_bytes_fetcher
         self.now = now or (lambda: datetime.now(timezone.utc))
         self.guard_state = guard_state
+        self.target_symbols = []
+        for raw in target_symbols or []:
+            symbol = str(raw or "").upper().strip()
+            if re.fullmatch(r"\d{6}", symbol) and symbol not in self.target_symbols:
+                self.target_symbols.append(symbol)
 
     def enabled(self) -> bool:
         return bool(
             truthy(self.settings.get("investmentCalendarOfficialMacroSyncEnabled"), True)
             and truthy(self.settings.get("investmentCalendarOfficialEarningsSyncEnabled"), True)
             and str(self.settings.get("opendartApiKey") or "").strip()
-            and symbol_assignments(self.settings.get("externalDartCorpCodes") or "")
+            and (symbol_assignments(self.settings.get("externalDartCorpCodes") or "") or self.target_symbols)
         )
 
     def timeout_seconds(self) -> float:
@@ -174,6 +214,29 @@ class OpenDartEarningsCalendarSource:
             raise RuntimeError(str((result or {}).get("message") or "OpenDART 목록 응답 오류"))
         return [row for row in result.get("list") or [] if isinstance(row, dict) and is_earnings_ir_report(row)]
 
+    def corp_code_assignments(self) -> Dict[str, str]:
+        configured = symbol_assignments(self.settings.get("externalDartCorpCodes") or "")
+        targets = []
+        for symbol in list(configured) + self.target_symbols:
+            if re.fullmatch(r"\d{6}", str(symbol or "")) and symbol not in targets:
+                targets.append(symbol)
+        missing = [symbol for symbol in targets if symbol not in configured]
+        if not missing:
+            return {symbol: configured[symbol] for symbol in targets[: self.max_symbols()]}
+        params = {"crtfc_key": str(self.settings.get("opendartApiKey") or "").strip()}
+        url = OPENDART_CORP_CODE_URL + "?" + urllib.parse.urlencode(params)
+        try:
+            raw = self.fetch(url, self.fetch_bytes, {"Accept": "application/zip,application/xml"})
+            configured.update(parse_opendart_corp_codes(raw, missing))
+        except Exception:
+            if not configured:
+                raise
+        return {
+            symbol: configured[symbol]
+            for symbol in targets[: self.max_symbols()]
+            if symbol in configured
+        }
+
     def document_text(self, receipt_no: str) -> str:
         params = {
             "crtfc_key": str(self.settings.get("opendartApiKey") or "").strip(),
@@ -186,10 +249,10 @@ class OpenDartEarningsCalendarSource:
     def events(self) -> List[OfficialCalendarEvent]:
         if not self.enabled():
             return []
-        assignments = symbol_assignments(self.settings.get("externalDartCorpCodes") or "")
+        assignments = self.corp_code_assignments()
         events: List[OfficialCalendarEvent] = []
         seen = set()
-        for symbol, corp_code in sorted(assignments.items())[: self.max_symbols()]:
+        for symbol, corp_code in list(assignments.items())[: self.max_symbols()]:
             for row in self.list_rows(corp_code):
                 receipt_no = str(row.get("rcept_no") or "").strip()
                 if not receipt_no:

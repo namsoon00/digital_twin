@@ -1,21 +1,25 @@
-from datetime import datetime, timezone
+from datetime import datetime, timedelta, timezone
 from typing import Dict, List, Tuple
 from urllib.parse import urlparse
 
-from ..domain.investment_calendar import clean_text, has_explicit_event_time
+from ..domain.investment_calendar import clean_text, has_explicit_event_time, parse_utc
 from ..domain.investment_calendar_candidates import (
     bounded_int,
     CANDIDATE_STATUS_REGISTERED,
+    CANDIDATE_STATUS_EXPIRED,
     CANDIDATE_STATUS_PENDING,
     CANDIDATE_STATUS_REJECTED,
+    CANDIDATE_STATUS_SUPERSEDED,
     InvestmentCalendarReviewCandidate,
 )
+from ..domain.security_lines import security_lines_for_symbol
 
 
 class InvestmentCalendarCandidateService:
-    def __init__(self, candidate_repository, calendar_service):
+    def __init__(self, candidate_repository, calendar_service, settings: Dict[str, object] = None):
         self.candidate_repository = candidate_repository
         self.calendar_service = calendar_service
+        self.settings = dict(settings or {})
 
     def list_candidates(self, query: Dict[str, object] = None) -> Dict[str, object]:
         query = query if isinstance(query, dict) else {}
@@ -71,16 +75,36 @@ class InvestmentCalendarCandidateService:
         }
 
     @staticmethod
+    def _structured_schedule(candidate: InvestmentCalendarReviewCandidate) -> bool:
+        payload = candidate.payload if isinstance(candidate.payload, dict) else {}
+        if not str(candidate.starts_at or "").strip():
+            return False
+        detector = str(payload.get("detector") or "").strip()
+        parser = str(payload.get("sourceParser") or "").strip()
+        date_source = str(payload.get("dateSource") or "").strip()
+        structured_type = str(payload.get("structuredEventType") or "").strip()
+        return bool(
+            date_source.startswith("calendar.")
+            or detector == "structured-calendar-source-v1"
+            or str(candidate.source or "").strip().casefold() == "yfinance"
+            or (
+                structured_type
+                and (
+                    parser in {"sec-edgar", "dart", "krx-kind", "exchange", "issuer-ir"}
+                    or detector in {"calendar-scheduled-research-v1", "ai-research-calendar-recommender-v1"}
+                )
+            )
+        )
+
+    @staticmethod
     def _candidate_visibility(candidate: InvestmentCalendarReviewCandidate) -> Tuple[bool, str]:
         payload = candidate.payload if isinstance(candidate.payload, dict) else {}
         if not payload.get("autoDetected"):
             return True, ""
         if not str(candidate.starts_at or "").strip():
             return False, "날짜 없는 자동 후보"
-        structured_type = str(payload.get("structuredEventType") or "").strip()
-        official = bool(payload.get("officialSource"))
-        if not structured_type and not official:
-            return False, "비공식 키워드 자동 후보"
+        if not InvestmentCalendarCandidateService._structured_schedule(candidate):
+            return False, "구조화 일정이 아닌 자동 후보"
         return True, ""
 
     @staticmethod
@@ -127,6 +151,113 @@ class InvestmentCalendarCandidateService:
             rejected += 1 if updated else 0
         return {"reviewed": len(candidates), "rejected": rejected, "hidden": hidden}
 
+    def reconcile_all_candidates(self, limit: int = 500) -> Dict[str, object]:
+        """Repair legacy approvals using the current official-source contract."""
+        if not hasattr(self.candidate_repository, "list"):
+            return {"reviewed": 0, "reopened": 0, "rejected": 0}
+        rows = []
+        for status in (CANDIDATE_STATUS_PENDING, CANDIDATE_STATUS_REGISTERED):
+            try:
+                rows.extend(self.candidate_repository.list(status=status, limit=limit, offset=0))
+            except TypeError:
+                rows.extend(self.candidate_repository.list(status=status, limit=limit))
+        reopened = 0
+        rejected = 0
+        expired = 0
+        unchanged = 0
+        expires_before = datetime.now(timezone.utc) - timedelta(days=2)
+        for candidate in rows:
+            if not (candidate.payload or {}).get("autoDetected"):
+                unchanged += 1
+                continue
+            candidate_at = parse_utc(candidate.starts_at)
+            if candidate_at and candidate_at < expires_before:
+                updated = self.candidate_repository.mark_status(
+                    candidate.candidate_id,
+                    CANDIDATE_STATUS_EXPIRED,
+                    "자동 정리: 예정일이 지나 후보 검토 대상에서 제외했습니다.",
+                )
+                expired += 1 if updated else 0
+                continue
+            if not self._structured_schedule(candidate):
+                updated = self.candidate_repository.mark_status(
+                    candidate.candidate_id,
+                    CANDIDATE_STATUS_REJECTED,
+                    "자동 정리: 구조화된 공식 일정 근거가 없습니다.",
+                )
+                rejected += 1 if updated else 0
+                continue
+            event = None
+            repository = getattr(self.calendar_service, "repository", None)
+            if repository and hasattr(repository, "get"):
+                event = repository.get(candidate.proposed_event_id)
+            event_payload = getattr(event, "payload", {}) if event else {}
+            confirmed = bool(
+                event
+                and bool(event_payload.get("officialSource"))
+                and not bool(event_payload.get("reviewRequired"))
+                and str(event_payload.get("scheduleState") or "") in {"confirmed", "dateConfirmed"}
+            )
+            if candidate.status == CANDIDATE_STATUS_REGISTERED and not confirmed:
+                updated = self.candidate_repository.mark_status(
+                    candidate.candidate_id,
+                    CANDIDATE_STATUS_PENDING,
+                    "자동 정리: 공식 출처와 확정 시각을 다시 확인해야 합니다.",
+                )
+                reopened += 1 if updated else 0
+            else:
+                unchanged += 1
+        return {
+            "reviewed": len(rows),
+            "reopened": reopened,
+            "rejected": rejected,
+            "expired": expired,
+            "unchanged": unchanged,
+        }
+
+    def related_symbols(self, symbols) -> set:
+        related = {str(symbol or "").upper() for symbol in symbols or [] if str(symbol or "").strip()}
+        for symbol in list(related):
+            for line in security_lines_for_symbol(symbol, self.settings):
+                related.update({
+                    str(line.local_symbol or "").upper(),
+                    str(line.symbol or "").upper(),
+                    str(line.underlying_symbol or "").upper(),
+                })
+        return {symbol for symbol in related if symbol}
+
+    def reconcile_official_event(self, official_event, window_days: int = 14) -> Dict[str, object]:
+        if not official_event or not getattr(official_event, "symbols", None):
+            return {"superseded": 0, "candidateIds": []}
+        official_at = parse_utc(getattr(official_event, "starts_at", ""))
+        if not official_at:
+            return {"superseded": 0, "candidateIds": []}
+        symbols = self.related_symbols(official_event.symbols)
+        rows = []
+        for status in (CANDIDATE_STATUS_PENDING, CANDIDATE_STATUS_REGISTERED):
+            try:
+                rows.extend(self.candidate_repository.list(status=status, limit=500, offset=0))
+            except TypeError:
+                rows.extend(self.candidate_repository.list(status=status, limit=500))
+        candidate_ids = []
+        for candidate in rows:
+            candidate_at = parse_utc(candidate.starts_at)
+            if (
+                candidate.event_type != official_event.event_type
+                or not symbols.intersection(self.related_symbols(candidate.symbols))
+                or not candidate_at
+                or abs((candidate_at - official_at).total_seconds()) > max(1, int(window_days)) * 86400
+            ):
+                continue
+            updated = self.candidate_repository.mark_status(
+                candidate.candidate_id,
+                CANDIDATE_STATUS_SUPERSEDED,
+                "공식 일정으로 대체: " + str(official_event.event_id or ""),
+            )
+            if updated:
+                candidate_ids.append(candidate.candidate_id)
+        return {"superseded": len(candidate_ids), "candidateIds": candidate_ids}
+
     def approve_candidate(self, candidate_id: str, payload: Dict[str, object] = None) -> Dict[str, object]:
         payload = payload if isinstance(payload, dict) else {}
         candidate = self.candidate_repository.get(candidate_id)
@@ -140,6 +271,15 @@ class InvestmentCalendarCandidateService:
         candidate_payload = candidate.payload if isinstance(candidate.payload, dict) else {}
         if candidate_payload.get("autoDetected"):
             self.apply_official_confirmation(event_payload, candidate, payload)
+            refreshed_candidate = candidate.to_dict()
+            refreshed_candidate.update({
+                "startsAt": event_payload.get("startsAt"),
+                "allDay": False,
+                "source": event_payload.get("source"),
+                "sourceUrl": event_payload.get("sourceUrl"),
+                "payload": dict(event_payload.get("payload") or {}),
+            })
+            self.candidate_repository.upsert(refreshed_candidate)
         event = self.calendar_service.save_event(event_payload)
         updated = self.candidate_repository.mark_status(
             candidate.candidate_id,

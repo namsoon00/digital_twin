@@ -65,6 +65,7 @@ from ..domain.ontology_worlds import portfolio_world_id
 from .event_bus import EventBus, default_event_bus
 from .bok_calendar_source import BokPolicyDecisionCalendarSource
 from .opendart_calendar_source import OpenDartEarningsCalendarSource
+from .samsung_ir_calendar_source import SamsungIrEarningsCalendarSource
 from .disclosure_analyzer import disclosure_analyzer_from_settings
 from .model_review_queue import ModelReviewEnqueuer
 from .model_reviewer import reviewer_from_settings
@@ -486,12 +487,23 @@ def build_investment_calendar_service(settings=None, event_publisher=None) -> In
 
 def build_official_calendar_sync_service(settings=None, event_publisher=None) -> OfficialCalendarSyncService:
     configured_settings = settings or runtime_settings()
+    calendar_service = build_investment_calendar_service(configured_settings, event_publisher)
+    account_repository = stores.account_registry(configured_settings)
+    priority_symbols = ontology_reasoning_priority_symbols(account_repository, configured_settings)
+    calendar_symbols = list(priority_symbols.get("holdingSymbols") or []) + list(priority_symbols.get("watchlistSymbols") or [])
+    candidate_service = InvestmentCalendarCandidateService(
+        candidate_repository=stores.investment_calendar_candidate_store(configured_settings),
+        calendar_service=calendar_service,
+        settings=configured_settings,
+    )
     return OfficialCalendarSyncService(
-        calendar_service=build_investment_calendar_service(configured_settings, event_publisher),
+        calendar_service=calendar_service,
         sources=[
             BokPolicyDecisionCalendarSource(configured_settings),
-            OpenDartEarningsCalendarSource(configured_settings),
+            OpenDartEarningsCalendarSource(configured_settings, target_symbols=calendar_symbols),
+            SamsungIrEarningsCalendarSource(configured_settings),
         ],
+        candidate_service=candidate_service,
         settings=configured_settings,
     )
 
@@ -501,6 +513,7 @@ def build_investment_calendar_candidate_service(settings=None, event_publisher=N
     return InvestmentCalendarCandidateService(
         candidate_repository=stores.investment_calendar_candidate_store(configured_settings),
         calendar_service=build_investment_calendar_service(configured_settings, event_publisher),
+        settings=configured_settings,
     )
 
 

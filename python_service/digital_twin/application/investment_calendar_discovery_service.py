@@ -40,9 +40,9 @@ def evidence_to_dict(item) -> Dict[str, object]:
 class InvestmentCalendarDiscoveryService:
     """Periodically discover dated, review-first investment calendar events.
 
-    The service intentionally separates discovery from activation. Structured
-    calendar dates from financial providers create visible tentative events and
-    review candidates; only official/approved events become active reminders.
+    The service intentionally separates discovery from activation. Provider
+    estimates stay in the review queue; only official or explicitly confirmed
+    schedules enter the investment calendar.
     """
 
     def __init__(
@@ -249,13 +249,6 @@ class InvestmentCalendarDiscoveryService:
             if existing_candidate and getattr(existing_candidate, "status", "") in CANDIDATE_FINAL_STATUSES:
                 skipped_final_count += 1
                 continue
-            existing_event = self.existing_event(candidate.event_id)
-            if not existing_event or str(getattr(existing_event, "status", "")) != "active":
-                try:
-                    self.calendar_service.save_event(self.tentative_event_payload(candidate, account_ids))
-                    tentative_count += 1
-                except Exception as error:  # noqa: BLE001 - a review candidate remains available.
-                    errors.append(candidate.event_id + ": " + str(error)[:180])
             if self.candidate_repository:
                 try:
                     if self.candidate_repository.upsert(self.candidate_payload(candidate, account_ids)):

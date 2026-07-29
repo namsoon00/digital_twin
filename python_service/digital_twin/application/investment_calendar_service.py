@@ -28,6 +28,7 @@ from ..domain.portfolio import utc_now_iso
 
 
 DISABLED_VALUES = {"0", "false", "no", "off", "disabled"}
+DEFAULT_VISIBLE_EVENT_STATUSES = {"active", "tentative"}
 
 
 def truthy(value: object, default: bool = True) -> bool:
@@ -149,17 +150,30 @@ class InvestmentCalendarService:
         if not to_at:
             to_at = utc_iso(now + timedelta(days=self.default_window_days()))
         limit = int_setting(query, "limit", 200, 1, 500)
+        requested_status = clean_text(query.get("status") or "")
+        include_inactive = truthy(query.get("includeInactive"), False)
         events = self.repository.list(
             from_at=from_at,
             to_at=to_at,
-            status=clean_text(query.get("status") or ""),
+            status=requested_status,
             symbol=clean_text(query.get("symbol") or "").upper(),
             event_type=clean_text(query.get("eventType") or query.get("event_type") or ""),
-            limit=limit,
+            limit=limit if requested_status or include_inactive else 500,
         )
+        if not requested_status and not include_inactive:
+            events = [event for event in events if event.status in DEFAULT_VISIBLE_EVENT_STATUSES]
+        events = events[:limit]
         summary = dict(self.repository.summary() or {})
         summary["storedTotal"] = int(summary.get("total") or 0)
+        summary["storedByType"] = list(summary.get("byType") or [])
         summary["total"] = len(events)
+        visible_by_type = {}
+        for event in events:
+            visible_by_type[event.event_type] = visible_by_type.get(event.event_type, 0) + 1
+        summary["byType"] = [
+            {"eventType": event_type, "count": count}
+            for event_type, count in sorted(visible_by_type.items(), key=lambda item: (-item[1], item[0]))
+        ]
         upcoming_events = [
             event
             for event in events
@@ -227,7 +241,7 @@ class InvestmentCalendarService:
             payload = candidate.payload if isinstance(candidate.payload, dict) else {}
             if (
                 candidate.event_id == official_event.event_id
-                or candidate.status not in {"active", "tentative", "needsReview"}
+                or candidate.status not in {"active", "tentative", "needsReview", "candidateOnly"}
                 or not payload.get("autoDetected")
                 or payload.get("officialSource")
             ):
@@ -253,16 +267,23 @@ class InvestmentCalendarService:
             superseded.append(candidate.event_id)
         return {"supersededCount": len(superseded), "eventIds": superseded}
 
-    def quarantine_unverified_automatic_events(self) -> Dict[str, object]:
-        """Move legacy auto-detected estimates out of the actionable calendar.
+    @staticmethod
+    def structured_automatic_event(payload: Dict[str, object], source: object = "") -> bool:
+        detector = str((payload or {}).get("detector") or "").strip()
+        parser = str((payload or {}).get("sourceParser") or "").strip()
+        date_source = str((payload or {}).get("dateSource") or "").strip()
+        return bool(
+            date_source.startswith("calendar.")
+            or detector == "structured-calendar-source-v1"
+            or str(source or "").strip().casefold() == "yfinance"
+            or str((payload or {}).get("structuredEventType") or "").strip()
+            or parser in {"sec-edgar", "dart", "krx-kind", "exchange", "issuer-ir"}
+        )
 
-        Earlier versions allowed a provider's date-only earnings estimate to be
-        approved into an active event.  Keep that history visible for review,
-        but do not leave it in an alertable state while no official source has
-        confirmed the date and time.
-        """
+    def reconcile_automatic_event_states(self) -> Dict[str, object]:
+        """Separate confirmed schedules, review candidates, and invalid noise."""
         if not hasattr(self.repository, "list"):
-            return {"quarantinedCount": 0, "eventIds": []}
+            return {"quarantinedCount": 0, "candidateOnlyCount": 0, "rejectedCount": 0, "eventIds": []}
         now = datetime.now(timezone.utc)
         candidates = self.repository.list(
             # Cover retained history as well as the next planning window. A
@@ -270,34 +291,73 @@ class InvestmentCalendarService:
             # have become past events, which makes the calendar misleading.
             from_at=utc_iso(now - timedelta(days=366)),
             to_at=utc_iso(now + timedelta(days=366)),
-            status="active",
             limit=1000,
         )
-        quarantined = []
+        changed = []
+        candidate_only = 0
+        rejected = 0
         for candidate in candidates:
             payload = candidate.payload if isinstance(candidate.payload, dict) else {}
-            if not truthy(payload.get("autoDetected"), False) or truthy(payload.get("officialSource"), False):
+            if not truthy(payload.get("autoDetected"), False):
+                continue
+            if candidate.status in {"superseded", "rejected", "deleted"}:
+                continue
+            official = truthy(payload.get("officialSource"), False)
+            review_required = truthy(payload.get("reviewRequired"), False)
+            schedule_state = str(payload.get("scheduleState") or "").strip()
+            structured = self.structured_automatic_event(payload, candidate.source)
+            confirmed_date_only = bool(
+                candidate.all_day
+                and official
+                and structured
+                and not review_required
+                and schedule_state in {"confirmed", "dateConfirmed"}
+            )
+            if candidate.reminder_eligible() or confirmed_date_only:
+                continue
+            desired_status = "candidateOnly" if structured else "rejected"
+            if (
+                candidate.status == desired_status
+                and not candidate.reminder_offsets_minutes
+                and truthy(payload.get("reviewRequired"), True)
+            ):
                 continue
             replacement = candidate.to_dict()
             replacement_payload = replacement.get("payload") if isinstance(replacement.get("payload"), dict) else {}
             date_source = str(replacement_payload.get("dateSource") or "").strip().lower()
             replacement_payload.update({
-                "scheduleState": "estimated",
+                "scheduleState": "estimated" if structured else "invalid",
                 "reviewRequired": True,
-                "reviewReason": replacement_payload.get("reviewReason") or "officialSourceRequired",
-                "needsSourceRefresh": True,
+                "reviewReason": (
+                    replacement_payload.get("reviewReason")
+                    or ("officialSourceRequired" if structured else "notStructuredSchedule")
+                ),
+                "needsSourceRefresh": structured,
                 "reminderEnabled": False,
                 "quarantinedAt": utc_now_iso(),
             })
             replacement.update({
-                "status": "needsReview",
+                "status": desired_status,
                 "allDay": bool(candidate.all_day or date_source.startswith("calendar.")),
                 "reminderOffsetsMinutes": [],
                 "payload": replacement_payload,
             })
             self.save_event(replacement)
-            quarantined.append(candidate.event_id)
-        return {"quarantinedCount": len(quarantined), "eventIds": quarantined}
+            changed.append(candidate.event_id)
+            if desired_status == "candidateOnly":
+                candidate_only += 1
+            else:
+                rejected += 1
+        return {
+            "quarantinedCount": len(changed),
+            "candidateOnlyCount": candidate_only,
+            "rejectedCount": rejected,
+            "eventIds": changed,
+        }
+
+    def quarantine_unverified_automatic_events(self) -> Dict[str, object]:
+        """Backward-compatible alias for the full automatic event repair."""
+        return self.reconcile_automatic_event_states()
 
     def delete_event(self, event_id: str) -> Dict[str, object]:
         normalized = clean_text(event_id, 191)
@@ -372,12 +432,18 @@ class InvestmentCalendarService:
 
     def reminder_message(self, reminder: InvestmentCalendarReminder, account=None) -> str:
         event = reminder.event
+        event_payload = event.payload if isinstance(event.payload, dict) else {}
         guidance = event_strategy_guidance(event.event_type, event.symbols, event.markets, account=account)
         lines = [
             "<b>투자 캘린더 알림</b>",
             html_line("이벤트", event.title),
             html_line("유형", event_type_label(event.event_type)),
-            html_line("일정", kst_text(event.starts_at, event.timezone)),
+            html_line(
+                "일정일·알림 기준"
+                if event_payload.get("timeState") == "operationalDefault"
+                else "일정",
+                kst_text(event.starts_at, event.timezone),
+            ),
             html_line("알림", offset_text(reminder.offset_minutes)),
             html_line("대상", guidance["target"]),
             html_line("중요도", str(event.importance) + "점"),

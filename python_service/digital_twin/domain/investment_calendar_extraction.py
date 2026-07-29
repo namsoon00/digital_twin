@@ -3,8 +3,9 @@ import re
 from dataclasses import dataclass, field
 from datetime import datetime, timedelta, timezone
 from typing import Dict, Iterable, List, Tuple
+from urllib.parse import urlparse
 
-from .investment_calendar import normalized_event_markets, utc_iso
+from .investment_calendar import calendar_timezone_for, normalized_event_markets, utc_iso
 from .portfolio import utc_now_iso
 
 
@@ -133,7 +134,6 @@ EVENT_PATTERNS = [
         "markets": [],
     },
 ]
-OFFICIAL_SOURCE_TERMS = {"dart", "kind", "krx", "sec", "edgar", "nasdaq", "nyse", "investor relations", "ir"}
 EVENT_PATTERN_BY_TYPE = {str(pattern["eventType"]): pattern for pattern in EVENT_PATTERNS}
 STRUCTURED_DATE_KEYS = [
     "eventDate",
@@ -287,23 +287,28 @@ def known_event_type(value: object) -> str:
 
 def source_parser(item: Dict[str, object]) -> str:
     payload = evidence_payload(item)
-    haystack = lower_text(" ".join([
+    identity = lower_text(" ".join([
         str(item.get("source") or ""),
-        str(item.get("url") or ""),
-        str(item.get("kind") or ""),
         str(payload.get("sourcePlatform") or ""),
         str(payload.get("provider") or ""),
         str(payload.get("sourceKind") or ""),
     ]))
-    if "sec" in haystack or "edgar" in haystack or "sec.gov" in haystack:
+    try:
+        host = (urlparse(str(item.get("url") or "")).hostname or "").casefold()
+    except ValueError:
+        host = ""
+    if host == "sec.gov" or host.endswith(".sec.gov") or re.search(r"\bsec\s+edgar\b|\bedgar\b", identity):
         return "sec-edgar"
-    if "dart" in haystack or "opendart" in haystack:
+    if host in {"dart.fss.or.kr", "opendart.fss.or.kr"} or host.endswith(".dart.fss.or.kr") or re.search(r"\bopen\s*dart\b", identity):
         return "dart"
-    if "krx" in haystack or "kind" in haystack:
+    if host == "kind.krx.co.kr" or host.endswith(".krx.co.kr") or re.search(r"\bkrx\b|\bkind\b", identity):
         return "krx-kind"
-    if "nasdaq" in haystack or "nyse" in haystack:
+    if host == "nasdaq.com" or host.endswith(".nasdaq.com") or host == "nyse.com" or host.endswith(".nyse.com"):
         return "exchange"
-    if "investor relations" in haystack or re.search(r"\bir\b", haystack):
+    if (
+        "investor relations" in identity
+        or identity in {"issuer-ir", "corporate-ir", "ir"}
+    ):
         return "issuer-ir"
     return "generic"
 
@@ -436,14 +441,7 @@ def parse_reference_datetime(item: Dict[str, object]):
 
 
 def official_source(item: Dict[str, object]) -> bool:
-    payload = evidence_payload(item)
-    haystack = lower_text(" ".join([
-        str(item.get("source") or ""),
-        str(item.get("url") or ""),
-        str(payload.get("sourcePlatform") or ""),
-        str(payload.get("provider") or ""),
-    ]))
-    return any(term in haystack for term in OFFICIAL_SOURCE_TERMS)
+    return source_parser(item) in {"sec-edgar", "dart", "krx-kind", "exchange", "issuer-ir"}
 
 
 @dataclass
@@ -456,6 +454,7 @@ class CalendarEventCandidate:
     importance: int
     symbols: List[str] = field(default_factory=list)
     markets: List[str] = field(default_factory=list)
+    timezone: str = "Asia/Seoul"
     source: str = "research-evidence"
     source_url: str = ""
     notes: str = ""
@@ -472,7 +471,7 @@ class CalendarEventCandidate:
             "title": self.title,
             "eventType": self.event_type,
             "startsAt": self.starts_at,
-            "timezone": "Asia/Seoul",
+            "timezone": self.timezone,
             "allDay": True,
             "status": self.status,
             "importance": self.importance,
@@ -496,7 +495,7 @@ class CalendarEventCandidate:
             "title": self.title,
             "eventType": self.event_type,
             "startsAt": self.starts_at,
-            "timezone": "Asia/Seoul",
+            "timezone": self.timezone,
             "allDay": True,
             "status": "pending",
             "reviewReason": self.review_reason or "needsReview",
@@ -626,10 +625,10 @@ def calendar_candidate_from_research_item(
     if not pattern:
         return None
     official = official_source(item)
-    # A title-keyword hit from a news feed is not enough to create work for an
-    # investor. Keep automatic candidates to structured evidence or an
-    # official calendar/filing source; human-created candidates remain intact.
-    if not structured_type and not official:
+    # A headline keyword is not a calendar contract, even when the article is
+    # hosted by a high-trust publisher. Require a structured event type or a
+    # filing parser that derived one from the source document.
+    if not structured_type:
         return None
     reference = parse_reference_datetime(item)
     event_type = str(pattern["eventType"])
@@ -663,6 +662,7 @@ def calendar_candidate_from_research_item(
     symbol = clean_text(item.get("symbol"), 24).upper()
     symbols = [symbol] if symbol else []
     markets = markets_for_candidate(item, pattern, text)
+    timezone_name = calendar_timezone_for(symbols, markets)
     status = "active" if readiness_state == "ready" and event_date and event_date >= reference - timedelta(days=2) else "tentative"
     if readiness_state != "ready":
         status = "needsReview"
@@ -691,7 +691,9 @@ def calendar_candidate_from_research_item(
         "officialSource": official,
         "sourceParser": parser,
         "dateSource": date_source,
+        "eventLocalDate": event_date.date().isoformat() if event_date else "",
         "structuredEventType": structured_type,
+        "scheduleState": "dateConfirmed" if official else "estimated",
         "reviewRequired": bool(review_reason),
         "reviewReason": review_reason,
         "needsSourceRefresh": status != "active",
@@ -706,6 +708,7 @@ def calendar_candidate_from_research_item(
         importance=int(pattern["importance"]),
         symbols=symbols,
         markets=markets,
+        timezone=timezone_name,
         source=source,
         source_url=clean_text(item.get("url"), 1000),
         notes=notes,
@@ -791,6 +794,7 @@ def structured_calendar_candidates_from_research_item(
                         "officialSource": official,
                         "sourceParser": source_parser(item),
                         "dateSource": "calendar." + field,
+                        "eventLocalDate": event_date.date().isoformat(),
                         "structuredEventType": definition["eventType"],
                         "schedulePhase": definition["schedulePhase"],
                         "scheduleState": "confirmed" if official else "estimated",
@@ -808,6 +812,7 @@ def structured_calendar_candidates_from_research_item(
                         importance=int(definition["importance"]),
                         symbols=[symbol] if symbol else [],
                         markets=markets[:8],
+                        timezone=calendar_timezone_for([symbol] if symbol else [], markets),
                         source=source,
                         source_url=source_url,
                         notes=notes,

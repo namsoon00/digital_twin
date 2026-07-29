@@ -1,5 +1,7 @@
 import unittest
 import sys
+import io
+import zipfile
 from datetime import datetime, timedelta, timezone
 from pathlib import Path
 from types import SimpleNamespace
@@ -24,7 +26,12 @@ from digital_twin.domain.investment_calendar_candidates import InvestmentCalenda
 from digital_twin.domain.investment_calendar_extraction import calendar_candidate_from_research_item, calendar_candidate_sets_from_research_items
 from digital_twin.domain.investment_research import ResearchEvidence
 from digital_twin.infrastructure.bok_calendar_source import BokPolicyDecisionCalendarSource, parse_bok_policy_decision_events
-from digital_twin.infrastructure.opendart_calendar_source import OpenDartEarningsCalendarSource, parse_opendart_earnings_event
+from digital_twin.infrastructure.opendart_calendar_source import (
+    OpenDartEarningsCalendarSource,
+    parse_opendart_corp_codes,
+    parse_opendart_earnings_event,
+)
+from digital_twin.infrastructure.samsung_ir_calendar_source import parse_samsung_ir_earnings_events
 from digital_twin.domain.message_types import INVESTMENT_CALENDAR_REMINDER
 from digital_twin.domain.notification_ai_gate_validation import build_notification_ai_gate_prompt
 
@@ -346,6 +353,53 @@ class InvestmentCalendarServiceTests(unittest.TestCase):
         self.assertFalse(event.reminder_eligible())
         self.assertEqual([], due_reminders_for_event(event, now_at=now_at))
 
+    def test_all_day_event_round_trip_preserves_local_date(self):
+        event = InvestmentCalendarEvent.from_payload({
+            "eventId": "all-day-us-event",
+            "title": "AAPL 실적 발표일 후보",
+            "eventType": "earnings",
+            "startsAt": "2026-08-20",
+            "timezone": "America/New_York",
+            "allDay": True,
+            "status": "tentative",
+            "symbols": ["AAPL"],
+            "markets": ["US"],
+        })
+
+        restored = InvestmentCalendarEvent.from_dict(event.to_dict())
+
+        self.assertEqual(event.starts_at, restored.starts_at)
+        self.assertEqual("2026-08-20", restored.to_dict()["localDate"])
+
+    def test_list_events_hides_candidate_only_rows_by_default(self):
+        now_at = datetime.now(timezone.utc)
+        store = MemoryCalendarStore()
+        store.upsert(InvestmentCalendarEvent.from_payload({
+            "eventId": "confirmed-event",
+            "title": "확정 일정",
+            "eventType": "earnings",
+            "startsAt": utc_iso(now_at + timedelta(days=1)),
+            "timezone": "UTC",
+            "status": "active",
+        }))
+        store.upsert(InvestmentCalendarEvent.from_payload({
+            "eventId": "candidate-only-event",
+            "title": "추정 후보",
+            "eventType": "earnings",
+            "startsAt": utc_iso(now_at + timedelta(days=2)),
+            "timezone": "UTC",
+            "status": "candidateOnly",
+        }))
+
+        result = self.service(store=store).list_events({
+            "from": utc_iso(now_at),
+            "to": utc_iso(now_at + timedelta(days=3)),
+        })
+
+        self.assertEqual(["confirmed-event"], [item["eventId"] for item in result["events"]])
+        self.assertEqual(1, result["summary"]["total"])
+        self.assertEqual(2, result["summary"]["storedTotal"])
+
     def test_list_events_reports_the_next_future_schedule_only(self):
         now_at = datetime.now(timezone.utc)
         store = MemoryCalendarStore()
@@ -515,7 +569,12 @@ class InvestmentCalendarServiceTests(unittest.TestCase):
             "eventType": "earnings",
             "startsAt": "2026-08-20T00:00:00Z",
             "status": "pending",
-            "payload": {"autoDetected": True, "officialSource": True},
+            "payload": {
+                "autoDetected": True,
+                "officialSource": False,
+                "structuredEventType": "earnings",
+                "dateSource": "calendar.Earnings Date",
+            },
         })
 
         result = candidate_service.list_candidates({"status": "pending", "limit": 20})
@@ -533,6 +592,20 @@ class InvestmentCalendarServiceTests(unittest.TestCase):
             "title": "Apple is added to a regional stock index after earnings",
             "summary": "A news article mentions an index move but provides no official schedule.",
             "url": "https://finance.yahoo.com/example/keyword-hit",
+            "publishedAt": "2026-07-15T00:00:00Z",
+        }, include_review=True)
+
+        self.assertIsNone(candidate)
+
+    def test_news_source_name_containing_ir_is_not_an_official_calendar_source(self):
+        candidate = calendar_candidate_from_research_item({
+            "evidenceId": "research:AAPL:wire:capital-raise",
+            "symbol": "AAPL",
+            "kind": "news",
+            "source": "PR Newswire",
+            "title": "Apple capital raise expected on 2026-08-20",
+            "summary": "A news article speculates about financing.",
+            "url": "https://www.prnewswire.com/ir/example-capital-raise",
             "publishedAt": "2026-07-15T00:00:00Z",
         }, include_review=True)
 
@@ -698,7 +771,52 @@ class InvestmentCalendarServiceTests(unittest.TestCase):
 
         self.assertEqual({}, calendar_store.events)
 
-    def test_calendar_discovery_saves_tentative_events_and_removes_rejected_candidate(self):
+    def test_candidate_repair_reopens_estimates_and_rejects_keyword_noise(self):
+        candidate_store = MemoryCandidateStore()
+        calendar_store = MemoryCalendarStore()
+        candidate_store.upsert({
+            "candidateId": "legacy-yfinance",
+            "proposedEventId": "legacy-yfinance-event",
+            "title": "AAPL 실적 발표 예정",
+            "eventType": "earnings",
+            "startsAt": "2026-08-20T00:00:00Z",
+            "status": "registered",
+            "source": "yfinance",
+            "payload": {
+                "autoDetected": True,
+                "officialSource": False,
+                "scheduleState": "estimated",
+            },
+        })
+        candidate_store.upsert({
+            "candidateId": "legacy-news-noise",
+            "proposedEventId": "legacy-news-event",
+            "title": "뉴스 제목 상장 후보",
+            "eventType": "listing",
+            "startsAt": "2026-08-21T00:00:00Z",
+            "status": "registered",
+            "source": "PR Newswire",
+            "payload": {"autoDetected": True, "officialSource": True},
+        })
+        calendar_store.upsert(InvestmentCalendarEvent.from_payload({
+            "eventId": "legacy-yfinance-event",
+            "title": "AAPL 실적 발표 예정",
+            "eventType": "earnings",
+            "startsAt": "2026-08-20T00:00:00Z",
+            "status": "candidateOnly",
+            "source": "yfinance",
+            "payload": {"autoDetected": True, "officialSource": False},
+        }))
+        service = InvestmentCalendarCandidateService(candidate_store, self.service(store=calendar_store))
+
+        result = service.reconcile_all_candidates()
+
+        self.assertEqual(1, result["reopened"])
+        self.assertEqual(1, result["rejected"])
+        self.assertEqual("pending", candidate_store.get("legacy-yfinance").status)
+        self.assertEqual("rejected", candidate_store.get("legacy-news-noise").status)
+
+    def test_calendar_discovery_keeps_estimates_in_candidate_queue_only(self):
         calendar_store = MemoryCalendarStore()
         candidate_store = MemoryCandidateStore()
         evidence_store = MemoryResearchEvidenceStore()
@@ -719,11 +837,10 @@ class InvestmentCalendarServiceTests(unittest.TestCase):
         self.assertEqual("ok", result["status"])
         self.assertEqual(1, result["targetCount"])
         self.assertEqual(1, result["evidenceCount"])
-        self.assertEqual(3, result["tentativeCount"])
+        self.assertEqual(0, result["tentativeCount"])
         self.assertEqual(3, result["reviewCandidateCount"])
         self.assertEqual(3, result["storedReviewCandidateCount"])
-        self.assertEqual(3, len(calendar_store.events))
-        self.assertTrue(all(event.status == "tentative" for event in calendar_store.events.values()))
+        self.assertEqual(0, len(calendar_store.events))
         self.assertEqual(3, len(candidate_store.candidates))
         self.assertEqual(1, len(gateway.calls))
         self.assertIn("financial-data", gateway.calls[0]["sourceTypes"])
@@ -748,7 +865,7 @@ class InvestmentCalendarServiceTests(unittest.TestCase):
 
         rejected = next(item for item in candidate_store.candidates.values() if item.status == "pending")
         rejection = InvestmentCalendarCandidateService(candidate_store, calendar).reject_candidate(rejected.candidate_id, {"reviewNote": "날짜 불확실"})
-        self.assertTrue(rejection["removedTentativeEvent"])
+        self.assertFalse(rejection["removedTentativeEvent"])
         self.assertIsNone(calendar_store.get(rejected.proposed_event_id))
 
     def test_calendar_discovery_marks_failed_sources_as_partial(self):
@@ -809,7 +926,7 @@ class InvestmentCalendarServiceTests(unittest.TestCase):
         self.assertEqual("adrListing", saved.event_type)
         self.assertEqual("sec-edgar", saved.payload["sourceParser"])
         self.assertEqual("eventDate", saved.payload["dateSource"])
-        self.assertEqual("2026-08-19T15:00:00Z", saved.starts_at)
+        self.assertEqual("2026-08-20T04:00:00Z", saved.starts_at)
 
     def test_rejected_feedback_can_demote_borderline_candidate_to_review(self):
         item = {
@@ -969,9 +1086,72 @@ class InvestmentCalendarServiceTests(unittest.TestCase):
         self.assertTrue(event.payload["officialSource"])
         self.assertEqual("confirmed", event.payload["scheduleState"])
 
+    def test_opendart_source_resolves_unconfigured_account_symbol(self):
+        corp_xml = (
+            "<?xml version=\"1.0\" encoding=\"UTF-8\"?>"
+            "<result><list><corp_code>00401731</corp_code><corp_name>LG전자</corp_name>"
+            "<stock_code>066570</stock_code></list></result>"
+        ).encode("utf-8")
+        archive_buffer = io.BytesIO()
+        with zipfile.ZipFile(archive_buffer, "w") as archive:
+            archive.writestr("CORPCODE.xml", corp_xml)
+        document = (
+            "기업설명회(IR) 개최(안내공시) 일시 및 장소 일시 2026-07-30 16:00 "
+            "개최목적 2026년 2분기 경영실적 발표"
+        ).encode("utf-8")
+
+        source = OpenDartEarningsCalendarSource(
+            settings={
+                "investmentCalendarOfficialMacroSyncEnabled": "1",
+                "investmentCalendarOfficialEarningsSyncEnabled": "1",
+                "opendartApiKey": "test-key",
+                "externalDartCorpCodes": "",
+            },
+            fetch_json=lambda _url, _headers, _timeout: {
+                "status": "000",
+                "list": [{
+                    "report_nm": "기업설명회(IR)개최(안내공시)",
+                    "rcept_no": "20260729001234",
+                    "corp_name": "LG전자",
+                }],
+            },
+            fetch_bytes=lambda url, _headers, _timeout: (
+                archive_buffer.getvalue() if "corpCode.xml" in url else document
+            ),
+            now=lambda: datetime(2026, 7, 29, tzinfo=timezone.utc),
+            guard_state={},
+            target_symbols=["066570"],
+        )
+
+        events = source.events()
+
+        self.assertEqual({"066570": "00401731"}, parse_opendart_corp_codes(archive_buffer.getvalue(), ["066570"]))
+        self.assertEqual(1, len(events))
+        self.assertEqual(["066570"], events[0].symbols)
+
+    def test_samsung_ir_source_parses_confirmed_earnings_time(self):
+        markup = """
+        <dl class="ir-event-list__detail">
+          <dt>2Q26 Earnings Conference Call</dt>
+          <dd>July 30, 2026, 10:00 a.m. KST</dd>
+        </dl>
+        """
+
+        events = parse_samsung_ir_earnings_events(
+            markup,
+            minimum_at=datetime(2026, 7, 1, tzinfo=timezone.utc),
+        )
+
+        self.assertEqual(1, len(events))
+        self.assertEqual("official-samsung-ir-earnings-005930-2026-q2", events[0].event_id)
+        self.assertEqual("2026-07-30T01:00:00Z", events[0].starts_at)
+        self.assertEqual(["005930"], events[0].symbols)
+        self.assertTrue(events[0].payload["officialSource"])
+
     def test_official_earnings_schedule_supersedes_nearby_yfinance_estimate(self):
         store = MemoryCalendarStore()
         calendar_service = self.service(store=store)
+        candidate_store = MemoryCandidateStore()
         estimated = InvestmentCalendarEvent.from_payload({
             "eventId": "estimated-005930-q2",
             "title": "005930 실적 발표 예정",
@@ -992,6 +1172,17 @@ class InvestmentCalendarServiceTests(unittest.TestCase):
             },
         })
         store.upsert(estimated)
+        candidate_store.upsert({
+            "candidateId": "estimated-005930-q2-candidate",
+            "proposedEventId": "estimated-005930-q2",
+            "title": "005930 실적 발표 예정",
+            "eventType": "earnings",
+            "startsAt": "2026-07-29T00:00:00Z",
+            "status": "registered",
+            "source": "yfinance",
+            "symbols": ["005930"],
+            "payload": {"autoDetected": True, "officialSource": False, "scheduleState": "estimated"},
+        })
         official = parse_opendart_earnings_event(
             "일시 및 장소 일시 2026-07-30 10:00 개최목적 2026년 2분기 경영실적 발표",
             "005930",
@@ -1001,6 +1192,7 @@ class InvestmentCalendarServiceTests(unittest.TestCase):
         sync_service = OfficialCalendarSyncService(
             calendar_service=calendar_service,
             sources=[SimpleNamespace(events=lambda: [official])],
+            candidate_service=InvestmentCalendarCandidateService(candidate_store, calendar_service),
             settings={"investmentCalendarOfficialMacroSyncEnabled": "1"},
             now=lambda: datetime(2026, 7, 29, tzinfo=timezone.utc),
         )
@@ -1009,11 +1201,19 @@ class InvestmentCalendarServiceTests(unittest.TestCase):
 
         self.assertEqual(1, result["quarantinedCount"])
         self.assertEqual(1, result["supersededCount"])
+        self.assertEqual(1, result["candidateSupersededCount"])
         self.assertEqual("superseded", store.get("estimated-005930-q2").status)
         self.assertEqual([], store.get("estimated-005930-q2").reminder_offsets_minutes)
         confirmed = store.get("official-opendart-earnings-005930-2026-q2")
         self.assertIsNotNone(confirmed)
         self.assertTrue(confirmed.reminder_eligible())
+        self.assertEqual("superseded", candidate_store.get("estimated-005930-q2-candidate").status)
+
+        repeated = sync_service.run_once(force=True)
+
+        self.assertEqual(0, repeated["quarantinedCount"])
+        self.assertEqual(0, repeated["supersededCount"])
+        self.assertEqual(0, repeated["candidateSupersededCount"])
 
     def test_calendar_sync_quarantines_legacy_unverified_automatic_event(self):
         store = MemoryCalendarStore()
@@ -1046,7 +1246,7 @@ class InvestmentCalendarServiceTests(unittest.TestCase):
 
         quarantined = store.get("legacy-yfinance-estimate")
         self.assertEqual(1, result["quarantinedCount"])
-        self.assertEqual("needsReview", quarantined.status)
+        self.assertEqual("candidateOnly", quarantined.status)
         self.assertTrue(quarantined.all_day)
         self.assertEqual([], quarantined.reminder_offsets_minutes)
         self.assertFalse(quarantined.reminder_eligible())

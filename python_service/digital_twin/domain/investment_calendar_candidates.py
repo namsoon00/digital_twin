@@ -1,14 +1,30 @@
 from dataclasses import asdict, dataclass, field
 from typing import Dict, Iterable, List
 
-from .investment_calendar import clean_text, normalized_list, normalize_market, normalize_symbol, reminder_offsets_from_payload
+from .investment_calendar import (
+    calendar_timezone_for,
+    clean_text,
+    local_date_text,
+    normalized_event_markets,
+    normalized_list,
+    normalize_market,
+    normalize_symbol,
+    reminder_offsets_from_payload,
+)
 from .portfolio import utc_now_iso
 
 
 CANDIDATE_STATUS_PENDING = "pending"
 CANDIDATE_STATUS_REGISTERED = "registered"
 CANDIDATE_STATUS_REJECTED = "rejected"
-CANDIDATE_FINAL_STATUSES = {CANDIDATE_STATUS_REGISTERED, CANDIDATE_STATUS_REJECTED}
+CANDIDATE_STATUS_SUPERSEDED = "superseded"
+CANDIDATE_STATUS_EXPIRED = "expired"
+CANDIDATE_FINAL_STATUSES = {
+    CANDIDATE_STATUS_REGISTERED,
+    CANDIDATE_STATUS_REJECTED,
+    CANDIDATE_STATUS_SUPERSEDED,
+    CANDIDATE_STATUS_EXPIRED,
+}
 
 
 def bounded_int(value: object, fallback: int, lower: int = 0, upper: int = 100) -> int:
@@ -50,20 +66,28 @@ class InvestmentCalendarReviewCandidate:
     def from_payload(cls, payload: Dict[str, object]):
         payload = payload if isinstance(payload, dict) else {}
         body = payload.get("payload") if isinstance(payload.get("payload"), dict) else {}
+        symbols = normalized_list(payload.get("symbols"), normalize_symbol, 100)
+        markets = normalized_event_markets(
+            symbols,
+            normalized_list(payload.get("markets"), normalize_market, 50),
+        )
+        timezone_name = clean_text(payload.get("timezone") or "Asia/Seoul", 80) or "Asia/Seoul"
+        if body.get("autoDetected"):
+            timezone_name = calendar_timezone_for(symbols, markets)
         return cls(
             candidate_id=clean_text(payload.get("candidateId") or payload.get("candidate_id"), 191),
             proposed_event_id=clean_text(payload.get("proposedEventId") or payload.get("proposed_event_id"), 191),
             title=clean_text(payload.get("title"), 255),
             event_type=clean_text(payload.get("eventType") or payload.get("event_type") or "custom", 64) or "custom",
             starts_at=clean_text(payload.get("startsAt") or payload.get("starts_at"), 40),
-            timezone=clean_text(payload.get("timezone") or "Asia/Seoul", 80) or "Asia/Seoul",
+            timezone=timezone_name,
             all_day=bool(payload.get("allDay", payload.get("all_day", True))),
             status=clean_text(payload.get("status") or CANDIDATE_STATUS_PENDING, 32) or CANDIDATE_STATUS_PENDING,
             review_reason=clean_text(payload.get("reviewReason") or payload.get("review_reason") or "needsReview", 80),
             importance=bounded_int(payload.get("importance"), 60),
             readiness_state=readiness_state_from_payload(payload),
-            symbols=normalized_list(payload.get("symbols"), normalize_symbol, 100),
-            markets=normalized_list(payload.get("markets"), normalize_market, 50),
+            symbols=symbols,
+            markets=markets,
             account_ids=normalized_list(
                 payload.get("accountIds") if "accountIds" in payload else payload.get("account_ids"),
                 lambda value: clean_text(value, 191),
@@ -87,12 +111,27 @@ class InvestmentCalendarReviewCandidate:
 
     def to_dict(self) -> Dict[str, object]:
         payload = asdict(self)
+        body = payload["payload"] if isinstance(payload["payload"], dict) else {}
+        estimated_local_date = ""
+        if (
+            payload["all_day"]
+            and (
+                str(body.get("dateSource") or "").startswith("calendar.")
+                or str(payload["source"] or "").strip().casefold() == "yfinance"
+            )
+        ):
+            estimated_local_date = str(payload["starts_at"] or "")[:10]
         return {
             "candidateId": payload["candidate_id"],
             "proposedEventId": payload["proposed_event_id"],
             "title": payload["title"],
             "eventType": payload["event_type"],
             "startsAt": payload["starts_at"],
+            "localDate": (
+                str(body.get("eventLocalDate") or "")
+                or estimated_local_date
+                or local_date_text(payload["starts_at"], payload["timezone"])
+            ),
             "timezone": payload["timezone"],
             "allDay": payload["all_day"],
             "status": payload["status"],
@@ -107,7 +146,7 @@ class InvestmentCalendarReviewCandidate:
             "notes": payload["notes"],
             "reminderOffsetsMinutes": payload["reminder_offsets_minutes"],
             "sourceEvidenceId": payload["source_evidence_id"],
-            "payload": payload["payload"],
+            "payload": body,
             "createdAt": payload["created_at"],
             "updatedAt": payload["updated_at"],
             "reviewedAt": payload["reviewed_at"],

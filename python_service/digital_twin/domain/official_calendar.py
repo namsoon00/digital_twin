@@ -104,7 +104,12 @@ def bok_policy_decision_event(
         notes=" ".join(note_parts),
         reminder_offsets_minutes=[1440, 180, 60, 0],
         payload={
+            "autoDetected": True,
             "officialSource": True,
+            "scheduleState": "confirmed",
+            "reviewRequired": False,
+            "timeState": "operationalDefault",
+            "reminderEnabled": True,
             "sourceProvider": "BOK",
             "country": "KR",
             "centralBank": "Bank of Korea",

@@ -8,10 +8,9 @@ sys.path.insert(0, str(Path(__file__).resolve().parents[1]))
 from digital_twin.application.kis_realtime_service import KISRealtimeWebSocketRunner
 from digital_twin.application.ontology_reasoning_service import OntologyReasoningRunner
 from digital_twin.domain.events import DomainEvent, MARKET_DATA_COLLECTED, ontology_reasoning_requested_event
-from digital_twin.domain.ontology_reasoning_queue import durable_mailbox_entries
+from digital_twin.domain.ontology_reasoning_queue import REALTIME_LATEST_STATE_SLOT, durable_mailbox_entries
 from digital_twin.domain.portfolio import AccountSnapshot, PortfolioSummary, Position
 from digital_twin.domain.verified_snapshot_reasoning import (
-    VERIFIED_MONITOR_SNAPSHOT_SLOT_FAMILY,
     VERIFIED_MONITOR_SNAPSHOT_TRIGGER,
     verified_monitor_snapshot_reasoning_event,
 )
@@ -111,7 +110,7 @@ class VerifiedSnapshotReasoningTests(unittest.TestCase):
         self.assertIn("ResearchEvidence", event.payload["factTypes"])
         self.assertIn("external.newsHeadlines", event.payload["changedFieldsBySymbol"]["AAPL"])
 
-    def test_snapshot_barrier_has_an_independent_mailbox_slot_from_raw_kis_ticks(self):
+    def test_snapshot_barrier_reuses_the_latest_realtime_slot_from_raw_kis_ticks(self):
         current = snapshot()
         barrier = verified_monitor_snapshot_reasoning_event(current)
         raw = ontology_reasoning_requested_event(
@@ -129,8 +128,9 @@ class VerifiedSnapshotReasoningTests(unittest.TestCase):
         barrier_entry = durable_mailbox_entries(barrier)[0]
         raw_entry = durable_mailbox_entries(raw)[0]
 
-        self.assertEqual(VERIFIED_MONITOR_SNAPSHOT_SLOT_FAMILY, barrier_entry["mailboxSlotFamily"])
-        self.assertNotEqual(barrier_entry["mailboxKey"], raw_entry["mailboxKey"])
+        self.assertEqual(REALTIME_LATEST_STATE_SLOT, barrier_entry["mailboxSlotFamily"])
+        self.assertEqual(REALTIME_LATEST_STATE_SLOT, raw_entry["mailboxSlotFamily"])
+        self.assertEqual(barrier_entry["mailboxKey"], raw_entry["mailboxKey"])
 
     def test_calendar_updates_now_use_a_latest_state_mailbox_slot(self):
         calendar = ontology_reasoning_requested_event(

@@ -31,7 +31,7 @@ from digital_twin.application.notification_ai_gate_message import (
 from digital_twin.domain.notification_templates import prepend_message_start_badge
 from digital_twin.domain.notification_ai import opinion_lines_for_type
 from digital_twin.domain.accounts import AccountConfig
-from digital_twin.domain.message_types import INVESTMENT_INSIGHT, WORK_HANDOFF, is_operations_delivery_message_type
+from digital_twin.domain.message_types import INVESTMENT_INSIGHT, MARKET_OBSERVATION, WORK_HANDOFF, is_operations_delivery_message_type
 from digital_twin.domain.notifications import NotificationJob
 from digital_twin.domain.strategy_alerts import StrategyAlertMixin
 from digital_twin.domain.portfolio import utc_now_iso
@@ -41,6 +41,13 @@ from digital_twin.infrastructure.notifications import NotificationResult, Telegr
 
 
 class NotificationDataQualityPolicyTests(unittest.TestCase):
+    def test_market_observation_relies_on_monitor_cadence_not_the_generic_similarity_window(self):
+        rule = default_notification_rule(MARKET_OBSERVATION)
+
+        self.assertTrue(rule.enabled)
+        self.assertFalse(rule.similarity_enabled)
+        self.assertFalse(rule.state_cooldown_enabled)
+
     @staticmethod
     def _typedb_relation_context(context):
         """Give cooldown tests the same TypeDB-backed contract as production."""

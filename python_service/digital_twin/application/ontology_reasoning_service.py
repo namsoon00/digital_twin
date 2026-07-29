@@ -21,6 +21,7 @@ from ..domain.investment_evidence_governance import (
 from ..domain.ontology_reasoning_queue import (
     VERIFIED_MONITOR_SNAPSHOT_TRIGGER,
     is_generic_research_latest_state,
+    is_realtime_latest_state,
     is_verified_monitor_snapshot_event,
     mailbox_slot_family,
 )
@@ -301,9 +302,16 @@ def event_order_key(event: object, priority_symbols: Dict[str, int] = None) -> T
 
 
 def event_time_key(event: object) -> Tuple[str, str]:
+    payload = event_payload(event)
+    mailbox = payload.get("_reasoningMailbox") if isinstance(payload.get("_reasoningMailbox"), dict) else {}
+    # A virtual mailbox event ID is a hash of its slot. It is deliberately
+    # opaque and must not change fair scheduling order when a slot-family
+    # migration changes that hash. The durable source event is the stable
+    # chronological tie-breaker instead.
+    source_event_id = str(mailbox.get("sourceEventId") or "").strip()
     return (
         str(getattr(event, "occurred_at", "") or ""),
-        str(getattr(event, "event_id", "") or ""),
+        source_event_id or str(getattr(event, "event_id", "") or ""),
     )
 
 
@@ -2189,6 +2197,42 @@ class OntologyReasoningRunner:
             self.mailbox_source_event_id(event),
         )
 
+    def realtime_latest_state_mailbox_subject(self, event: object) -> Tuple[str, str]:
+        """Return the replaceable realtime subject for one mailbox row.
+
+        Old releases keyed a verified snapshot separately from quote, flow,
+        and portfolio fact families.  Every one of those rows is still a
+        current-state request: the worker reads the latest committed monitor
+        snapshot and projects a complete ABox.  Grouping them by account and
+        symbol prevents obsolete transport variants from consuming an entire
+        TypeDB turn before the newest observation.
+        """
+
+        metadata = self.mailbox_metadata(event)
+        if not metadata or not is_realtime_latest_state(event):
+            return ()
+        symbols = event_symbols(event)
+        symbol = str(symbols[0] if symbols else "").upper().strip()
+        if not symbol:
+            return ()
+        account_scope = str(metadata.get("accountScope") or "market").strip() or "market"
+        return account_scope, symbol
+
+    def realtime_latest_state_mailbox_order_key(self, event: object) -> Tuple[str, int, str, str]:
+        """Prefer the newest source and a replayable snapshot on a tie.
+
+        A newer raw tick is retained until the monitor commits its matching
+        snapshot.  When timestamps tie, the verified snapshot is the safer
+        lead because it is the durable replay boundary used by the worker.
+        """
+
+        return (
+            self.event_source_observed_at(event),
+            1 if is_verified_monitor_snapshot_event(event) else 0,
+            str(getattr(event, "occurred_at", "") or ""),
+            self.mailbox_source_event_id(event),
+        )
+
     @staticmethod
     def timestamp_at_or_after(candidate: object, reference: object) -> bool:
         """Compare operational timestamps without trusting malformed values."""
@@ -2309,6 +2353,108 @@ class OntologyReasoningRunner:
                 discarded_entries,
                 state="superseded",
                 reason="newer generic ResearchEvidence state or a later TypeDB generation owns this account/symbol mailbox slot",
+            ) or {}
+        except Exception as error:  # noqa: BLE001 - retain work when durable acknowledgement is uncertain.
+            result.update({
+                "status": "error",
+                "reason": str(error)[:180],
+                "requests": original,
+                "actionableEntryCount": len(original),
+                "discardedEntryCount": 0,
+                "discardedEntries": [],
+            })
+            return result
+        result.update({
+            "status": "compacted",
+            "terminalEventStates": dict(terminal),
+        })
+        return result
+
+    def compact_realtime_latest_state_mailbox_requests(
+        self,
+        requests: Iterable[object],
+        persist: bool = False,
+    ) -> Dict[str, object]:
+        """Collapse legacy realtime fact-family slots to one newest subject.
+
+        New ingress already uses ``RealtimeObservationLatestState``.  This
+        pass safely drains rows written before that slot identity existed and
+        protects a mixed-version deployment: all replaceable realtime rows
+        for an account/symbol reduce to the newest source observation.  It
+        does not touch research handoffs, calendar work, or immediate events.
+        """
+
+        original = list(requests or [])
+        groups: Dict[Tuple[str, str], List[object]] = {}
+        for event in original:
+            subject = self.realtime_latest_state_mailbox_subject(event)
+            if subject:
+                groups.setdefault(subject, []).append(event)
+
+        discarded_entries: List[Dict[str, str]] = []
+        discarded_keys = set()
+        retained_by_subject: Dict[str, str] = {}
+
+        def discard(candidate: object) -> None:
+            metadata = self.mailbox_metadata(candidate)
+            mailbox_key = str(metadata.get("mailboxKey") or "").strip()
+            source_event_id = str(metadata.get("sourceEventId") or "").strip()
+            if not mailbox_key or mailbox_key in discarded_keys:
+                return
+            discarded_keys.add(mailbox_key)
+            discarded_entries.append({
+                "mailboxKey": mailbox_key,
+                "sourceEventId": source_event_id,
+            })
+
+        for subject, candidates in groups.items():
+            if len(candidates) < 2:
+                continue
+            lead = max(candidates, key=self.realtime_latest_state_mailbox_order_key)
+            lead_key = str(self.mailbox_metadata(lead).get("mailboxKey") or "").strip()
+            retained_by_subject["|".join(subject)] = self.mailbox_source_event_id(lead)
+            for candidate in candidates:
+                if candidate is lead:
+                    continue
+                mailbox_key = str(self.mailbox_metadata(candidate).get("mailboxKey") or "").strip()
+                if not mailbox_key or mailbox_key == lead_key:
+                    continue
+                discard(candidate)
+
+        active = [
+            event for event in original
+            if str(self.mailbox_metadata(event).get("mailboxKey") or "").strip() not in discarded_keys
+        ]
+        result = {
+            "status": "not-needed",
+            "requests": active,
+            "storedEntryCount": len(original),
+            "actionableEntryCount": len(active),
+            "discardedEntryCount": len(discarded_entries),
+            "discardedEntries": discarded_entries,
+            "terminalEventStates": {},
+            "retainedSourceEventIdsBySubject": retained_by_subject,
+        }
+        if not discarded_entries:
+            return result
+        if not persist:
+            result["status"] = "preview"
+            return result
+        acknowledge = getattr(self.mailbox_store, "acknowledge", None) if self.mailbox_enabled() else None
+        if not callable(acknowledge):
+            result.update({
+                "status": "unsupported",
+                "requests": original,
+                "actionableEntryCount": len(original),
+                "discardedEntryCount": 0,
+                "discardedEntries": [],
+            })
+            return result
+        try:
+            terminal = acknowledge(
+                discarded_entries,
+                state="superseded",
+                reason="newer realtime observation owns this account/symbol latest-state mailbox slot",
             ) or {}
         except Exception as error:  # noqa: BLE001 - retain work when durable acknowledgement is uncertain.
             result.update({
@@ -2503,12 +2649,11 @@ class OntologyReasoningRunner:
         hydrate_mailbox: bool = True,
         include_ingress_repair: bool = True,
     ) -> Dict[str, object]:
-        """Collapse redundant, lower-materiality realtime snapshot requests.
+        """Load only current mailbox work before a bounded TypeDB turn.
 
-        A newer market observation may supersede an older one only when it
-        includes all of the older event's symbols and exactly the same fact
-        family. The older cursor is advanced only after the newer snapshot has
-        completed TypeDB projection and inference.
+        Mailbox ingress preserves one newest slot for every account/symbol.
+        The additional semantic passes retire rows written by older releases
+        that still used separate fact-family identities.
         """
         source_events = self.source_reasoning_events(
             limit,
@@ -2532,22 +2677,36 @@ class OntologyReasoningRunner:
         )
         direct_work = self.coalesced_work(direct_source_requests)
         mailbox_requests = self.mailbox_pending_requests() if mailbox.get("enabled") else []
+        mailbox_stored_entry_count = len(mailbox_requests)
         mailbox_compaction = self.compact_generic_research_mailbox_requests(
             mailbox_requests,
             persist=bool(hydrate_mailbox and mailbox.get("enabled")),
         )
         mailbox_requests = list(mailbox_compaction.get("requests") or [])
+        realtime_mailbox_compaction = self.compact_realtime_latest_state_mailbox_requests(
+            mailbox_requests,
+            persist=bool(hydrate_mailbox and mailbox.get("enabled")),
+        )
+        mailbox_requests = list(realtime_mailbox_compaction.get("requests") or [])
         active_requests = list(mailbox_requests) + list(direct_work.get("requests") or [])
         return {
             "requests": active_requests,
             "rawRequestCount": len(source_requests),
             "sourceRequestCount": len(source_requests),
             "mailboxPendingEntryCount": len(mailbox_requests),
-            "mailboxStoredEntryCount": int(mailbox_compaction.get("storedEntryCount") or 0),
-            "semanticSupersededMailboxEntryCount": int(mailbox_compaction.get("discardedEntryCount") or 0),
+            "mailboxStoredEntryCount": mailbox_stored_entry_count,
+            "semanticSupersededMailboxEntryCount": (
+                int(mailbox_compaction.get("discardedEntryCount") or 0)
+                + int(realtime_mailbox_compaction.get("discardedEntryCount") or 0)
+            ),
             "mailboxSemanticCompaction": {
                 key: value
                 for key, value in mailbox_compaction.items()
+                if key not in {"requests", "discardedEntries"}
+            },
+            "mailboxRealtimeLatestStateCompaction": {
+                key: value
+                for key, value in realtime_mailbox_compaction.items()
                 if key not in {"requests", "discardedEntries"}
             },
             "mailbox": mailbox,
@@ -2556,6 +2715,7 @@ class OntologyReasoningRunner:
             "terminalMailboxEventStates": {
                 **dict(mailbox.get("terminalEventStates") or {}),
                 **dict(mailbox_compaction.get("terminalEventStates") or {}),
+                **dict(realtime_mailbox_compaction.get("terminalEventStates") or {}),
             },
             "coalescedEventIds": list(direct_work.get("coalescedEventIds") or []),
             "supersededByLead": dict(direct_work.get("supersededByLead") or {}),
@@ -2921,7 +3081,12 @@ class OntologyReasoningRunner:
                     REVIEW_LEVEL_ORDER.get(event_review_level(event), 0),
                     TRIGGER_ORDER.get(str(event_payload(event).get("trigger") or "data-update").strip(), 0),
                     1 if "ResearchEvidence" in fact_types else 0,
-                    event_time_key(event),
+                    # A mailbox virtual-event ID is a slot hash. Keep the
+                    # source observation time as the final chronological
+                    # priority and preserve the durable mailbox order for an
+                    # exact tie rather than letting a changed hash pick a
+                    # different symbol.
+                    self.event_source_observed_at(event),
                     -event_index,
                 )
                 event_candidates.append((rank, event_id, due_symbols))
@@ -4034,6 +4199,9 @@ class OntologyReasoningRunner:
                 work.get("semanticSupersededMailboxEntryCount") or 0
             ),
             "mailboxSemanticCompaction": dict(work.get("mailboxSemanticCompaction") or {}),
+            "mailboxRealtimeLatestStateCompaction": dict(
+                work.get("mailboxRealtimeLatestStateCompaction") or {}
+            ),
             "sameRevisionEntryCount": len((work.get("mailbox") or {}).get("sameRevisionEntryKeys") or []),
             "staleRequestCount": len(stale_requests),
             "mailbox": mailbox_summary,
@@ -5006,6 +5174,9 @@ class OntologyReasoningRunner:
                 work.get("semanticSupersededMailboxEntryCount") or 0
             ),
             "mailboxSemanticCompaction": dict(work.get("mailboxSemanticCompaction") or {}),
+            "mailboxRealtimeLatestStateCompaction": dict(
+                work.get("mailboxRealtimeLatestStateCompaction") or {}
+            ),
             "stalePreviewRequestCount": len(stale_preview),
             "mailbox": mailbox,
             "sourceFreshness": {

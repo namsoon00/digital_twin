@@ -10,6 +10,7 @@ from urllib.error import URLError
 sys.path.insert(0, str(Path(__file__).resolve().parents[1]))
 
 from digital_twin.domain.external_signal_quality import attach_external_signal_quality, evaluate_external_signal_quality
+from digital_twin.domain.events import MARKET_DATA_COLLECTED, ONTOLOGY_REASONING_REQUESTED
 from digital_twin.domain.ontology_external_abox import external_quality_data_state
 from digital_twin.domain.ontology_relation_facts import _external_quality_facts
 from digital_twin.domain.portfolio import Position
@@ -18,9 +19,26 @@ from digital_twin.infrastructure.external_signal_utils import ExternalApiGuard, 
 from digital_twin.infrastructure.external_signals import ExternalSignalProvider
 from digital_twin.infrastructure.news_sources import NewsSourceGateway, default_text_fetcher, provider_empty_status
 from digital_twin.infrastructure.admin_preview import configured_runtime_flags, public_runtime_settings
+from digital_twin.infrastructure.event_bus import EventBus
 
 
 class RuntimeResilienceTests(unittest.TestCase):
+    def test_market_data_event_waits_for_the_verified_monitor_snapshot_before_reasoning(self):
+        events = EventBus()
+        runner = MarketDataCollectionRunner(None, None, None, {}, None, event_publisher=events)
+
+        published = runner.publish_collected_event({
+            "savedCount": 1,
+            "changedCount": 1,
+            "symbols": ["000660"],
+            "investmentReasoningScheduling": "verified-monitor-snapshot-barrier",
+            "reasoningDispatch": "next-verified-monitor-snapshot",
+        })
+
+        self.assertTrue(published)
+        self.assertEqual([MARKET_DATA_COLLECTED], [event.name for event in events.published])
+        self.assertNotIn(ONTOLOGY_REASONING_REQUESTED, [event.name for event in events.published])
+
     def test_static_admin_preview_masks_sec_contact_configuration(self):
         settings = {
             "externalSecContactEmail": "operations@example.com",

@@ -6,6 +6,7 @@ from .market_hours import default_market_hours_enabled, default_market_hours_mar
 from .message_types import (
     INVESTMENT_CALENDAR_REMINDER,
     INVESTMENT_INSIGHT,
+    MARKET_OBSERVATION,
     NEWS_DIGEST,
     SYSTEM_MESSAGE_TYPES,
     notification_message_types,
@@ -74,7 +75,11 @@ def default_rule_message_types() -> List[str]:
 
 
 def default_similarity_enabled(message_type: str) -> bool:
-    return str(message_type or "") not in SYSTEM_MESSAGE_TYPES
+    key = str(message_type or "")
+    # Price observations already use a per-symbol monitor cadence. Applying
+    # the generic two-hour text-similarity filter on top of that would hide a
+    # later factual move merely because its title is the same.
+    return key not in SYSTEM_MESSAGE_TYPES and key != MARKET_OBSERVATION
 
 
 def default_similarity_window_minutes(message_type: str) -> int:

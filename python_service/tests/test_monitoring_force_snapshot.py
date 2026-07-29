@@ -8,7 +8,7 @@ sys.path.insert(0, str(Path(__file__).resolve().parents[1]))
 from digital_twin.application.monitoring_service import MonitorRunner
 from digital_twin.domain.accounts import AccountConfig
 from digital_twin.domain.market_data import normalize_position
-from digital_twin.domain.message_types import PORTFOLIO_HOLDINGS_SNAPSHOT
+from digital_twin.domain.message_types import MARKET_OBSERVATION, PORTFOLIO_HOLDINGS_SNAPSHOT
 from digital_twin.domain.monitoring import RealtimeMonitor
 from digital_twin.domain.portfolio import AccountSnapshot, utc_now_iso
 from digital_twin.domain.portfolio_calculations import portfolio_summary
@@ -42,6 +42,52 @@ class MemoryMonitorStore:
 
 
 class MonitoringForceSnapshotTests(unittest.TestCase):
+    def test_market_observation_is_emitted_while_typedb_reasoning_is_deferred(self):
+        previous_position = normalize_position({
+            "symbol": "000660",
+            "name": "SK하이닉스",
+            "market": "KR",
+            "currency": "KRW",
+            "quantity": 1,
+            "currentPrice": 200000,
+            "updatedAt": utc_now_iso(),
+        })
+        current_position = normalize_position({
+            "symbol": "000660",
+            "name": "SK하이닉스",
+            "market": "KR",
+            "currency": "KRW",
+            "quantity": 1,
+            "currentPrice": 202000,
+            "updatedAt": utc_now_iso(),
+        })
+        previous = AccountSnapshot(
+            "main", "메인", "toss", "live", "ok", utc_now_iso(),
+            portfolio_summary([previous_position]), [previous_position], [], metadata={},
+        )
+        current = AccountSnapshot(
+            "main", "메인", "toss", "live", "ok", utc_now_iso(),
+            portfolio_summary([current_position]), [current_position], [],
+            metadata={
+                "ontology": {
+                    "projection": {
+                        "status": "deferred-to-reasoning-worker",
+                        "reason": "전용 온톨로지 추론 워커 처리 대기",
+                    },
+                },
+            },
+        )
+
+        events = RealtimeMonitor().events_for_snapshot(current, previous.to_monitor_state())
+        observations = [event for event in events if event.rule == MARKET_OBSERVATION]
+
+        self.assertEqual(1, len(observations))
+        self.assertEqual("000660", observations[0].symbol)
+        self.assertTrue(observations[0].metadata["observationOnly"])
+        self.assertFalse(observations[0].metadata["investmentJudgement"])
+        self.assertIn("매수·매도 판단 없음", "\n".join(observations[0].lines))
+        self.assertTrue(current.metadata["ontology"]["inferenceMissingState"]["pending"])
+
     def test_verified_native_no_match_is_not_reported_as_an_inference_failure(self):
         reason_code, reason, detail = RealtimeMonitor().ontology_inference_missing_reason_from_metadata({
             "ontology": {

@@ -3,7 +3,7 @@ from typing import Callable, Dict, Iterable, List, Tuple
 
 from ..domain.accounts import AccountConfig
 from ..domain.data_freshness import age_minutes
-from ..domain.events import market_data_collected_event, ontology_reasoning_requested_event
+from ..domain.events import market_data_collected_event
 from ..domain.fact_changes import market_fact_change
 from ..domain.instrument_profiles import market_signal_symbols
 from ..domain.market_data import normalize_position, number, technical_indicators_from_candles
@@ -162,6 +162,25 @@ class MarketDataCollectionRunner:
         except Exception as error:  # noqa: BLE001 - health telemetry must not block collection.
             result["pipelineHealth"] = {"state": "unknown", "reason": str(error)[:180]}
         return result
+
+    def publish_collected_event(self, result: Dict[str, object]) -> bool:
+        """Publish market facts without starting a parallel TypeDB turn.
+
+        The market collector is the fast source-of-truth writer.  Its facts
+        are picked up by the next committed monitor snapshot, which is the
+        only replayable boundary for the asynchronous TypeDB worker.  Keeping
+        this source event separate prevents a fast polling loop from filling
+        the reasoning mailbox with raw ticks that the snapshot will supersede.
+        """
+
+        if not self.event_publisher or not int(result.get("savedCount") or 0):
+            return False
+        event = market_data_collected_event(result)
+        if hasattr(self.event_publisher, "publish"):
+            self.event_publisher.publish(event)
+        else:
+            self.event_publisher.handle(event)
+        return True
 
     def enabled(self) -> bool:
         return truthy(self.settings.get("marketDataCollectionEnabled"), True)
@@ -762,52 +781,22 @@ class MarketDataCollectionRunner:
         # (priority, diagnostics and later policy review), but it must not
         # decide whether a real market fact reaches the investment ABox. A
         # small price move can satisfy a TypeDB rule only in the context of an
-        # existing hypothesis, position or macro fact. The durable mailbox
-        # coalesces repeated revisions into the newest state before TypeDB
-        # executes it.
+        # existing hypothesis, position or macro fact. The next committed
+        # monitor snapshot is the sole replayable TypeDB boundary, so the
+        # fast collector never opens a second raw-market queue branch.
         focus_symbols = {str(symbol or "").upper().strip() for symbol in focused_symbols if str(symbol or "").strip()}
         fact_revision_symbol_set = set(changed_symbols)
         ontology_symbols = [symbol for symbol in changed_symbols if symbol in focus_symbols]
         result["investmentReasoningSymbols"] = ontology_symbols
         result["factRevisionReasoningSymbols"] = ontology_symbols
-        result["investmentReasoningScheduling"] = "fact-revision-first"
+        result["investmentReasoningScheduling"] = "verified-monitor-snapshot-barrier"
+        result["reasoningDispatch"] = "next-verified-monitor-snapshot"
         result["backgroundMaterialSymbolCount"] = len([symbol for symbol in material_symbols if symbol not in focus_symbols])
         result["backgroundBootstrapSymbolCount"] = len([symbol for symbol in bootstrap_symbols if symbol not in focus_symbols])
         result["backgroundFactRevisionSymbolCount"] = len([
             symbol for symbol in fact_revision_symbol_set if symbol not in focus_symbols
         ])
-        if self.event_publisher and saved:
-            event = market_data_collected_event(result)
-            if hasattr(self.event_publisher, "publish"):
-                self.event_publisher.publish(event)
-                if ontology_symbols:
-                    self.event_publisher.publish(ontology_reasoning_requested_event(
-                        event,
-                        "market-data-update",
-                        ontology_symbols,
-                        changed_count=len(ontology_symbols),
-                        observed_count=saved,
-                        fact_types=["MarketQuote", "TechnicalIndicator"],
-                        reason="보유·관심 종목의 실제 시장 사실 변경을 최신 상태 메일박스로 합류한 뒤 TypeDB ABox와 네이티브 규칙 추론에 반영합니다. 중요도 평가는 우선순위 참고용이며 입구 차단에는 사용하지 않습니다.",
-                        materiality_assessments=[materiality_assessments[symbol] for symbol in ontology_symbols if symbol in materiality_assessments],
-                        fact_revisions_by_symbol={symbol: fact_revisions_by_symbol[symbol] for symbol in ontology_symbols if fact_revisions_by_symbol.get(symbol)},
-                        changed_fields_by_symbol={symbol: changed_fields_by_symbol[symbol] for symbol in ontology_symbols if symbol in changed_fields_by_symbol},
-                    ))
-            else:
-                self.event_publisher.handle(event)
-                if ontology_symbols:
-                    self.event_publisher.handle(ontology_reasoning_requested_event(
-                        event,
-                        "market-data-update",
-                        ontology_symbols,
-                        changed_count=len(ontology_symbols),
-                        observed_count=saved,
-                        fact_types=["MarketQuote", "TechnicalIndicator"],
-                        reason="보유·관심 종목의 실제 시장 사실 변경을 최신 상태 메일박스로 합류한 뒤 TypeDB ABox와 네이티브 규칙 추론에 반영합니다. 중요도 평가는 우선순위 참고용이며 입구 차단에는 사용하지 않습니다.",
-                        materiality_assessments=[materiality_assessments[symbol] for symbol in ontology_symbols if symbol in materiality_assessments],
-                        fact_revisions_by_symbol={symbol: fact_revisions_by_symbol[symbol] for symbol in ontology_symbols if fact_revisions_by_symbol.get(symbol)},
-                        changed_fields_by_symbol={symbol: changed_fields_by_symbol[symbol] for symbol in ontology_symbols if symbol in changed_fields_by_symbol},
-                    ))
+        self.publish_collected_event(result)
         # Quote changes have already entered the event stream. A slow
         # fundamentals/news refresh is deliberately best-effort and cannot
         # delay the monitor that turns those quote changes into alerts.

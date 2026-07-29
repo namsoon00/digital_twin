@@ -13,6 +13,7 @@ from .message_types import (
     DEFAULT_ALERT_THRESHOLDS,
     DEFAULT_CADENCE,
     INVESTMENT_INSIGHT,
+    MARKET_OBSERVATION,
     MIN_CADENCE_MINUTES,
     ONTOLOGY_INFERENCE_MISSING,
     PORTFOLIO_HOLDINGS_SNAPSHOT,
@@ -324,6 +325,10 @@ class RealtimeMonitor(MonitoringSampleDataMixin, MonitoringPositionContextMixin,
         inference_missing = False
         raw_events.extend(self.connection_events(decision_snapshot, previous))
         raw_events.extend(self.heartbeat_events(decision_snapshot))
+        # This is deliberately a factual observation, not a Python investment
+        # signal. It is placed in the notification outbox immediately while
+        # the same snapshot's TypeDB request is processed independently.
+        raw_events.extend(self.market_observation_events(decision_snapshot, previous))
         if has_account_data:
             inference_state = self.ontology_inference_missing_state(decision_snapshot)
             inference_missing = bool(inference_state.get("missing"))
@@ -618,6 +623,121 @@ class RealtimeMonitor(MonitoringSampleDataMixin, MonitoringPositionContextMixin,
             metadata=metadata,
         )
         return [event for event in self.stamp_events(snapshot, [event]) if self.enabled(event.rule)]
+
+    def market_observation_price_change_threshold(self) -> float:
+        try:
+            value = float(self.thresholds.get("marketObservationPriceChangePct", 0.6) or 0.6)
+        except (TypeError, ValueError):
+            value = 0.6
+        return max(0.0, min(20.0, value))
+
+    @staticmethod
+    def monitor_state_positions(previous: Dict[str, object]) -> Dict[str, Dict[str, object]]:
+        """Map the last persisted holding/watchlist state by current subject."""
+
+        result: Dict[str, Dict[str, object]] = {}
+        state = previous if isinstance(previous, dict) else {}
+        for group_key in ("positions", "watchlist"):
+            group = state.get(group_key) if isinstance(state.get(group_key), dict) else {}
+            values = group.values() if isinstance(group, dict) else []
+            for item in values:
+                if not isinstance(item, dict):
+                    continue
+                symbol = str(item.get("symbol") or "").upper().strip()
+                if not symbol or symbol == "CASH":
+                    continue
+                # Holding state wins over a duplicate watchlist entry.
+                if group_key == "watchlist" and symbol in result:
+                    continue
+                result[symbol] = dict(item)
+        return result
+
+    def market_observation_events(
+        self,
+        snapshot: AccountSnapshot,
+        previous: Dict[str, object] = None,
+    ) -> List[AlertEvent]:
+        """Emit a bounded raw quote observation without an investment action.
+
+        The event's sole meaning is that the latest persisted price changed.
+        It never names a buy/sell/hold action, never consumes an InferenceBox,
+        and can therefore be durably queued before the asynchronous TypeDB
+        worker has an available schema-function generation.
+        """
+
+        if not snapshot.has_live_account_data():
+            return []
+        previous_positions = self.monitor_state_positions(previous or {})
+        if not previous_positions:
+            return []
+        threshold = self.market_observation_price_change_threshold()
+        current_positions: Dict[str, Position] = {}
+        for group_name, positions in (("positions", snapshot.positions), ("watchlist", snapshot.watchlist)):
+            for item in positions or []:
+                if item.is_cash():
+                    continue
+                symbol = str(item.symbol or "").upper().strip()
+                if not symbol or (group_name == "watchlist" and symbol in current_positions):
+                    continue
+                current_positions[symbol] = item
+
+        events: List[AlertEvent] = []
+        for symbol, item in current_positions.items():
+            previous_item = previous_positions.get(symbol)
+            if not previous_item:
+                continue
+            previous_price = self.position_current_price(previous_item)
+            current_price = float(item.current_price or 0)
+            if previous_price <= 0 or current_price <= 0:
+                continue
+            change_pct = (current_price - previous_price) / abs(previous_price) * 100.0
+            if change_pct == 0 or abs(change_pct) < threshold:
+                continue
+            direction = "up" if change_pct > 0 else "down" if change_pct < 0 else "flat"
+            currency = item.currency or self.position_currency(item.to_dict())
+            source = str(item.quote_source or item.source or "시세 공급자").strip()
+            lines = [
+                "현재가: " + price_money(current_price, currency),
+                "직전 저장값: " + price_money(previous_price, currency),
+                "직전 대비: " + signed_pct(change_pct),
+                "관측 기준: 직전 저장 시세와 비교",
+                "판단 상태: 원시 시세 관측만 발송 · 매수·매도 판단 없음",
+                "후속 처리: TypeDB 관계 추론 완료 시 투자 인사이트를 별도로 확인",
+            ]
+            if source:
+                lines.insert(3, "시세 출처: " + source)
+            events.append(AlertEvent(
+                snapshot.account_id,
+                snapshot.account_label,
+                "WATCH",
+                MARKET_OBSERVATION,
+                ":".join([snapshot.account_id, "market-observation", symbol, direction]),
+                (item.name or symbol) + " 시세 관측",
+                lines,
+                symbol,
+                criteria=self.criteria(
+                    "직전 저장 시세 대비 절대 " + compact_number(threshold) + "% 이상 변동 시 원시 시세 관측을 즉시 발송",
+                    "직전 " + price_money(previous_price, currency)
+                    + " → 현재 " + price_money(current_price, currency)
+                    + " (" + signed_pct(change_pct) + ") · 투자 판단 없음",
+                ),
+                metadata={
+                    "marketObservation": {
+                        "observationOnly": True,
+                        "previousPrice": previous_price,
+                        "currentPrice": current_price,
+                        "changePct": round(change_pct, 4),
+                        "thresholdPct": threshold,
+                        "direction": direction,
+                        "source": source,
+                    },
+                    "observationOnly": True,
+                    "investmentJudgement": False,
+                    "deliveryMode": "deterministic-outbox-before-typedb",
+                    "reasoningFollowup": "queued-separately",
+                },
+            ))
+        return events
 
     def holding_snapshot_line(self, item: Position) -> str:
         currency = item.currency or ("KRW" if str(item.market or "").upper() in {"KR", "KOSPI", "KOSDAQ"} else "")

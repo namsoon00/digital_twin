@@ -126,6 +126,7 @@ SEVERITY_LABELS = {
 
 REASONING_EXPLANATION_SKIP_TYPES = {
     "newsDigest",
+    "marketObservation",
     "workHandoff",
     OPERATOR_REASONING_REPORT,
     "ontologyReasoningQueue",
@@ -133,6 +134,7 @@ REASONING_EXPLANATION_SKIP_TYPES = {
 
 CUSTOMER_FACING_MESSAGE_TYPES = {
     "investmentInsight",
+    "marketObservation",
     "investmentCalendarReminder",
     "watchlistOntologySignal",
     "watchlistBuyCandidate",
@@ -163,6 +165,10 @@ DEFAULT_NOTIFICATION_TEMPLATES = {
     "investmentInsight": {
         "template": DEFAULT_TEMPLATE,
         "description": "온톨로지 관계 인사이트 기반 투자 알림",
+    },
+    "marketObservation": {
+        "template": DEFAULT_TEMPLATE,
+        "description": "TypeDB 추론과 분리된 원시 시세 관측 알림 (투자 판단 없음)",
     },
     "portfolioHoldingsSnapshot": {
         "template": DEFAULT_TEMPLATE,

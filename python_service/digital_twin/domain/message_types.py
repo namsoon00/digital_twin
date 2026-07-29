@@ -9,6 +9,7 @@ WATCHLIST_QUOTE_PENDING = "watchlistQuotePending"
 WATCHLIST_ONTOLOGY_SIGNAL = "watchlistOntologySignal"
 HOLDING_TIMING = "holdingTiming"
 INVESTMENT_INSIGHT = "investmentInsight"
+MARKET_OBSERVATION = "marketObservation"
 PORTFOLIO_HOLDINGS_SNAPSHOT = "portfolioHoldingsSnapshot"
 INVESTMENT_CALENDAR_REMINDER = "investmentCalendarReminder"
 NEWS_DIGEST = "newsDigest"
@@ -35,6 +36,7 @@ DEFAULT_MESSAGE = "default"
 
 MONITORING_MESSAGE_TYPES = [
     INVESTMENT_INSIGHT,
+    MARKET_OBSERVATION,
     PORTFOLIO_HOLDINGS_SNAPSHOT,
     NEWS_DIGEST,
     WATCHLIST_ONTOLOGY_SIGNAL,
@@ -57,6 +59,7 @@ SYSTEM_MESSAGE_TYPES = {
 
 USER_MANAGED_NOTIFICATION_TYPES = [
     INVESTMENT_INSIGHT,
+    MARKET_OBSERVATION,
     PORTFOLIO_HOLDINGS_SNAPSHOT,
     INVESTMENT_CALENDAR_REMINDER,
     NEWS_DIGEST,
@@ -97,6 +100,7 @@ MIN_CADENCE_MINUTES = 10
 
 DEFAULT_ALERT_RULES = {
     INVESTMENT_INSIGHT: 1,
+    MARKET_OBSERVATION: 1,
     PORTFOLIO_HOLDINGS_SNAPSHOT: 1,
     INVESTMENT_CALENDAR_REMINDER: 1,
     NEWS_DIGEST: 1,
@@ -115,6 +119,9 @@ EVIDENCE_ONLY_MESSAGE_TYPES = [
 ]
 
 DEFAULT_ALERT_THRESHOLDS = {
+    # Raw market-observation delivery only. This does not produce an
+    # investment action or replace the TypeDB materiality/inference path.
+    "marketObservationPriceChangePct": 0.6,
     "volumeRatioHigh": 2,
     "buyShareHigh": 65,
     "sellShareHigh": 65,
@@ -167,6 +174,7 @@ DEFAULT_RELATION_RULE_THRESHOLDS = {
 
 DEFAULT_CADENCE = {
     INVESTMENT_INSIGHT: 10,
+    MARKET_OBSERVATION: 10,
     PORTFOLIO_HOLDINGS_SNAPSHOT: 10,
     INVESTMENT_CALENDAR_REMINDER: 10,
     NEWS_DIGEST: 30,
@@ -182,6 +190,7 @@ DEFAULT_CADENCE = {
 MESSAGE_TYPE_LABELS = {
     DEFAULT_MESSAGE: "기본 알림",
     INVESTMENT_INSIGHT: "투자 인사이트",
+    MARKET_OBSERVATION: "시세 관측",
     PORTFOLIO_HOLDINGS_SNAPSHOT: "전체 보유 주식",
     INVESTMENT_CALENDAR_REMINDER: "투자 캘린더",
     NEWS_DIGEST: "뉴스/피드 새 정보",
@@ -216,6 +225,7 @@ MESSAGE_TYPE_LABELS = {
 MESSAGE_TYPE_EMOJIS = {
     DEFAULT_MESSAGE: "🔔",
     INVESTMENT_INSIGHT: "🧭",
+    MARKET_OBSERVATION: "📈",
     PORTFOLIO_HOLDINGS_SNAPSHOT: "📋",
     INVESTMENT_CALENDAR_REMINDER: "🗓️",
     NEWS_DIGEST: "🗞️",
@@ -249,6 +259,7 @@ MESSAGE_TYPE_EMOJIS = {
 
 TRIGGER_SUMMARIES = {
     INVESTMENT_INSIGHT: "온톨로지 관계 그래프에서 의미 있는 투자 인사이트가 생성될 때 보냅니다.",
+    MARKET_OBSERVATION: "직전 저장 시세와 비교해 설정한 폭 이상 바뀐 원시 시세를 즉시 관측 알림으로 보냅니다. 매수·매도 판단은 TypeDB 추론 완료 후 별도로 보냅니다.",
     PORTFOLIO_HOLDINGS_SNAPSHOT: "강제 점검이나 수동 확인 요청에서 모든 보유 종목의 현재 상태를 한 번에 확인할 때 보냅니다.",
     INVESTMENT_CALENDAR_REMINDER: "등록한 투자 이벤트가 설정한 리마인더 시점에 도달하면 보냅니다. 투자 판단은 별도 온톨로지 인사이트로만 보냅니다.",
     NEWS_DIGEST: "보유/관심 종목에 신선도·관련성·중요도 기준을 통과한 새 뉴스나 피드 근거가 들어올 때 보냅니다.",

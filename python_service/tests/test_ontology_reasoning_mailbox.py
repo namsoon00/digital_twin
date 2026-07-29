@@ -586,6 +586,44 @@ class OntologyReasoningMailboxTests(unittest.TestCase):
         self.assertEqual(1, result["semanticSupersededMailboxEntryCount"])
         self.assertEqual(0, result["mailbox"]["pendingEntryCount"])
 
+    def test_legacy_realtime_fact_family_slot_is_superseded_by_newest_subject_state(self):
+        old = realtime_request("legacy-market", ["AAPL"], "2026-07-24T00:00:00Z")
+        source = DomainEvent(
+            name="monitoring.snapshot_collected",
+            aggregate_id="account:market",
+            occurred_at="2026-07-24T00:01:00Z",
+            payload={"sourceObservedAt": "2026-07-24T00:01:00Z", "symbols": ["AAPL"]},
+        )
+        requested = ontology_reasoning_requested_event(
+            source,
+            "portfolio-snapshot-update",
+            ["AAPL"],
+            changed_count=1,
+            fact_types=["PortfolioSnapshot"],
+        )
+        newest = DomainEvent(
+            name=ONTOLOGY_REASONING_REQUESTED,
+            aggregate_id=requested.aggregate_id,
+            payload=dict(requested.payload or {}),
+            occurred_at="2026-07-24T00:01:00Z",
+            event_id="current-snapshot",
+        )
+        runner = self.build_runner([newest])
+        legacy_entry = runner.mailbox_entries_for_event(old)[0]
+        # Reproduce the separate fact-family row written before realtime
+        # observations shared one account/symbol latest-state slot.
+        legacy_entry["mailboxKey"] = "legacy-realtime:" + legacy_entry["mailboxKey"]
+        self.mailbox.enqueue([legacy_entry])
+
+        result = runner.run_once(force=True)
+
+        self.assertEqual([["AAPL"]], self.monitor.calls)
+        self.assertEqual("superseded", self.mailbox.events["legacy-market"]["state"])
+        self.assertEqual("completed", self.mailbox.events["current-snapshot"]["state"])
+        self.assertEqual(1, result["semanticSupersededMailboxEntryCount"])
+        self.assertEqual("compacted", result["mailboxRealtimeLatestStateCompaction"]["status"])
+        self.assertEqual(0, result["mailbox"]["pendingEntryCount"])
+
     def test_orphaned_research_retry_is_retired_after_a_later_successful_generation(self):
         article = research_evidence_request(
             "orphaned-research",

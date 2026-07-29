@@ -11,10 +11,7 @@ import hashlib
 from typing import Dict, List, Mapping, Tuple
 
 from .events import DomainEvent, ONTOLOGY_REASONING_REQUESTED
-from .verified_snapshot_reasoning import (
-    VERIFIED_MONITOR_SNAPSHOT_SLOT_FAMILY,
-    VERIFIED_MONITOR_SNAPSHOT_TRIGGER,
-)
+from .verified_snapshot_reasoning import VERIFIED_MONITOR_SNAPSHOT_TRIGGER
 
 
 REVIEW_LEVEL_ORDER = {
@@ -71,6 +68,13 @@ COALESCIBLE_RESEARCH_TRIGGERS = {
 # Keep one latest-state mailbox slot per account/symbol so those equivalent
 # triggers cannot accumulate behind a slow TypeDB projection.
 GENERIC_RESEARCH_LATEST_STATE_SLOT = "ResearchEvidenceLatestState"
+
+# A price tick, a cached market refresh, and the monitor's persisted snapshot
+# all describe the same current-world input for one account/symbol.  TypeDB
+# rebuilds that current ABox rather than replaying each transport-specific
+# fact family, so retaining separate slots here only lets stale observations
+# queue ahead of the newest verified snapshot.
+REALTIME_LATEST_STATE_SLOT = "RealtimeObservationLatestState"
 
 
 def event_payload(event: object) -> Dict[str, object]:
@@ -151,6 +155,21 @@ def is_verified_monitor_snapshot_event(event: object) -> bool:
     )
 
 
+def is_realtime_latest_state(event: object) -> bool:
+    """Whether an event is a replaceable realtime current-state observation.
+
+    ``immediate`` remains intentionally outside this slot.  It has an
+    explicit delivery/audit contract and must never disappear behind a later
+    ordinary quote or monitor snapshot.
+    """
+
+    payload = event_payload(event)
+    return bool(
+        str(payload.get("trigger") or "").strip() in COALESCIBLE_REALTIME_TRIGGERS
+        and event_review_level(event) != "immediate"
+    )
+
+
 def mailbox_slot_family(event: object, fact_types: Tuple[str, ...]) -> str:
     """Return the durable latest-state identity without losing event facts.
 
@@ -161,8 +180,8 @@ def mailbox_slot_family(event: object, fact_types: Tuple[str, ...]) -> str:
     """
     if is_generic_research_latest_state(event):
         return GENERIC_RESEARCH_LATEST_STATE_SLOT
-    if is_verified_monitor_snapshot_event(event):
-        return VERIFIED_MONITOR_SNAPSHOT_SLOT_FAMILY
+    if is_realtime_latest_state(event):
+        return REALTIME_LATEST_STATE_SLOT
     return ",".join(fact_types) or "MarketQuote"
 
 

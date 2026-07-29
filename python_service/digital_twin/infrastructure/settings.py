@@ -101,6 +101,10 @@ TEXT_SETTING_KEYS = [
     "ontologyProjectionGraphPersistentCacheTtlSeconds",
     "ontologyProjectionGraphPersistentCacheMaxEntries",
     "ontologyProjectionGraphPersistentCacheMaxPayloadBytes",
+    "ontologyDecisionEpisodeContextPerSymbolLimit",
+    "ontologyDecisionEpisodeContextMaxEpisodes",
+    "ontologyDecisionEpisodeContextHypothesisLimit",
+    "ontologyDecisionEpisodeContextOutcomeLimit",
     "ontologyAsyncQualityRecordEnabled",
     "ontologyWorldProjectionDeferWhenReasoningPending",
     "ontologyReasoningEnabled",
@@ -1118,6 +1122,26 @@ def runtime_settings(fast_operational_read: bool = False) -> Dict[str, str]:
             "ontologyProjectionGraphPersistentCacheMaxPayloadBytes",
             "ONTOLOGY_PROJECTION_GRAPH_PERSISTENT_CACHE_MAX_PAYLOAD_BYTES",
             str(8 * 1024 * 1024),
+        ),
+        "ontologyDecisionEpisodeContextPerSymbolLimit": value(
+            "ontologyDecisionEpisodeContextPerSymbolLimit",
+            "ONTOLOGY_DECISION_EPISODE_CONTEXT_PER_SYMBOL_LIMIT",
+            "3",
+        ),
+        "ontologyDecisionEpisodeContextMaxEpisodes": value(
+            "ontologyDecisionEpisodeContextMaxEpisodes",
+            "ONTOLOGY_DECISION_EPISODE_CONTEXT_MAX_EPISODES",
+            "24",
+        ),
+        "ontologyDecisionEpisodeContextHypothesisLimit": value(
+            "ontologyDecisionEpisodeContextHypothesisLimit",
+            "ONTOLOGY_DECISION_EPISODE_CONTEXT_HYPOTHESIS_LIMIT",
+            "3",
+        ),
+        "ontologyDecisionEpisodeContextOutcomeLimit": value(
+            "ontologyDecisionEpisodeContextOutcomeLimit",
+            "ONTOLOGY_DECISION_EPISODE_CONTEXT_OUTCOME_LIMIT",
+            "8",
         ),
         "ontologyAsyncQualityRecordEnabled": value(
             "ontologyAsyncQualityRecordEnabled",

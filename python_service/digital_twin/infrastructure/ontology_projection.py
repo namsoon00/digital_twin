@@ -66,6 +66,7 @@ from ..domain.ontology_native_rule_planning import (
 )
 from ..domain.portfolio_ontology_temporal_concepts import parse_temporal_windows
 from ..domain.portfolio import AccountSnapshot
+from ..domain.investment_brain import decision_episode_ontology_context
 from .graph_store_rulebox import rulebox_rules_to_payload
 from .runtime_identity import runtime_identity
 
@@ -777,6 +778,21 @@ class PortfolioOntologyProjectionRecorder:
             self.store_projection_result(snapshot, result)
             emit_progress("rejected", status=result["status"])
             return result
+        if target_symbols:
+            target_input = snapshot.projection_observation_input(target_symbols)
+            if str(target_input.get("mode") or "") == "empty":
+                result = {
+                    "saved": False,
+                    "status": "skipped-inactive-target-symbols",
+                    "reason": "추론 요청 종목이 현재 보유·관심종목 스냅샷에 없어 전체 계좌 재추론을 건너뛰었습니다.",
+                    "targetSymbols": list(target_input.get("targetSymbols") or []),
+                    "availableSymbols": list(target_input.get("availableSymbols") or []),
+                    "preservedActiveGeneration": True,
+                    "ontologyWorld": world_metadata(portfolio_world_context),
+                }
+                self.store_projection_result(snapshot, result)
+                emit_progress("skipped", status=result["status"])
+                return result
         if self.typedb_projection_deferred():
             result = {
                 "saved": False,
@@ -2279,7 +2295,7 @@ class PortfolioOntologyProjectionRecorder:
             metadata.pop("investmentBrain", None)
         source_snapshot["metadata"] = metadata
         payload = {
-            "version": "portfolio-graph-assembly-cache-v2",
+            "version": "portfolio-graph-assembly-cache-v3",
             "namespace": self.graph_assembly_cache_namespace(),
             "sourceSnapshot": stable_value(source_snapshot),
             "settings": stable_value(self.settings),
@@ -2379,6 +2395,11 @@ class PortfolioOntologyProjectionRecorder:
             target_symbols=input_symbols if input_mode == "target-scoped" else None,
         )
         stage_timings["runtimeContextMs"] = int((time.perf_counter() - runtime_context_started) * 1000)
+        decision_memory = runtime_context.get("decisionEpisodeProjection") if isinstance(runtime_context, dict) else {}
+        if isinstance(decision_memory, dict):
+            stage_timings["decisionEpisodeSourceCount"] = int(decision_memory.get("sourceEpisodeCount") or 0)
+            stage_timings["decisionEpisodeIncludedCount"] = int(decision_memory.get("includedEpisodeCount") or 0)
+            stage_timings["decisionEpisodeDroppedCount"] = int(decision_memory.get("droppedEpisodeCount") or 0)
         assembly_started = time.perf_counter()
         graph = build_portfolio_ontology(
             observation_input.get("positions") or [],
@@ -4569,16 +4590,12 @@ class PortfolioOntologyProjectionRecorder:
             if str(getattr(position, "symbol", "") or "").strip() and not position.is_cash()
         }
         selected_symbols.intersection_update(available_symbols)
-        all_decision_episodes = self.decision_episode_context(snapshot)
-        decision_episodes = (
-            [
-                item
-                for item in all_decision_episodes
-                if str(item.get("symbol") or "").upper().strip() in selected_symbols
-            ]
-            if selected_symbols
-            else all_decision_episodes
+        decision_memory_symbols = selected_symbols or available_symbols
+        decision_memory = self.decision_episode_projection_context(
+            snapshot,
+            target_symbols=decision_memory_symbols,
         )
+        decision_episodes = list(decision_memory.get("episodes") or [])
         metadata = self.factual_runtime_metadata(snapshot.metadata)
         # Projection output is derived state, not a new market observation.
         # Feeding the previous ABox result back into the next ABox makes an
@@ -4586,7 +4603,7 @@ class PortfolioOntologyProjectionRecorder:
         metadata.pop("ontology", None)
         account_context = metadata.get("accountContext") if isinstance(metadata.get("accountContext"), dict) else {}
         decision_performance = evaluate_decision_performance(
-            all_decision_episodes,
+            decision_episodes,
             minimum_sample_count=int(self.performance_setting("investmentBrainPerformanceMinimumSamples", 5)),
         )
         return {
@@ -4608,6 +4625,7 @@ class PortfolioOntologyProjectionRecorder:
             # reasoning context and keeps this input empty to avoid feedback.
             "decisionItems": [],
             "decisionEpisodes": decision_episodes,
+            "decisionEpisodeProjection": dict(decision_memory.get("projection") or {}),
             "decisionPerformance": decision_performance,
             "hypothesisProposals": self.hypothesis_proposal_context(
                 snapshot,
@@ -4722,27 +4740,137 @@ class PortfolioOntologyProjectionRecorder:
         payload = metadata.get("dataPipelineHealth")
         return dict(payload or {}) if isinstance(payload, dict) else {}
 
-    def decision_episode_context(self, snapshot: AccountSnapshot) -> List[Dict[str, object]]:
+    def decision_episode_context(
+        self,
+        snapshot: AccountSnapshot,
+        target_symbols=None,
+    ) -> List[Dict[str, object]]:
+        """Compatibility wrapper for callers that only need ABox memory rows."""
+        return list(
+            self.decision_episode_projection_context(
+                snapshot,
+                target_symbols=target_symbols,
+            ).get("episodes") or []
+        )
+
+    def decision_episode_projection_context(
+        self,
+        snapshot: AccountSnapshot,
+        target_symbols=None,
+    ) -> Dict[str, object]:
+        """Load a bounded, current-subject decision-memory slice for the ABox.
+
+        The decision repository is the complete audit record. Realtime TypeDB
+        projection only needs recent episode links and outcomes for subjects in
+        the current snapshot. Keeping those two concerns separate prevents an
+        old AI/research payload from expanding every live inference graph.
+        """
+        projection = {
+            "mode": "bounded-current-subject-memory",
+            "sourceEpisodeCount": 0,
+            "includedEpisodeCount": 0,
+            "droppedEpisodeCount": 0,
+            "targetSymbolCount": 0,
+            "perSymbolLimit": self.decision_episode_context_per_symbol_limit(),
+            "maximumEpisodeCount": self.decision_episode_context_maximum_episodes(),
+            "outcomeObservation": {},
+        }
         if not self.decision_episode_store:
-            return []
+            projection["status"] = "unavailable"
+            return {"episodes": [], "projection": projection}
         try:
             observation = self.outcome_observation_service.observe_snapshot(snapshot)
             snapshot.metadata.setdefault("investmentBrain", {})["outcomeObservation"] = observation
+            projection["outcomeObservation"] = dict(observation or {})
         except Exception as error:  # noqa: BLE001 - feedback memory must not block ABox projection.
-            snapshot.metadata.setdefault("investmentBrain", {})["outcomeObservation"] = {
+            observation = {
                 "status": "error",
                 "reason": str(error)[:180],
             }
+            snapshot.metadata.setdefault("investmentBrain", {})["outcomeObservation"] = observation
+            projection["outcomeObservation"] = observation
+        symbols = sorted({
+            str(symbol or "").upper().strip()
+            for symbol in target_symbols or []
+            if str(symbol or "").strip()
+        })
+        projection["targetSymbolCount"] = len(symbols)
+        per_symbol_limit = int(projection["perSymbolLimit"] or 1)
+        maximum_episode_count = int(projection["maximumEpisodeCount"] or 1)
         try:
-            # Outcome facts must remain visible after a position is sold or
-            # removed from a watchlist. The cognitive ABox is bounded, but it
-            # is account-history based rather than current-symbol based.
-            return [
-                item.to_dict()
-                for item in self.decision_episode_store.list(snapshot.account_id, limit=30)
-            ]
+            if symbols and hasattr(self.decision_episode_store, "list_for_symbols"):
+                source_episodes = self.decision_episode_store.list_for_symbols(
+                    symbols,
+                    account_id=snapshot.account_id,
+                    limit_per_symbol=per_symbol_limit,
+                )
+            elif symbols:
+                source_episodes = []
+                for symbol in symbols:
+                    source_episodes.extend(
+                        self.decision_episode_store.list(
+                            snapshot.account_id,
+                            symbol=symbol,
+                            limit=per_symbol_limit,
+                        )
+                    )
+            else:
+                source_episodes = self.decision_episode_store.list(
+                    snapshot.account_id,
+                    limit=maximum_episode_count,
+                )
         except Exception:  # noqa: BLE001 - projection remains valid without historical memory.
-            return []
+            projection["status"] = "unavailable"
+            return {"episodes": [], "projection": projection}
+        source_by_id = {}
+        for item in source_episodes or []:
+            episode_id = str(getattr(item, "episode_id", "") or "").strip()
+            symbol = str(getattr(item, "symbol", "") or "").upper().strip()
+            if not episode_id or (symbols and symbol not in symbols):
+                continue
+            source_by_id[episode_id] = item
+        ordered = sorted(
+            source_by_id.values(),
+            key=lambda item: (
+                str(getattr(item, "decided_at", "") or ""),
+                str(getattr(item, "episode_id", "") or ""),
+            ),
+            reverse=True,
+        )
+        projection["sourceEpisodeCount"] = len(ordered)
+        selected_episodes = ordered[:maximum_episode_count]
+        rows = [
+            decision_episode_ontology_context(
+                item,
+                maximum_hypotheses=self.decision_episode_context_hypothesis_limit(),
+                maximum_outcomes=self.decision_episode_context_outcome_limit(),
+            )
+            for item in selected_episodes
+        ]
+        rows = [item for item in rows if item]
+        projection["includedEpisodeCount"] = len(rows)
+        projection["droppedEpisodeCount"] = max(0, len(ordered) - len(rows))
+        projection["status"] = "ok"
+        return {"episodes": rows, "projection": projection}
+
+    def decision_episode_context_per_symbol_limit(self) -> int:
+        return self.integer_setting("ontologyDecisionEpisodeContextPerSymbolLimit", 3, 1, 12)
+
+    def decision_episode_context_maximum_episodes(self) -> int:
+        return self.integer_setting("ontologyDecisionEpisodeContextMaxEpisodes", 24, 1, 60)
+
+    def decision_episode_context_hypothesis_limit(self) -> int:
+        return self.integer_setting("ontologyDecisionEpisodeContextHypothesisLimit", 3, 1, 8)
+
+    def decision_episode_context_outcome_limit(self) -> int:
+        return self.integer_setting("ontologyDecisionEpisodeContextOutcomeLimit", 8, 1, 16)
+
+    def integer_setting(self, key: str, fallback: int, minimum: int, maximum: int) -> int:
+        try:
+            value = int(float(str(self.settings.get(key) or fallback)))
+        except (TypeError, ValueError):
+            value = fallback
+        return max(minimum, min(maximum, value))
 
     def hypothesis_proposal_context(
         self,

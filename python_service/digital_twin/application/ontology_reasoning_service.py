@@ -3083,6 +3083,14 @@ class OntologyReasoningRunner:
             "unchanged-material-facts",
             "unchanged-material-facts-reasoning-retry",
         }
+        terminal_non_inference_statuses = {
+            # A symbol-specific event can outlive a sold or removed
+            # watchlist position. It has no current ABox subject, so a full
+            # account projection would be unrelated work. Treat the event as
+            # safely handled after the recorder explicitly confirms that the
+            # active generation was preserved.
+            "skipped-inactive-target-symbols",
+        }
         retryable_projection_statuses = {
             # ABox and native inference writes deliberately share a durable
             # lease.  Another local worker holding it is back-pressure, not
@@ -3164,6 +3172,8 @@ class OntologyReasoningRunner:
         for account_id, raw_result in raw_results.items():
             result = dict(raw_result or {}) if isinstance(raw_result, dict) else {}
             projection_status = str(result.get("status") or "missing").strip().lower()
+            if projection_status in terminal_non_inference_statuses:
+                continue
             if projection_status not in accepted_projection_statuses:
                 add_result(
                     account_id,

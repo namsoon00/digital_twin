@@ -229,9 +229,9 @@ class AccountSnapshot:
         selected_symbols = {item.key() for item in selected if item.key()}
         if not selected_symbols:
             return {
-                "mode": "full",
+                "mode": "empty",
                 "reason": "target-symbols-not-in-snapshot",
-                "positions": reference_positions,
+                "positions": [],
                 "referencePositions": reference_positions,
                 "targetSymbols": sorted(requested),
                 "availableSymbols": sorted(available),

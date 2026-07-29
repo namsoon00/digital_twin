@@ -80,6 +80,21 @@ class OntologyRuntimeOperationsTests(unittest.TestCase):
         self.assertTrue(result["retryable"])
         self.assertEqual("deferred-source-snapshot", result["results"][0]["status"])
 
+    def test_projection_gate_completes_removed_target_without_requiring_inference(self):
+        service = OntologyReasoningRunner.__new__(OntologyReasoningRunner)
+        removed_target = SimpleNamespace(last_ontology_projection_results={
+            "main": {
+                "status": "skipped-inactive-target-symbols",
+                "preservedActiveGeneration": True,
+                "targetSymbols": ["005930"],
+            },
+        })
+
+        result = service.projection_gate(removed_target)
+
+        self.assertTrue(result["ready"])
+        self.assertEqual([], result["results"])
+
     def test_verified_recovery_clears_only_the_projection_circuit_latch(self):
         class Cursor:
             def __init__(self):

@@ -723,6 +723,302 @@ class DecisionEpisode:
         )
 
 
+DECISION_EPISODE_ONTOLOGY_CONTEXT_VERSION = "decision-episode-ontology-context-v1"
+
+
+def _ontology_context_count(value: object, fallback: int, upper: int) -> int:
+    try:
+        parsed = int(float(str(value)))
+    except (TypeError, ValueError):
+        parsed = fallback
+    return max(1, min(upper, parsed))
+
+
+def _ontology_context_text(value: object, limit: int = 480) -> str:
+    if isinstance(value, str):
+        return value[:max(1, limit)]
+    if isinstance(value, (int, float, bool)):
+        return str(value)[:max(1, limit)]
+    return ""
+
+
+def _ontology_context_values(value: object, limit: int = 24, text_limit: int = 240) -> List[str]:
+    if isinstance(value, str):
+        source: Iterable[object] = [value]
+    elif isinstance(value, (list, tuple, set)):
+        source = value
+    else:
+        return []
+    result: List[str] = []
+    for item in source:
+        text = _ontology_context_text(item, text_limit).strip()
+        if text and text not in result:
+            result.append(text)
+        if len(result) >= max(1, limit):
+            break
+    return result
+
+
+def _ontology_outcome_contract_context(value: object) -> Dict[str, object]:
+    """Keep only the RuleBox-owned fields needed to review stored outcomes."""
+    contract = value if isinstance(value, dict) else {}
+    if not contract:
+        return {}
+    result = {
+        "outcomeHorizonMinutes": list(contract.get("outcomeHorizonMinutes") or [])[:12],
+        "requiredObservationDomains": _ontology_context_values(
+            contract.get("requiredObservationDomains"),
+            limit=12,
+        ),
+        "minimumIndependentEpisodes": contract.get("minimumIndependentEpisodes"),
+        "maximumObservationDelayMinutes": contract.get("maximumObservationDelayMinutes"),
+        "verificationFocus": _ontology_context_values(contract.get("verificationFocus"), limit=12),
+        "evaluationScope": _ontology_context_text(contract.get("evaluationScope"), 120),
+        "contractVersion": _ontology_context_text(contract.get("contractVersion"), 120),
+        "selectedHypothesisId": _ontology_context_text(contract.get("selectedHypothesisId"), 180),
+        "sourceRuleIds": _ontology_context_values(contract.get("sourceRuleIds")),
+        "marketHypothesisId": _ontology_context_text(contract.get("marketHypothesisId"), 180),
+        "accountHypothesisOverlayId": _ontology_context_text(contract.get("accountHypothesisOverlayId"), 180),
+        "inferenceGenerationId": _ontology_context_text(contract.get("inferenceGenerationId"), 180),
+    }
+    return {key: item for key, item in result.items() if item not in (None, "", [], {})}
+
+
+def decision_episode_ontology_context(
+    episode: DecisionEpisode,
+    maximum_hypotheses: int = 3,
+    maximum_outcomes: int = 8,
+) -> Dict[str, object]:
+    """Build a bounded ABox memory view without serializing the full audit.
+
+    Decision episodes remain complete in their own repository for audit and
+    replay. The live portfolio ABox only needs a small, current-subject slice
+    of the selected decision, competing hypotheses, and later observations.
+    In particular, raw historical facts, full AI prompts, and research
+    documents are not copied back into every realtime inference generation.
+    """
+    if not isinstance(episode, DecisionEpisode):
+        return {}
+
+    hypothesis_limit = _ontology_context_count(maximum_hypotheses, 3, 16)
+    outcome_limit = _ontology_context_count(maximum_outcomes, 8, 32)
+    selected_id = str(episode.selected_hypothesis_id or "").strip()
+    source_hypotheses = list(episode.hypothesis_set.hypotheses or [])
+    selected = next((item for item in source_hypotheses if item.hypothesis_id == selected_id), None)
+    hypotheses = ([selected] if selected else []) + [
+        item for item in source_hypotheses if not selected or item.hypothesis_id != selected.hypothesis_id
+    ]
+    hypotheses = hypotheses[:hypothesis_limit]
+    hypothesis_ids = {str(item.hypothesis_id or "").strip() for item in hypotheses}
+    family_ids = {str(item.family_id or "").strip() for item in hypotheses if item.family_id}
+    market_ids = {
+        str(item.market_hypothesis_id or "").strip()
+        for item in hypotheses
+        if item.market_hypothesis_id
+    }
+    overlay_ids = {
+        str(item.account_hypothesis_overlay_id or "").strip()
+        for item in hypotheses
+        if item.account_hypothesis_overlay_id
+    }
+
+    def hypothesis_payload(item: InvestmentHypothesis) -> Dict[str, object]:
+        return {
+            "hypothesisId": str(item.hypothesis_id or ""),
+            "templateId": str(item.template_id or ""),
+            "templateLabel": _ontology_context_text(item.template_label),
+            "claim": _ontology_context_text(item.claim),
+            "stance": str(item.stance or ""),
+            "horizon": str(item.horizon or ""),
+            "evidenceState": str(item.evidence_state or ""),
+            "evidenceStateLabel": _ontology_context_text(item.evidence_state_label),
+            "status": str(item.status or ""),
+            "supportingEvidenceIds": _ontology_context_values(item.supporting_evidence_ids),
+            "counterEvidenceIds": _ontology_context_values(item.counter_evidence_ids),
+            "supportingRuleIds": _ontology_context_values(item.supporting_rule_ids),
+            "counterRuleIds": _ontology_context_values(item.counter_rule_ids),
+            "assumptions": _ontology_context_values(item.assumptions, limit=12),
+            "invalidationConditions": _ontology_context_values(item.invalidation_conditions, limit=12),
+            "causalPathIds": _ontology_context_values(item.causal_path_ids),
+            "requiredEvidenceTypes": _ontology_context_values(item.required_evidence_types, limit=12),
+            "approvalStatus": str(item.approval_status or ""),
+            "verificationStatus": str(item.verification_status or ""),
+            "familyId": str(item.family_id or ""),
+            "causalSignature": _ontology_context_text(item.causal_signature, 240),
+            "familySource": str(item.family_source or ""),
+            "mergedRuleCount": int(item.merged_rule_count or 0),
+            "scopeState": str(item.scope_state or ""),
+            "scopeVersion": str(item.scope_version or ""),
+            "marketHypothesisId": str(item.market_hypothesis_id or ""),
+            "marketWorldId": str(item.market_world_id or ""),
+            "marketId": str(item.market_id or ""),
+            "marketCausalSignature": _ontology_context_text(item.market_causal_signature, 240),
+            "marketConditionIds": _ontology_context_values(item.market_condition_ids),
+            "marketRelationTypes": _ontology_context_values(item.market_relation_types),
+            "accountHypothesisOverlayId": str(item.account_hypothesis_overlay_id or ""),
+            "accountConditionIds": _ontology_context_values(item.account_condition_ids),
+            "accountFields": _ontology_context_values(item.account_fields),
+            "accountRelationTypes": _ontology_context_values(item.account_relation_types),
+            "accountTargetKinds": _ontology_context_values(item.account_target_kinds),
+            "targetRoles": _ontology_context_values(item.target_roles),
+            "actionPolicies": _ontology_context_values(item.action_policies),
+        }
+
+    outcome_rows: List[Dict[str, object]] = []
+    for outcome in list(episode.outcomes or [])[-outcome_limit:]:
+        payload = outcome.payload if isinstance(outcome.payload, dict) else {}
+        outcome_rows.append({
+            "outcomeId": str(outcome.outcome_id or ""),
+            "episodeId": str(outcome.episode_id or episode.episode_id or ""),
+            "observedAt": str(outcome.observed_at or ""),
+            "price": outcome.price,
+            "profitLossRate": outcome.profit_loss_rate,
+            "priceChangeFromDecisionPct": outcome.price_change_from_decision_pct,
+            "selectedHypothesisStatus": str(outcome.selected_hypothesis_status or ""),
+            "payload": {
+                "horizonMinutes": payload.get("horizonMinutes"),
+                "targetAt": _ontology_context_text(payload.get("targetAt"), 80),
+                "observationTiming": _ontology_context_text(payload.get("observationTiming"), 80),
+                "calibrationEligibility": _ontology_context_text(payload.get("calibrationEligibility"), 120),
+                "observationSource": _ontology_context_text(payload.get("observationSource"), 160),
+                "sourceAsOf": _ontology_context_text(payload.get("sourceAsOf"), 80),
+                "dataQuality": _ontology_context_text(payload.get("dataQuality"), 120),
+                "missingObservationDomains": _ontology_context_values(payload.get("missingObservationDomains"), limit=12),
+            },
+        })
+
+    reviews = [
+        {
+            "hypothesisId": str(review.hypothesis_id or ""),
+            "verdict": str(review.verdict or ""),
+            "reasoning": _ontology_context_text(review.reasoning),
+            "reviewedSupportingEvidenceIds": _ontology_context_values(review.reviewed_supporting_evidence_ids),
+            "reviewedCounterEvidenceIds": _ontology_context_values(review.reviewed_counter_evidence_ids),
+        }
+        for review in episode.hypothesis_reviews or []
+        if str(review.hypothesis_id or "") in hypothesis_ids
+    ]
+    outcome_contract = _ontology_outcome_contract_context(
+        (episode.facts_at_decision or {}).get("hypothesisOutcomeContract")
+        if isinstance(episode.facts_at_decision, dict)
+        else {}
+    )
+    return {
+        "contextVersion": DECISION_EPISODE_ONTOLOGY_CONTEXT_VERSION,
+        "episodeId": str(episode.episode_id or ""),
+        "accountId": str(episode.account_id or ""),
+        "symbol": str(episode.symbol or "").upper(),
+        "subjectName": _ontology_context_text(episode.subject_name, 240),
+        "question": {
+            "questionId": str(episode.question.question_id or ""),
+            "text": _ontology_context_text(episode.question.text),
+            "intent": str(episode.question.intent or ""),
+            "subjectSymbol": str(episode.question.subject_symbol or "").upper(),
+            "subjectName": _ontology_context_text(episode.question.subject_name, 240),
+            "horizon": str(episode.question.horizon or ""),
+            "accountId": str(episode.question.account_id or ""),
+            "askedAt": str(episode.question.asked_at or ""),
+            "source": str(episode.question.source or ""),
+        },
+        "hypothesisSet": {
+            "hypothesisSetId": str(episode.hypothesis_set.hypothesis_set_id or ""),
+            "subjectSymbol": str(episode.hypothesis_set.subject_symbol or "").upper(),
+            "questionId": str(episode.hypothesis_set.question_id or ""),
+            "comparisonRequired": bool(episode.hypothesis_set.comparison_required),
+            "minimumComparisonCount": episode.hypothesis_set.minimum_comparison_count,
+            "inferenceGenerationId": str(episode.hypothesis_set.inference_generation_id or ""),
+            "version": str(episode.hypothesis_set.version or ""),
+            "hypotheses": [hypothesis_payload(item) for item in hypotheses],
+            "families": [
+                {
+                    "familyId": str(item.family_id or ""),
+                    "label": _ontology_context_text(item.label),
+                    "causalSignature": _ontology_context_text(item.causal_signature, 240),
+                    "stance": str(item.stance or ""),
+                    "horizon": str(item.horizon or ""),
+                    "sourceRuleIds": _ontology_context_values(item.source_rule_ids),
+                    "candidateHypothesisIds": [
+                        value for value in _ontology_context_values(item.candidate_hypothesis_ids)
+                        if value in hypothesis_ids
+                    ],
+                    "source": str(item.source or ""),
+                    "mergedRuleCount": int(item.merged_rule_count or 0),
+                    "scopeState": str(item.scope_state or ""),
+                    "marketHypothesisId": str(item.market_hypothesis_id or ""),
+                    "accountOverlayIds": [
+                        value for value in _ontology_context_values(item.account_overlay_ids)
+                        if value in overlay_ids
+                    ],
+                }
+                for item in episode.hypothesis_set.families or []
+                if str(item.family_id or "") in family_ids
+            ],
+            "marketHypotheses": [
+                {
+                    "marketHypothesisId": str(item.market_hypothesis_id or ""),
+                    "marketWorldId": str(item.market_world_id or ""),
+                    "marketId": str(item.market_id or ""),
+                    "subjectSymbol": str(item.subject_symbol or "").upper(),
+                    "horizon": str(item.horizon or ""),
+                    "causalSignature": _ontology_context_text(item.causal_signature, 240),
+                    "stance": str(item.stance or ""),
+                    "sourceRuleIds": _ontology_context_values(item.source_rule_ids),
+                    "marketConditionIds": _ontology_context_values(item.market_condition_ids),
+                    "marketRelationTypes": _ontology_context_values(item.market_relation_types),
+                    "source": str(item.source or ""),
+                    "scopeState": str(item.scope_state or ""),
+                    "scopeVersion": str(item.scope_version or ""),
+                }
+                for item in episode.hypothesis_set.market_hypotheses or []
+                if str(item.market_hypothesis_id or "") in market_ids
+            ],
+            "accountOverlays": [
+                {
+                    "accountOverlayId": str(item.account_overlay_id or ""),
+                    "accountId": str(item.account_id or ""),
+                    "portfolioWorldId": str(item.portfolio_world_id or ""),
+                    "familyId": str(item.family_id or ""),
+                    "scopeState": str(item.scope_state or ""),
+                    "marketHypothesisId": str(item.market_hypothesis_id or ""),
+                    "targetRoles": _ontology_context_values(item.target_roles),
+                    "actionPolicies": _ontology_context_values(item.action_policies),
+                    "allowedActions": _ontology_context_values(item.allowed_actions),
+                    "blockedActions": _ontology_context_values(item.blocked_actions),
+                    "accountConditionIds": _ontology_context_values(item.account_condition_ids),
+                    "accountFields": _ontology_context_values(item.account_fields),
+                    "accountRelationTypes": _ontology_context_values(item.account_relation_types),
+                    "accountTargetKinds": _ontology_context_values(item.account_target_kinds),
+                    "sourceRuleIds": _ontology_context_values(item.source_rule_ids),
+                    "source": str(item.source or ""),
+                    "scopeVersion": str(item.scope_version or ""),
+                }
+                for item in episode.hypothesis_set.account_overlays or []
+                if str(item.account_overlay_id or "") in overlay_ids
+            ],
+        },
+        "action": str(episode.action or ""),
+        "reviewLevel": str(episode.review_level or ""),
+        "dataState": str(episode.data_state or ""),
+        "validationState": str(episode.validation_state or ""),
+        "selectedHypothesisId": selected_id,
+        "hypothesisReviews": reviews,
+        "hypothesisComparisonState": str(episode.hypothesis_comparison_state or ""),
+        "hypothesisSelectionSource": str(episode.hypothesis_selection_source or ""),
+        "inferenceGenerationId": str(episode.inference_generation_id or ""),
+        "unresolvedQuestions": _ontology_context_values(episode.unresolved_questions, limit=12),
+        "decidedAt": str(episode.decided_at or ""),
+        "status": str(episode.status or ""),
+        "source": str(episode.source or ""),
+        "factsAtDecision": (
+            {"hypothesisOutcomeContract": outcome_contract}
+            if outcome_contract else {}
+        ),
+        "researchPlan": {},
+        "researchAudit": {},
+        "outcomes": outcome_rows,
+    }
+
+
 @dataclass(frozen=True)
 class LearningProposal:
     proposal_id: str

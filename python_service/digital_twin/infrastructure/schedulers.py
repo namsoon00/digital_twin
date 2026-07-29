@@ -621,7 +621,7 @@ class OntologyRuleboxPrewarmScheduler:
 
     def __init__(self, runner, interval_seconds: int, error_reporter=None, isolated_cycle=None):
         self.runner = runner
-        self.interval_seconds = max(5, int(interval_seconds or 10))
+        self.interval_seconds = max(15, int(interval_seconds or 60))
         self.error_reporter = error_reporter or operational_error_reporter()
         self.isolated_cycle = isolated_cycle
         self.last_signature = ""
@@ -667,6 +667,27 @@ class OntologyRuleboxPrewarmScheduler:
             return status not in {"disabled"}
         return False
 
+    def retry_interval_seconds(self, result: dict) -> int:
+        """Leave TypeDB recovery time after an expensive schema attempt.
+
+        A TypeDB schema commit may keep compiling after an isolated child has
+        timed out. Retrying that same commit every few seconds only adds more
+        clients behind the compiler and delays live read transactions. A
+        successful partial pass can resume at a measured pace; errors receive
+        a longer cooldown.
+        """
+        payload = dict(result or {})
+        status = str(payload.get("status") or "").strip()
+        try:
+            recommended = int(payload.get("recommendedRetryAfterSeconds") or 0)
+        except (TypeError, ValueError):
+            recommended = 0
+        if status == "error":
+            return max(self.interval_seconds, recommended, 60)
+        if status in {"provisioning", "deferred-projection-coordinator"}:
+            return max(self.interval_seconds, recommended, 30)
+        return max(self.interval_seconds, recommended)
+
     def run_forever(self) -> None:
         install_stop_handlers(self.stop)
         print(
@@ -677,19 +698,24 @@ class OntologyRuleboxPrewarmScheduler:
         )
         while self.running:
             started = time.monotonic()
+            retry_interval = self.interval_seconds
             try:
                 result = self.run_once()
+                retry_interval = self.retry_interval_seconds(result)
                 if self.should_report(result, started):
+                    reason = str(result.get("reason") or "").strip()
                     print(
                         "Ontology RuleBox prewarm "
                         + str(result.get("status") or "unknown")
                         + " pending="
                         + str(result.get("pendingRuleCount") or 0)
                         + " ready="
-                        + str(bool(result.get("functionsReady"))),
+                        + str(bool(result.get("functionsReady")))
+                        + (" reason=" + reason[:220] if reason else ""),
                         flush=True,
                     )
             except Exception as error:  # noqa: BLE001 - live inference keeps its own safe prior generation.
+                retry_interval = max(self.interval_seconds, 60)
                 print("Python ontology RuleBox prewarm worker error: " + str(error), flush=True)
                 report_runtime_error(
                     self.error_reporter,
@@ -697,7 +723,7 @@ class OntologyRuleboxPrewarmScheduler:
                     error,
                     "TypeDB RuleBox schema function prewarm",
                 )
-            end_at = time.monotonic() + max(1.0, self.interval_seconds - (time.monotonic() - started))
+            end_at = time.monotonic() + max(1.0, retry_interval - (time.monotonic() - started))
             wait_until_running(lambda: self.running, end_at)
 
 

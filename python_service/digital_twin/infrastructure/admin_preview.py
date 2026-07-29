@@ -604,7 +604,7 @@ def admin_preview_config() -> Dict[str, object]:
                     {"key": "ontologyInferenceDetailDeferWhenReasoningPending", "label": "추론 대기 중 상세 읽기 유예", "type": "toggle", "default": "1"},
                     {"key": "ontologyInferenceDetailIntervalSeconds", "label": "상세 읽기 점검 주기", "type": "number", "default": "15", "unit": "seconds"},
                     {"key": "ontologyRuleboxPrewarmEnabled", "label": "RuleBox 함수 사전 준비 워커", "type": "toggle", "default": "1"},
-                    {"key": "ontologyRuleboxPrewarmIntervalSeconds", "label": "RuleBox 함수 사전 준비 주기", "type": "number", "default": "10", "unit": "seconds"},
+                    {"key": "ontologyRuleboxPrewarmIntervalSeconds", "label": "RuleBox 함수 사전 준비 주기", "type": "number", "default": "60", "unit": "seconds"},
                     {"key": "ontologyRuleboxPrewarmExecutionTimeoutSeconds", "label": "RuleBox 함수 준비 시간 상한", "type": "number", "default": "180", "unit": "seconds"},
                     {"key": "ontologyRuleboxPrewarmProcessIsolationEnabled", "label": "RuleBox 함수 준비 프로세스 격리", "type": "toggle", "default": "1"},
                     {"key": "ontologyAboxMaintenanceDeferWhenReasoningPending", "label": "추론 대기 중 ABox 정리 유예", "type": "toggle", "default": "1"},

@@ -3,6 +3,7 @@ import unittest
 from digital_twin.application.ontology_rulebox_prewarm_service import (
     OntologyRuleboxPrewarmRunner,
 )
+from digital_twin.infrastructure.schedulers import OntologyRuleboxPrewarmScheduler
 
 
 class FakeRepository:
@@ -60,6 +61,13 @@ class OntologyRuleboxPrewarmRunnerTests(unittest.TestCase):
         self.assertTrue(status["processIsolationEnabled"])
         self.assertFalse(status["deferWhenReasoningPending"])
         self.assertTrue(status["prewarm"]["functionsReady"])
+
+    def test_scheduler_cools_down_schema_compile_errors_before_retrying(self):
+        scheduler = OntologyRuleboxPrewarmScheduler(FakeRepository(), 15)
+
+        self.assertEqual(60, scheduler.retry_interval_seconds({"status": "error"}))
+        self.assertEqual(30, scheduler.retry_interval_seconds({"status": "provisioning"}))
+        self.assertEqual(15, scheduler.retry_interval_seconds({"status": "ok"}))
 
 
 if __name__ == "__main__":

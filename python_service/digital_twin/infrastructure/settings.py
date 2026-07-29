@@ -1285,9 +1285,9 @@ def runtime_settings(fast_operational_read: bool = False) -> Dict[str, str]:
             "1",
         ),
         "ontologyRuleboxPrewarmIntervalSeconds": value(
-            "ontologyRuleboxPrewarmIntervalSeconds",
-            "ONTOLOGY_RULEBOX_PREWARM_INTERVAL_SECONDS",
-            "10",
+        "ontologyRuleboxPrewarmIntervalSeconds",
+        "ONTOLOGY_RULEBOX_PREWARM_INTERVAL_SECONDS",
+        "60",
         ),
         "ontologyRuleboxPrewarmExecutionTimeoutSeconds": value(
             "ontologyRuleboxPrewarmExecutionTimeoutSeconds",

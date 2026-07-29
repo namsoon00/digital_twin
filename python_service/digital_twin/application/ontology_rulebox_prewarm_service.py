@@ -43,7 +43,7 @@ class OntologyRuleboxPrewarmRunner:
         return _integer_setting(
             self.settings,
             "ontologyRuleboxPrewarmIntervalSeconds",
-            10,
+            60,
             5,
             3600,
         )

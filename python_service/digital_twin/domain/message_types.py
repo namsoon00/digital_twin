@@ -259,7 +259,7 @@ MESSAGE_TYPE_EMOJIS = {
 
 TRIGGER_SUMMARIES = {
     INVESTMENT_INSIGHT: "온톨로지 관계 그래프에서 의미 있는 투자 인사이트가 생성될 때 보냅니다.",
-    MARKET_OBSERVATION: "직전 저장 시세와 비교해 설정한 폭 이상 바뀐 원시 시세를 즉시 관측 알림으로 보냅니다. 매수·매도 판단은 TypeDB 추론 완료 후 별도로 보냅니다.",
+    MARKET_OBSERVATION: "마지막 알림 기준 시세와 비교해 설정한 폭 이상 누적 변동한 원시 시세를 즉시 관측 알림으로 보냅니다. 매수·매도 판단은 TypeDB 추론 완료 후 별도로 보냅니다.",
     PORTFOLIO_HOLDINGS_SNAPSHOT: "강제 점검이나 수동 확인 요청에서 모든 보유 종목의 현재 상태를 한 번에 확인할 때 보냅니다.",
     INVESTMENT_CALENDAR_REMINDER: "등록한 투자 이벤트가 설정한 리마인더 시점에 도달하면 보냅니다. 투자 판단은 별도 온톨로지 인사이트로만 보냅니다.",
     NEWS_DIGEST: "보유/관심 종목에 신선도·관련성·중요도 기준을 통과한 새 뉴스나 피드 근거가 들어올 때 보냅니다.",

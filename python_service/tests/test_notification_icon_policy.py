@@ -17,6 +17,7 @@ from digital_twin.domain.portfolio import AlertEvent  # noqa: E402
 EXPECTED_BASE_ICONS = {
     "default": "🔔",
     "investmentInsight": "🧭",
+    "marketObservation": "📈",
     "portfolioHoldingsSnapshot": "📋",
     "investmentCalendarReminder": "🗓️",
     "newsDigest": "🗞️",

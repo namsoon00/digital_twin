@@ -38,6 +38,7 @@ from digital_twin.domain.portfolio import utc_now_iso
 from digital_twin.application.notification_service import NotificationQueueRunner
 from digital_twin.infrastructure.cli import public_settings_payload
 from digital_twin.infrastructure.notifications import NotificationResult, TelegramNotifier, notifier_for_operations
+from digital_twin.infrastructure.mysql_notification_config import MySQLNotificationRuleStore
 
 
 class NotificationDataQualityPolicyTests(unittest.TestCase):
@@ -47,6 +48,29 @@ class NotificationDataQualityPolicyTests(unittest.TestCase):
         self.assertTrue(rule.enabled)
         self.assertFalse(rule.similarity_enabled)
         self.assertFalse(rule.state_cooldown_enabled)
+
+    def test_legacy_market_observation_similarity_policy_is_migrated_once(self):
+        legacy = default_notification_rule(MARKET_OBSERVATION)
+        legacy.similarity_enabled = True
+        legacy.similarity_window_minutes = 120
+
+        changed = MySQLNotificationRuleStore._migrate_legacy_market_observation_similarity(
+            legacy,
+            default_notification_rule(MARKET_OBSERVATION),
+        )
+
+        self.assertTrue(changed)
+        self.assertFalse(legacy.similarity_enabled)
+        self.assertEqual(0, legacy.similarity_window_minutes)
+
+        custom = default_notification_rule(MARKET_OBSERVATION)
+        custom.similarity_enabled = True
+        custom.similarity_window_minutes = 120
+        custom.similarity_fields = ["messageType", "accountId", "symbol", "marketObservation.changePct"]
+        self.assertFalse(MySQLNotificationRuleStore._migrate_legacy_market_observation_similarity(
+            custom,
+            default_notification_rule(MARKET_OBSERVATION),
+        ))
 
     @staticmethod
     def _typedb_relation_context(context):

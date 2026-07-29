@@ -8,6 +8,7 @@ sys.path.insert(0, str(Path(__file__).resolve().parents[1]))
 from digital_twin.application.monitoring_service import MonitorRunner
 from digital_twin.domain.accounts import AccountConfig
 from digital_twin.domain.market_data import normalize_position
+from digital_twin.domain.market_observations import apply_market_observation_outbox_baselines
 from digital_twin.domain.message_types import MARKET_OBSERVATION, PORTFOLIO_HOLDINGS_SNAPSHOT
 from digital_twin.domain.monitoring import RealtimeMonitor
 from digital_twin.domain.portfolio import AccountSnapshot, utc_now_iso
@@ -87,6 +88,56 @@ class MonitoringForceSnapshotTests(unittest.TestCase):
         self.assertFalse(observations[0].metadata["investmentJudgement"])
         self.assertIn("매수·매도 판단 없음", "\n".join(observations[0].lines))
         self.assertTrue(current.metadata["ontology"]["inferenceMissingState"]["pending"])
+
+    def test_market_observation_accumulates_from_last_outbox_baseline(self):
+        previous_position = normalize_position({
+            "symbol": "AAPL",
+            "name": "Apple",
+            "market": "US",
+            "currency": "USD",
+            "quantity": 1,
+            "currentPrice": 100.4,
+            "updatedAt": utc_now_iso(),
+        })
+        current_position = normalize_position({
+            "symbol": "AAPL",
+            "name": "Apple",
+            "market": "US",
+            "currency": "USD",
+            "quantity": 1,
+            "currentPrice": 100.7,
+            "updatedAt": utc_now_iso(),
+        })
+        previous = AccountSnapshot(
+            "main", "메인", "toss", "live", "ok", utc_now_iso(),
+            portfolio_summary([previous_position]), [previous_position], [],
+            metadata={
+                "marketObservationBaselines": {
+                    "AAPL": {"price": 100.0, "currency": "USD"},
+                },
+            },
+        )
+        current = AccountSnapshot(
+            "main", "메인", "toss", "live", "ok", utc_now_iso(),
+            portfolio_summary([current_position]), [current_position], [], metadata={},
+        )
+
+        observations = [
+            event for event in RealtimeMonitor().events_for_snapshot(current, previous.to_monitor_state())
+            if event.rule == MARKET_OBSERVATION
+        ]
+
+        self.assertEqual(1, len(observations))
+        observation = observations[0]
+        self.assertEqual("last-outbox-alert", observation.metadata["marketObservation"]["baselineKind"])
+        self.assertEqual(100.0, observation.metadata["marketObservation"]["baselinePrice"])
+        self.assertAlmostEqual(0.7, observation.metadata["marketObservation"]["changePct"])
+        self.assertIn("마지막 알림 기준값", "\n".join(observation.lines))
+
+        updated_state = apply_market_observation_outbox_baselines(current.to_monitor_state(), observations)
+        baseline = updated_state["metadata"]["marketObservationBaselines"]["AAPL"]
+        self.assertEqual(100.7, baseline["price"])
+        self.assertEqual("USD", baseline["currency"])
 
     def test_verified_native_no_match_is_not_reported_as_an_inference_failure(self):
         reason_code, reason, detail = RealtimeMonitor().ontology_inference_missing_reason_from_metadata({

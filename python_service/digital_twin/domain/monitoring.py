@@ -8,6 +8,7 @@ from .data_freshness import data_freshness_required, freshness_from_position, fr
 from .external_api_sources import external_api_source_metadata
 from .external_signal_deltas import external_signals_with_deltas
 from .market_data import number
+from .market_observations import market_observation_baseline
 from .message_types import (
     DEFAULT_ALERT_RULES,
     DEFAULT_ALERT_THRESHOLDS,
@@ -659,10 +660,12 @@ class RealtimeMonitor(MonitoringSampleDataMixin, MonitoringPositionContextMixin,
     ) -> List[AlertEvent]:
         """Emit a bounded raw quote observation without an investment action.
 
-        The event's sole meaning is that the latest persisted price changed.
-        It never names a buy/sell/hold action, never consumes an InferenceBox,
-        and can therefore be durably queued before the asynchronous TypeDB
-        worker has an available schema-function generation.
+        The event compares the current quote with the most recent
+        outbox-accepted observation price when available, so small consecutive
+        ticks accumulate instead of resetting the threshold every monitor
+        cycle. It never names a buy/sell/hold action, never consumes an
+        InferenceBox, and can therefore be durably queued before the
+        asynchronous TypeDB worker has an available schema-function generation.
         """
 
         if not snapshot.has_live_account_data():
@@ -690,17 +693,24 @@ class RealtimeMonitor(MonitoringSampleDataMixin, MonitoringPositionContextMixin,
             current_price = float(item.current_price or 0)
             if previous_price <= 0 or current_price <= 0:
                 continue
-            change_pct = (current_price - previous_price) / abs(previous_price) * 100.0
+            currency = item.currency or self.position_currency(item.to_dict())
+            baseline = market_observation_baseline(previous or {}, symbol, currency)
+            stored_baseline_price = number(baseline.get("price"))
+            baseline_price = stored_baseline_price or previous_price
+            baseline_kind = "last-outbox-alert" if stored_baseline_price > 0 else "previous-snapshot"
+            change_pct = (current_price - baseline_price) / abs(baseline_price) * 100.0
             if change_pct == 0 or abs(change_pct) < threshold:
                 continue
             direction = "up" if change_pct > 0 else "down" if change_pct < 0 else "flat"
-            currency = item.currency or self.position_currency(item.to_dict())
             source = str(item.quote_source or item.source or "시세 공급자").strip()
+            baseline_label = "마지막 알림 기준값" if baseline_kind == "last-outbox-alert" else "초기 관측 기준값"
+            comparison_label = "마지막 알림 기준 시세와 비교" if baseline_kind == "last-outbox-alert" else "직전 저장 시세와 비교 (초기 기준)"
             lines = [
                 "현재가: " + price_money(current_price, currency),
+                baseline_label + ": " + price_money(baseline_price, currency),
+                "기준 대비: " + signed_pct(change_pct),
                 "직전 저장값: " + price_money(previous_price, currency),
-                "직전 대비: " + signed_pct(change_pct),
-                "관측 기준: 직전 저장 시세와 비교",
+                "관측 기준: " + comparison_label,
                 "판단 상태: 원시 시세 관측만 발송 · 매수·매도 판단 없음",
                 "후속 처리: TypeDB 관계 추론 완료 시 투자 인사이트를 별도로 확인",
             ]
@@ -716,8 +726,8 @@ class RealtimeMonitor(MonitoringSampleDataMixin, MonitoringPositionContextMixin,
                 lines,
                 symbol,
                 criteria=self.criteria(
-                    "직전 저장 시세 대비 절대 " + compact_number(threshold) + "% 이상 변동 시 원시 시세 관측을 즉시 발송",
-                    "직전 " + price_money(previous_price, currency)
+                    "마지막 알림 기준 시세 대비 절대 " + compact_number(threshold) + "% 이상 누적 변동 시 원시 시세 관측을 즉시 발송",
+                    baseline_label + " " + price_money(baseline_price, currency)
                     + " → 현재 " + price_money(current_price, currency)
                     + " (" + signed_pct(change_pct) + ") · 투자 판단 없음",
                 ),
@@ -725,10 +735,13 @@ class RealtimeMonitor(MonitoringSampleDataMixin, MonitoringPositionContextMixin,
                     "marketObservation": {
                         "observationOnly": True,
                         "previousPrice": previous_price,
+                        "baselinePrice": baseline_price,
+                        "baselineKind": baseline_kind,
                         "currentPrice": current_price,
                         "changePct": round(change_pct, 4),
                         "thresholdPct": threshold,
                         "direction": direction,
+                        "currency": currency,
                         "source": source,
                     },
                     "observationOnly": True,

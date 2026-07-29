@@ -16,6 +16,7 @@ from ..domain.events import (
 from ..domain.fact_changes import fact_signature, research_evidence_fact_payload
 from ..domain.investment_research import ResearchEvidence
 from ..domain.investment_strategy_guidance import append_strategy_block, merge_strategy_context
+from ..domain.market_observations import apply_market_observation_outbox_baselines
 from ..domain.model_review import ModelReviewJob
 from ..domain.notification_rules import (
     DEFAULT_NOTIFICATION_RULES,
@@ -362,6 +363,35 @@ class MySQLMonitoringCycleRecorder(MySQLOperationalConnection):
             self.market_time_series_store.record_snapshots_with_connection(connection, live_snapshots)
             for snapshot in live_snapshots:
                 insert_domain_event_with_connection(connection, snapshot_collected_event(snapshot))
+            outboxed_events: List[AlertEvent] = []
+            if alert_source_event:
+                insert_domain_event_with_connection(connection, alert_source_event)
+                for event in guarded_events:
+                    account_context = account_contexts.get(event.account_id)
+                    context = merge_strategy_context(alert_context(event), account_context, self.runtime_settings)
+                    if str(event.rule or "") == "investmentInsight":
+                        context = append_strategy_block(context)
+                    message = MySQLNotificationTemplateStore(self.runtime_settings).render(event.rule, context)
+                    job = NotificationJob.create(
+                        message,
+                        account_id=event.account_id,
+                        account_label=event.account_label,
+                        message_type=event.rule or "alert",
+                        source_event_id=alert_source_event.event_id,
+                        source_event_name=alert_source_event.name,
+                        dedupe_key=":".join(["outbox", alert_source_event.event_id, event.key]),
+                        context=context,
+                    )
+                    if notification_store.enqueue_with_connection(connection, job):
+                        queued += 1
+                        outboxed_events.append(event)
+                model_review_store.enqueue_from_event_with_connection(connection, alert_source_event)
+                sent_entries = self.monitor_store.mark_sent_with_connection(connection, guarded_events, stamp)
+            if outboxed_events:
+                for account_id, state in list(snapshot_states.items()):
+                    account_events = [event for event in outboxed_events if event.account_id == account_id]
+                    if account_events:
+                        snapshot_states[account_id] = apply_market_observation_outbox_baselines(state, account_events)
             # Persist the source snapshot before publishing its replayable
             # TypeDB work. The two writes share this transaction, so a worker
             # can never see a barrier without the exact snapshot it names.
@@ -383,28 +413,6 @@ class MySQLMonitoringCycleRecorder(MySQLOperationalConnection):
                     # can recreate its mailbox row after an interrupted
                     # operational write.
                     pass
-            if alert_source_event:
-                insert_domain_event_with_connection(connection, alert_source_event)
-                for event in guarded_events:
-                    account_context = account_contexts.get(event.account_id)
-                    context = merge_strategy_context(alert_context(event), account_context, self.runtime_settings)
-                    if str(event.rule or "") == "investmentInsight":
-                        context = append_strategy_block(context)
-                    message = MySQLNotificationTemplateStore(self.runtime_settings).render(event.rule, context)
-                    job = NotificationJob.create(
-                        message,
-                        account_id=event.account_id,
-                        account_label=event.account_label,
-                        message_type=event.rule or "alert",
-                        source_event_id=alert_source_event.event_id,
-                        source_event_name=alert_source_event.name,
-                        dedupe_key=":".join(["outbox", alert_source_event.event_id, event.key]),
-                        context=context,
-                    )
-                    if notification_store.enqueue_with_connection(connection, job):
-                        queued += 1
-                model_review_store.enqueue_from_event_with_connection(connection, alert_source_event)
-                sent_entries = self.monitor_store.mark_sent_with_connection(connection, guarded_events, stamp)
             insert_domain_event_with_connection(
                 connection,
                 monitoring_cycle_completed_event(list(account_ids or []), len(snapshots), len(guarded_events), False, delivered),

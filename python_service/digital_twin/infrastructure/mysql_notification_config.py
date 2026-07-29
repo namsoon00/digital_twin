@@ -14,6 +14,7 @@ from ..domain.events import (
 from ..domain.fact_changes import fact_signature, research_evidence_fact_payload
 from ..domain.investment_research import ResearchEvidence
 from ..domain.model_review import ModelReviewJob
+from ..domain.message_types import MARKET_OBSERVATION
 from ..domain.notification_rules import (
     DEFAULT_NOTIFICATION_RULES,
     NotificationRuleConfig,
@@ -59,6 +60,9 @@ from .mysql_operational_helpers import (
     _sent_key_hash,
     research_evidence_change_payload,
 )
+
+
+MARKET_OBSERVATION_SIMILARITY_MIGRATION_KEY = "notification-rule-migration:market-observation-no-similarity-v1"
 
 
 class MySQLNotificationTemplateStore(MySQLOperationalConnection):
@@ -155,6 +159,11 @@ class MySQLNotificationRuleStore(MySQLOperationalConnection):
     def seed_defaults(self) -> None:
         stamp = utc_now()
         with self.transaction() as connection:
+            migration_row = connection.execute(
+                "SELECT store_id FROM app_store WHERE store_id = %s",
+                (MARKET_OBSERVATION_SIMILARITY_MIGRATION_KEY,),
+            ).fetchone()
+            migrate_market_observation_similarity = not bool(migration_row)
             for message_type, rule in DEFAULT_NOTIFICATION_RULES.items():
                 connection.execute(
                     """
@@ -186,6 +195,11 @@ class MySQLNotificationRuleStore(MySQLOperationalConnection):
                     current = rule_from_row(row)
                     migrated_conditions = self._migrate_default_conditions(current, rule)
                     migrated_similarity = self._migrate_default_similarity(current, rule)
+                    migrated_market_observation_similarity = (
+                        self._migrate_legacy_market_observation_similarity(current, rule)
+                        if migrate_market_observation_similarity
+                        else False
+                    )
                     set_clauses = []
                     params = []
                     if migrated_conditions:
@@ -196,6 +210,11 @@ class MySQLNotificationRuleStore(MySQLOperationalConnection):
                         params.append(json_dumps(current.similarity_fields))
                         set_clauses.append("similarity_bypass_conditions_json = %s")
                         params.append(json_dumps([condition.to_dict() for condition in current.similarity_bypass_conditions]))
+                    if migrated_market_observation_similarity:
+                        set_clauses.append("similarity_enabled = %s")
+                        params.append(1 if current.similarity_enabled else 0)
+                        set_clauses.append("similarity_window_minutes = %s")
+                        params.append(int(current.similarity_window_minutes))
                     if current.market_hours_enabled != rule.market_hours_enabled:
                         set_clauses.append("market_hours_enabled = %s")
                         params.append(1 if rule.market_hours_enabled else 0)
@@ -207,6 +226,19 @@ class MySQLNotificationRuleStore(MySQLOperationalConnection):
                             "UPDATE notification_rules SET " + ", ".join(set_clauses) + " WHERE message_type = %s",
                             params,
                         )
+            if migrate_market_observation_similarity:
+                connection.execute(
+                    """
+                    INSERT INTO app_store (store_id, payload_json, updated_at)
+                    VALUES (%s, %s, %s)
+                    ON DUPLICATE KEY UPDATE payload_json = VALUES(payload_json), updated_at = VALUES(updated_at)
+                    """,
+                    (
+                        MARKET_OBSERVATION_SIMILARITY_MIGRATION_KEY,
+                        json_dumps({"policy": "marketObservation uses monitor cadence instead of text similarity"}),
+                        stamp,
+                    ),
+                )
 
     def _migrate_default_conditions(self, current: NotificationRuleConfig, default_rule: NotificationRuleConfig) -> bool:
         defaults = {condition.condition_id: condition for condition in default_rule.conditions}
@@ -303,6 +335,29 @@ class MySQLNotificationRuleStore(MySQLOperationalConnection):
                     condition.description = default.description
                     changed = True
         return changed
+
+    @staticmethod
+    def _migrate_legacy_market_observation_similarity(
+        current: NotificationRuleConfig,
+        default_rule: NotificationRuleConfig,
+    ) -> bool:
+        """Disable only the old untouched two-hour price-observation policy.
+
+        The marker written by ``seed_defaults`` makes this a one-time migration
+        and preserves any later user change to the notification rule.
+        """
+
+        if str(current.message_type or "") != MARKET_OBSERVATION:
+            return False
+        if not current.similarity_enabled or int(current.similarity_window_minutes or 0) != 120:
+            return False
+        if list(current.similarity_fields or []) != list(default_rule.similarity_fields or []):
+            return False
+        if current.similarity_bypass_conditions:
+            return False
+        current.similarity_enabled = False
+        current.similarity_window_minutes = 0
+        return True
 
     def list(self) -> List[NotificationRuleConfig]:
         with self.connect() as connection:

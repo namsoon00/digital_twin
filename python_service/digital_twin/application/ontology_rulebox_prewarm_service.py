@@ -31,13 +31,61 @@ def _integer_setting(
 class OntologyRuleboxPrewarmRunner:
     """Run one bounded full-RuleBox schema preparation pass at a time."""
 
-    def __init__(self, ontology_repository, settings: Dict[str, object] = None):
+    def __init__(
+        self,
+        ontology_repository,
+        settings: Dict[str, object] = None,
+        reasoning_queue_probe=None,
+    ):
         self.ontology_repository = ontology_repository
         self.settings = dict(settings or {})
+        self.reasoning_queue_probe = reasoning_queue_probe
 
     def enabled(self) -> bool:
-        value = str(self.settings.get("ontologyRuleboxPrewarmEnabled") or "1").strip().lower()
+        # Cold TypeDB schema compilation can continue consuming the server
+        # after its client timed out. Keep the optimisation opt-in until the
+        # local compiler has demonstrated that it can finish within its bound.
+        value = str(self.settings.get("ontologyRuleboxPrewarmEnabled") or "0").strip().lower()
         return value not in DISABLED_VALUES
+
+    def defer_when_reasoning_pending(self) -> bool:
+        value = str(
+            self.settings.get("ontologyRuleboxPrewarmDeferWhenReasoningPending") or "1"
+        ).strip().lower()
+        return value not in DISABLED_VALUES
+
+    def reasoning_queue_state(self) -> Dict[str, object]:
+        probe = self.reasoning_queue_probe
+        if not callable(probe):
+            return {"status": "not-supported", "effectivePendingCount": 0}
+        try:
+            payload = probe()
+            return dict(payload or {}) if isinstance(payload, dict) else {
+                "status": "invalid",
+                "effectivePendingCount": 0,
+            }
+        except Exception as error:  # noqa: BLE001 - an unsafe compiler pass must not block alerts.
+            return {
+                "status": "error",
+                "effectivePendingCount": 0,
+                "reason": str(error)[:180],
+            }
+
+    @staticmethod
+    def pending_reasoning_count(payload: Dict[str, object]) -> int:
+        values = dict(payload or {}) if isinstance(payload, dict) else {}
+        candidates = [
+            values.get("effectivePendingCount"),
+            values.get("mailboxPendingEntryCount"),
+            values.get("pendingEntryCount"),
+        ]
+        parsed = []
+        for candidate in candidates:
+            try:
+                parsed.append(max(0, int(float(candidate or 0))))
+            except (TypeError, ValueError):
+                continue
+        return max(parsed or [0])
 
     def interval_seconds(self) -> int:
         return _integer_setting(
@@ -79,9 +127,7 @@ class OntologyRuleboxPrewarmRunner:
             "executionTimeoutSeconds": self.execution_timeout_seconds(),
             "executionTimeoutGraceSeconds": self.execution_timeout_grace_seconds(),
             "processIsolationEnabled": self.process_isolation_enabled(),
-            # A missing prewarm is itself a live-inference blocker, so this
-            # worker intentionally does not wait for the reasoning queue.
-            "deferWhenReasoningPending": False,
+            "deferWhenReasoningPending": self.defer_when_reasoning_pending(),
         }
         reader = getattr(self.ontology_repository, "schema_function_prewarm_status", None)
         if not callable(reader):
@@ -108,6 +154,37 @@ class OntologyRuleboxPrewarmRunner:
                 "configured": True,
                 "functionsReady": False,
                 "reason": "RuleBox schema-function prewarm worker is disabled.",
+                "durationMs": 0,
+            }
+        queue = self.reasoning_queue_state()
+        pending = self.pending_reasoning_count(queue)
+        if self.defer_when_reasoning_pending() and pending:
+            return {
+                "status": "deferred-reasoning-pending",
+                "configured": True,
+                "functionsReady": False,
+                "pendingRuleCount": 0,
+                "reasoningPendingCount": pending,
+                "reasoningQueue": queue,
+                "reason": (
+                    "Live ontology reasoning is pending; RuleBox schema compilation is deferred "
+                    "so it cannot delay an alert."
+                ),
+                "recommendedRetryAfterSeconds": self.interval_seconds(),
+                "durationMs": 0,
+            }
+        if self.defer_when_reasoning_pending() and str(queue.get("status") or "") == "error":
+            return {
+                "status": "deferred-reasoning-queue-probe",
+                "configured": True,
+                "functionsReady": False,
+                "pendingRuleCount": 0,
+                "reasoningQueue": queue,
+                "reason": (
+                    "Live reasoning queue state could not be confirmed; RuleBox schema compilation is deferred "
+                    "to avoid competing with an alert."
+                ),
+                "recommendedRetryAfterSeconds": self.interval_seconds(),
                 "durationMs": 0,
             }
         prewarm = getattr(self.ontology_repository, "prewarm_typedb_native_rule_functions", None)

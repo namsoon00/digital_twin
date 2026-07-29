@@ -6019,6 +6019,7 @@ class TypeDBOntologyGraphRepository(GraphStoreOntologyRowMapperMixin, ScopedABox
         schema_function_probe_interval_seconds: float = 300.0,
         schema_function_provision_batch_size: int = DEFAULT_TYPEDB_SCHEMA_FUNCTION_PROVISION_BATCH_SIZE,
         schema_function_provision_timeout_seconds: float = DEFAULT_TYPEDB_SCHEMA_FUNCTION_PROVISION_TIMEOUT_SECONDS,
+        schema_function_direct_query_fallback_enabled: bool = True,
         projection_coordinator_write_enforced: bool = False,
     ):
         self.address = str(address or "").strip()
@@ -6110,6 +6111,13 @@ class TypeDBOntologyGraphRepository(GraphStoreOntologyRowMapperMixin, ScopedABox
                     or DEFAULT_TYPEDB_SCHEMA_FUNCTION_PROVISION_TIMEOUT_SECONDS
                 ),
             ),
+        )
+        # Generated schema functions are a fast path only. When a cold
+        # compiler is staging them, the bounded direct TypeQL evaluator keeps
+        # the investment judgement in TypeDB without letting a deployment
+        # transaction suppress every realtime alert.
+        self._schema_function_direct_query_fallback_enabled = bool(
+            schema_function_direct_query_fallback_enabled
         )
         self._last_graph = None
         self._last_rules: List[GraphInferenceRule] = []
@@ -6223,6 +6231,9 @@ class TypeDBOntologyGraphRepository(GraphStoreOntologyRowMapperMixin, ScopedABox
 
     def schema_function_provision_timeout_seconds(self) -> float:
         return self._schema_function_provision_timeout_seconds
+
+    def schema_function_direct_query_fallback_enabled(self) -> bool:
+        return self._schema_function_direct_query_fallback_enabled
 
     def clear_rulebox_snapshot_cache(self) -> None:
         self._rulebox_snapshot_cache_at = 0.0
@@ -13663,10 +13674,12 @@ relation ontology-assertion,
             if imported[0] is None:
                 raise RuntimeError("typedb-driver Python package is not installed: " + str(imported[1])[:160])
             _TypeDB, _Credentials, _DriverOptions, _DriverTlsConfig, TransactionType = imported[0]
-            # Schema-function calls always bind the scoped active Manifest in
-            # their definition. Only a rule with an N-of-M group uses a direct
-            # TypeQL base/group probe, so avoid an extra active-pointer query
-            # for the normal function-only fast path.
+            # Schema-function calls bind the scoped active Manifest in their
+            # definition. A direct TypeQL fallback has no such definition, so
+            # it must bind the active Manifest for *every* raw predicate, not
+            # just N-of-M follow-up checks. Otherwise a staged function
+            # deployment can turn a one-symbol recovery read into a scan of
+            # inactive ABox generations.
             requires_direct_any_probe = any(
                 any(
                     normalized_condition_role(
@@ -13678,7 +13691,7 @@ relation ontology-assertion,
                 if item.get("rule")
             )
             scoped_manifest_only = False
-            if requires_direct_any_probe:
+            if requires_direct_any_probe or not schema_function_query:
                 try:
                     scoped_manifest_only = self.active_abox_uses_scoped_manifest(world_id)
                 except Exception:
@@ -16343,9 +16356,10 @@ relation ontology-assertion,
             schema_function_rules = list(function_sync_plan.get("schemaFunctionRules") or [])
             # Exact active-Manifest predicates are still evaluated by TypeDB,
             # but they do not require a generated schema function. A dedicated
-            # worker prewarms the complete RuleBox after policy changes. The
-            # live path only checks the small receipt slice it can invoke and
-            # must never open a TypeDB schema transaction itself.
+            # worker may prewarm the complete RuleBox after policy changes.
+            # The live path only checks the small receipt slice it can invoke;
+            # when a receipt is still staging, it can use bounded direct
+            # TypeQL reads but must never open a schema transaction itself.
             function_prewarm_check_started = time.perf_counter()
             if schema_function_rules:
                 function_sync_result = typedb_call_for_world(
@@ -16383,11 +16397,18 @@ relation ontology-assertion,
             native_stage_timings["schemaFunctionPrewarmCheckMs"] = int(
                 (time.perf_counter() - function_prewarm_check_started) * 1000
             )
+            schema_function_direct_query_fallback = bool(
+                str(function_sync_result.get("status") or "") == "provisioning"
+                and self.schema_function_direct_query_fallback_enabled()
+                and not force_schema_function_sync
+            )
             schema_function_sync_used = bool(schema_function_rules) and (
                 str(function_sync_result.get("status") or "") == "ok"
             )
             indexed_rule_count = int(function_sync_plan.get("indexedEvidenceRuleCount") or 0)
-            if schema_function_rules and indexed_rule_count:
+            if schema_function_direct_query_fallback:
+                execution_mode = "typedb-native-direct-typeql-fallback"
+            elif schema_function_rules and indexed_rule_count:
                 execution_mode = "typedb-native-hybrid"
             elif indexed_rule_count:
                 execution_mode = "typedb-native-indexed-evidence"
@@ -16410,6 +16431,13 @@ relation ontology-assertion,
                 "typedbSchemaFunctionFailedCount": int(number_or_none(function_sync_result.get("failedCount")) or 0),
                 "typedbSchemaFunctionPendingCount": int(number_or_none(function_sync_result.get("pendingRuleCount")) or 0),
                 "typedbSchemaFunctionPendingRuleIds": list(function_sync_result.get("pendingRuleIds") or [])[:80],
+                "typedbSchemaFunctionDirectQueryFallbackEnabled": self.schema_function_direct_query_fallback_enabled(),
+                "typedbSchemaFunctionDirectQueryFallbackUsed": schema_function_direct_query_fallback,
+                "typedbSchemaFunctionDirectQueryFallbackReason": (
+                    "Generated schema functions are still staging; TypeDB is evaluating the selected native rules with bounded direct TypeQL reads."
+                    if schema_function_direct_query_fallback
+                    else ""
+                ),
                 "typedbSchemaFunctionCandidateSource": str(function_sync_plan.get("candidateSource") or ""),
                 "typedbSchemaFunctionCandidateCount": int(function_sync_plan.get("candidateRuleCount") or 0),
                 "typedbSchemaFunctionRequiredRuleCount": len(schema_function_rules),
@@ -16421,7 +16449,10 @@ relation ontology-assertion,
                 "typedbNativeExecutionMode": execution_mode,
                 "typedbNativeStageTimings": dict(native_stage_timings),
             })
-            if str(function_sync_result.get("status") or "") == "provisioning":
+            if (
+                str(function_sync_result.get("status") or "") == "provisioning"
+                and not schema_function_direct_query_fallback
+            ):
                 return {
                     "configured": True,
                     "status": "deferred-schema-function-provisioning",
@@ -16452,7 +16483,10 @@ relation ontology-assertion,
                     "typedbQueryMetrics": self.query_metrics_snapshot(),
                     **runtime_rulebox_metadata,
                 }
-            if str(function_sync_result.get("status") or "") != "ok":
+            if (
+                str(function_sync_result.get("status") or "") != "ok"
+                and not schema_function_direct_query_fallback
+            ):
                 return {
                     "configured": True,
                     "status": "error",
@@ -16477,11 +16511,31 @@ relation ontology-assertion,
                     **runtime_rulebox_metadata,
                 }
             native_query_started = time.perf_counter()
+            # Generated functions can be evaluated concurrently after a
+            # stable ABox lease. During provisioning, however, direct TypeQL
+            # predicates still need their own query plans. Limit that
+            # recovery path to one reader so it restores an inference result
+            # without recreating the compiler contention that blocked the
+            # notification-producing worker in the first place.
+            native_rule_parallelism = (
+                self.native_rule_parallelism() if stable_abox_write_lease_held else 1
+            )
+            native_rule_target_parallelism = (
+                self.native_rule_target_parallelism()
+                if stable_abox_write_lease_held
+                else 1
+            )
+            if schema_function_direct_query_fallback:
+                native_rule_parallelism = 1
+                native_rule_target_parallelism = 1
+                runtime_rulebox_metadata[
+                    "typedbSchemaFunctionDirectQueryFallbackParallelismCap"
+                ] = 1
             native_match_result = typedb_call_for_world(
                 self.match_typedb_native_rules,
                 execution_rules,
                 target_symbols=target_symbols,
-                use_schema_functions=True,
+                use_schema_functions=not schema_function_direct_query_fallback,
                 world_id=world_id,
                 planner_topology=(
                     dict(planner_topology.get("topology") or {})
@@ -16490,12 +16544,8 @@ relation ontology-assertion,
                 ),
                 preflight_graph=preflight_graph,
                 preflight_incoming_relations_complete=preflight_incoming_relations_complete,
-                native_rule_parallelism=self.native_rule_parallelism() if stable_abox_write_lease_held else 1,
-                native_rule_target_parallelism=(
-                    self.native_rule_target_parallelism()
-                    if stable_abox_write_lease_held
-                    else 1
-                ),
+                native_rule_parallelism=native_rule_parallelism,
+                native_rule_target_parallelism=native_rule_target_parallelism,
                 stable_abox_write_lease_held=stable_abox_write_lease_held,
                 evidence_read_index=evidence_read_index,
             )
@@ -16553,7 +16603,11 @@ relation ontology-assertion,
                     "source": "typedbNativeRule",
                     "reasoningMode": TYPEDB_NATIVE_BLOCKED_MODE,
                     "reasonCode": str(native_match_result.get("reasonCode") or "typedbSchemaFunctionQueryError"),
-                    "reason": "TypeDB schema function 실행 실패: " + str(native_match_result.get("reason") or "")[:180],
+                    "reason": (
+                        "TypeDB 직접 TypeQL 규칙 실행 실패: "
+                        if schema_function_direct_query_fallback
+                        else "TypeDB schema function 실행 실패: "
+                    ) + str(native_match_result.get("reason") or "")[:180],
                     "statementCount": 0,
                     "relationTypes": [],
                     "nativeTypeDbReasoningUsed": False,
@@ -21381,6 +21435,9 @@ def typedb_repository_from_settings(settings: Dict[str, str] = None):
         schema_function_provision_timeout_seconds=number_or_none(
             settings.get("typedbSchemaFunctionProvisionTimeoutSeconds")
         ) or DEFAULT_TYPEDB_SCHEMA_FUNCTION_PROVISION_TIMEOUT_SECONDS,
+        schema_function_direct_query_fallback_enabled=True
+        if settings.get("typedbNativeRuleDirectQueryFallbackEnabled") in (None, "")
+        else typedb_bool(settings.get("typedbNativeRuleDirectQueryFallbackEnabled")),
         projection_coordinator_write_enforced=typedb_bool(
             settings.get("typedbProjectionCoordinatorEnabled", "1")
         ),

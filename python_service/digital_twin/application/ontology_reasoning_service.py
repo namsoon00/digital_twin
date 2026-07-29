@@ -1042,7 +1042,12 @@ class OntologyReasoningRunner:
         return int_setting(
             self.settings,
             "ontologyReasoningExecutionTimeoutSeconds",
-            240,
+            # A first scoped ABox activation can take roughly three minutes
+            # after a local TypeDB rebuild. Leave enough time for the bounded
+            # native-rule budget and outbox handoff as well; otherwise the
+            # process boundary kills a valid inference immediately before it
+            # can produce its notification event.
+            360,
             60,
             1800,
         )

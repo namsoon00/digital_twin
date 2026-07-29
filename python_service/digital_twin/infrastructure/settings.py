@@ -119,6 +119,7 @@ TEXT_SETTING_KEYS = [
     "ontologyInferenceDetailCompletedRetentionHours",
     "ontologyInferenceDetailMaxResultBytes",
     "ontologyRuleboxPrewarmEnabled",
+    "ontologyRuleboxPrewarmDeferWhenReasoningPending",
     "ontologyRuleboxPrewarmIntervalSeconds",
     "ontologyRuleboxPrewarmExecutionTimeoutSeconds",
     "ontologyRuleboxPrewarmExecutionTimeoutGraceSeconds",
@@ -261,6 +262,7 @@ TEXT_SETTING_KEYS = [
     "typedbSchemaOperationTimeoutSeconds",
     "typedbWriteOperationTimeoutSeconds",
     "typedbNativeRuleExecutionEnabled",
+    "typedbNativeRuleDirectQueryFallbackEnabled",
     "typedbNativeRuleQueryTimeoutSeconds",
     "typedbNativeRuleExecutionBudgetSeconds",
     "typedbNativeRuleParallelism",
@@ -987,7 +989,7 @@ def runtime_settings(fast_operational_read: bool = False) -> Dict[str, str]:
         "ontologyReasoningFairnessDrainEnabled": value("ontologyReasoningFairnessDrainEnabled", "ONTOLOGY_REASONING_FAIRNESS_DRAIN_ENABLED", "1"),
         "ontologyReasoningFairnessDrainMinIntervalSeconds": value("ontologyReasoningFairnessDrainMinIntervalSeconds", "ONTOLOGY_REASONING_FAIRNESS_DRAIN_MIN_INTERVAL_SECONDS", "60"),
         "ontologyReasoningProcessIsolationEnabled": value("ontologyReasoningProcessIsolationEnabled", "ONTOLOGY_REASONING_PROCESS_ISOLATION_ENABLED", "1"),
-        "ontologyReasoningExecutionTimeoutSeconds": value("ontologyReasoningExecutionTimeoutSeconds", "ONTOLOGY_REASONING_EXECUTION_TIMEOUT_SECONDS", "240"),
+        "ontologyReasoningExecutionTimeoutSeconds": value("ontologyReasoningExecutionTimeoutSeconds", "ONTOLOGY_REASONING_EXECUTION_TIMEOUT_SECONDS", "360"),
         "ontologyReasoningExecutionTimeoutGraceSeconds": value("ontologyReasoningExecutionTimeoutGraceSeconds", "ONTOLOGY_REASONING_EXECUTION_TIMEOUT_GRACE_SECONDS", "10"),
         "ontologyReasoningExecutionTimeoutBackoffSeconds": value("ontologyReasoningExecutionTimeoutBackoffSeconds", "ONTOLOGY_REASONING_EXECUTION_TIMEOUT_BACKOFF_SECONDS", "300"),
         "ontologyReasoningPreNativeTimeoutBackoffSeconds": value("ontologyReasoningPreNativeTimeoutBackoffSeconds", "ONTOLOGY_REASONING_PRE_NATIVE_TIMEOUT_BACKOFF_SECONDS", "45"),
@@ -1282,6 +1284,11 @@ def runtime_settings(fast_operational_read: bool = False) -> Dict[str, str]:
         "ontologyRuleboxPrewarmEnabled": value(
             "ontologyRuleboxPrewarmEnabled",
             "ONTOLOGY_RULEBOX_PREWARM_ENABLED",
+            "0",
+        ),
+        "ontologyRuleboxPrewarmDeferWhenReasoningPending": value(
+            "ontologyRuleboxPrewarmDeferWhenReasoningPending",
+            "ONTOLOGY_RULEBOX_PREWARM_DEFER_WHEN_REASONING_PENDING",
             "1",
         ),
         "ontologyRuleboxPrewarmIntervalSeconds": value(
@@ -1333,6 +1340,11 @@ def runtime_settings(fast_operational_read: bool = False) -> Dict[str, str]:
                 "ONTOLOGY_REASONING_TYPEDB_NATIVE_RULE_EXECUTION_ENABLED",
                 "1",
             ),
+        ),
+        "typedbNativeRuleDirectQueryFallbackEnabled": value(
+            "typedbNativeRuleDirectQueryFallbackEnabled",
+            "TYPEDB_NATIVE_RULE_DIRECT_QUERY_FALLBACK_ENABLED",
+            "1",
         ),
         "typedbNativeRuleQueryTimeoutSeconds": value(
             "typedbNativeRuleQueryTimeoutSeconds",

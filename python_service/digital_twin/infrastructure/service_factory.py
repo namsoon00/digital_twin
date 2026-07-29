@@ -751,6 +751,7 @@ def build_ontology_rulebox_prewarm_runner(settings=None) -> OntologyRuleboxPrewa
     return OntologyRuleboxPrewarmRunner(
         ontology_repository=ontology_repository_from_settings(configured_settings),
         settings=configured_settings,
+        reasoning_queue_probe=build_ontology_reasoning_queue_probe(configured_settings),
     )
 
 

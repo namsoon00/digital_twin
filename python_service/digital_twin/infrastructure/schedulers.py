@@ -682,9 +682,19 @@ class OntologyRuleboxPrewarmScheduler:
             recommended = int(payload.get("recommendedRetryAfterSeconds") or 0)
         except (TypeError, ValueError):
             recommended = 0
+        if status == "timeout":
+            # Killing the isolated Python client does not guarantee that a
+            # TypeDB schema compiler has stopped. Give the server a real
+            # recovery window instead of immediately queueing another compile.
+            return max(self.interval_seconds, recommended, 300)
         if status == "error":
             return max(self.interval_seconds, recommended, 60)
-        if status in {"provisioning", "deferred-projection-coordinator"}:
+        if status in {
+            "provisioning",
+            "deferred-projection-coordinator",
+            "deferred-reasoning-pending",
+            "deferred-reasoning-queue-probe",
+        }:
             return max(self.interval_seconds, recommended, 30)
         return max(self.interval_seconds, recommended)
 

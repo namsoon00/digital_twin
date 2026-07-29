@@ -89,6 +89,7 @@ class TypeDBOntologyRepositoryTests(unittest.TestCase):
         repository = TypeDBOntologyGraphRepository("127.0.0.1:1729")
 
         self.assertEqual(1, repository.schema_function_provision_batch_size())
+        self.assertTrue(repository.schema_function_direct_query_fallback_enabled())
 
     def test_pending_abox_activation_lookup_uses_the_world_scoped_control_id(self):
         repository = TypeDBOntologyGraphRepository("127.0.0.1:1729")
@@ -8073,7 +8074,10 @@ class TypeDBOntologyRepositoryTests(unittest.TestCase):
         self.assertEqual("skipped", result["clearResult"]["status"])
 
     def test_typedb_rulebox_defers_without_running_partial_rules_while_functions_provision(self):
-        repository = TypeDBOntologyGraphRepository("127.0.0.1:1729")
+        repository = TypeDBOntologyGraphRepository(
+            "127.0.0.1:1729",
+            schema_function_direct_query_fallback_enabled=False,
+        )
         rule = default_graph_inference_rules()[0]
         rule_snapshot = {
             "configured": True,
@@ -8113,6 +8117,117 @@ class TypeDBOntologyRepositoryTests(unittest.TestCase):
         self.assertEqual([rule.rule_id], [item.rule_id for item in readiness.call_args.args[0]])
         sync.assert_not_called()
         match.assert_not_called()
+
+    def test_typedb_rulebox_uses_bounded_direct_typeql_when_functions_are_staging(self):
+        repository = TypeDBOntologyGraphRepository("127.0.0.1:1729")
+        rule = default_graph_inference_rules()[0]
+        rule_snapshot = {
+            "configured": True,
+            "saved": True,
+            "status": "ok",
+            "graphStore": "typedb",
+            "rules": [rule.to_dict()],
+            "ruleCount": 1,
+        }
+        function_sync = {
+            "status": "provisioning",
+            "reasonCode": "typedbSchemaFunctionProvisioning",
+            "reason": "The generated function is not deployed yet.",
+            "syncedCount": 0,
+            "syncedFunctionCount": 0,
+            "skippedCount": 0,
+            "failedCount": 0,
+            "pendingRuleCount": 1,
+            "pendingRuleIds": [rule.rule_id],
+        }
+        native_match = {
+            "status": "ok",
+            "graphStore": "typedb",
+            "nativeQueryUsed": True,
+            "schemaFunctionUsed": False,
+            "indexedEvidenceQueryUsed": False,
+            "executedRuleCount": 1,
+            "executedRuleWorkCount": 1,
+            "skippedRuleCount": 0,
+            "matchedCount": 0,
+            "matches": [],
+        }
+        with patch.object(repository, "has_box_rows", return_value=True), \
+                patch.object(repository, "active_abox_metadata", return_value={
+                    "status": "ok",
+                    "aboxSnapshotId": "abox-snapshot:test",
+                }), \
+                patch.object(repository, "rulebox_snapshot", return_value=rule_snapshot), \
+                patch.object(repository, "schema_function_prewarm_readiness", return_value=function_sync), \
+                patch.object(repository, "match_typedb_native_rules", return_value=native_match) as match, \
+                patch.object(repository, "load_graph_for_native_matches", return_value=PortfolioOntology("direct-fallback")), \
+                patch.object(repository, "write_inferencebox_graph", return_value={
+                    "configured": True,
+                    "saved": True,
+                    "status": "ok",
+                    "graphStore": "typedb",
+                }):
+            result = repository.run_rulebox({"symbols": ["005930"]})
+
+        self.assertEqual("empty", result["status"])
+        self.assertTrue(result["typedbNativeRuleEvaluationCompleted"])
+        self.assertTrue(result["typedbSchemaFunctionDirectQueryFallbackUsed"])
+        self.assertFalse(result["typedbSchemaFunctionUsed"])
+        self.assertFalse(match.call_args.kwargs["use_schema_functions"])
+        self.assertEqual(1, match.call_args.kwargs["native_rule_parallelism"])
+        self.assertEqual(1, match.call_args.kwargs["native_rule_target_parallelism"])
+
+    def test_typedb_direct_fallback_binds_the_active_manifest_for_non_any_rules(self):
+        repository = TypeDBOntologyGraphRepository("127.0.0.1:1729", retry_count=0)
+        rule = next(
+            item for item in default_graph_inference_rules()
+            if item.rule_id == "graph.loss_guard.breakdown.v1"
+        )
+        queries = []
+
+        class FakePromise:
+            def resolve(self):
+                return []
+
+        class FakeTransaction:
+            def __enter__(self):
+                return self
+
+            def __exit__(self, _exc_type, _exc, _traceback):
+                return False
+
+            def query(self, query):
+                queries.append(query)
+                return FakePromise()
+
+        class FakeDriver:
+            def transaction(self, _database, _transaction_type, options=None):
+                return FakeTransaction()
+
+        driver = FakeDriver()
+        imported = (object, object, object, object, SimpleNamespace(READ="read"))
+        with patch.object(repository, "driver_imports", return_value=(imported, None)), \
+                patch.object(repository, "open_driver", return_value=driver), \
+                patch.object(repository, "ensure_database"), \
+                patch.object(repository, "close_driver"), \
+                patch.object(repository, "active_abox_uses_scoped_manifest", return_value=True) as scoped, \
+                patch.object(repository, "active_abox_rule_context", return_value={
+                    "status": "ok",
+                    "relationTypesBySymbol": {
+                        "005930": ["HAS_RISK_BUDGET", "HAS_TECHNICAL_INDICATOR"],
+                    },
+                    "sourceIdsBySymbol": {"005930": ["stock:005930"]},
+                }):
+            result = repository.match_typedb_native_rules(
+                [rule],
+                target_symbols=["005930"],
+                use_schema_functions=False,
+            )
+
+        self.assertEqual("ok", result["status"])
+        scoped.assert_called_once_with("")
+        self.assertEqual(1, len(queries))
+        self.assertIn('has ontology-kind "worldview-manifest-active-pointer"', queries[0])
 
     def test_typedb_rulebox_accepts_scoped_source_generations_through_one_worldview_manifest(self):
         repository = TypeDBOntologyGraphRepository("127.0.0.1:1729")

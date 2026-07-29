@@ -32,7 +32,7 @@ class MySQLOntologyProjectionRunStore(MySQLOperationalConnection):
         configured = seconds("ontologyProjectionAuditStaleAfterSeconds", 0)
         if configured:
             return max(120, min(3600, configured))
-        execution_timeout = seconds("ontologyReasoningExecutionTimeoutSeconds", 240) or 240
+        execution_timeout = seconds("ontologyReasoningExecutionTimeoutSeconds", 360) or 360
         execution_grace = seconds("ontologyReasoningExecutionTimeoutGraceSeconds", 10)
         return max(120, min(3600, execution_timeout + execution_grace + 60))
 

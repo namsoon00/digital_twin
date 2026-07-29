@@ -322,6 +322,14 @@ def projection_result_summary(result: Dict[str, object]) -> Dict[str, object]:
             "reusedActiveScopeCount": int(target_patch.get("reusedActiveScopeCount") or 0),
             "deferredScopeCount": int(target_patch.get("deferredScopeCount") or 0),
             "fullReconcileMinutes": float(target_patch.get("fullReconcileMinutes") or 0),
+            "fullReconcileDeferred": bool(target_patch.get("fullReconcileDeferred")),
+            "fullReconcileOverdue": bool(target_patch.get("fullReconcileOverdue")),
+            "fullReconcileMaintenanceRequired": bool(
+                target_patch.get("fullReconcileMaintenanceRequired")
+            ),
+            "fullReconcileDeferralReason": str(
+                target_patch.get("fullReconcileDeferralReason") or ""
+            )[:160],
         },
         "inferenceImpactPlan": impact_plan,
         "priorInferenceReuse": {

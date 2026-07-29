@@ -5739,6 +5739,28 @@ class TypeDBOntologyRepositoryTests(unittest.TestCase):
         self.assertFalse(regular["eligible"])
         self.assertEqual("full-reconciliation-due", regular["status"])
 
+        overdue_active = dict(active)
+        overdue_active["lastFullScopeReconcileAt"] = (
+            datetime.now(timezone.utc) - timedelta(minutes=95)
+        ).isoformat().replace("+00:00", "Z")
+        overdue = recorder.target_scoped_patch_targets(
+            snapshot,
+            overdue_active,
+            first,
+            ["005930"],
+            reasoning_context={"queuePressure": {
+                "effectivePendingCount": 3,
+                "selectedRequestCount": 1,
+                "hasDeferredWork": True,
+            }},
+        )
+
+        self.assertTrue(overdue["eligible"])
+        self.assertTrue(overdue["fullReconcileDeferred"])
+        self.assertTrue(overdue["fullReconcileOverdue"])
+        self.assertTrue(overdue["fullReconcileMaintenanceRequired"])
+        self.assertEqual("target-scoped-full-reconciliation-overdue", overdue["status"])
+
     def test_projection_recorder_restores_prior_generation_while_functions_provision(self):
         class FakeRepository:
             store_key = "typedb"

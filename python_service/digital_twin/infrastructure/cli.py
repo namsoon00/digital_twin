@@ -896,14 +896,16 @@ def maintenance_command(args) -> int:
                 pending_count = int(queue_state.get("effectivePendingCount") or 0)
             except (TypeError, ValueError):
                 pending_count = 0
+            # History retention owns a separate, low-priority worker. Deferring
+            # it forever whenever the inference mailbox is non-empty lets
+            # superseded high-volume events consume the operational database
+            # and eventually blocks the notification outbox itself.
+            result = run_mysql_operational_cleanup(settings)
             if pending_count > 0:
-                return {
-                    "status": "deferred",
-                    "skipped": "reasoning-queue-active",
-                    "reason": "추론 대기열이 비어 있을 때까지 MySQL 이력 정리를 미룹니다.",
-                    "reasoningQueue": queue_state,
-                }
-            return run_mysql_operational_cleanup(settings)
+                result["status"] = "queue-active-cleanup"
+                result["reasoningQueue"] = queue_state
+                result["reason"] = "추론 대기열 처리와 별개로 저우선 MySQL 이력 정리를 실행했습니다."
+            return result
 
         OperationalHistoryRetentionScheduler(cleanup_once, configured_interval).run_forever()
         return 0

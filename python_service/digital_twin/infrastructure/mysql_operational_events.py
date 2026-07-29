@@ -8,6 +8,7 @@ from ..domain.data_freshness import evaluate_notification_data_freshness
 from ..domain.events import (
     DomainEvent,
     alerts_detected_event,
+    domain_event_storage_payload,
     monitoring_cycle_completed_event,
     snapshot_collected_event,
 )
@@ -59,6 +60,7 @@ def insert_domain_event_with_connection(connection, event: DomainEvent) -> None:
     # ABox cycle. Readers merge the two columns for backward compatibility.
     event_metadata = event.to_dict()
     event_metadata.pop("payload", None)
+    payload = domain_event_storage_payload(event.name, event.payload)
     connection.execute(
         """
         INSERT IGNORE INTO domain_events (
@@ -72,7 +74,7 @@ def insert_domain_event_with_connection(connection, event: DomainEvent) -> None:
             str(event.aggregate_id or "")[:191],
             event.occurred_at,
             event.correlation_id,
-            json_dumps(event.payload),
+            json_dumps(payload),
             json_dumps(event_metadata),
         ),
     )

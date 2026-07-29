@@ -848,7 +848,7 @@ def runtime_settings(fast_operational_read: bool = False) -> Dict[str, str]:
         "operationalLargeDomainEventNames": value(
             "operationalLargeDomainEventNames",
             "OPERATIONAL_LARGE_DOMAIN_EVENT_NAMES",
-            "monitoring.alerts_detected,monitoring.snapshot_collected,research_evidence.collected",
+            "monitoring.alerts_detected,monitoring.snapshot_collected,market_data.collected,research_evidence.collected,ontology.reasoning_requested",
         ),
         "operationalProjectionRunKeepCount": value(
             "operationalProjectionRunKeepCount",

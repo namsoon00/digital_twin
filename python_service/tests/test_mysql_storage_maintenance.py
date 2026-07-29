@@ -6,6 +6,7 @@ from digital_twin.infrastructure.mysql_retention import (
     ephemeral_mysql_database_names,
     operational_delivered_notification_keep_count,
     operational_large_domain_event_keep_count,
+    operational_large_domain_event_names,
     operational_projection_run_keep_count,
     optimize_mysql_operational_tables,
 )
@@ -92,6 +93,14 @@ class MySQLStorageMaintenanceTests(unittest.TestCase):
         self.assertEqual(30, operational_delivered_notification_keep_count({}))
         self.assertEqual(5, operational_delivered_notification_keep_count({"operationalDeliveredNotificationKeepCount": "1"}))
         self.assertEqual(500, operational_delivered_notification_keep_count({"operationalDeliveredNotificationKeepCount": "9999"}))
+
+    def test_critical_high_volume_event_retention_survives_legacy_settings(self):
+        names = operational_large_domain_event_names({
+            "operationalLargeDomainEventNames": "monitoring.alerts_detected,research_evidence.collected",
+        })
+
+        self.assertIn("market_data.collected", names)
+        self.assertIn("ontology.reasoning_requested", names)
 
     def test_explicit_compaction_only_accepts_known_tables(self):
         connection = RecordingConnection()

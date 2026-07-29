@@ -21,7 +21,9 @@ DEFAULT_DELIVERED_NOTIFICATION_KEEP_COUNT = 30
 DEFAULT_LARGE_DOMAIN_EVENT_NAMES = (
     "monitoring.alerts_detected",
     "monitoring.snapshot_collected",
+    "market_data.collected",
     "research_evidence.collected",
+    "ontology.reasoning_requested",
 )
 DEFAULT_PROJECTION_RUN_KEEP_COUNT = 48
 DEFAULT_WORLD_PROJECTION_OUTBOX_RETENTION_HOURS = 168
@@ -220,11 +222,15 @@ def operational_large_domain_event_keep_count(settings: Mapping[str, object] = N
 
 
 def operational_large_domain_event_names(settings: Mapping[str, object] = None) -> List[str]:
-    return _csv_setting(
+    configured = _csv_setting(
         settings or {},
         "operationalLargeDomainEventNames",
         DEFAULT_LARGE_DOMAIN_EVENT_NAMES,
     )
+    # Critical high-volume events must remain bounded even when an existing
+    # local settings row predates a new default.  Their canonical facts live
+    # in dedicated stores; this table is a transport/audit window.
+    return list(dict.fromkeys(list(DEFAULT_LARGE_DOMAIN_EVENT_NAMES) + configured))
 
 
 def market_time_series_retention_days(settings: Mapping[str, object] = None) -> Dict[str, int]:

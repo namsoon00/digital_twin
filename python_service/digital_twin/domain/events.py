@@ -1,3 +1,4 @@
+import hashlib
 import uuid
 from dataclasses import asdict, dataclass, field
 from typing import Dict, Iterable, List, Mapping
@@ -104,6 +105,443 @@ def account_removed_event(account_id: str) -> DomainEvent:
         aggregate_id=account_id,
         payload={"accountId": account_id},
     )
+
+
+def _event_text(value: object, limit: int = 600) -> str:
+    """Keep the durable event transport small without changing source facts."""
+    return str(value or "").strip()[:max(0, int(limit or 0))]
+
+
+def _event_text_list(values: object, limit: int = 100, item_limit: int = 240) -> List[str]:
+    if isinstance(values, str):
+        values = [values]
+    if not isinstance(values, (list, tuple, set)):
+        return []
+    result = []
+    for value in values:
+        clean = _event_text(value, item_limit)
+        if clean:
+            result.append(clean)
+        if len(result) >= max(0, int(limit or 0)):
+            break
+    return result
+
+
+def _event_signature_digest(value: object) -> str:
+    raw = str(value or "")
+    return hashlib.sha256(raw.encode("utf-8")).hexdigest() if raw else ""
+
+
+def compact_evidence_delta_event_payload(value: object) -> Dict[str, object]:
+    """Make an evidence-set delta replayable without duplicating its source body.
+
+    The full signatures are derived from canonical evidence and can be tens of
+    kilobytes because they intentionally include source facts.  Mailbox and
+    event-log consumers only need their identity, transition, and a stable
+    provenance digest; TypeDB reloads the canonical facts from the evidence
+    store before it reasons.
+    """
+    if hasattr(value, "to_dict"):
+        try:
+            value = value.to_dict()
+        except Exception:  # noqa: BLE001 - a malformed audit item is omitted, never fatal.
+            value = {}
+    if not isinstance(value, Mapping):
+        return {}
+    source = dict(value)
+    compact: Dict[str, object] = {}
+    for key, limit in {
+        "evidenceId": 191,
+        "symbol": 64,
+        "transition": 64,
+        "previousLifecycleState": 64,
+        "lifecycleState": 64,
+        "occurredAt": 40,
+        "reason": 500,
+        "eligibleEvidenceSetRevision": 191,
+    }.items():
+        text = _event_text(source.get(key), limit)
+        if text:
+            compact[key] = text
+    for key in ("previousEligible", "eligible", "changesInferenceEligibleSet"):
+        if key in source:
+            compact[key] = bool(source.get(key))
+    families = _event_text_list(source.get("factFamilies"), limit=12, item_limit=96)
+    if families:
+        compact["factFamilies"] = families
+    for source_key, digest_key, size_key in (
+        ("previousSignature", "previousSignatureDigest", "previousSignatureBytes"),
+        ("signature", "signatureDigest", "signatureBytes"),
+    ):
+        raw = str(source.get(source_key) or "")
+        digest = _event_signature_digest(raw) or _event_text(source.get(digest_key), 64)
+        if digest:
+            compact[digest_key] = digest
+            try:
+                compact[size_key] = max(0, int(source.get(size_key) or len(raw.encode("utf-8"))))
+            except (TypeError, ValueError):
+                compact[size_key] = len(raw.encode("utf-8"))
+    return compact
+
+
+def compact_evidence_delta_event_payloads(values: object, limit: int = 200) -> List[Dict[str, object]]:
+    if not isinstance(values, (list, tuple, set)):
+        return []
+    compact = []
+    for value in values:
+        item = compact_evidence_delta_event_payload(value)
+        if item:
+            compact.append(item)
+        if len(compact) >= max(0, int(limit or 0)):
+            break
+    return compact
+
+
+def compact_materiality_assessment_event_payload(value: object) -> Dict[str, object]:
+    if not isinstance(value, Mapping):
+        return {}
+    source = dict(value)
+    compact: Dict[str, object] = {}
+    for key, limit in {
+        "subject": 96,
+        "reviewLevel": 40,
+        "changeState": 64,
+        "dataState": 64,
+        "evidenceRole": 64,
+        "trigger": 96,
+        "reason": 600,
+    }.items():
+        text = _event_text(source.get(key), limit)
+        if text:
+            compact[key] = text
+    if "passed" in source:
+        compact["passed"] = bool(source.get("passed"))
+    changed_fields = _event_text_list(source.get("changedFields"), limit=30, item_limit=96)
+    if changed_fields:
+        compact["changedFields"] = changed_fields
+    conditions = _event_text_list(source.get("matchedConditions"), limit=20, item_limit=120)
+    if conditions:
+        compact["matchedConditions"] = conditions
+    facts = source.get("facts")
+    if isinstance(facts, Mapping):
+        compact_facts = {}
+        for key in ("eventType", "polarity", "readScope", "relationScope", "sourceTrustState", "validationState"):
+            text = _event_text(facts.get(key), 96)
+            if text:
+                compact_facts[key] = text
+        if compact_facts:
+            compact["facts"] = compact_facts
+    return compact
+
+
+def compact_materiality_assessment_event_payloads(values: object, limit: int = 100) -> List[Dict[str, object]]:
+    if isinstance(values, Mapping):
+        values = list(values.values())
+    if not isinstance(values, (list, tuple, set)):
+        return []
+    compact = []
+    for value in values:
+        item = compact_materiality_assessment_event_payload(value)
+        if item:
+            compact.append(item)
+        if len(compact) >= max(0, int(limit or 0)):
+            break
+    return compact
+
+
+def compact_fact_revisions_for_event(values: object, limit: int = 200) -> Dict[str, str]:
+    if not isinstance(values, Mapping):
+        return {}
+    compact = {}
+    for key, value in values.items():
+        symbol = _event_text(key, 64).upper()
+        revision = _event_text(value, 191)
+        if symbol and revision:
+            compact[symbol] = revision
+        if len(compact) >= max(0, int(limit or 0)):
+            break
+    return compact
+
+
+def compact_research_item_for_event_storage(value: object) -> Dict[str, object]:
+    """Persist a replayable research summary, never duplicate article bodies.
+
+    The canonical research-evidence store owns raw article text, claim ledgers,
+    and model payloads.  This event projection keeps the identifiers and the
+    compact presentation/provenance fields required by event replay.
+    """
+    if not isinstance(value, Mapping):
+        return {}
+    source = dict(value)
+    raw_payload = source.get("payload") if isinstance(source.get("payload"), Mapping) else {}
+
+    def pick(key: str):
+        item = source.get(key)
+        return item if item not in (None, "", [], {}) else raw_payload.get(key)
+
+    compact: Dict[str, object] = {}
+    for key, limit in {
+        "evidenceId": 191,
+        "symbol": 64,
+        "kind": 64,
+        "source": 160,
+        "sourceKind": 96,
+        "sourceOrigin": 120,
+        "sourcePlatform": 120,
+        "sourcePublisher": 240,
+        "sourceTrustState": 64,
+        "title": 800,
+        "url": 1200,
+        "publishedAt": 40,
+        "observedAt": 40,
+        "summary": 1400,
+        "articleSummaryKo": 1400,
+        "analysisSummary": 1400,
+        "stockImpact": 64,
+        "stockImpactLabel": 96,
+        "stockImpactPolarity": 64,
+        "stockImpactReasonKo": 1200,
+        "eventType": 96,
+        "evidenceRole": 64,
+        "relationScope": 64,
+        "relevanceState": 64,
+        "dataState": 64,
+        "materialityState": 64,
+        "lifecycleState": 64,
+        "lifecycleChangedAt": 40,
+        "validationState": 64,
+        "articleReadStatus": 64,
+    }.items():
+        text = _event_text(pick(key), limit)
+        if text:
+            compact[key] = text
+    if not compact.get("evidenceId"):
+        compact["evidenceId"] = _event_text(pick("id"), 191)
+
+    for key in ("analysisConflict",):
+        if key in source:
+            compact[key] = bool(source.get(key))
+
+    analysis = pick("aiAnalysis")
+    if isinstance(analysis, Mapping):
+        compact_analysis = {}
+        for key, limit in {
+            "impactLabelKo": 160,
+            "impactPolarity": 64,
+            "impactReasonKo": 1000,
+            "summary": 1200,
+            "briefKo": 1200,
+            "rationaleKo": 1000,
+            "translatedTitleKo": 800,
+            "originalTitle": 800,
+            "sourceLanguage": 32,
+            "eventType": 96,
+            "dataState": 64,
+            "materialityState": 64,
+            "relevanceState": 64,
+            "relationScope": 64,
+            "readScope": 64,
+            "actionBoundaryKo": 800,
+            "portfolioImplicationKo": 1000,
+        }.items():
+            text = _event_text(analysis.get(key), limit)
+            if text:
+                compact_analysis[key] = text
+        if "needsReview" in analysis:
+            compact_analysis["needsReview"] = bool(analysis.get("needsReview"))
+        if compact_analysis:
+            compact["aiAnalysis"] = compact_analysis
+
+    article_facts = pick("articleFacts")
+    if isinstance(article_facts, Mapping):
+        compact_facts = {}
+        for key, limit in {
+            "eventType": 96,
+            "eventTypeLabel": 160,
+            "bodyQualityState": 64,
+            "bodyQualityReason": 500,
+            "publishedAt": 40,
+            "readStatus": 64,
+            "sourcePublisher": 240,
+            "sourceLanguage": 32,
+        }.items():
+            text = _event_text(article_facts.get(key), limit)
+            if text:
+                compact_facts[key] = text
+        for key in ("bodyAvailable",):
+            if key in article_facts:
+                compact_facts[key] = bool(article_facts.get(key))
+        if "bodyCharCount" in article_facts:
+            try:
+                compact_facts["bodyCharCount"] = max(0, int(article_facts.get("bodyCharCount") or 0))
+            except (TypeError, ValueError):
+                pass
+        sentences = _event_text_list(article_facts.get("keySentences"), limit=5, item_limit=500)
+        if sentences:
+            compact_facts["keySentences"] = sentences
+        if compact_facts:
+            compact["articleFacts"] = compact_facts
+
+    quality_gate = pick("qualityGate")
+    if isinstance(quality_gate, Mapping):
+        compact_gate = {}
+        for key, limit in {"decision": 64, "stage": 64, "reason": 500, "bodyQualityState": 64}.items():
+            text = _event_text(quality_gate.get(key), limit)
+            if text:
+                compact_gate[key] = text
+        for key in ("passed",):
+            if key in quality_gate:
+                compact_gate[key] = bool(quality_gate.get(key))
+        if "bodyCharCount" in quality_gate:
+            try:
+                compact_gate["bodyCharCount"] = max(0, int(quality_gate.get("bodyCharCount") or 0))
+            except (TypeError, ValueError):
+                pass
+        if compact_gate:
+            compact["qualityGate"] = compact_gate
+
+    governance = pick("evidenceGovernance")
+    if isinstance(governance, Mapping):
+        compact_governance = {}
+        for key, limit in {
+            "claimState": 64,
+            "validationState": 64,
+            "verificationStatus": 64,
+            "sourceTrustState": 64,
+            "sourcePublisher": 240,
+            "canonicalUrl": 1200,
+            "entityResolutionStatus": 96,
+        }.items():
+            text = _event_text(governance.get(key), limit)
+            if text:
+                compact_governance[key] = text
+        for key in ("investmentJudgmentEligible",):
+            if key in governance:
+                compact_governance[key] = bool(governance.get(key))
+        if "independentSourceCount" in governance:
+            try:
+                compact_governance["independentSourceCount"] = max(0, int(governance.get("independentSourceCount") or 0))
+            except (TypeError, ValueError):
+                pass
+        reasons = _event_text_list(governance.get("reasons"), limit=8, item_limit=400)
+        if reasons:
+            compact_governance["reasons"] = reasons
+        if compact_governance:
+            compact["evidenceGovernance"] = compact_governance
+    return {key: value for key, value in compact.items() if value not in (None, "", [], {})}
+
+
+def compact_research_evidence_event_payload_for_storage(payload: Mapping[str, object]) -> Dict[str, object]:
+    source = dict(payload or {})
+    compact: Dict[str, object] = {}
+    for key in (
+        "source", "status", "targetCount", "fetchedCount", "savedCount", "changedCount",
+        "materialChangedCount", "lifecycleChangedCount",
+    ):
+        if key in source:
+            compact[key] = source.get(key)
+    for key in ("symbols", "changedSymbols", "materialChangedSymbols", "inferenceChangedSymbols", "providers"):
+        values = _event_text_list(source.get(key), limit=100, item_limit=96)
+        if values:
+            compact[key] = values
+    for key in ("changedItems", "materialChangedItems"):
+        values = source.get(key)
+        if not isinstance(values, (list, tuple, set)):
+            continue
+        items = []
+        for value in values:
+            item = compact_research_item_for_event_storage(value)
+            if item:
+                items.append(item)
+            if len(items) >= 100:
+                break
+        if items:
+            compact[key] = items
+    assessments = compact_materiality_assessment_event_payloads(source.get("materialityAssessments"), limit=100)
+    if assessments:
+        compact["materialityAssessments"] = assessments
+    deltas = compact_evidence_delta_event_payloads(source.get("evidenceDeltas"), limit=200)
+    if deltas:
+        compact["evidenceDeltas"] = deltas
+    revisions = compact_fact_revisions_for_event(source.get("factRevisionsBySymbol"), limit=100)
+    if revisions:
+        compact["factRevisionsBySymbol"] = revisions
+    return compact
+
+
+def compact_ontology_reasoning_request_payload_for_storage(payload: Mapping[str, object]) -> Dict[str, object]:
+    source = dict(payload or {})
+    compact: Dict[str, object] = {}
+    for key, limit in {
+        "trigger": 96,
+        "sourceEventId": 191,
+        "sourceEventName": 191,
+        "sourceAggregateId": 191,
+        "reason": 1200,
+        "sourceObservedAt": 40,
+        "dispatchMode": 96,
+        "importanceGate": 96,
+        "materialityRole": 96,
+        "researchRunId": 191,
+        "accountId": 191,
+    }.items():
+        text = _event_text(source.get(key), limit)
+        if text:
+            compact[key] = text
+    for key in ("changedCount", "observedCount"):
+        try:
+            compact[key] = max(0, int(source.get(key) or 0))
+        except (TypeError, ValueError):
+            pass
+    for key, limit, item_limit in (("symbols", 200, 64), ("factTypes", 20, 96), ("changedEvidenceIds", 200, 191)):
+        values = _event_text_list(source.get(key), limit=limit, item_limit=item_limit)
+        if values:
+            compact[key] = values
+    assessments = compact_materiality_assessment_event_payloads(source.get("materialityAssessments"), limit=100)
+    if assessments:
+        compact["materialityAssessments"] = assessments
+    deltas = compact_evidence_delta_event_payloads(source.get("evidenceDeltas"), limit=200)
+    if deltas:
+        compact["evidenceDeltas"] = deltas
+    revisions = compact_fact_revisions_for_event(source.get("factRevisionsBySymbol"), limit=200)
+    if revisions:
+        compact["factRevisionsBySymbol"] = revisions
+    changed_fields = source.get("changedFieldsBySymbol")
+    if isinstance(changed_fields, Mapping):
+        compact_fields = {}
+        for symbol, fields in changed_fields.items():
+            clean_symbol = _event_text(symbol, 64).upper()
+            clean_fields = _event_text_list(fields, limit=30, item_limit=96)
+            if clean_symbol and clean_fields:
+                compact_fields[clean_symbol] = clean_fields
+            if len(compact_fields) >= 200:
+                break
+        if compact_fields:
+            compact["changedFieldsBySymbol"] = compact_fields
+    # These are strict generation contracts. They are already bounded by their
+    # own domain types, so retain them intact rather than silently weakening a
+    # research acknowledgement.
+    for key in ("reasoningHandoff", "hypothesisResearchBrief", "verifiedSourceSnapshot"):
+        value = source.get(key)
+        if isinstance(value, Mapping):
+            compact[key] = dict(value)
+    return compact
+
+
+def domain_event_storage_payload(event_name: object, payload: Mapping[str, object]) -> Dict[str, object]:
+    """Return the bounded durable representation for an event payload."""
+    name = str(event_name or "").strip()
+    source = dict(payload or {}) if isinstance(payload, Mapping) else {}
+    if name == RESEARCH_EVIDENCE_COLLECTED:
+        return compact_research_evidence_event_payload_for_storage(source)
+    if name == ONTOLOGY_REASONING_REQUESTED:
+        return compact_ontology_reasoning_request_payload_for_storage(source)
+    if name in {RESEARCH_EVIDENCE_LIFECYCLE_CHANGED, HYPOTHESIS_RESEARCH_COMPLETED}:
+        compact = dict(source)
+        compact["evidenceDeltas"] = compact_evidence_delta_event_payloads(source.get("evidenceDeltas"), limit=200)
+        compact["factRevisionsBySymbol"] = compact_fact_revisions_for_event(source.get("factRevisionsBySymbol"), limit=200)
+        return compact
+    return source
 
 
 def compact_snapshot_event_metadata(metadata: Dict[str, object]) -> Dict[str, object]:
@@ -530,12 +968,12 @@ def ontology_reasoning_requested_event(
         if str(item or "").strip()
     ]
     raw_deltas = evidence_deltas if evidence_deltas is not None else source_payload.get("evidenceDeltas")
-    deltas = [dict(item) for item in (raw_deltas or []) if isinstance(item, dict)]
+    deltas = compact_evidence_delta_event_payloads(raw_deltas, limit=200)
     return DomainEvent(
         name=ONTOLOGY_REASONING_REQUESTED,
         aggregate_id="ontology:" + (",".join(clean_symbols) or str(trigger or "all"))[:180],
         correlation_id=source_event.correlation_id or source_event.event_id,
-        payload={
+        payload=compact_ontology_reasoning_request_payload_for_storage({
             "trigger": str(trigger or "data-update"),
             "sourceEventId": source_event.event_id,
             "sourceEventName": source_event.name,
@@ -555,11 +993,14 @@ def ontology_reasoning_requested_event(
             # provenance, not a Python investment-decision gate.
             "importanceGate": "fact-revision-first",
             "materialityRole": "advisory-priority-only",
-            "materialityAssessments": materiality_assessments if materiality_assessments is not None else [],
+            "materialityAssessments": compact_materiality_assessment_event_payloads(
+                materiality_assessments if materiality_assessments is not None else [],
+                limit=100,
+            ),
             # Fact revisions are scheduling provenance only. They let the
             # durable mailbox keep the existing pending slot when a provider
             # emits the exact same market fact again.
-            "factRevisionsBySymbol": revisions,
+            "factRevisionsBySymbol": compact_fact_revisions_for_event(revisions, limit=200),
             "changedFieldsBySymbol": changed_fields,
             "researchRunId": str(source_payload.get("runId") or ""),
             "accountId": str(source_payload.get("accountId") or ""),
@@ -572,7 +1013,7 @@ def ontology_reasoning_requested_event(
             # raw provider tick without turning that distinction into an
             # investment rule condition.
             "verifiedSourceSnapshot": dict(snapshot_barrier or {}) if isinstance(snapshot_barrier, Mapping) else {},
-        },
+        }),
     )
 
 

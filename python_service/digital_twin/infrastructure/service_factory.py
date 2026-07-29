@@ -171,7 +171,16 @@ def ontology_reasoning_event_bus(settings=None) -> EventBus:
 
 
 def monitor_account_job_store_from_settings(settings):
-    return stores.monitor_account_job_store(settings)
+    """Enable durable account scheduling only when it is explicitly configured.
+
+    The monitor runner treats the presence of this store as the queue-mode
+    switch. Constructing it unconditionally made ``monitorAccountQueueEnabled``
+    ineffective and delayed normal monitor refreshes behind the job cadence.
+    """
+    configured_settings = dict(settings or {})
+    if not setting_truthy(configured_settings.get("monitorAccountQueueEnabled"), default=False):
+        return None
+    return stores.monitor_account_job_store(configured_settings)
 
 
 def build_hypothesis_lifecycle_service(settings=None, event_publisher=None) -> HypothesisLifecycleService:

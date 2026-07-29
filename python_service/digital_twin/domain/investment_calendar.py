@@ -102,6 +102,18 @@ def parse_event_datetime(value: object, timezone_name: str = DEFAULT_EVENT_TIMEZ
     text = str(value or "").strip()
     if not text:
         return None
+    # A provider date is a calendar date in the event's local market, not
+    # midnight UTC. Preserve that distinction so a date-only estimate cannot
+    # surface as an invented 09:00 KST appointment.
+    if all_day:
+        date_match = re.match(r"(\d{4}-\d{2}-\d{2})", text)
+        if not date_match:
+            return None
+        try:
+            parsed = datetime.fromisoformat(date_match.group(1)).replace(tzinfo=event_timezone(timezone_name))
+        except ValueError:
+            return None
+        return parsed.astimezone(timezone.utc)
     if re.fullmatch(r"\d{4}-\d{2}-\d{2}", text):
         text = text + "T00:00:00"
     if text.endswith("Z"):
@@ -115,6 +127,11 @@ def parse_event_datetime(value: object, timezone_name: str = DEFAULT_EVENT_TIMEZ
     if all_day:
         parsed = parsed.replace(hour=0, minute=0, second=0, microsecond=0)
     return parsed.astimezone(timezone.utc)
+
+
+def has_explicit_event_time(value: object) -> bool:
+    """Whether a value contains a clock time rather than only a calendar date."""
+    return bool(re.search(r"T\d{1,2}:\d{2}(?::\d{2}(?:\.\d+)?)?(?:Z|[+-]\d{2}:?\d{2})?$", str(value or "").strip()))
 
 
 def utc_iso(value: datetime) -> str:
@@ -144,6 +161,27 @@ def reminder_offsets_from_payload(value: object) -> List[int]:
     if offsets:
         return sorted(offsets, reverse=True)
     return [] if value is not None else list(DEFAULT_REMINDER_OFFSETS_MINUTES)
+
+
+def normalized_event_markets(symbols: Iterable[object], markets: Iterable[object]) -> List[str]:
+    """Keep the market attached to a domestic ticker when a provider omits it.
+
+    Research collection already resolves ordinary numeric targets to KOSPI. The
+    fallback here protects older evidence and calendar rows from being labeled
+    as US merely because they were sourced through a global data provider.
+    """
+    normalized = normalized_list(markets, normalize_market, 50)
+    domestic_symbols = [normalize_symbol(symbol) for symbol in symbols or []]
+    if any(re.fullmatch(r"\d{6}", symbol or "") for symbol in domestic_symbols):
+        local_markets = {"KOSPI", "KOSDAQ", "KR", "KRX"}
+        if not any(market in local_markets for market in normalized):
+            normalized = [market for market in normalized if market != "US"]
+            normalized.append("KOSPI")
+    return normalized[:50]
+
+
+def payload_truthy(payload: Dict[str, object], key: str, fallback: bool = False) -> bool:
+    return bool_value((payload or {}).get(key), fallback)
 
 
 def event_type_label(event_type: str) -> str:
@@ -200,6 +238,11 @@ class InvestmentCalendarEvent:
             event_type = "custom"
         created_at = clean_text(payload.get("createdAt") or payload.get("created_at"), 40) or utc_now_iso()
         payload_body = payload.get("payload") if isinstance(payload.get("payload"), dict) else {}
+        symbols = normalized_list(payload.get("symbols"), normalize_symbol, 100)
+        markets = normalized_event_markets(
+            symbols,
+            normalized_list(payload.get("markets"), normalize_market, 50),
+        )
         return cls(
             event_id=event_id,
             title=title,
@@ -210,8 +253,8 @@ class InvestmentCalendarEvent:
             all_day=all_day,
             status=clean_text(payload.get("status") or "active", 32) or "active",
             importance=clamp_int(payload.get("importance"), 0, 100, 60),
-            symbols=normalized_list(payload.get("symbols"), normalize_symbol, 100),
-            markets=normalized_list(payload.get("markets"), normalize_market, 50),
+            symbols=symbols,
+            markets=markets,
             account_ids=normalized_list(payload.get("accountIds") if "accountIds" in payload else payload.get("account_ids"), lambda value: clean_text(value, 191), 50),
             source=clean_text(payload.get("source") or "manual", 120) or "manual",
             source_url=clean_text(payload.get("sourceUrl") or payload.get("source_url"), 1000),
@@ -268,6 +311,25 @@ class InvestmentCalendarEvent:
     def active(self) -> bool:
         return str(self.status or "").strip() in ACTIVE_EVENT_STATUSES
 
+    def reminder_eligible(self) -> bool:
+        """Return whether this row is precise and verified enough to notify.
+
+        Manual events remain actionable. Automatically extracted events must
+        carry an issuer/exchange confirmation, a confirmed schedule state, and
+        a real event time. Date-only estimates stay visible in the calendar but
+        never generate H-1/H-0 reminders.
+        """
+        if not self.active() or self.all_day:
+            return False
+        payload = self.payload if isinstance(self.payload, dict) else {}
+        if not payload_truthy(payload, "autoDetected"):
+            return True
+        if not payload_truthy(payload, "officialSource"):
+            return False
+        if payload_truthy(payload, "reviewRequired"):
+            return False
+        return str(payload.get("scheduleState") or "").strip().lower() == "confirmed"
+
     def material_for_reasoning(self) -> bool:
         return self.active() and (self.importance >= 70 or bool(self.symbols))
 
@@ -302,7 +364,7 @@ def due_reminders_for_event(
     now_at: datetime = None,
     lookback_minutes: int = 180,
 ) -> List[InvestmentCalendarReminder]:
-    if not event.active():
+    if not event.reminder_eligible():
         return []
     now_at = now_at or datetime.now(timezone.utc)
     if now_at.tzinfo is None:

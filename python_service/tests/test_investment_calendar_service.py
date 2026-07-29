@@ -24,6 +24,7 @@ from digital_twin.domain.investment_calendar_candidates import InvestmentCalenda
 from digital_twin.domain.investment_calendar_extraction import calendar_candidate_from_research_item, calendar_candidate_sets_from_research_items
 from digital_twin.domain.investment_research import ResearchEvidence
 from digital_twin.infrastructure.bok_calendar_source import BokPolicyDecisionCalendarSource, parse_bok_policy_decision_events
+from digital_twin.infrastructure.opendart_calendar_source import OpenDartEarningsCalendarSource, parse_opendart_earnings_event
 from digital_twin.domain.message_types import INVESTMENT_CALENDAR_REMINDER
 from digital_twin.domain.notification_ai_gate_validation import build_notification_ai_gate_prompt
 
@@ -318,6 +319,31 @@ class InvestmentCalendarServiceTests(unittest.TestCase):
 
         self.assertEqual([], event.reminder_offsets_minutes)
         self.assertFalse(event.active())
+        self.assertEqual([], due_reminders_for_event(event, now_at=now_at))
+
+    def test_unverified_automatic_time_is_never_actionable(self):
+        now_at = datetime(2026, 7, 29, 0, 0, tzinfo=timezone.utc)
+        event = InvestmentCalendarEvent.from_payload({
+            "eventId": "estimated-earnings-1",
+            "title": "005930 실적 발표 예정",
+            "eventType": "earnings",
+            "startsAt": utc_iso(now_at + timedelta(hours=1)),
+            "timezone": "UTC",
+            "allDay": False,
+            "status": "active",
+            "symbols": ["005930"],
+            "markets": ["US"],
+            "reminderOffsetsMinutes": [60],
+            "payload": {
+                "autoDetected": True,
+                "officialSource": False,
+                "scheduleState": "estimated",
+                "reviewRequired": True,
+            },
+        })
+
+        self.assertEqual(["KOSPI"], event.markets)
+        self.assertFalse(event.reminder_eligible())
         self.assertEqual([], due_reminders_for_event(event, now_at=now_at))
 
     def test_list_events_reports_the_next_future_schedule_only(self):
@@ -645,6 +671,33 @@ class InvestmentCalendarServiceTests(unittest.TestCase):
         self.assertEqual(3, len(candidates["review"]))
         self.assertTrue(all(item.markets == ["KOSPI"] for item in candidates["review"]))
 
+    def test_automatic_candidate_cannot_activate_without_official_url_and_time(self):
+        candidate_store = MemoryCandidateStore()
+        candidate_store.upsert({
+            "candidateId": "estimated-earnings-candidate",
+            "proposedEventId": "estimated-earnings-event",
+            "title": "005930 실적 발표 예정",
+            "eventType": "earnings",
+            "startsAt": "2026-07-29T00:00:00Z",
+            "allDay": True,
+            "symbols": ["005930"],
+            "markets": ["US"],
+            "source": "yfinance",
+            "payload": {
+                "autoDetected": True,
+                "officialSource": False,
+                "scheduleState": "estimated",
+                "reviewRequired": True,
+            },
+        })
+        calendar_store = MemoryCalendarStore()
+        service = InvestmentCalendarCandidateService(candidate_store, self.service(store=calendar_store))
+
+        with self.assertRaisesRegex(ValueError, "공식 IR·공시 URL"):
+            service.approve_candidate("estimated-earnings-candidate", {"startsAt": "2026-07-30T10:00"})
+
+        self.assertEqual({}, calendar_store.events)
+
     def test_calendar_discovery_saves_tentative_events_and_removes_rejected_candidate(self):
         calendar_store = MemoryCalendarStore()
         candidate_store = MemoryCandidateStore()
@@ -678,9 +731,17 @@ class InvestmentCalendarServiceTests(unittest.TestCase):
         self.assertEqual(0, calendar.enqueue_due_reminders(now_at=datetime(2026, 8, 5, tzinfo=timezone.utc))["queuedCount"])
 
         candidate = next(item for item in candidate_store.candidates.values() if item.event_type == "earnings")
-        approval = InvestmentCalendarCandidateService(candidate_store, calendar).approve_candidate(candidate.candidate_id, {"reviewNote": "IR 확인"})
+        approval = InvestmentCalendarCandidateService(candidate_store, calendar).approve_candidate(candidate.candidate_id, {
+            "startsAt": "2026-08-05T10:00",
+            "officialSourceUrl": "https://investor.example.test/earnings",
+            "reviewNote": "IR 확인",
+        })
         self.assertEqual("registered", approval["candidate"]["status"])
-        self.assertEqual("active", calendar_store.get(candidate.proposed_event_id).status)
+        approved_event = calendar_store.get(candidate.proposed_event_id)
+        self.assertEqual("active", approved_event.status)
+        self.assertFalse(approved_event.all_day)
+        self.assertTrue(approved_event.payload["officialSource"])
+        self.assertEqual("confirmed", approved_event.payload["scheduleState"])
 
         discovery.run_once(force=True)
         self.assertEqual("active", calendar_store.get(candidate.proposed_event_id).status)
@@ -748,7 +809,7 @@ class InvestmentCalendarServiceTests(unittest.TestCase):
         self.assertEqual("adrListing", saved.event_type)
         self.assertEqual("sec-edgar", saved.payload["sourceParser"])
         self.assertEqual("eventDate", saved.payload["dateSource"])
-        self.assertEqual("2026-08-20T00:00:00Z", saved.starts_at)
+        self.assertEqual("2026-08-19T15:00:00Z", saved.starts_at)
 
     def test_rejected_feedback_can_demote_borderline_candidate_to_review(self):
         item = {
@@ -871,6 +932,124 @@ class InvestmentCalendarServiceTests(unittest.TestCase):
         self.assertEqual("한국은행 기준금리 결정 금융통화위원회", saved.title)
         self.assertEqual("Bank of Korea", saved.source)
         self.assertEqual("centralBank", saved.event_type)
+
+    def test_opendart_earnings_source_parses_official_ir_announcement(self):
+        document = (
+            "기업설명회(IR) 개최(안내공시) 일시 및 장소 일시 2026-07-30 10:00 "
+            "개최목적 2026년 2분기 경영실적 발표 주요 설명회내용 2026년 2분기 경영실적 발표 및 질의응답"
+        )
+        source = OpenDartEarningsCalendarSource(
+            settings={
+                "investmentCalendarOfficialMacroSyncEnabled": "1",
+                "investmentCalendarOfficialEarningsSyncEnabled": "1",
+                "opendartApiKey": "test-key",
+                "externalDartCorpCodes": "005930=00126380",
+            },
+            fetch_json=lambda _url, _headers, _timeout: {
+                "status": "000",
+                "list": [{
+                    "report_nm": "기업설명회(IR)개최(안내공시)",
+                    "rcept_no": "20260707001234",
+                    "corp_name": "삼성전자",
+                }],
+            },
+            fetch_bytes=lambda _url, _headers, _timeout: document.encode("utf-8"),
+            now=lambda: datetime(2026, 7, 29, tzinfo=timezone.utc),
+            guard_state={},
+        )
+
+        events = source.events()
+
+        self.assertEqual(1, len(events))
+        event = events[0]
+        self.assertEqual("official-opendart-earnings-005930-2026-q2", event.event_id)
+        self.assertEqual("2026-07-30T01:00:00Z", event.starts_at)
+        self.assertEqual(["005930"], event.symbols)
+        self.assertEqual(["KOSPI"], event.markets)
+        self.assertTrue(event.payload["officialSource"])
+        self.assertEqual("confirmed", event.payload["scheduleState"])
+
+    def test_official_earnings_schedule_supersedes_nearby_yfinance_estimate(self):
+        store = MemoryCalendarStore()
+        calendar_service = self.service(store=store)
+        estimated = InvestmentCalendarEvent.from_payload({
+            "eventId": "estimated-005930-q2",
+            "title": "005930 실적 발표 예정",
+            "eventType": "earnings",
+            "startsAt": "2026-07-29T00:00:00Z",
+            "timezone": "Asia/Seoul",
+            "allDay": False,
+            "status": "active",
+            "symbols": ["005930"],
+            "markets": ["US"],
+            "source": "yfinance",
+            "reminderOffsetsMinutes": [60, 0],
+            "payload": {
+                "autoDetected": True,
+                "officialSource": False,
+                "scheduleState": "estimated",
+                "reviewRequired": True,
+            },
+        })
+        store.upsert(estimated)
+        official = parse_opendart_earnings_event(
+            "일시 및 장소 일시 2026-07-30 10:00 개최목적 2026년 2분기 경영실적 발표",
+            "005930",
+            "삼성전자",
+            "20260707001234",
+        )
+        sync_service = OfficialCalendarSyncService(
+            calendar_service=calendar_service,
+            sources=[SimpleNamespace(events=lambda: [official])],
+            settings={"investmentCalendarOfficialMacroSyncEnabled": "1"},
+            now=lambda: datetime(2026, 7, 29, tzinfo=timezone.utc),
+        )
+
+        result = sync_service.run_once(force=True)
+
+        self.assertEqual(1, result["quarantinedCount"])
+        self.assertEqual(1, result["supersededCount"])
+        self.assertEqual("superseded", store.get("estimated-005930-q2").status)
+        self.assertEqual([], store.get("estimated-005930-q2").reminder_offsets_minutes)
+        confirmed = store.get("official-opendart-earnings-005930-2026-q2")
+        self.assertIsNotNone(confirmed)
+        self.assertTrue(confirmed.reminder_eligible())
+
+    def test_calendar_sync_quarantines_legacy_unverified_automatic_event(self):
+        store = MemoryCalendarStore()
+        calendar_service = self.service(store=store)
+        store.upsert(InvestmentCalendarEvent.from_payload({
+            "eventId": "legacy-yfinance-estimate",
+            "title": "005930 실적 발표 예정",
+            "eventType": "earnings",
+            "startsAt": "2026-08-20T00:00:00Z",
+            "timezone": "Asia/Seoul",
+            "allDay": False,
+            "status": "active",
+            "symbols": ["005930"],
+            "source": "yfinance",
+            "reminderOffsetsMinutes": [60, 0],
+            "payload": {
+                "autoDetected": True,
+                "officialSource": False,
+                "scheduleState": "estimated",
+                "dateSource": "calendar.Earnings Date",
+            },
+        }))
+        sync_service = OfficialCalendarSyncService(
+            calendar_service=calendar_service,
+            sources=[],
+            settings={"investmentCalendarOfficialMacroSyncEnabled": "1"},
+        )
+
+        result = sync_service.run_once(force=True)
+
+        quarantined = store.get("legacy-yfinance-estimate")
+        self.assertEqual(1, result["quarantinedCount"])
+        self.assertEqual("needsReview", quarantined.status)
+        self.assertTrue(quarantined.all_day)
+        self.assertEqual([], quarantined.reminder_offsets_minutes)
+        self.assertFalse(quarantined.reminder_eligible())
 
 
 if __name__ == "__main__":

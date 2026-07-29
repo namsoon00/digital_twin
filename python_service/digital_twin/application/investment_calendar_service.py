@@ -200,6 +200,105 @@ class InvestmentCalendarService:
             ))
         return {"event": saved.to_dict(), "eventId": source_event.event_id}
 
+    def reconcile_unverified_events(self, official_event) -> Dict[str, object]:
+        """Supersede nearby automatic estimates after an official schedule lands."""
+        if not official_event or not getattr(official_event, "symbols", None):
+            return {"supersededCount": 0, "eventIds": []}
+        starts_at = parse_utc(getattr(official_event, "starts_at", ""))
+        if not starts_at or not hasattr(self.repository, "list"):
+            return {"supersededCount": 0, "eventIds": []}
+        window_start = utc_iso(starts_at - timedelta(days=14))
+        window_end = utc_iso(starts_at + timedelta(days=14))
+        seen = set()
+        candidates = []
+        for symbol in official_event.symbols:
+            for candidate in self.repository.list(
+                from_at=window_start,
+                to_at=window_end,
+                symbol=symbol,
+                event_type=official_event.event_type,
+                limit=500,
+            ):
+                if candidate.event_id not in seen:
+                    seen.add(candidate.event_id)
+                    candidates.append(candidate)
+        superseded = []
+        for candidate in candidates:
+            payload = candidate.payload if isinstance(candidate.payload, dict) else {}
+            if (
+                candidate.event_id == official_event.event_id
+                or candidate.status not in {"active", "tentative", "needsReview"}
+                or not payload.get("autoDetected")
+                or payload.get("officialSource")
+            ):
+                continue
+            candidate_starts_at = candidate.starts_datetime()
+            if not candidate_starts_at or abs((candidate_starts_at - starts_at).total_seconds()) > 14 * 86400:
+                continue
+            replacement = candidate.to_dict()
+            replacement_payload = replacement.get("payload") if isinstance(replacement.get("payload"), dict) else {}
+            replacement_payload.update({
+                "scheduleState": "superseded",
+                "reminderEnabled": False,
+                "replacedByEventId": official_event.event_id,
+                "replacedBySource": official_event.source,
+                "replacedAt": utc_now_iso(),
+            })
+            replacement.update({
+                "status": "superseded",
+                "reminderOffsetsMinutes": [],
+                "payload": replacement_payload,
+            })
+            self.save_event(replacement)
+            superseded.append(candidate.event_id)
+        return {"supersededCount": len(superseded), "eventIds": superseded}
+
+    def quarantine_unverified_automatic_events(self) -> Dict[str, object]:
+        """Move legacy auto-detected estimates out of the actionable calendar.
+
+        Earlier versions allowed a provider's date-only earnings estimate to be
+        approved into an active event.  Keep that history visible for review,
+        but do not leave it in an alertable state while no official source has
+        confirmed the date and time.
+        """
+        if not hasattr(self.repository, "list"):
+            return {"quarantinedCount": 0, "eventIds": []}
+        now = datetime.now(timezone.utc)
+        candidates = self.repository.list(
+            # Cover retained history as well as the next planning window. A
+            # short lookback leaves legacy active estimates visible after they
+            # have become past events, which makes the calendar misleading.
+            from_at=utc_iso(now - timedelta(days=366)),
+            to_at=utc_iso(now + timedelta(days=366)),
+            status="active",
+            limit=1000,
+        )
+        quarantined = []
+        for candidate in candidates:
+            payload = candidate.payload if isinstance(candidate.payload, dict) else {}
+            if not truthy(payload.get("autoDetected"), False) or truthy(payload.get("officialSource"), False):
+                continue
+            replacement = candidate.to_dict()
+            replacement_payload = replacement.get("payload") if isinstance(replacement.get("payload"), dict) else {}
+            date_source = str(replacement_payload.get("dateSource") or "").strip().lower()
+            replacement_payload.update({
+                "scheduleState": "estimated",
+                "reviewRequired": True,
+                "reviewReason": replacement_payload.get("reviewReason") or "officialSourceRequired",
+                "needsSourceRefresh": True,
+                "reminderEnabled": False,
+                "quarantinedAt": utc_now_iso(),
+            })
+            replacement.update({
+                "status": "needsReview",
+                "allDay": bool(candidate.all_day or date_source.startswith("calendar.")),
+                "reminderOffsetsMinutes": [],
+                "payload": replacement_payload,
+            })
+            self.save_event(replacement)
+            quarantined.append(candidate.event_id)
+        return {"quarantinedCount": len(quarantined), "eventIds": quarantined}
+
     def delete_event(self, event_id: str) -> Dict[str, object]:
         normalized = clean_text(event_id, 191)
         if not normalized:

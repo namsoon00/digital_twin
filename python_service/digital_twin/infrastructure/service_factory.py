@@ -64,6 +64,7 @@ from ..domain.monitoring import RealtimeMonitor
 from ..domain.ontology_worlds import portfolio_world_id
 from .event_bus import EventBus, default_event_bus
 from .bok_calendar_source import BokPolicyDecisionCalendarSource
+from .opendart_calendar_source import OpenDartEarningsCalendarSource
 from .disclosure_analyzer import disclosure_analyzer_from_settings
 from .model_review_queue import ModelReviewEnqueuer
 from .model_reviewer import reviewer_from_settings
@@ -488,6 +489,7 @@ def build_official_calendar_sync_service(settings=None, event_publisher=None) ->
         calendar_service=build_investment_calendar_service(configured_settings, event_publisher),
         sources=[
             BokPolicyDecisionCalendarSource(configured_settings),
+            OpenDartEarningsCalendarSource(configured_settings),
         ],
         settings=configured_settings,
     )

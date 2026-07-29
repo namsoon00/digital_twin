@@ -1,8 +1,5 @@
-import html
-import io
 import re
 import urllib.parse
-import zipfile
 from datetime import datetime, timedelta, timezone
 from typing import Dict, List
 
@@ -15,40 +12,7 @@ from ..domain.portfolio_calculations import (
     broker_fx_rates_from_positions,
 )
 from ..domain.portfolio import Position, utc_now_iso
-from .external_signal_utils import parse_iso, symbol_assignments, symbol_list
-
-
-def dart_document_text(raw: object, limit: int) -> str:
-    """Read the textual portion of OpenDART's ZIP/XML document response."""
-    data = bytes(raw or b"")
-    if not data:
-        return ""
-    members = []
-    try:
-        with zipfile.ZipFile(io.BytesIO(data)) as archive:
-            members = [
-                archive.read(name)
-                for name in archive.namelist()
-                if name.lower().endswith((".xml", ".txt", ".xhtml", ".html"))
-            ]
-    except (OSError, zipfile.BadZipFile):
-        members = [data]
-    fragments = []
-    for member in members[:12]:
-        decoded = ""
-        for encoding in ("utf-8", "cp949", "euc-kr"):
-            try:
-                decoded = member.decode(encoding)
-                break
-            except UnicodeDecodeError:
-                continue
-        plain = html.unescape(re.sub(r"<[^>]+>", " ", decoded))
-        plain = re.sub(r"\s+", " ", plain).strip()
-        if plain:
-            fragments.append(plain)
-        if len(" ".join(fragments)) >= limit:
-            break
-    return " ".join(fragments)[:max(500, min(20000, int(limit or 6000)))]
+from .external_signal_utils import dart_document_text, parse_iso, symbol_assignments, symbol_list
 
 
 class ExternalSignalMarketMixin:

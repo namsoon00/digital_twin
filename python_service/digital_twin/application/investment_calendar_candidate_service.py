@@ -1,6 +1,8 @@
+from datetime import datetime, timezone
 from typing import Dict, List, Tuple
+from urllib.parse import urlparse
 
-from ..domain.investment_calendar import clean_text
+from ..domain.investment_calendar import clean_text, has_explicit_event_time
 from ..domain.investment_calendar_candidates import (
     bounded_int,
     CANDIDATE_STATUS_REGISTERED,
@@ -134,13 +136,53 @@ class InvestmentCalendarCandidateService:
         if not starts_at:
             raise ValueError("날짜가 없는 후보는 startsAt을 지정해야 승인할 수 있습니다.")
         account_ids = payload.get("accountIds") if "accountIds" in payload else None
-        event = self.calendar_service.save_event(candidate.to_calendar_payload(starts_at=starts_at, account_ids=account_ids))
+        event_payload = candidate.to_calendar_payload(starts_at=starts_at, account_ids=account_ids)
+        candidate_payload = candidate.payload if isinstance(candidate.payload, dict) else {}
+        if candidate_payload.get("autoDetected"):
+            self.apply_official_confirmation(event_payload, candidate, payload)
+        event = self.calendar_service.save_event(event_payload)
         updated = self.candidate_repository.mark_status(
             candidate.candidate_id,
             CANDIDATE_STATUS_REGISTERED,
             clean_text(payload.get("reviewNote") or payload.get("review_note") or "approved", 1000),
         )
         return {"candidate": updated.to_dict() if updated else candidate.to_dict(), "event": event.get("event")}
+
+    @staticmethod
+    def apply_official_confirmation(event_payload: Dict[str, object], candidate, approval: Dict[str, object]) -> None:
+        """Promote automatic candidates only with an auditable official check."""
+        source_url = clean_text(
+            approval.get("officialSourceUrl")
+            or approval.get("official_source_url")
+            or "",
+            1000,
+        )
+        parsed = urlparse(source_url)
+        if not (parsed.scheme in {"http", "https"} and parsed.netloc):
+            raise ValueError("자동 감지 일정은 공식 IR·공시 URL을 확인한 뒤 승인해야 합니다.")
+        if not has_explicit_event_time(event_payload.get("startsAt")):
+            raise ValueError("자동 감지 일정은 공식 발표 날짜와 시각을 YYYY-MM-DDTHH:MM 형식으로 확인해야 합니다.")
+        original = candidate.payload if isinstance(candidate.payload, dict) else {}
+        body = event_payload.get("payload") if isinstance(event_payload.get("payload"), dict) else {}
+        body.update({
+            "officialSource": True,
+            "officialSourceUrl": source_url,
+            "officialVerification": "user-confirmed",
+            "officialVerifiedAt": datetime.now(timezone.utc).isoformat().replace("+00:00", "Z"),
+            "originalSource": candidate.source,
+            "originalSourceUrl": candidate.source_url,
+            "originalScheduleState": original.get("scheduleState") or "estimated",
+            "scheduleState": "confirmed",
+            "reviewRequired": False,
+            "reviewReason": "",
+            "reminderEnabled": True,
+        })
+        event_payload["payload"] = body
+        event_payload["allDay"] = False
+        event_payload["source"] = clean_text(approval.get("officialSourceLabel") or "사용자 확인 공식 일정", 120)
+        event_payload["sourceUrl"] = source_url
+        existing_notes = clean_text(event_payload.get("notes"), 1800)
+        event_payload["notes"] = (existing_notes + " 공식 출처와 발표 시각을 사용자 확인으로 활성화했습니다.").strip()
 
     def reject_candidate(self, candidate_id: str, payload: Dict[str, object] = None) -> Dict[str, object]:
         payload = payload if isinstance(payload, dict) else {}

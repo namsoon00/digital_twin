@@ -4,7 +4,7 @@ from dataclasses import dataclass, field
 from datetime import datetime, timedelta, timezone
 from typing import Dict, Iterable, List, Tuple
 
-from .investment_calendar import utc_iso
+from .investment_calendar import normalized_event_markets, utc_iso
 from .portfolio import utc_now_iso
 
 
@@ -603,7 +603,8 @@ def markets_for_candidate(item: Dict[str, object], pattern: Dict[str, object], t
     market = clean_text(item.get("market") or payload.get("market") or payload.get("targetMarket"), 32).upper()
     if market and market not in markets:
         markets.append(market)
-    return markets[:8]
+    symbol = clean_text(item.get("symbol"), 24).upper()
+    return normalized_event_markets([symbol] if symbol else [], markets)[:8]
 
 
 def calendar_candidate_from_research_item(
@@ -738,8 +739,6 @@ def structured_calendar_candidates_from_research_item(
     evidence_id = clean_text(item.get("evidenceId") or item.get("id"), 191)
     symbol = clean_text(item.get("symbol"), 24).upper()
     markets = markets_for_candidate(item, {"markets": []}, source)
-    if source.casefold() == "yfinance" and not markets:
-        markets.append("US")
     official = official_source(item)
     candidates = []
     seen = set()

@@ -1,9 +1,12 @@
+import html
+import io
 import json
 import re
 import time
 import urllib.error
 import urllib.parse
 import urllib.request
+import zipfile
 from datetime import datetime, timedelta, timezone
 from typing import Callable, Dict, List, Optional
 
@@ -51,6 +54,38 @@ def default_text_fetcher(url: str, headers: Dict[str, str] = None, timeout: floa
     with urllib.request.urlopen(request, timeout=max(0.5, float(timeout or 12.0))) as response:
         charset = response.headers.get_content_charset() or "utf-8"
         return response.read().decode(charset, errors="replace")
+
+
+def dart_document_text(raw: object, limit: int) -> str:
+    """Read the textual portion of an OpenDART ZIP/XML document response."""
+    data = bytes(raw or b"")
+    if not data:
+        return ""
+    try:
+        with zipfile.ZipFile(io.BytesIO(data)) as archive:
+            members = [
+                archive.read(name)
+                for name in archive.namelist()
+                if name.lower().endswith((".xml", ".txt", ".xhtml", ".html"))
+            ]
+    except (OSError, zipfile.BadZipFile):
+        members = [data]
+    fragments = []
+    for member in members[:12]:
+        decoded = ""
+        for encoding in ("utf-8", "cp949", "euc-kr"):
+            try:
+                decoded = member.decode(encoding)
+                break
+            except UnicodeDecodeError:
+                continue
+        plain = html.unescape(re.sub(r"<[^>]+>", " ", decoded))
+        plain = re.sub(r"\s+", " ", plain).strip()
+        if plain:
+            fragments.append(plain)
+        if len(" ".join(fragments)) >= limit:
+            break
+    return " ".join(fragments)[:max(500, min(20000, int(limit or 6000)))]
 
 
 def parse_iso(value: str):

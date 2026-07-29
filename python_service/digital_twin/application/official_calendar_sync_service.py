@@ -63,10 +63,18 @@ class OfficialCalendarSyncService:
             return {"status": "not-due", "savedCount": 0, "fetchedCount": 0}
         fetched = 0
         saved = 0
+        superseded = 0
+        quarantined = 0
         errors: List[str] = []
         event_ids: List[str] = []
         source_results: List[Dict[str, object]] = []
         seen = set()
+        if hasattr(self.calendar_service, "quarantine_unverified_automatic_events"):
+            try:
+                quarantine_result = self.calendar_service.quarantine_unverified_automatic_events()
+                quarantined = int((quarantine_result or {}).get("quarantinedCount") or 0)
+            except Exception as error:  # noqa: BLE001 - source synchronization can still proceed.
+                errors.append("legacy-auto-quarantine: " + str(error)[:240])
         for source in self.sources:
             label = source.__class__.__name__
             try:
@@ -86,6 +94,9 @@ class OfficialCalendarSyncService:
                     saved += 1
                     source_saved += 1
                     event_ids.append(event.event_id)
+                    if hasattr(self.calendar_service, "reconcile_unverified_events"):
+                        reconciliation = self.calendar_service.reconcile_unverified_events(event)
+                        superseded += int((reconciliation or {}).get("supersededCount") or 0)
                 except Exception as error:  # noqa: BLE001 - keep syncing other events.
                     errors.append(event.event_id + ": " + str(error)[:240])
             source_results.append({
@@ -105,6 +116,8 @@ class OfficialCalendarSyncService:
             "generatedAt": utc_now_iso(),
             "fetchedCount": fetched,
             "savedCount": saved,
+            "supersededCount": superseded,
+            "quarantinedCount": quarantined,
             "eventIds": event_ids[:200],
             "sources": source_results,
             "errors": errors[:10],

@@ -4023,6 +4023,10 @@
       newsCollectionIncludeWatchlist: settingValue("newsCollectionIncludeWatchlist"),
       newsCollectionIncludeHoldings: settingValue("newsCollectionIncludeHoldings"),
       newsCollectionRateLimitSeconds: settingValue("newsCollectionRateLimitSeconds"),
+      newsEvidenceCleanupIntervalSeconds: settingValue("newsEvidenceCleanupIntervalSeconds"),
+      newsEvidenceCleanupBatchSize: settingValue("newsEvidenceCleanupBatchSize"),
+      researchEvidenceWriteBatchSize: settingValue("researchEvidenceWriteBatchSize"),
+      mysqlDeadlockRetryCount: settingValue("mysqlDeadlockRetryCount"),
       newsAiAnalysisEnabled: settingValue("newsAiAnalysisEnabled"),
       newsAiAnalysisUseCodex: settingValue("newsAiAnalysisUseCodex"),
       newsAiAnalysisCommand: settingValue("newsAiAnalysisCommand"),
@@ -24077,6 +24081,10 @@
           { value: "0", label: "제외" }
         ]),
         renderSettingField("newsCollectionRateLimitSeconds", "뉴스 호출 간격(초)", "number", "0.25"),
+        renderSettingField("newsEvidenceCleanupIntervalSeconds", "뉴스 정리 주기(초)", "number", "900"),
+        renderSettingField("newsEvidenceCleanupBatchSize", "뉴스 정리 잠금 배치", "number", "50"),
+        renderSettingField("researchEvidenceWriteBatchSize", "뉴스 저장 배치", "number", "50"),
+        renderSettingField("mysqlDeadlockRetryCount", "DB 데드락 재시도", "number", "3"),
         renderSettingSelect("newsAiAnalysisEnabled", "기사 AI 분석", [
           { value: "1", label: "사용" },
           { value: "0", label: "사용 안 함" }

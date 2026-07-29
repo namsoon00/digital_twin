@@ -303,6 +303,7 @@ def projection_result_summary(result: Dict[str, object]) -> Dict[str, object]:
         values.get("inferenceReuseProof") if isinstance(values.get("inferenceReuseProof"), dict) else {}
     )
     prior_inference_reuse = dict(values.get("priorInferenceReuse") or {})
+    inference_detail_outbox = dict(values.get("inferenceDetailOutbox") or {})
     native_stage_timings = dict(execution.get("typedbNativeStageTimings") or {})
     replay_validation = dict(values.get("nativeReplayValidation") or {})
     reasoning_context = compact_reasoning_request_context(values.get("reasoningContext"))
@@ -406,6 +407,15 @@ def projection_result_summary(result: Dict[str, object]) -> Dict[str, object]:
             ),
             "nativeInferenceOutcome": str(inference.get("nativeInferenceOutcome") or ""),
             "reasoningMode": str(inference.get("reasoningMode") or ""),
+        },
+        "inferenceDetailOutbox": {
+            "status": str(inference_detail_outbox.get("status") or ""),
+            "saved": bool(inference_detail_outbox.get("saved")),
+            "eventuallyConsistent": bool(inference_detail_outbox.get("eventuallyConsistent")),
+            "jobId": str(inference_detail_outbox.get("jobId") or ""),
+            "inferenceGenerationId": str(inference_detail_outbox.get("inferenceGenerationId") or ""),
+            "sourceAboxSnapshotId": str(inference_detail_outbox.get("sourceAboxSnapshotId") or ""),
+            "reason": str(inference_detail_outbox.get("reason") or "")[:220],
         },
         "ruleboxExecution": {
             "status": str(execution.get("status") or ""),

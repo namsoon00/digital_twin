@@ -3337,6 +3337,9 @@ class OntologyReasoningRunner:
                 or stages.get("nativeInferenceMs"),
                 0.0,
             )),
+            "inferenceCommitProofMs": int(float_value(stages.get("inferenceCommitProofMs"), 0.0)),
+            "inferenceDurableReadbackMs": int(float_value(stages.get("inferenceDurableReadbackMs"), 0.0)),
+            "inferenceDetailOutboxQueueMs": int(float_value(stages.get("inferenceDetailOutboxQueueMs"), 0.0)),
             "impactPlanningMs": int(float_value(stages.get("impactPlanningMs"), 0.0)),
             "aboxPersistenceMs": int(float_value(
                 stages.get("aboxPersistenceMs") or stages.get("persistenceMs"),
@@ -3920,6 +3923,7 @@ class OntologyReasoningRunner:
                 key: projection_runtime.get(key)
                 for key in [
                     "durationMs", "impactPlanningMs", "aboxPersistenceMs", "nativeInferenceMs",
+                    "inferenceCommitProofMs", "inferenceDurableReadbackMs", "inferenceDetailOutboxQueueMs",
                     "ruleboxBootstrapMs", "pendingAboxActivationRecoveryMs", "scopedAboxIdentityMs",
                     "activeAboxReadMs", "projectionAuditCreateMs", "aboxChangedScopeQueryCount",
                     "aboxChangedScopeTransactionCount", "aboxChangedScopeTransactionQueryCount",

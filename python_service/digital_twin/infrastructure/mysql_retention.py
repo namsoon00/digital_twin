@@ -25,6 +25,7 @@ DEFAULT_LARGE_DOMAIN_EVENT_NAMES = (
 )
 DEFAULT_PROJECTION_RUN_KEEP_COUNT = 48
 DEFAULT_WORLD_PROJECTION_OUTBOX_RETENTION_HOURS = 168
+DEFAULT_INFERENCE_DETAIL_OUTBOX_RETENTION_HOURS = 168
 DEFAULT_HYPOTHESIS_LIFECYCLE_EVENT_RETENTION_DAYS = 180
 DEFAULT_MARKET_TIME_SERIES_RETENTION_DAYS = {
     "3m": 7,
@@ -51,6 +52,7 @@ MYSQL_OPERATIONAL_COMPACTION_TABLES = frozenset({
     "ontology_ai_opinion_samples",
     "ontology_projection_runs",
     "ontology_world_projection_outbox",
+    "ontology_inference_detail_outbox",
     "investment_decision_episodes",
     "investment_decision_outcomes",
     "investment_hypothesis_lifecycle_states",
@@ -192,6 +194,16 @@ def operational_world_projection_outbox_retention_hours(settings: Mapping[str, o
         settings or {},
         "ontologyWorldProjectionCompletedRetentionHours",
         DEFAULT_WORLD_PROJECTION_OUTBOX_RETENTION_HOURS,
+        24,
+        24 * 365,
+    )
+
+
+def operational_inference_detail_outbox_retention_hours(settings: Mapping[str, object] = None) -> int:
+    return _int_setting(
+        settings or {},
+        "ontologyInferenceDetailCompletedRetentionHours",
+        DEFAULT_INFERENCE_DETAIL_OUTBOX_RETENTION_HOURS,
         24,
         24 * 365,
     )
@@ -561,6 +573,24 @@ def _delete_completed_world_projection_outbox_rows(connection, cutoff_iso: str, 
     return total
 
 
+def _delete_completed_inference_detail_outbox_rows(connection, cutoff_iso: str, batch_size: int) -> int:
+    total = 0
+    cutoff_sql = "CAST(%s AS CHAR CHARACTER SET utf8mb4) COLLATE utf8mb4_unicode_ci"
+    sql = (
+        "DELETE FROM `ontology_inference_detail_outbox`"
+        " WHERE `status` IN ('completed', 'superseded')"
+        " AND `completed_at` <> '' AND `completed_at` < " + cutoff_sql
+        + " ORDER BY `completed_at`, `job_id` LIMIT %s"
+    )
+    while True:
+        cursor = _execute(connection, sql, (cutoff_iso, batch_size))
+        affected = int(getattr(cursor, "rowcount", 0) or 0)
+        total += affected
+        if affected < batch_size:
+            break
+    return total
+
+
 def mysql_operational_compaction_tables(retention_result: Mapping[str, object] = None) -> List[str]:
     """Return tables that actually changed and are safe to rebuild offline."""
     tables = dict((retention_result or {}).get("tables") or {})
@@ -656,6 +686,7 @@ def apply_mysql_operational_history_retention(
     batch_size = operational_history_retention_batch_size(configured)
     projection_run_keep_count = operational_projection_run_keep_count(configured)
     world_projection_outbox_retention_hours = operational_world_projection_outbox_retention_hours(configured)
+    inference_detail_outbox_retention_hours = operational_inference_detail_outbox_retention_hours(configured)
     delivered_notification_keep_count = operational_delivered_notification_keep_count(configured)
     locked = False
     if use_lock:
@@ -722,6 +753,18 @@ def apply_mysql_operational_history_retention(
         deleted_by_table["ontology_world_projection_outbox"] = world_projection_deleted
         deleted_by_policy["time:ontology_world_projection_outbox"] = world_projection_deleted
 
+        inference_detail_cutoff = (
+            (now or datetime.now(timezone.utc)).astimezone(timezone.utc)
+            - timedelta(hours=inference_detail_outbox_retention_hours)
+        ).replace(microsecond=0).isoformat().replace("+00:00", "Z")
+        inference_detail_deleted = _delete_completed_inference_detail_outbox_rows(
+            connection,
+            inference_detail_cutoff,
+            batch_size,
+        )
+        deleted_by_table["ontology_inference_detail_outbox"] = inference_detail_deleted
+        deleted_by_policy["time:ontology_inference_detail_outbox"] = inference_detail_deleted
+
         time_series_deleted = 0
         for granularity, series_cutoff in time_series_cutoffs.items():
             deleted = _delete_market_time_series_rows(
@@ -761,6 +804,7 @@ def apply_mysql_operational_history_retention(
         "largeDomainEventNames": operational_large_domain_event_names(configured),
         "projectionRunKeepCount": projection_run_keep_count,
         "worldProjectionOutboxRetentionHours": world_projection_outbox_retention_hours,
+        "inferenceDetailOutboxRetentionHours": inference_detail_outbox_retention_hours,
         "marketTimeSeriesRetentionDays": market_time_series_retention_days(configured),
         "marketTimeSeriesCutoffs": time_series_cutoffs,
         "hypothesisLifecycleEventRetentionDays": hypothesis_lifecycle_event_retention_days(configured),

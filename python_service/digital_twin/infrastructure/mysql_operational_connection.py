@@ -669,6 +669,33 @@ MYSQL_SCHEMA = [
     ) ENGINE=InnoDB DEFAULT CHARSET=utf8mb4 COLLATE=utf8mb4_unicode_ci
     """,
     """
+    CREATE TABLE IF NOT EXISTS ontology_inference_detail_outbox (
+        job_id VARCHAR(191) PRIMARY KEY,
+        dedupe_key VARCHAR(64) NOT NULL,
+        world_id VARCHAR(191) NOT NULL DEFAULT '',
+        account_id VARCHAR(191) NOT NULL DEFAULT '',
+        inference_generation_id VARCHAR(191) NOT NULL DEFAULT '',
+        source_abox_snapshot_id VARCHAR(191) NOT NULL DEFAULT '',
+        target_symbols_json LONGTEXT NOT NULL,
+        projection_run_id VARCHAR(191) NOT NULL DEFAULT '',
+        detail_limit INT NOT NULL DEFAULT 80,
+        status VARCHAR(32) NOT NULL DEFAULT 'pending',
+        attempts INT NOT NULL DEFAULT 0,
+        available_at VARCHAR(40) NOT NULL DEFAULT '',
+        lease_owner VARCHAR(191) NOT NULL DEFAULT '',
+        lease_expires_at VARCHAR(40) NOT NULL DEFAULT '',
+        last_error TEXT NOT NULL,
+        result_json LONGTEXT NOT NULL,
+        created_at VARCHAR(40) NOT NULL,
+        updated_at VARCHAR(40) NOT NULL,
+        completed_at VARCHAR(40) NOT NULL DEFAULT '',
+        KEY idx_inference_detail_outbox_ready (status, available_at, created_at, job_id),
+        KEY idx_inference_detail_outbox_dedupe (dedupe_key, status, updated_at),
+        KEY idx_inference_detail_outbox_generation (world_id, inference_generation_id, status, updated_at),
+        KEY idx_inference_detail_outbox_projection_run (projection_run_id, status, updated_at)
+    ) ENGINE=InnoDB DEFAULT CHARSET=utf8mb4 COLLATE=utf8mb4_unicode_ci
+    """,
+    """
     CREATE TABLE IF NOT EXISTS investment_decision_episodes (
         episode_id VARCHAR(191) PRIMARY KEY,
         account_id VARCHAR(191) NOT NULL DEFAULT '',

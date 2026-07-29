@@ -49,6 +49,7 @@ from ..application.ontology_reasoning_service import (
     lightweight_ontology_reasoning_queue_state,
 )
 from ..application.ontology_maintenance_service import OntologyMaintenanceRunner
+from ..application.ontology_inference_detail_service import OntologyInferenceDetailRunner
 from ..application.ontology_world_projection_service import OntologyWorldProjectionRunner
 from ..application.ontology_lab_service import OntologyLabService
 from ..application.ontology_rule_candidate_service import RuleChangeCandidateProposalService
@@ -236,6 +237,7 @@ def build_monitor_runner(
             data_pipeline_health_store=stores.data_pipeline_health_store(configured_settings),
             market_time_series_store=market_time_series_store,
             world_projection_outbox=stores.ontology_world_projection_outbox_store(configured_settings),
+            inference_detail_outbox=stores.ontology_inference_detail_outbox_store(configured_settings),
             graph_assembly_cache_store=stores.ontology_graph_assembly_cache_store(configured_settings),
             settings=configured_settings,
         ),
@@ -723,6 +725,21 @@ def build_ontology_world_projection_runner(settings=None) -> OntologyWorldProjec
         ),
         settings=configured_settings,
         worker_id=os.environ.get("ONTOLOGY_WORLD_PROJECTION_WORKER_ID") or "",
+        reasoning_queue_probe=build_ontology_reasoning_queue_probe(configured_settings),
+    )
+
+
+def build_ontology_inference_detail_runner(settings=None) -> OntologyInferenceDetailRunner:
+    """Build the idle-only durable InferenceBox detail readback worker."""
+    configured_settings = settings or runtime_settings()
+    store_settings = dict(configured_settings)
+    store_settings["_skipOperationalHistoryRetention"] = "1"
+    store_settings["_skipOperationalSchemaBootstrap"] = "1"
+    return OntologyInferenceDetailRunner(
+        outbox=stores.ontology_inference_detail_outbox_store(store_settings),
+        ontology_repository=ontology_repository_from_settings(configured_settings),
+        settings=configured_settings,
+        worker_id=os.environ.get("ONTOLOGY_INFERENCE_DETAIL_WORKER_ID") or "",
         reasoning_queue_probe=build_ontology_reasoning_queue_probe(configured_settings),
     )
 

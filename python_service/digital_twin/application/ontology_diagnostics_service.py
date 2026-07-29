@@ -27,6 +27,7 @@ class OntologyDiagnosticsService:
         decision_episode_store=None,
         projection_run_store=None,
         world_projection_outbox=None,
+        inference_detail_outbox=None,
         maintenance_state_store=None,
         runtime_identity_provider=None,
     ):
@@ -39,6 +40,7 @@ class OntologyDiagnosticsService:
         self.decision_episode_store = decision_episode_store
         self.projection_run_store = projection_run_store
         self.world_projection_outbox = world_projection_outbox
+        self.inference_detail_outbox = inference_detail_outbox
         self.maintenance_state_store = maintenance_state_store
         self.runtime_identity_provider = runtime_identity_provider
 
@@ -70,6 +72,7 @@ class OntologyDiagnosticsService:
         notification_boundary = self.notification_boundary()
         runtime_observability = self.runtime_observation_boundary(clean_world_id)
         shared_world_projection = self.shared_world_projection_boundary()
+        inference_detail_readback = self.inference_detail_readback_boundary()
         abox_maintenance = self.abox_maintenance_boundary(abox_storage)
         inference_summary = self.inferencebox_summary(inference)
         latest_runtime_inference = (
@@ -198,6 +201,7 @@ class OntologyDiagnosticsService:
             "reasoningBoundary": self.reasoning_boundary(rulebox, inference),
             "runtimeObservability": runtime_observability,
             "sharedWorldProjection": shared_world_projection,
+            "inferenceDetailReadback": inference_detail_readback,
             "ruleboxQuality": self.rulebox_quality_boundary(rulebox, inference, decision_performance),
             "latestEvents": self.latest_events(),
             "notificationBoundary": notification_boundary,
@@ -326,6 +330,31 @@ class OntologyDiagnosticsService:
                 "states": dict(summary.get("states") or {}),
                 "maxPayloadBytes": int(getattr(store, "max_payload_bytes", lambda: 0)() or 0),
                 "deliveryModel": "verified-portfolio-abox -> durable-outbox -> shared-market-or-knowledge-world",
+            }
+        except Exception as error:  # noqa: BLE001 - diagnostics must not block the application.
+            return {"status": "error", "reason": str(error)[:180]}
+
+    def inference_detail_readback_boundary(self) -> Dict[str, object]:
+        """Expose the intentionally low-priority detailed-readback backlog."""
+        store = self.inference_detail_outbox
+        if not store or not hasattr(store, "summary"):
+            return {
+                "status": "unavailable",
+                "reason": "Durable InferenceBox detail outbox is not configured.",
+            }
+        try:
+            summary = dict(store.summary() or {})
+            pending = int(summary.get("pendingCount") or 0)
+            processing = int(summary.get("processingCount") or 0)
+            failed = int(summary.get("failedCount") or 0)
+            return {
+                "status": "error" if failed else ("warning" if pending or processing else "ok"),
+                "pendingCount": pending,
+                "processingCount": processing,
+                "failedCount": failed,
+                "supersededCount": int(summary.get("supersededCount") or 0),
+                "states": dict(summary.get("states") or {}),
+                "deliveryModel": "verified-native-generation -> durable-detail-outbox -> idle-TypeDB-readback",
             }
         except Exception as error:  # noqa: BLE001 - diagnostics must not block the application.
             return {"status": "error", "reason": str(error)[:180]}

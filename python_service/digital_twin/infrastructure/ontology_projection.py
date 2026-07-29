@@ -702,6 +702,7 @@ class PortfolioOntologyProjectionRecorder:
         market_time_series_store=None,
         projection_run_store=None,
         world_projection_outbox=None,
+        inference_detail_outbox=None,
         outcome_observation_service=None,
         graph_assembly_cache_store=None,
         settings: Dict[str, object] = None,
@@ -716,6 +717,7 @@ class PortfolioOntologyProjectionRecorder:
         self.market_time_series_store = market_time_series_store
         self.projection_run_store = projection_run_store
         self.world_projection_outbox = world_projection_outbox
+        self.inference_detail_outbox = inference_detail_outbox
         self.graph_assembly_cache_store = graph_assembly_cache_store
         self.settings = dict(settings or {})
         self.outcome_observation_service = outcome_observation_service or InvestmentOutcomeObservationService(
@@ -1521,6 +1523,8 @@ class PortfolioOntologyProjectionRecorder:
                 runtime_stages["aboxPersistenceMs"] = int((time.perf_counter() - abox_persistence_started) * 1000)
                 if not isinstance(result, dict):
                     result = {"saved": False, "status": "error", "reason": "ontology repository returned non-dict result"}
+                if projection_run:
+                    result["projectionRunId"] = projection_run.run_id
                 self.attach_abox_persistence_runtime_stages(runtime_stages, result)
                 result["projectionMode"] = "abox-facts-only-typedb-native-rules"
                 result["materialFingerprint"] = material_fingerprint
@@ -2744,6 +2748,99 @@ class PortfolioOntologyProjectionRecorder:
             return False
         return str(value).strip().lower() not in {"0", "false", "no", "off", "disabled"}
 
+    def inference_detail_outbox_enabled(self) -> bool:
+        """Whether full InferenceBox readback may leave the alert path.
+
+        The TypeDB native writer still returns an in-memory materialization and
+        the realtime path still verifies its active generation pointer.  This
+        setting only controls the expensive second TypeDB expansion used for
+        detailed audit/diagnostic storage.
+        """
+        if not self.inference_detail_outbox:
+            return False
+        value = self.settings.get("ontologyInferenceDetailOutboxEnabled")
+        if value is None:
+            return True
+        return str(value).strip().lower() not in {"0", "false", "no", "off", "disabled"}
+
+    @staticmethod
+    def inference_detail_outbox_summary(payload: Dict[str, object]) -> Dict[str, object]:
+        """Keep a compact operational queue receipt in the projection audit."""
+        values = dict(payload or {}) if isinstance(payload, dict) else {}
+        return {
+            "status": str(values.get("status") or ""),
+            "saved": bool(values.get("saved")),
+            "eventuallyConsistent": bool(values.get("eventuallyConsistent")),
+            "jobId": str(values.get("jobId") or ""),
+            "inferenceGenerationId": str(values.get("inferenceGenerationId") or ""),
+            "sourceAboxSnapshotId": str(values.get("sourceAboxSnapshotId") or ""),
+            "reason": str(values.get("reason") or "")[:220],
+        }
+
+    def enqueue_inference_detail_readback(
+        self,
+        result: Dict[str, object],
+        snapshot: AccountSnapshot,
+        inference_symbols: List[str],
+        world_id: str = "",
+    ) -> Dict[str, object]:
+        """Durably request detailed TypeDB rows after a verified publication.
+
+        Only immutable identifiers and the bounded target list go into MySQL.
+        The detailed facts stay in TypeDB until the low-priority worker reads
+        the exact active generation while the live reasoning queue is empty.
+        """
+        inferencebox = result.get("inferenceBox") if isinstance(result.get("inferenceBox"), dict) else {}
+        if not self.inference_detail_outbox_enabled():
+            return {
+                "status": "disabled",
+                "saved": False,
+                "eventuallyConsistent": False,
+                "reason": "Inference detail durable outbox is not configured.",
+            }
+        generation_id = str(inferencebox.get("inferenceGenerationId") or "").strip()
+        source_abox_id = str(inferencebox.get("sourceAboxSnapshotId") or "").strip()
+        clean_world_id = str(world_id or inferencebox.get("worldId") or "").strip()
+        targets = sorted({
+            str(symbol or "").upper().strip()
+            for symbol in (inferencebox.get("targetSymbols") or inference_symbols or [])
+            if str(symbol or "").strip()
+        })
+        if not (generation_id and source_abox_id and clean_world_id):
+            return {
+                "status": "deferred-incomplete-inference-detail-identity",
+                "saved": False,
+                "eventuallyConsistent": False,
+                "inferenceGenerationId": generation_id,
+                "sourceAboxSnapshotId": source_abox_id,
+                "reason": "Verified InferenceBox identity is incomplete; detailed readback was not queued.",
+            }
+        try:
+            queued = self.inference_detail_outbox.enqueue(
+                world_id=clean_world_id,
+                account_id=str(snapshot.account_id or ""),
+                inference_generation_id=generation_id,
+                source_abox_snapshot_id=source_abox_id,
+                target_symbols=targets,
+                projection_run_id=str(result.get("projectionRunId") or ""),
+                detail_limit=self.inference_snapshot_limit(),
+            )
+        except Exception as error:  # noqa: BLE001 - detailed audit must not reopen a verified realtime judgement.
+            queued = {
+                "status": "error",
+                "saved": False,
+                "eventuallyConsistent": False,
+                "inferenceGenerationId": generation_id,
+                "sourceAboxSnapshotId": source_abox_id,
+                "reason": str(error)[:220],
+            }
+        return dict(queued or {}) if isinstance(queued, dict) else {
+            "status": "error",
+            "saved": False,
+            "eventuallyConsistent": False,
+            "reason": "Inference detail outbox returned a non-dict receipt.",
+        }
+
     def graph_for_typedb_persistence(self, graph: PortfolioOntology) -> PortfolioOntology:
         return self.graph_for_graph_store_persistence(graph)
 
@@ -3587,9 +3684,104 @@ class PortfolioOntologyProjectionRecorder:
                 runtime_stages["aboxActivationFinalizationMs"] = int((time.perf_counter() - finalization_started) * 1000)
                 return
             # A native RuleBox execution first builds an in-memory graph and
-            # then writes it to TypeDB. Only a fresh TypeDB read proves that
-            # the active InferenceBox still exists after publication/pruning.
-            if active_key == "typedb" and hasattr(self.repository, "inferencebox_snapshot"):
+            # then writes it to TypeDB.  The old path expanded every durable
+            # InferenceBox row again before an alert could proceed.  In the
+            # production outbox path, prove the active marker/ABox pointer
+            # instead and retain the already materialized rows in memory.  A
+            # low-priority worker reads the detailed durable snapshot later.
+            deferred_detail_readback = False
+            memory_snapshot = (
+                dict(execution.get("inferenceBox") or {})
+                if isinstance(execution.get("inferenceBox"), dict)
+                else {}
+            )
+            commit_proof_reader = getattr(self.repository, "inferencebox_commit_proof", None)
+            if (
+                active_key == "typedb"
+                and self.inference_detail_outbox_enabled()
+                and memory_snapshot
+                and callable(commit_proof_reader)
+            ):
+                expected_generation_id = str(
+                    memory_snapshot.get("inferenceGenerationId")
+                    or execution.get("inferenceGenerationId")
+                    or ""
+                ).strip()
+                expected_source_abox_id = str(
+                    memory_snapshot.get("sourceAboxSnapshotId")
+                    or execution.get("sourceAboxSnapshotId")
+                    or result.get("aboxSnapshotId")
+                    or ""
+                ).strip()
+                if expected_generation_id and expected_source_abox_id:
+                    commit_proof_started = time.perf_counter()
+                    try:
+                        commit_proof = self.repository_world_call(
+                            "inferencebox_commit_proof",
+                            expected_generation_id,
+                            expected_source_abox_id,
+                            target_symbols=inference_symbols,
+                            world_id=world_id,
+                        )
+                    except Exception as error:  # noqa: BLE001 - legacy full readback remains the fail-closed fallback.
+                        commit_proof = {
+                            "status": "error",
+                            "verified": False,
+                            "reason": "TypeDB active InferenceBox commit proof failed: " + str(error)[:180],
+                        }
+                    runtime_stages["inferenceCommitProofMs"] = int(
+                        (time.perf_counter() - commit_proof_started) * 1000
+                    )
+                    if isinstance(commit_proof, dict):
+                        result["inferenceCommitProof"] = {
+                            key: value
+                            for key, value in commit_proof.items()
+                            if key not in {"propertiesJson"}
+                        }
+                    if isinstance(commit_proof, dict) and bool(commit_proof.get("verified")):
+                        snapshot_payload = dict(memory_snapshot)
+                        # Only marker/pointer-proven fields may override the
+                        # in-memory materialization. Relations, traces, and
+                        # calibration remain the output of this native run.
+                        for key in [
+                            "status",
+                            "graphStore",
+                            "worldId",
+                            "inferenceGenerationId",
+                            "sourceAboxSnapshotId",
+                            "activeAboxSnapshotId",
+                            "targetSymbols",
+                            "targetCoverageStatus",
+                            "nativeTypeDbReasoningCompleted",
+                            "typedbNativeRuleEvaluationCompleted",
+                            "nativeTypeDbReasoningUsed",
+                            "typedbNativeRuleReasoningUsed",
+                            "nativeInferenceOutcome",
+                            "nativeInferenceNoMatch",
+                            "generationAligned",
+                            "querySource",
+                            "typedbReadStatus",
+                            "durableCommitProof",
+                            "durableReadback",
+                        ]:
+                            if key in commit_proof:
+                                snapshot_payload[key] = commit_proof[key]
+                        snapshot_payload.setdefault("graphStore", active_key)
+                        snapshot_payload.setdefault("source", "typedbInferenceBox")
+                        snapshot_payload["requestedSymbols"] = sorted({
+                            str(symbol or "").upper().strip()
+                            for symbol in inference_symbols or []
+                            if str(symbol or "").strip()
+                        })
+                        snapshot_payload["durableReadback"] = False
+                        snapshot_payload["durableCommitProof"] = True
+                        result["inferenceBox"] = snapshot_payload
+                        deferred_detail_readback = True
+            if (
+                not deferred_detail_readback
+                and active_key == "typedb"
+                and hasattr(self.repository, "inferencebox_snapshot")
+            ):
                 readback_started = time.perf_counter()
                 try:
                     snapshot_payload = self.repository_world_call(
@@ -3611,11 +3803,11 @@ class PortfolioOntologyProjectionRecorder:
                     snapshot_payload["durableReadback"] = True
                     result["inferenceBox"] = snapshot_payload
                 runtime_stages["inferenceDurableReadbackMs"] = int((time.perf_counter() - readback_started) * 1000)
-            elif isinstance(execution.get("inferenceBox"), dict):
+            elif not deferred_detail_readback and isinstance(execution.get("inferenceBox"), dict):
                 snapshot_payload = dict(execution.get("inferenceBox") or {})
                 snapshot_payload.setdefault("graphStore", active_key)
                 result["inferenceBox"] = snapshot_payload
-            elif hasattr(self.repository, "inferencebox_snapshot"):
+            elif not deferred_detail_readback and hasattr(self.repository, "inferencebox_snapshot"):
                 try:
                     snapshot_payload = self.repository_world_call(
                         "inferencebox_snapshot",
@@ -3633,6 +3825,32 @@ class PortfolioOntologyProjectionRecorder:
             finalization_started = time.perf_counter()
             self.reconcile_abox_activation_after_inference(result, inference_symbols, world_id=world_id)
             runtime_stages["aboxActivationFinalizationMs"] = int((time.perf_counter() - finalization_started) * 1000)
+            if deferred_detail_readback:
+                detail_queue_started = time.perf_counter()
+                verified_snapshot = result.get("inferenceBox") if isinstance(result.get("inferenceBox"), dict) else {}
+                reusable = self.inference_result_is_reusable(
+                    verified_snapshot,
+                    {"aboxSnapshotId": str(verified_snapshot.get("sourceAboxSnapshotId") or "")},
+                    inference_symbols,
+                )
+                if bool(result.get("saved")) and reusable:
+                    detail_receipt = self.enqueue_inference_detail_readback(
+                        result,
+                        snapshot,
+                        inference_symbols,
+                        world_id=world_id,
+                    )
+                else:
+                    detail_receipt = {
+                        "status": "not-queued-inference-not-finalized",
+                        "saved": False,
+                        "eventuallyConsistent": False,
+                        "reason": "The native generation was not finalized as the active alert-safe result.",
+                    }
+                result["inferenceDetailOutbox"] = self.inference_detail_outbox_summary(detail_receipt)
+                runtime_stages["inferenceDetailOutboxQueueMs"] = int(
+                    (time.perf_counter() - detail_queue_started) * 1000
+                )
         finally:
             if inference_write_lease.get("acquired"):
                 result["inferenceWriteLeaseRelease"] = self.release_inference_write_lease(inference_write_lease)

@@ -160,6 +160,21 @@ class FakeWorldProjectionOutbox:
         return 5 * 1024 * 1024
 
 
+class FakeInferenceDetailOutbox:
+    def summary(self):
+        return {
+            "enabled": True,
+            "pendingCount": 1,
+            "processingCount": 0,
+            "failedCount": 0,
+            "supersededCount": 3,
+            "states": {
+                "pending": {"count": 1, "oldestAt": "2026-07-26T00:00:00Z"},
+                "superseded": {"count": 3, "oldestAt": "2026-07-25T00:00:00Z"},
+            },
+        }
+
+
 class FakeStrategyProposalService:
     def status(self):
         return {
@@ -375,6 +390,20 @@ class OntologyDiagnosticsServiceTests(unittest.TestCase):
         self.assertEqual(0, projection["failedCount"])
         self.assertEqual(5 * 1024 * 1024, projection["maxPayloadBytes"])
         self.assertIn("durable-outbox", projection["deliveryModel"])
+
+    def test_status_reports_deferred_inference_detail_backlog(self):
+        service = OntologyDiagnosticsService(
+            ontology_repository=FakeOntologyRepository(),
+            inference_detail_outbox=FakeInferenceDetailOutbox(),
+        )
+
+        payload = service.status()
+
+        detail = payload["inferenceDetailReadback"]
+        self.assertEqual("warning", detail["status"])
+        self.assertEqual(1, detail["pendingCount"])
+        self.assertEqual(3, detail["supersededCount"])
+        self.assertIn("idle-TypeDB-readback", detail["deliveryModel"])
 
     def test_notification_boundary_warns_when_latest_alert_has_no_outbox_job(self):
         alert_event = DomainEvent(

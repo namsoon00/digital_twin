@@ -40,6 +40,7 @@ from .service_factory import (
     build_notification_queue_runner,
     build_official_calendar_sync_service,
     build_ontology_lab_service,
+    build_ontology_inference_detail_runner,
     build_ontology_maintenance_runner,
     build_ontology_reasoning_runner,
     build_ontology_reasoning_queue_probe,
@@ -60,6 +61,7 @@ from .schedulers import (
     NotificationQueueScheduler,
     IsolatedOntologyReasoningCycle,
     OntologyLabScheduler,
+    OntologyInferenceDetailScheduler,
     OntologyMaintenanceScheduler,
     OntologyReasoningScheduler,
     OperationalHistoryRetentionScheduler,
@@ -427,6 +429,53 @@ def ontology_world_projection_command(args) -> int:
                 working_directory=str(project_root),
             )
         OntologyWorldProjectionScheduler(runner, interval, isolated_cycle=isolated_cycle).run_forever(limit=limit)
+        return 0
+    return 1
+
+
+def ontology_inference_detail_command(args) -> int:
+    settings = runtime_settings(fast_operational_read=True)
+    runner = build_ontology_inference_detail_runner(settings)
+    limit = int(getattr(args, "limit", "") or settings.get("ontologyInferenceDetailBatchSize") or 1)
+    if args.ontology_inference_detail_action == "status":
+        print(json.dumps(runner.status(), ensure_ascii=False))
+        return 0
+    if args.ontology_inference_detail_action == "retry-failed":
+        requeued = runner.outbox.requeue_failed(limit=limit)
+        print(json.dumps({
+            "status": "ok",
+            "requeuedFailedCount": requeued,
+            "outbox": runner.outbox.summary(),
+        }, ensure_ascii=False))
+        return 0
+    if args.ontology_inference_detail_action == "once":
+        print(json.dumps(runner.run_once(limit=limit), ensure_ascii=False))
+        return 0
+    if args.ontology_inference_detail_action == "watch":
+        interval = int(
+            os.environ.get("ONTOLOGY_INFERENCE_DETAIL_INTERVAL_SECONDS")
+            or settings.get("ontologyInferenceDetailIntervalSeconds")
+            or 15
+        )
+        isolated_cycle = None
+        isolation_value = str(
+            os.environ.get("ONTOLOGY_INFERENCE_DETAIL_PROCESS_ISOLATION_ENABLED")
+            or settings.get("ontologyInferenceDetailProcessIsolationEnabled")
+            or "1"
+        ).strip().lower()
+        if isolation_value not in {"0", "false", "no", "off", "disabled"}:
+            project_root = Path(__file__).resolve().parents[3]
+            isolated_cycle = IsolatedOntologyReasoningCycle(
+                [
+                    sys.executable,
+                    "-u",
+                    str(project_root / "python_service" / "service.py"),
+                    "ontology-inference-detail",
+                    "once",
+                ],
+                working_directory=str(project_root),
+            )
+        OntologyInferenceDetailScheduler(runner, interval, isolated_cycle=isolated_cycle).run_forever(limit=limit)
         return 0
     return 1
 
@@ -1145,6 +1194,23 @@ def build_parser() -> argparse.ArgumentParser:
     ontology_world_projection_rebuild.add_argument("--limit", default="")
     ontology_world_projection_actions.add_parser("status")
     ontology_world_projection.set_defaults(func=ontology_world_projection_command)
+
+    ontology_inference_detail = subparsers.add_parser(
+        "ontology-inference-detail",
+        help="Read detailed InferenceBox rows after live reasoning work is idle",
+    )
+    ontology_inference_detail_actions = ontology_inference_detail.add_subparsers(
+        dest="ontology_inference_detail_action",
+        required=True,
+    )
+    ontology_inference_detail_once = ontology_inference_detail_actions.add_parser("once")
+    ontology_inference_detail_once.add_argument("--limit", default="")
+    ontology_inference_detail_watch = ontology_inference_detail_actions.add_parser("watch")
+    ontology_inference_detail_watch.add_argument("--limit", default="")
+    ontology_inference_detail_retry = ontology_inference_detail_actions.add_parser("retry-failed")
+    ontology_inference_detail_retry.add_argument("--limit", default="")
+    ontology_inference_detail_actions.add_parser("status")
+    ontology_inference_detail.set_defaults(func=ontology_inference_detail_command)
 
     ontology_maintenance = subparsers.add_parser(
         "ontology-maintenance",

@@ -574,6 +574,48 @@ class OntologyWorldProjectionScheduler:
             wait_until_running(lambda: self.running, end_at)
 
 
+class OntologyInferenceDetailScheduler(OntologyWorldProjectionScheduler):
+    """Drive low-priority durable InferenceBox detail readback.
+
+    It deliberately shares the isolated-cycle and live-queue preflight
+    semantics with shared-world projection, while keeping its operational
+    output distinct so an expensive detailed TypeDB traversal is visible.
+    """
+
+    def run_forever(self, limit: int = 0) -> None:
+        install_stop_handlers(self.stop)
+        print(
+            "Python ontology inference detail worker started. interval="
+            + str(self.interval_seconds)
+            + "s mode="
+            + ("isolated" if self.process_isolation_enabled() else "in-process")
+        )
+        while self.running:
+            started = time.monotonic()
+            try:
+                result = self.run_once(limit=limit)
+                if result.get("claimedCount"):
+                    print(
+                        "Ontology inference detail completed="
+                        + str(result.get("completedCount", 0))
+                        + " superseded="
+                        + str(result.get("supersededCount", 0))
+                        + " retried="
+                        + str(result.get("retryCount", 0)),
+                        flush=True,
+                    )
+            except Exception as error:  # noqa: BLE001 - diagnostic detail must never stop live reasoning.
+                print("Python ontology inference detail worker error: " + str(error), flush=True)
+                report_runtime_error(
+                    self.error_reporter,
+                    "Python ontology inference detail worker",
+                    error,
+                    "InferenceBox detailed readback",
+                )
+            end_at = time.monotonic() + max(1.0, self.interval_seconds - (time.monotonic() - started))
+            wait_until_running(lambda: self.running, end_at)
+
+
 class OntologyMaintenanceScheduler:
     """Run low-priority scoped ABox retention outside the reasoning worker.
 

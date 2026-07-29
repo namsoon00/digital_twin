@@ -1733,6 +1733,34 @@ class ScopedABoxManifestMixin:
             "reason": "TypeDB ontology storage is not configured.",
         }
 
+    def inferencebox_commit_proof(
+        self,
+        inference_generation_id: str,
+        source_abox_snapshot_id: str,
+        target_symbols: List[str] = None,
+        world_id: str = "",
+    ) -> Dict[str, object]:
+        """Return the minimum durable proof required before alert delivery.
+
+        A full InferenceBox expansion is intentionally an asynchronous audit
+        concern.  The realtime path still needs to prove that the just-written
+        native generation is the active one for the active ABox, but that can
+        be done with the small active generation marker and ABox pointer.
+        Disabled adapters fail closed so callers retain their legacy full
+        readback behaviour.
+        """
+        return {
+            "configured": False,
+            "status": "disabled",
+            "verified": False,
+            "graphStore": "typedb",
+            "worldId": str(world_id or ""),
+            "inferenceGenerationId": str(inference_generation_id or ""),
+            "sourceAboxSnapshotId": str(source_abox_snapshot_id or ""),
+            "targetSymbols": clean_symbols_from_payload(target_symbols or []),
+            "reason": "TypeDB ontology storage is not configured.",
+        }
+
     def list_ontology_worlds(self) -> List[Dict[str, object]]:
         return []
 
@@ -8109,6 +8137,102 @@ class TypeDBOntologyGraphRepository(GraphStoreOntologyRowMapperMixin, ScopedABox
             "nativeInferenceOutcome": str(metadata.get("nativeInferenceOutcome") or ""),
             "reasoningMode": str(metadata.get("reasoningMode") or ""),
             "querySource": "typedb-active-inference-generation-marker",
+        }
+
+    def inferencebox_commit_proof(
+        self,
+        inference_generation_id: str,
+        source_abox_snapshot_id: str,
+        target_symbols: List[str] = None,
+        world_id: str = "",
+    ) -> Dict[str, object]:
+        """Verify publication using only active markers and pointers.
+
+        ``run_rulebox`` already has the materialized InferenceBox graph in
+        memory.  Re-reading every entity, relation, and trace just to make an
+        alert safe made the delivery path pay for a second expensive TypeDB
+        traversal.  This proof deliberately reads only the active Inference
+        generation marker and the active ABox pointer/candidate marker.  It
+        proves generation identity, source ABox identity, native completion,
+        and target coverage; detailed rows remain available to the durable
+        background audit worker.
+        """
+        expected_generation_id = str(inference_generation_id or "").strip()
+        expected_source_abox_id = str(source_abox_snapshot_id or "").strip()
+        expected_symbols = clean_symbols_from_payload(target_symbols or [])
+        clean_world_id = str(world_id or "").strip()
+        metadata = self.inferencebox_recovery_metadata(clean_world_id)
+        active_abox = self.active_abox_metadata(clean_world_id)
+
+        actual_generation_id = str(metadata.get("inferenceGenerationId") or "").strip()
+        actual_source_abox_id = str(metadata.get("sourceAboxSnapshotId") or "").strip()
+        actual_symbols = clean_symbols_from_payload(metadata.get("targetSymbols") or [])
+        active_abox_id = str(active_abox.get("aboxSnapshotId") or "").strip()
+        native_completed = bool(metadata.get("nativeTypeDbReasoningCompleted"))
+        outcome = str(metadata.get("nativeInferenceOutcome") or "").strip().lower()
+        issues = []
+        if str(metadata.get("status") or "") != "ok":
+            issues.append("active-inference-generation-marker-unavailable")
+        if not expected_generation_id:
+            issues.append("expected-inference-generation-missing")
+        elif actual_generation_id != expected_generation_id:
+            issues.append("inference-generation-mismatch")
+        if not expected_source_abox_id:
+            issues.append("expected-source-abox-missing")
+        elif actual_source_abox_id != expected_source_abox_id:
+            issues.append("inference-source-abox-mismatch")
+        if str(active_abox.get("status") or "") != "ok":
+            issues.append("active-abox-pointer-unavailable")
+        elif active_abox_id != expected_source_abox_id:
+            issues.append("active-abox-pointer-mismatch")
+        if not native_completed:
+            issues.append("native-evaluation-not-complete")
+        if outcome not in {"matched", "no-match"}:
+            issues.append("native-inference-outcome-unknown")
+        missing_symbols = sorted(set(expected_symbols).difference(actual_symbols))
+        if missing_symbols:
+            issues.append("target-symbol-coverage-missing")
+
+        base = {
+            "configured": True,
+            "graphStore": "typedb",
+            "worldId": str(metadata.get("worldId") or clean_world_id),
+            "inferenceGenerationId": actual_generation_id,
+            "expectedInferenceGenerationId": expected_generation_id,
+            "sourceAboxSnapshotId": actual_source_abox_id,
+            "expectedSourceAboxSnapshotId": expected_source_abox_id,
+            "activeAboxSnapshotId": active_abox_id,
+            "targetSymbols": actual_symbols,
+            "expectedTargetSymbols": expected_symbols,
+            "missingTargetSymbols": missing_symbols,
+            "nativeTypeDbReasoningCompleted": native_completed,
+            "typedbNativeRuleEvaluationCompleted": native_completed,
+            "nativeInferenceOutcome": outcome,
+            "generationAligned": not issues,
+            "durableCommitProof": not issues,
+            "durableReadback": False,
+            "querySource": "typedb-active-inference-commit-proof",
+            "typedbReadStatus": "commit-proof" if not issues else "commit-proof-failed",
+        }
+        if issues:
+            return {
+                **base,
+                "status": "error",
+                "verified": False,
+                "issues": issues,
+                "reason": "TypeDB active generation commit proof failed: " + ", ".join(issues),
+            }
+        matched = outcome == "matched"
+        return {
+            **base,
+            "status": "ok" if matched else "empty",
+            "verified": True,
+            "issues": [],
+            "nativeTypeDbReasoningUsed": matched,
+            "typedbNativeRuleReasoningUsed": matched,
+            "nativeInferenceNoMatch": not matched,
+            "targetCoverageStatus": "complete" if expected_symbols else "not-requested",
+            "reason": "",
         }
 
     def list_ontology_worlds(self) -> List[Dict[str, object]]:

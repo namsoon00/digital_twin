@@ -5138,6 +5138,54 @@ class TypeDBOntologyRepositoryTests(unittest.TestCase):
         self.assertIn('has ontology-kind "inference-generation"', repository.queries[0])
         self.assertIn('has ontology-world-id "portfolio:local:default"', repository.queries[0])
 
+    def test_inferencebox_commit_proof_checks_only_active_marker_and_abox_pointer(self):
+        class CommitProofRepository(TypeDBOntologyGraphRepository):
+            def __init__(self):
+                super().__init__("127.0.0.1:1729")
+                self.calls = []
+
+            def inferencebox_recovery_metadata(self, world_id=""):
+                self.calls.append(("inference", world_id))
+                return {
+                    "status": "ok",
+                    "graphStore": "typedb",
+                    "worldId": world_id,
+                    "inferenceGenerationId": "inference-generation:active",
+                    "sourceAboxSnapshotId": "abox-manifest:active",
+                    "targetSymbols": ["005930"],
+                    "nativeTypeDbReasoningCompleted": True,
+                    "nativeInferenceOutcome": "no-match",
+                }
+
+            def active_abox_metadata(self, world_id=""):
+                self.calls.append(("abox", world_id))
+                return {
+                    "status": "ok",
+                    "aboxSnapshotId": "abox-manifest:active",
+                }
+
+            def inferencebox_snapshot(self, *_args, **_kwargs):
+                raise AssertionError("commit proof must not expand detailed InferenceBox rows")
+
+        repository = CommitProofRepository()
+
+        proof = repository.inferencebox_commit_proof(
+            "inference-generation:active",
+            "abox-manifest:active",
+            ["005930"],
+            world_id="portfolio:local:default",
+        )
+
+        self.assertTrue(proof["verified"])
+        self.assertEqual("empty", proof["status"])
+        self.assertTrue(proof["durableCommitProof"])
+        self.assertFalse(proof["durableReadback"])
+        self.assertEqual("commit-proof", proof["typedbReadStatus"])
+        self.assertEqual([
+            ("inference", "portfolio:local:default"),
+            ("abox", "portfolio:local:default"),
+        ], repository.calls)
+
     def test_inference_generation_records_keep_source_abox_provenance(self):
         class ProvenanceRepository(TypeDBOntologyGraphRepository):
             def read_rows(self, query, columns, **_kwargs):
@@ -5526,6 +5574,115 @@ class TypeDBOntologyRepositoryTests(unittest.TestCase):
         self.assertEqual("ok", result["inferenceBox"]["status"])
         self.assertEqual("ok", result["inferenceBox"]["typedbReadStatus"])
         self.assertTrue(result["inferenceBox"]["durableReadback"])
+
+    def test_projection_recorder_defers_detailed_readback_after_active_commit_proof(self):
+        class FakeDetailOutbox:
+            def __init__(self):
+                self.jobs = []
+
+            def enqueue(self, **payload):
+                self.jobs.append(dict(payload))
+                return {
+                    "status": "queued-inference-detail",
+                    "saved": True,
+                    "eventuallyConsistent": True,
+                    "jobId": "inference-detail:test",
+                    "inferenceGenerationId": payload["inference_generation_id"],
+                    "sourceAboxSnapshotId": payload["source_abox_snapshot_id"],
+                }
+
+        class FakeRepository:
+            store_key = "typedb"
+
+            def __init__(self):
+                self.snapshot_read_called = False
+
+            def run_rulebox(self, _payload):
+                return {
+                    "status": "ok",
+                    "graphStore": "typedb",
+                    "inferenceBox": {
+                        "status": "ok",
+                        "relationCount": 1,
+                        "relations": [{"id": "native-relation:1"}],
+                        "traces": [{"id": "native-trace:1", "ruleId": "rule:trend"}],
+                        "inferenceGenerationId": "inference-generation:test",
+                        "sourceAboxSnapshotId": "abox-manifest:test",
+                        "targetSymbols": ["AAPL"],
+                        "nativeTypeDbReasoningUsed": True,
+                        "nativeTypeDbReasoningCompleted": True,
+                        "generationAligned": True,
+                    },
+                }
+
+            def inferencebox_commit_proof(self, generation_id, source_abox_id, target_symbols=None):
+                if generation_id != "inference-generation:test":
+                    raise AssertionError("unexpected inference generation")
+                if source_abox_id != "abox-manifest:test":
+                    raise AssertionError("unexpected source ABox")
+                if target_symbols != ["AAPL"]:
+                    raise AssertionError("unexpected target symbols")
+                return {
+                    "status": "ok",
+                    "verified": True,
+                    "graphStore": "typedb",
+                    "inferenceGenerationId": generation_id,
+                    "sourceAboxSnapshotId": source_abox_id,
+                    "activeAboxSnapshotId": source_abox_id,
+                    "targetSymbols": ["AAPL"],
+                    "targetCoverageStatus": "complete",
+                    "nativeTypeDbReasoningUsed": True,
+                    "nativeTypeDbReasoningCompleted": True,
+                    "typedbNativeRuleEvaluationCompleted": True,
+                    "nativeInferenceOutcome": "matched",
+                    "generationAligned": True,
+                    "durableCommitProof": True,
+                    "durableReadback": False,
+                    "typedbReadStatus": "commit-proof",
+                    "querySource": "typedb-active-inference-commit-proof",
+                }
+
+            def inferencebox_snapshot(self, *_args, **_kwargs):
+                self.snapshot_read_called = True
+                raise AssertionError("realtime path must not expand detailed InferenceBox rows")
+
+        repository = FakeRepository()
+        outbox = FakeDetailOutbox()
+        snapshot = AccountSnapshot(
+            "main",
+            "메인",
+            "toss",
+            "live",
+            "ok",
+            utc_now_iso(),
+            PortfolioSummary(total=1000, invested=1000, cash=0, markets=[], sectors=[], concentration=0),
+            positions=[Position("AAPL", "Apple", market="US", currency="USD", quantity=1, current_price=100, market_value=100, market_value_krw=140000)],
+        )
+        result = {
+            "saved": True,
+            "status": "ok",
+            "graphStore": "typedb",
+            "aboxSnapshotId": "abox-manifest:test",
+        }
+
+        PortfolioOntologyProjectionRecorder(
+            repository,
+            inference_detail_outbox=outbox,
+            settings={"ontologyInferenceDetailOutboxEnabled": "1"},
+        ).attach_graph_store_inference_result(
+            result,
+            snapshot,
+            ["AAPL"],
+            world_id="portfolio:local:main",
+        )
+
+        self.assertFalse(repository.snapshot_read_called)
+        self.assertEqual("commit-proof", result["inferenceBox"]["typedbReadStatus"])
+        self.assertTrue(result["inferenceBox"]["durableCommitProof"])
+        self.assertFalse(result["inferenceBox"]["durableReadback"])
+        self.assertEqual("queued-inference-detail", result["inferenceDetailOutbox"]["status"])
+        self.assertEqual(1, len(outbox.jobs))
+        self.assertEqual("inference-generation:test", outbox.jobs[0]["inference_generation_id"])
 
     def test_projection_recorder_defers_before_preparing_abox_when_inference_lease_is_held(self):
         class FakeRepository:

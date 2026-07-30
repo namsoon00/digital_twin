@@ -631,14 +631,28 @@ class OntologyReasoningRunner:
         return truthy(configured, False)
 
     def rulebox_prewarm_required(self) -> bool:
-        """Require compiled RuleBox receipts before a live native run.
+        """Whether a live native run must wait for compiled RuleBox receipts.
 
-        The opt-out remains explicit for installations that deliberately run
-        without the TypeDB native evaluator.  With native execution enabled,
-        this avoids a first queued alert becoming the schema compiler.
+        A dedicated worker still prewarms compiled functions whenever native
+        execution is enabled.  When the bounded direct TypeQL fallback is
+        available, however, live alerts must not wait for that compiler: the
+        selected subject can be evaluated without opening a schema
+        transaction.  Installations that explicitly disable the fallback keep
+        the strict prewarm gate.
         """
-        return self.native_typedb_rule_execution_enabled() and truthy(
+        return (
+            self.native_typedb_rule_execution_enabled()
+            and truthy(
             self.settings.get("ontologyRuleboxPrewarmEnabled"),
+            True,
+            )
+            and not self.rulebox_prewarm_direct_fallback_enabled()
+        )
+
+    def rulebox_prewarm_direct_fallback_enabled(self) -> bool:
+        """Whether a cold RuleBox may use bounded direct TypeQL evaluation."""
+        return self.native_typedb_rule_execution_enabled() and truthy(
+            self.settings.get("typedbNativeRuleDirectQueryFallbackEnabled"),
             True,
         )
 
@@ -655,8 +669,13 @@ class OntologyReasoningRunner:
         if not self.rulebox_prewarm_required():
             return {
                 "ready": True,
-                "status": "disabled",
-                "reason": "RuleBox prewarm gate is disabled for this runtime.",
+                "status": "direct-typeql-fallback" if self.rulebox_prewarm_direct_fallback_enabled() else "disabled",
+                "directTypeqlFallbackEnabled": self.rulebox_prewarm_direct_fallback_enabled(),
+                "reason": (
+                    "RuleBox prewarm runs in the background; a cold receipt uses bounded direct TypeQL evaluation."
+                    if self.rulebox_prewarm_direct_fallback_enabled()
+                    else "RuleBox prewarm gate is disabled for this runtime."
+                ),
             }
         probe = getattr(self, "rulebox_prewarm_probe", None)
         if not callable(probe):
@@ -1068,6 +1087,22 @@ class OntologyReasoningRunner:
 
     def projection_circuit_cooldown_seconds(self) -> int:
         return int_setting(self.settings, "ontologyProjectionCircuitCooldownSeconds", 300, 30, 3600)
+
+    def projection_circuit_probe_retry_seconds(self) -> int:
+        """How often an open circuit may run its lightweight recovery probe.
+
+        The cooldown protects TypeDB from another full projection.  It is not
+        a reason to leave the queue blind for the entire cooldown when the
+        server has already recovered.  This cadence is used only for the
+        bounded active-pointer/generation-marker probe.
+        """
+        return int_setting(
+            self.settings,
+            "ontologyProjectionCircuitProbeRetrySeconds",
+            15,
+            5,
+            60,
+        )
 
     def projection_backpressure_enabled(self) -> bool:
         return truthy(self.settings.get("ontologyReasoningBackpressureEnabled"), True)
@@ -3421,6 +3456,11 @@ class OntologyReasoningRunner:
             # Keep events pending and retry with back-pressure instead of
             # opening the failure circuit against an already verified ABox.
             "inference-failed-rolled-back",
+            # Native inference and its durable generation marker can be
+            # verified before the tiny ABox activation journal is cleared.
+            # A control-plane retry must not trip the global projection
+            # circuit and starve unrelated queued symbols.
+            "inference-finalization-pending",
             # A scoped generation may be valid for one symbol while a caller
             # asks for another. Keep the event pending for that target rather
             # than misclassifying the read as a verified no-signal.
@@ -4452,15 +4492,25 @@ class OntologyReasoningRunner:
                 circuit_remaining = 0
             else:
                 circuit = self.projection_circuit_state(cursor_payload)
+                # Keep the heavy TypeDB projection circuit open, but do not
+                # sleep for its whole (possibly exponential) cooldown. The
+                # next scheduler turn performs only the lightweight durable
+                # recovery probe and reopens the queue immediately once the
+                # active ABox is readable again.
+                recovery_probe_retry_seconds = min(
+                    circuit_remaining,
+                    self.projection_circuit_probe_retry_seconds(),
+                )
                 return {
                     "status": "circuit-open",
                     "processedCount": 0,
                     "alertCount": 0,
                     "symbols": symbols,
-                    "retryAfterSeconds": circuit_remaining,
+                    "retryAfterSeconds": max(1, recovery_probe_retry_seconds),
                     "deferredReason": str(circuit.get("lastFailureReason") or "TypeDB projection circuit is open."),
                     "projectionCircuit": circuit,
                     "projectionRecovery": recovery,
+                    "projectionCircuitProbeRetrySeconds": self.projection_circuit_probe_retry_seconds(),
                     "coalescedEventCount": len(durable_superseded_ids),
                     **queue_metadata,
                 }
@@ -5356,6 +5406,7 @@ class OntologyReasoningRunner:
             "ontologyMaintenance": self.maintenance_state(cursor_payload),
             "projectionCircuit": projection_circuit,
             "projectionCircuitRetryAfterSeconds": self.projection_circuit_remaining_seconds(),
+            "projectionCircuitProbeRetrySeconds": self.projection_circuit_probe_retry_seconds(),
             "executionProcessIsolationEnabled": self.process_isolation_enabled(),
             "executionTimeoutSeconds": self.execution_timeout_seconds(),
             "executionTimeoutGraceSeconds": self.execution_timeout_grace_seconds(),

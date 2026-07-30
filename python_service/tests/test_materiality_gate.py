@@ -1344,6 +1344,7 @@ class MaterialityGateTests(unittest.TestCase):
                 "ontologyReasoningEnabled": "1",
                 "ontologyProjectionCircuitFailureThreshold": "3",
                 "ontologyProjectionCircuitCooldownSeconds": "300",
+                "ontologyProjectionCircuitProbeRetrySeconds": "15",
             },
             now_provider=lambda: datetime(2026, 7, 21, 0, 3, 0, tzinfo=timezone.utc),
         )
@@ -1353,7 +1354,8 @@ class MaterialityGateTests(unittest.TestCase):
         result = runner.run_once()
 
         self.assertEqual("circuit-open", result["status"])
-        self.assertEqual(300, result["retryAfterSeconds"])
+        self.assertEqual(15, result["retryAfterSeconds"])
+        self.assertEqual(15, result["projectionCircuitProbeRetrySeconds"])
         self.assertEqual(3, result["projectionCircuit"]["consecutiveFailures"])
 
     def test_ontology_reasoning_reads_recent_events_when_supported(self):

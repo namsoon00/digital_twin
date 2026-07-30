@@ -199,6 +199,7 @@ TEXT_SETTING_KEYS = [
     "ontologyAboxMaintenanceDeferWhenReasoningPending",
     "ontologyProjectionCircuitFailureThreshold",
     "ontologyProjectionCircuitCooldownSeconds",
+    "ontologyProjectionCircuitProbeRetrySeconds",
     "ontologyRuntimeProjectionSloSeconds",
     "ontologyRuntimeInferenceSloSeconds",
     "ontologyRuntimeSloConsecutiveBreachCount",
@@ -1035,6 +1036,7 @@ def runtime_settings(fast_operational_read: bool = False) -> Dict[str, str]:
         "ontologyAboxMaintenanceDeferWhenReasoningPending": value("ontologyAboxMaintenanceDeferWhenReasoningPending", "ONTOLOGY_ABOX_MAINTENANCE_DEFER_WHEN_REASONING_PENDING", "1"),
         "ontologyProjectionCircuitFailureThreshold": value("ontologyProjectionCircuitFailureThreshold", "ONTOLOGY_PROJECTION_CIRCUIT_FAILURE_THRESHOLD", "3"),
         "ontologyProjectionCircuitCooldownSeconds": value("ontologyProjectionCircuitCooldownSeconds", "ONTOLOGY_PROJECTION_CIRCUIT_COOLDOWN_SECONDS", "300"),
+        "ontologyProjectionCircuitProbeRetrySeconds": value("ontologyProjectionCircuitProbeRetrySeconds", "ONTOLOGY_PROJECTION_CIRCUIT_PROBE_RETRY_SECONDS", "15"),
         "ontologyRuntimeProjectionSloSeconds": value("ontologyRuntimeProjectionSloSeconds", "ONTOLOGY_RUNTIME_PROJECTION_SLO_SECONDS", "120"),
         "ontologyRuntimeInferenceSloSeconds": value("ontologyRuntimeInferenceSloSeconds", "ONTOLOGY_RUNTIME_INFERENCE_SLO_SECONDS", "90"),
         "ontologyRuntimeSloConsecutiveBreachCount": value("ontologyRuntimeSloConsecutiveBreachCount", "ONTOLOGY_RUNTIME_SLO_CONSECUTIVE_BREACH_COUNT", "3"),
@@ -1305,12 +1307,12 @@ def runtime_settings(fast_operational_read: bool = False) -> Dict[str, str]:
         "ontologyRuleboxPrewarmIntervalSeconds": value(
         "ontologyRuleboxPrewarmIntervalSeconds",
         "ONTOLOGY_RULEBOX_PREWARM_INTERVAL_SECONDS",
-        "15",
+        "60",
         ),
         "ontologyRuleboxPrewarmExecutionTimeoutSeconds": value(
             "ontologyRuleboxPrewarmExecutionTimeoutSeconds",
             "ONTOLOGY_RULEBOX_PREWARM_EXECUTION_TIMEOUT_SECONDS",
-            "600",
+            "45",
         ),
         "ontologyRuleboxPrewarmExecutionTimeoutGraceSeconds": value(
             "ontologyRuleboxPrewarmExecutionTimeoutGraceSeconds",

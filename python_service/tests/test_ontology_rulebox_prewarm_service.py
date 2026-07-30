@@ -10,12 +10,14 @@ class FakeRepository:
     def __init__(self, result=None):
         self.result = dict(result or {"status": "ok", "functionsReady": True})
         self.calls = []
+        self.status_calls = 0
 
     def prewarm_typedb_native_rule_functions(self, force=False):
         self.calls.append(bool(force))
         return dict(self.result)
 
     def schema_function_prewarm_status(self):
+        self.status_calls += 1
         return dict(self.result)
 
 
@@ -64,9 +66,31 @@ class OntologyRuleboxPrewarmRunnerTests(unittest.TestCase):
 
         self.assertEqual("deferred-reasoning-pending", result["status"])
         self.assertEqual(4, result["reasoningPendingCount"])
+        self.assertTrue(result["prewarmReadinessDeferred"])
         self.assertEqual([], repository.calls)
+        self.assertEqual(0, repository.status_calls)
 
-    def test_prioritizes_missing_function_compilation_before_a_pending_live_queue(self):
+    def test_defers_compilation_while_reasoning_is_running_or_retrying(self):
+        repository = FakeRepository()
+        runner = OntologyRuleboxPrewarmRunner(
+            repository,
+            settings={"ontologyRuleboxPrewarmEnabled": "1"},
+            reasoning_queue_probe=lambda: {
+                "status": "idle",
+                "effectivePendingCount": 0,
+                "runningEntryCount": 1,
+                "retryingEntryCount": 2,
+            },
+        )
+
+        result = runner.run_once()
+
+        self.assertEqual("deferred-reasoning-pending", result["status"])
+        self.assertEqual(2, result["reasoningPendingCount"])
+        self.assertEqual([], repository.calls)
+        self.assertEqual(0, repository.status_calls)
+
+    def test_defers_missing_function_compilation_while_a_live_queue_is_pending(self):
         repository = FakeRepository({
             "status": "provisioning",
             "functionsReady": False,
@@ -80,9 +104,12 @@ class OntologyRuleboxPrewarmRunnerTests(unittest.TestCase):
 
         result = runner.run_once()
 
-        self.assertEqual("provisioning", result["status"])
-        self.assertTrue(result["queuePriority"])
-        self.assertEqual([False], repository.calls)
+        self.assertEqual("deferred-reasoning-pending", result["status"])
+        self.assertIsNone(result["functionsReady"])
+        self.assertIsNone(result["pendingRuleCount"])
+        self.assertTrue(result["prewarmReadinessDeferred"])
+        self.assertEqual([], repository.calls)
+        self.assertEqual(0, repository.status_calls)
 
     def test_status_reports_isolation_and_current_prewarm_state(self):
         repository = FakeRepository({"status": "ok", "functionsReady": True})

@@ -64,6 +64,24 @@ class OntologyRuntimeOperationsTests(unittest.TestCase):
         self.assertTrue(result["retryable"])
         self.assertEqual("inference-failed-rolled-back", result["results"][0]["status"])
 
+    def test_projection_gate_retries_pending_abox_finalization_without_opening_circuit(self):
+        service = OntologyReasoningRunner.__new__(OntologyReasoningRunner)
+        pending_finalization = SimpleNamespace(last_ontology_projection_results={
+            "main": {
+                "status": "inference-finalization-pending",
+                "reason": "activation journal clear is pending",
+                "retryable": True,
+                "recommendedRetryAfterSeconds": 10,
+            },
+        })
+
+        result = service.projection_gate(pending_finalization)
+
+        self.assertFalse(result["ready"])
+        self.assertTrue(result["retryable"])
+        self.assertEqual("inference-finalization-pending", result["results"][0]["status"])
+        self.assertEqual(10, result["retryAfterSeconds"])
+
     def test_projection_gate_treats_waiting_for_a_newer_source_snapshot_as_retryable(self):
         service = OntologyReasoningRunner.__new__(OntologyReasoningRunner)
         waiting = SimpleNamespace(last_ontology_projection_results={

@@ -654,6 +654,7 @@ def settings_status_payload() -> Dict[str, object]:
         "ontologyReasoningBacklogDrainNoCooldownEnabled",
         "ontologyReasoningBacklogDrainNoCooldownAgeSeconds",
         "ontologyReasoningProjectionRetrySeconds",
+        "ontologyProjectionCircuitProbeRetrySeconds",
         "ontologyReasoningBackpressureEnabled",
         "ontologyReasoningBackpressureFactor",
         "ontologyReasoningBackpressureMaxSeconds",

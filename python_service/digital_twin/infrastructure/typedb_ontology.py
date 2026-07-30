@@ -5072,8 +5072,10 @@ class ScopedABoxManifestMixin:
         # The caller has already read an aligned InferenceBox, but a separate
         # projection can finish between that read and this control write.
         # Re-read the durable candidate contract while the scoped writer lease
-        # is still held. Clearing the journal without this proof would make a
-        # later stale InferenceBox look final after an ABox pointer transition.
+        # is still held.  Do this from the small active-generation marker, not
+        # from a full InferenceBox expansion: the latter is an asynchronous
+        # audit concern and made finalization both slow and susceptible to a
+        # stale detailed read racing the just-published generation.
         pending = self.pending_abox_activation(world_id)
         if str(pending.get("status") or "") == "pending":
             candidate_id = str(pending.get("candidateAboxSnapshotId") or "").strip()
@@ -5089,21 +5091,53 @@ class ScopedABoxManifestMixin:
                     "reason": "Pending ABox candidate changed before finalization.",
                 }
             try:
-                inferencebox = self.inferencebox_snapshot(
-                    symbols=target_symbols,
-                    limit=80,
-                    world_id=world_id,
-                )
+                recovery_metadata = self.inferencebox_recovery_metadata(world_id=world_id)
             except Exception as error:  # noqa: BLE001 - do not clear a recoverable journal on an unreadable proof.
-                return {
-                    "configured": True,
+                recovery_metadata = {
                     "status": "error",
-                    "graphStore": "typedb",
-                    "activeAboxSnapshotId": active_id,
-                    "previousAboxSnapshotId": previous_id,
-                    "pendingActivation": pending,
-                    "reason": "InferenceBox verification failed before ABox finalization: " + str(error)[:180],
+                    "reason": "InferenceBox active-generation marker lookup failed: " + str(error)[:180],
                 }
+            recovery_metadata = (
+                dict(recovery_metadata or {})
+                if isinstance(recovery_metadata, dict)
+                else {"status": "invalid"}
+            )
+            native_completed = bool(recovery_metadata.get("nativeTypeDbReasoningCompleted"))
+            native_outcome = str(recovery_metadata.get("nativeInferenceOutcome") or "").strip().lower()
+            marker_ready = (
+                str(recovery_metadata.get("status") or "") == "ok"
+                and native_completed
+                and native_outcome in {"matched", "no-match"}
+            )
+            marker_targets = clean_symbols_from_payload(recovery_metadata.get("targetSymbols") or [])
+            inferencebox = {
+                "configured": True,
+                "graphStore": "typedb",
+                "status": (
+                    "ok" if marker_ready and native_outcome == "matched"
+                    else "empty" if marker_ready and native_outcome == "no-match"
+                    else "stale-generation"
+                ),
+                "nativeTypeDbReasoningUsed": bool(marker_ready and native_outcome == "matched"),
+                "nativeTypeDbReasoningCompleted": native_completed,
+                "typedbNativeRuleEvaluationCompleted": native_completed,
+                "nativeInferenceOutcome": native_outcome,
+                "generationAligned": bool(
+                    marker_ready
+                    and str(recovery_metadata.get("sourceAboxSnapshotId") or "").strip() == candidate_id
+                    and set(target_symbols).issubset(set(marker_targets))
+                ),
+                "sourceAboxSnapshotId": str(
+                    recovery_metadata.get("sourceAboxSnapshotId") or ""
+                ).strip(),
+                "targetSymbols": marker_targets,
+                "inferenceGenerationId": str(
+                    recovery_metadata.get("inferenceGenerationId") or ""
+                ).strip(),
+                "querySource": "typedb-active-inference-generation-marker",
+                "durableReadback": False,
+                "recoveryMetadata": recovery_metadata,
+            }
             if not self.inferencebox_matches_pending_abox_activation(
                 inferencebox,
                 candidate_id,
@@ -5117,7 +5151,7 @@ class ScopedABoxManifestMixin:
                     "previousAboxSnapshotId": previous_id,
                     "pendingActivation": pending,
                     "inferenceBox": inferencebox,
-                    "reason": "Current TypeDB InferenceBox no longer proves the active ABox candidate.",
+                    "reason": "Current TypeDB active InferenceBox generation marker no longer proves the active ABox candidate.",
                 }
         control = typedb_call_for_world(
             self.clear_scoped_abox_pending_activation,

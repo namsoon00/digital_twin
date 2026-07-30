@@ -3986,21 +3986,44 @@ class PortfolioOntologyProjectionRecorder:
             inference_symbols,
         ):
             finalizer = getattr(self.repository, "finalize_abox_generation", None)
-            if callable(finalizer):
-                try:
-                    result["aboxActivationFinalization"] = self.repository_world_call(
-                        "finalize_abox_generation",
-                        active_snapshot_id,
-                        previous_snapshot_id,
-                        world_id=world_id,
-                    )
-                except Exception as error:  # noqa: BLE001 - cleanup may be retried without invalidating aligned reasoning.
-                    result["aboxActivationFinalization"] = {
-                        "status": "error",
-                        "reason": str(error)[:180],
-                        "activeAboxSnapshotId": active_snapshot_id,
-                        "previousAboxSnapshotId": previous_snapshot_id,
-                    }
+            if not callable(finalizer):
+                return
+            try:
+                result["aboxActivationFinalization"] = self.repository_world_call(
+                    "finalize_abox_generation",
+                    active_snapshot_id,
+                    previous_snapshot_id,
+                    world_id=world_id,
+                )
+            except Exception as error:  # noqa: BLE001 - cleanup may be retried without invalidating aligned reasoning.
+                result["aboxActivationFinalization"] = {
+                    "status": "error",
+                    "reason": str(error)[:180],
+                    "activeAboxSnapshotId": active_snapshot_id,
+                    "previousAboxSnapshotId": previous_snapshot_id,
+                }
+            finalization = (
+                dict(result.get("aboxActivationFinalization") or {})
+                if isinstance(result.get("aboxActivationFinalization"), dict)
+                else {}
+            )
+            if str(finalization.get("status") or "") != "ok":
+                # The native generation was already proven against this
+                # active ABox.  A failure to clear the small activation
+                # journal is a control-plane retry, not evidence that the
+                # TypeDB projection itself is unsafe.  Keep the event pending
+                # and resume finalization through the bounded recovery path;
+                # importantly, do not let one journal write outage open the
+                # global queue circuit for every other symbol.
+                result["saved"] = False
+                result["status"] = "inference-finalization-pending"
+                result["preservedActiveGeneration"] = True
+                result["retryable"] = True
+                result["recommendedRetryAfterSeconds"] = 10
+                result["reason"] = (
+                    "TypeDB 네이티브 추론 세대는 검증됐지만 ABox 완료 표식 정리가 보류되었습니다. "
+                    + str(finalization.get("reason") or "다음 짧은 재시도에서 완료 처리합니다.")[:180]
+                )
             return
 
         rollback = {

@@ -1212,13 +1212,18 @@ class TypeDBOntologyRepositoryTests(unittest.TestCase):
             "candidateAboxSnapshotId": "abox-manifest:next",
             "previousAboxSnapshotId": "abox-manifest:old",
             "targetSymbols": ["MSTR"],
-        }), patch.object(repository, "inferencebox_snapshot", return_value={
+        }), patch.object(repository, "inferencebox_recovery_metadata", return_value={
             "status": "ok",
-            "nativeTypeDbReasoningUsed": True,
-            "generationAligned": True,
+            "inferenceGenerationId": "inference-generation:next",
+            "nativeTypeDbReasoningCompleted": True,
+            "nativeInferenceOutcome": "matched",
             "sourceAboxSnapshotId": "abox-manifest:next",
             "targetSymbols": ["MSTR"],
-        }), patch.object(repository, "clear_scoped_abox_pending_activation", return_value={"status": "ok"}), patch.object(
+        }), patch.object(repository, "inferencebox_snapshot") as full_read, patch.object(
+            repository,
+            "clear_scoped_abox_pending_activation",
+            return_value={"status": "ok"},
+        ), patch.object(
             repository,
             "prune_inactive_scoped_abox_manifests",
             return_value={"status": "ok", "removedManifestIds": ["abox-manifest:old"]},
@@ -1228,6 +1233,7 @@ class TypeDBOntologyRepositoryTests(unittest.TestCase):
         self.assertEqual("ok", result["status"])
         self.assertTrue(result["cleanupDeferred"])
         self.assertEqual("deferred", result["cleanup"]["status"])
+        full_read.assert_not_called()
         cleanup.assert_not_called()
 
     def test_scoped_abox_finalize_removes_legacy_complete_generation_after_inference(self):
@@ -1241,13 +1247,18 @@ class TypeDBOntologyRepositoryTests(unittest.TestCase):
             "candidateAboxSnapshotId": "abox-manifest:next",
             "previousAboxSnapshotId": "abox-material:legacy",
             "targetSymbols": ["MSTR"],
-        }), patch.object(repository, "inferencebox_snapshot", return_value={
+        }), patch.object(repository, "inferencebox_recovery_metadata", return_value={
             "status": "ok",
-            "nativeTypeDbReasoningUsed": True,
-            "generationAligned": True,
+            "inferenceGenerationId": "inference-generation:next",
+            "nativeTypeDbReasoningCompleted": True,
+            "nativeInferenceOutcome": "matched",
             "sourceAboxSnapshotId": "abox-manifest:next",
             "targetSymbols": ["MSTR"],
-        }), patch.object(repository, "clear_scoped_abox_pending_activation", return_value={"status": "ok"}), patch.object(
+        }), patch.object(repository, "inferencebox_snapshot") as full_read, patch.object(
+            repository,
+            "clear_scoped_abox_pending_activation",
+            return_value={"status": "ok"},
+        ), patch.object(
             repository,
             "prune_inactive_scoped_abox_manifests",
             return_value={"status": "ok"},
@@ -1263,6 +1274,7 @@ class TypeDBOntologyRepositoryTests(unittest.TestCase):
         self.assertEqual("ok", result["status"])
         self.assertTrue(result["cleanupDeferred"])
         self.assertTrue(result["cleanup"]["legacyPredecessorPending"])
+        full_read.assert_not_called()
         discard.assert_not_called()
 
     def test_scoped_abox_finalize_keeps_journal_when_inference_proof_is_stale(self):
@@ -1276,17 +1288,21 @@ class TypeDBOntologyRepositoryTests(unittest.TestCase):
             "candidateAboxSnapshotId": "abox-manifest:next",
             "previousAboxSnapshotId": "abox-manifest:old",
             "targetSymbols": ["MSTR"],
-        }), patch.object(repository, "inferencebox_snapshot", return_value={
+        }), patch.object(repository, "inferencebox_recovery_metadata", return_value={
             "status": "stale-generation",
-            "nativeTypeDbReasoningUsed": False,
-            "generationAligned": False,
+            "nativeTypeDbReasoningCompleted": False,
+            "nativeInferenceOutcome": "",
             "sourceAboxSnapshotId": "abox-manifest:old",
             "targetSymbols": ["MSTR"],
-        }), patch.object(repository, "clear_scoped_abox_pending_activation") as clear:
+        }), patch.object(repository, "inferencebox_snapshot") as full_read, patch.object(
+            repository,
+            "clear_scoped_abox_pending_activation",
+        ) as clear:
             result = repository.finalize_scoped_abox_manifest("abox-manifest:next", "abox-manifest:old")
 
         self.assertEqual("error", result["status"])
         self.assertIn("no longer proves", result["reason"])
+        full_read.assert_not_called()
         clear.assert_not_called()
 
     def test_scoped_manifest_control_delta_reuses_unchanged_scope_pointers(self):
@@ -6251,6 +6267,69 @@ class TypeDBOntologyRepositoryTests(unittest.TestCase):
         self.assertTrue(result["saved"])
         self.assertEqual("ok", result["status"])
         self.assertEqual([("abox:new", "abox:previous")], repository.finalized_snapshot_ids)
+
+    def test_projection_recorder_retries_journal_finalization_without_opening_a_projection_failure(self):
+        class FakeRepository:
+            store_key = "typedb"
+
+            def active_abox_metadata(self):
+                return {
+                    "status": "ok",
+                    "aboxSnapshotId": "abox:previous",
+                    "materialFingerprint": "previous-material",
+                }
+
+            def save_graph(self, _graph):
+                return {
+                    "saved": True,
+                    "status": "ok",
+                    "graphStore": "typedb",
+                    "aboxPersistenceVerification": {
+                        "activation": {
+                            "status": "activated",
+                            "snapshotId": "abox:new",
+                            "previousSnapshotId": "abox:previous",
+                        },
+                    },
+                }
+
+            def rulebox_snapshot(self):
+                rules = rulebox_rules_to_payload(default_graph_inference_rules())
+                return {
+                    "configured": True,
+                    "status": "ok",
+                    "rules": rules,
+                    "ruleCount": len(rules),
+                }
+
+            def run_rulebox(self, _payload):
+                return {
+                    "status": "ok",
+                    "inferenceBox": {
+                        "status": "ok",
+                        "nativeTypeDbReasoningUsed": True,
+                        "generationAligned": True,
+                        "sourceAboxSnapshotId": "abox:new",
+                        "targetSymbols": ["AAPL"],
+                    },
+                }
+
+            def finalize_abox_generation(self, *_args):
+                return {"status": "error", "reason": "temporary control write timeout"}
+
+        snapshot = AccountSnapshot(
+            "main", "메인", "toss", "live", "ok", utc_now_iso(),
+            PortfolioSummary(total=1000, invested=1000, cash=0, markets=[], sectors=[], concentration=0),
+            positions=[Position("AAPL", "Apple", market="US", currency="USD", quantity=1, current_price=100, market_value=100, market_value_krw=140000)],
+        )
+
+        result = PortfolioOntologyProjectionRecorder(FakeRepository()).record_snapshot(snapshot)
+
+        self.assertFalse(result["saved"])
+        self.assertEqual("inference-finalization-pending", result["status"])
+        self.assertTrue(result["retryable"])
+        self.assertTrue(result["preservedActiveGeneration"])
+        self.assertEqual(10, result["recommendedRetryAfterSeconds"])
 
     def test_projection_recorder_finalizes_abox_after_aligned_native_no_match(self):
         class FakeRepository:

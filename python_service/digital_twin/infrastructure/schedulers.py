@@ -660,7 +660,14 @@ class OntologyRuleboxPrewarmScheduler:
             pending = int(result.get("pendingRuleCount") or 0)
         except (TypeError, ValueError):
             pending = 0
-        signature = status + "|" + str(pending) + "|" + str(result.get("reason") or "")[:120]
+        try:
+            reasoning_pending = int(result.get("reasoningPendingCount") or 0)
+        except (TypeError, ValueError):
+            reasoning_pending = 0
+        signature = (
+            status + "|" + str(pending) + "|" + str(reasoning_pending)
+            + "|" + str(result.get("reason") or "")[:120]
+        )
         if signature != self.last_signature or started - self.last_report_at >= 300.0:
             self.last_signature = signature
             self.last_report_at = started
@@ -717,8 +724,10 @@ class OntologyRuleboxPrewarmScheduler:
                     print(
                         "Ontology RuleBox prewarm "
                         + str(result.get("status") or "unknown")
-                        + " pending="
+                        + " functionsPending="
                         + str(result.get("pendingRuleCount") or 0)
+                        + " reasoningPending="
+                        + str(result.get("reasoningPendingCount") or 0)
                         + " ready="
                         + str(bool(result.get("functionsReady")))
                         + (" reason=" + reason[:220] if reason else ""),

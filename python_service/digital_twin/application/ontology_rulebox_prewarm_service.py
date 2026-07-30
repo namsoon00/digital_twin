@@ -3,6 +3,8 @@
 The active RuleBox is an investment-policy contract. Its generated TypeDB
 functions are a compiled implementation detail, so compilation belongs to a
 separate bounded worker and must never be started by a live alert inference.
+When a receipt is cold, the live path uses its bounded direct-TypeQL fallback
+while this worker waits for the queue to become quiet.
 """
 
 from __future__ import annotations
@@ -78,6 +80,13 @@ class OntologyRuleboxPrewarmRunner:
             values.get("effectivePendingCount"),
             values.get("mailboxPendingEntryCount"),
             values.get("pendingEntryCount"),
+            # A claimed or retrying entry is still live alert work.  The
+            # compact queue state deliberately stores those counters apart
+            # from ``pendingEntryCount``; treating either as an empty queue
+            # can start a global TypeDB schema compilation halfway through a
+            # recovery pass.
+            values.get("runningEntryCount"),
+            values.get("retryingEntryCount"),
         ]
         parsed = []
         for candidate in candidates:
@@ -100,7 +109,7 @@ class OntologyRuleboxPrewarmRunner:
         return _integer_setting(
             self.settings,
             "ontologyRuleboxPrewarmExecutionTimeoutSeconds",
-            180,
+            45,
             30,
             1800,
         )
@@ -182,29 +191,32 @@ class OntologyRuleboxPrewarmRunner:
         queue = self.reasoning_queue_state()
         pending = self.pending_reasoning_count(queue)
         readiness = {}
-        # When receipts are already ready, stay out of a live queue exactly as
-        # before.  When they are missing, however, deferring this worker makes
-        # the first inference fall back to slow direct TypeQL reads.  Give the
-        # compiler one exclusive turn while the reasoning runner is gated on
-        # the same receipt; no live native inference competes with it.
+        # Schema compilation uses TypeDB's global schema boundary. It must
+        # never occupy that boundary while live work is waiting: the native
+        # runner has a bounded direct-TypeQL fallback for a cold receipt and
+        # can therefore keep alert latency predictable. The compiler resumes
+        # once the durable queue is actually empty.
         if self.defer_when_reasoning_pending() and pending and not force:
-            readiness = self.prewarm_readiness()
-            if bool(readiness.get("functionsReady")):
-                return {
-                    "status": "deferred-reasoning-pending",
-                    "configured": True,
-                    "functionsReady": True,
-                    "pendingRuleCount": 0,
-                    "reasoningPendingCount": pending,
-                    "reasoningQueue": queue,
-                    "prewarmReadiness": readiness,
-                    "reason": (
-                        "Live ontology reasoning is pending and durable RuleBox function receipts are already ready; "
-                        "the prewarm worker yields to the alert path."
-                    ),
-                    "recommendedRetryAfterSeconds": self.interval_seconds(),
-                    "durationMs": 0,
-                }
+            # Do not even read TypeDB deployment receipts here. A readiness
+            # check opens RuleBox and receipt reads for both namespaces and
+            # therefore competes with the exact workload this branch is
+            # protecting. The compact queue probe is sufficient to yield;
+            # readiness will be checked only after the queue is quiet.
+            return {
+                "status": "deferred-reasoning-pending",
+                "configured": True,
+                "functionsReady": None,
+                "pendingRuleCount": None,
+                "reasoningPendingCount": pending,
+                "reasoningQueue": queue,
+                "prewarmReadinessDeferred": True,
+                "reason": (
+                    "Live ontology reasoning is pending; the RuleBox worker does not access TypeDB and any cold "
+                    "function receipt uses the bounded direct TypeQL fallback."
+                ),
+                "recommendedRetryAfterSeconds": self.interval_seconds(),
+                "durationMs": 0,
+            }
         if self.defer_when_reasoning_pending() and str(queue.get("status") or "") == "error" and not force:
             return {
                 "status": "deferred-reasoning-queue-probe",

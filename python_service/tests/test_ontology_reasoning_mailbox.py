@@ -528,6 +528,25 @@ class OntologyReasoningMailboxTests(unittest.TestCase):
         self.assertEqual(15, result["retryAfterSeconds"])
         self.assertFalse(result["ruleboxPrewarm"]["ready"])
 
+    def test_source_snapshot_preflight_defers_before_creating_a_typedb_runner(self):
+        event = realtime_request("snapshot-preflight", ["AAPL"], "2026-07-24T00:00:00Z")
+        runner = self.build_runner([event])
+        runner.snapshot_readiness_probe = lambda context: {
+            "ready": False,
+            "status": "deferred-source-snapshot",
+            "reason": "The latest monitor snapshot predates the requested fact revision.",
+            "retryAfterSeconds": 30,
+            "accounts": [{"accountId": "acct", "status": "deferred"}],
+        }
+
+        result = runner.run_once(force=True)
+
+        self.assertEqual("deferred", result["status"])
+        self.assertEqual([], self.monitor.calls)
+        self.assertEqual(30, result["retryAfterSeconds"])
+        self.assertIn("확정 모니터 스냅샷 대기", result["deferredReason"])
+        self.assertEqual("deferred-source-snapshot", result["sourceSnapshotPreflight"]["status"])
+
     def test_post_monitor_checkpoint_finishes_without_rebuilding_typedb(self):
         event = realtime_request("resume-current", ["AAPL"], "2026-07-24T00:00:00Z")
         runner = self.build_runner([event])

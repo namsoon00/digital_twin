@@ -109,6 +109,31 @@ class MySQLMonitorStore(MySQLOperationalConnection):
             previous[row["account_id"]] = _json_loads(row["payload_json"], {})
         return previous
 
+    def snapshot_metadata(self, account_id: str) -> Dict[str, object]:
+        """Read the snapshot boundary without decoding its full payload.
+
+        Isolated ontology scheduling calls this before a TypeDB generation.
+        Keeping it narrow prevents a large research archive from becoming a
+        prerequisite for learning that a newer source snapshot is still due.
+        """
+        with self.connect() as connection:
+            row = connection.execute(
+                """
+                SELECT account_id, mode, status, generated_at, updated_at
+                FROM monitor_snapshots
+                WHERE account_id = %s
+                LIMIT 1
+                """,
+                (str(account_id or ""),),
+            ).fetchone() or {}
+        return {
+            "accountId": str(row.get("account_id") or account_id or ""),
+            "mode": str(row.get("mode") or ""),
+            "status": str(row.get("status") or ""),
+            "generatedAt": str(row.get("generated_at") or ""),
+            "updatedAt": str(row.get("updated_at") or ""),
+        }
+
     def load_history(self, account_id: str, limit: int = 6) -> List[Dict[str, object]]:
         with self.connect() as connection:
             # New rows carry a compact temporal projection.  Do not deserialize

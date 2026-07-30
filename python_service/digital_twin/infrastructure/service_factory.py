@@ -201,9 +201,19 @@ def build_monitor_runner(
     settings=None,
     typedb_native_rule_execution_enabled: bool = False,
     snapshot_builder: Callable = None,
+    ontology_projection_enabled: bool = None,
 ) -> MonitorRunner:
     configured_settings = dict(settings or runtime_settings())
     configured_settings["typedbNativeRuleExecutionEnabled"] = "1" if typedb_native_rule_execution_enabled else "0"
+    if ontology_projection_enabled is None:
+        # Normal monitoring commits source data and publishes one verified
+        # snapshot request.  The durable reasoning worker is then the only
+        # TypeDB ABox/InferenceBox writer.  Operators can re-enable the old
+        # synchronous path explicitly for a diagnostic run.
+        ontology_projection_enabled = setting_truthy(
+            configured_settings.get("ontologyMonitorInlineProjectionEnabled"),
+            False,
+        )
     monitor_snapshot_settings = dict(configured_settings)
     # The dedicated market-data worker owns slow external refreshes. The
     # realtime monitor consumes its cache so a vendor timeout cannot hold a
@@ -243,6 +253,7 @@ def build_monitor_runner(
             settings=configured_settings,
         ),
         hypothesis_lifecycle_service=build_hypothesis_lifecycle_service(configured_settings, publisher),
+        ontology_projection_enabled=bool(ontology_projection_enabled),
         account_job_store=monitor_account_job_store_from_settings(configured_settings),
         account_job_batch_size=int(configured_settings.get("monitorAccountBatchSize") or os.environ.get("MONITOR_ACCOUNT_BATCH_SIZE") or 10),
         account_job_interval_seconds=interval_seconds,
@@ -791,6 +802,38 @@ def build_ontology_reasoning_runner(settings=None, event_publisher=None) -> Onto
     event_log = stores.event_log(reasoning_store_settings)
     ontology_repository = ontology_repository_from_settings(configured_settings)
     cursor_store = stores.ontology_reasoning_cursor_store(reasoning_store_settings)
+    snapshot_readiness_source = LatestMonitorSnapshotReasoningSource(
+        stores.monitor_store(reasoning_store_settings),
+        settings=reasoning_monitor_settings,
+    )
+
+    def source_snapshot_preflight(reasoning_context):
+        context = dict(reasoning_context or {})
+        requested_accounts = {
+            str(account_id or "").strip()
+            for account_id in context.get("accountIds") or []
+            if str(account_id or "").strip()
+        }
+        accounts = [
+            account for account in (registry.load() or [])
+            if not requested_accounts or str(getattr(account, "account_id", "") or "").strip() in requested_accounts
+        ]
+        if requested_accounts and len(accounts) != len(requested_accounts):
+            return {
+                "ready": False,
+                "status": "deferred-source-snapshot",
+                "reason": "The requested account has no registered monitor snapshot source.",
+                "retryAfterSeconds": 30,
+                "accounts": [
+                    {"accountId": account_id, "status": "deferred"}
+                    for account_id in sorted(requested_accounts)
+                    if account_id not in {
+                        str(getattr(account, "account_id", "") or "").strip()
+                        for account in accounts
+                    }
+                ],
+            }
+        return snapshot_readiness_source.preflight(accounts, context)
 
     def projection_recovery_probe(account_ids, symbols):
         requested_accounts = {
@@ -876,6 +919,7 @@ def build_ontology_reasoning_runner(settings=None, event_publisher=None) -> Onto
             registry.load(),
             settings=reasoning_monitor_settings,
             typedb_native_rule_execution_enabled=reasoning_native_rule_execution_enabled,
+            ontology_projection_enabled=True,
         )
         runner.snapshot_builder = LatestMonitorSnapshotReasoningSource(
             runner.store,
@@ -913,6 +957,7 @@ def build_ontology_reasoning_runner(settings=None, event_publisher=None) -> Onto
         ),
         projection_lease_recovery=projection_lease_recovery,
         projection_coordinator_lease_recovery=projection_coordinator_lease_recovery,
+        snapshot_readiness_probe=source_snapshot_preflight,
         rulebox_prewarm_probe=(
             getattr(ontology_repository, "schema_function_prewarm_status")
             if callable(getattr(ontology_repository, "schema_function_prewarm_status", None))

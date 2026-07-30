@@ -618,6 +618,7 @@ def settings_status_payload() -> Dict[str, object]:
         "ontologyDecisionEpisodeContextMaxEpisodes",
         "ontologyDecisionEpisodeContextHypothesisLimit",
         "ontologyDecisionEpisodeContextOutcomeLimit",
+        "ontologyMonitorInlineProjectionEnabled",
         "ontologyReasoningEnabled",
         "ontologyReasoningIntervalSeconds",
         "ontologyReasoningBatchSize",

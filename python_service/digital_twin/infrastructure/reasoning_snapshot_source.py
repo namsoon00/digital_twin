@@ -8,6 +8,7 @@ from ..domain.portfolio import (
     AccountSnapshot,
     PortfolioSummary,
     account_snapshot_from_monitor_state,
+    monitor_state_has_live_account_data,
     utc_now_iso,
 )
 
@@ -64,9 +65,38 @@ class LatestMonitorSnapshotReasoningSource:
         state = previous.get(str(account_id or "")) if isinstance(previous, dict) else {}
         return copy.deepcopy(state) if isinstance(state, dict) else {}
 
-    def snapshot_freshness(self, snapshot: AccountSnapshot, reasoning_context: Dict[str, object] = None) -> Dict[str, object]:
+    def current_state_metadata(self, account_id: str) -> Dict[str, object]:
+        """Read only the durable source boundary needed before TypeDB work.
+
+        The full persisted monitor snapshot can contain a sizeable research
+        archive.  A stale-source check must not deserialize or copy that
+        payload before it knows a current snapshot exists.  MySQL-backed
+        stores expose a narrow metadata read; lightweight compatibility
+        stores retain the in-memory fallback.
+        """
+        reader = getattr(self.monitor_store, "snapshot_metadata", None)
+        if callable(reader):
+            try:
+                value = reader(str(account_id or ""))
+            except Exception:  # noqa: BLE001 - the authoritative replay remains fail-safe below.
+                value = None
+            if isinstance(value, dict):
+                return dict(value)
+        previous = getattr(self.monitor_store, "previous", {}) or {}
+        state = previous.get(str(account_id or "")) if isinstance(previous, dict) else {}
+        if not isinstance(state, dict):
+            return {}
+        return {
+            "accountId": str(state.get("accountId") or state.get("account_id") or account_id or ""),
+            "mode": str(state.get("mode") or ""),
+            "status": str(state.get("status") or ""),
+            "generatedAt": str(state.get("generatedAt") or state.get("generated_at") or ""),
+        }
+
+    def snapshot_freshness_at(self, generated_at: object, reasoning_context: Dict[str, object] = None) -> Dict[str, object]:
+        """Evaluate a compact persisted source timestamp without rehydration."""
         source_context = dict(reasoning_context or {})
-        snapshot_at = _timestamp(snapshot.generated_at)
+        snapshot_at = _timestamp(generated_at)
         source_at_text = str(source_context.get("sourceObservedAt") or "").strip()
         source_at = _timestamp(source_at_text)
         now = self.now_provider()
@@ -79,7 +109,7 @@ class LatestMonitorSnapshotReasoningSource:
                 "reason": "The stored monitor snapshot has no usable source timestamp.",
                 "retryAfterSeconds": self.retry_after_seconds(),
                 "sourceObservedAt": source_at_text,
-                "snapshotGeneratedAt": str(snapshot.generated_at or ""),
+                "snapshotGeneratedAt": str(generated_at or ""),
             }
         if source_at and snapshot_at < source_at:
             return {
@@ -87,7 +117,7 @@ class LatestMonitorSnapshotReasoningSource:
                 "reason": "The latest monitor snapshot predates the requested fact revision.",
                 "retryAfterSeconds": self.retry_after_seconds(),
                 "sourceObservedAt": source_at_text,
-                "snapshotGeneratedAt": str(snapshot.generated_at or ""),
+                "snapshotGeneratedAt": str(generated_at or ""),
                 "snapshotLagSeconds": max(0, int((source_at - snapshot_at).total_seconds())),
             }
         age_seconds = max(0, int((now - snapshot_at).total_seconds()))
@@ -97,16 +127,63 @@ class LatestMonitorSnapshotReasoningSource:
                 "reason": "The requested fact has no source timestamp and the stored monitor snapshot is too old to replay safely.",
                 "retryAfterSeconds": self.retry_after_seconds(),
                 "sourceObservedAt": source_at_text,
-                "snapshotGeneratedAt": str(snapshot.generated_at or ""),
+                "snapshotGeneratedAt": str(generated_at or ""),
                 "snapshotAgeSeconds": age_seconds,
             }
         return {
             "status": "ready",
             "reason": "The latest verified monitor snapshot covers the requested source revision.",
             "sourceObservedAt": source_at_text,
-            "snapshotGeneratedAt": str(snapshot.generated_at or ""),
+            "snapshotGeneratedAt": str(generated_at or ""),
             "snapshotAgeSeconds": age_seconds,
             "sourceTimestampState": "verified" if source_at else "unknown",
+        }
+
+    def snapshot_freshness(self, snapshot: AccountSnapshot, reasoning_context: Dict[str, object] = None) -> Dict[str, object]:
+        return self.snapshot_freshness_at(snapshot.generated_at, reasoning_context)
+
+    def preflight(self, accounts, reasoning_context: Dict[str, object] = None) -> Dict[str, object]:
+        """Prove source freshness before claiming a mailbox or opening TypeDB.
+
+        This is intentionally a timestamp/control-plane check only.  It does
+        not use any source field as an investment condition and it never
+        advances, releases, or acknowledges queued work.
+        """
+        account_rows = []
+        for account in accounts or []:
+            account_id = str(getattr(account, "account_id", "") or "").strip()
+            if not account_id:
+                continue
+            metadata = self.current_state_metadata(account_id)
+            if not monitor_state_has_live_account_data(metadata):
+                account_rows.append({
+                    "accountId": account_id,
+                    "status": "deferred",
+                    "reason": "No verified live monitor snapshot is available for this account.",
+                    "retryAfterSeconds": self.retry_after_seconds(),
+                    "sourceObservedAt": str((reasoning_context or {}).get("sourceObservedAt") or ""),
+                    "snapshotGeneratedAt": str(metadata.get("generatedAt") or ""),
+                })
+                continue
+            account_rows.append({
+                "accountId": account_id,
+                **self.snapshot_freshness_at(metadata.get("generatedAt"), reasoning_context),
+            })
+        deferred = [item for item in account_rows if str(item.get("status") or "") != "ready"]
+        if deferred:
+            first = deferred[0]
+            return {
+                "ready": False,
+                "status": "deferred-source-snapshot",
+                "reason": str(first.get("reason") or "The latest verified monitor snapshot is not ready."),
+                "retryAfterSeconds": max(1, int(first.get("retryAfterSeconds") or self.retry_after_seconds())),
+                "accounts": account_rows,
+            }
+        return {
+            "ready": True,
+            "status": "ready",
+            "reason": "All selected accounts have a persisted monitor snapshot covering this source revision.",
+            "accounts": account_rows,
         }
 
     def unavailable_snapshot(self, account, replay: Dict[str, object]) -> AccountSnapshot:

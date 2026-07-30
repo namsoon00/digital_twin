@@ -203,9 +203,10 @@ class IsolatedOntologyReasoningCycle:
 
 
 class RealtimeScheduler:
-    def __init__(self, runner, interval_seconds: int, error_reporter=None):
+    def __init__(self, runner, interval_seconds: int, error_reporter=None, minimum_interval_seconds: int = None):
         self.runner = runner
-        self.interval_seconds = max(MIN_REALTIME_INTERVAL_SECONDS, int(interval_seconds or MIN_REALTIME_INTERVAL_SECONDS))
+        minimum = max(5, int(minimum_interval_seconds or MIN_REALTIME_INTERVAL_SECONDS))
+        self.interval_seconds = max(minimum, int(interval_seconds or minimum))
         self.error_reporter = error_reporter or operational_error_reporter()
         self.running = True
 

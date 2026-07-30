@@ -27,6 +27,7 @@ class EmptyMonitor:
 class CapturingCycleRecorder:
     def __init__(self):
         self.source_snapshot_replay = None
+        self.snapshots = []
 
     def record_cycle(
         self,
@@ -38,6 +39,7 @@ class CapturingCycleRecorder:
         source_snapshot_replay=False,
     ):
         self.source_snapshot_replay = source_snapshot_replay
+        self.snapshots = list(_snapshots or [])
         return MonitoringCycleRecordResult(False, 0, "ok")
 
 
@@ -125,6 +127,34 @@ class ReasoningSnapshotReplayTests(unittest.TestCase):
         self.assertEqual("deferred", replay["status"])
         self.assertIn("predates", replay["reason"])
 
+    def test_preflight_reads_only_the_snapshot_boundary_before_replay(self):
+        class MetadataStore(SnapshotStore):
+            def __init__(self):
+                super().__init__({})
+                self.metadata_calls = []
+
+            def snapshot_metadata(self, account_id):
+                self.metadata_calls.append(account_id)
+                return {
+                    "accountId": account_id,
+                    "mode": "live",
+                    "status": "ok",
+                    "generatedAt": "2026-07-29T00:02:00Z",
+                }
+
+        store = MetadataStore()
+        source = LatestMonitorSnapshotReasoningSource(
+            store,
+            now_provider=lambda: datetime(2026, 7, 29, 0, 3, tzinfo=timezone.utc),
+        )
+
+        result = source.preflight([account()], {"sourceObservedAt": "2026-07-29T00:04:00Z"})
+
+        self.assertFalse(result["ready"])
+        self.assertEqual("deferred-source-snapshot", result["status"])
+        self.assertEqual(["acct"], store.metadata_calls)
+        self.assertIn("predates", result["reason"])
+
     def test_monitor_replay_does_not_rewrite_source_snapshot_rows(self):
         snapshot = AccountSnapshot(
             account_id="acct",
@@ -158,6 +188,31 @@ class ReasoningSnapshotReplayTests(unittest.TestCase):
 
         self.assertEqual("2026-07-29T00:01:00Z", contexts[0]["sourceObservedAt"])
         self.assertTrue(recorder.source_snapshot_replay)
+
+    def test_normal_monitor_queues_verified_snapshot_without_inline_typedb(self):
+        snapshot = account_snapshot_from_monitor_state(monitor_state())
+        recorder = CapturingCycleRecorder()
+        projected = []
+
+        class ProjectionRecorder:
+            def record_snapshot(self, _snapshot, **_kwargs):
+                projected.append(True)
+
+        runner = MonitorRunner(
+            [account()],
+            store=SnapshotStore(monitor_state()),
+            monitor=EmptyMonitor(),
+            snapshot_builder=lambda _account: snapshot,
+            event_sender=lambda *_args, **_kwargs: None,
+            cycle_recorder=recorder,
+            ontology_projection_recorder=ProjectionRecorder(),
+            ontology_projection_enabled=False,
+        )
+
+        runner.run_once()
+
+        self.assertEqual([], projected)
+        self.assertEqual("queued-verified-monitor-snapshot", recorder.snapshots[0].metadata["ontology"]["projection"]["status"])
 
 
 if __name__ == "__main__":

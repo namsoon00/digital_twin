@@ -100,7 +100,7 @@ def reasoning_request_provenance(
         for symbol in target_symbols or []
         if str(symbol or "").strip()
     }
-    request_event_ids, source_event_ids, triggers, fact_types, observed_at = set(), set(), set(), set(), []
+    request_event_ids, source_event_ids, triggers, fact_types, observed_at, account_ids = set(), set(), set(), set(), [], set()
     changed_fields: Dict[str, set] = {}
     revisions: Dict[str, str] = {}
     for event in events or []:
@@ -114,6 +114,15 @@ def reasoning_request_provenance(
         trigger = str(payload.get("trigger") or "").strip()
         if trigger:
             triggers.add(trigger)
+        raw_account_ids = payload.get("accountIds") or payload.get("accountId") or []
+        if isinstance(raw_account_ids, str):
+            raw_account_ids = [raw_account_ids]
+        elif not isinstance(raw_account_ids, (list, tuple, set)):
+            raw_account_ids = []
+        for account_id in [payload.get("accountId")] + list(raw_account_ids):
+            clean_account_id = str(account_id or "").strip()
+            if clean_account_id:
+                account_ids.add(clean_account_id)
         for fact_type in payload.get("factTypes") or []:
             clean_fact_type = str(fact_type or "").strip()
             if clean_fact_type:
@@ -153,6 +162,7 @@ def reasoning_request_provenance(
         "sourceEventIds": sorted(source_event_ids)[:80],
         "triggers": sorted(triggers)[:20],
         "factTypes": ordered_fact_types[:30],
+        "accountIds": sorted(account_ids)[:40],
         "requestedScopeFamilies": requested_scope_families_for_event_fact_types(ordered_fact_types),
         "targetSymbols": sorted(targets)[:80],
         "sourceObservedAt": max(observed_at) if observed_at else "",
@@ -589,6 +599,7 @@ class OntologyReasoningRunner:
         projection_lease_recovery: Callable = None,
         projection_coordinator_lease_recovery: Callable = None,
         rulebox_prewarm_probe: Callable = None,
+        snapshot_readiness_probe: Callable = None,
     ):
         self.event_reader = event_reader
         self.cursor_store = cursor_store
@@ -608,6 +619,7 @@ class OntologyReasoningRunner:
         self.projection_lease_recovery = projection_lease_recovery
         self.projection_coordinator_lease_recovery = projection_coordinator_lease_recovery
         self.rulebox_prewarm_probe = rulebox_prewarm_probe
+        self.snapshot_readiness_probe = snapshot_readiness_probe
 
     def enabled(self) -> bool:
         return truthy(self.settings.get("ontologyReasoningEnabled"), True)
@@ -707,6 +719,32 @@ class OntologyReasoningRunner:
             "ready": ready,
             "retryAfterSeconds": self.rulebox_prewarm_retry_seconds(),
         }
+
+    def source_snapshot_preflight(self, reasoning_context: Dict[str, object]) -> Dict[str, object]:
+        """Check a persisted snapshot boundary before creating a TypeDB child.
+
+        The probe reads only monitor metadata.  It is deliberately separate
+        from the full replay runner so a raw source update cannot spend a
+        costly graph assembly turn merely to learn that its monitor commit is
+        still a few seconds away.
+        """
+        probe = self.snapshot_readiness_probe
+        if not callable(probe):
+            return {"ready": True, "status": "not-configured"}
+        try:
+            result = probe(dict(reasoning_context or {}))
+        except Exception as error:  # noqa: BLE001 - the full replay remains the authoritative fail-safe path.
+            return {
+                "ready": True,
+                "status": "probe-error",
+                "reason": str(error)[:180],
+            }
+        value = dict(result or {}) if isinstance(result, Mapping) else {}
+        if not value:
+            return {"ready": True, "status": "empty"}
+        value["ready"] = bool(value.get("ready"))
+        value.setdefault("status", "ready" if value["ready"] else "deferred-source-snapshot")
+        return value
 
     def native_typedb_target_symbol_limit(self) -> int:
         """Bound schema-function work without reducing the complete ABox."""
@@ -4479,6 +4517,30 @@ class OntologyReasoningRunner:
                 "omittedSymbolCount": omitted_symbol_count,
                 "retryAfterSeconds": self.projection_retry_seconds(),
                 "deferredReason": "대기 중인 요청은 있으나 이번 주기에 실행 가능한 종목이 없습니다.",
+                "coalescedEventCount": len(durable_superseded_ids),
+                **queue_metadata,
+            }
+        source_snapshot_preflight = self.source_snapshot_preflight(reasoning_context)
+        if not source_snapshot_preflight.get("ready"):
+            retry_after_seconds = int(
+                source_snapshot_preflight.get("retryAfterSeconds")
+                or self.projection_retry_seconds()
+            )
+            return {
+                "status": "deferred",
+                "processedCount": 0,
+                "alertCount": 0,
+                "symbols": symbols,
+                "maxSymbolsPerRun": self.effective_max_symbols_per_run(),
+                "configuredMaxSymbolsPerRun": self.max_symbols_per_run(),
+                "nativeTypeDbTargetSymbolLimit": self.native_typedb_target_symbol_limit() if self.native_typedb_rule_execution_enabled() else None,
+                "omittedSymbolCount": omitted_symbol_count,
+                "retryAfterSeconds": max(1, retry_after_seconds),
+                "deferredReason": "확정 모니터 스냅샷 대기: " + str(
+                    source_snapshot_preflight.get("reason")
+                    or "The latest monitor snapshot is not ready for this source revision."
+                )[:180],
+                "sourceSnapshotPreflight": source_snapshot_preflight,
                 "coalescedEventCount": len(durable_superseded_ids),
                 **queue_metadata,
             }

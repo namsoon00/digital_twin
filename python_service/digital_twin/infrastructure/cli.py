@@ -285,8 +285,25 @@ def monitor_command(args) -> int:
             return 1
         return 0
     if args.monitor_action == "watch":
-        interval = int(os.environ.get("PYTHON_REALTIME_INTERVAL_SECONDS") or os.environ.get("REALTIME_NOTIFY_INTERVAL_SECONDS") or MIN_REALTIME_INTERVAL_SECONDS)
-        RealtimeScheduler(runner, interval).run_forever()
+        inline_projection = str(
+            settings.get("ontologyMonitorInlineProjectionEnabled") or "0"
+        ).strip().lower() not in {"", "0", "false", "no", "off", "disabled"}
+        # Once TypeDB generation is fully delegated to the durable reasoning
+        # worker, the monitor only collects and commits source facts.  It can
+        # therefore refresh the verified-snapshot boundary more often without
+        # competing for TypeDB's single writer transaction.
+        minimum_interval = MIN_REALTIME_INTERVAL_SECONDS if inline_projection else 30
+        interval = int(
+            os.environ.get("PYTHON_REALTIME_INTERVAL_SECONDS")
+            or os.environ.get("REALTIME_NOTIFY_INTERVAL_SECONDS")
+            or settings.get("monitorAccountIntervalSeconds")
+            or minimum_interval
+        )
+        RealtimeScheduler(
+            runner,
+            interval,
+            minimum_interval_seconds=minimum_interval,
+        ).run_forever()
         return 0
     return 1
 

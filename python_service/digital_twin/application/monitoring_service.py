@@ -22,6 +22,7 @@ class MonitorRunner:
         cycle_recorder: MonitoringCycleRecorder = None,
         ontology_projection_recorder: OntologyProjectionRecorder = None,
         hypothesis_lifecycle_service=None,
+        ontology_projection_enabled: bool = True,
         account_job_store: MonitorAccountJobRepository = None,
         account_job_batch_size: int = 10,
         account_job_interval_seconds: int = 180,
@@ -39,6 +40,12 @@ class MonitorRunner:
         self.cycle_recorder = cycle_recorder
         self.ontology_projection_recorder = ontology_projection_recorder
         self.hypothesis_lifecycle_service = hypothesis_lifecycle_service
+        # The normal monitor owns source collection and its durable commit.
+        # In production the isolated ontology worker owns the expensive
+        # TypeDB generation after that commit.  Keep the switch explicit so
+        # compatibility callers and deliberate synchronous runs can retain
+        # their existing projection behavior.
+        self.ontology_projection_enabled = bool(ontology_projection_enabled)
         self.account_job_store = account_job_store
         self.account_job_batch_size = max(1, int(account_job_batch_size or 10))
         self.account_job_interval_seconds = max(30, int(account_job_interval_seconds or 180))
@@ -281,22 +288,40 @@ class MonitorRunner:
             self.load_snapshot_history(snapshot.account_id)
         )
         snapshot.metadata.setdefault("ontology", {})["previousStateAvailable"] = bool(previous)
-        # Dry-run still needs graph inference to simulate the same investment
-        # judgement path as live monitoring; delivery and monitor persistence
-        # remain gated by dry_run below.
-        self.progress("ontology_projection.start", accountId=account.account_id)
-        self.record_ontology_projection(
-            snapshot,
-            target_symbols=allowed_symbols,
-            reasoning_context=reasoning_context,
-        )
-        projection = snapshot.metadata.get("ontology", {}).get("projection") if isinstance(snapshot.metadata.get("ontology"), dict) else {}
-        self.progress(
-            "ontology_projection.done",
-            accountId=account.account_id,
-            status=projection.get("status") if isinstance(projection, dict) else "",
-            graphStore=projection.get("graphStore") if isinstance(projection, dict) else "",
-        )
+        # Dry-run and the isolated reasoning replay still execute the exact
+        # TypeDB path.  The ordinary realtime monitor, however, persists the
+        # verified source snapshot first and leaves the generation to the
+        # single durable reasoning worker.  Running both paths concurrently
+        # duplicates an ABox write and makes the single TypeDB writer queue
+        # compete with itself.
+        projection_enabled = self.ontology_projection_enabled or dry_run
+        if projection_enabled:
+            self.progress("ontology_projection.start", accountId=account.account_id)
+            self.record_ontology_projection(
+                snapshot,
+                target_symbols=allowed_symbols,
+                reasoning_context=reasoning_context,
+            )
+            projection = snapshot.metadata.get("ontology", {}).get("projection") if isinstance(snapshot.metadata.get("ontology"), dict) else {}
+            self.progress(
+                "ontology_projection.done",
+                accountId=account.account_id,
+                status=projection.get("status") if isinstance(projection, dict) else "",
+                graphStore=projection.get("graphStore") if isinstance(projection, dict) else "",
+            )
+        else:
+            projection = {
+                "saved": False,
+                "status": "queued-verified-monitor-snapshot",
+                "reason": "확정 모니터 스냅샷을 저장한 뒤 전용 온톨로지 추론 워커가 TypeDB 세대를 처리합니다.",
+                "eventuallyConsistent": True,
+            }
+            snapshot.metadata.setdefault("ontology", {})["projection"] = projection
+            self.progress(
+                "ontology_projection.queued",
+                accountId=account.account_id,
+                status=projection["status"],
+            )
         if self.projection_inference_verified(projection):
             inference = projection.get("inferenceBox") if isinstance(projection, dict) else {}
             self.progress(
@@ -305,7 +330,11 @@ class MonitorRunner:
                 sourceAboxSnapshotId=str((inference or {}).get("sourceAboxSnapshotId") or ""),
                 inferenceGenerationId=str((inference or {}).get("inferenceGenerationId") or ""),
             )
-        self.record_hypothesis_lifecycle(snapshot)
+        # Hypothesis lifecycle observations refer to the verified native
+        # generation.  Defer them with the generation instead of recording a
+        # stale monitor-side placeholder.
+        if projection_enabled:
+            self.record_hypothesis_lifecycle(snapshot)
         events = self.monitor.events_for_snapshot(snapshot, previous)
         if force and hasattr(self.monitor, "forced_holdings_snapshot_events"):
             events.extend(self.monitor.forced_holdings_snapshot_events(snapshot))

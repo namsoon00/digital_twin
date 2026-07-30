@@ -684,7 +684,7 @@ class OntologyReasoningRunner:
     def rulebox_prewarm_backlog_recovery_enabled(self) -> bool:
         return truthy(
             self.settings.get("ontologyRuleboxPrewarmBacklogRecoveryEnabled"),
-            True,
+            False,
         )
 
     def rulebox_prewarm_backlog_recovery_age_seconds(self) -> int:
@@ -1165,7 +1165,10 @@ class OntologyReasoningRunner:
         return int_setting(self.settings, "ontologyReasoningResearchEventMaxAgeMinutes", 360, 1, 24 * 30)
 
     def telemetry_history_limit(self) -> int:
-        return int_setting(self.settings, "ontologyReasoningTelemetryHistoryLimit", 80, 10, 500)
+        # Execution history is operational evidence, not source input. Keeping
+        # dozens of repeated dispatch plans in one cursor made every five-
+        # second scheduler read decode a near-megabyte document.
+        return int_setting(self.settings, "ontologyReasoningTelemetryHistoryLimit", 24, 10, 500)
 
     def event_scan_limit(self, requested_limit: int = 0) -> int:
         fallback = max(1500, int(requested_limit or self.batch_size()) * 40)
@@ -3117,15 +3120,35 @@ class OntologyReasoningRunner:
             "reason": str(value.get("reason") or "")[:180],
         }
 
-    def timeout_recovery_retry_seconds(self) -> int:
-        """Return the short retry interval only after a dead lease is cleared."""
-        return int_setting(
-            self.settings,
-            "ontologyReasoningTimeoutRecoveryRetrySeconds",
-            30,
-            5,
-            300,
-        )
+    def isolated_timeout_guard_preflight(self) -> Dict[str, object]:
+        """Block a new sidecar while a timed-out TypeDB call may still run.
+
+        Killing the Python client releases its local lease, but it does not
+        prove that TypeDB cancelled the server-side transaction.  This MySQL-
+        only parent check prevents the scheduler from repeatedly launching a
+        warm child that would immediately contend with that surviving write.
+        It deliberately does not query TypeDB or mutate mailbox work.
+        """
+
+        payload = self.cursor_payload()
+        guard = self.execution_timeout_guard_state(payload)
+        remaining = self.execution_timeout_guard_remaining_seconds(payload)
+        if remaining > 0:
+            return {
+                "ready": False,
+                "status": "deferred-timeout-guard",
+                "retryAfterSeconds": remaining,
+                "reason": str(
+                    guard.get("reason")
+                    or "이전 TypeDB 추론 종료 뒤 서버 작업 잔존 가능성을 확인하는 중입니다."
+                )[:220],
+                "executionTimeoutGuard": guard,
+            }
+        return {
+            "ready": True,
+            "status": "ready",
+            "executionTimeoutGuard": self.execution_timeout_guard_display_state(payload),
+        }
 
     def isolated_execution_preflight(self) -> Dict[str, object]:
         """Avoid spawning a killable child while another TypeDB writer owns it.
@@ -4059,17 +4082,14 @@ class OntologyReasoningRunner:
         else:
             dead_lease_recovery = {"status": "invalid", "clearedCount": 0}
         recovered_dead_lease = int(dead_lease_recovery.get("clearedCount") or 0) > 0
-        # A known-dead child cannot still own the recovered TypeDB boundary.
-        # Retry its durable pending ABox candidate promptly instead of adding
-        # the normal long failure backoff to every queued symbol. A stage
-        # known to precede TypeDB persistence gets the same safe recovery
-        # benefit; unknown/native stages retain the configured delay.
+        # A local lease is not a server-side cancellation receipt. TypeDB can
+        # continue finalising an ABox or schema transaction after the client
+        # process is gone, so reducing the delay merely because its lease was
+        # removed races the next writer into the still-running transaction.
+        # The retry policy may still use its bounded pre-native delay when the
+        # durable checkpoint proves no TypeDB write had started.
         stage_backoff_seconds = int(retry_policy.get("backoffSeconds") or configured_backoff_seconds)
-        backoff_seconds = (
-            min(stage_backoff_seconds, self.timeout_recovery_retry_seconds())
-            if recovered_dead_lease
-            else stage_backoff_seconds
-        )
+        backoff_seconds = stage_backoff_seconds
         retry_policy = {
             **retry_policy,
             "deadLeaseRecovered": recovered_dead_lease,
@@ -4534,50 +4554,25 @@ class OntologyReasoningRunner:
             }
         prewarm_recovery = self.rulebox_prewarm_backlog_recovery_state(requests)
         queue_metadata["ruleboxPrewarmRecovery"] = dict(prewarm_recovery)
-        rulebox_prewarm = self.rulebox_prewarm_readiness(
-            probe_when_fallback=bool(prewarm_recovery.get("eligible")) and not force,
-        )
-        # A strict installation always waits for compiled functions. In the
-        # usual fallback-enabled installation, only an aged multi-entry queue
-        # takes this recovery gate. This gives the dedicated compiler a
-        # coordinated turn and prevents the old loop where every pending
-        # request forced another serial direct-TypeQL projection forever.
-        prewarm_recovery_gate = bool(
-            prewarm_recovery.get("eligible")
-            and str(rulebox_prewarm.get("status") or "") in {
-                "provisioning",
-                # A cold RuleBox status read can itself time out while the
-                # old serial fallback owns TypeDB. Treat that as recovery
-                # work, not as permission to restart the same fallback and
-                # recreate the compiler-starvation loop.
-                "error",
-            }
-            and not force
-        )
-        if not rulebox_prewarm.get("ready") and (
-            self.rulebox_prewarm_required() or prewarm_recovery_gate
-        ):
+        # A receipt check is not free: it reads the complete RuleBox and both
+        # deployment namespaces.  For a fallback-enabled queue, that extra
+        # work competes with the exact direct TypeQL recovery we need to
+        # drain.  Only an explicitly strict installation probes and waits for
+        # the compiled receipt here.  The repository still checks the one
+        # execution namespace immediately before a native run.
+        rulebox_prewarm = self.rulebox_prewarm_readiness()
+        if not rulebox_prewarm.get("ready") and self.rulebox_prewarm_required():
             retry_after = int(
                 rulebox_prewarm.get("retryAfterSeconds")
                 or self.rulebox_prewarm_retry_seconds()
             )
-            if prewarm_recovery_gate:
-                retry_after = min(
-                    retry_after,
-                    self.rulebox_prewarm_backlog_recovery_retry_seconds(),
-                )
             return {
                 "status": "deferred-rulebox-prewarm",
                 "processedCount": 0,
                 "alertCount": 0,
                 "retryAfterSeconds": max(1, retry_after),
                 "deferredReason": (
-                    (
-                        "오래된 추론 대기열의 직렬 TypeQL 폴백을 중단하고 "
-                        "TypeDB RuleBox 함수 준비를 우선 완료합니다. "
-                        if prewarm_recovery_gate
-                        else "TypeDB RuleBox 함수 사전 준비가 완료될 때까지 네이티브 추론을 시작하지 않습니다. "
-                    )
+                    "TypeDB RuleBox 함수 사전 준비가 완료될 때까지 네이티브 추론을 시작하지 않습니다. "
                     + str(rulebox_prewarm.get("reason") or "")[:180]
                 ).strip(),
                 "ruleboxPrewarm": rulebox_prewarm,

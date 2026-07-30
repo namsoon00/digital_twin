@@ -128,6 +128,22 @@ class CoordinatorBlockedRunner(FakeRunner):
         }
 
 
+class TimeoutGuardBlockedRunner(FakeRunner):
+    def __init__(self):
+        super().__init__()
+        self.timeout_guard_calls = 0
+
+    def isolated_timeout_guard_preflight(self):
+        self.timeout_guard_calls += 1
+        return {
+            "ready": False,
+            "status": "deferred-timeout-guard",
+            "retryAfterSeconds": 240,
+            "reason": "a timed-out TypeDB transaction may still be finalising",
+            "executionTimeoutGuard": {"status": "open"},
+        }
+
+
 class CountingIsolatedCycle:
     def __init__(self):
         self.calls = 0
@@ -324,6 +340,20 @@ for raw in sys.stdin:
 
         self.assertEqual("ok", result["status"])
         self.assertEqual(1, child.calls)
+
+    def test_timeout_guard_skips_even_a_persistent_child_until_backoff_expires(self):
+        child = PersistentCountingCycle()
+        runner = TimeoutGuardBlockedRunner()
+        scheduler = OntologyReasoningScheduler(runner, 10, isolated_cycle=child)
+
+        result = scheduler.run_once(limit=1)
+
+        self.assertEqual("deferred", result["status"])
+        self.assertEqual(240, result["retryAfterSeconds"])
+        self.assertEqual(1, runner.timeout_guard_calls)
+        self.assertEqual(0, runner.orphan_recoveries)
+        self.assertEqual(0, child.calls)
+        self.assertEqual("open", result["executionTimeoutGuard"]["status"])
 
     def test_persistent_timeout_recovers_typedb_leases_in_a_replacement_child(self):
         child = PersistentTimeoutCycle()

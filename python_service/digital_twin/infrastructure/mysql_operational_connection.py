@@ -440,6 +440,17 @@ MYSQL_SCHEMA = [
     ) ENGINE=InnoDB DEFAULT CHARSET=utf8mb4 COLLATE=utf8mb4_unicode_ci
     """,
     """
+    CREATE TABLE IF NOT EXISTS monitor_snapshot_reasoning_inputs (
+        account_id VARCHAR(191) NOT NULL,
+        generated_at VARCHAR(40) NOT NULL DEFAULT '',
+        symbol VARCHAR(64) NOT NULL DEFAULT '',
+        payload_json LONGTEXT NOT NULL,
+        updated_at VARCHAR(40) NOT NULL,
+        PRIMARY KEY (account_id, symbol),
+        KEY idx_monitor_reasoning_inputs_account_generation (account_id, generated_at)
+    ) ENGINE=InnoDB DEFAULT CHARSET=utf8mb4 COLLATE=utf8mb4_unicode_ci
+    """,
+    """
     CREATE TABLE IF NOT EXISTS monitor_snapshot_history (
         account_id VARCHAR(191) NOT NULL,
         generated_at VARCHAR(40) NOT NULL DEFAULT '',

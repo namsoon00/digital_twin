@@ -85,10 +85,11 @@ from digital_twin.infrastructure.typedb_ontology import (
 
 
 class TypeDBOntologyRepositoryTests(unittest.TestCase):
-    def test_default_schema_function_provisioning_is_one_complete_rule(self):
+    def test_default_schema_function_provisioning_uses_a_bounded_idle_maintenance_batch(self):
         repository = TypeDBOntologyGraphRepository("127.0.0.1:1729")
 
-        self.assertEqual(1, repository.schema_function_provision_batch_size())
+        self.assertEqual(12, repository.schema_function_provision_batch_size())
+        self.assertEqual(1200.0, repository.schema_function_provision_timeout_seconds())
         self.assertTrue(repository.schema_function_direct_query_fallback_enabled())
 
     def test_pending_abox_activation_lookup_uses_the_world_scoped_control_id(self):

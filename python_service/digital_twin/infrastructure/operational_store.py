@@ -18,6 +18,7 @@ from .mysql_operational import (
     MySQLMarketTimeSeriesStore,
     MySQLModelReviewJobStore,
     MySQLMonitorStore,
+    MySQLOntologyReasoningMonitorStore,
     MySQLMonitoringCycleRecorder,
     MySQLNotificationJobStore,
     MySQLNotificationRuleStore,
@@ -87,6 +88,12 @@ def ontology_reasoning_mailbox_store(settings: Dict[str, str] = None):
 def monitor_store(settings: Dict[str, str] = None):
     configured = configured_settings(settings)
     return MySQLMonitorStore(configured)
+
+
+def ontology_reasoning_monitor_store(settings: Dict[str, str] = None):
+    """Return the read-only, target-scoped monitor source for TypeDB replay."""
+    configured = configured_settings(settings)
+    return MySQLOntologyReasoningMonitorStore(configured)
 
 
 def monitoring_cycle_recorder(

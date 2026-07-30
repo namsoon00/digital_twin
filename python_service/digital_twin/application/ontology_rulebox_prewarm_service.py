@@ -4,9 +4,9 @@ The active RuleBox is an investment-policy contract. Its generated TypeDB
 functions are a compiled implementation detail, so compilation belongs to a
 separate bounded worker and must never be started by a live alert inference.
 When a receipt is cold, the live path can use its bounded direct-TypeQL
-fallback.  A permanently busy queue must not, however, starve compilation
-forever: an aged backlog is allowed to give this worker a short, coordinated
-recovery turn.
+fallback.  Schema commits are deliberately kept out of a live queue: TypeDB
+can continue compiling a commit after a client deadline, so forcing a compiler
+turn into an aged backlog makes the queue worse rather than recovering it.
 """
 
 from __future__ import annotations
@@ -62,15 +62,14 @@ class OntologyRuleboxPrewarmRunner:
         return value not in DISABLED_VALUES
 
     def backlog_recovery_enabled(self) -> bool:
-        """Allow a cold compiler to recover an already-aged queue.
+        """Expose aged-backlog compiler risk in diagnostics.
 
-        This does not bypass TypeDB's global projection coordinator.  It only
-        lets the dedicated worker *try* to acquire the same bounded writer
-        boundary once direct TypeQL fallback has demonstrably failed to drain
-        the replaceable latest-state queue.
+        This flag no longer authorizes a schema write while live work is
+        pending.  It remains a compatibility setting so operators can see
+        when a cold RuleBox coincides with an old durable queue.
         """
         value = str(
-            self.settings.get("ontologyRuleboxPrewarmBacklogRecoveryEnabled") or "1"
+            self.settings.get("ontologyRuleboxPrewarmBacklogRecoveryEnabled") or "0"
         ).strip().lower()
         return value not in DISABLED_VALUES
 
@@ -250,11 +249,28 @@ class OntologyRuleboxPrewarmRunner:
             3600,
         )
 
+    def idle_quiet_seconds(self) -> int:
+        """Require a sustained empty queue before opening a schema writer.
+
+        TypeDB schema function commits can take minutes and are not reliably
+        cancelled by disconnecting their client.  A momentarily empty mailbox
+        is not enough evidence that it is safe to begin one; the scheduler
+        owns the durable quiet-period check before it starts an isolated
+        compiler child.
+        """
+        return _integer_setting(
+            self.settings,
+            "ontologyRuleboxPrewarmIdleQuietSeconds",
+            300,
+            30,
+            24 * 60 * 60,
+        )
+
     def execution_timeout_seconds(self) -> int:
         return _integer_setting(
             self.settings,
             "ontologyRuleboxPrewarmExecutionTimeoutSeconds",
-            45,
+            1500,
             30,
             1800,
         )
@@ -278,6 +294,7 @@ class OntologyRuleboxPrewarmRunner:
         result = {
             "enabled": self.enabled(),
             "intervalSeconds": self.interval_seconds(),
+            "idleQuietSeconds": self.idle_quiet_seconds(),
             "executionTimeoutSeconds": self.execution_timeout_seconds(),
             "executionTimeoutGraceSeconds": self.execution_timeout_grace_seconds(),
             "processIsolationEnabled": self.process_isolation_enabled(),
@@ -340,19 +357,16 @@ class OntologyRuleboxPrewarmRunner:
         queue = self.reasoning_queue_state()
         pending = self.pending_reasoning_count(queue)
         recovery = self.backlog_recovery_state(queue)
-        # Schema compilation uses TypeDB's global schema boundary. Ordinarily
-        # it yields to live work, but direct-TypeQL fallback is intentionally
-        # serial. Once that fallback leaves a durable latest-state queue old,
-        # continuously yielding creates a feedback loop: the queue prevents
-        # compilation and compilation never removes the serial bottleneck.
-        # The recovery pass still acquires the same global coordinator as a
-        # live projection, so it cannot overlap a mutable ABox/InferenceBox
-        # operation.
+        # A TypeDB schema commit can keep its compiler busy after a client has
+        # timed out or an isolated worker has exited.  Starting one while an
+        # alert queue is waiting therefore turns a bounded recovery task into
+        # a minutes-long server-wide stall.  Preserve the latest-state queue,
+        # let live inference use the direct TypeQL path, and run compilation
+        # only during a genuinely idle interval (or an explicit force pass).
         if (
             self.defer_when_reasoning_pending()
             and pending
             and not force
-            and not recovery.get("eligible")
         ):
             # Do not even read TypeDB deployment receipts here. A readiness
             # check opens RuleBox and receipt reads for both namespaces and
@@ -360,7 +374,11 @@ class OntologyRuleboxPrewarmRunner:
             # protecting. The compact queue probe is sufficient to yield;
             # readiness will be checked only after the queue is quiet.
             return {
-                "status": "deferred-reasoning-pending",
+                "status": (
+                    "deferred-aged-reasoning-backlog"
+                    if recovery.get("eligible")
+                    else "deferred-reasoning-pending"
+                ),
                 "configured": True,
                 "functionsReady": None,
                 "pendingRuleCount": None,
@@ -369,8 +387,9 @@ class OntologyRuleboxPrewarmRunner:
                 "backlogRecovery": recovery,
                 "prewarmReadinessDeferred": True,
                 "reason": (
-                    "Live ontology reasoning is pending; the RuleBox worker does not access TypeDB and any cold "
-                    "function receipt uses the bounded direct TypeQL fallback."
+                    "Live ontology reasoning is pending; the RuleBox compiler does not open a TypeDB schema "
+                    "transaction. Any cold function receipt uses the bounded direct TypeQL fallback until the "
+                    "durable queue is empty."
                 ),
                 "recommendedRetryAfterSeconds": self.interval_seconds(),
                 "durationMs": 0,

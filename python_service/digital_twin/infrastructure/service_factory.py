@@ -203,6 +203,7 @@ def build_monitor_runner(
     snapshot_builder: Callable = None,
     ontology_projection_enabled: bool = None,
     ontology_repository=None,
+    monitor_store=None,
 ) -> MonitorRunner:
     configured_settings = dict(settings or runtime_settings())
     configured_settings["typedbNativeRuleExecutionEnabled"] = "1" if typedb_native_rule_execution_enabled else "0"
@@ -220,7 +221,10 @@ def build_monitor_runner(
     # realtime monitor consumes its cache so a vendor timeout cannot hold a
     # price/technical alert behind yfinance, news, or disclosure collection.
     monitor_snapshot_settings["_externalSignalsCacheOnly"] = "1"
-    store = stores.monitor_store(configured_settings)
+    # The normal monitor owns the full research archive.  Isolated TypeDB
+    # replay injects a read-only, target-scoped source store so selecting one
+    # mailbox symbol does not deserialize every provider document first.
+    store = monitor_store or stores.monitor_store(configured_settings)
     market_time_series_store = stores.market_time_series_store(configured_settings)
     ontology_quality_store = stores.ontology_quality_sample_store(configured_settings)
     projection_repository = ontology_repository or ontology_repository_from_settings(configured_settings)
@@ -805,7 +809,7 @@ def build_ontology_reasoning_runner(settings=None, event_publisher=None) -> Onto
     ontology_repository = ontology_repository_from_settings(configured_settings)
     cursor_store = stores.ontology_reasoning_cursor_store(reasoning_store_settings)
     snapshot_readiness_source = LatestMonitorSnapshotReasoningSource(
-        stores.monitor_store(reasoning_store_settings),
+        stores.ontology_reasoning_monitor_store(reasoning_store_settings),
         settings=reasoning_monitor_settings,
     )
 
@@ -917,15 +921,19 @@ def build_ontology_reasoning_runner(settings=None, event_publisher=None) -> Onto
         }
 
     def reasoning_monitor_runner():
+        reasoning_snapshot_store = stores.ontology_reasoning_monitor_store(
+            reasoning_store_settings,
+        )
         runner = build_monitor_runner(
             registry.load(),
             settings=reasoning_monitor_settings,
             typedb_native_rule_execution_enabled=reasoning_native_rule_execution_enabled,
             ontology_projection_enabled=True,
             ontology_repository=ontology_repository,
+            monitor_store=reasoning_snapshot_store,
         )
         runner.snapshot_builder = LatestMonitorSnapshotReasoningSource(
-            runner.store,
+            reasoning_snapshot_store,
             settings=reasoning_monitor_settings,
         )
         return runner

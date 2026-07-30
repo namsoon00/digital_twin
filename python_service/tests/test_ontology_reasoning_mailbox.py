@@ -505,7 +505,7 @@ class OntologyReasoningMailboxTests(unittest.TestCase):
         self.assertEqual("ok", result["status"])
         self.assertEqual([["AAPL"]], self.monitor.calls)
 
-    def test_aged_multi_entry_queue_yields_direct_fallback_to_rulebox_recovery(self):
+    def test_aged_multi_entry_queue_keeps_using_bounded_direct_typeql_fallback(self):
         events = [
             realtime_request("prewarm-recovery-a", ["AAPL"], "2026-07-24T00:00:00Z"),
             realtime_request("prewarm-recovery-b", ["MSFT"], "2026-07-24T00:00:00Z"),
@@ -520,23 +520,17 @@ class OntologyReasoningMailboxTests(unittest.TestCase):
                 "ontologyRuleboxPrewarmBacklogRecoveryRetrySeconds": "5",
             },
         )
-        runner.rulebox_prewarm_probe = lambda: {
-            "status": "provisioning",
-            "functionsReady": False,
-            "pendingRuleCount": 3,
-            "reason": "RuleBox schema functions are being prepared.",
-        }
+        runner.rulebox_prewarm_probe = lambda: (_ for _ in ()).throw(
+            AssertionError("fallback-enabled aged queues must not scan the full prewarm state")
+        )
 
         result = runner.run_once()
 
-        self.assertEqual("deferred-rulebox-prewarm", result["status"])
-        self.assertEqual([], self.monitor.calls)
-        self.assertEqual(5, result["retryAfterSeconds"])
+        self.assertEqual("ok", result["status"])
+        self.assertEqual([["AAPL"]], self.monitor.calls)
         self.assertTrue(result["ruleboxPrewarmRecovery"]["eligible"])
-        self.assertTrue(result["ruleboxPrewarm"]["recoveryProbe"])
-        self.assertIn("직렬 TypeQL 폴백", result["deferredReason"])
 
-    def test_aged_queue_keeps_recovery_gate_when_prewarm_status_probe_errors(self):
+    def test_aged_queue_does_not_probe_prewarm_error_before_direct_fallback(self):
         events = [
             realtime_request("prewarm-recovery-error-a", ["AAPL"], "2026-07-24T00:00:00Z"),
             realtime_request("prewarm-recovery-error-b", ["MSFT"], "2026-07-24T00:00:00Z"),
@@ -551,17 +545,14 @@ class OntologyReasoningMailboxTests(unittest.TestCase):
                 "ontologyRuleboxPrewarmBacklogRecoveryRetrySeconds": "5",
             },
         )
-        runner.rulebox_prewarm_probe = lambda: {
-            "status": "error",
-            "functionsReady": False,
-            "reason": "TypeDB receipt probe timed out.",
-        }
+        runner.rulebox_prewarm_probe = lambda: (_ for _ in ()).throw(
+            AssertionError("fallback-enabled aged queues must not issue a prewarm status probe")
+        )
 
         result = runner.run_once()
 
-        self.assertEqual("deferred-rulebox-prewarm", result["status"])
-        self.assertEqual([], self.monitor.calls)
-        self.assertEqual(5, result["retryAfterSeconds"])
+        self.assertEqual("ok", result["status"])
+        self.assertEqual([["AAPL"]], self.monitor.calls)
         self.assertTrue(result["ruleboxPrewarmRecovery"]["eligible"])
 
     def test_waits_for_rulebox_prewarm_only_when_direct_typeql_fallback_is_disabled(self):

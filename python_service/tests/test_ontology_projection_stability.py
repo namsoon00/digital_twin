@@ -261,7 +261,7 @@ class OntologyProjectionStabilityTests(unittest.TestCase):
         self.assertEqual(300, runner.execution_timeout_guard_remaining_seconds(cursor.load()))
         self.assertEqual("open", runner.execution_timeout_guard_state(cursor.load())["status"])
 
-    def test_timeout_recovers_proven_dead_typedb_lease_before_short_retry(self):
+    def test_timeout_keeps_server_safe_backoff_after_local_lease_recovery(self):
         cursor = CursorStore()
         calls = []
         runner = self.runner(
@@ -273,14 +273,34 @@ class OntologyProjectionStabilityTests(unittest.TestCase):
                 "worldCount": 2,
             },
         )
-        runner.settings["ontologyReasoningTimeoutRecoveryRetrySeconds"] = "15"
-
         recorded = runner.record_execution_timeout(240, started_at="2026-07-22T00:00:00Z")
 
-        self.assertEqual(15, recorded["retryAfterSeconds"])
+        self.assertEqual(300, recorded["retryAfterSeconds"])
         self.assertEqual("cleared", recorded["typedbDeadLeaseRecovery"]["status"])
         self.assertEqual(2, recorded["executionTelemetry"]["typedbDeadLeaseRecovery"]["clearedCount"])
+        self.assertTrue(recorded["executionTelemetry"]["timeoutRetryPolicy"]["deadLeaseRecovered"])
         self.assertEqual([True], calls)
+
+    def test_parent_timeout_guard_defers_without_a_typedb_coordinator_probe(self):
+        cursor = CursorStore({
+            "executionTimeoutGuard": {
+                "status": "open",
+                "retryAfterAt": "2026-07-22T00:05:00Z",
+                "reason": "native inference timed out",
+            },
+        })
+        runner = self.runner(
+            cursor,
+            projection_coordinator_probe=lambda: (_ for _ in ()).throw(
+                AssertionError("timeout guard must not query TypeDB")
+            ),
+        )
+
+        result = runner.isolated_timeout_guard_preflight()
+
+        self.assertFalse(result["ready"])
+        self.assertEqual("deferred-timeout-guard", result["status"])
+        self.assertEqual(300, result["retryAfterSeconds"])
 
     def test_isolated_preflight_defers_while_a_live_typedb_writer_holds_the_coordinator(self):
         runner = self.runner(

@@ -58,6 +58,16 @@ class FullBatchRecordingConnection(RecordingConnection):
         return Cursor(rowcount=self.rowcount)
 
 
+class CandidateRecordingConnection(RecordingConnection):
+    def execute(self, sql, params=()):
+        rendered = str(sql)
+        values = tuple(params or ())
+        self.calls.append((rendered, values))
+        if "SELECT event_id" in rendered:
+            return Cursor(rows=[{"event_id": "event-old-1"}, {"event_id": "event-old-2"}])
+        return Cursor(rowcount=2)
+
+
 class MySQLStorageMaintenanceTests(unittest.TestCase):
     def test_realtime_fast_path_skips_schema_and_constructor_retention(self):
         self.assertTrue(mysql_operational_schema_bootstrap_enabled({}))
@@ -141,6 +151,29 @@ class MySQLStorageMaintenanceTests(unittest.TestCase):
         ]
         self.assertEqual([2], [params[-1] for params in outbox_params])
 
+    def test_large_domain_event_retention_selects_then_deletes_small_primary_key_set(self):
+        connection = CandidateRecordingConnection()
+        result = apply_mysql_operational_history_retention(
+            connection,
+            {"operationalHistoryRetentionEnabled": "1", "operationalHistoryRetentionBatchSize": "50"},
+            now=datetime(2026, 7, 30, tzinfo=timezone.utc),
+            use_lock=False,
+        )
+
+        domain_queries = [
+            (sql, params)
+            for sql, params in connection.calls
+            if "domain_events" in sql
+        ]
+        self.assertTrue(any("SELECT event_id" in sql for sql, _params in domain_queries))
+        delete_params = [
+            params
+            for sql, params in domain_queries
+            if "DELETE FROM `domain_events` WHERE `event_id` IN" in sql
+        ]
+        self.assertEqual([("event-old-1", "event-old-2")], delete_params)
+        self.assertEqual(2, result["policies"]["count:domain_events"])
+
     def test_completed_outbox_indexes_and_connection_loss_codes_are_registered(self):
         index_names = {
             index.name
@@ -192,6 +225,35 @@ class MySQLStorageMaintenanceTests(unittest.TestCase):
             for call in stores.call_args_list
         ))
         sleep.assert_called_once_with(0.25)
+
+    def test_operational_cleanup_retries_deadlock_with_configured_backoff(self):
+        class Store:
+            def connect(self):
+                return self
+
+            def __enter__(self):
+                return self
+
+            def __exit__(self, *_args):
+                return False
+
+        with patch(
+            "digital_twin.infrastructure.cli.MySQLOperationalConnection",
+            side_effect=[Store(), Store()],
+        ), patch(
+            "digital_twin.infrastructure.cli.apply_mysql_operational_history_retention",
+            side_effect=[Exception(1213, "Deadlock"), {"deleted": 0, "tables": {}}],
+        ), patch(
+            "digital_twin.infrastructure.cli.mysql_operational_compaction_tables",
+            return_value=[],
+        ), patch(
+            "digital_twin.infrastructure.cli.mysql_deadlock_retry_delay_milliseconds",
+            return_value=17,
+        ), patch("digital_twin.infrastructure.cli.time.sleep") as sleep:
+            result = run_mysql_operational_cleanup({"operationalHistoryRetentionEnabled": "1"})
+
+        self.assertEqual(1, result["deadlockRetryCount"])
+        sleep.assert_called_once_with(0.017)
 
     def test_duplicated_event_and_delivery_history_defaults_are_compact(self):
         self.assertEqual(20, operational_large_domain_event_keep_count({}))

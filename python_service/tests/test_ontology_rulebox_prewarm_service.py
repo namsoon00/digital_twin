@@ -22,6 +22,23 @@ class FakeRepository:
         return dict(self.result)
 
 
+class QueueGuardedRunner(FakeRepository):
+    def __init__(self, queue):
+        super().__init__()
+        self.queue = dict(queue or {})
+
+    def reasoning_queue_state(self):
+        return dict(self.queue)
+
+    @staticmethod
+    def pending_reasoning_count(payload):
+        return int(dict(payload or {}).get("effectivePendingCount") or 0)
+
+    @staticmethod
+    def idle_quiet_seconds():
+        return 300
+
+
 class OntologyRuleboxPrewarmRunnerTests(unittest.TestCase):
     def test_runs_background_prewarm_only_when_explicitly_enabled_and_queue_is_empty(self):
         repository = FakeRepository({
@@ -112,7 +129,7 @@ class OntologyRuleboxPrewarmRunnerTests(unittest.TestCase):
         self.assertEqual([], repository.calls)
         self.assertEqual(0, repository.status_calls)
 
-    def test_aged_multi_entry_queue_prioritizes_bounded_prewarm_recovery(self):
+    def test_aged_multi_entry_queue_keeps_schema_compilation_out_of_live_work(self):
         repository = FakeRepository({
             "status": "provisioning",
             "functionsReady": False,
@@ -138,12 +155,11 @@ class OntologyRuleboxPrewarmRunnerTests(unittest.TestCase):
 
         result = runner.run_once()
 
-        self.assertEqual("provisioning", result["status"])
-        self.assertEqual([False], repository.calls)
-        self.assertTrue(result["queuePriority"])
+        self.assertEqual("deferred-aged-reasoning-backlog", result["status"])
+        self.assertEqual([], repository.calls)
         self.assertTrue(result["backlogRecovery"]["eligible"])
         self.assertEqual(1, result["backlogRecovery"]["activeEntryCount"])
-        self.assertEqual(5, result["recommendedRetryAfterSeconds"])
+        self.assertEqual(15, result["recommendedRetryAfterSeconds"])
 
     def test_status_reports_isolation_and_current_prewarm_state(self):
         repository = FakeRepository({"status": "ok", "functionsReady": True})
@@ -160,6 +176,7 @@ class OntologyRuleboxPrewarmRunnerTests(unittest.TestCase):
 
         self.assertTrue(status["enabled"])
         self.assertEqual(7, status["intervalSeconds"])
+        self.assertEqual(300, status["idleQuietSeconds"])
         self.assertTrue(status["processIsolationEnabled"])
         self.assertTrue(status["deferWhenReasoningPending"])
         self.assertTrue(status["prewarm"]["functionsReady"])
@@ -173,7 +190,7 @@ class OntologyRuleboxPrewarmRunnerTests(unittest.TestCase):
         self.assertEqual(30, scheduler.retry_interval_seconds({"status": "deferred-reasoning-pending"}))
         self.assertEqual(15, scheduler.retry_interval_seconds({"status": "ok"}))
 
-    def test_scheduler_retries_an_aged_backlog_recovery_without_the_normal_idle_delay(self):
+    def test_scheduler_does_not_promote_an_aged_backlog_compile_retry(self):
         scheduler = OntologyRuleboxPrewarmScheduler(FakeRepository(), 15)
 
         retry = scheduler.retry_interval_seconds({
@@ -182,7 +199,17 @@ class OntologyRuleboxPrewarmRunnerTests(unittest.TestCase):
             "backlogRecovery": {"eligible": True},
         })
 
-        self.assertEqual(5, retry)
+        self.assertEqual(30, retry)
+
+    def test_scheduler_never_starts_an_isolated_compiler_while_queue_is_nonempty(self):
+        runner = QueueGuardedRunner({"effectivePendingCount": 3})
+        scheduler = OntologyRuleboxPrewarmScheduler(runner, 15)
+
+        result = scheduler.run_once()
+
+        self.assertEqual("deferred-reasoning-pending", result["status"])
+        self.assertEqual(3, result["reasoningPendingCount"])
+        self.assertEqual([], runner.calls)
 
 
 if __name__ == "__main__":

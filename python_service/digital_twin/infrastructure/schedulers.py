@@ -689,6 +689,36 @@ class OntologyReasoningScheduler:
     def run_once(self, limit: int = 0):
         if not self.process_isolation_enabled():
             return self.runner.run_once(limit=limit)
+        # This guard reads only the durable cursor. A terminated client does
+        # not prove that TypeDB stopped its server-side transaction, so do not
+        # even wake the persistent sidecar while its timeout backoff is open.
+        # It is intentionally separate from the TypeDB coordinator preflight,
+        # which remains inside a killable persistent child.
+        timeout_guard_preflight = {}
+        timeout_guard_check = getattr(self.runner, "isolated_timeout_guard_preflight", None)
+        if callable(timeout_guard_check):
+            try:
+                timeout_guard_preflight = dict(timeout_guard_check() or {})
+            except Exception:
+                # The child remains authoritative if the lightweight cursor
+                # read itself is temporarily unavailable.
+                timeout_guard_preflight = {"ready": True, "status": "timeout-guard-probe-error"}
+        if timeout_guard_preflight and not bool(timeout_guard_preflight.get("ready", True)):
+            return {
+                "status": "deferred",
+                "processedCount": 0,
+                "alertCount": 0,
+                "retryAfterSeconds": max(
+                    1,
+                    int(timeout_guard_preflight.get("retryAfterSeconds") or self.interval_seconds),
+                ),
+                "deferredReason": str(
+                    timeout_guard_preflight.get("reason")
+                    or "이전 TypeDB 추론의 안전 재시도 대기가 끝날 때까지 새 워커를 시작하지 않습니다."
+                )[:220],
+                "executionTimeoutGuard": dict(timeout_guard_preflight.get("executionTimeoutGuard") or {}),
+                "isolatedTimeoutGuardPreflight": timeout_guard_preflight,
+            }
         recovery = {}
         recover_orphaned = getattr(self.runner, "recover_orphaned_mailbox_work", None)
         if callable(recover_orphaned):
@@ -1008,14 +1038,19 @@ class OntologyRuleboxPrewarmScheduler:
 
     def __init__(self, runner, interval_seconds: int, error_reporter=None, isolated_cycle=None):
         self.runner = runner
-        # During an aged queue recovery the prewarm runner asks for a short
-        # retry cadence.  Keep the scheduler capable of honoring it; ordinary
-        # healthy passes still use the configured (longer) interval.
+        # Schema commits are permitted only while the durable reasoning queue
+        # is empty.  A busy queue is a reason to wait, never a reason to retry
+        # compilation more aggressively.
         self.interval_seconds = max(5, int(interval_seconds or 15))
         self.error_reporter = error_reporter or operational_error_reporter()
         self.isolated_cycle = isolated_cycle
         self.last_signature = ""
         self.last_report_at = 0.0
+        # Do not assume an empty queue immediately after a worker restart is
+        # a maintenance window. The parent scheduler survives isolated child
+        # exits and is the one place that can measure a continuous quiet
+        # interval without persisting compiler state in TypeDB.
+        self.last_reasoning_activity_at = time.monotonic()
         self.running = True
 
     def stop(self, *_args) -> None:
@@ -1035,7 +1070,72 @@ class OntologyRuleboxPrewarmScheduler:
         configured = getattr(self.runner, "execution_timeout_grace_seconds", None)
         return max(1, int(configured() if callable(configured) else 10))
 
+    def idle_quiet_seconds(self) -> int:
+        configured = getattr(self.runner, "idle_quiet_seconds", None)
+        return max(30, int(configured() if callable(configured) else 300))
+
+    def idle_compile_guard(self) -> dict:
+        """Return a no-TypeDB compiler deferral while live work is recent.
+
+        The runner's queue probe reads MySQL mailbox state only. Keeping this
+        check in the parent prevents a just-created isolated child from
+        starting a schema transaction in the brief gap between reasoning
+        batches.
+        """
+        queue_reader = getattr(self.runner, "reasoning_queue_state", None)
+        pending_reader = getattr(self.runner, "pending_reasoning_count", None)
+        if not callable(queue_reader) or not callable(pending_reader):
+            return {}
+        try:
+            queue = dict(queue_reader() or {})
+            pending = max(0, int(pending_reader(queue) or 0))
+        except Exception:
+            # A compiler pass is lower priority than a queue visibility
+            # failure. Treat an unavailable queue probe as recent live work.
+            self.last_reasoning_activity_at = time.monotonic()
+            return {
+                "status": "deferred-reasoning-queue-probe",
+                "configured": True,
+                "functionsReady": None,
+                "pendingRuleCount": None,
+                "reasoningPendingCount": 0,
+                "reason": "Reasoning queue state could not be confirmed; RuleBox compilation remains idle.",
+                "recommendedRetryAfterSeconds": self.interval_seconds,
+                "durationMs": 0,
+            }
+        now = time.monotonic()
+        if pending:
+            self.last_reasoning_activity_at = now
+            return {
+                "status": "deferred-reasoning-pending",
+                "configured": True,
+                "functionsReady": None,
+                "pendingRuleCount": None,
+                "reasoningPendingCount": pending,
+                "reasoningQueue": queue,
+                "reason": "Live ontology reasoning is pending; RuleBox compilation remains idle.",
+                "recommendedRetryAfterSeconds": self.interval_seconds,
+                "durationMs": 0,
+            }
+        remaining = self.idle_quiet_seconds() - (now - self.last_reasoning_activity_at)
+        if remaining > 0:
+            return {
+                "status": "deferred-idle-quiet-period",
+                "configured": True,
+                "functionsReady": None,
+                "pendingRuleCount": None,
+                "reasoningPendingCount": 0,
+                "reasoningQueue": queue,
+                "reason": "RuleBox schema compilation waits for a sustained empty reasoning queue.",
+                "recommendedRetryAfterSeconds": max(1, int(remaining + 0.999)),
+                "durationMs": 0,
+            }
+        return {}
+
     def run_once(self):
+        guard = self.idle_compile_guard()
+        if guard:
+            return guard
         if not self.process_isolation_enabled():
             return self.runner.run_once()
         return self.isolated_cycle.run_once(
@@ -1086,21 +1186,12 @@ class OntologyRuleboxPrewarmScheduler:
             return max(self.interval_seconds, recommended, 300)
         if status == "error":
             return max(self.interval_seconds, recommended, 60)
-        recovery = payload.get("backlogRecovery")
-        recovery = recovery if isinstance(recovery, dict) else {}
-        if (
-            bool(recovery.get("eligible"))
-            and status in {"provisioning", "deferred-projection-coordinator"}
-        ):
-            # The rule compiler owns the same global TypeDB coordinator as a
-            # live projection. A failed acquisition is therefore harmless;
-            # retry promptly so a just-finished serial fallback cannot win
-            # every idle gap and starve compilation indefinitely.
-            return max(3, recommended or 5)
         if status in {
             "provisioning",
             "deferred-projection-coordinator",
             "deferred-reasoning-pending",
+            "deferred-aged-reasoning-backlog",
+            "deferred-idle-quiet-period",
             "deferred-reasoning-queue-probe",
         }:
             return max(self.interval_seconds, recommended, 30)

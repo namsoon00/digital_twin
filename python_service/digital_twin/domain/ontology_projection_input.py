@@ -23,6 +23,7 @@ from .security_lines import security_lines_for_symbol
 
 
 ONTOLOGY_PROJECTION_INPUT_VERSION = "ontology-projection-input-v1"
+ONTOLOGY_REASONING_SNAPSHOT_INPUT_VERSION = "ontology-reasoning-snapshot-input-v1"
 
 SYMBOL_SIGNAL_GROUPS = {
     "secFilings",
@@ -646,22 +647,18 @@ def _compact_crypto(value: object) -> Dict[str, object]:
     return result
 
 
-def compact_external_signals_for_ontology(
+def _compact_global_external_signals_for_ontology(
     external_signals: Mapping[str, object] = None,
-    *,
-    target_symbols: Iterable[object] = None,
-    settings: Mapping[str, object] = None,
 ) -> Dict[str, object]:
-    """Return the bounded external-signal view consumed by the ABox builder.
+    """Copy only the shared, non-symbol-scoped ABox input facts.
 
-    ``target_symbols`` narrows only symbol-keyed provider groups.  Global
-    macro/freshness facts remain because they are genuine shared dependencies
-    of the selected subject.  The returned dictionary contains no mutable
-    values from the source payload.
+    The live reasoning cache stores these once per account generation.  It
+    deliberately leaves quote, filing, research and other symbol payloads to
+    the per-symbol rows so a one-symbol TypeDB turn does not have to decode a
+    whole portfolio's provider archive first.
     """
 
     source = external_signals if isinstance(external_signals, Mapping) else {}
-    allowed_symbols = projection_signal_symbols(target_symbols, settings)
     result: Dict[str, object] = {}
     for key in ["macro", "fxRates", "cryptoMarkets"]:
         if key not in source:
@@ -685,10 +682,176 @@ def compact_external_signals_for_ontology(
             )
     if source.get("fetchedAt") not in (None, ""):
         result["fetchedAt"] = _text(source.get("fetchedAt"), 120)
+    return result
+
+
+def compact_symbol_external_signals_for_ontology(
+    external_signals: Mapping[str, object] = None,
+    *,
+    target_symbols: Iterable[object] = None,
+    settings: Mapping[str, object] = None,
+) -> Dict[str, object]:
+    """Return bounded symbol-scoped facts without duplicating global facts."""
+
+    source = external_signals if isinstance(external_signals, Mapping) else {}
+    allowed_symbols = projection_signal_symbols(target_symbols, settings)
+    result: Dict[str, object] = {}
     for group in sorted(SYMBOL_SIGNAL_GROUPS):
         compact = _compact_symbol_group(group, source.get(group), allowed_symbols)
         if compact:
             result[group] = compact
+    return result
+
+
+def compact_external_signals_for_ontology(
+    external_signals: Mapping[str, object] = None,
+    *,
+    target_symbols: Iterable[object] = None,
+    settings: Mapping[str, object] = None,
+) -> Dict[str, object]:
+    """Return the bounded external-signal view consumed by the ABox builder.
+
+    ``target_symbols`` narrows only symbol-keyed provider groups.  Global
+    macro/freshness facts remain because they are genuine shared dependencies
+    of the selected subject.  The returned dictionary contains no mutable
+    values from the source payload.
+    """
+
+    return {
+        **_compact_global_external_signals_for_ontology(external_signals),
+        **compact_symbol_external_signals_for_ontology(
+            external_signals,
+            target_symbols=target_symbols,
+            settings=settings,
+        ),
+    }
+
+
+def compact_monitor_runtime_metadata_for_ontology(value: object) -> Dict[str, object]:
+    """Keep the bounded runtime facts required by live ABox replay.
+
+    These fields were previously read by deserialising the whole monitor
+    record.  They are not a decision result: account context, proxy quotes and
+    observation baselines are source facts that the existing projection and
+    monitor paths already consume.  Prior ontology output stays out of the
+    live ABox cache except for the small operational missing-inference marker
+    used to avoid duplicate system diagnostics.
+    """
+
+    source = value if isinstance(value, Mapping) else {}
+    result: Dict[str, object] = {}
+    for key in [
+        "accountContext",
+        "connectionFailureStreak",
+        "lastConnectionFailure",
+        "marketObservationBaselines",
+        "marketProxyQuotes",
+        "marketSignalProxyQuotes",
+    ]:
+        if key in source and source.get(key) not in (None, ""):
+            result[key] = _bounded_value(
+                source.get(key),
+                text_limit=900,
+                list_limit=40,
+                map_limit=100,
+                depth=4,
+            )
+    ontology = source.get("ontology") if isinstance(source.get("ontology"), Mapping) else {}
+    inference_missing = ontology.get("inferenceMissingState") if isinstance(ontology, Mapping) else None
+    if isinstance(inference_missing, Mapping):
+        result["ontology"] = {
+            "inferenceMissingState": _bounded_value(
+                inference_missing,
+                text_limit=500,
+                list_limit=20,
+                map_limit=40,
+                depth=3,
+            ),
+        }
+    return result
+
+
+def reasoning_snapshot_symbols(state: Mapping[str, object] = None) -> Set[str]:
+    """Return all source subjects that need their own cached input row."""
+
+    source = state if isinstance(state, Mapping) else {}
+    symbols = set()
+    for key in ("positions", "watchlist"):
+        values = source.get(key)
+        if isinstance(values, Mapping):
+            symbols.update(_symbols(values.keys()))
+        elif isinstance(values, (list, tuple, set)):
+            for item in values:
+                if isinstance(item, Mapping):
+                    symbols.update(_symbols([item.get("symbol")]))
+    signals = source.get("externalSignals") if isinstance(source.get("externalSignals"), Mapping) else {}
+    for group in SYMBOL_SIGNAL_GROUPS:
+        values = signals.get(group) if isinstance(signals, Mapping) else None
+        if isinstance(values, Mapping):
+            symbols.update(_symbols(values.keys()))
+    return symbols
+
+
+def compact_monitor_state_for_reasoning_base(
+    state: Mapping[str, object] = None,
+    *,
+    settings: Mapping[str, object] = None,
+) -> Dict[str, object]:
+    """Build the once-per-account portion of a persisted reasoning input.
+
+    The normal monitor writes this in the same transaction as the verified
+    snapshot and mailbox ingress.  Thus a queued fact revision is never read
+    from an uncommitted or unrelated source cache.
+    """
+
+    source = state if isinstance(state, Mapping) else {}
+    result: Dict[str, object] = {
+        "version": ONTOLOGY_REASONING_SNAPSHOT_INPUT_VERSION,
+    }
+    for key in (
+        "accountId",
+        "accountLabel",
+        "provider",
+        "mode",
+        "status",
+        "generatedAt",
+        "portfolio",
+        "positions",
+        "watchlist",
+    ):
+        value = source.get(key)
+        if value not in (None, ""):
+            result[key] = deepcopy(value)
+    metadata = compact_monitor_runtime_metadata_for_ontology(source.get("metadata"))
+    if metadata:
+        result["metadata"] = metadata
+    external_signals = _compact_global_external_signals_for_ontology(source.get("externalSignals"))
+    if external_signals:
+        result["externalSignals"] = external_signals
+    return result
+
+
+def compact_monitor_state_for_reasoning_symbol(
+    state: Mapping[str, object] = None,
+    symbol: object = "",
+    *,
+    settings: Mapping[str, object] = None,
+) -> Dict[str, object]:
+    """Build the target-scoped portion of a persisted reasoning input."""
+
+    clean_symbol = str(symbol or "").upper().strip()
+    source = state if isinstance(state, Mapping) else {}
+    result: Dict[str, object] = {
+        "version": ONTOLOGY_REASONING_SNAPSHOT_INPUT_VERSION,
+        "symbol": clean_symbol,
+    }
+    external_signals = compact_symbol_external_signals_for_ontology(
+        source.get("externalSignals"),
+        target_symbols=[clean_symbol] if clean_symbol else None,
+        settings=settings,
+    )
+    if external_signals:
+        result["externalSignals"] = external_signals
     return result
 
 

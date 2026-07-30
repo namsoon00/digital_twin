@@ -60,7 +60,31 @@ class LatestMonitorSnapshotReasoningSource:
         # cadence. It is not an investment threshold or a decision rule.
         return max(60, min(3600, self.monitor_interval_seconds() * 2))
 
-    def current_state(self, account_id: str) -> Dict[str, object]:
+    @staticmethod
+    def target_symbols(reasoning_context: Dict[str, object] = None):
+        context = reasoning_context if isinstance(reasoning_context, dict) else {}
+        return [
+            str(symbol or "").upper().strip()
+            for symbol in context.get("targetSymbols") or []
+            if str(symbol or "").strip()
+        ]
+
+    def current_state(
+        self,
+        account_id: str,
+        reasoning_context: Dict[str, object] = None,
+    ) -> Dict[str, object]:
+        reader = getattr(self.monitor_store, "reasoning_snapshot_state", None)
+        if callable(reader):
+            try:
+                state = reader(
+                    str(account_id or ""),
+                    target_symbols=self.target_symbols(reasoning_context),
+                )
+            except Exception:
+                state = None
+            if isinstance(state, dict):
+                return copy.deepcopy(state)
         previous = getattr(self.monitor_store, "previous", {}) or {}
         state = previous.get(str(account_id or "")) if isinstance(previous, dict) else {}
         return copy.deepcopy(state) if isinstance(state, dict) else {}
@@ -199,7 +223,10 @@ class LatestMonitorSnapshotReasoningSource:
         )
 
     def __call__(self, account, reasoning_context: Dict[str, object] = None) -> AccountSnapshot:
-        state = self.current_state(getattr(account, "account_id", ""))
+        state = self.current_state(
+            getattr(account, "account_id", ""),
+            reasoning_context=reasoning_context,
+        )
         snapshot = account_snapshot_from_monitor_state(state)
         if not snapshot or not snapshot.has_live_account_data():
             return self.unavailable_snapshot(

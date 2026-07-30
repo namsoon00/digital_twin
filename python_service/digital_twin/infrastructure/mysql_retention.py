@@ -449,34 +449,43 @@ def _delete_large_domain_events_over_keep_count(
     if not event_names:
         return 0
     placeholders = ", ".join(["%s"] * len(event_names))
-    sql = (
+    candidate_sql = (
         """
-        DELETE events
-        FROM `domain_events` events
-        JOIN (
-            SELECT event_id
-            FROM (
-                SELECT event_id,
-                       name,
-                       ROW_NUMBER() OVER (
-                           PARTITION BY name
-                           ORDER BY occurred_at DESC, event_id DESC
-                       ) AS row_number_value
-                FROM `domain_events`
-                WHERE name IN (
+        SELECT event_id
+        FROM (
+            SELECT event_id,
+                   occurred_at,
+                   ROW_NUMBER() OVER (
+                       PARTITION BY name
+                       ORDER BY occurred_at DESC, event_id DESC
+                   ) AS row_number_value
+            FROM `domain_events`
+            WHERE name IN (
         """
         + placeholders
         + """
-                )
-            ) ranked
-            WHERE ranked.row_number_value > %s
-            LIMIT %s
-        ) stale
-          ON stale.event_id = events.event_id
+            )
+        ) ranked
+        WHERE ranked.row_number_value > %s
+        ORDER BY occurred_at ASC, event_id ASC
+        LIMIT %s
         """
     )
-    params = tuple(event_names) + (keep_count, batch_size)
-    return _delete_one_batch(connection, sql, params)
+    rows = _execute(connection, candidate_sql, tuple(event_names) + (keep_count, batch_size)).fetchall()
+    event_ids = []
+    for row in rows or []:
+        value = row.get("event_id") if isinstance(row, dict) else row[0]
+        event_id = str(value or "").strip()
+        if event_id:
+            event_ids.append(event_id)
+    if not event_ids:
+        return 0
+    delete_sql = (
+        "DELETE FROM `domain_events` WHERE `event_id` IN ("
+        + ", ".join(["%s"] * len(event_ids))
+        + ")"
+    )
+    return _delete_one_batch(connection, delete_sql, tuple(event_ids))
 
 
 def _delete_stale_projection_runs(connection, cutoff_iso: str, batch_size: int) -> int:

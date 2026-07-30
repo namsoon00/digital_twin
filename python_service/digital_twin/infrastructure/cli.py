@@ -14,7 +14,13 @@ from ..domain.portfolio import AlertEvent
 from .admin_preview import write_admin_preview
 from .event_bus import default_event_bus
 from . import operational_store as stores
-from .mysql_operational_connection import MySQLOperationalConnection, mysql_is_connection_lost
+from .mysql_operational_connection import (
+    MySQLOperationalConnection,
+    mysql_deadlock_retry_count,
+    mysql_deadlock_retry_delay_milliseconds,
+    mysql_is_connection_lost,
+    mysql_is_deadlock,
+)
 from .mysql_retention import (
     MYSQL_OPERATIONAL_COMPACTION_TABLES,
     apply_mysql_operational_history_retention,
@@ -955,7 +961,9 @@ def run_mysql_operational_cleanup(
     # normal pass is idempotent and uses a fresh pooled connection on retry;
     # explicit compaction is intentionally excluded because it is operator-led.
     retryable = not optimize and not drop_ephemeral_databases
-    for attempt in range(2):
+    connection_retries = 0
+    deadlock_retries = 0
+    while True:
         try:
             store = MySQLOperationalConnection(settings)
             with store.connect() as connection:
@@ -978,14 +986,24 @@ def run_mysql_operational_cleanup(
                         connection,
                         protected_databases=[str(settings.get("mysqlDatabase") or "")],
                     )
-            if attempt:
-                result["transientConnectionRetryCount"] = attempt
+            if connection_retries:
+                result["transientConnectionRetryCount"] = connection_retries
+            if deadlock_retries:
+                result["deadlockRetryCount"] = deadlock_retries
             return result
         except Exception as error:
-            if not retryable or attempt or not mysql_is_connection_lost(error):
+            if not retryable:
                 raise
-            time.sleep(0.25)
-    raise RuntimeError("unreachable MySQL operational cleanup retry state")
+            if mysql_is_deadlock(error) and deadlock_retries < mysql_deadlock_retry_count(settings):
+                deadlock_retries += 1
+                delay_ms = mysql_deadlock_retry_delay_milliseconds(settings, deadlock_retries)
+                time.sleep(delay_ms / 1000.0)
+                continue
+            if mysql_is_connection_lost(error) and connection_retries < 1:
+                connection_retries += 1
+                time.sleep(0.25)
+                continue
+            raise
 
 
 def maintenance_command(args) -> int:

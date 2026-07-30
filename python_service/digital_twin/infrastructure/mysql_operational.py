@@ -17,7 +17,12 @@ from .mysql_operational_core_stores import (
     MySQLRuntimeSettingsStore,
 )
 from .mysql_notification_config import MySQLNotificationRuleStore, MySQLNotificationTemplateStore
-from .mysql_monitoring_stores import MySQLEventLog, MySQLMonitoringCycleRecorder, MySQLMonitorStore
+from .mysql_monitoring_stores import (
+    MySQLEventLog,
+    MySQLMonitoringCycleRecorder,
+    MySQLMonitorStore,
+    MySQLOntologyReasoningMonitorStore,
+)
 from .mysql_market_stores import (
     MySQLMarketQuoteCache,
     MySQLModelReviewJobStore,

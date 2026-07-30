@@ -1353,17 +1353,17 @@ DEFAULT_TYPEDB_NATIVE_RULE_PARALLELISM = 4
 # activation and one InferenceBox publication; this value only controls how a
 # verified target set is split into read-only TypeDB work items in between.
 DEFAULT_TYPEDB_NATIVE_RULE_TARGET_PARALLELISM = 1
-# TypeDB recompiles the schema function graph at each deployment transaction.
-# A full RuleBox has dozens of generated functions, so a restart must never
-# submit that entire catalogue as one uninterruptible schema operation.  A
-# cold local compiler can retain a timed-out multi-function transaction after
-# the client exits; deploy one complete rule at a time so the next bounded
-# pass can make progress without keeping live inference behind a stale batch.
-DEFAULT_TYPEDB_SCHEMA_FUNCTION_PROVISION_BATCH_SIZE = 1
-# Large ABox migrations may need a long schema timeout. Generated functions do
-# not: their driver deadline stays short so a stalled compiler cannot retain
-# local TypeDB CPU after the deployment caller has stopped waiting.
-DEFAULT_TYPEDB_SCHEMA_FUNCTION_PROVISION_TIMEOUT_SECONDS = 30.0
+# TypeDB recompiles the stored-function graph at each schema transaction.
+# Deployment runs only after a sustained empty mailbox, so group a meaningful
+# but bounded number of complete rules into one commit. One-function batches
+# repeatedly recompile an almost identical RuleBox and turn a cold deployment
+# into hours of maintenance work.
+DEFAULT_TYPEDB_SCHEMA_FUNCTION_PROVISION_BATCH_SIZE = 12
+# Disconnecting a TypeDB client does not reliably cancel a schema compiler
+# commit. During the idle-only maintenance window, keep the client attached
+# long enough to receive the result and persist its deployment receipt rather
+# than repeatedly orphaning compiler work on the server.
+DEFAULT_TYPEDB_SCHEMA_FUNCTION_PROVISION_TIMEOUT_SECONDS = 1200.0
 TYPEDB_PROMOTED_NUMERIC_ATTRIBUTES = {
     "currentPrice": "ontology-current-price",
     "averagePrice": "ontology-average-price",
@@ -6146,7 +6146,7 @@ class TypeDBOntologyGraphRepository(GraphStoreOntologyRowMapperMixin, ScopedABox
         self._schema_function_provision_timeout_seconds = max(
             5.0,
             min(
-                60.0,
+                1800.0,
                 float(
                     number_or_none(schema_function_provision_timeout_seconds)
                     or DEFAULT_TYPEDB_SCHEMA_FUNCTION_PROVISION_TIMEOUT_SECONDS

@@ -31,7 +31,12 @@ from ..domain.notification_rules import (
 from ..domain.notification_templates import DEFAULT_NOTIFICATION_TEMPLATES, NotificationTemplate, alert_context, render_notification
 from ..domain.notifications import NotificationJob, notification_debug_number
 from ..domain.ontology_quality import OntologyQualitySample, build_ontology_quality_sample
-from ..domain.ontology_projection_input import compact_monitor_state_for_ontology
+from ..domain.ontology_projection_input import (
+    compact_monitor_state_for_ontology,
+    compact_monitor_state_for_reasoning_base,
+    compact_monitor_state_for_reasoning_symbol,
+    reasoning_snapshot_symbols,
+)
 from ..domain.portfolio import AccountSnapshot, AlertEvent, monitor_state_has_live_account_data
 from ..domain.repositories import MonitoringCycleRecordResult
 from ..domain.symbol_universe import ListedSymbol, normalize_market, normalize_symbol, utc_now_iso as symbol_utc_now_iso
@@ -204,6 +209,13 @@ class MySQLMonitorStore(MySQLOperationalConnection):
                 updated_at,
             ),
         )
+        self.upsert_reasoning_snapshot_inputs_with_connection(
+            connection,
+            account_id,
+            state,
+            generated_at=generated_at,
+            stamp=updated_at,
+        )
         connection.execute(
             """
             INSERT INTO monitor_snapshot_history (
@@ -216,9 +228,111 @@ class MySQLMonitorStore(MySQLOperationalConnection):
             (account_id, generated_at, json_dumps(state), json_dumps(temporal_projection), updated_at),
         )
 
+    def upsert_reasoning_snapshot_inputs_with_connection(
+        self,
+        connection,
+        account_id: str,
+        state: Dict[str, object],
+        *,
+        generated_at: str = "",
+        stamp: str = "",
+    ) -> None:
+        """Persist target-scoped TypeDB input beside its verified source row.
+
+        The durable mailbox event is inserted in the same monitoring-cycle
+        transaction.  Writing this cache here gives the reasoning worker a
+        small, revision-aligned input without asking it to decode the source
+        provider archive after it has already claimed live queue work.
+        """
+
+        current = dict(state or {}) if isinstance(state, dict) else {}
+        normalized_account_id = str(account_id or "").strip()
+        if not normalized_account_id:
+            return
+        updated_at = str(stamp or utc_now())
+        source_generated_at = str(generated_at or current.get("generatedAt") or updated_at)
+        base = compact_monitor_state_for_reasoning_base(
+            current,
+            settings=self.runtime_settings,
+        )
+        base["accountId"] = str(base.get("accountId") or normalized_account_id)
+        base["generatedAt"] = str(base.get("generatedAt") or source_generated_at)
+        inputs = [("", base)]
+        for symbol in sorted(reasoning_snapshot_symbols(current)):
+            inputs.append((
+                symbol,
+                compact_monitor_state_for_reasoning_symbol(
+                    current,
+                    symbol,
+                    settings=self.runtime_settings,
+                ),
+            ))
+        for symbol, payload in inputs:
+            connection.execute(
+                """
+                INSERT INTO monitor_snapshot_reasoning_inputs (
+                    account_id, generated_at, symbol, payload_json, updated_at
+                ) VALUES (%s, %s, %s, %s, %s)
+                ON DUPLICATE KEY UPDATE generated_at = VALUES(generated_at),
+                    payload_json = VALUES(payload_json), updated_at = VALUES(updated_at)
+                """,
+                (
+                    normalized_account_id,
+                    source_generated_at,
+                    str(symbol or ""),
+                    json_dumps(payload),
+                    updated_at,
+                ),
+            )
+        cached_symbols = [str(symbol or "") for symbol, _payload in inputs]
+        placeholders = ", ".join(["%s"] * len(cached_symbols))
+        connection.execute(
+            "DELETE FROM monitor_snapshot_reasoning_inputs "
+            "WHERE account_id = %s AND symbol NOT IN (" + placeholders + ")",
+            tuple([normalized_account_id] + cached_symbols),
+        )
+
     def upsert_snapshot_state(self, account_id: str, state: Dict[str, object]) -> None:
         with self.transaction() as connection:
             self.upsert_snapshot_state_with_connection(connection, account_id, state)
+
+    def backfill_reasoning_snapshot_inputs(self, account_ids: Iterable[str] = None) -> int:
+        """Seed current target-scoped inputs once during a rolling rollout.
+
+        This is a cache-only migration helper. It locks and reads the current
+        source row in the same transaction as the cache write, so it cannot
+        overwrite a newer monitor generation with a stale process-local copy.
+        Normal monitor commits keep the cache current afterwards.
+        """
+
+        requested = sorted({
+            str(account_id or "").strip()
+            for account_id in account_ids or []
+            if str(account_id or "").strip()
+        })
+        with self.transaction() as connection:
+            sql = "SELECT account_id, generated_at, payload_json FROM monitor_snapshots"
+            params = ()
+            if requested:
+                placeholders = ", ".join(["%s"] * len(requested))
+                sql += " WHERE account_id IN (" + placeholders + ")"
+                params = tuple(requested)
+            rows = connection.execute(sql + " FOR UPDATE", params).fetchall()
+            count = 0
+            stamp = utc_now()
+            for row in rows:
+                state = _json_loads(row.get("payload_json"), {})
+                if not isinstance(state, dict):
+                    continue
+                self.upsert_reasoning_snapshot_inputs_with_connection(
+                    connection,
+                    str(row.get("account_id") or ""),
+                    state,
+                    generated_at=str(row.get("generated_at") or state.get("generatedAt") or stamp),
+                    stamp=stamp,
+                )
+                count += 1
+        return count
 
     def save_snapshot(self, snapshot: AccountSnapshot) -> None:
         state = snapshot_state_for_persistence(snapshot, self.previous.get(snapshot.account_id))
@@ -275,6 +389,128 @@ class MySQLMonitorStore(MySQLOperationalConnection):
 
     def write(self) -> None:
         pass
+
+
+class MySQLOntologyReasoningMonitorStore(MySQLMonitorStore):
+    """Read only the target-scoped source cache used by live TypeDB replay.
+
+    ``MySQLMonitorStore`` deliberately retains the complete provider archive
+    for research and notification reconstruction.  The reasoning worker must
+    not load that archive merely to materialise one selected symbol.  This
+    adapter is intentionally read-only and is only valid with
+    ``source_snapshot_replay=True``.
+    """
+
+    def __init__(self, settings: Dict[str, str] = None):
+        # Do not call ``MySQLMonitorStore.__init__``: its normal role is to
+        # deserialize every raw monitor snapshot.  A persistent sidecar must
+        # start without that cost even before it knows which symbol is next.
+        MySQLOperationalConnection.__init__(self, settings)
+        self.payload = {"previous": {}, "sent": self.load_sent()}
+        self._reasoning_state_cache = {}
+
+    def load_previous(self) -> Dict[str, object]:
+        return {}
+
+    @staticmethod
+    def _symbols(target_symbols) -> List[str]:
+        return sorted({
+            str(symbol or "").upper().strip()
+            for symbol in target_symbols or []
+            if str(symbol or "").strip()
+        })
+
+    @staticmethod
+    def _merge_external_signals(base: Dict[str, object], incoming: Dict[str, object]) -> Dict[str, object]:
+        result = copy.deepcopy(base or {}) if isinstance(base, dict) else {}
+        for key, value in (incoming or {}).items():
+            if isinstance(value, dict) and isinstance(result.get(key), dict):
+                result[key] = {**result[key], **copy.deepcopy(value)}
+            else:
+                result[key] = copy.deepcopy(value)
+        return result
+
+    def legacy_snapshot_state(self, account_id: str) -> Dict[str, object]:
+        """Use one raw account row only while a rolling upgrade builds cache."""
+
+        try:
+            with self.connect() as connection:
+                row = connection.execute(
+                    "SELECT payload_json FROM monitor_snapshots WHERE account_id = %s LIMIT 1",
+                    (str(account_id or ""),),
+                ).fetchone() or {}
+        except Exception:
+            return {}
+        payload = _json_loads(row.get("payload_json"), {})
+        return dict(payload or {}) if isinstance(payload, dict) else {}
+
+    def reasoning_snapshot_state(
+        self,
+        account_id: str,
+        target_symbols=None,
+    ) -> Dict[str, object]:
+        """Rehydrate only the base row and the selected symbol input rows."""
+
+        normalized_account_id = str(account_id or "").strip()
+        selected_symbols = self._symbols(target_symbols)
+        cache_key = (normalized_account_id, tuple(selected_symbols))
+        if cache_key in self._reasoning_state_cache:
+            state = self._reasoning_state_cache[cache_key]
+            return copy.deepcopy(state) if isinstance(state, dict) else {}
+        if not normalized_account_id:
+            return {}
+        selection_sql = ""
+        params = [normalized_account_id]
+        if selected_symbols:
+            placeholders = ", ".join(["%s"] * len(selected_symbols))
+            selection_sql = " AND (symbol = '' OR symbol IN (" + placeholders + "))"
+            params.extend(selected_symbols)
+        try:
+            with self.connect() as connection:
+                rows = connection.execute(
+                    "SELECT generated_at, symbol, payload_json "
+                    "FROM monitor_snapshot_reasoning_inputs "
+                    "WHERE account_id = %s" + selection_sql,
+                    tuple(params),
+                ).fetchall()
+        except Exception:
+            rows = []
+        base_row = next((row for row in rows if not str(row.get("symbol") or "")), None)
+        if not base_row:
+            # Older deployments have the raw source and mailbox event but no
+            # cache table yet. Correctness wins for that one rolling-upgrade
+            # turn; subsequent monitor commits populate the small rows.
+            fallback = self.legacy_snapshot_state(normalized_account_id)
+            if fallback:
+                self.payload["previous"][normalized_account_id] = fallback
+            return copy.deepcopy(fallback)
+        base = _json_loads(base_row.get("payload_json"), {})
+        if not isinstance(base, dict):
+            return {}
+        expected_generated_at = str(base_row.get("generated_at") or base.get("generatedAt") or "")
+        state = copy.deepcopy(base)
+        state["accountId"] = str(state.get("accountId") or normalized_account_id)
+        state["generatedAt"] = str(state.get("generatedAt") or expected_generated_at)
+        signals = dict(state.get("externalSignals") or {}) if isinstance(state.get("externalSignals"), dict) else {}
+        for row in rows:
+            symbol = str(row.get("symbol") or "").upper().strip()
+            if not symbol or str(row.get("generated_at") or "") != expected_generated_at:
+                continue
+            payload = _json_loads(row.get("payload_json"), {})
+            source_signals = payload.get("externalSignals") if isinstance(payload, dict) else {}
+            if isinstance(source_signals, dict):
+                signals = self._merge_external_signals(signals, source_signals)
+        if signals:
+            state["externalSignals"] = signals
+        self._reasoning_state_cache[cache_key] = copy.deepcopy(state)
+        self.payload["previous"][normalized_account_id] = copy.deepcopy(state)
+        return copy.deepcopy(state)
+
+    def save_snapshot(self, _snapshot: AccountSnapshot) -> None:
+        raise RuntimeError("Ontology reasoning snapshot replay store is read-only")
+
+    def upsert_snapshot_state_with_connection(self, *_args, **_kwargs) -> None:
+        raise RuntimeError("Ontology reasoning snapshot replay store must not persist source snapshots")
 
 class MySQLMonitoringCycleRecorder(MySQLOperationalConnection):
     def __init__(

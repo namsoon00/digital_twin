@@ -5,8 +5,11 @@ from copy import deepcopy
 from digital_twin.domain.investment_research import research_evidence_from_external_signals
 from digital_twin.domain.ontology_projection_input import (
     compact_external_signals_for_ontology,
+    compact_monitor_state_for_reasoning_base,
+    compact_monitor_state_for_reasoning_symbol,
     compact_monitor_state_for_ontology,
     projection_input_summary,
+    reasoning_snapshot_symbols,
     temporal_research_signals_for_symbol,
 )
 from digital_twin.infrastructure.ontology_projection import PortfolioOntologyProjectionRecorder
@@ -242,6 +245,36 @@ class OntologyProjectionInputTests(unittest.TestCase):
         self.assertNotIn("aiAnalysis", evidence_row["payload"])
         self.assertTrue(any(item.evidence_id == "research:aapl:1" for item in parsed))
         self.assertLess(len(json.dumps(projected, ensure_ascii=False)), 20000)
+
+    def test_reasoning_snapshot_input_splits_shared_and_selected_symbol_facts(self):
+        state = {
+            "accountId": "main",
+            "accountLabel": "메인",
+            "provider": "toss",
+            "mode": "live",
+            "status": "ok",
+            "generatedAt": "2026-07-29T01:00:00Z",
+            "portfolio": {"totalValue": 1000},
+            "positions": {"AAPL": {"currentPrice": 200}},
+            "watchlist": {"NVDA": {"currentPrice": 180}},
+            "metadata": {
+                "marketProxyQuotes": {"SPY": {"currentPrice": 600}},
+                "ontology": {"projection": {"large": "ignore"}, "inferenceMissingState": {"missing": True}},
+            },
+            "externalSignals": self.source_signals(),
+        }
+
+        base = compact_monitor_state_for_reasoning_base(state)
+        aapl = compact_monitor_state_for_reasoning_symbol(state, "AAPL")
+
+        self.assertEqual({"AAPL", "NVDA"}, reasoning_snapshot_symbols(state))
+        self.assertIn("macro", base["externalSignals"])
+        self.assertNotIn("equityQuotes", base["externalSignals"])
+        self.assertEqual(600, base["metadata"]["marketProxyQuotes"]["SPY"]["currentPrice"])
+        self.assertEqual(True, base["metadata"]["ontology"]["inferenceMissingState"]["missing"])
+        self.assertNotIn("projection", base["metadata"]["ontology"])
+        self.assertEqual({"AAPL"}, set(aapl["externalSignals"]["equityQuotes"]))
+        self.assertNotIn("articleText", aapl["externalSignals"]["researchEvidence"]["AAPL"][0]["payload"])
 
 
 if __name__ == "__main__":

@@ -213,7 +213,7 @@
       "ontologyReasoningSourceFreshnessEnabled": "1",
       "ontologyReasoningRealtimeEventMaxAgeMinutes": "15",
       "ontologyReasoningResearchEventMaxAgeMinutes": "360",
-      "ontologyReasoningTelemetryHistoryLimit": "80",
+      "ontologyReasoningTelemetryHistoryLimit": "24",
       "ontologyReasoningMinIntervalSeconds": "180",
       "ontologyReasoningUrgentMinIntervalSeconds": "60",
       "ontologyReasoningFairnessMaxWaitSeconds": "900",
@@ -1711,7 +1711,7 @@
           "key": "ontologyReasoningTelemetryHistoryLimit",
           "label": "추론 실행 이력 보관 수",
           "type": "number",
-          "default": "80"
+          "default": "24"
         },
         {
           "key": "typedbNativeRuleTargetSymbolLimit",
@@ -1879,13 +1879,6 @@
           "label": "TypeDB 저장 전 시간 초과 재시도 대기",
           "type": "number",
           "default": "45",
-          "unit": "seconds"
-        },
-        {
-          "key": "ontologyReasoningTimeoutRecoveryRetrySeconds",
-          "label": "종료 워커 잠금 회수 후 빠른 재시도",
-          "type": "number",
-          "default": "30",
           "unit": "seconds"
         },
         {

@@ -628,7 +628,11 @@ class OntologyReasoningRunner:
         return int_setting(self.settings, "ontologyReasoningBatchSize", 200, 1, 200)
 
     def max_symbols_per_run(self) -> int:
-        return int_setting(self.settings, "ontologyReasoningMaxSymbolsPerRun", 20, 0, 200)
+        # One broad native generation can monopolize the only TypeDB writer
+        # for minutes. Keep the safe realtime fallback to one subject; an
+        # operator can raise the explicit runtime setting after measured
+        # per-target throughput proves that a larger wave stays within SLO.
+        return int_setting(self.settings, "ontologyReasoningMaxSymbolsPerRun", 1, 0, 200)
 
     def native_typedb_rule_execution_enabled(self) -> bool:
         """Return whether this runner delegates investment rules to TypeDB.
@@ -748,7 +752,7 @@ class OntologyReasoningRunner:
 
     def native_typedb_target_symbol_limit(self) -> int:
         """Bound schema-function work without reducing the complete ABox."""
-        return int_setting(self.settings, "typedbNativeRuleTargetSymbolLimit", 20, 1, 200)
+        return int_setting(self.settings, "typedbNativeRuleTargetSymbolLimit", 1, 1, 200)
 
     def effective_max_symbols_per_run(self) -> int:
         configured_limit = self.max_symbols_per_run()

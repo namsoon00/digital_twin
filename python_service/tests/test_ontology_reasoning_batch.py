@@ -26,6 +26,28 @@ class MemoryCursor:
 
 
 class AdaptiveOntologyReasoningBatchTests(unittest.TestCase):
+    def test_native_runtime_defaults_to_one_subject_even_when_backlog_is_old(self):
+        source = DomainEvent(name="market_data.collected", aggregate_id="market:KR", payload={})
+        request = ontology_reasoning_requested_event(
+            source,
+            "market-data-update",
+            ["005930", "000660", "035420"],
+            changed_count=3,
+            fact_types=["MarketQuote"],
+        )
+        runner = OntologyReasoningRunner(
+            event_reader=None,
+            cursor_store=None,
+            monitor_runner_factory=lambda: None,
+            settings={"ontologyReasoningTypeDbNativeRuleExecutionEnabled": "1"},
+        )
+
+        plan = runner.reasoning_batch_plan([request])
+
+        self.assertEqual(1, runner.effective_max_symbols_per_run())
+        self.assertEqual(1, plan["hardTargetSymbolLimit"])
+        self.assertEqual(1, plan["targetSymbolLimit"])
+
     def test_queue_pressure_expands_to_the_bounded_burst_target_set(self):
         plan = adaptive_reasoning_batch_plan(
             {

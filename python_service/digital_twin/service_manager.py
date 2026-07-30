@@ -205,7 +205,11 @@ def typedb_worker_spec(settings: Dict[str, object]) -> Dict[str, object]:
         "typedbPassword": password,
         "typedbDatabase": str((settings or {}).get("typedbDatabase") or os.environ.get("TYPEDB_DATABASE") or "orbit_alpha_ontology"),
         "typedbTlsEnabled": str((settings or {}).get("typedbTlsEnabled") or os.environ.get("TYPEDB_TLS_ENABLED") or "0"),
-        "startupWaitSeconds": str((settings or {}).get("typedbStartupWaitSeconds") or "60"),
+        # A durable TypeDB may need several minutes to replay its WAL and
+        # rebuild the type cache after a clean server restart.  Treating that
+        # normal recovery as a 60-second failure leaves every dependent worker
+        # down and turns a recoverable restart into a reasoning backlog.
+        "startupWaitSeconds": str((settings or {}).get("typedbStartupWaitSeconds") or "600"),
         "seedOnStart": str((settings or {}).get("typedbSeedOnStart") or os.environ.get("TYPEDB_SEED_ON_START") or "1"),
         "seedReplaceRuleBox": str((settings or {}).get("typedbSeedReplaceRuleBox") or os.environ.get("TYPEDB_SEED_REPLACE_RULEBOX") or "1"),
         "seedKeepInference": str((settings or {}).get("typedbSeedKeepInference") or os.environ.get("TYPEDB_SEED_KEEP_INFERENCE") or "1"),
@@ -840,7 +844,7 @@ def bootstrap_typedb_credentials_after_reset(spec: Dict[str, object]) -> bool:
 
 
 def wait_for_typedb_ready(spec: Dict[str, object]) -> bool:
-    wait_seconds = int_value(spec.get("startupWaitSeconds"), 60, 0)
+    wait_seconds = int_value(spec.get("startupWaitSeconds"), 600, 0)
     address = spec.get("healthAddress") or spec.get("typedbAddress") or "127.0.0.1:1729"
     if wait_seconds <= 0:
         return True

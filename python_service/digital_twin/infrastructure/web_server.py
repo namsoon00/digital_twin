@@ -756,6 +756,7 @@ def settings_status_payload() -> Dict[str, object]:
         "typedbDataRetentionHours",
         "typedbDataMaxSizeMb",
         "typedbMinimumFreeSpaceMb",
+        "typedbStartupWaitSeconds",
         "externalApiFetchIntervalMinutes",
         "externalAlphaEnabled",
         "externalAlphaDailyRequestBudget",

@@ -16,6 +16,7 @@ from ..domain.events import (
 from ..domain.fact_changes import fact_signature, research_evidence_fact_payload
 from ..domain.investment_research import ResearchEvidence
 from ..domain.investment_strategy_guidance import append_strategy_block, merge_strategy_context
+from ..domain.message_types import MARKET_OBSERVATION
 from ..domain.market_observations import apply_market_observation_outbox_baselines, hydrate_market_observation_baselines
 from ..domain.model_review import ModelReviewJob
 from ..domain.notification_rules import (
@@ -99,6 +100,31 @@ def snapshot_state_for_persistence(snapshot: AccountSnapshot, previous: Dict[str
     metadata["lastConnectionFailure"] = failure
     retained["metadata"] = metadata
     return retained
+
+
+def market_observation_followup_symbols(
+    events: Iterable[AlertEvent],
+    account_id: object,
+) -> List[str]:
+    """Return raw observation symbols actually queued for notification.
+
+    Only outboxed deterministic observations receive this scheduling marker.
+    Suppressed candidates should not consume the live TypeDB priority lane.
+    """
+    account = str(account_id or "").strip()
+    symbols = []
+    for event in events or []:
+        metadata = dict(getattr(event, "metadata", {}) or {})
+        if (
+            str(getattr(event, "account_id", "") or "").strip() != account
+            or str(getattr(event, "rule", "") or "") != MARKET_OBSERVATION
+            or not bool(metadata.get("observationOnly"))
+        ):
+            continue
+        symbol = str(getattr(event, "symbol", "") or "").upper().strip()
+        if symbol and symbol not in symbols:
+            symbols.append(symbol)
+    return symbols
 
 
 class MySQLMonitorStore(MySQLOperationalConnection):
@@ -665,6 +691,10 @@ class MySQLMonitoringCycleRecorder(MySQLOperationalConnection):
                     snapshot,
                     self.monitor_store.previous.get(snapshot.account_id),
                     self.runtime_settings,
+                    observation_followup_symbols=market_observation_followup_symbols(
+                        outboxed_events,
+                        snapshot.account_id,
+                    ),
                 )
                 if not reasoning_event:
                     continue

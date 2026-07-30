@@ -153,6 +153,13 @@ def _entry_fact_revision(entry: Mapping[str, object]) -> str:
     return _event_fact_revision(event if isinstance(event, Mapping) else {}, entry.get("symbol"))
 
 
+def _priority_hint(value: object) -> int:
+    try:
+        return max(0, int(value or 0))
+    except (TypeError, ValueError):
+        return 0
+
+
 class MySQLOntologyReasoningMailboxStore(MySQLOperationalConnection):
     """A leased-worker-ready mailbox with source-event completion accounting."""
 
@@ -312,7 +319,7 @@ class MySQLOntologyReasoningMailboxStore(MySQLOperationalConnection):
             for entry in event_entries:
                 mailbox_key = _text(entry.get("mailboxKey"))
                 current = connection.execute(
-                    "SELECT mailbox.source_event_id, mailbox.occurred_at, events.event_json "
+                    "SELECT mailbox.source_event_id, mailbox.occurred_at, mailbox.priority_hint, events.event_json "
                     "FROM ontology_reasoning_mailbox mailbox "
                     "LEFT JOIN ontology_reasoning_mailbox_events events ON events.event_id = mailbox.source_event_id "
                     "WHERE mailbox.mailbox_key = %s FOR UPDATE",
@@ -321,7 +328,15 @@ class MySQLOntologyReasoningMailboxStore(MySQLOperationalConnection):
                 incoming_revision = _entry_fact_revision(entry)
                 current_event = _json_loads(current.get("event_json"), {}) if current else {}
                 current_revision = _event_fact_revision(current_event, entry.get("symbol"))
+                incoming_priority = _priority_hint(entry.get("priorityHint"))
+                current_priority = _priority_hint(current.get("priority_hint")) if current else 0
                 if current and incoming_revision and incoming_revision == current_revision:
+                    if incoming_priority > current_priority:
+                        connection.execute(
+                            "UPDATE ontology_reasoning_mailbox SET priority_hint = %s, updated_at = %s "
+                            "WHERE mailbox_key = %s",
+                            (incoming_priority, stamp, mailbox_key),
+                        )
                     same_revision_skips += 1
                     result["sameRevisionEntryKeys"].append(mailbox_key)
                     continue
@@ -331,6 +346,11 @@ class MySQLOntologyReasoningMailboxStore(MySQLOperationalConnection):
                     continue
                 if current:
                     displaced = _text(current.get("source_event_id"))
+                    effective_entry = dict(entry)
+                    # A raw price observation may be superseded by a newer
+                    # snapshot before the worker claims the slot. Retain its
+                    # scheduling urgency while replacing the source facts.
+                    effective_entry["priorityHint"] = max(incoming_priority, current_priority)
                     connection.execute(
                         """
                         UPDATE ontology_reasoning_mailbox
@@ -338,7 +358,7 @@ class MySQLOntologyReasoningMailboxStore(MySQLOperationalConnection):
                             trigger_name = %s, review_level = %s, priority_hint = %s, occurred_at = %s, updated_at = %s
                         WHERE mailbox_key = %s
                         """,
-                        self._entry_values(entry, stamp) + (mailbox_key,),
+                        self._entry_values(effective_entry, stamp) + (mailbox_key,),
                     )
                     if displaced and displaced != event_id:
                         terminal = self._decrement_source_event(connection, displaced, "superseded", "newer fungible observation")
@@ -354,7 +374,11 @@ class MySQLOntologyReasoningMailboxStore(MySQLOperationalConnection):
                         """,
                         (mailbox_key,) + self._entry_values(entry, stamp) + (stamp,),
                     )
-                self._replace_work_item_with_connection(connection, entry, stamp)
+                self._replace_work_item_with_connection(
+                    connection,
+                    effective_entry if current else entry,
+                    stamp,
+                )
                 accepted += 1
                 result["acceptedEntryKeys"].append(mailbox_key)
 

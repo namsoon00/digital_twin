@@ -1,6 +1,7 @@
 import unittest
 
 from digital_twin.application.ontology_inference_detail_service import OntologyInferenceDetailRunner
+from digital_twin.infrastructure.mysql_ontology_inference_detail_outbox import inference_detail_dedupe_key
 
 
 def inference_job(generation="inference-generation:test", source_abox="abox-manifest:test"):
@@ -75,6 +76,13 @@ class FakeRepository:
 
 
 class OntologyInferenceDetailRunnerTests(unittest.TestCase):
+    def test_detail_dedupe_key_preserves_independent_target_scopes(self):
+        aapl = inference_detail_dedupe_key("portfolio:local:main", ["AAPL"])
+
+        self.assertEqual(aapl, inference_detail_dedupe_key("portfolio:local:main", ["aapl"]))
+        self.assertNotEqual(aapl, inference_detail_dedupe_key("portfolio:local:main", ["MSFT"]))
+        self.assertNotEqual(aapl, inference_detail_dedupe_key("portfolio:local:main", ["AAPL", "MSFT"]))
+
     def test_pending_live_reasoning_defers_before_claiming_detail_readback(self):
         outbox = FakeOutbox([inference_job()])
         repository = FakeRepository(complete_snapshot())

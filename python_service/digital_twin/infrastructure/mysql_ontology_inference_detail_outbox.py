@@ -42,6 +42,13 @@ def _sha(value: object) -> str:
     return hashlib.sha256(str(value or "").encode("utf-8")).hexdigest()
 
 
+def inference_detail_dedupe_key(world_id: object, target_symbols: object = None) -> str:
+    """Keep deferred detail readback current per world and requested scope."""
+    world = _clean(world_id)
+    scope = ",".join(_clean_symbols(target_symbols)) or "all"
+    return _sha("|".join([world, scope]))[:64]
+
+
 def _job_ids(rows) -> List[str]:
     values = []
     for row in rows or []:
@@ -58,9 +65,11 @@ def _timestamp_after(seconds: int) -> str:
 
 
 class MySQLOntologyInferenceDetailOutboxStore(MySQLOperationalConnection):
-    """Store latest detailed-readback work per PortfolioWorld.
+    """Store latest detailed-readback work per PortfolioWorld and target scope.
 
-    A pending job is coalesced to the newest active generation for its world.
+    A pending job is coalesced to the newest active generation for its exact
+    requested target scope. Independent symbols must retain their diagnostic
+    readback even when another live projection advances the same world.
     A claimed older job may still finish, but the worker recognizes its
     generation mismatch and records it as superseded instead of reading or
     persisting stale detail.
@@ -101,7 +110,7 @@ class MySQLOntologyInferenceDetailOutboxStore(MySQLOperationalConnection):
                 "reason": "world, inference generation, and source ABox identities are required.",
             }
         bounded_limit = max(1, min(500, int(detail_limit or 80)))
-        dedupe_key = _sha(world)[:64]
+        dedupe_key = inference_detail_dedupe_key(world, targets)
         fingerprint = _sha("|".join([
             dedupe_key,
             generation,

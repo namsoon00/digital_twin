@@ -712,7 +712,7 @@ class RealtimeMonitor(MonitoringSampleDataMixin, MonitoringPositionContextMixin,
                 "직전 저장값: " + price_money(previous_price, currency),
                 "관측 기준: " + comparison_label,
                 "판단 상태: 원시 시세 관측만 발송 · 매수·매도 판단 없음",
-                "후속 처리: TypeDB 관계 추론 완료 시 투자 인사이트를 별도로 확인",
+                "후속 처리: TypeDB가 현재 사실을 재평가하며, 새롭고 중요한 투자 판단이 성립할 때만 별도 인사이트를 발송",
             ]
             if source:
                 lines.insert(3, "시세 출처: " + source)

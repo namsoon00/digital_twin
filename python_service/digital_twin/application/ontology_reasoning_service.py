@@ -19,10 +19,13 @@ from ..domain.investment_evidence_governance import (
     complete_reasoning_handoff,
 )
 from ..domain.ontology_reasoning_queue import (
+    OBSERVATION_FOLLOWUP_PRIORITY_HINT,
     VERIFIED_MONITOR_SNAPSHOT_TRIGGER,
     is_generic_research_latest_state,
+    is_observation_followup_symbol,
     is_realtime_latest_state,
     is_verified_monitor_snapshot_event,
+    mailbox_entry_priority,
     mailbox_slot_family,
 )
 
@@ -298,7 +301,7 @@ def event_subject_priority(event: object, priority_symbols: Dict[str, int] = Non
     return max([int(priorities.get(symbol, 0) or 0) for symbol in event_symbols(event)] or [0])
 
 
-def event_order_key(event: object, priority_symbols: Dict[str, int] = None) -> Tuple[int, int, int, int, int]:
+def event_order_key(event: object, priority_symbols: Dict[str, int] = None) -> Tuple[int, ...]:
     payload = event_payload(event)
     trigger = str(payload.get("trigger") or "data-update").strip()
     fact_types = {str(item or "").strip() for item in payload.get("factTypes") or []}
@@ -308,6 +311,7 @@ def event_order_key(event: object, priority_symbols: Dict[str, int] = None) -> T
         TRIGGER_ORDER.get(trigger, 0),
         1 if "ResearchEvidence" in fact_types else 0,
         1 if "MarketQuote" in fact_types else 0,
+        max([int(is_observation_followup_symbol(event, symbol)) for symbol in event_symbols(event)] or [0]),
     )
 
 
@@ -563,8 +567,11 @@ def event_work_class(event: object) -> str:
         for item in payload.get("factTypes") or []
         if str(item or "").strip()
     }
-    if not event_symbols(event):
+    symbols = event_symbols(event)
+    if not symbols:
         return "global"
+    if any(is_observation_followup_symbol(event, symbol) for symbol in symbols):
+        return "observation-followup"
     if is_verified_monitor_snapshot_event(event):
         return "verified-snapshot"
     if "research" in trigger or fact_types & {"researchevidence", "verifiedclaim", "verificationrun", "newsevent"}:
@@ -1653,6 +1660,7 @@ class OntologyReasoningRunner:
         symbols: Iterable[str],
         priority_symbols: Dict[str, int] = None,
         cursor_payload: Dict[str, object] = None,
+        event: object = None,
     ) -> List[str]:
         priorities = priority_symbols or {}
         unique: List[str] = []
@@ -1664,6 +1672,7 @@ class OntologyReasoningRunner:
         return sorted(
             unique,
             key=lambda symbol: (
+                int(bool(event) and is_observation_followup_symbol(event, symbol)),
                 *self.symbol_fairness_rank(symbol, cursor_payload),
                 int(priorities.get(symbol, 0) or 0),
                 -original_order.get(symbol, 0),
@@ -1732,7 +1741,11 @@ class OntologyReasoningRunner:
         order = {symbol: index for index, symbol in enumerate(original)}
         return sorted(
             original,
-            key=lambda symbol: (-int(priorities.get(symbol, 0) or 0), order.get(symbol, 0)),
+            key=lambda symbol: (
+                -int(is_observation_followup_symbol(event, symbol)),
+                -int(priorities.get(symbol, 0) or 0),
+                order.get(symbol, 0),
+            ),
         )
 
     def cursor_payload(self) -> Dict[str, object]:
@@ -2165,6 +2178,7 @@ class OntologyReasoningRunner:
             if event_symbols(event) and not self.due_event_symbols(event, progress, cursor_payload, priority_symbols):
                 continue
             ranked_events.append((
+                max([int(is_observation_followup_symbol(event, symbol)) for symbol in event_symbols(event)] or [0]),
                 1 if is_verified_monitor_snapshot_event(event) else 0,
                 self.event_fairness_rank(event, progress, cursor_payload, priority_symbols),
                 event,
@@ -2172,15 +2186,16 @@ class OntologyReasoningRunner:
         ranked_events.sort(
             key=lambda item: (
                 item[0],
-                *item[1],
-                *event_order_key(item[2], priority_symbols),
-                1 if str(getattr(item[2], "event_id", "") or "") in progress else 0,
-                getattr(item[2], "occurred_at", ""),
-                getattr(item[2], "event_id", ""),
+                item[1],
+                *item[2],
+                *event_order_key(item[3], priority_symbols),
+                1 if str(getattr(item[3], "event_id", "") or "") in progress else 0,
+                getattr(item[3], "occurred_at", ""),
+                getattr(item[3], "event_id", ""),
             ),
             reverse=True,
         )
-        return [item[2] for item in ranked_events[: max(1, int(limit or self.batch_size()))]]
+        return [item[3] for item in ranked_events[: max(1, int(limit or self.batch_size()))]]
 
     def durable_mailbox_ingress_enabled(self) -> bool:
         """Whether coalescible events enter MySQL mailbox at publish time."""
@@ -2257,12 +2272,7 @@ class OntologyReasoningRunner:
         source_event.setdefault("occurred_at", str(getattr(event, "occurred_at", "") or ""))
         family = ",".join(fact_types) or "MarketQuote"
         slot_family = mailbox_slot_family(event, fact_types)
-        priority = (
-            event_subject_priority(event, self.priority_symbols()) * 10000
-            + REVIEW_LEVEL_ORDER.get(event_review_level(event), 0) * 1000
-            + TRIGGER_ORDER.get(trigger, 0) * 100
-            + (1 if "MarketQuote" in fact_types else 0)
-        )
+        priority_symbols = self.priority_symbols()
         entries = []
         for symbol in event_symbols(event):
             seed = "|".join([account_scope, symbol, slot_family])
@@ -2277,7 +2287,12 @@ class OntologyReasoningRunner:
                 "mailboxSlotFamily": slot_family,
                 "trigger": trigger,
                 "reviewLevel": event_review_level(event),
-                "priorityHint": priority,
+                "priorityHint": mailbox_entry_priority(
+                    event,
+                    symbol,
+                    priority_symbols.get(symbol, 0),
+                ),
+                "observationFollowup": is_observation_followup_symbol(event, symbol),
                 "occurredAt": str(getattr(event, "occurred_at", "") or ""),
                 "factRevision": event_fact_revision(event, symbol),
             })
@@ -2288,13 +2303,24 @@ class OntologyReasoningRunner:
         payload = dict(source.payload or {})
         source_event_id = str(entry.get("sourceEventId") or source.event_id or "").strip()
         mailbox_key = str(entry.get("mailboxKey") or "").strip()
-        payload["symbols"] = [str(entry.get("symbol") or "").upper().strip()]
+        symbol = str(entry.get("symbol") or "").upper().strip()
+        try:
+            priority_hint = int(entry.get("priorityHint") or 0)
+        except (TypeError, ValueError):
+            priority_hint = 0
+        payload["symbols"] = [symbol]
         payload["_reasoningMailbox"] = {
             "mailboxKey": mailbox_key,
             "sourceEventId": source_event_id,
             "accountScope": str(entry.get("accountScope") or "market"),
             "factFamily": str(entry.get("factFamily") or ""),
             "factRevision": str(entry.get("factRevision") or "")[:160],
+            "priorityHint": priority_hint,
+            "observationFollowup": bool(
+                entry.get("observationFollowup")
+                or is_observation_followup_symbol(source, symbol)
+                or priority_hint >= OBSERVATION_FOLLOWUP_PRIORITY_HINT
+            ),
             "enqueuedAt": str(entry.get("occurredAt") or source.occurred_at or ""),
         }
         return DomainEvent(
@@ -3378,6 +3404,23 @@ class OntologyReasoningRunner:
             recent_execution=telemetry,
         )
 
+    def due_observation_followup_symbols(self, requests: Iterable[object]) -> List[str]:
+        """Return due notified symbols without changing TypeDB rule inputs."""
+        cursor_payload = self.cursor_payload()
+        progress = self.event_symbol_progress(cursor_payload)
+        priority_symbols = self.priority_symbols()
+        symbols = []
+        for event in requests or []:
+            for symbol in self.due_event_symbols(
+                event,
+                progress,
+                cursor_payload,
+                priority_symbols,
+            ):
+                if symbol not in symbols and is_observation_followup_symbol(event, symbol):
+                    symbols.append(symbol)
+        return symbols
+
     def request_symbol_batches(
         self,
         requests: Iterable[object],
@@ -3419,6 +3462,7 @@ class OntologyReasoningRunner:
                     self.due_event_symbols(event, progress, cursor_payload, priority_symbols),
                     priority_symbols,
                     cursor_payload,
+                    event=event,
                 )
                 if not due_symbols:
                     continue
@@ -3428,6 +3472,7 @@ class OntologyReasoningRunner:
                 fact_types = {str(item or "").strip() for item in event_payload(event).get("factTypes") or []}
                 fairness_rank = max([self.symbol_fairness_rank(symbol, cursor_payload) for symbol in due_symbols] or [(0, 0)])
                 rank = (
+                    max([int(is_observation_followup_symbol(event, symbol)) for symbol in due_symbols] or [0]),
                     1 if is_verified_monitor_snapshot_event(event) else 0,
                     *fairness_rank,
                     max([int(priority_symbols.get(symbol, 0) or 0) for symbol in due_symbols] or [0]),
@@ -3494,12 +3539,14 @@ class OntologyReasoningRunner:
                 self.due_event_symbols(event, progress, cursor_payload, priority_symbols),
                 priority_symbols,
                 cursor_payload,
+                event=event,
             )
             if not self.ordered_event_symbols(event, priority_symbols):
                 batches[event_id] = []
                 continue
             for symbol_index, symbol in enumerate(remaining):
                 rank = (
+                    int(is_observation_followup_symbol(event, symbol)),
                     1 if is_verified_monitor_snapshot_event(event) else 0,
                     *self.symbol_fairness_rank(symbol, cursor_payload),
                     int(priority_symbols.get(symbol, 0) or 0),
@@ -3535,6 +3582,7 @@ class OntologyReasoningRunner:
                     self.due_event_symbols(event, progress, cursor_payload, priority_symbols),
                     priority_symbols,
                     cursor_payload,
+                    event=event,
                 )
                 if symbol in selected_set
             ]
@@ -3964,7 +4012,7 @@ class OntologyReasoningRunner:
             for symbol in selected_symbols or []
             if str(symbol or "").strip()
         ]
-        classes = ["verified-snapshot", "research", "realtime-market", "portfolio", "global", "other"]
+        classes = ["observation-followup", "verified-snapshot", "research", "realtime-market", "portfolio", "global", "other"]
         pending_counts = {work_class: 0 for work_class in classes}
         selected_counts = {work_class: 0 for work_class in classes}
         observed_at = []
@@ -4053,6 +4101,7 @@ class OntologyReasoningRunner:
                     or inference.get("typedbNativeRuleEvaluationCompleted")
                 ),
                 "nativeInferenceOutcome": str(inference.get("nativeInferenceOutcome") or ""),
+                "terminalOutcome": self.alert_pipeline_terminal_outcome(pipeline),
                 "alertPipeline": {
                     key: pipeline.get(key)
                     for key in [
@@ -4063,6 +4112,20 @@ class OntologyReasoningRunner:
                 },
             })
         return outcomes[:100]
+
+    @staticmethod
+    def alert_pipeline_terminal_outcome(pipeline: Mapping[str, object]) -> str:
+        """Describe completed alert delivery work without deciding an investment action."""
+        status = str((pipeline or {}).get("status") or "").strip().lower()
+        if status == "delivery-ready":
+            return "insight-queued"
+        if status == "cadence-suppressed":
+            return "insight-cadence-suppressed"
+        if status in {"no-signal", "no-material-alert"}:
+            return "no-material-change"
+        if status == "blocked":
+            return "deferred"
+        return "projection-outcome-unavailable"
 
     def mark_successful_projection(self, monitor_runner=None) -> None:
         if not hasattr(self.cursor_store, "load") or not hasattr(self.cursor_store, "save"):
@@ -4643,6 +4706,24 @@ class OntologyReasoningRunner:
                 **queue_metadata,
             }
         batch_plan = self.reasoning_batch_plan(requests)
+        observation_followup_symbols = self.due_observation_followup_symbols(requests)
+        if (
+            observation_followup_symbols
+            and self.native_typedb_rule_execution_enabled()
+            and int(batch_plan.get("targetSymbolLimit") or 0) > 1
+        ):
+            batch_plan = dict(batch_plan)
+            batch_plan["baseMode"] = str(batch_plan.get("mode") or "")
+            batch_plan["mode"] = "observation-followup-single-target"
+            batch_plan["targetSymbolLimit"] = 1
+            batch_plan["observationFollowupSymbols"] = observation_followup_symbols[:20]
+            reason_codes = list(batch_plan.get("reasonCodes") or [])
+            if "notified-observation-followup-single-target" not in reason_codes:
+                reason_codes.append("notified-observation-followup-single-target")
+            batch_plan["reasonCodes"] = reason_codes[:20]
+        elif observation_followup_symbols:
+            batch_plan = dict(batch_plan)
+            batch_plan["observationFollowupSymbols"] = observation_followup_symbols[:20]
         queue_metadata["batchPlan"] = dict(batch_plan)
         symbol_batches, symbols, omitted_symbol_count = self.request_symbol_batches(
             requests,

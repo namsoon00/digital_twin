@@ -8,7 +8,11 @@ sys.path.insert(0, str(Path(__file__).resolve().parents[1]))
 from digital_twin.application.kis_realtime_service import KISRealtimeWebSocketRunner
 from digital_twin.application.ontology_reasoning_service import OntologyReasoningRunner
 from digital_twin.domain.events import DomainEvent, MARKET_DATA_COLLECTED, ontology_reasoning_requested_event
-from digital_twin.domain.ontology_reasoning_queue import REALTIME_LATEST_STATE_SLOT, durable_mailbox_entries
+from digital_twin.domain.ontology_reasoning_queue import (
+    OBSERVATION_FOLLOWUP_PRIORITY_HINT,
+    REALTIME_LATEST_STATE_SLOT,
+    durable_mailbox_entries,
+)
 from digital_twin.domain.portfolio import AccountSnapshot, PortfolioSummary, Position
 from digital_twin.domain.verified_snapshot_reasoning import (
     VERIFIED_MONITOR_SNAPSHOT_TRIGGER,
@@ -91,6 +95,22 @@ class VerifiedSnapshotReasoningTests(unittest.TestCase):
         self.assertEqual(["AAPL"], event.payload["symbols"])
         self.assertIn("current_price", event.payload["changedFieldsBySymbol"]["AAPL"])
         self.assertNotIn("portfolioContext", event.payload["changedFieldsBySymbol"]["AAPL"])
+
+    def test_notified_market_observation_marks_only_the_changed_symbol_for_prompt_followup(self):
+        previous = snapshot()
+        current = snapshot(aapl_price=101.0)
+
+        event = verified_monitor_snapshot_reasoning_event(
+            current,
+            previous.to_monitor_state(),
+            observation_followup_symbols=["AAPL", "UNKNOWN"],
+        )
+
+        self.assertEqual(["AAPL"], event.payload["observationFollowupSymbols"])
+        entries = durable_mailbox_entries(event)
+        self.assertEqual(1, len(entries))
+        self.assertTrue(entries[0]["observationFollowup"])
+        self.assertGreaterEqual(entries[0]["priorityHint"], OBSERVATION_FOLLOWUP_PRIORITY_HINT)
 
     def test_changed_direct_research_evidence_targets_the_related_symbol(self):
         previous = snapshot(external_signals={

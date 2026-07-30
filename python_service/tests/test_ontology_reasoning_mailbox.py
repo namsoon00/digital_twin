@@ -117,6 +117,14 @@ class MemoryMailbox:
                 key = str(entry.get("mailboxKey") or "")
                 current = self.slots.get(key)
                 if current and self.same_revision(entry, current):
+                    current["priorityHint"] = max(
+                        int(current.get("priorityHint") or 0),
+                        int(entry.get("priorityHint") or 0),
+                    )
+                    current["observationFollowup"] = bool(
+                        current.get("observationFollowup")
+                        or entry.get("observationFollowup")
+                    )
                     same_revision_skips += 1
                     result["sameRevisionEntryKeys"].append(key)
                     continue
@@ -128,6 +136,17 @@ class MemoryMailbox:
                         terminal = self.decrement(displaced, "superseded")
                         if terminal:
                             result["terminalEventStates"][displaced] = terminal
+                    entry = {
+                        **entry,
+                        "priorityHint": max(
+                            int(current.get("priorityHint") or 0),
+                            int(entry.get("priorityHint") or 0),
+                        ),
+                        "observationFollowup": bool(
+                            current.get("observationFollowup")
+                            or entry.get("observationFollowup")
+                        ),
+                    }
                 self.slots[key] = dict(entry)
                 accepted += 1
                 result["acceptedEntryKeys"].append(key)
@@ -356,7 +375,18 @@ class MySQLMailboxConnection:
             self.slots[str(values[0])] = {
                 "source_event_id": str(values[1]),
                 "occurred_at": str(values[8]),
+                "priority_hint": int(values[7]),
             }
+            return MySQLCursor()
+        if query.startswith("UPDATE ontology_reasoning_mailbox SET priority_hint"):
+            self.slots[str(values[2])]["priority_hint"] = int(values[0])
+            return MySQLCursor()
+        if query.startswith("UPDATE ontology_reasoning_mailbox SET source_event_id"):
+            self.slots[str(values[9])].update({
+                "source_event_id": str(values[0]),
+                "occurred_at": str(values[7]),
+                "priority_hint": int(values[6]),
+            })
             return MySQLCursor()
         raise AssertionError("unexpected SQL: " + query)
 
@@ -384,7 +414,14 @@ class Monitor:
         return []
 
 
-def realtime_request(event_id, symbols, occurred_at, review_level="normal", fact_revision=""):
+def realtime_request(
+    event_id,
+    symbols,
+    occurred_at,
+    review_level="normal",
+    fact_revision="",
+    observation_followup_symbols=None,
+):
     source = DomainEvent(
         name="market_data.collected",
         aggregate_id="market:KR",
@@ -398,6 +435,7 @@ def realtime_request(event_id, symbols, occurred_at, review_level="normal", fact
         changed_count=len(symbols),
         fact_types=["MarketQuote"],
         fact_revisions_by_symbol={symbol: fact_revision for symbol in symbols} if fact_revision else None,
+        observation_followup_symbols=observation_followup_symbols,
     )
     payload = dict(request.payload or {})
     if review_level != "normal":
@@ -486,6 +524,70 @@ class OntologyReasoningMailboxTests(unittest.TestCase):
         self.assertEqual("superseded", self.mailbox.events["old"]["state"])
         self.assertEqual(0, result["mailbox"]["pendingEntryCount"])
         self.assertEqual("ok", result["executionTelemetry"]["status"])
+
+    def test_notified_observation_uses_one_target_priority_lane(self):
+        observation = realtime_request(
+            "observation",
+            ["AAPL"],
+            "2026-07-24T00:00:00Z",
+            observation_followup_symbols=["AAPL"],
+        )
+        background = realtime_request("background", ["MSFT"], "2026-07-24T00:01:00Z")
+        runner = self.build_runner(
+            [observation, background],
+            settings={
+                "ontologyReasoningMaxSymbolsPerRun": "2",
+                "typedbNativeRuleTargetSymbolLimit": "2",
+            },
+        )
+
+        result = runner.run_once(force=True)
+
+        self.assertEqual(["AAPL"], self.monitor.calls[0])
+        self.assertEqual("observation-followup-single-target", result["batchPlan"]["mode"])
+        self.assertEqual(["AAPL"], result["batchPlan"]["observationFollowupSymbols"])
+        self.assertEqual(["observation-followup"], result["queueDispatch"]["selectedWorkClasses"])
+
+    def test_observation_followup_priority_survives_a_newer_latest_state_snapshot(self):
+        notified = realtime_request(
+            "notified",
+            ["AAPL"],
+            "2026-07-24T00:00:00Z",
+            observation_followup_symbols=["AAPL"],
+        )
+        newer = realtime_request("newer", ["AAPL"], "2026-07-24T00:01:00Z")
+        runner = self.build_runner([])
+
+        runner.synchronize_mailbox([notified])
+        runner.synchronize_mailbox([newer])
+        entry = self.mailbox.pending(1)[0]
+        virtual = runner.mailbox_virtual_event(entry)
+
+        self.assertEqual("newer", entry["sourceEventId"])
+        self.assertGreaterEqual(entry["priorityHint"], 100000)
+        self.assertTrue(virtual.payload["_reasoningMailbox"]["observationFollowup"])
+
+    def test_projection_alert_outcome_marks_an_evaluated_no_match_as_no_material_change(self):
+        runner = self.build_runner([])
+        monitor = SimpleNamespace(last_ontology_projection_results={
+            "main": {
+                "status": "ok",
+                "inferenceBox": {
+                    "status": "empty",
+                    "nativeTypeDbReasoningCompleted": True,
+                    "generationAligned": True,
+                },
+                "alertPipeline": {
+                    "status": "no-signal",
+                    "requestedSymbols": ["AAPL"],
+                },
+            },
+        })
+
+        outcomes = runner.projection_alert_outcomes(monitor)
+
+        self.assertEqual("no-material-change", outcomes[0]["terminalOutcome"])
+        self.assertEqual(["AAPL"], outcomes[0]["alertPipeline"]["requestedSymbols"])
 
     def test_uses_bounded_direct_typeql_when_rulebox_prewarm_is_still_provisioning(self):
         event = realtime_request("prewarm-gate", ["AAPL"], "2026-07-24T00:00:00Z")

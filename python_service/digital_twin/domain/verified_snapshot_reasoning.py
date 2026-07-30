@@ -288,6 +288,7 @@ def verified_monitor_snapshot_reasoning_event(
     snapshot: AccountSnapshot,
     previous_state: Mapping[str, object] = None,
     settings: Mapping[str, object] = None,
+    observation_followup_symbols: Iterable[str] = None,
 ) -> DomainEvent | None:
     """Create one current-state reasoning request for changed snapshot facts.
 
@@ -384,4 +385,5 @@ def verified_monitor_snapshot_reasoning_event(
             "portfolioContextChanged": portfolio_changed,
             "externalSignalGroups": external_groups,
         },
+        observation_followup_symbols=observation_followup_symbols,
     )

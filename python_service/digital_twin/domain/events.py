@@ -493,7 +493,12 @@ def compact_ontology_reasoning_request_payload_for_storage(payload: Mapping[str,
             compact[key] = max(0, int(source.get(key) or 0))
         except (TypeError, ValueError):
             pass
-    for key, limit, item_limit in (("symbols", 200, 64), ("factTypes", 20, 96), ("changedEvidenceIds", 200, 191)):
+    for key, limit, item_limit in (
+        ("symbols", 200, 64),
+        ("observationFollowupSymbols", 200, 64),
+        ("factTypes", 20, 96),
+        ("changedEvidenceIds", 200, 191),
+    ):
         values = _event_text_list(source.get(key), limit=limit, item_limit=item_limit)
         if values:
             compact[key] = values
@@ -936,8 +941,14 @@ def ontology_reasoning_requested_event(
     changed_fields_by_symbol: Dict[str, Iterable[str]] = None,
     evidence_deltas: Iterable[Dict[str, object]] = None,
     snapshot_barrier: Mapping[str, object] = None,
+    observation_followup_symbols: Iterable[str] = None,
 ) -> DomainEvent:
     clean_symbols = sorted(set(str(symbol or "").upper().strip() for symbol in (symbols or []) if str(symbol or "").strip()))
+    clean_observation_followups = sorted({
+        str(symbol or "").upper().strip()
+        for symbol in (observation_followup_symbols or [])
+        if str(symbol or "").strip()
+    }.intersection(clean_symbols))
     clean_fact_types = sorted(set(str(item or "").strip() for item in (fact_types or []) if str(item or "").strip()))
     source_payload = source_event.payload or {}
     handoff = source_payload.get("reasoningHandoff") if isinstance(source_payload.get("reasoningHandoff"), dict) else {}
@@ -979,6 +990,9 @@ def ontology_reasoning_requested_event(
             "sourceEventName": source_event.name,
             "sourceAggregateId": source_event.aggregate_id,
             "symbols": clean_symbols[:200],
+            # This is delivery/scheduling provenance for a deterministic raw
+            # price observation, never a TypeDB rule condition.
+            "observationFollowupSymbols": clean_observation_followups[:200],
             "changedCount": int(changed_count or 0),
             "observedCount": int(observed_count or 0),
             "factTypes": clean_fact_types[:20],

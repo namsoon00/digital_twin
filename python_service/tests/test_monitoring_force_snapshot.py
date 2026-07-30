@@ -11,10 +11,13 @@ from digital_twin.domain.market_data import normalize_position
 from digital_twin.domain.market_observations import apply_market_observation_outbox_baselines
 from digital_twin.domain.message_types import MARKET_OBSERVATION, PORTFOLIO_HOLDINGS_SNAPSHOT
 from digital_twin.domain.monitoring import RealtimeMonitor
-from digital_twin.domain.portfolio import AccountSnapshot, utc_now_iso
+from digital_twin.domain.portfolio import AccountSnapshot, AlertEvent, utc_now_iso
 from digital_twin.domain.portfolio_calculations import portfolio_summary
 from digital_twin.domain.strategy import decisions_for_positions
-from digital_twin.infrastructure.mysql_monitoring_stores import snapshot_state_for_persistence
+from digital_twin.infrastructure.mysql_monitoring_stores import (
+    market_observation_followup_symbols,
+    snapshot_state_for_persistence,
+)
 
 
 class MemoryMonitorStore:
@@ -88,7 +91,26 @@ class MonitoringForceSnapshotTests(unittest.TestCase):
         self.assertTrue(observations[0].metadata["observationOnly"])
         self.assertFalse(observations[0].metadata["investmentJudgement"])
         self.assertIn("매수·매도 판단 없음", "\n".join(observations[0].lines))
+        self.assertIn("새롭고 중요한 투자 판단", "\n".join(observations[0].lines))
         self.assertTrue(current.metadata["ontology"]["inferenceMissingState"]["pending"])
+
+    def test_only_outboxed_raw_observations_enter_the_prompt_followup_lane(self):
+        events = [
+            AlertEvent(
+                "main", "메인", "WATCH", MARKET_OBSERVATION, "main:aapl", "AAPL", [],
+                symbol="AAPL", metadata={"observationOnly": True},
+            ),
+            AlertEvent(
+                "main", "메인", "WATCH", MARKET_OBSERVATION, "main:msft", "MSFT", [],
+                symbol="MSFT", metadata={"observationOnly": False},
+            ),
+            AlertEvent(
+                "other", "기타", "WATCH", MARKET_OBSERVATION, "other:nvda", "NVDA", [],
+                symbol="NVDA", metadata={"observationOnly": True},
+            ),
+        ]
+
+        self.assertEqual(["AAPL"], market_observation_followup_symbols(events, "main"))
 
     def test_market_observation_accumulates_from_last_outbox_baseline(self):
         previous_position = normalize_position({

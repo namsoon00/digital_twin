@@ -36,6 +36,11 @@ TRIGGER_ORDER = {
     "data-update": 1,
 }
 
+# A deterministic price-observation notification has already reached the
+# owner. Its current-state TypeDB follow-up should not wait behind ordinary
+# queue pressure, but the marker remains scheduling provenance only.
+OBSERVATION_FOLLOWUP_PRIORITY_HINT = 100000
+
 COALESCIBLE_REALTIME_TRIGGERS = {
     VERIFIED_MONITOR_SNAPSHOT_TRIGGER,
     "market-data-update",
@@ -88,6 +93,61 @@ def event_symbols(event: object) -> List[str]:
         if clean and clean not in symbols:
             symbols.append(clean)
     return symbols
+
+
+def observation_followup_symbols(event: object) -> List[str]:
+    """Return notified symbols that need a prompt current-state recheck.
+
+    A virtual mailbox event may inherit the priority from a displaced source
+    revision. In that case the durable mailbox marker is authoritative even
+    though the newest source payload no longer carries the original alert
+    symbol list.
+    """
+    symbols = event_symbols(event)
+    payload = event_payload(event)
+    mailbox = payload.get("_reasoningMailbox")
+    if isinstance(mailbox, Mapping) and bool(mailbox.get("observationFollowup")):
+        return symbols
+    raw = payload.get("observationFollowupSymbols") or []
+    if isinstance(raw, str):
+        raw = raw.split(",")
+    requested = {
+        str(symbol or "").upper().strip()
+        for symbol in raw
+        if str(symbol or "").strip()
+    } if isinstance(raw, (list, tuple, set)) else set()
+    return [symbol for symbol in symbols if symbol in requested]
+
+
+def is_observation_followup_symbol(event: object, symbol: object) -> bool:
+    clean = str(symbol or "").upper().strip()
+    return bool(clean and clean in observation_followup_symbols(event))
+
+
+def mailbox_entry_priority(
+    event: object,
+    symbol: object,
+    subject_priority: int = 0,
+) -> int:
+    """Build a durable scheduling priority without evaluating investment facts."""
+    payload = event_payload(event)
+    trigger = str(payload.get("trigger") or "").strip()
+    fact_types = {
+        str(value or "").strip()
+        for value in payload.get("factTypes") or []
+        if str(value or "").strip()
+    }
+    try:
+        account_priority = max(0, int(subject_priority or 0))
+    except (TypeError, ValueError):
+        account_priority = 0
+    return (
+        (OBSERVATION_FOLLOWUP_PRIORITY_HINT if is_observation_followup_symbol(event, symbol) else 0)
+        + account_priority * 10000
+        + REVIEW_LEVEL_ORDER.get(event_review_level(event), 0) * 1000
+        + TRIGGER_ORDER.get(trigger, 0) * 100
+        + (1 if "MarketQuote" in fact_types else 0)
+    )
 
 
 def event_changed_count(event: object) -> int:
@@ -252,11 +312,6 @@ def durable_mailbox_entries(event: DomainEvent) -> List[Dict[str, object]]:
     source_event.setdefault("occurred_at", str(getattr(event, "occurred_at", "") or ""))
     family = ",".join(fact_types) or "MarketQuote"
     slot_family = mailbox_slot_family(event, fact_types)
-    priority = (
-        REVIEW_LEVEL_ORDER.get(event_review_level(event), 0) * 1000
-        + TRIGGER_ORDER.get(trigger, 0) * 100
-        + (1 if "MarketQuote" in fact_types else 0)
-    )
     entries = []
     for symbol in event_symbols(event):
         seed = "|".join([account_scope, symbol, slot_family])
@@ -270,7 +325,8 @@ def durable_mailbox_entries(event: DomainEvent) -> List[Dict[str, object]]:
             "mailboxSlotFamily": slot_family,
             "trigger": trigger,
             "reviewLevel": event_review_level(event),
-            "priorityHint": priority,
+            "priorityHint": mailbox_entry_priority(event, symbol),
+            "observationFollowup": is_observation_followup_symbol(event, symbol),
             "occurredAt": str(getattr(event, "occurred_at", "") or ""),
             "factRevision": event_fact_revision(event, symbol),
         })

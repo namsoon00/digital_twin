@@ -157,6 +157,16 @@ def event_changed_count(event: object) -> int:
         return 0
 
 
+def event_has_reasoning_work(event: object) -> bool:
+    """Return whether a request needs a current-state TypeDB turn.
+
+    An outboxed price observation is a delivery fact, rather than a newly
+    persisted ABox fact. It still needs one follow-up projection even when its
+    snapshot has zero ordinary fact changes.
+    """
+    return bool(event_changed_count(event) > 0 or observation_followup_symbols(event))
+
+
 def materiality_assessments(event: object) -> List[Dict[str, object]]:
     raw = event_payload(event).get("materialityAssessments") or []
     if isinstance(raw, Mapping):
@@ -298,7 +308,7 @@ def durable_mailbox_entries(event: DomainEvent) -> List[Dict[str, object]]:
     """
     if str(getattr(event, "name", "") or "") != ONTOLOGY_REASONING_REQUESTED:
         return []
-    if event_changed_count(event) <= 0:
+    if not event_has_reasoning_work(event):
         return []
     coalescing_key = realtime_coalescing_key(event)
     if not coalescing_key:

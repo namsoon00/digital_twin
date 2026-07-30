@@ -21,6 +21,7 @@ from ..domain.investment_evidence_governance import (
 from ..domain.ontology_reasoning_queue import (
     OBSERVATION_FOLLOWUP_PRIORITY_HINT,
     VERIFIED_MONITOR_SNAPSHOT_TRIGGER,
+    event_has_reasoning_work,
     is_generic_research_latest_state,
     is_observation_followup_symbol,
     is_realtime_latest_state,
@@ -455,7 +456,7 @@ def lightweight_ontology_reasoning_queue_state(
     pending = []
     for event in source_events or []:
         event_id = str(getattr(event, "event_id", "") or "").strip()
-        if not event_id or event_id in processed or event_changed_count(event) <= 0:
+        if not event_id or event_id in processed or not event_has_reasoning_work(event):
             continue
         pending.append(event)
     pending.sort(key=event_time_key)
@@ -2173,7 +2174,7 @@ class OntologyReasoningRunner:
             source_events = list(source_events or [])
         ranked_events = []
         for event in source_events:
-            if event.event_id in processed or event_changed_count(event) <= 0:
+            if event.event_id in processed or not event_has_reasoning_work(event):
                 continue
             if event_symbols(event) and not self.due_event_symbols(event, progress, cursor_payload, priority_symbols):
                 continue
@@ -2235,7 +2236,7 @@ class OntologyReasoningRunner:
         candidates = []
         for event in source_events or []:
             event_id = str(getattr(event, "event_id", "") or "").strip()
-            if not event_id or event_id in processed or event_changed_count(event) <= 0:
+            if not event_id or event_id in processed or not event_has_reasoning_work(event):
                 continue
             if self.mailbox_entries_for_event(event):
                 candidates.append(event)

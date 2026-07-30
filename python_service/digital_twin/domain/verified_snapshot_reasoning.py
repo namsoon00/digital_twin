@@ -290,7 +290,7 @@ def verified_monitor_snapshot_reasoning_event(
     settings: Mapping[str, object] = None,
     observation_followup_symbols: Iterable[str] = None,
 ) -> DomainEvent | None:
-    """Create one current-state reasoning request for changed snapshot facts.
+    """Create one current-state reasoning request for changed facts or a queued quote follow-up.
 
     The request's ``sourceObservedAt`` is the snapshot generation time via
     ``snapshot_collected_event``. That is the exact persisted source boundary
@@ -362,6 +362,37 @@ def verified_monitor_snapshot_reasoning_event(
             EXTERNAL_REFRESH_FIELDS,
         )
 
+    # A raw price observation compares the current quote with the last
+    # *outboxed* quote, not necessarily with the immediately preceding
+    # snapshot. By the time that cumulative threshold is crossed, the latest
+    # snapshot can be fact-identical to the previous one. Keep the delivered
+    # observation in the replay request so its TypeDB follow-up cannot be
+    # silently dropped by that ordinary fact-delta optimization.
+    observation_followups = sorted({
+        _clean_symbol(symbol)
+        for symbol in (observation_followup_symbols or [])
+        if _clean_symbol(symbol) in current_positions
+    })
+    fact_changed_count = len(changed_symbols)
+    for symbol in observation_followups:
+        if symbol in changed_symbols:
+            continue
+        changed_symbols.append(symbol)
+        changed_fields_by_symbol[symbol] = ["outboxedMarketObservation"]
+        changed_external_groups_by_symbol[symbol] = []
+        all_fact_types.add("MarketQuote")
+        revisions[symbol] = fact_revision_id(
+            "VerifiedMonitorObservationFollowup",
+            symbol,
+            {
+                "position": current_positions.get(symbol, {}),
+                # This value is delivery provenance only. TypeDB evaluates
+                # the persisted current ABox, never this request marker.
+                "outboxedObservationSnapshot": str(snapshot.generated_at or ""),
+            },
+            EXTERNAL_REFRESH_FIELDS,
+        )
+
     if not changed_symbols:
         return None
 
@@ -371,10 +402,13 @@ def verified_monitor_snapshot_reasoning_event(
         source_event,
         VERIFIED_MONITOR_SNAPSHOT_TRIGGER,
         symbols=changed_symbols,
-        changed_count=len(changed_symbols),
+        changed_count=fact_changed_count,
         observed_count=len(subjects),
         fact_types=sorted(all_fact_types or {"PortfolioSnapshot"}),
-        reason="확정 저장된 계좌 스냅샷의 사실 변경을 TypeDB 현재 상태 추론에 반영합니다.",
+        reason=(
+            "확정 저장된 계좌 스냅샷의 사실 변경과 발송된 원시 시세 관측의 "
+            "후속 확인을 TypeDB 현재 상태 추론에 반영합니다."
+        ),
         fact_revisions_by_symbol=revisions,
         changed_fields_by_symbol=changed_fields_by_symbol,
         snapshot_barrier={
@@ -385,5 +419,5 @@ def verified_monitor_snapshot_reasoning_event(
             "portfolioContextChanged": portfolio_changed,
             "externalSignalGroups": external_groups,
         },
-        observation_followup_symbols=observation_followup_symbols,
+        observation_followup_symbols=observation_followups,
     )

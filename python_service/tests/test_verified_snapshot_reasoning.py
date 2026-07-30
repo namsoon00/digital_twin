@@ -1,5 +1,6 @@
 import sys
 import unittest
+from datetime import datetime
 from pathlib import Path
 from types import SimpleNamespace
 
@@ -111,6 +112,54 @@ class VerifiedSnapshotReasoningTests(unittest.TestCase):
         self.assertEqual(1, len(entries))
         self.assertTrue(entries[0]["observationFollowup"])
         self.assertGreaterEqual(entries[0]["priorityHint"], OBSERVATION_FOLLOWUP_PRIORITY_HINT)
+
+    def test_notified_market_observation_rechecks_an_unchanged_snapshot_symbol(self):
+        current = snapshot()
+
+        event = verified_monitor_snapshot_reasoning_event(
+            current,
+            current.to_monitor_state(),
+            observation_followup_symbols=["AAPL", "UNKNOWN"],
+        )
+
+        self.assertIsNotNone(event)
+        self.assertEqual(["AAPL"], event.payload["symbols"])
+        self.assertEqual(["AAPL"], event.payload["observationFollowupSymbols"])
+        self.assertEqual(0, event.payload["changedCount"])
+        self.assertEqual(["outboxedMarketObservation"], event.payload["changedFieldsBySymbol"]["AAPL"])
+        self.assertIn("MarketQuote", event.payload["factTypes"])
+        self.assertTrue(event.payload["factRevisionsBySymbol"]["AAPL"])
+        entries = durable_mailbox_entries(event)
+        self.assertEqual(1, len(entries))
+        self.assertTrue(entries[0]["observationFollowup"])
+
+    def test_unchanged_market_observation_followup_is_retained_by_scheduler(self):
+        current = snapshot()
+        request = verified_monitor_snapshot_reasoning_event(
+            current,
+            current.to_monitor_state(),
+            observation_followup_symbols=["AAPL"],
+        )
+
+        class Reader:
+            def recent_events(self, **_kwargs):
+                return [request]
+
+        class Cursor:
+            def processed_event_ids(self):
+                return []
+
+            def load(self):
+                return {}
+
+        runner = OntologyReasoningRunner(
+            Reader(),
+            Cursor(),
+            monitor_runner_factory=lambda: None,
+            now_provider=lambda: datetime(2026, 7, 29, 1, 0),
+        )
+
+        self.assertEqual([request.event_id], [event.event_id for event in runner.pending_requests()])
 
     def test_changed_direct_research_evidence_targets_the_related_symbol(self):
         previous = snapshot(external_signals={

@@ -412,7 +412,7 @@ class MySQLOntologyWorldProjectionOutboxStore(MySQLOperationalConnection):
             )
         return int(getattr(cursor, "rowcount", 0) or 0)
 
-    def purge_oversized_superseded(self, limit: int = 500) -> int:
+    def purge_oversized_superseded(self, limit: int = 10) -> int:
         """Remove legacy raw-account packets once a bounded replacement exists.
 
         Superseded packets over the current ceiling were produced by the old
@@ -420,33 +420,37 @@ class MySQLOntologyWorldProjectionOutboxStore(MySQLOperationalConnection):
         material and may contain account-private facts, so retaining them for
         normal outbox history is the wrong default.
         """
-        bounded = max(1, min(5000, int(limit or 500)))
-        with self.transaction() as connection:
+        bounded = max(1, min(10, int(limit or 10)))
+        def delete(connection):
             cursor = connection.execute(
                 """
                 DELETE FROM ontology_world_projection_outbox
                 WHERE status = %s AND LENGTH(payload_json) > %s
-                ORDER BY completed_at ASC LIMIT %s
+                ORDER BY completed_at ASC, job_id ASC LIMIT %s
                 """,
                 (SUPERSEDED, self.max_payload_bytes(), bounded),
             )
-        return int(getattr(cursor, "rowcount", 0) or 0)
+            return int(getattr(cursor, "rowcount", 0) or 0)
 
-    def prune_completed(self, retention_hours: int = 168, limit: int = 5000) -> int:
+        return int(self.transaction_with_deadlock_retry("world-projection-purge-oversized", delete) or 0)
+
+    def prune_completed(self, retention_hours: int = 24, limit: int = 10) -> int:
         """Retain audit results long enough for operations without unbounded growth."""
-        bounded_hours = max(24, min(24 * 365, int(retention_hours or 168)))
-        bounded_limit = max(1, min(50000, int(limit or 5000)))
+        bounded_hours = max(1, min(24, int(retention_hours or 24)))
+        bounded_limit = max(1, min(10, int(limit or 10)))
         cutoff = (datetime.now(timezone.utc) - timedelta(hours=bounded_hours)).isoformat().replace("+00:00", "Z")
-        with self.transaction() as connection:
+        def delete(connection):
             cursor = connection.execute(
                 """
                 DELETE FROM ontology_world_projection_outbox
                 WHERE status IN (%s, %s) AND completed_at != '' AND completed_at < %s
-                ORDER BY completed_at ASC LIMIT %s
+                ORDER BY completed_at ASC, job_id ASC LIMIT %s
                 """,
                 (COMPLETED, SUPERSEDED, cutoff, bounded_limit),
             )
-        return int(getattr(cursor, "rowcount", 0) or 0)
+            return int(getattr(cursor, "rowcount", 0) or 0)
+
+        return int(self.transaction_with_deadlock_retry("world-projection-prune-completed", delete) or 0)
 
     @staticmethod
     def row_payload(row: Mapping[str, object]) -> Dict[str, object]:

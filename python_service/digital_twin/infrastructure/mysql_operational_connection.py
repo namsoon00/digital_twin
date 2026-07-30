@@ -18,6 +18,7 @@ from .mysql_connection_pool import pooled_mysql_connection
 
 _FALSEY_VALUES = {"", "0", "false", "no", "off", "disabled"}
 MYSQL_DEADLOCK_ERROR_CODE = 1213
+MYSQL_CONNECTION_LOST_ERROR_CODES = frozenset({2006, 2013, 2055})
 
 
 @dataclass(frozen=True)
@@ -62,6 +63,11 @@ def mysql_error_code(error: Exception) -> int:
 
 def mysql_is_deadlock(error: Exception) -> bool:
     return mysql_error_code(error) == MYSQL_DEADLOCK_ERROR_CODE
+
+
+def mysql_is_connection_lost(error: Exception) -> bool:
+    """Whether retrying a complete idempotent maintenance pass is safe."""
+    return mysql_error_code(error) in MYSQL_CONNECTION_LOST_ERROR_CODES
 
 
 def mysql_deadlock_retry_count(settings: Dict[str, object] = None) -> int:
@@ -817,7 +823,8 @@ MYSQL_SCHEMA = [
         KEY idx_world_projection_outbox_ready (status, available_at, created_at, job_id),
         KEY idx_world_projection_outbox_dedupe (dedupe_key, status, updated_at),
         KEY idx_world_projection_outbox_world (world_id, status, updated_at),
-        KEY idx_world_projection_outbox_source (source_world_id, status, updated_at)
+        KEY idx_world_projection_outbox_source (source_world_id, status, updated_at),
+        KEY idx_world_projection_outbox_completed (status, completed_at, job_id)
     ) ENGINE=InnoDB DEFAULT CHARSET=utf8mb4 COLLATE=utf8mb4_unicode_ci
     """,
     """
@@ -844,7 +851,8 @@ MYSQL_SCHEMA = [
         KEY idx_inference_detail_outbox_ready (status, available_at, created_at, job_id),
         KEY idx_inference_detail_outbox_dedupe (dedupe_key, status, updated_at),
         KEY idx_inference_detail_outbox_generation (world_id, inference_generation_id, status, updated_at),
-        KEY idx_inference_detail_outbox_projection_run (projection_run_id, status, updated_at)
+        KEY idx_inference_detail_outbox_projection_run (projection_run_id, status, updated_at),
+        KEY idx_inference_detail_outbox_completed (status, completed_at, job_id)
     ) ENGINE=InnoDB DEFAULT CHARSET=utf8mb4 COLLATE=utf8mb4_unicode_ci
     """,
     """

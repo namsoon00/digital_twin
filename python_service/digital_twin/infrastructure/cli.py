@@ -2,6 +2,7 @@ import argparse
 import json
 import os
 import sys
+import time
 from pathlib import Path
 from typing import Dict, List
 
@@ -13,7 +14,7 @@ from ..domain.portfolio import AlertEvent
 from .admin_preview import write_admin_preview
 from .event_bus import default_event_bus
 from . import operational_store as stores
-from .mysql_operational_connection import MySQLOperationalConnection
+from .mysql_operational_connection import MySQLOperationalConnection, mysql_is_connection_lost
 from .mysql_retention import (
     MYSQL_OPERATIONAL_COMPACTION_TABLES,
     apply_mysql_operational_history_retention,
@@ -946,28 +947,41 @@ def run_mysql_operational_cleanup(
     """Run one bounded cleanup pass outside the realtime inference path."""
     settings = dict(settings or {})
     settings["_skipOperationalHistoryRetention"] = True
-    store = MySQLOperationalConnection(settings)
-    with store.connect() as connection:
-        result = apply_mysql_operational_history_retention(
-            connection,
-            settings,
-            use_lock=True,
-        )
-        result["compactionCandidates"] = mysql_operational_compaction_tables(result)
-        if optimize:
-            # Explicit maintenance runs while workers are paused; include the
-            # small current-state tables too because they can retain old pages
-            # after large payloads were replaced in place.
-            result["compaction"] = optimize_mysql_operational_tables(
-                connection,
-                sorted(MYSQL_OPERATIONAL_COMPACTION_TABLES),
-            )
-        if drop_ephemeral_databases:
-            result["ephemeralDatabaseCleanup"] = drop_ephemeral_mysql_databases(
-                connection,
-                protected_databases=[str(settings.get("mysqlDatabase") or "")],
-            )
-    return result
+    # A connection can be dropped after the server-side read timeout.  A
+    # normal pass is idempotent and uses a fresh pooled connection on retry;
+    # explicit compaction is intentionally excluded because it is operator-led.
+    retryable = not optimize and not drop_ephemeral_databases
+    for attempt in range(2):
+        try:
+            store = MySQLOperationalConnection(settings)
+            with store.connect() as connection:
+                result = apply_mysql_operational_history_retention(
+                    connection,
+                    settings,
+                    use_lock=True,
+                )
+                result["compactionCandidates"] = mysql_operational_compaction_tables(result)
+                if optimize:
+                    # Explicit maintenance runs while workers are paused; include the
+                    # small current-state tables too because they can retain old pages
+                    # after large payloads were replaced in place.
+                    result["compaction"] = optimize_mysql_operational_tables(
+                        connection,
+                        sorted(MYSQL_OPERATIONAL_COMPACTION_TABLES),
+                    )
+                if drop_ephemeral_databases:
+                    result["ephemeralDatabaseCleanup"] = drop_ephemeral_mysql_databases(
+                        connection,
+                        protected_databases=[str(settings.get("mysqlDatabase") or "")],
+                    )
+            if attempt:
+                result["transientConnectionRetryCount"] = attempt
+            return result
+        except Exception as error:
+            if not retryable or attempt or not mysql_is_connection_lost(error):
+                raise
+            time.sleep(0.25)
+    raise RuntimeError("unreachable MySQL operational cleanup retry state")
 
 
 def maintenance_command(args) -> int:

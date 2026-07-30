@@ -1227,17 +1227,21 @@ class MySQLOntologyReasoningMailboxStore(MySQLOperationalConnection):
         except Exception:
             return {}
 
-    def prune_terminal(self, retention_hours: int = 72, limit: int = 1000) -> int:
-        hours = max(1, min(24 * 90, int(retention_hours or 72)))
-        bounded = max(1, min(10000, int(limit or 1000)))
+    def prune_terminal(self, retention_hours: int = 24, limit: int = 50) -> int:
+        # This is operational history, not the source event log.  Keep its
+        # transaction short even when a legacy worker passes wider limits.
+        hours = max(1, min(24, int(retention_hours or 24)))
+        bounded = max(1, min(50, int(limit or 50)))
         cutoff = (datetime.now(timezone.utc) - timedelta(hours=hours)).isoformat().replace("+00:00", "Z")
-        with self.transaction() as connection:
+        def delete(connection):
             cursor = connection.execute(
                 """
                 DELETE FROM ontology_reasoning_mailbox_events
                 WHERE state IN ('completed', 'superseded', 'expired') AND updated_at < %s
-                LIMIT %s
+                ORDER BY updated_at ASC, event_id ASC LIMIT %s
                 """,
                 (cutoff, bounded),
             )
-        return int(cursor.rowcount or 0)
+            return int(getattr(cursor, "rowcount", 0) or 0)
+
+        return int(self.transaction_with_deadlock_retry("reasoning-mailbox-prune-terminal", delete) or 0)

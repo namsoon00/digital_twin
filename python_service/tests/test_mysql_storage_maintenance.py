@@ -1,20 +1,26 @@
 import unittest
 from datetime import datetime, timezone
+from unittest.mock import patch
 
+from digital_twin.infrastructure.cli import run_mysql_operational_cleanup
 from digital_twin.infrastructure.mysql_retention import (
     apply_mysql_operational_history_retention,
     ephemeral_mysql_database_names,
     operational_delivered_notification_keep_count,
+    operational_history_retention_batch_size,
     operational_large_domain_event_keep_count,
     operational_large_domain_event_names,
     operational_projection_run_keep_count,
+    operational_world_projection_outbox_retention_hours,
     optimize_mysql_operational_tables,
 )
 from digital_twin.infrastructure.mysql_monitoring import mysql_monitoring_schema_bootstrap_enabled
 from digital_twin.infrastructure.mysql_operational_connection import (
+    mysql_is_connection_lost,
     mysql_operational_constructor_retention_enabled,
     mysql_operational_schema_bootstrap_enabled,
 )
+from digital_twin.infrastructure.mysql_schema_tuning import MYSQL_OPERATIONAL_INDEXES
 from digital_twin.infrastructure.schedulers import OperationalHistoryRetentionScheduler
 from digital_twin.infrastructure.typedb_ontology import TypeDBOntologyGraphRepository
 
@@ -35,6 +41,21 @@ class RecordingConnection:
     def execute(self, sql, params=()):
         self.calls.append((str(sql), tuple(params or ())))
         return Cursor()
+
+
+class FullBatchRecordingConnection(RecordingConnection):
+    def __init__(self, rowcount=50):
+        super().__init__()
+        self.rowcount = rowcount
+        self.executions = {}
+
+    def execute(self, sql, params=()):
+        rendered = str(sql)
+        values = tuple(params or ())
+        self.calls.append((rendered, values))
+        key = (rendered, values)
+        self.executions[key] = self.executions.get(key, 0) + 1
+        return Cursor(rowcount=self.rowcount)
 
 
 class MySQLStorageMaintenanceTests(unittest.TestCase):
@@ -87,6 +108,81 @@ class MySQLStorageMaintenanceTests(unittest.TestCase):
         self.assertEqual(48, operational_projection_run_keep_count({}))
         self.assertEqual(2, operational_projection_run_keep_count({"operationalProjectionRunKeepCount": "0"}))
         self.assertEqual(500, operational_projection_run_keep_count({"operationalProjectionRunKeepCount": "9999"}))
+
+    def test_history_retention_limits_legacy_batches_and_large_outbox_audit_window(self):
+        self.assertEqual(50, operational_history_retention_batch_size({"operationalHistoryRetentionBatchSize": "1000"}))
+        self.assertEqual(24, operational_world_projection_outbox_retention_hours({}))
+        self.assertEqual(
+            24,
+            operational_world_projection_outbox_retention_hours(
+                {"ontologyWorldProjectionCompletedRetentionHours": "168"}
+            ),
+        )
+
+    def test_history_retention_runs_one_small_batch_per_policy(self):
+        connection = FullBatchRecordingConnection()
+
+        result = apply_mysql_operational_history_retention(
+            connection,
+            {"operationalHistoryRetentionEnabled": "1", "operationalHistoryRetentionBatchSize": "1000"},
+            now=datetime(2026, 7, 30, tzinfo=timezone.utc),
+            use_lock=False,
+        )
+
+        self.assertEqual(50, result["batchSize"])
+        self.assertEqual(10, result["outboxBatchSize"])
+        self.assertEqual("bounded-single-batch-per-policy", result["mode"])
+        self.assertTrue(connection.executions)
+        self.assertTrue(all(count == 1 for count in connection.executions.values()))
+        outbox_params = [
+            params
+            for sql, params in connection.calls
+            if "ontology_world_projection_outbox" in sql and "DELETE" in sql
+        ]
+        self.assertEqual([10], [params[-1] for params in outbox_params])
+
+    def test_completed_outbox_indexes_and_connection_loss_codes_are_registered(self):
+        index_names = {
+            index.name
+            for definitions in (
+                MYSQL_OPERATIONAL_INDEXES["ontology_world_projection_outbox"],
+                MYSQL_OPERATIONAL_INDEXES["ontology_inference_detail_outbox"],
+            )
+            for index in definitions
+        }
+
+        self.assertIn("idx_world_projection_outbox_completed", index_names)
+        self.assertIn("idx_inference_detail_outbox_completed", index_names)
+        self.assertTrue(mysql_is_connection_lost(Exception(2013, "Lost connection")))
+        self.assertFalse(mysql_is_connection_lost(Exception(1213, "Deadlock")))
+
+    def test_operational_cleanup_retries_one_connection_loss_with_a_fresh_store(self):
+        class Store:
+            def connect(self):
+                return self
+
+            def __enter__(self):
+                return self
+
+            def __exit__(self, *_args):
+                return False
+
+        with patch(
+            "digital_twin.infrastructure.cli.MySQLOperationalConnection",
+            side_effect=[Store(), Store()],
+        ) as stores, patch(
+            "digital_twin.infrastructure.cli.apply_mysql_operational_history_retention",
+            side_effect=[Exception(2013, "Lost connection"), {"deleted": 0, "tables": {}}],
+        ) as retention, patch(
+            "digital_twin.infrastructure.cli.mysql_operational_compaction_tables",
+            return_value=[],
+        ), patch("digital_twin.infrastructure.cli.time.sleep") as sleep:
+            result = run_mysql_operational_cleanup({"operationalHistoryRetentionEnabled": "1"})
+
+        self.assertEqual(2, stores.call_count)
+        self.assertEqual(2, retention.call_count)
+        self.assertEqual(1, result["transientConnectionRetryCount"])
+        sleep.assert_called_once_with(0.25)
 
     def test_duplicated_event_and_delivery_history_defaults_are_compact(self):
         self.assertEqual(20, operational_large_domain_event_keep_count({}))

@@ -195,6 +195,20 @@ MYSQL_OPERATIONAL_INDEXES: Dict[str, Sequence[MySQLIndexDefinition]] = {
             "`account_id`, `material_fingerprint`",
         ),
     ),
+    "ontology_world_projection_outbox": (
+        MySQLIndexDefinition(
+            "ontology_world_projection_outbox",
+            "idx_world_projection_outbox_completed",
+            "`status`, `completed_at`, `job_id`",
+        ),
+    ),
+    "ontology_inference_detail_outbox": (
+        MySQLIndexDefinition(
+            "ontology_inference_detail_outbox",
+            "idx_inference_detail_outbox_completed",
+            "`status`, `completed_at`, `job_id`",
+        ),
+    ),
     "investment_strategy_proposals": (
         MySQLIndexDefinition(
             "investment_strategy_proposals",

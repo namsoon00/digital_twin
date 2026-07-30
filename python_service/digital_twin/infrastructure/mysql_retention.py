@@ -9,7 +9,9 @@ from .mysql_schema_tuning import quote_identifier
 FALSE_VALUES = {"0", "false", "no", "off", "disabled", "disable", "none"}
 TRUE_VALUES = {"1", "true", "yes", "on", "enabled", "enable"}
 DEFAULT_RETENTION_HOURS = 24
-DEFAULT_BATCH_SIZE = 1000
+# Retention is deliberately low-priority. A large delete can hold page locks,
+# saturate the redo log, and turn routine history cleanup into an outage.
+DEFAULT_BATCH_SIZE = 50
 DEFAULT_CHECK_INTERVAL_SECONDS = 300
 DEFAULT_SNAPSHOT_HISTORY_KEEP_COUNT = 6
 DEFAULT_SUPPRESSED_NOTIFICATION_RETENTION_MINUTES = 120
@@ -26,7 +28,7 @@ DEFAULT_LARGE_DOMAIN_EVENT_NAMES = (
     "ontology.reasoning_requested",
 )
 DEFAULT_PROJECTION_RUN_KEEP_COUNT = 48
-DEFAULT_WORLD_PROJECTION_OUTBOX_RETENTION_HOURS = 168
+DEFAULT_WORLD_PROJECTION_OUTBOX_RETENTION_HOURS = 24
 DEFAULT_INFERENCE_DETAIL_OUTBOX_RETENTION_HOURS = 168
 DEFAULT_HYPOTHESIS_LIFECYCLE_EVENT_RETENTION_DAYS = 180
 DEFAULT_MARKET_TIME_SERIES_RETENTION_DAYS = {
@@ -130,7 +132,10 @@ def operational_history_retention_hours(settings: Mapping[str, object] = None) -
 
 
 def operational_history_retention_batch_size(settings: Mapping[str, object] = None) -> int:
-    return _int_setting(settings or {}, "operationalHistoryRetentionBatchSize", DEFAULT_BATCH_SIZE, 1, 10000)
+    # Clamp legacy 1,000-row settings too. The next maintenance turn will
+    # continue any backlog, so keeping a transaction short is more important
+    # than draining it in one pass.
+    return _int_setting(settings or {}, "operationalHistoryRetentionBatchSize", DEFAULT_BATCH_SIZE, 1, 50)
 
 
 def operational_history_retention_check_interval_seconds(settings: Mapping[str, object] = None) -> int:
@@ -192,12 +197,15 @@ def operational_projection_run_keep_count(settings: Mapping[str, object] = None)
 
 
 def operational_world_projection_outbox_retention_hours(settings: Mapping[str, object] = None) -> int:
+    # Projection packets can each carry a multi-megabyte ABox result.  Cap
+    # legacy seven-day settings as well as new values so retained queue audit
+    # data cannot exhaust the local MySQL volume again.
     return _int_setting(
         settings or {},
         "ontologyWorldProjectionCompletedRetentionHours",
         DEFAULT_WORLD_PROJECTION_OUTBOX_RETENTION_HOURS,
-        24,
-        24 * 365,
+        1,
+        DEFAULT_WORLD_PROJECTION_OUTBOX_RETENTION_HOURS,
     )
 
 
@@ -321,10 +329,15 @@ def _release_lock(connection) -> None:
     _execute(connection, "SELECT RELEASE_LOCK(%s)", (RETENTION_LOCK_NAME,))
 
 
+def _delete_one_batch(connection, sql: str, params=()) -> int:
+    """Delete one bounded batch; later maintenance turns drain the rest."""
+    cursor = _execute(connection, sql, params)
+    return int(getattr(cursor, "rowcount", 0) or 0)
+
+
 def _delete_stale_rows(connection, target: MySQLRetentionTarget, cutoff_iso: str, batch_size: int) -> int:
     table = quote_identifier(target.table)
     time_column = quote_identifier(target.time_column)
-    total = 0
     cutoff_sql = "CAST(%s AS CHAR CHARACTER SET utf8mb4) COLLATE utf8mb4_unicode_ci"
     sql = (
         "DELETE FROM "
@@ -337,17 +350,10 @@ def _delete_stale_rows(connection, target: MySQLRetentionTarget, cutoff_iso: str
         + time_column
         + " LIMIT %s"
     )
-    while True:
-        cursor = _execute(connection, sql, (cutoff_iso, batch_size))
-        affected = int(getattr(cursor, "rowcount", 0) or 0)
-        total += affected
-        if affected < batch_size:
-            break
-    return total
+    return _delete_one_batch(connection, sql, (cutoff_iso, batch_size))
 
 
 def _delete_suppressed_notification_rows(connection, cutoff_iso: str, batch_size: int) -> int:
-    total = 0
     cutoff_sql = "CAST(%s AS CHAR CHARACTER SET utf8mb4) COLLATE utf8mb4_unicode_ci"
     sql = (
         "DELETE FROM `notification_jobs`"
@@ -356,13 +362,7 @@ def _delete_suppressed_notification_rows(connection, cutoff_iso: str, batch_size
         + cutoff_sql
         + " ORDER BY `created_at`, `job_id` LIMIT %s"
     )
-    while True:
-        cursor = _execute(connection, sql, (cutoff_iso, batch_size))
-        affected = int(getattr(cursor, "rowcount", 0) or 0)
-        total += affected
-        if affected < batch_size:
-            break
-    return total
+    return _delete_one_batch(connection, sql, (cutoff_iso, batch_size))
 
 
 def _delete_delivered_notification_rows_over_keep_count(
@@ -376,7 +376,6 @@ def _delete_delivered_notification_rows_over_keep_count(
     while the canonical decision and evidence records live in their own tables.
     Delivery history therefore must not grow with every realtime cycle.
     """
-    total = 0
     sql = """
         DELETE jobs
         FROM `notification_jobs` jobs
@@ -396,13 +395,7 @@ def _delete_delivered_notification_rows_over_keep_count(
         ) stale
           ON stale.job_id = jobs.job_id
     """
-    while True:
-        cursor = _execute(connection, sql, (keep_count, batch_size))
-        affected = int(getattr(cursor, "rowcount", 0) or 0)
-        total += affected
-        if affected < batch_size:
-            break
-    return total
+    return _delete_one_batch(connection, sql, (keep_count, batch_size))
 
 
 def _delete_market_time_series_rows(
@@ -411,7 +404,6 @@ def _delete_market_time_series_rows(
     cutoff_iso: str,
     batch_size: int,
 ) -> int:
-    total = 0
     cutoff_sql = "CAST(%s AS CHAR CHARACTER SET utf8mb4) COLLATE utf8mb4_unicode_ci"
     sql = (
         "DELETE FROM `market_time_series_observations`"
@@ -420,17 +412,10 @@ def _delete_market_time_series_rows(
         + cutoff_sql
         + " ORDER BY `bucket_at`, `account_id`, `symbol` LIMIT %s"
     )
-    while True:
-        cursor = _execute(connection, sql, (granularity, cutoff_iso, batch_size))
-        affected = int(getattr(cursor, "rowcount", 0) or 0)
-        total += affected
-        if affected < batch_size:
-            break
-    return total
+    return _delete_one_batch(connection, sql, (granularity, cutoff_iso, batch_size))
 
 
 def _delete_snapshot_history_over_keep_count(connection, keep_count: int, batch_size: int) -> int:
-    total = 0
     sql = """
         DELETE history
         FROM `monitor_snapshot_history` history
@@ -451,13 +436,7 @@ def _delete_snapshot_history_over_keep_count(connection, keep_count: int, batch_
           ON stale.account_id = history.account_id
          AND stale.generated_at = history.generated_at
     """
-    while True:
-        cursor = _execute(connection, sql, (keep_count, batch_size))
-        affected = int(getattr(cursor, "rowcount", 0) or 0)
-        total += affected
-        if affected < batch_size:
-            break
-    return total
+    return _delete_one_batch(connection, sql, (keep_count, batch_size))
 
 
 def _delete_large_domain_events_over_keep_count(
@@ -470,7 +449,6 @@ def _delete_large_domain_events_over_keep_count(
     if not event_names:
         return 0
     placeholders = ", ".join(["%s"] * len(event_names))
-    total = 0
     sql = (
         """
         DELETE events
@@ -498,13 +476,7 @@ def _delete_large_domain_events_over_keep_count(
         """
     )
     params = tuple(event_names) + (keep_count, batch_size)
-    while True:
-        cursor = _execute(connection, sql, params)
-        affected = int(getattr(cursor, "rowcount", 0) or 0)
-        total += affected
-        if affected < batch_size:
-            break
-    return total
+    return _delete_one_batch(connection, sql, params)
 
 
 def _delete_stale_projection_runs(connection, cutoff_iso: str, batch_size: int) -> int:
@@ -513,7 +485,6 @@ def _delete_stale_projection_runs(connection, cutoff_iso: str, batch_size: int) 
     A currently projecting row is an active recovery contract and must remain
     available until the projection-run store marks it stale or completes it.
     """
-    total = 0
     cutoff_sql = "CAST(%s AS CHAR CHARACTER SET utf8mb4) COLLATE utf8mb4_unicode_ci"
     sql = (
         "DELETE FROM `ontology_projection_runs`"
@@ -521,18 +492,11 @@ def _delete_stale_projection_runs(connection, cutoff_iso: str, batch_size: int) 
         " AND `updated_at` < " + cutoff_sql
         + " ORDER BY `updated_at`, `run_id` LIMIT %s"
     )
-    while True:
-        cursor = _execute(connection, sql, (cutoff_iso, batch_size))
-        affected = int(getattr(cursor, "rowcount", 0) or 0)
-        total += affected
-        if affected < batch_size:
-            break
-    return total
+    return _delete_one_batch(connection, sql, (cutoff_iso, batch_size))
 
 
 def _delete_projection_runs_over_keep_count(connection, keep_count: int, batch_size: int) -> int:
     """Retain only the newest completed audit rows for each ontology world."""
-    total = 0
     sql = """
         DELETE runs
         FROM `ontology_projection_runs` runs
@@ -552,17 +516,10 @@ def _delete_projection_runs_over_keep_count(connection, keep_count: int, batch_s
         ) stale
           ON stale.run_id = runs.run_id
     """
-    while True:
-        cursor = _execute(connection, sql, (keep_count, batch_size))
-        affected = int(getattr(cursor, "rowcount", 0) or 0)
-        total += affected
-        if affected < batch_size:
-            break
-    return total
+    return _delete_one_batch(connection, sql, (keep_count, batch_size))
 
 
 def _delete_completed_world_projection_outbox_rows(connection, cutoff_iso: str, batch_size: int) -> int:
-    total = 0
     cutoff_sql = "CAST(%s AS CHAR CHARACTER SET utf8mb4) COLLATE utf8mb4_unicode_ci"
     sql = (
         "DELETE FROM `ontology_world_projection_outbox`"
@@ -570,17 +527,10 @@ def _delete_completed_world_projection_outbox_rows(connection, cutoff_iso: str, 
         " AND `completed_at` <> '' AND `completed_at` < " + cutoff_sql
         + " ORDER BY `completed_at`, `job_id` LIMIT %s"
     )
-    while True:
-        cursor = _execute(connection, sql, (cutoff_iso, batch_size))
-        affected = int(getattr(cursor, "rowcount", 0) or 0)
-        total += affected
-        if affected < batch_size:
-            break
-    return total
+    return _delete_one_batch(connection, sql, (cutoff_iso, batch_size))
 
 
 def _delete_completed_inference_detail_outbox_rows(connection, cutoff_iso: str, batch_size: int) -> int:
-    total = 0
     cutoff_sql = "CAST(%s AS CHAR CHARACTER SET utf8mb4) COLLATE utf8mb4_unicode_ci"
     sql = (
         "DELETE FROM `ontology_inference_detail_outbox`"
@@ -588,13 +538,7 @@ def _delete_completed_inference_detail_outbox_rows(connection, cutoff_iso: str, 
         " AND `completed_at` <> '' AND `completed_at` < " + cutoff_sql
         + " ORDER BY `completed_at`, `job_id` LIMIT %s"
     )
-    while True:
-        cursor = _execute(connection, sql, (cutoff_iso, batch_size))
-        affected = int(getattr(cursor, "rowcount", 0) or 0)
-        total += affected
-        if affected < batch_size:
-            break
-    return total
+    return _delete_one_batch(connection, sql, (cutoff_iso, batch_size))
 
 
 def mysql_operational_compaction_tables(retention_result: Mapping[str, object] = None) -> List[str]:
@@ -690,6 +634,10 @@ def apply_mysql_operational_history_retention(
     time_series_cutoffs = market_time_series_retention_cutoffs(configured, now=now)
     lifecycle_event_cutoff_iso = hypothesis_lifecycle_event_retention_cutoff(configured, now=now)
     batch_size = operational_history_retention_batch_size(configured)
+    # World-projection payloads are multi-megabyte ABox packets. Keep their
+    # delete transaction below the general history batch to avoid redo-log
+    # stalls while the normal worker continues draining in later turns.
+    outbox_batch_size = min(batch_size, 10)
     projection_run_keep_count = operational_projection_run_keep_count(configured)
     world_projection_outbox_retention_hours = operational_world_projection_outbox_retention_hours(configured)
     inference_detail_outbox_retention_hours = operational_inference_detail_outbox_retention_hours(configured)
@@ -754,7 +702,7 @@ def apply_mysql_operational_history_retention(
         world_projection_deleted = _delete_completed_world_projection_outbox_rows(
             connection,
             world_projection_cutoff,
-            batch_size,
+            outbox_batch_size,
         )
         deleted_by_table["ontology_world_projection_outbox"] = world_projection_deleted
         deleted_by_policy["time:ontology_world_projection_outbox"] = world_projection_deleted
@@ -766,7 +714,7 @@ def apply_mysql_operational_history_retention(
         inference_detail_deleted = _delete_completed_inference_detail_outbox_rows(
             connection,
             inference_detail_cutoff,
-            batch_size,
+            outbox_batch_size,
         )
         deleted_by_table["ontology_inference_detail_outbox"] = inference_detail_deleted
         deleted_by_policy["time:ontology_inference_detail_outbox"] = inference_detail_deleted
@@ -801,6 +749,9 @@ def apply_mysql_operational_history_retention(
     return {
         "enabled": True,
         "retentionHours": operational_history_retention_hours(configured),
+        "batchSize": batch_size,
+        "outboxBatchSize": outbox_batch_size,
+        "mode": "bounded-single-batch-per-policy",
         "cutoffIso": cutoff_iso,
         "snapshotHistoryKeepCount": operational_snapshot_history_keep_count(configured),
         "suppressedNotificationCutoffIso": suppressed_cutoff_iso,

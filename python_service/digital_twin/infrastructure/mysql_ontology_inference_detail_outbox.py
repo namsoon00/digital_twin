@@ -362,22 +362,24 @@ class MySQLOntologyInferenceDetailOutboxStore(MySQLOperationalConnection):
             )
         return int(getattr(cursor, "rowcount", 0) or 0)
 
-    def prune_completed(self, retention_hours: int = 168, limit: int = 5000) -> int:
+    def prune_completed(self, retention_hours: int = 168, limit: int = 50) -> int:
         bounded_hours = max(24, min(24 * 365, int(retention_hours or 168)))
-        bounded_limit = max(1, min(50000, int(limit or 5000)))
+        bounded_limit = max(1, min(50, int(limit or 50)))
         cutoff = (
             datetime.now(timezone.utc) - timedelta(hours=bounded_hours)
         ).isoformat().replace("+00:00", "Z")
-        with self.transaction() as connection:
+        def delete(connection):
             cursor = connection.execute(
                 """
                 DELETE FROM ontology_inference_detail_outbox
                 WHERE status IN (%s, %s) AND completed_at != '' AND completed_at < %s
-                ORDER BY completed_at ASC LIMIT %s
+                ORDER BY completed_at ASC, job_id ASC LIMIT %s
                 """,
                 (COMPLETED, SUPERSEDED, cutoff, bounded_limit),
             )
-        return int(getattr(cursor, "rowcount", 0) or 0)
+            return int(getattr(cursor, "rowcount", 0) or 0)
+
+        return int(self.transaction_with_deadlock_retry("inference-detail-prune-completed", delete) or 0)
 
     @staticmethod
     def row_payload(row: Mapping[str, object]) -> Dict[str, object]:

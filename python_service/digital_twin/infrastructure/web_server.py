@@ -645,6 +645,7 @@ def settings_status_payload() -> Dict[str, object]:
         "ontologyReasoningTelemetryHistoryLimit",
         "typedbNativeRuleTargetSymbolLimit",
         "typedbNativeRuleTargetParallelism",
+        "typedbNativeRuleTargetWorkShardingEnabled",
         "typedbNativeRuleSelectionEnabled",
         "typedbNativeRuleParallelism",
         "typedbNativeRuleExecutionBudgetSeconds",

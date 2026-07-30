@@ -250,6 +250,26 @@ class TypeDBOntologyRepositoryTests(unittest.TestCase):
             }),
         )
 
+    def test_target_work_plan_keeps_a_coherent_candidate_set_without_target_sharding(self):
+        work_plan = typedb_native_rule_target_work_plan(
+            [
+                {
+                    "ruleId": "graph.target.coherent.v1",
+                    "candidateSymbols": ["005930", "000660", "AAPL", "TSLA"],
+                }
+            ],
+            target_parallelism=1,
+        )
+
+        self.assertFalse(work_plan["targetWorkShardingUsed"])
+        self.assertEqual(1, work_plan["effectiveTargetParallelism"])
+        self.assertEqual(1, work_plan["targetWorkShardCount"])
+        self.assertEqual(1, work_plan["targetWorkItemCount"])
+        self.assertEqual(
+            ["000660", "005930", "AAPL", "TSLA"],
+            sorted(work_plan["workItems"][0]["candidateSymbols"]),
+        )
+
     def test_projection_recorder_exposes_scoped_abox_write_substage_timings(self):
         stages = {}
         PortfolioOntologyProjectionRecorder.attach_abox_persistence_runtime_stages(
@@ -2304,6 +2324,7 @@ class TypeDBOntologyRepositoryTests(unittest.TestCase):
             retry_count=0,
             native_rule_parallelism=2,
             native_rule_target_parallelism=2,
+            native_rule_target_work_sharding_enabled=True,
         )
         rule = GraphInferenceRule(
             rule_id="graph.target.parallel.v1",
@@ -2405,6 +2426,44 @@ class TypeDBOntologyRepositoryTests(unittest.TestCase):
                 for symbol in item["candidateSymbols"]
             },
         )
+
+    def test_typedb_native_rule_keeps_target_set_coherent_by_default(self):
+        repository = TypeDBOntologyGraphRepository(
+            "127.0.0.1:1729",
+            native_rule_parallelism=2,
+            native_rule_target_parallelism=2,
+        )
+        rule = GraphInferenceRule(
+            rule_id="graph.target.coherent.default.v1",
+            label="coherent target default",
+            version="v1",
+            source_kind="stock",
+            conditions=[],
+            derivations=[],
+            action_group="watch",
+            action_level="review",
+            prompt_hint="대상 묶음 질의 검증",
+        )
+
+        with patch.object(repository, "active_abox_rule_context", return_value={
+            "status": "ok",
+            "relationTypesBySymbol": {"005930": [], "000660": []},
+            "sourceIdsBySymbol": {"005930": ["stock:005930"], "000660": ["stock:000660"]},
+        }), patch.object(repository, "driver_imports", return_value=(None, "disabled for test")), patch(
+            "digital_twin.infrastructure.typedb_ontology.typedb_native_rule_target_work_plan",
+            wraps=typedb_native_rule_target_work_plan,
+        ) as target_plan:
+            result = repository.match_typedb_native_rules(
+                [rule],
+                target_symbols=["005930", "000660"],
+                native_rule_target_parallelism=2,
+                stable_abox_write_lease_held=True,
+            )
+
+        self.assertEqual("error", result["status"])
+        self.assertEqual(1, target_plan.call_args.kwargs["target_parallelism"])
+        self.assertFalse(result["targetWorkShardingUsed"])
+        self.assertEqual(1, result["targetWorkItemCount"])
 
     def test_typedb_native_target_sharding_requires_the_abox_write_lease(self):
         repository = TypeDBOntologyGraphRepository("127.0.0.1:1729")

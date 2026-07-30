@@ -6053,6 +6053,7 @@ class TypeDBOntologyGraphRepository(GraphStoreOntologyRowMapperMixin, ScopedABox
         native_rule_execution_budget_seconds: float = DEFAULT_TYPEDB_NATIVE_RULE_EXECUTION_BUDGET_SECONDS,
         native_rule_parallelism: int = DEFAULT_TYPEDB_NATIVE_RULE_PARALLELISM,
         native_rule_target_parallelism: int = DEFAULT_TYPEDB_NATIVE_RULE_TARGET_PARALLELISM,
+        native_rule_target_work_sharding_enabled: bool = False,
         native_rule_any_condition_parallelism: int = 1,
         inference_write_lease_enabled: bool = False,
         process_schema_function_cache_enabled: bool = False,
@@ -6116,6 +6117,13 @@ class TypeDBOntologyGraphRepository(GraphStoreOntologyRowMapperMixin, ScopedABox
                     or DEFAULT_TYPEDB_NATIVE_RULE_TARGET_PARALLELISM
                 ),
             ),
+        )
+        # A native rule takes the complete candidate-symbol set in one query.
+        # Target splitting multiplies those queries while the existing rule
+        # parallelism already supplies bounded concurrency. Keep splitting as
+        # an explicit capacity-test opt-in, never the live backlog default.
+        self._native_rule_target_work_sharding_enabled = bool(
+            native_rule_target_work_sharding_enabled
         )
         self._native_rule_any_condition_parallelism = max(
             1,
@@ -6284,6 +6292,9 @@ class TypeDBOntologyGraphRepository(GraphStoreOntologyRowMapperMixin, ScopedABox
 
     def native_rule_target_parallelism(self) -> int:
         return self._native_rule_target_parallelism
+
+    def native_rule_target_work_sharding_enabled(self) -> bool:
+        return self._native_rule_target_work_sharding_enabled
 
     def native_rule_any_condition_parallelism(self) -> int:
         return self._native_rule_any_condition_parallelism
@@ -14015,17 +14026,26 @@ relation ontology-assertion,
                     continue
                 selected_entries.append(planned)
             # The ABox pointer is stable only while the projection-owned write
-            # lease is held. Split an already verified target set at this point
-            # so each worker performs read-only TypeDB work, then merge every
-            # result before a single InferenceBox generation is materialized.
-            # Without that lease, retain the historical serial work shape.
+            # lease is held. The normal path keeps every selected target in
+            # each rule's single TypeDB query; bounded rule parallelism is the
+            # one concurrency dimension. Target splitting remains an explicit
+            # capacity-test option and still requires the same write lease.
+            target_work_sharding_enabled = self.native_rule_target_work_sharding_enabled()
+            target_work_parallelism = (
+                requested_target_parallelism
+                if stable_abox_write_lease_held and target_work_sharding_enabled
+                else 1
+            )
             target_work_plan = typedb_native_rule_target_work_plan(
                 selected_entries,
-                target_parallelism=(
-                    requested_target_parallelism
-                    if stable_abox_write_lease_held
-                    else 1
-                ),
+                target_parallelism=target_work_parallelism,
+            )
+            target_work_plan["targetWorkShardingEnabled"] = target_work_sharding_enabled
+            target_work_plan["targetWorkShardingSuppressed"] = bool(
+                stable_abox_write_lease_held
+                and requested_target_parallelism > 1
+                and not target_work_sharding_enabled
+                and len(clean_symbols) > 1
             )
             selected_entries = list(target_work_plan.get("workItems") or [])
             imported = self.driver_imports()
@@ -14468,6 +14488,8 @@ relation ontology-assertion,
                     "nativeRuleParallelism": effective_parallelism,
                     "nativeRuleTargetParallelism": int(target_work_plan.get("effectiveTargetParallelism") or 1),
                     "targetWorkShardingUsed": bool(target_work_plan.get("targetWorkShardingUsed")),
+                    "targetWorkShardingEnabled": bool(target_work_plan.get("targetWorkShardingEnabled")),
+                    "targetWorkShardingSuppressed": bool(target_work_plan.get("targetWorkShardingSuppressed")),
                     "targetWorkShardCount": int(target_work_plan.get("targetWorkShardCount") or 0),
                     "targetWorkItemCount": int(target_work_plan.get("targetWorkItemCount") or 0),
                     "targetWorkOriginalEntryCount": int(target_work_plan.get("targetWorkOriginalEntryCount") or 0),
@@ -14513,6 +14535,8 @@ relation ontology-assertion,
                 "nativeRuleParallelism": effective_parallelism,
                 "nativeRuleTargetParallelism": int(target_work_plan.get("effectiveTargetParallelism") or 1),
                 "targetWorkShardingUsed": bool(target_work_plan.get("targetWorkShardingUsed")),
+                "targetWorkShardingEnabled": bool(target_work_plan.get("targetWorkShardingEnabled")),
+                "targetWorkShardingSuppressed": bool(target_work_plan.get("targetWorkShardingSuppressed")),
                 "targetWorkShardCount": int(target_work_plan.get("targetWorkShardCount") or 0),
                 "targetWorkItemCount": int(target_work_plan.get("targetWorkItemCount") or 0),
                 "targetWorkOriginalEntryCount": int(target_work_plan.get("targetWorkOriginalEntryCount") or 0),
@@ -14557,6 +14581,8 @@ relation ontology-assertion,
                 "nativeRuleParallelism": effective_parallelism,
                 "nativeRuleTargetParallelism": int(target_work_plan.get("effectiveTargetParallelism") or 1),
                 "targetWorkShardingUsed": bool(target_work_plan.get("targetWorkShardingUsed")),
+                "targetWorkShardingEnabled": bool(target_work_plan.get("targetWorkShardingEnabled")),
+                "targetWorkShardingSuppressed": bool(target_work_plan.get("targetWorkShardingSuppressed")),
                 "targetWorkShardCount": int(target_work_plan.get("targetWorkShardCount") or 0),
                 "targetWorkItemCount": int(target_work_plan.get("targetWorkItemCount") or 0),
                 "targetWorkOriginalEntryCount": int(target_work_plan.get("targetWorkOriginalEntryCount") or 0),
@@ -16937,6 +16963,8 @@ relation ontology-assertion,
                 "typedbNativeRuleParallelUsed": bool(native_match_result.get("parallelRuleExecution")),
                 "typedbNativeRuleTargetParallelism": int(number_or_none(native_match_result.get("nativeRuleTargetParallelism")) or 1),
                 "typedbNativeRuleTargetWorkShardingUsed": bool(native_match_result.get("targetWorkShardingUsed")),
+                "typedbNativeRuleTargetWorkShardingEnabled": bool(native_match_result.get("targetWorkShardingEnabled")),
+                "typedbNativeRuleTargetWorkShardingSuppressed": bool(native_match_result.get("targetWorkShardingSuppressed")),
                 "typedbNativeRuleTargetWorkShardCount": int(number_or_none(native_match_result.get("targetWorkShardCount")) or 0),
                 "typedbNativeRuleWorkItemCount": int(number_or_none(native_match_result.get("targetWorkItemCount")) or 0),
                 # All target shards are merged before this one generation is
@@ -17371,6 +17399,8 @@ relation ontology-assertion,
             "typedbNativeRuleSkippedCount": int(number_or_none(native_match_result.get("skippedRuleCount")) or 0),
             "typedbNativeRuleTargetParallelism": int(number_or_none(native_match_result.get("nativeRuleTargetParallelism")) or 1),
             "typedbNativeRuleTargetWorkShardingUsed": bool(native_match_result.get("targetWorkShardingUsed")),
+            "typedbNativeRuleTargetWorkShardingEnabled": bool(native_match_result.get("targetWorkShardingEnabled")),
+            "typedbNativeRuleTargetWorkShardingSuppressed": bool(native_match_result.get("targetWorkShardingSuppressed")),
             "typedbNativeRuleTargetWorkShardCount": int(number_or_none(native_match_result.get("targetWorkShardCount")) or 0),
             "typedbNativeRuleWorkItemCount": int(number_or_none(native_match_result.get("targetWorkItemCount")) or 0),
             "typedbNativeRuleCommitMode": "single-inferencebox-generation",
@@ -21774,6 +21804,9 @@ def typedb_repository_from_settings(settings: Dict[str, str] = None):
         native_rule_target_parallelism=int(number_or_none(
             settings.get("typedbNativeRuleTargetParallelism")
         ) or DEFAULT_TYPEDB_NATIVE_RULE_TARGET_PARALLELISM),
+        native_rule_target_work_sharding_enabled=typedb_bool(
+            settings.get("typedbNativeRuleTargetWorkShardingEnabled")
+        ),
         native_rule_any_condition_parallelism=int(number_or_none(
             settings.get("typedbNativeRuleAnyConditionParallelism")
         ) or 1),

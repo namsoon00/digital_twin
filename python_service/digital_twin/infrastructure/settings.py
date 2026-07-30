@@ -218,6 +218,7 @@ TEXT_SETTING_KEYS = [
     "ontologyReasoningTypeDbNativeRuleExecutionEnabled",
     "typedbNativeRuleTargetSymbolLimit",
     "typedbNativeRuleTargetParallelism",
+    "typedbNativeRuleTargetWorkShardingEnabled",
     "typedbNativeRuleSelectionEnabled",
     "kisRealtimeWebSocketIncludeConfiguredInReasoning",
     "typedbABoxNodeBatchSize",
@@ -1065,7 +1066,16 @@ def runtime_settings(fast_operational_read: bool = False) -> Dict[str, str]:
         "typedbNativeRuleTargetParallelism": value(
             "typedbNativeRuleTargetParallelism",
             "TYPEDB_NATIVE_RULE_TARGET_PARALLELISM",
-            "4",
+            # A native rule accepts the complete selected symbol set in one
+            # TypeQL call. Splitting that same rule once per symbol multiplies
+            # calls without adding concurrency beyond typedbNativeRuleParallelism,
+            # and can turn a four-symbol backlog drain into a timeout.
+            "1",
+        ),
+        "typedbNativeRuleTargetWorkShardingEnabled": value(
+            "typedbNativeRuleTargetWorkShardingEnabled",
+            "TYPEDB_NATIVE_RULE_TARGET_WORK_SHARDING_ENABLED",
+            "0",
         ),
         "typedbNativeRuleSelectionEnabled": value("typedbNativeRuleSelectionEnabled", "TYPEDB_NATIVE_RULE_SELECTION_ENABLED", "1"),
         "kisRealtimeWebSocketIncludeConfiguredInReasoning": value("kisRealtimeWebSocketIncludeConfiguredInReasoning", "KIS_REALTIME_WEBSOCKET_INCLUDE_CONFIGURED_IN_REASONING", "0"),

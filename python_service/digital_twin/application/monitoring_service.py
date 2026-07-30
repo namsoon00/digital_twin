@@ -335,7 +335,18 @@ class MonitorRunner:
         # stale monitor-side placeholder.
         if projection_enabled:
             self.record_hypothesis_lifecycle(snapshot)
-        events = self.monitor.events_for_snapshot(snapshot, previous)
+        event_builder = self.monitor.events_for_snapshot
+        event_builder_parameters = inspect.signature(event_builder).parameters
+        event_builder_accepts_kwargs = any(
+            parameter.kind == inspect.Parameter.VAR_KEYWORD
+            for parameter in event_builder_parameters.values()
+        )
+        if reasoning_context is not None and (
+            "reasoning_context" in event_builder_parameters or event_builder_accepts_kwargs
+        ):
+            events = event_builder(snapshot, previous, reasoning_context=reasoning_context)
+        else:
+            events = event_builder(snapshot, previous)
         if force and hasattr(self.monitor, "forced_holdings_snapshot_events"):
             events.extend(self.monitor.forced_holdings_snapshot_events(snapshot))
         self.progress("events.detected", accountId=account.account_id, eventCount=len(events))

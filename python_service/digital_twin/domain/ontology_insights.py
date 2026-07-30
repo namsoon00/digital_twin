@@ -12,6 +12,7 @@ from .message_types import (
     MODEL_REVIEW,
     MONITOR_CONNECTION,
     MONITOR_HEARTBEAT,
+    ONTOLOGY_OBSERVATION_FOLLOWUP,
     ONTOLOGY_INFERENCE_MISSING,
     WATCHLIST_ONTOLOGY_SIGNAL,
     WORK_HANDOFF,
@@ -44,6 +45,7 @@ SYSTEM_ALERT_TYPES = {
 INVESTMENT_SIGNAL_TYPES = {
     WATCHLIST_ONTOLOGY_SIGNAL,
     HOLDING_TIMING,
+    ONTOLOGY_OBSERVATION_FOLLOWUP,
 }
 
 HOLDING_POSITION_SIGNAL_TYPES = {
@@ -63,6 +65,7 @@ INSIGHT_TYPE_LABELS = {
     "dataQualityWarning": "데이터 신뢰도 점검",
     "contradictionDetected": "상충 신호",
     "relationshipChange": "관계 변화",
+    "relationshipReview": "시세 변화 관계 분석",
 }
 
 SOURCE_METADATA_KEYS = {
@@ -254,6 +257,8 @@ def unique_preserve(values: Iterable[str]) -> List[str]:
 def infer_insight_type(events: List[AlertEvent]) -> str:
     source_types = {event.rule for event in events}
     severities = {str(event.severity or "").upper() for event in events}
+    if ONTOLOGY_OBSERVATION_FOLLOWUP in source_types:
+        return "relationshipReview"
     if WATCHLIST_ONTOLOGY_SIGNAL in source_types:
         signal_types = {
             str((event.metadata or {}).get("watchlistOntologySignalType") or "")
@@ -463,6 +468,8 @@ def promoted_reference_lines(events: List[AlertEvent]) -> List[str]:
 def insight_thesis(insight_type: str, subject_name: str, source_labels: List[str], review_level: str) -> str:
     sources = ", ".join(source_labels[:4]) if source_labels else "관계 신호"
     review_text = REVIEW_LEVEL_LABELS.get(review_level, REVIEW_LEVEL_LABELS["check"])
+    if insight_type == "relationshipReview":
+        return subject_name + "의 시세 변화를 반영한 TypeDB 관계 분석이 완료됐습니다. 현재 단계는 " + review_text + "이며, 매수·매도 결론이 새로 바뀌었다는 뜻은 아닙니다."
     if insight_type == "riskIncrease":
         return subject_name + "에서 확인할 위험 조건이 늘었습니다. 바로 매도하라는 뜻은 아니고, 보유 이유와 가격 반응을 먼저 다시 보라는 " + review_text + " 알림입니다."
     if insight_type == "riskManagement":
@@ -483,6 +490,8 @@ def insight_thesis(insight_type: str, subject_name: str, source_labels: List[str
 
 
 def next_check_for_insight(insight_type: str, source_types: List[str]) -> str:
+    if insight_type == "relationshipReview":
+        return "다음 시세·수급·뉴스 업데이트에서 관계 판단이나 실행 단계가 바뀌는지 확인하세요."
     if insight_type in {"riskIncrease", "riskManagement"}:
         return "손절/분할축소 기준, 매도 가능 수량, 다음 조회에서도 같은 규칙이 유지되는지 확인하세요."
     if insight_type == "opportunityDetected":
@@ -550,6 +559,7 @@ def build_investment_insight_events(snapshot: AccountSnapshot, signal_events: It
             continue
         source_types = unique_preserve(event.rule for event in events)
         source_labels = unique_preserve(signal_type_label(rule) for rule in source_types)
+        observation_followup = ONTOLOGY_OBSERVATION_FOLLOWUP in source_types
         decision_state = merged_decision_state(events)
         insight_type = infer_insight_type(events)
         policy_group = holding_position_policy_group(source_types)
@@ -580,7 +590,11 @@ def build_investment_insight_events(snapshot: AccountSnapshot, signal_events: It
         semantic_components = insight_semantic_components(subject, policy_dispatch_type, source_types, events)
         semantic_signature = insight_semantic_signature(semantic_components)
         criteria = [
-            "설정: 온톨로지 관계 그래프에서 의미 있는 투자 인사이트가 생성될 때",
+            (
+                "설정: 원시 시세 관측 뒤 최신 ABox의 TypeDB 관계 분석이 완료될 때"
+                if observation_followup
+                else "설정: 온톨로지 관계 그래프에서 의미 있는 투자 인사이트가 생성될 때"
+            ),
             "감지: " + ", ".join(source_labels)
             + " · 확인 단계 " + REVIEW_LEVEL_LABELS.get(decision_state["reviewLevel"], decision_state["reviewLevel"])
             + " · 자료 상태 " + DATA_STATE_LABELS.get(decision_state["dataState"], decision_state["dataState"])
@@ -613,7 +627,8 @@ def build_investment_insight_events(snapshot: AccountSnapshot, signal_events: It
                 "thesis": thesis,
                 "nextCheck": next_check,
                 "dispatchMode": "insight-driven-only",
-                "sourceSignalRole": "graph-backed-evidence",
+                "sourceSignalRole": "graph-backed-analysis-completion" if observation_followup else "graph-backed-evidence",
+                "observationFollowup": observation_followup,
                 "graphDerived": True,
                 "graphSource": "typedbInferenceBox",
                 "referenceDataLines": reference_lines,
@@ -642,11 +657,12 @@ def build_investment_insight_events(snapshot: AccountSnapshot, signal_events: It
                 "mode": "insight-driven-only",
                 "policyGroup": policy_group or "default",
                 "cooldownPolicy": "insight-cadence-key",
-                "noveltyPolicy": "source-relation-change",
+                "noveltyPolicy": "observation-analysis-completion" if observation_followup else "source-relation-change",
                 "suppressionPolicy": "legacy-signal-direct-dispatch-disabled",
                 "graphSourceRequired": True,
             },
-            "sourceSignalRole": "graph-backed-evidence",
+            "sourceSignalRole": "graph-backed-analysis-completion" if observation_followup else "graph-backed-evidence",
+            "observationFollowup": observation_followup,
         }
         metadata.update(promoted_context)
         insights.append(AlertEvent(

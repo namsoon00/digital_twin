@@ -10,6 +10,7 @@ WATCHLIST_ONTOLOGY_SIGNAL = "watchlistOntologySignal"
 HOLDING_TIMING = "holdingTiming"
 INVESTMENT_INSIGHT = "investmentInsight"
 MARKET_OBSERVATION = "marketObservation"
+ONTOLOGY_OBSERVATION_FOLLOWUP = "ontologyObservationFollowup"
 PORTFOLIO_HOLDINGS_SNAPSHOT = "portfolioHoldingsSnapshot"
 INVESTMENT_CALENDAR_REMINDER = "investmentCalendarReminder"
 NEWS_DIGEST = "newsDigest"
@@ -116,12 +117,13 @@ DEFAULT_ALERT_RULES = {
 EVIDENCE_ONLY_MESSAGE_TYPES = [
     WATCHLIST_ONTOLOGY_SIGNAL,
     HOLDING_TIMING,
+    ONTOLOGY_OBSERVATION_FOLLOWUP,
 ]
 
 DEFAULT_ALERT_THRESHOLDS = {
     # Raw market-observation delivery only. This does not produce an
     # investment action or replace the TypeDB materiality/inference path.
-    "marketObservationPriceChangePct": 0.6,
+    "marketObservationPriceChangePct": 2.0,
     "volumeRatioHigh": 2,
     "buyShareHigh": 65,
     "sellShareHigh": 65,
@@ -174,7 +176,7 @@ DEFAULT_RELATION_RULE_THRESHOLDS = {
 
 DEFAULT_CADENCE = {
     INVESTMENT_INSIGHT: 10,
-    MARKET_OBSERVATION: 10,
+    MARKET_OBSERVATION: 60,
     PORTFOLIO_HOLDINGS_SNAPSHOT: 10,
     INVESTMENT_CALENDAR_REMINDER: 10,
     NEWS_DIGEST: 30,
@@ -201,6 +203,7 @@ MESSAGE_TYPE_LABELS = {
     WATCHLIST_QUOTE_PENDING: "관심종목 시세 대기",
     WATCHLIST_ONTOLOGY_SIGNAL: "관심종목 관계 신호",
     HOLDING_TIMING: "보유 타이밍",
+    ONTOLOGY_OBSERVATION_FOLLOWUP: "시세 변화 관계 분석",
     ONTOLOGY_INFERENCE_MISSING: "온톨로지 추론 상태",
     ONTOLOGY_REASONING_QUEUE: "온톨로지 추론 대기열",
     MONITOR_HEARTBEAT: "실시간 상태",

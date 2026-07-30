@@ -408,9 +408,11 @@ class Monitor:
     def __init__(self):
         self.accounts = []
         self.calls = []
+        self.reasoning_contexts = []
 
-    def run_once(self, force=False, symbol_filter=None):
+    def run_once(self, force=False, symbol_filter=None, reasoning_context=None):
         self.calls.append(list(symbol_filter or []))
+        self.reasoning_contexts.append(dict(reasoning_context or {}))
         return []
 
 
@@ -546,6 +548,7 @@ class OntologyReasoningMailboxTests(unittest.TestCase):
         self.assertEqual(["AAPL"], self.monitor.calls[0])
         self.assertEqual("observation-followup-single-target", result["batchPlan"]["mode"])
         self.assertEqual(["AAPL"], result["batchPlan"]["observationFollowupSymbols"])
+        self.assertEqual(["AAPL"], self.monitor.reasoning_contexts[0]["observationFollowupSymbols"])
         self.assertEqual(["observation-followup"], result["queueDispatch"]["selectedWorkClasses"])
 
     def test_observation_followup_priority_survives_a_newer_latest_state_snapshot(self):

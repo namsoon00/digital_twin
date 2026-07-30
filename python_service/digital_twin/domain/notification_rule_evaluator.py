@@ -2,7 +2,7 @@ import re
 from typing import Dict, Iterable, List, Optional, Tuple
 
 from .market_hours import evaluate_market_hours
-from .message_types import INVESTMENT_INSIGHT, NEWS_DIGEST, SYSTEM_MESSAGE_TYPES
+from .message_types import INVESTMENT_INSIGHT, NEWS_DIGEST, ONTOLOGY_OBSERVATION_FOLLOWUP, SYSTEM_MESSAGE_TYPES
 from .notification_ai_context import is_graph_backed_relation_context
 from .ontology_relation_delivery import (
     relation_delivery_diff,
@@ -203,6 +203,24 @@ def material_evidence_present(context: Dict[str, object]) -> bool:
         if is_present(field_value(context, field)):
             return True
     return False
+
+
+def verified_observation_followup(context: Dict[str, object]) -> bool:
+    """Return whether this is a completed TypeDB analysis of a raw quote move."""
+
+    values = context if isinstance(context, dict) else {}
+    insight = nested_dict(values.get("ontologyInsight"))
+    source_types = insight.get("sourceSignalTypes") or values.get("sourceSignalTypes") or []
+    if isinstance(source_types, str):
+        source_types = [source_types]
+    normalized_source_types = {
+        str(item or "").strip()
+        for item in source_types
+        if str(item or "").strip()
+    } if isinstance(source_types, (list, tuple, set)) else set()
+    return bool(insight.get("observationFollowup") or values.get("observationFollowup")) and (
+        ONTOLOGY_OBSERVATION_FOLLOWUP in normalized_source_types
+    )
 
 
 def is_data_quality_insight_context(context: Dict[str, object]) -> bool:
@@ -890,12 +908,21 @@ def evaluate_notification_rule(job: NotificationJob, config: NotificationRuleCon
         if state["validationState"] == "blocked" or state["reviewLevel"] == "blocked":
             decision.mark_suppressed("validation_blocked", "AI 검증 또는 관계 판단이 보류 상태라 투자 판단 알림을 보내지 않습니다.")
             return decision
+        observation_followup = verified_observation_followup(job.context or {})
         if (
             state["reviewLevel"] == "normal"
             and state["changeState"] == "unchanged"
             and not material_evidence_present(job.context or {})
+            and not observation_followup
         ):
             decision.mark_suppressed("unchanged_normal_state", "평소 상태가 그대로이고 새 근거가 없어 반복 알림을 보내지 않습니다.")
+            return decision
+        if observation_followup:
+            if state["dataState"] == "partial" or state["validationState"] == "conditional":
+                decision.gate_state = "conditional"
+                decision.gate_reason = "원시 시세 관측 뒤 최신 TypeDB 관계 분석이 완료됐습니다. 일부 자료의 한계를 함께 표시합니다."
+            else:
+                decision.gate_reason = "원시 시세 관측 뒤 최신 TypeDB 관계 분석이 완료됐습니다."
             return decision
         if state["dataState"] == "partial" or state["validationState"] == "conditional":
             decision.gate_state = "conditional"

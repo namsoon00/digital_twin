@@ -189,6 +189,35 @@ class ReasoningSnapshotReplayTests(unittest.TestCase):
         self.assertEqual("2026-07-29T00:01:00Z", contexts[0]["sourceObservedAt"])
         self.assertTrue(recorder.source_snapshot_replay)
 
+    def test_monitor_forwards_reasoning_context_when_the_monitor_supports_it(self):
+        snapshot = account_snapshot_from_monitor_state(monitor_state())
+        recorder = CapturingCycleRecorder()
+
+        class ContextMonitor(EmptyMonitor):
+            def __init__(self):
+                self.reasoning_context = None
+
+            def events_for_snapshot(self, _snapshot, _previous, reasoning_context=None):
+                self.reasoning_context = dict(reasoning_context or {})
+                return []
+
+        monitor = ContextMonitor()
+        runner = MonitorRunner(
+            [account()],
+            store=SnapshotStore(monitor_state()),
+            monitor=monitor,
+            snapshot_builder=lambda _account: snapshot,
+            event_sender=lambda *_args, **_kwargs: None,
+            cycle_recorder=recorder,
+        )
+
+        runner.run_once(
+            symbol_filter=["AAPL"],
+            reasoning_context={"observationFollowupSymbols": ["AAPL"]},
+        )
+
+        self.assertEqual(["AAPL"], monitor.reasoning_context["observationFollowupSymbols"])
+
     def test_normal_monitor_queues_verified_snapshot_without_inline_typedb(self):
         snapshot = account_snapshot_from_monitor_state(monitor_state())
         recorder = CapturingCycleRecorder()

@@ -31,7 +31,13 @@ from digital_twin.application.notification_ai_gate_message import (
 from digital_twin.domain.notification_templates import prepend_message_start_badge
 from digital_twin.domain.notification_ai import opinion_lines_for_type
 from digital_twin.domain.accounts import AccountConfig
-from digital_twin.domain.message_types import INVESTMENT_INSIGHT, MARKET_OBSERVATION, WORK_HANDOFF, is_operations_delivery_message_type
+from digital_twin.domain.message_types import (
+    INVESTMENT_INSIGHT,
+    MARKET_OBSERVATION,
+    ONTOLOGY_OBSERVATION_FOLLOWUP,
+    WORK_HANDOFF,
+    is_operations_delivery_message_type,
+)
 from digital_twin.domain.notifications import NotificationJob
 from digital_twin.domain.strategy_alerts import StrategyAlertMixin
 from digital_twin.domain.portfolio import utc_now_iso
@@ -71,6 +77,48 @@ class NotificationDataQualityPolicyTests(unittest.TestCase):
             custom,
             default_notification_rule(MARKET_OBSERVATION),
         ))
+
+    def test_verified_observation_followup_can_report_an_unchanged_normal_state(self):
+        context = self._typedb_relation_context({
+            "messageType": INVESTMENT_INSIGHT,
+            "sourceSignalTypes": [ONTOLOGY_OBSERVATION_FOLLOWUP],
+            "ontologyInsight": {
+                "subject": "AAPL",
+                "reviewLevel": "normal",
+                "dataState": "sufficient",
+                "changeState": "unchanged",
+                "conflictState": "context-only",
+                "validationState": "ready",
+                "observationFollowup": True,
+                "sourceSignalTypes": [ONTOLOGY_OBSERVATION_FOLLOWUP],
+            },
+            "ontologyRelationContext": {
+                "source": "typedbInferenceBox",
+                "graphStore": "typedb",
+                "graphStoreUsed": True,
+                "fallbackUsed": False,
+                "reviewLevel": "normal",
+                "dataState": "sufficient",
+                "changeState": "unchanged",
+                "decision": {
+                    "basis": "typedbInferenceBox",
+                    "reviewLevel": "normal",
+                    "dataState": "sufficient",
+                    "changeState": "unchanged",
+                },
+            },
+        })
+        job = NotificationJob.create(
+            "시세 변화 후 TypeDB 관계 분석 완료",
+            account_id="main",
+            message_type=INVESTMENT_INSIGHT,
+            context=context,
+        )
+
+        decision = evaluate_notification_rule(job, default_notification_rule(INVESTMENT_INSIGHT))
+
+        self.assertTrue(decision.should_send)
+        self.assertIn("관계 분석이 완료", decision.gate_reason)
 
     @staticmethod
     def _typedb_relation_context(context):

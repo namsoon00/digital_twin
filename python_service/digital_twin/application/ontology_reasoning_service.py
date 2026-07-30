@@ -4749,6 +4749,18 @@ class OntologyReasoningRunner:
             batch_plan=batch_plan,
         )
         reasoning_context = reasoning_request_provenance(selected_requests, symbols)
+        selected_symbols = {str(symbol or "").upper().strip() for symbol in symbols if str(symbol or "").strip()}
+        selected_observation_followups = [
+            symbol
+            for symbol in observation_followup_symbols
+            if str(symbol or "").upper().strip() in selected_symbols
+        ]
+        if selected_observation_followups:
+            reasoning_context["observationFollowupSymbols"] = list(dict.fromkeys(
+                str(symbol or "").upper().strip()
+                for symbol in selected_observation_followups
+                if str(symbol or "").strip()
+            ))
         reasoning_context["queuePressure"] = {
             "effectivePendingCount": len(requests),
             "selectedRequestCount": len(selected_requests),

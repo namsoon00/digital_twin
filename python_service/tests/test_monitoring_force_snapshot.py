@@ -2,6 +2,7 @@ import sys
 import unittest
 from pathlib import Path
 from types import SimpleNamespace
+from unittest.mock import patch
 
 sys.path.insert(0, str(Path(__file__).resolve().parents[1]))
 
@@ -9,7 +10,12 @@ from digital_twin.application.monitoring_service import MonitorRunner
 from digital_twin.domain.accounts import AccountConfig
 from digital_twin.domain.market_data import normalize_position
 from digital_twin.domain.market_observations import apply_market_observation_outbox_baselines
-from digital_twin.domain.message_types import MARKET_OBSERVATION, PORTFOLIO_HOLDINGS_SNAPSHOT
+from digital_twin.domain.message_types import (
+    INVESTMENT_INSIGHT,
+    MARKET_OBSERVATION,
+    ONTOLOGY_OBSERVATION_FOLLOWUP,
+    PORTFOLIO_HOLDINGS_SNAPSHOT,
+)
 from digital_twin.domain.monitoring import RealtimeMonitor
 from digital_twin.domain.portfolio import AccountSnapshot, AlertEvent, utc_now_iso
 from digital_twin.domain.portfolio_calculations import portfolio_summary
@@ -83,7 +89,10 @@ class MonitoringForceSnapshotTests(unittest.TestCase):
             },
         )
 
-        events = RealtimeMonitor().events_for_snapshot(current, previous.to_monitor_state())
+        events = RealtimeMonitor({"alertThresholds": "marketObservationPriceChangePct=0.6"}).events_for_snapshot(
+            current,
+            previous.to_monitor_state(),
+        )
         observations = [event for event in events if event.rule == MARKET_OBSERVATION]
 
         self.assertEqual(1, len(observations))
@@ -91,7 +100,7 @@ class MonitoringForceSnapshotTests(unittest.TestCase):
         self.assertTrue(observations[0].metadata["observationOnly"])
         self.assertFalse(observations[0].metadata["investmentJudgement"])
         self.assertIn("매수·매도 판단 없음", "\n".join(observations[0].lines))
-        self.assertIn("새롭고 중요한 투자 판단", "\n".join(observations[0].lines))
+        self.assertIn("관계 분석 결과를 별도 인사이트로 발송", "\n".join(observations[0].lines))
         self.assertTrue(current.metadata["ontology"]["inferenceMissingState"]["pending"])
 
     def test_only_outboxed_raw_observations_enter_the_prompt_followup_lane(self):
@@ -146,7 +155,10 @@ class MonitoringForceSnapshotTests(unittest.TestCase):
         )
 
         observations = [
-            event for event in RealtimeMonitor().events_for_snapshot(current, previous.to_monitor_state())
+            event for event in RealtimeMonitor({"alertThresholds": "marketObservationPriceChangePct=0.6"}).events_for_snapshot(
+                current,
+                previous.to_monitor_state(),
+            )
             if event.rule == MARKET_OBSERVATION
         ]
 
@@ -192,11 +204,70 @@ class MonitoringForceSnapshotTests(unittest.TestCase):
         self.assertEqual(100.0, intermediate_state["metadata"]["marketObservationBaselines"]["AAPL"]["price"])
 
         observations = [
-            event for event in RealtimeMonitor().events_for_snapshot(current, intermediate_state)
+            event for event in RealtimeMonitor({"alertThresholds": "marketObservationPriceChangePct=0.6"}).events_for_snapshot(
+                current,
+                intermediate_state,
+            )
             if event.rule == MARKET_OBSERVATION
         ]
         self.assertEqual(1, len(observations))
         self.assertAlmostEqual(0.7, observations[0].metadata["marketObservation"]["changePct"])
+
+    def test_market_observation_defaults_require_a_material_move_and_longer_cadence(self):
+        monitor = RealtimeMonitor()
+
+        self.assertEqual(2.0, monitor.market_observation_price_change_threshold())
+        self.assertEqual(60, monitor.rule_cadence_minutes(MARKET_OBSERVATION))
+
+    def test_raw_observation_followup_builds_an_insight_after_graph_analysis(self):
+        watchlist = normalize_position({
+            "symbol": "AAPL",
+            "name": "Apple",
+            "market": "US",
+            "currency": "USD",
+            "currentPrice": 210,
+            "updatedAt": utc_now_iso(),
+            "source": "watchlist",
+        })
+        snapshot = AccountSnapshot(
+            "main", "메인", "toss", "live", "ok", utc_now_iso(),
+            portfolio_summary([]), [], [], watchlist=[watchlist], metadata={},
+        )
+        relation_context = {
+            "source": "typedbInferenceBox",
+            "graphStore": "typedb",
+            "graphStoreUsed": True,
+            "fallbackUsed": False,
+            "reviewLevel": "normal",
+            "dataState": "sufficient",
+            "changeState": "unchanged",
+            "conflictState": "context-only",
+            "decision": {
+                "basis": "typedbInferenceBox",
+                "label": "관심 유지",
+                "reviewLevel": "normal",
+                "dataState": "sufficient",
+                "changeState": "unchanged",
+            },
+            "activeRules": [{"ruleId": "graph.watchlist.trend.observe.v1", "label": "추세 관찰"}],
+        }
+
+        with patch("digital_twin.domain.monitoring.relation_contexts_from_snapshot", return_value={"AAPL": relation_context}):
+            events = RealtimeMonitor().events_for_snapshot(
+                snapshot,
+                {},
+                reasoning_context={
+                    "observationFollowupSymbols": ["AAPL"],
+                    "sourceEventIds": ["market-observation-source"],
+                },
+            )
+
+        insights = [event for event in events if event.rule == INVESTMENT_INSIGHT]
+        self.assertEqual(1, len(insights))
+        insight = insights[0]
+        self.assertEqual([ONTOLOGY_OBSERVATION_FOLLOWUP], insight.metadata["sourceSignalTypes"])
+        self.assertTrue(insight.metadata["ontologyInsight"]["observationFollowup"])
+        self.assertIn("TypeDB 관계 분석이 완료", "\n".join(insight.lines))
 
     def test_verified_native_no_match_is_not_reported_as_an_inference_failure(self):
         reason_code, reason, detail = RealtimeMonitor().ontology_inference_missing_reason_from_metadata({

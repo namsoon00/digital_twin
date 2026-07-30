@@ -16,6 +16,7 @@ from .message_types import (
     INVESTMENT_INSIGHT,
     MARKET_OBSERVATION,
     MIN_CADENCE_MINUTES,
+    ONTOLOGY_OBSERVATION_FOLLOWUP,
     ONTOLOGY_INFERENCE_MISSING,
     PORTFOLIO_HOLDINGS_SNAPSHOT,
     WATCHLIST_ONTOLOGY_SIGNAL,
@@ -315,7 +316,12 @@ class RealtimeMonitor(MonitoringSampleDataMixin, MonitoringPositionContextMixin,
     def enabled_signal_events(self, events: List[AlertEvent]) -> List[AlertEvent]:
         return [event for event in events or [] if self.enabled(event.rule)]
 
-    def events_for_snapshot(self, snapshot: AccountSnapshot, previous: Dict[str, object]) -> List[AlertEvent]:
+    def events_for_snapshot(
+        self,
+        snapshot: AccountSnapshot,
+        previous: Dict[str, object],
+        reasoning_context: Dict[str, object] = None,
+    ) -> List[AlertEvent]:
         self.use_external_fx_rates(snapshot.external_signals)
         raw_events: List[AlertEvent] = []
         snapshot = self.snapshot_with_external_signal_deltas(snapshot, previous or {})
@@ -341,6 +347,7 @@ class RealtimeMonitor(MonitoringSampleDataMixin, MonitoringPositionContextMixin,
         raw_events.extend(self.external_signal_events(signal_snapshot, previous or {}))
         if has_account_data and not inference_missing:
             raw_events.extend(self.holding_timing_events(decision_snapshot))
+            raw_events.extend(self.observation_followup_events(decision_snapshot, reasoning_context))
         raw_events = self.attach_data_freshness(decision_snapshot, raw_events)
         system_events, signal_events = split_operational_and_investment_events(raw_events)
         signal_events = self.enabled_signal_events(signal_events)
@@ -626,10 +633,11 @@ class RealtimeMonitor(MonitoringSampleDataMixin, MonitoringPositionContextMixin,
         return [event for event in self.stamp_events(snapshot, [event]) if self.enabled(event.rule)]
 
     def market_observation_price_change_threshold(self) -> float:
+        default = float(DEFAULT_THRESHOLDS.get("marketObservationPriceChangePct", 2.0) or 2.0)
         try:
-            value = float(self.thresholds.get("marketObservationPriceChangePct", 0.6) or 0.6)
+            value = float(self.thresholds.get("marketObservationPriceChangePct", default) or default)
         except (TypeError, ValueError):
-            value = 0.6
+            value = default
         return max(0.0, min(20.0, value))
 
     @staticmethod
@@ -712,7 +720,7 @@ class RealtimeMonitor(MonitoringSampleDataMixin, MonitoringPositionContextMixin,
                 "직전 저장값: " + price_money(previous_price, currency),
                 "관측 기준: " + comparison_label,
                 "판단 상태: 원시 시세 관측만 발송 · 매수·매도 판단 없음",
-                "후속 처리: TypeDB가 현재 사실을 재평가하며, 새롭고 중요한 투자 판단이 성립할 때만 별도 인사이트를 발송",
+                "후속 처리: TypeDB 추론이 최신 ABox에서 완료되면 관계 분석 결과를 별도 인사이트로 발송",
             ]
             if source:
                 lines.insert(3, "시세 출처: " + source)
@@ -748,6 +756,115 @@ class RealtimeMonitor(MonitoringSampleDataMixin, MonitoringPositionContextMixin,
                     "investmentJudgement": False,
                     "deliveryMode": "deterministic-outbox-before-typedb",
                     "reasoningFollowup": "queued-separately",
+                },
+            ))
+        return events
+
+    def observation_followup_events(
+        self,
+        snapshot: AccountSnapshot,
+        reasoning_context: Dict[str, object] = None,
+    ) -> List[AlertEvent]:
+        """Create one graph-backed insight source after a raw quote observation.
+
+        A raw observation is intentionally not a buy/sell signal. Once the
+        corresponding TypeDB generation is aligned, this source lets the user
+        see that the relation analysis completed even when its action state
+        remained unchanged.
+        """
+
+        context = dict(reasoning_context or {}) if isinstance(reasoning_context, dict) else {}
+        followup_symbols = []
+        for value in context.get("observationFollowupSymbols") or []:
+            symbol = str(value or "").upper().strip()
+            if symbol and symbol not in followup_symbols:
+                followup_symbols.append(symbol)
+        if not followup_symbols:
+            return []
+
+        positions: Dict[str, Position] = {}
+        for group in (snapshot.positions or [], snapshot.watchlist or []):
+            for item in group:
+                if item.is_cash():
+                    continue
+                symbol = str(item.symbol or "").upper().strip()
+                if symbol and symbol not in positions:
+                    positions[symbol] = item
+        relation_contexts = relation_contexts_from_snapshot(
+            snapshot,
+            getattr(self.strategy_model, "settings", {}) if self.strategy_model else {},
+        )
+        decisions = {
+            str(item.symbol or "").upper().strip(): item.to_dict()
+            for item in snapshot.decisions or []
+            if str(item.symbol or "").strip()
+        }
+        source_ids = [
+            str(value or "").strip()
+            for value in (context.get("sourceEventIds") or context.get("requestEventIds") or [])
+            if str(value or "").strip()
+        ]
+        source_marker = source_ids[0][:120] if source_ids else str(snapshot.generated_at or "current")[:120]
+        events: List[AlertEvent] = []
+        for symbol in followup_symbols:
+            position = positions.get(symbol)
+            relation_context = relation_contexts.get(symbol)
+            if not position or not is_graph_backed_relation_context(relation_context):
+                continue
+            relation_decision = relation_context.get("decision") if isinstance(relation_context.get("decision"), dict) else {}
+            review_level = str(relation_context.get("reviewLevel") or relation_decision.get("reviewLevel") or "observe").strip().lower()
+            data_state = str(relation_context.get("dataState") or relation_decision.get("dataState") or "partial").strip().lower()
+            change_state = str(relation_context.get("changeState") or relation_decision.get("changeState") or "unchanged").strip().lower()
+            if not data_state_is_usable(data_state):
+                continue
+            decision_state = decisions.get(symbol, {})
+            decision_label = str(
+                relation_decision.get("label")
+                or decision_state.get("decision")
+                or "관계 판단 유지"
+            ).strip()
+            relation_lines = relation_rule_context_summary_lines(relation_context)
+            position_context = position.to_dict()
+            prompt_context = self.prompt_context_from_decision(decision_state)
+            if not prompt_context and isinstance(relation_context.get("promptContext"), dict):
+                prompt_context = dict(relation_context.get("promptContext") or {})
+            events.append(AlertEvent(
+                snapshot.account_id,
+                snapshot.account_label,
+                "WATCH",
+                ONTOLOGY_OBSERVATION_FOLLOWUP,
+                ":".join([snapshot.account_id, "observation-followup", symbol, source_marker]),
+                position.name or symbol,
+                [
+                    "상태: 시세 변화 후 TypeDB 관계 분석 완료",
+                    "관계 판단: " + decision_label + " · " + REVIEW_LEVEL_LABELS.get(review_level, REVIEW_LEVEL_LABELS["observe"]),
+                    "판단 변화: " + CHANGE_STATE_LABELS.get(change_state, CHANGE_STATE_LABELS["unchanged"]),
+                    self.current_price_line(position_context),
+                    self.flow_context_line(position_context),
+                    self.investor_context_line(position_context),
+                    self.trend_context_line(position_context),
+                    *relation_lines,
+                ],
+                symbol,
+                criteria=self.criteria(
+                    "원시 시세 관측을 발송한 뒤 최신 ABox의 TypeDB 관계 분석이 완료될 때",
+                    decision_label
+                    + " · " + REVIEW_LEVEL_LABELS.get(review_level, REVIEW_LEVEL_LABELS["observe"])
+                    + " · " + CHANGE_STATE_LABELS.get(change_state, CHANGE_STATE_LABELS["unchanged"]),
+                ),
+                metadata={
+                    "observationFollowup": True,
+                    "observationFollowupSourceEventIds": source_ids[:8],
+                    "reviewLevel": review_level,
+                    "dataState": data_state,
+                    "changeState": change_state,
+                    "conflictState": str(relation_context.get("conflictState") or relation_decision.get("conflictState") or "context-only"),
+                    "ontologyRelationContext": relation_context,
+                    "ontologyPromptContext": prompt_context,
+                    "ontologyOpinion": self.ontology_opinion_from_decision(decision_state),
+                    "ontologyWorldview": self.ontology_worldview_from_decision(decision_state),
+                    "activeInvestmentOpinion": self.active_investment_opinion_from_decision(decision_state),
+                    "ontologyReviewContext": self.ai_context_from_decision(decision_state),
                 },
             ))
         return events

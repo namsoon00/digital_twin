@@ -72,7 +72,7 @@ class OntologyProjectionStabilityTests(unittest.TestCase):
 
         self.assertEqual(345, runner.effective_projection_min_interval_seconds([], cursor.load()))
 
-    def test_overdue_target_shortens_but_does_not_remove_projection_recovery_wait(self):
+    def test_overdue_target_has_no_artificial_projection_recovery_wait_by_default(self):
         cursor = CursorStore({
             "lastSuccessfulProjectionAt": "2026-07-21T23:59:30Z",
             "lastReasonedAtBySymbol": {"MSFT": "2026-07-21T23:30:00Z"},
@@ -89,8 +89,8 @@ class OntologyProjectionStabilityTests(unittest.TestCase):
 
         self.assertTrue(drain["active"])
         self.assertEqual(["MSFT"], drain["symbols"])
-        self.assertEqual(60, runner.effective_projection_min_interval_seconds([event], cursor.load(), ["MSFT"]))
-        self.assertFalse(runner.projection_due([event], cursor.load(), ["MSFT"]))
+        self.assertEqual(0, runner.effective_projection_min_interval_seconds([event], cursor.load(), ["MSFT"]))
+        self.assertTrue(runner.projection_due([event], cursor.load(), ["MSFT"]))
 
     def test_normal_target_keeps_global_projection_cooldown(self):
         cursor = CursorStore({

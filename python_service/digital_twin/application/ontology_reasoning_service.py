@@ -628,10 +628,10 @@ class OntologyReasoningRunner:
         return int_setting(self.settings, "ontologyReasoningBatchSize", 200, 1, 200)
 
     def max_symbols_per_run(self) -> int:
-        # One broad native generation can monopolize the only TypeDB writer
-        # for minutes. Keep the safe realtime fallback to one subject; an
-        # operator can raise the explicit runtime setting after measured
-        # per-target throughput proves that a larger wave stays within SLO.
+        # Compatibility callers retain a one-subject fallback. Production
+        # runtime settings can expose a larger hard ceiling, while the
+        # adaptive batch plan still starts at one target and only expands a
+        # verified, aged queue within its measured execution budget.
         return int_setting(self.settings, "ontologyReasoningMaxSymbolsPerRun", 1, 0, 200)
 
     def native_typedb_rule_execution_enabled(self) -> bool:
@@ -681,8 +681,74 @@ class OntologyReasoningRunner:
             300,
         )
 
-    def rulebox_prewarm_readiness(self) -> Dict[str, object]:
-        if not self.rulebox_prewarm_required():
+    def rulebox_prewarm_backlog_recovery_enabled(self) -> bool:
+        return truthy(
+            self.settings.get("ontologyRuleboxPrewarmBacklogRecoveryEnabled"),
+            True,
+        )
+
+    def rulebox_prewarm_backlog_recovery_age_seconds(self) -> int:
+        return int_setting(
+            self.settings,
+            "ontologyRuleboxPrewarmBacklogRecoveryAgeSeconds",
+            90,
+            15,
+            24 * 60 * 60,
+        )
+
+    def rulebox_prewarm_backlog_recovery_min_pending_entries(self) -> int:
+        return int_setting(
+            self.settings,
+            "ontologyRuleboxPrewarmBacklogRecoveryMinPendingEntries",
+            2,
+            1,
+            100000,
+        )
+
+    def rulebox_prewarm_backlog_recovery_retry_seconds(self) -> int:
+        return int_setting(
+            self.settings,
+            "ontologyRuleboxPrewarmBacklogRecoveryRetrySeconds",
+            5,
+            3,
+            60,
+        )
+
+    def rulebox_prewarm_backlog_recovery_state(
+        self,
+        requests: Iterable[object],
+    ) -> Dict[str, object]:
+        """Tell a cold compiler apart from ordinary one-shot live work.
+
+        Direct TypeQL fallback protects a fresh alert from a schema compiler,
+        but it is intentionally serial.  Once it demonstrably cannot drain a
+        durable latest-state queue, yielding one short period to the prewarm
+        worker is faster than repeatedly starting another serial fallback.
+        """
+        pending_requests = list(requests or [])
+        pending = len(pending_requests)
+        age_seconds = self.oldest_request_wait_seconds(pending_requests)
+        threshold = self.rulebox_prewarm_backlog_recovery_age_seconds()
+        minimum = self.rulebox_prewarm_backlog_recovery_min_pending_entries()
+        enabled = self.rulebox_prewarm_backlog_recovery_enabled()
+        return {
+            "enabled": enabled,
+            "pendingEntryCount": pending,
+            "oldestPendingAgeSeconds": age_seconds,
+            "minimumPendingEntries": minimum,
+            "ageThresholdSeconds": threshold,
+            "eligible": bool(
+                enabled
+                and pending >= minimum
+                and age_seconds >= threshold
+            ),
+        }
+
+    def rulebox_prewarm_readiness(
+        self,
+        probe_when_fallback: bool = False,
+    ) -> Dict[str, object]:
+        if not self.rulebox_prewarm_required() and not probe_when_fallback:
             return {
                 "ready": True,
                 "status": "direct-typeql-fallback" if self.rulebox_prewarm_direct_fallback_enabled() else "disabled",
@@ -722,6 +788,7 @@ class OntologyReasoningRunner:
             **result,
             "ready": ready,
             "retryAfterSeconds": self.rulebox_prewarm_retry_seconds(),
+            "recoveryProbe": bool(probe_when_fallback),
         }
 
     def source_snapshot_preflight(self, reasoning_context: Dict[str, object]) -> Dict[str, object]:
@@ -1157,12 +1224,18 @@ class OntologyReasoningRunner:
         return int_setting(self.settings, "ontologyReasoningBackpressureMaxSeconds", 900, 60, 3600)
 
     def fairness_drain_min_interval_seconds(self) -> int:
-        """Keep overdue work moving without immediately starting another heavy projection."""
+        """Optional protection interval between overdue queue generations.
+
+        The durable mailbox already coalesces each symbol to its newest state
+        and the TypeDB writer lease serialises physical mutations.  A default
+        pause here only grows an already-overdue queue, so deployments opt in
+        to a non-zero interval only when they need extra server recovery time.
+        """
         return int_setting(
             self.settings,
             "ontologyReasoningFairnessDrainMinIntervalSeconds",
-            60,
-            5,
+            0,
+            0,
             900,
         )
 
@@ -4459,21 +4532,49 @@ class OntologyReasoningRunner:
                 "coalescedEventCount": len(durable_superseded_ids),
                 **queue_metadata,
             }
-        rulebox_prewarm = self.rulebox_prewarm_readiness()
-        if not rulebox_prewarm.get("ready"):
+        prewarm_recovery = self.rulebox_prewarm_backlog_recovery_state(requests)
+        queue_metadata["ruleboxPrewarmRecovery"] = dict(prewarm_recovery)
+        rulebox_prewarm = self.rulebox_prewarm_readiness(
+            probe_when_fallback=bool(prewarm_recovery.get("eligible")) and not force,
+        )
+        # A strict installation always waits for compiled functions. In the
+        # usual fallback-enabled installation, only an aged multi-entry queue
+        # takes this recovery gate. This gives the dedicated compiler a
+        # coordinated turn and prevents the old loop where every pending
+        # request forced another serial direct-TypeQL projection forever.
+        prewarm_recovery_gate = bool(
+            prewarm_recovery.get("eligible")
+            and str(rulebox_prewarm.get("status") or "") == "provisioning"
+            and not force
+        )
+        if not rulebox_prewarm.get("ready") and (
+            self.rulebox_prewarm_required() or prewarm_recovery_gate
+        ):
+            retry_after = int(
+                rulebox_prewarm.get("retryAfterSeconds")
+                or self.rulebox_prewarm_retry_seconds()
+            )
+            if prewarm_recovery_gate:
+                retry_after = min(
+                    retry_after,
+                    self.rulebox_prewarm_backlog_recovery_retry_seconds(),
+                )
             return {
                 "status": "deferred-rulebox-prewarm",
                 "processedCount": 0,
                 "alertCount": 0,
-                "retryAfterSeconds": int(
-                    rulebox_prewarm.get("retryAfterSeconds")
-                    or self.rulebox_prewarm_retry_seconds()
-                ),
+                "retryAfterSeconds": max(1, retry_after),
                 "deferredReason": (
-                    "TypeDB RuleBox 함수 사전 준비가 완료될 때까지 네이티브 추론을 시작하지 않습니다. "
+                    (
+                        "오래된 추론 대기열의 직렬 TypeQL 폴백을 중단하고 "
+                        "TypeDB RuleBox 함수 준비를 우선 완료합니다. "
+                        if prewarm_recovery_gate
+                        else "TypeDB RuleBox 함수 사전 준비가 완료될 때까지 네이티브 추론을 시작하지 않습니다. "
+                    )
                     + str(rulebox_prewarm.get("reason") or "")[:180]
                 ).strip(),
                 "ruleboxPrewarm": rulebox_prewarm,
+                "ruleboxPrewarmRecovery": prewarm_recovery,
                 "coalescedEventCount": len(durable_superseded_ids),
                 **queue_metadata,
             }

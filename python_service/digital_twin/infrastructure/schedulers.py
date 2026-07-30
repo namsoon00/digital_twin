@@ -1008,7 +1008,10 @@ class OntologyRuleboxPrewarmScheduler:
 
     def __init__(self, runner, interval_seconds: int, error_reporter=None, isolated_cycle=None):
         self.runner = runner
-        self.interval_seconds = max(15, int(interval_seconds or 60))
+        # During an aged queue recovery the prewarm runner asks for a short
+        # retry cadence.  Keep the scheduler capable of honoring it; ordinary
+        # healthy passes still use the configured (longer) interval.
+        self.interval_seconds = max(5, int(interval_seconds or 15))
         self.error_reporter = error_reporter or operational_error_reporter()
         self.isolated_cycle = isolated_cycle
         self.last_signature = ""
@@ -1083,6 +1086,17 @@ class OntologyRuleboxPrewarmScheduler:
             return max(self.interval_seconds, recommended, 300)
         if status == "error":
             return max(self.interval_seconds, recommended, 60)
+        recovery = payload.get("backlogRecovery")
+        recovery = recovery if isinstance(recovery, dict) else {}
+        if (
+            bool(recovery.get("eligible"))
+            and status in {"provisioning", "deferred-projection-coordinator"}
+        ):
+            # The rule compiler owns the same global TypeDB coordinator as a
+            # live projection. A failed acquisition is therefore harmless;
+            # retry promptly so a just-finished serial fallback cannot win
+            # every idle gap and starve compilation indefinitely.
+            return max(3, recommended or 5)
         if status in {
             "provisioning",
             "deferred-projection-coordinator",

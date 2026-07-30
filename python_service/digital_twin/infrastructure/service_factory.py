@@ -228,7 +228,7 @@ def build_monitor_runner(
     market_time_series_store = stores.market_time_series_store(configured_settings)
     ontology_quality_store = stores.ontology_quality_sample_store(configured_settings)
     projection_repository = ontology_repository or ontology_repository_from_settings(configured_settings)
-    interval_seconds = int(os.environ.get("PYTHON_REALTIME_INTERVAL_SECONDS") or os.environ.get("REALTIME_NOTIFY_INTERVAL_SECONDS") or configured_settings.get("monitorAccountIntervalSeconds") or 180)
+    interval_seconds = int(os.environ.get("PYTHON_REALTIME_INTERVAL_SECONDS") or os.environ.get("REALTIME_NOTIFY_INTERVAL_SECONDS") or configured_settings.get("monitorAccountIntervalSeconds") or 120)
     publisher = event_publisher or monitor_event_bus(configured_settings)
     return MonitorRunner(
         accounts,

@@ -46,6 +46,41 @@ class ResearchEvidenceStoreTests(unittest.TestCase):
             published_at=published_at,
         )
 
+    @staticmethod
+    def direct_news_evidence(
+        evidence_id: str,
+        source: str = "Reuters",
+        url: str = "https://example.test/news/direct",
+        polarity: str = "support",
+        fetched_at: str = "",
+    ) -> ResearchEvidence:
+        payload = {
+            "relationScope": "direct",
+            "articleReadStatus": "body",
+            "articleFacts": {"bodyAvailable": True, "bodyQualityPassed": True},
+            "evidenceGovernance": {"investmentJudgmentEligible": True, "dataState": "sufficient"},
+            "sourceTrustState": "verified",
+            "materialityState": "material",
+            "dataState": "sufficient",
+            "validationState": "verified",
+            "stockImpactPolarity": polarity,
+        }
+        if fetched_at:
+            payload["sourceFetchedAt"] = fetched_at
+        return ResearchEvidence(
+            evidence_id,
+            "005930",
+            "news",
+            source,
+            "삼성전자 HBM 수요 전망",
+            "본문이 확인된 HBM 수요 전망 기사입니다.",
+            url,
+            "2026-07-08T01:00:00Z",
+            polarity,
+            published_at="2026-07-08T01:00:00Z",
+            raw_payload=payload,
+        )
+
     def test_upsert_sorts_and_splits_large_evidence_writes_into_short_transactions(self):
         with tempfile.TemporaryDirectory() as temp:
             reset_mysql_test_database(temp)
@@ -145,6 +180,38 @@ class ResearchEvidenceStoreTests(unittest.TestCase):
             self.assertEqual(1, summary["total"])
             self.assertEqual("005930", summary["bySymbol"][0]["name"])
             self.assertEqual("news", summary["byKind"][0]["name"])
+
+    def test_store_keeps_audit_rows_without_requeueing_refreshes_or_syndication(self):
+        with tempfile.TemporaryDirectory() as temp:
+            reset_mysql_test_database(temp)
+            store = TestResearchEvidenceStore(test_store_seed(temp))
+            first = self.direct_news_evidence("research:005930:news:direct")
+
+            self.assertEqual(1, store.upsert_many([first]))
+            first_revision = store.last_eligible_evidence_revisions["005930"]
+
+            clock_refresh = self.direct_news_evidence(
+                first.evidence_id,
+                fetched_at="2026-07-08T01:05:00Z",
+            )
+            self.assertEqual(0, store.upsert_many([clock_refresh]))
+            self.assertEqual({}, store.last_eligible_evidence_revisions)
+
+            syndicated = self.direct_news_evidence(
+                "research:005930:news:syndicated",
+                source="Bloomberg",
+                url="https://example.test/news/syndicated",
+            )
+            self.assertEqual(1, store.upsert_many([syndicated]))
+            self.assertEqual({}, store.last_eligible_evidence_revisions)
+            self.assertFalse(store.last_evidence_deltas[0]["changesInferenceEligibleSet"])
+            self.assertEqual(2, len(store.latest(symbol="005930", limit=10)))
+
+            risk_update = self.direct_news_evidence(first.evidence_id, polarity="risk")
+            self.assertEqual(1, store.upsert_many([risk_update]))
+            self.assertEqual(["005930"], sorted(store.last_eligible_evidence_revisions))
+            self.assertNotEqual(first_revision, store.last_eligible_evidence_revisions["005930"])
+            self.assertTrue(store.last_evidence_deltas[0]["changesInferenceEligibleSet"])
 
     def test_research_evidence_store_deletes_by_id(self):
         with tempfile.TemporaryDirectory() as temp:

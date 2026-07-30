@@ -26,6 +26,98 @@ EVIDENCE_DELTA_TRANSITIONS = {
     "reactivation",
 }
 
+# Provider polls and AI retries attach operational clocks to otherwise
+# identical evidence.  Those clocks are useful for diagnostics and retention,
+# but do not change the fact that TypeDB evaluates.  Keep the list normalized
+# so snake_case and camelCase transports receive the same treatment.
+VOLATILE_PAYLOAD_KEYS = {
+    "age", "ageminutes", "ageseconds", "cacheage", "cacheageminutes",
+    "checkedat", "collectedat", "collectionid", "collectionrunid",
+    "elapsedminutes", "elapsedseconds", "externalcompletedat",
+    "fetchduration", "fetchdurationms", "fetchedat", "firstseenat",
+    "generatedat", "lastattemptat", "lastcheckedat", "lastexternalattemptat",
+    "lastfetchedat", "lastpolledat", "lastseenat", "lastsuccessat",
+    "latency", "latencyms", "nextrefreshat", "nextretryafterminutes",
+    "observedat", "pollid", "refreshedat", "requestid", "retriedat",
+    "retrycount", "runid", "sourcefetchedat", "sourceobservedat",
+    "traceid", "updatedat",
+}
+
+# These fields alter the graph's relations, evidence quality, or policy
+# admission. Presentation-only text such as a translated headline remains in
+# the audit record, but cannot by itself cause a new investment inference.
+INFERENCE_PAYLOAD_KEYS = {
+    "articlefacts", "articlereadstatus", "bodyqualitypassed", "bodyqualitystate",
+    "claimledger", "datastate", "dataqualityrisk", "dataqualityriskscore",
+    "directmention", "evidencegovernance", "evidencerole", "eventtype",
+    "excludedreason", "impactpolarity", "matchedaliases", "materialitypassed",
+    "materialitystate", "mentionedpeers", "ontologyrelations", "entitylinks",
+    "qualitygate", "readscope", "relationscope", "relevancestate",
+    "sourcetexthash", "sourcekind", "sourceorigin", "sourceplatform",
+    "sourcepublisher", "sourcereliability", "sourcetruststate", "stockimpact",
+    "stockimpactlabel", "stockimpactpolarity", "stockimpactreasonko",
+    "stockimpactscore", "topictags", "markettopics", "validationstate",
+    "aianalysis", "analysisconflict", "analysisconflictaipolarity",
+    "analysisconflictexistingpolarity", "analysisconflictreasonko",
+    "analysisconflictsource", "correctionstate", "documenttype", "filingtype",
+    "form", "receiptno", "reportname", "regulatoryeventtype",
+}
+
+PRESENTATION_ONLY_PAYLOAD_KEYS = {
+    "actionboundaryko", "analysissummary", "articlesummaryko", "articletextpreview",
+    "normalizedsummary", "rationaleko", "translatedtitleko", "translationstatus",
+    "validationreasonko",
+}
+
+
+def _normalized_key(value: object) -> str:
+    return "".join(character for character in str(value or "").lower() if character.isalnum())
+
+
+def _stable_payload(value: object) -> object:
+    """Drop operational refresh noise while retaining the persisted fact body."""
+    if isinstance(value, Mapping):
+        return {
+            str(key): _stable_payload(candidate)
+            for key, candidate in value.items()
+            if _normalized_key(key) not in VOLATILE_PAYLOAD_KEYS
+        }
+    if isinstance(value, (list, tuple, set)):
+        return [_stable_payload(candidate) for candidate in value]
+    return value
+
+
+def _semantic_payload(value: object) -> Dict[str, object]:
+    """Return the graph-relevant portion of an evidence payload.
+
+    The collector can refresh translations, summaries, and retry metadata many
+    times.  The inference set must change only when an input that can affect
+    the ABox/RuleBox changes.
+    """
+    source = value if isinstance(value, Mapping) else {}
+    result: Dict[str, object] = {}
+    for key, candidate in source.items():
+        normalized = _normalized_key(key)
+        if normalized not in INFERENCE_PAYLOAD_KEYS:
+            continue
+        stable = _stable_payload(candidate)
+        if normalized == "aianalysis" and isinstance(stable, Mapping):
+            stable = {
+                str(nested_key): nested_value
+                for nested_key, nested_value in stable.items()
+                if _normalized_key(nested_key) not in PRESENTATION_ONLY_PAYLOAD_KEYS
+            }
+        if stable not in (None, "", [], {}):
+            result[str(key)] = stable
+    return result
+
+
+def _normalized_title(evidence) -> str:
+    payload = getattr(evidence, "raw_payload", {})
+    payload = payload if isinstance(payload, Mapping) else {}
+    value = payload.get("normalizedTitle") or getattr(evidence, "title", "") or ""
+    return " ".join(str(value).casefold().split())
+
 
 def clean_symbol(value: object) -> str:
     return str(value or "").strip().upper()
@@ -71,7 +163,68 @@ def evidence_content_signature(evidence) -> str:
         "materialityState": str(getattr(evidence, "materiality_state", "context") or "context").strip(),
         "dataState": str(getattr(evidence, "data_state", "partial") or "partial").strip(),
         "validationState": str(getattr(evidence, "validation_state", "conditional") or "conditional").strip(),
-        "payload": payload,
+        "payload": _stable_payload(payload),
+    })
+
+
+def evidence_story_key(evidence) -> str:
+    """Return a provider-independent identity for one reported fact.
+
+    The key intentionally excludes source and URL.  Syndicated reports often
+    differ only by transport URL or publisher while representing one factual
+    change.  Provenance remains in the durable evidence records and the ABox;
+    this key only prevents duplicate scheduling work.
+    """
+    if evidence is None:
+        return ""
+    payload = getattr(evidence, "raw_payload", {})
+    payload = payload if isinstance(payload, Mapping) else {}
+    published = str(
+        getattr(evidence, "published_at", "")
+        or getattr(evidence, "observed_at", "")
+        or ""
+    ).strip()
+    return fact_signature({
+        "symbol": clean_symbol(getattr(evidence, "symbol", "")),
+        "kind": str(getattr(evidence, "kind", "") or "").strip().lower(),
+        "title": _normalized_title(evidence),
+        # Providers frequently disagree on seconds/time zones for the same
+        # article. The publication day is stable enough to collapse those
+        # duplicate transports without combining separate dated updates.
+        "publishedDay": published[:10],
+        "eventType": str(payload.get("eventType") or "").strip().lower(),
+        "fallbackEvidenceId": (
+            str(getattr(evidence, "evidence_id", "") or "").strip()
+            if not _normalized_title(evidence)
+            else ""
+        ),
+    })
+
+
+def evidence_inference_signature(evidence) -> str:
+    """Return the stable, graph-relevant signature for one evidence item."""
+    if evidence is None:
+        return ""
+    payload = getattr(evidence, "raw_payload", {})
+    payload = dict(payload or {}) if isinstance(payload, Mapping) else {}
+    payload.pop("evidenceLifecycleState", None)
+    payload.pop("evidenceLifecycleChangedAt", None)
+    return fact_signature({
+        "storyKey": evidence_story_key(evidence),
+        "symbol": clean_symbol(getattr(evidence, "symbol", "")),
+        "kind": str(getattr(evidence, "kind", "") or "").strip(),
+        "title": _normalized_title(evidence),
+        "publishedAt": str(
+            getattr(evidence, "published_at", "")
+            or getattr(evidence, "observed_at", "")
+            or ""
+        ).strip()[:10],
+        "polarity": str(getattr(evidence, "polarity", "context") or "context").strip(),
+        "sourceTrustState": str(getattr(evidence, "source_trust_state", "unknown") or "unknown").strip(),
+        "materialityState": str(getattr(evidence, "materiality_state", "context") or "context").strip(),
+        "dataState": str(getattr(evidence, "data_state", "partial") or "partial").strip(),
+        "validationState": str(getattr(evidence, "validation_state", "conditional") or "conditional").strip(),
+        "payload": _semantic_payload(payload),
     })
 
 
@@ -112,17 +265,27 @@ class EvidenceDelta:
     eligible: bool = False
     previous_signature: str = ""
     signature: str = ""
+    previous_inference_signature: str = ""
+    inference_signature: str = ""
+    story_key: str = ""
     occurred_at: str = ""
     reason: str = ""
     eligible_set_revision: str = ""
+    eligible_set_changed: Optional[bool] = None
 
     @property
     def changes_inference_eligible_set(self) -> bool:
+        if self.eligible_set_changed is not None:
+            return bool(self.eligible_set_changed)
         if self.previous_eligible != self.eligible:
             return True
-        return bool(self.eligible and self.previous_signature != self.signature)
+        return bool(self.eligible and self.previous_inference_signature != self.inference_signature)
 
-    def with_eligible_set_revision(self, revision: str) -> "EvidenceDelta":
+    def with_eligible_set_revision(
+        self,
+        revision: str,
+        eligible_set_changed: Optional[bool] = None,
+    ) -> "EvidenceDelta":
         return EvidenceDelta(
             evidence_id=self.evidence_id,
             symbol=self.symbol,
@@ -133,9 +296,13 @@ class EvidenceDelta:
             eligible=self.eligible,
             previous_signature=self.previous_signature,
             signature=self.signature,
+            previous_inference_signature=self.previous_inference_signature,
+            inference_signature=self.inference_signature,
+            story_key=self.story_key,
             occurred_at=self.occurred_at,
             reason=self.reason,
             eligible_set_revision=str(revision or ""),
+            eligible_set_changed=eligible_set_changed,
         )
 
     def to_dict(self) -> Dict[str, object]:
@@ -149,6 +316,9 @@ class EvidenceDelta:
             "eligible": self.eligible,
             "previousSignature": self.previous_signature,
             "signature": self.signature,
+            "previousInferenceSignature": self.previous_inference_signature,
+            "inferenceSignature": self.inference_signature,
+            "storyKey": self.story_key,
             "occurredAt": self.occurred_at,
             "reason": self.reason,
             "changesInferenceEligibleSet": self.changes_inference_eligible_set,
@@ -173,6 +343,8 @@ def evidence_delta(
     after_state = clean_lifecycle_state(lifecycle_state, "active")
     before_signature = evidence_content_signature(previous)
     signature = evidence_content_signature(current)
+    before_inference_signature = evidence_inference_signature(previous)
+    inference_signature = evidence_inference_signature(current)
     subject = current if current is not None else previous
     evidence_id = str(getattr(subject, "evidence_id", "") or "").strip()
     symbol = clean_symbol(getattr(subject, "symbol", ""))
@@ -205,6 +377,9 @@ def evidence_delta(
         eligible=eligible,
         previous_signature=before_signature,
         signature=signature,
+        previous_inference_signature=before_inference_signature,
+        inference_signature=inference_signature,
+        story_key=evidence_story_key(subject),
         occurred_at=str(occurred_at or ""),
         reason=str(reason or ""),
     )
@@ -236,6 +411,8 @@ class EvidenceMutation:
     changed_items: List[object] = field(default_factory=list)
     deltas: List[EvidenceDelta] = field(default_factory=list)
     eligible_set_revisions: Dict[str, str] = field(default_factory=dict)
+    previous_eligible_set_revisions: Dict[str, str] = field(default_factory=dict)
+    inference_changed_symbols_override: Optional[List[str]] = None
 
     @property
     def lifecycle_changed_count(self) -> int:
@@ -243,6 +420,12 @@ class EvidenceMutation:
 
     @property
     def inference_changed_symbols(self) -> List[str]:
+        if self.inference_changed_symbols_override is not None:
+            return sorted({
+                clean_symbol(symbol)
+                for symbol in self.inference_changed_symbols_override
+                if clean_symbol(symbol)
+            })
         return sorted({
             clean_symbol(delta.symbol)
             for delta in self.deltas
@@ -251,8 +434,13 @@ class EvidenceMutation:
 
     def with_revisions(self) -> "EvidenceMutation":
         revisions = dict(self.eligible_set_revisions or {})
+        changed_symbols = set(self.inference_changed_symbols)
+        has_explicit_change_set = self.inference_changed_symbols_override is not None
         self.deltas = [
-            delta.with_eligible_set_revision(revisions.get(clean_symbol(delta.symbol), ""))
+            delta.with_eligible_set_revision(
+                revisions.get(clean_symbol(delta.symbol), ""),
+                clean_symbol(delta.symbol) in changed_symbols if has_explicit_change_set else None,
+            )
             for delta in self.deltas
         ]
         return self
@@ -264,6 +452,7 @@ class EvidenceMutation:
             "retractedCount": int(self.retracted_count or 0),
             "changedSymbols": list(self.changed_symbols or []),
             "inferenceChangedSymbols": self.inference_changed_symbols,
+            "inferenceChangedCount": len(self.inference_changed_symbols),
             "evidenceDeltas": [delta.to_dict() for delta in self.deltas],
             "factRevisionsBySymbol": dict(self.eligible_set_revisions or {}),
         }

@@ -591,7 +591,7 @@ def build_investment_insight_events(snapshot: AccountSnapshot, signal_events: It
         semantic_signature = insight_semantic_signature(semantic_components)
         criteria = [
             (
-                "설정: 원시 시세 관측 뒤 최신 ABox의 TypeDB 관계 분석이 완료될 때"
+                "설정: 시세 관측 후속 확인의 최신 ABox TypeDB 관계 분석이 완료될 때"
                 if observation_followup
                 else "설정: 온톨로지 관계 그래프에서 의미 있는 투자 인사이트가 생성될 때"
             ),

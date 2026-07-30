@@ -20,8 +20,10 @@ from ..domain.investment_evidence_governance import (
 )
 from ..domain.ontology_reasoning_queue import (
     OBSERVATION_FOLLOWUP_PRIORITY_HINT,
+    REASONING_PRIORITY_ORDER,
     VERIFIED_MONITOR_SNAPSHOT_TRIGGER,
     event_has_reasoning_work,
+    event_reasoning_priority,
     is_generic_research_latest_state,
     is_observation_followup_symbol,
     is_realtime_latest_state,
@@ -193,13 +195,13 @@ REVIEW_LEVEL_ORDER = {
 
 TRIGGER_ORDER = {
     VERIFIED_MONITOR_SNAPSHOT_TRIGGER: 7,
-    "research-evidence-update": 6,
-    "news-analysis-enrichment": 6,
-    "research-evidence-lifecycle": 6,
+    "research-evidence-lifecycle": 5,
     "investment-calendar-update": 5,
     "market-data-update": 4,
     "kis-realtime-websocket": 3,
     "kis-realtime-update": 3,
+    "research-evidence-update": 2,
+    "news-analysis-enrichment": 2,
     "portfolio-snapshot-update": 2,
     "data-update": 1,
 }
@@ -308,6 +310,7 @@ def event_order_key(event: object, priority_symbols: Dict[str, int] = None) -> T
     fact_types = {str(item or "").strip() for item in payload.get("factTypes") or []}
     return (
         event_subject_priority(event, priority_symbols),
+        REASONING_PRIORITY_ORDER.get(event_reasoning_priority(event), 0),
         REVIEW_LEVEL_ORDER.get(event_review_level(event), 0),
         TRIGGER_ORDER.get(trigger, 0),
         1 if "ResearchEvidence" in fact_types else 0,
@@ -610,6 +613,10 @@ class OntologyReasoningRunner:
         "ontologyReasoningBacklogDrainNoCooldownAgeSeconds",
         "ontologyReasoningMinIntervalSeconds",
         "ontologyReasoningUrgentMinIntervalSeconds",
+        "ontologyReasoningCriticalMinIntervalSeconds",
+        "ontologyReasoningMarketMinIntervalSeconds",
+        "ontologyReasoningResearchMinIntervalSeconds",
+        "ontologyReasoningObservationFollowupTargetLimit",
         "ontologyReasoningProjectionRetrySeconds",
         "ontologyReasoningFairnessDrainEnabled",
         "ontologyReasoningFairnessMaxWaitSeconds",
@@ -1261,6 +1268,25 @@ class OntologyReasoningRunner:
     def urgent_min_interval_seconds(self) -> int:
         return int_setting(self.settings, "ontologyReasoningUrgentMinIntervalSeconds", 60, 0, 3600)
 
+    def critical_min_interval_seconds(self) -> int:
+        return int_setting(self.settings, "ontologyReasoningCriticalMinIntervalSeconds", 30, 0, 3600)
+
+    def market_min_interval_seconds(self) -> int:
+        return int_setting(self.settings, "ontologyReasoningMarketMinIntervalSeconds", 120, 0, 3600)
+
+    def research_min_interval_seconds(self) -> int:
+        return int_setting(self.settings, "ontologyReasoningResearchMinIntervalSeconds", 300, 0, 86400)
+
+    def observation_followup_target_limit(self) -> int:
+        hard_limit = max(1, self.effective_max_symbols_per_run())
+        return int_setting(
+            self.settings,
+            "ontologyReasoningObservationFollowupTargetLimit",
+            3,
+            1,
+            hard_limit,
+        )
+
     def projection_retry_seconds(self) -> int:
         return int_setting(self.settings, "ontologyReasoningProjectionRetrySeconds", 30, 5, 900)
 
@@ -1842,22 +1868,24 @@ class OntologyReasoningRunner:
         return max(0, int(interval_seconds - elapsed))
 
     def event_min_interval_seconds(self, event: object) -> int:
-        trigger = str(event_payload(event).get("trigger") or "data-update").strip()
-        if is_verified_monitor_snapshot_event(event):
-            # This is an operational source-consistency boundary, not an
-            # investment escalation. One committed snapshot may run sooner
-            # than the ordinary background cadence without admitting raw
-            # provider ticks into TypeDB.
-            if truthy(
-                self.settings.get("ontologyReasoningVerifiedSnapshotFastDrainEnabled"),
-                False,
+        priority = event_reasoning_priority(event)
+        if priority == "critical":
+            return self.critical_min_interval_seconds()
+        if priority in {"urgent", "observation"}:
+            # A verified snapshot may bypass the normal cadence only for a
+            # source-confirmed urgent condition or an already selected quote
+            # observation follow-up. Ordinary snapshots stay in the market
+            # lane so a polling loop cannot continuously rebuild TypeDB.
+            if (
+                is_verified_monitor_snapshot_event(event)
+                and truthy(self.settings.get("ontologyReasoningVerifiedSnapshotFastDrainEnabled"), False)
             ):
                 return 0
             return self.urgent_min_interval_seconds()
-        if trigger in {"research-evidence-update", "investment-calendar-update"}:
-            return self.urgent_min_interval_seconds()
-        if event_review_level(event) in self.urgent_review_levels():
-            return self.urgent_min_interval_seconds()
+        if priority == "market":
+            return self.market_min_interval_seconds()
+        if priority == "research":
+            return self.research_min_interval_seconds()
         return self.min_interval_seconds()
 
     def projection_min_interval_seconds(self, requests: Iterable[object]) -> int:
@@ -1918,10 +1946,7 @@ class OntologyReasoningRunner:
         if self.backlog_drain_no_cooldown_active(requests, selected_symbols):
             return 0
         urgent = any(
-            is_verified_monitor_snapshot_event(event)
-            or
-            event_review_level(event) in self.urgent_review_levels()
-            or str(event_payload(event).get("trigger") or "") in {"research-evidence-update", "investment-calendar-update"}
+            event_reasoning_priority(event) in {"critical", "urgent", "observation"}
             for event in requests or []
         )
         if urgent or not self.projection_backpressure_enabled():
@@ -3406,7 +3431,7 @@ class OntologyReasoningRunner:
         )
 
     def due_observation_followup_symbols(self, requests: Iterable[object]) -> List[str]:
-        """Return due notified symbols without changing TypeDB rule inputs."""
+        """Return due raw-alert symbols without changing TypeDB rule inputs."""
         cursor_payload = self.cursor_payload()
         progress = self.event_symbol_progress(cursor_payload)
         priority_symbols = self.priority_symbols()
@@ -3477,6 +3502,7 @@ class OntologyReasoningRunner:
                     1 if is_verified_monitor_snapshot_event(event) else 0,
                     *fairness_rank,
                     max([int(priority_symbols.get(symbol, 0) or 0) for symbol in due_symbols] or [0]),
+                    REASONING_PRIORITY_ORDER.get(event_reasoning_priority(event), 0),
                     REVIEW_LEVEL_ORDER.get(event_review_level(event), 0),
                     TRIGGER_ORDER.get(str(event_payload(event).get("trigger") or "data-update").strip(), 0),
                     1 if "ResearchEvidence" in fact_types else 0,
@@ -3551,6 +3577,7 @@ class OntologyReasoningRunner:
                     1 if is_verified_monitor_snapshot_event(event) else 0,
                     *self.symbol_fairness_rank(symbol, cursor_payload),
                     int(priority_symbols.get(symbol, 0) or 0),
+                    REASONING_PRIORITY_ORDER.get(event_reasoning_priority(event), 0),
                     REVIEW_LEVEL_ORDER.get(event_review_level(event), 0),
                     TRIGGER_ORDER.get(str(event_payload(event).get("trigger") or "data-update").strip(), 0),
                     1 if "ResearchEvidence" in {str(item or "").strip() for item in event_payload(event).get("factTypes") or []} else 0,
@@ -4014,14 +4041,20 @@ class OntologyReasoningRunner:
             if str(symbol or "").strip()
         ]
         classes = ["observation-followup", "verified-snapshot", "research", "realtime-market", "portfolio", "global", "other"]
+        priority_classes = list(REASONING_PRIORITY_ORDER)
         pending_counts = {work_class: 0 for work_class in classes}
         selected_counts = {work_class: 0 for work_class in classes}
+        pending_priority_counts = {priority: 0 for priority in priority_classes}
+        selected_priority_counts = {priority: 0 for priority in priority_classes}
         observed_at = []
         requested_at = []
         for event in pending:
             work_class = event_work_class(event)
             pending_counts.setdefault(work_class, 0)
             pending_counts[work_class] += 1
+            priority = event_reasoning_priority(event)
+            pending_priority_counts.setdefault(priority, 0)
+            pending_priority_counts[priority] += 1
             stamp = self.event_source_observed_at(event)
             if stamp:
                 observed_at.append(stamp)
@@ -4032,6 +4065,9 @@ class OntologyReasoningRunner:
             work_class = event_work_class(event)
             selected_counts.setdefault(work_class, 0)
             selected_counts[work_class] += 1
+            priority = event_reasoning_priority(event)
+            selected_priority_counts.setdefault(priority, 0)
+            selected_priority_counts[priority] += 1
         fairness = fairness_drain or self.fairness_drain_state(selected_symbols, payload)
         configured_interval = self.projection_min_interval_seconds(pending)
         effective_interval = self.effective_projection_min_interval_seconds(
@@ -4060,6 +4096,8 @@ class OntologyReasoningRunner:
             "mode": mode,
             "pendingByClass": pending_counts,
             "selectedByClass": selected_counts,
+            "pendingByPriority": pending_priority_counts,
+            "selectedByPriority": selected_priority_counts,
             "selectedWorkClasses": selected_classes,
             "pendingSymbolCount": len(pending_symbols),
             "overduePendingSymbolCount": len([item for item in fairness_queue if item.get("state") == "overdue"]),
@@ -4711,16 +4749,16 @@ class OntologyReasoningRunner:
         if (
             observation_followup_symbols
             and self.native_typedb_rule_execution_enabled()
-            and int(batch_plan.get("targetSymbolLimit") or 0) > 1
+            and int(batch_plan.get("targetSymbolLimit") or 0) > self.observation_followup_target_limit()
         ):
             batch_plan = dict(batch_plan)
             batch_plan["baseMode"] = str(batch_plan.get("mode") or "")
-            batch_plan["mode"] = "observation-followup-single-target"
-            batch_plan["targetSymbolLimit"] = 1
+            batch_plan["mode"] = "observation-followup-bounded-batch"
+            batch_plan["targetSymbolLimit"] = self.observation_followup_target_limit()
             batch_plan["observationFollowupSymbols"] = observation_followup_symbols[:20]
             reason_codes = list(batch_plan.get("reasonCodes") or [])
-            if "notified-observation-followup-single-target" not in reason_codes:
-                reason_codes.append("notified-observation-followup-single-target")
+            if "market-observation-followup-bounded-batch" not in reason_codes:
+                reason_codes.append("market-observation-followup-bounded-batch")
             batch_plan["reasonCodes"] = reason_codes[:20]
         elif observation_followup_symbols:
             batch_plan = dict(batch_plan)

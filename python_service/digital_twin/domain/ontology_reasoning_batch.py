@@ -114,11 +114,11 @@ def adaptive_reasoning_batch_plan(
     )
     steady_limit = min(
         hard_limit,
-        _integer(configured.get("ontologyReasoningAdaptiveBatchSteadySymbols"), 1, 1, 200),
+        _integer(configured.get("ontologyReasoningAdaptiveBatchSteadySymbols"), 2, 1, 200),
     )
     burst_limit = min(
         hard_limit,
-        _integer(configured.get("ontologyReasoningAdaptiveBatchBurstSymbols"), 3, 1, 200),
+        _integer(configured.get("ontologyReasoningAdaptiveBatchBurstSymbols"), 4, 1, 200),
     )
     pending_threshold = _integer(
         configured.get("ontologyReasoningAdaptiveBatchPendingThreshold"),

@@ -126,7 +126,7 @@ class VerifiedSnapshotReasoningTests(unittest.TestCase):
         self.assertEqual(["AAPL"], event.payload["symbols"])
         self.assertEqual(["AAPL"], event.payload["observationFollowupSymbols"])
         self.assertEqual(0, event.payload["changedCount"])
-        self.assertEqual(["outboxedMarketObservation"], event.payload["changedFieldsBySymbol"]["AAPL"])
+        self.assertEqual(["marketObservationFollowup"], event.payload["changedFieldsBySymbol"]["AAPL"])
         self.assertIn("MarketQuote", event.payload["factTypes"])
         self.assertTrue(event.payload["factRevisionsBySymbol"]["AAPL"])
         entries = durable_mailbox_entries(event)

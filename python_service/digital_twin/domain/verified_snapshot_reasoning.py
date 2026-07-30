@@ -362,10 +362,10 @@ def verified_monitor_snapshot_reasoning_event(
             EXTERNAL_REFRESH_FIELDS,
         )
 
-    # A raw price observation compares the current quote with the last
-    # *outboxed* quote, not necessarily with the immediately preceding
+    # A material price observation compares the current quote with its durable
+    # source-boundary anchor, not necessarily with the immediately preceding
     # snapshot. By the time that cumulative threshold is crossed, the latest
-    # snapshot can be fact-identical to the previous one. Keep the delivered
+    # snapshot can be fact-identical to the previous one. Keep the queued
     # observation in the replay request so its TypeDB follow-up cannot be
     # silently dropped by that ordinary fact-delta optimization.
     observation_followups = sorted({
@@ -378,7 +378,7 @@ def verified_monitor_snapshot_reasoning_event(
         if symbol in changed_symbols:
             continue
         changed_symbols.append(symbol)
-        changed_fields_by_symbol[symbol] = ["outboxedMarketObservation"]
+        changed_fields_by_symbol[symbol] = ["marketObservationFollowup"]
         changed_external_groups_by_symbol[symbol] = []
         all_fact_types.add("MarketQuote")
         revisions[symbol] = fact_revision_id(
@@ -388,7 +388,7 @@ def verified_monitor_snapshot_reasoning_event(
                 "position": current_positions.get(symbol, {}),
                 # This value is delivery provenance only. TypeDB evaluates
                 # the persisted current ABox, never this request marker.
-                "outboxedObservationSnapshot": str(snapshot.generated_at or ""),
+                "marketObservationSnapshot": str(snapshot.generated_at or ""),
             },
             EXTERNAL_REFRESH_FIELDS,
         )
@@ -406,7 +406,7 @@ def verified_monitor_snapshot_reasoning_event(
         observed_count=len(subjects),
         fact_types=sorted(all_fact_types or {"PortfolioSnapshot"}),
         reason=(
-            "확정 저장된 계좌 스냅샷의 사실 변경과 발송된 원시 시세 관측의 "
+            "확정 저장된 계좌 스냅샷의 사실 변경과 시세 관측 후속 확인을 "
             "후속 확인을 TypeDB 현재 상태 추론에 반영합니다."
         ),
         fact_revisions_by_symbol=revisions,

@@ -285,6 +285,7 @@ class MaterialityGateTests(unittest.TestCase):
             settings={
                 "ontologyReasoningMinIntervalSeconds": "180",
                 "ontologyReasoningUrgentMinIntervalSeconds": "60",
+                "ontologyReasoningMarketMinIntervalSeconds": "180",
             },
             now_provider=lambda: now["value"],
         )
@@ -327,6 +328,44 @@ class MaterialityGateTests(unittest.TestCase):
         )
 
         self.assertEqual([request.event_id], [event.event_id for event in runner.pending_requests()])
+
+    def test_reasoning_worker_uses_source_specific_cadence_lanes(self):
+        market_request = ontology_reasoning_requested_event(
+            DomainEvent(name="market_data.collected", aggregate_id="market:AAPL", payload={}),
+            "market-data-update",
+            ["AAPL"],
+            changed_count=1,
+            fact_types=["MarketQuote"],
+        )
+        research_request = ontology_reasoning_requested_event(
+            DomainEvent(name="research.evidence.collected", aggregate_id="research:AAPL", payload={}),
+            "research-evidence-update",
+            ["AAPL"],
+            changed_count=1,
+            fact_types=["ResearchEvidence"],
+        )
+        urgent_research_request = ontology_reasoning_requested_event(
+            DomainEvent(name="research.evidence.collected", aggregate_id="research:AAPL", payload={}),
+            "research-evidence-update",
+            ["AAPL"],
+            changed_count=1,
+            fact_types=["ResearchEvidence"],
+            materiality_assessments=[{"reviewLevel": "act", "changeState": "new-condition"}],
+        )
+        runner = OntologyReasoningRunner(
+            event_reader=None,
+            cursor_store=None,
+            monitor_runner_factory=lambda: None,
+            settings={
+                "ontologyReasoningMarketMinIntervalSeconds": "120",
+                "ontologyReasoningResearchMinIntervalSeconds": "300",
+                "ontologyReasoningUrgentMinIntervalSeconds": "60",
+            },
+        )
+
+        self.assertEqual(120, runner.event_min_interval_seconds(market_request))
+        self.assertEqual(300, runner.event_min_interval_seconds(research_request))
+        self.assertEqual(60, runner.event_min_interval_seconds(urgent_research_request))
 
     def test_reasoning_worker_marks_async_research_run_refreshed(self):
         class ResearchStore:
@@ -1303,6 +1342,7 @@ class MaterialityGateTests(unittest.TestCase):
                 "ontologyReasoningEnabled": "1",
                 "ontologyReasoningMinIntervalSeconds": "180",
                 "ontologyReasoningUrgentMinIntervalSeconds": "60",
+                "ontologyReasoningMarketMinIntervalSeconds": "180",
                 "ontologyRuleCandidateAiEnabled": "0",
             },
             now_provider=lambda: datetime(2026, 7, 21, 0, 3, 0, tzinfo=timezone.utc),

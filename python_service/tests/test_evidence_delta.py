@@ -1,7 +1,9 @@
 import unittest
 
 from digital_twin.domain.evidence_delta import (
+    evidence_content_signature,
     evidence_delta,
+    evidence_inference_signature,
     eligible_evidence_set_revision,
 )
 from digital_twin.domain.events import (
@@ -92,6 +94,64 @@ class EvidenceDeltaTests(unittest.TestCase):
         )
 
         self.assertEqual(first_revision, second_revision)
+
+    def test_refresh_and_presentation_changes_do_not_requeue_the_same_fact(self):
+        evidence = eligible_evidence()
+        presentation_refresh = ResearchEvidence(
+            evidence.evidence_id,
+            evidence.symbol,
+            evidence.kind,
+            evidence.source,
+            evidence.title,
+            "AI summary wording was refreshed.",
+            evidence.url,
+            evidence.observed_at,
+            evidence.polarity,
+            published_at=evidence.published_at,
+            raw_payload={
+                **evidence.raw_payload,
+                "sourceFetchedAt": "2026-07-26T00:10:00Z",
+                "aiAnalysis": {
+                    "analysisSummary": "Presentation-only retry output.",
+                    "lastExternalAttemptAt": "2026-07-26T00:10:00Z",
+                },
+            },
+        )
+
+        self.assertNotEqual(
+            evidence_content_signature(evidence),
+            evidence_content_signature(presentation_refresh),
+        )
+        self.assertEqual(
+            evidence_inference_signature(evidence),
+            evidence_inference_signature(presentation_refresh),
+        )
+        self.assertFalse(evidence_delta(evidence, presentation_refresh).changes_inference_eligible_set)
+
+    def test_graph_relevant_evidence_change_requeues_the_fact_set(self):
+        evidence = eligible_evidence()
+        risk_update = ResearchEvidence(
+            evidence.evidence_id,
+            evidence.symbol,
+            evidence.kind,
+            evidence.source,
+            evidence.title,
+            evidence.summary,
+            evidence.url,
+            evidence.observed_at,
+            "risk",
+            published_at=evidence.published_at,
+            raw_payload={
+                **evidence.raw_payload,
+                "stockImpactPolarity": "risk",
+            },
+        )
+
+        self.assertNotEqual(
+            evidence_inference_signature(evidence),
+            evidence_inference_signature(risk_update),
+        )
+        self.assertTrue(evidence_delta(evidence, risk_update).changes_inference_eligible_set)
 
     def test_lifecycle_event_requests_reasoning_only_for_eligible_set_changes(self):
         eligible = eligible_evidence()

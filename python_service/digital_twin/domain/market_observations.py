@@ -15,6 +15,7 @@ from .portfolio import AlertEvent
 
 
 MARKET_OBSERVATION_BASELINES_KEY = "marketObservationBaselines"
+MARKET_OBSERVATION_CANDIDATES_KEY = "marketObservationReasoningCandidates"
 
 
 def _state_positions(state: Dict[str, object]) -> Dict[str, Dict[str, object]]:
@@ -162,7 +163,9 @@ def apply_market_observation_outbox_baselines(
         price = number(observation.get("currentPrice"))
         if not symbol or price <= 0:
             continue
+        previous = dict(baselines.get(symbol) or {})
         baselines[symbol] = {
+            **previous,
             "price": price,
             "currency": str(observation.get("currency") or "").upper().strip(),
             "source": str(observation.get("source") or "").strip(),
@@ -172,4 +175,80 @@ def apply_market_observation_outbox_baselines(
     if changed:
         metadata[MARKET_OBSERVATION_BASELINES_KEY] = baselines
         updated["metadata"] = metadata
+    return updated
+
+
+def market_observation_reasoning_candidates(metadata: Dict[str, object]) -> list[Dict[str, object]]:
+    """Read bounded quote candidates that must receive a TypeDB follow-up.
+
+    Candidate records are operational provenance attached to the persisted
+    monitor boundary. They are not investment facts and are deliberately
+    small enough to survive a worker retry without replaying a notification.
+    """
+    source = metadata if isinstance(metadata, dict) else {}
+    raw = source.get(MARKET_OBSERVATION_CANDIDATES_KEY) or []
+    if not isinstance(raw, (list, tuple)):
+        return []
+    candidates = []
+    seen = set()
+    for value in raw:
+        item = dict(value) if isinstance(value, dict) else {}
+        symbol = str(item.get("symbol") or "").upper().strip()
+        observation = item.get("marketObservation") if isinstance(item.get("marketObservation"), dict) else {}
+        if not symbol or symbol in seen or number(observation.get("currentPrice")) <= 0:
+            continue
+        seen.add(symbol)
+        candidates.append({
+            "symbol": symbol,
+            "marketObservation": dict(observation),
+            "deliveryDeferred": bool(item.get("deliveryDeferred")),
+        })
+    return candidates
+
+
+def market_observation_reasoning_symbols(metadata: Dict[str, object]) -> list[str]:
+    return [item["symbol"] for item in market_observation_reasoning_candidates(metadata)]
+
+
+def apply_market_observation_reasoning_baselines(
+    state: Dict[str, object],
+    candidates: Iterable[Dict[str, object]],
+) -> Dict[str, object]:
+    """Advance a quote anchor once its persisted follow-up has been queued.
+
+    Raw delivery is now optional for ordinary changes. Advancing at the source
+    snapshot boundary prevents the same cumulative move from re-entering the
+    mailbox every poll while retaining the durable reasoning request for retry.
+    """
+    updated = deepcopy(state or {})
+    metadata = dict(updated.get("metadata") or {})
+    baselines = market_observation_baselines(updated)
+    changed = False
+    for candidate in candidates or []:
+        item = dict(candidate) if isinstance(candidate, dict) else {}
+        symbol = str(item.get("symbol") or "").upper().strip()
+        observation = item.get("marketObservation") if isinstance(item.get("marketObservation"), dict) else {}
+        price = number(observation.get("currentPrice"))
+        if not symbol or price <= 0:
+            continue
+        previous = dict(baselines.get(symbol) or {})
+        if bool(item.get("deliveryDeferred")):
+            # This anchor no longer represents the last owner-visible raw
+            # alert. It represents a TypeDB-first follow-up boundary.
+            previous.pop("outboxQueuedAt", None)
+        baselines[symbol] = {
+            **previous,
+            "price": price,
+            "currency": str(observation.get("currency") or "").upper().strip(),
+            "source": str(observation.get("source") or "").strip(),
+            "reasoningQueuedAt": str(updated.get("generatedAt") or ""),
+        }
+        changed = True
+    if changed:
+        metadata[MARKET_OBSERVATION_BASELINES_KEY] = baselines
+    # Candidates belong to one source snapshot only. The linked TypeDB event
+    # stores its own marker, so retaining them on every later snapshot would
+    # falsely recreate the follow-up after a restart.
+    metadata.pop(MARKET_OBSERVATION_CANDIDATES_KEY, None)
+    updated["metadata"] = metadata
     return updated

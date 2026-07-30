@@ -168,7 +168,7 @@ DEFAULT_NOTIFICATION_TEMPLATES = {
     },
     "marketObservation": {
         "template": DEFAULT_TEMPLATE,
-        "description": "TypeDB 추론과 분리된 원시 시세 관측 알림 (투자 판단 없음)",
+        "description": "급변 시 즉시 발송하는 원시 시세 관측 알림 (투자 판단 없음)",
     },
     "portfolioHoldingsSnapshot": {
         "template": DEFAULT_TEMPLATE,

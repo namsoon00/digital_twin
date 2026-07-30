@@ -347,7 +347,7 @@ class MySQLOntologyReasoningMailboxStore(MySQLOperationalConnection):
                 if current:
                     displaced = _text(current.get("source_event_id"))
                     effective_entry = dict(entry)
-                    # A raw price observation may be superseded by a newer
+                    # A material price observation may be superseded by a newer
                     # snapshot before the worker claims the slot. Retain its
                     # scheduling urgency while replacing the source facts.
                     effective_entry["priorityHint"] = max(incoming_priority, current_priority)

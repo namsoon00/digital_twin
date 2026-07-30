@@ -25,20 +25,31 @@ REVIEW_LEVEL_ORDER = {
 
 TRIGGER_ORDER = {
     VERIFIED_MONITOR_SNAPSHOT_TRIGGER: 7,
-    "research-evidence-update": 6,
-    "news-analysis-enrichment": 6,
-    "research-evidence-lifecycle": 6,
+    "research-evidence-lifecycle": 5,
     "investment-calendar-update": 5,
     "market-data-update": 4,
     "kis-realtime-websocket": 3,
     "kis-realtime-update": 3,
+    "research-evidence-update": 2,
+    "news-analysis-enrichment": 2,
     "portfolio-snapshot-update": 2,
     "data-update": 1,
 }
 
-# A deterministic price-observation notification has already reached the
-# owner. Its current-state TypeDB follow-up should not wait behind ordinary
-# queue pressure, but the marker remains scheduling provenance only.
+# This is operational dispatch priority, not an investment action. It only
+# decides when an already accepted fact set is projected into TypeDB.
+REASONING_PRIORITY_ORDER = {
+    "background": 0,
+    "research": 1,
+    "market": 2,
+    "urgent": 3,
+    "critical": 4,
+    "observation": 5,
+}
+
+# A persisted material price observation has a current-state TypeDB follow-up.
+# It should not wait behind ordinary queue pressure, but the marker remains
+# scheduling provenance only.
 OBSERVATION_FOLLOWUP_PRIORITY_HINT = 100000
 
 COALESCIBLE_REALTIME_TRIGGERS = {
@@ -96,11 +107,11 @@ def event_symbols(event: object) -> List[str]:
 
 
 def observation_followup_symbols(event: object) -> List[str]:
-    """Return notified symbols that need a prompt current-state recheck.
+    """Return raw-alert symbols that need a prompt current-state recheck.
 
     A virtual mailbox event may inherit the priority from a displaced source
     revision. In that case the durable mailbox marker is authoritative even
-    though the newest source payload no longer carries the original alert
+    though the newest source payload no longer carries the original raw-alert
     symbol list.
     """
     symbols = event_symbols(event)
@@ -144,6 +155,7 @@ def mailbox_entry_priority(
     return (
         (OBSERVATION_FOLLOWUP_PRIORITY_HINT if is_observation_followup_symbol(event, symbol) else 0)
         + account_priority * 10000
+        + REASONING_PRIORITY_ORDER.get(event_reasoning_priority(event), 0) * 1500
         + REVIEW_LEVEL_ORDER.get(event_review_level(event), 0) * 1000
         + TRIGGER_ORDER.get(trigger, 0) * 100
         + (1 if "MarketQuote" in fact_types else 0)
@@ -160,9 +172,9 @@ def event_changed_count(event: object) -> int:
 def event_has_reasoning_work(event: object) -> bool:
     """Return whether a request needs a current-state TypeDB turn.
 
-    An outboxed price observation is a delivery fact, rather than a newly
-    persisted ABox fact. It still needs one follow-up projection even when its
-    snapshot has zero ordinary fact changes.
+    An outboxed critical price observation is a delivery fact, rather than a
+    newly persisted ABox fact. It still needs one follow-up projection even
+    when its snapshot has zero ordinary fact changes.
     """
     return bool(event_changed_count(event) > 0 or observation_followup_symbols(event))
 
@@ -223,6 +235,42 @@ def is_verified_monitor_snapshot_event(event: object) -> bool:
         and isinstance(payload.get("verifiedSourceSnapshot"), Mapping)
         and str((payload.get("verifiedSourceSnapshot") or {}).get("generatedAt") or "").strip()
     )
+
+
+def event_reasoning_priority(event: object) -> str:
+    """Classify the queue cadence without evaluating a market outcome.
+
+    Existing source materiality and lifecycle contracts are the only inputs.
+    In particular, an ordinary news refresh stays in the research lane even
+    when its source was collected successfully; it is no longer promoted to
+    the same cadence as a verified quote or an urgent fact withdrawal.
+    """
+    payload = event_payload(event)
+    trigger = str(payload.get("trigger") or "").strip().lower()
+    review_level = event_review_level(event)
+    if any(is_observation_followup_symbol(event, symbol) for symbol in event_symbols(event)):
+        return "observation"
+    if review_level == "immediate":
+        return "critical"
+    if trigger == "investment-calendar-update":
+        return "urgent"
+    if trigger == "research-evidence-lifecycle":
+        transitions = {
+            str(item.get("transition") or "").strip().lower()
+            for item in payload.get("evidenceDeltas") or []
+            if isinstance(item, Mapping)
+        }
+        if transitions & {"retraction", "expiration", "demotion", "supersession"}:
+            return "urgent"
+    if is_verified_monitor_snapshot_event(event):
+        return "urgent" if review_level in {"act", "immediate"} else "market"
+    if trigger in COALESCIBLE_RESEARCH_TRIGGERS or "research" in trigger:
+        return "urgent" if review_level == "act" else "research"
+    if review_level == "act":
+        return "urgent"
+    if trigger in COALESCIBLE_REALTIME_TRIGGERS:
+        return "market"
+    return "background"
 
 
 def is_realtime_latest_state(event: object) -> bool:

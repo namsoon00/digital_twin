@@ -183,11 +183,16 @@ class NewsAnalysisEnrichmentRunner:
                 or getattr(mutation, "eligible_set_revisions", {})
                 or {}
             ),
+            "inferenceChangedSymbols": list(
+                mutation_payload.get("inferenceChangedSymbols")
+                or getattr(mutation, "inference_changed_symbols", [])
+                or []
+            ),
             "providers": ["news-ai-analysis"],
         }
         event = research_evidence_collected_event(payload)
         events = [event]
-        inference_symbols = list(payload["factRevisionsBySymbol"])
+        inference_symbols = list(payload["inferenceChangedSymbols"])
         if inference_symbols:
             events.append(ontology_reasoning_requested_event(
                 event,

@@ -7,7 +7,8 @@ from ..domain.evidence_delta import (
     clean_symbol,
     evidence_content_signature,
     evidence_delta,
-    eligible_set_revisions_for_deltas,
+    evidence_inference_signature,
+    eligible_evidence_set_revision,
     inference_eligible,
 )
 from ..domain.investment_research import ResearchEvidence
@@ -61,6 +62,14 @@ class MySQLResearchEvidenceStore(MySQLOperationalConnection):
                     merged.changed_items.append(item)
             merged.deltas.extend(list(getattr(mutation, "deltas", []) or []))
             merged.eligible_set_revisions.update(dict(getattr(mutation, "eligible_set_revisions", {}) or {}))
+            merged.previous_eligible_set_revisions.update(dict(
+                getattr(mutation, "previous_eligible_set_revisions", {}) or {}
+            ))
+            explicit_inference_symbols = getattr(mutation, "inference_changed_symbols_override", None)
+            if explicit_inference_symbols is not None:
+                if merged.inference_changed_symbols_override is None:
+                    merged.inference_changed_symbols_override = []
+                merged.inference_changed_symbols_override.extend(list(explicit_inference_symbols or []))
         return merged.with_revisions()
 
     def _row_lifecycle_state(self, row) -> str:
@@ -86,18 +95,42 @@ class MySQLResearchEvidenceStore(MySQLOperationalConnection):
             item = research_evidence_from_row(row)
             lifecycle_state = self._row_lifecycle_state(row)
             if inference_eligible(item, lifecycle_state, self.runtime_settings):
-                result.setdefault(clean_symbol(item.symbol), []).append(evidence_content_signature(item))
+                result.setdefault(clean_symbol(item.symbol), []).append(evidence_inference_signature(item))
         return result
 
+    def _eligible_set_revisions_by_symbol(self, connection, symbols: Iterable[str]) -> Dict[str, str]:
+        signatures = self._active_eligible_signatures_by_symbol(connection, symbols)
+        return {
+            symbol: eligible_evidence_set_revision(symbol, values)
+            for symbol, values in signatures.items()
+        }
+
     def _finalize_mutation(self, connection, mutation: EvidenceMutation) -> EvidenceMutation:
-        eligible_signatures = self._active_eligible_signatures_by_symbol(
-            connection,
-            [delta.symbol for delta in mutation.deltas],
-        )
-        mutation.eligible_set_revisions = eligible_set_revisions_for_deltas(
-            mutation.deltas,
-            eligible_signatures,
-        )
+        affected_symbols = sorted({
+            clean_symbol(delta.symbol)
+            for delta in mutation.deltas
+            if clean_symbol(delta.symbol)
+        })
+        if not affected_symbols:
+            return mutation.with_revisions()
+        after_revisions = self._eligible_set_revisions_by_symbol(connection, affected_symbols)
+        before_revisions = dict(mutation.previous_eligible_set_revisions or {})
+        for symbol in affected_symbols:
+            before_revisions.setdefault(symbol, eligible_evidence_set_revision(symbol, []))
+        inference_changed_symbols = [
+            symbol
+            for symbol in affected_symbols
+            if before_revisions.get(symbol) != after_revisions.get(symbol)
+        ]
+        # Only changed active fact sets are passed to the reasoning queue.
+        # This also collapses syndicated copies that have the same semantic
+        # signature while retaining every source row for audit/provenance.
+        mutation.inference_changed_symbols_override = inference_changed_symbols
+        mutation.eligible_set_revisions = {
+            symbol: after_revisions[symbol]
+            for symbol in inference_changed_symbols
+            if after_revisions.get(symbol)
+        }
         return mutation.with_revisions()
 
     def _remember_mutation(self, mutation: EvidenceMutation) -> None:
@@ -112,8 +145,13 @@ class MySQLResearchEvidenceStore(MySQLOperationalConnection):
         items: Iterable[ResearchEvidence],
         stamp: str,
     ) -> EvidenceMutation:
+        rows = list(items or [])
         mutation = EvidenceMutation()
-        for item in items or []:
+        mutation.previous_eligible_set_revisions = self._eligible_set_revisions_by_symbol(
+            connection,
+            [getattr(item, "symbol", "") for item in rows],
+        )
+        for item in rows:
             evidence_id = str(item.evidence_id or "").strip()
             if not evidence_id:
                 continue
@@ -218,9 +256,14 @@ class MySQLResearchEvidenceStore(MySQLOperationalConnection):
         stamp: str,
         reason: str,
     ) -> EvidenceMutation:
+        rows = list(rows or [])
         mutation = EvidenceMutation()
+        mutation.previous_eligible_set_revisions = self._eligible_set_revisions_by_symbol(
+            connection,
+            [getattr(research_evidence_from_row(row), "symbol", "") for row in rows],
+        )
         target_state = clean_lifecycle_state(lifecycle_state)
-        for row in rows or []:
+        for row in rows:
             previous = research_evidence_from_row(row)
             previous_state = self._row_lifecycle_state(row)
             if previous_state == target_state:

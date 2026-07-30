@@ -8,7 +8,7 @@ from .data_freshness import data_freshness_required, freshness_from_position, fr
 from .external_api_sources import external_api_source_metadata
 from .external_signal_deltas import external_signals_with_deltas
 from .market_data import number
-from .market_observations import market_observation_baseline
+from .market_observations import MARKET_OBSERVATION_CANDIDATES_KEY, market_observation_baseline
 from .message_types import (
     DEFAULT_ALERT_RULES,
     DEFAULT_ALERT_THRESHOLDS,
@@ -332,10 +332,18 @@ class RealtimeMonitor(MonitoringSampleDataMixin, MonitoringPositionContextMixin,
         inference_missing = False
         raw_events.extend(self.connection_events(decision_snapshot, previous))
         raw_events.extend(self.heartbeat_events(decision_snapshot))
-        # This is deliberately a factual observation, not a Python investment
-        # signal. It is placed in the notification outbox immediately while
-        # the same snapshot's TypeDB request is processed independently.
-        raw_events.extend(self.market_observation_events(decision_snapshot, previous))
+        # A material quote candidate is always attached to the persisted
+        # snapshot for a TypeDB follow-up. Ordinary candidates wait for that
+        # relationship result; only a configured critical move bypasses it
+        # with a factual raw observation notification.
+        observation_events = self.market_observation_events(decision_snapshot, previous)
+        candidates = [self.market_observation_candidate_payload(event) for event in observation_events]
+        if candidates:
+            decision_snapshot.metadata[MARKET_OBSERVATION_CANDIDATES_KEY] = candidates[:50]
+        raw_events.extend([
+            event for event in observation_events
+            if not bool(dict(getattr(event, "metadata", {}) or {}).get("deliveryDeferred"))
+        ])
         if has_account_data:
             inference_state = self.ontology_inference_missing_state(decision_snapshot)
             inference_missing = bool(inference_state.get("missing"))
@@ -640,6 +648,35 @@ class RealtimeMonitor(MonitoringSampleDataMixin, MonitoringPositionContextMixin,
             value = default
         return max(0.0, min(20.0, value))
 
+    def market_observation_raw_delivery_mode(self) -> str:
+        mode = str(self.settings.get("marketObservationRawDeliveryMode") or "critical-only").strip().lower()
+        if mode in {"always", "critical-only", "typedb-first", "disabled"}:
+            return mode
+        return "critical-only"
+
+    def market_observation_immediate_price_change_threshold(self) -> float:
+        configured = number(self.settings.get("marketObservationImmediatePriceChangePct"))
+        fallback = max(3.0, self.market_observation_price_change_threshold())
+        return max(0.0, min(30.0, configured if configured > 0 else fallback))
+
+    def market_observation_deliver_immediately(self, change_pct: float) -> bool:
+        mode = self.market_observation_raw_delivery_mode()
+        if mode == "always":
+            return True
+        if mode in {"typedb-first", "disabled"}:
+            return False
+        return abs(float(change_pct or 0.0)) >= self.market_observation_immediate_price_change_threshold()
+
+    @staticmethod
+    def market_observation_candidate_payload(event: AlertEvent) -> Dict[str, object]:
+        metadata = dict(getattr(event, "metadata", {}) or {})
+        observation = metadata.get("marketObservation") if isinstance(metadata.get("marketObservation"), dict) else {}
+        return {
+            "symbol": str(getattr(event, "symbol", "") or "").upper().strip(),
+            "marketObservation": dict(observation),
+            "deliveryDeferred": bool(metadata.get("deliveryDeferred")),
+        }
+
     @staticmethod
     def monitor_state_positions(previous: Dict[str, object]) -> Dict[str, Dict[str, object]]:
         """Map the last persisted holding/watchlist state by current subject."""
@@ -666,14 +703,14 @@ class RealtimeMonitor(MonitoringSampleDataMixin, MonitoringPositionContextMixin,
         snapshot: AccountSnapshot,
         previous: Dict[str, object] = None,
     ) -> List[AlertEvent]:
-        """Emit a bounded raw quote observation without an investment action.
+        """Create bounded material quote candidates without an investment action.
 
-        The event compares the current quote with the most recent
-        outbox-accepted observation price when available, so small consecutive
-        ticks accumulate instead of resetting the threshold every monitor
-        cycle. It never names a buy/sell/hold action, never consumes an
-        InferenceBox, and can therefore be durably queued before the
-        asynchronous TypeDB worker has an available schema-function generation.
+        The candidate compares the current quote with its most recent durable
+        observation anchor, so small consecutive ticks accumulate instead of
+        resetting the threshold every monitor cycle. It never names a
+        buy/sell/hold action, never consumes an InferenceBox, and can therefore
+        be durably queued before the asynchronous TypeDB worker has an
+        available schema-function generation.
         """
 
         if not snapshot.has_live_account_data():
@@ -705,14 +742,31 @@ class RealtimeMonitor(MonitoringSampleDataMixin, MonitoringPositionContextMixin,
             baseline = market_observation_baseline(previous or {}, symbol, currency)
             stored_baseline_price = number(baseline.get("price"))
             baseline_price = stored_baseline_price or previous_price
-            baseline_kind = "last-outbox-alert" if stored_baseline_price > 0 else "previous-snapshot"
+            if baseline.get("outboxQueuedAt"):
+                baseline_kind = "last-outbox-alert"
+            elif baseline.get("reasoningQueuedAt"):
+                baseline_kind = "last-reasoning-candidate"
+            elif stored_baseline_price > 0:
+                baseline_kind = "initial-observation"
+            else:
+                baseline_kind = "previous-snapshot"
             change_pct = (current_price - baseline_price) / abs(baseline_price) * 100.0
             if change_pct == 0 or abs(change_pct) < threshold:
                 continue
             direction = "up" if change_pct > 0 else "down" if change_pct < 0 else "flat"
             source = str(item.quote_source or item.source or "시세 공급자").strip()
-            baseline_label = "마지막 알림 기준값" if baseline_kind == "last-outbox-alert" else "초기 관측 기준값"
-            comparison_label = "마지막 알림 기준 시세와 비교" if baseline_kind == "last-outbox-alert" else "직전 저장 시세와 비교 (초기 기준)"
+            baseline_label = {
+                "last-outbox-alert": "마지막 원시 알림 기준값",
+                "last-reasoning-candidate": "마지막 추론 확인 기준값",
+                "initial-observation": "초기 관측 기준값",
+            }.get(baseline_kind, "직전 저장 기준값")
+            comparison_label = {
+                "last-outbox-alert": "마지막 원시 알림 기준 시세와 비교",
+                "last-reasoning-candidate": "마지막 TypeDB 후속 확인 기준 시세와 비교",
+                "initial-observation": "초기 관측 기준 시세와 비교",
+            }.get(baseline_kind, "직전 저장 시세와 비교")
+            delivery_deferred = not self.market_observation_deliver_immediately(change_pct)
+            immediate_threshold = self.market_observation_immediate_price_change_threshold()
             lines = [
                 "현재가: " + price_money(current_price, currency),
                 baseline_label + ": " + price_money(baseline_price, currency),
@@ -724,6 +778,13 @@ class RealtimeMonitor(MonitoringSampleDataMixin, MonitoringPositionContextMixin,
             ]
             if source:
                 lines.insert(3, "시세 출처: " + source)
+            criteria_setting = (
+                "기준 시세 대비 절대 " + compact_number(threshold)
+                + "% 이상 누적 변동 시 TypeDB 후속 확인을 요청"
+                if delivery_deferred
+                else "기준 시세 대비 절대 " + compact_number(immediate_threshold)
+                + "% 이상 누적 변동 시 원시 시세 관측을 즉시 발송"
+            )
             events.append(AlertEvent(
                 snapshot.account_id,
                 snapshot.account_label,
@@ -734,7 +795,7 @@ class RealtimeMonitor(MonitoringSampleDataMixin, MonitoringPositionContextMixin,
                 lines,
                 symbol,
                 criteria=self.criteria(
-                    "마지막 알림 기준 시세 대비 절대 " + compact_number(threshold) + "% 이상 누적 변동 시 원시 시세 관측을 즉시 발송",
+                    criteria_setting,
                     baseline_label + " " + price_money(baseline_price, currency)
                     + " → 현재 " + price_money(current_price, currency)
                     + " (" + signed_pct(change_pct) + ") · 투자 판단 없음",
@@ -754,8 +815,9 @@ class RealtimeMonitor(MonitoringSampleDataMixin, MonitoringPositionContextMixin,
                     },
                     "observationOnly": True,
                     "investmentJudgement": False,
-                    "deliveryMode": "deterministic-outbox-before-typedb",
-                    "reasoningFollowup": "queued-separately",
+                    "deliveryDeferred": delivery_deferred,
+                    "deliveryMode": "typedb-first" if delivery_deferred else "deterministic-outbox-before-typedb",
+                    "reasoningFollowup": "queued-from-persisted-snapshot",
                 },
             ))
         return events
@@ -765,9 +827,9 @@ class RealtimeMonitor(MonitoringSampleDataMixin, MonitoringPositionContextMixin,
         snapshot: AccountSnapshot,
         reasoning_context: Dict[str, object] = None,
     ) -> List[AlertEvent]:
-        """Create one graph-backed insight source after a raw quote observation.
+        """Create one graph-backed insight source after a quote follow-up.
 
-        A raw observation is intentionally not a buy/sell signal. Once the
+        A material quote observation is intentionally not a buy/sell signal. Once the
         corresponding TypeDB generation is aligned, this source lets the user
         see that the relation analysis completed even when its action state
         remained unchanged.
@@ -847,7 +909,7 @@ class RealtimeMonitor(MonitoringSampleDataMixin, MonitoringPositionContextMixin,
                 ],
                 symbol,
                 criteria=self.criteria(
-                    "원시 시세 관측을 발송한 뒤 최신 ABox의 TypeDB 관계 분석이 완료될 때",
+                    "시세 관측 후속 확인의 최신 ABox TypeDB 관계 분석이 완료될 때",
                     decision_label
                     + " · " + REVIEW_LEVEL_LABELS.get(review_level, REVIEW_LEVEL_LABELS["observe"])
                     + " · " + CHANGE_STATE_LABELS.get(change_state, CHANGE_STATE_LABELS["unchanged"]),

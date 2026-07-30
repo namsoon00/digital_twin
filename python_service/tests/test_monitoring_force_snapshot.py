@@ -9,7 +9,12 @@ sys.path.insert(0, str(Path(__file__).resolve().parents[1]))
 from digital_twin.application.monitoring_service import MonitorRunner
 from digital_twin.domain.accounts import AccountConfig
 from digital_twin.domain.market_data import normalize_position
-from digital_twin.domain.market_observations import apply_market_observation_outbox_baselines
+from digital_twin.domain.market_observations import (
+    MARKET_OBSERVATION_CANDIDATES_KEY,
+    apply_market_observation_outbox_baselines,
+    apply_market_observation_reasoning_baselines,
+    market_observation_reasoning_candidates,
+)
 from digital_twin.domain.message_types import (
     INVESTMENT_INSIGHT,
     MARKET_OBSERVATION,
@@ -53,7 +58,7 @@ class MemoryMonitorStore:
 
 
 class MonitoringForceSnapshotTests(unittest.TestCase):
-    def test_market_observation_is_emitted_while_typedb_reasoning_is_deferred(self):
+    def test_market_observation_is_deferred_to_typedb_by_default(self):
         previous_position = normalize_position({
             "symbol": "000660",
             "name": "SK하이닉스",
@@ -95,13 +100,41 @@ class MonitoringForceSnapshotTests(unittest.TestCase):
         )
         observations = [event for event in events if event.rule == MARKET_OBSERVATION]
 
-        self.assertEqual(1, len(observations))
-        self.assertEqual("000660", observations[0].symbol)
-        self.assertTrue(observations[0].metadata["observationOnly"])
-        self.assertFalse(observations[0].metadata["investmentJudgement"])
-        self.assertIn("매수·매도 판단 없음", "\n".join(observations[0].lines))
-        self.assertIn("관계 분석 결과를 별도 인사이트로 발송", "\n".join(observations[0].lines))
+        self.assertEqual([], observations)
+        candidates = market_observation_reasoning_candidates(current.metadata)
+        self.assertEqual(1, len(candidates))
+        self.assertEqual("000660", candidates[0]["symbol"])
+        self.assertTrue(candidates[0]["deliveryDeferred"])
+        self.assertIn(MARKET_OBSERVATION_CANDIDATES_KEY, current.metadata)
         self.assertTrue(current.metadata["ontology"]["inferenceMissingState"]["pending"])
+
+    def test_critical_market_observation_is_emitted_immediately(self):
+        previous_position = normalize_position({
+            "symbol": "000660", "name": "SK하이닉스", "market": "KR", "currency": "KRW",
+            "quantity": 1, "currentPrice": 200000, "updatedAt": utc_now_iso(),
+        })
+        current_position = normalize_position({
+            "symbol": "000660", "name": "SK하이닉스", "market": "KR", "currency": "KRW",
+            "quantity": 1, "currentPrice": 207000, "updatedAt": utc_now_iso(),
+        })
+        previous = AccountSnapshot(
+            "main", "메인", "toss", "live", "ok", utc_now_iso(),
+            portfolio_summary([previous_position]), [previous_position], [], metadata={},
+        )
+        current = AccountSnapshot(
+            "main", "메인", "toss", "live", "ok", utc_now_iso(),
+            portfolio_summary([current_position]), [current_position], [], metadata={},
+        )
+
+        events = RealtimeMonitor({"alertThresholds": "marketObservationPriceChangePct=0.6"}).events_for_snapshot(
+            current,
+            previous.to_monitor_state(),
+        )
+        observations = [event for event in events if event.rule == MARKET_OBSERVATION]
+
+        self.assertEqual(1, len(observations))
+        self.assertFalse(observations[0].metadata["deliveryDeferred"])
+        self.assertEqual("deterministic-outbox-before-typedb", observations[0].metadata["deliveryMode"])
 
     def test_only_outboxed_raw_observations_enter_the_prompt_followup_lane(self):
         events = [
@@ -120,6 +153,29 @@ class MonitoringForceSnapshotTests(unittest.TestCase):
         ]
 
         self.assertEqual(["AAPL"], market_observation_followup_symbols(events, "main"))
+
+    def test_deferred_market_candidate_does_not_enter_the_prompt_followup_lane(self):
+        previous_position = normalize_position({
+            "symbol": "AAPL", "name": "Apple", "market": "US", "currency": "USD",
+            "quantity": 1, "currentPrice": 100.0, "updatedAt": utc_now_iso(),
+        })
+        current_position = normalize_position({
+            "symbol": "AAPL", "name": "Apple", "market": "US", "currency": "USD",
+            "quantity": 1, "currentPrice": 100.7, "updatedAt": utc_now_iso(),
+        })
+        previous = AccountSnapshot(
+            "main", "메인", "toss", "live", "ok", utc_now_iso(),
+            portfolio_summary([previous_position]), [previous_position], [], metadata={},
+        )
+        current = AccountSnapshot(
+            "main", "메인", "toss", "live", "ok", utc_now_iso(),
+            portfolio_summary([current_position]), [current_position], [], metadata={},
+        )
+        monitor = RealtimeMonitor({"alertThresholds": "marketObservationPriceChangePct=0.6"})
+        events = monitor.events_for_snapshot(current, previous.to_monitor_state())
+
+        self.assertEqual([], [event for event in events if event.rule == MARKET_OBSERVATION])
+        self.assertEqual([], market_observation_followup_symbols(events, "main"))
 
     def test_market_observation_accumulates_from_last_outbox_baseline(self):
         previous_position = normalize_position({
@@ -145,7 +201,11 @@ class MonitoringForceSnapshotTests(unittest.TestCase):
             portfolio_summary([previous_position]), [previous_position], [],
             metadata={
                 "marketObservationBaselines": {
-                    "AAPL": {"price": 100.0, "currency": "USD"},
+                    "AAPL": {
+                        "price": 100.0,
+                        "currency": "USD",
+                        "outboxQueuedAt": "2026-07-30T00:00:00Z",
+                    },
                 },
             },
         )
@@ -155,7 +215,10 @@ class MonitoringForceSnapshotTests(unittest.TestCase):
         )
 
         observations = [
-            event for event in RealtimeMonitor({"alertThresholds": "marketObservationPriceChangePct=0.6"}).events_for_snapshot(
+            event for event in RealtimeMonitor({
+                "alertThresholds": "marketObservationPriceChangePct=0.6",
+                "marketObservationRawDeliveryMode": "always",
+            }).events_for_snapshot(
                 current,
                 previous.to_monitor_state(),
             )
@@ -167,7 +230,7 @@ class MonitoringForceSnapshotTests(unittest.TestCase):
         self.assertEqual("last-outbox-alert", observation.metadata["marketObservation"]["baselineKind"])
         self.assertEqual(100.0, observation.metadata["marketObservation"]["baselinePrice"])
         self.assertAlmostEqual(0.7, observation.metadata["marketObservation"]["changePct"])
-        self.assertIn("마지막 알림 기준값", "\n".join(observation.lines))
+        self.assertIn("마지막 원시 알림 기준값", "\n".join(observation.lines))
 
         updated_state = apply_market_observation_outbox_baselines(current.to_monitor_state(), observations)
         baseline = updated_state["metadata"]["marketObservationBaselines"]["AAPL"]
@@ -204,7 +267,10 @@ class MonitoringForceSnapshotTests(unittest.TestCase):
         self.assertEqual(100.0, intermediate_state["metadata"]["marketObservationBaselines"]["AAPL"]["price"])
 
         observations = [
-            event for event in RealtimeMonitor({"alertThresholds": "marketObservationPriceChangePct=0.6"}).events_for_snapshot(
+            event for event in RealtimeMonitor({
+                "alertThresholds": "marketObservationPriceChangePct=0.6",
+                "marketObservationRawDeliveryMode": "always",
+            }).events_for_snapshot(
                 current,
                 intermediate_state,
             )
@@ -218,6 +284,54 @@ class MonitoringForceSnapshotTests(unittest.TestCase):
 
         self.assertEqual(2.0, monitor.market_observation_price_change_threshold())
         self.assertEqual(60, monitor.rule_cadence_minutes(MARKET_OBSERVATION))
+        self.assertEqual("critical-only", monitor.market_observation_raw_delivery_mode())
+        self.assertEqual(3.0, monitor.market_observation_immediate_price_change_threshold())
+
+    def test_reasoning_baseline_keeps_an_existing_raw_delivery_marker(self):
+        state = {
+            "generatedAt": "2026-07-30T00:00:00Z",
+            "metadata": {
+                "marketObservationBaselines": {
+                    "AAPL": {
+                        "price": 100.0,
+                        "currency": "USD",
+                        "outboxQueuedAt": "2026-07-30T00:00:00Z",
+                    },
+                },
+                MARKET_OBSERVATION_CANDIDATES_KEY: [{
+                    "symbol": "AAPL",
+                    "marketObservation": {
+                        "currentPrice": 101.0,
+                        "currency": "USD",
+                        "source": "Toss",
+                    },
+                }],
+            },
+        }
+
+        updated = apply_market_observation_reasoning_baselines(
+            state,
+            market_observation_reasoning_candidates(state["metadata"]),
+        )
+        baseline = updated["metadata"]["marketObservationBaselines"]["AAPL"]
+
+        self.assertEqual(101.0, baseline["price"])
+        self.assertEqual("2026-07-30T00:00:00Z", baseline["outboxQueuedAt"])
+        self.assertEqual("2026-07-30T00:00:00Z", baseline["reasoningQueuedAt"])
+        self.assertNotIn(MARKET_OBSERVATION_CANDIDATES_KEY, updated["metadata"])
+
+        deferred = apply_market_observation_reasoning_baselines(
+            updated,
+            [{
+                "symbol": "AAPL",
+                "deliveryDeferred": True,
+                "marketObservation": {"currentPrice": 102.0, "currency": "USD", "source": "Toss"},
+            }],
+        )
+        self.assertNotIn(
+            "outboxQueuedAt",
+            deferred["metadata"]["marketObservationBaselines"]["AAPL"],
+        )
 
     def test_raw_observation_followup_builds_an_insight_after_graph_analysis(self):
         watchlist = normalize_position({

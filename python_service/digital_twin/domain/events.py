@@ -159,6 +159,7 @@ def compact_evidence_delta_event_payload(value: object) -> Dict[str, object]:
         "occurredAt": 40,
         "reason": 500,
         "eligibleEvidenceSetRevision": 191,
+        "storyKey": 191,
     }.items():
         text = _event_text(source.get(key), limit)
         if text:
@@ -172,6 +173,8 @@ def compact_evidence_delta_event_payload(value: object) -> Dict[str, object]:
     for source_key, digest_key, size_key in (
         ("previousSignature", "previousSignatureDigest", "previousSignatureBytes"),
         ("signature", "signatureDigest", "signatureBytes"),
+        ("previousInferenceSignature", "previousInferenceSignatureDigest", "previousInferenceSignatureBytes"),
+        ("inferenceSignature", "inferenceSignatureDigest", "inferenceSignatureBytes"),
     ):
         raw = str(source.get(source_key) or "")
         digest = _event_signature_digest(raw) or _event_text(source.get(digest_key), 64)

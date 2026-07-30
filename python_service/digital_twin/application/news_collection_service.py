@@ -170,7 +170,7 @@ class NewsCollectionRunner:
         return int_setting(self.settings, "newsCollectionMaxSymbols", 3, 1, 500)
 
     def collection_interval_seconds(self) -> int:
-        return int_setting(self.settings, "newsCollectionIntervalSeconds", 60, 1, 86400)
+        return int_setting(self.settings, "newsCollectionIntervalSeconds", 120, 1, 86400)
 
     def run_budget_seconds(self) -> int:
         return int_setting(self.settings, "newsCollectionRunBudgetSeconds", 45, 5, 600)

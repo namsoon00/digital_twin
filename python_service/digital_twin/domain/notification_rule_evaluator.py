@@ -920,9 +920,9 @@ def evaluate_notification_rule(job: NotificationJob, config: NotificationRuleCon
         if observation_followup:
             if state["dataState"] == "partial" or state["validationState"] == "conditional":
                 decision.gate_state = "conditional"
-                decision.gate_reason = "원시 시세 관측 뒤 최신 TypeDB 관계 분석이 완료됐습니다. 일부 자료의 한계를 함께 표시합니다."
+                decision.gate_reason = "시세 관측 후속 확인의 최신 TypeDB 관계 분석이 완료됐습니다. 일부 자료의 한계를 함께 표시합니다."
             else:
-                decision.gate_reason = "원시 시세 관측 뒤 최신 TypeDB 관계 분석이 완료됐습니다."
+                decision.gate_reason = "시세 관측 후속 확인의 최신 TypeDB 관계 분석이 완료됐습니다."
             return decision
         if state["dataState"] == "partial" or state["validationState"] == "conditional":
             decision.gate_state = "conditional"

@@ -106,10 +106,10 @@ class OntologyProjectionStabilityTests(unittest.TestCase):
         )
 
         self.assertFalse(runner.fairness_drain_state(["MSFT"], cursor.load())["active"])
-        self.assertEqual(180, runner.effective_projection_min_interval_seconds([event], cursor.load(), ["MSFT"]))
+        self.assertEqual(120, runner.effective_projection_min_interval_seconds([event], cursor.load(), ["MSFT"]))
         self.assertFalse(runner.projection_due([event], cursor.load(), ["MSFT"]))
 
-    def test_verified_snapshot_fast_drain_has_no_artificial_cooldown(self):
+    def test_verified_actionable_snapshot_fast_drain_has_no_artificial_cooldown(self):
         cursor = CursorStore({
             "lastSuccessfulProjectionAt": "2026-07-21T23:59:30Z",
         })
@@ -123,6 +123,7 @@ class OntologyProjectionStabilityTests(unittest.TestCase):
                 "trigger": "verified-monitor-snapshot",
                 "symbols": ["MSFT"],
                 "verifiedSourceSnapshot": {"generatedAt": "2026-07-21T23:59:00Z"},
+                "materialityAssessments": [{"subject": "MSFT", "reviewLevel": "act"}],
             },
         )
 
@@ -144,7 +145,7 @@ class OntologyProjectionStabilityTests(unittest.TestCase):
             payload={"changedCount": 1, "trigger": "market-data-update", "symbols": ["MSFT"]},
         )
 
-        self.assertEqual(180, runner.event_min_interval_seconds(event))
+        self.assertEqual(120, runner.event_min_interval_seconds(event))
         self.assertTrue(runner.event_symbol_due(event, "MSFT", cursor.load()))
         self.assertEqual(0, runner.effective_projection_min_interval_seconds([event], cursor.load(), ["MSFT"]))
         self.assertTrue(runner.projection_due([event], cursor.load(), ["MSFT"]))

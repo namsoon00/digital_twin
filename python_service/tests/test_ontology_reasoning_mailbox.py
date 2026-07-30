@@ -527,7 +527,7 @@ class OntologyReasoningMailboxTests(unittest.TestCase):
         self.assertEqual(0, result["mailbox"]["pendingEntryCount"])
         self.assertEqual("ok", result["executionTelemetry"]["status"])
 
-    def test_notified_observation_uses_one_target_priority_lane(self):
+    def test_notified_observation_uses_a_bounded_priority_lane(self):
         observation = realtime_request(
             "observation",
             ["AAPL"],
@@ -545,11 +545,11 @@ class OntologyReasoningMailboxTests(unittest.TestCase):
 
         result = runner.run_once(force=True)
 
-        self.assertEqual(["AAPL"], self.monitor.calls[0])
-        self.assertEqual("observation-followup-single-target", result["batchPlan"]["mode"])
+        self.assertEqual(["AAPL", "MSFT"], self.monitor.calls[0])
+        self.assertEqual(2, result["batchPlan"]["targetSymbolLimit"])
         self.assertEqual(["AAPL"], result["batchPlan"]["observationFollowupSymbols"])
         self.assertEqual(["AAPL"], self.monitor.reasoning_contexts[0]["observationFollowupSymbols"])
-        self.assertEqual(["observation-followup"], result["queueDispatch"]["selectedWorkClasses"])
+        self.assertEqual("observation-followup", result["queueDispatch"]["selectedWorkClasses"][0])
 
     def test_observation_followup_priority_survives_a_newer_latest_state_snapshot(self):
         notified = realtime_request(
@@ -1564,7 +1564,7 @@ class OntologyReasoningMailboxTests(unittest.TestCase):
         self.assertEqual(["AAPL"], state["pendingSymbols"])
         self.assertEqual("2026-07-24T00:00:00Z", state["oldestRequestAt"])
 
-    def test_queue_dispatch_explains_selected_work_without_changing_priority(self):
+    def test_queue_dispatch_prioritizes_market_work_over_general_research(self):
         market = realtime_request("market", ["AAPL"], "2026-07-24T00:00:00Z")
         source = DomainEvent(
             name="research.evidence.collected",
@@ -1593,8 +1593,11 @@ class OntologyReasoningMailboxTests(unittest.TestCase):
 
         self.assertEqual(1, dispatch["pendingByClass"]["realtime-market"])
         self.assertEqual(1, dispatch["pendingByClass"]["research"])
-        self.assertEqual(["research"], dispatch["selectedWorkClasses"])
-        self.assertEqual(["MSFT"], dispatch["selectedSymbols"])
+        self.assertEqual(1, dispatch["pendingByPriority"]["market"])
+        self.assertEqual(1, dispatch["pendingByPriority"]["research"])
+        self.assertEqual(1, dispatch["selectedByPriority"]["market"])
+        self.assertEqual(["realtime-market"], dispatch["selectedWorkClasses"])
+        self.assertEqual(["AAPL"], dispatch["selectedSymbols"])
 
 
 if __name__ == "__main__":

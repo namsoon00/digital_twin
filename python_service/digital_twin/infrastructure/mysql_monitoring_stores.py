@@ -17,7 +17,12 @@ from ..domain.fact_changes import fact_signature, research_evidence_fact_payload
 from ..domain.investment_research import ResearchEvidence
 from ..domain.investment_strategy_guidance import append_strategy_block, merge_strategy_context
 from ..domain.message_types import MARKET_OBSERVATION
-from ..domain.market_observations import apply_market_observation_outbox_baselines, hydrate_market_observation_baselines
+from ..domain.market_observations import (
+    apply_market_observation_outbox_baselines,
+    apply_market_observation_reasoning_baselines,
+    hydrate_market_observation_baselines,
+    market_observation_reasoning_candidates,
+)
 from ..domain.model_review import ModelReviewJob
 from ..domain.notification_rules import (
     DEFAULT_NOTIFICATION_RULES,
@@ -601,6 +606,7 @@ class MySQLMonitoringCycleRecorder(MySQLOperationalConnection):
             return MonitoringCycleRecordResult(False, 0, "dry-run")
         snapshot_states = {}
         live_snapshots = []
+        observation_candidates_by_account: Dict[str, List[Dict[str, object]]] = {}
         if not source_snapshot_replay:
             snapshot_states = {
                 snapshot.account_id: snapshot_state_for_persistence(
@@ -610,6 +616,12 @@ class MySQLMonitoringCycleRecorder(MySQLOperationalConnection):
                 for snapshot in snapshots
             }
             live_snapshots = [snapshot for snapshot in snapshots if snapshot.has_live_account_data()]
+            observation_candidates_by_account = {
+                snapshot.account_id: market_observation_reasoning_candidates(
+                    snapshot.metadata if isinstance(snapshot.metadata, dict) else {}
+                )
+                for snapshot in live_snapshots
+            }
         stamp = datetime.now(timezone.utc).isoformat().replace("+00:00", "Z")
         queued = 0
         sent_entries: Dict[str, str] = {}
@@ -681,20 +693,29 @@ class MySQLMonitoringCycleRecorder(MySQLOperationalConnection):
                     account_events = [event for event in outboxed_events if event.account_id == account_id]
                     if account_events:
                         snapshot_states[account_id] = apply_market_observation_outbox_baselines(state, account_events)
+            # Ordinary price candidates are TypeDB-first. Advance their
+            # cumulative anchor at the same durable source boundary that
+            # creates the replay request, not only when a raw notification is
+            # accepted by the outbox.
+            for account_id, state in list(snapshot_states.items()):
+                candidates = observation_candidates_by_account.get(account_id) or []
+                if candidates:
+                    snapshot_states[account_id] = apply_market_observation_reasoning_baselines(state, candidates)
             # Persist the source snapshot before publishing its replayable
             # TypeDB work. The two writes share this transaction, so a worker
             # can never see a barrier without the exact snapshot it names.
             for account_id, state in snapshot_states.items():
                 self.monitor_store.upsert_snapshot_state_with_connection(connection, account_id, state, stamp)
             for snapshot in live_snapshots:
+                followup_symbols = market_observation_followup_symbols(
+                    outboxed_events,
+                    snapshot.account_id,
+                )
                 reasoning_event = verified_monitor_snapshot_reasoning_event(
                     snapshot,
                     self.monitor_store.previous.get(snapshot.account_id),
                     self.runtime_settings,
-                    observation_followup_symbols=market_observation_followup_symbols(
-                        outboxed_events,
-                        snapshot.account_id,
-                    ),
+                    observation_followup_symbols=followup_symbols,
                 )
                 if not reasoning_event:
                     continue

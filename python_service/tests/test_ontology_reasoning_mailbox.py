@@ -536,6 +536,34 @@ class OntologyReasoningMailboxTests(unittest.TestCase):
         self.assertTrue(result["ruleboxPrewarm"]["recoveryProbe"])
         self.assertIn("직렬 TypeQL 폴백", result["deferredReason"])
 
+    def test_aged_queue_keeps_recovery_gate_when_prewarm_status_probe_errors(self):
+        events = [
+            realtime_request("prewarm-recovery-error-a", ["AAPL"], "2026-07-24T00:00:00Z"),
+            realtime_request("prewarm-recovery-error-b", ["MSFT"], "2026-07-24T00:00:00Z"),
+        ]
+        runner = self.build_runner(
+            events,
+            settings={
+                "ontologyRuleboxPrewarmEnabled": "1",
+                "ontologyRuleboxPrewarmBacklogRecoveryEnabled": "1",
+                "ontologyRuleboxPrewarmBacklogRecoveryAgeSeconds": "90",
+                "ontologyRuleboxPrewarmBacklogRecoveryMinPendingEntries": "2",
+                "ontologyRuleboxPrewarmBacklogRecoveryRetrySeconds": "5",
+            },
+        )
+        runner.rulebox_prewarm_probe = lambda: {
+            "status": "error",
+            "functionsReady": False,
+            "reason": "TypeDB receipt probe timed out.",
+        }
+
+        result = runner.run_once()
+
+        self.assertEqual("deferred-rulebox-prewarm", result["status"])
+        self.assertEqual([], self.monitor.calls)
+        self.assertEqual(5, result["retryAfterSeconds"])
+        self.assertTrue(result["ruleboxPrewarmRecovery"]["eligible"])
+
     def test_waits_for_rulebox_prewarm_only_when_direct_typeql_fallback_is_disabled(self):
         event = realtime_request("prewarm-strict-gate", ["AAPL"], "2026-07-24T00:00:00Z")
         runner = self.build_runner(

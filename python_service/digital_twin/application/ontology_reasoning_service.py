@@ -4544,7 +4544,14 @@ class OntologyReasoningRunner:
         # request forced another serial direct-TypeQL projection forever.
         prewarm_recovery_gate = bool(
             prewarm_recovery.get("eligible")
-            and str(rulebox_prewarm.get("status") or "") == "provisioning"
+            and str(rulebox_prewarm.get("status") or "") in {
+                "provisioning",
+                # A cold RuleBox status read can itself time out while the
+                # old serial fallback owns TypeDB. Treat that as recovery
+                # work, not as permission to restart the same fallback and
+                # recreate the compiler-starvation loop.
+                "error",
+            }
             and not force
         )
         if not rulebox_prewarm.get("ready") and (

@@ -10328,6 +10328,48 @@ class TypeDBOntologyGraphRepository(GraphStoreOntologyRowMapperMixin, ScopedABox
                     "Recovery is blocked to avoid an unbounded InferenceBox read or an unsafe rollback."
                 ),
             }
+        if (
+            staged_target_cap
+            and len(target_symbols) > staged_target_cap
+            and previous_id
+            and active_id == candidate_id
+        ):
+            # A hard-isolation timeout records a smaller next scheduler cap.
+            # The candidate may already be the active ABox pointer even
+            # though its native InferenceBox never verified.  Retrying its
+            # original wide target set here would defeat that protection and
+            # can hold every newer mailbox revision behind the same timeout.
+            #
+            # The pending journal proves that this candidate has no aligned
+            # inference result yet, while ``previous_id`` is the last
+            # verified generation retained specifically for recovery.  A
+            # control-only rollback is therefore safe: it preserves the
+            # verified judgement and lets the current bounded scheduler
+            # stage fresh facts instead of resuming an obsolete wide batch.
+            rollback = typedb_call_for_world(
+                self.activate_abox_generation,
+                previous_id,
+                world_id=world_id,
+            )
+            restored = str(rollback.get("status") or "") == "ok"
+            return {
+                "configured": True,
+                "status": "restored" if restored else "error",
+                "graphStore": "typedb",
+                "candidateAboxSnapshotId": candidate_id,
+                "previousAboxSnapshotId": previous_id,
+                "activeAboxSnapshotId": active_id,
+                "targetSymbols": target_symbols,
+                "maxStagedTargetSymbols": staged_target_cap,
+                "pendingActivation": pending,
+                "rollback": rollback,
+                "recoveryMode": "rollback-oversized-active-candidate",
+                "reason": (
+                    "An interrupted active ABox batch exceeded the current scheduler target cap and was rolled back before retrying native inference."
+                    if restored
+                    else str(rollback.get("reason") or "ABox control rollback failed.")
+                ),
+            }
         try:
             recovery_metadata = typedb_call_for_world(
                 self.inferencebox_recovery_metadata,

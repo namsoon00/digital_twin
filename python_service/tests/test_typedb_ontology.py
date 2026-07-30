@@ -3752,6 +3752,30 @@ class TypeDBOntologyRepositoryTests(unittest.TestCase):
         self.assertEqual(["000660", "035420", "MSTR"], result["targetSymbols"])
         activate.assert_called_once_with("abox-manifest:previous")
 
+    def test_typedb_pending_abox_recovery_rolls_back_active_batch_above_scheduler_cap(self):
+        repository = TypeDBOntologyGraphRepository("127.0.0.1:1729")
+        pending = {
+            "status": "pending",
+            "activationStatus": "pending-native-inference",
+            "candidateAboxSnapshotId": "abox-manifest:candidate",
+            "previousAboxSnapshotId": "abox-manifest:previous",
+            "targetSymbols": ["000660", "035420", "MSTR"],
+        }
+        with patch.object(repository, "pending_abox_activation", return_value=pending), \
+                patch.object(repository, "active_abox_metadata", return_value={
+                    "status": "ok", "aboxSnapshotId": "abox-manifest:candidate",
+                }), \
+                patch.object(repository, "inferencebox_recovery_metadata") as marker, \
+                patch.object(repository, "activate_abox_generation", return_value={"status": "ok"}) as activate:
+            result = repository.recover_pending_abox_activation(max_staged_target_symbols=1)
+
+        self.assertEqual("restored", result["status"])
+        self.assertEqual("rollback-oversized-active-candidate", result["recoveryMode"])
+        self.assertEqual(1, result["maxStagedTargetSymbols"])
+        self.assertEqual(["000660", "035420", "MSTR"], result["targetSymbols"])
+        marker.assert_not_called()
+        activate.assert_called_once_with("abox-manifest:previous")
+
     def test_typedb_prepares_staged_manifest_only_when_the_expected_predecessor_is_active(self):
         repository = TypeDBOntologyGraphRepository("127.0.0.1:1729")
         staged = {

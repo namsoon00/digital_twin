@@ -7089,25 +7089,38 @@ class TypeDBOntologyGraphRepository(GraphStoreOntologyRowMapperMixin, ScopedABox
         if self.process_base_schema_is_ready(schema_fingerprint):
             self._base_schema_ready_fingerprint = schema_fingerprint
             return
-        contract_state = self.base_schema_contract_state()
-        if str(contract_state.get("status") or "") == "current":
-            self._base_schema_ready_fingerprint = schema_fingerprint
-            self.mark_process_base_schema_ready(schema_fingerprint)
-            return
         try:
             schema_text = self.typedb_schema_text(driver)
-            if self.ontology_storage_identity_migration_required(schema_text):
-                self.migrate_ontology_storage_identity(driver, imported, schema_text)
-                schema_text = self.typedb_schema_text(driver)
-            if self.ontology_scope_schema_migration_required(schema_text):
-                self.migrate_ontology_scope_schema(driver, imported)
-                schema_text = self.typedb_schema_text(driver)
-            if self.ontology_world_schema_migration_required(schema_text):
-                self.migrate_ontology_world_schema(driver, imported)
-                schema_text = self.typedb_schema_text(driver)
-            if self.ontology_semantic_schema_migration_required(schema_text):
-                self.migrate_ontology_semantic_schema(driver, imported, schema_text)
-                schema_text = self.typedb_schema_text(driver)
+            schema_type_names = set(re.findall(
+                r"^\s*(?:attribute|entity|relation)\s+([A-Za-z_][A-Za-z0-9_-]*)\b",
+                schema_text,
+                flags=re.MULTILINE,
+            ))
+            # A new database has no ontology types yet. Reading the static
+            # manifest first issues a query against those missing types and
+            # can invalidate the driver's connection before this schema write.
+            if self.base_schema_type_names().issubset(schema_type_names):
+                contract_state = self.base_schema_contract_state()
+                if str(contract_state.get("status") or "") == "current":
+                    self._base_schema_ready_fingerprint = schema_fingerprint
+                    self.mark_process_base_schema_ready(schema_fingerprint)
+                    return
+            # Migrations extend the generic ontology storage types. A blank
+            # database has neither type, so its first schema write must be
+            # the complete base contract instead of an additive migration.
+            if {"ontology-node", "ontology-assertion"}.issubset(schema_type_names):
+                if self.ontology_storage_identity_migration_required(schema_text):
+                    self.migrate_ontology_storage_identity(driver, imported, schema_text)
+                    schema_text = self.typedb_schema_text(driver)
+                if self.ontology_scope_schema_migration_required(schema_text):
+                    self.migrate_ontology_scope_schema(driver, imported)
+                    schema_text = self.typedb_schema_text(driver)
+                if self.ontology_world_schema_migration_required(schema_text):
+                    self.migrate_ontology_world_schema(driver, imported)
+                    schema_text = self.typedb_schema_text(driver)
+                if self.ontology_semantic_schema_migration_required(schema_text):
+                    self.migrate_ontology_semantic_schema(driver, imported, schema_text)
+                    schema_text = self.typedb_schema_text(driver)
             schema_type_names = set(re.findall(
                 r"^\s*(?:attribute|entity|relation)\s+([A-Za-z_][A-Za-z0-9_-]*)\b",
                 schema_text,

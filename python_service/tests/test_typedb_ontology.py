@@ -611,6 +611,46 @@ class TypeDBOntologyRepositoryTests(unittest.TestCase):
         self.assertEqual(0, driver.transaction_calls)
         self.assertEqual(1, driver.database.type_schema_calls)
 
+    def test_typedb_schema_sync_does_not_probe_manifest_before_empty_schema_bootstrap(self):
+        repository = TypeDBOntologyGraphRepository("127.0.0.1:1729")
+        repository.invalidate_process_base_schema_readiness()
+        queries = []
+
+        class FakeDatabase:
+            def type_schema(self):
+                return "define\n"
+
+        class FakeTransaction:
+            def query(self, query):
+                queries.append(query)
+                return SimpleNamespace(resolve=lambda: None)
+
+            def commit(self):
+                queries.append("commit")
+
+            def __enter__(self):
+                return self
+
+            def __exit__(self, *_args):
+                return False
+
+        class FakeDriver:
+            def __init__(self):
+                self.database = FakeDatabase()
+                self.databases = SimpleNamespace(get=lambda _name: self.database)
+
+            def transaction(self, *_args, **_kwargs):
+                return FakeTransaction()
+
+        driver = FakeDriver()
+        imported = ((object, object, object, object, SimpleNamespace(SCHEMA="schema")), None)
+
+        with patch.object(repository, "base_schema_contract_state", side_effect=AssertionError("manifest read before schema")):
+            repository.ensure_schema(driver, imported)
+
+        self.assertEqual(repository.schema_query(), queries[0])
+        self.assertEqual("commit", queries[1])
+
     def test_typedb_schema_readiness_is_reused_by_fresh_repository_instances(self):
         address = "typedb-schema-cache.test:1729"
         database_name = "schema_cache_test"

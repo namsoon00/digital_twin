@@ -103,6 +103,20 @@ EXTERNAL_REFRESH_FIELDS = {
     "fetchedAt", "fetched_at", "sourceAsOf", "source_as_of", "sourceFetchedAt", "source_fetched_at",
     "lastUpdated", "last_updated", "indicatorFetchedAt", "indicator_fetched_at",
     "freshnessAgeMinutes", "freshness_age_minutes", "checkedAt", "checked_at",
+    # External quality/freshness payloads are rebuilt at every monitor poll.
+    # These clock-derived values must not fan one unchanged provider refresh
+    # out into a TypeDB request for every holding.  Their discrete status,
+    # coverage, and error fields intentionally remain part of the signature.
+    "generatedAt", "generated_at", "collectedAt", "collected_at",
+    "observedAt", "observed_at", "updatedAt", "updated_at",
+    "ageMinutes", "age_minutes", "ageSeconds", "age_seconds",
+    "elapsedMinutes", "elapsed_minutes", "elapsedSeconds", "elapsed_seconds",
+    "lastCheckedAt", "last_checked_at", "lastPolledAt", "last_polled_at",
+    "lastSuccessAt", "last_success_at", "lastFailureAt", "last_failure_at",
+    "lastHealthyAt", "last_healthy_at", "lastObservedAt", "last_observed_at",
+    "firstObservedAt", "first_observed_at", "stateSince", "state_since",
+    "refreshedAt", "refreshed_at", "nextRefreshAt", "next_refresh_at",
+    "expiresAt", "expires_at", "validFrom", "valid_from", "validUntil", "valid_until",
 }
 
 

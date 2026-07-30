@@ -76,14 +76,14 @@ class MaterialityGateTests(unittest.TestCase):
         self.assertLess(event_order_key(blocked)[1], event_order_key(immediate)[1])
         self.assertEqual({"act", "immediate"}, runner.urgent_review_levels())
 
-    def test_reasoning_worker_defaults_to_small_time_bounded_symbol_batch(self):
+    def test_reasoning_worker_defaults_to_a_bounded_multi_symbol_batch(self):
         runner = OntologyReasoningRunner(
             event_reader=None,
             cursor_store=None,
             monitor_runner_factory=lambda: None,
         )
 
-        self.assertEqual(3, runner.max_symbols_per_run())
+        self.assertEqual(20, runner.max_symbols_per_run())
 
     def test_reasoning_worker_serializes_native_typedb_rule_subjects(self):
         request = ontology_reasoning_requested_event(

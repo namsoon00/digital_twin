@@ -144,10 +144,32 @@ def adaptive_reasoning_batch_plan(
         30,
         1800,
     )
+    backlog_burst_enabled = _enabled(
+        configured.get("ontologyReasoningAdaptiveBatchBacklogBurstEnabled"),
+        # Keep direct compatibility callers on the measured one-subject ramp
+        # unless the runtime explicitly enables the backlog escape policy.
+        False,
+    )
+    backlog_burst_age_seconds = _integer(
+        configured.get("ontologyReasoningAdaptiveBatchBacklogBurstAgeSeconds"),
+        120,
+        10,
+        7 * 24 * 60 * 60,
+    )
     pressure = bool(
         pending_requests >= pending_threshold
         or pending_symbols >= pending_threshold
         or oldest_wait >= age_threshold
+    )
+    # The ordinary pressure path grows one target at a time so a newly
+    # observed workload can be measured safely.  That policy is harmful once
+    # an already measured queue is minutes behind: it guarantees multiple
+    # full ABox generations before the burst ceiling is reached.  The escape
+    # path below still obeys the measured runtime budget and runtime guard;
+    # it only bypasses the artificial one-target ramp.
+    backlog_escape = bool(
+        backlog_burst_enabled
+        and oldest_wait >= backlog_burst_age_seconds
     )
     runtime_guard = bool(
         recent_status in {"error", "timeout", "partial", "circuit-open"}
@@ -245,6 +267,12 @@ def adaptive_reasoning_batch_plan(
         mode = "baseline-collection"
         target_limit = steady_limit
         reason_codes.append("runtime-baseline-unavailable")
+    elif backlog_escape:
+        mode = "backlog-escape"
+        target_limit = min(burst_limit, budget_target_limit)
+        reason_codes.append("backlog-burst-oldest-wait")
+        if budget_target_limit < burst_limit:
+            reason_codes.append("estimated-batch-runtime-budget")
     elif pressure and budget_target_limit < ramp_target_limit:
         mode = "runtime-budget-limited"
         target_limit = min(ramp_target_limit, budget_target_limit)
@@ -278,6 +306,9 @@ def adaptive_reasoning_batch_plan(
         "oldestWaitSeconds": oldest_wait,
         "pendingThreshold": pending_threshold,
         "ageThresholdSeconds": age_threshold,
+        "backlogBurstEnabled": backlog_burst_enabled,
+        "backlogBurstAgeSeconds": backlog_burst_age_seconds,
+        "backlogEscape": backlog_escape,
         "runtimeGuardSeconds": runtime_guard_seconds,
         "executionBudgetSeconds": execution_budget_seconds,
         "recentStatus": recent_status,

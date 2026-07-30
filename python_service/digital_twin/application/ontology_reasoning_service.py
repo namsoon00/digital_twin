@@ -614,7 +614,7 @@ class OntologyReasoningRunner:
         return int_setting(self.settings, "ontologyReasoningBatchSize", 200, 1, 200)
 
     def max_symbols_per_run(self) -> int:
-        return int_setting(self.settings, "ontologyReasoningMaxSymbolsPerRun", 3, 0, 200)
+        return int_setting(self.settings, "ontologyReasoningMaxSymbolsPerRun", 20, 0, 200)
 
     def native_typedb_rule_execution_enabled(self) -> bool:
         """Return whether this runner delegates investment rules to TypeDB.
@@ -630,7 +630,7 @@ class OntologyReasoningRunner:
 
     def native_typedb_target_symbol_limit(self) -> int:
         """Bound schema-function work without reducing the complete ABox."""
-        return int_setting(self.settings, "typedbNativeRuleTargetSymbolLimit", 1, 1, 200)
+        return int_setting(self.settings, "typedbNativeRuleTargetSymbolLimit", 20, 1, 200)
 
     def effective_max_symbols_per_run(self) -> int:
         configured_limit = self.max_symbols_per_run()
@@ -1558,6 +1558,11 @@ class OntologyReasoningRunner:
             # investment escalation. One committed snapshot may run sooner
             # than the ordinary background cadence without admitting raw
             # provider ticks into TypeDB.
+            if truthy(
+                self.settings.get("ontologyReasoningVerifiedSnapshotFastDrainEnabled"),
+                False,
+            ):
+                return 0
             return self.urgent_min_interval_seconds()
         if trigger in {"research-evidence-update", "investment-calendar-update"}:
             return self.urgent_min_interval_seconds()
@@ -1577,6 +1582,38 @@ class OntologyReasoningRunner:
         intervals = [self.event_min_interval_seconds(event) for event in requests or []]
         return min(intervals) if intervals else self.min_interval_seconds()
 
+    def backlog_drain_no_cooldown_enabled(self) -> bool:
+        """Whether an old latest-state queue may start its next generation now.
+
+        This is deliberately an operational throughput policy.  It does not
+        promote an event, skip TypeDB, or allow concurrent ABox writes: the
+        durable projection lease still serializes complete generations.
+        """
+        return truthy(
+            self.settings.get("ontologyReasoningBacklogDrainNoCooldownEnabled"),
+            False,
+        )
+
+    def backlog_drain_no_cooldown_age_seconds(self) -> int:
+        return int_setting(
+            self.settings,
+            "ontologyReasoningBacklogDrainNoCooldownAgeSeconds",
+            120,
+            10,
+            7 * 24 * 60 * 60,
+        )
+
+    def backlog_drain_no_cooldown_active(
+        self,
+        requests: Iterable[object],
+        selected_symbols: Iterable[str] = None,
+    ) -> bool:
+        if not self.backlog_drain_no_cooldown_enabled():
+            return False
+        if not list(selected_symbols or []):
+            return False
+        return self.oldest_request_wait_seconds(requests or []) >= self.backlog_drain_no_cooldown_age_seconds()
+
     def effective_projection_min_interval_seconds(
         self,
         requests: Iterable[object],
@@ -1584,6 +1621,12 @@ class OntologyReasoningRunner:
         selected_symbols: Iterable[str] = None,
     ) -> int:
         configured = self.projection_min_interval_seconds(requests)
+        # Once a replaceable latest-state queue is already old, waiting after
+        # a successful generation only grows its age.  ABox writes remain
+        # lease-serialized and the mailbox still coalesces each symbol to its
+        # newest source revision, so begin the next bounded batch immediately.
+        if self.backlog_drain_no_cooldown_active(requests, selected_symbols):
+            return 0
         urgent = any(
             is_verified_monitor_snapshot_event(event)
             or
@@ -1635,6 +1678,15 @@ class OntologyReasoningRunner:
 
     def event_symbol_due(self, event: object, symbol: str, cursor_payload: Dict[str, object] = None) -> bool:
         interval = self.event_min_interval_seconds(event)
+        # A replaceable source revision that has already waited beyond the
+        # backlog-drain threshold must not be rejected solely because another
+        # subject was projected recently.  Failure retries still obey the
+        # separate projection-attempt backoff below.
+        if (
+            self.backlog_drain_no_cooldown_enabled()
+            and self.oldest_request_wait_seconds([event]) >= self.backlog_drain_no_cooldown_age_seconds()
+        ):
+            interval = 0
         raw = self.last_reasoned_at_by_symbol(cursor_payload).get(str(symbol or "").upper().strip(), "")
         if not self.timestamp_due(raw, interval):
             return False

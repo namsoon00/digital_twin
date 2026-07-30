@@ -109,6 +109,46 @@ class OntologyProjectionStabilityTests(unittest.TestCase):
         self.assertEqual(180, runner.effective_projection_min_interval_seconds([event], cursor.load(), ["MSFT"]))
         self.assertFalse(runner.projection_due([event], cursor.load(), ["MSFT"]))
 
+    def test_verified_snapshot_fast_drain_has_no_artificial_cooldown(self):
+        cursor = CursorStore({
+            "lastSuccessfulProjectionAt": "2026-07-21T23:59:30Z",
+        })
+        runner = self.runner(cursor)
+        runner.settings["ontologyReasoningVerifiedSnapshotFastDrainEnabled"] = "1"
+        event = SimpleNamespace(
+            event_id="verified-msft",
+            occurred_at="2026-07-21T23:59:00Z",
+            payload={
+                "changedCount": 1,
+                "trigger": "verified-monitor-snapshot",
+                "symbols": ["MSFT"],
+                "verifiedSourceSnapshot": {"generatedAt": "2026-07-21T23:59:00Z"},
+            },
+        )
+
+        self.assertEqual(0, runner.event_min_interval_seconds(event))
+        self.assertEqual(0, runner.effective_projection_min_interval_seconds([event], cursor.load(), ["MSFT"]))
+        self.assertTrue(runner.projection_due([event], cursor.load(), ["MSFT"]))
+
+    def test_old_backlog_removes_inter_generation_cooldown_without_reclassifying_the_event(self):
+        cursor = CursorStore({
+            "lastSuccessfulProjectionAt": "2026-07-21T23:59:30Z",
+            "lastReasonedAtBySymbol": {"MSFT": "2026-07-21T23:59:30Z"},
+        })
+        runner = self.runner(cursor)
+        runner.settings["ontologyReasoningBacklogDrainNoCooldownEnabled"] = "1"
+        runner.settings["ontologyReasoningBacklogDrainNoCooldownAgeSeconds"] = "120"
+        event = SimpleNamespace(
+            event_id="old-market-update",
+            occurred_at="2026-07-21T23:50:00Z",
+            payload={"changedCount": 1, "trigger": "market-data-update", "symbols": ["MSFT"]},
+        )
+
+        self.assertEqual(180, runner.event_min_interval_seconds(event))
+        self.assertTrue(runner.event_symbol_due(event, "MSFT", cursor.load()))
+        self.assertEqual(0, runner.effective_projection_min_interval_seconds([event], cursor.load(), ["MSFT"]))
+        self.assertTrue(runner.projection_due([event], cursor.load(), ["MSFT"]))
+
     def test_idle_runner_executes_deferred_maintenance_outside_live_projection(self):
         calls = []
         runner = self.runner(maintenance_runner=lambda: calls.append("maintenance") or {"status": "ok"})

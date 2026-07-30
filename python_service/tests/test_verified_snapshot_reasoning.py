@@ -110,6 +110,75 @@ class VerifiedSnapshotReasoningTests(unittest.TestCase):
         self.assertIn("ResearchEvidence", event.payload["factTypes"])
         self.assertIn("external.newsHeadlines", event.payload["changedFieldsBySymbol"]["AAPL"])
 
+    def test_external_quality_clock_changes_do_not_fan_out_a_new_reasoning_request(self):
+        previous = snapshot(external_signals={
+            "quality": {
+                "generatedAt": "2026-07-29T00:00:00Z",
+                "fetchedAt": "2026-07-29T00:00:00Z",
+                "ageMinutes": 1,
+                "dataState": "sufficient",
+                "coverageState": "complete",
+                "sourceHealthState": "healthy",
+            },
+            "freshness": {
+                "fetchedAt": "2026-07-29T00:00:00Z",
+                "ageMinutes": 1,
+                "status": "fresh",
+                "transportStatus": "fresh",
+                "dataState": "sufficient",
+            },
+        })
+        clock_only_refresh = snapshot(external_signals={
+            "quality": {
+                "generatedAt": "2026-07-29T00:05:00Z",
+                "fetchedAt": "2026-07-29T00:05:00Z",
+                "ageMinutes": 0,
+                "dataState": "sufficient",
+                "coverageState": "complete",
+                "sourceHealthState": "healthy",
+            },
+            "freshness": {
+                "fetchedAt": "2026-07-29T00:05:00Z",
+                "ageMinutes": 0,
+                "status": "fresh",
+                "transportStatus": "fresh",
+                "dataState": "sufficient",
+            },
+        })
+
+        self.assertIsNone(
+            verified_monitor_snapshot_reasoning_event(
+                clock_only_refresh,
+                previous.to_monitor_state(),
+            )
+        )
+
+    def test_external_quality_state_change_still_requests_reasoning(self):
+        previous = snapshot(external_signals={
+            "freshness": {
+                "fetchedAt": "2026-07-29T00:00:00Z",
+                "ageMinutes": 1,
+                "status": "fresh",
+                "transportStatus": "fresh",
+                "dataState": "sufficient",
+            },
+        })
+        stale = snapshot(external_signals={
+            "freshness": {
+                "fetchedAt": "2026-07-29T01:00:00Z",
+                "ageMinutes": 61,
+                "status": "stale",
+                "transportStatus": "stale",
+                "dataState": "sufficient",
+            },
+        })
+
+        event = verified_monitor_snapshot_reasoning_event(stale, previous.to_monitor_state())
+
+        self.assertEqual(["AAPL", "MSFT"], event.payload["symbols"])
+        self.assertIn("DataQuality", event.payload["factTypes"])
+        self.assertIn("external.freshness", event.payload["changedFieldsBySymbol"]["AAPL"])
+
     def test_snapshot_barrier_reuses_the_latest_realtime_slot_from_raw_kis_ticks(self):
         current = snapshot()
         barrier = verified_monitor_snapshot_reasoning_event(current)

@@ -145,6 +145,45 @@ class AdaptiveOntologyReasoningBatchTests(unittest.TestCase):
         self.assertEqual(3, plan["targetSymbolLimit"])
         self.assertEqual(3, plan["rampTargetSymbolLimit"])
 
+    def test_old_backlog_uses_the_measured_burst_without_one_target_ramp(self):
+        plan = adaptive_reasoning_batch_plan(
+            {
+                "ontologyReasoningAdaptiveBatchEnabled": "1",
+                "ontologyReasoningAdaptiveBatchSteadySymbols": "1",
+                "ontologyReasoningAdaptiveBatchBurstSymbols": "13",
+                "ontologyReasoningAdaptiveBatchPendingThreshold": "2",
+                "ontologyReasoningAdaptiveBatchAgeSeconds": "30",
+                "ontologyReasoningAdaptiveBatchBudgetSeconds": "240",
+                "ontologyReasoningAdaptiveBatchBacklogBurstEnabled": "1",
+                "ontologyReasoningAdaptiveBatchBacklogBurstAgeSeconds": "120",
+                "typedbNativeRuleTargetParallelism": "4",
+            },
+            native_rule_execution=True,
+            hard_target_symbol_limit=13,
+            pending_request_count=24,
+            pending_symbol_count=13,
+            oldest_wait_seconds=241,
+            recent_execution={
+                "status": "ok",
+                "stageTiming": {"monitorAndProjectionMs": 128000},
+                "projectionRuntime": {
+                    "durationMs": 108000,
+                    "nativeInferenceMs": 35789,
+                    "targetSymbolCount": 1,
+                },
+            },
+        )
+
+        # One target paid about 72s of shared generation work and 36s of
+        # target work. Four target-read workers keep all thirteen targets
+        # inside the 240s budget, so a four-minute-old queue must not spend
+        # twelve generations ramping one target at a time.
+        self.assertEqual("backlog-escape", plan["mode"])
+        self.assertEqual(13, plan["targetSymbolLimit"])
+        self.assertTrue(plan["backlogEscape"])
+        self.assertEqual(120, plan["backlogBurstAgeSeconds"])
+        self.assertIn("backlog-burst-oldest-wait", plan["reasonCodes"])
+
     def test_slow_or_failed_projection_returns_to_the_steady_target_set(self):
         plan = adaptive_reasoning_batch_plan(
             {
@@ -305,6 +344,9 @@ class AdaptiveOntologyReasoningBatchTests(unittest.TestCase):
                 "pendingRequestCount": 8,
                 "pendingSymbolCount": 5,
                 "oldestWaitSeconds": 120,
+                "backlogBurstEnabled": True,
+                "backlogBurstAgeSeconds": 120,
+                "backlogEscape": True,
                 "runtimeGuard": False,
                 "runtimeEstimateBasis": "projection-runtime",
                 "runtimeEstimateBasisMs": 123000,
@@ -321,6 +363,7 @@ class AdaptiveOntologyReasoningBatchTests(unittest.TestCase):
         self.assertEqual("projection-runtime", compact["batchPlan"]["runtimeEstimateBasis"])
         self.assertEqual(105000, compact["batchPlan"]["estimatedFixedRuntimeMs"])
         self.assertEqual(18000, compact["batchPlan"]["estimatedIncrementalTargetRuntimeMs"])
+        self.assertTrue(compact["batchPlan"]["backlogEscape"])
         self.assertEqual(["pending-request-threshold"], compact["batchPlan"]["reasonCodes"])
 
 

@@ -10295,20 +10295,69 @@ class TypeDBOntologyGraphRepository(GraphStoreOntologyRowMapperMixin, ScopedABox
                 ),
             }
         try:
-            inferencebox = typedb_call_for_world(
-                self.inferencebox_snapshot,
-                symbols=target_symbols,
-                limit=80,
+            recovery_metadata = typedb_call_for_world(
+                self.inferencebox_recovery_metadata,
                 world_id=world_id,
             )
-        except Exception as error:  # noqa: BLE001 - preserve the old generation when inference state cannot be verified.
+        except Exception as error:  # noqa: BLE001 - retain the candidate journal when the marker cannot be read.
+            recovery_metadata = {
+                "configured": True,
+                "status": "error",
+                "graphStore": "typedb",
+                "reason": "InferenceBox recovery marker lookup failed: " + str(error)[:180],
+            }
+        recovery_metadata = dict(recovery_metadata or {}) if isinstance(recovery_metadata, dict) else {}
+        recovery_outcome = str(recovery_metadata.get("nativeInferenceOutcome") or "").strip().lower()
+        recovery_completed = bool(recovery_metadata.get("nativeTypeDbReasoningCompleted"))
+        recovery_source_id = str(recovery_metadata.get("sourceAboxSnapshotId") or "").strip()
+        recovery_targets = clean_symbols_from_payload(recovery_metadata.get("targetSymbols") or [])
+        recovery_marker_ready = (
+            str(recovery_metadata.get("status") or "") == "ok"
+            and recovery_completed
+            and recovery_outcome in {"matched", "no-match"}
+        )
+        # A recovery must not expand every entity, relation, and trace from a
+        # historical InferenceBox.  The active generation marker is the same
+        # provenance proof used by the realtime commit path: it contains the
+        # source ABox, native-completion state, outcome, and target coverage.
+        # Detailed rows remain an asynchronous audit concern.
+        inferencebox = {
+            "configured": True,
+            "graphStore": "typedb",
+            "status": (
+                "ok" if recovery_marker_ready and recovery_outcome == "matched"
+                else "empty" if recovery_marker_ready and recovery_outcome == "no-match"
+                else "stale-generation"
+            ),
+            "nativeTypeDbReasoningUsed": bool(
+                recovery_marker_ready and recovery_outcome == "matched"
+            ),
+            "nativeTypeDbReasoningCompleted": recovery_completed,
+            "typedbNativeRuleEvaluationCompleted": recovery_completed,
+            "nativeInferenceOutcome": recovery_outcome,
+            "generationAligned": bool(
+                recovery_marker_ready
+                and recovery_source_id == candidate_id
+                and set(target_symbols).issubset(set(recovery_targets))
+            ),
+            "sourceAboxSnapshotId": recovery_source_id,
+            "targetSymbols": recovery_targets,
+            "inferenceGenerationId": str(recovery_metadata.get("inferenceGenerationId") or "").strip(),
+            "querySource": str(
+                recovery_metadata.get("querySource")
+                or "typedb-active-inference-generation-marker"
+            ),
+            "durableReadback": False,
+            "recoveryMetadata": recovery_metadata,
+        }
+        if str(recovery_metadata.get("status") or "") == "error" and active_id != candidate_id:
             return {
                 "configured": True,
                 "status": "error",
                 "graphStore": "typedb",
                 "candidateAboxSnapshotId": candidate_id,
                 "previousAboxSnapshotId": previous_id,
-                "reason": "InferenceBox verification failed during ABox recovery: " + str(error)[:180],
+                "reason": str(recovery_metadata.get("reason") or "InferenceBox recovery marker is unreadable.")[:220],
             }
         if self.inferencebox_matches_pending_abox_activation(
             inferencebox,

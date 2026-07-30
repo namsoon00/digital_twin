@@ -3773,17 +3773,21 @@ class TypeDBOntologyRepositoryTests(unittest.TestCase):
                 patch.object(repository, "active_abox_metadata", return_value={
                     "status": "ok", "aboxSnapshotId": "abox-material:candidate",
                 }), \
-                patch.object(repository, "inferencebox_snapshot", return_value={
-                "status": "stale-generation",
-                "sourceAboxSnapshotId": "abox-material:previous",
-                "generationAligned": False,
-            }), \
+                patch.object(repository, "inferencebox_recovery_metadata", return_value={
+                    "status": "ok",
+                    "sourceAboxSnapshotId": "abox-material:previous",
+                    "targetSymbols": ["000660"],
+                    "nativeTypeDbReasoningCompleted": True,
+                    "nativeInferenceOutcome": "matched",
+                }), \
+                patch.object(repository, "inferencebox_snapshot") as full_snapshot, \
                 patch.object(repository, "activate_abox_generation") as restore:
             result = repository.recover_pending_abox_activation()
 
         self.assertEqual("retry-required", result["status"])
         self.assertEqual("resume-active-candidate", result["recoveryMode"])
         self.assertEqual(["000660"], result["targetSymbols"])
+        full_snapshot.assert_not_called()
         restore.assert_not_called()
 
     def test_scoped_manifest_metadata_reads_only_the_requested_marker(self):
@@ -3824,10 +3828,11 @@ class TypeDBOntologyRepositoryTests(unittest.TestCase):
                 patch.object(repository, "active_abox_metadata", return_value={
                     "status": "ok", "aboxSnapshotId": "abox-material:first",
                 }), \
-                patch.object(repository, "inferencebox_snapshot", return_value={
-                    "status": "stale-generation",
+                patch.object(repository, "inferencebox_recovery_metadata", return_value={
+                    "status": "missing",
                     "sourceAboxSnapshotId": "",
-                    "generationAligned": False,
+                    "targetSymbols": [],
+                    "nativeTypeDbReasoningCompleted": False,
                 }):
             result = repository.recover_pending_abox_activation()
 
@@ -3848,12 +3853,13 @@ class TypeDBOntologyRepositoryTests(unittest.TestCase):
                 patch.object(repository, "active_abox_metadata", return_value={
                     "status": "ok", "aboxSnapshotId": "abox-material:candidate",
                 }), \
-                patch.object(repository, "inferencebox_snapshot", return_value={
+                patch.object(repository, "inferencebox_recovery_metadata", return_value={
                     "status": "ok",
-                    "nativeTypeDbReasoningUsed": True,
-                    "generationAligned": True,
+                    "inferenceGenerationId": "inference-generation:candidate",
                     "sourceAboxSnapshotId": "abox-material:candidate",
                     "targetSymbols": ["000660"],
+                    "nativeTypeDbReasoningCompleted": True,
+                    "nativeInferenceOutcome": "matched",
                 }), \
                 patch.object(repository, "finalize_abox_generation", return_value={"status": "ok"}) as finalize:
             result = repository.recover_pending_abox_activation()
@@ -3873,14 +3879,13 @@ class TypeDBOntologyRepositoryTests(unittest.TestCase):
                 patch.object(repository, "active_abox_metadata", return_value={
                     "status": "ok", "aboxSnapshotId": "abox-material:candidate",
                 }), \
-                patch.object(repository, "inferencebox_snapshot", return_value={
-                    "status": "empty",
-                    "nativeTypeDbReasoningUsed": False,
-                    "nativeTypeDbReasoningCompleted": True,
+                patch.object(repository, "inferencebox_recovery_metadata", return_value={
+                    "status": "ok",
+                    "inferenceGenerationId": "inference-generation:candidate",
                     "nativeInferenceOutcome": "no-match",
-                    "generationAligned": True,
                     "sourceAboxSnapshotId": "abox-material:candidate",
                     "targetSymbols": ["000660"],
+                    "nativeTypeDbReasoningCompleted": True,
                 }), \
                 patch.object(repository, "finalize_abox_generation", return_value={"status": "ok"}) as finalize:
             result = repository.recover_pending_abox_activation()

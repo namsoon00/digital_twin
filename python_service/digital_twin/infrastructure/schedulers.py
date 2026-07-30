@@ -1,9 +1,11 @@
 import errno
 import json
 import os
+import queue
 import signal
 import socket
 import subprocess
+import threading
 import time
 
 from .operational_error_reporting import operational_error_reporter, report_runtime_error
@@ -202,6 +204,315 @@ class IsolatedOntologyReasoningCycle:
         return result
 
 
+class PersistentIsolatedOntologyReasoningCycle:
+    """Keep one killable TypeDB child warm across bounded reasoning turns.
+
+    One-shot isolation protects the scheduler from a native TypeDB call that
+    ignores Python cancellation, but starting a fresh interpreter and driver
+    for every mailbox turn makes the handshake the dominant queue cost.  This
+    sidecar keeps its repository and driver process-local, while the parent
+    still enforces the same hard timeout and replaces the whole process when a
+    request stops making progress.
+    """
+
+    protocol = "ontology-reasoning-worker-v1"
+    persistent_worker = True
+
+    def __init__(self, command, working_directory="", process_factory=None, environment=None):
+        self.command = list(command or [])
+        self.working_directory = str(working_directory or "")
+        self.process_factory = process_factory or subprocess.Popen
+        self.environment = dict(environment or {})
+        self.process = None
+        self._output_queue = queue.Queue()
+        self._reader_thread = None
+        self._stop_requested = False
+        self._request_sequence = 0
+
+    @staticmethod
+    def _signal_group(process, sig) -> None:
+        IsolatedOntologyReasoningCycle._signal_group(process, sig)
+
+    def _launch(self):
+        if not self.command:
+            raise RuntimeError("persistent ontology reasoning worker command is not configured")
+        kwargs = {
+            "stdin": subprocess.PIPE,
+            "stdout": subprocess.PIPE,
+            "stderr": subprocess.STDOUT,
+            "text": True,
+            "bufsize": 1,
+        }
+        if self.working_directory:
+            kwargs["cwd"] = self.working_directory
+        if self.environment:
+            kwargs["env"] = {**os.environ, **self.environment}
+        if os.name != "nt":
+            kwargs["start_new_session"] = True
+        process = self.process_factory(self.command, **kwargs)
+        self.process = process
+        self._output_queue = queue.Queue()
+        output = getattr(process, "stdout", None)
+        if output is not None:
+            self._reader_thread = threading.Thread(
+                target=self._read_output,
+                args=(output,),
+                name="ontology-reasoning-sidecar-output",
+                daemon=True,
+            )
+            self._reader_thread.start()
+        else:
+            self._reader_thread = None
+        return process
+
+    def _read_output(self, output) -> None:
+        try:
+            for line in iter(output.readline, ""):
+                self._output_queue.put(_output_text(line))
+        except Exception as error:  # noqa: BLE001 - parent reports a missing response below.
+            self._output_queue.put("sidecar-output-error: " + str(error))
+        finally:
+            self._output_queue.put(None)
+
+    @staticmethod
+    def _process_exit_code(process) -> int:
+        code = getattr(process, "returncode", None)
+        if code is None:
+            try:
+                code = process.poll()
+            except Exception:
+                code = None
+        try:
+            return int(code) if code is not None else 0
+        except (TypeError, ValueError):
+            return 0
+
+    @staticmethod
+    def _wait_for_exit(process, timeout_seconds: float) -> bool:
+        end_at = time.monotonic() + max(0.05, float(timeout_seconds or 0.05))
+        while time.monotonic() < end_at:
+            try:
+                if process.poll() is not None:
+                    return True
+            except Exception:
+                return True
+            time.sleep(0.02)
+        try:
+            return process.poll() is not None
+        except Exception:
+            return True
+
+    @staticmethod
+    def _close_stdin(process) -> None:
+        stream = getattr(process, "stdin", None)
+        close = getattr(stream, "close", None)
+        if callable(close):
+            try:
+                close()
+            except Exception:
+                pass
+
+    @staticmethod
+    def _close_stdout(process) -> None:
+        stream = getattr(process, "stdout", None)
+        close = getattr(stream, "close", None)
+        if callable(close):
+            try:
+                close()
+            except Exception:
+                pass
+
+    def _discard_process(self, process, grace_seconds: int) -> None:
+        self._close_stdin(process)
+        self._signal_group(process, signal.SIGTERM)
+        if not self._wait_for_exit(process, max(1, int(grace_seconds or 1))):
+            self._signal_group(process, signal.SIGKILL)
+            self._wait_for_exit(process, max(1, int(grace_seconds or 1)))
+        reader = self._reader_thread
+        if reader is not None and reader is not threading.current_thread():
+            reader.join(timeout=0.2)
+        self._close_stdout(process)
+        if self.process is process:
+            self.process = None
+            self._reader_thread = None
+
+    def _drain_output(self) -> str:
+        values = []
+        while True:
+            try:
+                line = self._output_queue.get_nowait()
+            except queue.Empty:
+                break
+            if line is not None:
+                values.append(_output_text(line))
+        return "".join(values)[-1200:]
+
+    def stop(self, grace_seconds: int = 5) -> None:
+        self._stop_requested = True
+        process = self.process
+        if process is None:
+            return
+        try:
+            alive = process.poll() is None
+        except Exception:
+            alive = False
+        if alive:
+            self._signal_group(process, signal.SIGTERM)
+        # The active request owns pipe draining.  It will observe the signal
+        # and clear the sidecar; calling ``communicate`` here races its reader
+        # thread in exactly the same way as the original one-shot worker.
+        del grace_seconds
+
+    def close(self, grace_seconds: int = 5) -> None:
+        """Terminate and release the sidecar when its scheduler is retired."""
+        process = self.process
+        if process is not None:
+            self._discard_process(process, grace_seconds)
+
+    def run_once(
+        self,
+        limit: int,
+        timeout_seconds: int,
+        grace_seconds: int,
+        action: str = "run",
+    ) -> dict:
+        started = time.monotonic()
+        self._stop_requested = False
+        process = self.process
+        try:
+            alive = process is not None and process.poll() is None
+        except Exception:
+            alive = False
+        if not alive:
+            if process is not None:
+                self._discard_process(process, grace_seconds)
+            try:
+                process = self._launch()
+            except Exception as error:  # noqa: BLE001 - preserve the parent scheduler boundary.
+                return {
+                    "status": "error",
+                    "processedCount": 0,
+                    "alertCount": 0,
+                    "durationMs": int((time.monotonic() - started) * 1000),
+                    "deferredReason": "영구 격리 추론 워커를 시작하지 못했습니다: " + str(error)[:180],
+                }
+        if self._stop_requested:
+            self._discard_process(process, grace_seconds)
+            return {
+                "status": "stopped",
+                "processedCount": 0,
+                "alertCount": 0,
+                "stopRequested": True,
+                "durationMs": int((time.monotonic() - started) * 1000),
+                "childExitCode": self._process_exit_code(process),
+            }
+        stream = getattr(process, "stdin", None)
+        if stream is None:
+            self._discard_process(process, grace_seconds)
+            return {
+                "status": "error",
+                "processedCount": 0,
+                "alertCount": 0,
+                "durationMs": int((time.monotonic() - started) * 1000),
+                "deferredReason": "영구 격리 추론 워커의 요청 채널을 열 수 없습니다.",
+            }
+        self._request_sequence += 1
+        request_id = str(self._request_sequence)
+        prior_output = self._drain_output()
+        try:
+            stream.write(json.dumps({
+                "protocol": self.protocol,
+                "requestId": request_id,
+                "action": str(action or "run"),
+                "limit": max(0, int(limit or 0)),
+            }, ensure_ascii=False) + "\n")
+            stream.flush()
+        except Exception as error:  # noqa: BLE001 - a dead sidecar is replaced on the next scheduler turn.
+            self._discard_process(process, grace_seconds)
+            return {
+                "status": "error",
+                "processedCount": 0,
+                "alertCount": 0,
+                "durationMs": int((time.monotonic() - started) * 1000),
+                "deferredReason": "영구 격리 추론 워커에 요청을 전달하지 못했습니다: " + str(error)[:180],
+                "workerOutput": prior_output[-1200:],
+            }
+        output = prior_output
+        deadline = started + max(1, int(timeout_seconds or 1))
+        while time.monotonic() < deadline:
+            remaining = max(0.01, deadline - time.monotonic())
+            try:
+                line = self._output_queue.get(timeout=remaining)
+            except queue.Empty:
+                break
+            if line is None:
+                output = (output + "\nsidecar-output-closed")[-1200:]
+                break
+            text = _output_text(line)
+            output = (output + text)[-1200:]
+            try:
+                envelope = json.loads(text)
+            except (TypeError, ValueError):
+                continue
+            if not isinstance(envelope, dict):
+                continue
+            if str(envelope.get("protocol") or "") != self.protocol:
+                continue
+            if str(envelope.get("requestId") or "") != request_id:
+                continue
+            result = envelope.get("result")
+            if not isinstance(result, dict):
+                result = {
+                    "status": "error",
+                    "processedCount": 0,
+                    "alertCount": 0,
+                    "deferredReason": "영구 격리 추론 워커가 유효한 결과를 반환하지 않았습니다.",
+                }
+            response = dict(result)
+            response["isolatedExecution"] = True
+            response["persistentIsolatedWorker"] = True
+            response["childExitCode"] = self._process_exit_code(process)
+            response["isolatedDurationMs"] = int((time.monotonic() - started) * 1000)
+            return response
+        if self._stop_requested:
+            self._discard_process(process, grace_seconds)
+            return {
+                "status": "stopped",
+                "processedCount": 0,
+                "alertCount": 0,
+                "stopRequested": True,
+                "durationMs": int((time.monotonic() - started) * 1000),
+                "childExitCode": self._process_exit_code(process),
+                "workerOutput": output[-1200:],
+            }
+        self._discard_process(process, grace_seconds)
+        return {
+            "status": "timeout",
+            "processedCount": 0,
+            "alertCount": 0,
+            "timeout": True,
+            "timeoutSeconds": int(timeout_seconds or 0),
+            "durationMs": int((time.monotonic() - started) * 1000),
+            "workerOutput": output[-1200:],
+            "persistentIsolatedWorker": True,
+        }
+
+    def recover_dead_leases(self, timeout_seconds: int, grace_seconds: int) -> dict:
+        """Recover a killed child’s TypeDB leases inside a fresh sidecar.
+
+        The normal timeout path intentionally never calls TypeDB from the
+        scheduler parent.  This request starts a replacement child when
+        needed, gives the recovery its own small hard boundary, and leaves
+        the queue retryable if the TypeDB control plane is unavailable.
+        """
+        return self.run_once(
+            0,
+            timeout_seconds,
+            grace_seconds,
+            action="recover-dead-leases",
+        )
+
+
 class RealtimeScheduler:
     def __init__(self, runner, interval_seconds: int, error_reporter=None, minimum_interval_seconds: int = None):
         self.runner = runner
@@ -339,7 +650,7 @@ class OntologyReasoningScheduler:
         self.interval_seconds = max(5, int(interval_seconds or 10))
         self.error_reporter = error_reporter or operational_error_reporter()
         self.isolated_cycle = isolated_cycle
-        # The parent passes this stable id to each short-lived child.  If the
+        # The parent passes this stable id to its killable child.  If the
         # child times out, only this invocation's mailbox lease is released;
         # a different scheduler instance cannot be accidentally reclaimed.
         self.worker_id = "reasoning-watch:" + socket.gethostname() + ":" + str(os.getpid())
@@ -365,6 +676,16 @@ class OntologyReasoningScheduler:
         configured = getattr(self.runner, "execution_timeout_grace_seconds", None)
         return max(1, int(configured() if callable(configured) else 10))
 
+    def timeout_lease_recovery_seconds(self) -> int:
+        """Bound post-timeout TypeDB cleanup independently of inference.
+
+        A native inference can receive a larger budget, but recovering a
+        dead local lease is a control operation.  It gets at most 30 seconds
+        (20 seconds with the normal ten-second shutdown grace) and always
+        runs in the replacement sidecar.
+        """
+        return max(5, min(30, self.execution_timeout_grace_seconds() * 2))
+
     def run_once(self, limit: int = 0):
         if not self.process_isolation_enabled():
             return self.runner.run_once(limit=limit)
@@ -385,29 +706,39 @@ class OntologyReasoningScheduler:
                 "deferredReason": "이전 로컬 추론 워커 종료 유예를 확인한 뒤 영속 작업 lease를 회수합니다.",
                 "mailboxOrphanLeaseRecovery": recovery,
             }
-        preflight = {}
-        preflight_check = getattr(self.runner, "isolated_execution_preflight", None)
-        if callable(preflight_check):
-            try:
-                preflight = dict(preflight_check() or {})
-            except Exception as error:  # noqa: BLE001 - the child remains the authoritative scheduler path.
-                preflight = {"ready": True, "status": "preflight-error", "reason": str(error)[:180]}
-        if preflight and not bool(preflight.get("ready", True)):
-            return {
-                "status": str(preflight.get("status") or "deferred"),
-                "processedCount": 0,
-                "alertCount": 0,
-                "retryAfterSeconds": max(
-                    1,
-                    int(preflight.get("retryAfterSeconds") or self.interval_seconds),
-                ),
-                "deferredReason": str(
-                    preflight.get("reason")
-                    or "TypeDB 투영 경계를 확인한 뒤 추론 워커를 다시 시작합니다."
-                )[:220],
-                "isolatedExecutionPreflight": preflight,
-                **({"mailboxOrphanLeaseRecovery": recovery} if recovery else {}),
-            }
+        # A one-shot child is expensive to launch, so it keeps the historic
+        # TypeDB coordinator probe in the parent.  A persistent child has
+        # already removed that launch cost.  More importantly, keeping a
+        # native-driver control read in the parent would put it outside the
+        # hard timeout boundary: a stalled driver handshake could freeze the
+        # queue before the killable sidecar ever receives a request.  Let the
+        # warm sidecar perform its ordinary coordinator/lease acquisition and
+        # contain *all* TypeDB work in the replaceable process instead.
+        persistent_worker = bool(getattr(self.isolated_cycle, "persistent_worker", False))
+        if not persistent_worker:
+            preflight = {}
+            preflight_check = getattr(self.runner, "isolated_execution_preflight", None)
+            if callable(preflight_check):
+                try:
+                    preflight = dict(preflight_check() or {})
+                except Exception as error:  # noqa: BLE001 - the child remains the authoritative scheduler path.
+                    preflight = {"ready": True, "status": "preflight-error", "reason": str(error)[:180]}
+            if preflight and not bool(preflight.get("ready", True)):
+                return {
+                    "status": str(preflight.get("status") or "deferred"),
+                    "processedCount": 0,
+                    "alertCount": 0,
+                    "retryAfterSeconds": max(
+                        1,
+                        int(preflight.get("retryAfterSeconds") or self.interval_seconds),
+                    ),
+                    "deferredReason": str(
+                        preflight.get("reason")
+                        or "TypeDB 투영 경계를 확인한 뒤 추론 워커를 다시 시작합니다."
+                    )[:220],
+                    "isolatedExecutionPreflight": preflight,
+                    **({"mailboxOrphanLeaseRecovery": recovery} if recovery else {}),
+                }
         current_environment = dict(getattr(self.isolated_cycle, "environment", {}) or {})
         current_environment["ONTOLOGY_REASONING_WORKER_ID"] = self.worker_id
         self.isolated_cycle.environment = current_environment
@@ -423,87 +754,142 @@ class OntologyReasoningScheduler:
         recorder = getattr(self.runner, "record_execution_timeout", None)
         if not callable(recorder):
             return result
+        dead_lease_recovery = None
+        if bool(getattr(self.isolated_cycle, "persistent_worker", False)):
+            recover_dead_leases = getattr(self.isolated_cycle, "recover_dead_leases", None)
+            if callable(recover_dead_leases):
+                recovery_result = recover_dead_leases(
+                    self.timeout_lease_recovery_seconds(),
+                    self.execution_timeout_grace_seconds(),
+                )
+                if recovery_result.get("timeout"):
+                    dead_lease_recovery = {
+                        "status": "timeout",
+                        "clearedCount": 0,
+                        "reason": "격리된 TypeDB lease 복구가 제한 시간 안에 끝나지 않았습니다.",
+                        "isolatedDurationMs": int(recovery_result.get("durationMs") or 0),
+                    }
+                else:
+                    raw_recovery = recovery_result.get("typedbDeadLeaseRecovery")
+                    if isinstance(raw_recovery, dict):
+                        dead_lease_recovery = dict(raw_recovery)
+                        dead_lease_recovery["isolatedDurationMs"] = int(
+                            recovery_result.get("isolatedDurationMs")
+                            or recovery_result.get("durationMs")
+                            or 0
+                        )
+                    else:
+                        dead_lease_recovery = {
+                            "status": "invalid-sidecar-response",
+                            "clearedCount": 0,
+                        }
+        timeout_seconds = int(result.get("timeoutSeconds") or self.execution_timeout_seconds())
+        timeout_output = str(result.get("workerOutput") or "")
         try:
-            recorded = recorder(
-                int(result.get("timeoutSeconds") or self.execution_timeout_seconds()),
-                output=str(result.get("workerOutput") or ""),
-                worker_id=self.worker_id,
-            )
+            if dead_lease_recovery is None:
+                recorded = recorder(
+                    timeout_seconds,
+                    output=timeout_output,
+                    worker_id=self.worker_id,
+                )
+            else:
+                recorded = recorder(
+                    timeout_seconds,
+                    output=timeout_output,
+                    worker_id=self.worker_id,
+                    dead_lease_recovery=dead_lease_recovery,
+                )
         except TypeError:
-            # Compatibility runners predate durable work leases.
-            recorded = recorder(
-                int(result.get("timeoutSeconds") or self.execution_timeout_seconds()),
-                output=str(result.get("workerOutput") or ""),
-            )
+            # Compatibility runners may predate the isolated-recovery
+            # argument, or (in older tests) the durable worker-id argument.
+            try:
+                recorded = recorder(
+                    timeout_seconds,
+                    output=timeout_output,
+                    worker_id=self.worker_id,
+                )
+            except TypeError:
+                recorded = recorder(timeout_seconds, output=timeout_output)
         return {
             **recorded,
             "isolatedExecution": True,
             "isolatedDurationMs": int(result.get("durationMs") or 0),
             "workerOutput": str(result.get("workerOutput") or "")[-1200:],
+            **({"timeoutLeaseRecovery": dead_lease_recovery} if dead_lease_recovery else {}),
             **({"mailboxOrphanLeaseRecovery": recovery} if recovery else {}),
         }
 
     def run_forever(self, limit: int = 0) -> None:
         install_stop_handlers(self.stop)
-        mode = "isolated" if self.process_isolation_enabled() else "in-process"
+        persistent = bool(getattr(self.isolated_cycle, "persistent_worker", False))
+        mode = (
+            "isolated-persistent" if self.process_isolation_enabled() and persistent
+            else "isolated" if self.process_isolation_enabled()
+            else "in-process"
+        )
         print(
             "Python ontology reasoning worker started. interval="
             + str(self.interval_seconds)
             + "s mode="
             + mode
-            + (" timeout=" + str(self.execution_timeout_seconds()) + "s" if mode == "isolated" else "")
+            + (" timeout=" + str(self.execution_timeout_seconds()) + "s" if mode.startswith("isolated") else "")
         )
-        while self.running:
-            started = time.monotonic()
-            try:
-                result = self.run_once(limit=limit)
-                if result.get("processedCount"):
-                    print(
-                        "Ontology reasoning "
-                        + str(result.get("status"))
-                        + " processed="
-                        + str(result.get("processedCount", 0))
-                        + " alerts="
-                        + str(result.get("alertCount", 0))
-                    )
-                    self.last_deferred_signature = ""
-                    self.last_deferred_report_at = 0.0
-                elif str(result.get("status") or "") in {"deferred", "circuit-open"}:
-                    reason = str(result.get("deferredReason") or "TypeDB projection is not ready.")
-                    signature = str(result.get("status") or "") + "|" + reason
-                    # A worker can retry every few seconds. Log the first
-                    # distinct block immediately, then retain one heartbeat
-                    # per minute so a persistent block stays observable.
-                    if (
-                        signature != self.last_deferred_signature
-                        or started - self.last_deferred_report_at >= 60.0
-                    ):
+        try:
+            while self.running:
+                started = time.monotonic()
+                try:
+                    result = self.run_once(limit=limit)
+                    if result.get("processedCount"):
                         print(
                             "Ontology reasoning "
                             + str(result.get("status"))
-                            + " retryAfter="
-                            + str(result.get("retryAfterSeconds", 0))
-                            + "s reason="
-                            + reason[:280]
+                            + " processed="
+                            + str(result.get("processedCount", 0))
+                            + " alerts="
+                            + str(result.get("alertCount", 0))
                         )
-                        self.last_deferred_signature = signature
-                        self.last_deferred_report_at = started
-            except Exception as error:  # noqa: BLE001 - long-running reasoning worker must continue after a cycle failure.
-                print("Python ontology reasoning worker error: " + str(error))
-                report_runtime_error(self.error_reporter, "Python ontology reasoning worker", error, "inference cycle")
-                result = {}
-            retry_after = 0
-            try:
-                retry_after = max(0, int(float((result or {}).get("retryAfterSeconds") or 0)))
-            except (TypeError, ValueError):
+                        self.last_deferred_signature = ""
+                        self.last_deferred_report_at = 0.0
+                    elif str(result.get("status") or "") in {"deferred", "circuit-open"}:
+                        reason = str(result.get("deferredReason") or "TypeDB projection is not ready.")
+                        signature = str(result.get("status") or "") + "|" + reason
+                        # A worker can retry every few seconds. Log the first
+                        # distinct block immediately, then retain one heartbeat
+                        # per minute so a persistent block stays observable.
+                        if (
+                            signature != self.last_deferred_signature
+                            or started - self.last_deferred_report_at >= 60.0
+                        ):
+                            print(
+                                "Ontology reasoning "
+                                + str(result.get("status"))
+                                + " retryAfter="
+                                + str(result.get("retryAfterSeconds", 0))
+                                + "s reason="
+                                + reason[:280]
+                            )
+                            self.last_deferred_signature = signature
+                            self.last_deferred_report_at = started
+                except Exception as error:  # noqa: BLE001 - long-running reasoning worker must continue after a cycle failure.
+                    print("Python ontology reasoning worker error: " + str(error))
+                    report_runtime_error(self.error_reporter, "Python ontology reasoning worker", error, "inference cycle")
+                    result = {}
                 retry_after = 0
-            wait_seconds = max(
-                1.0,
-                self.interval_seconds - (time.monotonic() - started),
-                float(retry_after),
-            )
-            end_at = time.monotonic() + wait_seconds
-            wait_until_running(lambda: self.running, end_at)
+                try:
+                    retry_after = max(0, int(float((result or {}).get("retryAfterSeconds") or 0)))
+                except (TypeError, ValueError):
+                    retry_after = 0
+                wait_seconds = max(
+                    1.0,
+                    self.interval_seconds - (time.monotonic() - started),
+                    float(retry_after),
+                )
+                end_at = time.monotonic() + wait_seconds
+                wait_until_running(lambda: self.running, end_at)
+        finally:
+            close = getattr(self.isolated_cycle, "close", None)
+            if callable(close):
+                close(self.execution_timeout_grace_seconds())
 
 
 class OntologyWorldProjectionScheduler:

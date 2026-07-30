@@ -1,4 +1,5 @@
 import subprocess
+import sys
 import unittest
 
 from digital_twin.infrastructure.schedulers import (
@@ -6,6 +7,7 @@ from digital_twin.infrastructure.schedulers import (
     OntologyMaintenanceScheduler,
     OntologyReasoningScheduler,
     OntologyWorldProjectionScheduler,
+    PersistentIsolatedOntologyReasoningCycle,
 )
 
 
@@ -135,6 +137,69 @@ class CountingIsolatedCycle:
         raise AssertionError("isolated child must not start while reasoning is pending")
 
 
+class PersistentCountingCycle:
+    persistent_worker = True
+
+    def __init__(self):
+        self.calls = 0
+
+    def run_once(self, *_args, **_kwargs):
+        self.calls += 1
+        return {"status": "ok", "processedCount": 0, "alertCount": 0}
+
+
+class PersistentTimeoutCycle:
+    persistent_worker = True
+
+    def __init__(self):
+        self.run_calls = 0
+        self.recovery_calls = []
+
+    def run_once(self, *_args, **_kwargs):
+        self.run_calls += 1
+        return {
+            "status": "timeout",
+            "processedCount": 0,
+            "alertCount": 0,
+            "timeout": True,
+            "timeoutSeconds": 12,
+            "durationMs": 12000,
+        }
+
+    def recover_dead_leases(self, timeout_seconds, grace_seconds):
+        self.recovery_calls.append((timeout_seconds, grace_seconds))
+        return {
+            "status": "recovered",
+            "processedCount": 0,
+            "alertCount": 0,
+            "typedbDeadLeaseRecovery": {"status": "cleared", "clearedCount": 1},
+            "isolatedDurationMs": 31,
+        }
+
+
+class RecoveryAwareRunner(FakeRunner):
+    def __init__(self):
+        super().__init__()
+        self.dead_lease_recoveries = []
+
+    def record_execution_timeout(
+        self,
+        timeout_seconds,
+        started_at="",
+        output="",
+        worker_id="",
+        dead_lease_recovery=None,
+    ):
+        self.timeouts.append({"timeoutSeconds": timeout_seconds, "output": output, "workerId": worker_id})
+        self.dead_lease_recoveries.append(dict(dead_lease_recovery or {}))
+        return {
+            "status": "timeout",
+            "processedCount": 0,
+            "alertCount": 0,
+            "retryAfterSeconds": 30,
+        }
+
+
 class OntologyReasoningSchedulerTests(unittest.TestCase):
     def test_isolated_cycle_parses_the_one_shot_json_result(self):
         cycle = IsolatedOntologyReasoningCycle(
@@ -147,6 +212,45 @@ class OntologyReasoningSchedulerTests(unittest.TestCase):
         self.assertEqual("ok", result["status"])
         self.assertEqual(1, result["processedCount"])
         self.assertTrue(result["isolatedExecution"])
+
+    def test_persistent_isolated_cycle_reuses_one_warm_child_for_multiple_requests(self):
+        worker = """import json
+import sys
+for raw in sys.stdin:
+    request = json.loads(raw)
+    result = {'status': 'ok', 'processedCount': request.get('limit', 0), 'alertCount': 0}
+    if request.get('action') == 'recover-dead-leases':
+        result = {
+            'status': 'recovered',
+            'processedCount': 0,
+            'alertCount': 0,
+            'typedbDeadLeaseRecovery': {'status': 'cleared', 'clearedCount': 1},
+        }
+    print(json.dumps({
+        'protocol': 'ontology-reasoning-worker-v1',
+        'requestId': request['requestId'],
+        'result': result,
+    }), flush=True)
+"""
+        cycle = PersistentIsolatedOntologyReasoningCycle(
+            [sys.executable, "-u", "-c", worker],
+        )
+        try:
+            first = cycle.run_once(limit=1, timeout_seconds=5, grace_seconds=1)
+            child_pid = cycle.process.pid
+            second = cycle.run_once(limit=2, timeout_seconds=5, grace_seconds=1)
+            recovery = cycle.recover_dead_leases(timeout_seconds=5, grace_seconds=1)
+
+            self.assertEqual("ok", first["status"])
+            self.assertEqual(1, first["processedCount"])
+            self.assertEqual("ok", second["status"])
+            self.assertEqual(2, second["processedCount"])
+            self.assertTrue(first["persistentIsolatedWorker"])
+            self.assertEqual("recovered", recovery["status"])
+            self.assertEqual(1, recovery["typedbDeadLeaseRecovery"]["clearedCount"])
+            self.assertEqual(child_pid, cycle.process.pid)
+        finally:
+            cycle.close()
 
     def test_timeout_is_recorded_by_the_parent_and_keeps_work_unacknowledged(self):
         process = FakeTimeoutProcess()
@@ -210,6 +314,29 @@ class OntologyReasoningSchedulerTests(unittest.TestCase):
         self.assertEqual("deferred-projection-coordinator", result["status"])
         self.assertEqual(20, result["retryAfterSeconds"])
         self.assertEqual(0, child.calls)
+
+    def test_persistent_cycle_keeps_typedb_preflight_inside_the_killable_child(self):
+        child = PersistentCountingCycle()
+        runner = CoordinatorBlockedRunner()
+        scheduler = OntologyReasoningScheduler(runner, 10, isolated_cycle=child)
+
+        result = scheduler.run_once(limit=1)
+
+        self.assertEqual("ok", result["status"])
+        self.assertEqual(1, child.calls)
+
+    def test_persistent_timeout_recovers_typedb_leases_in_a_replacement_child(self):
+        child = PersistentTimeoutCycle()
+        runner = RecoveryAwareRunner()
+        scheduler = OntologyReasoningScheduler(runner, 10, isolated_cycle=child)
+
+        result = scheduler.run_once(limit=1)
+
+        self.assertEqual("timeout", result["status"])
+        self.assertEqual([(5, 1)], child.recovery_calls)
+        self.assertEqual("cleared", runner.dead_lease_recoveries[0]["status"])
+        self.assertEqual(1, runner.dead_lease_recoveries[0]["clearedCount"])
+        self.assertEqual("cleared", result["timeoutLeaseRecovery"]["status"])
 
     def test_shared_world_scheduler_skips_isolated_child_when_live_reasoning_is_pending(self):
         runner = DeferredLowPriorityRunner()

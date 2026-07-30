@@ -3945,6 +3945,7 @@ class OntologyReasoningRunner:
         started_at: str = "",
         output: str = "",
         worker_id: str = "",
+        dead_lease_recovery: Dict[str, object] = None,
     ) -> Dict[str, object]:
         """Persist a durable cooldown after the isolated worker is terminated.
 
@@ -3971,7 +3972,15 @@ class OntologyReasoningRunner:
             active_checkpoint,
             configured_backoff_seconds=configured_backoff_seconds,
         )
-        dead_lease_recovery = self.recover_dead_projection_leases()
+        # The persistent scheduler performs this native control operation in
+        # a new killable sidecar.  Legacy/in-process callers retain the
+        # original direct recovery behavior for compatibility.
+        if dead_lease_recovery is None:
+            dead_lease_recovery = self.recover_dead_projection_leases()
+        elif isinstance(dead_lease_recovery, dict):
+            dead_lease_recovery = dict(dead_lease_recovery)
+        else:
+            dead_lease_recovery = {"status": "invalid", "clearedCount": 0}
         recovered_dead_lease = int(dead_lease_recovery.get("clearedCount") or 0) > 0
         # A known-dead child cannot still own the recovered TypeDB boundary.
         # Retry its durable pending ABox candidate promptly instead of adding

@@ -2012,6 +2012,59 @@ class TypeDBOntologyRepositoryTests(unittest.TestCase):
         self.assertEqual("127.0.0.1:1729", captured["address"])
         self.assertEqual(32000, captured["options"].request_timeout_millis)
 
+    def test_typedb_persistent_driver_reuses_the_native_channel_until_invalidated(self):
+        repository = TypeDBOntologyGraphRepository(
+            "127.0.0.1:1729",
+            write_operation_timeout_seconds=180,
+            persistent_driver_enabled=True,
+        )
+        created = []
+
+        class FakeDriver:
+            def __init__(self):
+                self.closed = 0
+
+            def close(self):
+                self.closed += 1
+
+        class FakeTypeDB:
+            @staticmethod
+            def driver(_address, _credentials, options):
+                driver = FakeDriver()
+                created.append((driver, options.request_timeout_millis))
+                return driver
+
+        class FakeCredentials:
+            def __init__(self, _user, _password):
+                pass
+
+        class FakeDriverOptions:
+            def __init__(self, _tls_config, **kwargs):
+                self.request_timeout_millis = kwargs["request_timeout_millis"]
+
+        class FakeDriverTlsConfig:
+            @staticmethod
+            def enabled():
+                return "enabled"
+
+            @staticmethod
+            def disabled():
+                return "disabled"
+
+        imported = ((FakeTypeDB, FakeCredentials, FakeDriverOptions, FakeDriverTlsConfig, object), None)
+        first = repository.open_driver(imported, request_timeout_seconds=5)
+        second = repository.open_driver(imported, request_timeout_seconds=5)
+        repository.close_driver(first)
+
+        self.assertIs(first, second)
+        self.assertEqual(1, len(created))
+        self.assertEqual(180000, created[0][1])
+        self.assertEqual(0, first.closed)
+
+        repository.invalidate_persistent_driver()
+
+        self.assertEqual(1, first.closed)
+
     def test_typedb_write_transaction_options_cover_write_operation_timeout(self):
         repository = TypeDBOntologyGraphRepository(
             "127.0.0.1:1729",

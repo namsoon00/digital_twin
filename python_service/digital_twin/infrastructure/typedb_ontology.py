@@ -6065,6 +6065,7 @@ class TypeDBOntologyGraphRepository(GraphStoreOntologyRowMapperMixin, ScopedABox
         schema_function_provision_timeout_seconds: float = DEFAULT_TYPEDB_SCHEMA_FUNCTION_PROVISION_TIMEOUT_SECONDS,
         schema_function_direct_query_fallback_enabled: bool = True,
         projection_coordinator_write_enforced: bool = False,
+        persistent_driver_enabled: bool = False,
     ):
         self.address = str(address or "").strip()
         self.user = str(user or "admin").strip() or "admin"
@@ -6179,6 +6180,14 @@ class TypeDBOntologyGraphRepository(GraphStoreOntologyRowMapperMixin, ScopedABox
         # lease held by another process.
         self._projection_coordinator_local = threading.local()
         self._projection_coordinator_write_enforced = bool(projection_coordinator_write_enforced)
+        # The TypeDB Python driver performs a server-description handshake
+        # when it is created.  Creating and closing it for each tiny control
+        # read can cost more than the bounded native inference itself.  The
+        # production worker therefore retains one process-local driver while
+        # its supervisor still owns a killable process boundary.
+        self._persistent_driver_enabled = bool(persistent_driver_enabled)
+        self._persistent_driver = None
+        self._persistent_driver_lock = threading.RLock()
 
     def with_typedb_retries(self, operation):
         attempts = max(1, self.retry_count + 1)
@@ -6188,6 +6197,11 @@ class TypeDBOntologyGraphRepository(GraphStoreOntologyRowMapperMixin, ScopedABox
                 return operation()
             except Exception as error:  # noqa: BLE001 - TypeDB connectivity can be transient.
                 last_error = error
+                # A driver can retain a broken native transport after a
+                # server restart or a cancelled query.  Retrying through the
+                # same instance only repeats the stall; drop it before the
+                # next bounded attempt.
+                self.invalidate_persistent_driver()
                 if index >= attempts - 1:
                     break
                 time.sleep(min(2.0, 0.25 * (index + 1)))
@@ -6695,7 +6709,7 @@ class TypeDBOntologyGraphRepository(GraphStoreOntologyRowMapperMixin, ScopedABox
         except Exception as error:  # noqa: BLE001 - optional dependency.
             return None, error
 
-    def open_driver(self, imported, request_timeout_seconds: float = None):
+    def create_driver(self, imported, request_timeout_seconds: float = None):
         TypeDB, Credentials, DriverOptions, DriverTlsConfig, _TransactionType = imported[0]
         tls_config = DriverTlsConfig.enabled() if self.tls_enabled else DriverTlsConfig.disabled()
         request_timeout = (
@@ -6716,6 +6730,22 @@ class TypeDBOntologyGraphRepository(GraphStoreOntologyRowMapperMixin, ScopedABox
                 request_timeout_millis=max(1000, int(request_timeout * 1000)),
             ),
         )
+
+    def open_driver(self, imported, request_timeout_seconds: float = None):
+        if not self._persistent_driver_enabled:
+            return self.create_driver(imported, request_timeout_seconds=request_timeout_seconds)
+        # Transaction-level options still enforce each read/write deadline.
+        # Use the repository's longest declared operation timeout for the
+        # shared channel so a short read does not poison a later valid ABox
+        # write with a smaller driver-wide deadline.
+        with self._persistent_driver_lock:
+            if self._persistent_driver is not None:
+                return self._persistent_driver
+            self._persistent_driver = self.create_driver(
+                imported,
+                request_timeout_seconds=self.driver_request_timeout_seconds(),
+            )
+            return self._persistent_driver
 
     def driver_request_timeout_seconds(self) -> float:
         return max(
@@ -6752,9 +6782,31 @@ class TypeDBOntologyGraphRepository(GraphStoreOntologyRowMapperMixin, ScopedABox
         )
 
     def close_driver(self, driver) -> None:
+        if self._persistent_driver_enabled:
+            with self._persistent_driver_lock:
+                if driver is self._persistent_driver:
+                    return
         close = getattr(driver, "close", None)
         if callable(close):
             close()
+
+    def invalidate_persistent_driver(self) -> None:
+        """Drop a cached native channel after an operation failure.
+
+        This is intentionally idempotent because nested repository calls may
+        observe the same transport error while unwinding.
+        """
+        if not self._persistent_driver_enabled:
+            return
+        with self._persistent_driver_lock:
+            driver = self._persistent_driver
+            self._persistent_driver = None
+        close = getattr(driver, "close", None)
+        if callable(close):
+            try:
+                close()
+            except Exception:
+                pass
 
     def ensure_database(self, driver) -> None:
         databases = getattr(driver, "databases", None)
@@ -21597,4 +21649,7 @@ def typedb_repository_from_settings(settings: Dict[str, str] = None):
         projection_coordinator_write_enforced=typedb_bool(
             settings.get("typedbProjectionCoordinatorEnabled", "1")
         ),
+        persistent_driver_enabled=True
+        if settings.get("typedbPersistentDriverEnabled") in (None, "")
+        else typedb_bool(settings.get("typedbPersistentDriverEnabled")),
     )

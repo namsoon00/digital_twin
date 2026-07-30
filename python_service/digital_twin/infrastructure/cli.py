@@ -61,6 +61,7 @@ from .schedulers import (
     NewsAnalysisEnrichmentScheduler,
     NotificationQueueScheduler,
     IsolatedOntologyReasoningCycle,
+    PersistentIsolatedOntologyReasoningCycle,
     OntologyLabScheduler,
     OntologyInferenceDetailScheduler,
     OntologyMaintenanceScheduler,
@@ -375,6 +376,85 @@ def ontology_reasoning_command(args) -> int:
             result["localScopedABoxWriteLeaseRecovery"] = local_lease_recovery
         print(json.dumps(result, ensure_ascii=False))
         return 0
+    if args.ontology_reasoning_action == "serve":
+        # The parent scheduler owns the timeout and can replace this process
+        # at any point. This child deliberately keeps one composed runner
+        # alive so its TypeDB driver and immutable RuleBox caches are warm
+        # between durable mailbox turns.
+        protocol = "ontology-reasoning-worker-v1"
+        for raw_line in sys.stdin:
+            try:
+                request = json.loads(raw_line)
+            except (TypeError, ValueError):
+                continue
+            if not isinstance(request, dict) or str(request.get("protocol") or "") != protocol:
+                continue
+            request_id = str(request.get("requestId") or "")
+            action = str(request.get("action") or "run").strip().lower()
+            if action == "stop":
+                print(json.dumps({
+                    "protocol": protocol,
+                    "requestId": request_id,
+                    "result": {"status": "stopped", "processedCount": 0, "alertCount": 0},
+                }, ensure_ascii=False), flush=True)
+                return 0
+            if action == "recover-dead-leases":
+                recover = getattr(runner, "recover_dead_projection_leases", None)
+                try:
+                    recovery = dict(recover() or {}) if callable(recover) else {
+                        "status": "not-configured",
+                        "clearedCount": 0,
+                    }
+                except Exception as error:  # noqa: BLE001 - parent keeps this child killable and retries safely.
+                    recovery = {
+                        "status": "error",
+                        "clearedCount": 0,
+                        "reason": str(error)[:180],
+                    }
+                print(json.dumps({
+                    "protocol": protocol,
+                    "requestId": request_id,
+                    "result": {
+                        "status": "recovered",
+                        "processedCount": 0,
+                        "alertCount": 0,
+                        "typedbDeadLeaseRecovery": recovery,
+                    },
+                }, ensure_ascii=False), flush=True)
+                continue
+            if action != "run":
+                print(json.dumps({
+                    "protocol": protocol,
+                    "requestId": request_id,
+                    "result": {
+                        "status": "error",
+                        "processedCount": 0,
+                        "alertCount": 0,
+                        "deferredReason": "영구 격리 추론 워커의 요청 종류가 올바르지 않습니다.",
+                    },
+                }, ensure_ascii=False), flush=True)
+                continue
+            try:
+                requested_limit = int(request.get("limit") or limit or 0)
+            except (TypeError, ValueError):
+                requested_limit = limit
+            try:
+                result = runner.run_once(limit=max(0, requested_limit), force=bool(request.get("force")))
+            except Exception as error:  # noqa: BLE001 - the parent retains the durable retry contract.
+                result = {
+                    "status": "error",
+                    "processedCount": 0,
+                    "alertCount": 0,
+                    "deferredReason": str(error)[:220],
+                }
+            if local_lease_recovery:
+                result = {**dict(result or {}), "localScopedABoxWriteLeaseRecovery": local_lease_recovery}
+            print(json.dumps({
+                "protocol": protocol,
+                "requestId": request_id,
+                "result": result,
+            }, ensure_ascii=False), flush=True)
+        return 0
     if args.ontology_reasoning_action == "watch":
         if local_lease_recovery:
             print("Ontology reasoning local scoped ABox write lease recovery=" + json.dumps(local_lease_recovery, ensure_ascii=False))
@@ -386,13 +466,17 @@ def ontology_reasoning_command(args) -> int:
         isolated_cycle = None
         if runner.process_isolation_enabled():
             project_root = Path(__file__).resolve().parents[3]
-            isolated_cycle = IsolatedOntologyReasoningCycle(
+            persistent_worker_enabled = str(
+                settings.get("ontologyReasoningPersistentWorkerEnabled", "1")
+            ).strip().lower() not in {"0", "false", "no", "off", "disabled"}
+            cycle_class = PersistentIsolatedOntologyReasoningCycle if persistent_worker_enabled else IsolatedOntologyReasoningCycle
+            isolated_cycle = cycle_class(
                 [
                     sys.executable,
                     "-u",
                     str(project_root / "python_service" / "service.py"),
                     "ontology-reasoning",
-                    "once",
+                    "serve" if persistent_worker_enabled else "once",
                 ],
                 working_directory=str(project_root),
             )
@@ -1239,6 +1323,7 @@ def build_parser() -> argparse.ArgumentParser:
     ontology_once.add_argument("--force", action="store_true")
     ontology_watch = ontology_reasoning_actions.add_parser("watch")
     ontology_watch.add_argument("--limit", default="")
+    ontology_reasoning_actions.add_parser("serve", help=argparse.SUPPRESS)
     ontology_reasoning_actions.add_parser("status")
     ontology_reasoning.set_defaults(func=ontology_reasoning_command)
 

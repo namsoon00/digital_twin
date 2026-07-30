@@ -165,6 +165,7 @@ TEXT_SETTING_KEYS = [
     "ontologyReasoningFairnessDrainEnabled",
     "ontologyReasoningFairnessDrainMinIntervalSeconds",
     "ontologyReasoningProcessIsolationEnabled",
+    "ontologyReasoningPersistentWorkerEnabled",
     "ontologyReasoningExecutionTimeoutSeconds",
     "ontologyReasoningExecutionTimeoutGraceSeconds",
     "ontologyReasoningExecutionTimeoutBackoffSeconds",
@@ -274,6 +275,7 @@ TEXT_SETTING_KEYS = [
     "typedbNativeRuleExecutionBudgetSeconds",
     "typedbNativeRuleParallelism",
     "typedbNativeRuleAnyConditionParallelism",
+    "typedbPersistentDriverEnabled",
     "typedbProcessSchemaFunctionCacheEnabled",
     "typedbSchemaFunctionProbeIntervalSeconds",
     "typedbSchemaFunctionProvisionBatchSize",
@@ -1003,6 +1005,7 @@ def runtime_settings(fast_operational_read: bool = False) -> Dict[str, str]:
         "ontologyReasoningFairnessDrainEnabled": value("ontologyReasoningFairnessDrainEnabled", "ONTOLOGY_REASONING_FAIRNESS_DRAIN_ENABLED", "1"),
         "ontologyReasoningFairnessDrainMinIntervalSeconds": value("ontologyReasoningFairnessDrainMinIntervalSeconds", "ONTOLOGY_REASONING_FAIRNESS_DRAIN_MIN_INTERVAL_SECONDS", "60"),
         "ontologyReasoningProcessIsolationEnabled": value("ontologyReasoningProcessIsolationEnabled", "ONTOLOGY_REASONING_PROCESS_ISOLATION_ENABLED", "1"),
+        "ontologyReasoningPersistentWorkerEnabled": value("ontologyReasoningPersistentWorkerEnabled", "ONTOLOGY_REASONING_PERSISTENT_WORKER_ENABLED", "1"),
         "ontologyReasoningExecutionTimeoutSeconds": value("ontologyReasoningExecutionTimeoutSeconds", "ONTOLOGY_REASONING_EXECUTION_TIMEOUT_SECONDS", "360"),
         "ontologyReasoningExecutionTimeoutGraceSeconds": value("ontologyReasoningExecutionTimeoutGraceSeconds", "ONTOLOGY_REASONING_EXECUTION_TIMEOUT_GRACE_SECONDS", "10"),
         "ontologyReasoningExecutionTimeoutBackoffSeconds": value("ontologyReasoningExecutionTimeoutBackoffSeconds", "ONTOLOGY_REASONING_EXECUTION_TIMEOUT_BACKOFF_SECONDS", "300"),
@@ -1379,6 +1382,11 @@ def runtime_settings(fast_operational_read: bool = False) -> Dict[str, str]:
         "typedbNativeRuleAnyConditionParallelism": value(
             "typedbNativeRuleAnyConditionParallelism",
             "TYPEDB_NATIVE_RULE_ANY_CONDITION_PARALLELISM",
+            "1",
+        ),
+        "typedbPersistentDriverEnabled": value(
+            "typedbPersistentDriverEnabled",
+            "TYPEDB_PERSISTENT_DRIVER_ENABLED",
             "1",
         ),
         "typedbProcessSchemaFunctionCacheEnabled": value(

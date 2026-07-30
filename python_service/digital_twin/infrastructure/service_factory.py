@@ -202,6 +202,7 @@ def build_monitor_runner(
     typedb_native_rule_execution_enabled: bool = False,
     snapshot_builder: Callable = None,
     ontology_projection_enabled: bool = None,
+    ontology_repository=None,
 ) -> MonitorRunner:
     configured_settings = dict(settings or runtime_settings())
     configured_settings["typedbNativeRuleExecutionEnabled"] = "1" if typedb_native_rule_execution_enabled else "0"
@@ -222,6 +223,7 @@ def build_monitor_runner(
     store = stores.monitor_store(configured_settings)
     market_time_series_store = stores.market_time_series_store(configured_settings)
     ontology_quality_store = stores.ontology_quality_sample_store(configured_settings)
+    projection_repository = ontology_repository or ontology_repository_from_settings(configured_settings)
     interval_seconds = int(os.environ.get("PYTHON_REALTIME_INTERVAL_SECONDS") or os.environ.get("REALTIME_NOTIFY_INTERVAL_SECONDS") or configured_settings.get("monitorAccountIntervalSeconds") or 180)
     publisher = event_publisher or monitor_event_bus(configured_settings)
     return MonitorRunner(
@@ -239,7 +241,7 @@ def build_monitor_runner(
             market_time_series_store,
         ),
         ontology_projection_recorder=PortfolioOntologyProjectionRecorder(
-            ontology_repository_from_settings(configured_settings),
+            projection_repository,
             quality_store=ontology_quality_store,
             projection_run_store=stores.ontology_projection_run_store(configured_settings),
             decision_episode_store=stores.investment_decision_episode_store(configured_settings),
@@ -920,6 +922,7 @@ def build_ontology_reasoning_runner(settings=None, event_publisher=None) -> Onto
             settings=reasoning_monitor_settings,
             typedb_native_rule_execution_enabled=reasoning_native_rule_execution_enabled,
             ontology_projection_enabled=True,
+            ontology_repository=ontology_repository,
         )
         runner.snapshot_builder = LatestMonitorSnapshotReasoningSource(
             runner.store,

@@ -412,7 +412,7 @@ class MySQLOntologyWorldProjectionOutboxStore(MySQLOperationalConnection):
             )
         return int(getattr(cursor, "rowcount", 0) or 0)
 
-    def purge_oversized_superseded(self, limit: int = 10) -> int:
+    def purge_oversized_superseded(self, limit: int = 2) -> int:
         """Remove legacy raw-account packets once a bounded replacement exists.
 
         Superseded packets over the current ceiling were produced by the old
@@ -420,7 +420,7 @@ class MySQLOntologyWorldProjectionOutboxStore(MySQLOperationalConnection):
         material and may contain account-private facts, so retaining them for
         normal outbox history is the wrong default.
         """
-        bounded = max(1, min(10, int(limit or 10)))
+        bounded = max(1, min(2, int(limit or 2)))
         def delete(connection):
             cursor = connection.execute(
                 """
@@ -434,10 +434,10 @@ class MySQLOntologyWorldProjectionOutboxStore(MySQLOperationalConnection):
 
         return int(self.transaction_with_deadlock_retry("world-projection-purge-oversized", delete) or 0)
 
-    def prune_completed(self, retention_hours: int = 24, limit: int = 10) -> int:
+    def prune_completed(self, retention_hours: int = 24, limit: int = 2) -> int:
         """Retain audit results long enough for operations without unbounded growth."""
         bounded_hours = max(1, min(24, int(retention_hours or 24)))
-        bounded_limit = max(1, min(10, int(limit or 10)))
+        bounded_limit = max(1, min(2, int(limit or 2)))
         cutoff = (datetime.now(timezone.utc) - timedelta(hours=bounded_hours)).isoformat().replace("+00:00", "Z")
         def delete(connection):
             cursor = connection.execute(

@@ -922,7 +922,8 @@ MYSQL_SCHEMA = [
         occurred_at VARCHAR(40) NOT NULL,
         material_change TINYINT(1) NOT NULL DEFAULT 0,
         payload_json LONGTEXT NOT NULL,
-        created_at VARCHAR(40) NOT NULL
+        created_at VARCHAR(40) NOT NULL,
+        KEY idx_hypothesis_lifecycle_events_occurred (occurred_at, transition_id)
     ) ENGINE=InnoDB DEFAULT CHARSET=utf8mb4 COLLATE=utf8mb4_unicode_ci
     """,
     """

@@ -947,6 +947,10 @@ def run_mysql_operational_cleanup(
     """Run one bounded cleanup pass outside the realtime inference path."""
     settings = dict(settings or {})
     settings["_skipOperationalHistoryRetention"] = True
+    # The service manager bootstraps schema before it starts workers.  This
+    # low-priority worker must not repeat table/index DDL checks on every
+    # separate process because that work can exceed the normal query timeout.
+    settings["_skipOperationalSchemaBootstrap"] = True
     # A connection can be dropped after the server-side read timeout.  A
     # normal pass is idempotent and uses a fresh pooled connection on retry;
     # explicit compaction is intentionally excluded because it is operator-led.

@@ -256,6 +256,11 @@ MYSQL_OPERATIONAL_INDEXES: Dict[str, Sequence[MySQLIndexDefinition]] = {
     "investment_hypothesis_lifecycle_events": (
         MySQLIndexDefinition(
             "investment_hypothesis_lifecycle_events",
+            "idx_hypothesis_lifecycle_events_occurred",
+            "`occurred_at`, `transition_id`",
+        ),
+        MySQLIndexDefinition(
+            "investment_hypothesis_lifecycle_events",
             "idx_hypothesis_lifecycle_events_key_time",
             "`lifecycle_key`, `occurred_at`",
         ),

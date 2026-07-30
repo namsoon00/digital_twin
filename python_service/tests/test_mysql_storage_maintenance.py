@@ -130,7 +130,7 @@ class MySQLStorageMaintenanceTests(unittest.TestCase):
         )
 
         self.assertEqual(50, result["batchSize"])
-        self.assertEqual(10, result["outboxBatchSize"])
+        self.assertEqual(2, result["outboxBatchSize"])
         self.assertEqual("bounded-single-batch-per-policy", result["mode"])
         self.assertTrue(connection.executions)
         self.assertTrue(all(count == 1 for count in connection.executions.values()))
@@ -139,7 +139,7 @@ class MySQLStorageMaintenanceTests(unittest.TestCase):
             for sql, params in connection.calls
             if "ontology_world_projection_outbox" in sql and "DELETE" in sql
         ]
-        self.assertEqual([10], [params[-1] for params in outbox_params])
+        self.assertEqual([2], [params[-1] for params in outbox_params])
 
     def test_completed_outbox_indexes_and_connection_loss_codes_are_registered(self):
         index_names = {
@@ -153,6 +153,11 @@ class MySQLStorageMaintenanceTests(unittest.TestCase):
 
         self.assertIn("idx_world_projection_outbox_completed", index_names)
         self.assertIn("idx_inference_detail_outbox_completed", index_names)
+        lifecycle_index_names = {
+            index.name
+            for index in MYSQL_OPERATIONAL_INDEXES["investment_hypothesis_lifecycle_events"]
+        }
+        self.assertIn("idx_hypothesis_lifecycle_events_occurred", lifecycle_index_names)
         self.assertTrue(mysql_is_connection_lost(Exception(2013, "Lost connection")))
         self.assertFalse(mysql_is_connection_lost(Exception(1213, "Deadlock")))
 
@@ -182,6 +187,10 @@ class MySQLStorageMaintenanceTests(unittest.TestCase):
         self.assertEqual(2, stores.call_count)
         self.assertEqual(2, retention.call_count)
         self.assertEqual(1, result["transientConnectionRetryCount"])
+        self.assertTrue(all(
+            call.args[0]["_skipOperationalSchemaBootstrap"]
+            for call in stores.call_args_list
+        ))
         sleep.assert_called_once_with(0.25)
 
     def test_duplicated_event_and_delivery_history_defaults_are_compact(self):

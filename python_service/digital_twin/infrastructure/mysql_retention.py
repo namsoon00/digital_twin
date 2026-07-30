@@ -634,10 +634,10 @@ def apply_mysql_operational_history_retention(
     time_series_cutoffs = market_time_series_retention_cutoffs(configured, now=now)
     lifecycle_event_cutoff_iso = hypothesis_lifecycle_event_retention_cutoff(configured, now=now)
     batch_size = operational_history_retention_batch_size(configured)
-    # World-projection payloads are multi-megabyte ABox packets. Keep their
-    # delete transaction below the general history batch to avoid redo-log
-    # stalls while the normal worker continues draining in later turns.
-    outbox_batch_size = min(batch_size, 10)
+    # World-projection payloads are multi-megabyte ABox packets. Two rows are
+    # enough to make steady progress while keeping one delete transaction
+    # below the normal read timeout and redo-log stall threshold.
+    outbox_batch_size = min(batch_size, 2)
     projection_run_keep_count = operational_projection_run_keep_count(configured)
     world_projection_outbox_retention_hours = operational_world_projection_outbox_retention_hours(configured)
     inference_detail_outbox_retention_hours = operational_inference_detail_outbox_retention_hours(configured)

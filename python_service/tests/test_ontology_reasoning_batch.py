@@ -26,6 +26,44 @@ class MemoryCursor:
 
 
 class AdaptiveOntologyReasoningBatchTests(unittest.TestCase):
+    def test_persistent_runner_hot_reloads_only_operational_batch_controls(self):
+        propagated = []
+        runner = OntologyReasoningRunner(
+            event_reader=None,
+            cursor_store=None,
+            monitor_runner_factory=lambda: None,
+            settings={
+                "ontologyReasoningTypeDbNativeRuleExecutionEnabled": "1",
+                "ontologyReasoningMaxSymbolsPerRun": "4",
+                "typedbNativeRuleTargetSymbolLimit": "4",
+                "typedbAddress": "old-driver-address",
+            },
+            operational_settings_refresher=lambda settings, changed, removed: propagated.append(
+                (settings, changed, removed)
+            ),
+        )
+
+        refreshed = runner.refresh_operational_settings({
+            "ontologyReasoningMaxSymbolsPerRun": "8",
+            "typedbNativeRuleTargetSymbolLimit": "8",
+            "ontologyReasoningAdaptiveBatchBurstSymbols": "8",
+            "typedbAddress": "must-not-replace-warm-driver",
+        })
+
+        self.assertEqual("updated", refreshed["status"])
+        self.assertEqual(8, runner.effective_max_symbols_per_run())
+        self.assertEqual("old-driver-address", runner.settings["typedbAddress"])
+        self.assertEqual(
+            [
+                "ontologyReasoningMaxSymbolsPerRun",
+                "typedbNativeRuleTargetSymbolLimit",
+                "ontologyReasoningAdaptiveBatchBurstSymbols",
+            ],
+            refreshed["changedKeys"],
+        )
+        self.assertEqual(1, len(propagated))
+        self.assertEqual("8", propagated[0][0]["typedbNativeRuleTargetSymbolLimit"])
+
     def test_native_runtime_defaults_to_one_subject_even_when_backlog_is_old(self):
         source = DomainEvent(name="market_data.collected", aggregate_id="market:KR", payload={})
         request = ontology_reasoning_requested_event(

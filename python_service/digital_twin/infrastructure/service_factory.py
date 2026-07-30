@@ -938,6 +938,21 @@ def build_ontology_reasoning_runner(settings=None, event_publisher=None) -> Onto
         )
         return runner
 
+    def refresh_reasoning_monitor_settings(updated_settings, changed_keys, removed_keys):
+        """Keep a warm sidecar's short-lived monitor runners in sync.
+
+        The monitor runner is composed per durable turn, but its settings map
+        is intentionally retained so it can reuse the TypeDB repository and
+        source snapshot boundaries.  Only the application-owned operational
+        keys are forwarded by ``OntologyReasoningRunner``.
+        """
+        updated = dict(updated_settings or {})
+        for key in changed_keys or []:
+            if key in updated:
+                reasoning_monitor_settings[key] = updated[key]
+        for key in removed_keys or []:
+            reasoning_monitor_settings.pop(key, None)
+
     return OntologyReasoningRunner(
         event_reader=event_log,
         cursor_store=cursor_store,
@@ -974,6 +989,7 @@ def build_ontology_reasoning_runner(settings=None, event_publisher=None) -> Onto
             if callable(getattr(ontology_repository, "schema_function_prewarm_status", None))
             else None
         ),
+        operational_settings_refresher=refresh_reasoning_monitor_settings,
     )
 
 

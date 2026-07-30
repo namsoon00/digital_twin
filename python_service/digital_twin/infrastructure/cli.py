@@ -446,6 +446,20 @@ def ontology_reasoning_command(args) -> int:
                 requested_limit = int(request.get("limit") or limit or 0)
             except (TypeError, ValueError):
                 requested_limit = limit
+            settings_refresh = {"status": "not-supported", "changedKeys": [], "removedKeys": []}
+            refresh_settings = getattr(runner, "refresh_operational_settings", None)
+            if callable(refresh_settings):
+                try:
+                    settings_refresh = dict(
+                        refresh_settings(runtime_settings(fast_operational_read=True)) or {}
+                    )
+                except Exception as error:  # noqa: BLE001 - a settings read must not stall durable work.
+                    settings_refresh = {
+                        "status": "error",
+                        "changedKeys": [],
+                        "removedKeys": [],
+                        "reason": str(error)[:180],
+                    }
             try:
                 result = runner.run_once(limit=max(0, requested_limit), force=bool(request.get("force")))
             except Exception as error:  # noqa: BLE001 - the parent retains the durable retry contract.
@@ -455,6 +469,10 @@ def ontology_reasoning_command(args) -> int:
                     "alertCount": 0,
                     "deferredReason": str(error)[:220],
                 }
+            result = {
+                **dict(result or {}),
+                "runtimeSettingsRefresh": settings_refresh,
+            }
             if local_lease_recovery:
                 result = {**dict(result or {}), "localScopedABoxWriteLeaseRecovery": local_lease_recovery}
             print(json.dumps({

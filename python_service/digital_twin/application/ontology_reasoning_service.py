@@ -579,6 +579,35 @@ def event_work_class(event: object) -> str:
 
 
 class OntologyReasoningRunner:
+    # These alter only how durable, already-authorized reasoning work is
+    # scheduled.  They deliberately exclude TypeDB connection, schema, and
+    # native-driver settings: changing those underneath a warm sidecar needs
+    # an explicit service restart and must never race a live projection.
+    HOT_RELOADABLE_OPERATIONAL_SETTING_KEYS = (
+        "ontologyReasoningEnabled",
+        "ontologyReasoningBatchSize",
+        "ontologyReasoningMaxSymbolsPerRun",
+        "typedbNativeRuleTargetSymbolLimit",
+        "ontologyReasoningCoherentSnapshotMaxSymbols",
+        "ontologyReasoningAdaptiveBatchEnabled",
+        "ontologyReasoningAdaptiveBatchSteadySymbols",
+        "ontologyReasoningAdaptiveBatchBurstSymbols",
+        "ontologyReasoningAdaptiveBatchPendingThreshold",
+        "ontologyReasoningAdaptiveBatchAgeSeconds",
+        "ontologyReasoningAdaptiveBatchRuntimeGuardSeconds",
+        "ontologyReasoningAdaptiveBatchBudgetSeconds",
+        "ontologyReasoningAdaptiveBatchBacklogBurstEnabled",
+        "ontologyReasoningAdaptiveBatchBacklogBurstAgeSeconds",
+        "ontologyReasoningBacklogDrainNoCooldownEnabled",
+        "ontologyReasoningBacklogDrainNoCooldownAgeSeconds",
+        "ontologyReasoningMinIntervalSeconds",
+        "ontologyReasoningUrgentMinIntervalSeconds",
+        "ontologyReasoningProjectionRetrySeconds",
+        "ontologyReasoningFairnessDrainEnabled",
+        "ontologyReasoningFairnessMaxWaitSeconds",
+        "ontologyReasoningFairnessDrainMinIntervalSeconds",
+    )
+
     def __init__(
         self,
         event_reader,
@@ -600,6 +629,7 @@ class OntologyReasoningRunner:
         projection_coordinator_lease_recovery: Callable = None,
         rulebox_prewarm_probe: Callable = None,
         snapshot_readiness_probe: Callable = None,
+        operational_settings_refresher: Callable = None,
     ):
         self.event_reader = event_reader
         self.cursor_store = cursor_store
@@ -620,6 +650,38 @@ class OntologyReasoningRunner:
         self.projection_coordinator_lease_recovery = projection_coordinator_lease_recovery
         self.rulebox_prewarm_probe = rulebox_prewarm_probe
         self.snapshot_readiness_probe = snapshot_readiness_probe
+        self.operational_settings_refresher = operational_settings_refresher
+
+    def refresh_operational_settings(self, settings: Dict[str, object] = None) -> Dict[str, object]:
+        """Apply safe scheduling changes between persistent-sidecar turns.
+
+        The warm TypeDB driver is intentionally retained between queue turns.
+        Recreating it just to raise a batch cap makes a live backlog slower,
+        while changing connection/schema/native-driver settings in place can
+        invalidate a running transaction.  This method is therefore limited
+        to runner-owned cadence and batch controls, and is called only by the
+        sidecar before it starts a new ``run_once`` invocation.
+        """
+        incoming = dict(settings or {})
+        changed_keys = []
+        removed_keys = []
+        for key in self.HOT_RELOADABLE_OPERATIONAL_SETTING_KEYS:
+            if key in incoming:
+                next_value = incoming.get(key)
+                if self.settings.get(key) != next_value:
+                    self.settings[key] = next_value
+                    changed_keys.append(key)
+            elif key in self.settings:
+                self.settings.pop(key, None)
+                removed_keys.append(key)
+        callback = self.operational_settings_refresher
+        if callable(callback) and (changed_keys or removed_keys):
+            callback(dict(self.settings), list(changed_keys), list(removed_keys))
+        return {
+            "status": "updated" if changed_keys or removed_keys else "unchanged",
+            "changedKeys": changed_keys,
+            "removedKeys": removed_keys,
+        }
 
     def enabled(self) -> bool:
         return truthy(self.settings.get("ontologyReasoningEnabled"), True)

@@ -76,14 +76,14 @@ class MaterialityGateTests(unittest.TestCase):
         self.assertLess(event_order_key(blocked)[1], event_order_key(immediate)[1])
         self.assertEqual({"act", "immediate"}, runner.urgent_review_levels())
 
-    def test_reasoning_worker_defaults_to_a_bounded_multi_symbol_batch(self):
+    def test_reasoning_worker_defaults_to_one_native_typedb_subject(self):
         runner = OntologyReasoningRunner(
             event_reader=None,
             cursor_store=None,
             monitor_runner_factory=lambda: None,
         )
 
-        self.assertEqual(20, runner.max_symbols_per_run())
+        self.assertEqual(1, runner.max_symbols_per_run())
 
     def test_reasoning_worker_serializes_native_typedb_rule_subjects(self):
         request = ontology_reasoning_requested_event(
@@ -1031,7 +1031,12 @@ class MaterialityGateTests(unittest.TestCase):
             cursor,
             monitor_runner_factory=lambda: monitor,
             event_publisher=EventBus(),
-            settings={"ontologyRuleCandidateAiEnabled": "0"},
+            settings={
+                "ontologyRuleCandidateAiEnabled": "0",
+                # This case verifies event coalescing, not the production
+                # one-subject safety default.
+                "ontologyReasoningMaxSymbolsPerRun": "2",
+            },
         )
 
         result = runner.run_once()

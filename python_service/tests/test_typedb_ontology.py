@@ -3761,7 +3761,7 @@ class TypeDBOntologyRepositoryTests(unittest.TestCase):
             inference_target_symbols=["000660"],
         )
 
-    def test_typedb_pending_abox_recovery_restores_previous_generation_on_stale_inference(self):
+    def test_typedb_pending_abox_recovery_resumes_complete_active_generation_on_stale_inference(self):
         repository = TypeDBOntologyGraphRepository("127.0.0.1:1729")
         pending = {
             "status": "pending",
@@ -3774,15 +3774,42 @@ class TypeDBOntologyRepositoryTests(unittest.TestCase):
                     "status": "ok", "aboxSnapshotId": "abox-material:candidate",
                 }), \
                 patch.object(repository, "inferencebox_snapshot", return_value={
-                    "status": "stale-generation",
-                    "sourceAboxSnapshotId": "abox-material:previous",
-                    "generationAligned": False,
-                }), \
-                patch.object(repository, "activate_abox_generation", return_value={"status": "ok"}) as restore:
+                "status": "stale-generation",
+                "sourceAboxSnapshotId": "abox-material:previous",
+                "generationAligned": False,
+            }), \
+                patch.object(repository, "activate_abox_generation") as restore:
             result = repository.recover_pending_abox_activation()
 
-        self.assertEqual("restored", result["status"])
-        restore.assert_called_once_with("abox-material:previous")
+        self.assertEqual("retry-required", result["status"])
+        self.assertEqual("resume-active-candidate", result["recoveryMode"])
+        self.assertEqual(["000660"], result["targetSymbols"])
+        restore.assert_not_called()
+
+    def test_scoped_manifest_metadata_reads_only_the_requested_marker(self):
+        repository = TypeDBOntologyGraphRepository("127.0.0.1:1729")
+        marker = {
+            "worldviewManifestId": "abox-manifest:candidate",
+            "aboxSnapshotId": "abox-manifest:candidate",
+            "scopePlan": [{"scopeId": "position:000660"}],
+            "scopeGenerationIds": {"position:000660": "abox-scope:candidate"},
+        }
+        with patch.object(
+            repository,
+            "worldview_manifest_marker_rows",
+            return_value=[marker],
+        ) as marker_rows:
+            result = repository.scoped_manifest_metadata(
+                "abox-manifest:candidate",
+                "portfolio:local:default",
+            )
+
+        self.assertEqual("ok", result["status"])
+        marker_rows.assert_called_once_with(
+            "portfolio:local:default",
+            manifest_id="abox-manifest:candidate",
+            limit=1,
+        )
 
     def test_typedb_pending_abox_recovery_keeps_initial_retry_targets_for_resume(self):
         repository = TypeDBOntologyGraphRepository("127.0.0.1:1729")

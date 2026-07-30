@@ -4659,7 +4659,17 @@ class ScopedABoxManifestMixin:
         if not clean_manifest_id:
             return {}
         try:
-            markers = self.worldview_manifest_marker_rows(world_id)
+            # A Manifest marker contains the complete scoped persistence
+            # index.  Reading every historical marker here made a recovery
+            # of one interrupted target deserialize every retained ABox
+            # generation before it could make progress.  The immutable
+            # manifest id is already a precise TypeQL lookup, so keep this
+            # recovery read bounded to the requested generation.
+            markers = self.worldview_manifest_marker_rows(
+                world_id,
+                manifest_id=clean_manifest_id,
+                limit=1,
+            )
         except Exception:  # noqa: BLE001 - callers retain the current Manifest on lookup failure.
             return {}
         candidates = [
@@ -10321,9 +10331,30 @@ class TypeDBOntologyGraphRepository(GraphStoreOntologyRowMapperMixin, ScopedABox
                 "finalization": finalization,
                 "reason": "" if str(finalization.get("status") or "") == "ok" else str(finalization.get("reason") or "ABox finalization failed."),
             }
+        if active_id == candidate_id:
+            # The durable pointer already proves this candidate is a complete
+            # ABox generation.  A missing or stale InferenceBox must not make
+            # us scan and restore an older Manifest: that turns an interrupted
+            # one-target cycle into a historical ABox read and can repeatedly
+            # exceed the isolated worker timeout.  Keep the activation journal
+            # in place (so no judgement can use this ABox yet) and resume the
+            # exact bounded native inference on the active candidate.
+            return {
+                "configured": True,
+                "status": "retry-required",
+                "graphStore": "typedb",
+                "candidateAboxSnapshotId": candidate_id,
+                "previousAboxSnapshotId": previous_id,
+                "activeAboxSnapshotId": active_id,
+                "targetSymbols": target_symbols,
+                "pendingActivation": pending,
+                "inferenceBox": inferencebox,
+                "recoveryMode": "resume-active-candidate",
+                "reason": "The complete active ABox candidate is awaiting a retry of bounded TypeDB native inference.",
+            }
         if not previous_id:
             # There is no prior verified generation to restore. The candidate
-            # remains visible but cannot produce investment judgement until a
+            # remains staged and cannot produce investment judgement until a
             # later same-material cycle retries native inference.
             return {
                 "configured": True,

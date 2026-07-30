@@ -4130,20 +4130,17 @@ class ScopedABoxManifestMixin:
                 worldview.get("inferenceTargetSymbols") or worldview.get("targetSymbols") or []
             )
         )
-        common = {
+        # Both control records are routing journals, not a second copy of the
+        # immutable Manifest. The active pointer selects the generation, and
+        # the pending journal carries only the recovery identity and target
+        # coverage. Detailed scope/evidence data stays on the Manifest marker.
+        control_identity_common = {
             "ontologyBox": "ABoxControl",
             **world_context,
             "worldviewManifestId": manifest_id,
             "materialFingerprint": str(worldview.get("materialFingerprint") or ""),
             "projectionRunId": str(worldview.get("projectionRunId") or ""),
             "asOf": str(worldview.get("asOf") or worldview.get("generatedAt") or utc_now()),
-            "scopePlan": list(scope_plan),
-            "scopeGenerationIds": dict(worldview.get("scopeGenerationIds") or {}),
-            "scopeFingerprints": dict(worldview.get("scopeFingerprints") or {}),
-            "scopeTopologyVersion": str(worldview.get("scopeTopologyVersion") or ""),
-            "scopeFamilyCounts": dict(worldview.get("scopeFamilyCounts") or {}),
-            "scopeDelta": dict(worldview.get("scopeDelta") or {}),
-            "inferenceImpactPlan": dict(worldview.get("inferenceImpactPlan") or {}),
             "scopedAboxManifestVersion": SCOPED_ABOX_MANIFEST_VERSION,
         }
         entities = [OntologyEntity(
@@ -4151,7 +4148,7 @@ class ScopedABoxManifestMixin:
             label="Active Worldview Manifest",
             kind="worldview-manifest-active-pointer",
             properties={
-                **common,
+                **control_identity_common,
                 "tboxClass": "WorldviewManifestActivePointer",
                 "snapshotId": manifest_id,
                 "aboxSnapshotId": manifest_id,
@@ -4196,7 +4193,7 @@ class ScopedABoxManifestMixin:
                 label="Worldview Manifest activation pending native inference",
                 kind="abox-activation-pending",
                 properties={
-                    **common,
+                    **control_identity_common,
                     "tboxClass": "ABoxActivationPending",
                     "snapshotId": manifest_id,
                     "aboxSnapshotId": manifest_id,
@@ -4204,7 +4201,6 @@ class ScopedABoxManifestMixin:
                     "candidateWorldviewManifestId": manifest_id,
                     "previousAboxSnapshotId": previous_manifest_id,
                     "previousWorldviewManifestId": previous_manifest_id,
-                    "previousScopeGenerationIds": dict(previous.get("scopeGenerationIds") or {}),
                     "targetSymbols": target_symbols,
                     "activationStatus": "pending-native-inference",
                 },
@@ -6188,6 +6184,14 @@ class TypeDBOntologyGraphRepository(GraphStoreOntologyRowMapperMixin, ScopedABox
         self._persistent_driver_enabled = bool(persistent_driver_enabled)
         self._persistent_driver = None
         self._persistent_driver_lock = threading.RLock()
+        # A scoped Worldview Manifest contains the complete evidence-read
+        # index.  It is intentionally large, but immutable between marker
+        # revisions.  The persistent reasoning worker therefore keeps the
+        # parsed form until the lightweight pointer/marker identity changes.
+        # The cache is repository-local so an isolated worker exit still
+        # provides a hard recovery boundary.
+        self._active_scoped_abox_metadata_cache: Dict[Tuple[str, str, str, str, str], Dict[str, object]] = {}
+        self._active_scoped_abox_metadata_cache_lock = threading.RLock()
 
     def with_typedb_retries(self, operation):
         attempts = max(1, self.retry_count + 1)
@@ -7926,6 +7930,51 @@ class TypeDBOntologyGraphRepository(GraphStoreOntologyRowMapperMixin, ScopedABox
             "ABoxControl",
         )
 
+    def active_worldview_manifest_pointer_identity_rows(
+        self,
+        world_id: str = "",
+        limit: int = 0,
+    ) -> List[Dict[str, object]]:
+        """Read just enough active-pointer state to validate a cached Manifest.
+
+        The active pointer used to duplicate the full scoped Manifest payload.
+        Deserialising that JSON on each native-rule stage made the control
+        plane more expensive than a one-subject inference.  Its TypeQL
+        attributes already expose the immutable Manifest id and revision, so
+        keep the hot path free of ``ontology-json`` entirely.
+        """
+        clean_world_id = str(world_id or "").strip()
+        query = (
+            "match $n isa ontology-node, "
+            "has ontology-id $id, "
+            "has ontology-kind \"worldview-manifest-active-pointer\", "
+            "has ontology-box \"ABoxControl\", "
+            + (
+                "has ontology-world-id " + typedb_string(clean_world_id) + ", "
+                if clean_world_id
+                else ""
+            )
+            + "has ontology-snapshot-id $snapshotId, "
+            "has ontology-updated-at $updatedAt;"
+            + typeql_limit_clause(limit)
+        )
+        rows = self.read_rows(
+            query,
+            ["id", "snapshotId", "updatedAt"],
+            label="typedb.worldview-manifest-active-pointer-identity",
+        )
+        return [
+            {
+                "id": str(row.get("id") or ""),
+                "snapshotId": str(row.get("snapshotId") or ""),
+                "worldviewManifestId": str(row.get("snapshotId") or ""),
+                "updatedAt": str(row.get("updatedAt") or ""),
+                "worldId": clean_world_id,
+            }
+            for row in rows or []
+            if str(row.get("id") or "")
+        ]
+
     def worldview_manifest_marker_rows(
         self,
         world_id: str = "",
@@ -7958,6 +8007,52 @@ class TypeDBOntologyGraphRepository(GraphStoreOntologyRowMapperMixin, ScopedABox
             ),
             "ABox",
         )
+
+    def worldview_manifest_marker_identity_rows(
+        self,
+        world_id: str = "",
+        manifest_id: str = "",
+        limit: int = 0,
+    ) -> List[Dict[str, object]]:
+        """Read a Manifest revision without loading its large JSON payload."""
+        clean_world_id = str(world_id or "").strip()
+        clean_manifest_id = str(manifest_id or "").strip()
+        manifest_clause = (
+            "has ontology-snapshot-id " + typedb_string(clean_manifest_id) + ", "
+            if clean_manifest_id
+            else ""
+        )
+        query = (
+            "match $n isa ontology-node, "
+            "has ontology-id $id, "
+            "has ontology-kind \"worldview-manifest-marker\", "
+            "has ontology-box \"ABox\", "
+            + (
+                "has ontology-world-id " + typedb_string(clean_world_id) + ", "
+                if clean_world_id
+                else ""
+            )
+            + manifest_clause
+            + "has ontology-snapshot-id $snapshotId, "
+            "has ontology-updated-at $updatedAt;"
+            + typeql_limit_clause(limit)
+        )
+        rows = self.read_rows(
+            query,
+            ["id", "snapshotId", "updatedAt"],
+            label="typedb.worldview-manifest-marker-identity",
+        )
+        return [
+            {
+                "id": str(row.get("id") or ""),
+                "snapshotId": str(row.get("snapshotId") or ""),
+                "worldviewManifestId": str(row.get("snapshotId") or ""),
+                "updatedAt": str(row.get("updatedAt") or ""),
+                "worldId": clean_world_id,
+            }
+            for row in rows or []
+            if str(row.get("id") or "")
+        ]
 
     @staticmethod
     def scoped_abox_metadata_from_manifest_marker(marker: Dict[str, object]) -> Dict[str, object]:
@@ -8078,7 +8173,7 @@ class TypeDBOntologyGraphRepository(GraphStoreOntologyRowMapperMixin, ScopedABox
     def active_abox_metadata(self, world_id: str = "") -> Dict[str, object]:
         try:
             manifests = sorted(
-                self.active_worldview_manifest_pointer_rows(world_id, limit=1),
+                self.active_worldview_manifest_pointer_identity_rows(world_id, limit=1),
                 key=lambda row: (str(row.get("updatedAt") or ""), str(row.get("id") or "")),
                 reverse=True,
             )
@@ -8094,9 +8189,53 @@ class TypeDBOntologyGraphRepository(GraphStoreOntologyRowMapperMixin, ScopedABox
                 or pointer.get("snapshotId")
                 or ""
             ).strip()
+            cache_world_id = str(world_id or pointer.get("worldId") or "").strip()
+            try:
+                marker_identities = self.worldview_manifest_marker_identity_rows(
+                    cache_world_id,
+                    manifest_id=manifest_id,
+                    limit=1,
+                )
+            except Exception:
+                marker_identities = []
+            marker_identity = next(
+                (
+                    item
+                    for item in marker_identities
+                    if str(
+                        item.get("worldviewManifestId")
+                        or item.get("aboxSnapshotId")
+                        or item.get("snapshotId")
+                        or ""
+                    ).strip() == manifest_id
+                ),
+                marker_identities[0] if marker_identities else {},
+            )
+            marker_identity_id = str(marker_identity.get("id") or "").strip()
+            marker_identity_manifest_id = str(
+                marker_identity.get("worldviewManifestId")
+                or marker_identity.get("aboxSnapshotId")
+                or marker_identity.get("snapshotId")
+                or ""
+            ).strip()
+            cache_key = (
+                cache_world_id,
+                str(pointer.get("id") or "").strip(),
+                str(pointer.get("updatedAt") or "").strip(),
+                manifest_id,
+                marker_identity_id + "@" + str(marker_identity.get("updatedAt") or "").strip(),
+            )
+            if marker_identity_id and marker_identity_manifest_id == manifest_id:
+                with self._active_scoped_abox_metadata_cache_lock:
+                    cached_metadata = self._active_scoped_abox_metadata_cache.get(cache_key)
+                if cached_metadata is not None:
+                    # Callers have historically received a mutable top-level
+                    # payload. Preserve that contract while treating the
+                    # immutable Manifest substructures as read-only snapshots.
+                    return dict(cached_metadata)
             try:
                 markers = self.worldview_manifest_marker_rows(
-                    world_id,
+                    cache_world_id,
                     manifest_id=manifest_id,
                     limit=1,
                 )
@@ -8117,7 +8256,18 @@ class TypeDBOntologyGraphRepository(GraphStoreOntologyRowMapperMixin, ScopedABox
             metadata = self.scoped_abox_metadata_from_manifest_marker(marker)
             if metadata:
                 metadata["activePointerId"] = str(pointer.get("id") or "")
-                metadata.setdefault("worldId", str(world_id or pointer.get("worldId") or ""))
+                metadata.setdefault("worldId", cache_world_id)
+                if marker_identity_id and marker_identity_manifest_id == manifest_id:
+                    with self._active_scoped_abox_metadata_cache_lock:
+                        # A repository follows at most a small number of live
+                        # worlds. Discard superseded revisions for this world
+                        # rather than retaining every historical Manifest.
+                        for stale_key in [
+                            key for key in self._active_scoped_abox_metadata_cache
+                            if key[0] == cache_world_id and key != cache_key
+                        ]:
+                            self._active_scoped_abox_metadata_cache.pop(stale_key, None)
+                        self._active_scoped_abox_metadata_cache[cache_key] = dict(metadata)
                 return metadata
             return {
                 "configured": True,

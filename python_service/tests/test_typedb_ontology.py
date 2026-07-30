@@ -3480,7 +3480,7 @@ class TypeDBOntologyRepositoryTests(unittest.TestCase):
             },
         ]
 
-        with patch.object(repository, "active_worldview_manifest_pointer_rows", return_value=[], create=True), \
+        with patch.object(repository, "active_worldview_manifest_pointer_identity_rows", return_value=[]), \
                 patch.object(repository, "abox_projection_marker_rows", return_value=markers), \
                 patch.object(repository, "active_abox_pointer_rows", return_value=[{
                     "id": "abox-active-pointer",
@@ -3519,12 +3519,23 @@ class TypeDBOntologyRepositoryTests(unittest.TestCase):
             "marketScopeObservedAt": {"symbol:005930:market:world:test": "2026-07-23T00:00:00Z"},
             "marketScopeObservedAtVersion": "source-item-v1",
         }
+        marker_identity = {
+            "id": "worldview-manifest-marker:active",
+            "worldviewManifestId": "abox-manifest:active",
+            "updatedAt": "2026-07-23T00:00:00Z",
+        }
 
-        with patch.object(repository, "active_worldview_manifest_pointer_rows", return_value=[pointer]) as pointers, \
+        with patch.object(repository, "active_worldview_manifest_pointer_identity_rows", return_value=[pointer]) as pointers, \
+                patch.object(repository, "worldview_manifest_marker_identity_rows", return_value=[marker_identity]) as marker_identities, \
                 patch.object(repository, "worldview_manifest_marker_rows", return_value=[marker]) as markers:
             metadata = repository.active_abox_metadata("market:shared:kr")
 
         pointers.assert_called_once_with("market:shared:kr", limit=1)
+        marker_identities.assert_called_once_with(
+            "market:shared:kr",
+            manifest_id="abox-manifest:active",
+            limit=1,
+        )
         markers.assert_called_once_with(
             "market:shared:kr",
             manifest_id="abox-manifest:active",
@@ -3534,6 +3545,89 @@ class TypeDBOntologyRepositoryTests(unittest.TestCase):
         self.assertEqual("2026-07-23T00:00:00Z", metadata["lastFullScopeReconcileAt"])
         self.assertEqual("2026-07-23T00:00:00Z", metadata["marketScopeObservedAt"]["symbol:005930:market:world:test"])
         self.assertEqual("source-item-v1", metadata["marketScopeObservedAtVersion"])
+
+    def test_typedb_active_scoped_metadata_caches_manifest_until_identity_changes(self):
+        repository = TypeDBOntologyGraphRepository("127.0.0.1:1729")
+        pointer = {
+            "id": "worldview-manifest-active-pointer",
+            "worldviewManifestId": "abox-manifest:active",
+            "updatedAt": "2026-07-23T00:00:00Z",
+        }
+        marker_identity = {
+            "id": "worldview-manifest-marker:active",
+            "worldviewManifestId": "abox-manifest:active",
+            "updatedAt": "2026-07-23T00:00:00Z",
+        }
+        marker = {
+            "id": "worldview-manifest-marker:active",
+            "worldviewManifestId": "abox-manifest:active",
+            "worldId": "market:shared:kr",
+            "scopePlan": [{
+                "scopeId": "symbol:005930:market:world:test",
+                "generationId": "abox-scope:005930",
+                "fingerprint": "fingerprint-005930",
+            }],
+            "scopeGenerationIds": {"symbol:005930:market:world:test": "abox-scope:005930"},
+            "scopeFingerprints": {"symbol:005930:market:world:test": "fingerprint-005930"},
+            "nativeRuleEvidenceReadIndex": {"status": "ok", "entries": [{"ruleId": "rule:test"}]},
+        }
+
+        with patch.object(repository, "active_worldview_manifest_pointer_identity_rows", return_value=[pointer]) as pointers, \
+                patch.object(repository, "worldview_manifest_marker_identity_rows", return_value=[marker_identity]) as marker_identities, \
+                patch.object(repository, "worldview_manifest_marker_rows", return_value=[marker]) as markers:
+            first = repository.active_abox_metadata("market:shared:kr")
+            second = repository.active_abox_metadata("market:shared:kr")
+
+        self.assertIsNot(first, second)
+        self.assertEqual(first["scopeGenerationIds"], second["scopeGenerationIds"])
+        self.assertEqual(2, pointers.call_count)
+        self.assertEqual(2, marker_identities.call_count)
+        markers.assert_called_once_with(
+            "market:shared:kr",
+            manifest_id="abox-manifest:active",
+            limit=1,
+        )
+
+    def test_typedb_active_scoped_metadata_reloads_when_marker_revision_changes(self):
+        repository = TypeDBOntologyGraphRepository("127.0.0.1:1729")
+        pointer = {
+            "id": "worldview-manifest-active-pointer",
+            "worldviewManifestId": "abox-manifest:active",
+            "updatedAt": "2026-07-23T00:00:00Z",
+        }
+        marker_identity = {
+            "id": "worldview-manifest-marker:active",
+            "worldviewManifestId": "abox-manifest:active",
+            "updatedAt": "2026-07-23T00:00:00Z",
+        }
+        marker = {
+            "id": "worldview-manifest-marker:active",
+            "worldviewManifestId": "abox-manifest:active",
+            "worldId": "market:shared:kr",
+            "scopePlan": [{"scopeId": "symbol:005930:market", "generationId": "scope:first"}],
+            "scopeGenerationIds": {"symbol:005930:market": "scope:first"},
+        }
+        refreshed_marker = {
+            **marker,
+            "scopePlan": [{"scopeId": "symbol:005930:market", "generationId": "scope:refreshed"}],
+            "scopeGenerationIds": {"symbol:005930:market": "scope:refreshed"},
+        }
+
+        with patch.object(repository, "active_worldview_manifest_pointer_identity_rows", return_value=[pointer]), \
+                patch.object(repository, "worldview_manifest_marker_identity_rows", side_effect=[
+                    [marker_identity],
+                    [{**marker_identity, "updatedAt": "2026-07-23T00:01:00Z"}],
+                ]), \
+                patch.object(repository, "worldview_manifest_marker_rows", side_effect=[
+                    [marker],
+                    [refreshed_marker],
+                ]) as markers:
+            first = repository.active_abox_metadata("market:shared:kr")
+            second = repository.active_abox_metadata("market:shared:kr")
+
+        self.assertEqual("scope:first", first["scopeGenerationIds"]["symbol:005930:market"])
+        self.assertEqual("scope:refreshed", second["scopeGenerationIds"]["symbol:005930:market"])
+        self.assertEqual(2, markers.call_count)
 
     def test_scoped_manifest_marker_persists_market_scope_observation_metadata(self):
         repository = TypeDBOntologyGraphRepository("127.0.0.1:1729")
@@ -3648,6 +3742,26 @@ class TypeDBOntologyRepositoryTests(unittest.TestCase):
         self.assertIn('has ontology-snapshot-id "abox-manifest:active"', query)
         self.assertIn("limit 1;", query)
 
+    def test_typedb_active_manifest_identity_queries_do_not_read_large_json_payloads(self):
+        repository = TypeDBOntologyGraphRepository("127.0.0.1:1729")
+        with patch.object(repository, "read_rows", side_effect=[[], []]) as read_rows:
+            repository.active_worldview_manifest_pointer_identity_rows(
+                "market:shared:kr",
+                limit=1,
+            )
+            repository.worldview_manifest_marker_identity_rows(
+                "market:shared:kr",
+                manifest_id="abox-manifest:active",
+                limit=1,
+            )
+
+        pointer_query = str(read_rows.call_args_list[0].args[0])
+        marker_query = str(read_rows.call_args_list[1].args[0])
+        self.assertNotIn("ontology-json", pointer_query)
+        self.assertNotIn("ontology-json", marker_query)
+        self.assertIn('has ontology-world-id "market:shared:kr"', pointer_query)
+        self.assertIn('has ontology-snapshot-id "abox-manifest:active"', marker_query)
+
     def test_typedb_abox_candidate_keeps_its_generation_in_the_live_box(self):
         graph = PortfolioOntology("typedb-staging")
         graph.entities.append(OntologyEntity(
@@ -3739,7 +3853,41 @@ class TypeDBOntologyRepositoryTests(unittest.TestCase):
         self.assertEqual("staged-native-inference", staged.entities[0].properties["activationStatus"])
         self.assertEqual("abox-manifest:previous", staged.entities[0].properties["previousAboxSnapshotId"])
         self.assertEqual(["000660"], staged.entities[0].properties["targetSymbols"])
+        self.assertNotIn("scopePlan", staged.entities[0].properties)
+        self.assertNotIn("scopeGenerationIds", staged.entities[0].properties)
         self.assertFalse(any(item.kind == "worldview-manifest-active-pointer" for item in staged.entities))
+
+    def test_scoped_manifest_active_pointer_keeps_large_payload_on_the_marker(self):
+        repository = TypeDBOntologyGraphRepository("127.0.0.1:1729")
+        candidate = PortfolioOntology(
+            "typedb-active-manifest",
+            worldview={
+                "worldId": "portfolio:local:default",
+                "worldviewManifestId": "abox-manifest:active",
+                "scopeGenerationIds": {"symbol:000660": "abox-scope:active"},
+                "scopeFingerprints": {"symbol:000660": "fingerprint"},
+                "nativeRuleEvidenceReadIndex": {"entries": [{"ruleId": "rule:test"}]},
+            },
+        )
+        scope_plan = [{
+            "scopeId": "symbol:000660",
+            "scopeType": "symbol",
+            "generationId": "abox-scope:active",
+            "fingerprint": "fingerprint",
+        }]
+
+        control = repository.scoped_manifest_pointer_graph(
+            candidate,
+            scope_plan,
+            pending_activation=False,
+        )
+        pointer = next(item for item in control.entities if item.kind == "worldview-manifest-active-pointer")
+
+        self.assertEqual("abox-manifest:active", pointer.properties["worldviewManifestId"])
+        self.assertEqual("abox-manifest:active", pointer.properties["snapshotId"])
+        self.assertNotIn("scopePlan", pointer.properties)
+        self.assertNotIn("scopeGenerationIds", pointer.properties)
+        self.assertNotIn("nativeRuleEvidenceReadIndex", pointer.properties)
 
     def test_scoped_manifest_control_rebuild_preserves_the_staged_inference_targets(self):
         repository = TypeDBOntologyGraphRepository("127.0.0.1:1729")

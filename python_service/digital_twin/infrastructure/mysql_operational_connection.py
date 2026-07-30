@@ -958,6 +958,23 @@ MYSQL_SCHEMA = [
     ) ENGINE=InnoDB DEFAULT CHARSET=utf8mb4 COLLATE=utf8mb4_unicode_ci
     """,
     """
+    CREATE TABLE IF NOT EXISTS mysql_retention_runs (
+        run_id VARCHAR(191) PRIMARY KEY,
+        profile VARCHAR(96) NOT NULL DEFAULT '',
+        mode VARCHAR(32) NOT NULL DEFAULT 'preview',
+        status VARCHAR(64) NOT NULL DEFAULT 'ok',
+        deleted_count INT NOT NULL DEFAULT 0,
+        compacted_count INT NOT NULL DEFAULT 0,
+        estimated_bytes BIGINT NOT NULL DEFAULT 0,
+        report_json LONGTEXT NOT NULL,
+        started_at VARCHAR(40) NOT NULL,
+        completed_at VARCHAR(40) NOT NULL,
+        created_at VARCHAR(40) NOT NULL,
+        KEY idx_mysql_retention_runs_created (created_at, run_id),
+        KEY idx_mysql_retention_runs_status (status, created_at, run_id)
+    ) ENGINE=InnoDB DEFAULT CHARSET=utf8mb4 COLLATE=utf8mb4_unicode_ci
+    """,
+    """
     CREATE TABLE IF NOT EXISTS investment_learning_proposals (
         proposal_id VARCHAR(191) PRIMARY KEY,
         status VARCHAR(32) NOT NULL DEFAULT 'review-required',

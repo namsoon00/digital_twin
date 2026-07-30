@@ -7,7 +7,9 @@ from pathlib import Path
 from typing import Dict, List
 
 from ..application.account_service import AccountApplicationService
+from ..application.mysql_minimal_retention_service import MySQLMinimalRetentionService
 from ..domain.accounts import AccountConfig, split_symbols
+from ..domain.mysql_minimal_retention import mysql_minimal_retention_policy
 from ..domain.monitoring import RealtimeMonitor
 from ..domain.notification_templates import template_variables, text_context
 from ..domain.portfolio import AlertEvent
@@ -29,6 +31,7 @@ from .mysql_retention import (
     mysql_operational_compaction_tables,
     optimize_mysql_operational_tables,
 )
+from .mysql_minimal_retention import MySQLMinimalRetentionRepository
 from .notifications import queued_notifier_for_account, send_events
 from .ontology_graph_store import ontology_repository_from_settings
 from .service_factory import (
@@ -995,6 +998,21 @@ def run_mysql_operational_cleanup(
                     settings,
                     use_lock=True,
                 )
+                minimal_retention = MySQLMinimalRetentionService(
+                    MySQLMinimalRetentionRepository(connection),
+                    settings,
+                ).run_once()
+                result["minimalRetention"] = minimal_retention
+                result["deleted"] = int(result.get("deleted") or 0) + int(minimal_retention.get("deleted") or 0)
+                result["compacted"] = int(minimal_retention.get("compacted") or 0)
+                merged_tables = dict(result.get("tables") or {})
+                for table, count in dict(minimal_retention.get("tables") or {}).items():
+                    merged_tables[str(table)] = int(merged_tables.get(str(table)) or 0) + int(count or 0)
+                result["tables"] = merged_tables
+                policies = dict(result.get("policies") or {})
+                for name, count in dict(minimal_retention.get("policies") or {}).items():
+                    policies["minimal:" + str(name)] = int(count or 0)
+                result["policies"] = policies
                 result["compactionCandidates"] = mysql_operational_compaction_tables(result)
                 if optimize:
                     # Explicit maintenance runs while workers are paused; include the
@@ -1029,9 +1047,52 @@ def run_mysql_operational_cleanup(
             raise
 
 
+def run_mysql_minimal_retention(settings: Dict[str, object], apply: bool = False) -> Dict[str, object]:
+    """Run a one-off MySQL-only retention pass; preview is the default CLI mode."""
+
+    configured = dict(settings or {})
+    configured["_skipOperationalHistoryRetention"] = True
+    configured["mysqlOperationTimeoutSeconds"] = str(max(60, mysql_operation_timeout_seconds(configured)))
+    connection_retries = 0
+    deadlock_retries = 0
+    while True:
+        try:
+            store = MySQLOperationalConnection(configured)
+            with store.connect() as connection:
+                result = MySQLMinimalRetentionService(
+                    MySQLMinimalRetentionRepository(connection),
+                    configured,
+                ).run_once(
+                    force=True,
+                    apply=apply,
+                    preview=not apply,
+                    preview_before_apply=apply,
+                )
+            if connection_retries:
+                result["transientConnectionRetryCount"] = connection_retries
+            if deadlock_retries:
+                result["deadlockRetryCount"] = deadlock_retries
+            return result
+        except Exception as error:
+            if mysql_is_deadlock(error) and deadlock_retries < mysql_deadlock_retry_count(configured):
+                deadlock_retries += 1
+                delay_ms = mysql_deadlock_retry_delay_milliseconds(configured, deadlock_retries)
+                time.sleep(delay_ms / 1000.0)
+                continue
+            if mysql_is_connection_lost(error) and connection_retries < 1:
+                connection_retries += 1
+                time.sleep(0.25)
+                continue
+            raise
+
+
 def maintenance_command(args) -> int:
     """Run storage maintenance outside the realtime inference path."""
     settings = dict(runtime_settings())
+    if args.maintenance_action == "mysql-minimal-retention":
+        result = run_mysql_minimal_retention(settings, apply=bool(args.apply))
+        print(json.dumps(result, ensure_ascii=False))
+        return 0 if str(result.get("status") or "ok") != "error" else 1
     if args.maintenance_action == "mysql-cleanup":
         result = run_mysql_operational_cleanup(
             settings,
@@ -1047,6 +1108,9 @@ def maintenance_command(args) -> int:
             or settings.get("operationalHistoryRetentionCheckIntervalSeconds")
             or 300
         )
+        minimal_policy = mysql_minimal_retention_policy(settings)
+        if minimal_policy.enabled:
+            configured_interval = min(configured_interval, minimal_policy.interval_seconds)
 
         reasoning_queue_probe = build_ontology_reasoning_queue_probe(settings)
 
@@ -1554,6 +1618,11 @@ def build_parser() -> argparse.ArgumentParser:
     mysql_cleanup = maintenance_actions.add_parser("mysql-cleanup")
     mysql_cleanup.add_argument("--optimize", action="store_true")
     mysql_cleanup.add_argument("--drop-ephemeral-databases", action="store_true")
+    mysql_minimal_retention = maintenance_actions.add_parser(
+        "mysql-minimal-retention",
+        help="Preview bounded MySQL data retention, or apply it explicitly with --apply",
+    )
+    mysql_minimal_retention.add_argument("--apply", action="store_true")
     mysql_retention_watch = maintenance_actions.add_parser("watch")
     mysql_retention_watch.add_argument("--interval", default="")
     maintenance.set_defaults(func=maintenance_command)

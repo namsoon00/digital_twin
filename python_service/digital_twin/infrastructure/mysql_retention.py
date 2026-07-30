@@ -59,6 +59,7 @@ MYSQL_OPERATIONAL_COMPACTION_TABLES = frozenset({
     "ontology_inference_detail_outbox",
     "investment_decision_episodes",
     "investment_decision_outcomes",
+    "mysql_retention_runs",
     "investment_hypothesis_lifecycle_states",
     "investment_hypothesis_lifecycle_events",
     "investment_research_runs",
@@ -79,8 +80,6 @@ class MySQLRetentionTarget:
 MYSQL_OPERATIONAL_HISTORY_RETENTION_TARGETS = (
     MySQLRetentionTarget("domain_events", "occurred_at"),
     MySQLRetentionTarget("monitor_snapshot_history", "generated_at"),
-    MySQLRetentionTarget("notification_jobs", "created_at"),
-    MySQLRetentionTarget("model_review_jobs", "created_at"),
     MySQLRetentionTarget("monitor_sent", "sent_at"),
     MySQLRetentionTarget("ontology_ai_opinion_samples", "created_at"),
 )
@@ -371,6 +370,34 @@ def _delete_suppressed_notification_rows(connection, cutoff_iso: str, batch_size
         " AND `created_at` < "
         + cutoff_sql
         + " ORDER BY `created_at`, `job_id` LIMIT %s"
+    )
+    return _delete_one_batch(connection, sql, (cutoff_iso, batch_size))
+
+
+def _delete_terminal_notification_rows(connection, cutoff_iso: str, batch_size: int) -> int:
+    """Delete only delivered legacy/current notifications, never a retryable job."""
+
+    cutoff_sql = "CAST(%s AS CHAR CHARACTER SET utf8mb4) COLLATE utf8mb4_unicode_ci"
+    sql = (
+        "DELETE FROM `notification_jobs`"
+        " WHERE `status` IN ('done', 'sent')"
+        " AND `created_at` < "
+        + cutoff_sql
+        + " ORDER BY `created_at`, `job_id` LIMIT %s"
+    )
+    return _delete_one_batch(connection, sql, (cutoff_iso, batch_size))
+
+
+def _delete_completed_model_review_rows(connection, cutoff_iso: str, batch_size: int) -> int:
+    """Keep failed reviews retryable; only completed review output is history."""
+
+    cutoff_sql = "CAST(%s AS CHAR CHARACTER SET utf8mb4) COLLATE utf8mb4_unicode_ci"
+    sql = (
+        "DELETE FROM `model_review_jobs`"
+        " WHERE `status` = 'done'"
+        " AND `updated_at` < "
+        + cutoff_sql
+        + " ORDER BY `updated_at`, `job_id` LIMIT %s"
     )
     return _delete_one_batch(connection, sql, (cutoff_iso, batch_size))
 
@@ -688,6 +715,14 @@ def apply_mysql_operational_history_retention(
             deleted = _delete_stale_rows(connection, target, cutoff_iso, batch_size)
             deleted_by_table[target.table] = deleted
             deleted_by_policy["time:" + target.table] = deleted
+
+        terminal_notification_deleted = _delete_terminal_notification_rows(connection, cutoff_iso, batch_size)
+        deleted_by_table["notification_jobs"] = terminal_notification_deleted
+        deleted_by_policy["terminal:notification_jobs"] = terminal_notification_deleted
+
+        completed_model_review_deleted = _delete_completed_model_review_rows(connection, cutoff_iso, batch_size)
+        deleted_by_table["model_review_jobs"] = completed_model_review_deleted
+        deleted_by_policy["completed:model_review_jobs"] = completed_model_review_deleted
 
         snapshot_deleted = _delete_snapshot_history_over_keep_count(
             connection,

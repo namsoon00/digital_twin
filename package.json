@@ -70,6 +70,7 @@
     "python:service:supervise": "python3 python_service/monitor_service.py supervise",
     "python:service:supervisor:install": "python3 python_service/monitor_service.py supervisor-install",
     "python:service:supervisor:uninstall": "python3 python_service/monitor_service.py supervisor-uninstall",
+    "python:mysql-retention:preview": "python3 python_service/service.py maintenance mysql-minimal-retention",
     "python:test": "node scripts/run-python-tests.js core",
     "python:test:full": "node scripts/run-python-tests.js full",
     "share": "node scripts/share-local.js",

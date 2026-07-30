@@ -30,6 +30,15 @@ def _sha(value: object) -> str:
     return hashlib.sha256(str(value or "").encode("utf-8")).hexdigest()
 
 
+def _job_ids(rows) -> List[str]:
+    values = []
+    for row in rows or []:
+        job_id = _clean(row.get("job_id") if isinstance(row, dict) else row[0])
+        if job_id:
+            values.append(job_id)
+    return values
+
+
 def _timestamp_after(seconds: int) -> str:
     return (datetime.now(timezone.utc) + timedelta(seconds=max(0, int(seconds or 0)))).isoformat().replace("+00:00", "Z")
 
@@ -412,7 +421,7 @@ class MySQLOntologyWorldProjectionOutboxStore(MySQLOperationalConnection):
             )
         return int(getattr(cursor, "rowcount", 0) or 0)
 
-    def purge_oversized_superseded(self, limit: int = 2) -> int:
+    def purge_oversized_superseded(self, limit: int = 1) -> int:
         """Remove legacy raw-account packets once a bounded replacement exists.
 
         Superseded packets over the current ceiling were produced by the old
@@ -420,33 +429,57 @@ class MySQLOntologyWorldProjectionOutboxStore(MySQLOperationalConnection):
         material and may contain account-private facts, so retaining them for
         normal outbox history is the wrong default.
         """
-        bounded = max(1, min(2, int(limit or 2)))
+        bounded = max(1, min(1, int(limit or 1)))
+
         def delete(connection):
-            cursor = connection.execute(
+            rows = connection.execute(
                 """
-                DELETE FROM ontology_world_projection_outbox
+                SELECT job_id FROM ontology_world_projection_outbox
                 WHERE status = %s AND LENGTH(payload_json) > %s
                 ORDER BY completed_at ASC, job_id ASC LIMIT %s
                 """,
                 (SUPERSEDED, self.max_payload_bytes(), bounded),
+            ).fetchall()
+            job_ids = _job_ids(rows)
+            if not job_ids:
+                return 0
+            cursor = connection.execute(
+                """
+                DELETE FROM ontology_world_projection_outbox
+                WHERE job_id IN (""" + ", ".join(["%s"] * len(job_ids)) + """ )
+                  AND status = %s AND LENGTH(payload_json) > %s
+                """,
+                tuple(job_ids) + (SUPERSEDED, self.max_payload_bytes()),
             )
             return int(getattr(cursor, "rowcount", 0) or 0)
 
         return int(self.transaction_with_deadlock_retry("world-projection-purge-oversized", delete) or 0)
 
-    def prune_completed(self, retention_hours: int = 24, limit: int = 2) -> int:
+    def prune_completed(self, retention_hours: int = 24, limit: int = 1) -> int:
         """Retain audit results long enough for operations without unbounded growth."""
         bounded_hours = max(1, min(24, int(retention_hours or 24)))
-        bounded_limit = max(1, min(2, int(limit or 2)))
+        bounded_limit = max(1, min(1, int(limit or 1)))
         cutoff = (datetime.now(timezone.utc) - timedelta(hours=bounded_hours)).isoformat().replace("+00:00", "Z")
+
         def delete(connection):
-            cursor = connection.execute(
+            rows = connection.execute(
                 """
-                DELETE FROM ontology_world_projection_outbox
+                SELECT job_id FROM ontology_world_projection_outbox
                 WHERE status IN (%s, %s) AND completed_at != '' AND completed_at < %s
                 ORDER BY completed_at ASC, job_id ASC LIMIT %s
                 """,
                 (COMPLETED, SUPERSEDED, cutoff, bounded_limit),
+            ).fetchall()
+            job_ids = _job_ids(rows)
+            if not job_ids:
+                return 0
+            cursor = connection.execute(
+                """
+                DELETE FROM ontology_world_projection_outbox
+                WHERE job_id IN (""" + ", ".join(["%s"] * len(job_ids)) + """ )
+                  AND status IN (%s, %s) AND completed_at != '' AND completed_at < %s
+                """,
+                tuple(job_ids) + (COMPLETED, SUPERSEDED, cutoff),
             )
             return int(getattr(cursor, "rowcount", 0) or 0)
 

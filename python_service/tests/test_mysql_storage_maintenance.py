@@ -16,6 +16,7 @@ from digital_twin.infrastructure.mysql_retention import (
 )
 from digital_twin.infrastructure.mysql_monitoring import mysql_monitoring_schema_bootstrap_enabled
 from digital_twin.infrastructure.mysql_operational_connection import (
+    MySQLOperationalConnection,
     mysql_is_connection_lost,
     mysql_operational_constructor_retention_enabled,
     mysql_operational_schema_bootstrap_enabled,
@@ -53,6 +54,10 @@ class FullBatchRecordingConnection(RecordingConnection):
         rendered = str(sql)
         values = tuple(params or ())
         self.calls.append((rendered, values))
+        if "SELECT `job_id` FROM `ontology_world_projection_outbox`" in rendered:
+            return Cursor(rows=[{"job_id": "world-projection-old"}])
+        if "SELECT `job_id` FROM `ontology_inference_detail_outbox`" in rendered:
+            return Cursor(rows=[{"job_id": "inference-detail-old"}])
         key = (rendered, values)
         self.executions[key] = self.executions.get(key, 0) + 1
         return Cursor(rowcount=self.rowcount)
@@ -140,16 +145,20 @@ class MySQLStorageMaintenanceTests(unittest.TestCase):
         )
 
         self.assertEqual(50, result["batchSize"])
-        self.assertEqual(2, result["outboxBatchSize"])
+        self.assertEqual(1, result["outboxBatchSize"])
         self.assertEqual("bounded-single-batch-per-policy", result["mode"])
         self.assertTrue(connection.executions)
         self.assertTrue(all(count == 1 for count in connection.executions.values()))
-        outbox_params = [
+        outbox_candidate_params = [
             params
             for sql, params in connection.calls
-            if "ontology_world_projection_outbox" in sql and "DELETE" in sql
+            if "SELECT `job_id` FROM `ontology_world_projection_outbox`" in sql
         ]
-        self.assertEqual([2], [params[-1] for params in outbox_params])
+        self.assertEqual([1], [params[-1] for params in outbox_candidate_params])
+        self.assertTrue(any(
+            "DELETE FROM `ontology_world_projection_outbox` WHERE `job_id` IN" in sql
+            for sql, _params in connection.calls
+        ))
 
     def test_large_domain_event_retention_selects_then_deletes_small_primary_key_set(self):
         connection = CandidateRecordingConnection()
@@ -224,7 +233,30 @@ class MySQLStorageMaintenanceTests(unittest.TestCase):
             call.args[0]["_skipOperationalSchemaBootstrap"]
             for call in stores.call_args_list
         ))
+        self.assertTrue(all(
+            int(call.args[0]["mysqlOperationTimeoutSeconds"]) >= 60
+            for call in stores.call_args_list
+        ))
         sleep.assert_called_once_with(0.25)
+
+    def test_connection_pool_key_keeps_maintenance_timeout_separate(self):
+        store = object.__new__(MySQLOperationalConnection)
+        store.runtime_settings = {"mysqlOperationTimeoutSeconds": "60"}
+        store.mysql_config = {
+            "host": "127.0.0.1",
+            "port": 3306,
+            "user": "orbit_alpha_app",
+            "database": "orbit_alpha",
+            "unix_socket": "",
+        }
+
+        with patch(
+            "digital_twin.infrastructure.mysql_operational_connection.pooled_mysql_connection",
+            return_value=(object(), lambda _connection: None),
+        ) as pooled:
+            store.pooled_connection()
+
+        self.assertEqual(60, pooled.call_args[0][0][-1])
 
     def test_operational_cleanup_retries_deadlock_with_configured_backoff(self):
         class Store:

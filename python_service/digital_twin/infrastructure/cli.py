@@ -20,6 +20,7 @@ from .mysql_operational_connection import (
     mysql_deadlock_retry_delay_milliseconds,
     mysql_is_connection_lost,
     mysql_is_deadlock,
+    mysql_operation_timeout_seconds,
 )
 from .mysql_retention import (
     MYSQL_OPERATIONAL_COMPACTION_TABLES,
@@ -957,6 +958,10 @@ def run_mysql_operational_cleanup(
     # low-priority worker must not repeat table/index DDL checks on every
     # separate process because that work can exceed the normal query timeout.
     settings["_skipOperationalSchemaBootstrap"] = True
+    # A completed world-projection row can still carry a multi-megabyte result.
+    # Keep this local to the maintenance worker and isolate its pool key so a
+    # previously opened 10-second realtime connection cannot be reused here.
+    settings["mysqlOperationTimeoutSeconds"] = str(max(60, mysql_operation_timeout_seconds(settings)))
     # A connection can be dropped after the server-side read timeout.  A
     # normal pass is idempotent and uses a fresh pooled connection on retry;
     # explicit compaction is intentionally excluded because it is operator-led.

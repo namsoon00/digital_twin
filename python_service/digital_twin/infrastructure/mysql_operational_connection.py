@@ -251,6 +251,7 @@ class MySQLOperationalConnection:
         return pymysql.connect(**kwargs)
 
     def pooled_connection(self, autocommit: bool = True):
+        timeout_seconds = mysql_operation_timeout_seconds(self.runtime_settings)
         key = (
             "orbit-alpha-operational",
             str(self.mysql_config.get("host") or ""),
@@ -258,6 +259,7 @@ class MySQLOperationalConnection:
             str(self.mysql_config.get("user") or ""),
             str(self.mysql_config.get("database") or ""),
             str(self.mysql_config.get("unix_socket") or ""),
+            timeout_seconds,
         )
         return pooled_mysql_connection(
             key,

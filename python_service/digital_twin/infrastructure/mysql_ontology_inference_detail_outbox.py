@@ -42,6 +42,15 @@ def _sha(value: object) -> str:
     return hashlib.sha256(str(value or "").encode("utf-8")).hexdigest()
 
 
+def _job_ids(rows) -> List[str]:
+    values = []
+    for row in rows or []:
+        job_id = _clean(row.get("job_id") if isinstance(row, dict) else row[0])
+        if job_id:
+            values.append(job_id)
+    return values
+
+
 def _timestamp_after(seconds: int) -> str:
     return (
         datetime.now(timezone.utc) + timedelta(seconds=max(0, int(seconds or 0)))
@@ -368,14 +377,26 @@ class MySQLOntologyInferenceDetailOutboxStore(MySQLOperationalConnection):
         cutoff = (
             datetime.now(timezone.utc) - timedelta(hours=bounded_hours)
         ).isoformat().replace("+00:00", "Z")
+
         def delete(connection):
-            cursor = connection.execute(
+            rows = connection.execute(
                 """
-                DELETE FROM ontology_inference_detail_outbox
+                SELECT job_id FROM ontology_inference_detail_outbox
                 WHERE status IN (%s, %s) AND completed_at != '' AND completed_at < %s
                 ORDER BY completed_at ASC, job_id ASC LIMIT %s
                 """,
                 (COMPLETED, SUPERSEDED, cutoff, bounded_limit),
+            ).fetchall()
+            job_ids = _job_ids(rows)
+            if not job_ids:
+                return 0
+            cursor = connection.execute(
+                """
+                DELETE FROM ontology_inference_detail_outbox
+                WHERE job_id IN (""" + ", ".join(["%s"] * len(job_ids)) + """ )
+                  AND status IN (%s, %s) AND completed_at != '' AND completed_at < %s
+                """,
+                tuple(job_ids) + (COMPLETED, SUPERSEDED, cutoff),
             )
             return int(getattr(cursor, "rowcount", 0) or 0)
 

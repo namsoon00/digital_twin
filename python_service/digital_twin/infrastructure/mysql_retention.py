@@ -335,6 +335,16 @@ def _delete_one_batch(connection, sql: str, params=()) -> int:
     return int(getattr(cursor, "rowcount", 0) or 0)
 
 
+def _row_identifiers(rows, key: str) -> List[str]:
+    identifiers = []
+    for row in rows or []:
+        value = row.get(key) if isinstance(row, dict) else row[0]
+        identifier = str(value or "").strip()
+        if identifier:
+            identifiers.append(identifier)
+    return identifiers
+
+
 def _delete_stale_rows(connection, target: MySQLRetentionTarget, cutoff_iso: str, batch_size: int) -> int:
     table = quote_identifier(target.table)
     time_column = quote_identifier(target.time_column)
@@ -472,12 +482,7 @@ def _delete_large_domain_events_over_keep_count(
         """
     )
     rows = _execute(connection, candidate_sql, tuple(event_names) + (keep_count, batch_size)).fetchall()
-    event_ids = []
-    for row in rows or []:
-        value = row.get("event_id") if isinstance(row, dict) else row[0]
-        event_id = str(value or "").strip()
-        if event_id:
-            event_ids.append(event_id)
+    event_ids = _row_identifiers(rows, "event_id")
     if not event_ids:
         return 0
     delete_sql = (
@@ -530,24 +535,44 @@ def _delete_projection_runs_over_keep_count(connection, keep_count: int, batch_s
 
 def _delete_completed_world_projection_outbox_rows(connection, cutoff_iso: str, batch_size: int) -> int:
     cutoff_sql = "CAST(%s AS CHAR CHARACTER SET utf8mb4) COLLATE utf8mb4_unicode_ci"
-    sql = (
-        "DELETE FROM `ontology_world_projection_outbox`"
+    candidate_sql = (
+        "SELECT `job_id` FROM `ontology_world_projection_outbox`"
         " WHERE `status` IN ('completed', 'superseded')"
         " AND `completed_at` <> '' AND `completed_at` < " + cutoff_sql
         + " ORDER BY `completed_at`, `job_id` LIMIT %s"
     )
-    return _delete_one_batch(connection, sql, (cutoff_iso, batch_size))
+    rows = _execute(connection, candidate_sql, (cutoff_iso, batch_size)).fetchall()
+    job_ids = _row_identifiers(rows, "job_id")
+    if not job_ids:
+        return 0
+    sql = (
+        "DELETE FROM `ontology_world_projection_outbox` WHERE `job_id` IN ("
+        + ", ".join(["%s"] * len(job_ids))
+        + ") AND `status` IN ('completed', 'superseded')"
+        + " AND `completed_at` <> '' AND `completed_at` < " + cutoff_sql
+    )
+    return _delete_one_batch(connection, sql, tuple(job_ids) + (cutoff_iso,))
 
 
 def _delete_completed_inference_detail_outbox_rows(connection, cutoff_iso: str, batch_size: int) -> int:
     cutoff_sql = "CAST(%s AS CHAR CHARACTER SET utf8mb4) COLLATE utf8mb4_unicode_ci"
-    sql = (
-        "DELETE FROM `ontology_inference_detail_outbox`"
+    candidate_sql = (
+        "SELECT `job_id` FROM `ontology_inference_detail_outbox`"
         " WHERE `status` IN ('completed', 'superseded')"
         " AND `completed_at` <> '' AND `completed_at` < " + cutoff_sql
         + " ORDER BY `completed_at`, `job_id` LIMIT %s"
     )
-    return _delete_one_batch(connection, sql, (cutoff_iso, batch_size))
+    rows = _execute(connection, candidate_sql, (cutoff_iso, batch_size)).fetchall()
+    job_ids = _row_identifiers(rows, "job_id")
+    if not job_ids:
+        return 0
+    sql = (
+        "DELETE FROM `ontology_inference_detail_outbox` WHERE `job_id` IN ("
+        + ", ".join(["%s"] * len(job_ids))
+        + ") AND `status` IN ('completed', 'superseded')"
+        + " AND `completed_at` <> '' AND `completed_at` < " + cutoff_sql
+    )
+    return _delete_one_batch(connection, sql, tuple(job_ids) + (cutoff_iso,))
 
 
 def mysql_operational_compaction_tables(retention_result: Mapping[str, object] = None) -> List[str]:
@@ -643,10 +668,9 @@ def apply_mysql_operational_history_retention(
     time_series_cutoffs = market_time_series_retention_cutoffs(configured, now=now)
     lifecycle_event_cutoff_iso = hypothesis_lifecycle_event_retention_cutoff(configured, now=now)
     batch_size = operational_history_retention_batch_size(configured)
-    # World-projection payloads are multi-megabyte ABox packets. Two rows are
-    # enough to make steady progress while keeping one delete transaction
-    # below the normal read timeout and redo-log stall threshold.
-    outbox_batch_size = min(batch_size, 2)
+    # World-projection payloads are multi-megabyte ABox packets. Delete one at
+    # a time so the low-priority transaction does not monopolize the redo log.
+    outbox_batch_size = min(batch_size, 1)
     projection_run_keep_count = operational_projection_run_keep_count(configured)
     world_projection_outbox_retention_hours = operational_world_projection_outbox_retention_hours(configured)
     inference_detail_outbox_retention_hours = operational_inference_detail_outbox_retention_hours(configured)

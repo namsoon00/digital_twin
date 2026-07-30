@@ -42,10 +42,10 @@ class OntologyRuleboxPrewarmRunner:
         self.reasoning_queue_probe = reasoning_queue_probe
 
     def enabled(self) -> bool:
-        # Cold TypeDB schema compilation can continue consuming the server
-        # after its client timed out. Keep the optimisation opt-in until the
-        # local compiler has demonstrated that it can finish within its bound.
-        value = str(self.settings.get("ontologyRuleboxPrewarmEnabled") or "0").strip().lower()
+        # A live inference must never be the process that discovers a cold
+        # RuleBox function.  The dedicated worker owns that compilation and
+        # the reasoning runner waits for its durable receipt instead.
+        value = str(self.settings.get("ontologyRuleboxPrewarmEnabled") or "1").strip().lower()
         return value not in DISABLED_VALUES
 
     def defer_when_reasoning_pending(self) -> bool:
@@ -147,6 +147,29 @@ class OntologyRuleboxPrewarmRunner:
             }
         return result
 
+    def prewarm_readiness(self) -> Dict[str, object]:
+        """Read the durable prewarm receipt without beginning compilation."""
+        reader = getattr(self.ontology_repository, "schema_function_prewarm_status", None)
+        if not callable(reader):
+            return {
+                "status": "unsupported",
+                "functionsReady": False,
+                "reason": "Ontology repository has no TypeDB schema-function prewarm capability.",
+            }
+        try:
+            payload = reader()
+            return dict(payload or {}) if isinstance(payload, dict) else {
+                "status": "error",
+                "functionsReady": False,
+                "reason": "TypeDB schema-function prewarm returned an invalid readiness payload.",
+            }
+        except Exception as error:  # noqa: BLE001 - the bounded worker can retry its own read.
+            return {
+                "status": "error",
+                "functionsReady": False,
+                "reason": str(error)[:220],
+            }
+
     def run_once(self, force: bool = False) -> Dict[str, object]:
         if not self.enabled():
             return {
@@ -158,22 +181,31 @@ class OntologyRuleboxPrewarmRunner:
             }
         queue = self.reasoning_queue_state()
         pending = self.pending_reasoning_count(queue)
-        if self.defer_when_reasoning_pending() and pending:
-            return {
-                "status": "deferred-reasoning-pending",
-                "configured": True,
-                "functionsReady": False,
-                "pendingRuleCount": 0,
-                "reasoningPendingCount": pending,
-                "reasoningQueue": queue,
-                "reason": (
-                    "Live ontology reasoning is pending; RuleBox schema compilation is deferred "
-                    "so it cannot delay an alert."
-                ),
-                "recommendedRetryAfterSeconds": self.interval_seconds(),
-                "durationMs": 0,
-            }
-        if self.defer_when_reasoning_pending() and str(queue.get("status") or "") == "error":
+        readiness = {}
+        # When receipts are already ready, stay out of a live queue exactly as
+        # before.  When they are missing, however, deferring this worker makes
+        # the first inference fall back to slow direct TypeQL reads.  Give the
+        # compiler one exclusive turn while the reasoning runner is gated on
+        # the same receipt; no live native inference competes with it.
+        if self.defer_when_reasoning_pending() and pending and not force:
+            readiness = self.prewarm_readiness()
+            if bool(readiness.get("functionsReady")):
+                return {
+                    "status": "deferred-reasoning-pending",
+                    "configured": True,
+                    "functionsReady": True,
+                    "pendingRuleCount": 0,
+                    "reasoningPendingCount": pending,
+                    "reasoningQueue": queue,
+                    "prewarmReadiness": readiness,
+                    "reason": (
+                        "Live ontology reasoning is pending and durable RuleBox function receipts are already ready; "
+                        "the prewarm worker yields to the alert path."
+                    ),
+                    "recommendedRetryAfterSeconds": self.interval_seconds(),
+                    "durationMs": 0,
+                }
+        if self.defer_when_reasoning_pending() and str(queue.get("status") or "") == "error" and not force:
             return {
                 "status": "deferred-reasoning-queue-probe",
                 "configured": True,
@@ -209,4 +241,7 @@ class OntologyRuleboxPrewarmRunner:
         result.setdefault("durationMs", int((time.perf_counter() - started_at) * 1000))
         result.setdefault("background", True)
         result.setdefault("liveInferenceDeploymentAvoided", True)
+        if readiness:
+            result["queuePriority"] = True
+            result["prewarmReadinessBeforeRun"] = readiness
         return result

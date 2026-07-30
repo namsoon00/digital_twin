@@ -913,6 +913,11 @@ def build_ontology_reasoning_runner(settings=None, event_publisher=None) -> Onto
         ),
         projection_lease_recovery=projection_lease_recovery,
         projection_coordinator_lease_recovery=projection_coordinator_lease_recovery,
+        rulebox_prewarm_probe=(
+            getattr(ontology_repository, "schema_function_prewarm_status")
+            if callable(getattr(ontology_repository, "schema_function_prewarm_status", None))
+            else None
+        ),
     )
 
 

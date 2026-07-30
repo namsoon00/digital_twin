@@ -487,6 +487,26 @@ class OntologyReasoningMailboxTests(unittest.TestCase):
         self.assertEqual(0, result["mailbox"]["pendingEntryCount"])
         self.assertEqual("ok", result["executionTelemetry"]["status"])
 
+    def test_waits_for_rulebox_prewarm_before_claiming_a_native_reasoning_request(self):
+        event = realtime_request("prewarm-gate", ["AAPL"], "2026-07-24T00:00:00Z")
+        runner = self.build_runner(
+            [event],
+            settings={"ontologyRuleboxPrewarmEnabled": "1"},
+        )
+        runner.rulebox_prewarm_probe = lambda: {
+            "status": "provisioning",
+            "functionsReady": False,
+            "pendingRuleCount": 3,
+            "reason": "RuleBox schema functions are being prepared.",
+        }
+
+        result = runner.run_once()
+
+        self.assertEqual("deferred-rulebox-prewarm", result["status"])
+        self.assertEqual([], self.monitor.calls)
+        self.assertEqual(15, result["retryAfterSeconds"])
+        self.assertFalse(result["ruleboxPrewarm"]["ready"])
+
     def test_post_monitor_checkpoint_finishes_without_rebuilding_typedb(self):
         event = realtime_request("resume-current", ["AAPL"], "2026-07-24T00:00:00Z")
         runner = self.build_runner([event])

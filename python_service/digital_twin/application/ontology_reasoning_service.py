@@ -588,6 +588,7 @@ class OntologyReasoningRunner:
         projection_coordinator_probe: Callable = None,
         projection_lease_recovery: Callable = None,
         projection_coordinator_lease_recovery: Callable = None,
+        rulebox_prewarm_probe: Callable = None,
     ):
         self.event_reader = event_reader
         self.cursor_store = cursor_store
@@ -606,6 +607,7 @@ class OntologyReasoningRunner:
         self.projection_coordinator_probe = projection_coordinator_probe
         self.projection_lease_recovery = projection_lease_recovery
         self.projection_coordinator_lease_recovery = projection_coordinator_lease_recovery
+        self.rulebox_prewarm_probe = rulebox_prewarm_probe
 
     def enabled(self) -> bool:
         return truthy(self.settings.get("ontologyReasoningEnabled"), True)
@@ -627,6 +629,65 @@ class OntologyReasoningRunner:
         if configured is None:
             configured = self.settings.get("typedbNativeRuleExecutionEnabled")
         return truthy(configured, False)
+
+    def rulebox_prewarm_required(self) -> bool:
+        """Require compiled RuleBox receipts before a live native run.
+
+        The opt-out remains explicit for installations that deliberately run
+        without the TypeDB native evaluator.  With native execution enabled,
+        this avoids a first queued alert becoming the schema compiler.
+        """
+        return self.native_typedb_rule_execution_enabled() and truthy(
+            self.settings.get("ontologyRuleboxPrewarmEnabled"),
+            True,
+        )
+
+    def rulebox_prewarm_retry_seconds(self) -> int:
+        return int_setting(
+            self.settings,
+            "ontologyRuleboxPrewarmIntervalSeconds",
+            15,
+            5,
+            300,
+        )
+
+    def rulebox_prewarm_readiness(self) -> Dict[str, object]:
+        if not self.rulebox_prewarm_required():
+            return {
+                "ready": True,
+                "status": "disabled",
+                "reason": "RuleBox prewarm gate is disabled for this runtime.",
+            }
+        probe = getattr(self, "rulebox_prewarm_probe", None)
+        if not callable(probe):
+            # Compatibility repositories do not expose generated functions.
+            # Do not turn that absence into a permanent scheduler outage.
+            return {
+                "ready": True,
+                "status": "unsupported",
+                "reason": "Ontology repository has no RuleBox prewarm readiness probe.",
+            }
+        try:
+            payload = probe()
+        except Exception as error:  # noqa: BLE001 - fail closed before a live schema fallback.
+            return {
+                "ready": False,
+                "status": "error",
+                "functionsReady": False,
+                "retryAfterSeconds": self.rulebox_prewarm_retry_seconds(),
+                "reason": "TypeDB RuleBox prewarm readiness lookup failed: " + str(error)[:180],
+            }
+        result = dict(payload or {}) if isinstance(payload, dict) else {
+            "status": "error",
+            "functionsReady": False,
+            "reason": "TypeDB RuleBox prewarm readiness returned an invalid payload.",
+        }
+        ready = bool(result.get("functionsReady")) or str(result.get("status") or "") == "ok"
+        return {
+            **result,
+            "ready": ready,
+            "retryAfterSeconds": self.rulebox_prewarm_retry_seconds(),
+        }
 
     def native_typedb_target_symbol_limit(self) -> int:
         """Bound schema-function work without reducing the complete ABox."""
@@ -4304,6 +4365,24 @@ class OntologyReasoningRunner:
                 "retryAfterSeconds": 60,
                 "deferredReason": str(storage_guard.get("reason") or "TypeDB 저장소 여유 공간이 부족해 추론을 보류합니다."),
                 "storageGuard": storage_guard,
+                "coalescedEventCount": len(durable_superseded_ids),
+                **queue_metadata,
+            }
+        rulebox_prewarm = self.rulebox_prewarm_readiness()
+        if not rulebox_prewarm.get("ready"):
+            return {
+                "status": "deferred-rulebox-prewarm",
+                "processedCount": 0,
+                "alertCount": 0,
+                "retryAfterSeconds": int(
+                    rulebox_prewarm.get("retryAfterSeconds")
+                    or self.rulebox_prewarm_retry_seconds()
+                ),
+                "deferredReason": (
+                    "TypeDB RuleBox 함수 사전 준비가 완료될 때까지 네이티브 추론을 시작하지 않습니다. "
+                    + str(rulebox_prewarm.get("reason") or "")[:180]
+                ).strip(),
+                "ruleboxPrewarm": rulebox_prewarm,
                 "coalescedEventCount": len(durable_superseded_ids),
                 **queue_metadata,
             }

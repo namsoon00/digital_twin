@@ -1295,7 +1295,7 @@ def runtime_settings(fast_operational_read: bool = False) -> Dict[str, str]:
         "ontologyRuleboxPrewarmEnabled": value(
             "ontologyRuleboxPrewarmEnabled",
             "ONTOLOGY_RULEBOX_PREWARM_ENABLED",
-            "0",
+            "1",
         ),
         "ontologyRuleboxPrewarmDeferWhenReasoningPending": value(
             "ontologyRuleboxPrewarmDeferWhenReasoningPending",
@@ -1305,12 +1305,12 @@ def runtime_settings(fast_operational_read: bool = False) -> Dict[str, str]:
         "ontologyRuleboxPrewarmIntervalSeconds": value(
         "ontologyRuleboxPrewarmIntervalSeconds",
         "ONTOLOGY_RULEBOX_PREWARM_INTERVAL_SECONDS",
-        "60",
+        "15",
         ),
         "ontologyRuleboxPrewarmExecutionTimeoutSeconds": value(
             "ontologyRuleboxPrewarmExecutionTimeoutSeconds",
             "ONTOLOGY_RULEBOX_PREWARM_EXECUTION_TIMEOUT_SECONDS",
-            "180",
+            "600",
         ),
         "ontologyRuleboxPrewarmExecutionTimeoutGraceSeconds": value(
             "ontologyRuleboxPrewarmExecutionTimeoutGraceSeconds",

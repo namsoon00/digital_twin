@@ -66,6 +66,24 @@ class OntologyRuleboxPrewarmRunnerTests(unittest.TestCase):
         self.assertEqual(4, result["reasoningPendingCount"])
         self.assertEqual([], repository.calls)
 
+    def test_prioritizes_missing_function_compilation_before_a_pending_live_queue(self):
+        repository = FakeRepository({
+            "status": "provisioning",
+            "functionsReady": False,
+            "pendingRuleCount": 3,
+        })
+        runner = OntologyRuleboxPrewarmRunner(
+            repository,
+            settings={"ontologyRuleboxPrewarmEnabled": "1"},
+            reasoning_queue_probe=lambda: {"status": "ok", "effectivePendingCount": 4},
+        )
+
+        result = runner.run_once()
+
+        self.assertEqual("provisioning", result["status"])
+        self.assertTrue(result["queuePriority"])
+        self.assertEqual([False], repository.calls)
+
     def test_status_reports_isolation_and_current_prewarm_state(self):
         repository = FakeRepository({"status": "ok", "functionsReady": True})
         runner = OntologyRuleboxPrewarmRunner(

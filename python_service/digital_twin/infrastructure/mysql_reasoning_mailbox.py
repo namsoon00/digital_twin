@@ -666,7 +666,7 @@ class MySQLOntologyReasoningMailboxStore(MySQLOperationalConnection):
                         result["blocked"].append({"mailboxKey": key, "sourceEventId": event_id, "reason": "newer-source"})
                         continue
                     work = connection.execute(
-                        "SELECT source_event_id, work_state, lease_owner, lease_until, not_before_at, last_stage, checkpoint_json FROM ontology_reasoning_work_items "
+                        "SELECT source_event_id, work_state, lease_owner, lease_until, not_before_at, attempt_count, last_stage, checkpoint_json FROM ontology_reasoning_work_items "
                         "WHERE mailbox_key = %s FOR UPDATE",
                         (key,),
                     ).fetchone()
@@ -724,7 +724,15 @@ class MySQLOntologyReasoningMailboxStore(MySQLOperationalConnection):
                             stamp, stamp,
                         ),
                     )
-                    result["claimed"].append({"mailboxKey": key, "sourceEventId": event_id})
+                    result["claimed"].append({
+                        "mailboxKey": key,
+                        "sourceEventId": event_id,
+                        # Expose the post-claim count to the application
+                        # coordinator. It uses this only for bounded retry
+                        # scheduling; latest-state ownership remains the
+                        # mailbox key/source revision pair above.
+                        "attemptCount": max(1, int((work or {}).get("attempt_count") or 0) + 1),
+                    })
                     if resumed_from_verified_inference:
                         result["resumed"].append({
                             "mailboxKey": key,

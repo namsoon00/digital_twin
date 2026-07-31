@@ -4,9 +4,11 @@ The active RuleBox is an investment-policy contract. Its generated TypeDB
 functions are a compiled implementation detail, so compilation belongs to a
 separate bounded worker and must never be started by a live alert inference.
 When a receipt is cold, the live path can use its bounded direct-TypeQL
-fallback.  Schema commits are deliberately kept out of a live queue: TypeDB
-can continue compiling a commit after a client deadline, so forcing a compiler
-turn into an aged backlog makes the queue worse rather than recovering it.
+fallback.  Schema commits are normally kept out of a live queue because TypeDB
+can continue compiling after a client deadline.  An aged queue with no active
+inference lease is the exception: repeatedly starting the serial fallback
+cannot recover it, so the dedicated worker gets one coordinator-protected
+compiler turn.
 """
 
 from __future__ import annotations
@@ -62,14 +64,14 @@ class OntologyRuleboxPrewarmRunner:
         return value not in DISABLED_VALUES
 
     def backlog_recovery_enabled(self) -> bool:
-        """Expose aged-backlog compiler risk in diagnostics.
+        """Allow a safe compiler recovery for an aged, unleased queue.
 
-        This flag no longer authorizes a schema write while live work is
-        pending.  It remains a compatibility setting so operators can see
-        when a cold RuleBox coincides with an old durable queue.
+        The recovery never overlaps a running reasoning lease.  The shared
+        TypeDB projection coordinator still serializes the narrow hand-off if
+        a new reasoning worker races this decision.
         """
         value = str(
-            self.settings.get("ontologyRuleboxPrewarmBacklogRecoveryEnabled") or "0"
+            self.settings.get("ontologyRuleboxPrewarmBacklogRecoveryEnabled") or "1"
         ).strip().lower()
         return value not in DISABLED_VALUES
 
@@ -161,12 +163,33 @@ class OntologyRuleboxPrewarmRunner:
 
     @staticmethod
     def active_reasoning_count(payload: Dict[str, object]) -> int:
+        """Count only leases that can currently execute TypeDB work.
+
+        A ``retrying`` item has no lease and is deliberately held by
+        ``not_before_at``.  It is safe to prewarm in that interval because a
+        concurrent reasoning claim must acquire the same TypeDB projection
+        coordinator before it can begin native inference.
+        """
         values = dict(payload or {}) if isinstance(payload, dict) else {}
         mailbox = values.get("mailbox") if isinstance(values.get("mailbox"), dict) else {}
         candidates = [
             values.get("runningEntryCount"),
-            values.get("retryingEntryCount"),
             mailbox.get("runningEntryCount"),
+        ]
+        parsed = []
+        for candidate in candidates:
+            try:
+                parsed.append(max(0, int(float(candidate or 0))))
+            except (TypeError, ValueError):
+                continue
+        return max(parsed or [0])
+
+    @staticmethod
+    def retrying_reasoning_count(payload: Dict[str, object]) -> int:
+        values = dict(payload or {}) if isinstance(payload, dict) else {}
+        mailbox = values.get("mailbox") if isinstance(values.get("mailbox"), dict) else {}
+        candidates = [
+            values.get("retryingEntryCount"),
             mailbox.get("retryingEntryCount"),
         ]
         parsed = []
@@ -226,18 +249,22 @@ class OntologyRuleboxPrewarmRunner:
         minimum_pending = self.backlog_recovery_min_pending_entries()
         age_threshold = self.backlog_recovery_age_seconds()
         enabled = self.backlog_recovery_enabled()
+        active = self.active_reasoning_count(payload)
+        eligible = bool(
+            enabled
+            and waiting >= minimum_pending
+            and oldest_age >= age_threshold
+        )
         return {
             "enabled": enabled,
             "waitingEntryCount": waiting,
-            "activeEntryCount": self.active_reasoning_count(payload),
+            "activeEntryCount": active,
+            "retryingEntryCount": self.retrying_reasoning_count(payload),
             "oldestPendingAgeSeconds": oldest_age,
             "minimumPendingEntries": minimum_pending,
             "ageThresholdSeconds": age_threshold,
-            "eligible": bool(
-                enabled
-                and waiting >= minimum_pending
-                and oldest_age >= age_threshold
-            ),
+            "eligible": eligible,
+            "canRecover": bool(eligible and active == 0),
         }
 
     def interval_seconds(self) -> int:
@@ -357,16 +384,18 @@ class OntologyRuleboxPrewarmRunner:
         queue = self.reasoning_queue_state()
         pending = self.pending_reasoning_count(queue)
         recovery = self.backlog_recovery_state(queue)
+        recovery_granted = bool(recovery.get("canRecover")) and not force
         # A TypeDB schema commit can keep its compiler busy after a client has
-        # timed out or an isolated worker has exited.  Starting one while an
-        # alert queue is waiting therefore turns a bounded recovery task into
-        # a minutes-long server-wide stall.  Preserve the latest-state queue,
-        # let live inference use the direct TypeQL path, and run compilation
-        # only during a genuinely idle interval (or an explicit force pass).
+        # timed out or an isolated worker has exited.  Preserve the
+        # latest-state queue while an inference lease is active.  Once an aged
+        # queue has no active lease, however, direct TypeQL has already failed
+        # to drain it; give the coordinator-protected background compiler a
+        # short recovery turn instead of deferring forever.
         if (
             self.defer_when_reasoning_pending()
             and pending
             and not force
+            and not recovery_granted
         ):
             # Do not even read TypeDB deployment receipts here. A readiness
             # check opens RuleBox and receipt reads for both namespaces and
@@ -375,7 +404,7 @@ class OntologyRuleboxPrewarmRunner:
             # readiness will be checked only after the queue is quiet.
             return {
                 "status": (
-                    "deferred-aged-reasoning-backlog"
+                    "deferred-aged-reasoning-backlog-active"
                     if recovery.get("eligible")
                     else "deferred-reasoning-pending"
                 ),
@@ -388,8 +417,8 @@ class OntologyRuleboxPrewarmRunner:
                 "prewarmReadinessDeferred": True,
                 "reason": (
                     "Live ontology reasoning is pending; the RuleBox compiler does not open a TypeDB schema "
-                    "transaction. Any cold function receipt uses the bounded direct TypeQL fallback until the "
-                    "durable queue is empty."
+                    "transaction while an inference lease is active. Any cold function receipt uses the bounded "
+                    "direct TypeQL fallback until the active lease ends."
                 ),
                 "recommendedRetryAfterSeconds": self.interval_seconds(),
                 "durationMs": 0,
@@ -434,6 +463,9 @@ class OntologyRuleboxPrewarmRunner:
             result["queuePriority"] = True
             result["backlogRecovery"] = recovery
             result["reasoningPendingCount"] = pending
+            result["backlogRecoveryGranted"] = recovery_granted
+            if recovery_granted:
+                result["recoveryMode"] = "aged-backlog-no-active-inference-lease"
             if str(result.get("status") or "") in {
                 "provisioning",
                 "deferred-projection-coordinator",

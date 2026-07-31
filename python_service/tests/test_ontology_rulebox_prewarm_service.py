@@ -129,7 +129,7 @@ class OntologyRuleboxPrewarmRunnerTests(unittest.TestCase):
         self.assertEqual([], repository.calls)
         self.assertEqual(0, repository.status_calls)
 
-    def test_aged_multi_entry_queue_keeps_schema_compilation_out_of_live_work(self):
+    def test_aged_multi_entry_queue_keeps_schema_compilation_out_of_active_live_work(self):
         repository = FakeRepository({
             "status": "provisioning",
             "functionsReady": False,
@@ -155,11 +155,43 @@ class OntologyRuleboxPrewarmRunnerTests(unittest.TestCase):
 
         result = runner.run_once()
 
-        self.assertEqual("deferred-aged-reasoning-backlog", result["status"])
+        self.assertEqual("deferred-aged-reasoning-backlog-active", result["status"])
         self.assertEqual([], repository.calls)
         self.assertTrue(result["backlogRecovery"]["eligible"])
         self.assertEqual(1, result["backlogRecovery"]["activeEntryCount"])
         self.assertEqual(15, result["recommendedRetryAfterSeconds"])
+
+    def test_aged_retrying_queue_runs_compiler_recovery_when_no_inference_lease_is_active(self):
+        repository = FakeRepository({
+            "status": "provisioning",
+            "functionsReady": False,
+            "pendingRuleCount": 4,
+        })
+        runner = OntologyRuleboxPrewarmRunner(
+            repository,
+            settings={
+                "ontologyRuleboxPrewarmEnabled": "1",
+                "ontologyRuleboxPrewarmBacklogRecoveryEnabled": "1",
+                "ontologyRuleboxPrewarmBacklogRecoveryAgeSeconds": "90",
+                "ontologyRuleboxPrewarmBacklogRecoveryMinPendingEntries": "2",
+                "ontologyRuleboxPrewarmBacklogRecoveryRetrySeconds": "5",
+            },
+            reasoning_queue_probe=lambda: {
+                "status": "retrying",
+                "effectivePendingCount": 4,
+                "retryingEntryCount": 4,
+                "oldestRequestAt": "2026-07-24T00:00:00Z",
+            },
+            now_provider=lambda: datetime(2026, 7, 24, 0, 5, tzinfo=timezone.utc),
+        )
+
+        result = runner.run_once()
+
+        self.assertEqual("provisioning", result["status"])
+        self.assertEqual([False], repository.calls)
+        self.assertTrue(result["backlogRecovery"]["canRecover"])
+        self.assertTrue(result["backlogRecoveryGranted"])
+        self.assertEqual("aged-backlog-no-active-inference-lease", result["recoveryMode"])
 
     def test_status_reports_isolation_and_current_prewarm_state(self):
         repository = FakeRepository({"status": "ok", "functionsReady": True})
@@ -201,6 +233,17 @@ class OntologyRuleboxPrewarmRunnerTests(unittest.TestCase):
 
         self.assertEqual(30, retry)
 
+    def test_scheduler_promotes_only_a_granted_aged_backlog_recovery(self):
+        scheduler = OntologyRuleboxPrewarmScheduler(FakeRepository(), 15)
+
+        retry = scheduler.retry_interval_seconds({
+            "status": "provisioning",
+            "recommendedRetryAfterSeconds": 5,
+            "backlogRecoveryGranted": True,
+        })
+
+        self.assertEqual(5, retry)
+
     def test_scheduler_never_starts_an_isolated_compiler_while_queue_is_nonempty(self):
         runner = QueueGuardedRunner({"effectivePendingCount": 3})
         scheduler = OntologyRuleboxPrewarmScheduler(runner, 15)
@@ -210,6 +253,36 @@ class OntologyRuleboxPrewarmRunnerTests(unittest.TestCase):
         self.assertEqual("deferred-reasoning-pending", result["status"])
         self.assertEqual(3, result["reasoningPendingCount"])
         self.assertEqual([], runner.calls)
+
+    def test_scheduler_allows_only_an_unleased_aged_backlog_recovery(self):
+        repository = FakeRepository({
+            "status": "provisioning",
+            "functionsReady": False,
+            "pendingRuleCount": 2,
+        })
+        runner = OntologyRuleboxPrewarmRunner(
+            repository,
+            settings={
+                "ontologyRuleboxPrewarmEnabled": "1",
+                "ontologyRuleboxPrewarmBacklogRecoveryEnabled": "1",
+                "ontologyRuleboxPrewarmBacklogRecoveryAgeSeconds": "90",
+                "ontologyRuleboxPrewarmBacklogRecoveryMinPendingEntries": "2",
+            },
+            reasoning_queue_probe=lambda: {
+                "status": "retrying",
+                "effectivePendingCount": 2,
+                "retryingEntryCount": 2,
+                "oldestRequestAt": "2026-07-24T00:00:00Z",
+            },
+            now_provider=lambda: datetime(2026, 7, 24, 0, 5, tzinfo=timezone.utc),
+        )
+        scheduler = OntologyRuleboxPrewarmScheduler(runner, 15)
+
+        result = scheduler.run_once()
+
+        self.assertEqual("provisioning", result["status"])
+        self.assertTrue(result["backlogRecoveryGranted"])
+        self.assertEqual([False], repository.calls)
 
 
 if __name__ == "__main__":

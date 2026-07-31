@@ -16,10 +16,11 @@ from ..domain.security_lines import security_lines_for_symbol
 
 
 class InvestmentCalendarCandidateService:
-    def __init__(self, candidate_repository, calendar_service, settings: Dict[str, object] = None):
+    def __init__(self, candidate_repository, calendar_service, settings: Dict[str, object] = None, now=None):
         self.candidate_repository = candidate_repository
         self.calendar_service = calendar_service
         self.settings = dict(settings or {})
+        self.now = now or (lambda: datetime.now(timezone.utc))
 
     def list_candidates(self, query: Dict[str, object] = None) -> Dict[str, object]:
         query = query if isinstance(query, dict) else {}
@@ -165,7 +166,10 @@ class InvestmentCalendarCandidateService:
         rejected = 0
         expired = 0
         unchanged = 0
-        expires_before = datetime.now(timezone.utc) - timedelta(days=2)
+        observed_now = self.now()
+        if observed_now.tzinfo is None:
+            observed_now = observed_now.replace(tzinfo=timezone.utc)
+        expires_before = observed_now.astimezone(timezone.utc) - timedelta(days=2)
         for candidate in rows:
             if not (candidate.payload or {}).get("autoDetected"):
                 unchanged += 1

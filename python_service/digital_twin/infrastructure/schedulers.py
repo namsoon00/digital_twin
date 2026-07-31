@@ -1038,9 +1038,10 @@ class OntologyRuleboxPrewarmScheduler:
 
     def __init__(self, runner, interval_seconds: int, error_reporter=None, isolated_cycle=None):
         self.runner = runner
-        # Schema commits are permitted only while the durable reasoning queue
-        # is empty.  A busy queue is a reason to wait, never a reason to retry
-        # compilation more aggressively.
+        # Schema commits normally wait for an empty durable reasoning queue.
+        # An aged queue without an active inference lease is the controlled
+        # recovery exception: direct TypeQL has already failed to drain it, so
+        # the coordinator-protected compiler gets a bounded turn.
         self.interval_seconds = max(5, int(interval_seconds or 15))
         self.error_reporter = error_reporter or operational_error_reporter()
         self.isolated_cycle = isolated_cycle
@@ -1106,14 +1107,37 @@ class OntologyRuleboxPrewarmScheduler:
         now = time.monotonic()
         if pending:
             self.last_reasoning_activity_at = now
+            recovery_reader = getattr(self.runner, "backlog_recovery_state", None)
+            recovery = {}
+            if callable(recovery_reader):
+                try:
+                    candidate = recovery_reader(queue)
+                    recovery = dict(candidate or {}) if isinstance(candidate, dict) else {}
+                except Exception:
+                    recovery = {}
+            if bool(recovery.get("canRecover")):
+                # The runner will take the TypeDB projection coordinator before
+                # compiling. A racing reasoning worker therefore receives a
+                # cheap coordinator deferral rather than concurrent native
+                # inference while the schema compiler is active.
+                return {}
             return {
-                "status": "deferred-reasoning-pending",
+                "status": (
+                    "deferred-aged-reasoning-backlog-active"
+                    if recovery.get("eligible")
+                    else "deferred-reasoning-pending"
+                ),
                 "configured": True,
                 "functionsReady": None,
                 "pendingRuleCount": None,
                 "reasoningPendingCount": pending,
                 "reasoningQueue": queue,
-                "reason": "Live ontology reasoning is pending; RuleBox compilation remains idle.",
+                "backlogRecovery": recovery,
+                "reason": (
+                    "Live ontology reasoning has an active lease; RuleBox compilation remains idle."
+                    if recovery.get("eligible")
+                    else "Live ontology reasoning is pending; RuleBox compilation remains idle."
+                ),
                 "recommendedRetryAfterSeconds": self.interval_seconds,
                 "durationMs": 0,
             }
@@ -1186,11 +1210,21 @@ class OntologyRuleboxPrewarmScheduler:
             return max(self.interval_seconds, recommended, 300)
         if status == "error":
             return max(self.interval_seconds, recommended, 60)
+        if (
+            bool(payload.get("backlogRecoveryGranted"))
+            and status in {"provisioning", "deferred-projection-coordinator"}
+        ):
+            # A recovery pass has no active inference lease and commits only a
+            # bounded RuleBox batch. Respect its short hand-off cadence so the
+            # compiler can finish before the retrying queue starts another
+            # serial direct-TypeQL cycle.
+            return max(3, recommended or 5)
         if status in {
             "provisioning",
             "deferred-projection-coordinator",
             "deferred-reasoning-pending",
             "deferred-aged-reasoning-backlog",
+            "deferred-aged-reasoning-backlog-active",
             "deferred-idle-quiet-period",
             "deferred-reasoning-queue-probe",
         }:

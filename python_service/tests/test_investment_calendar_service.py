@@ -1192,7 +1192,11 @@ class InvestmentCalendarServiceTests(unittest.TestCase):
         sync_service = OfficialCalendarSyncService(
             calendar_service=calendar_service,
             sources=[SimpleNamespace(events=lambda: [official])],
-            candidate_service=InvestmentCalendarCandidateService(candidate_store, calendar_service),
+            candidate_service=InvestmentCalendarCandidateService(
+                candidate_store,
+                calendar_service,
+                now=lambda: datetime(2026, 7, 29, tzinfo=timezone.utc),
+            ),
             settings={"investmentCalendarOfficialMacroSyncEnabled": "1"},
             now=lambda: datetime(2026, 7, 29, tzinfo=timezone.utc),
         )

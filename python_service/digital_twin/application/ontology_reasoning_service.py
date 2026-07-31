@@ -761,7 +761,7 @@ class OntologyReasoningRunner:
     def rulebox_prewarm_backlog_recovery_enabled(self) -> bool:
         return truthy(
             self.settings.get("ontologyRuleboxPrewarmBacklogRecoveryEnabled"),
-            False,
+            True,
         )
 
     def rulebox_prewarm_backlog_recovery_age_seconds(self) -> int:
@@ -937,6 +937,112 @@ class OntologyReasoningRunner:
 
     def mailbox_work_retry_seconds(self) -> int:
         return int_setting(self.settings, "ontologyReasoningWorkRetrySeconds", 30, 5, 900)
+
+    def projection_failure_yield_enabled(self) -> bool:
+        return truthy(self.settings.get("ontologyReasoningProjectionFailureYieldEnabled"), True)
+
+    def projection_failure_yield_after_attempts(self) -> int:
+        return int_setting(
+            self.settings,
+            "ontologyReasoningProjectionFailureYieldAfterAttempts",
+            2,
+            2,
+            20,
+        )
+
+    def projection_failure_yield_base_seconds(self) -> int:
+        return int_setting(
+            self.settings,
+            "ontologyReasoningProjectionFailureYieldBaseSeconds",
+            60,
+            5,
+            900,
+        )
+
+    def projection_failure_yield_max_seconds(self) -> int:
+        return int_setting(
+            self.settings,
+            "ontologyReasoningProjectionFailureYieldMaxSeconds",
+            600,
+            self.projection_failure_yield_base_seconds(),
+            3600,
+        )
+
+    @staticmethod
+    def mailbox_attempt_count(entries: Iterable[Mapping[str, object]]) -> int:
+        attempts = []
+        for entry in entries or []:
+            if not isinstance(entry, Mapping):
+                continue
+            try:
+                attempts.append(max(0, int(float(entry.get("attemptCount") or 0))))
+            except (TypeError, ValueError):
+                continue
+        # Compatibility mailbox adapters do not expose attempt counts. Treat
+        # their first observed release as attempt one and retain their prior
+        # retry cadence.
+        return max(attempts or [1])
+
+    def projection_failure_yield_state(
+        self,
+        entries: Iterable[Mapping[str, object]],
+        projection_gate: Mapping[str, object],
+        requested_retry_seconds: int,
+    ) -> Dict[str, object]:
+        """Yield repeated native-generation failures without dropping work.
+
+        The mailbox already coalesces every fact family to its newest source
+        revision. This guard is for the remaining case: the same latest
+        revision repeatedly reaches TypeDB but cannot produce an aligned
+        InferenceBox. Giving that revision a bounded backoff lets other
+        symbols progress and gives the RuleBox prewarm worker a quiet handoff.
+        """
+        requested = max(1, int(requested_retry_seconds or self.projection_retry_seconds()))
+        results = list((projection_gate or {}).get("results") or [])
+        statuses = {
+            str((item or {}).get("status") or "").strip().lower()
+            for item in results
+            if isinstance(item, Mapping)
+        }
+        retryable_native_statuses = {
+            "inference-failed-rolled-back",
+            "inference-finalization-pending",
+            "incomplete-native-coverage",
+            "deferred-schema-function-provisioning",
+        }
+        attempts = self.mailbox_attempt_count(entries)
+        threshold = self.projection_failure_yield_after_attempts()
+        eligible = bool(
+            self.projection_failure_yield_enabled()
+            and statuses.intersection(retryable_native_statuses)
+            and attempts >= threshold
+        )
+        if not eligible:
+            return {
+                "enabled": self.projection_failure_yield_enabled(),
+                "applied": False,
+                "attemptCount": attempts,
+                "afterAttempts": threshold,
+                "retryAfterSeconds": requested,
+                "failureStatuses": sorted(statuses),
+            }
+        exponent = min(10, max(0, attempts - threshold))
+        yielded = min(
+            self.projection_failure_yield_max_seconds(),
+            self.projection_failure_yield_base_seconds() * (2 ** exponent),
+        )
+        effective = max(requested, yielded)
+        return {
+            "enabled": True,
+            "applied": True,
+            "attemptCount": attempts,
+            "afterAttempts": threshold,
+            "baseSeconds": self.projection_failure_yield_base_seconds(),
+            "maxSeconds": self.projection_failure_yield_max_seconds(),
+            "retryAfterSeconds": effective,
+            "failureStatuses": sorted(statuses),
+            "reason": "같은 최신 ABox/InferenceBox 세대 실패를 짧게 격리해 다른 종목과 RuleBox 복구를 우선 처리합니다.",
+        }
 
     def mailbox_worker_id(self) -> str:
         configured = str(
@@ -1194,21 +1300,34 @@ class OntologyReasoningRunner:
             **queue_metadata,
         }
 
-    def release_mailbox_work(self, entries: Iterable[Mapping[str, object]], reason: str, retry_after_seconds: int = 0) -> None:
+    def release_mailbox_work(
+        self,
+        entries: Iterable[Mapping[str, object]],
+        reason: str,
+        retry_after_seconds: int = 0,
+    ) -> Dict[str, object]:
+        effective_retry = max(1, int(retry_after_seconds or self.mailbox_work_retry_seconds()))
+        result = {
+            "released": False,
+            "retryAfterSeconds": effective_retry,
+        }
         release = getattr(self.mailbox_store, "release", None) if self.mailbox_enabled() else None
         if not callable(release):
-            return
+            return result
         try:
             release(
                 entries,
                 reason,
-                retry_after_seconds or self.mailbox_work_retry_seconds(),
+                effective_retry,
                 worker_id=self.mailbox_worker_id(),
             )
+            result["released"] = True
         except TypeError:
-            release(entries, reason, retry_after_seconds or self.mailbox_work_retry_seconds())
+            release(entries, reason, effective_retry)
+            result["released"] = True
         except Exception:
-            return
+            return result
+        return result
 
     def recover_orphaned_mailbox_work(self) -> Dict[str, object]:
         """Resume work left by a confirmed-dead local isolated scheduler.
@@ -4510,6 +4629,69 @@ class OntologyReasoningRunner:
             "history": [dict(item) for item in history or [] if isinstance(item, dict)][-10:],
         }
 
+    def inference_pipeline_health(
+        self,
+        payload: Dict[str, object] = None,
+        pending_count: int = 0,
+    ) -> Dict[str, object]:
+        """Describe native inference separately from queue connectivity."""
+        telemetry = self.execution_telemetry(payload)
+        last = dict(telemetry.get("last") or {})
+        if not last:
+            return {
+                "status": "unknown",
+                "scope": "typedb-inference-execution",
+                "reason": "아직 완료되거나 실패한 TypeDB 추론 실행 기록이 없습니다.",
+            }
+        status = str(last.get("status") or "unknown").strip().lower()
+        failures = [
+            item for item in last.get("projectionFailures") or []
+            if isinstance(item, dict)
+        ]
+        failure_statuses = {
+            str(item.get("status") or "").strip().lower()
+            for item in failures
+        }
+        hard_failures = {
+            "inference-failed-rolled-back",
+            "inference-finalization-pending",
+            "incomplete-native-coverage",
+            "error",
+            "failed",
+            "invalid-abox",
+        }
+        if status == "error" or failure_statuses.intersection(hard_failures):
+            yield_state = last.get("mailboxFailureYield")
+            return {
+                "status": "critical" if pending_count else "degraded",
+                "scope": "typedb-inference-execution",
+                "reason": str(last.get("deferredReason") or "TypeDB 네이티브 추론이 현재 ABox 세대를 확정하지 못했습니다."),
+                "lastExecutionStatus": status,
+                "failureStatuses": sorted(failure_statuses),
+                "failureYield": dict(yield_state or {}) if isinstance(yield_state, dict) else {},
+            }
+        if status == "deferred-rulebox-prewarm-recovery":
+            return {
+                "status": "recovering",
+                "scope": "typedb-inference-execution",
+                "reason": str(last.get("deferredReason") or "RuleBox 컴파일 복구를 기다리는 중입니다."),
+                "lastExecutionStatus": status,
+                "ruleboxPrewarm": dict(last.get("ruleboxPrewarm") or {}),
+            }
+        if status in {"ok", "idle", "cooldown", "partial"}:
+            return {
+                "status": "healthy",
+                "scope": "typedb-inference-execution",
+                "reason": "",
+                "lastExecutionStatus": status,
+            }
+        return {
+            "status": "degraded" if pending_count else "unknown",
+            "scope": "typedb-inference-execution",
+            "reason": str(last.get("deferredReason") or "TypeDB 추론 실행 상태를 확인 중입니다."),
+            "lastExecutionStatus": status,
+        }
+
     def record_execution_telemetry(
         self,
         result: Dict[str, object],
@@ -4588,6 +4770,34 @@ class OntologyReasoningRunner:
                 key: mailbox.get(key)
                 for key in ["enabled", "entryCount", "mailboxPendingEntryCount", "pendingEntryCount", "reason"]
                 if key in mailbox
+            }
+        projection_failures = result.get("projectionFailures")
+        if isinstance(projection_failures, list):
+            summary["projectionFailures"] = [
+                {
+                    key: item.get(key)
+                    for key in ["accountId", "stage", "status", "reason", "retryAfterSeconds"]
+                    if key in item
+                }
+                for item in projection_failures[:8]
+                if isinstance(item, dict)
+            ]
+        failure_yield = result.get("mailboxFailureYield")
+        if isinstance(failure_yield, dict):
+            summary["mailboxFailureYield"] = {
+                key: failure_yield.get(key)
+                for key in [
+                    "enabled", "applied", "attemptCount", "afterAttempts",
+                    "retryAfterSeconds", "failureStatuses",
+                ]
+                if key in failure_yield
+            }
+        rulebox_prewarm = result.get("ruleboxPrewarm")
+        if isinstance(rulebox_prewarm, dict):
+            summary["ruleboxPrewarm"] = {
+                key: rulebox_prewarm.get(key)
+                for key in ["status", "functionsReady", "pendingRuleCount", "reason"]
+                if key in rulebox_prewarm
             }
         payload = self.cursor_payload()
         history = [dict(item) for item in payload.get("reasoningExecutionHistory") or [] if isinstance(item, dict)]
@@ -4719,12 +4929,18 @@ class OntologyReasoningRunner:
         prewarm_recovery = self.rulebox_prewarm_backlog_recovery_state(requests)
         queue_metadata["ruleboxPrewarmRecovery"] = dict(prewarm_recovery)
         # A receipt check is not free: it reads the complete RuleBox and both
-        # deployment namespaces.  For a fallback-enabled queue, that extra
-        # work competes with the exact direct TypeQL recovery we need to
-        # drain.  Only an explicitly strict installation probes and waits for
-        # the compiled receipt here.  The repository still checks the one
-        # execution namespace immediately before a native run.
-        rulebox_prewarm = self.rulebox_prewarm_readiness()
+        # deployment namespaces. For fresh fallback-enabled work, avoid that
+        # extra read and let the repository make the final narrow check. Once
+        # a queue is aged enough to trigger compiler recovery, however, one
+        # bounded readiness read prevents another failed direct-TypeQL/ABox
+        # rollback cycle while the dedicated prewarm worker catches up.
+        prewarm_recovery_probe = bool(
+            prewarm_recovery.get("eligible")
+            and self.rulebox_prewarm_direct_fallback_enabled()
+        )
+        rulebox_prewarm = self.rulebox_prewarm_readiness(
+            probe_when_fallback=prewarm_recovery_probe,
+        )
         if not rulebox_prewarm.get("ready") and self.rulebox_prewarm_required():
             retry_after = int(
                 rulebox_prewarm.get("retryAfterSeconds")
@@ -4737,6 +4953,29 @@ class OntologyReasoningRunner:
                 "retryAfterSeconds": max(1, retry_after),
                 "deferredReason": (
                     "TypeDB RuleBox 함수 사전 준비가 완료될 때까지 네이티브 추론을 시작하지 않습니다. "
+                    + str(rulebox_prewarm.get("reason") or "")[:180]
+                ).strip(),
+                "ruleboxPrewarm": rulebox_prewarm,
+                "ruleboxPrewarmRecovery": prewarm_recovery,
+                "coalescedEventCount": len(durable_superseded_ids),
+                **queue_metadata,
+            }
+        if prewarm_recovery_probe and not rulebox_prewarm.get("ready"):
+            probe_retry_after = int(
+                rulebox_prewarm.get("retryAfterSeconds")
+                or self.rulebox_prewarm_backlog_recovery_retry_seconds()
+            )
+            retry_after = min(
+                probe_retry_after,
+                self.rulebox_prewarm_backlog_recovery_retry_seconds(),
+            )
+            return {
+                "status": "deferred-rulebox-prewarm-recovery",
+                "processedCount": 0,
+                "alertCount": 0,
+                "retryAfterSeconds": max(1, retry_after),
+                "deferredReason": (
+                    "오래된 추론 대기열의 직접 TypeQL 재시도를 멈추고 TypeDB RuleBox 컴파일 복구를 기다립니다. "
                     + str(rulebox_prewarm.get("reason") or "")[:180]
                 ).strip(),
                 "ruleboxPrewarm": rulebox_prewarm,
@@ -5078,10 +5317,18 @@ class OntologyReasoningRunner:
         if not projection_gate.get("ready"):
             self.mark_projection_attempt(symbols)
             if projection_gate.get("retryable"):
-                self.release_mailbox_work(
+                requested_retry_after = int(
+                    projection_gate.get("retryAfterSeconds") or self.projection_retry_seconds()
+                )
+                failure_yield = self.projection_failure_yield_state(
+                    claimed_mailbox_entries,
+                    projection_gate,
+                    requested_retry_after,
+                )
+                mailbox_release = self.release_mailbox_work(
                     claimed_mailbox_entries,
                     str(projection_gate.get("reason") or "TypeDB writer is not ready."),
-                    int(projection_gate.get("retryAfterSeconds") or self.projection_retry_seconds()),
+                    int(failure_yield.get("retryAfterSeconds") or requested_retry_after),
                 )
                 return {
                     "status": "deferred",
@@ -5093,11 +5340,12 @@ class OntologyReasoningRunner:
                     "nativeTypeDbTargetSymbolLimit": self.native_typedb_target_symbol_limit() if self.native_typedb_rule_execution_enabled() else None,
                     "omittedSymbolCount": omitted_symbol_count,
                     "retryAfterSeconds": int(
-                        projection_gate.get("retryAfterSeconds")
-                        or self.projection_retry_seconds()
+                        failure_yield.get("retryAfterSeconds") or requested_retry_after
                     ),
                     "deferredReason": str(projection_gate.get("reason") or "TypeDB graph cycle is serialized by another writer."),
                     "projectionFailures": list(projection_gate.get("results") or []),
+                    "mailboxFailureYield": failure_yield,
+                    "mailboxRelease": mailbox_release,
                     "projectionCircuit": self.projection_circuit_state(),
                     "reasoningContext": reasoning_context,
                     "coalescedEventCount": len(durable_superseded_ids),
@@ -5712,6 +5960,10 @@ class OntologyReasoningRunner:
         elif any(item.get("state") == "overdue" for item in fairness_queue):
             queue_status = "degraded"
             queue_reason = "대기 한도를 넘긴 종목이 있어 우선 처리 대기열을 비우고 있습니다."
+        inference_health = self.inference_pipeline_health(
+            cursor_payload,
+            pending_count=len(pending),
+        )
         return {
             "enabled": self.enabled(),
             "pendingCount": len(pending),
@@ -5800,6 +6052,11 @@ class OntologyReasoningRunner:
                 "status": "degraded" if mailbox.get("status") == "error" else "healthy",
                 "reason": str(mailbox.get("reason") or "") if mailbox.get("status") == "error" else "",
                 "scope": "durable-queue-read-model",
+            },
+            "inferenceHealth": inference_health,
+            "pipelineHealth": {
+                "queue": {"status": queue_status, "scope": "scheduler-readiness"},
+                "inference": inference_health,
             },
             "queueDispatch": queue_dispatch,
             "queueDelayHealth": (

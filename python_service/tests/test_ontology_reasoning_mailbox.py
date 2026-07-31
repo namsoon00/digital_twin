@@ -610,7 +610,7 @@ class OntologyReasoningMailboxTests(unittest.TestCase):
         self.assertEqual("ok", result["status"])
         self.assertEqual([["AAPL"]], self.monitor.calls)
 
-    def test_aged_multi_entry_queue_keeps_using_bounded_direct_typeql_fallback(self):
+    def test_aged_multi_entry_queue_waits_for_rulebox_compiler_recovery(self):
         events = [
             realtime_request("prewarm-recovery-a", ["AAPL"], "2026-07-24T00:00:00Z"),
             realtime_request("prewarm-recovery-b", ["MSFT"], "2026-07-24T00:00:00Z"),
@@ -625,17 +625,21 @@ class OntologyReasoningMailboxTests(unittest.TestCase):
                 "ontologyRuleboxPrewarmBacklogRecoveryRetrySeconds": "5",
             },
         )
-        runner.rulebox_prewarm_probe = lambda: (_ for _ in ()).throw(
-            AssertionError("fallback-enabled aged queues must not scan the full prewarm state")
-        )
+        runner.rulebox_prewarm_probe = lambda: {
+            "status": "provisioning",
+            "functionsReady": False,
+            "pendingRuleCount": 3,
+            "reason": "RuleBox schema functions are being prepared.",
+        }
 
         result = runner.run_once()
 
-        self.assertEqual("ok", result["status"])
-        self.assertEqual([["AAPL"]], self.monitor.calls)
+        self.assertEqual("deferred-rulebox-prewarm-recovery", result["status"])
+        self.assertEqual([], self.monitor.calls)
+        self.assertEqual(5, result["retryAfterSeconds"])
         self.assertTrue(result["ruleboxPrewarmRecovery"]["eligible"])
 
-    def test_aged_queue_does_not_probe_prewarm_error_before_direct_fallback(self):
+    def test_aged_queue_surfaces_prewarm_recovery_probe_errors_without_running_direct_typeql(self):
         events = [
             realtime_request("prewarm-recovery-error-a", ["AAPL"], "2026-07-24T00:00:00Z"),
             realtime_request("prewarm-recovery-error-b", ["MSFT"], "2026-07-24T00:00:00Z"),
@@ -651,14 +655,83 @@ class OntologyReasoningMailboxTests(unittest.TestCase):
             },
         )
         runner.rulebox_prewarm_probe = lambda: (_ for _ in ()).throw(
-            AssertionError("fallback-enabled aged queues must not issue a prewarm status probe")
+            RuntimeError("temporary RuleBox receipt read failure")
         )
 
         result = runner.run_once()
 
-        self.assertEqual("ok", result["status"])
-        self.assertEqual([["AAPL"]], self.monitor.calls)
+        self.assertEqual("deferred-rulebox-prewarm-recovery", result["status"])
+        self.assertEqual([], self.monitor.calls)
+        self.assertIn("temporary RuleBox receipt read failure", result["deferredReason"])
         self.assertTrue(result["ruleboxPrewarmRecovery"]["eligible"])
+
+    def test_repeated_native_generation_failure_yields_the_same_mailbox_revision(self):
+        class LeasedMailbox(MemoryMailbox):
+            def __init__(self):
+                super().__init__()
+                self.releases = []
+
+            def claim(self, entries, _worker_id, _lease_seconds):
+                return {
+                    "enabled": True,
+                    "claimed": [{**dict(item), "attemptCount": 3} for item in entries or []],
+                    "blocked": [],
+                    "resumed": [],
+                }
+
+            def release(self, entries, reason, retry_after_seconds, worker_id=""):
+                self.releases.append({
+                    "entries": [dict(item) for item in entries or []],
+                    "reason": reason,
+                    "retryAfterSeconds": retry_after_seconds,
+                    "workerId": worker_id,
+                })
+
+        class NativeFailureMonitor(Monitor):
+            def __init__(self):
+                super().__init__()
+                self.last_ontology_projection_results = {
+                    "default": {
+                        "status": "inference-failed-rolled-back",
+                        "reason": "TypeDB native rule execution timed out before an aligned InferenceBox was stored.",
+                    },
+                }
+
+        event = realtime_request("native-failure-yield", ["AAPL"], "2026-07-24T00:00:00Z")
+        runner = self.build_runner([event])
+        mailbox = LeasedMailbox()
+        runner.mailbox_store = mailbox
+        self.mailbox = mailbox
+        self.monitor = NativeFailureMonitor()
+        runner.monitor_runner_factory = lambda: self.monitor
+
+        result = runner.run_once(force=True)
+
+        self.assertEqual("deferred", result["status"])
+        self.assertTrue(result["mailboxFailureYield"]["applied"])
+        self.assertEqual(3, result["mailboxFailureYield"]["attemptCount"])
+        self.assertEqual(120, result["retryAfterSeconds"])
+        self.assertEqual(120, mailbox.releases[-1]["retryAfterSeconds"])
+
+    def test_status_reports_native_inference_failure_separately_from_queue_probe_health(self):
+        event = realtime_request("native-health", ["AAPL"], "2026-07-24T00:00:00Z")
+        runner = self.build_runner([event])
+        self.cursor.payload["lastReasoningExecution"] = {
+            "status": "deferred",
+            "deferredReason": "TypeDB native-rule 대기: direct rule query timed out",
+            "projectionFailures": [{
+                "stage": "projection",
+                "status": "inference-failed-rolled-back",
+            }],
+            "mailboxFailureYield": {"applied": True, "retryAfterSeconds": 120},
+        }
+
+        status = runner.status()
+
+        self.assertEqual("healthy", status["probeHealth"]["status"])
+        self.assertEqual("critical", status["inferenceHealth"]["status"])
+        self.assertEqual("typedb-inference-execution", status["inferenceHealth"]["scope"])
+        self.assertTrue(status["inferenceHealth"]["failureYield"]["applied"])
 
     def test_waits_for_rulebox_prewarm_only_when_direct_typeql_fallback_is_disabled(self):
         event = realtime_request("prewarm-strict-gate", ["AAPL"], "2026-07-24T00:00:00Z")

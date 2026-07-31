@@ -1172,9 +1172,20 @@ def restart(restart_typedb: bool = False, restart_mysql: bool = False) -> int:
         mysql_pid_path = mysql_spec.get("pid") if isinstance(mysql_spec, dict) else None
         if mysql_spec and mysql_pid_path and is_running(read_pid(mysql_pid_path), mysql_spec):
             excluded.add("mysql")
+    maintenance_window_seconds = 300
+    if restart_typedb:
+        typedb_spec = worker_specs().get("typedb")
+        if isinstance(typedb_spec, dict):
+            maintenance_window_seconds = typedb_restart_maintenance_window_seconds(typedb_spec)
     pause_supervisor = supervisor_running()
     if pause_supervisor:
-        maintenance_token = begin_supervisor_maintenance("restart")
+        if restart_typedb:
+            maintenance_token = begin_supervisor_maintenance(
+                "restart",
+                max_age_seconds=maintenance_window_seconds,
+            )
+        else:
+            maintenance_token = begin_supervisor_maintenance("restart")
         if not wait_for_supervisor_maintenance_ack(maintenance_token):
             end_supervisor_maintenance()
             print("Service restart aborted because the supervisor did not acknowledge maintenance mode.")
@@ -1220,13 +1231,25 @@ def read_supervisor_maintenance_payload() -> Dict[str, object]:
     return dict(payload or {}) if isinstance(payload, dict) else {}
 
 
-def begin_supervisor_maintenance(reason: str) -> str:
+def typedb_restart_maintenance_window_seconds(spec: Dict[str, object]) -> int:
+    """Bound the supervisor pause to the complete managed TypeDB restart path."""
+    startup_seconds = int_value(spec.get("startupWaitSeconds"), 600, 0)
+    seed_attempts = int_value(spec.get("seedRetryCount"), 2, 0) + 1
+    seed_seconds = int_value(spec.get("seedTimeoutSeconds"), 180, 1) * seed_attempts
+    rebuild_seconds = int_value(spec.get("sharedWorldProjectionRebuildTimeoutSeconds"), 900, 0)
+    # Keep the fallback recovery bounded even if a local setting is malformed.
+    return min(3600, max(300, startup_seconds + seed_seconds + rebuild_seconds + 60))
+
+
+def begin_supervisor_maintenance(reason: str, max_age_seconds: int = 300) -> str:
     token = str(os.getpid()) + "-" + str(time.time_ns())
+    duration_seconds = max(30, int(max_age_seconds or 300))
     write_supervisor_maintenance_payload({
         "pid": os.getpid(),
         "token": token,
         "reason": str(reason or "maintenance"),
         "startedAt": iso_now(),
+        "expiresAtEpoch": time.time() + duration_seconds,
     })
     return token
 
@@ -1263,6 +1286,24 @@ def end_supervisor_maintenance() -> None:
 
 def supervisor_maintenance_active(max_age_seconds: int = 300) -> bool:
     path = supervisor_maintenance_path()
+    payload = read_supervisor_maintenance_payload()
+    if not payload:
+        return False
+    try:
+        expires_at = float(payload.get("expiresAtEpoch") or 0)
+    except (TypeError, ValueError):
+        expires_at = 0.0
+    if expires_at > 0:
+        owner_pid = int_value(payload.get("pid"), 0, 0)
+        if owner_pid and not pid_exists(owner_pid):
+            remove_pid(path)
+            append_log(supervisor_log_path(), "removed orphaned maintenance marker")
+            return False
+        if time.time() <= expires_at:
+            return True
+        remove_pid(path)
+        append_log(supervisor_log_path(), "removed expired maintenance marker")
+        return False
     try:
         age_seconds = max(0.0, time.time() - path.stat().st_mtime)
     except OSError:

@@ -7412,6 +7412,23 @@ class TypeDBOntologyRepositoryTests(unittest.TestCase):
         start.assert_called_once_with(excluded_roles=set())
         end.assert_called_once_with()
 
+    def test_service_manager_extends_supervisor_pause_for_typedb_restart(self):
+        specs = {"typedb": {"role": "typedb", "pid": Path("/tmp/typedb.pid")}}
+        with patch.object(service_manager, "worker_specs", return_value=specs), \
+                patch.object(service_manager, "typedb_restart_maintenance_window_seconds", return_value=2640) as window, \
+                patch.object(service_manager, "supervisor_running", return_value=True), \
+                patch.object(service_manager, "begin_supervisor_maintenance", return_value="restart-token") as begin, \
+                patch.object(service_manager, "wait_for_supervisor_maintenance_ack", return_value=True), \
+                patch.object(service_manager, "end_supervisor_maintenance"), \
+                patch.object(service_manager, "stop", return_value=0) as stop, \
+                patch.object(service_manager, "start", return_value=0) as start:
+            self.assertEqual(0, service_manager.restart(restart_typedb=True))
+
+        window.assert_called_once_with(specs["typedb"])
+        begin.assert_called_once_with("restart", max_age_seconds=2640)
+        stop.assert_called_once_with(excluded_roles=set(), include_supervisor=False)
+        start.assert_called_once_with(excluded_roles=set())
+
     def test_service_manager_supervisor_acknowledges_maintenance_token(self):
         with tempfile.TemporaryDirectory() as temp:
             marker = Path(temp) / "python-supervisor-maintenance.json"

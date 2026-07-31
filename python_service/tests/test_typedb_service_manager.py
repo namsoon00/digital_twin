@@ -119,6 +119,40 @@ class TypeDBServiceManagerTests(unittest.TestCase):
         self.assertEqual("1", bootstrap_settings["_skipOperationalHistoryRetention"])
         self.assertNotIn("_skipOperationalSchemaBootstrap", bootstrap_settings)
 
+    def test_typedb_restart_maintenance_window_covers_full_bounded_startup(self):
+        window = service_manager.typedb_restart_maintenance_window_seconds({
+            "startupWaitSeconds": "600",
+            "seedTimeoutSeconds": "360",
+            "seedRetryCount": "2",
+            "sharedWorldProjectionRebuildTimeoutSeconds": "900",
+        })
+
+        self.assertEqual(2640, window)
+
+    def test_supervisor_honors_explicit_maintenance_deadline_while_owner_runs(self):
+        with tempfile.TemporaryDirectory() as temp:
+            marker = Path(temp) / "maintenance.json"
+            with patch.object(service_manager, "supervisor_maintenance_path", return_value=marker), \
+                    patch.object(service_manager, "pid_exists", return_value=True), \
+                    patch.object(service_manager.time, "time", side_effect=[1000.0, 1301.0]):
+                service_manager.begin_supervisor_maintenance("restart", max_age_seconds=900)
+                self.assertTrue(service_manager.supervisor_maintenance_active())
+
+    def test_supervisor_removes_explicit_maintenance_marker_when_owner_is_gone(self):
+        with tempfile.TemporaryDirectory() as temp:
+            marker = Path(temp) / "maintenance.json"
+            with patch.object(service_manager, "supervisor_maintenance_path", return_value=marker), \
+                    patch.object(service_manager, "supervisor_log_path", return_value=Path(temp) / "supervisor.log"), \
+                    patch.object(service_manager, "pid_exists", return_value=False), \
+                    patch.object(service_manager.time, "time", return_value=1000.0):
+                service_manager.write_supervisor_maintenance_payload({
+                    "pid": 12345,
+                    "expiresAtEpoch": 1600.0,
+                })
+                self.assertFalse(service_manager.supervisor_maintenance_active())
+
+            self.assertFalse(marker.exists())
+
 
 if __name__ == "__main__":
     unittest.main()

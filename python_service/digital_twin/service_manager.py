@@ -13,6 +13,7 @@ from typing import Dict, List
 
 from .infrastructure.mysql_monitoring import mysql_settings
 from .infrastructure.mysql_monitoring import MySQLMonitorAccountJobStore
+from .infrastructure.mysql_operational import MySQLOntologyRuleboxPrewarmStateStore
 from .infrastructure.mysql_operational_connection import MySQLOperationalConnection
 from .infrastructure.settings import ROOT_DIR, data_dir, runtime_settings
 from .infrastructure.typedb_storage_guard import typedb_storage_health
@@ -1002,6 +1003,30 @@ def recover_typedb_scoped_write_lease_after_worker_restart(spec: Dict[str, objec
     return True
 
 
+def clear_typedb_rulebox_prewarm_activity() -> bool:
+    """Discard a compiler hand-off only after a new TypeDB server is ready.
+
+    A bounded cooldown protects a server-side schema commit after its client
+    disconnects.  A managed TypeDB restart terminates that commit, so carrying
+    the old hand-off into the new server lifetime would delay both prewarm and
+    live reasoning for no safety benefit.
+    """
+    settings = dict(runtime_settings())
+    settings["_skipOperationalHistoryRetention"] = "1"
+    settings["_skipOperationalSchemaBootstrap"] = "1"
+    try:
+        MySQLOntologyRuleboxPrewarmStateStore(settings).replace({
+            "status": "idle",
+            "active": False,
+            "updatedAt": iso_now(),
+            "expiresAtEpoch": 0,
+            "reason": "typedb-server-restarted",
+        })
+    except Exception:  # noqa: BLE001 - a stale hint must never fail a healthy graph start.
+        return False
+    return True
+
+
 def start_worker(spec: Dict[str, object]) -> int:
     if spec.get("missingReason") or not spec.get("command"):
         print(str(spec["label"]) + " not started. " + str(spec.get("missingReason") or "Command is not configured."))
@@ -1084,6 +1109,8 @@ def start_worker(spec: Dict[str, object]) -> int:
             return 1
         if not ensure_typedb_shared_world_projection_rebuilt(spec):
             return 1
+        if not clear_typedb_rulebox_prewarm_activity():
+            append_log(log_path, "RuleBox compiler activity marker could not be cleared after TypeDB restart")
     elif role in {"mysql", "web"}:
         if not wait_for_tcp_service(spec):
             print(str(spec["label"]) + " did not become ready at " + str(spec.get("healthAddress") or ""))

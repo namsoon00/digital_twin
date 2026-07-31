@@ -129,6 +129,27 @@ class TypeDBServiceManagerTests(unittest.TestCase):
 
         self.assertEqual(2640, window)
 
+    def test_typedb_restart_clears_the_durable_rulebox_compiler_handoff(self):
+        with patch.object(service_manager, "runtime_settings", return_value={
+            "mysqlHost": "127.0.0.1",
+            "mysqlDatabase": "orbit_alpha",
+        }), patch.object(service_manager, "MySQLOntologyRuleboxPrewarmStateStore") as state_store:
+            self.assertTrue(service_manager.clear_typedb_rulebox_prewarm_activity())
+
+        settings = state_store.call_args.args[0]
+        self.assertEqual("1", settings["_skipOperationalHistoryRetention"])
+        self.assertEqual("1", settings["_skipOperationalSchemaBootstrap"])
+        self.assertEqual({
+            "status": "idle",
+            "active": False,
+            "expiresAtEpoch": 0,
+            "reason": "typedb-server-restarted",
+        }, {
+            key: value
+            for key, value in state_store.return_value.replace.call_args.args[0].items()
+            if key != "updatedAt"
+        })
+
     def test_supervisor_honors_explicit_maintenance_deadline_while_owner_runs(self):
         with tempfile.TemporaryDirectory() as temp:
             marker = Path(temp) / "maintenance.json"

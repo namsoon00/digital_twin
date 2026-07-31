@@ -739,7 +739,13 @@ def typedb_error_code(error: object) -> str:
     text = str(error or "").lower()
     if any(term in text for term in ["unable to connect", "connection refused", "connect failed", "unavailable"]):
         return "typedbConnectionError"
-    if any(term in text for term in ["timeout", "timed out", "deadline"]):
+    # TypeDB can surface a cancelled bounded read as TSV13 without including
+    # the word "timeout". Treat that interruption as a timeout so the native
+    # rule executor can use its bounded recovery path instead of misreporting
+    # a transient query-shape issue as an unknown read error.
+    if (
+        "[tsv13]" in text and "execution interrupted" in text
+    ) or any(term in text for term in ["timeout", "timed out", "deadline"]):
         return "typedbTimeout"
     if any(term in text for term in ["schema"]):
         return "typedbSchemaError"
@@ -13899,6 +13905,169 @@ relation ontology-assertion,
             }
         return with_elapsed(result)
 
+    @staticmethod
+    def native_rule_entry_has_timeout_failure(result: Dict[str, object]) -> bool:
+        """Return whether a failed native-rule entry is safe to retry smaller.
+
+        Only a bounded read timeout is eligible. A malformed query, missing
+        schema function, or incomplete any-condition proof must remain a hard
+        failure for the entire generation.
+        """
+        failure = dict((result or {}).get("failure") or {})
+        status = str(failure.get("status") or "").strip().lower()
+        reason = str(failure.get("reason") or "")
+        return status == "query-timeout" or typedb_error_code(reason) == "typedbTimeout"
+
+    def recover_timed_out_native_rule_entry(
+        self,
+        primary_result: Dict[str, object],
+        planned: Dict[str, object],
+        clean_symbols: Iterable[str],
+        schema_function_query: bool,
+        world_id: str,
+        scoped_manifest_only: bool,
+        imported,
+        transaction_type,
+        deadline: float,
+        execution_mode: str,
+        evidence_read_index: Dict[str, object] = None,
+    ) -> Dict[str, object]:
+        """Retry only one timed-out rule in two serial, complete target shards.
+
+        A native query that exceeds its bound invalidates its transaction, but
+        a smaller query against the same immutable ABox can still be complete.
+        This recovery deliberately runs after the initial parallel phase and
+        serially: it lowers TypeDB pressure and never accepts a subset. Every
+        shard must succeed before the coordinator may merge any result.
+        """
+        primary = dict(primary_result or {})
+        if not self.native_rule_entry_has_timeout_failure(primary):
+            return primary
+
+        candidate_symbols = clean_symbols_from_payload(
+            dict(planned or {}).get("candidateSymbols") or clean_symbols
+        )
+        if len(candidate_symbols) < 2:
+            return primary
+
+        recovery_entry = dict(planned or {})
+        recovery_entry["candidateSymbols"] = list(candidate_symbols)
+        recovery_plan = typedb_native_rule_target_work_plan(
+            [recovery_entry],
+            target_parallelism=2,
+        )
+        work_items = list(recovery_plan.get("workItems") or [])
+        if len(work_items) < 2:
+            return primary
+
+        primary_failure = dict(primary.get("failure") or {})
+        primary_elapsed_ms = int(number_or_none(primary_failure.get("elapsedMs")) or 0)
+        primary_query_duration_ms = int(number_or_none(primary_failure.get("queryDurationMs")) or 0)
+        read_transaction_count = int(primary.get("readTransactionCount") or 0)
+        read_query_count = int(primary.get("readQueryCount") or 0)
+        recovery_started = time.perf_counter()
+
+        def annotated_failure(
+            failure: Dict[str, object],
+            failed_shard_index: int = -1,
+            attempted: bool = True,
+            reason: str = "",
+        ) -> Dict[str, object]:
+            result = dict(primary)
+            detail = dict(failure or primary_failure)
+            if reason:
+                detail["reason"] = reason
+                detail["status"] = "deferred-by-runtime-budget"
+            detail["candidateSymbols"] = list(candidate_symbols)
+            detail["timeoutFallbackAttempted"] = bool(attempted)
+            detail["timeoutFallbackShardCount"] = len(work_items)
+            if failed_shard_index >= 0:
+                detail["timeoutFallbackFailedShardIndex"] = failed_shard_index
+            detail["timeoutFallbackInitialStatus"] = str(primary_failure.get("status") or "")
+            elapsed_ms = primary_elapsed_ms + int((time.perf_counter() - recovery_started) * 1000)
+            detail["elapsedMs"] = max(int(number_or_none(detail.get("elapsedMs")) or 0), elapsed_ms)
+            detail["queryDurationMs"] = max(
+                int(number_or_none(detail.get("queryDurationMs")) or 0),
+                primary_query_duration_ms,
+            )
+            result.update({
+                "status": "partial",
+                "readTransactionCount": read_transaction_count,
+                "readQueryCount": read_query_count,
+                "failure": detail,
+            })
+            return result
+
+        shard_results: List[Dict[str, object]] = []
+        for shard_index, shard in enumerate(work_items):
+            if deadline - time.monotonic() <= 0.5:
+                return annotated_failure(
+                    primary_failure,
+                    attempted=bool(shard_results),
+                    reason="TypeDB native-rule runtime budget was exhausted before timeout recovery completed.",
+                )
+            shard_result = self.execute_typedb_native_rule_entry(
+                shard,
+                clean_symbols,
+                schema_function_query,
+                world_id,
+                scoped_manifest_only,
+                imported,
+                transaction_type,
+                deadline,
+                execution_mode,
+                evidence_read_index,
+            )
+            read_transaction_count += int(shard_result.get("readTransactionCount") or 0)
+            read_query_count += int(shard_result.get("readQueryCount") or 0)
+            if str(shard_result.get("status") or "partial") != "ok":
+                return annotated_failure(
+                    dict(shard_result.get("failure") or primary_failure),
+                    failed_shard_index=shard_index,
+                )
+            shard_results.append(dict(shard_result))
+
+        rule = planned.get("rule")
+        query_plan = dict(shard_results[0].get("queryPlan") or {})
+        rows = [
+            row
+            for shard_result in shard_results
+            for row in shard_result.get("rows") or []
+        ]
+        shard_executed = [dict(item.get("executed") or {}) for item in shard_results]
+        first_executed = dict(shard_executed[0] or {})
+        executed = {
+            **first_executed,
+            "ruleId": str(getattr(rule, "rule_id", "") or first_executed.get("ruleId") or ""),
+            "candidateSymbols": list(candidate_symbols),
+            # These fields describe configured target work. Recovery is kept
+            # separate so telemetry does not imply a global sharding setting.
+            "targetWorkShardIndex": int(number_or_none(planned.get("targetWorkShardIndex")) or 0),
+            "targetWorkShardCount": max(1, int(number_or_none(planned.get("targetWorkShardCount")) or 1)),
+            "targetWorkShardingUsed": bool(planned.get("targetWorkShardingUsed")),
+            "rowCount": sum(int(item.get("rowCount") or 0) for item in shard_executed),
+            "queryCount": sum(int(item.get("queryCount") or 0) for item in shard_executed),
+            "anyConditionQueryCount": sum(
+                int(item.get("anyConditionQueryCount") or 0) for item in shard_executed
+            ),
+            "queryDurationMs": primary_query_duration_ms + sum(
+                int(item.get("queryDurationMs") or 0) for item in shard_executed
+            ),
+            "elapsedMs": primary_elapsed_ms + int((time.perf_counter() - recovery_started) * 1000),
+            "timeoutFallbackUsed": True,
+            "timeoutFallbackShardCount": len(work_items),
+            "timeoutFallbackMode": "serial-target-shards",
+        }
+        return {
+            "status": "ok",
+            "rule": rule,
+            "queryPlan": query_plan,
+            "rows": rows,
+            "readTransactionCount": read_transaction_count,
+            "readQueryCount": read_query_count,
+            "executed": executed,
+        }
+
     def match_typedb_native_rules(
         self,
         rules: Iterable[GraphInferenceRule],
@@ -13947,6 +14116,8 @@ relation ontology-assertion,
         schema_function_match_used = False
         indexed_evidence_query_used = False
         evidence_index_hydration: Dict[str, object] = {}
+        timeout_fallback_rule_count = 0
+        timeout_fallback_shard_count = 0
         requested_target_parallelism = max(
             1,
             min(8, int(number_or_none(native_rule_target_parallelism) or 1)),
@@ -14494,6 +14665,24 @@ relation ontology-assertion,
                                 capture(index, planned, error=error)
                 for index, planned in enumerate(selected_entries):
                     completed = dict(completed_entries.get(index) or {})
+                    if str(completed.get("status") or "partial") != "ok":
+                        # Initial independent rule calls may run in parallel,
+                        # but a timeout recovery runs here after that phase has
+                        # drained. This gives the failed rule smaller target
+                        # sets without adding concurrent TypeDB pressure.
+                        completed = self.recover_timed_out_native_rule_entry(
+                            completed,
+                            planned,
+                            clean_symbols,
+                            schema_function_query,
+                            world_id,
+                            scoped_manifest_only,
+                            imported,
+                            TransactionType,
+                            deadline,
+                            execution_mode,
+                            evidence_read_index,
+                        )
                     read_transaction_count += int(completed.get("readTransactionCount") or 0)
                     read_call_count += int(completed.get("readQueryCount") or 0)
                     if str(completed.get("status") or "partial") != "ok":
@@ -14522,6 +14711,11 @@ relation ontology-assertion,
                         execution_incomplete = True
                         continue
                     executed_rules.append(executed)
+                    if bool(executed.get("timeoutFallbackUsed")):
+                        timeout_fallback_rule_count += 1
+                        timeout_fallback_shard_count += int(
+                            executed.get("timeoutFallbackShardCount") or 0
+                        )
                     schema_function_match_used = schema_function_match_used or bool(
                         executed.get("schemaFunctionQueryUsed")
                     )
@@ -14556,6 +14750,9 @@ relation ontology-assertion,
                     "targetWorkItemCount": int(target_work_plan.get("targetWorkItemCount") or 0),
                     "targetWorkOriginalEntryCount": int(target_work_plan.get("targetWorkOriginalEntryCount") or 0),
                     "targetWorkShardedRuleCount": int(target_work_plan.get("targetWorkShardedRuleCount") or 0),
+                    "timeoutFallbackUsed": timeout_fallback_rule_count > 0,
+                    "timeoutFallbackRuleCount": timeout_fallback_rule_count,
+                    "timeoutFallbackShardCount": timeout_fallback_shard_count,
                     "nativeRuleAnyConditionParallelismCap": any_condition_parallelism_cap,
                     "nativeRuleAnyConditionRuleCount": any_condition_rule_count,
                     "nativeRuleExecutionPhases": native_rule_execution_phases,
@@ -14603,6 +14800,9 @@ relation ontology-assertion,
                 "targetWorkItemCount": int(target_work_plan.get("targetWorkItemCount") or 0),
                 "targetWorkOriginalEntryCount": int(target_work_plan.get("targetWorkOriginalEntryCount") or 0),
                 "targetWorkShardedRuleCount": int(target_work_plan.get("targetWorkShardedRuleCount") or 0),
+                "timeoutFallbackUsed": timeout_fallback_rule_count > 0,
+                "timeoutFallbackRuleCount": timeout_fallback_rule_count,
+                "timeoutFallbackShardCount": timeout_fallback_shard_count,
                 "nativeRuleAnyConditionParallelismCap": any_condition_parallelism_cap,
                 "nativeRuleAnyConditionRuleCount": any_condition_rule_count,
                 "nativeRuleExecutionPhases": native_rule_execution_phases,
@@ -14649,6 +14849,9 @@ relation ontology-assertion,
                 "targetWorkItemCount": int(target_work_plan.get("targetWorkItemCount") or 0),
                 "targetWorkOriginalEntryCount": int(target_work_plan.get("targetWorkOriginalEntryCount") or 0),
                 "targetWorkShardedRuleCount": int(target_work_plan.get("targetWorkShardedRuleCount") or 0),
+                "timeoutFallbackUsed": timeout_fallback_rule_count > 0,
+                "timeoutFallbackRuleCount": timeout_fallback_rule_count,
+                "timeoutFallbackShardCount": timeout_fallback_shard_count,
                 "nativeRuleAnyConditionParallelismCap": any_condition_parallelism_cap,
                 "nativeRuleAnyConditionRuleCount": any_condition_rule_count,
                 "nativeRuleExecutionPhases": native_rule_execution_phases,
@@ -17050,6 +17253,13 @@ relation ontology-assertion,
                 "typedbNativeRuleTargetWorkShardingSuppressed": bool(native_match_result.get("targetWorkShardingSuppressed")),
                 "typedbNativeRuleTargetWorkShardCount": int(number_or_none(native_match_result.get("targetWorkShardCount")) or 0),
                 "typedbNativeRuleWorkItemCount": int(number_or_none(native_match_result.get("targetWorkItemCount")) or 0),
+                "typedbNativeRuleTimeoutFallbackUsed": bool(native_match_result.get("timeoutFallbackUsed")),
+                "typedbNativeRuleTimeoutFallbackRuleCount": int(
+                    number_or_none(native_match_result.get("timeoutFallbackRuleCount")) or 0
+                ),
+                "typedbNativeRuleTimeoutFallbackShardCount": int(
+                    number_or_none(native_match_result.get("timeoutFallbackShardCount")) or 0
+                ),
                 # All target shards are merged before this one generation is
                 # written, so no partial target result can become active.
                 "typedbNativeRuleCommitMode": "single-inferencebox-generation",
@@ -17486,6 +17696,13 @@ relation ontology-assertion,
             "typedbNativeRuleTargetWorkShardingSuppressed": bool(native_match_result.get("targetWorkShardingSuppressed")),
             "typedbNativeRuleTargetWorkShardCount": int(number_or_none(native_match_result.get("targetWorkShardCount")) or 0),
             "typedbNativeRuleWorkItemCount": int(number_or_none(native_match_result.get("targetWorkItemCount")) or 0),
+            "typedbNativeRuleTimeoutFallbackUsed": bool(native_match_result.get("timeoutFallbackUsed")),
+            "typedbNativeRuleTimeoutFallbackRuleCount": int(
+                number_or_none(native_match_result.get("timeoutFallbackRuleCount")) or 0
+            ),
+            "typedbNativeRuleTimeoutFallbackShardCount": int(
+                number_or_none(native_match_result.get("timeoutFallbackShardCount")) or 0
+            ),
             "typedbNativeRuleCommitMode": "single-inferencebox-generation",
             "typedbSchemaFunctionUsed": schema_function_sync_used,
             "typedbSchemaFunctionSyncedCount": int(number_or_none(function_sync_result.get("syncedCount")) or 0),
@@ -17520,7 +17737,8 @@ relation ontology-assertion,
                     "status", "reason", "reasonCode", "nativeQueryUsed", "schemaFunctionUsed", "indexedEvidenceQueryUsed",
                     "executedRuleCount", "skippedRuleCount", "matchedCount", "executedRules",
                     "skippedRules", "nativeExecutionMode", "readTransactionCount", "readQueryCount",
-                    "executionPlan", "blockingRule", "typedbQueryMetrics",
+                    "executionPlan", "blockingRule", "typedbQueryMetrics", "timeoutFallbackUsed",
+                    "timeoutFallbackRuleCount", "timeoutFallbackShardCount",
                 ]
                 if key in native_match_result
             },

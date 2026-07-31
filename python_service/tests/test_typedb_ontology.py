@@ -80,6 +80,7 @@ from digital_twin.infrastructure.typedb_ontology import (
     typedb_native_rule_profile,
     typedb_native_reasoning_profile,
     typedb_scoped_manifest_member_clause,
+    typedb_error_code,
     inference_generation_marker_row,
 )
 
@@ -3427,6 +3428,267 @@ class TypeDBOntologyRepositoryTests(unittest.TestCase):
         self.assertEqual("typedbNativeRuleQueryTimeout", result["reasonCode"])
         self.assertEqual(rule.rule_id, result["blockingRule"]["ruleId"])
         self.assertIn(rule.rule_id, result["reason"])
+
+    def test_typedb_error_code_classifies_native_execution_interruption_as_timeout(self):
+        self.assertEqual(
+            "typedbTimeout",
+            typedb_error_code("[TSV13] Execution interrupted by a bounded TypeDB read."),
+        )
+
+    def test_timed_out_native_rule_recovers_only_after_every_target_shard_succeeds(self):
+        repository = TypeDBOntologyGraphRepository("127.0.0.1:1729", retry_count=0)
+        rule = default_graph_inference_rules()[0]
+        symbols = ["005930", "000660", "035420", "035720"]
+        planned = {
+            "rule": rule,
+            "candidateSymbols": symbols,
+            "queryComplexity": 5,
+        }
+        primary = {
+            "status": "partial",
+            "readTransactionCount": 1,
+            "readQueryCount": 1,
+            "failure": {
+                "ruleId": rule.rule_id,
+                "status": "query-timeout",
+                "reason": "TypeDB read query timed out after 10s",
+                "candidateSymbols": symbols,
+                "elapsedMs": 10000,
+                "queryDurationMs": 10000,
+            },
+        }
+
+        def recovered_entry(shard, *_args):
+            shard_symbols = list(shard["candidateSymbols"])
+            return {
+                "status": "ok",
+                "rule": rule,
+                "queryPlan": {"schemaFunctionQuery": True, "queryMode": "typedb-schema-function"},
+                "rows": [{"sourceId": "stock:" + symbol} for symbol in shard_symbols],
+                "readTransactionCount": 1,
+                "readQueryCount": 1,
+                "executed": {
+                    "ruleId": rule.rule_id,
+                    "nativeRuleId": "native:" + rule.rule_id,
+                    "schemaFunctionQueryUsed": True,
+                    "indexedEvidenceQueryUsed": False,
+                    "rowCount": len(shard_symbols),
+                    "candidateSymbols": shard_symbols,
+                    "queryCount": 1,
+                    "anyConditionQueryCount": 0,
+                    "queryDurationMs": 120,
+                    "elapsedMs": 120,
+                },
+            }
+
+        with patch.object(repository, "execute_typedb_native_rule_entry", side_effect=recovered_entry) as execute:
+            result = repository.recover_timed_out_native_rule_entry(
+                primary,
+                planned,
+                symbols,
+                True,
+                "",
+                False,
+                None,
+                None,
+                time.monotonic() + 5,
+                "typedb-schema-function-filtered-planned-parallel",
+            )
+
+        self.assertEqual("ok", result["status"])
+        self.assertEqual(2, execute.call_count)
+        self.assertEqual(
+            [["000660", "035420"], ["005930", "035720"]],
+            [call.args[0]["candidateSymbols"] for call in execute.call_args_list],
+        )
+        self.assertEqual(set(symbols), set(result["executed"]["candidateSymbols"]))
+        self.assertTrue(result["executed"]["timeoutFallbackUsed"])
+        self.assertEqual(2, result["executed"]["timeoutFallbackShardCount"])
+        self.assertEqual(3, result["readTransactionCount"])
+        self.assertEqual(3, result["readQueryCount"])
+        self.assertEqual(
+            {"stock:" + symbol for symbol in symbols},
+            {row["sourceId"] for row in result["rows"]},
+        )
+
+    def test_timed_out_native_rule_recovery_rejects_a_partial_target_result(self):
+        repository = TypeDBOntologyGraphRepository("127.0.0.1:1729", retry_count=0)
+        rule = default_graph_inference_rules()[0]
+        symbols = ["005930", "000660"]
+        planned = {"rule": rule, "candidateSymbols": symbols, "queryComplexity": 5}
+        primary = {
+            "status": "partial",
+            "readTransactionCount": 1,
+            "readQueryCount": 1,
+            "failure": {
+                "ruleId": rule.rule_id,
+                "status": "query-timeout",
+                "reason": "TypeDB read query timed out after 10s",
+                "candidateSymbols": symbols,
+            },
+        }
+        recovered = {
+            "status": "ok",
+            "rule": rule,
+            "queryPlan": {},
+            "rows": [{"sourceId": "stock:005930"}],
+            "readTransactionCount": 1,
+            "readQueryCount": 1,
+            "executed": {
+                "ruleId": rule.rule_id,
+                "candidateSymbols": ["005930"],
+                "rowCount": 1,
+                "queryCount": 1,
+                "anyConditionQueryCount": 0,
+                "queryDurationMs": 10,
+                "elapsedMs": 10,
+            },
+        }
+        failed = {
+            "status": "partial",
+            "readTransactionCount": 1,
+            "readQueryCount": 1,
+            "failure": {
+                "ruleId": rule.rule_id,
+                "status": "query-timeout",
+                "reason": "TypeDB read query timed out after 10s",
+                "candidateSymbols": ["000660"],
+            },
+        }
+
+        with patch.object(
+            repository,
+            "execute_typedb_native_rule_entry",
+            side_effect=[recovered, failed],
+        ):
+            result = repository.recover_timed_out_native_rule_entry(
+                primary,
+                planned,
+                symbols,
+                True,
+                "",
+                False,
+                None,
+                None,
+                time.monotonic() + 5,
+                "typedb-schema-function-filtered-planned-parallel",
+            )
+
+        self.assertEqual("partial", result["status"])
+        self.assertNotIn("rows", result)
+        self.assertTrue(result["failure"]["timeoutFallbackAttempted"])
+        self.assertEqual(1, result["failure"]["timeoutFallbackFailedShardIndex"])
+        self.assertEqual(set(symbols), set(result["failure"]["candidateSymbols"]))
+
+    def test_parallel_native_rule_match_uses_serial_timeout_recovery_before_merging(self):
+        repository = TypeDBOntologyGraphRepository(
+            "127.0.0.1:1729",
+            retry_count=0,
+            native_rule_parallelism=2,
+        )
+        symbols = ["005930", "000660"]
+
+        def rule(rule_id):
+            return GraphInferenceRule(
+                rule_id=rule_id,
+                label=rule_id,
+                version="v1",
+                source_kind="stock",
+                conditions=[
+                    GraphRuleCondition(
+                        "holding-source",
+                        "subject_property",
+                        "보유 종목입니다.",
+                        field="source",
+                        value="holding",
+                    ),
+                ],
+                derivations=[
+                    GraphRuleDerivation(
+                        relation_type="REQUIRES_NEXT_CHECK",
+                        target_kind="next-check",
+                        target_key="{symbol}:check",
+                        target_label="다음 확인",
+                        tbox_class="NextCheck",
+                    ),
+                ],
+                action_group="watch",
+                action_level="review",
+                prompt_hint="시간 초과 복구 연결 검증",
+            )
+
+        slow_rule = rule("graph.timeout.recovery.slow.v1")
+        fast_rule = rule("graph.timeout.recovery.fast.v1")
+
+        def successful_entry(planned, timeout_fallback=False):
+            candidate_symbols = list(planned["candidateSymbols"])
+            return {
+                "status": "ok",
+                "rule": planned["rule"],
+                "queryPlan": {},
+                "rows": [],
+                "readTransactionCount": 1,
+                "readQueryCount": 1,
+                "executed": {
+                    "ruleId": planned["rule"].rule_id,
+                    "nativeRuleId": "native:" + planned["rule"].rule_id,
+                    "schemaFunctionQueryUsed": True,
+                    "indexedEvidenceQueryUsed": False,
+                    "rowCount": 0,
+                    "candidateSymbols": candidate_symbols,
+                    "queryCount": 1,
+                    "anyConditionQueryCount": 0,
+                    "queryDurationMs": 10,
+                    "elapsedMs": 10,
+                    "timeoutFallbackUsed": timeout_fallback,
+                    "timeoutFallbackShardCount": 2 if timeout_fallback else 0,
+                },
+            }
+
+        def execute_entry(planned, *_args):
+            if planned["rule"].rule_id == slow_rule.rule_id:
+                return {
+                    "status": "partial",
+                    "readTransactionCount": 1,
+                    "readQueryCount": 1,
+                    "failure": {
+                        "ruleId": slow_rule.rule_id,
+                        "status": "query-timeout",
+                        "reason": "TypeDB read query timed out after 10s",
+                        "candidateSymbols": list(planned["candidateSymbols"]),
+                    },
+                }
+            return successful_entry(planned)
+
+        def recover_entry(_primary, planned, *_args):
+            self.assertEqual(slow_rule.rule_id, planned["rule"].rule_id)
+            return successful_entry(planned, timeout_fallback=True)
+
+        imported = (object, object, object, object, SimpleNamespace(READ="read"))
+        with patch.object(repository, "driver_imports", return_value=(imported, None)), \
+                patch.object(repository, "active_abox_rule_context", return_value={
+                    "status": "ok",
+                    "relationTypesBySymbol": {symbol: [] for symbol in symbols},
+                    "sourceIdsBySymbol": {
+                        symbol: ["stock:" + symbol]
+                        for symbol in symbols
+                    },
+                }), \
+                patch.object(repository, "execute_typedb_native_rule_entry", side_effect=execute_entry), \
+                patch.object(repository, "recover_timed_out_native_rule_entry", side_effect=recover_entry) as recover:
+            result = repository.match_typedb_native_rules(
+                [slow_rule, fast_rule],
+                target_symbols=symbols,
+                native_rule_parallelism=2,
+                stable_abox_write_lease_held=True,
+            )
+
+        self.assertEqual("ok", result["status"])
+        self.assertTrue(result["parallelRuleExecution"])
+        recover.assert_called_once()
+        self.assertTrue(result["timeoutFallbackUsed"])
+        self.assertEqual(1, result["timeoutFallbackRuleCount"])
+        self.assertEqual(2, result["timeoutFallbackShardCount"])
 
     def test_typedb_native_rule_profile_gap_blocks_partial_investment_judgement(self):
         repository = TypeDBOntologyGraphRepository("127.0.0.1:1729", retry_count=0)

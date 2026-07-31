@@ -468,6 +468,8 @@ def native_rule_timing_profile(
             "targetWorkShardIndex": max(0, _integer(item.get("targetWorkShardIndex"))),
             "targetWorkShardCount": max(1, _integer(item.get("targetWorkShardCount") or 1)),
             "targetWorkShardingUsed": bool(item.get("targetWorkShardingUsed")),
+            "timeoutFallbackUsed": bool(item.get("timeoutFallbackUsed")),
+            "timeoutFallbackShardCount": max(0, _integer(item.get("timeoutFallbackShardCount"))),
             "queryComplexity": max(0, _integer(item.get("queryComplexity"))),
             "queryCount": max(0, _integer(item.get("queryCount"))),
             "anyConditionQueryCount": max(0, _integer(item.get("anyConditionQueryCount"))),

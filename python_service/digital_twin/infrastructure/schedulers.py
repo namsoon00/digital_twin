@@ -1188,6 +1188,21 @@ class OntologyRuleboxPrewarmScheduler:
             return status not in {"disabled"}
         return False
 
+    @staticmethod
+    def interrupted_compiler_error(payload: dict) -> bool:
+        """Recognize a TypeDB call that may still be compiling server-side."""
+        text = " ".join(str(dict(payload or {}).get(key) or "") for key in [
+            "reason", "deferredReason", "workerOutput",
+        ]).lower()
+        return any(token in text for token in [
+            "keep-alive timed out",
+            "operation timed out",
+            "deadline exceeded",
+            "transport error",
+            "connection reset",
+            "connection closed",
+        ])
+
     def retry_interval_seconds(self, result: dict) -> int:
         """Leave TypeDB recovery time after an expensive schema attempt.
 
@@ -1209,6 +1224,11 @@ class OntologyRuleboxPrewarmScheduler:
             # recovery window instead of immediately queueing another compile.
             return max(self.interval_seconds, recommended, 300)
         if status == "error":
+            if self.interrupted_compiler_error(payload):
+                # Driver-side keep-alive loss has the same safety property as
+                # an outer isolated-process timeout: TypeDB can still be
+                # completing the schema transaction after the client exits.
+                return max(self.interval_seconds, recommended, 300)
             return max(self.interval_seconds, recommended, 60)
         if (
             bool(payload.get("backlogRecoveryGranted"))

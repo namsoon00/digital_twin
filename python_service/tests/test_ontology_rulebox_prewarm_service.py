@@ -223,6 +223,10 @@ class OntologyRuleboxPrewarmRunnerTests(unittest.TestCase):
         scheduler = OntologyRuleboxPrewarmScheduler(FakeRepository(), 15)
 
         self.assertEqual(60, scheduler.retry_interval_seconds({"status": "error"}))
+        self.assertEqual(300, scheduler.retry_interval_seconds({
+            "status": "error",
+            "reason": "http2 error: transport error: keep-alive timed out",
+        }))
         self.assertEqual(30, scheduler.retry_interval_seconds({"status": "provisioning"}))
         self.assertEqual(300, scheduler.retry_interval_seconds({"status": "timeout"}))
         self.assertEqual(30, scheduler.retry_interval_seconds({"status": "deferred-reasoning-pending"}))

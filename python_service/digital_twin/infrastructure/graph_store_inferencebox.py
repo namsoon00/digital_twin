@@ -105,11 +105,35 @@ def inferencebox_relation_payload(row: Dict[str, object]) -> Dict[str, object]:
         "reasoningLayer": str(row.get("reasoningLayer") or ""),
         "reasoningMode": str(row.get("reasoningMode") or ""),
         "materializationSource": str(row.get("materializationSource") or ""),
-        "polarity": str(row.get("polarity") or ""),
+        # Native TypeDB materialization keeps the complete RuleBox decision
+        # envelope in ``propertiesJson``.  Some live in-memory graph rows
+        # intentionally promote only a subset of that envelope, so the
+        # InferenceBox read model must retain these fields from properties as
+        # well.  Dropping the action group/level makes a valid relation look
+        # like an unsafe, policy-less inference and blocks its alert path.
+        "polarity": str(row.get("polarity") or properties.get("polarity") or ""),
         "evidenceRole": str(properties.get("evidenceRole") or row.get("evidenceRole") or "context"),
-        "actionGroup": str(row.get("actionGroup") or ""),
-        "actionLevel": str(row.get("actionLevel") or ""),
-        "decisionStage": str(row.get("decisionStage") or ""),
+        "actionGroup": str(
+            row.get("actionGroup")
+            or row.get("action_group")
+            or properties.get("actionGroup")
+            or properties.get("action_group")
+            or ""
+        ),
+        "actionLevel": str(
+            row.get("actionLevel")
+            or row.get("action_level")
+            or properties.get("actionLevel")
+            or properties.get("action_level")
+            or ""
+        ),
+        "decisionStage": str(
+            row.get("decisionStage")
+            or row.get("decision_stage")
+            or properties.get("decisionStage")
+            or properties.get("decision_stage")
+            or ""
+        ),
         "decisionEffect": str(properties.get("decisionEffect") or properties.get("decision_effect") or row.get("decisionEffect") or ""),
         "decisionLabel": str(properties.get("decisionLabel") or row.get("decisionLabel") or ""),
         "decisionTone": str(properties.get("decisionTone") or row.get("decisionTone") or ""),

@@ -1,3 +1,4 @@
+import json
 import sys
 import unittest
 from pathlib import Path
@@ -22,9 +23,37 @@ from digital_twin.domain.investment_research import choose_action
 from digital_twin.domain.portfolio import AccountSnapshot, Position
 from digital_twin.domain.portfolio_calculations import portfolio_summary
 from digital_twin.domain.strategy import decisions_for_positions
+from digital_twin.infrastructure.graph_store_inferencebox import inferencebox_relation_payload
 
 
 class OntologyInferenceContextTests(unittest.TestCase):
+    def test_inferencebox_adapter_keeps_property_decision_envelope_for_alerts(self):
+        """A live native relation must not become policy-less at the adapter boundary."""
+        relation = inferencebox_relation_payload({
+            "type": "HAS_INFERRED_RISK",
+            "source": "stock:000660",
+            "target": "risk:000660:trend",
+            "ruleId": "graph.test.risk.v1",
+            "polarity": "risk",
+            "decisionStage": "LOSS_REDUCE",
+            "nativeTypeDbReasoned": True,
+            "propertiesJson": json.dumps({
+                "actionGroup": "lossControl",
+                "actionLevel": "review",
+                "decisionEffect": "constrain",
+                "decisionLabel": "손실 관리 검토",
+                "decisionTone": "caution",
+            }),
+        })
+
+        match = matches_from_inference([relation], [], facts={"symbol": "000660"})[0]
+
+        self.assertEqual("lossControl", relation["actionGroup"])
+        self.assertEqual("review", relation["actionLevel"])
+        self.assertEqual("LOSS_REDUCE", relation["decisionStage"])
+        self.assertFalse(match.reference_only)
+        self.assertNotIn("policyReasonCode", match.evidence_state)
+
     def test_execution_plan_describes_only_typedb_add_buy_relations(self):
         facts = {
             "symbol": "000660",

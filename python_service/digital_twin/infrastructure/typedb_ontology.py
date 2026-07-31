@@ -1355,15 +1355,15 @@ DEFAULT_TYPEDB_NATIVE_RULE_PARALLELISM = 4
 DEFAULT_TYPEDB_NATIVE_RULE_TARGET_PARALLELISM = 1
 # TypeDB recompiles the stored-function graph at each schema transaction.
 # Deployment runs only after a sustained empty mailbox, so group a meaningful
-# but bounded number of complete rules into one commit. One-function batches
-# repeatedly recompile an almost identical RuleBox and turn a cold deployment
-# into hours of maintenance work.
-DEFAULT_TYPEDB_SCHEMA_FUNCTION_PROVISION_BATCH_SIZE = 12
-# Disconnecting a TypeDB client does not reliably cancel a schema compiler
-# commit. During the idle-only maintenance window, keep the client attached
-# long enough to receive the result and persist its deployment receipt rather
-# than repeatedly orphaning compiler work on the server.
-DEFAULT_TYPEDB_SCHEMA_FUNCTION_PROVISION_TIMEOUT_SECONDS = 1200.0
+# but bounded number of complete rules into one commit. Three rules keep the
+# TypeQL definition small enough for local TypeDB to answer before its HTTP/2
+# keep-alive window, without paying the overhead of a one-function commit.
+DEFAULT_TYPEDB_SCHEMA_FUNCTION_PROVISION_BATCH_SIZE = 3
+# A timed-out schema commit can continue server-side, so deployment receipts
+# make the next bounded pass verify it before defining anything again. Keep
+# the client deadline short enough to prevent a stalled compiler from holding
+# every inference worker behind one long-lived request.
+DEFAULT_TYPEDB_SCHEMA_FUNCTION_PROVISION_TIMEOUT_SECONDS = 30.0
 TYPEDB_PROMOTED_NUMERIC_ATTRIBUTES = {
     "currentPrice": "ontology-current-price",
     "averagePrice": "ontology-average-price",

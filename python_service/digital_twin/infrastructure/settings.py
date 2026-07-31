@@ -1578,12 +1578,12 @@ def runtime_settings(fast_operational_read: bool = False) -> Dict[str, str]:
         "typedbSchemaFunctionProvisionBatchSize": value(
             "typedbSchemaFunctionProvisionBatchSize",
             "TYPEDB_SCHEMA_FUNCTION_PROVISION_BATCH_SIZE",
-            "12",
+            "3",
         ),
         "typedbSchemaFunctionProvisionTimeoutSeconds": value(
             "typedbSchemaFunctionProvisionTimeoutSeconds",
             "TYPEDB_SCHEMA_FUNCTION_PROVISION_TIMEOUT_SECONDS",
-            "1200",
+            "30",
         ),
         "typedbAutoResetEnabled": value("typedbAutoResetEnabled", "TYPEDB_AUTO_RESET_ENABLED", "0"),
         "typedbAgeResetEnabled": value("typedbAgeResetEnabled", "TYPEDB_AGE_RESET_ENABLED", "0"),

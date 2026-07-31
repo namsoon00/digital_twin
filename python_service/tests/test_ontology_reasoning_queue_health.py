@@ -268,6 +268,33 @@ class OntologyReasoningQueueHealthTests(unittest.TestCase):
         self.assertEqual("fairness-drain-progress", health.reason_code)
         self.assertFalse(health.alert_required)
 
+    def test_event_fairness_drain_reports_an_overdue_event_separately(self):
+        health = evaluate_ontology_reasoning_queue_health(
+            queue_snapshot(
+                "2026-07-25T00:00:00Z",
+                effectivePendingCount=2,
+                mailboxPendingEntryCount=2,
+                queueDispatch={
+                    "oldestRequestAt": "2026-07-25T00:00:00Z",
+                    "pendingSymbolCount": 2,
+                    "overduePendingSymbolCount": 0,
+                    "overduePendingEventCount": 1,
+                    "mode": "fairness-drain",
+                    "fairnessDrainActive": True,
+                    "eventFairnessReservationActive": True,
+                },
+            ),
+            previous={"state": "healthy"},
+            warning_age_minutes=30,
+            critical_age_minutes=90,
+            now=datetime(2026, 7, 25, 0, 4, tzinfo=UTC),
+        )
+
+        self.assertEqual("healthy", health.state)
+        self.assertEqual("fairness-drain-progress", health.reason_code)
+        self.assertEqual(1, health.overdue_pending_event_count)
+        self.assertEqual(1, health.to_dict()["overduePendingEventCount"])
+
     def test_recovery_from_delayed_queue_is_alerted(self):
         previous = {
             "state": "delayed",
@@ -444,7 +471,11 @@ class OntologyReasoningQueueHealthTests(unittest.TestCase):
             "rawPendingCount": 120,
             "pendingSymbolCount": 5,
             "overduePendingSymbolCount": 2,
+            "overduePendingEventCount": 1,
             "queueMode": "fairness-drain",
+            "fairnessDrainActive": True,
+            "eventFairnessReservationActive": True,
+            "eventFairnessReservation": {"symbol": "AAPL"},
             "reason": "가장 오래된 추론 요청이 지연 기준을 넘었습니다.",
         })
 
@@ -456,6 +487,8 @@ class OntologyReasoningQueueHealthTests(unittest.TestCase):
         self.assertEqual(ONTOLOGY_REASONING_QUEUE, job.message_type)
         self.assertIn(event.event_id, job.dedupe_key)
         self.assertIn("가장 오래된 요청", job.text)
+        self.assertIn("이벤트 1건 / 종목 2개", job.text)
+        self.assertIn("오래된 이벤트 예약 슬롯 처리 중", job.text)
         self.assertTrue(is_operations_delivery_message_type(job.message_type))
 
         rendered = render_notification(NotificationTemplate.default(ONTOLOGY_REASONING_QUEUE), job.context)

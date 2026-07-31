@@ -109,6 +109,66 @@ class OntologyProjectionStabilityTests(unittest.TestCase):
         self.assertEqual(120, runner.effective_projection_min_interval_seconds([event], cursor.load(), ["MSFT"]))
         self.assertFalse(runner.projection_due([event], cursor.load(), ["MSFT"]))
 
+    def test_overdue_event_reserves_one_target_despite_recent_symbol_projection(self):
+        cursor = CursorStore({
+            "lastReasonedAtBySymbol": {
+                "MSFT": "2026-07-21T23:59:30Z",
+                "NVDA": "2026-07-21T23:59:30Z",
+                "AAPL": "2026-07-21T23:59:30Z",
+            },
+        })
+        runner = self.runner(cursor)
+        runner.settings.update({
+            "ontologyReasoningMaxSymbolsPerRun": "2",
+            "ontologyReasoningFairnessMaxWaitSeconds": "900",
+        })
+        old_calendar = SimpleNamespace(
+            event_id="old-calendar",
+            occurred_at="2026-07-21T23:40:00Z",
+            payload={
+                "changedCount": 2,
+                "trigger": "investment-calendar-update",
+                "symbols": ["MSFT", "NVDA"],
+                "factTypes": ["InvestmentCalendarEvent"],
+            },
+        )
+        new_critical = SimpleNamespace(
+            event_id="new-critical",
+            occurred_at="2026-07-21T23:59:50Z",
+            payload={
+                "changedCount": 1,
+                "trigger": "market-data-update",
+                "symbols": ["AAPL"],
+                "factTypes": ["MarketQuote"],
+                "materialityAssessments": [{"subject": "AAPL", "reviewLevel": "immediate"}],
+            },
+        )
+
+        batches, symbols, omitted = runner.request_symbol_batches([new_critical, old_calendar])
+        fairness = runner.fairness_drain_state(
+            symbols,
+            cursor.load(),
+            requests=[new_critical, old_calendar],
+            selected_requests=[new_critical, old_calendar],
+        )
+        dispatch = runner.queue_dispatch_summary(
+            [new_critical, old_calendar],
+            selected_requests=[new_critical, old_calendar],
+            selected_symbols=symbols,
+            cursor_payload=cursor.load(),
+            fairness_drain=fairness,
+        )
+
+        self.assertEqual(["MSFT", "AAPL"], symbols)
+        self.assertEqual(["MSFT"], batches["old-calendar"])
+        self.assertEqual(["AAPL"], batches["new-critical"])
+        self.assertEqual(1, omitted)
+        self.assertTrue(fairness["active"])
+        self.assertEqual(["old-calendar"], fairness["eventIds"])
+        self.assertEqual("fairness-drain", dispatch["mode"])
+        self.assertEqual(1, dispatch["overduePendingEventCount"])
+        self.assertTrue(dispatch["eventFairnessReservationActive"])
+
     def test_verified_actionable_snapshot_fast_drain_has_no_artificial_cooldown(self):
         cursor = CursorStore({
             "lastSuccessfulProjectionAt": "2026-07-21T23:59:30Z",

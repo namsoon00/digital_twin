@@ -1795,7 +1795,7 @@ class OntologyReasoningRunner:
         return levels or {"act", "immediate"}
 
     def fairness_max_wait_seconds(self) -> int:
-        """Prevent a slow native TypeDB worker from starving one symbol forever."""
+        """Bound queue starvation for both symbols and durable event revisions."""
         return int_setting(self.settings, "ontologyReasoningFairnessMaxWaitSeconds", 900, 60, 86400)
 
     def fairness_drain_enabled(self) -> bool:
@@ -1836,10 +1836,121 @@ class OntologyReasoningRunner:
         rank, _wait_seconds = self.symbol_fairness_rank(symbol, cursor_payload)
         return "unseen" if rank == 2 else "overdue" if rank == 1 else "normal"
 
+    def event_wait_seconds(self, event: object) -> int:
+        """Return durable queue age for one event without trusting source clocks.
+
+        Source observations can legitimately be older than the queue entry
+        when a provider refresh is replayed after a worker restart. Fairness
+        is about when the durable scheduler accepted the work, so it uses the
+        event timestamp that also drives queue-health alerts.
+        """
+        raw = str(getattr(event, "occurred_at", "") or "").strip()
+        if not raw:
+            return 0
+        try:
+            occurred = datetime.fromisoformat(raw.replace("Z", "+00:00"))
+        except ValueError:
+            return 0
+        if occurred.tzinfo is None:
+            occurred = occurred.replace(tzinfo=timezone.utc)
+        now = self.now_provider()
+        if now.tzinfo is None:
+            now = now.replace(tzinfo=timezone.utc)
+        return max(0, int((now.astimezone(timezone.utc) - occurred.astimezone(timezone.utc)).total_seconds()))
+
+    def event_fairness_state(self, event: object) -> str:
+        return "overdue" if self.event_wait_seconds(event) >= self.fairness_max_wait_seconds() else "normal"
+
+    def event_fairness_queue(
+        self,
+        requests: Iterable[object],
+        progress: Dict[str, List[str]] = None,
+        cursor_payload: Dict[str, object] = None,
+        priority_symbols: Dict[str, int] = None,
+    ) -> List[Dict[str, object]]:
+        """Expose durable-event fairness separately from subject freshness.
+
+        A symbol can be served by a newer quote while an older calendar or
+        research event for that same symbol has never been selected. The old
+        symbol-only queue hid that situation and allowed priority starvation.
+        """
+        payload = self.cursor_payload() if cursor_payload is None else dict(cursor_payload or {})
+        event_progress = self.event_symbol_progress(payload) if progress is None else dict(progress or {})
+        priorities = self.priority_symbols() if priority_symbols is None else dict(priority_symbols or {})
+        rows = []
+        for event in requests or []:
+            event_id = str(getattr(event, "event_id", "") or "").strip()
+            if not event_id:
+                continue
+            due_symbols = self.due_event_symbols(event, event_progress, payload, priorities)
+            if not due_symbols:
+                continue
+            wait_seconds = self.event_wait_seconds(event)
+            rows.append({
+                "eventId": event_id,
+                "state": "overdue" if wait_seconds >= self.fairness_max_wait_seconds() else "normal",
+                "waitSeconds": wait_seconds,
+                "symbols": self.order_symbols_by_fairness(
+                    due_symbols,
+                    priorities,
+                    payload,
+                    event=event,
+                )[:20],
+                "priority": event_reasoning_priority(event),
+                "trigger": str(event_payload(event).get("trigger") or ""),
+            })
+        return sorted(
+            rows,
+            key=lambda item: (
+                int(item.get("state") == "overdue"),
+                int(item.get("waitSeconds") or 0),
+                str(item.get("eventId") or ""),
+            ),
+            reverse=True,
+        )
+
+    def event_fairness_reservation(
+        self,
+        requests: Iterable[object],
+        progress: Dict[str, List[str]] = None,
+        cursor_payload: Dict[str, object] = None,
+        priority_symbols: Dict[str, int] = None,
+    ) -> Dict[str, object]:
+        """Reserve one bounded target for the oldest overdue event revision.
+
+        Native TypeDB writes stay serialized and target counts remain bounded.
+        This only prevents a constant stream of newer market or research
+        revisions from keeping a valid calendar/research event at
+        ``attempt_count=0`` indefinitely.
+        """
+        queue = self.event_fairness_queue(
+            requests,
+            progress=progress,
+            cursor_payload=cursor_payload,
+            priority_symbols=priority_symbols,
+        )
+        overdue = [item for item in queue if item.get("state") == "overdue" and item.get("symbols")]
+        selected = overdue[0] if overdue and self.fairness_drain_enabled() else {}
+        return {
+            "enabled": self.fairness_drain_enabled(),
+            "active": bool(selected),
+            "eventId": str(selected.get("eventId") or ""),
+            "symbol": str((selected.get("symbols") or [""])[0] or ""),
+            "waitSeconds": int(selected.get("waitSeconds") or 0),
+            "overdueEventCount": len(overdue),
+            "reason": (
+                "대기 한도를 넘긴 이벤트에 한 개 대상 예약 슬롯을 배정했습니다."
+                if selected
+                else ""
+            ),
+        }
+
     def fairness_drain_state(
         self,
         selected_symbols: Iterable[str],
         cursor_payload: Dict[str, object] = None,
+        requests: Iterable[object] = None,
+        selected_requests: Iterable[object] = None,
     ) -> Dict[str, object]:
         """Return a scheduling-only drain decision for already overdue work."""
         payload = self.cursor_payload() if cursor_payload is None else dict(cursor_payload or {})
@@ -1849,15 +1960,42 @@ class OntologyReasoningRunner:
             if str(symbol or "").strip()
             and self.symbol_fairness_state(str(symbol or "").upper().strip(), payload) == "overdue"
         ]
+        reservation = self.event_fairness_reservation(
+            requests or [],
+            cursor_payload=payload,
+        )
+        selected_symbol_set = {
+            str(symbol or "").upper().strip()
+            for symbol in selected_symbols or []
+            if str(symbol or "").strip()
+        }
+        selected_event_ids = {
+            str(getattr(event, "event_id", "") or "").strip()
+            for event in selected_requests or []
+            if str(getattr(event, "event_id", "") or "").strip()
+        }
+        reservation_applied = bool(
+            reservation.get("active")
+            and str(reservation.get("symbol") or "").upper().strip() in selected_symbol_set
+            and (
+                not selected_event_ids
+                or str(reservation.get("eventId") or "") in selected_event_ids
+            )
+        )
+        active = bool(self.fairness_drain_enabled() and (overdue_symbols or reservation_applied))
+        reasons = []
+        if overdue_symbols:
+            reasons.append("대기 한도를 넘긴 종목을 순서대로 따라잡습니다.")
+        if reservation_applied:
+            reasons.append(str(reservation.get("reason") or ""))
         return {
             "enabled": self.fairness_drain_enabled(),
-            "active": bool(self.fairness_drain_enabled() and overdue_symbols),
+            "active": active,
             "symbols": list(dict.fromkeys(overdue_symbols)),
-            "reason": (
-                "대기 한도를 넘긴 종목을 순서대로 따라잡되, TypeDB를 연속 점유하지 않도록 최소 보호 대기를 적용합니다."
-                if self.fairness_drain_enabled() and overdue_symbols
-                else ""
-            ),
+            "eventIds": [str(reservation.get("eventId") or "")] if reservation_applied else [],
+            "eventReservation": reservation,
+            "eventReservationActive": reservation_applied,
+            "reason": " ".join(item for item in reasons if item),
         }
 
     def order_symbols_by_fairness(
@@ -2132,12 +2270,20 @@ class OntologyReasoningRunner:
         runtime = self.last_projection_runtime(payload)
         duration_ms = int(float_value(runtime.get("durationMs"), 0.0))
         if duration_ms <= 0:
-            if self.fairness_drain_state(selected_symbols or [], payload).get("active"):
+            if self.fairness_drain_state(
+                selected_symbols or [],
+                payload,
+                requests=requests,
+            ).get("active"):
                 return min(configured, self.fairness_drain_min_interval_seconds())
             return configured
         measured = int((duration_ms / 1000.0) * self.projection_backpressure_factor())
         protected_delay = min(self.projection_backpressure_max_seconds(), measured)
-        if self.fairness_drain_state(selected_symbols or [], payload).get("active"):
+        if self.fairness_drain_state(
+            selected_symbols or [],
+            payload,
+            requests=requests,
+        ).get("active"):
             # Fairness must not turn a multi-minute projection into a tight
             # loop. It may shorten the ordinary cadence, but it still waits
             # for the observed runtime-derived recovery window.
@@ -2199,6 +2345,13 @@ class OntologyReasoningRunner:
         remaining = self.remaining_event_symbols(event, progress, priority_symbols)
         event_id = str(getattr(event, "event_id", "") or "")
         if event_id and event_id in (progress or {}):
+            return remaining
+        # Event-level fairness is intentionally stronger than per-symbol
+        # cadence. A newer quote can keep a symbol's watermark fresh while a
+        # separate calendar or research revision for it is never claimed.
+        # Once the durable event itself exceeds the wait bound, let its latest
+        # target run in the next bounded generation.
+        if self.fairness_drain_enabled() and self.event_fairness_state(event) == "overdue":
             return remaining
         return [symbol for symbol in remaining if self.event_symbol_due(event, symbol, cursor_payload)]
 
@@ -3650,6 +3803,14 @@ class OntologyReasoningRunner:
         batches: Dict[str, List[str]] = {}
         candidates: Dict[str, Tuple[tuple, str]] = {}
         requested_events = list(requests or [])
+        event_reservation = self.event_fairness_reservation(
+            requested_events,
+            progress=progress,
+            cursor_payload=cursor_payload,
+            priority_symbols=priority_symbols,
+        )
+        reserved_event_id = str(event_reservation.get("eventId") or "").strip()
+        reserved_symbol = str(event_reservation.get("symbol") or "").upper().strip()
 
         if self.coherent_snapshot_enabled():
             event_candidates = []
@@ -3703,6 +3864,22 @@ class OntologyReasoningRunner:
                     snapshot_limit = min(snapshot_limit, max_symbols)
                 selected = []
                 selected_set = set()
+                # Always let one long-waiting event enter the bounded native
+                # target set before newer current-state updates fill it. This
+                # keeps a calendar or research revision from remaining
+                # unclaimed forever when its symbol also receives fresh ticks.
+                if reserved_event_id and reserved_symbol:
+                    reserved_candidate = next(
+                        (
+                            item for item in event_candidates
+                            if item[1] == reserved_event_id and reserved_symbol in item[2]
+                        ),
+                        None,
+                    )
+                    if reserved_candidate and (not snapshot_limit or len(selected) < snapshot_limit):
+                        selected.append(reserved_symbol)
+                        selected_set.add(reserved_symbol)
+                        batches[reserved_event_id] = [reserved_symbol]
                 # Preserve event-level review/trigger priority, then retain
                 # the fairness ordering already applied inside each event.
                 # The former single-event selection made a target cap of two
@@ -3722,7 +3899,10 @@ class OntologyReasoningRunner:
                         selected_set.add(symbol)
                         selected_for_event.append(symbol)
                     if selected_for_event:
-                        batches[event_id] = selected_for_event
+                        existing = batches.setdefault(event_id, [])
+                        for symbol in selected_for_event:
+                            if symbol not in existing:
+                                existing.append(symbol)
                     if snapshot_limit > 0 and len(selected) >= snapshot_limit:
                         break
                 return batches, selected, max(0, len(all_due_symbols) - len(selected))
@@ -3774,7 +3954,15 @@ class OntologyReasoningRunner:
                 reverse=True,
             )
         ]
-        selected = ranked_symbols if not max_symbols else ranked_symbols[:max_symbols]
+        selected = []
+        if reserved_symbol and reserved_symbol in ranked_symbols and (not max_symbols or len(selected) < max_symbols):
+            selected.append(reserved_symbol)
+        for symbol in ranked_symbols:
+            if symbol in selected:
+                continue
+            if max_symbols and len(selected) >= max_symbols:
+                break
+            selected.append(symbol)
         selected_set = set(selected)
         omitted_symbols = [symbol for symbol in ranked_symbols if symbol not in selected_set]
 
@@ -4246,7 +4434,14 @@ class OntologyReasoningRunner:
             priority = event_reasoning_priority(event)
             selected_priority_counts.setdefault(priority, 0)
             selected_priority_counts[priority] += 1
-        fairness = fairness_drain or self.fairness_drain_state(selected_symbols, payload)
+        fairness = fairness_drain or self.fairness_drain_state(
+            selected_symbols,
+            payload,
+            requests=pending,
+            selected_requests=selected,
+        )
+        event_fairness_queue = self.event_fairness_queue(pending, cursor_payload=payload)
+        overdue_event_count = len([item for item in event_fairness_queue if item.get("state") == "overdue"])
         configured_interval = self.projection_min_interval_seconds(pending)
         effective_interval = self.effective_projection_min_interval_seconds(
             pending,
@@ -4279,11 +4474,14 @@ class OntologyReasoningRunner:
             "selectedWorkClasses": selected_classes,
             "pendingSymbolCount": len(pending_symbols),
             "overduePendingSymbolCount": len([item for item in fairness_queue if item.get("state") == "overdue"]),
+            "overduePendingEventCount": overdue_event_count,
             "unseenPendingSymbolCount": len([item for item in fairness_queue if item.get("state") == "unseen"]),
             "selectedSymbols": selected_symbols[:20],
             "omittedSymbolCount": max(0, int(omitted_symbol_count or 0)),
             "fairnessDrainActive": bool(fairness.get("active")),
             "fairnessDrainReason": str(fairness.get("reason") or ""),
+            "eventFairnessReservationActive": bool(fairness.get("eventReservationActive")),
+            "eventFairnessReservation": dict(fairness.get("eventReservation") or {}),
             "backpressureActive": backpressure_active,
             "configuredIntervalSeconds": configured_interval,
             "effectiveIntervalSeconds": effective_interval,
@@ -5241,7 +5439,12 @@ class OntologyReasoningRunner:
                     "coalescedEventCount": len(durable_superseded_ids),
                     **queue_metadata,
                 }
-        fairness_drain = self.fairness_drain_state(symbols, cursor_payload)
+        fairness_drain = self.fairness_drain_state(
+            symbols,
+            cursor_payload,
+            requests=requests,
+            selected_requests=selected_requests,
+        )
         queue_metadata["queueDispatch"] = self.queue_dispatch_summary(
             requests,
             selected_requests,
@@ -6041,7 +6244,17 @@ class OntologyReasoningRunner:
         ]
         pending_symbols = self.request_symbols(pending)
         fairness_queue = self.fairness_queue(pending_symbols, cursor_payload)
-        fairness_drain = self.fairness_drain_state(next_symbols, cursor_payload)
+        event_fairness_queue = self.event_fairness_queue(
+            pending,
+            progress=progress,
+            cursor_payload=cursor_payload,
+        )
+        fairness_drain = self.fairness_drain_state(
+            next_symbols,
+            cursor_payload,
+            requests=pending,
+            selected_requests=selected_requests,
+        )
         queue_dispatch = self.queue_dispatch_summary(
             pending,
             selected_requests,
@@ -6073,6 +6286,9 @@ class OntologyReasoningRunner:
         elif mailbox.get("status") == "error":
             queue_status = "degraded"
             queue_reason = str(mailbox.get("reason") or "영속 추론 메일박스 상태를 읽지 못했습니다.")
+        elif any(item.get("state") == "overdue" for item in event_fairness_queue):
+            queue_status = "degraded"
+            queue_reason = "대기 한도를 넘긴 이벤트에 예약 슬롯을 배정해 우선 처리 중입니다."
         elif any(item.get("state") == "overdue" for item in fairness_queue):
             queue_status = "degraded"
             queue_reason = "대기 한도를 넘긴 종목이 있어 우선 처리 대기열을 비우고 있습니다."
@@ -6132,10 +6348,13 @@ class OntologyReasoningRunner:
             "fairnessDrainMinIntervalSeconds": self.fairness_drain_min_interval_seconds(),
             "fairnessDrainActive": bool(fairness_drain.get("active")),
             "fairnessDrainSymbols": list(fairness_drain.get("symbols") or []),
+            "fairnessDrainEventIds": list(fairness_drain.get("eventIds") or []),
             "fairnessDrainReason": str(fairness_drain.get("reason") or ""),
             "unseenPendingSymbolCount": len([item for item in fairness_queue if item.get("state") == "unseen"]),
             "overduePendingSymbolCount": len([item for item in fairness_queue if item.get("state") == "overdue"]),
+            "overduePendingEventCount": len([item for item in event_fairness_queue if item.get("state") == "overdue"]),
             "fairnessQueue": fairness_queue[:20],
+            "eventFairnessQueue": event_fairness_queue[:20],
             "partialEventCount": len(progress),
             "ruleCandidateAiEnabled": self.rule_candidate_ai_enabled(),
             "ruleCandidateAiDue": self.rule_candidate_due(),

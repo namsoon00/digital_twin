@@ -615,7 +615,7 @@ def admin_preview_config() -> Dict[str, object]:
                     {"key": "ontologyReasoningVerifiedSnapshotFastDrainEnabled", "label": "확정 스냅샷 즉시 다음 추론", "type": "toggle", "default": "1"},
                     {"key": "ontologyReasoningBacklogDrainNoCooldownEnabled", "label": "오래된 대기열 세대 간 대기 제거", "type": "toggle", "default": "1"},
                     {"key": "ontologyReasoningBacklogDrainNoCooldownAgeSeconds", "label": "세대 간 대기 제거 기준", "type": "number", "default": "120", "unit": "seconds"},
-                    {"key": "ontologyReasoningFairnessMaxWaitSeconds", "label": "추론 대기 종목 우선 처리 시간", "type": "number", "default": "900", "unit": "seconds"},
+                    {"key": "ontologyReasoningFairnessMaxWaitSeconds", "label": "추론 대기 이벤트·종목 우선 처리 시간", "type": "number", "default": "900", "unit": "seconds"},
                     {"key": "ontologyReasoningFairnessDrainEnabled", "label": "대기 한도 초과 종목 우선 처리", "type": "toggle", "default": "1"},
                     {"key": "ontologyReasoningFairnessDrainMinIntervalSeconds", "label": "우선 처리 최소 보호 대기(0=즉시)", "type": "number", "default": "0", "unit": "seconds"},
                     {"key": "ontologyReasoningQueueAlertEnabled", "label": "추론 대기 지연 운영 알림", "type": "toggle", "default": "1"},

@@ -42,6 +42,7 @@ class OntologyReasoningQueueHealth:
     mailbox_pending_entry_count: int
     pending_symbol_count: int
     overdue_pending_symbol_count: int
+    overdue_pending_event_count: int
     queue_mode: str
     fairness_drain_active: bool
     backpressure_active: bool
@@ -70,6 +71,7 @@ class OntologyReasoningQueueHealth:
             "mailboxPendingEntryCount": payload["mailbox_pending_entry_count"],
             "pendingSymbolCount": payload["pending_symbol_count"],
             "overduePendingSymbolCount": payload["overdue_pending_symbol_count"],
+            "overduePendingEventCount": payload["overdue_pending_event_count"],
             "queueMode": payload["queue_mode"],
             "fairnessDrainActive": payload["fairness_drain_active"],
             "backpressureActive": payload["backpressure_active"],
@@ -143,6 +145,10 @@ def evaluate_ontology_reasoning_queue_health(
         dispatch.get("overduePendingSymbolCount")
         or source.get("overduePendingSymbolCount")
     )
+    overdue_pending_event_count = integer(
+        dispatch.get("overduePendingEventCount")
+        or source.get("overduePendingEventCount")
+    )
     queue_mode = str(dispatch.get("mode") or source.get("queueMode") or "waiting").strip() or "waiting"
     fairness_drain_active = bool(dispatch.get("fairnessDrainActive") or source.get("fairnessDrainActive"))
     backpressure_active = bool(dispatch.get("backpressureActive") or source.get("backpressureActive"))
@@ -175,11 +181,10 @@ def evaluate_ontology_reasoning_queue_health(
         candidate_state = "critical"
         reason_code = "oldest-request-critical"
         reason = "가장 오래된 추론 요청이 심각 지연 기준을 넘었습니다."
-    # ``overduePendingSymbolCount`` is a fairness-scheduler input: it means
-    # that a symbol has not had a recent native inference turn.  During an
-    # active fairness drain, several such symbols are expected while the
-    # one-target TypeDB worker works through a fresh, bounded mailbox.  Do
-    # not page operations for that normal catch-up path; request age, effective
+    # Overdue symbol and event counts are fairness-scheduler inputs. A symbol
+    # can be current while an older calendar/research event for it has never
+    # been selected, so both counts remain visible. During an active fairness
+    # drain they describe a bounded catch-up path; request age, effective
     # queue size, and blocked execution remain the operational SLO signals.
     elif not fairness_drain_active and overdue_pending_symbol_count >= critical_overdue_symbols:
         candidate_state = "critical"
@@ -201,7 +206,7 @@ def evaluate_ontology_reasoning_queue_health(
         candidate_state = "delayed"
         reason_code = "request-count-delayed"
         reason = "처리 대기 요청과 대상 종목 수가 지연 기준을 넘었습니다."
-    elif fairness_drain_active and overdue_pending_symbol_count:
+    elif fairness_drain_active and (overdue_pending_symbol_count or overdue_pending_event_count):
         candidate_state = "healthy"
         reason_code = "fairness-drain-progress"
         reason = "공정 배출이 진행 중이며, 최신 추론 요청은 설정한 지연 기준 안에 있습니다."
@@ -255,6 +260,7 @@ def evaluate_ontology_reasoning_queue_health(
         mailbox_pending_entry_count=mailbox_pending_entry_count,
         pending_symbol_count=pending_symbol_count,
         overdue_pending_symbol_count=overdue_pending_symbol_count,
+        overdue_pending_event_count=overdue_pending_event_count,
         queue_mode=queue_mode,
         fairness_drain_active=fairness_drain_active,
         backpressure_active=backpressure_active,

@@ -200,10 +200,12 @@ class OntologyReasoningQueueHealthNotificationEnqueuer:
         age = int(payload.get("oldestRequestAgeMinutes") or 0)
         raw_pending = int(payload.get("rawPendingCount") or 0)
         effective_pending = int(payload.get("effectivePendingCount") or raw_pending)
+        overdue_events = int(payload.get("overduePendingEventCount") or 0)
+        overdue_symbols = int(payload.get("overduePendingSymbolCount") or 0)
         pending_line = (
             "• 유효 대기: " + str(effective_pending) + "건"
             + " · 대상 종목: " + str(int(payload.get("pendingSymbolCount") or 0)) + "개"
-            + " · 대기 한도 초과: " + str(int(payload.get("overduePendingSymbolCount") or 0)) + "개"
+            + " · 대기 한도 초과: 이벤트 " + str(overdue_events) + "건 / 종목 " + str(overdue_symbols) + "개"
         )
         if raw_pending > effective_pending:
             pending_line += " · 원천 이벤트: " + str(raw_pending) + "건(최신 상태로 압축됨)"
@@ -226,7 +228,16 @@ class OntologyReasoningQueueHealthNotificationEnqueuer:
                 recovery_line += " 시작: " + started_at
             lines.insert(2, recovery_line)
         if payload.get("fairnessDrainActive"):
-            lines.insert(5, "• 우선 처리: 대기 한도 초과 종목을 먼저 비우는 중")
+            reservation = payload.get("eventFairnessReservation")
+            reservation = dict(reservation or {}) if isinstance(reservation, dict) else {}
+            if payload.get("eventFairnessReservationActive"):
+                lines.insert(
+                    5,
+                    "• 우선 처리: 오래된 이벤트 예약 슬롯 처리 중"
+                    + (" · " + str(reservation.get("symbol") or "") if reservation.get("symbol") else ""),
+                )
+            else:
+                lines.insert(5, "• 우선 처리: 대기 한도 초과 종목을 먼저 비우는 중")
         if payload.get("backpressureActive"):
             lines.insert(5, "• 처리 조절: 이전 실행 시간이 길어 처리 간격을 늘린 상태")
         if int(payload.get("retryAfterSeconds") or 0) > 0:
@@ -248,5 +259,5 @@ class OntologyReasoningQueueHealthNotificationEnqueuer:
             "queueDelayHealth": payload,
             "eventGeneratedAt": event.occurred_at,
             "notificationSignals": ["operations", "queueDelayRecovered" if recovered else "queueDelay", "actionable"],
-            "criteria": ["가장 오래된 요청 대기 시간", "대기 요청·종목 수", "대기 한도 초과 종목", "추론 실행 차단 상태"],
+            "criteria": ["가장 오래된 요청 대기 시간", "대기 요청·종목 수", "대기 한도 초과 이벤트·종목", "추론 실행 차단 상태"],
         }

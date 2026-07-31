@@ -1354,11 +1354,12 @@ DEFAULT_TYPEDB_NATIVE_RULE_PARALLELISM = 4
 # verified target set is split into read-only TypeDB work items in between.
 DEFAULT_TYPEDB_NATIVE_RULE_TARGET_PARALLELISM = 1
 # TypeDB recompiles the stored-function graph at each schema transaction.
-# Deployment runs only after a sustained empty mailbox, so group a meaningful
-# but bounded number of complete rules into one commit. Three rules keep the
-# TypeQL definition small enough for local TypeDB to answer before its HTTP/2
-# keep-alive window, without paying the overhead of a one-function commit.
-DEFAULT_TYPEDB_SCHEMA_FUNCTION_PROVISION_BATCH_SIZE = 3
+# A schema definition invalidates TypeDB's function planner cache.  On the
+# local single-node runtime, committing more than one complete RuleBox rule
+# can leave that compiler busy long enough for the client transport to expire.
+# One complete rule is slower only during idle maintenance, but it gives the
+# durable receipt recovery path an unambiguous commit boundary.
+DEFAULT_TYPEDB_SCHEMA_FUNCTION_PROVISION_BATCH_SIZE = 1
 # A timed-out schema commit can continue server-side, so deployment receipts
 # make the next bounded pass verify it before defining anything again. Keep
 # every inference worker behind one long-lived request. Local TypeDB schema
@@ -6771,6 +6772,24 @@ class TypeDBOntologyGraphRepository(GraphStoreOntologyRowMapperMixin, ScopedABox
             float(self._write_operation_timeout_seconds or 0),
         )
 
+    def open_schema_driver(self, imported, request_timeout_seconds: float = None):
+        """Open a dedicated channel for an expensive schema-function commit.
+
+        The persistent driver serves bounded read and ABox work. Reusing that
+        channel for a cold RuleBox compiler commit can retain a shorter
+        request deadline and a transport that was interrupted by the compiler.
+        A schema writer is already isolated by the prewarm worker, so it gets
+        a fresh channel with its own maintenance deadline instead.
+        """
+        timeout = (
+            self.schema_function_provision_timeout_seconds()
+            if request_timeout_seconds is None
+            else max(1.0, float(request_timeout_seconds))
+        )
+        if not self._persistent_driver_enabled:
+            return self.open_driver(imported, request_timeout_seconds=timeout)
+        return self.create_driver(imported, request_timeout_seconds=timeout)
+
     def write_transaction_options(self):
         try:
             from typedb.driver import TransactionOptions
@@ -6796,6 +6815,35 @@ class TypeDBOntologyGraphRepository(GraphStoreOntologyRowMapperMixin, ScopedABox
         return TransactionOptions(
             transaction_timeout_millis=max(1000, int(timeout * 1000)),
         )
+
+    def schema_transaction_options(self, timeout_seconds: float = None):
+        """Give TypeDB's schema lock and transaction the prewarm deadline."""
+        try:
+            from typedb.driver import TransactionOptions
+        except Exception:  # noqa: BLE001 - retain compatibility with older optional drivers.
+            return None
+        timeout = (
+            self.schema_function_provision_timeout_seconds()
+            if timeout_seconds is None
+            else max(1.0, float(timeout_seconds))
+        )
+        timeout_millis = max(1000, int(timeout * 1000))
+        return TransactionOptions(
+            transaction_timeout_millis=timeout_millis,
+            schema_lock_acquire_timeout_millis=timeout_millis,
+        )
+
+    def schema_transaction(self, driver, transaction_type, timeout_seconds: float = None):
+        """Open a schema transaction while retaining older driver compatibility."""
+        options = self.schema_transaction_options(timeout_seconds)
+        if options is None:
+            return driver.transaction(self.database, transaction_type)
+        try:
+            return driver.transaction(self.database, transaction_type, options=options)
+        except TypeError as error:
+            if "unexpected keyword" not in str(error).lower():
+                raise
+            return driver.transaction(self.database, transaction_type)
 
     def close_driver(self, driver) -> None:
         if self._persistent_driver_enabled:
@@ -15674,12 +15722,12 @@ relation ontology-assertion,
                 """
                 def operation():
                     timeout = self.schema_function_provision_timeout_seconds()
-                    driver = self.open_driver(imported, request_timeout_seconds=timeout)
+                    driver = self.open_schema_driver(imported, request_timeout_seconds=timeout)
                     try:
                         self.ensure_database(driver)
                         self.ensure_schema(driver, imported)
                         with typedb_operation_timeout(timeout, "TypeDB schema function provisioning"):
-                            with driver.transaction(self.database, TransactionType.SCHEMA) as tx:
+                            with self.schema_transaction(driver, TransactionType.SCHEMA, timeout) as tx:
                                 # A schema transaction alone is not enough to
                                 # avoid repeated TypeDB compilation: issuing
                                 # one ``define`` query per function still
@@ -15728,13 +15776,13 @@ relation ontology-assertion,
                 """
                 def operation():
                     timeout = self.schema_function_provision_timeout_seconds()
-                    driver = self.open_driver(imported, request_timeout_seconds=timeout)
+                    driver = self.open_schema_driver(imported, request_timeout_seconds=timeout)
                     try:
                         self.ensure_database(driver)
                         self.ensure_schema(driver, imported)
                         try:
                             with typedb_operation_timeout(timeout, "TypeDB schema function provisioning"):
-                                with driver.transaction(self.database, TransactionType.SCHEMA) as tx:
+                                with self.schema_transaction(driver, TransactionType.SCHEMA, timeout) as tx:
                                     tx.query(str(definition.get("define") or "")).resolve()
                                     tx.commit()
                             return "defined"

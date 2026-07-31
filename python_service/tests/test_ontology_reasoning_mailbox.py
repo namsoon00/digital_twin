@@ -611,7 +611,7 @@ class OntologyReasoningMailboxTests(unittest.TestCase):
         self.assertEqual("ok", result["status"])
         self.assertEqual([["AAPL"]], self.monitor.calls)
 
-    def test_aged_multi_entry_queue_waits_for_rulebox_compiler_recovery(self):
+    def test_aged_multi_entry_queue_uses_direct_typeql_instead_of_waiting_for_compiler_recovery(self):
         events = [
             realtime_request("prewarm-recovery-a", ["AAPL"], "2026-07-24T00:00:00Z"),
             realtime_request("prewarm-recovery-b", ["MSFT"], "2026-07-24T00:00:00Z"),
@@ -635,9 +635,8 @@ class OntologyReasoningMailboxTests(unittest.TestCase):
 
         result = runner.run_once()
 
-        self.assertEqual("deferred-rulebox-prewarm-recovery", result["status"])
-        self.assertEqual([], self.monitor.calls)
-        self.assertEqual(5, result["retryAfterSeconds"])
+        self.assertEqual("ok", result["status"])
+        self.assertEqual([["AAPL"]], self.monitor.calls)
         self.assertTrue(result["ruleboxPrewarmRecovery"]["eligible"])
 
     def test_aged_queue_uses_durable_compiler_activity_before_opening_a_typedb_readiness_connection(self):
@@ -669,13 +668,13 @@ class OntologyReasoningMailboxTests(unittest.TestCase):
 
         result = runner.run_once()
 
-        self.assertEqual("deferred-rulebox-prewarm-recovery", result["status"])
+        self.assertEqual("deferred-rulebox-prewarm", result["status"])
         self.assertEqual([], readiness_calls)
         self.assertEqual([], self.monitor.calls)
         self.assertTrue(result["ruleboxPrewarmActivity"]["active"])
         self.assertEqual(15, result["retryAfterSeconds"])
 
-    def test_aged_queue_surfaces_prewarm_recovery_probe_errors_without_running_direct_typeql(self):
+    def test_aged_queue_does_not_open_a_prewarm_probe_before_running_direct_typeql(self):
         events = [
             realtime_request("prewarm-recovery-error-a", ["AAPL"], "2026-07-24T00:00:00Z"),
             realtime_request("prewarm-recovery-error-b", ["MSFT"], "2026-07-24T00:00:00Z"),
@@ -696,9 +695,8 @@ class OntologyReasoningMailboxTests(unittest.TestCase):
 
         result = runner.run_once()
 
-        self.assertEqual("deferred-rulebox-prewarm-recovery", result["status"])
-        self.assertEqual([], self.monitor.calls)
-        self.assertIn("temporary RuleBox receipt read failure", result["deferredReason"])
+        self.assertEqual("ok", result["status"])
+        self.assertEqual([["AAPL"]], self.monitor.calls)
         self.assertTrue(result["ruleboxPrewarmRecovery"]["eligible"])
 
     def test_repeated_native_generation_failure_yields_the_same_mailbox_revision(self):

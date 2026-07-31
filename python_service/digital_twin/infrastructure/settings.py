@@ -1578,7 +1578,7 @@ def runtime_settings(fast_operational_read: bool = False) -> Dict[str, str]:
         "typedbSchemaFunctionProvisionBatchSize": value(
             "typedbSchemaFunctionProvisionBatchSize",
             "TYPEDB_SCHEMA_FUNCTION_PROVISION_BATCH_SIZE",
-            "3",
+            "1",
         ),
         "typedbSchemaFunctionProvisionTimeoutSeconds": value(
             "typedbSchemaFunctionProvisionTimeoutSeconds",

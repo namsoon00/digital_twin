@@ -4988,18 +4988,25 @@ class OntologyReasoningRunner:
         prewarm_recovery = self.rulebox_prewarm_backlog_recovery_state(requests)
         queue_metadata["ruleboxPrewarmRecovery"] = dict(prewarm_recovery)
         # A receipt check is not free: it reads the complete RuleBox and both
-        # deployment namespaces. For fresh fallback-enabled work, avoid that
-        # extra read and let the repository make the final narrow check. Once
-        # a queue is aged enough to trigger compiler recovery, however, one
-        # bounded readiness read prevents another failed direct-TypeQL/ABox
-        # rollback cycle while the dedicated prewarm worker catches up.
+        # deployment namespaces. Fallback-enabled work deliberately avoids
+        # that global read and lets the repository make only the narrow check
+        # required for its selected native predicates. Strict deployments can
+        # still use a bounded readiness probe before compiler recovery.
+        # The background compiler is an optimisation. When bounded direct
+        # TypeQL is enabled, an aged mailbox must keep draining rather than
+        # turn a cold full-RuleBox prewarm into a global alert gate. Strict
+        # deployments without that fallback retain the readiness probe.
         prewarm_recovery_probe = bool(
             prewarm_recovery.get("eligible")
-            and self.rulebox_prewarm_direct_fallback_enabled()
+            and not self.rulebox_prewarm_direct_fallback_enabled()
         )
         prewarm_activity = (
             self.rulebox_prewarm_activity_state()
-            if self.rulebox_prewarm_required() or prewarm_recovery_probe
+            if (
+                self.rulebox_prewarm_required()
+                or self.rulebox_prewarm_direct_fallback_enabled()
+                or prewarm_recovery_probe
+            )
             else {}
         )
         if bool(prewarm_activity.get("active")):

@@ -165,6 +165,7 @@ class OntologyRuleboxPrewarmRunnerTests(unittest.TestCase):
                 "ontologyRuleboxPrewarmBacklogRecoveryAgeSeconds": "90",
                 "ontologyRuleboxPrewarmBacklogRecoveryMinPendingEntries": "2",
                 "ontologyRuleboxPrewarmBacklogRecoveryRetrySeconds": "5",
+                "typedbNativeRuleDirectQueryFallbackEnabled": "0",
             },
             reasoning_queue_probe=lambda: {
                 "status": "pending",
@@ -197,6 +198,7 @@ class OntologyRuleboxPrewarmRunnerTests(unittest.TestCase):
                 "ontologyRuleboxPrewarmBacklogRecoveryAgeSeconds": "90",
                 "ontologyRuleboxPrewarmBacklogRecoveryMinPendingEntries": "2",
                 "ontologyRuleboxPrewarmBacklogRecoveryRetrySeconds": "5",
+                "typedbNativeRuleDirectQueryFallbackEnabled": "0",
             },
             reasoning_queue_probe=lambda: {
                 "status": "retrying",
@@ -214,6 +216,37 @@ class OntologyRuleboxPrewarmRunnerTests(unittest.TestCase):
         self.assertTrue(result["backlogRecovery"]["canRecover"])
         self.assertTrue(result["backlogRecoveryGranted"])
         self.assertEqual("aged-backlog-no-active-inference-lease", result["recoveryMode"])
+
+    def test_aged_retrying_queue_keeps_compiler_idle_when_direct_typeql_fallback_is_available(self):
+        repository = FakeRepository({
+            "status": "provisioning",
+            "functionsReady": False,
+            "pendingRuleCount": 4,
+        })
+        runner = OntologyRuleboxPrewarmRunner(
+            repository,
+            settings={
+                "ontologyRuleboxPrewarmEnabled": "1",
+                "ontologyRuleboxPrewarmBacklogRecoveryEnabled": "1",
+                "ontologyRuleboxPrewarmBacklogRecoveryAgeSeconds": "90",
+                "ontologyRuleboxPrewarmBacklogRecoveryMinPendingEntries": "2",
+                "typedbNativeRuleDirectQueryFallbackEnabled": "1",
+            },
+            reasoning_queue_probe=lambda: {
+                "status": "retrying",
+                "effectivePendingCount": 4,
+                "retryingEntryCount": 4,
+                "oldestRequestAt": "2026-07-24T00:00:00Z",
+            },
+            now_provider=lambda: datetime(2026, 7, 24, 0, 5, tzinfo=timezone.utc),
+        )
+
+        result = runner.run_once()
+
+        self.assertEqual("deferred-reasoning-pending", result["status"])
+        self.assertFalse(result["backlogRecovery"]["eligible"])
+        self.assertTrue(result["backlogRecovery"]["directTypeqlFallbackEnabled"])
+        self.assertEqual([], repository.calls)
 
     def test_status_reports_isolation_and_current_prewarm_state(self):
         repository = FakeRepository({"status": "ok", "functionsReady": True})
@@ -413,6 +446,7 @@ class OntologyRuleboxPrewarmRunnerTests(unittest.TestCase):
                 "ontologyRuleboxPrewarmBacklogRecoveryEnabled": "1",
                 "ontologyRuleboxPrewarmBacklogRecoveryAgeSeconds": "90",
                 "ontologyRuleboxPrewarmBacklogRecoveryMinPendingEntries": "2",
+                "typedbNativeRuleDirectQueryFallbackEnabled": "0",
             },
             reasoning_queue_probe=lambda: {
                 "status": "retrying",

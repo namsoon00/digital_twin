@@ -88,7 +88,7 @@ class TypeDBOntologyRepositoryTests(unittest.TestCase):
     def test_default_schema_function_provisioning_uses_a_small_bounded_maintenance_batch(self):
         repository = TypeDBOntologyGraphRepository("127.0.0.1:1729")
 
-        self.assertEqual(3, repository.schema_function_provision_batch_size())
+        self.assertEqual(1, repository.schema_function_provision_batch_size())
         self.assertEqual(900.0, repository.schema_function_provision_timeout_seconds())
         self.assertTrue(repository.schema_function_direct_query_fallback_enabled())
 
@@ -2173,6 +2173,63 @@ class TypeDBOntologyRepositoryTests(unittest.TestCase):
         repository.invalidate_persistent_driver()
 
         self.assertEqual(1, first.closed)
+
+    def test_typedb_open_schema_driver_does_not_reuse_the_persistent_channel(self):
+        repository = TypeDBOntologyGraphRepository(
+            "127.0.0.1:1729",
+            persistent_driver_enabled=True,
+            write_operation_timeout_seconds=180,
+            schema_function_provision_timeout_seconds=900,
+        )
+        created = []
+
+        class FakeDriver:
+            def close(self):
+                return None
+
+        class FakeTypeDB:
+            @staticmethod
+            def driver(_address, _credentials, options):
+                driver = FakeDriver()
+                created.append((driver, options.request_timeout_millis))
+                return driver
+
+        class FakeCredentials:
+            def __init__(self, _user, _password):
+                pass
+
+        class FakeDriverOptions:
+            def __init__(self, _tls_config, **kwargs):
+                self.request_timeout_millis = kwargs["request_timeout_millis"]
+
+        class FakeDriverTlsConfig:
+            @staticmethod
+            def enabled():
+                return "enabled"
+
+            @staticmethod
+            def disabled():
+                return "disabled"
+
+        imported = ((FakeTypeDB, FakeCredentials, FakeDriverOptions, FakeDriverTlsConfig, object), None)
+        persistent = repository.open_driver(imported)
+        schema = repository.open_schema_driver(imported)
+
+        self.assertIsNot(persistent, schema)
+        self.assertEqual(2, len(created))
+        self.assertEqual([180000, 900000], [item[1] for item in created])
+
+    def test_typedb_schema_transaction_options_cover_compiler_and_schema_lock_timeout(self):
+        repository = TypeDBOntologyGraphRepository(
+            "127.0.0.1:1729",
+            schema_function_provision_timeout_seconds=900,
+        )
+
+        options = repository.schema_transaction_options()
+
+        self.assertIsNotNone(options)
+        self.assertEqual(900000, options.transaction_timeout_millis)
+        self.assertEqual(900000, options.schema_lock_acquire_timeout_millis)
 
     def test_typedb_write_transaction_options_cover_write_operation_timeout(self):
         repository = TypeDBOntologyGraphRepository(

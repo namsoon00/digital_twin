@@ -4,11 +4,9 @@ The active RuleBox is an investment-policy contract. Its generated TypeDB
 functions are a compiled implementation detail, so compilation belongs to a
 separate bounded worker and must never be started by a live alert inference.
 When a receipt is cold, the live path can use its bounded direct-TypeQL
-fallback.  Schema commits are normally kept out of a live queue because TypeDB
-can continue compiling after a client deadline.  An aged queue with no active
-inference lease is the exception: repeatedly starting the serial fallback
-cannot recover it, so the dedicated worker gets one coordinator-protected
-compiler turn.
+fallback. Schema commits remain idle while that fallback drains a live queue.
+Only strict deployments that explicitly disable the fallback may give an aged,
+unleased queue one coordinator-protected compiler recovery turn.
 """
 
 from __future__ import annotations
@@ -76,6 +74,13 @@ class OntologyRuleboxPrewarmRunner:
         """
         value = str(
             self.settings.get("ontologyRuleboxPrewarmBacklogRecoveryEnabled") or "1"
+        ).strip().lower()
+        return value not in DISABLED_VALUES
+
+    def direct_typeql_fallback_enabled(self) -> bool:
+        """Keep alert work on bounded TypeQL while idle compilation is cold."""
+        value = str(
+            self.settings.get("typedbNativeRuleDirectQueryFallbackEnabled") or "1"
         ).strip().lower()
         return value not in DISABLED_VALUES
 
@@ -252,7 +257,8 @@ class OntologyRuleboxPrewarmRunner:
         oldest_age = self.oldest_pending_age_seconds(payload)
         minimum_pending = self.backlog_recovery_min_pending_entries()
         age_threshold = self.backlog_recovery_age_seconds()
-        enabled = self.backlog_recovery_enabled()
+        direct_fallback_enabled = self.direct_typeql_fallback_enabled()
+        enabled = self.backlog_recovery_enabled() and not direct_fallback_enabled
         active = self.active_reasoning_count(payload)
         eligible = bool(
             enabled
@@ -261,6 +267,7 @@ class OntologyRuleboxPrewarmRunner:
         )
         return {
             "enabled": enabled,
+            "directTypeqlFallbackEnabled": direct_fallback_enabled,
             "waitingEntryCount": waiting,
             "activeEntryCount": active,
             "retryingEntryCount": self.retrying_reasoning_count(payload),
@@ -577,10 +584,9 @@ class OntologyRuleboxPrewarmRunner:
         recovery_granted = bool(recovery.get("canRecover")) and not force
         # A TypeDB schema commit can keep its compiler busy after a client has
         # timed out or an isolated worker has exited.  Preserve the
-        # latest-state queue while an inference lease is active.  Once an aged
-        # queue has no active lease, however, direct TypeQL has already failed
-        # to drain it; give the coordinator-protected background compiler a
-        # short recovery turn instead of deferring forever.
+        # latest-state queue while an inference lease is active. A strict
+        # deployment without direct TypeQL fallback may grant an aged,
+        # unleased queue one coordinator-protected compiler recovery turn.
         if (
             self.defer_when_reasoning_pending()
             and pending

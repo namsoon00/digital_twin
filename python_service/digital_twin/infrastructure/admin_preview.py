@@ -684,7 +684,7 @@ def admin_preview_config() -> Dict[str, object]:
                     {"key": "typedbPersistentDriverEnabled", "label": "TypeDB 연결 프로세스 재사용", "type": "toggle", "default": "1"},
                     {"key": "typedbProcessSchemaFunctionCacheEnabled", "label": "TypeDB 함수 검증 프로세스 캐시", "type": "toggle", "default": "1"},
                     {"key": "typedbSchemaFunctionProbeIntervalSeconds", "label": "TypeDB 함수 전수 검증 간격", "type": "number", "default": "300", "unit": "seconds"},
-                    {"key": "typedbSchemaFunctionProvisionBatchSize", "label": "TypeDB 함수 배포 유지보수 배치 규칙 수", "type": "number", "default": "3"},
+                    {"key": "typedbSchemaFunctionProvisionBatchSize", "label": "TypeDB 함수 배포 유지보수 배치 규칙 수", "type": "number", "default": "1"},
                     {"key": "typedbSchemaFunctionProvisionTimeoutSeconds", "label": "TypeDB 함수 배포 완료 대기", "type": "number", "default": "900", "unit": "seconds"},
                     {"key": "typedbProjectionCoordinatorEnabled", "label": "TypeDB 전역 투영 조정", "type": "toggle", "default": "1"},
                     {"key": "typedbProjectionCoordinatorLeaseSeconds", "label": "TypeDB 전역 투영 lease", "type": "number", "default": "600", "unit": "seconds"},

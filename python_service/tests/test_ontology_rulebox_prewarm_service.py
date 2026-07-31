@@ -213,6 +213,12 @@ class OntologyRuleboxPrewarmRunnerTests(unittest.TestCase):
         self.assertTrue(status["deferWhenReasoningPending"])
         self.assertTrue(status["prewarm"]["functionsReady"])
 
+    def test_default_execution_limit_matches_the_environment_contract(self):
+        runner = OntologyRuleboxPrewarmRunner(FakeRepository())
+
+        self.assertEqual(180, runner.execution_timeout_seconds())
+        self.assertEqual(10, runner.execution_timeout_grace_seconds())
+
     def test_scheduler_cools_down_schema_compile_errors_before_retrying(self):
         scheduler = OntologyRuleboxPrewarmScheduler(FakeRepository(), 15)
 

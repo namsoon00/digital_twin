@@ -297,7 +297,7 @@ class OntologyRuleboxPrewarmRunner:
         return _integer_setting(
             self.settings,
             "ontologyRuleboxPrewarmExecutionTimeoutSeconds",
-            1500,
+            180,
             30,
             1800,
         )

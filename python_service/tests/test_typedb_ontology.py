@@ -7022,6 +7022,100 @@ class TypeDBOntologyRepositoryTests(unittest.TestCase):
         self.assertEqual(1, len(repository.fake_driver.queries))
         self.assertTrue(repository.fake_driver.queries[0].lstrip().startswith("define"))
 
+    def test_typedb_schema_function_sync_does_not_retry_each_function_after_interrupted_batch(self):
+        class FakeQuery:
+            def __init__(self, driver, query):
+                self.driver = driver
+                self.query_text = str(query or "")
+
+            def resolve(self):
+                self.driver.queries.append(self.query_text)
+                raise TypeDBOperationTimeout("TypeDB schema function provisioning timed out after 30.0s")
+
+        class FakeTransaction:
+            def __init__(self, driver):
+                self.driver = driver
+
+            def __enter__(self):
+                return self
+
+            def __exit__(self, _exc_type, _exc, _traceback):
+                return False
+
+            def query(self, query):
+                return FakeQuery(self.driver, query)
+
+            def commit(self):
+                raise AssertionError("an interrupted definition batch must not commit")
+
+        class FakeDriver:
+            def __init__(self):
+                self.queries = []
+
+            def transaction(self, *_args, **_kwargs):
+                return FakeTransaction(self)
+
+        class FakeRepository(TypeDBOntologyGraphRepository):
+            def __init__(self):
+                super().__init__(
+                    "127.0.0.1:1729",
+                    retry_count=0,
+                    schema_function_provision_batch_size=2,
+                    schema_function_provision_timeout_seconds=30,
+                )
+                self.fake_driver = FakeDriver()
+
+            def driver_imports(self):
+                return (object, object, object, object, SimpleNamespace(SCHEMA="schema")), None
+
+            def open_driver(self, _imported, request_timeout_seconds=None):
+                del request_timeout_seconds
+                return self.fake_driver
+
+            def ensure_database(self, _driver):
+                return None
+
+            def ensure_schema(self, _driver, _imported):
+                return None
+
+            def close_driver(self, _driver):
+                return None
+
+        repository = FakeRepository()
+        rules = default_graph_inference_rules()[:2]
+        rule_ids = [rule.rule_id for rule in rules]
+
+        with patch.object(repository, "probe_typedb_native_rule_functions", return_value={
+            "status": "missing",
+            "available": False,
+            "missingRuleIds": rule_ids,
+            "missingFunctionNames": [
+                typedb_native_function_definition(rule.to_dict()).get("functionName")
+                for rule in rules
+            ],
+        }), patch.object(
+            repository,
+            "probe_typedb_schema_function_definitions",
+            side_effect=lambda definitions: {
+                "status": "missing",
+                "available": False,
+                "missingFunctionNames": [item.get("functionName") for item in definitions],
+            },
+        ), patch.object(
+            repository,
+            "save_schema_function_deployment_markers",
+            return_value={"status": "ok", "saved": True, "markerCount": 2},
+        ), patch.object(
+            repository,
+            "recover_pending_schema_function_deployment_receipts",
+            return_value={"status": "empty", "pendingFunctionNames": [], "recoveredRuleIds": []},
+        ):
+            result = repository.sync_typedb_native_rule_functions(rules)
+
+        self.assertEqual("provisioning", result["status"])
+        self.assertTrue(result["schemaFunctionProvisioning"])
+        self.assertEqual(1, len(repository.fake_driver.queries))
+
     def test_typedb_schema_function_prewarm_readiness_never_starts_a_schema_sync(self):
         repository = TypeDBOntologyGraphRepository("127.0.0.1:1729")
         rule = default_graph_inference_rules()[0]

@@ -1493,12 +1493,12 @@ def runtime_settings(fast_operational_read: bool = False) -> Dict[str, str]:
         "ontologyRuleboxPrewarmExecutionTimeoutSeconds": value(
             "ontologyRuleboxPrewarmExecutionTimeoutSeconds",
             "ONTOLOGY_RULEBOX_PREWARM_EXECUTION_TIMEOUT_SECONDS",
-            "1500",
+            "180",
         ),
         "ontologyRuleboxPrewarmExecutionTimeoutGraceSeconds": value(
             "ontologyRuleboxPrewarmExecutionTimeoutGraceSeconds",
             "ONTOLOGY_RULEBOX_PREWARM_EXECUTION_TIMEOUT_GRACE_SECONDS",
-            "60",
+            "10",
         ),
         "ontologyRuleboxPrewarmProcessIsolationEnabled": value(
             "ontologyRuleboxPrewarmProcessIsolationEnabled",

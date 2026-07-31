@@ -15646,6 +15646,20 @@ relation ontology-assertion,
             error_text = str(error).lower()
             return "already exists" in error_text or "with name" in error_text
 
+        def is_interrupted_schema_function_commit(error: Exception) -> bool:
+            """Do not compound a server-side compiler run after client loss."""
+            if isinstance(error, TimeoutError):
+                return True
+            error_text = str(error or "").lower()
+            return any(token in error_text for token in [
+                "keep-alive timed out",
+                "operation timed out",
+                "deadline exceeded",
+                "transport error",
+                "connection reset",
+                "connection closed",
+            ])
+
         synced: List[Dict[str, object]] = []
         failed: List[Dict[str, object]] = []
         try:
@@ -15745,7 +15759,14 @@ relation ontology-assertion,
             if len(deployment_definitions) > 1:
                 try:
                     synced.extend(sync_definitions_batch(deployment_definitions))
-                except Exception:
+                except Exception as error:
+                    if is_interrupted_schema_function_commit(error):
+                        # The provisioning receipt is already durable. The
+                        # next pass proves the server-side commit before it
+                        # may define anything again; retrying each function
+                        # immediately would add compiler pressure to a server
+                        # that may still be processing this same batch.
+                        raise
                     # A batch can be invalidated by a concurrent schema writer
                     # or one unexpected legacy definition. Re-open independent
                     # transactions so already-installed functions are treated

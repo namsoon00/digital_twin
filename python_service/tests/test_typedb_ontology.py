@@ -977,6 +977,54 @@ class TypeDBOntologyRepositoryTests(unittest.TestCase):
             for scope_id in patch["scopeGenerationIds"]
         ))
 
+    def test_observation_followup_retains_missing_target_scopes_until_full_reconciliation(self):
+        graph = PortfolioOntology(
+            "main",
+            entities=[
+                OntologyEntity("stock:005930", "삼성전자", "stock", {
+                    "ontologyBox": "ABox", "symbol": "005930",
+                }),
+                OntologyEntity("price:005930", "삼성전자 현재가", "price-metric", {
+                    "ontologyBox": "ABox", "symbol": "005930", "currentPrice": 70000,
+                }),
+                OntologyEntity("stock:MSTR", "Strategy", "stock", {
+                    "ontologyBox": "ABox", "symbol": "MSTR",
+                }),
+            ],
+            relations=[
+                OntologyRelation("stock:005930", "price:005930", "HAS_PRICE", properties={
+                    "ontologyBox": "ABox",
+                }),
+            ],
+        )
+        first = apply_scoped_abox_identity(graph, world_id="portfolio:local:main")
+        active = {
+            "status": "ok",
+            "scopedAboxManifestVersion": SCOPED_ABOX_MANIFEST_VERSION,
+            "scopeTopologyVersion": SCOPED_ABOX_SCOPE_TOPOLOGY_VERSION,
+            "scopePlan": [dict(item) for item in first["scopePlan"]],
+            "scopeGenerationIds": dict(first["scopeGenerationIds"]),
+            "scopeFingerprints": dict(first["scopeFingerprints"]),
+        }
+        retained_market_scope = next(
+            scope_id for scope_id in first["scopeGenerationIds"]
+            if scope_id.startswith("symbol:005930:market:")
+        )
+        graph.entities = [
+            item for item in graph.entities
+            if item.entity_id != "price:005930"
+        ]
+        graph.relations = []
+        apply_scoped_abox_identity(graph, world_id="portfolio:local:main")
+        graph.worldview["targetScopeRetentionMode"] = "observation-followup"
+
+        patch = merge_target_scoped_abox_manifest(graph, active, ["005930"])
+
+        self.assertTrue(patch["applied"])
+        self.assertTrue(patch["retainsMissingTargetScopes"])
+        self.assertNotIn(retained_market_scope, patch["retiredScopeIds"])
+        self.assertEqual(active["scopeGenerationIds"][retained_market_scope], patch["scopeGenerationIds"][retained_market_scope])
+
     def test_explicit_target_can_patch_shared_context_without_rewriting_every_symbol(self):
         graph = PortfolioOntology(
             "main",

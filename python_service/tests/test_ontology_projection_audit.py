@@ -215,12 +215,14 @@ class OntologyProjectionAuditTests(unittest.TestCase):
                 "005930": "revision-1",
                 "000660": "revision-2",
             },
+            "observationFollowupSymbols": ["005930", "000660"],
             "rawFacts": {"must": "not be copied"},
         }, target_symbols=["005930"])
 
         self.assertEqual(["005930"], context["targetSymbols"])
         self.assertEqual({"005930": ["price", "volume"]}, context["changedFieldsBySymbol"])
         self.assertEqual({"005930": "revision-1"}, context["factRevisionsBySymbol"])
+        self.assertEqual(["005930"], context["observationFollowupSymbols"])
         self.assertNotIn("rawFacts", context)
 
     def test_target_reuse_scope_plan_keeps_only_target_dependencies(self):

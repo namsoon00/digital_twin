@@ -182,12 +182,40 @@ class ReasoningSnapshotReplayTests(unittest.TestCase):
             snapshot_builder=snapshot_builder,
             event_sender=lambda *_args, **_kwargs: None,
             cycle_recorder=recorder,
+            source_snapshot_replay=True,
         )
 
         runner.run_once(symbol_filter=["AAPL"], reasoning_context={"sourceObservedAt": "2026-07-29T00:01:00Z"})
 
         self.assertEqual("2026-07-29T00:01:00Z", contexts[0]["sourceObservedAt"])
         self.assertTrue(recorder.source_snapshot_replay)
+
+    def test_normal_monitor_ignores_a_stale_replay_marker_and_commits_a_source_snapshot(self):
+        snapshot = AccountSnapshot(
+            account_id="acct",
+            account_label="Test",
+            provider="toss",
+            mode="live",
+            status="ok",
+            generated_at="2026-07-29T00:02:00Z",
+            portfolio=PortfolioSummary(1000.0, 700.0, 300.0, [], [], 70.0),
+            positions=[Position(symbol="AAPL", name="Apple", market="US", currency="USD", quantity=1.0)],
+            metadata={"reasoningSnapshotReplay": {"status": "ready"}},
+        )
+        recorder = CapturingCycleRecorder()
+        runner = MonitorRunner(
+            [account()],
+            store=SnapshotStore(monitor_state()),
+            monitor=EmptyMonitor(),
+            snapshot_builder=lambda _account: snapshot,
+            event_sender=lambda *_args, **_kwargs: None,
+            cycle_recorder=recorder,
+        )
+
+        runner.run_once()
+
+        self.assertFalse(recorder.source_snapshot_replay)
+        self.assertNotIn("reasoningSnapshotReplay", recorder.snapshots[0].metadata)
 
     def test_monitor_forwards_reasoning_context_when_the_monitor_supports_it(self):
         snapshot = account_snapshot_from_monitor_state(monitor_state())

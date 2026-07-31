@@ -70,6 +70,13 @@ def compact_reasoning_request_context(
     queue_pressure = raw_queue_pressure if isinstance(raw_queue_pressure, Mapping) else {}
     raw_batch_plan = values.get("batchPlan")
     batch_plan = raw_batch_plan if isinstance(raw_batch_plan, Mapping) else {}
+    observation_followups = {
+        str(symbol or "").upper().strip()
+        for symbol in (values.get("observationFollowupSymbols") or [])
+        if str(symbol or "").strip()
+    }
+    if targets:
+        observation_followups.intersection_update(targets)
 
     def non_negative_integer(value: object) -> int:
         try:
@@ -88,6 +95,10 @@ def compact_reasoning_request_context(
         "sourceObservedAt": str(values.get("sourceObservedAt") or "").strip()[:80],
         "changedFieldsBySymbol": symbol_map(values.get("changedFieldsBySymbol"), list_values=True),
         "factRevisionsBySymbol": symbol_map(values.get("factRevisionsBySymbol"), list_values=False),
+        # Delivery provenance only. It enables a bounded current-state ABox
+        # patch after an already-outboxed raw quote, but is never a TypeDB
+        # rule condition or an investment conclusion.
+        "observationFollowupSymbols": sorted(observation_followups)[:80],
         # Scheduler pressure remains operational provenance. It can decide
         # whether a periodic full reconciliation yields to queued work, but is
         # never exposed as a TypeDB RuleBox condition or investment fact.

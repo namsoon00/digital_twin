@@ -204,6 +204,7 @@ def build_monitor_runner(
     ontology_projection_enabled: bool = None,
     ontology_repository=None,
     monitor_store=None,
+    source_snapshot_replay: bool = False,
 ) -> MonitorRunner:
     configured_settings = dict(settings or runtime_settings())
     configured_settings["typedbNativeRuleExecutionEnabled"] = "1" if typedb_native_rule_execution_enabled else "0"
@@ -266,6 +267,7 @@ def build_monitor_runner(
         account_job_lock_seconds=int(configured_settings.get("monitorAccountLockSeconds") or os.environ.get("MONITOR_ACCOUNT_LOCK_SECONDS") or max(600, interval_seconds * 4)),
         worker_id=os.environ.get("MONITOR_WORKER_ID") or ("monitor-" + uuid.uuid4().hex[:12]),
         progress_callback=progress_callback,
+        source_snapshot_replay=source_snapshot_replay,
     )
 
 
@@ -931,6 +933,7 @@ def build_ontology_reasoning_runner(settings=None, event_publisher=None) -> Onto
             ontology_projection_enabled=True,
             ontology_repository=ontology_repository,
             monitor_store=reasoning_snapshot_store,
+            source_snapshot_replay=True,
         )
         runner.snapshot_builder = LatestMonitorSnapshotReasoningSource(
             reasoning_snapshot_store,

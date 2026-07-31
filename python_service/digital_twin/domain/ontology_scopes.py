@@ -1622,6 +1622,10 @@ def select_target_scoped_manifest_patch(
         active.get("scopeFingerprints") or {},
     )
     requested_symbols = sorted({_symbol(value) for value in target_symbols or [] if _symbol(value)})
+    retain_missing_target_scopes = (
+        _clean(worldview.get("targetScopeRetentionMode"))
+        == "observation-followup"
+    )
     base = {
         "targetSymbols": requested_symbols,
         "incomingScopeCount": len(incoming),
@@ -1632,6 +1636,7 @@ def select_target_scoped_manifest_patch(
         "deferredScopeIds": [],
         "retiredScopeIds": [],
         "removedRelevantScopeIds": [],
+        "retainsMissingTargetScopes": retain_missing_target_scopes,
     }
     if not requested_symbols:
         return {
@@ -1692,7 +1697,12 @@ def select_target_scoped_manifest_patch(
         if is_requested_or_shared(scope_id) and changed_from_active(scope_id, item)
     }
 
-    removed_relevant_scopes = sorted(
+    # A target-scoped quote follow-up is a partial current-state input. Its
+    # absent scope rows have no deletion meaning; they merely remain on the
+    # active verified manifest until a full reconciliation proves removal.
+    # Treating those omissions as retirement forced a full manifest rewrite
+    # (and frequently a 300s+ TypeDB cycle) for a small price observation.
+    removed_relevant_scopes = [] if retain_missing_target_scopes else sorted(
         scope_id
         for scope_id in active_by_scope
         if scope_id not in incoming and is_requested_or_shared(scope_id)

@@ -918,6 +918,24 @@ class PortfolioOntologyProjectionRecorder:
             material_snapshot_id = projection_graph["materialSnapshotId"]
             scoped_identity = projection_graph["scopedIdentity"]
             runtime_stages.update(dict(projection_graph.get("runtimeStages") or {}))
+            observation_followup_targets = sorted({
+                str(symbol or "").upper().strip()
+                for symbol in compact_reasoning_context.get("observationFollowupSymbols") or []
+                if str(symbol or "").strip()
+            }.intersection({
+                str(symbol or "").upper().strip()
+                for symbol in target_symbols or []
+                if str(symbol or "").strip()
+            }))
+            if observation_followup_targets:
+                # A target-scoped source intentionally omits unrelated and
+                # temporarily absent target facts. For a raw quote follow-up
+                # that omission means "retain the last verified context", not
+                # "delete the scope". This keeps the TypeDB operation bounded
+                # to the notified quote scopes while TypeDB still evaluates
+                # its rules over the merged active ABox.
+                persistence_graph.worldview["targetScopeRetentionMode"] = "observation-followup"
+                persistence_graph.worldview["observationFollowupTargets"] = observation_followup_targets
             emit_progress(
                 "graph_assembly.done",
                 cacheLayer=str((graph_assembly or {}).get("cacheLayer") or "none"),

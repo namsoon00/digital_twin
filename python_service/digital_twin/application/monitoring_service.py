@@ -29,6 +29,7 @@ class MonitorRunner:
         account_job_lock_seconds: int = 600,
         worker_id: str = "",
         progress_callback: Callable[[str, Dict[str, object]], None] = None,
+        source_snapshot_replay: bool = False,
     ):
         self.accounts = list(accounts)
         self.account_map = {account.account_id: account for account in self.accounts}
@@ -52,6 +53,11 @@ class MonitorRunner:
         self.account_job_lock_seconds = max(60, int(account_job_lock_seconds or 600))
         self.worker_id = worker_id or ("monitor-" + uuid.uuid4().hex[:12])
         self.progress_callback = progress_callback
+        # ``reasoningSnapshotReplay`` is an internal source-adapter marker,
+        # not persisted monitor data.  Treat replay as an explicit runner
+        # mode so a stale marker can never make the ordinary monitor skip its
+        # source commit and the resulting verified reasoning request.
+        self.source_snapshot_replay = bool(source_snapshot_replay)
         # The reasoning worker advances its event cursor only after this
         # projection has a usable TypeDB result.
         self.last_ontology_projection_results: Dict[str, Dict[str, object]] = {}
@@ -127,10 +133,7 @@ class MonitorRunner:
             kwargs = {"dry_run": dry_run}
             if delivery_guard is not None and ("delivery_guard" in parameters or accepts_kwargs):
                 kwargs["delivery_guard"] = delivery_guard
-            source_snapshot_replay = bool(snapshots) and all(
-                self.reasoning_snapshot_replay(snapshot) is not None
-                for snapshot in snapshots
-            )
+            source_snapshot_replay = bool(self.source_snapshot_replay)
             if source_snapshot_replay and ("source_snapshot_replay" in parameters or accepts_kwargs):
                 kwargs["source_snapshot_replay"] = True
             cycle_result = recorder(
@@ -260,7 +263,31 @@ class MonitorRunner:
             positionCount=len(snapshot.positions or []),
             watchlistCount=len(snapshot.watchlist or []),
         )
-        replay = self.reasoning_snapshot_replay(snapshot)
+        if not self.source_snapshot_replay:
+            # A normal provider snapshot must not inherit this isolated
+            # worker control-plane field through an older persisted payload.
+            # Leaving it in place previously made the cycle recorder skip
+            # both ``snapshot_collected`` and the market-observation
+            # follow-up request while still allowing the raw price message.
+            snapshot.metadata.pop("reasoningSnapshotReplay", None)
+        replay = self.reasoning_snapshot_replay(snapshot) if self.source_snapshot_replay else None
+        if self.source_snapshot_replay and replay is None:
+            projection = {
+                "saved": False,
+                "status": "deferred-source-snapshot",
+                "reason": "The isolated reasoning worker did not receive a verified monitor snapshot replay marker.",
+                "retryable": True,
+                "recommendedRetryAfterSeconds": 30,
+            }
+            snapshot.metadata.setdefault("ontology", {})["projection"] = projection
+            self.last_ontology_projection_results[account.account_id] = projection
+            self.progress(
+                "ontology_projection.deferred",
+                accountId=account.account_id,
+                status=projection["status"],
+                reason=projection["reason"],
+            )
+            return snapshot, []
         if replay is not None and str(replay.get("status") or "") != "ready":
             projection = {
                 "saved": False,

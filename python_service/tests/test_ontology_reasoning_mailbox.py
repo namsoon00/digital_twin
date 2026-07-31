@@ -488,7 +488,7 @@ def research_evidence_request(
 
 
 class OntologyReasoningMailboxTests(unittest.TestCase):
-    def build_runner(self, events, now=None, settings=None, event_publisher=None):
+    def build_runner(self, events, now=None, settings=None, event_publisher=None, activity_probe=None):
         self.cursor = MemoryCursor()
         self.mailbox = MemoryMailbox()
         self.monitor = Monitor()
@@ -510,6 +510,7 @@ class OntologyReasoningMailboxTests(unittest.TestCase):
             settings=runtime_settings,
             mailbox_store=self.mailbox,
             now_provider=now or (lambda: datetime(2026, 7, 24, 0, 5, tzinfo=timezone.utc)),
+            rulebox_prewarm_activity_probe=activity_probe,
         )
 
     def test_newer_realtime_observation_replaces_older_source_before_typedb(self):
@@ -638,6 +639,41 @@ class OntologyReasoningMailboxTests(unittest.TestCase):
         self.assertEqual([], self.monitor.calls)
         self.assertEqual(5, result["retryAfterSeconds"])
         self.assertTrue(result["ruleboxPrewarmRecovery"]["eligible"])
+
+    def test_aged_queue_uses_durable_compiler_activity_before_opening_a_typedb_readiness_connection(self):
+        now = datetime(2026, 7, 24, 0, 5, tzinfo=timezone.utc)
+        events = [
+            realtime_request("prewarm-activity-a", ["AAPL"], "2026-07-24T00:00:00Z"),
+            realtime_request("prewarm-activity-b", ["MSFT"], "2026-07-24T00:00:00Z"),
+        ]
+        runner = self.build_runner(
+            events,
+            now=lambda: now,
+            settings={
+                "ontologyRuleboxPrewarmEnabled": "1",
+                "ontologyRuleboxPrewarmBacklogRecoveryEnabled": "1",
+                "ontologyRuleboxPrewarmBacklogRecoveryAgeSeconds": "90",
+                "ontologyRuleboxPrewarmBacklogRecoveryMinPendingEntries": "2",
+            },
+            activity_probe=lambda: {
+                "status": "running",
+                "active": True,
+                "expiresAtEpoch": now.timestamp() + 120,
+            },
+        )
+        readiness_calls = []
+        runner.rulebox_prewarm_probe = lambda: readiness_calls.append(True) or {
+            "status": "provisioning",
+            "functionsReady": False,
+        }
+
+        result = runner.run_once()
+
+        self.assertEqual("deferred-rulebox-prewarm-recovery", result["status"])
+        self.assertEqual([], readiness_calls)
+        self.assertEqual([], self.monitor.calls)
+        self.assertTrue(result["ruleboxPrewarmActivity"]["active"])
+        self.assertEqual(15, result["retryAfterSeconds"])
 
     def test_aged_queue_surfaces_prewarm_recovery_probe_errors_without_running_direct_typeql(self):
         events = [

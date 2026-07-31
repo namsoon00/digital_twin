@@ -1083,6 +1083,31 @@ class OntologyRuleboxPrewarmScheduler:
         starting a schema transaction in the brief gap between reasoning
         batches.
         """
+        activity_reader = getattr(self.runner, "prewarm_activity_state", None)
+        if callable(activity_reader):
+            try:
+                candidate = activity_reader()
+                activity = dict(candidate or {}) if isinstance(candidate, dict) else {}
+            except Exception:
+                activity = {}
+            if bool(activity.get("active")):
+                status = str(activity.get("status") or "running")
+                return {
+                    "status": "deferred-compiler-activity",
+                    "configured": True,
+                    "functionsReady": False,
+                    "pendingRuleCount": None,
+                    "prewarmActivity": activity,
+                    "reason": (
+                        "TypeDB RuleBox compiler is " + status
+                        + "; the scheduler keeps the next schema writer idle."
+                    ),
+                    "recommendedRetryAfterSeconds": max(
+                        1,
+                        int(activity.get("retryAfterSeconds") or self.interval_seconds),
+                    ),
+                    "durationMs": 0,
+                }
         queue_reader = getattr(self.runner, "reasoning_queue_state", None)
         pending_reader = getattr(self.runner, "pending_reasoning_count", None)
         if not callable(queue_reader) or not callable(pending_reader):
@@ -1162,11 +1187,48 @@ class OntologyRuleboxPrewarmScheduler:
             return guard
         if not self.process_isolation_enabled():
             return self.runner.run_once()
-        return self.isolated_cycle.run_once(
+        result = self.isolated_cycle.run_once(
             0,
             self.execution_timeout_seconds(),
             self.execution_timeout_grace_seconds(),
         )
+        return self.record_isolated_compiler_handoff(result)
+
+    def record_isolated_compiler_handoff(self, result: dict) -> dict:
+        """Persist a cooldown when the child cannot publish its own result.
+
+        The isolated child normally writes ``running`` then its final state.
+        An outer hard timeout is the exception: the scheduler owns the result
+        while the child is being stopped, and TypeDB may still be completing
+        the schema commit after the client disappears.
+        """
+        payload = dict(result or {})
+        status = str(payload.get("status") or "").strip().lower()
+        if status != "timeout" and not (
+            status == "error" and self.interrupted_compiler_error(payload)
+        ):
+            return payload
+        cooldown_reader = getattr(self.runner, "activity_cooldown_seconds", None)
+        publisher = getattr(self.runner, "publish_activity", None)
+        if not callable(cooldown_reader) or not callable(publisher):
+            return payload
+        try:
+            cooldown_seconds = max(0, int(cooldown_reader(payload) or 0))
+        except Exception:
+            cooldown_seconds = 0
+        if not cooldown_seconds:
+            return payload
+        try:
+            activity = publisher(
+                "cooldown",
+                active_seconds=cooldown_seconds,
+                result=payload,
+            )
+        except Exception:
+            activity = {}
+        if activity:
+            payload["prewarmActivity"] = activity
+        return payload
 
     def should_report(self, result: dict, started: float) -> bool:
         status = str(result.get("status") or "unknown")
@@ -1245,6 +1307,7 @@ class OntologyRuleboxPrewarmScheduler:
             "deferred-reasoning-pending",
             "deferred-aged-reasoning-backlog",
             "deferred-aged-reasoning-backlog-active",
+            "deferred-compiler-activity",
             "deferred-idle-quiet-period",
             "deferred-reasoning-queue-probe",
         }:

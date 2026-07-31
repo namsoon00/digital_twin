@@ -89,7 +89,7 @@ class TypeDBOntologyRepositoryTests(unittest.TestCase):
         repository = TypeDBOntologyGraphRepository("127.0.0.1:1729")
 
         self.assertEqual(3, repository.schema_function_provision_batch_size())
-        self.assertEqual(30.0, repository.schema_function_provision_timeout_seconds())
+        self.assertEqual(900.0, repository.schema_function_provision_timeout_seconds())
         self.assertTrue(repository.schema_function_direct_query_fallback_enabled())
 
     def test_pending_abox_activation_lookup_uses_the_world_scoped_control_id(self):
@@ -7230,7 +7230,7 @@ class TypeDBOntologyRepositoryTests(unittest.TestCase):
         self.assertEqual("2048", workers["typedb"]["maxSizeMb"])
         self.assertEqual("0", workers["typedb"]["ageResetEnabled"])
         self.assertEqual("127.0.0.1:1729", workers["typedb"]["healthAddress"])
-        self.assertEqual("600", workers["typedb"]["startupWaitSeconds"])
+        self.assertEqual("1800", workers["typedb"]["startupWaitSeconds"])
         self.assertEqual("1", workers["typedb"]["seedOnStart"])
         self.assertEqual("1", workers["typedb"]["seedReplaceRuleBox"])
         self.assertEqual("1", workers["typedb"]["seedKeepInference"])
@@ -8918,7 +8918,11 @@ class TypeDBOntologyRepositoryTests(unittest.TestCase):
                 }), \
                 patch.object(repository, "match_typedb_native_rules", return_value=native_match), \
                 patch.object(repository, "load_graph_for_native_matches", return_value=graph), \
-                patch.object(repository, "write_inferencebox_graph", side_effect=capture_inferencebox):
+                patch.object(repository, "write_inferencebox_graph", side_effect=capture_inferencebox), \
+                patch.object(repository, "prune_inferencebox_generations", return_value={
+                    "status": "skipped",
+                    "removedGenerationCount": 0,
+                }):
             result = repository.run_rulebox({})
 
         self.assertEqual("ok", result["status"])

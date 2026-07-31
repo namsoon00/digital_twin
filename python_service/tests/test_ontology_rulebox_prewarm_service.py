@@ -1,4 +1,5 @@
 import unittest
+import time
 from datetime import datetime, timezone
 
 from digital_twin.application.ontology_rulebox_prewarm_service import (
@@ -19,6 +20,27 @@ class FakeRepository:
 
     def schema_function_prewarm_status(self):
         self.status_calls += 1
+        return dict(self.result)
+
+
+class MemoryPrewarmStateStore:
+    def __init__(self):
+        self.payloads = []
+
+    def replace(self, payload):
+        self.payloads.append(dict(payload or {}))
+
+    def load(self):
+        return dict(self.payloads[-1]) if self.payloads else {}
+
+
+class FakeIsolatedCycle:
+    def __init__(self, result):
+        self.result = dict(result or {})
+        self.calls = []
+
+    def run_once(self, *args):
+        self.calls.append(args)
         return dict(self.result)
 
 
@@ -216,8 +238,122 @@ class OntologyRuleboxPrewarmRunnerTests(unittest.TestCase):
     def test_default_execution_limit_matches_the_environment_contract(self):
         runner = OntologyRuleboxPrewarmRunner(FakeRepository())
 
-        self.assertEqual(180, runner.execution_timeout_seconds())
+        self.assertEqual(1500, runner.execution_timeout_seconds())
         self.assertEqual(10, runner.execution_timeout_grace_seconds())
+
+    def test_publishes_a_durable_cooldown_after_an_interrupted_compiler_call(self):
+        now = datetime(2026, 7, 24, 0, 5, tzinfo=timezone.utc)
+        state_store = MemoryPrewarmStateStore()
+        runner = OntologyRuleboxPrewarmRunner(
+            FakeRepository({
+                "status": "error",
+                "functionsReady": False,
+                "reason": "http2 error: transport error: keep-alive timed out",
+            }),
+            settings={"ontologyRuleboxPrewarmEnabled": "1"},
+            reasoning_queue_probe=lambda: {"status": "idle", "effectivePendingCount": 0},
+            now_provider=lambda: now,
+            prewarm_state_store=state_store,
+        )
+
+        result = runner.run_once()
+
+        self.assertEqual("cooldown", result["prewarmActivity"]["status"])
+        self.assertTrue(result["prewarmActivity"]["active"])
+        self.assertEqual(2, len(state_store.payloads))
+        self.assertEqual("running", state_store.payloads[0]["status"])
+        self.assertEqual("cooldown", state_store.payloads[-1]["status"])
+        self.assertEqual(900, int(state_store.payloads[-1]["expiresAtEpoch"] - now.timestamp()))
+
+    def test_defers_a_second_compiler_while_a_durable_cooldown_is_active(self):
+        now = datetime(2026, 7, 24, 0, 5, tzinfo=timezone.utc)
+        state_store = MemoryPrewarmStateStore()
+        state_store.replace({
+            "status": "cooldown",
+            "active": True,
+            "expiresAtEpoch": now.timestamp() + 120,
+        })
+        repository = FakeRepository()
+        runner = OntologyRuleboxPrewarmRunner(
+            repository,
+            settings={"ontologyRuleboxPrewarmEnabled": "1"},
+            now_provider=lambda: now,
+            prewarm_state_store=state_store,
+        )
+
+        result = runner.run_once()
+
+        self.assertEqual("deferred-compiler-activity", result["status"])
+        self.assertEqual("cooldown", result["prewarmActivity"]["status"])
+        self.assertEqual(15, result["recommendedRetryAfterSeconds"])
+        self.assertEqual([], repository.calls)
+
+    def test_scheduler_keeps_an_isolated_compiler_child_idle_during_activity(self):
+        now = datetime(2026, 7, 24, 0, 5, tzinfo=timezone.utc)
+        state_store = MemoryPrewarmStateStore()
+        state_store.replace({
+            "status": "running",
+            "active": True,
+            "expiresAtEpoch": now.timestamp() + 120,
+        })
+        repository = FakeRepository()
+        runner = OntologyRuleboxPrewarmRunner(
+            repository,
+            settings={"ontologyRuleboxPrewarmEnabled": "1"},
+            now_provider=lambda: now,
+            prewarm_state_store=state_store,
+        )
+        scheduler = OntologyRuleboxPrewarmScheduler(runner, 15)
+
+        result = scheduler.run_once()
+
+        self.assertEqual("deferred-compiler-activity", result["status"])
+        self.assertEqual([], repository.calls)
+
+    def test_scheduler_publishes_cooldown_when_an_isolated_child_times_out(self):
+        now = datetime(2026, 7, 24, 0, 5, tzinfo=timezone.utc)
+        state_store = MemoryPrewarmStateStore()
+        runner = OntologyRuleboxPrewarmRunner(
+            FakeRepository(),
+            settings={
+                "ontologyRuleboxPrewarmEnabled": "1",
+                "ontologyRuleboxPrewarmIdleQuietSeconds": "30",
+            },
+            reasoning_queue_probe=lambda: {"status": "idle", "effectivePendingCount": 0},
+            now_provider=lambda: now,
+            prewarm_state_store=state_store,
+        )
+        isolated_cycle = FakeIsolatedCycle({"status": "timeout", "functionsReady": False})
+        scheduler = OntologyRuleboxPrewarmScheduler(runner, 15, isolated_cycle=isolated_cycle)
+        scheduler.last_reasoning_activity_at = time.monotonic() - 31
+
+        result = scheduler.run_once()
+
+        self.assertEqual("timeout", result["status"])
+        self.assertEqual(1, len(isolated_cycle.calls))
+        self.assertEqual("cooldown", result["prewarmActivity"]["status"])
+        self.assertEqual(900, int(result["prewarmActivity"]["expiresAtEpoch"] - now.timestamp()))
+
+    def test_status_uses_compiler_activity_without_opening_a_typedb_readiness_connection(self):
+        now = datetime(2026, 7, 24, 0, 5, tzinfo=timezone.utc)
+        state_store = MemoryPrewarmStateStore()
+        state_store.replace({
+            "status": "running",
+            "active": True,
+            "expiresAtEpoch": now.timestamp() + 120,
+        })
+        repository = FakeRepository()
+        runner = OntologyRuleboxPrewarmRunner(
+            repository,
+            now_provider=lambda: now,
+            prewarm_state_store=state_store,
+        )
+
+        status = runner.status()
+
+        self.assertEqual("compiler-running", status["prewarm"]["status"])
+        self.assertTrue(status["prewarmActivity"]["active"])
+        self.assertEqual(0, repository.status_calls)
 
     def test_scheduler_cools_down_schema_compile_errors_before_retrying(self):
         scheduler = OntologyRuleboxPrewarmScheduler(FakeRepository(), 15)

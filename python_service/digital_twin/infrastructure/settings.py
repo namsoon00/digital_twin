@@ -1493,7 +1493,7 @@ def runtime_settings(fast_operational_read: bool = False) -> Dict[str, str]:
         "ontologyRuleboxPrewarmExecutionTimeoutSeconds": value(
             "ontologyRuleboxPrewarmExecutionTimeoutSeconds",
             "ONTOLOGY_RULEBOX_PREWARM_EXECUTION_TIMEOUT_SECONDS",
-            "180",
+            "1500",
         ),
         "ontologyRuleboxPrewarmExecutionTimeoutGraceSeconds": value(
             "ontologyRuleboxPrewarmExecutionTimeoutGraceSeconds",
@@ -1583,14 +1583,14 @@ def runtime_settings(fast_operational_read: bool = False) -> Dict[str, str]:
         "typedbSchemaFunctionProvisionTimeoutSeconds": value(
             "typedbSchemaFunctionProvisionTimeoutSeconds",
             "TYPEDB_SCHEMA_FUNCTION_PROVISION_TIMEOUT_SECONDS",
-            "30",
+            "900",
         ),
         "typedbAutoResetEnabled": value("typedbAutoResetEnabled", "TYPEDB_AUTO_RESET_ENABLED", "0"),
         "typedbAgeResetEnabled": value("typedbAgeResetEnabled", "TYPEDB_AGE_RESET_ENABLED", "0"),
         "typedbDataRetentionHours": value("typedbDataRetentionHours", "TYPEDB_DATA_RETENTION_HOURS", "24"),
         "typedbDataMaxSizeMb": value("typedbDataMaxSizeMb", "TYPEDB_DATA_MAX_SIZE_MB", "2048"),
         "typedbMinimumFreeSpaceMb": value("typedbMinimumFreeSpaceMb", "TYPEDB_MINIMUM_FREE_SPACE_MB", "4096"),
-        "typedbStartupWaitSeconds": value("typedbStartupWaitSeconds", "TYPEDB_STARTUP_WAIT_SECONDS", "600"),
+        "typedbStartupWaitSeconds": value("typedbStartupWaitSeconds", "TYPEDB_STARTUP_WAIT_SECONDS", "1800"),
         "typedbSeedOnStart": value("typedbSeedOnStart", "TYPEDB_SEED_ON_START", "1"),
         "typedbSeedReplaceRuleBox": value("typedbSeedReplaceRuleBox", "TYPEDB_SEED_REPLACE_RULEBOX", "1"),
         "typedbSeedKeepInference": value("typedbSeedKeepInference", "TYPEDB_SEED_KEEP_INFERENCE", "1"),

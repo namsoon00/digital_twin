@@ -14,7 +14,7 @@ compiler turn.
 from __future__ import annotations
 
 import time
-from datetime import datetime, timezone
+from datetime import datetime, timedelta, timezone
 from typing import Callable, Dict
 
 
@@ -44,11 +44,15 @@ class OntologyRuleboxPrewarmRunner:
         settings: Dict[str, object] = None,
         reasoning_queue_probe=None,
         now_provider: Callable[[], datetime] = None,
+        prewarm_state_store=None,
     ):
         self.ontology_repository = ontology_repository
         self.settings = dict(settings or {})
         self.reasoning_queue_probe = reasoning_queue_probe
         self.now_provider = now_provider or (lambda: datetime.now(timezone.utc))
+        # Live reasoning needs only a cheap signal that a schema compiler is
+        # active. Production wires this to MySQL, never to a TypeDB read.
+        self.prewarm_state_store = prewarm_state_store
 
     def enabled(self) -> bool:
         # A live inference must never be the process that discovers a cold
@@ -297,7 +301,7 @@ class OntologyRuleboxPrewarmRunner:
         return _integer_setting(
             self.settings,
             "ontologyRuleboxPrewarmExecutionTimeoutSeconds",
-            180,
+            1500,
             30,
             1800,
         )
@@ -310,6 +314,163 @@ class OntologyRuleboxPrewarmRunner:
             1,
             120,
         )
+
+    def prewarm_activity_lease_seconds(self) -> int:
+        """Keep a stale compiler signal bounded when an isolated child dies."""
+        return max(
+            60,
+            min(
+                3600,
+                self.execution_timeout_seconds()
+                + self.execution_timeout_grace_seconds()
+                + 60,
+            ),
+        )
+
+    def interrupted_compiler_cooldown_seconds(self) -> int:
+        """Allow TypeDB to finish a schema commit after a client disconnect."""
+        return max(300, min(900, self.execution_timeout_seconds()))
+
+    def activity_now(self) -> datetime:
+        current = self.now_provider()
+        if current.tzinfo is None:
+            current = current.replace(tzinfo=timezone.utc)
+        return current.astimezone(timezone.utc)
+
+    def prewarm_activity_state(self) -> Dict[str, object]:
+        """Read the bounded compiler hand-off without opening TypeDB.
+
+        The state is intentionally advisory: an expired or unavailable record
+        never prevents the next worker from recovering.  While it is active,
+        however, another schema writer would only contend with the TypeDB
+        compiler that is already rebuilding its type cache.
+        """
+        store = self.prewarm_state_store
+        reader = getattr(store, "load", None)
+        if not callable(reader):
+            return {"active": False, "status": "not-configured"}
+        try:
+            payload = reader()
+        except Exception as error:  # noqa: BLE001 - a missing hint must not stall recovery.
+            return {
+                "active": False,
+                "status": "error",
+                "reason": str(error)[:180],
+            }
+        result = dict(payload or {}) if isinstance(payload, dict) else {}
+        status = str(result.get("status") or "").strip().lower()
+        try:
+            expires_at_epoch = float(result.get("expiresAtEpoch") or 0)
+        except (TypeError, ValueError):
+            expires_at_epoch = 0.0
+        if not expires_at_epoch:
+            raw_expiry = str(result.get("expiresAt") or "").strip()
+            if raw_expiry:
+                try:
+                    expiry = datetime.fromisoformat(raw_expiry.replace("Z", "+00:00"))
+                    if expiry.tzinfo is None:
+                        expiry = expiry.replace(tzinfo=timezone.utc)
+                    expires_at_epoch = expiry.astimezone(timezone.utc).timestamp()
+                except ValueError:
+                    expires_at_epoch = 0.0
+        remaining = max(0.0, expires_at_epoch - self.activity_now().timestamp())
+        raw_active = result.get("active")
+        active_flag = (
+            raw_active
+            if isinstance(raw_active, bool)
+            else str(raw_active or "").strip().lower() not in DISABLED_VALUES | {""}
+        )
+        active = bool(
+            active_flag
+            and status in {"running", "cooldown", "provisioning", "handoff"}
+            and remaining > 0
+        )
+        return {
+            **result,
+            "status": status or "unknown",
+            "active": active,
+            "remainingSeconds": int(remaining + 0.999) if active else 0,
+            # Keep polling MySQL instead of leaving a long stale wait when a
+            # killed isolated worker never gets to publish its completion.
+            "retryAfterSeconds": min(
+                max(1, int(remaining + 0.999)) if active else 0,
+                self.interval_seconds(),
+            ) if active else 0,
+        }
+
+    @staticmethod
+    def interrupted_compiler_result(payload: Dict[str, object]) -> bool:
+        text = " ".join(str(dict(payload or {}).get(key) or "") for key in [
+            "reason", "deferredReason", "workerOutput",
+        ]).lower()
+        return any(token in text for token in [
+            "keep-alive timed out",
+            "operation timed out",
+            "deadline exceeded",
+            "transport error",
+            "connection reset",
+            "connection closed",
+        ])
+
+    def activity_cooldown_seconds(self, payload: Dict[str, object]) -> int:
+        """Return a no-TypeDB hand-off interval after a prewarm attempt."""
+        result = dict(payload or {})
+        status = str(result.get("status") or "").strip().lower()
+        if status == "timeout" or self.interrupted_compiler_result(result):
+            return self.interrupted_compiler_cooldown_seconds()
+        if status in {"provisioning", "deferred-projection-coordinator"}:
+            try:
+                recommended = int(result.get("recommendedRetryAfterSeconds") or 0)
+            except (TypeError, ValueError):
+                recommended = 0
+            return max(3, min(60, recommended or self.interval_seconds()))
+        return 0
+
+    @staticmethod
+    def activity_result_summary(payload: Dict[str, object]) -> Dict[str, object]:
+        result = dict(payload or {})
+        return {
+            key: result.get(key)
+            for key in [
+                "status",
+                "functionsReady",
+                "pendingRuleCount",
+                "reasonCode",
+                "reason",
+                "durationMs",
+                "recommendedRetryAfterSeconds",
+            ]
+            if key in result
+        }
+
+    def publish_activity(
+        self,
+        status: str,
+        active_seconds: int = 0,
+        result: Dict[str, object] = None,
+    ) -> Dict[str, object]:
+        """Publish compiler activity without letting telemetry block TypeDB work."""
+        store = self.prewarm_state_store
+        writer = getattr(store, "replace", None) or getattr(store, "save", None)
+        if not callable(writer):
+            return {}
+        now = self.activity_now()
+        duration = max(0, int(active_seconds or 0))
+        expires_at = now + timedelta(seconds=duration)
+        payload = {
+            "status": str(status or "idle"),
+            "active": bool(duration),
+            "updatedAt": now.isoformat().replace("+00:00", "Z"),
+            "expiresAt": expires_at.isoformat().replace("+00:00", "Z"),
+            "expiresAtEpoch": expires_at.timestamp(),
+        }
+        if result:
+            payload["lastResult"] = self.activity_result_summary(result)
+        try:
+            writer(payload)
+        except Exception:
+            return {}
+        return payload
 
     def process_isolation_enabled(self) -> bool:
         value = str(
@@ -331,6 +492,16 @@ class OntologyRuleboxPrewarmRunner:
             "backlogRecoveryMinPendingEntries": self.backlog_recovery_min_pending_entries(),
             "backlogRecoveryRetrySeconds": self.backlog_recovery_retry_seconds(),
         }
+        activity = self.prewarm_activity_state()
+        result["prewarmActivity"] = activity
+        if bool(activity.get("active")):
+            status = str(activity.get("status") or "running")
+            result["prewarm"] = {
+                "status": "compiler-" + status,
+                "functionsReady": False,
+                "reason": "TypeDB RuleBox compiler is active; readiness is deferred without a TypeDB connection.",
+            }
+            return result
         reader = getattr(self.ontology_repository, "schema_function_prewarm_status", None)
         if not callable(reader):
             result["prewarm"] = {
@@ -379,6 +550,25 @@ class OntologyRuleboxPrewarmRunner:
                 "configured": True,
                 "functionsReady": False,
                 "reason": "RuleBox schema-function prewarm worker is disabled.",
+                "durationMs": 0,
+            }
+        activity = self.prewarm_activity_state()
+        if bool(activity.get("active")):
+            status = str(activity.get("status") or "running")
+            return {
+                "status": "deferred-compiler-activity",
+                "configured": True,
+                "functionsReady": False,
+                "pendingRuleCount": None,
+                "prewarmActivity": activity,
+                "reason": (
+                    "TypeDB RuleBox compiler is " + status
+                    + "; another schema compilation is deferred without opening TypeDB."
+                ),
+                "recommendedRetryAfterSeconds": max(
+                    1,
+                    int(activity.get("retryAfterSeconds") or self.interval_seconds()),
+                ),
                 "durationMs": 0,
             }
         queue = self.reasoning_queue_state()
@@ -446,6 +636,15 @@ class OntologyRuleboxPrewarmRunner:
                 "reason": "Ontology repository has no TypeDB schema-function prewarm capability.",
                 "durationMs": 0,
             }
+        self.publish_activity(
+            "running",
+            active_seconds=self.prewarm_activity_lease_seconds(),
+            result={
+                "status": "running",
+                "reasoningPendingCount": pending,
+                "backlogRecoveryGranted": recovery_granted,
+            },
+        )
         started_at = time.perf_counter()
         try:
             result = dict(prewarm(force=bool(force)) or {})
@@ -474,4 +673,17 @@ class OntologyRuleboxPrewarmRunner:
                 # quickly here is safe and lets it retain priority until the
                 # compiled path can release the waiting queue.
                 result["recommendedRetryAfterSeconds"] = self.backlog_recovery_retry_seconds()
+        cooldown_seconds = self.activity_cooldown_seconds(result)
+        activity_status = (
+            "cooldown"
+            if cooldown_seconds
+            else "ready" if str(result.get("status") or "") == "ok" else "idle"
+        )
+        activity = self.publish_activity(
+            activity_status,
+            active_seconds=cooldown_seconds,
+            result=result,
+        )
+        if activity:
+            result["prewarmActivity"] = activity
         return result

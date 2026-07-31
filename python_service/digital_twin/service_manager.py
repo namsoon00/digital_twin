@@ -209,7 +209,7 @@ def typedb_worker_spec(settings: Dict[str, object]) -> Dict[str, object]:
         # rebuild the type cache after a clean server restart.  Treating that
         # normal recovery as a 60-second failure leaves every dependent worker
         # down and turns a recoverable restart into a reasoning backlog.
-        "startupWaitSeconds": str((settings or {}).get("typedbStartupWaitSeconds") or "600"),
+        "startupWaitSeconds": str((settings or {}).get("typedbStartupWaitSeconds") or "1800"),
         "seedOnStart": str((settings or {}).get("typedbSeedOnStart") or os.environ.get("TYPEDB_SEED_ON_START") or "1"),
         "seedReplaceRuleBox": str((settings or {}).get("typedbSeedReplaceRuleBox") or os.environ.get("TYPEDB_SEED_REPLACE_RULEBOX") or "1"),
         "seedKeepInference": str((settings or {}).get("typedbSeedKeepInference") or os.environ.get("TYPEDB_SEED_KEEP_INFERENCE") or "1"),

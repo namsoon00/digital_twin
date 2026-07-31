@@ -767,10 +767,14 @@ def build_ontology_inference_detail_runner(settings=None) -> OntologyInferenceDe
 def build_ontology_rulebox_prewarm_runner(settings=None) -> OntologyRuleboxPrewarmRunner:
     """Build the isolated compiler worker for the active TypeDB RuleBox."""
     configured_settings = settings or runtime_settings()
+    store_settings = dict(configured_settings)
+    store_settings["_skipOperationalHistoryRetention"] = "1"
+    store_settings["_skipOperationalSchemaBootstrap"] = "1"
     return OntologyRuleboxPrewarmRunner(
         ontology_repository=ontology_repository_from_settings(configured_settings),
         settings=configured_settings,
         reasoning_queue_probe=build_ontology_reasoning_queue_probe(configured_settings),
+        prewarm_state_store=stores.ontology_rulebox_prewarm_state_store(store_settings),
     )
 
 
@@ -810,6 +814,9 @@ def build_ontology_reasoning_runner(settings=None, event_publisher=None) -> Onto
     event_log = stores.event_log(reasoning_store_settings)
     ontology_repository = ontology_repository_from_settings(configured_settings)
     cursor_store = stores.ontology_reasoning_cursor_store(reasoning_store_settings)
+    rulebox_prewarm_state_store = stores.ontology_rulebox_prewarm_state_store(
+        reasoning_store_settings,
+    )
     snapshot_readiness_source = LatestMonitorSnapshotReasoningSource(
         stores.ontology_reasoning_monitor_store(reasoning_store_settings),
         settings=reasoning_monitor_settings,
@@ -993,6 +1000,11 @@ def build_ontology_reasoning_runner(settings=None, event_publisher=None) -> Onto
             else None
         ),
         operational_settings_refresher=refresh_reasoning_monitor_settings,
+        rulebox_prewarm_activity_probe=(
+            getattr(rulebox_prewarm_state_store, "load")
+            if callable(getattr(rulebox_prewarm_state_store, "load", None))
+            else None
+        ),
     )
 
 

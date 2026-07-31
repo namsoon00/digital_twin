@@ -292,6 +292,12 @@ class MySQLOntologyMaintenanceStateStore(MySQLAppStore):
     store_id = "ontology_maintenance_state"
 
 
+class MySQLOntologyRuleboxPrewarmStateStore(MySQLAppStore):
+    """Shares a bounded RuleBox compiler hand-off without storing graph data."""
+
+    store_id = "ontology_rulebox_prewarm_state"
+
+
 class MySQLOntologyReasoningCursorStore(MySQLAppStore):
     store_id = "ontology_reasoning_cursor"
 

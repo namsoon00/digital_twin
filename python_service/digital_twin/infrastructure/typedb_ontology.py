@@ -1361,9 +1361,10 @@ DEFAULT_TYPEDB_NATIVE_RULE_TARGET_PARALLELISM = 1
 DEFAULT_TYPEDB_SCHEMA_FUNCTION_PROVISION_BATCH_SIZE = 3
 # A timed-out schema commit can continue server-side, so deployment receipts
 # make the next bounded pass verify it before defining anything again. Keep
-# the client deadline short enough to prevent a stalled compiler from holding
-# every inference worker behind one long-lived request.
-DEFAULT_TYPEDB_SCHEMA_FUNCTION_PROVISION_TIMEOUT_SECONDS = 30.0
+# every inference worker behind one long-lived request. Local TypeDB schema
+# cache construction can legitimately exceed a short transport keep-alive,
+# so the dedicated isolated worker gets a real maintenance window instead.
+DEFAULT_TYPEDB_SCHEMA_FUNCTION_PROVISION_TIMEOUT_SECONDS = 900.0
 TYPEDB_PROMOTED_NUMERIC_ATTRIBUTES = {
     "currentPrice": "ontology-current-price",
     "averagePrice": "ontology-average-price",

@@ -29,6 +29,7 @@ from .mysql_operational import (
     MySQLOntologyWorldProjectionOutboxStore,
     MySQLOntologyQualitySampleStore,
     MySQLOntologyMaintenanceStateStore,
+    MySQLOntologyRuleboxPrewarmStateStore,
     MySQLOntologyReasoningCursorStore,
     MySQLOntologyReasoningMailboxStore,
     MySQLResearchEvidenceStore,
@@ -78,6 +79,11 @@ def ontology_reasoning_cursor_store(settings: Dict[str, str] = None):
 def ontology_maintenance_state_store(settings: Dict[str, str] = None):
     configured = configured_settings(settings)
     return MySQLOntologyMaintenanceStateStore(configured)
+
+
+def ontology_rulebox_prewarm_state_store(settings: Dict[str, str] = None):
+    configured = configured_settings(settings)
+    return MySQLOntologyRuleboxPrewarmStateStore(configured)
 
 
 def ontology_reasoning_mailbox_store(settings: Dict[str, str] = None):

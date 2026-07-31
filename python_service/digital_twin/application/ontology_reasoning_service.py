@@ -645,6 +645,7 @@ class OntologyReasoningRunner:
         rulebox_prewarm_probe: Callable = None,
         snapshot_readiness_probe: Callable = None,
         operational_settings_refresher: Callable = None,
+        rulebox_prewarm_activity_probe: Callable = None,
     ):
         self.event_reader = event_reader
         self.cursor_store = cursor_store
@@ -666,6 +667,7 @@ class OntologyReasoningRunner:
         self.rulebox_prewarm_probe = rulebox_prewarm_probe
         self.snapshot_readiness_probe = snapshot_readiness_probe
         self.operational_settings_refresher = operational_settings_refresher
+        self.rulebox_prewarm_activity_probe = rulebox_prewarm_activity_probe
 
     def refresh_operational_settings(self, settings: Dict[str, object] = None) -> Dict[str, object]:
         """Apply safe scheduling changes between persistent-sidecar turns.
@@ -866,6 +868,63 @@ class OntologyReasoningRunner:
             "ready": ready,
             "retryAfterSeconds": self.rulebox_prewarm_retry_seconds(),
             "recoveryProbe": bool(probe_when_fallback),
+        }
+
+    def rulebox_prewarm_activity_state(self) -> Dict[str, object]:
+        """Read the low-cost compiler hand-off state without opening TypeDB.
+
+        A schema commit rebuilds TypeDB's type cache and may still be running
+        after its Python child has lost the driver connection. During that
+        window a readiness check is counterproductive: it creates another
+        native-driver handshake exactly while the compiler owns the server.
+        """
+        probe = self.rulebox_prewarm_activity_probe
+        if not callable(probe):
+            return {"active": False, "status": "not-configured"}
+        try:
+            payload = probe()
+        except Exception as error:  # noqa: BLE001 - a missing hint must not block a normal receipt check.
+            return {
+                "active": False,
+                "status": "error",
+                "reason": str(error)[:180],
+            }
+        result = dict(payload or {}) if isinstance(payload, Mapping) else {}
+        status = str(result.get("status") or "").strip().lower()
+        try:
+            expires_at_epoch = float(result.get("expiresAtEpoch") or 0)
+        except (TypeError, ValueError):
+            expires_at_epoch = 0.0
+        if not expires_at_epoch:
+            raw_expiry = str(result.get("expiresAt") or "").strip()
+            if raw_expiry:
+                try:
+                    expiry = datetime.fromisoformat(raw_expiry.replace("Z", "+00:00"))
+                    if expiry.tzinfo is None:
+                        expiry = expiry.replace(tzinfo=timezone.utc)
+                    expires_at_epoch = expiry.astimezone(timezone.utc).timestamp()
+                except ValueError:
+                    expires_at_epoch = 0.0
+        now = self.now_provider()
+        if now.tzinfo is None:
+            now = now.replace(tzinfo=timezone.utc)
+        remaining = max(0.0, expires_at_epoch - now.astimezone(timezone.utc).timestamp())
+        active = bool(
+            result.get("active")
+            and status in {"running", "cooldown", "provisioning", "handoff"}
+            and remaining > 0
+        )
+        return {
+            **result,
+            "status": status or "unknown",
+            "active": active,
+            "remainingSeconds": int(remaining + 0.999) if active else 0,
+            # Poll MySQL again soon. This intentionally avoids a long stale
+            # wait if an isolated compiler process is killed unexpectedly.
+            "retryAfterSeconds": min(
+                max(1, int(remaining + 0.999)) if active else 0,
+                self.rulebox_prewarm_retry_seconds(),
+            ) if active else 0,
         }
 
     def source_snapshot_preflight(self, reasoning_context: Dict[str, object]) -> Dict[str, object]:
@@ -4938,6 +4997,56 @@ class OntologyReasoningRunner:
             prewarm_recovery.get("eligible")
             and self.rulebox_prewarm_direct_fallback_enabled()
         )
+        prewarm_activity = (
+            self.rulebox_prewarm_activity_state()
+            if self.rulebox_prewarm_required() or prewarm_recovery_probe
+            else {}
+        )
+        if bool(prewarm_activity.get("active")):
+            retry_after = int(
+                prewarm_activity.get("retryAfterSeconds")
+                or self.rulebox_prewarm_retry_seconds()
+            )
+            activity_status = str(prewarm_activity.get("status") or "running")
+            activity_reason = (
+                "TypeDB RuleBox 컴파일러가 " + activity_status
+                + " 상태로 실행 중입니다. 완료 확인을 위해 TypeDB에 새 연결을 열지 않고 대기합니다."
+            )
+            if prewarm_recovery_probe:
+                return {
+                    "status": "deferred-rulebox-prewarm-recovery",
+                    "processedCount": 0,
+                    "alertCount": 0,
+                    "retryAfterSeconds": max(1, retry_after),
+                    "deferredReason": (
+                        "오래된 추론 대기열의 직접 TypeQL 재시도를 멈추고 " + activity_reason
+                    ),
+                    "ruleboxPrewarm": {
+                        "status": "compiler-" + activity_status,
+                        "functionsReady": False,
+                        "reason": activity_reason,
+                    },
+                    "ruleboxPrewarmActivity": prewarm_activity,
+                    "ruleboxPrewarmRecovery": prewarm_recovery,
+                    "coalescedEventCount": len(durable_superseded_ids),
+                    **queue_metadata,
+                }
+            return {
+                "status": "deferred-rulebox-prewarm",
+                "processedCount": 0,
+                "alertCount": 0,
+                "retryAfterSeconds": max(1, retry_after),
+                "deferredReason": activity_reason,
+                "ruleboxPrewarm": {
+                    "status": "compiler-" + activity_status,
+                    "functionsReady": False,
+                    "reason": activity_reason,
+                },
+                "ruleboxPrewarmActivity": prewarm_activity,
+                "ruleboxPrewarmRecovery": prewarm_recovery,
+                "coalescedEventCount": len(durable_superseded_ids),
+                **queue_metadata,
+            }
         rulebox_prewarm = self.rulebox_prewarm_readiness(
             probe_when_fallback=prewarm_recovery_probe,
         )

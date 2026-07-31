@@ -576,6 +576,7 @@ def settings_status_payload() -> Dict[str, object]:
         "notificationAiUseCodex",
         "notificationAiModel",
         "notificationAiTimeoutSeconds",
+        "notificationAiDeliveryDeadlineSeconds",
         "investmentBrainMinimumHypothesisCount",
         "investmentBrainMaximumHypothesisCount",
         "investmentBrainInferenceBoxLimit",

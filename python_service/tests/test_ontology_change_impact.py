@@ -796,6 +796,130 @@ class OntologyChangeImpactTests(unittest.TestCase):
         self.assertEqual("snapshot-broader-than-event", plan["diagnostics"]["eventScopeAgreement"])
         self.assertEqual(["market"], plan["diagnostics"]["unexpectedChangedFamilies"])
 
+    def test_target_event_routes_its_shared_fact_family_without_reopening_other_global_values(self):
+        before = [
+            {
+                "scopeId": "symbol:005930:market",
+                "generationId": "market-a",
+                "semanticFingerprints": {"market": "price-a"},
+                "semanticDependencyFingerprintVersion": DEPENDENCY_FINGERPRINT_VERSION,
+                "semanticDependencyFingerprints": {"field:currentprice": "price-a"},
+            },
+            {
+                "scopeId": "macro:fx",
+                "generationId": "fx-a",
+                "semanticFingerprints": {"macro-fx": "fx-a"},
+                "semanticDependencyFingerprintVersion": DEPENDENCY_FINGERPRINT_VERSION,
+                "semanticDependencyFingerprints": {"kind:fx-rate": "fx-a"},
+            },
+            {
+                "scopeId": "portfolio:main",
+                "generationId": "portfolio-a",
+                "semanticFingerprints": {"position": "portfolio-a"},
+                "semanticDependencyFingerprintVersion": DEPENDENCY_FINGERPRINT_VERSION,
+                "semanticDependencyFingerprints": {"field:positionweight": "portfolio-a"},
+            },
+        ]
+        after = [
+            {
+                **before[0],
+                "generationId": "market-b",
+                "semanticFingerprints": {"market": "price-b"},
+                "semanticDependencyFingerprints": {"field:currentprice": "price-b"},
+            },
+            {
+                **before[1],
+                "generationId": "fx-b",
+                "semanticFingerprints": {"macro-fx": "fx-b"},
+                "semanticDependencyFingerprints": {"kind:fx-rate": "fx-b"},
+            },
+            {
+                **before[2],
+                "generationId": "portfolio-b",
+                "semanticFingerprints": {"position": "portfolio-b"},
+                "semanticDependencyFingerprints": {"field:positionweight": "portfolio-b"},
+            },
+        ]
+        rules = [
+            {
+                "ruleId": "graph.test.market.v1",
+                "conditions": [{"field": "currentPrice", "operator": ">", "value": 0}],
+            },
+            {
+                "ruleId": "graph.test.fx.v1",
+                "conditions": [{
+                    "kind": "relation",
+                    "relationType": "HAS_FX_RATE",
+                    "targetKind": "fx-rate",
+                }],
+            },
+            {
+                "ruleId": "graph.test.portfolio.v1",
+                "conditions": [{"field": "positionWeight", "operator": ">", "value": 0}],
+            },
+        ]
+
+        plan = build_inference_impact_plan(
+            before,
+            after,
+            ["005930"],
+            explicit_target_symbols=["005930"],
+            rules=rules,
+            requested_fact_families=["market"],
+        )
+
+        self.assertTrue(plan["globalImpact"])
+        self.assertTrue(plan["boundedGlobalContext"])
+        self.assertTrue(plan["eventScopedRuleSelection"])
+        self.assertEqual(["market"], plan["routingScopeFamilies"])
+        self.assertEqual(["graph.test.market.v1"], plan["candidateRuleIds"])
+        self.assertEqual(
+            ["macro:fx", "portfolio:main"],
+            plan["deferredSharedContextScopeIds"],
+        )
+        self.assertIn(
+            "event-scoped-shared-context-routing",
+            plan["diagnostics"]["reasonCodes"],
+        )
+
+    def test_unresolved_reference_link_is_context_not_global_value(self):
+        before = [{
+            "scopeId": "link:shared-research",
+            "generationId": "link-a",
+            "semanticFingerprints": {"evidence": "evidence-a"},
+            "semanticDependencyFingerprintVersion": DEPENDENCY_FINGERPRINT_VERSION,
+            "semanticDependencyFingerprints": {"relation:has-external-signal": "link-a"},
+        }]
+        after = [{
+            **before[0],
+            "generationId": "link-b",
+            "semanticFingerprints": {"evidence": "evidence-b"},
+            "semanticDependencyFingerprints": {"relation:has-external-signal": "link-b"},
+        }]
+        rules = [{
+            "ruleId": "graph.test.evidence.v1",
+            "conditions": [{
+                "kind": "relation",
+                "relationType": "HAS_EXTERNAL_SIGNAL",
+                "targetKind": "news-article",
+            }],
+        }]
+
+        plan = build_inference_impact_plan(
+            before,
+            after,
+            ["005930"],
+            explicit_target_symbols=["005930"],
+            rules=rules,
+            requested_fact_families=["evidence"],
+        )
+
+        self.assertFalse(plan["globalImpact"])
+        self.assertTrue(plan["contextScopedGlobalContext"])
+        self.assertTrue(plan["boundedGlobalContext"])
+        self.assertEqual(["link:shared-research"], plan["contextOnlyGlobalScopeIds"])
+        self.assertEqual(["graph.test.evidence.v1"], plan["candidateRuleIds"])
+
     def test_compact_impact_plan_ignores_malformed_diagnostics(self):
         compact = compact_inference_impact_plan({
             "version": "test",
@@ -1059,7 +1183,7 @@ class OntologyChangeImpactTests(unittest.TestCase):
 
         trace = inference.entities[0]
         self.assertEqual("inference:test", trace.properties["inferenceGenerationId"])
-        self.assertEqual("abox-change-impact-v8", trace.properties["impactPlanVersion"])
+        self.assertEqual("abox-change-impact-v9", trace.properties["impactPlanVersion"])
         self.assertEqual(["005930"], trace.properties["inferenceImpactPlan"]["inferenceTargetSymbols"])
         self.assertEqual("dependency-selected-native-evaluation", trace.properties["ruleExecutionScope"])
         self.assertFalse(trace.properties["nativeRuleSelectionApplied"])

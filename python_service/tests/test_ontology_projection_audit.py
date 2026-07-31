@@ -444,6 +444,113 @@ class OntologyProjectionAuditTests(unittest.TestCase):
         self.assertEqual(0, repository.active_read_count)
         self.assertEqual(0, repository.inference_read_count)
 
+    def test_recorder_combines_independent_audited_proofs_for_a_multi_symbol_batch(self):
+        class ReuseRepository:
+            store_key = "typedb"
+
+            def active_abox_metadata(self):
+                return {"status": "ok", "aboxSnapshotId": "abox:current"}
+
+            def inferencebox_snapshot(self, _symbols=None, _limit=0):
+                return {"status": "stale-generation"}
+
+        def scope(symbol, generation):
+            return {
+                "scopeId": "symbol:" + symbol + ":market",
+                "scopeType": "symbol",
+                "scopeFamily": "market",
+                "impactScopeFamilies": ["market"],
+                "semanticFingerprints": {"market": generation},
+                "generationId": generation,
+                "fingerprint": generation,
+                "baseFingerprint": generation,
+                "dependencyScopeIds": [],
+            }
+
+        prior_a = [scope("005930", "market-a")]
+        prior_b = [scope("000660", "market-a")]
+        candidate_scope_plan = [
+            scope("005930", "market-b"),
+            scope("000660", "market-b"),
+        ]
+
+        def audit_row(symbol, prior_scope_plan, run_id):
+            fingerprint = inference_reuse_scope_plan_fingerprint(prior_scope_plan)
+            return {
+                "runId": run_id,
+                "status": "ok",
+                "graphStore": "typedb",
+                "sourceSymbols": [symbol],
+                "aboxSnapshotId": "abox:" + symbol,
+                "activeAboxSnapshotId": "abox:" + symbol,
+                "context": {"scopeTopology": {
+                    "inferenceReuseScopePlan": prior_scope_plan,
+                    "inferenceReuseScopePlanFingerprint": fingerprint,
+                }},
+                "result": {"inferenceReuseProof": {
+                    "status": "verified",
+                    "coverageComplete": True,
+                    "sourceAboxSnapshotId": "abox:" + symbol,
+                    "inferenceGenerationId": "inference:" + symbol,
+                    "targetSymbols": [symbol],
+                    "matchedRuleIds": ["flow-rule"],
+                    "ruleboxRulesHash": "rulebox-current",
+                    "tboxFingerprint": "tbox-current",
+                    "scopePlanFingerprint": fingerprint,
+                }},
+            }
+
+        audit_store = SimpleNamespace(latest=lambda **_kwargs: [
+            audit_row("005930", prior_a, "projection:005930"),
+            audit_row("000660", prior_b, "projection:000660"),
+        ])
+        recorder = PortfolioOntologyProjectionRecorder(ReuseRepository(), projection_run_store=audit_store)
+        recorder._rulebox_impact_rules = [
+            {
+                "ruleId": "market-rule",
+                "enabled": True,
+                "conditions": [{"conditionId": "price", "kind": "subject_property", "field": "currentPrice"}],
+            },
+            {
+                "ruleId": "flow-rule",
+                "enabled": True,
+                "conditions": [{"conditionId": "flow", "kind": "subject_property", "field": "volumeRatio"}],
+            },
+            {
+                "ruleId": "quality-rule",
+                "enabled": True,
+                "conditions": [{"conditionId": "quality", "kind": "subject_property", "field": "freshnessStatus"}],
+            },
+        ]
+
+        context = recorder.prior_rule_selection_context(
+            source_snapshot(),
+            ["005930", "000660"],
+            candidate_scope_plan=candidate_scope_plan,
+            rulebox_rules_hash="rulebox-current",
+            tbox_fingerprint="tbox-current",
+        )
+
+        self.assertTrue(context["reusable"])
+        self.assertEqual("audited-target-scope-proofs", context["proofSource"])
+        self.assertEqual(["000660", "005930"], context["reusedTargetSymbols"])
+        self.assertEqual(["market-rule"], context["candidateRuleIds"])
+        self.assertEqual(["flow-rule"], context["matchedRuleIds"])
+
+        current_plan = {
+            "candidateRuleIds": ["market-rule", "flow-rule", "quality-rule"],
+            "deferredRuleIds": [],
+            "candidateRuleCount": 3,
+            "enabledRuleCount": 3,
+            "nativeRuleSelectionEligible": False,
+            "diagnostics": {"reasonCodes": []},
+        }
+        selected_plan = recorder.impact_plan_with_audited_candidates(current_plan, context)
+
+        self.assertTrue(selected_plan["nativeRuleSelectionEligible"])
+        self.assertEqual(["market-rule"], selected_plan["candidateRuleIds"])
+        self.assertEqual(["flow-rule", "quality-rule"], selected_plan["deferredRuleIds"])
+
     def test_recorder_rejects_audited_proof_when_rulebox_version_changed(self):
         class ReuseRepository:
             store_key = "typedb"

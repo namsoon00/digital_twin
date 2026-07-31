@@ -25,7 +25,9 @@ class LocalNotificationAIReviewer(NotificationAIReviewer):
 class CommandNotificationAIReviewer(NotificationAIReviewer):
     def __init__(self, command: str, timeout_seconds: int = 120, source: str = "AI"):
         self.command = str(command or "").strip()
-        self.timeout_seconds = max(30, int(timeout_seconds or 120))
+        # Alert delivery has an explicit deadline below. Keep a small lower
+        # bound so a malformed setting cannot create a zero-second subprocess.
+        self.timeout_seconds = max(5, int(timeout_seconds or 120))
         self.source = source
 
     def review(self, context: Dict[str, object]) -> NotificationAIValidatedResponse:
@@ -71,7 +73,26 @@ class FallbackNotificationAIReviewer(NotificationAIReviewer):
 def notification_ai_reviewer_from_settings(settings: Dict[str, str] = None) -> NotificationAIReviewer:
     settings = settings or runtime_settings()
     use_codex = str(settings.get("notificationAiUseCodex") or os.environ.get("NOTIFICATION_AI_USE_CODEX") or "1").strip() != "0"
-    timeout = int(settings.get("notificationAiTimeoutSeconds") or os.environ.get("NOTIFICATION_AI_TIMEOUT_SECONDS") or 120)
+    try:
+        configured_timeout = int(
+            settings.get("notificationAiTimeoutSeconds")
+            or os.environ.get("NOTIFICATION_AI_TIMEOUT_SECONDS")
+            or 120
+        )
+    except (TypeError, ValueError):
+        configured_timeout = 120
+    try:
+        delivery_deadline = int(
+            settings.get("notificationAiDeliveryDeadlineSeconds")
+            or os.environ.get("NOTIFICATION_AI_DELIVERY_DEADLINE_SECONDS")
+            or 15
+        )
+    except (TypeError, ValueError):
+        delivery_deadline = 15
+    # The AI may refine a notification, but TypeDB has already produced the
+    # verified decision. After this bounded attempt FallbackNotificationAIReviewer
+    # emits the deterministic graph-backed response instead of blocking delivery.
+    timeout = max(5, min(max(5, configured_timeout), max(5, delivery_deadline)))
     if use_codex:
         command = codex_command()
         if command:

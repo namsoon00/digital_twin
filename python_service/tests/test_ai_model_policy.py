@@ -44,6 +44,20 @@ class AiModelPolicyTests(unittest.TestCase):
         ]:
             command.assert_called_once_with()
 
+    def test_notification_delivery_deadline_caps_codex_gate_wait(self):
+        fixed_command = "codex --model gpt-5.6-sol --config model_reasoning_effort=max exec -"
+        with patch(
+            "digital_twin.infrastructure.notification_ai_reviewer.codex_command",
+            return_value=fixed_command,
+        ):
+            reviewer = notification_ai_reviewer_from_settings({
+                "notificationAiUseCodex": "1",
+                "notificationAiTimeoutSeconds": "120",
+                "notificationAiDeliveryDeadlineSeconds": "15",
+            })
+
+        self.assertEqual(15, reviewer.primary.timeout_seconds)
+
 
 if __name__ == "__main__":
     unittest.main()

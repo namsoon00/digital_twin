@@ -13,12 +13,13 @@ import re
 from typing import Dict, Iterable, List, Mapping, Optional, Sequence, Set
 
 
-# v8 keeps the v6 global quality/value distinction and makes dependency
+# v9 keeps the v6 global quality/value distinction, makes dependency
 # fingerprints distinguish structural changes from a value change inside the
-# same kind or relation. TypeDB still evaluates every selected RuleBox
-# function; Python only avoids scheduling rules whose actual inputs did not
-# change.
-CHANGE_IMPACT_VERSION = "abox-change-impact-v8"
+# same kind or relation, and separates the current mailbox event from other
+# shared facts that happened to be present in the latest persisted snapshot.
+# TypeDB still evaluates every selected RuleBox function; Python only avoids
+# scheduling rules whose actual inputs did not change for this event.
+CHANGE_IMPACT_VERSION = "abox-change-impact-v9"
 DEPENDENCY_FINGERPRINT_VERSION = "rule-input-v2"
 
 SYMBOL_SCOPE_FAMILIES = {
@@ -937,6 +938,7 @@ def global_scope_impact_partition(
     semantic_by_scope = delta.get("semanticChangedFamiliesByScope")
     semantic_by_scope = semantic_by_scope if isinstance(semantic_by_scope, Mapping) else {}
     quality_only: List[str] = []
+    context_only: List[str] = []
     value: List[str] = []
     for raw_scope_id in global_scope_ids or []:
         scope_id = _clean(raw_scope_id)
@@ -947,13 +949,134 @@ def global_scope_impact_partition(
             for family in semantic_by_scope.get(scope_id, [])
             if _clean(family)
         }
+        current_scope_type = scope_type(scope_id)
         if semantic and semantic <= {"quality"}:
             quality_only.append(scope_id)
+        elif current_scope_type in RELATION_LOCAL_SCOPE_TYPES:
+            # A relation without a symbol endpoint can still be relevant to a
+            # requested subject, but a link/evidence topology update is not a
+            # changed macro, portfolio, or policy value. Keep it in the ABox
+            # and route its dependent RuleBox subset without promoting it to a
+            # whole-world value reconciliation.
+            context_only.append(scope_id)
+        elif current_scope_type in {"reference", "episode"} and semantic and not any(
+            family in {"position", "portfolio", "policy"} or family.startswith("macro-")
+            for family in semantic
+        ):
+            # Reference and historical facts often carry evidence/profile
+            # metadata shared by many symbols. Their dependency rules still
+            # run, but the metadata alone must not make every update look like
+            # a changed market or portfolio value.
+            context_only.append(scope_id)
         else:
             value.append(scope_id)
     return {
         "qualityOnlyGlobalScopeIds": sorted(set(quality_only)),
+        "contextOnlyGlobalScopeIds": sorted(set(context_only)),
         "globalValueScopeIds": sorted(set(value)),
+    }
+
+
+def event_scoped_routing_inputs(
+    delta: Mapping[str, object],
+    explicit_target_symbols: Iterable[object],
+    requested_fact_families: Iterable[object],
+) -> Dict[str, object]:
+    """Keep a target event from reopening unrelated shared snapshot facts.
+
+    The persisted monitor snapshot is intentionally complete, so it can
+    contain a new FX quote, portfolio aggregate, or reference fact while a
+    mailbox request is only about a target's quote or news. Every directly
+    changed target scope remains eligible. For shared scopes, provenance must
+    explicitly name the affected family before it is included in this turn.
+    Deferred shared facts retain their own durable source event and periodic
+    reconciliation; this function never decides an investment outcome.
+    """
+    targets = {
+        _clean(symbol).upper()
+        for symbol in explicit_target_symbols or []
+        if _clean(symbol)
+    }
+    requested = _expanded_family_values(requested_fact_families)
+    if not targets or not requested:
+        return {
+            "enabled": False,
+            "scopeIds": [],
+            "scopeFamilies": [],
+            "dependencyKeys": [],
+            "deferredSharedScopeIds": [],
+            "deferredSharedScopeFamilies": [],
+        }
+
+    semantic_by_scope = delta.get("semanticChangedFamiliesByScope")
+    semantic_by_scope = semantic_by_scope if isinstance(semantic_by_scope, Mapping) else {}
+    dependency_by_scope = delta.get("semanticChangedDependencyKeysByScope")
+    dependency_by_scope = dependency_by_scope if isinstance(dependency_by_scope, Mapping) else {}
+    direct_scope_ids = [
+        _clean(scope_id)
+        for scope_id in delta.get("directChangedScopeIds") or []
+        if _clean(scope_id)
+    ]
+    selected_scope_ids: List[str] = []
+    selected_families: Set[str] = set()
+    selected_dependency_keys: Set[str] = set()
+    deferred_shared_scope_ids: List[str] = []
+    deferred_shared_families: Set[str] = set()
+
+    for scope_id in direct_scope_ids:
+        semantic = {
+            _lower(family)
+            for family in semantic_by_scope.get(scope_id, []) or []
+            if _clean(family)
+        }
+        if not semantic:
+            semantic = scope_family_tokens(scope_id)
+        is_target_scope = scope_symbol(scope_id) in targets
+        matched_families = {
+            family
+            for family in semantic
+            if _families_intersect({family}, requested)
+        }
+        if is_target_scope:
+            # A target's position, technical, or quality facts can be derived
+            # from the same quote. Recheck all of that target's direct facts
+            # rather than relying on event labels to infer a dependency.
+            included_families = semantic
+        else:
+            included_families = matched_families
+        if included_families:
+            selected_scope_ids.append(scope_id)
+            selected_families.update(included_families)
+            selected_dependency_keys.update(
+                _clean(key)
+                for key in dependency_by_scope.get(scope_id, []) or []
+                if _clean(key)
+            )
+        if not is_target_scope:
+            omitted_families = semantic - included_families
+            if omitted_families:
+                deferred_shared_scope_ids.append(scope_id)
+                deferred_shared_families.update(omitted_families)
+
+    # Do not claim an event boundary if it could not select any direct scope.
+    # The caller falls back to its conservative whole-delta route in that
+    # case, for example with an older opaque manifest.
+    if not selected_scope_ids:
+        return {
+            "enabled": False,
+            "scopeIds": [],
+            "scopeFamilies": [],
+            "dependencyKeys": [],
+            "deferredSharedScopeIds": [],
+            "deferredSharedScopeFamilies": [],
+        }
+    return {
+        "enabled": bool(deferred_shared_scope_ids),
+        "scopeIds": sorted(set(selected_scope_ids)),
+        "scopeFamilies": sorted(selected_families),
+        "dependencyKeys": sorted(selected_dependency_keys),
+        "deferredSharedScopeIds": sorted(set(deferred_shared_scope_ids)),
+        "deferredSharedScopeFamilies": sorted(deferred_shared_families),
     }
 
 
@@ -964,7 +1087,9 @@ def inference_impact_diagnostics(
     global_impact: bool,
     bounded_global_context: bool,
     quality_scoped_global_context: bool = False,
+    context_scoped_global_context: bool = False,
     quality_only_global_scope_ids: Iterable[object] = None,
+    context_only_global_scope_ids: Iterable[object] = None,
     global_value_scope_ids: Iterable[object] = None,
     target_symbols: Iterable[object],
     changed_families: Iterable[object],
@@ -974,6 +1099,10 @@ def inference_impact_diagnostics(
     selection_eligibility_reason: str,
     changed_dependency_key_count: int = 0,
     dependency_fingerprint_coverage_complete: bool = False,
+    event_scoped_rule_selection: bool = False,
+    event_scoped_scope_ids: Iterable[object] = None,
+    deferred_shared_scope_ids: Iterable[object] = None,
+    deferred_shared_scope_families: Iterable[object] = None,
 ) -> Dict[str, object]:
     """Explain why a native cycle is broad without deciding what it means.
 
@@ -997,13 +1126,18 @@ def inference_impact_diagnostics(
     candidate_ratio = round((max(0, int(candidate_rule_count or 0)) / max(1, int(enabled_rule_count or 0))) * 100, 1)
     reason_codes: List[str] = []
     quality_scope_ids = [_clean(scope_id) for scope_id in quality_only_global_scope_ids or [] if _clean(scope_id)]
+    context_scope_ids = [_clean(scope_id) for scope_id in context_only_global_scope_ids or [] if _clean(scope_id)]
     value_scope_ids = [_clean(scope_id) for scope_id in global_value_scope_ids or [] if _clean(scope_id)]
     if global_impact:
         reason_codes.append("global-context-changed")
     if quality_scoped_global_context:
         reason_codes.append("quality-scoped-global-context")
+    if context_scoped_global_context:
+        reason_codes.append("context-scoped-global-context")
     if bounded_global_context:
         reason_codes.append("target-scoped-global-context")
+    if event_scoped_rule_selection:
+        reason_codes.append("event-scoped-shared-context-routing")
     if len(changed) >= 8:
         reason_codes.append("broad-fact-family-delta")
     if enabled_rule_count and candidate_ratio >= 95:
@@ -1023,6 +1157,8 @@ def inference_impact_diagnostics(
     classification = (
         "target-scoped-global-context"
         if bounded_global_context
+        else "context-scoped-global-context"
+        if context_scoped_global_context
         else "quality-scoped-global-context"
         if quality_scoped_global_context
         else "global-reconciliation"
@@ -1034,6 +1170,7 @@ def inference_impact_diagnostics(
         "reasonCodes": reason_codes,
         "globalScopeCount": len(scope_ids),
         "qualityOnlyGlobalScopeCount": len(quality_scope_ids),
+        "contextOnlyGlobalScopeCount": len(context_scope_ids),
         "globalValueScopeCount": len(value_scope_ids),
         "globalScopeTypes": [
             {
@@ -1061,6 +1198,10 @@ def inference_impact_diagnostics(
         "eventFactFamilies": requested,
         "eventScopeAgreement": event_agreement,
         "unexpectedChangedFamilies": unexpected,
+        "eventScopedRuleSelection": bool(event_scoped_rule_selection),
+        "eventScopedScopeCount": len([scope_id for scope_id in event_scoped_scope_ids or [] if _clean(scope_id)]),
+        "deferredSharedScopeCount": len([scope_id for scope_id in deferred_shared_scope_ids or [] if _clean(scope_id)]),
+        "deferredSharedScopeFamilies": _clean_family_values(deferred_shared_scope_families),
     }
 
 
@@ -1090,13 +1231,15 @@ def build_inference_impact_plan(
     } | set(delta.get("unresolvedRelationScopeIds") or []))
     global_partition = global_scope_impact_partition(delta, global_scope_ids)
     quality_only_global_scope_ids = list(global_partition["qualityOnlyGlobalScopeIds"])
+    context_only_global_scope_ids = list(global_partition["contextOnlyGlobalScopeIds"])
     global_value_scope_ids = list(global_partition["globalValueScopeIds"])
     # A quality-only change can invalidate data-confidence conclusions but
     # cannot by itself represent a changed macro/portfolio value. It stays
     # global ABox context while allowing the quality-dependent RuleBox subset.
     global_impact = bool(global_value_scope_ids)
     quality_scoped_global_context = bool(quality_only_global_scope_ids)
-    bounded_global_context = bool(global_impact and explicit_symbols)
+    context_scoped_global_context = bool(context_only_global_scope_ids)
+    bounded_global_context = bool((global_impact or context_scoped_global_context) and explicit_symbols)
     impacted_symbols = (
         set(delta.get("directChangedSymbols") or delta.get("changedSymbols") or [])
         | set(delta.get("dependencyAffectedSymbols") or [])
@@ -1114,7 +1257,7 @@ def build_inference_impact_plan(
     else:
         # Whole-world callers keep the conservative expansion for a global
         # fact because no scheduler has already chosen the next subject.
-        if global_impact or quality_scoped_global_context:
+        if global_impact or quality_scoped_global_context or context_scoped_global_context:
             impacted_symbols.update(available_symbols)
         target_symbols = [symbol for symbol in available_symbols if symbol in impacted_symbols]
     if not target_symbols and not changed_scope_ids:
@@ -1124,12 +1267,32 @@ def build_inference_impact_plan(
     changed_families = set(delta.get("directChangedScopeFamilies") or delta.get("changedScopeFamilies") or [])
     changed_dependency_keys = set(delta.get("directChangedDependencyKeys") or [])
     dependency_fingerprint_coverage_complete = bool(delta.get("dependencyFingerprintCoverageComplete"))
+    event_routing = event_scoped_routing_inputs(
+        delta,
+        explicit_symbols,
+        requested_fact_families,
+    )
+    event_scoped_rule_selection = bool(
+        event_routing.get("enabled")
+        and dependency_fingerprint_coverage_complete
+        and event_routing.get("scopeFamilies")
+    )
+    routing_families = (
+        set(event_routing.get("scopeFamilies") or [])
+        if event_scoped_rule_selection
+        else changed_families
+    )
+    routing_dependency_keys = (
+        set(event_routing.get("dependencyKeys") or [])
+        if event_scoped_rule_selection
+        else changed_dependency_keys
+    )
     candidate_profiles = [
         profile for profile in enabled_profiles
         if _rule_may_depend_on(
             profile,
-            changed_families,
-            changed_dependency_keys,
+            routing_families,
+            routing_dependency_keys,
             dependency_fingerprint_coverage_complete,
         )
     ]
@@ -1145,15 +1308,17 @@ def build_inference_impact_plan(
         # Skip it rather than paying the extra TypeDB read on every broad
         # market/portfolio generation.
         selection_eligibility_reason = "candidate-rules-cover-complete-catalog"
-    elif global_impact and not bounded_global_context:
-        selection_eligibility_reason = "global-impact-requires-complete-evaluation"
+    elif (global_impact or context_scoped_global_context) and not bounded_global_context:
+        selection_eligibility_reason = "shared-context-requires-complete-evaluation"
     diagnostics = inference_impact_diagnostics(
         delta=delta,
         global_scope_ids=global_scope_ids,
         global_impact=global_impact,
         bounded_global_context=bounded_global_context,
         quality_scoped_global_context=quality_scoped_global_context,
+        context_scoped_global_context=context_scoped_global_context,
         quality_only_global_scope_ids=quality_only_global_scope_ids,
+        context_only_global_scope_ids=context_only_global_scope_ids,
         global_value_scope_ids=global_value_scope_ids,
         target_symbols=target_symbols,
         changed_families=changed_families,
@@ -1163,15 +1328,21 @@ def build_inference_impact_plan(
         selection_eligibility_reason=selection_eligibility_reason,
         changed_dependency_key_count=len(changed_dependency_keys),
         dependency_fingerprint_coverage_complete=dependency_fingerprint_coverage_complete,
+        event_scoped_rule_selection=event_scoped_rule_selection,
+        event_scoped_scope_ids=event_routing.get("scopeIds") or [],
+        deferred_shared_scope_ids=event_routing.get("deferredSharedScopeIds") or [],
+        deferred_shared_scope_families=event_routing.get("deferredSharedScopeFamilies") or [],
     )
     return {
         "version": CHANGE_IMPACT_VERSION,
         "scopeDelta": delta,
         "globalImpact": global_impact,
         "qualityScopedGlobalContext": quality_scoped_global_context,
+        "contextScopedGlobalContext": context_scoped_global_context,
         "boundedGlobalContext": bounded_global_context,
         "globalImpactScopeIds": global_scope_ids,
         "qualityOnlyGlobalScopeIds": quality_only_global_scope_ids,
+        "contextOnlyGlobalScopeIds": context_only_global_scope_ids,
         "globalValueScopeIds": global_value_scope_ids,
         "explicitTargetSymbols": explicit_symbols,
         "inferenceTargetSymbols": target_symbols,
@@ -1182,13 +1353,21 @@ def build_inference_impact_plan(
         "enabledRuleCount": len(enabled_profiles),
         "changedScopeFamilies": sorted(changed_families),
         "changedDependencyKeys": sorted(changed_dependency_keys),
+        "routingScopeFamilies": sorted(routing_families),
+        "routingDependencyKeys": sorted(routing_dependency_keys),
         "dependencyFingerprintCoverageComplete": dependency_fingerprint_coverage_complete,
         "requestedFactFamilies": _clean_family_values(requested_fact_families),
+        "eventScopedRuleSelection": event_scoped_rule_selection,
+        "eventScopedScopeIds": list(event_routing.get("scopeIds") or []),
+        "deferredSharedContextScopeIds": list(event_routing.get("deferredSharedScopeIds") or []),
+        "deferredSharedContextFamilies": list(event_routing.get("deferredSharedScopeFamilies") or []),
         "relationContextSymbols": list(delta.get("relationContextSymbols") or []),
         "unresolvedRelationScopeIds": list(delta.get("unresolvedRelationScopeIds") or []),
         "ruleExecutionScope": (
             "target-scoped-global-context-native-evaluation"
             if bounded_global_context
+            else "context-scoped-global-context-native-evaluation"
+            if context_scoped_global_context
             else "quality-scoped-global-context-native-evaluation"
             if quality_scoped_global_context
             else "global-native-reconciliation"
@@ -1198,7 +1377,7 @@ def build_inference_impact_plan(
         "nativeRuleSelectionEligible": bool(
             candidate_profiles
             and len(candidate_profiles) < len(enabled_profiles)
-            and (not global_impact or bounded_global_context)
+            and (not (global_impact or context_scoped_global_context) or bounded_global_context)
         ),
         "nativeRuleSelectionEligibilityReason": selection_eligibility_reason or "candidate-subset-within-safe-context",
         "nativeRuleSelectionApplied": False,
@@ -1206,6 +1385,8 @@ def build_inference_impact_plan(
         "reason": (
             "전역 사실은 바뀌었지만 요청된 종목 범위에서 관련 규칙과 기존 성립 규칙만 다시 확인합니다."
             if bounded_global_context
+            else "공유 참조·관계 사실은 바뀌었지만 요청된 사실군과 관련 규칙만 TypeDB에서 재확인합니다."
+            if context_scoped_global_context
             else "전역 데이터 품질·신선도 사실만 바뀌어 품질 의존 RuleBox와 기존 성립 규칙만 TypeDB에서 재확인합니다."
             if quality_scoped_global_context
             else "전역 범위 변경이 감지되어 전체 투자 대상을 재검토합니다."
@@ -1228,9 +1409,11 @@ def compact_inference_impact_plan(plan: Mapping[str, object], limit: int = 80) -
         "version": str(values.get("version") or CHANGE_IMPACT_VERSION),
         "globalImpact": bool(values.get("globalImpact")),
         "qualityScopedGlobalContext": bool(values.get("qualityScopedGlobalContext")),
+        "contextScopedGlobalContext": bool(values.get("contextScopedGlobalContext")),
         "boundedGlobalContext": bool(values.get("boundedGlobalContext")),
         "globalImpactScopeIds": list(values.get("globalImpactScopeIds") or [])[:bounded],
         "qualityOnlyGlobalScopeIds": list(values.get("qualityOnlyGlobalScopeIds") or [])[:bounded],
+        "contextOnlyGlobalScopeIds": list(values.get("contextOnlyGlobalScopeIds") or [])[:bounded],
         "globalValueScopeIds": list(values.get("globalValueScopeIds") or [])[:bounded],
         "explicitTargetSymbols": list(values.get("explicitTargetSymbols") or [])[:bounded],
         "inferenceTargetSymbols": list(values.get("inferenceTargetSymbols") or [])[:bounded],
@@ -1241,8 +1424,14 @@ def compact_inference_impact_plan(plan: Mapping[str, object], limit: int = 80) -
         "enabledRuleCount": int(values.get("enabledRuleCount") or 0),
         "changedScopeFamilies": list(values.get("changedScopeFamilies") or [])[:bounded],
         "changedDependencyKeys": list(values.get("changedDependencyKeys") or [])[:bounded],
+        "routingScopeFamilies": list(values.get("routingScopeFamilies") or [])[:bounded],
+        "routingDependencyKeys": list(values.get("routingDependencyKeys") or [])[:bounded],
         "dependencyFingerprintCoverageComplete": bool(values.get("dependencyFingerprintCoverageComplete")),
         "requestedFactFamilies": list(values.get("requestedFactFamilies") or [])[:bounded],
+        "eventScopedRuleSelection": bool(values.get("eventScopedRuleSelection")),
+        "eventScopedScopeIds": list(values.get("eventScopedScopeIds") or [])[:bounded],
+        "deferredSharedContextScopeIds": list(values.get("deferredSharedContextScopeIds") or [])[:bounded],
+        "deferredSharedContextFamilies": list(values.get("deferredSharedContextFamilies") or [])[:bounded],
         "relationContextSymbols": list(values.get("relationContextSymbols") or [])[:bounded],
         "unresolvedRelationScopeIds": list(values.get("unresolvedRelationScopeIds") or [])[:bounded],
         "ruleExecutionScope": str(values.get("ruleExecutionScope") or "dependency-selected-native-evaluation"),
@@ -1254,6 +1443,7 @@ def compact_inference_impact_plan(plan: Mapping[str, object], limit: int = 80) -
             "reasonCodes": list(diagnostics.get("reasonCodes") or [])[:bounded],
             "globalScopeCount": int(diagnostics.get("globalScopeCount") or 0),
             "qualityOnlyGlobalScopeCount": int(diagnostics.get("qualityOnlyGlobalScopeCount") or 0),
+            "contextOnlyGlobalScopeCount": int(diagnostics.get("contextOnlyGlobalScopeCount") or 0),
             "globalValueScopeCount": int(diagnostics.get("globalValueScopeCount") or 0),
             "globalScopeTypes": [
                 {
@@ -1278,6 +1468,10 @@ def compact_inference_impact_plan(plan: Mapping[str, object], limit: int = 80) -
             "eventFactFamilies": list(diagnostics.get("eventFactFamilies") or [])[:bounded],
             "eventScopeAgreement": str(diagnostics.get("eventScopeAgreement") or ""),
             "unexpectedChangedFamilies": list(diagnostics.get("unexpectedChangedFamilies") or [])[:bounded],
+            "eventScopedRuleSelection": bool(diagnostics.get("eventScopedRuleSelection")),
+            "eventScopedScopeCount": int(diagnostics.get("eventScopedScopeCount") or 0),
+            "deferredSharedScopeCount": int(diagnostics.get("deferredSharedScopeCount") or 0),
+            "deferredSharedScopeFamilies": list(diagnostics.get("deferredSharedScopeFamilies") or [])[:bounded],
         },
         "scopeDelta": {
             "previousScopeCount": int(delta.get("previousScopeCount") or 0),

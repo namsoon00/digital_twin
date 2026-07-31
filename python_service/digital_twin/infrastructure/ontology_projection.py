@@ -3530,9 +3530,13 @@ class PortfolioOntologyProjectionRecorder:
                     candidate_scope_plan=candidate_scope_plan,
                     rulebox_rules_hash=rulebox_rules_hash,
                     tbox_fingerprint=tbox_fingerprint,
+                    requested_fact_families=compact_impact_plan.get("requestedFactFamilies") or [],
                 )
                 runtime_stages["priorInferenceReuseReadMs"] = int((time.perf_counter() - selection_started) * 1000)
-                recomputed_impact_plan = selection_context.get("inferenceImpactPlan")
+                recomputed_impact_plan = self.impact_plan_with_audited_candidates(
+                    compact_impact_plan,
+                    selection_context,
+                )
                 if isinstance(recomputed_impact_plan, dict) and recomputed_impact_plan:
                     compact_impact_plan = compact_inference_impact_plan(recomputed_impact_plan)
                     result["inferenceImpactPlan"] = compact_impact_plan
@@ -4266,6 +4270,7 @@ class PortfolioOntologyProjectionRecorder:
         candidate_scope_plan: List[Dict[str, object]] = None,
         rulebox_rules_hash: str = "",
         tbox_fingerprint: str = "",
+        requested_fact_families: List[str] = None,
     ) -> Dict[str, object]:
         """Prove which unaffected native rules must be re-materialized.
 
@@ -4288,6 +4293,7 @@ class PortfolioOntologyProjectionRecorder:
             rulebox_rules_hash=rulebox_rules_hash,
             tbox_fingerprint=tbox_fingerprint,
             world_id=world_id,
+            requested_fact_families=requested_fact_families,
         )
         if audited:
             return audited
@@ -4346,6 +4352,7 @@ class PortfolioOntologyProjectionRecorder:
         rulebox_rules_hash: str = "",
         tbox_fingerprint: str = "",
         world_id: str = "",
+        requested_fact_families: List[str] = None,
     ) -> Dict[str, object]:
         """Recover a target-specific native-rule proof from projection audit.
 
@@ -4356,13 +4363,32 @@ class PortfolioOntologyProjectionRecorder:
         """
         if not self.projection_run_store or not hasattr(self.projection_run_store, "latest"):
             return {}
-        targets = [
+        targets = sorted({
             str(symbol or "").upper().strip()
             for symbol in inference_symbols or []
             if str(symbol or "").strip()
-        ]
-        if len(targets) != 1:
+        })
+        if not targets:
             return {}
+        if len(targets) > 1:
+            target_contexts = [
+                self.audited_prior_rule_selection_context(
+                    snapshot,
+                    [target],
+                    candidate_scope_plan=candidate_scope_plan,
+                    rulebox_rules_hash=rulebox_rules_hash,
+                    tbox_fingerprint=tbox_fingerprint,
+                    world_id=world_id,
+                    requested_fact_families=requested_fact_families,
+                )
+                for target in targets
+            ]
+            if not all(context.get("reusable") for context in target_contexts):
+                return {}
+            return self.combine_audited_target_rule_selection_contexts(
+                targets,
+                target_contexts,
+            )
         current_scope_plan = inference_reuse_scope_plan(candidate_scope_plan or [])
         if not current_scope_plan or not str(rulebox_rules_hash or "").strip():
             return {}
@@ -4452,6 +4478,7 @@ class PortfolioOntologyProjectionRecorder:
                 targets,
                 explicit_target_symbols=targets,
                 rules=current_rules,
+                requested_fact_families=requested_fact_families,
             )
             if not bool(historical_plan.get("nativeRuleSelectionEligible")):
                 continue
@@ -4465,6 +4492,8 @@ class PortfolioOntologyProjectionRecorder:
                 "inferenceGenerationId": str(proof.get("inferenceGenerationId") or ""),
                 "sourceAboxSnapshotId": source_abox_snapshot_id,
                 "inferenceImpactPlan": historical_plan,
+                "candidateRuleIds": list(historical_plan.get("candidateRuleIds") or []),
+                "deferredRuleIds": list(historical_plan.get("deferredRuleIds") or []),
                 "recomputedCandidateRuleCount": int(historical_plan.get("candidateRuleCount") or 0),
                 "recomputedChangedScopeCount": len(
                     list((historical_plan.get("scopeDelta") or {}).get("changedScopeIds") or [])
@@ -4472,6 +4501,176 @@ class PortfolioOntologyProjectionRecorder:
                 "fallbackReason": "",
             }
         return {}
+
+    def combine_audited_target_rule_selection_contexts(
+        self,
+        targets: List[str],
+        target_contexts: List[Dict[str, object]],
+    ) -> Dict[str, object]:
+        """Combine independently verified target proofs for one batch.
+
+        A batch still publishes one coherent TypeDB InferenceBox. Each subject
+        can, however, have a different last completed projection. Requiring a
+        previous *batch* with the identical target list disabled reuse whenever
+        the adaptive scheduler grouped two or more pending symbols. A union of
+        complete per-target proofs is safe: candidate rules and prior TypeDB
+        matches are both re-executed, never asserted from this audit data.
+        """
+        contexts = [dict(context or {}) for context in target_contexts or []]
+        if not targets or len(contexts) != len(targets):
+            return {}
+        plans = [
+            context.get("inferenceImpactPlan")
+            for context in contexts
+            if isinstance(context.get("inferenceImpactPlan"), dict)
+        ]
+        if len(plans) != len(targets) or not all(
+            bool(plan.get("nativeRuleSelectionEligible")) for plan in plans
+        ):
+            return {}
+
+        def rule_id(rule: object) -> str:
+            if isinstance(rule, dict):
+                return str(rule.get("ruleId") or rule.get("rule_id") or "").strip()
+            return str(getattr(rule, "rule_id", "") or "").strip()
+
+        enabled_rule_ids = [
+            value
+            for value in (rule_id(rule) for rule in self.rulebox_rules_for_impact())
+            if value
+        ]
+        if not enabled_rule_ids:
+            return {}
+        candidate_ids = {
+            str(rule_id or "").strip()
+            for plan in plans
+            for rule_id in plan.get("candidateRuleIds") or []
+            if str(rule_id or "").strip()
+        }
+        candidate_ids.intersection_update(enabled_rule_ids)
+        ordered_candidates = [rule_id for rule_id in enabled_rule_ids if rule_id in candidate_ids]
+        if not ordered_candidates or len(ordered_candidates) >= len(enabled_rule_ids):
+            return {}
+
+        matched_rule_ids: List[str] = []
+        proof_run_ids: List[str] = []
+        inference_generation_ids: List[str] = []
+        source_abox_snapshot_ids: List[str] = []
+        for context in contexts:
+            for rule_id in context.get("matchedRuleIds") or []:
+                clean_rule_id = str(rule_id or "").strip()
+                if clean_rule_id and clean_rule_id not in matched_rule_ids:
+                    matched_rule_ids.append(clean_rule_id)
+            for key, values in [
+                ("proofRunId", proof_run_ids),
+                ("inferenceGenerationId", inference_generation_ids),
+                ("sourceAboxSnapshotId", source_abox_snapshot_ids),
+            ]:
+                value = str(context.get(key) or "").strip()
+                if value and value not in values:
+                    values.append(value)
+
+        merged_plan = deepcopy(plans[0])
+        deferred_rule_ids = [rule_id for rule_id in enabled_rule_ids if rule_id not in candidate_ids]
+        merged_plan.update({
+            "explicitTargetSymbols": list(targets),
+            "inferenceTargetSymbols": list(targets),
+            "candidateRuleIds": ordered_candidates,
+            "deferredRuleIds": deferred_rule_ids,
+            "candidateRuleCount": len(ordered_candidates),
+            "enabledRuleCount": len(enabled_rule_ids),
+            "nativeRuleSelectionEligible": True,
+            "nativeRuleSelectionEligibilityReason": "audited-multi-target-proof-candidate-subset",
+            "auditedTargetReuse": {
+                "mode": "independent-target-proofs",
+                "targetSymbols": list(targets),
+                "proofRunIds": list(proof_run_ids),
+            },
+        })
+        diagnostics = dict(merged_plan.get("diagnostics") or {})
+        diagnostics.update({
+            "targetSymbolCount": len(targets),
+            "candidateRuleCount": len(ordered_candidates),
+            "enabledRuleCount": len(enabled_rule_ids),
+            "candidateRuleRatioPct": round((len(ordered_candidates) / max(1, len(enabled_rule_ids))) * 100, 1),
+            "candidateSubsetAvailable": True,
+            "selectionEligibilityReason": "audited-multi-target-proof-candidate-subset",
+        })
+        reason_codes = list(diagnostics.get("reasonCodes") or [])
+        if "audited-multi-target-proof-reuse" not in reason_codes:
+            reason_codes.append("audited-multi-target-proof-reuse")
+        diagnostics["reasonCodes"] = reason_codes
+        merged_plan["diagnostics"] = diagnostics
+        return {
+            "reusable": True,
+            "proofSource": "audited-target-scope-proofs",
+            "proofRunId": ",".join(proof_run_ids)[:640],
+            "proofRunIds": proof_run_ids,
+            "matchedRuleIds": matched_rule_ids,
+            "matchedRuleCount": len(matched_rule_ids),
+            "inferenceGenerationId": ",".join(inference_generation_ids)[:640],
+            "sourceAboxSnapshotId": ",".join(source_abox_snapshot_ids)[:640],
+            "inferenceImpactPlan": merged_plan,
+            "candidateRuleIds": ordered_candidates,
+            "deferredRuleIds": deferred_rule_ids,
+            "recomputedCandidateRuleCount": len(ordered_candidates),
+            "recomputedChangedScopeCount": sum(
+                int(context.get("recomputedChangedScopeCount") or 0)
+                for context in contexts
+            ),
+            "reusedTargetSymbols": list(targets),
+            "fallbackReason": "",
+        }
+
+    @staticmethod
+    def impact_plan_with_audited_candidates(
+        impact_plan: Dict[str, object],
+        selection_context: Dict[str, object],
+    ) -> Dict[str, object]:
+        """Apply only proof-backed candidate ids to the current impact plan."""
+        base = deepcopy(impact_plan or {}) if isinstance(impact_plan, dict) else {}
+        context = dict(selection_context or {}) if isinstance(selection_context, dict) else {}
+        if not base or not bool(context.get("reusable")):
+            return {}
+        candidate_ids = [
+            str(rule_id or "").strip()
+            for rule_id in context.get("candidateRuleIds") or []
+            if str(rule_id or "").strip()
+        ]
+        all_rule_ids = []
+        for rule_id in list(base.get("candidateRuleIds") or []) + list(base.get("deferredRuleIds") or []):
+            clean_rule_id = str(rule_id or "").strip()
+            if clean_rule_id and clean_rule_id not in all_rule_ids:
+                all_rule_ids.append(clean_rule_id)
+        if not candidate_ids or not all_rule_ids or any(rule_id not in all_rule_ids for rule_id in candidate_ids):
+            return {}
+        candidate_ids = [rule_id for rule_id in all_rule_ids if rule_id in candidate_ids]
+        if len(candidate_ids) >= len(all_rule_ids):
+            return {}
+        deferred_rule_ids = [rule_id for rule_id in all_rule_ids if rule_id not in candidate_ids]
+        base.update({
+            "candidateRuleIds": candidate_ids,
+            "deferredRuleIds": deferred_rule_ids,
+            "candidateRuleCount": len(candidate_ids),
+            "enabledRuleCount": max(int(base.get("enabledRuleCount") or 0), len(all_rule_ids)),
+            "nativeRuleSelectionEligible": True,
+            "nativeRuleSelectionEligibilityReason": "audited-target-proof-candidate-subset",
+        })
+        diagnostics = dict(base.get("diagnostics") or {})
+        enabled_count = int(base.get("enabledRuleCount") or len(all_rule_ids))
+        diagnostics.update({
+            "candidateRuleCount": len(candidate_ids),
+            "enabledRuleCount": enabled_count,
+            "candidateRuleRatioPct": round((len(candidate_ids) / max(1, enabled_count)) * 100, 1),
+            "candidateSubsetAvailable": True,
+            "selectionEligibilityReason": "audited-target-proof-candidate-subset",
+        })
+        reason_codes = list(diagnostics.get("reasonCodes") or [])
+        if "audited-target-proof-reuse" not in reason_codes:
+            reason_codes.append("audited-target-proof-reuse")
+        diagnostics["reasonCodes"] = reason_codes
+        base["diagnostics"] = diagnostics
+        return base
 
     def snapshot_symbols(self, snapshot: AccountSnapshot) -> List[str]:
         symbols = []

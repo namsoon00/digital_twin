@@ -1051,6 +1051,64 @@ class OntologyProjectionAuditTests(unittest.TestCase):
             completed[0].result_payload["inferenceReuseProof"]["status"],
         )
 
+    def test_recorder_uses_only_matching_rulebox_audit_timing_for_preemptive_sharding(self):
+        snapshot = source_snapshot()
+        compatible = {
+            "graphStore": "typedb",
+            "ruleboxRulesHash": "rulebox-current",
+            "result": {
+                "runtimeObservation": {
+                    "inference": {
+                        "nativeRuleTiming": {
+                            "slowestRules": [{
+                                "ruleId": "graph.timeout-prone.v1",
+                                "candidateSymbolCount": 4,
+                                "timeoutFallbackUsed": True,
+                                "elapsedMs": 38000,
+                                "queryDurationMs": 16900,
+                            }],
+                        },
+                    },
+                },
+            },
+        }
+        incompatible = {
+            **compatible,
+            "ruleboxRulesHash": "rulebox-old",
+            "result": {
+                "runtimeObservation": {
+                    "inference": {
+                        "nativeRuleTiming": {
+                            "slowestRules": [{
+                                "ruleId": "graph.old-rule.v1",
+                                "candidateSymbolCount": 4,
+                                "timeoutFallbackUsed": True,
+                                "elapsedMs": 38000,
+                                "queryDurationMs": 16900,
+                            }],
+                        },
+                    },
+                },
+            },
+        }
+        store = SimpleNamespace(latest=lambda **_kwargs: [compatible, incompatible])
+        recorder = PortfolioOntologyProjectionRecorder(
+            None,
+            projection_run_store=store,
+            settings={"typedbNativeRuleAdaptiveTargetShardingLookbackRuns": "12"},
+        )
+
+        profile = recorder.adaptive_native_rule_target_sharding_profile(
+            snapshot,
+            world_id="portfolio:local:main",
+            rulebox_rules_hash="rulebox-current",
+        )
+
+        self.assertEqual("active", profile["status"])
+        self.assertEqual("projection-audit", profile["source"])
+        self.assertEqual(1, profile["compatibleAuditRunCount"])
+        self.assertEqual(["graph.timeout-prone.v1"], profile["preemptiveRuleIds"])
+
 
 if __name__ == "__main__":
     unittest.main()

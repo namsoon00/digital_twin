@@ -6062,6 +6062,7 @@ class TypeDBOntologyGraphRepository(GraphStoreOntologyRowMapperMixin, ScopedABox
         native_rule_parallelism: int = DEFAULT_TYPEDB_NATIVE_RULE_PARALLELISM,
         native_rule_target_parallelism: int = DEFAULT_TYPEDB_NATIVE_RULE_TARGET_PARALLELISM,
         native_rule_target_work_sharding_enabled: bool = False,
+        native_rule_adaptive_target_sharding_enabled: bool = True,
         native_rule_any_condition_parallelism: int = 1,
         inference_write_lease_enabled: bool = False,
         process_schema_function_cache_enabled: bool = False,
@@ -6132,6 +6133,13 @@ class TypeDBOntologyGraphRepository(GraphStoreOntologyRowMapperMixin, ScopedABox
         # an explicit capacity-test opt-in, never the live backlog default.
         self._native_rule_target_work_sharding_enabled = bool(
             native_rule_target_work_sharding_enabled
+        )
+        # Historical timing can request a small, per-rule target split. It is
+        # deliberately independent of the broad capacity-test switch above:
+        # only recent timeout-prone rules are eligible and their work runs in
+        # a serial recovery phase under the same ABox lease.
+        self._native_rule_adaptive_target_sharding_enabled = bool(
+            native_rule_adaptive_target_sharding_enabled
         )
         self._native_rule_any_condition_parallelism = max(
             1,
@@ -6303,6 +6311,9 @@ class TypeDBOntologyGraphRepository(GraphStoreOntologyRowMapperMixin, ScopedABox
 
     def native_rule_target_work_sharding_enabled(self) -> bool:
         return self._native_rule_target_work_sharding_enabled
+
+    def native_rule_adaptive_target_sharding_enabled(self) -> bool:
+        return self._native_rule_adaptive_target_sharding_enabled
 
     def native_rule_any_condition_parallelism(self) -> int:
         return self._native_rule_any_condition_parallelism
@@ -13736,6 +13747,9 @@ relation ontology-assertion,
             "targetWorkShardIndex": int(number_or_none(planned.get("targetWorkShardIndex")) or 0),
             "targetWorkShardCount": max(1, int(number_or_none(planned.get("targetWorkShardCount")) or 1)),
             "targetWorkShardingUsed": bool(planned.get("targetWorkShardingUsed")),
+            "targetWorkAdaptiveShardingUsed": bool(
+                planned.get("targetWorkAdaptiveShardingUsed")
+            ),
         }
         function_name = typedb_native_rule_function_name(rule.rule_id, world_id)
         has_any_conditions = any(
@@ -14045,6 +14059,9 @@ relation ontology-assertion,
             "targetWorkShardIndex": int(number_or_none(planned.get("targetWorkShardIndex")) or 0),
             "targetWorkShardCount": max(1, int(number_or_none(planned.get("targetWorkShardCount")) or 1)),
             "targetWorkShardingUsed": bool(planned.get("targetWorkShardingUsed")),
+            "targetWorkAdaptiveShardingUsed": bool(
+                planned.get("targetWorkAdaptiveShardingUsed")
+            ),
             "rowCount": sum(int(item.get("rowCount") or 0) for item in shard_executed),
             "queryCount": sum(int(item.get("queryCount") or 0) for item in shard_executed),
             "anyConditionQueryCount": sum(
@@ -14079,6 +14096,7 @@ relation ontology-assertion,
         preflight_incoming_relations_complete: bool = False,
         native_rule_parallelism: int = 1,
         native_rule_target_parallelism: int = 1,
+        adaptive_target_sharding_profile: Dict[str, object] = None,
         stable_abox_write_lease_held: bool = False,
         evidence_read_index: Dict[str, object] = None,
     ) -> Dict[str, object]:
@@ -14108,6 +14126,7 @@ relation ontology-assertion,
         query_failures = []
         execution_budget_exhausted = False
         execution_incomplete = False
+        isolated_entry_execution = False
         parallel_rule_execution = False
         effective_parallelism = 1
         any_condition_parallelism_cap = 1
@@ -14118,6 +14137,15 @@ relation ontology-assertion,
         evidence_index_hydration: Dict[str, object] = {}
         timeout_fallback_rule_count = 0
         timeout_fallback_shard_count = 0
+        adaptive_target_sharding_profile = (
+            dict(adaptive_target_sharding_profile or {})
+            if isinstance(adaptive_target_sharding_profile, dict)
+            else {}
+        )
+        adaptive_target_parallelism_by_rule_id: Dict[str, int] = {}
+        adaptive_target_sharding_profile_status = str(
+            adaptive_target_sharding_profile.get("status") or "not-requested"
+        )
         requested_target_parallelism = max(
             1,
             min(8, int(number_or_none(native_rule_target_parallelism) or 1)),
@@ -14132,6 +14160,9 @@ relation ontology-assertion,
             "targetWorkItemCount": 0,
             "targetWorkOriginalEntryCount": 0,
             "targetWorkShardedRuleCount": 0,
+            "targetWorkAdaptiveShardingUsed": False,
+            "targetWorkAdaptiveShardedRuleCount": 0,
+            "targetWorkAdaptiveShardedRuleIds": [],
             "workItems": [],
         }
         try:
@@ -14264,6 +14295,13 @@ relation ontology-assertion,
             # one concurrency dimension. Target splitting remains an explicit
             # capacity-test option and still requires the same write lease.
             target_work_sharding_enabled = self.native_rule_target_work_sharding_enabled()
+            adaptive_target_sharding_enabled = self.native_rule_adaptive_target_sharding_enabled()
+            if stable_abox_write_lease_held and adaptive_target_sharding_enabled:
+                adaptive_target_parallelism_by_rule_id = (
+                    typedb_native_rule_adaptive_target_parallelism_by_rule_id(
+                        adaptive_target_sharding_profile
+                    )
+                )
             target_work_parallelism = (
                 requested_target_parallelism
                 if stable_abox_write_lease_held and target_work_sharding_enabled
@@ -14272,8 +14310,16 @@ relation ontology-assertion,
             target_work_plan = typedb_native_rule_target_work_plan(
                 selected_entries,
                 target_parallelism=target_work_parallelism,
+                adaptive_target_parallelism_by_rule_id=adaptive_target_parallelism_by_rule_id,
             )
             target_work_plan["targetWorkShardingEnabled"] = target_work_sharding_enabled
+            target_work_plan["targetWorkAdaptiveShardingEnabled"] = adaptive_target_sharding_enabled
+            target_work_plan["targetWorkAdaptiveShardingProfileStatus"] = (
+                adaptive_target_sharding_profile_status
+            )
+            target_work_plan["targetWorkAdaptiveRequestedRuleIds"] = sorted(
+                adaptive_target_parallelism_by_rule_id.keys()
+            )[:20]
             target_work_plan["targetWorkShardingSuppressed"] = bool(
                 stable_abox_write_lease_held
                 and requested_target_parallelism > 1
@@ -14334,15 +14380,21 @@ relation ontology-assertion,
                 )
                 for index, planned in enumerate(selected_entries)
             }
+            adaptive_target_entries = [
+                (index, planned)
+                for index, planned in enumerate(selected_entries)
+                if bool(planned.get("targetWorkAdaptiveShardingUsed"))
+            ]
+            adaptive_target_indexes = {index for index, _planned in adaptive_target_entries}
             function_only_entries = [
                 (index, planned)
                 for index, planned in enumerate(selected_entries)
-                if not entry_has_any_conditions.get(index)
+                if index not in adaptive_target_indexes and not entry_has_any_conditions.get(index)
             ]
             any_condition_entries = [
                 (index, planned)
                 for index, planned in enumerate(selected_entries)
-                if entry_has_any_conditions.get(index)
+                if index not in adaptive_target_indexes and entry_has_any_conditions.get(index)
             ]
             execution_batches = []
             if function_only_entries:
@@ -14362,32 +14414,54 @@ relation ontology-assertion,
                     "entries": any_condition_entries,
                     "parallelism": min(any_condition_parallelism_cap, len(any_condition_entries)),
                 })
+            if adaptive_target_entries:
+                # A rule selected from timeout history is deliberately split
+                # before its first query. Run the smaller target shards after
+                # the normal phase and serially, matching the proven fallback
+                # pressure profile without reducing any rule's coverage.
+                execution_batches.append({
+                    "name": "adaptive-target-shards",
+                    "entries": adaptive_target_entries,
+                    "parallelism": 1,
+                })
             native_rule_execution_phases = {
                 "functionOnlyRuleCount": len(function_only_entries),
                 "functionOnlyParallelism": min(requested_parallelism, len(function_only_entries)) if function_only_entries else 0,
                 "anyConditionRuleCount": len(any_condition_entries),
                 "anyConditionParallelism": min(any_condition_parallelism_cap, len(any_condition_entries)) if any_condition_entries else 0,
+                "adaptiveTargetShardWorkItemCount": len(adaptive_target_entries),
+                "adaptiveTargetShardedRuleCount": int(
+                    target_work_plan.get("targetWorkAdaptiveShardedRuleCount") or 0
+                ),
+                "adaptiveTargetShardParallelism": 1 if adaptive_target_entries else 0,
             }
-            parallel_rule_execution = bool(
+            isolated_entry_execution = bool(
                 stable_abox_write_lease_held
                 and execution_batches
                 and len(selected_entries) > 1
             )
+            parallel_rule_execution = bool(
+                isolated_entry_execution
+                and any(int(batch.get("parallelism") or 1) > 1 for batch in execution_batches)
+            )
             effective_parallelism = (
                 max(int(batch.get("parallelism") or 1) for batch in execution_batches)
-                if parallel_rule_execution
+                if isolated_entry_execution
                 else 1
             )
-            if parallel_rule_execution:
+            if isolated_entry_execution:
                 # ABox writes are serialized by the durable lease passed by the
                 # projection recorder. Independent schema functions may now use
                 # separate bounded read transactions without observing a world
                 # pointer transition between rule evaluations.
-                execution_mode = (
-                    "typedb-schema-function-hybrid-any-verified-phased"
-                    if schema_function_query and requires_direct_any_probe
-                    else execution_mode + "-parallel"
-                )
+                if parallel_rule_execution:
+                    execution_mode = (
+                        "typedb-schema-function-hybrid-any-verified-phased"
+                        if schema_function_query and requires_direct_any_probe
+                        else execution_mode + "-parallel"
+                    )
+                elif adaptive_target_entries:
+                    execution_mode += "-adaptive-target-shards"
 
             def operation():
                 nonlocal read_call_count, read_transaction_count, execution_budget_exhausted, execution_incomplete, execution_mode
@@ -14592,7 +14666,7 @@ relation ontology-assertion,
                 finally:
                     self.close_driver(driver)
 
-            if parallel_rule_execution:
+            if isolated_entry_execution:
                 deadline = time.monotonic() + self.native_rule_execution_budget_seconds()
                 completed_entries: Dict[int, Dict[str, object]] = {}
                 for batch in execution_batches:
@@ -14750,6 +14824,11 @@ relation ontology-assertion,
                     "targetWorkItemCount": int(target_work_plan.get("targetWorkItemCount") or 0),
                     "targetWorkOriginalEntryCount": int(target_work_plan.get("targetWorkOriginalEntryCount") or 0),
                     "targetWorkShardedRuleCount": int(target_work_plan.get("targetWorkShardedRuleCount") or 0),
+                    "targetWorkAdaptiveShardingEnabled": bool(target_work_plan.get("targetWorkAdaptiveShardingEnabled")),
+                    "targetWorkAdaptiveShardingProfileStatus": str(target_work_plan.get("targetWorkAdaptiveShardingProfileStatus") or ""),
+                    "targetWorkAdaptiveShardingUsed": bool(target_work_plan.get("targetWorkAdaptiveShardingUsed")),
+                    "targetWorkAdaptiveShardedRuleCount": int(target_work_plan.get("targetWorkAdaptiveShardedRuleCount") or 0),
+                    "targetWorkAdaptiveShardedRuleIds": list(target_work_plan.get("targetWorkAdaptiveShardedRuleIds") or [])[:20],
                     "timeoutFallbackUsed": timeout_fallback_rule_count > 0,
                     "timeoutFallbackRuleCount": timeout_fallback_rule_count,
                     "timeoutFallbackShardCount": timeout_fallback_shard_count,
@@ -14800,6 +14879,11 @@ relation ontology-assertion,
                 "targetWorkItemCount": int(target_work_plan.get("targetWorkItemCount") or 0),
                 "targetWorkOriginalEntryCount": int(target_work_plan.get("targetWorkOriginalEntryCount") or 0),
                 "targetWorkShardedRuleCount": int(target_work_plan.get("targetWorkShardedRuleCount") or 0),
+                "targetWorkAdaptiveShardingEnabled": bool(target_work_plan.get("targetWorkAdaptiveShardingEnabled")),
+                "targetWorkAdaptiveShardingProfileStatus": str(target_work_plan.get("targetWorkAdaptiveShardingProfileStatus") or ""),
+                "targetWorkAdaptiveShardingUsed": bool(target_work_plan.get("targetWorkAdaptiveShardingUsed")),
+                "targetWorkAdaptiveShardedRuleCount": int(target_work_plan.get("targetWorkAdaptiveShardedRuleCount") or 0),
+                "targetWorkAdaptiveShardedRuleIds": list(target_work_plan.get("targetWorkAdaptiveShardedRuleIds") or [])[:20],
                 "timeoutFallbackUsed": timeout_fallback_rule_count > 0,
                 "timeoutFallbackRuleCount": timeout_fallback_rule_count,
                 "timeoutFallbackShardCount": timeout_fallback_shard_count,
@@ -14849,6 +14933,11 @@ relation ontology-assertion,
                 "targetWorkItemCount": int(target_work_plan.get("targetWorkItemCount") or 0),
                 "targetWorkOriginalEntryCount": int(target_work_plan.get("targetWorkOriginalEntryCount") or 0),
                 "targetWorkShardedRuleCount": int(target_work_plan.get("targetWorkShardedRuleCount") or 0),
+                "targetWorkAdaptiveShardingEnabled": bool(target_work_plan.get("targetWorkAdaptiveShardingEnabled")),
+                "targetWorkAdaptiveShardingProfileStatus": str(target_work_plan.get("targetWorkAdaptiveShardingProfileStatus") or ""),
+                "targetWorkAdaptiveShardingUsed": bool(target_work_plan.get("targetWorkAdaptiveShardingUsed")),
+                "targetWorkAdaptiveShardedRuleCount": int(target_work_plan.get("targetWorkAdaptiveShardedRuleCount") or 0),
+                "targetWorkAdaptiveShardedRuleIds": list(target_work_plan.get("targetWorkAdaptiveShardedRuleIds") or [])[:20],
                 "timeoutFallbackUsed": timeout_fallback_rule_count > 0,
                 "timeoutFallbackRuleCount": timeout_fallback_rule_count,
                 "timeoutFallbackShardCount": timeout_fallback_shard_count,
@@ -16703,6 +16792,11 @@ relation ontology-assertion,
             or payload.get("targetSymbols")
             or payload.get("changedSymbols")
         )
+        adaptive_target_sharding_profile = (
+            dict(payload.get("nativeRuleAdaptiveTargetShardingProfile") or {})
+            if isinstance(payload.get("nativeRuleAdaptiveTargetShardingProfile"), dict)
+            else {}
+        )
         force_clear_requested = typedb_bool(payload.get("forceClearInference"))
         if "forceClearInference" not in payload:
             force_clear_requested = typedb_bool(payload.get("clearInference"))
@@ -17198,6 +17292,10 @@ relation ontology-assertion,
             if schema_function_direct_query_fallback:
                 native_rule_parallelism = 1
                 native_rule_target_parallelism = 1
+                # Direct TypeQL recovery has a separate one-reader safety
+                # contract. Do not add target work from historical timing
+                # until the prepared schema-function path is available again.
+                adaptive_target_sharding_profile = {}
                 runtime_rulebox_metadata[
                     "typedbSchemaFunctionDirectQueryFallbackParallelismCap"
                 ] = 1
@@ -17216,6 +17314,7 @@ relation ontology-assertion,
                 preflight_incoming_relations_complete=preflight_incoming_relations_complete,
                 native_rule_parallelism=native_rule_parallelism,
                 native_rule_target_parallelism=native_rule_target_parallelism,
+                adaptive_target_sharding_profile=adaptive_target_sharding_profile,
                 stable_abox_write_lease_held=stable_abox_write_lease_held,
                 evidence_read_index=evidence_read_index,
             )
@@ -17253,6 +17352,21 @@ relation ontology-assertion,
                 "typedbNativeRuleTargetWorkShardingSuppressed": bool(native_match_result.get("targetWorkShardingSuppressed")),
                 "typedbNativeRuleTargetWorkShardCount": int(number_or_none(native_match_result.get("targetWorkShardCount")) or 0),
                 "typedbNativeRuleWorkItemCount": int(number_or_none(native_match_result.get("targetWorkItemCount")) or 0),
+                "typedbNativeRuleAdaptiveTargetShardingEnabled": bool(
+                    native_match_result.get("targetWorkAdaptiveShardingEnabled")
+                ),
+                "typedbNativeRuleAdaptiveTargetShardingProfileStatus": str(
+                    native_match_result.get("targetWorkAdaptiveShardingProfileStatus") or ""
+                ),
+                "typedbNativeRuleAdaptiveTargetShardingUsed": bool(
+                    native_match_result.get("targetWorkAdaptiveShardingUsed")
+                ),
+                "typedbNativeRuleAdaptiveTargetShardedRuleCount": int(
+                    number_or_none(native_match_result.get("targetWorkAdaptiveShardedRuleCount")) or 0
+                ),
+                "typedbNativeRuleAdaptiveTargetShardedRuleIds": list(
+                    native_match_result.get("targetWorkAdaptiveShardedRuleIds") or []
+                )[:20],
                 "typedbNativeRuleTimeoutFallbackUsed": bool(native_match_result.get("timeoutFallbackUsed")),
                 "typedbNativeRuleTimeoutFallbackRuleCount": int(
                     number_or_none(native_match_result.get("timeoutFallbackRuleCount")) or 0
@@ -17696,6 +17810,21 @@ relation ontology-assertion,
             "typedbNativeRuleTargetWorkShardingSuppressed": bool(native_match_result.get("targetWorkShardingSuppressed")),
             "typedbNativeRuleTargetWorkShardCount": int(number_or_none(native_match_result.get("targetWorkShardCount")) or 0),
             "typedbNativeRuleWorkItemCount": int(number_or_none(native_match_result.get("targetWorkItemCount")) or 0),
+            "typedbNativeRuleAdaptiveTargetShardingEnabled": bool(
+                native_match_result.get("targetWorkAdaptiveShardingEnabled")
+            ),
+            "typedbNativeRuleAdaptiveTargetShardingProfileStatus": str(
+                native_match_result.get("targetWorkAdaptiveShardingProfileStatus") or ""
+            ),
+            "typedbNativeRuleAdaptiveTargetShardingUsed": bool(
+                native_match_result.get("targetWorkAdaptiveShardingUsed")
+            ),
+            "typedbNativeRuleAdaptiveTargetShardedRuleCount": int(
+                number_or_none(native_match_result.get("targetWorkAdaptiveShardedRuleCount")) or 0
+            ),
+            "typedbNativeRuleAdaptiveTargetShardedRuleIds": list(
+                native_match_result.get("targetWorkAdaptiveShardedRuleIds") or []
+            )[:20],
             "typedbNativeRuleTimeoutFallbackUsed": bool(native_match_result.get("timeoutFallbackUsed")),
             "typedbNativeRuleTimeoutFallbackRuleCount": int(
                 number_or_none(native_match_result.get("timeoutFallbackRuleCount")) or 0
@@ -19734,9 +19863,36 @@ def typedb_native_rule_execution_plan(
     }
 
 
+def typedb_native_rule_adaptive_target_parallelism_by_rule_id(
+    profile: Dict[str, object] = None,
+) -> Dict[str, int]:
+    """Read only explicit, bounded proactive-sharding recommendations.
+
+    The profile is operational history assembled outside TypeDB. It never
+    grants a rule match, omits a rule, or changes a candidate symbol. The
+    caller still requires a stable ABox lease and a complete result.
+    """
+
+    values = dict(profile or {}) if isinstance(profile, dict) else {}
+    if str(values.get("status") or "").strip().lower() != "active":
+        return {}
+    if values.get("enabled") is False:
+        return {}
+    recommendations: Dict[str, int] = {}
+    for item in values.get("rules") or []:
+        if not isinstance(item, dict) or not bool(item.get("preemptiveTargetSharding")):
+            continue
+        rule_id = str(item.get("ruleId") or "").strip()
+        parallelism = int(number_or_none(item.get("targetParallelism")) or 1)
+        if rule_id and parallelism > 1:
+            recommendations[rule_id] = max(2, min(4, parallelism))
+    return recommendations
+
+
 def typedb_native_rule_target_work_plan(
     entries: Iterable[Dict[str, object]],
     target_parallelism: int = 1,
+    adaptive_target_parallelism_by_rule_id: Dict[str, int] = None,
 ) -> Dict[str, object]:
     """Split one verified target set into bounded, read-only TypeDB work.
 
@@ -19751,6 +19907,11 @@ def typedb_native_rule_target_work_plan(
         1,
         min(8, int(number_or_none(target_parallelism) or 1)),
     )
+    adaptive_parallelism_by_rule_id = {
+        str(rule_id or "").strip(): max(2, min(4, int(number_or_none(parallelism) or 2)))
+        for rule_id, parallelism in dict(adaptive_target_parallelism_by_rule_id or {}).items()
+        if str(rule_id or "").strip() and int(number_or_none(parallelism) or 0) > 1
+    }
     all_candidate_symbols = clean_symbols_from_payload([
         symbol
         for entry in selected_entries
@@ -19764,13 +19925,20 @@ def typedb_native_rule_target_work_plan(
     work_items: List[Dict[str, object]] = []
     max_shard_count = 0
     sharded_rule_ids = set()
+    adaptive_sharded_rule_ids = set()
 
     for entry in selected_entries:
         candidate_symbols = clean_symbols_from_payload(entry.get("candidateSymbols") or [])
-        shard_count = min(effective_parallelism, len(candidate_symbols)) if candidate_symbols else 1
+        rule_id = str(entry.get("ruleId") or "").strip()
+        adaptive_parallelism = int(adaptive_parallelism_by_rule_id.get(rule_id) or 1)
+        adaptive_sharding_requested = adaptive_parallelism > 1
+        entry_parallelism = adaptive_parallelism if adaptive_sharding_requested else effective_parallelism
+        shard_count = min(entry_parallelism, len(candidate_symbols)) if candidate_symbols else 1
         max_shard_count = max(max_shard_count, shard_count)
         if shard_count > 1:
-            sharded_rule_ids.add(str(entry.get("ruleId") or ""))
+            sharded_rule_ids.add(rule_id)
+            if adaptive_sharding_requested:
+                adaptive_sharded_rule_ids.add(rule_id)
         shards = (
             [candidate_symbols[index::shard_count] for index in range(shard_count)]
             if candidate_symbols
@@ -19782,6 +19950,9 @@ def typedb_native_rule_target_work_plan(
             work_item["targetWorkShardIndex"] = shard_index
             work_item["targetWorkShardCount"] = shard_count
             work_item["targetWorkShardingUsed"] = shard_count > 1
+            work_item["targetWorkAdaptiveShardingUsed"] = bool(
+                adaptive_sharding_requested and shard_count > 1
+            )
             work_items.append(work_item)
 
     return {
@@ -19794,6 +19965,13 @@ def typedb_native_rule_target_work_plan(
         "targetWorkItemCount": len(work_items),
         "targetWorkOriginalEntryCount": len(selected_entries),
         "targetWorkShardedRuleCount": len([rule_id for rule_id in sharded_rule_ids if rule_id]),
+        "targetWorkAdaptiveShardingUsed": bool(adaptive_sharded_rule_ids),
+        "targetWorkAdaptiveShardedRuleCount": len([
+            rule_id for rule_id in adaptive_sharded_rule_ids if rule_id
+        ]),
+        "targetWorkAdaptiveShardedRuleIds": sorted(
+            rule_id for rule_id in adaptive_sharded_rule_ids if rule_id
+        ),
         "workItems": work_items,
     }
 
@@ -22108,6 +22286,9 @@ def typedb_repository_from_settings(settings: Dict[str, str] = None):
         native_rule_target_work_sharding_enabled=typedb_bool(
             settings.get("typedbNativeRuleTargetWorkShardingEnabled")
         ),
+        native_rule_adaptive_target_sharding_enabled=True
+        if settings.get("typedbNativeRuleAdaptiveTargetShardingEnabled") in (None, "")
+        else typedb_bool(settings.get("typedbNativeRuleAdaptiveTargetShardingEnabled")),
         native_rule_any_condition_parallelism=int(number_or_none(
             settings.get("typedbNativeRuleAnyConditionParallelism")
         ) or 1),

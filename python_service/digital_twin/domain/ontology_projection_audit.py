@@ -444,6 +444,18 @@ def projection_result_summary(result: Dict[str, object]) -> Dict[str, object]:
             "typedbNativeRuleTargetWorkShardingUsed": bool(execution.get("typedbNativeRuleTargetWorkShardingUsed")),
             "typedbNativeRuleTargetWorkShardCount": int(execution.get("typedbNativeRuleTargetWorkShardCount") or 0),
             "typedbNativeRuleWorkItemCount": int(execution.get("typedbNativeRuleWorkItemCount") or 0),
+            "typedbNativeRuleAdaptiveTargetShardingEnabled": bool(
+                execution.get("typedbNativeRuleAdaptiveTargetShardingEnabled")
+            ),
+            "typedbNativeRuleAdaptiveTargetShardingProfileStatus": str(
+                execution.get("typedbNativeRuleAdaptiveTargetShardingProfileStatus") or ""
+            ),
+            "typedbNativeRuleAdaptiveTargetShardingUsed": bool(
+                execution.get("typedbNativeRuleAdaptiveTargetShardingUsed")
+            ),
+            "typedbNativeRuleAdaptiveTargetShardedRuleCount": int(
+                execution.get("typedbNativeRuleAdaptiveTargetShardedRuleCount") or 0
+            ),
             "typedbNativeRuleCommitMode": str(execution.get("typedbNativeRuleCommitMode") or ""),
             "nativeInferenceEvaluationComplete": bool(execution.get("nativeInferenceEvaluationComplete")),
             "nativeInferenceOutcome": str(execution.get("nativeInferenceOutcome") or ""),

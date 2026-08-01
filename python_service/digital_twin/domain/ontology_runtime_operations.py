@@ -14,6 +14,7 @@ from typing import Dict, Iterable, List, Mapping
 
 ONTOLOGY_RUNTIME_OBSERVATION_VERSION = "ontology-runtime-observation-v1"
 NATIVE_RULE_TIMING_PROFILE_VERSION = "typedb-native-rule-timing-v1"
+NATIVE_RULE_ADAPTIVE_TARGET_SHARDING_PROFILE_VERSION = "typedb-native-rule-adaptive-target-sharding-v1"
 NATIVE_REPLAY_VALIDATION_VERSION = "typedb-native-replay-validation-v1"
 SCOPED_ABOX_MAINTENANCE_POLICY_VERSION = "typedb-scoped-abox-maintenance-policy-v2"
 DISABLED_VALUES = {"0", "false", "no", "off", "disabled"}
@@ -468,6 +469,7 @@ def native_rule_timing_profile(
             "targetWorkShardIndex": max(0, _integer(item.get("targetWorkShardIndex"))),
             "targetWorkShardCount": max(1, _integer(item.get("targetWorkShardCount") or 1)),
             "targetWorkShardingUsed": bool(item.get("targetWorkShardingUsed")),
+            "targetWorkAdaptiveShardingUsed": bool(item.get("targetWorkAdaptiveShardingUsed")),
             "timeoutFallbackUsed": bool(item.get("timeoutFallbackUsed")),
             "timeoutFallbackShardCount": max(0, _integer(item.get("timeoutFallbackShardCount"))),
             "queryComplexity": max(0, _integer(item.get("queryComplexity"))),
@@ -507,6 +509,208 @@ def native_rule_timing_profile(
         "aggregateQueryDurationMs": sum(item["queryDurationMs"] for item in rows),
         "slowestRules": bounded,
     }
+
+
+def native_rule_adaptive_target_sharding_policy(
+    settings: Mapping[str, object] = None,
+) -> Dict[str, object]:
+    """Return the bounded operational policy for proactive target sharding.
+
+    This controls only TypeDB read scheduling.  It does not alter the ABox,
+    TypeDB rule semantics, or which inference result becomes active.
+    """
+
+    configured = settings or {}
+    enabled = _text(
+        configured.get("typedbNativeRuleAdaptiveTargetShardingEnabled", "1")
+    ).lower() not in DISABLED_VALUES
+    return {
+        "version": NATIVE_RULE_ADAPTIVE_TARGET_SHARDING_PROFILE_VERSION,
+        "enabled": enabled,
+        "lookbackRunLimit": _integer(_setting_number(
+            configured,
+            "typedbNativeRuleAdaptiveTargetShardingLookbackRuns",
+            12,
+            1,
+            80,
+        )),
+        "targetParallelism": _integer(_setting_number(
+            configured,
+            "typedbNativeRuleAdaptiveTargetShardingParallelism",
+            2,
+            2,
+            4,
+        )),
+        "nearTimeoutRatio": _setting_number(
+            configured,
+            "typedbNativeRuleAdaptiveTargetShardingNearTimeoutRatio",
+            0.7,
+            0.5,
+            0.95,
+        ),
+        "queryTimeoutMs": int(_setting_number(
+            configured,
+            "typedbNativeRuleQueryTimeoutSeconds",
+            10,
+            0.5,
+            120,
+        ) * 1000),
+    }
+
+
+def native_rule_adaptive_target_sharding_profile(
+    observations: Iterable[Mapping[str, object]],
+    settings: Mapping[str, object] = None,
+) -> Dict[str, object]:
+    """Derive a conservative read-scheduling profile from completed audits.
+
+    A single prior bounded-read timeout is enough to make the same rule use
+    smaller target groups for a limited number of later runs.  Rules that only
+    approach the timeout must do so repeatedly before they are changed.  The
+    profile is intentionally ephemeral and bounded by recent audit rows so a
+    temporary TypeDB slowdown cannot permanently multiply read work.
+    """
+
+    policy = native_rule_adaptive_target_sharding_policy(settings)
+    profile = {
+        "version": NATIVE_RULE_ADAPTIVE_TARGET_SHARDING_PROFILE_VERSION,
+        "enabled": bool(policy["enabled"]),
+        "status": "disabled" if not policy["enabled"] else "no-history",
+        "lookbackRunLimit": int(policy["lookbackRunLimit"]),
+        "sampledRunCount": 0,
+        "queryTimeoutMs": int(policy["queryTimeoutMs"]),
+        "nearTimeoutThresholdMs": int(
+            int(policy["queryTimeoutMs"]) * float(policy["nearTimeoutRatio"])
+        ),
+        "targetParallelism": int(policy["targetParallelism"]),
+        "rules": [],
+        "preemptiveRuleIds": [],
+    }
+    if not policy["enabled"]:
+        return profile
+
+    stats_by_rule: Dict[str, Dict[str, object]] = {}
+    threshold_ms = int(profile["nearTimeoutThresholdMs"])
+    sampled = 0
+    for observation in list(observations or [])[:int(policy["lookbackRunLimit"])]:
+        if not isinstance(observation, Mapping):
+            continue
+        inference = observation.get("inference")
+        inference = dict(inference or {}) if isinstance(inference, Mapping) else {}
+        timing = inference.get("nativeRuleTiming")
+        timing = dict(timing or {}) if isinstance(timing, Mapping) else {}
+        rows = timing.get("slowestRules")
+        if not isinstance(rows, list):
+            continue
+        sampled += 1
+        # A pre-sharded rule produces one timing row per target shard. Aggregate
+        # them first so one generation counts once toward the history policy.
+        per_run: Dict[str, Dict[str, object]] = {}
+        for item in rows:
+            if not isinstance(item, Mapping):
+                continue
+            rule_id = _text(item.get("ruleId"))
+            candidate_count = max(0, _integer(item.get("candidateSymbolCount")))
+            if not rule_id or candidate_count < 2:
+                continue
+            elapsed_ms = max(0, _integer(item.get("elapsedMs")))
+            query_duration_ms = max(0, _integer(item.get("queryDurationMs")))
+            current = per_run.setdefault(rule_id, {
+                "candidateSymbolCount": candidate_count,
+                "elapsedMs": elapsed_ms,
+                "queryDurationMs": query_duration_ms,
+                "timeoutFallbackUsed": False,
+                "timedOut": False,
+            })
+            current["candidateSymbolCount"] = max(
+                int(current["candidateSymbolCount"]), candidate_count
+            )
+            current["elapsedMs"] = max(int(current["elapsedMs"]), elapsed_ms)
+            current["queryDurationMs"] = max(
+                int(current["queryDurationMs"]), query_duration_ms
+            )
+            current["timeoutFallbackUsed"] = bool(
+                current["timeoutFallbackUsed"] or item.get("timeoutFallbackUsed")
+            )
+            current["timedOut"] = bool(
+                current["timedOut"]
+                or _text(item.get("status")).lower() == "query-timeout"
+            )
+        for rule_id, item in per_run.items():
+            stats = stats_by_rule.setdefault(rule_id, {
+                "ruleId": rule_id,
+                "observedRunCount": 0,
+                "timeoutFallbackRunCount": 0,
+                "timedOutRunCount": 0,
+                "nearTimeoutRunCount": 0,
+                "maximumCandidateSymbolCount": 0,
+                "maximumElapsedMs": 0,
+                "maximumQueryDurationMs": 0,
+            })
+            stats["observedRunCount"] = int(stats["observedRunCount"]) + 1
+            stats["timeoutFallbackRunCount"] = int(stats["timeoutFallbackRunCount"]) + int(
+                bool(item["timeoutFallbackUsed"])
+            )
+            stats["timedOutRunCount"] = int(stats["timedOutRunCount"]) + int(
+                bool(item["timedOut"])
+            )
+            stats["nearTimeoutRunCount"] = int(stats["nearTimeoutRunCount"]) + int(
+                int(item["queryDurationMs"]) >= threshold_ms
+            )
+            stats["maximumCandidateSymbolCount"] = max(
+                int(stats["maximumCandidateSymbolCount"]), int(item["candidateSymbolCount"])
+            )
+            stats["maximumElapsedMs"] = max(
+                int(stats["maximumElapsedMs"]), int(item["elapsedMs"])
+            )
+            stats["maximumQueryDurationMs"] = max(
+                int(stats["maximumQueryDurationMs"]), int(item["queryDurationMs"])
+            )
+
+    rows = []
+    for stats in stats_by_rule.values():
+        timeout_history = int(stats["timeoutFallbackRunCount"]) + int(stats["timedOutRunCount"])
+        repeated_near_timeout = int(stats["nearTimeoutRunCount"]) >= 2
+        preemptive = timeout_history > 0 or repeated_near_timeout
+        reason = (
+            "recent-timeout-recovery"
+            if timeout_history > 0
+            else "repeated-near-timeout"
+            if repeated_near_timeout
+            else ""
+        )
+        rows.append({
+            **stats,
+            "preemptiveTargetSharding": preemptive,
+            "targetParallelism": min(
+                int(policy["targetParallelism"]),
+                int(stats["maximumCandidateSymbolCount"]),
+            ) if preemptive else 1,
+            "reason": reason,
+        })
+    rows.sort(
+        key=lambda item: (
+            bool(item["preemptiveTargetSharding"]),
+            int(item["timeoutFallbackRunCount"]) + int(item["timedOutRunCount"]),
+            int(item["nearTimeoutRunCount"]),
+            int(item["maximumQueryDurationMs"]),
+            str(item["ruleId"]),
+        ),
+        reverse=True,
+    )
+    bounded_rows = rows[:20]
+    preemptive_rule_ids = [
+        str(item["ruleId"])
+        for item in bounded_rows
+        if bool(item["preemptiveTargetSharding"]) and int(item["targetParallelism"]) > 1
+    ]
+    profile.update({
+        "sampledRunCount": sampled,
+        "rules": bounded_rows,
+        "preemptiveRuleIds": preemptive_rule_ids,
+        "status": "active" if preemptive_rule_ids else "no-slow-rules",
+    })
+    return profile
 
 
 def _slo_state(
@@ -706,6 +910,18 @@ def build_projection_runtime_observation(
             "targetWorkShardingUsed": bool(execution.get("typedbNativeRuleTargetWorkShardingUsed")),
             "targetWorkShardCount": _integer(execution.get("typedbNativeRuleTargetWorkShardCount")),
             "targetWorkItemCount": _integer(execution.get("typedbNativeRuleWorkItemCount")),
+            "adaptiveTargetShardingEnabled": bool(
+                execution.get("typedbNativeRuleAdaptiveTargetShardingEnabled")
+            ),
+            "adaptiveTargetShardingProfileStatus": _text(
+                execution.get("typedbNativeRuleAdaptiveTargetShardingProfileStatus")
+            ),
+            "adaptiveTargetShardingUsed": bool(
+                execution.get("typedbNativeRuleAdaptiveTargetShardingUsed")
+            ),
+            "adaptiveTargetShardedRuleCount": _integer(
+                execution.get("typedbNativeRuleAdaptiveTargetShardedRuleCount")
+            ),
             "commitMode": _text(execution.get("typedbNativeRuleCommitMode")),
             "deferredRuleCount": _integer(execution.get("nativeRuleSelectionDeferredCount")),
             "nativeRuleSelectionApplied": bool(execution.get("nativeRuleSelectionApplied")),

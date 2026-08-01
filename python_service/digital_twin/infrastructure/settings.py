@@ -253,6 +253,9 @@ TEXT_SETTING_KEYS = [
     "typedbNativeRuleTargetSymbolLimit",
     "typedbNativeRuleTargetParallelism",
     "typedbNativeRuleTargetWorkShardingEnabled",
+    "typedbNativeRuleAdaptiveTargetShardingEnabled",
+    "typedbNativeRuleAdaptiveTargetShardingLookbackRuns",
+    "typedbNativeRuleAdaptiveTargetShardingParallelism",
     "typedbNativeRuleSelectionEnabled",
     "kisRealtimeWebSocketIncludeConfiguredInReasoning",
     "typedbABoxNodeBatchSize",
@@ -1229,6 +1232,24 @@ def runtime_settings(fast_operational_read: bool = False) -> Dict[str, str]:
             "typedbNativeRuleTargetWorkShardingEnabled",
             "TYPEDB_NATIVE_RULE_TARGET_WORK_SHARDING_ENABLED",
             "0",
+        ),
+        # Only rules with recent bounded-read timeouts use this path. Unlike
+        # broad target sharding, it keeps the learned shards serial and does
+        # not change normal multi-symbol rule execution.
+        "typedbNativeRuleAdaptiveTargetShardingEnabled": value(
+            "typedbNativeRuleAdaptiveTargetShardingEnabled",
+            "TYPEDB_NATIVE_RULE_ADAPTIVE_TARGET_SHARDING_ENABLED",
+            "1",
+        ),
+        "typedbNativeRuleAdaptiveTargetShardingLookbackRuns": value(
+            "typedbNativeRuleAdaptiveTargetShardingLookbackRuns",
+            "TYPEDB_NATIVE_RULE_ADAPTIVE_TARGET_SHARDING_LOOKBACK_RUNS",
+            "12",
+        ),
+        "typedbNativeRuleAdaptiveTargetShardingParallelism": value(
+            "typedbNativeRuleAdaptiveTargetShardingParallelism",
+            "TYPEDB_NATIVE_RULE_ADAPTIVE_TARGET_SHARDING_PARALLELISM",
+            "2",
         ),
         "typedbNativeRuleSelectionEnabled": value("typedbNativeRuleSelectionEnabled", "TYPEDB_NATIVE_RULE_SELECTION_ENABLED", "1"),
         "kisRealtimeWebSocketIncludeConfiguredInReasoning": value("kisRealtimeWebSocketIncludeConfiguredInReasoning", "KIS_REALTIME_WEBSOCKET_INCLUDE_CONFIGURED_IN_REASONING", "0"),

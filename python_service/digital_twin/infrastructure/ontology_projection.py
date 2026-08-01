@@ -59,6 +59,8 @@ from ..domain.ontology_projection_input import (
 )
 from ..domain.ontology_runtime_operations import (
     build_projection_runtime_observation,
+    native_rule_adaptive_target_sharding_policy,
+    native_rule_adaptive_target_sharding_profile,
     native_replay_validation,
 )
 from ..domain.ontology_validator import validate_ontology
@@ -3462,6 +3464,26 @@ class PortfolioOntologyProjectionRecorder:
             "matchedRuleIds": [],
             "matchedRuleCount": 0,
         }
+        adaptive_target_sharding_profile: Dict[str, object] = {}
+        if active_key == "typedb":
+            adaptive_target_sharding_profile = self.adaptive_native_rule_target_sharding_profile(
+                snapshot,
+                world_id=world_id,
+                rulebox_rules_hash=rulebox_rules_hash,
+            )
+            # This is bounded operational telemetry for the audit record. It
+            # never becomes an ABox property or a user-facing investment fact.
+            result["nativeRuleAdaptiveTargetSharding"] = {
+                "status": str(adaptive_target_sharding_profile.get("status") or ""),
+                "source": str(adaptive_target_sharding_profile.get("source") or ""),
+                "sampledRunCount": int(adaptive_target_sharding_profile.get("sampledRunCount") or 0),
+                "compatibleAuditRunCount": int(
+                    adaptive_target_sharding_profile.get("compatibleAuditRunCount") or 0
+                ),
+                "preemptiveRuleIds": list(
+                    adaptive_target_sharding_profile.get("preemptiveRuleIds") or []
+                )[:20],
+            }
         inference_write_lease: Dict[str, object] = {}
         if active_key == "typedb":
             inference_write_lease = self.acquire_inference_write_lease(result, world_id=world_id)
@@ -3610,6 +3632,7 @@ class PortfolioOntologyProjectionRecorder:
                 "priorMatchedRuleIds": list(selection_context.get("matchedRuleIds") or []),
                 "priorInferenceProofSource": str(selection_context.get("proofSource") or ""),
                 "priorInferenceProofRunId": str(selection_context.get("proofRunId") or ""),
+                "nativeRuleAdaptiveTargetShardingProfile": adaptive_target_sharding_profile,
             }
             if inference_write_lease.get("acquired"):
                 payload["_inferenceWriteLeaseOwner"] = str(inference_write_lease.get("leaseOwner") or "")
@@ -4325,6 +4348,73 @@ class PortfolioOntologyProjectionRecorder:
             "sourceAboxSnapshotId": str(inferencebox.get("sourceAboxSnapshotId") or ""),
             "fallbackReason": "prior-aligned-inference-unavailable",
         }
+
+    def adaptive_native_rule_target_sharding_profile(
+        self,
+        snapshot: AccountSnapshot,
+        world_id: str = "",
+        rulebox_rules_hash: str = "",
+    ) -> Dict[str, object]:
+        """Build a bounded execution-only profile from compatible audits.
+
+        Historical durations are not projected into the ABox and are never a
+        RuleBox condition. They only let the TypeDB adapter avoid replaying a
+        recently timed-out multi-symbol read at its known unsafe size.
+        """
+
+        policy = native_rule_adaptive_target_sharding_policy(self.settings)
+        if not bool(policy.get("enabled")):
+            return native_rule_adaptive_target_sharding_profile([], self.settings)
+        if not self.projection_run_store or not hasattr(self.projection_run_store, "latest"):
+            profile = native_rule_adaptive_target_sharding_profile([], self.settings)
+            profile["source"] = "projection-audit-unavailable"
+            return profile
+        read_limit = max(
+            20,
+            min(160, int(policy.get("lookbackRunLimit") or 12) * 4),
+        )
+        try:
+            try:
+                rows = self.projection_run_store.latest(
+                    account_id=str(snapshot.account_id or ""),
+                    limit=read_limit,
+                    world_id=world_id,
+                )
+            except TypeError as error:
+                if "unexpected keyword" not in str(error) and "world_id" not in str(error):
+                    raise
+                rows = self.projection_run_store.latest(
+                    account_id=str(snapshot.account_id or ""),
+                    limit=read_limit,
+                )
+        except Exception:
+            profile = native_rule_adaptive_target_sharding_profile([], self.settings)
+            profile["source"] = "projection-audit-read-failed"
+            return profile
+
+        observations = []
+        compatible_rows = 0
+        expected_rulebox_hash = str(rulebox_rules_hash or "").strip()
+        for row in rows or []:
+            if not isinstance(row, dict):
+                continue
+            if str(row.get("graphStore") or "").strip() != "typedb":
+                continue
+            if expected_rulebox_hash and str(row.get("ruleboxRulesHash") or "") != expected_rulebox_hash:
+                continue
+            result = row.get("result") if isinstance(row.get("result"), dict) else {}
+            observation = result.get("runtimeObservation") if isinstance(result, dict) else {}
+            if not isinstance(observation, dict):
+                continue
+            compatible_rows += 1
+            observations.append(observation)
+
+        profile = native_rule_adaptive_target_sharding_profile(observations, self.settings)
+        profile.update({
+            "source": "projection-audit",
+            "compatibleAuditRunCount": compatible_rows,
+        })
+        return profile
 
     @staticmethod
     def matched_rule_ids_from_inference_payload(payload: Dict[str, object]) -> List[str]:

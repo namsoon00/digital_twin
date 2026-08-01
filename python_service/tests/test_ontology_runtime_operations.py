@@ -5,6 +5,7 @@ from types import SimpleNamespace
 
 from digital_twin.domain.ontology_runtime_operations import (
     build_projection_runtime_observation,
+    native_rule_adaptive_target_sharding_profile,
     native_replay_validation,
     native_rule_timing_profile,
     summarize_projection_runtime_observations,
@@ -386,6 +387,75 @@ class OntologyRuntimeOperationsTests(unittest.TestCase):
         self.assertEqual(1, profile["incompleteRuleCount"])
         self.assertEqual("graph.slow", profile["slowestRules"][0]["ruleId"])
         self.assertEqual(7600, profile["slowestRules"][0]["queryDurationMs"])
+
+    def test_timeout_history_creates_a_bounded_proactive_target_sharding_profile(self):
+        profile = native_rule_adaptive_target_sharding_profile([
+            {
+                "inference": {
+                    "nativeRuleTiming": {
+                        "slowestRules": [
+                            {
+                                "ruleId": "graph.timeout-prone",
+                                "candidateSymbolCount": 4,
+                                "timeoutFallbackUsed": True,
+                                "elapsedMs": 38000,
+                                "queryDurationMs": 16900,
+                            },
+                            {
+                                "ruleId": "graph.one-symbol",
+                                "candidateSymbolCount": 1,
+                                "timeoutFallbackUsed": True,
+                                "elapsedMs": 10000,
+                                "queryDurationMs": 10000,
+                            },
+                        ],
+                    },
+                },
+            },
+            {
+                "inference": {
+                    "nativeRuleTiming": {
+                        "slowestRules": [
+                            {
+                                "ruleId": "graph.near-timeout",
+                                "candidateSymbolCount": 3,
+                                "elapsedMs": 7600,
+                                "queryDurationMs": 7400,
+                            },
+                        ],
+                    },
+                },
+            },
+            {
+                "inference": {
+                    "nativeRuleTiming": {
+                        "slowestRules": [
+                            {
+                                "ruleId": "graph.near-timeout",
+                                "candidateSymbolCount": 3,
+                                "elapsedMs": 7900,
+                                "queryDurationMs": 7600,
+                            },
+                        ],
+                    },
+                },
+            },
+        ], {
+            "typedbNativeRuleAdaptiveTargetShardingLookbackRuns": "8",
+            "typedbNativeRuleAdaptiveTargetShardingParallelism": "2",
+            "typedbNativeRuleQueryTimeoutSeconds": "10",
+        })
+
+        by_rule = {item["ruleId"]: item for item in profile["rules"]}
+        self.assertEqual("active", profile["status"])
+        self.assertEqual(
+            ["graph.timeout-prone", "graph.near-timeout"],
+            profile["preemptiveRuleIds"],
+        )
+        self.assertEqual(2, by_rule["graph.timeout-prone"]["targetParallelism"])
+        self.assertEqual("recent-timeout-recovery", by_rule["graph.timeout-prone"]["reason"])
+        self.assertEqual("repeated-near-timeout", by_rule["graph.near-timeout"]["reason"])
+        self.assertNotIn("graph.one-symbol", by_rule)
 
     def test_slo_summary_requires_sustained_breach_before_escalation(self):
         warning = build_projection_runtime_observation(

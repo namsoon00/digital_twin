@@ -72,6 +72,7 @@ from digital_twin.infrastructure.typedb_ontology import (
     typedb_native_rule_runtime_query_plan,
     typedb_native_rule_execution_plan,
     typedb_native_rule_target_work_plan,
+    typedb_native_rule_adaptive_target_parallelism_by_rule_id,
     typedb_native_rule_evidence_read_index_for_execution,
     typedb_native_rule_planner_topology_for_execution,
     materialize_typedb_native_matches,
@@ -269,6 +270,48 @@ class TypeDBOntologyRepositoryTests(unittest.TestCase):
         self.assertEqual(
             ["000660", "005930", "AAPL", "TSLA"],
             sorted(work_plan["workItems"][0]["candidateSymbols"]),
+        )
+
+    def test_target_work_plan_preemptively_shards_only_timeout_prone_rules(self):
+        slow_rule_id = "graph.timeout-prone.v1"
+        fast_rule_id = "graph.normal.v1"
+        adaptive_profile = {
+            "status": "active",
+            "enabled": True,
+            "rules": [{
+                "ruleId": slow_rule_id,
+                "preemptiveTargetSharding": True,
+                "targetParallelism": 2,
+            }],
+        }
+        work_plan = typedb_native_rule_target_work_plan(
+            [
+                {"ruleId": slow_rule_id, "candidateSymbols": ["005930", "000660", "035420", "035720"]},
+                {"ruleId": fast_rule_id, "candidateSymbols": ["005930", "000660", "035420", "035720"]},
+            ],
+            target_parallelism=1,
+            adaptive_target_parallelism_by_rule_id=(
+                typedb_native_rule_adaptive_target_parallelism_by_rule_id(adaptive_profile)
+            ),
+        )
+
+        slow_work = [
+            item for item in work_plan["workItems"]
+            if item["ruleId"] == slow_rule_id
+        ]
+        fast_work = [
+            item for item in work_plan["workItems"]
+            if item["ruleId"] == fast_rule_id
+        ]
+        self.assertTrue(work_plan["targetWorkAdaptiveShardingUsed"])
+        self.assertEqual([slow_rule_id], work_plan["targetWorkAdaptiveShardedRuleIds"])
+        self.assertEqual(2, len(slow_work))
+        self.assertTrue(all(item["targetWorkAdaptiveShardingUsed"] for item in slow_work))
+        self.assertEqual(1, len(fast_work))
+        self.assertFalse(fast_work[0]["targetWorkAdaptiveShardingUsed"])
+        self.assertEqual(
+            ["000660", "005930", "035420", "035720"],
+            sorted({symbol for item in slow_work for symbol in item["candidateSymbols"]}),
         )
 
     def test_projection_recorder_exposes_scoped_abox_write_substage_timings(self):
@@ -3690,6 +3733,122 @@ class TypeDBOntologyRepositoryTests(unittest.TestCase):
         self.assertEqual(1, result["timeoutFallbackRuleCount"])
         self.assertEqual(2, result["timeoutFallbackShardCount"])
 
+    def test_native_rule_match_preemptively_serializes_only_recent_timeout_rule_targets(self):
+        repository = TypeDBOntologyGraphRepository(
+            "127.0.0.1:1729",
+            retry_count=0,
+            native_rule_parallelism=2,
+        )
+        symbols = ["005930", "000660", "035420", "035720"]
+
+        def rule(rule_id):
+            return GraphInferenceRule(
+                rule_id=rule_id,
+                label=rule_id,
+                version="v1",
+                source_kind="stock",
+                conditions=[
+                    GraphRuleCondition(
+                        "holding-source",
+                        "subject_property",
+                        "보유 종목입니다.",
+                        field="source",
+                        value="holding",
+                    ),
+                ],
+                derivations=[
+                    GraphRuleDerivation(
+                        relation_type="REQUIRES_NEXT_CHECK",
+                        target_kind="next-check",
+                        target_key="{symbol}:check",
+                        target_label="다음 확인",
+                        tbox_class="NextCheck",
+                    ),
+                ],
+                action_group="watch",
+                action_level="review",
+                prompt_hint="사전 대상 분할 검증",
+            )
+
+        slow_rule = rule("graph.timeout.history.slow.v1")
+        fast_rule = rule("graph.timeout.history.fast.v1")
+        observed = []
+
+        def execute_entry(planned, *_args):
+            candidate_symbols = list(planned["candidateSymbols"])
+            observed.append({
+                "ruleId": planned["rule"].rule_id,
+                "candidateSymbols": candidate_symbols,
+                "adaptive": bool(planned.get("targetWorkAdaptiveShardingUsed")),
+            })
+            return {
+                "status": "ok",
+                "rule": planned["rule"],
+                "queryPlan": {},
+                "rows": [],
+                "readTransactionCount": 1,
+                "readQueryCount": 1,
+                "executed": {
+                    "ruleId": planned["rule"].rule_id,
+                    "nativeRuleId": "native:" + planned["rule"].rule_id,
+                    "schemaFunctionQueryUsed": True,
+                    "indexedEvidenceQueryUsed": False,
+                    "rowCount": 0,
+                    "candidateSymbols": candidate_symbols,
+                    "queryCount": 1,
+                    "anyConditionQueryCount": 0,
+                    "queryDurationMs": 10,
+                    "elapsedMs": 10,
+                    "targetWorkAdaptiveShardingUsed": bool(
+                        planned.get("targetWorkAdaptiveShardingUsed")
+                    ),
+                },
+            }
+
+        imported = (object, object, object, object, SimpleNamespace(READ="read"))
+        profile = {
+            "status": "active",
+            "enabled": True,
+            "rules": [{
+                "ruleId": slow_rule.rule_id,
+                "preemptiveTargetSharding": True,
+                "targetParallelism": 2,
+            }],
+        }
+        with patch.object(repository, "driver_imports", return_value=(imported, None)), \
+                patch.object(repository, "active_abox_rule_context", return_value={
+                    "status": "ok",
+                    "relationTypesBySymbol": {symbol: [] for symbol in symbols},
+                    "sourceIdsBySymbol": {
+                        symbol: ["stock:" + symbol]
+                        for symbol in symbols
+                    },
+                }), \
+                patch.object(repository, "execute_typedb_native_rule_entry", side_effect=execute_entry), \
+                patch.object(repository, "recover_timed_out_native_rule_entry") as recover:
+            result = repository.match_typedb_native_rules(
+                [slow_rule, fast_rule],
+                target_symbols=symbols,
+                native_rule_parallelism=2,
+                adaptive_target_sharding_profile=profile,
+                stable_abox_write_lease_held=True,
+            )
+
+        slow_work = [item for item in observed if item["ruleId"] == slow_rule.rule_id]
+        fast_work = [item for item in observed if item["ruleId"] == fast_rule.rule_id]
+        self.assertEqual("ok", result["status"])
+        self.assertTrue(result["targetWorkAdaptiveShardingUsed"])
+        self.assertEqual([slow_rule.rule_id], result["targetWorkAdaptiveShardedRuleIds"])
+        self.assertEqual(2, len(slow_work))
+        self.assertTrue(all(item["adaptive"] for item in slow_work))
+        self.assertEqual(1, len(fast_work))
+        self.assertFalse(fast_work[0]["adaptive"])
+        self.assertEqual(set(symbols), {
+            symbol for item in slow_work for symbol in item["candidateSymbols"]
+        })
+        self.assertEqual(1, result["nativeRuleExecutionPhases"]["adaptiveTargetShardedRuleCount"])
+        recover.assert_not_called()
+
     def test_typedb_native_rule_profile_gap_blocks_partial_investment_judgement(self):
         repository = TypeDBOntologyGraphRepository("127.0.0.1:1729", retry_count=0)
         rule = default_graph_inference_rules()[0]
@@ -5123,6 +5282,11 @@ class TypeDBOntologyRepositoryTests(unittest.TestCase):
             "typedbNativeRuleParallelism": "2",
             "typedbNativeRuleTargetParallelism": "9",
         })
+        factory_adaptive_target_sharding_disabled = typedb_repository_from_settings({
+            "ontologyTypeDbEnabled": "1",
+            "typedbAddress": "127.0.0.1:1729",
+            "typedbNativeRuleAdaptiveTargetShardingEnabled": "0",
+        })
 
         self.assertTrue(direct.native_rule_execution_enabled())
         self.assertTrue(factory_default.native_rule_execution_enabled())
@@ -5136,6 +5300,8 @@ class TypeDBOntologyRepositoryTests(unittest.TestCase):
         self.assertEqual(4, factory_default.native_rule_parallelism())
         self.assertEqual(1, factory_default.native_rule_target_parallelism())
         self.assertEqual(2, factory_target_parallel.native_rule_target_parallelism())
+        self.assertTrue(factory_default.native_rule_adaptive_target_sharding_enabled())
+        self.assertFalse(factory_adaptive_target_sharding_disabled.native_rule_adaptive_target_sharding_enabled())
         self.assertFalse(direct._inference_write_lease_enabled)
         self.assertTrue(factory_default._inference_write_lease_enabled)
         self.assertFalse(factory_inference_lease_disabled._inference_write_lease_enabled)

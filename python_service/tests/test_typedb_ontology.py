@@ -9201,6 +9201,15 @@ class TypeDBOntologyRepositoryTests(unittest.TestCase):
     def test_typedb_rulebox_uses_bounded_direct_typeql_when_functions_are_staging(self):
         repository = TypeDBOntologyGraphRepository("127.0.0.1:1729")
         rule = default_graph_inference_rules()[0]
+        adaptive_profile = {
+            "status": "active",
+            "enabled": True,
+            "rules": [{
+                "ruleId": rule.rule_id,
+                "preemptiveTargetSharding": True,
+                "targetParallelism": 2,
+            }],
+        }
         rule_snapshot = {
             "configured": True,
             "saved": True,
@@ -9247,7 +9256,10 @@ class TypeDBOntologyRepositoryTests(unittest.TestCase):
                     "status": "ok",
                     "graphStore": "typedb",
                 }):
-            result = repository.run_rulebox({"symbols": ["005930"]})
+            result = repository.run_rulebox({
+                "symbols": ["005930"],
+                "nativeRuleAdaptiveTargetShardingProfile": adaptive_profile,
+            })
 
         self.assertEqual("empty", result["status"])
         self.assertTrue(result["typedbNativeRuleEvaluationCompleted"])
@@ -9256,6 +9268,10 @@ class TypeDBOntologyRepositoryTests(unittest.TestCase):
         self.assertFalse(match.call_args.kwargs["use_schema_functions"])
         self.assertEqual(1, match.call_args.kwargs["native_rule_parallelism"])
         self.assertEqual(1, match.call_args.kwargs["native_rule_target_parallelism"])
+        self.assertEqual(
+            adaptive_profile,
+            match.call_args.kwargs["adaptive_target_sharding_profile"],
+        )
 
     def test_typedb_direct_fallback_binds_the_active_manifest_for_non_any_rules(self):
         repository = TypeDBOntologyGraphRepository("127.0.0.1:1729", retry_count=0)

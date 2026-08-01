@@ -17293,9 +17293,10 @@ relation ontology-assertion,
                 native_rule_parallelism = 1
                 native_rule_target_parallelism = 1
                 # Direct TypeQL recovery has a separate one-reader safety
-                # contract. Do not add target work from historical timing
-                # until the prepared schema-function path is available again.
-                adaptive_target_sharding_profile = {}
+                # contract. Adaptive shards retain that contract: the known
+                # slow rule's smaller target reads are still run serially,
+                # avoiding the initial bounded-read timeout without adding
+                # concurrent readers.
                 runtime_rulebox_metadata[
                     "typedbSchemaFunctionDirectQueryFallbackParallelismCap"
                 ] = 1

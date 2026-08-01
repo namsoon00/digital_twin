@@ -671,7 +671,7 @@ def _compact_global_external_signals_for_ontology(
             compact = _compact_crypto(source.get(key))
         if compact:
             result[key] = compact
-    for key in ["quality", "freshness", "provenance", "statuses"]:
+    for key in ["quality", "freshness", "cryptoFreshness", "provenance", "statuses"]:
         if key in source and source.get(key) not in (None, ""):
             result[key] = _bounded_value(
                 source.get(key),
@@ -682,6 +682,8 @@ def _compact_global_external_signals_for_ontology(
             )
     if source.get("fetchedAt") not in (None, ""):
         result["fetchedAt"] = _text(source.get("fetchedAt"), 120)
+    if source.get("cryptoFetchedAt") not in (None, ""):
+        result["cryptoFetchedAt"] = _text(source.get("cryptoFetchedAt"), 120)
     return result
 
 

@@ -18,6 +18,7 @@ from typing import Dict, Iterable, List, Mapping, Tuple
 
 from .events import DomainEvent, ontology_reasoning_requested_event, snapshot_collected_event
 from .fact_changes import changed_fields, fact_revision_id, fact_signature
+from .crypto_market_signals import crypto_market_transitions, crypto_transition_targets
 from .ontology_projection_input import compact_external_signals_for_ontology
 from .portfolio import AccountSnapshot, Position
 
@@ -230,9 +231,35 @@ def _previous_portfolio_context(state: Mapping[str, object]) -> Dict[str, object
 
 def _external_for_symbol(compact: Mapping[str, object], symbol: str) -> Dict[str, object]:
     result: Dict[str, object] = {}
-    for key in ("macro", "fxRates", "cryptoMarkets", "quality", "freshness", "provenance", "statuses"):
+    # Crypto price paths have an explicit transition contract below.  Keeping
+    # this global source in every stock's generic external delta made one
+    # CoinGecko poll enqueue the complete account even when no crypto rule was
+    # eligible to change.
+    for key in ("macro", "fxRates", "quality", "freshness", "provenance", "statuses"):
         if key in compact:
-            result[key] = compact.get(key)
+            value = compact.get(key)
+            if key == "statuses" and isinstance(value, list):
+                value = [
+                    item for item in value
+                    if not isinstance(item, Mapping) or str(item.get("source") or "") != "CoinGecko"
+                ]
+            elif key == "quality" and isinstance(value, Mapping):
+                value = dict(value)
+                coverage = value.get("sourceCoverage")
+                if isinstance(coverage, list):
+                    value["sourceCoverage"] = [
+                        item for item in coverage
+                        if not isinstance(item, Mapping) or str(item.get("key") or "") != "cryptoMarkets"
+                    ]
+                value.pop("cryptoMarketCount", None)
+            elif key == "provenance" and isinstance(value, Mapping):
+                value = dict(value)
+                for nested_key in ("sources", "unavailableSources"):
+                    rows = value.get(nested_key)
+                    if isinstance(rows, list):
+                        value[nested_key] = [item for item in rows if str(item or "") != "CoinGecko"]
+            if value not in (None, "", [], {}):
+                result[key] = value
     for group in (
         "secFilings", "equityQuotes", "yfinanceData", "newsHeadlines", "dartDisclosures",
         "earningsReports", "companyOverviews", "researchEvidence",
@@ -272,7 +299,7 @@ def _fact_types_for_change(fields: Iterable[str], external_groups: Iterable[str]
         selected.add("InterestRate")
     if groups & {"fxRates"}:
         selected.add("FxRate")
-    if groups & {"cryptoMarkets", "equityQuotes"}:
+    if groups & {"equityQuotes"}:
         selected.add("MarketQuote")
     if groups & {
         "secFilings", "newsHeadlines", "dartDisclosures", "earningsReports",
@@ -302,12 +329,18 @@ def verified_monitor_snapshot_reasoning_event(
     current_positions = _snapshot_position_map(snapshot)
     previous_positions = _state_position_map(previous)
     subjects = sorted(set(current_positions) | set(previous_positions))
-    if not subjects:
-        return None
 
     current_portfolio = _portfolio_context(snapshot)
     previous_portfolio = _previous_portfolio_context(previous)
     portfolio_changed = fact_signature(previous_portfolio) != fact_signature(current_portfolio)
+    previous_raw_external = previous.get("externalSignals") if isinstance(previous, Mapping) and isinstance(previous.get("externalSignals"), Mapping) else {}
+    crypto_transitions = crypto_market_transitions(
+        previous_raw_external,
+        snapshot.external_signals,
+        settings=settings,
+    )
+    if not subjects and not crypto_transitions:
+        return None
     current_external = compact_external_signals_for_ontology(
         snapshot.external_signals,
         target_symbols=subjects,
@@ -359,6 +392,43 @@ def verified_monitor_snapshot_reasoning_event(
             "VerifiedMonitorSnapshot",
             symbol,
             revision_payload,
+            EXTERNAL_REFRESH_FIELDS,
+        )
+
+    # BTC/ETH are independent market subjects.  The same transition may also
+    # affect an actually held or watched crypto-sensitive stock, but it must
+    # never fan out through unrelated account symbols.
+    transition_targets = crypto_transition_targets(
+        crypto_transitions,
+        list(snapshot.positions or []) + list(snapshot.watchlist or []),
+    )
+    transitions_by_symbol: Dict[str, List[Dict[str, object]]] = {}
+    for transition in crypto_transitions:
+        target = _clean_symbol(transition.get("symbol"))
+        if target:
+            transitions_by_symbol.setdefault(target, []).append(dict(transition))
+    for symbol in transition_targets:
+        applicable = list(crypto_transitions if symbol not in transitions_by_symbol else transitions_by_symbol[symbol])
+        if not applicable:
+            continue
+        fields = changed_fields_by_symbol.setdefault(symbol, [])
+        for field in ["external.cryptoMarkets", "cryptoMarketTransition"]:
+            if field not in fields:
+                fields.append(field)
+        groups = changed_external_groups_by_symbol.setdefault(symbol, [])
+        if "cryptoMarkets" not in groups:
+            groups.append("cryptoMarkets")
+        if symbol not in changed_symbols:
+            changed_symbols.append(symbol)
+        all_fact_types.add("MarketQuote")
+        revisions[symbol] = fact_revision_id(
+            "VerifiedCryptoMarketTransition",
+            symbol,
+            {
+                "position": current_positions.get(symbol, {}),
+                "cryptoTransitions": applicable,
+                "cryptoMarkets": current_external.get("cryptoMarkets", {}),
+            },
             EXTERNAL_REFRESH_FIELDS,
         )
 
@@ -418,6 +488,8 @@ def verified_monitor_snapshot_reasoning_event(
             "positionChangedCount": position_changed_count,
             "portfolioContextChanged": portfolio_changed,
             "externalSignalGroups": external_groups,
+            "cryptoTransitions": crypto_transitions[:12],
+            "cryptoTransitionTargetSymbols": transition_targets[:20],
         },
         observation_followup_symbols=observation_followups,
     )

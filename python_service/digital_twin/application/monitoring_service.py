@@ -452,7 +452,7 @@ class MonitorRunner:
             and generation_aligned
             and bool(str(inference.get("sourceAboxSnapshotId") or ""))
         )
-        investment_types = {"investmentInsight", "holdingTiming", "watchlistOntologySignal"}
+        investment_types = {"investmentInsight", "holdingTiming", "watchlistOntologySignal", "cryptoOntologySignal"}
         detected = [event for event in detected_events or [] if str(getattr(event, "message_type", "") or "") in investment_types]
         ready = [event for event in ready_events or [] if str(getattr(event, "message_type", "") or "") in investment_types]
         selected_symbols = sorted({

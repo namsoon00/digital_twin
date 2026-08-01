@@ -2048,7 +2048,9 @@ function checkFrontendAdminRender() {
     assertOk(settingsHtml.indexOf('data-setting="externalNewsProvider"') >= 0, "설정 탭에 뉴스 공급자 옵션이 없습니다.");
     assertOk(settingsHtml.indexOf('data-setting="dataFreshnessEnabled"') >= 0, "설정 탭에 알림 데이터 신선도 게이트 옵션이 없습니다.");
     assertOk(settingsHtml.indexOf('data-setting="dataFreshnessQuoteMaxAgeMinutes"') >= 0, "설정 탭에 시세 알림 신선도 기준이 없습니다.");
+    assertOk(settingsHtml.indexOf('data-setting="dataFreshnessExternalCryptoMaxAgeMinutes"') >= 0, "설정 탭에 크립토 신호 신선도 기준이 없습니다.");
     assertOk(settingsHtml.indexOf('data-setting="externalSignalCacheMaxAgeMinutes"') >= 0, "설정 탭에 외부 신호 캐시 TTL 기준이 없습니다.");
+    assertOk(settingsHtml.indexOf('data-setting="externalCoinGeckoFetchIntervalMinutes"') >= 0, "설정 탭에 CoinGecko 수집 주기 기준이 없습니다.");
     assertOk(settingsHtml.indexOf('data-setting="marketDataMaxAgeMinutes"') >= 0, "설정 탭에 추천 시세 신선도 기준이 없습니다.");
     assertOk(settingsHtml.indexOf('data-setting="dartDisclosureAiAnalysisEnabled"') >= 0, "설정 탭에 공시 AI 해석 옵션이 없습니다.");
     assertOk(settingsHtml.indexOf('data-setting="dartDisclosureAiTimeoutSeconds"') >= 0, "설정 탭에 공시 AI 타임아웃 옵션이 없습니다.");
@@ -2301,7 +2303,9 @@ async function checkNormalMode(port, context) {
   assertOk(Object.prototype.hasOwnProperty.call(settingsPayload.settings, "externalNewsProvider"), "설정 API에 뉴스 공급자 옵션이 없습니다.");
   assertOk(settingsPayload.settings.dataFreshnessEnabled === "1", "설정 API의 데이터 신선도 게이트 기본값이 없습니다.");
   assertOk(settingsPayload.settings.dataFreshnessQuoteMaxAgeMinutes === "10", "설정 API의 시세 신선도 기본값이 없습니다.");
-  assertOk(settingsPayload.settings.externalSignalCacheMaxAgeMinutes === "10", "설정 API의 외부 신호 캐시 TTL 기본값이 없습니다.");
+  assertOk(settingsPayload.settings.dataFreshnessExternalCryptoMaxAgeMinutes === "25", "설정 API의 크립토 신호 신선도 기본값이 없습니다.");
+  assertOk(settingsPayload.settings.externalSignalCacheMaxAgeMinutes === "30", "설정 API의 외부 신호 캐시 TTL 기본값이 없습니다.");
+  assertOk(settingsPayload.settings.externalCoinGeckoFetchIntervalMinutes === "10", "설정 API의 CoinGecko 수집 주기 기본값이 없습니다.");
   assertOk(settingsPayload.settings.marketDataMaxAgeMinutes === "240", "설정 API의 추천 시세 신선도 기본값이 없습니다.");
   assertOk(settingsPayload.settings.dartDisclosureAiTimeoutSeconds === "90", "설정 API의 공시 AI 타임아웃 기본값이 없습니다.");
   assertOk(settingsPayload.settings.watchlistSymbols.indexOf("TSLA") >= 0, "기본 관심 종목에 TSLA가 없습니다.");
@@ -2384,7 +2388,9 @@ async function checkNormalMode(port, context) {
         externalNewsProvider: "gdelt",
         dataFreshnessEnabled: "1",
         dataFreshnessQuoteMaxAgeMinutes: "12",
+        dataFreshnessExternalCryptoMaxAgeMinutes: "26",
         externalSignalCacheMaxAgeMinutes: "9",
+        externalCoinGeckoFetchIntervalMinutes: "11",
         marketDataMaxAgeMinutes: "180",
         alertRules: "investmentInsight=1\nwatchlistOntologySignal=1",
         ontologyReasoningUrgentReviewLevels: "act,immediate,blocked",
@@ -2420,7 +2426,9 @@ async function checkNormalMode(port, context) {
   assertOk(savedSettingsPayload.settings.externalNewsEnabled === "0", "저장된 뉴스 헤드라인 사용 설정이 응답에 없습니다.");
   assertOk(savedSettingsPayload.settings.externalNewsProvider === "gdelt", "저장된 뉴스 공급자 설정이 응답에 없습니다.");
   assertOk(savedSettingsPayload.settings.dataFreshnessQuoteMaxAgeMinutes === "12", "저장된 시세 신선도 기준이 응답에 없습니다.");
+  assertOk(savedSettingsPayload.settings.dataFreshnessExternalCryptoMaxAgeMinutes === "26", "저장된 크립토 신호 신선도 기준이 응답에 없습니다.");
   assertOk(savedSettingsPayload.settings.externalSignalCacheMaxAgeMinutes === "9", "저장된 외부 신호 캐시 TTL이 응답에 없습니다.");
+  assertOk(savedSettingsPayload.settings.externalCoinGeckoFetchIntervalMinutes === "11", "저장된 CoinGecko 수집 주기가 응답에 없습니다.");
   assertOk(savedSettingsPayload.settings.marketDataMaxAgeMinutes === "180", "저장된 추천 시세 신선도 기준이 응답에 없습니다.");
   const eventStatusAfterSettings = JSON.parse((await request(port, "/api/realtime/status")).body);
   assertOk(eventStatusAfterSettings.events["settings.updated"] >= 1, "설정 저장 이벤트가 이벤트 로그에 없습니다.");

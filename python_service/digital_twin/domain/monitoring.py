@@ -20,6 +20,7 @@ from .message_types import (
     ONTOLOGY_INFERENCE_MISSING,
     PORTFOLIO_HOLDINGS_SNAPSHOT,
     WATCHLIST_ONTOLOGY_SIGNAL,
+    CRYPTO_ONTOLOGY_SIGNAL,
 )
 from .ontology_inference_context import inferencebox_source_name, ontology_projection_from_metadata, relation_contexts_from_snapshot
 from .ontology_insights import build_investment_insight_events, relation_news_event_key_suffix, split_operational_and_investment_events
@@ -356,7 +357,7 @@ class RealtimeMonitor(MonitoringSampleDataMixin, MonitoringPositionContextMixin,
             inference_missing_events = self.ontology_inference_missing_events(decision_snapshot, previous or {}, inference_state)
             raw_events.extend(inference_missing_events)
             if not inference_missing:
-                raw_events.extend(self.ontology_signal_events(signal_snapshot))
+                raw_events.extend(self.ontology_signal_events(signal_snapshot, reasoning_context=reasoning_context))
         raw_events.extend(self.external_signal_events(signal_snapshot, previous or {}))
         if has_account_data and not inference_missing:
             raw_events.extend(self.holding_timing_events(decision_snapshot))
@@ -423,6 +424,32 @@ class RealtimeMonitor(MonitoringSampleDataMixin, MonitoringPositionContextMixin,
             position = positions.get(symbol)
             if position:
                 event.metadata["dataFreshness"] = freshness_from_position(position, event.rule, self.settings)
+            elif event.rule == CRYPTO_ONTOLOGY_SIGNAL:
+                crypto_freshness = (
+                    snapshot.external_signals.get("cryptoFreshness")
+                    if isinstance(snapshot.external_signals, dict)
+                    and isinstance(snapshot.external_signals.get("cryptoFreshness"), dict)
+                    else {}
+                )
+                record = freshness_record(
+                    "CoinGecko",
+                    event.rule,
+                    settings=self.settings,
+                    source_fetched_at=crypto_freshness.get("fetchedAt"),
+                    source_as_of=crypto_freshness.get("fetchedAt"),
+                    data_quality="actual" if str(crypto_freshness.get("status") or "") == "fresh" else "partial",
+                    require_source_as_of=True,
+                )
+                if str(crypto_freshness.get("status") or "").lower() != "fresh":
+                    record["status"] = "stale"
+                    record["reason"] = str(crypto_freshness.get("reason") or "CoinGecko 신선도 기준 미충족")
+                event.metadata["dataFreshness"] = {
+                    "status": record.get("status"),
+                    "reason": record.get("reason"),
+                    "ageMinutes": record.get("ageMinutes"),
+                    "maxAgeMinutes": record.get("maxAgeMinutes"),
+                    "sources": [record],
+                }
             elif data_freshness_required(event.rule):
                 event.metadata["dataFreshness"] = freshness_record(
                     "accountSnapshot",

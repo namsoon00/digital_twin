@@ -4,6 +4,7 @@ from datetime import datetime, timezone
 from typing import Dict, Iterable, List, Optional, Set
 
 from .message_types import (
+    CRYPTO_ONTOLOGY_SIGNAL,
     EXTERNAL_CRYPTO_MOVE,
     EXTERNAL_DART_DISCLOSURE,
     EXTERNAL_EQUITY_MOVE,
@@ -33,6 +34,7 @@ DATA_FRESHNESS_MESSAGE_TYPES = {
     MODEL_SELL,
     WATCHLIST_BUY_CANDIDATE,
     WATCHLIST_ONTOLOGY_SIGNAL,
+    CRYPTO_ONTOLOGY_SIGNAL,
     WATCHLIST_QUOTE,
     HOLDING_TIMING,
     MONITOR_POSITION_CHANGE,
@@ -162,8 +164,8 @@ def age_minutes(value: object, now=None):
 def max_age_minutes_for_message_type(message_type: str, settings: Dict[str, object] = None) -> int:
     settings = settings or {}
     key = str(message_type or "")
-    if key == EXTERNAL_CRYPTO_MOVE:
-        return int_setting(settings, "dataFreshnessExternalCryptoMaxAgeMinutes", 10)
+    if key in {EXTERNAL_CRYPTO_MOVE, CRYPTO_ONTOLOGY_SIGNAL}:
+        return int_setting(settings, "dataFreshnessExternalCryptoMaxAgeMinutes", 25)
     if key == EXTERNAL_EQUITY_MOVE:
         return int_setting(settings, "dataFreshnessExternalEquityMaxAgeMinutes", 10)
     if key == EXTERNAL_MACRO_SHIFT:

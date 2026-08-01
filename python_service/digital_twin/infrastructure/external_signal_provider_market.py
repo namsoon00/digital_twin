@@ -32,9 +32,9 @@ class ExternalSignalMarketMixin:
     def dart_document_text_max_chars(self) -> int:
         return max(500, min(20000, int(number(self.settings.get("externalDartDocumentTextMaxChars")) or 6000)))
 
-    def add_coingecko(self, signals: Dict[str, object]) -> None:
+    def add_coingecko(self, signals: Dict[str, object]) -> bool:
         if not self.external_api_enabled("externalCoinGeckoEnabled"):
-            return
+            return False
         ids = self.limited_targets(
             signals,
             "CoinGecko",
@@ -43,11 +43,20 @@ class ExternalSignalMarketMixin:
             50,
         )
         if not ids:
-            return
+            return False
         headers = {"Accept": "application/json", "User-Agent": "DigitalTwin/1.0"}
         api_key = str(self.settings.get("coingeckoApiKey") or "").strip()
         if api_key:
             headers["x-cg-demo-api-key"] = api_key
+        # A cache entry may contain the previous CoinGecko failure row. It is
+        # state for the last attempt, not permanent source health, so replace
+        # it before this independent refresh reports its own outcome.
+        statuses = signals.get("statuses") if isinstance(signals.get("statuses"), list) else []
+        signals["statuses"] = [
+            item for item in statuses
+            if not isinstance(item, dict) or str(item.get("source") or "") != "CoinGecko"
+        ]
+        signals["cryptoLastAttemptAt"] = utc_now_iso()
         try:
             def fetch_markets():
                 url = "https://api.coingecko.com/api/v3/coins/markets?" + urllib.parse.urlencode({
@@ -66,13 +75,15 @@ class ExternalSignalMarketMixin:
                 return payload
 
             payload = self.guarded_call("CoinGecko", "coins/markets", fetch_markets)
+            fetched_at = utc_now_iso()
+            markets = {}
             for item in payload:
                 if not isinstance(item, dict):
                     continue
                 coin_id = str(item.get("id") or "").lower()
                 if not coin_id:
                     continue
-                signals["cryptoMarkets"][coin_id] = {
+                markets[coin_id] = {
                     "provider": "CoinGecko",
                     "symbol": str(item.get("symbol") or "").upper(),
                     "name": str(item.get("name") or coin_id),
@@ -83,9 +94,26 @@ class ExternalSignalMarketMixin:
                     "change24h": number(item.get("price_change_percentage_24h_in_currency") or item.get("price_change_percentage_24h")),
                     "change7d": number(item.get("price_change_percentage_7d_in_currency")),
                     "lastUpdated": str(item.get("last_updated") or ""),
+                    "fetchedAt": fetched_at,
                 }
+            if not markets:
+                raise RuntimeError("coins/markets returned no configured assets")
+            # Do not clear the last good snapshot unless a complete refresh
+            # has succeeded.  This keeps a transient API failure from turning
+            # a fresh market fact into a misleading empty value.
+            signals["cryptoMarkets"] = markets
+            signals["cryptoFetchedAt"] = fetched_at
+            self.status(
+                signals,
+                "CoinGecko",
+                True,
+                "coins/markets refreshed",
+                dataUsable=True,
+            )
+            return True
         except Exception as error:  # noqa: BLE001
             self.status_for_error(signals, "CoinGecko", "", error)
+            return False
 
     def add_fred(self, signals: Dict[str, object]) -> None:
         if not self.external_api_enabled("externalFredEnabled"):

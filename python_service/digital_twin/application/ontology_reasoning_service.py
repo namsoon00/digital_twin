@@ -109,6 +109,8 @@ def reasoning_request_provenance(
     request_event_ids, source_event_ids, triggers, fact_types, observed_at, account_ids = set(), set(), set(), set(), [], set()
     changed_fields: Dict[str, set] = {}
     revisions: Dict[str, str] = {}
+    crypto_transitions: Dict[str, Dict[str, object]] = {}
+    verified_source_snapshot: Dict[str, object] = {}
     for event in events or []:
         payload = event_payload(event)
         event_id = str(getattr(event, "event_id", "") or "").strip()
@@ -142,6 +144,25 @@ def reasoning_request_provenance(
         raw_fields = raw_fields if isinstance(raw_fields, dict) else {}
         raw_revisions = payload.get("factRevisionsBySymbol")
         raw_revisions = raw_revisions if isinstance(raw_revisions, dict) else {}
+        barrier = payload.get("verifiedSourceSnapshot")
+        barrier = barrier if isinstance(barrier, dict) else {}
+        if barrier:
+            candidate = {
+                key: barrier.get(key)
+                for key in [
+                    "version", "generatedAt", "accountId", "positionChangedCount",
+                    "portfolioContextChanged", "externalSignalGroups", "cryptoTransitionTargetSymbols",
+                ]
+                if barrier.get(key) not in (None, "", [], {})
+            }
+            if candidate and str(candidate.get("generatedAt") or "") >= str(verified_source_snapshot.get("generatedAt") or ""):
+                verified_source_snapshot = candidate
+            for item in barrier.get("cryptoTransitions") or []:
+                if not isinstance(item, dict):
+                    continue
+                signature = str(item.get("signature") or "").strip()
+                if signature:
+                    crypto_transitions[signature] = dict(item)
         event_targets = targets or set(event_symbols(event))
         for raw_symbol, fields in raw_fields.items():
             symbol = str(raw_symbol or "").upper().strip()
@@ -162,7 +183,7 @@ def reasoning_request_provenance(
             if clean_revision:
                 revisions[symbol] = clean_revision[:160]
     ordered_fact_types = sorted(fact_types)
-    return {
+    context = {
         "version": "reasoning-request-context-v1",
         "requestEventIds": sorted(request_event_ids)[:80],
         "sourceEventIds": sorted(source_event_ids)[:80],
@@ -179,6 +200,14 @@ def reasoning_request_provenance(
         },
         "factRevisionsBySymbol": dict(sorted(revisions.items())),
     }
+    if crypto_transitions:
+        context["cryptoTransitions"] = [
+            crypto_transitions[key]
+            for key in sorted(crypto_transitions)
+        ][:12]
+    if verified_source_snapshot:
+        context["verifiedSourceSnapshot"] = verified_source_snapshot
+    return context
 
 
 REVIEW_LEVEL_ORDER = {

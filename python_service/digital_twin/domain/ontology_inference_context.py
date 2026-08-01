@@ -1,6 +1,7 @@
 from typing import Dict, Iterable, List, Optional
 
 from .hypothesis_calibration import attach_abox_hypothesis_calibrations
+from .crypto_market_signals import crypto_market_positions
 from .investment_brain import hypothesis_set_from_relation_context
 from .market_data import number
 from .ontology_decision_state import (
@@ -124,6 +125,7 @@ def inferencebox_from_snapshot(snapshot: AccountSnapshot) -> Dict[str, object]:
 def relation_contexts_from_snapshot(
     snapshot: AccountSnapshot,
     settings: Optional[Dict[str, object]] = None,
+    include_crypto_market_subjects: bool = False,
 ) -> Dict[str, Dict[str, object]]:
     inferencebox = inferencebox_from_snapshot(snapshot)
     if not inferencebox:
@@ -133,6 +135,12 @@ def relation_contexts_from_snapshot(
         for item in list(snapshot.positions or []) + list(snapshot.watchlist or [])
         if getattr(item, "symbol", "") and not item.is_cash()
     ]
+    if include_crypto_market_subjects:
+        known_symbols = {str(item.symbol or "").upper().strip() for item in positions}
+        positions.extend([
+            item for item in crypto_market_positions(snapshot.external_signals)
+            if str(item.symbol or "").upper().strip() not in known_symbols
+        ])
     result: Dict[str, Dict[str, object]] = {}
     lifecycle_by_symbol = (
         snapshot.metadata.get("hypothesisLifecycle", {}).get("bySymbol", {})
@@ -1447,7 +1455,25 @@ def evidence_subgraph_packet(
     traces: List[Dict[str, object]],
 ) -> Dict[str, object]:
     symbol = str(position.symbol or facts.get("symbol") or "").upper().strip()
-    target_id = "stock:" + symbol if symbol else ""
+
+    def source_symbol(value: object) -> str:
+        raw = str(value or "").strip()
+        kind, separator, candidate = raw.partition(":")
+        if separator and kind in {"stock", "crypto-asset"}:
+            return candidate.upper()
+        return ""
+
+    target_id = next(
+        (
+            str(item.get("source") or "")
+            for item in relations or []
+            if isinstance(item, dict) and source_symbol(item.get("source")) == symbol
+        ),
+        "",
+    )
+    if not target_id and symbol:
+        target_id = ("crypto-asset:" if str(position.market or "").upper() == "CRYPTO" else "stock:") + symbol
+    target_kind = target_id.split(":", 1)[0] if ":" in target_id else "stock"
     nodes: Dict[str, Dict[str, object]] = {}
 
     def add_node(node_id: str, label: str, kind: str, **properties: object) -> None:
@@ -1460,14 +1486,19 @@ def evidence_subgraph_packet(
             "properties": {key: value for key, value in properties.items() if value not in (None, "", [], {})},
         }
 
-    add_node(target_id, position.name or symbol, "stock", symbol=symbol, market=position.market, sector=position.sector)
+    add_node(target_id, position.name or symbol, target_kind, symbol=symbol, market=position.market, sector=position.sector)
     edges: List[Dict[str, object]] = []
     for relation in relations or []:
         if not isinstance(relation, dict):
             continue
         source = str(relation.get("source") or target_id)
         target = str(relation.get("target") or "")
-        add_node(source, relation.get("sourceLabel") or source, "source")
+        add_node(
+            source,
+            relation.get("sourceLabel") or source,
+            target_kind if source == target_id else "source",
+            symbol=symbol if source == target_id else "",
+        )
         add_node(
             target,
             relation.get("targetLabel") or target,

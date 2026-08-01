@@ -89,10 +89,18 @@ class ExternalSignalCoreMixin:
         if cache_fresh or cache_only:
             signals = entry.get("signals") if isinstance(entry, dict) else None
             if isinstance(signals, dict):
-                if cache_fresh and self.should_promote_cache_scope(entry, normalized_cache_scope):
-                    # Older aggregate entries predate cacheScope. Promote the
-                    # metadata on first use so symbol-level research refreshes
-                    # cannot evict the cache the realtime monitor depends on.
+                cache_needs_store = cache_fresh and self.should_promote_cache_scope(entry, normalized_cache_scope)
+                # Cache-only callers are the reasoning path. They must never
+                # refresh a vendor inline. The metadata-only legacy promotion
+                # above preserves a pre-existing cache entry without changing
+                # any vendor payload.
+                signals = deepcopy(signals)
+                if cache_fresh and not cache_only and self.crypto_refresh_due(signals):
+                    self.refresh_cached_coingecko(signals)
+                    # The general cache timestamp remains untouched. Only the
+                    # CoinGecko payload and provider state are refreshed.
+                    cache_needs_store = True
+                if cache_needs_store:
                     self.cache.replace(self.next_cache_payload(
                         cached,
                         cache_key,
@@ -100,11 +108,6 @@ class ExternalSignalCoreMixin:
                         cache_scope=normalized_cache_scope,
                         subject_count=subject_count,
                     ))
-                # Cache-only callers are the reasoning path. They must never
-                # refresh a vendor inline. The metadata-only legacy promotion
-                # above preserves a pre-existing cache entry without changing
-                # any vendor payload.
-                signals = deepcopy(signals)
                 if cache_only:
                     self.status(
                         signals,
@@ -158,6 +161,8 @@ class ExternalSignalCoreMixin:
     def empty_cache_only_signals(self) -> Dict[str, object]:
         signals = {
             "fetchedAt": "",
+            "cryptoFetchedAt": "",
+            "cryptoLastAttemptAt": "",
             "equityQuotes": {},
             "cryptoMarkets": {},
             "macro": {},
@@ -326,6 +331,7 @@ class ExternalSignalCoreMixin:
             "alphaRelatedSymbolsEnabled": str(self.settings.get("externalAlphaRelatedSymbolsEnabled") or "1"),
             "alphaRelatedMaxSymbols": str(self.settings.get("externalAlphaRelatedMaxSymbols") or "8"),
             "cryptoIds": symbol_list(self.settings.get("externalCryptoIds") or "bitcoin,ethereum") if self.external_api_enabled("externalCoinGeckoEnabled") else [],
+            "cryptoFetchIntervalMinutes": str(self.crypto_fetch_interval_minutes()),
             "fredSeries": symbol_list(self.settings.get("externalFredSeries") or "DGS10,DGS2,DFF") if self.external_api_enabled("externalFredEnabled") else [],
             "fredTimeoutSeconds": str(self.settings.get("externalFredTimeoutSeconds") or "8"),
             "fxRates": str(self.settings.get("fxRates") or ""),
@@ -404,9 +410,36 @@ class ExternalSignalCoreMixin:
         freshness = max(1, freshness)
         return min(interval, freshness)
 
+    def crypto_fetch_interval_minutes(self) -> int:
+        value = int(number(self.settings.get("externalCoinGeckoFetchIntervalMinutes")) or 10)
+        return max(1, min(120, value))
+
+    def crypto_refresh_due(self, signals: Dict[str, object]) -> bool:
+        if not self.external_api_enabled("externalCoinGeckoEnabled"):
+            return False
+        payload = signals if isinstance(signals, dict) else {}
+        stamp = str(payload.get("cryptoLastAttemptAt") or payload.get("cryptoFetchedAt") or "")
+        if not stamp:
+            markets = payload.get("cryptoMarkets") if isinstance(payload.get("cryptoMarkets"), dict) else {}
+            stamps = [
+                str(item.get("fetchedAt") or item.get("lastUpdated") or "")
+                for item in markets.values()
+                if isinstance(item, dict)
+            ]
+            stamp = max(stamps) if stamps else ""
+        fetched_at = parse_iso(stamp)
+        if not fetched_at:
+            return True
+        return datetime.now(timezone.utc) - fetched_at >= timedelta(minutes=self.crypto_fetch_interval_minutes())
+
+    def refresh_cached_coingecko(self, signals: Dict[str, object]) -> bool:
+        return bool(self.add_coingecko(signals))
+
     def fetch_signals(self, positions: List[Position]) -> Dict[str, object]:
         signals = {
             "fetchedAt": utc_now_iso(),
+            "cryptoFetchedAt": "",
+            "cryptoLastAttemptAt": "",
             "equityQuotes": {},
             "cryptoMarkets": {},
             "macro": {},

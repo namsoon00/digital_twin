@@ -408,7 +408,10 @@ class ResearchEvidenceStoreTests(unittest.TestCase):
             reset_mysql_test_database(temp)
             store = TestResearchEvidenceStore(test_store_seed(temp))
             provider = FixedCacheKeyExternalSignalProvider(
-                settings={"externalApiFetchIntervalMinutes": "30"},
+                settings={
+                    "externalApiFetchIntervalMinutes": "30",
+                    "externalCoinGeckoEnabled": "0",
+                },
                 cache=cache,
                 evidence_store=store,
             )

@@ -411,6 +411,81 @@ def with_rulebox_execution_guidance(rules: List[GraphInferenceRule]) -> List[Gra
         enriched.append(replace(rule, derivations=derivations))
     return enriched
 
+
+def crypto_market_inference_rules() -> List[GraphInferenceRule]:
+    """RuleBox-owned BTC/ETH market-path interpretation.
+
+    Python schedules only a threshold transition.  These rules remain the
+    authority for whether the current ABox is an upward/downward market
+    relationship and how urgently it should be reviewed.
+    """
+
+    rows = [
+        ("24h", "change24h", "up", 3.0, "WATCH"),
+        ("24h", "change24h", "down", 3.0, "WATCH"),
+        ("7d", "change7d", "up", 4.0, "WATCH"),
+        ("7d", "change7d", "down", 4.0, "WATCH"),
+        ("24h", "change24h", "up", 6.0, "ALERT"),
+        ("24h", "change24h", "down", 6.0, "ALERT"),
+        ("7d", "change7d", "up", 8.0, "ALERT"),
+        ("7d", "change7d", "down", 8.0, "ALERT"),
+    ]
+    rules: List[GraphInferenceRule] = []
+    for horizon, field, direction, threshold, severity in rows:
+        threshold_key = str(int(threshold)) if threshold.is_integer() else str(threshold).replace(".", "_")
+        level = "major" if severity == "ALERT" else "watch"
+        operator = ">=" if direction == "up" else "<="
+        signed_threshold = threshold if direction == "up" else -threshold
+        polarity = "support" if direction == "up" else "risk"
+        relationship_label = "상승" if direction == "up" else "하락"
+        rule_id = "graph.crypto.market." + horizon + "." + direction + "." + level + ".v1"
+        rules.append(GraphInferenceRule(
+            rule_id=rule_id,
+            label="BTC/ETH " + horizon + " 원시 " + relationship_label + " 경로 -> 크립토 변동 재확인",
+            version="v1",
+            source_kind="crypto-asset",
+            action_group="macroRegime",
+            action_level="review",
+            prompt_hint="BTC/ETH 원시 변화율은 ABox에 유지하고, 상승·하락·강도 구간의 관계 판단과 알림 강도는 TypeDB RuleBox에서만 결정합니다.",
+            conditions=[
+                GraphRuleCondition(
+                    "crypto-" + horizon + "-" + direction + "-" + level,
+                    "relation",
+                    "BTC 또는 ETH " + horizon + " 변화율이 RuleBox " + relationship_label + " 기준을 충족합니다.",
+                    relation_type="HAS_PRICE_PATH",
+                    target_kind="price-path",
+                    target_property_filters={field: {"operator": operator, "value": signed_threshold}},
+                ),
+            ],
+            derivations=[
+                GraphRuleDerivation(
+                    relation_type="HAS_INFERRED_SUPPORT" if direction == "up" else "HAS_INFERRED_RISK",
+                    target_kind="crypto-market-assessment",
+                    target_key="{symbol}:crypto-market:" + horizon + ":" + direction + ":" + level + ":" + threshold_key,
+                    target_label="{displayName} 크립토 " + horizon + " " + relationship_label + " 변동 재확인",
+                    tbox_class="CryptoMarketSignal",
+                    tbox_classes=["CryptoMarketSignal", "CryptoSignal", "MacroSignal"],
+                    polarity=polarity,
+                    evidence_role=polarity,
+                    decision_effect="support" if direction == "up" else "constrain",
+                    belief_label="BTC/ETH " + horizon + " 원시 변화율이 " + ("+" if signed_threshold > 0 else "") + str(int(signed_threshold)) + "% RuleBox 기준을 충족했습니다.",
+                    ai_influence_label="크립토 " + horizon + " " + relationship_label + " 변동 재확인",
+                    action_group="macroRegime",
+                    action_level="review",
+                    decision_stage="MACRO_REGIME",
+                    target_role=WATCHLIST_TARGET_ROLE,
+                    action_policy=WATCHLIST_ACTION_POLICY,
+                    allowed_actions=WATCHLIST_ALLOWED_ACTIONS,
+                    blocked_actions=WATCHLIST_BLOCKED_ACTIONS,
+                    candidate_action="HOLD",
+                    notification_category="relationshipChange",
+                    notification_severity=severity,
+                    next_checks=["BTC/ETH 가격 경로가 다음 수집에서도 유지되는지와 민감 종목의 실제 가격 반응을 함께 확인"],
+                ),
+            ],
+        ))
+    return rules
+
 def default_graph_inference_rules() -> List[GraphInferenceRule]:
     rules = [
         GraphInferenceRule(
@@ -5558,6 +5633,7 @@ def default_graph_inference_rules() -> List[GraphInferenceRule]:
                 ),
             ],
         ),
+        *crypto_market_inference_rules(),
         GraphInferenceRule(
             rule_id="graph.crypto.exposure.volatility_risk.v1",
             label="크립토 민감 종목 + 원시 하락 경로 -> 노출 리스크",

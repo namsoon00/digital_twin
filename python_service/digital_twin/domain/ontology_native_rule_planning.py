@@ -33,7 +33,7 @@ def _topology_fingerprint(payload: Mapping[str, object]) -> str:
 
 
 def native_rule_planner_topology(graph: PortfolioOntology) -> Dict[str, object]:
-    """Return the relation-type index for stock subjects in one ABox graph.
+    """Return the relation-type index for native RuleBox subjects in one ABox graph.
 
     This is deliberately a structural index. The complete rule payload and
     every numeric/text/negative condition remain TypeDB schema-function work.
@@ -41,7 +41,7 @@ def native_rule_planner_topology(graph: PortfolioOntology) -> Dict[str, object]:
     source_ids_by_symbol: Dict[str, Set[str]] = {}
     symbol_by_entity_id: Dict[str, str] = {}
     for entity in list(getattr(graph, "entities", []) or []):
-        if str(getattr(entity, "kind", "") or "") != "stock":
+        if str(getattr(entity, "kind", "") or "") not in {"stock", "crypto-asset"}:
             continue
         properties = dict(getattr(entity, "properties", {}) or {})
         symbol = _clean_symbol(properties.get("symbol"))

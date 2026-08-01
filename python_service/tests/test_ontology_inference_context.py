@@ -656,6 +656,74 @@ class OntologyInferenceContextTests(unittest.TestCase):
         self.assertEqual("typedbInferenceBox", decisions[0].relation_rule_context["decision"]["basis"])
         self.assertTrue(decisions[0].relation_rule_context["graphStoreUsed"])
 
+    def test_typedb_context_resolves_virtual_btc_subject_for_direct_crypto_alerts(self):
+        snapshot = AccountSnapshot(
+            "acct",
+            "계좌",
+            "test",
+            "live",
+            "ok",
+            "2026-08-01T00:00:00Z",
+            portfolio_summary([], fx_rates={"USD": 1400}),
+            external_signals={
+                "cryptoFreshness": {"status": "fresh", "fetchedAt": "2026-08-01T00:00:00Z"},
+                "cryptoMarkets": {
+                    "bitcoin": {"symbol": "BTC", "name": "Bitcoin", "price": 65000, "change24h": -3.2},
+                },
+            },
+            metadata={
+                "ontology": {
+                    "activeGraphStore": "typedb",
+                    "typedb": {
+                        "graphStore": "typedb",
+                        "inferenceBox": {
+                            "status": "ok",
+                            "source": "typedbInferenceBox",
+                            "graphStore": "typedb",
+                            "nativeTypeDbReasoningUsed": True,
+                            "relations": [{
+                                "type": "HAS_INFERRED_RISK",
+                                "source": "crypto-asset:BTC",
+                                "sourceLabel": "Bitcoin",
+                                "target": "crypto-market-assessment:BTC:24h:down:watch",
+                                "targetLabel": "Bitcoin 크립토 24h 하락 변동 재확인",
+                                "ruleId": "graph.crypto.market.24h.down.watch.v1",
+                                "polarity": "risk",
+                                "decisionStage": "MACRO_REGIME",
+                                "decisionEffect": "constrain",
+                                "decisionTone": "caution",
+                                "actionGroup": "macroRegime",
+                                "actionLevel": "review",
+                                "primaryAction": "REGIME_EXPOSURE_REVIEW",
+                                "primaryActionLabel": "거시 레짐과 종목 노출의 연결 점검",
+                                "candidateAction": "HOLD",
+                                "targetRole": "watchlist",
+                                "actionPolicy": "ENTRY_ONLY",
+                                "allowedActions": ["BUY", "HOLD", "AVOID"],
+                                "blockedActions": ["ADD", "TRIM", "SELL"],
+                                "notificationCategory": "relationshipChange",
+                                "notificationSeverity": "WATCH",
+                                "nativeTypeDbReasoned": True,
+                            }],
+                            "traces": [{
+                                "id": "inference-trace:BTC:crypto-down",
+                                "symbol": "BTC",
+                                "ruleId": "graph.crypto.market.24h.down.watch.v1",
+                                "nativeTypeDbReasoned": True,
+                            }],
+                        },
+                    },
+                },
+            },
+        )
+
+        contexts = relation_contexts_from_snapshot(snapshot, include_crypto_market_subjects=True)
+
+        self.assertIn("BTC", contexts)
+        self.assertEqual("graph.crypto.market.24h.down.watch.v1", contexts["BTC"]["decision"]["selectedRuleId"])
+        self.assertEqual("WATCH", contexts["BTC"]["executionPlan"]["notificationSeverity"])
+        self.assertEqual("crypto-asset:BTC", contexts["BTC"]["evidenceSubgraph"]["target"]["id"])
+
     def test_missing_typedb_decision_stage_blocks_python_policy_fallback(self):
         relations = [{
             "type": "HAS_INFERRED_RISK",

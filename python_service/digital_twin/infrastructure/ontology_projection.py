@@ -11,6 +11,7 @@ import time
 from ..application.investment_outcome_observation_service import InvestmentOutcomeObservationService
 from ..domain.ontology_contracts import PortfolioOntology
 from ..domain.decision_performance import evaluate_decision_performance
+from ..domain.crypto_market_signals import crypto_markets_by_symbol
 from ..domain.ontology_rulebox_catalog import default_graph_inference_rules
 from ..domain.ontology_rulebox_governance import rulebox_rules_hash
 from ..domain.ontology_change_impact import (
@@ -80,6 +81,17 @@ from .runtime_identity import runtime_identity
 
 DEPRECATED_TYPEDB_RULE_IDS = {"shadow.market_psychology.state.v1"}
 
+CRYPTO_MARKET_RULE_IDS = {
+    "graph.crypto.market.24h.up.watch.v1",
+    "graph.crypto.market.24h.down.watch.v1",
+    "graph.crypto.market.7d.up.watch.v1",
+    "graph.crypto.market.7d.down.watch.v1",
+    "graph.crypto.market.24h.up.major.v1",
+    "graph.crypto.market.24h.down.major.v1",
+    "graph.crypto.market.7d.up.major.v1",
+    "graph.crypto.market.7d.down.major.v1",
+}
+
 # These rules previously consumed Python-classified ABox relations such as
 # ``BREAKS_LEVEL`` or ``HAS_INVESTOR_FLOW_SENTIMENT``. Their current versions
 # consume raw ABox measurements and must replace an incompatible persisted
@@ -110,6 +122,7 @@ RULEBOX_RAW_ABOX_RUNTIME_RULE_IDS = {
     "graph.price.reclaim.thesis_support.v1",
     "graph.macro.regime.risk.v1",
     "graph.crypto.exposure.volatility_risk.v1",
+    *CRYPTO_MARKET_RULE_IDS,
     # Execution rules use normalized execution-metric observations. Existing
     # consolidated capacity-profile definitions must be replaced because their
     # promoted attributes are not part of the deployed base TypeDB schema.
@@ -128,6 +141,8 @@ RULEBOX_RAW_ABOX_RUNTIME_RULE_VERSIONS = {
     for rule_id in RULEBOX_RAW_ABOX_RUNTIME_RULE_IDS
 }
 RULEBOX_RAW_ABOX_RUNTIME_RULE_VERSIONS["graph.execution.capacity_safe.v1"] = "v3"
+for _rule_id in CRYPTO_MARKET_RULE_IDS:
+    RULEBOX_RAW_ABOX_RUNTIME_RULE_VERSIONS[_rule_id] = "v1"
 
 # These native-rule templates were added after RuleBox had already become the
 # persisted source of truth.  A controlled release migration appends only
@@ -139,6 +154,7 @@ RULEBOX_PLATFORM_RELEASE_ADDITION_IDS = {
     "graph.macro.regime.risk.v1",
     "graph.fx.usdkrw.exposure.regime.v1",
     "graph.crypto.exposure.volatility_risk.v1",
+    *CRYPTO_MARKET_RULE_IDS,
     "graph.earnings.surprise.risk.v1",
     "graph.earnings.surprise.support.v1",
     "graph.regulatory.event.risk.v1",
@@ -4769,6 +4785,9 @@ class PortfolioOntologyProjectionRecorder:
             symbol = str(getattr(item, "symbol", "") or "").upper().strip()
             if symbol and symbol not in symbols:
                 symbols.append(symbol)
+        for symbol in crypto_markets_by_symbol(getattr(snapshot, "external_signals", {})):
+            if symbol not in symbols:
+                symbols.append(symbol)
         return symbols
 
     def inference_symbols(self, snapshot: AccountSnapshot, target_symbols: List[str] = None) -> List[str]:
@@ -5131,11 +5150,15 @@ class PortfolioOntologyProjectionRecorder:
     def has_projectable_data(self, snapshot: AccountSnapshot) -> bool:
         if not snapshot.has_live_account_data():
             return False
-        return any(
+        if any(
             item
             for item in list(snapshot.positions or []) + list(snapshot.watchlist or [])
             if not item.is_cash()
-        )
+        ):
+            return True
+        # BTC/ETH market subjects are not account holdings. They remain
+        # projectable when CoinGecko supplies a current source fact.
+        return bool(crypto_markets_by_symbol(snapshot.external_signals))
 
     def typedb_projection_deferred(self) -> bool:
         if self.active_graph_store_key() != "typedb":

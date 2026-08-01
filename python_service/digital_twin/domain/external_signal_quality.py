@@ -144,6 +144,56 @@ def fundamental_event_count(signals: Dict[str, object]) -> int:
     return count
 
 
+def crypto_signal_freshness(
+    signals: Dict[str, object],
+    settings: Dict[str, object] = None,
+    now=None,
+) -> Dict[str, object]:
+    """Evaluate CoinGecko recency independently from the global vendor cache."""
+
+    payload = signals if isinstance(signals, dict) else {}
+    settings = settings or {}
+    markets = payload.get("cryptoMarkets") if isinstance(payload.get("cryptoMarkets"), dict) else {}
+    max_age_minutes = int(number(settings.get("dataFreshnessExternalCryptoMaxAgeMinutes")) or 25)
+    max_age_minutes = max(1, min(24 * 60, max_age_minutes))
+    fetched_at = str(payload.get("cryptoFetchedAt") or "")
+    if not fetched_at:
+        stamps = [
+            str(item.get("fetchedAt") or item.get("lastUpdated") or "")
+            for item in markets.values()
+            if isinstance(item, dict)
+        ]
+        fetched_at = max(stamps) if stamps else ""
+    status = source_status(payload, "CoinGecko")
+    age = age_minutes(fetched_at, now=now) if fetched_at else 0
+    if not markets:
+        freshness_status = "unavailable"
+        reason = "CoinGecko 시장 데이터가 없어 크립토 관계 판단을 보류합니다."
+    elif not fetched_at:
+        freshness_status = "partial"
+        reason = "CoinGecko 응답에 수집 기준 시각이 없어 크립토 신호 강도를 제한합니다."
+    elif age > max_age_minutes:
+        freshness_status = "stale"
+        reason = "CoinGecko 수집 시각이 크립토 신선도 한도를 넘었습니다."
+    elif not bool(status.get("ok")):
+        freshness_status = "partial"
+        reason = "최근 CoinGecko 데이터는 남아 있지만 현재 공급자 요청이 정상 완료되지 않았습니다."
+    else:
+        freshness_status = "fresh"
+        reason = "CoinGecko 수집 시각이 크립토 신선도 기준을 충족합니다."
+    return {
+        "provider": "CoinGecko",
+        "fetchedAt": fetched_at,
+        "ageMinutes": age,
+        "maxAgeMinutes": max_age_minutes,
+        "status": freshness_status,
+        "marketCount": len(markets),
+        "deferred": bool(status.get("deferred")),
+        "messages": list(status.get("messages") or [])[:5],
+        "reason": reason,
+    }
+
+
 def evaluate_external_signal_quality(
     signals: Dict[str, object],
     positions: Iterable[Position] = None,
@@ -179,10 +229,17 @@ def evaluate_external_signal_quality(
             "messages": messages[:5],
         })
     configured_rows = [row for row in source_rows if row["configured"]]
-    healthy_rows = [row for row in configured_rows if row["ok"] and row["itemCount"] > 0]
-    source_health = (len(healthy_rows) / len(configured_rows)) if configured_rows else 1.0
-    error_count = len([row for row in statuses if not row.get("ok")])
-    if configured_rows and not healthy_rows:
+    # CoinGecko has its own collection interval and freshness policy. A
+    # crypto-only outage must not downgrade stock/fundamental evidence or
+    # enqueue every account symbol as a global data-quality change.
+    global_configured_rows = [row for row in configured_rows if row["key"] != "cryptoMarkets"]
+    healthy_rows = [row for row in global_configured_rows if row["ok"] and row["itemCount"] > 0]
+    source_health = (len(healthy_rows) / len(global_configured_rows)) if global_configured_rows else 1.0
+    error_count = len([
+        row for row in statuses
+        if not row.get("ok") and str(row.get("source") or "") != "CoinGecko"
+    ])
+    if global_configured_rows and not healthy_rows:
         data_state = "unavailable"
     elif coverage["ratio"] < 0.5 or source_health < 0.5:
         data_state = "insufficient"
@@ -246,6 +303,7 @@ def attach_external_signal_quality(
         "sourceHealthState": str(quality.get("sourceHealthState") or ""),
         "reason": freshness_reason,
     }
+    payload["cryptoFreshness"] = crypto_signal_freshness(payload, settings=settings, now=now)
     payload["provenance"] = {
         "sources": [row["source"] for row in quality.get("sourceCoverage", []) if row.get("configured")],
         "unavailableSources": [row["source"] for row in quality.get("sourceCoverage", []) if row.get("configured") and not row.get("ok")],

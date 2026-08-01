@@ -70,6 +70,8 @@ def compact_reasoning_request_context(
     queue_pressure = raw_queue_pressure if isinstance(raw_queue_pressure, Mapping) else {}
     raw_batch_plan = values.get("batchPlan")
     batch_plan = raw_batch_plan if isinstance(raw_batch_plan, Mapping) else {}
+    raw_crypto_transitions = values.get("cryptoTransitions")
+    crypto_transitions = raw_crypto_transitions if isinstance(raw_crypto_transitions, (list, tuple)) else []
     observation_followups = {
         str(symbol or "").upper().strip()
         for symbol in (values.get("observationFollowupSymbols") or [])
@@ -84,6 +86,36 @@ def compact_reasoning_request_context(
         except (TypeError, ValueError):
             return 0
 
+    compact_crypto_transitions = []
+    seen_crypto_signatures = set()
+    for item in crypto_transitions:
+        if not isinstance(item, Mapping):
+            continue
+        signature = str(item.get("signature") or "").strip()
+        if not signature or signature in seen_crypto_signatures:
+            continue
+        seen_crypto_signatures.add(signature)
+        compact_crypto_transitions.append({
+            key: item.get(key)
+            for key in [
+                "symbol", "coinId", "name", "horizon", "field", "direction", "severity",
+                "changePct", "thresholdPct", "previousBand", "currentBand", "transition",
+                "observedAt", "signature",
+            ]
+            if item.get(key) not in (None, "", [], {})
+        })
+        if len(compact_crypto_transitions) >= 12:
+            break
+    verified_source_snapshot = values.get("verifiedSourceSnapshot")
+    verified_source_snapshot = verified_source_snapshot if isinstance(verified_source_snapshot, Mapping) else {}
+    compact_verified_source_snapshot = {
+        key: verified_source_snapshot.get(key)
+        for key in [
+            "version", "generatedAt", "accountId", "positionChangedCount", "portfolioContextChanged",
+            "externalSignalGroups", "cryptoTransitionTargetSymbols",
+        ]
+        if verified_source_snapshot.get(key) not in (None, "", [], {})
+    }
     return {
         "version": str(values.get("version") or REASONING_REQUEST_CONTEXT_VERSION),
         "requestEventIds": clean_list(values.get("requestEventIds"), limit=80),
@@ -142,6 +174,10 @@ def compact_reasoning_request_context(
             "runtimeGuard": bool(batch_plan.get("runtimeGuard")),
             "reasonCodes": clean_list(batch_plan.get("reasonCodes"), limit=12),
         },
+        # Bounded scheduling provenance. It controls whether a completed
+        # current-state generation may be delivered, never a RuleBox rule.
+        "cryptoTransitions": compact_crypto_transitions,
+        "verifiedSourceSnapshot": compact_verified_source_snapshot,
     }
 
 

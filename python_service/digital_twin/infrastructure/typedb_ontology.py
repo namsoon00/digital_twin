@@ -393,7 +393,7 @@ def native_rule_evidence_read_index_from_rows(
     node_rows: Iterable[Dict[str, object]],
     relation_rows: Iterable[Dict[str, object]],
 ) -> Dict[str, object]:
-    """Build an exact physical-read index for active stock evidence.
+    """Build an exact physical-read index for active RuleBox source evidence.
 
     Scoped ABox facts are immutable and can be shared by several historical
     Manifests.  The index records the physical storage identities selected by
@@ -408,7 +408,10 @@ def native_rule_evidence_read_index_from_rows(
     for row in node_rows or []:
         if str(row.get("ontologyBox") or "ABox") != "ABox":
             continue
-        if str(row.get("kind") or "") != "stock":
+        # BTC/ETH use the same native RuleBox execution path as stocks but
+        # are materialized as crypto-asset sources. Do not make their direct
+        # market rules fall back to an unbounded TypeDB topology scan.
+        if str(row.get("kind") or "") not in {"stock", "crypto-asset"}:
             continue
         source_id = str(row.get("id") or "").strip()
         symbol = str(row.get("symbol") or "").upper().strip()
@@ -7632,7 +7635,7 @@ class TypeDBOntologyGraphRepository(GraphStoreOntologyRowMapperMixin, ScopedABox
         world_id: str = "",
         active_abox_metadata: Dict[str, object] = None,
     ) -> Dict[str, object]:
-        """Read a compact active-ABox topology index for stock subjects.
+        """Read a compact active-ABox topology index for RuleBox subjects.
 
         Native rule planning only needs each stock's available relation types.
         Loading every endpoint's JSON payload for that purpose made the planner
@@ -7718,9 +7721,16 @@ class TypeDBOntologyGraphRepository(GraphStoreOntologyRowMapperMixin, ScopedABox
             active_snapshot = ""
             query = (
                 "match " + active_scope
-                + "$stock isa ontology-node, has ontology-id $sourceId, has ontology-kind \"stock\", "
+                + "$stock isa ontology-node, has ontology-id $sourceId, has ontology-kind $sourceKind, "
                 "has ontology-box \"ABox\"" + active_snapshot + ", "
                 "has ontology-symbol $symbol; "
+                + typedb_value_match(
+                    "$stock",
+                    "ontology-kind",
+                    ["stock", "crypto-asset"],
+                    "==",
+                    "topologySourceKindFilter",
+                )
                 + "$r isa ontology-assertion, " + links_clause + ", has ontology-id $relationId, "
                 "has ontology-box \"ABox\"" + active_snapshot + ", "
                 "has ontology-relation-type $relationType; "
@@ -19584,7 +19594,7 @@ def typedb_native_rule_required_conditions_preflight(
     symbol: str,
     incoming_relations_complete: bool = True,
 ) -> Dict[str, object]:
-    """Prove only impossible RuleBox clauses for one stock symbol.
+    """Prove only impossible RuleBox clauses for one RuleBox source symbol.
 
     This is a negative planner, not a second decision engine. Besides a
     failed required condition, it can reject an N-of-M group only when the
@@ -19593,13 +19603,18 @@ def typedb_native_rule_required_conditions_preflight(
     the rule to TypeDB.
     """
     clean_symbol = str(symbol or "").upper().strip()
+    source_kind = str(
+        getattr(rule, "source_kind", "")
+        or (rule.get("source_kind") or rule.get("sourceKind") if isinstance(rule, dict) else "")
+        or "stock"
+    )
     candidates = [
         item for item in graph.entities
-        if str(item.kind or "") == "stock"
+        if str(item.kind or "") == source_kind
         and str((item.properties or {}).get("symbol") or "").upper().strip() == clean_symbol
     ]
     if len(candidates) != 1:
-        return {"status": "unknown", "reason": "ABox preflight has no unambiguous stock subject.", "failedConditionIds": []}
+        return {"status": "unknown", "reason": "ABox preflight has no unambiguous RuleBox source subject.", "failedConditionIds": []}
     subject = candidates[0]
     properties = typedb_preflight_properties(subject.properties or {})
     properties.setdefault("symbol", clean_symbol)
@@ -22236,7 +22251,7 @@ def ontology_storage_id(row: Dict[str, object], canonical_id: object, owner_kind
 
 def symbol_from_subject(value: object) -> str:
     raw = str(value or "")
-    if raw.startswith("stock:"):
+    if raw.startswith(("stock:", "crypto-asset:")):
         return raw.split(":", 1)[1].upper()
     return ""
 

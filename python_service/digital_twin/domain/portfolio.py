@@ -211,11 +211,18 @@ class AccountSnapshot:
             for symbol in target_symbols or []
             if str(symbol or "").strip()
         }
-        available = {
+        position_symbols = {
             item.key()
             for item in reference_positions
             if item.key()
         }
+        crypto_markets = self.external_signals.get("cryptoMarkets") if isinstance(self.external_signals, dict) else {}
+        crypto_symbols = {
+            str(item.get("symbol") or "").upper().strip()
+            for item in crypto_markets.values()
+            if isinstance(item, dict) and str(item.get("symbol") or "").strip().upper() in {"BTC", "ETH"}
+        } if isinstance(crypto_markets, dict) else set()
+        available = position_symbols | crypto_symbols
         if not requested:
             return {
                 "mode": "full",
@@ -227,6 +234,7 @@ class AccountSnapshot:
             }
         selected = [item for item in reference_positions if item.key() in requested]
         selected_symbols = {item.key() for item in selected if item.key()}
+        selected_symbols.update(requested & crypto_symbols)
         if not selected_symbols:
             return {
                 "mode": "empty",

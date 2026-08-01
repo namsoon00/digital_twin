@@ -127,8 +127,18 @@ class OntologyRuleBoxTests(unittest.TestCase):
             "graph.market_proxy.relative_underperformance.risk.v1",
             "graph.market_proxy.relative_resilience.support.v1",
         }
+        crypto_market_rule_ids = {
+            "graph.crypto.market.24h.up.watch.v1",
+            "graph.crypto.market.24h.down.watch.v1",
+            "graph.crypto.market.7d.up.watch.v1",
+            "graph.crypto.market.7d.down.watch.v1",
+            "graph.crypto.market.24h.up.major.v1",
+            "graph.crypto.market.24h.down.major.v1",
+            "graph.crypto.market.7d.up.major.v1",
+            "graph.crypto.market.7d.down.major.v1",
+        }
 
-        for rule_id in expected_rule_ids:
+        for rule_id in expected_rule_ids | crypto_market_rule_ids:
             profile = typedb_native_rule_profile(rules_by_id[rule_id].to_dict())
             self.assertEqual("ready", profile["status"], rule_id)
             self.assertEqual([], profile["blockers"], rule_id)
@@ -150,6 +160,13 @@ class OntologyRuleBoxTests(unittest.TestCase):
         self.assertIn("ontology-fx-pair", fx_query)
         self.assertIn("ontology-value-number", fx_query)
         self.assertIn("ontology-surprise-percentage", earnings_query)
+
+        direct_crypto_query = typedb_native_match_query(
+            rules_by_id["graph.crypto.market.24h.down.watch.v1"].to_dict(),
+            target_symbols=["BTC"],
+        )["query"]
+        self.assertIn('has ontology-kind "crypto-asset"', direct_crypto_query)
+        self.assertIn("ontology-change-24h", direct_crypto_query)
 
     def test_rulebox_derivation_keeps_its_evidence_role_over_template_default(self):
         payload = derivation_payload_from_row({

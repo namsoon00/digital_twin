@@ -40,6 +40,7 @@ EXPECTED_BASE_ICONS = {
     "monitorDecisionChange": "🔁",
     "externalEquityMove": "🇺🇸",
     "externalCryptoMove": "🪙",
+    "cryptoOntologySignal": "🪙",
     "externalMacroShift": "🏦",
     "externalDartDisclosure": "📄",
     "externalDataConnection": "🛰️",

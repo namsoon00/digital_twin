@@ -2802,6 +2802,51 @@ class TypeDBOntologyRepositoryTests(unittest.TestCase):
         invalid["sourceStorageIdsBySourceId"] = {"stock:005930": "ontology-storage:wrong"}
         self.assertEqual("invalid", normalize_native_rule_evidence_read_index(invalid, topology)["status"])
 
+    def test_native_evidence_index_supports_direct_crypto_asset_rule_sources(self):
+        repository = TypeDBOntologyGraphRepository("127.0.0.1:1729")
+        graph = PortfolioOntology("crypto-evidence-index")
+        graph.entities.extend([
+            OntologyEntity("crypto-asset:BTC", "Bitcoin", "crypto-asset", {
+                "ontologyBox": "ABox",
+                "symbol": "BTC",
+                "snapshotId": "abox-scope:crypto",
+            }),
+            OntologyEntity("price-path:BTC:crypto", "Bitcoin price path", "price-path", {
+                "ontologyBox": "ABox",
+                "symbol": "BTC",
+                "change24h": -3.2,
+                "snapshotId": "abox-scope:crypto",
+            }),
+        ])
+        graph.relations.append(OntologyRelation(
+            "crypto-asset:BTC",
+            "price-path:BTC:crypto",
+            "HAS_PRICE_PATH",
+            properties={"ontologyBox": "ABox", "symbol": "BTC", "snapshotId": "abox-scope:crypto"},
+        ))
+        topology = native_rule_planner_topology(graph)
+        node_rows, relation_rows = repository.graph_persistence_rows(graph)
+        evidence_index = native_rule_evidence_read_index_from_rows(node_rows, relation_rows)
+        execution_index = typedb_native_rule_evidence_read_index_for_execution({
+            "nativeRulePlannerTopology": topology,
+            "nativeRuleEvidenceReadIndex": evidence_index,
+        }, ["BTC"])
+        rule = next(
+            item for item in default_graph_inference_rules()
+            if item.rule_id == "graph.crypto.market.24h.down.watch.v1"
+        )
+        query_plan = typedb_native_indexed_evidence_match_query(
+            rule.to_dict(),
+            ["BTC"],
+            execution_index,
+            "portfolio:local:default",
+        )
+
+        self.assertEqual("verified", execution_index["status"])
+        self.assertEqual(["crypto-asset:BTC"], execution_index["index"]["sourceIdsBySymbol"]["BTC"])
+        self.assertEqual("ok", query_plan["status"])
+        self.assertIn('has ontology-kind "crypto-asset"', query_plan["query"])
+
     def test_native_evidence_storage_readers_avoid_active_scope_pointer_joins(self):
         class CapturingRepository(TypeDBOntologyGraphRepository):
             def __init__(self):
@@ -5503,6 +5548,14 @@ class TypeDBOntologyRepositoryTests(unittest.TestCase):
                 "graph.macro.regime.risk.v1",
                 "graph.fx.usdkrw.exposure.regime.v1",
                 "graph.crypto.exposure.volatility_risk.v1",
+                "graph.crypto.market.24h.up.watch.v1",
+                "graph.crypto.market.24h.down.watch.v1",
+                "graph.crypto.market.7d.up.watch.v1",
+                "graph.crypto.market.7d.down.watch.v1",
+                "graph.crypto.market.24h.up.major.v1",
+                "graph.crypto.market.24h.down.major.v1",
+                "graph.crypto.market.7d.up.major.v1",
+                "graph.crypto.market.7d.down.major.v1",
                 "graph.earnings.surprise.risk.v1",
                 "graph.earnings.surprise.support.v1",
                 "graph.regulatory.event.risk.v1",

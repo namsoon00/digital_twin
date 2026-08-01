@@ -81,7 +81,8 @@ def external_observation_profile(
     domain: str = "external",
     max_age_minutes: int = 180,
 ) -> Dict[str, object]:
-    freshness = external_signals.get("freshness") if isinstance(external_signals.get("freshness"), dict) else {}
+    freshness_key = "cryptoFreshness" if str(domain or "").lower() == "crypto" else "freshness"
+    freshness = external_signals.get(freshness_key) if isinstance(external_signals.get(freshness_key), dict) else {}
     item = value if isinstance(value, dict) else {}
     nested_candidates = []
     for nested_key in ["latestFiling", "facts", "freshness"]:
@@ -100,6 +101,7 @@ def external_observation_profile(
         or next((candidate for candidate in nested_candidates if candidate not in (None, "")), "")
         or freshness.get("sourceAsOf")
         or freshness.get("fetchedAt")
+        or (external_signals.get("cryptoFetchedAt") if str(domain or "").lower() == "crypto" else "")
         or external_signals.get("fetchedAt")
         or ""
     )
@@ -107,6 +109,7 @@ def external_observation_profile(
         item.get("sourceFetchedAt")
         or item.get("fetchedAt")
         or freshness.get("fetchedAt")
+        or (external_signals.get("cryptoFetchedAt") if str(domain or "").lower() == "crypto" else "")
         or external_signals.get("fetchedAt")
         or ""
     )
@@ -420,7 +423,7 @@ def add_external_signal_concepts(
     add_external_signal_quality_concepts(graph, portfolio_node_id, external_signals)
     add_portfolio_macro_and_cross_asset_concepts(graph, portfolio_node_id, external_signals, runtime_context)
     for key, value in sorted(external_signals.items()):
-        if key in {"quality", "freshness", "provenance"} or is_volatile_lifecycle_key(key):
+        if key in {"quality", "freshness", "cryptoFreshness", "cryptoFetchedAt", "cryptoLastAttemptAt", "provenance"} or is_volatile_lifecycle_key(key):
             continue
         # Global source nodes express availability and freshness only. Their
         # raw payload is already represented by symbol-specific evidence and
@@ -546,12 +549,19 @@ def add_portfolio_macro_and_cross_asset_concepts(
         change7d = number(item.get("change7d"))
         price = number(item.get("price"))
         volume24h = number(item.get("volume24h"))
+        crypto_profile = external_observation_profile(external_signals, item, "crypto", 25)
+        crypto_data_state = data_state_from_evidence(
+            usable=str(crypto_profile.get("freshnessStatus") or "").lower() == "fresh",
+            freshness_status=crypto_profile.get("freshnessStatus"),
+            has_evidence=True,
+        )
         asset_id = add_entity(graph, "crypto-asset", symbol or str(coin_id), name, {
             "tboxClass": "CryptoAsset",
             "tboxClasses": ["Instrument", "CryptoAsset"],
             "symbol": symbol,
             "coinId": str(coin_id),
             "provider": str(item.get("provider") or "CoinGecko"),
+            **crypto_profile,
         })
         crypto_id = add_entity(graph, "crypto-market-signal", str(coin_id), str(item.get("name") or coin_id), {
             "tboxClass": "CryptoMarketSignal",
@@ -564,12 +574,16 @@ def add_portfolio_macro_and_cross_asset_concepts(
             "volume24h": round(volume24h, 2),
             "marketCap": round(number(item.get("marketCap")), 2),
             "lastUpdated": str(item.get("lastUpdated") or ""),
+            **crypto_profile,
         })
         props = external_evidence_properties(
             source="cryptoMarkets",
             label=name + " 변동성",
             symbol=symbol,
             dataScope="crypto",
+            data_state=crypto_data_state,
+            freshnessStatus=str(crypto_profile.get("freshnessStatus") or ""),
+            sourceFetchedAt=str(crypto_profile.get("sourceFetchedAt") or ""),
         )
         price_id = add_entity(graph, "price-bar", symbol + ":crypto:latest", name + " 현재 가격", {
             "tboxClass": "PriceBar",
@@ -581,6 +595,7 @@ def add_portfolio_macro_and_cross_asset_concepts(
             "volume": round(volume24h, 2),
             "observedAt": str(item.get("lastUpdated") or ""),
             "provider": str(item.get("provider") or "CoinGecko"),
+            **crypto_profile,
         })
         path_id = add_entity(graph, "price-path", symbol + ":crypto:1h-24h-7d", name + " 가격 경로", {
             "tboxClass": "PricePath",
@@ -591,6 +606,7 @@ def add_portfolio_macro_and_cross_asset_concepts(
             "change24h": round(change24h, 2),
             "change7d": round(change7d, 2),
             "provider": str(item.get("provider") or "CoinGecko"),
+            **crypto_profile,
         })
         volume_id = add_entity(graph, "volume-profile", symbol + ":crypto", name + " 거래량 프로파일", {
             "tboxClass": "VolumeProfile",
@@ -601,6 +617,7 @@ def add_portfolio_macro_and_cross_asset_concepts(
             "marketCap": round(number(item.get("marketCap")), 2),
             "turnoverPct": round((volume24h / number(item.get("marketCap"))) * 100, 3) if volume24h and number(item.get("marketCap")) else 0.0,
             "provider": str(item.get("provider") or "CoinGecko"),
+            **crypto_profile,
         })
         liquidity_id = add_entity(graph, "liquidity-profile", symbol + ":crypto", name + " 크립토 유동성", {
             "tboxClass": "LiquidityProfile",
@@ -610,6 +627,7 @@ def add_portfolio_macro_and_cross_asset_concepts(
             "volume24h": round(volume24h, 2),
             "marketCap": round(number(item.get("marketCap")), 2),
             "provider": str(item.get("provider") or "CoinGecko"),
+            **crypto_profile,
         })
         quality_id = add_entity(graph, "data-quality", symbol + ":crypto", name + " 크립토 데이터 품질", {
             "tboxClass": "DataQuality",
@@ -621,6 +639,7 @@ def add_portfolio_macro_and_cross_asset_concepts(
             "hasChange24h": item.get("change24h") not in (None, ""),
             "lastUpdated": str(item.get("lastUpdated") or ""),
             "dataScope": "crypto",
+            **crypto_profile,
         })
         add_relation(graph, portfolio_node_id, crypto_id, "HAS_EXTERNAL_SIGNAL", weight=1.0, properties=props)
         add_relation(graph, portfolio_node_id, asset_id, "HAS_CRYPTO_EXPOSURE", weight=0.72, properties=props)
@@ -752,6 +771,12 @@ def add_position_crypto_exposure_concepts(
             continue
         change24h = number(item.get("change24h"))
         change7d = number(item.get("change7d"))
+        crypto_profile = external_observation_profile(external_signals, item, "crypto", 25)
+        crypto_data_state = data_state_from_evidence(
+            usable=str(crypto_profile.get("freshnessStatus") or "").lower() == "fresh",
+            freshness_status=crypto_profile.get("freshnessStatus"),
+            has_evidence=True,
+        )
         exposure_id = add_entity(graph, "crypto-exposure", symbol + ":" + coin_symbol, (position.name or symbol) + " " + coin_symbol + " 노출", {
             "tboxClass": "CryptoExposure",
             "tboxClasses": ["Observation", "CryptoExposure"],
@@ -761,6 +786,7 @@ def add_position_crypto_exposure_concepts(
             "change24h": round(change24h, 2),
             "change7d": round(change7d, 2),
             "exposureBasis": "business-model-or-sector",
+            **crypto_profile,
         })
         props = external_evidence_properties(
             source="cryptoMarkets",
@@ -769,6 +795,9 @@ def add_position_crypto_exposure_concepts(
             cryptoSymbol=coin_symbol,
             dataScope="crypto",
             positionWeightPct=holding_weight_pct,
+            data_state=crypto_data_state,
+            freshnessStatus=str(crypto_profile.get("freshnessStatus") or ""),
+            sourceFetchedAt=str(crypto_profile.get("sourceFetchedAt") or ""),
         )
         add_relation(graph, stock_id, exposure_id, "HAS_CRYPTO_EXPOSURE", weight=1.0, properties=props)
         add_relation(graph, exposure_id, entity_id("crypto-asset", coin_symbol), "AFFECTS", weight=1.0, properties=props)

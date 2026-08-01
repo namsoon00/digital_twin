@@ -248,6 +248,50 @@ class VerifiedSnapshotReasoningTests(unittest.TestCase):
         self.assertIn("DataQuality", event.payload["factTypes"])
         self.assertIn("external.freshness", event.payload["changedFieldsBySymbol"]["AAPL"])
 
+    def test_crypto_transition_targets_direct_assets_and_sensitive_positions_only(self):
+        previous = snapshot(external_signals={
+            "cryptoFreshness": {"status": "fresh", "fetchedAt": "2026-07-29T00:00:00Z"},
+            "cryptoMarkets": {
+                "bitcoin": {"symbol": "BTC", "change24h": -1.0, "change7d": 0.0},
+            },
+        })
+        current = snapshot(external_signals={
+            "cryptoFreshness": {"status": "fresh", "fetchedAt": "2026-07-29T00:10:00Z"},
+            "cryptoMarkets": {
+                "bitcoin": {"symbol": "BTC", "change24h": -3.2, "change7d": 0.0},
+            },
+        })
+        for item in (previous, current):
+            item.positions.append(Position(
+                symbol="MSTR",
+                name="Strategy",
+                market="US",
+                currency="USD",
+                quantity=1.0,
+                current_price=100.0,
+                source="holding",
+            ))
+
+        event = verified_monitor_snapshot_reasoning_event(current, previous.to_monitor_state())
+
+        self.assertEqual(["BTC", "MSTR"], event.payload["symbols"])
+        self.assertNotIn("AAPL", event.payload["symbols"])
+        self.assertNotIn("MSFT", event.payload["symbols"])
+        self.assertEqual(["BTC", "MSTR"], event.payload["verifiedSourceSnapshot"]["cryptoTransitionTargetSymbols"])
+        self.assertEqual("down", event.payload["verifiedSourceSnapshot"]["cryptoTransitions"][0]["direction"])
+
+    def test_steady_crypto_band_does_not_enqueue_another_reasoning_request(self):
+        previous = snapshot(external_signals={
+            "cryptoFreshness": {"status": "fresh", "fetchedAt": "2026-07-29T00:00:00Z"},
+            "cryptoMarkets": {"bitcoin": {"symbol": "BTC", "change24h": 3.2}},
+        })
+        current = snapshot(external_signals={
+            "cryptoFreshness": {"status": "fresh", "fetchedAt": "2026-07-29T00:10:00Z"},
+            "cryptoMarkets": {"bitcoin": {"symbol": "BTC", "change24h": 4.8}},
+        })
+
+        self.assertIsNone(verified_monitor_snapshot_reasoning_event(current, previous.to_monitor_state()))
+
     def test_snapshot_barrier_reuses_the_latest_realtime_slot_from_raw_kis_ticks(self):
         current = snapshot()
         barrier = verified_monitor_snapshot_reasoning_event(current)

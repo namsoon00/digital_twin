@@ -188,9 +188,23 @@ def _liquidity_facts(position: Position) -> Dict[str, object]:
     }
 
 
-def _external_quality_facts(external_signals: Dict[str, object]) -> Dict[str, object]:
+def _external_quality_facts(external_signals: Dict[str, object], symbol: str = "") -> Dict[str, object]:
     quality = external_signals.get("quality") if isinstance(external_signals.get("quality"), dict) else {}
     freshness = external_signals.get("freshness") if isinstance(external_signals.get("freshness"), dict) else {}
+    crypto_freshness = external_signals.get("cryptoFreshness") if isinstance(external_signals.get("cryptoFreshness"), dict) else {}
+    if str(symbol or "").upper().strip() in {"BTC", "ETH"} and crypto_freshness:
+        crypto_status = str(crypto_freshness.get("status") or "").strip().lower()
+        crypto_data_state = (
+            "sufficient" if crypto_status == "fresh"
+            else "partial" if crypto_status in {"partial", "stale", "unknown", ""}
+            else "unavailable"
+        )
+        return {
+            "externalSignalDataState": crypto_data_state,
+            "externalSignalAgeMinutes": number(crypto_freshness.get("ageMinutes")),
+            "externalSignalFreshnessStatus": crypto_status,
+            "externalSignalErrorCount": 0 if crypto_status == "fresh" else 1,
+        }
     statuses = external_signals.get("statuses") if isinstance(external_signals.get("statuses"), list) else []
     error_count = len([item for item in statuses if isinstance(item, dict) and not item.get("ok")])
     freshness_status = str(freshness.get("status") or "").strip().lower()
@@ -1007,7 +1021,7 @@ def position_signal_facts(
     facts.update(_investment_strategy_facts(external_signals, account_context, settings))
     facts.update(_temporal_facts(position, previous_state, previous_decision))
     facts.update(_liquidity_facts(position))
-    facts.update(_external_quality_facts(external_signals))
+    facts.update(_external_quality_facts(external_signals, symbol))
     facts.update(macro_context_facts(position, portfolio, external_signals))
     facts.update(_valuation_facts(position, external_signals, settings))
     missing: List[Dict[str, str]] = []

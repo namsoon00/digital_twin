@@ -3,6 +3,7 @@ from typing import Dict, Iterable, List, Tuple
 
 from .data_freshness import aggregate_freshness
 from .message_types import (
+    CRYPTO_ONTOLOGY_SIGNAL,
     EXTERNAL_CRYPTO_MOVE,
     EXTERNAL_DATA_CONNECTION,
     HOLDING_TIMING,
@@ -44,6 +45,7 @@ SYSTEM_ALERT_TYPES = {
 
 INVESTMENT_SIGNAL_TYPES = {
     WATCHLIST_ONTOLOGY_SIGNAL,
+    CRYPTO_ONTOLOGY_SIGNAL,
     HOLDING_TIMING,
     ONTOLOGY_OBSERVATION_FOLLOWUP,
 }
@@ -259,6 +261,8 @@ def infer_insight_type(events: List[AlertEvent]) -> str:
     severities = {str(event.severity or "").upper() for event in events}
     if ONTOLOGY_OBSERVATION_FOLLOWUP in source_types:
         return "relationshipReview"
+    if CRYPTO_ONTOLOGY_SIGNAL in source_types:
+        return "externalRegimeShift"
     if WATCHLIST_ONTOLOGY_SIGNAL in source_types:
         signal_types = {
             str((event.metadata or {}).get("watchlistOntologySignalType") or "")

@@ -797,6 +797,7 @@ def settings_status_payload() -> Dict[str, object]:
         "externalYFinanceAnalystMaxAgeMinutes",
         "externalYFinanceFundamentalMaxAgeMinutes",
         "externalCoinGeckoEnabled",
+        "externalCoinGeckoFetchIntervalMinutes",
         "externalFredEnabled",
         "externalFredSeries",
         "externalFredTimeoutSeconds",

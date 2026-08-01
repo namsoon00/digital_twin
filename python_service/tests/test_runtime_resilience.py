@@ -1,7 +1,7 @@
 import json
 import sys
 import unittest
-from datetime import datetime, timezone
+from datetime import datetime, timedelta, timezone
 from html import escape
 from pathlib import Path
 from unittest.mock import patch
@@ -9,7 +9,7 @@ from urllib.error import URLError
 
 sys.path.insert(0, str(Path(__file__).resolve().parents[1]))
 
-from digital_twin.domain.external_signal_quality import attach_external_signal_quality, evaluate_external_signal_quality
+from digital_twin.domain.external_signal_quality import attach_external_signal_quality, crypto_signal_freshness, evaluate_external_signal_quality
 from digital_twin.domain.events import MARKET_DATA_COLLECTED, ONTOLOGY_REASONING_REQUESTED
 from digital_twin.domain.ontology_external_abox import external_quality_data_state
 from digital_twin.domain.ontology_relation_facts import _external_quality_facts
@@ -19,6 +19,7 @@ from digital_twin.infrastructure.external_signal_utils import ExternalApiGuard, 
 from digital_twin.infrastructure.external_signals import ExternalSignalProvider
 from digital_twin.infrastructure.news_sources import NewsSourceGateway, default_text_fetcher, provider_empty_status
 from digital_twin.infrastructure.admin_preview import configured_runtime_flags, public_runtime_settings
+from digital_twin.infrastructure.settings import TEXT_SETTING_KEYS
 from digital_twin.infrastructure.event_bus import EventBus
 
 
@@ -52,6 +53,9 @@ class RuntimeResilienceTests(unittest.TestCase):
         self.assertNotIn("externalSecUserAgent", public)
         self.assertTrue(configured["externalSecContactEmail"])
         self.assertTrue(configured["externalSecUserAgent"])
+
+    def test_coingecko_collection_interval_is_a_persistable_runtime_setting(self):
+        self.assertIn("externalCoinGeckoFetchIntervalMinutes", TEXT_SETTING_KEYS)
 
     def test_cache_only_reasoning_path_reuses_stale_external_signals_without_fetching(self):
         class MemoryCache:
@@ -117,6 +121,105 @@ class RuntimeResilienceTests(unittest.TestCase):
         self.assertTrue(status["cacheOnly"])
         self.assertTrue(status["deferred"])
         self.assertFalse(status["dataUsable"])
+
+    def test_cached_external_snapshot_refreshes_only_coingecko_when_due(self):
+        class MemoryCache:
+            def __init__(self):
+                self.payload = {}
+
+            def load(self):
+                return self.payload
+
+            def replace(self, payload):
+                self.payload = payload
+
+        class EvidenceStore:
+            def latest(self, **_kwargs):
+                return []
+
+        now = datetime.now(timezone.utc)
+        now_text = now.isoformat().replace("+00:00", "Z")
+        stale_crypto_text = (now.replace(second=0, microsecond=0) - timedelta(minutes=11)).isoformat().replace("+00:00", "Z")
+        cache = MemoryCache()
+        position = Position(symbol="AAPL", name="Apple", market="US", currency="USD")
+        provider = ExternalSignalProvider(
+            settings={
+                "externalApiFetchIntervalMinutes": "30",
+                "externalSignalCacheMaxAgeMinutes": "30",
+                "externalCoinGeckoEnabled": "1",
+                "externalCoinGeckoFetchIntervalMinutes": "10",
+                "externalAlphaEnabled": "0",
+                "externalFredEnabled": "0",
+                "externalDartEnabled": "0",
+                "externalSecEnabled": "0",
+                "externalNewsEnabled": "0",
+                "externalFxRateEnabled": "0",
+                "externalYFinanceEnabled": "0",
+                "externalApiRateLimitSeconds": "0",
+                "externalApiRetryAttempts": "1",
+            },
+            cache=cache,
+            evidence_store=EvidenceStore(),
+            fetch_json=lambda *_args, **_kwargs: [{
+                "id": "bitcoin",
+                "symbol": "btc",
+                "name": "Bitcoin",
+                "current_price": 65000,
+                "price_change_percentage_24h": -3.2,
+                "price_change_percentage_7d_in_currency": -4.5,
+                "last_updated": now_text,
+            }],
+            sleep=lambda _seconds: None,
+        )
+        cache_key = provider.cache_key_for_positions([position])
+        cached_signals = {
+            "fetchedAt": now_text,
+            "cryptoFetchedAt": stale_crypto_text,
+            "cryptoLastAttemptAt": stale_crypto_text,
+            "equityQuotes": {},
+            "cryptoMarkets": {"bitcoin": {"symbol": "BTC", "price": 60000, "fetchedAt": stale_crypto_text}},
+            "macro": {},
+            "fxRates": {},
+            "secFilings": {},
+            "dartDisclosures": {},
+            "newsHeadlines": {},
+            "companyOverviews": {},
+            "earningsReports": {},
+            "yfinanceData": {},
+            "researchEvidence": {},
+            "statuses": [{"source": "CoinGecko", "ok": False, "message": "old failure"}],
+        }
+        cache.replace(provider.next_cache_payload({}, cache_key, cached_signals, cache_scope="account-snapshot", subject_count=1))
+
+        refreshed = provider.signals_for_positions([position], cache_scope="account-snapshot")
+        stored = cache.load()["entries"][cache_key]["signals"]
+
+        self.assertEqual(now_text, refreshed["fetchedAt"])
+        self.assertEqual(65000, refreshed["cryptoMarkets"]["bitcoin"]["price"])
+        self.assertEqual("fresh", refreshed["cryptoFreshness"]["status"])
+        self.assertTrue(stored["cryptoFetchedAt"])
+        self.assertFalse(any(not item.get("ok") for item in stored["statuses"] if item.get("source") == "CoinGecko"))
+
+    def test_crypto_freshness_uses_its_own_twenty_five_minute_budget(self):
+        signals = {
+            "cryptoFetchedAt": "2026-08-01T00:00:00Z",
+            "cryptoMarkets": {"bitcoin": {"symbol": "BTC", "price": 65000}},
+            "statuses": [],
+        }
+
+        fresh = crypto_signal_freshness(
+            signals,
+            settings={"dataFreshnessExternalCryptoMaxAgeMinutes": "25"},
+            now=datetime(2026, 8, 1, 0, 24, tzinfo=timezone.utc),
+        )
+        stale = crypto_signal_freshness(
+            signals,
+            settings={"dataFreshnessExternalCryptoMaxAgeMinutes": "25"},
+            now=datetime(2026, 8, 1, 0, 26, tzinfo=timezone.utc),
+        )
+
+        self.assertEqual("fresh", fresh["status"])
+        self.assertEqual("stale", stale["status"])
 
     def test_account_snapshot_cache_survives_per_symbol_cache_eviction(self):
         provider = ExternalSignalProvider(settings={"externalSignalCacheMaxEntries": "3"})

@@ -6,6 +6,7 @@ from typing import Callable, Dict, Iterable, List
 from ..domain.accounts import AccountConfig
 from ..domain.events import alerts_detected_event, monitoring_cycle_completed_event, snapshot_collected_event
 from ..domain.ontology_projection_input import compact_monitor_state_for_ontology
+from ..domain.ontology_projection_status import VERIFIED_MONITOR_SNAPSHOT_QUEUED
 from ..domain.portfolio import AccountSnapshot, AlertEvent
 from ..domain.repositories import MonitorAccountJob, MonitorAccountJobRepository, MonitorStateRepository, MonitoringCycleRecorder, OntologyProjectionRecorder, SnapshotMonitor
 
@@ -339,7 +340,7 @@ class MonitorRunner:
         else:
             projection = {
                 "saved": False,
-                "status": "queued-verified-monitor-snapshot",
+                "status": VERIFIED_MONITOR_SNAPSHOT_QUEUED,
                 "reason": "확정 모니터 스냅샷을 저장한 뒤 전용 온톨로지 추론 워커가 TypeDB 세대를 처리합니다.",
                 "eventuallyConsistent": True,
             }

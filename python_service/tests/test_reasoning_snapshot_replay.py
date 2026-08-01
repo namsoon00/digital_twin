@@ -4,6 +4,7 @@ from datetime import datetime, timezone
 from digital_twin.application.monitoring_service import MonitorRunner
 from digital_twin.domain.accounts import AccountConfig
 from digital_twin.domain.ontology_projection_audit import projection_source_snapshot
+from digital_twin.domain.monitoring import RealtimeMonitor
 from digital_twin.domain.portfolio import AccountSnapshot, PortfolioSummary, Position, account_snapshot_from_monitor_state
 from digital_twin.domain.repositories import MonitoringCycleRecordResult
 from digital_twin.infrastructure.ontology_projection import PortfolioOntologyProjectionRecorder
@@ -270,6 +271,20 @@ class ReasoningSnapshotReplayTests(unittest.TestCase):
 
         self.assertEqual([], projected)
         self.assertEqual("queued-verified-monitor-snapshot", recorder.snapshots[0].metadata["ontology"]["projection"]["status"])
+
+        pending_snapshot = recorder.snapshots[0]
+        previous = pending_snapshot.to_monitor_state()
+        events = RealtimeMonitor().events_for_snapshot(pending_snapshot, previous)
+        pending_state = pending_snapshot.metadata["ontology"]["inferenceMissingState"]
+        reason_code, reason, detail = RealtimeMonitor().ontology_inference_missing_reason(pending_snapshot)
+
+        self.assertFalse(any(event.rule == "ontologyInferenceMissing" for event in events))
+        self.assertFalse(pending_state["missing"])
+        self.assertTrue(pending_state["pending"])
+        self.assertEqual("queued-verified-monitor-snapshot", pending_state["status"])
+        self.assertEqual("", reason_code)
+        self.assertEqual("", reason)
+        self.assertTrue(detail["pending"])
 
 
 if __name__ == "__main__":

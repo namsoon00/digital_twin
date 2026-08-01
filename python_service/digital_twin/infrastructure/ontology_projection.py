@@ -57,6 +57,7 @@ from ..domain.ontology_projection_input import (
     compact_external_signals_for_ontology,
     projection_input_summary,
 )
+from ..domain.ontology_projection_status import TYPEDB_REASONING_WORKER_DEFERRED
 from ..domain.ontology_runtime_operations import (
     build_projection_runtime_observation,
     native_rule_adaptive_target_sharding_policy,
@@ -804,7 +805,7 @@ class PortfolioOntologyProjectionRecorder:
         if self.typedb_projection_deferred():
             result = {
                 "saved": False,
-                "status": "deferred-to-reasoning-worker",
+                "status": TYPEDB_REASONING_WORKER_DEFERRED,
                 "reason": "TypeDB ABox와 InferenceBox는 전용 온톨로지 추론 워커가 같은 주기에서 생성합니다.",
                 "preservedActiveGeneration": True,
                 "singleWriter": True,

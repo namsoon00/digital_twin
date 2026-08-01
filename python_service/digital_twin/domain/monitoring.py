@@ -23,6 +23,7 @@ from .message_types import (
 )
 from .ontology_inference_context import inferencebox_source_name, ontology_projection_from_metadata, relation_contexts_from_snapshot
 from .ontology_insights import build_investment_insight_events, relation_news_event_key_suffix, split_operational_and_investment_events
+from .ontology_projection_status import projection_waits_for_reasoning_worker
 from .ontology_relation_reasoning import relation_rule_context_summary_lines
 from .ontology_decision_state import (
     CHANGE_STATE_LABELS,
@@ -64,6 +65,10 @@ def ontology_quality_event_metadata(snapshot: AccountSnapshot) -> Dict[str, obje
         data_state = "unavailable"
         validation_state = "blocked"
         reason = "온톨로지 연결 또는 검증 오류가 있어 투자 판단을 보류합니다."
+    elif projection_waits_for_reasoning_worker(projection):
+        data_state = "partial"
+        validation_state = "conditional"
+        reason = "확정 스냅샷은 저장됐으며 전용 온톨로지 추론 워커의 최신 TypeDB 세대를 기다리고 있습니다."
     elif status in {"partial", "limited", "degraded", "stale"} or warnings:
         data_state = "partial"
         validation_state = "conditional"
@@ -971,12 +976,13 @@ class RealtimeMonitor(MonitoringSampleDataMixin, MonitoringPositionContextMixin,
         if inference_contexts:
             return {"missing": False, "positionCount": len(positions), "contextCount": len(inference_contexts)}
         projection = ontology_projection_from_metadata(snapshot.metadata if isinstance(snapshot.metadata, dict) else {})
-        if str((projection or {}).get("status") or "").strip().lower() == "deferred-to-reasoning-worker":
+        if projection_waits_for_reasoning_worker(projection):
             return {
                 "missing": False,
                 "pending": True,
                 "reasonCode": "reasoningWorkerPending",
                 "reason": str((projection or {}).get("reason") or "전용 온톨로지 추론 워커 처리 대기"),
+                "status": str((projection or {}).get("status") or ""),
                 "positionCount": len(positions),
             }
 
@@ -1285,6 +1291,12 @@ class RealtimeMonitor(MonitoringSampleDataMixin, MonitoringPositionContextMixin,
                 reason += ": " + summary
             return "invalidABox", reason, common
         projection_status = str(projection.get("status") or "").strip().lower()
+        if projection_waits_for_reasoning_worker(projection):
+            common.update({
+                "pending": True,
+                "pendingReason": str(projection.get("reason") or "전용 온톨로지 추론 워커 처리 대기"),
+            })
+            return "", "", common
         if projection_status and projection_status not in {
             "ok",
             "partial",

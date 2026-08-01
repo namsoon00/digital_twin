@@ -9975,6 +9975,75 @@ class TypeDBOntologyRepositoryTests(unittest.TestCase):
         self.assertNotIn('has ontology-kind "abox-scope-active-pointer"', plan["query"])
         self.assertTrue(runtime_plan["indexedEvidenceQuery"])
 
+    def test_typedb_price_reclaim_uses_verified_index_for_negative_data_quality_condition(self):
+        rule = next(
+            item for item in default_graph_inference_rules()
+            if item.rule_id == "graph.price.reclaim.thesis_support.v1"
+        )
+        evidence_index = {
+            "status": "verified",
+            "index": {
+                "sourceIdsBySymbol": {"MSTR": ["stock:MSTR"]},
+                "sourceStorageIdsBySourceId": {
+                    "stock:MSTR": "ontology-storage:active-mstr",
+                },
+                "relationStorageIdsBySymbolAndType": {
+                    "MSTR": {
+                        "HAS_TECHNICAL_INDICATOR": ["ontology-storage:active-tech"],
+                        "HAS_DATA_QUALITY": ["ontology-storage:active-quality"],
+                    },
+                },
+            },
+        }
+
+        plan = typedb_native_indexed_evidence_match_query(
+            rule.to_dict(),
+            ["MSTR"],
+            evidence_index,
+            "portfolio:local:default",
+        )
+
+        self.assertEqual("ok", plan["status"])
+        self.assertTrue(plan["indexedEvidenceQuery"])
+        self.assertIn('has ontology-storage-id "ontology-storage:active-tech"', plan["query"])
+        self.assertIn('has ontology-storage-id "ontology-storage:active-quality"', plan["query"])
+        self.assertIn("not {", plan["query"])
+        self.assertIn('has ontology-relation-type "HAS_DATA_QUALITY"', plan["query"])
+        self.assertNotIn('has ontology-kind "abox-scope-active-pointer"', plan["query"])
+
+    def test_typedb_verified_index_proves_absent_negative_relation_without_scope_scan(self):
+        rule = next(
+            item for item in default_graph_inference_rules()
+            if item.rule_id == "graph.price.reclaim.thesis_support.v1"
+        )
+        evidence_index = {
+            "status": "verified",
+            "index": {
+                "sourceIdsBySymbol": {"MSTR": ["stock:MSTR"]},
+                "sourceStorageIdsBySourceId": {
+                    "stock:MSTR": "ontology-storage:active-mstr",
+                },
+                "relationStorageIdsBySymbolAndType": {
+                    "MSTR": {
+                        "HAS_TECHNICAL_INDICATOR": ["ontology-storage:active-tech"],
+                    },
+                },
+            },
+        }
+
+        plan = typedb_native_indexed_evidence_match_query(
+            rule.to_dict(),
+            ["MSTR"],
+            evidence_index,
+            "portfolio:local:default",
+        )
+
+        self.assertEqual("ok", plan["status"])
+        self.assertTrue(plan["indexedEvidenceQuery"])
+        self.assertIn('has ontology-storage-id "ontology-storage:active-tech"', plan["query"])
+        self.assertNotIn('has ontology-relation-type "HAS_DATA_QUALITY"', plan["query"])
+        self.assertNotIn('has ontology-kind "abox-scope-active-pointer"', plan["query"])
+
     def test_schema_function_sync_plan_skips_preflight_selected_indexed_rules(self):
         capacity_rule = next(
             item

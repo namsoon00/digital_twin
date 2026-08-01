@@ -20347,7 +20347,7 @@ def typedb_native_match_query(
             indexed_evidence
             and str(condition.get("kind") or "") == "relation"
             and not active_relation_storage_ids
-            and role not in {"any", "optional"}
+            and role not in {"any", "optional", "not"}
         ):
             return {
                 "ruleId": rule_id,
@@ -20364,6 +20364,17 @@ def typedb_native_match_query(
             # An absent alternative cannot satisfy an N-of-M group. Leave it
             # out of the TypeDB branch set rather than falling back to an
             # unbounded active-scope scan for this one missing relation type.
+            continue
+        if (
+            indexed_evidence
+            and str(condition.get("kind") or "") == "relation"
+            and not active_relation_storage_ids
+            and role == "not"
+        ):
+            # The verified Manifest index is complete for the requested
+            # sources. With no active relation of this type, the negative
+            # predicate already holds and must not fall back to a broad
+            # active-scope absence scan.
             continue
         pattern = typedb_condition_pattern(
             condition,
@@ -20986,8 +20997,9 @@ def typedb_native_indexed_evidence_match_query(
     not a Python decision. Binding the stock and each required assertion by
     those IDs lets TypeDB evaluate the authored filters against the exact
     current facts without repeatedly expanding every active scope pointer.
-    Rules with negative predicates stay on the schema-function path because
-    their absence check needs the complete active-world surface.
+    Negative predicates are also eligible when the verified Manifest index
+    covers their relation type. The generated TypeQL keeps the absence check
+    inside TypeDB while binding it to the exact active relation storage rows.
     """
     verified = dict(evidence_read_index or {})
     index = dict(verified.get("index") or {}) if str(verified.get("status") or "") == "verified" else {}
@@ -21001,26 +21013,19 @@ def typedb_native_indexed_evidence_match_query(
             "reason": "A verified active-Manifest evidence index and explicit target symbol are required.",
         }
     conditions = [item for item in rule.get("conditions") or [] if isinstance(item, dict)]
-    if any(normalized_condition_role(condition) == "not" for condition in conditions):
-        return {
-            "status": "not-eligible",
-            "ruleId": rule_id,
-            "query": "",
-            "reason": "Rules with negative predicates retain the complete active-world schema-function path.",
-        }
-    required_relation_types = sorted({
+    indexed_relation_types = sorted({
         str(condition.get("relation_type") or condition.get("relationType") or "").upper().strip()
         for condition in conditions
         if str(condition.get("kind") or "") == "relation"
-        and normalized_condition_role(condition) == "required"
+        and normalized_condition_role(condition) in {"required", "not"}
         and str(condition.get("relation_type") or condition.get("relationType") or "").strip()
     })
-    if not required_relation_types:
+    if not indexed_relation_types:
         return {
             "status": "not-eligible",
             "ruleId": rule_id,
             "query": "",
-            "reason": "Rule has no required relation predicate to anchor by active evidence storage identity.",
+            "reason": "Rule has no required or negative relation predicate to anchor by active evidence storage identity.",
         }
     source_ids_by_symbol = dict(index.get("sourceIdsBySymbol") or {})
     source_storage_by_id = dict(index.get("sourceStorageIdsBySourceId") or {})
@@ -21068,20 +21073,28 @@ def typedb_native_indexed_evidence_match_query(
             if str(storage_id or "").strip()
         })
 
-    for relation_type in required_relation_types:
+    for relation_type in indexed_relation_types:
         storage_ids = type_storage_ids(relation_type)
-        if not storage_ids:
+        relation_is_required = any(
+            str(condition.get("kind") or "") == "relation"
+            and normalized_condition_role(condition) == "required"
+            and str(condition.get("relation_type") or condition.get("relationType") or "").upper().strip()
+            == relation_type
+            for condition in conditions
+        )
+        if not storage_ids and relation_is_required:
             return {
                 "status": "not-eligible",
                 "ruleId": rule_id,
                 "query": "",
                 "reason": "Active Manifest evidence index has no " + relation_type + " relation for the requested symbols.",
             }
-        relation_storage_ids_by_type[relation_type] = storage_ids
+        if storage_ids:
+            relation_storage_ids_by_type[relation_type] = storage_ids
     for condition in conditions:
         if (
             str(condition.get("kind") or "") != "relation"
-            or normalized_condition_role(condition) != "required"
+            or normalized_condition_role(condition) not in {"required", "not"}
         ):
             continue
         relation_type = str(condition.get("relation_type") or condition.get("relationType") or "").upper().strip()
@@ -21098,9 +21111,9 @@ def typedb_native_indexed_evidence_match_query(
             ).get(field_value, []) or []
             if str(storage_id or "").strip()
         })
-        relation_storage_ids_by_condition[condition_id] = (
-            field_storage_ids or relation_storage_ids_by_type.get(relation_type, [])
-        )
+        storage_ids = field_storage_ids or relation_storage_ids_by_type.get(relation_type, [])
+        if storage_ids:
+            relation_storage_ids_by_condition[condition_id] = storage_ids
     storage_identity_count = len(source_storage_ids) + sum(
         len(values)
         for values in relation_storage_ids_by_condition.values()
@@ -21136,7 +21149,7 @@ def typedb_native_indexed_evidence_match_query(
         "schemaFunctionQuery": False,
         "queryMode": "typedb-manifest-evidence-index",
         "storageIdentityCount": storage_identity_count,
-        "activeEvidenceRelationTypes": required_relation_types,
+        "activeEvidenceRelationTypes": indexed_relation_types,
         "activeEvidenceRelationStorageMode": (
             "condition-field-index"
             if relation_ids_by_symbol_type_field

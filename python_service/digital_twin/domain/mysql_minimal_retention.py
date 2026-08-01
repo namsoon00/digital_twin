@@ -77,6 +77,9 @@ def mysql_minimal_retention_policy(settings: Mapping[str, object] = None) -> MyS
     """
 
     configured = settings or {}
+    internal_batch = "_effectiveMysqlMinimalRetentionBatchSize" in configured
+    internal_bytes = "_effectiveMysqlMinimalRetentionMaxDeleteBytes" in configured
+    internal_seconds = "_effectiveMysqlMinimalRetentionMaxRunSeconds" in configured
     return MySQLMinimalRetentionPolicy(
         profile=MINIMAL_MYSQL_RETENTION_PROFILE,
         enabled=_bool_setting(configured, "mysqlMinimalRetentionEnabled", False),
@@ -88,20 +91,26 @@ def mysql_minimal_retention_policy(settings: Mapping[str, object] = None) -> MyS
             60,
             24 * 60 * 60,
         ),
-        batch_size=_int_setting(configured, "mysqlMinimalRetentionBatchSize", 20, 1, 100),
+        batch_size=_int_setting(
+            configured,
+            "_effectiveMysqlMinimalRetentionBatchSize" if internal_batch else "mysqlMinimalRetentionBatchSize",
+            20,
+            1,
+            1000 if internal_batch else 100,
+        ),
         max_delete_bytes=_int_setting(
             configured,
-            "mysqlMinimalRetentionMaxDeleteBytes",
+            "_effectiveMysqlMinimalRetentionMaxDeleteBytes" if internal_bytes else "mysqlMinimalRetentionMaxDeleteBytes",
             32 * 1024 * 1024,
             256 * 1024,
-            128 * 1024 * 1024,
+            512 * 1024 * 1024 if internal_bytes else 128 * 1024 * 1024,
         ),
         max_run_seconds=_int_setting(
             configured,
-            "mysqlMinimalRetentionMaxRunSeconds",
+            "_effectiveMysqlMinimalRetentionMaxRunSeconds" if internal_seconds else "mysqlMinimalRetentionMaxRunSeconds",
             20,
             1,
-            60,
+            120 if internal_seconds else 60,
         ),
         snapshot_history_keep_count=_int_setting(
             configured,

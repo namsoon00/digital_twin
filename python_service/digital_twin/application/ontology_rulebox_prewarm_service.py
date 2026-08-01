@@ -43,6 +43,7 @@ class OntologyRuleboxPrewarmRunner:
         reasoning_queue_probe=None,
         now_provider: Callable[[], datetime] = None,
         prewarm_state_store=None,
+        storage_guard=None,
     ):
         self.ontology_repository = ontology_repository
         self.settings = dict(settings or {})
@@ -51,6 +52,7 @@ class OntologyRuleboxPrewarmRunner:
         # Live reasoning needs only a cheap signal that a schema compiler is
         # active. Production wires this to MySQL, never to a TypeDB read.
         self.prewarm_state_store = prewarm_state_store
+        self.storage_guard = storage_guard
 
     def enabled(self) -> bool:
         # A live inference must never be the process that discovers a cold
@@ -559,6 +561,20 @@ class OntologyRuleboxPrewarmRunner:
                 "reason": "RuleBox schema-function prewarm worker is disabled.",
                 "durationMs": 0,
             }
+        if callable(self.storage_guard):
+            try:
+                storage = dict(self.storage_guard() or {})
+            except Exception as error:  # noqa: BLE001 - an unknown disk state must not start schema compilation.
+                storage = {"ready": False, "status": "unavailable", "reason": str(error)[:180]}
+            if not bool(storage.get("ready", True)):
+                return {
+                    "status": "deferred-low-disk",
+                    "configured": True,
+                    "functionsReady": False,
+                    "storage": storage,
+                    "reason": str(storage.get("reason") or "TypeDB 저장 여유 공간이 부족합니다."),
+                    "durationMs": 0,
+                }
         activity = self.prewarm_activity_state()
         if bool(activity.get("active")):
             status = str(activity.get("status") or "running")

@@ -97,6 +97,16 @@ class MySQLMinimalRetentionTests(unittest.TestCase):
         self.assertEqual(20, policy.max_run_seconds)
         self.assertEqual(10, policy.audit_keep_count)
 
+        accelerated = mysql_minimal_retention_policy({
+            "mysqlMinimalRetentionEnabled": "1",
+            "_effectiveMysqlMinimalRetentionBatchSize": "1000",
+            "_effectiveMysqlMinimalRetentionMaxDeleteBytes": str(256 * 1024 * 1024),
+            "_effectiveMysqlMinimalRetentionMaxRunSeconds": "60",
+        })
+        self.assertEqual(1000, accelerated.batch_size)
+        self.assertEqual(256 * 1024 * 1024, accelerated.max_delete_bytes)
+        self.assertEqual(60, accelerated.max_run_seconds)
+
     def test_disabled_profile_does_not_query_or_record_anything(self):
         repository = RepositorySpy()
 

@@ -62,6 +62,20 @@ class QueueGuardedRunner(FakeRepository):
 
 
 class OntologyRuleboxPrewarmRunnerTests(unittest.TestCase):
+    def test_low_disk_guard_defers_before_opening_the_typedb_compiler(self):
+        repository = FakeRepository()
+        runner = OntologyRuleboxPrewarmRunner(
+            repository,
+            settings={"ontologyRuleboxPrewarmEnabled": "1"},
+            storage_guard=lambda: {"ready": False, "status": "blocked-low-disk"},
+        )
+
+        result = runner.run_once()
+
+        self.assertEqual("deferred-low-disk", result["status"])
+        self.assertEqual([], repository.calls)
+        self.assertEqual(0, repository.status_calls)
+
     def test_runs_background_prewarm_only_when_explicitly_enabled_and_queue_is_empty(self):
         repository = FakeRepository({
             "status": "provisioning",

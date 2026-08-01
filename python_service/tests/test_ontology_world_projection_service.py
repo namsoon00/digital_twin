@@ -103,6 +103,21 @@ class OntologyWorldProjectionRunnerTests(unittest.TestCase):
 
         self.assertEqual(1, runner.batch_size())
 
+    def test_low_disk_guard_defers_before_claiming_a_shared_world_write(self):
+        outbox = FakeOutbox([projection_job()])
+        recorder = FakeRecorder({"status": "ok", "saved": True})
+        runner = OntologyWorldProjectionRunner(
+            outbox,
+            recorder,
+            storage_guard=lambda: {"ready": False, "status": "blocked-low-disk"},
+        )
+
+        result = runner.run_once()
+
+        self.assertEqual("deferred-low-disk", result["status"])
+        self.assertEqual(1, len(outbox.jobs))
+        self.assertEqual([], recorder.calls)
+
     def test_completed_shared_projection_acknowledges_the_durable_job(self):
         outbox = FakeOutbox([projection_job()])
         recorder = FakeRecorder({"status": "ok", "saved": True})

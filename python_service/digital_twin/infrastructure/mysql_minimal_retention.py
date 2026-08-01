@@ -356,27 +356,50 @@ class MySQLMinimalRetentionRepository:
 
     def _delete_terminal_notifications(self, policy, budget, keep_count, cutoff_iso) -> Dict[str, object]:
         statuses = _status_placeholders(TERMINAL_NOTIFICATION_STATUSES)
-        candidates = self._byte_bounded_candidates(
-            """
-            SELECT job_id, payload_bytes
-            FROM (
-                SELECT job_id, updated_at,
-                       OCTET_LENGTH(`text`) + OCTET_LENGTH(payload_json) AS payload_bytes,
-                       ROW_NUMBER() OVER (
-                           PARTITION BY account_id
-                           ORDER BY updated_at DESC, job_id DESC
-                       ) AS history_rank
-                FROM `notification_jobs`
-                WHERE status IN (""" + statuses + """
-                )
-            ) ranked
-            WHERE history_rank > %s AND updated_at < """ + _cutoff_sql()
-            + " ORDER BY updated_at, job_id LIMIT %s",
-            tuple(TERMINAL_NOTIFICATION_STATUSES) + (keep_count, cutoff_iso, policy.batch_size),
-            "job_id",
-            policy,
-            budget,
-        )
+        account_rows = _fetchall(_execute(
+            self.connection,
+            "SELECT DISTINCT account_id FROM `notification_jobs` WHERE status IN ("
+            + statuses
+            + ") ORDER BY account_id",
+            TERMINAL_NOTIFICATION_STATUSES,
+        ))
+        candidate_rows = []
+        for account_row in account_rows:
+            if len(candidate_rows) >= policy.batch_size:
+                break
+            account_id = str(_row_value(account_row, "account_id", fallback="") or "")
+            boundary = _fetchone(_execute(
+                self.connection,
+                "SELECT updated_at, job_id FROM `notification_jobs` WHERE account_id = %s AND status IN ("
+                + statuses
+                + ") ORDER BY updated_at DESC, job_id DESC LIMIT 1 OFFSET %s",
+                (account_id, *TERMINAL_NOTIFICATION_STATUSES, max(0, keep_count - 1)),
+            ))
+            if not boundary:
+                continue
+            boundary_at = str(_row_value(boundary, "updated_at", fallback="") or "")
+            boundary_id = str(_row_value(boundary, "job_id", fallback="") or "")
+            rows = _fetchall(_execute(
+                self.connection,
+                "SELECT job_id, OCTET_LENGTH(`text`) + OCTET_LENGTH(payload_json) AS payload_bytes "
+                "FROM `notification_jobs` WHERE account_id = %s AND status IN ("
+                + statuses
+                + ") AND updated_at < "
+                + _cutoff_sql()
+                + " AND (updated_at < %s OR (updated_at = %s AND job_id < %s)) "
+                "ORDER BY updated_at, job_id LIMIT %s",
+                (
+                    account_id,
+                    *TERMINAL_NOTIFICATION_STATUSES,
+                    cutoff_iso,
+                    boundary_at,
+                    boundary_at,
+                    boundary_id,
+                    policy.batch_size - len(candidate_rows),
+                ),
+            ))
+            candidate_rows.extend(rows)
+        candidates = self._bounded_candidate_rows(candidate_rows, "job_id", policy, budget)
         deleted, bytes_deleted = self._delete_candidates(
             "notification_jobs",
             "job_id",
@@ -388,23 +411,35 @@ class MySQLMinimalRetentionRepository:
         return self._result("notification_jobs", deleted, bytes_deleted)
 
     def _delete_snapshot_history(self, policy, budget, keep_count) -> Dict[str, object]:
-        candidates = self._byte_bounded_candidates(
-            """
-            SELECT account_id, generated_at, payload_bytes
-            FROM (
-                SELECT account_id, generated_at,
-                       OCTET_LENGTH(payload_json) + COALESCE(OCTET_LENGTH(projection_payload_json), 0) AS payload_bytes,
-                       ROW_NUMBER() OVER (
-                           PARTITION BY account_id
-                           ORDER BY generated_at DESC
-                       ) AS history_rank
-                FROM `monitor_snapshot_history`
-            ) ranked
-            WHERE history_rank > %s
-            ORDER BY generated_at, account_id
-            LIMIT %s
-            """,
-            (keep_count, policy.batch_size),
+        account_rows = _fetchall(_execute(
+            self.connection,
+            "SELECT DISTINCT account_id FROM `monitor_snapshot_history` ORDER BY account_id",
+        ))
+        candidate_rows = []
+        for account_row in account_rows:
+            if len(candidate_rows) >= policy.batch_size:
+                break
+            account_id = str(_row_value(account_row, "account_id", fallback="") or "")
+            boundary = _fetchone(_execute(
+                self.connection,
+                "SELECT generated_at FROM `monitor_snapshot_history` WHERE account_id = %s "
+                "ORDER BY generated_at DESC LIMIT 1 OFFSET %s",
+                (account_id, max(0, keep_count - 1)),
+            ))
+            boundary_at = str(_row_value(boundary, "generated_at", fallback="") or "") if boundary else ""
+            if not boundary_at:
+                continue
+            rows = _fetchall(_execute(
+                self.connection,
+                "SELECT account_id, generated_at, "
+                "OCTET_LENGTH(payload_json) + COALESCE(OCTET_LENGTH(projection_payload_json), 0) AS payload_bytes "
+                "FROM `monitor_snapshot_history` WHERE account_id = %s AND generated_at < %s "
+                "ORDER BY generated_at LIMIT %s",
+                (account_id, boundary_at, policy.batch_size - len(candidate_rows)),
+            ))
+            candidate_rows.extend(rows)
+        candidates = self._bounded_candidate_rows(
+            candidate_rows,
             "generated_at",
             policy,
             budget,
@@ -476,26 +511,46 @@ class MySQLMinimalRetentionRepository:
         }
 
     def _delete_projection_runs(self, policy, budget, cutoff_iso) -> Dict[str, object]:
-        candidates = self._byte_bounded_candidates(
-            """
-            SELECT run_id, payload_bytes
-            FROM (
-                SELECT run_id, updated_at,
-                       OCTET_LENGTH(source_symbols_json) + OCTET_LENGTH(context_payload_json) + OCTET_LENGTH(result_payload_json) AS payload_bytes,
-                       ROW_NUMBER() OVER (
-                           PARTITION BY COALESCE(NULLIF(world_id, ''), '__legacy__')
-                           ORDER BY updated_at DESC, run_id DESC
-                       ) AS history_rank
-                FROM `ontology_projection_runs`
-                WHERE status <> 'projecting'
-            ) ranked
-            WHERE history_rank > 2 AND updated_at < """ + _cutoff_sql()
-            + " ORDER BY updated_at, run_id LIMIT %s",
-            (cutoff_iso, policy.batch_size),
-            "run_id",
-            policy,
-            budget,
-        )
+        world_rows = _fetchall(_execute(
+            self.connection,
+            "SELECT DISTINCT world_id FROM `ontology_projection_runs` WHERE status <> 'projecting' ORDER BY world_id",
+        ))
+        candidate_rows = []
+        for world_row in world_rows:
+            if len(candidate_rows) >= policy.batch_size:
+                break
+            world_id = str(_row_value(world_row, "world_id", fallback="") or "")
+            boundary = _fetchone(_execute(
+                self.connection,
+                "SELECT updated_at, run_id FROM `ontology_projection_runs` "
+                "WHERE status <> 'projecting' AND world_id = %s "
+                "ORDER BY updated_at DESC, run_id DESC LIMIT 1 OFFSET 1",
+                (world_id,),
+            ))
+            if not boundary:
+                continue
+            boundary_at = str(_row_value(boundary, "updated_at", fallback="") or "")
+            boundary_id = str(_row_value(boundary, "run_id", fallback="") or "")
+            rows = _fetchall(_execute(
+                self.connection,
+                "SELECT run_id, OCTET_LENGTH(source_symbols_json) + OCTET_LENGTH(context_payload_json) "
+                "+ OCTET_LENGTH(result_payload_json) AS payload_bytes "
+                "FROM `ontology_projection_runs` WHERE status <> 'projecting' AND world_id = %s "
+                "AND updated_at < "
+                + _cutoff_sql()
+                + " AND (updated_at < %s OR (updated_at = %s AND run_id < %s)) "
+                "ORDER BY updated_at, run_id LIMIT %s",
+                (
+                    world_id,
+                    cutoff_iso,
+                    boundary_at,
+                    boundary_at,
+                    boundary_id,
+                    policy.batch_size - len(candidate_rows),
+                ),
+            ))
+            candidate_rows.extend(rows)
+        candidates = self._bounded_candidate_rows(candidate_rows, "run_id", policy, budget)
         deleted, bytes_deleted = self._delete_candidates(
             "ontology_projection_runs",
             "run_id",
@@ -603,23 +658,26 @@ class MySQLMinimalRetentionRepository:
         return self._result("market_time_series_observations", deleted, 0)
 
     def _delete_audit_runs(self, policy, budget, keep_count) -> Dict[str, object]:
-        candidates = self._byte_bounded_candidates(
-            """
-            SELECT run_id, OCTET_LENGTH(report_json) AS payload_bytes
-            FROM (
-                SELECT run_id, report_json,
-                       ROW_NUMBER() OVER (ORDER BY created_at DESC, run_id DESC) AS history_rank
-                FROM `mysql_retention_runs`
-            ) ranked
-            WHERE history_rank > %s
-            ORDER BY run_id
-            LIMIT %s
-            """,
-            (keep_count, policy.batch_size),
-            "run_id",
-            policy,
-            budget,
-        )
+        boundary = _fetchone(_execute(
+            self.connection,
+            "SELECT created_at, run_id FROM `mysql_retention_runs` "
+            "ORDER BY created_at DESC, run_id DESC LIMIT 1 OFFSET %s",
+            (max(0, keep_count - 1),),
+        ))
+        if boundary:
+            boundary_at = str(_row_value(boundary, "created_at", fallback="") or "")
+            boundary_id = str(_row_value(boundary, "run_id", fallback="") or "")
+            candidates = self._byte_bounded_candidates(
+                "SELECT run_id, OCTET_LENGTH(report_json) AS payload_bytes FROM `mysql_retention_runs` "
+                "WHERE created_at < %s OR (created_at = %s AND run_id < %s) "
+                "ORDER BY created_at, run_id LIMIT %s",
+                (boundary_at, boundary_at, boundary_id, policy.batch_size),
+                "run_id",
+                policy,
+                budget,
+            )
+        else:
+            candidates = []
         deleted, bytes_deleted = self._delete_candidates(
             "mysql_retention_runs",
             "run_id",
@@ -642,6 +700,16 @@ class MySQLMinimalRetentionRepository:
         if not self._has_budget(budget):
             return []
         rows = _fetchall(_execute(self.connection, sql, params))
+        return self._bounded_candidate_rows(rows, identifier, policy, budget, compound_key=compound_key)
+
+    def _bounded_candidate_rows(
+        self,
+        rows: Sequence[object],
+        identifier: str,
+        policy: MySQLMinimalRetentionPolicy,
+        budget: Dict[str, object],
+        compound_key: Sequence[str] = (),
+    ) -> List[object]:
         result = []
         remaining = _integer(budget.get("remainingBytes"))
         for row in rows:

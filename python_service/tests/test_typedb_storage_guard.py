@@ -34,3 +34,19 @@ class TypeDBStorageGuardTests(unittest.TestCase):
 
         self.assertTrue(state["ready"])
         self.assertEqual("ready", state["status"])
+
+    def test_shared_operational_reserve_overrides_a_smaller_typedb_reserve(self):
+        state = typedb_storage_health(
+            {
+                "typedbMinimumFreeSpaceMb": "4096",
+                "operationalMinimumFreeSpaceMb": "16384",
+            },
+            data_path=Path("/tmp/typedb-test"),
+            disk_usage_provider=lambda _path: SimpleNamespace(
+                free=12 * 1024 * 1024 * 1024,
+                total=100 * 1024 * 1024 * 1024,
+            ),
+        )
+
+        self.assertFalse(state["ready"])
+        self.assertEqual(16384, state["minimumFreeMb"])

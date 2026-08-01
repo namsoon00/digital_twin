@@ -621,8 +621,16 @@ class OperationalHistoryRetentionScheduler:
         )
         while self.running:
             started = time.monotonic()
+            next_interval = self.interval_seconds
             try:
                 result = self.run_once()
+                try:
+                    next_interval = max(
+                        60,
+                        min(self.interval_seconds, int(result.get("nextIntervalSeconds") or self.interval_seconds)),
+                    )
+                except (TypeError, ValueError):
+                    next_interval = self.interval_seconds
                 deleted = int(result.get("deleted") or 0)
                 skipped = str(result.get("skipped") or "")
                 if deleted or skipped:
@@ -640,7 +648,7 @@ class OperationalHistoryRetentionScheduler:
                     error,
                     "MySQL history retention",
                 )
-            end_at = time.monotonic() + max(1.0, self.interval_seconds - (time.monotonic() - started))
+            end_at = time.monotonic() + max(1.0, next_interval - (time.monotonic() - started))
             wait_until_running(lambda: self.running, end_at)
 
 

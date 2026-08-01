@@ -195,7 +195,10 @@ def typedb_worker_spec(settings: Dict[str, object]) -> Dict[str, object]:
         "dataPath": data_path,
         "retentionHours": str((settings or {}).get("typedbDataRetentionHours") or "24"),
         "maxSizeMb": str((settings or {}).get("typedbDataMaxSizeMb") or "2048"),
-        "minimumFreeSpaceMb": str((settings or {}).get("typedbMinimumFreeSpaceMb") or "4096"),
+        "minimumFreeSpaceMb": str(max(
+            int_value((settings or {}).get("typedbMinimumFreeSpaceMb"), 4096, 1),
+            int_value((settings or {}).get("operationalMinimumFreeSpaceMb"), 16384, 1),
+        )),
         # TypeDB is the durable ontology store. Capacity pressure must surface
         # as maintenance work, never as an automatic data deletion during a
         # routine worker restart.

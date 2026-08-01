@@ -41,6 +41,11 @@ def typedb_storage_health(
     }
     path = Path(data_path) if data_path is not None else typedb_data_path(configured)
     minimum_free_mb = _int_value(configured.get("typedbMinimumFreeSpaceMb"), 4096)
+    if "operationalMinimumFreeSpaceMb" in configured:
+        minimum_free_mb = max(
+            minimum_free_mb,
+            _int_value(configured.get("operationalMinimumFreeSpaceMb"), minimum_free_mb),
+        )
     if not enabled:
         return {
             "ready": True,

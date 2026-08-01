@@ -102,6 +102,11 @@ MYSQL_OPERATIONAL_INDEXES: Dict[str, Sequence[MySQLIndexDefinition]] = {
             "idx_monitor_snapshot_history_generated",
             "`generated_at`, `account_id`",
         ),
+        MySQLIndexDefinition(
+            "monitor_snapshot_history",
+            "idx_monitor_snapshot_history_account_generated",
+            "`account_id`, `generated_at`",
+        ),
     ),
     "monitor_sent": (
         MySQLIndexDefinition("monitor_sent", "idx_monitor_sent_sent_at", "`sent_at`, `sent_key_hash`"),
@@ -124,6 +129,18 @@ MYSQL_OPERATIONAL_INDEXES: Dict[str, Sequence[MySQLIndexDefinition]] = {
             "`status`, `processing_started_at`, `updated_at`, `created_at`, `job_id`",
         ),
         MySQLIndexDefinition("notification_jobs", "idx_notification_jobs_source_event", "`source_event_id`, `job_id`"),
+        MySQLIndexDefinition(
+            "notification_jobs",
+            "idx_notification_jobs_account_status_updated",
+            "`account_id`, `status`, `updated_at`, `job_id`",
+        ),
+    ),
+    "mysql_retention_runs": (
+        MySQLIndexDefinition(
+            "mysql_retention_runs",
+            "idx_mysql_retention_runs_created",
+            "`created_at`, `run_id`",
+        ),
     ),
     "model_review_jobs": (
         MySQLIndexDefinition("model_review_jobs", "idx_model_review_jobs_created", "`created_at`, `job_id`"),
@@ -167,6 +184,11 @@ MYSQL_OPERATIONAL_INDEXES: Dict[str, Sequence[MySQLIndexDefinition]] = {
             "research_evidence",
             "idx_research_evidence_lifecycle_kind_seen",
             "`lifecycle_state`, `kind`, `last_seen_at`, `evidence_id`",
+        ),
+        MySQLIndexDefinition(
+            "research_evidence",
+            "idx_research_evidence_lifecycle_kind_latest",
+            "`lifecycle_state`, `kind`, `last_seen_at`, `published_at`, `evidence_id`",
         ),
     ),
     "ontology_ai_opinion_samples": (

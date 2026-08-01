@@ -43,12 +43,14 @@ class OntologyWorldProjectionRunner:
         settings: Dict[str, object] = None,
         worker_id: str = "",
         reasoning_queue_probe=None,
+        storage_guard=None,
     ):
         self.outbox = outbox
         self.projection_recorder = projection_recorder
         self.settings = dict(settings or {})
         self.worker_id = str(worker_id or "ontology-world-" + uuid.uuid4().hex[:12])
         self.reasoning_queue_probe = reasoning_queue_probe
+        self.storage_guard = storage_guard
         self.last_run_details = []
 
     def batch_size(self) -> int:
@@ -240,6 +242,21 @@ class OntologyWorldProjectionRunner:
 
     def run_once(self, limit: int = 0, bypass_reasoning_queue: bool = False) -> Dict[str, object]:
         started = time.monotonic()
+        if callable(self.storage_guard):
+            try:
+                storage = dict(self.storage_guard() or {})
+            except Exception as error:  # noqa: BLE001 - an unknown disk state must not start a graph write.
+                storage = {"ready": False, "status": "unavailable", "reason": str(error)[:180]}
+            if not bool(storage.get("ready", True)):
+                self.last_run_details = ["deferred-low-disk"]
+                return {
+                    "status": "deferred-low-disk",
+                    "processedCount": 0,
+                    "completedCount": 0,
+                    "retriedCount": 0,
+                    "storage": storage,
+                    "durationMs": int((time.monotonic() - started) * 1000),
+                }
         deferred = {} if bypass_reasoning_queue else self.reasoning_queue_deferral()
         if deferred:
             self.last_run_details = ["deferred-reasoning-queue"]

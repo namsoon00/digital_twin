@@ -456,10 +456,38 @@ class MySQLResearchEvidenceStore(MySQLOperationalConnection):
         return mutation, events
 
     def latest(self, symbol: str = "", kind: str = "", limit: int = 50, include_inactive: bool = False) -> List[ResearchEvidence]:
-        items, _ = self.latest_page(symbol=symbol, kind=kind, limit=limit, include_inactive=include_inactive)
-        return items
+        conditions, params = self._latest_conditions(
+            symbol=symbol,
+            kind=kind,
+            include_inactive=include_inactive,
+        )
+        page_size = max(1, min(1000, int(limit or 50)))
+        with self.connect() as connection:
+            rows = self._latest_rows(connection, conditions, params, page_size, 0)
+        return [research_evidence_from_row(row) for row in rows]
 
     def latest_page(self, symbol: str = "", kind: str = "", limit: int = 50, offset: int = 0, query: str = "", include_inactive: bool = False) -> Tuple[List[ResearchEvidence], int]:
+        conditions, params = self._latest_conditions(
+            symbol=symbol,
+            kind=kind,
+            query=query,
+            include_inactive=include_inactive,
+        )
+        where = (" WHERE " + " AND ".join(conditions)) if conditions else ""
+        page_size = max(1, min(1000, int(limit or 50)))
+        page_offset = max(0, int(offset or 0))
+        with self.connect() as connection:
+            total_row = connection.execute("SELECT COUNT(*) AS count FROM research_evidence" + where, params).fetchone()
+            rows = self._latest_rows(connection, conditions, params, page_size, page_offset)
+        return [research_evidence_from_row(row) for row in rows], int(total_row["count"] or 0) if total_row else 0
+
+    @staticmethod
+    def _latest_conditions(
+        symbol: str = "",
+        kind: str = "",
+        query: str = "",
+        include_inactive: bool = False,
+    ) -> Tuple[List[str], List[object]]:
         conditions = []
         params: List[object] = []
         if not include_inactive:
@@ -477,16 +505,33 @@ class MySQLResearchEvidenceStore(MySQLOperationalConnection):
             conditions.append("(title LIKE %s OR summary LIKE %s OR source LIKE %s OR symbol LIKE %s)")
             like = "%" + needle[:120] + "%"
             params.extend([like, like, like, like])
+        return conditions, params
+
+    @staticmethod
+    def _latest_rows(connection, conditions, params, page_size: int, page_offset: int):
+        """Sort narrow IDs first so large JSON evidence never enters temp sort files."""
+
         where = (" WHERE " + " AND ".join(conditions)) if conditions else ""
-        page_size = max(1, min(100, int(limit or 50)))
-        page_offset = max(0, int(offset or 0))
-        with self.connect() as connection:
-            total_row = connection.execute("SELECT COUNT(*) AS count FROM research_evidence" + where, params).fetchone()
-            rows = connection.execute(
-                "SELECT * FROM research_evidence" + where + " ORDER BY last_seen_at DESC, published_at DESC, evidence_id DESC LIMIT %s OFFSET %s",
-                params + [page_size, page_offset],
-            ).fetchall()
-        return [research_evidence_from_row(row) for row in rows], int(total_row["count"] or 0) if total_row else 0
+        id_rows = connection.execute(
+            "SELECT evidence_id FROM research_evidence"
+            + where
+            + " ORDER BY last_seen_at DESC, published_at DESC, evidence_id DESC LIMIT %s OFFSET %s",
+            list(params) + [page_size, page_offset],
+        ).fetchall()
+        evidence_ids = [
+            str(row.get("evidence_id") or "").strip()
+            for row in id_rows or []
+            if str(row.get("evidence_id") or "").strip()
+        ]
+        if not evidence_ids:
+            return []
+        placeholders = ", ".join(["%s"] * len(evidence_ids))
+        rows = connection.execute(
+            "SELECT * FROM research_evidence WHERE evidence_id IN (" + placeholders + ")",
+            evidence_ids,
+        ).fetchall()
+        rows_by_id = {str(row.get("evidence_id") or ""): row for row in rows or []}
+        return [rows_by_id[evidence_id] for evidence_id in evidence_ids if evidence_id in rows_by_id]
 
     def get(self, evidence_id: str) -> Optional[ResearchEvidence]:
         target = str(evidence_id or "").strip()

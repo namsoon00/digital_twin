@@ -48,11 +48,19 @@ def utc_now_iso() -> str:
 class NewsAnalysisEnrichmentRunner:
     """Reprocess deferred news without delaying provider collection."""
 
-    def __init__(self, evidence_store, analysis_service, settings: Dict[str, object], event_publisher=None):
+    def __init__(
+        self,
+        evidence_store,
+        analysis_service,
+        settings: Dict[str, object],
+        event_publisher=None,
+        storage_guard=None,
+    ):
         self.evidence_store = evidence_store
         self.analysis_service = analysis_service
         self.settings = dict(settings or {})
         self.event_publisher = event_publisher
+        self.storage_guard = storage_guard
 
     def enabled(self) -> bool:
         return truthy(self.settings.get("newsAiAnalysisAsyncEnabled"), True) and bool(self.analysis_service)
@@ -138,8 +146,7 @@ class NewsAnalysisEnrichmentRunner:
         rows = list(self.evidence_store.latest(kind="news", limit=self.scan_limit()) or [])
         return sorted((item for item in rows if self.should_retry(item)), key=self.priority, reverse=True)
 
-    def status(self) -> Dict[str, object]:
-        candidates = self.candidates() if self.enabled() else []
+    def _status_for_candidates(self, candidates) -> Dict[str, object]:
         pending_translation = 0
         for item in candidates:
             payload = item.raw_payload if isinstance(item.raw_payload, dict) else {}
@@ -153,6 +160,22 @@ class NewsAnalysisEnrichmentRunner:
             "pendingCount": len(candidates),
             "pendingTranslationCount": pending_translation,
         }
+
+    def status(self) -> Dict[str, object]:
+        candidates = self.candidates() if self.enabled() else []
+        return self._status_for_candidates(candidates)
+
+    def storage_state(self) -> Dict[str, object]:
+        if not callable(self.storage_guard):
+            return {"status": "not-configured", "nonEssentialWritesAllowed": True}
+        try:
+            return dict(self.storage_guard() or {})
+        except Exception as error:  # noqa: BLE001 - a guard probe failure should defer optional analysis.
+            return {
+                "status": "unavailable",
+                "nonEssentialWritesAllowed": False,
+                "reason": str(error)[:180],
+            }
 
     def _events_for_mutation(self, mutation, processed_count: int) -> List[object]:
         changed_items = list(getattr(mutation, "changed_items", []) or [])
@@ -211,7 +234,22 @@ class NewsAnalysisEnrichmentRunner:
     def run_once(self, limit: int = 0) -> Dict[str, object]:
         if not self.enabled():
             return {"status": "disabled", **self.status(), "processedCount": 0, "savedCount": 0}
-        selected = self.candidates()[: max(1, int(limit or self.batch_size()))]
+        storage = self.storage_state()
+        if not bool(storage.get("nonEssentialWritesAllowed", True)):
+            return {
+                "status": "deferred-low-disk",
+                "enabled": True,
+                "intervalSeconds": self.interval_seconds(),
+                "batchSize": self.batch_size(),
+                "retryMinutes": self.retry_minutes(),
+                "pendingCount": 0,
+                "pendingTranslationCount": 0,
+                "processedCount": 0,
+                "savedCount": 0,
+                "storage": storage,
+            }
+        candidates = self.candidates()
+        selected = candidates[: max(1, int(limit or self.batch_size()))]
         updated: List[ResearchEvidence] = []
         failures: List[Dict[str, object]] = []
         translated_count = 0
@@ -268,7 +306,7 @@ class NewsAnalysisEnrichmentRunner:
 
         return {
             "status": "ok",
-            **self.status(),
+            **self._status_for_candidates(candidates),
             "processedCount": len(selected),
             "savedCount": saved,
             "translatedCount": translated_count,

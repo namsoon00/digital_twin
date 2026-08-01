@@ -12,7 +12,9 @@ from digital_twin.infrastructure.mysql_retention import (
     operational_large_domain_event_names,
     operational_projection_run_keep_count,
     operational_world_projection_outbox_retention_hours,
+    mysql_operational_space_reclaim_candidates,
     optimize_mysql_operational_tables,
+    safe_mysql_operational_compaction_tables,
 )
 from digital_twin.infrastructure.mysql_monitoring import mysql_monitoring_schema_bootstrap_enabled
 from digital_twin.infrastructure.mysql_operational_connection import (
@@ -73,6 +75,27 @@ class CandidateRecordingConnection(RecordingConnection):
         return Cursor(rowcount=2)
 
 
+class TableSpaceConnection(RecordingConnection):
+    def execute(self, sql, params=()):
+        self.calls.append((str(sql), tuple(params or ())))
+        return Cursor(rows=[
+            {
+                "tableName": "ontology_world_projection_outbox",
+                "dataBytes": 100 * 1024 * 1024,
+                "indexBytes": 10 * 1024 * 1024,
+                "statisticalFreeBytes": 2048 * 1024 * 1024,
+                "allocatedBytes": 2200 * 1024 * 1024,
+            },
+            {
+                "tableName": "unknown_vendor_table",
+                "dataBytes": 1,
+                "indexBytes": 1,
+                "statisticalFreeBytes": 2048 * 1024 * 1024,
+                "allocatedBytes": 2200 * 1024 * 1024,
+            },
+        ])
+
+
 class MySQLStorageMaintenanceTests(unittest.TestCase):
     def test_realtime_fast_path_skips_schema_and_constructor_retention(self):
         self.assertTrue(mysql_operational_schema_bootstrap_enabled({}))
@@ -115,7 +138,8 @@ class MySQLStorageMaintenanceTests(unittest.TestCase):
         projection_queries = [sql for sql, _params in connection.calls if "ontology_projection_runs" in sql]
         self.assertGreaterEqual(len(projection_queries), 2)
         self.assertTrue(any("status <> 'projecting'" in sql for sql in projection_queries))
-        self.assertTrue(any("ROW_NUMBER() OVER" in sql for sql in projection_queries))
+        self.assertFalse(any("ROW_NUMBER() OVER" in sql for sql in projection_queries))
+        self.assertTrue(any("SELECT DISTINCT world_id" in sql for sql in projection_queries))
         notification_queries = [sql for sql, _params in connection.calls if "notification_jobs" in sql]
         self.assertTrue(any("WHERE `status` = 'done'" in sql for sql in notification_queries))
 
@@ -200,6 +224,14 @@ class MySQLStorageMaintenanceTests(unittest.TestCase):
             for index in MYSQL_OPERATIONAL_INDEXES["investment_hypothesis_lifecycle_events"]
         }
         self.assertIn("idx_hypothesis_lifecycle_events_occurred", lifecycle_index_names)
+        evidence_index_names = {
+            index.name for index in MYSQL_OPERATIONAL_INDEXES["research_evidence"]
+        }
+        self.assertIn("idx_research_evidence_lifecycle_kind_latest", evidence_index_names)
+        notification_index_names = {
+            index.name for index in MYSQL_OPERATIONAL_INDEXES["notification_jobs"]
+        }
+        self.assertIn("idx_notification_jobs_account_status_updated", notification_index_names)
         self.assertTrue(mysql_is_connection_lost(Exception(2013, "Lost connection")))
         self.assertFalse(mysql_is_connection_lost(Exception(1213, "Deadlock")))
 
@@ -313,6 +345,25 @@ class MySQLStorageMaintenanceTests(unittest.TestCase):
         self.assertEqual(["unknown_table; DROP DATABASE orbit_alpha"], result["rejectedTables"])
         self.assertEqual(1, len(connection.calls))
         self.assertEqual("OPTIMIZE TABLE `domain_events`", connection.calls[0][0])
+
+    def test_compaction_plan_uses_metadata_and_preserves_disk_reserve(self):
+        candidates = mysql_operational_space_reclaim_candidates(TableSpaceConnection())
+
+        self.assertEqual(["ontology_world_projection_outbox"], [item["table"] for item in candidates])
+        safe = safe_mysql_operational_compaction_tables(
+            candidates,
+            free_bytes=20 * 1024 * 1024 * 1024,
+            reserve_bytes=16 * 1024 * 1024 * 1024,
+        )
+        blocked = safe_mysql_operational_compaction_tables(
+            candidates,
+            free_bytes=16 * 1024 * 1024 * 1024,
+            reserve_bytes=16 * 1024 * 1024 * 1024,
+        )
+
+        self.assertEqual(["ontology_world_projection_outbox"], safe["selectedTables"])
+        self.assertEqual([], blocked["selectedTables"])
+        self.assertEqual("insufficient-headroom", blocked["skippedTables"][0]["reason"])
 
     def test_only_disposable_test_and_smoke_databases_are_candidates(self):
         result = ephemeral_mysql_database_names(

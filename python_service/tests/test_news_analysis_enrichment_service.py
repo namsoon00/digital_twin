@@ -103,6 +103,28 @@ class NewsAnalysisEnrichmentRunnerTests(unittest.TestCase):
         self.assertEqual("ok", saved.raw_payload["aiAnalysis"]["status"])
         self.assertTrue(saved.raw_payload["aiAnalysis"]["lastExternalAttemptAt"])
 
+    def test_worker_defers_before_querying_news_when_storage_reserve_is_low(self):
+        class Store:
+            def latest(self, **_kwargs):
+                raise AssertionError("low-disk guard must run before the evidence query")
+
+        runner = NewsAnalysisEnrichmentRunner(
+            evidence_store=Store(),
+            analysis_service=object(),
+            settings={"newsAiAnalysisAsyncEnabled": "1"},
+            storage_guard=lambda: {
+                "status": "guarded-low-disk",
+                "nonEssentialWritesAllowed": False,
+                "freeMb": 12000,
+            },
+        )
+
+        result = runner.run_once()
+
+        self.assertEqual("deferred-low-disk", result["status"])
+        self.assertEqual(0, result["processedCount"])
+        self.assertEqual("guarded-low-disk", result["storage"]["status"])
+
     def test_worker_event_payload_serializes_evidence_deltas(self):
         item = self.evidence()
         runner = NewsAnalysisEnrichmentRunner(

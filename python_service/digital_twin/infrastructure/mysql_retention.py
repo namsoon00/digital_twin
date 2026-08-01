@@ -134,7 +134,16 @@ def operational_history_retention_batch_size(settings: Mapping[str, object] = No
     # Clamp legacy 1,000-row settings too. The next maintenance turn will
     # continue any backlog, so keeping a transaction short is more important
     # than draining it in one pass.
-    return _int_setting(settings or {}, "operationalHistoryRetentionBatchSize", DEFAULT_BATCH_SIZE, 1, 50)
+    configured = settings or {}
+    if "_effectiveOperationalHistoryRetentionBatchSize" in configured:
+        return _int_setting(
+            configured,
+            "_effectiveOperationalHistoryRetentionBatchSize",
+            DEFAULT_BATCH_SIZE,
+            1,
+            500,
+        )
+    return _int_setting(configured, "operationalHistoryRetentionBatchSize", DEFAULT_BATCH_SIZE, 1, 50)
 
 
 def operational_history_retention_check_interval_seconds(settings: Mapping[str, object] = None) -> int:
@@ -413,26 +422,32 @@ def _delete_delivered_notification_rows_over_keep_count(
     while the canonical decision and evidence records live in their own tables.
     Delivery history therefore must not grow with every realtime cycle.
     """
-    sql = """
-        DELETE jobs
-        FROM `notification_jobs` jobs
-        JOIN (
-            SELECT job_id
-            FROM (
-                SELECT job_id,
-                       ROW_NUMBER() OVER (
-                           PARTITION BY account_id
-                           ORDER BY updated_at DESC, job_id DESC
-                       ) AS row_number_value
-                FROM `notification_jobs`
-                WHERE `status` = 'done'
-            ) ranked
-            WHERE ranked.row_number_value > %s
-            LIMIT %s
-        ) stale
-          ON stale.job_id = jobs.job_id
-    """
-    return _delete_one_batch(connection, sql, (keep_count, batch_size))
+    account_rows = _execute(
+        connection,
+        "SELECT DISTINCT account_id FROM `notification_jobs` WHERE `status` = 'done' ORDER BY account_id",
+    ).fetchall()
+    job_ids = []
+    for row in account_rows or []:
+        if len(job_ids) >= batch_size:
+            break
+        account_id = str((row.get("account_id") if isinstance(row, dict) else row[0]) or "")
+        rows = _execute(
+            connection,
+            "SELECT job_id FROM `notification_jobs` WHERE account_id = %s AND `status` = 'done' "
+            "ORDER BY updated_at DESC, job_id DESC LIMIT %s OFFSET %s",
+            (account_id, batch_size - len(job_ids), keep_count),
+        ).fetchall()
+        job_ids.extend(_row_identifiers(rows, "job_id"))
+    job_ids = list(dict.fromkeys(job_ids))[:batch_size]
+    if not job_ids:
+        return 0
+    return _delete_one_batch(
+        connection,
+        "DELETE FROM `notification_jobs` WHERE job_id IN ("
+        + ", ".join(["%s"] * len(job_ids))
+        + ") AND `status` = 'done'",
+        tuple(job_ids),
+    )
 
 
 def _delete_market_time_series_rows(
@@ -453,27 +468,32 @@ def _delete_market_time_series_rows(
 
 
 def _delete_snapshot_history_over_keep_count(connection, keep_count: int, batch_size: int) -> int:
-    sql = """
-        DELETE history
-        FROM `monitor_snapshot_history` history
-        JOIN (
-            SELECT account_id, generated_at
-            FROM (
-                SELECT account_id,
-                       generated_at,
-                       ROW_NUMBER() OVER (
-                           PARTITION BY account_id
-                           ORDER BY generated_at DESC
-                       ) AS row_number_value
-                FROM `monitor_snapshot_history`
-            ) ranked
-            WHERE ranked.row_number_value > %s
-            LIMIT %s
-        ) stale
-          ON stale.account_id = history.account_id
-         AND stale.generated_at = history.generated_at
-    """
-    return _delete_one_batch(connection, sql, (keep_count, batch_size))
+    account_rows = _execute(
+        connection,
+        "SELECT DISTINCT account_id FROM `monitor_snapshot_history` ORDER BY account_id",
+    ).fetchall()
+    deleted = 0
+    for row in account_rows or []:
+        if deleted >= batch_size:
+            break
+        account_id = str((row.get("account_id") if isinstance(row, dict) else row[0]) or "")
+        candidates = _execute(
+            connection,
+            "SELECT generated_at FROM `monitor_snapshot_history` WHERE account_id = %s "
+            "ORDER BY generated_at DESC LIMIT %s OFFSET %s",
+            (account_id, batch_size - deleted, keep_count),
+        ).fetchall()
+        generated_values = _row_identifiers(candidates, "generated_at")
+        if not generated_values:
+            continue
+        deleted += _delete_one_batch(
+            connection,
+            "DELETE FROM `monitor_snapshot_history` WHERE account_id = %s AND generated_at IN ("
+            + ", ".join(["%s"] * len(generated_values))
+            + ")",
+            (account_id, *generated_values),
+        )
+    return deleted
 
 
 def _delete_large_domain_events_over_keep_count(
@@ -485,31 +505,18 @@ def _delete_large_domain_events_over_keep_count(
     event_names = [str(item or "").strip() for item in names or [] if str(item or "").strip()]
     if not event_names:
         return 0
-    placeholders = ", ".join(["%s"] * len(event_names))
-    candidate_sql = (
-        """
-        SELECT event_id
-        FROM (
-            SELECT event_id,
-                   occurred_at,
-                   ROW_NUMBER() OVER (
-                       PARTITION BY name
-                       ORDER BY occurred_at DESC, event_id DESC
-                   ) AS row_number_value
-            FROM `domain_events`
-            WHERE name IN (
-        """
-        + placeholders
-        + """
-            )
-        ) ranked
-        WHERE ranked.row_number_value > %s
-        ORDER BY occurred_at ASC, event_id ASC
-        LIMIT %s
-        """
-    )
-    rows = _execute(connection, candidate_sql, tuple(event_names) + (keep_count, batch_size)).fetchall()
-    event_ids = _row_identifiers(rows, "event_id")
+    event_ids = []
+    for event_name in event_names:
+        if len(event_ids) >= batch_size:
+            break
+        rows = _execute(
+            connection,
+            "SELECT event_id FROM `domain_events` WHERE name = %s "
+            "ORDER BY occurred_at DESC, event_id DESC LIMIT %s OFFSET %s",
+            (event_name, batch_size - len(event_ids), keep_count),
+        ).fetchall()
+        event_ids.extend(_row_identifiers(rows, "event_id"))
+    event_ids = list(dict.fromkeys(event_ids))[:batch_size]
     if not event_ids:
         return 0
     delete_sql = (
@@ -538,26 +545,32 @@ def _delete_stale_projection_runs(connection, cutoff_iso: str, batch_size: int) 
 
 def _delete_projection_runs_over_keep_count(connection, keep_count: int, batch_size: int) -> int:
     """Retain only the newest completed audit rows for each ontology world."""
-    sql = """
-        DELETE runs
-        FROM `ontology_projection_runs` runs
-        JOIN (
-            SELECT run_id
-            FROM (
-                SELECT run_id,
-                       ROW_NUMBER() OVER (
-                           PARTITION BY COALESCE(NULLIF(world_id, ''), '__legacy__')
-                           ORDER BY updated_at DESC, run_id DESC
-                       ) AS row_number_value
-                FROM `ontology_projection_runs`
-                WHERE status <> 'projecting'
-            ) ranked
-            WHERE row_number_value > %s
-            LIMIT %s
-        ) stale
-          ON stale.run_id = runs.run_id
-    """
-    return _delete_one_batch(connection, sql, (keep_count, batch_size))
+    world_rows = _execute(
+        connection,
+        "SELECT DISTINCT world_id FROM `ontology_projection_runs` WHERE status <> 'projecting' ORDER BY world_id",
+    ).fetchall()
+    run_ids = []
+    for row in world_rows or []:
+        if len(run_ids) >= batch_size:
+            break
+        world_id = str((row.get("world_id") if isinstance(row, dict) else row[0]) or "")
+        rows = _execute(
+            connection,
+            "SELECT run_id FROM `ontology_projection_runs` WHERE status <> 'projecting' AND world_id = %s "
+            "ORDER BY updated_at DESC, run_id DESC LIMIT %s OFFSET %s",
+            (world_id, batch_size - len(run_ids), keep_count),
+        ).fetchall()
+        run_ids.extend(_row_identifiers(rows, "run_id"))
+    run_ids = list(dict.fromkeys(run_ids))[:batch_size]
+    if not run_ids:
+        return 0
+    return _delete_one_batch(
+        connection,
+        "DELETE FROM `ontology_projection_runs` WHERE run_id IN ("
+        + ", ".join(["%s"] * len(run_ids))
+        + ") AND status <> 'projecting'",
+        tuple(run_ids),
+    )
 
 
 def _delete_completed_world_projection_outbox_rows(connection, cutoff_iso: str, batch_size: int) -> int:
@@ -610,6 +623,90 @@ def mysql_operational_compaction_tables(retention_result: Mapping[str, object] =
         for table, deleted in tables.items()
         if table in MYSQL_OPERATIONAL_COMPACTION_TABLES and int(deleted or 0) > 0
     )
+
+
+def mysql_operational_space_reclaim_candidates(
+    connection,
+    minimum_reclaim_mb: int = 256,
+    maximum_tables: int = 3,
+) -> List[Dict[str, object]]:
+    """Plan explicit compaction from table metadata without reading payloads."""
+
+    minimum_bytes = max(16, int(minimum_reclaim_mb or 256)) * 1024 * 1024
+    limit = max(1, min(10, int(maximum_tables or 3)))
+    rows = _execute(
+        connection,
+        """
+        SELECT tables_meta.table_name AS tableName,
+               COALESCE(tables_meta.data_length, 0) AS dataBytes,
+               COALESCE(tables_meta.index_length, 0) AS indexBytes,
+               COALESCE(tables_meta.data_free, 0) AS statisticalFreeBytes,
+               COALESCE(SUM(spaces.allocated_size), 0) AS allocatedBytes
+        FROM information_schema.tables tables_meta
+        LEFT JOIN information_schema.innodb_tablespaces spaces
+          ON spaces.name = CONCAT(tables_meta.table_schema, '/', tables_meta.table_name)
+          OR LEFT(
+               spaces.name,
+               CHAR_LENGTH(CONCAT(tables_meta.table_schema, '/', tables_meta.table_name, '#p#'))
+             ) = CONCAT(tables_meta.table_schema, '/', tables_meta.table_name, '#p#')
+        WHERE tables_meta.table_schema = DATABASE()
+        GROUP BY tables_meta.table_name, tables_meta.data_length, tables_meta.index_length, tables_meta.data_free
+        ORDER BY allocatedBytes DESC, tables_meta.table_name
+        """,
+    ).fetchall()
+    candidates = []
+    for row in rows or []:
+        table = str((row.get("tableName") if isinstance(row, dict) else row[0]) or "").strip()
+        data_bytes = int((row.get("dataBytes") if isinstance(row, dict) else row[1]) or 0)
+        index_bytes = int((row.get("indexBytes") if isinstance(row, dict) else row[2]) or 0)
+        statistical_free_bytes = int((row.get("statisticalFreeBytes") if isinstance(row, dict) else row[3]) or 0)
+        allocated_bytes = int((row.get("allocatedBytes") if isinstance(row, dict) else row[4]) or 0)
+        reclaimable_bytes = max(0, allocated_bytes - data_bytes - index_bytes)
+        allocated_bytes = max(1, allocated_bytes)
+        if table not in MYSQL_OPERATIONAL_COMPACTION_TABLES or reclaimable_bytes < minimum_bytes:
+            continue
+        if reclaimable_bytes / allocated_bytes < 0.20:
+            continue
+        candidates.append({
+            "table": table,
+            "dataBytes": data_bytes,
+            "indexBytes": index_bytes,
+            "allocatedBytes": allocated_bytes,
+            "reclaimableBytes": reclaimable_bytes,
+            "statisticalFreeBytes": statistical_free_bytes,
+            "temporaryHeadroomBytes": data_bytes + index_bytes + 64 * 1024 * 1024,
+        })
+        if len(candidates) >= limit:
+            break
+    return candidates
+
+
+def safe_mysql_operational_compaction_tables(
+    candidates: Sequence[Mapping[str, object]],
+    free_bytes: int,
+    reserve_bytes: int,
+) -> Dict[str, object]:
+    """Select sequential table rebuilds while retaining the shared reserve."""
+
+    available_for_work = max(0, int(free_bytes or 0) - max(0, int(reserve_bytes or 0)))
+    selected = []
+    skipped = []
+    for item in candidates or []:
+        table = str((item or {}).get("table") or "")
+        required = max(0, int((item or {}).get("temporaryHeadroomBytes") or 0))
+        if required <= available_for_work:
+            selected.append(table)
+            # Be conservative: do not assume the previous rebuild's free pages
+            # become visible before the next table starts.
+            available_for_work -= required
+        else:
+            skipped.append({"table": table, "requiredBytes": required, "reason": "insufficient-headroom"})
+    return {
+        "selectedTables": selected,
+        "skippedTables": skipped,
+        "freeBytes": max(0, int(free_bytes or 0)),
+        "reserveBytes": max(0, int(reserve_bytes or 0)),
+    }
 
 
 def optimize_mysql_operational_tables(connection, tables: Sequence[str]) -> Dict[str, object]:

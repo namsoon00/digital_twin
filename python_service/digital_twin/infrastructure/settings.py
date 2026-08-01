@@ -40,6 +40,9 @@ TEXT_SETTING_KEYS = [
     "operationalLargeDomainEventKeepCount",
     "operationalLargeDomainEventNames",
     "operationalProjectionRunKeepCount",
+    "operationalMinimumFreeSpaceMb",
+    "operationalCriticalFreeSpaceMb",
+    "operationalStoragePressureFreePercent",
     "mysqlMinimalRetentionEnabled",
     "mysqlMinimalRetentionMode",
     "mysqlMinimalRetentionIntervalSeconds",
@@ -914,6 +917,21 @@ def runtime_settings(fast_operational_read: bool = False) -> Dict[str, str]:
             "operationalProjectionRunKeepCount",
             "OPERATIONAL_PROJECTION_RUN_KEEP_COUNT",
             "48",
+        ),
+        "operationalMinimumFreeSpaceMb": value(
+            "operationalMinimumFreeSpaceMb",
+            "OPERATIONAL_MINIMUM_FREE_SPACE_MB",
+            "16384",
+        ),
+        "operationalCriticalFreeSpaceMb": value(
+            "operationalCriticalFreeSpaceMb",
+            "OPERATIONAL_CRITICAL_FREE_SPACE_MB",
+            "8192",
+        ),
+        "operationalStoragePressureFreePercent": value(
+            "operationalStoragePressureFreePercent",
+            "OPERATIONAL_STORAGE_PRESSURE_FREE_PERCENT",
+            "10",
         ),
         "mysqlMinimalRetentionEnabled": value(
             "mysqlMinimalRetentionEnabled",

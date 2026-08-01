@@ -25,13 +25,19 @@ from .mysql_operational_connection import (
     mysql_operation_timeout_seconds,
 )
 from .mysql_retention import (
-    MYSQL_OPERATIONAL_COMPACTION_TABLES,
     apply_mysql_operational_history_retention,
     drop_ephemeral_mysql_databases,
     mysql_operational_compaction_tables,
+    mysql_operational_space_reclaim_candidates,
+    operational_history_retention_check_interval_seconds,
     optimize_mysql_operational_tables,
+    safe_mysql_operational_compaction_tables,
 )
 from .mysql_minimal_retention import MySQLMinimalRetentionRepository
+from .operational_storage_guard import (
+    accelerated_mysql_cleanup_settings,
+    operational_storage_health,
+)
 from .notifications import queued_notifier_for_account, send_events
 from .ontology_graph_store import ontology_repository_from_settings
 from .service_factory import (
@@ -974,6 +980,8 @@ def run_mysql_operational_cleanup(
 ) -> Dict[str, object]:
     """Run one bounded cleanup pass outside the realtime inference path."""
     settings = dict(settings or {})
+    storage_health = operational_storage_health(settings)
+    settings = accelerated_mysql_cleanup_settings(settings, storage_health)
     settings["_skipOperationalHistoryRetention"] = True
     # The service manager bootstraps schema before it starts workers.  This
     # low-priority worker must not repeat table/index DDL checks on every
@@ -1015,12 +1023,23 @@ def run_mysql_operational_cleanup(
                 result["policies"] = policies
                 result["compactionCandidates"] = mysql_operational_compaction_tables(result)
                 if optimize:
-                    # Explicit maintenance runs while workers are paused; include the
-                    # small current-state tables too because they can retain old pages
-                    # after large payloads were replaced in place.
+                    compaction_candidates = mysql_operational_space_reclaim_candidates(
+                        connection,
+                        minimum_reclaim_mb=int(settings.get("mysqlPhysicalCompactionMinReclaimMb") or 256),
+                        maximum_tables=int(settings.get("mysqlPhysicalCompactionMaxTablesPerRun") or 3),
+                    )
+                    compaction_plan = safe_mysql_operational_compaction_tables(
+                        compaction_candidates,
+                        free_bytes=int(float(storage_health.get("freeMb") or 0) * 1024 * 1024),
+                        reserve_bytes=int(float(storage_health.get("minimumFreeMb") or 0) * 1024 * 1024),
+                    )
+                    result["compactionPlan"] = {
+                        **compaction_plan,
+                        "candidates": compaction_candidates,
+                    }
                     result["compaction"] = optimize_mysql_operational_tables(
                         connection,
-                        sorted(MYSQL_OPERATIONAL_COMPACTION_TABLES),
+                        compaction_plan["selectedTables"],
                     )
                 if drop_ephemeral_databases:
                     result["ephemeralDatabaseCleanup"] = drop_ephemeral_mysql_databases(
@@ -1031,6 +1050,19 @@ def run_mysql_operational_cleanup(
                 result["transientConnectionRetryCount"] = connection_retries
             if deadlock_retries:
                 result["deadlockRetryCount"] = deadlock_retries
+            result["storageHealth"] = storage_health
+            result["cleanupMode"] = str(storage_health.get("cleanupMode") or "normal")
+            result["nextIntervalSeconds"] = (
+                60
+                if result["cleanupMode"] == "emergency"
+                else 120
+                if result["cleanupMode"] == "accelerated"
+                and (
+                    int(result.get("deleted") or 0) > 0
+                    or not bool(storage_health.get("nonEssentialWritesAllowed", True))
+                )
+                else operational_history_retention_check_interval_seconds(settings)
+            )
             return result
         except Exception as error:
             if not retryable:

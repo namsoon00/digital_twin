@@ -79,6 +79,7 @@ from .ontology_graph_store import ontology_repository_from_settings
 from . import operational_store as stores
 from .ontology_projection import PortfolioOntologyProjectionRecorder
 from .typedb_storage_guard import typedb_storage_health
+from .operational_storage_guard import operational_storage_health
 from .kis_realtime_ws import KISRealtimeSymbolSelector, KISRealtimeWebSocketClient
 from .rule_change_candidate_ai import rule_change_candidate_advisor_from_settings
 from .notifications import queued_notifier_for_account
@@ -502,6 +503,7 @@ def build_news_analysis_enrichment_runner(settings=None, event_publisher=None) -
         ),
         settings=configured_settings,
         event_publisher=event_publisher or news_event_bus(configured_settings),
+        storage_guard=lambda: operational_storage_health(configured_settings),
     )
 
 
@@ -746,6 +748,7 @@ def build_ontology_world_projection_runner(settings=None) -> OntologyWorldProjec
         settings=configured_settings,
         worker_id=os.environ.get("ONTOLOGY_WORLD_PROJECTION_WORKER_ID") or "",
         reasoning_queue_probe=build_ontology_reasoning_queue_probe(configured_settings),
+        storage_guard=lambda: typedb_storage_health(configured_settings),
     )
 
 
@@ -775,6 +778,7 @@ def build_ontology_rulebox_prewarm_runner(settings=None) -> OntologyRuleboxPrewa
         settings=configured_settings,
         reasoning_queue_probe=build_ontology_reasoning_queue_probe(configured_settings),
         prewarm_state_store=stores.ontology_rulebox_prewarm_state_store(store_settings),
+        storage_guard=lambda: typedb_storage_health(configured_settings),
     )
 
 

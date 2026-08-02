@@ -935,6 +935,9 @@ class OntologyMaintenanceRunner:
                     ]
                 },
             })
+        yield_targets_selected_world = (
+            text(maintenance_yield.get("worldId")) == world_id
+        )
         if bool(maintenance_yield.get("active")) and result_status in {"ok", "partial"}:
             granted_at = utc_now_iso()
             next_state.update({
@@ -947,6 +950,32 @@ class OntologyMaintenanceRunner:
                 "status": "consumed",
                 "active": False,
                 "grantedAt": granted_at,
+                "worldId": world_id,
+            }
+        elif (
+            bool(maintenance_yield.get("active"))
+            and yield_targets_selected_world
+            and result_status == "deferred-pending-abox-activation"
+        ):
+            # Retention cannot remove a candidate or its predecessors while
+            # native inference still owns the ABox activation journal. Keep
+            # the directly measured backlog, but release the current yield
+            # request so the reasoning worker can finish that activation.
+            # Leaving it active would make both workers wait for each other
+            # until the request TTL elapsed.
+            released_at = utc_now_iso()
+            next_state.update({
+                "maintenanceYieldRequest": {},
+                "maintenanceYieldLastReleasedAt": released_at,
+                "maintenanceYieldLastReleaseReason": "pending-abox-activation",
+                "maintenanceYieldLastWorldId": world_id,
+            })
+            compact["maintenanceYield"] = {
+                **maintenance_yield,
+                "status": "released-pending-abox-activation",
+                "active": False,
+                "releasedAt": released_at,
+                "releaseReason": "pending-abox-activation",
                 "worldId": world_id,
             }
         elif bool(maintenance_yield.get("active")):

@@ -488,6 +488,7 @@ def scoped_abox_maintenance_yield_status(
     request_age = _elapsed_seconds(requested_at, current) if requested_at else None
     last_requested_at = _text(payload.get("maintenanceYieldLastRequestedAt"))
     last_granted_at = _text(payload.get("maintenanceYieldLastGrantedAt"))
+    last_released_at = _text(payload.get("maintenanceYieldLastReleasedAt"))
     last_activity_at = last_requested_at
     if _timestamp(last_granted_at) and (
         not _timestamp(last_activity_at)
@@ -522,6 +523,7 @@ def scoped_abox_maintenance_yield_status(
         "backgroundWaitSeconds": max(0, _integer(request.get("backgroundWaitSeconds"))),
         "lastRequestedAt": last_requested_at,
         "lastGrantedAt": last_granted_at,
+        "lastReleasedAt": last_released_at,
         "cooldownRemainingSeconds": cooldown_remaining,
         "policy": policy,
     }

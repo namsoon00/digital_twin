@@ -269,6 +269,46 @@ class OntologyMaintenanceRunnerTests(unittest.TestCase):
         self.assertEqual({}, store.payload["maintenanceYieldRequest"])
         self.assertTrue(store.payload["maintenanceYieldLastGrantedAt"])
 
+    def test_pending_activation_releases_active_yield_for_reasoning_recovery(self):
+        class PendingActivationRepository(ManifestInventoryRepository):
+            def run_deferred_maintenance(self, payload):
+                self.calls.append(dict(payload or {}))
+                return {
+                    "status": "ok",
+                    "worldId": payload.get("worldId"),
+                    "abox": {
+                        "status": "skipped",
+                        "reason": "Scoped ABox activation is pending native inference.",
+                    },
+                }
+
+        now = datetime.now(timezone.utc)
+        store = FakeStateStore({
+            "maintenanceYieldRequest": {
+                "requestedAt": now.isoformat().replace("+00:00", "Z"),
+                "expiresAt": (now + timedelta(seconds=120)).isoformat().replace("+00:00", "Z"),
+                "worldId": "portfolio:local:main",
+                "inactiveManifestCount": 13,
+            },
+            "maintenanceYieldLastRequestedAt": now.isoformat().replace("+00:00", "Z"),
+        })
+        runner = OntologyMaintenanceRunner(
+            PendingActivationRepository(),
+            state_store=store,
+            reasoning_queue_probe=lambda: {"effectivePendingCount": 0, "runningEntryCount": 0},
+        )
+
+        result = runner.run_once()
+
+        self.assertEqual("deferred-pending-abox-activation", result["status"])
+        self.assertEqual(
+            "released-pending-abox-activation",
+            result["maintenance"]["maintenanceYield"]["status"],
+        )
+        self.assertEqual({}, store.payload["maintenanceYieldRequest"])
+        self.assertTrue(store.payload["maintenanceYieldLastReleasedAt"])
+        self.assertNotIn("maintenanceYieldLastGrantedAt", store.payload)
+
     def test_aged_maintenance_gets_one_fairness_turn_between_reasoning_leases(self):
         repository = FakeOntologyRepository()
         store = FakeStateStore({

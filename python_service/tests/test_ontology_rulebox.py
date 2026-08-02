@@ -921,6 +921,27 @@ class OntologyRuleBoxTests(unittest.TestCase):
         self.assertEqual([], missing_market_microstructure_fields(us_position))
         self.assertIn("tradeStrength", {item["field"] for item in missing_market_microstructure_fields(kr_position)})
 
+    def test_microstructure_quality_projects_an_explicit_usable_state(self):
+        usable_graph = self.liquid_small_position_graph()
+        usable = next(
+            item
+            for item in usable_graph.entities
+            if item.kind == "data-quality-status" and item.entity_id == "data-quality-status:005930:market-microstructure"
+        )
+        usable_relation = next(
+            item
+            for item in usable_graph.relations
+            if item.source == "stock:005930"
+            and item.target == usable.entity_id
+            and item.relation_type == "HAS_DATA_QUALITY"
+        )
+        missing_graph = self.data_quality_gap_graph()
+
+        self.assertEqual("available", usable.properties["dataState"])
+        self.assertEqual("market-microstructure", usable.properties["dataScope"])
+        self.assertEqual("available", usable_relation.properties["dataState"])
+        self.assertFalse(any(item.kind == "data-quality-status" for item in missing_graph.entities))
+
     def test_prompt_payload_for_abox_projection_has_no_local_rulebox_inference(self):
         graph = self.loss_guard_graph()
         payload = prompt_payload(graph)
@@ -1179,10 +1200,10 @@ class OntologyRuleBoxTests(unittest.TestCase):
             for item in condition_rows
             if item["id"] == "rule-condition:graph.execution.liquidity_or_slippage_block.v1:visible-depth-block"
         )
-        price_reclaim_not = next(
+        price_reclaim_quality = next(
             item
             for item in condition_rows
-            if item["id"] == "rule-condition:graph.price.reclaim.thesis_support.v1:no-severe-microstructure-gap"
+            if item["id"] == "rule-condition:graph.price.reclaim.thesis_support.v1:microstructure-data-usable"
         )
         portfolio_concentration = next(
             item
@@ -1414,7 +1435,10 @@ class OntologyRuleBoxTests(unittest.TestCase):
         self.assertEqual("any", execution_slippage["conditionRole"])
         self.assertEqual(["positionToBidDepthPct"], execution_slippage["conditionTargetFields"])
         self.assertEqual(30.0, execution_slippage["conditionTargetMinValue"])
-        self.assertEqual("not", price_reclaim_not["conditionRole"])
+        self.assertEqual("required", price_reclaim_quality["conditionRole"])
+        self.assertEqual("HAS_DATA_QUALITY", price_reclaim_quality["conditionRelationType"])
+        self.assertEqual("data-quality-status", price_reclaim_quality["conditionTargetKind"])
+        self.assertEqual(["market-microstructure"], price_reclaim_quality["conditionTargetDataScopes"])
         self.assertEqual("any", portfolio_concentration["conditionRole"])
         self.assertEqual("HAS_MARKET_EXPOSURE", portfolio_concentration["conditionRelationType"])
         self.assertEqual("sector-exposure", portfolio_concentration["conditionTargetKind"])

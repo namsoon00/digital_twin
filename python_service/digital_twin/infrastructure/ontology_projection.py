@@ -63,6 +63,7 @@ from ..domain.ontology_runtime_operations import (
     build_projection_runtime_observation,
     native_rule_adaptive_target_sharding_policy,
     native_rule_adaptive_target_sharding_profile,
+    native_rule_failure_diagnostic,
     native_replay_validation,
 )
 from ..domain.ontology_validator import validate_ontology
@@ -141,6 +142,7 @@ RULEBOX_RAW_ABOX_RUNTIME_RULE_VERSIONS = {
     for rule_id in RULEBOX_RAW_ABOX_RUNTIME_RULE_IDS
 }
 RULEBOX_RAW_ABOX_RUNTIME_RULE_VERSIONS["graph.execution.capacity_safe.v1"] = "v3"
+RULEBOX_RAW_ABOX_RUNTIME_RULE_VERSIONS["graph.price.reclaim.thesis_support.v1"] = "v3"
 for _rule_id in CRYPTO_MARKET_RULE_IDS:
     RULEBOX_RAW_ABOX_RUNTIME_RULE_VERSIONS[_rule_id] = "v1"
 
@@ -3745,6 +3747,46 @@ class PortfolioOntologyProjectionRecorder:
                 self.reconcile_abox_activation_after_inference(result, inference_symbols, world_id=world_id)
                 runtime_stages["aboxActivationFinalizationMs"] = int((time.perf_counter() - finalization_started) * 1000)
                 return
+            native_failure = (
+                native_rule_failure_diagnostic(execution, inference_symbols)
+                if active_key == "typedb"
+                else {}
+            )
+            if native_failure:
+                # A failed native query leaves the previous durable
+                # InferenceBox readable. Reading it here used to turn the
+                # original TypeDB timeout into a misleading ABox/InferenceBox
+                # alignment failure. Reconcile only to restore the prior ABox
+                # generation, while retaining the actual blocking rule in the
+                # operational audit payload.
+                result["nativeRuleFailure"] = native_failure
+                reason = str(
+                    native_failure.get("reason")
+                    or execution.get("reason")
+                    or "TypeDB native RuleBox execution did not complete."
+                )
+                result["inferenceBox"] = {
+                    "configured": True,
+                    "status": "native-rule-failed",
+                    "graphStore": active_key,
+                    "source": "typedbInferenceBox",
+                    "nativeTypeDbReasoningUsed": False,
+                    "nativeTypeDbReasoningCompleted": False,
+                    "nativeInferenceOutcome": "failed",
+                    "targetSymbols": list(native_failure.get("targetSymbols") or inference_symbols),
+                    "reason": reason,
+                }
+                finalization_started = time.perf_counter()
+                self.reconcile_abox_activation_after_inference(result, inference_symbols, world_id=world_id)
+                runtime_stages["aboxActivationFinalizationMs"] = int(
+                    (time.perf_counter() - finalization_started) * 1000
+                )
+                if result.get("preservedActiveGeneration") and bool(native_failure.get("retryable")):
+                    result["retryable"] = True
+                    result["recommendedRetryAfterSeconds"] = int(
+                        native_failure.get("recommendedRetryAfterSeconds") or 30
+                    )
+                return
             # A native RuleBox execution first builds an in-memory graph and
             # then writes it to TypeDB.  The old path expanded every durable
             # InferenceBox row again before an alert could proceed.  In the
@@ -4110,17 +4152,33 @@ class PortfolioOntologyProjectionRecorder:
             if result["preservedActiveGeneration"]
             else "inference-failed-no-rollback"
         )
-        result["reason"] = (
-            "TypeDB native InferenceBox가 새 ABox 세대와 정렬되지 않아 "
-            + ("이전 검증 세대로 복원했습니다." if result["preservedActiveGeneration"] else "투자 추론을 차단했습니다.")
-            + " " + str(alignment.get("summary") or "")
-        )
+        native_failure = result.get("nativeRuleFailure")
+        native_failure = dict(native_failure or {}) if isinstance(native_failure, dict) else {}
+        failure_rule_id = str(native_failure.get("ruleId") or "").strip()
+        failure_reason = str(native_failure.get("reason") or "").strip()
+        if failure_reason:
+            result["reason"] = (
+                "TypeDB 네이티브 규칙 실행 실패"
+                + ((" (" + failure_rule_id + ")") if failure_rule_id else "")
+                + ": " + failure_reason[:500]
+                + " "
+                + ("이전 검증 세대로 복원했습니다." if result["preservedActiveGeneration"] else "투자 추론을 차단했습니다.")
+                + " 정렬 진단: " + str(alignment.get("summary") or "")
+            )
+        else:
+            result["reason"] = (
+                "TypeDB native InferenceBox가 새 ABox 세대와 정렬되지 않아 "
+                + ("이전 검증 세대로 복원했습니다." if result["preservedActiveGeneration"] else "투자 추론을 차단했습니다.")
+                + " " + str(alignment.get("summary") or "")
+            )
         if result["preservedActiveGeneration"]:
             # The prior verified generation is still active. Keep the source
             # event pending and retry with back-pressure instead of opening a
             # failure circuit against a safe rollback.
             result["retryable"] = True
-            result["recommendedRetryAfterSeconds"] = 30
+            result["recommendedRetryAfterSeconds"] = int(
+                native_failure.get("recommendedRetryAfterSeconds") or 30
+            )
         if isinstance(rollback.get("activeAbox"), dict):
             verification["activePointer"] = dict(rollback.get("activeAbox") or {})
             result["aboxPersistenceVerification"] = verification

@@ -9,6 +9,7 @@ from digital_twin.domain.ontology_projection_audit import (
     complete_ontology_projection_run,
     inference_reuse_scope_plan_for_targets,
     inference_reuse_scope_plan_fingerprint,
+    projection_result_summary,
     projection_run_from_payload,
     projection_source_snapshot,
 )
@@ -102,6 +103,31 @@ def abox_graph():
 
 
 class OntologyProjectionAuditTests(unittest.TestCase):
+    def test_projection_result_summary_keeps_native_rule_failure_context(self):
+        summary = projection_result_summary({
+            "status": "inference-failed-rolled-back",
+            "nativeRuleFailure": {
+                "version": "typedb-native-rule-failure-v1",
+                "stage": "native-rule-query",
+                "status": "query-timeout",
+                "executionStatus": "error",
+                "reasonCode": "typedbNativeRuleQueryTimeout",
+                "ruleId": "graph.price.reclaim.thesis_support.v1",
+                "blockingRuleStatus": "query-timeout",
+                "targetSymbols": ["MSTR", "035420"],
+                "queryMode": "typedb-manifest-evidence-index",
+                "retryable": True,
+                "recommendedRetryAfterSeconds": 30,
+                "reason": "Blocking rule timed out.",
+            },
+        })
+
+        failure = summary["nativeRuleFailure"]
+        self.assertEqual("query-timeout", failure["status"])
+        self.assertEqual("graph.price.reclaim.thesis_support.v1", failure["ruleId"])
+        self.assertEqual(["035420", "MSTR"], failure["targetSymbols"])
+        self.assertEqual(30, failure["recommendedRetryAfterSeconds"])
+
     def build_run(self):
         snapshot = source_snapshot()
         graph = abox_graph()

@@ -5376,12 +5376,12 @@ def default_graph_inference_rules() -> List[GraphInferenceRule]:
         ),
         GraphInferenceRule(
             rule_id="graph.price.reclaim.thesis_support.v1",
-            label="가격 기준 회복 + 심각 결측 없음 -> thesis 지지",
-            version="v2",
+            label="가격 기준 회복 + 미시구조 자료 상태 확인 -> thesis 지지",
+            version="v3",
             source_kind="stock",
             action_group="entry",
             action_level="review",
-            prompt_hint="기준선 회복은 데이터 품질 차단이 없을 때만 진입 또는 보유 thesis 지지로 설명합니다.",
+            prompt_hint="기준선 회복은 필요한 미시구조 자료가 사용 가능한 상태에서만 진입 또는 보유 thesis 지지로 설명합니다.",
             conditions=[
                 GraphRuleCondition(
                     "level-reclaim",
@@ -5392,14 +5392,15 @@ def default_graph_inference_rules() -> List[GraphInferenceRule]:
                     target_property_filters={"levelType": ["ma5", "ma20", "ma60"], "minValue": 0.0},
                 ),
                 GraphRuleCondition(
-                    "no-severe-microstructure-gap",
+                    "microstructure-data-usable",
                     "relation",
-                    "심각한 미시구조 결측이 없어야 합니다.",
+                    "필요한 미시구조 자료가 사용 가능한 상태여야 합니다.",
                     relation_type="HAS_DATA_QUALITY",
-                    target_kind="missing-data",
-                    target_property_filters={"dataScope": "market-microstructure"},
-                    relation_property_filters={"evidenceRole": "risk"},
-                    role="not",
+                    target_kind="data-quality-status",
+                    target_property_filters={
+                        "dataScope": "market-microstructure",
+                        "dataState": ["available", "not-required"],
+                    },
                 ),
             ],
             derivations=[

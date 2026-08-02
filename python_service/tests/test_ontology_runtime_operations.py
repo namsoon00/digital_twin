@@ -7,6 +7,7 @@ from digital_twin.domain.ontology_runtime_operations import (
     bounded_background_work_fairness,
     build_projection_runtime_observation,
     native_rule_adaptive_target_sharding_profile,
+    native_rule_failure_diagnostic,
     native_replay_validation,
     native_rule_timing_profile,
     summarize_projection_runtime_observations,
@@ -16,6 +17,34 @@ from digital_twin.infrastructure.mysql_ontology_projection_runs import MySQLOnto
 
 
 class OntologyRuntimeOperationsTests(unittest.TestCase):
+    def test_native_rule_failure_diagnostic_preserves_blocking_timeout_context(self):
+        diagnostic = native_rule_failure_diagnostic({
+            "status": "error",
+            "reason": "TypeDB native rule execution did not complete for every applicable rule.",
+            "nativeMatchResult": {
+                "status": "partial",
+                "reasonCode": "typedbNativeRuleQueryTimeout",
+                "reason": (
+                    "TypeDB native rule execution did not complete for every applicable rule. "
+                    "Blocking rule: graph.price.reclaim.thesis_support.v1 / query-timeout / [TSV13]."
+                ),
+                "nativeExecutionMode": "typedb-manifest-evidence-index",
+                "blockingRule": {
+                    "ruleId": "graph.price.reclaim.thesis_support.v1",
+                    "status": "query-timeout",
+                    "candidateSymbols": ["035420", "MSTR"],
+                },
+            },
+        }, ["MSTR"])
+
+        self.assertEqual("query-timeout", diagnostic["status"])
+        self.assertEqual("typedbNativeRuleQueryTimeout", diagnostic["reasonCode"])
+        self.assertEqual("graph.price.reclaim.thesis_support.v1", diagnostic["ruleId"])
+        self.assertEqual(["035420", "MSTR"], diagnostic["targetSymbols"])
+        self.assertEqual("typedb-manifest-evidence-index", diagnostic["queryMode"])
+        self.assertTrue(diagnostic["retryable"])
+        self.assertEqual(30, diagnostic["recommendedRetryAfterSeconds"])
+
     def test_background_work_fairness_never_overlaps_active_reasoning_and_respects_cooldown(self):
         now = datetime(2026, 8, 2, 0, 20, tzinfo=timezone.utc)
         old = (now - timedelta(minutes=20)).isoformat().replace("+00:00", "Z")

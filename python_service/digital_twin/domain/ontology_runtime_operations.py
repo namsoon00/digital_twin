@@ -16,6 +16,7 @@ ONTOLOGY_RUNTIME_OBSERVATION_VERSION = "ontology-runtime-observation-v1"
 NATIVE_RULE_TIMING_PROFILE_VERSION = "typedb-native-rule-timing-v1"
 NATIVE_RULE_ADAPTIVE_TARGET_SHARDING_PROFILE_VERSION = "typedb-native-rule-adaptive-target-sharding-v1"
 NATIVE_REPLAY_VALIDATION_VERSION = "typedb-native-replay-validation-v1"
+NATIVE_RULE_FAILURE_DIAGNOSTIC_VERSION = "typedb-native-rule-failure-v1"
 SCOPED_ABOX_MAINTENANCE_POLICY_VERSION = "typedb-scoped-abox-maintenance-policy-v2"
 BACKGROUND_WORK_FAIRNESS_POLICY_VERSION = "ontology-background-work-fairness-v1"
 DISABLED_VALUES = {"0", "false", "no", "off", "disabled"}
@@ -496,6 +497,121 @@ def native_replay_validation(result: Mapping[str, object] = None) -> Dict[str, o
         "requestedTargetSymbolCount": len(requested_symbols),
         "actualTargetSymbolCount": len(actual_symbols),
         "priorProofStatus": _text(proof.get("status")),
+    }
+
+
+def native_rule_failure_diagnostic(
+    execution: Mapping[str, object] = None,
+    target_symbols: Iterable[object] = None,
+) -> Dict[str, object]:
+    """Summarize a failed native RuleBox turn without judging a rule in Python.
+
+    TypeDB already identifies the blocking rule in ``nativeMatchResult``.  The
+    projection layer needs a compact, stable operational payload so it can
+    preserve that root failure instead of replacing it with a secondary ABox
+    and InferenceBox alignment symptom.
+    """
+
+    values = dict(execution or {}) if isinstance(execution, Mapping) else {}
+    execution_status = _text(values.get("status")).lower()
+    native_match = values.get("nativeMatchResult")
+    native_match = dict(native_match or {}) if isinstance(native_match, Mapping) else {}
+    native_status = _text(native_match.get("status")).lower()
+    completed = bool(
+        values.get("nativeInferenceEvaluationComplete")
+        or values.get("nativeTypeDbReasoningCompleted")
+        or values.get("typedbNativeRuleEvaluationCompleted")
+    )
+
+    # A complete match and a complete no-match are both safe outcomes. The
+    # deferred statuses are handled by their dedicated projection branches.
+    if (execution_status in {"ok", "empty"} and completed) or execution_status.startswith("deferred-"):
+        return {}
+    if execution_status in {"", "ok", "empty"} and not native_status:
+        return {}
+
+    blocking = values.get("blockingRule")
+    blocking = dict(blocking or {}) if isinstance(blocking, Mapping) else {}
+    if not blocking:
+        blocking = native_match.get("blockingRule")
+        blocking = dict(blocking or {}) if isinstance(blocking, Mapping) else {}
+    if not blocking:
+        for item in native_match.get("skippedRules") or values.get("skippedRules") or []:
+            if isinstance(item, Mapping) and _text(item.get("status")).lower() not in {
+                "",
+                "not-applicable",
+                "not-applicable-preflight",
+                "planned",
+            }:
+                blocking = dict(item)
+                break
+
+    blocking_status = _text(blocking.get("status")).lower()
+    reason_code = _text(
+        native_match.get("reasonCode") or values.get("reasonCode")
+    )
+    reason = _text(native_match.get("reason") or values.get("reason"))
+    blocking_reason = _text(blocking.get("reason"))
+    timeout = (
+        blocking_status == "query-timeout"
+        or native_status == "query-timeout"
+        or "timeout" in reason_code.lower()
+        or "timeout" in reason.lower()
+        or "timed out" in reason.lower()
+        or "[tsv13]" in reason.lower()
+    )
+    budget_exhausted = (
+        blocking_status == "deferred-by-runtime-budget"
+        or native_status == "deferred-by-runtime-budget"
+        or "budget" in reason_code.lower()
+    )
+    diagnostic_status = (
+        "query-timeout"
+        if timeout
+        else "runtime-budget-exhausted"
+        if budget_exhausted
+        else "native-rule-incomplete"
+        if execution_status == "partial" or native_status == "partial"
+        else "native-rule-failed"
+    )
+    raw_candidates = (
+        blocking.get("candidateSymbols")
+        or target_symbols
+        or values.get("targetSymbols")
+        or []
+    )
+    if isinstance(raw_candidates, (str, bytes)):
+        raw_candidates = [raw_candidates]
+    candidates = [
+        _text(symbol).upper()
+        for symbol in raw_candidates
+        if _text(symbol)
+    ]
+    rule_id = _text(blocking.get("ruleId") or values.get("ruleId"))
+    if not reason:
+        reason = blocking_reason or "TypeDB native RuleBox execution did not complete."
+    return {
+        "version": NATIVE_RULE_FAILURE_DIAGNOSTIC_VERSION,
+        "stage": "native-rule-query",
+        "status": diagnostic_status,
+        "executionStatus": execution_status or native_status or "error",
+        "reasonCode": reason_code,
+        "reason": reason[:500],
+        "ruleId": rule_id,
+        "blockingRuleStatus": blocking_status,
+        "targetSymbols": sorted(set(candidates)),
+        "queryMode": _text(
+            native_match.get("nativeExecutionMode")
+            or values.get("typedbNativeExecutionMode")
+            or values.get("nativeExecutionMode")
+        ),
+        "retryable": diagnostic_status in {
+            "query-timeout",
+            "runtime-budget-exhausted",
+            "native-rule-incomplete",
+            "native-rule-failed",
+        },
+        "recommendedRetryAfterSeconds": 30 if timeout or budget_exhausted else 15,
     }
 
 

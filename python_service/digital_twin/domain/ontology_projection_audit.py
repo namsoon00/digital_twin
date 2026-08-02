@@ -356,6 +356,7 @@ def projection_result_summary(result: Dict[str, object]) -> Dict[str, object]:
     inference_detail_outbox = dict(values.get("inferenceDetailOutbox") or {})
     native_stage_timings = dict(execution.get("typedbNativeStageTimings") or {})
     replay_validation = dict(values.get("nativeReplayValidation") or {})
+    native_rule_failure = dict(values.get("nativeRuleFailure") or {})
     reasoning_context = compact_reasoning_request_context(values.get("reasoningContext"))
     return {
         "saved": bool(values.get("saved")),
@@ -418,6 +419,22 @@ def projection_result_summary(result: Dict[str, object]) -> Dict[str, object]:
             "coverageComplete": bool(replay_validation.get("coverageComplete")),
             "nativeEvaluationComplete": bool(replay_validation.get("nativeEvaluationComplete")),
             "generationAligned": bool(replay_validation.get("generationAligned")),
+        },
+        "nativeRuleFailure": {
+            "version": str(native_rule_failure.get("version") or ""),
+            "stage": str(native_rule_failure.get("stage") or ""),
+            "status": str(native_rule_failure.get("status") or ""),
+            "executionStatus": str(native_rule_failure.get("executionStatus") or ""),
+            "reasonCode": str(native_rule_failure.get("reasonCode") or ""),
+            "ruleId": str(native_rule_failure.get("ruleId") or ""),
+            "blockingRuleStatus": str(native_rule_failure.get("blockingRuleStatus") or ""),
+            "targetSymbols": _clean_symbols(native_rule_failure.get("targetSymbols") or []),
+            "queryMode": str(native_rule_failure.get("queryMode") or ""),
+            "retryable": bool(native_rule_failure.get("retryable")),
+            "recommendedRetryAfterSeconds": int(
+                native_rule_failure.get("recommendedRetryAfterSeconds") or 0
+            ),
+            "reason": str(native_rule_failure.get("reason") or "")[:500],
         },
         "reasoningContext": reasoning_context,
         "entityCount": int(values.get("entityCount") or 0),

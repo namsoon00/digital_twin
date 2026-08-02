@@ -3347,12 +3347,12 @@ class TypeDBOntologyRepositoryTests(unittest.TestCase):
 
         self.assertEqual([rule.rule_id], [item["ruleId"] for item in matching_plan["selectedEntries"]])
 
-    def test_typedb_native_rule_preflight_prunes_proven_negative_condition_match(self):
+    def test_typedb_native_rule_preflight_prunes_missing_usable_microstructure_quality(self):
         rule = next(
             item for item in default_graph_inference_rules()
             if item.rule_id == "graph.price.reclaim.thesis_support.v1"
         )
-        graph = PortfolioOntology("typedb-preflight-negative")
+        graph = PortfolioOntology("typedb-preflight-quality")
         graph.entities.extend([
             OntologyEntity("stock:005930", "삼성전자", "stock", {
                 "ontologyBox": "ABox",
@@ -3363,16 +3363,16 @@ class TypeDBOntologyRepositoryTests(unittest.TestCase):
                 "levelType": "ma20",
                 "value": 1,
             }),
-            OntologyEntity("missing:005930", "호가 결측", "missing-data", {
+            OntologyEntity("quality:005930", "미시구조 자료 상태", "data-quality-status", {
                 "ontologyBox": "ABox",
                 "dataScope": "market-microstructure",
+                "dataState": "insufficient",
             }),
         ])
         graph.relations.extend([
             OntologyRelation("stock:005930", "level:005930", "HAS_TECHNICAL_INDICATOR", properties={"ontologyBox": "ABox"}),
-            OntologyRelation("stock:005930", "missing:005930", "HAS_DATA_QUALITY", properties={
+            OntologyRelation("stock:005930", "quality:005930", "HAS_DATA_QUALITY", properties={
                 "ontologyBox": "ABox",
-                "evidenceRole": "risk",
             }),
         ])
 
@@ -3386,9 +3386,19 @@ class TypeDBOntologyRepositoryTests(unittest.TestCase):
         self.assertEqual([], plan["selectedEntries"])
         skipped = plan["skippedEntries"][0]
         self.assertEqual(
-            ["not:no-severe-microstructure-gap"],
+            ["microstructure-data-usable"],
             skipped["preflightPrunedSymbols"]["005930"]["failedConditionIds"],
         )
+
+        graph.entities[2].properties["dataState"] = "available"
+        matching_plan = typedb_native_rule_execution_plan(
+            [rule],
+            ["005930"],
+            {"005930": ["HAS_TECHNICAL_INDICATOR", "HAS_DATA_QUALITY"]},
+            preflight_graph=graph,
+        )
+
+        self.assertEqual([rule.rule_id], [item["ruleId"] for item in matching_plan["selectedEntries"]])
 
     def test_typedb_native_rule_preflight_keeps_incoming_relation_rules_when_endpoint_scan_is_deferred(self):
         rule = next(
@@ -7108,6 +7118,101 @@ class TypeDBOntologyRepositoryTests(unittest.TestCase):
         self.assertEqual("misaligned", result["inferenceAlignment"]["status"])
         self.assertIn("native-evaluation-not-complete", result["inferenceAlignment"]["issues"])
 
+    def test_projection_recorder_preserves_native_timeout_without_stale_inference_readback(self):
+        class FakeRepository:
+            store_key = "typedb"
+
+            def __init__(self):
+                self.restored_snapshot_ids = []
+                self.snapshot_read_called = False
+
+            def active_abox_metadata(self):
+                return {
+                    "status": "ok",
+                    "aboxSnapshotId": "abox:previous",
+                    "materialFingerprint": "previous-material",
+                }
+
+            def save_graph(self, _graph):
+                return {
+                    "saved": True,
+                    "status": "ok",
+                    "graphStore": "typedb",
+                    "aboxPersistenceVerification": {
+                        "activation": {
+                            "status": "activated",
+                            "snapshotId": "abox:new",
+                            "previousSnapshotId": "abox:previous",
+                        },
+                    },
+                }
+
+            def rulebox_snapshot(self):
+                rules = rulebox_rules_to_payload(default_graph_inference_rules())
+                return {
+                    "configured": True,
+                    "status": "ok",
+                    "rules": rules,
+                    "ruleCount": len(rules),
+                }
+
+            def run_rulebox(self, _payload):
+                return {
+                    "status": "error",
+                    "reason": "TypeDB native rule execution did not complete for every applicable rule.",
+                    "nativeMatchResult": {
+                        "status": "partial",
+                        "reasonCode": "typedbNativeRuleQueryTimeout",
+                        "reason": (
+                            "TypeDB native rule execution did not complete for every applicable rule. "
+                            "Blocking rule: graph.price.reclaim.thesis_support.v1 / query-timeout / [TSV13]."
+                        ),
+                        "nativeExecutionMode": "typedb-manifest-evidence-index",
+                        "blockingRule": {
+                            "ruleId": "graph.price.reclaim.thesis_support.v1",
+                            "status": "query-timeout",
+                            "candidateSymbols": ["AAPL"],
+                        },
+                    },
+                }
+
+            def inferencebox_snapshot(self, *_args, **_kwargs):
+                self.snapshot_read_called = True
+                raise AssertionError("a failed native rule must not read stale inference rows")
+
+            def activate_abox_generation(self, snapshot_id):
+                self.restored_snapshot_ids.append(snapshot_id)
+                return {
+                    "status": "ok",
+                    "activeAbox": {"status": "ok", "aboxSnapshotId": snapshot_id},
+                }
+
+        snapshot = AccountSnapshot(
+            "main",
+            "메인",
+            "toss",
+            "live",
+            "ok",
+            utc_now_iso(),
+            PortfolioSummary(total=1000, invested=1000, cash=0, markets=[], sectors=[], concentration=0),
+            positions=[Position("AAPL", "Apple", market="US", currency="USD", quantity=1, current_price=100, market_value=100, market_value_krw=140000)],
+        )
+        repository = FakeRepository()
+
+        result = PortfolioOntologyProjectionRecorder(repository).record_snapshot(snapshot)
+
+        self.assertFalse(repository.snapshot_read_called)
+        self.assertFalse(result["saved"])
+        self.assertEqual("inference-failed-rolled-back", result["status"])
+        self.assertTrue(result["preservedActiveGeneration"])
+        self.assertEqual(["abox:previous"], repository.restored_snapshot_ids)
+        self.assertEqual("native-rule-failed", result["inferenceBox"]["status"])
+        self.assertEqual("query-timeout", result["nativeRuleFailure"]["status"])
+        self.assertEqual("graph.price.reclaim.thesis_support.v1", result["nativeRuleFailure"]["ruleId"])
+        self.assertEqual(["AAPL"], result["nativeRuleFailure"]["targetSymbols"])
+        self.assertEqual(30, result["recommendedRetryAfterSeconds"])
+        self.assertIn("graph.price.reclaim.thesis_support.v1", result["reason"])
+
     def test_projection_recorder_finalizes_abox_after_aligned_native_inference(self):
         class FakeRepository:
             store_key = "typedb"
@@ -10028,7 +10133,7 @@ class TypeDBOntologyRepositoryTests(unittest.TestCase):
         self.assertNotIn('has ontology-kind "abox-scope-active-pointer"', plan["query"])
         self.assertTrue(runtime_plan["indexedEvidenceQuery"])
 
-    def test_typedb_price_reclaim_uses_verified_index_for_negative_data_quality_condition(self):
+    def test_typedb_price_reclaim_uses_verified_index_for_usable_data_quality_condition(self):
         rule = next(
             item for item in default_graph_inference_rules()
             if item.rule_id == "graph.price.reclaim.thesis_support.v1"
@@ -10060,11 +10165,13 @@ class TypeDBOntologyRepositoryTests(unittest.TestCase):
         self.assertTrue(plan["indexedEvidenceQuery"])
         self.assertIn('has ontology-storage-id "ontology-storage:active-tech"', plan["query"])
         self.assertIn('has ontology-storage-id "ontology-storage:active-quality"', plan["query"])
-        self.assertIn("not {", plan["query"])
+        self.assertNotIn("not {", plan["query"])
         self.assertIn('has ontology-relation-type "HAS_DATA_QUALITY"', plan["query"])
+        self.assertIn("ontology-data-state", plan["query"])
+        self.assertIn('"available"', plan["query"])
         self.assertNotIn('has ontology-kind "abox-scope-active-pointer"', plan["query"])
 
-    def test_typedb_verified_index_proves_absent_negative_relation_without_scope_scan(self):
+    def test_typedb_price_reclaim_requires_usable_data_quality_relation_in_verified_index(self):
         rule = next(
             item for item in default_graph_inference_rules()
             if item.rule_id == "graph.price.reclaim.thesis_support.v1"
@@ -10091,11 +10198,9 @@ class TypeDBOntologyRepositoryTests(unittest.TestCase):
             "portfolio:local:default",
         )
 
-        self.assertEqual("ok", plan["status"])
-        self.assertTrue(plan["indexedEvidenceQuery"])
-        self.assertIn('has ontology-storage-id "ontology-storage:active-tech"', plan["query"])
-        self.assertNotIn('has ontology-relation-type "HAS_DATA_QUALITY"', plan["query"])
-        self.assertNotIn('has ontology-kind "abox-scope-active-pointer"', plan["query"])
+        self.assertEqual("not-eligible", plan["status"])
+        self.assertIn("HAS_DATA_QUALITY", plan["reason"])
+        self.assertEqual("", plan["query"])
 
     def test_schema_function_sync_plan_skips_preflight_selected_indexed_rules(self):
         capacity_rule = next(

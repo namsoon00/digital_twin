@@ -526,6 +526,44 @@ def add_price_level_and_liquidity_concepts(
         add_relation(graph, stock_id, volume_id, "HAS_OBSERVATION", weight=1.0, properties=flow_props)
         add_relation(graph, stock_id, volume_id, "HAS_TRADE_FLOW", weight=1.0, properties=flow_props)
     missing_fields = missing_market_microstructure_fields(position)
+    if not missing_fields:
+        needs_microstructure = expects_kr_microstructure_signals(
+            position.market,
+            position.currency,
+            symbol,
+        )
+        data_state = "available" if needs_microstructure else "not-required"
+        quality_id = add_entity(
+            graph,
+            "data-quality-status",
+            symbol + ":market-microstructure",
+            (position.name or symbol) + " 미시구조 자료 상태",
+            {
+                "tboxClass": "DataQuality",
+                "tboxClasses": ["Observation", "DataQuality", "DataQualitySignal"],
+                "symbol": symbol,
+                "source": source,
+                "scope": "market-microstructure",
+                "dataScope": "market-microstructure",
+                "dataState": data_state,
+                "reviewLevel": "normal",
+                "microstructureRequired": needs_microstructure,
+            },
+        )
+        quality_props = {
+            "source": source,
+            "evidenceRole": "context",
+            "reviewLevel": "normal",
+            "dataState": data_state,
+            "dataScope": "market-microstructure",
+            "scope": "market-microstructure",
+            "aiInfluenceLabel": (
+                "체결/호가/투자자별 수급 사용 가능"
+                if needs_microstructure
+                else "미시구조 자료 요구 대상 아님"
+            ),
+        }
+        add_relation(graph, stock_id, quality_id, "HAS_DATA_QUALITY", weight=1.0, properties=quality_props)
     if missing_fields:
         missing_id = add_entity(graph, "missing-data", symbol + ":market-microstructure", (position.name or symbol) + " 부족 데이터", {
             "tboxClass": "MissingData",

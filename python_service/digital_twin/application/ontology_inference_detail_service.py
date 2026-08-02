@@ -51,6 +51,7 @@ class OntologyInferenceDetailRunner:
         worker_id: str = "",
         reasoning_queue_probe=None,
         fairness_state_store=None,
+        storage_guard=None,
     ):
         self.outbox = outbox
         self.ontology_repository = ontology_repository
@@ -58,6 +59,7 @@ class OntologyInferenceDetailRunner:
         self.worker_id = str(worker_id or "ontology-inference-detail-" + uuid.uuid4().hex[:12])
         self.reasoning_queue_probe = reasoning_queue_probe
         self.fairness_state_store = fairness_state_store
+        self.storage_guard = storage_guard
         self.last_run_details: List[str] = []
         self.last_background_fairness: Dict[str, object] = {}
 
@@ -304,6 +306,22 @@ class OntologyInferenceDetailRunner:
             ),
         }
 
+    def storage_guard_state(self) -> Dict[str, object]:
+        if not callable(self.storage_guard):
+            return {"ready": True, "status": "not-configured"}
+        try:
+            value = self.storage_guard()
+        except Exception as error:  # noqa: BLE001 - optional readback must yield on unknown capacity.
+            return {
+                "ready": False,
+                "status": "error",
+                "reason": "TypeDB 용량 상태 확인 실패: " + str(error)[:180],
+            }
+        state = dict(value or {}) if isinstance(value, dict) else {}
+        state["ready"] = bool(state.get("ready"))
+        state.setdefault("status", "ready" if state["ready"] else "blocked")
+        return state
+
     def status(self) -> Dict[str, object]:
         reasoning_queue = self.reasoning_queue_state()
         fairness = self.background_fairness_decision(reasoning_queue)
@@ -317,6 +335,7 @@ class OntologyInferenceDetailRunner:
             "reasoningQueue": reasoning_queue,
             "backgroundFairness": fairness,
             "fairnessState": self.fairness_state(),
+            "storageGuard": self.storage_guard_state(),
             "outbox": self.outbox_summary(),
         }
 
@@ -397,6 +416,21 @@ class OntologyInferenceDetailRunner:
 
     def run_once(self, limit: int = 0) -> Dict[str, object]:
         started = time.monotonic()
+        storage_guard = self.storage_guard_state()
+        if not storage_guard.get("ready"):
+            self.last_run_details = ["deferred-capacity"]
+            return {
+                "status": "deferred-capacity",
+                "workerId": self.worker_id,
+                "claimedCount": 0,
+                "completedCount": 0,
+                "supersededCount": 0,
+                "retryCount": 0,
+                "storageGuard": storage_guard,
+                "reason": str(storage_guard.get("reason") or "TypeDB 용량 보호 중 상세 InferenceBox 읽기를 보류합니다."),
+                "prunedCompletedCount": 0,
+                "durationMs": int((time.monotonic() - started) * 1000),
+            }
         deferred = self.reasoning_queue_deferral(commit_fairness=True)
         if deferred:
             self.last_run_details = ["deferred-reasoning-queue"]

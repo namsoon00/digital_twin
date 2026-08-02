@@ -91,6 +91,21 @@ class FakeStateStore:
 
 
 class OntologyInferenceDetailRunnerTests(unittest.TestCase):
+    def test_capacity_guard_defers_detail_readback_before_claiming_work(self):
+        outbox = FakeOutbox([inference_job()])
+        repository = FakeRepository(complete_snapshot())
+        runner = OntologyInferenceDetailRunner(
+            outbox,
+            repository,
+            storage_guard=lambda: {"ready": False, "mode": "write-throttled", "reason": "capacity"},
+        )
+
+        result = runner.run_once()
+
+        self.assertEqual("deferred-capacity", result["status"])
+        self.assertEqual(1, len(outbox.jobs))
+        self.assertEqual([], repository.calls)
+
     def test_detail_dedupe_key_preserves_independent_target_scopes(self):
         aapl = inference_detail_dedupe_key("portfolio:local:main", ["AAPL"])
 

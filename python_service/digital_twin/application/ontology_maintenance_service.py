@@ -34,7 +34,7 @@ class OntologyMaintenanceRunner:
     state in MySQL so restarts continue the round-robin world order.
     """
 
-    state_contract = "ontology-maintenance-state-v3"
+    state_contract = "ontology-maintenance-state-v4"
 
     def __init__(
         self,
@@ -42,11 +42,13 @@ class OntologyMaintenanceRunner:
         state_store=None,
         settings: Dict[str, object] = None,
         reasoning_queue_probe=None,
+        capacity_guard=None,
     ):
         self.ontology_repository = ontology_repository
         self.state_store = state_store
         self.settings = dict(settings or {})
         self.reasoning_queue_probe = reasoning_queue_probe
+        self.capacity_guard = capacity_guard
         self.last_background_fairness: Dict[str, object] = {}
 
     def policy(self) -> Dict[str, object]:
@@ -94,13 +96,20 @@ class OntologyMaintenanceRunner:
     def max_reasoning_deferral_seconds(self) -> int:
         return max(30, min(24 * 60 * 60, integer(
             self.settings.get("ontologyAboxMaintenanceMaxReasoningDeferralSeconds"),
-            300,
+            120,
         )))
 
     def fairness_cooldown_seconds(self) -> int:
         return max(10, min(60 * 60, integer(
             self.settings.get("ontologyBackgroundWorkFairnessCooldownSeconds"),
             300,
+        )))
+
+    def busy_retry_seconds(self) -> int:
+        """Retry a no-write availability probe often enough to catch an idle gap."""
+        return max(5, min(60, integer(
+            self.settings.get("ontologyAboxMaintenanceBusyRetrySeconds"),
+            10,
         )))
 
     def reasoning_queue_state(self) -> Dict[str, object]:
@@ -111,6 +120,58 @@ class OntologyMaintenanceRunner:
         except Exception as error:  # noqa: BLE001 - uncertainty must not block low-priority cleanup forever.
             return {"status": "error", "effectivePendingCount": 0, "reason": str(error)[:180]}
         return dict(value or {}) if isinstance(value, dict) else {"status": "invalid", "effectivePendingCount": 0}
+
+    def capacity_guard_state(self) -> Dict[str, object]:
+        """Return the role-specific TypeDB capacity policy for retention."""
+        if not callable(self.capacity_guard):
+            return {"ready": True, "status": "not-configured", "mode": "normal"}
+        try:
+            value = self.capacity_guard()
+        except Exception as error:  # noqa: BLE001 - no deletion on an unknown TypeDB capacity state.
+            return {
+                "ready": False,
+                "status": "error",
+                "mode": "unavailable",
+                "reason": "TypeDB 용량 상태 확인 실패: " + str(error)[:180],
+            }
+        state = dict(value or {}) if isinstance(value, dict) else {}
+        state["ready"] = bool(state.get("ready"))
+        state.setdefault("status", "ready" if state["ready"] else "blocked")
+        state.setdefault("mode", state["status"])
+        return state
+
+    def capacity_maintenance_budget(
+        self,
+        policy: Dict[str, object],
+        adaptive_drain: Dict[str, object],
+        capacity: Dict[str, object],
+    ) -> Dict[str, int]:
+        """Increase one cleanup turn only while TypeDB is below rotation level."""
+        base_manifests = max(1, integer(policy.get("maxManifestsPerRun"), 1))
+        base_batches = max(1, integer(adaptive_drain.get("effectiveMaxDeleteBatches"), 1))
+        base_batch_size = max(10, integer(policy.get("deleteBatchSize"), 50))
+        if not bool(capacity.get("capacityPriority")):
+            return {
+                "maxInactiveManifests": base_manifests,
+                "maxAboxDeleteBatches": base_batches,
+                "aboxDeleteBatchSize": base_batch_size,
+                "capacityPriority": 0,
+            }
+        return {
+            "maxInactiveManifests": max(
+                base_manifests,
+                min(20, integer(self.settings.get("typedbCapacityMaintenanceMaxManifests"), 10)),
+            ),
+            "maxAboxDeleteBatches": max(
+                base_batches,
+                min(50, integer(self.settings.get("typedbCapacityMaintenanceMaxDeleteBatches"), 12)),
+            ),
+            "aboxDeleteBatchSize": max(
+                base_batch_size,
+                min(500, integer(self.settings.get("typedbCapacityMaintenanceDeleteBatchSize"), 250)),
+            ),
+            "capacityPriority": 1,
+        }
 
     @staticmethod
     def queue_pending_count(state: Dict[str, object]) -> int:
@@ -203,6 +264,20 @@ class OntologyMaintenanceRunner:
         commit_fairness: bool = False,
     ) -> Dict[str, object]:
         """Return a no-write preflight result while investment reasoning runs."""
+        capacity = self.capacity_guard_state()
+        if not bool(capacity.get("ready")):
+            return {
+                "status": "deferred-capacity",
+                "contract": self.state_contract,
+                "policy": dict(policy or self.policy()),
+                "reason": str(capacity.get("reason") or "TypeDB 용량 보호 중 ABox 정리를 보류합니다."),
+                "capacityGuard": capacity,
+                "retryAfterSeconds": self.interval_seconds(),
+            }
+        if bool(capacity.get("bypassReasoningDeferral")):
+            self.clear_reasoning_deferral_state(self.state())
+            self.last_background_fairness = {}
+            return {}
         queue_state = self.reasoning_queue_state()
         pending = self.queue_pending_count(queue_state)
         if not self.defer_while_reasoning_pending() or pending <= 0:
@@ -217,6 +292,12 @@ class OntologyMaintenanceRunner:
         )
         if bool(fairness.get("fairnessGranted")):
             return {}
+        retry_after = self.interval_seconds()
+        if text(fairness.get("reasonCode")) in {
+            "active-reasoning-lease",
+            "active-lease-unknown",
+        }:
+            retry_after = self.busy_retry_seconds()
         return {
             "status": "deferred-reasoning-queue",
             "contract": self.state_contract,
@@ -224,7 +305,7 @@ class OntologyMaintenanceRunner:
             "reason": "활성 추론 요청이 남아 있어 ABox 정리를 유휴 시간으로 미룹니다.",
             "reasoningQueue": queue_state,
             "backgroundFairness": fairness,
-            "retryAfterSeconds": self.interval_seconds(),
+            "retryAfterSeconds": retry_after,
         }
 
     def projection_coordinator_summary(self, lease: Dict[str, object]) -> Dict[str, object]:
@@ -303,6 +384,45 @@ class OntologyMaintenanceRunner:
         return sorted(rows, key=lambda item: (item["worldType"], item["worldId"]))
 
     @staticmethod
+    def manifest_inventory_available(inventory: Dict[str, object]) -> bool:
+        values = dict(inventory or {}) if isinstance(inventory, dict) else {}
+        if "inactiveManifestCount" not in values:
+            return False
+        return text(values.get("status") or "ok").lower() not in {
+            "error", "disabled", "driver-missing", "unavailable",
+        }
+
+    def manifest_inventories(self, worlds: Iterable[Dict[str, object]]) -> Dict[str, Dict[str, object]]:
+        """Read the cheap manifest-only inventory before taking a writer lease.
+
+        Full ABox diagnostics count every physical row and are intentionally
+        not suitable for a one-minute maintenance scheduler.  The TypeDB
+        adapter exposes this lighter control-plane read so the runner can
+        select the world where retention is actually needed.
+        """
+        reader = getattr(self.ontology_repository, "scoped_abox_manifest_inventory", None)
+        if not callable(reader):
+            return {}
+        results: Dict[str, Dict[str, object]] = {}
+        for world in worlds or []:
+            world_id = text(dict(world or {}).get("worldId"))
+            if not world_id:
+                continue
+            try:
+                raw = reader(world_id)
+            except Exception as error:  # noqa: BLE001 - fall back to the persisted cursor.
+                raw = {"status": "error", "reason": str(error)[:180]}
+            value = dict(raw or {}) if isinstance(raw, dict) else {"status": "invalid"}
+            results[world_id] = {
+                "status": text(value.get("status") or "unknown"),
+                "inactiveManifestCount": max(0, integer(value.get("inactiveManifestCount"))),
+                "storedManifestCount": max(0, integer(value.get("storedManifestCount"))),
+                "available": self.manifest_inventory_available(value),
+                "reason": text(value.get("reason"))[:180],
+            }
+        return results
+
+    @staticmethod
     def next_world(worlds: Iterable[Dict[str, object]], state: Dict[str, object]) -> tuple:
         rows = list(worlds or [])
         if not rows:
@@ -312,6 +432,58 @@ class OntologyMaintenanceRunner:
         selected = rows[index]
         following = rows[(index + 1) % len(rows)]
         return selected, text(following.get("worldId"))
+
+    def select_world_for_maintenance(
+        self,
+        worlds: Iterable[Dict[str, object]],
+        state: Dict[str, object],
+        manifest_inventories: Dict[str, Dict[str, object]],
+        policy: Dict[str, object],
+    ) -> tuple:
+        """Prefer a verified inactive-manifest backlog, otherwise round robin.
+
+        The rotation cursor remains the tie breaker.  That preserves fairness
+        between worlds with equally large retention backlogs while preventing
+        an active portfolio from waiting behind two empty shared worlds.
+        """
+        rows = list(worlds or [])
+        fallback, fallback_next = self.next_world(rows, state)
+        threshold = max(1, integer((policy or {}).get("priorityInactiveManifestCount"), 8))
+        if not rows:
+            return {}, "", {
+                "mode": "none",
+                "priorityInactiveManifestCount": threshold,
+                "observedInactiveManifestCounts": {},
+            }
+        next_id = text((state or {}).get("nextWorldId"))
+        cursor = next((idx for idx, item in enumerate(rows) if item.get("worldId") == next_id), 0)
+        candidates = []
+        observed_counts = {}
+        for index, item in enumerate(rows):
+            world_id = text(item.get("worldId"))
+            inventory = dict((manifest_inventories or {}).get(world_id) or {})
+            if not bool(inventory.get("available")):
+                continue
+            inactive_count = max(0, integer(inventory.get("inactiveManifestCount")))
+            observed_counts[world_id] = inactive_count
+            if inactive_count >= threshold:
+                candidates.append((inactive_count, (index - cursor) % len(rows), index, item))
+        if not candidates:
+            return fallback, fallback_next, {
+                "mode": "round-robin",
+                "priorityInactiveManifestCount": threshold,
+                "observedInactiveManifestCounts": observed_counts,
+            }
+        _, _, selected_index, selected = sorted(
+            candidates,
+            key=lambda item: (-item[0], item[1], text(item[3].get("worldId"))),
+        )[0]
+        following = rows[(selected_index + 1) % len(rows)]
+        return selected, text(following.get("worldId")), {
+            "mode": "inactive-manifest-priority",
+            "priorityInactiveManifestCount": threshold,
+            "observedInactiveManifestCounts": observed_counts,
+        }
 
     @staticmethod
     def backlog_by_world(state: Dict[str, object]) -> Dict[str, Dict[str, object]]:
@@ -323,6 +495,40 @@ class OntologyMaintenanceRunner:
             for world_id, value in raw.items()
             if text(world_id) and isinstance(value, dict)
         }
+
+    def reconciled_observed_backlog(
+        self,
+        previous: Dict[str, object],
+        manifest_inventories: Dict[str, Dict[str, object]],
+        valid_world_ids: Iterable[str],
+        policy: Dict[str, object],
+    ) -> Dict[str, Dict[str, object]]:
+        """Replace stale maintenance estimates with direct manifest evidence."""
+        rows = self.backlog_by_world(previous)
+        allowed = {text(item) for item in valid_world_ids if text(item)}
+        rows = {key: value for key, value in rows.items() if key in allowed}
+        observed_at = utc_now_iso()
+        for world_id, inventory in dict(manifest_inventories or {}).items():
+            if world_id not in allowed or not bool(dict(inventory or {}).get("available")):
+                continue
+            current = dict(rows.get(world_id) or {})
+            inactive_count = max(0, integer(dict(inventory or {}).get("inactiveManifestCount")))
+            health = scoped_abox_maintenance_health({
+                "status": str(dict(inventory or {}).get("status") or "ok"),
+                "inactiveManifestCount": inactive_count,
+            }, policy)
+            current.update({
+                "inventoryAvailable": True,
+                "lastInactiveManifestCount": inactive_count,
+                "lastObservedInactiveManifestCount": inactive_count,
+                "lastStoredManifestCount": max(0, integer(dict(inventory or {}).get("storedManifestCount"))),
+                "lastInventoryObservedAt": observed_at,
+                "lastInventoryStatus": text(dict(inventory or {}).get("status") or "ok"),
+            })
+            if text(health.get("state")) != "critical":
+                current["criticalDrainRuns"] = 0
+            rows[world_id] = current
+        return rows
 
     def adaptive_drain(self, policy: Dict[str, object], state: Dict[str, object], world_id: str) -> Dict[str, object]:
         """Select a bounded physical-delete budget from prior safe passes.
@@ -373,7 +579,11 @@ class OntologyMaintenanceRunner:
         current = dict(rows.get(world_id) or {})
         if not inventory_available:
             current["lastStatus"] = result_status
-            current["inventoryAvailable"] = False
+            current["lastMaintenanceInventoryAvailable"] = False
+            # A lightweight manifest read may already have corrected the
+            # previous run's stale estimate. Keep that evidence visible even
+            # when this turn lost the writer lease before full retention ran.
+            current["inventoryAvailable"] = bool(current.get("lastInventoryObservedAt"))
             rows[world_id] = current
             return rows
 
@@ -391,10 +601,13 @@ class OntologyMaintenanceRunner:
         else:
             critical_runs = 0
         rows[world_id] = {
+            **current,
             "criticalDrainRuns": critical_runs,
             "lastStatus": result_status,
             "inventoryAvailable": True,
+            "lastMaintenanceInventoryAvailable": True,
             "lastInactiveManifestCount": inactive_remaining,
+            "lastObservedInactiveManifestCount": inactive_remaining,
             "lastProgress": progress,
             "lastDeletedBatchCount": deleted_batch_count,
         }
@@ -411,10 +624,12 @@ class OntologyMaintenanceRunner:
             "worldTypes": sorted(self.configured_world_types()),
             "worldCount": len(worlds),
             "intervalSeconds": self.interval_seconds(),
+            "busyRetrySeconds": self.busy_retry_seconds(),
             "processIsolationEnabled": self.process_isolation_enabled(),
             "executionTimeoutSeconds": self.execution_timeout_seconds(),
             "deferWhenReasoningPending": self.defer_while_reasoning_pending(),
             "reasoningQueue": self.reasoning_queue_state(),
+            "capacityGuard": self.capacity_guard_state(),
             "backgroundFairness": self.background_fairness_decision(policy),
             "policy": policy,
             "lastRunAt": text(state.get("lastRunAt")),
@@ -435,6 +650,7 @@ class OntologyMaintenanceRunner:
                 "policy": policy,
                 "reason": "Graph store has no scoped ABox maintenance adapter.",
             }
+        capacity = self.capacity_guard_state()
         deferred = self.reasoning_queue_deferral(policy, commit_fairness=True)
         if deferred:
             result = dict(deferred)
@@ -454,9 +670,27 @@ class OntologyMaintenanceRunner:
                 "reason": "No active ontology world matches the maintenance scope.",
             }
         previous = self.state()
-        selected, next_world_id = self.next_world(worlds, previous)
+        manifest_inventories = self.manifest_inventories(worlds)
+        observed_backlog = self.reconciled_observed_backlog(
+            previous,
+            manifest_inventories,
+            [item.get("worldId") for item in worlds],
+            policy,
+        )
+        selection_state = {
+            **previous,
+            "backlogByWorld": observed_backlog,
+        }
+        selected, next_world_id, world_selection = self.select_world_for_maintenance(
+            worlds,
+            selection_state,
+            manifest_inventories,
+            policy,
+        )
         world_id = text(selected.get("worldId"))
-        adaptive_drain = self.adaptive_drain(policy, previous, world_id)
+        selected_inventory = dict(manifest_inventories.get(world_id) or {})
+        adaptive_drain = self.adaptive_drain(policy, selection_state, world_id)
+        capacity_budget = self.capacity_maintenance_budget(policy, adaptive_drain, capacity)
         coordinator_lease = self.acquire_projection_coordinator_lease(world_id)
         if not bool(coordinator_lease.get("acquired")):
             result = {
@@ -470,9 +704,11 @@ class OntologyMaintenanceRunner:
                 )[:220],
                 "retryAfterSeconds": int(coordinator_lease.get("recommendedRetryAfterSeconds") or 10),
                 "projectionCoordinator": self.projection_coordinator_summary(coordinator_lease),
+                "manifestInventory": selected_inventory,
+                "worldSelection": world_selection,
             }
             self.save_state({
-                **previous,
+                **selection_state,
                 "lastRunAt": utc_now_iso(),
                 "lastResult": result,
             })
@@ -480,9 +716,9 @@ class OntologyMaintenanceRunner:
         try:
             result = dict(runner({
                 "worldId": world_id,
-                "maxInactiveManifests": integer(policy.get("maxManifestsPerRun"), 1),
-                "maxAboxDeleteBatches": integer(adaptive_drain.get("effectiveMaxDeleteBatches"), 1),
-                "aboxDeleteBatchSize": integer(policy.get("deleteBatchSize"), 50),
+                "maxInactiveManifests": capacity_budget["maxInactiveManifests"],
+                "maxAboxDeleteBatches": capacity_budget["maxAboxDeleteBatches"],
+                "aboxDeleteBatchSize": capacity_budget["aboxDeleteBatchSize"],
                 "keepInactiveManifests": integer(policy.get("keepInactiveManifestCount"), 0),
             }) or {})
         except Exception as error:  # noqa: BLE001 - a maintenance fault must not affect native inference.
@@ -539,10 +775,14 @@ class OntologyMaintenanceRunner:
             "deleteBatchSize": max(0, integer(abox.get("deleteBatchSize"), integer(policy.get("deleteBatchSize"), 50))),
             "health": health,
             "adaptiveDrain": adaptive_drain,
+            "capacityGuard": capacity,
+            "capacityBudget": capacity_budget,
+            "manifestInventory": selected_inventory,
+            "worldSelection": world_selection,
             "reason": text(result.get("reason"))[:220],
         }
         backlog_by_world = self.updated_backlog_by_world(
-            previous,
+            selection_state,
             world_id,
             result_status,
             inventory_available,
@@ -560,7 +800,7 @@ class OntologyMaintenanceRunner:
             "lastProgress": bool(current_backlog.get("lastProgress")),
         }
         self.save_state({
-            **previous,
+            **selection_state,
             "contract": self.state_contract,
             "lastRunAt": utc_now_iso(),
             "nextWorldId": next_world_id,

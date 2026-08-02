@@ -392,6 +392,15 @@ for raw in sys.stdin:
         self.assertEqual(0, runner.run_calls)
         self.assertEqual(0, child.calls)
 
+    def test_maintenance_scheduler_retries_lease_only_deferrals_before_normal_interval(self):
+        scheduler = OntologyMaintenanceScheduler(DeferredLowPriorityRunner(), 60)
+
+        self.assertEqual(10.0, scheduler.next_wait_seconds({
+            "status": "deferred-reasoning-queue",
+            "retryAfterSeconds": 10,
+        }))
+        self.assertEqual(60.0, scheduler.next_wait_seconds({"status": "ok"}))
+
 
 def signal_value(name):
     # Keep the assertion portable across Unix and Windows signal values.

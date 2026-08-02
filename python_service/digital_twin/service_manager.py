@@ -16,7 +16,8 @@ from .infrastructure.mysql_monitoring import MySQLMonitorAccountJobStore
 from .infrastructure.mysql_operational import MySQLOntologyRuleboxPrewarmStateStore
 from .infrastructure.mysql_operational_connection import MySQLOperationalConnection
 from .infrastructure.settings import ROOT_DIR, data_dir, runtime_settings
-from .infrastructure.typedb_storage_guard import typedb_storage_health
+from .infrastructure.typedb_storage_guard import typedb_storage_health, typedb_storage_inventory
+from .infrastructure.operational_storage_guard import storage_directory_physical_size_bytes
 
 
 BASE_WORKERS = {
@@ -200,9 +201,14 @@ def typedb_worker_spec(settings: Dict[str, object]) -> Dict[str, object]:
             int_value((settings or {}).get("operationalMinimumFreeSpaceMb"), 12288, 1),
         )),
         # TypeDB is the durable ontology store. Capacity pressure must surface
-        # as maintenance work, never as an automatic data deletion during a
-        # routine worker restart.
+        # as an explicit, source-verified rotation rather than an arbitrary
+        # worker restart. The active graph is rebuildable from MySQL.
         "autoResetEnabled": str((settings or {}).get("typedbAutoResetEnabled") or "0"),
+        "autoRotationEnabled": str((settings or {}).get("typedbCapacityAutoRotateEnabled") or "1"),
+        "autoRotationPercent": str((settings or {}).get("typedbCapacityAutoRotatePercent") or "90"),
+        "autoRotationCooldownMinutes": str(
+            (settings or {}).get("typedbCapacityAutoRotateCooldownMinutes") or "60"
+        ),
         "ageResetEnabled": str((settings or {}).get("typedbAgeResetEnabled") or "0"),
         "healthAddress": address,
         "typedbUser": str((settings or {}).get("typedbUser") or os.environ.get("TYPEDB_USER") or "admin"),
@@ -415,16 +421,8 @@ def int_value(value: object, fallback: int, lower: int = 0) -> int:
 
 
 def directory_size_bytes(path: Path) -> int:
-    if not path.exists():
-        return 0
-    total = 0
-    for item in path.rglob("*"):
-        try:
-            if item.is_file() or item.is_symlink():
-                total += item.stat().st_size
-        except OSError:
-            continue
-    return total
+    """Return actual allocated bytes for TypeDB reset and rotation decisions."""
+    return storage_directory_physical_size_bytes(path)
 
 
 def typedb_retention_marker_path() -> Path:
@@ -443,6 +441,49 @@ def write_typedb_retention_marker(payload: Dict[str, object]) -> None:
     path.parent.mkdir(parents=True, exist_ok=True)
     path.write_text(json.dumps(payload, ensure_ascii=False, indent=2, sort_keys=True), encoding="utf-8")
     os.chmod(path, 0o600)
+
+
+def typedb_rotation_lock_path() -> Path:
+    return data_dir() / "typedb-rotation.lock"
+
+
+def acquire_typedb_rotation_lock() -> Dict[str, object]:
+    """Acquire a small cross-command lock before stopping graph workers."""
+
+    path = typedb_rotation_lock_path()
+    path.parent.mkdir(parents=True, exist_ok=True)
+    payload = {"pid": os.getpid(), "startedAt": iso_now()}
+    for _attempt in range(2):
+        try:
+            descriptor = os.open(str(path), os.O_WRONLY | os.O_CREAT | os.O_EXCL, 0o600)
+        except FileExistsError:
+            try:
+                existing = json.loads(path.read_text(encoding="utf-8"))
+            except (OSError, ValueError, json.JSONDecodeError):
+                existing = {}
+            owner = int_value(existing.get("pid"), 0, 0)
+            if owner and pid_exists(owner):
+                return {"acquired": False, "reason": "another TypeDB rotation is active", "ownerPid": owner}
+            try:
+                path.unlink()
+            except OSError:
+                return {"acquired": False, "reason": "TypeDB rotation lock is unavailable"}
+            continue
+        try:
+            os.write(descriptor, json.dumps(payload, ensure_ascii=False).encode("utf-8"))
+        finally:
+            os.close(descriptor)
+        return {"acquired": True, "path": str(path), **payload}
+    return {"acquired": False, "reason": "TypeDB rotation lock could not be acquired"}
+
+
+def release_typedb_rotation_lock(lock: Dict[str, object]) -> None:
+    if not bool((lock or {}).get("acquired")):
+        return
+    try:
+        typedb_rotation_lock_path().unlink()
+    except OSError:
+        return
 
 
 def iso_now() -> str:
@@ -512,6 +553,157 @@ def typedb_reset_needed(
     }
 
 
+def typedb_auto_rotation_needed(
+    spec: Dict[str, object],
+    now_epoch: float = None,
+    size_provider=None,
+) -> Dict[str, object]:
+    """Return whether a source-verified automatic TypeDB rotation is due.
+
+    This is intentionally independent from the historical ``autoReset``
+    setting. The latter remains an explicit legacy retention switch; capacity
+    rotation only happens when the supervisor can rebuild the graph from the
+    durable operational store and the configured pressure threshold is met.
+    """
+
+    configured = dict(spec or {})
+    enabled = truthy(configured.get("autoRotationEnabled"))
+    data_path = Path(configured.get("dataPath") or "")
+    maximum_mb = int_value(configured.get("maxSizeMb"), 2048, 1)
+    threshold_percent = int_value(configured.get("autoRotationPercent"), 90, 50)
+    threshold_percent = min(100, threshold_percent)
+    cooldown_minutes = min(24 * 60, int_value(configured.get("autoRotationCooldownMinutes"), 60, 1))
+    size_bytes = int((size_provider or directory_size_bytes)(data_path))
+    size_mb = round(size_bytes / 1024 / 1024, 1)
+    usage_percent = round(size_bytes / (maximum_mb * 1024 * 1024) * 100.0, 1)
+    now = float(now_epoch if now_epoch is not None else time.time())
+    marker = read_typedb_retention_marker()
+    try:
+        last_attempt_epoch = float(marker.get("lastAutoRotationAttemptEpoch") or 0)
+    except (TypeError, ValueError):
+        last_attempt_epoch = 0.0
+    cooldown_remaining_seconds = max(
+        0,
+        int(cooldown_minutes * 60 - max(0.0, now - last_attempt_epoch)),
+    ) if last_attempt_epoch > 0 else 0
+    threshold_reached = bool(
+        data_path.exists()
+        and size_bytes > 0
+        and usage_percent >= threshold_percent
+    )
+    hard_limit_reached = usage_percent >= 100.0
+    if not enabled:
+        return {
+            "needed": False,
+            "reason": "disabled",
+            "enabled": False,
+            "typedbSizeMb": size_mb,
+            "typedbUsagePercent": usage_percent,
+            "thresholdPercent": threshold_percent,
+            "maxSizeMb": maximum_mb,
+        }
+    if not threshold_reached:
+        return {
+            "needed": False,
+            "reason": "below-threshold",
+            "enabled": True,
+            "typedbSizeMb": size_mb,
+            "typedbUsagePercent": usage_percent,
+            "thresholdPercent": threshold_percent,
+            "maxSizeMb": maximum_mb,
+            "cooldownRemainingSeconds": cooldown_remaining_seconds,
+        }
+    if cooldown_remaining_seconds > 0 and not hard_limit_reached:
+        return {
+            "needed": False,
+            "reason": "cooldown",
+            "enabled": True,
+            "typedbSizeMb": size_mb,
+            "typedbUsagePercent": usage_percent,
+            "thresholdPercent": threshold_percent,
+            "maxSizeMb": maximum_mb,
+            "cooldownRemainingSeconds": cooldown_remaining_seconds,
+        }
+    return {
+        "needed": True,
+        "reason": (
+            "size " + str(size_mb) + "MB (" + str(usage_percent) + "%) >= automatic rotation "
+            + str(threshold_percent) + "%"
+        ),
+        "enabled": True,
+        "typedbSizeMb": size_mb,
+        "typedbUsagePercent": usage_percent,
+        "thresholdPercent": threshold_percent,
+        "maxSizeMb": maximum_mb,
+        "cooldownRemainingSeconds": cooldown_remaining_seconds,
+        "hardLimitReached": hard_limit_reached,
+    }
+
+
+def typedb_auto_rotation_recovery_preflight(
+    specs: Dict[str, Dict[str, object]],
+) -> Dict[str, object]:
+    """Require the managed MySQL recovery source before an automatic reset."""
+
+    mysql_spec = dict((specs or {}).get("mysql") or {})
+    if not mysql_spec:
+        return {
+            "ready": False,
+            "reason": "managed MySQL recovery source is not configured",
+        }
+    pid = read_pid(mysql_spec.get("pid"))
+    if not is_running(pid, mysql_spec) or not tcp_ready(mysql_spec.get("healthAddress")):
+        return {
+            "ready": False,
+            "reason": "managed MySQL recovery source is not healthy",
+        }
+    return {
+        "ready": True,
+        "reason": "managed MySQL recovery source is healthy",
+        "mysqlPid": pid,
+    }
+
+
+def record_typedb_auto_rotation_incident(
+    spec: Dict[str, object],
+    decision: Dict[str, object],
+) -> Dict[str, object]:
+    """Page the operator once before a supervisor-owned graph rebuild.
+
+    The normal capacity sampler runs in a low-priority worker. A rapid
+    automatic rotation can finish between those samples, so record a distinct
+    operational incident before stopping the worker set.
+    """
+
+    try:
+        from .infrastructure.operational_storage_guard import operational_storage_inventory
+        from .infrastructure.service_factory import observe_operational_storage_capacity
+
+        settings = runtime_settings(fast_operational_read=True)
+        snapshot = operational_storage_inventory(settings)
+        health = observe_operational_storage_capacity(
+            settings,
+            snapshot=snapshot,
+            force_alert=True,
+            force_alert_kind="typedb-auto-rotation",
+        )
+        return {
+            "recorded": True,
+            "alertRequired": bool(health.get("alertRequired")),
+            "typedbSizeMb": health.get("typedbSizeMb"),
+            "typedbUsagePercent": decision.get("typedbUsagePercent"),
+        }
+    except Exception as error:  # noqa: BLE001 - notification failure must not leave TypeDB unsafe.
+        return {"recorded": False, "reason": str(error)[:180]}
+
+
+def record_typedb_auto_rotation_state(**updates: object) -> Dict[str, object]:
+    marker = read_typedb_retention_marker()
+    marker.update({key: value for key, value in updates.items() if value is not None})
+    write_typedb_retention_marker(marker)
+    return marker
+
+
 def typedb_storage_preflight(spec: Dict[str, object]) -> Dict[str, object]:
     return typedb_storage_health(
         {
@@ -540,9 +732,11 @@ def run_typedb_data_retention(spec: Dict[str, object], force: bool = False) -> D
             **decision,
             "dataPath": str(data_path),
         }
+    previous_marker = read_typedb_retention_marker()
     if data_path.exists():
         shutil.rmtree(data_path)
     write_typedb_retention_marker({
+        **previous_marker,
         "lastResetAt": iso_now(),
         "reason": "forced" if force else decision.get("reason", ""),
         "previousSizeBytes": int(decision.get("sizeBytes") or 0),
@@ -588,6 +782,30 @@ def status_worker(spec: Dict[str, object]) -> int:
             "Storage: " + str(storage.get("status") or "unknown")
             + " · free=" + str(storage.get("freeMb") or "-") + "MB"
             + " · minimum=" + str(storage.get("minimumFreeMb") or "-") + "MB"
+        )
+        inventory = typedb_storage_inventory(
+            {
+                "ontologyTypeDbEnabled": "1",
+                "typedbMinimumFreeSpaceMb": spec.get("minimumFreeSpaceMb") or "4096",
+                "typedbDataMaxSizeMb": spec.get("maxSizeMb") or "4096",
+            },
+            data_path=Path(spec.get("dataPath") or data_dir() / "typedb-data"),
+        )
+        capacity = typedb_auto_rotation_needed(spec)
+        print(
+            "Capacity (physical): " + str(inventory.get("typedbSizeMb") or 0) + "MB / "
+            + str(inventory.get("typedbLimitMb") or 0) + "MB ("
+            + str(capacity.get("typedbUsagePercent") or 0) + "%)"
+            + " · WAL=" + str(inventory.get("typedbWalMb") or 0) + "MB"
+            + " · checkpoint reference=" + str(inventory.get("typedbCheckpointReferencedMb") or inventory.get("typedbCheckpointMb") or 0) + "MB"
+            + " · hard-link deduplicated=" + str(inventory.get("typedbSharedLinkedMb") or 0) + "MB"
+        )
+        rotation_status = "due" if capacity.get("needed") else str(capacity.get("reason") or "unknown")
+        print(
+            "Automatic rotation: " + ("enabled" if capacity.get("enabled") else "disabled")
+            + " · threshold=" + str(capacity.get("thresholdPercent") or "-") + "%"
+            + " · status=" + rotation_status
+            + " · cooldown=" + str(capacity.get("cooldownRemainingSeconds") or 0) + "s"
         )
     if log_path.exists():
         print("Log: " + str(log_path))
@@ -1425,6 +1643,7 @@ def supervise() -> int:
             return 1
         last_maintenance_at = 0.0
         last_typedb_capacity_notice = ""
+        last_typedb_auto_rotation_notice = ""
         while not stopping["value"]:
             if supervisor_maintenance_active():
                 acknowledge_supervisor_maintenance()
@@ -1444,6 +1663,40 @@ def supervise() -> int:
             if time.monotonic() - last_maintenance_at >= 60:
                 typedb_spec = specs.get("typedb")
                 decision = typedb_reset_needed(typedb_spec, ignore_auto_reset=True) if typedb_spec else {}
+                automatic = typedb_auto_rotation_needed(typedb_spec) if typedb_spec else {}
+                if automatic.get("needed"):
+                    recovery = typedb_auto_rotation_recovery_preflight(specs)
+                    if bool(recovery.get("ready")):
+                        notice = str(automatic.get("reason") or "TypeDB automatic capacity rotation")
+                        append_log(supervisor_log_path(), "typedb automatic rotation starting. " + notice)
+                        incident = record_typedb_auto_rotation_incident(typedb_spec, automatic)
+                        if not bool(incident.get("recorded")):
+                            append_log(
+                                supervisor_log_path(),
+                                "typedb automatic rotation incident record failed. "
+                                + str(incident.get("reason") or "unknown"),
+                            )
+                        result = typedb_rotate(
+                            force=True,
+                            supervisor_owned=True,
+                            rotation_reason=notice,
+                        )
+                        outcome = "completed" if result == 0 else "failed"
+                        append_log(supervisor_log_path(), "typedb automatic rotation " + outcome + ". " + notice)
+                        last_typedb_auto_rotation_notice = outcome + "|" + notice
+                        last_maintenance_at = time.monotonic()
+                        continue
+                    notice = str(automatic.get("reason") or "TypeDB automatic capacity rotation")
+                    recovery_reason = str(recovery.get("reason") or "MySQL recovery source is unavailable")
+                    combined = notice + " | " + recovery_reason
+                    if combined != last_typedb_auto_rotation_notice:
+                        append_log(
+                            supervisor_log_path(),
+                            "typedb automatic rotation deferred; " + combined,
+                        )
+                        last_typedb_auto_rotation_notice = combined
+                elif str(automatic.get("reason") or "") != "below-threshold":
+                    last_typedb_auto_rotation_notice = ""
                 if decision.get("needed"):
                     notice = str(decision.get("reason") or "TypeDB storage capacity reached")
                     if notice != last_typedb_capacity_notice:
@@ -1521,7 +1774,11 @@ def typedb_maintenance(force: bool = False) -> int:
     return 0
 
 
-def typedb_rotate(force: bool = False) -> int:
+def typedb_rotate(
+    force: bool = False,
+    supervisor_owned: bool = False,
+    rotation_reason: str = "",
+) -> int:
     """Safely rebuild an oversized TypeDB store and restart all dependents.
 
     This is intentionally the only automated-manager path that removes the
@@ -1541,32 +1798,67 @@ def typedb_rotate(force: bool = False) -> int:
         print(json.dumps({"status": "skipped", **decision}, ensure_ascii=False, indent=2, sort_keys=True))
         return 0
 
-    pause_supervisor = supervisor_running()
+    rotation_lock = acquire_typedb_rotation_lock()
+    if not bool(rotation_lock.get("acquired")):
+        print(json.dumps({"status": "skipped", "reason": rotation_lock.get("reason") or "rotation lock unavailable"}, ensure_ascii=False))
+        return 0
+
+    pause_supervisor = supervisor_running() and not supervisor_owned
     maintenance_token = ""
-    if pause_supervisor:
+    if supervisor_owned:
+        maintenance_token = begin_supervisor_maintenance(
+            "typedb-auto-rotate",
+            max_age_seconds=typedb_restart_maintenance_window_seconds(spec),
+        )
+    elif pause_supervisor:
         maintenance_token = begin_supervisor_maintenance(
             "typedb-rotate",
             max_age_seconds=typedb_restart_maintenance_window_seconds(spec),
         )
         if not wait_for_supervisor_maintenance_ack(maintenance_token):
             end_supervisor_maintenance()
+            release_typedb_rotation_lock(rotation_lock)
             print("TypeDB rotation aborted because the supervisor did not acknowledge maintenance mode.")
             return 1
 
     result = {}
     try:
+        if supervisor_owned:
+            record_typedb_auto_rotation_state(
+                lastAutoRotationAttemptAt=iso_now(),
+                lastAutoRotationAttemptEpoch=time.time(),
+                lastAutoRotationReason=str(rotation_reason or decision.get("reason") or "capacity"),
+                lastAutoRotationStatus="running",
+            )
         stop(include_supervisor=False)
         result = run_typedb_data_retention(spec, force=True)
         if result.get("status") != "reset":
+            if supervisor_owned:
+                record_typedb_auto_rotation_state(
+                    lastAutoRotationFinishedAt=iso_now(),
+                    lastAutoRotationStatus="reset-failed",
+                    lastAutoRotationResult=dict(result),
+                )
             print(json.dumps(result, ensure_ascii=False, indent=2, sort_keys=True))
             return 1
         start_status = start()
         result["restartStatus"] = "ok" if start_status == 0 else "failed"
+        if supervisor_owned:
+            record_typedb_auto_rotation_state(
+                lastAutoRotationFinishedAt=iso_now(),
+                lastAutoRotationStatus="ok" if start_status == 0 else "restart-failed",
+                lastAutoRotationResult={
+                    "status": result.get("status"),
+                    "restartStatus": result.get("restartStatus"),
+                    "previousSizeBytes": result.get("previousSizeBytes"),
+                },
+            )
         print(json.dumps(result, ensure_ascii=False, indent=2, sort_keys=True))
         return start_status
     finally:
-        if pause_supervisor:
+        if pause_supervisor or supervisor_owned:
             end_supervisor_maintenance()
+        release_typedb_rotation_lock(rotation_lock)
 
 
 def main(argv: List[str] = None) -> int:

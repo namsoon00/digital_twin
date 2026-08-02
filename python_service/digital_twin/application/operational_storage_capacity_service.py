@@ -56,6 +56,7 @@ class OperationalStorageCapacityService:
         self,
         snapshot: Mapping[str, object],
         force_alert: bool = False,
+        force_alert_kind: str = "runtime-write-failure",
     ) -> Tuple[Dict[str, object], DomainEvent]:
         current = self.now_provider()
         if current.tzinfo is None:
@@ -71,7 +72,13 @@ class OperationalStorageCapacityService:
         # normal sampler was too late. It bypasses the long human reminder
         # window, while a short dedicated cooldown avoids one alert per
         # failing worker process.
-        last_runtime_failure = parse_datetime(previous.get("lastRuntimeFailureAlertAt"))
+        forced_kind = str(force_alert_kind or "runtime-write-failure").strip() or "runtime-write-failure"
+        forced_alert_key = (
+            "lastRuntimeFailureAlertAt"
+            if forced_kind == "runtime-write-failure"
+            else "lastForcedCapacityAlertAt"
+        )
+        last_forced_alert = parse_datetime(previous.get(forced_alert_key))
         try:
             runtime_cooldown_minutes = int(
                 float(str(self.settings.get("operationalStorageRuntimeFailureCooldownMinutes") or 5))
@@ -79,8 +86,8 @@ class OperationalStorageCapacityService:
         except (TypeError, ValueError):
             runtime_cooldown_minutes = 5
         runtime_cooldown_seconds = max(60, runtime_cooldown_minutes * 60)
-        force_due = not last_runtime_failure or (
-            current.astimezone(timezone.utc) - last_runtime_failure.astimezone(timezone.utc)
+        force_due = not last_forced_alert or (
+            current.astimezone(timezone.utc) - last_forced_alert.astimezone(timezone.utc)
         ).total_seconds() >= runtime_cooldown_seconds
         if (
             force_alert
@@ -89,11 +96,17 @@ class OperationalStorageCapacityService:
         ):
             health.update({
                 "alertRequired": True,
-                "alertKind": "runtime-write-failure",
+                "alertKind": forced_kind,
                 "lastAlertAt": str(health.get("checkedAt") or ""),
-                "lastRuntimeFailureAlertAt": str(health.get("checkedAt") or ""),
-                "runtimeCapacityFailure": True,
+                forced_alert_key: str(health.get("checkedAt") or ""),
             })
+            if forced_kind == "runtime-write-failure":
+                health["runtimeCapacityFailure"] = True
+            else:
+                health["forcedCapacityIncident"] = forced_kind
+        for key in ("lastRuntimeFailureAlertAt", "lastForcedCapacityAlertAt"):
+            if key in previous and key not in health:
+                health[key] = previous[key]
         self.save(health)
         event = operational_storage_capacity_changed_event(health) if health.get("alertRequired") else None
         return health, event
@@ -148,6 +161,8 @@ class OperationalStorageCapacityNotificationEnqueuer:
         }.get(state, "상태 변경")
         if kind == "runtime-write-failure":
             title = "운영 저장공간 쓰기 실패"
+        elif kind == "typedb-auto-rotation":
+            title = "TypeDB 안전 재구축 시작"
         elif kind in {"forecast", "forecast-eta-worsened"}:
             title = "운영 저장공간 소진 예상"
         elif kind == "material-worsening":
@@ -160,9 +175,9 @@ class OperationalStorageCapacityNotificationEnqueuer:
             + " · 운영 알림 " + str(values.get("alertFreeMb") or 0) + "MB"
             + " · 제한 " + str(values.get("minimumFreeMb") or 0) + "MB"
             + " · 심각 " + str(values.get("criticalFreeMb") or 0) + "MB",
-            "• TypeDB: " + str(values.get("typedbSizeMb") or 0) + "MB / 한도 " + str(values.get("typedbLimitMb") or 0) + "MB"
+            "• TypeDB 실제 점유: " + str(values.get("typedbSizeMb") or 0) + "MB / 한도 " + str(values.get("typedbLimitMb") or 0) + "MB"
             + " · WAL " + str(values.get("typedbWalMb") or 0) + "MB"
-            + " · checkpoint " + str(values.get("typedbCheckpointMb") or 0) + "MB",
+            + " · checkpoint 참조 " + str(values.get("typedbCheckpointReferencedMb") or values.get("typedbCheckpointMb") or 0) + "MB",
             "• MySQL: " + str(values.get("mysqlSizeMb") or 0) + "MB / 한도 " + str(values.get("mysqlLimitMb") or 0) + "MB",
             "• 로그: " + str(values.get("logSizeMb") or 0) + "MB / 한도 " + str(values.get("logLimitMb") or 0) + "MB",
             "• 처리 모드: " + str(values.get("cleanupMode") or "normal"),
@@ -182,6 +197,18 @@ class OperationalStorageCapacityNotificationEnqueuer:
             )
         if kind == "runtime-write-failure":
             lines.insert(3, "• 감지: 실제 저장소 쓰기 실패(ENOSPC 계열)를 감지해 일반 알림 쿨다운과 별도로 발송했습니다.")
+        elif kind == "typedb-auto-rotation":
+            lines.insert(3, "• 감지: TypeDB가 안전 재구축 기준에 도달해 MySQL 원천 데이터로 그래프를 다시 만드는 작업을 시작했습니다.")
+        try:
+            shared_linked_mb = float(values.get("typedbSharedLinkedMb") or 0)
+        except (TypeError, ValueError):
+            shared_linked_mb = 0.0
+        if shared_linked_mb > 0:
+            lines.insert(
+                4,
+                "• 계산 기준: checkpoint 하드링크 참조 " + str(round(shared_linked_mb, 1))
+                + "MB는 실제 디스크 사용량에 중복 합산하지 않았습니다.",
+            )
         components = list(values.get("limitingComponents") or [])
         if components:
             names = ", ".join(str(item.get("component") or "") for item in components if isinstance(item, dict))
@@ -189,6 +216,7 @@ class OperationalStorageCapacityNotificationEnqueuer:
                 lines.insert(3, "• 제한 대상: " + names)
         text = "\n".join(lines)
         signal = "recovered" if recovered else (
+            "capacityRotation" if kind == "typedb-auto-rotation" else
             "capacityForecast" if kind in {"forecast", "forecast-eta-worsened"} else "capacityLimited"
         )
         return {

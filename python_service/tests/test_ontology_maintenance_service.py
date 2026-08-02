@@ -45,6 +45,31 @@ class FakeOntologyRepository:
         }
 
 
+class ManifestInventoryRepository(FakeOntologyRepository):
+    def __init__(self):
+        super().__init__()
+        self.inventories = {
+            "portfolio:local:main": {
+                "status": "ok",
+                "storedManifestCount": 14,
+                "inactiveManifestCount": 13,
+            },
+            "market:shared:kr": {
+                "status": "ok",
+                "storedManifestCount": 2,
+                "inactiveManifestCount": 1,
+            },
+            "knowledge:shared:news": {
+                "status": "ok",
+                "storedManifestCount": 1,
+                "inactiveManifestCount": 0,
+            },
+        }
+
+    def scoped_abox_manifest_inventory(self, world_id):
+        return dict(self.inventories[world_id])
+
+
 class OntologyMaintenanceRunnerTests(unittest.TestCase):
     def test_round_robin_uses_bounded_policy_and_persists_cursor(self):
         repository = FakeOntologyRepository()
@@ -90,6 +115,32 @@ class OntologyMaintenanceRunnerTests(unittest.TestCase):
         self.assertEqual(2, status["policy"]["maxDeleteBatchesPerRun"])
         self.assertEqual(50, status["policy"]["deleteBatchSize"])
 
+    def test_live_manifest_inventory_prioritizes_backlogged_world_and_replaces_stale_state(self):
+        repository = ManifestInventoryRepository()
+        store = FakeStateStore({
+            "nextWorldId": "market:shared:kr",
+            "backlogByWorld": {
+                "portfolio:local:main": {
+                    "lastInactiveManifestCount": 485,
+                    "inventoryAvailable": False,
+                },
+            },
+        })
+        runner = OntologyMaintenanceRunner(
+            repository,
+            state_store=store,
+            settings={"ontologyAboxMaintenancePriorityInactiveManifestCount": "8"},
+        )
+
+        result = runner.run_once()
+
+        self.assertEqual("portfolio:local:main", result["worldId"])
+        self.assertEqual("inactive-manifest-priority", result["maintenance"]["worldSelection"]["mode"])
+        self.assertEqual(13, result["maintenance"]["manifestInventory"]["inactiveManifestCount"])
+        self.assertEqual(4, store.payload["backlogByWorld"]["portfolio:local:main"]["lastInactiveManifestCount"])
+        self.assertEqual(1, store.payload["backlogByWorld"]["market:shared:kr"]["lastInactiveManifestCount"])
+        self.assertEqual(0, store.payload["backlogByWorld"]["knowledge:shared:news"]["lastInactiveManifestCount"])
+
     def test_deferred_writer_lease_does_not_claim_an_empty_inventory(self):
         class BusyRepository(FakeOntologyRepository):
             def run_deferred_maintenance(self, payload):
@@ -125,6 +176,7 @@ class OntologyMaintenanceRunnerTests(unittest.TestCase):
         self.assertEqual(2, result["reasoningQueue"]["effectivePendingCount"])
         self.assertEqual([], repository.calls)
         self.assertEqual("active-reasoning-lease", result["backgroundFairness"]["reasonCode"])
+        self.assertEqual(10, result["retryAfterSeconds"])
 
     def test_aged_maintenance_gets_one_fairness_turn_between_reasoning_leases(self):
         repository = FakeOntologyRepository()
@@ -201,6 +253,48 @@ class OntologyMaintenanceRunnerTests(unittest.TestCase):
         self.assertEqual([2, 2, 3], [call["maxAboxDeleteBatches"] for call in repository.calls])
         self.assertEqual("adaptive-drain", third["maintenance"]["adaptiveDrain"]["mode"])
         self.assertEqual(3, third["maintenance"]["adaptiveDrain"]["criticalDrainRuns"])
+
+    def test_capacity_pressure_prioritizes_bounded_cleanup_over_pending_reasoning(self):
+        repository = FakeOntologyRepository()
+        runner = OntologyMaintenanceRunner(
+            repository,
+            state_store=FakeStateStore(),
+            settings={
+                "typedbCapacityMaintenanceMaxManifests": "10",
+                "typedbCapacityMaintenanceMaxDeleteBatches": "12",
+                "typedbCapacityMaintenanceDeleteBatchSize": "250",
+            },
+            reasoning_queue_probe=lambda: {"effectivePendingCount": 4, "runningEntryCount": 0},
+            capacity_guard=lambda: {
+                "ready": True,
+                "capacityPriority": True,
+                "bypassReasoningDeferral": True,
+                "mode": "write-throttled",
+            },
+        )
+
+        result = runner.run_once()
+
+        self.assertEqual("ok", result["status"])
+        self.assertEqual(10, repository.calls[0]["maxInactiveManifests"])
+        self.assertEqual(12, repository.calls[0]["maxAboxDeleteBatches"])
+        self.assertEqual(250, repository.calls[0]["aboxDeleteBatchSize"])
+        self.assertEqual(1, result["maintenance"]["capacityBudget"]["capacityPriority"])
+
+    def test_capacity_rotation_wait_blocks_cleanup_writes(self):
+        repository = FakeOntologyRepository()
+        result = OntologyMaintenanceRunner(
+            repository,
+            state_store=FakeStateStore(),
+            capacity_guard=lambda: {
+                "ready": False,
+                "mode": "rotation-required",
+                "reason": "rotation required",
+            },
+        ).run_once()
+
+        self.assertEqual("deferred-capacity", result["status"])
+        self.assertEqual([], repository.calls)
 
 
 if __name__ == "__main__":

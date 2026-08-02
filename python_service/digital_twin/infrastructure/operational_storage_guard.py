@@ -121,6 +121,53 @@ def storage_directory_size_bytes(path: Path) -> int:
     return total
 
 
+def storage_directory_physical_size_bytes(path: Path) -> int:
+    """Return allocated filesystem bytes, deduplicating hard-linked files.
+
+    TypeDB checkpoints commonly hard-link immutable SST files from ``storage``.
+    Summing every pathname makes a 1 GB graph look like 2 GB or more and can
+    trigger needless capacity alerts or graph rebuilds.  Capacity decisions
+    need allocated blocks, not the apparent size of every directory entry.
+    """
+
+    target = Path(path)
+    try:
+        if target.is_file():
+            stat = target.stat()
+            blocks = int(getattr(stat, "st_blocks", 0) or 0)
+            return max(0, blocks * 512 if blocks > 0 else int(stat.st_size))
+    except OSError:
+        return 0
+    if not target.exists():
+        return 0
+    total = 0
+    seen = set()
+    pending = [target]
+    while pending:
+        current = pending.pop()
+        try:
+            with os.scandir(current) as entries:
+                for entry in entries:
+                    try:
+                        if entry.is_dir(follow_symlinks=False):
+                            pending.append(Path(entry.path))
+                            continue
+                        if not entry.is_file(follow_symlinks=False):
+                            continue
+                        stat = entry.stat(follow_symlinks=False)
+                        identity = (int(stat.st_dev), int(stat.st_ino))
+                        if identity in seen:
+                            continue
+                        seen.add(identity)
+                        blocks = int(getattr(stat, "st_blocks", 0) or 0)
+                        total += max(0, blocks * 512 if blocks > 0 else int(stat.st_size))
+                    except OSError:
+                        continue
+        except OSError:
+            continue
+    return total
+
+
 def operational_storage_inventory(
     settings: Mapping[str, object] = None,
     data_path: Path = None,
@@ -131,7 +178,8 @@ def operational_storage_inventory(
 
     configured = dict(settings or {})
     root = Path(data_path) if data_path is not None else data_dir()
-    size = size_provider or storage_directory_size_bytes
+    apparent_size = size_provider or storage_directory_size_bytes
+    physical_size = size_provider or storage_directory_physical_size_bytes
     health = operational_storage_health(
         configured,
         probe_path=root,
@@ -139,17 +187,24 @@ def operational_storage_inventory(
     )
     typedb_root = root / "typedb-data"
     mysql_root = root / "mysql-runtime"
-    typedb_wal = sum(size(path) for path in typedb_root.glob("*/wal"))
-    typedb_checkpoint = sum(size(path) for path in typedb_root.glob("*/checkpoint"))
-    root_logs = sum(size(path) for path in root.glob("*.log"))
-    typedb_logs = size(root / "typedb-logs")
+    typedb_physical = physical_size(typedb_root)
+    typedb_apparent = apparent_size(typedb_root)
+    typedb_wal = sum(physical_size(path) for path in typedb_root.glob("*/wal"))
+    # This is a useful TypeDB diagnostic, but checkpoint files can be hard
+    # linked to the active store and must not be added again to capacity.
+    typedb_checkpoint = sum(apparent_size(path) for path in typedb_root.glob("*/checkpoint"))
+    root_logs = sum(apparent_size(path) for path in root.glob("*.log"))
+    typedb_logs = apparent_size(root / "typedb-logs")
     return {
         **health,
-        "typedbSizeMb": round(size(typedb_root) / 1024 / 1024, 1),
+        "typedbSizeMb": round(typedb_physical / 1024 / 1024, 1),
+        "typedbApparentSizeMb": round(typedb_apparent / 1024 / 1024, 1),
+        "typedbSharedLinkedMb": round(max(0, typedb_apparent - typedb_physical) / 1024 / 1024, 1),
         "typedbWalMb": round(typedb_wal / 1024 / 1024, 1),
         "typedbCheckpointMb": round(typedb_checkpoint / 1024 / 1024, 1),
+        "typedbCheckpointReferencedMb": round(typedb_checkpoint / 1024 / 1024, 1),
         "typedbLimitMb": _integer(configured.get("typedbDataMaxSizeMb"), 4096, 256),
-        "mysqlSizeMb": round(size(mysql_root) / 1024 / 1024, 1),
+        "mysqlSizeMb": round(apparent_size(mysql_root) / 1024 / 1024, 1),
         "mysqlLimitMb": _integer(configured.get("operationalMySqlDataMaxSizeMb"), 4096, 256),
         "logSizeMb": round((root_logs + typedb_logs) / 1024 / 1024, 1),
         "logLimitMb": _integer(configured.get("operationalLogMaxSizeMb"), 512, 32),

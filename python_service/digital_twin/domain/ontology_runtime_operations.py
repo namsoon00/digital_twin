@@ -17,7 +17,7 @@ NATIVE_RULE_TIMING_PROFILE_VERSION = "typedb-native-rule-timing-v1"
 NATIVE_RULE_ADAPTIVE_TARGET_SHARDING_PROFILE_VERSION = "typedb-native-rule-adaptive-target-sharding-v1"
 NATIVE_REPLAY_VALIDATION_VERSION = "typedb-native-replay-validation-v1"
 NATIVE_RULE_FAILURE_DIAGNOSTIC_VERSION = "typedb-native-rule-failure-v1"
-SCOPED_ABOX_MAINTENANCE_POLICY_VERSION = "typedb-scoped-abox-maintenance-policy-v2"
+SCOPED_ABOX_MAINTENANCE_POLICY_VERSION = "typedb-scoped-abox-maintenance-policy-v3"
 BACKGROUND_WORK_FAIRNESS_POLICY_VERSION = "ontology-background-work-fairness-v1"
 DISABLED_VALUES = {"0", "false", "no", "off", "disabled"}
 
@@ -286,6 +286,18 @@ def scoped_abox_maintenance_policy(settings: Mapping[str, object] = None) -> Dic
         )),
         "warningInactiveManifestCount": warning_count,
         "criticalInactiveManifestCount": critical_count,
+        # The maintenance runner reads the lightweight Manifest inventory
+        # before it acquires the writer lease.  Once a world has this many
+        # retired generations, it takes precedence over round-robin order so
+        # a busy portfolio cannot keep growing while quieter worlds are
+        # inspected first.
+        "priorityInactiveManifestCount": _integer(_setting_number(
+            configured,
+            "ontologyAboxMaintenancePriorityInactiveManifestCount",
+            8,
+            1,
+            50000,
+        )),
         # A prolonged critical backlog can receive a modestly larger physical
         # delete budget only after confirmed lease-owning cleanup passes.
         # This remains an operational retention control, never an investment

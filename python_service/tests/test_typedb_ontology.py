@@ -1681,7 +1681,10 @@ class TypeDBOntologyRepositoryTests(unittest.TestCase):
             "prune_inferencebox_generations",
             return_value={"status": "ok", "deletedGenerationCount": 2},
         ) as prune_inference:
-            result = repository.run_deferred_maintenance({"aboxDeleteBatchSize": 25})
+            result = repository.run_deferred_maintenance({
+                "aboxDeleteBatchSize": 25,
+                "maxInactiveManifests": 20,
+            })
 
         self.assertEqual("ok", result["status"])
         self.assertEqual("not-requested", result["orphanScopedAbox"]["status"])
@@ -1690,7 +1693,26 @@ class TypeDBOntologyRepositoryTests(unittest.TestCase):
         prune_orphans.assert_not_called()
         self.assertEqual(2, prune_abox.call_args.kwargs["max_delete_batches"])
         self.assertEqual(25, prune_abox.call_args.kwargs["delete_batch_size"])
+        self.assertEqual(20, prune_abox.call_args.kwargs["max_manifests"])
         prune_inference.assert_called_once_with("inference:active", keep_count=2)
+
+    def test_scoped_manifest_inventory_avoids_physical_abox_row_counts(self):
+        repository = TypeDBOntologyGraphRepository("127.0.0.1:1729")
+        with patch.object(repository, "active_abox_metadata", return_value={
+            "status": "ok",
+            "scopedAboxManifestVersion": SCOPED_ABOX_MANIFEST_VERSION,
+            "worldviewManifestId": "abox-manifest:active",
+        }), patch.object(repository, "worldview_manifest_marker_rows", return_value=[
+            {"worldviewManifestId": "abox-manifest:active"},
+            {"worldviewManifestId": "abox-manifest:old-one"},
+            {"worldviewManifestId": "abox-manifest:old-two"},
+        ]), patch.object(repository, "box_row_counts") as row_counts:
+            result = repository.scoped_abox_manifest_inventory("portfolio:local:main")
+
+        self.assertEqual("ok", result["status"])
+        self.assertEqual(3, result["storedManifestCount"])
+        self.assertEqual(2, result["inactiveManifestCount"])
+        row_counts.assert_not_called()
 
     def test_scoped_manifest_retention_stops_at_delete_batch_budget(self):
         repository = TypeDBOntologyGraphRepository("127.0.0.1:1729")

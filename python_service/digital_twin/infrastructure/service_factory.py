@@ -83,7 +83,7 @@ from .investment_research_gateway import CompositeInvestmentResearchGateway, Exi
 from .ontology_graph_store import ontology_repository_from_settings
 from . import operational_store as stores
 from .ontology_projection import PortfolioOntologyProjectionRecorder
-from .typedb_storage_guard import typedb_storage_health
+from .typedb_storage_guard import TypeDBCapacityGuard
 from .operational_storage_guard import operational_storage_health, operational_storage_inventory
 from .kis_realtime_ws import KISRealtimeSymbolSelector, KISRealtimeWebSocketClient
 from .rule_change_candidate_ai import rule_change_candidate_advisor_from_settings
@@ -108,6 +108,16 @@ def setting_truthy(value: object, default: bool = True) -> bool:
     if not text:
         return default
     return text not in DISABLED_SETTING_VALUES
+
+
+def typedb_capacity_guard(settings, role: str, state_store=None) -> TypeDBCapacityGuard:
+    """Build a role-aware guard that reuses the maintenance worker sample."""
+    reader = getattr(state_store, "load", None)
+    return TypeDBCapacityGuard(
+        settings,
+        role=role,
+        capacity_state_loader=reader if callable(reader) else None,
+    )
 
 
 def monitor_event_bus(settings=None) -> EventBus:
@@ -190,6 +200,7 @@ def observe_operational_storage_capacity(
     settings=None,
     snapshot=None,
     force_alert: bool = False,
+    force_alert_kind: str = "runtime-write-failure",
 ):
     """Record one bounded capacity observation and dispatch any state alert.
 
@@ -203,6 +214,7 @@ def observe_operational_storage_capacity(
     health, event = build_operational_storage_capacity_service(configured_settings).record(
         observed,
         force_alert=force_alert,
+        force_alert_kind=force_alert_kind,
     )
     if event:
         operational_storage_event_bus(configured_settings).publish(event)
@@ -786,6 +798,11 @@ def build_ontology_world_projection_runner(settings=None) -> OntologyWorldProjec
     store_settings["_skipOperationalHistoryRetention"] = "1"
     store_settings["_skipOperationalSchemaBootstrap"] = "1"
 
+    storage_guard = typedb_capacity_guard(
+        configured_settings,
+        "world-projection",
+        stores.operational_storage_capacity_state_store(store_settings),
+    )
     return OntologyWorldProjectionRunner(
         outbox=stores.ontology_world_projection_outbox_store(store_settings),
         projection_recorder=PortfolioOntologyProjectionRecorder(
@@ -797,7 +814,7 @@ def build_ontology_world_projection_runner(settings=None) -> OntologyWorldProjec
         settings=configured_settings,
         worker_id=os.environ.get("ONTOLOGY_WORLD_PROJECTION_WORKER_ID") or "",
         reasoning_queue_probe=build_ontology_reasoning_queue_probe(configured_settings),
-        storage_guard=lambda: typedb_storage_health(configured_settings),
+        storage_guard=storage_guard,
         fairness_state_store=stores.ontology_world_projection_state_store(store_settings),
     )
 
@@ -808,6 +825,11 @@ def build_ontology_inference_detail_runner(settings=None) -> OntologyInferenceDe
     store_settings = dict(configured_settings)
     store_settings["_skipOperationalHistoryRetention"] = "1"
     store_settings["_skipOperationalSchemaBootstrap"] = "1"
+    storage_guard = typedb_capacity_guard(
+        configured_settings,
+        "inference-detail",
+        stores.operational_storage_capacity_state_store(store_settings),
+    )
     return OntologyInferenceDetailRunner(
         outbox=stores.ontology_inference_detail_outbox_store(store_settings),
         ontology_repository=ontology_repository_from_settings(configured_settings),
@@ -815,6 +837,7 @@ def build_ontology_inference_detail_runner(settings=None) -> OntologyInferenceDe
         worker_id=os.environ.get("ONTOLOGY_INFERENCE_DETAIL_WORKER_ID") or "",
         reasoning_queue_probe=build_ontology_reasoning_queue_probe(configured_settings),
         fairness_state_store=stores.ontology_inference_detail_state_store(store_settings),
+        storage_guard=storage_guard,
     )
 
 
@@ -824,12 +847,17 @@ def build_ontology_rulebox_prewarm_runner(settings=None) -> OntologyRuleboxPrewa
     store_settings = dict(configured_settings)
     store_settings["_skipOperationalHistoryRetention"] = "1"
     store_settings["_skipOperationalSchemaBootstrap"] = "1"
+    storage_guard = typedb_capacity_guard(
+        configured_settings,
+        "rulebox-prewarm",
+        stores.operational_storage_capacity_state_store(store_settings),
+    )
     return OntologyRuleboxPrewarmRunner(
         ontology_repository=ontology_repository_from_settings(configured_settings),
         settings=configured_settings,
         reasoning_queue_probe=build_ontology_reasoning_queue_probe(configured_settings),
         prewarm_state_store=stores.ontology_rulebox_prewarm_state_store(store_settings),
-        storage_guard=lambda: typedb_storage_health(configured_settings),
+        storage_guard=storage_guard,
     )
 
 
@@ -841,11 +869,17 @@ def build_ontology_maintenance_runner(settings=None) -> OntologyMaintenanceRunne
     store_settings["_skipOperationalHistoryRetention"] = "1"
     store_settings["_skipOperationalSchemaBootstrap"] = "1"
 
+    capacity_guard = typedb_capacity_guard(
+        configured_settings,
+        "maintenance",
+        stores.operational_storage_capacity_state_store(store_settings),
+    )
     return OntologyMaintenanceRunner(
         ontology_repository=ontology_repository_from_settings(configured_settings),
         state_store=stores.ontology_maintenance_state_store(store_settings),
         settings=configured_settings,
         reasoning_queue_probe=build_ontology_reasoning_queue_probe(configured_settings),
+        capacity_guard=capacity_guard,
     )
 
 
@@ -1018,6 +1052,11 @@ def build_ontology_reasoning_runner(settings=None, event_publisher=None) -> Onto
         for key in removed_keys or []:
             reasoning_monitor_settings.pop(key, None)
 
+    storage_guard = typedb_capacity_guard(
+        configured_settings,
+        "reasoning",
+        stores.operational_storage_capacity_state_store(reasoning_store_settings),
+    )
     return OntologyReasoningRunner(
         event_reader=event_log,
         cursor_store=cursor_store,
@@ -1035,7 +1074,7 @@ def build_ontology_reasoning_runner(settings=None, event_publisher=None) -> Onto
         priority_symbols_provider=lambda: ontology_reasoning_priority_symbols(registry, reasoning_store_settings),
         projection_recovery_probe=projection_recovery_probe,
         maintenance_runner=reasoning_worker_maintenance,
-        storage_guard=lambda: typedb_storage_health(configured_settings),
+        storage_guard=storage_guard,
         mailbox_store=stores.ontology_reasoning_mailbox_store(reasoning_store_settings),
         queue_health_service=OntologyReasoningQueueHealthService(
             store=cursor_store,

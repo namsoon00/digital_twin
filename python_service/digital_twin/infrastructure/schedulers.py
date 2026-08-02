@@ -1411,6 +1411,27 @@ class OntologyMaintenanceScheduler:
             self.execution_timeout_grace_seconds(),
         )
 
+    def next_wait_seconds(self, result: dict) -> float:
+        """Retry lease-only deferrals inside the normal maintenance interval.
+
+        The retry is a MySQL/lease probe, not an additional TypeDB write. It
+        lets retention catch a short idle gap between continuous reasoning
+        batches instead of repeatedly waking on the same one-minute phase.
+        """
+        values = dict(result or {}) if isinstance(result, dict) else {}
+        status = str(values.get("status") or "")
+        if status not in {
+            "deferred-reasoning-queue",
+            "deferred-projection-coordinator",
+            "deferred-write-lease",
+        }:
+            return float(self.interval_seconds)
+        try:
+            retry_after = int(float(values.get("retryAfterSeconds") or self.interval_seconds))
+        except (TypeError, ValueError):
+            retry_after = self.interval_seconds
+        return float(max(5, min(self.interval_seconds, retry_after)))
+
     def should_report(self, result: dict, started: float) -> bool:
         maintenance = result.get("maintenance") if isinstance(result.get("maintenance"), dict) else {}
         removed = int(maintenance.get("removedManifestCount") or 0)
@@ -1438,6 +1459,7 @@ class OntologyMaintenanceScheduler:
         )
         while self.running:
             started = time.monotonic()
+            result = {}
             try:
                 result = self.run_once()
                 if self.should_report(result, started):
@@ -1456,7 +1478,8 @@ class OntologyMaintenanceScheduler:
             except Exception as error:  # noqa: BLE001 - retention never stops live inference.
                 print("Python ontology ABox maintenance worker error: " + str(error), flush=True)
                 report_runtime_error(self.error_reporter, "Python ontology ABox maintenance worker", error, "scoped ABox retention")
-            end_at = time.monotonic() + max(1.0, self.interval_seconds - (time.monotonic() - started))
+            next_interval = self.next_wait_seconds(result)
+            end_at = time.monotonic() + max(1.0, next_interval - (time.monotonic() - started))
             wait_until_running(lambda: self.running, end_at)
 
 

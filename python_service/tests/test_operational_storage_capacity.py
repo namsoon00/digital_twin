@@ -137,6 +137,34 @@ class OperationalStorageCapacityTests(unittest.TestCase):
         self.assertTrue(due["alertRequired"])
         self.assertIsNotNone(due_event)
 
+    def test_typedb_auto_rotation_uses_a_distinct_forced_incident(self):
+        current = [datetime(2026, 8, 2, 9, 0, tzinfo=timezone.utc)]
+        service = OperationalStorageCapacityService(
+            store=StateStore(),
+            settings={"operationalStorageRuntimeFailureCooldownMinutes": "5"},
+            now_provider=lambda: current[0],
+        )
+
+        first, first_event = service.record(
+            self.limited_snapshot(),
+            force_alert=True,
+            force_alert_kind="typedb-auto-rotation",
+        )
+
+        self.assertTrue(first["alertRequired"])
+        self.assertEqual("typedb-auto-rotation", first["alertKind"])
+        self.assertEqual(first["checkedAt"], first["lastForcedCapacityAlertAt"])
+        self.assertIsNotNone(first_event)
+
+        current[0] += timedelta(minutes=2)
+        repeated, repeated_event = service.record(
+            self.limited_snapshot(),
+            force_alert=True,
+            force_alert_kind="typedb-auto-rotation",
+        )
+        self.assertFalse(repeated["alertRequired"])
+        self.assertIsNone(repeated_event)
+
     def test_internal_cleanup_warning_does_not_page_until_the_human_threshold(self):
         current = [datetime(2026, 8, 2, 9, 0, tzinfo=timezone.utc)]
         service = OperationalStorageCapacityService(
@@ -256,6 +284,29 @@ class OperationalStorageCapacityTests(unittest.TestCase):
         self.assertEqual(1, len(notifier.messages))
         self.assertIn("운영 저장공간 쓰기 실패", notifier.messages[0])
         self.assertIn("TypeDB", notifier.messages[0])
+
+    def test_auto_rotation_notification_names_the_rebuild(self):
+        payload = {
+            **self.limited_snapshot(),
+            "state": "limited",
+            "previousState": "warning",
+            "alertRequired": True,
+            "alertKind": "typedb-auto-rotation",
+            "checkedAt": "2026-08-02T09:00:00Z",
+            "warningFreeMb": 49152,
+            "alertFreeMb": 24576,
+            "minimumFreeMb": 32768,
+            "criticalFreeMb": 20480,
+            "limitingComponents": [{"component": "typedb"}],
+            "suggestedAction": "TypeDB 안전 재구축을 실행하세요.",
+        }
+        queue = Queue()
+        OperationalStorageCapacityNotificationEnqueuer(queue).handle(
+            operational_storage_capacity_changed_event(payload)
+        )
+
+        self.assertEqual(1, len(queue.jobs))
+        self.assertIn("TypeDB 안전 재구축 시작", queue.jobs[0].text)
 
     def test_storage_capacity_uses_the_operations_delivery_channel_and_presentation(self):
         self.assertTrue(is_operations_delivery_message_type(OPERATIONAL_STORAGE_CAPACITY))

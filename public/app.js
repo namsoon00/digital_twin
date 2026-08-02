@@ -4075,6 +4075,10 @@
       typedbRetryCount: settingValue("typedbRetryCount"),
       typedbInferenceGenerationKeepCount: settingValue("typedbInferenceGenerationKeepCount"),
       typedbAutoResetEnabled: settingValue("typedbAutoResetEnabled"),
+      typedbCapacityAutoRotateEnabled: settingValue("typedbCapacityAutoRotateEnabled"),
+      typedbCapacityThrottlePercent: settingValue("typedbCapacityThrottlePercent"),
+      typedbCapacityAutoRotatePercent: settingValue("typedbCapacityAutoRotatePercent"),
+      typedbCapacityAutoRotateCooldownMinutes: settingValue("typedbCapacityAutoRotateCooldownMinutes"),
       typedbDataRetentionHours: settingValue("typedbDataRetentionHours"),
       typedbDataMaxSizeMb: settingValue("typedbDataMaxSizeMb"),
       materialityGateEnabled: settingValue("materialityGateEnabled"),
@@ -24127,8 +24131,18 @@
           { value: "1", label: "사용" },
           { value: "0", label: "사용 안 함" }
         ]),
+        renderSettingSelect("typedbCapacityAutoRotateEnabled", "TypeDB 용량 자동 회전", [
+          { value: "1", label: "사용" },
+          { value: "0", label: "사용 안 함" }
+        ]),
+        renderSettingField("typedbCapacityThrottlePercent", "TypeDB 배경 쓰기 완화 기준(%)", "number", "80"),
+        renderSettingField("typedbCapacityAutoRotatePercent", "TypeDB 안전 재구축 기준(%)", "number", "90"),
+        renderSettingField("typedbCapacityAutoRotateCooldownMinutes", "TypeDB 자동 회전 재시도 간격(분)", "number", "60"),
+        renderSettingField("ontologyAboxMaintenanceMaxReasoningDeferralSeconds", "ABox 정리 최대 유예(초)", "number", "120"),
+        renderSettingField("ontologyAboxMaintenanceBusyRetrySeconds", "ABox 정리 유휴 구간 재확인(초)", "number", "10"),
+        renderSettingField("ontologyAboxMaintenancePriorityInactiveManifestCount", "ABox 적체 우선 선택 기준", "number", "8"),
         renderSettingField("typedbDataRetentionHours", "TypeDB 보관 시간", "number", "24"),
-        renderSettingField("typedbDataMaxSizeMb", "TypeDB 최대 용량(MB)", "number", "2048"),
+        renderSettingField("typedbDataMaxSizeMb", "TypeDB 최대 용량(MB)", "number", "4096"),
         renderSettingField("ontologyReasoningIntervalSeconds", "추론 요청 확인 주기(초)", "number", "10"),
         renderSettingField("ontologyReasoningBatchSize", "추론 요청 배치", "number", "20"),
         renderSettingSelect("ontologyReasoningMailboxEnabled", "실시간 최신 상태만 유지", [

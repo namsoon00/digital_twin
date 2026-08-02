@@ -1,3 +1,4 @@
+import os
 import tempfile
 import unittest
 from pathlib import Path
@@ -69,6 +70,99 @@ class TypeDBServiceManagerTests(unittest.TestCase):
         self.assertEqual("disabled", automatic["reason"])
         self.assertTrue(controlled["needed"])
         self.assertIn("size", controlled["reason"])
+
+    def test_automatic_rotation_uses_a_pre_limit_threshold_and_cooldown(self):
+        with tempfile.TemporaryDirectory() as temp:
+            data_path = Path(temp) / "typedb-data"
+            data_path.mkdir()
+            (data_path / "segment").write_bytes(b"x" * (9 * 1024 * 1024))
+            spec = {
+                "dataPath": data_path,
+                "maxSizeMb": "10",
+                "autoRotationEnabled": "1",
+                "autoRotationPercent": "90",
+                "autoRotationCooldownMinutes": "60",
+            }
+            marker = Path(temp) / "marker.json"
+            with patch.object(service_manager, "typedb_retention_marker_path", return_value=marker):
+                due = service_manager.typedb_auto_rotation_needed(spec, now_epoch=1000)
+                service_manager.write_typedb_retention_marker({"lastAutoRotationAttemptEpoch": 1000})
+                cooling = service_manager.typedb_auto_rotation_needed(spec, now_epoch=1001)
+
+        self.assertTrue(due["needed"])
+        self.assertEqual(90.0, due["typedbUsagePercent"])
+        self.assertFalse(cooling["needed"])
+        self.assertEqual("cooldown", cooling["reason"])
+
+    def test_automatic_rotation_uses_physical_size_not_checkpoint_hard_link_paths(self):
+        with tempfile.TemporaryDirectory() as temp:
+            data_path = Path(temp) / "typedb-data"
+            storage = data_path / "db" / "storage"
+            checkpoint = data_path / "db" / "checkpoint"
+            storage.mkdir(parents=True)
+            checkpoint.mkdir(parents=True)
+            segment = storage / "segment"
+            segment.write_bytes(b"x" * (6 * 1024 * 1024))
+            os.link(segment, checkpoint / "segment")
+            decision = service_manager.typedb_auto_rotation_needed({
+                "dataPath": data_path,
+                "maxSizeMb": "10",
+                "autoRotationEnabled": "1",
+                "autoRotationPercent": "90",
+            })
+
+        self.assertFalse(decision["needed"])
+        self.assertLess(decision["typedbUsagePercent"], 90)
+
+    def test_automatic_rotation_ignores_a_malformed_previous_attempt_timestamp(self):
+        with tempfile.TemporaryDirectory() as temp:
+            data_path = Path(temp) / "typedb-data"
+            data_path.mkdir()
+            (data_path / "segment").write_bytes(b"x" * (9 * 1024 * 1024))
+            spec = {
+                "dataPath": data_path,
+                "maxSizeMb": "10",
+                "autoRotationEnabled": "1",
+                "autoRotationPercent": "90",
+                "autoRotationCooldownMinutes": "60",
+            }
+            marker = Path(temp) / "marker.json"
+            with patch.object(service_manager, "typedb_retention_marker_path", return_value=marker):
+                service_manager.write_typedb_retention_marker({"lastAutoRotationAttemptEpoch": "not-a-time"})
+                due = service_manager.typedb_auto_rotation_needed(spec, now_epoch=1001)
+
+        self.assertTrue(due["needed"])
+
+    def test_hard_limit_bypasses_the_automatic_rotation_cooldown(self):
+        with tempfile.TemporaryDirectory() as temp:
+            data_path = Path(temp) / "typedb-data"
+            data_path.mkdir()
+            (data_path / "segment").write_bytes(b"x" * (11 * 1024 * 1024))
+            spec = {
+                "dataPath": data_path,
+                "maxSizeMb": "10",
+                "autoRotationEnabled": "1",
+                "autoRotationPercent": "90",
+                "autoRotationCooldownMinutes": "60",
+            }
+            marker = Path(temp) / "marker.json"
+            with patch.object(service_manager, "typedb_retention_marker_path", return_value=marker):
+                service_manager.write_typedb_retention_marker({"lastAutoRotationAttemptEpoch": 1000})
+                due = service_manager.typedb_auto_rotation_needed(spec, now_epoch=1001)
+
+        self.assertTrue(due["needed"])
+        self.assertTrue(due["hardLimitReached"])
+
+    def test_automatic_rotation_requires_a_healthy_managed_mysql_source(self):
+        mysql_spec = {"pid": Path("/tmp/mysql.pid"), "healthAddress": "127.0.0.1:3306"}
+        with patch.object(service_manager, "read_pid", return_value=123), \
+                patch.object(service_manager, "is_running", return_value=True), \
+                patch.object(service_manager, "tcp_ready", return_value=True):
+            ready = service_manager.typedb_auto_rotation_recovery_preflight({"mysql": mysql_spec})
+        unavailable = service_manager.typedb_auto_rotation_recovery_preflight({})
+
+        self.assertTrue(ready["ready"])
+        self.assertFalse(unavailable["ready"])
 
     def test_typedb_rotate_pauses_workers_and_restarts_after_reset(self):
         spec = {

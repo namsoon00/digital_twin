@@ -1826,6 +1826,59 @@ class ScopedABoxManifestMixin:
             for variable, prefix in normalized
         )
 
+    def scoped_abox_manifest_inventory(self, world_id: str = "") -> Dict[str, object]:
+        """Read the retired Manifest count without scanning physical ABox rows.
+
+        The maintenance scheduler needs to select the most backlogged world
+        before it tries to obtain TypeDB's global writer lease.  The full
+        storage diagnostic also counts every physical ABox row, which is
+        useful for an operator screen but too expensive for that recurring
+        selection step.
+        """
+        try:
+            active = self.active_abox_metadata(world_id)
+        except Exception as error:  # noqa: BLE001 - maintenance can fall back to round robin.
+            return {
+                "configured": bool(getattr(self, "address", "")),
+                "status": "error",
+                "graphStore": "typedb",
+                "reason": str(error)[:180],
+            }
+        scoped = str(active.get("scopedAboxManifestVersion") or "") == SCOPED_ABOX_MANIFEST_VERSION
+        if not scoped:
+            return {
+                "configured": bool(getattr(self, "address", "")),
+                "status": str(active.get("status") or "legacy"),
+                "graphStore": "typedb",
+                "persistenceMode": "immutable-complete-generation",
+                "activeAboxSnapshotId": str(active.get("aboxSnapshotId") or ""),
+                "reason": "Active ABox has not yet been migrated to a scoped Worldview Manifest.",
+            }
+        try:
+            markers = list(self.worldview_manifest_marker_rows(world_id))
+            manifest_ids = {
+                str(item.get("worldviewManifestId") or item.get("aboxSnapshotId") or item.get("snapshotId") or "")
+                for item in markers
+            }
+            manifest_ids.discard("")
+            return {
+                "configured": bool(getattr(self, "address", "")),
+                "status": str(active.get("status") or "ok"),
+                "graphStore": "typedb",
+                "persistenceMode": SCOPED_ABOX_PERSISTENCE_MODE,
+                "worldviewManifestId": str(active.get("worldviewManifestId") or active.get("aboxSnapshotId") or ""),
+                "storedManifestCount": len(manifest_ids),
+                "inactiveManifestCount": max(0, len(manifest_ids) - 1),
+            }
+        except Exception as error:  # noqa: BLE001 - a later retention turn can retry inventory.
+            return {
+                "configured": bool(getattr(self, "address", "")),
+                "status": "error",
+                "graphStore": "typedb",
+                "persistenceMode": SCOPED_ABOX_PERSISTENCE_MODE,
+                "reason": str(error)[:180],
+            }
+
     def scoped_abox_storage_diagnostics(self, world_id: str = "") -> Dict[str, object]:
         """Describe active logical scopes separately from physical ABox rows.
 
@@ -5433,7 +5486,7 @@ class ScopedABoxManifestMixin:
         max_count = (
             self.abox_inactive_generation_max_prune_per_save()
             if max_manifests is None
-            else max(0, min(10, int(max_manifests or 0)))
+            else max(0, min(20, int(max_manifests or 0)))
         )
         max_batch_count = (
             self.deferred_maintenance_abox_max_delete_batches()
@@ -5615,7 +5668,7 @@ class ScopedABoxManifestMixin:
         maintenance_manifest_limit = (
             self.deferred_maintenance_abox_max_manifests()
             if requested_manifest_limit is None
-            else max(1, min(10, int(requested_manifest_limit)))
+            else max(1, min(20, int(requested_manifest_limit)))
         )
         requested_delete_batch_limit = number_or_none(
             options.get("maxAboxDeleteBatches")

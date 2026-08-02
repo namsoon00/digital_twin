@@ -451,9 +451,12 @@ def evaluate_operational_storage_capacity(
         "minimumFreeMb": minimum_free_mb,
         "criticalFreeMb": critical_free_mb,
         "typedbSizeMb": round(_number(values.get("typedbSizeMb")), 1),
+        "typedbApparentSizeMb": round(_number(values.get("typedbApparentSizeMb")), 1),
+        "typedbSharedLinkedMb": round(_number(values.get("typedbSharedLinkedMb")), 1),
         "typedbLimitMb": round(_number(values.get("typedbLimitMb")), 1),
         "typedbWalMb": round(_number(values.get("typedbWalMb")), 1),
         "typedbCheckpointMb": round(_number(values.get("typedbCheckpointMb")), 1),
+        "typedbCheckpointReferencedMb": round(_number(values.get("typedbCheckpointReferencedMb")), 1),
         "mysqlSizeMb": round(_number(values.get("mysqlSizeMb")), 1),
         "mysqlLimitMb": round(_number(values.get("mysqlLimitMb")), 1),
         "logSizeMb": round(_number(values.get("logSizeMb")), 1),
@@ -500,6 +503,7 @@ def evaluate_operational_storage_capacity(
             "lastAlertComponentSizes",
             "lastAlertForecastEtaMinutes",
             "lastRuntimeFailureAlertAt",
+            "lastForcedCapacityAlertAt",
         ):
             if key in prior:
                 result[key] = prior[key]

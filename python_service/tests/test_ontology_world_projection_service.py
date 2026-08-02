@@ -117,6 +117,7 @@ class OntologyWorldProjectionRunnerTests(unittest.TestCase):
         runner = OntologyWorldProjectionRunner(FakeOutbox([]), FakeRecorder({"status": "ok"}))
 
         self.assertEqual(1, runner.batch_size())
+        self.assertEqual(300, runner.fairness_cooldown_seconds())
 
     def test_low_disk_guard_defers_before_claiming_a_shared_world_write(self):
         outbox = FakeOutbox([projection_job()])

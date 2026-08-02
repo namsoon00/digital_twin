@@ -77,7 +77,7 @@ def bounded_background_work_fairness(
     oldest_background_work_at: object,
     last_fairness_at: object = "",
     max_deferral_seconds: object = 600,
-    fairness_cooldown_seconds: object = 60,
+    fairness_cooldown_seconds: object = 300,
     now: datetime = None,
 ) -> Dict[str, object]:
     """Decide whether an aged background task may use one bounded turn.
@@ -97,7 +97,7 @@ def bounded_background_work_fairness(
     active_known = active_reasoning_count not in (None, "")
     active = max(0, _integer(active_reasoning_count)) if active_known else 0
     maximum = max(15, min(24 * 60 * 60, _integer(max_deferral_seconds, 600)))
-    cooldown = max(10, min(60 * 60, _integer(fairness_cooldown_seconds, 60)))
+    cooldown = max(10, min(60 * 60, _integer(fairness_cooldown_seconds, 300)))
     oldest = _text(oldest_background_work_at)
     last_grant = _text(last_fairness_at)
     wait_seconds = _elapsed_seconds(oldest, current)

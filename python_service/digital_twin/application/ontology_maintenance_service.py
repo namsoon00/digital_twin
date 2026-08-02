@@ -100,7 +100,7 @@ class OntologyMaintenanceRunner:
     def fairness_cooldown_seconds(self) -> int:
         return max(10, min(60 * 60, integer(
             self.settings.get("ontologyBackgroundWorkFairnessCooldownSeconds"),
-            60,
+            300,
         )))
 
     def reasoning_queue_state(self) -> Dict[str, object]:

@@ -106,7 +106,7 @@ class OntologyWorldProjectionRunner:
         return _integer_setting(
             self.settings,
             "ontologyBackgroundWorkFairnessCooldownSeconds",
-            60,
+            300,
             10,
             60 * 60,
         )

@@ -1548,7 +1548,7 @@ def runtime_settings(fast_operational_read: bool = False) -> Dict[str, str]:
         "ontologyBackgroundWorkFairnessCooldownSeconds": value(
             "ontologyBackgroundWorkFairnessCooldownSeconds",
             "ONTOLOGY_BACKGROUND_WORK_FAIRNESS_COOLDOWN_SECONDS",
-            "60",
+            "300",
         ),
         "ontologyWorldProjectionMaxReasoningDeferralSeconds": value(
             "ontologyWorldProjectionMaxReasoningDeferralSeconds",

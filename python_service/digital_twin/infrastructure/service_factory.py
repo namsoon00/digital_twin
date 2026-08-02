@@ -903,6 +903,9 @@ def build_ontology_reasoning_runner(settings=None, event_publisher=None) -> Onto
     event_log = stores.event_log(reasoning_store_settings)
     ontology_repository = ontology_repository_from_settings(configured_settings)
     cursor_store = stores.ontology_reasoning_cursor_store(reasoning_store_settings)
+    maintenance_state_store = stores.ontology_maintenance_state_store(
+        reasoning_store_settings,
+    )
     rulebox_prewarm_state_store = stores.ontology_rulebox_prewarm_state_store(
         reasoning_store_settings,
     )
@@ -1097,6 +1100,11 @@ def build_ontology_reasoning_runner(settings=None, event_publisher=None) -> Onto
         rulebox_prewarm_activity_probe=(
             getattr(rulebox_prewarm_state_store, "load")
             if callable(getattr(rulebox_prewarm_state_store, "load", None))
+            else None
+        ),
+        maintenance_yield_state_probe=(
+            getattr(maintenance_state_store, "load")
+            if callable(getattr(maintenance_state_store, "load", None))
             else None
         ),
     )

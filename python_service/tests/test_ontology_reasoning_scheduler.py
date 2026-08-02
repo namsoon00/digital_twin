@@ -112,6 +112,18 @@ class DeferredLowPriorityRunner:
         raise AssertionError("low-priority TypeDB child must not start while reasoning is pending")
 
 
+class YieldWindowLowPriorityRunner:
+    def __init__(self):
+        self.preflight_calls = 0
+
+    def reasoning_queue_deferral(self):
+        self.preflight_calls += 1
+        # A verified inactive-manifest backlog has asked the next reasoning
+        # batch to yield. The maintenance scheduler must now attempt its
+        # coordinator-protected isolated pass instead of re-deferring itself.
+        return {}
+
+
 class GraceRecoveryRunner(FakeRunner):
     def recover_orphaned_mailbox_work(self):
         self.orphan_recoveries += 1
@@ -391,6 +403,17 @@ for raw in sys.stdin:
         self.assertEqual(1, runner.preflight_calls)
         self.assertEqual(0, runner.run_calls)
         self.assertEqual(0, child.calls)
+
+    def test_maintenance_scheduler_starts_the_bounded_pass_during_a_yield_window(self):
+        runner = YieldWindowLowPriorityRunner()
+        child = PersistentCountingCycle()
+        scheduler = OntologyMaintenanceScheduler(runner, 60, isolated_cycle=child)
+
+        result = scheduler.run_once()
+
+        self.assertEqual("ok", result["status"])
+        self.assertEqual(1, runner.preflight_calls)
+        self.assertEqual(1, child.calls)
 
     def test_maintenance_scheduler_retries_lease_only_deferrals_before_normal_interval(self):
         scheduler = OntologyMaintenanceScheduler(DeferredLowPriorityRunner(), 60)

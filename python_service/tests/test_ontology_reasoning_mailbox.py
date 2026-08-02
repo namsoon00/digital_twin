@@ -488,7 +488,15 @@ def research_evidence_request(
 
 
 class OntologyReasoningMailboxTests(unittest.TestCase):
-    def build_runner(self, events, now=None, settings=None, event_publisher=None, activity_probe=None):
+    def build_runner(
+        self,
+        events,
+        now=None,
+        settings=None,
+        event_publisher=None,
+        activity_probe=None,
+        maintenance_yield_probe=None,
+    ):
         self.cursor = MemoryCursor()
         self.mailbox = MemoryMailbox()
         self.monitor = Monitor()
@@ -511,6 +519,7 @@ class OntologyReasoningMailboxTests(unittest.TestCase):
             mailbox_store=self.mailbox,
             now_provider=now or (lambda: datetime(2026, 7, 24, 0, 5, tzinfo=timezone.utc)),
             rulebox_prewarm_activity_probe=activity_probe,
+            maintenance_yield_state_probe=maintenance_yield_probe,
         )
 
     def test_newer_realtime_observation_replaces_older_source_before_typedb(self):
@@ -527,6 +536,29 @@ class OntologyReasoningMailboxTests(unittest.TestCase):
         self.assertEqual("superseded", self.mailbox.events["old"]["state"])
         self.assertEqual(0, result["mailbox"]["pendingEntryCount"])
         self.assertEqual("ok", result["executionTelemetry"]["status"])
+
+    def test_verified_abox_yield_defers_before_starting_a_new_monitor_projection(self):
+        request = realtime_request("yield", ["AAPL"], "2026-07-24T00:00:00Z")
+        runner = self.build_runner(
+            [request],
+            maintenance_yield_probe=lambda: {
+                "maintenanceYieldRequest": {
+                    "requestedAt": "2026-07-24T00:05:00Z",
+                    "expiresAt": "2026-07-24T00:05:30Z",
+                    "worldId": "portfolio:local:main",
+                    "inactiveManifestCount": 20,
+                },
+                "maintenanceYieldLastRequestedAt": "2026-07-24T00:05:00Z",
+            },
+        )
+
+        result = runner.run_once(force=True)
+
+        self.assertEqual("deferred", result["status"])
+        self.assertEqual("maintenance-window", result["deferredKind"])
+        self.assertEqual(30, result["retryAfterSeconds"])
+        self.assertTrue(result["maintenanceYield"]["active"])
+        self.assertEqual([], self.monitor.calls)
 
     def test_notified_observation_uses_a_bounded_priority_lane(self):
         observation = realtime_request(

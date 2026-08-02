@@ -1,11 +1,14 @@
 """Low-priority, lease-safe retention for immutable TypeDB ABox manifests."""
 
+from datetime import datetime, timedelta, timezone
 from typing import Dict, Iterable, List
 
 from ..domain.ontology_runtime_operations import (
     bounded_background_work_fairness,
     scoped_abox_maintenance_health,
     scoped_abox_maintenance_policy,
+    scoped_abox_maintenance_yield_backlog,
+    scoped_abox_maintenance_yield_status,
 )
 from ..domain.portfolio import utc_now_iso
 
@@ -34,7 +37,7 @@ class OntologyMaintenanceRunner:
     state in MySQL so restarts continue the round-robin world order.
     """
 
-    state_contract = "ontology-maintenance-state-v4"
+    state_contract = "ontology-maintenance-state-v5"
 
     def __init__(
         self,
@@ -111,6 +114,83 @@ class OntologyMaintenanceRunner:
             self.settings.get("ontologyAboxMaintenanceBusyRetrySeconds"),
             10,
         )))
+
+    def maintenance_yield_status(self, state: Dict[str, object] = None) -> Dict[str, object]:
+        return scoped_abox_maintenance_yield_status(
+            self.state() if state is None else state,
+            self.settings,
+        )
+
+    def request_maintenance_yield(
+        self,
+        state: Dict[str, object],
+        fairness: Dict[str, object],
+    ) -> Dict[str, object]:
+        """Persist one bounded writer hand-off for a verified ABox backlog.
+
+        The request is created only while a known live reasoning lease keeps
+        maintenance out of TypeDB.  The reasoning worker consumes the durable
+        request before it starts its next batch, so this method never reaches
+        into a running TypeDB transaction or cancels investment work.
+        """
+
+        current_state = dict(state or {})
+        status = self.maintenance_yield_status(current_state)
+        policy = dict(status.get("policy") or {})
+        if bool(status.get("active")):
+            return status
+        if not bool(policy.get("enabled")):
+            return status
+        if text((fairness or {}).get("reasonCode")) != "active-reasoning-lease":
+            return {
+                **status,
+                "status": "not-required",
+                "reason": "실행 중인 라이브 추론 lease가 확인된 경우에만 ABox 정리 창을 요청합니다.",
+            }
+        background_wait = max(0, integer((fairness or {}).get("backgroundWaitSeconds")))
+        if background_wait < max(1, integer(policy.get("afterSeconds"), 120)):
+            return {
+                **status,
+                "status": "within-deferral-budget",
+                "reason": "ABox 정리 대기 시간이 제한된 추론 양보 기준보다 짧습니다.",
+            }
+        if integer(status.get("cooldownRemainingSeconds")) > 0:
+            return {
+                **status,
+                "status": "cooldown",
+                "reason": "직전 ABox 정리 창 뒤 최소 간격이 남아 있습니다.",
+            }
+        backlog = scoped_abox_maintenance_yield_backlog(current_state, self.settings)
+        if not bool(backlog.get("eligible")):
+            return {
+                **status,
+                "status": str(backlog.get("status") or "no-priority-backlog"),
+                "backlog": backlog,
+                "reason": "최근 직접 확인된 우선 ABox 적체가 없어 라이브 추론을 유예하지 않습니다.",
+            }
+        now = datetime.now(timezone.utc)
+        requested_at = now.isoformat().replace("+00:00", "Z")
+        expires_at = (now + timedelta(seconds=max(1, integer(policy.get("windowSeconds"), 30)))).isoformat().replace("+00:00", "Z")
+        request = {
+            "version": str(policy.get("version") or "typedb-scoped-abox-maintenance-yield-v1"),
+            "requestedAt": requested_at,
+            "expiresAt": expires_at,
+            "worldId": text(backlog.get("worldId")),
+            "inactiveManifestCount": max(0, integer(backlog.get("inactiveManifestCount"))),
+            "inventoryObservedAt": text(backlog.get("inventoryObservedAt")),
+            "backgroundWaitSeconds": background_wait,
+            "reasonCode": "active-reasoning-lease-priority-backlog",
+        }
+        self.save_state({
+            **current_state,
+            "maintenanceYieldRequest": request,
+            "maintenanceYieldLastRequestedAt": requested_at,
+        })
+        return self.maintenance_yield_status({
+            **current_state,
+            "maintenanceYieldRequest": request,
+            "maintenanceYieldLastRequestedAt": requested_at,
+        })
 
     def reasoning_queue_state(self) -> Dict[str, object]:
         if not callable(self.reasoning_queue_probe):
@@ -292,6 +372,19 @@ class OntologyMaintenanceRunner:
         )
         if bool(fairness.get("fairnessGranted")):
             return {}
+        maintenance_yield = self.request_maintenance_yield(self.state(), fairness)
+        # The request is useful only when this worker is allowed to attempt
+        # the shared TypeDB coordinator. A still-running reasoning batch may
+        # reject that attempt, but its next batch will observe the same
+        # durable request and yield. Returning a normal queue deferral here
+        # would leave the request active without ever giving retention the
+        # writer opportunity it was created for.
+        if bool(maintenance_yield.get("active")):
+            self.last_background_fairness = {
+                **fairness,
+                "maintenanceYieldRequested": True,
+            }
+            return {}
         retry_after = self.interval_seconds()
         if text(fairness.get("reasonCode")) in {
             "active-reasoning-lease",
@@ -305,6 +398,7 @@ class OntologyMaintenanceRunner:
             "reason": "활성 추론 요청이 남아 있어 ABox 정리를 유휴 시간으로 미룹니다.",
             "reasoningQueue": queue_state,
             "backgroundFairness": fairness,
+            "maintenanceYield": maintenance_yield,
             "retryAfterSeconds": retry_after,
         }
 
@@ -713,6 +807,7 @@ class OntologyMaintenanceRunner:
                 "lastResult": result,
             })
             return result
+        maintenance_yield = self.maintenance_yield_status(selection_state)
         try:
             result = dict(runner({
                 "worldId": world_id,
@@ -799,14 +894,31 @@ class OntologyMaintenanceRunner:
             "criticalDrainRuns": integer(current_backlog.get("criticalDrainRuns")),
             "lastProgress": bool(current_backlog.get("lastProgress")),
         }
-        self.save_state({
+        next_state = {
             **selection_state,
             "contract": self.state_contract,
             "lastRunAt": utc_now_iso(),
             "nextWorldId": next_world_id,
             "lastResult": compact,
             "backlogByWorld": backlog_by_world,
-        })
+        }
+        if bool(maintenance_yield.get("active")) and result_status in {"ok", "partial"}:
+            granted_at = utc_now_iso()
+            next_state.update({
+                "maintenanceYieldRequest": {},
+                "maintenanceYieldLastGrantedAt": granted_at,
+                "maintenanceYieldLastWorldId": world_id,
+            })
+            compact["maintenanceYield"] = {
+                **maintenance_yield,
+                "status": "consumed",
+                "active": False,
+                "grantedAt": granted_at,
+                "worldId": world_id,
+            }
+        elif bool(maintenance_yield.get("active")):
+            compact["maintenanceYield"] = maintenance_yield
+        self.save_state(next_state)
         response = {
             "contract": self.state_contract,
             "status": result_status,

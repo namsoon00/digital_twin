@@ -9,7 +9,10 @@ from typing import Callable, Dict, Iterable, List, Mapping, Tuple
 from ..domain.events import DomainEvent, ONTOLOGY_REASONING_REQUESTED, ontology_reasoning_completed_event
 from ..domain.ontology_change_impact import requested_scope_families_for_event_fact_types
 from ..domain.ontology_reasoning_batch import adaptive_reasoning_batch_plan
-from ..domain.ontology_runtime_operations import native_replay_validation
+from ..domain.ontology_runtime_operations import (
+    native_replay_validation,
+    scoped_abox_maintenance_yield_status,
+)
 from ..domain.market_data import known_stock
 from ..domain.market_hours import evaluate_market_hours
 from ..domain.message_types import INVESTMENT_INSIGHT
@@ -650,6 +653,11 @@ class OntologyReasoningRunner:
         "ontologyReasoningFairnessDrainEnabled",
         "ontologyReasoningFairnessMaxWaitSeconds",
         "ontologyReasoningFairnessDrainMinIntervalSeconds",
+        "ontologyAboxMaintenanceYieldEnabled",
+        "ontologyAboxMaintenanceYieldAfterSeconds",
+        "ontologyAboxMaintenanceYieldWindowSeconds",
+        "ontologyAboxMaintenanceYieldCooldownSeconds",
+        "ontologyAboxMaintenanceYieldInventoryMaxAgeSeconds",
     )
 
     def __init__(
@@ -675,6 +683,7 @@ class OntologyReasoningRunner:
         snapshot_readiness_probe: Callable = None,
         operational_settings_refresher: Callable = None,
         rulebox_prewarm_activity_probe: Callable = None,
+        maintenance_yield_state_probe: Callable = None,
     ):
         self.event_reader = event_reader
         self.cursor_store = cursor_store
@@ -697,6 +706,7 @@ class OntologyReasoningRunner:
         self.snapshot_readiness_probe = snapshot_readiness_probe
         self.operational_settings_refresher = operational_settings_refresher
         self.rulebox_prewarm_activity_probe = rulebox_prewarm_activity_probe
+        self.maintenance_yield_state_probe = maintenance_yield_state_probe
 
     def refresh_operational_settings(self, settings: Dict[str, object] = None) -> Dict[str, object]:
         """Apply safe scheduling changes between persistent-sidecar turns.
@@ -981,6 +991,34 @@ class OntologyReasoningRunner:
         value["ready"] = bool(value.get("ready"))
         value.setdefault("status", "ready" if value["ready"] else "deferred-source-snapshot")
         return value
+
+    def maintenance_yield_preflight(self) -> Dict[str, object]:
+        """Read a bounded ABox maintenance hand-off before a new TypeDB batch.
+
+        The probe is MySQL-only and occurs before source snapshots, native
+        rules, mailbox claiming, or TypeDB lease acquisition.  It cannot
+        change investment facts; it simply gives verified physical retention
+        a short chance to acquire the same writer coordinator between live
+        reasoning batches.
+        """
+
+        probe = self.maintenance_yield_state_probe
+        if not callable(probe):
+            return {"active": False, "status": "not-configured"}
+        try:
+            raw = probe()
+        except Exception as error:  # noqa: BLE001 - unavailable operational state must not stop inference.
+            return {
+                "active": False,
+                "status": "probe-error",
+                "reason": str(error)[:180],
+            }
+        state = dict(raw or {}) if isinstance(raw, Mapping) else {}
+        return scoped_abox_maintenance_yield_status(
+            state,
+            self.settings,
+            now=self.now_provider(),
+        )
 
     def native_typedb_target_symbol_limit(self) -> int:
         """Bound schema-function work without reducing the complete ABox."""
@@ -5182,6 +5220,26 @@ class OntologyReasoningRunner:
                 "coalescedEventCount": len(durable_superseded_ids),
                 "maintenance": maintenance,
                 **({"executionTimeoutGuard": elapsed_timeout_guard} if elapsed_timeout_guard else {}),
+                **queue_metadata,
+            }
+        maintenance_yield = self.maintenance_yield_preflight()
+        if bool(maintenance_yield.get("active")):
+            retry_after = max(1, int(float_value(
+                maintenance_yield.get("retryAfterSeconds"),
+                self.projection_retry_seconds(),
+            )))
+            return {
+                "status": "deferred",
+                "processedCount": 0,
+                "alertCount": 0,
+                "retryAfterSeconds": retry_after,
+                "deferredKind": "maintenance-window",
+                "deferredReason": (
+                    "검증된 비활성 ABox 세대 정리를 위해 다음 TypeDB 추론 배치를 잠시 유예합니다. "
+                    + str(maintenance_yield.get("worldId") or "")
+                ).strip(),
+                "maintenanceYield": maintenance_yield,
+                "coalescedEventCount": len(durable_superseded_ids),
                 **queue_metadata,
             }
         execution_timeout_remaining = self.execution_timeout_guard_remaining_seconds()

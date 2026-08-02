@@ -19,6 +19,7 @@ NATIVE_REPLAY_VALIDATION_VERSION = "typedb-native-replay-validation-v1"
 NATIVE_RULE_FAILURE_DIAGNOSTIC_VERSION = "typedb-native-rule-failure-v1"
 SCOPED_ABOX_MAINTENANCE_POLICY_VERSION = "typedb-scoped-abox-maintenance-policy-v3"
 BACKGROUND_WORK_FAIRNESS_POLICY_VERSION = "ontology-background-work-fairness-v1"
+SCOPED_ABOX_MAINTENANCE_YIELD_POLICY_VERSION = "typedb-scoped-abox-maintenance-yield-v1"
 DISABLED_VALUES = {"0", "false", "no", "off", "disabled"}
 
 
@@ -320,6 +321,197 @@ def scoped_abox_maintenance_policy(settings: Mapping[str, object] = None) -> Dic
             1,
             20,
         )),
+    }
+
+
+def scoped_abox_maintenance_yield_policy(
+    settings: Mapping[str, object] = None,
+) -> Dict[str, object]:
+    """Return the bounded hand-off policy between reasoning and ABox retention.
+
+    This is deliberately an operational scheduling policy, not a RuleBox
+    condition.  It gives a verified, aged inactive-manifest backlog a brief
+    writer opportunity when continuously arriving reasoning work would
+    otherwise keep every low-priority cleanup pass out of TypeDB.
+    """
+
+    configured = settings or {}
+    enabled = _text(configured.get("ontologyAboxMaintenanceYieldEnabled") or "1").lower()
+    priority_count = _integer(_setting_number(
+        configured,
+        "ontologyAboxMaintenancePriorityInactiveManifestCount",
+        8,
+        1,
+        50000,
+    ))
+    return {
+        "version": SCOPED_ABOX_MAINTENANCE_YIELD_POLICY_VERSION,
+        "enabled": enabled not in DISABLED_VALUES,
+        "afterSeconds": _integer(_setting_number(
+            configured,
+            "ontologyAboxMaintenanceYieldAfterSeconds",
+            120,
+            30,
+            24 * 60 * 60,
+        )),
+        "windowSeconds": _integer(_setting_number(
+            configured,
+            "ontologyAboxMaintenanceYieldWindowSeconds",
+            30,
+            10,
+            5 * 60,
+        )),
+        "cooldownSeconds": _integer(_setting_number(
+            configured,
+            "ontologyAboxMaintenanceYieldCooldownSeconds",
+            120,
+            30,
+            24 * 60 * 60,
+        )),
+        "inventoryMaxAgeSeconds": _integer(_setting_number(
+            configured,
+            "ontologyAboxMaintenanceYieldInventoryMaxAgeSeconds",
+            900,
+            60,
+            24 * 60 * 60,
+        )),
+        "priorityInactiveManifestCount": priority_count,
+    }
+
+
+def scoped_abox_maintenance_yield_backlog(
+    state: Mapping[str, object] = None,
+    settings: Mapping[str, object] = None,
+    now: datetime = None,
+) -> Dict[str, object]:
+    """Select one recently observed inactive-manifest backlog for a yield.
+
+    A stale cursor must never defer live inference.  Only an inventory that
+    was directly observed within the configured freshness window can request
+    this bounded maintenance hand-off.
+    """
+
+    policy = scoped_abox_maintenance_yield_policy(settings)
+    current = now or datetime.now(timezone.utc)
+    if current.tzinfo is None:
+        current = current.replace(tzinfo=timezone.utc)
+    current = current.astimezone(timezone.utc)
+    payload = dict(state or {}) if isinstance(state, Mapping) else {}
+    rows = payload.get("backlogByWorld") if isinstance(payload.get("backlogByWorld"), Mapping) else {}
+    candidates = []
+    stale_count = 0
+    observed_count = 0
+    for raw_world_id, raw_value in rows.items():
+        world_id = _text(raw_world_id)
+        value = dict(raw_value or {}) if isinstance(raw_value, Mapping) else {}
+        if not world_id or not bool(value.get("inventoryAvailable")):
+            continue
+        inactive_count = max(0, _integer(value.get("lastInactiveManifestCount")))
+        if inactive_count < int(policy["priorityInactiveManifestCount"]):
+            continue
+        observed_at = _text(value.get("lastInventoryObservedAt"))
+        observed_age = _elapsed_seconds(observed_at, current)
+        if not observed_at or observed_age > int(policy["inventoryMaxAgeSeconds"]):
+            stale_count += 1
+            continue
+        observed_count += 1
+        candidates.append((inactive_count, world_id, observed_at, observed_age))
+    if not candidates:
+        status = "stale-inventory" if stale_count else "below-priority-backlog"
+        return {
+            "version": SCOPED_ABOX_MAINTENANCE_YIELD_POLICY_VERSION,
+            "eligible": False,
+            "status": status,
+            "worldId": "",
+            "inactiveManifestCount": 0,
+            "inventoryObservedAt": "",
+            "inventoryAgeSeconds": None,
+            "observedPriorityWorldCount": observed_count,
+            "stalePriorityWorldCount": stale_count,
+            "policy": policy,
+        }
+    inactive_count, world_id, observed_at, observed_age = sorted(
+        candidates,
+        key=lambda item: (-item[0], item[1]),
+    )[0]
+    return {
+        "version": SCOPED_ABOX_MAINTENANCE_YIELD_POLICY_VERSION,
+        "eligible": True,
+        "status": "eligible",
+        "worldId": world_id,
+        "inactiveManifestCount": inactive_count,
+        "inventoryObservedAt": observed_at,
+        "inventoryAgeSeconds": observed_age,
+        "observedPriorityWorldCount": observed_count,
+        "stalePriorityWorldCount": stale_count,
+        "policy": policy,
+    }
+
+
+def scoped_abox_maintenance_yield_status(
+    state: Mapping[str, object] = None,
+    settings: Mapping[str, object] = None,
+    now: datetime = None,
+) -> Dict[str, object]:
+    """Read the durable maintenance-yield request without touching TypeDB."""
+
+    policy = scoped_abox_maintenance_yield_policy(settings)
+    current = now or datetime.now(timezone.utc)
+    if current.tzinfo is None:
+        current = current.replace(tzinfo=timezone.utc)
+    current = current.astimezone(timezone.utc)
+    payload = dict(state or {}) if isinstance(state, Mapping) else {}
+    raw_request = payload.get("maintenanceYieldRequest")
+    request = dict(raw_request or {}) if isinstance(raw_request, Mapping) else {}
+    requested_at = _text(request.get("requestedAt"))
+    expires_at = _text(request.get("expiresAt"))
+    expiry = _timestamp(expires_at)
+    remaining = max(0, int((expiry - current).total_seconds())) if expiry else 0
+    active = bool(
+        policy["enabled"]
+        and requested_at
+        and expiry
+        and remaining > 0
+        and _text(request.get("worldId"))
+    )
+    request_age = _elapsed_seconds(requested_at, current) if requested_at else None
+    last_requested_at = _text(payload.get("maintenanceYieldLastRequestedAt"))
+    last_granted_at = _text(payload.get("maintenanceYieldLastGrantedAt"))
+    last_activity_at = last_requested_at
+    if _timestamp(last_granted_at) and (
+        not _timestamp(last_activity_at)
+        or _timestamp(last_granted_at) > _timestamp(last_activity_at)
+    ):
+        last_activity_at = last_granted_at
+    last_activity_age = _elapsed_seconds(last_activity_at, current) if last_activity_at else None
+    cooldown_remaining = max(
+        0,
+        int(policy["cooldownSeconds"]) - int(last_activity_age or 0),
+    ) if last_activity_at else 0
+    return {
+        "version": SCOPED_ABOX_MAINTENANCE_YIELD_POLICY_VERSION,
+        "enabled": bool(policy["enabled"]),
+        "active": active,
+        "status": (
+            "active" if active
+            else "disabled" if not policy["enabled"]
+            else "expired" if requested_at and expiry and remaining <= 0
+            else "invalid" if requested_at or expires_at
+            else "idle"
+        ),
+        "checkedAt": current.isoformat().replace("+00:00", "Z"),
+        "retryAfterSeconds": remaining if active else 0,
+        "requestedAt": requested_at,
+        "requestAgeSeconds": request_age,
+        "expiresAt": expires_at,
+        "worldId": _text(request.get("worldId")),
+        "inactiveManifestCount": max(0, _integer(request.get("inactiveManifestCount"))),
+        "inventoryObservedAt": _text(request.get("inventoryObservedAt")),
+        "backgroundWaitSeconds": max(0, _integer(request.get("backgroundWaitSeconds"))),
+        "lastRequestedAt": last_requested_at,
+        "lastGrantedAt": last_granted_at,
+        "cooldownRemainingSeconds": cooldown_remaining,
+        "policy": policy,
     }
 
 

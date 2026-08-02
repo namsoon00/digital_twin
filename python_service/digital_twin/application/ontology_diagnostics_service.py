@@ -12,6 +12,7 @@ from ..domain.portfolio_ontology_coverage import CATEGORY_LABELS, CATEGORY_RELAT
 from ..domain.ontology_runtime_operations import (
     scoped_abox_maintenance_health,
     scoped_abox_maintenance_policy,
+    scoped_abox_maintenance_yield_status,
 )
 
 
@@ -237,6 +238,7 @@ class OntologyDiagnosticsService:
             except Exception as error:  # noqa: BLE001 - audit remains available without MySQL state.
                 state = {"status": "error", "reason": str(error)[:180]}
         last_result = state.get("lastResult") if isinstance(state.get("lastResult"), dict) else {}
+        maintenance_yield = scoped_abox_maintenance_yield_status(state, self.settings)
         return {
             **health,
             "policy": policy,
@@ -254,6 +256,20 @@ class OntologyDiagnosticsService:
                 "maxDeleteBatches",
                 "deleteBatchSize",
                 "reason",
+            ]),
+            "maintenanceYield": self.pick(maintenance_yield, [
+                "version",
+                "enabled",
+                "active",
+                "status",
+                "retryAfterSeconds",
+                "requestedAt",
+                "expiresAt",
+                "worldId",
+                "inactiveManifestCount",
+                "inventoryObservedAt",
+                "backgroundWaitSeconds",
+                "cooldownRemainingSeconds",
             ]),
         }
 

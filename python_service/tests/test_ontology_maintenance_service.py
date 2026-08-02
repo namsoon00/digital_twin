@@ -178,6 +178,66 @@ class OntologyMaintenanceRunnerTests(unittest.TestCase):
         self.assertEqual("active-reasoning-lease", result["backgroundFairness"]["reasonCode"])
         self.assertEqual(10, result["retryAfterSeconds"])
 
+    def test_aged_verified_priority_backlog_requests_a_bounded_reasoning_yield(self):
+        now = datetime.now(timezone.utc)
+        store = FakeStateStore({
+            "reasoningQueueDeferredSinceAt": (
+                now - timedelta(minutes=10)
+            ).isoformat().replace("+00:00", "Z"),
+            "backlogByWorld": {
+                "portfolio:local:main": {
+                    "inventoryAvailable": True,
+                    "lastInactiveManifestCount": 20,
+                    "lastInventoryObservedAt": now.isoformat().replace("+00:00", "Z"),
+                },
+            },
+        })
+        runner = OntologyMaintenanceRunner(
+            FakeOntologyRepository(),
+            state_store=store,
+            settings={
+                "ontologyAboxMaintenanceYieldAfterSeconds": "30",
+                "ontologyAboxMaintenanceYieldWindowSeconds": "30",
+            },
+            reasoning_queue_probe=lambda: {
+                "effectivePendingCount": 2,
+                "runningEntryCount": 1,
+            },
+        )
+
+        result = runner.reasoning_queue_deferral()
+        maintenance_yield = runner.maintenance_yield_status(store.payload)
+
+        self.assertEqual({}, result)
+        self.assertTrue(maintenance_yield["active"])
+        self.assertEqual("portfolio:local:main", maintenance_yield["worldId"])
+        self.assertEqual(20, maintenance_yield["inactiveManifestCount"])
+        self.assertTrue(store.payload["maintenanceYieldRequest"]["expiresAt"])
+
+    def test_successful_maintenance_consumes_an_active_yield_request(self):
+        now = datetime.now(timezone.utc)
+        store = FakeStateStore({
+            "maintenanceYieldRequest": {
+                "requestedAt": now.isoformat().replace("+00:00", "Z"),
+                "expiresAt": (now + timedelta(seconds=60)).isoformat().replace("+00:00", "Z"),
+                "worldId": "portfolio:local:main",
+                "inactiveManifestCount": 20,
+            },
+            "maintenanceYieldLastRequestedAt": now.isoformat().replace("+00:00", "Z"),
+        })
+        runner = OntologyMaintenanceRunner(
+            FakeOntologyRepository(),
+            state_store=store,
+            reasoning_queue_probe=lambda: {"effectivePendingCount": 0, "runningEntryCount": 0},
+        )
+
+        result = runner.run_once()
+
+        self.assertEqual("ok", result["status"])
+        self.assertEqual("consumed", result["maintenance"]["maintenanceYield"]["status"])
+        self.assertEqual({}, store.payload["maintenanceYieldRequest"])
+        self.assertTrue(store.payload["maintenanceYieldLastGrantedAt"])
+
     def test_aged_maintenance_gets_one_fairness_turn_between_reasoning_leases(self):
         repository = FakeOntologyRepository()
         store = FakeStateStore({

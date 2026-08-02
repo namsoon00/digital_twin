@@ -4850,6 +4850,64 @@ class OntologyReasoningRunner:
         }
         self.save_cursor_payload(payload)
 
+    def clear_expired_projection_circuit_after_retryable_backpressure(
+        self,
+        projection_gate: Mapping[str, object],
+    ) -> Dict[str, object]:
+        """Retire an elapsed hard-failure latch after a safe retry outcome.
+
+        A circuit cooldown is a temporary guard, not a permanent incident
+        marker.  Once it has elapsed, a subsequent TypeDB response that is
+        explicitly retryable proves that the queue is experiencing ordinary
+        coordination back-pressure rather than another hard projection
+        failure.  Persisting ``open`` in that case makes diagnostics and
+        adaptive batching treat a non-blocking queue as failed indefinitely.
+        """
+        if not bool((projection_gate or {}).get("retryable")):
+            return self.projection_circuit_state()
+        if not hasattr(self.cursor_store, "load") or not hasattr(self.cursor_store, "save"):
+            return self.projection_circuit_state()
+        payload = self.cursor_payload()
+        prior = self.projection_circuit_state(payload)
+        if (
+            str(prior.get("status") or "") != "open"
+            or self.projection_circuit_remaining_seconds(payload) > 0
+        ):
+            return prior
+        now = self.now_provider()
+        if now.tzinfo is None:
+            now = now.replace(tzinfo=timezone.utc)
+        results = [
+            {
+                "stage": str(item.get("stage") or ""),
+                "status": str(item.get("status") or ""),
+            }
+            for item in list((projection_gate or {}).get("results") or [])[:5]
+            if isinstance(item, Mapping)
+        ]
+        state = {
+            "status": "closed",
+            "consecutiveFailures": 0,
+            "failureThreshold": self.projection_circuit_failure_threshold(),
+            "lastFailureAt": "",
+            "lastFailureReason": "",
+            "recentFailures": [],
+            "openUntil": "",
+            "recoveredAt": now.astimezone(timezone.utc).isoformat().replace("+00:00", "Z"),
+            "recoveryReason": (
+                "The prior projection circuit cooldown elapsed and the next TypeDB result "
+                "was safe retryable back-pressure, not a hard projection failure."
+            ),
+            "recoveredFailureCount": int(prior.get("consecutiveFailures") or 0),
+            "recovery": {
+                "status": "retryable-backpressure",
+                "results": results,
+            },
+        }
+        payload["projectionCircuit"] = state
+        self.save_cursor_payload(payload)
+        return state
+
     def run_maintenance_if_due(self, force: bool = False) -> Dict[str, object]:
         if not self.maintenance_enabled():
             return {"status": "disabled"}
@@ -5731,6 +5789,9 @@ class OntologyReasoningRunner:
         if not projection_gate.get("ready"):
             self.mark_projection_attempt(symbols)
             if projection_gate.get("retryable"):
+                circuit = self.clear_expired_projection_circuit_after_retryable_backpressure(
+                    projection_gate,
+                )
                 requested_retry_after = int(
                     projection_gate.get("retryAfterSeconds") or self.projection_retry_seconds()
                 )
@@ -5760,7 +5821,7 @@ class OntologyReasoningRunner:
                     "projectionFailures": list(projection_gate.get("results") or []),
                     "mailboxFailureYield": failure_yield,
                     "mailboxRelease": mailbox_release,
-                    "projectionCircuit": self.projection_circuit_state(),
+                    "projectionCircuit": circuit,
                     "reasoningContext": reasoning_context,
                     "coalescedEventCount": len(durable_superseded_ids),
                     **queue_metadata,

@@ -174,6 +174,44 @@ class OntologyRuntimeOperationsTests(unittest.TestCase):
         self.assertEqual("deferred-projection-coordinator", result["results"][0]["status"])
         self.assertEqual(17, result["retryAfterSeconds"])
 
+    def test_expired_projection_circuit_closes_after_retryable_backpressure(self):
+        class Cursor:
+            def __init__(self):
+                self.payload = {
+                    "projectionCircuit": {
+                        "status": "open",
+                        "consecutiveFailures": 3,
+                        "failureThreshold": 3,
+                        "lastFailureReason": "old coordinator contention",
+                        "openUntil": "2026-07-22T00:00:00Z",
+                    },
+                }
+
+            def load(self):
+                return dict(self.payload)
+
+            def save(self, payload):
+                self.payload = dict(payload)
+
+        cursor = Cursor()
+        runner = OntologyReasoningRunner(
+            event_reader=None,
+            cursor_store=cursor,
+            monitor_runner_factory=lambda: None,
+            settings={"ontologyProjectionCircuitFailureThreshold": "3"},
+            now_provider=lambda: datetime(2026, 7, 22, 0, 1, tzinfo=timezone.utc),
+        )
+
+        circuit = runner.clear_expired_projection_circuit_after_retryable_backpressure({
+            "retryable": True,
+            "results": [{"stage": "projection", "status": "deferred-projection-coordinator"}],
+        })
+
+        self.assertEqual("closed", circuit["status"])
+        self.assertEqual(0, circuit["consecutiveFailures"])
+        self.assertEqual(3, circuit["recoveredFailureCount"])
+        self.assertEqual("retryable-backpressure", circuit["recovery"]["status"])
+
     def test_projection_gate_treats_waiting_for_a_newer_source_snapshot_as_retryable(self):
         service = OntologyReasoningRunner.__new__(OntologyReasoningRunner)
         waiting = SimpleNamespace(last_ontology_projection_results={

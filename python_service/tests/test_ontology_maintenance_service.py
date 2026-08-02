@@ -257,7 +257,36 @@ class OntologyMaintenanceRunnerTests(unittest.TestCase):
         self.assertEqual("ok", result["status"])
         self.assertTrue(result["backgroundFairness"]["fairnessGranted"])
         self.assertTrue(store.payload["lastFairnessAttemptAt"])
+        self.assertTrue(store.payload["lastFairnessCompletedAt"])
         self.assertEqual(1, len(repository.calls))
+
+    def test_rejected_coordinator_lease_does_not_start_fairness_cooldown(self):
+        class BusyCoordinatorRepository(FakeOntologyRepository):
+            def acquire_projection_coordinator_lease(self, _owner, world_id=""):
+                return {
+                    "acquired": False,
+                    "status": "held",
+                    "requestedWorldId": world_id,
+                    "recommendedRetryAfterSeconds": 10,
+                    "reason": "another TypeDB projection is active",
+                }
+
+        store = FakeStateStore({
+            "reasoningQueueDeferredSinceAt": (
+                datetime.now(timezone.utc) - timedelta(minutes=10)
+            ).isoformat().replace("+00:00", "Z"),
+        })
+        runner = OntologyMaintenanceRunner(
+            BusyCoordinatorRepository(),
+            state_store=store,
+            settings={"ontologyAboxMaintenanceMaxReasoningDeferralSeconds": "30"},
+            reasoning_queue_probe=lambda: {"effectivePendingCount": 2, "runningEntryCount": 0},
+        )
+
+        result = runner.run_once()
+
+        self.assertEqual("deferred-projection-coordinator", result["status"])
+        self.assertNotIn("lastFairnessCompletedAt", store.payload)
 
     def test_maintenance_yields_when_another_world_owns_typedb_writer(self):
         class BusyCoordinatorRepository(FakeOntologyRepository):

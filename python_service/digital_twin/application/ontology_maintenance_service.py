@@ -307,7 +307,10 @@ class OntologyMaintenanceRunner:
             active_reasoning_count=self.active_reasoning_count(queue),
             background_work_pending=bool(pending),
             oldest_background_work_at=deferred_since,
-            last_fairness_at=state.get("lastFairnessAttemptAt"),
+            # Before state-v5, this field was recorded before the coordinator
+            # was acquired. Only a completed lease-owning pass is allowed to
+            # start the fairness cooldown.
+            last_fairness_at=state.get("lastFairnessCompletedAt"),
             max_deferral_seconds=self.max_reasoning_deferral_seconds(),
             fairness_cooldown_seconds=self.fairness_cooldown_seconds(),
         )
@@ -323,18 +326,12 @@ class OntologyMaintenanceRunner:
             "worker": "ontology-abox-maintenance",
             "enabled": fairness_enabled,
         })
-        if bool(decision.get("fairnessGranted")) and commit_fairness:
-            self.save_state({
-                **state,
-                "lastFairnessAttemptAt": text(decision.get("checkedAt")),
-                "lastFairness": {
-                    key: decision.get(key)
-                    for key in [
-                        "version", "checkedAt", "reasonCode", "backgroundWaitSeconds",
-                        "maxDeferralSeconds", "fairnessCooldownSeconds",
-                    ]
-                },
-            })
+        # A fairness grant only permits an attempt; it does not prove this
+        # worker received the TypeDB writer. Persisting the cooldown here
+        # would turn a rejected coordinator lease into a five-minute cleanup
+        # delay. ``run_once`` records the grant only after a lease-owning
+        # maintenance pass returns successfully.
+        del commit_fairness
         self.last_background_fairness = dict(decision)
         return decision
 
@@ -902,6 +899,18 @@ class OntologyMaintenanceRunner:
             "lastResult": compact,
             "backlogByWorld": backlog_by_world,
         }
+        if bool(self.last_background_fairness.get("fairnessGranted")) and result_status in {"ok", "partial"}:
+            next_state.update({
+                "lastFairnessAttemptAt": text(self.last_background_fairness.get("checkedAt")),
+                "lastFairnessCompletedAt": text(self.last_background_fairness.get("checkedAt")),
+                "lastFairness": {
+                    key: self.last_background_fairness.get(key)
+                    for key in [
+                        "version", "checkedAt", "reasonCode", "backgroundWaitSeconds",
+                        "maxDeferralSeconds", "fairnessCooldownSeconds",
+                    ]
+                },
+            })
         if bool(maintenance_yield.get("active")) and result_status in {"ok", "partial"}:
             granted_at = utc_now_iso()
             next_state.update({

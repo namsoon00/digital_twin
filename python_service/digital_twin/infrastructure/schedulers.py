@@ -1424,6 +1424,7 @@ class OntologyMaintenanceScheduler:
             "deferred-reasoning-queue",
             "deferred-projection-coordinator",
             "deferred-write-lease",
+            "deferred-pending-abox-activation",
         }:
             return float(self.interval_seconds)
         try:
@@ -1440,7 +1441,13 @@ class OntologyMaintenanceScheduler:
             self.last_signature = ""
             self.last_report_at = 0.0
             return True
-        if status in {"error", "partial", "deferred-write-lease", "timeout"}:
+        if status in {
+            "error",
+            "partial",
+            "deferred-write-lease",
+            "deferred-pending-abox-activation",
+            "timeout",
+        }:
             signature = status + "|" + str(maintenance.get("reason") or result.get("reason") or "")[:180]
             if signature != self.last_signature or started - self.last_report_at >= 300.0:
                 self.last_signature = signature

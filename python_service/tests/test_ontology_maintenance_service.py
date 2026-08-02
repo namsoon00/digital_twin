@@ -157,6 +157,34 @@ class OntologyMaintenanceRunnerTests(unittest.TestCase):
         self.assertEqual("deferred", result["maintenance"]["health"]["state"])
         self.assertIsNone(result["maintenance"]["health"]["inactiveManifestCount"])
 
+    def test_pending_native_activation_preserves_verified_manifest_backlog(self):
+        class PendingActivationRepository(ManifestInventoryRepository):
+            def run_deferred_maintenance(self, payload):
+                self.calls.append(dict(payload or {}))
+                return {
+                    "status": "ok",
+                    "worldId": payload.get("worldId"),
+                    "abox": {
+                        "status": "skipped",
+                        "reason": "Scoped ABox activation is pending native inference.",
+                    },
+                }
+
+        repository = PendingActivationRepository()
+        store = FakeStateStore()
+        runner = OntologyMaintenanceRunner(repository, state_store=store)
+
+        result = runner.run_once()
+
+        self.assertEqual("deferred-pending-abox-activation", result["status"])
+        self.assertEqual(10, result["retryAfterSeconds"])
+        self.assertFalse(result["maintenance"]["inventoryAvailable"])
+        self.assertEqual("deferred", result["maintenance"]["health"]["state"])
+        self.assertEqual(
+            13,
+            store.payload["backlogByWorld"]["portfolio:local:main"]["lastInactiveManifestCount"],
+        )
+
     def test_maintenance_yields_to_pending_reasoning_work(self):
         repository = FakeOntologyRepository()
         runner = OntologyMaintenanceRunner(

@@ -422,6 +422,10 @@ for raw in sys.stdin:
             "status": "deferred-reasoning-queue",
             "retryAfterSeconds": 10,
         }))
+        self.assertEqual(10.0, scheduler.next_wait_seconds({
+            "status": "deferred-pending-abox-activation",
+            "retryAfterSeconds": 10,
+        }))
         self.assertEqual(60.0, scheduler.next_wait_seconds({"status": "ok"}))
 
 

@@ -821,7 +821,18 @@ class OntologyMaintenanceRunner:
         result["projectionCoordinatorRelease"] = coordinator_release
         result_status = text(result.get("status") or "unknown")
         abox = result.get("abox") if isinstance(result.get("abox"), dict) else {}
-        inventory_available = bool(abox)
+        abox_status = text(abox.get("status") or result_status).lower()
+        # ``run_deferred_maintenance`` keeps a pending ABox activation intact
+        # until native inference completes. That adapter result is a valid
+        # no-delete outcome, but it has no retention counts. Treating its
+        # truthy payload as an empty inventory used to overwrite the direct
+        # Manifest backlog with zero and delayed the next real cleanup pass.
+        inventory_available = bool(abox) and (
+            "completedInactiveManifestCount" in abox
+            or "remainingInactiveManifestCount" in abox
+        )
+        if abox_status == "skipped" and not inventory_available:
+            result_status = "deferred-pending-abox-activation"
         inactive_before = max(0, integer(abox.get("completedInactiveManifestCount")))
         inactive_remaining = max(
             0,
@@ -837,15 +848,23 @@ class OntologyMaintenanceRunner:
             }, policy)
             if inventory_available
             else {
-                "status": "ok" if result_status == "deferred-write-lease" else "warning",
-                "state": "deferred" if result_status == "deferred-write-lease" else "unavailable",
+                "status": "ok" if result_status in {
+                    "deferred-write-lease",
+                    "deferred-pending-abox-activation",
+                } else "warning",
+                "state": "deferred" if result_status in {
+                    "deferred-write-lease",
+                    "deferred-pending-abox-activation",
+                } else "unavailable",
                 "inactiveManifestCount": None,
                 "warningInactiveManifestCount": integer(policy.get("warningInactiveManifestCount")),
                 "criticalInactiveManifestCount": integer(policy.get("criticalInactiveManifestCount")),
                 "drainRequired": None,
                 "recommendedMaxManifests": 0,
                 "reason": (
-                    "Scoped ABox inventory was not read because a live writer lease has priority."
+                    "Scoped ABox activation is pending native inference; the verified Manifest backlog remains queued."
+                    if result_status == "deferred-pending-abox-activation"
+                    else "Scoped ABox inventory was not read because a live writer lease has priority."
                     if result_status == "deferred-write-lease"
                     else "Scoped ABox retention inventory is unavailable for this maintenance result."
                 ),
@@ -871,8 +890,10 @@ class OntologyMaintenanceRunner:
             "capacityBudget": capacity_budget,
             "manifestInventory": selected_inventory,
             "worldSelection": world_selection,
-            "reason": text(result.get("reason"))[:220],
+            "reason": text(abox.get("reason") or result.get("reason"))[:220],
         }
+        if result_status == "deferred-pending-abox-activation":
+            compact["retryAfterSeconds"] = self.busy_retry_seconds()
         backlog_by_world = self.updated_backlog_by_world(
             selection_state,
             world_id,
@@ -937,6 +958,8 @@ class OntologyMaintenanceRunner:
             "maintenance": compact,
             "repository": result,
         }
+        if compact.get("retryAfterSeconds"):
+            response["retryAfterSeconds"] = compact["retryAfterSeconds"]
         if bool(self.last_background_fairness.get("fairnessGranted")):
             response["backgroundFairness"] = dict(self.last_background_fairness)
         return response

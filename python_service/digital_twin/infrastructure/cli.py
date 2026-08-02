@@ -36,7 +36,7 @@ from .mysql_retention import (
 from .mysql_minimal_retention import MySQLMinimalRetentionRepository
 from .operational_storage_guard import (
     accelerated_mysql_cleanup_settings,
-    operational_storage_health,
+    operational_storage_inventory,
 )
 from .notifications import queued_notifier_for_account, send_events
 from .ontology_graph_store import ontology_repository_from_settings
@@ -56,6 +56,7 @@ from .service_factory import (
     build_news_collection_runner,
     build_notification_queue_runner,
     build_official_calendar_sync_service,
+    observe_operational_storage_capacity,
     build_ontology_lab_service,
     build_ontology_inference_detail_runner,
     build_ontology_maintenance_runner,
@@ -980,7 +981,11 @@ def run_mysql_operational_cleanup(
 ) -> Dict[str, object]:
     """Run one bounded cleanup pass outside the realtime inference path."""
     settings = dict(settings or {})
-    storage_health = operational_storage_health(settings)
+    storage_health = operational_storage_inventory(settings)
+    storage_capacity_health = observe_operational_storage_capacity(
+        settings,
+        snapshot=storage_health,
+    )
     settings = accelerated_mysql_cleanup_settings(settings, storage_health)
     settings["_skipOperationalHistoryRetention"] = True
     # The service manager bootstraps schema before it starts workers.  This
@@ -1050,7 +1055,13 @@ def run_mysql_operational_cleanup(
                 result["transientConnectionRetryCount"] = connection_retries
             if deadlock_retries:
                 result["deadlockRetryCount"] = deadlock_retries
+            storage_health = operational_storage_inventory(settings)
+            storage_capacity_health = observe_operational_storage_capacity(
+                settings,
+                snapshot=storage_health,
+            )
             result["storageHealth"] = storage_health
+            result["storageCapacityHealth"] = storage_capacity_health
             result["cleanupMode"] = str(storage_health.get("cleanupMode") or "normal")
             result["nextIntervalSeconds"] = (
                 60
@@ -1079,27 +1090,94 @@ def run_mysql_operational_cleanup(
             raise
 
 
-def run_mysql_minimal_retention(settings: Dict[str, object], apply: bool = False) -> Dict[str, object]:
-    """Run a one-off MySQL-only retention pass; preview is the default CLI mode."""
+def run_mysql_minimal_retention(
+    settings: Dict[str, object],
+    apply: bool = False,
+    drain: bool = False,
+    drain_max_passes: int = 20,
+) -> Dict[str, object]:
+    """Run bounded MySQL retention, with an explicit backlog-drain option."""
 
     configured = dict(settings or {})
+    if drain and not apply:
+        return {
+            "status": "invalid",
+            "reason": "--drain requires --apply because preview never deletes retained operational data.",
+            "deleted": 0,
+            "compacted": 0,
+            "tables": {},
+        }
+    if drain:
+        # This profile is reserved for an operator-led recovery after a
+        # capacity incident. It remains bounded in both rows and bytes per
+        # pass and never changes the saved steady-state policy.
+        configured.update({
+            "_effectiveMysqlMinimalRetentionBatchSize": "1000",
+            "_effectiveMysqlMinimalRetentionMaxDeleteBytes": str(256 * 1024 * 1024),
+            "_effectiveMysqlMinimalRetentionMaxRunSeconds": "60",
+        })
     configured["_skipOperationalHistoryRetention"] = True
     configured["mysqlOperationTimeoutSeconds"] = str(max(60, mysql_operation_timeout_seconds(configured)))
+    try:
+        requested_passes = int(drain_max_passes or 20)
+    except (TypeError, ValueError):
+        requested_passes = 20
+    passes = max(1, min(50, requested_passes)) if drain else 1
     connection_retries = 0
     deadlock_retries = 0
     while True:
         try:
             store = MySQLOperationalConnection(configured)
             with store.connect() as connection:
-                result = MySQLMinimalRetentionService(
+                service = MySQLMinimalRetentionService(
                     MySQLMinimalRetentionRepository(connection),
                     configured,
-                ).run_once(
-                    force=True,
-                    apply=apply,
-                    preview=not apply,
-                    preview_before_apply=apply,
                 )
+                results = []
+                for _index in range(passes):
+                    result = service.run_once(
+                        force=True,
+                        apply=apply,
+                        preview=not apply,
+                        preview_before_apply=apply,
+                    )
+                    results.append(result)
+                    if not drain or (
+                        int(result.get("deleted") or 0) <= 0
+                        and int(result.get("compacted") or 0) <= 0
+                    ):
+                        break
+                result = dict(results[-1] or {}) if results else {
+                    "status": "ok",
+                    "deleted": 0,
+                    "compacted": 0,
+                    "tables": {},
+                }
+                if drain:
+                    total_deleted = sum(int(item.get("deleted") or 0) for item in results)
+                    total_compacted = sum(int(item.get("compacted") or 0) for item in results)
+                    total_estimated_bytes = sum(int(item.get("estimatedBytes") or 0) for item in results)
+                    merged_tables = {}
+                    merged_policies = {}
+                    for item in results:
+                        for table, count in dict(item.get("tables") or {}).items():
+                            merged_tables[str(table)] = int(merged_tables.get(str(table)) or 0) + int(count or 0)
+                        for name, count in dict(item.get("policies") or {}).items():
+                            merged_policies[str(name)] = int(merged_policies.get(str(name)) or 0) + int(count or 0)
+                    result["deleted"] = total_deleted
+                    result["compacted"] = total_compacted
+                    result["estimatedBytes"] = total_estimated_bytes
+                    result["tables"] = merged_tables
+                    result["policies"] = merged_policies
+                    result["drain"] = {
+                        "enabled": True,
+                        "completedPasses": len(results),
+                        "maxPasses": passes,
+                        "exhausted": bool(results) and (
+                            int(results[-1].get("deleted") or 0) <= 0
+                            and int(results[-1].get("compacted") or 0) <= 0
+                        ),
+                    }
             if connection_retries:
                 result["transientConnectionRetryCount"] = connection_retries
             if deadlock_retries:
@@ -1122,7 +1200,12 @@ def maintenance_command(args) -> int:
     """Run storage maintenance outside the realtime inference path."""
     settings = dict(runtime_settings())
     if args.maintenance_action == "mysql-minimal-retention":
-        result = run_mysql_minimal_retention(settings, apply=bool(args.apply))
+        result = run_mysql_minimal_retention(
+            settings,
+            apply=bool(args.apply),
+            drain=bool(getattr(args, "drain", False)),
+            drain_max_passes=getattr(args, "drain_max_passes", 20),
+        )
         print(json.dumps(result, ensure_ascii=False))
         return 0 if str(result.get("status") or "ok") != "error" else 1
     if args.maintenance_action == "mysql-cleanup":
@@ -1655,6 +1738,12 @@ def build_parser() -> argparse.ArgumentParser:
         help="Preview bounded MySQL data retention, or apply it explicitly with --apply",
     )
     mysql_minimal_retention.add_argument("--apply", action="store_true")
+    mysql_minimal_retention.add_argument(
+        "--drain",
+        action="store_true",
+        help="Apply up to a bounded number of accelerated retention passes after a capacity incident",
+    )
+    mysql_minimal_retention.add_argument("--drain-max-passes", default="20")
     mysql_retention_watch = maintenance_actions.add_parser("watch")
     mysql_retention_watch.add_argument("--interval", default="")
     maintenance.set_defaults(func=maintenance_command)

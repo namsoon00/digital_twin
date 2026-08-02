@@ -198,6 +198,10 @@ DEFAULT_NOTIFICATION_TEMPLATES = {
         "template": DEFAULT_TEMPLATE,
         "description": "온톨로지 추론 요청 대기 지연 운영 알림",
     },
+    "operationalStorageCapacity": {
+        "template": DEFAULT_TEMPLATE,
+        "description": "디스크·TypeDB·MySQL 저장공간 제한 및 복구 운영 알림",
+    },
     "monitorHeartbeat": {
         "template": DEFAULT_TEMPLATE,
         "description": "실시간 모니터링 상태 알림",

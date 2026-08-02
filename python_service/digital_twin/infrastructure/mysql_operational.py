@@ -12,6 +12,7 @@ from .mysql_operational_core_stores import (
     MySQLAppStore,
     MySQLDataPipelineHealthStore,
     MySQLExternalSignalCache,
+    MySQLOperationalStorageCapacityStateStore,
     MySQLOntologyMaintenanceStateStore,
     MySQLOntologyRuleboxPrewarmStateStore,
     MySQLOntologyReasoningCursorStore,

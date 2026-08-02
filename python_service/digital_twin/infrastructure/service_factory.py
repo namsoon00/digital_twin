@@ -9,6 +9,10 @@ from ..application.ontology_reasoning_queue_health_service import (
     OntologyReasoningQueueHealthNotificationEnqueuer,
     OntologyReasoningQueueHealthService,
 )
+from ..application.operational_storage_capacity_service import (
+    OperationalStorageCapacityNotificationEnqueuer,
+    OperationalStorageCapacityService,
+)
 from ..application.investment_analysis_service import InvestmentAnalysisService
 from ..application.investment_brain_service import InvestmentBrainService
 from ..application.investment_research_orchestration_service import InvestmentResearchOrchestrationService, InvestmentResearchQueueRunner
@@ -59,6 +63,7 @@ from ..domain.accounts import AccountConfig
 from ..domain.events import (
     DATA_PIPELINE_HEALTH_CHANGED,
     ONTOLOGY_REASONING_QUEUE_HEALTH_CHANGED,
+    OPERATIONAL_STORAGE_CAPACITY_CHANGED,
     RESEARCH_EVIDENCE_COLLECTED,
 )
 from ..domain.market_data import number
@@ -79,7 +84,7 @@ from .ontology_graph_store import ontology_repository_from_settings
 from . import operational_store as stores
 from .ontology_projection import PortfolioOntologyProjectionRecorder
 from .typedb_storage_guard import typedb_storage_health
-from .operational_storage_guard import operational_storage_health
+from .operational_storage_guard import operational_storage_health, operational_storage_inventory
 from .kis_realtime_ws import KISRealtimeSymbolSelector, KISRealtimeWebSocketClient
 from .rule_change_candidate_ai import rule_change_candidate_advisor_from_settings
 from .notifications import queued_notifier_for_account
@@ -158,6 +163,50 @@ def data_pipeline_health_event_bus(settings=None) -> EventBus:
         ).handle,
     )
     return bus
+
+
+def operational_storage_event_bus(settings=None) -> EventBus:
+    configured_settings = settings or runtime_settings()
+    bus = default_event_bus()
+    bus.subscribe(
+        OPERATIONAL_STORAGE_CAPACITY_CHANGED,
+        OperationalStorageCapacityNotificationEnqueuer(
+            queue=stores.notification_job_store(configured_settings),
+            fallback_notifier_factory=notifier_for_operations,
+        ).handle,
+    )
+    return bus
+
+
+def build_operational_storage_capacity_service(settings=None) -> OperationalStorageCapacityService:
+    configured_settings = settings or runtime_settings()
+    return OperationalStorageCapacityService(
+        store=stores.operational_storage_capacity_state_store(configured_settings),
+        settings=configured_settings,
+    )
+
+
+def observe_operational_storage_capacity(
+    settings=None,
+    snapshot=None,
+    force_alert: bool = False,
+):
+    """Record one bounded capacity observation and dispatch any state alert.
+
+    The helper is intentionally usable from error paths.  When MySQL cannot
+    accept the event or notification job, the subscribed enqueuer sends the
+    operations notifier directly instead.
+    """
+
+    configured_settings = settings or runtime_settings()
+    observed = dict(snapshot or operational_storage_inventory(configured_settings))
+    health, event = build_operational_storage_capacity_service(configured_settings).record(
+        observed,
+        force_alert=force_alert,
+    )
+    if event:
+        operational_storage_event_bus(configured_settings).publish(event)
+    return health
 
 
 def ontology_reasoning_event_bus(settings=None) -> EventBus:

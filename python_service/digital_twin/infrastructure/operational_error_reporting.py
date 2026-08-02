@@ -14,6 +14,13 @@ from .settings import SECRET_SETTING_KEYS, runtime_settings, utc_now
 
 DEFAULT_ERROR_ALERT_COOLDOWN_SECONDS = 300
 MAX_ERROR_MESSAGE_CHARS = 1600
+STORAGE_CAPACITY_ERROR_MARKERS = (
+    "no space left on device",
+    "errno 28",
+    "enospc",
+    "disk full",
+    "filesystem full",
+)
 ERROR_SECRET_SETTING_KEYS = set(SECRET_SETTING_KEYS) | {
     "tossAccountSeq",
     "telegramChatId",
@@ -32,6 +39,11 @@ def sanitize_operational_error_text(value: object, settings: Dict[str, object] =
     text = re.sub(r"(?i)(authorization\s*:\s*bearer\s+)[^\s]+", r"\1***", text)
     text = re.sub(r"(?i)((?:token|secret|password|chat[_ -]?id|client[_ -]?id)\s*[:=]\s*)[^\s,;]+", r"\1***", text)
     return text[:MAX_ERROR_MESSAGE_CHARS].strip()
+
+
+def is_storage_capacity_error(value: object) -> bool:
+    text = str(value or "").strip().lower()
+    return any(marker in text for marker in STORAGE_CAPACITY_ERROR_MARKERS)
 
 
 class OperationalErrorReporter:
@@ -89,6 +101,22 @@ class OperationalErrorReporter:
         except Exception:  # noqa: BLE001 - custom event publishers are optional observability hooks.
             pass
 
+        capacity_health = {}
+        if should_send and is_storage_capacity_error(message):
+            # Do not wait for the low-priority cleanup interval after an
+            # actual write has already hit ENOSPC.  This path remains safe if
+            # MySQL is unavailable because its notification handler falls
+            # back to the direct operations notifier.
+            try:
+                from .service_factory import observe_operational_storage_capacity
+
+                capacity_health = observe_operational_storage_capacity(
+                    settings,
+                    force_alert=True,
+                )
+            except Exception:  # noqa: BLE001 - preserve the original error report.
+                capacity_health = {}
+
         if not should_send:
             return {
                 "sent": False,
@@ -141,6 +169,7 @@ class OperationalErrorReporter:
             "occurrenceCount": occurrence_count,
             "message": message,
             "deliveryReason": delivery_reason,
+            "storageCapacityHealth": capacity_health,
         }
 
 

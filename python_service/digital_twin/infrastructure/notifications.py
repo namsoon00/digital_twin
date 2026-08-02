@@ -180,7 +180,14 @@ def notifier_for_account(account: AccountConfig = None):
 
 def notifier_for_operations(account: AccountConfig = None):
     settings = runtime_settings()
-    token = str(settings.get("operationsTelegramBotToken") or "").strip()
+    # A dedicated operations bot remains preferred.  Local-first deployments
+    # commonly configure only the primary Telegram bot, however, and a
+    # storage incident must not become silent solely for that reason.
+    token = str(
+        settings.get("operationsTelegramBotToken")
+        or settings.get("telegramBotToken")
+        or ""
+    ).strip()
     chat_id = str(
         settings.get("operationsTelegramChatId")
         or settings.get("telegramChatId")

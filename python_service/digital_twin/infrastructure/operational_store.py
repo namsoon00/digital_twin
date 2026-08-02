@@ -8,6 +8,7 @@ from .mysql_operational import (
     MySQLDataPipelineHealthStore,
     MySQLEventLog,
     MySQLExternalSignalCache,
+    MySQLOperationalStorageCapacityStateStore,
     MySQLInvestmentCalendarCandidateStore,
     MySQLInvestmentCalendarStore,
     MySQLInvestmentStrategyProposalStore,
@@ -69,6 +70,11 @@ def external_signal_cache(settings: Dict[str, str] = None):
 def data_pipeline_health_store(settings: Dict[str, str] = None):
     configured = configured_settings(settings)
     return MySQLDataPipelineHealthStore(configured)
+
+
+def operational_storage_capacity_state_store(settings: Dict[str, str] = None):
+    configured = configured_settings(settings)
+    return MySQLOperationalStorageCapacityStateStore(configured)
 
 
 def ontology_reasoning_cursor_store(settings: Dict[str, str] = None):

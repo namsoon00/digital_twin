@@ -62,6 +62,29 @@ class OperationalErrorReporterTests(unittest.TestCase):
         self.assertEqual(2, len(notifier.messages))
         self.assertIn("이전 발송 이후 같은 오류 발생: 2회", notifier.messages[1])
 
+    def test_no_space_error_forces_a_storage_capacity_observation(self):
+        notifier = FakeNotifier()
+        reporter = OperationalErrorReporter(
+            notifier_factory=lambda: notifier,
+            event_publisher=lambda _event: None,
+            cooldown_seconds=300,
+        )
+
+        with patch(
+            "digital_twin.infrastructure.service_factory.observe_operational_storage_capacity",
+            return_value={"state": "critical", "alertRequired": True},
+        ) as observe:
+            result = reporter.report(
+                "Python news analysis worker",
+                OSError(28, "No space left on device"),
+                "analysis cycle",
+            )
+
+        self.assertTrue(result["sent"])
+        self.assertEqual("critical", result["storageCapacityHealth"]["state"])
+        observe.assert_called_once()
+        self.assertTrue(observe.call_args.kwargs["force_alert"])
+
     def test_realtime_scheduler_reports_cycle_error_without_stopping_worker(self):
         class FailingRunner:
             def run_once(self):

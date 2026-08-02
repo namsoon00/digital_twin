@@ -286,6 +286,12 @@ class MySQLDataPipelineHealthStore(MySQLAppStore):
     store_id = "data_pipeline_health"
 
 
+class MySQLOperationalStorageCapacityStateStore(MySQLAppStore):
+    """Keeps one compact capacity incident state across worker restarts."""
+
+    store_id = "operational_storage_capacity_state"
+
+
 class MySQLOntologyMaintenanceStateStore(MySQLAppStore):
     """Keeps only the cursor and latest result for background ABox retention."""
 

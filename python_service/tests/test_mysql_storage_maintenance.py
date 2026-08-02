@@ -2,7 +2,7 @@ import unittest
 from datetime import datetime, timezone
 from unittest.mock import patch
 
-from digital_twin.infrastructure.cli import run_mysql_operational_cleanup
+from digital_twin.infrastructure.cli import run_mysql_minimal_retention, run_mysql_operational_cleanup
 from digital_twin.infrastructure.mysql_retention import (
     apply_mysql_operational_history_retention,
     ephemeral_mysql_database_names,
@@ -144,15 +144,15 @@ class MySQLStorageMaintenanceTests(unittest.TestCase):
         self.assertTrue(any("WHERE `status` = 'done'" in sql for sql in notification_queries))
 
     def test_projection_audit_keep_count_is_safely_bounded(self):
-        self.assertEqual(48, operational_projection_run_keep_count({}))
+        self.assertEqual(2, operational_projection_run_keep_count({}))
         self.assertEqual(2, operational_projection_run_keep_count({"operationalProjectionRunKeepCount": "0"}))
         self.assertEqual(500, operational_projection_run_keep_count({"operationalProjectionRunKeepCount": "9999"}))
 
     def test_history_retention_limits_legacy_batches_and_large_outbox_audit_window(self):
         self.assertEqual(50, operational_history_retention_batch_size({"operationalHistoryRetentionBatchSize": "1000"}))
-        self.assertEqual(24, operational_world_projection_outbox_retention_hours({}))
+        self.assertEqual(1, operational_world_projection_outbox_retention_hours({}))
         self.assertEqual(
-            24,
+            1,
             operational_world_projection_outbox_retention_hours(
                 {"ontologyWorldProjectionCompletedRetentionHours": "168"}
             ),
@@ -271,6 +271,56 @@ class MySQLStorageMaintenanceTests(unittest.TestCase):
         ))
         sleep.assert_called_once_with(0.25)
 
+    def test_explicit_minimal_retention_drain_uses_bounded_accelerated_passes(self):
+        class Store:
+            def connect(self):
+                return self
+
+            def __enter__(self):
+                return self
+
+            def __exit__(self, *_args):
+                return False
+
+        with patch(
+            "digital_twin.infrastructure.cli.MySQLOperationalConnection",
+            return_value=Store(),
+        ), patch(
+            "digital_twin.infrastructure.cli.MySQLMinimalRetentionService",
+        ) as service:
+            service.return_value.run_once.side_effect = [
+                {
+                    "status": "ok",
+                    "deleted": 1200,
+                    "compacted": 4,
+                    "estimatedBytes": 1024,
+                    "tables": {"investment_hypothesis_lifecycle_events": 1200},
+                    "policies": {"lifecycle:events": 1200},
+                },
+                {
+                    "status": "ok",
+                    "deleted": 0,
+                    "compacted": 0,
+                    "estimatedBytes": 0,
+                    "tables": {},
+                    "policies": {},
+                },
+            ]
+
+            result = run_mysql_minimal_retention({}, apply=True, drain=True, drain_max_passes=5)
+
+        self.assertEqual(1200, result["deleted"])
+        self.assertEqual(4, result["compacted"])
+        self.assertEqual(2, result["drain"]["completedPasses"])
+        self.assertTrue(result["drain"]["exhausted"])
+        self.assertEqual("1000", service.call_args.args[1].get("_effectiveMysqlMinimalRetentionBatchSize"))
+        self.assertEqual(2, service.return_value.run_once.call_count)
+
+    def test_minimal_retention_drain_requires_explicit_apply(self):
+        result = run_mysql_minimal_retention({}, drain=True)
+
+        self.assertEqual("invalid", result["status"])
+
     def test_connection_pool_key_keeps_maintenance_timeout_separate(self):
         store = object.__new__(MySQLOperationalConnection)
         store.runtime_settings = {"mysqlOperationTimeoutSeconds": "60"}
@@ -321,7 +371,7 @@ class MySQLStorageMaintenanceTests(unittest.TestCase):
 
     def test_duplicated_event_and_delivery_history_defaults_are_compact(self):
         self.assertEqual(20, operational_large_domain_event_keep_count({}))
-        self.assertEqual(30, operational_delivered_notification_keep_count({}))
+        self.assertEqual(5, operational_delivered_notification_keep_count({}))
         self.assertEqual(5, operational_delivered_notification_keep_count({"operationalDeliveredNotificationKeepCount": "1"}))
         self.assertEqual(500, operational_delivered_notification_keep_count({"operationalDeliveredNotificationKeepCount": "9999"}))
 

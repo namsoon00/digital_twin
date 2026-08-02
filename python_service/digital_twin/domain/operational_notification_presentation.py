@@ -9,6 +9,7 @@ from .message_types import (
     MONITOR_HEARTBEAT,
     ONTOLOGY_INFERENCE_MISSING,
     ONTOLOGY_REASONING_QUEUE,
+    OPERATIONAL_STORAGE_CAPACITY,
     OPERATOR_REASONING_REPORT,
     WORK_HANDOFF,
     is_operations_delivery_message_type,
@@ -247,6 +248,16 @@ def operational_notification_presentation(
         if state == "disabled":
             return presentation("ℹ️", "info", state)
         return presentation("ℹ️", "info", state or "unknown")
+
+    if key == OPERATIONAL_STORAGE_CAPACITY:
+        state = normalized_state(values)
+        if is_recovery(values, state):
+            return presentation("✅", "recovered", "recovered")
+        if state == "critical":
+            return presentation("🚨", "critical", state)
+        if state in {"limited", "warning"}:
+            return presentation("⚠️", "degraded", state)
+        return presentation("💾", "info", state or "healthy")
 
     if key == ONTOLOGY_INFERENCE_MISSING:
         return presentation("⚠️", "degraded", "inference-missing")

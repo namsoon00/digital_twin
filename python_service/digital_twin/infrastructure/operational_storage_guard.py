@@ -2,6 +2,7 @@
 
 from __future__ import annotations
 
+import os
 import shutil
 from pathlib import Path
 from typing import Callable, Dict, Mapping
@@ -87,6 +88,71 @@ def operational_storage_health(
         "freeMb": free_mb,
         "freePercent": free_percent,
         "totalMb": round(total_bytes / 1024 / 1024, 1),
+    }
+
+
+def storage_directory_size_bytes(path: Path) -> int:
+    """Read a directory's apparent size without loading any stored payload."""
+
+    target = Path(path)
+    try:
+        if target.is_file() or target.is_symlink():
+            return max(0, int(target.stat().st_size))
+    except OSError:
+        return 0
+    if not target.exists():
+        return 0
+    total = 0
+    pending = [target]
+    while pending:
+        current = pending.pop()
+        try:
+            with os.scandir(current) as entries:
+                for entry in entries:
+                    try:
+                        if entry.is_dir(follow_symlinks=False):
+                            pending.append(Path(entry.path))
+                        elif entry.is_file(follow_symlinks=False) or entry.is_symlink():
+                            total += max(0, int(entry.stat(follow_symlinks=False).st_size))
+                    except OSError:
+                        continue
+        except OSError:
+            continue
+    return total
+
+
+def operational_storage_inventory(
+    settings: Mapping[str, object] = None,
+    data_path: Path = None,
+    disk_usage_provider: Callable = None,
+    size_provider: Callable[[Path], int] = None,
+) -> Dict[str, object]:
+    """Return bounded component sizes for capacity alerts and maintenance decisions."""
+
+    configured = dict(settings or {})
+    root = Path(data_path) if data_path is not None else data_dir()
+    size = size_provider or storage_directory_size_bytes
+    health = operational_storage_health(
+        configured,
+        probe_path=root,
+        disk_usage_provider=disk_usage_provider,
+    )
+    typedb_root = root / "typedb-data"
+    mysql_root = root / "mysql-runtime"
+    typedb_wal = sum(size(path) for path in typedb_root.glob("*/wal"))
+    typedb_checkpoint = sum(size(path) for path in typedb_root.glob("*/checkpoint"))
+    root_logs = sum(size(path) for path in root.glob("*.log"))
+    typedb_logs = size(root / "typedb-logs")
+    return {
+        **health,
+        "typedbSizeMb": round(size(typedb_root) / 1024 / 1024, 1),
+        "typedbWalMb": round(typedb_wal / 1024 / 1024, 1),
+        "typedbCheckpointMb": round(typedb_checkpoint / 1024 / 1024, 1),
+        "typedbLimitMb": _integer(configured.get("typedbDataMaxSizeMb"), 4096, 256),
+        "mysqlSizeMb": round(size(mysql_root) / 1024 / 1024, 1),
+        "mysqlLimitMb": _integer(configured.get("operationalMySqlDataMaxSizeMb"), 4096, 256),
+        "logSizeMb": round((root_logs + typedb_logs) / 1024 / 1024, 1),
+        "logLimitMb": _integer(configured.get("operationalLogMaxSizeMb"), 512, 32),
     }
 
 

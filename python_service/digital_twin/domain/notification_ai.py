@@ -38,7 +38,7 @@ from .ontology_relation_reasoning import (
 )
 
 
-SKIP_AI_OPINION_TYPES = {"workHandoff", "modelReview", OPERATOR_REASONING_REPORT, ONTOLOGY_REASONING_QUEUE}
+SKIP_AI_OPINION_TYPES = {"workHandoff", "modelReview", OPERATOR_REASONING_REPORT, ONTOLOGY_REASONING_QUEUE, "operationalStorageCapacity"}
 AI_OPINION_ENGINE_VERSION = "notification-ai-opinion-v3"
 AI_OPINION_MAX_LINES = 5
 AI_OPINION_MAX_CHARS = 135

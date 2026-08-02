@@ -520,7 +520,7 @@ class NotificationDataQualityPolicyTests(unittest.TestCase):
         self.assertTrue(payload["configured"]["operationsTelegramBotToken"])
         self.assertTrue(payload["configured"]["operationsTelegramChatId"])
 
-    def test_operations_notifier_never_falls_back_to_account_bot(self):
+    def test_operations_notifier_prefers_the_dedicated_operations_bot(self):
         with patch(
             "digital_twin.infrastructure.notifications.runtime_settings",
             return_value={
@@ -536,6 +536,21 @@ class NotificationDataQualityPolicyTests(unittest.TestCase):
         self.assertEqual("Telegram Operations", notifier.label)
         self.assertEqual("operations-token", notifier.bot_token)
         self.assertEqual("operations-chat", notifier.chat_id)
+
+    def test_operations_notifier_uses_the_primary_bot_when_no_dedicated_bot_is_configured(self):
+        with patch(
+            "digital_twin.infrastructure.notifications.runtime_settings",
+            return_value={
+                "telegramBotToken": "primary-token",
+                "telegramChatId": "primary-chat",
+            },
+        ):
+            notifier = notifier_for_operations()
+
+        self.assertIsInstance(notifier, TelegramNotifier)
+        self.assertEqual("Telegram Operations", notifier.label)
+        self.assertEqual("primary-token", notifier.bot_token)
+        self.assertEqual("primary-chat", notifier.chat_id)
 
     def test_topline_change_summary_is_separated_from_new_alert_badge(self):
         message = prepend_execution_start_badge(

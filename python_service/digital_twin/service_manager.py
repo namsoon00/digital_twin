@@ -463,7 +463,17 @@ def typedb_data_age_hours(path: Path, marker: Dict[str, object]) -> float:
         return 0.0
 
 
-def typedb_reset_needed(spec: Dict[str, object]) -> Dict[str, object]:
+def typedb_reset_needed(
+    spec: Dict[str, object],
+    ignore_auto_reset: bool = False,
+) -> Dict[str, object]:
+    """Describe whether a TypeDB rebuild is required without mutating data.
+
+    Routine supervisors honor ``typedbAutoResetEnabled`` and never delete a
+    graph store.  Controlled operator rotation still needs to evaluate the
+    physical size even while that automatic switch is deliberately disabled.
+    """
+
     data_path = Path(spec.get("dataPath") or "")
     enabled = truthy(spec.get("autoResetEnabled"))
     age_reset_enabled = truthy(spec.get("ageResetEnabled")) if spec.get("ageResetEnabled") not in (None, "") else False
@@ -473,8 +483,17 @@ def typedb_reset_needed(spec: Dict[str, object]) -> Dict[str, object]:
     marker = read_typedb_retention_marker()
     age_hours = typedb_data_age_hours(data_path, marker)
     reasons = []
-    if not enabled:
-        return {"needed": False, "reason": "disabled", "sizeBytes": size_bytes, "ageHours": age_hours}
+    if not enabled and not ignore_auto_reset:
+        return {
+            "needed": False,
+            "reason": "disabled",
+            "sizeBytes": size_bytes,
+            "ageHours": age_hours,
+            "retentionHours": retention_hours,
+            "ageResetEnabled": age_reset_enabled,
+            "maxSizeMb": max_size_mb,
+            "autoResetEnabled": False,
+        }
     if not data_path.exists() or size_bytes <= 0:
         return {"needed": False, "reason": "empty", "sizeBytes": size_bytes, "ageHours": age_hours}
     if age_reset_enabled and age_hours >= retention_hours:
@@ -489,6 +508,7 @@ def typedb_reset_needed(spec: Dict[str, object]) -> Dict[str, object]:
         "retentionHours": retention_hours,
         "ageResetEnabled": age_reset_enabled,
         "maxSizeMb": max_size_mb,
+        "autoResetEnabled": enabled,
     }
 
 
@@ -506,7 +526,7 @@ def run_typedb_data_retention(spec: Dict[str, object], force: bool = False) -> D
     if str(spec.get("role") or "") != "typedb":
         return {"status": "skipped", "reason": "not typedb"}
     data_path = Path(spec.get("dataPath") or "")
-    decision = typedb_reset_needed(spec)
+    decision = typedb_reset_needed(spec, ignore_auto_reset=force)
     if not force:
         if not decision.get("needed"):
             return {"status": "skipped", **decision}
@@ -1404,6 +1424,7 @@ def supervise() -> int:
         if start() != 0:
             return 1
         last_maintenance_at = 0.0
+        last_typedb_capacity_notice = ""
         while not stopping["value"]:
             if supervisor_maintenance_active():
                 acknowledge_supervisor_maintenance()
@@ -1422,11 +1443,17 @@ def supervise() -> int:
                     start_worker(spec)
             if time.monotonic() - last_maintenance_at >= 60:
                 typedb_spec = specs.get("typedb")
-                if typedb_spec and typedb_reset_needed(typedb_spec).get("needed"):
-                    append_log(supervisor_log_path(), "typedb storage limit maintenance")
-                    stop_worker(typedb_spec)
-                    run_typedb_data_retention(typedb_spec)
-                    start_worker(typedb_spec)
+                decision = typedb_reset_needed(typedb_spec, ignore_auto_reset=True) if typedb_spec else {}
+                if decision.get("needed"):
+                    notice = str(decision.get("reason") or "TypeDB storage capacity reached")
+                    if notice != last_typedb_capacity_notice:
+                        append_log(
+                            supervisor_log_path(),
+                            "typedb storage maintenance required; controlled rotation not yet run. " + notice,
+                        )
+                        last_typedb_capacity_notice = notice
+                else:
+                    last_typedb_capacity_notice = ""
                 last_maintenance_at = time.monotonic()
             time.sleep(5)
     finally:
@@ -1494,6 +1521,54 @@ def typedb_maintenance(force: bool = False) -> int:
     return 0
 
 
+def typedb_rotate(force: bool = False) -> int:
+    """Safely rebuild an oversized TypeDB store and restart all dependents.
+
+    This is intentionally the only automated-manager path that removes the
+    TypeDB data directory.  It pauses the supervisor, stops project-managed
+    workers that may hold graph connections, records the reset marker, then
+    lets the normal startup path seed the RuleBox and rebuild durable shared
+    worlds from MySQL before inference workers resume.
+    """
+
+    specs = worker_specs()
+    spec = specs.get("typedb")
+    if not spec:
+        print(json.dumps({"status": "skipped", "reason": "TypeDB worker is not configured."}, ensure_ascii=False))
+        return 0
+    decision = typedb_reset_needed(spec, ignore_auto_reset=True)
+    if not force and not decision.get("needed"):
+        print(json.dumps({"status": "skipped", **decision}, ensure_ascii=False, indent=2, sort_keys=True))
+        return 0
+
+    pause_supervisor = supervisor_running()
+    maintenance_token = ""
+    if pause_supervisor:
+        maintenance_token = begin_supervisor_maintenance(
+            "typedb-rotate",
+            max_age_seconds=typedb_restart_maintenance_window_seconds(spec),
+        )
+        if not wait_for_supervisor_maintenance_ack(maintenance_token):
+            end_supervisor_maintenance()
+            print("TypeDB rotation aborted because the supervisor did not acknowledge maintenance mode.")
+            return 1
+
+    result = {}
+    try:
+        stop(include_supervisor=False)
+        result = run_typedb_data_retention(spec, force=True)
+        if result.get("status") != "reset":
+            print(json.dumps(result, ensure_ascii=False, indent=2, sort_keys=True))
+            return 1
+        start_status = start()
+        result["restartStatus"] = "ok" if start_status == 0 else "failed"
+        print(json.dumps(result, ensure_ascii=False, indent=2, sort_keys=True))
+        return start_status
+    finally:
+        if pause_supervisor:
+            end_supervisor_maintenance()
+
+
 def main(argv: List[str] = None) -> int:
     args = list(argv if argv is not None else sys.argv[1:])
     command = args[0] if args else "status"
@@ -1510,11 +1585,13 @@ def main(argv: List[str] = None) -> int:
         return status()
     if command == "typedb-maintenance":
         return typedb_maintenance(force="--force" in args[1:])
+    if command == "typedb-rotate":
+        return typedb_rotate(force="--force" in args[1:])
     if command == "supervise":
         return supervise()
     if command == "supervisor-install":
         return install_supervisor()
     if command == "supervisor-uninstall":
         return uninstall_supervisor()
-    print("Usage: python3 python_service/monitor_service.py start|stop|restart|status|supervise|supervisor-install|supervisor-uninstall|typedb-maintenance [--force]")
+    print("Usage: python3 python_service/monitor_service.py start|stop|restart|status|supervise|supervisor-install|supervisor-uninstall|typedb-maintenance|typedb-rotate [--force]")
     return 1

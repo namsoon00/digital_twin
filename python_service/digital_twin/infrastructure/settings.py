@@ -42,7 +42,13 @@ TEXT_SETTING_KEYS = [
     "operationalProjectionRunKeepCount",
     "operationalMinimumFreeSpaceMb",
     "operationalCriticalFreeSpaceMb",
+    "operationalStorageWarningFreeSpaceMb",
     "operationalStoragePressureFreePercent",
+    "operationalStorageComponentWarningPercent",
+    "operationalStorageAlertEnabled",
+    "operationalStorageAlertReminderMinutes",
+    "operationalMySqlDataMaxSizeMb",
+    "operationalLogMaxSizeMb",
     "mysqlMinimalRetentionEnabled",
     "mysqlMinimalRetentionMode",
     "mysqlMinimalRetentionIntervalSeconds",
@@ -876,22 +882,22 @@ def runtime_settings(fast_operational_read: bool = False) -> Dict[str, str]:
         "operationalHistoryRetentionHours": value(
             "operationalHistoryRetentionHours",
             "OPERATIONAL_HISTORY_RETENTION_HOURS",
-            "24",
+            "12",
         ),
         "operationalHistoryRetentionBatchSize": value(
             "operationalHistoryRetentionBatchSize",
             "OPERATIONAL_HISTORY_RETENTION_BATCH_SIZE",
-            "1000",
+            "50",
         ),
         "operationalHistoryRetentionCheckIntervalSeconds": value(
             "operationalHistoryRetentionCheckIntervalSeconds",
             "OPERATIONAL_HISTORY_RETENTION_CHECK_INTERVAL_SECONDS",
-            "300",
+            "120",
         ),
         "operationalSnapshotHistoryKeepCount": value(
             "operationalSnapshotHistoryKeepCount",
             "OPERATIONAL_SNAPSHOT_HISTORY_KEEP_COUNT",
-            "6",
+            "2",
         ),
         "operationalSuppressedNotificationRetentionMinutes": value(
             "operationalSuppressedNotificationRetentionMinutes",
@@ -901,7 +907,7 @@ def runtime_settings(fast_operational_read: bool = False) -> Dict[str, str]:
         "operationalDeliveredNotificationKeepCount": value(
             "operationalDeliveredNotificationKeepCount",
             "OPERATIONAL_DELIVERED_NOTIFICATION_KEEP_COUNT",
-            "30",
+            "5",
         ),
         "operationalLargeDomainEventKeepCount": value(
             "operationalLargeDomainEventKeepCount",
@@ -916,22 +922,52 @@ def runtime_settings(fast_operational_read: bool = False) -> Dict[str, str]:
         "operationalProjectionRunKeepCount": value(
             "operationalProjectionRunKeepCount",
             "OPERATIONAL_PROJECTION_RUN_KEEP_COUNT",
-            "48",
+            "2",
         ),
         "operationalMinimumFreeSpaceMb": value(
             "operationalMinimumFreeSpaceMb",
             "OPERATIONAL_MINIMUM_FREE_SPACE_MB",
-            "16384",
+            "32768",
         ),
         "operationalCriticalFreeSpaceMb": value(
             "operationalCriticalFreeSpaceMb",
             "OPERATIONAL_CRITICAL_FREE_SPACE_MB",
-            "8192",
+            "20480",
+        ),
+        "operationalStorageWarningFreeSpaceMb": value(
+            "operationalStorageWarningFreeSpaceMb",
+            "OPERATIONAL_STORAGE_WARNING_FREE_SPACE_MB",
+            "49152",
         ),
         "operationalStoragePressureFreePercent": value(
             "operationalStoragePressureFreePercent",
             "OPERATIONAL_STORAGE_PRESSURE_FREE_PERCENT",
             "10",
+        ),
+        "operationalStorageComponentWarningPercent": value(
+            "operationalStorageComponentWarningPercent",
+            "OPERATIONAL_STORAGE_COMPONENT_WARNING_PERCENT",
+            "80",
+        ),
+        "operationalStorageAlertEnabled": value(
+            "operationalStorageAlertEnabled",
+            "OPERATIONAL_STORAGE_ALERT_ENABLED",
+            "1",
+        ),
+        "operationalStorageAlertReminderMinutes": value(
+            "operationalStorageAlertReminderMinutes",
+            "OPERATIONAL_STORAGE_ALERT_REMINDER_MINUTES",
+            "60",
+        ),
+        "operationalMySqlDataMaxSizeMb": value(
+            "operationalMySqlDataMaxSizeMb",
+            "OPERATIONAL_MYSQL_DATA_MAX_SIZE_MB",
+            "4096",
+        ),
+        "operationalLogMaxSizeMb": value(
+            "operationalLogMaxSizeMb",
+            "OPERATIONAL_LOG_MAX_SIZE_MB",
+            "512",
         ),
         "mysqlMinimalRetentionEnabled": value(
             "mysqlMinimalRetentionEnabled",
@@ -946,22 +982,22 @@ def runtime_settings(fast_operational_read: bool = False) -> Dict[str, str]:
         "mysqlMinimalRetentionIntervalSeconds": value(
             "mysqlMinimalRetentionIntervalSeconds",
             "MYSQL_MINIMAL_RETENTION_INTERVAL_SECONDS",
-            "300",
+            "120",
         ),
         "mysqlMinimalRetentionBatchSize": value(
             "mysqlMinimalRetentionBatchSize",
             "MYSQL_MINIMAL_RETENTION_BATCH_SIZE",
-            "20",
+            "100",
         ),
         "mysqlMinimalRetentionMaxDeleteBytes": value(
             "mysqlMinimalRetentionMaxDeleteBytes",
             "MYSQL_MINIMAL_RETENTION_MAX_DELETE_BYTES",
-            "33554432",
+            "67108864",
         ),
         "mysqlMinimalRetentionMaxRunSeconds": value(
             "mysqlMinimalRetentionMaxRunSeconds",
             "MYSQL_MINIMAL_RETENTION_MAX_RUN_SECONDS",
-            "20",
+            "30",
         ),
         "mysqlMinimalSnapshotHistoryKeepCount": value(
             "mysqlMinimalSnapshotHistoryKeepCount",
@@ -996,17 +1032,17 @@ def runtime_settings(fast_operational_read: bool = False) -> Dict[str, str]:
         "mysqlMinimalLifecycleEventRetentionHours": value(
             "mysqlMinimalLifecycleEventRetentionHours",
             "MYSQL_MINIMAL_LIFECYCLE_EVENT_RETENTION_HOURS",
-            "24",
+            "6",
         ),
         "mysqlMinimalResearchTerminalRetentionHours": value(
             "mysqlMinimalResearchTerminalRetentionHours",
             "MYSQL_MINIMAL_RESEARCH_TERMINAL_RETENTION_HOURS",
-            "72",
+            "24",
         ),
         "mysqlMinimalInactiveEvidenceRetentionHours": value(
             "mysqlMinimalInactiveEvidenceRetentionHours",
             "MYSQL_MINIMAL_INACTIVE_EVIDENCE_RETENTION_HOURS",
-            "72",
+            "24",
         ),
         "mysqlMinimalRetentionAuditKeepCount": value(
             "mysqlMinimalRetentionAuditKeepCount",
@@ -1443,7 +1479,7 @@ def runtime_settings(fast_operational_read: bool = False) -> Dict[str, str]:
         "ontologyWorldProjectionCompletedRetentionHours": value(
             "ontologyWorldProjectionCompletedRetentionHours",
             "ONTOLOGY_WORLD_PROJECTION_COMPLETED_RETENTION_HOURS",
-            "168",
+            "1",
         ),
         "ontologyWorldProjectionMaxPayloadBytes": value(
             "ontologyWorldProjectionMaxPayloadBytes",
@@ -1498,7 +1534,7 @@ def runtime_settings(fast_operational_read: bool = False) -> Dict[str, str]:
         "ontologyInferenceDetailCompletedRetentionHours": value(
             "ontologyInferenceDetailCompletedRetentionHours",
             "ONTOLOGY_INFERENCE_DETAIL_COMPLETED_RETENTION_HOURS",
-            "168",
+            "24",
         ),
         "ontologyInferenceDetailMaxResultBytes": value(
             "ontologyInferenceDetailMaxResultBytes",
@@ -1643,7 +1679,7 @@ def runtime_settings(fast_operational_read: bool = False) -> Dict[str, str]:
         "typedbAutoResetEnabled": value("typedbAutoResetEnabled", "TYPEDB_AUTO_RESET_ENABLED", "0"),
         "typedbAgeResetEnabled": value("typedbAgeResetEnabled", "TYPEDB_AGE_RESET_ENABLED", "0"),
         "typedbDataRetentionHours": value("typedbDataRetentionHours", "TYPEDB_DATA_RETENTION_HOURS", "24"),
-        "typedbDataMaxSizeMb": value("typedbDataMaxSizeMb", "TYPEDB_DATA_MAX_SIZE_MB", "2048"),
+        "typedbDataMaxSizeMb": value("typedbDataMaxSizeMb", "TYPEDB_DATA_MAX_SIZE_MB", "4096"),
         "typedbMinimumFreeSpaceMb": value("typedbMinimumFreeSpaceMb", "TYPEDB_MINIMUM_FREE_SPACE_MB", "4096"),
         "typedbStartupWaitSeconds": value("typedbStartupWaitSeconds", "TYPEDB_STARTUP_WAIT_SECONDS", "1800"),
         "typedbSeedOnStart": value("typedbSeedOnStart", "TYPEDB_SEED_ON_START", "1"),
@@ -1676,10 +1712,10 @@ def runtime_settings(fast_operational_read: bool = False) -> Dict[str, str]:
         "marketDataCandleBatchSize": value("marketDataCandleBatchSize", "MARKET_DATA_CANDLE_BATCH_SIZE", "25"),
         "marketDataRefreshUniverse": value("marketDataRefreshUniverse", "MARKET_DATA_REFRESH_UNIVERSE", "1"),
         "marketTimeSeriesEnabled": value("marketTimeSeriesEnabled", "MARKET_TIME_SERIES_ENABLED", "1"),
-        "marketTimeSeriesRawRetentionDays": value("marketTimeSeriesRawRetentionDays", "MARKET_TIME_SERIES_RAW_RETENTION_DAYS", "7"),
-        "marketTimeSeries15mRetentionDays": value("marketTimeSeries15mRetentionDays", "MARKET_TIME_SERIES_15M_RETENTION_DAYS", "120"),
-        "marketTimeSeries1hRetentionDays": value("marketTimeSeries1hRetentionDays", "MARKET_TIME_SERIES_1H_RETENTION_DAYS", "730"),
-        "marketTimeSeriesDailyRetentionDays": value("marketTimeSeriesDailyRetentionDays", "MARKET_TIME_SERIES_DAILY_RETENTION_DAYS", "3650"),
+        "marketTimeSeriesRawRetentionDays": value("marketTimeSeriesRawRetentionDays", "MARKET_TIME_SERIES_RAW_RETENTION_DAYS", "2"),
+        "marketTimeSeries15mRetentionDays": value("marketTimeSeries15mRetentionDays", "MARKET_TIME_SERIES_15M_RETENTION_DAYS", "10"),
+        "marketTimeSeries1hRetentionDays": value("marketTimeSeries1hRetentionDays", "MARKET_TIME_SERIES_1H_RETENTION_DAYS", "90"),
+        "marketTimeSeriesDailyRetentionDays": value("marketTimeSeriesDailyRetentionDays", "MARKET_TIME_SERIES_DAILY_RETENTION_DAYS", "180"),
         "marketTimeSeriesMaxPointsPerWindow": value("marketTimeSeriesMaxPointsPerWindow", "MARKET_TIME_SERIES_MAX_POINTS_PER_WINDOW", "500"),
         "marketSignalDataCollectionEnabled": value("marketSignalDataCollectionEnabled", "MARKET_SIGNAL_DATA_COLLECTION_ENABLED", "1"),
         "marketSignalDataBatchSize": value("marketSignalDataBatchSize", "MARKET_SIGNAL_DATA_BATCH_SIZE", "12"),

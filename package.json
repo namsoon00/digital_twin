@@ -66,6 +66,7 @@
     "python:service:restart": "python3 python_service/monitor_service.py restart",
     "python:service:start": "python3 python_service/monitor_service.py start",
     "python:service:status": "python3 python_service/monitor_service.py status",
+    "python:service:typedb:rotate": "python3 python_service/monitor_service.py typedb-rotate",
     "python:service:stop": "python3 python_service/monitor_service.py stop",
     "python:service:supervise": "python3 python_service/monitor_service.py supervise",
     "python:service:supervisor:install": "python3 python_service/monitor_service.py supervisor-install",

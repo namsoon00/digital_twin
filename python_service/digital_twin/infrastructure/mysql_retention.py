@@ -8,15 +8,15 @@ from .mysql_schema_tuning import quote_identifier
 
 FALSE_VALUES = {"0", "false", "no", "off", "disabled", "disable", "none"}
 TRUE_VALUES = {"1", "true", "yes", "on", "enabled", "enable"}
-DEFAULT_RETENTION_HOURS = 24
+DEFAULT_RETENTION_HOURS = 12
 # Retention is deliberately low-priority. A large delete can hold page locks,
 # saturate the redo log, and turn routine history cleanup into an outage.
 DEFAULT_BATCH_SIZE = 50
-DEFAULT_CHECK_INTERVAL_SECONDS = 300
-DEFAULT_SNAPSHOT_HISTORY_KEEP_COUNT = 6
+DEFAULT_CHECK_INTERVAL_SECONDS = 120
+DEFAULT_SNAPSHOT_HISTORY_KEEP_COUNT = 2
 DEFAULT_SUPPRESSED_NOTIFICATION_RETENTION_MINUTES = 120
 DEFAULT_LARGE_DOMAIN_EVENT_KEEP_COUNT = 20
-DEFAULT_DELIVERED_NOTIFICATION_KEEP_COUNT = 30
+DEFAULT_DELIVERED_NOTIFICATION_KEEP_COUNT = 5
 # The event log is a transport/audit trail, not the canonical store for the
 # same snapshot, evidence claim, or delivered notification. These payloads
 # can be large, so retain a bounded operator window per high-volume event.
@@ -27,15 +27,15 @@ DEFAULT_LARGE_DOMAIN_EVENT_NAMES = (
     "research_evidence.collected",
     "ontology.reasoning_requested",
 )
-DEFAULT_PROJECTION_RUN_KEEP_COUNT = 48
-DEFAULT_WORLD_PROJECTION_OUTBOX_RETENTION_HOURS = 24
-DEFAULT_INFERENCE_DETAIL_OUTBOX_RETENTION_HOURS = 168
-DEFAULT_HYPOTHESIS_LIFECYCLE_EVENT_RETENTION_DAYS = 180
+DEFAULT_PROJECTION_RUN_KEEP_COUNT = 2
+DEFAULT_WORLD_PROJECTION_OUTBOX_RETENTION_HOURS = 1
+DEFAULT_INFERENCE_DETAIL_OUTBOX_RETENTION_HOURS = 24
+DEFAULT_HYPOTHESIS_LIFECYCLE_EVENT_RETENTION_DAYS = 1
 DEFAULT_MARKET_TIME_SERIES_RETENTION_DAYS = {
-    "3m": 7,
-    "15m": 120,
-    "1h": 730,
-    "1d": 3650,
+    "3m": 2,
+    "15m": 10,
+    "1h": 90,
+    "1d": 180,
 }
 RETENTION_LOCK_NAME = "orbit_alpha_operational_history_retention"
 EPHEMERAL_MYSQL_DATABASE_PATTERN = re.compile(
@@ -252,10 +252,10 @@ def operational_large_domain_event_names(settings: Mapping[str, object] = None) 
 def market_time_series_retention_days(settings: Mapping[str, object] = None) -> Dict[str, int]:
     configured = settings or {}
     return {
-        "3m": _int_setting(configured, "marketTimeSeriesRawRetentionDays", 7, 1, 3650),
-        "15m": _int_setting(configured, "marketTimeSeries15mRetentionDays", 120, 1, 36500),
-        "1h": _int_setting(configured, "marketTimeSeries1hRetentionDays", 730, 1, 36500),
-        "1d": _int_setting(configured, "marketTimeSeriesDailyRetentionDays", 3650, 1, 36500),
+        "3m": _int_setting(configured, "marketTimeSeriesRawRetentionDays", 2, 1, 3650),
+        "15m": _int_setting(configured, "marketTimeSeries15mRetentionDays", 10, 1, 36500),
+        "1h": _int_setting(configured, "marketTimeSeries1hRetentionDays", 90, 1, 36500),
+        "1d": _int_setting(configured, "marketTimeSeriesDailyRetentionDays", 180, 1, 36500),
     }
 
 
@@ -264,7 +264,7 @@ def hypothesis_lifecycle_event_retention_days(settings: Mapping[str, object] = N
         settings or {},
         "hypothesisLifecycleEventRetentionDays",
         DEFAULT_HYPOTHESIS_LIFECYCLE_EVENT_RETENTION_DAYS,
-        7,
+        1,
         3650,
     )
 

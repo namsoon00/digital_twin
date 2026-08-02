@@ -94,7 +94,7 @@ class MySQLMinimalRetentionTests(unittest.TestCase):
         self.assertEqual("apply", policy.mode)
         self.assertEqual(100, policy.batch_size)
         self.assertEqual(256 * 1024, policy.max_delete_bytes)
-        self.assertEqual(20, policy.max_run_seconds)
+        self.assertEqual(30, policy.max_run_seconds)
         self.assertEqual(10, policy.audit_keep_count)
 
         accelerated = mysql_minimal_retention_policy({

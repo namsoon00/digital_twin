@@ -49,6 +49,49 @@ class TypeDBServiceManagerTests(unittest.TestCase):
                 self.assertFalse(service_manager.typedb_credentials_bootstrap_pending())
                 self.assertFalse(service_manager.typedb_shared_world_projection_rebuild_pending())
 
+    def test_controlled_rotation_detects_capacity_while_auto_reset_is_disabled(self):
+        with tempfile.TemporaryDirectory() as temp:
+            data_path = Path(temp) / "typedb-data"
+            data_path.mkdir()
+            (data_path / "segment").write_bytes(b"x" * (2 * 1024 * 1024))
+            spec = {
+                "role": "typedb",
+                "dataPath": data_path,
+                "autoResetEnabled": "0",
+                "maxSizeMb": "0.001",
+                "retentionHours": "24",
+            }
+
+            automatic = service_manager.typedb_reset_needed(spec)
+            controlled = service_manager.typedb_reset_needed(spec, ignore_auto_reset=True)
+
+        self.assertFalse(automatic["needed"])
+        self.assertEqual("disabled", automatic["reason"])
+        self.assertTrue(controlled["needed"])
+        self.assertIn("size", controlled["reason"])
+
+    def test_typedb_rotate_pauses_workers_and_restarts_after_reset(self):
+        spec = {
+            "role": "typedb",
+            "dataPath": Path("/tmp/orbit-alpha-typedb-test"),
+            "startupWaitSeconds": "60",
+            "seedTimeoutSeconds": "30",
+            "seedRetryCount": "0",
+            "sharedWorldProjectionRebuildTimeoutSeconds": "30",
+        }
+        with patch.object(service_manager, "worker_specs", return_value={"typedb": spec}), \
+                patch.object(service_manager, "typedb_reset_needed", return_value={"needed": True, "reason": "size"}), \
+                patch.object(service_manager, "supervisor_running", return_value=False), \
+                patch.object(service_manager, "stop") as stop, \
+                patch.object(service_manager, "run_typedb_data_retention", return_value={"status": "reset"}) as reset, \
+                patch.object(service_manager, "start", return_value=0) as start:
+            status = service_manager.typedb_rotate()
+
+        self.assertEqual(0, status)
+        stop.assert_called_once_with(include_supervisor=False)
+        reset.assert_called_once_with(spec, force=True)
+        start.assert_called_once_with()
+
     def test_shared_world_rebuild_runs_once_for_a_fresh_typedb_marker(self):
         with tempfile.TemporaryDirectory() as temp:
             marker_path = Path(temp) / "marker.json"

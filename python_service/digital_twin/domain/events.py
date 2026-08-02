@@ -36,6 +36,7 @@ HYPOTHESIS_LIFECYCLE_TRANSITIONED = "investment_hypothesis.lifecycle_transitione
 ONTOLOGY_REASONING_REQUESTED = "ontology.reasoning_requested"
 ONTOLOGY_REASONING_COMPLETED = "ontology.reasoning_completed"
 ONTOLOGY_REASONING_QUEUE_HEALTH_CHANGED = "ontology.reasoning_queue_health_changed"
+OPERATIONAL_STORAGE_CAPACITY_CHANGED = "operations.storage_capacity_changed"
 INVESTMENT_CALENDAR_EVENT_SAVED = "investment_calendar.event_saved"
 INVESTMENT_CALENDAR_EVENT_REMOVED = "investment_calendar.event_removed"
 INVESTMENT_CALENDAR_REMINDER_DUE = "investment_calendar.reminder_due"
@@ -88,6 +89,19 @@ def system_error_reported_event(
             "fingerprint": str(fingerprint or ""),
             "occurrenceCount": max(1, int(occurrence_count or 1)),
         },
+    )
+
+
+def operational_storage_capacity_changed_event(payload: Dict[str, object]) -> DomainEvent:
+    """Emit an operations-only storage state transition without raw payloads."""
+
+    values = dict(payload or {})
+    state = str(values.get("state") or "unknown").strip() or "unknown"
+    return DomainEvent(
+        name=OPERATIONAL_STORAGE_CAPACITY_CHANGED,
+        aggregate_id="operations-storage-capacity",
+        payload=values,
+        correlation_id="storage-capacity:" + state,
     )
 
 

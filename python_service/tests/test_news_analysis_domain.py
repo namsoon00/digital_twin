@@ -27,6 +27,7 @@ from digital_twin.domain.news_analysis import (
 from digital_twin.domain.news_ai_analysis import (
     NewsAiAnalysis,
     apply_news_ai_analysis,
+    article_body_quality_needs_refresh,
     build_news_ai_analysis_prompt,
     local_news_ai_analysis,
     normalize_ai_analysis,
@@ -34,6 +35,7 @@ from digital_twin.domain.news_ai_analysis import (
     summary_texts_similar,
 )
 from digital_twin.domain.ontology_contracts import PortfolioOntology
+from digital_twin.domain.materiality import evidence_materiality
 from digital_twin.domain.ontology_relation_reasoning import research_evidence_facts
 from digital_twin.domain.ontology_schema import add_entity
 from digital_twin.domain.portfolio_ontology_research_concepts import add_research_evidence_concepts
@@ -104,6 +106,107 @@ class NewsAnalysisDomainTests(unittest.TestCase):
         self.assertNotIn("확인된 수치", summary)
         self.assertEqual("needs-review", quality["state"])
         self.assertIn("summary-navigation-contamination", quality["issues"])
+
+    def test_google_result_boundary_drops_unrelated_following_article(self):
+        target = NewsCollectionTarget("000660", "SK하이닉스", "KOSPI", "KRW", "반도체")
+        body = (
+            "적자 나면 임금 깎자고? 성과급 주식 지급과 일정 기간 매도 제한을 두고 "
+            "SK하이닉스 노조가 반발하면서 임단협 진통이 예상된다. 회사는 제안을 수정하지 않으면 "
+            "갈등이 길어질 수 있다고 설명했다. "
+            "Google 검색에서 한국경제 기사를 더 자주 볼 수 있습니다. "
+            "최태원 SK그룹 회장이 SK하이닉스 주식 약 48억원어치를 장내매수했다."
+        )
+
+        cleaned = clean_article_body_text(body)
+        facts = article_analysis_facts(
+            target,
+            '"적자 땐 임금조정"…SK하이닉스 제안',
+            body,
+            "",
+            {"relationScope": "direct"},
+            read_status="body",
+            body_minimum_chars=280,
+        )
+
+        self.assertNotIn("48억원", cleaned)
+        self.assertNotIn("Google 검색", cleaned)
+        self.assertFalse(facts["bodyQualityPassed"])
+        self.assertEqual("limited", facts["bodyQualityState"])
+
+    def test_reenrichment_blocks_legacy_body_after_google_result_boundary(self):
+        target = NewsCollectionTarget("000660", "SK하이닉스", "KOSPI", "KRW", "반도체")
+        evidence = ResearchEvidence(
+            "research:000660:news:google-result-boundary",
+            "000660",
+            "news",
+            "한국경제",
+            '"적자 땐 임금조정"…SK하이닉스 제안',
+            "최태원 SK그룹 회장이 SK하이닉스 주식 약 48억원어치를 장내매수했다.",
+            "https://www.hankyung.com/article/example",
+            "2026-08-01T00:00:00Z",
+            "risk",
+            published_at="2026-08-01T00:00:00Z",
+            raw_payload={
+                "name": "SK하이닉스",
+                "relationScope": "direct",
+                "materialityPassed": True,
+                "articleReadStatus": "body",
+                "articleText": (
+                    "적자 나면 임금 깎자고? 성과급 주식 지급과 일정 기간 매도 제한을 두고 "
+                    "SK하이닉스 노조가 반발하면서 임단협 진통이 예상된다. 회사는 제안을 수정하지 않으면 "
+                    "갈등이 길어질 수 있다고 설명했다. "
+                    "Google 검색에서 한국경제 기사를 더 자주 볼 수 있습니다. "
+                    "최태원 SK그룹 회장이 SK하이닉스 주식 약 48억원어치를 장내매수했다."
+                ),
+                "articleFacts": {"bodyAvailable": True, "bodyQualityPassed": True},
+                "qualityGate": {"decision": "accept", "passed": True},
+            },
+        )
+
+        updated = apply_news_ai_analysis(evidence, local_news_ai_analysis(target, evidence).to_dict())
+        assessment = evidence_materiality(updated)
+
+        self.assertFalse(updated.raw_payload["bodyQualityPassed"])
+        self.assertFalse(updated.raw_payload["qualityGate"]["passed"])
+        self.assertFalse(assessment.passed)
+        self.assertEqual("blocked", assessment.review_level)
+
+    def test_legacy_body_quality_gate_is_detected_even_with_current_ai_hash(self):
+        target = NewsCollectionTarget("000660", "SK하이닉스", "KOSPI", "KRW", "반도체")
+        evidence = ResearchEvidence(
+            "research:000660:news:legacy-quality-gate",
+            "000660",
+            "news",
+            "한국경제",
+            '"적자 땐 임금조정"…SK하이닉스 제안',
+            "SK하이닉스 노사 관련 기사입니다.",
+            "https://www.hankyung.com/article/example",
+            "2026-08-01T00:00:00Z",
+            "risk",
+            published_at="2026-08-01T00:00:00Z",
+            raw_payload={
+                "name": "SK하이닉스",
+                "relationScope": "direct",
+                "articleReadStatus": "body",
+                "articleText": (
+                    "적자 나면 임금 깎자고? 성과급 주식 지급과 일정 기간 매도 제한을 두고 "
+                    "SK하이닉스 노조가 반발하면서 임단협 진통이 예상된다. 회사는 제안을 수정하지 않으면 "
+                    "갈등이 길어질 수 있다고 설명했다. "
+                    "Google 검색에서 한국경제 기사를 더 자주 볼 수 있습니다. "
+                    "최태원 SK그룹 회장이 SK하이닉스 주식 약 48억원어치를 장내매수했다."
+                ),
+                "articleFacts": {"bodyAvailable": True, "bodyQualityPassed": True},
+                "bodyQualityPassed": True,
+                "qualityGate": {"decision": "accept", "passed": True},
+            },
+        )
+        applied = apply_news_ai_analysis(evidence, local_news_ai_analysis(target, evidence).to_dict())
+        # Reproduce a legacy persisted flag that was written before boundary cleanup.
+        applied.raw_payload["articleFacts"]["bodyQualityPassed"] = True
+        applied.raw_payload["bodyQualityPassed"] = True
+        applied.raw_payload["qualityGate"] = {"decision": "accept", "passed": True}
+
+        self.assertTrue(article_body_quality_needs_refresh(applied))
 
     def test_korean_wire_article_prioritizes_target_merger_review_over_unrelated_company_noise(self):
         target = NewsCollectionTarget("035420", "NAVER", "KOSPI", "KRW", "플랫폼")

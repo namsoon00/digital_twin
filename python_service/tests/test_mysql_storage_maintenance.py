@@ -7,6 +7,7 @@ from digital_twin.infrastructure.mysql_retention import (
     apply_mysql_operational_history_retention,
     ephemeral_mysql_database_names,
     operational_delivered_notification_keep_count,
+    sent_article_delivery_ledger_retention_days,
     operational_history_retention_batch_size,
     operational_large_domain_event_keep_count,
     operational_large_domain_event_names,
@@ -135,6 +136,7 @@ class MySQLStorageMaintenanceTests(unittest.TestCase):
         self.assertIn("time:ontology_projection_runs", result["policies"])
         self.assertIn("count:ontology_projection_runs", result["policies"])
         self.assertIn("count:delivered_notification_jobs", result["policies"])
+        self.assertIn("time:notification_article_delivery_ledger", result["policies"])
         projection_queries = [sql for sql, _params in connection.calls if "ontology_projection_runs" in sql]
         self.assertGreaterEqual(len(projection_queries), 2)
         self.assertTrue(any("status <> 'projecting'" in sql for sql in projection_queries))
@@ -147,6 +149,11 @@ class MySQLStorageMaintenanceTests(unittest.TestCase):
         self.assertEqual(2, operational_projection_run_keep_count({}))
         self.assertEqual(2, operational_projection_run_keep_count({"operationalProjectionRunKeepCount": "0"}))
         self.assertEqual(500, operational_projection_run_keep_count({"operationalProjectionRunKeepCount": "9999"}))
+
+    def test_article_delivery_ledger_retention_is_compact_and_bounded(self):
+        self.assertEqual(30, sent_article_delivery_ledger_retention_days({}))
+        self.assertEqual(1, sent_article_delivery_ledger_retention_days({"sentArticleDeliveryLedgerRetentionDays": "0"}))
+        self.assertEqual(365, sent_article_delivery_ledger_retention_days({"sentArticleDeliveryLedgerRetentionDays": "9999"}))
 
     def test_history_retention_limits_legacy_batches_and_large_outbox_audit_window(self):
         self.assertEqual(50, operational_history_retention_batch_size({"operationalHistoryRetentionBatchSize": "1000"}))

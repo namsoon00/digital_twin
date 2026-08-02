@@ -181,6 +181,66 @@ class NewsDigestEnqueuerTests(unittest.TestCase):
         self.assertEqual(1, len(job.context["newsDigest"]["items"]))
         self.assertTrue(job.context["newsDigest"]["items"][0]["identityKeys"])
         self.assertTrue(job.context["newsDigest"]["articleKeys"])
+        self.assertEqual("Semafor", job.context["dataFreshness"]["source"])
+        self.assertEqual("2026-07-11T00:00:00Z", job.context["dataFreshness"]["sourceAsOf"])
+
+    def test_news_digest_uses_dispatch_clock_for_article_age(self):
+        queue = MemoryNotificationQueue()
+        event = DomainEvent(
+            name=RESEARCH_EVIDENCE_COLLECTED,
+            aggregate_id="news:AAPL",
+            occurred_at="2026-07-11T06:00:00Z",
+            payload={"materialChangedItems": [self.evidence().to_dict()]},
+        )
+
+        self.enqueuer(queue).handle(event)
+
+        job = queue.jobs[0]
+        self.assertEqual("2026-07-11T06:00:00Z", job.context["referenceDate"])
+        self.assertIn("6시간 전 · 07/11 09:00 KST", job.text)
+
+    def test_rejects_body_with_google_result_contamination_before_digest(self):
+        queue = MemoryNotificationQueue()
+        evidence = self.evidence()
+        evidence.symbol = "000660"
+        evidence.title = '"적자 땐 임금조정"…SK하이닉스 제안 - 한국경제'
+        evidence.url = "https://www.hankyung.com/article/example"
+        evidence.raw_payload.update({
+            "name": "SK하이닉스",
+            "articleText": (
+                "적자 나면 임금 깎자고? 성과급 주식 지급과 일정 기간 매도 제한을 두고 "
+                "SK하이닉스 노조가 반발하면서 임단협 진통이 예상된다. 회사는 제안을 수정하지 않으면 "
+                "갈등이 길어질 수 있다고 설명했다. "
+                "Google 검색에서 한국경제 기사를 더 자주 볼 수 있습니다. "
+                "최태원 SK그룹 회장이 SK하이닉스 주식 약 48억원어치를 장내매수했다."
+            ),
+            "articleFacts": {
+                "readStatus": "body",
+                "bodyAvailable": True,
+                "bodyQualityPassed": True,
+            },
+        })
+        monitor_store = SimpleNamespace(previous={
+            "main": {
+                "positions": {"000660": {"symbol": "000660", "name": "SK하이닉스"}},
+                "watchlist": {},
+            },
+        })
+        enqueuer = NewsDigestEnqueuer(
+            account_repository=SimpleNamespace(load=lambda: [self.account()]),
+            monitor_store=monitor_store,
+            queue=queue,
+            settings={},
+        )
+        event = DomainEvent(
+            name=RESEARCH_EVIDENCE_COLLECTED,
+            aggregate_id="news:000660",
+            payload={"materialChangedItems": [evidence.to_dict()]},
+        )
+
+        enqueuer.handle(event)
+
+        self.assertEqual([], queue.jobs)
 
     def test_ignores_article_already_sent_with_same_normalized_title(self):
         previous = NotificationJob.create(

@@ -34,6 +34,7 @@ from digital_twin.domain.accounts import AccountConfig
 from digital_twin.domain.message_types import (
     INVESTMENT_INSIGHT,
     MARKET_OBSERVATION,
+    NEWS_DIGEST,
     ONTOLOGY_OBSERVATION_FOLLOWUP,
     WORK_HANDOFF,
     is_operations_delivery_message_type,
@@ -187,6 +188,24 @@ class NotificationDataQualityPolicyTests(unittest.TestCase):
         self.assertFalse(decision.should_send)
         self.assertEqual("stale", decision.status)
         self.assertEqual(4, decision.age_minutes)
+
+    def test_news_digest_is_suppressed_when_article_is_stale_at_dispatch(self):
+        decision = evaluate_notification_data_freshness(
+            {
+                "messageType": NEWS_DIGEST,
+                "dataFreshness": {
+                    "source": "한국경제 원문",
+                    "sourceAsOf": "2026-07-20T00:00:00Z",
+                    "sourceFetchedAt": "2026-07-20T00:05:00Z",
+                },
+            },
+            settings={"dataFreshnessEnabled": "1", "dataFreshnessNewsDigestMaxAgeMinutes": "240"},
+            now=datetime(2026, 7, 20, 5, 0, tzinfo=timezone.utc),
+        )
+
+        self.assertFalse(decision.should_send)
+        self.assertEqual("stale", decision.status)
+        self.assertEqual(300, decision.age_minutes)
 
     def test_blocked_review_level_never_bypasses_cooldown_as_an_upgrade(self):
         condition = SimilarityBypassCondition(

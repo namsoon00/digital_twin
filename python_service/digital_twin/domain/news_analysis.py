@@ -777,6 +777,20 @@ def clean_article_body_text(value: object, limit: int = 5000) -> str:
             continue
         if len(quote_matches) - index >= 2:
             return compact_text(text[:match.start()], limit)
+    # Some publisher pages reached through Google result resolution contain a
+    # short headline block followed by search/navigation results from other
+    # articles. Treat that boundary as the end of the extracted article so a
+    # later, unrelated company action cannot become the summary's key fact.
+    for marker in (
+        "Google 검색에서",
+        "Google에서 한국경제 기사를 더 자주 볼 수 있습니다",
+        "로그인이 필요한 서비스 입니다",
+        "로그인이 필요한 서비스입니다",
+    ):
+        boundary = text.casefold().find(marker.casefold())
+        if boundary >= 80:
+            text = text[:boundary]
+            break
     return compact_text(strip_korean_news_wire_noise(text), limit)
 
 

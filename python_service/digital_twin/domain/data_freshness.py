@@ -12,6 +12,7 @@ from .message_types import (
     HOLDING_TIMING,
     INVESTMENT_INSIGHT,
     MARKET_OBSERVATION,
+    NEWS_DIGEST,
     PORTFOLIO_HOLDINGS_SNAPSHOT,
     MODEL_BUY,
     MODEL_SELL,
@@ -46,6 +47,7 @@ DATA_FRESHNESS_MESSAGE_TYPES = {
     EXTERNAL_CRYPTO_MOVE,
     EXTERNAL_MACRO_SHIFT,
     EXTERNAL_DART_DISCLOSURE,
+    NEWS_DIGEST,
 }
 
 QUOTE_MESSAGE_TYPES = {
@@ -172,6 +174,11 @@ def max_age_minutes_for_message_type(message_type: str, settings: Dict[str, obje
         return int_setting(settings, "dataFreshnessMacroMaxAgeMinutes", 120)
     if key == EXTERNAL_DART_DISCLOSURE:
         return int_setting(settings, "dataFreshnessDisclosureMaxAgeMinutes", 120)
+    if key == NEWS_DIGEST:
+        # News is useful only while the reported event is still actionable.
+        # Keep this separate from evidence retention: older articles remain
+        # auditable, but must not reappear as a newly collected alert.
+        return int_setting(settings, "dataFreshnessNewsDigestMaxAgeMinutes", 240)
     if key in QUOTE_MESSAGE_TYPES:
         return int_setting(settings, "dataFreshnessQuoteMaxAgeMinutes", 10)
     return int_setting(settings, "dataFreshnessDefaultMaxAgeMinutes", 10)

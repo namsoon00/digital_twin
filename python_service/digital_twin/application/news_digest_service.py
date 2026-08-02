@@ -6,6 +6,7 @@ from typing import Dict, Iterable, List, Tuple
 
 from ..domain.accounts import AccountConfig
 from ..domain.events import DomainEvent, RESEARCH_EVIDENCE_COLLECTED
+from ..domain.data_freshness import freshness_record
 from ..domain.market_data import number
 from ..domain.message_types import NEWS_DIGEST
 from ..domain.investment_research import NewsCollectionTarget
@@ -15,6 +16,7 @@ from ..domain.news_analysis import (
     NEWS_RELEVANCE_STATE_LABELS,
     NEWS_SOURCE_TRUST_STATE_LABELS,
     analysis_payload_requires_refresh,
+    article_body_quality,
     classify_news_relevance,
     clean_article_summary_noise,
     news_state_rank,
@@ -204,6 +206,12 @@ def freshness_text(value: object, reference: object = "") -> str:
     else:
         relative = short_datetime_text(value)
     return relative + " · " + short_datetime_text(value)
+
+
+def event_reference_timestamp(event: DomainEvent) -> str:
+    """Use the dispatch event clock, never another article's collection clock."""
+    occurred_at = clean_text(getattr(event, "occurred_at", ""))
+    return occurred_at if parse_datetime(occurred_at) else utc_now_iso()
 
 
 def event_is_story_update(items: List[Dict[str, object]]) -> bool:
@@ -455,6 +463,38 @@ def item_summary(item: Dict[str, object]) -> str:
         or bounded_text(clean_article_summary_noise(item.get("summary")), 360)
         or bounded_text(clean_article_summary_noise(payload.get("articleSummaryKo")), 360)
     )
+
+
+def item_article_body_is_usable(item: Dict[str, object]) -> bool:
+    """Recheck saved body text before turning it into a user-facing alert.
+
+    Older evidence can have been collected before an extractor boundary fix.
+    Prefer a current deterministic body check whenever raw text is present,
+    while retaining compatibility for compact legacy rows that only expose a
+    previously validated body flag.
+    """
+    payload = item_payload(item)
+    facts = article_facts(item)
+    raw_body = ""
+    for source in (item, payload, facts):
+        if not isinstance(source, dict):
+            continue
+        for key in ("articleText", "articleTextPreview", "bodyPreview"):
+            value = clean_text(source.get(key))
+            if value:
+                raw_body = value
+                break
+        if raw_body:
+            break
+    if raw_body:
+        return bool(article_body_quality(raw_body).get("passed"))
+    for source in (item, payload, facts):
+        if not isinstance(source, dict) or "bodyQualityPassed" not in source:
+            continue
+        value = source.get("bodyQualityPassed")
+        if value is False or clean_text(value).lower() in {"0", "false", "no"}:
+            return False
+    return True
 
 
 def ai_reason_line(item: Dict[str, object]) -> str:
@@ -773,7 +813,18 @@ class NewsDigestEnqueuer:
                 self.enqueue_account_digest(account, scoped_items, event)
 
     def previously_sent_article_keys(self, account: AccountConfig) -> set:
-        if not self.sent_article_filter_enabled() or not hasattr(self.queue, "recent"):
+        if not self.sent_article_filter_enabled():
+            return set()
+        account_id = str(getattr(account, "account_id", "") or "")
+        durable_reader = getattr(self.queue, "sent_article_identity_keys", None)
+        if callable(durable_reader):
+            try:
+                return set(durable_reader(account_id=account_id, limit=self.sent_article_history_limit()) or [])
+            except TypeError:
+                return set(durable_reader(account_id) or [])
+            except Exception:  # noqa: BLE001 - duplicate filtering must not block new evidence handling.
+                return set()
+        if not hasattr(self.queue, "recent"):
             return set()
         try:
             recent_jobs = self.queue.recent(limit=self.sent_article_history_limit(), status="done")
@@ -782,7 +833,6 @@ class NewsDigestEnqueuer:
         except Exception:  # noqa: BLE001 - duplicate filtering must not block new evidence handling.
             return set()
         keys = set()
-        account_id = str(getattr(account, "account_id", "") or "")
         for job in recent_jobs or []:
             if account_id and str(getattr(job, "account_id", "") or "") != account_id:
                 continue
@@ -819,7 +869,8 @@ class NewsDigestEnqueuer:
         if self.require_article_body():
             items = [
                 item for item in items
-                if item_event_kind(item) == "disclosure" or article_read_status(item) == "body"
+                if item_event_kind(item) == "disclosure"
+                or (article_read_status(item) == "body" and item_article_body_is_usable(item))
             ]
         if self.require_korean_title_translation():
             items = [item for item in items if item_title_translation_ready(item)]
@@ -904,7 +955,7 @@ class NewsDigestEnqueuer:
     def context(self, account: AccountConfig, items: List[Dict[str, object]], event: DomainEvent) -> Dict[str, object]:
         primary = items[0]
         event_kind = item_event_kind(primary) or "news"
-        reference = latest_timestamp(items)
+        reference = event_reference_timestamp(event)
         icon = event_icon(items, reference)
         sources = source_names(items)
         delivery_mode = "story-update" if event_is_story_update(items) else "new-event"
@@ -940,6 +991,13 @@ class NewsDigestEnqueuer:
             "body": "",
             "referenceDate": reference,
             "generatedAt": event.occurred_at,
+            "dataFreshness": freshness_record(
+                clean_text(primary.get("source")) or "뉴스 원문",
+                NEWS_DIGEST,
+                source_fetched_at=primary.get("observedAt"),
+                source_as_of=primary.get("publishedAt") or primary.get("observedAt"),
+                data_quality=item_news_states(primary).get("dataState") or "",
+            ),
             "notificationSignals": ["important", "confirmingData", "actionable"],
             "messageDeliveryLevel": account.message_delivery_profile()["level"],
             "messageDeliveryLevelLabel": account.message_delivery_profile()["label"],
@@ -973,7 +1031,7 @@ class NewsDigestEnqueuer:
         return merge_strategy_context(context, account)
 
     def message_text(self, account: AccountConfig, items: List[Dict[str, object]], event: DomainEvent, tracking_number: str = "") -> str:
-        reference = latest_timestamp(items)
+        reference = event_reference_timestamp(event)
         primary = items[0]
         label = event_label(items)
         icon = event_icon(items, reference)

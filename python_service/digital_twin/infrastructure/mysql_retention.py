@@ -17,6 +17,7 @@ DEFAULT_SNAPSHOT_HISTORY_KEEP_COUNT = 2
 DEFAULT_SUPPRESSED_NOTIFICATION_RETENTION_MINUTES = 120
 DEFAULT_LARGE_DOMAIN_EVENT_KEEP_COUNT = 20
 DEFAULT_DELIVERED_NOTIFICATION_KEEP_COUNT = 5
+DEFAULT_SENT_ARTICLE_DELIVERY_LEDGER_RETENTION_DAYS = 30
 # The event log is a transport/audit trail, not the canonical store for the
 # same snapshot, evidence claim, or delivered notification. These payloads
 # can be large, so retain a bounded operator window per high-volume event.
@@ -50,6 +51,7 @@ MYSQL_OPERATIONAL_COMPACTION_TABLES = frozenset({
     "monitor_snapshots",
     "monitor_snapshot_history",
     "notification_jobs",
+    "notification_article_delivery_ledger",
     "model_review_jobs",
     "monitor_sent",
     "market_quote_cache",
@@ -187,6 +189,17 @@ def operational_delivered_notification_keep_count(settings: Mapping[str, object]
     )
 
 
+def sent_article_delivery_ledger_retention_days(settings: Mapping[str, object] = None) -> int:
+    """Keep compact article identities after full notification payloads expire."""
+    return _int_setting(
+        settings or {},
+        "sentArticleDeliveryLedgerRetentionDays",
+        DEFAULT_SENT_ARTICLE_DELIVERY_LEDGER_RETENTION_DAYS,
+        1,
+        365,
+    )
+
+
 def operational_projection_run_keep_count(settings: Mapping[str, object] = None) -> int:
     """Keep a compact, per-world projection audit window.
 
@@ -290,6 +303,18 @@ def operational_suppressed_notification_cutoff(
         current = current.replace(tzinfo=timezone.utc)
     current = current.astimezone(timezone.utc)
     cutoff = current - timedelta(minutes=operational_suppressed_notification_retention_minutes(settings))
+    return cutoff.replace(microsecond=0).isoformat().replace("+00:00", "Z")
+
+
+def sent_article_delivery_ledger_cutoff(
+    settings: Mapping[str, object] = None,
+    now: Optional[datetime] = None,
+) -> str:
+    current = now or datetime.now(timezone.utc)
+    if current.tzinfo is None:
+        current = current.replace(tzinfo=timezone.utc)
+    current = current.astimezone(timezone.utc)
+    cutoff = current - timedelta(days=sent_article_delivery_ledger_retention_days(settings))
     return cutoff.replace(microsecond=0).isoformat().replace("+00:00", "Z")
 
 
@@ -448,6 +473,17 @@ def _delete_delivered_notification_rows_over_keep_count(
         + ") AND `status` = 'done'",
         tuple(job_ids),
     )
+
+
+def _delete_expired_article_delivery_ledger_rows(connection, cutoff_iso: str, batch_size: int) -> int:
+    cutoff_sql = "CAST(%s AS CHAR CHARACTER SET utf8mb4) COLLATE utf8mb4_unicode_ci"
+    sql = (
+        "DELETE FROM `notification_article_delivery_ledger`"
+        " WHERE `delivered_at` < "
+        + cutoff_sql
+        + " ORDER BY `delivered_at`, `account_id`, `identity_key` LIMIT %s"
+    )
+    return _delete_one_batch(connection, sql, (cutoff_iso, batch_size))
 
 
 def _delete_market_time_series_rows(
@@ -799,6 +835,7 @@ def apply_mysql_operational_history_retention(
     world_projection_outbox_retention_hours = operational_world_projection_outbox_retention_hours(configured)
     inference_detail_outbox_retention_hours = operational_inference_detail_outbox_retention_hours(configured)
     delivered_notification_keep_count = operational_delivered_notification_keep_count(configured)
+    article_delivery_ledger_cutoff = sent_article_delivery_ledger_cutoff(configured, now=now)
     locked = False
     if use_lock:
         locked = _acquire_lock(connection)
@@ -840,6 +877,14 @@ def apply_mysql_operational_history_retention(
         )
         deleted_by_table["notification_jobs"] = deleted_by_table.get("notification_jobs", 0) + delivered_notification_deleted
         deleted_by_policy["count:delivered_notification_jobs"] = delivered_notification_deleted
+
+        article_delivery_ledger_deleted = _delete_expired_article_delivery_ledger_rows(
+            connection,
+            article_delivery_ledger_cutoff,
+            batch_size,
+        )
+        deleted_by_table["notification_article_delivery_ledger"] = article_delivery_ledger_deleted
+        deleted_by_policy["time:notification_article_delivery_ledger"] = article_delivery_ledger_deleted
 
         domain_event_deleted = _delete_large_domain_events_over_keep_count(
             connection,
@@ -922,6 +967,8 @@ def apply_mysql_operational_history_retention(
         "suppressedNotificationCutoffIso": suppressed_cutoff_iso,
         "suppressedNotificationRetentionMinutes": operational_suppressed_notification_retention_minutes(configured),
         "deliveredNotificationKeepCount": delivered_notification_keep_count,
+        "sentArticleDeliveryLedgerRetentionDays": sent_article_delivery_ledger_retention_days(configured),
+        "sentArticleDeliveryLedgerCutoffIso": article_delivery_ledger_cutoff,
         "largeDomainEventKeepCount": operational_large_domain_event_keep_count(configured),
         "largeDomainEventNames": operational_large_domain_event_names(configured),
         "projectionRunKeepCount": projection_run_keep_count,

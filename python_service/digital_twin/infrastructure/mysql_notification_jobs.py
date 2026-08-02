@@ -1,4 +1,5 @@
 from datetime import datetime, timedelta, timezone
+from threading import Lock
 from typing import Dict, List, Optional, Tuple
 
 from ..domain.data_freshness import evaluate_notification_data_freshness, sanitize_notification_context_for_freshness
@@ -38,6 +39,7 @@ from ..domain.sent_article_filter import (
     news_story_impact_from_context,
 )
 from .mysql_operational_connection import MySQLOperationalConnection
+from .mysql_retention import sent_article_delivery_ledger_cutoff
 from .mysql_operational_helpers import _is_duplicate_key_error, _json_loads
 from .operational_common import (
     MAX_NOTIFICATION_DELIVERY_ATTEMPTS,
@@ -51,11 +53,33 @@ from .settings import utc_now
 
 
 class MySQLNotificationJobStore(MySQLOperationalConnection):
+    _article_delivery_ledger_backfill_lock = Lock()
+    _article_delivery_ledger_backfill_ready = set()
+
     def __init__(self, settings: Dict[str, str] = None):
         super().__init__(settings)
         from .mysql_operational import MySQLNotificationRuleStore
 
         MySQLNotificationRuleStore(self.runtime_settings)
+        self.ensure_sent_article_delivery_ledger_backfill()
+
+    def sent_article_delivery_ledger_backfill_key(self) -> Tuple[str, str, str, str]:
+        return (
+            str(self.mysql_config.get("database") or ""),
+            str(self.mysql_config.get("unix_socket") or ""),
+            str(self.mysql_config.get("host") or ""),
+            str(self.mysql_config.get("port") or ""),
+        )
+
+    def ensure_sent_article_delivery_ledger_backfill(self) -> int:
+        """Seed historical keys once per process without adding hot-path writes."""
+        key = self.sent_article_delivery_ledger_backfill_key()
+        with self._article_delivery_ledger_backfill_lock:
+            if key in self._article_delivery_ledger_backfill_ready:
+                return 0
+            written = self.backfill_sent_article_delivery_ledger()
+            self._article_delivery_ledger_backfill_ready.add(key)
+            return written
 
     def notification_rule_defaults_exist(self) -> bool:
         message_types = list(DEFAULT_NOTIFICATION_RULES.keys())
@@ -369,10 +393,143 @@ class MySQLNotificationJobStore(MySQLOperationalConnection):
         except (TypeError, ValueError):
             return 120
 
+    def sent_article_delivery_ledger_key_limit(self) -> int:
+        return max(100, min(1000, self.sent_article_history_limit() * 8))
+
+    def sent_article_delivery_ledger_keys_with_connection(self, connection, account_id: str = "") -> set:
+        """Read compact, durable article identities without retaining alert payloads."""
+        if not self.sent_article_filter_enabled():
+            return set()
+        rows = connection.execute(
+            """
+            SELECT identity_key
+            FROM notification_article_delivery_ledger
+            WHERE account_id = %s
+              AND delivered_at >= CAST(%s AS CHAR CHARACTER SET utf8mb4) COLLATE utf8mb4_unicode_ci
+            ORDER BY delivered_at DESC, identity_key DESC
+            LIMIT %s
+            """,
+            (
+                str(account_id or "").strip()[:191],
+                sent_article_delivery_ledger_cutoff(self.runtime_settings),
+                self.sent_article_delivery_ledger_key_limit(),
+            ),
+        ).fetchall()
+        return {
+            str(row["identity_key"] or "").strip()
+            for row in rows
+            if str(row["identity_key"] or "").strip()
+        }
+
+    def record_article_delivery_context_with_connection(
+        self,
+        connection,
+        account_id: str,
+        message_type: str,
+        context: Dict[str, object],
+        source_job_id: str = "",
+        delivered_at: str = "",
+    ) -> int:
+        """Persist only article identity keys once delivery succeeds.
+
+        Full notification payloads are intentionally retained for a very short
+        operator window. This compact ledger is the independent duplicate
+        memory needed after those payloads are removed for disk control.
+        """
+        probe = NotificationJob(
+            job_id=str(source_job_id or ""),
+            account_id=str(account_id or ""),
+            account_label="",
+            message_type=str(message_type or ""),
+            text="",
+            context=dict(context or {}),
+        )
+        if not self.sent_article_filter_enabled() or not self.article_driven_job(probe):
+            return 0
+        keys = sorted({
+            str(key or "").strip()[:191]
+            for key in collect_article_identity_keys_from_context(probe.context, max_depth=7, max_nodes=600, max_keys=800)
+            if str(key or "").strip()
+        })[: self.sent_article_delivery_ledger_key_limit()]
+        if not keys:
+            return 0
+        stamp = str(delivered_at or utc_now()).strip() or utc_now()
+        safe_account_id = str(account_id or "").strip()[:191]
+        safe_job_id = str(source_job_id or "").strip()[:191]
+        safe_message_type = str(message_type or "").strip()[:191]
+        for identity_key in keys:
+            connection.execute(
+                """
+                INSERT INTO notification_article_delivery_ledger (
+                    account_id, identity_key, delivered_at, updated_at, source_job_id, message_type
+                ) VALUES (%s, %s, %s, %s, %s, %s)
+                ON DUPLICATE KEY UPDATE
+                    delivered_at = VALUES(delivered_at),
+                    updated_at = VALUES(updated_at),
+                    source_job_id = VALUES(source_job_id),
+                    message_type = VALUES(message_type)
+                """,
+                (safe_account_id, identity_key, stamp, stamp, safe_job_id, safe_message_type),
+            )
+        return len(keys)
+
+    def record_article_delivery_with_connection(self, connection, job: NotificationJob) -> int:
+        return self.record_article_delivery_context_with_connection(
+            connection,
+            job.account_id,
+            job.message_type,
+            job.context or {},
+            source_job_id=job.job_id,
+            delivered_at=job.updated_at or job.created_at,
+        )
+
+    def backfill_sent_article_delivery_ledger(self) -> int:
+        """Seed the durable ledger from the bounded live delivery history."""
+        if not self.sent_article_filter_enabled():
+            return 0
+        with self.transaction() as connection:
+            rows = connection.execute(
+                """
+                SELECT job_id, account_id, message_type, updated_at, created_at, payload_json
+                FROM notification_jobs
+                WHERE status IN ('done', 'sent')
+                  AND message_type IN (%s, %s)
+                ORDER BY updated_at DESC, job_id DESC
+                LIMIT %s
+                """,
+                (NEWS_DIGEST, INVESTMENT_INSIGHT, self.sent_article_delivery_ledger_key_limit()),
+            ).fetchall()
+            written = 0
+            for row in rows:
+                payload = _json_loads(row["payload_json"], {})
+                context = payload.get("context") if isinstance(payload.get("context"), dict) else {}
+                written += self.record_article_delivery_context_with_connection(
+                    connection,
+                    row["account_id"],
+                    row["message_type"],
+                    context,
+                    source_job_id=row["job_id"],
+                    delivered_at=row["updated_at"] or row["created_at"],
+                )
+            return written
+
+    def sent_article_identity_keys(self, account_id: str = "", limit: int = 0) -> set:
+        """Expose the durable duplicate-filter surface to news ingestion."""
+        if not self.sent_article_filter_enabled():
+            return set()
+        probe = NotificationJob.create(
+            "",
+            account_id=str(account_id or ""),
+            message_type=NEWS_DIGEST,
+        )
+        with self.transaction() as connection:
+            return self.sent_article_history_keys_with_connection(connection, probe)
+
     def sent_article_history_keys_with_connection(self, connection, job: NotificationJob):
         if not self.sent_article_filter_enabled():
             return set()
         account_id = str(job.account_id or "").strip()
+        keys = self.sent_article_delivery_ledger_keys_with_connection(connection, account_id)
         clauses = ["status IN ('done', 'pending', 'processing')", "message_type IN (%s, %s)"]
         params: List[object] = [NEWS_DIGEST, INVESTMENT_INSIGHT]
         if account_id:
@@ -381,7 +538,7 @@ class MySQLNotificationJobStore(MySQLOperationalConnection):
         params.append(self.sent_article_history_limit())
         rows = connection.execute(
             """
-            SELECT payload_json
+            SELECT job_id, status, account_id, message_type, updated_at, created_at, payload_json
             FROM notification_jobs
             WHERE """ + " AND ".join(clauses) + """
             ORDER BY created_at DESC, job_id DESC
@@ -389,13 +546,22 @@ class MySQLNotificationJobStore(MySQLOperationalConnection):
             """,
             params,
         ).fetchall()
-        keys = set()
         for row in rows:
             previous_payload = _json_loads(row["payload_json"], {})
-            if str(previous_payload.get("jobId") or previous_payload.get("job_id") or "") == job.job_id:
+            if str(row["job_id"] or "") == job.job_id:
                 continue
             context = previous_payload.get("context") if isinstance(previous_payload.get("context"), dict) else {}
-            keys.update(collect_article_identity_keys_from_context(context, max_depth=7, max_nodes=600, max_keys=800))
+            previous_keys = collect_article_identity_keys_from_context(context, max_depth=7, max_nodes=600, max_keys=800)
+            keys.update(previous_keys)
+            if str(row["status"] or "") in {"done", "sent"} and previous_keys:
+                self.record_article_delivery_context_with_connection(
+                    connection,
+                    row["account_id"],
+                    row["message_type"],
+                    context,
+                    source_job_id=row["job_id"],
+                    delivered_at=row["updated_at"] or row["created_at"],
+                )
             if len(keys) >= 800:
                 break
         return keys
@@ -828,7 +994,9 @@ class MySQLNotificationJobStore(MySQLOperationalConnection):
         job.status = "done"
         job.last_error = ""
         job.updated_at = utc_now()
-        self.update(job)
+        with self.transaction() as connection:
+            self.upsert_job_with_connection(connection, job)
+            self.record_article_delivery_with_connection(connection, job)
 
     def mark_failed(self, job: NotificationJob, error: str) -> None:
         job.status = "failed"

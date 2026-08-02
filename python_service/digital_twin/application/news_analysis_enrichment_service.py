@@ -14,6 +14,7 @@ from ..domain.investment_research import NewsCollectionTarget, ResearchEvidence
 from ..domain.materiality import evidence_materiality
 from ..domain.news_ai_analysis import (
     apply_news_ai_analysis,
+    article_body_quality_needs_refresh,
     article_text_parts,
     news_ai_analysis_is_current,
     news_ai_analysis_retryable,
@@ -122,10 +123,15 @@ class NewsAnalysisEnrichmentRunner:
             or news_ai_analysis_retryable(item) and (needs_translation or needs_summary_review)
         )
         analysis_outdated = not news_ai_analysis_is_current(item)
-        if not (needs_translation or needs_summary_review or retryable_analysis or analysis_outdated):
+        body_quality_repair = article_body_quality_needs_refresh(item)
+        if not (needs_translation or needs_summary_review or retryable_analysis or analysis_outdated or body_quality_repair):
             return False
         last_attempt = parse_datetime(analysis.get("lastExternalAttemptAt"))
-        if last_attempt and age_minutes(last_attempt.isoformat(), now=datetime.now(timezone.utc)) < self.retry_minutes():
+        if (
+            not body_quality_repair
+            and last_attempt
+            and age_minutes(last_attempt.isoformat(), now=datetime.now(timezone.utc)) < self.retry_minutes()
+        ):
             return False
         return True
 
@@ -136,6 +142,7 @@ class NewsAnalysisEnrichmentRunner:
         translation_pending = language == "en" and str(payload.get("translationStatus") or "").lower() != "complete"
         states = news_domain.news_state_rank(item.state_payload())
         return (
+            article_body_quality_needs_refresh(item),
             bool(facts.get("bodyAvailable")),
             translation_pending,
             *states,

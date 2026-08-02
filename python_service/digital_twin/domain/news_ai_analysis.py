@@ -1163,6 +1163,37 @@ def news_ai_analysis_is_current(evidence: ResearchEvidence) -> bool:
     )
 
 
+def article_body_quality_needs_refresh(evidence: ResearchEvidence) -> bool:
+    """Detect legacy rows whose persisted body gate disagrees with cleaned text.
+
+    Only recalculate when the raw article body is still available. Compact
+    legacy rows can retain a previously verified flag without retaining the
+    source body, and must not be downgraded merely because that source was
+    intentionally compacted.
+    """
+    payload = analysis_payload_from_evidence(evidence)
+    if str(payload.get("relationScope") or "") == "editorial_context":
+        return False
+    facts = article_facts(payload)
+    raw_body = (
+        payload.get("articleText")
+        or payload.get("articleTextPreview")
+        or facts.get("bodyPreview")
+        or ""
+    )
+    if not str(raw_body or "").strip():
+        return False
+    _title, body, _feed_summary, _read_scope = article_text_parts(evidence)
+    expected = bool(news_domain.article_body_quality(body).get("passed"))
+    quality_gate = payload.get("qualityGate") if isinstance(payload.get("qualityGate"), dict) else {}
+    return (
+        (facts.get("bodyQualityPassed") is True) != expected
+        or (payload.get("bodyQualityPassed") is True) != expected
+        or not quality_gate
+        or (quality_gate.get("passed") is True) != expected
+    )
+
+
 def news_ai_analysis_retryable(evidence: ResearchEvidence) -> bool:
     """A local fallback is useful for display but must not consume the final analysis state."""
     payload = analysis_payload_from_evidence(evidence)
@@ -1395,6 +1426,14 @@ def apply_news_ai_analysis(evidence: ResearchEvidence, analysis_payload: Dict[st
     if conflict_payload:
         refreshed_facts.update(conflict_payload)
     payload["articleFacts"] = refreshed_facts
+    payload["bodyQualityState"] = refreshed_facts.get("bodyQualityState") or "unavailable"
+    payload["bodyQualityPassed"] = refreshed_facts.get("bodyQualityPassed") is True
+    if not editorial_context:
+        # Re-enrichment can clean a legacy body more aggressively than the
+        # original collector. Rebuild the body gate too, otherwise a stale
+        # `passed=true` flag could keep contaminated content in the inference
+        # fact set after its useful article boundary disappeared.
+        payload["qualityGate"] = news_domain.article_quality_gate(refreshed_facts)
     payload = news_domain.public_news_payload(payload)
     evidence_polarity = impact_polarity if impact_polarity in {"support", "risk"} else "context"
     states = news_domain.news_state_payload(payload)

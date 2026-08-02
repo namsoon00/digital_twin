@@ -519,6 +519,19 @@ MYSQL_SCHEMA = [
     ) ENGINE=InnoDB DEFAULT CHARSET=utf8mb4 COLLATE=utf8mb4_unicode_ci
     """,
     """
+    CREATE TABLE IF NOT EXISTS notification_article_delivery_ledger (
+        account_id VARCHAR(191) NOT NULL DEFAULT '',
+        identity_key VARCHAR(191) NOT NULL,
+        delivered_at VARCHAR(40) NOT NULL,
+        updated_at VARCHAR(40) NOT NULL,
+        source_job_id VARCHAR(191) NOT NULL DEFAULT '',
+        message_type VARCHAR(191) NOT NULL DEFAULT '',
+        PRIMARY KEY (account_id, identity_key),
+        KEY idx_notification_article_delivery_ledger_account_time (account_id, delivered_at, identity_key),
+        KEY idx_notification_article_delivery_ledger_time (delivered_at, account_id)
+    ) ENGINE=InnoDB DEFAULT CHARSET=utf8mb4 COLLATE=utf8mb4_unicode_ci
+    """,
+    """
     CREATE TABLE IF NOT EXISTS model_review_jobs (
         job_id VARCHAR(191) PRIMARY KEY,
         account_id VARCHAR(191) NOT NULL DEFAULT '',

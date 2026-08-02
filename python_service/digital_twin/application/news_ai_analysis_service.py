@@ -5,6 +5,7 @@ from ..domain.investment_research import NewsCollectionTarget, ResearchEvidence
 from ..domain.market_data import number
 from ..domain.news_ai_analysis import (
     apply_news_ai_analysis,
+    article_body_quality_needs_refresh,
     local_news_ai_analysis,
     news_ai_analysis_is_current,
     news_ai_analysis_retryable,
@@ -79,7 +80,11 @@ class NewsAiAnalysisService:
     def analysis_needs_work(self, evidence: ResearchEvidence) -> bool:
         if evidence.kind != "news":
             return False
-        return not news_ai_analysis_is_current(evidence) or news_ai_analysis_retryable(evidence)
+        return (
+            not news_ai_analysis_is_current(evidence)
+            or news_ai_analysis_retryable(evidence)
+            or article_body_quality_needs_refresh(evidence)
+        )
 
     def analyze_evidence(
         self,
@@ -89,6 +94,19 @@ class NewsAiAnalysisService:
     ) -> ResearchEvidence:
         if not self.enabled() or not self.analysis_needs_work(evidence):
             return evidence
+        # This is a deterministic migration of stale extractor output, not a
+        # reason to consume an external AI-analysis call.
+        if (
+            article_body_quality_needs_refresh(evidence)
+            and news_ai_analysis_is_current(evidence)
+            and not news_ai_analysis_retryable(evidence)
+        ):
+            return self.local_analyze_evidence(
+                target,
+                evidence,
+                "본문 경계 정제 기준이 변경되어 기사 본문 품질을 다시 검증했습니다.",
+                status="local",
+            )
         try:
             if self.analyzer and hasattr(self.analyzer, "analyze"):
                 if external_timeout_seconds and hasattr(self.analyzer, "analyze_with_timeout"):

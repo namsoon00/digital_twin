@@ -7,6 +7,9 @@ from .accounts import AccountConfig
 from .portfolio import AccountSnapshot, AlertEvent, utc_now_iso
 
 
+DOMAIN_EVENT_SCHEMA_VERSION = "domain-event-v1"
+
+
 ACCOUNT_SAVED = "account.saved"
 ACCOUNT_REMOVED = "account.removed"
 MONITORING_SNAPSHOT_COLLECTED = "monitoring.snapshot_collected"
@@ -52,6 +55,7 @@ SYSTEM_ERROR_REPORTED = "system.error_reported"
 class DomainEvent:
     name: str
     aggregate_id: str
+    schema_version: str = DOMAIN_EVENT_SCHEMA_VERSION
     payload: Dict[str, object] = field(default_factory=dict)
     occurred_at: str = field(default_factory=utc_now_iso)
     event_id: str = field(default_factory=lambda: uuid.uuid4().hex)
@@ -65,6 +69,11 @@ class DomainEvent:
         return cls(
             name=str(payload.get("name") or ""),
             aggregate_id=str(payload.get("aggregate_id") or payload.get("aggregateId") or ""),
+            schema_version=str(
+                payload.get("schema_version")
+                or payload.get("schemaVersion")
+                or DOMAIN_EVENT_SCHEMA_VERSION
+            ),
             payload=dict(payload.get("payload") or {}),
             occurred_at=str(payload.get("occurred_at") or payload.get("occurredAt") or utc_now_iso()),
             event_id=str(payload.get("event_id") or payload.get("eventId") or uuid.uuid4().hex),

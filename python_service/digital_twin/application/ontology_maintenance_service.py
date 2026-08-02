@@ -3,6 +3,7 @@
 from typing import Dict, Iterable, List
 
 from ..domain.ontology_runtime_operations import (
+    bounded_background_work_fairness,
     scoped_abox_maintenance_health,
     scoped_abox_maintenance_policy,
 )
@@ -33,7 +34,7 @@ class OntologyMaintenanceRunner:
     state in MySQL so restarts continue the round-robin world order.
     """
 
-    state_contract = "ontology-maintenance-state-v2"
+    state_contract = "ontology-maintenance-state-v3"
 
     def __init__(
         self,
@@ -46,6 +47,7 @@ class OntologyMaintenanceRunner:
         self.state_store = state_store
         self.settings = dict(settings or {})
         self.reasoning_queue_probe = reasoning_queue_probe
+        self.last_background_fairness: Dict[str, object] = {}
 
     def policy(self) -> Dict[str, object]:
         return scoped_abox_maintenance_policy(self.settings)
@@ -85,6 +87,22 @@ class OntologyMaintenanceRunner:
         value = text(self.settings.get("ontologyAboxMaintenanceDeferWhenReasoningPending") or "1").lower()
         return value not in DISABLED_VALUES
 
+    def background_fairness_enabled(self) -> bool:
+        value = text(self.settings.get("ontologyBackgroundWorkFairnessEnabled") or "1").lower()
+        return value not in DISABLED_VALUES
+
+    def max_reasoning_deferral_seconds(self) -> int:
+        return max(30, min(24 * 60 * 60, integer(
+            self.settings.get("ontologyAboxMaintenanceMaxReasoningDeferralSeconds"),
+            300,
+        )))
+
+    def fairness_cooldown_seconds(self) -> int:
+        return max(10, min(60 * 60, integer(
+            self.settings.get("ontologyBackgroundWorkFairnessCooldownSeconds"),
+            60,
+        )))
+
     def reasoning_queue_state(self) -> Dict[str, object]:
         if not callable(self.reasoning_queue_probe):
             return {"status": "not-configured", "effectivePendingCount": 0}
@@ -102,10 +120,102 @@ class OntologyMaintenanceRunner:
                 return value
         return 0
 
-    def reasoning_queue_deferral(self, policy: Dict[str, object] = None) -> Dict[str, object]:
+    @staticmethod
+    def active_reasoning_count(state: Dict[str, object]):
+        values = dict(state or {}) if isinstance(state, dict) else {}
+        mailbox = values.get("mailbox") if isinstance(values.get("mailbox"), dict) else {}
+        counts = []
+        for source in (values, mailbox):
+            if "runningEntryCount" not in source:
+                continue
+            try:
+                counts.append(max(0, int(float(source.get("runningEntryCount") or 0))))
+            except (TypeError, ValueError):
+                continue
+        return max(counts) if counts else None
+
+    def clear_reasoning_deferral_state(self, state: Dict[str, object]) -> None:
+        if not text((state or {}).get("reasoningQueueDeferredSinceAt")):
+            return
+        self.save_state({
+            **dict(state or {}),
+            "reasoningQueueDeferredSinceAt": "",
+        })
+
+    def background_fairness_decision(
+        self,
+        policy: Dict[str, object] = None,
+        reasoning_queue: Dict[str, object] = None,
+        commit_fairness: bool = False,
+        record_deferral: bool = False,
+    ) -> Dict[str, object]:
+        del policy  # The fairness boundary is independent from delete budgets.
+        queue = dict(reasoning_queue or self.reasoning_queue_state())
+        pending = self.queue_pending_count(queue)
+        state = self.state()
+        deferred_since = text(state.get("reasoningQueueDeferredSinceAt"))
+        if pending > 0 and not deferred_since and record_deferral:
+            deferred_since = utc_now_iso()
+            state = {
+                **state,
+                "reasoningQueueDeferredSinceAt": deferred_since,
+            }
+            self.save_state(state)
+        decision = bounded_background_work_fairness(
+            reasoning_pending_count=pending,
+            active_reasoning_count=self.active_reasoning_count(queue),
+            background_work_pending=bool(pending),
+            oldest_background_work_at=deferred_since,
+            last_fairness_at=state.get("lastFairnessAttemptAt"),
+            max_deferral_seconds=self.max_reasoning_deferral_seconds(),
+            fairness_cooldown_seconds=self.fairness_cooldown_seconds(),
+        )
+        fairness_enabled = self.background_fairness_enabled()
+        if not fairness_enabled and pending > 0:
+            decision.update({
+                "deferred": True,
+                "fairnessGranted": False,
+                "reasonCode": "fairness-disabled",
+                "reason": "공정 실행이 비활성화되어 라이브 추론 우선 정책을 유지합니다.",
+            })
+        decision.update({
+            "worker": "ontology-abox-maintenance",
+            "enabled": fairness_enabled,
+        })
+        if bool(decision.get("fairnessGranted")) and commit_fairness:
+            self.save_state({
+                **state,
+                "lastFairnessAttemptAt": text(decision.get("checkedAt")),
+                "lastFairness": {
+                    key: decision.get(key)
+                    for key in [
+                        "version", "checkedAt", "reasonCode", "backgroundWaitSeconds",
+                        "maxDeferralSeconds", "fairnessCooldownSeconds",
+                    ]
+                },
+            })
+        self.last_background_fairness = dict(decision)
+        return decision
+
+    def reasoning_queue_deferral(
+        self,
+        policy: Dict[str, object] = None,
+        commit_fairness: bool = False,
+    ) -> Dict[str, object]:
         """Return a no-write preflight result while investment reasoning runs."""
         queue_state = self.reasoning_queue_state()
-        if not self.defer_while_reasoning_pending() or self.queue_pending_count(queue_state) <= 0:
+        pending = self.queue_pending_count(queue_state)
+        if not self.defer_while_reasoning_pending() or pending <= 0:
+            self.clear_reasoning_deferral_state(self.state())
+            self.last_background_fairness = {}
+            return {}
+        fairness = self.background_fairness_decision(
+            policy,
+            queue_state,
+            commit_fairness=commit_fairness,
+            record_deferral=True,
+        )
+        if bool(fairness.get("fairnessGranted")):
             return {}
         return {
             "status": "deferred-reasoning-queue",
@@ -113,6 +223,7 @@ class OntologyMaintenanceRunner:
             "policy": dict(policy or self.policy()),
             "reason": "활성 추론 요청이 남아 있어 ABox 정리를 유휴 시간으로 미룹니다.",
             "reasoningQueue": queue_state,
+            "backgroundFairness": fairness,
             "retryAfterSeconds": self.interval_seconds(),
         }
 
@@ -304,6 +415,7 @@ class OntologyMaintenanceRunner:
             "executionTimeoutSeconds": self.execution_timeout_seconds(),
             "deferWhenReasoningPending": self.defer_while_reasoning_pending(),
             "reasoningQueue": self.reasoning_queue_state(),
+            "backgroundFairness": self.background_fairness_decision(policy),
             "policy": policy,
             "lastRunAt": text(state.get("lastRunAt")),
             "lastResult": dict(last_result),
@@ -323,7 +435,7 @@ class OntologyMaintenanceRunner:
                 "policy": policy,
                 "reason": "Graph store has no scoped ABox maintenance adapter.",
             }
-        deferred = self.reasoning_queue_deferral(policy)
+        deferred = self.reasoning_queue_deferral(policy, commit_fairness=True)
         if deferred:
             result = dict(deferred)
             previous = self.state()
@@ -448,13 +560,14 @@ class OntologyMaintenanceRunner:
             "lastProgress": bool(current_backlog.get("lastProgress")),
         }
         self.save_state({
+            **previous,
             "contract": self.state_contract,
             "lastRunAt": utc_now_iso(),
             "nextWorldId": next_world_id,
             "lastResult": compact,
             "backlogByWorld": backlog_by_world,
         })
-        return {
+        response = {
             "contract": self.state_contract,
             "status": result_status,
             "worldId": world_id,
@@ -463,3 +576,6 @@ class OntologyMaintenanceRunner:
             "maintenance": compact,
             "repository": result,
         }
+        if bool(self.last_background_fairness.get("fairnessGranted")):
+            response["backgroundFairness"] = dict(self.last_background_fairness)
+        return response

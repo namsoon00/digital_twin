@@ -1,9 +1,10 @@
 import unittest
 from concurrent.futures import ThreadPoolExecutor
-from datetime import datetime, timezone
+from datetime import datetime, timedelta, timezone
 from types import SimpleNamespace
 
 from digital_twin.domain.ontology_runtime_operations import (
+    bounded_background_work_fairness,
     build_projection_runtime_observation,
     native_rule_adaptive_target_sharding_profile,
     native_replay_validation,
@@ -15,6 +16,49 @@ from digital_twin.infrastructure.mysql_ontology_projection_runs import MySQLOnto
 
 
 class OntologyRuntimeOperationsTests(unittest.TestCase):
+    def test_background_work_fairness_never_overlaps_active_reasoning_and_respects_cooldown(self):
+        now = datetime(2026, 8, 2, 0, 20, tzinfo=timezone.utc)
+        old = (now - timedelta(minutes=20)).isoformat().replace("+00:00", "Z")
+        active = bounded_background_work_fairness(
+            reasoning_pending_count=3,
+            active_reasoning_count=1,
+            background_work_pending=True,
+            oldest_background_work_at=old,
+            max_deferral_seconds=60,
+            fairness_cooldown_seconds=60,
+            now=now,
+        )
+        self.assertTrue(active["deferred"])
+        self.assertFalse(active["fairnessGranted"])
+        self.assertEqual("active-reasoning-lease", active["reasonCode"])
+
+        granted = bounded_background_work_fairness(
+            reasoning_pending_count=3,
+            active_reasoning_count=0,
+            background_work_pending=True,
+            oldest_background_work_at=old,
+            max_deferral_seconds=60,
+            fairness_cooldown_seconds=60,
+            now=now,
+        )
+        self.assertFalse(granted["deferred"])
+        self.assertTrue(granted["fairnessGranted"])
+        self.assertEqual("aged-background-turn", granted["reasonCode"])
+
+        cooled_down = bounded_background_work_fairness(
+            reasoning_pending_count=3,
+            active_reasoning_count=0,
+            background_work_pending=True,
+            oldest_background_work_at=old,
+            last_fairness_at=(now - timedelta(seconds=10)).isoformat().replace("+00:00", "Z"),
+            max_deferral_seconds=60,
+            fairness_cooldown_seconds=60,
+            now=now,
+        )
+        self.assertTrue(cooled_down["deferred"])
+        self.assertFalse(cooled_down["fairnessGranted"])
+        self.assertEqual("fairness-cooldown", cooled_down["reasonCode"])
+
     def test_projection_gate_accepts_only_verified_current_generation_no_match(self):
         service = OntologyReasoningRunner.__new__(OntologyReasoningRunner)
         verified = SimpleNamespace(last_ontology_projection_results={

@@ -1,4 +1,5 @@
 import unittest
+from datetime import datetime, timedelta, timezone
 
 from digital_twin.application.ontology_inference_detail_service import OntologyInferenceDetailRunner
 from digital_twin.infrastructure.mysql_ontology_inference_detail_outbox import inference_detail_dedupe_key
@@ -38,6 +39,7 @@ class FakeOutbox:
         self.completed = []
         self.retries = []
         self.pruned = 0
+        self.summary_payload = None
 
     def claim(self, _worker_id, limit, _lease_seconds):
         claimed = self.jobs[:limit]
@@ -62,6 +64,8 @@ class FakeOutbox:
         return self.pruned
 
     def summary(self):
+        if self.summary_payload is not None:
+            return dict(self.summary_payload)
         return {"enabled": True, "pendingCount": len(self.jobs)}
 
 
@@ -73,6 +77,17 @@ class FakeRepository:
     def inferencebox_snapshot(self, symbols=None, limit=80, world_id=""):
         self.calls.append({"symbols": list(symbols or []), "limit": limit, "worldId": world_id})
         return dict(self.snapshot)
+
+
+class FakeStateStore:
+    def __init__(self, payload=None):
+        self.payload = dict(payload or {})
+
+    def load(self):
+        return dict(self.payload)
+
+    def replace(self, payload):
+        self.payload = dict(payload or {})
 
 
 class OntologyInferenceDetailRunnerTests(unittest.TestCase):
@@ -89,7 +104,7 @@ class OntologyInferenceDetailRunnerTests(unittest.TestCase):
         runner = OntologyInferenceDetailRunner(
             outbox,
             repository,
-            reasoning_queue_probe=lambda: {"effectivePendingCount": 2},
+            reasoning_queue_probe=lambda: {"effectivePendingCount": 2, "runningEntryCount": 1},
         )
 
         result = runner.run_once()
@@ -98,6 +113,36 @@ class OntologyInferenceDetailRunnerTests(unittest.TestCase):
         self.assertEqual(0, result["claimedCount"])
         self.assertEqual(1, len(outbox.jobs))
         self.assertEqual([], repository.calls)
+        self.assertEqual("active-reasoning-lease", result["backgroundFairness"]["reasonCode"])
+
+    def test_aged_detail_readback_gets_one_fairness_turn_between_reasoning_leases(self):
+        outbox = FakeOutbox([inference_job()])
+        outbox.summary_payload = {
+            "enabled": True,
+            "pendingCount": 1,
+            "states": {
+                "pending": {
+                    "count": 1,
+                    "oldestAt": (datetime.now(timezone.utc) - timedelta(minutes=20)).isoformat().replace("+00:00", "Z"),
+                },
+            },
+        }
+        state = FakeStateStore()
+        repository = FakeRepository(complete_snapshot())
+        runner = OntologyInferenceDetailRunner(
+            outbox,
+            repository,
+            settings={"ontologyInferenceDetailMaxReasoningDeferralSeconds": "30"},
+            reasoning_queue_probe=lambda: {"effectivePendingCount": 2, "runningEntryCount": 0},
+            fairness_state_store=state,
+        )
+
+        result = runner.run_once()
+
+        self.assertEqual(1, result["completedCount"])
+        self.assertTrue(result["backgroundFairness"]["fairnessGranted"])
+        self.assertTrue(state.payload["lastFairnessAttemptAt"])
+        self.assertEqual(1, len(repository.calls))
 
     def test_matching_durable_detail_is_completed_after_idle_readback(self):
         outbox = FakeOutbox([inference_job()])

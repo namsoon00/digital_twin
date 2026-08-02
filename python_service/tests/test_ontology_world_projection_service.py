@@ -1,4 +1,5 @@
 import unittest
+from datetime import datetime, timedelta, timezone
 
 from digital_twin.application.ontology_world_projection_service import OntologyWorldProjectionRunner
 from digital_twin.domain.ontology_contracts import OntologyEntity, PortfolioOntology
@@ -14,6 +15,7 @@ class FakeOutbox:
         self.pruned = 0
         self.rebuild_requeue_result = None
         self.rebuild_requeue_limits = []
+        self.summary_payload = None
 
     def claim(self, worker_id, limit, lease_seconds):
         claimed = self.jobs[:limit]
@@ -38,6 +40,8 @@ class FakeOutbox:
         return self.pruned
 
     def summary(self):
+        if self.summary_payload is not None:
+            return dict(self.summary_payload)
         return {"enabled": True, "pendingCount": len(self.jobs)}
 
     def max_payload_bytes(self):
@@ -61,6 +65,17 @@ class FakeRecorder:
     def project_shared_world_update(self, graph, world, projection_kind="market"):
         self.calls.append((graph, world, projection_kind))
         return dict(self.result)
+
+
+class FakeStateStore:
+    def __init__(self, payload=None):
+        self.payload = dict(payload or {})
+
+    def load(self):
+        return dict(self.payload)
+
+    def replace(self, payload):
+        self.payload = dict(payload or {})
 
 
 class FakeMaintenanceRepository:
@@ -143,6 +158,7 @@ class OntologyWorldProjectionRunnerTests(unittest.TestCase):
             reasoning_queue_probe=lambda: {
                 "status": "healthy",
                 "effectivePendingCount": 2,
+                "runningEntryCount": 1,
                 "pendingSymbolCount": 2,
                 "queueMode": "priority-selected",
             },
@@ -155,6 +171,36 @@ class OntologyWorldProjectionRunnerTests(unittest.TestCase):
         self.assertEqual(1, len(outbox.jobs))
         self.assertEqual([], recorder.calls)
         self.assertEqual(2, result["reasoningQueue"]["effectivePendingCount"])
+        self.assertEqual("active-reasoning-lease", result["backgroundFairness"]["reasonCode"])
+
+    def test_aged_shared_projection_gets_one_fairness_turn_between_reasoning_leases(self):
+        outbox = FakeOutbox([projection_job()])
+        outbox.summary_payload = {
+            "enabled": True,
+            "pendingCount": 1,
+            "states": {
+                "pending": {
+                    "count": 1,
+                    "oldestAt": (datetime.now(timezone.utc) - timedelta(minutes=15)).isoformat().replace("+00:00", "Z"),
+                },
+            },
+        }
+        state = FakeStateStore()
+        recorder = FakeRecorder({"status": "ok", "saved": True})
+        runner = OntologyWorldProjectionRunner(
+            outbox,
+            recorder,
+            settings={"ontologyWorldProjectionMaxReasoningDeferralSeconds": "30"},
+            reasoning_queue_probe=lambda: {"effectivePendingCount": 2, "runningEntryCount": 0},
+            fairness_state_store=state,
+        )
+
+        result = runner.run_once(limit=1)
+
+        self.assertEqual(1, result["completedCount"])
+        self.assertTrue(result["backgroundFairness"]["fairnessGranted"])
+        self.assertTrue(state.payload["lastFairnessAttemptAt"])
+        self.assertEqual(1, len(recorder.calls))
 
     def test_reset_rebuild_replays_latest_durable_job_before_live_reasoning(self):
         job = projection_job()

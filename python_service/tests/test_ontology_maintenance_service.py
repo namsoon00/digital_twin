@@ -1,4 +1,5 @@
 import unittest
+from datetime import datetime, timedelta, timezone
 import sys
 from pathlib import Path
 
@@ -113,6 +114,7 @@ class OntologyMaintenanceRunnerTests(unittest.TestCase):
             reasoning_queue_probe=lambda: {
                 "status": "healthy",
                 "effectivePendingCount": 2,
+                "runningEntryCount": 1,
                 "pendingSymbolCount": 1,
             },
         )
@@ -122,6 +124,28 @@ class OntologyMaintenanceRunnerTests(unittest.TestCase):
         self.assertEqual("deferred-reasoning-queue", result["status"])
         self.assertEqual(2, result["reasoningQueue"]["effectivePendingCount"])
         self.assertEqual([], repository.calls)
+        self.assertEqual("active-reasoning-lease", result["backgroundFairness"]["reasonCode"])
+
+    def test_aged_maintenance_gets_one_fairness_turn_between_reasoning_leases(self):
+        repository = FakeOntologyRepository()
+        store = FakeStateStore({
+            "reasoningQueueDeferredSinceAt": (
+                datetime.now(timezone.utc) - timedelta(minutes=10)
+            ).isoformat().replace("+00:00", "Z"),
+        })
+        runner = OntologyMaintenanceRunner(
+            repository,
+            state_store=store,
+            settings={"ontologyAboxMaintenanceMaxReasoningDeferralSeconds": "30"},
+            reasoning_queue_probe=lambda: {"effectivePendingCount": 2, "runningEntryCount": 0},
+        )
+
+        result = runner.run_once()
+
+        self.assertEqual("ok", result["status"])
+        self.assertTrue(result["backgroundFairness"]["fairnessGranted"])
+        self.assertTrue(store.payload["lastFairnessAttemptAt"])
+        self.assertEqual(1, len(repository.calls))
 
     def test_maintenance_yields_when_another_world_owns_typedb_writer(self):
         class BusyCoordinatorRepository(FakeOntologyRepository):

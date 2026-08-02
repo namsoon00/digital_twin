@@ -298,6 +298,18 @@ class MySQLOntologyMaintenanceStateStore(MySQLAppStore):
     store_id = "ontology_maintenance_state"
 
 
+class MySQLOntologyWorldProjectionStateStore(MySQLAppStore):
+    """Keeps bounded fairness state for shared-world projection work."""
+
+    store_id = "ontology_world_projection_state"
+
+
+class MySQLOntologyInferenceDetailStateStore(MySQLAppStore):
+    """Keeps bounded fairness state for deferred InferenceBox readback."""
+
+    store_id = "ontology_inference_detail_state"
+
+
 class MySQLOntologyRuleboxPrewarmStateStore(MySQLAppStore):
     """Shares a bounded RuleBox compiler hand-off without storing graph data."""
 

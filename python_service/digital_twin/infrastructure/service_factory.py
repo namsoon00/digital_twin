@@ -798,6 +798,7 @@ def build_ontology_world_projection_runner(settings=None) -> OntologyWorldProjec
         worker_id=os.environ.get("ONTOLOGY_WORLD_PROJECTION_WORKER_ID") or "",
         reasoning_queue_probe=build_ontology_reasoning_queue_probe(configured_settings),
         storage_guard=lambda: typedb_storage_health(configured_settings),
+        fairness_state_store=stores.ontology_world_projection_state_store(store_settings),
     )
 
 
@@ -813,6 +814,7 @@ def build_ontology_inference_detail_runner(settings=None) -> OntologyInferenceDe
         settings=configured_settings,
         worker_id=os.environ.get("ONTOLOGY_INFERENCE_DETAIL_WORKER_ID") or "",
         reasoning_queue_probe=build_ontology_reasoning_queue_probe(configured_settings),
+        fairness_state_store=stores.ontology_inference_detail_state_store(store_settings),
     )
 
 

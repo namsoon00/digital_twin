@@ -13,9 +13,11 @@ from .mysql_operational_core_stores import (
     MySQLDataPipelineHealthStore,
     MySQLExternalSignalCache,
     MySQLOperationalStorageCapacityStateStore,
+    MySQLOntologyInferenceDetailStateStore,
     MySQLOntologyMaintenanceStateStore,
     MySQLOntologyRuleboxPrewarmStateStore,
     MySQLOntologyReasoningCursorStore,
+    MySQLOntologyWorldProjectionStateStore,
     MySQLRuntimeSettingsStore,
 )
 from .mysql_notification_config import MySQLNotificationRuleStore, MySQLNotificationTemplateStore

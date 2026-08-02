@@ -8,7 +8,7 @@ world and inference store.
 
 from __future__ import annotations
 
-from datetime import datetime
+from datetime import datetime, timezone
 from typing import Dict, Iterable, List, Mapping
 
 
@@ -17,6 +17,7 @@ NATIVE_RULE_TIMING_PROFILE_VERSION = "typedb-native-rule-timing-v1"
 NATIVE_RULE_ADAPTIVE_TARGET_SHARDING_PROFILE_VERSION = "typedb-native-rule-adaptive-target-sharding-v1"
 NATIVE_REPLAY_VALIDATION_VERSION = "typedb-native-replay-validation-v1"
 SCOPED_ABOX_MAINTENANCE_POLICY_VERSION = "typedb-scoped-abox-maintenance-policy-v2"
+BACKGROUND_WORK_FAIRNESS_POLICY_VERSION = "ontology-background-work-fairness-v1"
 DISABLED_VALUES = {"0", "false", "no", "off", "disabled"}
 
 
@@ -48,6 +49,130 @@ def _setting_number(
     raw_value = (settings or {}).get(key)
     value = fallback if raw_value in (None, "") else _number(raw_value, fallback)
     return max(minimum, min(maximum, value))
+
+
+def _timestamp(value: object) -> datetime | None:
+    raw = _text(value)
+    if not raw:
+        return None
+    try:
+        parsed = datetime.fromisoformat(raw.replace("Z", "+00:00"))
+    except ValueError:
+        return None
+    return parsed.replace(tzinfo=timezone.utc) if parsed.tzinfo is None else parsed.astimezone(timezone.utc)
+
+
+def _elapsed_seconds(value: object, now: datetime) -> int:
+    parsed = _timestamp(value)
+    if not parsed:
+        return 0
+    return max(0, int((now - parsed).total_seconds()))
+
+
+def bounded_background_work_fairness(
+    *,
+    reasoning_pending_count: object,
+    active_reasoning_count: object,
+    background_work_pending: bool,
+    oldest_background_work_at: object,
+    last_fairness_at: object = "",
+    max_deferral_seconds: object = 600,
+    fairness_cooldown_seconds: object = 60,
+    now: datetime = None,
+) -> Dict[str, object]:
+    """Decide whether an aged background task may use one bounded turn.
+
+    Live investment reasoning retains normal priority. A background task is
+    considered only when the durable queue proves that no reasoning lease is
+    running. This prevents background work from starving forever under a
+    continuously non-empty mailbox without permitting concurrent TypeDB
+    writers.
+    """
+
+    current = now or datetime.now(timezone.utc)
+    if current.tzinfo is None:
+        current = current.replace(tzinfo=timezone.utc)
+    current = current.astimezone(timezone.utc)
+    pending = max(0, _integer(reasoning_pending_count))
+    active_known = active_reasoning_count not in (None, "")
+    active = max(0, _integer(active_reasoning_count)) if active_known else 0
+    maximum = max(15, min(24 * 60 * 60, _integer(max_deferral_seconds, 600)))
+    cooldown = max(10, min(60 * 60, _integer(fairness_cooldown_seconds, 60)))
+    oldest = _text(oldest_background_work_at)
+    last_grant = _text(last_fairness_at)
+    wait_seconds = _elapsed_seconds(oldest, current)
+    last_grant_age = _elapsed_seconds(last_grant, current)
+    cooldown_remaining = max(0, cooldown - last_grant_age) if last_grant else 0
+    checked_at = current.isoformat().replace("+00:00", "Z")
+
+    result = {
+        "version": BACKGROUND_WORK_FAIRNESS_POLICY_VERSION,
+        "checkedAt": checked_at,
+        "reasoningPendingCount": pending,
+        "activeReasoningKnown": active_known,
+        "activeReasoningCount": active if active_known else None,
+        "backgroundWorkPending": bool(background_work_pending),
+        "oldestBackgroundWorkAt": oldest,
+        "backgroundWaitSeconds": wait_seconds,
+        "lastFairnessAt": last_grant,
+        "lastFairnessAgeSeconds": last_grant_age if last_grant else None,
+        "maxDeferralSeconds": maximum,
+        "fairnessCooldownSeconds": cooldown,
+        "cooldownRemainingSeconds": cooldown_remaining,
+        "deferred": False,
+        "fairnessGranted": False,
+        "reasonCode": "reasoning-idle",
+        "reason": "라이브 추론 대기열이 비어 있어 배경 작업을 실행할 수 있습니다.",
+    }
+    if not background_work_pending:
+        result.update({
+            "reasonCode": "background-idle",
+            "reason": "처리할 배경 작업이 없습니다.",
+        })
+        return result
+    if pending <= 0:
+        return result
+    if not active_known:
+        result.update({
+            "deferred": True,
+            "reasonCode": "active-lease-unknown",
+            "reason": "라이브 추론 lease 상태를 확인할 수 없어 배경 작업을 유예합니다.",
+        })
+        return result
+    if active > 0:
+        result.update({
+            "deferred": True,
+            "reasonCode": "active-reasoning-lease",
+            "reason": "실행 중인 라이브 추론 lease가 있어 배경 작업을 유예합니다.",
+        })
+        return result
+    if not oldest:
+        result.update({
+            "deferred": True,
+            "reasonCode": "background-age-unknown",
+            "reason": "배경 작업의 대기 시작 시각이 없어 공정 실행을 아직 허용하지 않습니다.",
+        })
+        return result
+    if wait_seconds < maximum:
+        result.update({
+            "deferred": True,
+            "reasonCode": "background-within-deferral-budget",
+            "reason": "라이브 추론 우선 기간 안이어서 배경 작업을 유예합니다.",
+        })
+        return result
+    if cooldown_remaining > 0:
+        result.update({
+            "deferred": True,
+            "reasonCode": "fairness-cooldown",
+            "reason": "직전 공정 실행 뒤 최소 간격이 남아 있어 배경 작업을 유예합니다.",
+        })
+        return result
+    result.update({
+        "fairnessGranted": True,
+        "reasonCode": "aged-background-turn",
+        "reason": "실행 중인 라이브 추론 없이 배경 작업 대기 시간이 한도를 넘어 제한된 공정 실행을 허용합니다.",
+    })
+    return result
 
 
 def runtime_slo_policy(settings: Mapping[str, object] = None) -> Dict[str, object]:

@@ -13,6 +13,8 @@ import time
 import uuid
 from typing import Dict, List, Mapping, Tuple
 
+from ..domain.ontology_runtime_operations import bounded_background_work_fairness
+
 
 SUCCESS_STATUSES = {"ok", "empty"}
 
@@ -48,13 +50,16 @@ class OntologyInferenceDetailRunner:
         settings: Dict[str, object] = None,
         worker_id: str = "",
         reasoning_queue_probe=None,
+        fairness_state_store=None,
     ):
         self.outbox = outbox
         self.ontology_repository = ontology_repository
         self.settings = dict(settings or {})
         self.worker_id = str(worker_id or "ontology-inference-detail-" + uuid.uuid4().hex[:12])
         self.reasoning_queue_probe = reasoning_queue_probe
+        self.fairness_state_store = fairness_state_store
         self.last_run_details: List[str] = []
+        self.last_background_fairness: Dict[str, object] = {}
 
     def batch_size(self) -> int:
         # Full snapshots can involve a sizable TypeDB traversal. One idle job
@@ -100,6 +105,142 @@ class OntologyInferenceDetailRunner:
         ).strip().lower()
         return value not in {"0", "false", "no", "off", "disabled"}
 
+    def background_fairness_enabled(self) -> bool:
+        value = str(
+            self.settings.get("ontologyBackgroundWorkFairnessEnabled") or "1"
+        ).strip().lower()
+        return value not in {"0", "false", "no", "off", "disabled"}
+
+    def max_reasoning_deferral_seconds(self) -> int:
+        return _integer_setting(
+            self.settings,
+            "ontologyInferenceDetailMaxReasoningDeferralSeconds",
+            900,
+            30,
+            24 * 60 * 60,
+        )
+
+    def fairness_cooldown_seconds(self) -> int:
+        return _integer_setting(
+            self.settings,
+            "ontologyBackgroundWorkFairnessCooldownSeconds",
+            60,
+            10,
+            60 * 60,
+        )
+
+    def fairness_state(self) -> Dict[str, object]:
+        store = self.fairness_state_store
+        reader = getattr(store, "load", None)
+        if not callable(reader):
+            return {}
+        try:
+            value = reader()
+        except Exception:  # noqa: BLE001 - diagnostics may run without their optional audit checkpoint.
+            return {}
+        return dict(value or {}) if isinstance(value, dict) else {}
+
+    def save_fairness_state(self, payload: Dict[str, object]) -> None:
+        store = self.fairness_state_store
+        writer = getattr(store, "replace", None)
+        if not callable(writer):
+            writer = getattr(store, "save", None)
+        if not callable(writer):
+            return
+        try:
+            writer(dict(payload or {}))
+        except Exception:
+            return
+
+    def outbox_summary(self) -> Dict[str, object]:
+        try:
+            value = self.outbox.summary()
+        except Exception:  # noqa: BLE001 - an unavailable audit summary must preserve live priority.
+            return {"status": "unavailable"}
+        return dict(value or {}) if isinstance(value, dict) else {"status": "invalid"}
+
+    @staticmethod
+    def nonnegative(value: object) -> int:
+        try:
+            return max(0, int(float(value or 0)))
+        except (TypeError, ValueError):
+            return 0
+
+    @staticmethod
+    def active_reasoning_count(state: Mapping[str, object]):
+        values = dict(state or {}) if isinstance(state, Mapping) else {}
+        mailbox = values.get("mailbox") if isinstance(values.get("mailbox"), Mapping) else {}
+        counts = []
+        for source in (values, mailbox):
+            if "runningEntryCount" not in source:
+                continue
+            try:
+                counts.append(max(0, int(float(source.get("runningEntryCount") or 0))))
+            except (TypeError, ValueError):
+                continue
+        return max(counts) if counts else None
+
+    def pending_background_work(self, summary: Mapping[str, object]) -> Dict[str, object]:
+        values = dict(summary or {}) if isinstance(summary, Mapping) else {}
+        states = values.get("states") if isinstance(values.get("states"), Mapping) else {}
+        pending_state = states.get("pending") if isinstance(states.get("pending"), Mapping) else {}
+        pending_count = self.nonnegative(values.get("pendingCount") or pending_state.get("count"))
+        return {
+            "pendingCount": pending_count,
+            "oldestAt": str(pending_state.get("oldestAt") or values.get("oldestPendingAt") or "").strip(),
+            "summaryStatus": str(values.get("status") or "ok").strip() or "ok",
+        }
+
+    def background_fairness_decision(
+        self,
+        reasoning_queue: Mapping[str, object] = None,
+        commit_fairness: bool = False,
+    ) -> Dict[str, object]:
+        queue = dict(reasoning_queue or self.reasoning_queue_state())
+        pending = self.reasoning_pending_count(queue)
+        active = self.active_reasoning_count(queue)
+        state = self.fairness_state()
+        fairness_enabled = self.background_fairness_enabled()
+        backlog = {"pendingCount": None, "oldestAt": "", "summaryStatus": "not-read"}
+        if pending > 0 and active == 0 and fairness_enabled:
+            backlog = self.pending_background_work(self.outbox_summary())
+        background_pending = bool(backlog.get("pendingCount")) if backlog.get("pendingCount") is not None else pending > 0
+        decision = bounded_background_work_fairness(
+            reasoning_pending_count=pending,
+            active_reasoning_count=active,
+            background_work_pending=background_pending,
+            oldest_background_work_at=backlog.get("oldestAt"),
+            last_fairness_at=state.get("lastFairnessAttemptAt"),
+            max_deferral_seconds=self.max_reasoning_deferral_seconds(),
+            fairness_cooldown_seconds=self.fairness_cooldown_seconds(),
+        )
+        if not fairness_enabled and pending > 0:
+            decision.update({
+                "deferred": True,
+                "fairnessGranted": False,
+                "reasonCode": "fairness-disabled",
+                "reason": "공정 실행이 비활성화되어 라이브 추론 우선 정책을 유지합니다.",
+            })
+        decision.update({
+            "worker": "ontology-inference-detail",
+            "enabled": fairness_enabled,
+            "outbox": backlog,
+        })
+        if bool(decision.get("fairnessGranted")) and commit_fairness:
+            self.save_fairness_state({
+                **state,
+                "lastFairnessAttemptAt": str(decision.get("checkedAt") or ""),
+                "lastFairness": {
+                    key: decision.get(key)
+                    for key in [
+                        "version", "checkedAt", "reasonCode", "backgroundWaitSeconds",
+                        "maxDeferralSeconds", "fairnessCooldownSeconds", "outbox",
+                    ]
+                },
+            })
+        self.last_background_fairness = dict(decision)
+        return decision
+
     def reasoning_queue_state(self) -> Dict[str, object]:
         if not callable(self.reasoning_queue_probe):
             return {"status": "not-configured", "effectivePendingCount": 0}
@@ -127,11 +268,27 @@ class OntologyInferenceDetailRunner:
                 return value
         return 0
 
-    def reasoning_queue_deferral(self) -> Dict[str, object]:
+    def reasoning_queue_deferral(self, commit_fairness: bool = False) -> Dict[str, object]:
         reasoning_queue = self.reasoning_queue_state()
         pending = self.reasoning_pending_count(reasoning_queue)
         if not self.defer_while_reasoning_pending() or pending <= 0:
+            self.last_background_fairness = {}
             return {}
+        fairness = self.background_fairness_decision(reasoning_queue, commit_fairness=commit_fairness)
+        if bool(fairness.get("fairnessGranted")):
+            return {}
+        if not bool(fairness.get("backgroundWorkPending")):
+            return {
+                "status": "idle-no-background-work",
+                "workerId": self.worker_id,
+                "claimedCount": 0,
+                "completedCount": 0,
+                "supersededCount": 0,
+                "retryCount": 0,
+                "reasoningQueue": reasoning_queue,
+                "backgroundFairness": fairness,
+                "reason": "라이브 추론 대기 중이지만 처리할 상세 InferenceBox 읽기 작업이 없습니다.",
+            }
         return {
             "status": "deferred-reasoning-queue",
             "workerId": self.worker_id,
@@ -140,6 +297,7 @@ class OntologyInferenceDetailRunner:
             "supersededCount": 0,
             "retryCount": 0,
             "reasoningQueue": reasoning_queue,
+            "backgroundFairness": fairness,
             "reason": (
                 "라이브 TypeDB 추론 요청이 " + str(pending)
                 + "건 남아 있어 상세 InferenceBox 읽기를 유예합니다."
@@ -147,6 +305,8 @@ class OntologyInferenceDetailRunner:
         }
 
     def status(self) -> Dict[str, object]:
+        reasoning_queue = self.reasoning_queue_state()
+        fairness = self.background_fairness_decision(reasoning_queue)
         return {
             "workerId": self.worker_id,
             "batchSize": self.batch_size(),
@@ -154,8 +314,10 @@ class OntologyInferenceDetailRunner:
             "maxAttempts": self.max_attempts(),
             "completedRetentionHours": self.completed_retention_hours(),
             "deferWhenReasoningPending": self.defer_while_reasoning_pending(),
-            "reasoningQueue": self.reasoning_queue_state(),
-            "outbox": dict(self.outbox.summary() or {}),
+            "reasoningQueue": reasoning_queue,
+            "backgroundFairness": fairness,
+            "fairnessState": self.fairness_state(),
+            "outbox": self.outbox_summary(),
         }
 
     def inferencebox_snapshot(self, job: Mapping[str, object]) -> Dict[str, object]:
@@ -235,7 +397,7 @@ class OntologyInferenceDetailRunner:
 
     def run_once(self, limit: int = 0) -> Dict[str, object]:
         started = time.monotonic()
-        deferred = self.reasoning_queue_deferral()
+        deferred = self.reasoning_queue_deferral(commit_fairness=True)
         if deferred:
             self.last_run_details = ["deferred-reasoning-queue"]
             return {
@@ -303,7 +465,7 @@ class OntologyInferenceDetailRunner:
             except Exception:  # noqa: BLE001 - retention must not block future audit reads.
                 pruned = 0
         self.last_run_details = details
-        return {
+        result = {
             "status": "ok",
             "workerId": self.worker_id,
             "claimedCount": len(jobs),
@@ -317,3 +479,6 @@ class OntologyInferenceDetailRunner:
             "prunedCompletedCount": pruned,
             "durationMs": int((time.monotonic() - started) * 1000),
         }
+        if bool(self.last_background_fairness.get("fairnessGranted")):
+            result["backgroundFairness"] = dict(self.last_background_fairness)
+        return result

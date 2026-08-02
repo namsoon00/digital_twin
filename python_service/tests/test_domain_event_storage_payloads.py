@@ -2,6 +2,7 @@ import json
 import unittest
 
 from digital_twin.domain.events import (
+    DOMAIN_EVENT_SCHEMA_VERSION,
     DomainEvent,
     domain_event_storage_payload,
     ontology_reasoning_requested_event,
@@ -10,6 +11,23 @@ from digital_twin.domain.events import (
 
 
 class DomainEventStoragePayloadTests(unittest.TestCase):
+    def test_domain_event_schema_version_is_explicit_and_backward_compatible(self):
+        event = DomainEvent(name="market_data.collected", aggregate_id="market:005930")
+
+        self.assertEqual(DOMAIN_EVENT_SCHEMA_VERSION, event.to_dict()["schema_version"])
+        self.assertEqual(
+            DOMAIN_EVENT_SCHEMA_VERSION,
+            DomainEvent.from_dict({"name": event.name, "aggregateId": event.aggregate_id}).schema_version,
+        )
+        self.assertEqual(
+            "domain-event-v2",
+            DomainEvent.from_dict({
+                "name": event.name,
+                "aggregate_id": event.aggregate_id,
+                "schemaVersion": "domain-event-v2",
+            }).schema_version,
+        )
+
     def large_delta(self):
         return {
             "evidenceId": "evidence:TSLA:1",

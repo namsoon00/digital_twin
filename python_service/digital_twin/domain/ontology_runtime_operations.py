@@ -616,6 +616,50 @@ def _cleanup_summary(result: Mapping[str, object]) -> Dict[str, object]:
     }
 
 
+def compact_abox_relation_persistence(value: object) -> Dict[str, object]:
+    """Keep scoped ABox relation-write telemetry bounded in durable audit rows."""
+    raw = dict(value or {}) if isinstance(value, Mapping) else {}
+    if not raw:
+        return {}
+
+    def histogram(value: object) -> Dict[str, object]:
+        source = dict(value or {}) if isinstance(value, Mapping) else {}
+        items = source.get("items") if isinstance(source.get("items"), list) else []
+        compact_items = []
+        for item in items[:24]:
+            if not isinstance(item, Mapping):
+                continue
+            key = _text(item.get("key"))
+            if not key:
+                continue
+            compact_items.append({
+                "key": key[:220],
+                "count": max(0, _integer(item.get("count"))),
+            })
+        return {
+            "distinctCount": max(0, _integer(source.get("distinctCount"))),
+            "items": compact_items,
+            "remainingCount": max(0, _integer(source.get("remainingCount"))),
+        }
+
+    def breakdown(value: object) -> Dict[str, object]:
+        source = dict(value or {}) if isinstance(value, Mapping) else {}
+        return {
+            "relationCount": max(0, _integer(source.get("relationCount"))),
+            "byRelationType": histogram(source.get("byRelationType")),
+            "byScopeFamily": histogram(source.get("byScopeFamily")),
+            "bySymbol": histogram(source.get("bySymbol")),
+            "byScope": histogram(source.get("byScope")),
+        }
+
+    return {
+        "version": _text(raw.get("version")),
+        "requested": breakdown(raw.get("requested")),
+        "inserted": breakdown(raw.get("inserted")),
+        "reused": breakdown(raw.get("reused")),
+    }
+
+
 def _stage_timings(result: Mapping[str, object]) -> Dict[str, int]:
     raw = result.get("runtimeStages") if isinstance(result, Mapping) else {}
     values = dict(raw or {}) if isinstance(raw, Mapping) else {}
@@ -1245,6 +1289,7 @@ def build_projection_runtime_observation(
     runtime_identity = dict(runtime_identity or {}) if isinstance(runtime_identity, Mapping) else {}
     target_patch = projection_scope.get("targetScopedManifestPatch")
     target_patch = dict(target_patch or {}) if isinstance(target_patch, Mapping) else {}
+    relation_persistence = compact_abox_relation_persistence(values.get("relationPersistence"))
     stages = _stage_timings(values)
     native_rule_timing = native_rule_timing_profile(execution)
     delta = _scope_delta(plan)
@@ -1406,6 +1451,7 @@ def build_projection_runtime_observation(
             "snapshotId": _text(values.get("aboxSnapshotId") or getattr(projection_run, "abox_snapshot_id", "")),
             "entityCount": _integer(values.get("entityCount") or getattr(projection_run, "entity_count", 0)),
             "relationCount": _integer(values.get("relationCount") or getattr(projection_run, "relation_count", 0)),
+            "relationPersistence": relation_persistence,
             "cleanup": _cleanup_summary(values),
         },
         "stages": stages,

@@ -128,6 +128,25 @@ class OntologyProjectionAuditTests(unittest.TestCase):
         self.assertEqual(["035420", "MSTR"], failure["targetSymbols"])
         self.assertEqual(30, failure["recommendedRetryAfterSeconds"])
 
+    def test_projection_result_summary_keeps_relation_write_breakdown(self):
+        summary = projection_result_summary({
+            "relationPersistence": {
+                "version": "scoped-abox-relation-persistence-v1",
+                "requested": {
+                    "relationCount": 3,
+                    "byRelationType": {"distinctCount": 1, "items": [{"key": "HAS_PRICE", "count": 3}], "remainingCount": 0},
+                    "byScopeFamily": {"distinctCount": 1, "items": [{"key": "market", "count": 3}], "remainingCount": 0},
+                    "bySymbol": {"distinctCount": 1, "items": [{"key": "005930", "count": 3}], "remainingCount": 0},
+                    "byScope": {"distinctCount": 1, "items": [{"key": "link:symbol:005930:market", "count": 3}], "remainingCount": 0},
+                },
+            },
+        })
+
+        metrics = summary["relationPersistence"]
+        self.assertEqual("scoped-abox-relation-persistence-v1", metrics["version"])
+        self.assertEqual(3, metrics["requested"]["relationCount"])
+        self.assertEqual("market", metrics["requested"]["byScopeFamily"]["items"][0]["key"])
+
     def build_run(self):
         snapshot = source_snapshot()
         graph = abox_graph()
@@ -335,6 +354,42 @@ class OntologyProjectionAuditTests(unittest.TestCase):
                 "symbol:005930:link",
                 "symbol:005930:market",
             ],
+            [item["scopeId"] for item in selected],
+        )
+
+    def test_target_reuse_scope_plan_keeps_v4_family_link_for_the_target(self):
+        plan = [
+            {
+                "scopeId": "link:symbol:005930:market",
+                "scopeType": "link",
+                "scopeFamily": "market",
+                "impactScopeFamilies": ["market"],
+                "semanticFingerprints": {"market": "price-link"},
+                "generationId": "target-market-link",
+                "dependencyScopeIds": ["symbol:005930:market", "symbol:000660:state"],
+            },
+            {
+                "scopeId": "symbol:005930:market",
+                "scopeType": "symbol",
+                "scopeFamily": "market",
+                "semanticFingerprints": {"market": "target-price"},
+                "generationId": "target-market",
+                "dependencyScopeIds": [],
+            },
+            {
+                "scopeId": "symbol:000660:state",
+                "scopeType": "symbol",
+                "scopeFamily": "state",
+                "semanticFingerprints": {"state": "other-holding"},
+                "generationId": "other-state",
+                "dependencyScopeIds": [],
+            },
+        ]
+
+        selected = inference_reuse_scope_plan_for_targets(plan, ["005930"])
+
+        self.assertEqual(
+            ["link:symbol:005930:market", "symbol:005930:market"],
             [item["scopeId"] for item in selected],
         )
 

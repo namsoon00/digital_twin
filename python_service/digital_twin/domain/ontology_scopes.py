@@ -16,6 +16,7 @@ from typing import Dict, Iterable, List, Mapping, MutableMapping, Set, Tuple
 
 from .ontology_change_impact import (
     DEPENDENCY_FINGERPRINT_VERSION,
+    SYMBOL_SCOPE_FAMILIES,
     family_for_field,
     family_for_entity,
     family_for_relation,
@@ -31,7 +32,7 @@ from .ontology_worlds import world_scoped_scope_id
 
 SCOPED_ABOX_MANIFEST_VERSION = "scoped-manifest-v1"
 SCOPED_ABOX_PERSISTENCE_MODE = "immutable-scoped-manifest"
-SCOPED_ABOX_SCOPE_TOPOLOGY_VERSION = "granular-v3-relation-links"
+SCOPED_ABOX_SCOPE_TOPOLOGY_VERSION = "granular-v4-family-links"
 
 REFERENCE_SCOPE_ID = "reference:global"
 MACRO_SCOPE_ID = "macro:global"
@@ -213,22 +214,29 @@ def relation_link_scope_id(
     target_scope: object,
     account_id: object = "",
     symbol: object = "",
+    relation_family: object = "",
 ) -> str:
-    """Return a relation-only owner scope for a cross-scope ABox edge.
+    """Return a fact-family relation-only owner for a cross-scope ABox edge.
 
     Immutable TypeDB generations give every node a generation-scoped storage
     identity. Storing a cross-scope edge beside either endpoint therefore
     forced that endpoint's whole fact family to roll whenever the other side
     changed. A relation-only link scope owns the edge instead: endpoint facts
-    remain independently versioned and only the link is rebound.
+    remain independently versioned and only the link is rebound. The factual
+    family prevents a market update from recreating the same symbol's flow,
+    evidence, valuation, or exposure relationships.
     """
 
+    clean_family = _clean(relation_family).lower()
+    if clean_family not in SYMBOL_SCOPE_FAMILIES and not clean_family.startswith("macro-"):
+        clean_family = "state"
+    clean_account_id = re.sub(r"[^A-Za-z0-9_.-]+", "-", _clean(account_id)).strip("-.") or "global"
     clean_symbol = _symbol(symbol)
     if not clean_symbol:
         clean_symbol = scope_symbol(source_scope) or scope_symbol(target_scope)
     if clean_symbol:
-        return symbol_scope_id(clean_symbol, "link")
-    return _scope_id("link", _clean(account_id) or "global")
+        return "link:symbol:" + clean_symbol + ":" + clean_family
+    return "link:account:" + clean_account_id + ":" + clean_family
 
 
 def _id_symbol(entity_id: object) -> str:
@@ -365,6 +373,16 @@ def scope_id_for_relation(
     source_symbol = scope_symbol(source_scope)
     target_symbol = scope_symbol(target_scope)
     symbol = _symbol(properties.get("symbol"))
+    source_entity = (entities_by_id or {}).get(source_id)
+    target_entity = (entities_by_id or {}).get(target_id)
+    relation_family = family_for_relation(
+        relation.relation_type,
+        properties,
+        scope_family(source_scope),
+        scope_family(target_scope),
+        getattr(source_entity, "kind", ""),
+        getattr(target_entity, "kind", ""),
+    )
     macro_scopes = [
         scope_id
         for scope_id in [source_scope, target_scope]
@@ -378,26 +396,22 @@ def scope_id_for_relation(
         # provenance. They are still a global cross-scope edge, not a holding
         # or watchlist link for that ticker.
         if symbol and macro_scopes and not source_symbol and not target_symbol:
-            return _scope_id("link", account_id)
+            return relation_link_scope_id(
+                "",
+                "",
+                account_id,
+                relation_family=relation_family,
+            )
         return relation_link_scope_id(
             source_scope,
             target_scope,
             account_id,
             symbol,
+            relation_family,
         )
     explicit = _clean(properties.get("aboxScopeId"))
     if explicit:
         return explicit
-    source_entity = (entities_by_id or {}).get(source_id)
-    target_entity = (entities_by_id or {}).get(target_id)
-    relation_family = family_for_relation(
-        relation.relation_type,
-        properties,
-        scope_family(source_scope),
-        scope_family(target_scope),
-        getattr(source_entity, "kind", ""),
-        getattr(target_entity, "kind", ""),
-    )
     # Market-proxy relationships carry their observed ticker for provenance.
     # That ticker must not turn a global market sensor into a pseudo holding.
     if symbol and macro_scopes and not source_symbol and not target_symbol:
@@ -474,6 +488,7 @@ def _support_relation_specs(
             target_scope,
             account_id,
             values.get("symbol"),
+            "evidence",
         )
         if world_id:
             scope_id = world_scoped_scope_id(scope_id, world_id)

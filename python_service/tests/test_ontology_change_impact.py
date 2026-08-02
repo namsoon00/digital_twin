@@ -7,7 +7,9 @@ from digital_twin.domain.ontology_change_impact import (
     family_for_relation,
     rule_condition_dependency_profile,
     rule_dependency_profile,
+    scope_family,
     scope_delta,
+    scope_symbol,
 )
 from digital_twin.domain.ontology_contracts import OntologyEntity, OntologyEvidence, OntologyRelation, PortfolioOntology
 from digital_twin.domain.ontology_scopes import (
@@ -75,8 +77,8 @@ class OntologyChangeImpactTests(unittest.TestCase):
         self.assertEqual("symbol:005930:temporal", entity_scopes["temporal-window:005930:5d"])
         self.assertEqual("symbol:005930:evidence", entity_scopes["news-article:005930:1"])
         self.assertEqual("macro:market", entity_scopes["market-proxy-instrument:QQQ"])
-        self.assertEqual("link:main", relation_scopes["OBSERVES_MARKET_PROXY"])
-        self.assertEqual("symbol:005930:link", relation_scopes["HAS_TRADE_FLOW"])
+        self.assertEqual("link:account:main:exposure", relation_scopes["OBSERVES_MARKET_PROXY"])
+        self.assertEqual("link:symbol:005930:flow", relation_scopes["HAS_TRADE_FLOW"])
 
         first_generations = dict(first["scopeGenerationIds"])
         flow = next(item for item in graph.entities if item.entity_id == "flow-metric:005930:volume")
@@ -88,6 +90,13 @@ class OntologyChangeImpactTests(unittest.TestCase):
         self.assertEqual(first_generations["symbol:005930:market"], second_generations["symbol:005930:market"])
         self.assertEqual(first_generations["symbol:005930:state"], second_generations["symbol:005930:state"])
         self.assertEqual(first_generations["macro:market"], second_generations["macro:market"])
+
+    def test_family_link_scope_keeps_symbol_routing_and_fact_family(self):
+        scope_id = "link:symbol:005930:flow:world:abc123"
+
+        self.assertEqual("005930", scope_symbol(scope_id))
+        self.assertEqual("flow", scope_family(scope_id))
+        self.assertEqual("link", scope_family("link:main"))
 
     def test_scope_identity_ignores_display_label_only_changes(self):
         graph = self.scope_graph()

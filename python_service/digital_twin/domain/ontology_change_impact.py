@@ -126,6 +126,16 @@ def scope_symbol(scope_id: object) -> str:
     parts = [item.strip() for item in _clean(scope_id).split(":")]
     if len(parts) >= 2 and parts[0] == "symbol" and parts[1]:
         return parts[1].upper()
+    # v4 relation-only scopes retain the affected instrument for routing.
+    # Any world suffix is appended after the family and leaves this prefix
+    # unchanged.
+    if (
+        len(parts) >= 4
+        and parts[0].lower() == "link"
+        and parts[1].lower() == "symbol"
+        and parts[2]
+    ):
+        return parts[2].upper()
     return ""
 
 
@@ -136,13 +146,21 @@ def scope_family(scope_id: object) -> str:
         return "reference"
     if parts[0] == "symbol":
         return parts[2] if len(parts) >= 3 and parts[2] in SYMBOL_SCOPE_FAMILIES else "state"
+    if parts[0] == "link":
+        # v4 uses relation-only scopes of the form
+        # ``link:symbol:<ticker>:<family>`` or
+        # ``link:account:<account>:<family>``. Keep legacy ``link:<owner>``
+        # readable while active v3 manifests drain.
+        if len(parts) >= 4 and parts[1] in {"symbol", "account"}:
+            family = parts[3]
+            if family in SYMBOL_SCOPE_FAMILIES or family.startswith("macro-"):
+                return family
+        return "link"
     if parts[0] == "macro":
         family = parts[1] if len(parts) >= 2 else "market"
         return "macro-" + family if not family.startswith("macro-") else family
     if parts[0] in {"portfolio", "policy", "episode", "evidence", "reference"}:
         return parts[0]
-    if parts[0] == "link":
-        return "link"
     return parts[0]
 
 

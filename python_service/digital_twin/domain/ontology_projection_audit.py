@@ -5,7 +5,11 @@ from typing import Dict, Iterable, List, Mapping
 
 from .ontology_change_impact import compact_inference_impact_plan, scope_symbol
 from .ontology_contracts import PortfolioOntology
-from .ontology_runtime_operations import native_replay_validation, native_rule_timing_profile
+from .ontology_runtime_operations import (
+    compact_abox_relation_persistence,
+    native_replay_validation,
+    native_rule_timing_profile,
+)
 from .portfolio import AccountSnapshot, utc_now_iso
 
 
@@ -382,6 +386,7 @@ def projection_result_summary(result: Dict[str, object]) -> Dict[str, object]:
         },
         "scopeTopologyVersion": str(projection_scope.get("scopeTopologyVersion") or ""),
         "scopeFamilyCounts": dict(projection_scope.get("scopeFamilyCounts") or {}),
+        "relationPersistence": compact_abox_relation_persistence(values.get("relationPersistence")),
         "targetScopedManifestPatch": {
             "status": str(target_patch.get("status") or ""),
             "mode": str(target_patch.get("mode") or ""),

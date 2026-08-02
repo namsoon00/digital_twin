@@ -39,7 +39,7 @@ from ..domain.ontology_rulebox_governance import (
     rulebox_rules_hash,
     rulebox_version_payload,
 )
-from ..domain.ontology_change_impact import compact_inference_impact_plan
+from ..domain.ontology_change_impact import compact_inference_impact_plan, scope_family, scope_symbol
 from ..domain.ontology_native_rule_planning import normalize_native_rule_planner_topology
 from ..domain.ontology_runtime_operations import native_rule_timing_profile
 from ..domain.ontology_schema import default_tbox_metadata
@@ -3360,6 +3360,72 @@ class ScopedABoxManifestMixin:
         return counts
 
     @staticmethod
+    def scoped_abox_relation_breakdown(
+        relation_rows: Iterable[Dict[str, object]],
+        bucket_limit: int = 24,
+    ) -> Dict[str, object]:
+        """Return bounded physical-write telemetry for scoped ABox relations.
+
+        The payload is operational audit data, never RuleBox input. It makes
+        a large write attributable to a relation type, factual family,
+        instrument, and owning scope without retaining every relation row.
+        """
+        limit = max(1, int(bucket_limit or 24))
+        counters: Dict[str, Dict[str, int]] = {
+            "relationType": {},
+            "scopeFamily": {},
+            "symbol": {},
+            "scope": {},
+        }
+        relation_count = 0
+
+        def increment(counter: Dict[str, int], key: object) -> None:
+            value = str(key or "").strip() or "shared"
+            counter[value] = counter.get(value, 0) + 1
+
+        for raw in relation_rows or []:
+            row = dict(raw or {})
+            scope_id = str(row.get("scopeId") or "").strip()
+            symbol = scope_symbol(scope_id) or str(row.get("symbol") or "").strip().upper()
+            relation_count += 1
+            increment(counters["relationType"], row.get("type") or "unknown")
+            increment(counters["scopeFamily"], scope_family(scope_id))
+            increment(counters["symbol"], symbol)
+            increment(counters["scope"], scope_id)
+
+        def compact(counter: Dict[str, int]) -> Dict[str, object]:
+            ordered = sorted(counter.items(), key=lambda item: (-item[1], item[0]))
+            selected = ordered[:limit]
+            return {
+                "distinctCount": len(ordered),
+                "items": [
+                    {"key": key, "count": count}
+                    for key, count in selected
+                ],
+                "remainingCount": sum(count for _key, count in ordered[limit:]),
+            }
+
+        return {
+            "version": "scoped-abox-relation-breakdown-v1",
+            "relationCount": relation_count,
+            "byRelationType": compact(counters["relationType"]),
+            "byScopeFamily": compact(counters["scopeFamily"]),
+            "bySymbol": compact(counters["symbol"]),
+            "byScope": compact(counters["scope"]),
+        }
+
+    @staticmethod
+    def scoped_abox_relation_persistence_summary(write_plan: Dict[str, object]) -> Dict[str, object]:
+        """Expose requested, inserted, and reused relation writes for audit."""
+        values = dict(write_plan or {})
+        return {
+            "version": "scoped-abox-relation-persistence-v1",
+            "requested": dict(values.get("requestedRelationBreakdown") or {}),
+            "inserted": dict(values.get("insertedRelationBreakdown") or {}),
+            "reused": dict(values.get("reusedRelationBreakdown") or {}),
+        }
+
+    @staticmethod
     def merged_scoped_abox_counts(
         *count_sets: Dict[str, Dict[str, int]],
     ) -> Dict[str, Dict[str, int]]:
@@ -3567,6 +3633,15 @@ class ScopedABoxManifestMixin:
             "expectedCountsByScope": expected_counts_by_scope,
             "insertedCountsByScope": inserted_counts_by_scope,
             "reusedCountsByScope": reused_counts_by_scope,
+            "requestedRelationBreakdown": self.scoped_abox_relation_breakdown(
+                reuse_plan.get("relationRows") or [],
+            ),
+            "insertedRelationBreakdown": self.scoped_abox_relation_breakdown(
+                relation_rows_to_insert,
+            ),
+            "reusedRelationBreakdown": self.scoped_abox_relation_breakdown(
+                reuse_plan.get("reusedRelationRows") or [],
+            ),
             "relationBatchSize": relation_batch_size,
             "transactionQueryCount": batch_size,
             "transactionCount": (len(queries) + batch_size - 1) // batch_size if queries else 0,
@@ -4638,6 +4713,9 @@ class ScopedABoxManifestMixin:
             timing["totalMs"] = round((time.monotonic() - save_started_at) * 1000, 1)
             activation_status = "staged" if previous_manifest_id != manifest_id else "unchanged"
             release = release_write_lease()
+            relation_persistence = self.scoped_abox_relation_persistence_summary(
+                dict(timing.get("changedScopeWritePlan") or {}),
+            )
             return {
                 "configured": True,
                 "saved": True,
@@ -4656,6 +4734,7 @@ class ScopedABoxManifestMixin:
                 "pendingAboxActivation": pending_after,
                 "changedScopeEntityCount": len(node_rows),
                 "changedScopeRelationCount": len(relation_rows),
+                "relationPersistence": relation_persistence,
                 "orphanCandidateCleanup": orphan_cleanup,
                 "writeLease": {
                     key: value
@@ -4685,6 +4764,9 @@ class ScopedABoxManifestMixin:
                 "reason": "Failed scoped candidate cleanup is deferred to idle maintenance.",
             }
             release = release_write_lease()
+            relation_persistence = self.scoped_abox_relation_persistence_summary(
+                dict(timing.get("changedScopeWritePlan") or {}),
+            )
             return {
                 "configured": True,
                 "saved": False,
@@ -4703,6 +4785,7 @@ class ScopedABoxManifestMixin:
                 "reason": str(error)[:220],
                 "scopeVerification": verification,
                 "timing": timing,
+                "relationPersistence": relation_persistence,
                 "orphanCandidateCleanup": orphan_cleanup,
                 "failedCandidateCleanup": failed_candidate_cleanup,
                 "writeLease": {

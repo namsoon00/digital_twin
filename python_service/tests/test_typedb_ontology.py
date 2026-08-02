@@ -817,12 +817,12 @@ class TypeDBOntologyRepositoryTests(unittest.TestCase):
         second_generations = dict(second["scopeGenerationIds"])
 
         self.assertNotEqual(first_generations["macro:fx"], second_generations["macro:fx"])
-        self.assertNotEqual(first_generations["symbol:MSTR:link"], second_generations["symbol:MSTR:link"])
+        self.assertNotEqual(first_generations["link:symbol:MSTR:exposure"], second_generations["link:symbol:MSTR:exposure"])
         self.assertEqual(first_generations["symbol:MSTR:state"], second_generations["symbol:MSTR:state"])
         self.assertEqual(first_generations["symbol:005930:state"], second_generations["symbol:005930:state"])
 
         repository = TypeDBOntologyGraphRepository("127.0.0.1:1729")
-        nodes, relations = repository.scoped_abox_persistence_rows(graph, ["symbol:MSTR:link"])
+        nodes, relations = repository.scoped_abox_persistence_rows(graph, ["link:symbol:MSTR:exposure"])
         self.assertEqual([], [row["id"] for row in nodes])
         self.assertEqual(1, len(relations))
         macro = next(item for item in graph.entities if item.entity_id == "fx-rate:USDKRW")
@@ -857,12 +857,18 @@ class TypeDBOntologyRepositoryTests(unittest.TestCase):
 
         first = apply_scoped_abox_identity(graph)
         first_generations = dict(first["scopeGenerationIds"])
-        link = next(item for item in first["scopePlan"] if item["scopeId"] == "symbol:005930:link")
-        self.assertEqual(0, link["entityCount"])
-        self.assertEqual(2, link["relationCount"])
+        market_link = next(item for item in first["scopePlan"] if item["scopeId"] == "link:symbol:005930:market")
+        exposure_link = next(item for item in first["scopePlan"] if item["scopeId"] == "link:symbol:005930:exposure")
+        self.assertEqual(0, market_link["entityCount"])
+        self.assertEqual(1, market_link["relationCount"])
         self.assertEqual(
-            {"macro:fx", "symbol:005930:market", "symbol:005930:state"},
-            set(link["dependencyScopeIds"]),
+            {"symbol:005930:market", "symbol:005930:state"},
+            set(market_link["dependencyScopeIds"]),
+        )
+        self.assertEqual(1, exposure_link["relationCount"])
+        self.assertEqual(
+            {"macro:fx", "symbol:005930:state"},
+            set(exposure_link["dependencyScopeIds"]),
         )
 
         graph.entities[1].properties["currentPrice"] = 71000
@@ -870,9 +876,18 @@ class TypeDBOntologyRepositoryTests(unittest.TestCase):
         second_generations = dict(second["scopeGenerationIds"])
 
         self.assertNotEqual(first_generations["symbol:005930:market"], second_generations["symbol:005930:market"])
-        self.assertNotEqual(first_generations["symbol:005930:link"], second_generations["symbol:005930:link"])
+        self.assertNotEqual(first_generations["link:symbol:005930:market"], second_generations["link:symbol:005930:market"])
+        self.assertEqual(first_generations["link:symbol:005930:exposure"], second_generations["link:symbol:005930:exposure"])
         self.assertEqual(first_generations["symbol:005930:state"], second_generations["symbol:005930:state"])
         self.assertEqual(first_generations["macro:fx"], second_generations["macro:fx"])
+        self.assertEqual(
+            {"link:symbol:005930:market", "symbol:005930:market"},
+            {
+                scope_id
+                for scope_id, generation_id in second_generations.items()
+                if first_generations.get(scope_id) != generation_id
+            },
+        )
 
     def test_target_scoped_manifest_patch_retains_untargeted_generations(self):
         graph = PortfolioOntology(
@@ -1248,6 +1263,58 @@ class TypeDBOntologyRepositoryTests(unittest.TestCase):
             result["reusedCountsByScope"],
         )
 
+    def test_scoped_abox_relation_breakdown_groups_family_symbol_and_scope(self):
+        repository = TypeDBOntologyGraphRepository("127.0.0.1:1729")
+        breakdown = repository.scoped_abox_relation_breakdown([
+            {"scopeId": "link:symbol:005930:market", "type": "HAS_PRICE"},
+            {"scopeId": "link:symbol:005930:flow", "type": "HAS_TRADE_FLOW"},
+            {"scopeId": "link:symbol:005930:market", "type": "HAS_PRICE"},
+            {"scopeId": "link:account:main:exposure", "type": "OBSERVES_MARKET_PROXY"},
+        ])
+
+        self.assertEqual(4, breakdown["relationCount"])
+        self.assertEqual(
+            {"HAS_PRICE": 2, "HAS_TRADE_FLOW": 1, "OBSERVES_MARKET_PROXY": 1},
+            {item["key"]: item["count"] for item in breakdown["byRelationType"]["items"]},
+        )
+        self.assertEqual(
+            {"market": 2, "flow": 1, "exposure": 1},
+            {item["key"]: item["count"] for item in breakdown["byScopeFamily"]["items"]},
+        )
+        self.assertEqual(
+            {"005930": 3, "shared": 1},
+            {item["key"]: item["count"] for item in breakdown["bySymbol"]["items"]},
+        )
+
+    def test_scoped_abox_write_reports_requested_inserted_and_reused_relations(self):
+        repository = TypeDBOntologyGraphRepository("127.0.0.1:1729")
+        relation = {
+            "scopeId": "link:symbol:005930:market",
+            "type": "HAS_PRICE",
+        }
+        reuse_plan = {
+            "status": "ok",
+            "nodeRows": [],
+            "relationRows": [relation],
+            "nodeRowsToInsert": [],
+            "relationRowsToInsert": [],
+            "reusedNodeRows": [],
+            "reusedRelationRows": [relation],
+            "conflicts": [],
+        }
+        imported = ((object, object, object, object, SimpleNamespace(WRITE="write")), None)
+
+        with patch.object(repository, "scoped_abox_storage_reuse_plan", return_value=reuse_plan):
+            result = repository.write_persistence_rows(None, imported, [], [relation])
+
+        self.assertEqual(1, result["requestedRelationBreakdown"]["relationCount"])
+        self.assertEqual(0, result["insertedRelationBreakdown"]["relationCount"])
+        self.assertEqual(1, result["reusedRelationBreakdown"]["relationCount"])
+        self.assertEqual(
+            "005930",
+            result["reusedRelationBreakdown"]["bySymbol"]["items"][0]["key"],
+        )
+
     def test_scoped_abox_manifest_count_verification_combines_inserted_and_reused_rows(self):
         repository = TypeDBOntologyGraphRepository("127.0.0.1:1729")
 
@@ -1332,21 +1399,21 @@ class TypeDBOntologyRepositoryTests(unittest.TestCase):
         first = apply_scoped_abox_identity(graph)
         repository = TypeDBOntologyGraphRepository("127.0.0.1:1729")
 
-        nodes, relations = repository.scoped_abox_persistence_rows(graph, ["symbol:005930:link"])
+        nodes, relations = repository.scoped_abox_persistence_rows(graph, ["link:symbol:005930:evidence"])
 
         self.assertEqual(set(), {row["id"] for row in nodes})
         self.assertEqual(["HAS_EVIDENCE"], [row["type"] for row in relations])
-        self.assertTrue(all(row["scopeId"] == "symbol:005930:link" for row in nodes + relations))
+        self.assertTrue(all(row["scopeId"] == "link:symbol:005930:evidence" for row in nodes + relations))
 
         graph.entities[0].properties["currentPrice"] = 71000
         second = apply_scoped_abox_identity(graph)
         first_generations = dict(first["scopeGenerationIds"])
         second_generations = dict(second["scopeGenerationIds"])
         self.assertNotEqual(first_generations["symbol:005930:state"], second_generations["symbol:005930:state"])
-        self.assertNotEqual(first_generations["symbol:005930:link"], second_generations["symbol:005930:link"])
+        self.assertNotEqual(first_generations["link:symbol:005930:evidence"], second_generations["link:symbol:005930:evidence"])
         self.assertEqual(first_generations["symbol:005930:evidence"], second_generations["symbol:005930:evidence"])
 
-        _nodes, rebound_relations = repository.scoped_abox_persistence_rows(graph, ["symbol:005930:link"])
+        _nodes, rebound_relations = repository.scoped_abox_persistence_rows(graph, ["link:symbol:005930:evidence"])
         self.assertEqual(1, len(rebound_relations))
         stock = next(item for item in graph.entities if item.entity_id == "stock:005930")
         self.assertEqual(

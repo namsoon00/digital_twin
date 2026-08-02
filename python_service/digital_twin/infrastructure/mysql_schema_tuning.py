@@ -274,6 +274,11 @@ MYSQL_OPERATIONAL_INDEXES: Dict[str, Sequence[MySQLIndexDefinition]] = {
             "idx_hypothesis_lifecycle_generation",
             "`inference_generation_id`",
         ),
+        MySQLIndexDefinition(
+            "investment_hypothesis_lifecycle_states",
+            "idx_hypothesis_lifecycle_live_subject",
+            "`symbol`, `scope`, `account_id`, `lifecycle_key`",
+        ),
     ),
     "investment_hypothesis_lifecycle_events": (
         MySQLIndexDefinition(

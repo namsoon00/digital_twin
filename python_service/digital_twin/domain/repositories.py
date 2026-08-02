@@ -303,6 +303,15 @@ class HypothesisLifecycleRepository(Protocol):
         self,
         account_id: str,
         symbols: Iterable[str],
+        lifecycle_key_prefix: str = "",
+    ) -> Dict[str, HypothesisLifecycleRecord]:
+        ...
+
+    def current_summary_for_subjects(
+        self,
+        account_id: str,
+        symbols: Iterable[str],
+        lifecycle_key_prefix: str = "",
     ) -> Dict[str, HypothesisLifecycleRecord]:
         ...
 

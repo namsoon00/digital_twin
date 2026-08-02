@@ -12,7 +12,11 @@ from __future__ import annotations
 from datetime import timedelta
 from typing import Dict, Iterable, List, Mapping, Sequence
 
-from .hypothesis_lifecycle import HYPOTHESIS_LIFECYCLE_STATE_LABELS, parse_timestamp
+from .hypothesis_lifecycle import (
+    HYPOTHESIS_LIFECYCLE_STATE_LABELS,
+    lifecycle_key_for_hypothesis,
+    parse_timestamp,
+)
 from .hypothesis_outcome_contract import resolved_outcome_contract
 from .ontology_rulebox_contracts import HypothesisLifecyclePolicy
 
@@ -86,11 +90,20 @@ def lifecycle_reference_for_hypothesis(
     family_id = text(hypothesis.get("familyId"))
     source_rule_ids = values(hypothesis.get("supportingRuleIds"))
     result: List[Dict[str, object]] = []
+    market_context = text(hypothesis.get("marketId") or episode.get("marketId") or episode.get("market"))
     market_id = text(hypothesis.get("marketHypothesisId"))
     if market_id:
         result.append({
             "scope": "market",
             "lifecycleId": market_id,
+            "lifecycleKey": lifecycle_key_for_hypothesis(
+                "market",
+                "",
+                market_context,
+                symbol,
+                hypothesis,
+                source_lifecycle_id=market_id,
+            ),
             "symbol": symbol,
             "familyId": family_id,
             "sourceRuleIds": source_rule_ids,
@@ -100,6 +113,14 @@ def lifecycle_reference_for_hypothesis(
         result.append({
             "scope": "account",
             "lifecycleId": overlay_id,
+            "lifecycleKey": lifecycle_key_for_hypothesis(
+                "account",
+                account_id,
+                market_context,
+                symbol,
+                hypothesis,
+                source_lifecycle_id=overlay_id,
+            ),
             "accountId": account_id,
             "symbol": symbol,
             "familyId": family_id,
@@ -111,6 +132,14 @@ def lifecycle_reference_for_hypothesis(
             result.append({
                 "scope": "account",
                 "lifecycleId": "hypothesis:" + hypothesis_id,
+                "lifecycleKey": lifecycle_key_for_hypothesis(
+                    "account",
+                    account_id,
+                    market_context,
+                    symbol,
+                    hypothesis,
+                    source_lifecycle_id="hypothesis:" + hypothesis_id,
+                ),
                 "accountId": account_id,
                 "symbol": symbol,
                 "familyId": family_id,
@@ -120,6 +149,9 @@ def lifecycle_reference_for_hypothesis(
 
 
 def lifecycle_reference_key(reference: Mapping[str, object]) -> str:
+    stable_key = text(reference.get("lifecycleKey"))
+    if stable_key:
+        return stable_key
     scope = text(reference.get("scope")) or "account"
     account_id = text(reference.get("accountId")) if scope == "account" else ""
     return "|".join([scope, account_id, upper(reference.get("symbol")), text(reference.get("lifecycleId"))])
@@ -150,6 +182,13 @@ def episode_matches_lifecycle(episode: Mapping[str, object], lifecycle: Mapping[
     hypothesis = selected_hypothesis(episode)
     if not hypothesis:
         return False
+    for reference in lifecycle_reference_for_hypothesis(hypothesis, episode):
+        if (
+            text(reference.get("scope")) == scope
+            and text(reference.get("lifecycleKey"))
+            and text(reference.get("lifecycleKey")) == text(lifecycle.get("lifecycleKey"))
+        ):
+            return True
     lifecycle_id = text(lifecycle.get("lifecycleId"))
     if scope == "market":
         return lifecycle_id and text(hypothesis.get("marketHypothesisId")) == lifecycle_id

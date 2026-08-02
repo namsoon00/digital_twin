@@ -5,6 +5,9 @@ from typing import Dict, Iterable, List
 
 from ..domain.events import hypothesis_lifecycle_transitioned_event
 from ..domain.hypothesis_lifecycle import (
+    HYPOTHESIS_LIFECYCLE_KEY_PREFIX,
+    HYPOTHESIS_LIFECYCLE_KEY_VERSION,
+    HYPOTHESIS_LIFECYCLE_VERSION,
     TERMINAL_HYPOTHESIS_LIFECYCLE_STATES,
     HypothesisLifecycleRecord,
     HypothesisLifecycleSnapshot,
@@ -39,7 +42,8 @@ class HypothesisLifecycleService:
         observed_at = str(snapshot.generated_at or inferencebox.get("inferenceGenerationAt") or "")
         if not self.inference_is_reconcilable(inferencebox):
             payload = {
-                "version": "typedb-hypothesis-lifecycle-v1",
+                "version": HYPOTHESIS_LIFECYCLE_VERSION,
+                "lifecycleKeyVersion": HYPOTHESIS_LIFECYCLE_KEY_VERSION,
                 "status": "skipped-unhealthy-inference",
                 "reason": self.inference_health_reason(inferencebox),
                 "observedAt": observed_at,
@@ -48,13 +52,30 @@ class HypothesisLifecycleService:
             snapshot.metadata["hypothesisLifecycle"] = payload
             return payload
 
+        subjects = self.subject_symbols(snapshot)
+        symbols = self.reconciled_subject_symbols(inferencebox, subjects)
+        if not symbols:
+            payload = {
+                "version": HYPOTHESIS_LIFECYCLE_VERSION,
+                "lifecycleKeyVersion": HYPOTHESIS_LIFECYCLE_KEY_VERSION,
+                "status": "ok",
+                "reconciliationStatus": "skipped-no-explicit-targets",
+                "observedAt": observed_at,
+                "inferenceGenerationId": str(inferencebox.get("inferenceGenerationId") or ""),
+                "reconciledSymbols": [],
+                "bySymbol": {},
+                "transitionCount": 0,
+            }
+            snapshot.metadata["hypothesisLifecycle"] = payload
+            return payload
+
         contexts = relation_contexts_from_snapshot(snapshot, self.settings)
         current_snapshots = [
             item
             for context in contexts.values()
+            if self.context_symbol(context) in symbols
             for item in lifecycle_snapshots_from_relation_context(context, observed_at=observed_at)
         ]
-        symbols = self.subject_symbols(snapshot)
         previous_by_key = self.current_for_subjects(snapshot.account_id, symbols)
         next_by_key: Dict[str, HypothesisLifecycleRecord] = dict(previous_by_key)
         transitions = []
@@ -74,29 +95,34 @@ class HypothesisLifecycleService:
                 transitions.append((record, transition))
                 self.publish_transition(record, transition)
 
-        if self.generation_covers_subjects(inferencebox, symbols):
-            profiles_by_symbol = self.observation_profiles_by_symbol(snapshot, inferencebox)
-            for key, previous in previous_by_key.items():
-                if key in active_keys or previous.state in TERMINAL_HYPOTHESIS_LIFECYCLE_STATES:
-                    continue
-                expiry_reason = self.absent_record_expiry_reason(previous, profiles_by_symbol.get(previous.symbol) or {}, observed_at)
-                record, transition = record_for_absent_snapshot(previous, observed_at, expiry_reason)
-                if transition is None:
-                    continue
-                self.store.save(record, transition)
-                next_by_key[key] = record
-                transitions.append((record, transition))
-                self.publish_transition(record, transition)
+        # A target manifest is a proof for each selected subject, not for the
+        # full account. Reconcile only those subjects so a two-symbol batch can
+        # retire its own missing paths without touching untouched holdings.
+        profiles_by_symbol = self.observation_profiles_by_symbol(snapshot, inferencebox)
+        for key, previous in previous_by_key.items():
+            if key in active_keys or previous.state in TERMINAL_HYPOTHESIS_LIFECYCLE_STATES:
+                continue
+            expiry_reason = self.absent_record_expiry_reason(previous, profiles_by_symbol.get(previous.symbol) or {}, observed_at)
+            record, transition = record_for_absent_snapshot(previous, observed_at, expiry_reason)
+            if transition is None:
+                continue
+            self.store.save(record, transition)
+            next_by_key[key] = record
+            transitions.append((record, transition))
+            self.publish_transition(record, transition)
 
         by_symbol: Dict[str, List[HypothesisLifecycleRecord]] = {}
         for record in next_by_key.values():
             if record.symbol in symbols:
                 by_symbol.setdefault(record.symbol, []).append(record)
         payload = {
-            "version": "typedb-hypothesis-lifecycle-v1",
+            "version": HYPOTHESIS_LIFECYCLE_VERSION,
+            "lifecycleKeyVersion": HYPOTHESIS_LIFECYCLE_KEY_VERSION,
             "status": "ok",
+            "reconciliationStatus": "target-scoped",
             "observedAt": observed_at,
             "inferenceGenerationId": str(inferencebox.get("inferenceGenerationId") or ""),
+            "reconciledSymbols": sorted(symbols),
             "bySymbol": {
                 symbol: lifecycle_context_summary(records)
                 for symbol, records in sorted(by_symbol.items())
@@ -141,18 +167,12 @@ class HypothesisLifecycleService:
             if str(getattr(position, "symbol", "") or "").strip() and not position.is_cash()
         }
 
-    def current_for_subjects(self, account_id: str, symbols: Iterable[str]) -> Dict[str, HypothesisLifecycleRecord]:
-        if hasattr(self.store, "current_for_subjects"):
-            return dict(self.store.current_for_subjects(account_id, symbols) or {})
-        rows = self.store.list_current(account_id=account_id, limit=1000) if hasattr(self.store, "list_current") else []
-        allowed = {str(item or "").upper().strip() for item in symbols or [] if str(item or "").strip()}
-        return {
-            item.lifecycle_key: item
-            for item in rows or []
-            if isinstance(item, HypothesisLifecycleRecord) and item.symbol in allowed
-        }
+    @staticmethod
+    def context_symbol(context: Dict[str, object]) -> str:
+        subject = context.get("subject") if isinstance(context, dict) and isinstance(context.get("subject"), dict) else {}
+        return str(subject.get("symbol") or "").upper().strip()
 
-    def generation_covers_subjects(self, inferencebox: Dict[str, object], symbols: Iterable[str]) -> bool:
+    def reconciled_subject_symbols(self, inferencebox: Dict[str, object], subjects: Iterable[str]) -> set:
         targets = {
             str(item or "").upper().strip()
             for item in (
@@ -162,6 +182,36 @@ class HypothesisLifecycleService:
             )
             if str(item or "").strip()
         }
+        allowed = {str(item or "").upper().strip() for item in subjects or [] if str(item or "").strip()}
+        return targets.intersection(allowed)
+
+    def current_for_subjects(self, account_id: str, symbols: Iterable[str]) -> Dict[str, HypothesisLifecycleRecord]:
+        if hasattr(self.store, "current_for_subjects"):
+            try:
+                return dict(self.store.current_for_subjects(
+                    account_id,
+                    symbols,
+                    lifecycle_key_prefix=HYPOTHESIS_LIFECYCLE_KEY_PREFIX,
+                ) or {})
+            except TypeError:
+                # In-memory/test repositories may intentionally retain the old
+                # two-argument contract. Production stores use v2-only rows so
+                # a legacy audit archive never expands the realtime read.
+                return dict(self.store.current_for_subjects(account_id, symbols) or {})
+        rows = self.store.list_current(account_id=account_id, limit=1000) if hasattr(self.store, "list_current") else []
+        allowed = {str(item or "").upper().strip() for item in symbols or [] if str(item or "").strip()}
+        return {
+            item.lifecycle_key: item
+            for item in rows or []
+            if (
+                isinstance(item, HypothesisLifecycleRecord)
+                and item.symbol in allowed
+                and item.lifecycle_key.startswith(HYPOTHESIS_LIFECYCLE_KEY_PREFIX)
+            )
+        }
+
+    def generation_covers_subjects(self, inferencebox: Dict[str, object], symbols: Iterable[str]) -> bool:
+        targets = self.reconciled_subject_symbols(inferencebox, symbols)
         required = {str(item or "").upper().strip() for item in symbols or [] if str(item or "").strip()}
         # A healthy inference status alone is not proof that every current
         # symbol was evaluated. Without an explicit target manifest we retain

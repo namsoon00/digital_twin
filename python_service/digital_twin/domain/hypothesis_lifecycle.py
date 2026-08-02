@@ -17,7 +17,9 @@ from typing import Dict, Iterable, List, Mapping, Optional, Sequence, Tuple
 from .ontology_rulebox_contracts import HypothesisLifecyclePolicy
 
 
-HYPOTHESIS_LIFECYCLE_VERSION = "typedb-hypothesis-lifecycle-v1"
+HYPOTHESIS_LIFECYCLE_VERSION = "typedb-hypothesis-lifecycle-v2"
+HYPOTHESIS_LIFECYCLE_KEY_VERSION = "v2"
+HYPOTHESIS_LIFECYCLE_KEY_PREFIX = HYPOTHESIS_LIFECYCLE_KEY_VERSION + ":"
 HYPOTHESIS_LIFECYCLE_STATES = (
     "observed",
     "maintained",
@@ -113,6 +115,104 @@ def stable_id(prefix: str, *parts: object) -> str:
 def stable_fingerprint(payload: Mapping[str, object]) -> str:
     encoded = json.dumps(payload, ensure_ascii=False, sort_keys=True, separators=(",", ":"), default=str)
     return hashlib.sha256(encoded.encode("utf-8")).hexdigest()
+
+
+def lifecycle_key_for_members(
+    scope: str,
+    account_id: str,
+    market_id: str,
+    symbol: str,
+    family_id: str,
+    members: Iterable[Mapping[str, object]],
+    source_lifecycle_id: str = "",
+) -> str:
+    """Return a stable audit key for one semantic lifecycle path.
+
+    TypeDB's current hypothesis, market-hypothesis, and overlay IDs describe a
+    particular inference generation.  They are useful audit evidence, but are
+    not a durable lifecycle identity because an otherwise identical path can
+    receive a new generation-local ID.  The key deliberately uses only scope,
+    subject, family, and structural causal identity; evidence changes remain
+    part of the lifecycle state delta instead of creating a new row.
+    """
+
+    normalized_scope = _text(scope) or "account"
+    normalized_account_id = _text(account_id) if normalized_scope == "account" else ""
+    normalized_market_id = _upper(market_id)
+    normalized_symbol = _upper(symbol)
+    rows = [dict(item) for item in members or [] if isinstance(item, Mapping)]
+    normalized_family_id = _text(family_id) or next((
+        _text(item.get("familyId") or item.get("family_id"))
+        for item in rows
+        if _text(item.get("familyId") or item.get("family_id"))
+    ), "")
+    primary_signature_fields, fallback_signature_fields = (
+        (("marketCausalSignature", "market_causal_signature"), ("causalSignature", "causal_signature"))
+        if normalized_scope == "market"
+        else (("causalSignature", "causal_signature"), ("marketCausalSignature", "market_causal_signature"))
+    )
+
+    def signatures_for(fields: Sequence[str]) -> List[str]:
+        return sorted({
+            _text(item.get(field_name))
+            for item in rows
+            for field_name in fields
+            if _text(item.get(field_name))
+        })
+
+    causal_signatures = signatures_for(primary_signature_fields) or signatures_for(fallback_signature_fields)
+    template_ids = sorted({
+        _text(item.get("templateId") or item.get("template_id"))
+        for item in rows
+        if _text(item.get("templateId") or item.get("template_id"))
+    })
+    source_rule_ids = sorted({
+        _text(rule_id)
+        for item in rows
+        for rule_id in _as_values(item.get("supportingRuleIds") or item.get("supporting_rule_ids"))
+        if _text(rule_id)
+    })
+    if causal_signatures:
+        semantic_kind, semantic_values = "causal-signature", causal_signatures
+    elif template_ids:
+        semantic_kind, semantic_values = "template", template_ids
+    elif source_rule_ids:
+        semantic_kind, semantic_values = "rule", source_rule_ids
+    else:
+        semantic_kind, semantic_values = "source-id-fallback", [_text(source_lifecycle_id)]
+    identity = {
+        "keyVersion": HYPOTHESIS_LIFECYCLE_KEY_VERSION,
+        "scope": normalized_scope,
+        "accountId": normalized_account_id,
+        "marketId": normalized_market_id,
+        "symbol": normalized_symbol,
+        "familyId": normalized_family_id,
+        "semanticKind": semantic_kind,
+        "semanticValues": semantic_values,
+    }
+    return HYPOTHESIS_LIFECYCLE_KEY_PREFIX + normalized_scope + ":" + stable_fingerprint(identity)[:24]
+
+
+def lifecycle_key_for_hypothesis(
+    scope: str,
+    account_id: str,
+    market_id: str,
+    symbol: str,
+    hypothesis: Mapping[str, object],
+    source_lifecycle_id: str = "",
+) -> str:
+    """Derive the same stable lifecycle key from a single hypothesis row."""
+
+    item = dict(hypothesis or {}) if isinstance(hypothesis, Mapping) else {}
+    return lifecycle_key_for_members(
+        scope=scope,
+        account_id=account_id,
+        market_id=market_id,
+        symbol=symbol,
+        family_id=_text(item.get("familyId") or item.get("family_id")),
+        members=[item],
+        source_lifecycle_id=source_lifecycle_id,
+    )
 
 
 @dataclass(frozen=True)
@@ -364,7 +464,6 @@ def lifecycle_snapshots_from_relation_context(
     result: List[HypothesisLifecycleSnapshot] = []
 
     def build_snapshot(
-        lifecycle_key: str,
         lifecycle_id: str,
         scope: str,
         members: Sequence[Mapping[str, object]],
@@ -405,9 +504,18 @@ def lifecycle_snapshots_from_relation_context(
             policy,
             default_formation_condition_ids=formation,
         ).to_dict()
+        lifecycle_key = lifecycle_key_for_members(
+            scope=scope,
+            account_id=account_id,
+            market_id=market_id,
+            symbol=symbol,
+            family_id=family_id,
+            members=member_rows,
+            source_lifecycle_id=lifecycle_id,
+        )
         payload = {
             "scope": scope,
-            "lifecycleId": lifecycle_id,
+            "lifecycleKey": lifecycle_key,
             "symbol": symbol,
             "familyId": family_id,
             "marketWorldId": market_scope_id or market_world_id,
@@ -465,7 +573,6 @@ def lifecycle_snapshots_from_relation_context(
             continue
         market_hypothesis_member_ids.update(_text(item.get("hypothesisId")) for item in members)
         result.append(build_snapshot(
-            "market:" + lifecycle_id,
             lifecycle_id,
             "market",
             members,
@@ -488,7 +595,6 @@ def lifecycle_snapshots_from_relation_context(
             continue
         accounted_hypothesis_ids.update(_text(item.get("hypothesisId")) for item in members)
         result.append(build_snapshot(
-            "account:" + (account_id or "unknown") + ":" + lifecycle_id,
             lifecycle_id,
             "account",
             members,
@@ -510,7 +616,6 @@ def lifecycle_snapshots_from_relation_context(
             continue
         lifecycle_id = "hypothesis:" + hypothesis_id
         result.append(build_snapshot(
-            "account:" + (account_id or "unknown") + ":" + lifecycle_id,
             lifecycle_id,
             "account",
             [hypothesis],

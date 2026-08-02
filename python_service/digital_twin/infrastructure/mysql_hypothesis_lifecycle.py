@@ -111,6 +111,7 @@ class MySQLHypothesisLifecycleStore(MySQLOperationalConnection):
         self,
         account_id: str,
         symbols: Iterable[str],
+        lifecycle_key_prefix: str = "",
     ) -> Dict[str, HypothesisLifecycleRecord]:
         clean_symbols = list(dict.fromkeys(
             str(item or "").upper().strip()
@@ -125,9 +126,55 @@ class MySQLHypothesisLifecycleStore(MySQLOperationalConnection):
             "WHERE symbol IN (" + placeholders + ") "
             "AND (account_id = %s OR scope = 'market')"
         )
+        params = tuple(clean_symbols) + (str(account_id or ""),)
+        if lifecycle_key_prefix:
+            sql += " AND lifecycle_key LIKE %s"
+            params += (str(lifecycle_key_prefix) + "%",)
         with self.connect() as connection:
-            rows = connection.execute(sql, tuple(clean_symbols) + (str(account_id or ""),)).fetchall()
+            rows = connection.execute(sql, params).fetchall()
         records = [self.record_from_row(row) for row in rows or []]
+        return {item.lifecycle_key: item for item in records if item.lifecycle_key}
+
+    def current_summary_for_subjects(
+        self,
+        account_id: str,
+        symbols: Iterable[str],
+        lifecycle_key_prefix: str = "",
+    ) -> Dict[str, HypothesisLifecycleRecord]:
+        """Read a small lifecycle slice for an explicitly enabled ABox audit.
+
+        The full JSON payload contains raw evidence paths and is only needed by
+        the history/detail view. Realtime projection must never decode it just
+        to render a lifecycle state label.
+        """
+
+        clean_symbols = list(dict.fromkeys(
+            str(item or "").upper().strip()
+            for item in symbols or []
+            if str(item or "").strip()
+        ))
+        if not clean_symbols:
+            return {}
+        placeholders = ",".join(["%s"] * len(clean_symbols))
+        columns = (
+            "lifecycle_key, lifecycle_id, scope, account_id, portfolio_world_id, "
+            "market_world_id, market_id, symbol, family_id, state, first_observed_at, "
+            "last_observed_at, last_transition_at, inference_generation_id, "
+            "inference_generation_at, previous_generation_id, semantic_fingerprint, "
+            "transition_reason, material_change"
+        )
+        sql = (
+            "SELECT " + columns + " FROM investment_hypothesis_lifecycle_states "
+            "WHERE symbol IN (" + placeholders + ") "
+            "AND (account_id = %s OR scope = 'market')"
+        )
+        params = tuple(clean_symbols) + (str(account_id or ""),)
+        if lifecycle_key_prefix:
+            sql += " AND lifecycle_key LIKE %s"
+            params += (str(lifecycle_key_prefix) + "%",)
+        with self.connect() as connection:
+            rows = connection.execute(sql, params).fetchall()
+        records = [self.record_from_summary_row(row) for row in rows or []]
         return {item.lifecycle_key: item for item in records if item.lifecycle_key}
 
     def list_events(

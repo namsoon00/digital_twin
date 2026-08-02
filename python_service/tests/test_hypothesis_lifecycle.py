@@ -1,5 +1,6 @@
 import sys
 import unittest
+from copy import deepcopy
 from dataclasses import replace
 from pathlib import Path
 from unittest import mock
@@ -14,6 +15,7 @@ from digital_twin.domain.hypothesis_lifecycle import (
     record_for_snapshot,
     stable_fingerprint,
 )
+from digital_twin.domain.hypothesis_review import episode_matches_lifecycle
 from digital_twin.domain.ontology_inference_context import relation_context_from_inferencebox
 from digital_twin.domain.ontology_rulebox_contracts import (
     GraphInferenceRule,
@@ -22,21 +24,26 @@ from digital_twin.domain.ontology_rulebox_contracts import (
 )
 from digital_twin.domain.portfolio import AccountSnapshot, Position
 from digital_twin.domain.portfolio_calculations import portfolio_summary
+from digital_twin.domain.portfolio_ontology_builder import build_portfolio_ontology
 from digital_twin.infrastructure.graph_store_rulebox import rulebox_graph_from_rules
+from digital_twin.infrastructure.ontology_projection import PortfolioOntologyProjectionRecorder
 
 
 class MemoryLifecycleStore:
     def __init__(self):
         self.records = {}
         self.events = []
+        self.subject_queries = []
 
-    def current_for_subjects(self, account_id, symbols):
+    def current_for_subjects(self, account_id, symbols, lifecycle_key_prefix=""):
         allowed = {str(item or "").upper() for item in symbols or []}
+        self.subject_queries.append(set(allowed))
         return {
             key: item
             for key, item in self.records.items()
             if item.symbol in allowed
             and (item.scope == "market" or item.account_id == str(account_id or ""))
+            and (not lifecycle_key_prefix or item.lifecycle_key.startswith(lifecycle_key_prefix))
         }
 
     def list_current(self, account_id="", symbol="", market_id="", scope="", limit=100):
@@ -73,6 +80,19 @@ class MemoryLifecycleStore:
         if transition:
             self.events.append(transition)
         return record
+
+
+class LifecycleProjectionProbe:
+    def __init__(self):
+        self.calls = []
+
+    def current_summary_for_subjects(self, account_id, symbols, lifecycle_key_prefix=""):
+        self.calls.append({
+            "accountId": account_id,
+            "symbols": set(symbols or []),
+            "lifecycleKeyPrefix": lifecycle_key_prefix,
+        })
+        return {}
 
 
 def lifecycle_snapshot(
@@ -162,6 +182,9 @@ def relation_context(generation="generation-1", support=None, counter=None, matc
                 "hypothesisId": "hypothesis:aapl-trend",
                 "marketHypothesisId": "market-hypothesis-aapl-trend",
                 "familyId": "family:aapl-trend",
+                "templateId": "hypothesis-template:rule.aapl.trend.v1",
+                "causalSignature": "typedb-structural:aapl-trend",
+                "marketCausalSignature": "typedb-market:aapl-trend",
                 "supportingRuleIds": ["rule.aapl.trend.v1"],
                 "supportingEvidenceIds": support,
                 "counterEvidenceIds": counter,
@@ -170,6 +193,8 @@ def relation_context(generation="generation-1", support=None, counter=None, matc
             "marketHypotheses": [{
                 "marketHypothesisId": "market-hypothesis-aapl-trend",
                 "marketWorldId": "market:US",
+                "marketId": "US",
+                "causalSignature": "typedb-market:aapl-trend",
             }],
             "accountOverlays": [],
         },
@@ -186,17 +211,20 @@ def relation_context(generation="generation-1", support=None, counter=None, matc
     }
 
 
-def account_snapshot(generation="generation-1", targets=None, aligned=True):
-    position = Position(
-        symbol="AAPL",
-        name="Apple",
-        market="US",
-        currency="USD",
-        source="watchlist",
-        current_price=200,
-        source_as_of="2026-07-23T00:00:00Z",
-        source_fetched_at="2026-07-23T00:00:00Z",
-    )
+def account_snapshot(generation="generation-1", targets=None, aligned=True, symbols=None):
+    positions = [
+        Position(
+            symbol=symbol,
+            name="Apple" if symbol == "AAPL" else symbol,
+            market="US",
+            currency="USD",
+            source="watchlist",
+            current_price=200,
+            source_as_of="2026-07-23T00:00:00Z",
+            source_fetched_at="2026-07-23T00:00:00Z",
+        )
+        for symbol in (symbols or ["AAPL"])
+    ]
     return AccountSnapshot(
         "account-1",
         "테스트 계좌",
@@ -205,7 +233,7 @@ def account_snapshot(generation="generation-1", targets=None, aligned=True):
         "ok",
         "2026-07-23T00:00:00Z",
         portfolio_summary([], fx_rates={"USD": 1400}),
-        watchlist=[position],
+        watchlist=positions,
         metadata={
             "ontology": {
                 "activeGraphStore": "typedb",
@@ -267,6 +295,39 @@ class HypothesisLifecycleTests(unittest.TestCase):
         self.assertEqual("", snapshots[0].account_id)
         self.assertEqual(["trend-below-ma20"], snapshots[0].policy["formationConditionIds"])
         self.assertEqual(["정규장 거래량"], snapshots[0].policy["nextDataRequirements"])
+
+    def test_stable_lifecycle_key_ignores_generation_local_hypothesis_ids(self):
+        first = lifecycle_snapshots_from_relation_context(relation_context("generation-1"))[0]
+        changed = deepcopy(relation_context("generation-2"))
+        changed["hypothesisSet"]["hypotheses"][0]["hypothesisId"] = "hypothesis:next-generation"
+        changed["hypothesisSet"]["hypotheses"][0]["marketHypothesisId"] = "market-hypothesis-next-generation"
+        changed["hypothesisSet"]["marketHypotheses"][0]["marketHypothesisId"] = "market-hypothesis-next-generation"
+        second = lifecycle_snapshots_from_relation_context(changed)[0]
+
+        self.assertTrue(first.lifecycle_key.startswith("v2:market:"))
+        self.assertEqual(first.lifecycle_key, second.lifecycle_key)
+        self.assertEqual(first.semantic_fingerprint, second.semantic_fingerprint)
+        observed, _ = record_for_snapshot(None, first, first.observed_at)
+        maintained, transition = record_for_snapshot(observed, second, second.observed_at)
+        self.assertEqual("maintained", maintained.state)
+        self.assertEqual("observed", transition.previous_state)
+
+    def test_outcome_review_matches_a_stable_key_after_source_ids_change(self):
+        first = lifecycle_snapshots_from_relation_context(relation_context("generation-1"))[0]
+        record, _ = record_for_snapshot(None, first, first.observed_at)
+        changed = deepcopy(relation_context("generation-2"))
+        changed["hypothesisSet"]["hypotheses"][0]["hypothesisId"] = "hypothesis:next-generation"
+        changed["hypothesisSet"]["hypotheses"][0]["marketHypothesisId"] = "market-hypothesis-next-generation"
+        changed["hypothesisSet"]["marketHypotheses"][0]["marketHypothesisId"] = "market-hypothesis-next-generation"
+        episode = {
+            "accountId": "account-1",
+            "symbol": "AAPL",
+            "marketId": "US",
+            "selectedHypothesisId": "hypothesis:next-generation",
+            "hypothesisSet": changed["hypothesisSet"],
+        }
+
+        self.assertTrue(episode_matches_lifecycle(episode, record.to_dict()))
 
     def test_lifecycle_transitions_follow_evidence_and_policy_not_actions(self):
         first = lifecycle_snapshot()
@@ -381,6 +442,108 @@ class HypothesisLifecycleTests(unittest.TestCase):
         result = service.observe_snapshot(unaligned_snapshot)
         self.assertEqual("skipped-unhealthy-inference", result["status"])
         self.assertEqual("invalidated", next(iter(store.records.values())).state)
+
+    def test_service_reconciles_only_explicit_target_symbols(self):
+        store = MemoryLifecycleStore()
+        service = HypothesisLifecycleService(store)
+        first_snapshot = account_snapshot("generation-1")
+        with mock.patch(
+            "digital_twin.application.hypothesis_lifecycle_service.relation_contexts_from_snapshot",
+            return_value={"AAPL": relation_context("generation-1")},
+        ):
+            service.observe_snapshot(first_snapshot)
+        aapl_key = next(iter(store.records))
+        msft_snapshot = replace(
+            lifecycle_snapshot(),
+            lifecycle_key="v2:market:msft-audit",
+            lifecycle_id="market-hypothesis-msft",
+            symbol="MSFT",
+            family_id="family:msft-trend",
+        )
+        msft_record, _ = record_for_snapshot(None, msft_snapshot)
+        store.save(msft_record)
+
+        target_snapshot = account_snapshot(
+            "generation-2",
+            targets=["AAPL"],
+            symbols=["AAPL", "MSFT"],
+        )
+        with mock.patch(
+            "digital_twin.application.hypothesis_lifecycle_service.relation_contexts_from_snapshot",
+            return_value={},
+        ):
+            result = service.observe_snapshot(target_snapshot)
+
+        self.assertEqual(["AAPL"], result["reconciledSymbols"])
+        self.assertEqual({"AAPL"}, store.subject_queries[-1])
+        self.assertEqual("invalidated", store.records[aapl_key].state)
+        self.assertEqual("observed", store.records[msft_record.lifecycle_key].state)
+        self.assertNotIn("MSFT", result["bySymbol"])
+
+    def test_live_abox_excludes_lifecycle_audit_without_explicit_opt_in(self):
+        position = Position(
+            symbol="AAPL",
+            name="Apple",
+            market="US",
+            currency="USD",
+            source="watchlist",
+            current_price=200,
+            source_as_of="2026-07-23T00:00:00Z",
+            source_fetched_at="2026-07-23T00:00:00Z",
+        )
+        record, _ = record_for_snapshot(None, lifecycle_snapshot())
+        runtime_context = {
+            "hypothesisLifecycles": [record.to_dict()],
+            "hypothesisLifecycleAboxProjection": {"enabled": False},
+        }
+        graph = build_portfolio_ontology(
+            [position],
+            portfolio_summary([], fx_rates={"USD": 1400}),
+            portfolio_id="account-1",
+            runtime_context=runtime_context,
+        )
+        self.assertFalse(any(item.kind == "hypothesis-lifecycle" for item in graph.entities))
+
+        runtime_context["hypothesisLifecycleAboxProjection"] = {"enabled": True}
+        diagnostic_graph = build_portfolio_ontology(
+            [position],
+            portfolio_summary([], fx_rates={"USD": 1400}),
+            portfolio_id="account-1",
+            runtime_context=runtime_context,
+        )
+        self.assertTrue(any(item.kind == "hypothesis-lifecycle" for item in diagnostic_graph.entities))
+
+    def test_runtime_projection_does_not_read_lifecycle_audit_by_default(self):
+        probe = LifecycleProjectionProbe()
+        snapshot = account_snapshot("generation-1")
+        recorder = PortfolioOntologyProjectionRecorder(
+            None,
+            hypothesis_lifecycle_store=probe,
+        )
+        context = recorder.runtime_context(
+            snapshot,
+            active_tbox={},
+            target_symbols=["AAPL"],
+        )
+
+        self.assertEqual([], probe.calls)
+        self.assertEqual("excluded-from-live-abox", context["hypothesisLifecycleAboxProjection"]["mode"])
+        self.assertFalse(context["hypothesisLifecycleAboxProjection"]["enabled"])
+
+        diagnostic_recorder = PortfolioOntologyProjectionRecorder(
+            None,
+            hypothesis_lifecycle_store=probe,
+            settings={"ontologyHypothesisLifecycleAboxProjectionEnabled": True},
+        )
+        diagnostic_context = diagnostic_recorder.runtime_context(
+            snapshot,
+            active_tbox={},
+            target_symbols=["AAPL"],
+        )
+        self.assertEqual(1, len(probe.calls))
+        self.assertEqual({"AAPL"}, probe.calls[0]["symbols"])
+        self.assertEqual("v2:", probe.calls[0]["lifecycleKeyPrefix"])
+        self.assertEqual("compact-opt-in-audit", diagnostic_context["hypothesisLifecycleAboxProjection"]["mode"])
 
     def test_lifecycle_reaches_ai_context_and_web_read_model(self):
         position = Position(

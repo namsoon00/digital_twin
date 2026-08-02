@@ -76,6 +76,7 @@ from ..domain.ontology_native_rule_planning import (
 from ..domain.portfolio_ontology_temporal_concepts import parse_temporal_windows
 from ..domain.portfolio import AccountSnapshot
 from ..domain.investment_brain import decision_episode_ontology_context
+from ..domain.hypothesis_lifecycle import HYPOTHESIS_LIFECYCLE_KEY_PREFIX
 from .graph_store_rulebox import rulebox_rules_to_payload
 from .runtime_identity import runtime_identity
 
@@ -2697,6 +2698,11 @@ class PortfolioOntologyProjectionRecorder:
             stage_timings["decisionEpisodeSourceCount"] = int(decision_memory.get("sourceEpisodeCount") or 0)
             stage_timings["decisionEpisodeIncludedCount"] = int(decision_memory.get("includedEpisodeCount") or 0)
             stage_timings["decisionEpisodeDroppedCount"] = int(decision_memory.get("droppedEpisodeCount") or 0)
+        lifecycle_projection = runtime_context.get("hypothesisLifecycleAboxProjection") if isinstance(runtime_context, dict) else {}
+        if isinstance(lifecycle_projection, dict):
+            stage_timings["hypothesisLifecycleAboxProjectionMs"] = int(lifecycle_projection.get("readMs") or 0)
+            stage_timings["hypothesisLifecycleAboxRecordCount"] = int(lifecycle_projection.get("recordCount") or 0)
+            stage_timings["hypothesisLifecycleAboxProjectionEnabled"] = 1 if lifecycle_projection.get("enabled") else 0
         emit("ontology_graph.start")
         assembly_started = time.perf_counter()
         graph = build_portfolio_ontology(
@@ -5554,12 +5560,33 @@ class PortfolioOntologyProjectionRecorder:
             target_symbols=selected_symbols,
         )
         emit("hypothesis_proposals.done", proposalCount=len(hypothesis_proposals))
-        emit("hypothesis_lifecycles.start")
-        hypothesis_lifecycles = self.hypothesis_lifecycle_context(
-            snapshot,
-            target_symbols=selected_symbols,
+        lifecycle_projection_started = time.perf_counter()
+        lifecycle_projection = {
+            "mode": "excluded-from-live-abox",
+            "enabled": False,
+            "recordCount": 0,
+            "payloadBytesRead": 0,
+            "keyPrefix": HYPOTHESIS_LIFECYCLE_KEY_PREFIX,
+        }
+        emit("hypothesis_lifecycles.start", mode=lifecycle_projection["mode"])
+        hypothesis_lifecycles = []
+        if self.hypothesis_lifecycle_abox_projection_enabled():
+            hypothesis_lifecycles = self.hypothesis_lifecycle_context(
+                snapshot,
+                target_symbols=selected_symbols,
+            )
+            lifecycle_projection.update({
+                "mode": "compact-opt-in-audit",
+                "enabled": True,
+                "recordCount": len(hypothesis_lifecycles),
+            })
+        lifecycle_projection["readMs"] = int((time.perf_counter() - lifecycle_projection_started) * 1000)
+        emit(
+            "hypothesis_lifecycles.done",
+            lifecycleCount=len(hypothesis_lifecycles),
+            mode=lifecycle_projection["mode"],
+            runtimeMs=lifecycle_projection["readMs"],
         )
-        emit("hypothesis_lifecycles.done", lifecycleCount=len(hypothesis_lifecycles))
         emit("pipeline_health.start")
         data_pipeline_health = self.data_pipeline_health_context(snapshot)
         emit("pipeline_health.done")
@@ -5592,6 +5619,7 @@ class PortfolioOntologyProjectionRecorder:
             "decisionPerformance": decision_performance,
             "hypothesisProposals": hypothesis_proposals,
             "hypothesisLifecycles": hypothesis_lifecycles,
+            "hypothesisLifecycleAboxProjection": lifecycle_projection,
             # A live pipeline health row may change while a delayed retry is
             # rebuilding the same account snapshot. Only health captured with
             # the snapshot is causal ABox input; current worker telemetry is
@@ -5616,7 +5644,7 @@ class PortfolioOntologyProjectionRecorder:
         source = dict(metadata or {})
         values = {}
         for key, value in source.items():
-            if key in {"ontology", "reasoningSnapshotReplay", "previousMonitorState", "previousState", "monitorStateHistory"}:
+            if key in {"ontology", "hypothesisLifecycle", "reasoningSnapshotReplay", "previousMonitorState", "previousState", "monitorStateHistory"}:
                 continue
             values[key] = deepcopy(value)
         # This marker describes how the worker acquired the snapshot. It is
@@ -5640,6 +5668,7 @@ class PortfolioOntologyProjectionRecorder:
             if isinstance(nested, dict):
                 nested = dict(nested)
                 nested.pop("ontology", None)
+                nested.pop("hypothesisLifecycle", None)
                 nested.pop("reasoningSnapshotReplay", None)
                 nested.pop("previousMonitorState", None)
                 nested.pop("previousState", None)
@@ -5879,7 +5908,7 @@ class PortfolioOntologyProjectionRecorder:
         snapshot: AccountSnapshot,
         target_symbols=None,
     ) -> List[Dict[str, object]]:
-        if not self.hypothesis_lifecycle_store or not hasattr(self.hypothesis_lifecycle_store, "current_for_subjects"):
+        if not self.hypothesis_lifecycle_store:
             return []
         symbols = {
             str(getattr(position, "symbol", "") or "").upper().strip()
@@ -5896,7 +5925,26 @@ class PortfolioOntologyProjectionRecorder:
         if not symbols:
             return []
         try:
-            records = self.hypothesis_lifecycle_store.current_for_subjects(snapshot.account_id, symbols)
+            if hasattr(self.hypothesis_lifecycle_store, "current_summary_for_subjects"):
+                try:
+                    records = self.hypothesis_lifecycle_store.current_summary_for_subjects(
+                        snapshot.account_id,
+                        symbols,
+                        lifecycle_key_prefix=HYPOTHESIS_LIFECYCLE_KEY_PREFIX,
+                    )
+                except TypeError:
+                    records = self.hypothesis_lifecycle_store.current_summary_for_subjects(snapshot.account_id, symbols)
+            elif hasattr(self.hypothesis_lifecycle_store, "current_for_subjects"):
+                try:
+                    records = self.hypothesis_lifecycle_store.current_for_subjects(
+                        snapshot.account_id,
+                        symbols,
+                        lifecycle_key_prefix=HYPOTHESIS_LIFECYCLE_KEY_PREFIX,
+                    )
+                except TypeError:
+                    records = self.hypothesis_lifecycle_store.current_for_subjects(snapshot.account_id, symbols)
+            else:
+                return []
         except Exception:  # noqa: BLE001 - lifecycle audit must not block a factual ABox projection.
             return []
         return [
@@ -5904,3 +5952,14 @@ class PortfolioOntologyProjectionRecorder:
             for item in (records or {}).values()
             if hasattr(item, "to_dict")
         ]
+
+    def hypothesis_lifecycle_abox_projection_enabled(self) -> bool:
+        """Keep audit history out of realtime TypeDB input unless explicitly needed.
+
+        Lifecycle records explain a completed generation; they are not source
+        facts or native-rule inputs. Their compact prompt summary is attached
+        after a verified generation by ``HypothesisLifecycleService``.
+        """
+
+        value = self.settings.get("ontologyHypothesisLifecycleAboxProjectionEnabled")
+        return str(value or "").strip().lower() in {"1", "true", "yes", "on", "enabled"}

@@ -353,13 +353,27 @@ def build_portfolio_ontology(
         )))
     except (TypeError, ValueError):
         hypothesis_outcome_minimum_samples = 3
+    lifecycle_projection = (
+        runtime_context.get("hypothesisLifecycleAboxProjection")
+        if isinstance(runtime_context, dict)
+        and isinstance(runtime_context.get("hypothesisLifecycleAboxProjection"), dict)
+        else {}
+    )
+    # Lifecycle state is a downstream audit of an already verified
+    # InferenceBox. Keep it out of the next live ABox unless an operator
+    # explicitly enables the compact diagnostic projection.
+    lifecycle_rows = (
+        runtime_context.get("hypothesisLifecycles")
+        if lifecycle_projection.get("enabled") and isinstance(runtime_context, dict)
+        else []
+    )
     add_investment_brain_concepts(
         graph,
         portfolio_id,
         runtime_context.get("decisionEpisodes") if isinstance(runtime_context, dict) else [],
         runtime_context.get("hypothesisProposals") if isinstance(runtime_context, dict) else [],
         runtime_context.get("decisionPerformance") if isinstance(runtime_context, dict) else {},
-        runtime_context.get("hypothesisLifecycles") if isinstance(runtime_context, dict) else [],
+        lifecycle_rows,
         max(1, min(100, hypothesis_outcome_minimum_samples)),
     )
     add_coverage_gap_concepts(graph, observed_positions, portfolio_id)

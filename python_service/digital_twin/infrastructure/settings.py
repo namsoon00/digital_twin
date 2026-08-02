@@ -43,10 +43,23 @@ TEXT_SETTING_KEYS = [
     "operationalMinimumFreeSpaceMb",
     "operationalCriticalFreeSpaceMb",
     "operationalStorageWarningFreeSpaceMb",
+    "operationalStorageAlertFreeSpaceMb",
     "operationalStoragePressureFreePercent",
     "operationalStorageComponentWarningPercent",
+    "operationalStorageComponentAlertPercent",
+    "operationalStorageComponentCriticalPercent",
     "operationalStorageAlertEnabled",
     "operationalStorageAlertReminderMinutes",
+    "operationalStorageLimitedAlertReminderMinutes",
+    "operationalStorageCriticalAlertReminderMinutes",
+    "operationalStorageRuntimeFailureCooldownMinutes",
+    "operationalStorageMaterialWorseningPercent",
+    "operationalStorageForecastEnabled",
+    "operationalStorageForecastHorizonMinutes",
+    "operationalStorageForecastThresholdMb",
+    "operationalStorageForecastLookbackMinutes",
+    "operationalStorageForecastMinimumSamples",
+    "operationalStorageForecastMinimumElapsedMinutes",
     "operationalMySqlDataMaxSizeMb",
     "operationalLogMaxSizeMb",
     "mysqlMinimalRetentionEnabled",
@@ -927,17 +940,22 @@ def runtime_settings(fast_operational_read: bool = False) -> Dict[str, str]:
         "operationalMinimumFreeSpaceMb": value(
             "operationalMinimumFreeSpaceMb",
             "OPERATIONAL_MINIMUM_FREE_SPACE_MB",
-            "32768",
+            "12288",
         ),
         "operationalCriticalFreeSpaceMb": value(
             "operationalCriticalFreeSpaceMb",
             "OPERATIONAL_CRITICAL_FREE_SPACE_MB",
-            "20480",
+            "6144",
         ),
         "operationalStorageWarningFreeSpaceMb": value(
             "operationalStorageWarningFreeSpaceMb",
             "OPERATIONAL_STORAGE_WARNING_FREE_SPACE_MB",
             "49152",
+        ),
+        "operationalStorageAlertFreeSpaceMb": value(
+            "operationalStorageAlertFreeSpaceMb",
+            "OPERATIONAL_STORAGE_ALERT_FREE_SPACE_MB",
+            "24576",
         ),
         "operationalStoragePressureFreePercent": value(
             "operationalStoragePressureFreePercent",
@@ -949,6 +967,16 @@ def runtime_settings(fast_operational_read: bool = False) -> Dict[str, str]:
             "OPERATIONAL_STORAGE_COMPONENT_WARNING_PERCENT",
             "80",
         ),
+        "operationalStorageComponentAlertPercent": value(
+            "operationalStorageComponentAlertPercent",
+            "OPERATIONAL_STORAGE_COMPONENT_ALERT_PERCENT",
+            "90",
+        ),
+        "operationalStorageComponentCriticalPercent": value(
+            "operationalStorageComponentCriticalPercent",
+            "OPERATIONAL_STORAGE_COMPONENT_CRITICAL_PERCENT",
+            "95",
+        ),
         "operationalStorageAlertEnabled": value(
             "operationalStorageAlertEnabled",
             "OPERATIONAL_STORAGE_ALERT_ENABLED",
@@ -957,7 +985,57 @@ def runtime_settings(fast_operational_read: bool = False) -> Dict[str, str]:
         "operationalStorageAlertReminderMinutes": value(
             "operationalStorageAlertReminderMinutes",
             "OPERATIONAL_STORAGE_ALERT_REMINDER_MINUTES",
+            "240",
+        ),
+        "operationalStorageLimitedAlertReminderMinutes": value(
+            "operationalStorageLimitedAlertReminderMinutes",
+            "OPERATIONAL_STORAGE_LIMITED_ALERT_REMINDER_MINUTES",
+            "240",
+        ),
+        "operationalStorageCriticalAlertReminderMinutes": value(
+            "operationalStorageCriticalAlertReminderMinutes",
+            "OPERATIONAL_STORAGE_CRITICAL_ALERT_REMINDER_MINUTES",
             "60",
+        ),
+        "operationalStorageRuntimeFailureCooldownMinutes": value(
+            "operationalStorageRuntimeFailureCooldownMinutes",
+            "OPERATIONAL_STORAGE_RUNTIME_FAILURE_COOLDOWN_MINUTES",
+            "5",
+        ),
+        "operationalStorageMaterialWorseningPercent": value(
+            "operationalStorageMaterialWorseningPercent",
+            "OPERATIONAL_STORAGE_MATERIAL_WORSENING_PERCENT",
+            "25",
+        ),
+        "operationalStorageForecastEnabled": value(
+            "operationalStorageForecastEnabled",
+            "OPERATIONAL_STORAGE_FORECAST_ENABLED",
+            "1",
+        ),
+        "operationalStorageForecastHorizonMinutes": value(
+            "operationalStorageForecastHorizonMinutes",
+            "OPERATIONAL_STORAGE_FORECAST_HORIZON_MINUTES",
+            "60",
+        ),
+        "operationalStorageForecastThresholdMb": value(
+            "operationalStorageForecastThresholdMb",
+            "OPERATIONAL_STORAGE_FORECAST_THRESHOLD_MB",
+            "12288",
+        ),
+        "operationalStorageForecastLookbackMinutes": value(
+            "operationalStorageForecastLookbackMinutes",
+            "OPERATIONAL_STORAGE_FORECAST_LOOKBACK_MINUTES",
+            "30",
+        ),
+        "operationalStorageForecastMinimumSamples": value(
+            "operationalStorageForecastMinimumSamples",
+            "OPERATIONAL_STORAGE_FORECAST_MINIMUM_SAMPLES",
+            "3",
+        ),
+        "operationalStorageForecastMinimumElapsedMinutes": value(
+            "operationalStorageForecastMinimumElapsedMinutes",
+            "OPERATIONAL_STORAGE_FORECAST_MINIMUM_ELAPSED_MINUTES",
+            "5",
         ),
         "operationalMySqlDataMaxSizeMb": value(
             "operationalMySqlDataMaxSizeMb",

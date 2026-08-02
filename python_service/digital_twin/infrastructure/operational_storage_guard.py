@@ -26,10 +26,10 @@ def operational_storage_health(
     """Classify shared-disk pressure before optional database writes start."""
 
     configured = dict(settings or {})
-    minimum_free_mb = _integer(configured.get("operationalMinimumFreeSpaceMb"), 16384, 1024)
+    minimum_free_mb = _integer(configured.get("operationalMinimumFreeSpaceMb"), 12288, 1024)
     critical_free_mb = min(
         minimum_free_mb,
-        _integer(configured.get("operationalCriticalFreeSpaceMb"), 8192, 512),
+        _integer(configured.get("operationalCriticalFreeSpaceMb"), 6144, 512),
     )
     pressure_free_percent = _integer(
         configured.get("operationalStoragePressureFreePercent"),

@@ -13,10 +13,10 @@ from ..domain.events import (
 from ..domain.data_freshness import parse_datetime
 from ..domain.message_types import OPERATIONAL_STORAGE_CAPACITY
 from ..domain.notifications import NotificationJob
-from ..domain.operational_storage_capacity import ACTIVE_STATES, evaluate_operational_storage_capacity
-
-
-DISABLED_VALUES = {"0", "false", "no", "off", "disabled"}
+from ..domain.operational_storage_capacity import (
+    evaluate_operational_storage_capacity,
+    operational_storage_capacity_enabled,
+)
 
 
 class OperationalStorageCapacityService:
@@ -67,30 +67,33 @@ class OperationalStorageCapacityService:
             settings=self.settings,
             now=current,
         )
-        # An ENOSPC-style write failure is an independent proof that the
-        # normal capacity sampler arrived too late.  It may force one alert,
-        # but preserves the usual reminder interval to prevent a failed
-        # worker from repeatedly paging operations.
-        last_alert = str(previous.get("lastAlertAt") or "")
-        last_alert_at = parse_datetime(last_alert)
-        reminder_seconds = max(5, int(health.get("alertReminderMinutes") or 60)) * 60
-        force_due = not last_alert_at or (
-            current.astimezone(timezone.utc) - last_alert_at.astimezone(timezone.utc)
-        ).total_seconds() >= reminder_seconds
+        # An ENOSPC-style write failure is independent evidence that the
+        # normal sampler was too late. It bypasses the long human reminder
+        # window, while a short dedicated cooldown avoids one alert per
+        # failing worker process.
+        last_runtime_failure = parse_datetime(previous.get("lastRuntimeFailureAlertAt"))
+        try:
+            runtime_cooldown_minutes = int(
+                float(str(self.settings.get("operationalStorageRuntimeFailureCooldownMinutes") or 5))
+            )
+        except (TypeError, ValueError):
+            runtime_cooldown_minutes = 5
+        runtime_cooldown_seconds = max(60, runtime_cooldown_minutes * 60)
+        force_due = not last_runtime_failure or (
+            current.astimezone(timezone.utc) - last_runtime_failure.astimezone(timezone.utc)
+        ).total_seconds() >= runtime_cooldown_seconds
         if (
             force_alert
             and force_due
-            and str(health.get("state") or "") in ACTIVE_STATES
-            and not health.get("alertRequired")
+            and operational_storage_capacity_enabled(self.settings)
         ):
             health.update({
                 "alertRequired": True,
                 "alertKind": "runtime-write-failure",
                 "lastAlertAt": str(health.get("checkedAt") or ""),
+                "lastRuntimeFailureAlertAt": str(health.get("checkedAt") or ""),
                 "runtimeCapacityFailure": True,
             })
-            if last_alert:
-                health["previousAlertAt"] = last_alert
         self.save(health)
         event = operational_storage_capacity_changed_event(health) if health.get("alertRequired") else None
         return health, event
@@ -137,16 +140,24 @@ class OperationalStorageCapacityNotificationEnqueuer:
         state = str(values.get("state") or "unknown")
         previous = str(values.get("previousState") or "없음")
         recovered = str(values.get("alertKind") or "") == "recovered"
-        title = "운영 저장공간 정상 복구" if recovered else "운영 저장공간 제한 " + {
+        kind = str(values.get("alertKind") or "")
+        title = "운영 저장공간 알림 해소" if recovered else "운영 저장공간 제한 " + {
             "warning": "경고",
             "limited": "도달",
             "critical": "심각",
         }.get(state, "상태 변경")
+        if kind == "runtime-write-failure":
+            title = "운영 저장공간 쓰기 실패"
+        elif kind in {"forecast", "forecast-eta-worsened"}:
+            title = "운영 저장공간 소진 예상"
+        elif kind == "material-worsening":
+            title = "운영 저장공간 제한 악화"
         lines = [
             "[운영] " + title,
             "• 상태: " + state + " (이전 " + previous + ")",
             "• 공용 디스크 여유: " + str(values.get("freeMb") or 0) + "MB"
-            + " · 경고 " + str(values.get("warningFreeMb") or 0) + "MB"
+            + " · 내부 정리 " + str(values.get("warningFreeMb") or 0) + "MB"
+            + " · 운영 알림 " + str(values.get("alertFreeMb") or 0) + "MB"
             + " · 제한 " + str(values.get("minimumFreeMb") or 0) + "MB"
             + " · 심각 " + str(values.get("criticalFreeMb") or 0) + "MB",
             "• TypeDB: " + str(values.get("typedbSizeMb") or 0) + "MB / 한도 " + str(values.get("typedbLimitMb") or 0) + "MB"
@@ -159,13 +170,27 @@ class OperationalStorageCapacityNotificationEnqueuer:
             "• 확인시각: " + str(values.get("checkedAt") or event.occurred_at),
         ]
         if recovered:
-            lines.insert(2, "• 해소: " + str(values.get("recoveredFromState") or previous) + " 상태에서 정상 범위로 복구되었습니다.")
+            lines.insert(2, "• 해소: " + str(values.get("recoveredFromState") or previous) + " 상태에서 운영 알림 기준을 벗어났습니다.")
+        if values.get("forecastDetected"):
+            eta = values.get("forecastEtaMinutes")
+            eta_text = "계산 중" if eta is None else "약 " + str(eta) + "분 후"
+            lines.insert(
+                3,
+                "• 소진 예측: 최근 " + str(values.get("forecastElapsedMinutes") or 0)
+                + "분 흐름에서 " + eta_text + " "
+                + str(values.get("forecastThresholdMb") or 0) + "MB 이하 예상",
+            )
+        if kind == "runtime-write-failure":
+            lines.insert(3, "• 감지: 실제 저장소 쓰기 실패(ENOSPC 계열)를 감지해 일반 알림 쿨다운과 별도로 발송했습니다.")
         components = list(values.get("limitingComponents") or [])
         if components:
             names = ", ".join(str(item.get("component") or "") for item in components if isinstance(item, dict))
             if names:
                 lines.insert(3, "• 제한 대상: " + names)
         text = "\n".join(lines)
+        signal = "recovered" if recovered else (
+            "capacityForecast" if kind in {"forecast", "forecast-eta-worsened"} else "capacityLimited"
+        )
         return {
             "messageType": OPERATIONAL_STORAGE_CAPACITY,
             "accountId": "",
@@ -181,6 +206,6 @@ class OperationalStorageCapacityNotificationEnqueuer:
             "rawLines": text,
             "storageCapacityHealth": values,
             "eventGeneratedAt": event.occurred_at,
-            "notificationSignals": ["operations", "storageCapacity", "recovered" if recovered else "capacityLimited"],
+            "notificationSignals": ["operations", "storageCapacity", signal],
             "criteria": ["공용 디스크 여유", "TypeDB 저장·WAL·checkpoint 크기", "MySQL·로그 저장공간 한도"],
         }

@@ -847,6 +847,52 @@ class PortfolioOntologyProjectionRecorder:
             status=recovery_status,
             runtimeMs=runtime_stages["pendingAboxActivationRecoveryMs"],
         )
+        # Recovery takes the same database-wide writer coordinator as an ABox
+        # swap.  A held coordinator is normal back-pressure: keep the
+        # existing generation and let the reasoning mailbox retry after the
+        # current writer finishes.  Collapsing it into a generic recovery
+        # failure incorrectly opened the projection circuit and left the
+        # pending activation (and its retired Manifest cleanup) stranded.
+        recovery_is_retryable = (
+            recovery_status.startswith("deferred-")
+            or bool(pending_activation_recovery.get("retryable"))
+        )
+        if recovery_is_retryable:
+            try:
+                recovery_retry_after = max(
+                    1,
+                    int(float(
+                        pending_activation_recovery.get("recommendedRetryAfterSeconds")
+                        or pending_activation_recovery.get("retryAfterSeconds")
+                        or 10
+                    )),
+                )
+            except (TypeError, ValueError):
+                recovery_retry_after = 10
+            result = {
+                "saved": False,
+                "status": (
+                    recovery_status
+                    if recovery_status.startswith("deferred-")
+                    else "deferred-pending-abox-activation-recovery"
+                ),
+                "reason": str(
+                    pending_activation_recovery.get("reason")
+                    or "TypeDB ABox activation recovery is waiting for a safe retry."
+                )[:220],
+                "graphStore": self.active_graph_store_key(),
+                "retryable": True,
+                "recommendedRetryAfterSeconds": recovery_retry_after,
+                "preservedActiveGeneration": True,
+                "pendingAboxActivationRecovery": pending_activation_recovery,
+            }
+            if isinstance(pending_activation_recovery.get("projectionCoordinator"), dict):
+                result["projectionCoordinator"] = dict(
+                    pending_activation_recovery.get("projectionCoordinator") or {}
+                )
+            self.store_projection_result(snapshot, result)
+            emit_progress("deferred", status=result["status"])
+            return result
         if recovery_status not in {
             "skipped",
             "disabled",

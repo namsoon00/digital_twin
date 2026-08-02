@@ -156,6 +156,24 @@ class OntologyRuntimeOperationsTests(unittest.TestCase):
         self.assertEqual("inference-finalization-pending", result["results"][0]["status"])
         self.assertEqual(10, result["retryAfterSeconds"])
 
+    def test_projection_gate_preserves_deferred_pending_abox_recovery_as_backpressure(self):
+        service = OntologyReasoningRunner.__new__(OntologyReasoningRunner)
+        coordinator_busy = SimpleNamespace(last_ontology_projection_results={
+            "main": {
+                "status": "deferred-projection-coordinator",
+                "reason": "another TypeDB projection owns the writer boundary",
+                "retryable": True,
+                "recommendedRetryAfterSeconds": 17,
+            },
+        })
+
+        result = service.projection_gate(coordinator_busy)
+
+        self.assertFalse(result["ready"])
+        self.assertTrue(result["retryable"])
+        self.assertEqual("deferred-projection-coordinator", result["results"][0]["status"])
+        self.assertEqual(17, result["retryAfterSeconds"])
+
     def test_projection_gate_treats_waiting_for_a_newer_source_snapshot_as_retryable(self):
         service = OntologyReasoningRunner.__new__(OntologyReasoningRunner)
         waiting = SimpleNamespace(last_ontology_projection_results={

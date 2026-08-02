@@ -4200,6 +4200,13 @@ class OntologyReasoningRunner:
         failures: List[Dict[str, str]] = []
         retryable: List[Dict[str, str]] = []
 
+        def is_retryable_projection_status(status: str) -> bool:
+            # New control-plane deferrals must not become circuit-opening
+            # failures merely because the producing worker added a more
+            # specific deferred status.  The `deferred-` prefix is the
+            # cross-layer contract for safe, mailbox-preserving back-pressure.
+            return status in retryable_projection_statuses or status.startswith("deferred-")
+
         def add_result(
             account_id: object,
             stage: str,
@@ -4219,7 +4226,7 @@ class OntologyReasoningRunner:
             }
             if retry_after:
                 item["retryAfterSeconds"] = retry_after
-            if status in retryable_projection_statuses:
+            if is_retryable_projection_status(status):
                 retryable.append(item)
             else:
                 failures.append(item)
@@ -4240,7 +4247,7 @@ class OntologyReasoningRunner:
                 continue
             execution = result.get("ruleboxExecution") if isinstance(result.get("ruleboxExecution"), dict) else {}
             execution_status = str(execution.get("status") or "").strip().lower()
-            if execution_status in transient_failure_statuses or execution_status in retryable_projection_statuses:
+            if execution_status in transient_failure_statuses or is_retryable_projection_status(execution_status):
                 add_result(
                     account_id,
                     "native-rule",
@@ -4254,7 +4261,7 @@ class OntologyReasoningRunner:
             if (
                 not inference
                 or inference_status in transient_failure_statuses
-                or inference_status in retryable_projection_statuses
+                or is_retryable_projection_status(inference_status)
             ):
                 add_result(
                     account_id,

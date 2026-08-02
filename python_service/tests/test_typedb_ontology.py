@@ -6781,6 +6781,43 @@ class TypeDBOntologyRepositoryTests(unittest.TestCase):
         self.assertEqual("empty-journal", result["recoveryPreflight"])
         self.assertEqual(["read-pending"], repository.calls)
 
+    def test_projection_recorder_defers_when_pending_activation_recovery_waits_for_coordinator(self):
+        class FakeRepository:
+            store_key = "typedb"
+
+            def pending_abox_activation(self, **_kwargs):
+                return {
+                    "status": "pending",
+                    "candidateAboxSnapshotId": "abox-manifest:pending",
+                    "targetSymbols": ["AAPL"],
+                }
+
+            def recover_pending_abox_activation(self, **_kwargs):
+                return {
+                    "status": "deferred-projection-coordinator",
+                    "retryable": True,
+                    "recommendedRetryAfterSeconds": 13,
+                    "reason": "another TypeDB projection owns the writer boundary",
+                    "projectionCoordinator": {"status": "held", "leaseRemainingSeconds": 13},
+                }
+
+        snapshot = AccountSnapshot(
+            "main", "메인", "toss", "live", "ok", utc_now_iso(),
+            PortfolioSummary(total=1000, invested=1000, cash=0, markets=[], sectors=[], concentration=0),
+            positions=[Position("AAPL", "Apple", market="US", currency="USD", quantity=1, current_price=100, market_value=100, market_value_krw=140000)],
+        )
+
+        result = PortfolioOntologyProjectionRecorder(FakeRepository()).record_snapshot(snapshot)
+
+        self.assertEqual("deferred-projection-coordinator", result["status"])
+        self.assertTrue(result["retryable"])
+        self.assertEqual(13, result["recommendedRetryAfterSeconds"])
+        self.assertEqual("held", result["projectionCoordinator"]["status"])
+        self.assertEqual(
+            "deferred-projection-coordinator",
+            result["pendingAboxActivationRecovery"]["status"],
+        )
+
     def test_projection_recorder_resumes_a_staged_pending_manifest_before_new_snapshot(self):
         class FakeRepository:
             store_key = "typedb"

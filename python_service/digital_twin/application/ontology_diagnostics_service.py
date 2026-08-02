@@ -263,6 +263,7 @@ class OntologyDiagnosticsService:
                 "active",
                 "status",
                 "retryAfterSeconds",
+                "requestRemainingSeconds",
                 "requestedAt",
                 "expiresAt",
                 "worldId",

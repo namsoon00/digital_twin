@@ -361,6 +361,17 @@ def scoped_abox_maintenance_yield_policy(
             10,
             5 * 60,
         )),
+        # A request can be created while an already-started native inference
+        # owns the writer. Keep the request long enough for that bounded
+        # batch to finish; the reasoning worker still yields in short
+        # ``windowSeconds`` slices once it sees the request.
+        "requestTtlSeconds": _integer(_setting_number(
+            configured,
+            "ontologyAboxMaintenanceYieldRequestTtlSeconds",
+            420,
+            30,
+            30 * 60,
+        )),
         "cooldownSeconds": _integer(_setting_number(
             configured,
             "ontologyAboxMaintenanceYieldCooldownSeconds",
@@ -500,7 +511,8 @@ def scoped_abox_maintenance_yield_status(
             else "idle"
         ),
         "checkedAt": current.isoformat().replace("+00:00", "Z"),
-        "retryAfterSeconds": remaining if active else 0,
+        "retryAfterSeconds": min(remaining, int(policy["windowSeconds"])) if active else 0,
+        "requestRemainingSeconds": remaining if active else 0,
         "requestedAt": requested_at,
         "requestAgeSeconds": request_age,
         "expiresAt": expires_at,

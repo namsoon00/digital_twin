@@ -226,6 +226,7 @@ class OntologyMaintenanceRunnerTests(unittest.TestCase):
             settings={
                 "ontologyAboxMaintenanceYieldAfterSeconds": "30",
                 "ontologyAboxMaintenanceYieldWindowSeconds": "30",
+                "ontologyAboxMaintenanceYieldRequestTtlSeconds": "90",
             },
             reasoning_queue_probe=lambda: {
                 "effectivePendingCount": 2,
@@ -240,6 +241,8 @@ class OntologyMaintenanceRunnerTests(unittest.TestCase):
         self.assertTrue(maintenance_yield["active"])
         self.assertEqual("portfolio:local:main", maintenance_yield["worldId"])
         self.assertEqual(20, maintenance_yield["inactiveManifestCount"])
+        self.assertEqual(30, maintenance_yield["retryAfterSeconds"])
+        self.assertGreaterEqual(maintenance_yield["requestRemainingSeconds"], 80)
         self.assertTrue(store.payload["maintenanceYieldRequest"]["expiresAt"])
 
     def test_successful_maintenance_consumes_an_active_yield_request(self):

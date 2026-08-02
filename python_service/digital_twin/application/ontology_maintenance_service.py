@@ -170,7 +170,10 @@ class OntologyMaintenanceRunner:
             }
         now = datetime.now(timezone.utc)
         requested_at = now.isoformat().replace("+00:00", "Z")
-        expires_at = (now + timedelta(seconds=max(1, integer(policy.get("windowSeconds"), 30)))).isoformat().replace("+00:00", "Z")
+        expires_at = (now + timedelta(seconds=max(
+            integer(policy.get("windowSeconds"), 30),
+            integer(policy.get("requestTtlSeconds"), 420),
+        ))).isoformat().replace("+00:00", "Z")
         request = {
             "version": str(policy.get("version") or "typedb-scoped-abox-maintenance-yield-v1"),
             "requestedAt": requested_at,

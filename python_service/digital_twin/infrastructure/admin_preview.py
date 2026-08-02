@@ -671,6 +671,7 @@ def admin_preview_config() -> Dict[str, object]:
                     {"key": "ontologyAboxMaintenanceYieldEnabled", "label": "ABox 정리 창 보장", "type": "toggle", "default": "1"},
                     {"key": "ontologyAboxMaintenanceYieldAfterSeconds", "label": "ABox 정리 창 요청 대기", "type": "number", "default": "120", "unit": "seconds"},
                     {"key": "ontologyAboxMaintenanceYieldWindowSeconds", "label": "ABox 정리 창 길이", "type": "number", "default": "30", "unit": "seconds"},
+                    {"key": "ontologyAboxMaintenanceYieldRequestTtlSeconds", "label": "ABox 정리 요청 유효시간", "type": "number", "default": "420", "unit": "seconds"},
                     {"key": "ontologyAboxMaintenanceYieldCooldownSeconds", "label": "ABox 정리 창 최소 간격", "type": "number", "default": "120", "unit": "seconds"},
                     {"key": "ontologyAboxMaintenanceYieldInventoryMaxAgeSeconds", "label": "ABox 적체 관측 유효시간", "type": "number", "default": "900", "unit": "seconds"},
                     {"key": "ontologyReasoningUrgentReviewLevels", "label": "긴급 추론 검토 단계", "type": "text", "default": "act,immediate"},

@@ -656,6 +656,7 @@ class OntologyReasoningRunner:
         "ontologyAboxMaintenanceYieldEnabled",
         "ontologyAboxMaintenanceYieldAfterSeconds",
         "ontologyAboxMaintenanceYieldWindowSeconds",
+        "ontologyAboxMaintenanceYieldRequestTtlSeconds",
         "ontologyAboxMaintenanceYieldCooldownSeconds",
         "ontologyAboxMaintenanceYieldInventoryMaxAgeSeconds",
     )

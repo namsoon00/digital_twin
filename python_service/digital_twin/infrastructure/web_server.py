@@ -701,6 +701,7 @@ def settings_status_payload() -> Dict[str, object]:
         "ontologyAboxMaintenanceYieldEnabled",
         "ontologyAboxMaintenanceYieldAfterSeconds",
         "ontologyAboxMaintenanceYieldWindowSeconds",
+        "ontologyAboxMaintenanceYieldRequestTtlSeconds",
         "ontologyAboxMaintenanceYieldCooldownSeconds",
         "ontologyAboxMaintenanceYieldInventoryMaxAgeSeconds",
         "ontologyWorldProjectionDeferWhenReasoningPending",

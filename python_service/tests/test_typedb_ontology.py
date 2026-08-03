@@ -10250,6 +10250,67 @@ class TypeDBOntologyRepositoryTests(unittest.TestCase):
         self.assertIn("$anyConditionCount >= 2", query)
         self.assertNotIn('has ontology-kind "worldview-manifest-active-pointer"', query)
 
+    def test_typedb_manifest_indexed_any_group_gets_extended_bounded_timeout(self):
+        repository = TypeDBOntologyGraphRepository(
+            "127.0.0.1:1729",
+            native_rule_query_timeout_seconds=10,
+            native_rule_execution_budget_seconds=105,
+        )
+        rule = next(item for item in default_graph_inference_rules() if item.rule_id == "graph.loss_smart_money.add_buy_review.v1")
+        evidence_index = {
+            "status": "verified",
+            "index": {
+                "sourceStorageIdsBySourceId": {
+                    "stock:000660": "ontology-storage:active-000660",
+                },
+                "relationStorageIdsBySymbolAndType": {
+                    "000660": {
+                        "HAS_TECHNICAL_INDICATOR": ["ontology-storage:active-ma5"],
+                        "HAS_TEMPORAL_WINDOW": ["ontology-storage:active-window"],
+                        "HAS_TRADE_FLOW": ["ontology-storage:active-flow"],
+                    },
+                },
+            },
+        }
+        with patch.object(repository, "read_rows_in_transaction", return_value=[]) as read_rows:
+            result = repository.verify_typedb_native_any_conditions(
+                object(),
+                object(),
+                rule,
+                "stock:000660",
+                40.0,
+                True,
+                tx=object(),
+                world_id="portfolio:local:default",
+                evidence_read_index=evidence_index,
+            )
+
+        self.assertEqual("not-matched", result["status"])
+        self.assertEqual(20.0, repository.native_rule_indexed_any_condition_query_timeout_seconds())
+        self.assertEqual(20.0, read_rows.call_args.kwargs["timeout_seconds"])
+
+    def test_typedb_generic_any_group_keeps_standard_query_timeout(self):
+        repository = TypeDBOntologyGraphRepository(
+            "127.0.0.1:1729",
+            native_rule_query_timeout_seconds=10,
+            native_rule_execution_budget_seconds=105,
+        )
+        rule = next(item for item in default_graph_inference_rules() if item.rule_id == "graph.loss_smart_money.add_buy_review.v1")
+        with patch.object(repository, "read_rows_in_transaction", return_value=[]) as read_rows:
+            result = repository.verify_typedb_native_any_conditions(
+                object(),
+                object(),
+                rule,
+                "stock:000660",
+                40.0,
+                True,
+                tx=object(),
+                world_id="portfolio:local:default",
+            )
+
+        self.assertEqual("not-matched", result["status"])
+        self.assertEqual(10.0, read_rows.call_args.kwargs["timeout_seconds"])
+
     def test_typedb_any_group_check_uses_direct_existence_for_one_of_many(self):
         rule = next(
             item

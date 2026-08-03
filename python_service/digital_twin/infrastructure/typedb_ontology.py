@@ -1571,6 +1571,11 @@ TYPEDB_PROJECTION_COORDINATOR_VERSION = "typedb-projection-coordinator-v1"
 # into a partial judgement.
 # The reasoning scheduler and circuit breaker continue to bound aggregate CPU.
 DEFAULT_TYPEDB_NATIVE_RULE_QUERY_TIMEOUT_SECONDS = 10.0
+# An indexed N-of-M group is bound to one verified active ABox source and its
+# exact relation rows. It is structurally bounded but TypeDB's aggregation
+# planner can take longer than an ordinary schema-function lookup on a cold
+# local server. Keep this allowance separate from the broad-query deadline.
+DEFAULT_TYPEDB_NATIVE_RULE_INDEXED_ANY_CONDITION_QUERY_TIMEOUT_SECONDS = 20.0
 # A complete one-symbol production replay needs roughly 84 seconds on the
 # local TypeDB dataset. Leave headroom for the final applicable rule instead
 # of failing a whole candidate when its last bounded read starts with <1s.
@@ -6764,6 +6769,18 @@ class TypeDBOntologyGraphRepository(GraphStoreOntologyRowMapperMixin, ScopedABox
 
     def native_rule_query_timeout_seconds(self) -> float:
         return self._native_rule_query_timeout_seconds
+
+    def native_rule_indexed_any_condition_query_timeout_seconds(self) -> float:
+        return max(
+            0.5,
+            min(
+                self.native_rule_execution_budget_seconds(),
+                max(
+                    self.native_rule_query_timeout_seconds(),
+                    DEFAULT_TYPEDB_NATIVE_RULE_INDEXED_ANY_CONDITION_QUERY_TIMEOUT_SECONDS,
+                ),
+            ),
+        )
 
     def native_rule_execution_budget_seconds(self) -> float:
         return self._native_rule_execution_budget_seconds
@@ -14122,20 +14139,25 @@ relation ontology-assertion,
                 "readQueryCount": 0,
                 "reason": str(query_plan.get("reason") or "TypeDB any-condition group query could not be built."),
             }
+        requested_timeout = max(0.5, float(timeout_seconds or 0.5))
+        query_timeout_cap = self.native_rule_query_timeout_seconds()
+        if str(query_plan.get("anyConditionCheckMode") or "") == "distinct-condition-count-manifest-indexed":
+            query_timeout_cap = self.native_rule_indexed_any_condition_query_timeout_seconds()
+        query_timeout = min(requested_timeout, query_timeout_cap)
         owns_transaction = tx is None
         try:
             if owns_transaction:
                 with driver.transaction(
                     self.database,
                     transaction_type.READ,
-                    self.read_transaction_options(timeout_seconds),
+                    self.read_transaction_options(query_timeout),
                 ) as transaction:
                     rows = self.read_rows_in_transaction(
                         transaction,
                         str(query_plan.get("query")),
                         query_plan.get("columns") or ["sourceId"],
                         label="nativeRuleAnyGroup:" + str(rule.rule_id or ""),
-                        timeout_seconds=timeout_seconds,
+                        timeout_seconds=query_timeout,
                     )
             else:
                 rows = self.read_rows_in_transaction(
@@ -14143,7 +14165,7 @@ relation ontology-assertion,
                     str(query_plan.get("query")),
                     query_plan.get("columns") or ["sourceId"],
                     label="nativeRuleAnyGroup:" + str(rule.rule_id or ""),
-                    timeout_seconds=timeout_seconds,
+                    timeout_seconds=query_timeout,
                 )
         except Exception as error:  # noqa: BLE001 - a partial any check must block the whole inference generation.
             return {
@@ -14163,6 +14185,8 @@ relation ontology-assertion,
             "requiredConditionCount": required_count,
             "readTransactionCount": 1 if owns_transaction else 0,
             "readQueryCount": 1,
+            "queryTimeoutSeconds": query_timeout,
+            "anyConditionCheckMode": str(query_plan.get("anyConditionCheckMode") or ""),
             "typeDbCardinalityVerified": bool(rows),
         }
 
@@ -14276,7 +14300,16 @@ relation ontology-assertion,
             if remaining_seconds <= 0.5:
                 return budget_failure()
             query_timeout = min(self.native_rule_query_timeout_seconds(), remaining_seconds)
-            driver = self.open_driver(imported, request_timeout_seconds=query_timeout)
+            driver = self.open_driver(
+                imported,
+                request_timeout_seconds=min(
+                    remaining_seconds,
+                    max(
+                        query_timeout,
+                        self.native_rule_indexed_any_condition_query_timeout_seconds(),
+                    ),
+                ),
+            )
             read_transaction_count = 0
             read_call_count = 0
             query_duration_ms = 0.0
@@ -14318,7 +14351,7 @@ relation ontology-assertion,
                                 transaction_type,
                                 rule,
                                 str(row.get("sourceId") or ""),
-                                min(self.native_rule_query_timeout_seconds(), remaining_seconds),
+                                remaining_seconds,
                                 scoped_manifest_only,
                                 world_id=world_id,
                                 evidence_read_index=evidence_read_index,
@@ -15079,7 +15112,7 @@ relation ontology-assertion,
                                             TransactionType,
                                             rule,
                                             str(row.get("sourceId") or ""),
-                                            min(self.native_rule_query_timeout_seconds(), remaining_seconds),
+                                            remaining_seconds,
                                             scoped_manifest_only,
                                             tx=tx,
                                             world_id=world_id,

@@ -453,13 +453,36 @@ class MonitorRunner:
             and bool(str(inference.get("sourceAboxSnapshotId") or ""))
         )
         investment_types = {"investmentInsight", "holdingTiming", "watchlistOntologySignal", "cryptoOntologySignal"}
-        detected = [event for event in detected_events or [] if str(getattr(event, "message_type", "") or "") in investment_types]
-        ready = [event for event in ready_events or [] if str(getattr(event, "message_type", "") or "") in investment_types]
+
+        def event_message_type(event: AlertEvent) -> str:
+            return str(
+                getattr(event, "rule", "")
+                or getattr(event, "message_type", "")
+                or ""
+            ).strip()
+
+        detected = [event for event in detected_events or [] if event_message_type(event) in investment_types]
+        ready = [event for event in ready_events or [] if event_message_type(event) in investment_types]
         selected_symbols = sorted({
             str(symbol or "").upper().strip()
             for symbol in allowed_symbols or set()
             if str(symbol or "").strip()
         })
+        target_symbols = sorted({
+            str(symbol or "").upper().strip()
+            for symbol in inference.get("targetSymbols") or []
+            if str(symbol or "").strip()
+        })
+        detected_symbols = {
+            str(getattr(event, "symbol", "") or "").upper().strip()
+            for event in detected
+            if str(getattr(event, "symbol", "") or "").strip()
+        }
+        ready_symbols = {
+            str(getattr(event, "symbol", "") or "").upper().strip()
+            for event in ready
+            if str(getattr(event, "symbol", "") or "").strip()
+        }
         if no_match:
             status = "no-signal"
             reason = "TypeDB native rules evaluated the current ABox successfully, but no investment relation matched."
@@ -477,6 +500,31 @@ class MonitorRunner:
         else:
             status = "no-material-alert"
             reason = "The current inference did not create a material investment alert candidate."
+        symbol_outcomes = []
+        for symbol in selected_symbols or target_symbols:
+            if symbol in ready_symbols:
+                symbol_status = "delivery-ready"
+                symbol_reason = "An investment alert candidate passed cadence."
+            elif symbol in detected_symbols:
+                symbol_status = "cadence-suppressed"
+                symbol_reason = "An investment alert candidate was held by cadence."
+            elif target_symbols and symbol not in target_symbols:
+                symbol_status = "not-evaluated"
+                symbol_reason = "The verified TypeDB generation did not include this symbol."
+            elif no_match:
+                symbol_status = "no-signal"
+                symbol_reason = "TypeDB evaluated the symbol but no investment relation matched."
+            elif status == "blocked":
+                symbol_status = "blocked"
+                symbol_reason = reason
+            else:
+                symbol_status = "no-material-alert"
+                symbol_reason = "The evaluated relations did not create a material alert candidate."
+            symbol_outcomes.append({
+                "symbol": symbol,
+                "status": symbol_status,
+                "reason": symbol_reason,
+            })
         payload = {
             "status": status,
             "reason": reason,
@@ -486,12 +534,13 @@ class MonitorRunner:
             "generationAligned": generation_aligned,
             "sourceAboxSnapshotId": str(inference.get("sourceAboxSnapshotId") or ""),
             "inferenceGenerationId": str(inference.get("inferenceGenerationId") or ""),
-            "targetSymbols": list(inference.get("targetSymbols") or [])[:80],
+            "targetSymbols": target_symbols[:80],
             "requestedSymbols": selected_symbols,
             "detectedCandidateCount": len(detected),
             "cadenceReadyCount": len(ready),
-            "detectedMessageTypes": sorted({str(getattr(event, "message_type", "") or "") for event in detected}),
-            "cadenceReadyMessageTypes": sorted({str(getattr(event, "message_type", "") or "") for event in ready}),
+            "detectedMessageTypes": sorted({event_message_type(event) for event in detected}),
+            "cadenceReadyMessageTypes": sorted({event_message_type(event) for event in ready}),
+            "symbolOutcomes": symbol_outcomes[:80],
         }
         snapshot.metadata.setdefault("ontology", {})["alertPipeline"] = payload
         if isinstance(projection, dict):

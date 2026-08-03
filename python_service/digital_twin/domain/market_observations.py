@@ -48,7 +48,7 @@ def _position_source(item: Dict[str, object]) -> str:
 
 
 def market_observation_baselines(state: Dict[str, object]) -> Dict[str, Dict[str, object]]:
-    """Read valid per-symbol alert anchors from one persisted monitor state."""
+    """Read valid per-symbol reasoning and owner-delivery anchors."""
 
     metadata = state.get("metadata") if isinstance(state, dict) else {}
     raw = metadata.get(MARKET_OBSERVATION_BASELINES_KEY) if isinstance(metadata, dict) else {}
@@ -56,10 +56,25 @@ def market_observation_baselines(state: Dict[str, object]) -> Dict[str, Dict[str
     for raw_symbol, raw_value in (raw.items() if isinstance(raw, dict) else []):
         symbol = str(raw_symbol or "").upper().strip()
         value = dict(raw_value) if isinstance(raw_value, dict) else {"price": raw_value}
-        price = number(value.get("price") if "price" in value else value.get("currentPrice"))
+        price = number(
+            value.get("reasoningPrice")
+            or value.get("price")
+            or value.get("currentPrice")
+            or value.get("outboxPrice")
+            or value.get("initialPrice")
+        )
         if not symbol or price <= 0:
             continue
         value["price"] = price
+        value["reasoningPrice"] = number(value.get("reasoningPrice")) or price
+        value["initialPrice"] = number(value.get("initialPrice")) or price
+        outbox_price = number(value.get("outboxPrice"))
+        if outbox_price > 0:
+            value["outboxPrice"] = outbox_price
+        elif value.get("outboxQueuedAt"):
+            # Legacy rows stored only one price plus the delivery marker. The
+            # normalized copy becomes explicit on the next snapshot write.
+            value["outboxPrice"] = price
         result[symbol] = value
     return result
 
@@ -69,7 +84,7 @@ def market_observation_baseline(
     symbol: str,
     currency: str = "",
 ) -> Dict[str, object]:
-    """Return the last outbox-accepted observation anchor for a symbol.
+    """Return all durable observation anchors for a symbol.
 
     Currency changes invalidate an old price anchor instead of comparing two
     values with different units.
@@ -121,12 +136,17 @@ def hydrate_market_observation_baselines(
                 continue
             baseline = {
                 "price": anchor_price,
+                "reasoningPrice": anchor_price,
+                "initialPrice": anchor_price,
                 "currency": currency,
                 "source": _position_source(item),
                 "initializedAt": str(updated.get("generatedAt") or ""),
             }
         else:
-            baseline["price"] = number(baseline.get("price"))
+            reasoning_price = number(baseline.get("reasoningPrice")) or number(baseline.get("price"))
+            baseline["price"] = reasoning_price
+            baseline["reasoningPrice"] = reasoning_price
+            baseline["initialPrice"] = number(baseline.get("initialPrice")) or reasoning_price
             baseline["currency"] = currency or baseline_currency
             baseline.setdefault("source", _position_source(item))
         baselines[symbol] = baseline
@@ -167,6 +187,9 @@ def apply_market_observation_outbox_baselines(
         baselines[symbol] = {
             **previous,
             "price": price,
+            "reasoningPrice": price,
+            "outboxPrice": price,
+            "initialPrice": number(previous.get("initialPrice")) or price,
             "currency": str(observation.get("currency") or "").upper().strip(),
             "source": str(observation.get("source") or "").strip(),
             "outboxQueuedAt": str(getattr(event, "generated_at", "") or updated.get("generatedAt") or ""),
@@ -232,13 +255,18 @@ def apply_market_observation_reasoning_baselines(
         if not symbol or price <= 0:
             continue
         previous = dict(baselines.get(symbol) or {})
-        if bool(item.get("deliveryDeferred")):
-            # This anchor no longer represents the last owner-visible raw
-            # alert. It represents a TypeDB-first follow-up boundary.
-            previous.pop("outboxQueuedAt", None)
+        initial_price = (
+            number(previous.get("initialPrice"))
+            or number(observation.get("initialPrice"))
+            or number(observation.get("outboxBaselinePrice"))
+            or number(observation.get("baselinePrice"))
+            or price
+        )
         baselines[symbol] = {
             **previous,
             "price": price,
+            "reasoningPrice": price,
+            "initialPrice": initial_price,
             "currency": str(observation.get("currency") or "").upper().strip(),
             "source": str(observation.get("source") or "").strip(),
             "reasoningQueuedAt": str(updated.get("generatedAt") or ""),

@@ -1,5 +1,6 @@
 import sys
 import unittest
+from datetime import datetime, timedelta, timezone
 from pathlib import Path
 from types import SimpleNamespace
 from unittest.mock import patch
@@ -325,6 +326,8 @@ class MonitoringForceSnapshotTests(unittest.TestCase):
         baseline = updated["metadata"]["marketObservationBaselines"]["AAPL"]
 
         self.assertEqual(101.0, baseline["price"])
+        self.assertEqual(101.0, baseline["reasoningPrice"])
+        self.assertEqual(100.0, baseline["outboxPrice"])
         self.assertEqual("2026-07-30T00:00:00Z", baseline["outboxQueuedAt"])
         self.assertEqual("2026-07-30T00:00:00Z", baseline["reasoningQueuedAt"])
         self.assertNotIn(MARKET_OBSERVATION_CANDIDATES_KEY, updated["metadata"])
@@ -337,10 +340,101 @@ class MonitoringForceSnapshotTests(unittest.TestCase):
                 "marketObservation": {"currentPrice": 102.0, "currency": "USD", "source": "Toss"},
             }],
         )
-        self.assertNotIn(
-            "outboxQueuedAt",
-            deferred["metadata"]["marketObservationBaselines"]["AAPL"],
+        deferred_baseline = deferred["metadata"]["marketObservationBaselines"]["AAPL"]
+        self.assertEqual(102.0, deferred_baseline["reasoningPrice"])
+        self.assertEqual(100.0, deferred_baseline["outboxPrice"])
+        self.assertEqual("2026-07-30T00:00:00Z", deferred_baseline["outboxQueuedAt"])
+
+    def test_critical_move_uses_last_owner_alert_even_after_reasoning_advanced(self):
+        previous_position = normalize_position({
+            "symbol": "PLTR", "name": "팔란티어", "market": "US", "currency": "USD",
+            "quantity": 1, "currentPrice": 140.99, "updatedAt": utc_now_iso(),
+        })
+        current_position = normalize_position({
+            "symbol": "PLTR", "name": "팔란티어", "market": "US", "currency": "USD",
+            "quantity": 1, "currentPrice": 142.33, "updatedAt": utc_now_iso(),
+        })
+        previous = AccountSnapshot(
+            "main", "메인", "toss", "live", "ok", utc_now_iso(),
+            portfolio_summary([previous_position]), [previous_position], [],
+            metadata={
+                "marketObservationBaselines": {
+                    "PLTR": {
+                        "price": 140.99,
+                        "reasoningPrice": 140.99,
+                        "outboxPrice": 134.74,
+                        "initialPrice": 125.83,
+                        "currency": "USD",
+                        "outboxQueuedAt": "2026-08-03T20:06:59Z",
+                        "reasoningQueuedAt": "2026-08-03T20:48:46Z",
+                    },
+                },
+            },
         )
+        current = AccountSnapshot(
+            "main", "메인", "toss", "live", "ok", utc_now_iso(),
+            portfolio_summary([current_position]), [current_position], [], metadata={},
+        )
+        monitor = RealtimeMonitor()
+
+        observations = [
+            event for event in monitor.events_for_snapshot(current, previous.to_monitor_state())
+            if event.rule == MARKET_OBSERVATION
+        ]
+
+        self.assertEqual(1, len(observations))
+        observation = observations[0]
+        details = observation.metadata["marketObservation"]
+        self.assertFalse(observation.metadata["deliveryDeferred"])
+        self.assertEqual("last-outbox-alert", details["baselineKind"])
+        self.assertEqual(134.74, details["baselinePrice"])
+        self.assertAlmostEqual(5.6331, details["changePct"], places=3)
+        self.assertAlmostEqual(0.9504, details["reasoningChangePct"], places=3)
+        self.assertEqual(10, monitor.dispatch_cadence_minutes(observation))
+
+        store = MemoryMonitorStore()
+        store.sent[observation.cadence_key()] = (
+            datetime.now(timezone.utc) - timedelta(minutes=20)
+        ).isoformat().replace("+00:00", "Z")
+        self.assertEqual([observation], monitor.apply_cadence([observation], store))
+
+    def test_alert_pipeline_records_real_alert_event_rules_and_symbol_outcomes(self):
+        position = normalize_position({
+            "symbol": "PLTR", "name": "팔란티어", "market": "US", "currency": "USD",
+            "quantity": 1, "currentPrice": 142.33, "updatedAt": utc_now_iso(),
+        })
+        snapshot = AccountSnapshot(
+            "main", "메인", "toss", "live", "ok", utc_now_iso(),
+            portfolio_summary([position]), [position], [], metadata={},
+        )
+        projection = {
+            "status": "ok",
+            "inferenceBox": {
+                "status": "ok",
+                "targetSymbols": ["PLTR"],
+                "nativeTypeDbReasoningCompleted": True,
+                "generationAligned": True,
+            },
+        }
+        candidate = AlertEvent(
+            "main", "메인", "WATCH", INVESTMENT_INSIGHT,
+            "main:pltr:insight", "팔란티어", [], symbol="PLTR",
+        )
+
+        MonitorRunner.record_investment_alert_pipeline(
+            SimpleNamespace(),
+            snapshot,
+            projection,
+            [candidate],
+            [],
+            allowed_symbols={"PLTR"},
+        )
+
+        pipeline = projection["alertPipeline"]
+        self.assertEqual("cadence-suppressed", pipeline["status"])
+        self.assertEqual(1, pipeline["detectedCandidateCount"])
+        self.assertEqual(["investmentInsight"], pipeline["detectedMessageTypes"])
+        self.assertEqual("cadence-suppressed", pipeline["symbolOutcomes"][0]["status"])
 
     def test_raw_observation_followup_builds_an_insight_after_graph_analysis(self):
         watchlist = normalize_position({

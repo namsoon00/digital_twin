@@ -276,6 +276,15 @@ class RealtimeMonitor(MonitoringSampleDataMixin, MonitoringPositionContextMixin,
         return max(MIN_CADENCE_MINUTES, value)
 
     def dispatch_cadence_minutes(self, event: AlertEvent) -> int:
+        if event.rule == MARKET_OBSERVATION:
+            metadata = dict(event.metadata or {}) if isinstance(event.metadata, dict) else {}
+            if not bool(metadata.get("deliveryDeferred")):
+                raw = self.settings.get("marketObservationImmediateCadenceMinutes")
+                try:
+                    value = int(float(str(raw).strip())) if str(raw or "").strip() else MIN_CADENCE_MINUTES
+                except ValueError:
+                    value = MIN_CADENCE_MINUTES
+                return max(MIN_CADENCE_MINUTES, value)
         if event.rule == INVESTMENT_INSIGHT:
             raw = self.settings.get("notificationCooldownMinutes")
             if str(raw or "").strip():
@@ -772,19 +781,41 @@ class RealtimeMonitor(MonitoringSampleDataMixin, MonitoringPositionContextMixin,
                 continue
             currency = item.currency or self.position_currency(item.to_dict())
             baseline = market_observation_baseline(previous or {}, symbol, currency)
-            stored_baseline_price = number(baseline.get("price"))
-            baseline_price = stored_baseline_price or previous_price
-            if baseline.get("outboxQueuedAt"):
-                baseline_kind = "last-outbox-alert"
-            elif baseline.get("reasoningQueuedAt"):
-                baseline_kind = "last-reasoning-candidate"
-            elif stored_baseline_price > 0:
-                baseline_kind = "initial-observation"
-            else:
-                baseline_kind = "previous-snapshot"
-            change_pct = (current_price - baseline_price) / abs(baseline_price) * 100.0
-            if change_pct == 0 or abs(change_pct) < threshold:
+            reasoning_baseline_price = (
+                number(baseline.get("reasoningPrice"))
+                or number(baseline.get("price"))
+                or previous_price
+            )
+            initial_baseline_price = number(baseline.get("initialPrice")) or reasoning_baseline_price
+            outbox_price = number(baseline.get("outboxPrice"))
+            delivery_baseline_price = outbox_price or initial_baseline_price
+            reasoning_change_pct = (
+                (current_price - reasoning_baseline_price) / abs(reasoning_baseline_price) * 100.0
+            )
+            delivery_change_pct = (
+                (current_price - delivery_baseline_price) / abs(delivery_baseline_price) * 100.0
+            )
+            reasoning_material = abs(reasoning_change_pct) >= threshold
+            immediate_delivery = (
+                abs(delivery_change_pct) >= threshold
+                and self.market_observation_deliver_immediately(delivery_change_pct)
+            )
+            if not reasoning_material and not immediate_delivery:
                 continue
+            if immediate_delivery:
+                baseline_price = delivery_baseline_price
+                baseline_kind = "last-outbox-alert" if outbox_price > 0 else "initial-observation"
+                change_pct = delivery_change_pct
+            else:
+                baseline_price = reasoning_baseline_price
+                baseline_kind = (
+                    "last-reasoning-candidate"
+                    if baseline.get("reasoningQueuedAt")
+                    else "initial-observation"
+                    if number(baseline.get("price")) > 0
+                    else "previous-snapshot"
+                )
+                change_pct = reasoning_change_pct
             direction = "up" if change_pct > 0 else "down" if change_pct < 0 else "flat"
             source = str(item.quote_source or item.source or "시세 공급자").strip()
             baseline_label = {
@@ -797,7 +828,7 @@ class RealtimeMonitor(MonitoringSampleDataMixin, MonitoringPositionContextMixin,
                 "last-reasoning-candidate": "마지막 TypeDB 후속 확인 기준 시세와 비교",
                 "initial-observation": "초기 관측 기준 시세와 비교",
             }.get(baseline_kind, "직전 저장 시세와 비교")
-            delivery_deferred = not self.market_observation_deliver_immediately(change_pct)
+            delivery_deferred = not immediate_delivery
             immediate_threshold = self.market_observation_immediate_price_change_threshold()
             lines = [
                 "현재가: " + price_money(current_price, currency),
@@ -840,6 +871,11 @@ class RealtimeMonitor(MonitoringSampleDataMixin, MonitoringPositionContextMixin,
                         "baselineKind": baseline_kind,
                         "currentPrice": current_price,
                         "changePct": round(change_pct, 4),
+                        "reasoningBaselinePrice": reasoning_baseline_price,
+                        "reasoningChangePct": round(reasoning_change_pct, 4),
+                        "outboxBaselinePrice": delivery_baseline_price,
+                        "outboxChangePct": round(delivery_change_pct, 4),
+                        "initialPrice": initial_baseline_price,
                         "thresholdPct": threshold,
                         "direction": direction,
                         "currency": currency,

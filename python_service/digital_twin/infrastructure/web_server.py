@@ -947,6 +947,7 @@ def settings_status_payload() -> Dict[str, object]:
         "monitorAccountLockSeconds",
         "marketObservationRawDeliveryMode",
         "marketObservationImmediatePriceChangePct",
+        "marketObservationImmediateCadenceMinutes",
         "marketDataMaxAgeMinutes",
         "marketSignalDataCollectionEnabled",
         "marketSignalDataBatchSize",

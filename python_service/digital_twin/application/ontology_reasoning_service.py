@@ -4702,6 +4702,7 @@ class OntologyReasoningRunner:
                     for key in [
                         "status", "reason", "detectedCandidateCount", "cadenceReadyCount",
                         "targetSymbols", "requestedSymbols", "nativeInferenceOutcome",
+                        "symbolOutcomes",
                     ]
                     if key in pipeline
                 },

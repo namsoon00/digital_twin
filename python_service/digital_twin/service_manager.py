@@ -1249,23 +1249,31 @@ def recover_typedb_scoped_write_lease_after_worker_restart(spec: Dict[str, objec
 
 
 def clear_typedb_rulebox_prewarm_activity() -> bool:
-    """Discard a compiler hand-off only after a new TypeDB server is ready.
+    """Mark RuleBox compilation as required after a new TypeDB server is ready.
 
     A bounded cooldown protects a server-side schema commit after its client
     disconnects.  A managed TypeDB restart terminates that commit, so carrying
-    the old hand-off into the new server lifetime would delay both prewarm and
-    live reasoning for no safety benefit.
+    the old hand-off into the new server lifetime would delay prewarm for no
+    safety benefit. Do not mark the RuleBox as idle, however: the next native
+    inference must wait for receipts from this TypeDB server lifetime. The
+    prewarm scheduler uses this durable marker to break the otherwise circular
+    wait between a cold receipt and a non-empty mailbox.
     """
     settings = dict(runtime_settings())
     settings["_skipOperationalHistoryRetention"] = "1"
     settings["_skipOperationalSchemaBootstrap"] = "1"
     try:
         MySQLOntologyRuleboxPrewarmStateStore(settings).replace({
-            "status": "idle",
+            "status": "bootstrap-required",
             "active": False,
             "updatedAt": iso_now(),
             "expiresAtEpoch": 0,
-            "reason": "typedb-server-restarted",
+            "reason": "typedb-server-restarted-require-rulebox-receipt",
+            "lastResult": {
+                "status": "bootstrap-required",
+                "functionsReady": False,
+                "reason": "TypeDB server restarted; RuleBox receipts must be verified before native investment inference.",
+            },
         })
     except Exception:  # noqa: BLE001 - a stale hint must never fail a healthy graph start.
         return False

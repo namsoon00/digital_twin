@@ -1103,6 +1103,11 @@ def build_ontology_reasoning_runner(settings=None, event_publisher=None) -> Onto
             if callable(getattr(rulebox_prewarm_state_store, "load", None))
             else None
         ),
+        rulebox_prewarm_state_writer=(
+            getattr(rulebox_prewarm_state_store, "replace")
+            if callable(getattr(rulebox_prewarm_state_store, "replace", None))
+            else None
+        ),
         maintenance_yield_state_probe=(
             getattr(maintenance_state_store, "load")
             if callable(getattr(maintenance_state_store, "load", None))

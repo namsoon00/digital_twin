@@ -495,6 +495,7 @@ class OntologyReasoningMailboxTests(unittest.TestCase):
         settings=None,
         event_publisher=None,
         activity_probe=None,
+        prewarm_state_writer=None,
         maintenance_yield_probe=None,
     ):
         self.cursor = MemoryCursor()
@@ -519,6 +520,7 @@ class OntologyReasoningMailboxTests(unittest.TestCase):
             mailbox_store=self.mailbox,
             now_provider=now or (lambda: datetime(2026, 7, 24, 0, 5, tzinfo=timezone.utc)),
             rulebox_prewarm_activity_probe=activity_probe,
+            rulebox_prewarm_state_writer=prewarm_state_writer,
             maintenance_yield_state_probe=maintenance_yield_probe,
         )
 
@@ -625,7 +627,7 @@ class OntologyReasoningMailboxTests(unittest.TestCase):
         self.assertEqual("no-material-change", outcomes[0]["terminalOutcome"])
         self.assertEqual(["AAPL"], outcomes[0]["alertPipeline"]["requestedSymbols"])
 
-    def test_uses_bounded_direct_typeql_when_rulebox_prewarm_is_still_provisioning(self):
+    def test_waits_for_rulebox_prewarm_by_default_even_when_direct_fallback_is_configured(self):
         event = realtime_request("prewarm-gate", ["AAPL"], "2026-07-24T00:00:00Z")
         runner = self.build_runner(
             [event],
@@ -640,8 +642,33 @@ class OntologyReasoningMailboxTests(unittest.TestCase):
 
         result = runner.run_once()
 
-        self.assertEqual("ok", result["status"])
-        self.assertEqual([["AAPL"]], self.monitor.calls)
+        self.assertEqual("deferred-rulebox-prewarm", result["status"])
+        self.assertEqual([], self.monitor.calls)
+        self.assertFalse(result["ruleboxPrewarm"]["ready"])
+
+    def test_cold_receipt_publishes_a_compiler_handoff_without_starting_inference(self):
+        event = realtime_request("prewarm-handoff", ["AAPL"], "2026-07-24T00:00:00Z")
+        published = []
+        runner = self.build_runner(
+            [event],
+            settings={"ontologyRuleboxPrewarmEnabled": "1"},
+            prewarm_state_writer=lambda payload: published.append(dict(payload or {})),
+        )
+        runner.rulebox_prewarm_probe = lambda: {
+            "status": "provisioning",
+            "functionsReady": False,
+            "pendingRuleCount": 3,
+            "reason": "RuleBox schema functions are being prepared.",
+        }
+
+        result = runner.run_once()
+
+        self.assertEqual("deferred-rulebox-prewarm", result["status"])
+        self.assertEqual([], self.monitor.calls)
+        self.assertTrue(result["ruleboxPrewarmRequest"]["published"])
+        self.assertEqual(1, len(published))
+        self.assertEqual("bootstrap-required", published[0]["status"])
+        self.assertFalse(published[0]["lastResult"]["functionsReady"])
 
     def test_aged_multi_entry_queue_uses_direct_typeql_instead_of_waiting_for_compiler_recovery(self):
         events = [
@@ -656,6 +683,7 @@ class OntologyReasoningMailboxTests(unittest.TestCase):
                 "ontologyRuleboxPrewarmBacklogRecoveryAgeSeconds": "90",
                 "ontologyRuleboxPrewarmBacklogRecoveryMinPendingEntries": "2",
                 "ontologyRuleboxPrewarmBacklogRecoveryRetrySeconds": "5",
+                "ontologyRuleboxPrewarmRequireReadyForInference": "0",
             },
         )
         runner.rulebox_prewarm_probe = lambda: {
@@ -700,7 +728,7 @@ class OntologyReasoningMailboxTests(unittest.TestCase):
 
         result = runner.run_once()
 
-        self.assertEqual("deferred-rulebox-prewarm", result["status"])
+        self.assertEqual("deferred-rulebox-prewarm-recovery", result["status"])
         self.assertEqual([], readiness_calls)
         self.assertEqual([], self.monitor.calls)
         self.assertTrue(result["ruleboxPrewarmActivity"]["active"])
@@ -719,6 +747,7 @@ class OntologyReasoningMailboxTests(unittest.TestCase):
                 "ontologyRuleboxPrewarmBacklogRecoveryAgeSeconds": "90",
                 "ontologyRuleboxPrewarmBacklogRecoveryMinPendingEntries": "2",
                 "ontologyRuleboxPrewarmBacklogRecoveryRetrySeconds": "5",
+                "ontologyRuleboxPrewarmRequireReadyForInference": "0",
             },
         )
         runner.rulebox_prewarm_probe = lambda: (_ for _ in ()).throw(
@@ -799,13 +828,14 @@ class OntologyReasoningMailboxTests(unittest.TestCase):
         self.assertEqual("typedb-inference-execution", status["inferenceHealth"]["scope"])
         self.assertTrue(status["inferenceHealth"]["failureYield"]["applied"])
 
-    def test_waits_for_rulebox_prewarm_only_when_direct_typeql_fallback_is_disabled(self):
+    def test_waits_for_rulebox_prewarm_when_safety_gate_is_enabled(self):
         event = realtime_request("prewarm-strict-gate", ["AAPL"], "2026-07-24T00:00:00Z")
         runner = self.build_runner(
             [event],
             settings={
                 "ontologyRuleboxPrewarmEnabled": "1",
-                "typedbNativeRuleDirectQueryFallbackEnabled": "0",
+                "typedbNativeRuleDirectQueryFallbackEnabled": "1",
+                "ontologyRuleboxPrewarmRequireReadyForInference": "1",
             },
         )
         runner.rulebox_prewarm_probe = lambda: {

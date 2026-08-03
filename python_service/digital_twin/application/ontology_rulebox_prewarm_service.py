@@ -3,10 +3,11 @@
 The active RuleBox is an investment-policy contract. Its generated TypeDB
 functions are a compiled implementation detail, so compilation belongs to a
 separate bounded worker and must never be started by a live alert inference.
-When a receipt is cold, the live path can use its bounded direct-TypeQL
-fallback. Schema commits remain idle while that fallback drains a live queue.
-Only strict deployments that explicitly disable the fallback may give an aged,
-unleased queue one coordinator-protected compiler recovery turn.
+Normal deployments fail closed while a RuleBox receipt is cold: raw source
+observations can continue, but investment inference waits for a verified
+compiled RuleBox. When that safety gate has deferred work and no inference
+lease is active, this worker receives a coordinator-protected bootstrap turn
+instead of waiting for the mailbox to become empty forever.
 """
 
 from __future__ import annotations
@@ -80,9 +81,27 @@ class OntologyRuleboxPrewarmRunner:
         return value not in DISABLED_VALUES
 
     def direct_typeql_fallback_enabled(self) -> bool:
-        """Keep alert work on bounded TypeQL while idle compilation is cold."""
+        """Return the explicit compatibility fallback setting.
+
+        The setting is retained for controlled compatibility rollouts. It does
+        not bypass the normal readiness gate unless that gate is explicitly
+        disabled through ``ontologyRuleboxPrewarmRequireReadyForInference``.
+        """
         value = str(
             self.settings.get("typedbNativeRuleDirectQueryFallbackEnabled") or "1"
+        ).strip().lower()
+        return value not in DISABLED_VALUES
+
+    def require_ready_for_inference(self) -> bool:
+        """Require verified functions before a native investment judgement.
+
+        This defaults to enabled so a TypeDB restart or a RuleBox deployment
+        cannot silently switch the live path to a slower, differently-shaped
+        direct TypeQL execution mode. Operators can still opt out during a
+        controlled compatibility migration.
+        """
+        value = str(
+            self.settings.get("ontologyRuleboxPrewarmRequireReadyForInference") or "1"
         ).strip().lower()
         return value not in DISABLED_VALUES
 
@@ -260,7 +279,14 @@ class OntologyRuleboxPrewarmRunner:
         minimum_pending = self.backlog_recovery_min_pending_entries()
         age_threshold = self.backlog_recovery_age_seconds()
         direct_fallback_enabled = self.direct_typeql_fallback_enabled()
-        enabled = self.backlog_recovery_enabled() and not direct_fallback_enabled
+        strict_readiness = self.require_ready_for_inference()
+        # A normal production deployment now requires verified functions even
+        # if the legacy fallback flag remains configured. Keep the old
+        # fallback-only behavior available only when the explicit readiness
+        # gate has been disabled.
+        enabled = self.backlog_recovery_enabled() and (
+            strict_readiness or not direct_fallback_enabled
+        )
         active = self.active_reasoning_count(payload)
         eligible = bool(
             enabled
@@ -270,6 +296,7 @@ class OntologyRuleboxPrewarmRunner:
         return {
             "enabled": enabled,
             "directTypeqlFallbackEnabled": direct_fallback_enabled,
+            "strictReadinessGateEnabled": strict_readiness,
             "waitingEntryCount": waiting,
             "activeEntryCount": active,
             "retryingEntryCount": self.retrying_reasoning_count(payload),
@@ -278,6 +305,57 @@ class OntologyRuleboxPrewarmRunner:
             "ageThresholdSeconds": age_threshold,
             "eligible": eligible,
             "canRecover": bool(eligible and active == 0),
+        }
+
+    def cold_bootstrap_state(self, payload: Dict[str, object]) -> Dict[str, object]:
+        """Allow prewarm to make progress after a safe cold-start deferral.
+
+        A strict live worker defers before it acquires a TypeDB inference
+        lease. That leaves mailbox entries waiting or retrying, not running.
+        Treating every pending entry as active therefore creates a circular
+        wait: inference waits for functions while the compiler waits for an
+        empty queue. The only safe escape is a compiler pass with no active
+        inference lease. The shared TypeDB projection coordinator remains the
+        final concurrency guard if a race occurs.
+        """
+        waiting = self.waiting_reasoning_count(payload)
+        active = self.active_reasoning_count(payload)
+        queue_status = str(dict(payload or {}).get("status") or "").strip().lower()
+        strict_readiness = self.require_ready_for_inference()
+        activity = self.prewarm_activity_state()
+        last_result = (
+            dict(activity.get("lastResult") or {})
+            if isinstance(activity.get("lastResult"), dict)
+            else {}
+        )
+        last_functions_ready = bool(last_result.get("functionsReady"))
+        activity_status = str(activity.get("status") or "").strip().lower()
+        bootstrap_required = (
+            activity_status == "bootstrap-required"
+            or not last_functions_ready
+        )
+        return {
+            "strictReadinessGateEnabled": strict_readiness,
+            "waitingEntryCount": waiting,
+            "activeEntryCount": active,
+            "queueStatus": queue_status or "unknown",
+            "prewarmActivityStatus": activity_status or "unknown",
+            "lastFunctionsReady": last_functions_ready,
+            "bootstrapRequired": bootstrap_required,
+            "eligible": bool(
+                strict_readiness
+                and waiting > 0
+                and active == 0
+                and queue_status != "error"
+                and bootstrap_required
+            ),
+            "canBootstrap": bool(
+                strict_readiness
+                and waiting > 0
+                and active == 0
+                and queue_status != "error"
+                and bootstrap_required
+            ),
         }
 
     def interval_seconds(self) -> int:
@@ -496,6 +574,7 @@ class OntologyRuleboxPrewarmRunner:
             "executionTimeoutGraceSeconds": self.execution_timeout_grace_seconds(),
             "processIsolationEnabled": self.process_isolation_enabled(),
             "deferWhenReasoningPending": self.defer_when_reasoning_pending(),
+            "requireReadyForInference": self.require_ready_for_inference(),
             "backlogRecoveryEnabled": self.backlog_recovery_enabled(),
             "backlogRecoveryAgeSeconds": self.backlog_recovery_age_seconds(),
             "backlogRecoveryMinPendingEntries": self.backlog_recovery_min_pending_entries(),
@@ -597,23 +676,22 @@ class OntologyRuleboxPrewarmRunner:
         queue = self.reasoning_queue_state()
         pending = self.pending_reasoning_count(queue)
         recovery = self.backlog_recovery_state(queue)
+        bootstrap = self.cold_bootstrap_state(queue)
         recovery_granted = bool(recovery.get("canRecover")) and not force
+        bootstrap_granted = bool(bootstrap.get("canBootstrap")) and not force
+        compiler_turn_granted = recovery_granted or bootstrap_granted
         # A TypeDB schema commit can keep its compiler busy after a client has
-        # timed out or an isolated worker has exited.  Preserve the
-        # latest-state queue while an inference lease is active. A strict
-        # deployment without direct TypeQL fallback may grant an aged,
-        # unleased queue one coordinator-protected compiler recovery turn.
+        # timed out or an isolated worker has exited. Preserve the latest-state
+        # queue while an inference lease is active. A strict cold start gets a
+        # compiler turn as soon as that lease is absent, breaking the circular
+        # wait between an empty-queue compiler policy and a prewarm-gated live
+        # inference policy.
         if (
             self.defer_when_reasoning_pending()
             and pending
             and not force
-            and not recovery_granted
+            and not compiler_turn_granted
         ):
-            # Do not even read TypeDB deployment receipts here. A readiness
-            # check opens RuleBox and receipt reads for both namespaces and
-            # therefore competes with the exact workload this branch is
-            # protecting. The compact queue probe is sufficient to yield;
-            # readiness will be checked only after the queue is quiet.
             return {
                 "status": (
                     "deferred-aged-reasoning-backlog-active"
@@ -626,11 +704,12 @@ class OntologyRuleboxPrewarmRunner:
                 "reasoningPendingCount": pending,
                 "reasoningQueue": queue,
                 "backlogRecovery": recovery,
+                "coldBootstrap": bootstrap,
                 "prewarmReadinessDeferred": True,
                 "reason": (
                     "Live ontology reasoning is pending; the RuleBox compiler does not open a TypeDB schema "
-                    "transaction while an inference lease is active. Any cold function receipt uses the bounded "
-                    "direct TypeQL fallback until the active lease ends."
+                    "transaction while an inference lease is active. The compiler will resume as soon as the "
+                    "active inference lease ends."
                 ),
                 "recommendedRetryAfterSeconds": self.interval_seconds(),
                 "durationMs": 0,
@@ -665,6 +744,7 @@ class OntologyRuleboxPrewarmRunner:
                 "status": "running",
                 "reasoningPendingCount": pending,
                 "backlogRecoveryGranted": recovery_granted,
+                "bootstrapPriorityGranted": bootstrap_granted,
             },
         )
         started_at = time.perf_counter()
@@ -680,6 +760,12 @@ class OntologyRuleboxPrewarmRunner:
         result.setdefault("durationMs", int((time.perf_counter() - started_at) * 1000))
         result.setdefault("background", True)
         result.setdefault("liveInferenceDeploymentAvoided", True)
+        if bootstrap.get("eligible"):
+            result["coldBootstrap"] = bootstrap
+            result["bootstrapPriorityGranted"] = bootstrap_granted
+            result["reasoningPendingCount"] = pending
+            if bootstrap_granted:
+                result["recoveryMode"] = "cold-rulebox-bootstrap-no-active-inference-lease"
         if recovery.get("eligible"):
             result["queuePriority"] = True
             result["backlogRecovery"] = recovery
@@ -695,6 +781,13 @@ class OntologyRuleboxPrewarmRunner:
                 # quickly here is safe and lets it retain priority until the
                 # compiled path can release the waiting queue.
                 result["recommendedRetryAfterSeconds"] = self.backlog_recovery_retry_seconds()
+        elif bootstrap_granted and str(result.get("status") or "") in {
+            "provisioning",
+            "deferred-projection-coordinator",
+        }:
+            # Stay responsive while a cold RuleBox is staged, but do not
+            # bypass the compiler hand-off state or the TypeDB coordinator.
+            result["recommendedRetryAfterSeconds"] = self.backlog_recovery_retry_seconds()
         cooldown_seconds = self.activity_cooldown_seconds(result)
         activity_status = (
             "cooldown"

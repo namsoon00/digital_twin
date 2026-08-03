@@ -1140,6 +1140,21 @@ class OntologyRuleboxPrewarmScheduler:
         now = time.monotonic()
         if pending:
             self.last_reasoning_activity_at = now
+            bootstrap_reader = getattr(self.runner, "cold_bootstrap_state", None)
+            bootstrap = {}
+            if callable(bootstrap_reader):
+                try:
+                    candidate = bootstrap_reader(queue)
+                    bootstrap = dict(candidate or {}) if isinstance(candidate, dict) else {}
+                except Exception:
+                    bootstrap = {}
+            if bool(bootstrap.get("canBootstrap")):
+                # A strict live worker has intentionally deferred before
+                # taking a TypeDB inference lease. Let the compiler child
+                # inspect and advance its staged receipt now; otherwise the
+                # queue and the empty-queue prewarm policy would wait for one
+                # another indefinitely after a TypeDB restart.
+                return {}
             recovery_reader = getattr(self.runner, "backlog_recovery_state", None)
             recovery = {}
             if callable(recovery_reader):
@@ -1165,6 +1180,7 @@ class OntologyRuleboxPrewarmScheduler:
                 "pendingRuleCount": None,
                 "reasoningPendingCount": pending,
                 "reasoningQueue": queue,
+                "coldBootstrap": bootstrap,
                 "backlogRecovery": recovery,
                 "reason": (
                     "Live ontology reasoning has an active lease; RuleBox compilation remains idle."
@@ -1301,7 +1317,10 @@ class OntologyRuleboxPrewarmScheduler:
                 return max(self.interval_seconds, recommended, 300)
             return max(self.interval_seconds, recommended, 60)
         if (
-            bool(payload.get("backlogRecoveryGranted"))
+            (
+                bool(payload.get("backlogRecoveryGranted"))
+                or bool(payload.get("bootstrapPriorityGranted"))
+            )
             and status in {"provisioning", "deferred-projection-coordinator"}
         ):
             # A recovery pass has no active inference lease and commits only a

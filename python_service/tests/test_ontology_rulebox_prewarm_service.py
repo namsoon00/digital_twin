@@ -112,7 +112,10 @@ class OntologyRuleboxPrewarmRunnerTests(unittest.TestCase):
         repository = FakeRepository()
         runner = OntologyRuleboxPrewarmRunner(
             repository,
-            settings={"ontologyRuleboxPrewarmEnabled": "1"},
+            settings={
+                "ontologyRuleboxPrewarmEnabled": "1",
+                "ontologyRuleboxPrewarmRequireReadyForInference": "0",
+            },
             reasoning_queue_probe=lambda: {"status": "ok", "effectivePendingCount": 4},
         )
 
@@ -152,7 +155,10 @@ class OntologyRuleboxPrewarmRunnerTests(unittest.TestCase):
         })
         runner = OntologyRuleboxPrewarmRunner(
             repository,
-            settings={"ontologyRuleboxPrewarmEnabled": "1"},
+            settings={
+                "ontologyRuleboxPrewarmEnabled": "1",
+                "ontologyRuleboxPrewarmRequireReadyForInference": "0",
+            },
             reasoning_queue_probe=lambda: {"status": "ok", "effectivePendingCount": 4},
         )
 
@@ -245,6 +251,7 @@ class OntologyRuleboxPrewarmRunnerTests(unittest.TestCase):
                 "ontologyRuleboxPrewarmBacklogRecoveryAgeSeconds": "90",
                 "ontologyRuleboxPrewarmBacklogRecoveryMinPendingEntries": "2",
                 "typedbNativeRuleDirectQueryFallbackEnabled": "1",
+                "ontologyRuleboxPrewarmRequireReadyForInference": "0",
             },
             reasoning_queue_probe=lambda: {
                 "status": "retrying",
@@ -260,6 +267,65 @@ class OntologyRuleboxPrewarmRunnerTests(unittest.TestCase):
         self.assertEqual("deferred-reasoning-pending", result["status"])
         self.assertFalse(result["backlogRecovery"]["eligible"])
         self.assertTrue(result["backlogRecovery"]["directTypeqlFallbackEnabled"])
+        self.assertEqual([], repository.calls)
+
+    def test_strict_cold_queue_bootstraps_before_the_mailbox_becomes_empty(self):
+        repository = FakeRepository({
+            "status": "provisioning",
+            "functionsReady": False,
+            "pendingRuleCount": 3,
+        })
+        runner = OntologyRuleboxPrewarmRunner(
+            repository,
+            settings={
+                "ontologyRuleboxPrewarmEnabled": "1",
+                "ontologyRuleboxPrewarmRequireReadyForInference": "1",
+                "typedbNativeRuleDirectQueryFallbackEnabled": "1",
+            },
+            reasoning_queue_probe=lambda: {
+                "status": "retrying",
+                "effectivePendingCount": 4,
+                "retryingEntryCount": 4,
+            },
+        )
+
+        result = runner.run_once()
+
+        self.assertEqual("provisioning", result["status"])
+        self.assertEqual([False], repository.calls)
+        self.assertTrue(result["coldBootstrap"]["canBootstrap"])
+        self.assertTrue(result["bootstrapPriorityGranted"])
+        self.assertEqual(
+            "cold-rulebox-bootstrap-no-active-inference-lease",
+            result["recoveryMode"],
+        )
+        self.assertEqual(5, result["recommendedRetryAfterSeconds"])
+
+    def test_strict_queue_does_not_reopen_the_compiler_after_a_ready_receipt(self):
+        state_store = MemoryPrewarmStateStore()
+        state_store.replace({
+            "status": "ready",
+            "active": False,
+            "lastResult": {"status": "ok", "functionsReady": True},
+        })
+        repository = FakeRepository()
+        runner = OntologyRuleboxPrewarmRunner(
+            repository,
+            settings={
+                "ontologyRuleboxPrewarmEnabled": "1",
+                "ontologyRuleboxPrewarmRequireReadyForInference": "1",
+            },
+            reasoning_queue_probe=lambda: {
+                "status": "pending",
+                "effectivePendingCount": 2,
+            },
+            prewarm_state_store=state_store,
+        )
+
+        result = runner.run_once()
+
+        self.assertEqual("deferred-reasoning-pending", result["status"])
+        self.assertFalse(result["coldBootstrap"]["canBootstrap"])
         self.assertEqual([], repository.calls)
 
     def test_status_reports_isolation_and_current_prewarm_state(self):
@@ -446,6 +512,32 @@ class OntologyRuleboxPrewarmRunnerTests(unittest.TestCase):
         self.assertEqual("deferred-reasoning-pending", result["status"])
         self.assertEqual(3, result["reasoningPendingCount"])
         self.assertEqual([], runner.calls)
+
+    def test_scheduler_allows_a_strict_cold_bootstrap_without_an_active_lease(self):
+        repository = FakeRepository({
+            "status": "provisioning",
+            "functionsReady": False,
+            "pendingRuleCount": 2,
+        })
+        runner = OntologyRuleboxPrewarmRunner(
+            repository,
+            settings={
+                "ontologyRuleboxPrewarmEnabled": "1",
+                "ontologyRuleboxPrewarmRequireReadyForInference": "1",
+            },
+            reasoning_queue_probe=lambda: {
+                "status": "retrying",
+                "effectivePendingCount": 2,
+                "retryingEntryCount": 2,
+            },
+        )
+        scheduler = OntologyRuleboxPrewarmScheduler(runner, 15)
+
+        result = scheduler.run_once()
+
+        self.assertEqual("provisioning", result["status"])
+        self.assertEqual([False], repository.calls)
+        self.assertTrue(result["bootstrapPriorityGranted"])
 
     def test_scheduler_allows_only_an_unleased_aged_backlog_recovery(self):
         repository = FakeRepository({

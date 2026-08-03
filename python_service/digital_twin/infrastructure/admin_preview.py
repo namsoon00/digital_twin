@@ -658,6 +658,7 @@ def admin_preview_config() -> Dict[str, object]:
                     {"key": "ontologyInferenceDetailDeferWhenReasoningPending", "label": "추론 대기 중 상세 읽기 유예", "type": "toggle", "default": "1"},
                     {"key": "ontologyInferenceDetailIntervalSeconds", "label": "상세 읽기 점검 주기", "type": "number", "default": "15", "unit": "seconds"},
                     {"key": "ontologyRuleboxPrewarmEnabled", "label": "RuleBox 함수 사전 준비 워커", "type": "toggle", "default": "1"},
+                    {"key": "ontologyRuleboxPrewarmRequireReadyForInference", "label": "함수 준비 전 투자 판단 보류", "type": "toggle", "default": "1"},
                     {"key": "ontologyRuleboxPrewarmDeferWhenReasoningPending", "label": "추론 대기 중 함수 사전 준비 유예", "type": "toggle", "default": "1"},
                     {"key": "ontologyRuleboxPrewarmBacklogRecoveryEnabled", "label": "오래된 대기열 컴파일 위험 진단", "type": "toggle", "default": "0"},
                     {"key": "ontologyRuleboxPrewarmBacklogRecoveryAgeSeconds", "label": "함수 준비 우선 복구 대기 기준", "type": "number", "default": "90", "unit": "seconds"},

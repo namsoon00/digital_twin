@@ -172,6 +172,7 @@ TEXT_SETTING_KEYS = [
     "ontologyInferenceDetailCompletedRetentionHours",
     "ontologyInferenceDetailMaxResultBytes",
     "ontologyRuleboxPrewarmEnabled",
+    "ontologyRuleboxPrewarmRequireReadyForInference",
     "ontologyRuleboxPrewarmDeferWhenReasoningPending",
     "ontologyRuleboxPrewarmBacklogRecoveryEnabled",
     "ontologyRuleboxPrewarmBacklogRecoveryAgeSeconds",
@@ -1686,6 +1687,11 @@ def runtime_settings(fast_operational_read: bool = False) -> Dict[str, str]:
         "ontologyRuleboxPrewarmEnabled": value(
             "ontologyRuleboxPrewarmEnabled",
             "ONTOLOGY_RULEBOX_PREWARM_ENABLED",
+            "1",
+        ),
+        "ontologyRuleboxPrewarmRequireReadyForInference": value(
+            "ontologyRuleboxPrewarmRequireReadyForInference",
+            "ONTOLOGY_RULEBOX_PREWARM_REQUIRE_READY_FOR_INFERENCE",
             "1",
         ),
         "ontologyRuleboxPrewarmDeferWhenReasoningPending": value(

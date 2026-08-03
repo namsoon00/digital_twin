@@ -266,7 +266,7 @@ class TypeDBServiceManagerTests(unittest.TestCase):
 
         self.assertEqual(2640, window)
 
-    def test_typedb_restart_clears_the_durable_rulebox_compiler_handoff(self):
+    def test_typedb_restart_marks_the_durable_rulebox_compiler_handoff_cold(self):
         with patch.object(service_manager, "runtime_settings", return_value={
             "mysqlHost": "127.0.0.1",
             "mysqlDatabase": "orbit_alpha",
@@ -277,10 +277,15 @@ class TypeDBServiceManagerTests(unittest.TestCase):
         self.assertEqual("1", settings["_skipOperationalHistoryRetention"])
         self.assertEqual("1", settings["_skipOperationalSchemaBootstrap"])
         self.assertEqual({
-            "status": "idle",
+            "status": "bootstrap-required",
             "active": False,
             "expiresAtEpoch": 0,
-            "reason": "typedb-server-restarted",
+            "reason": "typedb-server-restarted-require-rulebox-receipt",
+            "lastResult": {
+                "status": "bootstrap-required",
+                "functionsReady": False,
+                "reason": "TypeDB server restarted; RuleBox receipts must be verified before native investment inference.",
+            },
         }, {
             key: value
             for key, value in state_store.return_value.replace.call_args.args[0].items()

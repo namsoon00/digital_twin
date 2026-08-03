@@ -731,6 +731,7 @@ class OntologyReasoningRunner:
         snapshot_readiness_probe: Callable = None,
         operational_settings_refresher: Callable = None,
         rulebox_prewarm_activity_probe: Callable = None,
+        rulebox_prewarm_state_writer: Callable = None,
         maintenance_yield_state_probe: Callable = None,
     ):
         self.event_reader = event_reader
@@ -754,6 +755,7 @@ class OntologyReasoningRunner:
         self.snapshot_readiness_probe = snapshot_readiness_probe
         self.operational_settings_refresher = operational_settings_refresher
         self.rulebox_prewarm_activity_probe = rulebox_prewarm_activity_probe
+        self.rulebox_prewarm_state_writer = rulebox_prewarm_state_writer
         self.maintenance_yield_state_probe = maintenance_yield_state_probe
 
     def refresh_operational_settings(self, settings: Dict[str, object] = None) -> Dict[str, object]:
@@ -815,24 +817,30 @@ class OntologyReasoningRunner:
     def rulebox_prewarm_required(self) -> bool:
         """Whether a live native run must wait for compiled RuleBox receipts.
 
-        A dedicated worker still prewarms compiled functions whenever native
-        execution is enabled.  When the bounded direct TypeQL fallback is
-        available, however, live alerts must not wait for that compiler: the
-        selected subject can be evaluated without opening a schema
-        transaction.  Installations that explicitly disable the fallback keep
-        the strict prewarm gate.
+        Native investment inference normally uses one verified RuleBox
+        execution mode. A TypeDB restart must not silently switch a live
+        decision to the bounded direct-TypeQL compatibility path just because
+        schema receipts are still cold. The compatibility path remains
+        available only when an operator explicitly disables this gate.
         """
         return (
             self.native_typedb_rule_execution_enabled()
             and truthy(
-            self.settings.get("ontologyRuleboxPrewarmEnabled"),
-            True,
+                self.settings.get("ontologyRuleboxPrewarmEnabled"),
+                True,
             )
-            and not self.rulebox_prewarm_direct_fallback_enabled()
+            and truthy(
+                self.settings.get("ontologyRuleboxPrewarmRequireReadyForInference"),
+                True,
+            )
         )
 
     def rulebox_prewarm_direct_fallback_enabled(self) -> bool:
-        """Whether a cold RuleBox may use bounded direct TypeQL evaluation."""
+        """Whether a cold RuleBox may use bounded direct TypeQL evaluation.
+
+        This remains a compatibility capability. ``rulebox_prewarm_required``
+        governs whether normal production inference may actually take it.
+        """
         return self.native_typedb_rule_execution_enabled() and truthy(
             self.settings.get("typedbNativeRuleDirectQueryFallbackEnabled"),
             True,
@@ -920,7 +928,7 @@ class OntologyReasoningRunner:
                 "status": "direct-typeql-fallback" if self.rulebox_prewarm_direct_fallback_enabled() else "disabled",
                 "directTypeqlFallbackEnabled": self.rulebox_prewarm_direct_fallback_enabled(),
                 "reason": (
-                    "RuleBox prewarm runs in the background; a cold receipt uses bounded direct TypeQL evaluation."
+                    "RuleBox prewarm readiness gate is explicitly disabled; a cold receipt uses bounded direct TypeQL evaluation."
                     if self.rulebox_prewarm_direct_fallback_enabled()
                     else "RuleBox prewarm gate is disabled for this runtime."
                 ),
@@ -1013,6 +1021,49 @@ class OntologyReasoningRunner:
                 self.rulebox_prewarm_retry_seconds(),
             ) if active else 0,
         }
+
+    def request_rulebox_prewarm(self, readiness: Dict[str, object]) -> Dict[str, object]:
+        """Persist a cold-receipt hand-off for the dedicated compiler worker.
+
+        The reasoning worker only observes missing receipts; it must never
+        compile schema functions itself. Publishing this small MySQL marker
+        invalidates a previously-ready hand-off after a RuleBox change and
+        lets the prewarm scheduler make progress even while latest-state
+        mailbox work is waiting.
+        """
+        writer = self.rulebox_prewarm_state_writer
+        if not callable(writer):
+            return {"published": False, "reason": "not-configured"}
+        now = self.now_provider()
+        if now.tzinfo is None:
+            now = now.replace(tzinfo=timezone.utc)
+        summary = {
+            key: dict(readiness or {}).get(key)
+            for key in [
+                "status",
+                "functionsReady",
+                "pendingRuleCount",
+                "reasonCode",
+                "reason",
+            ]
+            if key in dict(readiness or {})
+        }
+        payload = {
+            "status": "bootstrap-required",
+            "active": False,
+            "updatedAt": now.astimezone(timezone.utc).isoformat().replace("+00:00", "Z"),
+            "expiresAtEpoch": 0,
+            "reason": "live-readiness-probe-reported-cold-rulebox",
+            "lastResult": {
+                **summary,
+                "functionsReady": False,
+            },
+        }
+        try:
+            writer(payload)
+        except Exception as error:  # noqa: BLE001 - live safety must not depend on telemetry writes.
+            return {"published": False, "reason": str(error)[:180]}
+        return {"published": True, "state": payload}
 
     def source_snapshot_preflight(self, reasoning_context: Dict[str, object]) -> Dict[str, object]:
         """Check a persisted snapshot boundary before creating a TypeDB child.
@@ -5393,17 +5444,13 @@ class OntologyReasoningRunner:
         prewarm_recovery = self.rulebox_prewarm_backlog_recovery_state(requests)
         queue_metadata["ruleboxPrewarmRecovery"] = dict(prewarm_recovery)
         # A receipt check is not free: it reads the complete RuleBox and both
-        # deployment namespaces. Fallback-enabled work deliberately avoids
-        # that global read and lets the repository make only the narrow check
-        # required for its selected native predicates. Strict deployments can
-        # still use a bounded readiness probe before compiler recovery.
-        # The background compiler is an optimisation. When bounded direct
-        # TypeQL is enabled, an aged mailbox must keep draining rather than
-        # turn a cold full-RuleBox prewarm into a global alert gate. Strict
-        # deployments without that fallback retain the readiness probe.
+        # deployment namespaces. It is nevertheless required before a normal
+        # investment judgement so a TypeDB restart cannot change the rule
+        # execution shape beneath an alert. Compatibility deployments that
+        # explicitly disable the gate retain the bounded direct-TypeQL path.
         prewarm_recovery_probe = bool(
             prewarm_recovery.get("eligible")
-            and not self.rulebox_prewarm_direct_fallback_enabled()
+            and self.rulebox_prewarm_required()
         )
         prewarm_activity = (
             self.rulebox_prewarm_activity_state()
@@ -5467,16 +5514,18 @@ class OntologyReasoningRunner:
                 rulebox_prewarm.get("retryAfterSeconds")
                 or self.rulebox_prewarm_retry_seconds()
             )
+            prewarm_request = self.request_rulebox_prewarm(rulebox_prewarm)
             return {
                 "status": "deferred-rulebox-prewarm",
                 "processedCount": 0,
                 "alertCount": 0,
                 "retryAfterSeconds": max(1, retry_after),
                 "deferredReason": (
-                    "TypeDB RuleBox 함수 사전 준비가 완료될 때까지 네이티브 추론을 시작하지 않습니다. "
+                    "TypeDB RuleBox 함수 사전 준비가 완료될 때까지 투자 판단 추론을 안전하게 보류합니다. "
                     + str(rulebox_prewarm.get("reason") or "")[:180]
                 ).strip(),
                 "ruleboxPrewarm": rulebox_prewarm,
+                "ruleboxPrewarmRequest": prewarm_request,
                 "ruleboxPrewarmRecovery": prewarm_recovery,
                 "coalescedEventCount": len(durable_superseded_ids),
                 **queue_metadata,

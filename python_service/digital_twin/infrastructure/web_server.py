@@ -727,6 +727,7 @@ def settings_status_payload() -> Dict[str, object]:
         "ontologyInferenceDetailCompletedRetentionHours",
         "ontologyInferenceDetailMaxResultBytes",
         "ontologyRuleboxPrewarmEnabled",
+        "ontologyRuleboxPrewarmRequireReadyForInference",
         "ontologyRuleboxPrewarmDeferWhenReasoningPending",
         "ontologyRuleboxPrewarmBacklogRecoveryEnabled",
         "ontologyRuleboxPrewarmBacklogRecoveryAgeSeconds",

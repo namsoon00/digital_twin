@@ -8152,7 +8152,7 @@ class TypeDBOntologyRepositoryTests(unittest.TestCase):
         self.assertEqual("1", workers["typedb"]["seedOnStart"])
         self.assertEqual("1", workers["typedb"]["seedReplaceRuleBox"])
         self.assertEqual("1", workers["typedb"]["seedKeepInference"])
-        self.assertEqual("360", workers["typedb"]["seedTimeoutSeconds"])
+        self.assertEqual("900", workers["typedb"]["seedTimeoutSeconds"])
         self.assertEqual("2", workers["typedb"]["seedRetryCount"])
 
     def test_service_manager_waits_for_typedb_driver_readiness_after_tcp_opens(self):

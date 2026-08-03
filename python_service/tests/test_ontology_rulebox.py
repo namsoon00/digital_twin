@@ -40,7 +40,12 @@ from digital_twin.infrastructure.typedb_ontology import (
     typedb_native_rule_profile,
 )
 from digital_twin.infrastructure.graph_store_rulebox import derivation_payload_from_row
-from digital_twin.domain.ontology_rulebox_governance import rulebox_governance_candidates, rulebox_rules_hash, rulebox_version_payload
+from digital_twin.domain.ontology_rulebox_governance import (
+    rulebox_governance_candidates,
+    rulebox_rules_hash,
+    rulebox_semantic_violations,
+    rulebox_version_payload,
+)
 
 
 class OntologyRuleBoxTests(unittest.TestCase):
@@ -167,6 +172,81 @@ class OntologyRuleBoxTests(unittest.TestCase):
         )["query"]
         self.assertIn('has ontology-kind "crypto-asset"', direct_crypto_query)
         self.assertIn("ontology-change-24h", direct_crypto_query)
+
+    def test_rulebox_v3_has_explicit_governance_and_removes_false_generic_paths(self):
+        rules = default_graph_inference_rules()
+        rules_by_id = {item.rule_id: item for item in rules}
+
+        self.assertEqual([], rulebox_semantic_violations(rules))
+        self.assertEqual(91, sum(item.enabled for item in rules))
+        self.assertFalse(rules_by_id["graph.benchmark.beta.context.v1"].enabled)
+        self.assertFalse(rules_by_id["graph.data_quality.action_block.v1"].enabled)
+        self.assertFalse(rules_by_id["graph.holding.trend_transition.risk.v1"].enabled)
+        self.assertTrue(any(
+            item.relation_type == "BLOCKS_ACTION"
+            for item in rules_by_id["graph.data_quality.microstructure_gap.v1"].derivations
+        ))
+        self.assertTrue(any(
+            item.relation_type == "WEAKENS_THESIS"
+            for item in rules_by_id["graph.temporal.downside_acceleration.risk.v1"].derivations
+        ))
+        self.assertTrue(all(
+            condition.hypothesis_scope and condition.evidence_group_key
+            for rule in rules
+            for condition in rule.conditions
+        ))
+        self.assertTrue(all(
+            rule.hypothesis_family_key
+            and rule.resolved_hypothesis_lifecycle().validity_minutes > 0
+            and rule.resolved_hypothesis_lifecycle().required_freshness_domains
+            for rule in rules
+            if rule.enabled
+        ))
+        rulebox_rules_from_payload(
+            {"rules": rulebox_rules_to_payload(rules)},
+            strict_governance=True,
+        )
+        invalid_rules = rulebox_rules_to_payload(rules)
+        invalid_rules[0]["conditions"][0].pop("evidence_group_key", None)
+        with self.assertRaisesRegex(ValueError, "evidence_group_key"):
+            rulebox_rules_from_payload({"rules": invalid_rules}, strict_governance=True)
+
+    def test_rulebox_v3_counts_independent_any_evidence_and_bounds_crypto_watch(self):
+        rules_by_id = {item.rule_id: item for item in default_graph_inference_rules()}
+        recovery = rules_by_id["graph.price.recovery.confirmed_by_flow.v1"]
+        normal_query = typedb_native_match_query(recovery.to_dict(), target_symbols=["005930"])["query"]
+        self.assertEqual(1, normal_query.count("smart-money-confirmation"))
+        self.assertIn("$anyConditionCount >= 2", normal_query)
+
+        invalid_payload = recovery.to_dict()
+        for condition in invalid_payload["conditions"]:
+            if condition.get("role") == "any":
+                condition["evidence_group_key"] = "one-shared-observation"
+        invalid_plan = typedb_native_match_query(invalid_payload, target_symbols=["005930"])
+        self.assertEqual("any condition minimum exceeds independent evidence groups", invalid_plan["reason"])
+
+        watch_query = typedb_native_match_query(
+            rules_by_id["graph.crypto.market.24h.up.watch.v1"].to_dict(),
+            target_symbols=["BTC"],
+        )["query"]
+        major_query = typedb_native_match_query(
+            rules_by_id["graph.crypto.market.24h.up.major.v1"].to_dict(),
+            target_symbols=["BTC"],
+        )["query"]
+        self.assertIn(">= 3.0", watch_query)
+        self.assertIn("< 6.0", watch_query)
+        self.assertIn(">= 6.0", major_query)
+        self.assertNotIn("< 6.0", major_query)
+
+        factor_query = typedb_native_match_query(
+            rules_by_id["graph.factor.position_crowding.v1"].to_dict(),
+            target_symbols=["005930"],
+        )["query"]
+        self.assertIn("ontology-weight", factor_query)
+        self.assertEqual(
+            "ready",
+            typedb_native_rule_profile(rules_by_id["graph.factor.position_crowding.v1"].to_dict())["status"],
+        )
 
     def test_rulebox_derivation_keeps_its_evidence_role_over_template_default(self):
         payload = derivation_payload_from_row({

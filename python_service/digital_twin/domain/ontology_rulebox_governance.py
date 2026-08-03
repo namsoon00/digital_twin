@@ -4,7 +4,109 @@ import re
 from typing import Dict, Iterable, List
 
 from .ontology_decision_state import DECISION_EFFECTS
-from .ontology_rulebox_contracts import GRAPH_REASONER_VERSION, GraphInferenceRule, GraphRuleCondition, GraphRuleDerivation
+from .ontology_rulebox_contracts import (
+    GRAPH_REASONER_VERSION,
+    HOLDING_TARGET_ROLE,
+    WATCHLIST_ALLOWED_ACTIONS,
+    WATCHLIST_TARGET_ROLE,
+    GraphInferenceRule,
+    GraphRuleCondition,
+    GraphRuleDerivation,
+)
+
+
+RULEBOX_EVIDENCE_ROLES = frozenset({"risk", "support", "counter", "context", "blocking"})
+RULEBOX_HYPOTHESIS_SCOPES = frozenset({"market", "account", "mixed", "unverified"})
+RULEBOX_ACTIONS = frozenset({"BUY", "ADD", "TRIM", "SELL", "HOLD", "AVOID"})
+
+
+def rulebox_semantic_violations(rules: Iterable[GraphInferenceRule]) -> List[str]:
+    """Return static RuleBox contract violations before TypeDB persistence.
+
+    This checks authoring metadata only. TypeDB remains the sole evaluator of
+    investment conditions and action evidence.
+    """
+
+    violations: List[str] = []
+    enabled_rules = [rule for rule in list(rules or []) if bool(getattr(rule, "enabled", True))]
+    signatures: Dict[tuple, List[str]] = {}
+    for rule in enabled_rules:
+        rule_id = str(rule.rule_id or "").strip() or "<missing-rule-id>"
+        if not str(rule.hypothesis_family_key or "").strip():
+            violations.append(rule_id + ": hypothesis_family_key is required")
+        lifecycle = rule.resolved_hypothesis_lifecycle()
+        condition_ids = {str(item.condition_id or "").strip() for item in rule.conditions or []}
+        if not lifecycle.formation_condition_ids:
+            violations.append(rule_id + ": lifecycle formation_condition_ids is required")
+        elif set(lifecycle.formation_condition_ids) - condition_ids:
+            violations.append(rule_id + ": lifecycle formation_condition_ids reference unknown conditions")
+        if int(lifecycle.validity_minutes or 0) <= 0:
+            violations.append(rule_id + ": lifecycle validity_minutes must be positive")
+        if not lifecycle.required_freshness_domains:
+            violations.append(rule_id + ": lifecycle required_freshness_domains is required")
+        if not str(lifecycle.invalidation_mode or "").strip():
+            violations.append(rule_id + ": lifecycle invalidation_mode is required")
+
+        condition_signatures: Dict[str, List[str]] = {}
+        any_groups = set()
+        for condition in rule.conditions or []:
+            condition_id = str(condition.condition_id or "").strip() or "<missing-condition-id>"
+            scope = str(condition.hypothesis_scope or "").strip().lower()
+            if scope not in RULEBOX_HYPOTHESIS_SCOPES:
+                violations.append(rule_id + ": " + condition_id + " has no valid hypothesis_scope")
+            group = str(condition.evidence_group_key or "").strip()
+            if not group:
+                violations.append(rule_id + ": " + condition_id + " has no evidence_group_key")
+            if str(condition.role or "required").strip().lower() in {"any", "optional"} and group:
+                any_groups.add(group)
+            condition_signatures.setdefault(rulebox_condition_signature(condition), []).append(condition_id)
+        for duplicate_ids in condition_signatures.values():
+            if len(duplicate_ids) > 1:
+                violations.append(rule_id + ": duplicate condition semantics " + ", ".join(sorted(duplicate_ids)))
+        if int(rule.any_condition_min_count or 1) > 1 and int(rule.any_condition_min_count or 1) > len(any_groups):
+            violations.append(rule_id + ": any_condition_min_count exceeds independent evidence groups")
+
+        for derivation in rule.derivations or []:
+            evidence_role = str(derivation.evidence_role or "").strip().lower()
+            if evidence_role not in RULEBOX_EVIDENCE_ROLES:
+                violations.append(rule_id + ": derivation has no valid evidence_role")
+            effect = str(derivation.decision_effect or "").strip().lower()
+            if effect not in DECISION_EFFECTS:
+                violations.append(rule_id + ": derivation has no valid decision_effect")
+            candidate_action = str(derivation.candidate_action or "").strip().upper()
+            if candidate_action not in RULEBOX_ACTIONS:
+                violations.append(rule_id + ": derivation has no valid candidate_action")
+                continue
+            target_role = str(derivation.target_role or "").strip().lower()
+            if target_role == WATCHLIST_TARGET_ROLE and candidate_action not in WATCHLIST_ALLOWED_ACTIONS:
+                violations.append(rule_id + ": watchlist derivation permits holding-only action " + candidate_action)
+            if candidate_action == "BUY" and target_role and target_role != WATCHLIST_TARGET_ROLE:
+                violations.append(rule_id + ": BUY candidate requires watchlist target_role")
+            if candidate_action in {"ADD", "TRIM", "SELL"} and target_role and target_role != HOLDING_TARGET_ROLE:
+                violations.append(rule_id + ": " + candidate_action + " candidate requires holding target_role")
+
+        signatures.setdefault(rulebox_rule_condition_set_signature(rule), []).append(rule_id)
+    for rule_ids in signatures.values():
+        if len(rule_ids) > 1:
+            violations.append("duplicate enabled rule conditions: " + ", ".join(sorted(rule_ids)))
+    return sorted(set(violations))
+
+
+def validate_rulebox_semantics(rules: Iterable[GraphInferenceRule]) -> None:
+    violations = rulebox_semantic_violations(rules)
+    if violations:
+        raise ValueError("RuleBox semantic validation failed: " + " | ".join(violations[:12]))
+
+
+def rulebox_condition_signature(condition: GraphRuleCondition) -> str:
+    payload = condition.to_dict()
+    for field in ("condition_id", "description", "hypothesis_scope", "evidence_group_key"):
+        payload.pop(field, None)
+    return json.dumps(canonical_json_value(payload), ensure_ascii=False, sort_keys=True, separators=(",", ":"))
+
+
+def rulebox_rule_condition_set_signature(rule: GraphInferenceRule) -> tuple:
+    return tuple(sorted(rulebox_condition_signature(condition) for condition in rule.conditions or []))
 
 
 def rulebox_rules_payload(rules: Iterable[GraphInferenceRule]) -> List[Dict[str, object]]:

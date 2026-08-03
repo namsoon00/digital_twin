@@ -1,6 +1,8 @@
+import json
 from dataclasses import replace
 from typing import Dict, List
 
+from .hypothesis_scoping import condition_scope_profile
 from .ontology_rulebox_contracts import (
     WATCHLIST_ACTION_POLICY,
     WATCHLIST_ALLOWED_ACTIONS,
@@ -9,6 +11,7 @@ from .ontology_rulebox_contracts import (
     GraphInferenceRule,
     GraphRuleCondition,
     GraphRuleDerivation,
+    HypothesisLifecyclePolicy,
 )
 
 
@@ -111,7 +114,7 @@ RULEBOX_EXECUTION_GUIDANCE_BY_STAGE: Dict[str, Dict[str, object]] = {
         "decisionLabel": "팩터 집중 노출 점검",
         "primaryAction": "EXPOSURE_REVIEW",
         "primaryActionLabel": "동일 팩터·섹터 노출 점검",
-        "candidateAction": "TRIM",
+        "candidateAction": "HOLD",
         "blockedActionLabels": ["같은 팩터 종목 동시 추가매수"],
         "nextChecks": ["동일 팩터 보유 종목의 동방향 위험을 확인"],
     },
@@ -140,7 +143,7 @@ RULEBOX_EXECUTION_GUIDANCE_BY_STAGE: Dict[str, Dict[str, object]] = {
         "decisionLabel": "실행 유동성 위험 점검",
         "primaryAction": "SPLIT_EXECUTION_REVIEW",
         "primaryActionLabel": "시장가 대신 분할 실행 기준 점검",
-        "candidateAction": "TRIM",
+        "candidateAction": "HOLD",
         "blockedActionLabels": ["유동성 확인 없는 일괄 주문"],
         "nextChecks": ["거래대금, 호가 잔량, 매도 가능 수량으로 분할 기준을 확인"],
     },
@@ -222,7 +225,7 @@ RULEBOX_EXECUTION_GUIDANCE_BY_STAGE: Dict[str, Dict[str, object]] = {
         "decisionLabel": "리밸런싱 점검",
         "primaryAction": "REBALANCE_REVIEW",
         "primaryActionLabel": "집중 노출 축소와 리밸런싱 점검",
-        "candidateAction": "TRIM",
+        "candidateAction": "HOLD",
         "blockedActionLabels": ["같은 섹터·팩터 비중 확대"],
         "nextChecks": ["단일 종목·섹터·통화 비중 한도를 확인"],
     },
@@ -310,13 +313,13 @@ RULEBOX_DECISION_EFFECT_BY_STAGE: Dict[str, str] = {
     "RATE_ACTION": "constrain",
     "FX_REVIEW": "constrain",
     "FX_ACTION": "constrain",
-    "MARKET_PROXY_CONTEXT": "constrain",
+    "MARKET_PROXY_CONTEXT": "defer",
     "MARKET_STRUCTURE": "constrain",
     "LIQUIDITY_REVIEW": "constrain",
     "LIQUIDITY_ACTION": "constrain",
-    "EXECUTION_OK": "constrain",
+    "EXECUTION_OK": "defer",
     "DISTRIBUTION_REVIEW": "constrain",
-    "FACTOR_CROWDING": "constrain",
+    "FACTOR_CROWDING": "defer",
     "LOSS_REDUCE": "constrain",
     "LOSS_CUT": "constrain",
     "BREAKDOWN_ACCELERATION": "constrain",
@@ -327,7 +330,7 @@ RULEBOX_DECISION_EFFECT_BY_STAGE: Dict[str, str] = {
     "PROFIT_PARTIAL": "constrain",
     "PROFIT_SPLIT": "constrain",
     "PROFIT_PROTECT": "constrain",
-    "REBALANCE_REVIEW": "constrain",
+    "REBALANCE_REVIEW": "defer",
     "REBALANCE_ACTION": "constrain",
     "BTC_REVIEW": "constrain",
     "BTC_REDUCE": "constrain",
@@ -412,6 +415,195 @@ def with_rulebox_execution_guidance(rules: List[GraphInferenceRule]) -> List[Gra
     return enriched
 
 
+RULEBOX_V3_DUPLICATE_MERGES = {
+    # The paired rules had exactly the same predicates. Keep both authored
+    # outcomes on one TypeDB path instead of making one ABox fact emit two
+    # competing hypotheses and alerts.
+    "graph.data_quality.action_block.v1": "graph.data_quality.microstructure_gap.v1",
+    "graph.holding.trend_transition.risk.v1": "graph.temporal.downside_acceleration.risk.v1",
+}
+
+# The former beta edge was a static market-map label (weight 0.6), not an
+# observed beta value. Real beta remains available through valuation inputs;
+# this generic context rule stays disabled until a measured stock-to-benchmark
+# beta relation is introduced.
+RULEBOX_V3_DISABLED_RULE_IDS = {"graph.benchmark.beta.context.v1"}
+
+
+def _rulebox_v3_evidence_group_key(condition: GraphRuleCondition) -> str:
+    """Map one condition to the raw evidence family it actually observes."""
+
+    field = str(condition.field or "").strip()
+    normalized_field = field.lower()
+    if normalized_field in {
+        "foreignnetvolume", "institutionnetvolume", "individualnetvolume",
+        "smartmoneynetvolume", "investorflowbase",
+    }:
+        return "investor-flow"
+    if normalized_field in {"tradestrength", "bidaskimbalance", "buyvolume", "sellvolume"}:
+        return "microstructure"
+    if "volume" in normalized_field:
+        return "volume"
+    if normalized_field in {"currentprice", "pricechangerate", "changerate", "ma5distance", "ma20distance", "ma60distance"}:
+        return "price-path"
+    if normalized_field:
+        return "subject:" + normalized_field
+
+    relation_type = str(condition.relation_type or "").upper().strip()
+    filters = dict(condition.target_property_filters or {})
+    relation_filters = dict(condition.relation_property_filters or {})
+    field_filter = filters.get("field")
+    if isinstance(field_filter, dict):
+        field_filter = field_filter.get("value")
+    normalized_filter_field = str(field_filter or "").strip().lower()
+    if relation_type == "HAS_TRADE_FLOW":
+        if "volume" in normalized_filter_field:
+            return "volume"
+        return "microstructure"
+    if relation_type in {"HAS_TECHNICAL_INDICATOR", "HAS_PRICE_PATH", "HAS_RELATIVE_PERFORMANCE"}:
+        return "price-path"
+    if relation_type in {"HAS_TEMPORAL_WINDOW", "HAS_OBSERVATION"}:
+        return "temporal-path"
+    if relation_type in {"HAS_DATA_QUALITY"}:
+        return "data-quality"
+    if relation_type in {"HAS_EXECUTION_METRIC"}:
+        return "execution-capacity"
+    if relation_type in {"HAS_FACTOR_EXPOSURE", "HAS_BETA_TO", "HAS_MARKET_EXPOSURE"}:
+        return "portfolio-exposure"
+    if relation_type in {"HAS_VALUATION", "HAS_MARGIN_OF_SAFETY", "HAS_VALUATION_RISK", "HAS_VALUATION_OPPORTUNITY"}:
+        return "valuation"
+    if relation_type in {"HAS_RATE_SENSITIVITY", "HAS_FX_EXPOSURE", "HAS_MACRO_REGIME"}:
+        return "macro"
+    if relation_type in {"HAS_EXTERNAL_SIGNAL"}:
+        event_key = filters.get("eventType") or filters.get("group") or filters.get("relationScope") or condition.target_kind
+        return "external:" + str(event_key or "signal").lower()
+    if relation_type in {"HAS_CRYPTO_EXPOSURE"}:
+        return "crypto"
+    canonical = json.dumps(
+        {"target": filters, "relation": relation_filters},
+        ensure_ascii=True,
+        sort_keys=True,
+        separators=(",", ":"),
+        default=str,
+    )
+    return "relation:" + (relation_type or str(condition.kind or "condition")) + ":" + canonical
+
+
+def _rulebox_v3_family_key(rule: GraphInferenceRule) -> str:
+    rule_id = str(rule.rule_id or "").strip()
+    explicit = {
+        "graph.data_quality.microstructure_gap.v1": "data-quality:microstructure-gap",
+        "graph.data_quality.action_block.v1": "data-quality:microstructure-gap",
+        "graph.holding.trend_transition.risk.v1": "temporal:downside-acceleration",
+        "graph.temporal.downside_acceleration.risk.v1": "temporal:downside-acceleration",
+    }
+    if rule_id in explicit:
+        return explicit[rule_id]
+    crypto_parts = rule_id.split(".")
+    if len(crypto_parts) >= 7 and crypto_parts[1:3] == ["crypto", "market"]:
+        return "crypto-market:" + ":".join(crypto_parts[3:5])
+    return rule_id.removeprefix("graph.").removesuffix(".v1") or rule_id
+
+
+def _rulebox_v3_lifecycle(rule: GraphInferenceRule, conditions: List[GraphRuleCondition]) -> HypothesisLifecyclePolicy:
+    rule_id = str(rule.rule_id or "").lower()
+    validity_minutes = 30
+    freshness_domains = ["quote"]
+    next_data = ["다음 현재가와 가격 경로"]
+    if rule_id.startswith("graph.crypto.market"):
+        validity_minutes, freshness_domains, next_data = 25, ["quote"], ["BTC/ETH 다음 수집값", "민감 종목 가격 반응"]
+    elif any(token in rule_id for token in ("news", "disclosure", "earnings", "regulatory")):
+        validity_minutes, freshness_domains, next_data = 1440, ["research"], ["원문", "후속 보도 또는 공시", "가격 반응"]
+    elif any(token in rule_id for token in ("valuation",)):
+        validity_minutes, freshness_domains, next_data = 10080, ["research"], ["EPS/PER 가정", "실적 또는 컨센서스 갱신"]
+    elif any(token in rule_id for token in ("macro", "fx", "rate")):
+        validity_minutes, freshness_domains, next_data = 360, ["quote"], ["거시 원시값", "개별 종목 가격 반응"]
+    elif any(token in rule_id for token in ("data_quality", "coverage")):
+        validity_minutes, freshness_domains, next_data = 30, ["static"], ["누락 필드 복구", "출처 기준 시각"]
+    elif any(token in rule_id for token in ("execution", "liquidity")):
+        validity_minutes, freshness_domains, next_data = 10, ["quote", "portfolio"], ["호가", "거래대금", "매도 가능 수량"]
+    elif any(token in rule_id for token in ("temporal", "trend", "rebound", "recovery")):
+        validity_minutes, freshness_domains, next_data = 60, ["quote", "trend"], ["다음 가격 경로", "거래량 또는 수급"]
+    elif rule.source_kind == "portfolio" or any(token in rule_id for token in ("factor", "benchmark", "portfolio")):
+        validity_minutes, freshness_domains, next_data = 240, ["portfolio"], ["포트폴리오 비중", "상관 또는 노출 변화"]
+    elif "flow" in rule_id or "smart_money" in rule_id:
+        validity_minutes, freshness_domains, next_data = 30, ["quote", "flow"], ["다음 수급 스냅샷", "가격·거래량 동조"]
+    formation = [
+        condition.condition_id
+        for condition in conditions
+        if str(condition.role or "required").lower() != "not"
+    ]
+    invalidation = [
+        condition.condition_id
+        for condition in conditions
+        if str(condition.role or "required").lower() == "not"
+    ]
+    return HypothesisLifecyclePolicy(
+        formation_condition_ids=formation,
+        invalidation_condition_ids=invalidation,
+        validity_minutes=validity_minutes,
+        required_freshness_domains=freshness_domains,
+        next_data_requirements=next_data,
+        invalidation_mode="typedb-rule-not-materialized",
+    )
+
+
+def _merge_rulebox_v3_duplicates(rules: List[GraphInferenceRule]) -> List[GraphInferenceRule]:
+    by_id = {rule.rule_id: rule for rule in rules}
+    merged_derivations: Dict[str, List[GraphRuleDerivation]] = {}
+    for duplicate_rule_id, primary_rule_id in RULEBOX_V3_DUPLICATE_MERGES.items():
+        duplicate = by_id.get(duplicate_rule_id)
+        primary = by_id.get(primary_rule_id)
+        if not duplicate or not primary:
+            continue
+        rows = list(primary.derivations or []) + list(duplicate.derivations or [])
+        unique = []
+        seen = set()
+        for derivation in rows:
+            key = (derivation.relation_type, derivation.target_kind, derivation.target_key)
+            if key in seen:
+                continue
+            seen.add(key)
+            unique.append(derivation)
+        merged_derivations[primary_rule_id] = unique
+    result = []
+    for rule in rules:
+        if rule.rule_id in merged_derivations:
+            result.append(replace(rule, derivations=merged_derivations[rule.rule_id]))
+        elif rule.rule_id in RULEBOX_V3_DUPLICATE_MERGES or rule.rule_id in RULEBOX_V3_DISABLED_RULE_IDS:
+            result.append(replace(rule, enabled=False))
+        else:
+            result.append(rule)
+    return result
+
+
+def with_rulebox_v3_governance(rules: List[GraphInferenceRule]) -> List[GraphInferenceRule]:
+    """Make bootstrap rules explicit, independently grounded and auditable."""
+
+    normalized: List[GraphInferenceRule] = []
+    for rule in _merge_rulebox_v3_duplicates(list(rules or [])):
+        conditions = []
+        for condition in rule.conditions or []:
+            scope = str(condition_scope_profile(condition.to_dict()).get("scope") or "unverified")
+            conditions.append(replace(
+                condition,
+                hypothesis_scope=scope,
+                evidence_group_key=_rulebox_v3_evidence_group_key(condition),
+            ))
+        derivations = []
+        for derivation in rule.derivations or []:
+            evidence_role = str(derivation.evidence_role or derivation.polarity or "context").strip().lower()
+            derivations.append(replace(derivation, evidence_role=evidence_role))
+        normalized.append(replace(
+            rule,
+            conditions=conditions,
+            derivations=derivations,
+            hypothesis_family_key=_rulebox_v3_family_key(rule),
+            hypothesis_lifecycle=_rulebox_v3_lifecycle(rule, conditions),
+        ))
+    return normalized
+
+
 def crypto_market_inference_rules() -> List[GraphInferenceRule]:
     """RuleBox-owned BTC/ETH market-path interpretation.
 
@@ -421,17 +613,17 @@ def crypto_market_inference_rules() -> List[GraphInferenceRule]:
     """
 
     rows = [
-        ("24h", "change24h", "up", 3.0, "WATCH"),
-        ("24h", "change24h", "down", 3.0, "WATCH"),
-        ("7d", "change7d", "up", 4.0, "WATCH"),
-        ("7d", "change7d", "down", 4.0, "WATCH"),
-        ("24h", "change24h", "up", 6.0, "ALERT"),
-        ("24h", "change24h", "down", 6.0, "ALERT"),
-        ("7d", "change7d", "up", 8.0, "ALERT"),
-        ("7d", "change7d", "down", 8.0, "ALERT"),
+        ("24h", "change24h", "up", 3.0, 6.0, "WATCH"),
+        ("24h", "change24h", "down", 3.0, 6.0, "WATCH"),
+        ("7d", "change7d", "up", 4.0, 8.0, "WATCH"),
+        ("7d", "change7d", "down", 4.0, 8.0, "WATCH"),
+        ("24h", "change24h", "up", 6.0, None, "ALERT"),
+        ("24h", "change24h", "down", 6.0, None, "ALERT"),
+        ("7d", "change7d", "up", 8.0, None, "ALERT"),
+        ("7d", "change7d", "down", 8.0, None, "ALERT"),
     ]
     rules: List[GraphInferenceRule] = []
-    for horizon, field, direction, threshold, severity in rows:
+    for horizon, field, direction, threshold, upper_threshold, severity in rows:
         threshold_key = str(int(threshold)) if threshold.is_integer() else str(threshold).replace(".", "_")
         level = "major" if severity == "ALERT" else "watch"
         operator = ">=" if direction == "up" else "<="
@@ -439,6 +631,27 @@ def crypto_market_inference_rules() -> List[GraphInferenceRule]:
         polarity = "support" if direction == "up" else "risk"
         relationship_label = "상승" if direction == "up" else "하락"
         rule_id = "graph.crypto.market." + horizon + "." + direction + "." + level + ".v1"
+        conditions = [
+            GraphRuleCondition(
+                "crypto-" + horizon + "-" + direction + "-" + level,
+                "relation",
+                "BTC 또는 ETH " + horizon + " 변화율이 RuleBox " + relationship_label + " 기준을 충족합니다.",
+                relation_type="HAS_PRICE_PATH",
+                target_kind="price-path",
+                target_property_filters={field: {"operator": operator, "value": signed_threshold}},
+            ),
+        ]
+        if upper_threshold is not None:
+            upper_operator = "<" if direction == "up" else ">"
+            signed_upper_threshold = upper_threshold if direction == "up" else -upper_threshold
+            conditions.append(GraphRuleCondition(
+                "crypto-" + horizon + "-" + direction + "-" + level + "-cap",
+                "relation",
+                "WATCH 구간은 더 높은 ALERT 기준에 아직 도달하지 않았습니다.",
+                relation_type="HAS_PRICE_PATH",
+                target_kind="price-path",
+                target_property_filters={field: {"operator": upper_operator, "value": signed_upper_threshold}},
+            ))
         rules.append(GraphInferenceRule(
             rule_id=rule_id,
             label="BTC/ETH " + horizon + " 원시 " + relationship_label + " 경로 -> 크립토 변동 재확인",
@@ -447,16 +660,7 @@ def crypto_market_inference_rules() -> List[GraphInferenceRule]:
             action_group="macroRegime",
             action_level="review",
             prompt_hint="BTC/ETH 원시 변화율은 ABox에 유지하고, 상승·하락·강도 구간의 관계 판단과 알림 강도는 TypeDB RuleBox에서만 결정합니다.",
-            conditions=[
-                GraphRuleCondition(
-                    "crypto-" + horizon + "-" + direction + "-" + level,
-                    "relation",
-                    "BTC 또는 ETH " + horizon + " 변화율이 RuleBox " + relationship_label + " 기준을 충족합니다.",
-                    relation_type="HAS_PRICE_PATH",
-                    target_kind="price-path",
-                    target_property_filters={field: {"operator": operator, "value": signed_threshold}},
-                ),
-            ],
+            conditions=conditions,
             derivations=[
                 GraphRuleDerivation(
                     relation_type="HAS_INFERRED_SUPPORT" if direction == "up" else "HAS_INFERRED_RISK",
@@ -2793,15 +2997,6 @@ def default_graph_inference_rules() -> List[GraphInferenceRule]:
                     value=0,
                     role="any",
                 ),
-                GraphRuleCondition(
-                    "investor-flow-support",
-                    "subject_property",
-                    "외국인·기관 합산 순매수가 양수입니다.",
-                    field="smartMoneyNetVolume",
-                    operator=">",
-                    value=0,
-                    role="any",
-                ),
             ],
             derivations=[
                 GraphRuleDerivation(
@@ -2881,15 +3076,6 @@ def default_graph_inference_rules() -> List[GraphInferenceRule]:
                     "smart-money-outflow",
                     "subject_property",
                     "외국인과 기관 합산 순매도가 반등 근거를 약하게 만듭니다.",
-                    field="smartMoneyNetVolume",
-                    operator="<",
-                    value=0,
-                    role="any",
-                ),
-                GraphRuleCondition(
-                    "investor-flow-risk",
-                    "subject_property",
-                    "외국인·기관 합산 순매도가 음수입니다.",
                     field="smartMoneyNetVolume",
                     operator="<",
                     value=0,
@@ -3387,24 +3573,24 @@ def default_graph_inference_rules() -> List[GraphInferenceRule]:
                     "relation",
                     "종목 단위 공시/신고 신호가 갱신됐습니다.",
                     relation_type="HAS_EXTERNAL_SIGNAL",
-                    target_kind="external-signal",
+                    target_kind="disclosure-filing",
                     target_property_filters={"group": ["dartDisclosures", "secFilings"]},
                 ),
             ],
             derivations=[
                 GraphRuleDerivation(
-                    relation_type="HAS_INFERRED_RISK",
-                    target_kind="risk",
-                    target_key="{symbol}:disclosure-event-risk",
-                    target_label="{displayName} 공시 이벤트 리스크",
-                    tbox_class="EventRisk",
-                    tbox_classes=["Risk", "EventRisk", "DisclosureEvent", "DisclosureFiling"],
-                    polarity="risk",
-                    belief_label="보유 종목에 공시/신고 이벤트가 갱신되어 보유 논리와 실행 계획을 재확인해야 합니다.",
-                    ai_influence_label="공시 이벤트 리스크",
+                    relation_type="REQUIRES_NEXT_CHECK",
+                    target_kind="next-check",
+                    target_key="{symbol}:disclosure-event-review",
+                    target_label="{displayName} 공시 이벤트 원문 점검",
+                    tbox_class="NextCheck",
+                    tbox_classes=["NextCheck", "DisclosureEvent", "DisclosureFiling"],
+                    polarity="context",
+                    belief_label="보유 종목에 공시/신고 이벤트가 갱신되어 원문 성격과 가격 반응을 확인해야 합니다.",
+                    ai_influence_label="공시 이벤트 원문 점검",
                     action_group="eventRisk",
                     action_level="review",
-                    decision_stage="NEWS_RISK",
+                    decision_stage="DISCLOSURE_REVIEW",
                 )
             ],
         ),
@@ -5053,9 +5239,10 @@ def default_graph_inference_rules() -> List[GraphInferenceRule]:
                 GraphRuleCondition(
                     "factor-exposure",
                     "relation",
-                    "포트폴리오 내에서 의미 있는 팩터 노출입니다.",
+                    "단일 보유 종목 비중이 의미 있는 팩터 노출입니다.",
                     relation_type="HAS_FACTOR_EXPOSURE",
                     target_kind="factor",
+                    relation_property_filters={"weight": {"operator": ">=", "value": 0.2}},
                 ),
             ],
             derivations=[
@@ -5109,9 +5296,10 @@ def default_graph_inference_rules() -> List[GraphInferenceRule]:
                 GraphRuleCondition(
                     "benchmark-beta",
                     "relation",
-                    "시장 벤치마크 베타가 판단 컨텍스트에 필요합니다.",
+                    "관측된 시장 벤치마크 베타가 판단 컨텍스트에 필요합니다.",
                     relation_type="HAS_BETA_TO",
                     target_kind="benchmark-index",
+                    target_property_filters={"beta": {"operator": ">=", "value": 1.2}},
                 ),
             ],
             derivations=[
@@ -5902,21 +6090,12 @@ def default_graph_inference_rules() -> List[GraphInferenceRule]:
                     role="any",
                 ),
                 GraphRuleCondition(
-                    "sector-concentration-count",
-                    "relation",
-                    "같은 섹터 보유 종목 수가 집중 점검 기준 이상입니다.",
-                    relation_type="HAS_MARKET_EXPOSURE",
-                    target_kind="sector-exposure",
-                    target_property_filters={"positionCount": {"operator": ">=", "value": 2}},
-                    role="any",
-                ),
-                GraphRuleCondition(
                     "currency-concentration-ratio",
                     "relation",
-                    "외화 원시 노출 비중이 리밸런싱 기준 이상입니다.",
+                    "외화 원시 노출 비중이 집중 점검 기준 이상입니다.",
                     relation_type="HAS_MARKET_EXPOSURE",
                     target_kind="currency-exposure",
-                    target_property_filters={"exposureRatio": {"operator": ">=", "value": 10}},
+                    target_property_filters={"exposureRatio": {"operator": ">=", "value": 35}},
                     role="any",
                 ),
             ],
@@ -5934,8 +6113,10 @@ def default_graph_inference_rules() -> List[GraphInferenceRule]:
                     action_group="rebalance",
                     action_level="review",
                     decision_stage="REBALANCE_REVIEW",
+                    decision_effect="defer",
+                    candidate_action="HOLD",
                 )
             ],
         ),
     ]
-    return with_rulebox_execution_guidance(rules)
+    return with_rulebox_v3_governance(with_rulebox_execution_guidance(rules))

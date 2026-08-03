@@ -11,6 +11,7 @@ from ..domain.ontology_rulebox_governance import (
     normalize_rule_change_candidate,
     rulebox_governance_candidates,
     rulebox_version_payload,
+    validate_rulebox_semantics,
 )
 from ..domain.ontology_rulebox_projection import add_rulebox_concepts
 from ..domain.ontology_schema import default_tbox_metadata, normalize_tbox_metadata, tbox_entities, tbox_relations
@@ -31,7 +32,7 @@ from .graph_store_payloads import (
 def rulebox_rules_to_payload(rules: Iterable[GraphInferenceRule]) -> List[Dict[str, object]]:
     return [rule.to_dict() for rule in rules]
 
-def rulebox_rules_from_payload(payload: Dict[str, object]) -> List[GraphInferenceRule]:
+def rulebox_rules_from_payload(payload: Dict[str, object], strict_governance: bool = False) -> List[GraphInferenceRule]:
     payload = payload or {}
     raw_rules = payload.get("rules")
     if payload.get("rulesJson"):
@@ -67,6 +68,8 @@ def rulebox_rules_from_payload(payload: Dict[str, object]) -> List[GraphInferenc
             "(support, defer, constrain, block): "
             + ", ".join(invalid_effects[:10])
         )
+    if strict_governance:
+        validate_rulebox_semantics(rules)
     return rules
 
 def rulebox_graph_from_rules(
@@ -398,6 +401,8 @@ def condition_payload_from_row(row: Dict[str, object]) -> Dict[str, object]:
         "target_kind": str(condition.get("target_kind") or row.get("targetKind") or ""),
         "target_property_filters": target_filters,
         "relation_property_filters": relation_filters,
+        "hypothesis_scope": str(condition.get("hypothesis_scope") or condition.get("hypothesisScope") or ""),
+        "evidence_group_key": str(condition.get("evidence_group_key") or condition.get("evidenceGroupKey") or ""),
     }
 
 def derivation_payload_from_row(row: Dict[str, object]) -> Dict[str, object]:

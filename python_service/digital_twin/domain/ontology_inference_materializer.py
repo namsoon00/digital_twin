@@ -590,6 +590,9 @@ def rule_condition_shape(condition) -> Dict[str, object]:
     hypothesis_scope = str(getattr(condition, "hypothesis_scope", "") or "")
     if hypothesis_scope:
         payload["hypothesisScope"] = hypothesis_scope
+    evidence_group_key = str(getattr(condition, "evidence_group_key", "") or "")
+    if evidence_group_key:
+        payload["evidenceGroupKey"] = evidence_group_key
     return payload
 
 
@@ -704,8 +707,10 @@ def matching_evidence_relation(
             getattr(condition, "target_property_filters", {}) or {},
         ):
             continue
+        relation_properties = dict(relation.properties or {})
+        relation_properties.setdefault("weight", getattr(relation, "weight", None))
         if not ontology_properties_match(
-            relation.properties or {},
+            relation_properties,
             getattr(condition, "relation_property_filters", {}) or {},
         ):
             continue

@@ -145,13 +145,19 @@ class GraphRuleCondition:
     # condition itself; this only prevents private account inputs from being
     # promoted into a cross-account market hypothesis.
     hypothesis_scope: str = ""
+    # Conditions in an N-of-M group may observe the same underlying fact. The
+    # TypeDB compiler counts this key, rather than duplicated condition rows,
+    # so one investor-flow snapshot cannot masquerade as two confirmations.
+    evidence_group_key: str = ""
 
     def to_dict(self) -> Dict[str, object]:
         payload = asdict(self)
-        # Empty scope means the established structural classifier applies.
-        # Leaving it out preserves RuleBox fingerprints for existing rules.
+        # Empty values keep backward compatibility for existing authored
+        # rules. Bootstrap RuleBox v3 writes both fields explicitly.
         if not payload.get("hypothesis_scope"):
             payload.pop("hypothesis_scope", None)
+        if not payload.get("evidence_group_key"):
+            payload.pop("evidence_group_key", None)
         return payload
 
     @staticmethod
@@ -175,6 +181,11 @@ class GraphRuleCondition:
                 or payload.get("hypothesisScope")
                 or payload.get("input_scope")
                 or payload.get("inputScope")
+                or ""
+            ),
+            evidence_group_key=str(
+                payload.get("evidence_group_key")
+                or payload.get("evidenceGroupKey")
                 or ""
             ),
         )
@@ -306,7 +317,7 @@ class GraphInferenceRule:
             formation = [
                 condition.condition_id
                 for condition in self.conditions
-                if str(condition.role or "required").lower() not in {"optional", "negative", "exclude"}
+                if str(condition.role or "required").lower() not in {"optional", "negative", "exclude", "not"}
             ]
         try:
             validity_minutes = int(float(str(configured.validity_minutes or 0)))
@@ -362,7 +373,7 @@ class GraphInferenceRule:
         default_formation_condition_ids = [
             condition.condition_id
             for condition in conditions
-            if str(condition.role or "required").lower() not in {"optional", "negative", "exclude"}
+            if str(condition.role or "required").lower() not in {"optional", "negative", "exclude", "not"}
         ]
         return GraphInferenceRule(
             rule_id=rule_id,

@@ -1860,6 +1860,7 @@ TYPEDB_FUNCTION_TARGET_FILTERS = {
     "beta",
 } | set(TYPEDB_PROMOTED_NUMERIC_ATTRIBUTES.keys()) | set(TYPEDB_PROMOTED_TEXT_ATTRIBUTES.keys())
 TYPEDB_FUNCTION_RELATION_FILTERS = {
+    "weight",
     "field",
     "signalGroup",
     "polarity",
@@ -13450,7 +13451,7 @@ relation ontology-assertion,
     def seed_ontology(self, payload: Dict[str, object] = None) -> Dict[str, object]:
         payload = payload or {}
         try:
-            rules = rulebox_rules_from_payload(payload) if (payload.get("rules") is not None or payload.get("rulesJson")) else default_graph_inference_rules()
+            rules = rulebox_rules_from_payload(payload, strict_governance=True) if (payload.get("rules") is not None or payload.get("rulesJson")) else default_graph_inference_rules()
         except ValueError as error:
             return {"configured": True, "saved": False, "seeded": False, "status": "invalid-rulebox", "graphStore": "typedb", "reason": str(error)}
         rules = list(rules)
@@ -13821,7 +13822,7 @@ relation ontology-assertion,
     )
     def save_rulebox(self, payload: Dict[str, object] = None) -> Dict[str, object]:
         try:
-            rules = rulebox_rules_from_payload(payload or {})
+            rules = rulebox_rules_from_payload(payload or {}, strict_governance=True)
         except ValueError as error:
             return {"configured": True, "saved": False, "status": "invalid-rulebox", "graphStore": "typedb", "reason": str(error)}
         source = dict(payload or {}) if isinstance(payload, dict) else {}
@@ -20139,8 +20140,10 @@ def typedb_preflight_relation_condition_matches(
             target.properties or {},
             typedb_rule_condition_value(condition, "target_property_filters", {}) or {},
         )
+        relation_properties = dict(relation.properties or {})
+        relation_properties.setdefault("weight", getattr(relation, "weight", None))
         relation_verdict = typedb_preflight_filters_match(
-            relation.properties or {},
+            relation_properties,
             typedb_rule_condition_value(condition, "relation_property_filters", {}) or {},
         )
         if target_verdict is False or relation_verdict is False:
@@ -20990,8 +20993,26 @@ def typedb_native_match_query(
             condition_evidence_columns[condition_id] = str(pattern.get("relationIdColumn"))
     query = "match " + " ".join(clauses)
     if any_conditions and include_any_conditions:
-        if any_min_count > len(any_conditions):
-            return {"ruleId": rule_id, "query": "", "columns": columns, "reason": "any condition minimum exceeds available any conditions"}
+        # An N-of-M group is evidence-based, not condition-row-based. Two
+        # aliases of one raw observation must contribute one confirmation.
+        # Use the first durable RuleBox condition entity in each evidence
+        # group as the TypeDB count token, so the reducer stays fully native.
+        any_group_representatives: Dict[str, str] = {}
+        for condition_index, condition in any_conditions:
+            condition_id = str(condition.get("condition_id") or condition.get("conditionId") or "condition-" + str(condition_index))
+            evidence_group = str(
+                condition.get("evidence_group_key")
+                or condition.get("evidenceGroupKey")
+                or condition_id
+            ).strip() or condition_id
+            any_group_representatives.setdefault(evidence_group, condition_id)
+        if any_min_count > len(any_group_representatives):
+            return {
+                "ruleId": rule_id,
+                "query": "",
+                "columns": columns,
+                "reason": "any condition minimum exceeds independent evidence groups",
+            }
         branches: List[str] = []
         for branch_index, (_condition_index, condition) in enumerate(any_conditions):
             pattern = typedb_condition_pattern(
@@ -21020,7 +21041,13 @@ def typedb_native_match_query(
             branch_clauses = [str(item) for item in pattern.get("clauses") or [] if str(item or "").strip()]
             if branch_clauses:
                 condition_id = str(condition.get("condition_id") or condition.get("conditionId") or "condition-" + str(branch_index))
-                token_id = entity_id("rule-condition", rule_id + ":" + condition_id)
+                evidence_group = str(
+                    condition.get("evidence_group_key")
+                    or condition.get("evidenceGroupKey")
+                    or condition_id
+                ).strip() or condition_id
+                token_condition_id = any_group_representatives[evidence_group]
+                token_id = entity_id("rule-condition", rule_id + ":" + token_condition_id)
                 branch_clauses.append(
                     "$anyConditionToken isa ontology-node, has ontology-box \"RuleBox\", has ontology-id "
                     + typedb_string(token_id)
@@ -21029,9 +21056,9 @@ def typedb_native_match_query(
                 branches.append("{ " + " ".join(branch_clauses) + " }")
         if not branches:
             return {"ruleId": rule_id, "query": "", "columns": columns, "reason": "any conditions produced no TypeQL branches"}
-        # `count($anyConditionToken)` counts distinct RuleBox condition
-        # entities, not relation rows. A source therefore cannot satisfy the
-        # N-of-M contract by producing duplicate evidence for one condition.
+        # `count($anyConditionToken)` counts distinct independent evidence
+        # groups, represented by durable RuleBox condition entities, not
+        # relation rows or duplicate aliases of the same raw observation.
         query += (
             " match " + " or ".join(branches) + ";"
             + " reduce $anyConditionCount = count($anyConditionToken) groupby $source;"
@@ -21086,12 +21113,16 @@ def typedb_native_any_group_check_query(
         1,
         int(number_or_none(rule.get("any_condition_min_count") or rule.get("anyConditionMinCount")) or 1),
     )
-    if any_min_count > len(conditions):
+    evidence_groups = {
+        str(condition.get("evidence_group_key") or condition.get("evidenceGroupKey") or condition.get("condition_id") or condition.get("conditionId") or "condition-" + str(index)).strip()
+        for index, condition in conditions
+    }
+    if any_min_count > len(evidence_groups):
         return {
             "ruleId": str(rule.get("rule_id") or rule.get("ruleId") or ""),
             "query": "",
             "columns": [],
-            "reason": "any condition minimum exceeds available any conditions",
+            "reason": "any condition minimum exceeds independent evidence groups",
         }
 
     def relation_shape(condition: Dict[str, object]) -> Tuple[str, str, str]:
@@ -22057,6 +22088,7 @@ def typedb_target_attribute(field: str) -> str:
 
 def typedb_relation_attribute(field: str) -> str:
     return {
+        "weight": "ontology-weight",
         "field": "ontology-field",
         "signalGroup": "ontology-signal-group",
         "polarity": "ontology-polarity",

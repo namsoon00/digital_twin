@@ -223,7 +223,11 @@ def typedb_worker_spec(settings: Dict[str, object]) -> Dict[str, object]:
         "seedOnStart": str((settings or {}).get("typedbSeedOnStart") or os.environ.get("TYPEDB_SEED_ON_START") or "1"),
         "seedReplaceRuleBox": str((settings or {}).get("typedbSeedReplaceRuleBox") or os.environ.get("TYPEDB_SEED_REPLACE_RULEBOX") or "1"),
         "seedKeepInference": str((settings or {}).get("typedbSeedKeepInference") or os.environ.get("TYPEDB_SEED_KEEP_INFERENCE") or "1"),
-        "seedTimeoutSeconds": str((settings or {}).get("typedbSeedTimeoutSeconds") or os.environ.get("TYPEDB_SEED_TIMEOUT_SECONDS") or "360"),
+        # A fresh TypeDB needs to persist the complete static TBox, RuleBox,
+        # and language contract before any ABox worker is allowed to run.
+        # The safe one-query static writes intentionally trade bootstrap speed
+        # for planner stability and can exceed six minutes on a cold store.
+        "seedTimeoutSeconds": str((settings or {}).get("typedbSeedTimeoutSeconds") or os.environ.get("TYPEDB_SEED_TIMEOUT_SECONDS") or "900"),
         "seedRetryCount": str((settings or {}).get("typedbSeedRetryCount") or os.environ.get("TYPEDB_SEED_RETRY_COUNT") or "2"),
         "sharedWorldProjectionRebuildTimeoutSeconds": str(
             (settings or {}).get("typedbSharedWorldProjectionRebuildTimeoutSeconds")

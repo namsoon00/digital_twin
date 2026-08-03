@@ -207,6 +207,75 @@ class VerifiedSnapshotReasoningTests(unittest.TestCase):
         self.assertIn("ResearchEvidence", event.payload["factTypes"])
         self.assertIn("external.newsHeadlines", event.payload["changedFieldsBySymbol"]["AAPL"])
 
+    def test_research_cache_rotation_without_eligible_evidence_does_not_enqueue(self):
+        previous = snapshot(external_signals={
+            "researchEvidence": {
+                "AAPL": [{
+                    "evidenceId": "research:AAPL:yfinance:old",
+                    "symbol": "AAPL",
+                    "kind": "financial-fact",
+                    "source": "yfinance",
+                    "title": "yfinance 종합 데이터",
+                    "observedAt": "2026-07-29T00:00:00Z",
+                    "payload": {
+                        "relationScope": "",
+                        "sourceKind": "unofficial-yahoo-finance-wrapper",
+                        "evidenceGovernance": {"investmentJudgmentEligible": False},
+                    },
+                }],
+            },
+        })
+        current = snapshot(external_signals={
+            "researchEvidence": {
+                "AAPL": [{
+                    "evidenceId": "research:AAPL:yfinance:new",
+                    "symbol": "AAPL",
+                    "kind": "financial-fact",
+                    "source": "yfinance",
+                    "title": "yfinance 종합 데이터",
+                    "observedAt": "2026-07-29T00:05:00Z",
+                    "payload": {
+                        "relationScope": "",
+                        "sourceKind": "unofficial-yahoo-finance-wrapper",
+                        "evidenceGovernance": {"investmentJudgmentEligible": False},
+                    },
+                }],
+            },
+        })
+
+        self.assertIsNone(
+            verified_monitor_snapshot_reasoning_event(current, previous.to_monitor_state())
+        )
+
+    def test_eligible_research_set_change_targets_only_its_symbol(self):
+        previous = snapshot()
+        current = snapshot(external_signals={
+            "researchEvidence": {
+                "AAPL": [{
+                    "evidenceId": "research:AAPL:direct:1",
+                    "symbol": "AAPL",
+                    "kind": "news",
+                    "source": "Reuters",
+                    "title": "Apple guidance changes",
+                    "url": "https://example.test/aapl-guidance",
+                    "polarity": "risk",
+                    "observedAt": "2026-07-29T00:05:00Z",
+                    "payload": {
+                        "relationScope": "direct",
+                        "articleReadStatus": "body",
+                        "articleFacts": {"bodyQualityPassed": True},
+                        "evidenceGovernance": {"investmentJudgmentEligible": True},
+                    },
+                }],
+            },
+        })
+
+        event = verified_monitor_snapshot_reasoning_event(current, previous.to_monitor_state())
+
+        self.assertEqual(["AAPL"], event.payload["symbols"])
+        self.assertEqual(["ResearchEvidence"], event.payload["factTypesBySymbol"]["AAPL"])
+        self.assertIn("external.researchEvidence", event.payload["changedFieldsBySymbol"]["AAPL"])
+
     def test_external_quality_clock_changes_do_not_fan_out_a_new_reasoning_request(self):
         previous = snapshot(external_signals={
             "quality": {

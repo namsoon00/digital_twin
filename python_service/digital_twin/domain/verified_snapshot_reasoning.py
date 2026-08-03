@@ -17,8 +17,10 @@ from __future__ import annotations
 from typing import Dict, Iterable, List, Mapping, Tuple
 
 from .events import DomainEvent, ontology_reasoning_requested_event, snapshot_collected_event
+from .evidence_delta import evidence_inference_signature, inference_eligible
 from .fact_changes import changed_fields, fact_revision_id, fact_signature
 from .crypto_market_signals import crypto_market_transitions, crypto_transition_targets
+from .investment_research import research_evidence_from_payload
 from .materiality import market_change_materiality
 from .ontology_projection_input import compact_external_signals_for_ontology
 from .portfolio import AccountSnapshot, Position
@@ -26,7 +28,7 @@ from .portfolio import AccountSnapshot, Position
 
 VERIFIED_MONITOR_SNAPSHOT_TRIGGER = "verified-monitor-snapshot"
 VERIFIED_MONITOR_SNAPSHOT_SLOT_FAMILY = "VerifiedMonitorSnapshot"
-VERIFIED_MONITOR_SNAPSHOT_VERSION = "verified-monitor-snapshot-v2"
+VERIFIED_MONITOR_SNAPSHOT_VERSION = "verified-monitor-snapshot-v3"
 
 
 # Deliberately keep the source contract close to the Position domain object.
@@ -259,7 +261,67 @@ def _previous_portfolio_context(state: Mapping[str, object]) -> Dict[str, object
     }
 
 
-def _external_for_symbol(compact: Mapping[str, object], symbol: str) -> Dict[str, object]:
+def _research_lifecycle_state(value: object) -> str:
+    source = value if isinstance(value, Mapping) else {}
+    payload = source.get("payload") if isinstance(source.get("payload"), Mapping) else {}
+    for key in (
+        "lifecycleState",
+        "lifecycle_state",
+        "evidenceLifecycleState",
+        "evidence_lifecycle_state",
+    ):
+        state = source.get(key)
+        if state in (None, ""):
+            state = payload.get(key)
+        text = str(state or "").strip()
+        if text:
+            return text
+    return "active"
+
+
+def _eligible_research_evidence_projection(
+    value: object,
+    symbol: str,
+    settings: Mapping[str, object] = None,
+) -> List[Dict[str, object]]:
+    """Return the active, inference-eligible research set for one symbol.
+
+    ``researchEvidence`` is a read-model cache that is rebuilt on every
+    monitor pass. Its newest-N order can change when a yfinance supplement is
+    refreshed, even though no TypeDB-eligible fact changed. The evidence
+    store already defines the admission boundary, so reuse its semantic
+    inference signature here instead of scheduling on cache ordering or
+    collection clocks.
+    """
+
+    rows = value if isinstance(value, list) else []
+    clean_symbol = _clean_symbol(symbol)
+    projections: Dict[str, Dict[str, object]] = {}
+    for row in rows:
+        if not isinstance(row, Mapping):
+            continue
+        evidence = research_evidence_from_payload(dict(row), fallback_symbol=clean_symbol)
+        if _clean_symbol(getattr(evidence, "symbol", "")) != clean_symbol:
+            continue
+        lifecycle_state = _research_lifecycle_state(row)
+        if not inference_eligible(evidence, lifecycle_state, dict(settings or {})):
+            continue
+        signature = evidence_inference_signature(evidence)
+        if not signature:
+            continue
+        projections[signature] = {
+            "evidenceId": str(getattr(evidence, "evidence_id", "") or ""),
+            "inferenceSignature": signature,
+            "lifecycleState": str(lifecycle_state or "active").strip().lower() or "active",
+        }
+    return [projections[key] for key in sorted(projections)]
+
+
+def _external_for_symbol(
+    compact: Mapping[str, object],
+    symbol: str,
+    settings: Mapping[str, object] = None,
+) -> Dict[str, object]:
     result: Dict[str, object] = {}
     # Crypto price paths have an explicit transition contract below.  Keeping
     # this global source in every stock's generic external delta made one
@@ -296,6 +358,15 @@ def _external_for_symbol(compact: Mapping[str, object], symbol: str) -> Dict[str
     ):
         rows = compact.get(group)
         if not isinstance(rows, Mapping) or symbol not in rows:
+            continue
+        if group == "researchEvidence":
+            eligible = _eligible_research_evidence_projection(
+                rows.get(symbol),
+                symbol,
+                settings,
+            )
+            if eligible:
+                result[group] = {symbol: eligible}
             continue
         result[group] = {symbol: rows.get(symbol)}
     return result
@@ -454,8 +525,8 @@ def verified_monitor_snapshot_reasoning_event(
         if position_fields:
             position_changed_count += 1
 
-        before_external = _external_for_symbol(previous_external, symbol)
-        after_external = _external_for_symbol(current_external, symbol)
+        before_external = _external_for_symbol(previous_external, symbol, settings)
+        after_external = _external_for_symbol(current_external, symbol, settings)
         raw_external_groups = _changed_external_groups(before_external, after_external)
         external_groups = _reasoning_external_groups(
             before_external,

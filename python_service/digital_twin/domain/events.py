@@ -528,6 +528,18 @@ def compact_ontology_reasoning_request_payload_for_storage(payload: Mapping[str,
         values = _event_text_list(source.get(key), limit=limit, item_limit=item_limit)
         if values:
             compact[key] = values
+    fact_types_by_symbol = source.get("factTypesBySymbol")
+    if isinstance(fact_types_by_symbol, Mapping):
+        compact_fact_types = {}
+        for symbol, values in fact_types_by_symbol.items():
+            clean_symbol = _event_text(symbol, 64).upper()
+            clean_types = _event_text_list(values, limit=20, item_limit=96)
+            if clean_symbol and clean_types:
+                compact_fact_types[clean_symbol] = clean_types
+            if len(compact_fact_types) >= 200:
+                break
+        if compact_fact_types:
+            compact["factTypesBySymbol"] = compact_fact_types
     assessments = compact_materiality_assessment_event_payloads(source.get("materialityAssessments"), limit=100)
     if assessments:
         compact["materialityAssessments"] = assessments
@@ -968,6 +980,9 @@ def ontology_reasoning_requested_event(
     evidence_deltas: Iterable[Dict[str, object]] = None,
     snapshot_barrier: Mapping[str, object] = None,
     observation_followup_symbols: Iterable[str] = None,
+    importance_gate: str = "fact-revision-first",
+    materiality_role: str = "advisory-priority-only",
+    fact_types_by_symbol: Dict[str, Iterable[str]] = None,
 ) -> DomainEvent:
     clean_symbols = sorted(set(str(symbol or "").upper().strip() for symbol in (symbols or []) if str(symbol or "").strip()))
     clean_observation_followups = sorted({
@@ -983,8 +998,11 @@ def ontology_reasoning_requested_event(
     raw_revisions = raw_revisions if isinstance(raw_revisions, dict) else {}
     raw_changed_fields = changed_fields_by_symbol if isinstance(changed_fields_by_symbol, dict) else source_payload.get("changedFieldsBySymbol")
     raw_changed_fields = raw_changed_fields if isinstance(raw_changed_fields, dict) else {}
+    raw_fact_types_by_symbol = fact_types_by_symbol if isinstance(fact_types_by_symbol, Mapping) else source_payload.get("factTypesBySymbol")
+    raw_fact_types_by_symbol = raw_fact_types_by_symbol if isinstance(raw_fact_types_by_symbol, Mapping) else {}
     revisions = {}
     changed_fields = {}
+    symbol_fact_types = {}
     for symbol in clean_symbols:
         revision = str(raw_revisions.get(symbol) or raw_revisions.get(symbol.upper()) or "").strip()
         if revision:
@@ -994,6 +1012,17 @@ def ontology_reasoning_requested_event(
             fields = raw_changed_fields.get(symbol.upper())
         if isinstance(fields, (list, tuple, set)):
             changed_fields[symbol] = [str(field or "").strip() for field in fields if str(field or "").strip()][:30]
+        values = raw_fact_types_by_symbol.get(symbol)
+        if values is None:
+            values = raw_fact_types_by_symbol.get(symbol.upper())
+        if isinstance(values, (list, tuple, set)):
+            clean_values = sorted({
+                str(value or "").strip()
+                for value in values
+                if str(value or "").strip()
+            })
+            if clean_values:
+                symbol_fact_types[symbol] = clean_values[:20]
     source_observed_at = next((
         str(source_payload.get(key) or "").strip()
         for key in ["sourceObservedAt", "sourceAsOf", "observedAt", "generatedAt", "collectedAt"]
@@ -1022,17 +1051,20 @@ def ontology_reasoning_requested_event(
             "changedCount": int(changed_count or 0),
             "observedCount": int(observed_count or 0),
             "factTypes": clean_fact_types[:20],
+            # Per-symbol provenance prevents a broad monitor snapshot from
+            # making an unrelated research or flow family look changed for
+            # every mailbox slot. It is scheduling metadata only.
+            "factTypesBySymbol": symbol_fact_types,
             "reason": str(reason or ""),
             # Scheduling uses the original vendor/collection observation time,
             # never the delayed worker publish time, to reject stale data
             # before an expensive TypeDB cycle.
             "sourceObservedAt": source_observed_at,
             "dispatchMode": "data-update-driven",
-            # A canonical source fact revision is the ingress contract. The
-            # materiality assessment below remains advisory scheduling
-            # provenance, not a Python investment-decision gate.
-            "importanceGate": "fact-revision-first",
-            "materialityRole": "advisory-priority-only",
+            # This controls whether a raw fact creates a TypeDB work request;
+            # it is not an investment rule or a Python buy/sell decision.
+            "importanceGate": str(importance_gate or "fact-revision-first"),
+            "materialityRole": str(materiality_role or "advisory-priority-only"),
             "materialityAssessments": compact_materiality_assessment_event_payloads(
                 materiality_assessments if materiality_assessments is not None else [],
                 limit=100,

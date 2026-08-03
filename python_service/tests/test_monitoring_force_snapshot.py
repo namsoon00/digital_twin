@@ -14,6 +14,7 @@ from digital_twin.domain.market_observations import (
     apply_market_observation_outbox_baselines,
     apply_market_observation_reasoning_baselines,
     market_observation_reasoning_candidates,
+    market_observation_reasoning_symbols,
 )
 from digital_twin.domain.message_types import (
     INVESTMENT_INSIGHT,
@@ -25,6 +26,7 @@ from digital_twin.domain.monitoring import RealtimeMonitor
 from digital_twin.domain.portfolio import AccountSnapshot, AlertEvent, utc_now_iso
 from digital_twin.domain.portfolio_calculations import portfolio_summary
 from digital_twin.domain.strategy import decisions_for_positions
+from digital_twin.domain.verified_snapshot_reasoning import verified_monitor_snapshot_reasoning_event
 from digital_twin.infrastructure.mysql_monitoring_stores import (
     market_observation_followup_symbols,
     snapshot_state_for_persistence,
@@ -107,6 +109,13 @@ class MonitoringForceSnapshotTests(unittest.TestCase):
         self.assertTrue(candidates[0]["deliveryDeferred"])
         self.assertIn(MARKET_OBSERVATION_CANDIDATES_KEY, current.metadata)
         self.assertTrue(current.metadata["ontology"]["inferenceMissingState"]["pending"])
+        followup = verified_monitor_snapshot_reasoning_event(
+            current,
+            previous.to_monitor_state(),
+            observation_followup_symbols=market_observation_reasoning_symbols(current.metadata),
+        )
+        self.assertEqual(["000660"], followup.payload["symbols"])
+        self.assertEqual(["000660"], followup.payload["observationFollowupSymbols"])
 
     def test_critical_market_observation_is_emitted_immediately(self):
         previous_position = normalize_position({

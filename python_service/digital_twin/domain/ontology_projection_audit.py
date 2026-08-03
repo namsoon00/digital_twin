@@ -30,7 +30,7 @@ def _clean_symbols(symbols: Iterable[object]) -> List[str]:
 
 
 INFERENCE_REUSE_PROOF_VERSION = "target-inference-reuse-proof-v1"
-REASONING_REQUEST_CONTEXT_VERSION = "reasoning-request-context-v1"
+REASONING_REQUEST_CONTEXT_VERSION = "reasoning-request-context-v2"
 
 
 def compact_reasoning_request_context(

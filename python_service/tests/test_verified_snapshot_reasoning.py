@@ -97,6 +97,34 @@ class VerifiedSnapshotReasoningTests(unittest.TestCase):
         self.assertIn("current_price", event.payload["changedFieldsBySymbol"]["AAPL"])
         self.assertNotIn("portfolioContext", event.payload["changedFieldsBySymbol"]["AAPL"])
 
+    def test_subthreshold_quote_refresh_does_not_create_another_typedb_turn(self):
+        previous = snapshot()
+        current = snapshot(aapl_price=100.2)
+
+        event = verified_monitor_snapshot_reasoning_event(current, previous.to_monitor_state())
+
+        self.assertIsNone(event)
+
+    def test_foreign_flow_direction_change_creates_a_flow_request(self):
+        previous = snapshot()
+        current = snapshot()
+        previous.positions[0].foreign_buy_volume = 100.0
+        previous.positions[0].foreign_sell_volume = 110.0
+        previous.positions[0].foreign_net_volume = -10.0
+        current.positions[0].foreign_buy_volume = 130.0
+        current.positions[0].foreign_sell_volume = 100.0
+        current.positions[0].foreign_net_volume = 30.0
+
+        event = verified_monitor_snapshot_reasoning_event(current, previous.to_monitor_state())
+        assessments = {
+            item["subject"]: item
+            for item in event.payload["materialityAssessments"]
+        }
+
+        self.assertEqual(["AAPL"], event.payload["symbols"])
+        self.assertEqual(["ExecutionFlow"], event.payload["factTypesBySymbol"]["AAPL"])
+        self.assertIn("foreign-flow-direction", assessments["AAPL"]["matchedConditions"])
+
     def test_notified_market_observation_marks_only_the_changed_symbol_for_prompt_followup(self):
         previous = snapshot()
         current = snapshot(aapl_price=101.0)
@@ -247,6 +275,40 @@ class VerifiedSnapshotReasoningTests(unittest.TestCase):
         self.assertEqual(["AAPL", "MSFT"], event.payload["symbols"])
         self.assertIn("DataQuality", event.payload["factTypes"])
         self.assertIn("external.freshness", event.payload["changedFieldsBySymbol"]["AAPL"])
+
+    def test_supplemental_quote_cache_refresh_does_not_enqueue_a_duplicate_turn(self):
+        previous = snapshot(external_signals={
+            "yfinanceData": {"AAPL": {"marketCap": 1000, "trailingPE": 20}},
+        })
+        current = snapshot(external_signals={
+            "yfinanceData": {"AAPL": {"marketCap": 1100, "trailingPE": 21}},
+        })
+
+        self.assertIsNone(
+            verified_monitor_snapshot_reasoning_event(current, previous.to_monitor_state())
+        )
+
+    def test_mailbox_entries_keep_fact_types_bound_to_the_changed_symbol(self):
+        previous = snapshot()
+        current = snapshot(
+            msft_price=202.0,
+            external_signals={
+                "newsHeadlines": {
+                    "AAPL": {"items": [{"symbol": "AAPL", "title": "New", "url": "https://example.test/new"}]},
+                },
+            },
+        )
+
+        event = verified_monitor_snapshot_reasoning_event(current, previous.to_monitor_state())
+        entries = {
+            entry["symbol"]: entry
+            for entry in durable_mailbox_entries(event)
+        }
+
+        self.assertEqual(["ResearchEvidence"], event.payload["factTypesBySymbol"]["AAPL"])
+        self.assertEqual(["MarketQuote"], event.payload["factTypesBySymbol"]["MSFT"])
+        self.assertEqual("ResearchEvidence", entries["AAPL"]["factFamily"])
+        self.assertEqual("MarketQuote", entries["MSFT"]["factFamily"])
 
     def test_crypto_transition_targets_direct_assets_and_sensitive_positions_only(self):
         previous = snapshot(external_signals={

@@ -13,13 +13,13 @@ import re
 from typing import Dict, Iterable, List, Mapping, Optional, Sequence, Set
 
 
-# v9 keeps the v6 global quality/value distinction, makes dependency
+# v10 keeps the v6 global quality/value distinction, makes dependency
 # fingerprints distinguish structural changes from a value change inside the
 # same kind or relation, and separates the current mailbox event from other
 # shared facts that happened to be present in the latest persisted snapshot.
 # TypeDB still evaluates every selected RuleBox function; Python only avoids
 # scheduling rules whose actual inputs did not change for this event.
-CHANGE_IMPACT_VERSION = "abox-change-impact-v9"
+CHANGE_IMPACT_VERSION = "abox-change-impact-v10"
 DEPENDENCY_FINGERPRINT_VERSION = "rule-input-v2"
 
 SYMBOL_SCOPE_FAMILIES = {
@@ -999,6 +999,7 @@ def event_scoped_routing_inputs(
     delta: Mapping[str, object],
     explicit_target_symbols: Iterable[object],
     requested_fact_families: Iterable[object],
+    requested_fact_families_by_symbol: Mapping[str, Iterable[object]] = None,
 ) -> Dict[str, object]:
     """Keep a target event from reopening unrelated shared snapshot facts.
 
@@ -1016,12 +1017,20 @@ def event_scoped_routing_inputs(
         if _clean(symbol)
     }
     requested = _expanded_family_values(requested_fact_families)
-    if not targets or not requested:
+    requested_by_symbol: Dict[str, Set[str]] = {}
+    for raw_symbol, values in dict(requested_fact_families_by_symbol or {}).items():
+        symbol = _clean(raw_symbol).upper()
+        families = _expanded_family_values(values)
+        if symbol and families:
+            requested_by_symbol[symbol] = families
+    if not targets or (not requested and not requested_by_symbol):
         return {
             "enabled": False,
             "scopeIds": [],
             "scopeFamilies": [],
             "dependencyKeys": [],
+            "dependencyKeysComplete": False,
+            "targetScopeNarrowed": False,
             "deferredSharedScopeIds": [],
             "deferredSharedScopeFamilies": [],
         }
@@ -1040,6 +1049,7 @@ def event_scoped_routing_inputs(
     selected_dependency_keys: Set[str] = set()
     deferred_shared_scope_ids: List[str] = []
     deferred_shared_families: Set[str] = set()
+    target_scope_narrowed = False
 
     for scope_id in direct_scope_ids:
         semantic = {
@@ -1049,27 +1059,38 @@ def event_scoped_routing_inputs(
         }
         if not semantic:
             semantic = scope_family_tokens(scope_id)
-        is_target_scope = scope_symbol(scope_id) in targets
+        scope_target = scope_symbol(scope_id).upper()
+        is_target_scope = scope_target in targets
+        target_requested = requested_by_symbol.get(scope_target, requested)
         matched_families = {
             family
             for family in semantic
-            if _families_intersect({family}, requested)
+            if _families_intersect({family}, target_requested)
         }
         if is_target_scope:
-            # A target's position, technical, or quality facts can be derived
-            # from the same quote. Recheck all of that target's direct facts
-            # rather than relying on event labels to infer a dependency.
-            included_families = semantic
+            # Legacy requests carry only a batch-wide provenance list, so
+            # preserve the conservative target-wide path for them. New
+            # verified snapshots bind fact types to each symbol. That lets a
+            # market turn avoid reopening an unrelated evidence/flow change
+            # that happened to be present in the same persisted snapshot.
+            included_families = matched_families if scope_target in requested_by_symbol else semantic
+            if scope_target in requested_by_symbol and semantic - included_families:
+                target_scope_narrowed = True
         else:
             included_families = matched_families
         if included_families:
             selected_scope_ids.append(scope_id)
             selected_families.update(included_families)
-            selected_dependency_keys.update(
-                _clean(key)
-                for key in dependency_by_scope.get(scope_id, []) or []
-                if _clean(key)
-            )
+            # Dependency fingerprints are currently scoped, not family-keyed.
+            # When a new per-symbol request intentionally narrows one scope,
+            # retain safe family-level selection instead of incorrectly using
+            # dependency keys from the omitted facts.
+            if not (is_target_scope and scope_target in requested_by_symbol and semantic - included_families):
+                selected_dependency_keys.update(
+                    _clean(key)
+                    for key in dependency_by_scope.get(scope_id, []) or []
+                    if _clean(key)
+                )
         if not is_target_scope:
             omitted_families = semantic - included_families
             if omitted_families:
@@ -1085,14 +1106,18 @@ def event_scoped_routing_inputs(
             "scopeIds": [],
             "scopeFamilies": [],
             "dependencyKeys": [],
+            "dependencyKeysComplete": False,
+            "targetScopeNarrowed": False,
             "deferredSharedScopeIds": [],
             "deferredSharedScopeFamilies": [],
         }
     return {
-        "enabled": bool(deferred_shared_scope_ids),
+        "enabled": bool(deferred_shared_scope_ids or target_scope_narrowed),
         "scopeIds": sorted(set(selected_scope_ids)),
         "scopeFamilies": sorted(selected_families),
         "dependencyKeys": sorted(selected_dependency_keys),
+        "dependencyKeysComplete": not target_scope_narrowed,
+        "targetScopeNarrowed": target_scope_narrowed,
         "deferredSharedScopeIds": sorted(set(deferred_shared_scope_ids)),
         "deferredSharedScopeFamilies": sorted(deferred_shared_families),
     }
@@ -1230,6 +1255,7 @@ def build_inference_impact_plan(
     explicit_target_symbols: Iterable[object] = None,
     rules: Iterable[object] = None,
     requested_fact_families: Iterable[object] = None,
+    requested_fact_families_by_symbol: Mapping[str, Iterable[object]] = None,
 ) -> Dict[str, object]:
     """Build a conservative routing plan for a native TypeDB inference run.
 
@@ -1289,11 +1315,19 @@ def build_inference_impact_plan(
         delta,
         explicit_symbols,
         requested_fact_families,
+        requested_fact_families_by_symbol,
     )
     event_scoped_rule_selection = bool(
         event_routing.get("enabled")
-        and dependency_fingerprint_coverage_complete
         and event_routing.get("scopeFamilies")
+    )
+    routing_dependency_fingerprint_coverage_complete = bool(
+        dependency_fingerprint_coverage_complete
+        and (
+            event_routing.get("dependencyKeysComplete", True)
+            if event_scoped_rule_selection
+            else True
+        )
     )
     routing_families = (
         set(event_routing.get("scopeFamilies") or [])
@@ -1311,7 +1345,7 @@ def build_inference_impact_plan(
             profile,
             routing_families,
             routing_dependency_keys,
-            dependency_fingerprint_coverage_complete,
+            routing_dependency_fingerprint_coverage_complete,
         )
     ]
     deferred_profiles = [
@@ -1344,8 +1378,8 @@ def build_inference_impact_plan(
         candidate_rule_count=len(candidate_profiles),
         enabled_rule_count=len(enabled_profiles),
         selection_eligibility_reason=selection_eligibility_reason,
-        changed_dependency_key_count=len(changed_dependency_keys),
-        dependency_fingerprint_coverage_complete=dependency_fingerprint_coverage_complete,
+        changed_dependency_key_count=len(routing_dependency_keys),
+        dependency_fingerprint_coverage_complete=routing_dependency_fingerprint_coverage_complete,
         event_scoped_rule_selection=event_scoped_rule_selection,
         event_scoped_scope_ids=event_routing.get("scopeIds") or [],
         deferred_shared_scope_ids=event_routing.get("deferredSharedScopeIds") or [],
@@ -1374,7 +1408,13 @@ def build_inference_impact_plan(
         "routingScopeFamilies": sorted(routing_families),
         "routingDependencyKeys": sorted(routing_dependency_keys),
         "dependencyFingerprintCoverageComplete": dependency_fingerprint_coverage_complete,
+        "routingDependencyFingerprintCoverageComplete": routing_dependency_fingerprint_coverage_complete,
         "requestedFactFamilies": _clean_family_values(requested_fact_families),
+        "requestedFactFamiliesBySymbol": {
+            _clean(symbol).upper(): _clean_family_values(values)
+            for symbol, values in dict(requested_fact_families_by_symbol or {}).items()
+            if _clean(symbol) and _clean_family_values(values)
+        },
         "eventScopedRuleSelection": event_scoped_rule_selection,
         "eventScopedScopeIds": list(event_routing.get("scopeIds") or []),
         "deferredSharedContextScopeIds": list(event_routing.get("deferredSharedScopeIds") or []),
@@ -1445,7 +1485,13 @@ def compact_inference_impact_plan(plan: Mapping[str, object], limit: int = 80) -
         "routingScopeFamilies": list(values.get("routingScopeFamilies") or [])[:bounded],
         "routingDependencyKeys": list(values.get("routingDependencyKeys") or [])[:bounded],
         "dependencyFingerprintCoverageComplete": bool(values.get("dependencyFingerprintCoverageComplete")),
+        "routingDependencyFingerprintCoverageComplete": bool(values.get("routingDependencyFingerprintCoverageComplete")),
         "requestedFactFamilies": list(values.get("requestedFactFamilies") or [])[:bounded],
+        "requestedFactFamiliesBySymbol": {
+            _clean(symbol).upper(): list(families or [])[:30]
+            for symbol, families in dict(values.get("requestedFactFamiliesBySymbol") or {}).items()
+            if _clean(symbol) and isinstance(families, (list, tuple, set))
+        },
         "eventScopedRuleSelection": bool(values.get("eventScopedRuleSelection")),
         "eventScopedScopeIds": list(values.get("eventScopedScopeIds") or [])[:bounded],
         "deferredSharedContextScopeIds": list(values.get("deferredSharedContextScopeIds") or [])[:bounded],

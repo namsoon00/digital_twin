@@ -22,6 +22,7 @@ from ..domain.market_observations import (
     apply_market_observation_reasoning_baselines,
     hydrate_market_observation_baselines,
     market_observation_reasoning_candidates,
+    market_observation_reasoning_symbols,
 )
 from ..domain.model_review import ModelReviewJob
 from ..domain.notification_rules import (
@@ -707,10 +708,21 @@ class MySQLMonitoringCycleRecorder(MySQLOperationalConnection):
             for account_id, state in snapshot_states.items():
                 self.monitor_store.upsert_snapshot_state_with_connection(connection, account_id, state, stamp)
             for snapshot in live_snapshots:
-                followup_symbols = market_observation_followup_symbols(
-                    outboxed_events,
-                    snapshot.account_id,
-                )
+                # A material quote candidate is TypeDB-first even when raw
+                # delivery is deferred. The old path only forwarded an
+                # outboxed raw alert, so a cumulative move could advance its
+                # durable baseline without ever receiving the intended graph
+                # follow-up. Preserve both candidates and immediately sent
+                # observations; de-duplication is per current snapshot.
+                followup_symbols = list(dict.fromkeys([
+                    *market_observation_reasoning_symbols(
+                        snapshot.metadata if isinstance(snapshot.metadata, dict) else {}
+                    ),
+                    *market_observation_followup_symbols(
+                        outboxed_events,
+                        snapshot.account_id,
+                    ),
+                ]))
                 reasoning_event = verified_monitor_snapshot_reasoning_event(
                     snapshot,
                     self.monitor_store.previous.get(snapshot.account_id),

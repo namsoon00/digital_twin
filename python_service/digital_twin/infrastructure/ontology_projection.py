@@ -3675,6 +3675,7 @@ class PortfolioOntologyProjectionRecorder:
                     rulebox_rules_hash=rulebox_rules_hash,
                     tbox_fingerprint=tbox_fingerprint,
                     requested_fact_families=compact_impact_plan.get("requestedFactFamilies") or [],
+                    requested_fact_families_by_symbol=compact_impact_plan.get("requestedFactFamiliesBySymbol") or {},
                 )
                 runtime_stages["priorInferenceReuseReadMs"] = int((time.perf_counter() - selection_started) * 1000)
                 recomputed_impact_plan = self.impact_plan_with_audited_candidates(
@@ -4472,6 +4473,7 @@ class PortfolioOntologyProjectionRecorder:
         rulebox_rules_hash: str = "",
         tbox_fingerprint: str = "",
         requested_fact_families: List[str] = None,
+        requested_fact_families_by_symbol: Dict[str, List[str]] = None,
     ) -> Dict[str, object]:
         """Prove which unaffected native rules must be re-materialized.
 
@@ -4495,6 +4497,7 @@ class PortfolioOntologyProjectionRecorder:
             tbox_fingerprint=tbox_fingerprint,
             world_id=world_id,
             requested_fact_families=requested_fact_families,
+            requested_fact_families_by_symbol=requested_fact_families_by_symbol,
         )
         if audited:
             return audited
@@ -4621,6 +4624,7 @@ class PortfolioOntologyProjectionRecorder:
         tbox_fingerprint: str = "",
         world_id: str = "",
         requested_fact_families: List[str] = None,
+        requested_fact_families_by_symbol: Dict[str, List[str]] = None,
     ) -> Dict[str, object]:
         """Recover a target-specific native-rule proof from projection audit.
 
@@ -4648,6 +4652,7 @@ class PortfolioOntologyProjectionRecorder:
                     tbox_fingerprint=tbox_fingerprint,
                     world_id=world_id,
                     requested_fact_families=requested_fact_families,
+                    requested_fact_families_by_symbol=requested_fact_families_by_symbol,
                 )
                 for target in targets
             ]
@@ -4747,6 +4752,7 @@ class PortfolioOntologyProjectionRecorder:
                 explicit_target_symbols=targets,
                 rules=current_rules,
                 requested_fact_families=requested_fact_families,
+                requested_fact_families_by_symbol=requested_fact_families_by_symbol,
             )
             if not bool(historical_plan.get("nativeRuleSelectionEligible")):
                 continue
@@ -5293,6 +5299,7 @@ class PortfolioOntologyProjectionRecorder:
             explicit_target_symbols=target_symbols,
             rules=self.rulebox_rules_for_impact(),
             requested_fact_families=(reasoning_context or {}).get("requestedScopeFamilies") or [],
+            requested_fact_families_by_symbol=(reasoning_context or {}).get("requestedScopeFamiliesBySymbol") or {},
         )
 
     def rulebox_rules_for_impact(self) -> List[Dict[str, object]]:

@@ -758,6 +758,7 @@ def settings_status_payload() -> Dict[str, object]:
         "marketMaterialityTrendDistancePct",
         "marketMaterialityTrendDistanceChangePct",
         "marketMaterialityVolumeRatio",
+        "marketMaterialityInvestorFlowRatioPct",
         "typedbAddress",
         "typedbUser",
         "typedbAllowDefaultPassword",

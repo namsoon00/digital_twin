@@ -8,6 +8,54 @@ from . import news_analysis as news_domain
 DISABLED_VALUES = {"0", "false", "no", "off", "disabled"}
 
 
+# Collector cache rows use camelCase while persisted monitor snapshots use the
+# dataclass's snake_case fields. Materiality is an ingress scheduling contract,
+# so both representations must describe the same source fact.
+MARKET_FIELD_ALIASES = {
+    "currentPrice": ("currentPrice", "current_price"),
+    "changeRate": ("changeRate", "change_rate"),
+    "ma20Distance": ("ma20Distance", "ma20_distance"),
+    "ma60Distance": ("ma60Distance", "ma60_distance"),
+    "volumeRatio": ("volumeRatio", "volume_ratio"),
+    "tradeStrength": ("tradeStrength", "trade_strength"),
+    "orderbookImbalance": ("orderbookImbalance", "orderbook_imbalance"),
+    "bidAskImbalance": ("bidAskImbalance", "bid_ask_imbalance"),
+    "foreignBuyVolume": ("foreignBuyVolume", "foreign_buy_volume"),
+    "foreignSellVolume": ("foreignSellVolume", "foreign_sell_volume"),
+    "foreignNetVolume": ("foreignNetVolume", "foreign_net_volume"),
+    "institutionBuyVolume": ("institutionBuyVolume", "institution_buy_volume"),
+    "institutionSellVolume": ("institutionSellVolume", "institution_sell_volume"),
+    "institutionNetVolume": ("institutionNetVolume", "institution_net_volume"),
+    "dataQuality": ("dataQuality", "data_quality"),
+    "freshnessStatus": ("freshnessStatus", "freshness_status"),
+    "sourceTimestampState": ("sourceTimestampState", "source_timestamp_state"),
+    "latencyStatus": ("latencyStatus", "latency_status"),
+    "marketSession": ("marketSession", "market_session"),
+    "marketSessionLabel": ("marketSessionLabel", "market_session_label"),
+    "realTime": ("realTime", "real_time"),
+    "quoteStatus": ("quoteStatus", "quote_status"),
+}
+
+_MARKET_FIELD_CANONICAL = {
+    alias.replace("_", "").lower(): canonical
+    for canonical, aliases in MARKET_FIELD_ALIASES.items()
+    for alias in aliases
+}
+
+
+def market_field(payload: Dict[str, object], canonical: str) -> object:
+    source = payload or {}
+    for key in MARKET_FIELD_ALIASES.get(canonical, (canonical,)):
+        if key in source:
+            return source.get(key)
+    return None
+
+
+def canonical_market_field(value: object) -> str:
+    text = str(value or "").strip()
+    return _MARKET_FIELD_CANONICAL.get(text.replace("_", "").lower(), text)
+
+
 def truthy(value: object, default: bool = True) -> bool:
     text = str(value if value is not None else "").strip().lower()
     if not text:
@@ -38,8 +86,8 @@ def crossed_zero(previous: object, current: object) -> bool:
 
 
 def field_changed(changed_fields: Iterable[str], *fields: str) -> bool:
-    changed = {str(field or "") for field in changed_fields or []}
-    return any(field in changed for field in fields)
+    changed = {canonical_market_field(field) for field in changed_fields or []}
+    return any(canonical_market_field(field) in changed for field in fields)
 
 
 def threshold_transition(previous: object, current: object, threshold: float) -> str:
@@ -71,6 +119,23 @@ def pressure_transition(previous: object, current: object, lower: float, upper: 
     if before_active and not after_active:
         return "cleared"
     return ""
+
+
+def investor_flow_pressure(payload: Dict[str, object], prefix: str) -> float:
+    """Return the directional investor-flow share without using raw size.
+
+    Intraday cumulative volumes naturally grow every poll. A ratio boundary or
+    a direction flip is a stable scheduling event; an absolute share count is
+    not. This remains an ingress gate, not an investment recommendation.
+    """
+
+    net = abs(number(market_field(payload, prefix + "NetVolume")))
+    gross = abs(number(market_field(payload, prefix + "BuyVolume"))) + abs(
+        number(market_field(payload, prefix + "SellVolume"))
+    )
+    if not gross:
+        gross = abs(number((payload or {}).get("volume")))
+    return (net / gross * 100.0) if gross else 0.0
 
 
 @dataclass
@@ -152,21 +217,35 @@ def market_change_materiality(
             change_state="new-condition",
         )
 
-    price_change = percent_delta(previous.get("currentPrice"), current.get("currentPrice"))
+    price_change = percent_delta(
+        market_field(previous, "currentPrice"),
+        market_field(current, "currentPrice"),
+    )
     price_threshold = float_setting(settings, "marketMaterialityPriceChangePct", 0.6, 0.0, 20.0)
     trend_threshold = float_setting(settings, "marketMaterialityTrendDistancePct", 2.0, 0.0, 30.0)
     trend_change_threshold = float_setting(settings, "marketMaterialityTrendDistanceChangePct", 1.0, 0.0, 30.0)
     volume_threshold = float_setting(settings, "marketMaterialityVolumeRatio", 1.5, 0.0, 20.0)
-    current_ma20 = number(current.get("ma20Distance"))
-    previous_ma20 = number(previous.get("ma20Distance"))
-    current_ma60 = number(current.get("ma60Distance"))
-    previous_ma60 = number(previous.get("ma60Distance"))
-    previous_volume_ratio = number(previous.get("volumeRatio"))
-    volume_ratio = number(current.get("volumeRatio"))
-    previous_trade_strength = number(previous.get("tradeStrength"))
-    trade_strength = number(current.get("tradeStrength"))
-    previous_imbalance = abs(number(previous.get("orderbookImbalance") or previous.get("bidAskImbalance")))
-    imbalance = abs(number(current.get("orderbookImbalance") or current.get("bidAskImbalance")))
+    investor_flow_threshold = float_setting(
+        settings,
+        "marketMaterialityInvestorFlowRatioPct",
+        15.0,
+        0.0,
+        100.0,
+    )
+    current_ma20 = number(market_field(current, "ma20Distance"))
+    previous_ma20 = number(market_field(previous, "ma20Distance"))
+    current_ma60 = number(market_field(current, "ma60Distance"))
+    previous_ma60 = number(market_field(previous, "ma60Distance"))
+    previous_volume_ratio = number(market_field(previous, "volumeRatio"))
+    volume_ratio = number(market_field(current, "volumeRatio"))
+    previous_trade_strength = number(market_field(previous, "tradeStrength"))
+    trade_strength = number(market_field(current, "tradeStrength"))
+    previous_imbalance = abs(number(
+        market_field(previous, "orderbookImbalance") or market_field(previous, "bidAskImbalance")
+    ))
+    imbalance = abs(number(
+        market_field(current, "orderbookImbalance") or market_field(current, "bidAskImbalance")
+    ))
     matched: List[str] = []
 
     if field_changed(changed_fields, "currentPrice", "changeRate") and abs(price_change) >= price_threshold:
@@ -209,7 +288,29 @@ def market_change_materiality(
             matched.append("orderbook-imbalance")
         elif imbalance_transition == "cleared":
             matched.append("orderbook-imbalance-cleared")
-    if current.get("dataQuality") and previous.get("dataQuality") and current.get("dataQuality") != previous.get("dataQuality"):
+    flow_pressure_facts = {}
+    for prefix, label in (("foreign", "foreign"), ("institution", "institution")):
+        net_field = prefix + "NetVolume"
+        flow_fields = (net_field, prefix + "BuyVolume", prefix + "SellVolume")
+        if not field_changed(changed_fields, *flow_fields):
+            continue
+        previous_net = number(market_field(previous, net_field))
+        current_net = number(market_field(current, net_field))
+        previous_pressure = investor_flow_pressure(previous, prefix)
+        current_pressure = investor_flow_pressure(current, prefix)
+        flow_pressure_facts[label + "FlowPressurePct"] = round(current_pressure, 3)
+        if crossed_zero(previous_net, current_net):
+            matched.append(label + "-flow-direction")
+        pressure = threshold_transition(previous_pressure, current_pressure, investor_flow_threshold)
+        if pressure == "entered":
+            matched.append(label + "-flow-pressure")
+        elif pressure == "cleared":
+            matched.append(label + "-flow-pressure-cleared")
+    if (
+        market_field(current, "dataQuality")
+        and market_field(previous, "dataQuality")
+        and market_field(current, "dataQuality") != market_field(previous, "dataQuality")
+    ):
         matched.append("data-state-change")
     if field_changed(changed_fields, "freshnessStatus", "sourceTimestampState", "latencyStatus", "realTime"):
         matched.append("source-validity-state-change")
@@ -229,11 +330,12 @@ def market_change_materiality(
         "marketSessionLabel",
         "realTime",
     }
+    canonical_changed_fields = {canonical_market_field(field) for field in changed_fields}
     closed_reference = (
-        str(current.get("freshnessStatus") or "").strip().lower() == "last-close"
-        or str(current.get("marketSession") or "").strip().lower() in {"closed", "closed_exception"}
+        str(market_field(current, "freshnessStatus") or "").strip().lower() == "last-close"
+        or str(market_field(current, "marketSession") or "").strip().lower() in {"closed", "closed_exception"}
     )
-    if changed_fields and set(changed_fields).issubset(source_validity_fields) and closed_reference:
+    if changed_fields and canonical_changed_fields.issubset(source_validity_fields) and closed_reference:
         return MaterialityAssessment(
             symbol,
             "market-data-update",
@@ -265,10 +367,16 @@ def market_change_materiality(
         "volume-confirmation-cleared",
         "trade-pressure-cleared",
         "orderbook-imbalance-cleared",
+        "foreign-flow-direction",
+        "foreign-flow-pressure",
+        "foreign-flow-pressure-cleared",
+        "institution-flow-direction",
+        "institution-flow-pressure",
+        "institution-flow-pressure-cleared",
     } & set(matched)
     if "ma60-cross" in matched or (directional and confirmation):
         review_level = "act"
-    elif directional or "data-state-change" in matched or "source-validity-state-change" in matched:
+    elif directional or confirmation or "data-state-change" in matched or "source-validity-state-change" in matched:
         review_level = "check"
     else:
         review_level = "normal"
@@ -282,9 +390,9 @@ def market_change_materiality(
     else:
         change_state = "new-condition" if matched else "unchanged"
         evidence_role = "context"
-    source_state = str(current.get("freshnessStatus") or "").lower()
+    source_state = str(market_field(current, "freshnessStatus") or "").lower()
     data_state = "partial" if (
-        str(current.get("dataQuality") or "").lower() in {"poor", "stale", "partial", "reference", "unavailable"}
+        str(market_field(current, "dataQuality") or "").lower() in {"poor", "stale", "partial", "reference", "unavailable"}
         or source_state in {"stale", "last-close", "reference-only", "unavailable", "no-tick"}
     ) else "sufficient"
     reason = (
@@ -307,6 +415,7 @@ def market_change_materiality(
             "ma60Distance": round(current_ma60, 3),
             "ma20DistanceChange": round(current_ma20 - previous_ma20, 3),
             "ma60DistanceChange": round(current_ma60 - previous_ma60, 3),
+            **flow_pressure_facts,
         },
         data_state=data_state,
         change_state=change_state,

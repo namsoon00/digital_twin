@@ -57,6 +57,30 @@ class AdaptiveOntologyReasoningBatchTests(unittest.TestCase):
             provenance["requestedScopeFamiliesBySymbol"],
         )
 
+    def test_request_provenance_uses_exact_symbol_fact_types_from_one_snapshot_event(self):
+        combined = DomainEvent(
+            name="ontology.reasoning.requested",
+            aggregate_id="monitor:acct",
+            payload={
+                "symbols": ["AAPL", "MSFT"],
+                "factTypes": ["MarketQuote", "ResearchEvidence"],
+                "factTypesBySymbol": {
+                    "AAPL": ["ResearchEvidence"],
+                    "MSFT": ["MarketQuote"],
+                },
+            },
+        )
+
+        provenance = reasoning_request_provenance(
+            [combined],
+            target_symbols=["AAPL", "MSFT"],
+        )
+
+        self.assertEqual(
+            {"AAPL": ["evidence"], "MSFT": ["market"]},
+            provenance["requestedScopeFamiliesBySymbol"],
+        )
+
     def test_persistent_runner_hot_reloads_only_operational_batch_controls(self):
         propagated = []
         runner = OntologyReasoningRunner(

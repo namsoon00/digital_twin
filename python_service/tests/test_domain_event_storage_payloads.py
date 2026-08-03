@@ -108,6 +108,26 @@ class DomainEventStoragePayloadTests(unittest.TestCase):
         self.assertTrue(delta["signatureDigest"])
         self.assertLess(len(encoded), 10000)
 
+    def test_reasoning_request_storage_keeps_fact_types_bound_to_each_symbol(self):
+        request = ontology_reasoning_requested_event(
+            DomainEvent(name="monitoring.snapshot_collected", aggregate_id="monitor:acct", payload={}),
+            "verified-monitor-snapshot",
+            ["AAPL", "MSFT"],
+            changed_count=2,
+            fact_types=["MarketQuote", "ResearchEvidence"],
+            fact_types_by_symbol={
+                "AAPL": ["ResearchEvidence"],
+                "MSFT": ["MarketQuote"],
+            },
+        )
+
+        stored = domain_event_storage_payload(request.name, request.payload)
+
+        self.assertEqual(
+            {"AAPL": ["ResearchEvidence"], "MSFT": ["MarketQuote"]},
+            stored["factTypesBySymbol"],
+        )
+
 
 if __name__ == "__main__":
     unittest.main()

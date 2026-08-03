@@ -394,6 +394,7 @@ def add_operational_world_concepts(
         "trendDistancePct": number(settings.get("marketMaterialityTrendDistancePct")) or 2.0,
         "trendDistanceChangePct": number(settings.get("marketMaterialityTrendDistanceChangePct")) or 1.0,
         "volumeRatio": number(settings.get("marketMaterialityVolumeRatio")) or 1.5,
+        "investorFlowRatioPct": number(settings.get("marketMaterialityInvestorFlowRatioPct")) or 15.0,
         "description": "데이터 변경이 투자 판단에 충분히 중요한 경우에만 추론과 알림 의도로 승격합니다.",
     })
     novelty_policy_id = add_entity(graph, "novelty-policy", "relation-novelty", "관계 신규성 정책", {

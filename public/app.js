@@ -4085,6 +4085,7 @@
       marketMaterialityPriceChangePct: settingValue("marketMaterialityPriceChangePct"),
       marketMaterialityTrendDistancePct: settingValue("marketMaterialityTrendDistancePct"),
       marketMaterialityVolumeRatio: settingValue("marketMaterialityVolumeRatio"),
+      marketMaterialityInvestorFlowRatioPct: settingValue("marketMaterialityInvestorFlowRatioPct"),
       externalDartCorpCodes: settingValue("externalDartCorpCodes"),
       dartDisclosureAiAnalysisEnabled: settingValue("dartDisclosureAiAnalysisEnabled"),
       dartDisclosureAiUseCodex: settingValue("dartDisclosureAiUseCodex"),
@@ -24181,6 +24182,7 @@
         renderSettingField("marketMaterialityPriceChangePct", "가격 중요 변화율(%)", "number", "0.6"),
         renderSettingField("marketMaterialityTrendDistancePct", "추세 중요 이격(%)", "number", "2"),
         renderSettingField("marketMaterialityVolumeRatio", "거래량 중요 배율", "number", "1.5"),
+        renderSettingField("marketMaterialityInvestorFlowRatioPct", "외국인·기관 수급 중요 비중(%)", "number", "15"),
         renderSettingSelect("newsDigestMinimumMaterialityState", "뉴스 중요성 상태", [
           { value: "notable", label: "확인할 정보부터" },
           { value: "material", label: "중요 정보부터" },
@@ -25832,7 +25834,8 @@
         renderSettingField("ontologyReasoningQueueAlertReminderMinutes", "지연 운영 알림 재전송(분)", "number", "60"),
         renderSettingField("marketMaterialityPriceChangePct", "가격 중요 변화율(%)", "number", "0.6"),
         renderSettingField("marketMaterialityTrendDistancePct", "추세 중요 이격(%)", "number", "2"),
-        renderSettingField("marketMaterialityVolumeRatio", "거래량 중요 배율", "number", "1.5")
+        renderSettingField("marketMaterialityVolumeRatio", "거래량 중요 배율", "number", "1.5"),
+        renderSettingField("marketMaterialityInvestorFlowRatioPct", "외국인·기관 수급 중요 비중(%)", "number", "15")
       ].join(""), "gate"),
       renderSettingsGroup("공시 AI와 매핑", "AI 해석 방식과 종목·CIK·환율 매핑처럼 긴 설정값을 관리합니다.", [
         renderSettingSelect("dartDisclosureAiAnalysisEnabled", "공시 AI 해석", [

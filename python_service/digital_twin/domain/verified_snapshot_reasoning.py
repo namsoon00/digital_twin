@@ -7,9 +7,9 @@ snapshot, not a vendor cache.  This module turns one committed snapshot into a
 bounded latest-state request after comparing it with the previously committed
 snapshot.
 
-The comparison is operational provenance only.  It does not evaluate an
-investment rule, assign a recommendation, or use a materiality threshold.
-TypeDB still evaluates the resulting current ABox.
+The comparison is an operational ingress gate only. It decides whether a
+source fact warrants one new TypeDB turn; it never evaluates a RuleBox rule,
+assigns a recommendation, or changes the facts persisted in the ABox.
 """
 
 from __future__ import annotations
@@ -19,13 +19,14 @@ from typing import Dict, Iterable, List, Mapping, Tuple
 from .events import DomainEvent, ontology_reasoning_requested_event, snapshot_collected_event
 from .fact_changes import changed_fields, fact_revision_id, fact_signature
 from .crypto_market_signals import crypto_market_transitions, crypto_transition_targets
+from .materiality import market_change_materiality
 from .ontology_projection_input import compact_external_signals_for_ontology
 from .portfolio import AccountSnapshot, Position
 
 
 VERIFIED_MONITOR_SNAPSHOT_TRIGGER = "verified-monitor-snapshot"
 VERIFIED_MONITOR_SNAPSHOT_SLOT_FAMILY = "VerifiedMonitorSnapshot"
-VERIFIED_MONITOR_SNAPSHOT_VERSION = "verified-monitor-snapshot-v1"
+VERIFIED_MONITOR_SNAPSHOT_VERSION = "verified-monitor-snapshot-v2"
 
 
 # Deliberately keep the source contract close to the Position domain object.
@@ -118,6 +119,35 @@ EXTERNAL_REFRESH_FIELDS = {
     "firstObservedAt", "first_observed_at", "stateSince", "state_since",
     "refreshedAt", "refreshed_at", "nextRefreshAt", "next_refresh_at",
     "expiresAt", "expires_at", "validFrom", "valid_from", "validUntil", "valid_until",
+}
+
+# Quote/fundamental provider cache payloads overlap with the durable Position
+# fact. Re-running TypeDB for a small quote refresh through both paths creates
+# duplicate work without adding a new ABox condition. Primary quote fields and
+# explicit research events remain the source of an inference request.
+SUPPLEMENTAL_EXTERNAL_GROUPS = {
+    "equityQuotes",
+    "yfinanceData",
+    "companyOverviews",
+}
+QUALITY_EXTERNAL_GROUPS = {"quality", "freshness", "provenance", "statuses"}
+EXTERNAL_STATE_FIELDS = {
+    "status",
+    "state",
+    "datastate",
+    "coveragestate",
+    "sourcehealthstate",
+    "freshnessstatus",
+    "transportstatus",
+    "validationstate",
+    "investmentjudgmenteligible",
+    "available",
+    "ok",
+    "deferred",
+}
+EXTERNAL_STATE_IGNORED_FIELDS = {
+    str(field).replace("_", "").lower()
+    for field in EXTERNAL_REFRESH_FIELDS
 }
 
 
@@ -281,6 +311,58 @@ def _changed_external_groups(previous: Mapping[str, object], current: Mapping[st
     return groups
 
 
+def _external_state_projection(value: object, include_scalar: bool = False):
+    """Keep only discrete provider state when deciding a quality recheck.
+
+    Quality payloads carry coverage counters, timings and per-provider cache
+    detail that can change on every poll.  Preserve scalar values only once a
+    recognised state field selects them; nested objects are traversed because
+    source rows commonly wrap ``status`` under a provider key.
+    """
+
+    if isinstance(value, Mapping):
+        result = {}
+        for raw_key, raw_value in sorted(value.items(), key=lambda item: str(item[0])):
+            key = str(raw_key or "")
+            normalized = key.replace("_", "").lower()
+            if normalized in EXTERNAL_STATE_IGNORED_FIELDS:
+                continue
+            if normalized in EXTERNAL_STATE_FIELDS:
+                projected = _external_state_projection(raw_value, include_scalar=True)
+            elif isinstance(raw_value, (Mapping, list, tuple, set)):
+                projected = _external_state_projection(raw_value)
+            else:
+                continue
+            if projected not in ({}, [], None, ""):
+                result[key] = projected
+        return result
+    if isinstance(value, (list, tuple, set)):
+        rows = [_external_state_projection(item) for item in value]
+        rows = [item for item in rows if item not in ({}, [], None, "")]
+        return sorted(rows, key=lambda item: repr(item))
+    return value if include_scalar else None
+
+
+def _reasoning_external_groups(
+    previous: Mapping[str, object],
+    current: Mapping[str, object],
+    changed_groups: Iterable[str],
+) -> List[str]:
+    """Remove duplicate cache refreshes while preserving evidence/state changes."""
+
+    selected = []
+    for group in changed_groups or []:
+        if group in SUPPLEMENTAL_EXTERNAL_GROUPS:
+            continue
+        if group in QUALITY_EXTERNAL_GROUPS:
+            before_state = _external_state_projection((previous or {}).get(group))
+            after_state = _external_state_projection((current or {}).get(group))
+            if before_state == after_state:
+                continue
+        selected.append(group)
+    return sorted(set(selected))
+
+
 def _fact_types_for_change(fields: Iterable[str], external_groups: Iterable[str], portfolio_changed: bool) -> List[str]:
     selected = set()
     field_set = set(fields or [])
@@ -356,7 +438,11 @@ def verified_monitor_snapshot_reasoning_event(
     changed_fields_by_symbol: Dict[str, List[str]] = {}
     revisions: Dict[str, str] = {}
     all_fact_types = set()
+    fact_types_by_symbol: Dict[str, List[str]] = {}
     changed_external_groups_by_symbol: Dict[str, List[str]] = {}
+    materiality_assessments: Dict[str, Dict[str, object]] = {}
+    deferred_market_symbols: List[str] = []
+    deferred_supplemental_external_symbols: List[str] = []
     position_changed_count = 0
 
     for symbol in subjects:
@@ -370,19 +456,48 @@ def verified_monitor_snapshot_reasoning_event(
 
         before_external = _external_for_symbol(previous_external, symbol)
         after_external = _external_for_symbol(current_external, symbol)
-        external_groups = _changed_external_groups(before_external, after_external)
+        raw_external_groups = _changed_external_groups(before_external, after_external)
+        external_groups = _reasoning_external_groups(
+            before_external,
+            after_external,
+            raw_external_groups,
+        )
+        assessment = None
+        if position_fields and before_position and after_position:
+            assessment = market_change_materiality(
+                symbol,
+                before_position,
+                after_position,
+                {"fields": position_fields},
+                dict(settings or {}),
+            )
+        bootstrap_or_position_context = bool(
+            not before_position
+            or not after_position
+            or set(position_fields).intersection(POSITION_CONTEXT_FIELDS)
+            or "positionRemoved" in position_fields
+        )
+        market_requires_reasoning = bool(assessment and assessment.passed)
+        if assessment and not assessment.passed and position_fields and not bootstrap_or_position_context:
+            deferred_market_symbols.append(symbol)
+        if raw_external_groups and not external_groups and not position_fields:
+            deferred_supplemental_external_symbols.append(symbol)
+        if not (bootstrap_or_position_context or market_requires_reasoning or external_groups or portfolio_changed):
+            continue
+
         fields = list(position_fields)
         if portfolio_changed:
             fields.append("portfolioContext")
         fields.extend("external." + group for group in external_groups)
-        if not fields:
-            continue
 
         fact_types = _fact_types_for_change(position_fields, external_groups, portfolio_changed)
         all_fact_types.update(fact_types)
         changed_symbols.append(symbol)
         changed_fields_by_symbol[symbol] = fields[:30]
         changed_external_groups_by_symbol[symbol] = external_groups
+        fact_types_by_symbol[symbol] = fact_types
+        if assessment:
+            materiality_assessments[symbol] = assessment.to_dict()
         revision_payload = {
             "position": after_position or {"removed": True},
             "portfolioContext": current_portfolio if portfolio_changed else {},
@@ -421,6 +536,7 @@ def verified_monitor_snapshot_reasoning_event(
         if symbol not in changed_symbols:
             changed_symbols.append(symbol)
         all_fact_types.add("MarketQuote")
+        fact_types_by_symbol[symbol] = ["MarketQuote"]
         revisions[symbol] = fact_revision_id(
             "VerifiedCryptoMarketTransition",
             symbol,
@@ -451,6 +567,7 @@ def verified_monitor_snapshot_reasoning_event(
         changed_fields_by_symbol[symbol] = ["marketObservationFollowup"]
         changed_external_groups_by_symbol[symbol] = []
         all_fact_types.add("MarketQuote")
+        fact_types_by_symbol[symbol] = ["MarketQuote"]
         revisions[symbol] = fact_revision_id(
             "VerifiedMonitorObservationFollowup",
             symbol,
@@ -475,10 +592,12 @@ def verified_monitor_snapshot_reasoning_event(
         changed_count=fact_changed_count,
         observed_count=len(subjects),
         fact_types=sorted(all_fact_types or {"PortfolioSnapshot"}),
+        fact_types_by_symbol=fact_types_by_symbol,
         reason=(
-            "확정 저장된 계좌 스냅샷의 사실 변경과 시세 관측 후속 확인을 "
-            "후속 확인을 TypeDB 현재 상태 추론에 반영합니다."
+            "확정 저장된 계좌 스냅샷에서 의미 있는 시세·수급 전환, 직접 근거, "
+            "데이터 상태 변화와 시세 관측 후속 확인을 TypeDB 현재 상태 추론에 반영합니다."
         ),
+        materiality_assessments=materiality_assessments,
         fact_revisions_by_symbol=revisions,
         changed_fields_by_symbol=changed_fields_by_symbol,
         snapshot_barrier={
@@ -488,8 +607,14 @@ def verified_monitor_snapshot_reasoning_event(
             "positionChangedCount": position_changed_count,
             "portfolioContextChanged": portfolio_changed,
             "externalSignalGroups": external_groups,
+            "deferredImmaterialMarketSymbolCount": len(deferred_market_symbols),
+            "deferredImmaterialMarketSymbols": deferred_market_symbols[:20],
+            "deferredSupplementalExternalSymbolCount": len(deferred_supplemental_external_symbols),
+            "deferredSupplementalExternalSymbols": deferred_supplemental_external_symbols[:20],
             "cryptoTransitions": crypto_transitions[:12],
             "cryptoTransitionTargetSymbols": transition_targets[:20],
         },
         observation_followup_symbols=observation_followups,
+        importance_gate="materiality-or-context-transition",
+        materiality_role="scheduling-gate-only",
     )

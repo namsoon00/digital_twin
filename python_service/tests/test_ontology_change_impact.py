@@ -364,6 +364,56 @@ class OntologyChangeImpactTests(unittest.TestCase):
         self.assertEqual(["graph.test.current-price.v1"], plan["candidateRuleIds"])
         self.assertTrue(plan["nativeRuleSelectionEligible"])
 
+    def test_per_symbol_request_does_not_reopen_other_changed_families_in_same_scope(self):
+        before = [{
+            "scopeId": "symbol:005930:state",
+            "generationId": "state-a",
+            "semanticFingerprints": {"market": "market-a", "evidence": "evidence-a"},
+            "semanticDependencyFingerprintVersion": DEPENDENCY_FINGERPRINT_VERSION,
+            "semanticDependencyFingerprints": {
+                "field:currentprice": "price-a",
+                "kind:news-article": "evidence-a",
+            },
+        }]
+        after = [{
+            **before[0],
+            "generationId": "state-b",
+            "semanticFingerprints": {"market": "market-b", "evidence": "evidence-b"},
+            "semanticDependencyFingerprints": {
+                "field:currentprice": "price-b",
+                "kind:news-article": "evidence-b",
+            },
+        }]
+        rules = [
+            {
+                "ruleId": "graph.test.market.v1",
+                "conditions": [{"field": "currentPrice", "operator": ">", "value": 0}],
+            },
+            {
+                "ruleId": "graph.test.evidence.v1",
+                "conditions": [{
+                    "kind": "relation",
+                    "relationType": "HAS_EXTERNAL_SIGNAL",
+                    "targetKind": "news-article",
+                }],
+            },
+        ]
+
+        plan = build_inference_impact_plan(
+            before,
+            after,
+            ["005930"],
+            explicit_target_symbols=["005930"],
+            rules=rules,
+            requested_fact_families=["market", "evidence"],
+            requested_fact_families_by_symbol={"005930": ["market"]},
+        )
+
+        self.assertTrue(plan["eventScopedRuleSelection"])
+        self.assertFalse(plan["routingDependencyFingerprintCoverageComplete"])
+        self.assertEqual(["market"], plan["routingScopeFamilies"])
+        self.assertEqual(["graph.test.market.v1"], plan["candidateRuleIds"])
+
     def test_subject_property_dependency_does_not_collide_with_macro_field(self):
         before = [{
             "scopeId": "macro:fx",
@@ -1192,7 +1242,7 @@ class OntologyChangeImpactTests(unittest.TestCase):
 
         trace = inference.entities[0]
         self.assertEqual("inference:test", trace.properties["inferenceGenerationId"])
-        self.assertEqual("abox-change-impact-v9", trace.properties["impactPlanVersion"])
+        self.assertEqual("abox-change-impact-v10", trace.properties["impactPlanVersion"])
         self.assertEqual(["005930"], trace.properties["inferenceImpactPlan"]["inferenceTargetSymbols"])
         self.assertEqual("dependency-selected-native-evaluation", trace.properties["ruleExecutionScope"])
         self.assertFalse(trace.properties["nativeRuleSelectionApplied"])

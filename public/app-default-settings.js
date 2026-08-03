@@ -169,6 +169,7 @@
     marketMaterialityPriceChangePct: "0.6",
     marketMaterialityTrendDistancePct: "2",
     marketMaterialityVolumeRatio: "1.5",
+    marketMaterialityInvestorFlowRatioPct: "15",
     externalDartCorpCodes: [
       "005930=00126380",
       "000660=00164779",

@@ -336,6 +336,7 @@ TEXT_SETTING_KEYS = [
     "marketMaterialityTrendDistancePct",
     "marketMaterialityTrendDistanceChangePct",
     "marketMaterialityVolumeRatio",
+    "marketMaterialityInvestorFlowRatioPct",
     "typedbAddress",
     "typedbUser",
     "typedbAllowDefaultPassword",
@@ -1472,6 +1473,7 @@ def runtime_settings(fast_operational_read: bool = False) -> Dict[str, str]:
         "marketMaterialityTrendDistancePct": value("marketMaterialityTrendDistancePct", "MARKET_MATERIALITY_TREND_DISTANCE_PCT", "2"),
         "marketMaterialityTrendDistanceChangePct": value("marketMaterialityTrendDistanceChangePct", "MARKET_MATERIALITY_TREND_DISTANCE_CHANGE_PCT", "1"),
         "marketMaterialityVolumeRatio": value("marketMaterialityVolumeRatio", "MARKET_MATERIALITY_VOLUME_RATIO", "1.5"),
+        "marketMaterialityInvestorFlowRatioPct": value("marketMaterialityInvestorFlowRatioPct", "MARKET_MATERIALITY_INVESTOR_FLOW_RATIO_PCT", "15"),
         "ontologyTenantId": value("ontologyTenantId", "ONTOLOGY_TENANT_ID", "local"),
         "ontologySharedMarketTenantId": value("ontologySharedMarketTenantId", "ONTOLOGY_SHARED_MARKET_TENANT_ID", "shared"),
         "ontologySharedMarketWorldRetentionHours": value(

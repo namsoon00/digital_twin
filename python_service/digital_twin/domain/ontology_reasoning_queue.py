@@ -106,6 +106,39 @@ def event_symbols(event: object) -> List[str]:
     return symbols
 
 
+def event_fact_types_for_symbol(event: object, symbol: object) -> Tuple[str, ...]:
+    """Return the source fact types attributed to one mailbox subject.
+
+    Older events only have a batch-wide ``factTypes`` list, so they retain the
+    conservative fallback. Newer verified snapshots carry ``factTypesBySymbol``
+    and must not let one symbol's research or flow fact raise another symbol's
+    scheduling priority or routing family.
+    """
+
+    clean_symbol = str(symbol or "").upper().strip()
+    payload = event_payload(event)
+    by_symbol = payload.get("factTypesBySymbol")
+    if clean_symbol and isinstance(by_symbol, Mapping):
+        values = None
+        for raw_symbol, candidate in by_symbol.items():
+            if str(raw_symbol or "").upper().strip() == clean_symbol:
+                values = candidate
+                break
+        if isinstance(values, str):
+            values = [values]
+        if isinstance(values, (list, tuple, set)):
+            return tuple(sorted({
+                str(value or "").strip()
+                for value in values
+                if str(value or "").strip()
+            }))
+    return tuple(sorted({
+        str(value or "").strip()
+        for value in payload.get("factTypes") or []
+        if str(value or "").strip()
+    }))
+
+
 def observation_followup_symbols(event: object) -> List[str]:
     """Return raw-alert symbols that need a prompt current-state recheck.
 
@@ -143,11 +176,7 @@ def mailbox_entry_priority(
     """Build a durable scheduling priority without evaluating investment facts."""
     payload = event_payload(event)
     trigger = str(payload.get("trigger") or "").strip()
-    fact_types = {
-        str(value or "").strip()
-        for value in payload.get("factTypes") or []
-        if str(value or "").strip()
-    }
+    fact_types = set(event_fact_types_for_symbol(event, symbol))
     try:
         account_priority = max(0, int(subject_priority or 0))
     except (TypeError, ValueError):
@@ -372,6 +401,8 @@ def durable_mailbox_entries(event: DomainEvent) -> List[Dict[str, object]]:
     slot_family = mailbox_slot_family(event, fact_types)
     entries = []
     for symbol in event_symbols(event):
+        symbol_fact_types = event_fact_types_for_symbol(event, symbol)
+        symbol_family = ",".join(symbol_fact_types) or "MarketQuote"
         seed = "|".join([account_scope, symbol, slot_family])
         entries.append({
             "mailboxKey": hashlib.sha256(seed.encode("utf-8")).hexdigest(),
@@ -379,7 +410,7 @@ def durable_mailbox_entries(event: DomainEvent) -> List[Dict[str, object]]:
             "sourceEvent": source_event,
             "accountScope": account_scope,
             "symbol": symbol,
-            "factFamily": family,
+            "factFamily": symbol_family,
             "mailboxSlotFamily": slot_family,
             "trigger": trigger,
             "reviewLevel": event_review_level(event),

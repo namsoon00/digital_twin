@@ -26,6 +26,7 @@ from ..domain.ontology_reasoning_queue import (
     REASONING_PRIORITY_ORDER,
     VERIFIED_MONITOR_SNAPSHOT_TRIGGER,
     event_has_reasoning_work,
+    event_fact_types_for_symbol,
     event_reasoning_priority,
     is_generic_research_latest_state,
     is_observation_followup_symbol,
@@ -170,11 +171,24 @@ def reasoning_request_provenance(
             targets.update(event_scope_symbols)
         if not event_scope_symbols and len(targets) == 1:
             event_scope_symbols.update(targets)
+        raw_fact_types_by_symbol = payload.get("factTypesBySymbol")
+        raw_fact_types_by_symbol = raw_fact_types_by_symbol if isinstance(raw_fact_types_by_symbol, Mapping) else {}
         event_families = requested_scope_families_for_event_fact_types(event_fact_types)
         for symbol in sorted(event_scope_symbols):
             # Retain an empty value as an explicit conservative marker for
             # an event whose fact family is unknown to this runtime.
-            fact_families_by_symbol.setdefault(symbol, set()).update(event_families)
+            exact_fact_types = event_fact_types_for_symbol(event, symbol)
+            # ``event_fact_types_for_symbol`` returns the legacy global list
+            # when no explicit subject attribution exists. A map entry for
+            # this symbol therefore intentionally narrows only new events.
+            has_explicit_symbol_types = any(
+                str(raw_symbol or "").upper().strip() == symbol
+                for raw_symbol in raw_fact_types_by_symbol
+            )
+            symbol_families = requested_scope_families_for_event_fact_types(
+                exact_fact_types if has_explicit_symbol_types else event_fact_types
+            )
+            fact_families_by_symbol.setdefault(symbol, set()).update(symbol_families)
         barrier = payload.get("verifiedSourceSnapshot")
         barrier = barrier if isinstance(barrier, dict) else {}
         if barrier:
@@ -215,7 +229,7 @@ def reasoning_request_provenance(
                 revisions[symbol] = clean_revision[:160]
     ordered_fact_types = sorted(fact_types)
     context = {
-        "version": "reasoning-request-context-v1",
+        "version": "reasoning-request-context-v2",
         "requestEventIds": sorted(request_event_ids)[:80],
         "sourceEventIds": sorted(source_event_ids)[:80],
         "triggers": sorted(triggers)[:20],
@@ -2733,6 +2747,8 @@ class OntologyReasoningRunner:
         priority_symbols = self.priority_symbols()
         entries = []
         for symbol in event_symbols(event):
+            symbol_fact_types = event_fact_types_for_symbol(event, symbol)
+            symbol_family = ",".join(symbol_fact_types) or "MarketQuote"
             seed = "|".join([account_scope, symbol, slot_family])
             mailbox_key = hashlib.sha256(seed.encode("utf-8")).hexdigest()
             entries.append({
@@ -2741,7 +2757,7 @@ class OntologyReasoningRunner:
                 "sourceEvent": source_event,
                 "accountScope": account_scope,
                 "symbol": symbol,
-                "factFamily": family,
+                "factFamily": symbol_family,
                 "mailboxSlotFamily": slot_family,
                 "trigger": trigger,
                 "reviewLevel": event_review_level(event),

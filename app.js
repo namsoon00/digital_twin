@@ -4049,6 +4049,7 @@
       ontologyReasoningQueueWarningOverdueSymbols: settingValue("ontologyReasoningQueueWarningOverdueSymbols"),
       ontologyReasoningQueueCriticalOverdueSymbols: settingValue("ontologyReasoningQueueCriticalOverdueSymbols"),
       ontologyReasoningQueueConsecutiveObservations: settingValue("ontologyReasoningQueueConsecutiveObservations"),
+      ontologyReasoningQueueNoProgressMinutes: settingValue("ontologyReasoningQueueNoProgressMinutes"),
       ontologyReasoningQueueAlertReminderMinutes: settingValue("ontologyReasoningQueueAlertReminderMinutes"),
       temporalWindowPeriods: settingValue("temporalWindowPeriods"),
       temporalWindowHistoryLimit: settingValue("temporalWindowHistoryLimit"),
@@ -24170,6 +24171,7 @@
         renderSettingField("ontologyReasoningQueueWarningOverdueSymbols", "대기 한도 초과 종목 경고 수", "number", "3"),
         renderSettingField("ontologyReasoningQueueCriticalOverdueSymbols", "대기 한도 초과 종목 심각 수", "number", "8"),
         renderSettingField("ontologyReasoningQueueConsecutiveObservations", "지연 연속 확인 횟수", "number", "3"),
+        renderSettingField("ontologyReasoningQueueNoProgressMinutes", "처리 진행 신호 정체 시간(분)", "number", "15"),
         renderSettingField("ontologyReasoningQueueAlertReminderMinutes", "지연 운영 알림 재전송(분)", "number", "60"),
         renderSettingField("temporalWindowHistoryLimit", "기간 판단 히스토리 수", "number", "96"),
         '<label><span>기간 판단 구간</span><div class="form-control-shell"><textarea data-setting="temporalWindowPeriods" rows="7" autocomplete="off" placeholder="15M=15m:4">' + escapeHtml(settingValue("temporalWindowPeriods") || defaultSettings.temporalWindowPeriods) + '</textarea></div></label>'
@@ -25831,6 +25833,7 @@
         renderSettingField("ontologyReasoningQueueWarningPendingCount", "대기 요청 경고 수", "number", "100"),
         renderSettingField("ontologyReasoningQueueCriticalPendingCount", "대기 요청 심각 수", "number", "200"),
         renderSettingField("ontologyReasoningQueueConsecutiveObservations", "지연 연속 확인 횟수", "number", "3"),
+        renderSettingField("ontologyReasoningQueueNoProgressMinutes", "처리 진행 신호 정체 시간(분)", "number", "15"),
         renderSettingField("ontologyReasoningQueueAlertReminderMinutes", "지연 운영 알림 재전송(분)", "number", "60"),
         renderSettingField("marketMaterialityPriceChangePct", "가격 중요 변화율(%)", "number", "0.6"),
         renderSettingField("marketMaterialityTrendDistancePct", "추세 중요 이격(%)", "number", "2"),
@@ -25887,6 +25890,8 @@
     var queueDelayCandidate = String(queueDelay.candidateState || "").toLowerCase();
     var queueDelayOldest = String(queueDelay.oldestRequestAt || queueDispatch.oldestRequestAt || "");
     var queueDelayAge = Number(queueDelay.oldestRequestAgeMinutes || 0);
+    var queueDelayProgressAt = String(queueDelay.lastProgressAt || "");
+    var queueDelayProgressAge = Number(queueDelay.progressAgeMinutes || 0);
     if (!queueDelayAge && queueDelayOldest) {
       var queueDelayOldestMs = new Date(queueDelayOldest).getTime();
       if (!Number.isNaN(queueDelayOldestMs)) queueDelayAge = Math.max(0, Math.floor((Date.now() - queueDelayOldestMs) / 60000));
@@ -25894,11 +25899,12 @@
     var queueDelayRequests = Number(queueDelay.rawPendingCount || reasoning.rawPendingCount || 0);
     var queueDelaySymbols = Number(queueDelay.pendingSymbolCount || (Array.isArray(reasoning.pendingSymbols) ? reasoning.pendingSymbols.length : 0));
     var queueDelayOverdue = Number(queueDelay.overduePendingSymbolCount || reasoning.overduePendingSymbolCount || 0);
-    var queueDelayLabel = queueDelayState === "critical" ? "심각 지연" : (queueDelayState === "delayed" ? "지연" : (queueDelayCandidate === "critical" || queueDelayCandidate === "delayed" ? "확인 중" : reasoningLabel));
-    var queueDelayTone = queueDelayState === "critical" ? "danger" : (queueDelayState === "delayed" ? "caution" : (queueDelayCandidate === "critical" || queueDelayCandidate === "delayed" ? "caution" : reasoningTone));
+    var queueDelayLabel = queueDelayState === "critical" ? "심각 지연" : (queueDelayState === "delayed" ? "지연" : (queueDelayState === "draining" ? "처리 진행" : (queueDelayCandidate === "critical" || queueDelayCandidate === "delayed" ? "확인 중" : reasoningLabel)));
+    var queueDelayTone = queueDelayState === "critical" ? "danger" : (queueDelayState === "delayed" ? "caution" : (queueDelayState === "draining" ? "watch" : (queueDelayCandidate === "critical" || queueDelayCandidate === "delayed" ? "caution" : reasoningTone)));
     var queueDelayDetail = queueDelayOldest
       ? "최장 " + queueDelayAge + "분 · 요청 " + queueDelayRequests + "건 · 종목 " + queueDelaySymbols + "개 · 한도 초과 " + queueDelayOverdue + "개"
       : (mailboxCount + "개 최신 상태 대기 · 실시간 원천 " + (reasoning.sourceFreshness && reasoning.sourceFreshness.realtimeEventMaxAgeMinutes || "-") + "분 이내만 사용");
+    if (queueDelayProgressAt) queueDelayDetail += " · 최근 진행 " + queueDelayProgressAge + "분 전";
     var diagnostics = [
       {
         label: "저장 상태",

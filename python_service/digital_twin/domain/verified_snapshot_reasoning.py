@@ -556,12 +556,26 @@ def verified_monitor_snapshot_reasoning_event(
         if not (bootstrap_or_position_context or market_requires_reasoning or external_groups or portfolio_changed):
             continue
 
-        fields = list(position_fields)
+        # A direct evidence change can share a monitor snapshot with a small
+        # quote refresh. Keep the source families exact: the evidence needs a
+        # TypeDB turn, while the non-material quote does not become an
+        # implicit MarketQuote/ExecutionFlow trigger merely because the same
+        # subject was selected for another reason.
+        selected_position_fields = (
+            list(position_fields)
+            if (bootstrap_or_position_context or market_requires_reasoning or portfolio_changed)
+            else []
+        )
+        fields = list(selected_position_fields)
         if portfolio_changed:
             fields.append("portfolioContext")
         fields.extend("external." + group for group in external_groups)
 
-        fact_types = _fact_types_for_change(position_fields, external_groups, portfolio_changed)
+        fact_types = _fact_types_for_change(
+            selected_position_fields,
+            external_groups,
+            portfolio_changed,
+        )
         all_fact_types.update(fact_types)
         changed_symbols.append(symbol)
         changed_fields_by_symbol[symbol] = fields[:30]
@@ -570,7 +584,11 @@ def verified_monitor_snapshot_reasoning_event(
         if assessment:
             materiality_assessments[symbol] = assessment.to_dict()
         revision_payload = {
-            "position": after_position or {"removed": True},
+            "position": (
+                after_position or {"removed": True}
+                if selected_position_fields
+                else {}
+            ),
             "portfolioContext": current_portfolio if portfolio_changed else {},
             "external": after_external if external_groups else {},
         }

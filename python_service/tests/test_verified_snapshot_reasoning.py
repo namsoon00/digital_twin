@@ -249,7 +249,7 @@ class VerifiedSnapshotReasoningTests(unittest.TestCase):
 
     def test_eligible_research_set_change_targets_only_its_symbol(self):
         previous = snapshot()
-        current = snapshot(external_signals={
+        current = snapshot(aapl_price=100.2, external_signals={
             "researchEvidence": {
                 "AAPL": [{
                     "evidenceId": "research:AAPL:direct:1",
@@ -275,6 +275,7 @@ class VerifiedSnapshotReasoningTests(unittest.TestCase):
         self.assertEqual(["AAPL"], event.payload["symbols"])
         self.assertEqual(["ResearchEvidence"], event.payload["factTypesBySymbol"]["AAPL"])
         self.assertIn("external.researchEvidence", event.payload["changedFieldsBySymbol"]["AAPL"])
+        self.assertNotIn("current_price", event.payload["changedFieldsBySymbol"]["AAPL"])
 
     def test_external_quality_clock_changes_do_not_fan_out_a_new_reasoning_request(self):
         previous = snapshot(external_signals={

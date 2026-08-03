@@ -50,6 +50,7 @@ class OntologyInferenceQualityTests(unittest.TestCase):
 
     def test_materialized_trace_contains_observed_values_and_relation_ids(self):
         rule_payload = default_graph_inference_rules()[0].to_dict()
+        rule_payload["hypothesis_family_key"] = "loss-guard-breakdown"
         rule_payload["hypothesisFamilyKey"] = "loss-guard-breakdown"
         rule = GraphInferenceRule.from_dict(rule_payload)
         graph = PortfolioOntology("quality-test")

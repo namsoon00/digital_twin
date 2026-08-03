@@ -237,7 +237,7 @@ class OntologyReasoningQueueHealthTests(unittest.TestCase):
         self.assertEqual(320, health.raw_pending_count)
         self.assertEqual(9, health.effective_pending_count)
 
-    def test_fairness_drain_overdue_symbols_do_not_page_before_request_slo_is_breached(self):
+    def test_fairness_drain_is_visible_as_progress_without_paging(self):
         health = evaluate_ontology_reasoning_queue_health(
             queue_snapshot(
                 "2026-07-25T00:00:00Z",
@@ -263,8 +263,8 @@ class OntologyReasoningQueueHealthTests(unittest.TestCase):
             now=datetime(2026, 7, 25, 0, 4, tzinfo=UTC),
         )
 
-        self.assertEqual("healthy", health.state)
-        self.assertEqual("healthy", health.candidate_state)
+        self.assertEqual("draining", health.state)
+        self.assertEqual("draining", health.candidate_state)
         self.assertEqual("fairness-drain-progress", health.reason_code)
         self.assertFalse(health.alert_required)
 
@@ -290,12 +290,12 @@ class OntologyReasoningQueueHealthTests(unittest.TestCase):
             now=datetime(2026, 7, 25, 0, 4, tzinfo=UTC),
         )
 
-        self.assertEqual("healthy", health.state)
+        self.assertEqual("draining", health.state)
         self.assertEqual("fairness-drain-progress", health.reason_code)
         self.assertEqual(1, health.overdue_pending_event_count)
         self.assertEqual(1, health.to_dict()["overduePendingEventCount"])
 
-    def test_recovery_from_delayed_queue_is_alerted(self):
+    def test_domain_marks_recovery_for_the_application_service_to_decide(self):
         previous = {
             "state": "delayed",
             "candidateState": "delayed",
@@ -311,7 +311,7 @@ class OntologyReasoningQueueHealthTests(unittest.TestCase):
 
         self.assertEqual("healthy", health.state)
         self.assertTrue(health.state_changed)
-        self.assertTrue(health.alert_required)
+        self.assertFalse(health.alert_required)
 
     def test_recovery_is_an_operations_alert_with_incident_duration(self):
         now = datetime(2026, 7, 25, 1, 0, tzinfo=UTC)
@@ -322,6 +322,12 @@ class OntologyReasoningQueueHealthTests(unittest.TestCase):
                 "stateSince": "2026-07-25T00:10:00Z",
                 "firstObservedAt": "2026-07-25T00:00:00Z",
                 "consecutiveDelayedObservations": 3,
+                "incidentOpen": True,
+                "incidentId": "ontology-reasoning-queue:2026-07-25T00:00:00Z",
+                "incidentStartedAt": "2026-07-25T00:00:00Z",
+                "activeAlertDeliveredAt": "2026-07-25T00:15:00Z",
+                "activeAlertJobId": "N-active",
+                "activeAlertDeliveryState": "done",
             },
         })
         service = OntologyReasoningQueueHealthService(store, now_provider=lambda: now)
@@ -334,14 +340,14 @@ class OntologyReasoningQueueHealthTests(unittest.TestCase):
         self.assertTrue(health["alertRequired"])
         self.assertEqual("recovered", health["alertKind"])
         self.assertEqual("critical", health["recoveredFromState"])
-        self.assertEqual(50, health["incidentDurationMinutes"])
+        self.assertEqual(60, health["incidentDurationMinutes"])
         self.assertEqual(1, len(queue.jobs))
         job = queue.jobs[0]
         self.assertEqual(ONTOLOGY_REASONING_QUEUE, job.message_type)
         self.assertEqual("", job.account_id)
         self.assertEqual("operations", job.context["deliveryAudience"])
         self.assertIn("[운영] 온톨로지 추론 요청 대기 정상 복구", job.text)
-        self.assertIn("해소: critical 상태가 정상 처리로 복구되었습니다. 감지 후 50분 지속됐습니다.", job.text)
+        self.assertIn("해소: critical 상태가 정상 처리로 복구되었습니다. 감지 후 60분 지속됐습니다.", job.text)
 
         account_messages = []
         operations_messages = []
@@ -359,6 +365,113 @@ class OntologyReasoningQueueHealthTests(unittest.TestCase):
         self.assertEqual([], account_messages)
         self.assertEqual([job.text], operations_messages)
         self.assertEqual("operations", job.context["deliveryAudience"])
+
+    def test_recovery_is_not_enqueued_when_the_active_alert_was_not_delivered(self):
+        now = datetime(2026, 7, 25, 1, 0, tzinfo=UTC)
+        store = MemoryStore({
+            "queueDelayHealth": {
+                "state": "critical",
+                "candidateState": "critical",
+                "stateSince": "2026-07-25T00:10:00Z",
+                "firstObservedAt": "2026-07-25T00:00:00Z",
+                "consecutiveDelayedObservations": 3,
+                "incidentOpen": True,
+                "incidentId": "ontology-reasoning-queue:2026-07-25T00:00:00Z",
+                "incidentStartedAt": "2026-07-25T00:00:00Z",
+                "lastAlertDeliveryState": "suppressed",
+            },
+        })
+        service = OntologyReasoningQueueHealthService(store, now_provider=lambda: now)
+
+        health, event = service.record(
+            queue_snapshot("", rawRequestCount=0, mailboxPendingEntryCount=0, queueDispatch={"mode": "waiting"})
+        )
+
+        self.assertFalse(health["alertRequired"])
+        self.assertIsNone(event)
+        self.assertEqual("active-alert-not-delivered", health["recoverySuppressedReason"])
+
+    def test_delivery_provenance_unlocks_recovery_after_drain(self):
+        clock = [datetime(2026, 7, 25, 0, 1, tzinfo=UTC)]
+        store = MemoryStore()
+        service = OntologyReasoningQueueHealthService(
+            store,
+            {"ontologyReasoningQueueCriticalAgeMinutes": "90"},
+            now_provider=lambda: clock[0],
+        )
+        active_health, active_event = service.record(queue_snapshot(
+            "2026-07-25T00:00:00Z",
+            rawRequestCount=12,
+            effectivePendingCount=12,
+            mailboxPendingEntryCount=12,
+            queueDispatch={
+                "oldestRequestAt": "2026-07-25T00:00:00Z",
+                "pendingSymbolCount": 5,
+                "overduePendingSymbolCount": 8,
+                "mode": "priority-selected",
+                "fairnessDrainActive": False,
+            },
+        ))
+        self.assertTrue(active_health["alertRequired"])
+        self.assertIsNotNone(active_event)
+
+        queue = MemoryQueue()
+        OntologyReasoningQueueHealthNotificationEnqueuer(queue).handle(active_event)
+        clock[0] = datetime(2026, 7, 25, 0, 2, tzinfo=UTC)
+        draining_health, _ = service.record(queue_snapshot(
+            "2026-07-25T00:00:00Z",
+            rawRequestCount=12,
+            effectivePendingCount=12,
+            mailboxPendingEntryCount=12,
+            queueDispatch={
+                "oldestRequestAt": "2026-07-25T00:00:00Z",
+                "pendingSymbolCount": 5,
+                "overduePendingSymbolCount": 8,
+                "mode": "fairness-drain",
+                "fairnessDrainActive": True,
+            },
+        ))
+        self.assertEqual("draining", draining_health["state"])
+        service.record_notification_delivery(queue.jobs[0], "done")
+        self.assertTrue(service.previous()["activeAlertDeliveredAt"])
+
+        clock[0] = datetime(2026, 7, 25, 1, 0, tzinfo=UTC)
+        recovered_health, recovery_event = service.record(
+            queue_snapshot("", rawRequestCount=0, mailboxPendingEntryCount=0, queueDispatch={"mode": "waiting"})
+        )
+
+        self.assertTrue(recovered_health["alertRequired"])
+        self.assertEqual("recovered", recovered_health["alertKind"])
+        self.assertIsNotNone(recovery_event)
+
+    def test_progress_stall_pages_during_fairness_drain(self):
+        health = evaluate_ontology_reasoning_queue_health(
+            queue_snapshot(
+                "2026-07-25T00:00:00Z",
+                rawRequestCount=8,
+                effectivePendingCount=8,
+                mailboxPendingEntryCount=8,
+                mailbox={"lastCompletedAt": "2026-07-25T00:00:00Z"},
+                queueDispatch={
+                    "oldestRequestAt": "2026-07-25T00:00:00Z",
+                    "pendingSymbolCount": 4,
+                    "overduePendingSymbolCount": 4,
+                    "mode": "fairness-drain",
+                    "fairnessDrainActive": True,
+                },
+            ),
+            previous={"state": "draining", "candidateState": "draining"},
+            warning_age_minutes=30,
+            critical_age_minutes=90,
+            stall_minutes=15,
+            required_consecutive_observations=3,
+            now=datetime(2026, 7, 25, 0, 20, tzinfo=UTC),
+        )
+
+        self.assertEqual("delayed", health.state)
+        self.assertEqual("queue-progress-stalled", health.reason_code)
+        self.assertTrue(health.progress_stalled)
+        self.assertTrue(health.alert_required)
 
     def test_operations_alert_never_falls_back_to_an_account_notifier(self):
         job = NotificationJob.create(
@@ -426,6 +539,70 @@ class OntologyReasoningQueueHealthTests(unittest.TestCase):
         self.assertEqual("suppressed", job.status)
         self.assertIn("critical에서 healthy", job.last_error)
         self.assertEqual("obsolete_queue_health_at_dispatch", job.context["deliverySuppressionReason"])
+
+    def test_delivery_keeps_an_active_incident_when_fairness_drain_has_started(self):
+        class DeliveryQueue:
+            def __init__(self, job):
+                self.jobs = [job]
+
+            def pending(self, limit=10):
+                return [job for job in self.jobs if job.status in {"pending", "failed"}][:limit]
+
+            def mark_processing(self, job):
+                job.status = "processing"
+                job.attempts += 1
+
+            def mark_done(self, job):
+                job.status = "done"
+
+            def mark_failed(self, job, reason):
+                job.status = "failed"
+                job.last_error = str(reason)
+
+            def mark_suppressed(self, job, reason):
+                job.status = "suppressed"
+                job.last_error = str(reason)
+
+        class EmptyAccounts:
+            def load_all(self):
+                return []
+
+        job = NotificationJob.create(
+            "[운영] critical 추론 대기열",
+            message_type=ONTOLOGY_REASONING_QUEUE,
+            context={
+                "deliveryAudience": "operations",
+                "queueDelayHealth": {
+                    "state": "critical",
+                    "alertKind": "state-changed",
+                    "incidentId": "ontology-reasoning-queue:test",
+                    "checkedAt": "2026-07-25T00:00:00Z",
+                },
+            },
+        )
+        messages = []
+        delivery_records = []
+        runner = NotificationQueueRunner(
+            queue=DeliveryQueue(job),
+            account_repository=EmptyAccounts(),
+            notifier_factory=lambda _account: None,
+            operations_notifier_factory=lambda _account: type("Notifier", (), {
+                "send": lambda _self, message: messages.append(message) or NotificationResult(True, "Operations"),
+            })(),
+            operational_state_resolver=lambda: {
+                "state": "draining",
+                "checkedAt": "2026-07-25T00:02:00Z",
+            },
+            operational_delivery_recorder=lambda queued_job, outcome, reason: delivery_records.append((queued_job.job_id, outcome, reason)),
+        )
+
+        processed = runner.run_once()
+
+        self.assertEqual(1, processed)
+        self.assertEqual("done", job.status)
+        self.assertEqual([job.text], messages)
+        self.assertEqual([(job.job_id, "done", "")], delivery_records)
+        self.assertEqual("draining", job.context["operationalDispatchState"]["currentState"])
 
     def test_service_reminds_only_after_the_configured_interval(self):
         now = datetime(2026, 7, 25, 2, 0, tzinfo=UTC)

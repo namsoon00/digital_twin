@@ -8,6 +8,7 @@ from ..domain.events import (
 )
 from ..domain.ontology_reasoning_queue_health import (
     ACTIVE_QUEUE_STATES,
+    INCIDENT_QUEUE_STATES,
     evaluate_ontology_reasoning_queue_health,
 )
 from ..domain.message_types import ONTOLOGY_REASONING_QUEUE
@@ -80,6 +81,67 @@ class OntologyReasoningQueueHealthService:
         )
         return (now - last_alert.astimezone(timezone.utc)).total_seconds() >= interval * 60
 
+    def incident_identifier(self, payload: Dict[str, object], previous: Dict[str, object]) -> str:
+        """Keep one delivery record from detection through queue drain.
+
+        The queue observer may move from delayed/critical to draining before
+        the outbound job is delivered. A stable incident ID lets the delivery
+        worker record that the operator actually saw the original incident.
+        """
+        existing = str(previous.get("incidentId") or "").strip()
+        if existing:
+            return existing
+        started_at = str(payload.get("firstObservedAt") or payload.get("checkedAt") or "").strip()
+        return "ontology-reasoning-queue:" + (started_at or utc_now_iso(self.now_provider()))
+
+    @staticmethod
+    def incident_was_open(previous: Dict[str, object]) -> bool:
+        return bool(previous.get("incidentOpen")) or str(previous.get("state") or "").strip() in INCIDENT_QUEUE_STATES
+
+    def record_notification_delivery(self, job: NotificationJob, outcome: str, reason: str = "") -> None:
+        """Record the outbound result used to decide whether recovery is useful.
+
+        A recovery message is only meaningful after at least one delayed or
+        critical queue message reached operations. Suppressed/failed jobs are
+        retained as audit metadata but deliberately do not unlock recovery.
+        """
+        if str(getattr(job, "message_type", "") or "") != ONTOLOGY_REASONING_QUEUE:
+            return
+        context = getattr(job, "context", {})
+        context = dict(context or {}) if isinstance(context, dict) else {}
+        health = context.get("queueDelayHealth")
+        health = dict(health or {}) if isinstance(health, dict) else {}
+        alert_kind = str(health.get("alertKind") or "").strip().lower()
+        incident_id = str(health.get("incidentId") or "").strip()
+        if not incident_id or alert_kind == "recovered":
+            return
+
+        previous = self.previous()
+        if str(previous.get("incidentId") or "").strip() != incident_id or not previous.get("incidentOpen"):
+            return
+
+        current = self.now_provider()
+        if current.tzinfo is None:
+            current = current.replace(tzinfo=timezone.utc)
+        stamp = utc_now_iso(current)
+        payload = dict(previous)
+        payload.update({
+            "lastAlertDeliveryState": str(outcome or "unknown"),
+            "lastAlertDeliveryAt": stamp,
+            "lastAlertDeliveryReason": str(reason or "")[:500],
+            "lastAlertJobId": str(getattr(job, "job_id", "") or ""),
+        })
+        if str(outcome or "").strip().lower() == "done":
+            payload.update({
+                "activeAlertDeliveredAt": stamp,
+                "activeAlertJobId": str(getattr(job, "job_id", "") or ""),
+                "activeAlertDeliveryState": "done",
+                # Reminders are paced from an actual delivery, never an
+                # enqueue time or a suppressed job.
+                "lastAlertAt": stamp,
+            })
+        self.save(payload)
+
     def observe(
         self,
         snapshot: Dict[str, object],
@@ -101,6 +163,7 @@ class OntologyReasoningQueueHealthService:
             warning_overdue_symbols=int_setting(self.settings, "ontologyReasoningQueueWarningOverdueSymbols", 3, 1, 10000),
             critical_overdue_symbols=int_setting(self.settings, "ontologyReasoningQueueCriticalOverdueSymbols", 8, 1, 10000),
             required_consecutive_observations=int_setting(self.settings, "ontologyReasoningQueueConsecutiveObservations", 3, 1, 120),
+            stall_minutes=int_setting(self.settings, "ontologyReasoningQueueNoProgressMinutes", 15, 1, 10080),
             now=current,
         )
         return health.to_dict()
@@ -111,13 +174,49 @@ class OntologyReasoningQueueHealthService:
         if current.tzinfo is None:
             current = current.replace(tzinfo=timezone.utc)
         payload = self.observe(snapshot, previous=previous, now=current)
-        should_alert = bool(payload.get("alertRequired"))
-        alert_kind = ""
-        if should_alert:
-            alert_kind = "recovered" if payload.get("state") == "healthy" else "state-changed"
-        if alert_kind == "recovered":
+        state = str(payload.get("state") or "").strip()
+        previous_state = str(previous.get("state") or "").strip()
+        active_state = state in ACTIVE_QUEUE_STATES
+        incident_open = state in INCIDENT_QUEUE_STATES
+        had_incident = self.incident_was_open(previous)
+        should_alert = bool(payload.get("alertRequired")) if active_state else False
+        alert_kind = "state-changed" if should_alert else ""
+
+        if incident_open:
             incident_started_at = str(
-                previous.get("stateSince")
+                previous.get("incidentStartedAt")
+                or (previous.get("firstObservedAt") if had_incident else payload.get("firstObservedAt"))
+                or payload.get("checkedAt")
+                or ""
+            ).strip()
+            previous_peak_state = str(previous.get("incidentHighestState") or "").strip()
+            incident_peak_state = (
+                "critical"
+                if state == "critical" or previous_peak_state == "critical"
+                else "delayed"
+                if state == "delayed" or previous_peak_state == "delayed"
+                else ""
+            )
+            payload.update({
+                "incidentOpen": True,
+                "incidentId": self.incident_identifier(payload, previous) if had_incident else (
+                    "ontology-reasoning-queue:" + incident_started_at
+                ),
+                "incidentStartedAt": incident_started_at,
+                "incidentHighestState": incident_peak_state,
+                "activeAlertDeliveredAt": str(previous.get("activeAlertDeliveredAt") or ""),
+                "activeAlertJobId": str(previous.get("activeAlertJobId") or ""),
+                "activeAlertDeliveryState": str(previous.get("activeAlertDeliveryState") or ""),
+                "lastAlertDeliveryState": str(previous.get("lastAlertDeliveryState") or ""),
+                "lastAlertDeliveryAt": str(previous.get("lastAlertDeliveryAt") or ""),
+                "lastAlertDeliveryReason": str(previous.get("lastAlertDeliveryReason") or ""),
+            })
+            if active_state and not should_alert and self.reminder_due(previous, current.astimezone(timezone.utc)):
+                should_alert = True
+                alert_kind = "reminder"
+        elif state == "healthy" and had_incident:
+            incident_started_at = str(
+                previous.get("incidentStartedAt")
                 or previous.get("firstObservedAt")
                 or ""
             ).strip()
@@ -128,24 +227,33 @@ class OntologyReasoningQueueHealthService:
                     0,
                     int((current.astimezone(timezone.utc) - incident_started.astimezone(timezone.utc)).total_seconds() // 60),
                 )
+            active_alert_delivered_at = str(previous.get("activeAlertDeliveredAt") or "").strip()
             payload.update({
-                "recoveredFromState": str(previous.get("state") or "").strip(),
+                "incidentOpen": False,
+                "incidentId": str(previous.get("incidentId") or "").strip(),
                 "incidentStartedAt": incident_started_at,
                 "incidentDurationMinutes": duration_minutes,
+                "incidentHighestState": str(previous.get("incidentHighestState") or previous_state or ""),
+                "activeAlertDeliveredAt": active_alert_delivered_at,
+                "activeAlertJobId": str(previous.get("activeAlertJobId") or ""),
+                "activeAlertDeliveryState": str(previous.get("activeAlertDeliveryState") or ""),
             })
-        elif (
-            payload.get("state") in ACTIVE_QUEUE_STATES
-            and self.reminder_due(previous, current.astimezone(timezone.utc))
-        ):
-            should_alert = True
-            alert_kind = "reminder"
+            if active_alert_delivered_at:
+                should_alert = True
+                alert_kind = "recovered"
+                payload.update({
+                    "recoveredFromState": str(previous.get("incidentHighestState") or previous_state),
+                    "recoverySuppressedReason": "",
+                })
+            else:
+                payload["recoverySuppressedReason"] = "active-alert-not-delivered"
         if not self.enabled():
             should_alert = False
             alert_kind = ""
         payload["alertRequired"] = should_alert
         if alert_kind:
             payload["alertKind"] = alert_kind
-            payload["lastAlertAt"] = utc_now_iso(current)
+            payload["lastAlertAttemptAt"] = utc_now_iso(current)
         elif previous.get("lastAlertAt"):
             payload["lastAlertAt"] = str(previous.get("lastAlertAt"))
         self.save(payload)
@@ -193,6 +301,7 @@ class OntologyReasoningQueueHealthNotificationEnqueuer:
         labels = {
             "delayed": "지연 감지",
             "critical": "심각 지연",
+            "draining": "처리 진행",
             "healthy": "정상 복구",
         }
         title = "온톨로지 추론 요청 대기 " + labels.get(state, "상태 변경")
@@ -218,6 +327,10 @@ class OntologyReasoningQueueHealthNotificationEnqueuer:
             "• 이유: " + str(payload.get("reason") or ""),
             "• 확인시각: " + str(payload.get("checkedAt") or event.occurred_at),
         ]
+        last_progress_at = str(payload.get("lastProgressAt") or "").strip()
+        if last_progress_at:
+            progress_age = int(payload.get("progressAgeMinutes") or 0)
+            lines.insert(4, "• 최근 처리 진행: " + last_progress_at + " · " + str(progress_age) + "분 전")
         if recovered:
             duration = int(payload.get("incidentDurationMinutes") or 0)
             started_at = str(payload.get("incidentStartedAt") or "").strip()

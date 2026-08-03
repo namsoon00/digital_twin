@@ -344,6 +344,7 @@ class NotificationQueueRunner:
         operator_reports_enabled: bool = False,
         settings: Dict[str, object] = None,
         operational_state_resolver: Callable = None,
+        operational_delivery_recorder: Callable = None,
     ):
         self.queue = queue
         self.account_repository = account_repository
@@ -359,6 +360,7 @@ class NotificationQueueRunner:
         self.dispatch_freshness_enabled = settings is not None
         self.settings = dict(settings or {})
         self.operational_state_resolver = operational_state_resolver
+        self.operational_delivery_recorder = operational_delivery_recorder
         self.last_run_details = []
 
     def account_map(self) -> Dict[str, object]:
@@ -379,17 +381,21 @@ class NotificationQueueRunner:
                     self.queue.mark_suppressed(job, reason)
                 else:
                     self.queue.mark_failed(job, reason)
+                self.record_operational_delivery(job, "suppressed", reason)
                 self.last_run_details.append(self.job_detail(job, "suppressed", "operator reports disabled"))
                 processed += 1
                 continue
             if not job.text.strip():
-                self.queue.mark_failed(job, "empty notification text")
+                reason = "empty notification text"
+                self.queue.mark_failed(job, reason)
+                self.record_operational_delivery(job, "failed", reason)
                 self.last_run_details.append(self.job_detail(job, "failed", "empty text"))
                 continue
             account = accounts.get(job.account_id)
             self.apply_account_delivery_context(job, account)
             if not self.dry_run and account and account.quiet_hours_active(self.now_provider(), job.message_type):
                 self.mark_quiet_hours_suppressed(job, account)
+                self.record_operational_delivery(job, "suppressed", "quiet hours")
                 self.last_run_details.append(self.job_detail(job, "suppressed", "quiet hours"))
                 processed += 1
                 continue
@@ -403,7 +409,9 @@ class NotificationQueueRunner:
                 continue
             message = self.render(job)
             if not message:
-                self.queue.mark_failed(job, "empty rendered notification text")
+                reason = "empty rendered notification text"
+                self.queue.mark_failed(job, reason)
+                self.record_operational_delivery(job, "failed", reason)
                 self.last_run_details.append(self.job_detail(job, "failed", "empty rendered text"))
                 continue
             if not self.apply_operational_state_gate(job, "발송 직전"):
@@ -421,10 +429,12 @@ class NotificationQueueRunner:
                 self.deliver(job, accounts, message)
                 operator_detail = self.capture_operator_report_after_delivery(job, message)
                 self.queue.mark_done(job)
+                self.record_operational_delivery(job, "done")
                 self.last_run_details.append(self.job_detail(job, "done", operator_detail))
                 processed += 1
             except Exception as error:  # noqa: BLE001 - one failed delivery must not stop the queue.
                 self.queue.mark_failed(job, str(error))
+                self.record_operational_delivery(job, "failed", str(error))
                 self.last_run_details.append(self.job_detail(job, "failed", str(error)[:120]))
             if self.send_gap_seconds and processed < len(jobs):
                 time.sleep(self.send_gap_seconds)
@@ -471,10 +481,14 @@ class NotificationQueueRunner:
         if not current_state or current_state == expected_state:
             return True
         expected_active = expected_state in {"delayed", "critical"}
-        current_active = current_state in {"delayed", "critical"}
-        obsolete = (expected_active and not current_active) or (
-            expected_state == "healthy" and current_active
-        ) or (expected_active and current_active and expected_state != current_state)
+        # Fairness draining is an active incident that is being worked, not a
+        # healthy recovery. Keep the original page deliverable while it moves
+        # into this state; otherwise operations only receives a later recovery
+        # message and never sees the incident that justified it.
+        current_incident = current_state in {"delayed", "critical", "draining"}
+        obsolete = (expected_active and not current_incident) or (
+            expected_state == "healthy" and current_incident
+        )
         if not obsolete:
             return True
         reason = (
@@ -489,6 +503,7 @@ class NotificationQueueRunner:
             self.queue.mark_suppressed(job, reason)
         else:
             self.queue.mark_failed(job, reason)
+        self.record_operational_delivery(job, "suppressed", reason)
         self.last_run_details.append(self.job_detail(job, "suppressed", reason[:160]))
         return False
 
@@ -510,8 +525,18 @@ class NotificationQueueRunner:
             self.queue.mark_suppressed(job, reason)
         else:
             self.queue.mark_failed(job, reason)
+        self.record_operational_delivery(job, "suppressed", reason)
         self.last_run_details.append(self.job_detail(job, "suppressed", reason[:160]))
         return False
+
+    def record_operational_delivery(self, job: NotificationJob, outcome: str, reason: str = "") -> None:
+        """Persist best-effort delivery provenance for operations incidents."""
+        if not callable(self.operational_delivery_recorder):
+            return
+        try:
+            self.operational_delivery_recorder(job, outcome, reason)
+        except Exception:  # noqa: BLE001 - alert audit must not block delivery retries.
+            return
 
     def job_detail(self, job: NotificationJob, status: str, reason: str = "") -> str:
         context = job.context if isinstance(job.context, dict) else {}

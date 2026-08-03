@@ -72,6 +72,10 @@ class OperationalNotificationPresentationTests(unittest.TestCase):
             "messageType": ONTOLOGY_REASONING_QUEUE,
             "queueDelayHealth": {"state": "critical", "reasonCode": "queue-blocked"},
         })
+        draining = operational_notification_presentation(ONTOLOGY_REASONING_QUEUE, {
+            "messageType": ONTOLOGY_REASONING_QUEUE,
+            "queueDelayHealth": {"state": "draining", "reasonCode": "fairness-drain-progress"},
+        })
         recovered = operational_notification_presentation(ONTOLOGY_REASONING_QUEUE, {
             "messageType": ONTOLOGY_REASONING_QUEUE,
             "queueDelayHealth": {
@@ -83,6 +87,8 @@ class OperationalNotificationPresentationTests(unittest.TestCase):
 
         self.assertEqual("⏳", delayed.icon)
         self.assertEqual("🚨", critical.icon)
+        self.assertEqual("🔄", draining.icon)
+        self.assertEqual("draining", draining.tone)
         self.assertEqual("✅", recovered.icon)
 
     def test_connection_recovery_uses_current_state_instead_of_previous_error(self):

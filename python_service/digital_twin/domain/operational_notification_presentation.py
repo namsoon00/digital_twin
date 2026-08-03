@@ -245,6 +245,8 @@ def operational_notification_presentation(
             return presentation("🚨", "critical", state or "critical")
         if state == "delayed":
             return presentation("⏳", "delayed", state)
+        if state == "draining":
+            return presentation("🔄", "draining", state)
         if state == "disabled":
             return presentation("ℹ️", "info", state)
         return presentation("ℹ️", "info", state or "unknown")

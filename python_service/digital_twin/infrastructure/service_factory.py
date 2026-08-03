@@ -395,6 +395,7 @@ def build_notification_queue_runner(dry_run: bool = False) -> NotificationQueueR
         operator_reports_enabled=str(settings.get("operatorReasoningReportEnabled", "1")).strip().lower() not in {"0", "false", "no", "off"},
         settings=settings,
         operational_state_resolver=queue_health_at_dispatch,
+        operational_delivery_recorder=queue_health_service.record_notification_delivery,
     )
 
 

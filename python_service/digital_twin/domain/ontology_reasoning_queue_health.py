@@ -6,6 +6,8 @@ from .data_freshness import parse_datetime
 
 
 ACTIVE_QUEUE_STATES = {"delayed", "critical"}
+DRAINING_QUEUE_STATE = "draining"
+INCIDENT_QUEUE_STATES = ACTIVE_QUEUE_STATES | {DRAINING_QUEUE_STATE}
 
 
 def integer(value: object) -> int:
@@ -24,6 +26,15 @@ def elapsed_minutes(timestamp: object, now: datetime) -> int:
     if not parsed:
         return 0
     return max(0, int((now - parsed.astimezone(timezone.utc)).total_seconds() // 60))
+
+
+def latest_timestamp(*values: object) -> str:
+    latest = None
+    for value in values:
+        parsed = parse_datetime(value)
+        if parsed and (latest is None or parsed > latest):
+            latest = parsed
+    return latest.astimezone(timezone.utc).isoformat().replace("+00:00", "Z") if latest else ""
 
 
 @dataclass(frozen=True)
@@ -50,6 +61,9 @@ class OntologyReasoningQueueHealth:
     consecutive_delayed_observations: int
     required_consecutive_observations: int
     retry_after_seconds: int
+    last_progress_at: str
+    progress_age_minutes: int
+    progress_stalled: bool
     previous_state: str = ""
     state_changed: bool = False
     alert_required: bool = False
@@ -79,6 +93,9 @@ class OntologyReasoningQueueHealth:
             "consecutiveDelayedObservations": payload["consecutive_delayed_observations"],
             "requiredConsecutiveObservations": payload["required_consecutive_observations"],
             "retryAfterSeconds": payload["retry_after_seconds"],
+            "lastProgressAt": payload["last_progress_at"],
+            "progressAgeMinutes": payload["progress_age_minutes"],
+            "progressStalled": payload["progress_stalled"],
             "previousState": payload["previous_state"],
             "stateChanged": payload["state_changed"],
             "alertRequired": payload["alert_required"],
@@ -95,6 +112,7 @@ def evaluate_ontology_reasoning_queue_health(
     warning_overdue_symbols: int = 3,
     critical_overdue_symbols: int = 8,
     required_consecutive_observations: int = 3,
+    stall_minutes: int = 15,
     now: datetime = None,
 ) -> OntologyReasoningQueueHealth:
     """Classify scheduler pressure without changing its scheduling policy.
@@ -153,6 +171,14 @@ def evaluate_ontology_reasoning_queue_health(
     fairness_drain_active = bool(dispatch.get("fairnessDrainActive") or source.get("fairnessDrainActive"))
     backpressure_active = bool(dispatch.get("backpressureActive") or source.get("backpressureActive"))
     retry_after_seconds = integer(source.get("retryAfterSeconds"))
+    last_progress_at = latest_timestamp(
+        source.get("lastCompletedAt"),
+        source.get("lastStageAt"),
+        dispatch.get("lastCompletedAt"),
+        dispatch.get("lastStageAt"),
+        mailbox.get("lastCompletedAt"),
+        mailbox.get("lastStageAt"),
+    )
     blocked = bool(
         str(queue_health.get("status") or "").strip().lower() == "blocked"
         or result_status == "circuit-open"
@@ -168,6 +194,14 @@ def evaluate_ontology_reasoning_queue_health(
     warning_overdue_symbols = max(1, int(warning_overdue_symbols or 1))
     critical_overdue_symbols = max(warning_overdue_symbols, int(critical_overdue_symbols or warning_overdue_symbols))
     required_consecutive_observations = max(1, int(required_consecutive_observations or 1))
+    stall_minutes = max(1, int(stall_minutes or 1))
+    progress_age_minutes = elapsed_minutes(last_progress_at, current) if last_progress_at else 0
+    progress_stalled = bool(
+        effective_pending_count
+        and last_progress_at
+        and oldest_request_age_minutes >= stall_minutes
+        and progress_age_minutes >= stall_minutes
+    )
 
     if not enabled:
         candidate_state = "disabled"
@@ -181,6 +215,10 @@ def evaluate_ontology_reasoning_queue_health(
         candidate_state = "critical"
         reason_code = "oldest-request-critical"
         reason = "가장 오래된 추론 요청이 심각 지연 기준을 넘었습니다."
+    elif progress_stalled:
+        candidate_state = "delayed"
+        reason_code = "queue-progress-stalled"
+        reason = "대기 요청이 남아 있고 최근 추론 완료 또는 작업 진행 신호가 지연 기준을 넘었습니다."
     # Overdue symbol and event counts are fairness-scheduler inputs. A symbol
     # can be current while an older calendar/research event for it has never
     # been selected, so both counts remain visible. During an active fairness
@@ -207,9 +245,9 @@ def evaluate_ontology_reasoning_queue_health(
         reason_code = "request-count-delayed"
         reason = "처리 대기 요청과 대상 종목 수가 지연 기준을 넘었습니다."
     elif fairness_drain_active and (overdue_pending_symbol_count or overdue_pending_event_count):
-        candidate_state = "healthy"
+        candidate_state = DRAINING_QUEUE_STATE
         reason_code = "fairness-drain-progress"
-        reason = "공정 배출이 진행 중이며, 최신 추론 요청은 설정한 지연 기준 안에 있습니다."
+        reason = "공정 배출이 진행 중입니다. 대기열은 남아 있지만 최근 작업 진행 신호가 확인됩니다."
     else:
         candidate_state = "healthy"
         reason_code = "queue-healthy"
@@ -228,7 +266,8 @@ def evaluate_ontology_reasoning_queue_health(
             "oldest-request-critical",
             "overdue-symbols-critical",
         }
-        confirmed = immediate_critical or consecutive >= required_consecutive_observations
+        immediate_delayed = reason_code == "queue-progress-stalled"
+        confirmed = immediate_critical or immediate_delayed or consecutive >= required_consecutive_observations
         state = candidate_state if confirmed else "healthy"
         first_observed_at = (
             str(previous.get("firstObservedAt") or checked_at)
@@ -240,11 +279,17 @@ def evaluate_ontology_reasoning_queue_health(
     else:
         consecutive = 0
         state = candidate_state
-        first_observed_at = checked_at
+        first_observed_at = (
+            str(previous.get("firstObservedAt") or checked_at)
+            if candidate_state == DRAINING_QUEUE_STATE and previous_state in INCIDENT_QUEUE_STATES
+            else checked_at
+        )
 
     state_changed = state != previous_state
     state_since = checked_at if state_changed else str(previous.get("stateSince") or checked_at)
-    alert_required = state_changed and (state in ACTIVE_QUEUE_STATES or previous_state in ACTIVE_QUEUE_STATES)
+    # Recovery delivery is owned by the application service because it must
+    # depend on whether the initial operations alert actually reached a user.
+    alert_required = state_changed and state in ACTIVE_QUEUE_STATES
     return OntologyReasoningQueueHealth(
         state=state,
         candidate_state=candidate_state,
@@ -268,6 +313,9 @@ def evaluate_ontology_reasoning_queue_health(
         consecutive_delayed_observations=consecutive,
         required_consecutive_observations=required_consecutive_observations,
         retry_after_seconds=retry_after_seconds,
+        last_progress_at=last_progress_at,
+        progress_age_minutes=progress_age_minutes,
+        progress_stalled=progress_stalled,
         previous_state=previous_state,
         state_changed=state_changed,
         alert_required=alert_required,

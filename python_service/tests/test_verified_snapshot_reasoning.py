@@ -248,8 +248,11 @@ class VerifiedSnapshotReasoningTests(unittest.TestCase):
         )
 
     def test_eligible_research_set_change_targets_only_its_symbol(self):
-        previous = snapshot()
+        previous = snapshot(external_signals={
+            "freshness": {"status": "fresh", "dataState": "sufficient"},
+        })
         current = snapshot(aapl_price=100.2, external_signals={
+            "freshness": {"status": "stale", "dataState": "partial"},
             "researchEvidence": {
                 "AAPL": [{
                     "evidenceId": "research:AAPL:direct:1",
@@ -320,8 +323,13 @@ class VerifiedSnapshotReasoningTests(unittest.TestCase):
             )
         )
 
-    def test_external_quality_state_change_still_requests_reasoning(self):
+    def test_external_quality_state_change_stays_out_of_per_symbol_reasoning(self):
         previous = snapshot(external_signals={
+            "quality": {
+                "dataState": "sufficient",
+                "coverageState": "complete",
+                "sourceHealthState": "healthy",
+            },
             "freshness": {
                 "fetchedAt": "2026-07-29T00:00:00Z",
                 "ageMinutes": 1,
@@ -329,22 +337,43 @@ class VerifiedSnapshotReasoningTests(unittest.TestCase):
                 "transportStatus": "fresh",
                 "dataState": "sufficient",
             },
+            "provenance": {"sources": ["OpenDART"], "unavailableSources": []},
+            "statuses": [{"source": "OpenDART", "ok": True}],
         })
         stale = snapshot(external_signals={
+            "quality": {
+                "dataState": "partial",
+                "coverageState": "incomplete",
+                "sourceHealthState": "degraded",
+            },
             "freshness": {
                 "fetchedAt": "2026-07-29T01:00:00Z",
                 "ageMinutes": 61,
                 "status": "stale",
                 "transportStatus": "stale",
-                "dataState": "sufficient",
+                "dataState": "partial",
             },
+            "provenance": {"sources": ["OpenDART"], "unavailableSources": ["OpenDART"]},
+            "statuses": [{"source": "OpenDART", "ok": False, "message": "unauthorized"}],
         })
 
-        event = verified_monitor_snapshot_reasoning_event(stale, previous.to_monitor_state())
+        self.assertIsNone(
+            verified_monitor_snapshot_reasoning_event(stale, previous.to_monitor_state())
+        )
 
-        self.assertEqual(["AAPL", "MSFT"], event.payload["symbols"])
-        self.assertIn("DataQuality", event.payload["factTypes"])
-        self.assertIn("external.freshness", event.payload["changedFieldsBySymbol"]["AAPL"])
+    def test_material_price_change_keeps_global_quality_as_context(self):
+        previous = snapshot(external_signals={
+            "freshness": {"status": "fresh", "dataState": "sufficient"},
+        })
+        current = snapshot(aapl_price=102.0, external_signals={
+            "freshness": {"status": "stale", "dataState": "partial"},
+        })
+
+        event = verified_monitor_snapshot_reasoning_event(current, previous.to_monitor_state())
+
+        self.assertEqual(["AAPL"], event.payload["symbols"])
+        self.assertEqual(["MarketQuote"], event.payload["factTypesBySymbol"]["AAPL"])
+        self.assertNotIn("external.freshness", event.payload["changedFieldsBySymbol"]["AAPL"])
 
     def test_supplemental_quote_cache_refresh_does_not_enqueue_a_duplicate_turn(self):
         previous = snapshot(external_signals={

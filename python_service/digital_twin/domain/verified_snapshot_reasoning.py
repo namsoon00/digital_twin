@@ -132,25 +132,12 @@ SUPPLEMENTAL_EXTERNAL_GROUPS = {
     "yfinanceData",
     "companyOverviews",
 }
-QUALITY_EXTERNAL_GROUPS = {"quality", "freshness", "provenance", "statuses"}
-EXTERNAL_STATE_FIELDS = {
-    "status",
-    "state",
-    "datastate",
-    "coveragestate",
-    "sourcehealthstate",
-    "freshnessstatus",
-    "transportstatus",
-    "validationstate",
-    "investmentjudgmenteligible",
-    "available",
-    "ok",
-    "deferred",
-}
-EXTERNAL_STATE_IGNORED_FIELDS = {
-    str(field).replace("_", "").lower()
-    for field in EXTERNAL_REFRESH_FIELDS
-}
+# These are shared operational-context facts, not a change to one stock's
+# investment case. They remain in the persisted ABox and are evaluated with
+# the next material subject request. A provider outage already has its own
+# operational alert; duplicating it as a TypeDB turn for every holding turns a
+# single state change into a queue flood.
+CONTEXT_ONLY_EXTERNAL_GROUPS = {"quality", "freshness", "provenance", "statuses"}
 
 
 def _clean_symbol(value: object) -> str:
@@ -382,54 +369,13 @@ def _changed_external_groups(previous: Mapping[str, object], current: Mapping[st
     return groups
 
 
-def _external_state_projection(value: object, include_scalar: bool = False):
-    """Keep only discrete provider state when deciding a quality recheck.
-
-    Quality payloads carry coverage counters, timings and per-provider cache
-    detail that can change on every poll.  Preserve scalar values only once a
-    recognised state field selects them; nested objects are traversed because
-    source rows commonly wrap ``status`` under a provider key.
-    """
-
-    if isinstance(value, Mapping):
-        result = {}
-        for raw_key, raw_value in sorted(value.items(), key=lambda item: str(item[0])):
-            key = str(raw_key or "")
-            normalized = key.replace("_", "").lower()
-            if normalized in EXTERNAL_STATE_IGNORED_FIELDS:
-                continue
-            if normalized in EXTERNAL_STATE_FIELDS:
-                projected = _external_state_projection(raw_value, include_scalar=True)
-            elif isinstance(raw_value, (Mapping, list, tuple, set)):
-                projected = _external_state_projection(raw_value)
-            else:
-                continue
-            if projected not in ({}, [], None, ""):
-                result[key] = projected
-        return result
-    if isinstance(value, (list, tuple, set)):
-        rows = [_external_state_projection(item) for item in value]
-        rows = [item for item in rows if item not in ({}, [], None, "")]
-        return sorted(rows, key=lambda item: repr(item))
-    return value if include_scalar else None
-
-
-def _reasoning_external_groups(
-    previous: Mapping[str, object],
-    current: Mapping[str, object],
-    changed_groups: Iterable[str],
-) -> List[str]:
-    """Remove duplicate cache refreshes while preserving evidence/state changes."""
+def _reasoning_external_groups(changed_groups: Iterable[str]) -> List[str]:
+    """Return only subject-scoped external changes that require a TypeDB turn."""
 
     selected = []
     for group in changed_groups or []:
-        if group in SUPPLEMENTAL_EXTERNAL_GROUPS:
+        if group in SUPPLEMENTAL_EXTERNAL_GROUPS or group in CONTEXT_ONLY_EXTERNAL_GROUPS:
             continue
-        if group in QUALITY_EXTERNAL_GROUPS:
-            before_state = _external_state_projection((previous or {}).get(group))
-            after_state = _external_state_projection((current or {}).get(group))
-            if before_state == after_state:
-                continue
         selected.append(group)
     return sorted(set(selected))
 
@@ -528,11 +474,7 @@ def verified_monitor_snapshot_reasoning_event(
         before_external = _external_for_symbol(previous_external, symbol, settings)
         after_external = _external_for_symbol(current_external, symbol, settings)
         raw_external_groups = _changed_external_groups(before_external, after_external)
-        external_groups = _reasoning_external_groups(
-            before_external,
-            after_external,
-            raw_external_groups,
-        )
+        external_groups = _reasoning_external_groups(raw_external_groups)
         assessment = None
         if position_fields and before_position and after_position:
             assessment = market_change_materiality(

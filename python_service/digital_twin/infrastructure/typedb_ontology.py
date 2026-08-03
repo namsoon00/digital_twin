@@ -14111,6 +14111,7 @@ relation ontology-assertion,
             world_id=world_id,
             active_source_storage_id=source_storage_id,
             active_relation_storage_ids=relation_storage_ids,
+            active_relation_storage_ids_by_type=relation_storage_ids_by_type,
         )
         if not query_plan.get("query"):
             return {
@@ -21025,6 +21026,7 @@ def typedb_native_any_group_check_query(
     world_id: str = "",
     active_source_storage_id: str = "",
     active_relation_storage_ids: Iterable[str] = None,
+    active_relation_storage_ids_by_type: Dict[str, Iterable[str]] = None,
 ) -> Dict[str, object]:
     """Build a source-bounded TypeDB N-of-M condition check.
 
@@ -21066,12 +21068,67 @@ def typedb_native_any_group_check_query(
             str(condition.get("target_kind") or condition.get("targetKind") or ""),
         )
 
+    clean_source_storage_id = str(active_source_storage_id or "").strip()
+    indexed_relation_storage_ids_by_type = {
+        str(relation_type or "").upper().strip(): sorted({
+            str(storage_id or "").strip()
+            for storage_id in storage_ids or []
+            if str(storage_id or "").strip()
+        })
+        for relation_type, storage_ids in dict(active_relation_storage_ids_by_type or {}).items()
+        if str(relation_type or "").strip()
+    }
+    any_relation_types = {
+        str(condition.get("relation_type") or condition.get("relationType") or "").upper().strip()
+        for _condition_index, condition in conditions
+        if str(condition.get("kind") or "") == "relation"
+        and str(condition.get("relation_type") or condition.get("relationType") or "").strip()
+    }
+    if not indexed_relation_storage_ids_by_type:
+        flattened_relation_storage_ids = sorted({
+            str(storage_id or "").strip()
+            for storage_id in active_relation_storage_ids or []
+            if str(storage_id or "").strip()
+        })
+        if flattened_relation_storage_ids:
+            # v1 callers have one verified source-local relation set but no
+            # type partition. The rule's TypeDB relation-type predicate still
+            # keeps every branch exact.
+            indexed_relation_storage_ids_by_type = {
+                relation_type: list(flattened_relation_storage_ids)
+                for relation_type in any_relation_types
+            }
+
+    # For N-of-M groups, a source-bounded generic query still expands the
+    # active scoped-Manifest membership graph. Use the verified source-local
+    # physical rows when available. The existing compiler retains the same
+    # TypeDB `reduce count` evaluation and RuleBox condition tokens; Python
+    # supplies identities only and never decides the cardinality outcome.
+    if clean_source_storage_id and any_min_count > 1:
+        source_symbol = symbol_from_subject(clean_source_id)
+        indexed_plan = typedb_native_match_query(
+            rule,
+            [source_symbol] if source_symbol else [],
+            scoped_manifest_only=False,
+            include_required_conditions=False,
+            include_negative_conditions=False,
+            include_any_conditions=True,
+            world_id=world_id,
+            active_source_storage_ids=[clean_source_storage_id],
+            active_relation_storage_ids_by_type=indexed_relation_storage_ids_by_type,
+        )
+        if indexed_plan.get("query"):
+            return {
+                **indexed_plan,
+                "columns": ["sourceId", "sourceLabel"],
+                "anyConditionCheckMode": "distinct-condition-count-manifest-indexed",
+            }
+
     # An N-of-M group with N=1 is a pure existence test. The former generic
     # path joined RuleBox condition-token entities and ran a `reduce count`
     # even though there is no cardinality to calculate. Keep the decision in
     # TypeDB, but ask it for one bounded matching branch instead.
     if any_min_count == 1:
-        clean_source_storage_id = str(active_source_storage_id or "").strip()
         clean_relation_storage_ids = sorted({
             str(item or "").strip()
             for item in active_relation_storage_ids or []

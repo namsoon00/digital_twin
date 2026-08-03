@@ -10224,6 +10224,32 @@ class TypeDBOntologyRepositoryTests(unittest.TestCase):
         self.assertIn("$anyConditionCount >= 2", query)
         self.assertIn('has ontology-kind "worldview-manifest-active-pointer"', query)
 
+    def test_typedb_any_group_check_uses_manifest_rows_for_multi_condition_group(self):
+        rule = next(item for item in default_graph_inference_rules() if item.rule_id == "graph.loss_smart_money.add_buy_review.v1")
+
+        plan = typedb_native_any_group_check_query(
+            rule.to_dict(),
+            "stock:000660",
+            scoped_manifest_only=True,
+            world_id="portfolio:local:default",
+            active_source_storage_id="ontology-storage:active-000660",
+            active_relation_storage_ids_by_type={
+                "HAS_TECHNICAL_INDICATOR": ["ontology-storage:active-ma5"],
+                "HAS_TEMPORAL_WINDOW": ["ontology-storage:active-window"],
+                "HAS_TRADE_FLOW": ["ontology-storage:active-flow"],
+            },
+        )
+        query = plan["query"]
+
+        self.assertEqual("distinct-condition-count-manifest-indexed", plan["anyConditionCheckMode"])
+        self.assertIn('has ontology-storage-id "ontology-storage:active-000660"', query)
+        self.assertIn('has ontology-storage-id "ontology-storage:active-ma5"', query)
+        self.assertIn('has ontology-storage-id "ontology-storage:active-window"', query)
+        self.assertIn('has ontology-storage-id "ontology-storage:active-flow"', query)
+        self.assertIn("reduce $anyConditionCount = count($anyConditionToken) groupby $source", query)
+        self.assertIn("$anyConditionCount >= 2", query)
+        self.assertNotIn('has ontology-kind "worldview-manifest-active-pointer"', query)
+
     def test_typedb_any_group_check_uses_direct_existence_for_one_of_many(self):
         rule = next(
             item

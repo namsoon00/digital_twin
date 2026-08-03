@@ -70,6 +70,17 @@ def compact_reasoning_request_context(
                     result[symbol] = cleaned[:160]
         return dict(sorted(result.items()))
 
+    def symbol_family_map(value: object) -> Dict[str, List[str]]:
+        """Keep empty per-symbol families as a conservative routing marker."""
+        source = value if isinstance(value, Mapping) else {}
+        result: Dict[str, List[str]] = {}
+        for raw_symbol, raw_value in source.items():
+            symbol = str(raw_symbol or "").upper().strip()
+            if not symbol or (targets and symbol not in targets):
+                continue
+            result[symbol] = clean_list(raw_value, limit=30)
+        return dict(sorted(result.items()))
+
     raw_queue_pressure = values.get("queuePressure")
     queue_pressure = raw_queue_pressure if isinstance(raw_queue_pressure, Mapping) else {}
     raw_batch_plan = values.get("batchPlan")
@@ -127,6 +138,9 @@ def compact_reasoning_request_context(
         "triggers": clean_list(values.get("triggers"), limit=20),
         "factTypes": clean_list(values.get("factTypes"), limit=30),
         "requestedScopeFamilies": clean_list(values.get("requestedScopeFamilies"), limit=30),
+        "requestedScopeFamiliesBySymbol": symbol_family_map(
+            values.get("requestedScopeFamiliesBySymbol")
+        ),
         "targetSymbols": sorted(targets)[:80],
         "sourceObservedAt": str(values.get("sourceObservedAt") or "").strip()[:80],
         "changedFieldsBySymbol": symbol_map(values.get("changedFieldsBySymbol"), list_values=True),

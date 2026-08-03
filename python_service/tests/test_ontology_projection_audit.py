@@ -250,6 +250,10 @@ class OntologyProjectionAuditTests(unittest.TestCase):
             "triggers": ["market-data-update"],
             "factTypes": ["MarketQuote", "TechnicalIndicator"],
             "requestedScopeFamilies": ["market", "temporal"],
+            "requestedScopeFamiliesBySymbol": {
+                "005930": ["market"],
+                "000660": ["temporal"],
+            },
             "targetSymbols": ["005930", "000660"],
             "sourceObservedAt": "2026-07-24T01:00:00Z",
             "changedFieldsBySymbol": {
@@ -267,6 +271,7 @@ class OntologyProjectionAuditTests(unittest.TestCase):
         self.assertEqual(["005930"], context["targetSymbols"])
         self.assertEqual({"005930": ["price", "volume"]}, context["changedFieldsBySymbol"])
         self.assertEqual({"005930": "revision-1"}, context["factRevisionsBySymbol"])
+        self.assertEqual({"005930": ["market"]}, context["requestedScopeFamiliesBySymbol"])
         self.assertEqual(["005930"], context["observationFollowupSymbols"])
         self.assertNotIn("rawFacts", context)
 

@@ -5,7 +5,10 @@ from pathlib import Path
 
 sys.path.insert(0, str(Path(__file__).resolve().parents[1]))
 
-from digital_twin.application.ontology_reasoning_service import OntologyReasoningRunner
+from digital_twin.application.ontology_reasoning_service import (
+    OntologyReasoningRunner,
+    reasoning_request_provenance,
+)
 from digital_twin.domain.events import DomainEvent, ontology_reasoning_requested_event
 from digital_twin.domain.ontology_projection_audit import compact_reasoning_request_context
 from digital_twin.domain.ontology_reasoning_batch import adaptive_reasoning_batch_plan
@@ -26,6 +29,34 @@ class MemoryCursor:
 
 
 class AdaptiveOntologyReasoningBatchTests(unittest.TestCase):
+    def test_request_provenance_keeps_fact_families_bound_to_each_symbol(self):
+        market = DomainEvent(
+            name="ontology.reasoning.requested",
+            aggregate_id="market:KR",
+            payload={
+                "symbols": ["066570"],
+                "factTypes": ["MarketQuote", "TechnicalIndicator"],
+            },
+        )
+        research = DomainEvent(
+            name="ontology.reasoning.requested",
+            aggregate_id="research:US",
+            payload={
+                "symbols": ["AAPL"],
+                "factTypes": ["ResearchEvidence"],
+            },
+        )
+
+        provenance = reasoning_request_provenance(
+            [market, research],
+            target_symbols=["066570", "AAPL"],
+        )
+
+        self.assertEqual(
+            {"066570": ["market", "temporal"], "AAPL": ["evidence"]},
+            provenance["requestedScopeFamiliesBySymbol"],
+        )
+
     def test_persistent_runner_hot_reloads_only_operational_batch_controls(self):
         propagated = []
         runner = OntologyReasoningRunner(

@@ -26,6 +26,7 @@ from .ontology_change_impact import (
     symbol_scope_id,
 )
 from .ontology_contracts import OntologyEntity, OntologyEvidence, OntologyRelation, PortfolioOntology
+from .ontology_fact_slots import select_fact_slot_scope_ids
 from .ontology_projection_fingerprint import VOLATILE_LIFECYCLE_KEYS, stable_value
 from .ontology_worlds import world_scoped_scope_id
 
@@ -1615,6 +1616,7 @@ def select_target_scoped_manifest_patch(
     graph: PortfolioOntology,
     active_metadata: Mapping[str, object],
     target_symbols: Iterable[object],
+    fact_slot_plan: Mapping[str, object] = None,
 ) -> Dict[str, object]:
     """Select the incoming scopes that may replace an active manifest.
 
@@ -1652,6 +1654,7 @@ def select_target_scoped_manifest_patch(
         "retiredScopeIds": [],
         "removedRelevantScopeIds": [],
         "retainsMissingTargetScopes": retain_missing_target_scopes,
+        "factSlot": dict(fact_slot_plan or {}),
     }
     if not requested_symbols:
         return {
@@ -1711,6 +1714,12 @@ def select_target_scoped_manifest_patch(
         for scope_id, item in incoming.items()
         if is_requested_or_shared(scope_id) and changed_from_active(scope_id, item)
     }
+    fact_slot_selection = select_fact_slot_scope_ids(
+        incoming,
+        selected,
+        fact_slot_plan,
+    )
+    selected = set(fact_slot_selection.get("selectedScopeIds") or selected)
 
     # A target-scoped quote follow-up is a partial current-state input. Its
     # absent scope rows have no deletion meaning; they merely remain on the
@@ -1853,6 +1862,7 @@ def select_target_scoped_manifest_patch(
         "deferredScopeIds": sorted(deferred),
         "retiredScopeIds": retired_scope_ids,
         "removedRelevantScopeIds": removed_relevant_scopes,
+        "factSlot": fact_slot_selection,
     }
 
 
@@ -1950,10 +1960,16 @@ def merge_target_scoped_abox_manifest(
     graph: PortfolioOntology,
     active_metadata: Mapping[str, object],
     target_symbols: Iterable[object],
+    fact_slot_plan: Mapping[str, object] = None,
 ) -> Dict[str, object]:
     """Replace only target-symbol scopes while retaining active generations."""
 
-    selection = select_target_scoped_manifest_patch(graph, active_metadata, target_symbols)
+    selection = select_target_scoped_manifest_patch(
+        graph,
+        active_metadata,
+        target_symbols,
+        fact_slot_plan=fact_slot_plan,
+    )
     if not selection.get("applied"):
         return selection
     active = dict(active_metadata or {})
@@ -1982,6 +1998,7 @@ def merge_target_scoped_abox_manifest(
         "reusedActiveScopeIds": list(selection.get("reusedActiveScopeIds") or []),
         "deferredScopeIds": list(selection.get("deferredScopeIds") or []),
         "retiredScopeIds": list(selection.get("retiredScopeIds") or []),
+        "factSlot": dict(selection.get("factSlot") or {}),
     }
     graph.worldview["targetScopedManifestPatch"] = patch_metadata
     return {

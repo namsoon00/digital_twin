@@ -26,7 +26,10 @@ from digital_twin.domain.ontology_scopes import (
     apply_scoped_abox_identity,
     merge_target_scoped_abox_manifest,
 )
-from digital_twin.domain.ontology_native_rule_planning import native_rule_planner_topology
+from digital_twin.domain.ontology_native_rule_planning import (
+    merge_native_rule_planner_topology,
+    native_rule_planner_topology,
+)
 from digital_twin.domain.ontology_schema import default_tbox_metadata
 from digital_twin.domain.portfolio import AccountSnapshot, PortfolioSummary, Position, utc_now_iso
 from digital_twin.domain.ontology_worlds import market_world
@@ -55,6 +58,7 @@ from digital_twin.infrastructure.typedb_ontology import (
     TYPEDB_PROMOTED_TEXT_ATTRIBUTES,
     node_boxes,
     native_rule_evidence_read_index_from_rows,
+    merge_native_rule_evidence_read_index,
     normalize_native_rule_evidence_read_index,
     ontology_storage_id,
     relation_row_id,
@@ -74,6 +78,7 @@ from digital_twin.infrastructure.typedb_ontology import (
     typedb_native_rule_target_work_plan,
     typedb_native_rule_adaptive_target_parallelism_by_rule_id,
     typedb_native_rule_evidence_read_index_for_execution,
+    typedb_native_rule_evidence_read_allows_active_membership_recovery,
     typedb_native_rule_planner_topology_for_execution,
     materialize_typedb_native_matches,
     typedb_projection_preflight_graph_for_execution,
@@ -2890,6 +2895,150 @@ class TypeDBOntologyRepositoryTests(unittest.TestCase):
         invalid = dict(index)
         invalid["sourceStorageIdsBySourceId"] = {"stock:005930": "ontology-storage:wrong"}
         self.assertEqual("invalid", normalize_native_rule_evidence_read_index(invalid, topology)["status"])
+
+    def test_target_scoped_manifest_index_merge_retains_unrelated_active_symbols(self):
+        repository = TypeDBOntologyGraphRepository("127.0.0.1:1729")
+        active_graph = PortfolioOntology("active-topology")
+        active_graph.entities.extend([
+            OntologyEntity("stock:005930", "Samsung", "stock", {
+                "ontologyBox": "ABox", "symbol": "005930", "snapshotId": "active",
+            }),
+            OntologyEntity("price:005930", "Samsung price", "price-metric", {
+                "ontologyBox": "ABox", "symbol": "005930", "snapshotId": "active", "currentPrice": 70000,
+            }),
+            OntologyEntity("stock:000660", "SK hynix", "stock", {
+                "ontologyBox": "ABox", "symbol": "000660", "snapshotId": "active",
+            }),
+            OntologyEntity("price:000660", "SK hynix price", "price-metric", {
+                "ontologyBox": "ABox", "symbol": "000660", "snapshotId": "active", "currentPrice": 180000,
+            }),
+        ])
+        active_graph.relations.extend([
+            OntologyRelation("stock:005930", "price:005930", "HAS_PRICE", properties={
+                "ontologyBox": "ABox", "symbol": "005930", "snapshotId": "active",
+            }),
+            OntologyRelation("stock:000660", "price:000660", "HAS_PRICE", properties={
+                "ontologyBox": "ABox", "symbol": "000660", "snapshotId": "active",
+            }),
+        ])
+        incoming_graph = PortfolioOntology("incoming-topology")
+        incoming_graph.entities.extend([
+            OntologyEntity("stock:005930", "Samsung", "stock", {
+                "ontologyBox": "ABox", "symbol": "005930", "snapshotId": "incoming",
+            }),
+            OntologyEntity("price:005930", "Samsung price", "price-metric", {
+                "ontologyBox": "ABox", "symbol": "005930", "snapshotId": "incoming", "currentPrice": 71000,
+            }),
+        ])
+        incoming_graph.relations.append(OntologyRelation(
+            "stock:005930", "price:005930", "HAS_PRICE", properties={
+                "ontologyBox": "ABox", "symbol": "005930", "snapshotId": "incoming",
+            },
+        ))
+        active_topology = native_rule_planner_topology(active_graph)
+        incoming_topology = native_rule_planner_topology(incoming_graph)
+        topology_merge = merge_native_rule_planner_topology(
+            active_topology,
+            incoming_topology,
+            ["005930"],
+        )
+        active_nodes, active_relations = repository.graph_persistence_rows(active_graph)
+        incoming_nodes, incoming_relations = repository.graph_persistence_rows(incoming_graph)
+        index_merge = merge_native_rule_evidence_read_index(
+            native_rule_evidence_read_index_from_rows(active_nodes, active_relations),
+            active_topology,
+            native_rule_evidence_read_index_from_rows(incoming_nodes, incoming_relations),
+            incoming_topology,
+            topology_merge["topology"],
+            ["005930"],
+        )
+
+        self.assertEqual("ok", topology_merge["status"])
+        self.assertEqual({"000660", "005930"}, set(topology_merge["topology"]["sourceIdsBySymbol"]))
+        self.assertEqual("ok", index_merge["status"])
+        merged_index = index_merge["index"]
+        self.assertEqual(["stock:000660"], merged_index["sourceIdsBySymbol"]["000660"])
+        self.assertEqual("ok", normalize_native_rule_evidence_read_index(
+            merged_index,
+            topology_merge["topology"],
+        )["status"])
+
+    def test_partial_active_marker_falls_back_to_active_topology_for_missing_target(self):
+        graph = PortfolioOntology("partial-topology")
+        graph.entities.append(OntologyEntity("stock:005930", "Samsung", "stock", {
+            "ontologyBox": "ABox", "symbol": "005930",
+        }))
+        topology = native_rule_planner_topology(graph)
+
+        execution = typedb_native_rule_planner_topology_for_execution(
+            {"nativeRulePlannerTopology": topology},
+            topology,
+            ["000660"],
+        )
+
+        self.assertEqual("fallback", execution["status"])
+        self.assertEqual(["000660"], execution["missingSymbols"])
+
+    def test_missing_target_index_uses_only_the_explicit_active_membership_recovery(self):
+        allowed = {
+            "status": "fallback",
+            "source": "typedb-active-abox-membership-recovery",
+        }
+
+        self.assertTrue(typedb_native_rule_evidence_read_allows_active_membership_recovery(allowed))
+        self.assertTrue(typedb_native_rule_evidence_read_allows_active_membership_recovery({
+            "status": "verified",
+            "source": "active-manifest",
+        }))
+        self.assertFalse(typedb_native_rule_evidence_read_allows_active_membership_recovery({
+            "status": "fallback",
+            "source": "typedb-active-abox-manifest",
+        }))
+
+    def test_manifest_index_recovers_missing_matched_source_from_active_membership(self):
+        repository = TypeDBOntologyGraphRepository("127.0.0.1:1729")
+        rule = default_graph_inference_rules()[0]
+        native_match = {"matches": [{
+            "ruleId": rule.rule_id,
+            "sourceId": "stock:000660",
+            "sourceLabel": "SK hynix",
+        }]}
+        partial_index = {
+            "status": "verified",
+            "source": "active-manifest",
+            "index": {
+                "sourceIdsBySymbol": {"005930": ["stock:005930"]},
+                "sourceStorageIdsBySourceId": {"stock:005930": "ontology-storage:stock-005930"},
+                "relationStorageIdsBySymbol": {"005930": []},
+                "relationStorageIdsBySymbolAndType": {"005930": {}},
+            },
+        }
+        recovered_row = {
+            "id": "stock:000660",
+            "label": "SK hynix",
+            "kind": "stock",
+            "ontologyBox": "ABox",
+            "symbol": "000660",
+            "propertiesJson": json.dumps({"ontologyBox": "ABox", "symbol": "000660"}),
+        }
+
+        with patch.object(repository, "read_entity_rows_by_ids", return_value=[recovered_row]) as entity_read, \
+                patch.object(repository, "read_relation_rows_by_source_ids", return_value=[]) as relation_read:
+            graph = repository.load_graph_for_native_matches(
+                native_match,
+                [rule],
+                evidence_read_index=partial_index,
+                world_id="portfolio:local:default",
+            )
+
+        entity_read.assert_called_once()
+        relation_read.assert_called_once()
+        self.assertEqual("ok", graph.worldview["nativeEvidenceRead"]["status"])
+        self.assertEqual(
+            "manifest-storage-index-with-active-source-recovery",
+            graph.worldview["nativeEvidenceRead"]["mode"],
+        )
+        self.assertEqual(["stock:000660"], graph.worldview["nativeEvidenceRead"]["fallbackSourceIds"])
 
     def test_native_evidence_index_supports_direct_crypto_asset_rule_sources(self):
         repository = TypeDBOntologyGraphRepository("127.0.0.1:1729")

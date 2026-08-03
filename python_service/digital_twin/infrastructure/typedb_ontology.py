@@ -337,6 +337,26 @@ def typedb_native_rule_planner_topology_for_execution(
             "relationTypesBySymbol": {},
             "sourceIdsBySymbol": {},
         }
+    requested_symbols = clean_symbols_from_payload(target_symbols or [])
+    missing_requested_symbols = [
+        symbol
+        for symbol in requested_symbols
+        if not list((stored_full.get("sourceIdsBySymbol") or {}).get(symbol) or [])
+    ]
+    if missing_requested_symbols:
+        # A rolling deployment can encounter an older partial marker whose
+        # self-consistent topology lacks unrelated active symbols. Fall back
+        # to the bounded active-membership topology read for this target rather
+        # than treating a missing index entry as evidence that no rules apply.
+        return {
+            "status": "fallback",
+            "source": "typedb-active-abox-read",
+            "reason": "Active ABox planner topology does not cover requested symbols.",
+            "missingSymbols": missing_requested_symbols,
+            "topology": {},
+            "relationTypesBySymbol": {},
+            "sourceIdsBySymbol": {},
+        }
     stored = normalize_native_rule_planner_topology(
         active.get("nativeRulePlannerTopology"),
         target_symbols=target_symbols,
@@ -482,6 +502,173 @@ def native_rule_evidence_read_index_from_rows(
     }
 
 
+def native_rule_evidence_read_index_from_components(
+    source_ids_by_symbol: Dict[str, Iterable[str]],
+    source_storage_ids_by_source_id: Dict[str, object],
+    relation_storage_ids_by_symbol: Dict[str, Iterable[str]],
+    relation_storage_ids_by_symbol_and_type: Dict[str, Dict[str, Iterable[str]]] = None,
+) -> Dict[str, object]:
+    """Build the canonical persisted evidence index from verified components."""
+    sources = {
+        str(symbol or "").upper().strip(): sorted({
+            str(source_id or "").strip()
+            for source_id in source_ids or []
+            if str(source_id or "").strip()
+        })
+        for symbol, source_ids in dict(source_ids_by_symbol or {}).items()
+        if str(symbol or "").strip()
+    }
+    sources = {
+        symbol: source_ids
+        for symbol, source_ids in sorted(sources.items())
+        if source_ids
+    }
+    storage_ids = {
+        source_id: str(source_storage_ids_by_source_id.get(source_id) or "").strip()
+        for source_id in sorted({
+            source_id
+            for source_ids in sources.values()
+            for source_id in source_ids
+        })
+        if str(source_storage_ids_by_source_id.get(source_id) or "").strip()
+    }
+    relation_ids = {
+        symbol: sorted({
+            str(storage_id or "").strip()
+            for storage_id in list((relation_storage_ids_by_symbol or {}).get(symbol) or [])
+            if str(storage_id or "").strip()
+        })
+        for symbol in sources
+    }
+    typed_relation_ids = {
+        symbol: {
+            str(relation_type or "").upper().strip(): sorted({
+                str(storage_id or "").strip()
+                for storage_id in storage_ids or []
+                if str(storage_id or "").strip()
+            })
+            for relation_type, storage_ids in sorted(
+                dict((relation_storage_ids_by_symbol_and_type or {}).get(symbol) or {}).items()
+            )
+            if str(relation_type or "").strip()
+        }
+        for symbol in sources
+    }
+    payload = {
+        "version": NATIVE_RULE_EVIDENCE_READ_INDEX_VERSION,
+        "complete": True,
+        "source": "projection-persistence-rows",
+        "sourceIdsBySymbol": sources,
+        "sourceStorageIdsBySourceId": storage_ids,
+        "relationStorageIdsBySymbol": relation_ids,
+        "relationStorageIdsBySymbolAndType": typed_relation_ids,
+    }
+    canonical = json.dumps(payload, ensure_ascii=True, sort_keys=True, separators=(",", ":"))
+    return {
+        **payload,
+        "fingerprint": "native-rule-evidence-index:" + hashlib.sha256(canonical.encode("utf-8")).hexdigest()[:24],
+    }
+
+
+def merge_native_rule_evidence_read_index(
+    active_index: Dict[str, object],
+    active_topology: Dict[str, object],
+    incoming_index: Dict[str, object],
+    incoming_topology: Dict[str, object],
+    merged_topology: Dict[str, object],
+    replacement_symbols: Iterable[object] = None,
+) -> Dict[str, object]:
+    """Merge target-scoped physical identities into an active Manifest index.
+
+    The active and incoming indexes are each verified against their own
+    topology before their per-symbol rows are combined.  This avoids replacing
+    the active Manifest's unrelated source identities with the target-only
+    graph that happened to trigger the current projection.
+    """
+    active_topology_normalized = normalize_native_rule_planner_topology(active_topology)
+    incoming_topology_normalized = normalize_native_rule_planner_topology(incoming_topology)
+    merged_topology_normalized = normalize_native_rule_planner_topology(merged_topology)
+    if str(active_topology_normalized.get("status") or "") != "ok":
+        return {"status": "active-topology-unavailable", "reason": str(active_topology_normalized.get("reason") or "")}
+    if str(incoming_topology_normalized.get("status") or "") != "ok":
+        return {"status": "incoming-topology-invalid", "reason": str(incoming_topology_normalized.get("reason") or "")}
+    if str(merged_topology_normalized.get("status") or "") != "ok":
+        return {"status": "merged-topology-invalid", "reason": str(merged_topology_normalized.get("reason") or "")}
+    active = normalize_native_rule_evidence_read_index(active_index, active_topology_normalized)
+    incoming = normalize_native_rule_evidence_read_index(incoming_index, incoming_topology_normalized)
+    if str(active.get("status") or "") != "ok":
+        return {"status": "active-index-unavailable", "reason": str(active.get("reason") or "")}
+    if str(incoming.get("status") or "") != "ok":
+        return {"status": "incoming-index-invalid", "reason": str(incoming.get("reason") or "")}
+
+    requested = {
+        str(symbol or "").upper().strip()
+        for symbol in replacement_symbols or []
+        if str(symbol or "").strip()
+    }
+    active_sources = dict(active.get("sourceIdsBySymbol") or {})
+    incoming_sources = dict(incoming.get("sourceIdsBySymbol") or {})
+    incoming_symbols = set(incoming_sources)
+    replacements = {
+        symbol
+        for symbol in incoming_symbols
+        if not requested or symbol in requested or symbol not in active_sources
+    }
+    expected_sources = dict(merged_topology_normalized.get("sourceIdsBySymbol") or {})
+    source_ids_by_symbol: Dict[str, Iterable[str]] = {}
+    storage_ids_by_source_id: Dict[str, object] = {}
+    relation_ids_by_symbol: Dict[str, Iterable[str]] = {}
+    typed_relation_ids_by_symbol: Dict[str, Dict[str, Iterable[str]]] = {}
+    for symbol, expected_ids in expected_sources.items():
+        selected = incoming if symbol in replacements else active
+        actual_ids = sorted({str(item or "").strip() for item in selected.get("sourceIdsBySymbol", {}).get(symbol, []) or [] if str(item or "").strip()})
+        expected_ids = sorted({str(item or "").strip() for item in expected_ids or [] if str(item or "").strip()})
+        if actual_ids != expected_ids:
+            return {
+                "status": "source-coverage-mismatch",
+                "reason": "Merged evidence index source coverage does not match the merged planner topology.",
+                "symbol": symbol,
+                "replacedSymbols": sorted(replacements),
+            }
+        source_ids_by_symbol[symbol] = actual_ids
+        selected_storage = dict(selected.get("sourceStorageIdsBySourceId") or {})
+        for source_id in actual_ids:
+            storage_id = str(selected_storage.get(source_id) or "").strip()
+            if not storage_id:
+                return {
+                    "status": "missing-source-storage-id",
+                    "reason": "Merged evidence index is missing a source storage identity.",
+                    "symbol": symbol,
+                    "sourceId": source_id,
+                }
+            storage_ids_by_source_id[source_id] = storage_id
+        relation_ids_by_symbol[symbol] = list(
+            (selected.get("relationStorageIdsBySymbol") or {}).get(symbol) or []
+        )
+        typed_relation_ids_by_symbol[symbol] = dict(
+            (selected.get("relationStorageIdsBySymbolAndType") or {}).get(symbol) or {}
+        )
+    index = native_rule_evidence_read_index_from_components(
+        source_ids_by_symbol,
+        storage_ids_by_source_id,
+        relation_ids_by_symbol,
+        typed_relation_ids_by_symbol,
+    )
+    verified = normalize_native_rule_evidence_read_index(index, merged_topology_normalized)
+    if str(verified.get("status") or "") != "ok":
+        return {
+            "status": "merged-index-invalid",
+            "reason": str(verified.get("reason") or "Merged evidence index is invalid."),
+        }
+    return {
+        "status": "ok",
+        "reason": "",
+        "index": index,
+        "replacedSymbols": sorted(replacements),
+        "mergedSymbolCount": len(source_ids_by_symbol),
+    }
+
+
 def normalize_native_rule_evidence_read_index(
     value: Dict[str, object] = None,
     planner_topology: Dict[str, object] = None,
@@ -611,6 +798,20 @@ def typedb_native_rule_evidence_read_index_for_execution(
     """Return only an active-Manifest verified evidence-read index."""
     active = dict(active_abox_metadata or {})
     topology = normalize_native_rule_planner_topology(active.get("nativeRulePlannerTopology"))
+    requested_symbols = clean_symbols_from_payload(target_symbols or [])
+    missing_requested_symbols = [
+        symbol
+        for symbol in requested_symbols
+        if not list((topology.get("sourceIdsBySymbol") or {}).get(symbol) or [])
+    ] if str(topology.get("status") or "") == "ok" else []
+    if missing_requested_symbols:
+        return {
+            "status": "fallback",
+            "source": "typedb-active-abox-membership-recovery",
+            "reason": "Active ABox evidence index does not cover requested symbols.",
+            "missingSymbols": missing_requested_symbols,
+            "index": {},
+        }
     normalized = normalize_native_rule_evidence_read_index(
         active.get("nativeRuleEvidenceReadIndex"),
         planner_topology=topology,
@@ -630,6 +831,26 @@ def typedb_native_rule_evidence_read_index_for_execution(
         "fingerprint": str(normalized.get("fingerprint") or ""),
         "index": normalized,
     }
+
+
+def typedb_native_rule_evidence_read_allows_active_membership_recovery(
+    evidence_read_index: Dict[str, object] = None,
+) -> bool:
+    """Allow only the explicit partial-manifest recovery read path.
+
+    A missing target in an otherwise valid historical Manifest topology is a
+    known rolling-deployment condition. The active-membership read is bounded
+    to that target and the active ABox pointer, so it is safe to use for the
+    explanation graph. Other invalid indexes remain fail-closed.
+    """
+    value = dict(evidence_read_index or {}) if isinstance(evidence_read_index, dict) else {}
+    return (
+        str(value.get("status") or "") == "verified"
+        or (
+            str(value.get("status") or "") == "fallback"
+            and str(value.get("source") or "") == "typedb-active-abox-membership-recovery"
+        )
+    )
 
 
 def typedb_projection_preflight_graph_for_execution(
@@ -3665,16 +3886,33 @@ class ScopedABoxManifestMixin:
             "tenantId": str(worldview.get("tenantId") or ""),
             "accountId": str(worldview.get("accountId") or graph.portfolio_id or ""),
         }
-        # This derives only physical persistence identities from the same
-        # complete graph that is being staged.  It is stored with the
-        # immutable Manifest marker so native-rule materialization can later
-        # read exactly the active evidence rows without joining every retained
-        # scope pointer and historic ABox generation.
+        # Target-scoped graphs contain only the current mailbox subject. Their
+        # index is prepared against the retained active Manifest before this
+        # marker is written. A full graph can still derive the same index here.
         all_node_rows, all_relation_rows = self.graph_persistence_rows(graph)
-        evidence_read_index = native_rule_evidence_read_index_from_rows(
+        local_evidence_read_index = native_rule_evidence_read_index_from_rows(
             all_node_rows,
             all_relation_rows,
         )
+        planner_topology = dict(worldview.get("nativeRulePlannerTopology") or {})
+        prepared_index = dict(worldview.get("nativeRuleEvidenceReadIndex") or {})
+        prepared = normalize_native_rule_evidence_read_index(
+            prepared_index,
+            planner_topology=planner_topology,
+        )
+        local = normalize_native_rule_evidence_read_index(
+            local_evidence_read_index,
+            planner_topology=planner_topology,
+        )
+        if str(prepared.get("status") or "") == "ok":
+            evidence_read_index = prepared_index
+        elif str(local.get("status") or "") == "ok":
+            evidence_read_index = local_evidence_read_index
+        else:
+            # Do not persist a self-consistent partial index against a merged
+            # Manifest. The next execution uses active-membership recovery
+            # rather than treating omitted subjects as absent facts.
+            evidence_read_index = {}
         marker_scope_id = "manifest:" + manifest_id
         marker = OntologyEntity(
             entity_id="worldview-manifest-marker:" + manifest_id,
@@ -3709,12 +3947,88 @@ class ScopedABoxManifestMixin:
                 "inferenceImpactPlan": dict(worldview.get("inferenceImpactPlan") or {}),
                 "nativeRulePlannerTopology": dict(worldview.get("nativeRulePlannerTopology") or {}),
                 "nativeRuleEvidenceReadIndex": evidence_read_index,
+                "nativeRulePlannerTopologyMerge": dict(
+                    worldview.get("nativeRulePlannerTopologyMerge") or {}
+                ),
+                "nativeRuleEvidenceReadIndexMerge": dict(
+                    worldview.get("nativeRuleEvidenceReadIndexMerge") or {}
+                ),
+                "factSlotProjection": dict(worldview.get("factSlotProjection") or {}),
                 "changedScopeIds": sorted({str(item or "") for item in changed_scope_ids if str(item or "")}),
                 "projectionStatus": "complete",
                 "scopedAboxManifestVersion": SCOPED_ABOX_MANIFEST_VERSION,
             },
         )
         return PortfolioOntology(str(graph.portfolio_id or "typedb-scoped-manifest"), entities=[marker])
+
+    def prepare_scoped_manifest_native_rule_indexes(
+        self,
+        graph: PortfolioOntology,
+        active_metadata: Dict[str, object] = None,
+    ) -> Dict[str, object]:
+        """Bind a staged target graph to the complete active Manifest index.
+
+        This is control-plane persistence only. It never evaluates RuleBox
+        conditions. A failed merge leaves the marker without an index so the
+        runtime falls back to active-membership reads for correctness.
+        """
+        worldview = dict(getattr(graph, "worldview", {}) or {})
+        topology = dict(worldview.get("nativeRulePlannerTopology") or {})
+        incoming_topology = dict(
+            worldview.get("nativeRulePlannerTopologyIncoming")
+            or topology
+        )
+        patch = dict(worldview.get("targetScopedManifestPatch") or {})
+        target_symbols = clean_symbols_from_payload(patch.get("targetSymbols") or [])
+        node_rows, relation_rows = self.graph_persistence_rows(graph)
+        incoming_index = native_rule_evidence_read_index_from_rows(node_rows, relation_rows)
+        target_scoped = (
+            str(patch.get("status") or "") == "applied"
+            and bool(target_symbols)
+            and bool(worldview.get("nativeRulePlannerTopologyIncoming"))
+        )
+        if not target_scoped:
+            local = normalize_native_rule_evidence_read_index(
+                incoming_index,
+                planner_topology=topology,
+            )
+            if str(local.get("status") or "") == "ok":
+                graph.worldview["nativeRuleEvidenceReadIndex"] = incoming_index
+                graph.worldview["nativeRuleEvidenceReadIndexMerge"] = {
+                    "status": "local-complete",
+                    "mergedSymbolCount": len(incoming_index.get("sourceIdsBySymbol") or {}),
+                }
+                return dict(graph.worldview["nativeRuleEvidenceReadIndexMerge"])
+            graph.worldview.pop("nativeRuleEvidenceReadIndex", None)
+            return {
+                "status": "local-index-topology-mismatch",
+                "reason": str(local.get("reason") or ""),
+                "mergedSymbolCount": 0,
+            }
+
+        merged = merge_native_rule_evidence_read_index(
+            dict((active_metadata or {}).get("nativeRuleEvidenceReadIndex") or {}),
+            dict((active_metadata or {}).get("nativeRulePlannerTopology") or {}),
+            incoming_index,
+            incoming_topology,
+            topology,
+            target_symbols,
+        )
+        if str(merged.get("status") or "") != "ok":
+            graph.worldview.pop("nativeRuleEvidenceReadIndex", None)
+            graph.worldview["nativeRuleEvidenceReadIndexMerge"] = {
+                "status": str(merged.get("status") or "failed"),
+                "reason": str(merged.get("reason") or "")[:220],
+                "replacedSymbols": list(merged.get("replacedSymbols") or []),
+            }
+            return dict(graph.worldview["nativeRuleEvidenceReadIndexMerge"])
+        graph.worldview["nativeRuleEvidenceReadIndex"] = dict(merged.get("index") or {})
+        graph.worldview["nativeRuleEvidenceReadIndexMerge"] = {
+            "status": "merged",
+            "replacedSymbols": list(merged.get("replacedSymbols") or []),
+            "mergedSymbolCount": int(merged.get("mergedSymbolCount") or 0),
+        }
+        return dict(graph.worldview["nativeRuleEvidenceReadIndexMerge"])
 
     def replace_scoped_manifest_marker_graph(
         self,
@@ -4556,10 +4870,22 @@ class ScopedABoxManifestMixin:
                 "reason": "A scoped ABox Manifest must change whenever its scope generation changes.",
                 "writeLeaseRelease": release,
             }
+        native_manifest_index_started = time.monotonic()
+        native_manifest_index = self.prepare_scoped_manifest_native_rule_indexes(
+            graph,
+            active_before,
+        )
         node_rows, relation_rows = self.scoped_abox_persistence_rows(graph, changed_scope_ids)
         scope_rows = {str(item.get("scopeId") or ""): item for item in scope_plan}
         verification: Dict[str, object] = {}
-        timing: Dict[str, object] = {"startedAt": utc_now()}
+        timing: Dict[str, object] = {
+            "startedAt": utc_now(),
+            "nativeManifestEvidenceIndex": native_manifest_index,
+            "nativeManifestEvidenceIndexMs": round(
+                (time.monotonic() - native_manifest_index_started) * 1000,
+                1,
+            ),
+        }
         save_started_at = time.monotonic()
         imported = self.driver_imports()
         if imported[0] is None:
@@ -17568,7 +17894,13 @@ relation ontology-assertion,
                 item for item in native_match_result.get("matches") or []
                 if isinstance(item, dict) and str(item.get("sourceId") or "").strip()
             ]
-            if scoped_active_abox and native_matches and str(evidence_read_index.get("status") or "") != "verified":
+            if (
+                scoped_active_abox
+                and native_matches
+                and not typedb_native_rule_evidence_read_allows_active_membership_recovery(
+                    evidence_read_index
+                )
+            ):
                 return {
                     "configured": True,
                     "status": "evidence-read-index-unavailable",
@@ -19169,6 +19501,72 @@ relation ontology-assertion,
                     "reason": "Legacy active-membership source lookup failed: " + str(error)[:180],
                 })
                 rows = []
+        if indexed_read and source_ids:
+            loaded_source_ids = {
+                str(row.get("id") or "").strip()
+                for row in rows
+                if str(row.get("id") or "").strip()
+            }
+            recovery_source_ids = sorted(set(source_ids) - loaded_source_ids)
+            if recovery_source_ids:
+                # The Manifest marker can be from a rolling deployment where
+                # a target-only graph overwrote a self-consistent but partial
+                # index. Recover only the matched active subjects instead of
+                # invalidating the whole inference generation.
+                recovery_error = ""
+                try:
+                    recovery_rows = typedb_call_for_world(
+                        self.read_entity_rows_by_ids,
+                        recovery_source_ids,
+                        ["ABox"],
+                        world_id=world_id,
+                    )
+                    rows = list({
+                        str(row.get("id") or ""): row
+                        for row in [*rows, *recovery_rows]
+                        if str(row.get("id") or "").strip()
+                    }.values())
+                    recovery_relations = typedb_call_for_world(
+                        self.read_relation_rows_by_source_ids,
+                        source_ids,
+                        ["ABox"],
+                        evidence_relation_types,
+                        include_incoming=include_incoming_relations,
+                        world_id=world_id,
+                    )
+                    relation_rows = list({
+                        str(row.get("id") or ""): row
+                        for row in [*relation_rows, *recovery_relations]
+                        if str(row.get("id") or "").strip()
+                    }.values())
+                except Exception as error:  # noqa: BLE001 - retain an explicit incomplete status on recovery failure.
+                    recovery_error = str(error)[:180]
+                loaded_after_recovery = {
+                    str(row.get("id") or "").strip()
+                    for row in rows
+                    if str(row.get("id") or "").strip()
+                }
+                remaining = sorted(set(source_ids) - loaded_after_recovery)
+                if not recovery_error and not remaining:
+                    evidence_read.update({
+                        "status": "ok",
+                        "mode": "manifest-storage-index-with-active-source-recovery",
+                        "source": "active-manifest+active-membership-recovery",
+                        "reason": "",
+                        "fallbackSourceIds": recovery_source_ids,
+                        "relationReadScope": "active-membership-recovery",
+                    })
+                else:
+                    evidence_read.update({
+                        "status": "incomplete" if not recovery_error else "error",
+                        "reason": (
+                            "Active-membership recovery did not return every matched stock."
+                            if not recovery_error
+                            else "Active-membership recovery failed: " + recovery_error
+                        ),
+                        "missingSourceIds": remaining,
+                        "fallbackSourceIds": recovery_source_ids,
+                    })
         rows_by_id = {str(row.get("id") or ""): row for row in rows}
         graph = PortfolioOntology("typedb-native-match-model")
         graph.worldview["worldId"] = str(world_id or "")

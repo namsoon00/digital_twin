@@ -111,6 +111,7 @@ def reasoning_request_provenance(
     }
     request_event_ids, source_event_ids, triggers, fact_types, observed_at, account_ids = set(), set(), set(), set(), [], set()
     changed_fields: Dict[str, set] = {}
+    fact_families_by_symbol: Dict[str, set] = {}
     revisions: Dict[str, str] = {}
     crypto_transitions: Dict[str, Dict[str, object]] = {}
     verified_source_snapshot: Dict[str, object] = {}
@@ -134,10 +135,12 @@ def reasoning_request_provenance(
             clean_account_id = str(account_id or "").strip()
             if clean_account_id:
                 account_ids.add(clean_account_id)
+        event_fact_types = []
         for fact_type in payload.get("factTypes") or []:
             clean_fact_type = str(fact_type or "").strip()
             if clean_fact_type:
                 fact_types.add(clean_fact_type)
+                event_fact_types.append(clean_fact_type)
         for key in ["sourceObservedAt", "sourceAsOf", "observedAt", "generatedAt", "collectedAt"]:
             stamp = str(payload.get(key) or "").strip()
             if stamp:
@@ -147,6 +150,31 @@ def reasoning_request_provenance(
         raw_fields = raw_fields if isinstance(raw_fields, dict) else {}
         raw_revisions = payload.get("factRevisionsBySymbol")
         raw_revisions = raw_revisions if isinstance(raw_revisions, dict) else {}
+        # A coherent execution batch can hold a quote event for one symbol
+        # and a research event for another. Keep the event fact family bound
+        # to its actual subjects so the scoped ABox writer does not turn the
+        # batch-wide union into an unrelated write for every selected symbol.
+        # This remains scheduling provenance only; TypeDB evaluates RuleBox
+        # conditions from the persisted facts, never from this mapping.
+        event_scope_symbols = set(event_symbols(event))
+        event_scope_symbols.update(
+            str(symbol or "").upper().strip()
+            for symbol in list(raw_fields) + list(raw_revisions)
+            if str(symbol or "").strip()
+        )
+        if targets:
+            event_scope_symbols.intersection_update(targets)
+        elif len(event_scope_symbols) == 1:
+            # Keep direct callers without an explicit target list useful
+            # while avoiding an unbounded global attribution.
+            targets.update(event_scope_symbols)
+        if not event_scope_symbols and len(targets) == 1:
+            event_scope_symbols.update(targets)
+        event_families = requested_scope_families_for_event_fact_types(event_fact_types)
+        for symbol in sorted(event_scope_symbols):
+            # Retain an empty value as an explicit conservative marker for
+            # an event whose fact family is unknown to this runtime.
+            fact_families_by_symbol.setdefault(symbol, set()).update(event_families)
         barrier = payload.get("verifiedSourceSnapshot")
         barrier = barrier if isinstance(barrier, dict) else {}
         if barrier:
@@ -194,6 +222,11 @@ def reasoning_request_provenance(
         "factTypes": ordered_fact_types[:30],
         "accountIds": sorted(account_ids)[:40],
         "requestedScopeFamilies": requested_scope_families_for_event_fact_types(ordered_fact_types),
+        "requestedScopeFamiliesBySymbol": {
+            symbol: sorted(values)[:30]
+            for symbol, values in sorted(fact_families_by_symbol.items())
+            if not targets or symbol in targets
+        },
         "targetSymbols": sorted(targets)[:80],
         "sourceObservedAt": max(observed_at) if observed_at else "",
         "changedFieldsBySymbol": {
@@ -4447,6 +4480,11 @@ class OntologyReasoningRunner:
                 "selectedIncomingScopeCount": int(float_value(target_patch.get("selectedIncomingScopeCount"), 0.0)),
                 "reusedActiveScopeCount": int(float_value(target_patch.get("reusedActiveScopeCount"), 0.0)),
                 "deferredScopeCount": int(float_value(target_patch.get("deferredScopeCount"), 0.0)),
+                "factSlotStatus": str(target_patch.get("factSlotStatus") or ""),
+                "factSlotSelectedScopeCount": int(float_value(target_patch.get("factSlotSelectedScopeCount"), 0.0)),
+                "factSlotDeferredScopeCount": int(float_value(target_patch.get("factSlotDeferredScopeCount"), 0.0)),
+                "factSlotFamilies": list(target_patch.get("factSlotFamilies") or [])[:20],
+                "factSlotFallbackReason": str(target_patch.get("factSlotFallbackReason") or ""),
             },
             "replayValidation": {
                 "status": str(replay.get("status") or ""),

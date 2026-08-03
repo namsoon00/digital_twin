@@ -167,6 +167,11 @@ class OntologyDiagnosticsService:
                     "selectedIncomingScopeCount",
                     "reusedActiveScopeCount",
                     "deferredScopeCount",
+                    "factSlotStatus",
+                    "factSlotSelectedScopeCount",
+                    "factSlotDeferredScopeCount",
+                    "factSlotFamilies",
+                    "factSlotFallbackReason",
                     "fullReconcileMinutes",
                 ])
             impact_diagnostics = latest_runtime_scope.get("impactDiagnostics")

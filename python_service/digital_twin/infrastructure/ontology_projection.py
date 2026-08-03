@@ -70,9 +70,11 @@ from ..domain.ontology_validator import validate_ontology
 from ..domain.portfolio_ontology_builder import build_portfolio_ontology
 from ..domain.portfolio_ontology_coverage import CATEGORY_RELATIONS
 from ..domain.ontology_native_rule_planning import (
+    merge_native_rule_planner_topology,
     native_rule_planner_manifest_fingerprint,
     native_rule_planner_topology,
 )
+from ..domain.ontology_fact_slots import build_fact_slot_projection_plan
 from ..domain.portfolio_ontology_temporal_concepts import parse_temporal_windows
 from ..domain.portfolio import AccountSnapshot
 from ..domain.investment_brain import decision_episode_ontology_context
@@ -1157,6 +1159,7 @@ class PortfolioOntologyProjectionRecorder:
                     persistence_graph,
                     active_abox,
                     target_scoped_patch.get("targetSymbols") or [],
+                    fact_slot_plan=target_scoped_patch.get("factSlotPlan") or {},
                 )
                 runtime_stages["targetScopedManifestPatchMs"] = int(
                     (time.perf_counter() - target_patch_started) * 1000
@@ -1172,6 +1175,32 @@ class PortfolioOntologyProjectionRecorder:
                     # deferred symbols. The persisted identity must describe
                     # the merged active manifest, not facts intentionally held
                     # for their own target cycle or the periodic reconciliation.
+                    incoming_planner_topology = dict(planner_topology or {})
+                    topology_merge = merge_native_rule_planner_topology(
+                        active_abox.get("nativeRulePlannerTopology"),
+                        incoming_planner_topology,
+                        target_scoped_patch.get("targetSymbols") or [],
+                    )
+                    merged_topology_available = str(topology_merge.get("status") or "") == "ok"
+                    planner_topology = dict(
+                        topology_merge.get("topology") if merged_topology_available else incoming_planner_topology
+                    )
+                    if merged_topology_available:
+                        persistence_graph.worldview["nativeRulePlannerTopologyIncoming"] = incoming_planner_topology
+                    else:
+                        # Older markers may predate the structural index. Keep
+                        # this target correct through active-membership
+                        # fallback, then establish the complete merged index on
+                        # the next eligible scoped or full projection.
+                        persistence_graph.worldview.pop("nativeRulePlannerTopologyIncoming", None)
+                    persistence_graph.worldview["nativeRulePlannerTopology"] = planner_topology
+                    persistence_graph.worldview["nativeRulePlannerTopologyMerge"] = {
+                        key: topology_merge.get(key)
+                        for key in [
+                            "status", "reason", "replacedSymbols", "retainedSymbols",
+                            "activeSymbolCount", "incomingSymbolCount", "mergedSymbolCount",
+                        ]
+                    }
                     material_fingerprint = native_rule_planner_manifest_fingerprint(
                         applied_target_patch.get("scopeManifestFingerprint"),
                         planner_topology,
@@ -1201,6 +1230,21 @@ class PortfolioOntologyProjectionRecorder:
                         ),
                         "retiredScopeIds": list(
                             applied_target_patch.get("retiredScopeIds") or []
+                        ),
+                        "factSlotStatus": str(
+                            (applied_target_patch.get("factSlot") or {}).get("status") or ""
+                        ),
+                        "factSlotSelectedScopeCount": len(
+                            (applied_target_patch.get("factSlot") or {}).get("selectedScopeIds") or []
+                        ),
+                        "factSlotDeferredScopeCount": len(
+                            (applied_target_patch.get("factSlot") or {}).get("deferredScopeIds") or []
+                        ),
+                        "factSlotFamilies": list(
+                            (applied_target_patch.get("factSlot") or {}).get("slotFamilies") or []
+                        )[:20],
+                        "factSlotFallbackReason": str(
+                            (applied_target_patch.get("factSlot") or {}).get("fallbackReason") or ""
                         ),
                         "fullReconcileMinutes": self.scoped_full_reconcile_minutes(),
                         "fullReconcileDeferred": bool(
@@ -1333,6 +1377,13 @@ class PortfolioOntologyProjectionRecorder:
             # Preserve the exact incremental path or safe fallback in the
             # manifest, so operational diagnostics do not infer it later.
             persistence_graph.worldview["targetScopedManifestPatch"] = dict(target_scoped_patch)
+            persistence_graph.worldview["factSlotProjection"] = {
+                "status": str(target_scoped_patch.get("factSlotStatus") or "not-applied"),
+                "selectedScopeCount": int(target_scoped_patch.get("factSlotSelectedScopeCount") or 0),
+                "deferredScopeCount": int(target_scoped_patch.get("factSlotDeferredScopeCount") or 0),
+                "slotFamilies": list(target_scoped_patch.get("factSlotFamilies") or [])[:20],
+                "fallbackReason": str(target_scoped_patch.get("factSlotFallbackReason") or ""),
+            }
             if str(target_scoped_patch.get("status") or "") == "applied":
                 full_reconcile_at = str(
                     active_abox.get("lastFullScopeReconcileAt")
@@ -5146,6 +5197,13 @@ class PortfolioOntologyProjectionRecorder:
             "fullReconcileDeferralReason": "",
             "queuePressure": self.reasoning_queue_pressure(reasoning_context),
             "fallbackReason": "",
+            "factSlotPlan": build_fact_slot_projection_plan(
+                inferred,
+                preliminary.get("requestedFactFamilies") or [],
+                requested_fact_families_by_symbol=(reasoning_context or {}).get(
+                    "requestedScopeFamiliesBySymbol"
+                ) or {},
+            ),
         }
         # A reasoning worker can intentionally schedule one subject even when
         # a shared macro or portfolio fact also changed. Persist that subject

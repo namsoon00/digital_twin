@@ -168,3 +168,106 @@ def normalize_native_rule_planner_topology(
             for symbol in selected
         },
     }
+
+
+def merge_native_rule_planner_topology(
+    active_topology: Mapping[str, object] = None,
+    incoming_topology: Mapping[str, object] = None,
+    replacement_symbols: Iterable[object] = None,
+) -> Dict[str, object]:
+    """Merge a target-scoped topology into the active Manifest topology.
+
+    A target-scoped ABox projection only contains the symbols selected for the
+    current mailbox turn.  Its structural index must therefore replace those
+    symbols while retaining every other active Manifest subject.  This is a
+    persistence contract only; it does not inspect rule conditions or choose
+    an investment outcome.
+    """
+    active = normalize_native_rule_planner_topology(active_topology)
+    incoming = normalize_native_rule_planner_topology(incoming_topology)
+    if str(incoming.get("status") or "") != "ok":
+        return {
+            "status": "invalid-incoming",
+            "reason": str(incoming.get("reason") or "Incoming planner topology is invalid."),
+            "topology": {},
+            "replacedSymbols": [],
+            "retainedSymbols": [],
+        }
+    if str(active.get("status") or "") != "ok":
+        return {
+            "status": "active-unavailable",
+            "reason": str(active.get("reason") or "Active planner topology is unavailable."),
+            "topology": {},
+            "replacedSymbols": [],
+            "retainedSymbols": [],
+        }
+
+    requested = {
+        _clean_symbol(symbol)
+        for symbol in replacement_symbols or []
+        if _clean_symbol(symbol)
+    }
+    active_sources = dict(active.get("sourceIdsBySymbol") or {})
+    active_relations = dict(active.get("relationTypesBySymbol") or {})
+    incoming_sources = dict(incoming.get("sourceIdsBySymbol") or {})
+    incoming_relations = dict(incoming.get("relationTypesBySymbol") or {})
+    incoming_symbols = set(incoming_sources) | set(incoming_relations)
+
+    # A partial input may intentionally omit a source while it waits for a
+    # follow-up observation.  Do not erase the active source in that case.
+    # An explicit retirement is handled by the scoped Manifest plan instead.
+    replaced = {
+        symbol
+        for symbol in incoming_symbols
+        if not requested or symbol in requested or symbol not in active_sources
+    }
+    merged_sources = {
+        symbol: list(values or [])
+        for symbol, values in active_sources.items()
+        if symbol not in replaced
+    }
+    merged_relations = {
+        symbol: list(values or [])
+        for symbol, values in active_relations.items()
+        if symbol not in replaced
+    }
+    for symbol in replaced:
+        merged_sources[symbol] = list(incoming_sources.get(symbol) or [])
+        merged_relations[symbol] = list(incoming_relations.get(symbol) or [])
+
+    payload = {
+        "version": NATIVE_RULE_PLANNER_TOPOLOGY_VERSION,
+        "complete": True,
+        "source": "projection-graph",
+        "sourceIdsBySymbol": {
+            symbol: sorted({str(value or "").strip() for value in values or [] if str(value or "").strip()})
+            for symbol, values in sorted(merged_sources.items())
+        },
+        "relationTypesBySymbol": {
+            symbol: _normalized_relation_types(merged_relations.get(symbol) or [])
+            for symbol in sorted(merged_sources)
+        },
+    }
+    topology = {
+        **payload,
+        "fingerprint": _topology_fingerprint(payload),
+    }
+    verified = normalize_native_rule_planner_topology(topology)
+    if str(verified.get("status") or "") != "ok":
+        return {
+            "status": "invalid-merged",
+            "reason": str(verified.get("reason") or "Merged planner topology is invalid."),
+            "topology": {},
+            "replacedSymbols": sorted(replaced),
+            "retainedSymbols": sorted(set(merged_sources) - replaced),
+        }
+    return {
+        "status": "ok",
+        "reason": "",
+        "topology": topology,
+        "replacedSymbols": sorted(replaced),
+        "retainedSymbols": sorted(set(merged_sources) - replaced),
+        "activeSymbolCount": len(active_sources),
+        "incomingSymbolCount": len(incoming_symbols),
+        "mergedSymbolCount": len(merged_sources),
+    }

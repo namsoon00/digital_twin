@@ -108,6 +108,24 @@ class OntologyRuleboxPrewarmRunnerTests(unittest.TestCase):
         self.assertEqual("ok", result["status"])
         self.assertEqual([True], repository.calls)
 
+    def test_compatibility_mode_quarantines_automatic_schema_compilation_when_idle(self):
+        repository = FakeRepository()
+        runner = OntologyRuleboxPrewarmRunner(
+            repository,
+            settings={
+                "ontologyRuleboxPrewarmEnabled": "1",
+                "ontologyRuleboxPrewarmRequireReadyForInference": "0",
+                "typedbNativeRuleDirectQueryFallbackEnabled": "1",
+            },
+            reasoning_queue_probe=lambda: {"status": "idle", "effectivePendingCount": 0},
+        )
+
+        result = runner.run_once()
+
+        self.assertEqual("deferred-direct-typeql-fallback", result["status"])
+        self.assertTrue(result["automaticSchemaCompilationSuppressed"])
+        self.assertEqual([], repository.calls)
+
     def test_defers_compilation_while_live_reasoning_is_pending(self):
         repository = FakeRepository()
         runner = OntologyRuleboxPrewarmRunner(

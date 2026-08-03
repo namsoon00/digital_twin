@@ -6665,6 +6665,8 @@ class TypeDBOntologyGraphRepository(GraphStoreOntologyRowMapperMixin, ScopedABox
         self._rulebox_snapshot_cache_result: Dict[str, object] = {}
         self._query_metrics: List[Dict[str, object]] = []
         self._query_metrics_lock = threading.Lock()
+        self._schema_function_sync_trace: Dict[str, object] = {}
+        self._schema_function_sync_trace_lock = threading.RLock()
         # Nested repository calls in one worker must share the coordinator
         # acquired by their outer projection. A thread-local stack keeps that
         # adoption local to the request and never bypasses the durable TypeDB
@@ -6761,6 +6763,89 @@ class TypeDBOntologyGraphRepository(GraphStoreOntologyRowMapperMixin, ScopedABox
             "totalDurationMs": round(total_ms, 2),
             "slowQueries": slow,
         }
+
+    def begin_schema_function_sync_trace(self, world_id: str, rule_count: int) -> None:
+        namespace = self.schema_function_prewarm_namespace(world_id)
+        with self._schema_function_sync_trace_lock:
+            self._schema_function_sync_trace = {
+                "namespace": namespace,
+                "worldId": str(world_id or ""),
+                "ruleCount": max(0, int(rule_count or 0)),
+                "startedAt": utc_now(),
+                "currentStage": "initializing",
+                "lastStage": "",
+                "failedStage": "",
+                "stages": [],
+                "_startedMonotonic": time.perf_counter(),
+            }
+
+    def update_schema_function_sync_trace(self, **metadata) -> None:
+        with self._schema_function_sync_trace_lock:
+            if not self._schema_function_sync_trace:
+                return
+            for key, value in metadata.items():
+                self._schema_function_sync_trace[str(key)] = value
+
+    def run_schema_function_sync_stage(self, stage: str, operation):
+        stage_name = str(stage or "unknown")
+        started_at = time.perf_counter()
+        with self._schema_function_sync_trace_lock:
+            if self._schema_function_sync_trace:
+                self._schema_function_sync_trace["currentStage"] = stage_name
+        try:
+            result = operation()
+        except Exception as error:
+            duration_ms = int((time.perf_counter() - started_at) * 1000)
+            with self._schema_function_sync_trace_lock:
+                if self._schema_function_sync_trace:
+                    self._schema_function_sync_trace["currentStage"] = ""
+                    self._schema_function_sync_trace["lastStage"] = stage_name
+                    self._schema_function_sync_trace["failedStage"] = stage_name
+                    self._schema_function_sync_trace["failureReasonCode"] = typedb_error_code(error)
+                    self._schema_function_sync_trace["failureReason"] = str(error)[:220]
+                    self._schema_function_sync_trace.setdefault("stages", []).append({
+                        "stage": stage_name,
+                        "status": "error",
+                        "durationMs": duration_ms,
+                        "reasonCode": typedb_error_code(error),
+                        "reason": str(error)[:180],
+                    })
+            raise
+        duration_ms = int((time.perf_counter() - started_at) * 1000)
+        result_status = "ok"
+        if isinstance(result, dict) and str(result.get("status") or ""):
+            result_status = str(result.get("status") or "")
+        with self._schema_function_sync_trace_lock:
+            if self._schema_function_sync_trace:
+                self._schema_function_sync_trace["currentStage"] = ""
+                self._schema_function_sync_trace["lastStage"] = stage_name
+                if result_status in {"error", "timeout"}:
+                    self._schema_function_sync_trace["failedStage"] = stage_name
+                    self._schema_function_sync_trace["failureReasonCode"] = str(
+                        result.get("reasonCode") or ""
+                    )
+                    self._schema_function_sync_trace["failureReason"] = str(
+                        result.get("reason") or result_status
+                    )[:220]
+                self._schema_function_sync_trace.setdefault("stages", []).append({
+                    "stage": stage_name,
+                    "status": result_status,
+                    "durationMs": duration_ms,
+                    **({
+                        "reasonCode": str(result.get("reasonCode") or ""),
+                        "reason": str(result.get("reason") or result_status)[:180],
+                    } if result_status in {"error", "timeout"} else {}),
+                })
+        return result
+
+    def schema_function_sync_trace_snapshot(self) -> Dict[str, object]:
+        with self._schema_function_sync_trace_lock:
+            trace = copy.deepcopy(self._schema_function_sync_trace)
+        started_at = float(trace.pop("_startedMonotonic", 0.0) or 0.0)
+        if started_at:
+            trace["durationMs"] = int((time.perf_counter() - started_at) * 1000)
+        trace["stages"] = list(trace.get("stages") or [])[-24:]
+        return trace
 
     def rulebox_snapshot_cache_seconds(self) -> float:
         return self._rulebox_snapshot_cache_seconds
@@ -16123,6 +16208,7 @@ relation ontology-assertion,
         if not self.address:
             return {"status": "disabled", "configured": False, "graphStore": "typedb", "syncedCount": 0}
         rules = list(rules or [])
+        self.begin_schema_function_sync_trace(world_id, len(rules))
         definitions: List[Dict[str, object]] = []
         skipped: List[Dict[str, object]] = []
         for rule in rules or []:
@@ -16171,6 +16257,11 @@ relation ontology-assertion,
             sort_keys=True,
             ensure_ascii=False,
         ).encode("utf-8")).hexdigest()
+        self.update_schema_function_sync_trace(
+            syncFingerprint=sync_fingerprint,
+            generatedFunctionCount=len(definitions),
+            skippedRuleCount=len(skipped),
+        )
         if force:
             self.invalidate_schema_function_sync_cache(sync_fingerprint)
         else:
@@ -16179,7 +16270,10 @@ relation ontology-assertion,
                 self._schema_function_sync_cache_key = sync_fingerprint
                 self._schema_function_sync_cache_result = dict(process_cached)
                 return process_cached
-        probe_result = self.probe_typedb_native_rule_functions(rules, world_id)
+        probe_result = self.run_schema_function_sync_stage(
+            "deployment-receipt-probe",
+            lambda: self.probe_typedb_native_rule_functions(rules, world_id),
+        )
         if (
             not force
             and self._schema_function_sync_cache_key == sync_fingerprint
@@ -16279,7 +16373,10 @@ relation ontology-assertion,
                 "reasonCode": "typedbSchemaFunctionDefinitionMissing",
                 "reason": "Missing TypeDB schema function has no generated definition.",
             }
-        definition_probe = self.probe_typedb_schema_function_definitions(definitions_to_sync)
+        definition_probe = self.run_schema_function_sync_stage(
+            "function-definition-receipt-probe",
+            lambda: self.probe_typedb_schema_function_definitions(definitions_to_sync),
+        )
         if str(definition_probe.get("status") or "") == "error":
             return {
                 "configured": True,
@@ -16308,10 +16405,13 @@ relation ontology-assertion,
             if str(item.get("functionName") or "") in missing_function_names
         ]
         try:
-            pending_recovery = self.recover_pending_schema_function_deployment_receipts(
-                rules,
-                definitions_to_sync,
-                world_id,
+            pending_recovery = self.run_schema_function_sync_stage(
+                "pending-commit-recovery-probe",
+                lambda: self.recover_pending_schema_function_deployment_receipts(
+                    rules,
+                    definitions_to_sync,
+                    world_id,
+                ),
             )
         except Exception as error:  # noqa: BLE001 - receipt recovery must fail closed before another schema definition.
             return {
@@ -16366,7 +16466,10 @@ relation ontology-assertion,
                 if str(item.get("ruleId") or "") not in recovered_rule_ids
             ]
         if not definitions_to_sync:
-            verification_result = self.probe_typedb_native_rule_functions(rules, world_id)
+            verification_result = self.run_schema_function_sync_stage(
+                "recovered-deployment-verification",
+                lambda: self.probe_typedb_native_rule_functions(rules, world_id),
+            )
             if verification_result.get("available"):
                 synced_rule_ids = sorted({
                     str(item.get("ruleId") or "")
@@ -16449,6 +16552,15 @@ relation ontology-assertion,
             if str(item.get("ruleId") or "").strip()
         })
         imported = self.driver_imports()
+        self.update_schema_function_sync_trace(
+            deploymentRuleIds=list(deployment_rule_ids),
+            deploymentFunctionNames=[
+                str(item.get("functionName") or "")
+                for item in deployment_definitions
+                if str(item.get("functionName") or "")
+            ],
+            remainingRuleCount=len(pending_rule_ids),
+        )
         if imported[0] is None:
             return {
                 "configured": True,
@@ -16465,9 +16577,12 @@ relation ontology-assertion,
             "markerCount": 0,
         }
         if pending_recovery_status == "empty":
-            provisioning_receipt = self.save_schema_function_deployment_markers(
-                deployment_definitions,
-                deployment_state="provisioning",
+            provisioning_receipt = self.run_schema_function_sync_stage(
+                "provisioning-receipt-write",
+                lambda: self.save_schema_function_deployment_markers(
+                    deployment_definitions,
+                    deployment_state="provisioning",
+                ),
             )
             if not provisioning_receipt.get("saved"):
                 return {
@@ -16521,12 +16636,25 @@ relation ontology-assertion,
                 """
                 def operation():
                     timeout = self.schema_function_provision_timeout_seconds()
-                    driver = self.open_schema_driver(imported, request_timeout_seconds=timeout)
+                    driver = self.run_schema_function_sync_stage(
+                        "schema-driver-open",
+                        lambda: self.open_schema_driver(imported, request_timeout_seconds=timeout),
+                    )
                     try:
-                        self.ensure_database(driver)
-                        self.ensure_schema(driver, imported)
+                        self.run_schema_function_sync_stage(
+                            "schema-database-ensure",
+                            lambda: self.ensure_database(driver),
+                        )
+                        self.run_schema_function_sync_stage(
+                            "base-schema-ensure",
+                            lambda: self.ensure_schema(driver, imported),
+                        )
                         with typedb_operation_timeout(timeout, "TypeDB schema function provisioning"):
-                            with self.schema_transaction(driver, TransactionType.SCHEMA, timeout) as tx:
+                            transaction = self.run_schema_function_sync_stage(
+                                "schema-transaction-open",
+                                lambda: self.schema_transaction(driver, TransactionType.SCHEMA, timeout),
+                            )
+                            with transaction as tx:
                                 # A schema transaction alone is not enough to
                                 # avoid repeated TypeDB compilation: issuing
                                 # one ``define`` query per function still
@@ -16541,8 +16669,14 @@ relation ontology-assertion,
                                 ]
                                 if len(bodies) != len(definitions_batch):
                                     raise ValueError("TypeDB native-rule batch contains an empty schema function body.")
-                                tx.query("define\n" + "\n".join(bodies)).resolve()
-                                tx.commit()
+                                self.run_schema_function_sync_stage(
+                                    "schema-function-define",
+                                    lambda: tx.query("define\n" + "\n".join(bodies)).resolve(),
+                                )
+                                self.run_schema_function_sync_stage(
+                                    "schema-function-commit",
+                                    tx.commit,
+                                )
                         return [
                             {
                                 "ruleId": definition.get("ruleId"),
@@ -16575,15 +16709,34 @@ relation ontology-assertion,
                 """
                 def operation():
                     timeout = self.schema_function_provision_timeout_seconds()
-                    driver = self.open_schema_driver(imported, request_timeout_seconds=timeout)
+                    driver = self.run_schema_function_sync_stage(
+                        "schema-driver-open",
+                        lambda: self.open_schema_driver(imported, request_timeout_seconds=timeout),
+                    )
                     try:
-                        self.ensure_database(driver)
-                        self.ensure_schema(driver, imported)
+                        self.run_schema_function_sync_stage(
+                            "schema-database-ensure",
+                            lambda: self.ensure_database(driver),
+                        )
+                        self.run_schema_function_sync_stage(
+                            "base-schema-ensure",
+                            lambda: self.ensure_schema(driver, imported),
+                        )
                         try:
                             with typedb_operation_timeout(timeout, "TypeDB schema function provisioning"):
-                                with self.schema_transaction(driver, TransactionType.SCHEMA, timeout) as tx:
-                                    tx.query(str(definition.get("define") or "")).resolve()
-                                    tx.commit()
+                                transaction = self.run_schema_function_sync_stage(
+                                    "schema-transaction-open",
+                                    lambda: self.schema_transaction(driver, TransactionType.SCHEMA, timeout),
+                                )
+                                with transaction as tx:
+                                    self.run_schema_function_sync_stage(
+                                        "schema-function-define",
+                                        lambda: tx.query(str(definition.get("define") or "")).resolve(),
+                                    )
+                                    self.run_schema_function_sync_stage(
+                                        "schema-function-commit",
+                                        tx.commit,
+                                    )
                             return "defined"
                         except Exception as error:  # noqa: BLE001 - duplicate content-addressed functions are already deployed.
                             if is_already_existing_schema_function(error):
@@ -16660,7 +16813,10 @@ relation ontology-assertion,
                 ),
                 "retryable": bool(provisioning_receipt.get("saved")),
             }
-        deployment_receipt = self.save_schema_function_deployment_markers(deployment_definitions)
+        deployment_receipt = self.run_schema_function_sync_stage(
+            "deployment-receipt-write",
+            lambda: self.save_schema_function_deployment_markers(deployment_definitions),
+        )
         if not deployment_receipt.get("saved"):
             return {
                 "configured": True,
@@ -16686,9 +16842,12 @@ relation ontology-assertion,
             rule for rule in rules
             if str(getattr(rule, "rule_id", "") or "").strip() in set(deployment_rule_ids)
         ]
-        verification_result = self.probe_typedb_native_rule_functions(
-            deployed_rules or rules,
-            world_id,
+        verification_result = self.run_schema_function_sync_stage(
+            "deployed-function-verification",
+            lambda: self.probe_typedb_native_rule_functions(
+                deployed_rules or rules,
+                world_id,
+            ),
         )
         if not verification_result.get("available"):
             return {
@@ -16754,7 +16913,10 @@ relation ontology-assertion,
         # batches only verified their own functions so a partial deployment can
         # never be mistaken for a complete investment evaluation.
         if deployed_rules and len(deployed_rules) != len(rules):
-            verification_result = self.probe_typedb_native_rule_functions(rules, world_id)
+            verification_result = self.run_schema_function_sync_stage(
+                "complete-rulebox-verification",
+                lambda: self.probe_typedb_native_rule_functions(rules, world_id),
+            )
             if not verification_result.get("available"):
                 return {
                     "configured": True,
@@ -17079,7 +17241,35 @@ relation ontology-assertion,
             return NullTypeDBOntologyGraphRepository().prewarm_typedb_native_rule_functions(force)
         self.reset_query_metrics()
         started_at = time.perf_counter()
-        rulebox = self.schema_function_prewarm_rulebox()
+        prewarm_stage_timings: List[Dict[str, object]] = []
+        rulebox_started_at = time.perf_counter()
+        try:
+            rulebox = self.schema_function_prewarm_rulebox()
+        except Exception as error:  # noqa: BLE001 - expose the pre-compiler failure stage.
+            prewarm_stage_timings.append({
+                "stage": "active-rulebox-load",
+                "status": "error",
+                "durationMs": int((time.perf_counter() - rulebox_started_at) * 1000),
+                "reasonCode": typedb_error_code(error),
+            })
+            return {
+                "configured": True,
+                "status": "error",
+                "graphStore": "typedb",
+                "source": "typedbSchemaFunctionPrewarm",
+                "functionsReady": False,
+                "failedStage": "active-rulebox-load",
+                "reasonCode": typedb_error_code(error),
+                "reason": str(error)[:220],
+                "prewarmStageTimings": prewarm_stage_timings,
+                "durationMs": int((time.perf_counter() - started_at) * 1000),
+                "typedbQueryMetrics": self.query_metrics_snapshot(),
+            }
+        prewarm_stage_timings.append({
+            "stage": "active-rulebox-load",
+            "status": str(rulebox.get("status") or "ok"),
+            "durationMs": int((time.perf_counter() - rulebox_started_at) * 1000),
+        })
         if str(rulebox.get("status") or "") != "ok":
             return {
                 "configured": True,
@@ -17087,8 +17277,10 @@ relation ontology-assertion,
                 "graphStore": "typedb",
                 "source": "typedbSchemaFunctionPrewarm",
                 "functionsReady": False,
+                "failedStage": "active-rulebox-load",
                 "reasonCode": str(rulebox.get("reasonCode") or "typedbRuleBoxUnavailable"),
                 "reason": str(rulebox.get("reason") or "Active RuleBox is unavailable.")[:220],
+                "prewarmStageTimings": prewarm_stage_timings,
                 "durationMs": int((time.perf_counter() - started_at) * 1000),
                 "typedbQueryMetrics": self.query_metrics_snapshot(),
             }
@@ -17097,15 +17289,40 @@ relation ontology-assertion,
         namespaces = self.schema_function_prewarm_namespaces()
         for index, namespace in enumerate(namespaces):
             namespace_started_at = time.perf_counter()
-            result = self.sync_typedb_native_rule_functions(
-                rules,
-                force=bool(force),
-                world_id=str(namespace.get("worldId") or ""),
-            )
+            namespace_name = str(namespace.get("namespace") or "")
+            try:
+                result = self.sync_typedb_native_rule_functions(
+                    rules,
+                    force=bool(force),
+                    world_id=str(namespace.get("worldId") or ""),
+                )
+            except Exception as error:  # noqa: BLE001 - retain the adapter's last completed stage.
+                trace = self.schema_function_sync_trace_snapshot()
+                result = {
+                    "status": "error",
+                    "failedStage": str(trace.get("failedStage") or "namespace-sync"),
+                    "reasonCode": typedb_error_code(error),
+                    "reason": str(error)[:220],
+                    "schemaFunctionSyncTrace": trace,
+                }
+            result = dict(result or {})
+            result.setdefault("schemaFunctionSyncTrace", self.schema_function_sync_trace_snapshot())
+            namespace_duration_ms = int((time.perf_counter() - namespace_started_at) * 1000)
+            prewarm_stage_timings.append({
+                "stage": "namespace-sync",
+                "namespace": namespace_name,
+                "status": str(result.get("status") or "unknown"),
+                "durationMs": namespace_duration_ms,
+                "failedStage": str(
+                    result.get("failedStage")
+                    or dict(result.get("schemaFunctionSyncTrace") or {}).get("failedStage")
+                    or ""
+                ),
+            })
             namespace_results.append({
-                "namespace": str(namespace.get("namespace") or ""),
+                "namespace": namespace_name,
                 "result": result,
-                "durationMs": int((time.perf_counter() - namespace_started_at) * 1000),
+                "durationMs": namespace_duration_ms,
             })
             # A cold schema definition can consume the TypeDB compiler for its
             # bounded timeout. Prepare the normal Worldview namespace first,
@@ -17141,6 +17358,12 @@ relation ontology-assertion,
             for rule_id in dict(item.get("result") or {}).get("pendingRuleIds") or []
             if str(rule_id or "").strip()
         })
+        failed_trace = next((
+            dict(item.get("result", {}).get("schemaFunctionSyncTrace") or {})
+            for item in namespace_results
+            if str(dict(item.get("result", {}).get("schemaFunctionSyncTrace") or {}).get("failedStage") or "")
+        ), {})
+        failed_stage = str(failed_trace.get("failedStage") or "")
         return {
             "configured": True,
             "status": status,
@@ -17156,9 +17379,16 @@ relation ontology-assertion,
             "namespaceResults": namespace_results,
             "pendingRuleCount": len(pending_rule_ids),
             "pendingRuleIds": pending_rule_ids[:80],
+            "failedStage": failed_stage,
+            "prewarmStageTimings": prewarm_stage_timings,
             "retryable": status == "provisioning",
             "reason": (
-                "The complete active RuleBox is prewarmed in bounded TypeDB schema batches."
+                (
+                    "TypeDB RuleBox prewarm was interrupted at " + failed_stage
+                    + "; the durable provisioning receipt will verify the commit before retry."
+                )
+                if failed_stage
+                else "The complete active RuleBox is prewarmed in bounded TypeDB schema batches."
                 if status == "provisioning"
                 else ""
             ),
@@ -20675,6 +20905,16 @@ def typedb_filter_operator(filter_key: str, expected: object, default_operator: 
     return default_operator
 
 
+def typedb_entity_match_type(kind: object) -> str:
+    """Use the stored semantic subtype to keep TypeDB read plans bounded."""
+    return entity_semantic_type({}, kind, fallback="ontology-node")
+
+
+def typedb_relation_match_type(relation_type: object) -> str:
+    """Use the stored semantic relation subtype when the TBox defines it."""
+    return relation_semantic_type(relation_type, fallback="ontology-assertion")
+
+
 def typedb_condition_pattern(
     condition: Dict[str, object],
     index: int,
@@ -20725,18 +20965,21 @@ def typedb_condition_pattern(
         relation_id_var = value_variable("relationId", 0)
         rel_type = str(condition.get("relation_type") or condition.get("relationType") or "").upper()
         direction = str(condition.get("direction") or "out")
+        target_kind = str(condition.get("target_kind") or condition.get("targetKind") or "")
         if not rel_type:
             return {"conditionId": condition_id, "clauses": [], "columns": [], "reason": "missing relation type"}
+        target_type = typedb_entity_match_type(target_kind)
+        relation_type = typedb_relation_match_type(rel_type)
         if direction == "in":
             clauses.append(
-                target_var + " isa ontology-node; "
-                + relation_var + " isa ontology-assertion, links (source: " + target_var + ", target: " + source_var + "), "
+                target_var + " isa " + target_type + "; "
+                + relation_var + " isa " + relation_type + ", links (source: " + target_var + ", target: " + source_var + "), "
                 + "has ontology-id $" + relation_id_var + ", has ontology-relation-type " + typedb_string(rel_type) + ";"
             )
         else:
             clauses.append(
-                target_var + " isa ontology-node; "
-                + relation_var + " isa ontology-assertion, links (source: " + source_var + ", target: " + target_var + "), "
+                target_var + " isa " + target_type + "; "
+                + relation_var + " isa " + relation_type + ", links (source: " + source_var + ", target: " + target_var + "), "
                 + "has ontology-id $" + relation_id_var + ", has ontology-relation-type " + typedb_string(rel_type) + ";"
             )
         indexed_relation_storage_ids = sorted({
@@ -20784,7 +21027,6 @@ def typedb_condition_pattern(
                 world_id,
                 world_id_variable,
             ))
-        target_kind = str(condition.get("target_kind") or condition.get("targetKind") or "")
         if target_kind:
             clauses.append(target_var + " has ontology-kind " + typedb_string(target_kind) + ";")
         for filter_key, expected in dict(condition.get("target_property_filters") or condition.get("targetPropertyFilters") or {}).items():
@@ -20897,7 +21139,8 @@ def typedb_native_match_query(
             world_id_variable,
         )]
     clauses.append(
-        "$source isa ontology-node, has ontology-id $sourceId, has ontology-label $sourceLabel, has ontology-kind "
+        "$source isa " + typedb_entity_match_type(source_kind)
+        + ", has ontology-id $sourceId, has ontology-label $sourceLabel, has ontology-kind "
         + typedb_string(source_kind)
         + ";"
     )
@@ -21096,6 +21339,8 @@ def typedb_native_any_group_check_query(
     rule query produced this exact source id.
     """
     clean_source_id = str(source_id or "").strip()
+    source_kind = str(rule.get("source_kind") or rule.get("sourceKind") or "stock")
+    source_type = typedb_entity_match_type(source_kind)
     if not clean_source_id:
         return {
             "ruleId": str(rule.get("rule_id") or rule.get("ruleId") or ""),
@@ -21213,25 +21458,27 @@ def typedb_native_any_group_check_query(
                 for _condition_index, condition in conditions
             ):
                 relation_type, direction, target_kind = common_shape
+                relation_match_type = typedb_relation_match_type(relation_type)
+                target_match_type = typedb_entity_match_type(target_kind)
                 source_var = "$source"
                 target_var = "$anyIndexedTarget"
                 relation_var = "$anyIndexedRelation"
                 if direction == "in":
                     link_clause = (
-                        target_var + " isa ontology-node; "
-                        + relation_var + " isa ontology-assertion, links (source: " + target_var
+                        target_var + " isa " + target_match_type + "; "
+                        + relation_var + " isa " + relation_match_type + ", links (source: " + target_var
                         + ", target: " + source_var + "), has ontology-relation-type "
                         + typedb_string(relation_type) + ";"
                     )
                 else:
                     link_clause = (
-                        target_var + " isa ontology-node; "
-                        + relation_var + " isa ontology-assertion, links (source: " + source_var
+                        target_var + " isa " + target_match_type + "; "
+                        + relation_var + " isa " + relation_match_type + ", links (source: " + source_var
                         + ", target: " + target_var + "), has ontology-relation-type "
                         + typedb_string(relation_type) + ";"
                     )
                 structural_clauses = [
-                    source_var + " isa ontology-node, has ontology-id " + typedb_string(clean_source_id)
+                    source_var + " isa " + source_type + ", has ontology-id " + typedb_string(clean_source_id)
                     + ", has ontology-storage-id " + typedb_string(clean_source_storage_id) + ";",
                     link_clause,
                 ]
@@ -21316,19 +21563,21 @@ def typedb_native_any_group_check_query(
                 if not relation_type:
                     indexed_branches = []
                     break
+                relation_match_type = typedb_relation_match_type(relation_type)
+                target_match_type = typedb_entity_match_type(target_kind)
                 target_var = "$anyIndexedBranchTarget" + str(branch_index)
                 relation_var = "$anyIndexedBranchRelation" + str(branch_index)
                 if direction == "in":
                     link_clause = (
-                        target_var + " isa ontology-node; "
-                        + relation_var + " isa ontology-assertion, links (source: " + target_var
+                        target_var + " isa " + target_match_type + "; "
+                        + relation_var + " isa " + relation_match_type + ", links (source: " + target_var
                         + ", target: $source), has ontology-relation-type "
                         + typedb_string(relation_type) + ";"
                     )
                 else:
                     link_clause = (
-                        target_var + " isa ontology-node; "
-                        + relation_var + " isa ontology-assertion, links (source: $source, target: "
+                        target_var + " isa " + target_match_type + "; "
+                        + relation_var + " isa " + relation_match_type + ", links (source: $source, target: "
                         + target_var + "), has ontology-relation-type "
                         + typedb_string(relation_type) + ";"
                     )
@@ -21381,7 +21630,7 @@ def typedb_native_any_group_check_query(
                     "ruleId": str(rule.get("rule_id") or rule.get("ruleId") or ""),
                     "nativeRuleId": typedb_native_rule_id(str(rule.get("rule_id") or rule.get("ruleId") or "")),
                     "query": (
-                        "match $source isa ontology-node, has ontology-id " + typedb_string(clean_source_id)
+                        "match $source isa " + source_type + ", has ontology-id " + typedb_string(clean_source_id)
                         + ", has ontology-storage-id " + typedb_string(clean_source_storage_id) + ";"
                         + " match " + " or ".join(indexed_branches) + ";"
                         + " $source has ontology-id $sourceId, has ontology-label $sourceLabel;"
@@ -21406,7 +21655,7 @@ def typedb_native_any_group_check_query(
         else:
             clauses.append(typedb_active_abox_member_clause("$source", "source", world_id))
         clauses.append(
-            "$source isa ontology-node, has ontology-id " + typedb_string(clean_source_id) + ";"
+            "$source isa " + source_type + ", has ontology-id " + typedb_string(clean_source_id) + ";"
         )
         # A common RuleBox shape is one relation type with several alternative
         # target thresholds, such as execution metrics.  Repeating the same

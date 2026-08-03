@@ -5443,6 +5443,8 @@ class OntologyReasoningRunner:
             }
         prewarm_recovery = self.rulebox_prewarm_backlog_recovery_state(requests)
         queue_metadata["ruleboxPrewarmRecovery"] = dict(prewarm_recovery)
+        prewarm_required = self.rulebox_prewarm_required()
+        direct_fallback_enabled = self.rulebox_prewarm_direct_fallback_enabled()
         # A receipt check is not free: it reads the complete RuleBox and both
         # deployment namespaces. It is nevertheless required before a normal
         # investment judgement so a TypeDB restart cannot change the rule
@@ -5450,18 +5452,18 @@ class OntologyReasoningRunner:
         # explicitly disable the gate retain the bounded direct-TypeQL path.
         prewarm_recovery_probe = bool(
             prewarm_recovery.get("eligible")
-            and self.rulebox_prewarm_required()
+            and prewarm_required
         )
         prewarm_activity = (
             self.rulebox_prewarm_activity_state()
             if (
-                self.rulebox_prewarm_required()
-                or self.rulebox_prewarm_direct_fallback_enabled()
+                prewarm_required
+                or direct_fallback_enabled
                 or prewarm_recovery_probe
             )
             else {}
         )
-        if bool(prewarm_activity.get("active")):
+        if bool(prewarm_activity.get("active")) and prewarm_required:
             retry_after = int(
                 prewarm_activity.get("retryAfterSeconds")
                 or self.rulebox_prewarm_retry_seconds()
@@ -5506,10 +5508,18 @@ class OntologyReasoningRunner:
                 "coalescedEventCount": len(durable_superseded_ids),
                 **queue_metadata,
             }
+        if bool(prewarm_activity.get("active")) and direct_fallback_enabled:
+            # Read transactions remain available while TypeDB owns the schema
+            # writer.  A compatibility deployment that explicitly disables
+            # the strict readiness gate therefore keeps investment inference
+            # on the serial, bounded direct-TypeQL path instead of turning a
+            # background compiler cooldown into a full notification outage.
+            queue_metadata["ruleboxPrewarmActivity"] = dict(prewarm_activity)
+            queue_metadata["ruleboxPrewarmFallbackDuringCompilerActivity"] = True
         rulebox_prewarm = self.rulebox_prewarm_readiness(
             probe_when_fallback=prewarm_recovery_probe,
         )
-        if not rulebox_prewarm.get("ready") and self.rulebox_prewarm_required():
+        if not rulebox_prewarm.get("ready") and prewarm_required:
             retry_after = int(
                 rulebox_prewarm.get("retryAfterSeconds")
                 or self.rulebox_prewarm_retry_seconds()

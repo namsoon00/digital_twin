@@ -522,10 +522,12 @@ class OntologyRuleboxPrewarmRunner:
                 "status",
                 "functionsReady",
                 "pendingRuleCount",
+                "failedStage",
                 "reasonCode",
                 "reason",
                 "durationMs",
                 "recommendedRetryAfterSeconds",
+                "prewarmStageTimings",
             ]
             if key in result
         }
@@ -724,6 +726,31 @@ class OntologyRuleboxPrewarmRunner:
                 "reason": (
                     "Live reasoning queue state could not be confirmed; RuleBox schema compilation is deferred "
                     "to avoid competing with an alert."
+                ),
+                "recommendedRetryAfterSeconds": self.interval_seconds(),
+                "durationMs": 0,
+            }
+        if (
+            not force
+            and not self.require_ready_for_inference()
+            and self.direct_typeql_fallback_enabled()
+        ):
+            # Compatibility mode is an operational circuit breaker. Starting
+            # another automatic schema commit after the live queue drains can
+            # make the whole TypeDB server unresponsive again, which is worse
+            # than the slower serial direct-TypeQL evaluator. An operator can
+            # still run one traced diagnostic pass explicitly with ``--force``.
+            return {
+                "status": "deferred-direct-typeql-fallback",
+                "configured": True,
+                "functionsReady": None,
+                "pendingRuleCount": None,
+                "reasoningPendingCount": pending,
+                "reasoningQueue": queue,
+                "automaticSchemaCompilationSuppressed": True,
+                "reason": (
+                    "Direct TypeQL compatibility mode is active; automatic RuleBox schema compilation "
+                    "remains quarantined so live investment inference keeps TypeDB available."
                 ),
                 "recommendedRetryAfterSeconds": self.interval_seconds(),
                 "durationMs": 0,

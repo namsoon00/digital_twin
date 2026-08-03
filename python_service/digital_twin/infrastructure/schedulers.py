@@ -1337,6 +1337,7 @@ class OntologyRuleboxPrewarmScheduler:
             "deferred-compiler-activity",
             "deferred-idle-quiet-period",
             "deferred-reasoning-queue-probe",
+            "deferred-direct-typeql-fallback",
         }:
             return max(self.interval_seconds, recommended, 30)
         return max(self.interval_seconds, recommended)
@@ -1357,6 +1358,7 @@ class OntologyRuleboxPrewarmScheduler:
                 retry_interval = self.retry_interval_seconds(result)
                 if self.should_report(result, started):
                     reason = str(result.get("reason") or "").strip()
+                    failed_stage = str(result.get("failedStage") or "").strip()
                     print(
                         "Ontology RuleBox prewarm "
                         + str(result.get("status") or "unknown")
@@ -1366,6 +1368,7 @@ class OntologyRuleboxPrewarmScheduler:
                         + str(result.get("reasoningPendingCount") or 0)
                         + " ready="
                         + str(bool(result.get("functionsReady")))
+                        + (" failedStage=" + failed_stage if failed_stage else "")
                         + (" reason=" + reason[:220] if reason else ""),
                         flush=True,
                     )

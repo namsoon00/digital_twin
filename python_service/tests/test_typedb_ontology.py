@@ -5609,6 +5609,20 @@ class TypeDBOntologyRepositoryTests(unittest.TestCase):
         self.assertIn('has ontology-symbol "000660"', query)
         self.assertNotIn("has ontology-symbol 660.0", query)
 
+    def test_typedb_native_rule_query_uses_stored_semantic_subtypes(self):
+        rule = next(
+            item
+            for item in default_graph_inference_rules()
+            if item.rule_id == "graph.news.direct_material_support.v1"
+        )
+
+        query = typedb_native_match_query(rule.to_dict(), ["035420"])["query"]
+
+        self.assertIn("$source isa ontology-class-stock", query)
+        self.assertIn("isa ontology-relation-has-external-signal", query)
+        self.assertIn("isa ontology-relation-has-observation", query)
+        self.assertNotIn(" isa ontology-assertion", query)
+
     def test_typedb_native_function_call_limits_candidates_to_active_manifest(self):
         rule = next(item for item in default_graph_inference_rules() if item.rule_id == "graph.loss_guard.breakdown.v1")
 
@@ -7939,6 +7953,16 @@ class TypeDBOntologyRepositoryTests(unittest.TestCase):
         self.assertEqual(1, repository.fake_driver.commits)
         self.assertEqual(1, len(repository.fake_driver.queries))
         self.assertTrue(repository.fake_driver.queries[0].lstrip().startswith("define"))
+        trace = repository.schema_function_sync_trace_snapshot()
+        self.assertEqual("", trace["failedStage"])
+        self.assertIn(
+            "schema-function-define",
+            [item["stage"] for item in trace["stages"]],
+        )
+        self.assertIn(
+            "schema-function-commit",
+            [item["stage"] for item in trace["stages"]],
+        )
 
     def test_typedb_schema_function_sync_does_not_retry_each_function_after_interrupted_batch(self):
         class FakeQuery:
@@ -8033,6 +8057,29 @@ class TypeDBOntologyRepositoryTests(unittest.TestCase):
         self.assertEqual("provisioning", result["status"])
         self.assertTrue(result["schemaFunctionProvisioning"])
         self.assertEqual(1, len(repository.fake_driver.queries))
+        trace = repository.schema_function_sync_trace_snapshot()
+        self.assertEqual("schema-function-define", trace["failedStage"])
+        self.assertEqual("error", trace["stages"][-1]["status"])
+        self.assertIn("timed out", trace["failureReason"])
+
+    def test_typedb_schema_function_stage_trace_records_returned_error_status(self):
+        repository = TypeDBOntologyGraphRepository("127.0.0.1:1729")
+        repository.begin_schema_function_sync_trace("portfolio:local:default", 1)
+
+        result = repository.run_schema_function_sync_stage(
+            "deployment-receipt-probe",
+            lambda: {
+                "status": "error",
+                "reasonCode": "typedbUnavailable",
+                "reason": "catalogue read failed",
+            },
+        )
+
+        self.assertEqual("error", result["status"])
+        trace = repository.schema_function_sync_trace_snapshot()
+        self.assertEqual("deployment-receipt-probe", trace["failedStage"])
+        self.assertEqual("typedbUnavailable", trace["failureReasonCode"])
+        self.assertEqual("catalogue read failed", trace["failureReason"])
 
     def test_typedb_schema_function_prewarm_readiness_never_starts_a_schema_sync(self):
         repository = TypeDBOntologyGraphRepository("127.0.0.1:1729")

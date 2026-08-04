@@ -288,7 +288,7 @@ class NotificationReasoningReportTests(unittest.TestCase):
         enriched = context_with_validated_ai_response(context, validated_response(article_url))
         message = render_notification(NotificationTemplate.default(INVESTMENT_INSIGHT), enriched)
 
-        for heading in ["지금 행동", "이번 변화", "현재 흐름", "바뀐 이유", "다음 행동", "판단 변경 조건", "자료 상태"]:
+        for heading in ["지금 행동", "이번 변화", "현재 흐름", "판단 근거", "다음 행동", "판단 변경 조건", "자료 상태"]:
             self.assertIn("<b>" + heading + "</b>", message)
         self.assertIn("[AI]", message)
         self.assertIn("판단에 필요한 자료 있음", message)

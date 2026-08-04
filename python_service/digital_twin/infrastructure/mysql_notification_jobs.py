@@ -891,10 +891,27 @@ class MySQLNotificationJobStore(MySQLOperationalConnection):
             ).fetchall()
         return [self.job_from_row(row) for row in rows]
 
-    def claim_pending(self, limit: int = 10, stale_after_minutes: int = 30) -> List[NotificationJob]:
+    def claim_pending(
+        self,
+        limit: int = 10,
+        stale_after_minutes: int = 30,
+        include_message_types: Tuple[str, ...] = (),
+        exclude_message_types: Tuple[str, ...] = (),
+    ) -> List[NotificationJob]:
         stamp = utc_now()
         cutoff = (datetime.now(timezone.utc) - timedelta(minutes=max(1, int(stale_after_minutes or 30)))).isoformat().replace("+00:00", "Z")
         requested = max(1, int(limit or 10))
+        included = tuple(dict.fromkeys(str(item).strip() for item in include_message_types or () if str(item).strip()))
+        excluded = tuple(dict.fromkeys(str(item).strip() for item in exclude_message_types or () if str(item).strip()))
+        lane_clauses: List[str] = []
+        lane_params: List[object] = []
+        if included:
+            lane_clauses.append("message_type IN (" + ",".join(["%s"] * len(included)) + ")")
+            lane_params.extend(included)
+        if excluded:
+            lane_clauses.append("message_type NOT IN (" + ",".join(["%s"] * len(excluded)) + ")")
+            lane_params.extend(excluded)
+        lane_sql = (" AND " + " AND ".join(lane_clauses)) if lane_clauses else ""
         claimed: List[NotificationJob] = []
         with self.transaction() as connection:
             query_specs = [
@@ -902,32 +919,35 @@ class MySQLNotificationJobStore(MySQLOperationalConnection):
                     """
                     SELECT job_id, text, payload_json FROM notification_jobs
                     WHERE status = 'pending'
+                    """ + lane_sql + """
                     ORDER BY created_at, job_id
                     LIMIT %s
                     FOR UPDATE SKIP LOCKED
                     """,
-                    (),
+                    tuple(lane_params),
                 ),
                 (
                     """
                     SELECT job_id, text, payload_json FROM notification_jobs
                     WHERE status = 'processing'
                       AND COALESCE(NULLIF(processing_started_at, ''), NULLIF(updated_at, ''), created_at) <= %s
+                    """ + lane_sql + """
                     ORDER BY created_at, job_id
                     LIMIT %s
                     FOR UPDATE SKIP LOCKED
                     """,
-                    (cutoff,),
+                    (cutoff, *lane_params),
                 ),
                 (
                     """
                     SELECT job_id, text, payload_json FROM notification_jobs
                     WHERE status = 'failed' AND attempts < %s
+                    """ + lane_sql + """
                     ORDER BY attempts, created_at, job_id
                     LIMIT %s
                     FOR UPDATE SKIP LOCKED
                     """,
-                    (MAX_NOTIFICATION_DELIVERY_ATTEMPTS,),
+                    (MAX_NOTIFICATION_DELIVERY_ATTEMPTS, *lane_params),
                 ),
             ]
             for sql, params in query_specs:

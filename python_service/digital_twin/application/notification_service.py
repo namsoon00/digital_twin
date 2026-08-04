@@ -345,6 +345,8 @@ class NotificationQueueRunner:
         settings: Dict[str, object] = None,
         operational_state_resolver: Callable = None,
         operational_delivery_recorder: Callable = None,
+        include_message_types: List[str] = None,
+        exclude_message_types: List[str] = None,
     ):
         self.queue = queue
         self.account_repository = account_repository
@@ -361,6 +363,8 @@ class NotificationQueueRunner:
         self.settings = dict(settings or {})
         self.operational_state_resolver = operational_state_resolver
         self.operational_delivery_recorder = operational_delivery_recorder
+        self.include_message_types = tuple(dict.fromkeys(str(item).strip() for item in include_message_types or [] if str(item).strip()))
+        self.exclude_message_types = tuple(dict.fromkeys(str(item).strip() for item in exclude_message_types or [] if str(item).strip()))
         self.last_run_details = []
 
     def account_map(self) -> Dict[str, object]:
@@ -369,7 +373,20 @@ class NotificationQueueRunner:
     def run_once(self, limit: int = 10) -> int:
         self.last_run_details = []
         use_claim = (not self.dry_run) and hasattr(self.queue, "claim_pending")
-        jobs = self.queue.claim_pending(limit=limit, stale_after_minutes=self.stale_after_minutes) if use_claim else self.queue.pending(limit=limit)
+        if use_claim:
+            try:
+                jobs = self.queue.claim_pending(
+                    limit=limit,
+                    stale_after_minutes=self.stale_after_minutes,
+                    include_message_types=self.include_message_types,
+                    exclude_message_types=self.exclude_message_types,
+                )
+            except TypeError:
+                jobs = self.queue.claim_pending(limit=limit, stale_after_minutes=self.stale_after_minutes)
+        else:
+            scan_limit = max(int(limit or 10), 100) if (self.include_message_types or self.exclude_message_types) else limit
+            jobs = self.queue.pending(limit=scan_limit)
+            jobs = [job for job in jobs if self.message_type_allowed(job.message_type)][: int(limit or 10)]
         if not jobs:
             return 0
         accounts = self.account_map()
@@ -439,6 +456,14 @@ class NotificationQueueRunner:
             if self.send_gap_seconds and processed < len(jobs):
                 time.sleep(self.send_gap_seconds)
         return processed
+
+    def message_type_allowed(self, message_type: object) -> bool:
+        value = str(message_type or "").strip()
+        if self.include_message_types and value not in self.include_message_types:
+            return False
+        if self.exclude_message_types and value in self.exclude_message_types:
+            return False
+        return True
 
     def apply_operational_state_gate(self, job: NotificationJob, stage: str) -> bool:
         """Suppress an obsolete queue incident after live state has changed.

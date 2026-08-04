@@ -73,6 +73,11 @@ class FallbackNotificationAIReviewer(NotificationAIReviewer):
 def notification_ai_reviewer_from_settings(settings: Dict[str, str] = None) -> NotificationAIReviewer:
     settings = settings or runtime_settings()
     use_codex = str(settings.get("notificationAiUseCodex") or os.environ.get("NOTIFICATION_AI_USE_CODEX") or "1").strip() != "0"
+    reasoning_effort = str(
+        settings.get("notificationAiReasoningEffort")
+        or os.environ.get("NOTIFICATION_AI_REASONING_EFFORT")
+        or "low"
+    ).strip().lower()
     try:
         configured_timeout = int(
             settings.get("notificationAiTimeoutSeconds")
@@ -85,16 +90,16 @@ def notification_ai_reviewer_from_settings(settings: Dict[str, str] = None) -> N
         delivery_deadline = int(
             settings.get("notificationAiDeliveryDeadlineSeconds")
             or os.environ.get("NOTIFICATION_AI_DELIVERY_DEADLINE_SECONDS")
-            or 15
+            or 90
         )
     except (TypeError, ValueError):
-        delivery_deadline = 15
+        delivery_deadline = 90
     # The AI may refine a notification, but TypeDB has already produced the
     # verified decision. After this bounded attempt FallbackNotificationAIReviewer
     # emits the deterministic graph-backed response instead of blocking delivery.
     timeout = max(5, min(max(5, configured_timeout), max(5, delivery_deadline)))
     if use_codex:
-        command = codex_command()
+        command = codex_command(reasoning_effort=reasoning_effort)
         if command:
-            return FallbackNotificationAIReviewer(CommandNotificationAIReviewer(command, timeout, "Codex AI (" + codex_model_label() + ")"))
+            return FallbackNotificationAIReviewer(CommandNotificationAIReviewer(command, timeout, "Codex AI (" + codex_model_label(reasoning_effort) + ")"))
     return LocalNotificationAIReviewer()

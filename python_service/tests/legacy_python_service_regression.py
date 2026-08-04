@@ -8989,6 +8989,19 @@ class PythonServiceTests(unittest.TestCase):
         self.assertNotEqual(first_claim[0].job_id, second_claim[0].job_id)
         self.assertEqual({"processing": 2}, queue.summary())
 
+    def test_notification_outbox_claim_separates_ai_and_fast_delivery_lanes(self):
+        db_path = test_store_seed(self.temp.name)
+        queue = TestNotificationJobStore(db_path)
+        queue.upsert_job(NotificationJob.create("투자 판단", account_id="main", message_type="investmentInsight"))
+        queue.upsert_job(NotificationJob.create("운영 상태", account_id="main", message_type="monitorHeartbeat"))
+
+        ai_jobs = queue.claim_pending(limit=1, include_message_types=("investmentInsight",))
+        fast_jobs = queue.claim_pending(limit=1, exclude_message_types=("investmentInsight",))
+
+        self.assertEqual(["investmentInsight"], [job.message_type for job in ai_jobs])
+        self.assertEqual(["monitorHeartbeat"], [job.message_type for job in fast_jobs])
+        self.assertEqual({"processing": 2}, queue.summary())
+
     def test_model_review_outbox_claim_marks_processing_atomically(self):
         db_path = test_store_seed(self.temp.name)
         queue = TestModelReviewJobStore(db_path, legacy_path=Path(self.temp.name) / "missing.json")

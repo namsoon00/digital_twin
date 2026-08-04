@@ -7,6 +7,7 @@ sys.path.insert(0, str(Path(__file__).resolve().parents[1]))
 
 from digital_twin.domain.notification_ai_gate_validation import (  # noqa: E402
     ai_decision_input_packet,
+    build_notification_ai_gate_prompt,
     local_validated_ai_response,
     validated_response_from_payload,
 )
@@ -159,6 +160,7 @@ class ActionEnvelopeAiGateTests(unittest.TestCase):
             invalidation_condition="진입 지지 관계가 사라지거나 직접 반대 뉴스가 확인되면 다시 봅니다.",
             next_checks=["정규장 거래량이 유지되는지 확인"],
             reference_date="2026-07-27 10:00 KST",
+            source="test AI",
         )
 
         message = execution_telegram_message(context, response)
@@ -168,6 +170,78 @@ class ActionEnvelopeAiGateTests(unittest.TestCase):
         self.assertIn("[AI]", message)
         self.assertNotIn("API 조회 정보", message)
         self.assertNotIn("뉴스·공시 요약", message)
+
+    def test_compact_message_uses_distinct_ai_content_for_each_action_stage(self):
+        context = entry_context()
+        context.update({
+            "messageDeliveryLevel": "beginner",
+            "rawLines": ["현재가: $208.16", "추세: 20일 평균보다 2% 높음"],
+        })
+        response = NotificationAIValidatedResponse(
+            action="BUY",
+            action_label="소액 진입 검토",
+            summary="진입 조건이 확인됐습니다.",
+            opinion="소액 진입을 검토합니다.",
+            current_action_plan="오늘은 정한 투자 한도 안에서만 소액 진입을 검토합니다.",
+            change_analysis="관심 유지에서 소액 진입 검토로 바뀌었고, 가격 회복 근거가 새로 확인됐습니다.",
+            next_action_plan="다음 정규장 마감 후 거래량이 유지되면 진입 시점을 다시 정합니다.",
+            invalidation_condition="가격 회복 근거가 사라지면 관심 유지로 되돌립니다.",
+            source="Codex AI (test)",
+        )
+
+        message = execution_telegram_message(context, response)
+
+        self.assertIn("오늘은 정한 투자 한도 안에서만 소액 진입을 검토합니다.", message)
+        self.assertIn("가격 회복 근거가 새로 확인됐습니다.", message)
+        self.assertIn("다음 정규장 마감 후 거래량이 유지되면 진입 시점을 다시 정합니다.", message)
+        self.assertEqual(1, message.count("오늘은 정한 투자 한도 안에서만"))
+        self.assertEqual(1, message.count("다음 정규장 마감 후"))
+
+    def test_local_fallback_is_not_labeled_as_ai(self):
+        context = entry_context()
+        context["messageDeliveryLevel"] = "beginner"
+
+        message = execution_telegram_message(
+            context,
+            local_validated_ai_response(context, source="local fallback"),
+        )
+
+        self.assertIn("[관계 추론]", message)
+        self.assertNotIn("[AI]", message)
+
+    def test_notification_ai_prompt_excludes_copied_full_evidence_payloads(self):
+        context = entry_context()
+        oversized_evidence = {
+            "evidenceId": "evidence:news:1",
+            "title": "NVIDIA 공급 계약",
+            "summary": "공급 계약이 확인됐습니다.",
+            "sourcePublisher": "Reuters",
+            "publishedAt": "2026-07-27T00:30:00Z",
+            "payload": {"fullArticleBody": "copied-provider-payload-" * 10000},
+            "claimLedger": {
+                "claims": [{
+                    "claimId": "claim:1",
+                    "statement": "공급 계약이 공식 발표됐습니다.",
+                    "verificationStatus": "verified",
+                    "investmentJudgmentEligible": True,
+                }],
+            },
+        }
+        context["ontologyRelationContext"]["facts"]["researchEvidence"] = [oversized_evidence]
+        context["activeInvestmentOpinion"] = {
+            "action": "BUY",
+            "thesis": "가격 회복과 계약 근거를 함께 확인합니다.",
+            "evidence": [oversized_evidence],
+            "counterEvidence": [],
+        }
+
+        prompt = build_notification_ai_gate_prompt(context)
+
+        self.assertIn('"currentActionPlan"', prompt)
+        self.assertIn('"changeAnalysis"', prompt)
+        self.assertIn('"nextActionPlan"', prompt)
+        self.assertNotIn("copied-provider-payload", prompt)
+        self.assertLess(len(prompt.encode("utf-8")), 96 * 1024)
 
     def test_compact_message_explains_macro_constraint_with_observed_rates(self):
         context = entry_context()

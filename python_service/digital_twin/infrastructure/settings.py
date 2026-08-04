@@ -119,6 +119,7 @@ TEXT_SETTING_KEYS = [
     "notificationAiGateMessageTypes",
     "notificationAiUseCodex",
     "notificationAiModel",
+    "notificationAiReasoningEffort",
     "notificationAiTimeoutSeconds",
     "notificationAiDeliveryDeadlineSeconds",
     "modelName",
@@ -693,10 +694,11 @@ DEFAULT_STRATEGY_SETTINGS = {
     "notificationAiGateMessageTypes": "investmentInsight",
     "notificationAiUseCodex": "1",
     "notificationAiModel": "gpt-5.6-sol",
+    "notificationAiReasoningEffort": "low",
     "notificationAiTimeoutSeconds": "120",
     # The detailed AI rewrite is optional. A verified TypeDB decision alert
     # must never remain in the outbound queue for the full model timeout.
-    "notificationAiDeliveryDeadlineSeconds": "15",
+    "notificationAiDeliveryDeadlineSeconds": "90",
     "modelName": "나의 매수/매도 모델",
     "modelHypothesis": "손익, 가격 흐름, 수급, 가치, 뉴스와 반대 근거를 상태로 나눠 행동 조건을 결정한다.",
     "alertThresholds": assignment_text(DEFAULT_ALERT_THRESHOLDS),
@@ -1236,6 +1238,7 @@ def runtime_settings(fast_operational_read: bool = False) -> Dict[str, str]:
         "notificationAiGateMessageTypes": value("notificationAiGateMessageTypes", "NOTIFICATION_AI_GATE_MESSAGE_TYPES", DEFAULT_STRATEGY_SETTINGS["notificationAiGateMessageTypes"]),
         "notificationAiUseCodex": value("notificationAiUseCodex", "NOTIFICATION_AI_USE_CODEX", DEFAULT_STRATEGY_SETTINGS["notificationAiUseCodex"]),
         "notificationAiModel": value("notificationAiModel", "NOTIFICATION_AI_MODEL", DEFAULT_STRATEGY_SETTINGS["notificationAiModel"]),
+        "notificationAiReasoningEffort": value("notificationAiReasoningEffort", "NOTIFICATION_AI_REASONING_EFFORT", DEFAULT_STRATEGY_SETTINGS["notificationAiReasoningEffort"]),
         "notificationAiTimeoutSeconds": value("notificationAiTimeoutSeconds", "NOTIFICATION_AI_TIMEOUT_SECONDS", DEFAULT_STRATEGY_SETTINGS["notificationAiTimeoutSeconds"]),
         "notificationAiDeliveryDeadlineSeconds": value("notificationAiDeliveryDeadlineSeconds", "NOTIFICATION_AI_DELIVERY_DEADLINE_SECONDS", DEFAULT_STRATEGY_SETTINGS["notificationAiDeliveryDeadlineSeconds"]),
         "modelName": value("modelName", "MODEL_NAME", DEFAULT_STRATEGY_SETTINGS["modelName"]),

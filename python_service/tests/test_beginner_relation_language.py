@@ -222,6 +222,7 @@ class BeginnerRelationLanguageTests(unittest.TestCase):
                 "검증 2",
                 "검증 3",
             ],
+            source="test AI",
         )
 
         message = execution_telegram_message(
@@ -237,7 +238,7 @@ class BeginnerRelationLanguageTests(unittest.TestCase):
         for expected in [
             "<b>지금 행동</b>",
             "<b>이번 변화</b>",
-            "<b>바뀐 이유</b>",
+            "<b>판단 근거</b>",
             "<b>다음 행동</b>",
             "<b>판단 변경 조건</b>",
             "<b>자료 상태</b>",
@@ -265,6 +266,7 @@ class BeginnerRelationLanguageTests(unittest.TestCase):
             counter_evidence=["반대 1", "반대 2", "반대 3", "반대 4"],
             next_checks=["확인 1", "확인 2", "확인 3", "확인 4"],
             missing_data_impact=["부족 1", "부족 2", "부족 3", "부족 4", "부족 5"],
+            source="test AI",
         )
 
         message = execution_telegram_message(
@@ -277,7 +279,7 @@ class BeginnerRelationLanguageTests(unittest.TestCase):
         )
 
         self.assertIn("<b>지금 행동</b>", message)
-        self.assertIn("<b>바뀐 이유</b>", message)
+        self.assertIn("<b>판단 근거</b>", message)
         self.assertIn("<b>다음 행동</b>", message)
         self.assertIn("근거 1", message)
         self.assertIn("근거 2", message)
@@ -300,7 +302,7 @@ class BeginnerRelationLanguageTests(unittest.TestCase):
         self.assertIn("[AI]", message)
         self.assertNotIn("<b>점수 안내</b>", message)
         self.assertNotIn("관계 강도", message)
-        self.assertIn("RuleBox(관계 분석 규칙)", message)
+        self.assertNotIn("RuleBox", message)
 
     def test_beginner_message_includes_compact_investor_and_execution_flow(self):
         response = NotificationAIValidatedResponse(
@@ -449,7 +451,7 @@ class BeginnerRelationLanguageTests(unittest.TestCase):
             response,
         )
 
-        self.assertIn("<b>바뀐 이유</b>", message)
+        self.assertIn("<b>판단 근거</b>", message)
         self.assertIn("20일 평균보다 12.9%", message)
         self.assertIn("자료 상태", message)
         self.assertNotIn("점수 안내", message)

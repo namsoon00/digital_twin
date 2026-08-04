@@ -120,11 +120,20 @@ BASE_WORKERS = {
         "needle": "python_service/service.py ontology-lab watch",
     },
     "notifications": {
-        "label": "Python notification worker",
+        "label": "Python fast notification worker",
         "pid": data_dir() / "python-notifications.pid",
         "log": data_dir() / "python-notifications.log",
-        "command": [sys.executable, "-u", "python_service/service.py", "notifications", "watch"],
+        "command": [sys.executable, "-u", "python_service/service.py", "notifications", "watch", "--lane", "fast"],
+        # The generic needle also recognizes the pre-lane worker during the
+        # first upgrade restart so it is terminated instead of orphaned.
         "needle": "python_service/service.py notifications watch",
+    },
+    "notification-ai": {
+        "label": "Python investment notification AI worker",
+        "pid": data_dir() / "python-notification-ai.pid",
+        "log": data_dir() / "python-notification-ai.log",
+        "command": [sys.executable, "-u", "python_service/service.py", "notifications", "watch", "--lane", "ai", "--limit", "1"],
+        "needle": "python_service/service.py notifications watch --lane ai --limit 1",
     },
     "operational-maintenance": {
         "label": "Python operational history maintenance worker",

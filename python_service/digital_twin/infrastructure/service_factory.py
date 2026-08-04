@@ -68,6 +68,7 @@ from ..domain.events import (
 )
 from ..domain.market_data import number
 from ..domain.monitoring import RealtimeMonitor
+from ..domain.notification_ai_gate_contracts import ai_gate_message_type_set
 from ..domain.ontology_worlds import portfolio_world_id
 from .event_bus import EventBus, default_event_bus
 from .bok_calendar_source import BokPolicyDecisionCalendarSource
@@ -345,8 +346,14 @@ def build_model_review_runner(dry_run: bool = False) -> ModelReviewRunner:
     )
 
 
-def build_notification_queue_runner(dry_run: bool = False) -> NotificationQueueRunner:
+def build_notification_queue_runner(dry_run: bool = False, lane: str = "all") -> NotificationQueueRunner:
     settings = runtime_settings()
+    normalized_lane = str(lane or "all").strip().lower()
+    if normalized_lane not in {"all", "ai", "fast"}:
+        normalized_lane = "all"
+    ai_message_types = sorted(ai_gate_message_type_set(settings.get("notificationAiGateMessageTypes")))
+    include_message_types = ai_message_types if normalized_lane == "ai" else []
+    exclude_message_types = ai_message_types if normalized_lane == "fast" else []
     monitor_store = stores.monitor_store(settings)
     investment_brain_service = build_investment_brain_service(settings)
     reasoning_queue_probe = build_ontology_reasoning_queue_probe(settings)
@@ -396,6 +403,8 @@ def build_notification_queue_runner(dry_run: bool = False) -> NotificationQueueR
         settings=settings,
         operational_state_resolver=queue_health_at_dispatch,
         operational_delivery_recorder=queue_health_service.record_notification_delivery,
+        include_message_types=include_message_types,
+        exclude_message_types=exclude_message_types,
     )
 
 

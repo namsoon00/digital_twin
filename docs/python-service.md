@@ -273,7 +273,7 @@ Configuration:
 
 Monitoring snapshots, alert detections, account changes, and cycle completions are appended to `domain_events`. The configured event-log adapter replays that stream in event order so lightweight projections and audits can be rebuilt from the event log instead of trusting only the latest mutable state.
 
-Monitoring alerts, model-review messages, and work-handoff messages enqueue `notification_jobs` instead of sending directly. This table is the notification outbox. Jobs derived from a domain event store `source_event_id`, `source_event_name`, and a `dedupe_key`, so replaying or retrying an event does not enqueue the same outbound message twice. The notification worker renders the current `notification_templates` row for the job's `message_type` at delivery time, then calls the configured notifier. That keeps Telegram/API delivery and message formatting out of realtime monitoring and model-review workers.
+Monitoring alerts, model-review messages, and work-handoff messages enqueue `notification_jobs` instead of sending directly. This table is the notification outbox. Jobs derived from a domain event store `source_event_id`, `source_event_name`, and a `dedupe_key`, so replaying or retrying an event does not enqueue the same outbound message twice. The delivery workers render the current `notification_templates` row for the job's `message_type` at delivery time, then call the configured notifier. The fast lane handles operational and deterministic messages. The AI lane claims only configured investment-AI message types, so a bounded AI rewrite cannot delay storage, queue-health, or work-handoff alerts. That keeps Telegram/API delivery and message formatting out of realtime monitoring and model-review workers.
 
 Template management:
 
@@ -290,6 +290,10 @@ Configuration:
 - `NOTIFICATION_QUEUE_INTERVAL_SECONDS`: defaults to `30`.
 - `NOTIFICATION_QUEUE_BATCH_SIZE`: defaults to `10`.
 - `NOTIFICATION_SEND_GAP_SECONDS`: defaults to `1`.
+- `NOTIFICATION_AI_REASONING_EFFORT`: defaults to `low` for the latency-bounded investment notification rewrite. Research, article, disclosure, hypothesis, and model-review jobs retain `max`.
+- `NOTIFICATION_AI_DELIVERY_DEADLINE_SECONDS`: defaults to `90`. On timeout or invalid JSON, the AI lane emits the deterministic graph-backed response and labels it as relation inference rather than AI output.
+- `python3 python_service/service.py notifications watch --lane fast`: claims every non-AI message type.
+- `python3 python_service/service.py notifications watch --lane ai --limit 1`: claims only configured investment-AI message types.
 
 ## Async Model Review
 
@@ -305,7 +309,7 @@ The model-review worker processes that queue separately and enqueues a second no
 Configuration:
 
 - `MODEL_REVIEW_USE_CODEX`: defaults to `1`; when `codex` is available on PATH, the worker uses the read-only `gpt-5.6-sol` command with `model_reasoning_effort="max"`.
-- All application-owned AI paths (article analysis, disclosure interpretation, notification validation, model review, and hypothesis/rule advisers) use the same fixed model policy. Legacy custom-command settings are retained only for configuration compatibility and are ignored.
+- All application-owned AI paths use the fixed `gpt-5.6-sol` model. Asynchronous article, disclosure, research, hypothesis/rule, and model-review paths use `max`; the latency-bounded notification rewrite explicitly uses `low`. Legacy custom model-command settings are retained only for configuration compatibility and are ignored.
 - `MODEL_REVIEW_TIMEOUT_SECONDS`: defaults to `180`.
 - `MODEL_REVIEW_INTERVAL_SECONDS`: defaults to `300`.
 - `MODEL_REVIEW_BATCH_SIZE`: defaults to `1`.

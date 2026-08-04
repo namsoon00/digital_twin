@@ -72,6 +72,9 @@ class NotificationAIValidatedResponse:
     review_label: str = "조건 확인"
     summary: str = ""
     opinion: str = ""
+    current_action_plan: str = ""
+    change_analysis: str = ""
+    next_action_plan: str = ""
     evidence: List[str] = field(default_factory=list)
     counter_evidence: List[str] = field(default_factory=list)
     invalidation_condition: str = ""
@@ -106,6 +109,9 @@ class NotificationAIValidatedResponse:
             "dataStateLabel": "data_state_label",
             "reviewLevel": "review_level",
             "reviewLabel": "review_label",
+            "currentActionPlan": "current_action_plan",
+            "changeAnalysis": "change_analysis",
+            "nextActionPlan": "next_action_plan",
             "counterEvidence": "counter_evidence",
             "invalidationCondition": "invalidation_condition",
             "nextChecks": "next_checks",
@@ -142,6 +148,9 @@ class NotificationAIValidatedResponse:
         payload["dataStateLabel"] = payload.pop("data_state_label")
         payload["reviewLevel"] = payload.pop("review_level")
         payload["reviewLabel"] = payload.pop("review_label")
+        payload["currentActionPlan"] = payload.pop("current_action_plan")
+        payload["changeAnalysis"] = payload.pop("change_analysis")
+        payload["nextActionPlan"] = payload.pop("next_action_plan")
         payload["counterEvidence"] = payload.pop("counter_evidence")
         payload["invalidationCondition"] = payload.pop("invalidation_condition")
         payload["nextChecks"] = payload.pop("next_checks")

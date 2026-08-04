@@ -353,7 +353,7 @@ def notifications_command(args) -> int:
         return 0
     settings = runtime_settings()
     limit = int(args.limit or settings.get("notificationQueueBatchSize") or 10)
-    runner = build_notification_queue_runner(dry_run=args.dry_run)
+    runner = build_notification_queue_runner(dry_run=args.dry_run, lane=getattr(args, "lane", "all"))
     if args.notifications_action == "once":
         processed = runner.run_once(limit=limit)
         print("notificationJobsProcessed=" + str(processed))
@@ -1548,9 +1548,11 @@ def build_parser() -> argparse.ArgumentParser:
     notify_once = notification_actions.add_parser("once")
     notify_once.add_argument("--dry-run", action="store_true")
     notify_once.add_argument("--limit", default="")
+    notify_once.add_argument("--lane", choices=["all", "fast", "ai"], default="all")
     notify_watch = notification_actions.add_parser("watch")
     notify_watch.add_argument("--dry-run", action="store_true")
     notify_watch.add_argument("--limit", default="")
+    notify_watch.add_argument("--lane", choices=["all", "fast", "ai"], default="all")
     notification_actions.add_parser("status")
     notifications.set_defaults(func=notifications_command)
 

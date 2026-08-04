@@ -2492,9 +2492,7 @@ def execution_telegram_message_compact_beginner(
         "",
         "<b>지금 행동</b>",
         _html_bullet(
-            "[AI] "
-            + (action_label_for_action(response.action, context) or response.action_label)
-            + (". " + compact_sentence_count(response.summary, 1) if str(response.summary or "").strip() else ""),
+            compact_current_action_line(context, response),
             level,
         ),
     ]
@@ -2506,7 +2504,7 @@ def execution_telegram_message_compact_beginner(
         parts.extend(["", "<b>현재 흐름</b>", *[_html_bullet(row, level) for row in flow_rows]])
     reasons = compact_action_reason_rows(context, response)
     if reasons:
-        parts.extend(["", "<b>바뀐 이유</b>", *[_html_bullet(item, level) for item in reasons]])
+        parts.extend(["", "<b>" + compact_reason_heading(context) + "</b>", *[_html_bullet(item, level) for item in reasons]])
     next_action = compact_next_action_line(context, response)
     invalidation = compact_invalidation_line(context, response)
     if next_action and _same_compact_message_text(next_action, invalidation):
@@ -2531,8 +2529,35 @@ def execution_telegram_message_compact_beginner(
     return "\n".join(part for part in parts if str(part).strip() or part == "").strip()
 
 
+def compact_current_action_line(context: Dict[str, object], response: NotificationAIValidatedResponse) -> str:
+    source = str(response.source or "").strip().lower()
+    marker = "[관계 추론]" if source.startswith("local") else "[AI]"
+    action = action_label_for_action(response.action, context) or response.action_label
+    detail = compact_sentence_count(
+        customer_visible_ai_text(
+            response.current_action_plan
+            or response.opinion
+            or response.summary
+            or ""
+        ),
+        2,
+    )
+    if detail and _same_compact_message_text(action, detail):
+        return marker + " " + detail
+    return marker + " " + action + ((". " + detail) if detail else "")
+
+
+def compact_reason_heading(context: Dict[str, object]) -> str:
+    transition = decision_transition_from_context(context)
+    return "바뀐 이유" if str(transition.get("kind") or "").strip().lower() == "action-changed" else "판단 근거"
+
+
 def compact_decision_transition(context: Dict[str, object], response: NotificationAIValidatedResponse) -> str:
     presentation = decision_transition_presentation(context, response.action)
+    analysis = compact_sentence_count(customer_visible_ai_text(response.change_analysis or ""), 2)
+    if analysis and not compact_reason_is_internal(analysis):
+        label = str(presentation.get("label") or "판단 변화").strip()
+        return "[" + label + "] " + analysis
     if presentation.get("summary"):
         return "[" + presentation.get("label", "판단 변경") + "] " + presentation["summary"]
     transition = decision_transition_from_context(context)
@@ -2966,6 +2991,18 @@ def compact_next_action_line(context: Dict[str, object], response: NotificationA
             item for item in _execution_plan_list(context, "nextChecks")
             if item and item not in next_checks
         )
+    explicit = compact_sentence_count(
+        customer_visible_ai_text(response.next_action_plan or ""),
+        2,
+    )
+    if explicit and not compact_reason_is_internal(explicit):
+        return _friendly_next_check_text(context, explicit)
+    hypothesis_check = compact_sentence_count(
+        customer_visible_ai_text(_strategy_guide_value(response, "hypothesisNextCheck")),
+        2,
+    )
+    if hypothesis_check and not compact_reason_is_internal(hypothesis_check):
+        return _friendly_next_check_text(context, hypothesis_check)
     macro_value = _macro_next_action_line(context, next_checks)
     if macro_value:
         return macro_value

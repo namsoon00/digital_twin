@@ -10,6 +10,7 @@ from .settings import ROOT_DIR, runtime_settings
 
 ENFORCED_CODEX_MODEL = "gpt-5.6-sol"
 ENFORCED_CODEX_REASONING_EFFORT = "max"
+VALID_CODEX_REASONING_EFFORTS = {"low", "medium", "high", "max"}
 
 
 class ModelReviewer:
@@ -60,27 +61,33 @@ class FallbackModelReviewer(ModelReviewer):
             return self.fallback.review(job) + "\n- LLM 상태: 외부 분석 실패로 로컬 진단 사용 (" + str(error)[:160] + ")"
 
 
-def codex_model_label() -> str:
-    return "GPT-5.6 Sol · max"
+def normalized_codex_reasoning_effort(value: object = "") -> str:
+    effort = str(value or ENFORCED_CODEX_REASONING_EFFORT).strip().lower()
+    return effort if effort in VALID_CODEX_REASONING_EFFORTS else ENFORCED_CODEX_REASONING_EFFORT
 
 
-def codex_cli_arguments() -> list:
-    """Return the non-negotiable model policy for every app-owned Codex call."""
+def codex_model_label(reasoning_effort: str = "") -> str:
+    return "GPT-5.6 Sol · " + normalized_codex_reasoning_effort(reasoning_effort)
+
+
+def codex_cli_arguments(reasoning_effort: str = "") -> list:
+    """Return the fixed model and the bounded effort selected for a workload."""
 
     return [
         "--model",
         ENFORCED_CODEX_MODEL,
         "--config",
-        'model_reasoning_effort="' + ENFORCED_CODEX_REASONING_EFFORT + '"',
+        'model_reasoning_effort="' + normalized_codex_reasoning_effort(reasoning_effort) + '"',
     ]
 
 
-def codex_command(_requested_model: str = "") -> str:
-    """Build a read-only command with the project-wide quality-first model policy.
+def codex_command(_requested_model: str = "", reasoning_effort: str = "") -> str:
+    """Build a read-only command with the project-wide fixed model policy.
 
     The argument is retained for compatibility with older callers, but model
-    selection is intentionally not caller-configurable.  A mixed model policy
-    made alert, article, disclosure, and review output difficult to audit.
+    selection is intentionally not caller-configurable. Workload-specific
+    reasoning effort is explicit: realtime alert wording is latency-bounded,
+    while asynchronous research and review keep the quality-first max policy.
     """
 
     executable = shutil.which("codex")
@@ -89,7 +96,7 @@ def codex_command(_requested_model: str = "") -> str:
     parts = [
         shlex.quote(executable),
     ]
-    for argument in codex_cli_arguments():
+    for argument in codex_cli_arguments(reasoning_effort):
         parts.append(shlex.quote(argument))
     parts.extend([
         "-a",

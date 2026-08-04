@@ -727,7 +727,7 @@ class MySQLNotificationJobStore(MySQLOperationalConnection):
         rows = connection.execute(
             """
             SELECT text, payload_json, created_at, status FROM notification_jobs
-            WHERE message_type = %s AND created_at >= %s AND status IN ('pending', 'processing', 'awaiting_ai', 'done')
+            WHERE message_type = %s AND created_at >= %s AND status IN ('pending', 'processing', 'awaiting_ai', 'done', 'suppressed')
             ORDER BY created_at DESC
             LIMIT %s
             """,
@@ -740,9 +740,12 @@ class MySQLNotificationJobStore(MySQLOperationalConnection):
             if notification_subject_group_key(previous) != current_group:
                 continue
             status = str(row["status"] or "").strip()
-            if status != "done" and not notification_history_is_recent_in_flight(row):
-                continue
             context = dict(previous.context or {})
+            if status == "suppressed":
+                if str(context.get("deliverySuppressionReason") or "") != "initial_graph_baseline":
+                    continue
+            elif status != "done" and not notification_history_is_recent_in_flight(row):
+                continue
             context["_relationPredecessorSentAt"] = str(row["created_at"] or previous.created_at or "")
             return context
         return {}

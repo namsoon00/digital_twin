@@ -49,6 +49,41 @@ from digital_twin.infrastructure.mysql_notification_config import MySQLNotificat
 
 
 class NotificationDataQualityPolicyTests(unittest.TestCase):
+    def test_initial_non_actionable_graph_state_is_stored_as_a_suppressed_baseline(self):
+        rule = default_notification_rule("investmentInsight")
+        job = NotificationJob.create(
+            "NVIDIA 관심 유지",
+            account_id="main",
+            message_type="investmentInsight",
+            context={
+                "severity": "WATCH",
+                "symbol": "NVDA",
+                "ontologyInsight": {"subject": "NVDA", "dispatchInsightType": "watchlist"},
+                "ontologyRelationDiff": {
+                    "material": False,
+                    "changeClass": "baseline",
+                    "decisionTransition": {
+                        "kind": "initial",
+                        "material": False,
+                        "currentAction": "hold",
+                    },
+                },
+            },
+        )
+        decision = evaluate_notification_rule(job, rule)
+
+        decision = apply_state_cooldown_rule(
+            decision,
+            rule,
+            sent_count=0,
+            previous_context={},
+            job=job,
+        )
+
+        self.assertFalse(decision.should_send)
+        self.assertEqual("baseline", decision.state_decision)
+        self.assertEqual("initial_graph_baseline", decision.suppression_reason)
+
     def test_market_observation_relies_on_monitor_cadence_not_the_generic_similarity_window(self):
         rule = default_notification_rule(MARKET_OBSERVATION)
 

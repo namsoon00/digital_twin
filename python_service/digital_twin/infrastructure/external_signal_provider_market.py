@@ -143,7 +143,10 @@ class ExternalSignalMarketMixin:
                         "series_id": series_id,
                         "api_key": api_key,
                         "file_type": "json",
-                        "limit": "2",
+                        # FRED publishes these series daily. Keep enough source
+                        # observations to distinguish a real rate move from a
+                        # monitor refresh of the same published value.
+                        "limit": "25",
                         "sort_order": "desc",
                     })
                     payload = self.fetch_json_with_timeout(
@@ -155,14 +158,47 @@ class ExternalSignalMarketMixin:
                         maximum_timeout=20.0,
                     )
                     observations = payload.get("observations") if isinstance(payload.get("observations"), list) else []
-                    latest = next((item for item in observations if number(item.get("value"))), None)
-                    if not latest:
+                    valid_observations = []
+                    for observation in observations:
+                        if not isinstance(observation, dict):
+                            continue
+                        raw_value = observation.get("value")
+                        if raw_value in (None, "", "."):
+                            continue
+                        try:
+                            value = float(raw_value)
+                        except (TypeError, ValueError):
+                            continue
+                        valid_observations.append({
+                            "date": str(observation.get("date") or ""),
+                            "value": value,
+                        })
+                    if not valid_observations:
                         raise RuntimeError("empty observations")
-                    return {
+                    latest = valid_observations[0]
+                    result = {
                         "provider": "FRED",
                         "date": str(latest.get("date") or ""),
                         "value": number(latest.get("value")),
+                        "observationDate": str(latest.get("date") or ""),
+                        "sourceAsOf": str(latest.get("date") or ""),
+                        "observationCount": len(valid_observations),
+                        "changeBasis": "fred-published-observations",
                     }
+                    lookbacks = ((1, "delta1dBp"), (5, "delta5dBp"), (20, "delta20dBp"))
+                    for index, field in lookbacks:
+                        if len(valid_observations) <= index:
+                            continue
+                        prior = valid_observations[index]
+                        result[field] = (number(latest.get("value")) - number(prior.get("value"))) * 100
+                        result[field.replace("delta", "comparison", 1).replace("Bp", "Date")] = str(prior.get("date") or "")
+                    if len(valid_observations) > 1:
+                        previous = valid_observations[1]
+                        result["previousValue"] = number(previous.get("value"))
+                        result["previousDate"] = str(previous.get("date") or "")
+                        result["deltaBp"] = result.get("delta1dBp", 0.0)
+                        result["deltaPctPoint"] = number(latest.get("value")) - number(previous.get("value"))
+                    return result
 
                 macro["series"][series_id] = self.guarded_call("FRED", "series:" + series_id, fetch_series)
             except Exception as error:  # noqa: BLE001
@@ -170,6 +206,26 @@ class ExternalSignalMarketMixin:
         series = macro.get("series") or {}
         if "DGS10" in series and "DGS2" in series:
             macro["yieldSpread10y2y"] = number(series["DGS10"].get("value")) - number(series["DGS2"].get("value"))
+            dgs10_previous = series["DGS10"].get("previousValue")
+            dgs2_previous = series["DGS2"].get("previousValue")
+            if dgs10_previous not in (None, "") and dgs2_previous not in (None, ""):
+                previous_spread = number(dgs10_previous) - number(dgs2_previous)
+                macro["previousYieldSpread10y2y"] = previous_spread
+                macro["yieldSpread10y2yDeltaBp"] = (
+                    number(macro.get("yieldSpread10y2y")) - previous_spread
+                ) * 100
+                previous_dates = [
+                    str(item.get("previousDate") or "")
+                    for item in [series["DGS10"], series["DGS2"]]
+                    if str(item.get("previousDate") or "")
+                ]
+                macro["yieldSpreadPreviousDate"] = min(previous_dates) if previous_dates else ""
+            observation_dates = [
+                str(item.get("date") or "")
+                for item in [series["DGS10"], series["DGS2"]]
+                if str(item.get("date") or "")
+            ]
+            macro["yieldSpreadObservationDate"] = min(observation_dates) if observation_dates else ""
 
     def add_fx_rates(self, signals: Dict[str, object], positions: List[Position] = None) -> None:
         assignments = symbol_assignments(self.settings.get("fxRates") or "")

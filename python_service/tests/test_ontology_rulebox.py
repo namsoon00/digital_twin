@@ -119,7 +119,11 @@ class OntologyRuleBoxTests(unittest.TestCase):
     def test_external_raw_fact_rules_compile_to_native_typedb_queries(self):
         rules_by_id = {item.rule_id: item for item in default_graph_inference_rules()}
         expected_rule_ids = {
-            "graph.macro.regime.risk.v1",
+            "graph.macro.rate.rise.confirmed_risk.v1",
+            "graph.macro.rate.fall.confirmed_support.v1",
+            "graph.macro.rate.high_regime_entry.risk.v1",
+            "graph.macro.rate.stock_divergence.support.v1",
+            "graph.macro.curve.inversion_entry.risk.v1",
             "graph.fx.usdkrw.exposure.regime.v1",
             "graph.crypto.exposure.volatility_risk.v1",
             "graph.earnings.surprise.risk.v1",
@@ -165,6 +169,12 @@ class OntologyRuleBoxTests(unittest.TestCase):
         self.assertIn("ontology-fx-pair", fx_query)
         self.assertIn("ontology-value-number", fx_query)
         self.assertIn("ontology-surprise-percentage", earnings_query)
+        rate_query = typedb_native_match_query(
+            rules_by_id["graph.macro.rate.rise.confirmed_risk.v1"].to_dict(),
+            target_symbols=["NVDA"],
+        )["query"]
+        self.assertIn("ontology-delta-5d-bp", rate_query)
+        self.assertIn("ontology-rate-series-id", rate_query)
 
         direct_crypto_query = typedb_native_match_query(
             rules_by_id["graph.crypto.market.24h.down.watch.v1"].to_dict(),
@@ -178,7 +188,7 @@ class OntologyRuleBoxTests(unittest.TestCase):
         rules_by_id = {item.rule_id: item for item in rules}
 
         self.assertEqual([], rulebox_semantic_violations(rules))
-        self.assertEqual(91, sum(item.enabled for item in rules))
+        self.assertEqual(95, sum(item.enabled for item in rules))
         self.assertFalse(rules_by_id["graph.benchmark.beta.context.v1"].enabled)
         self.assertFalse(rules_by_id["graph.data_quality.action_block.v1"].enabled)
         self.assertFalse(rules_by_id["graph.holding.trend_transition.risk.v1"].enabled)
@@ -1413,7 +1423,7 @@ class OntologyRuleBoxTests(unittest.TestCase):
         preferred_rate_signal = next(
             item
             for item in condition_rows
-            if item["id"] == "rule-condition:graph.instrument_profile.preferred_income.rate_sensitivity.v1:high-rate-signal"
+            if item["id"] == "rule-condition:graph.instrument_profile.preferred_income.rate_sensitivity.v1:preferred-rate-rise"
         )
         cyclical_growth_profile = next(
             item
@@ -1423,12 +1433,12 @@ class OntologyRuleBoxTests(unittest.TestCase):
         macro_sensitivity = next(
             item
             for item in condition_rows
-            if item["id"] == "rule-condition:graph.macro.regime.risk.v1:macro-sensitivity-source"
+            if item["id"] == "rule-condition:graph.macro.rate.rise.confirmed_risk.v1:rate-factor-sensitivity"
         )
-        macro_high_rate = next(
+        macro_rate_rise = next(
             item
             for item in condition_rows
-            if item["id"] == "rule-condition:graph.macro.regime.risk.v1:high-rate-level"
+            if item["id"] == "rule-condition:graph.macro.rate.rise.confirmed_risk.v1:rate-five-observation-rise"
         )
         crypto_exposure = next(
             item
@@ -1482,7 +1492,12 @@ class OntologyRuleBoxTests(unittest.TestCase):
         self.assertIn("graph.benchmark.beta.context.v1", rule_ids)
         self.assertIn("graph.price.reclaim.thesis_support.v1", rule_ids)
         self.assertIn("graph.coverage.gap.validation_state.v1", rule_ids)
-        self.assertIn("graph.macro.regime.risk.v1", rule_ids)
+        self.assertNotIn("graph.macro.regime.risk.v1", rule_ids)
+        self.assertIn("graph.macro.rate.rise.confirmed_risk.v1", rule_ids)
+        self.assertIn("graph.macro.rate.fall.confirmed_support.v1", rule_ids)
+        self.assertIn("graph.macro.rate.high_regime_entry.risk.v1", rule_ids)
+        self.assertIn("graph.macro.rate.stock_divergence.support.v1", rule_ids)
+        self.assertIn("graph.macro.curve.inversion_entry.risk.v1", rule_ids)
         self.assertIn("graph.fx.usdkrw.exposure.regime.v1", rule_ids)
         self.assertIn("graph.crypto.exposure.volatility_risk.v1", rule_ids)
         self.assertIn("graph.earnings.surprise.risk.v1", rule_ids)
@@ -1576,13 +1591,18 @@ class OntologyRuleBoxTests(unittest.TestCase):
         self.assertEqual(["rate"], preferred_rate_factor["conditionTargetFactors"])
         self.assertEqual(["high"], preferred_rate_factor["conditionTargetSensitivityLevels"])
         self.assertEqual("HAS_RATE_SENSITIVITY", preferred_rate_signal["conditionRelationType"])
-        self.assertEqual(4.0, preferred_rate_signal["conditionTargetMinValue"])
+        self.assertEqual(["rateSeriesId", "delta5dBp"], preferred_rate_signal["conditionTargetFields"])
+        self.assertEqual(10.0, preferred_rate_signal["conditionTargetMinValue"])
+        self.assertEqual("any", preferred_rate_signal["conditionRole"])
         self.assertEqual(["SemiconductorHBM", "CyclicalGrowth", "SemiconductorCyclical", "AIGrowth"], cyclical_growth_profile["conditionTargetInstrumentArchetypes"])
-        self.assertEqual("HAS_RATE_SENSITIVITY", macro_sensitivity["conditionRelationType"])
-        self.assertEqual("HAS_RATE_SENSITIVITY", macro_high_rate["conditionRelationType"])
-        self.assertEqual("interest-rate", macro_high_rate["conditionTargetKind"])
-        self.assertEqual(4.5, macro_high_rate["conditionTargetMinValue"])
-        self.assertEqual("any", macro_high_rate["conditionRole"])
+        self.assertEqual("HAS_FACTOR_SENSITIVITY", macro_sensitivity["conditionRelationType"])
+        self.assertEqual(["rate"], macro_sensitivity["conditionTargetFactors"])
+        self.assertEqual(["medium", "high"], macro_sensitivity["conditionTargetSensitivityLevels"])
+        self.assertEqual("HAS_RATE_SENSITIVITY", macro_rate_rise["conditionRelationType"])
+        self.assertEqual("interest-rate", macro_rate_rise["conditionTargetKind"])
+        self.assertEqual(["rateSeriesId", "delta5dBp"], macro_rate_rise["conditionTargetFields"])
+        self.assertEqual(15.0, macro_rate_rise["conditionTargetMinValue"])
+        self.assertEqual("required", macro_rate_rise["conditionRole"])
         self.assertEqual("HAS_CRYPTO_EXPOSURE", crypto_exposure["conditionRelationType"])
         self.assertEqual("crypto-exposure", crypto_exposure["conditionTargetKind"])
         self.assertEqual("HAS_CRYPTO_EXPOSURE", crypto_downside["conditionRelationType"])

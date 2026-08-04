@@ -83,7 +83,20 @@ from .graph_store_rulebox import rulebox_rules_to_payload
 from .runtime_identity import runtime_identity
 
 
-DEPRECATED_TYPEDB_RULE_IDS = {"shadow.market_psychology.state.v1"}
+DEPRECATED_TYPEDB_RULE_IDS = {
+    "shadow.market_psychology.state.v1",
+    # Replaced by change-and-response rules. The old rule treated a static
+    # rate level as a recurring stock risk and therefore over-selected macro.
+    "graph.macro.regime.risk.v1",
+}
+
+RATE_MACRO_RULE_IDS = {
+    "graph.macro.rate.rise.confirmed_risk.v1",
+    "graph.macro.rate.fall.confirmed_support.v1",
+    "graph.macro.rate.high_regime_entry.risk.v1",
+    "graph.macro.rate.stock_divergence.support.v1",
+    "graph.macro.curve.inversion_entry.risk.v1",
+}
 
 CRYPTO_MARKET_RULE_IDS = {
     "graph.crypto.market.24h.up.watch.v1",
@@ -124,7 +137,8 @@ RULEBOX_RAW_ABOX_RUNTIME_RULE_IDS = {
     "graph.market_proxy.observation.support_context.v1",
     "graph.portfolio.concentration.review.v1",
     "graph.price.reclaim.thesis_support.v1",
-    "graph.macro.regime.risk.v1",
+    "graph.instrument_profile.preferred_income.rate_sensitivity.v1",
+    *RATE_MACRO_RULE_IDS,
     "graph.crypto.exposure.volatility_risk.v1",
     *CRYPTO_MARKET_RULE_IDS,
     # Execution rules use normalized execution-metric observations. Existing
@@ -148,6 +162,8 @@ RULEBOX_RAW_ABOX_RUNTIME_RULE_VERSIONS["graph.execution.capacity_safe.v1"] = "v3
 RULEBOX_RAW_ABOX_RUNTIME_RULE_VERSIONS["graph.price.reclaim.thesis_support.v1"] = "v3"
 for _rule_id in CRYPTO_MARKET_RULE_IDS:
     RULEBOX_RAW_ABOX_RUNTIME_RULE_VERSIONS[_rule_id] = "v1"
+for _rule_id in RATE_MACRO_RULE_IDS:
+    RULEBOX_RAW_ABOX_RUNTIME_RULE_VERSIONS[_rule_id] = "v1"
 
 # These native-rule templates were added after RuleBox had already become the
 # persisted source of truth.  A controlled release migration appends only
@@ -156,7 +172,7 @@ for _rule_id in CRYPTO_MARKET_RULE_IDS:
 # deleted when an operator wants to suppress them, so their governance history
 # remains intact.
 RULEBOX_PLATFORM_RELEASE_ADDITION_IDS = {
-    "graph.macro.regime.risk.v1",
+    *RATE_MACRO_RULE_IDS,
     "graph.fx.usdkrw.exposure.regime.v1",
     "graph.crypto.exposure.volatility_risk.v1",
     *CRYPTO_MARKET_RULE_IDS,

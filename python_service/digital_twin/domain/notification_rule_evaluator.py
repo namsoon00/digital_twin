@@ -1009,6 +1009,13 @@ def apply_state_cooldown_rule(
     has_graph_transition = bool(transition)
     transition_is_material = bool(transition.get("material"))
     transition_kind = str(transition.get("kind") or "")
+    if has_graph_transition and transition_kind == "initial" and not transition_is_material:
+        decision.state_decision = "baseline"
+        decision.state_suppressed = True
+        decision.state_reason = "최초 비실행 관계 상태를 알림 없이 기준선으로 저장"
+        decision.reasons.append("상태 정책: " + decision.state_reason)
+        decision.mark_suppressed("initial_graph_baseline", decision.state_reason)
+        return decision
     if has_graph_transition and transition_is_material and transition_kind != "initial" and decision.state_recent_sent_count > 0:
         decision.state_decision = "meaningful-change"
         decision.state_reason = "실행 판단 전이: " + str(transition.get("summary") or "현재 실행 범위가 바뀌었습니다.")

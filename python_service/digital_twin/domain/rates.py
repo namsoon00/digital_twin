@@ -13,12 +13,22 @@ class InterestRateContext:
     dgs10_delta_bp: float = 0.0
     dgs2_delta_bp: float = 0.0
     dff_delta_bp: float = 0.0
+    dgs10_delta_5d_bp: float = 0.0
+    dgs10_delta_20d_bp: float = 0.0
+    dgs2_delta_5d_bp: float = 0.0
+    dgs2_delta_20d_bp: float = 0.0
+    dff_delta_5d_bp: float = 0.0
+    dff_delta_20d_bp: float = 0.0
     yield_spread_delta_bp: float = 0.0
+    dgs10_observation_date: str = ""
+    dgs2_observation_date: str = ""
+    dff_observation_date: str = ""
+    yield_spread_observation_date: str = ""
     has_dgs10_delta: bool = False
     has_dgs2_delta: bool = False
     has_dff_delta: bool = False
     has_yield_spread_delta: bool = False
-    rate_regime: str = "neutral_rate"
+    rate_regime: str = "unavailable_rate"
     yield_curve_regime: str = "flat_or_unknown_curve"
     has_interest_rate_signals: bool = False
     has_interest_rate_delta_signal: bool = False
@@ -33,7 +43,17 @@ class InterestRateContext:
             "macroDgs10DeltaBp": self.dgs10_delta_bp,
             "macroDgs2DeltaBp": self.dgs2_delta_bp,
             "macroDffDeltaBp": self.dff_delta_bp,
+            "macroDgs10Delta5dBp": self.dgs10_delta_5d_bp,
+            "macroDgs10Delta20dBp": self.dgs10_delta_20d_bp,
+            "macroDgs2Delta5dBp": self.dgs2_delta_5d_bp,
+            "macroDgs2Delta20dBp": self.dgs2_delta_20d_bp,
+            "macroDffDelta5dBp": self.dff_delta_5d_bp,
+            "macroDffDelta20dBp": self.dff_delta_20d_bp,
             "macroYieldSpreadDeltaBp": self.yield_spread_delta_bp,
+            "macroDgs10ObservationDate": self.dgs10_observation_date,
+            "macroDgs2ObservationDate": self.dgs2_observation_date,
+            "macroDffObservationDate": self.dff_observation_date,
+            "macroYieldSpreadObservationDate": self.yield_spread_observation_date,
             "hasMacroDgs10Delta": self.has_dgs10_delta,
             "hasMacroDgs2Delta": self.has_dgs2_delta,
             "hasMacroDffDelta": self.has_dff_delta,
@@ -50,12 +70,9 @@ class InterestRateContext:
 
 
 def rate_regime_for_dgs10(dgs10: float) -> str:
-    value = number(dgs10)
-    if value >= 4.5:
-        return "high_rate"
-    if value and value <= 3.0:
-        return "low_rate"
-    return "neutral_rate"
+    # The ABox records the observed level only. Whether that level is high,
+    # low, or decision-relevant is an editable TypeDB RuleBox concern.
+    return "observed_rate" if number(dgs10) else "unavailable_rate"
 
 
 def yield_curve_regime_for_spread(spread: float) -> str:
@@ -91,6 +108,17 @@ def _series_delta_bp(item: Dict[str, object]):
     if current_value is not None and previous_value is not None:
         return (current_value - previous_value) * 100
     return None
+
+
+def _series_window_delta_bp(item: Dict[str, object], field: str) -> float:
+    value = optional_number(item, [field]) if isinstance(item, dict) else None
+    return value if value is not None else 0.0
+
+
+def _series_observation_date(item: Dict[str, object]) -> str:
+    if not isinstance(item, dict):
+        return ""
+    return str(item.get("observationDate") or item.get("sourceAsOf") or item.get("date") or "")
 
 
 def _macro_delta_bp(macro: Dict[str, object], current_key: str, explicit_keys):
@@ -134,7 +162,17 @@ def interest_rate_context_from_signals(external_signals: Dict[str, object]) -> I
         dgs10_delta_bp=dgs10_delta_bp or 0.0,
         dgs2_delta_bp=dgs2_delta_bp or 0.0,
         dff_delta_bp=dff_delta_bp or 0.0,
+        dgs10_delta_5d_bp=_series_window_delta_bp(dgs10_item, "delta5dBp"),
+        dgs10_delta_20d_bp=_series_window_delta_bp(dgs10_item, "delta20dBp"),
+        dgs2_delta_5d_bp=_series_window_delta_bp(dgs2_item, "delta5dBp"),
+        dgs2_delta_20d_bp=_series_window_delta_bp(dgs2_item, "delta20dBp"),
+        dff_delta_5d_bp=_series_window_delta_bp(dff_item, "delta5dBp"),
+        dff_delta_20d_bp=_series_window_delta_bp(dff_item, "delta20dBp"),
         yield_spread_delta_bp=spread_delta_bp or 0.0,
+        dgs10_observation_date=_series_observation_date(dgs10_item),
+        dgs2_observation_date=_series_observation_date(dgs2_item),
+        dff_observation_date=_series_observation_date(dff_item),
+        yield_spread_observation_date=str(macro.get("yieldSpreadObservationDate") or ""),
         has_dgs10_delta=dgs10_delta_bp is not None,
         has_dgs2_delta=dgs2_delta_bp is not None,
         has_dff_delta=dff_delta_bp is not None,

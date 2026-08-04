@@ -1725,6 +1725,10 @@ TYPEDB_PROMOTED_NUMERIC_ATTRIBUTES = {
     "delta": "ontology-delta",
     "deltaPct": "ontology-delta-pct",
     "deltaBp": "ontology-delta-bp",
+    "previousValue": "ontology-previous-value",
+    "delta1dBp": "ontology-delta-1d-bp",
+    "delta5dBp": "ontology-delta-5d-bp",
+    "delta20dBp": "ontology-delta-20d-bp",
     "change24h": "ontology-change-24h",
     "change7d": "ontology-change-7d",
     "surprisePercentage": "ontology-surprise-percentage",
@@ -1744,6 +1748,11 @@ TYPEDB_PROMOTED_TEXT_ATTRIBUTES = {
     "instrumentArchetypeLabels": "ontology-instrument-archetype-label",
     "factor": "ontology-factor",
     "sensitivityLevel": "ontology-sensitivity-level",
+    "rateSeriesId": "ontology-rate-series-id",
+    "observationDate": "ontology-observation-date",
+    "previousDate": "ontology-previous-observation-date",
+    "sourceAsOf": "ontology-source-as-of",
+    "changeBasis": "ontology-change-basis",
     "cryptoSymbol": "ontology-crypto-symbol",
     "pair": "ontology-fx-pair",
     "actionPolicy": "ontology-action-policy",
@@ -11554,6 +11563,10 @@ attribute ontology-beta, value double;
 attribute ontology-delta, value double;
 attribute ontology-delta-pct, value double;
 attribute ontology-delta-bp, value double;
+attribute ontology-previous-value, value double;
+attribute ontology-delta-1d-bp, value double;
+attribute ontology-delta-5d-bp, value double;
+attribute ontology-delta-20d-bp, value double;
 attribute ontology-change-24h, value double;
 attribute ontology-change-7d, value double;
 attribute ontology-surprise-percentage, value double;
@@ -11688,6 +11701,11 @@ attribute ontology-instrument-archetype, value string;
 attribute ontology-instrument-archetype-label, value string;
 attribute ontology-factor, value string;
 attribute ontology-sensitivity-level, value string;
+attribute ontology-rate-series-id, value string;
+attribute ontology-observation-date, value string;
+attribute ontology-previous-observation-date, value string;
+attribute ontology-source-as-of, value string;
+attribute ontology-change-basis, value string;
 attribute ontology-crypto-symbol, value string;
 attribute ontology-fx-pair, value string;
 attribute ontology-action-policy, value string;
@@ -11808,6 +11826,10 @@ entity ontology-node @abstract,
     owns ontology-delta,
     owns ontology-delta-pct,
     owns ontology-delta-bp,
+    owns ontology-previous-value,
+    owns ontology-delta-1d-bp,
+    owns ontology-delta-5d-bp,
+    owns ontology-delta-20d-bp,
     owns ontology-change-24h,
     owns ontology-change-7d,
     owns ontology-surprise-percentage,
@@ -11942,6 +11964,11 @@ entity ontology-node @abstract,
     owns ontology-instrument-archetype-label,
     owns ontology-factor,
     owns ontology-sensitivity-level,
+    owns ontology-rate-series-id,
+    owns ontology-observation-date,
+    owns ontology-previous-observation-date,
+    owns ontology-source-as-of,
+    owns ontology-change-basis,
     owns ontology-crypto-symbol,
     owns ontology-fx-pair,
     owns ontology-action-policy,

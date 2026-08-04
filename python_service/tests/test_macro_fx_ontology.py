@@ -7,7 +7,7 @@ sys.path.insert(0, str(Path(__file__).resolve().parents[1]))
 from digital_twin.domain.fx import fx_exposure_facts
 from digital_twin.domain.external_signal_deltas import external_signals_with_deltas
 from digital_twin.domain.macro_context import macro_context_facts
-from digital_twin.domain.ontology_external_abox import fx_rate_entries
+from digital_twin.domain.ontology_external_abox import fx_rate_entries, rate_sensitive_position
 from digital_twin.domain.ontology_relation_reasoning import relation_rule_context_summary_lines
 from digital_twin.domain.portfolio import Position
 from digital_twin.domain.portfolio_calculations import portfolio_summary
@@ -96,7 +96,7 @@ class MacroFxOntologyTests(unittest.TestCase):
         fx_facts = fx_exposure_facts(position, portfolio, external_signals)
         macro_facts = macro_context_facts(position, portfolio, external_signals)
 
-        self.assertEqual("high_rate", rate_facts["rateRegime"])
+        self.assertEqual("observed_rate", rate_facts["rateRegime"])
         self.assertTrue(rate_facts["hasInterestRateDeltaSignal"])
         self.assertAlmostEqual(21, rate_facts["macroDgs10DeltaBp"])
         self.assertEqual("krw_weakening", fx_facts["fxRegime"])
@@ -306,6 +306,60 @@ class MacroFxOntologyTests(unittest.TestCase):
 
         self.assertFalse(facts["hasInterestRateDeltaSignal"])
         self.assertFalse(facts["hasFxDeltaSignal"])
+
+    def test_same_fred_publication_date_is_not_treated_as_a_new_rate_change(self):
+        current = {
+            "macro": {"series": {"DGS10": {"provider": "FRED", "date": "2026-08-03", "value": 4.75}}},
+        }
+        previous = {
+            "macro": {"series": {"DGS10": {"provider": "FRED", "date": "2026-08-03", "value": 4.75}}},
+        }
+
+        enriched = external_signals_with_deltas(current, previous)
+
+        self.assertNotIn("deltaBp", enriched["macro"]["series"]["DGS10"])
+        self.assertNotIn("previousValue", enriched["macro"]["series"]["DGS10"])
+
+    def test_fred_source_history_is_preserved_over_monitor_snapshot_delta(self):
+        current = {
+            "macro": {"series": {"DGS10": {
+                "provider": "FRED",
+                "date": "2026-08-03",
+                "value": 4.75,
+                "previousValue": 4.70,
+                "previousDate": "2026-08-02",
+                "deltaBp": 5,
+                "delta5dBp": 18,
+            }}},
+        }
+        previous = {
+            "macro": {"series": {"DGS10": {"provider": "FRED", "date": "2026-08-01", "value": 4.10}}},
+        }
+
+        enriched = external_signals_with_deltas(current, previous)
+
+        self.assertEqual(4.70, enriched["macro"]["series"]["DGS10"]["previousValue"])
+        self.assertEqual(5, enriched["macro"]["series"]["DGS10"]["deltaBp"])
+        self.assertEqual(18, enriched["macro"]["series"]["DGS10"]["delta5dBp"])
+
+    def test_rate_sensitivity_requires_an_instrument_profile_factor(self):
+        generic_us_stock = Position(
+            symbol="GENERIC",
+            name="Generic US Equity",
+            market="US",
+            currency="USD",
+            sector="산업재",
+        )
+        platform_stock = Position(
+            symbol="PLTR",
+            name="Palantir Technologies",
+            market="US",
+            currency="USD",
+            sector="AI/플랫폼",
+        )
+
+        self.assertFalse(rate_sensitive_position(generic_us_stock))
+        self.assertTrue(rate_sensitive_position(platform_stock))
 
     def test_fx_relation_rule_does_not_attach_usd_pair_to_krw_holding(self):
         position = Position(

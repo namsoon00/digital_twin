@@ -91,9 +91,8 @@ FX_REGIME_LABELS = {
 }
 
 RATE_REGIME_LABELS = {
-    "high_rate": "고금리",
-    "low_rate": "저금리",
-    "neutral_rate": "중립 금리",
+    "observed_rate": "원시 관측값",
+    "unavailable_rate": "미확인",
 }
 
 CURVE_REGIME_LABELS = {
@@ -243,6 +242,18 @@ def rate_fact_line(facts: Dict[str, object]) -> str:
         parts.append("연방기금 " + fact_number_text(facts.get("macroDff"), 2) + "%")
     if has_fact_value(facts.get("macroYieldSpread10y2y")):
         parts.append("10Y-2Y " + fact_number_text(facts.get("macroYieldSpread10y2y"), 2, signed=True) + "%p")
+    changes = []
+    if fact_number(facts.get("macroDgs10DeltaBp")):
+        changes.append("10년 1일 " + fact_number_text(facts.get("macroDgs10DeltaBp"), 0, signed=True) + "bp")
+    if fact_number(facts.get("macroDgs10Delta5dBp")):
+        changes.append("5일 " + fact_number_text(facts.get("macroDgs10Delta5dBp"), 0, signed=True) + "bp")
+    if fact_number(facts.get("macroDgs10Delta20dBp")):
+        changes.append("20일 " + fact_number_text(facts.get("macroDgs10Delta20dBp"), 0, signed=True) + "bp")
+    if changes:
+        parts.append("미국10년 변화 " + " / ".join(changes))
+    observation_date = str(facts.get("macroDgs10ObservationDate") or facts.get("macroDgs2ObservationDate") or "").strip()
+    if observation_date:
+        parts.append("FRED 관측일 " + observation_date)
     if not parts:
         return ""
     regimes = []
@@ -253,7 +264,7 @@ def rate_fact_line(facts: Dict[str, object]) -> str:
     if curve_regime:
         regimes.append("수익률곡선 " + curve_regime)
     if regimes:
-        parts.append("레짐 " + " / ".join(regimes))
+        parts.append("상태 " + " / ".join(regimes))
     return "금리: " + " · ".join(parts)
 
 

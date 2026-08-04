@@ -5792,11 +5792,18 @@ class TypeDBOntologyRepositoryTests(unittest.TestCase):
             "rule_id": "shadow.market_psychology.state.v1",
             "derivations": [{"decision_stage": ""}],
         })
+        stored.append({
+            "rule_id": "graph.macro.regime.risk.v1",
+            "derivations": [{"decision_stage": "MACRO_REGIME"}],
+        })
 
         migration = migrate_typedb_rule_catalog(stored, bootstrap)
 
         self.assertTrue(migration["changed"])
-        self.assertEqual(["shadow.market_psychology.state.v1"], migration["removedRuleIds"])
+        self.assertEqual(
+            ["graph.macro.regime.risk.v1", "shadow.market_psychology.state.v1"],
+            migration["removedRuleIds"],
+        )
         self.assertEqual("LOSS_REDUCE", migration["rules"][0]["derivations"][0]["decision_stage"])
         self.assertEqual("constrain", migration["rules"][0]["derivations"][0]["decision_effect"])
 
@@ -5814,7 +5821,11 @@ class TypeDBOntologyRepositoryTests(unittest.TestCase):
         self.assertFalse(migrated_by_id[stored[0]["rule_id"]]["enabled"])
         self.assertEqual(
             {
-                "graph.macro.regime.risk.v1",
+                "graph.macro.rate.rise.confirmed_risk.v1",
+                "graph.macro.rate.fall.confirmed_support.v1",
+                "graph.macro.rate.high_regime_entry.risk.v1",
+                "graph.macro.rate.stock_divergence.support.v1",
+                "graph.macro.curve.inversion_entry.risk.v1",
                 "graph.fx.usdkrw.exposure.regime.v1",
                 "graph.crypto.exposure.volatility_risk.v1",
                 "graph.crypto.market.24h.up.watch.v1",

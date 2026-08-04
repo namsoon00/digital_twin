@@ -197,6 +197,43 @@ class OntologyRelationDeliveryTests(unittest.TestCase):
         self.assertEqual("action-changed", diff["decisionTransition"]["kind"])
         self.assertIn("actionEnvelope", diff["materialComponents"])
 
+    def test_initial_hold_without_material_event_becomes_a_delivery_baseline(self):
+        context = self.context(event_key="")
+        context["ontologyRelationContext"]["decisionState"]["reviewLevel"] = "observe"
+        context["ontologyRelationContext"]["actionEnvelope"] = {
+            "status": "ENTRY_DEFERRED",
+            "preferredAction": "HOLD",
+            "selectedDecisionEffect": "defer",
+            "dataReadiness": {"state": "partial", "dataState": "partial"},
+        }
+        context["ontologyInsight"]["semanticComponents"] = {"materialSourceEventKeys": []}
+
+        diff = ontology_relation_delivery_diff(context, {})
+
+        self.assertTrue(diff["changed"])
+        self.assertFalse(diff["material"])
+        self.assertEqual("baseline", diff["changeClass"])
+        self.assertEqual("initial", diff["decisionTransition"]["kind"])
+        self.assertFalse(diff["decisionTransition"]["material"])
+
+    def test_initial_hold_with_a_material_source_event_remains_deliverable(self):
+        context = self.context(event_key="main:news:005930:article-9")
+        context["ontologyRelationContext"]["decisionState"]["reviewLevel"] = "observe"
+        context["ontologyRelationContext"]["actionEnvelope"] = {
+            "status": "HOLDING_REVIEW",
+            "preferredAction": "HOLD",
+            "selectedDecisionEffect": "defer",
+            "dataReadiness": {"state": "ready", "dataState": "sufficient"},
+        }
+        context["ontologyInsight"]["semanticComponents"] = {
+            "materialSourceEventKeys": ["main:news:005930:article-9"],
+        }
+
+        diff = ontology_relation_delivery_diff(context, {})
+
+        self.assertTrue(diff["material"])
+        self.assertTrue(diff["decisionTransition"]["material"])
+
 
 if __name__ == "__main__":
     unittest.main()

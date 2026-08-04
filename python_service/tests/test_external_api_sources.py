@@ -54,6 +54,46 @@ class ExternalApiSourceTests(unittest.TestCase):
         self.assertEqual(4.35, signals["macro"]["series"]["DGS10"]["value"])
         self.assertEqual(7.0, fetch.call_args.kwargs["timeout"])
 
+    def test_fred_uses_published_history_for_rate_change_windows(self):
+        settings = {
+            "externalAlphaEnabled": "0",
+            "externalCoinGeckoEnabled": "0",
+            "externalFredEnabled": "1",
+            "externalFredSeries": "DGS10",
+            "externalFredMaxSeries": "1",
+            "fredApiKey": "fred-key",
+            "externalYFinanceEnabled": "0",
+            "externalSecEnabled": "0",
+            "externalDartEnabled": "0",
+            "externalNewsEnabled": "0",
+            "externalFxRateEnabled": "0",
+            "externalApiRetryAttempts": "1",
+            "externalApiRateLimitSeconds": "0",
+        }
+        observations = [
+            {"date": "2026-08-03", "value": "4.75"},
+            {"date": "2026-08-02", "value": "4.70"},
+            {"date": "2026-08-01", "value": "4.68"},
+            {"date": "2026-07-31", "value": "."},
+            {"date": "2026-07-30", "value": "4.66"},
+            {"date": "2026-07-29", "value": "4.63"},
+            {"date": "2026-07-28", "value": "4.55"},
+        ]
+        provider = ExternalSignalProvider(settings=settings)
+
+        with patch(
+            "digital_twin.infrastructure.external_signal_provider_core.default_json_fetcher",
+            return_value={"observations": observations},
+        ) as fetch:
+            signals = provider.fetch_signals([])
+
+        rate = signals["macro"]["series"]["DGS10"]
+        self.assertEqual("2026-08-03", rate["observationDate"])
+        self.assertEqual("2026-08-02", rate["previousDate"])
+        self.assertAlmostEqual(5, rate["deltaBp"])
+        self.assertAlmostEqual(20, rate["delta5dBp"])
+        self.assertIn("limit=25", fetch.call_args.args[0])
+
     def test_toss_price_outside_market_session_is_labeled_last_close_reference(self):
         quote = normalize_price_payload(
             {

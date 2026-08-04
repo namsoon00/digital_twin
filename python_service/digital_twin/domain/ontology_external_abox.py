@@ -2,6 +2,7 @@ import json
 from typing import Dict, Iterable, List
 
 from .market_data import number
+from .instrument_profiles import instrument_profile_for_position
 from .ontology_contracts import PortfolioOntology, entity_id
 from .ontology_decision_state import data_state_from_evidence
 from .ontology_projection_fingerprint import is_volatile_lifecycle_key, stable_value
@@ -308,10 +309,29 @@ def rate_series_classes(series_id: str) -> List[str]:
     normalized = str(series_id or "").upper().strip()
     classes = ["Observation", "ExternalObservation", "ExternalSignal", "MacroIndicator", "MacroSignal"]
     if rate_series_kind(normalized) == "interest-rate":
-        classes.extend(["RateSignal", "InterestRate"])
+        classes.extend(["RateSignal", "InterestRate", "InterestRateObservation", "InterestRateLevel"])
     else:
         classes.append("MacroPrint")
     return unique_list(classes)
+
+
+def rate_observation_properties(item: Dict[str, object]) -> Dict[str, object]:
+    properties: Dict[str, object] = {}
+    for field in ["previousValue", "deltaBp", "delta1dBp", "delta5dBp", "delta20dBp"]:
+        if item.get(field) in (None, ""):
+            continue
+        properties[field] = round(number(item.get(field)), 4)
+    for field in [
+        "previousDate", "observationDate", "sourceAsOf", "comparison1dDate",
+        "comparison5dDate", "comparison20dDate", "changeBasis",
+    ]:
+        if item.get(field) not in (None, ""):
+            properties[field] = str(item.get(field) or "")
+    properties["hasRateChange"] = any(
+        item.get(field) not in (None, "")
+        for field in ["deltaBp", "delta1dBp", "delta5dBp", "delta20dBp"]
+    )
+    return properties
 
 
 def fx_rate_entries(external_signals: Dict[str, object], runtime_context: Dict[str, object] = None) -> Dict[str, Dict[str, object]]:
@@ -385,17 +405,23 @@ def interest_rate_signal_ids(external_signals: Dict[str, object]) -> Dict[str, s
     return ids
 
 
-def rate_sensitive_position(position: Position) -> bool:
-    market = str(position.market or "").upper().strip()
-    currency = str(position.currency or "").upper().strip()
-    sector = str(position.sector or "").strip()
-    symbol = str(position.symbol or "").upper().strip()
-    return (
-        market in {"US", "USA", "NASDAQ", "NYSE"}
-        or currency == "USD"
-        or any(token in sector for token in ["반도체", "AI", "플랫폼", "모빌리티", "디지털자산"])
-        or symbol in {"MSTR", "STRC", "COIN", "MARA", "RIOT", "CLSK", "HUT", "BITF"}
-    )
+def rate_sensitivity_profile(position: Position, runtime_context: Dict[str, object] = None) -> Dict[str, str]:
+    settings = runtime_context.get("settings") if isinstance(runtime_context, dict) else {}
+    settings = settings if isinstance(settings, dict) else (runtime_context if isinstance(runtime_context, dict) else {})
+    profile = instrument_profile_for_position(position, settings)
+    level = str((profile.sensitivities or {}).get("rate") or "").strip().lower()
+    if level not in {"medium", "high"}:
+        return {}
+    return {
+        "factor": "rate",
+        "sensitivityLevel": level,
+        "sensitivitySource": str(profile.source or "instrument-profile"),
+        "profileLabel": str(profile.label or ""),
+    }
+
+
+def rate_sensitive_position(position: Position, runtime_context: Dict[str, object] = None) -> bool:
+    return bool(rate_sensitivity_profile(position, runtime_context))
 
 
 def crypto_sensitive_position(position: Position) -> bool:
@@ -473,14 +499,21 @@ def add_portfolio_macro_and_cross_asset_concepts(
         if not isinstance(item, dict):
             continue
         value = number(item.get("value"))
+        classes = rate_series_classes(str(series_id))
+        if rate_series_kind(str(series_id)) == "interest-rate" and any(
+            item.get(field) not in (None, "")
+            for field in ["deltaBp", "delta1dBp", "delta5dBp", "delta20dBp"]
+        ):
+            classes = unique_list(classes + ["InterestRateChange"])
         macro_id = add_entity(graph, rate_series_kind(str(series_id)), str(series_id), rate_series_label(str(series_id)), {
             "tboxClass": "InterestRate" if rate_series_kind(str(series_id)) == "interest-rate" else "MacroPrint",
-            "tboxClasses": rate_series_classes(str(series_id)),
+            "tboxClasses": classes,
             "seriesId": str(series_id),
+            "rateSeriesId": str(series_id),
             "provider": str(item.get("provider") or "FRED"),
             "date": str(item.get("date") or ""),
             "value": round(value, 4),
-            "deltaBp": round(number(item.get("deltaBp")), 2),
+            **rate_observation_properties(item),
             **external_observation_profile(external_signals, item, "macro", 4320),
         })
         props = external_evidence_properties(
@@ -495,13 +528,22 @@ def add_portfolio_macro_and_cross_asset_concepts(
         add_relation(graph, macro_id, portfolio_node_id, "AFFECTS", weight=0.65, properties=props)
     if "yieldSpread10y2y" in macro:
         spread = number(macro.get("yieldSpread10y2y"))
-        spread_id = add_entity(graph, "yield-curve", "yieldSpread10y2y", "10Y-2Y 금리 스프레드", {
+        spread_properties = {
             "tboxClass": "YieldCurve",
             "tboxClasses": ["Observation", "ExternalObservation", "ExternalSignal", "MacroIndicator", "RateSignal", "YieldCurve", "CreditSpreadSignal"],
             "value": round(spread, 4),
-            "deltaBp": round(number(macro.get("yieldSpread10y2yDeltaBp")), 2),
+            "rateSeriesId": "YIELDSPREAD10Y2Y",
+            "observationDate": str(macro.get("yieldSpreadObservationDate") or ""),
             **external_observation_profile(external_signals, macro, "macro", 4320),
-        })
+        }
+        if macro.get("previousYieldSpread10y2y") not in (None, ""):
+            spread_properties["previousValue"] = round(number(macro.get("previousYieldSpread10y2y")), 4)
+        if macro.get("yieldSpread10y2yDeltaBp") not in (None, ""):
+            spread_properties["deltaBp"] = round(number(macro.get("yieldSpread10y2yDeltaBp")), 2)
+            spread_properties["hasRateChange"] = True
+        if macro.get("yieldSpreadPreviousDate") not in (None, ""):
+            spread_properties["previousDate"] = str(macro.get("yieldSpreadPreviousDate") or "")
+        spread_id = add_entity(graph, "yield-curve", "yieldSpread10y2y", "10Y-2Y 금리 스프레드", spread_properties)
         props = external_evidence_properties(
             source="macro",
             label="10Y-2Y 금리 스프레드",
@@ -742,7 +784,8 @@ def add_position_macro_context_concepts(
         )
         add_relation(graph, stock_id, rate_id, "HAS_FX_EXPOSURE", weight=1.0, properties=props)
         add_relation(graph, rate_id, stock_id, "AFFECTS", weight=1.0, properties=props)
-    if not rate_sensitive_position(position):
+    sensitivity = rate_sensitivity_profile(position, runtime_context)
+    if not sensitivity:
         add_position_crypto_exposure_concepts(graph, stock_id, position, external_signals, holding_weight_pct)
         return
     for series_id, rate_id in sorted(interest_rate_signal_ids(external_signals).items()):
@@ -751,6 +794,7 @@ def add_position_macro_context_concepts(
             source="macro",
             label="금리 스프레드 민감도" if is_curve else rate_series_label(series_id) + " 민감도",
             positionWeightPct=holding_weight_pct,
+            **sensitivity,
         )
         if series_id in {"DGS10", "DGS2", "DFF"}:
             props["rateSeriesId"] = series_id

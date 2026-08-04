@@ -32,12 +32,31 @@ def _attach_macro_deltas(current: Dict[str, object], previous: Dict[str, object]
         previous_value = _series_value(previous_item)
         if current_value is None or previous_value is None:
             continue
+        # Prefer the source observation history supplied by FRED. Comparing
+        # two monitor snapshots from the same publication date would turn a
+        # daily macro series into a misleading intraday 0bp change.
+        if item.get("previousValue") not in (None, "") or item.get("deltaBp") not in (None, ""):
+            continue
+        current_date = str(item.get("observationDate") or item.get("date") or "").strip()
+        previous_date = str(previous_item.get("observationDate") or previous_item.get("date") or "").strip()
+        if current_date and previous_date and current_date == previous_date:
+            continue
         item["previousValue"] = previous_value
         item["deltaBp"] = (current_value - previous_value) * 100
         item["deltaPctPoint"] = current_value - previous_value
         if previous_item.get("date"):
             item["previousDate"] = str(previous_item.get("date") or "")
-    if macro.get("yieldSpread10y2y") not in (None, "") and previous_macro.get("yieldSpread10y2y") not in (None, ""):
+    if (
+        macro.get("yieldSpread10y2yDeltaBp") in (None, "")
+        and macro.get("yieldSpread10y2y") not in (None, "")
+        and previous_macro.get("yieldSpread10y2y") not in (None, "")
+        and (
+            not str(macro.get("yieldSpreadObservationDate") or "").strip()
+            or not str(previous_macro.get("yieldSpreadObservationDate") or "").strip()
+            or str(macro.get("yieldSpreadObservationDate") or "").strip()
+            != str(previous_macro.get("yieldSpreadObservationDate") or "").strip()
+        )
+    ):
         spread = number(macro.get("yieldSpread10y2y"))
         previous_spread = number(previous_macro.get("yieldSpread10y2y"))
         macro["previousYieldSpread10y2y"] = previous_spread

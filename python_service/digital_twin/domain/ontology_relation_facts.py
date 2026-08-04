@@ -656,14 +656,23 @@ def _rate_context_line_from_facts(facts: Dict[str, object]) -> str:
             delta_parts.append("스프레드 " + _bp_text(facts.get("macroYieldSpreadDeltaBp")))
         if delta_parts:
             parts.append("변화 " + " / ".join(delta_parts))
+    window_parts = []
+    if number(facts.get("macroDgs10Delta5dBp")):
+        window_parts.append("5일 " + _bp_text(facts.get("macroDgs10Delta5dBp")))
+    if number(facts.get("macroDgs10Delta20dBp")):
+        window_parts.append("20일 " + _bp_text(facts.get("macroDgs10Delta20dBp")))
+    if window_parts:
+        parts.append("미국10년 누적변화 " + " / ".join(window_parts))
+    observation_date = str(facts.get("macroDgs10ObservationDate") or facts.get("macroDgs2ObservationDate") or "").strip()
+    if observation_date:
+        parts.append("FRED 관측일 " + observation_date)
     if not parts:
         return ""
     regime = str(facts.get("rateRegime") or "")
     curve = str(facts.get("yieldCurveRegime") or "")
     regime_labels = {
-        "high_rate": "고금리",
-        "low_rate": "저금리",
-        "neutral_rate": "중립 금리",
+        "observed_rate": "원시 관측값",
+        "unavailable_rate": "미확인",
     }
     curve_labels = {
         "inverted_curve": "수익률곡선 역전",

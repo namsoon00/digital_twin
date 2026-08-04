@@ -193,6 +193,7 @@ def relation_delivery_components(
         }
     graph = _mapping(relation.get("graphStoreInference"))
     insight = _mapping(context.get("ontologyInsight"))
+    semantic_components = _mapping(insight.get("semanticComponents"))
     source_evidence = []
     for source in [
         context.get("sourceEventKeys"),
@@ -210,6 +211,13 @@ def relation_delivery_components(
         graph.get("traces"),
     ]:
         inference_evidence.extend(_evidence_keys(source))
+    material_source_evidence = []
+    for source in [
+        semantic_components.get("materialSourceEventKeys"),
+        insight.get("materialSourceEventKeys"),
+        context.get("materialSourceEventKeys"),
+    ]:
+        material_source_evidence.extend(_evidence_keys(source))
     return {
         "version": RELATION_DELIVERY_FINGERPRINT_VERSION,
         "decision": {
@@ -241,13 +249,31 @@ def relation_delivery_components(
         "relations": _relation_rows(graph.get("relations")),
         "traces": _trace_rows(graph.get("traces")),
         "evidenceKeys": sorted(set(source_evidence)),
+        "materialSourceEventKeys": sorted(set(material_source_evidence)),
         "inferenceEvidenceKeys": sorted(set(inference_evidence)),
     }
+
+
+def _initial_relation_is_material(components: Mapping[str, object]) -> bool:
+    components = _mapping(components)
+    decision = _mapping(components.get("decision"))
+    envelope = _mapping(components.get("actionEnvelope"))
+    state = _mapping(components.get("state"))
+    action = _first(envelope, "preferredAction") or _first(decision, "candidateAction", "primaryAction")
+    effect = _first(envelope, "selectedDecisionEffect") or _first(decision, "decisionEffect")
+    review_level = _first(state, "reviewLevel")
+    return bool(
+        action in {"buy", "add", "trim", "sell"}
+        or effect == "block"
+        or review_level in {"act", "action", "urgent", "immediate", "blocked"}
+        or components.get("materialSourceEventKeys")
+    )
 
 
 def _decision_transition(
     current_components: Mapping[str, object],
     previous_components: Mapping[str, object] = None,
+    initial_material: bool = True,
 ) -> Dict[str, object]:
     current_components = _mapping(current_components)
     previous_components = _mapping(previous_components)
@@ -268,7 +294,7 @@ def _decision_transition(
     )
     if first:
         kind = "initial"
-        summary = "새 조건이 처음 생성됐습니다."
+        summary = "즉시 알릴 최초 조건입니다." if initial_material else "최초 관계 상태를 알림 없이 기준선으로 저장했습니다."
     elif action_changed:
         kind = "action-changed"
         summary = (previous_action or "이전 판단") + "에서 " + (current_action or "현재 판단") + "으로 바뀌었습니다."
@@ -283,7 +309,7 @@ def _decision_transition(
         summary = "실행 판단 범위는 이전과 같습니다."
     return {
         "changed": bool(first or action_changed or status_changed or readiness_changed),
-        "material": bool(first or action_changed or status_changed or readiness_changed),
+        "material": bool((first and initial_material) or action_changed or status_changed or readiness_changed),
         "kind": kind,
         "summary": summary,
         "previousAction": previous_action,
@@ -363,17 +389,22 @@ def relation_delivery_diff(
         }
     if not previous:
         current_components = current.get("components") or {}
-        transition = _decision_transition(current_components)
+        initial_material = _initial_relation_is_material(current_components)
+        transition = _decision_transition(current_components, initial_material=initial_material)
         return {
             "changed": True,
-            "material": True,
-            "changeClass": "material",
-            "reason": "New graph-backed relation context.",
+            "material": initial_material,
+            "changeClass": "material" if initial_material else "baseline",
+            "reason": (
+                "New actionable graph-backed relation context."
+                if initial_material
+                else "Initial non-actionable graph state recorded as a delivery baseline."
+            ),
             "currentFingerprint": current.get("fingerprint"),
             "previousFingerprint": "",
             "changedComponents": ["initial"],
-            "materialComponents": ["initial"],
-            "contextComponents": [],
+            "materialComponents": ["initial"] if initial_material else [],
+            "contextComponents": [] if initial_material else ["initial"],
             "addedEvidenceKeys": list(current_components.get("evidenceKeys") or []),
             "removedEvidenceKeys": [],
             "decisionTransition": transition,
@@ -417,7 +448,10 @@ def relation_delivery_diff(
     transition = _decision_transition(current_components, previous_components)
     current_evidence = set(current_components.get("evidenceKeys") or [])
     previous_evidence = set(previous_components.get("evidenceKeys") or [])
-    for key in ["decision", "actionEnvelope", "state", "activeRules", "relations", "evidenceKeys"]:
+    for key in [
+        "decision", "actionEnvelope", "state", "activeRules", "relations",
+        "evidenceKeys", "materialSourceEventKeys",
+    ]:
         if current_components.get(key) != previous_components.get(key):
             # Rule-set churn alone must not reopen a cooldown.  It becomes
             # material only when it changed the bounded action, readiness, or
@@ -426,7 +460,7 @@ def relation_delivery_diff(
                 material_components.append(key)
             elif key == "state" and transition.get("kind") == "readiness-changed":
                 material_components.append(key)
-            elif key == "evidenceKeys":
+            elif key in {"evidenceKeys", "materialSourceEventKeys"}:
                 material_components.append(key)
             else:
                 context_components.append(key)
@@ -441,6 +475,7 @@ def relation_delivery_diff(
         "relations": "추론 관계",
         "traces": "추론 경로",
         "evidenceKeys": "근거 원문",
+        "materialSourceEventKeys": "판단 변경 원문",
         "inferenceEvidenceKeys": "추론 근거 식별자",
     }
     changed = material_components + context_components

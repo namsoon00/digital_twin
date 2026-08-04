@@ -988,6 +988,14 @@ class PortfolioOntologyProjectionRecorder:
             material_snapshot_id = projection_graph["materialSnapshotId"]
             scoped_identity = projection_graph["scopedIdentity"]
             runtime_stages.update(dict(projection_graph.get("runtimeStages") or {}))
+            if str(graph_assembly.get("inputMode") or "") == "target-scoped":
+                # A target-scoped graph is an incremental patch by contract.
+                # Missing scopes therefore mean "reuse the active generation";
+                # only the scheduled full reconciliation may prove deletion.
+                # This avoids turning one-symbol mailbox work into a complete
+                # manifest rewrite while preserving explicit deletion checks
+                # on the full projection path.
+                persistence_graph.worldview["targetScopeRetentionMode"] = "incremental-target-patch"
             observation_followup_targets = sorted({
                 str(symbol or "").upper().strip()
                 for symbol in compact_reasoning_context.get("observationFollowupSymbols") or []

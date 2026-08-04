@@ -64,7 +64,7 @@ def evaluate_typedb_capacity_policy(
     throttle_percent = _integer(
         configured,
         "typedbCapacityThrottlePercent",
-        80,
+        70,
         50,
         99,
     )
@@ -73,7 +73,7 @@ def evaluate_typedb_capacity_policy(
         _integer(
             configured,
             "typedbCapacityAutoRotatePercent",
-            90,
+            80,
             50,
             100,
         ),
@@ -83,7 +83,7 @@ def evaluate_typedb_capacity_policy(
         _integer(
             configured,
             "typedbCapacityCriticalPercent",
-            95,
+            90,
             50,
             100,
         ),

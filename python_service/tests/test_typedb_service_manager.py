@@ -153,6 +153,33 @@ class TypeDBServiceManagerTests(unittest.TestCase):
         self.assertTrue(due["needed"])
         self.assertTrue(due["hardLimitReached"])
 
+    def test_failed_automatic_rotation_uses_short_retry_window(self):
+        with tempfile.TemporaryDirectory() as temp:
+            data_path = Path(temp) / "typedb-data"
+            data_path.mkdir()
+            (data_path / "segment").write_bytes(b"x" * (9 * 1024 * 1024))
+            spec = {
+                "dataPath": data_path,
+                "maxSizeMb": "10",
+                "autoRotationEnabled": "1",
+                "autoRotationPercent": "80",
+                "autoRotationCooldownMinutes": "60",
+                "autoRotationFailureRetrySeconds": "120",
+            }
+            marker = Path(temp) / "marker.json"
+            with patch.object(service_manager, "typedb_retention_marker_path", return_value=marker):
+                service_manager.write_typedb_retention_marker({
+                    "lastAutoRotationAttemptEpoch": 1000,
+                    "lastAutoRotationStatus": "reset-failed",
+                })
+                cooling = service_manager.typedb_auto_rotation_needed(spec, now_epoch=1100)
+                due = service_manager.typedb_auto_rotation_needed(spec, now_epoch=1121)
+
+        self.assertFalse(cooling["needed"])
+        self.assertEqual(20, cooling["cooldownRemainingSeconds"])
+        self.assertEqual(120, cooling["retryWindowSeconds"])
+        self.assertTrue(due["needed"])
+
     def test_automatic_rotation_requires_a_healthy_managed_mysql_source(self):
         mysql_spec = {"pid": Path("/tmp/mysql.pid"), "healthAddress": "127.0.0.1:3306"}
         with patch.object(service_manager, "read_pid", return_value=123), \
@@ -185,6 +212,45 @@ class TypeDBServiceManagerTests(unittest.TestCase):
         stop.assert_called_once_with(include_supervisor=False)
         reset.assert_called_once_with(spec, force=True)
         start.assert_called_once_with()
+
+    def test_typedb_rotate_recovers_workers_and_alerts_when_reset_fails(self):
+        spec = {"role": "typedb", "dataPath": Path("/tmp/orbit-alpha-typedb-test")}
+        with patch.object(service_manager, "worker_specs", return_value={"typedb": spec}), \
+                patch.object(service_manager, "typedb_reset_needed", return_value={"needed": True, "reason": "size"}), \
+                patch.object(service_manager, "supervisor_running", return_value=False), \
+                patch.object(service_manager, "stop") as stop, \
+                patch.object(service_manager, "run_typedb_data_retention", return_value={"status": "reset-failed"}), \
+                patch.object(service_manager, "start", return_value=0) as start, \
+                patch.object(service_manager, "record_typedb_auto_rotation_incident", return_value={"recorded": True}) as incident:
+            status = service_manager.typedb_rotate(force=True)
+
+        self.assertEqual(1, status)
+        stop.assert_called_once_with(include_supervisor=False)
+        start.assert_called_once_with()
+        incident.assert_called_once_with(
+            spec,
+            {"needed": True, "reason": "size"},
+            alert_kind="typedb-auto-rotation-failed",
+        )
+
+    def test_cli_start_restores_configured_supervisor_instead_of_leaving_unmanaged_workers(self):
+        with patch.object(service_manager, "configured_supervisor_available", return_value=True), \
+                patch.object(service_manager, "restore_configured_supervisor", return_value=0) as restore, \
+                patch.object(service_manager, "start") as direct_start:
+            status = service_manager.main(["start"])
+
+        self.assertEqual(0, status)
+        restore.assert_called_once_with()
+        direct_start.assert_not_called()
+
+    def test_cli_restart_restores_configured_supervisor_after_worker_restart(self):
+        with patch.object(service_manager, "restart", return_value=0) as restart, \
+                patch.object(service_manager, "restore_configured_supervisor", return_value=0) as restore:
+            status = service_manager.main(["restart"])
+
+        self.assertEqual(0, status)
+        restart.assert_called_once_with(restart_typedb=False, restart_mysql=False)
+        restore.assert_called_once_with()
 
     def test_shared_world_rebuild_runs_once_for_a_fresh_typedb_marker(self):
         with tempfile.TemporaryDirectory() as temp:

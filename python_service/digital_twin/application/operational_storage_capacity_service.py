@@ -73,11 +73,11 @@ class OperationalStorageCapacityService:
         # window, while a short dedicated cooldown avoids one alert per
         # failing worker process.
         forced_kind = str(force_alert_kind or "runtime-write-failure").strip() or "runtime-write-failure"
-        forced_alert_key = (
-            "lastRuntimeFailureAlertAt"
-            if forced_kind == "runtime-write-failure"
-            else "lastForcedCapacityAlertAt"
-        )
+        forced_alert_key = {
+            "runtime-write-failure": "lastRuntimeFailureAlertAt",
+            "typedb-auto-rotation": "lastCapacityRotationAlertAt",
+            "typedb-auto-rotation-failed": "lastCapacityRotationFailureAlertAt",
+        }.get(forced_kind, "lastForcedCapacityAlertAt")
         last_forced_alert = parse_datetime(previous.get(forced_alert_key))
         try:
             runtime_cooldown_minutes = int(
@@ -104,7 +104,12 @@ class OperationalStorageCapacityService:
                 health["runtimeCapacityFailure"] = True
             else:
                 health["forcedCapacityIncident"] = forced_kind
-        for key in ("lastRuntimeFailureAlertAt", "lastForcedCapacityAlertAt"):
+        for key in (
+            "lastRuntimeFailureAlertAt",
+            "lastForcedCapacityAlertAt",
+            "lastCapacityRotationAlertAt",
+            "lastCapacityRotationFailureAlertAt",
+        ):
             if key in previous and key not in health:
                 health[key] = previous[key]
         self.save(health)
@@ -163,6 +168,8 @@ class OperationalStorageCapacityNotificationEnqueuer:
             title = "운영 저장공간 쓰기 실패"
         elif kind == "typedb-auto-rotation":
             title = "TypeDB 안전 재구축 시작"
+        elif kind == "typedb-auto-rotation-failed":
+            title = "TypeDB 안전 재구축 실패"
         elif kind in {"forecast", "forecast-eta-worsened"}:
             title = "운영 저장공간 소진 예상"
         elif kind == "material-worsening":
@@ -199,6 +206,8 @@ class OperationalStorageCapacityNotificationEnqueuer:
             lines.insert(3, "• 감지: 실제 저장소 쓰기 실패(ENOSPC 계열)를 감지해 일반 알림 쿨다운과 별도로 발송했습니다.")
         elif kind == "typedb-auto-rotation":
             lines.insert(3, "• 감지: TypeDB가 안전 재구축 기준에 도달해 MySQL 원천 데이터로 그래프를 다시 만드는 작업을 시작했습니다.")
+        elif kind == "typedb-auto-rotation-failed":
+            lines.insert(3, "• 감지: TypeDB 안전 재구축이 완료되지 않았습니다. 짧은 실패 재시도 간격으로 다시 시도합니다.")
         try:
             shared_linked_mb = float(values.get("typedbSharedLinkedMb") or 0)
         except (TypeError, ValueError):
@@ -217,6 +226,7 @@ class OperationalStorageCapacityNotificationEnqueuer:
         text = "\n".join(lines)
         signal = "recovered" if recovered else (
             "capacityRotation" if kind == "typedb-auto-rotation" else
+            "capacityRotationFailed" if kind == "typedb-auto-rotation-failed" else
             "capacityForecast" if kind in {"forecast", "forecast-eta-worsened"} else "capacityLimited"
         )
         return {

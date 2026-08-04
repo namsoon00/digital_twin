@@ -384,6 +384,7 @@ TEXT_SETTING_KEYS = [
     "typedbCapacityAutoRotatePercent",
     "typedbCapacityCriticalPercent",
     "typedbCapacityAutoRotateCooldownMinutes",
+    "typedbCapacityAutoRotateFailureRetrySeconds",
     "typedbCapacityMaintenanceMaxManifests",
     "typedbCapacityMaintenanceMaxDeleteBatches",
     "typedbCapacityMaintenanceDeleteBatchSize",
@@ -1858,7 +1859,7 @@ def runtime_settings(fast_operational_read: bool = False) -> Dict[str, str]:
         "typedbAutoResetEnabled": value("typedbAutoResetEnabled", "TYPEDB_AUTO_RESET_ENABLED", "0"),
         "typedbAgeResetEnabled": value("typedbAgeResetEnabled", "TYPEDB_AGE_RESET_ENABLED", "0"),
         "typedbDataRetentionHours": value("typedbDataRetentionHours", "TYPEDB_DATA_RETENTION_HOURS", "24"),
-        "typedbDataMaxSizeMb": value("typedbDataMaxSizeMb", "TYPEDB_DATA_MAX_SIZE_MB", "4096"),
+        "typedbDataMaxSizeMb": value("typedbDataMaxSizeMb", "TYPEDB_DATA_MAX_SIZE_MB", "8192"),
         "typedbMinimumFreeSpaceMb": value("typedbMinimumFreeSpaceMb", "TYPEDB_MINIMUM_FREE_SPACE_MB", "4096"),
         "typedbCapacityGuardCheckIntervalSeconds": value(
             "typedbCapacityGuardCheckIntervalSeconds",
@@ -1878,7 +1879,7 @@ def runtime_settings(fast_operational_read: bool = False) -> Dict[str, str]:
         "typedbCapacityThrottlePercent": value(
             "typedbCapacityThrottlePercent",
             "TYPEDB_CAPACITY_THROTTLE_PERCENT",
-            "80",
+            "70",
         ),
         "typedbCapacityAutoRotateEnabled": value(
             "typedbCapacityAutoRotateEnabled",
@@ -1888,17 +1889,22 @@ def runtime_settings(fast_operational_read: bool = False) -> Dict[str, str]:
         "typedbCapacityAutoRotatePercent": value(
             "typedbCapacityAutoRotatePercent",
             "TYPEDB_CAPACITY_AUTO_ROTATE_PERCENT",
-            "90",
+            "80",
         ),
         "typedbCapacityCriticalPercent": value(
             "typedbCapacityCriticalPercent",
             "TYPEDB_CAPACITY_CRITICAL_PERCENT",
-            "95",
+            "90",
         ),
         "typedbCapacityAutoRotateCooldownMinutes": value(
             "typedbCapacityAutoRotateCooldownMinutes",
             "TYPEDB_CAPACITY_AUTO_ROTATE_COOLDOWN_MINUTES",
             "60",
+        ),
+        "typedbCapacityAutoRotateFailureRetrySeconds": value(
+            "typedbCapacityAutoRotateFailureRetrySeconds",
+            "TYPEDB_CAPACITY_AUTO_ROTATE_FAILURE_RETRY_SECONDS",
+            "120",
         ),
         "typedbCapacityMaintenanceMaxManifests": value(
             "typedbCapacityMaintenanceMaxManifests",

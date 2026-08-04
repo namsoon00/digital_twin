@@ -112,7 +112,7 @@ class TypeDBStorageGuardTests(unittest.TestCase):
 
         def inventory(_settings, **_kwargs):
             calls.append(True)
-            return {"typedbSizeMb": 800, "typedbLimitMb": 1000, "typedbWalMb": 400, "typedbCheckpointMb": 300}
+            return {"typedbSizeMb": 750, "typedbLimitMb": 1000, "typedbWalMb": 400, "typedbCheckpointMb": 300}
 
         guard = TypeDBCapacityGuard(
             {"typedbCapacityGuardCheckIntervalSeconds": "30"},
@@ -140,7 +140,10 @@ class TypeDBStorageGuardTests(unittest.TestCase):
             raise AssertionError("direct TypeDB scan should not run")
 
         guard = TypeDBCapacityGuard(
-            {"typedbCapacitySharedSampleMaxAgeSeconds": "180"},
+            {
+                "typedbCapacitySharedSampleMaxAgeSeconds": "180",
+                "typedbDataMaxSizeMb": "1000",
+            },
             role="world-projection",
             data_path=Path("/tmp/typedb-test"),
             disk_usage_provider=lambda _path: SimpleNamespace(
@@ -177,7 +180,10 @@ class TypeDBStorageGuardTests(unittest.TestCase):
             }
 
         guard = TypeDBCapacityGuard(
-            {"typedbCapacityThrottlePercent": "80"},
+            {
+                "typedbCapacityThrottlePercent": "80",
+                "typedbDataMaxSizeMb": "1000",
+            },
             role="world-projection",
             data_path=Path("/tmp/typedb-test"),
             disk_usage_provider=lambda _path: SimpleNamespace(
@@ -199,3 +205,39 @@ class TypeDBStorageGuardTests(unittest.TestCase):
         self.assertEqual(1, len(calls))
         self.assertEqual("direct-filesystem", state["capacitySampleSource"])
         self.assertTrue(state["ready"])
+
+    def test_guard_rejects_a_shared_sample_from_an_obsolete_capacity_limit(self):
+        calls = []
+
+        def inventory(_settings, **_kwargs):
+            calls.append(True)
+            return {
+                "typedbSizeMb": 800,
+                "typedbLimitMb": 8192,
+                "typedbWalMb": 100,
+                "typedbCheckpointMb": 200,
+            }
+
+        guard = TypeDBCapacityGuard(
+            {"typedbDataMaxSizeMb": "8192"},
+            role="reasoning",
+            data_path=Path("/tmp/typedb-test"),
+            disk_usage_provider=lambda _path: SimpleNamespace(
+                free=20 * 1024 * 1024 * 1024,
+                total=32 * 1024 * 1024 * 1024,
+            ),
+            inventory_provider=inventory,
+            capacity_state_loader=lambda: {
+                "operationalStorageCapacity": {
+                    "checkedAt": datetime.now(timezone.utc).isoformat().replace("+00:00", "Z"),
+                    "typedbSizeMb": 800,
+                    "typedbLimitMb": 4096,
+                },
+            },
+        )
+
+        state = guard()
+
+        self.assertEqual(1, len(calls))
+        self.assertEqual("direct-filesystem", state["capacitySampleSource"])
+        self.assertEqual(8192, state["typedbLimitMb"])

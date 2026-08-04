@@ -120,7 +120,7 @@ def typedb_storage_inventory(
         "typedbWalMb": round(wal_size / 1024 / 1024, 1),
         "typedbCheckpointMb": round(checkpoint_size / 1024 / 1024, 1),
         "typedbCheckpointReferencedMb": round(checkpoint_size / 1024 / 1024, 1),
-        "typedbLimitMb": _int_value(configured.get("typedbDataMaxSizeMb"), 4096, 256),
+        "typedbLimitMb": _int_value(configured.get("typedbDataMaxSizeMb"), 8192, 256),
     }
 
 
@@ -210,7 +210,17 @@ class TypeDBCapacityGuard:
             size_mb = float(values.get("typedbSizeMb") or 0)
         except (TypeError, ValueError):
             return {}
-        throttle_percent = _int_value(self.settings.get("typedbCapacityThrottlePercent"), 80)
+        configured_limit_mb = _int_value(
+            self.settings.get("typedbDataMaxSizeMb"),
+            8192,
+            256,
+        )
+        if int(limit_mb) != configured_limit_mb:
+            # Runtime capacity settings can change between sampler cycles.
+            # Do not apply a low-usage result computed against an obsolete
+            # denominator; refresh directly from the TypeDB filesystem.
+            return {}
+        throttle_percent = _int_value(self.settings.get("typedbCapacityThrottlePercent"), 70)
         if limit_mb > 0 and size_mb / limit_mb * 100.0 >= throttle_percent:
             return {}
         return values

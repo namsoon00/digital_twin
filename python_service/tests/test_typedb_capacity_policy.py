@@ -20,9 +20,9 @@ class TypeDBCapacityPolicyTests(unittest.TestCase):
         self.assertFalse(policy["rotationRequired"])
 
     def test_pressure_yields_background_work_but_keeps_live_reasoning_available(self):
-        projection = evaluate_typedb_capacity_policy(self.snapshot(800), role="world-projection")
-        reasoning = evaluate_typedb_capacity_policy(self.snapshot(800), role="reasoning")
-        maintenance = evaluate_typedb_capacity_policy(self.snapshot(800), role="maintenance")
+        projection = evaluate_typedb_capacity_policy(self.snapshot(750), role="world-projection")
+        reasoning = evaluate_typedb_capacity_policy(self.snapshot(750), role="reasoning")
+        maintenance = evaluate_typedb_capacity_policy(self.snapshot(750), role="maintenance")
 
         self.assertEqual("write-throttled", projection["mode"])
         self.assertFalse(projection["ready"])
@@ -33,7 +33,7 @@ class TypeDBCapacityPolicyTests(unittest.TestCase):
 
     def test_rotation_threshold_blocks_all_graph_writers(self):
         for role in ["reasoning", "world-projection", "maintenance", "rulebox-prewarm"]:
-            policy = evaluate_typedb_capacity_policy(self.snapshot(900), role=role)
+            policy = evaluate_typedb_capacity_policy(self.snapshot(800), role=role)
             self.assertFalse(policy["ready"])
             self.assertEqual("rotation-required", policy["mode"])
             self.assertTrue(policy["rotationRequired"])

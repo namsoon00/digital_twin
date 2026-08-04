@@ -203,7 +203,7 @@ def operational_storage_inventory(
         "typedbWalMb": round(typedb_wal / 1024 / 1024, 1),
         "typedbCheckpointMb": round(typedb_checkpoint / 1024 / 1024, 1),
         "typedbCheckpointReferencedMb": round(typedb_checkpoint / 1024 / 1024, 1),
-        "typedbLimitMb": _integer(configured.get("typedbDataMaxSizeMb"), 4096, 256),
+        "typedbLimitMb": _integer(configured.get("typedbDataMaxSizeMb"), 8192, 256),
         "mysqlSizeMb": round(apparent_size(mysql_root) / 1024 / 1024, 1),
         "mysqlLimitMb": _integer(configured.get("operationalMySqlDataMaxSizeMb"), 4096, 256),
         "logSizeMb": round((root_logs + typedb_logs) / 1024 / 1024, 1),

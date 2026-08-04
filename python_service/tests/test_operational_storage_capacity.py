@@ -153,7 +153,7 @@ class OperationalStorageCapacityTests(unittest.TestCase):
 
         self.assertTrue(first["alertRequired"])
         self.assertEqual("typedb-auto-rotation", first["alertKind"])
-        self.assertEqual(first["checkedAt"], first["lastForcedCapacityAlertAt"])
+        self.assertEqual(first["checkedAt"], first["lastCapacityRotationAlertAt"])
         self.assertIsNotNone(first_event)
 
         current[0] += timedelta(minutes=2)
@@ -164,6 +164,16 @@ class OperationalStorageCapacityTests(unittest.TestCase):
         )
         self.assertFalse(repeated["alertRequired"])
         self.assertIsNone(repeated_event)
+
+        failed, failed_event = service.record(
+            self.limited_snapshot(),
+            force_alert=True,
+            force_alert_kind="typedb-auto-rotation-failed",
+        )
+        self.assertTrue(failed["alertRequired"])
+        self.assertEqual("typedb-auto-rotation-failed", failed["alertKind"])
+        self.assertEqual(failed["checkedAt"], failed["lastCapacityRotationFailureAlertAt"])
+        self.assertIsNotNone(failed_event)
 
     def test_internal_cleanup_warning_does_not_page_until_the_human_threshold(self):
         current = [datetime(2026, 8, 2, 9, 0, tzinfo=timezone.utc)]

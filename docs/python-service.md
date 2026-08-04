@@ -157,7 +157,7 @@ The `python:service:*` commands run all background workers:
 - notification worker: `data/python-notifications.pid`, `data/python-notifications.log`
 - TypeDB graph store: `data/typedb.pid`, `data/typedb.log`, `data/typedb-data/`, `data/typedb-logs/`
 
-TypeDB is a local projection/read model, not the operational source of truth. Default retention keeps only short-lived local graph state: `TYPEDB_AUTO_RESET_ENABLED=1`, `TYPEDB_DATA_RETENTION_HOURS=24`, `TYPEDB_DATA_MAX_SIZE_MB=2048`, and `TYPEDB_INFERENCE_GENERATION_KEEP_COUNT=1`. When the service manager starts TypeDB and the data directory exceeds those limits, it resets the local TypeDB directory and rebuilds from current operational facts.
+TypeDB is a rebuildable projection/read model; MySQL remains the operational source of truth. The default capacity envelope is 8GB. At 70% usage, background graph writers yield while live reasoning and bounded cleanup remain available. At 80%, the managed supervisor performs a controlled rebuild from MySQL; 90% is reported as critical. Successful rotations use a 60-minute cooldown, while failed rotations retry after 120 seconds. `python:service:start`, `restart`, and manual TypeDB rotation reattach an installed LaunchAgent supervisor so capacity automation is not lost after maintenance.
 
 ## Operational Database
 

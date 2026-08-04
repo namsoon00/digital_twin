@@ -826,6 +826,7 @@ def settings_status_payload() -> Dict[str, object]:
         "typedbCapacityAutoRotatePercent",
         "typedbCapacityCriticalPercent",
         "typedbCapacityAutoRotateCooldownMinutes",
+        "typedbCapacityAutoRotateFailureRetrySeconds",
         "typedbCapacityMaintenanceMaxManifests",
         "typedbCapacityMaintenanceMaxDeleteBatches",
         "typedbCapacityMaintenanceDeleteBatchSize",

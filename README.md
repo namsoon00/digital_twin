@@ -60,7 +60,7 @@ TYPEDB_TIMEOUT_SECONDS=20
 
 `ONTOLOGY_TYPEDB_ENABLED=1`이면 `npm run python:service:start|restart|status`가 TypeDB 서버도 함께 관리합니다. TypeDB의 gRPC/HTTP 주소는 loopback에만 바인딩하고 진단 HTTP 포트는 끕니다. 기본 비밀번호는 사용하지 않으며 `.env.local`은 파일 권한 `600`으로 유지합니다. TypeDB 로컬 데이터와 로그는 `data/typedb-data/`, `data/typedb-logs/`, `data/typedb.log` 아래에 저장되며 git에는 포함하지 않습니다.
 
-TypeDB는 원본 업무 저장소가 아니라 온톨로지 projection/read model입니다. 기본값은 하루치만 유지하도록 `TYPEDB_AUTO_RESET_ENABLED=1`, `TYPEDB_DATA_RETENTION_HOURS=24`, `TYPEDB_DATA_MAX_SIZE_MB=2048`, `TYPEDB_INFERENCE_GENERATION_KEEP_COUNT=1`로 동작합니다. 서비스 시작 전 보관 시간 또는 용량 한도를 넘은 `data/typedb-data/`는 삭제 후 재생성됩니다. 수동 정리는 TypeDB를 중지한 뒤 `npm run python:service -- typedb-maintenance --force`로 실행할 수 있습니다.
+TypeDB는 원본 업무 저장소가 아니라 MySQL 원천 데이터에서 다시 만들 수 있는 온톨로지 projection/read model입니다. 기본 한도는 8GB이며 70%부터 라이브 추론을 제외한 배경 쓰기를 완화하고, 80%에서 관리 감독자가 통제 회전하며, 90%는 심각 상태로 표시합니다. 성공한 회전은 60분 쿨다운을 사용하고 실패한 회전은 기본 120초 뒤 다시 시도합니다. `npm run python:service:start`와 `restart`는 설치된 LaunchAgent 감독자를 자동 복구하므로 자동 회전이 관리 명령 이후에도 유지됩니다. 수동 재구축은 `npm run python:service:typedb:rotate -- --force`로 실행합니다.
 
 투자 판단은 `TBox/ABox -> TypeDB schema function rule -> InferenceBox -> AI 검증 -> investmentInsight` 흐름을 기준으로 합니다. TypeDB 3에서는 예전 `define rule` 대신 schema `fun`을 런타임 rule 실행 단위로 사용합니다. Python 공식과 알림 임계값은 원천 지표, 데이터 품질, 발송 정책을 계산할 수 있지만 매수/매도/보유/분할축소 같은 최종 투자 의미는 TypeDB InferenceBox 관계 컨텍스트를 통해 만들어야 합니다. 자세한 개발 규칙은 `docs/development-methodology.md`, 모델 구조는 `docs/ontology-strategy-model.md`, 서비스 운영 기준은 `docs/python-service.md`에 정리되어 있습니다.
 

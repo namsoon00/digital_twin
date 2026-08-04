@@ -197,7 +197,7 @@ def typedb_worker_spec(settings: Dict[str, object]) -> Dict[str, object]:
         "role": "typedb",
         "dataPath": data_path,
         "retentionHours": str((settings or {}).get("typedbDataRetentionHours") or "24"),
-        "maxSizeMb": str((settings or {}).get("typedbDataMaxSizeMb") or "2048"),
+        "maxSizeMb": str((settings or {}).get("typedbDataMaxSizeMb") or "8192"),
         "minimumFreeSpaceMb": str(max(
             int_value((settings or {}).get("typedbMinimumFreeSpaceMb"), 4096, 1),
             int_value((settings or {}).get("operationalMinimumFreeSpaceMb"), 12288, 1),
@@ -207,9 +207,12 @@ def typedb_worker_spec(settings: Dict[str, object]) -> Dict[str, object]:
         # worker restart. The active graph is rebuildable from MySQL.
         "autoResetEnabled": str((settings or {}).get("typedbAutoResetEnabled") or "0"),
         "autoRotationEnabled": str((settings or {}).get("typedbCapacityAutoRotateEnabled") or "1"),
-        "autoRotationPercent": str((settings or {}).get("typedbCapacityAutoRotatePercent") or "90"),
+        "autoRotationPercent": str((settings or {}).get("typedbCapacityAutoRotatePercent") or "80"),
         "autoRotationCooldownMinutes": str(
             (settings or {}).get("typedbCapacityAutoRotateCooldownMinutes") or "60"
+        ),
+        "autoRotationFailureRetrySeconds": str(
+            (settings or {}).get("typedbCapacityAutoRotateFailureRetrySeconds") or "120"
         ),
         "ageResetEnabled": str((settings or {}).get("typedbAgeResetEnabled") or "0"),
         "healthAddress": address,
@@ -605,10 +608,14 @@ def typedb_auto_rotation_needed(
     configured = dict(spec or {})
     enabled = truthy(configured.get("autoRotationEnabled"))
     data_path = Path(configured.get("dataPath") or "")
-    maximum_mb = int_value(configured.get("maxSizeMb"), 2048, 1)
-    threshold_percent = int_value(configured.get("autoRotationPercent"), 90, 50)
+    maximum_mb = int_value(configured.get("maxSizeMb"), 8192, 1)
+    threshold_percent = int_value(configured.get("autoRotationPercent"), 80, 50)
     threshold_percent = min(100, threshold_percent)
     cooldown_minutes = min(24 * 60, int_value(configured.get("autoRotationCooldownMinutes"), 60, 1))
+    failure_retry_seconds = min(
+        3600,
+        int_value(configured.get("autoRotationFailureRetrySeconds"), 120, 30),
+    )
     size_bytes = int((size_provider or directory_size_bytes)(data_path))
     size_mb = round(size_bytes / 1024 / 1024, 1)
     usage_percent = round(size_bytes / (maximum_mb * 1024 * 1024) * 100.0, 1)
@@ -618,9 +625,16 @@ def typedb_auto_rotation_needed(
         last_attempt_epoch = float(marker.get("lastAutoRotationAttemptEpoch") or 0)
     except (TypeError, ValueError):
         last_attempt_epoch = 0.0
+    last_attempt_status = str(marker.get("lastAutoRotationStatus") or "").strip().lower()
+    failure_statuses = {"failed", "reset-failed", "restart-failed", "exception"}
+    retry_window_seconds = (
+        failure_retry_seconds
+        if last_attempt_status in failure_statuses
+        else cooldown_minutes * 60
+    )
     cooldown_remaining_seconds = max(
         0,
-        int(cooldown_minutes * 60 - max(0.0, now - last_attempt_epoch)),
+        int(retry_window_seconds - max(0.0, now - last_attempt_epoch)),
     ) if last_attempt_epoch > 0 else 0
     threshold_reached = bool(
         data_path.exists()
@@ -648,6 +662,8 @@ def typedb_auto_rotation_needed(
             "thresholdPercent": threshold_percent,
             "maxSizeMb": maximum_mb,
             "cooldownRemainingSeconds": cooldown_remaining_seconds,
+            "lastAttemptStatus": last_attempt_status,
+            "retryWindowSeconds": retry_window_seconds,
         }
     if cooldown_remaining_seconds > 0 and not hard_limit_reached:
         return {
@@ -659,6 +675,8 @@ def typedb_auto_rotation_needed(
             "thresholdPercent": threshold_percent,
             "maxSizeMb": maximum_mb,
             "cooldownRemainingSeconds": cooldown_remaining_seconds,
+            "lastAttemptStatus": last_attempt_status,
+            "retryWindowSeconds": retry_window_seconds,
         }
     return {
         "needed": True,
@@ -672,6 +690,8 @@ def typedb_auto_rotation_needed(
         "thresholdPercent": threshold_percent,
         "maxSizeMb": maximum_mb,
         "cooldownRemainingSeconds": cooldown_remaining_seconds,
+        "lastAttemptStatus": last_attempt_status,
+        "retryWindowSeconds": retry_window_seconds,
         "hardLimitReached": hard_limit_reached,
     }
 
@@ -703,6 +723,7 @@ def typedb_auto_rotation_recovery_preflight(
 def record_typedb_auto_rotation_incident(
     spec: Dict[str, object],
     decision: Dict[str, object],
+    alert_kind: str = "typedb-auto-rotation",
 ) -> Dict[str, object]:
     """Page the operator once before a supervisor-owned graph rebuild.
 
@@ -721,7 +742,7 @@ def record_typedb_auto_rotation_incident(
             settings,
             snapshot=snapshot,
             force_alert=True,
-            force_alert_kind="typedb-auto-rotation",
+            force_alert_kind=str(alert_kind or "typedb-auto-rotation"),
         )
         return {
             "recorded": True,
@@ -823,7 +844,7 @@ def status_worker(spec: Dict[str, object]) -> int:
             {
                 "ontologyTypeDbEnabled": "1",
                 "typedbMinimumFreeSpaceMb": spec.get("minimumFreeSpaceMb") or "4096",
-                "typedbDataMaxSizeMb": spec.get("maxSizeMb") or "4096",
+                "typedbDataMaxSizeMb": spec.get("maxSizeMb") or "8192",
             },
             data_path=Path(spec.get("dataPath") or data_dir() / "typedb-data"),
         )
@@ -842,6 +863,7 @@ def status_worker(spec: Dict[str, object]) -> int:
             + " · threshold=" + str(capacity.get("thresholdPercent") or "-") + "%"
             + " · status=" + rotation_status
             + " · cooldown=" + str(capacity.get("cooldownRemainingSeconds") or 0) + "s"
+            + " · last-attempt=" + str(capacity.get("lastAttemptStatus") or "none")
         )
     if log_path.exists():
         print("Log: " + str(log_path))
@@ -1439,6 +1461,13 @@ def stop_worker(spec: Dict[str, object]) -> int:
 def status() -> int:
     for spec in worker_specs().values():
         status_worker(spec)
+    configured = launch_agent_path().exists() and bool(shutil.which("launchctl"))
+    print(
+        "Orbit Alpha runtime supervisor: "
+        + ("running" if supervisor_running() else "stopped")
+        + " · launch-agent="
+        + ("configured" if configured else "not-configured")
+    )
     return 0
 
 
@@ -1634,6 +1663,23 @@ def supervisor_running() -> bool:
 
 def launch_agent_path() -> Path:
     return Path.home() / "Library" / "LaunchAgents" / "com.orbitalpha.services.plist"
+
+
+def configured_supervisor_available() -> bool:
+    return bool(launch_agent_path().exists() and shutil.which("launchctl"))
+
+
+def restore_configured_supervisor() -> int:
+    """Reattach launchd after an explicit stop/start maintenance cycle."""
+
+    if supervisor_running():
+        return 0
+    if not configured_supervisor_available():
+        return 0
+    result = install_supervisor()
+    if result == 0:
+        print("Orbit Alpha runtime supervisor restored after service maintenance.")
+    return result
 
 
 def bootout_supervisor_launch_agent() -> None:
@@ -1866,6 +1912,8 @@ def typedb_rotate(
             return 1
 
     result = {}
+    services_stopped = False
+    restart_attempted = False
     try:
         if supervisor_owned:
             record_typedb_auto_rotation_state(
@@ -1874,18 +1922,35 @@ def typedb_rotate(
                 lastAutoRotationReason=str(rotation_reason or decision.get("reason") or "capacity"),
                 lastAutoRotationStatus="running",
             )
+        services_stopped = True
         stop(include_supervisor=False)
-        result = run_typedb_data_retention(spec, force=True)
+        try:
+            result = run_typedb_data_retention(spec, force=True)
+        except Exception as error:  # noqa: BLE001 - the stopped runtime must still be recovered.
+            result = {
+                "status": "reset-failed",
+                "reason": str(error)[:300],
+                "errorType": error.__class__.__name__,
+            }
         if result.get("status") != "reset":
+            recovery_status = start()
+            restart_attempted = True
+            result["restartStatus"] = "ok" if recovery_status == 0 else "failed"
             if supervisor_owned:
                 record_typedb_auto_rotation_state(
                     lastAutoRotationFinishedAt=iso_now(),
                     lastAutoRotationStatus="reset-failed",
                     lastAutoRotationResult=dict(result),
                 )
+            result["failureIncident"] = record_typedb_auto_rotation_incident(
+                spec,
+                decision,
+                alert_kind="typedb-auto-rotation-failed",
+            )
             print(json.dumps(result, ensure_ascii=False, indent=2, sort_keys=True))
             return 1
         start_status = start()
+        restart_attempted = True
         result["restartStatus"] = "ok" if start_status == 0 else "failed"
         if supervisor_owned:
             record_typedb_auto_rotation_state(
@@ -1897,9 +1962,23 @@ def typedb_rotate(
                     "previousSizeBytes": result.get("previousSizeBytes"),
                 },
             )
+        if start_status != 0:
+            result["failureIncident"] = record_typedb_auto_rotation_incident(
+                spec,
+                decision,
+                alert_kind="typedb-auto-rotation-failed",
+            )
         print(json.dumps(result, ensure_ascii=False, indent=2, sort_keys=True))
         return start_status
     finally:
+        if services_stopped and not restart_attempted:
+            try:
+                start()
+            except Exception as error:  # noqa: BLE001 - launchd remains the final recovery boundary.
+                append_log(
+                    supervisor_log_path(),
+                    "typedb rotation emergency restart failed. " + str(error)[:180],
+                )
         if pause_supervisor or supervisor_owned:
             end_supervisor_maintenance()
         release_typedb_rotation_lock(rotation_lock)
@@ -1909,20 +1988,26 @@ def main(argv: List[str] = None) -> int:
     args = list(argv if argv is not None else sys.argv[1:])
     command = args[0] if args else "status"
     if command == "start":
+        if configured_supervisor_available():
+            return restore_configured_supervisor()
         return start()
     if command == "stop":
         return stop()
     if command == "restart":
-        return restart(
+        result = restart(
             restart_typedb="--restart-typedb" in args[1:],
             restart_mysql="--restart-mysql" in args[1:],
         )
+        supervisor_result = restore_configured_supervisor()
+        return result if result != 0 else supervisor_result
     if command == "status":
         return status()
     if command == "typedb-maintenance":
         return typedb_maintenance(force="--force" in args[1:])
     if command == "typedb-rotate":
-        return typedb_rotate(force="--force" in args[1:])
+        result = typedb_rotate(force="--force" in args[1:])
+        supervisor_result = restore_configured_supervisor()
+        return result if result != 0 else supervisor_result
     if command == "supervise":
         return supervise()
     if command == "supervisor-install":

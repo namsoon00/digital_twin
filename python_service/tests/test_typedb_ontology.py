@@ -1089,6 +1089,13 @@ class TypeDBOntologyRepositoryTests(unittest.TestCase):
         self.assertNotIn(retained_market_scope, patch["retiredScopeIds"])
         self.assertEqual(active["scopeGenerationIds"][retained_market_scope], patch["scopeGenerationIds"][retained_market_scope])
 
+        graph.worldview["targetScopeRetentionMode"] = "incremental-target-patch"
+        incremental_patch = merge_target_scoped_abox_manifest(graph, active, ["005930"])
+
+        self.assertTrue(incremental_patch["applied"])
+        self.assertEqual("incremental-target-patch", incremental_patch["targetScopeRetentionMode"])
+        self.assertNotIn(retained_market_scope, incremental_patch["retiredScopeIds"])
+
     def test_explicit_target_can_patch_shared_context_without_rewriting_every_symbol(self):
         graph = PortfolioOntology(
             "main",
@@ -8192,7 +8199,7 @@ class TypeDBOntologyRepositoryTests(unittest.TestCase):
         self.assertIn("--storage.data-directory", command)
         self.assertEqual("typedb", workers["typedb"]["role"])
         self.assertEqual("24", workers["typedb"]["retentionHours"])
-        self.assertEqual("2048", workers["typedb"]["maxSizeMb"])
+        self.assertEqual("8192", workers["typedb"]["maxSizeMb"])
         self.assertEqual("0", workers["typedb"]["ageResetEnabled"])
         self.assertEqual("127.0.0.1:1729", workers["typedb"]["healthAddress"])
         self.assertEqual("1800", workers["typedb"]["startupWaitSeconds"])

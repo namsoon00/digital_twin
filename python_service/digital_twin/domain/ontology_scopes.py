@@ -1639,10 +1639,11 @@ def select_target_scoped_manifest_patch(
         active.get("scopeFingerprints") or {},
     )
     requested_symbols = sorted({_symbol(value) for value in target_symbols or [] if _symbol(value)})
-    retain_missing_target_scopes = (
-        _clean(worldview.get("targetScopeRetentionMode"))
-        == "observation-followup"
-    )
+    target_scope_retention_mode = _clean(worldview.get("targetScopeRetentionMode"))
+    retain_missing_target_scopes = target_scope_retention_mode in {
+        "incremental-target-patch",
+        "observation-followup",
+    }
     base = {
         "targetSymbols": requested_symbols,
         "incomingScopeCount": len(incoming),
@@ -1654,6 +1655,7 @@ def select_target_scoped_manifest_patch(
         "retiredScopeIds": [],
         "removedRelevantScopeIds": [],
         "retainsMissingTargetScopes": retain_missing_target_scopes,
+        "targetScopeRetentionMode": target_scope_retention_mode,
         "factSlot": dict(fact_slot_plan or {}),
     }
     if not requested_symbols:

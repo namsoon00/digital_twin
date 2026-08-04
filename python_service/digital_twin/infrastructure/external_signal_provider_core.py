@@ -4,6 +4,11 @@ from copy import deepcopy
 from datetime import datetime, timedelta, timezone
 from typing import Callable, Dict, Iterable, List
 
+from ..domain.crypto_market_signals import (
+    combine_crypto_market_snapshots,
+    crypto_market_snapshot,
+    merge_crypto_market_snapshot,
+)
 from ..domain.external_signal_quality import attach_external_signal_quality
 from ..domain.investment_evidence_governance import claim_policy, governed_evidence
 from ..domain.investment_research import NewsCollectionTarget, research_evidence_from_external_signals
@@ -83,6 +88,9 @@ class ExternalSignalCoreMixin:
         cache_key = self.cache_key_for_positions(position_list)
         cached = self.cache.load()
         self.provider_state = self.provider_state_from(cached)
+        crypto_snapshot, crypto_cache_state = self.load_crypto_market_snapshot(cached)
+        self._crypto_market_snapshot = crypto_snapshot
+        self._crypto_market_cache_state = crypto_cache_state
         entry = self.cache_entry(cached, cache_key)
         cache_fresh = self.is_cache_fresh(entry)
         cache_only = self.external_signal_cache_only()
@@ -95,6 +103,13 @@ class ExternalSignalCoreMixin:
                 # above preserves a pre-existing cache entry without changing
                 # any vendor payload.
                 signals = deepcopy(signals)
+                crypto_changed = self.merge_cached_crypto_market_snapshot(
+                    signals,
+                    crypto_snapshot,
+                    crypto_cache_state,
+                )
+                if crypto_changed and cache_fresh and not cache_only:
+                    cache_needs_store = True
                 if cache_fresh and not cache_only and self.crypto_refresh_due(signals):
                     self.refresh_cached_coingecko(signals)
                     # The general cache timestamp remains untouched. Only the
@@ -130,6 +145,11 @@ class ExternalSignalCoreMixin:
                 return signals
             if cache_only:
                 signals = self.empty_cache_only_signals()
+                self.merge_cached_crypto_market_snapshot(
+                    signals,
+                    crypto_snapshot,
+                    crypto_cache_state,
+                )
                 self.attach_stored_research_evidence(position_list, signals)
                 return attach_external_signal_quality(signals, positions=position_list, settings=self.settings)
 
@@ -186,6 +206,83 @@ class ExternalSignalCoreMixin:
             cacheOnly=True,
         )
         return signals
+
+    def aggregate_crypto_market_snapshot(self, cached: Dict[str, object]) -> Dict[str, object]:
+        """Recover the newest CoinGecko facts from any legacy aggregate key."""
+
+        payload = cached if isinstance(cached, dict) else {}
+        candidates = []
+        direct_signals = payload.get("signals") if isinstance(payload.get("signals"), dict) else {}
+        if direct_signals:
+            candidates.append(crypto_market_snapshot(direct_signals))
+        entries = payload.get("entries") if isinstance(payload.get("entries"), dict) else {}
+        for entry in entries.values():
+            signals = entry.get("signals") if isinstance(entry, dict) and isinstance(entry.get("signals"), dict) else {}
+            if signals:
+                candidates.append(crypto_market_snapshot(signals))
+        return combine_crypto_market_snapshots(*[item for item in candidates if item])
+
+    def load_crypto_market_snapshot(self, cached: Dict[str, object]) -> tuple:
+        if not self.external_api_enabled("externalCoinGeckoEnabled"):
+            return {}, "disabled"
+        self._crypto_cache_error = ""
+        dedicated = {}
+        if self.crypto_cache:
+            try:
+                dedicated = self.crypto_cache.load()
+            except Exception as error:  # noqa: BLE001 - aggregate migration remains usable.
+                self._crypto_cache_error = self.safe_error_message(error)
+        aggregate = self.aggregate_crypto_market_snapshot(cached)
+        combined = combine_crypto_market_snapshots(aggregate, dedicated)
+        if not combined:
+            return {}, "missing"
+        cache_state = "dedicated" if dedicated else "aggregate-fallback"
+        normalized_dedicated = combine_crypto_market_snapshots(dedicated)
+        if self.crypto_cache and combined != normalized_dedicated:
+            try:
+                self.crypto_cache.replace(combined)
+                cache_state = "aggregate-migrated" if not dedicated else "dedicated-reconciled"
+            except Exception as error:  # noqa: BLE001 - in-memory facts remain usable for this cycle.
+                self._crypto_cache_error = self.safe_error_message(error)
+        return combined, cache_state
+
+    def merge_cached_crypto_market_snapshot(
+        self,
+        signals: Dict[str, object],
+        snapshot: Dict[str, object],
+        cache_state: str,
+    ) -> bool:
+        changed = merge_crypto_market_snapshot(signals, snapshot, cache_state=cache_state) if snapshot else False
+        cache_error = str(getattr(self, "_crypto_cache_error", "") or "")
+        if cache_error:
+            self.status(
+                signals,
+                "Crypto market cache",
+                False,
+                "CoinGecko 전용 캐시 조회/저장 실패 · " + cache_error,
+                operationalAlert=True,
+            )
+        return changed
+
+    def persist_crypto_market_snapshot(self, signals: Dict[str, object]) -> bool:
+        snapshot = crypto_market_snapshot(signals)
+        if not snapshot or not self.crypto_cache:
+            return False
+        try:
+            self.crypto_cache.replace(snapshot)
+            self._crypto_market_snapshot = snapshot
+            self._crypto_market_cache_state = "dedicated"
+            merge_crypto_market_snapshot(signals, snapshot, cache_state="dedicated")
+            return True
+        except Exception as error:  # noqa: BLE001 - vendor result remains usable in the current cycle.
+            self.status(
+                signals,
+                "Crypto market cache",
+                False,
+                "CoinGecko 전용 캐시 저장 실패 · " + self.safe_error_message(error),
+                operationalAlert=True,
+            )
+            return False
 
     def attach_stored_research_evidence(self, positions: Iterable[Position], signals: Dict[str, object]) -> None:
         if not self.evidence_store or not isinstance(signals, dict):
@@ -302,12 +399,13 @@ class ExternalSignalCoreMixin:
         # monitor. Keep the newest two even when per-symbol research refreshes
         # create more cache entries than the normal cap.
         pinned_scopes = {"account-snapshot", "market-monitor"}
-        pinned = [
+        all_pinned = [
             item for item in ordered
             if isinstance(item[1], dict)
             and str(item[1].get("cacheScope") or "").strip().lower() in pinned_scopes
-        ][:max_entries]
-        pinned_keys = {key for key, _entry in pinned}
+        ]
+        pinned = all_pinned[:min(2, max_entries)]
+        pinned_keys = {key for key, _entry in all_pinned}
         remaining = [item for item in ordered if item[0] not in pinned_keys]
         selected = pinned + remaining[:max(0, max_entries - len(pinned))]
         return {"schemaVersion": 1, "entries": dict(selected), "providerState": dict(self.provider_state)}
@@ -453,12 +551,18 @@ class ExternalSignalCoreMixin:
             "researchEvidence": {},
             "statuses": [],
         }
+        self.merge_cached_crypto_market_snapshot(
+            signals,
+            getattr(self, "_crypto_market_snapshot", {}),
+            str(getattr(self, "_crypto_market_cache_state", "missing") or "missing"),
+        )
         self.add_fx_rates(signals, positions)
         self.add_alpha_vantage(signals, positions)
         self.add_alpha_fundamentals(signals, positions)
         self.add_yfinance(signals, positions)
         self.add_sec_edgar(signals, positions)
-        self.add_coingecko(signals)
+        if self.crypto_refresh_due(signals):
+            self.add_coingecko(signals)
         self.add_fred(signals)
         self.add_opendart(signals, positions)
         self.add_news_headlines(signals, positions)

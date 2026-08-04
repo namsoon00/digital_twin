@@ -141,6 +141,7 @@ class RuntimeResilienceTests(unittest.TestCase):
         now_text = now.isoformat().replace("+00:00", "Z")
         stale_crypto_text = (now.replace(second=0, microsecond=0) - timedelta(minutes=11)).isoformat().replace("+00:00", "Z")
         cache = MemoryCache()
+        crypto_cache = MemoryCache()
         position = Position(symbol="AAPL", name="Apple", market="US", currency="USD")
         provider = ExternalSignalProvider(
             settings={
@@ -159,6 +160,7 @@ class RuntimeResilienceTests(unittest.TestCase):
                 "externalApiRetryAttempts": "1",
             },
             cache=cache,
+            crypto_cache=crypto_cache,
             evidence_store=EvidenceStore(),
             fetch_json=lambda *_args, **_kwargs: [{
                 "id": "bitcoin",
@@ -198,7 +200,210 @@ class RuntimeResilienceTests(unittest.TestCase):
         self.assertEqual(65000, refreshed["cryptoMarkets"]["bitcoin"]["price"])
         self.assertEqual("fresh", refreshed["cryptoFreshness"]["status"])
         self.assertTrue(stored["cryptoFetchedAt"])
+        self.assertEqual(65000, crypto_cache.load()["markets"]["bitcoin"]["price"])
         self.assertFalse(any(not item.get("ok") for item in stored["statuses"] if item.get("source") == "CoinGecko"))
+
+    def test_cache_only_reasoning_recovers_crypto_from_an_unrelated_aggregate_key(self):
+        class MemoryCache:
+            def __init__(self, payload=None):
+                self.payload = payload or {}
+
+            def load(self):
+                return self.payload
+
+            def replace(self, payload):
+                self.payload = payload
+
+        class EvidenceStore:
+            @staticmethod
+            def latest(**_kwargs):
+                return []
+
+        now_text = datetime.now(timezone.utc).isoformat().replace("+00:00", "Z")
+        aggregate = MemoryCache({
+            "schemaVersion": 1,
+            "entries": {
+                "different-portfolio-key": {
+                    "fetchedAt": now_text,
+                    "cacheScope": "account-snapshot",
+                    "signals": {
+                        "fetchedAt": now_text,
+                        "cryptoFetchedAt": now_text,
+                        "cryptoLastAttemptAt": now_text,
+                        "cryptoMarkets": {
+                            "bitcoin": {
+                                "provider": "CoinGecko",
+                                "symbol": "BTC",
+                                "price": 63811,
+                                "lastUpdated": now_text,
+                                "fetchedAt": now_text,
+                            },
+                        },
+                        "statuses": [{"source": "CoinGecko", "ok": True, "dataUsable": True}],
+                    },
+                },
+            },
+        })
+        dedicated = MemoryCache()
+        provider = ExternalSignalProvider(
+            settings={
+                "_externalSignalsCacheOnly": "1",
+                "externalCoinGeckoEnabled": "1",
+                "dataFreshnessExternalCryptoMaxAgeMinutes": "25",
+            },
+            cache=aggregate,
+            crypto_cache=dedicated,
+            evidence_store=EvidenceStore(),
+        )
+        position = Position(symbol="AAPL", name="Apple", market="US", currency="USD")
+
+        with patch.object(provider, "fetch_signals", side_effect=AssertionError("cache-only must not fetch")):
+            result = provider.signals_for_positions([position], cache_scope="account-snapshot")
+
+        self.assertEqual(63811, result["cryptoMarkets"]["bitcoin"]["price"])
+        self.assertEqual("fresh", result["cryptoFreshness"]["status"])
+        self.assertEqual("aggregate-migrated", result["cryptoFreshness"]["cacheState"])
+        self.assertEqual(63811, dedicated.load()["markets"]["bitcoin"]["price"])
+
+    def test_fresh_dedicated_crypto_cache_prevents_duplicate_vendor_fetch(self):
+        class MemoryCache:
+            def __init__(self, payload=None):
+                self.payload = payload or {}
+
+            def load(self):
+                return self.payload
+
+            def replace(self, payload):
+                self.payload = payload
+
+        class EvidenceStore:
+            @staticmethod
+            def latest(**_kwargs):
+                return []
+
+            @staticmethod
+            def upsert_many(_items):
+                return None
+
+        now_text = datetime.now(timezone.utc).isoformat().replace("+00:00", "Z")
+        dedicated = MemoryCache({
+            "schemaVersion": 1,
+            "provider": "CoinGecko",
+            "dataset": "coins/markets",
+            "markets": {
+                "bitcoin": {
+                    "provider": "CoinGecko",
+                    "symbol": "BTC",
+                    "price": 64000,
+                    "lastUpdated": now_text,
+                    "fetchedAt": now_text,
+                },
+            },
+            "fetchedAt": now_text,
+            "lastAttemptAt": now_text,
+            "sourceAsOf": now_text,
+            "statusRows": [{"source": "CoinGecko", "ok": True, "dataUsable": True}],
+        })
+        aggregate = MemoryCache()
+        settings = {
+            "externalCoinGeckoEnabled": "1",
+            "externalCoinGeckoFetchIntervalMinutes": "10",
+            "externalAlphaEnabled": "0",
+            "externalFredEnabled": "0",
+            "externalDartEnabled": "0",
+            "externalSecEnabled": "0",
+            "externalNewsEnabled": "0",
+            "externalFxRateEnabled": "0",
+            "externalYFinanceEnabled": "0",
+        }
+        provider = ExternalSignalProvider(
+            settings=settings,
+            cache=aggregate,
+            crypto_cache=dedicated,
+            evidence_store=EvidenceStore(),
+            fetch_json=lambda *_args, **_kwargs: (_ for _ in ()).throw(AssertionError("fresh crypto must not refetch")),
+        )
+
+        result = provider.signals_for_positions([
+            Position(symbol="AAPL", name="Apple", market="US", currency="USD"),
+        ])
+
+        self.assertEqual(64000, result["cryptoMarkets"]["bitcoin"]["price"])
+        self.assertEqual("fresh", result["cryptoFreshness"]["status"])
+        self.assertEqual("dedicated", result["cryptoFreshness"]["cacheState"])
+        self.assertEqual(1, len(aggregate.load()["entries"]))
+
+    def test_coingecko_failure_persists_attempt_and_preserves_last_good_market(self):
+        class MemoryCache:
+            def __init__(self, payload=None):
+                self.payload = payload or {}
+
+            def load(self):
+                return self.payload
+
+            def replace(self, payload):
+                self.payload = payload
+
+        class EvidenceStore:
+            @staticmethod
+            def latest(**_kwargs):
+                return []
+
+            @staticmethod
+            def upsert_many(_items):
+                return None
+
+        stale_text = (datetime.now(timezone.utc) - timedelta(minutes=11)).isoformat().replace("+00:00", "Z")
+        dedicated = MemoryCache({
+            "schemaVersion": 1,
+            "provider": "CoinGecko",
+            "dataset": "coins/markets",
+            "markets": {
+                "bitcoin": {
+                    "provider": "CoinGecko",
+                    "symbol": "BTC",
+                    "price": 63000,
+                    "lastUpdated": stale_text,
+                    "fetchedAt": stale_text,
+                },
+            },
+            "fetchedAt": stale_text,
+            "lastAttemptAt": stale_text,
+            "sourceAsOf": stale_text,
+            "statusRows": [{"source": "CoinGecko", "ok": True, "dataUsable": True}],
+        })
+        provider = ExternalSignalProvider(
+            settings={
+                "externalCoinGeckoEnabled": "1",
+                "externalCoinGeckoFetchIntervalMinutes": "10",
+                "dataFreshnessExternalCryptoMaxAgeMinutes": "25",
+                "externalApiRetryAttempts": "1",
+                "externalApiRateLimitSeconds": "0",
+                "externalAlphaEnabled": "0",
+                "externalFredEnabled": "0",
+                "externalDartEnabled": "0",
+                "externalSecEnabled": "0",
+                "externalNewsEnabled": "0",
+                "externalFxRateEnabled": "0",
+                "externalYFinanceEnabled": "0",
+            },
+            cache=MemoryCache(),
+            crypto_cache=dedicated,
+            evidence_store=EvidenceStore(),
+            fetch_json=lambda *_args, **_kwargs: (_ for _ in ()).throw(RuntimeError("simulated provider outage")),
+            sleep=lambda _seconds: None,
+        )
+
+        result = provider.signals_for_positions([
+            Position(symbol="AAPL", name="Apple", market="US", currency="USD"),
+        ])
+        stored = dedicated.load()
+
+        self.assertEqual(63000, result["cryptoMarkets"]["bitcoin"]["price"])
+        self.assertEqual("partial", result["cryptoFreshness"]["status"])
+        self.assertNotEqual(stale_text, stored["lastAttemptAt"])
+        self.assertEqual(63000, stored["markets"]["bitcoin"]["price"])
+        self.assertFalse(stored["statusRows"][-1]["ok"])
 
     def test_crypto_freshness_uses_its_own_twenty_five_minute_budget(self):
         signals = {
@@ -243,6 +448,35 @@ class RuntimeResilienceTests(unittest.TestCase):
         self.assertIn("account-snapshot", entries)
         self.assertEqual("account-snapshot", entries["account-snapshot"]["cacheScope"])
         self.assertEqual(3, len(entries))
+
+    def test_aggregate_cache_keeps_only_the_two_newest_account_snapshots(self):
+        class MemoryCache:
+            @staticmethod
+            def load():
+                return {}
+
+        provider = ExternalSignalProvider(
+            settings={"externalSignalCacheMaxEntries": "3"},
+            cache=MemoryCache(),
+        )
+        payload = {}
+        for index in range(4):
+            payload = provider.next_cache_payload(
+                payload,
+                "account-" + str(index),
+                {"fetchedAt": "2026-07-27T00:0" + str(index) + ":00Z"},
+                cache_scope="account-snapshot",
+                subject_count=4,
+            )
+        payload = provider.next_cache_payload(
+            payload,
+            "research-latest",
+            {"fetchedAt": "2026-07-27T00:05:00Z"},
+            cache_scope="research",
+            subject_count=1,
+        )
+
+        self.assertEqual({"account-2", "account-3", "research-latest"}, set(payload["entries"]))
 
     def test_fresh_legacy_cache_is_promoted_for_account_snapshot_reuse(self):
         class MemoryCache:

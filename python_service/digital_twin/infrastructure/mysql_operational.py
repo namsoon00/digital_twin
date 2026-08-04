@@ -11,6 +11,7 @@ from .mysql_ai_inference_queue import MySQLAIInferenceQueueStore
 from .mysql_operational_core_stores import (
     MySQLAccountRegistry,
     MySQLAppStore,
+    MySQLCryptoMarketSignalCache,
     MySQLDataPipelineHealthStore,
     MySQLExternalSignalCache,
     MySQLOperationalStorageCapacityStateStore,

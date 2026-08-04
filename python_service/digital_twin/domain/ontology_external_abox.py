@@ -423,7 +423,16 @@ def add_external_signal_concepts(
     add_external_signal_quality_concepts(graph, portfolio_node_id, external_signals)
     add_portfolio_macro_and_cross_asset_concepts(graph, portfolio_node_id, external_signals, runtime_context)
     for key, value in sorted(external_signals.items()):
-        if key in {"quality", "freshness", "cryptoFreshness", "cryptoFetchedAt", "cryptoLastAttemptAt", "provenance"} or is_volatile_lifecycle_key(key):
+        if key in {
+            "quality",
+            "freshness",
+            "cryptoFreshness",
+            "cryptoFetchedAt",
+            "cryptoLastAttemptAt",
+            "cryptoSourceAsOf",
+            "cryptoCache",
+            "provenance",
+        } or is_volatile_lifecycle_key(key):
             continue
         # Global source nodes express availability and freshness only. Their
         # raw payload is already represented by symbol-specific evidence and

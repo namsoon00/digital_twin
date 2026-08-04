@@ -130,6 +130,8 @@ class OntologyProjectionFingerprintContractTests(unittest.TestCase):
                 "portfolio:external-signal-contract",
                 {
                     "fetchedAt": "2026-07-23T10:00:00Z",
+                    "cryptoSourceAsOf": "2026-07-23T09:59:00Z",
+                    "cryptoCache": {"state": "dedicated"},
                     "equityQuotes": {"AAPL": {"currentPrice": price}},
                 },
             )
@@ -143,6 +145,8 @@ class OntologyProjectionFingerprintContractTests(unittest.TestCase):
         self.assertTrue(signal.properties["payloadPresent"])
         self.assertEqual("mapping", signal.properties["payloadKind"])
         self.assertFalse(any(item.entity_id == "external-signal:fetchedAt" for item in first.entities))
+        self.assertFalse(any(item.entity_id == "external-signal:cryptoSourceAsOf" for item in first.entities))
+        self.assertFalse(any(item.entity_id == "external-signal:cryptoCache" for item in first.entities))
         self.assertEqual(material_graph_fingerprint(first), material_graph_fingerprint(second))
 
     def test_projection_uses_only_snapshot_captured_pipeline_health(self):

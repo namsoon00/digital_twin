@@ -23,7 +23,7 @@ from .external_signal_utils import (
     symbol_assignments,
     symbol_list,
 )
-from .operational_store import external_signal_cache, research_evidence_store
+from .operational_store import crypto_market_signal_cache, external_signal_cache, research_evidence_store
 from .settings import runtime_settings
 
 
@@ -44,9 +44,17 @@ class ExternalSignalProvider(
         fetch_text: TextFetcher = None,
         fetch_bytes: BytesFetcher = None,
         sleep: Callable[[float], None] = None,
+        crypto_cache=None,
     ):
         self.settings = settings or runtime_settings()
+        uses_default_cache = cache is None
         self.cache = cache or external_signal_cache(self.settings)
+        # Injected aggregate caches are normally isolated unit-test doubles.
+        # Production providers additionally share one compact global crypto
+        # snapshot so portfolio/settings cache-key changes cannot hide it.
+        self.crypto_cache = crypto_cache if crypto_cache is not None else (
+            crypto_market_signal_cache(self.settings) if uses_default_cache else None
+        )
         self.evidence_store = evidence_store or research_evidence_store(self.settings)
         # Provider-specific timeouts use the standard transport only. Test
         # and vendor adapters keep their existing two-argument contract.

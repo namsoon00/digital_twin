@@ -6,6 +6,7 @@ from .mysql_operational import (
     MySQLAccountRegistry,
     MySQLAIInferenceQueueStore,
     MySQLAppStore,
+    MySQLCryptoMarketSignalCache,
     MySQLDataPipelineHealthStore,
     MySQLEventLog,
     MySQLExternalSignalCache,
@@ -68,6 +69,11 @@ def app_store(settings: Dict[str, str] = None):
 def external_signal_cache(settings: Dict[str, str] = None):
     configured = configured_settings(settings)
     return MySQLExternalSignalCache(configured)
+
+
+def crypto_market_signal_cache(settings: Dict[str, str] = None):
+    configured = configured_settings(settings)
+    return MySQLCryptoMarketSignalCache(configured)
 
 
 def data_pipeline_health_store(settings: Dict[str, str] = None):

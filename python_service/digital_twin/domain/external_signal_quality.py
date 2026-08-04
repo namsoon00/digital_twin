@@ -165,6 +165,7 @@ def crypto_signal_freshness(
         ]
         fetched_at = max(stamps) if stamps else ""
     status = source_status(payload, "CoinGecko")
+    cache = payload.get("cryptoCache") if isinstance(payload.get("cryptoCache"), dict) else {}
     age = age_minutes(fetched_at, now=now) if fetched_at else 0
     if not markets:
         freshness_status = "unavailable"
@@ -184,6 +185,9 @@ def crypto_signal_freshness(
     return {
         "provider": "CoinGecko",
         "fetchedAt": fetched_at,
+        "sourceAsOf": str(payload.get("cryptoSourceAsOf") or ""),
+        "lastAttemptAt": str(payload.get("cryptoLastAttemptAt") or ""),
+        "cacheState": str(cache.get("state") or ""),
         "ageMinutes": age,
         "maxAgeMinutes": max_age_minutes,
         "status": freshness_status,

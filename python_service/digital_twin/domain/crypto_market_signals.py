@@ -8,8 +8,11 @@ meaningfully changed.
 
 from __future__ import annotations
 
+from copy import deepcopy
+from datetime import timezone
 from typing import Dict, Iterable, List, Mapping
 
+from .external_signal_quality import parse_iso_datetime
 from .instrument_profiles import BTC_SENSITIVE_SYMBOLS
 from .market_data import known_stock, number
 from .portfolio import Position
@@ -25,10 +28,158 @@ DEFAULT_CHANGE_THRESHOLDS = {
     "7d": 4.0,
 }
 ESCALATION_MULTIPLIER = 2.0
+CRYPTO_MARKET_SNAPSHOT_SCHEMA_VERSION = 1
 
 
 def _clean_symbol(value: object) -> str:
     return str(value or "").upper().strip()
+
+
+def _timestamp_key(value: object) -> float:
+    parsed = parse_iso_datetime(str(value or ""))
+    if not parsed:
+        return -1.0
+    if parsed.tzinfo is None:
+        parsed = parsed.replace(tzinfo=timezone.utc)
+    return parsed.astimezone(timezone.utc).timestamp()
+
+
+def _latest_timestamp(values: Iterable[object]) -> str:
+    rows = [str(value or "").strip() for value in values if str(value or "").strip()]
+    return max(rows, key=_timestamp_key) if rows else ""
+
+
+def crypto_market_snapshot(external_signals: Mapping[str, object] = None) -> Dict[str, object]:
+    """Build the compact, portfolio-independent CoinGecko cache contract."""
+
+    payload = external_signals if isinstance(external_signals, Mapping) else {}
+    markets_value = payload.get("cryptoMarkets")
+    markets = {
+        str(coin_id): deepcopy(dict(item))
+        for coin_id, item in markets_value.items()
+        if isinstance(markets_value, Mapping) and isinstance(item, Mapping)
+    } if isinstance(markets_value, Mapping) else {}
+    fetched_at = str(payload.get("cryptoFetchedAt") or "").strip()
+    if not fetched_at:
+        fetched_at = _latest_timestamp(
+            item.get("fetchedAt") or item.get("lastUpdated")
+            for item in markets.values()
+        )
+    last_attempt_at = str(payload.get("cryptoLastAttemptAt") or fetched_at or "").strip()
+    source_as_of = str(payload.get("cryptoSourceAsOf") or "").strip()
+    if not source_as_of:
+        source_as_of = _latest_timestamp(
+            item.get("lastUpdated") or item.get("fetchedAt")
+            for item in markets.values()
+        )
+    statuses_value = payload.get("statuses")
+    status_rows = [
+        deepcopy(dict(item))
+        for item in statuses_value
+        if isinstance(statuses_value, list)
+        and isinstance(item, Mapping)
+        and str(item.get("source") or "") == "CoinGecko"
+    ][-5:] if isinstance(statuses_value, list) else []
+    if not markets and not fetched_at and not last_attempt_at and not status_rows:
+        return {}
+    return {
+        "schemaVersion": CRYPTO_MARKET_SNAPSHOT_SCHEMA_VERSION,
+        "provider": "CoinGecko",
+        "dataset": "coins/markets",
+        "markets": markets,
+        "fetchedAt": fetched_at,
+        "lastAttemptAt": last_attempt_at,
+        "sourceAsOf": source_as_of,
+        "statusRows": status_rows,
+    }
+
+
+def _normalized_crypto_market_snapshot(payload: Mapping[str, object] = None) -> Dict[str, object]:
+    value = payload if isinstance(payload, Mapping) else {}
+    if not isinstance(value.get("markets"), Mapping):
+        return crypto_market_snapshot(value)
+    signals = {
+        "cryptoMarkets": value.get("markets"),
+        "cryptoFetchedAt": value.get("fetchedAt"),
+        "cryptoLastAttemptAt": value.get("lastAttemptAt"),
+        "cryptoSourceAsOf": value.get("sourceAsOf"),
+        "statuses": value.get("statusRows") if isinstance(value.get("statusRows"), list) else [],
+    }
+    return crypto_market_snapshot(signals)
+
+
+def combine_crypto_market_snapshots(*snapshots: Mapping[str, object]) -> Dict[str, object]:
+    """Combine latest market facts with the latest independent request state."""
+
+    rows = [_normalized_crypto_market_snapshot(item) for item in snapshots]
+    rows = [item for item in rows if item]
+    if not rows:
+        return {}
+    market_rows = [item for item in rows if item.get("markets")]
+    market_source = max(
+        market_rows,
+        key=lambda item: _timestamp_key(item.get("fetchedAt") or item.get("sourceAsOf")),
+    ) if market_rows else {}
+    attempt_source = max(
+        rows,
+        key=lambda item: _timestamp_key(item.get("lastAttemptAt") or item.get("fetchedAt")),
+    )
+    status_rows = attempt_source.get("statusRows") if isinstance(attempt_source.get("statusRows"), list) else []
+    if not status_rows and market_source:
+        status_rows = market_source.get("statusRows") if isinstance(market_source.get("statusRows"), list) else []
+    return {
+        "schemaVersion": CRYPTO_MARKET_SNAPSHOT_SCHEMA_VERSION,
+        "provider": "CoinGecko",
+        "dataset": "coins/markets",
+        "markets": deepcopy(market_source.get("markets") or {}),
+        "fetchedAt": str(market_source.get("fetchedAt") or ""),
+        "lastAttemptAt": str(attempt_source.get("lastAttemptAt") or attempt_source.get("fetchedAt") or ""),
+        "sourceAsOf": str(market_source.get("sourceAsOf") or ""),
+        "statusRows": deepcopy(status_rows),
+    }
+
+
+def merge_crypto_market_snapshot(
+    external_signals: Dict[str, object],
+    snapshot: Mapping[str, object],
+    cache_state: str = "dedicated",
+) -> bool:
+    """Merge a global CoinGecko snapshot without disturbing other providers."""
+
+    if not isinstance(external_signals, dict):
+        return False
+    current = crypto_market_snapshot(external_signals)
+    combined = combine_crypto_market_snapshots(current, snapshot)
+    if not combined:
+        return False
+    before = {
+        "markets": deepcopy(external_signals.get("cryptoMarkets") or {}),
+        "fetchedAt": str(external_signals.get("cryptoFetchedAt") or ""),
+        "lastAttemptAt": str(external_signals.get("cryptoLastAttemptAt") or ""),
+        "sourceAsOf": str(external_signals.get("cryptoSourceAsOf") or ""),
+    }
+    external_signals["cryptoMarkets"] = deepcopy(combined.get("markets") or {})
+    external_signals["cryptoFetchedAt"] = str(combined.get("fetchedAt") or "")
+    external_signals["cryptoLastAttemptAt"] = str(combined.get("lastAttemptAt") or "")
+    external_signals["cryptoSourceAsOf"] = str(combined.get("sourceAsOf") or "")
+    statuses = external_signals.get("statuses") if isinstance(external_signals.get("statuses"), list) else []
+    external_signals["statuses"] = [
+        item for item in statuses
+        if not isinstance(item, Mapping) or str(item.get("source") or "") != "CoinGecko"
+    ] + deepcopy(combined.get("statusRows") or [])
+    external_signals["cryptoCache"] = {
+        "schemaVersion": CRYPTO_MARKET_SNAPSHOT_SCHEMA_VERSION,
+        "provider": "CoinGecko",
+        "dataset": "coins/markets",
+        "state": str(cache_state or "dedicated"),
+    }
+    after = {
+        "markets": external_signals["cryptoMarkets"],
+        "fetchedAt": external_signals["cryptoFetchedAt"],
+        "lastAttemptAt": external_signals["cryptoLastAttemptAt"],
+        "sourceAsOf": external_signals["cryptoSourceAsOf"],
+    }
+    return before != after
 
 
 def _number_setting(settings: Mapping[str, object], key: str, fallback: float) -> float:

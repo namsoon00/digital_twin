@@ -110,9 +110,14 @@ class ExternalSignalMarketMixin:
                 "coins/markets refreshed",
                 dataUsable=True,
             )
+            self.persist_crypto_market_snapshot(signals)
             return True
         except Exception as error:  # noqa: BLE001
             self.status_for_error(signals, "CoinGecko", "", error)
+            # Persist the failed attempt together with the last good market
+            # facts so cache-only reasoning can distinguish stale/partial
+            # evidence from a genuinely missing dataset.
+            self.persist_crypto_market_snapshot(signals)
             return False
 
     def add_fred(self, signals: Dict[str, object]) -> None:

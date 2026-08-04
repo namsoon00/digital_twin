@@ -48,6 +48,9 @@ IMPACT_LABELS = {
 DISCLOSURE_EVIDENCE_KINDS = {"disclosure", "filing", "sec-filing", "sec_filing"}
 NEWS_EVIDENCE_KINDS = {"news", "article", "news-article", "rss"}
 MAX_SOURCES_PER_EVENT = 3
+DEFAULT_RECONCILIATION_INITIAL_LOOKBACK_MINUTES = 1
+DEFAULT_RECONCILIATION_MAX_REPLAY_AGE_MINUTES = 180
+DEFAULT_RECONCILIATION_BATCH_SIZE = 100
 
 
 def clean_text(value: object, fallback: str = "") -> str:
@@ -686,6 +689,100 @@ def short_dedupe_token(value: object) -> str:
     return hashlib.sha1(text.encode("utf-8")).hexdigest()[:16]
 
 
+class NewsDigestEventReconciler:
+    """Replay durable research events when synchronous notification dispatch is lost."""
+
+    def __init__(
+        self,
+        event_reader,
+        enqueuer,
+        cursor_store,
+        batch_size: int = DEFAULT_RECONCILIATION_BATCH_SIZE,
+        initial_lookback_minutes: int = DEFAULT_RECONCILIATION_INITIAL_LOOKBACK_MINUTES,
+        max_replay_age_minutes: int = DEFAULT_RECONCILIATION_MAX_REPLAY_AGE_MINUTES,
+        now_provider=None,
+    ):
+        self.event_reader = event_reader
+        self.enqueuer = enqueuer
+        self.cursor_store = cursor_store
+        self.batch_size = max(1, min(500, int(batch_size or DEFAULT_RECONCILIATION_BATCH_SIZE)))
+        self.initial_lookback_minutes = max(1, int(initial_lookback_minutes or DEFAULT_RECONCILIATION_INITIAL_LOOKBACK_MINUTES))
+        self.max_replay_age_minutes = max(
+            self.initial_lookback_minutes,
+            int(max_replay_age_minutes or DEFAULT_RECONCILIATION_MAX_REPLAY_AGE_MINUTES),
+        )
+        self.now_provider = now_provider or (lambda: datetime.now(timezone.utc))
+        self.last_result: Dict[str, object] = {}
+
+    @staticmethod
+    def timestamp(value: datetime) -> str:
+        parsed = value if value.tzinfo else value.replace(tzinfo=timezone.utc)
+        return parsed.astimezone(timezone.utc).isoformat().replace("+00:00", "Z")
+
+    def run_once(self) -> Dict[str, object]:
+        reader = getattr(self.event_reader, "research_evidence_events_after", None)
+        if not callable(reader):
+            self.last_result = {"status": "unsupported", "processedCount": 0, "queuedCount": 0}
+            return dict(self.last_result)
+
+        state = self.cursor_store.load() if self.cursor_store and hasattr(self.cursor_store, "load") else {}
+        state = dict(state or {}) if isinstance(state, dict) else {}
+        now = self.now_provider()
+        if not isinstance(now, datetime):
+            now = datetime.now(timezone.utc)
+        if not now.tzinfo:
+            now = now.replace(tzinfo=timezone.utc)
+        initial_floor = now - timedelta(minutes=self.initial_lookback_minutes)
+        replay_floor = now - timedelta(minutes=self.max_replay_age_minutes)
+        stored_at_text = clean_text(state.get("lastOccurredAt"))
+        stored_at = parse_datetime(stored_at_text)
+        if not stored_at:
+            after_at = initial_floor
+            after_id = ""
+        elif stored_at < replay_floor:
+            after_at = replay_floor
+            after_id = ""
+        else:
+            after_at = stored_at
+            after_id = clean_text(state.get("lastEventId"))
+
+        events = list(reader(
+            after_occurred_at=self.timestamp(after_at),
+            after_event_id=after_id,
+            limit=self.batch_size,
+        ) or [])
+        processed = 0
+        queued = 0
+        last_at = self.timestamp(after_at)
+        last_id = after_id
+        for event in events:
+            if str(getattr(event, "name", "") or "") != RESEARCH_EVIDENCE_COLLECTED:
+                continue
+            queued += int(self.enqueuer.handle(event) or 0)
+            processed += 1
+            last_at = clean_text(getattr(event, "occurred_at", "")) or last_at
+            last_id = clean_text(getattr(event, "event_id", "")) or last_id
+
+        if self.cursor_store and hasattr(self.cursor_store, "replace"):
+            self.cursor_store.replace({
+                "lastOccurredAt": last_at,
+                "lastEventId": last_id,
+                "processedCount": int(state.get("processedCount") or 0) + processed,
+                "lastProcessedCount": processed,
+                "lastQueuedCount": queued,
+                "updatedAt": self.timestamp(now),
+            })
+        self.last_result = {
+            "status": "ok" if processed else "idle",
+            "processedCount": processed,
+            "queuedCount": queued,
+            "cursorOccurredAt": last_at,
+            "cursorEventId": last_id,
+            "hasMore": len(events) >= self.batch_size,
+        }
+        return dict(self.last_result)
+
+
 class NewsDigestEnqueuer:
     def __init__(
         self,
@@ -800,17 +897,19 @@ class NewsDigestEnqueuer:
             and states["validationState"] != "blocked"
         )
 
-    def handle(self, event: DomainEvent) -> None:
+    def handle(self, event: DomainEvent) -> int:
         if event.name != RESEARCH_EVIDENCE_COLLECTED:
-            return
+            return 0
         items = self.event_items(event)
         if not items:
-            return
+            return 0
+        queued = 0
         accounts = [account for account in (self.account_repository.load() or []) if isinstance(account, AccountConfig) and account.enabled]
         for account in accounts:
             scoped_items = self.items_for_account(account, items)
             if scoped_items:
-                self.enqueue_account_digest(account, scoped_items, event)
+                queued += self.enqueue_account_digest(account, scoped_items, event)
+        return queued
 
     def previously_sent_article_keys(self, account: AccountConfig) -> set:
         if not self.sent_article_filter_enabled():
@@ -920,11 +1019,13 @@ class NewsDigestEnqueuer:
                 scoped.append(item)
         return self.exclude_previously_sent_articles(account, scoped)
 
-    def enqueue_account_digest(self, account: AccountConfig, items: List[Dict[str, object]], event: DomainEvent) -> None:
+    def enqueue_account_digest(self, account: AccountConfig, items: List[Dict[str, object]], event: DomainEvent) -> int:
+        queued = 0
         for event_items in grouped_event_items(items)[: self.max_items]:
-            self.enqueue_account_event(account, event_items, event)
+            queued += self.enqueue_account_event(account, event_items, event)
+        return queued
 
-    def enqueue_account_event(self, account: AccountConfig, items: List[Dict[str, object]], event: DomainEvent) -> None:
+    def enqueue_account_event(self, account: AccountConfig, items: List[Dict[str, object]], event: DomainEvent) -> int:
         primary = items[0]
         primary_id = item_evidence_id(primary)
         article_keys = sorted({key for item in items for key in article_identity_keys(item)})
@@ -950,7 +1051,7 @@ class NewsDigestEnqueuer:
         context["body"] = text
         job.text = text
         job.context = context
-        self.queue.enqueue(job)
+        return 1 if self.queue.enqueue(job) else 0
 
     def context(self, account: AccountConfig, items: List[Dict[str, object]], event: DomainEvent) -> Dict[str, object]:
         primary = items[0]

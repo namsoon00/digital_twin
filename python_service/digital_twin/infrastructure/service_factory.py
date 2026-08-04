@@ -40,7 +40,7 @@ from ..application.model_review_service import ModelReviewRunner
 from ..application.news_collection_service import NewsCollectionRunner
 from ..application.news_ai_analysis_service import NewsAiAnalysisService
 from ..application.news_analysis_enrichment_service import NewsAnalysisEnrichmentRunner
-from ..application.news_digest_service import NewsDigestEnqueuer
+from ..application.news_digest_service import NewsDigestEnqueuer, NewsDigestEventReconciler
 from ..application.monitoring_service import MonitorRunner
 from ..application.notification_service import (
     CompositeNotificationContextEnricher,
@@ -384,6 +384,7 @@ def build_notification_queue_runner(dry_run: bool = False, lane: str = "all") ->
     )
     opinion_enricher = NotificationAIOpinionEnricher(settings)
     ai_request_enqueuer = None
+    news_digest_reconciler = None
     if not dry_run:
         ai_request_enqueuer = NotificationAIRequestEnqueuer(
             stores.ai_inference_queue_store(settings),
@@ -394,6 +395,17 @@ def build_notification_queue_runner(dry_run: bool = False, lane: str = "all") ->
                 opinion_enricher,
             ),
             settings,
+        )
+        news_digest_reconciler = NewsDigestEventReconciler(
+            event_reader=stores.event_log(settings),
+            enqueuer=NewsDigestEnqueuer(
+                account_repository=stores.account_registry(settings),
+                monitor_store=monitor_store,
+                queue=stores.notification_job_store(settings),
+                settings=settings,
+                max_items=int(number(settings.get("newsDigestMaxItems")) or 3),
+            ),
+            cursor_store=stores.news_digest_reconciliation_state_store(settings),
         )
 
     return NotificationQueueRunner(
@@ -421,6 +433,7 @@ def build_notification_queue_runner(dry_run: bool = False, lane: str = "all") ->
         include_message_types=include_message_types,
         exclude_message_types=exclude_message_types,
         ai_request_enqueuer=ai_request_enqueuer,
+        news_digest_reconciler=news_digest_reconciler,
     )
 
 

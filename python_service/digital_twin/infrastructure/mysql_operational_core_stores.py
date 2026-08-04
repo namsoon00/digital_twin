@@ -292,6 +292,12 @@ class MySQLDataPipelineHealthStore(MySQLAppStore):
     store_id = "data_pipeline_health"
 
 
+class MySQLNewsDigestReconciliationStateStore(MySQLAppStore):
+    """Keeps the durable research-event cursor used by notification recovery."""
+
+    store_id = "news_digest_reconciliation_state"
+
+
 class MySQLOperationalStorageCapacityStateStore(MySQLAppStore):
     """Keeps one compact capacity incident state across worker restarts."""
 

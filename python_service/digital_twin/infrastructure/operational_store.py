@@ -8,6 +8,7 @@ from .mysql_operational import (
     MySQLAppStore,
     MySQLCryptoMarketSignalCache,
     MySQLDataPipelineHealthStore,
+    MySQLNewsDigestReconciliationStateStore,
     MySQLEventLog,
     MySQLExternalSignalCache,
     MySQLOperationalStorageCapacityStateStore,
@@ -79,6 +80,11 @@ def crypto_market_signal_cache(settings: Dict[str, str] = None):
 def data_pipeline_health_store(settings: Dict[str, str] = None):
     configured = configured_settings(settings)
     return MySQLDataPipelineHealthStore(configured)
+
+
+def news_digest_reconciliation_state_store(settings: Dict[str, str] = None):
+    configured = configured_settings(settings)
+    return MySQLNewsDigestReconciliationStateStore(configured)
 
 
 def operational_storage_capacity_state_store(settings: Dict[str, str] = None):

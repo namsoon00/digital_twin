@@ -348,6 +348,7 @@ class NotificationQueueRunner:
         include_message_types: List[str] = None,
         exclude_message_types: List[str] = None,
         ai_request_enqueuer=None,
+        news_digest_reconciler=None,
     ):
         self.queue = queue
         self.account_repository = account_repository
@@ -367,6 +368,8 @@ class NotificationQueueRunner:
         self.include_message_types = tuple(dict.fromkeys(str(item).strip() for item in include_message_types or [] if str(item).strip()))
         self.exclude_message_types = tuple(dict.fromkeys(str(item).strip() for item in exclude_message_types or [] if str(item).strip()))
         self.ai_request_enqueuer = ai_request_enqueuer
+        self.news_digest_reconciler = news_digest_reconciler
+        self.last_news_digest_reconciliation: Dict[str, object] = {}
         self.last_run_details = []
 
     def account_map(self) -> Dict[str, object]:
@@ -374,6 +377,8 @@ class NotificationQueueRunner:
 
     def run_once(self, limit: int = 10) -> int:
         self.last_run_details = []
+        if self.news_digest_reconciler:
+            self.last_news_digest_reconciliation = dict(self.news_digest_reconciler.run_once() or {})
         use_claim = (not self.dry_run) and hasattr(self.queue, "claim_pending")
         if use_claim:
             try:

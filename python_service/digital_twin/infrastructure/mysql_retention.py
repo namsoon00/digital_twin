@@ -52,6 +52,9 @@ MYSQL_OPERATIONAL_COMPACTION_TABLES = frozenset({
     "monitor_snapshot_history",
     "notification_jobs",
     "notification_article_delivery_ledger",
+    "ai_inference_subject_heads",
+    "ai_inference_requests",
+    "ai_inference_results",
     "model_review_jobs",
     "monitor_sent",
     "market_quote_cache",
@@ -240,6 +243,10 @@ def operational_inference_detail_outbox_retention_hours(settings: Mapping[str, o
     )
 
 
+def operational_ai_inference_queue_retention_hours(settings: Mapping[str, object] = None) -> int:
+    return _int_setting(settings or {}, "notificationAiQueueRetentionHours", 24, 1, 24 * 30)
+
+
 def operational_large_domain_event_keep_count(settings: Mapping[str, object] = None) -> int:
     return _int_setting(
         settings or {},
@@ -400,7 +407,7 @@ def _delete_suppressed_notification_rows(connection, cutoff_iso: str, batch_size
     cutoff_sql = "CAST(%s AS CHAR CHARACTER SET utf8mb4) COLLATE utf8mb4_unicode_ci"
     sql = (
         "DELETE FROM `notification_jobs`"
-        " WHERE `status` = 'suppressed'"
+        " WHERE `status` IN ('suppressed', 'superseded')"
         " AND `created_at` < "
         + cutoff_sql
         + " ORDER BY `created_at`, `job_id` LIMIT %s"
@@ -434,6 +441,26 @@ def _delete_completed_model_review_rows(connection, cutoff_iso: str, batch_size:
         + " ORDER BY `updated_at`, `job_id` LIMIT %s"
     )
     return _delete_one_batch(connection, sql, (cutoff_iso, batch_size))
+
+
+def _delete_terminal_ai_inference_rows(connection, cutoff_iso: str, batch_size: int) -> Dict[str, int]:
+    cutoff_sql = "CAST(%s AS CHAR CHARACTER SET utf8mb4) COLLATE utf8mb4_unicode_ci"
+    results = _delete_one_batch(
+        connection,
+        "DELETE FROM `ai_inference_results` WHERE `created_at` < "
+        + cutoff_sql
+        + " ORDER BY `created_at`, `result_id` LIMIT %s",
+        (cutoff_iso, batch_size),
+    )
+    requests = _delete_one_batch(
+        connection,
+        "DELETE FROM `ai_inference_requests` WHERE `status` IN ('completed', 'failed', 'superseded')"
+        " AND `completed_at` != '' AND `completed_at` < "
+        + cutoff_sql
+        + " ORDER BY `completed_at`, `request_id` LIMIT %s",
+        (cutoff_iso, batch_size),
+    )
+    return {"requests": requests, "results": results}
 
 
 def _delete_delivered_notification_rows_over_keep_count(
@@ -834,6 +861,7 @@ def apply_mysql_operational_history_retention(
     projection_run_keep_count = operational_projection_run_keep_count(configured)
     world_projection_outbox_retention_hours = operational_world_projection_outbox_retention_hours(configured)
     inference_detail_outbox_retention_hours = operational_inference_detail_outbox_retention_hours(configured)
+    ai_inference_queue_retention_hours = operational_ai_inference_queue_retention_hours(configured)
     delivered_notification_keep_count = operational_delivered_notification_keep_count(configured)
     article_delivery_ledger_cutoff = sent_article_delivery_ledger_cutoff(configured, now=now)
     locked = False
@@ -857,6 +885,16 @@ def apply_mysql_operational_history_retention(
         completed_model_review_deleted = _delete_completed_model_review_rows(connection, cutoff_iso, batch_size)
         deleted_by_table["model_review_jobs"] = completed_model_review_deleted
         deleted_by_policy["completed:model_review_jobs"] = completed_model_review_deleted
+
+        ai_inference_cutoff = (
+            (now or datetime.now(timezone.utc)).astimezone(timezone.utc)
+            - timedelta(hours=ai_inference_queue_retention_hours)
+        ).replace(microsecond=0).isoformat().replace("+00:00", "Z")
+        ai_inference_deleted = _delete_terminal_ai_inference_rows(connection, ai_inference_cutoff, batch_size)
+        deleted_by_table["ai_inference_requests"] = ai_inference_deleted["requests"]
+        deleted_by_table["ai_inference_results"] = ai_inference_deleted["results"]
+        deleted_by_policy["terminal:ai_inference_requests"] = ai_inference_deleted["requests"]
+        deleted_by_policy["time:ai_inference_results"] = ai_inference_deleted["results"]
 
         snapshot_deleted = _delete_snapshot_history_over_keep_count(
             connection,

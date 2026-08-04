@@ -41,6 +41,7 @@ from .operational_storage_guard import (
 from .notifications import queued_notifier_for_account, send_events
 from .ontology_graph_store import ontology_repository_from_settings
 from .service_factory import (
+    build_ai_inference_queue_runner,
     build_investment_calendar_candidate_service,
     build_investment_calendar_discovery_service,
     build_investment_calendar_research_service,
@@ -69,6 +70,7 @@ from .service_factory import (
     monitor_account_job_store_from_settings,
 )
 from .schedulers import (
+    AIInferenceQueueScheduler,
     InvestmentCalendarScheduler,
     InvestmentResearchScheduler,
     KISRealtimeWebSocketScheduler,
@@ -353,7 +355,7 @@ def notifications_command(args) -> int:
         return 0
     settings = runtime_settings()
     limit = int(args.limit or settings.get("notificationQueueBatchSize") or 10)
-    runner = build_notification_queue_runner(dry_run=args.dry_run, lane=getattr(args, "lane", "all"))
+    runner = build_notification_queue_runner(dry_run=args.dry_run)
     if args.notifications_action == "once":
         processed = runner.run_once(limit=limit)
         print("notificationJobsProcessed=" + str(processed))
@@ -365,6 +367,34 @@ def notifications_command(args) -> int:
             or 30
         )
         NotificationQueueScheduler(runner, interval).run_forever(limit=limit)
+        return 0
+    return 1
+
+
+def ai_inference_command(args) -> int:
+    store = stores.ai_inference_queue_store()
+    if args.ai_inference_action == "status":
+        print(json.dumps({"aiInferenceQueue": store.summary()}, ensure_ascii=False))
+        return 0
+    settings = runtime_settings()
+    limit = int(args.limit or settings.get("notificationAiQueueBatchSize") or 1)
+    worker_id = str(args.worker_id or os.environ.get("NOTIFICATION_AI_WORKER_ID") or "").strip()
+    runner = build_ai_inference_queue_runner(worker_id=worker_id)
+    if args.ai_inference_action == "once":
+        processed = runner.run_once(limit=limit)
+        print(json.dumps({
+            "aiInferenceRequestsProcessed": processed,
+            "workerId": runner.worker_id,
+            "details": runner.last_run_details,
+        }, ensure_ascii=False))
+        return 0
+    if args.ai_inference_action == "watch":
+        interval = int(
+            os.environ.get("NOTIFICATION_AI_QUEUE_INTERVAL_SECONDS")
+            or settings.get("notificationAiQueueIntervalSeconds")
+            or 5
+        )
+        AIInferenceQueueScheduler(runner, interval).run_forever(limit=limit)
         return 0
     return 1
 
@@ -1548,13 +1578,22 @@ def build_parser() -> argparse.ArgumentParser:
     notify_once = notification_actions.add_parser("once")
     notify_once.add_argument("--dry-run", action="store_true")
     notify_once.add_argument("--limit", default="")
-    notify_once.add_argument("--lane", choices=["all", "fast", "ai"], default="all")
     notify_watch = notification_actions.add_parser("watch")
     notify_watch.add_argument("--dry-run", action="store_true")
     notify_watch.add_argument("--limit", default="")
-    notify_watch.add_argument("--lane", choices=["all", "fast", "ai"], default="all")
     notification_actions.add_parser("status")
     notifications.set_defaults(func=notifications_command)
+
+    ai_inference = subparsers.add_parser("ai-inference", help="Run deferred notification AI inference")
+    ai_inference_actions = ai_inference.add_subparsers(dest="ai_inference_action", required=True)
+    ai_once = ai_inference_actions.add_parser("once")
+    ai_once.add_argument("--limit", default="")
+    ai_once.add_argument("--worker-id", default="")
+    ai_watch = ai_inference_actions.add_parser("watch")
+    ai_watch.add_argument("--limit", default="")
+    ai_watch.add_argument("--worker-id", default="")
+    ai_inference_actions.add_parser("status")
+    ai_inference.set_defaults(func=ai_inference_command)
 
     ontology_reasoning = subparsers.add_parser("ontology-reasoning", help="Run data-update driven ontology reasoning")
     ontology_reasoning_actions = ontology_reasoning.add_subparsers(dest="ontology_reasoning_action", required=True)

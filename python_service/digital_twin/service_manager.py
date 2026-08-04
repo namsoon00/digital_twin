@@ -120,20 +120,13 @@ BASE_WORKERS = {
         "needle": "python_service/service.py ontology-lab watch",
     },
     "notifications": {
-        "label": "Python fast notification worker",
+        "label": "Python notification delivery worker",
         "pid": data_dir() / "python-notifications.pid",
         "log": data_dir() / "python-notifications.log",
-        "command": [sys.executable, "-u", "python_service/service.py", "notifications", "watch", "--lane", "fast"],
+        "command": [sys.executable, "-u", "python_service/service.py", "notifications", "watch"],
         # The generic needle also recognizes the pre-lane worker during the
         # first upgrade restart so it is terminated instead of orphaned.
         "needle": "python_service/service.py notifications watch",
-    },
-    "notification-ai": {
-        "label": "Python investment notification AI worker",
-        "pid": data_dir() / "python-notification-ai.pid",
-        "log": data_dir() / "python-notification-ai.log",
-        "command": [sys.executable, "-u", "python_service/service.py", "notifications", "watch", "--lane", "ai", "--limit", "1"],
-        "needle": "python_service/service.py notifications watch --lane ai --limit 1",
     },
     "operational-maintenance": {
         "label": "Python operational history maintenance worker",
@@ -369,6 +362,35 @@ def worker_specs() -> Dict[str, Dict[str, object]]:
     if typedb_requested(settings):
         workers["typedb"] = typedb_worker_spec(settings)
     workers.update(BASE_WORKERS)
+    ai_worker_count = min(8, int_value((settings or {}).get("notificationAiQueueWorkerCount"), 2, 1))
+    for index in range(1, ai_worker_count + 1):
+        name = "notification-ai" if index == 1 else "notification-ai-" + str(index)
+        pid_name = "python-notification-ai.pid" if index == 1 else "python-notification-ai-" + str(index) + ".pid"
+        log_name = "python-notification-ai.log" if index == 1 else "python-notification-ai-" + str(index) + ".log"
+        command_needle = "python_service/service.py ai-inference watch --worker-id ai-" + str(index) + " --limit 1"
+        needles = [command_needle]
+        if index == 1:
+            # Recognize and terminate the pre-queue synchronous AI lane during
+            # the first restart after this migration.
+            needles.append("python_service/service.py notifications watch --lane ai --limit 1")
+        workers[name] = {
+            "label": "Python notification AI inference worker " + str(index),
+            "pid": data_dir() / pid_name,
+            "log": data_dir() / log_name,
+            "command": [
+                sys.executable,
+                "-u",
+                "python_service/service.py",
+                "ai-inference",
+                "watch",
+                "--worker-id",
+                "ai-" + str(index),
+                "--limit",
+                "1",
+            ],
+            "needle": command_needle,
+            "needles": needles,
+        }
     workers["web"] = web_worker_spec(settings)
     return workers
 
@@ -391,7 +413,8 @@ def command_for_pid(pid: int) -> str:
 
 
 def is_worker_command(command: str, spec: Dict[str, object]) -> bool:
-    return str(spec["needle"]) in command
+    needles = spec.get("needles") if isinstance(spec.get("needles"), (list, tuple, set)) else [spec.get("needle")]
+    return any(str(needle or "") in command for needle in needles if str(needle or ""))
 
 
 def pid_exists(pid: int) -> bool:

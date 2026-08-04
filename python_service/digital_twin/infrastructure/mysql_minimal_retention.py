@@ -18,7 +18,7 @@ from .mysql_schema_tuning import quote_identifier
 
 
 MYSQL_MINIMAL_RETENTION_LOCK_NAME = "orbit_alpha_minimal_mysql_retention"
-TERMINAL_NOTIFICATION_STATUSES = ("done", "suppressed", "sent")
+TERMINAL_NOTIFICATION_STATUSES = ("done", "suppressed", "superseded", "sent")
 TERMINAL_WORLD_PROJECTION_STATUSES = ("completed", "superseded")
 # Research status values evolve with the collection workflow.  Completed-at is
 # the durable terminal marker; these three states are the only ones that may

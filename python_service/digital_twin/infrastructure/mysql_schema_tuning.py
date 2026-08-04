@@ -135,6 +135,47 @@ MYSQL_OPERATIONAL_INDEXES: Dict[str, Sequence[MySQLIndexDefinition]] = {
             "`account_id`, `status`, `updated_at`, `job_id`",
         ),
     ),
+    "ai_inference_subject_heads": (
+        MySQLIndexDefinition(
+            "ai_inference_subject_heads",
+            "idx_ai_inference_subject_heads_updated",
+            "`updated_at`, `subject_key`",
+        ),
+    ),
+    "ai_inference_requests": (
+        MySQLIndexDefinition(
+            "ai_inference_requests",
+            "idx_ai_inference_requests_ready",
+            "`status`, `available_at`, `priority`, `created_at`, `request_id`",
+        ),
+        MySQLIndexDefinition(
+            "ai_inference_requests",
+            "idx_ai_inference_requests_subject",
+            "`subject_key`, `status`, `updated_at`, `request_id`",
+        ),
+        MySQLIndexDefinition(
+            "ai_inference_requests",
+            "idx_ai_inference_requests_lease",
+            "`status`, `lease_expires_at`, `request_id`",
+        ),
+        MySQLIndexDefinition(
+            "ai_inference_requests",
+            "idx_ai_inference_requests_completed",
+            "`status`, `completed_at`, `request_id`",
+        ),
+    ),
+    "ai_inference_results": (
+        MySQLIndexDefinition(
+            "ai_inference_results",
+            "idx_ai_inference_results_notification",
+            "`notification_job_id`, `created_at`",
+        ),
+        MySQLIndexDefinition(
+            "ai_inference_results",
+            "idx_ai_inference_results_created",
+            "`created_at`, `result_id`",
+        ),
+    ),
     "mysql_retention_runs": (
         MySQLIndexDefinition(
             "mysql_retention_runs",

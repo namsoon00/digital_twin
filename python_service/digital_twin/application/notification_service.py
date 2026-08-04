@@ -347,6 +347,7 @@ class NotificationQueueRunner:
         operational_delivery_recorder: Callable = None,
         include_message_types: List[str] = None,
         exclude_message_types: List[str] = None,
+        ai_request_enqueuer=None,
     ):
         self.queue = queue
         self.account_repository = account_repository
@@ -365,6 +366,7 @@ class NotificationQueueRunner:
         self.operational_delivery_recorder = operational_delivery_recorder
         self.include_message_types = tuple(dict.fromkeys(str(item).strip() for item in include_message_types or [] if str(item).strip()))
         self.exclude_message_types = tuple(dict.fromkeys(str(item).strip() for item in exclude_message_types or [] if str(item).strip()))
+        self.ai_request_enqueuer = ai_request_enqueuer
         self.last_run_details = []
 
     def account_map(self) -> Dict[str, object]:
@@ -424,6 +426,16 @@ class NotificationQueueRunner:
             if not self.apply_dispatch_freshness_gate(job, "AI 판단 전"):
                 processed += 1
                 continue
+            if self.should_defer_ai_inference(job):
+                try:
+                    outcome = self.ai_request_enqueuer.enqueue(job)
+                    status = str((outcome or {}).get("status") or "awaiting-ai")
+                    self.last_run_details.append(self.job_detail(job, status))
+                except Exception as error:  # noqa: BLE001 - the source notification remains retryable.
+                    self.queue.mark_failed(job, "AI 추론 큐 등록 실패: " + str(error))
+                    self.last_run_details.append(self.job_detail(job, "failed", str(error)[:160]))
+                processed += 1
+                continue
             message = self.render(job)
             if not message:
                 reason = "empty rendered notification text"
@@ -456,6 +468,13 @@ class NotificationQueueRunner:
             if self.send_gap_seconds and processed < len(jobs):
                 time.sleep(self.send_gap_seconds)
         return processed
+
+    def should_defer_ai_inference(self, job: NotificationJob) -> bool:
+        if self.dry_run or self.ai_request_enqueuer is None:
+            return False
+        if not ai_gate_enabled_for_message_type(job.message_type, self.settings):
+            return False
+        return not bool((job.context or {}).get("notificationAiValidatedResponse"))
 
     def message_type_allowed(self, message_type: object) -> bool:
         value = str(message_type or "").strip()

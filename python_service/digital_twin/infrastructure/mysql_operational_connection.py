@@ -519,6 +519,67 @@ MYSQL_SCHEMA = [
     ) ENGINE=InnoDB DEFAULT CHARSET=utf8mb4 COLLATE=utf8mb4_unicode_ci
     """,
     """
+    CREATE TABLE IF NOT EXISTS ai_inference_subject_heads (
+        subject_key VARCHAR(255) PRIMARY KEY,
+        latest_request_id VARCHAR(191) NOT NULL DEFAULT '',
+        updated_at VARCHAR(40) NOT NULL,
+        KEY idx_ai_inference_subject_heads_updated (updated_at, subject_key)
+    ) ENGINE=InnoDB DEFAULT CHARSET=utf8mb4 COLLATE=utf8mb4_unicode_ci
+    """,
+    """
+    CREATE TABLE IF NOT EXISTS ai_inference_requests (
+        request_id VARCHAR(191) PRIMARY KEY,
+        notification_job_id VARCHAR(191) NOT NULL,
+        account_id VARCHAR(191) NOT NULL DEFAULT '',
+        account_label VARCHAR(255) NOT NULL DEFAULT '',
+        message_type VARCHAR(191) NOT NULL DEFAULT '',
+        subject_key VARCHAR(255) NOT NULL,
+        symbol VARCHAR(64) NOT NULL DEFAULT '',
+        inference_generation_id VARCHAR(191) NOT NULL DEFAULT '',
+        context_hash CHAR(64) NOT NULL,
+        prompt_version VARCHAR(120) NOT NULL DEFAULT '',
+        model VARCHAR(120) NOT NULL DEFAULT '',
+        reasoning_effort VARCHAR(32) NOT NULL DEFAULT 'max',
+        priority SMALLINT NOT NULL DEFAULT 20,
+        status VARCHAR(32) NOT NULL DEFAULT 'pending',
+        attempts INT NOT NULL DEFAULT 0,
+        available_at VARCHAR(40) NOT NULL DEFAULT '',
+        lease_owner VARCHAR(191) NOT NULL DEFAULT '',
+        lease_expires_at VARCHAR(40) NOT NULL DEFAULT '',
+        heartbeat_at VARCHAR(40) NOT NULL DEFAULT '',
+        superseded_by VARCHAR(191) NOT NULL DEFAULT '',
+        created_at VARCHAR(40) NOT NULL,
+        updated_at VARCHAR(40) NOT NULL,
+        started_at VARCHAR(40) NOT NULL DEFAULT '',
+        completed_at VARCHAR(40) NOT NULL DEFAULT '',
+        last_error TEXT NOT NULL,
+        context_json LONGTEXT NOT NULL,
+        UNIQUE KEY idx_ai_inference_requests_notification (notification_job_id),
+        KEY idx_ai_inference_requests_ready (status, available_at, priority, created_at, request_id),
+        KEY idx_ai_inference_requests_subject (subject_key, status, updated_at, request_id),
+        KEY idx_ai_inference_requests_lease (status, lease_expires_at, request_id),
+        KEY idx_ai_inference_requests_completed (status, completed_at, request_id)
+    ) ENGINE=InnoDB DEFAULT CHARSET=utf8mb4 COLLATE=utf8mb4_unicode_ci
+    """,
+    """
+    CREATE TABLE IF NOT EXISTS ai_inference_results (
+        result_id VARCHAR(191) PRIMARY KEY,
+        request_id VARCHAR(191) NOT NULL,
+        notification_job_id VARCHAR(191) NOT NULL,
+        model VARCHAR(120) NOT NULL DEFAULT '',
+        reasoning_effort VARCHAR(32) NOT NULL DEFAULT 'max',
+        source VARCHAR(255) NOT NULL DEFAULT '',
+        validation_state VARCHAR(32) NOT NULL DEFAULT 'conditional',
+        latency_ms BIGINT NOT NULL DEFAULT 0,
+        prompt_bytes BIGINT NOT NULL DEFAULT 0,
+        response_json LONGTEXT NOT NULL,
+        created_at VARCHAR(40) NOT NULL,
+        UNIQUE KEY idx_ai_inference_results_request (request_id),
+        KEY idx_ai_inference_results_notification (notification_job_id, created_at),
+        KEY idx_ai_inference_results_created (created_at, result_id)
+    ) ENGINE=InnoDB DEFAULT CHARSET=utf8mb4 COLLATE=utf8mb4_unicode_ci
+    """,
+    """
     CREATE TABLE IF NOT EXISTS notification_article_delivery_ledger (
         account_id VARCHAR(191) NOT NULL DEFAULT '',
         identity_key VARCHAR(191) NOT NULL,

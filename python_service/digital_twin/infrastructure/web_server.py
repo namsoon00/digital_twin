@@ -377,13 +377,27 @@ def realtime_status_payload() -> Dict[str, object]:
         notification_jobs = notification_queue_store().summary()
     except Exception as error:  # noqa: BLE001 - notification queue may share the same optional MySQL backend.
         store_warning = store_warning or str(error)[:240]
-        notification_jobs = {"pending": 0, "processing": 0, "done": 0, "suppressed": 0, "failed": 0}
+        notification_jobs = {
+            "pending": 0,
+            "awaiting_ai": 0,
+            "processing": 0,
+            "done": 0,
+            "superseded": 0,
+            "suppressed": 0,
+            "failed": 0,
+        }
+    try:
+        ai_inference_queue = stores.ai_inference_queue_store().summary()
+    except Exception as error:  # noqa: BLE001 - expose the notification queue even if AI storage is unavailable.
+        store_warning = store_warning or str(error)[:240]
+        ai_inference_queue = {"pendingCount": 0, "retryCount": 0, "processingCount": 0, "failedCount": 0}
     return {
         **REALTIME_HUB.status(),
         "events": counts,
         "latestEvents": [realtime_event_summary(event) for event in latest_events],
         "monitoring": monitoring,
         "notificationJobs": notification_jobs,
+        "aiInferenceQueue": ai_inference_queue,
         "storeWarning": store_warning,
     }
 
@@ -575,8 +589,18 @@ def settings_status_payload() -> Dict[str, object]:
         "notificationAiGateMessageTypes",
         "notificationAiUseCodex",
         "notificationAiModel",
+        "notificationAiReasoningEffort",
         "notificationAiTimeoutSeconds",
         "notificationAiDeliveryDeadlineSeconds",
+        "notificationAiQueueWorkerCount",
+        "notificationAiQueueBatchSize",
+        "notificationAiQueueIntervalSeconds",
+        "notificationAiQueueLeaseSeconds",
+        "notificationAiQueueHeartbeatSeconds",
+        "notificationAiQueueMaxAttempts",
+        "notificationAiQueueRetrySeconds",
+        "notificationAiQueueMaxPromptBytes",
+        "notificationAiQueueRetentionHours",
         "investmentBrainMinimumHypothesisCount",
         "investmentBrainMaximumHypothesisCount",
         "investmentBrainInferenceBoxLimit",
@@ -2310,7 +2334,15 @@ def notification_jobs_payload(query: Dict[str, List[str]]) -> Dict[str, object]:
     except Exception:  # noqa: BLE001 - empty queue keeps the console readable without MySQL.
         jobs = []
         total = 0
-        summary = {"pending": 0, "processing": 0, "done": 0, "suppressed": 0, "failed": 0}
+        summary = {
+            "pending": 0,
+            "awaiting_ai": 0,
+            "processing": 0,
+            "done": 0,
+            "superseded": 0,
+            "suppressed": 0,
+            "failed": 0,
+        }
         stale_minutes = 30
     return {
         "jobs": [notification_job_list_payload(job, stale_minutes=stale_minutes) for job in jobs],

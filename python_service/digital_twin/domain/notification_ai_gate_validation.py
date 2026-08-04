@@ -1434,7 +1434,103 @@ def compact_prompt_context_for_ai(context: object) -> Dict[str, object]:
     compact["facts"] = facts
     return compact
 
-def build_notification_ai_gate_prompt(context: Dict[str, object]) -> str:
+
+def _prompt_json_bytes(value: object) -> int:
+    return len(json.dumps(value, ensure_ascii=False, default=str, separators=(",", ":")).encode("utf-8"))
+
+
+def _bounded_prompt_value(value: object, *, string_limit: int = 280, list_limit: int = 10, key: str = "") -> object:
+    if isinstance(value, dict):
+        return {
+            str(item_key): _bounded_prompt_value(
+                item,
+                string_limit=string_limit,
+                list_limit=list_limit,
+                key=str(item_key),
+            )
+            for item_key, item in value.items()
+            if item not in (None, "", [], {})
+        }
+    if isinstance(value, (list, tuple)):
+        # Every competing hypothesis must remain visible to the model. Other
+        # repeated audit rows are bounded because their canonical copies stay
+        # in MySQL/TypeDB and are not needed twice in one prompt.
+        rows = list(value) if key == "hypotheses" else list(value)[:list_limit]
+        return [
+            _bounded_prompt_value(item, string_limit=string_limit, list_limit=list_limit)
+            for item in rows
+        ]
+    if isinstance(value, str):
+        return value[:string_limit]
+    return value
+
+
+def bounded_notification_ai_prompt_payload(payload: Dict[str, object], max_payload_bytes: int) -> Dict[str, object]:
+    """Remove duplicate audit detail while retaining the graph decision contract."""
+
+    bounded = json.loads(json.dumps(payload, ensure_ascii=False, default=str))
+    budget = max(8 * 1024, int(max_payload_bytes or 30 * 1024))
+    if _prompt_json_bytes(bounded) <= budget:
+        return bounded
+    omitted: List[str] = []
+    decision_input = bounded.get("aiDecisionInput") if isinstance(bounded.get("aiDecisionInput"), dict) else {}
+    relation = (
+        decision_input.get("relationshipDatabaseInference")
+        if isinstance(decision_input.get("relationshipDatabaseInference"), dict)
+        else {}
+    )
+    raw_alert = decision_input.get("rawAlert") if isinstance(decision_input.get("rawAlert"), dict) else {}
+    raw_alert["rawLines"] = _bounded_ai_list(raw_alert.get("rawLines") or [], 10, 220)
+    raw_alert["criteria"] = _bounded_ai_list(raw_alert.get("criteria") or [], 8, 220)
+    decision_input["researchEvidence"] = list(decision_input.get("researchEvidence") or [])[:6]
+    decision_input["newsHeadlines"] = _bounded_ai_list(decision_input.get("newsHeadlines") or [], 5, 240)
+    decision_input["sourceAlertEvents"] = list(decision_input.get("sourceAlertEvents") or [])[:3]
+    relation["selfQuestions"] = _bounded_ai_list(relation.get("selfQuestions") or [], 4, 260)
+    relation["missingData"] = list(relation.get("missingData") or [])[:8]
+    for rule in relation.get("activeRules") or []:
+        if isinstance(rule, dict):
+            rule.pop("evidenceState", None)
+            rule["evidence"] = list(rule.get("evidence") or [])[:2]
+    bounded = _bounded_prompt_value(bounded, string_limit=360, list_limit=12)
+    if _prompt_json_bytes(bounded) <= budget:
+        return bounded
+
+    prompt_context = bounded.get("promptContext") if isinstance(bounded.get("promptContext"), dict) else {}
+    bounded["promptContext"] = {
+        key: value
+        for key, value in prompt_context.items()
+        if key in {"messageType", "target", "referenceDate", "hypothesisLifecycle", "messageDeliveryProfile"}
+    }
+    omitted.append("duplicatedPromptContext")
+    decision_input = bounded.get("aiDecisionInput") if isinstance(bounded.get("aiDecisionInput"), dict) else {}
+    decision_input.pop("sourceAlertEvents", None)
+    decision_input.pop("precomputedOpinionCandidate", None)
+    omitted.extend(["sourceAlertEventsDuplicate", "precomputedOpinionCandidateDuplicate"])
+    if _prompt_json_bytes(bounded) <= budget:
+        bounded["contextBudget"] = {"omittedDuplicateSections": omitted}
+        return bounded
+
+    relation = decision_input.get("relationshipDatabaseInference") if isinstance(decision_input.get("relationshipDatabaseInference"), dict) else {}
+    for key in ("hypothesisDecisionBrief", "researchPlan", "hypothesisCalibration"):
+        if relation.pop(key, None) not in (None, "", [], {}):
+            omitted.append(key)
+    bounded = _bounded_prompt_value(bounded, string_limit=260, list_limit=8)
+    bounded["contextBudget"] = {
+        "omittedDuplicateSections": omitted,
+        "reason": "Canonical audit detail remains in TypeDB/MySQL; the decision-bearing graph packet is retained.",
+    }
+    if _prompt_json_bytes(bounded) <= budget:
+        return bounded
+
+    # Final deterministic reduction keeps all hypothesis rows and identifiers,
+    # while shortening prose that already has canonical evidence IDs.
+    return _bounded_prompt_value(bounded, string_limit=180, list_limit=6)
+
+
+def build_notification_ai_gate_prompt(
+    context: Dict[str, object],
+    max_prompt_bytes: int = 48 * 1024,
+) -> str:
     context = merge_strategy_context(dict(context or {}))
     message_type = str(context.get("messageType") or context.get("rule") or "notification")
     prompt_context = notification_ai_prompt_context(message_type, context)
@@ -1447,7 +1543,10 @@ def build_notification_ai_gate_prompt(context: Dict[str, object]) -> str:
         "promptContext": compact_prompt_context_for_ai(prompt_context),
         "aiDecisionInput": decision_input,
     }
-    return "\n".join([
+    # Instructions are stable at roughly 16 KiB. Reserve the rest for the
+    # immutable graph packet and then make one measured second pass below.
+    payload = bounded_notification_ai_prompt_payload(payload, max(8 * 1024, int(max_prompt_bytes or 48 * 1024) - 18 * 1024))
+    lines = [
         "너는 자동 주문자가 아니라 최종 투자 의견을 판단하는 AI 분석가다.",
         "도메인 계산 결과를 검증만 하지 말고, 제공된 모든 증거와 관계형/온톨로지 데이터베이스 추론을 종합해 직접 최종 의견을 고른다.",
         "제공된 데이터, 뉴스·공시, 리서치 근거, 온톨로지 관계 규칙, 실행 계획 후보만 사용한다. 없는 데이터는 절대 추정하지 않는다.",
@@ -1543,7 +1642,15 @@ def build_notification_ai_gate_prompt(context: Dict[str, object]) -> str:
         }, ensure_ascii=False),
         "입력:",
         json.dumps(payload, ensure_ascii=False, default=str),
-    ])
+    ]
+    rendered = "\n".join(lines)
+    maximum = max(24 * 1024, int(max_prompt_bytes or 48 * 1024))
+    if len(rendered.encode("utf-8")) > maximum:
+        instruction_bytes = len("\n".join(lines[:-1]).encode("utf-8")) + 1
+        payload = bounded_notification_ai_prompt_payload(payload, max(8 * 1024, maximum - instruction_bytes))
+        lines[-1] = json.dumps(payload, ensure_ascii=False, default=str)
+        rendered = "\n".join(lines)
+    return rendered
 
 def validated_response_from_payload(
     context: Dict[str, object],

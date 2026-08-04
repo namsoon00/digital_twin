@@ -20,6 +20,9 @@ NOTIFICATION_TEMPLATE_UPDATED = "notification_template.updated"
 NOTIFICATION_RULE_UPDATED = "notification_rule.updated"
 NOTIFICATION_TEST_REQUESTED = "notification.test_requested"
 NOTIFICATION_JOB_QUEUED = "notification.job_queued"
+AI_INFERENCE_REQUESTED = "ai_inference.requested"
+AI_INFERENCE_COMPLETED = "ai_inference.completed"
+AI_INFERENCE_SUPERSEDED = "ai_inference.superseded"
 APP_PROFILE_UPDATED = "app.profile_updated"
 APP_MEMORY_RECORDED = "app.memory_recorded"
 APP_MEMORY_UPDATED = "app.memory_updated"
@@ -79,6 +82,39 @@ class DomainEvent:
             event_id=str(payload.get("event_id") or payload.get("eventId") or uuid.uuid4().hex),
             correlation_id=str(payload.get("correlation_id") or payload.get("correlationId") or ""),
         )
+
+
+def ai_inference_event(
+    name: str,
+    request_id: str,
+    *,
+    notification_job_id: str = "",
+    account_id: str = "",
+    symbol: str = "",
+    inference_generation_id: str = "",
+    model: str = "",
+    reasoning_effort: str = "",
+    status: str = "",
+    superseded_by: str = "",
+) -> DomainEvent:
+    """Publish bounded lifecycle metadata without duplicating AI context."""
+
+    return DomainEvent(
+        name=str(name or AI_INFERENCE_REQUESTED),
+        aggregate_id=str(request_id or notification_job_id or "ai-inference")[:191],
+        payload={
+            "requestId": str(request_id or "")[:191],
+            "notificationJobId": str(notification_job_id or "")[:191],
+            "accountId": str(account_id or "")[:191],
+            "symbol": str(symbol or "")[:64],
+            "inferenceGenerationId": str(inference_generation_id or "")[:191],
+            "model": str(model or "")[:120],
+            "reasoningEffort": str(reasoning_effort or "")[:32],
+            "status": str(status or "")[:32],
+            "supersededBy": str(superseded_by or "")[:191],
+        },
+        correlation_id="ai-inference:" + str(notification_job_id or request_id or "")[:160],
+    )
 
 
 def system_error_reported_event(

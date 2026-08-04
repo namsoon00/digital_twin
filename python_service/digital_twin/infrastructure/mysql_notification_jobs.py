@@ -530,7 +530,7 @@ class MySQLNotificationJobStore(MySQLOperationalConnection):
             return set()
         account_id = str(job.account_id or "").strip()
         keys = self.sent_article_delivery_ledger_keys_with_connection(connection, account_id)
-        clauses = ["status IN ('done', 'pending', 'processing')", "message_type IN (%s, %s)"]
+        clauses = ["status IN ('done', 'pending', 'processing', 'awaiting_ai')", "message_type IN (%s, %s)"]
         params: List[object] = [NEWS_DIGEST, INVESTMENT_INSIGHT]
         if account_id:
             clauses.append("account_id = %s")
@@ -660,7 +660,7 @@ class MySQLNotificationJobStore(MySQLOperationalConnection):
         rows = connection.execute(
             """
             SELECT text, payload_json, created_at, status FROM notification_jobs
-            WHERE message_type = %s AND created_at >= %s AND status IN ('pending', 'processing', 'done')
+            WHERE message_type = %s AND created_at >= %s AND status IN ('pending', 'processing', 'awaiting_ai', 'done')
             ORDER BY created_at DESC
             LIMIT %s
             """,
@@ -727,7 +727,7 @@ class MySQLNotificationJobStore(MySQLOperationalConnection):
         rows = connection.execute(
             """
             SELECT text, payload_json, created_at, status FROM notification_jobs
-            WHERE message_type = %s AND created_at >= %s AND status IN ('pending', 'processing', 'done')
+            WHERE message_type = %s AND created_at >= %s AND status IN ('pending', 'processing', 'awaiting_ai', 'done')
             ORDER BY created_at DESC
             LIMIT %s
             """,

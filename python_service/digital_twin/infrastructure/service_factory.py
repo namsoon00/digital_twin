@@ -4,6 +4,10 @@ import uuid
 from typing import Callable, Dict, Iterable
 
 from ..application.flow_lens_service import FlowLensService
+from ..application.ai_inference_queue_service import (
+    AIInferenceQueueRunner,
+    NotificationAIRequestEnqueuer,
+)
 from ..application.data_pipeline_health_service import DataPipelineHealthNotificationEnqueuer, DataPipelineHealthService
 from ..application.ontology_reasoning_queue_health_service import (
     OntologyReasoningQueueHealthNotificationEnqueuer,
@@ -68,7 +72,6 @@ from ..domain.events import (
 )
 from ..domain.market_data import number
 from ..domain.monitoring import RealtimeMonitor
-from ..domain.notification_ai_gate_contracts import ai_gate_message_type_set
 from ..domain.ontology_worlds import portfolio_world_id
 from .event_bus import EventBus, default_event_bus
 from .bok_calendar_source import BokPolicyDecisionCalendarSource
@@ -348,12 +351,9 @@ def build_model_review_runner(dry_run: bool = False) -> ModelReviewRunner:
 
 def build_notification_queue_runner(dry_run: bool = False, lane: str = "all") -> NotificationQueueRunner:
     settings = runtime_settings()
-    normalized_lane = str(lane or "all").strip().lower()
-    if normalized_lane not in {"all", "ai", "fast"}:
-        normalized_lane = "all"
-    ai_message_types = sorted(ai_gate_message_type_set(settings.get("notificationAiGateMessageTypes")))
-    include_message_types = ai_message_types if normalized_lane == "ai" else []
-    exclude_message_types = ai_message_types if normalized_lane == "fast" else []
+    del lane  # Compatibility argument; dedicated AI workers replaced notification lanes.
+    include_message_types = []
+    exclude_message_types = []
     monitor_store = stores.monitor_store(settings)
     investment_brain_service = build_investment_brain_service(settings)
     reasoning_queue_probe = build_ontology_reasoning_queue_probe(settings)
@@ -370,6 +370,32 @@ def build_notification_queue_runner(dry_run: bool = False, lane: str = "all") ->
         # while a live projection is writing.
         return queue_health_service.observe(reasoning_queue_probe())
 
+    holding_enricher = NotificationHoldingSnapshotEnricher(
+        monitor_store.load_previous,
+        RealtimeMonitor(settings),
+    )
+    disclosure_enricher = DisclosureAnalysisNotificationEnricher(
+        disclosure_analyzer_from_settings(settings),
+        settings,
+    )
+    research_enricher = NotificationHypothesisResearchEnricher(
+        investment_brain_service,
+        settings,
+    )
+    opinion_enricher = NotificationAIOpinionEnricher(settings)
+    ai_request_enqueuer = None
+    if not dry_run:
+        ai_request_enqueuer = NotificationAIRequestEnqueuer(
+            stores.ai_inference_queue_store(settings),
+            CompositeNotificationContextEnricher(
+                holding_enricher,
+                disclosure_enricher,
+                research_enricher,
+                opinion_enricher,
+            ),
+            settings,
+        )
+
     return NotificationQueueRunner(
         queue=stores.notification_job_store(settings),
         account_repository=stores.account_registry(settings),
@@ -380,24 +406,13 @@ def build_notification_queue_runner(dry_run: bool = False, lane: str = "all") ->
         stale_after_minutes=int(settings.get("notificationProcessingStaleMinutes") or 30),
         template_renderer=stores.notification_template_store(settings).render_job,
         context_enricher=CompositeNotificationContextEnricher(
-            NotificationHoldingSnapshotEnricher(
-                monitor_store.load_previous,
-                RealtimeMonitor(settings),
-            ),
-            DisclosureAnalysisNotificationEnricher(
-                disclosure_analyzer_from_settings(settings),
-                settings,
-            ),
-            NotificationHypothesisResearchEnricher(
-                investment_brain_service,
-                settings,
-            ),
+            disclosure_enricher,
             NotificationAIValidatedGateEnricher(
-                notification_ai_reviewer_from_settings(settings),
+                notification_ai_reviewer_from_settings(settings) if dry_run else None,
                 settings,
                 stores.investment_decision_episode_store(settings),
             ),
-            NotificationAIOpinionEnricher(settings),
+            opinion_enricher,
         ),
         operator_reports_enabled=str(settings.get("operatorReasoningReportEnabled", "1")).strip().lower() not in {"0", "false", "no", "off"},
         settings=settings,
@@ -405,6 +420,18 @@ def build_notification_queue_runner(dry_run: bool = False, lane: str = "all") ->
         operational_delivery_recorder=queue_health_service.record_notification_delivery,
         include_message_types=include_message_types,
         exclude_message_types=exclude_message_types,
+        ai_request_enqueuer=ai_request_enqueuer,
+    )
+
+
+def build_ai_inference_queue_runner(worker_id: str = "") -> AIInferenceQueueRunner:
+    settings = runtime_settings()
+    return AIInferenceQueueRunner(
+        queue=stores.ai_inference_queue_store(settings),
+        reviewer=notification_ai_reviewer_from_settings(settings, allow_local_fallback=False),
+        settings=settings,
+        decision_episode_store=stores.investment_decision_episode_store(settings),
+        worker_id=worker_id,
     )
 
 

@@ -1,0 +1,54 @@
+import unittest
+from unittest.mock import patch
+
+from digital_twin import service_manager
+from digital_twin.infrastructure.schedulers import AIInferenceQueueScheduler
+
+
+class AIInferenceWorkerRuntimeTests(unittest.TestCase):
+    def test_service_manager_builds_configured_parallel_ai_workers(self):
+        with patch.object(service_manager, "runtime_settings", return_value={
+            "notificationAiQueueWorkerCount": "3",
+            "ontologyTypeDbEnabled": "0",
+            "mysqlRuntimeManaged": "0",
+        }):
+            specs = service_manager.worker_specs()
+
+        names = [name for name in specs if name.startswith("notification-ai")]
+        self.assertEqual(["notification-ai", "notification-ai-2", "notification-ai-3"], names)
+        self.assertIn("ai-inference watch --worker-id ai-1 --limit 1", " ".join(specs["notification-ai"]["command"]))
+
+    def test_first_worker_recognizes_pre_queue_process_for_safe_upgrade_stop(self):
+        with patch.object(service_manager, "runtime_settings", return_value={
+            "notificationAiQueueWorkerCount": "2",
+            "ontologyTypeDbEnabled": "0",
+            "mysqlRuntimeManaged": "0",
+        }):
+            spec = service_manager.worker_specs()["notification-ai"]
+
+        self.assertTrue(service_manager.is_worker_command(
+            "python3 python_service/service.py notifications watch --lane ai --limit 1",
+            spec,
+        ))
+        self.assertTrue(service_manager.is_worker_command(
+            "python3 python_service/service.py ai-inference watch --worker-id ai-1 --limit 1",
+            spec,
+        ))
+
+    def test_scheduler_stops_active_reviewer_through_runner(self):
+        class Runner:
+            stopped = False
+
+            def stop(self):
+                self.stopped = True
+
+        runner = Runner()
+        scheduler = AIInferenceQueueScheduler(runner, 5)
+        scheduler.stop()
+
+        self.assertFalse(scheduler.running)
+        self.assertTrue(runner.stopped)
+
+
+if __name__ == "__main__":
+    unittest.main()

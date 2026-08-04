@@ -42,7 +42,7 @@ class AiModelPolicyTests(unittest.TestCase):
             planning_command,
         ]:
             command.assert_called_once_with()
-        notification_command.assert_called_once_with(reasoning_effort="low")
+        notification_command.assert_called_once_with(reasoning_effort="max")
 
     def test_notification_delivery_deadline_caps_codex_gate_wait(self):
         fixed_command = "codex --model gpt-5.6-sol --config model_reasoning_effort=max exec -"
@@ -74,6 +74,23 @@ class AiModelPolicyTests(unittest.TestCase):
         command.assert_called_once_with(reasoning_effort="low")
         self.assertEqual(90, reviewer.primary.timeout_seconds)
         self.assertIn("low", reviewer.primary.source)
+
+    def test_dedicated_notification_ai_queue_uses_primary_without_inline_fallback(self):
+        fixed_command = "codex --model gpt-5.6-sol --config model_reasoning_effort=max exec -"
+        with patch(
+            "digital_twin.infrastructure.notification_ai_reviewer.codex_command",
+            return_value=fixed_command,
+        ):
+            reviewer = notification_ai_reviewer_from_settings({
+                "notificationAiUseCodex": "1",
+                "notificationAiReasoningEffort": "max",
+                "notificationAiTimeoutSeconds": "300",
+                "notificationAiDeliveryDeadlineSeconds": "300",
+            }, allow_local_fallback=False)
+
+        self.assertEqual(300, reviewer.timeout_seconds)
+        self.assertIn("max", reviewer.source)
+        self.assertFalse(hasattr(reviewer, "primary"))
 
 
 if __name__ == "__main__":

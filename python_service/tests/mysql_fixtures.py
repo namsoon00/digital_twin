@@ -12,6 +12,7 @@ from digital_twin.infrastructure.mysql_monitoring import (
 )
 from digital_twin.infrastructure.mysql_operational import (
     MySQLAccountRegistry,
+    MySQLAIInferenceQueueStore,
     MySQLAppStore,
     MySQLEventLog,
     MySQLExternalSignalCache,
@@ -340,6 +341,11 @@ class TestModelReviewJobStore(MySQLModelReviewJobStore):
 
 
 class TestNotificationJobStore(MySQLNotificationJobStore):
+    def __init__(self, seed=None, legacy_path=None):
+        super().__init__(_settings(seed))
+
+
+class TestAIInferenceQueueStore(MySQLAIInferenceQueueStore):
     def __init__(self, seed=None, legacy_path=None):
         super().__init__(_settings(seed))
 

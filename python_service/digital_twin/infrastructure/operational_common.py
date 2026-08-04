@@ -37,7 +37,7 @@ def notification_history_row_age_minutes(row) -> int:
 
 def notification_history_is_recent_in_flight(row) -> bool:
     status = str(row["status"] or "").strip()
-    if status not in {"pending", "processing"}:
+    if status not in {"pending", "processing", "awaiting_ai"}:
         return False
     return notification_history_row_age_minutes(row) <= IN_FLIGHT_NOTIFICATION_HISTORY_MINUTES
 

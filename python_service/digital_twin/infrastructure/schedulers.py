@@ -592,6 +592,47 @@ class NotificationQueueScheduler:
             wait_until_running(lambda: self.running, end_at)
 
 
+class AIInferenceQueueScheduler:
+    def __init__(self, runner, interval_seconds: int, error_reporter=None):
+        self.runner = runner
+        self.interval_seconds = max(2, int(interval_seconds or 5))
+        self.error_reporter = error_reporter or operational_error_reporter()
+        self.running = True
+
+    def stop(self, *_args) -> None:
+        self.running = False
+        stopper = getattr(self.runner, "stop", None)
+        if callable(stopper):
+            stopper()
+
+    def run_forever(self, limit: int = 1) -> None:
+        install_stop_handlers(self.stop)
+        print(
+            "Python notification AI inference worker started. worker="
+            + str(getattr(self.runner, "worker_id", "unknown"))
+            + " interval="
+            + str(self.interval_seconds)
+            + "s"
+        )
+        while self.running:
+            started = time.monotonic()
+            try:
+                processed = self.runner.run_once(limit=limit)
+                if processed:
+                    details = list(getattr(self.runner, "last_run_details", []) or [])
+                    print("Processed AI inference requests: " + str(processed) + " · " + "; ".join(details[:6]))
+            except Exception as error:  # noqa: BLE001 - worker must continue after a failed request.
+                print("Python notification AI inference worker error: " + str(error))
+                report_runtime_error(
+                    self.error_reporter,
+                    "Python notification AI inference worker",
+                    error,
+                    "AI inference cycle",
+                )
+            end_at = time.monotonic() + max(1.0, self.interval_seconds - (time.monotonic() - started))
+            wait_until_running(lambda: self.running, end_at)
+
+
 class OperationalHistoryRetentionScheduler:
     """Run bounded MySQL retention only when no realtime code creates stores.
 

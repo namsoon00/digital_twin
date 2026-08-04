@@ -4,6 +4,7 @@ from .mysql_monitoring import MySQLMonitorAccountJobStore
 from .ontology_lab_store import JsonOntologyExperimentStore
 from .mysql_operational import (
     MySQLAccountRegistry,
+    MySQLAIInferenceQueueStore,
     MySQLAppStore,
     MySQLDataPipelineHealthStore,
     MySQLEventLog,
@@ -146,6 +147,11 @@ def model_review_job_store(settings: Dict[str, str] = None):
 def notification_job_store(settings: Dict[str, str] = None):
     configured = configured_settings(settings)
     return MySQLNotificationJobStore(configured)
+
+
+def ai_inference_queue_store(settings: Dict[str, str] = None):
+    configured = configured_settings(settings)
+    return MySQLAIInferenceQueueStore(configured)
 
 
 def notification_template_store(settings: Dict[str, str] = None):

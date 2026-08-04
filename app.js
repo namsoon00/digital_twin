@@ -865,11 +865,13 @@
   function notificationJobSummaryText(jobs) {
     jobs = jobs || {};
     var pending = Number(jobs.pending || 0);
+    var awaitingAi = Number(jobs.awaiting_ai || 0);
     var processing = Number(jobs.processing || 0);
     var failed = Number(jobs.failed || 0);
+    var superseded = Number(jobs.superseded || 0);
     var suppressed = Number(jobs.suppressed || 0);
-    if (pending || processing || failed || suppressed) {
-      return "대기 " + pending + " · 처리 " + processing + " · 실패 " + failed + " · 제외 " + suppressed;
+    if (pending || awaitingAi || processing || failed || superseded || suppressed) {
+      return "발송 대기 " + pending + " · AI 판단 " + awaitingAi + " · 처리 " + processing + " · 실패 " + failed + " · 대체 " + superseded + " · 제외 " + suppressed;
     }
     if (Number(jobs.done || 0)) return "완료 " + Number(jobs.done || 0);
     return "-";
@@ -18557,17 +18559,19 @@
   function notificationJobStatusLabel(status) {
     var labels = {
       pending: "대기",
+      awaiting_ai: "AI 판단 대기",
       processing: "처리 중",
       done: "발송",
       failed: "실패",
+      superseded: "최신 판단으로 대체",
       suppressed: "보류"
     };
     return labels[status] || status || "-";
   }
 
   function notificationJobToneClass(status) {
-    if (status === "done" || status === "pending" || status === "processing") return "watch";
-    if (status === "suppressed") return "muted";
+    if (status === "done" || status === "pending" || status === "awaiting_ai" || status === "processing") return "watch";
+    if (status === "suppressed" || status === "superseded") return "muted";
     if (status === "failed") return "danger";
     return "muted";
   }
@@ -18825,7 +18829,7 @@
     var summary = state.notificationJobsSummary || state.realtime.notificationJobs || {};
     var diagnostics = state.notificationJobDiagnostics || {};
     var hasError = Boolean(state.notificationJobsError);
-    var summaryItems = ["pending", "done", "suppressed", "failed"].map(function (key) {
+    var summaryItems = ["pending", "awaiting_ai", "done", "superseded", "suppressed", "failed"].map(function (key) {
       return '<span class="chip">' + escapeHtml(notificationJobStatusLabel(key)) + ' ' + escapeHtml(Number(summary[key] || 0)) + '</span>';
     }).join("");
     var activeJob = activeNotificationDecisionJob(filteredJobs);

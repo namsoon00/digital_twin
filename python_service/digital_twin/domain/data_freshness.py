@@ -142,7 +142,16 @@ def parse_datetime(value: object):
         try:
             parsed = datetime.fromisoformat(text + "T00:00:00+00:00")
         except ValueError:
-            return None
+            parsed = None
+    if parsed is None:
+        for pattern in ("%Y%m%dT%H%M%SZ", "%Y%m%dT%H%M%S", "%Y%m%d%H%M%S", "%Y%m%d"):
+            try:
+                parsed = datetime.strptime(text, pattern).replace(tzinfo=timezone.utc)
+                break
+            except ValueError:
+                pass
+    if parsed is None:
+        return None
     return parsed if parsed.tzinfo else parsed.replace(tzinfo=timezone.utc)
 
 

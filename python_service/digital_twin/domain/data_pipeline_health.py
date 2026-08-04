@@ -27,12 +27,15 @@ def provider_health_rows(statuses: Iterable[Dict[str, object]]) -> List[Dict[str
             "suppressedCount": 0,
             "circuitOpenCount": 0,
             "itemCount": 0,
+            "feedCandidateCount": 0,
             "candidateCount": 0,
             "bodyMissingCount": 0,
             "googleOriginalUrlResolveFailedCount": 0,
             "googleOriginalUrlBudgetRejectedCount": 0,
+            "googleOriginalUrlDeferredCandidateCount": 0,
             "googleOriginalUrlResolvedCount": 0,
             "sourceBlockedCount": 0,
+            "feedOnlyQualityRejectedCount": 0,
             "relevanceRejectedCount": 0,
             "messages": [],
         })
@@ -51,14 +54,19 @@ def provider_health_rows(statuses: Iterable[Dict[str, object]]) -> List[Dict[str
         else:
             row["successCount"] += 1
         row["itemCount"] += integer(status.get("count"))
-        row["candidateCount"] += integer(status.get("candidateCount"))
+        feed_candidates = integer(status.get("feedCandidateCount"))
+        row["feedCandidateCount"] += feed_candidates
+        row["candidateCount"] += max(integer(status.get("candidateCount")), feed_candidates)
         row["bodyMissingCount"] += integer(status.get("bodyMissingCount"))
         row["googleOriginalUrlResolveFailedCount"] += integer(status.get("googleOriginalUrlResolveFailedCount"))
         row["googleOriginalUrlBudgetRejectedCount"] += integer(status.get("googleOriginalUrlBudgetRejectedCount"))
+        row["googleOriginalUrlDeferredCandidateCount"] += integer(status.get("googleOriginalUrlDeferredCandidateCount"))
         row["googleOriginalUrlResolvedCount"] += integer(status.get("googleOriginalUrlResolvedCount"))
         row["sourceBlockedCount"] += integer(status.get("sourceBlockedCount"))
+        row["feedOnlyQualityRejectedCount"] += integer(status.get("feedOnlyQualityRejectedCount"))
         row["relevanceRejectedCount"] += integer(status.get("preliminaryRejectedCount"))
         row["relevanceRejectedCount"] += integer(status.get("finalRelevanceRejectedCount"))
+        row["relevanceRejectedCount"] += integer(status.get("feedOnlyQualityRejectedCount"))
     return list(grouped.values())
 
 
@@ -287,7 +295,7 @@ def evaluate_news_collection_health(
     elif (
         provider_candidates
         and original_url_budget_count
-        and original_url_budget_ratio >= 0.5
+        and (not fetched_count or original_url_budget_ratio >= 0.5)
     ):
         state, reason_code, reason = "degraded", "article-original-url-budget-exhausted", "Google RSS 원문 주소 해석 호출 상한 때문에 후보 본문 확인이 대량으로 보류되었습니다."
     elif (

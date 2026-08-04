@@ -83,6 +83,46 @@ class NewsAnalysisDomainTests(unittest.TestCase):
         self.assertNotIn("summary-number-not-grounded", quality["issues"])
         self.assertNotIn("summary-target-name-omitted", quality["issues"])
 
+    def test_summary_quality_grounds_korean_quarter_number_from_english_ordinal(self):
+        quality = summary_quality_payload(
+            "애플은 3분기 서비스 매출이 증가했다고 발표했습니다.",
+            "Apple reported that services revenue increased in the third quarter.",
+            "Apple",
+        )
+
+        self.assertEqual("ready", quality["state"])
+        self.assertNotIn("summary-number-not-grounded", quality["issues"])
+
+    def test_summary_quality_normalizes_translated_months_and_korean_count_units(self):
+        quality = summary_quality_payload(
+            "테슬라는 7월 2분기에 48만 126대를 인도했고, 배터리는 20만 마일 뒤에도 성능을 유지했다. 누적 1,000만 번째 차량도 생산했다.",
+            "In July, Tesla delivered 480,126 vehicles in Q2. Batteries retained capacity after 200,000 miles, and the company produced its 10-millionth EV.",
+            "Tesla",
+        )
+
+        self.assertEqual("ready", quality["state"])
+        self.assertNotIn("summary-number-not-grounded", quality["issues"])
+
+    def test_summary_quality_normalizes_compound_korean_currency_and_word_counts(self):
+        quality = summary_quality_payload(
+            "애플의 매출은 1,094억2천만 달러였고 이를 추적하는 기관은 35곳입니다.",
+            "Apple reported $109.42 billion in revenue and is tracked by thirty-five firms.",
+            "Apple",
+        )
+
+        self.assertEqual("ready", quality["state"])
+        self.assertNotIn("summary-number-not-grounded", quality["issues"])
+
+    def test_summary_quality_does_not_treat_zero_padded_stock_code_as_article_number(self):
+        quality = summary_quality_payload(
+            "000660 관련성은 시장 심리 맥락 이상으로 판단하기 어렵습니다.",
+            "The article lists Micron among several companies but gives no company-specific figures.",
+            "SK하이닉스",
+        )
+
+        self.assertEqual("ready", quality["state"])
+        self.assertNotIn("summary-number-not-grounded", quality["issues"])
+
     def test_korean_summary_uses_direct_target_body_and_flags_navigation_headlines(self):
         target = NewsCollectionTarget("066570", "LG전자", "KOSPI", "KRW", "가전/전자")
         body = (
@@ -1292,6 +1332,36 @@ class NewsAnalysisDomainTests(unittest.TestCase):
         self.assertFalse(analysis["qualityGate"]["targetSubjectConfirmed"])
         self.assertTrue(analysis["qualityGate"]["relatedProductContext"])
         self.assertTrue(any(row["role"] == "related_product_context" for row in analysis["entityLinks"]))
+
+    def test_naver_pay_third_party_giveaway_is_not_naver_company_news(self):
+        target = NewsCollectionTarget("035420", "NAVER", "KOSPI", "KRW", "플랫폼")
+
+        analysis = classify_news_relevance(
+            target,
+            "벤큐, 모니터 구매 후 포토후기 작성하면 네이버페이 5만원 증정",
+            "제3자 제품 구매 고객에게 네이버페이 포인트를 지급하는 행사입니다.",
+            "Example News",
+            "google_rss_kr",
+        )
+
+        self.assertEqual("entity_mismatch", analysis["relationScope"])
+        self.assertFalse(relation_scope_is_investable(analysis["relationScope"]))
+        self.assertFalse(analysis["qualityGate"]["targetSubjectConfirmed"])
+        self.assertIn("제3자 판촉", analysis["excludedReason"])
+
+    def test_naver_product_name_does_not_hide_explicit_parent_company_subject(self):
+        target = NewsCollectionTarget("035420", "NAVER", "KOSPI", "KRW", "플랫폼")
+
+        analysis = classify_news_relevance(
+            target,
+            "NAVER, 네이버페이 해외 결제 서비스 출시",
+            "NAVER가 신규 결제 서비스를 발표했습니다.",
+            "Reuters",
+            "google_rss_kr",
+        )
+
+        self.assertEqual("direct", analysis["relationScope"])
+        self.assertTrue(analysis["qualityGate"]["targetSubjectConfirmed"])
 
     def test_mstr_title_subject_stays_direct_when_symbol_is_explicit(self):
         target = NewsCollectionTarget("MSTR", "Strategy", "NASDAQ", "USD", "디지털자산")

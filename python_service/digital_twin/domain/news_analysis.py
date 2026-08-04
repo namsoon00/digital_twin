@@ -134,8 +134,21 @@ PEER_ALIASES = {
 }
 
 RELATED_PRODUCT_ALIASES = {
+    "035420": ["네이버페이", "NAVER Pay", "네이버클라우드", "NAVER Cloud", "네이버웹툰", "NAVER Webtoon", "네이버쇼핑", "NAVER Shopping"],
+    "035720": ["카카오페이", "Kakao Pay", "카카오게임즈", "Kakao Games", "카카오모빌리티", "Kakao Mobility"],
     "MSTR": ["MSTY", "MSTX", "MSTU", "STRC", "STRK", "STRF", "STRD", "Strategy preferred shares"],
 }
+THIRD_PARTY_PRODUCT_PROMOTION_MARKERS = (
+    "구매 후",
+    "가입 시",
+    "신규가입",
+    "증정",
+    "쿠폰",
+    "포토후기",
+    "프로모션",
+    "경품",
+    "포인트 지급",
+)
 
 EXTRA_COMPANY_ALIASES = [
     "카카오",
@@ -947,6 +960,13 @@ def related_product_aliases(target: object) -> List[str]:
     return _unique_texts(RELATED_PRODUCT_ALIASES.get(target_symbol(target), []))
 
 
+def text_without_aliases(value: object, aliases: Iterable[object]) -> str:
+    text = str(value or "")
+    for alias in sorted(_unique_texts(aliases), key=len, reverse=True):
+        text = re.sub(re.escape(alias), " ", text, flags=re.IGNORECASE)
+    return re.sub(r"\s+", " ", text).strip()
+
+
 def sector_topic_keywords(target: object) -> List[str]:
     text = _lower_text(" ".join([
         getattr(target, "sector", ""),
@@ -1582,23 +1602,8 @@ def korean_article_summary(
     )
     if sentences and contains_hangul(article_text_for_summary):
         sentence_text = join_korean_summary_parts(sentences)
-        summary_fact_text = sentence_text
-        topics = detected_topic_labels(summary_fact_text)
-        numbers = numeric_highlights(summary_fact_text)
-        details = []
-        if topics:
-            details.append("핵심 키워드: " + ", ".join(topics))
-        if numbers:
-            details.append("확인된 수치: " + ", ".join(numbers))
-        suffix = (" " + " / ".join(details) + ".") if details else ""
-        return compact_text(body_status + " 요약: " + sentence_text + suffix, 760)
-    topics = detected_topic_labels(str(title or "") + " " + article_text_for_summary)
-    numbers = numeric_highlights(article_text_for_summary)
+        return compact_text(body_status + " 요약: " + sentence_text, 760)
     detail_parts = factual_english_article_summary_parts(target, title, article_text_for_summary, event_label)
-    if topics:
-        detail_parts.append("핵심 키워드는 " + ", ".join(topics) + "입니다")
-    if numbers:
-        detail_parts.append("기사에서 확인되는 주요 수치는 " + ", ".join(numbers) + "입니다")
     if not detail_parts:
         detail_parts.append("기사의 구체 내용을 확인하려면 원문 본문 확인이 필요합니다")
     return compact_text(
@@ -2089,15 +2094,15 @@ def analyze_news_item(
     aliases = target_aliases(target)
     peers = peer_aliases(target)
     topics = sector_topic_keywords(target)
-    raw_direct_hits = matched_terms(title_text + " " + summary_text + " " + str(source or ""), aliases)
-    direct_title = matched_terms(normalized_title, aliases)
-    direct_body = matched_terms(normalized_summary, aliases)
-    direct_keys = {_lower_text(item) for item in _unique_texts([*direct_title, *direct_body])}
-    platform_alias_hits = [item for item in raw_direct_hits if _lower_text(item) not in direct_keys]
-    peer_hits = matched_terms(combined, peers)
     related_products = related_product_aliases(target)
     related_product_hits = matched_terms(combined, related_products)
     related_product_title_hits = matched_terms(normalized_title, related_products)
+    raw_direct_hits = matched_terms(title_text + " " + summary_text + " " + str(source or ""), aliases)
+    direct_title = matched_terms(text_without_aliases(normalized_title, related_product_title_hits), aliases)
+    direct_body = matched_terms(text_without_aliases(normalized_summary, related_product_hits), aliases)
+    direct_keys = {_lower_text(item) for item in _unique_texts([*direct_title, *direct_body])}
+    platform_alias_hits = [item for item in raw_direct_hits if _lower_text(item) not in direct_keys]
+    peer_hits = matched_terms(combined, peers)
     topic_hits = matched_terms(combined, topics)
     market_hits = matched_terms(combined, MARKET_TOPIC_KEYWORDS)
     other_subject_hits = other_company_subject_hits(target, normalized_title)
@@ -2105,16 +2110,31 @@ def analyze_news_item(
     source_trust_state = source_trust_state_for_source(source, provider)
     event_type = classify_news_event_type(title_text, summary_text)
     polarity = keyword_polarity(combined)
-    platform_reference_only = target_symbol(target) == "035420" and bool(platform_alias_hits) and not direct_title and not direct_body
-    platform_only = platform_reference_only or platform_source_only_noise(target, title_text, summary_text, source, [*direct_title, *direct_body], topic_hits, event_type)
+    related_product_focus = bool(related_product_title_hits) and not direct_title
+    third_party_product_promotion = (
+        related_product_focus
+        and any(marker in _lower_text(normalized_title) for marker in THIRD_PARTY_PRODUCT_PROMOTION_MARKERS)
+    )
+    platform_reference_only = (
+        target_symbol(target) == "035420"
+        and bool(platform_alias_hits)
+        and not direct_title
+        and not direct_body
+        and not related_product_focus
+    )
+    platform_only = (
+        platform_reference_only
+        or platform_source_only_noise(target, title_text, summary_text, source, [*direct_title, *direct_body], topic_hits, event_type)
+    ) and not related_product_focus
     alias_noise = ambiguous_company_alias_noise(target, title_text, summary_text, [*direct_title, *direct_body], topic_hits, event_type)
     low_confidence_platform = low_confidence_platform_context(source, provider, [*direct_title, *direct_body])
-    related_product_focus = bool(related_product_title_hits) and not direct_title
     editorial_context = editorial_preview_context(title_text, summary_text)
 
     scope = "noise"
     if platform_only:
         scope = "platform_noise"
+    elif third_party_product_promotion:
+        scope = "entity_mismatch"
     elif alias_noise:
         scope = "noise"
     elif low_confidence_platform:
@@ -2140,6 +2160,8 @@ def analyze_news_item(
     excluded_reason = ""
     if platform_only:
         excluded_reason = "회사 뉴스가 아니라 플랫폼/블로그 출처명이 종목명처럼 잡힌 항목"
+    elif third_party_product_promotion:
+        excluded_reason = "대상 회사 사건이 아니라 제3자 판촉의 결제·경품 수단으로 제품명이 언급된 항목"
     elif alias_noise:
         excluded_reason = "회사 뉴스가 아니라 일반 명사 별칭이 종목명처럼 잡힌 항목"
     elif low_confidence_platform:

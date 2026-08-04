@@ -44,6 +44,22 @@ class MySQLResearchEvidenceQueryTests(unittest.TestCase):
         self.assertEqual(("news", 160, 0), first_params)
         self.assertTrue(connection.calls[1][0].startswith("SELECT * FROM research_evidence WHERE evidence_id IN"))
 
+    def test_stale_news_lock_query_includes_compact_provider_timestamps(self):
+        connection = Connection()
+        store = object.__new__(MySQLResearchEvidenceStore)
+
+        store._stale_news_rows(
+            connection,
+            "2026-08-01T00:00:00Z",
+            10,
+            ["legacy-compact"],
+        )
+
+        sql, params = connection.calls[0]
+        self.assertIn("REGEXP '^[0-9]{8}T?[0-9]{6}Z?$'", sql)
+        self.assertIn("STR_TO_DATE", sql)
+        self.assertEqual(("2026-08-01T00:00:00Z", "2026-08-01T00:00:00Z"), params[:2])
+
 
 if __name__ == "__main__":
     unittest.main()

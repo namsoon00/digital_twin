@@ -9,7 +9,7 @@ from unittest.mock import patch
 sys.path.insert(0, str(Path(__file__).resolve().parents[1]))
 
 from digital_twin.application.news_ai_analysis_service import NewsAiAnalysisService
-from digital_twin.application.news_collection_service import NewsCollectionRunner
+from digital_twin.application.news_collection_service import NewsCollectionRunner, parse_news_timestamp
 from digital_twin.domain.data_pipeline_health import evaluate_news_collection_health
 from digital_twin.domain.investment_research import NewsCollectionTarget, ResearchEvidence
 from digital_twin.domain.materiality import evidence_materiality
@@ -17,7 +17,7 @@ from digital_twin.domain.news_ai_analysis import article_text_parts, local_news_
 from digital_twin.domain.news_analysis import article_analysis_facts, article_quality_gate
 from digital_twin.infrastructure.external_signal_utils import ExternalCircuitOpen
 from digital_twin.infrastructure import news_sources
-from digital_twin.infrastructure.news_sources import NewsSourceGateway, article_metadata_from_html, extract_article_text
+from digital_twin.infrastructure.news_sources import NewsSourceGateway, article_metadata_from_html, extract_article_text, news_article_identity_token
 
 
 class NewsCollectionQualityTests(unittest.TestCase):
@@ -60,6 +60,201 @@ class NewsCollectionQualityTests(unittest.TestCase):
         gateway.begin_run()
 
         self.assertTrue(gateway.article_text_for_url("https://example.test/second"))
+
+    def test_compact_gdelt_timestamp_is_normalized_and_rejected_when_stale(self):
+        parsed = parse_news_timestamp("20260719T091519")
+        stale = self.evidence()
+        stale.published_at = "20260719T091519"
+        stale.observed_at = "20260719T091519"
+        runner = NewsCollectionRunner(
+            account_repository=SimpleNamespace(load=lambda: []),
+            monitor_store=SimpleNamespace(previous={}),
+            symbol_store=SimpleNamespace(),
+            evidence_store=SimpleNamespace(),
+            gateway=SimpleNamespace(providers=lambda: []),
+            settings={"newsEvidenceMaxAgeMinutes": "4320"},
+        )
+
+        fresh, rejected = runner.fresh_news_items([stale])
+
+        self.assertEqual("2026-07-19T09:15:19+00:00", parsed.isoformat())
+        self.assertEqual([], fresh)
+        self.assertEqual([stale], rejected)
+
+    def test_feed_only_related_product_from_unknown_source_is_rejected(self):
+        target = NewsCollectionTarget("MSTR", "Strategy", "NASDAQ", "USD", "Digital Assets")
+        gateway = NewsSourceGateway({
+            "newsCollectionArticleBodyMaxPerTarget": "0",
+            "newsCollectionArticleBodyMaxPerRun": "0",
+        })
+        gateway.reset_provider_diagnostics()
+
+        evidence = gateway.news_evidence_from_article(
+            target,
+            "GDELT",
+            "unknown-finance-blog.test",
+            "MSTY Covered-Call ETF Hits Record Monthly Distribution",
+            "The ETF owns MSTR-linked exposure and reacts to Strategy share volatility.",
+            "https://unknown-finance-blog.test/msty-distribution",
+            "2026-08-04T05:00:00Z",
+        )
+
+        self.assertIsNone(evidence)
+        self.assertEqual(1, gateway._current_provider_diagnostics["feedOnlyQualityRejectedCount"])
+
+    def test_same_canonical_article_url_has_one_stable_evidence_id(self):
+        body = "Apple reported third-quarter services revenue and explained the outlook for subscriptions and margins. " * 8
+        gateway = NewsSourceGateway({"newsCollectionArticleBodyMinimumChars": "80"})
+        gateway.article_content_for_url = lambda url: {"text": body, "canonicalUrl": url, "publisher": "Reuters"}
+        first = gateway.news_evidence_from_article(
+            self.target(),
+            "Google News US",
+            "Reuters.com",
+            "Apple reports third-quarter services growth - Reuters",
+            "",
+            "https://www.reuters.example.test/apple-results?utm_source=google",
+            "2026-08-04T05:00:00Z",
+        )
+        second = gateway.news_evidence_from_article(
+            self.target(),
+            "Google News US",
+            "reuters.com",
+            "Apple Reports Third-Quarter Services Growth - REUTERS",
+            "",
+            "https://reuters.example.test/apple-results?utm_medium=rss",
+            "2026-08-04T05:00:00Z",
+        )
+
+        self.assertIsNotNone(first)
+        self.assertIsNotNone(second)
+        self.assertEqual(first.evidence_id, second.evidence_id)
+
+    def test_google_feed_ranks_direct_material_story_before_resolution_budget(self):
+        xml = """<rss><channel>
+        <item><title>Technology ETFs rise as AI stocks gain</title><link>https://news.google.com/rss/articles/context</link><pubDate>Tue, 04 Aug 2026 05:00:00 GMT</pubDate><source>Unknown Blog</source><description>Technology market update</description></item>
+        <item><title>Apple reports third-quarter revenue and raises guidance</title><link>https://news.google.com/rss/articles/direct</link><pubDate>Tue, 04 Aug 2026 05:10:00 GMT</pubDate><source>Reuters</source><description>Apple reported revenue and raised guidance.</description></item>
+        </channel></rss>"""
+        resolved = []
+        gateway = NewsSourceGateway(
+            {
+                "newsCollectionGoogleOriginalUrlMaxPerTarget": "1",
+                "newsCollectionGoogleOriginalUrlMaxPerRun": "1",
+                "newsCollectionArticleBodyMinimumChars": "80",
+                "newsCollectionLookbackMinutes": "1440",
+            },
+            fetch_text=lambda _url, _headers=None: xml,
+        )
+
+        def resolve(url):
+            resolved.append(url)
+            gateway._google_original_url_fetches_for_target += 1
+            gateway._google_original_url_fetches_used += 1
+            return "https://reuters.example.test/apple-results"
+
+        gateway.resolve_google_news_article_url = resolve
+        gateway.article_content_for_url = lambda url: {
+            "text": "Apple reported third-quarter revenue and raised its full-year guidance after services growth. " * 8,
+            "canonicalUrl": url,
+            "publisher": "Reuters",
+        }
+        gateway.reset_provider_diagnostics()
+
+        evidence = gateway.fetch_google_news_rss(self.target(), "US")
+
+        self.assertEqual(["Apple reports third-quarter revenue and raises guidance"], [item.title for item in evidence])
+        self.assertEqual(["https://news.google.com/rss/articles/direct"], resolved)
+        self.assertEqual(1, gateway._current_provider_diagnostics["googleOriginalUrlDeferredCandidateCount"])
+        self.assertEqual(0, gateway._current_provider_diagnostics["googleOriginalUrlBudgetRejectedCount"])
+
+    def test_duplicate_cleanup_keeps_the_stable_canonical_identity(self):
+        canonical_url = "https://example.test/apple-results"
+        stable_id = "research:AAPL:news:" + news_article_identity_token("Google News US", "ignored", canonical_url)
+        stable = self.evidence()
+        stable.evidence_id = stable_id
+        stable.url = canonical_url
+        legacy = self.evidence()
+        legacy.evidence_id = "research:AAPL:news:legacy-title-key"
+        legacy.url = canonical_url + "?utm_source=rss"
+
+        class Store:
+            def __init__(self):
+                self.deleted = []
+
+            def latest(self, **_kwargs):
+                return [legacy, stable]
+
+            def delete(self, evidence_id):
+                self.deleted.append(evidence_id)
+                return True
+
+        store = Store()
+        runner = NewsCollectionRunner(
+            account_repository=SimpleNamespace(load=lambda: []),
+            monitor_store=SimpleNamespace(previous={}),
+            symbol_store=SimpleNamespace(),
+            evidence_store=store,
+            gateway=SimpleNamespace(providers=lambda: []),
+            settings={"newsEvidenceCleanupEnabled": "1"},
+        )
+
+        result = runner.delete_duplicate_news()
+
+        self.assertEqual(1, result["deleted"])
+        self.assertEqual([legacy.evidence_id], store.deleted)
+
+    def test_entity_cleanup_retracts_legacy_third_party_naver_pay_promotion(self):
+        promotion = ResearchEvidence(
+            "research:035420:news:legacy-promotion",
+            "035420",
+            "news",
+            "Example News",
+            "벤큐, 구매 후기 작성하면 네이버페이 5만원 증정",
+            "제3자 제품 구매 고객에게 네이버페이 포인트를 지급합니다.",
+            "https://example.test/benq-promotion",
+            "2026-08-04T05:00:00Z",
+            "context",
+            published_at="2026-08-04T05:00:00Z",
+            raw_payload={"name": "NAVER", "provider": "Google News KR"},
+        )
+        direct = ResearchEvidence(
+            "research:035420:news:direct-launch",
+            "035420",
+            "news",
+            "Reuters",
+            "NAVER, 네이버페이 해외 결제 서비스 출시",
+            "NAVER가 신규 결제 서비스를 발표했습니다.",
+            "https://example.test/naver-pay-launch",
+            "2026-08-04T05:00:00Z",
+            "support",
+            published_at="2026-08-04T05:00:00Z",
+            raw_payload={"name": "NAVER", "provider": "Google News KR"},
+        )
+
+        class Store:
+            def __init__(self):
+                self.deleted = []
+
+            def latest(self, **_kwargs):
+                return [promotion, direct]
+
+            def delete(self, evidence_id):
+                self.deleted.append(evidence_id)
+                return True
+
+        store = Store()
+        runner = NewsCollectionRunner(
+            account_repository=SimpleNamespace(load=lambda: []),
+            monitor_store=SimpleNamespace(previous={}),
+            symbol_store=SimpleNamespace(),
+            evidence_store=store,
+            gateway=SimpleNamespace(providers=lambda: []),
+            settings={"newsEvidenceCleanupEnabled": "1"},
+        )
+
+        result = runner.delete_reclassified_entity_noise_news()
+
+        self.assertEqual(1, result["deleted"])
+        self.assertEqual([promotion.evidence_id], store.deleted)
 
     def test_runner_starts_a_fresh_budget_window_for_long_lived_collaborators(self):
         gateway = SimpleNamespace(begin_calls=0, providers=lambda: [])

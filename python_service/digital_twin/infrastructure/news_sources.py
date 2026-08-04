@@ -16,6 +16,7 @@ from html.parser import HTMLParser
 from typing import Callable, Dict, Iterable, List, Optional, Tuple
 
 from ..domain import news_analysis as news_domain
+from ..domain.investment_evidence_governance import canonical_evidence_url
 from ..domain.investment_research import NewsCollectionTarget, ResearchEvidence, classify_news_relevance, compact_text, keyword_polarity, stable_evidence_token
 from ..domain.market_data import number
 from ..domain.portfolio import utc_now_iso
@@ -65,7 +66,10 @@ class NewsProviderTimeout(TimeoutError):
 
 
 def provider_empty_status(diagnostics: Dict[str, int]) -> str:
-    if int(diagnostics.get("candidateCount") or 0) <= 0:
+    if max(
+        int(diagnostics.get("candidateCount") or 0),
+        int(diagnostics.get("feedCandidateCount") or 0),
+    ) <= 0:
         return "no-candidates"
     if int(diagnostics.get("googleOriginalUrlResolveFailedCount") or 0) > 0:
         return "article-original-url-unavailable"
@@ -75,7 +79,11 @@ def provider_empty_status(diagnostics: Dict[str, int]) -> str:
         return "article-original-url-budget-exhausted"
     if int(diagnostics.get("bodyBudgetRejectedCount") or 0) > 0:
         return "article-body-budget-exhausted"
-    if int(diagnostics.get("preliminaryRejectedCount") or 0) > 0 or int(diagnostics.get("finalRelevanceRejectedCount") or 0) > 0:
+    if (
+        int(diagnostics.get("preliminaryRejectedCount") or 0) > 0
+        or int(diagnostics.get("finalRelevanceRejectedCount") or 0) > 0
+        or int(diagnostics.get("feedOnlyQualityRejectedCount") or 0) > 0
+    ):
         return "relevance-filtered"
     return "empty"
 
@@ -436,7 +444,24 @@ def parse_news_datetime(value: object):
         parsed = parsedate_to_datetime(text)
         return parsed if parsed.tzinfo else parsed.replace(tzinfo=timezone.utc)
     except (TypeError, ValueError, IndexError):
-        return None
+        pass
+    for pattern in ("%Y%m%dT%H%M%SZ", "%Y%m%dT%H%M%S", "%Y%m%d%H%M%S", "%Y%m%d"):
+        try:
+            return datetime.strptime(text, pattern).replace(tzinfo=timezone.utc)
+        except ValueError:
+            pass
+    return None
+
+
+def news_article_identity_token(provider: object, title: object, url: object) -> str:
+    """Use publisher article identity before mutable feed title metadata."""
+    canonical_url = canonical_evidence_url(url)
+    parsed_url = urllib.parse.urlsplit(canonical_url) if canonical_url else None
+    if canonical_url and parsed_url and ((parsed_url.path or "/") != "/" or parsed_url.query):
+        return stable_evidence_token(canonical_url)
+    normalized_provider = re.sub(r"\s+", " ", str(provider or "").strip()).casefold()
+    normalized_title = news_domain.normalized_article_title(title).casefold()
+    return stable_evidence_token(normalized_provider, normalized_title)
 
 
 def iso_or_empty(value: object) -> str:
@@ -487,6 +512,7 @@ class NewsSourceGateway:
 
     def reset_provider_diagnostics(self) -> None:
         self._current_provider_diagnostics = {
+            "feedCandidateCount": 0,
             "candidateCount": 0,
             "preliminaryRejectedCount": 0,
             "bodyFetchAttemptCount": 0,
@@ -496,15 +522,17 @@ class NewsSourceGateway:
             "googleOriginalUrlResolvedCount": 0,
             "googleOriginalUrlResolveFailedCount": 0,
             "googleOriginalUrlBudgetRejectedCount": 0,
+            "googleOriginalUrlDeferredCandidateCount": 0,
             "sourceBlockedCount": 0,
             "finalRelevanceRejectedCount": 0,
+            "feedOnlyQualityRejectedCount": 0,
             "acceptedCount": 0,
         }
 
-    def record_provider_diagnostic(self, key: str) -> None:
+    def record_provider_diagnostic(self, key: str, count: int = 1) -> None:
         if key not in self._current_provider_diagnostics:
             self._current_provider_diagnostics[key] = 0
-        self._current_provider_diagnostics[key] += 1
+        self._current_provider_diagnostics[key] += max(0, int(count or 0))
 
     def guarded_json_fetcher(self, timeout: float) -> JsonFetcher:
         def fetch(url: str, headers: Dict[str, str] = None) -> object:
@@ -907,6 +935,17 @@ class NewsSourceGateway:
         if not self.relevance_state_passes(relevance) or not news_domain.relation_scope_is_investable(relevance.get("relationScope")):
             self.record_provider_diagnostic("finalRelevanceRejectedCount")
             return None
+        if not article_text:
+            entity_gate = relevance.get("qualityGate") if isinstance(relevance.get("qualityGate"), dict) else {}
+            source_trust = str(relevance.get("sourceTrustState") or "unknown").strip().lower()
+            feed_only_verified = (
+                str(relevance.get("relationScope") or "").strip().lower() == "direct"
+                and bool(entity_gate.get("targetSubjectConfirmed"))
+                and source_trust in {"standard", "trusted"}
+            )
+            if not feed_only_verified:
+                self.record_provider_diagnostic("feedOnlyQualityRejectedCount")
+                return None
         polarity = keyword_polarity(title + " " + analysis_text)
         summary_ko = news_domain.korean_article_summary(
             target,
@@ -961,10 +1000,11 @@ class NewsSourceGateway:
             "googleNewsFeedUrl": original_link if original_link != article_link else "",
             "articleSourceUrl": article_link,
             "articleCanonicalUrl": article_canonical_url,
+            "articleIdentityUrl": canonical_evidence_url(article_canonical_url),
             "articlePublisher": article_publisher,
         }
         evidence = ResearchEvidence(
-            evidence_id="research:" + symbol + ":news:" + stable_evidence_token(provider, title, article_canonical_url),
+            evidence_id="research:" + symbol + ":news:" + news_article_identity_token(provider, title, article_canonical_url),
             symbol=symbol,
             kind="news",
             source=source,
@@ -1075,6 +1115,27 @@ class NewsSourceGateway:
         published = parse_news_datetime(item.published_at or item.observed_at)
         timestamp = published.timestamp() if published else 0.0
         return body_available, *states, timestamp
+
+    def feed_candidate_rank_key(self, target: NewsCollectionTarget, candidate: Dict[str, object]) -> tuple:
+        preliminary = classify_news_relevance(
+            target,
+            candidate.get("title"),
+            candidate.get("summary"),
+            candidate.get("source"),
+            candidate.get("provider"),
+        )
+        gate = preliminary.get("qualityGate") if isinstance(preliminary.get("qualityGate"), dict) else {}
+        investable = self.relevance_state_passes(preliminary) and news_domain.relation_scope_is_investable(
+            preliminary.get("relationScope")
+        )
+        published = parse_news_datetime(candidate.get("published"))
+        timestamp = published.timestamp() if published else 0.0
+        return (
+            investable,
+            bool(gate.get("targetSubjectConfirmed")),
+            *news_domain.news_state_rank(preliminary),
+            timestamp,
+        )
 
     def fetch_provider(self, provider: str, target: NewsCollectionTarget) -> List[ResearchEvidence]:
         if provider in {"google_rss_kr", "rss_kr", "kr"}:
@@ -1199,6 +1260,7 @@ class NewsSourceGateway:
         root = ET.fromstring(xml_text)
         evidence: List[ResearchEvidence] = []
         source_name = "Google News US" if locale == "US" else "Google News KR"
+        candidates: List[Dict[str, object]] = []
         for item in root.findall(".//item"):
             title = strip_html(item.findtext("title"))
             link = str(item.findtext("link") or "").strip()
@@ -1208,14 +1270,39 @@ class NewsSourceGateway:
             source = item.find("source")
             source_text = strip_html(source.text if source is not None else "") or source_name
             summary = strip_html(item.findtext("description"))
+            candidates.append({
+                "title": title,
+                "link": link,
+                "published": published,
+                "source": source_text,
+                "summary": summary,
+                "provider": source_name,
+            })
+        self.record_provider_diagnostic("feedCandidateCount", len(candidates))
+        candidates.sort(key=lambda candidate: self.feed_candidate_rank_key(target, candidate), reverse=True)
+        for index, candidate in enumerate(candidates):
+            link = str(candidate.get("link") or "")
+            if self.google_news_article_link(link) and (
+                not self.google_original_url_resolution_enabled()
+                or not self.google_original_url_budget_available()
+            ):
+                self.record_provider_diagnostic(
+                    "googleOriginalUrlDeferredCandidateCount",
+                    len(candidates) - index,
+                )
+                if not evidence:
+                    if not int(self._current_provider_diagnostics.get("candidateCount") or 0):
+                        self.record_provider_diagnostic("candidateCount")
+                    self.record_provider_diagnostic("googleOriginalUrlBudgetRejectedCount")
+                break
             item_evidence = self.news_evidence_from_article(
                 target,
                 source_name,
-                source_text,
-                title,
-                summary,
+                str(candidate.get("source") or source_name),
+                str(candidate.get("title") or ""),
+                str(candidate.get("summary") or ""),
                 link,
-                published,
+                candidate.get("published"),
                 {
                     "provider": source_name,
                     "locale": locale,

@@ -13,11 +13,12 @@ from ..domain.events import ontology_reasoning_requested_event, research_evidenc
 from ..domain.investment_research import NewsCollectionTarget, ResearchEvidence
 from ..domain.materiality import evidence_materiality
 from ..domain.news_ai_analysis import (
-    apply_news_ai_analysis,
     article_body_quality_needs_refresh,
+    article_summary_quality_needs_refresh,
     article_text_parts,
     news_ai_analysis_is_current,
     news_ai_analysis_retryable,
+    refreshed_article_summary_quality,
     source_language,
     summary_quality_payload,
 )
@@ -72,6 +73,9 @@ class NewsAnalysisEnrichmentRunner:
     def batch_size(self) -> int:
         return int_setting(self.settings, "newsAiAnalysisWorkerBatchSize", 1, 1, 10)
 
+    def local_repair_batch_size(self) -> int:
+        return int_setting(self.settings, "newsAiAnalysisLocalRepairBatchSize", 25, 1, 100)
+
     def scan_limit(self) -> int:
         return int_setting(self.settings, "newsAiAnalysisWorkerScanLimit", 160, 10, 1000)
 
@@ -80,6 +84,18 @@ class NewsAnalysisEnrichmentRunner:
 
     def timeout_seconds(self) -> int:
         return int_setting(self.settings, "newsAiAnalysisTimeoutSeconds", 90, 5, 300)
+
+    def max_news_age_minutes(self) -> int:
+        return int_setting(self.settings, "newsEvidenceMaxAgeMinutes", 1440 * 30, 5, 1440 * 30)
+
+    def keep_undated_news(self) -> bool:
+        return truthy(self.settings.get("newsEvidenceKeepUndated"), False)
+
+    def item_is_fresh(self, item: ResearchEvidence) -> bool:
+        parsed = parse_datetime(item.published_at or item.observed_at)
+        if not parsed:
+            return self.keep_undated_news()
+        return age_minutes(parsed.isoformat(), now=datetime.now(timezone.utc)) <= self.max_news_age_minutes()
 
     def target_for(self, item: ResearchEvidence) -> NewsCollectionTarget:
         payload = item.raw_payload if isinstance(item.raw_payload, dict) else {}
@@ -94,6 +110,8 @@ class NewsAnalysisEnrichmentRunner:
     def should_retry(self, item: ResearchEvidence) -> bool:
         if not isinstance(item, ResearchEvidence) or item.kind != "news":
             return False
+        if not self.item_is_fresh(item):
+            return False
         payload = item.raw_payload if isinstance(item.raw_payload, dict) else {}
         if str(payload.get("relationScope") or "") == "editorial_context":
             return False
@@ -101,7 +119,6 @@ class NewsAnalysisEnrichmentRunner:
         if str(quality_gate.get("decision") or "") == "exclude":
             return False
         analysis = payload.get("aiAnalysis") if isinstance(payload.get("aiAnalysis"), dict) else {}
-        summary_quality = payload.get("articleSummaryQuality") if isinstance(payload.get("articleSummaryQuality"), dict) else {}
         language = str(payload.get("sourceLanguage") or source_language(item.title)).lower()
         translation_status = str(payload.get("translationStatus") or "").lower()
         needs_translation = language == "en" and translation_status != "complete"
@@ -111,10 +128,8 @@ class NewsAnalysisEnrichmentRunner:
             " ".join(part for part in [title, body or feed_summary] if part),
             str(payload.get("name") or payload.get("companyName") or item.symbol),
         )
-        needs_summary_review = (
-            str(summary_quality.get("state") or "") in {"blocked", "needs-review"}
-            or str(refreshed_quality.get("state") or "") in {"blocked", "needs-review"}
-        )
+        needs_summary_review = str(refreshed_quality.get("state") or "") in {"blocked", "needs-review"}
+        summary_quality_refresh = article_summary_quality_needs_refresh(item)
         analysis_status = str(analysis.get("status") or "").lower()
         retryable_analysis = (
             analysis_status in {"fallback", "error", ""}
@@ -124,11 +139,19 @@ class NewsAnalysisEnrichmentRunner:
         )
         analysis_outdated = not news_ai_analysis_is_current(item)
         body_quality_repair = article_body_quality_needs_refresh(item)
-        if not (needs_translation or needs_summary_review or retryable_analysis or analysis_outdated or body_quality_repair):
+        if not (
+            needs_translation
+            or needs_summary_review
+            or summary_quality_refresh
+            or retryable_analysis
+            or analysis_outdated
+            or body_quality_repair
+        ):
             return False
         last_attempt = parse_datetime(analysis.get("lastExternalAttemptAt"))
         if (
             not body_quality_repair
+            and not summary_quality_refresh
             and last_attempt
             and age_minutes(last_attempt.isoformat(), now=datetime.now(timezone.utc)) < self.retry_minutes()
         ):
@@ -141,12 +164,23 @@ class NewsAnalysisEnrichmentRunner:
         language = str(payload.get("sourceLanguage") or source_language(item.title)).lower()
         translation_pending = language == "en" and str(payload.get("translationStatus") or "").lower() != "complete"
         states = news_domain.news_state_rank(item.state_payload())
+        published = parse_datetime(item.published_at or item.observed_at)
         return (
-            article_body_quality_needs_refresh(item),
+            *states,
             bool(facts.get("bodyAvailable")),
             translation_pending,
-            *states,
-            str(item.published_at or item.observed_at or ""),
+            not article_body_quality_needs_refresh(item),
+            published.timestamp() if published else 0.0,
+        )
+
+    def deterministic_repair(self, item: ResearchEvidence) -> bool:
+        if not news_ai_analysis_is_current(item) or news_ai_analysis_retryable(item):
+            return False
+        if article_body_quality_needs_refresh(item):
+            return True
+        return (
+            article_summary_quality_needs_refresh(item)
+            and str(refreshed_article_summary_quality(item).get("state") or "") == "ready"
         )
 
     def candidates(self) -> List[ResearchEvidence]:
@@ -163,6 +197,7 @@ class NewsAnalysisEnrichmentRunner:
             "enabled": self.enabled(),
             "intervalSeconds": self.interval_seconds(),
             "batchSize": self.batch_size(),
+            "localRepairBatchSize": self.local_repair_batch_size(),
             "retryMinutes": self.retry_minutes(),
             "pendingCount": len(candidates),
             "pendingTranslationCount": pending_translation,
@@ -256,12 +291,19 @@ class NewsAnalysisEnrichmentRunner:
                 "storage": storage,
             }
         candidates = self.candidates()
-        selected = candidates[: max(1, int(limit or self.batch_size()))]
+        repair_candidates = [item for item in candidates if self.deterministic_repair(item)]
+        repair_selected = repair_candidates[: self.local_repair_batch_size()]
+        repair_ids = {item.evidence_id for item in repair_selected}
+        repair_candidate_ids = {item.evidence_id for item in repair_candidates}
+        model_candidates = [item for item in candidates if item.evidence_id not in repair_candidate_ids]
+        model_selected = model_candidates[: max(1, int(limit or self.batch_size()))]
+        selected = [*repair_selected, *model_selected]
         updated: List[ResearchEvidence] = []
         failures: List[Dict[str, object]] = []
         translated_count = 0
         now = utc_now_iso()
         for item in selected:
+            local_repair = item.evidence_id in repair_ids
             try:
                 result = self.analysis_service.analyze_evidence(
                     self.target_for(item),
@@ -270,11 +312,14 @@ class NewsAnalysisEnrichmentRunner:
                 )
                 payload = dict(result.raw_payload or {})
                 analysis = dict(payload.get("aiAnalysis") or {})
-                analysis["lastExternalAttemptAt"] = now
-                if str(analysis.get("status") or "").lower() in {"fallback", "error", "deferred"}:
-                    analysis["nextRetryAfterMinutes"] = self.retry_minutes()
+                if local_repair:
+                    analysis["lastLocalRepairAt"] = now
                 else:
-                    analysis["externalCompletedAt"] = now
+                    analysis["lastExternalAttemptAt"] = now
+                    if str(analysis.get("status") or "").lower() in {"fallback", "error", "deferred"}:
+                        analysis["nextRetryAfterMinutes"] = self.retry_minutes()
+                    else:
+                        analysis["externalCompletedAt"] = now
                 payload["aiAnalysis"] = analysis
                 result.raw_payload = payload
                 if str(payload.get("translationStatus") or "").lower() == "complete":
@@ -315,6 +360,8 @@ class NewsAnalysisEnrichmentRunner:
             "status": "ok",
             **self._status_for_candidates(candidates),
             "processedCount": len(selected),
+            "localRepairCount": len(repair_selected),
+            "modelProcessedCount": len(model_selected),
             "savedCount": saved,
             "translatedCount": translated_count,
             "failedCount": len(failures),

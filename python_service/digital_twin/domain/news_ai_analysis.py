@@ -166,6 +166,13 @@ SUMMARY_PREFIX_PATTERN = re.compile(
     r"^(?:(?:전체\s*)?본문|RSS/제공|RSS|제공|기사|AI\s*기사)\s*(?:요약|분석)\s*:\s*|^요약\s*:\s*",
     re.IGNORECASE,
 )
+GENERATED_SUMMARY_METADATA_TAIL_PATTERNS = (
+    re.compile(
+        r"\s*(?:[/·]\s*)?(?:핵심 키워드\s*:\s*.+?(?:\s*/\s*))?확인된 수치\s*:\s*.*$",
+        re.IGNORECASE,
+    ),
+    re.compile(r"\s*기사에서 확인되는 주요 수치는\s+[^.]+입니다\.?$", re.IGNORECASE),
+)
 
 SUMMARY_STOP_WORDS = {
     "관련", "기사", "내용", "핵심", "요약", "분석", "확인", "대상", "종목",
@@ -180,13 +187,88 @@ GENERIC_SUMMARY_PATTERNS = (
 )
 
 NUMBER_TOKEN_PATTERN = re.compile(
-    r"(?<![A-Za-z가-힣0-9])(?:[$€£]\s*)?\d[\d,]*(?:\.\d+)?\s*(?:trillion|billion|million|thousand|percent|bp|%|조|억|만|천|원|달러|주)?",
+    r"(?<![A-Za-z가-힣0-9])(?:[$€£]\s*)?\d[\d,]*(?:\.\d+)?\s*"
+    r"(?:-?\s*(?:trillion|billion|million|thousand)(?:th)?|percent|bp|%|조|억|만|천|원|달러|주|대|개|명|마일)?",
     re.IGNORECASE,
+)
+KOREAN_MAGNITUDE_SEQUENCE_PATTERN = re.compile(
+    r"(?<![A-Za-z가-힣0-9])(?:\d[\d,]*(?:\.\d+)?\s*(?:조|억|만|천)+\s*)+"
+    r"(?:\d[\d,]*(?:\.\d+)?)?\s*(?:원|달러|주|대|개|명|마일)?",
+)
+ENGLISH_PERIOD_NUMBER_PATTERN = re.compile(
+    r"\b(first|second|third|fourth|fifth|sixth|seventh|eighth|ninth|tenth|eleventh|twelfth)"
+    r"(?:\s+fiscal)?\s*[- ]\s*(?:quarter|qtr|half|month|week|year)s?\b|\bq([1-4])\b",
+    re.IGNORECASE,
+)
+ENGLISH_PERIOD_NUMBERS = {
+    "first": 1.0,
+    "second": 2.0,
+    "third": 3.0,
+    "fourth": 4.0,
+    "fifth": 5.0,
+    "sixth": 6.0,
+    "seventh": 7.0,
+    "eighth": 8.0,
+    "ninth": 9.0,
+    "tenth": 10.0,
+    "eleventh": 11.0,
+    "twelfth": 12.0,
+}
+ENGLISH_NUMBER_WORDS = {
+    **ENGLISH_PERIOD_NUMBERS,
+    "one": 1.0,
+    "two": 2.0,
+    "three": 3.0,
+    "four": 4.0,
+    "five": 5.0,
+    "six": 6.0,
+    "seven": 7.0,
+    "eight": 8.0,
+    "nine": 9.0,
+    "ten": 10.0,
+    "eleven": 11.0,
+    "twelve": 12.0,
+}
+ENGLISH_NUMBER_WORD_PATTERN = re.compile(
+    r"\b(" + "|".join(ENGLISH_NUMBER_WORDS) + r")\b",
+    re.IGNORECASE,
+)
+ENGLISH_TENS_NUMBERS = {
+    "twenty": 20.0,
+    "thirty": 30.0,
+    "forty": 40.0,
+    "fifty": 50.0,
+    "sixty": 60.0,
+    "seventy": 70.0,
+    "eighty": 80.0,
+    "ninety": 90.0,
+}
+ENGLISH_COMPOUND_NUMBER_PATTERN = re.compile(
+    r"\b(" + "|".join(ENGLISH_TENS_NUMBERS) + r")(?:[- ](one|two|three|four|five|six|seven|eight|nine))?\b",
+    re.IGNORECASE,
+)
+ENGLISH_MONTH_NUMBERS = {
+    "january": 1.0,
+    "february": 2.0,
+    "march": 3.0,
+    "april": 4.0,
+    "may": 5.0,
+    "june": 6.0,
+    "july": 7.0,
+    "august": 8.0,
+    "september": 9.0,
+    "october": 10.0,
+    "november": 11.0,
+    "december": 12.0,
+}
+ENGLISH_MONTH_PATTERN = re.compile(
+    r"\b(" + "|".join(month.title() for month in ENGLISH_MONTH_NUMBERS) + r")\b",
 )
 
 
 def normalized_numeric_values(value: object) -> List[Tuple[str, float]]:
     """Normalize English and Korean magnitude words for summary grounding."""
+    text = str(value or "")
     values: List[Tuple[str, float]] = []
     multipliers = {
         "trillion": 1_000_000_000_000.0,
@@ -198,13 +280,35 @@ def normalized_numeric_values(value: object) -> List[Tuple[str, float]]:
         "만": 10_000.0,
         "천": 1_000.0,
     }
-    for match in NUMBER_TOKEN_PATTERN.finditer(str(value or "")):
+    compound_spans: List[Tuple[int, int]] = []
+    for match in KOREAN_MAGNITUDE_SEQUENCE_PATTERN.finditer(text):
+        token = match.group(0).strip()
+        total = 0.0
+        last_component_end = 0
+        for component in re.finditer(r"(\d[\d,]*(?:\.\d+)?)\s*((?:조|억|만|천)+)", token):
+            scale = 1.0
+            for unit in component.group(2):
+                scale *= multipliers[unit]
+            total += float(component.group(1).replace(",", "")) * scale
+            last_component_end = component.end()
+        trailing = re.match(r"\s*(\d[\d,]*(?:\.\d+)?)", token[last_component_end:])
+        if trailing:
+            total += float(trailing.group(1).replace(",", ""))
+        kind = "amount" if re.search(r"(?:원|달러)\s*$", token) else "plain"
+        values.append((kind, total))
+        compound_spans.append(match.span())
+    for match in NUMBER_TOKEN_PATTERN.finditer(text):
+        if any(match.start() < end and match.end() > start for start, end in compound_spans):
+            continue
         token = match.group(0).strip()
         numeric = re.search(r"\d[\d,]*(?:\.\d+)?", token)
         if not numeric:
             continue
+        raw_numeric = numeric.group(0).replace(",", "")
+        if len(raw_numeric) == 6 and raw_numeric.startswith("0") and raw_numeric.isdigit():
+            continue
         try:
-            amount = float(numeric.group(0).replace(",", ""))
+            amount = float(raw_numeric)
         except ValueError:
             continue
         suffix = token[numeric.end():].strip().casefold()
@@ -216,15 +320,29 @@ def normalized_numeric_values(value: object) -> List[Tuple[str, float]]:
             values.append(("basis-point", amount))
             continue
         multiplier = next((scale for unit, scale in multipliers.items() if unit in suffix), 1.0)
-        is_amount = bool(prefix.strip() or any(unit in suffix for unit in [*multipliers, "원", "달러"]))
+        is_amount = bool(prefix.strip() or any(unit in suffix for unit in ["원", "달러"]))
         values.append(("amount" if is_amount else "plain", amount * multiplier))
+    for match in ENGLISH_PERIOD_NUMBER_PATTERN.finditer(text):
+        word = str(match.group(1) or "").casefold()
+        quarter = str(match.group(2) or "")
+        amount = ENGLISH_PERIOD_NUMBERS.get(word) if word else float(quarter)
+        values.append(("plain", amount))
+    for match in ENGLISH_NUMBER_WORD_PATTERN.finditer(text):
+        values.append(("plain", ENGLISH_NUMBER_WORDS[match.group(1).casefold()]))
+    for match in ENGLISH_COMPOUND_NUMBER_PATTERN.finditer(text):
+        amount = ENGLISH_TENS_NUMBERS[match.group(1).casefold()]
+        if match.group(2):
+            amount += ENGLISH_NUMBER_WORDS[match.group(2).casefold()]
+        values.append(("plain", amount))
+    for match in ENGLISH_MONTH_PATTERN.finditer(text):
+        values.append(("plain", ENGLISH_MONTH_NUMBERS[match.group(1).casefold()]))
     return values
 
 
 def numeric_value_is_grounded(value: Tuple[str, float], source_values: Iterable[Tuple[str, float]]) -> bool:
     kind, amount = value
     for source_kind, source_amount in source_values:
-        if source_kind != kind:
+        if source_kind != kind and {source_kind, kind} != {"amount", "plain"}:
             continue
         tolerance = max(0.01, abs(source_amount) * 0.015)
         if abs(amount - source_amount) <= tolerance:
@@ -296,6 +414,8 @@ def clean_summary_text(value: object, limit: int = 760) -> str:
     while text and text != previous:
         previous = text
         text = SUMMARY_PREFIX_PATTERN.sub("", text).strip()
+        for pattern in GENERATED_SUMMARY_METADATA_TAIL_PATTERNS:
+            text = pattern.sub("", text).strip()
     text = re.sub(r"\s*/\s*(?=[가-힣A-Za-z])", ". ", text)
     text = re.sub(r"\s+", " ", text).strip(" .·;:-")
     return compact_text(text, limit)
@@ -1201,6 +1321,43 @@ def news_ai_analysis_retryable(evidence: ResearchEvidence) -> bool:
     if not isinstance(analysis, dict):
         return False
     return str(analysis.get("status") or "").strip().lower() in {"fallback", "deferred", "error"}
+
+
+def refreshed_article_summary_quality(evidence: ResearchEvidence) -> Dict[str, object]:
+    payload = analysis_payload_from_evidence(evidence)
+    title, body, feed_summary, _read_scope = article_text_parts(evidence)
+    return summary_quality_payload(
+        payload.get("articleSummaryKo") or evidence.summary,
+        " ".join(part for part in [title, body or feed_summary] if part),
+        payload.get("name") or payload.get("companyName") or evidence.symbol,
+    )
+
+
+def article_summary_quality_needs_refresh(evidence: ResearchEvidence) -> bool:
+    payload = analysis_payload_from_evidence(evidence)
+    stored = payload.get("articleSummaryQuality") if isinstance(payload.get("articleSummaryQuality"), dict) else {}
+    refreshed = refreshed_article_summary_quality(evidence)
+    return (
+        str(stored.get("state") or payload.get("summaryQualityState") or "") != str(refreshed.get("state") or "")
+        or list(stored.get("issues") or []) != list(refreshed.get("issues") or [])
+    )
+
+
+def refresh_article_summary_quality(evidence: ResearchEvidence) -> ResearchEvidence:
+    payload = dict(analysis_payload_from_evidence(evidence))
+    quality = refreshed_article_summary_quality(evidence)
+    payload["articleSummaryQuality"] = quality
+    payload["summaryQualityState"] = quality.get("state") or "needs-review"
+    analysis = dict(payload.get("aiAnalysis") or {})
+    if not quality.get("issues"):
+        analysis["reasoningLimitations"] = [
+            item
+            for item in list(analysis.get("reasoningLimitations") or [])
+            if not str(item or "").startswith("요약 품질 점검 필요:")
+        ]
+        payload["aiAnalysis"] = analysis
+    evidence.raw_payload = payload
+    return evidence
 
 
 def apply_news_ai_analysis(evidence: ResearchEvidence, analysis_payload: Dict[str, object]) -> ResearchEvidence:

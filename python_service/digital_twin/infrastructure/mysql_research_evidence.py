@@ -324,11 +324,27 @@ class MySQLResearchEvidenceStore(MySQLOperationalConnection):
                 FROM research_evidence
                 WHERE lifecycle_state = 'active'
                   AND kind = 'news'
-                  AND COALESCE(NULLIF(published_at, ''), NULLIF(observed_at, ''), NULLIF(last_seen_at, '')) < %s
+                  AND (
+                    COALESCE(NULLIF(published_at, ''), NULLIF(observed_at, ''), NULLIF(last_seen_at, '')) < %s
+                    OR (
+                      COALESCE(NULLIF(published_at, ''), NULLIF(observed_at, ''), NULLIF(last_seen_at, ''))
+                        REGEXP '^[0-9]{8}T?[0-9]{6}Z?$'
+                      AND STR_TO_DATE(
+                        REPLACE(REPLACE(
+                          COALESCE(NULLIF(published_at, ''), NULLIF(observed_at, ''), NULLIF(last_seen_at, '')),
+                          'T', ''
+                        ), 'Z', ''),
+                        '%%Y%%m%%d%%H%%i%%s'
+                      ) < STR_TO_DATE(
+                        LEFT(REPLACE(REPLACE(%s, 'T', ' '), 'Z', ''), 19),
+                        '%%Y-%%m-%%d %%H:%%i:%%s'
+                      )
+                    )
+                  )
                 ORDER BY last_seen_at ASC, evidence_id ASC
                 LIMIT %s
                 """,
-                (cutoff, candidate_limit),
+                (cutoff, cutoff, candidate_limit),
             ).fetchall()
         return [str(row.get("evidence_id") or "").strip() for row in rows if str(row.get("evidence_id") or "").strip()]
 
@@ -342,14 +358,30 @@ class MySQLResearchEvidenceStore(MySQLOperationalConnection):
             SELECT * FROM research_evidence
             WHERE lifecycle_state = 'active'
               AND kind = 'news'
-              AND COALESCE(NULLIF(published_at, ''), NULLIF(observed_at, ''), NULLIF(last_seen_at, '')) < %s
+              AND (
+                COALESCE(NULLIF(published_at, ''), NULLIF(observed_at, ''), NULLIF(last_seen_at, '')) < %s
+                OR (
+                  COALESCE(NULLIF(published_at, ''), NULLIF(observed_at, ''), NULLIF(last_seen_at, ''))
+                    REGEXP '^[0-9]{8}T?[0-9]{6}Z?$'
+                  AND STR_TO_DATE(
+                    REPLACE(REPLACE(
+                      COALESCE(NULLIF(published_at, ''), NULLIF(observed_at, ''), NULLIF(last_seen_at, '')),
+                      'T', ''
+                    ), 'Z', ''),
+                    '%%Y%%m%%d%%H%%i%%s'
+                  ) < STR_TO_DATE(
+                    LEFT(REPLACE(REPLACE(%s, 'T', ' '), 'Z', ''), 19),
+                    '%%Y-%%m-%%d %%H:%%i:%%s'
+                  )
+                )
+              )
               AND evidence_id IN (""" + placeholders + """
               )
             ORDER BY evidence_id ASC
             LIMIT %s
             FOR UPDATE SKIP LOCKED
             """,
-            [cutoff, *ids, row_limit],
+            [cutoff, cutoff, *ids, row_limit],
         ).fetchall()
 
     def upsert_many(self, items: Iterable[ResearchEvidence]) -> int:

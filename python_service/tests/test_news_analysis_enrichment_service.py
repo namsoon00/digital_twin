@@ -215,6 +215,100 @@ class NewsAnalysisEnrichmentRunnerTests(unittest.TestCase):
 
         self.assertTrue(runner.should_retry(applied))
 
+    def test_worker_skips_stale_compact_timestamp_before_spending_ai_budget(self):
+        item = self.evidence()
+        item.published_at = "20260719T091519"
+        item.observed_at = "20260719T091519"
+        runner = NewsAnalysisEnrichmentRunner(
+            evidence_store=object(),
+            analysis_service=object(),
+            settings={"newsAiAnalysisAsyncEnabled": "1", "newsEvidenceMaxAgeMinutes": "4320"},
+        )
+
+        self.assertFalse(runner.should_retry(item))
+
+    def test_worker_prioritizes_material_direct_news_before_body_repair(self):
+        material = self.evidence()
+        material.raw_payload.update({
+            "materialityState": "material",
+            "relevanceState": "direct",
+            "sourceTrustState": "trusted",
+            "validationState": "conditional",
+        })
+        context = self.evidence()
+        context.evidence_id = "research:AAPL:news:context-repair"
+        context.raw_payload.update({
+            "materialityState": "context",
+            "relevanceState": "related",
+            "sourceTrustState": "trusted",
+            "validationState": "conditional",
+        })
+
+        runner = NewsAnalysisEnrichmentRunner(
+            evidence_store=object(),
+            analysis_service=object(),
+            settings={"newsAiAnalysisAsyncEnabled": "1"},
+        )
+
+        self.assertGreater(runner.priority(material), runner.priority(context))
+
+    def test_service_repairs_legacy_quarter_grounding_without_another_model_call(self):
+        item = self.evidence()
+        item.raw_payload["articleSummaryKo"] = "애플은 3분기 서비스 매출이 증가했다고 발표했습니다."
+        item.raw_payload["articleText"] = "Apple reported that services revenue increased in the third quarter."
+        item.raw_payload["aiAnalysis"]["sourceTextHash"] = local_news_ai_analysis(
+            NewsCollectionTarget("AAPL", "Apple", "NASDAQ", "USD", "Technology"),
+            item,
+        ).source_text_hash
+        item.raw_payload["aiAnalysis"]["status"] = "ok"
+        item.raw_payload["translationStatus"] = "complete"
+        item.raw_payload["articleSummaryQuality"] = {
+            "state": "blocked",
+            "issues": ["summary-number-not-grounded"],
+        }
+        item.raw_payload["summaryQualityState"] = "blocked"
+
+        class Analyzer:
+            def analyze(self, *_args, **_kwargs):
+                raise AssertionError("deterministic quality repair must not call the model")
+
+        class Store:
+            def __init__(self):
+                self.saved = []
+                self.last_changed_items = []
+                self.last_changed_symbols = []
+
+            def latest(self, **_kwargs):
+                return [item]
+
+            def upsert_many(self, rows):
+                self.saved = list(rows)
+                self.last_changed_items = list(rows)
+                self.last_changed_symbols = ["AAPL"]
+                return len(self.saved)
+
+        store = Store()
+        runner = NewsAnalysisEnrichmentRunner(
+            evidence_store=store,
+            analysis_service=NewsAiAnalysisService(Analyzer(), {"newsAiAnalysisEnabled": "1"}),
+            settings={
+                "newsAiAnalysisAsyncEnabled": "1",
+                "newsAiAnalysisWorkerBatchSize": "1",
+                "newsAiAnalysisLocalRepairBatchSize": "25",
+            },
+        )
+
+        result = runner.run_once()
+        repaired = store.saved[0]
+
+        self.assertEqual(1, result["localRepairCount"])
+        self.assertEqual(0, result["modelProcessedCount"])
+        self.assertEqual("ready", repaired.raw_payload["summaryQualityState"])
+        self.assertNotIn(
+            "summary-number-not-grounded",
+            repaired.raw_payload["articleSummaryQuality"]["issues"],
+        )
+
 
 if __name__ == "__main__":
     unittest.main()

@@ -1,5 +1,6 @@
 import inspect
 import time
+import urllib.parse
 from datetime import datetime, timedelta, timezone
 from typing import Callable, Dict, Iterable, List, Tuple
 
@@ -11,8 +12,8 @@ from ..domain.events import (
     research_evidence_collected_event,
     research_evidence_lifecycle_events,
 )
-from ..domain.investment_research import NewsCollectionTarget, ResearchEvidence
-from ..domain.investment_evidence_governance import claim_policy, claim_quality_summary, governed_evidence
+from ..domain.investment_research import NewsCollectionTarget, ResearchEvidence, classify_news_relevance, stable_evidence_token
+from ..domain.investment_evidence_governance import canonical_evidence_url, claim_policy, claim_quality_summary, governed_evidence
 from ..domain.market_data import known_stock, number
 from ..domain.materiality import evidence_materiality
 from ..domain.repositories import AccountRepository, MonitorSnapshotReader, ResearchEvidenceGateway, ResearchEvidenceRepository, SymbolUniverseRepository
@@ -67,7 +68,7 @@ def parse_news_timestamp(value: object):
     if parsed:
         return parsed
     text = str(value or "").strip()
-    for pattern in ["%Y%m%dT%H%M%SZ", "%Y%m%d"]:
+    for pattern in ["%Y%m%dT%H%M%SZ", "%Y%m%dT%H%M%S", "%Y%m%d%H%M%S", "%Y%m%d"]:
         try:
             return datetime.strptime(text, pattern).replace(tzinfo=timezone.utc)
         except ValueError:
@@ -194,6 +195,15 @@ class NewsCollectionRunner:
     def cleanup_batch_size(self) -> int:
         return int_setting(self.settings, "newsEvidenceCleanupBatchSize", 50, 1, 50)
 
+    def cleanup_scan_limit(self) -> int:
+        return int_setting(
+            self.settings,
+            "newsEvidenceCleanupScanLimit",
+            max(500, self.cleanup_batch_size() * 20),
+            50,
+            1000,
+        )
+
     def cleanup_interval_seconds(self) -> int:
         return int_setting(self.settings, "newsEvidenceCleanupIntervalSeconds", 900, 60, 86400)
 
@@ -230,6 +240,8 @@ class NewsCollectionRunner:
                 "nextDueAt": utc_iso((self._last_evidence_cleanup_at or now) + timedelta(seconds=self.cleanup_interval_seconds())),
                 "stale": {"enabled": self.cleanup_enabled(), "deleted": 0, "status": "deferred"},
                 "feedOnlyRss": {"enabled": self.cleanup_enabled() and self.require_article_body_for_rss(), "deleted": 0, "status": "deferred"},
+                "duplicates": {"enabled": self.cleanup_enabled(), "deleted": 0, "status": "deferred"},
+                "entityNoise": {"enabled": self.cleanup_enabled(), "deleted": 0, "status": "deferred"},
             }
         # Mark the schedule before doing database work. A transient failure is
         # retried on the next maintenance interval instead of competing with
@@ -240,6 +252,8 @@ class NewsCollectionRunner:
             "nextDueAt": utc_iso(now + timedelta(seconds=self.cleanup_interval_seconds())),
             "stale": self.delete_stale_news(),
             "feedOnlyRss": self.delete_feed_only_rss_news(),
+            "duplicates": self.delete_duplicate_news(),
+            "entityNoise": self.delete_reclassified_entity_noise_news(),
         }
 
     def delete_stale_news(self) -> Dict[str, object]:
@@ -305,6 +319,143 @@ class NewsCollectionRunner:
                 if self.evidence_store.delete(item.evidence_id):
                     deleted += 1
             return {"enabled": True, "deleted": deleted, "scanned": len(items), "reason": "rssFeedOnlyWithoutArticleBody"}
+        except Exception as error:  # noqa: BLE001 - cleanup failure should not stop fresh collection.
+            return {"enabled": True, "deleted": 0, "status": "error", "message": str(error)[:180]}
+
+    def duplicate_news_quality_key(self, item: ResearchEvidence, canonical_url: str) -> tuple:
+        payload = evidence_payload(item)
+        facts = evidence_article_facts(item)
+        summary_quality = payload.get("articleSummaryQuality") if isinstance(payload.get("articleSummaryQuality"), dict) else {}
+        analysis = payload.get("aiAnalysis") if isinstance(payload.get("aiAnalysis"), dict) else {}
+        source_trust = str(payload.get("sourceTrustState") or facts.get("sourceTrustState") or "unknown").lower()
+        expected_id = "research:" + str(item.symbol or "").upper().strip() + ":news:" + stable_evidence_token(canonical_url)
+        published = parse_news_timestamp(evidence_reference_timestamp(item))
+        return (
+            str(item.evidence_id or "") == expected_id,
+            bool(facts.get("bodyAvailable")),
+            facts.get("bodyQualityPassed") is True,
+            str(summary_quality.get("state") or payload.get("summaryQualityState") or "") == "ready",
+            str(analysis.get("status") or "").lower() in {"ok", "local"},
+            str(payload.get("translationStatus") or "").lower() in {"complete", "not-required"},
+            {"unknown": 0, "limited": 1, "standard": 2, "trusted": 3}.get(source_trust, 0),
+            published.timestamp() if published else 0.0,
+        )
+
+    def delete_duplicate_news(self) -> Dict[str, object]:
+        if not self.cleanup_enabled() or not hasattr(self.evidence_store, "latest") or not hasattr(self.evidence_store, "delete"):
+            return {"enabled": self.cleanup_enabled(), "deleted": 0}
+        try:
+            items = list(self.evidence_store.latest(kind="news", limit=self.cleanup_scan_limit()) or [])
+            groups: Dict[Tuple[str, str], List[ResearchEvidence]] = {}
+            for item in items:
+                canonical_url = canonical_evidence_url(getattr(item, "url", ""))
+                if not canonical_url.startswith(("http://", "https://")):
+                    continue
+                parsed_url = urllib.parse.urlsplit(canonical_url)
+                if (parsed_url.path or "/") == "/" and not parsed_url.query:
+                    continue
+                key = (str(item.symbol or "").upper().strip(), canonical_url)
+                groups.setdefault(key, []).append(item)
+            duplicate_ids: List[str] = []
+            duplicate_group_count = 0
+            for (_symbol, canonical_url), rows in groups.items():
+                if len(rows) < 2:
+                    continue
+                duplicate_group_count += 1
+                ranked = sorted(
+                    rows,
+                    key=lambda row: self.duplicate_news_quality_key(row, canonical_url),
+                    reverse=True,
+                )
+                duplicate_ids.extend(str(row.evidence_id or "") for row in ranked[1:] if str(row.evidence_id or ""))
+            duplicate_ids = duplicate_ids[: self.cleanup_batch_size()]
+            if (
+                duplicate_ids
+                and self.event_publisher
+                and hasattr(self.event_publisher, "dispatch_recorded")
+                and hasattr(self.evidence_store, "retract_many_with_events")
+            ):
+                reason = "duplicateCanonicalNewsArticle"
+                mutation, events = self.evidence_store.retract_many_with_events(
+                    duplicate_ids,
+                    reason,
+                    lambda value: self.lifecycle_events(value, reason),
+                )
+                for event in events:
+                    self.event_publisher.dispatch_recorded(event)
+                return {
+                    "enabled": True,
+                    "deleted": int(getattr(mutation, "retracted_count", 0) or 0),
+                    "scanned": len(items),
+                    "duplicateGroupCount": duplicate_group_count,
+                    "reason": reason,
+                    "evidenceDeltas": list(getattr(mutation, "to_dict", lambda: {})().get("evidenceDeltas") or []),
+                    "inferenceChangedSymbols": list(getattr(mutation, "inference_changed_symbols", []) or []),
+                }
+            deleted = sum(1 for evidence_id in duplicate_ids if self.evidence_store.delete(evidence_id))
+            return {
+                "enabled": True,
+                "deleted": deleted,
+                "scanned": len(items),
+                "duplicateGroupCount": duplicate_group_count,
+                "reason": "duplicateCanonicalNewsArticle",
+            }
+        except Exception as error:  # noqa: BLE001 - cleanup failure should not stop fresh collection.
+            return {"enabled": True, "deleted": 0, "status": "error", "message": str(error)[:180]}
+
+    def delete_reclassified_entity_noise_news(self) -> Dict[str, object]:
+        if not self.cleanup_enabled() or not hasattr(self.evidence_store, "latest") or not hasattr(self.evidence_store, "delete"):
+            return {"enabled": self.cleanup_enabled(), "deleted": 0}
+        try:
+            items = list(self.evidence_store.latest(kind="news", limit=self.cleanup_scan_limit()) or [])
+            targets: List[ResearchEvidence] = []
+            for item in items:
+                payload = evidence_payload(item)
+                target = NewsCollectionTarget(
+                    symbol=item.symbol,
+                    name=str(payload.get("name") or payload.get("companyName") or item.symbol),
+                    market=str(payload.get("market") or default_market_for_symbol(item.symbol)),
+                    currency=str(payload.get("currency") or ("KRW" if str(item.symbol).isdigit() else "USD")),
+                    sector=str(payload.get("sector") or ""),
+                )
+                analysis = classify_news_relevance(
+                    target,
+                    item.title,
+                    payload.get("articleText") or item.summary,
+                    item.source,
+                    payload.get("provider") or "",
+                )
+                if (
+                    str(analysis.get("relationScope") or "") == "entity_mismatch"
+                    and "제3자 판촉" in str(analysis.get("excludedReason") or "")
+                ):
+                    targets.append(item)
+                if len(targets) >= self.cleanup_batch_size():
+                    break
+            reason = "newsEntityResolutionReclassified"
+            if (
+                targets
+                and self.event_publisher
+                and hasattr(self.event_publisher, "dispatch_recorded")
+                and hasattr(self.evidence_store, "retract_many_with_events")
+            ):
+                mutation, events = self.evidence_store.retract_many_with_events(
+                    [item.evidence_id for item in targets],
+                    reason,
+                    lambda value: self.lifecycle_events(value, reason),
+                )
+                for event in events:
+                    self.event_publisher.dispatch_recorded(event)
+                return {
+                    "enabled": True,
+                    "deleted": int(getattr(mutation, "retracted_count", 0) or 0),
+                    "scanned": len(items),
+                    "reason": reason,
+                    "evidenceDeltas": list(getattr(mutation, "to_dict", lambda: {})().get("evidenceDeltas") or []),
+                    "inferenceChangedSymbols": list(getattr(mutation, "inference_changed_symbols", []) or []),
+                }
+            deleted = sum(1 for item in targets if self.evidence_store.delete(item.evidence_id))
+            return {"enabled": True, "deleted": deleted, "scanned": len(items), "reason": reason}
         except Exception as error:  # noqa: BLE001 - cleanup failure should not stop fresh collection.
             return {"enabled": True, "deleted": 0, "status": "error", "message": str(error)[:180]}
 
@@ -583,11 +734,12 @@ class NewsCollectionRunner:
         maintenance = self.due_evidence_cleanup()
         cleanup = dict(maintenance.get("stale") or {})
         feed_only_cleanup = dict(maintenance.get("feedOnlyRss") or {})
+        duplicate_cleanup = dict(maintenance.get("duplicates") or {})
         target_plan = self.target_plan()
         targets = list(target_plan.get("targets") or [])
         selection_metadata = {key: value for key, value in target_plan.items() if key != "targets"}
         if not targets:
-            return self.with_health({"status": "noTargets", "targetCount": 0, "fetchedCount": 0, "savedCount": 0, "staleDeletedCount": cleanup.get("deleted", 0), "staleCleanup": cleanup, "feedOnlyRssCleanup": feed_only_cleanup, "evidenceMaintenance": maintenance, "targetSelection": selection_metadata, "collectionRun": collection_run})
+            return self.with_health({"status": "noTargets", "targetCount": 0, "fetchedCount": 0, "savedCount": 0, "staleDeletedCount": cleanup.get("deleted", 0), "staleCleanup": cleanup, "feedOnlyRssCleanup": feed_only_cleanup, "duplicateNewsCleanup": duplicate_cleanup, "evidenceMaintenance": maintenance, "targetSelection": selection_metadata, "collectionRun": collection_run})
         collected: List[ResearchEvidence] = []
         governed_for_persistence: List[ResearchEvidence] = []
         stale_items: List[ResearchEvidence] = []
@@ -717,6 +869,7 @@ class NewsCollectionRunner:
                 "staleDeletedCount": cleanup.get("deleted", 0),
                 "staleCleanup": cleanup,
                 "feedOnlyRssCleanup": feed_only_cleanup,
+                "duplicateNewsCleanup": duplicate_cleanup,
                 "evidenceMaintenance": maintenance,
                 "changedSymbols": symbols,
                 "materialChangedCount": len(material_items),

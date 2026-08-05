@@ -543,6 +543,7 @@ class OntologyReasoningMailboxTests(unittest.TestCase):
         request = realtime_request("yield", ["AAPL"], "2026-07-24T00:00:00Z")
         runner = self.build_runner(
             [request],
+            settings={"ontologyAboxMaintenanceYieldEnabled": "1"},
             maintenance_yield_probe=lambda: {
                 "maintenanceYieldRequest": {
                     "requestedAt": "2026-07-24T00:05:00Z",

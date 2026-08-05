@@ -224,6 +224,7 @@ class OntologyMaintenanceRunnerTests(unittest.TestCase):
             FakeOntologyRepository(),
             state_store=store,
             settings={
+                "ontologyAboxMaintenanceYieldEnabled": "1",
                 "ontologyAboxMaintenanceYieldAfterSeconds": "30",
                 "ontologyAboxMaintenanceYieldWindowSeconds": "30",
                 "ontologyAboxMaintenanceYieldRequestTtlSeconds": "90",
@@ -259,6 +260,7 @@ class OntologyMaintenanceRunnerTests(unittest.TestCase):
         runner = OntologyMaintenanceRunner(
             FakeOntologyRepository(),
             state_store=store,
+            settings={"ontologyAboxMaintenanceYieldEnabled": "1"},
             reasoning_queue_probe=lambda: {"effectivePendingCount": 0, "runningEntryCount": 0},
         )
 
@@ -295,6 +297,7 @@ class OntologyMaintenanceRunnerTests(unittest.TestCase):
         runner = OntologyMaintenanceRunner(
             PendingActivationRepository(),
             state_store=store,
+            settings={"ontologyAboxMaintenanceYieldEnabled": "1"},
             reasoning_queue_probe=lambda: {"effectivePendingCount": 0, "runningEntryCount": 0},
         )
 

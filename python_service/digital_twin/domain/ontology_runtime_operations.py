@@ -336,7 +336,10 @@ def scoped_abox_maintenance_yield_policy(
     """
 
     configured = settings or {}
-    enabled = _text(configured.get("ontologyAboxMaintenanceYieldEnabled") or "1").lower()
+    # Retention is normally an idle-time concern. Yielding a live investment
+    # batch for it is an explicit operational opt-in; capacity protection has
+    # its own urgent path and must not depend on this hand-off.
+    enabled = _text(configured.get("ontologyAboxMaintenanceYieldEnabled") or "0").lower()
     priority_count = _integer(_setting_number(
         configured,
         "ontologyAboxMaintenancePriorityInactiveManifestCount",

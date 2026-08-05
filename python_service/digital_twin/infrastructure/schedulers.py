@@ -1204,7 +1204,9 @@ class OntologyRuleboxPrewarmScheduler:
                     recovery = dict(candidate or {}) if isinstance(candidate, dict) else {}
                 except Exception:
                     recovery = {}
-            if bool(recovery.get("canRecover")):
+            if bool(recovery.get("canRecover")) and not bool(
+                recovery.get("directTypeqlFallbackEnabled")
+            ):
                 # The runner will take the TypeDB projection coordinator before
                 # compiling. A racing reasoning worker therefore receives a
                 # cheap coordinator deferral rather than concurrent native

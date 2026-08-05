@@ -678,7 +678,17 @@ class OntologyRuleboxPrewarmRunner:
         pending = self.pending_reasoning_count(queue)
         recovery = self.backlog_recovery_state(queue)
         bootstrap = self.cold_bootstrap_state(queue)
-        recovery_granted = bool(recovery.get("canRecover")) and not force
+        recovery_granted = (
+            bool(recovery.get("canRecover"))
+            and not force
+            # Direct TypeQL is the live compatibility path. Do not turn an
+            # aged queue into a schema compilation window: the compiler can
+            # hold TypeDB for minutes and halt all investment delivery.
+            and not (
+                bool(recovery.get("directTypeqlFallbackEnabled"))
+                and not self.require_ready_for_inference()
+            )
+        )
         bootstrap_granted = bool(bootstrap.get("canBootstrap")) and not force
         compiler_turn_granted = recovery_granted or bootstrap_granted
         # A TypeDB schema commit can keep its compiler busy after a client has

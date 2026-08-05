@@ -5472,11 +5472,7 @@ class OntologyReasoningRunner:
             and bool(prewarm_activity.get("active"))
             and prewarm_activity_status == "cooldown"
         )
-        if bool(prewarm_activity.get("active")) and (
-            prewarm_required or (
-                prewarm_recovery_probe and not recovery_cooldown_fallback
-            )
-        ):
+        if bool(prewarm_activity.get("active")) and prewarm_required:
             retry_after = int(
                 prewarm_activity.get("retryAfterSeconds")
                 or self.rulebox_prewarm_retry_seconds()
@@ -5535,7 +5531,14 @@ class OntologyReasoningRunner:
                 # The read-only fallback remains available during that window;
                 # otherwise an already-aged mailbox would be blocked twice.
                 queue_metadata["ruleboxPrewarmRecoveryCooldownFallback"] = True
-        if recovery_cooldown_fallback:
+        if direct_fallback_enabled:
+            # A schema compilation is a background optimisation. When the
+            # compatibility path is explicitly enabled, live TypeQL inference
+            # must keep draining the mailbox even while a compiler attempt is
+            # active or its receipt is unavailable. The compiler scheduler
+            # waits for a true idle window before trying again.
+            prewarm_recovery_probe = False
+        elif recovery_cooldown_fallback:
             prewarm_recovery_probe = False
         rulebox_prewarm = self.rulebox_prewarm_readiness(
             probe_when_fallback=prewarm_recovery_probe,

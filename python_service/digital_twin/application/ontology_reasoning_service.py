@@ -4491,6 +4491,23 @@ class OntologyReasoningRunner:
             "activeAboxReadMs": int(float_value(stages.get("activeAboxReadMs"), 0.0)),
             "projectionAuditCreateMs": int(float_value(stages.get("projectionAuditCreateMs"), 0.0)),
             "aboxChangedScopeQueryCount": int(float_value(stages.get("aboxChangedScopeQueryCount"), 0.0)),
+            "aboxPlannedRelationQueryCount": int(float_value(
+                stages.get("aboxPlannedRelationQueryCount"),
+                0.0,
+            )),
+            "aboxRelationGivenBatchCount": int(float_value(
+                stages.get("aboxRelationGivenBatchCount"),
+                0.0,
+            )),
+            "aboxRelationGivenRowCount": int(float_value(
+                stages.get("aboxRelationGivenRowCount"),
+                0.0,
+            )),
+            "aboxRelationGivenFallbackCount": int(float_value(
+                stages.get("aboxRelationGivenFallbackCount"),
+                0.0,
+            )),
+            "aboxRelationWriteMode": str(stages.get("aboxRelationWriteMode") or ""),
             "aboxChangedScopeTransactionCount": int(float_value(stages.get("aboxChangedScopeTransactionCount"), 0.0)),
             "aboxChangedScopeTransactionQueryCount": int(float_value(stages.get("aboxChangedScopeTransactionQueryCount"), 0.0)),
             "aboxManifestVerificationReadCount": int(float_value(
@@ -5235,6 +5252,9 @@ class OntologyReasoningRunner:
                     "inferenceCommitProofMs", "inferenceDurableReadbackMs", "inferenceDetailOutboxQueueMs",
                     "ruleboxBootstrapMs", "pendingAboxActivationRecoveryMs", "scopedAboxIdentityMs",
                     "activeAboxReadMs", "projectionAuditCreateMs", "aboxChangedScopeQueryCount",
+                    "aboxPlannedRelationQueryCount", "aboxRelationGivenBatchCount",
+                    "aboxRelationGivenRowCount", "aboxRelationGivenFallbackCount",
+                    "aboxRelationWriteMode",
                     "aboxChangedScopeTransactionCount", "aboxChangedScopeTransactionQueryCount",
                     "aboxManifestVerificationReadCount",
                     "aboxReusedPhysicalRowCount", "aboxInsertedNodeCount", "aboxInsertedRelationCount",

@@ -4404,6 +4404,9 @@ class PortfolioOntologyProjectionRecorder:
                 "relationGivenFallbackCount": "aboxRelationGivenFallbackCount",
             }.items():
                 record(source_key, target_key, write_plan)
+            relation_write_mode = str(write_plan.get("relationWriteMode") or "").strip()
+            if relation_write_mode:
+                runtime_stages["aboxRelationWriteMode"] = relation_write_mode
         physical_verification = timing.get("changedScopeStorageIdentityVerification")
         if isinstance(physical_verification, dict):
             for source_key, target_key in {

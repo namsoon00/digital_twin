@@ -340,11 +340,16 @@ class TypeDBOntologyRepositoryTests(unittest.TestCase):
                             "totalQueryMs": 35.4,
                             "slowestQueryMs": 22.6,
                             "queryCount": 3,
+                            "plannedRelationQueryCount": 8,
                             "transactionCount": 1,
                             "insertedNodeCount": 4,
                             "insertedRelationCount": 5,
                             "reusedNodeCount": 6,
                             "reusedRelationCount": 7,
+                            "relationWriteMode": "given-rows",
+                            "relationGivenBatchCount": 2,
+                            "relationGivenRowCount": 5,
+                            "relationGivenFallbackCount": 0,
                         },
                     },
                 },
@@ -355,6 +360,11 @@ class TypeDBOntologyRepositoryTests(unittest.TestCase):
         self.assertEqual(46, stages["aboxChangedScopeWriteMs"])
         self.assertEqual(3, stages["aboxManifestControlWriteMs"])
         self.assertEqual(35, stages["aboxChangedScopeQueryMs"])
+        self.assertEqual(8, stages["aboxPlannedRelationQueryCount"])
+        self.assertEqual("given-rows", stages["aboxRelationWriteMode"])
+        self.assertEqual(2, stages["aboxRelationGivenBatchCount"])
+        self.assertEqual(5, stages["aboxRelationGivenRowCount"])
+        self.assertEqual(0, stages["aboxRelationGivenFallbackCount"])
         self.assertEqual(7, stages["aboxReusedRelationCount"])
         self.assertEqual(2, stages["aboxManifestVerificationReadCount"])
         self.assertEqual(11, stages["aboxReusedPhysicalRowCount"])

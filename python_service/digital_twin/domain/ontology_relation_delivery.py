@@ -185,6 +185,7 @@ def relation_delivery_components(
     context = _mapping(notification_context)
     decision = _mapping(relation.get("decision"))
     action_envelope = _mapping(relation.get("actionEnvelope")) or _mapping(decision.get("actionEnvelope"))
+    execution_plan = _mapping(relation.get("executionPlan"))
     state = _mapping(relation.get("decisionState"))
     if not state:
         state = {
@@ -225,7 +226,10 @@ def relation_delivery_components(
             "decisionStage": _normalized(_first(decision, "decisionStage", "decision_stage")),
             "actionGroup": _normalized(_first(decision, "actionGroup", "action_group")),
             "actionPolicy": _normalized(_first(decision, "actionPolicy", "action_policy")),
-            "primaryAction": _normalized(_first(_mapping(relation.get("executionPlan")), "primaryAction", "action")),
+            "primaryAction": _normalized(
+                _first(decision, "primaryAction", "primary_action")
+                or _first(execution_plan, "primaryAction", "action")
+            ),
             "candidateAction": _normalized(_first(decision, "candidateAction", "candidate_action")),
             "decisionEffect": _normalized(_first(decision, "decisionEffect", "decision_effect")),
         },
@@ -259,13 +263,26 @@ def _initial_relation_is_material(components: Mapping[str, object]) -> bool:
     decision = _mapping(components.get("decision"))
     envelope = _mapping(components.get("actionEnvelope"))
     state = _mapping(components.get("state"))
-    action = _first(envelope, "preferredAction") or _first(decision, "candidateAction", "primaryAction")
     effect = _first(envelope, "selectedDecisionEffect") or _first(decision, "decisionEffect")
     review_level = _first(state, "reviewLevel")
+    # The envelope can conservatively retain HOLD while a selected rule still
+    # raises a concrete risk action such as TRIM_REVIEW.  Inspect every action
+    # field instead of letting that HOLD mask the risk on its first occurrence.
+    actions = {
+        _normalized(value).replace("_", "-")
+        for value in (
+            envelope.get("preferredAction"),
+            decision.get("candidateAction"),
+            decision.get("primaryAction"),
+        )
+        if _text(value)
+    }
+    actionable_actions = {"buy", "add", "trim", "sell"}
+    actionable_reviews = {"trim-review", "sell-review", "exit-review"}
     return bool(
-        action in {"buy", "add", "trim", "sell"}
-        or effect == "block"
-        or review_level in {"act", "action", "urgent", "immediate", "blocked"}
+        actions.intersection(actionable_actions | actionable_reviews)
+        or _normalized(effect) == "block"
+        or _normalized(review_level) in {"act", "action", "urgent", "immediate", "blocked"}
         or components.get("materialSourceEventKeys")
     )
 
@@ -412,6 +429,40 @@ def relation_delivery_diff(
     if current.get("fingerprint") == previous.get("fingerprint"):
         current_components = current.get("components") or {}
         previous_components = previous.get("components") or {}
+        previous_context = _mapping(previous_relation_context)
+        previous_notification = _mapping(previous_notification_context)
+        previous_suppression = _text(
+            previous_context.get("deliverySuppressionReason")
+            or previous_notification.get("deliverySuppressionReason")
+        )
+        # A previous release could store a genuine trim/sell review as an
+        # initial HOLD baseline because it ignored the decision's primary
+        # action. Replay that one state transition once, without treating
+        # routine graph rebuilds as new alerts.
+        if (
+            previous_suppression == "initial_graph_baseline"
+            and _initial_relation_is_material(current_components)
+        ):
+            transition = _decision_transition(current_components, previous_components)
+            transition.update({
+                "kind": "policy-reclassified",
+                "material": True,
+                "summary": "기존 기준선이 실행 검토가 필요한 관계 상태로 다시 분류됐습니다.",
+            })
+            return {
+                "changed": True,
+                "material": True,
+                "changeClass": "material",
+                "reason": "A previously suppressed initial baseline now contains an actionable graph decision.",
+                "currentFingerprint": current.get("fingerprint"),
+                "previousFingerprint": previous.get("fingerprint"),
+                "changedComponents": ["delivery-policy"],
+                "materialComponents": ["delivery-policy"],
+                "contextComponents": [],
+                "addedEvidenceKeys": [],
+                "removedEvidenceKeys": [],
+                "decisionTransition": transition,
+            }
         context_components = [
             key
             for key in ["traces", "inferenceEvidenceKeys"]

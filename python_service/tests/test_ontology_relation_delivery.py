@@ -294,6 +294,54 @@ class OntologyRelationDeliveryTests(unittest.TestCase):
         self.assertEqual("initial", diff["decisionTransition"]["kind"])
         self.assertFalse(diff["decisionTransition"]["material"])
 
+    def test_initial_trim_review_is_material_when_envelope_remains_hold(self):
+        context = self.context(event_key="")
+        context["ontologyRelationContext"]["decision"].update({
+            "candidateAction": "HOLD",
+            "primaryAction": "TRIM_REVIEW",
+        })
+        context["ontologyRelationContext"]["decisionState"]["reviewLevel"] = "check"
+        context["ontologyRelationContext"]["actionEnvelope"] = {
+            "status": "ENTRY_OBSERVING",
+            "preferredAction": "HOLD",
+            "selectedDecisionEffect": "defer",
+            "dataReadiness": {"state": "partial", "dataState": "partial"},
+        }
+        context["ontologyInsight"]["semanticComponents"] = {"materialSourceEventKeys": []}
+
+        diff = ontology_relation_delivery_diff(context, {})
+
+        self.assertTrue(diff["material"])
+        self.assertEqual("material", diff["changeClass"])
+        self.assertTrue(diff["decisionTransition"]["material"])
+
+        prior_baseline = dict(context)
+        prior_baseline["deliverySuppressionReason"] = "initial_graph_baseline"
+        replay = ontology_relation_delivery_diff(context, prior_baseline)
+
+        self.assertTrue(replay["material"])
+        self.assertEqual("policy-reclassified", replay["decisionTransition"]["kind"])
+
+    def test_initial_uppercase_direct_action_is_material(self):
+        context = self.context(event_key="")
+        context["ontologyRelationContext"]["decision"].update({
+            "candidateAction": "TRIM",
+            "primaryAction": "TRIM_REVIEW",
+        })
+        context["ontologyRelationContext"]["decisionState"]["reviewLevel"] = "observe"
+        context["ontologyRelationContext"]["actionEnvelope"] = {
+            "status": "ENTRY_DEFERRED",
+            "preferredAction": "HOLD",
+            "selectedDecisionEffect": "defer",
+            "dataReadiness": {"state": "partial", "dataState": "partial"},
+        }
+        context["ontologyInsight"]["semanticComponents"] = {"materialSourceEventKeys": []}
+
+        diff = ontology_relation_delivery_diff(context, {})
+
+        self.assertTrue(diff["material"])
+        self.assertTrue(diff["decisionTransition"]["material"])
+
     def test_initial_hold_with_a_material_source_event_remains_deliverable(self):
         context = self.context(event_key="main:news:005930:article-9")
         context["ontologyRelationContext"]["decisionState"]["reviewLevel"] = "observe"

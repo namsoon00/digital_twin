@@ -280,13 +280,12 @@ class OntologyRuleboxPrewarmRunner:
         age_threshold = self.backlog_recovery_age_seconds()
         direct_fallback_enabled = self.direct_typeql_fallback_enabled()
         strict_readiness = self.require_ready_for_inference()
-        # A normal production deployment now requires verified functions even
-        # if the legacy fallback flag remains configured. Keep the old
-        # fallback-only behavior available only when the explicit readiness
-        # gate has been disabled.
-        enabled = self.backlog_recovery_enabled() and (
-            strict_readiness or not direct_fallback_enabled
-        )
+        # Direct TypeQL is useful for a fresh event while generated functions
+        # are cold. It must not, however, permanently starve the compiler when
+        # repeated bounded reads cannot drain an aged mailbox. The recovery
+        # turn remains guarded by the durable queue age and by the absence of
+        # an active inference lease below.
+        enabled = self.backlog_recovery_enabled()
         active = self.active_reasoning_count(payload)
         eligible = bool(
             enabled
@@ -732,6 +731,7 @@ class OntologyRuleboxPrewarmRunner:
             }
         if (
             not force
+            and not compiler_turn_granted
             and not self.require_ready_for_inference()
             and self.direct_typeql_fallback_enabled()
         ):

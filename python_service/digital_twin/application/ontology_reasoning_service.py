@@ -5451,10 +5451,11 @@ class OntologyReasoningRunner:
         # investment judgement so a TypeDB restart cannot change the rule
         # execution shape beneath an alert. Compatibility deployments that
         # explicitly disable the gate retain the bounded direct-TypeQL path.
-        prewarm_recovery_probe = bool(
-            prewarm_recovery.get("eligible")
-            and prewarm_required
-        )
+        # Compatibility deployments normally keep direct TypeQL available
+        # while functions are cold. Once that path has left an aged backlog,
+        # it must yield to the dedicated compiler just like a strict receipt
+        # gate; otherwise the compiler can never acquire an idle turn.
+        prewarm_recovery_probe = bool(prewarm_recovery.get("eligible"))
         prewarm_activity = (
             self.rulebox_prewarm_activity_state()
             if (
@@ -5464,7 +5465,9 @@ class OntologyReasoningRunner:
             )
             else {}
         )
-        if bool(prewarm_activity.get("active")) and prewarm_required:
+        if bool(prewarm_activity.get("active")) and (
+            prewarm_required or prewarm_recovery_probe
+        ):
             retry_after = int(
                 prewarm_activity.get("retryAfterSeconds")
                 or self.rulebox_prewarm_retry_seconds()

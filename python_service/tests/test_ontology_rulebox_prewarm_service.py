@@ -255,7 +255,7 @@ class OntologyRuleboxPrewarmRunnerTests(unittest.TestCase):
         self.assertTrue(result["backlogRecoveryGranted"])
         self.assertEqual("aged-backlog-no-active-inference-lease", result["recoveryMode"])
 
-    def test_aged_retrying_queue_keeps_compiler_idle_when_direct_typeql_fallback_is_available(self):
+    def test_aged_retrying_queue_prioritizes_compiler_recovery_over_direct_typeql(self):
         repository = FakeRepository({
             "status": "provisioning",
             "functionsReady": False,
@@ -282,10 +282,12 @@ class OntologyRuleboxPrewarmRunnerTests(unittest.TestCase):
 
         result = runner.run_once()
 
-        self.assertEqual("deferred-reasoning-pending", result["status"])
-        self.assertFalse(result["backlogRecovery"]["eligible"])
+        self.assertEqual("provisioning", result["status"])
+        self.assertTrue(result["backlogRecovery"]["eligible"])
+        self.assertTrue(result["backlogRecovery"]["canRecover"])
+        self.assertTrue(result["backlogRecoveryGranted"])
         self.assertTrue(result["backlogRecovery"]["directTypeqlFallbackEnabled"])
-        self.assertEqual([], repository.calls)
+        self.assertEqual([False], repository.calls)
 
     def test_strict_cold_queue_bootstraps_before_the_mailbox_becomes_empty(self):
         repository = FakeRepository({

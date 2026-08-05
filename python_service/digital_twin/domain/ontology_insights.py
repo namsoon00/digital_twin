@@ -524,6 +524,39 @@ def promoted_ontology_context(events: List[AlertEvent]) -> Dict[str, object]:
         values = [event.metadata.get(key) for event in events if isinstance(event.metadata, dict) and event.metadata.get(key)]
         if not values:
             continue
+        if key == "ontologyRelationContext":
+            relation_events = [
+                event
+                for event in events
+                if isinstance(event.metadata, dict)
+                and isinstance(event.metadata.get(key), dict)
+                and event.metadata.get(key)
+            ]
+            if relation_events:
+                # Consumers use this field as the current subject's concrete
+                # TypeDB proof. Keep it singular even when several source
+                # signals are combined into one investment insight.
+                def relation_priority(event: AlertEvent) -> Tuple[int, int, int, int]:
+                    state = event_decision_state(event)
+                    relation = event_relation_context(event)
+                    review_level = str(state.get("reviewLevel") or "observe")
+                    change_state = str(state.get("changeState") or "unchanged")
+                    data_state = str(state.get("dataState") or "partial")
+                    return (
+                        1 if is_graph_backed_relation_context(relation) else 0,
+                        REVIEW_LEVEL_ORDER.index(review_level) if review_level in REVIEW_LEVEL_ORDER else -1,
+                        CHANGE_STATE_ORDER.index(change_state) if change_state in CHANGE_STATE_ORDER else -1,
+                        -DATA_STATE_ORDER.index(data_state) if data_state in DATA_STATE_ORDER else -1,
+                    )
+
+                selected_event = max(relation_events, key=relation_priority)
+                relation_contexts = [dict(event_relation_context(event)) for event in relation_events]
+                promoted[key] = dict(event_relation_context(selected_event))
+                if len(relation_contexts) > 1:
+                    # Preserve the supporting contexts for diagnosis without
+                    # breaking the single-relation context contract.
+                    promoted["ontologyRelationContexts"] = relation_contexts
+                continue
         promoted[key] = values[0] if len(values) == 1 else values
     return promoted
 

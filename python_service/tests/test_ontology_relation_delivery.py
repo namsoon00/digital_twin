@@ -6,7 +6,11 @@ from digital_twin.domain.notification_rule_evaluator import (
     ontology_relation_delivery_diff,
     ontology_relation_delivery_metadata,
 )
+from digital_twin.domain.notification_rules import default_notification_rule, evaluate_notification_rule
+from digital_twin.domain.notification_templates import alert_context
 from digital_twin.domain.notifications import NotificationJob
+from digital_twin.domain.ontology_insights import build_investment_insight_events
+from digital_twin.domain.portfolio import AccountSnapshot, AlertEvent, PortfolioSummary
 
 
 class OntologyRelationDeliveryTests(unittest.TestCase):
@@ -63,6 +67,80 @@ class OntologyRelationDeliveryTests(unittest.TestCase):
             message_type="investmentInsight",
             context=context,
         )
+
+    def test_combined_insight_keeps_one_graph_context_for_notification_delivery(self):
+        snapshot = AccountSnapshot(
+            "main",
+            "메인",
+            "toss",
+            "live",
+            "ok",
+            "2026-08-05T03:00:00Z",
+            PortfolioSummary(0, 0, 0, [], [], 0),
+        )
+        lower_priority = self.context()["ontologyRelationContext"]
+        lower_priority["decision"].update({"reviewLevel": "observe", "changeState": "unchanged"})
+        lower_priority.update({"reviewLevel": "observe", "changeState": "unchanged", "dataState": "sufficient"})
+        lower_priority["decisionState"] = {
+            "reviewLevel": "observe",
+            "dataState": "sufficient",
+            "changeState": "unchanged",
+            "conflictState": "context-only",
+        }
+        higher_priority = self.context()["ontologyRelationContext"]
+        higher_priority["decision"].update({
+            "selectedRuleId": "graph.watchlist.entry.confirmed.v1",
+            "reviewLevel": "check",
+            "changeState": "new-condition",
+        })
+        higher_priority["activeRules"][0]["ruleId"] = "graph.watchlist.entry.confirmed.v1"
+        higher_priority.update({"reviewLevel": "check", "changeState": "new-condition", "dataState": "sufficient"})
+        higher_priority["decisionState"] = {
+            "reviewLevel": "check",
+            "dataState": "sufficient",
+            "changeState": "new-condition",
+            "conflictState": "context-only",
+        }
+        events = [
+            AlertEvent(
+                "main",
+                "메인",
+                "WATCH",
+                "watchlistOntologySignal",
+                "main:watch:005930:trend",
+                "삼성전자",
+                ["추세 확인"],
+                "005930",
+                metadata={"ontologyRelationContext": lower_priority, "watchlistOntologySignalType": "trendReview"},
+            ),
+            AlertEvent(
+                "main",
+                "메인",
+                "WATCH",
+                "watchlistOntologySignal",
+                "main:watch:005930:entry",
+                "삼성전자",
+                ["진입 조건 확인"],
+                "005930",
+                metadata={"ontologyRelationContext": higher_priority, "watchlistOntologySignalType": "entryCandidate"},
+            ),
+        ]
+
+        insight = build_investment_insight_events(snapshot, events)[0]
+        metadata = insight.metadata
+        relation_context = metadata["ontologyRelationContext"]
+
+        self.assertIsInstance(relation_context, dict)
+        self.assertEqual("graph.watchlist.entry.confirmed.v1", relation_context["decision"]["selectedRuleId"])
+        self.assertEqual(2, len(metadata["ontologyRelationContexts"]))
+
+        context = alert_context(insight)
+        decision = evaluate_notification_rule(
+            self.job(context),
+            default_notification_rule("investmentInsight"),
+        )
+        self.assertTrue(decision.should_send)
+        self.assertNotEqual("missing_graph_inference", decision.suppression_reason)
 
     def test_price_only_change_keeps_relation_delivery_fingerprint_and_cooldown_group(self):
         before = self.context(current_price=70000)

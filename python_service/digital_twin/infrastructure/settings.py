@@ -1387,13 +1387,18 @@ def runtime_settings(fast_operational_read: bool = False) -> Dict[str, str]:
         "ontologyAboxMaintenanceIntervalSeconds": value("ontologyAboxMaintenanceIntervalSeconds", "ONTOLOGY_ABOX_MAINTENANCE_INTERVAL_SECONDS", "60"),
         "ontologyAboxMaintenanceWorldTypes": value("ontologyAboxMaintenanceWorldTypes", "ONTOLOGY_ABOX_MAINTENANCE_WORLD_TYPES", "portfolio,market,knowledge"),
         "ontologyAboxMaintenanceMaxManifestsPerRun": value("ontologyAboxMaintenanceMaxManifestsPerRun", "ONTOLOGY_ABOX_MAINTENANCE_MAX_MANIFESTS_PER_RUN", "8"),
-        "ontologyAboxMaintenanceMaxDeleteBatchesPerRun": value("ontologyAboxMaintenanceMaxDeleteBatchesPerRun", "ONTOLOGY_ABOX_MAINTENANCE_MAX_DELETE_BATCHES_PER_RUN", "2"),
-        "ontologyAboxMaintenanceDeleteBatchSize": value("ontologyAboxMaintenanceDeleteBatchSize", "ONTOLOGY_ABOX_MAINTENANCE_DELETE_BATCH_SIZE", "50"),
+        # One inactive scoped ABox generation typically holds several
+        # hundred rows. Two 50-row delete batches never finish one generation
+        # during a busy market, so retention falls behind permanently and
+        # broadens later TypeDB reads. Keep the turn bounded, but let it
+        # complete a normal generation inside the isolated maintenance window.
+        "ontologyAboxMaintenanceMaxDeleteBatchesPerRun": value("ontologyAboxMaintenanceMaxDeleteBatchesPerRun", "ONTOLOGY_ABOX_MAINTENANCE_MAX_DELETE_BATCHES_PER_RUN", "8"),
+        "ontologyAboxMaintenanceDeleteBatchSize": value("ontologyAboxMaintenanceDeleteBatchSize", "ONTOLOGY_ABOX_MAINTENANCE_DELETE_BATCH_SIZE", "150"),
         "ontologyAboxMaintenanceKeepInactiveManifestCount": value("ontologyAboxMaintenanceKeepInactiveManifestCount", "ONTOLOGY_ABOX_MAINTENANCE_KEEP_INACTIVE_MANIFEST_COUNT", "0"),
         "ontologyAboxMaintenanceWarningInactiveManifestCount": value("ontologyAboxMaintenanceWarningInactiveManifestCount", "ONTOLOGY_ABOX_MAINTENANCE_WARNING_INACTIVE_MANIFEST_COUNT", "40"),
         "ontologyAboxMaintenanceCriticalInactiveManifestCount": value("ontologyAboxMaintenanceCriticalInactiveManifestCount", "ONTOLOGY_ABOX_MAINTENANCE_CRITICAL_INACTIVE_MANIFEST_COUNT", "120"),
         "ontologyAboxMaintenanceAdaptiveDrainEnabled": value("ontologyAboxMaintenanceAdaptiveDrainEnabled", "ONTOLOGY_ABOX_MAINTENANCE_ADAPTIVE_DRAIN_ENABLED", "1"),
-        "ontologyAboxMaintenanceAdaptiveDrainMaxDeleteBatchesPerRun": value("ontologyAboxMaintenanceAdaptiveDrainMaxDeleteBatchesPerRun", "ONTOLOGY_ABOX_MAINTENANCE_ADAPTIVE_DRAIN_MAX_DELETE_BATCHES_PER_RUN", "4"),
+        "ontologyAboxMaintenanceAdaptiveDrainMaxDeleteBatchesPerRun": value("ontologyAboxMaintenanceAdaptiveDrainMaxDeleteBatchesPerRun", "ONTOLOGY_ABOX_MAINTENANCE_ADAPTIVE_DRAIN_MAX_DELETE_BATCHES_PER_RUN", "16"),
         "ontologyAboxMaintenanceAdaptiveDrainCriticalRunsBeforeIncrease": value("ontologyAboxMaintenanceAdaptiveDrainCriticalRunsBeforeIncrease", "ONTOLOGY_ABOX_MAINTENANCE_ADAPTIVE_DRAIN_CRITICAL_RUNS_BEFORE_INCREASE", "2"),
         "ontologyAboxMaintenanceProcessIsolationEnabled": value("ontologyAboxMaintenanceProcessIsolationEnabled", "ONTOLOGY_ABOX_MAINTENANCE_PROCESS_ISOLATION_ENABLED", "1"),
         "ontologyAboxMaintenanceExecutionTimeoutSeconds": value("ontologyAboxMaintenanceExecutionTimeoutSeconds", "ONTOLOGY_ABOX_MAINTENANCE_EXECUTION_TIMEOUT_SECONDS", "180"),

@@ -90,8 +90,8 @@ class OntologyMaintenanceRunnerTests(unittest.TestCase):
         self.assertEqual("market:shared:kr", first["worldId"])
         self.assertEqual("portfolio:local:main", second["worldId"])
         self.assertEqual(7, repository.calls[0]["maxInactiveManifests"])
-        self.assertEqual(2, repository.calls[0]["maxAboxDeleteBatches"])
-        self.assertEqual(50, repository.calls[0]["aboxDeleteBatchSize"])
+        self.assertEqual(8, repository.calls[0]["maxAboxDeleteBatches"])
+        self.assertEqual(150, repository.calls[0]["aboxDeleteBatchSize"])
         self.assertEqual(0, repository.calls[0]["keepInactiveManifests"])
         self.assertEqual(2, first["maintenance"]["removedManifestCount"])
         self.assertEqual("draining", first["maintenance"]["health"]["state"])
@@ -112,8 +112,8 @@ class OntologyMaintenanceRunnerTests(unittest.TestCase):
         self.assertTrue(status["enabled"])
         self.assertEqual(3, status["worldCount"])
         self.assertEqual(100, status["policy"]["criticalInactiveManifestCount"])
-        self.assertEqual(2, status["policy"]["maxDeleteBatchesPerRun"])
-        self.assertEqual(50, status["policy"]["deleteBatchSize"])
+        self.assertEqual(8, status["policy"]["maxDeleteBatchesPerRun"])
+        self.assertEqual(150, status["policy"]["deleteBatchSize"])
 
     def test_live_manifest_inventory_prioritizes_backlogged_world_and_replaces_stale_state(self):
         repository = ManifestInventoryRepository()

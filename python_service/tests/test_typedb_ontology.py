@@ -1770,7 +1770,7 @@ class TypeDBOntologyRepositoryTests(unittest.TestCase):
         self.assertEqual("ok", result["abox"]["status"])
         self.assertEqual("ok", result["inference"]["status"])
         prune_orphans.assert_not_called()
-        self.assertEqual(2, prune_abox.call_args.kwargs["max_delete_batches"])
+        self.assertEqual(8, prune_abox.call_args.kwargs["max_delete_batches"])
         self.assertEqual(25, prune_abox.call_args.kwargs["delete_batch_size"])
         self.assertEqual(20, prune_abox.call_args.kwargs["max_manifests"])
         prune_inference.assert_called_once_with("inference:active", keep_count=2)
@@ -5629,6 +5629,26 @@ class TypeDBOntologyRepositoryTests(unittest.TestCase):
         self.assertIn("isa ontology-relation-has-external-signal", query)
         self.assertIn("isa ontology-relation-has-observation", query)
         self.assertNotIn(" isa ontology-assertion", query)
+
+    def test_compacted_native_query_returns_one_row_per_proven_source(self):
+        rule = next(
+            item for item in default_graph_inference_rules()
+            if item.rule_id == "graph.news.direct_material_support.v1"
+        )
+
+        plan = typedb_native_match_query(
+            rule.to_dict(),
+            ["035420"],
+            compact_result_rows=True,
+        )
+
+        self.assertIn(
+            "reduce $nativeMatchCount = count groupby $sourceId, $sourceLabel;",
+            plan["query"],
+        )
+        self.assertEqual(["sourceId", "sourceLabel"], plan["columns"])
+        self.assertEqual([], plan["evidenceColumns"])
+        self.assertTrue(plan["resultRowsCompacted"])
 
     def test_typedb_native_function_call_limits_candidates_to_active_manifest(self):
         rule = next(item for item in default_graph_inference_rules() if item.rule_id == "graph.loss_guard.breakdown.v1")

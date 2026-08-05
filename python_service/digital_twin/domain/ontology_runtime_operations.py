@@ -247,7 +247,7 @@ def scoped_abox_maintenance_policy(settings: Mapping[str, object] = None) -> Dic
     max_delete_batches = _integer(_setting_number(
         configured,
         "ontologyAboxMaintenanceMaxDeleteBatchesPerRun",
-        2,
+        8,
         1,
         50,
     ))
@@ -274,7 +274,7 @@ def scoped_abox_maintenance_policy(settings: Mapping[str, object] = None) -> Dic
         "deleteBatchSize": _integer(_setting_number(
             configured,
             "ontologyAboxMaintenanceDeleteBatchSize",
-            50,
+            150,
             10,
             500,
         )),
@@ -309,7 +309,7 @@ def scoped_abox_maintenance_policy(settings: Mapping[str, object] = None) -> Dic
             _integer(_setting_number(
                 configured,
                 "ontologyAboxMaintenanceAdaptiveDrainMaxDeleteBatchesPerRun",
-                4,
+                16,
                 1,
                 50,
             )),

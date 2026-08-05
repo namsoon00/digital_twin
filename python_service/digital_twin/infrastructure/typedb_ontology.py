@@ -14375,6 +14375,13 @@ relation ontology-assertion,
             scoped_manifest_only=scoped_manifest_only,
             world_id=world_id,
             evidence_read_index=evidence_read_index,
+            # A native rule decides only whether a source matches. When the
+            # optional detailed-evidence path is off, returning every
+            # relation combination makes the driver deserialize a potentially
+            # unbounded Cartesian result that is discarded by the merge step.
+            # TypeDB still evaluates the full predicate; the reducer only
+            # returns one proven result row per source.
+            compact_result_rows=not self.condition_detail_queries_enabled(),
         )
         uses_schema_function = bool(query_plan.get("schemaFunctionQuery"))
         uses_indexed_evidence_query = bool(query_plan.get("indexedEvidenceQuery"))
@@ -14510,6 +14517,7 @@ relation ontology-assertion,
                         )),
                         "schemaFunctionQueryUsed": uses_schema_function,
                         "indexedEvidenceQueryUsed": uses_indexed_evidence_query,
+                        "resultRowsCompacted": bool(query_plan.get("resultRowsCompacted")),
                         "rowCount": len(rows),
                         "candidateSymbols": candidate_symbols,
                         **target_work_metadata,
@@ -15152,6 +15160,7 @@ relation ontology-assertion,
                                 scoped_manifest_only=scoped_manifest_only,
                                 world_id=world_id,
                                 evidence_read_index=evidence_read_index,
+                                compact_result_rows=not self.condition_detail_queries_enabled(),
                             )
                             uses_schema_function = bool(query_plan.get("schemaFunctionQuery"))
                             uses_indexed_evidence_query = bool(query_plan.get("indexedEvidenceQuery"))
@@ -21099,6 +21108,7 @@ def typedb_native_match_query(
     active_source_storage_ids: Iterable[str] = None,
     active_relation_storage_ids_by_type: Dict[str, Iterable[str]] = None,
     active_relation_storage_ids_by_condition: Dict[str, Iterable[str]] = None,
+    compact_result_rows: bool = False,
 ) -> Dict[str, object]:
     """Compile one RuleBox rule into a bounded TypeQL read pipeline.
 
@@ -21262,6 +21272,7 @@ def typedb_native_match_query(
         if pattern.get("relationIdColumn"):
             condition_evidence_columns[condition_id] = str(pattern.get("relationIdColumn"))
     query = "match " + " ".join(clauses)
+    result_rows_compacted = False
     if any_conditions and include_any_conditions:
         # An N-of-M group is evidence-based, not condition-row-based. Two
         # aliases of one raw observation must contribute one confirmation.
@@ -21339,6 +21350,19 @@ def typedb_native_match_query(
         # evidence is collected only by the opt-in condition-detail path.
         evidence_columns = []
         condition_evidence_columns = {}
+        result_rows_compacted = True
+    elif compact_result_rows:
+        # The calling pipeline only needs one boolean result per source. A
+        # raw TypeQL match otherwise returns every intermediate relation and
+        # target binding, even though the Python merge immediately collapses
+        # them by ``ruleId|sourceId``. Grouping inside TypeDB preserves the
+        # existential rule semantics and prevents that discarded result set
+        # from dominating gRPC decode time.
+        query += " reduce $nativeMatchCount = count groupby $sourceId, $sourceLabel;"
+        columns = ["sourceId", "sourceLabel"]
+        evidence_columns = []
+        condition_evidence_columns = {}
+        result_rows_compacted = True
     return {
         "ruleId": rule_id,
         "nativeRuleId": typedb_native_rule_id(rule_id),
@@ -21346,6 +21370,7 @@ def typedb_native_match_query(
         "columns": columns,
         "evidenceColumns": evidence_columns,
         "conditionEvidenceColumns": condition_evidence_columns,
+        "resultRowsCompacted": result_rows_compacted,
     }
 
 
@@ -21936,6 +21961,7 @@ def typedb_native_indexed_evidence_match_query(
     target_symbols: Iterable[str] = None,
     evidence_read_index: Dict[str, object] = None,
     world_id: str = "",
+    compact_result_rows: bool = False,
 ) -> Dict[str, object]:
     """Build a TypeDB-native RuleBox predicate anchored by Manifest rows.
 
@@ -22081,6 +22107,7 @@ def typedb_native_indexed_evidence_match_query(
         active_source_storage_ids=source_storage_ids,
         active_relation_storage_ids_by_type=relation_storage_ids_by_type,
         active_relation_storage_ids_by_condition=relation_storage_ids_by_condition,
+        compact_result_rows=compact_result_rows,
     )
     if not plan.get("query"):
         return {
@@ -22111,6 +22138,7 @@ def typedb_native_rule_runtime_query_plan(
     scoped_manifest_only: bool = False,
     world_id: str = "",
     evidence_read_index: Dict[str, object] = None,
+    compact_result_rows: bool = False,
 ) -> Dict[str, object]:
     """Choose a TypeDB-owned predicate surface without Python evaluation."""
     indexed_plan = typedb_native_indexed_evidence_match_query(
@@ -22118,6 +22146,7 @@ def typedb_native_rule_runtime_query_plan(
         target_symbols,
         evidence_read_index,
         world_id,
+        compact_result_rows,
     )
     if str(indexed_plan.get("status") or "") == "ok":
         return indexed_plan
@@ -22136,6 +22165,7 @@ def typedb_native_rule_runtime_query_plan(
             scoped_manifest_only=scoped_manifest_only,
             include_any_conditions=False,
             world_id=world_id,
+            compact_result_rows=compact_result_rows,
         ),
         "schemaFunctionQuery": False,
         "indexedEvidenceQuery": False,

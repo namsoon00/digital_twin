@@ -766,6 +766,37 @@ class OntologyReasoningMailboxTests(unittest.TestCase):
         self.assertTrue(result["ruleboxPrewarmFallbackDuringCompilerActivity"])
         self.assertEqual("cooldown", result["ruleboxPrewarmActivity"]["status"])
 
+    def test_aged_queue_uses_direct_typeql_during_failed_compiler_cooldown(self):
+        now = datetime(2026, 7, 24, 0, 5, tzinfo=timezone.utc)
+        events = [
+            realtime_request("prewarm-cooldown-a", ["AAPL"], "2026-07-24T00:00:00Z"),
+            realtime_request("prewarm-cooldown-b", ["MSFT"], "2026-07-24T00:00:00Z"),
+        ]
+        runner = self.build_runner(
+            events,
+            now=lambda: now,
+            settings={
+                "ontologyRuleboxPrewarmEnabled": "1",
+                "ontologyRuleboxPrewarmBacklogRecoveryEnabled": "1",
+                "ontologyRuleboxPrewarmBacklogRecoveryAgeSeconds": "90",
+                "ontologyRuleboxPrewarmBacklogRecoveryMinPendingEntries": "2",
+                "ontologyRuleboxPrewarmRequireReadyForInference": "0",
+                "typedbNativeRuleDirectQueryFallbackEnabled": "1",
+            },
+            activity_probe=lambda: {
+                "status": "cooldown",
+                "active": True,
+                "expiresAtEpoch": now.timestamp() + 120,
+            },
+        )
+
+        result = runner.run_once()
+
+        self.assertEqual("ok", result["status"])
+        self.assertEqual([["AAPL"]], self.monitor.calls)
+        self.assertTrue(result["ruleboxPrewarmRecovery"]["eligible"])
+        self.assertTrue(result["ruleboxPrewarmRecoveryCooldownFallback"])
+
     def test_aged_queue_checks_compiler_recovery_before_retrying_direct_typeql(self):
         events = [
             realtime_request("prewarm-recovery-error-a", ["AAPL"], "2026-07-24T00:00:00Z"),

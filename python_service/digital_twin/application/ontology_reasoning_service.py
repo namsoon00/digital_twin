@@ -5465,8 +5465,17 @@ class OntologyReasoningRunner:
             )
             else {}
         )
+        prewarm_activity_status = str(prewarm_activity.get("status") or "").strip().lower()
+        recovery_cooldown_fallback = bool(
+            prewarm_recovery_probe
+            and direct_fallback_enabled
+            and bool(prewarm_activity.get("active"))
+            and prewarm_activity_status == "cooldown"
+        )
         if bool(prewarm_activity.get("active")) and (
-            prewarm_required or prewarm_recovery_probe
+            prewarm_required or (
+                prewarm_recovery_probe and not recovery_cooldown_fallback
+            )
         ):
             retry_after = int(
                 prewarm_activity.get("retryAfterSeconds")
@@ -5520,6 +5529,14 @@ class OntologyReasoningRunner:
             # background compiler cooldown into a full notification outage.
             queue_metadata["ruleboxPrewarmActivity"] = dict(prewarm_activity)
             queue_metadata["ruleboxPrewarmFallbackDuringCompilerActivity"] = True
+            if recovery_cooldown_fallback:
+                # A failed compiler records a bounded cooldown so another
+                # schema writer does not immediately contend with TypeDB.
+                # The read-only fallback remains available during that window;
+                # otherwise an already-aged mailbox would be blocked twice.
+                queue_metadata["ruleboxPrewarmRecoveryCooldownFallback"] = True
+        if recovery_cooldown_fallback:
+            prewarm_recovery_probe = False
         rulebox_prewarm = self.rulebox_prewarm_readiness(
             probe_when_fallback=prewarm_recovery_probe,
         )

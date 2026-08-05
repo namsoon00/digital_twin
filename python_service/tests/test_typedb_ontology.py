@@ -3923,6 +3923,65 @@ class TypeDBOntologyRepositoryTests(unittest.TestCase):
         self.assertEqual(1, result["failure"]["timeoutFallbackFailedShardIndex"])
         self.assertEqual(set(symbols), set(result["failure"]["candidateSymbols"]))
 
+    def test_interrupted_native_rule_retries_once_with_a_fresh_read_transaction(self):
+        repository = TypeDBOntologyGraphRepository("127.0.0.1:1729", retry_count=0)
+        rule = default_graph_inference_rules()[0]
+        symbols = ["005930"]
+        planned = {"rule": rule, "candidateSymbols": symbols, "queryComplexity": 2}
+        primary = {
+            "status": "partial",
+            "readTransactionCount": 1,
+            "readQueryCount": 0,
+            "failure": {
+                "ruleId": rule.rule_id,
+                "status": "query-error",
+                "reason": "[REX1] Execution interrupted by to a concurrent transaction close.",
+                "candidateSymbols": symbols,
+            },
+        }
+        recovered = {
+            "status": "ok",
+            "rule": rule,
+            "queryPlan": {"queryMode": "typedb-scoped-typeql"},
+            "rows": [{"sourceId": "stock:005930"}],
+            "readTransactionCount": 1,
+            "readQueryCount": 1,
+            "executed": {
+                "ruleId": rule.rule_id,
+                "candidateSymbols": symbols,
+                "rowCount": 1,
+                "queryCount": 1,
+                "anyConditionQueryCount": 0,
+                "queryDurationMs": 20,
+            },
+        }
+
+        with patch.object(
+            repository,
+            "execute_typedb_native_rule_entry",
+            return_value=recovered,
+        ) as execute:
+            result = repository.recover_timed_out_native_rule_entry(
+                primary,
+                planned,
+                symbols,
+                False,
+                "",
+                False,
+                None,
+                None,
+                time.monotonic() + 5,
+                "typedb-scoped-typeql",
+            )
+
+        self.assertEqual("ok", result["status"])
+        execute.assert_called_once()
+        self.assertEqual(symbols, execute.call_args.args[0]["candidateSymbols"])
+        self.assertTrue(result["executed"]["interruptedTransactionRetryUsed"])
+        self.assertEqual("fresh-read-transaction", result["executed"]["interruptedTransactionRetryMode"])
+        self.assertEqual(2, result["readTransactionCount"])
+        self.assertEqual(1, result["readQueryCount"])
+
     def test_parallel_native_rule_match_uses_serial_timeout_recovery_before_merging(self):
         repository = TypeDBOntologyGraphRepository(
             "127.0.0.1:1729",

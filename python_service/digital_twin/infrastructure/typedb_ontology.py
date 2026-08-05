@@ -3828,19 +3828,25 @@ class ScopedABoxManifestMixin:
             self.write_query_max_bytes(settings),
         )
         relation_batch_size = self.abox_relation_batch_size(settings)
-        relation_queries = self.batched_relation_insert_queries(
+        updated_at = utc_now()
+        relation_write_plans = self.given_relation_insert_plans(
             relation_rows_to_insert,
-            utc_now(),
-            relation_batch_size,
-            self.write_query_max_bytes(settings),
+            updated_at,
+            settings=settings,
         )
-        queries = [*node_queries, *relation_queries]
+        relation_queries = [str(item.get("query") or "") for item in relation_write_plans]
+        queries = list(node_queries)
         batch_size = self.abox_write_transaction_query_count(settings)
         query_durations_ms: List[float] = []
-        for offset in range(0, len(queries), batch_size):
-            query_batch = queries[offset: offset + batch_size]
+        relation_fallback_count = 0
+        relation_given_row_count = 0
+        relation_given_batch_count = 0
+        relation_legacy_query_count = 0
+        relation_legacy_transaction_count = 0
+
+        def write_query_batch(query_batch: List[str]) -> None:
             if not query_batch:
-                continue
+                return
 
             def write_batch():
                 with typedb_operation_timeout(self.write_operation_timeout_seconds(), "TypeDB scoped ABox write batch"):
@@ -3856,10 +3862,61 @@ class ScopedABoxManifestMixin:
                         tx.commit()
 
             self.with_typedb_retries(write_batch)
+
+        # Nodes must exist before relation batches resolve their storage ids.
+        # Keep the established short transaction budget for node writes.
+        for offset in range(0, len(queries), batch_size):
+            query_batch = queries[offset: offset + batch_size]
+            write_query_batch(query_batch)
+
+        for plan in relation_write_plans:
+            query = str(plan.get("query") or "")
+            rows = list(plan.get("givenRows") or [])
+            if not query:
+                continue
+            if not rows:
+                write_query_batch([query])
+                relation_legacy_query_count += 1
+                relation_legacy_transaction_count += 1
+                continue
+
+            def write_given_batch():
+                with typedb_operation_timeout(self.write_operation_timeout_seconds(), "TypeDB scoped ABox given relation batch"):
+                    with driver.transaction(
+                        self.database,
+                        TransactionType.WRITE,
+                        options=self.write_transaction_options(),
+                    ) as tx:
+                        query_started = time.monotonic()
+                        tx.query(query, given_rows=rows).resolve()
+                        query_durations_ms.append(round((time.monotonic() - query_started) * 1000, 1))
+                        tx.commit()
+
+            try:
+                self.with_typedb_retries(write_given_batch)
+                relation_given_batch_count += 1
+                relation_given_row_count += len(rows)
+            except Exception:
+                # A TypeDB version or a particular relation shape can reject a
+                # ``given`` plan. The transaction is rolled back before this
+                # point, so preserving the legacy one-edge query is safe and
+                # keeps a live inference from failing due to an optimization.
+                relation_fallback_count += 1
+                fallback_queries = self.batched_relation_insert_queries(
+                    list(plan.get("rows") or []),
+                    updated_at,
+                    relation_batch_size,
+                    self.write_query_max_bytes(settings),
+                )
+                for offset in range(0, len(fallback_queries), batch_size):
+                    write_query_batch(fallback_queries[offset: offset + batch_size])
+                    relation_legacy_transaction_count += 1
+                relation_legacy_query_count += len(fallback_queries)
         return {
-            "queryCount": len(queries),
+            "queryCount": len(node_queries) + relation_given_batch_count + relation_legacy_query_count,
             "nodeQueryCount": len(node_queries),
-            "relationQueryCount": len(relation_queries),
+            "relationQueryCount": relation_given_batch_count + relation_legacy_query_count,
+            "plannedRelationQueryCount": len(relation_queries),
             "requestedNodeCount": len(reuse_plan.get("nodeRows") or []),
             "requestedRelationCount": len(reuse_plan.get("relationRows") or []),
             "insertedNodeCount": len(node_rows_to_insert),
@@ -3879,8 +3936,20 @@ class ScopedABoxManifestMixin:
                 reuse_plan.get("reusedRelationRows") or [],
             ),
             "relationBatchSize": relation_batch_size,
+            "relationWriteMode": (
+                "given-rows" if relation_given_batch_count and not relation_fallback_count
+                else "given-rows-with-legacy-fallback" if relation_given_batch_count
+                else "legacy-single-edge"
+            ),
+            "relationGivenBatchCount": relation_given_batch_count,
+            "relationGivenRowCount": relation_given_row_count,
+            "relationGivenFallbackCount": relation_fallback_count,
             "transactionQueryCount": batch_size,
-            "transactionCount": (len(queries) + batch_size - 1) // batch_size if queries else 0,
+            "transactionCount": (
+                (len(node_queries) + batch_size - 1) // batch_size
+                + relation_given_batch_count
+                + relation_legacy_transaction_count
+            ),
             "slowestQueryMs": max(query_durations_ms) if query_durations_ms else 0.0,
             "totalQueryMs": round(sum(query_durations_ms), 1),
         }
@@ -12686,6 +12755,151 @@ relation ontology-assertion,
             matches.append(self.relation_match_clause(row, source_var, target_var))
             inserts.append(self.relation_insert_clause(row, updated_at, relation_var, source_var, target_var) + ";")
         return "match " + " ".join(matches) + " insert " + " ".join(inserts)
+
+    @staticmethod
+    def _given_relation_value(value: object, value_type: str) -> object:
+        if value_type == "double":
+            return float(value)
+        return str(value)
+
+    @staticmethod
+    def _given_relation_has_value(value: object) -> bool:
+        return value is not None and str(value).strip() != ""
+
+    def given_relation_writes_enabled(self, settings: Dict[str, object] = None) -> bool:
+        values = dict(runtime_settings() if settings is None else settings or {})
+        raw = values.get("typedbABoxGivenRelationWritesEnabled")
+        if raw is None:
+            # TypeDB 3.12 accepts ``given`` input rows. The legacy query path
+            # remains an automatic per-batch fallback for mixed deployments.
+            return True
+        return str(raw).strip().lower() not in {"0", "false", "no", "off", "disabled"}
+
+    def given_relation_batch_size(self, settings: Dict[str, object] = None) -> int:
+        values = dict(runtime_settings() if settings is None else settings or {})
+        configured = number_or_none(values.get("typedbABoxGivenRelationBatchSize"))
+        if configured is None:
+            configured = 50
+        # The old multi-edge query created independent endpoint matches in a
+        # single TypeQL plan. ``given`` keeps one stable plan and streams row
+        # values, but a bounded size still limits transaction validation work.
+        return max(1, min(250, int(configured)))
+
+    def given_relation_row_values(self, row: Dict[str, object]) -> List[tuple]:
+        """Return the stable typed inputs for a relation ``given`` query."""
+        relation_id = relation_row_id(row)
+        values = [
+            ("source-storage-id", "ontology-storage-id", "string", str(
+                row.get("sourceStorageId") or ontology_storage_id(row, row.get("source"), "node")
+            )),
+            ("target-storage-id", "ontology-storage-id", "string", str(
+                row.get("targetStorageId") or ontology_storage_id(row, row.get("target"), "node")
+            )),
+            ("relation-id", "ontology-id", "string", relation_id),
+            ("relation-storage-id", "ontology-storage-id", "string", ontology_storage_id(row, relation_id, "relation")),
+            ("relation-type", "ontology-relation-type", "string", row.get("type")),
+            ("ontology-box", "ontology-box", "string", row.get("ontologyBox") or "ABox"),
+            ("ontology-symbol", "ontology-symbol", "string", row.get("symbol")),
+            ("ontology-rule-id", "ontology-rule-id", "string", row.get("ruleId")),
+            ("ontology-account-id", "ontology-account-id", "string", row.get("accountId")),
+            ("ontology-tenant-id", "ontology-tenant-id", "string", row.get("tenantId")),
+            ("ontology-world-id", "ontology-world-id", "string", row.get("worldId")),
+            ("ontology-world-type", "ontology-world-type", "string", row.get("worldType")),
+            ("ontology-snapshot-id", "ontology-snapshot-id", "string", row.get("snapshotId") or row.get("aboxSnapshotId")),
+            ("ontology-scope-id", "ontology-scope-id", "string", row.get("scopeId")),
+            ("ontology-scope-type", "ontology-scope-type", "string", row.get("scopeType")),
+            ("ontology-manifest-id", "ontology-manifest-id", "string", row.get("manifestId")),
+            ("ontology-tbox-class", "ontology-tbox-class", "string", row.get("tboxClass")),
+            ("ontology-json", "ontology-json", "string", row.get("propertiesJson")),
+            ("ontology-weight", "ontology-weight", "double", row.get("weight")),
+            ("ontology-field", "ontology-field", "string", row.get("field")),
+            ("ontology-polarity", "ontology-polarity", "string", row.get("polarity")),
+            ("ontology-evidence-role", "ontology-evidence-role", "string", row.get("evidenceRole")),
+            ("ontology-review-level", "ontology-review-level", "string", row.get("reviewLevel")),
+            ("ontology-data-state", "ontology-data-state", "string", row.get("dataState")),
+            ("ontology-change-state", "ontology-change-state", "string", row.get("changeState")),
+            ("ontology-conflict-state", "ontology-conflict-state", "string", row.get("conflictState")),
+            ("ontology-validation-state", "ontology-validation-state", "string", row.get("validationState")),
+            ("ontology-transition-type", "ontology-transition-type", "string", row.get("transitionType")),
+            ("ontology-signal-group", "ontology-signal-group", "string", row.get("signalGroup")),
+            ("ontology-materiality-passed", "ontology-materiality-passed", "string", row.get("materialityPassed")),
+            ("ontology-materiality-state", "ontology-materiality-state", "string", row.get("materialityState")),
+            ("ontology-relevance-state", "ontology-relevance-state", "string", row.get("relevanceState")),
+            ("ontology-source-trust-state", "ontology-source-trust-state", "string", row.get("sourceTrustState")),
+        ]
+        return [item for item in values if self._given_relation_has_value(item[3])]
+
+    def given_relation_insert_plans(
+        self,
+        rows: Iterable[Dict[str, object]],
+        updated_at: str,
+        settings: Dict[str, object] = None,
+    ) -> List[Dict[str, object]]:
+        """Build TypeDB 3.12 ``given`` relation inserts grouped by query shape.
+
+        Rows with different optional attributes require different TypeQL
+        shapes. Grouping by relation type and attribute presence keeps each
+        query plan stable and avoids the old cross-product of independent
+        endpoint matches.
+        """
+        items = [
+            dict(row)
+            for row in rows or []
+            if str((row or {}).get("source") or "").strip()
+            and str((row or {}).get("target") or "").strip()
+        ]
+        if not items:
+            return []
+        if not self.given_relation_writes_enabled(settings):
+            return [{"query": query, "rows": [], "givenRows": []} for query in self.batched_relation_insert_queries(
+                items,
+                updated_at,
+                self.abox_relation_batch_size(settings),
+                self.write_query_max_bytes(settings),
+            )]
+
+        grouped: Dict[tuple, List[tuple]] = {}
+        for row in items:
+            fields = self.given_relation_row_values(row)
+            relation_type = relation_semantic_type(row.get("type"))
+            signature = tuple((name, attribute, value_type) for name, attribute, value_type, _value in fields)
+            grouped.setdefault((relation_type, signature), []).append((row, fields))
+
+        plans: List[Dict[str, object]] = []
+        maximum = self.given_relation_batch_size(settings)
+        for (relation_type, signature), grouped_rows in grouped.items():
+            declarations = ", ".join("$" + name + ": " + value_type for name, _attribute, value_type in signature)
+            relation_attributes = "".join(
+                ", has " + attribute + " == $" + name
+                for name, attribute, _value_type in signature
+                if name not in {"source-storage-id", "target-storage-id"}
+            )
+            query = (
+                "given " + declarations + "; "
+                "match $source isa ontology-node, has ontology-storage-id == $source-storage-id; "
+                "$target isa ontology-node, has ontology-storage-id == $target-storage-id; "
+                "insert $r isa " + relation_type + ", links (source: $source, target: $target)"
+                + relation_attributes
+                + ", has ontology-semantic-type " + typedb_string(relation_type)
+                + ", has ontology-updated-at " + typedb_string(updated_at)
+                + ";"
+            )
+            for offset in range(0, len(grouped_rows), maximum):
+                chunk = grouped_rows[offset: offset + maximum]
+                plans.append({
+                    "query": query,
+                    "rows": [row for row, _fields in chunk],
+                    "givenRows": [
+                        {
+                            name: self._given_relation_value(value, value_type)
+                            for name, _attribute, value_type, value in fields
+                        }
+                        for _row, fields in chunk
+                    ],
+                    "relationType": relation_type,
+                    "rowCount": len(chunk),
+                })
+        return plans
 
     def inferencebox_insert_queries(
         self,

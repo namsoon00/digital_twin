@@ -2165,6 +2165,130 @@ class TypeDBOntologyRepositoryTests(unittest.TestCase):
         self.assertNotIn('has ontology-id "ontology-box:RuleBox";', query)
         self.assertNotIn('has ontology-id "rule-registry:test";', query)
 
+    def test_given_relation_insert_plans_group_rows_without_endpoint_cross_product(self):
+        repository = TypeDBOntologyGraphRepository("127.0.0.1:1729")
+        rows = [
+            {
+                "source": "stock:005930",
+                "target": "price:005930",
+                "sourceStorageId": "node:source:005930",
+                "targetStorageId": "node:target:005930",
+                "type": "HAS_PRICE",
+                "ontologyBox": "ABox",
+                "scopeId": "link:symbol:005930:market",
+                "worldId": "portfolio:local:main",
+                "snapshotId": "abox:test",
+                "propertiesJson": "{}",
+                "weight": 1.0,
+            },
+            {
+                "source": "stock:000660",
+                "target": "price:000660",
+                "sourceStorageId": "node:source:000660",
+                "targetStorageId": "node:target:000660",
+                "type": "HAS_PRICE",
+                "ontologyBox": "ABox",
+                "scopeId": "link:symbol:000660:market",
+                "worldId": "portfolio:local:main",
+                "snapshotId": "abox:test",
+                "propertiesJson": "{}",
+                "weight": 1.0,
+            },
+        ]
+
+        plans = repository.given_relation_insert_plans(
+            rows,
+            "2026-08-06T00:00:00Z",
+            settings={"typedbABoxGivenRelationWritesEnabled": "1"},
+        )
+
+        self.assertEqual(1, len(plans))
+        self.assertEqual(2, plans[0]["rowCount"])
+        self.assertIn("given $source-storage-id: string", plans[0]["query"])
+        self.assertIn("has ontology-storage-id == $source-storage-id", plans[0]["query"])
+        self.assertNotIn("node:source:005930", plans[0]["query"])
+        self.assertEqual("node:source:005930", plans[0]["givenRows"][0]["source-storage-id"])
+        self.assertEqual("node:source:000660", plans[0]["givenRows"][1]["source-storage-id"])
+
+    def test_given_relation_insert_plans_preserve_legacy_queries_when_disabled(self):
+        repository = TypeDBOntologyGraphRepository("127.0.0.1:1729")
+        rows = [{
+            "source": "stock:005930",
+            "target": "price:005930",
+            "sourceStorageId": "node:source:005930",
+            "targetStorageId": "node:target:005930",
+            "type": "HAS_PRICE",
+            "ontologyBox": "ABox",
+            "scopeId": "link:symbol:005930:market",
+            "snapshotId": "abox:test",
+        }]
+
+        plans = repository.given_relation_insert_plans(
+            rows,
+            "2026-08-06T00:00:00Z",
+            settings={"typedbABoxGivenRelationWritesEnabled": "0"},
+        )
+
+        self.assertEqual(1, len(plans))
+        self.assertEqual([], plans[0]["givenRows"])
+        self.assertIn("match", plans[0]["query"])
+
+    def test_scoped_relation_write_falls_back_when_given_rows_are_rejected(self):
+        repository = TypeDBOntologyGraphRepository("127.0.0.1:1729")
+        relation = {
+            "source": "stock:005930",
+            "target": "price:005930",
+            "sourceStorageId": "node:source:005930",
+            "targetStorageId": "node:target:005930",
+            "type": "HAS_PRICE",
+            "ontologyBox": "ABox",
+            "scopeId": "link:symbol:005930:market",
+            "snapshotId": "abox:test",
+            "propertiesJson": "{}",
+        }
+        reuse_plan = {
+            "status": "ok",
+            "nodeRows": [],
+            "relationRows": [relation],
+            "nodeRowsToInsert": [],
+            "relationRowsToInsert": [relation],
+            "reusedNodeRows": [],
+            "reusedRelationRows": [],
+            "conflicts": [],
+        }
+        calls = []
+
+        class FakeTransaction:
+            def __enter__(self):
+                return self
+
+            def __exit__(self, *_args):
+                return False
+
+            def query(self, query, given_rows=None):
+                calls.append({"query": query, "givenRows": given_rows})
+                if given_rows:
+                    raise RuntimeError("given stage unavailable")
+                return SimpleNamespace(resolve=lambda: None)
+
+            def commit(self):
+                return None
+
+        class FakeDriver:
+            def transaction(self, *_args, **_kwargs):
+                return FakeTransaction()
+
+        imported = ((object, object, object, object, SimpleNamespace(WRITE="write")), None)
+        with patch.object(repository, "scoped_abox_storage_reuse_plan", return_value=reuse_plan), \
+                patch.object(repository, "with_typedb_retries", side_effect=lambda operation: operation()):
+            result = repository.write_persistence_rows(FakeDriver(), imported, [], [relation])
+
+        self.assertEqual("legacy-single-edge", result["relationWriteMode"])
+        self.assertEqual(1, result["relationGivenFallbackCount"])
+        self.assertEqual(1, result["relationQueryCount"])
+        self.assertTrue(calls[0]["givenRows"])
+        self.assertIsNone(calls[-1]["givenRows"])
+
     def test_seed_ontology_repairs_missing_static_relations_before_full_reseed(self):
         repository = TypeDBOntologyGraphRepository("127.0.0.1:1729")
         stale = {

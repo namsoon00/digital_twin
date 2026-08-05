@@ -18,6 +18,7 @@ from ..domain.ontology_change_impact import (
     build_inference_impact_plan,
     compact_inference_impact_plan,
 )
+from ..domain.ontology_world_routing import route_world_impact
 from ..domain.ontology_projection_fingerprint import (
     active_material_fingerprint,
     apply_material_graph_identity,
@@ -1484,6 +1485,10 @@ class PortfolioOntologyProjectionRecorder:
                 reasoning_context=compact_reasoning_context,
             )
             compact_impact_plan = compact_inference_impact_plan(inference_impact_plan)
+            world_impact_route = route_world_impact(
+                compact_impact_plan,
+                initial_projection=not bool(active_abox.get("aboxSnapshotId")),
+            )
             inference_symbols = self.inference_symbols(
                 snapshot,
                 inference_impact_plan.get("inferenceTargetSymbols") or target_symbols,
@@ -1503,6 +1508,7 @@ class PortfolioOntologyProjectionRecorder:
             )
             persistence_graph.worldview["scopeDelta"] = dict(compact_impact_plan.get("scopeDelta") or {})
             persistence_graph.worldview["inferenceImpactPlan"] = compact_impact_plan
+            persistence_graph.worldview["worldImpactRoute"] = world_impact_route
             projection_scope = {
                 "triggerMode": "scope-change-impact-native",
                 "targetSymbols": list(inference_symbols),
@@ -1519,6 +1525,7 @@ class PortfolioOntologyProjectionRecorder:
                 "targetScopedManifestPatch": dict(target_scoped_patch or {}),
                 "graphInput": dict(graph_input),
                 "inferenceImpactPlan": compact_impact_plan,
+                "worldImpactRoute": world_impact_route,
                 "reasoningContext": compact_reasoning_context,
                 "reason": (
                     "변경된 사실군과 ABox 의존 관계에서 재평가 대상을 계산하고, 변경 범위만 새 세대로 기록한 뒤 "
@@ -1713,6 +1720,24 @@ class PortfolioOntologyProjectionRecorder:
                     saved=bool(result.get("saved")),
                     runtimeMs=runtime_stages["aboxPersistenceMs"],
                 )
+                # Candidate ABox writes have committed at this point and the
+                # pending activation journal protects this world.  Do not
+                # hold the database-wide writer coordinator while TypeDB
+                # prepares read-side native rule candidates.  The inference
+                # materialization claims its own short coordinator scope.
+                # This lets an unrelated world stage its next bounded patch
+                # instead of waiting behind a whole account inference cycle.
+                if bool(coordinator_lease.get("acquired")):
+                    early_coordinator_release = self.release_projection_coordinator_lease(
+                        coordinator_lease
+                    )
+                    result["projectionCoordinatorPersistenceRelease"] = early_coordinator_release
+                    result.pop("_projectionCoordinatorLease", None)
+                    coordinator_lease = {
+                        **coordinator_lease,
+                        "acquired": False,
+                        "status": "released-after-abox-persistence",
+                    }
                 if result.get("saved") or save_status == "staged-scoped-manifest":
                     pending = result.get("pendingAboxActivation") if isinstance(result.get("pendingAboxActivation"), dict) else {}
                     emit_progress(
@@ -1762,7 +1787,8 @@ class PortfolioOntologyProjectionRecorder:
                     result["projectionCoordinator"] = self.projection_coordinator_summary(coordinator_lease)
                     result["projectionCoordinatorRelease"] = coordinator_release
             market_projection_started = time.perf_counter()
-            if bool(result.get("saved")):
+            result["worldImpactRoute"] = world_impact_route
+            if bool(result.get("saved")) and bool(world_impact_route.get("market", {}).get("required")):
                 # MarketWorld is an account-independent derived mirror.  It
                 # is intentionally scheduled only after the portfolio ABox
                 # and its decision-critical TypeDB inference are verified.
@@ -1774,11 +1800,26 @@ class PortfolioOntologyProjectionRecorder:
                     market_world_context,
                     source_world=portfolio_world_context,
                 )
+            elif bool(result.get("saved")):
+                result["marketWorld"] = {
+                    **world_metadata(market_world_context),
+                    "status": "skipped-world-impact-route",
+                    "preservedActiveGeneration": True,
+                    "reason": str(world_impact_route.get("market", {}).get("reason") or ""),
+                }
+            if bool(result.get("saved")) and bool(world_impact_route.get("knowledge", {}).get("required")):
                 result["knowledgeWorld"] = self.schedule_knowledge_world_projection(
                     graph,
                     knowledge_world_context,
                     source_world=portfolio_world_context,
                 )
+            elif bool(result.get("saved")):
+                result["knowledgeWorld"] = {
+                    **world_metadata(knowledge_world_context),
+                    "status": "skipped-world-impact-route",
+                    "preservedActiveGeneration": True,
+                    "reason": str(world_impact_route.get("knowledge", {}).get("reason") or ""),
+                }
             else:
                 result["marketWorld"] = {
                     **world_metadata(market_world_context),
@@ -4351,12 +4392,16 @@ class PortfolioOntologyProjectionRecorder:
                 "totalQueryMs": "aboxChangedScopeQueryMs",
                 "slowestQueryMs": "aboxChangedScopeSlowestQueryMs",
                 "queryCount": "aboxChangedScopeQueryCount",
+                "plannedRelationQueryCount": "aboxPlannedRelationQueryCount",
                 "transactionCount": "aboxChangedScopeTransactionCount",
                 "transactionQueryCount": "aboxChangedScopeTransactionQueryCount",
                 "insertedNodeCount": "aboxInsertedNodeCount",
                 "insertedRelationCount": "aboxInsertedRelationCount",
                 "reusedNodeCount": "aboxReusedNodeCount",
                 "reusedRelationCount": "aboxReusedRelationCount",
+                "relationGivenBatchCount": "aboxRelationGivenBatchCount",
+                "relationGivenRowCount": "aboxRelationGivenRowCount",
+                "relationGivenFallbackCount": "aboxRelationGivenFallbackCount",
             }.items():
                 record(source_key, target_key, write_plan)
         physical_verification = timing.get("changedScopeStorageIdentityVerification")

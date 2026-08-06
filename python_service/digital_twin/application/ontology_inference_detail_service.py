@@ -352,13 +352,26 @@ class OntologyInferenceDetailRunner:
             500,
         )
         world_id = str(job.get("worldId") or "").strip()
+        generation_id = str(job.get("inferenceGenerationId") or "").strip()
+        source_abox_snapshot_id = str(job.get("sourceAboxSnapshotId") or "").strip()
         try:
-            value = method(symbols=targets, limit=limit, world_id=world_id)
+            value = method(
+                symbols=targets,
+                limit=limit,
+                world_id=world_id,
+                inference_generation_id=generation_id,
+                source_abox_snapshot_id=source_abox_snapshot_id,
+            )
         except TypeError as error:
             message = str(error)
-            if "world_id" not in message and "unexpected keyword" not in message:
+            if "unexpected keyword" not in message:
                 raise
-            value = method(symbols=targets, limit=limit)
+            try:
+                value = method(symbols=targets, limit=limit, world_id=world_id)
+            except TypeError as legacy_error:
+                if "unexpected keyword" not in str(legacy_error):
+                    raise
+                value = method(symbols=targets, limit=limit)
         if not isinstance(value, dict):
             raise ValueError("inferencebox_snapshot returned non-dict")
         return dict(value)

@@ -74,8 +74,21 @@ class FakeRepository:
         self.snapshot = dict(snapshot or {})
         self.calls = []
 
-    def inferencebox_snapshot(self, symbols=None, limit=80, world_id=""):
-        self.calls.append({"symbols": list(symbols or []), "limit": limit, "worldId": world_id})
+    def inferencebox_snapshot(
+        self,
+        symbols=None,
+        limit=80,
+        world_id="",
+        inference_generation_id="",
+        source_abox_snapshot_id="",
+    ):
+        self.calls.append({
+            "symbols": list(symbols or []),
+            "limit": limit,
+            "worldId": world_id,
+            "inferenceGenerationId": inference_generation_id,
+            "sourceAboxSnapshotId": source_abox_snapshot_id,
+        })
         return dict(self.snapshot)
 
 
@@ -174,6 +187,8 @@ class OntologyInferenceDetailRunnerTests(unittest.TestCase):
         self.assertTrue(stored["durableReadback"])
         self.assertTrue(stored["durableDetailReadback"])
         self.assertEqual("portfolio:local:main", repository.calls[0]["worldId"])
+        self.assertEqual("inference-generation:test", repository.calls[0]["inferenceGenerationId"])
+        self.assertEqual("abox-manifest:test", repository.calls[0]["sourceAboxSnapshotId"])
 
     def test_newer_active_generation_supersedes_stale_detail_job(self):
         outbox = FakeOutbox([inference_job()])

@@ -6521,6 +6521,8 @@ class ScopedABoxManifestMixin:
         limit: int = 80,
         reset_metrics: bool = True,
         world_id: str = "",
+        inference_generation_id: str = "",
+        source_abox_snapshot_id: str = "",
     ) -> Dict[str, object]:
         return {
             "configured": False,
@@ -6531,6 +6533,8 @@ class ScopedABoxManifestMixin:
             "reasoningMode": "disabled",
             "reason": "TypeDB ontology storage is not configured.",
             "symbols": list(symbols or []),
+            "inferenceGenerationId": str(inference_generation_id or ""),
+            "sourceAboxSnapshotId": str(source_abox_snapshot_id or ""),
             "entities": [],
             "relations": [],
             "traces": [],
@@ -19680,6 +19684,8 @@ relation ontology-assertion,
         limit: int = 80,
         reset_metrics: bool = True,
         world_id: str = "",
+        inference_generation_id: str = "",
+        source_abox_snapshot_id: str = "",
     ) -> Dict[str, object]:
         clean_symbols = sorted(set(str(item or "").upper().strip() for item in (symbols or []) if str(item or "").strip()))
         safe_limit = max(1, min(500, int(limit or 80)))
@@ -19688,7 +19694,13 @@ relation ontology-assertion,
         if reset_metrics:
             self.reset_query_metrics()
         try:
-            return self.inferencebox_snapshot_from_typedb(clean_symbols, safe_limit, world_id=world_id)
+            return self.inferencebox_snapshot_from_typedb(
+                clean_symbols,
+                safe_limit,
+                world_id=world_id,
+                inference_generation_id=inference_generation_id,
+                source_abox_snapshot_id=source_abox_snapshot_id,
+            )
         except Exception as error:  # noqa: BLE001 - expose TypeDB read failures to monitoring diagnostics.
             return {
                 "configured": True,
@@ -19704,6 +19716,8 @@ relation ontology-assertion,
                 "reason": "TypeDB InferenceBox 조회 실패: " + str(error)[:180],
                 "symbols": clean_symbols,
                 "worldId": world_id,
+                "inferenceGenerationId": str(inference_generation_id or ""),
+                "sourceAboxSnapshotId": str(source_abox_snapshot_id or ""),
                 "entities": [],
                 "relations": [],
                 "traces": [],
@@ -19727,14 +19741,71 @@ relation ontology-assertion,
                 },
                 "typedbQueryMetrics": self.query_metrics_snapshot(),
             }
-    def inferencebox_snapshot_from_typedb(self, clean_symbols: List[str], safe_limit: int, world_id: str = "") -> Dict[str, object]:
-        generation_records = self.read_inference_generation_records(world_id=world_id)
-        active_generation = generation_records[0] if generation_records else {}
+    def inferencebox_snapshot_from_typedb(
+        self,
+        clean_symbols: List[str],
+        safe_limit: int,
+        world_id: str = "",
+        inference_generation_id: str = "",
+        source_abox_snapshot_id: str = "",
+    ) -> Dict[str, object]:
+        requested_generation_id = str(inference_generation_id or "").strip()
+        requested_source_abox_snapshot_id = str(source_abox_snapshot_id or "").strip()
+        generation_records = self.read_inference_generation_records(
+            published_only=not bool(requested_generation_id),
+            world_id=world_id,
+        )
+        active_generation = (
+            next(
+                (
+                    record
+                    for record in generation_records
+                    if str(record.get("generationId") or "").strip() == requested_generation_id
+                ),
+                {},
+            )
+            if requested_generation_id
+            else (generation_records[0] if generation_records else {})
+        )
         generation_id = str((active_generation or {}).get("generationId") or "")
         generation_scoped = bool(generation_id)
-        generation_identity_source = "active-generation-marker" if generation_scoped else ""
+        generation_identity_source = (
+            "requested-generation-id" if requested_generation_id and generation_scoped
+            else "active-generation-marker" if generation_scoped
+            else ""
+        )
         unresolved_materialized_generation = False
         fallback_active_abox_metadata: Dict[str, object] = {}
+        if requested_generation_id and not generation_scoped:
+            return {
+                "configured": True,
+                "saved": True,
+                "status": "stale-generation",
+                "source": "typedbInferenceBox",
+                "graphStore": "typedb",
+                "reasoningMode": "typedb-typeql-read",
+                "reason": "요청한 TypeDB InferenceBox 세대가 보존되어 있지 않습니다.",
+                "symbols": clean_symbols,
+                "worldId": world_id,
+                "inferenceGenerationId": requested_generation_id,
+                "sourceAboxSnapshotId": requested_source_abox_snapshot_id,
+                "generationScoped": True,
+                "inferenceGenerationIdentitySource": "requested-generation-missing",
+                "entities": [],
+                "relations": [],
+                "traces": [],
+                "entityCount": 0,
+                "relationCount": 0,
+                "traceCount": 0,
+                "nativeEntityCount": 0,
+                "nativeRelationCount": 0,
+                "nativeTraceCount": 0,
+                "nativeTypeDbReasoningUsed": False,
+                "typedbNativeRuleReasoningUsed": False,
+                "nativeTypeDbReasoningCompleted": False,
+                "generationAligned": False,
+                "typedbQueryMetrics": self.query_metrics_snapshot(),
+            }
         if generation_scoped:
             entity_rows = self.read_inferencebox_entity_rows(generation_id, clean_symbols, safe_limit, world_id=world_id)
             relation_rows = self.read_inferencebox_relation_rows(generation_id, clean_symbols, safe_limit, world_id=world_id)
@@ -19860,12 +19931,23 @@ relation ontology-assertion,
             active_abox_metadata = self.active_abox_metadata(world_id)
             active_abox_status = str(active_abox_metadata.get("status") or "")
             active_abox_snapshot_id = str(active_abox_metadata.get("aboxSnapshotId") or "").strip() if active_abox_status == "ok" else ""
-            generation_aligned = bool(active_abox_snapshot_id and active_abox_snapshot_id == source_abox_snapshot_id)
+            pinned_generation_aligned = bool(
+                requested_generation_id
+                and requested_source_abox_snapshot_id
+                and source_abox_snapshot_id == requested_source_abox_snapshot_id
+            )
+            generation_aligned = (
+                pinned_generation_aligned
+                if requested_generation_id
+                else bool(active_abox_snapshot_id and active_abox_snapshot_id == source_abox_snapshot_id)
+            )
             snapshot.update({
                 "sourceAboxSnapshotId": source_abox_snapshot_id,
                 "activeAboxSnapshotId": active_abox_snapshot_id,
                 "activeAboxStatus": active_abox_status,
                 "generationAligned": generation_aligned,
+                "detailGenerationPinned": bool(requested_generation_id),
+                "activeAboxAligned": bool(active_abox_snapshot_id and active_abox_snapshot_id == source_abox_snapshot_id),
             })
             if not generation_aligned:
                 incomplete_abox = active_abox_status != "ok"

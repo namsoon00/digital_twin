@@ -175,6 +175,8 @@ class OntologyGraphRepository(Protocol):
         symbols: List[str] = None,
         limit: int = 80,
         world_id: str = "",
+        inference_generation_id: str = "",
+        source_abox_snapshot_id: str = "",
     ) -> Dict[str, object]:
         ...
 

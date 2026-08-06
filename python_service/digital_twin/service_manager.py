@@ -367,7 +367,10 @@ def worker_specs() -> Dict[str, Dict[str, object]]:
     workers.update(BASE_WORKERS)
     # Zero is an explicit operational pause: keep collection and deterministic
     # notifications running without launching external AI inference workers.
-    ai_worker_count = min(8, int_value((settings or {}).get("notificationAiQueueWorkerCount"), 2, 0))
+    # The operational settings store can be unavailable while MySQL itself is
+    # starting.  Failing closed prevents an old/default configuration from
+    # issuing AI requests before the persisted pause setting is readable.
+    ai_worker_count = min(8, int_value((settings or {}).get("notificationAiQueueWorkerCount"), 0, 0))
     for index in range(1, ai_worker_count + 1):
         name = "notification-ai" if index == 1 else "notification-ai-" + str(index)
         pid_name = "python-notification-ai.pid" if index == 1 else "python-notification-ai-" + str(index) + ".pid"

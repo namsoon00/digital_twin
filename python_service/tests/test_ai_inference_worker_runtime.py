@@ -28,6 +28,12 @@ class AIInferenceWorkerRuntimeTests(unittest.TestCase):
 
         self.assertFalse([name for name in specs if name.startswith("notification-ai")])
 
+    def test_service_manager_keeps_ai_workers_off_until_runtime_settings_are_available(self):
+        with patch.object(service_manager, "runtime_settings", return_value={}):
+            specs = service_manager.worker_specs()
+
+        self.assertFalse([name for name in specs if name.startswith("notification-ai")])
+
     def test_first_worker_recognizes_pre_queue_process_for_safe_upgrade_stop(self):
         with patch.object(service_manager, "runtime_settings", return_value={
             "notificationAiQueueWorkerCount": "2",

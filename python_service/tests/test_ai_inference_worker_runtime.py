@@ -18,6 +18,16 @@ class AIInferenceWorkerRuntimeTests(unittest.TestCase):
         self.assertEqual(["notification-ai", "notification-ai-2", "notification-ai-3"], names)
         self.assertIn("ai-inference watch --worker-id ai-1 --limit 1", " ".join(specs["notification-ai"]["command"]))
 
+    def test_service_manager_allows_ai_workers_to_be_paused(self):
+        with patch.object(service_manager, "runtime_settings", return_value={
+            "notificationAiQueueWorkerCount": "0",
+            "ontologyTypeDbEnabled": "0",
+            "mysqlRuntimeManaged": "0",
+        }):
+            specs = service_manager.worker_specs()
+
+        self.assertFalse([name for name in specs if name.startswith("notification-ai")])
+
     def test_first_worker_recognizes_pre_queue_process_for_safe_upgrade_stop(self):
         with patch.object(service_manager, "runtime_settings", return_value={
             "notificationAiQueueWorkerCount": "2",

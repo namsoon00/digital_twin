@@ -1483,6 +1483,10 @@ def start(excluded_roles=None) -> int:
             continue
         result = start_worker(spec)
         if result != 0:
+            if str(spec.get("role") or "").strip() == "web":
+                # A user-managed web process may own the canonical port while
+                # data collection and notification workers remain healthy.
+                continue
             print("Service start aborted before dependent workers. failed=" + str(spec.get("label") or "unknown"))
             return result
     return 0

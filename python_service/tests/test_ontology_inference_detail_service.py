@@ -203,6 +203,23 @@ class OntologyInferenceDetailRunnerTests(unittest.TestCase):
         self.assertEqual("superseded", outbox.completed[0][3])
         self.assertEqual("inference-generation:new", outbox.completed[0][2]["actualInferenceGenerationId"])
 
+    def test_retention_expired_pinned_generation_is_terminally_superseded(self):
+        outbox = FakeOutbox([inference_job()])
+        repository = FakeRepository({
+            "status": "stale-generation",
+            "inferenceGenerationId": "inference-generation:test",
+            "sourceAboxSnapshotId": "abox-manifest:test",
+        })
+        runner = OntologyInferenceDetailRunner(outbox, repository)
+
+        result = runner.run_once()
+
+        self.assertEqual(1, result["supersededCount"])
+        self.assertEqual(0, result["retryCount"])
+        self.assertEqual([], outbox.retries)
+        self.assertEqual("superseded", outbox.completed[0][3])
+        self.assertIn("no longer retained", outbox.completed[0][2]["reason"])
+
     def test_unaligned_detail_is_retried_without_acknowledgement(self):
         snapshot = complete_snapshot()
         snapshot["generationAligned"] = False

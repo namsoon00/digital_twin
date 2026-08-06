@@ -387,6 +387,11 @@ class OntologyInferenceDetailRunner:
         status = str(values.get("status") or "").strip().lower()
         if actual_generation and expected_generation and actual_generation != expected_generation:
             return "superseded", "active InferenceBox generation changed before deferred detail readback"
+        # A job is pinned to its exact generation.  If retention has already
+        # removed that generation, retrying cannot ever produce matching
+        # detail and would keep newer alert evidence behind an obsolete job.
+        if status == "stale-generation" and expected_generation:
+            return "superseded", "queued InferenceBox generation is no longer retained"
         if status not in SUCCESS_STATUSES:
             return "retry", "TypeDB detailed InferenceBox read returned " + (status or "unknown")
         if not actual_generation:

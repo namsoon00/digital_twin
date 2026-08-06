@@ -146,6 +146,45 @@ class MonitoringForceSnapshotTests(unittest.TestCase):
         self.assertFalse(observations[0].metadata["deliveryDeferred"])
         self.assertEqual("deterministic-outbox-before-typedb", observations[0].metadata["deliveryMode"])
 
+    def test_always_raw_market_observation_survives_missing_inference(self):
+        """Raw observations remain deliverable when AI/TypeDB insight is unavailable."""
+        previous_position = normalize_position({
+            "symbol": "AAPL", "name": "Apple", "market": "US", "currency": "USD",
+            "quantity": 1, "currentPrice": 100.0, "updatedAt": utc_now_iso(),
+        })
+        current_position = normalize_position({
+            "symbol": "AAPL", "name": "Apple", "market": "US", "currency": "USD",
+            "quantity": 1, "currentPrice": 100.7, "updatedAt": utc_now_iso(),
+        })
+        previous = AccountSnapshot(
+            "main", "메인", "toss", "live", "ok", utc_now_iso(),
+            portfolio_summary([previous_position]), [previous_position], [], metadata={},
+        )
+        current = AccountSnapshot(
+            "main", "메인", "toss", "live", "ok", utc_now_iso(),
+            portfolio_summary([current_position]), [current_position], [], metadata={
+                "ontology": {
+                    "projection": {
+                        "status": "deferred-to-reasoning-worker",
+                        "reason": "전용 온톨로지 추론 워커 처리 대기",
+                    },
+                },
+            },
+        )
+
+        events = RealtimeMonitor({
+            "alertThresholds": "marketObservationPriceChangePct=0.6",
+            "marketObservationRawDeliveryMode": "always",
+        }).events_for_snapshot(current, previous.to_monitor_state())
+        observations = [event for event in events if event.rule == MARKET_OBSERVATION]
+
+        self.assertEqual(1, len(observations))
+        self.assertFalse(observations[0].metadata["deliveryDeferred"])
+        self.assertTrue(observations[0].metadata["observationOnly"])
+        self.assertFalse(observations[0].metadata["investmentJudgement"])
+        self.assertEqual("deterministic-outbox-before-typedb", observations[0].metadata["deliveryMode"])
+        self.assertTrue(current.metadata["ontology"]["inferenceMissingState"]["pending"])
+
     def test_only_outboxed_raw_observations_enter_the_prompt_followup_lane(self):
         events = [
             AlertEvent(

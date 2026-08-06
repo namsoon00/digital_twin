@@ -46,6 +46,17 @@ class AIInferenceWorkerRuntimeTests(unittest.TestCase):
 
         self.assertEqual(3, start_worker.call_count)
 
+    def test_supervisor_recognizes_an_unmanaged_web_server_as_healthy(self):
+        spec = {
+            "label": "web",
+            "role": "web",
+            "healthAddress": "127.0.0.1:3000",
+            "needle": "python_service/service.py web",
+        }
+        with patch.object(service_manager, "pid_exists", return_value=False), \
+             patch.object(service_manager, "tcp_ready", return_value=True):
+            self.assertTrue(service_manager.is_running(0, spec))
+
     def test_first_worker_recognizes_pre_queue_process_for_safe_upgrade_stop(self):
         with patch.object(service_manager, "runtime_settings", return_value={
             "notificationAiQueueWorkerCount": "2",

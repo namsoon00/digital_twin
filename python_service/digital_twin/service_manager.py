@@ -436,6 +436,11 @@ def pid_exists(pid: int) -> bool:
 
 
 def is_running(pid: int, spec: Dict[str, object]) -> bool:
+    # A developer may run the web UI directly on the canonical local port.
+    # It is not a managed child, but it must not trigger repeated start
+    # attempts or interrupt inference and notification workers.
+    if str(spec.get("role") or "") == "web" and not pid_exists(pid):
+        return tcp_ready(spec.get("healthAddress"))
     if not pid_exists(pid):
         return False
     if os.name != "nt":

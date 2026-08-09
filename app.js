@@ -4115,7 +4115,11 @@
       notificationAiGateEnabled: settingValue("notificationAiGateEnabled"),
       notificationAiGateMessageTypes: settingValue("notificationAiGateMessageTypes"),
       notificationAiUseCodex: settingValue("notificationAiUseCodex"),
+      notificationAiModel: settingValue("notificationAiModel"),
+      notificationAiReasoningEffort: settingValue("notificationAiReasoningEffort"),
       notificationAiTimeoutSeconds: settingValue("notificationAiTimeoutSeconds"),
+      notificationAiDeliveryDeadlineSeconds: settingValue("notificationAiDeliveryDeadlineSeconds"),
+      notificationAiQueueWorkerCount: settingValue("notificationAiQueueWorkerCount"),
       modelName: settingValue("modelName"),
       modelHypothesis: settingValue("modelHypothesis"),
       alertRules: settingValue("alertRules"),
@@ -7559,7 +7563,11 @@
       "notificationAiGateEnabled",
       "notificationAiGateMessageTypes",
       "notificationAiUseCodex",
+      "notificationAiModel",
+      "notificationAiReasoningEffort",
       "notificationAiTimeoutSeconds",
+      "notificationAiDeliveryDeadlineSeconds",
+      "notificationAiQueueWorkerCount",
       "modelName",
       "modelHypothesis",
       "relationRuleThresholds",
@@ -21940,7 +21948,8 @@
       '<div class="model-section">',
       '<div class="flow-title"><div><strong>실시간 알림 AI 검증</strong><span>알림 워커가 AI 답변을 기다린 뒤 검증된 실행 메시지만 보낼지 정합니다.</span></div></div>',
       '<div class="settings-grid compact-settings-grid">',
-      '<label class="setting-field"><span>AI 검증 대기</span><select data-model-setting="notificationAiGateEnabled"><option value="1"' + ((settingValue("notificationAiGateEnabled") || defaultSettings.notificationAiGateEnabled) !== "0" ? " selected" : "") + '>사용</option><option value="0"' + ((settingValue("notificationAiGateEnabled") || defaultSettings.notificationAiGateEnabled) === "0" ? " selected" : "") + '>끄기</option></select></label>',
+      '<label class="setting-field"><span>AI 투자판단</span><select data-model-setting="notificationAiGateEnabled"><option value="1"' + ((settingValue("notificationAiGateEnabled") || defaultSettings.notificationAiGateEnabled) !== "0" ? " selected" : "") + '>사용</option><option value="0"' + ((settingValue("notificationAiGateEnabled") || defaultSettings.notificationAiGateEnabled) === "0" ? " selected" : "") + '>끄기</option></select></label>',
+      '<label class="setting-field"><span>병렬 AI 워커</span><select data-model-setting="notificationAiQueueWorkerCount"><option value="0"' + ((settingValue("notificationAiQueueWorkerCount") || defaultSettings.notificationAiQueueWorkerCount) === "0" ? " selected" : "") + '>중지</option><option value="1"' + ((settingValue("notificationAiQueueWorkerCount") || defaultSettings.notificationAiQueueWorkerCount) === "1" ? " selected" : "") + '>1개</option><option value="2"' + ((settingValue("notificationAiQueueWorkerCount") || defaultSettings.notificationAiQueueWorkerCount) === "2" ? " selected" : "") + '>2개 (권장)</option><option value="3"' + ((settingValue("notificationAiQueueWorkerCount") || defaultSettings.notificationAiQueueWorkerCount) === "3" ? " selected" : "") + '>3개</option><option value="4"' + ((settingValue("notificationAiQueueWorkerCount") || defaultSettings.notificationAiQueueWorkerCount) === "4" ? " selected" : "") + '>4개</option></select></label>',
       '<label class="setting-field"><span>Codex 사용</span><select data-model-setting="notificationAiUseCodex"><option value="1"' + ((settingValue("notificationAiUseCodex") || defaultSettings.notificationAiUseCodex) !== "0" ? " selected" : "") + '>사용</option><option value="0"' + ((settingValue("notificationAiUseCodex") || defaultSettings.notificationAiUseCodex) === "0" ? " selected" : "") + '>로컬 검증만</option></select></label>',
       '<label class="setting-field"><span>타임아웃(초)</span><input data-model-setting="notificationAiTimeoutSeconds" type="number" min="30" step="10" value="' + escapeHtml(settingValue("notificationAiTimeoutSeconds") || defaultSettings.notificationAiTimeoutSeconds) + '"></label>',
       '</div>',
@@ -24073,6 +24082,11 @@
       ]),
       renderSettingsApiCard("추론 흐름", reasoningScope, [
         configuredChip("추론", settingEnabled("ontologyReasoningEnabled"), settingValue("ontologyReasoningBatchSize") || defaultSettings.ontologyReasoningBatchSize || "20"),
+        configuredChip(
+          "AI 판단",
+          settingEnabled("notificationAiGateEnabled") && String(settingValue("notificationAiQueueWorkerCount") || defaultSettings.notificationAiQueueWorkerCount || "0") !== "0",
+          String(settingValue("notificationAiQueueWorkerCount") || defaultSettings.notificationAiQueueWorkerCount || "0") + "개 실행"
+        ),
         configuredChip("게이트", settingEnabled("materialityGateEnabled"), "상태 전이"),
         configuredChip("뉴스 기준", true, newsStateSettingLabel("materiality", settingValue("newsDigestMinimumMaterialityState") || defaultSettings.newsDigestMinimumMaterialityState))
       ]),
@@ -24118,6 +24132,11 @@
       ]),
       renderSettingsApiCard("추론 흐름", reasoningScope, [
         configuredChip("추론", settingEnabled("ontologyReasoningEnabled"), settingValue("ontologyReasoningBatchSize") || defaultSettings.ontologyReasoningBatchSize || "20"),
+        configuredChip(
+          "AI 판단",
+          settingEnabled("notificationAiGateEnabled") && String(settingValue("notificationAiQueueWorkerCount") || defaultSettings.notificationAiQueueWorkerCount || "0") !== "0",
+          String(settingValue("notificationAiQueueWorkerCount") || defaultSettings.notificationAiQueueWorkerCount || "0") + "개 실행"
+        ),
         configuredChip("게이트", settingEnabled("materialityGateEnabled"), "상태 전이"),
         configuredChip("뉴스 기준", true, newsStateSettingLabel("materiality", settingValue("newsDigestMinimumMaterialityState") || defaultSettings.newsDigestMinimumMaterialityState))
       ]),
@@ -24223,6 +24242,7 @@
         renderSettingField("newsAiAnalysisCommand", "기사 분석 명령", "text", ""),
         renderSettingField("newsAiAnalysisTimeoutSeconds", "기사 분석 타임아웃(초)", "number", "90")
       ].join(""), "research feed-wide"),
+      renderSettingsAiRuntimeGroup("ai feed-compact"),
       renderSettingsGroup("그래프 추론", "수집 데이터가 그래프 저장소 관계 추론으로 넘어가는 경로입니다.", [
         renderSettingSelect("ontologyReasoningEnabled", "데이터 변경 추론", [
           { value: "1", label: "사용" },
@@ -25297,6 +25317,15 @@
         configuredChip("Bot token", isConfiguredSetting("operationsTelegramBotToken")),
         configuredChip("Chat ID", isConfiguredSetting("operationsTelegramChatId"), isConfiguredSetting("operationsTelegramChatId") ? "저장됨" : "계정 채널 사용")
       ]),
+      renderSettingsApiCard("AI 투자판단", settingEnabled("notificationAiGateEnabled") && String(settingValue("notificationAiQueueWorkerCount") || defaultSettings.notificationAiQueueWorkerCount || "0") !== "0" ? "사용" : "중지", [
+        configuredChip("AI 판단", settingEnabled("notificationAiGateEnabled") && String(settingValue("notificationAiQueueWorkerCount") || defaultSettings.notificationAiQueueWorkerCount || "0") !== "0"),
+        configuredChip(
+          "병렬 워커",
+          String(settingValue("notificationAiQueueWorkerCount") || defaultSettings.notificationAiQueueWorkerCount || "0") !== "0",
+          String(settingValue("notificationAiQueueWorkerCount") || defaultSettings.notificationAiQueueWorkerCount || "0") + "개"
+        ),
+        configuredChip("Codex", settingValue("notificationAiUseCodex") !== "0", settingValue("notificationAiReasoningEffort") || defaultSettings.notificationAiReasoningEffort || "max")
+      ]),
       renderSettingsApiCard("외부 데이터", externalEnabledCount + "/6개 수집 사용", [
         configuredChip("Alpha", settingEnabled("externalAlphaEnabled"), isConfiguredSetting("alphaVantageApiKey") ? "키 저장됨" : "키 필요"),
         configuredChip("CoinGecko", settingEnabled("externalCoinGeckoEnabled"), isConfiguredSetting("coingeckoApiKey") ? "키 저장됨" : "키 없음"),
@@ -25416,6 +25445,7 @@
       '</div>',
       '<div class="settings-detail-grid">',
       renderSettingsDetailDisclosure("기본 설정 편집", "화면 표시와 알림 전달 채널", renderSettingsEnvironmentPanel() + renderSettingsDeliverySettingsPanel()),
+      renderSettingsDetailDisclosure("AI 투자판단", "AI 사용 여부, 병렬 워커, 추론 깊이", renderSettingsAiOperationsPanel()),
       renderSettingsDetailDisclosure("보편언어 관리", "승인 용어, 사용자 수준별 표현, 금지 표현", renderInvestmentLanguagePanel()),
       renderSettingsDetailDisclosure("고급 설정", "외부 API, 신선도 게이트, 추론, 매핑값", renderSettingsExternalDataPanel()),
       renderSettingsDetailDisclosure("진단", "저장 상태, 잠금, API 준비도", renderSettingsDiagnosticsPanel()),
@@ -25621,6 +25651,32 @@
     ].join("");
   }
 
+  function renderSettingsAiRuntimeGroup(tone) {
+    return renderSettingsGroup("AI 투자판단", "TypeDB 추론 결과를 AI가 검증하고 투자 의견으로 작성하는 실행 설정입니다.", [
+      renderSettingSelect("notificationAiGateEnabled", "AI 투자판단", [
+        { value: "1", label: "사용" },
+        { value: "0", label: "사용 안 함" }
+      ]),
+      renderSettingSelect("notificationAiQueueWorkerCount", "병렬 AI 워커", [
+        { value: "0", label: "중지" },
+        { value: "1", label: "1개" },
+        { value: "2", label: "2개 (권장)" },
+        { value: "3", label: "3개" },
+        { value: "4", label: "4개" }
+      ]),
+      renderSettingSelect("notificationAiUseCodex", "AI 실행 엔진", [
+        { value: "1", label: "Codex AI" },
+        { value: "0", label: "로컬 검증만" }
+      ]),
+      renderSettingSelect("notificationAiReasoningEffort", "AI 추론 깊이", [
+        { value: "max", label: "최대" },
+        { value: "high", label: "높음" },
+        { value: "medium", label: "보통" },
+        { value: "low", label: "낮음" }
+      ])
+    ].join(""), tone || "ai");
+  }
+
   function renderSettingsOverviewPanel() {
     return [
       '<article class="panel settings-overview-panel"' + cardTypeAttrs("config-panel", settingsStatusTone()) + '>',
@@ -25760,6 +25816,24 @@
         renderSettingField("operationsTelegramBotToken", "운영 알림 Bot Token", secretType, "operations bot token", { preserveConfigured: true }),
         renderSettingField("operationsTelegramChatId", "운영 알림 Chat ID", "text", "기존 Chat ID 사용 가능", { preserveConfigured: true })
       ].join(""), "operations-delivery"),
+      '</div>',
+      '</article>'
+    ].join("");
+  }
+
+  function renderSettingsAiOperationsPanel() {
+    return [
+      '<article class="panel settings-ai-operations-panel">',
+      '<div class="panel-head">',
+      '<div>',
+      '<p class="label">AI Runtime</p>',
+      '<h2>AI 투자판단 운영</h2>',
+      '<span>AI 판단을 켜고 실제 요청을 처리할 병렬 워커 수를 함께 관리합니다.</span>',
+      '</div>',
+      '</div>',
+      '<div class="settings-body">',
+      renderSettingsAiRuntimeGroup("ai"),
+      renderSettingsSmartSavePanel(),
       '</div>',
       '</article>'
     ].join("");

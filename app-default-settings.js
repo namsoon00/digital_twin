@@ -293,7 +293,11 @@
     notificationAiGateEnabled: "1",
     notificationAiGateMessageTypes: "investmentInsight",
     notificationAiUseCodex: "1",
-    notificationAiTimeoutSeconds: "120",
+    notificationAiModel: "gpt-5.6-sol",
+    notificationAiReasoningEffort: "max",
+    notificationAiTimeoutSeconds: "300",
+    notificationAiDeliveryDeadlineSeconds: "300",
+    notificationAiQueueWorkerCount: "2",
     modelName: "나의 매수/매도 모델",
     modelHypothesis: "손익, 가격 흐름, 수급, 가치, 뉴스와 반대 근거를 상태로 나눠 행동 조건을 결정한다.",
     alertRules: [

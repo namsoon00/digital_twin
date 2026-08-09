@@ -9354,6 +9354,79 @@
     return parts.join(" · ") || condition.kind || condition.role || "-";
   }
 
+  function renderReasoningExecutionHistory(payload) {
+    var history = payload.executionHistory && typeof payload.executionHistory === "object" ? payload.executionHistory : {};
+    var runs = Array.isArray(history.runs) ? history.runs : [];
+    var runtime = payload.ruleRuntimeSummary && typeof payload.ruleRuntimeSummary === "object" ? payload.ruleRuntimeSummary : {};
+    var slowRules = Array.isArray(runtime.rules) ? runtime.rules.slice(0, 12) : [];
+    var audit = payload.ruleAudit && typeof payload.ruleAudit === "object" ? payload.ruleAudit : {};
+    var auditRules = Array.isArray(audit.rules) ? audit.rules.filter(function (rule) {
+      return ["observed", "disabled"].indexOf(String(rule.status || "")) < 0;
+    }).slice(0, 24) : [];
+    var auditStages = audit.executionStageCounts && typeof audit.executionStageCounts === "object" ? audit.executionStageCounts : {};
+    if (!runs.length && !slowRules.length && !auditRules.length) {
+      return history.status === "error" ? '<p class="form-error">' + escapeHtml(history.reason || "실행 이력을 읽지 못했습니다.") + '</p>' : '';
+    }
+    return [
+      '<div class="inference-ledger-coverage">',
+      '<strong>Reasoning execution history</strong>',
+      '<span>처리 레인, 단계, 규칙별 실행 시간과 실패를 MySQL 실행 원장에서 읽습니다.</span>',
+      audit.ruleCount ? '<div class="inference-ledger-relation-strip">' + [
+        "전체 " + formatInteger(audit.ruleCount),
+        "critical " + formatInteger(auditStages.critical || 0),
+        "core " + formatInteger(auditStages.core || 0),
+        "supporting " + formatInteger(auditStages.supporting || 0)
+      ].map(function (label) { return '<span class="chip">' + escapeHtml(label) + '</span>'; }).join("") + '</div>' : '',
+      auditRules.length ? '<div class="inference-ledger-relation-strip">' + auditRules.map(function (rule) {
+        var profile = rule.executionProfile && typeof rule.executionProfile === "object" ? rule.executionProfile : {};
+        return '<span class="chip">' + escapeHtml([
+          rule.ruleId,
+          profile.executionStage,
+          rule.status,
+          rule.p95DurationMs ? "p95 " + formatInteger(rule.p95DurationMs) + "ms" : ""
+        ].filter(Boolean).join(" · ")) + '</span>';
+      }).join("") + '</div>' : '',
+      slowRules.length ? '<div class="inference-ledger-relation-strip">' + slowRules.map(function (rule) {
+        var detail = [
+          rule.ruleId,
+          "p95 " + formatInteger(rule.p95DurationMs || 0) + "ms",
+          "표본 " + formatInteger(rule.sampleCount || 0),
+          rule.failureCount ? "실패 " + formatInteger(rule.failureCount) : ""
+        ].filter(Boolean).join(" · ");
+        return '<span class="chip">' + escapeHtml(detail) + '</span>';
+      }).join("") + '</div>' : '',
+      runs.map(function (run) {
+        var stages = Array.isArray(run.stages) ? run.stages : [];
+        var rules = Array.isArray(run.rules) ? run.rules : [];
+        var failedRules = rules.filter(function (rule) {
+          return ["error", "blocked", "query-timeout", "query-error"].indexOf(String(rule.status || "").toLowerCase()) >= 0;
+        });
+        var slow = rules.slice().sort(function (left, right) {
+          return Number(right.durationMs || 0) - Number(left.durationMs || 0);
+        }).slice(0, 8);
+        return [
+          '<article class="inference-ledger-row"' + cardTypeAttrs("execution-run", failedRules.length ? "danger" : "watch") + '>',
+          '<div class="inference-ledger-row-head"><div>',
+          '<span class="tone-chip ' + escapeHtml(failedRules.length ? "danger" : "watch") + '">' + escapeHtml(run.lane || "CORE_REASONING") + '</span>',
+          '<strong>' + escapeHtml(run.runId || "Reasoning run") + '</strong>',
+          '<em>' + escapeHtml([run.accountId, run.worldId, "규칙 " + rules.length + "개"].filter(Boolean).join(" · ")) + '</em>',
+          '</div><span>' + escapeHtml(run.updatedAt || "-") + '</span></div>',
+          '<div class="inference-ledger-stage-rail">',
+          stages.map(function (stage, index) {
+            return '<section class="inference-ledger-stage ' + escapeHtml(inferenceLedgerTone(stage.status)) + '"><b>' + escapeHtml(String(index + 1).padStart(2, "0")) + '</b><div><strong>' + escapeHtml(stage.stageKey || "-") + '</strong><span>' + escapeHtml(stage.status || "-") + '</span><em>' + escapeHtml(formatInteger(stage.durationMs || 0) + "ms") + '</em></div></section>';
+          }).join(""),
+          '</div>',
+          slow.length ? '<div class="inference-ledger-relation-strip">' + slow.map(function (rule) {
+            return '<span class="chip">' + escapeHtml([rule.ruleId, rule.status, formatInteger(rule.durationMs || 0) + "ms", rule.selectedReason].filter(Boolean).join(" · ")) + '</span>';
+          }).join("") + '</div>' : '',
+          failedRules.length ? '<p class="form-error">' + escapeHtml(failedRules.map(function (rule) { return rule.ruleId + ": " + (rule.failureReason || rule.status); }).join(" · ")) + '</p>' : '',
+          '</article>'
+        ].join("");
+      }).join(""),
+      '</div>'
+    ].join("");
+  }
+
   function renderInferenceTraceLedgerPanel() {
     var payload = inferenceLedgerPayload();
     var summary = inferenceLedgerSummary();
@@ -9384,6 +9457,7 @@
       payload.reason && !rows.length ? '<p class="subtle">' + escapeHtml(payload.reason) + '</p>' : '',
       state.ontologyInferenceLedgerLoading && !rows.length ? '<div class="ontology-empty">Inference Trace Ledger를 읽는 중입니다.</div>' : '',
       rows.length ? '<div class="inference-ledger-list">' + rows.map(renderInferenceLedgerRow).join("") + '</div>' : (!state.ontologyInferenceLedgerLoading ? '<div class="ontology-empty">표시할 추론 원장이 없습니다. RuleBox 실행과 TypeDB InferenceBox 세대를 확인하세요.</div>' : ''),
+      renderReasoningExecutionHistory(payload),
       renderInferenceLedgerCoverage(payload),
       '</section>'
     ].join("");
@@ -19141,6 +19215,8 @@
     var snapshot = trace.snapshot && typeof trace.snapshot === "object" ? trace.snapshot : {};
     var finalDecision = trace.finalDecision && typeof trace.finalDecision === "object" ? trace.finalDecision : {};
     var comparison = trace.aiComparison && typeof trace.aiComparison === "object" ? trace.aiComparison : {};
+    var aiExecution = trace.aiExecution && typeof trace.aiExecution === "object" ? trace.aiExecution : {};
+    var executionLedger = trace.executionLedger && typeof trace.executionLedger === "object" ? trace.executionLedger : {};
     var selected = trace.selectedHypothesis && typeof trace.selectedHypothesis === "object" ? trace.selectedHypothesis : {};
     var delivery = trace.delivery && typeof trace.delivery === "object" ? trace.delivery : {};
     var deliveryLabel = delivery.decision ? notificationDeliveryStateLabel(delivery.decision) : (job.status || "발송 판단");
@@ -19234,6 +19310,45 @@
       var tone = item.state === "verified" ? "watch" : (item.state === "partial" ? "caution" : "hold");
       return '<div><span class="tone-chip ' + escapeHtml(tone) + '">' + escapeHtml(item.state === "verified" ? "확인" : "제한") + '</span><strong>' + escapeHtml(item.label || "검증") + '</strong><em>' + escapeHtml(item.detail || "") + '</em></div>';
     });
+    var aiExecutionMeta = [
+      aiExecution.executed ? "실행됨" : "실행 안 함",
+      aiExecution.model || "",
+      aiExecution.reasoningEffort || "",
+      aiExecution.promptVersion || "",
+      aiExecution.latencyMs ? formatInteger(aiExecution.latencyMs) + "ms" : "",
+      aiExecution.promptBytes ? formatInteger(aiExecution.promptBytes) + " bytes" : ""
+    ].filter(Boolean);
+    var aiExecutionBody = notificationReasoningTraceTags(aiExecutionMeta, "notification-reasoning-tags");
+    if (aiExecution.promptHash) {
+      aiExecutionBody += '<code>' + escapeHtml(aiExecution.promptHash) + '</code>';
+    }
+    if (aiExecution.prompt) {
+      aiExecutionBody += '<details class="notification-ai-prompt-audit"><summary>실제 AI 입력 프롬프트</summary><pre>' + escapeHtml(aiExecution.prompt) + '</pre></details>';
+    }
+    var executionRuns = Array.isArray(executionLedger.runs) ? executionLedger.runs : [];
+    var executionLedgerBody = executionRuns.map(function (run) {
+      var stages = Array.isArray(run.stages) ? run.stages : [];
+      var ruleRuns = Array.isArray(run.rules) ? run.rules : [];
+      var slowRules = ruleRuns.slice().sort(function (left, right) {
+        return Number(right.durationMs || 0) - Number(left.durationMs || 0);
+      }).slice(0, 12);
+      return [
+        '<div class="notification-reasoning-provenance">',
+        '<code>' + escapeHtml(run.runId || "run") + '</code>',
+        '<code>' + escapeHtml(run.lane || "CORE_REASONING") + '</code>',
+        '<code>stages ' + escapeHtml(stages.length) + '</code>',
+        '<code>rules ' + escapeHtml(ruleRuns.length) + '</code>',
+        '</div>',
+        '<div class="notification-reasoning-audit-list">',
+        stages.map(function (stage) {
+          return '<div><span class="tone-chip ' + escapeHtml(inferenceLedgerTone(stage.status)) + '">' + escapeHtml(stage.status || "-") + '</span><strong>' + escapeHtml(stage.stageKey || "-") + '</strong><em>' + escapeHtml(formatInteger(stage.durationMs || 0) + "ms") + '</em></div>';
+        }).join(""),
+        '</div>',
+        notificationReasoningTraceTags(slowRules.map(function (rule) {
+          return [rule.ruleId, rule.status, formatInteger(rule.durationMs || 0) + "ms"].filter(Boolean).join(" · ");
+        }), "notification-reasoning-tags")
+      ].join("");
+    }).join("");
     return [
       '<section class="notification-detail-section notification-reasoning-section">',
       '<div class="notification-reasoning-head">',
@@ -19249,6 +19364,8 @@
       renderNotificationReasoningStep(5, "ABox 사실과 원문", facts.length + "개 핵심 사실, " + sources.length + "개 출처", missing.length ? "부족 데이터 " + missing.length + "건은 결론 강도를 제한합니다." : "기록된 부족 데이터 없음", factBody + sourceBody + notificationReasoningTraceTags(missing, "notification-reasoning-tags caution")),
       '</ol>',
       alternatives.length || (comparison.unresolvedQuestions && comparison.unresolvedQuestions.length) ? '<div class="notification-reasoning-appendix"><strong>비교한 다른 가설과 미해결 질문</strong>' + alternativeBody + notificationReasoningTraceTags(comparison.unresolvedQuestions || [], "notification-reasoning-tags") + '</div>' : '',
+      '<div class="notification-reasoning-appendix"><strong>AI 실행 경계</strong>' + aiExecutionBody + '</div>',
+      executionLedgerBody ? '<div class="notification-reasoning-appendix"><strong>투영·추론 실행 원장</strong>' + executionLedgerBody + '</div>' : '',
       auditBody ? '<div class="notification-reasoning-appendix"><strong>추론 무결성</strong>' + auditBody + '</div>' : '',
       '</section>'
     ].join("");

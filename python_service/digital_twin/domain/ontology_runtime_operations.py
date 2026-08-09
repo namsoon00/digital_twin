@@ -1295,6 +1295,17 @@ def build_projection_runtime_observation(
     relation_persistence = compact_abox_relation_persistence(values.get("relationPersistence"))
     stages = _stage_timings(values)
     native_rule_timing = native_rule_timing_profile(execution)
+    raw_native_stage_timings = execution.get("typedbNativeStageTimings")
+    raw_native_stage_timings = (
+        dict(raw_native_stage_timings)
+        if isinstance(raw_native_stage_timings, Mapping)
+        else {}
+    )
+    native_stage_timings = {
+        _text(key): max(0, _integer(value))
+        for key, value in raw_native_stage_timings.items()
+        if _text(key) and isinstance(value, (int, float))
+    }
     delta = _scope_delta(plan)
     impact_diagnostics = _impact_diagnostics(plan)
     replay_validation = values.get("nativeReplayValidation")
@@ -1444,6 +1455,7 @@ def build_projection_runtime_observation(
             "entityCount": _integer(inference.get("entityCount")),
             "executionStatus": _text(execution.get("status")),
             "nativeRuleTiming": native_rule_timing,
+            "nativeStageTimings": native_stage_timings,
             "replayValidation": {
                 "version": _text(replay_validation.get("version")),
                 "status": _text(replay_validation.get("status")),

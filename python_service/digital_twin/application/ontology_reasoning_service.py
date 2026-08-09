@@ -4476,6 +4476,11 @@ class OntologyReasoningRunner:
             }
         stages = observation.get("stages") if isinstance(observation.get("stages"), dict) else {}
         inference = observation.get("inference") if isinstance(observation.get("inference"), dict) else {}
+        native_stage_timings = (
+            inference.get("nativeStageTimings")
+            if isinstance(inference.get("nativeStageTimings"), dict)
+            else {}
+        )
         scope = observation.get("scope") if isinstance(observation.get("scope"), dict) else {}
         impact = scope.get("impactDiagnostics") if isinstance(scope.get("impactDiagnostics"), dict) else {}
         target_patch = scope.get("targetScopedManifestPatch") if isinstance(scope.get("targetScopedManifestPatch"), dict) else {}
@@ -4552,6 +4557,11 @@ class OntologyReasoningRunner:
             "candidateRuleRatioPct": float(float_value(inference.get("candidateRuleRatioPct"), 0.0)),
             "executedRuleCount": int(float_value(inference.get("executedRuleCount"), 0.0)),
             "executedRuleWorkCount": int(float_value(inference.get("executedRuleWorkCount"), 0.0)),
+            "nativeStageTimings": {
+                str(key): int(float_value(value, 0.0))
+                for key, value in native_stage_timings.items()
+                if str(key or "")
+            },
             "targetParallelism": int(float_value(inference.get("targetParallelism"), 0.0)),
             "targetWorkShardingUsed": bool(inference.get("targetWorkShardingUsed")),
             "targetWorkShardCount": int(float_value(inference.get("targetWorkShardCount"), 0.0)),

@@ -143,6 +143,16 @@ def reasoning_stage_records(
         )
 
     execution = _mapping(values.get("ruleboxExecution"))
+    for raw_key, raw_duration in _mapping(execution.get("typedbNativeStageTimings")).items():
+        stage_key = _text(raw_key)
+        if not stage_key or not isinstance(raw_duration, (int, float)):
+            continue
+        add(
+            "typedb-native:" + stage_key,
+            _semantic_stage_status(stage_key, values),
+            raw_duration,
+            {"runtimeMetric": stage_key, "nestedUnder": "nativeInferenceMs"},
+        )
     inference = _mapping(values.get("inferenceBox"))
     add("rulebox-selection", _text(execution.get("status")) or "not-run", detail={
         "selectionApplied": bool(execution.get("nativeRuleSelectionApplied")),

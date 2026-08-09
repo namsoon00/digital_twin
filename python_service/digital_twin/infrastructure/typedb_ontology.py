@@ -6547,6 +6547,19 @@ class ScopedABoxManifestMixin:
             "statementCount": 0,
         }
 
+    def profile_native_rule_reads(self, payload: Dict[str, object] = None) -> Dict[str, object]:
+        """Return a disabled read-only proof result for the null adapter."""
+        return {
+            "configured": False,
+            "status": "disabled",
+            "graphStore": "typedb",
+            "readOnly": True,
+            "mutatedOperationalState": False,
+            "writeMethodsInvoked": [],
+            "samples": [],
+            "reason": "TypeDB ontology storage is not configured.",
+        }
+
     def schema_function_prewarm_status(self) -> Dict[str, object]:
         return {
             "configured": False,
@@ -16003,6 +16016,370 @@ relation ontology-assertion,
                 "typedbQueryMetrics": self.query_metrics_snapshot(),
                 "executionPlan": typedb_native_rule_execution_plan_summary(execution_plan),
             }
+
+    @staticmethod
+    def abox_generation_identity(metadata: Dict[str, object]) -> Dict[str, object]:
+        """Build a compact identity for one immutable active ABox generation."""
+        values = dict(metadata or {})
+        scope_generations = values.get("scopeGenerationIds")
+        scope_generations = dict(scope_generations or {}) if isinstance(scope_generations, dict) else {}
+        identity_payload = {
+            "worldId": str(values.get("worldId") or ""),
+            "aboxSnapshotId": str(values.get("aboxSnapshotId") or ""),
+            "worldviewManifestId": str(values.get("worldviewManifestId") or ""),
+            "activePointerId": str(values.get("activePointerId") or ""),
+            "materialFingerprint": str(values.get("materialFingerprint") or ""),
+            "scopeTopologyVersion": str(values.get("scopeTopologyVersion") or ""),
+            "scopeGenerationIds": {
+                str(key): str(value)
+                for key, value in sorted(scope_generations.items())
+                if str(key)
+            },
+        }
+        encoded = json.dumps(identity_payload, ensure_ascii=False, sort_keys=True, separators=(",", ":"))
+        return {
+            "status": str(values.get("status") or ""),
+            "worldId": identity_payload["worldId"],
+            "aboxSnapshotId": identity_payload["aboxSnapshotId"],
+            "worldviewManifestId": identity_payload["worldviewManifestId"],
+            "activePointerId": identity_payload["activePointerId"],
+            "materialFingerprint": identity_payload["materialFingerprint"],
+            "scopeGenerationCount": len(identity_payload["scopeGenerationIds"]),
+            "fingerprint": hashlib.sha256(encoded.encode("utf-8")).hexdigest(),
+        }
+
+    @staticmethod
+    def compact_native_rule_profile_rows(rows: Iterable[Dict[str, object]]) -> List[Dict[str, object]]:
+        """Aggregate target shards while retaining every executed rule ID."""
+        grouped: Dict[str, Dict[str, object]] = {}
+        for raw in rows or []:
+            item = dict(raw or {}) if isinstance(raw, dict) else {}
+            rule_id = str(item.get("ruleId") or "").strip()
+            if not rule_id:
+                continue
+            target = grouped.setdefault(rule_id, {
+                "ruleId": rule_id,
+                "status": str(item.get("status") or "executed"),
+                "queryMode": str(item.get("queryMode") or ""),
+                "elapsedMs": 0,
+                "queryDurationMs": 0,
+                "queryCount": 0,
+                "rowCount": 0,
+                "workItemCount": 0,
+                "candidateSymbols": [],
+            })
+            target["elapsedMs"] += int(number_or_none(item.get("elapsedMs")) or 0)
+            target["queryDurationMs"] += int(number_or_none(item.get("queryDurationMs")) or 0)
+            target["queryCount"] += int(number_or_none(item.get("queryCount")) or 0)
+            target["rowCount"] += int(number_or_none(item.get("rowCount")) or 0)
+            target["workItemCount"] += 1
+            target["candidateSymbols"] = clean_symbols_from_payload([
+                *target["candidateSymbols"],
+                *(item.get("candidateSymbols") or []),
+            ])
+        return sorted(
+            grouped.values(),
+            key=lambda item: (int(item.get("elapsedMs") or 0), str(item.get("ruleId") or "")),
+            reverse=True,
+        )
+
+    def profile_native_rule_reads(self, payload: Dict[str, object] = None) -> Dict[str, object]:
+        """Replay the native read path without writing operational graph state.
+
+        The method reads the active RuleBox and ABox, evaluates schema
+        functions, loads the matched evidence graph, and builds an InferenceBox
+        graph in memory. It deliberately never syncs schema functions, acquires
+        a write lease, persists ABox/InferenceBox rows, or rotates generations.
+        A sample is comparable only when the active ABox identity is unchanged
+        before and after the complete read path.
+        """
+        values = dict(payload or {})
+        world_id = str(values.get("worldId") or "").strip()
+        target_symbols = clean_symbols_from_payload(values.get("symbols") or values.get("targetSymbols") or [])
+        repeat_count = max(1, min(3, int(number_or_none(values.get("repeats")) or 2)))
+        requested_query_mode = str(values.get("nativeQueryMode") or "").strip().lower()
+        if requested_query_mode not in {"auto", "schema-function", "direct-typeql"}:
+            requested_query_mode = (
+                "schema-function"
+                if "useSchemaFunctions" not in values or typedb_bool(values.get("useSchemaFunctions"))
+                else "direct-typeql"
+            )
+        requested_rule_ids = {
+            str(item or "").strip()
+            for item in values.get("ruleIds") or []
+            if str(item or "").strip()
+        }
+        report = {
+            "configured": bool(self.address),
+            "status": "error",
+            "graphStore": "typedb",
+            "readOnly": True,
+            "mutatedOperationalState": False,
+            "writeMethodsInvoked": [],
+            "excludedOperations": [
+                "schema-function-sync",
+                "abox-write",
+                "inferencebox-write",
+                "generation-activation",
+                "retention-cleanup",
+            ],
+            "worldId": world_id,
+            "targetSymbols": target_symbols,
+            "requestedRepeatCount": repeat_count,
+            "requestedNativeQueryMode": requested_query_mode,
+            "samples": [],
+        }
+        if not self.address:
+            report.update({"status": "disabled", "reason": "TypeDB ontology storage is not configured."})
+            return report
+
+        rulebox_started = time.perf_counter()
+        snapshot = self.rulebox_snapshot()
+        report["ruleboxReadMs"] = int((time.perf_counter() - rulebox_started) * 1000)
+        rules_payload = snapshot.get("rules") if isinstance(snapshot.get("rules"), list) else []
+        if str(snapshot.get("status") or "") != "ok" or not rules_payload:
+            report.update({
+                "status": "rulebox-not-ready",
+                "reason": str(snapshot.get("reason") or "Active RuleBox is unavailable."),
+            })
+            return report
+        try:
+            rules = [rule for rule in rulebox_rules_from_payload({"rules": rules_payload}) if bool(rule.enabled)]
+        except Exception as error:  # noqa: BLE001 - profiler must report malformed operational rules.
+            report.update({"status": "invalid-rulebox", "reason": str(error)[:220]})
+            return report
+        if requested_rule_ids:
+            rules = [rule for rule in rules if str(rule.rule_id or "") in requested_rule_ids]
+        if not rules:
+            report.update({"status": "no-rules", "reason": "No enabled RuleBox rule matched the requested IDs."})
+            return report
+
+        schema_function_probe = {
+            "status": "not-requested",
+            "available": requested_query_mode == "schema-function",
+        }
+        if requested_query_mode == "auto":
+            probe_started = time.perf_counter()
+            schema_function_probe = self.probe_typedb_native_rule_functions(rules, world_id)
+            schema_function_probe = {
+                key: schema_function_probe.get(key)
+                for key in [
+                    "status", "available", "probedCount", "verifiedRuleCount",
+                    "missingRuleIds", "missingFunctionNames", "reasonCode", "reason",
+                ]
+                if key in schema_function_probe
+            }
+            schema_function_probe["durationMs"] = int((time.perf_counter() - probe_started) * 1000)
+        use_schema_functions = (
+            requested_query_mode == "schema-function"
+            or requested_query_mode == "auto" and bool(schema_function_probe.get("available"))
+        )
+        report["nativeQueryMode"] = "schema-function" if use_schema_functions else "direct-typeql"
+        report["schemaFunctionProbe"] = schema_function_probe
+
+        report["rulebox"] = {
+            "ruleCount": len(rules),
+            "sourceRulesHash": rulebox_rules_hash(rules_payload),
+            "selectedRulesHash": rulebox_rules_hash([rule.to_dict() for rule in rules]),
+            "requestedRuleIds": sorted(requested_rule_ids),
+        }
+        for sample_index in range(repeat_count):
+            sample_started = time.perf_counter()
+            stage_timings: Dict[str, int] = {}
+            self.reset_query_metrics()
+            before_started = time.perf_counter()
+            before_metadata = self.active_abox_metadata(world_id)
+            stage_timings["activeAboxBeforeMs"] = int((time.perf_counter() - before_started) * 1000)
+            before_identity = self.abox_generation_identity(before_metadata)
+            sample: Dict[str, object] = {
+                "sample": sample_index + 1,
+                "status": "error",
+                "generationFingerprint": str(before_identity.get("fingerprint") or ""),
+                "generationBefore": before_identity,
+                "validForComparison": False,
+                "stageTimings": stage_timings,
+            }
+            if str(before_metadata.get("status") or "") != "ok":
+                sample.update({
+                    "status": "abox-not-ready",
+                    "reason": str(before_metadata.get("reason") or "Active ABox is unavailable."),
+                    "wallClockMs": int((time.perf_counter() - sample_started) * 1000),
+                    "typedbQueryMetrics": self.query_metrics_snapshot(),
+                })
+                report["samples"].append(sample)
+                continue
+
+            planner = typedb_native_rule_planner_topology_for_execution(
+                before_metadata,
+                target_symbols=target_symbols,
+            )
+            planner_topology = (
+                dict(planner.get("topology") or {})
+                if str(planner.get("status") or "") == "verified"
+                else None
+            )
+            scoped_active_abox = (
+                str(before_metadata.get("scopedAboxManifestVersion") or "")
+                == SCOPED_ABOX_MANIFEST_VERSION
+            )
+            evidence_read_index = (
+                typedb_native_rule_evidence_read_index_for_execution(
+                    before_metadata,
+                    target_symbols=target_symbols,
+                )
+                if scoped_active_abox
+                else {
+                    "status": "legacy",
+                    "source": "legacy-active-membership",
+                    "index": {},
+                }
+            )
+            native_started = time.perf_counter()
+            try:
+                native_result = self.match_typedb_native_rules(
+                    rules,
+                    target_symbols=target_symbols,
+                    use_schema_functions=use_schema_functions,
+                    world_id=world_id,
+                    planner_topology=planner_topology,
+                    native_rule_parallelism=(self.native_rule_parallelism() if use_schema_functions else 1),
+                    native_rule_target_parallelism=1,
+                    stable_abox_write_lease_held=False,
+                    evidence_read_index=evidence_read_index,
+                )
+            except Exception as error:  # noqa: BLE001 - retain an invalid diagnostic sample.
+                native_result = {
+                    "status": "query-error",
+                    "reason": str(error)[:220],
+                    "executedRules": [],
+                    "skippedRules": [],
+                }
+            stage_timings["nativeRuleQueriesMs"] = int((time.perf_counter() - native_started) * 1000)
+            native_status = str(native_result.get("status") or "error")
+            sample_reason = str(native_result.get("reason") or "")[:220]
+            core_evaluation_complete = bool(
+                native_result.get("coreNativeInferenceEvaluationComplete")
+                if "coreNativeInferenceEvaluationComplete" in native_result
+                else native_status == "ok"
+            )
+            full_evaluation_complete = bool(
+                native_result.get("nativeInferenceEvaluationComplete")
+                if "nativeInferenceEvaluationComplete" in native_result
+                else native_status == "ok"
+            )
+            graph_counts = {"entityCount": 0, "relationCount": 0, "inferenceRelationCount": 0}
+            if native_status == "ok":
+                try:
+                    graph_started = time.perf_counter()
+                    graph = self.load_graph_for_native_matches(
+                        native_result,
+                        rules,
+                        world_id=world_id,
+                        **({"evidence_read_index": evidence_read_index} if scoped_active_abox else {}),
+                    )
+                    stage_timings["matchedGraphReadMs"] = int((time.perf_counter() - graph_started) * 1000)
+                    graph.worldview.update({
+                        "worldId": world_id,
+                        "worldType": str(before_metadata.get("worldType") or ""),
+                        "tenantId": str(before_metadata.get("tenantId") or ""),
+                        "accountId": str(before_metadata.get("accountId") or ""),
+                    })
+                    build_started = time.perf_counter()
+                    materialize_typedb_native_matches(graph, rules, native_result)
+                    in_memory_inference = typedb_inferencebox_graph(
+                        graph,
+                        generation_id="read-only-profile-" + str(sample_index + 1),
+                        rulebox_metadata={
+                            "worldId": world_id,
+                            "readOnlyProfile": True,
+                        },
+                    )
+                    stage_timings["inferenceGraphBuildMs"] = int((time.perf_counter() - build_started) * 1000)
+                    graph_counts = {
+                        "entityCount": len(graph.entities),
+                        "relationCount": len(graph.relations),
+                        "inferenceEntityCount": len(in_memory_inference.entities),
+                        "inferenceRelationCount": len(in_memory_inference.relations),
+                    }
+                except Exception as error:  # noqa: BLE001 - retain query evidence when graph read fails.
+                    native_status = "graph-read-error"
+                    sample_reason = str(error)[:220]
+
+            after_started = time.perf_counter()
+            try:
+                after_metadata = self.active_abox_metadata(world_id)
+            except Exception as error:  # noqa: BLE001 - a missing after identity invalidates only this sample.
+                after_metadata = {"status": "error", "reason": str(error)[:220]}
+            stage_timings["activeAboxAfterMs"] = int((time.perf_counter() - after_started) * 1000)
+            after_identity = self.abox_generation_identity(after_metadata)
+            generation_unchanged = bool(
+                str(before_identity.get("status") or "") == "ok"
+                and str(after_identity.get("status") or "") == "ok"
+                and str(before_identity.get("fingerprint") or "")
+                == str(after_identity.get("fingerprint") or "")
+            )
+            sample.update({
+                "status": native_status,
+                "reason": sample_reason,
+                "generationAfter": after_identity,
+                "generationUnchanged": generation_unchanged,
+                "validForComparison": (
+                    native_status == "ok"
+                    and core_evaluation_complete
+                    and generation_unchanged
+                ),
+                "wallClockMs": int((time.perf_counter() - sample_started) * 1000),
+                "coreEvaluationComplete": core_evaluation_complete,
+                "fullEvaluationComplete": full_evaluation_complete,
+                "nativeCoverageStatus": str(native_result.get("nativeCoverageStatus") or ""),
+                "supportingRuleFailureCount": int(
+                    number_or_none(native_result.get("supportingRuleFailureCount")) or 0
+                ),
+                "blockingRuleFailureCount": int(
+                    number_or_none(native_result.get("blockingRuleFailureCount")) or 0
+                ),
+                "executedRuleCount": int(number_or_none(native_result.get("executedRuleCount")) or 0),
+                "executedRuleWorkCount": int(number_or_none(native_result.get("executedRuleWorkCount")) or 0),
+                "skippedRuleCount": int(number_or_none(native_result.get("skippedRuleCount")) or 0),
+                "matchedCount": int(number_or_none(native_result.get("matchedCount")) or 0),
+                "readTransactionCount": int(number_or_none(native_result.get("readTransactionCount")) or 0),
+                "readQueryCount": int(number_or_none(native_result.get("readQueryCount")) or 0),
+                "parallelRuleExecution": bool(native_result.get("parallelRuleExecution")),
+                "nativeRuleParallelism": int(number_or_none(native_result.get("nativeRuleParallelism")) or 1),
+                "graphCounts": graph_counts,
+                "rules": self.compact_native_rule_profile_rows(native_result.get("executedRules") or []),
+                "skippedRules": self.compact_native_rule_profile_rows(native_result.get("skippedRules") or []),
+                "typedbQueryMetrics": self.query_metrics_snapshot(),
+            })
+            report["samples"].append(sample)
+
+        try:
+            final_snapshot = self.rulebox_snapshot()
+        except Exception as error:  # noqa: BLE001 - an unverifiable RuleBox invalidates every sample.
+            final_snapshot = {"status": "error", "reason": str(error)[:220]}
+        final_rules_payload = final_snapshot.get("rules") if isinstance(final_snapshot.get("rules"), list) else []
+        final_hash = rulebox_rules_hash(final_rules_payload) if final_rules_payload else ""
+        report["rulebox"]["finalRulesHash"] = final_hash
+        report["rulebox"]["unchanged"] = bool(
+            final_hash
+            and final_hash == report["rulebox"]["sourceRulesHash"]
+        )
+        for sample in report["samples"]:
+            sample["ruleboxUnchanged"] = bool(report["rulebox"]["unchanged"])
+            if not report["rulebox"]["unchanged"]:
+                sample["validForComparison"] = False
+        valid_count = sum(1 for item in report["samples"] if item.get("validForComparison"))
+        report.update({
+            "status": "ok" if valid_count == repeat_count else "partial" if valid_count else "inconclusive",
+            "validSampleCount": valid_count,
+            "invalidSampleCount": repeat_count - valid_count,
+            "reason": (
+                "Every read-only sample used an unchanged active ABox generation."
+                if valid_count == repeat_count
+                else "At least one sample failed, crossed an active ABox generation, or observed a RuleBox change."
+            ),
+        })
+        return report
 
     def merge_native_match_rows(
         self,

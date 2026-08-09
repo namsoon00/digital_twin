@@ -56,6 +56,7 @@ from ..application.ontology_reasoning_service import (
     OntologyReasoningRunner,
     lightweight_ontology_reasoning_queue_state,
 )
+from ..application.ontology_reasoning_proof_service import OntologyReasoningProofService
 from ..application.ontology_maintenance_service import OntologyMaintenanceRunner
 from ..application.ontology_inference_detail_service import OntologyInferenceDetailRunner
 from ..application.ontology_rulebox_prewarm_service import OntologyRuleboxPrewarmRunner
@@ -930,6 +931,21 @@ def build_ontology_maintenance_runner(settings=None) -> OntologyMaintenanceRunne
         settings=configured_settings,
         reasoning_queue_probe=build_ontology_reasoning_queue_probe(configured_settings),
         capacity_guard=capacity_guard,
+    )
+
+
+def build_ontology_reasoning_proof_service(settings=None) -> OntologyReasoningProofService:
+    """Compose a read-only production-history and TypeDB replay diagnostic."""
+    configured_settings = settings or runtime_settings()
+    read_only_store_settings = dict(configured_settings)
+    read_only_store_settings["_skipOperationalHistoryRetention"] = "1"
+    read_only_store_settings["_skipOperationalSchemaBootstrap"] = "1"
+    return OntologyReasoningProofService(
+        ontology_repository=ontology_repository_from_settings(configured_settings),
+        projection_run_store=stores.ontology_projection_run_store(read_only_store_settings),
+        account_repository=stores.account_registry(read_only_store_settings),
+        reasoning_cursor_store=stores.ontology_reasoning_cursor_store(read_only_store_settings),
+        settings=configured_settings,
     )
 
 

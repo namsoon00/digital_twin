@@ -48,6 +48,7 @@
     "python:ai-inference:status": "python3 python_service/service.py ai-inference status",
     "python:ai-inference:watch": "python3 python_service/service.py ai-inference watch",
     "python:ontology-reasoning:once": "python3 python_service/service.py ontology-reasoning once",
+    "python:ontology-reasoning:profile": "python3 python_service/service.py ontology-reasoning profile",
     "python:ontology-reasoning:status": "python3 python_service/service.py ontology-reasoning status",
     "python:ontology-reasoning:watch": "python3 python_service/service.py ontology-reasoning watch",
     "python:ontology-world-projection:once": "python3 python_service/service.py ontology-world-projection once",

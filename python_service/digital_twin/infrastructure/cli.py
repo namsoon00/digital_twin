@@ -62,6 +62,7 @@ from .service_factory import (
     build_ontology_inference_detail_runner,
     build_ontology_maintenance_runner,
     build_ontology_rulebox_prewarm_runner,
+    build_ontology_reasoning_proof_service,
     build_ontology_reasoning_runner,
     build_ontology_reasoning_queue_probe,
     build_ontology_world_projection_runner,
@@ -401,6 +402,46 @@ def ai_inference_command(args) -> int:
 
 def ontology_reasoning_command(args) -> int:
     settings = runtime_settings(fast_operational_read=True)
+    if args.ontology_reasoning_action == "profile":
+        service = build_ontology_reasoning_proof_service(settings)
+        result = service.prove(
+            account_id=str(getattr(args, "account_id", "") or ""),
+            world_id=str(getattr(args, "world_id", "") or ""),
+            symbols=split_symbols(str(getattr(args, "symbols", "") or "")),
+            repeats=int(getattr(args, "repeats", 2) or 2),
+            production_run_limit=int(getattr(args, "production_runs", 10) or 10),
+            rule_ids=list(getattr(args, "rule_id", None) or []),
+        )
+        if not bool(getattr(args, "full", False)):
+            production = dict(result.get("productionEvidence") or {})
+            production.pop("runs", None)
+            result["productionEvidence"] = production
+            replay = dict(result.get("readOnlyReplay") or {})
+            compact_samples = []
+            for raw_sample in replay.get("samples") or []:
+                sample = dict(raw_sample or {})
+                compact_samples.append({
+                    key: sample.get(key)
+                    for key in [
+                        "sample", "status", "reason", "validForComparison",
+                        "generationUnchanged", "ruleboxUnchanged", "generationFingerprint", "wallClockMs",
+                        "stageTimings", "executedRuleCount", "executedRuleWorkCount",
+                        "skippedRuleCount", "matchedCount", "readTransactionCount",
+                        "readQueryCount", "parallelRuleExecution", "nativeRuleParallelism",
+                        "coreEvaluationComplete", "fullEvaluationComplete", "nativeCoverageStatus",
+                        "supportingRuleFailureCount", "blockingRuleFailureCount", "graphCounts",
+                    ]
+                    if key in sample
+                } | {
+                    "slowRules": list(sample.get("rules") or [])[:8],
+                })
+            replay["samples"] = compact_samples
+            result["readOnlyReplay"] = replay
+            trace = dict(result.get("productionRuleTrace") or {})
+            trace["rules"] = list(trace.get("rules") or [])[:8]
+            result["productionRuleTrace"] = trace
+        print(json.dumps(result, ensure_ascii=False))
+        return 0
     limit = int(args.limit or settings.get("ontologyReasoningBatchSize") or 20) if hasattr(args, "limit") else int(settings.get("ontologyReasoningBatchSize") or 20)
     local_lease_recovery = {}
     if args.ontology_reasoning_action in {"once", "watch"}:
@@ -1604,6 +1645,21 @@ def build_parser() -> argparse.ArgumentParser:
     ontology_watch.add_argument("--limit", default="")
     ontology_reasoning_actions.add_parser("serve", help=argparse.SUPPRESS)
     ontology_reasoning_actions.add_parser("status")
+    ontology_profile = ontology_reasoning_actions.add_parser(
+        "profile",
+        help="Prove TypeDB reasoning bottlenecks with a read-only same-generation replay",
+    )
+    ontology_profile.add_argument("--account-id", default="")
+    ontology_profile.add_argument("--world-id", default="")
+    ontology_profile.add_argument("--symbols", default="")
+    ontology_profile.add_argument("--repeats", default="2")
+    ontology_profile.add_argument("--production-runs", default="10")
+    ontology_profile.add_argument("--rule-id", action="append", default=[])
+    ontology_profile.add_argument(
+        "--full",
+        action="store_true",
+        help="Include full generation metadata, skipped rules, and query diagnostics",
+    )
     ontology_reasoning.set_defaults(func=ontology_reasoning_command)
 
     ontology_world_projection = subparsers.add_parser(

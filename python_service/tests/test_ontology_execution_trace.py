@@ -33,6 +33,10 @@ class OntologyExecutionTraceTests(unittest.TestCase):
             "inferenceImpactPlan": {"candidateRuleIds": ["rule.price"]},
             "ruleboxExecution": {
                 "status": "ok",
+                "typedbNativeStageTimings": {
+                    "nativeRuleQueriesMs": 7000,
+                    "matchedGraphReadMs": 1500,
+                },
                 "nativeRuleSelectionApplied": True,
                 "nativeRuleSelectionCandidateCount": 1,
                 "nativeRuleSelectionExecutedRuleIds": ["rule.price", "rule.prior"],
@@ -71,6 +75,12 @@ class OntologyExecutionTraceTests(unittest.TestCase):
         self.assertEqual("CRITICAL_REASONING", trace["lane"])
         ai_stage = next(item for item in trace["stages"] if item["stageKey"] == "notification-ai")
         self.assertEqual("skipped-disabled", ai_stage["status"])
+        native_query_stage = next(
+            item for item in trace["stages"]
+            if item["stageKey"] == "typedb-native:nativeRuleQueriesMs"
+        )
+        self.assertEqual(7000, native_query_stage["durationMs"])
+        self.assertEqual("nativeInferenceMs", native_query_stage["detail"]["nestedUnder"])
         rules = {item["ruleId"]: item for item in trace["rules"]}
         self.assertEqual("matched", rules["rule.price"]["status"])
         self.assertEqual("changed-rule-dependency", rules["rule.price"]["selectedReason"])

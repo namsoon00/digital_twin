@@ -353,9 +353,14 @@ class OntologyRuntimeOperationsTests(unittest.TestCase):
         }
 
     def test_projection_observation_keeps_scope_and_native_inference_cost_together(self):
+        result = self.sample_result()
+        result["ruleboxExecution"]["typedbNativeStageTimings"] = {
+            "nativeRuleQueriesMs": 4200,
+            "matchedGraphReadMs": 1700,
+        }
         observation = build_projection_runtime_observation(
             self.sample_run(),
-            self.sample_result(),
+            result,
             {"ontologyRuntimeProjectionSloSeconds": "5"},
         )
 
@@ -365,6 +370,7 @@ class OntologyRuntimeOperationsTests(unittest.TestCase):
         self.assertEqual(2, observation["scope"]["affectedScopeCount"])
         self.assertEqual(3, observation["inference"]["candidateRuleCount"])
         self.assertEqual(2, observation["inference"]["matchedRuleCount"])
+        self.assertEqual(4200, observation["inference"]["nativeStageTimings"]["nativeRuleQueriesMs"])
         self.assertTrue(observation["inference"]["generationAligned"])
         self.assertEqual(1, observation["abox"]["cleanup"]["removedManifestCount"])
         self.assertEqual("applied", observation["scope"]["targetScopedManifestPatch"]["status"])

@@ -1,4 +1,6 @@
+import tempfile
 import unittest
+from pathlib import Path
 from unittest.mock import patch
 
 from digital_twin import service_manager
@@ -84,6 +86,41 @@ class AIInferenceWorkerRuntimeTests(unittest.TestCase):
         with patch.object(service_manager, "pid_exists", return_value=False), \
              patch.object(service_manager, "tcp_ready", return_value=True):
             self.assertTrue(service_manager.is_running(0, spec))
+
+    def test_service_stop_removes_stale_web_pid_without_signaling_external_listener(self):
+        with tempfile.TemporaryDirectory() as temp:
+            pid_path = Path(temp) / "web.pid"
+            pid_path.write_text("123\n", encoding="utf-8")
+            spec = {
+                "label": "web",
+                "role": "web",
+                "pid": pid_path,
+                "log": Path(temp) / "web.log",
+                "healthAddress": "127.0.0.1:3000",
+            }
+            with patch.object(service_manager, "pid_exists", return_value=False), \
+                 patch.object(service_manager.os, "kill") as kill:
+                self.assertEqual(0, service_manager.stop_worker(spec))
+
+            kill.assert_not_called()
+            self.assertFalse(pid_path.exists())
+
+    def test_service_stop_accepts_process_exit_between_check_and_signal(self):
+        with tempfile.TemporaryDirectory() as temp:
+            pid_path = Path(temp) / "worker.pid"
+            pid_path.write_text("456\n", encoding="utf-8")
+            spec = {
+                "label": "worker",
+                "role": "monitor",
+                "pid": pid_path,
+                "log": Path(temp) / "worker.log",
+            }
+            with patch.object(service_manager, "pid_exists", return_value=True), \
+                 patch.object(service_manager, "is_running", return_value=True), \
+                 patch.object(service_manager.os, "kill", side_effect=ProcessLookupError):
+                self.assertEqual(0, service_manager.stop_worker(spec))
+
+            self.assertFalse(pid_path.exists())
 
     def test_first_worker_recognizes_pre_queue_process_for_safe_upgrade_stop(self):
         with patch.object(service_manager, "runtime_settings", return_value={

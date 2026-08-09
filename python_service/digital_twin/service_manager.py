@@ -1471,11 +1471,24 @@ def stop_worker(spec: Dict[str, object]) -> int:
     if not pid:
         print(str(spec["label"]) + " is not running.")
         return 0
+    # `is_running` deliberately treats an unmanaged web listener on the
+    # canonical port as healthy.  A stale managed PID must not inherit that
+    # listener's health and receive a signal after its process has exited.
+    if not pid_exists(pid):
+        remove_pid(pid_path)
+        print(str(spec["label"]) + " was not running. Removed stale pid file.")
+        return 0
     if not is_running(pid, spec):
         remove_pid(pid_path)
         print(str(spec["label"]) + " was not running. Removed stale pid file.")
         return 0
-    os.kill(pid, signal.SIGTERM)
+    try:
+        os.kill(pid, signal.SIGTERM)
+    except ProcessLookupError:
+        remove_pid(pid_path)
+        append_log(log_path, "stop")
+        print(str(spec["label"]) + " stopped before signal delivery. pid=" + str(pid))
+        return 0
     attempts = 150 if str(spec.get("role") or "") in {"mysql", "typedb"} else 25
     for _index in range(attempts):
         time.sleep(0.2)
@@ -1484,7 +1497,13 @@ def stop_worker(spec: Dict[str, object]) -> int:
             append_log(log_path, "stop")
             print(str(spec["label"]) + " stopped. pid=" + str(pid))
             return 0
-    os.kill(pid, signal.SIGKILL)
+    try:
+        os.kill(pid, signal.SIGKILL)
+    except ProcessLookupError:
+        remove_pid(pid_path)
+        append_log(log_path, "stop")
+        print(str(spec["label"]) + " stopped before forced termination. pid=" + str(pid))
+        return 0
     remove_pid(pid_path)
     append_log(log_path, "kill")
     print(str(spec["label"]) + " killed. pid=" + str(pid))

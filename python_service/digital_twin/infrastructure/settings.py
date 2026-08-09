@@ -1745,7 +1745,7 @@ def runtime_settings(fast_operational_read: bool = False) -> Dict[str, str]:
         "ontologyRuleboxPrewarmEnabled": value(
             "ontologyRuleboxPrewarmEnabled",
             "ONTOLOGY_RULEBOX_PREWARM_ENABLED",
-            "1",
+            "0",
         ),
         "ontologyRuleboxPrewarmRequireReadyForInference": value(
             "ontologyRuleboxPrewarmRequireReadyForInference",
@@ -1835,7 +1835,7 @@ def runtime_settings(fast_operational_read: bool = False) -> Dict[str, str]:
         "typedbNativeRuleDirectQueryFallbackEnabled": value(
             "typedbNativeRuleDirectQueryFallbackEnabled",
             "TYPEDB_NATIVE_RULE_DIRECT_QUERY_FALLBACK_ENABLED",
-            "0",
+            "1",
         ),
         "typedbNativeRuleQueryTimeoutSeconds": value(
             "typedbNativeRuleQueryTimeoutSeconds",

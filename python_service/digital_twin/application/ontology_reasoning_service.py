@@ -843,14 +843,15 @@ class OntologyReasoningRunner:
         )
 
     def rulebox_prewarm_direct_fallback_enabled(self) -> bool:
-        """Whether a cold RuleBox may use bounded direct TypeQL evaluation.
+        """Whether RuleBox candidates may use bounded direct TypeQL evaluation.
 
-        This remains a compatibility capability. ``rulebox_prewarm_required``
-        governs whether normal production inference may actually take it.
+        This is the production path until generated-function compilation has
+        been profiled and explicitly enabled. ``rulebox_prewarm_required``
+        still enforces a strict compiled-only deployment when requested.
         """
         return self.native_typedb_rule_execution_enabled() and truthy(
             self.settings.get("typedbNativeRuleDirectQueryFallbackEnabled"),
-            False,
+            True,
         )
 
     def rulebox_prewarm_retry_seconds(self) -> int:

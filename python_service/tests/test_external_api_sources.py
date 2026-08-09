@@ -407,11 +407,12 @@ class ExternalApiSourceTests(unittest.TestCase):
         self.assertEqual(202414, retained["institutionNetVolume"])
 
     def test_external_api_error_redacts_key_disclosed_by_provider(self):
-        message = "We have detected your API key as 8YHIHMCZZ3W8L64E and our standard rate limit applies"
+        fake_key = "TESTKEY1234567890"
+        message = "We have detected your API key as " + fake_key + " and our standard rate limit applies"
 
         sanitized = sanitize_sensitive_text(message)
 
-        self.assertNotIn("8YHIHMCZZ3W8L64E", sanitized)
+        self.assertNotIn(fake_key, sanitized)
         self.assertIn("API key as ***", sanitized)
 
     def snapshot_with_sources(self) -> AccountSnapshot:

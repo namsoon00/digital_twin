@@ -4422,7 +4422,7 @@ class OntologyReasoningRunner:
                 )
                 if (
                     not support_only_gap
-                    and str(replay_validation.get("status") or "") != "verified-prior-coverage"
+                    and not bool(replay_validation.get("verified"))
                 ):
                     add_result(
                         account_id,

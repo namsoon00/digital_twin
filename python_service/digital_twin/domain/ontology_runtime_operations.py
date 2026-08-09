@@ -677,9 +677,11 @@ def native_replay_validation(result: Mapping[str, object] = None) -> Dict[str, o
     """Validate native-rule coverage without running a second rule engine.
 
     A full TypeDB execution is complete by itself. A dependency-selected
-    execution can only be reused when the preceding complete native proof is
-    present and aligned. The function merely classifies persisted TypeDB
-    evidence; it never evaluates a RuleBox condition in Python.
+    execution is a complete delta when TypeDB evaluated every selected rule
+    and the execution ledger accounts for every deferred RuleBox rule. An
+    aligned prior proof can add unchanged matches, but its absence must not
+    invalidate the current changed-candidate result. The function merely
+    classifies persisted TypeDB evidence; it never evaluates a condition.
     """
     values = dict(result or {}) if isinstance(result, Mapping) else {}
     inference = values.get("inferenceBox")
@@ -721,24 +723,38 @@ def native_replay_validation(result: Mapping[str, object] = None) -> Dict[str, o
         and bool(proof.get("coverageComplete"))
         and bool(proof.get("selectionApplied")) == selection_applied
     )
+    candidate_rule_count = max(0, _integer(execution.get("nativeRuleSelectionCandidateCount")))
+    executed_rule_count = max(0, _integer(execution.get("nativeRuleSelectionExecutedCount")))
+    deferred_rule_count = max(0, _integer(execution.get("nativeRuleSelectionDeferredCount")))
+    full_rule_count = max(0, _integer(execution.get("nativeRuleSelectionFullRuleCount")))
+    selected_ledger_complete = bool(
+        full_rule_count > 0
+        and executed_rule_count >= candidate_rule_count
+        and executed_rule_count + deferred_rule_count == full_rule_count
+    )
     if selection_applied:
         verified = bool(
             native_evaluation_complete
             and generation_aligned
             and coverage_complete
-            and proof_verified
+            and selected_ledger_complete
         )
-        status = "verified-prior-coverage" if verified else "incomplete-coverage"
-        if verified:
+        if verified and proof_verified:
+            status = "verified-prior-coverage"
             reason = "Dependency-selected native execution is backed by an aligned prior complete TypeDB proof."
-        elif not proof_verified:
-            reason = "Dependency-selected execution is missing an aligned prior complete TypeDB proof."
-        elif not coverage_complete:
-            reason = "Dependency-selected execution did not cover every requested target symbol."
-        elif not native_evaluation_complete:
-            reason = "TypeDB did not confirm native rule evaluation completion."
+        elif verified:
+            status = "verified-selected-delta"
+            reason = "TypeDB evaluated every changed candidate and explicitly accounted for every deferred RuleBox rule."
         else:
-            reason = "TypeDB InferenceBox is not aligned with the active ABox generation."
+            status = "incomplete-coverage"
+            if not selected_ledger_complete:
+                reason = "Dependency-selected execution does not account for the complete selected/deferred RuleBox ledger."
+            elif not coverage_complete:
+                reason = "Dependency-selected execution did not cover every requested target symbol."
+            elif not native_evaluation_complete:
+                reason = "TypeDB did not confirm native rule evaluation completion."
+            else:
+                reason = "TypeDB InferenceBox is not aligned with the active ABox generation."
     else:
         verified = bool(native_evaluation_complete and generation_aligned and coverage_complete)
         status = "complete-native-evaluation" if verified else "incomplete-native-evaluation"
@@ -762,6 +778,11 @@ def native_replay_validation(result: Mapping[str, object] = None) -> Dict[str, o
         "requestedTargetSymbolCount": len(requested_symbols),
         "actualTargetSymbolCount": len(actual_symbols),
         "priorProofStatus": _text(proof.get("status")),
+        "candidateRuleCount": candidate_rule_count,
+        "executedRuleCount": executed_rule_count,
+        "deferredRuleCount": deferred_rule_count,
+        "fullRuleCount": full_rule_count,
+        "selectedRuleLedgerComplete": selected_ledger_complete,
     }
 
 

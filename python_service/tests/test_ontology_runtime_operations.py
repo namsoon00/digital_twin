@@ -449,19 +449,34 @@ class OntologyRuntimeOperationsTests(unittest.TestCase):
         self.assertTrue(observation["inference"]["nativeRuleSelectionApplied"])
         self.assertEqual(6200, observation["stages"]["nativeInferenceMs"])
 
-    def test_dependency_selected_execution_requires_a_verified_prior_native_proof(self):
+    def test_dependency_selected_execution_accepts_a_complete_selected_delta_without_prior_proof(self):
         result = self.sample_result()
         result["inferenceBox"].update({
             "nativeTypeDbReasoningCompleted": True,
             "targetSymbols": ["005930"],
         })
-        result["ruleboxExecution"].update({"nativeRuleSelectionApplied": True})
+        result["ruleboxExecution"].update({
+            "nativeRuleSelectionApplied": True,
+            "nativeInferenceEvaluationComplete": True,
+            "nativeRuleSelectionCandidateCount": 3,
+            "nativeRuleSelectionExecutedCount": 3,
+            "nativeRuleSelectionDeferredCount": 6,
+            "nativeRuleSelectionFullRuleCount": 9,
+        })
 
-        missing_proof = native_replay_validation(result)
+        selected_delta = native_replay_validation(result)
 
-        self.assertEqual("incomplete-coverage", missing_proof["status"])
-        self.assertFalse(missing_proof["verified"])
+        self.assertEqual("verified-selected-delta", selected_delta["status"])
+        self.assertTrue(selected_delta["verified"])
+        self.assertTrue(selected_delta["selectedRuleLedgerComplete"])
 
+        result["ruleboxExecution"]["nativeRuleSelectionExecutedCount"] = 2
+        incomplete = native_replay_validation(result)
+
+        self.assertEqual("incomplete-coverage", incomplete["status"])
+        self.assertFalse(incomplete["verified"])
+
+        result["ruleboxExecution"]["nativeRuleSelectionExecutedCount"] = 3
         result["inferenceReuseProof"] = {
             "status": "verified",
             "coverageComplete": True,

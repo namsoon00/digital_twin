@@ -3,6 +3,7 @@ from dataclasses import replace
 from typing import Dict, List
 
 from .hypothesis_scoping import condition_scope_profile
+from .ontology_change_impact import rule_dependency_profile
 from .ontology_rulebox_contracts import (
     WATCHLIST_ACTION_POLICY,
     WATCHLIST_ALLOWED_ACTIONS,
@@ -499,34 +500,50 @@ def _rulebox_v3_family_key(rule: GraphInferenceRule) -> str:
     }
     if rule_id in explicit:
         return explicit[rule_id]
-    crypto_parts = rule_id.split(".")
-    if len(crypto_parts) >= 7 and crypto_parts[1:3] == ["crypto", "market"]:
-        return "crypto-market:" + ":".join(crypto_parts[3:5])
+    if str(rule.source_kind or "").strip().lower() == "crypto-asset":
+        condition = next(iter(rule.conditions or []), None)
+        filters = dict(getattr(condition, "target_property_filters", {}) or {})
+        field = next((str(key) for key in filters if str(key).lower().startswith("change")), "")
+        comparison = filters.get(field) if field else {}
+        operator = str((comparison or {}).get("operator") or "") if isinstance(comparison, dict) else ""
+        horizon = "24h" if "24" in field else "7d" if "7" in field else "change"
+        direction = "up" if operator in {">", ">="} else "down" if operator in {"<", "<="} else "path"
+        return "crypto-market:" + horizon + ":" + direction
     return rule_id.removeprefix("graph.").removesuffix(".v1") or rule_id
 
 
 def _rulebox_v3_lifecycle(rule: GraphInferenceRule, conditions: List[GraphRuleCondition]) -> HypothesisLifecyclePolicy:
-    rule_id = str(rule.rule_id or "").lower()
+    dependency = rule_dependency_profile(replace(rule, conditions=conditions))
+    families = set(dependency.get("scopeFamilies") or [])
+    condition_vocabulary = " ".join(
+        " ".join([
+            str(condition.field or ""),
+            str(condition.relation_type or ""),
+            str(condition.target_kind or ""),
+        ]).lower()
+        for condition in conditions
+    )
+    source_kind = str(rule.source_kind or "").strip().lower()
     validity_minutes = 30
     freshness_domains = ["quote"]
     next_data = ["다음 현재가와 가격 경로"]
-    if rule_id.startswith("graph.crypto.market"):
+    if source_kind == "crypto-asset" or "crypto" in condition_vocabulary:
         validity_minutes, freshness_domains, next_data = 25, ["quote"], ["BTC/ETH 다음 수집값", "민감 종목 가격 반응"]
-    elif any(token in rule_id for token in ("news", "disclosure", "earnings", "regulatory")):
+    elif "evidence" in families:
         validity_minutes, freshness_domains, next_data = 1440, ["research"], ["원문", "후속 보도 또는 공시", "가격 반응"]
-    elif any(token in rule_id for token in ("valuation",)):
+    elif "valuation" in families:
         validity_minutes, freshness_domains, next_data = 10080, ["research"], ["EPS/PER 가정", "실적 또는 컨센서스 갱신"]
-    elif any(token in rule_id for token in ("macro", "fx", "rate")):
+    elif any(family == "macro" or family.startswith("macro-") for family in families):
         validity_minutes, freshness_domains, next_data = 360, ["quote"], ["거시 원시값", "개별 종목 가격 반응"]
-    elif any(token in rule_id for token in ("data_quality", "coverage")):
-        validity_minutes, freshness_domains, next_data = 30, ["static"], ["누락 필드 복구", "출처 기준 시각"]
-    elif any(token in rule_id for token in ("execution", "liquidity")):
+    elif any(token in condition_vocabulary for token in ("execution", "liquidity", "slippage", "orderbook")):
         validity_minutes, freshness_domains, next_data = 10, ["quote", "portfolio"], ["호가", "거래대금", "매도 가능 수량"]
-    elif any(token in rule_id for token in ("temporal", "trend", "rebound", "recovery")):
+    elif "quality" in families:
+        validity_minutes, freshness_domains, next_data = 30, ["static"], ["누락 필드 복구", "출처 기준 시각"]
+    elif "temporal" in families:
         validity_minutes, freshness_domains, next_data = 60, ["quote", "trend"], ["다음 가격 경로", "거래량 또는 수급"]
-    elif rule.source_kind == "portfolio" or any(token in rule_id for token in ("factor", "benchmark", "portfolio")):
+    elif source_kind == "portfolio" or "portfolio" in families or "exposure" in families:
         validity_minutes, freshness_domains, next_data = 240, ["portfolio"], ["포트폴리오 비중", "상관 또는 노출 변화"]
-    elif "flow" in rule_id or "smart_money" in rule_id:
+    elif "flow" in families:
         validity_minutes, freshness_domains, next_data = 30, ["quote", "flow"], ["다음 수급 스냅샷", "가격·거래량 동조"]
     formation = [
         condition.condition_id

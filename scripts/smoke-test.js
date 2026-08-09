@@ -8,7 +8,10 @@ const path = require("path");
 const vm = require("vm");
 
 const rootDir = path.resolve(__dirname, "..");
-const requestTimeoutMs = Number(process.env.SMOKE_REQUEST_TIMEOUT_MS || 30000);
+// A fresh smoke database creates the complete operational schema on its first
+// /api/bootstrap request. Keep that cold-start check bounded, but allow the
+// local MySQL DDL path enough headroom under concurrent worker load.
+const requestTimeoutMs = Number(process.env.SMOKE_REQUEST_TIMEOUT_MS || 60000);
 const flowLensReadyTimeoutMs = Math.max(1000, Number(process.env.FLOW_LENS_SMOKE_READY_TIMEOUT_MS || 30000) || 30000);
 
 function randomPort() {
@@ -2221,6 +2224,7 @@ async function withServer(extraEnv, callback) {
     MYSQL_USER: process.env.MYSQL_USER || "root",
     MYSQL_PASSWORD: process.env.MYSQL_PASSWORD || "",
     MYSQL_UNIX_SOCKET: process.env.MYSQL_UNIX_SOCKET || "",
+    MYSQL_TABLE_PARTITIONING: "off",
     KIS_MARKET_SIGNALS_ENABLED: "0",
     EXTERNAL_ALPHA_ENABLED: "0",
     EXTERNAL_COINGECKO_ENABLED: "0",

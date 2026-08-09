@@ -469,11 +469,18 @@ def iso_or_empty(value: object) -> str:
     return parsed.astimezone(timezone.utc).isoformat().replace("+00:00", "Z") if parsed else str(value or "").strip()
 
 
-def within_lookback(value: object, lookback_minutes: int) -> bool:
+def within_lookback(
+    value: object,
+    lookback_minutes: int,
+    now: datetime = None,
+) -> bool:
     parsed = parse_news_datetime(value)
     if not parsed:
         return True
-    return datetime.now(timezone.utc) - parsed.astimezone(timezone.utc) <= timedelta(minutes=max(1, lookback_minutes))
+    current = now if isinstance(now, datetime) else datetime.now(timezone.utc)
+    if current.tzinfo is None:
+        current = current.replace(tzinfo=timezone.utc)
+    return current.astimezone(timezone.utc) - parsed.astimezone(timezone.utc) <= timedelta(minutes=max(1, lookback_minutes))
 
 
 class NewsSourceGateway:
@@ -483,12 +490,14 @@ class NewsSourceGateway:
         fetch_json: JsonFetcher = None,
         fetch_text: TextFetcher = None,
         fetch_post_text: PostTextFetcher = None,
+        now_provider: Callable[[], datetime] = None,
     ):
         self.settings = dict(settings or {})
         timeout = number(self.settings.get("newsCollectionTimeoutSeconds") or self.settings.get("externalApiTimeoutSeconds")) or 8.0
         self.fetch_json = fetch_json or self.guarded_json_fetcher(timeout)
         self.fetch_text = fetch_text or self.guarded_text_fetcher(timeout)
         self.fetch_post_text = fetch_post_text or self.guarded_post_text_fetcher(timeout)
+        self.now_provider = now_provider or (lambda: datetime.now(timezone.utc))
         self._article_body_fetches_used = 0
         self._article_body_fetches_for_target = 0
         self._google_original_url_fetches_used = 0
@@ -1176,7 +1185,7 @@ class NewsSourceGateway:
             title = strip_html(item.findtext("title"))
             link = str(item.findtext("link") or "").strip()
             published = item.findtext("pubDate") or ""
-            if not title or not link or not within_lookback(published, self.lookback_minutes()):
+            if not title or not link or not within_lookback(published, self.lookback_minutes(), self.now_provider()):
                 continue
             source_text = strip_html(item.findtext("source")) or "Yahoo Finance"
             summary = strip_html(item.findtext("description"))
@@ -1221,7 +1230,7 @@ class NewsSourceGateway:
             link = str(article.get("link") or "").strip()
             published_epoch = number(article.get("providerPublishTime"))
             published = datetime.fromtimestamp(published_epoch, tz=timezone.utc).isoformat().replace("+00:00", "Z") if published_epoch else ""
-            if not title or not link or not within_lookback(published, self.lookback_minutes()):
+            if not title or not link or not within_lookback(published, self.lookback_minutes(), self.now_provider()):
                 continue
             source = str(article.get("publisher") or "Yahoo Finance").strip()
             item_evidence = self.news_evidence_from_article(
@@ -1265,7 +1274,7 @@ class NewsSourceGateway:
             title = strip_html(item.findtext("title"))
             link = str(item.findtext("link") or "").strip()
             published = item.findtext("pubDate") or ""
-            if not title or not link or not within_lookback(published, self.lookback_minutes()):
+            if not title or not link or not within_lookback(published, self.lookback_minutes(), self.now_provider()):
                 continue
             source = item.find("source")
             source_text = strip_html(source.text if source is not None else "") or source_name
@@ -1338,7 +1347,7 @@ class NewsSourceGateway:
             title = str(article.get("title") or "").strip()
             link = str(article.get("url") or "").strip()
             published = article.get("seendate") or ""
-            if not title or not link or not within_lookback(published, self.lookback_minutes()):
+            if not title or not link or not within_lookback(published, self.lookback_minutes(), self.now_provider()):
                 continue
             source = str(article.get("domain") or "GDELT News").strip()
             item_evidence = self.news_evidence_from_article(

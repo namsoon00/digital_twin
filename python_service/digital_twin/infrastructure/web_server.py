@@ -1206,6 +1206,8 @@ def ontology_diagnostics_payload(query: Dict[str, List[str]]) -> Dict[str, objec
 
 
 def ontology_inference_ledger_api_payload(query: Dict[str, List[str]]) -> Dict[str, object]:
+    from ..domain.ontology_rule_audit import rule_audit_payload
+
     settings = runtime_settings()
     repo = ontology_repository_from_settings(settings)
     symbols = ontology_audit_symbols(query)
@@ -1237,6 +1239,38 @@ def ontology_inference_ledger_api_payload(query: Dict[str, List[str]]) -> Dict[s
     payload["ruleboxStatus"] = rulebox.get("status")
     payload["ruleboxReason"] = rulebox.get("reason")
     payload["worldId"] = world_id
+    try:
+        execution_store = stores.ontology_projection_run_store(settings)
+        payload["executionHistory"] = execution_store.execution_trace(
+            run_id=str(first_query(query, "runId") or ""),
+            account_id=str(first_query(query, "accountId") or first_query(query, "account") or ""),
+            world_id=world_id,
+            limit=safe_int(first_query(query, "runLimit"), 12, 1, 50),
+        )
+        payload["ruleRuntimeSummary"] = execution_store.rule_runtime_summary(
+            account_id=str(first_query(query, "accountId") or first_query(query, "account") or ""),
+            world_id=world_id,
+            limit=safe_int(first_query(query, "ruleSampleLimit"), 5000, 100, 10000),
+        )
+        payload["ruleAudit"] = rule_audit_payload(
+            rulebox.get("rules") or [],
+            payload["ruleRuntimeSummary"],
+        )
+    except Exception as error:  # noqa: BLE001 - active InferenceBox trace remains readable.
+        payload["executionHistory"] = {
+            "status": "error",
+            "reason": str(error)[:220],
+            "runCount": 0,
+            "runs": [],
+        }
+        payload["ruleRuntimeSummary"] = {
+            "status": "error",
+            "reason": str(error)[:220],
+            "sampleCount": 0,
+            "ruleCount": 0,
+            "rules": [],
+        }
+        payload["ruleAudit"] = rule_audit_payload(rulebox.get("rules") or [], {})
     return payload
 
 
@@ -2265,6 +2299,25 @@ def notification_job_public_payload(job: NotificationJob, detail: bool = False, 
             job_id=job.job_id,
             job_status=job.status,
         )
+        try:
+            relation = context.get("ontologyRelationContext")
+            relation = dict(relation or {}) if isinstance(relation, dict) else {}
+            generation_id = str(relation.get("inferenceGenerationId") or "").strip()
+            if generation_id:
+                execution_store = stores.ontology_projection_run_store(runtime_settings())
+                payload["reasoningTrace"]["executionLedger"] = (
+                    execution_store.execution_trace_for_inference_generation(
+                        generation_id,
+                        account_id=job.account_id,
+                    )
+                )
+        except Exception as error:  # noqa: BLE001 - saved notification trace remains available.
+            payload["reasoningTrace"]["executionLedger"] = {
+                "status": "error",
+                "reason": str(error)[:220],
+                "runCount": 0,
+                "runs": [],
+            }
     return payload
 
 

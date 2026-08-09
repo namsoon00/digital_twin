@@ -3,6 +3,7 @@ from typing import Dict, Iterable
 from .ontology_change_impact import rule_condition_dependency_profile
 from .ontology_contracts import OntologyEntity, OntologyRelation, PortfolioOntology, entity_id
 from .ontology_rulebox_contracts import GRAPH_REASONER_VERSION, GraphInferenceRule
+from .ontology_rule_execution_policy import rule_execution_profile
 from .ontology_relation_reasoning import ONTOLOGY_RULE_ENGINE_VERSION, RelationRuleDefinition
 from .ontology_schema import abox_relation_properties
 from .ontology_threshold_policy import rulebox_threshold_policy_payloads
@@ -25,6 +26,7 @@ def add_rulebox_concepts(graph: PortfolioOntology, rules: Iterable[GraphInferenc
     ))
     add_threshold_policy_concepts(graph, registry_id)
     for rule in rules:
+        execution_profile = rule_execution_profile(rule)
         rule_id = entity_id("rule", rule.rule_id)
         graph.entities.append(OntologyEntity(rule_id, rule.label, "rule", rulebox_properties({
             "tboxClass": "GraphInferenceRule",
@@ -39,6 +41,13 @@ def add_rulebox_concepts(graph: PortfolioOntology, rules: Iterable[GraphInferenc
             "hypothesisFamilyKey": rule.hypothesis_family_key,
             "hypothesisLifecycle": rule.resolved_hypothesis_lifecycle().to_dict(),
             "anyConditionMinCount": rule.any_condition_min_count,
+            "executionStage": execution_profile["executionStage"],
+            "failurePolicy": execution_profile["failurePolicy"],
+            "costHint": execution_profile["costHint"],
+            "executionProfile": execution_profile,
+            "executionStageOverride": rule.execution_stage,
+            "failurePolicyOverride": rule.failure_policy,
+            "costHintOverride": rule.cost_hint,
             "conditionCount": len(rule.conditions),
             "derivationCount": len(rule.derivations),
         })))

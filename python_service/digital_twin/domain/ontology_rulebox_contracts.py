@@ -300,6 +300,11 @@ class GraphInferenceRule:
     # policy only records how a materialized path changes over generations.
     hypothesis_lifecycle: HypothesisLifecyclePolicy = dataclass_field(default_factory=HypothesisLifecyclePolicy)
     any_condition_min_count: int = 1
+    # Operational scheduling metadata is editable with the RuleBox. Empty
+    # values use the conservative profile derived from derivation semantics.
+    execution_stage: str = ""
+    failure_policy: str = ""
+    cost_hint: str = ""
     enabled: bool = True
 
     def resolved_hypothesis_lifecycle(self) -> HypothesisLifecyclePolicy:
@@ -337,6 +342,9 @@ class GraphInferenceRule:
     def to_dict(self) -> Dict[str, object]:
         payload = asdict(self)
         payload["hypothesis_lifecycle"] = self.resolved_hypothesis_lifecycle().to_dict()
+        from .ontology_rule_execution_policy import rule_execution_profile
+
+        payload["execution_profile"] = rule_execution_profile(self)
         payload["conditionCount"] = len(self.conditions)
         payload["derivationCount"] = len(self.derivations)
         return payload
@@ -397,5 +405,20 @@ class GraphInferenceRule:
                 default_formation_condition_ids=default_formation_condition_ids,
             ),
             any_condition_min_count=max(1, int(payload.get("any_condition_min_count") or payload.get("anyConditionMinCount") or 1)),
+            execution_stage=str(
+                payload.get("execution_stage")
+                or payload.get("executionStageOverride")
+                or ""
+            ).strip(),
+            failure_policy=str(
+                payload.get("failure_policy")
+                or payload.get("failurePolicyOverride")
+                or ""
+            ).strip(),
+            cost_hint=str(
+                payload.get("cost_hint")
+                or payload.get("costHintOverride")
+                or ""
+            ).strip(),
             enabled=bool(payload.get("enabled")) if "enabled" in payload else True,
         )

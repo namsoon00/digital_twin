@@ -472,7 +472,7 @@ class NewsCollectionRunner:
         return research_evidence_lifecycle_events(payload)
 
     def fresh_news_items(self, items: Iterable[ResearchEvidence]) -> Tuple[List[ResearchEvidence], List[ResearchEvidence]]:
-        now = datetime.now(timezone.utc)
+        now = self.cleanup_now()
         fresh: List[ResearchEvidence] = []
         stale: List[ResearchEvidence] = []
         max_age = self.max_news_age_minutes()
@@ -792,6 +792,7 @@ class NewsCollectionRunner:
                         self.max_news_age_minutes(),
                         str(self.settings.get("investmentBrainResearchMinimumSourceTrustState") or "standard"),
                         policy=claim_policy(self.settings),
+                        now=self.cleanup_now(),
                     )
                     governed_for_persistence.extend(corpus)
                     statuses.append({

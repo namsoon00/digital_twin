@@ -347,6 +347,28 @@ class MySQLStorageMaintenanceTests(unittest.TestCase):
 
         self.assertEqual(60, pooled.call_args[0][0][-1])
 
+    def test_transaction_preserves_original_error_when_rollback_connection_is_closed(self):
+        class BrokenConnection:
+            def __init__(self):
+                self.rollback_count = 0
+
+            def rollback(self):
+                self.rollback_count += 1
+                raise RuntimeError("socket already closed")
+
+        connection = BrokenConnection()
+        store = object.__new__(MySQLOperationalConnection)
+        store.pooled_connection = lambda autocommit=False: (
+            connection,
+            lambda _connection: None,
+        )
+
+        with self.assertRaisesRegex(ValueError, "original query timeout"):
+            with store.transaction():
+                raise ValueError("original query timeout")
+
+        self.assertEqual(1, connection.rollback_count)
+
     def test_operational_cleanup_retries_deadlock_with_configured_backoff(self):
         class Store:
             def connect(self):

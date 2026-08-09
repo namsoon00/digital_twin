@@ -5,6 +5,7 @@ from __future__ import annotations
 import threading
 import time
 import uuid
+import hashlib
 from typing import Dict
 
 from ..domain.ai_inference_queue import AIInferenceRequest, AIInferenceResult
@@ -111,7 +112,12 @@ class AIInferenceQueueRunner:
 
     def process_request(self, request: AIInferenceRequest) -> str:
         context = dict(request.context or {})
-        prompt_bytes = 0
+        prompt = build_notification_ai_gate_prompt(
+            context,
+            max_prompt_bytes=self.max_prompt_bytes,
+        )
+        prompt_bytes = len(prompt.encode("utf-8"))
+        prompt_hash = hashlib.sha256(prompt.encode("utf-8")).hexdigest()
         stop_heartbeat = threading.Event()
         lease_lost = threading.Event()
         heartbeat = threading.Thread(
@@ -132,10 +138,12 @@ class AIInferenceQueueRunner:
             stop_heartbeat.set()
             heartbeat.join(timeout=max(1.0, self.heartbeat_seconds + 1.0))
         latency_ms = int((time.monotonic() - started) * 1000)
-        prompt_bytes = max(0, int(getattr(self.reviewer, "last_prompt_bytes", 0) or 0))
-        if not prompt_bytes:
-            prompt = build_notification_ai_gate_prompt(context, max_prompt_bytes=self.max_prompt_bytes)
-            prompt_bytes = len(prompt.encode("utf-8"))
+        reviewer_prompt_bytes = max(
+            0,
+            int(getattr(self.reviewer, "last_prompt_bytes", 0) or 0),
+        )
+        if reviewer_prompt_bytes:
+            prompt_bytes = reviewer_prompt_bytes
 
         if lease_lost.is_set() or not self.queue.is_current(request.request_id, self.worker_id):
             return request.request_id[:8] + " superseded-during-review"
@@ -161,6 +169,21 @@ class AIInferenceQueueRunner:
         apply_ontology_quality_gate_to_response(response, quality_gate)
         episode = self.decision_episode_context(request, context, response)
         enriched = context_with_validated_ai_response(context, response, self.settings)
+        enriched["notificationAiExecutionAudit"] = {
+            "version": "notification-ai-execution-audit-v1",
+            "status": "fallback" if "fallback" in str(response.source or "").lower() else "completed",
+            "requestId": request.request_id,
+            "notificationJobId": request.notification_job_id,
+            "promptVersion": request.prompt_version,
+            "model": request.model,
+            "reasoningEffort": request.reasoning_effort,
+            "promptHash": prompt_hash,
+            "promptBytes": prompt_bytes,
+            "prompt": prompt,
+            "responseSource": str(response.source or ""),
+            "validationState": str(response.validation_state or ""),
+            "latencyMs": latency_ms,
+        }
         result = AIInferenceResult.create(
             request,
             response.to_dict(),

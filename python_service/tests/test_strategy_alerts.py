@@ -84,6 +84,8 @@ class StrategyAlertTests(unittest.TestCase):
             "activeRules": [{
                 "ruleId": "graph.crypto.market.24h.down.watch.v1",
                 "label": "BTC/ETH 24h 원시 하락 경로 -> 크립토 변동 재확인",
+                "ruleSourceKind": "crypto-asset",
+                "ruleScopeFamilies": ["market"],
             }],
             "reviewLevel": "observe",
             "dataState": "sufficient",

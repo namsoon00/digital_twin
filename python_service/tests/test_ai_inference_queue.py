@@ -126,6 +126,11 @@ class AIInferenceQueueTests(unittest.TestCase):
         self.assertEqual("pending", delivered.status)
         self.assertEqual("HOLD", delivered.context["notificationAiValidatedResponse"]["action"])
         self.assertEqual("completed", delivered.context["notificationAiQueue"]["status"])
+        prompt_audit = delivered.context["notificationAiExecutionAudit"]
+        self.assertEqual(request.request_id, prompt_audit["requestId"])
+        self.assertEqual("gpt-5.6-sol", prompt_audit["model"])
+        self.assertTrue(prompt_audit["prompt"].startswith("너는 자동 주문자가 아니라"))
+        self.assertEqual(64, len(prompt_audit["promptHash"]))
         result_count = mysql_fetchone(self.seed, "SELECT COUNT(*) FROM ai_inference_results")
         self.assertEqual(1, int(result_count[0]))
 

@@ -23,10 +23,12 @@ from ..domain.investment_evidence_governance import (
 )
 from ..domain.ontology_reasoning_queue import (
     OBSERVATION_FOLLOWUP_PRIORITY_HINT,
+    REASONING_LANES,
     REASONING_PRIORITY_ORDER,
     VERIFIED_MONITOR_SNAPSHOT_TRIGGER,
     event_has_reasoning_work,
     event_fact_types_for_symbol,
+    event_reasoning_lane,
     event_reasoning_priority,
     is_generic_research_latest_state,
     is_observation_followup_symbol,
@@ -4389,13 +4391,22 @@ class OntologyReasoningRunner:
                     )
                     continue
             if bool(execution.get("nativeRuleSelectionApplied")):
+                support_only_gap = bool(
+                    execution.get("coreNativeInferenceEvaluationComplete")
+                    and str(execution.get("nativeCoverageStatus") or "")
+                    == "core-complete-supporting-partial"
+                    and int(execution.get("supportingRuleFailureCount") or 0) > 0
+                )
                 replay_validation = result.get("nativeReplayValidation")
                 replay_validation = (
                     dict(replay_validation)
                     if isinstance(replay_validation, dict)
                     else native_replay_validation(result)
                 )
-                if str(replay_validation.get("status") or "") != "verified-prior-coverage":
+                if (
+                    not support_only_gap
+                    and str(replay_validation.get("status") or "") != "verified-prior-coverage"
+                ):
                     add_result(
                         account_id,
                         "native-rule-coverage",
@@ -4609,6 +4620,9 @@ class OntologyReasoningRunner:
         selected_counts = {work_class: 0 for work_class in classes}
         pending_priority_counts = {priority: 0 for priority in priority_classes}
         selected_priority_counts = {priority: 0 for priority in priority_classes}
+        reasoning_lanes = [lane for lane in REASONING_LANES if lane.endswith("_REASONING")]
+        pending_lane_counts = {lane: 0 for lane in reasoning_lanes}
+        selected_lane_counts = {lane: 0 for lane in reasoning_lanes}
         observed_at = []
         requested_at = []
         for event in pending:
@@ -4618,6 +4632,9 @@ class OntologyReasoningRunner:
             priority = event_reasoning_priority(event)
             pending_priority_counts.setdefault(priority, 0)
             pending_priority_counts[priority] += 1
+            lane = event_reasoning_lane(event)
+            pending_lane_counts.setdefault(lane, 0)
+            pending_lane_counts[lane] += 1
             stamp = self.event_source_observed_at(event)
             if stamp:
                 observed_at.append(stamp)
@@ -4631,6 +4648,9 @@ class OntologyReasoningRunner:
             priority = event_reasoning_priority(event)
             selected_priority_counts.setdefault(priority, 0)
             selected_priority_counts[priority] += 1
+            lane = event_reasoning_lane(event)
+            selected_lane_counts.setdefault(lane, 0)
+            selected_lane_counts[lane] += 1
         fairness = fairness_drain or self.fairness_drain_state(
             selected_symbols,
             payload,
@@ -4668,6 +4688,11 @@ class OntologyReasoningRunner:
             "selectedByClass": selected_counts,
             "pendingByPriority": pending_priority_counts,
             "selectedByPriority": selected_priority_counts,
+            "pendingByLane": pending_lane_counts,
+            "selectedByLane": selected_lane_counts,
+            "selectedLanes": [
+                lane for lane in reasoning_lanes if selected_lane_counts.get(lane)
+            ],
             "selectedWorkClasses": selected_classes,
             "pendingSymbolCount": len(pending_symbols),
             "overduePendingSymbolCount": len([item for item in fairness_queue if item.get("state") == "overdue"]),
@@ -5673,6 +5698,20 @@ class OntologyReasoningRunner:
             ),
         }
         reasoning_context["batchPlan"] = dict(batch_plan)
+        reasoning_context["queueDispatch"] = {
+            key: value
+            for key, value in dict(queue_metadata.get("queueDispatch") or {}).items()
+            if key in {
+                "mode",
+                "selectedByLane",
+                "selectedLanes",
+                "selectedByPriority",
+                "selectedWorkClasses",
+                "selectedSymbols",
+                "oldestRequestAt",
+                "oldestSourceObservedAt",
+            }
+        }
         # A pending mailbox slot can be temporarily ineligible because its
         # symbol-level interval or retry protection has not elapsed.  Never
         # invoke the monitor with an empty subject filter in that case: older

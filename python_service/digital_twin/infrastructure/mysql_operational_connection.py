@@ -190,6 +190,11 @@ class MySQLConnectionProxy:
         cursor.execute(sql, params or ())
         return cursor
 
+    def executemany(self, sql: str, rows):
+        cursor = self.connection.cursor()
+        cursor.executemany(sql, list(rows or []))
+        return cursor
+
     def commit(self) -> None:
         self.connection.commit()
 
@@ -280,7 +285,13 @@ class MySQLOperationalConnection:
             yield proxy
             proxy.commit()
         except Exception:
-            proxy.rollback()
+            try:
+                proxy.rollback()
+            except Exception:
+                # A read/write timeout can already have closed the socket.
+                # Preserve the original database exception for retry and
+                # diagnostics instead of replacing it with rollback failure.
+                pass
             raise
         finally:
             proxy.close()
@@ -870,6 +881,66 @@ MYSQL_SCHEMA = [
         KEY idx_ontology_projection_runs_world_updated (world_id, updated_at, run_id),
         KEY idx_ontology_projection_runs_abox (abox_snapshot_id),
         KEY idx_ontology_projection_runs_material (account_id, material_fingerprint)
+    ) ENGINE=InnoDB DEFAULT CHARSET=utf8mb4 COLLATE=utf8mb4_unicode_ci
+    """,
+    """
+    CREATE TABLE IF NOT EXISTS ontology_reasoning_run_stages (
+        run_id VARCHAR(191) NOT NULL,
+        stage_key VARCHAR(191) NOT NULL,
+        trace_version VARCHAR(64) NOT NULL DEFAULT '',
+        world_id VARCHAR(191) NOT NULL DEFAULT '',
+        account_id VARCHAR(191) NOT NULL DEFAULT '',
+        inference_generation_id VARCHAR(191) NOT NULL DEFAULT '',
+        lane VARCHAR(48) NOT NULL DEFAULT 'CORE_REASONING',
+        stage_order INT NOT NULL DEFAULT 0,
+        status VARCHAR(64) NOT NULL DEFAULT '',
+        started_at VARCHAR(40) NOT NULL DEFAULT '',
+        completed_at VARCHAR(40) NOT NULL DEFAULT '',
+        duration_ms BIGINT NOT NULL DEFAULT 0,
+        input_count INT NOT NULL DEFAULT 0,
+        output_count INT NOT NULL DEFAULT 0,
+        detail_json LONGTEXT NOT NULL,
+        created_at VARCHAR(40) NOT NULL,
+        updated_at VARCHAR(40) NOT NULL,
+        PRIMARY KEY (run_id, stage_key),
+        KEY idx_reasoning_run_stages_world_time (world_id, updated_at, run_id),
+        KEY idx_reasoning_run_stages_generation (inference_generation_id, account_id, updated_at),
+        KEY idx_reasoning_run_stages_lane_time (lane, updated_at, run_id),
+        KEY idx_reasoning_run_stages_stage_time (stage_key, updated_at, run_id)
+    ) ENGINE=InnoDB DEFAULT CHARSET=utf8mb4 COLLATE=utf8mb4_unicode_ci
+    """,
+    """
+    CREATE TABLE IF NOT EXISTS ontology_reasoning_rule_runs (
+        run_id VARCHAR(191) NOT NULL,
+        rule_run_key VARCHAR(64) NOT NULL,
+        trace_version VARCHAR(64) NOT NULL DEFAULT '',
+        world_id VARCHAR(191) NOT NULL DEFAULT '',
+        account_id VARCHAR(191) NOT NULL DEFAULT '',
+        inference_generation_id VARCHAR(191) NOT NULL DEFAULT '',
+        lane VARCHAR(48) NOT NULL DEFAULT 'CORE_REASONING',
+        stage_key VARCHAR(96) NOT NULL DEFAULT 'native-rule-evaluation',
+        rule_id VARCHAR(191) NOT NULL DEFAULT '',
+        rule_version VARCHAR(64) NOT NULL DEFAULT '',
+        status VARCHAR(64) NOT NULL DEFAULT '',
+        selected_reason VARCHAR(96) NOT NULL DEFAULT '',
+        query_mode VARCHAR(96) NOT NULL DEFAULT '',
+        query_count INT NOT NULL DEFAULT 0,
+        duration_ms BIGINT NOT NULL DEFAULT 0,
+        query_duration_ms BIGINT NOT NULL DEFAULT 0,
+        target_symbols_json TEXT NOT NULL,
+        matched TINYINT(1) NOT NULL DEFAULT 0,
+        reused TINYINT(1) NOT NULL DEFAULT 0,
+        cost_class VARCHAR(32) NOT NULL DEFAULT 'fast',
+        failure_reason TEXT NOT NULL,
+        detail_json LONGTEXT NOT NULL,
+        created_at VARCHAR(40) NOT NULL,
+        updated_at VARCHAR(40) NOT NULL,
+        PRIMARY KEY (run_id, rule_run_key),
+        KEY idx_reasoning_rule_runs_world_time (world_id, updated_at, run_id),
+        KEY idx_reasoning_rule_runs_generation (inference_generation_id, account_id, updated_at),
+        KEY idx_reasoning_rule_runs_rule_time (rule_id, updated_at, run_id),
+        KEY idx_reasoning_rule_runs_status_time (status, updated_at, run_id),
+        KEY idx_reasoning_rule_runs_cost_time (cost_class, updated_at, run_id)
     ) ENGINE=InnoDB DEFAULT CHARSET=utf8mb4 COLLATE=utf8mb4_unicode_ci
     """,
     """

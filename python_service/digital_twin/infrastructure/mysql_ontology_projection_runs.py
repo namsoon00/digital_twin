@@ -1,6 +1,7 @@
 from datetime import datetime, timedelta, timezone
-from typing import Dict, List
+from typing import Dict, List, Mapping
 
+from ..domain.ontology_execution_trace import reasoning_execution_trace_payload
 from ..domain.ontology_projection_audit import OntologyProjectionRun
 from ..domain.ontology_runtime_operations import summarize_projection_runtime_observations
 from .mysql_operational_connection import MySQLOperationalConnection
@@ -156,8 +157,13 @@ class MySQLOntologyProjectionRunStore(MySQLOperationalConnection):
     def complete(self, run: OntologyProjectionRun) -> OntologyProjectionRun:
         stamp = utc_now()
         with self.transaction() as connection:
-            connection.execute(
-                """
+            self._complete_with_connection(connection, run, stamp)
+        return run
+
+    @staticmethod
+    def _complete_with_connection(connection, run: OntologyProjectionRun, stamp: str) -> None:
+        connection.execute(
+            """
                 UPDATE ontology_projection_runs
                 SET last_observed_at = %s,
                     completed_at = %s,
@@ -184,36 +190,162 @@ class MySQLOntologyProjectionRunStore(MySQLOperationalConnection):
                     result_payload_json = %s,
                     updated_at = %s
                 WHERE run_id = %s
-                """,
-                (
-                    run.last_observed_at,
-                    run.completed_at,
-                    run.activated_at,
-                    run.status,
-                    run.graph_store,
-                    run.projection_mode,
-                    run.tenant_id,
-                    run.world_id,
-                    run.world_type,
-                    run.market_world_id,
-                    run.material_fingerprint,
-                    run.abox_snapshot_id,
-                    run.active_abox_snapshot_id,
-                    run.tbox_version,
-                    run.tbox_fingerprint,
-                    run.rulebox_rules_hash,
-                    int(run.entity_count or 0),
-                    int(run.relation_count or 0),
-                    run.inference_generation_id,
-                    run.inference_status,
-                    json_dumps(run.source_symbols),
-                    json_dumps(run.context_payload),
-                    json_dumps(run.result_payload),
-                    stamp,
-                    run.run_id,
-                ),
-            )
+            """,
+            (
+                run.last_observed_at,
+                run.completed_at,
+                run.activated_at,
+                run.status,
+                run.graph_store,
+                run.projection_mode,
+                run.tenant_id,
+                run.world_id,
+                run.world_type,
+                run.market_world_id,
+                run.material_fingerprint,
+                run.abox_snapshot_id,
+                run.active_abox_snapshot_id,
+                run.tbox_version,
+                run.tbox_fingerprint,
+                run.rulebox_rules_hash,
+                int(run.entity_count or 0),
+                int(run.relation_count or 0),
+                run.inference_generation_id,
+                run.inference_status,
+                json_dumps(run.source_symbols),
+                json_dumps(run.context_payload),
+                json_dumps(run.result_payload),
+                stamp,
+                run.run_id,
+            ),
+        )
+
+    def complete_with_execution_trace(
+        self,
+        run: OntologyProjectionRun,
+        result: Dict[str, object],
+    ) -> OntologyProjectionRun:
+        """Commit the run result and its normalized stage/rule trace together."""
+        stamp = utc_now()
+        trace = reasoning_execution_trace_payload(
+            run,
+            result,
+            settings=getattr(self, "runtime_settings", {}) or {},
+        )
+        with self.transaction() as connection:
+            self._complete_with_connection(connection, run, stamp)
+            self._replace_execution_trace_with_connection(connection, trace, stamp)
         return run
+
+    @staticmethod
+    def _bulk_execute(connection, sql: str, rows: List[tuple]) -> None:
+        if not rows:
+            return
+        executemany = getattr(connection, "executemany", None)
+        if callable(executemany):
+            executemany(sql, rows)
+            return
+        for row in rows:
+            connection.execute(sql, row)
+
+    def _replace_execution_trace_with_connection(
+        self,
+        connection,
+        trace: Dict[str, object],
+        stamp: str,
+    ) -> None:
+        run_id = str(trace.get("runId") or "").strip()
+        if not run_id:
+            return
+        connection.execute(
+            "DELETE FROM ontology_reasoning_run_stages WHERE run_id = %s",
+            (run_id,),
+        )
+        connection.execute(
+            "DELETE FROM ontology_reasoning_rule_runs WHERE run_id = %s",
+            (run_id,),
+        )
+        stage_rows = [
+            (
+                run_id,
+                str(item.get("stageKey") or ""),
+                str(item.get("version") or ""),
+                str(item.get("worldId") or ""),
+                str(item.get("accountId") or ""),
+                str(item.get("inferenceGenerationId") or trace.get("inferenceGenerationId") or ""),
+                str(item.get("lane") or "CORE_REASONING"),
+                int(item.get("stageOrder") or 0),
+                str(item.get("status") or ""),
+                str(item.get("startedAt") or ""),
+                str(item.get("completedAt") or ""),
+                int(item.get("durationMs") or 0),
+                int(item.get("inputCount") or 0),
+                int(item.get("outputCount") or 0),
+                json_dumps(item.get("detail") or {}),
+                stamp,
+                stamp,
+            )
+            for item in trace.get("stages") or []
+            if isinstance(item, dict) and str(item.get("stageKey") or "").strip()
+        ]
+        self._bulk_execute(
+            connection,
+            """
+            INSERT INTO ontology_reasoning_run_stages (
+                run_id, stage_key, trace_version, world_id, account_id,
+                inference_generation_id, lane,
+                stage_order, status, started_at, completed_at, duration_ms,
+                input_count, output_count, detail_json, created_at, updated_at
+            ) VALUES (%s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s)
+            """,
+            stage_rows,
+        )
+        rule_rows = [
+            (
+                run_id,
+                str(item.get("ruleRunKey") or ""),
+                str(item.get("version") or ""),
+                str(item.get("worldId") or ""),
+                str(item.get("accountId") or ""),
+                str(item.get("inferenceGenerationId") or trace.get("inferenceGenerationId") or ""),
+                str(item.get("lane") or "CORE_REASONING"),
+                str(item.get("stageKey") or "native-rule-evaluation"),
+                str(item.get("ruleId") or ""),
+                str(item.get("ruleVersion") or ""),
+                str(item.get("status") or ""),
+                str(item.get("selectedReason") or ""),
+                str(item.get("queryMode") or ""),
+                int(item.get("queryCount") or 0),
+                int(item.get("durationMs") or 0),
+                int(item.get("queryDurationMs") or 0),
+                json_dumps(item.get("targetSymbols") or []),
+                1 if item.get("matched") else 0,
+                1 if item.get("reused") else 0,
+                str(item.get("costClass") or "fast"),
+                str(item.get("failureReason") or "")[:1000],
+                json_dumps(item.get("detail") or {}),
+                stamp,
+                stamp,
+            )
+            for item in trace.get("rules") or []
+            if isinstance(item, dict)
+            and str(item.get("ruleRunKey") or "").strip()
+            and str(item.get("ruleId") or "").strip()
+        ]
+        self._bulk_execute(
+            connection,
+            """
+            INSERT INTO ontology_reasoning_rule_runs (
+                run_id, rule_run_key, trace_version, world_id, account_id,
+                inference_generation_id, lane, stage_key, rule_id, rule_version,
+                status, selected_reason,
+                query_mode, query_count, duration_ms, query_duration_ms,
+                target_symbols_json, matched, reused, cost_class,
+                failure_reason, detail_json, created_at, updated_at
+            ) VALUES (%s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s)
+            """,
+            rule_rows,
+        )
 
     def latest(self, account_id: str = "", limit: int = 50, world_id: str = "") -> List[Dict[str, object]]:
         clauses = []
@@ -232,6 +364,249 @@ class MySQLOntologyProjectionRunStore(MySQLOperationalConnection):
         with self.connect() as connection:
             rows = connection.execute(sql, params).fetchall()
         return [self.row_payload(row) for row in rows or []]
+
+    def execution_trace(
+        self,
+        run_id: str = "",
+        account_id: str = "",
+        world_id: str = "",
+        limit: int = 20,
+    ) -> Dict[str, object]:
+        """Read normalized execution history without querying TypeDB."""
+        clauses = []
+        params: List[object] = []
+        if str(run_id or "").strip():
+            clauses.append("run_id = %s")
+            params.append(str(run_id).strip())
+        if str(account_id or "").strip():
+            clauses.append("account_id = %s")
+            params.append(str(account_id).strip())
+        if str(world_id or "").strip():
+            clauses.append("world_id = %s")
+            params.append(str(world_id).strip())
+        bounded = max(1, min(100, int(limit or 20)))
+        stage_sql = "SELECT * FROM ontology_reasoning_run_stages"
+        if clauses:
+            stage_sql += " WHERE " + " AND ".join(clauses)
+        stage_sql += " ORDER BY updated_at DESC, run_id DESC, stage_order ASC LIMIT %s"
+        stage_params = [*params, bounded * 40]
+        with self.connect() as connection:
+            stage_rows = connection.execute(stage_sql, stage_params).fetchall()
+        run_ids = []
+        for row in stage_rows or []:
+            candidate = str(row.get("run_id") or "")
+            if candidate and candidate not in run_ids:
+                run_ids.append(candidate)
+            if len(run_ids) >= bounded:
+                break
+        stage_rows = [row for row in stage_rows or [] if str(row.get("run_id") or "") in run_ids]
+        rule_rows = []
+        if run_ids:
+            placeholders = ", ".join(["%s"] * len(run_ids))
+            with self.connect() as connection:
+                rule_rows = connection.execute(
+                    "SELECT * FROM ontology_reasoning_rule_runs WHERE run_id IN ("
+                    + placeholders
+                    + ") ORDER BY updated_at DESC, duration_ms DESC, rule_id ASC",
+                    run_ids,
+                ).fetchall()
+        grouped = {
+            item: {
+                "runId": item,
+                "worldId": "",
+                "accountId": "",
+                "inferenceGenerationId": "",
+                "lane": "",
+                "updatedAt": "",
+                "stages": [],
+                "rules": [],
+            }
+            for item in run_ids
+        }
+        for row in stage_rows or []:
+            item = self.stage_trace_row_payload(row)
+            target = grouped.get(item["runId"])
+            if not target:
+                continue
+            target.update({
+                "worldId": item["worldId"],
+                "accountId": item["accountId"],
+                "inferenceGenerationId": item["inferenceGenerationId"],
+                "lane": item["lane"],
+                "updatedAt": max(str(target.get("updatedAt") or ""), item["updatedAt"]),
+            })
+            target["stages"].append(item)
+        for row in rule_rows or []:
+            item = self.rule_trace_row_payload(row)
+            target = grouped.get(item["runId"])
+            if target:
+                target["rules"].append(item)
+        runs = [grouped[item] for item in run_ids if item in grouped]
+        return {
+            "status": "ok",
+            "runCount": len(runs),
+            "runs": runs,
+        }
+
+    def execution_trace_for_inference_generation(
+        self,
+        inference_generation_id: str,
+        account_id: str = "",
+    ) -> Dict[str, object]:
+        generation_id = str(inference_generation_id or "").strip()
+        if not generation_id:
+            return {
+                "status": "unavailable",
+                "reason": "Inference generation ID is missing.",
+                "runCount": 0,
+                "runs": [],
+            }
+        clauses = ["inference_generation_id = %s"]
+        params: List[object] = [generation_id]
+        if str(account_id or "").strip():
+            clauses.append("account_id = %s")
+            params.append(str(account_id).strip())
+        with self.connect() as connection:
+            cursor = connection.execute(
+                "SELECT run_id FROM ontology_reasoning_run_stages WHERE "
+                + " AND ".join(clauses)
+                + " ORDER BY updated_at DESC LIMIT 1",
+                params,
+            )
+            if hasattr(cursor, "fetchone"):
+                row = cursor.fetchone()
+            else:
+                rows = cursor.fetchall()
+                row = rows[0] if rows else {}
+        run_id = str((row or {}).get("run_id") or "") if isinstance(row, Mapping) else ""
+        if not run_id:
+            return {
+                "status": "not-found",
+                "reason": "No projection run was found for the inference generation.",
+                "inferenceGenerationId": generation_id,
+                "runCount": 0,
+                "runs": [],
+            }
+        payload = self.execution_trace(run_id=run_id, limit=1)
+        payload["inferenceGenerationId"] = generation_id
+        return payload
+
+    @staticmethod
+    def stage_trace_row_payload(row: Dict[str, object]) -> Dict[str, object]:
+        return {
+            "runId": str(row.get("run_id") or ""),
+            "stageKey": str(row.get("stage_key") or ""),
+            "version": str(row.get("trace_version") or ""),
+            "worldId": str(row.get("world_id") or ""),
+            "accountId": str(row.get("account_id") or ""),
+            "inferenceGenerationId": str(row.get("inference_generation_id") or ""),
+            "lane": str(row.get("lane") or ""),
+            "stageOrder": int(row.get("stage_order") or 0),
+            "status": str(row.get("status") or ""),
+            "startedAt": str(row.get("started_at") or ""),
+            "completedAt": str(row.get("completed_at") or ""),
+            "durationMs": int(row.get("duration_ms") or 0),
+            "inputCount": int(row.get("input_count") or 0),
+            "outputCount": int(row.get("output_count") or 0),
+            "detail": _json_loads(row.get("detail_json"), {}),
+            "updatedAt": str(row.get("updated_at") or ""),
+        }
+
+    @staticmethod
+    def rule_trace_row_payload(row: Dict[str, object]) -> Dict[str, object]:
+        return {
+            "runId": str(row.get("run_id") or ""),
+            "ruleRunKey": str(row.get("rule_run_key") or ""),
+            "version": str(row.get("trace_version") or ""),
+            "worldId": str(row.get("world_id") or ""),
+            "accountId": str(row.get("account_id") or ""),
+            "inferenceGenerationId": str(row.get("inference_generation_id") or ""),
+            "lane": str(row.get("lane") or ""),
+            "stageKey": str(row.get("stage_key") or ""),
+            "ruleId": str(row.get("rule_id") or ""),
+            "ruleVersion": str(row.get("rule_version") or ""),
+            "status": str(row.get("status") or ""),
+            "selectedReason": str(row.get("selected_reason") or ""),
+            "queryMode": str(row.get("query_mode") or ""),
+            "queryCount": int(row.get("query_count") or 0),
+            "durationMs": int(row.get("duration_ms") or 0),
+            "queryDurationMs": int(row.get("query_duration_ms") or 0),
+            "targetSymbols": _json_loads(row.get("target_symbols_json"), []),
+            "matched": bool(row.get("matched")),
+            "reused": bool(row.get("reused")),
+            "costClass": str(row.get("cost_class") or ""),
+            "failureReason": str(row.get("failure_reason") or ""),
+            "detail": _json_loads(row.get("detail_json"), {}),
+            "updatedAt": str(row.get("updated_at") or ""),
+        }
+
+    def rule_runtime_summary(
+        self,
+        world_id: str = "",
+        account_id: str = "",
+        limit: int = 5000,
+    ) -> Dict[str, object]:
+        clauses = []
+        params: List[object] = []
+        if str(world_id or "").strip():
+            clauses.append("world_id = %s")
+            params.append(str(world_id).strip())
+        if str(account_id or "").strip():
+            clauses.append("account_id = %s")
+            params.append(str(account_id).strip())
+        sql = "SELECT * FROM ontology_reasoning_rule_runs"
+        if clauses:
+            sql += " WHERE " + " AND ".join(clauses)
+        sql += " ORDER BY updated_at DESC LIMIT %s"
+        params.append(max(1, min(10000, int(limit or 5000))))
+        with self.connect() as connection:
+            rows = connection.execute(sql, params).fetchall()
+        grouped: Dict[str, List[Dict[str, object]]] = {}
+        for row in rows or []:
+            item = self.rule_trace_row_payload(row)
+            if item["ruleId"]:
+                grouped.setdefault(item["ruleId"], []).append(item)
+        summaries = []
+        for rule_id, samples in grouped.items():
+            durations = sorted(int(item.get("durationMs") or 0) for item in samples)
+            p95_index = min(
+                len(durations) - 1,
+                max(0, ((95 * len(durations) + 99) // 100) - 1),
+            )
+            failed_samples = [
+                item
+                for item in samples
+                if any(
+                    token in str(item.get("status") or "").lower()
+                    for token in ["error", "timeout", "failed", "blocked"]
+                )
+            ]
+            summaries.append({
+                "ruleId": rule_id,
+                "sampleCount": len(samples),
+                "matchedCount": len([item for item in samples if item.get("matched")]),
+                "failureCount": len(failed_samples),
+                "averageDurationMs": int(sum(durations) / len(durations)) if durations else 0,
+                "p95DurationMs": durations[p95_index] if durations else 0,
+                "maxDurationMs": durations[-1] if durations else 0,
+                "lastStatus": str(samples[0].get("status") or ""),
+                "lastUpdatedAt": str(samples[0].get("updatedAt") or ""),
+            })
+        summaries.sort(
+            key=lambda item: (
+                item["failureCount"],
+                item["p95DurationMs"],
+                item["sampleCount"],
+                item["ruleId"],
+            ),
+            reverse=True,
+        )
+        return {
+            "status": "ok",
+            "sampleCount": len(rows or []),
+            "ruleCount": len(summaries),
+            "rules": summaries,
+        }
 
     def runtime_summary(self, account_id: str = "", limit: int = 80, world_id: str = "") -> Dict[str, object]:
         """Read bounded operational telemetry from the durable projection audit.

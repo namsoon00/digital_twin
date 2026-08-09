@@ -194,6 +194,10 @@ def mysql_test_settings(seed=None):
         "mysqlPassword": os.environ.get("MYSQL_PASSWORD", ""),
         "mysqlUnixSocket": os.environ.get("MYSQL_UNIX_SOCKET", ""),
         "operationalHistoryRetentionEnabled": "0",
+        # Unit/integration schemas validate SQL contracts, not production
+        # repartitioning. DDL partition probes add minutes and can disconnect
+        # the shared local MySQL server while the application is running.
+        "mysqlTablePartitioning": "off",
     }
     config = mysql_test_database_config(settings)
     acquire_mysql_test_database_lock(config)

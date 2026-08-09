@@ -33,6 +33,10 @@ from ..domain.ontology_inference_materializer import (
 )
 from ..domain.ontology_rulebox_catalog import default_graph_inference_rules
 from ..domain.ontology_rulebox_contracts import GRAPH_REASONER_VERSION, GraphInferenceRule
+from ..domain.ontology_rule_execution_policy import (
+    RULE_EXECUTION_POLICY_VERSION,
+    rule_execution_profile,
+)
 from ..domain.ontology_rulebox_governance import (
     normalize_rule_change_candidate,
     rulebox_governance_candidates,
@@ -1158,6 +1162,15 @@ def generated_inference_id(original_id: str, generation_id: str) -> str:
 def rulebox_runtime_metadata(rules_payload: List[Dict[str, object]]) -> Dict[str, object]:
     rules_payload = [item for item in (rules_payload or []) if isinstance(item, dict)]
     rules_hash = rulebox_rules_hash(rules_payload)
+    execution_profiles = [rule_execution_profile(item) for item in rules_payload]
+    stage_counts = {
+        stage: len([
+            item
+            for item in execution_profiles
+            if str(item.get("executionStage") or "") == stage
+        ])
+        for stage in ["critical", "core", "supporting"]
+    }
     return {
         "ruleboxRulesHash": rules_hash,
         "ruleboxShortHash": rules_hash[:12],
@@ -1165,6 +1178,8 @@ def rulebox_runtime_metadata(rules_payload: List[Dict[str, object]]) -> Dict[str
         "ruleboxConditionCount": sum(len(item.get("conditions") or []) for item in rules_payload),
         "ruleboxDerivationCount": sum(len(item.get("derivations") or []) for item in rules_payload),
         "ruleboxEngineVersion": GRAPH_REASONER_VERSION,
+        "ruleExecutionPolicyVersion": RULE_EXECUTION_POLICY_VERSION,
+        "ruleExecutionStageCounts": stage_counts,
     }
 
 
@@ -2477,7 +2492,12 @@ class ScopedABoxManifestMixin:
             # to write, and only if its recorded local process is proven dead.
             # This preserves live and remote ownership while avoiding a global
             # TypeDB control-plane scan on every worker restart.
-            recovery = self.recover_dead_local_scoped_abox_write_lease(world_id)
+            recovery = self.recover_dead_local_scoped_abox_write_lease(
+                world_id,
+                recover_untracked_current_process=(
+                    str(world_id or "") == TYPEDB_PROJECTION_COORDINATOR_WORLD_ID
+                ),
+            )
             if str(recovery.get("status") or "") == "cleared":
                 existing = self.scoped_abox_write_lease_status(world_id)
             else:
@@ -2570,10 +2590,12 @@ class ScopedABoxManifestMixin:
         }
 
     def recover_dead_projection_coordinator_lease(self) -> Dict[str, object]:
-        """Recover only the synthetic global writer lease when its PID is dead."""
-        return self.recover_dead_local_scoped_abox_write_lease(
-            TYPEDB_PROJECTION_COORDINATOR_WORLD_ID,
-        )
+        """Recover a dead or proven-orphaned local projection coordinator."""
+        with self._projection_coordinator_registry_lock:
+            return self.recover_dead_local_scoped_abox_write_lease(
+                TYPEDB_PROJECTION_COORDINATOR_WORLD_ID,
+                recover_untracked_current_process=True,
+            )
 
     def projection_coordinator_write_enforced(self) -> bool:
         """Whether public repository mutations must take the global writer lease."""
@@ -2585,38 +2607,52 @@ class ScopedABoxManifestMixin:
             return {}
         return dict(leases[-1] or {})
 
+    def projection_coordinator_token_is_active(self, token: str) -> bool:
+        clean_token = str(token or "").strip()
+        if not clean_token:
+            return False
+        with self._projection_coordinator_registry_lock:
+            return clean_token in self._active_projection_coordinator_tokens
+
     def track_projection_coordinator_lease(self, lease: Dict[str, object]) -> None:
         if not bool((lease or {}).get("acquired")):
             return
-        leases = list(getattr(self._projection_coordinator_local, "leases", []) or [])
-        leases.append(dict(lease or {}))
-        self._projection_coordinator_local.leases = leases
+        with self._projection_coordinator_registry_lock:
+            leases = list(getattr(self._projection_coordinator_local, "leases", []) or [])
+            leases.append(dict(lease or {}))
+            self._projection_coordinator_local.leases = leases
+            token = str((lease or {}).get("leaseToken") or "").strip()
+            if token:
+                self._active_projection_coordinator_tokens.add(token)
 
     def forget_projection_coordinator_lease(self, lease: Dict[str, object]) -> None:
-        leases = list(getattr(self._projection_coordinator_local, "leases", []) or [])
-        if not leases:
-            return
-        target_token = str((lease or {}).get("leaseToken") or "")
-        target_owner = str((lease or {}).get("leaseOwner") or "")
-        target_status = str((lease or {}).get("status") or "")
-        for index in range(len(leases) - 1, -1, -1):
-            candidate = dict(leases[index] or {})
-            if target_token and str(candidate.get("leaseToken") or "") == target_token:
-                leases.pop(index)
-                self._projection_coordinator_local.leases = leases
+        with self._projection_coordinator_registry_lock:
+            leases = list(getattr(self._projection_coordinator_local, "leases", []) or [])
+            target_token = str((lease or {}).get("leaseToken") or "")
+            if target_token:
+                self._active_projection_coordinator_tokens.discard(target_token)
+            if not leases:
                 return
-            if (
-                not target_token
-                and target_owner
-                and str(candidate.get("leaseOwner") or "") == target_owner
-            ):
-                leases.pop(index)
-                self._projection_coordinator_local.leases = leases
-                return
-            if not target_token and not target_owner and target_status == "disabled":
-                leases.pop(index)
-                self._projection_coordinator_local.leases = leases
-                return
+            target_owner = str((lease or {}).get("leaseOwner") or "")
+            target_status = str((lease or {}).get("status") or "")
+            for index in range(len(leases) - 1, -1, -1):
+                candidate = dict(leases[index] or {})
+                if target_token and str(candidate.get("leaseToken") or "") == target_token:
+                    leases.pop(index)
+                    self._projection_coordinator_local.leases = leases
+                    return
+                if (
+                    not target_token
+                    and target_owner
+                    and str(candidate.get("leaseOwner") or "") == target_owner
+                ):
+                    leases.pop(index)
+                    self._projection_coordinator_local.leases = leases
+                    return
+                if not target_token and not target_owner and target_status == "disabled":
+                    leases.pop(index)
+                    self._projection_coordinator_local.leases = leases
+                    return
 
     @contextmanager
     def projection_coordinator_write_scope(self, owner: str, world_id: str = ""):
@@ -2630,6 +2666,14 @@ class ScopedABoxManifestMixin:
                 self.release_projection_coordinator_lease(lease)
 
     def acquire_projection_coordinator_lease(
+        self,
+        owner: str,
+        world_id: str = "",
+    ) -> Dict[str, object]:
+        with self._projection_coordinator_registry_lock:
+            return self._acquire_projection_coordinator_lease(owner, world_id=world_id)
+
+    def _acquire_projection_coordinator_lease(
         self,
         owner: str,
         world_id: str = "",
@@ -2689,6 +2733,10 @@ class ScopedABoxManifestMixin:
         return response
 
     def release_projection_coordinator_lease(self, lease: Dict[str, object]) -> Dict[str, object]:
+        with self._projection_coordinator_registry_lock:
+            return self._release_projection_coordinator_lease(lease)
+
+    def _release_projection_coordinator_lease(self, lease: Dict[str, object]) -> Dict[str, object]:
         if bool((lease or {}).get("adopted")):
             return {"status": "adopted-by-caller"}
         try:
@@ -2740,7 +2788,11 @@ class ScopedABoxManifestMixin:
             return True
         return True
 
-    def recover_dead_local_scoped_abox_write_lease(self, world_id: str = "") -> Dict[str, object]:
+    def recover_dead_local_scoped_abox_write_lease(
+        self,
+        world_id: str = "",
+        recover_untracked_current_process: bool = False,
+    ) -> Dict[str, object]:
         """Release a held lease only when its local owner process is gone.
 
         This covers a project worker restart without requiring a TypeDB server
@@ -2818,7 +2870,14 @@ class ScopedABoxManifestMixin:
                 "leaseHost": lease_host,
                 "reason": "Held lease belongs to another host and cannot be reclaimed locally.",
             }
-        if self.local_process_alive(local_process_id):
+        lease_token = str(existing.get("leaseToken") or payload.get("leaseToken") or "").strip()
+        current_process_orphan = bool(
+            recover_untracked_current_process
+            and local_process_id == os.getpid()
+            and lease_token
+            and not self.projection_coordinator_token_is_active(lease_token)
+        )
+        if self.local_process_alive(local_process_id) and not current_process_orphan:
             return {
                 "configured": True,
                 "status": "active-owner",
@@ -6754,6 +6813,8 @@ class TypeDBOntologyGraphRepository(GraphStoreOntologyRowMapperMixin, ScopedABox
         # adoption local to the request and never bypasses the durable TypeDB
         # lease held by another process.
         self._projection_coordinator_local = threading.local()
+        self._projection_coordinator_registry_lock = threading.RLock()
+        self._active_projection_coordinator_tokens: set = set()
         self._projection_coordinator_write_enforced = bool(projection_coordinator_write_enforced)
         # The TypeDB Python driver performs a server-description handshake
         # when it is created.  Creating and closing it for each tiny control
@@ -14435,10 +14496,10 @@ relation ontology-assertion,
             dict(index_payload.get("relationStorageIdsBySymbolAndType") or {}).get(source_symbol, {}) or {}
         )
         any_relation_types = {
-            str(getattr(condition, "relation_type", "") or "").upper().strip()
-            for condition in conditions
-            if str(getattr(condition, "kind", "") or "") == "relation"
-            and str(getattr(condition, "relation_type", "") or "").strip()
+            str(condition.get("relation_type") or condition.get("relationType") or "").upper().strip()
+            for _condition_index, condition in conditions
+            if str(condition.get("kind") or "") == "relation"
+            and str(condition.get("relation_type") or condition.get("relationType") or "").strip()
         }
         relation_storage_ids = sorted({
             str(storage_id or "").strip()
@@ -15184,6 +15245,7 @@ relation ontology-assertion,
                     "status": str(item.get("status") or "skipped"),
                     "reason": str(item.get("reason") or "")[:220],
                     "requiredRelationTypes": list(item.get("requiredRelationTypes") or []),
+                    **typedb_rule_execution_profile_fields(item),
                 })
             # Reject non-native RuleBox entries before opening TypeDB.  This
             # makes a mixed or incomplete RuleBox fail closed without issuing
@@ -15201,6 +15263,7 @@ relation ontology-assertion,
                         "ruleId": str(rule.rule_id or ""),
                         "status": str(profile.get("status") or "partial"),
                         "reason": "Rule has JSON-bound or unsupported conditions for TypeDB schema function execution.",
+                        **typedb_rule_execution_profile_fields(planned),
                     })
                     continue
                 selected_entries.append(planned)
@@ -15312,33 +15375,46 @@ relation ontology-assertion,
                 if index not in adaptive_target_indexes and entry_has_any_conditions.get(index)
             ]
             execution_batches = []
-            if function_only_entries:
-                execution_batches.append({
-                    "name": "function-only",
-                    "entries": function_only_entries,
-                    "parallelism": min(requested_parallelism, len(function_only_entries)),
-                })
-            if any_condition_entries:
-                # Each source-bounded any-condition verification opens a
-                # second TypeDB read. Run this smaller, contention-sensitive
-                # group after function-only rules and default it to one worker.
-                # The setting permits controlled increases after a deployment
-                # has demonstrated server headroom.
-                execution_batches.append({
-                    "name": "any-condition",
-                    "entries": any_condition_entries,
-                    "parallelism": min(any_condition_parallelism_cap, len(any_condition_entries)),
-                })
-            if adaptive_target_entries:
-                # A rule selected from timeout history is deliberately split
-                # before its first query. Run the smaller target shards after
-                # the normal phase and serially, matching the proven fallback
-                # pressure profile without reducing any rule's coverage.
-                execution_batches.append({
-                    "name": "adaptive-target-shards",
-                    "entries": adaptive_target_entries,
-                    "parallelism": 1,
-                })
+            for execution_stage in ["critical", "core", "supporting"]:
+                stage_function_entries = [
+                    item
+                    for item in function_only_entries
+                    if str(item[1].get("executionStage") or "core") == execution_stage
+                ]
+                stage_any_entries = [
+                    item
+                    for item in any_condition_entries
+                    if str(item[1].get("executionStage") or "core") == execution_stage
+                ]
+                stage_adaptive_entries = [
+                    item
+                    for item in adaptive_target_entries
+                    if str(item[1].get("executionStage") or "core") == execution_stage
+                ]
+                if stage_function_entries:
+                    execution_batches.append({
+                        "name": execution_stage + ":function-only",
+                        "executionStage": execution_stage,
+                        "entries": stage_function_entries,
+                        "parallelism": min(requested_parallelism, len(stage_function_entries)),
+                    })
+                if stage_any_entries:
+                    # N-of-M verification is contention-sensitive, but a
+                    # critical any-rule must still run before cheaper core or
+                    # supporting rules.
+                    execution_batches.append({
+                        "name": execution_stage + ":any-condition",
+                        "executionStage": execution_stage,
+                        "entries": stage_any_entries,
+                        "parallelism": min(any_condition_parallelism_cap, len(stage_any_entries)),
+                    })
+                if stage_adaptive_entries:
+                    execution_batches.append({
+                        "name": execution_stage + ":adaptive-target-shards",
+                        "executionStage": execution_stage,
+                        "entries": stage_adaptive_entries,
+                        "parallelism": 1,
+                    })
             native_rule_execution_phases = {
                 "functionOnlyRuleCount": len(function_only_entries),
                 "functionOnlyParallelism": min(requested_parallelism, len(function_only_entries)) if function_only_entries else 0,
@@ -15349,6 +15425,14 @@ relation ontology-assertion,
                     target_work_plan.get("targetWorkAdaptiveShardedRuleCount") or 0
                 ),
                 "adaptiveTargetShardParallelism": 1 if adaptive_target_entries else 0,
+                "executionStageWorkCounts": {
+                    stage: len([
+                        item
+                        for item in selected_entries
+                        if str(item.get("executionStage") or "core") == stage
+                    ])
+                    for stage in ["critical", "core", "supporting"]
+                },
             }
             isolated_entry_execution = bool(
                 stable_abox_write_lease_held
@@ -15428,6 +15512,7 @@ relation ontology-assertion,
                                     "status": "deferred-by-runtime-budget",
                                     "reason": "TypeDB native-rule realtime execution budget is exhausted.",
                                     "elapsedMs": int((time.perf_counter() - rule_started) * 1000),
+                                    **typedb_rule_execution_profile_fields(planned),
                                 })
                                 continue
                             rule_payload = rule.to_dict() if hasattr(rule, "to_dict") else dict(rule or {})
@@ -15465,6 +15550,7 @@ relation ontology-assertion,
                                     "status": "blocked",
                                     "reason": "TypeDB schema function call could not be built.",
                                     "elapsedMs": int((time.perf_counter() - rule_started) * 1000),
+                                    **typedb_rule_execution_profile_fields(planned),
                                 })
                                 continue
                             query_timeout = min(self.native_rule_query_timeout_seconds(), remaining_seconds)
@@ -15489,6 +15575,7 @@ relation ontology-assertion,
                                     "candidateSymbols": candidate_symbols,
                                     "elapsedMs": int((time.perf_counter() - rule_started) * 1000),
                                     "queryDurationMs": int(rule_query_duration_ms),
+                                    **typedb_rule_execution_profile_fields(planned),
                                 }
                                 skipped_rules.append(failure)
                                 query_failures.append(failure)
@@ -15508,6 +15595,7 @@ relation ontology-assertion,
                                             "candidateSymbols": candidate_symbols,
                                             "elapsedMs": int((time.perf_counter() - rule_started) * 1000),
                                             "queryDurationMs": int(rule_query_duration_ms),
+                                            **typedb_rule_execution_profile_fields(planned),
                                         }
                                         skipped_rules.append(failure)
                                         query_failures.append(failure)
@@ -15548,6 +15636,7 @@ relation ontology-assertion,
                                         "candidateSymbols": candidate_symbols,
                                         "elapsedMs": int((time.perf_counter() - rule_started) * 1000),
                                         "queryDurationMs": int(rule_query_duration_ms),
+                                        **typedb_rule_execution_profile_fields(planned),
                                     }
                                     skipped_rules.append(failure)
                                     query_failures.append(failure)
@@ -15577,6 +15666,7 @@ relation ontology-assertion,
                                 "anyConditionQueryCount": any_condition_query_count,
                                 "elapsedMs": int((time.perf_counter() - rule_started) * 1000),
                                 "queryDurationMs": int(rule_query_duration_ms),
+                                **typedb_rule_execution_profile_fields(planned),
                             })
                             self.merge_native_match_rows(rule, query_plan, rows, match_index, matches, world_id)
                 finally:
@@ -15605,6 +15695,7 @@ relation ontology-assertion,
                                 "candidateSymbols": clean_symbols_from_payload(
                                     planned.get("candidateSymbols") or clean_symbols
                                 ),
+                                **typedb_rule_execution_profile_fields(planned),
                             },
                         }
 
@@ -15680,6 +15771,8 @@ relation ontology-assertion,
                         failure.setdefault("ruleId", str(getattr(planned.get("rule"), "rule_id", "") or ""))
                         failure.setdefault("status", "query-error")
                         failure.setdefault("reason", "TypeDB native rule did not complete.")
+                        for key, value in typedb_rule_execution_profile_fields(planned).items():
+                            failure.setdefault(key, value)
                         skipped_rules.append(failure)
                         query_failures.append(failure)
                         execution_incomplete = True
@@ -15695,11 +15788,17 @@ relation ontology-assertion,
                             "ruleId": str(getattr(planned.get("rule"), "rule_id", "") or ""),
                             "status": "query-error",
                             "reason": "TypeDB native rule returned an incomplete parallel result.",
+                            **typedb_rule_execution_profile_fields(planned),
                         }
                         skipped_rules.append(failure)
                         query_failures.append(failure)
                         execution_incomplete = True
                         continue
+                    executed.update({
+                        key: value
+                        for key, value in typedb_rule_execution_profile_fields(planned).items()
+                        if key not in executed
+                    })
                     executed_rules.append(executed)
                     if bool(executed.get("timeoutFallbackUsed")):
                         timeout_fallback_rule_count += 1
@@ -15717,7 +15816,26 @@ relation ontology-assertion,
                     self.merge_native_match_rows(rule, query_plan, rows, match_index, matches, world_id)
             else:
                 self.with_typedb_retries(operation)
-            if query_failures or execution_budget_exhausted or execution_incomplete:
+            incomplete_failure_candidates = list(query_failures)
+            if not incomplete_failure_candidates:
+                incomplete_failure_candidates = [
+                    item
+                    for item in skipped_rules
+                    if isinstance(item, dict)
+                    and str(item.get("status") or "")
+                    not in {"", "not-applicable", "not-applicable-preflight", "planned"}
+                ]
+            failure_partition = typedb_rule_execution_failure_partition(
+                incomplete_failure_candidates
+            )
+            supporting_coverage_gap = bool(
+                (query_failures or execution_budget_exhausted or execution_incomplete)
+                and failure_partition["supporting"]
+                and not failure_partition["blocking"]
+            )
+            if (
+                query_failures or execution_budget_exhausted or execution_incomplete
+            ) and not supporting_coverage_gap:
                 incomplete_diagnostic = typedb_native_rule_execution_incomplete_diagnostic(
                     query_failures,
                     skipped_rules,
@@ -15753,6 +15871,11 @@ relation ontology-assertion,
                     "nativeRuleExecutionPhases": native_rule_execution_phases,
                     "parallelRuleExecution": parallel_rule_execution,
                     "matchedCount": len(matches),
+                    "nativeInferenceEvaluationComplete": False,
+                    "coreNativeInferenceEvaluationComplete": False,
+                    "nativeCoverageStatus": "blocking-rule-failure",
+                    "blockingRuleFailureCount": len(failure_partition["blocking"]),
+                    "supportingRuleFailureCount": len(failure_partition["supporting"]),
                     "executedRuleCount": len({
                         str(item.get("ruleId") or "").strip()
                         for item in executed_rules
@@ -15771,8 +15894,8 @@ relation ontology-assertion,
                     "blockingRule": dict(incomplete_diagnostic.get("blockingRule") or {}),
                     "readTransactionCount": read_transaction_count,
                     "readQueryCount": read_call_count,
-                    "executedRules": executed_rules[:40],
-                    "skippedRules": skipped_rules[:40],
+                    "executedRules": list(executed_rules),
+                    "skippedRules": list(skipped_rules),
                     "executionPlan": typedb_native_rule_execution_plan_summary(execution_plan),
                     "ruleContext": rule_context,
                     "evidenceFieldIndex": evidence_index_hydration,
@@ -15807,6 +15930,15 @@ relation ontology-assertion,
                 "nativeRuleAnyConditionRuleCount": any_condition_rule_count,
                 "nativeRuleExecutionPhases": native_rule_execution_phases,
                 "parallelRuleExecution": parallel_rule_execution,
+                "nativeInferenceEvaluationComplete": not supporting_coverage_gap,
+                "coreNativeInferenceEvaluationComplete": True,
+                "nativeCoverageStatus": (
+                    "core-complete-supporting-partial"
+                    if supporting_coverage_gap
+                    else "complete"
+                ),
+                "supportingRuleFailureCount": len(failure_partition["supporting"]),
+                "supportingRuleFailures": list(failure_partition["supporting"]),
                 "executedRuleCount": len({
                     str(item.get("ruleId") or "").strip()
                     for item in executed_rules
@@ -15826,8 +15958,8 @@ relation ontology-assertion,
                 "conditionDetailQueryCount": 0 if not self.condition_detail_queries_enabled() else None,
                 "typedbQueryMetrics": self.query_metrics_snapshot(),
                 "matches": matches,
-                "executedRules": executed_rules[:40],
-                "skippedRules": skipped_rules[:40],
+                "executedRules": list(executed_rules),
+                "skippedRules": list(skipped_rules),
                 "executionPlan": typedb_native_rule_execution_plan_summary(execution_plan),
                 "ruleContext": rule_context,
                 "evidenceFieldIndex": evidence_index_hydration,
@@ -15865,8 +15997,8 @@ relation ontology-assertion,
                 "matches": [],
                 "reasonCode": typedb_error_code(error),
                 "reason": str(error)[:220],
-                "executedRules": executed_rules[:40],
-                "skippedRules": skipped_rules[:40],
+                "executedRules": list(executed_rules),
+                "skippedRules": list(skipped_rules),
                 "readQueryCount": read_call_count,
                 "typedbQueryMetrics": self.query_metrics_snapshot(),
                 "executionPlan": typedb_native_rule_execution_plan_summary(execution_plan),
@@ -18406,6 +18538,21 @@ relation ontology-assertion,
                 "typedbNativeRuleExecutedCount": int(number_or_none(native_match_result.get("executedRuleCount")) or 0),
                 "typedbNativeRuleExecutedWorkCount": int(number_or_none(native_match_result.get("executedRuleWorkCount")) or 0),
                 "typedbNativeRuleSkippedCount": int(number_or_none(native_match_result.get("skippedRuleCount")) or 0),
+                "nativeInferenceEvaluationComplete": bool(
+                    native_match_result.get("nativeInferenceEvaluationComplete", True)
+                ),
+                "coreNativeInferenceEvaluationComplete": bool(
+                    native_match_result.get("coreNativeInferenceEvaluationComplete", True)
+                ),
+                "nativeCoverageStatus": str(
+                    native_match_result.get("nativeCoverageStatus") or "complete"
+                ),
+                "supportingRuleFailureCount": int(
+                    number_or_none(native_match_result.get("supportingRuleFailureCount")) or 0
+                ),
+                "supportingRuleFailures": list(
+                    native_match_result.get("supportingRuleFailures") or []
+                ),
                 "typedbNativeRuleParallelism": int(number_or_none(native_match_result.get("nativeRuleParallelism")) or 1),
                 "typedbNativeRuleParallelUsed": bool(native_match_result.get("parallelRuleExecution")),
                 "typedbNativeRuleTargetParallelism": int(number_or_none(native_match_result.get("nativeRuleTargetParallelism")) or 1),
@@ -18681,7 +18828,15 @@ relation ontology-assertion,
             # an empty generation marker with the active ABox provenance so a
             # new factual generation can be finalized without reusing stale
             # relations from an older market snapshot.
-            runtime_rulebox_metadata["nativeInferenceEvaluationComplete"] = True
+            runtime_rulebox_metadata["nativeInferenceEvaluationComplete"] = bool(
+                native_match_result.get("nativeInferenceEvaluationComplete", True)
+            )
+            runtime_rulebox_metadata["coreNativeInferenceEvaluationComplete"] = bool(
+                native_match_result.get("coreNativeInferenceEvaluationComplete", True)
+            )
+            runtime_rulebox_metadata["nativeCoverageStatus"] = str(
+                native_match_result.get("nativeCoverageStatus") or "complete"
+            )
             runtime_rulebox_metadata["nativeInferenceOutcome"] = "matched" if native_match_found else "no-match"
             runtime_rulebox_metadata["nativeInferenceNoMatch"] = not native_match_found
             inference_graph = typedb_inferencebox_graph(
@@ -20939,6 +21094,42 @@ def typedb_native_rule_query_complexity(rule: object) -> int:
     return len(conditions) + min(64, combinations) * 3
 
 
+def typedb_rule_execution_profile_fields(subject: object) -> Dict[str, object]:
+    """Return compact RuleBox execution metadata for plans and traces."""
+
+    if isinstance(subject, dict) and isinstance(subject.get("executionProfile"), dict):
+        profile = dict(subject.get("executionProfile") or {})
+    else:
+        rule = subject.get("rule") if isinstance(subject, dict) and subject.get("rule") else subject
+        profile = rule_execution_profile(rule)
+    return {
+        "executionStage": str(profile.get("executionStage") or "core"),
+        "failurePolicy": str(profile.get("failurePolicy") or "invalidate-generation"),
+        "costHint": str(profile.get("costHint") or "medium"),
+        "costScore": int(number_or_none(profile.get("costScore")) or 0),
+        "supportOnly": bool(profile.get("supportOnly")),
+        "executionProfileVersion": str(profile.get("version") or RULE_EXECUTION_POLICY_VERSION),
+    }
+
+
+def typedb_rule_execution_failure_partition(
+    failures: Iterable[Dict[str, object]],
+) -> Dict[str, List[Dict[str, object]]]:
+    """Separate fail-closed rules from support-only coverage gaps."""
+
+    blocking = []
+    supporting = []
+    for item in failures or []:
+        if not isinstance(item, dict):
+            continue
+        failure = dict(item)
+        if str(failure.get("failurePolicy") or "") == "preserve-core-with-gap":
+            supporting.append(failure)
+        else:
+            blocking.append(failure)
+    return {"blocking": blocking, "supporting": supporting}
+
+
 def typedb_native_rule_execution_plan(
     rules: Iterable[GraphInferenceRule],
     target_symbols: Iterable[str],
@@ -21005,6 +21196,7 @@ def typedb_native_rule_execution_plan(
                     continue
                 retained_symbols.append(symbol)
             candidate_symbols = retained_symbols
+        execution_profile = rule_execution_profile(rule)
         entry = {
             "rule": rule,
             "ruleId": rule_id,
@@ -21014,6 +21206,8 @@ def typedb_native_rule_execution_plan(
             "candidateSymbols": candidate_symbols,
             "queryComplexity": typedb_native_rule_query_complexity(rule),
             "preflightPrunedSymbols": preflight_pruned_symbols,
+            "executionProfile": execution_profile,
+            **typedb_rule_execution_profile_fields({"executionProfile": execution_profile}),
         }
         if clean_symbols and not candidate_symbols:
             preflight_reasons = [
@@ -21047,6 +21241,10 @@ def typedb_native_rule_execution_plan(
         # long series of ordinary matches cannot leave the only cardinality
         # proof until the shared read budget is nearly exhausted.
         return (
+            {"critical": 0, "core": 1, "supporting": 2}.get(
+                str(item.get("executionStage") or "core"),
+                1,
+            ),
             0 if has_any_group else 1,
             int(item.get("queryComplexity") or 0),
             str(item.get("ruleId") or ""),
@@ -21290,8 +21488,9 @@ def typedb_native_rule_execution_plan_summary(plan: Dict[str, object]) -> Dict[s
                 "ruleId": str(item.get("ruleId") or ""),
                 "candidateSymbols": list(item.get("candidateSymbols") or []),
                 "queryComplexity": int(number_or_none(item.get("queryComplexity")) or 0),
+                **typedb_rule_execution_profile_fields(item),
             }
-            for item in selected[:40]
+            for item in selected[:200]
         ],
         "relationTypesBySymbol": dict(payload.get("relationTypesBySymbol") or {}),
     }
@@ -21328,6 +21527,7 @@ def typedb_condition_pattern(
     world_id: str = "",
     world_id_variable: str = "",
     active_relation_storage_ids: Iterable[str] = None,
+    source_storage_indexed: bool = False,
 ) -> Dict[str, object]:
     condition_id = str(condition.get("condition_id") or condition.get("conditionId") or "condition-" + str(index))
     kind = str(condition.get("kind") or "")
@@ -21416,7 +21616,7 @@ def typedb_condition_pattern(
                 world_id,
                 world_id_variable,
             ))
-        else:
+        elif not source_storage_indexed:
             clauses.append(typedb_active_abox_member_clause(
                 target_var,
                 target_prefix + str(index),
@@ -21865,6 +22065,63 @@ def typedb_native_any_group_check_query(
             str(condition.get("kind") or "") == "relation"
             for _condition_index, condition in conditions
         )
+        mixed_condition_kinds = {
+            str(condition.get("kind") or "")
+            for _condition_index, condition in conditions
+            if str(condition.get("kind") or "")
+        }
+        if clean_source_storage_id and len(mixed_condition_kinds) > 1:
+            indexed_branches: List[str] = []
+            for branch_index, (condition_index, condition) in enumerate(conditions):
+                relation_type = str(
+                    condition.get("relation_type") or condition.get("relationType") or ""
+                ).upper().strip()
+                pattern = typedb_condition_pattern(
+                    condition,
+                    condition_index,
+                    relation_prefix="anyIndexedMixedRel" + str(branch_index) + "_",
+                    target_prefix="anyIndexedMixedTarget" + str(branch_index) + "_",
+                    variable_scope="anyIndexedMixed" + str(branch_index) + "_",
+                    active_relation_storage_ids=indexed_relation_storage_ids_by_type.get(
+                        relation_type,
+                        [],
+                    ),
+                    # The exact immutable source row is already bound below.
+                    # A relation linked to that physical row belongs to the
+                    # same ABox generation even when a legacy evidence index
+                    # has no relation storage IDs by type.
+                    source_storage_indexed=True,
+                )
+                if pattern.get("reason"):
+                    return {
+                        "ruleId": str(rule.get("rule_id") or rule.get("ruleId") or ""),
+                        "query": "",
+                        "columns": [],
+                        "reason": str(pattern.get("reason") or ""),
+                    }
+                branch_clauses = [
+                    str(item)
+                    for item in pattern.get("clauses") or []
+                    if str(item or "").strip()
+                ]
+                if branch_clauses:
+                    indexed_branches.append("{ " + " ".join(branch_clauses) + " }")
+            if indexed_branches:
+                return {
+                    "ruleId": str(rule.get("rule_id") or rule.get("ruleId") or ""),
+                    "nativeRuleId": typedb_native_rule_id(
+                        str(rule.get("rule_id") or rule.get("ruleId") or "")
+                    ),
+                    "query": (
+                        "match $source isa " + source_type + ", has ontology-id "
+                        + typedb_string(clean_source_id)
+                        + ", has ontology-storage-id " + typedb_string(clean_source_storage_id) + ";"
+                        + " match " + " or ".join(indexed_branches) + ";"
+                        + " $source has ontology-id $sourceId, has ontology-label $sourceLabel;"
+                    ),
+                    "columns": ["sourceId", "sourceLabel"],
+                    "anyConditionCheckMode": "exists-any-manifest-indexed-mixed",
+                }
         if (
             clean_source_storage_id
             and shared_relation_conditions

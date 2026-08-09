@@ -361,6 +361,57 @@ class VerifiedSnapshotReasoningTests(unittest.TestCase):
             verified_monitor_snapshot_reasoning_event(stale, previous.to_monitor_state())
         )
 
+    def test_ordinary_rate_refresh_waits_for_the_next_symbol_event(self):
+        previous = snapshot(external_signals={
+            "macro": {"series": {"DGS10": {"value": 4.0}}},
+        })
+        current = snapshot(external_signals={
+            "macro": {"series": {"DGS10": {"value": 4.1}}},
+        })
+
+        self.assertIsNone(
+            verified_monitor_snapshot_reasoning_event(
+                current,
+                previous.to_monitor_state(),
+            )
+        )
+
+    def test_systemic_rate_transition_can_recheck_all_live_symbols(self):
+        previous = snapshot(external_signals={
+            "macro": {"series": {"DGS10": {"value": 4.0}}},
+        })
+        current = snapshot(external_signals={
+            "macro": {"series": {"DGS10": {"value": 4.3}}},
+        })
+
+        event = verified_monitor_snapshot_reasoning_event(
+            current,
+            previous.to_monitor_state(),
+        )
+
+        self.assertEqual(["AAPL", "MSFT"], event.payload["symbols"])
+        self.assertEqual(["InterestRate"], event.payload["factTypesBySymbol"]["AAPL"])
+        transition = event.payload["verifiedSourceSnapshot"]["systemicMacroTransition"]
+        self.assertTrue(transition["systemic"])
+        self.assertAlmostEqual(30.0, transition["rateChangesBp"]["DGS10"])
+
+    def test_price_event_reads_new_macro_context_without_macro_fanout(self):
+        previous = snapshot(external_signals={
+            "macro": {"series": {"DGS10": {"value": 4.0}}},
+        })
+        current = snapshot(aapl_price=102.0, external_signals={
+            "macro": {"series": {"DGS10": {"value": 4.1}}},
+        })
+
+        event = verified_monitor_snapshot_reasoning_event(
+            current,
+            previous.to_monitor_state(),
+        )
+
+        self.assertEqual(["AAPL"], event.payload["symbols"])
+        self.assertEqual(["MarketQuote"], event.payload["factTypesBySymbol"]["AAPL"])
+        self.assertNotIn("external.macro", event.payload["changedFieldsBySymbol"]["AAPL"])
+
     def test_material_price_change_keeps_global_quality_as_context(self):
         previous = snapshot(external_signals={
             "freshness": {"status": "fresh", "dataState": "sufficient"},

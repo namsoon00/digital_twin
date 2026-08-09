@@ -819,6 +819,65 @@ class OntologyProjectionAuditTests(unittest.TestCase):
         self.assertEqual("ok", completed.status)
         self.assertEqual("generation:1", completed.inference_generation_id)
 
+    def test_mysql_store_commits_projection_and_normalized_execution_trace_together(self):
+        _snapshot, _graph, _fingerprint, run = self.build_run()
+        connection = RecordingConnection()
+        store = MySQLOntologyProjectionRunStore.__new__(MySQLOntologyProjectionRunStore)
+        store.runtime_settings = {
+            "notificationAiGateEnabled": "0",
+            "notificationAiQueueWorkerCount": "0",
+        }
+        store.transaction = lambda: ConnectionContext(connection)
+        result = {
+            "saved": True,
+            "status": "ok",
+            "graphStore": "typedb",
+            "aboxSnapshotId": run.abox_snapshot_id,
+            "ruleboxExecution": {
+                "status": "ok",
+                "nativeRuleSelectionApplied": True,
+                "nativeRuleSelectionExecutedRuleIds": ["graph.test.core.v1"],
+                "nativeMatchResult": {
+                    "status": "ok",
+                    "matches": [{"ruleId": "graph.test.core.v1"}],
+                    "executedRules": [{
+                        "ruleId": "graph.test.core.v1",
+                        "status": "ok",
+                        "executionStage": "core",
+                        "elapsedMs": 25,
+                        "queryDurationMs": 20,
+                    }],
+                },
+            },
+            "inferenceBox": {
+                "status": "ok",
+                "inferenceGenerationId": "generation:trace",
+                "sourceAboxSnapshotId": run.abox_snapshot_id,
+                "generationAligned": True,
+            },
+        }
+        completed = complete_ontology_projection_run(
+            run,
+            result,
+            completed_at="2026-07-20T00:01:10Z",
+        )
+
+        store.complete_with_execution_trace(completed, result)
+
+        statements = [sql for sql, _params in connection.calls]
+        self.assertTrue(any("UPDATE ontology_projection_runs" in sql for sql in statements))
+        self.assertTrue(any("DELETE FROM ontology_reasoning_run_stages" in sql for sql in statements))
+        self.assertTrue(any("INSERT INTO ontology_reasoning_run_stages" in sql for sql in statements))
+        self.assertTrue(any("INSERT INTO ontology_reasoning_rule_runs" in sql for sql in statements))
+        rule_call = next(
+            item for item in connection.calls
+            if "INSERT INTO ontology_reasoning_rule_runs" in item[0]
+        )
+        self.assertEqual(run.run_id, rule_call[1][0])
+        self.assertEqual("generation:trace", rule_call[1][5])
+        self.assertEqual("graph.test.core.v1", rule_call[1][8])
+        self.assertEqual("matched", rule_call[1][10])
+
     def test_projection_audit_keeps_runtime_identity_and_patch_fallback(self):
         _snapshot, _graph, _fingerprint, run = self.build_run()
         completed = complete_ontology_projection_run(run, {
@@ -947,6 +1006,54 @@ class OntologyProjectionAuditTests(unittest.TestCase):
 
         self.assertIn("world_id = %s", connection.calls[0][0])
         self.assertEqual("portfolio:tenant-a:main", connection.calls[0][1][0])
+
+    def test_execution_trace_resolves_generation_without_retained_projection_row(self):
+        connection = RecordingConnection(rows=[{"run_id": "run:historical"}])
+        store = MySQLOntologyProjectionRunStore.__new__(MySQLOntologyProjectionRunStore)
+        store.connect = lambda: ConnectionContext(connection)
+        store.execution_trace = lambda **_kwargs: {
+            "status": "ok",
+            "runCount": 1,
+            "runs": [{"runId": "run:historical"}],
+        }
+
+        payload = store.execution_trace_for_inference_generation(
+            "generation:historical",
+            account_id="main",
+        )
+
+        self.assertEqual(1, payload["runCount"])
+        self.assertEqual("generation:historical", payload["inferenceGenerationId"])
+        self.assertIn("ontology_reasoning_run_stages", connection.calls[0][0])
+        self.assertNotIn("ontology_projection_runs", connection.calls[0][0])
+
+    def test_rule_runtime_summary_uses_nearest_rank_p95_for_small_samples(self):
+        connection = RecordingConnection(rows=[
+            {
+                "run_id": "run:1",
+                "rule_run_key": "rule-run:1",
+                "rule_id": "graph.slow.v1",
+                "duration_ms": 100,
+                "status": "evaluated-no-match",
+                "updated_at": "2026-07-20T00:00:00Z",
+            },
+            {
+                "run_id": "run:2",
+                "rule_run_key": "rule-run:2",
+                "rule_id": "graph.slow.v1",
+                "duration_ms": 9000,
+                "status": "matched",
+                "matched": 1,
+                "updated_at": "2026-07-20T00:01:00Z",
+            },
+        ])
+        store = MySQLOntologyProjectionRunStore.__new__(MySQLOntologyProjectionRunStore)
+        store.connect = lambda: ConnectionContext(connection)
+
+        payload = store.rule_runtime_summary(limit=10)
+
+        self.assertEqual(9000, payload["rules"][0]["p95DurationMs"])
+        self.assertEqual(1, payload["rules"][0]["matchedCount"])
 
     def test_mysql_store_recovers_only_stale_audit_rows_for_the_current_world(self):
         connection = RecordingConnection(rows=[])

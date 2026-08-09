@@ -137,11 +137,100 @@ SUPPLEMENTAL_EXTERNAL_GROUPS = {
 # the next material subject request. A provider outage already has its own
 # operational alert; duplicating it as a TypeDB turn for every holding turns a
 # single state change into a queue flood.
-CONTEXT_ONLY_EXTERNAL_GROUPS = {"quality", "freshness", "provenance", "statuses"}
+CONTEXT_ONLY_EXTERNAL_GROUPS = {
+    "quality", "freshness", "provenance", "statuses", "macro", "fxRates",
+}
 
 
 def _clean_symbol(value: object) -> str:
     return str(value or "").upper().strip()
+
+
+def _number(value: object):
+    try:
+        return float(value)
+    except (TypeError, ValueError):
+        return None
+
+
+def _setting_number(settings: Mapping[str, object], key: str, default: float) -> float:
+    value = _number((settings or {}).get(key))
+    return max(0.0, value if value is not None else default)
+
+
+def _macro_series_values(external: Mapping[str, object]) -> Dict[str, float]:
+    macro = external.get("macro") if isinstance(external.get("macro"), Mapping) else {}
+    series = macro.get("series") if isinstance(macro.get("series"), Mapping) else {}
+    values = {}
+    for series_id, raw in series.items():
+        payload = raw if isinstance(raw, Mapping) else {"value": raw}
+        value = _number(payload.get("value"))
+        if value is not None:
+            values[str(series_id or "").upper().strip()] = value
+    return values
+
+
+def _fx_values(external: Mapping[str, object]) -> Dict[str, float]:
+    rows = external.get("fxRates") if isinstance(external.get("fxRates"), Mapping) else {}
+    values = {}
+    for currency, raw in rows.items():
+        payload = raw if isinstance(raw, Mapping) else {"value": raw}
+        value = _number(
+            payload.get("value")
+            if payload.get("value") is not None
+            else payload.get("rate")
+        )
+        if value is not None and value > 0:
+            values[str(currency or "").upper().strip()] = value
+    return values
+
+
+def systemic_macro_transition(
+    previous: Mapping[str, object],
+    current: Mapping[str, object],
+    settings: Mapping[str, object] = None,
+) -> Dict[str, object]:
+    """Detect only an explicit shared-market shock for operational routing."""
+
+    rate_threshold_bp = _setting_number(
+        settings or {},
+        "ontologyMacroSystemicRateDeltaBp",
+        25.0,
+    )
+    fx_threshold_pct = _setting_number(
+        settings or {},
+        "ontologyMacroSystemicFxChangePct",
+        2.0,
+    )
+    previous_rates = _macro_series_values(previous)
+    current_rates = _macro_series_values(current)
+    rate_changes = {
+        series_id: round((current_rates[series_id] - previous_rates[series_id]) * 100.0, 3)
+        for series_id in sorted(set(previous_rates) & set(current_rates))
+    }
+    previous_fx = _fx_values(previous)
+    current_fx = _fx_values(current)
+    fx_changes = {
+        currency: round(
+            ((current_fx[currency] - previous_fx[currency]) / previous_fx[currency]) * 100.0,
+            4,
+        )
+        for currency in sorted(set(previous_fx) & set(current_fx))
+        if previous_fx[currency] > 0
+    }
+    breached_rates = {
+        key: value for key, value in rate_changes.items() if abs(value) >= rate_threshold_bp
+    }
+    breached_fx = {
+        key: value for key, value in fx_changes.items() if abs(value) >= fx_threshold_pct
+    }
+    return {
+        "systemic": bool(breached_rates or breached_fx),
+        "rateThresholdBp": rate_threshold_bp,
+        "fxThresholdPct": fx_threshold_pct,
+        "rateChangesBp": breached_rates,
+        "fxChangesPct": breached_fx,
+    }
 
 
 def _camel_case(value: str) -> str:
@@ -369,12 +458,17 @@ def _changed_external_groups(previous: Mapping[str, object], current: Mapping[st
     return groups
 
 
-def _reasoning_external_groups(changed_groups: Iterable[str]) -> List[str]:
+def _reasoning_external_groups(
+    changed_groups: Iterable[str],
+    include_shared_context: bool = False,
+) -> List[str]:
     """Return only subject-scoped external changes that require a TypeDB turn."""
 
     selected = []
     for group in changed_groups or []:
-        if group in SUPPLEMENTAL_EXTERNAL_GROUPS or group in CONTEXT_ONLY_EXTERNAL_GROUPS:
+        if group in SUPPLEMENTAL_EXTERNAL_GROUPS:
+            continue
+        if group in CONTEXT_ONLY_EXTERNAL_GROUPS and not include_shared_context:
             continue
         selected.append(group)
     return sorted(set(selected))
@@ -450,6 +544,11 @@ def verified_monitor_snapshot_reasoning_event(
         target_symbols=subjects,
         settings=settings,
     )
+    macro_transition = systemic_macro_transition(
+        previous_external,
+        current_external,
+        settings=settings,
+    )
 
     changed_symbols: List[str] = []
     changed_fields_by_symbol: Dict[str, List[str]] = {}
@@ -474,7 +573,10 @@ def verified_monitor_snapshot_reasoning_event(
         before_external = _external_for_symbol(previous_external, symbol, settings)
         after_external = _external_for_symbol(current_external, symbol, settings)
         raw_external_groups = _changed_external_groups(before_external, after_external)
-        external_groups = _reasoning_external_groups(raw_external_groups)
+        external_groups = _reasoning_external_groups(
+            raw_external_groups,
+            include_shared_context=bool(macro_transition.get("systemic")),
+        )
         assessment = None
         if position_fields and before_position and after_position:
             assessment = market_change_materiality(
@@ -644,6 +746,7 @@ def verified_monitor_snapshot_reasoning_event(
             "deferredSupplementalExternalSymbols": deferred_supplemental_external_symbols[:20],
             "cryptoTransitions": crypto_transitions[:12],
             "cryptoTransitionTargetSymbols": transition_targets[:20],
+            "systemicMacroTransition": macro_transition,
         },
         observation_followup_symbols=observation_followups,
         importance_gate="materiality-or-context-transition",

@@ -29,6 +29,7 @@ DEFAULT_LARGE_DOMAIN_EVENT_NAMES = (
     "ontology.reasoning_requested",
 )
 DEFAULT_PROJECTION_RUN_KEEP_COUNT = 2
+DEFAULT_ONTOLOGY_EXECUTION_TRACE_RETENTION_DAYS = 30
 DEFAULT_WORLD_PROJECTION_OUTBOX_RETENTION_HOURS = 1
 DEFAULT_INFERENCE_DETAIL_OUTBOX_RETENTION_HOURS = 24
 DEFAULT_HYPOTHESIS_LIFECYCLE_EVENT_RETENTION_DAYS = 1
@@ -60,6 +61,8 @@ MYSQL_OPERATIONAL_COMPACTION_TABLES = frozenset({
     "market_quote_cache",
     "ontology_ai_opinion_samples",
     "ontology_projection_runs",
+    "ontology_reasoning_run_stages",
+    "ontology_reasoning_rule_runs",
     "ontology_world_projection_outbox",
     "ontology_inference_detail_outbox",
     "investment_decision_episodes",
@@ -217,6 +220,16 @@ def operational_projection_run_keep_count(settings: Mapping[str, object] = None)
         DEFAULT_PROJECTION_RUN_KEEP_COUNT,
         2,
         500,
+    )
+
+
+def ontology_execution_trace_retention_days(settings: Mapping[str, object] = None) -> int:
+    return _int_setting(
+        settings or {},
+        "ontologyExecutionTraceRetentionDays",
+        DEFAULT_ONTOLOGY_EXECUTION_TRACE_RETENTION_DAYS,
+        1,
+        365,
     )
 
 
@@ -859,6 +872,7 @@ def apply_mysql_operational_history_retention(
     # a time so the low-priority transaction does not monopolize the redo log.
     outbox_batch_size = min(batch_size, 1)
     projection_run_keep_count = operational_projection_run_keep_count(configured)
+    execution_trace_retention_days = ontology_execution_trace_retention_days(configured)
     world_projection_outbox_retention_hours = operational_world_projection_outbox_retention_hours(configured)
     inference_detail_outbox_retention_hours = operational_inference_detail_outbox_retention_hours(configured)
     ai_inference_queue_retention_hours = operational_ai_inference_queue_retention_hours(configured)
@@ -943,6 +957,27 @@ def apply_mysql_operational_history_retention(
         deleted_by_policy["time:ontology_projection_runs"] = projection_time_deleted
         deleted_by_policy["count:ontology_projection_runs"] = projection_count_deleted
 
+        execution_trace_cutoff = (
+            (now or datetime.now(timezone.utc)).astimezone(timezone.utc)
+            - timedelta(days=execution_trace_retention_days)
+        ).replace(microsecond=0).isoformat().replace("+00:00", "Z")
+        stage_trace_deleted = _delete_stale_rows(
+            connection,
+            MySQLRetentionTarget("ontology_reasoning_run_stages", "updated_at"),
+            execution_trace_cutoff,
+            batch_size,
+        )
+        rule_trace_deleted = _delete_stale_rows(
+            connection,
+            MySQLRetentionTarget("ontology_reasoning_rule_runs", "updated_at"),
+            execution_trace_cutoff,
+            batch_size,
+        )
+        deleted_by_table["ontology_reasoning_run_stages"] = stage_trace_deleted
+        deleted_by_table["ontology_reasoning_rule_runs"] = rule_trace_deleted
+        deleted_by_policy["time:ontology_reasoning_run_stages"] = stage_trace_deleted
+        deleted_by_policy["time:ontology_reasoning_rule_runs"] = rule_trace_deleted
+
         world_projection_cutoff = (
             (now or datetime.now(timezone.utc)).astimezone(timezone.utc)
             - timedelta(hours=world_projection_outbox_retention_hours)
@@ -1010,6 +1045,7 @@ def apply_mysql_operational_history_retention(
         "largeDomainEventKeepCount": operational_large_domain_event_keep_count(configured),
         "largeDomainEventNames": operational_large_domain_event_names(configured),
         "projectionRunKeepCount": projection_run_keep_count,
+        "ontologyExecutionTraceRetentionDays": execution_trace_retention_days,
         "worldProjectionOutboxRetentionHours": world_projection_outbox_retention_hours,
         "inferenceDetailOutboxRetentionHours": inference_detail_outbox_retention_hours,
         "marketTimeSeriesRetentionDays": market_time_series_retention_days(configured),

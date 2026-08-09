@@ -76,117 +76,18 @@ from ..domain.ontology_native_rule_planning import (
     native_rule_planner_topology,
 )
 from ..domain.ontology_fact_slots import build_fact_slot_projection_plan
+from ..domain.ontology_rulebox_release_manifest import (
+    DEPRECATED_TYPEDB_RULE_IDS,
+    RULEBOX_PLATFORM_RELEASE_ADDITION_IDS,
+    RULEBOX_RAW_ABOX_RUNTIME_RULE_IDS,
+    RULEBOX_RAW_ABOX_RUNTIME_RULE_VERSIONS,
+)
 from ..domain.portfolio_ontology_temporal_concepts import parse_temporal_windows
 from ..domain.portfolio import AccountSnapshot
 from ..domain.investment_brain import decision_episode_ontology_context
 from ..domain.hypothesis_lifecycle import HYPOTHESIS_LIFECYCLE_KEY_PREFIX
 from .graph_store_rulebox import rulebox_rules_to_payload
 from .runtime_identity import runtime_identity
-
-
-DEPRECATED_TYPEDB_RULE_IDS = {
-    "shadow.market_psychology.state.v1",
-    # Replaced by change-and-response rules. The old rule treated a static
-    # rate level as a recurring stock risk and therefore over-selected macro.
-    "graph.macro.regime.risk.v1",
-}
-
-RATE_MACRO_RULE_IDS = {
-    "graph.macro.rate.rise.confirmed_risk.v1",
-    "graph.macro.rate.fall.confirmed_support.v1",
-    "graph.macro.rate.high_regime_entry.risk.v1",
-    "graph.macro.rate.stock_divergence.support.v1",
-    "graph.macro.curve.inversion_entry.risk.v1",
-}
-
-CRYPTO_MARKET_RULE_IDS = {
-    "graph.crypto.market.24h.up.watch.v1",
-    "graph.crypto.market.24h.down.watch.v1",
-    "graph.crypto.market.7d.up.watch.v1",
-    "graph.crypto.market.7d.down.watch.v1",
-    "graph.crypto.market.24h.up.major.v1",
-    "graph.crypto.market.24h.down.major.v1",
-    "graph.crypto.market.7d.up.major.v1",
-    "graph.crypto.market.7d.down.major.v1",
-}
-
-# These rules previously consumed Python-classified ABox relations such as
-# ``BREAKS_LEVEL`` or ``HAS_INVESTOR_FLOW_SENTIMENT``. Their current versions
-# consume raw ABox measurements and must replace an incompatible persisted
-# shape once. Execution capacity intentionally uses normalized metric facts
-# instead of adding physical TypeDB attributes to an already live database.
-RULEBOX_RAW_ABOX_RUNTIME_RULE_IDS = {
-    "graph.loss_guard.breakdown.v1",
-    "graph.loss_smart_money.defense.v1",
-    "graph.investor_flow.smart_money_accumulation.v1",
-    "graph.investor_flow.retail_dip_buying_risk.v1",
-    "graph.investor_flow.smart_money_outflow_risk.v1",
-    "graph.loss_smart_money.add_buy_review.v1",
-    "graph.averaging_down.risk_guard.v1",
-    "graph.profit_protect.trend_break.v1",
-    "graph.winner_momentum.add_buy_review.v1",
-    "graph.watchlist.pullback.entry.v1",
-    "graph.price.recovery.confirmed_by_flow.v1",
-    "graph.price.rebound.failure.v1",
-    "graph.flow.recovery_confirmed_by_smart_money.v1",
-    "graph.flow.price_up_smart_money_outflow.divergence.v1",
-    "graph.news.price_reaction.risk_confirmed.v1",
-    "graph.materiality.alert_candidate.v1",
-    "graph.holding.trend_transition.risk.v1",
-    "graph.watchlist.trend_transition.support.v1",
-    "graph.market_proxy.observation.risk_context.v1",
-    "graph.market_proxy.observation.support_context.v1",
-    "graph.portfolio.concentration.review.v1",
-    "graph.price.reclaim.thesis_support.v1",
-    "graph.instrument_profile.preferred_income.rate_sensitivity.v1",
-    *RATE_MACRO_RULE_IDS,
-    "graph.crypto.exposure.volatility_risk.v1",
-    *CRYPTO_MARKET_RULE_IDS,
-    # Execution rules use normalized execution-metric observations. Existing
-    # consolidated capacity-profile definitions must be replaced because their
-    # promoted attributes are not part of the deployed base TypeDB schema.
-    "graph.liquidity.execution_guard.v1",
-    "graph.execution.liquidity_or_slippage_block.v1",
-    "graph.execution.capacity_safe.v1",
-}
-
-# This is migration metadata, not a second decision policy.  Runtime
-# investment judgement continues to come from the stored TypeDB RuleBox.  The
-# version map only identifies a persisted rule shape that cannot safely read
-# the current raw ABox contract and therefore must be upgraded from the
-# bootstrap catalog before native execution starts.
-RULEBOX_RAW_ABOX_RUNTIME_RULE_VERSIONS = {
-    rule_id: "v2"
-    for rule_id in RULEBOX_RAW_ABOX_RUNTIME_RULE_IDS
-}
-RULEBOX_RAW_ABOX_RUNTIME_RULE_VERSIONS["graph.execution.capacity_safe.v1"] = "v3"
-RULEBOX_RAW_ABOX_RUNTIME_RULE_VERSIONS["graph.price.reclaim.thesis_support.v1"] = "v3"
-for _rule_id in CRYPTO_MARKET_RULE_IDS:
-    RULEBOX_RAW_ABOX_RUNTIME_RULE_VERSIONS[_rule_id] = "v1"
-for _rule_id in RATE_MACRO_RULE_IDS:
-    RULEBOX_RAW_ABOX_RUNTIME_RULE_VERSIONS[_rule_id] = "v1"
-
-# These native-rule templates were added after RuleBox had already become the
-# persisted source of truth.  A controlled release migration appends only
-# these missing platform rules; it never replaces an existing edited rule or
-# re-enables a disabled one.  Platform rules should be disabled rather than
-# deleted when an operator wants to suppress them, so their governance history
-# remains intact.
-RULEBOX_PLATFORM_RELEASE_ADDITION_IDS = {
-    *RATE_MACRO_RULE_IDS,
-    "graph.fx.usdkrw.exposure.regime.v1",
-    "graph.crypto.exposure.volatility_risk.v1",
-    *CRYPTO_MARKET_RULE_IDS,
-    "graph.earnings.surprise.risk.v1",
-    "graph.earnings.surprise.support.v1",
-    "graph.regulatory.event.risk.v1",
-    "graph.temporal.intraday_downside_acceleration.risk.v1",
-    "graph.temporal.intraday_reversal.defense.v1",
-    "graph.temporal.risk_event_absorption.support.v1",
-    "graph.temporal.support_event_rejection.risk.v1",
-    "graph.market_proxy.relative_underperformance.risk.v1",
-    "graph.market_proxy.relative_resilience.support.v1",
-}
 
 
 _RULEBOX_BOOTSTRAP_CATALOG_LOCK = Lock()
@@ -5535,7 +5436,15 @@ class PortfolioOntologyProjectionRecorder:
                     **dict(completed_run.result_payload or {}),
                     "runtimeObservation": dict(result["runtimeObservation"]),
                 })
-                self.projection_run_store.complete(completed_run)
+                complete_with_trace = getattr(
+                    self.projection_run_store,
+                    "complete_with_execution_trace",
+                    None,
+                )
+                if callable(complete_with_trace):
+                    complete_with_trace(completed_run, result)
+                else:
+                    self.projection_run_store.complete(completed_run)
                 result["projectionAudit"] = {
                     "status": "recorded",
                     "runId": completed_run.run_id,

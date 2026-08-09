@@ -70,6 +70,8 @@ class OntologyRuleMatch:
     next_checks: List[str] = field(default_factory=list)
     notification_category: str = ""
     notification_severity: str = ""
+    rule_source_kind: str = ""
+    rule_scope_families: List[str] = field(default_factory=list)
 
     def to_dict(self) -> Dict[str, object]:
         payload = asdict(self)
@@ -97,6 +99,8 @@ class OntologyRuleMatch:
         payload["nextChecks"] = payload.pop("next_checks")
         payload["notificationCategory"] = payload.pop("notification_category")
         payload["notificationSeverity"] = payload.pop("notification_severity")
+        payload["ruleSourceKind"] = payload.pop("rule_source_kind")
+        payload["ruleScopeFamilies"] = payload.pop("rule_scope_families")
         return payload
 
 

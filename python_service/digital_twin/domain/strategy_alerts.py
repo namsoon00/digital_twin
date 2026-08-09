@@ -154,7 +154,8 @@ class StrategyAlertMixin:
             return None
         active_rules = [
             item for item in (relation_context.get("activeRules") if isinstance(relation_context, dict) else []) or []
-            if isinstance(item, dict) and str(item.get("ruleId") or item.get("rule_id") or "").startswith("graph.crypto.market.")
+            if isinstance(item, dict)
+            and str(item.get("ruleSourceKind") or item.get("rule_source_kind") or "").strip().lower() == "crypto-asset"
         ]
         if not active_rules:
             return None

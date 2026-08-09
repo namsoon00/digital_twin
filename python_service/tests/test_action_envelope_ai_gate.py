@@ -261,9 +261,18 @@ class ActionEnvelopeAiGateTests(unittest.TestCase):
             "macroDgs2": 4.37,
             "instrumentSensitivities": {"rate": "medium"},
         })
+        context["ontologyRelationContext"]["actionEnvelope"]["constraintRuleIds"] = [
+            "graph.macro.rate.high_regime_entry.risk.v1",
+        ]
         context["ontologyRelationContext"]["activeRules"] = [
             {"ruleId": "graph.price.reclaim.thesis_support.v1", "actionGroup": "entry"},
-            {"ruleId": "graph.macro.regime.risk.v1", "actionGroup": "macroRegime"},
+            {
+                "ruleId": "graph.macro.rate.high_regime_entry.risk.v1",
+                "actionGroup": "macroRegime",
+                "evidenceRole": "risk",
+                "decisionEffect": "constrain",
+                "ruleScopeFamilies": ["macro-rates"],
+            },
         ]
         context["ontologyRelationContext"]["executionPlan"]["decisionDrivers"] = [
             {

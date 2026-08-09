@@ -258,6 +258,20 @@ MYSQL_OPERATIONAL_INDEXES: Dict[str, Sequence[MySQLIndexDefinition]] = {
             "`account_id`, `material_fingerprint`",
         ),
     ),
+    "ontology_reasoning_run_stages": (
+        MySQLIndexDefinition(
+            "ontology_reasoning_run_stages",
+            "idx_reasoning_run_stages_generation",
+            "`inference_generation_id`, `account_id`, `updated_at`",
+        ),
+    ),
+    "ontology_reasoning_rule_runs": (
+        MySQLIndexDefinition(
+            "ontology_reasoning_rule_runs",
+            "idx_reasoning_rule_runs_generation",
+            "`inference_generation_id`, `account_id`, `updated_at`",
+        ),
+    ),
     "ontology_world_projection_outbox": (
         MySQLIndexDefinition(
             "ontology_world_projection_outbox",
@@ -387,6 +401,20 @@ MYSQL_OPERATIONAL_COLUMNS: Dict[str, Sequence[MySQLColumnDefinition]] = {
         MySQLColumnDefinition(
             "ontology_projection_runs",
             "market_world_id",
+            "VARCHAR(191) NOT NULL DEFAULT ''",
+        ),
+    ),
+    "ontology_reasoning_run_stages": (
+        MySQLColumnDefinition(
+            "ontology_reasoning_run_stages",
+            "inference_generation_id",
+            "VARCHAR(191) NOT NULL DEFAULT ''",
+        ),
+    ),
+    "ontology_reasoning_rule_runs": (
+        MySQLColumnDefinition(
+            "ontology_reasoning_rule_runs",
+            "inference_generation_id",
             "VARCHAR(191) NOT NULL DEFAULT ''",
         ),
     ),

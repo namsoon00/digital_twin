@@ -659,15 +659,20 @@ class MaterialityGateTests(unittest.TestCase):
                 return ["unit"]
 
         events = EventBus()
+        company_by_symbol = {
+            "AAPL": SimpleNamespace(symbol="AAPL", name="Apple", market="NASDAQ", currency="USD", sector="Technology"),
+            "TSLA": SimpleNamespace(symbol="TSLA", name="Tesla", market="NASDAQ", currency="USD", sector="Automotive"),
+        }
         runner = NewsCollectionRunner(
             account_repository=SimpleNamespace(load=lambda: [AccountConfig("main", "메인", "toss", "https://example.test", "", "", "", ["AAPL", "TSLA"])]),
             monitor_store=SimpleNamespace(previous={}),
-            symbol_store=SimpleNamespace(get=lambda *_args: None),
+            symbol_store=SimpleNamespace(get=lambda symbol, *_args: company_by_symbol.get(symbol)),
             evidence_store=MemoryEvidenceStore(),
             gateway=Gateway(),
             settings={"newsCollectionRateLimitSeconds": "0", "newsEvidenceCleanupEnabled": "0", "newsEvidenceMaxAgeMinutes": "100000"},
             event_publisher=events,
             sleep_fn=lambda _seconds: None,
+            now_provider=lambda: datetime(2026, 7, 10, 2, 0, tzinfo=timezone.utc),
         )
 
         result = runner.run_once()
@@ -770,6 +775,7 @@ class MaterialityGateTests(unittest.TestCase):
             event_publisher=events,
             article_analysis_service=AnalysisService(),
             sleep_fn=lambda _seconds: None,
+            now_provider=lambda: datetime(2026, 7, 10, 2, 0, tzinfo=timezone.utc),
         )
 
         result = runner.run_once()

@@ -377,6 +377,8 @@ def build_notification_reverse_reasoning_trace(
     plan = _dict(relation.get("executionPlan"))
     subject = _dict(relation.get("subject"))
     ai = _dict(values.get("notificationAiValidatedResponse"))
+    ai_execution = _dict(values.get("notificationAiExecutionAudit"))
+    prompt_context = _dict(values.get("notificationAiPromptContext"))
     hypotheses = _hypothesis_rows(relation, ai)
     selected_hypothesis_id = _text(
         ai.get("selectedHypothesisId")
@@ -498,6 +500,28 @@ def build_notification_reverse_reasoning_trace(
             "selectionSource": _text(ai.get("hypothesisSelectionSource"), 120),
             "selectedHypothesisId": selected_hypothesis_id,
             "unresolvedQuestions": _unique(ai.get("unresolvedQuestions") or [], 6, 260),
+        },
+        "aiExecution": {
+            "status": _text(ai_execution.get("status"), 80) or "not-executed",
+            "requestId": _text(ai_execution.get("requestId"), 180),
+            "promptVersion": _text(
+                ai_execution.get("promptVersion")
+                or prompt_context.get("promptVersion"),
+                120,
+            ),
+            "promptId": _text(prompt_context.get("promptId"), 160),
+            "model": _text(ai_execution.get("model"), 120),
+            "reasoningEffort": _text(ai_execution.get("reasoningEffort"), 40),
+            "promptHash": _text(ai_execution.get("promptHash"), 80),
+            "promptBytes": int(ai_execution.get("promptBytes") or 0),
+            "prompt": str(ai_execution.get("prompt") or ""),
+            "responseSource": _text(
+                ai_execution.get("responseSource") or ai.get("source"),
+                180,
+            ),
+            "validationState": _text(ai_execution.get("validationState"), 80),
+            "latencyMs": int(ai_execution.get("latencyMs") or 0),
+            "executed": bool(ai_execution.get("requestId")),
         },
         "selectedHypothesis": selected_hypothesis,
         "alternativeHypotheses": alternatives,

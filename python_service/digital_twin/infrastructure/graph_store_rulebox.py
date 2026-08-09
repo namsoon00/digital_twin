@@ -309,6 +309,21 @@ def build_rulebox_rules_from_rows(
                 or {}
             ),
             "any_condition_min_count": int(row.get("anyConditionMinCount") or props.get("anyConditionMinCount") or 1),
+            "execution_stage": str(
+                row.get("executionStageOverride")
+                or props.get("executionStageOverride")
+                or ""
+            ),
+            "failure_policy": str(
+                row.get("failurePolicyOverride")
+                or props.get("failurePolicyOverride")
+                or ""
+            ),
+            "cost_hint": str(
+                row.get("costHintOverride")
+                or props.get("costHintOverride")
+                or ""
+            ),
             "enabled": bool(row.get("enabled")) if row.get("enabled") is not None else bool(props.get("enabled", True)),
         }
         try:

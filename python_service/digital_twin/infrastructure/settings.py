@@ -41,6 +41,9 @@ TEXT_SETTING_KEYS = [
     "operationalLargeDomainEventKeepCount",
     "operationalLargeDomainEventNames",
     "operationalProjectionRunKeepCount",
+    "ontologyExecutionTraceRetentionDays",
+    "ontologyMacroSystemicRateDeltaBp",
+    "ontologyMacroSystemicFxChangePct",
     "operationalMinimumFreeSpaceMb",
     "operationalCriticalFreeSpaceMb",
     "operationalStorageWarningFreeSpaceMb",
@@ -991,6 +994,21 @@ def runtime_settings(fast_operational_read: bool = False) -> Dict[str, str]:
         "operationalProjectionRunKeepCount": value(
             "operationalProjectionRunKeepCount",
             "OPERATIONAL_PROJECTION_RUN_KEEP_COUNT",
+            "2",
+        ),
+        "ontologyExecutionTraceRetentionDays": value(
+            "ontologyExecutionTraceRetentionDays",
+            "ONTOLOGY_EXECUTION_TRACE_RETENTION_DAYS",
+            "30",
+        ),
+        "ontologyMacroSystemicRateDeltaBp": value(
+            "ontologyMacroSystemicRateDeltaBp",
+            "ONTOLOGY_MACRO_SYSTEMIC_RATE_DELTA_BP",
+            "25",
+        ),
+        "ontologyMacroSystemicFxChangePct": value(
+            "ontologyMacroSystemicFxChangePct",
+            "ONTOLOGY_MACRO_SYSTEMIC_FX_CHANGE_PCT",
             "2",
         ),
         "operationalMinimumFreeSpaceMb": value(

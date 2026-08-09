@@ -1718,10 +1718,23 @@ def _macro_constraint_rule_ids(context: Dict[str, object]) -> set:
 
 
 def _macro_constraint_state(context: Dict[str, object]) -> Dict[str, bool]:
-    rule_ids = _macro_constraint_rule_ids(context)
+    relation_context = relation_context_value(context or {})
+    constrained_rule_ids = _macro_constraint_rule_ids(context)
+    rules = relation_context.get("activeRules") or relation_context.get("matchedRules") or []
+    constrained_families = []
+    for item in rules if isinstance(rules, list) else []:
+        if not isinstance(item, dict):
+            continue
+        rule_id = str(item.get("ruleId") or item.get("rule_id") or "").strip().casefold()
+        if rule_id not in constrained_rule_ids:
+            continue
+        families = item.get("ruleScopeFamilies") or item.get("rule_scope_families") or []
+        if not isinstance(families, list):
+            families = [families]
+        constrained_families.extend(str(value or "").strip().casefold() for value in families)
     return {
-        "rate": any(rule_id.startswith("graph.macro.") for rule_id in rule_ids),
-        "fx": any(rule_id.startswith("graph.fx.") for rule_id in rule_ids),
+        "rate": "macro-rates" in constrained_families,
+        "fx": "macro-fx" in constrained_families,
     }
 
 

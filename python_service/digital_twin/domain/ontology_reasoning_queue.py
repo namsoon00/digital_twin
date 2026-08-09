@@ -47,6 +47,30 @@ REASONING_PRIORITY_ORDER = {
     "observation": 5,
 }
 
+REASONING_LANES = (
+    "REALTIME_INGEST",
+    "CRITICAL_REASONING",
+    "CORE_REASONING",
+    "ENRICHMENT",
+    "MAINTENANCE",
+)
+
+
+def reasoning_lane_for_priority(priority: object) -> str:
+    """Map existing dispatch priority to one bounded processing lane.
+
+    This is an operational scheduling contract only. It neither evaluates a
+    market fact nor changes which RuleBox rules TypeDB considers.
+    """
+    clean = str(priority or "").strip().lower()
+    if clean in {"observation", "critical", "urgent"}:
+        return "CRITICAL_REASONING"
+    return "CORE_REASONING"
+
+
+def event_reasoning_lane(event: object) -> str:
+    return reasoning_lane_for_priority(event_reasoning_priority(event))
+
 # A persisted material price observation has a current-state TypeDB follow-up.
 # It should not wait behind ordinary queue pressure, but the marker remains
 # scheduling provenance only.

@@ -1085,13 +1085,14 @@ def verification_for_evidence(
     target: NewsCollectionTarget,
     max_age_minutes: int,
     minimum_source_trust_state: str = "standard",
+    now: datetime = None,
     **legacy_policy: object,
 ) -> Tuple[EvidenceClaim, bool]:
     if "minimum_source_reliability" in legacy_policy:
         minimum_source_trust_state = normalized_source_trust_state(legacy_policy["minimum_source_reliability"])
     payload = item.raw_payload if isinstance(item.raw_payload, dict) else {}
     resolution, reasons = entity_resolution(item, target)
-    age = evidence_age_minutes(item)
+    age = evidence_age_minutes(item, now=now)
     if age is None:
         reasons.append("reference-time-missing")
     elif age > max(1, int(max_age_minutes or 1)):
@@ -1247,6 +1248,7 @@ def governed_evidence(
     minimum_source_trust_state: str = "standard",
     policy: Dict[str, object] = None,
     related_items: Iterable[ResearchEvidence] = None,
+    now: datetime = None,
     **legacy_policy: object,
 ) -> Tuple[List[ResearchEvidence], List[EvidenceClaim], List[EvidenceClaim]]:
     """Apply source, claim, official-document and lifecycle governance.
@@ -1290,6 +1292,7 @@ def governed_evidence(
             target,
             max_age_minutes,
             minimum_source_trust_state,
+            now=now,
         )
         baseline_by_evidence[str(item.evidence_id or "")] = (baseline, base_accepted)
         for claim in extracted_claims_for_evidence(item, target, normalized_policy):

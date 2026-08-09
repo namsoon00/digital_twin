@@ -83,6 +83,8 @@ def compact_reasoning_request_context(
 
     raw_queue_pressure = values.get("queuePressure")
     queue_pressure = raw_queue_pressure if isinstance(raw_queue_pressure, Mapping) else {}
+    raw_queue_dispatch = values.get("queueDispatch")
+    queue_dispatch = raw_queue_dispatch if isinstance(raw_queue_dispatch, Mapping) else {}
     raw_batch_plan = values.get("batchPlan")
     batch_plan = raw_batch_plan if isinstance(raw_batch_plan, Mapping) else {}
     raw_crypto_transitions = values.get("cryptoTransitions")
@@ -157,6 +159,28 @@ def compact_reasoning_request_context(
             "selectedRequestCount": non_negative_integer(queue_pressure.get("selectedRequestCount")),
             "omittedSymbolCount": non_negative_integer(queue_pressure.get("omittedSymbolCount")),
             "hasDeferredWork": bool(queue_pressure.get("hasDeferredWork")),
+        },
+        "queueDispatch": {
+            "mode": str(queue_dispatch.get("mode") or "")[:80],
+            "selectedLanes": clean_list(queue_dispatch.get("selectedLanes"), limit=5),
+            "selectedWorkClasses": clean_list(
+                queue_dispatch.get("selectedWorkClasses"),
+                limit=12,
+            ),
+            "selectedByLane": {
+                str(key or "")[:40]: non_negative_integer(value)
+                for key, value in dict(queue_dispatch.get("selectedByLane") or {}).items()
+                if str(key or "").strip()
+            },
+            "selectedByPriority": {
+                str(key or "")[:40]: non_negative_integer(value)
+                for key, value in dict(queue_dispatch.get("selectedByPriority") or {}).items()
+                if str(key or "").strip()
+            },
+            "oldestRequestAt": str(queue_dispatch.get("oldestRequestAt") or "")[:80],
+            "oldestSourceObservedAt": str(
+                queue_dispatch.get("oldestSourceObservedAt") or ""
+            )[:80],
         },
         # This is scheduler provenance only. It explains why several symbols
         # shared one coherent TypeDB generation without becoming a RuleBox

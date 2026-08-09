@@ -2080,7 +2080,10 @@ class TypeDBOntologyRepositoryTests(unittest.TestCase):
 
         self.assertEqual(acquired, result)
         self.assertEqual([call(world_id), call(world_id)], status.call_args_list)
-        recover.assert_called_once_with(world_id)
+        recover.assert_called_once_with(
+            world_id,
+            recover_untracked_current_process=False,
+        )
 
     def test_scoped_abox_write_lease_recovery_inventories_each_validated_world(self):
         repository = TypeDBOntologyGraphRepository("127.0.0.1:1729")
@@ -2107,7 +2110,64 @@ class TypeDBOntologyRepositoryTests(unittest.TestCase):
             result = repository.recover_dead_projection_coordinator_lease()
 
         self.assertEqual("cleared", result["status"])
-        recover.assert_called_once_with(TYPEDB_PROJECTION_COORDINATOR_WORLD_ID)
+        recover.assert_called_once_with(
+            TYPEDB_PROJECTION_COORDINATOR_WORLD_ID,
+            recover_untracked_current_process=True,
+        )
+
+    def test_projection_coordinator_recovery_protects_active_token_and_clears_same_pid_orphan(self):
+        repository = TypeDBOntologyGraphRepository("127.0.0.1:1729")
+        active_lease = {
+            "acquired": True,
+            "status": "acquired",
+            "leaseOwner": "scoped-abox:active",
+            "leaseToken": "active-token",
+        }
+        repository.track_projection_coordinator_lease(active_lease)
+        held_active = {
+            "status": "held",
+            "leaseOwner": "scoped-abox:active",
+            "leaseToken": "active-token",
+            "leaseHost": "unit-host",
+            "leaseProcessId": 4242,
+            "propertiesJson": (
+                '{"leaseHost":"unit-host","leaseProcessId":4242,'
+                '"leaseToken":"active-token"}'
+            ),
+        }
+        with patch.object(repository, "scoped_abox_write_lease_status", return_value=held_active), \
+                patch("digital_twin.infrastructure.typedb_ontology.socket.gethostname", return_value="unit-host"), \
+                patch("digital_twin.infrastructure.typedb_ontology.os.getpid", return_value=4242), \
+                patch.object(repository, "local_process_alive", return_value=True), \
+                patch.object(repository, "release_scoped_abox_write_lease") as release:
+            result = repository.recover_dead_projection_coordinator_lease()
+
+        self.assertEqual("active-owner", result["status"])
+        release.assert_not_called()
+        repository.forget_projection_coordinator_lease(active_lease)
+
+        held_orphan = {
+            **held_active,
+            "leaseOwner": "scoped-abox:orphan",
+            "leaseToken": "orphan-token",
+            "propertiesJson": (
+                '{"leaseHost":"unit-host","leaseProcessId":4242,'
+                '"leaseToken":"orphan-token"}'
+            ),
+        }
+        with patch.object(repository, "scoped_abox_write_lease_status", return_value=held_orphan), \
+                patch("digital_twin.infrastructure.typedb_ontology.socket.gethostname", return_value="unit-host"), \
+                patch("digital_twin.infrastructure.typedb_ontology.os.getpid", return_value=4242), \
+                patch.object(repository, "local_process_alive", return_value=True), \
+                patch.object(
+                    repository,
+                    "release_scoped_abox_write_lease",
+                    return_value={"status": "released"},
+                ) as release:
+            result = repository.recover_dead_projection_coordinator_lease()
+
+        self.assertEqual("cleared", result["status"])
+        release.assert_called_once()
 
     def test_scoped_abox_write_lease_local_recovery_does_not_steal_live_or_legacy_owner(self):
         repository = TypeDBOntologyGraphRepository("127.0.0.1:1729")
@@ -3624,6 +3684,31 @@ class TypeDBOntologyRepositoryTests(unittest.TestCase):
             [item["ruleId"] for item in plan["selectedEntries"]],
         )
 
+    def test_typedb_native_rule_execution_plan_runs_critical_before_supporting(self):
+        rules = default_graph_inference_rules()
+        supporting_any_rule = next(
+            item
+            for item in rules
+            if item.rule_id == "graph.price.recovery.confirmed_by_flow.v1"
+        )
+        critical_rule = next(
+            item
+            for item in rules
+            if item.rule_id == "graph.security_line.coverage_gap.v1"
+        )
+
+        plan = typedb_native_rule_execution_plan(
+            [supporting_any_rule, critical_rule],
+            [],
+        )
+
+        self.assertEqual(
+            [critical_rule.rule_id, supporting_any_rule.rule_id],
+            [item["ruleId"] for item in plan["selectedEntries"]],
+        )
+        self.assertEqual("critical", plan["selectedEntries"][0]["executionStage"])
+        self.assertEqual("supporting", plan["selectedEntries"][1]["executionStage"])
+
     def test_typedb_native_rule_preflight_prunes_only_a_proven_required_relation_mismatch(self):
         rule = next(
             item for item in default_graph_inference_rules()
@@ -3905,6 +3990,53 @@ class TypeDBOntologyRepositoryTests(unittest.TestCase):
         self.assertEqual("typedbNativeRuleQueryTimeout", result["reasonCode"])
         self.assertEqual(rule.rule_id, result["blockingRule"]["ruleId"])
         self.assertIn(rule.rule_id, result["reason"])
+
+    def test_support_only_native_rule_timeout_preserves_completed_core_with_gap(self):
+        repository = TypeDBOntologyGraphRepository(
+            "127.0.0.1:1729",
+            retry_count=0,
+            native_rule_query_timeout_seconds=0.5,
+            native_rule_execution_budget_seconds=1,
+        )
+        rule = next(
+            item
+            for item in default_graph_inference_rules()
+            if item.rule_id == "graph.price.reclaim.thesis_support.v1"
+        )
+
+        class FakePromise:
+            def resolve(self):
+                raise RuntimeError("TypeDB read query timed out after 0.5s")
+
+        class FakeTransaction:
+            def __enter__(self):
+                return self
+
+            def __exit__(self, _exc_type, _exc, _traceback):
+                return False
+
+            def query(self, _query):
+                return FakePromise()
+
+        class FakeDriver:
+            def transaction(self, _database, _transaction_type, options=None):
+                return FakeTransaction()
+
+        driver = FakeDriver()
+        imported = (object, object, object, object, SimpleNamespace(READ="read"))
+        with patch.object(repository, "driver_imports", return_value=(imported, None)), \
+                patch.object(repository, "open_driver", return_value=driver), \
+                patch.object(repository, "ensure_database"), \
+                patch.object(repository, "close_driver"):
+            result = repository.match_typedb_native_rules([rule])
+
+        self.assertEqual("ok", result["status"])
+        self.assertTrue(result["nativeQueryUsed"])
+        self.assertFalse(result["nativeInferenceEvaluationComplete"])
+        self.assertTrue(result["coreNativeInferenceEvaluationComplete"])
+        self.assertEqual("core-complete-supporting-partial", result["nativeCoverageStatus"])
+        self.assertEqual(1, result["supportingRuleFailureCount"])
+        self.assertEqual("preserve-core-with-gap", result["skippedRules"][0]["failurePolicy"])
 
     def test_typedb_error_code_classifies_native_execution_interruption_as_timeout(self):
         self.assertEqual(
@@ -10681,6 +10813,33 @@ class TypeDBOntologyRepositoryTests(unittest.TestCase):
         self.assertIn('has ontology-relation-type "HAS_MACRO_REGIME"', query)
         self.assertIn('has ontology-storage-id "ontology-storage:active-mstr"', query)
         self.assertNotIn('has ontology-kind "abox-scope-active-pointer"', query)
+
+    def test_typedb_any_group_check_indexes_mixed_relation_and_subject_conditions(self):
+        rule = next(
+            item
+            for item in default_graph_inference_rules()
+            if item.rule_id == "graph.instrument_profile.strategy_fit.support.v1"
+        )
+
+        plan = typedb_native_any_group_check_query(
+            rule.to_dict(),
+            "stock:035420",
+            scoped_manifest_only=True,
+            world_id="portfolio:local:default",
+            active_source_storage_id="ontology-storage:active-naver",
+            active_relation_storage_ids_by_type={
+                "HAS_INSTRUMENT_PROFILE": ["ontology-storage:active-profile"],
+            },
+        )
+        query = plan["query"]
+
+        self.assertEqual("exists-any-manifest-indexed-mixed", plan["anyConditionCheckMode"])
+        self.assertIn('has ontology-storage-id "ontology-storage:active-naver"', query)
+        self.assertIn('has ontology-storage-id "ontology-storage:active-profile"', query)
+        self.assertIn("ontology-position-account-weight", query)
+        self.assertIn("ontology-allow-add-on-strength", query)
+        self.assertNotIn('has ontology-kind "abox-scope-active-pointer"', query)
+        self.assertNotIn("abox-active-member", query)
 
     def test_typedb_any_group_check_shares_relation_join_for_alternative_thresholds(self):
         rule = next(

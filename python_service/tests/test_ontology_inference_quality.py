@@ -119,12 +119,15 @@ class OntologyInferenceQualityTests(unittest.TestCase):
         self.assertEqual("typedb-match+abox-grounding", trace.properties["conditionDetailSource"])
         self.assertTrue(trace.properties["evidenceUsableForJudgement"])
         self.assertEqual("loss-guard-breakdown", trace.properties["hypothesisFamilyKey"])
+        self.assertEqual("stock", trace.properties["ruleSourceKind"])
+        self.assertTrue(trace.properties["ruleScopeFamilies"])
         self.assertEqual(
             {"levelType": ["ma20", "ma60"], "maxValue": -5.0},
             trace.properties["ruleConditionShapes"][3]["targetPropertyFilters"],
         )
         primary_relation = next(item for item in graph.relations if item.relation_type == "HAS_INFERRED_RISK")
         self.assertEqual("loss-guard-breakdown", primary_relation.properties["hypothesisFamilyKey"])
+        self.assertEqual(trace.properties["ruleScopeFamilies"], primary_relation.properties["ruleScopeFamilies"])
 
     def test_type_db_evidence_relation_id_is_preferred_over_another_matching_abox_relation(self):
         graph = PortfolioOntology("evidence-index-test")

@@ -143,6 +143,7 @@ class NewsCollectionQualityTests(unittest.TestCase):
                 "newsCollectionLookbackMinutes": "1440",
             },
             fetch_text=lambda _url, _headers=None: xml,
+            now_provider=lambda: datetime(2026, 8, 4, 5, 20, tzinfo=timezone.utc),
         )
 
         def resolve(url):

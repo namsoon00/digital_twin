@@ -570,6 +570,8 @@ def matches_from_inference(
             next_checks=string_list(relation.get("nextChecks") or relation.get("next_checks")),
             notification_category=str(relation.get("notificationCategory") or relation.get("notification_category") or ""),
             notification_severity=str(relation.get("notificationSeverity") or relation.get("notification_severity") or ""),
+            rule_source_kind=str(relation.get("ruleSourceKind") or relation.get("rule_source_kind") or ""),
+            rule_scope_families=string_list(relation.get("ruleScopeFamilies") or relation.get("rule_scope_families")),
         ))
     if matches:
         return sorted(matches, key=lambda item: semantic_relation_sort_key(relation_for_match(item, primary_relations)))

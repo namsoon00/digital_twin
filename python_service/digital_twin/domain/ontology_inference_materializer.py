@@ -10,6 +10,7 @@ from .ontology_decision_state import (
     conflict_state_from_roles,
     review_level_for,
 )
+from .ontology_change_impact import rule_dependency_profile
 from .ontology_rulebox_contracts import (
     GRAPH_REASONER_VERSION,
     HOLDING_TARGET_ROLE,
@@ -42,6 +43,11 @@ def materialize_rule_inference(
     display_name = stock.label or symbol
     hypothesis_family_key = str(getattr(rule, "hypothesis_family_key", "") or "").strip()
     family_properties = {"hypothesisFamilyKey": hypothesis_family_key} if hypothesis_family_key else {}
+    dependency_profile = rule_dependency_profile(rule)
+    rule_contract_properties = {
+        "ruleSourceKind": str(rule.source_kind or ""),
+        "ruleScopeFamilies": list(dependency_profile.get("scopeFamilies") or []),
+    }
     lifecycle_policy = (
         rule.resolved_hypothesis_lifecycle()
         if hasattr(rule, "resolved_hypothesis_lifecycle")
@@ -84,6 +90,7 @@ def materialize_rule_inference(
         "temporalEvidenceCount": int(number(context.get("temporalEvidenceCount"))),
         "evidenceUsableForJudgement": bool(context.get("evidenceUsableForJudgement")),
         "promptHint": rule.prompt_hint,
+        **rule_contract_properties,
         **family_properties,
         **lifecycle_properties,
     })))
@@ -109,6 +116,7 @@ def materialize_rule_inference(
             "ruleId": rule.rule_id,
             "aiInfluenceLabel": rule.label,
             "source": GRAPH_REASONER_VERSION,
+            **rule_contract_properties,
             **family_properties,
             **lifecycle_properties,
         }),
@@ -124,6 +132,7 @@ def materialize_rule_inference(
             "ruleId": rule.rule_id,
             "aiInfluenceLabel": rule.label,
             "source": GRAPH_REASONER_VERSION,
+            **rule_contract_properties,
             **family_properties,
             **lifecycle_properties,
         }),
@@ -232,6 +241,7 @@ def materialize_rule_inference(
             "freshnessGateReason": str(context.get("freshnessGateReason") or ""),
             "evidenceUsableForJudgement": bool(context.get("evidenceUsableForJudgement")),
             "source": GRAPH_REASONER_VERSION,
+            **rule_contract_properties,
             **family_properties,
             **lifecycle_properties,
         }

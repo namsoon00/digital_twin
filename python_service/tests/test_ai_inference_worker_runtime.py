@@ -34,6 +34,34 @@ class AIInferenceWorkerRuntimeTests(unittest.TestCase):
 
         self.assertFalse([name for name in specs if name.startswith("notification-ai")])
 
+    def test_service_manager_finds_configured_out_ai_workers_with_pid_files(self):
+        active_specs = service_manager.notification_ai_worker_specs(1)
+
+        with patch.object(service_manager, "read_pid", return_value=123):
+            disabled = service_manager.disabled_notification_ai_worker_specs(active_specs)
+
+        self.assertNotIn("notification-ai", disabled)
+        self.assertEqual(
+            ["notification-ai-2", "notification-ai-3", "notification-ai-4",
+             "notification-ai-5", "notification-ai-6", "notification-ai-7",
+             "notification-ai-8"],
+            list(disabled),
+        )
+
+    def test_service_stop_reaps_configured_out_ai_workers(self):
+        active = {"monitor": {"label": "monitor", "role": "monitor"}}
+        disabled = {
+            "notification-ai": {"label": "notification ai", "role": "notification-ai"},
+        }
+        with patch.object(service_manager, "worker_specs", return_value=active), \
+             patch.object(service_manager, "disabled_notification_ai_worker_specs", return_value=disabled), \
+             patch.object(service_manager, "stop_worker") as stop_worker:
+            self.assertEqual(0, service_manager.stop(include_supervisor=False))
+
+        self.assertEqual([disabled["notification-ai"], active["monitor"]], [
+            call.args[0] for call in stop_worker.call_args_list
+        ])
+
     def test_service_start_keeps_other_workers_running_when_web_port_is_owned(self):
         specs = {
             "monitor": {"label": "monitor", "role": "monitor"},

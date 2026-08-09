@@ -137,6 +137,8 @@ BASE_WORKERS = {
     },
 }
 
+MAX_NOTIFICATION_AI_WORKERS = 8
+
 
 def truthy(value: object) -> bool:
     return str(value or "").strip().lower() not in {"", "0", "false", "no", "off"}
@@ -354,24 +356,9 @@ def web_worker_spec(settings: Dict[str, object]) -> Dict[str, object]:
     }
 
 
-def worker_specs() -> Dict[str, Dict[str, object]]:
-    try:
-        settings = runtime_settings()
-    except Exception:  # noqa: BLE001 - service manager should still manage Python workers.
-        settings = {}
+def notification_ai_worker_specs(worker_count: int) -> Dict[str, Dict[str, object]]:
     workers = {}
-    if truthy((settings or {}).get("mysqlRuntimeManaged", os.environ.get("MYSQL_RUNTIME_MANAGED", "1"))):
-        workers["mysql"] = mysql_worker_spec(settings)
-    if typedb_requested(settings):
-        workers["typedb"] = typedb_worker_spec(settings)
-    workers.update(BASE_WORKERS)
-    # Zero is an explicit operational pause: keep collection and deterministic
-    # notifications running without launching external AI inference workers.
-    # The operational settings store can be unavailable while MySQL itself is
-    # starting.  Failing closed prevents an old/default configuration from
-    # issuing AI requests before the persisted pause setting is readable.
-    ai_worker_count = min(8, int_value((settings or {}).get("notificationAiQueueWorkerCount"), 0, 0))
-    for index in range(1, ai_worker_count + 1):
+    for index in range(1, min(MAX_NOTIFICATION_AI_WORKERS, max(0, int(worker_count or 0))) + 1):
         name = "notification-ai" if index == 1 else "notification-ai-" + str(index)
         pid_name = "python-notification-ai.pid" if index == 1 else "python-notification-ai-" + str(index) + ".pid"
         log_name = "python-notification-ai.log" if index == 1 else "python-notification-ai-" + str(index) + ".log"
@@ -399,6 +386,42 @@ def worker_specs() -> Dict[str, Dict[str, object]]:
             "needle": command_needle,
             "needles": needles,
         }
+    return workers
+
+
+def disabled_notification_ai_worker_specs(
+    active_specs: Dict[str, Dict[str, object]],
+) -> Dict[str, Dict[str, object]]:
+    """Return configured-out AI workers that still own a managed PID file."""
+    return {
+        name: spec
+        for name, spec in notification_ai_worker_specs(MAX_NOTIFICATION_AI_WORKERS).items()
+        if name not in active_specs and read_pid(spec["pid"])
+    }
+
+
+def worker_specs() -> Dict[str, Dict[str, object]]:
+    try:
+        settings = runtime_settings()
+    except Exception:  # noqa: BLE001 - service manager should still manage Python workers.
+        settings = {}
+    workers = {}
+    if truthy((settings or {}).get("mysqlRuntimeManaged", os.environ.get("MYSQL_RUNTIME_MANAGED", "1"))):
+        workers["mysql"] = mysql_worker_spec(settings)
+    if typedb_requested(settings):
+        workers["typedb"] = typedb_worker_spec(settings)
+    workers.update(BASE_WORKERS)
+    # Zero is an explicit operational pause: keep collection and deterministic
+    # notifications running without launching external AI inference workers.
+    # The operational settings store can be unavailable while MySQL itself is
+    # starting.  Failing closed prevents an old/default configuration from
+    # issuing AI requests before the persisted pause setting is readable.
+    ai_worker_count = int_value(
+        (settings or {}).get("notificationAiQueueWorkerCount"),
+        0,
+        0,
+    )
+    workers.update(notification_ai_worker_specs(ai_worker_count))
     workers["web"] = web_worker_spec(settings)
     return workers
 
@@ -1501,7 +1524,9 @@ def stop(excluded_roles=None, include_supervisor: bool = True) -> int:
     if include_supervisor:
         stop_supervisor()
     excluded = {str(role or "").strip() for role in (excluded_roles or set())}
-    for spec in reversed(list(worker_specs().values())):
+    specs = worker_specs()
+    specs.update(disabled_notification_ai_worker_specs(specs))
+    for spec in reversed(list(specs.values())):
         if str(spec.get("role") or "").strip() in excluded:
             continue
         stop_worker(spec)
@@ -1754,6 +1779,8 @@ def supervise() -> int:
                 time.sleep(1)
                 continue
             specs = worker_specs()
+            for spec in disabled_notification_ai_worker_specs(specs).values():
+                stop_worker(spec)
             for spec in specs.values():
                 if stopping["value"]:
                     break

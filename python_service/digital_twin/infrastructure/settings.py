@@ -1507,7 +1507,7 @@ def runtime_settings(fast_operational_read: bool = False) -> Dict[str, str]:
         "typedbStaticWriteTransactionQueryCount": value("typedbStaticWriteTransactionQueryCount", "TYPEDB_STATIC_WRITE_TRANSACTION_QUERY_COUNT", "16"),
         "typedbInferenceBoxNodeBatchSize": value("typedbInferenceBoxNodeBatchSize", "TYPEDB_INFERENCEBOX_NODE_BATCH_SIZE", "25"),
         "typedbInferenceBoxRelationBatchSize": value("typedbInferenceBoxRelationBatchSize", "TYPEDB_INFERENCEBOX_RELATION_BATCH_SIZE", "1"),
-        "typedbInferenceBoxWriteTransactionQueryCount": value("typedbInferenceBoxWriteTransactionQueryCount", "TYPEDB_INFERENCEBOX_WRITE_TRANSACTION_QUERY_COUNT", "8"),
+        "typedbInferenceBoxWriteTransactionQueryCount": value("typedbInferenceBoxWriteTransactionQueryCount", "TYPEDB_INFERENCEBOX_WRITE_TRANSACTION_QUERY_COUNT", "24"),
         "typedbWriteMaxQueryBytes": value("typedbWriteMaxQueryBytes", "TYPEDB_WRITE_MAX_QUERY_BYTES", "192000"),
         "temporalWindowPeriods": value(
             "temporalWindowPeriods",
@@ -1835,12 +1835,12 @@ def runtime_settings(fast_operational_read: bool = False) -> Dict[str, str]:
         "typedbNativeRuleDirectQueryFallbackEnabled": value(
             "typedbNativeRuleDirectQueryFallbackEnabled",
             "TYPEDB_NATIVE_RULE_DIRECT_QUERY_FALLBACK_ENABLED",
-            "1",
+            "0",
         ),
         "typedbNativeRuleQueryTimeoutSeconds": value(
             "typedbNativeRuleQueryTimeoutSeconds",
             "TYPEDB_NATIVE_RULE_QUERY_TIMEOUT_SECONDS",
-            "10",
+            "30",
         ),
         "typedbNativeRuleExecutionBudgetSeconds": value(
             "typedbNativeRuleExecutionBudgetSeconds",
@@ -1850,7 +1850,7 @@ def runtime_settings(fast_operational_read: bool = False) -> Dict[str, str]:
         "typedbNativeRuleParallelism": value(
             "typedbNativeRuleParallelism",
             "TYPEDB_NATIVE_RULE_PARALLELISM",
-            "4",
+            "2",
         ),
         "typedbNativeRuleAnyConditionParallelism": value(
             "typedbNativeRuleAnyConditionParallelism",

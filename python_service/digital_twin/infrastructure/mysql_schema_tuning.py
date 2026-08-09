@@ -96,6 +96,13 @@ MYSQL_OPERATIONAL_INDEXES: Dict[str, Sequence[MySQLIndexDefinition]] = {
             "`state`, `occurred_at`, `event_id`",
         ),
     ),
+    "ontology_reasoning_mailbox": (
+        MySQLIndexDefinition(
+            "ontology_reasoning_mailbox",
+            "idx_reasoning_mailbox_lane_pending",
+            "`reasoning_lane`, `priority_hint`, `occurred_at`, `mailbox_key`",
+        ),
+    ),
     "monitor_snapshot_history": (
         MySQLIndexDefinition(
             "monitor_snapshot_history",
@@ -272,6 +279,23 @@ MYSQL_OPERATIONAL_INDEXES: Dict[str, Sequence[MySQLIndexDefinition]] = {
             "`inference_generation_id`, `account_id`, `updated_at`",
         ),
     ),
+    "ontology_reasoning_rule_result_slots": (
+        MySQLIndexDefinition(
+            "ontology_reasoning_rule_result_slots",
+            "idx_reasoning_rule_slots_catalog",
+            "`world_id`, `account_id`, `rulebox_rules_hash`, `tbox_fingerprint`, `symbol`",
+        ),
+        MySQLIndexDefinition(
+            "ontology_reasoning_rule_result_slots",
+            "idx_reasoning_rule_slots_generation",
+            "`inference_generation_id`, `account_id`, `updated_at`",
+        ),
+        MySQLIndexDefinition(
+            "ontology_reasoning_rule_result_slots",
+            "idx_reasoning_rule_slots_rule",
+            "`rule_id`, `matched`, `updated_at`",
+        ),
+    ),
     "ontology_world_projection_outbox": (
         MySQLIndexDefinition(
             "ontology_world_projection_outbox",
@@ -416,6 +440,38 @@ MYSQL_OPERATIONAL_COLUMNS: Dict[str, Sequence[MySQLColumnDefinition]] = {
             "ontology_reasoning_rule_runs",
             "inference_generation_id",
             "VARCHAR(191) NOT NULL DEFAULT ''",
+        ),
+    ),
+    "ontology_reasoning_mailbox": (
+        MySQLColumnDefinition(
+            "ontology_reasoning_mailbox",
+            "work_class",
+            "VARCHAR(32) NOT NULL DEFAULT 'MARKET'",
+        ),
+        MySQLColumnDefinition(
+            "ontology_reasoning_mailbox",
+            "impact_scope",
+            "VARCHAR(32) NOT NULL DEFAULT 'SUBJECT'",
+        ),
+        MySQLColumnDefinition(
+            "ontology_reasoning_mailbox",
+            "reasoning_lane",
+            "VARCHAR(40) NOT NULL DEFAULT 'REALTIME_REASONING'",
+        ),
+        MySQLColumnDefinition(
+            "ontology_reasoning_mailbox",
+            "market_scope",
+            "VARCHAR(96) NOT NULL DEFAULT 'market'",
+        ),
+        MySQLColumnDefinition(
+            "ontology_reasoning_mailbox",
+            "rule_families_json",
+            "TEXT NOT NULL",
+        ),
+        MySQLColumnDefinition(
+            "ontology_reasoning_mailbox",
+            "revision_vector_json",
+            "TEXT NOT NULL",
         ),
     ),
     "ontology_reasoning_work_items": (

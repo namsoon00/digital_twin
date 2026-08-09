@@ -944,6 +944,34 @@ MYSQL_SCHEMA = [
     ) ENGINE=InnoDB DEFAULT CHARSET=utf8mb4 COLLATE=utf8mb4_unicode_ci
     """,
     """
+    CREATE TABLE IF NOT EXISTS ontology_reasoning_rule_result_slots (
+        world_id VARCHAR(191) NOT NULL,
+        account_id VARCHAR(191) NOT NULL DEFAULT '',
+        symbol VARCHAR(64) NOT NULL,
+        rule_id VARCHAR(191) NOT NULL,
+        rule_version VARCHAR(64) NOT NULL DEFAULT '',
+        rulebox_rules_hash VARCHAR(64) NOT NULL DEFAULT '',
+        tbox_fingerprint VARCHAR(64) NOT NULL DEFAULT '',
+        scope_plan_fingerprint VARCHAR(64) NOT NULL DEFAULT '',
+        result_state VARCHAR(32) NOT NULL DEFAULT 'not-matched',
+        matched TINYINT(1) NOT NULL DEFAULT 0,
+        catalog_rule_count INT NOT NULL DEFAULT 0,
+        inference_generation_id VARCHAR(191) NOT NULL DEFAULT '',
+        source_abox_snapshot_id VARCHAR(191) NOT NULL DEFAULT '',
+        source_run_id VARCHAR(191) NOT NULL DEFAULT '',
+        input_fingerprint VARCHAR(64) NOT NULL DEFAULT '',
+        revision_vector_json LONGTEXT NOT NULL,
+        created_at VARCHAR(40) NOT NULL,
+        updated_at VARCHAR(40) NOT NULL,
+        PRIMARY KEY (world_id, symbol, rule_id),
+        KEY idx_reasoning_rule_slots_catalog (
+            world_id, account_id, rulebox_rules_hash, tbox_fingerprint, symbol
+        ),
+        KEY idx_reasoning_rule_slots_generation (inference_generation_id, account_id, updated_at),
+        KEY idx_reasoning_rule_slots_rule (rule_id, matched, updated_at)
+    ) ENGINE=InnoDB DEFAULT CHARSET=utf8mb4 COLLATE=utf8mb4_unicode_ci
+    """,
+    """
     CREATE TABLE IF NOT EXISTS ontology_graph_assembly_cache (
         cache_key VARCHAR(64) PRIMARY KEY,
         payload_json LONGTEXT NOT NULL,
@@ -1191,6 +1219,12 @@ MYSQL_SCHEMA = [
         account_scope VARCHAR(255) NOT NULL DEFAULT 'market',
         symbol VARCHAR(64) NOT NULL DEFAULT '',
         fact_family VARCHAR(255) NOT NULL DEFAULT '',
+        work_class VARCHAR(32) NOT NULL DEFAULT 'MARKET',
+        impact_scope VARCHAR(32) NOT NULL DEFAULT 'SUBJECT',
+        reasoning_lane VARCHAR(40) NOT NULL DEFAULT 'REALTIME_REASONING',
+        market_scope VARCHAR(96) NOT NULL DEFAULT 'market',
+        rule_families_json TEXT NOT NULL,
+        revision_vector_json TEXT NOT NULL,
         trigger_name VARCHAR(96) NOT NULL DEFAULT '',
         review_level VARCHAR(32) NOT NULL DEFAULT 'normal',
         priority_hint INT NOT NULL DEFAULT 0,
@@ -1198,6 +1232,7 @@ MYSQL_SCHEMA = [
         created_at VARCHAR(40) NOT NULL,
         updated_at VARCHAR(40) NOT NULL,
         KEY idx_reasoning_mailbox_pending (priority_hint, occurred_at, mailbox_key),
+        KEY idx_reasoning_mailbox_lane_pending (reasoning_lane, priority_hint, occurred_at, mailbox_key),
         KEY idx_reasoning_mailbox_source_event (source_event_id)
     ) ENGINE=InnoDB DEFAULT CHARSET=utf8mb4 COLLATE=utf8mb4_unicode_ci
     """,

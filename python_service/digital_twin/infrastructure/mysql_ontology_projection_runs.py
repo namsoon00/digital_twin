@@ -1,4 +1,5 @@
 from datetime import datetime, timedelta, timezone
+import hashlib
 from typing import Dict, List, Mapping
 
 from ..domain.ontology_execution_trace import reasoning_execution_trace_payload
@@ -235,6 +236,13 @@ class MySQLOntologyProjectionRunStore(MySQLOperationalConnection):
         with self.transaction() as connection:
             self._complete_with_connection(connection, run, stamp)
             self._replace_execution_trace_with_connection(connection, trace, stamp)
+            self._upsert_rule_result_slots_with_connection(
+                connection,
+                run,
+                result,
+                trace,
+                stamp,
+            )
         return run
 
     @staticmethod
@@ -346,6 +354,340 @@ class MySQLOntologyProjectionRunStore(MySQLOperationalConnection):
             """,
             rule_rows,
         )
+
+    def _upsert_rule_result_slots_with_connection(
+        self,
+        connection,
+        run: OntologyProjectionRun,
+        result: Mapping[str, object],
+        trace: Mapping[str, object],
+        stamp: str,
+    ) -> None:
+        """Index only completed TypeDB rule outcomes for incremental reuse.
+
+        The slot is an execution index, not an inference engine. A future run
+        may use a complete, version-aligned slot set only to select prior
+        matches for another TypeDB evaluation.
+        """
+        inference = (
+            dict(result.get("inferenceBox") or {})
+            if isinstance(result.get("inferenceBox"), Mapping)
+            else {}
+        )
+        execution = (
+            dict(result.get("ruleboxExecution") or {})
+            if isinstance(result.get("ruleboxExecution"), Mapping)
+            else {}
+        )
+        generation_id = str(
+            inference.get("inferenceGenerationId")
+            or trace.get("inferenceGenerationId")
+            or ""
+        ).strip()
+        if (
+            str(result.get("status") or "").lower() != "ok"
+            or str(execution.get("status") or "").lower() != "ok"
+            or not bool(inference.get("generationAligned"))
+            or not generation_id
+            or not str(run.rulebox_rules_hash or "").strip()
+            or not str(run.tbox_fingerprint or "").strip()
+        ):
+            return
+        impact = (
+            dict(result.get("inferenceImpactPlan") or {})
+            if isinstance(result.get("inferenceImpactPlan"), Mapping)
+            else {}
+        )
+        catalog_rule_count = max(
+            0,
+            int(
+                execution.get("nativeRuleSelectionFullRuleCount")
+                or impact.get("enabledRuleCount")
+                or 0
+            ),
+        )
+        if not catalog_rule_count:
+            return
+        proof = (
+            dict(result.get("inferenceReuseProof") or {})
+            if isinstance(result.get("inferenceReuseProof"), Mapping)
+            else {}
+        )
+        context = dict(run.context_payload or {})
+        topology = (
+            dict(context.get("scopeTopology") or {})
+            if isinstance(context.get("scopeTopology"), Mapping)
+            else {}
+        )
+        request = (
+            dict(context.get("reasoningRequest") or {})
+            if isinstance(context.get("reasoningRequest"), Mapping)
+            else {}
+        )
+        revision_vectors = (
+            dict(request.get("revisionVectorsBySymbol") or {})
+            if isinstance(request.get("revisionVectorsBySymbol"), Mapping)
+            else {}
+        )
+        scope_fingerprint = str(
+            proof.get("scopePlanFingerprint")
+            or topology.get("inferenceReuseScopePlanFingerprint")
+            or ""
+        ).strip()
+        source_abox_snapshot_id = str(
+            inference.get("sourceAboxSnapshotId")
+            or run.abox_snapshot_id
+            or ""
+        ).strip()
+        slot_rows = []
+        accepted_states = {"matched", "evaluated-no-match", "not-applicable"}
+        for item in trace.get("rules") or []:
+            if not isinstance(item, Mapping):
+                continue
+            status = str(item.get("status") or "").strip()
+            rule_id = str(item.get("ruleId") or "").strip()
+            if not rule_id or status not in accepted_states:
+                continue
+            matched = bool(item.get("matched"))
+            symbols = sorted({
+                str(symbol or "").upper().strip()
+                for symbol in item.get("targetSymbols") or run.source_symbols or []
+                if str(symbol or "").strip()
+            })
+            for symbol in symbols:
+                revision_vector = revision_vectors.get(symbol)
+                revision_vector = (
+                    dict(revision_vector or {})
+                    if isinstance(revision_vector, Mapping)
+                    else {}
+                )
+                fingerprint_seed = "|".join([
+                    str(run.world_id or ""),
+                    symbol,
+                    rule_id,
+                    str(run.rulebox_rules_hash or ""),
+                    str(run.tbox_fingerprint or ""),
+                    scope_fingerprint,
+                    "matched" if matched else "not-matched",
+                    generation_id,
+                ])
+                slot_rows.append((
+                    str(run.world_id or ""),
+                    str(run.account_id or ""),
+                    symbol,
+                    rule_id,
+                    str(item.get("ruleVersion") or ""),
+                    str(run.rulebox_rules_hash or ""),
+                    str(run.tbox_fingerprint or ""),
+                    scope_fingerprint,
+                    "matched" if matched else "not-matched",
+                    1 if matched else 0,
+                    catalog_rule_count,
+                    generation_id,
+                    source_abox_snapshot_id,
+                    str(run.run_id or ""),
+                    hashlib.sha256(fingerprint_seed.encode("utf-8")).hexdigest(),
+                    json_dumps(revision_vector),
+                    stamp,
+                    stamp,
+                ))
+        self._bulk_execute(
+            connection,
+            """
+            INSERT INTO ontology_reasoning_rule_result_slots (
+                world_id, account_id, symbol, rule_id, rule_version,
+                rulebox_rules_hash, tbox_fingerprint, scope_plan_fingerprint,
+                result_state, matched, catalog_rule_count,
+                inference_generation_id, source_abox_snapshot_id, source_run_id,
+                input_fingerprint, revision_vector_json, created_at, updated_at
+            ) VALUES (%s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s)
+            ON DUPLICATE KEY UPDATE
+                account_id = VALUES(account_id), rule_version = VALUES(rule_version),
+                rulebox_rules_hash = VALUES(rulebox_rules_hash),
+                tbox_fingerprint = VALUES(tbox_fingerprint),
+                scope_plan_fingerprint = VALUES(scope_plan_fingerprint),
+                result_state = VALUES(result_state), matched = VALUES(matched),
+                catalog_rule_count = VALUES(catalog_rule_count),
+                inference_generation_id = VALUES(inference_generation_id),
+                source_abox_snapshot_id = VALUES(source_abox_snapshot_id),
+                source_run_id = VALUES(source_run_id),
+                input_fingerprint = VALUES(input_fingerprint),
+                revision_vector_json = VALUES(revision_vector_json),
+                updated_at = VALUES(updated_at)
+            """,
+            slot_rows,
+        )
+
+    def active_rule_result_slot_context(
+        self,
+        world_id: str,
+        account_id: str,
+        symbols: List[str],
+        rulebox_rules_hash: str,
+        tbox_fingerprint: str,
+        expected_rule_count: int,
+    ) -> Dict[str, object]:
+        """Return prior matches only when every target has full catalog coverage."""
+        targets = sorted({
+            str(symbol or "").upper().strip()
+            for symbol in symbols or []
+            if str(symbol or "").strip()
+        })
+        expected = max(0, int(expected_rule_count or 0))
+        if (
+            not str(world_id or "").strip()
+            or not targets
+            or not str(rulebox_rules_hash or "").strip()
+            or not str(tbox_fingerprint or "").strip()
+            or not expected
+        ):
+            return {"reusable": False, "reason": "incomplete-result-slot-request"}
+        placeholders = ", ".join(["%s"] * len(targets))
+        with self.connect() as connection:
+            rows = connection.execute(
+                "SELECT symbol, rule_id, matched, catalog_rule_count, inference_generation_id, "
+                "source_abox_snapshot_id, source_run_id FROM ontology_reasoning_rule_result_slots "
+                "WHERE world_id = %s AND account_id = %s "
+                "AND rulebox_rules_hash = %s AND tbox_fingerprint = %s "
+                "AND symbol IN (" + placeholders + ")",
+                (
+                    str(world_id or ""),
+                    str(account_id or ""),
+                    str(rulebox_rules_hash or ""),
+                    str(tbox_fingerprint or ""),
+                    *targets,
+                ),
+            ).fetchall()
+        by_symbol = {symbol: {} for symbol in targets}
+        generation_ids = []
+        source_run_ids = []
+        source_abox_ids = []
+        for row in rows or []:
+            symbol = str(row.get("symbol") or "").upper().strip()
+            rule_id = str(row.get("rule_id") or "").strip()
+            if symbol not in by_symbol or not rule_id:
+                continue
+            by_symbol[symbol][rule_id] = bool(row.get("matched"))
+            for key, target in [
+                ("inference_generation_id", generation_ids),
+                ("source_run_id", source_run_ids),
+                ("source_abox_snapshot_id", source_abox_ids),
+            ]:
+                value = str(row.get(key) or "").strip()
+                if value and value not in target:
+                    target.append(value)
+        incomplete = [
+            symbol for symbol, states in by_symbol.items()
+            if len(states) < expected
+        ]
+        if incomplete:
+            return {
+                "reusable": False,
+                "proofSource": "typedb-rule-result-slots",
+                "reason": "result-slot-catalog-coverage-incomplete",
+                "expectedRuleCount": expected,
+                "coveredRuleCountBySymbol": {
+                    symbol: len(states) for symbol, states in by_symbol.items()
+                },
+                "incompleteSymbols": incomplete,
+            }
+        matched_rule_ids = sorted({
+            rule_id
+            for states in by_symbol.values()
+            for rule_id, matched in states.items()
+            if matched
+        })
+        return {
+            "reusable": True,
+            "proofSource": "typedb-rule-result-slots",
+            "matchedRuleIds": matched_rule_ids,
+            "matchedRuleCount": len(matched_rule_ids),
+            "expectedRuleCount": expected,
+            "coveredRuleCountBySymbol": {
+                symbol: len(states) for symbol, states in by_symbol.items()
+            },
+            "reusedTargetSymbols": targets,
+            "inferenceGenerationId": ",".join(generation_ids)[:640],
+            "proofRunId": ",".join(source_run_ids)[:640],
+            "sourceAboxSnapshotId": ",".join(source_abox_ids)[:640],
+            "fallbackReason": "",
+        }
+
+    def rule_result_slot_summary(
+        self,
+        world_id: str = "",
+        account_id: str = "",
+        symbols: List[str] = None,
+        limit: int = 5000,
+    ) -> Dict[str, object]:
+        """Expose bounded current slot coverage for the ontology ledger UI."""
+        clauses = []
+        params: List[object] = []
+        if str(world_id or "").strip():
+            clauses.append("world_id = %s")
+            params.append(str(world_id or "").strip())
+        if str(account_id or "").strip():
+            clauses.append("account_id = %s")
+            params.append(str(account_id or "").strip())
+        targets = sorted({
+            str(symbol or "").upper().strip()
+            for symbol in symbols or []
+            if str(symbol or "").strip()
+        })
+        if targets:
+            clauses.append("symbol IN (" + ", ".join(["%s"] * len(targets)) + ")")
+            params.extend(targets)
+        sql = (
+            "SELECT world_id, account_id, symbol, rule_id, rule_version, "
+            "rulebox_rules_hash, tbox_fingerprint, result_state, matched, "
+            "catalog_rule_count, inference_generation_id, source_abox_snapshot_id, "
+            "source_run_id, input_fingerprint, revision_vector_json, updated_at "
+            "FROM ontology_reasoning_rule_result_slots"
+        )
+        if clauses:
+            sql += " WHERE " + " AND ".join(clauses)
+        sql += " ORDER BY updated_at DESC, symbol ASC, rule_id ASC LIMIT %s"
+        params.append(max(1, min(10000, int(limit or 5000))))
+        with self.connect() as connection:
+            rows = connection.execute(sql, params).fetchall()
+        by_symbol: Dict[str, Dict[str, object]] = {}
+        for row in rows or []:
+            symbol = str(row.get("symbol") or "").upper().strip()
+            if not symbol:
+                continue
+            target = by_symbol.setdefault(symbol, {
+                "symbol": symbol,
+                "coveredRuleCount": 0,
+                "catalogRuleCount": 0,
+                "matchedRuleCount": 0,
+                "matchedRuleIds": [],
+                "ruleboxRulesHash": str(row.get("rulebox_rules_hash") or ""),
+                "tboxFingerprint": str(row.get("tbox_fingerprint") or ""),
+                "latestUpdatedAt": str(row.get("updated_at") or ""),
+            })
+            target["coveredRuleCount"] = int(target["coveredRuleCount"] or 0) + 1
+            target["catalogRuleCount"] = max(
+                int(target["catalogRuleCount"] or 0),
+                int(row.get("catalog_rule_count") or 0),
+            )
+            if bool(row.get("matched")):
+                target["matchedRuleCount"] = int(target["matchedRuleCount"] or 0) + 1
+                target["matchedRuleIds"].append(str(row.get("rule_id") or ""))
+        for target in by_symbol.values():
+            target["coverageComplete"] = bool(
+                int(target.get("catalogRuleCount") or 0)
+                and int(target.get("coveredRuleCount") or 0)
+                >= int(target.get("catalogRuleCount") or 0)
+            )
+        return {
+            "status": "ok",
+            "slotCount": len(rows or []),
+            "symbolCount": len(by_symbol),
+            "completeSymbolCount": len([
+                item for item in by_symbol.values() if item.get("coverageComplete")
+            ]),
+            "symbols": list(by_symbol.values()),
+        }
 
     def latest(self, account_id: str = "", limit: int = 50, world_id: str = "") -> List[Dict[str, object]]:
         clauses = []

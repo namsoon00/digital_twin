@@ -1585,7 +1585,7 @@ TYPEDB_PROJECTION_COORDINATOR_VERSION = "typedb-projection-coordinator-v1"
 # complete generation rather than turning a slow, otherwise valid function
 # into a partial judgement.
 # The reasoning scheduler and circuit breaker continue to bound aggregate CPU.
-DEFAULT_TYPEDB_NATIVE_RULE_QUERY_TIMEOUT_SECONDS = 10.0
+DEFAULT_TYPEDB_NATIVE_RULE_QUERY_TIMEOUT_SECONDS = 30.0
 # An indexed N-of-M group is bound to one verified active ABox source and its
 # exact relation rows. It is structurally bounded but TypeDB's aggregation
 # planner can take longer than an ordinary schema-function lookup on a cold
@@ -3900,6 +3900,7 @@ class ScopedABoxManifestMixin:
         relation_fallback_count = 0
         relation_given_row_count = 0
         relation_given_batch_count = 0
+        relation_given_transaction_count = 0
         relation_legacy_query_count = 0
         relation_legacy_transaction_count = 0
 
@@ -3928,49 +3929,85 @@ class ScopedABoxManifestMixin:
             query_batch = queries[offset: offset + batch_size]
             write_query_batch(query_batch)
 
-        for plan in relation_write_plans:
-            query = str(plan.get("query") or "")
-            rows = list(plan.get("givenRows") or [])
-            if not query:
-                continue
-            if not rows:
-                write_query_batch([query])
-                relation_legacy_query_count += 1
-                relation_legacy_transaction_count += 1
-                continue
+        given_plans = [
+            plan
+            for plan in relation_write_plans
+            if str(plan.get("query") or "") and list(plan.get("givenRows") or [])
+        ]
+        legacy_plans = [
+            plan
+            for plan in relation_write_plans
+            if str(plan.get("query") or "") and not list(plan.get("givenRows") or [])
+        ]
 
-            def write_given_batch():
+        def write_given_plan_batch(plans: List[Dict[str, object]]) -> None:
+            if not plans:
+                return
+
+            def write_given_transaction():
                 with typedb_operation_timeout(self.write_operation_timeout_seconds(), "TypeDB scoped ABox given relation batch"):
                     with driver.transaction(
                         self.database,
                         TransactionType.WRITE,
                         options=self.write_transaction_options(),
                     ) as tx:
-                        query_started = time.monotonic()
-                        tx.query(query, given_rows=rows).resolve()
-                        query_durations_ms.append(round((time.monotonic() - query_started) * 1000, 1))
+                        for plan in plans:
+                            query_started = time.monotonic()
+                            tx.query(
+                                str(plan.get("query") or ""),
+                                given_rows=list(plan.get("givenRows") or []),
+                            ).resolve()
+                            query_durations_ms.append(round((time.monotonic() - query_started) * 1000, 1))
                         tx.commit()
 
+            self.with_typedb_retries(write_given_transaction)
+
+        # Query shape controls TypeDB planning, not transaction ownership.
+        # Group several stable ``given`` plans into one bounded commit so a
+        # normal changed-symbol projection does not acquire the schema/data
+        # writer lock once per relation type.
+        for offset in range(0, len(given_plans), batch_size):
+            plan_batch = given_plans[offset: offset + batch_size]
             try:
-                self.with_typedb_retries(write_given_batch)
-                relation_given_batch_count += 1
-                relation_given_row_count += len(rows)
+                write_given_plan_batch(plan_batch)
+                relation_given_transaction_count += 1
+                relation_given_batch_count += len(plan_batch)
+                relation_given_row_count += sum(
+                    len(plan.get("givenRows") or []) for plan in plan_batch
+                )
+                continue
             except Exception:
-                # A TypeDB version or a particular relation shape can reject a
-                # ``given`` plan. The transaction is rolled back before this
-                # point, so preserving the legacy one-edge query is safe and
-                # keeps a live inference from failing due to an optimization.
-                relation_fallback_count += 1
+                # One unsupported shape rolls back the complete grouped
+                # transaction. Retry each plan independently to identify and
+                # preserve the legacy compatibility fallback without writing
+                # a partial candidate generation.
+                pass
+
+            for plan in plan_batch:
+                rows = list(plan.get("givenRows") or [])
+                try:
+                    write_given_plan_batch([plan])
+                    relation_given_transaction_count += 1
+                    relation_given_batch_count += 1
+                    relation_given_row_count += len(rows)
+                    continue
+                except Exception:
+                    relation_fallback_count += 1
                 fallback_queries = self.batched_relation_insert_queries(
                     list(plan.get("rows") or []),
                     updated_at,
                     relation_batch_size,
                     self.write_query_max_bytes(settings),
                 )
-                for offset in range(0, len(fallback_queries), batch_size):
-                    write_query_batch(fallback_queries[offset: offset + batch_size])
+                for fallback_offset in range(0, len(fallback_queries), batch_size):
+                    write_query_batch(fallback_queries[fallback_offset: fallback_offset + batch_size])
                     relation_legacy_transaction_count += 1
                 relation_legacy_query_count += len(fallback_queries)
+
+        for plan in legacy_plans:
+            write_query_batch([str(plan.get("query") or "")])
+            relation_legacy_query_count += 1
+            relation_legacy_transaction_count += 1
         return {
             "queryCount": len(node_queries) + relation_given_batch_count + relation_legacy_query_count,
             "nodeQueryCount": len(node_queries),
@@ -4001,12 +4038,13 @@ class ScopedABoxManifestMixin:
                 else "legacy-single-edge"
             ),
             "relationGivenBatchCount": relation_given_batch_count,
+            "relationGivenTransactionCount": relation_given_transaction_count,
             "relationGivenRowCount": relation_given_row_count,
             "relationGivenFallbackCount": relation_fallback_count,
             "transactionQueryCount": batch_size,
             "transactionCount": (
                 (len(node_queries) + batch_size - 1) // batch_size
-                + relation_given_batch_count
+                + relation_given_transaction_count
                 + relation_legacy_transaction_count
             ),
             "slowestQueryMs": max(query_durations_ms) if query_durations_ms else 0.0,
@@ -6802,10 +6840,10 @@ class TypeDBOntologyGraphRepository(GraphStoreOntologyRowMapperMixin, ScopedABox
                 ),
             ),
         )
-        # Generated schema functions are a fast path only. When a cold
-        # compiler is staging them, the bounded direct TypeQL evaluator keeps
-        # the investment judgement in TypeDB without letting a deployment
-        # transaction suppress every realtime alert.
+        # Generated schema functions are the production execution contract.
+        # Direct TypeQL remains an explicit compatibility switch only; a cold
+        # compiler normally blocks investment inference while raw operational
+        # observations continue through their independent path.
         self._schema_function_direct_query_fallback_enabled = bool(
             schema_function_direct_query_fallback_enabled
         )
@@ -9991,13 +10029,14 @@ class TypeDBOntologyGraphRepository(GraphStoreOntologyRowMapperMixin, ScopedABox
         return max(1, min(32, int(parsed)))
 
     def inferencebox_write_transaction_query_count(self, settings: Dict[str, object] = None) -> int:
-        raw = (settings or runtime_settings()).get("typedbInferenceBoxWriteTransactionQueryCount")
+        configured_settings = runtime_settings() if settings is None else settings
+        raw = dict(configured_settings or {}).get("typedbInferenceBoxWriteTransactionQueryCount")
         parsed = number_or_none(raw)
         if parsed is None:
-            parsed = 8
-        # Staging facts are written before the ABox cutover. Bounded batches
-        # keep one live refresh from monopolizing TypeDB while the active ABox
-        # remains available to the inference worker.
+            parsed = 24
+        # One candidate normally fits in one transaction. The cap keeps a
+        # pathological trace set bounded while avoiding separate commits for
+        # candidate cleanup, rows, and the candidate marker.
         return max(1, min(50, int(parsed)))
 
     def inferencebox_relation_batch_size(self, settings: Dict[str, object] = None) -> int:
@@ -18529,9 +18568,15 @@ relation ontology-assertion,
                 "targetSymbols": target_symbols,
                 "incrementalScope": "symbols" if target_symbols else "all-symbols",
                 "ruleExecutionScope": (
-                    "dependency-selected-native-evaluation"
+                    str(
+                        impact_plan.get("ruleExecutionScope")
+                        or "subject-dependency-selected-native-evaluation"
+                    )
                     if bool(rule_selection.get("selectionApplied"))
                     else "complete-native-evaluation"
+                ),
+                "nativeRuleSelectionCoverageMode": str(
+                    rule_selection.get("coverageMode") or "complete-catalog"
                 ),
                 "nativeRuleSelectionApplied": bool(rule_selection.get("selectionApplied")),
                 "nativeRuleSelectionFallbackReason": str(rule_selection.get("fallbackReason") or ""),
@@ -18539,6 +18584,7 @@ relation ontology-assertion,
                 "nativeRuleSelectionPriorMatchedCount": len(rule_selection.get("priorMatchedRuleIds") or []),
                 "nativeRuleSelectionExecutedCount": len(rule_selection.get("selectedRuleIds") or []),
                 "nativeRuleSelectionDeferredCount": len(rule_selection.get("deferredRuleIds") or []),
+                "nativeRuleSelectionFullRuleCount": int(rule_selection.get("fullRuleCount") or 0),
                 "nativeRuleSelectionExecutedRuleIds": list(rule_selection.get("selectedRuleIds") or [])[:80],
                 "nativeRuleSelectionDeferredRuleIds": list(rule_selection.get("deferredRuleIds") or [])[:80],
                 "nativeRulePlannerTopologyStatus": str(planner_topology.get("status") or ""),
@@ -19802,13 +19848,18 @@ relation ontology-assertion,
                                 self.with_typedb_retries(write_batch)
                             write_timing[stage + "Ms"] = round((time.monotonic() - stage_started) * 1000, 1)
 
-                        if generation_id:
-                            write_query_chunks(
-                                inference_generation_delete_queries(generation_id, world_id=world_id),
-                                "candidateDelete",
-                            )
-                        write_query_chunks(queries, "candidateWrite")
-                        write_query_chunks([marker_query], "candidateMarker")
+                        candidate_queries = (
+                            inference_generation_delete_queries(generation_id, world_id=world_id)
+                            if generation_id
+                            else []
+                        )
+                        candidate_queries.extend(queries)
+                        if marker_query:
+                            candidate_queries.append(marker_query)
+                        write_query_chunks(candidate_queries, "candidateCommit")
+                        write_timing["candidateDeleteMs"] = 0.0
+                        write_timing["candidateWriteMs"] = write_timing.get("candidateCommitMs", 0.0)
+                        write_timing["candidateMarkerMs"] = 0.0
                     finally:
                         self.close_driver(driver)
                         write_timing["slowestQueryMs"] = max(query_durations_ms) if query_durations_ms else 0.0
@@ -21779,14 +21830,15 @@ def typedb_native_rule_execution_selection(
     global_impact: bool = False,
     bounded_global_context: bool = False,
 ) -> Dict[str, object]:
-    """Select a complete, reusable native RuleBox slice.
+    """Select the native RuleBox slice affected by the current revision.
 
     A RuleBox rule is never evaluated in Python.  For a local immutable scope
     change, an unchanged rule can only remain matched when it was matched in
     the previous aligned InferenceBox; known non-matches remain non-matches.
-    We therefore execute changed candidates plus previous matches.  Any
-    incomplete proof falls back to every enabled rule rather than emitting a
-    partial investment judgement.
+    We execute changed candidates plus verified previous matches when that
+    compact proof is available. Missing prior proof must not expand a local
+    revision to the complete rule catalog; unchanged outcomes remain owned by
+    their prior result slots and reconciliation is handled separately.
     """
     all_rules = [rule for rule in rules or [] if getattr(rule, "enabled", True)]
     all_ids = [str(getattr(rule, "rule_id", "") or "").strip() for rule in all_rules]
@@ -21805,13 +21857,11 @@ def typedb_native_rule_execution_selection(
     fallback_reason = ""
     if not eligible:
         fallback_reason = "impact-plan-not-eligible"
-    elif global_impact and not bounded_global_context:
-        fallback_reason = "global-impact-requires-complete-evaluation"
     elif not candidates:
         fallback_reason = "candidate-rules-unavailable"
-    elif not prior_inference_reusable:
-        fallback_reason = "prior-aligned-inference-unavailable"
-    elif (candidates | prior_matches) - available:
+    elif candidates - available:
+        fallback_reason = "rulebox-version-or-candidate-mismatch"
+    elif prior_inference_reusable and (prior_matches - available):
         fallback_reason = "rulebox-version-or-prior-match-mismatch"
     if fallback_reason:
         return {
@@ -21824,7 +21874,7 @@ def typedb_native_rule_execution_selection(
             "fallbackReason": fallback_reason,
             "fullRuleCount": len(all_rules),
         }
-    selected_ids = candidates | prior_matches
+    selected_ids = candidates | (prior_matches if prior_inference_reusable else set())
     selected_rules = [rule for rule in all_rules if str(getattr(rule, "rule_id", "") or "") in selected_ids]
     deferred = [rule_id for rule_id in all_ids if rule_id not in selected_ids]
     return {
@@ -21835,6 +21885,7 @@ def typedb_native_rule_execution_selection(
         "priorMatchedRuleIds": sorted(prior_matches),
         "selectionApplied": len(selected_rules) < len(all_rules),
         "fallbackReason": "",
+        "coverageMode": "candidate-plus-prior-matches" if prior_inference_reusable else "changed-candidates",
         "fullRuleCount": len(all_rules),
     }
 
@@ -24299,7 +24350,7 @@ def typedb_repository_from_settings(settings: Dict[str, str] = None):
         schema_function_provision_timeout_seconds=number_or_none(
             settings.get("typedbSchemaFunctionProvisionTimeoutSeconds")
         ) or DEFAULT_TYPEDB_SCHEMA_FUNCTION_PROVISION_TIMEOUT_SECONDS,
-        schema_function_direct_query_fallback_enabled=True
+        schema_function_direct_query_fallback_enabled=False
         if settings.get("typedbNativeRuleDirectQueryFallbackEnabled") in (None, "")
         else typedb_bool(settings.get("typedbNativeRuleDirectQueryFallbackEnabled")),
         projection_coordinator_write_enforced=typedb_bool(

@@ -30,7 +30,7 @@ def _clean_symbols(symbols: Iterable[object]) -> List[str]:
 
 
 INFERENCE_REUSE_PROOF_VERSION = "target-inference-reuse-proof-v1"
-REASONING_REQUEST_CONTEXT_VERSION = "reasoning-request-context-v2"
+REASONING_REQUEST_CONTEXT_VERSION = "reasoning-request-context-v3"
 
 
 def compact_reasoning_request_context(
@@ -139,6 +139,9 @@ def compact_reasoning_request_context(
         "sourceEventIds": clean_list(values.get("sourceEventIds"), limit=80),
         "triggers": clean_list(values.get("triggers"), limit=20),
         "factTypes": clean_list(values.get("factTypes"), limit=30),
+        "workClasses": clean_list(values.get("workClasses"), limit=8),
+        "impactScopes": clean_list(values.get("impactScopes"), limit=8),
+        "reasoningLanes": clean_list(values.get("reasoningLanes"), limit=8),
         "requestedScopeFamilies": clean_list(values.get("requestedScopeFamilies"), limit=30),
         "requestedScopeFamiliesBySymbol": symbol_family_map(
             values.get("requestedScopeFamiliesBySymbol")
@@ -147,6 +150,17 @@ def compact_reasoning_request_context(
         "sourceObservedAt": str(values.get("sourceObservedAt") or "").strip()[:80],
         "changedFieldsBySymbol": symbol_map(values.get("changedFieldsBySymbol"), list_values=True),
         "factRevisionsBySymbol": symbol_map(values.get("factRevisionsBySymbol"), list_values=False),
+        "revisionVectorsBySymbol": {
+            str(symbol or "").upper().strip(): {
+                str(key or "")[:40]: str(value or "")[:191]
+                for key, value in dict(vector or {}).items()
+                if str(key or "").strip() and str(value or "").strip()
+            }
+            for symbol, vector in dict(values.get("revisionVectorsBySymbol") or {}).items()
+            if str(symbol or "").strip()
+            and (not targets or str(symbol or "").upper().strip() in targets)
+            and isinstance(vector, Mapping)
+        },
         # Delivery provenance only. It enables a bounded current-state ABox
         # patch after an already-outboxed raw quote, but is never a TypeDB
         # rule condition or an investment conclusion.

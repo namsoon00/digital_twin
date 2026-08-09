@@ -7,10 +7,10 @@ from digital_twin.domain.ontology_reasoning_queue import reasoning_lane_for_prio
 
 class OntologyExecutionTraceTests(unittest.TestCase):
     def test_reasoning_lanes_reuse_existing_dispatch_priority(self):
-        self.assertEqual("CRITICAL_REASONING", reasoning_lane_for_priority("observation"))
-        self.assertEqual("CRITICAL_REASONING", reasoning_lane_for_priority("urgent"))
-        self.assertEqual("CORE_REASONING", reasoning_lane_for_priority("market"))
-        self.assertEqual("CORE_REASONING", reasoning_lane_for_priority("research"))
+        self.assertEqual("REALTIME_REASONING", reasoning_lane_for_priority("observation"))
+        self.assertEqual("REALTIME_REASONING", reasoning_lane_for_priority("urgent"))
+        self.assertEqual("CONTEXT_REASONING", reasoning_lane_for_priority("market"))
+        self.assertEqual("CONTEXT_REASONING", reasoning_lane_for_priority("research"))
 
     def test_execution_trace_records_stages_rules_and_disabled_ai(self):
         run = SimpleNamespace(
@@ -72,7 +72,7 @@ class OntologyExecutionTraceTests(unittest.TestCase):
             },
         )
 
-        self.assertEqual("CRITICAL_REASONING", trace["lane"])
+        self.assertEqual("REALTIME_REASONING", trace["lane"])
         ai_stage = next(item for item in trace["stages"] if item["stageKey"] == "notification-ai")
         self.assertEqual("skipped-disabled", ai_stage["status"])
         native_query_stage = next(

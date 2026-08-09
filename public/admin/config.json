@@ -1735,7 +1735,7 @@
           "key": "typedbNativeRuleParallelism",
           "label": "TypeDB 규칙 병렬 실행 수",
           "type": "number",
-          "default": "4"
+          "default": "2"
         },
         {
           "key": "ontologyReasoningMinIntervalSeconds",

@@ -410,7 +410,17 @@ def worker_specs() -> Dict[str, Dict[str, object]]:
         workers["mysql"] = mysql_worker_spec(settings)
     if typedb_requested(settings):
         workers["typedb"] = typedb_worker_spec(settings)
-    workers.update(BASE_WORKERS)
+    # Schema-function readiness is a prerequisite for investment inference.
+    # Start its dedicated worker before collectors can create fresh reasoning
+    # pressure; the reasoning worker itself still fails closed until the
+    # verified receipt for the active RuleBox/TBox is ready.
+    if "ontology-rulebox-prewarm" in BASE_WORKERS:
+        workers["ontology-rulebox-prewarm"] = BASE_WORKERS["ontology-rulebox-prewarm"]
+    workers.update({
+        name: spec
+        for name, spec in BASE_WORKERS.items()
+        if name != "ontology-rulebox-prewarm"
+    })
     # Zero is an explicit operational pause: keep collection and deterministic
     # notifications running without launching external AI inference workers.
     # The operational settings store can be unavailable while MySQL itself is

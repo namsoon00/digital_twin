@@ -1169,10 +1169,11 @@ class TypeDBOntologyRepositoryTests(unittest.TestCase):
             second,
             None,
         )
-        self.assertFalse(whole_world["eligible"])
-        self.assertEqual("full-global-impact", whole_world["status"])
+        self.assertTrue(whole_world["eligible"])
+        self.assertEqual("target-scoped-explicit-global-context", whole_world["status"])
+        self.assertEqual(["005930"], whole_world["targetSymbols"])
         self.assertEqual(
-            "global-value-context-without-explicit-subject",
+            "",
             whole_world["fallbackReason"],
         )
 
@@ -5707,7 +5708,7 @@ class TypeDBOntologyRepositoryTests(unittest.TestCase):
     def test_typedb_inferencebox_write_transaction_query_count_is_bounded(self):
         repository = TypeDBOntologyGraphRepository("127.0.0.1:1729")
 
-        self.assertEqual(8, repository.inferencebox_write_transaction_query_count({}))
+        self.assertEqual(24, repository.inferencebox_write_transaction_query_count({}))
         self.assertEqual(1, repository.inferencebox_write_transaction_query_count({
             "typedbInferenceBoxWriteTransactionQueryCount": "0",
         }))
@@ -5920,7 +5921,7 @@ class TypeDBOntologyRepositoryTests(unittest.TestCase):
         self.assertFalse(factory_disabled.native_rule_execution_enabled())
         self.assertEqual(20.0, factory_default.query_timeout_seconds())
         self.assertEqual(20.0, factory_default.schema_operation_timeout_seconds())
-        self.assertEqual(10.0, factory_default.native_rule_query_timeout_seconds())
+        self.assertEqual(30.0, factory_default.native_rule_query_timeout_seconds())
         self.assertEqual(105.0, factory_default.native_rule_execution_budget_seconds())
         self.assertEqual(4, factory_default.native_rule_parallelism())
         self.assertEqual(1, factory_default.native_rule_target_parallelism())

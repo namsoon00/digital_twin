@@ -88,7 +88,7 @@ class OntologyRuleboxPrewarmRunner:
         disabled through ``ontologyRuleboxPrewarmRequireReadyForInference``.
         """
         value = str(
-            self.settings.get("typedbNativeRuleDirectQueryFallbackEnabled") or "1"
+            self.settings.get("typedbNativeRuleDirectQueryFallbackEnabled") or "0"
         ).strip().lower()
         return value not in DISABLED_VALUES
 

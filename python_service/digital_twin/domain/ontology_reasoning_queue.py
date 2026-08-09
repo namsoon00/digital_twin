@@ -49,11 +49,58 @@ REASONING_PRIORITY_ORDER = {
 
 REASONING_LANES = (
     "REALTIME_INGEST",
-    "CRITICAL_REASONING",
-    "CORE_REASONING",
+    "REALTIME_REASONING",
+    "CONTEXT_REASONING",
+    "RECONCILIATION_REASONING",
     "ENRICHMENT",
     "MAINTENANCE",
 )
+
+WORK_CLASSES = (
+    "MARKET",
+    "EVIDENCE",
+    "MACRO",
+    "PORTFOLIO",
+    "RECONCILIATION",
+)
+
+IMPACT_SCOPES = (
+    "SUBJECT",
+    "MARKET_CONTEXT",
+    "PORTFOLIO",
+    "RECONCILIATION",
+)
+
+MACRO_FACT_TYPES = {
+    "InterestRate",
+    "FxRate",
+    "MacroIndicator",
+    "MarketProxy",
+    "MarketProxyInstrument",
+}
+
+EVIDENCE_FACT_TYPES = {
+    "ResearchEvidence",
+    "NewsArticle",
+    "Disclosure",
+    "InvestmentCalendarEvent",
+}
+
+PORTFOLIO_FACT_TYPES = {
+    "Portfolio",
+    "PortfolioSnapshot",
+    "Position",
+    "Account",
+}
+
+MARKET_FACT_TYPES = {
+    "MarketQuote",
+    "PriceMetric",
+    "TradeFlow",
+    "InvestorFlow",
+    "TechnicalIndicator",
+    "CryptoMarket",
+}
 
 
 def reasoning_lane_for_priority(priority: object) -> str:
@@ -64,12 +111,23 @@ def reasoning_lane_for_priority(priority: object) -> str:
     """
     clean = str(priority or "").strip().lower()
     if clean in {"observation", "critical", "urgent"}:
-        return "CRITICAL_REASONING"
-    return "CORE_REASONING"
+        return "REALTIME_REASONING"
+    return "CONTEXT_REASONING"
 
 
 def event_reasoning_lane(event: object) -> str:
-    return reasoning_lane_for_priority(event_reasoning_priority(event))
+    payload = event_payload(event)
+    mailbox = payload.get("_reasoningMailbox")
+    mailbox = dict(mailbox or {}) if isinstance(mailbox, Mapping) else {}
+    persisted = str(mailbox.get("reasoningLane") or "").strip().upper()
+    if persisted in REASONING_LANES:
+        return persisted
+    work_class = event_work_class(event)
+    if work_class == "RECONCILIATION":
+        return "RECONCILIATION_REASONING"
+    if work_class == "MARKET":
+        return "REALTIME_REASONING"
+    return "CONTEXT_REASONING"
 
 # A persisted material price observation has a current-state TypeDB follow-up.
 # It should not wait behind ordinary queue pressure, but the marker remains
@@ -141,6 +199,19 @@ def event_fact_types_for_symbol(event: object, symbol: object) -> Tuple[str, ...
 
     clean_symbol = str(symbol or "").upper().strip()
     payload = event_payload(event)
+    mailbox = payload.get("_reasoningMailbox")
+    mailbox = dict(mailbox or {}) if isinstance(mailbox, Mapping) else {}
+    routed_families = mailbox.get("ruleFamilies")
+    if isinstance(routed_families, str):
+        routed_families = [routed_families]
+    if isinstance(routed_families, (list, tuple, set)):
+        clean_routed = tuple(sorted({
+            str(value or "").strip()
+            for value in routed_families
+            if str(value or "").strip()
+        }))
+        if clean_routed:
+            return clean_routed
     by_symbol = payload.get("factTypesBySymbol")
     if clean_symbol and isinstance(by_symbol, Mapping):
         values = None
@@ -161,6 +232,93 @@ def event_fact_types_for_symbol(event: object, symbol: object) -> Tuple[str, ...
         for value in payload.get("factTypes") or []
         if str(value or "").strip()
     }))
+
+
+def work_class_for_fact_types(
+    fact_types: Iterable[object],
+    trigger: object = "",
+    full_reconciliation: bool = False,
+) -> str:
+    """Classify source facts without evaluating their investment meaning."""
+    clean_trigger = str(trigger or "").strip().lower()
+    clean_fact_types = {
+        str(value or "").strip()
+        for value in fact_types or []
+        if str(value or "").strip()
+    }
+    if (
+        full_reconciliation
+        or "reconciliation" in clean_trigger
+        or "rulebox" in clean_trigger
+        or "tbox" in clean_trigger
+        or "schema" in clean_trigger
+    ):
+        return "RECONCILIATION"
+    if clean_fact_types & EVIDENCE_FACT_TYPES:
+        return "EVIDENCE"
+    if clean_fact_types & MACRO_FACT_TYPES:
+        return "MACRO"
+    if clean_fact_types & PORTFOLIO_FACT_TYPES:
+        return "PORTFOLIO"
+    if clean_fact_types & MARKET_FACT_TYPES:
+        return "MARKET"
+    if clean_trigger in COALESCIBLE_RESEARCH_TRIGGERS or "research" in clean_trigger or "news" in clean_trigger:
+        return "EVIDENCE"
+    if "macro" in clean_trigger or "interest-rate" in clean_trigger or "fx-rate" in clean_trigger:
+        return "MACRO"
+    if "portfolio" in clean_trigger and clean_trigger not in COALESCIBLE_REALTIME_TRIGGERS:
+        return "PORTFOLIO"
+    return "MARKET"
+
+
+def event_work_class(event: object, symbol: object = "") -> str:
+    """Classify one reasoning request without evaluating investment meaning."""
+    payload = event_payload(event)
+    mailbox = payload.get("_reasoningMailbox")
+    mailbox = dict(mailbox or {}) if isinstance(mailbox, Mapping) else {}
+    persisted = str(mailbox.get("workClass") or "").strip().upper()
+    if persisted in WORK_CLASSES:
+        return persisted
+    return work_class_for_fact_types(
+        event_fact_types_for_symbol(event, symbol),
+        trigger=payload.get("trigger"),
+        full_reconciliation=bool(payload.get("fullReconciliation")),
+    )
+
+
+def work_class_impact_scope(work_class: object) -> str:
+    clean = str(work_class or "").strip().upper()
+    if clean == "MACRO":
+        return "MARKET_CONTEXT"
+    if clean == "PORTFOLIO":
+        return "PORTFOLIO"
+    if clean == "RECONCILIATION":
+        return "RECONCILIATION"
+    return "SUBJECT"
+
+
+def work_class_reasoning_lane(work_class: object, priority: object = "") -> str:
+    del priority
+    clean = str(work_class or "").strip().upper()
+    if clean == "RECONCILIATION":
+        return "RECONCILIATION_REASONING"
+    if clean == "MARKET":
+        return "REALTIME_REASONING"
+    return "CONTEXT_REASONING"
+
+
+def event_revision_vector(event: object, symbol: object = "") -> Dict[str, str]:
+    """Return the bounded source revisions that make a mailbox item current."""
+    payload = event_payload(event)
+    source = payload.get("verifiedSourceSnapshot")
+    source = dict(source or {}) if isinstance(source, Mapping) else {}
+    values = {
+        "fact": event_fact_revision(event, symbol),
+        "source": str(source.get("generatedAt") or payload.get("sourceGeneratedAt") or "").strip(),
+        "rules": str(payload.get("ruleboxRulesHash") or payload.get("ruleboxRevision") or "").strip(),
+        "tbox": str(payload.get("tboxFingerprint") or payload.get("tboxRevision") or "").strip(),
+    }
+    return {key: value[:191] for key, value in values.items() if value}
 
 
 def observation_followup_symbols(event: object) -> List[str]:
@@ -421,26 +579,49 @@ def durable_mailbox_entries(event: DomainEvent) -> List[Dict[str, object]]:
     source_event = event_as_dict(event)
     source_event["event_id"] = event_id
     source_event.setdefault("occurred_at", str(getattr(event, "occurred_at", "") or ""))
-    family = ",".join(fact_types) or "MarketQuote"
-    slot_family = mailbox_slot_family(event, fact_types)
     entries = []
     for symbol in event_symbols(event):
         symbol_fact_types = event_fact_types_for_symbol(event, symbol)
-        symbol_family = ",".join(symbol_fact_types) or "MarketQuote"
-        seed = "|".join([account_scope, symbol, slot_family])
-        entries.append({
-            "mailboxKey": hashlib.sha256(seed.encode("utf-8")).hexdigest(),
-            "sourceEventId": event_id,
-            "sourceEvent": source_event,
-            "accountScope": account_scope,
-            "symbol": symbol,
-            "factFamily": symbol_family,
-            "mailboxSlotFamily": slot_family,
-            "trigger": trigger,
-            "reviewLevel": event_review_level(event),
-            "priorityHint": mailbox_entry_priority(event, symbol),
-            "observationFollowup": is_observation_followup_symbol(event, symbol),
-            "occurredAt": str(getattr(event, "occurred_at", "") or ""),
-            "factRevision": event_fact_revision(event, symbol),
-        })
+        priority = event_reasoning_priority(event)
+        revision_vector = event_revision_vector(event, symbol)
+        grouped_fact_types: Dict[str, List[str]] = {}
+        for fact_type in symbol_fact_types or ("MarketQuote",):
+            work_class = work_class_for_fact_types(
+                [fact_type],
+                trigger=trigger,
+                full_reconciliation=bool(event_payload(event).get("fullReconciliation")),
+            )
+            grouped_fact_types.setdefault(work_class, []).append(fact_type)
+        for work_class, routed_fact_types in grouped_fact_types.items():
+            routed_fact_types = sorted(set(routed_fact_types))
+            symbol_family = ",".join(routed_fact_types) or "MarketQuote"
+            slot_family = mailbox_slot_family(event, routed_fact_types)
+            impact_scope = work_class_impact_scope(work_class)
+            reasoning_lane = work_class_reasoning_lane(work_class, priority)
+            seed = "|".join([account_scope, symbol, work_class, slot_family])
+            entry_priority = mailbox_entry_priority(event, symbol)
+            entries.append({
+                "mailboxKey": hashlib.sha256(seed.encode("utf-8")).hexdigest(),
+                "sourceEventId": event_id,
+                "sourceEvent": source_event,
+                "accountScope": account_scope,
+                "symbol": symbol,
+                "factFamily": symbol_family,
+                "ruleFamilies": routed_fact_types,
+                "mailboxSlotFamily": slot_family,
+                "workClass": work_class,
+                "impactScope": impact_scope,
+                "reasoningLane": reasoning_lane,
+                "marketScope": str(event_payload(event).get("marketScope") or "market").strip() or "market",
+                "revisionVector": revision_vector,
+                "trigger": trigger,
+                "reviewLevel": event_review_level(event),
+                "priorityHint": entry_priority if work_class == "MARKET" else min(entry_priority, 1000),
+                "observationFollowup": bool(
+                    work_class == "MARKET"
+                    and is_observation_followup_symbol(event, symbol)
+                ),
+                "occurredAt": str(getattr(event, "occurred_at", "") or ""),
+                "factRevision": event_fact_revision(event, symbol),
+            })
     return entries

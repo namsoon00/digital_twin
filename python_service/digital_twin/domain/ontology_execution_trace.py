@@ -62,13 +62,15 @@ def reasoning_execution_lane(run: object) -> str:
         for value in dispatch.get("selectedLanes") or []
         if _text(value)
     ]
-    if "CRITICAL_REASONING" in lanes:
-        return "CRITICAL_REASONING"
-    if "CORE_REASONING" in lanes:
-        return "CORE_REASONING"
+    if "REALTIME_REASONING" in lanes or "CRITICAL_REASONING" in lanes:
+        return "REALTIME_REASONING"
+    if "CONTEXT_REASONING" in lanes or "CORE_REASONING" in lanes:
+        return "CONTEXT_REASONING"
+    if "RECONCILIATION_REASONING" in lanes:
+        return "RECONCILIATION_REASONING"
     if request.get("observationFollowupSymbols"):
-        return "CRITICAL_REASONING"
-    return "CORE_REASONING"
+        return "REALTIME_REASONING"
+    return "CONTEXT_REASONING"
 
 
 def _semantic_stage_status(stage_key: str, result: Mapping[str, object]) -> str:
@@ -89,6 +91,8 @@ def reasoning_stage_records(
 ) -> List[Dict[str, object]]:
     values = _mapping(result)
     configured = _mapping(settings)
+    context = _mapping(_run_value(run, "context_payload", {}))
+    request = _mapping(context.get("reasoningRequest"))
     lane = reasoning_execution_lane(run)
     run_id = _text(_run_value(run, "run_id"))
     world_id = _text(_run_value(run, "world_id"))
@@ -130,6 +134,10 @@ def reasoning_stage_records(
     add("source-fact-capture", "recorded", detail={
         "targetSymbols": source_symbols,
         "sourceSnapshotAt": _text(_run_value(run, "source_snapshot_at")),
+        "workClasses": list(request.get("workClasses") or []),
+        "impactScopes": list(request.get("impactScopes") or []),
+        "reasoningLanes": list(request.get("reasoningLanes") or []),
+        "revisionVectorsBySymbol": dict(request.get("revisionVectorsBySymbol") or {}),
     })
     for raw_key, raw_duration in runtime_stages.items():
         stage_key = _text(raw_key)

@@ -3633,16 +3633,27 @@ class PortfolioOntologyProjectionRecorder:
                 # writer lease. This makes the reuse proof and the following
                 # ABox pointer transition one serialized operation.
                 selection_started = time.perf_counter()
-                selection_context = self.prior_rule_selection_context(
+                # Reuse only the compact MySQL audit proof. A missing proof no
+                # longer triggers a full TypeDB InferenceBox read before the
+                # changed candidate rules can run.
+                selection_context = self.audited_prior_rule_selection_context(
                     snapshot,
                     inference_symbols,
-                    world_id=world_id,
                     candidate_scope_plan=candidate_scope_plan,
                     rulebox_rules_hash=rulebox_rules_hash,
                     tbox_fingerprint=tbox_fingerprint,
+                    world_id=world_id,
                     requested_fact_families=compact_impact_plan.get("requestedFactFamilies") or [],
                     requested_fact_families_by_symbol=compact_impact_plan.get("requestedFactFamiliesBySymbol") or {},
                 )
+                if not selection_context:
+                    selection_context = {
+                        "reusable": False,
+                        "proofSource": "",
+                        "matchedRuleIds": [],
+                        "matchedRuleCount": 0,
+                        "fallbackReason": "compact-prior-proof-unavailable",
+                    }
                 runtime_stages["priorInferenceReuseReadMs"] = int((time.perf_counter() - selection_started) * 1000)
                 recomputed_impact_plan = self.impact_plan_with_audited_candidates(
                     compact_impact_plan,
@@ -4606,7 +4617,7 @@ class PortfolioOntologyProjectionRecorder:
         investment action; the next TypeDB schema-function query remains the
         evaluator.
         """
-        if not self.projection_run_store or not hasattr(self.projection_run_store, "latest"):
+        if not self.projection_run_store:
             return {}
         targets = sorted({
             str(symbol or "").upper().strip()
@@ -4615,6 +4626,26 @@ class PortfolioOntologyProjectionRecorder:
         })
         if not targets:
             return {}
+        current_rules = self.rulebox_rules_for_impact()
+        slot_reader = getattr(
+            self.projection_run_store,
+            "active_rule_result_slot_context",
+            None,
+        )
+        if callable(slot_reader):
+            try:
+                slot_context = slot_reader(
+                    world_id=world_id,
+                    account_id=str(snapshot.account_id or ""),
+                    symbols=targets,
+                    rulebox_rules_hash=rulebox_rules_hash,
+                    tbox_fingerprint=tbox_fingerprint,
+                    expected_rule_count=len(current_rules),
+                )
+            except Exception:
+                slot_context = {}
+            if bool((slot_context or {}).get("reusable")):
+                return dict(slot_context)
         if len(targets) > 1:
             target_contexts = [
                 self.audited_prior_rule_selection_context(
@@ -4636,7 +4667,11 @@ class PortfolioOntologyProjectionRecorder:
                 target_contexts,
             )
         current_scope_plan = inference_reuse_scope_plan(candidate_scope_plan or [])
-        if not current_scope_plan or not str(rulebox_rules_hash or "").strip():
+        if (
+            not hasattr(self.projection_run_store, "latest")
+            or not current_scope_plan
+            or not str(rulebox_rules_hash or "").strip()
+        ):
             return {}
         try:
             try:
@@ -4651,7 +4686,6 @@ class PortfolioOntologyProjectionRecorder:
                 rows = self.projection_run_store.latest(account_id=str(snapshot.account_id or ""), limit=160)
         except Exception:
             return {}
-        current_rules = self.rulebox_rules_for_impact()
         for row in rows or []:
             if not isinstance(row, dict):
                 continue
@@ -4766,6 +4800,34 @@ class PortfolioOntologyProjectionRecorder:
         contexts = [dict(context or {}) for context in target_contexts or []]
         if not targets or len(contexts) != len(targets):
             return {}
+        if all(
+            context.get("proofSource") == "typedb-rule-result-slots"
+            and bool(context.get("reusable"))
+            for context in contexts
+        ):
+            matched_rule_ids = sorted({
+                str(rule_id or "").strip()
+                for context in contexts
+                for rule_id in context.get("matchedRuleIds") or []
+                if str(rule_id or "").strip()
+            })
+            return {
+                "reusable": True,
+                "proofSource": "typedb-rule-result-slots",
+                "matchedRuleIds": matched_rule_ids,
+                "matchedRuleCount": len(matched_rule_ids),
+                "reusedTargetSymbols": list(targets),
+                "proofRunId": ",".join(
+                    str(context.get("proofRunId") or "") for context in contexts
+                )[:640],
+                "inferenceGenerationId": ",".join(
+                    str(context.get("inferenceGenerationId") or "") for context in contexts
+                )[:640],
+                "sourceAboxSnapshotId": ",".join(
+                    str(context.get("sourceAboxSnapshotId") or "") for context in contexts
+                )[:640],
+                "fallbackReason": "",
+            }
         plans = [
             context.get("inferenceImpactPlan")
             for context in contexts
@@ -5190,12 +5252,12 @@ class PortfolioOntologyProjectionRecorder:
         # coherent context until their own queued turn or the periodic full
         # reconciliation. Without an explicit worker target, preserve the
         # conservative whole-portfolio path for a global change.
-        if preliminary.get("globalImpact") and not explicit:
+        if preliminary.get("impactScope") == "MARKET_CONTEXT" and not explicit and not inferred:
             return {
                 **base,
-                "status": "full-global-impact",
-                "eligible": False,
-                "fallbackReason": "global-value-context-without-explicit-subject",
+                "status": "market-context-awaiting-related-subjects",
+                "eligible": True,
+                "fallbackReason": "no-related-subject-for-market-context-revision",
             }
         full_reconcile_due = self.scoped_full_reconcile_due(active_metadata)
         full_reconcile_deferred = (

@@ -560,8 +560,8 @@ class VerifiedSnapshotReasoningTests(unittest.TestCase):
 
         dispatch = runner.queue_dispatch_summary([barrier], selected_requests=[barrier], selected_symbols=["AAPL"])
 
-        self.assertEqual(1, dispatch["pendingByClass"]["verified-snapshot"])
-        self.assertEqual(1, dispatch["selectedByClass"]["verified-snapshot"])
+        self.assertEqual(1, dispatch["pendingByClass"]["PORTFOLIO"])
+        self.assertEqual(1, dispatch["selectedByClass"]["PORTFOLIO"])
 
     def test_kis_tick_is_retained_as_source_data_without_starting_an_unreplayable_turn(self):
         events = EventBus()

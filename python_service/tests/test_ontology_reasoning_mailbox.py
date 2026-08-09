@@ -374,18 +374,18 @@ class MySQLMailboxConnection:
         if query.startswith("INSERT INTO ontology_reasoning_mailbox ("):
             self.slots[str(values[0])] = {
                 "source_event_id": str(values[1]),
-                "occurred_at": str(values[8]),
-                "priority_hint": int(values[7]),
+                "occurred_at": str(values[14]),
+                "priority_hint": int(values[13]),
             }
             return MySQLCursor()
         if query.startswith("UPDATE ontology_reasoning_mailbox SET priority_hint"):
             self.slots[str(values[2])]["priority_hint"] = int(values[0])
             return MySQLCursor()
         if query.startswith("UPDATE ontology_reasoning_mailbox SET source_event_id"):
-            self.slots[str(values[9])].update({
+            self.slots[str(values[15])].update({
                 "source_event_id": str(values[0]),
-                "occurred_at": str(values[7]),
-                "priority_hint": int(values[6]),
+                "occurred_at": str(values[13]),
+                "priority_hint": int(values[12]),
             })
             return MySQLCursor()
         raise AssertionError("unexpected SQL: " + query)
@@ -585,7 +585,7 @@ class OntologyReasoningMailboxTests(unittest.TestCase):
         self.assertEqual(2, result["batchPlan"]["targetSymbolLimit"])
         self.assertEqual(["AAPL"], result["batchPlan"]["observationFollowupSymbols"])
         self.assertEqual(["AAPL"], self.monitor.reasoning_contexts[0]["observationFollowupSymbols"])
-        self.assertEqual("observation-followup", result["queueDispatch"]["selectedWorkClasses"][0])
+        self.assertEqual("MARKET", result["queueDispatch"]["selectedWorkClasses"][0])
 
     def test_observation_followup_priority_survives_a_newer_latest_state_snapshot(self):
         notified = realtime_request(
@@ -685,6 +685,7 @@ class OntologyReasoningMailboxTests(unittest.TestCase):
                 "ontologyRuleboxPrewarmBacklogRecoveryMinPendingEntries": "2",
                 "ontologyRuleboxPrewarmBacklogRecoveryRetrySeconds": "5",
                 "ontologyRuleboxPrewarmRequireReadyForInference": "0",
+                "typedbNativeRuleDirectQueryFallbackEnabled": "1",
             },
         )
         runner.rulebox_prewarm_probe = lambda: {
@@ -813,6 +814,7 @@ class OntologyReasoningMailboxTests(unittest.TestCase):
                 "ontologyRuleboxPrewarmBacklogRecoveryMinPendingEntries": "2",
                 "ontologyRuleboxPrewarmBacklogRecoveryRetrySeconds": "5",
                 "ontologyRuleboxPrewarmRequireReadyForInference": "0",
+                "typedbNativeRuleDirectQueryFallbackEnabled": "1",
             },
         )
         runner.rulebox_prewarm_probe = lambda: (_ for _ in ()).throw(
@@ -1004,6 +1006,43 @@ class OntologyReasoningMailboxTests(unittest.TestCase):
         self.assertEqual("superseded", self.mailbox.events["article-analysis"]["state"])
         self.assertEqual("completed", self.mailbox.events["evidence-refresh"]["state"])
         self.assertEqual("ok", result["status"])
+
+    def test_mixed_snapshot_routes_market_evidence_and_macro_to_separate_lanes(self):
+        source = DomainEvent(
+            name="monitor.snapshot.verified",
+            aggregate_id="account:main",
+            occurred_at="2026-07-24T00:00:00Z",
+            payload={"symbols": ["AAPL"]},
+        )
+        requested = ontology_reasoning_requested_event(
+            source,
+            "market-data-update",
+            ["AAPL"],
+            changed_count=3,
+            fact_types=["MarketQuote", "ResearchEvidence", "InterestRate"],
+            fact_revisions_by_symbol={"AAPL": "revision:mixed:1"},
+            observation_followup_symbols=["AAPL"],
+        )
+        event = DomainEvent(
+            name=ONTOLOGY_REASONING_REQUESTED,
+            aggregate_id=requested.aggregate_id,
+            payload=requested.payload,
+            occurred_at=requested.occurred_at,
+            event_id="mixed-routing",
+        )
+
+        entries = durable_mailbox_entries(event)
+        by_class = {entry["workClass"]: entry for entry in entries}
+
+        self.assertEqual({"MARKET", "EVIDENCE", "MACRO"}, set(by_class))
+        self.assertEqual("REALTIME_REASONING", by_class["MARKET"]["reasoningLane"])
+        self.assertEqual("CONTEXT_REASONING", by_class["EVIDENCE"]["reasoningLane"])
+        self.assertEqual("CONTEXT_REASONING", by_class["MACRO"]["reasoningLane"])
+        self.assertEqual("MARKET_CONTEXT", by_class["MACRO"]["impactScope"])
+        self.assertTrue(by_class["MARKET"]["observationFollowup"])
+        self.assertFalse(by_class["MACRO"]["observationFollowup"])
+        self.assertEqual(["InterestRate"], by_class["MACRO"]["ruleFamilies"])
+        self.assertEqual(3, len({entry["mailboxKey"] for entry in entries}))
 
     def test_legacy_generic_research_slot_is_superseded_by_newer_evidence(self):
         article = research_evidence_request(
@@ -1825,12 +1864,12 @@ class OntologyReasoningMailboxTests(unittest.TestCase):
         status = runner.status()
         dispatch = status["queueDispatch"]
 
-        self.assertEqual(1, dispatch["pendingByClass"]["realtime-market"])
-        self.assertEqual(1, dispatch["pendingByClass"]["research"])
+        self.assertEqual(1, dispatch["pendingByClass"]["MARKET"])
+        self.assertEqual(1, dispatch["pendingByClass"]["EVIDENCE"])
         self.assertEqual(1, dispatch["pendingByPriority"]["market"])
         self.assertEqual(1, dispatch["pendingByPriority"]["research"])
         self.assertEqual(1, dispatch["selectedByPriority"]["market"])
-        self.assertEqual(["realtime-market"], dispatch["selectedWorkClasses"])
+        self.assertEqual(["MARKET"], dispatch["selectedWorkClasses"])
         self.assertEqual(["AAPL"], dispatch["selectedSymbols"])
 
 

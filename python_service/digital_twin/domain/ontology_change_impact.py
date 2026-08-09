@@ -19,7 +19,7 @@ from typing import Dict, Iterable, List, Mapping, Optional, Sequence, Set
 # shared facts that happened to be present in the latest persisted snapshot.
 # TypeDB still evaluates every selected RuleBox function; Python only avoids
 # scheduling rules whose actual inputs did not change for this event.
-CHANGE_IMPACT_VERSION = "abox-change-impact-v10"
+CHANGE_IMPACT_VERSION = "abox-change-impact-v11"
 DEPENDENCY_FINGERPRINT_VERSION = "rule-input-v2"
 
 SYMBOL_SCOPE_FAMILIES = {
@@ -1284,6 +1284,11 @@ def build_inference_impact_plan(
     quality_scoped_global_context = bool(quality_only_global_scope_ids)
     context_scoped_global_context = bool(context_only_global_scope_ids)
     bounded_global_context = bool((global_impact or context_scoped_global_context) and explicit_symbols)
+    impact_scope = (
+        "MARKET_CONTEXT"
+        if global_impact or context_scoped_global_context or quality_scoped_global_context
+        else "SUBJECT"
+    )
     impacted_symbols = (
         set(delta.get("directChangedSymbols") or delta.get("changedSymbols") or [])
         | set(delta.get("dependencyAffectedSymbols") or [])
@@ -1299,10 +1304,10 @@ def build_inference_impact_plan(
     if explicit_symbols:
         target_symbols = [symbol for symbol in available_symbols if symbol in explicit_symbols]
     else:
-        # Whole-world callers keep the conservative expansion for a global
-        # fact because no scheduler has already chosen the next subject.
-        if global_impact or quality_scoped_global_context or context_scoped_global_context:
-            impacted_symbols.update(available_symbols)
+        # Shared context is a market-level revision, not an instruction to
+        # enqueue every known subject. Only subjects proven by the changed
+        # relation closure are evaluated here; catalog reconciliation has its
+        # own bounded maintenance lane.
         target_symbols = [symbol for symbol in available_symbols if symbol in impacted_symbols]
     if not target_symbols and not changed_scope_ids:
         target_symbols = list(available_symbols)
@@ -1360,8 +1365,6 @@ def build_inference_impact_plan(
         # Skip it rather than paying the extra TypeDB read on every broad
         # market/portfolio generation.
         selection_eligibility_reason = "candidate-rules-cover-complete-catalog"
-    elif (global_impact or context_scoped_global_context) and not bounded_global_context:
-        selection_eligibility_reason = "shared-context-requires-complete-evaluation"
     diagnostics = inference_impact_diagnostics(
         delta=delta,
         global_scope_ids=global_scope_ids,
@@ -1389,6 +1392,7 @@ def build_inference_impact_plan(
         "version": CHANGE_IMPACT_VERSION,
         "scopeDelta": delta,
         "globalImpact": global_impact,
+        "impactScope": impact_scope,
         "qualityScopedGlobalContext": quality_scoped_global_context,
         "contextScopedGlobalContext": context_scoped_global_context,
         "boundedGlobalContext": bounded_global_context,
@@ -1422,34 +1426,21 @@ def build_inference_impact_plan(
         "relationContextSymbols": list(delta.get("relationContextSymbols") or []),
         "unresolvedRelationScopeIds": list(delta.get("unresolvedRelationScopeIds") or []),
         "ruleExecutionScope": (
-            "target-scoped-global-context-native-evaluation"
-            if bounded_global_context
-            else "context-scoped-global-context-native-evaluation"
-            if context_scoped_global_context
-            else "quality-scoped-global-context-native-evaluation"
-            if quality_scoped_global_context
-            else "global-native-reconciliation"
-            if global_impact
-            else "dependency-selected-native-evaluation"
+            "market-context-dependency-selected-native-evaluation"
+            if impact_scope == "MARKET_CONTEXT"
+            else "subject-dependency-selected-native-evaluation"
         ),
         "nativeRuleSelectionEligible": bool(
             candidate_profiles
             and len(candidate_profiles) < len(enabled_profiles)
-            and (not (global_impact or context_scoped_global_context) or bounded_global_context)
         ),
         "nativeRuleSelectionEligibilityReason": selection_eligibility_reason or "candidate-subset-within-safe-context",
         "nativeRuleSelectionApplied": False,
         "diagnostics": diagnostics,
         "reason": (
-            "전역 사실은 바뀌었지만 요청된 종목 범위에서 관련 규칙과 기존 성립 규칙만 다시 확인합니다."
-            if bounded_global_context
-            else "공유 참조·관계 사실은 바뀌었지만 요청된 사실군과 관련 규칙만 TypeDB에서 재확인합니다."
-            if context_scoped_global_context
-            else "전역 데이터 품질·신선도 사실만 바뀌어 품질 의존 RuleBox와 기존 성립 규칙만 TypeDB에서 재확인합니다."
-            if quality_scoped_global_context
-            else "전역 범위 변경이 감지되어 전체 투자 대상을 재검토합니다."
-            if global_impact
-            else "직접 변경된 ABox 사실군으로 후보 RuleBox를 계산하고, 이전에 성립한 비변경 규칙을 함께 TypeDB에서 재확인합니다."
+            "공유 시장 맥락은 별도 리비전으로 유지하고 관계로 연결된 종목의 관련 RuleBox만 TypeDB에서 재확인합니다."
+            if impact_scope == "MARKET_CONTEXT"
+            else "직접 변경된 ABox 사실군과 연결된 후보 RuleBox만 TypeDB에서 재확인합니다."
         ),
     }
 
@@ -1466,6 +1457,7 @@ def compact_inference_impact_plan(plan: Mapping[str, object], limit: int = 80) -
     return {
         "version": str(values.get("version") or CHANGE_IMPACT_VERSION),
         "globalImpact": bool(values.get("globalImpact")),
+        "impactScope": str(values.get("impactScope") or "SUBJECT"),
         "qualityScopedGlobalContext": bool(values.get("qualityScopedGlobalContext")),
         "contextScopedGlobalContext": bool(values.get("contextScopedGlobalContext")),
         "boundedGlobalContext": bool(values.get("boundedGlobalContext")),
@@ -1498,7 +1490,10 @@ def compact_inference_impact_plan(plan: Mapping[str, object], limit: int = 80) -
         "deferredSharedContextFamilies": list(values.get("deferredSharedContextFamilies") or [])[:bounded],
         "relationContextSymbols": list(values.get("relationContextSymbols") or [])[:bounded],
         "unresolvedRelationScopeIds": list(values.get("unresolvedRelationScopeIds") or [])[:bounded],
-        "ruleExecutionScope": str(values.get("ruleExecutionScope") or "dependency-selected-native-evaluation"),
+        "ruleExecutionScope": str(
+            values.get("ruleExecutionScope")
+            or "subject-dependency-selected-native-evaluation"
+        ),
         "nativeRuleSelectionEligible": bool(values.get("nativeRuleSelectionEligible")),
         "nativeRuleSelectionEligibilityReason": str(values.get("nativeRuleSelectionEligibilityReason") or ""),
         "nativeRuleSelectionApplied": bool(values.get("nativeRuleSelectionApplied")),

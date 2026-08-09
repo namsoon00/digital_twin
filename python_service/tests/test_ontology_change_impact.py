@@ -164,7 +164,7 @@ class OntologyChangeImpactTests(unittest.TestCase):
         self.assertEqual(legacy_payloads, combined_payloads)
         self.assertEqual(legacy_semantics, combined_semantics)
 
-    def test_change_impact_limits_symbol_flow_but_expands_macro_change(self):
+    def test_change_impact_limits_symbol_flow_and_keeps_macro_as_market_context(self):
         before = [
             {"scopeId": "symbol:005930:state", "generationId": "state-a"},
             {"scopeId": "symbol:005930:flow", "generationId": "flow-a"},
@@ -213,12 +213,13 @@ class OntologyChangeImpactTests(unittest.TestCase):
         self.assertEqual(["graph.test.flow.v1"], flow_plan["candidateRuleIds"])
         self.assertTrue(flow_plan["nativeRuleSelectionEligible"])
         self.assertFalse(flow_plan["nativeRuleSelectionApplied"])
-        self.assertEqual("dependency-selected-native-evaluation", flow_plan["ruleExecutionScope"])
+        self.assertEqual("subject-dependency-selected-native-evaluation", flow_plan["ruleExecutionScope"])
 
         after[-1]["generationId"] = "rates-b"
         macro_plan = build_inference_impact_plan(before, after, ["005930", "000660"], rules=rules)
         self.assertTrue(macro_plan["globalImpact"])
-        self.assertEqual(["000660", "005930"], macro_plan["inferenceTargetSymbols"])
+        self.assertEqual("MARKET_CONTEXT", macro_plan["impactScope"])
+        self.assertEqual(["005930"], macro_plan["inferenceTargetSymbols"])
         self.assertIn("macro-rates", macro_plan["changedScopeFamilies"])
 
         bounded_macro_plan = build_inference_impact_plan(
@@ -233,7 +234,7 @@ class OntologyChangeImpactTests(unittest.TestCase):
         self.assertTrue(bounded_macro_plan["nativeRuleSelectionEligible"])
         self.assertEqual(["005930"], bounded_macro_plan["inferenceTargetSymbols"])
         self.assertEqual(
-            "target-scoped-global-context-native-evaluation",
+            "market-context-dependency-selected-native-evaluation",
             bounded_macro_plan["ruleExecutionScope"],
         )
 
@@ -785,7 +786,7 @@ class OntologyChangeImpactTests(unittest.TestCase):
         self.assertEqual(["graph.test.quality.v1"], plan["candidateRuleIds"])
         self.assertTrue(plan["nativeRuleSelectionEligible"])
         self.assertEqual(
-            "quality-scoped-global-context-native-evaluation",
+            "market-context-dependency-selected-native-evaluation",
             plan["ruleExecutionScope"],
         )
 
@@ -1242,12 +1243,12 @@ class OntologyChangeImpactTests(unittest.TestCase):
 
         trace = inference.entities[0]
         self.assertEqual("inference:test", trace.properties["inferenceGenerationId"])
-        self.assertEqual("abox-change-impact-v10", trace.properties["impactPlanVersion"])
+        self.assertEqual("abox-change-impact-v11", trace.properties["impactPlanVersion"])
         self.assertEqual(["005930"], trace.properties["inferenceImpactPlan"]["inferenceTargetSymbols"])
-        self.assertEqual("dependency-selected-native-evaluation", trace.properties["ruleExecutionScope"])
+        self.assertEqual("subject-dependency-selected-native-evaluation", trace.properties["ruleExecutionScope"])
         self.assertFalse(trace.properties["nativeRuleSelectionApplied"])
 
-    def test_native_rule_selection_rechecks_prior_matches_and_falls_back_without_proof(self):
+    def test_native_rule_selection_rechecks_prior_matches_without_catalog_fallback(self):
         rules = default_graph_inference_rules()[:3]
         rule_ids = [rule.rule_id for rule in rules]
 
@@ -1268,9 +1269,10 @@ class OntologyChangeImpactTests(unittest.TestCase):
             eligible=True,
             prior_inference_reusable=False,
         )
-        self.assertFalse(fallback["selectionApplied"])
-        self.assertEqual(rule_ids, fallback["selectedRuleIds"])
-        self.assertEqual("prior-aligned-inference-unavailable", fallback["fallbackReason"])
+        self.assertTrue(fallback["selectionApplied"])
+        self.assertEqual([rule_ids[0]], fallback["selectedRuleIds"])
+        self.assertEqual("", fallback["fallbackReason"])
+        self.assertEqual("changed-candidates", fallback["coverageMode"])
 
         bounded_global = typedb_native_rule_execution_selection(
             rules,
@@ -1292,8 +1294,9 @@ class OntologyChangeImpactTests(unittest.TestCase):
             prior_inference_reusable=True,
             global_impact=True,
         )
-        self.assertFalse(full_global["selectionApplied"])
-        self.assertEqual("global-impact-requires-complete-evaluation", full_global["fallbackReason"])
+        self.assertTrue(full_global["selectionApplied"])
+        self.assertEqual([rule_ids[0], rule_ids[1]], full_global["selectedRuleIds"])
+        self.assertEqual("", full_global["fallbackReason"])
 
 
 if __name__ == "__main__":

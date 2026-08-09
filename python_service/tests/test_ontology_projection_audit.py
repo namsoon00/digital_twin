@@ -836,6 +836,7 @@ class OntologyProjectionAuditTests(unittest.TestCase):
             "ruleboxExecution": {
                 "status": "ok",
                 "nativeRuleSelectionApplied": True,
+                "nativeRuleSelectionFullRuleCount": 1,
                 "nativeRuleSelectionExecutedRuleIds": ["graph.test.core.v1"],
                 "nativeMatchResult": {
                     "status": "ok",
@@ -869,6 +870,7 @@ class OntologyProjectionAuditTests(unittest.TestCase):
         self.assertTrue(any("DELETE FROM ontology_reasoning_run_stages" in sql for sql in statements))
         self.assertTrue(any("INSERT INTO ontology_reasoning_run_stages" in sql for sql in statements))
         self.assertTrue(any("INSERT INTO ontology_reasoning_rule_runs" in sql for sql in statements))
+        self.assertTrue(any("INSERT INTO ontology_reasoning_rule_result_slots" in sql for sql in statements))
         rule_call = next(
             item for item in connection.calls
             if "INSERT INTO ontology_reasoning_rule_runs" in item[0]
@@ -877,6 +879,70 @@ class OntologyProjectionAuditTests(unittest.TestCase):
         self.assertEqual("generation:trace", rule_call[1][5])
         self.assertEqual("graph.test.core.v1", rule_call[1][8])
         self.assertEqual("matched", rule_call[1][10])
+        slot_call = next(
+            item for item in connection.calls
+            if "INSERT INTO ontology_reasoning_rule_result_slots" in item[0]
+        )
+        self.assertEqual(run.world_id, slot_call[1][0])
+        self.assertEqual("005930", slot_call[1][2])
+        self.assertEqual("graph.test.core.v1", slot_call[1][3])
+        self.assertEqual(1, slot_call[1][9])
+
+    def test_rule_result_slots_are_reusable_only_with_complete_catalog_coverage(self):
+        rows = [
+            {
+                "symbol": "005930",
+                "rule_id": "graph.rule.one",
+                "matched": 1,
+                "catalog_rule_count": 2,
+                "inference_generation_id": "generation:1",
+                "source_abox_snapshot_id": "abox:1",
+                "source_run_id": "run:1",
+            },
+            {
+                "symbol": "005930",
+                "rule_id": "graph.rule.two",
+                "matched": 0,
+                "catalog_rule_count": 2,
+                "inference_generation_id": "generation:1",
+                "source_abox_snapshot_id": "abox:1",
+                "source_run_id": "run:1",
+            },
+        ]
+        connection = RecordingConnection(rows=rows)
+        store = MySQLOntologyProjectionRunStore.__new__(MySQLOntologyProjectionRunStore)
+        store.connect = lambda: ConnectionContext(connection)
+
+        complete = store.active_rule_result_slot_context(
+            world_id="portfolio:local:main",
+            account_id="main",
+            symbols=["005930"],
+            rulebox_rules_hash="rules:1",
+            tbox_fingerprint="tbox:1",
+            expected_rule_count=2,
+        )
+        incomplete = store.active_rule_result_slot_context(
+            world_id="portfolio:local:main",
+            account_id="main",
+            symbols=["005930"],
+            rulebox_rules_hash="rules:1",
+            tbox_fingerprint="tbox:1",
+            expected_rule_count=3,
+        )
+
+        self.assertTrue(complete["reusable"])
+        self.assertEqual(["graph.rule.one"], complete["matchedRuleIds"])
+        self.assertFalse(incomplete["reusable"])
+        self.assertEqual(["005930"], incomplete["incompleteSymbols"])
+
+        summary = store.rule_result_slot_summary(
+            world_id="portfolio:local:main",
+            account_id="main",
+            symbols=["005930"],
+        )
+        self.assertEqual(2, summary["slotCount"])
+        self.assertEqual(1, summary["completeSymbolCount"])
+        self.assertEqual(["graph.rule.one"], summary["symbols"][0]["matchedRuleIds"])
 
     def test_projection_audit_keeps_runtime_identity_and_patch_fallback(self):
         _snapshot, _graph, _fingerprint, run = self.build_run()

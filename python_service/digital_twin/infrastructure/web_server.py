@@ -1252,6 +1252,12 @@ def ontology_inference_ledger_api_payload(query: Dict[str, List[str]]) -> Dict[s
             world_id=world_id,
             limit=safe_int(first_query(query, "ruleSampleLimit"), 5000, 100, 10000),
         )
+        payload["ruleResultSlots"] = execution_store.rule_result_slot_summary(
+            account_id=str(first_query(query, "accountId") or first_query(query, "account") or ""),
+            world_id=world_id,
+            symbols=symbols,
+            limit=safe_int(first_query(query, "slotLimit"), 5000, 100, 10000),
+        )
         payload["ruleAudit"] = rule_audit_payload(
             rulebox.get("rules") or [],
             payload["ruleRuntimeSummary"],
@@ -1269,6 +1275,13 @@ def ontology_inference_ledger_api_payload(query: Dict[str, List[str]]) -> Dict[s
             "sampleCount": 0,
             "ruleCount": 0,
             "rules": [],
+        }
+        payload["ruleResultSlots"] = {
+            "status": "error",
+            "reason": str(error)[:220],
+            "slotCount": 0,
+            "symbolCount": 0,
+            "symbols": [],
         }
         payload["ruleAudit"] = rule_audit_payload(rulebox.get("rules") or [], {})
     return payload

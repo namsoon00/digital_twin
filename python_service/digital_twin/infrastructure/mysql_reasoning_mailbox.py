@@ -160,6 +160,18 @@ def _priority_hint(value: object) -> int:
         return 0
 
 
+def _checkpoint_metadata(entry: Mapping[str, object]) -> Dict[str, object]:
+    return {
+        "sourceEventId": _text(entry.get("sourceEventId") or entry.get("source_event_id")),
+        "workClass": _text(entry.get("workClass") or entry.get("work_class")),
+        "impactScope": _text(entry.get("impactScope") or entry.get("impact_scope")),
+        "reasoningLane": _text(entry.get("reasoningLane") or entry.get("reasoning_lane")),
+        "marketScope": _text(entry.get("marketScope") or entry.get("market_scope")),
+        "ruleFamilies": list(entry.get("ruleFamilies") or entry.get("rule_families") or []),
+        "revisionVector": dict(entry.get("revisionVector") or entry.get("revision_vector") or {}),
+    }
+
+
 class MySQLOntologyReasoningMailboxStore(MySQLOperationalConnection):
     """A leased-worker-ready mailbox with source-event completion accounting."""
 
@@ -355,6 +367,8 @@ class MySQLOntologyReasoningMailboxStore(MySQLOperationalConnection):
                         """
                         UPDATE ontology_reasoning_mailbox
                         SET source_event_id = %s, account_scope = %s, symbol = %s, fact_family = %s,
+                            work_class = %s, impact_scope = %s, reasoning_lane = %s, market_scope = %s,
+                            rule_families_json = %s, revision_vector_json = %s,
                             trigger_name = %s, review_level = %s, priority_hint = %s, occurred_at = %s, updated_at = %s
                         WHERE mailbox_key = %s
                         """,
@@ -368,9 +382,11 @@ class MySQLOntologyReasoningMailboxStore(MySQLOperationalConnection):
                     connection.execute(
                         """
                         INSERT INTO ontology_reasoning_mailbox (
-                            mailbox_key, source_event_id, account_scope, symbol, fact_family, trigger_name,
+                            mailbox_key, source_event_id, account_scope, symbol, fact_family,
+                            work_class, impact_scope, reasoning_lane, market_scope,
+                            rule_families_json, revision_vector_json, trigger_name,
                             review_level, priority_hint, occurred_at, created_at, updated_at
-                        ) VALUES (%s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s)
+                        ) VALUES (%s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s)
                         """,
                         (mailbox_key,) + self._entry_values(entry, stamp) + (stamp,),
                     )
@@ -437,6 +453,12 @@ class MySQLOntologyReasoningMailboxStore(MySQLOperationalConnection):
             _text(entry.get("accountScope")) or "market",
             _text(entry.get("symbol")).upper(),
             _text(entry.get("factFamily")),
+            _text(entry.get("workClass")) or "MARKET",
+            _text(entry.get("impactScope")) or "SUBJECT",
+            _text(entry.get("reasoningLane")) or "REALTIME_REASONING",
+            _text(entry.get("marketScope")) or "market",
+            json_dumps(list(entry.get("ruleFamilies") or [])),
+            json_dumps(dict(entry.get("revisionVector") or {})),
             _text(entry.get("trigger")),
             _text(entry.get("reviewLevel")) or "normal",
             int(entry.get("priorityHint") or 0),
@@ -471,8 +493,8 @@ class MySQLOntologyReasoningMailboxStore(MySQLOperationalConnection):
                     _text(entry.get("sourceEventId")),
                     stamp,
                     json_dumps({
-                        "version": "reasoning-work-checkpoint-v1",
-                        "sourceEventId": _text(entry.get("sourceEventId")),
+                        "version": "reasoning-work-checkpoint-v2",
+                        **_checkpoint_metadata(entry),
                         "stage": "queued",
                         "updatedAt": stamp,
                     }),
@@ -637,11 +659,13 @@ class MySQLOntologyReasoningMailboxStore(MySQLOperationalConnection):
     def claim(self, entries: Iterable[Mapping[str, object]], worker_id: str, lease_seconds: int = 300) -> Dict[str, object]:
         """Lease selected latest-state rows without ever deleting newer work."""
         clean = []
+        metadata_by_revision = {}
         for item in entries or []:
             key = _text(item.get("mailboxKey") or item.get("mailbox_key"))
             event_id = _text(item.get("sourceEventId") or item.get("source_event_id"))
             if key and event_id and (key, event_id) not in clean:
                 clean.append((key, event_id))
+                metadata_by_revision[(key, event_id)] = _checkpoint_metadata(item)
         result = {
             "enabled": True,
             "claimed": [],
@@ -697,9 +721,10 @@ class MySQLOntologyReasoningMailboxStore(MySQLOperationalConnection):
                         else "snapshot-preparation"
                     )
                     checkpoint = {
-                        "version": "reasoning-work-checkpoint-v1",
+                        "version": "reasoning-work-checkpoint-v2",
                         "stage": claim_stage,
                         "startedAt": stamp,
+                        **metadata_by_revision.get((key, event_id), {}),
                     }
                     if resumed_from_verified_inference:
                         checkpoint["resumedFrom"] = "post-monitor-inference-verified"
@@ -727,6 +752,7 @@ class MySQLOntologyReasoningMailboxStore(MySQLOperationalConnection):
                     result["claimed"].append({
                         "mailboxKey": key,
                         "sourceEventId": event_id,
+                        **metadata_by_revision.get((key, event_id), {}),
                         # Expose the post-claim count to the application
                         # coordinator. It uses this only for bounded retry
                         # scheduling; latest-state ownership remains the
@@ -824,21 +850,30 @@ class MySQLOntologyReasoningMailboxStore(MySQLOperationalConnection):
         details: Mapping[str, object] = None,
         worker_id: str = "",
     ) -> None:
-        clean = [
-            (_text(item.get("mailboxKey") or item.get("mailbox_key")), _text(item.get("sourceEventId") or item.get("source_event_id")))
-            for item in entries or [] if isinstance(item, Mapping)
-        ]
-        clean = [(key, event_id) for key, event_id in clean if key and event_id]
+        clean = []
+        for item in entries or []:
+            if not isinstance(item, Mapping):
+                continue
+            key = _text(item.get("mailboxKey") or item.get("mailbox_key"))
+            event_id = _text(item.get("sourceEventId") or item.get("source_event_id"))
+            if key and event_id:
+                clean.append((key, event_id, _checkpoint_metadata(item)))
         if not clean:
             return
         stamp = utc_now()
         try:
             with self.transaction() as connection:
-                for key, event_id in clean:
+                for key, event_id, metadata in clean:
                     owner_clause = " AND lease_owner = %s AND work_state = 'running'" if _text(worker_id) else ""
                     parameters = [
                         _text(stage)[:64], stamp, _text(stage)[:64], stamp,
-                        json_dumps({"version": "reasoning-work-checkpoint-v1", "stage": _text(stage)[:64], "updatedAt": stamp, "details": dict(details or {})}),
+                        json_dumps({
+                            "version": "reasoning-work-checkpoint-v2",
+                            **metadata,
+                            "stage": _text(stage)[:64],
+                            "updatedAt": stamp,
+                            "details": dict(details or {}),
+                        }),
                         stamp, key, event_id,
                     ]
                     if _text(worker_id):
@@ -1050,7 +1085,9 @@ class MySQLOntologyReasoningMailboxStore(MySQLOperationalConnection):
             rows = connection.execute(
                 """
                 SELECT mailbox.mailbox_key, mailbox.source_event_id, mailbox.account_scope, mailbox.symbol,
-                       mailbox.fact_family, mailbox.trigger_name, mailbox.review_level, mailbox.priority_hint,
+                       mailbox.fact_family, mailbox.work_class, mailbox.impact_scope, mailbox.reasoning_lane,
+                       mailbox.market_scope, mailbox.rule_families_json, mailbox.revision_vector_json,
+                       mailbox.trigger_name, mailbox.review_level, mailbox.priority_hint,
                        mailbox.occurred_at, events.event_json
                 FROM ontology_reasoning_mailbox mailbox
                 INNER JOIN ontology_reasoning_mailbox_events events ON events.event_id = mailbox.source_event_id
@@ -1080,6 +1117,12 @@ class MySQLOntologyReasoningMailboxStore(MySQLOperationalConnection):
                 "accountScope": _text(row.get("account_scope")),
                 "symbol": _text(row.get("symbol")).upper(),
                 "factFamily": _text(row.get("fact_family")),
+                "workClass": _text(row.get("work_class")) or "MARKET",
+                "impactScope": _text(row.get("impact_scope")) or "SUBJECT",
+                "reasoningLane": _text(row.get("reasoning_lane")) or "REALTIME_REASONING",
+                "marketScope": _text(row.get("market_scope")) or "market",
+                "ruleFamilies": list(_json_loads(row.get("rule_families_json"), []) or []),
+                "revisionVector": dict(_json_loads(row.get("revision_vector_json"), {}) or {}),
                 "trigger": _text(row.get("trigger_name")),
                 "reviewLevel": _text(row.get("review_level")),
                 "priorityHint": int(row.get("priority_hint") or 0),

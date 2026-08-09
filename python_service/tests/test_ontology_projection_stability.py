@@ -159,9 +159,9 @@ class OntologyProjectionStabilityTests(unittest.TestCase):
             fairness_drain=fairness,
         )
 
-        self.assertEqual(["MSFT", "AAPL"], symbols)
-        self.assertEqual(["MSFT"], batches["old-calendar"])
-        self.assertEqual(["AAPL"], batches["new-critical"])
+        self.assertEqual(["MSFT", "NVDA"], symbols)
+        self.assertEqual(["MSFT", "NVDA"], batches["old-calendar"])
+        self.assertNotIn("new-critical", batches)
         self.assertEqual(1, omitted)
         self.assertTrue(fairness["active"])
         self.assertEqual(["old-calendar"], fairness["eventIds"])

@@ -1,4 +1,3 @@
-import hashlib
 import inspect
 import os
 import socket
@@ -25,8 +24,11 @@ from ..domain.ontology_reasoning_queue import (
     OBSERVATION_FOLLOWUP_PRIORITY_HINT,
     REASONING_LANES,
     REASONING_PRIORITY_ORDER,
+    WORK_CLASSES,
     VERIFIED_MONITOR_SNAPSHOT_TRIGGER,
+    durable_mailbox_entries,
     event_has_reasoning_work,
+    event_work_class as domain_event_work_class,
     event_fact_types_for_symbol,
     event_reasoning_lane,
     event_reasoning_priority,
@@ -113,6 +115,8 @@ def reasoning_request_provenance(
         if str(symbol or "").strip()
     }
     request_event_ids, source_event_ids, triggers, fact_types, observed_at, account_ids = set(), set(), set(), set(), [], set()
+    work_classes, impact_scopes, reasoning_lanes = set(), set(), set()
+    revision_vectors_by_symbol: Dict[str, Dict[str, str]] = {}
     changed_fields: Dict[str, set] = {}
     fact_families_by_symbol: Dict[str, set] = {}
     revisions: Dict[str, str] = {}
@@ -120,15 +124,26 @@ def reasoning_request_provenance(
     verified_source_snapshot: Dict[str, object] = {}
     for event in events or []:
         payload = event_payload(event)
+        mailbox = payload.get("_reasoningMailbox")
+        mailbox = dict(mailbox or {}) if isinstance(mailbox, Mapping) else {}
         event_id = str(getattr(event, "event_id", "") or "").strip()
         if event_id:
             request_event_ids.add(event_id)
-        source_event_id = str(payload.get("sourceEventId") or "").strip()
+        source_event_id = str(mailbox.get("sourceEventId") or payload.get("sourceEventId") or "").strip()
         if source_event_id:
             source_event_ids.add(source_event_id)
         trigger = str(payload.get("trigger") or "").strip()
         if trigger:
             triggers.add(trigger)
+        work_class = str(mailbox.get("workClass") or domain_event_work_class(event)).strip().upper()
+        impact_scope = str(mailbox.get("impactScope") or "").strip().upper()
+        reasoning_lane = str(mailbox.get("reasoningLane") or event_reasoning_lane(event)).strip().upper()
+        if work_class:
+            work_classes.add(work_class)
+        if impact_scope:
+            impact_scopes.add(impact_scope)
+        if reasoning_lane:
+            reasoning_lanes.add(reasoning_lane)
         raw_account_ids = payload.get("accountIds") or payload.get("accountId") or []
         if isinstance(raw_account_ids, str):
             raw_account_ids = [raw_account_ids]
@@ -173,6 +188,14 @@ def reasoning_request_provenance(
             targets.update(event_scope_symbols)
         if not event_scope_symbols and len(targets) == 1:
             event_scope_symbols.update(targets)
+        revision_vector = mailbox.get("revisionVector")
+        if isinstance(revision_vector, Mapping):
+            for symbol in event_scope_symbols:
+                revision_vectors_by_symbol[symbol] = {
+                    str(key or "")[:40]: str(value or "")[:191]
+                    for key, value in revision_vector.items()
+                    if str(key or "").strip() and str(value or "").strip()
+                }
         raw_fact_types_by_symbol = payload.get("factTypesBySymbol")
         raw_fact_types_by_symbol = raw_fact_types_by_symbol if isinstance(raw_fact_types_by_symbol, Mapping) else {}
         event_families = requested_scope_families_for_event_fact_types(event_fact_types)
@@ -231,11 +254,14 @@ def reasoning_request_provenance(
                 revisions[symbol] = clean_revision[:160]
     ordered_fact_types = sorted(fact_types)
     context = {
-        "version": "reasoning-request-context-v2",
+        "version": "reasoning-request-context-v3",
         "requestEventIds": sorted(request_event_ids)[:80],
         "sourceEventIds": sorted(source_event_ids)[:80],
         "triggers": sorted(triggers)[:20],
         "factTypes": ordered_fact_types[:30],
+        "workClasses": sorted(work_classes)[:8],
+        "impactScopes": sorted(impact_scopes)[:8],
+        "reasoningLanes": sorted(reasoning_lanes)[:8],
         "accountIds": sorted(account_ids)[:40],
         "requestedScopeFamilies": requested_scope_families_for_event_fact_types(ordered_fact_types),
         "requestedScopeFamiliesBySymbol": {
@@ -251,6 +277,7 @@ def reasoning_request_provenance(
             if values
         },
         "factRevisionsBySymbol": dict(sorted(revisions.items())),
+        "revisionVectorsBySymbol": dict(sorted(revision_vectors_by_symbol.items())),
     }
     if crypto_transitions:
         context["cryptoTransitions"] = [
@@ -645,29 +672,7 @@ def realtime_coalescing_key(event: object) -> Tuple[str, str, Tuple[str, ...]]:
 
 def event_work_class(event: object) -> str:
     """Classify scheduler work for operational visibility only."""
-    payload = event_payload(event)
-    trigger = str(payload.get("trigger") or "").strip().lower()
-    fact_types = {
-        str(item or "").strip().lower()
-        for item in payload.get("factTypes") or []
-        if str(item or "").strip()
-    }
-    symbols = event_symbols(event)
-    if not symbols:
-        return "global"
-    if any(is_observation_followup_symbol(event, symbol) for symbol in symbols):
-        return "observation-followup"
-    if is_verified_monitor_snapshot_event(event):
-        return "verified-snapshot"
-    if "research" in trigger or fact_types & {"researchevidence", "verifiedclaim", "verificationrun", "newsevent"}:
-        return "research"
-    if trigger in COALESCIBLE_REALTIME_TRIGGERS or fact_types & {
-        "marketquote", "technicalindicator", "executionflow", "orderbook",
-    }:
-        return "realtime-market"
-    if "portfolio" in trigger or fact_types & {"portfoliosnapshot"}:
-        return "portfolio"
-    return "other"
+    return domain_event_work_class(event)
 
 
 class OntologyReasoningRunner:
@@ -845,7 +850,7 @@ class OntologyReasoningRunner:
         """
         return self.native_typedb_rule_execution_enabled() and truthy(
             self.settings.get("typedbNativeRuleDirectQueryFallbackEnabled"),
-            True,
+            False,
         )
 
     def rulebox_prewarm_retry_seconds(self) -> int:
@@ -1295,6 +1300,8 @@ class OntologyReasoningRunner:
                     "mailboxKey": mailbox_key,
                     "sourceEventId": source_event_id,
                     "symbol": symbol,
+                    "workClass": str(metadata.get("workClass") or "MARKET"),
+                    "reasoningLane": str(metadata.get("reasoningLane") or "REALTIME_REASONING"),
                 })
         return entries
 
@@ -2785,44 +2792,20 @@ class OntologyReasoningRunner:
 
     def mailbox_entries_for_event(self, event: object) -> List[Dict[str, object]]:
         """Expand a fungible observation into one latest-state mailbox slot."""
-        coalescing_key = realtime_coalescing_key(event)
-        if not coalescing_key:
-            return []
-        account_scope, trigger, fact_types = coalescing_key
-        event_id = str(getattr(event, "event_id", "") or "").strip()
-        if not event_id:
-            return []
-        source_event = self.event_as_dict(event)
-        source_event["event_id"] = event_id
-        source_event.setdefault("occurred_at", str(getattr(event, "occurred_at", "") or ""))
-        family = ",".join(fact_types) or "MarketQuote"
-        slot_family = mailbox_slot_family(event, fact_types)
         priority_symbols = self.priority_symbols()
-        entries = []
-        for symbol in event_symbols(event):
-            symbol_fact_types = event_fact_types_for_symbol(event, symbol)
-            symbol_family = ",".join(symbol_fact_types) or "MarketQuote"
-            seed = "|".join([account_scope, symbol, slot_family])
-            mailbox_key = hashlib.sha256(seed.encode("utf-8")).hexdigest()
-            entries.append({
-                "mailboxKey": mailbox_key,
-                "sourceEventId": event_id,
-                "sourceEvent": source_event,
-                "accountScope": account_scope,
-                "symbol": symbol,
-                "factFamily": symbol_family,
-                "mailboxSlotFamily": slot_family,
-                "trigger": trigger,
-                "reviewLevel": event_review_level(event),
-                "priorityHint": mailbox_entry_priority(
-                    event,
-                    symbol,
-                    priority_symbols.get(symbol, 0),
-                ),
-                "observationFollowup": is_observation_followup_symbol(event, symbol),
-                "occurredAt": str(getattr(event, "occurred_at", "") or ""),
-                "factRevision": event_fact_revision(event, symbol),
-            })
+        entries = durable_mailbox_entries(event)
+        for entry in entries:
+            symbol = str(entry.get("symbol") or "").upper().strip()
+            priority_hint = mailbox_entry_priority(
+                event,
+                symbol,
+                priority_symbols.get(symbol, 0),
+            )
+            entry["priorityHint"] = (
+                priority_hint
+                if str(entry.get("workClass") or "MARKET") == "MARKET"
+                else min(priority_hint, 1000)
+            )
         return entries
 
     def mailbox_virtual_event(self, entry: Dict[str, object]) -> DomainEvent:
@@ -2842,11 +2825,20 @@ class OntologyReasoningRunner:
             "accountScope": str(entry.get("accountScope") or "market"),
             "factFamily": str(entry.get("factFamily") or ""),
             "factRevision": str(entry.get("factRevision") or "")[:160],
+            "workClass": str(entry.get("workClass") or "MARKET"),
+            "impactScope": str(entry.get("impactScope") or "SUBJECT"),
+            "reasoningLane": str(entry.get("reasoningLane") or "REALTIME_REASONING"),
+            "marketScope": str(entry.get("marketScope") or "market"),
+            "ruleFamilies": list(entry.get("ruleFamilies") or []),
+            "revisionVector": dict(entry.get("revisionVector") or {}),
             "priorityHint": priority_hint,
             "observationFollowup": bool(
-                entry.get("observationFollowup")
-                or is_observation_followup_symbol(source, symbol)
-                or priority_hint >= OBSERVATION_FOLLOWUP_PRIORITY_HINT
+                str(entry.get("workClass") or "MARKET") == "MARKET"
+                and (
+                    entry.get("observationFollowup")
+                    or is_observation_followup_symbol(source, symbol)
+                    or priority_hint >= OBSERVATION_FOLLOWUP_PRIORITY_HINT
+                )
             ),
             "enqueuedAt": str(entry.get("occurredAt") or source.occurred_at or ""),
         }
@@ -4004,7 +3996,12 @@ class OntologyReasoningRunner:
                 for symbol in due_symbols:
                     if symbol not in all_due_symbols:
                         all_due_symbols.append(symbol)
-                fact_types = {str(item or "").strip() for item in event_payload(event).get("factTypes") or []}
+                fact_types = {
+                    str(item or "").strip()
+                    for symbol in due_symbols
+                    for item in event_fact_types_for_symbol(event, symbol)
+                    if str(item or "").strip()
+                }
                 fairness_rank = max([self.symbol_fairness_rank(symbol, cursor_payload) for symbol in due_symbols] or [(0, 0)])
                 rank = (
                     max([int(is_observation_followup_symbol(event, symbol)) for symbol in due_symbols] or [0]),
@@ -4025,6 +4022,25 @@ class OntologyReasoningRunner:
                 )
                 event_candidates.append((rank, event_id, due_symbols))
             if event_candidates:
+                candidates_by_event_id = {
+                    str(getattr(event, "event_id", "") or ""): event
+                    for event in requested_events
+                }
+                reserved_lane = (
+                    event_reasoning_lane(candidates_by_event_id.get(reserved_event_id))
+                    if reserved_event_id
+                    else ""
+                )
+                if reserved_lane:
+                    selected_lane = reserved_lane
+                else:
+                    lead = max(event_candidates, key=lambda item: item[0])
+                    selected_lane = event_reasoning_lane(candidates_by_event_id.get(lead[1]))
+                event_candidates = [
+                    item
+                    for item in event_candidates
+                    if event_reasoning_lane(candidates_by_event_id.get(item[1])) == selected_lane
+                ]
                 snapshot_limit = self.coherent_snapshot_max_symbols()
                 # Coherence refers to the full ABox retained for context, not
                 # an unbounded schema-function request. Native TypeDB rules
@@ -4624,7 +4640,7 @@ class OntologyReasoningRunner:
             for symbol in selected_symbols or []
             if str(symbol or "").strip()
         ]
-        classes = ["observation-followup", "verified-snapshot", "research", "realtime-market", "portfolio", "global", "other"]
+        classes = list(WORK_CLASSES)
         priority_classes = list(REASONING_PRIORITY_ORDER)
         pending_counts = {work_class: 0 for work_class in classes}
         selected_counts = {work_class: 0 for work_class in classes}

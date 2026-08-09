@@ -2033,6 +2033,10 @@ function checkFrontendAdminRender() {
     assertOk(settingsHtml.indexOf("settings-overview-panel") >= 0, "설정 탭 요약 패널이 렌더링되지 않았습니다.");
     assertOk(settingsHtml.indexOf("settings-environment-panel") >= 0, "설정 탭 앱 환경 패널이 렌더링되지 않았습니다.");
     assertOk(settingsHtml.indexOf("settings-delivery-panel") >= 0, "설정 탭 알림 전달 패널이 렌더링되지 않았습니다.");
+    assertOk(settingsHtml.indexOf("settings-ai-operations-panel") >= 0, "운영 설정 탭에 AI 투자판단 운영 패널이 없습니다.");
+    assertOk(settingsHtml.indexOf('data-setting="notificationAiGateEnabled"') >= 0, "운영 설정 탭에 AI 투자판단 사용 옵션이 없습니다.");
+    assertOk(settingsHtml.indexOf('data-setting="notificationAiQueueWorkerCount"') >= 0, "운영 설정 탭에 AI 병렬 워커 옵션이 없습니다.");
+    assertOk(settingsHtml.indexOf('data-setting="notificationAiReasoningEffort"') >= 0, "운영 설정 탭에 AI 추론 깊이 옵션이 없습니다.");
     assertOk(settingsHtml.indexOf("settings-external-data-panel") >= 0, "설정 탭 외부 데이터 패널이 렌더링되지 않았습니다.");
     assertOk(settingsHtml.indexOf("settings-advanced-disclosure") >= 0 && settingsHtml.indexOf("고급 설정") >= 0 && settingsHtml.indexOf("settings-diagnostics-panel") >= 0, "설정 탭이 기본/고급/진단 흐름으로 분리되지 않았습니다.");
     assertOk(settingsHtml.indexOf("settings-smart-save") >= 0, "설정 탭 스마트 저장 영역이 렌더링되지 않았습니다.");

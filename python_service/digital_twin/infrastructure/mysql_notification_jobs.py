@@ -30,6 +30,7 @@ from ..domain.notification_rules import (
     notification_state_group_key,
 )
 from ..domain.notifications import NotificationJob
+from ..domain.ontology_relation_delivery import suppressed_relation_context_is_comparable
 from ..domain.sent_article_filter import (
     article_filter_context_summary,
     collect_article_identity_keys_from_context,
@@ -742,7 +743,7 @@ class MySQLNotificationJobStore(MySQLOperationalConnection):
             status = str(row["status"] or "").strip()
             context = dict(previous.context or {})
             if status == "suppressed":
-                if str(context.get("deliverySuppressionReason") or "") != "initial_graph_baseline":
+                if not suppressed_relation_context_is_comparable(context):
                     continue
             elif status != "done" and not notification_history_is_recent_in_flight(row):
                 continue

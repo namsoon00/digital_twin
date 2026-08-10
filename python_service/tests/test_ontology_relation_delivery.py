@@ -1,3 +1,4 @@
+import json
 import unittest
 
 from digital_twin.domain.notification_rule_evaluator import (
@@ -10,7 +11,9 @@ from digital_twin.domain.notification_rules import default_notification_rule, ev
 from digital_twin.domain.notification_templates import alert_context
 from digital_twin.domain.notifications import NotificationJob
 from digital_twin.domain.ontology_insights import build_investment_insight_events
+from digital_twin.domain.ontology_relation_delivery import suppressed_relation_context_is_comparable
 from digital_twin.domain.portfolio import AccountSnapshot, AlertEvent, PortfolioSummary
+from digital_twin.infrastructure.mysql_notification_jobs import MySQLNotificationJobStore
 
 
 class OntologyRelationDeliveryTests(unittest.TestCase):
@@ -141,6 +144,48 @@ class OntologyRelationDeliveryTests(unittest.TestCase):
         )
         self.assertTrue(decision.should_send)
         self.assertNotEqual("missing_graph_inference", decision.suppression_reason)
+
+    def test_state_cooldown_graph_remains_a_comparable_predecessor(self):
+        self.assertTrue(suppressed_relation_context_is_comparable({
+            "deliverySuppressionReason": "state_cooldown",
+        }))
+        self.assertTrue(suppressed_relation_context_is_comparable({
+            "deliverySuppressionReason": "initial_graph_baseline",
+        }))
+        self.assertFalse(suppressed_relation_context_is_comparable({
+            "deliverySuppressionReason": "stale_data",
+        }))
+
+    def test_relation_predecessor_uses_a_state_cooldown_suppressed_job(self):
+        previous_context = self.context()
+        previous_context["deliverySuppressionReason"] = "state_cooldown"
+        previous = self.job(previous_context)
+        previous.status = "suppressed"
+        current = self.job(self.context())
+        row = {
+            "text": previous.text,
+            "payload_json": json.dumps(MySQLNotificationJobStore.compact_job_payload(previous)),
+            "created_at": previous.created_at,
+            "status": previous.status,
+        }
+
+        class Result:
+            def fetchall(self):
+                return [row]
+
+        class Connection:
+            def execute(self, *_args, **_kwargs):
+                return Result()
+
+        store = MySQLNotificationJobStore.__new__(MySQLNotificationJobStore)
+        found = store.relation_predecessor_with_connection(
+            Connection(),
+            current,
+            default_notification_rule("investmentInsight"),
+        )
+
+        self.assertEqual("state_cooldown", found["deliverySuppressionReason"])
+        self.assertEqual(previous.created_at, found["_relationPredecessorSentAt"])
 
     def test_price_only_change_keeps_relation_delivery_fingerprint_and_cooldown_group(self):
         before = self.context(current_price=70000)

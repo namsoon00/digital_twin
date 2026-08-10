@@ -19,6 +19,11 @@ from urllib.parse import parse_qsl, urlencode, urlsplit, urlunsplit
 RELATION_DELIVERY_FINGERPRINT_VERSION = "ontology-relation-delivery-v2"
 VOLATILE_EVENT_SUFFIX = re.compile(r":[+-]?\d+(?:\.\d+)?%?$")
 TRACKING_QUERY_KEYS = {"fbclid", "gclid", "mc_cid", "mc_eid", "ref", "source"}
+COMPARABLE_RELATION_SUPPRESSION_REASONS = {
+    "initial_graph_baseline",
+    "similar_repeat",
+    "state_cooldown",
+}
 
 
 def _text(value: object) -> str:
@@ -31,6 +36,13 @@ def _normalized(value: object) -> str:
 
 def _mapping(value: object) -> Dict[str, object]:
     return dict(value or {}) if isinstance(value, Mapping) else {}
+
+
+def suppressed_relation_context_is_comparable(context: Mapping[str, object]) -> bool:
+    """Return whether delivery policy, rather than invalid data, hid the graph."""
+
+    reason = _text(_mapping(context).get("deliverySuppressionReason")).casefold()
+    return reason in COMPARABLE_RELATION_SUPPRESSION_REASONS
 
 
 def _items(value: object) -> List[object]:

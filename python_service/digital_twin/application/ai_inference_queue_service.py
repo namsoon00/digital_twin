@@ -17,6 +17,7 @@ from ..domain.notification_ai_gate_validation import (
 )
 from ..domain.notifications import NotificationJob
 from .notification_ai_gate_audit import context_with_validated_ai_response
+from .notification_decision_memory import context_with_previous_investment_decision
 from .notification_service import (
     apply_ontology_quality_gate_to_response,
     ontology_quality_gate_context,
@@ -34,10 +35,17 @@ def _int_setting(settings: Dict[str, object], key: str, fallback: int, minimum: 
 class NotificationAIRequestEnqueuer:
     """Capture one immutable AI context and move its notification to waiting."""
 
-    def __init__(self, queue, context_preparer=None, settings: Dict[str, object] = None):
+    def __init__(
+        self,
+        queue,
+        context_preparer=None,
+        settings: Dict[str, object] = None,
+        decision_episode_store=None,
+    ):
         self.queue = queue
         self.context_preparer = context_preparer
         self.settings = dict(settings or {})
+        self.decision_episode_store = decision_episode_store
 
     def enqueue(self, job: NotificationJob) -> Dict[str, object]:
         if self.context_preparer:
@@ -47,6 +55,12 @@ class NotificationAIRequestEnqueuer:
         context.setdefault("accountId", job.account_id)
         context.setdefault("accountLabel", job.account_label)
         context.setdefault("jobId", job.job_id)
+        if job.message_type == INVESTMENT_INSIGHT:
+            context = context_with_previous_investment_decision(
+                context,
+                self.decision_episode_store,
+                account_id=job.account_id,
+            )
         context["ontologyQualityGate"] = ontology_quality_gate_context(context, self.settings)
         request = AIInferenceRequest.create(
             job,
@@ -112,6 +126,13 @@ class AIInferenceQueueRunner:
 
     def process_request(self, request: AIInferenceRequest) -> str:
         context = dict(request.context or {})
+        if request.message_type == INVESTMENT_INSIGHT:
+            context = context_with_previous_investment_decision(
+                context,
+                self.decision_episode_store,
+                account_id=request.account_id,
+                symbol=request.symbol,
+            )
         prompt = build_notification_ai_gate_prompt(
             context,
             max_prompt_bytes=self.max_prompt_bytes,

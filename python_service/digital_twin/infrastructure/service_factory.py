@@ -396,6 +396,7 @@ def build_notification_queue_runner(dry_run: bool = False, lane: str = "all") ->
                 opinion_enricher,
             ),
             settings,
+            decision_episode_store=stores.investment_decision_episode_store(settings),
         )
         news_digest_reconciler = NewsDigestEventReconciler(
             event_reader=stores.event_log(settings),

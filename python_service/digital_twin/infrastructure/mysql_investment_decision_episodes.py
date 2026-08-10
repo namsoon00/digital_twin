@@ -197,6 +197,52 @@ class MySQLInvestmentDecisionEpisodeStore(MySQLOperationalConnection):
             rows = connection.execute(sql, tuple(params)).fetchall()
         return self.hydrate_outcomes(self.episode_from_row(row) for row in rows or [])
 
+    def latest_decision_memory(
+        self,
+        account_id: str,
+        symbol: str,
+        exclude_episode_id: str = "",
+    ) -> Dict[str, object]:
+        """Read the compact prior decision used by the next notification AI run.
+
+        Notification continuity needs one action and its audit identity, not the
+        episode's full hypothesis payload or outcome history. Keeping this read
+        on indexed columns prevents one live alert from hydrating the heavier
+        learning model.
+        """
+
+        where = ["account_id = %s", "symbol = %s"]
+        params: List[object] = [str(account_id or ""), str(symbol or "").upper()]
+        if str(exclude_episode_id or "").strip():
+            where.append("episode_id <> %s")
+            params.append(str(exclude_episode_id).strip())
+        with self.connect() as connection:
+            row = connection.execute(
+                "SELECT episode_id, account_id, symbol, subject_name, selected_hypothesis_id, "
+                "action, review_level, data_state, validation_state, inference_generation_id, "
+                "status, decided_at, source "
+                "FROM investment_decision_episodes WHERE " + " AND ".join(where)
+                + " ORDER BY decided_at DESC, episode_id DESC LIMIT 1",
+                tuple(params),
+            ).fetchone()
+        if not row:
+            return {}
+        return {
+            "episodeId": str(row.get("episode_id") or ""),
+            "accountId": str(row.get("account_id") or ""),
+            "symbol": str(row.get("symbol") or "").upper(),
+            "subjectName": str(row.get("subject_name") or ""),
+            "selectedHypothesisId": str(row.get("selected_hypothesis_id") or ""),
+            "action": str(row.get("action") or "").upper(),
+            "reviewLevel": str(row.get("review_level") or ""),
+            "dataState": str(row.get("data_state") or ""),
+            "validationState": str(row.get("validation_state") or ""),
+            "inferenceGenerationId": str(row.get("inference_generation_id") or ""),
+            "status": str(row.get("status") or ""),
+            "decidedAt": canonical_investment_timestamp(row.get("decided_at")) or str(row.get("decided_at") or ""),
+            "source": str(row.get("source") or ""),
+        }
+
     def list_for_symbols(
         self,
         symbols: Iterable[str],

@@ -24,6 +24,7 @@ from ..domain.ontology_decision_state import (
     VALIDATION_STATE_LABELS,
 )
 from .notification_ai_gate_audit import context_with_validated_ai_response
+from .notification_decision_memory import context_with_previous_investment_decision
 from .notification_disclosure_rendering import context_with_disclosure_analysis
 
 
@@ -255,6 +256,12 @@ class NotificationAIValidatedGateEnricher:
         context.setdefault("accountId", job.account_id)
         context.setdefault("accountLabel", job.account_label)
         context.setdefault("jobId", job.job_id)
+        if job.message_type == INVESTMENT_INSIGHT:
+            context = context_with_previous_investment_decision(
+                context,
+                self.decision_episode_store,
+                account_id=job.account_id,
+            )
         quality_gate = ontology_quality_gate_context(context, self.settings)
         context["ontologyQualityGate"] = quality_gate
         if context.get("notificationAiValidatedResponse"):

@@ -77,6 +77,13 @@ def entry_context():
 class ActionEnvelopeAiGateTests(unittest.TestCase):
     def test_ai_input_receives_typedb_envelope_and_transition(self):
         context = entry_context()
+        context["previousInvestmentDecisionEpisode"] = {
+            "episodeId": "decision-episode:previous",
+            "accountId": "main",
+            "symbol": "NVDA",
+            "action": "HOLD",
+            "decidedAt": "2026-07-26T01:00:00Z",
+        }
 
         packet = ai_decision_input_packet(
             context,
@@ -88,6 +95,8 @@ class ActionEnvelopeAiGateTests(unittest.TestCase):
         self.assertEqual("ENTRY_ELIGIBLE", inference["actionEnvelope"]["status"])
         self.assertEqual("BUY", inference["actionEnvelope"]["preferredAction"])
         self.assertEqual("action-changed", inference["decisionTransition"]["kind"])
+        self.assertEqual("HOLD", packet["previousFinalDecision"]["action"])
+        self.assertEqual("BUY", packet["precomputedActionCandidate"])
 
     def test_ai_cannot_lower_entry_eligibility_without_counter_evidence(self):
         response = validated_response_from_payload(
@@ -120,6 +129,74 @@ class ActionEnvelopeAiGateTests(unittest.TestCase):
         )
 
         self.assertEqual("HOLD", response.action)
+        self.assertEqual("BUY", response.precomputed_action)
+        self.assertIn("직접 위험 뉴스", response.disagreement_reason)
+
+    def test_counter_evidence_becomes_auditable_disagreement_when_reason_is_omitted(self):
+        response = validated_response_from_payload(
+            entry_context(),
+            {
+                "action": "HOLD",
+                "summary": "거래 확인이 부족해 관심을 유지합니다.",
+                "opinion": "관심을 유지합니다.",
+                "evidence": ["가격 회복 조건이 확인됐습니다."],
+                "counterEvidence": ["거래량이 평소의 절반이라 회복 지속성을 확인하기 어렵습니다."],
+                "nextChecks": ["다음 정규장 거래량 확인"],
+            },
+        )
+
+        self.assertEqual("HOLD", response.action)
+        self.assertIn("거래량이 평소의 절반", response.disagreement_reason)
+        self.assertTrue(any("첫 번째 반대 근거" in item for item in response.validation_warnings))
+
+    def test_previous_ai_decision_prevents_false_first_judgment(self):
+        context = entry_context()
+        context["previousInvestmentDecisionEpisode"] = {
+            "episodeId": "decision-episode:previous",
+            "accountId": "main",
+            "symbol": "NVDA",
+            "action": "HOLD",
+            "decidedAt": "2026-07-26T01:00:00Z",
+        }
+
+        response = validated_response_from_payload(
+            context,
+            {
+                "action": "HOLD",
+                "summary": "진입 조건은 생겼지만 거래 확인이 더 필요합니다.",
+                "opinion": "관심을 유지합니다.",
+                "changeAnalysis": "이번 알림은 첫 행동 판단이므로 이전 행동과 직접 비교할 수 없습니다.",
+                "evidence": ["가격 회복 조건이 확인됐습니다."],
+                "counterEvidence": ["거래량 확인이 부족합니다."],
+                "disagreementReason": "거래량 확인이 부족해 진입 후보를 바로 실행하지 않습니다.",
+                "nextChecks": ["다음 정규장 거래량 확인"],
+            },
+        )
+
+        self.assertNotIn("첫", response.change_analysis)
+        self.assertIn("이전 AI 최종 판단과 같은 관심 유지", response.change_analysis)
+        self.assertTrue(any("결정 이력 기준" in item for item in response.validation_warnings))
+
+    def test_compact_message_exposes_graph_candidate_ai_disagreement(self):
+        context = entry_context()
+        context["messageDeliveryLevel"] = "beginner"
+        response = validated_response_from_payload(
+            context,
+            {
+                "action": "HOLD",
+                "summary": "가격 회복은 확인됐지만 거래 증가가 부족해 관심을 유지합니다.",
+                "opinion": "관심을 유지합니다.",
+                "evidence": ["가격 회복 조건이 확인됐습니다."],
+                "counterEvidence": ["거래량 확인이 부족합니다."],
+                "disagreementReason": "거래량 확인이 부족해 진입 후보를 바로 실행하지 않습니다.",
+                "nextChecks": ["다음 정규장 거래량 확인"],
+            },
+        )
+
+        message = execution_telegram_message(context, response)
+
+        self.assertIn("관계 분석 후보는 소액 진입 검토였지만 AI 최종 판단은 관심 유지입니다.", message)
+        self.assertIn("거래량 확인이 부족해 진입 후보를 바로 실행하지 않습니다.", message)
 
     def test_local_response_explains_entry_envelope_without_engine_terms(self):
         response = local_validated_ai_response(entry_context())

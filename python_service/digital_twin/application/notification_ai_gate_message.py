@@ -357,6 +357,12 @@ def decision_transition_from_context(context: Dict[str, object]) -> Dict[str, ob
     return dict(transition or {})
 
 
+def ai_decision_transition_from_context(context: Dict[str, object]) -> Dict[str, object]:
+    context = context if isinstance(context, dict) else {}
+    transition = context.get("aiDecisionTransition") if isinstance(context.get("aiDecisionTransition"), dict) else {}
+    return dict(transition or {})
+
+
 def _normalized_action_envelope_status(value: object) -> str:
     raw = str(value or "").strip()
     if not raw:
@@ -2569,11 +2575,22 @@ def compact_current_action_line(context: Dict[str, object], response: Notificati
 
 
 def compact_reason_heading(context: Dict[str, object]) -> str:
-    transition = decision_transition_from_context(context)
+    transition = ai_decision_transition_from_context(context) or decision_transition_from_context(context)
     return "바뀐 이유" if str(transition.get("kind") or "").strip().lower() == "action-changed" else "판단 근거"
 
 
 def compact_decision_transition(context: Dict[str, object], response: NotificationAIValidatedResponse) -> str:
+    ai_transition = ai_decision_transition_from_context(context)
+    if ai_transition.get("historyAvailable"):
+        analysis = compact_sentence_count(customer_visible_ai_text(response.change_analysis or ""), 2)
+        label = "판단 변경" if str(ai_transition.get("kind") or "").strip().lower() == "action-changed" else "판단 유지"
+        if analysis and not compact_reason_is_internal(analysis):
+            return "[" + label + "] " + analysis
+        previous = str(ai_transition.get("previousAction") or "").strip().upper()
+        current = str(ai_transition.get("currentAction") or response.action or "").strip().upper()
+        if previous and current and previous != current:
+            return "[판단 변경] " + action_label_for_action(previous, context) + "에서 " + action_label_for_action(current, context) + "으로 바뀌었습니다."
+        return "[판단 유지] 이전 AI 최종 판단과 같은 " + action_label_for_action(current or previous, context) + "입니다."
     presentation = decision_transition_presentation(context, response.action)
     analysis = compact_sentence_count(customer_visible_ai_text(response.change_analysis or ""), 2)
     if analysis and not compact_reason_is_internal(analysis):
@@ -2889,6 +2906,19 @@ def compact_action_reason_rows(
     response: NotificationAIValidatedResponse,
 ) -> List[str]:
     rows: List[str] = []
+    if response.precomputed_action and response.precomputed_action != response.action:
+        adjustment = (
+            "관계 분석 후보는 "
+            + action_label_for_action(response.precomputed_action, context)
+            + "였지만 AI 최종 판단은 "
+            + action_label_for_action(response.action, context)
+            + "입니다."
+        )
+        reason = compact_sentence_count(
+            _message_text(customer_visible_ai_text(response.disagreement_reason), "beginner"),
+            1,
+        )
+        rows.append(adjustment + ((" " + reason) if reason else ""))
     summary = compact_sentence_count(_message_text(response.summary, "beginner"), 1)
     summary_key = re.sub(r"[^0-9a-z가-힣]+", "", summary.casefold())
     envelope_rows = compact_envelope_reason_rows(context)

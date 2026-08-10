@@ -2,6 +2,7 @@ import re
 from typing import Dict, Optional
 
 from ..domain.investment_ubiquitous_language import user_facing_investment_language
+from ..domain.investment_decision_history import context_with_ai_decision_transition
 from ..domain.notification_ai import active_investment_opinion_value, notification_ai_prompt_context, relation_context_value
 from ..domain.notification_ai_gate_contracts import (
     AI_DECISION_MODE,
@@ -19,7 +20,11 @@ from .notification_ai_gate_message import (
 )
 from ..domain.notification_ai_gate_sources import source_labels_from_context
 from ..domain.notification_ai_gate_text import _text, reference_date
-from ..domain.notification_ai_gate_validation import ai_decision_input_packet, delivery_profile_from_context
+from ..domain.notification_ai_gate_validation import (
+    ai_decision_input_packet,
+    delivery_profile_from_context,
+    reconcile_change_analysis_with_decision_history,
+)
 from ..domain.notification_icon_policy import investment_notification_icon
 
 
@@ -173,6 +178,9 @@ def notification_ai_decision_audit(
         "sourceUrls": source_urls,
         "sourceLabels": source_labels,
         "strategyGuideQuality": guide_quality,
+        "decisionHistory": dict((context or {}).get("investmentDecisionHistory") or {}),
+        "previousFinalDecision": dict((context or {}).get("previousInvestmentDecisionEpisode") or {}),
+        "aiDecisionTransition": dict((context or {}).get("aiDecisionTransition") or {}),
         "inputSummary": {
             "rawLineCount": len(decision_input.get("rawAlert", {}).get("rawLines") or []),
             "activeRuleCount": len(decision_input.get("relationshipDatabaseInference", {}).get("activeRules") or []),
@@ -191,7 +199,17 @@ def context_with_validated_ai_response(
     response: NotificationAIValidatedResponse,
     settings: Optional[Dict[str, object]] = None,
 ) -> Dict[str, object]:
-    enriched = dict(context or {})
+    enriched = context_with_ai_decision_transition(context or {}, response.action)
+    reconciled_change, false_initial_history = reconcile_change_analysis_with_decision_history(
+        enriched,
+        response.action,
+        response.change_analysis,
+    )
+    response.change_analysis = reconciled_change
+    if false_initial_history:
+        warning = "저장된 이전 AI 판단과 맞지 않는 첫 판단 표현을 결정 이력 기준으로 보정했습니다."
+        if warning not in response.validation_warnings:
+            response.validation_warnings.append(warning)
     payload = response.to_dict()
     guide_quality = strategy_guide_quality(enriched, response)
     payload["strategyGuideQuality"] = guide_quality

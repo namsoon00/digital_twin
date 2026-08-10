@@ -134,6 +134,56 @@ class AIInferenceQueueTests(unittest.TestCase):
         result_count = mysql_fetchone(self.seed, "SELECT COUNT(*) FROM ai_inference_results")
         self.assertEqual(1, int(result_count[0]))
 
+    def test_runner_loads_previous_final_decision_and_never_marks_it_initial(self):
+        job = self.create_job()
+        request = AIInferenceRequest.create(job, job.context, reasoning_effort="max")
+        self.queue.enqueue(job, request)
+
+        class DecisionMemoryStore:
+            calls = []
+
+            def latest_decision_memory(self, account_id, symbol, exclude_episode_id=""):
+                self.calls.append((account_id, symbol, exclude_episode_id))
+                return {
+                    "episodeId": "decision-episode:previous",
+                    "accountId": account_id,
+                    "symbol": symbol,
+                    "action": "HOLD",
+                    "decidedAt": "2026-08-04T00:30:00Z",
+                }
+
+        class HistoryAwareReviewer(FakeReviewer):
+            received_context = {}
+
+            def review(self, context):
+                self.received_context = dict(context)
+                response = super().review(context)
+                response.change_analysis = "이번 알림은 첫 판단이라 이전 판단과 비교할 수 없습니다."
+                return response
+
+        store = DecisionMemoryStore()
+        reviewer = HistoryAwareReviewer()
+        runner = AIInferenceQueueRunner(
+            self.queue,
+            reviewer,
+            {
+                "notificationAiQueueLeaseSeconds": "60",
+                "notificationAiQueueHeartbeatSeconds": "2",
+            },
+            decision_episode_store=store,
+            worker_id="worker-history",
+        )
+
+        self.assertEqual(1, runner.run_once(limit=1))
+
+        delivered = self.notifications.get(job.job_id)
+        self.assertEqual([("main", "005930", "")], store.calls)
+        self.assertEqual("HOLD", reviewer.received_context["previousInvestmentDecisionEpisode"]["action"])
+        self.assertEqual("unchanged", delivered.context["aiDecisionTransition"]["kind"])
+        self.assertNotIn("첫 판단", delivered.context["notificationAiValidatedResponse"]["changeAnalysis"])
+        self.assertIn("이전 AI 최종 판단과 같은", delivered.context["notificationAiValidatedResponse"]["changeAnalysis"])
+        self.assertIn('"previousFinalDecision"', delivered.context["notificationAiExecutionAudit"]["prompt"])
+
     def test_heartbeat_requires_matching_owner_and_latest_head(self):
         job = self.create_job()
         request = AIInferenceRequest.create(job, job.context)

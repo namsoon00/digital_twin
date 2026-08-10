@@ -2,7 +2,7 @@ import json
 import re
 from typing import Dict, List
 
-from .notification_ai import active_investment_opinion_value, line_value
+from .notification_ai import active_investment_opinion_value, line_value, relation_context_value
 from .notification_ai_gate_contracts import ACTION_TEXT_REPLACEMENTS, VALID_ACTIONS
 
 
@@ -286,7 +286,20 @@ def append_unique_text(rows: List[str], value: object, limit: int = 180) -> None
 def precomputed_action_value(context: Dict[str, object]) -> str:
     opinion = active_investment_opinion_value(context)
     action = str(opinion.get("action") or opinion.get("primaryAction") or "").strip().upper() if isinstance(opinion, dict) else ""
-    return action if action in VALID_ACTIONS else ""
+    if action in VALID_ACTIONS:
+        return action
+    relation_context = relation_context_value(context or {})
+    decision = relation_context.get("decision") if isinstance(relation_context.get("decision"), dict) else {}
+    envelope = relation_context.get("actionEnvelope") if isinstance(relation_context.get("actionEnvelope"), dict) else {}
+    for value in [
+        envelope.get("preferredAction"),
+        decision.get("candidateAction"),
+        decision.get("primaryAction"),
+    ]:
+        candidate = str(value or "").strip().upper()
+        if candidate in VALID_ACTIONS:
+            return candidate
+    return ""
 
 
 def recursive_values(value: object, keys: set, limit: int = 16) -> List[str]:

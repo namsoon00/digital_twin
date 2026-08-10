@@ -315,7 +315,9 @@ class OntologyRuntimeOperationsTests(unittest.TestCase):
                     "selectedIncomingScopeCount": 2,
                     "reusedActiveScopeCount": 10,
                     "deferredScopeCount": 0,
-                    "fullReconcileMinutes": 30,
+                    "scopeIntegrityAuditIntervalMinutes": 30,
+                    "scopeIntegrityAuditDue": True,
+                    "automaticFullProjectionBlocked": True,
                 },
             },
             "inferenceImpactPlan": {

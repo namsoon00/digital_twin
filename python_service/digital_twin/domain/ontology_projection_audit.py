@@ -165,9 +165,9 @@ def compact_reasoning_request_context(
         # patch after an already-outboxed raw quote, but is never a TypeDB
         # rule condition or an investment conclusion.
         "observationFollowupSymbols": sorted(observation_followups)[:80],
-        # Scheduler pressure remains operational provenance. It can decide
-        # whether a periodic full reconciliation yields to queued work, but is
-        # never exposed as a TypeDB RuleBox condition or investment fact.
+        # Scheduler pressure remains operational provenance. It controls only
+        # bounded queue dispatch and never expands a subject request into a
+        # whole-world projection or becomes an investment fact.
         "queuePressure": {
             "effectivePendingCount": non_negative_integer(queue_pressure.get("effectivePendingCount")),
             "selectedRequestCount": non_negative_integer(queue_pressure.get("selectedRequestCount")),
@@ -539,15 +539,13 @@ def projection_result_summary(result: Dict[str, object]) -> Dict[str, object]:
             "selectedIncomingScopeCount": int(target_patch.get("selectedIncomingScopeCount") or 0),
             "reusedActiveScopeCount": int(target_patch.get("reusedActiveScopeCount") or 0),
             "deferredScopeCount": int(target_patch.get("deferredScopeCount") or 0),
-            "fullReconcileMinutes": float(target_patch.get("fullReconcileMinutes") or 0),
-            "fullReconcileDeferred": bool(target_patch.get("fullReconcileDeferred")),
-            "fullReconcileOverdue": bool(target_patch.get("fullReconcileOverdue")),
-            "fullReconcileMaintenanceRequired": bool(
-                target_patch.get("fullReconcileMaintenanceRequired")
+            "scopeIntegrityAuditIntervalMinutes": float(
+                target_patch.get("scopeIntegrityAuditIntervalMinutes") or 0
             ),
-            "fullReconcileDeferralReason": str(
-                target_patch.get("fullReconcileDeferralReason") or ""
-            )[:160],
+            "scopeIntegrityAuditDue": bool(target_patch.get("scopeIntegrityAuditDue")),
+            "automaticFullProjectionBlocked": bool(
+                target_patch.get("automaticFullProjectionBlocked")
+            ),
             "factSlotFamiliesBySymbol": {
                 str(symbol or "").upper().strip(): sorted({
                     str(value or "").strip()

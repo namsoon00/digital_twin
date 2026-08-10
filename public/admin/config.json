@@ -1889,24 +1889,23 @@
           "unit": "seconds"
         },
         {
-          "key": "ontologyScopedFullReconcileMinutes",
-          "label": "전체 범위 재조정 주기",
+          "key": "ontologyScopeIntegrityAuditEnabled",
+          "label": "스코프 무결성 읽기 점검",
+          "type": "toggle",
+          "default": "1"
+        },
+        {
+          "key": "ontologyScopeIntegrityAuditIntervalMinutes",
+          "label": "스코프 무결성 점검 주기",
           "type": "number",
           "default": "30",
           "unit": "minutes"
         },
         {
-          "key": "ontologyScopedFullReconcileDeferWhenQueueActive",
-          "label": "대기열 중 전체 재조정 유예",
-          "type": "toggle",
-          "default": "1"
-        },
-        {
-          "key": "ontologyScopedFullReconcileMaxDeferralMinutes",
-          "label": "전체 재조정 최대 유예",
+          "key": "ontologyScopeIntegrityAuditBatchSize",
+          "label": "점검당 스코프 수",
           "type": "number",
-          "default": "60",
-          "unit": "minutes"
+          "default": "20"
         },
         {
           "key": "ontologyReasoningMaintenanceEnabled",

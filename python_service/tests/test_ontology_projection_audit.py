@@ -1010,7 +1010,9 @@ class OntologyProjectionAuditTests(unittest.TestCase):
                     "selectedIncomingScopeCount": 0,
                     "reusedActiveScopeCount": 0,
                     "deferredScopeCount": 3,
-                    "fullReconcileMinutes": 30,
+                    "scopeIntegrityAuditIntervalMinutes": 30,
+                    "scopeIntegrityAuditDue": True,
+                    "automaticFullProjectionBlocked": True,
                 },
             },
         }, completed_at="2026-07-20T00:01:10Z")

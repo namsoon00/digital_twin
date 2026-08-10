@@ -28,6 +28,7 @@ from ..domain.ontology_projection_fingerprint import (
 from ..domain.ontology_scopes import (
     SCOPED_ABOX_MANIFEST_VERSION,
     SCOPED_ABOX_PERSISTENCE_MODE,
+    SCOPED_ABOX_SCOPE_TOPOLOGY_VERSION,
     apply_scoped_manifest_plan,
     apply_scoped_abox_identity,
     merge_target_scoped_abox_manifest,
@@ -908,8 +909,9 @@ class PortfolioOntologyProjectionRecorder:
             runtime_stages.update(dict(projection_graph.get("runtimeStages") or {}))
             if str(graph_assembly.get("inputMode") or "") == "target-scoped":
                 # A target-scoped graph is an incremental patch by contract.
-                # Missing scopes therefore mean "reuse the active generation";
-                # only the scheduled full reconciliation may prove deletion.
+                # Missing scopes therefore mean "reuse the active generation".
+                # Deletion requires an explicit scoped source fact or operator
+                # rebuild; no timer may expand this request to the whole world.
                 # This avoids turning one-symbol mailbox work into a complete
                 # manifest rewrite while preserving explicit deletion checks
                 # on the full projection path.
@@ -1100,7 +1102,7 @@ class PortfolioOntologyProjectionRecorder:
                     # The source graph can contain newer observations for
                     # deferred symbols. The persisted identity must describe
                     # the merged active manifest, not facts intentionally held
-                    # for their own target cycle or the periodic reconciliation.
+                    # for their own target cycle.
                     incoming_planner_topology = dict(planner_topology or {})
                     topology_merge = merge_native_rule_planner_topology(
                         active_abox.get("nativeRulePlannerTopology"),
@@ -1203,96 +1205,66 @@ class PortfolioOntologyProjectionRecorder:
                             (applied_target_patch.get("factSlot") or {}).get("fallbackReason") or ""
                         ),
                         "scopeSelectionTrace": scope_selection_trace,
-                        "fullReconcileMinutes": self.scoped_full_reconcile_minutes(),
-                        "fullReconcileDeferred": bool(
-                            target_scoped_patch.get("fullReconcileDeferred")
+                        "scopeIntegrityAuditIntervalMinutes": self.scope_integrity_audit_interval_minutes(),
+                        "scopeIntegrityAuditDue": bool(
+                            target_scoped_patch.get("scopeIntegrityAuditDue")
                         ),
-                        "fullReconcileOverdue": bool(
-                            target_scoped_patch.get("fullReconcileOverdue")
-                        ),
-                        "fullReconcileMaintenanceRequired": bool(
-                            target_scoped_patch.get("fullReconcileMaintenanceRequired")
-                        ),
-                        "fullReconcileDeferralReason": str(
-                            target_scoped_patch.get("fullReconcileDeferralReason") or ""
-                        ),
+                        "automaticFullProjectionBlocked": True,
                     }
                     persistence_graph.worldview["targetScopedManifestPatch"] = dict(target_scoped_patch)
                 elif str(graph_input.get("mode") or "") == "target-scoped":
-                    # The target-only graph was valid locally but could not
-                    # retain every required active link or scope. Rebuild the
-                    # complete graph for this one cycle instead of persisting
-                    # a partial manifest.
-                    emit_progress(
-                        "full_input_fallback.start",
-                        reason=str(
-                            applied_target_patch.get("fallbackReason")
-                            or applied_target_patch.get("status")
-                            or "target-scoped-manifest-patch-not-applied"
-                        ),
-                    )
-                    full_input_fallback_started = time.perf_counter()
-                    target_attempt_stages = dict(projection_graph.get("runtimeStages") or {})
-                    full_projection_graph = self.build_projection_graph(
-                        snapshot,
-                        rulebox_bootstrap,
-                        portfolio_world_context,
-                        market_world_context=market_world_context,
-                        target_symbols=target_symbols,
-                        target_scoped_input=False,
-                    )
-                    graph = full_projection_graph["graph"]
-                    persistence_graph = full_projection_graph["persistenceGraph"]
-                    graph_assembly = full_projection_graph["assembly"]
-                    planner_topology = full_projection_graph["plannerTopology"]
-                    material_fingerprint = full_projection_graph["materialFingerprint"]
-                    material_snapshot_id = full_projection_graph["materialSnapshotId"]
-                    scoped_identity = full_projection_graph["scopedIdentity"]
-                    full_runtime_stages = dict(full_projection_graph.get("runtimeStages") or {})
-                    for stage, value in full_runtime_stages.items():
-                        if stage == "graphBuildMs":
-                            continue
-                        runtime_stages["fullInput" + stage[:1].upper() + stage[1:]] = value
-                    runtime_stages["targetScopedInputUsed"] = 1
-                    runtime_stages["targetScopedInputAttemptGraphBuildMs"] = int(
-                        target_attempt_stages.get("graphBuildMs") or 0
-                    )
-                    runtime_stages["targetScopedInputFallbackGraphBuildMs"] = int(
-                        full_runtime_stages.get("graphBuildMs") or 0
-                    )
-                    runtime_stages["targetScopedInputFallback"] = 1
-                    runtime_stages["graphBuildMs"] = (
-                        runtime_stages["targetScopedInputAttemptGraphBuildMs"]
-                        + runtime_stages["targetScopedInputFallbackGraphBuildMs"]
-                    )
-                    runtime_stages["targetScopedInputFallbackTotalMs"] = int(
-                        (time.perf_counter() - full_input_fallback_started) * 1000
-                    )
-                    emit_progress(
-                        "full_input_fallback.done",
-                        runtimeMs=runtime_stages["targetScopedInputFallbackTotalMs"],
-                    )
-                    graph_input.update({
-                        "mode": "full",
-                        "targetSymbols": list(graph_assembly.get("targetSymbols") or []),
-                        "sourcePositionCount": int(graph_assembly.get("sourcePositionCount") or 0),
-                        "referencePositionCount": int(graph_assembly.get("referencePositionCount") or 0),
-                        "fallback": True,
-                        "fallbackReason": str(
-                            applied_target_patch.get("fallbackReason")
-                            or applied_target_patch.get("status")
-                            or "target-scoped-manifest-patch-not-applied"
-                        ),
-                    })
-                    target_scoped_patch = {
-                        "status": "full-input-fallback",
-                        "mode": "full-manifest-fallback",
-                        "targetSymbols": list(
-                            target_scoped_patch.get("targetSymbols") or []
-                        ),
-                        "fallbackReason": graph_input["fallbackReason"],
-                        "fullReconcileMinutes": self.scoped_full_reconcile_minutes(),
+                    # A local event must never become a whole-world write merely
+                    # because its incremental merge needs repair. Preserve the
+                    # active Manifest and surface the exact scope failure. An
+                    # operator can run the explicit rebuild path for a topology
+                    # migration; normal workers remain bounded by subject.
+                    result = {
+                        "saved": False,
+                        "status": "target-scope-repair-required",
+                        "reason": "Target-scoped Manifest patch could not be applied safely.",
+                        "graphStore": self.active_graph_store_key(),
+                        "preservedActiveGeneration": True,
+                        "recommendedRetryAfterSeconds": 60,
+                        "graphInput": graph_input,
+                        "targetScopedManifestPatch": {
+                            "status": str(applied_target_patch.get("status") or "repair-required"),
+                            "mode": "target-scope-repair-required",
+                            "targetSymbols": list(target_scoped_patch.get("targetSymbols") or []),
+                            "incomingScopeCount": int(
+                                applied_target_patch.get("incomingScopeCount") or 0
+                            ),
+                            "activeScopeCount": int(
+                                applied_target_patch.get("activeScopeCount") or 0
+                            ),
+                            "missingEndpointScopeIds": list(
+                                applied_target_patch.get("missingEndpointScopeIds") or []
+                            )[:50],
+                            "removedRelevantScopeIds": list(
+                                applied_target_patch.get("removedRelevantScopeIds") or []
+                            )[:50],
+                            "sharedRemovedScopeIds": list(
+                                applied_target_patch.get("sharedRemovedScopeIds") or []
+                            )[:50],
+                            "retiredScopeIds": list(
+                                applied_target_patch.get("retiredScopeIds") or []
+                            )[:50],
+                            "retainedDependencyScopeIds": list(
+                                applied_target_patch.get("retainedDependencyScopeIds") or []
+                            )[:50],
+                            "selectedDependencyScopeIds": list(
+                                applied_target_patch.get("selectedDependencyScopeIds") or []
+                            )[:50],
+                            "factSlot": dict(applied_target_patch.get("factSlot") or {}),
+                            "fallbackReason": str(
+                                applied_target_patch.get("fallbackReason")
+                                or applied_target_patch.get("status")
+                                or "target-scoped-manifest-patch-not-applied"
+                            ),
+                            "automaticFullProjectionBlocked": True,
+                        },
                     }
+                    self.store_projection_result(snapshot, result, projection_run)
+                    return result
                 else:
                     target_scoped_patch = {
                         "status": str(applied_target_patch.get("status") or "skipped"),
@@ -5193,41 +5165,21 @@ class PortfolioOntologyProjectionRecorder:
         except (TypeError, ValueError):
             return 0
 
-    def scoped_full_reconcile_minutes(self) -> float:
-        """Bound deferred-symbol freshness during target-scoped projection."""
+    def scope_integrity_audit_interval_minutes(self) -> float:
+        """Return the read-only Manifest integrity audit cadence."""
         try:
-            value = float(str(self.settings.get("ontologyScopedFullReconcileMinutes") or "30"))
+            value = float(str(
+                self.settings.get("ontologyScopeIntegrityAuditIntervalMinutes") or "30"
+            ))
         except (TypeError, ValueError):
             value = 30.0
         return max(5.0, min(24.0 * 60.0, value))
 
-    def scoped_full_reconcile_due(self, active_metadata: Dict[str, object]) -> bool:
-        """Require a periodic whole-world pass instead of hiding deferred facts."""
-        age_minutes = self.scoped_full_reconcile_age_minutes(active_metadata)
-        return age_minutes is None or age_minutes >= self.scoped_full_reconcile_minutes()
-
-    def scoped_full_reconcile_overdue(self, active_metadata: Dict[str, object]) -> bool:
-        """Whether a deferred whole-world pass needs maintenance attention.
-
-        This flag must not make the realtime worker expand a bounded target
-        request back into the full portfolio. That expansion makes a busy
-        mailbox permanently slower than its execution timeout. The next quiet
-        cycle still performs the full reconciliation; while work remains in
-        the mailbox we retain current untouched scopes and expose the overdue
-        state for operations.
-        """
-        age_minutes = self.scoped_full_reconcile_age_minutes(active_metadata)
-        if age_minutes is None:
-            return False
-        return age_minutes > (
-            self.scoped_full_reconcile_minutes()
-            + self.scoped_full_reconcile_max_deferral_minutes()
-        )
-
-    def scoped_full_reconcile_age_minutes(self, active_metadata: Dict[str, object]):
-        """Return active full-scope age, or ``None`` when no baseline exists."""
+    def scope_integrity_audit_age_minutes(self, active_metadata: Dict[str, object]):
+        """Return the last read-only audit age without changing projection scope."""
         stamp = str(
-            (active_metadata or {}).get("lastFullScopeReconcileAt")
+            (active_metadata or {}).get("lastScopeIntegrityAuditAt")
+            or (active_metadata or {}).get("lastFullScopeReconcileAt")
             or (active_metadata or {}).get("asOf")
             or ""
         ).strip()
@@ -5241,21 +5193,6 @@ class PortfolioOntologyProjectionRecorder:
             return None
         age_minutes = (datetime.now(timezone.utc) - parsed.astimezone(timezone.utc)).total_seconds() / 60.0
         return max(0.0, age_minutes)
-
-    def scoped_full_reconcile_defer_when_queue_active(self) -> bool:
-        value = str(
-            self.settings.get("ontologyScopedFullReconcileDeferWhenQueueActive") or "1"
-        ).strip().lower()
-        return value not in {"0", "false", "no", "off", "disabled"}
-
-    def scoped_full_reconcile_max_deferral_minutes(self) -> float:
-        try:
-            value = float(str(
-                self.settings.get("ontologyScopedFullReconcileMaxDeferralMinutes") or "60"
-            ))
-        except (TypeError, ValueError):
-            value = 60.0
-        return max(5.0, min(24.0 * 60.0, value))
 
     @staticmethod
     def reasoning_queue_pressure(reasoning_context: Dict[str, object] = None) -> Dict[str, object]:
@@ -5283,26 +5220,6 @@ class PortfolioOntologyProjectionRecorder:
             ),
         }
 
-    def defer_scoped_full_reconcile(
-        self,
-        active_metadata: Dict[str, object],
-        reasoning_context: Dict[str, object] = None,
-    ) -> bool:
-        """Yield a periodic whole-world pass while target work is queued.
-
-        The first full projection must never be skipped because it establishes
-        the Manifest baseline. After that, an overdue reconciliation is an
-        operational maintenance concern, not a reason to turn every queued
-        symbol update into a whole-portfolio TypeDB write. The quiet cycle
-        after the mailbox drains runs the complete reconciliation.
-        """
-        if not self.scoped_full_reconcile_defer_when_queue_active():
-            return False
-        age_minutes = self.scoped_full_reconcile_age_minutes(active_metadata)
-        if age_minutes is None:
-            return False
-        return bool(self.reasoning_queue_pressure(reasoning_context).get("hasDeferredWork"))
-
     def target_scoped_patch_targets(
         self,
         snapshot: AccountSnapshot,
@@ -5316,7 +5233,7 @@ class PortfolioOntologyProjectionRecorder:
         TypeDB still receives the full active world through the manifest. This
         only prevents a one-symbol observation from rewriting unchanged
         symbols. A global request without an explicit subject, a first
-        projection, or a quiet periodic reconciliation keeps the full path.
+        projection keeps the full path. A timer never expands a local event.
         """
         preliminary = self.inference_impact_plan(
             snapshot,
@@ -5340,20 +5257,29 @@ class PortfolioOntologyProjectionRecorder:
         # argument is empty. This branch needs the literal scheduler request
         # to distinguish a chosen subject from a whole-world cycle.
         explicit = self.inference_symbols(snapshot, requested_symbols) if requested_symbols else []
-        full_reconcile_age_minutes = self.scoped_full_reconcile_age_minutes(active_metadata)
-        full_reconcile_overdue = self.scoped_full_reconcile_overdue(active_metadata)
+        integrity_age_minutes = self.scope_integrity_audit_age_minutes(active_metadata)
+        integrity_due = (
+            integrity_age_minutes is None
+            or integrity_age_minutes >= self.scope_integrity_audit_interval_minutes()
+        )
+        active_manifest_ready = bool(
+            str((active_metadata or {}).get("status") or "").lower() == "ok"
+            and (active_metadata or {}).get("scopePlan")
+            and (active_metadata or {}).get("scopeGenerationIds")
+            and str((active_metadata or {}).get("scopedAboxManifestVersion") or "")
+            == SCOPED_ABOX_MANIFEST_VERSION
+            and str((active_metadata or {}).get("scopeTopologyVersion") or "")
+            == SCOPED_ABOX_SCOPE_TOPOLOGY_VERSION
+        )
         base = {
             "preliminaryImpactPlan": compact_inference_impact_plan(preliminary),
             "targetSymbols": list(inferred),
             "explicitTargetSymbols": list(explicit),
             "availableSymbolCount": len(available),
-            "fullReconcileMinutes": self.scoped_full_reconcile_minutes(),
-            "fullReconcileMaxDeferralMinutes": self.scoped_full_reconcile_max_deferral_minutes(),
-            "fullReconcileAgeMinutes": full_reconcile_age_minutes,
-            "fullReconcileOverdue": full_reconcile_overdue,
-            "fullReconcileDeferred": False,
-            "fullReconcileMaintenanceRequired": False,
-            "fullReconcileDeferralReason": "",
+            "scopeIntegrityAuditIntervalMinutes": self.scope_integrity_audit_interval_minutes(),
+            "scopeIntegrityAuditAgeMinutes": integrity_age_minutes,
+            "scopeIntegrityAuditDue": integrity_due,
+            "automaticFullProjectionBlocked": active_manifest_ready,
             "queuePressure": self.reasoning_queue_pressure(reasoning_context),
             "fallbackReason": "",
             "factSlotPlan": build_fact_slot_projection_plan(
@@ -5370,9 +5296,11 @@ class PortfolioOntologyProjectionRecorder:
         # A reasoning worker can intentionally schedule one subject even when
         # a shared macro or portfolio fact also changed. Persist that subject
         # and the shared scopes now; the untouched subjects retain their last
-        # coherent context until their own queued turn or the periodic full
-        # reconciliation. Without an explicit worker target, preserve the
-        # conservative whole-portfolio path for a global change.
+        # coherent context until their own queued turn or an explicit source
+        # update. Without an explicit worker target, preserve the
+        # conservative whole-portfolio path only for an explicitly global
+        # change. Integrity checks are owned by the maintenance worker and
+        # never promote a local event to this path.
         if preliminary.get("impactScope") == "MARKET_CONTEXT" and not explicit and not inferred:
             return {
                 **base,
@@ -5380,17 +5308,12 @@ class PortfolioOntologyProjectionRecorder:
                 "eligible": True,
                 "fallbackReason": "no-related-subject-for-market-context-revision",
             }
-        full_reconcile_due = self.scoped_full_reconcile_due(active_metadata)
-        full_reconcile_deferred = (
-            full_reconcile_due
-            and self.defer_scoped_full_reconcile(active_metadata, reasoning_context)
-        )
-        if full_reconcile_due and not full_reconcile_deferred:
+        if not active_manifest_ready:
             return {
                 **base,
-                "status": "full-reconciliation-due",
+                "status": "initial-scoped-manifest-bootstrap",
                 "eligible": False,
-                "fallbackReason": "periodic-full-scope-reconciliation-due",
+                "fallbackReason": "active-scoped-manifest-unavailable",
             }
         if not inferred:
             return {
@@ -5409,10 +5332,8 @@ class PortfolioOntologyProjectionRecorder:
         return {
             **base,
             "status": (
-                "target-scoped-full-reconciliation-overdue"
-                if full_reconcile_deferred and full_reconcile_overdue
-                else "target-scoped-full-reconciliation-deferred"
-                if full_reconcile_deferred
+                "target-scoped-integrity-audit-due"
+                if integrity_due
                 else
                 "target-scoped-explicit-global-context"
                 if preliminary.get("globalImpact")
@@ -5421,20 +5342,7 @@ class PortfolioOntologyProjectionRecorder:
                 else "target-scoped"
             ),
             "eligible": True,
-            "fullReconcileDeferred": full_reconcile_deferred,
-            "fullReconcileMaintenanceRequired": (
-                full_reconcile_deferred and full_reconcile_overdue
-            ),
-            "fullReconcileDeferralReason": (
-                "queued-target-work-retains-active-scopes"
-                if full_reconcile_deferred
-                else ""
-            ),
-            "fallbackReason": (
-                "periodic-full-scope-reconciliation-deferred-for-active-queue"
-                if full_reconcile_deferred
-                else ""
-            ),
+            "fallbackReason": "",
         }
 
     def inference_impact_plan(

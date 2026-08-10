@@ -70,7 +70,61 @@ class ManifestInventoryRepository(FakeOntologyRepository):
         return dict(self.inventories[world_id])
 
 
+class IntegrityAuditRepository(FakeOntologyRepository):
+    def __init__(self):
+        super().__init__()
+        self.audit_calls = []
+
+    def scoped_abox_integrity_audit(self, world_id="", cursor=0, limit=20):
+        self.audit_calls.append({"worldId": world_id, "cursor": cursor, "limit": limit})
+        return {
+            "status": "repair-required",
+            "worldId": world_id,
+            "activeScopeCount": 44,
+            "checkedScopeCount": 7,
+            "mismatchCount": 1,
+            "mismatches": [{
+                "scopeId": "symbol:005930:flow",
+                "symbol": "005930",
+                "scopeFamily": "flow",
+            }],
+            "nextCursor": 7,
+            "cycleCompleted": False,
+            "readOnly": True,
+            "automaticFullProjectionUsed": False,
+        }
+
+
 class OntologyMaintenanceRunnerTests(unittest.TestCase):
+    def test_maintenance_rotates_read_only_scope_integrity_audit_without_full_projection(self):
+        repository = IntegrityAuditRepository()
+        store = FakeStateStore()
+        runner = OntologyMaintenanceRunner(
+            repository,
+            state_store=store,
+            settings={
+                "ontologyAboxMaintenanceWorldTypes": "portfolio",
+                "ontologyScopeIntegrityAuditIntervalMinutes": "30",
+                "ontologyScopeIntegrityAuditBatchSize": "7",
+            },
+        )
+
+        result = runner.run_once()
+
+        audit = result["maintenance"]["scopeIntegrityAudit"]
+        self.assertEqual("repair-required", audit["status"])
+        self.assertEqual(1, audit["mismatchCount"])
+        self.assertEqual(7, audit["checkedScopeCount"])
+        self.assertTrue(audit["readOnly"])
+        self.assertFalse(audit["automaticFullProjectionUsed"])
+        self.assertEqual([{
+            "worldId": "portfolio:local:main",
+            "cursor": 0,
+            "limit": 7,
+        }], repository.audit_calls)
+        stored = store.payload["scopeIntegrityAuditByWorld"]["portfolio:local:main"]
+        self.assertEqual(7, stored["nextCursor"])
+
     def test_round_robin_uses_bounded_policy_and_persists_cursor(self):
         repository = FakeOntologyRepository()
         store = FakeStateStore()

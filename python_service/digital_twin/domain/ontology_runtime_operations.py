@@ -1497,7 +1497,13 @@ def build_projection_runtime_observation(
                     ).items()
                     if _text(symbol)
                 },
-                "fullReconcileMinutes": _number(target_patch.get("fullReconcileMinutes")),
+                "scopeIntegrityAuditIntervalMinutes": _number(
+                    target_patch.get("scopeIntegrityAuditIntervalMinutes")
+                ),
+                "scopeIntegrityAuditDue": bool(target_patch.get("scopeIntegrityAuditDue")),
+                "automaticFullProjectionBlocked": bool(
+                    target_patch.get("automaticFullProjectionBlocked")
+                ),
                 "scopeSelectionTrace": {
                     "version": _text(scope_selection_trace.get("version")),
                     "selected": [

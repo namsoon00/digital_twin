@@ -1825,6 +1825,57 @@ class TypeDBOntologyRepositoryTests(unittest.TestCase):
         self.assertEqual(2, result["inactiveManifestCount"])
         row_counts.assert_not_called()
 
+    def test_scoped_manifest_integrity_audit_reports_only_mismatched_slice(self):
+        repository = TypeDBOntologyGraphRepository("127.0.0.1:1729")
+        scope_plan = [
+            {
+                "scopeId": "symbol:005930:market",
+                "scopeFamily": "market",
+                "generationId": "scope:market",
+                "entityCount": 2,
+                "relationCount": 1,
+            },
+            {
+                "scopeId": "symbol:005930:flow",
+                "scopeFamily": "flow",
+                "generationId": "scope:flow",
+                "entityCount": 3,
+                "relationCount": 2,
+            },
+        ]
+        with patch.object(repository, "active_abox_metadata", return_value={
+            "status": "ok",
+            "scopedAboxManifestVersion": SCOPED_ABOX_MANIFEST_VERSION,
+            "worldviewManifestId": "abox-manifest:active",
+            "worldId": "portfolio:local:main",
+            "worldType": "portfolio",
+            "accountId": "main",
+            "scopePlan": scope_plan,
+        }), patch.object(repository, "scoped_abox_scope_row_counts_batch", return_value={
+            "symbol:005930:flow": {"entityCount": 3, "relationCount": 1},
+            "symbol:005930:market": {"entityCount": 2, "relationCount": 1},
+        }) as counts:
+            result = repository.scoped_abox_integrity_audit(
+                "portfolio:local:main",
+                cursor=0,
+                limit=20,
+            )
+
+        self.assertEqual("repair-required", result["status"])
+        self.assertEqual(2, result["checkedScopeCount"])
+        self.assertEqual(1, result["mismatchCount"])
+        self.assertEqual("symbol:005930:flow", result["mismatches"][0]["scopeId"])
+        self.assertEqual("005930", result["mismatches"][0]["symbol"])
+        self.assertTrue(result["readOnly"])
+        self.assertFalse(result["automaticFullProjectionUsed"])
+        counts.assert_called_once()
+        audited_plan = counts.call_args.args[0]
+        self.assertEqual(
+            {"symbol:005930:flow", "symbol:005930:market"},
+            {item["scopeId"] for item in audited_plan},
+        )
+        self.assertEqual("portfolio:local:main", counts.call_args.kwargs["world_id"])
+
     def test_scoped_manifest_retention_stops_at_delete_batch_budget(self):
         repository = TypeDBOntologyGraphRepository("127.0.0.1:1729")
         metadata = {
@@ -7604,7 +7655,7 @@ class TypeDBOntologyRepositoryTests(unittest.TestCase):
         self.assertTrue(result["resumedPendingAboxActivation"])
         self.assertEqual(["prepare", "run-rulebox", "readback", "finalize"], repository.calls)
 
-    def test_target_scoped_patch_defers_overdue_full_reconciliation_only_with_backlog(self):
+    def test_target_scoped_patch_never_expands_to_full_projection_when_audit_is_due(self):
         graph = PortfolioOntology(
             "main",
             entities=[
@@ -7621,8 +7672,7 @@ class TypeDBOntologyRepositoryTests(unittest.TestCase):
             SimpleNamespace(store_key="typedb"),
             settings={
                 "typedbNativeRuleTargetSymbolLimit": "1",
-                "ontologyScopedFullReconcileMinutes": "30",
-                "ontologyScopedFullReconcileMaxDeferralMinutes": "60",
+                "ontologyScopeIntegrityAuditIntervalMinutes": "30",
             },
         )
         active = {
@@ -7637,7 +7687,7 @@ class TypeDBOntologyRepositoryTests(unittest.TestCase):
             "scopeFingerprints": dict(first["scopeFingerprints"]),
         }
 
-        deferred = recorder.target_scoped_patch_targets(
+        queued = recorder.target_scoped_patch_targets(
             snapshot,
             active,
             first,
@@ -7648,19 +7698,21 @@ class TypeDBOntologyRepositoryTests(unittest.TestCase):
                 "hasDeferredWork": True,
             }},
         )
-        regular = recorder.target_scoped_patch_targets(snapshot, active, first, ["005930"])
+        quiet = recorder.target_scoped_patch_targets(snapshot, active, first, ["005930"])
 
-        self.assertTrue(deferred["eligible"])
-        self.assertTrue(deferred["fullReconcileDeferred"])
-        self.assertEqual("target-scoped-full-reconciliation-deferred", deferred["status"])
-        self.assertFalse(regular["eligible"])
-        self.assertEqual("full-reconciliation-due", regular["status"])
+        self.assertTrue(queued["eligible"])
+        self.assertTrue(quiet["eligible"])
+        self.assertTrue(queued["scopeIntegrityAuditDue"])
+        self.assertTrue(quiet["scopeIntegrityAuditDue"])
+        self.assertTrue(queued["automaticFullProjectionBlocked"])
+        self.assertEqual("target-scoped-integrity-audit-due", queued["status"])
+        self.assertEqual("target-scoped-integrity-audit-due", quiet["status"])
 
         overdue_active = dict(active)
         overdue_active["lastFullScopeReconcileAt"] = (
             datetime.now(timezone.utc) - timedelta(minutes=95)
         ).isoformat().replace("+00:00", "Z")
-        overdue = recorder.target_scoped_patch_targets(
+        much_later = recorder.target_scoped_patch_targets(
             snapshot,
             overdue_active,
             first,
@@ -7672,11 +7724,14 @@ class TypeDBOntologyRepositoryTests(unittest.TestCase):
             }},
         )
 
-        self.assertTrue(overdue["eligible"])
-        self.assertTrue(overdue["fullReconcileDeferred"])
-        self.assertTrue(overdue["fullReconcileOverdue"])
-        self.assertTrue(overdue["fullReconcileMaintenanceRequired"])
-        self.assertEqual("target-scoped-full-reconciliation-overdue", overdue["status"])
+        self.assertTrue(much_later["eligible"])
+        self.assertTrue(much_later["scopeIntegrityAuditDue"])
+        self.assertTrue(much_later["automaticFullProjectionBlocked"])
+        self.assertEqual("target-scoped-integrity-audit-due", much_later["status"])
+
+        bootstrap = recorder.target_scoped_patch_targets(snapshot, {}, first, ["005930"])
+        self.assertFalse(bootstrap["eligible"])
+        self.assertEqual("initial-scoped-manifest-bootstrap", bootstrap["status"])
 
     def test_projection_recorder_restores_prior_generation_while_functions_provision(self):
         class FakeRepository:

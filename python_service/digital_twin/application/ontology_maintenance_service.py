@@ -37,7 +37,7 @@ class OntologyMaintenanceRunner:
     state in MySQL so restarts continue the round-robin world order.
     """
 
-    state_contract = "ontology-maintenance-state-v5"
+    state_contract = "ontology-maintenance-state-v6"
 
     def __init__(
         self,
@@ -114,6 +114,95 @@ class OntologyMaintenanceRunner:
             self.settings.get("ontologyAboxMaintenanceBusyRetrySeconds"),
             10,
         )))
+
+    def scope_integrity_audit_enabled(self) -> bool:
+        value = text(self.settings.get("ontologyScopeIntegrityAuditEnabled") or "1").lower()
+        return value not in DISABLED_VALUES
+
+    def scope_integrity_audit_interval_seconds(self) -> int:
+        return max(5 * 60, min(24 * 60 * 60, integer(
+            self.settings.get("ontologyScopeIntegrityAuditIntervalMinutes"),
+            30,
+        ) * 60))
+
+    def scope_integrity_audit_batch_size(self) -> int:
+        return max(1, min(200, integer(
+            self.settings.get("ontologyScopeIntegrityAuditBatchSize"),
+            20,
+        )))
+
+    @staticmethod
+    def scope_integrity_audit_state(state: Dict[str, object]) -> Dict[str, Dict[str, object]]:
+        raw = state.get("scopeIntegrityAuditByWorld") if isinstance(state, dict) else {}
+        if not isinstance(raw, dict):
+            return {}
+        return {
+            text(world_id): dict(value or {})
+            for world_id, value in raw.items()
+            if text(world_id) and isinstance(value, dict)
+        }
+
+    def scope_integrity_audit_due(self, audit_state: Dict[str, object]) -> bool:
+        stamp = text((audit_state or {}).get("lastCheckedAt"))
+        if not stamp:
+            return True
+        try:
+            parsed = datetime.fromisoformat(stamp.replace("Z", "+00:00"))
+            if parsed.tzinfo is None:
+                parsed = parsed.replace(tzinfo=timezone.utc)
+        except ValueError:
+            return True
+        age = (datetime.now(timezone.utc) - parsed.astimezone(timezone.utc)).total_seconds()
+        return age >= self.scope_integrity_audit_interval_seconds()
+
+    def run_scope_integrity_audit(
+        self,
+        world_id: str,
+        state: Dict[str, object],
+    ) -> tuple[Dict[str, object], Dict[str, Dict[str, object]]]:
+        audits = self.scope_integrity_audit_state(state)
+        previous = dict(audits.get(world_id) or {})
+        if not self.scope_integrity_audit_enabled():
+            return {"status": "disabled", "readOnly": True}, audits
+        if not self.scope_integrity_audit_due(previous):
+            return {
+                "status": "not-due",
+                "readOnly": True,
+                "lastCheckedAt": text(previous.get("lastCheckedAt")),
+                "nextCursor": max(0, integer(previous.get("nextCursor"))),
+                "lastStatus": text(previous.get("status")),
+            }, audits
+        reader = getattr(self.ontology_repository, "scoped_abox_integrity_audit", None)
+        if not callable(reader):
+            return {"status": "unsupported", "readOnly": True}, audits
+        checked_at = utc_now_iso()
+        try:
+            result = dict(reader(
+                world_id=world_id,
+                cursor=max(0, integer(previous.get("nextCursor"))),
+                limit=self.scope_integrity_audit_batch_size(),
+            ) or {})
+        except Exception as error:  # noqa: BLE001 - retention remains independent from audit reads.
+            result = {"status": "error", "reason": str(error)[:220], "readOnly": True}
+        compact = {
+            "status": text(result.get("status") or "unknown"),
+            "lastCheckedAt": checked_at,
+            "nextCursor": max(0, integer(result.get("nextCursor"))),
+            "activeScopeCount": max(0, integer(result.get("activeScopeCount"))),
+            "checkedScopeCount": max(0, integer(result.get("checkedScopeCount"))),
+            "mismatchCount": max(0, integer(result.get("mismatchCount"))),
+            "mismatches": [
+                dict(item)
+                for item in (result.get("mismatches") or [])[:50]
+                if isinstance(item, dict)
+            ],
+            "cycleCompleted": bool(result.get("cycleCompleted")),
+            "readOnly": True,
+            "automaticFullProjectionUsed": False,
+            "reason": text(result.get("reason"))[:220],
+        }
+        audits[world_id] = compact
+        return {**result, "lastCheckedAt": checked_at}, audits
 
     def maintenance_yield_status(self, state: Dict[str, object] = None) -> Dict[str, object]:
         return scoped_abox_maintenance_yield_status(
@@ -781,6 +870,12 @@ class OntologyMaintenanceRunner:
             "lastResult": dict(last_result),
             "nextWorldId": text(state.get("nextWorldId")),
             "backlogByWorld": self.backlog_by_world(state),
+            "scopeIntegrityAudit": {
+                "enabled": self.scope_integrity_audit_enabled(),
+                "intervalSeconds": self.scope_integrity_audit_interval_seconds(),
+                "batchSize": self.scope_integrity_audit_batch_size(),
+                "byWorld": self.scope_integrity_audit_state(state),
+            },
         }
 
     def run_once(self) -> Dict[str, object]:
@@ -853,6 +948,11 @@ class OntologyMaintenanceRunner:
             )
         world_id = text(selected.get("worldId"))
         selected_inventory = dict(manifest_inventories.get(world_id) or {})
+        integrity_audit, integrity_audits = self.run_scope_integrity_audit(
+            world_id,
+            selection_state,
+        )
+        selection_state["scopeIntegrityAuditByWorld"] = integrity_audits
         adaptive_drain = self.adaptive_drain(policy, selection_state, world_id)
         capacity_budget = self.capacity_maintenance_budget(policy, adaptive_drain, capacity)
         coordinator_lease = self.acquire_projection_coordinator_lease(world_id)
@@ -869,6 +969,7 @@ class OntologyMaintenanceRunner:
                 "retryAfterSeconds": int(coordinator_lease.get("recommendedRetryAfterSeconds") or 10),
                 "projectionCoordinator": self.projection_coordinator_summary(coordinator_lease),
                 "manifestInventory": selected_inventory,
+                "scopeIntegrityAudit": integrity_audit,
                 "worldSelection": world_selection,
             }
             self.save_state({
@@ -980,6 +1081,7 @@ class OntologyMaintenanceRunner:
             "capacityGuard": capacity,
             "capacityBudget": run_budget,
             "manifestInventory": selected_inventory,
+            "scopeIntegrityAudit": integrity_audit,
             "worldSelection": world_selection,
             "reason": text(abox.get("reason") or result.get("reason"))[:220],
         }

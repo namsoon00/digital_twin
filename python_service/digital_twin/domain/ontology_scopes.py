@@ -1795,7 +1795,7 @@ def select_target_scoped_manifest_patch(
 
     # A target-scoped quote follow-up is a partial current-state input. Its
     # absent scope rows have no deletion meaning; they merely remain on the
-    # active verified manifest until a full reconciliation proves removal.
+    # active verified manifest until an explicit scoped source fact proves removal.
     # Treating those omissions as retirement forced a full manifest rewrite
     # (and frequently a 300s+ TypeDB cycle) for a small price observation.
     removed_relevant_scopes = [] if retain_missing_target_scopes else sorted(

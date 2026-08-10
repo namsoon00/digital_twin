@@ -2135,6 +2135,109 @@ class ScopedABoxManifestMixin:
                 "reason": str(error)[:180],
             }
 
+    def scoped_abox_integrity_audit(
+        self,
+        world_id: str = "",
+        cursor: int = 0,
+        limit: int = 20,
+    ) -> Dict[str, object]:
+        """Verify a bounded slice of the active Manifest without rewriting it.
+
+        A recurring whole-world projection used to hide physical drift by
+        rebuilding every scope. The scoped Manifest already records the exact
+        generation and expected row counts, so two grouped TypeQL reductions
+        can verify a rotating slice instead. Any mismatch is returned as an
+        explicit repair target; this read-only audit never changes the active
+        pointer or creates an investment inference.
+        """
+
+        try:
+            active = dict(self.active_abox_metadata(world_id) or {})
+        except Exception as error:  # noqa: BLE001 - diagnostics must remain bounded and observable.
+            return {
+                "configured": bool(getattr(self, "address", "")),
+                "status": "error",
+                "graphStore": "typedb",
+                "worldId": str(world_id or ""),
+                "reason": str(error)[:220],
+            }
+        scope_plan = [
+            dict(item)
+            for item in active.get("scopePlan") or []
+            if isinstance(item, dict)
+            and str(item.get("scopeId") or "").strip()
+            and str(item.get("generationId") or "").strip()
+        ]
+        if (
+            str(active.get("status") or "") != "ok"
+            or str(active.get("scopedAboxManifestVersion") or "") != SCOPED_ABOX_MANIFEST_VERSION
+            or not scope_plan
+        ):
+            return {
+                "configured": bool(getattr(self, "address", "")),
+                "status": "unavailable",
+                "graphStore": "typedb",
+                "worldId": str(world_id or ""),
+                "reason": "Active scoped ABox Manifest is unavailable.",
+                "checkedScopeCount": 0,
+                "activeScopeCount": len(scope_plan),
+            }
+        ordered = sorted(scope_plan, key=lambda item: str(item.get("scopeId") or ""))
+        bounded_limit = max(1, min(200, int(limit or 20)))
+        start = max(0, int(cursor or 0)) % len(ordered)
+        selected = ordered[start:start + bounded_limit]
+        if len(selected) < bounded_limit and len(selected) < len(ordered):
+            selected.extend(ordered[:min(start, bounded_limit - len(selected))])
+        counts = self.scoped_abox_scope_row_counts_batch(
+            selected,
+            world_id=str(world_id or ""),
+        )
+        mismatches = []
+        for item in selected:
+            scope_id = str(item.get("scopeId") or "")
+            actual = dict(counts.get(scope_id) or {})
+            expected_entities = int(number_or_none(item.get("entityCount")) or 0)
+            expected_relations = int(number_or_none(item.get("relationCount")) or 0)
+            actual_entities = int(actual.get("entityCount") or 0)
+            actual_relations = int(actual.get("relationCount") or 0)
+            if (
+                expected_entities == actual_entities
+                and expected_relations == actual_relations
+            ):
+                continue
+            mismatches.append({
+                "scopeId": scope_id,
+                "generationId": str(item.get("generationId") or ""),
+                "symbol": scope_symbol(scope_id),
+                "scopeFamily": str(item.get("scopeFamily") or scope_family(scope_id)),
+                "expectedEntityCount": expected_entities,
+                "actualEntityCount": actual_entities,
+                "expectedRelationCount": expected_relations,
+                "actualRelationCount": actual_relations,
+            })
+        next_cursor = (start + len(selected)) % len(ordered)
+        return {
+            "configured": True,
+            "status": "repair-required" if mismatches else "ok",
+            "graphStore": "typedb",
+            "worldId": str(world_id or active.get("worldId") or ""),
+            "worldType": str(active.get("worldType") or ""),
+            "accountId": str(active.get("accountId") or ""),
+            "worldviewManifestId": str(
+                active.get("worldviewManifestId") or active.get("aboxSnapshotId") or ""
+            ),
+            "activeScopeCount": len(ordered),
+            "checkedScopeCount": len(selected),
+            "checkedScopeIds": [str(item.get("scopeId") or "") for item in selected],
+            "mismatchCount": len(mismatches),
+            "mismatches": mismatches[:50],
+            "cursor": start,
+            "nextCursor": next_cursor,
+            "cycleCompleted": next_cursor == 0,
+            "readOnly": True,
+            "automaticFullProjectionUsed": False,
+        }
+
     def scoped_abox_storage_diagnostics(self, world_id: str = "") -> Dict[str, object]:
         """Describe active logical scopes separately from physical ABox rows.
 

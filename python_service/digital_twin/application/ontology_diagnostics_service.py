@@ -172,7 +172,9 @@ class OntologyDiagnosticsService:
                     "factSlotDeferredScopeCount",
                     "factSlotFamilies",
                     "factSlotFallbackReason",
-                    "fullReconcileMinutes",
+                    "scopeIntegrityAuditIntervalMinutes",
+                    "scopeIntegrityAuditDue",
+                    "automaticFullProjectionBlocked",
                 ])
             impact_diagnostics = latest_runtime_scope.get("impactDiagnostics")
             if isinstance(impact_diagnostics, dict):

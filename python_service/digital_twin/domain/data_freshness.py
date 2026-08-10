@@ -269,6 +269,12 @@ def kis_stage_freshness_records(position: Dict[str, object], message_type: str, 
         if status == "available" and fields:
             fetched_at = stage_payload.get("fetchedAt") or stage_payload.get("sourceFetchedAt")
             source_as_of = stage_payload.get("sourceAsOf") or ""
+            stage_max_age = max_age_minutes_for_kis_stage(str(stage), settings)
+            valid_until = parse_datetime(stage_payload.get("validUntil"))
+            source_timestamp = parse_datetime(source_as_of)
+            if valid_until and source_timestamp and valid_until > source_timestamp:
+                validity_minutes = int((valid_until - source_timestamp).total_seconds() // 60) + 1
+                stage_max_age = max(stage_max_age, validity_minutes)
             source_as_of_required = not (
                 str(stage or "") == "investor"
                 and str(stage_payload.get("sourceTimestampState") or "") == "business-date-only"
@@ -280,7 +286,7 @@ def kis_stage_freshness_records(position: Dict[str, object], message_type: str, 
                     "status": "unknown",
                     "reason": "단계별 기준시각 없음",
                     "ageMinutes": None,
-                    "maxAgeMinutes": max_age_minutes_for_kis_stage(str(stage), settings),
+                    "maxAgeMinutes": stage_max_age,
                     "sourceFetchedAt": "",
                     "sourceAsOf": "",
                     "dataQuality": item.get("dataQuality") or item.get("data_quality") or "",
@@ -297,7 +303,7 @@ def kis_stage_freshness_records(position: Dict[str, object], message_type: str, 
                 source_as_of=freshness_source_as_of,
                 data_quality=item.get("dataQuality") or item.get("data_quality") or "",
                 now=now,
-                max_age_minutes=max_age_minutes_for_kis_stage(str(stage), settings),
+                max_age_minutes=stage_max_age,
                 require_source_as_of=source_as_of_required,
             )
             record["stage"] = str(stage or "")
@@ -317,6 +323,15 @@ def kis_stage_freshness_records(position: Dict[str, object], message_type: str, 
                 "latencyReason",
                 "aiUsableAsStrongEvidence",
                 "judgementEvidenceUsable",
+                "measurementType",
+                "isEstimate",
+                "providerUpdateCode",
+                "providerUpdateSlot",
+                "providerExpectedUpdateCode",
+                "providerExpectedUpdateSlot",
+                "providerUpdateCurrent",
+                "nextProviderUpdateAt",
+                "validUntil",
             ]:
                 if stage_payload.get(key) not in (None, ""):
                     record[key] = stage_payload.get(key)

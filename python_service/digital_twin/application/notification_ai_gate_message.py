@@ -918,11 +918,19 @@ def _investor_text_from_relation_facts(context: Dict[str, object]) -> str:
     if not rows:
         return ""
 
-    note = "KIS 당일 누적 수급"
+    measurement_type = str(investor.get("measurementType") or "")
+    if measurement_type == "intraday-estimate":
+        note = "KIS 장중 외국인·기관 추정 가집계 · " + str(investor.get("providerUpdateSlot") or "기준시각 미확인") + " KST 기준 · 장 마감 확정값 아님"
+    elif measurement_type == "daily-final":
+        note = "KIS 장 마감 외국인·기관·개인 확정 집계"
+    else:
+        note = "KIS 당일 누적 수급"
     unchanged_count = _number(investor.get("unchangedCount"))
     if unchanged_count:
         note += " · 이전 조회와 같은 값 " + compact_number(unchanged_count) + "회"
-    note += " · 보유·매매 판단에 반영 · 장중 신규 변화 확인 전 참고값"
+    note += " · 보유·매매 판단에 반영"
+    if measurement_type not in {"intraday-estimate", "daily-final"}:
+        note += " · 장중 신규 변화 확인 전 참고값"
     return note + "\n" + "\n".join(rows)
 
 

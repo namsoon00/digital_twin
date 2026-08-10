@@ -3953,6 +3953,7 @@
       kisMarketSignalPreferLiveDuringMarketHours: settingValue("kisMarketSignalPreferLiveDuringMarketHours"),
       kisMarketSignalLiveRefreshSeconds: settingValue("kisMarketSignalLiveRefreshSeconds"),
       kisMarketSignalUnchangedStaleCount: settingValue("kisMarketSignalUnchangedStaleCount"),
+      kisInvestorIntradayEstimateEnabled: settingValue("kisInvestorIntradayEstimateEnabled"),
       notifyProvider: settingValue("notifyProvider"),
       telegramBotToken: settingValue("telegramBotToken"),
       telegramChatId: settingValue("telegramChatId"),
@@ -24215,12 +24216,16 @@
         renderSettingField("kisMarketSignalMaxSymbols", "KIS 수급 종목 수", "number", "20"),
         renderSettingField("kisMarketSignalCacheMinutes", "KIS 수급 캐시(분)", "number", "3"),
         renderSettingField("kisMarketSignalGapSeconds", "KIS 호출 간격(초)", "number", "0.35"),
-        renderSettingSelect("kisMarketSignalPreferLiveDuringMarketHours", "장중 KIS live 우선", [
+        renderSettingSelect("kisMarketSignalPreferLiveDuringMarketHours", "장중 KIS 최신 시세 우선", [
           { value: "1", label: "사용" },
           { value: "0", label: "사용 안 함" }
         ]),
-        renderSettingField("kisMarketSignalLiveRefreshSeconds", "장중 live 최소 간격(초)", "number", "60"),
-        renderSettingField("kisMarketSignalUnchangedStaleCount", "동일 수급값 stale 판정 횟수", "number", "3")
+        renderSettingField("kisMarketSignalLiveRefreshSeconds", "장중 시세 최소 조회 간격(초)", "number", "60"),
+        renderSettingSelect("kisInvestorIntradayEstimateEnabled", "장중 외국인·기관 추정 수급", [
+          { value: "1", label: "사용" },
+          { value: "0", label: "사용 안 함" }
+        ]),
+        renderSettingField("kisMarketSignalUnchangedStaleCount", "레거시 동일 수급값 판정 횟수", "number", "3")
       ].join(""), "market feed-compact"),
       renderSettingsGroup("뉴스 헤드라인", "빠른 외부 뉴스 조회 범위를 관리합니다.", [
         renderSettingSelect("externalNewsEnabled", "뉴스 헤드라인 수집", [
@@ -25952,12 +25957,16 @@
         renderSettingField("kisMarketSignalMaxSymbols", "KIS 수급 종목 수", "number", "20"),
         renderSettingField("kisMarketSignalCacheMinutes", "KIS 수급 캐시(분)", "number", "3"),
         renderSettingField("kisMarketSignalGapSeconds", "KIS 호출 간격(초)", "number", "0.35"),
-        renderSettingSelect("kisMarketSignalPreferLiveDuringMarketHours", "장중 KIS live 우선", [
+        renderSettingSelect("kisMarketSignalPreferLiveDuringMarketHours", "장중 KIS 최신 시세 우선", [
           { value: "1", label: "사용" },
           { value: "0", label: "사용 안 함" }
         ]),
-        renderSettingField("kisMarketSignalLiveRefreshSeconds", "장중 live 최소 간격(초)", "number", "60"),
-        renderSettingField("kisMarketSignalUnchangedStaleCount", "동일 수급값 stale 판정 횟수", "number", "3")
+        renderSettingField("kisMarketSignalLiveRefreshSeconds", "장중 시세 최소 조회 간격(초)", "number", "60"),
+        renderSettingSelect("kisInvestorIntradayEstimateEnabled", "장중 외국인·기관 추정 수급", [
+          { value: "1", label: "사용" },
+          { value: "0", label: "사용 안 함" }
+        ]),
+        renderSettingField("kisMarketSignalUnchangedStaleCount", "레거시 동일 수급값 판정 횟수", "number", "3")
       ].join(""), "market"),
       renderSettingsGroup("해외·거시 원천", "미장, 코인, 금리 데이터를 판단 근거로 넣기 위한 API 연결입니다.", [
         renderSettingSelect("externalAlphaEnabled", "Alpha Vantage 수집", [

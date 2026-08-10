@@ -4,7 +4,7 @@ from typing import Dict, Iterable, List, Optional
 
 from .alert_formatting import compact_number, price_money
 from .investment_research import research_evidence_from_external_signals, research_evidence_from_facts
-from .investor_flow_psychology import investor_flow_values_reliable
+from .investor_flow_psychology import investor_flow_measurement, investor_flow_values_reliable
 from .macro_context import macro_context_facts
 from .market_data import investor_net_volume, number
 from . import news_analysis as news_domain
@@ -43,6 +43,7 @@ def _position_account_weight(position: Position, portfolio: PortfolioSummary) ->
 
 
 def _investor_flow(position: Position) -> Dict[str, object]:
+    measurement = investor_flow_measurement(position)
     reliable = investor_flow_values_reliable(position)
     if not reliable:
         # Do not emit stale investor values as neutral or directional facts.
@@ -64,6 +65,7 @@ def _investor_flow(position: Position) -> Dict[str, object]:
             "investorFlowBase": 0.0,
             "investorFlowAvailable": False,
             "investorFlowDataState": "unavailable",
+            **measurement,
         }
     foreign_volume = investor_net_volume(position.foreign_net_volume, position.foreign_buy_volume, position.foreign_sell_volume)
     institution_volume = investor_net_volume(position.institution_net_volume, position.institution_buy_volume, position.institution_sell_volume)
@@ -71,6 +73,7 @@ def _investor_flow(position: Position) -> Dict[str, object]:
     base = abs(foreign_volume) + abs(institution_volume) + abs(individual_volume)
     joint_inflow = foreign_volume > 0 and institution_volume > 0
     joint_outflow = foreign_volume < 0 and institution_volume < 0
+    is_estimate = bool(measurement.get("investorFlowIsEstimate"))
     return {
         "foreignNetVolume": round(foreign_volume, 2),
         "institutionNetVolume": round(institution_volume, 2),
@@ -83,7 +86,8 @@ def _investor_flow(position: Position) -> Dict[str, object]:
         "jointSmartMoneyOutflow": joint_outflow,
         "investorFlowBase": round(base, 2),
         "investorFlowAvailable": bool(base),
-        "investorFlowDataState": "sufficient" if base else "insufficient",
+        "investorFlowDataState": "estimated" if is_estimate and base else "sufficient" if base else "insufficient",
+        **measurement,
     }
 
 

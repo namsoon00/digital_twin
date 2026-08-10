@@ -569,12 +569,19 @@ class MonitoringPositionContextMixin:
         if not investor:
             return ""
         status = str(investor.get("status") or "").strip()
+        measurement_type = str(investor.get("measurementType") or "").strip()
         if status in {"stale", "stale-at-dispatch"}:
             reason = str(investor.get("staleReason") or investor.get("reason") or "").strip()
             source_time_note = " · KIS 제공 기준시각은 영업일자 누적값"
             if str(investor.get("sourceTimestampState") or "") != "business-date-only":
                 source_time_note = ""
             return "상태: 오래된 반복값 · 외국인·기관 수치 제외" + (" · " + reason if reason else "") + source_time_note
+        if status == "available" and measurement_type == "intraday-estimate":
+            slot = str(investor.get("providerUpdateSlot") or "기준시각 미확인")
+            update_state = "현재 공식 구간" if investor.get("providerUpdateCurrent") is not False else "다음 갱신 대기"
+            return "KIS 장중 외국인·기관 추정 가집계 · " + slot + " KST 기준 · " + update_state + " · 장 마감 확정값 아님"
+        if status == "available" and measurement_type == "daily-final":
+            return "KIS 장 마감 외국인·기관·개인 확정 집계 · 제공 영업일 기준"
         if investor.get("unchangedCount") not in (None, "", 0):
             return "KIS 당일 누적 수급 · 동일값 " + str(investor.get("unchangedCount")) + "회 · 보유·매매 판단에 반영 · 장중 신규 변화 미확인"
         latency_label = str(investor.get("latencyLabel") or "").strip()

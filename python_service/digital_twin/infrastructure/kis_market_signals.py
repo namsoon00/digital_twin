@@ -21,6 +21,8 @@ KIS_CACHE_ACCOUNT_ID = "__market_signals__"
 PRICE_PATH = "/uapi/domestic-stock/v1/quotations/inquire-price"
 CCNL_PATH = "/uapi/domestic-stock/v1/quotations/inquire-ccnl"
 INVESTOR_PATH = "/uapi/domestic-stock/v1/quotations/inquire-investor"
+INVESTOR_ESTIMATE_PATH = "/uapi/domestic-stock/v1/quotations/investor-trend-estimate"
+INVESTOR_ESTIMATE_TR_ID = "HHPTJ04160200"
 ORDERBOOK_PATH = "/uapi/domestic-stock/v1/quotations/inquire-asking-price-exp-ccn"
 DETAIL_SIGNAL_KEYS = [
     "tradeStrength",
@@ -79,9 +81,25 @@ INVESTOR_RAW_KEYS = [
     "prsn_ntby_qty",
     "prsn_ntby_tr_pbmn",
 ]
+INVESTOR_ESTIMATE_RAW_KEYS = [
+    "frgn_fake_ntby_qty",
+    "orgn_fake_ntby_qty",
+    "sum_fake_ntby_qty",
+]
+# KIS documents these as manually accumulated intraday estimates, not ticks.
+# The code in bsop_hour_gb identifies the provider's scheduled input slot.
+INVESTOR_ESTIMATE_SLOTS = {
+    "1": (9, 30),
+    "2": (10, 0),
+    "3": (11, 20),
+    "4": (13, 20),
+    "5": (14, 30),
+}
 INVESTOR_DELAYED_LABEL = "KIS 투자자 수급 지연 가능"
 INVESTOR_DELAYED_REASON = "KIS 투자자별 수급이 캐시·반복값·노후값으로 판정되어 실시간 근거로 쓰지 않습니다."
 INVESTOR_REST_REFERENCE_REASON = "KIS 투자자별 수급은 REST 조회값이라 실시간 체결 근거는 아니지만 판단 참고 근거로 반영합니다."
+INVESTOR_ESTIMATE_REASON = "KIS 장중 외국인·기관 수급은 실시간 체결값이 아니라 공식 시각에 갱신되는 추정 가집계입니다. 추정 여부와 제공 기준시각을 함께 반영합니다."
+INVESTOR_FINAL_REASON = "KIS 투자자별 수급 확정값은 장 종료 후 제공되는 당일 집계입니다."
 
 JsonFetcher = Callable[[str, str, Dict[str, str], Optional[Dict[str, object]], Optional[Dict[str, str]], int], Dict[str, object]]
 
@@ -190,6 +208,103 @@ def kst_business_date_iso(value: object, time_value: object = "") -> str:
     )
 
 
+def kst_iso_at(now: datetime, hour: int, minute: int) -> str:
+    local = now.astimezone(KST).replace(hour=hour, minute=minute, second=0, microsecond=0)
+    return local.isoformat()
+
+
+def investor_estimate_slot(now: datetime) -> Tuple[str, str]:
+    local = now.astimezone(KST)
+    current_minutes = local.hour * 60 + local.minute
+    available = [
+        (code, hour, minute)
+        for code, (hour, minute) in INVESTOR_ESTIMATE_SLOTS.items()
+        if hour * 60 + minute <= current_minutes
+    ]
+    if not available:
+        return "", ""
+    code, hour, minute = available[-1]
+    return code, f"{hour:02d}:{minute:02d}"
+
+
+def next_investor_estimate_at(now: datetime, slot_code: str = "") -> str:
+    local = now.astimezone(KST)
+    current_minutes = local.hour * 60 + local.minute
+    for code, (hour, minute) in INVESTOR_ESTIMATE_SLOTS.items():
+        if int(code) > int(slot_code or 0) and hour * 60 + minute > current_minutes:
+            return kst_iso_at(now, hour, minute)
+    return kst_iso_at(now, 15, 30)
+
+
+def investor_estimate_valid_until(now: datetime, slot_code: str) -> str:
+    next_at = parse_iso(next_investor_estimate_at(now, slot_code))
+    if not next_at:
+        return ""
+    return (next_at + timedelta(minutes=10)).isoformat()
+
+
+def investor_final_valid_until(now: datetime) -> str:
+    local = now.astimezone(KST) + timedelta(days=1)
+    return local.replace(hour=8, minute=59, second=59, microsecond=0).isoformat()
+
+
+def source_as_of_matches_kst_date(source_as_of: object, now: datetime) -> bool:
+    parsed = parse_iso(source_as_of)
+    if not parsed:
+        return False
+    return parsed.astimezone(KST).date() == now.astimezone(KST).date()
+
+
+def investor_estimate_selection(items: List[Dict[str, object]], now: datetime) -> Tuple[Dict[str, object], Dict[str, object]]:
+    expected_code, expected_slot = investor_estimate_slot(now)
+    metadata: Dict[str, object] = {
+        "measurementType": "intraday-estimate",
+        "isEstimate": True,
+        "providerExpectedUpdateCode": expected_code,
+        "providerExpectedUpdateSlot": expected_slot,
+    }
+    if not expected_code:
+        metadata["nextProviderUpdateAt"] = kst_iso_at(now, 9, 30)
+        return {}, metadata
+
+    candidates = []
+    for item in items or []:
+        if not isinstance(item, dict) or not has_raw_value(item, INVESTOR_ESTIMATE_RAW_KEYS):
+            continue
+        code = str(item.get("bsop_hour_gb") or "").strip()
+        if code not in INVESTOR_ESTIMATE_SLOTS or int(code) > int(expected_code):
+            continue
+        candidates.append((int(code), item))
+    if not candidates:
+        metadata["nextProviderUpdateAt"] = kst_iso_at(now, *INVESTOR_ESTIMATE_SLOTS[expected_code])
+        return {}, metadata
+
+    selected_code_number, selected = max(candidates, key=lambda item: item[0])
+    selected_code = str(selected_code_number)
+    hour, minute = INVESTOR_ESTIMATE_SLOTS[selected_code]
+    selected_slot = f"{hour:02d}:{minute:02d}"
+    metadata.update({
+        "providerUpdateCode": selected_code,
+        "providerUpdateSlot": selected_slot,
+        "sourceAsOf": kst_iso_at(now, hour, minute),
+        "sourceTimestampState": "provider-scheduled-estimate",
+        "nextProviderUpdateAt": next_investor_estimate_at(now, selected_code),
+        "providerUpdateCurrent": selected_code == expected_code,
+    })
+    if selected_code != expected_code:
+        metadata["nextProviderUpdateAt"] = (now + timedelta(seconds=60)).isoformat()
+    metadata["validUntil"] = investor_estimate_valid_until(now, selected_code)
+    normalized = {
+        "foreignNetVolume": optional_number(selected, ["frgn_fake_ntby_qty"]),
+    }
+    # KIS publishes the first foreign estimate at 09:30, while the first
+    # institution estimate is scheduled for 10:00. A zero in slot 1 is not
+    # evidence of balanced institution flow, so leave that fact unobserved.
+    if selected_code != "1":
+        normalized["institutionNetVolume"] = optional_number(selected, ["orgn_fake_ntby_qty"])
+    return normalized, metadata
+
+
 def stage_source_as_of(stage: str, raw_payload, fetched_at: str) -> Tuple[str, str]:
     if stage != "investor":
         return fetched_at, "provider-timestamp"
@@ -251,8 +366,11 @@ def stage_coverage(
     transport: str = "rest",
     source_timestamp_state: str = "",
     ai_usable_as_strong_evidence: Optional[bool] = None,
+    measurement_type: str = "",
+    measurement_metadata: Dict[str, object] = None,
 ) -> Dict[str, object]:
     session = session or {}
+    measurement_metadata = measurement_metadata or {}
     fields = sorted([
         key
         for key in keys
@@ -280,6 +398,20 @@ def stage_coverage(
         payload["sourceTimestampState"] = str(source_timestamp_state)
     if ai_usable_as_strong_evidence is not None:
         payload["aiUsableAsStrongEvidence"] = bool(ai_usable_as_strong_evidence)
+    if measurement_type:
+        payload["measurementType"] = str(measurement_type)
+    for key in [
+        "isEstimate",
+        "providerUpdateCode",
+        "providerUpdateSlot",
+        "providerExpectedUpdateCode",
+        "providerExpectedUpdateSlot",
+        "providerUpdateCurrent",
+        "nextProviderUpdateAt",
+        "validUntil",
+    ]:
+        if measurement_metadata.get(key) not in (None, ""):
+            payload[key] = measurement_metadata.get(key)
     if payload["status"] == "available":
         if stage == "investor" and ai_usable_as_strong_evidence is False:
             payload["freshnessStatus"] = "reference-only"
@@ -300,16 +432,39 @@ def stage_coverage(
         payload["marketSession"] = str(session.get("key") or "")
         payload["marketSessionLabel"] = str(session.get("label") or "")
     if stage == "investor" and status == "available":
-        payload["realTime"] = bool(real_time)
-        payload["cadence"] = "live-poll" if real_time else "rest-reference"
+        investor_measurement = str(measurement_type or "").strip() or ("intraday-live-poll" if real_time else "rest-reference")
+        payload["measurementType"] = investor_measurement
         payload["judgementEvidenceUsable"] = True
-        if not real_time:
+        if investor_measurement == "intraday-estimate":
+            update_current = measurement_metadata.get("providerUpdateCurrent") is not False
+            payload["realTime"] = False
+            payload["isEstimate"] = True
+            payload["cadence"] = "scheduled-estimate"
+            payload["freshnessStatus"] = "intraday-estimate" if update_current else "estimate-update-pending"
+            payload["latencyStatus"] = "scheduled-batch" if update_current else "provider-update-pending"
+            payload["latencyLabel"] = "KIS 장중 외국인·기관 추정 수급"
+            payload["latencyReason"] = INVESTOR_ESTIMATE_REASON
+            payload["aiUsableAsStrongEvidence"] = False
+        elif investor_measurement == "daily-final":
+            payload["realTime"] = False
+            payload["isEstimate"] = False
+            payload["cadence"] = "daily-final"
+            payload["freshnessStatus"] = "market-close-final"
+            payload["latencyStatus"] = "market-close-final"
+            payload["latencyLabel"] = "KIS 장 마감 투자자별 확정 수급"
+            payload["latencyReason"] = INVESTOR_FINAL_REASON
+            payload["aiUsableAsStrongEvidence"] = ai_usable_as_strong_evidence is not False
+        elif not real_time:
+            payload["realTime"] = False
+            payload["cadence"] = "rest-reference"
             payload["latencyStatus"] = "delayed-or-batched"
             payload["latencyLabel"] = INVESTOR_DELAYED_LABEL
             payload["latencyReason"] = INVESTOR_REST_REFERENCE_REASON
             payload["aiUsableAsStrongEvidence"] = False
             payload["freshnessStatus"] = "reference-only"
         else:
+            payload["realTime"] = True
+            payload["cadence"] = "live-poll"
             payload["freshnessStatus"] = "realtime-polled"
             payload["latencyLabel"] = "KIS 장중 누적 수급 실시간 조회"
             payload["latencyReason"] = "KIS 투자자별 수급은 WebSocket 틱 데이터가 아니라 REST 장중 누적 조회값입니다. 매 주기 새로 조회하고 반복값이면 자동으로 약한 근거로 낮춥니다."
@@ -437,6 +592,15 @@ def investor_stage_values_reliable(coverage: Dict[str, object]) -> bool:
     latency_status = str(item.get("latencyStatus") or "").strip()
     if status in {"stale", "unknown", "unavailable", "missing", "empty"}:
         return False
+    measurement_type = str(item.get("measurementType") or "").strip()
+    if measurement_type == "intraday-estimate":
+        return (
+            status == "available"
+            and item.get("judgementEvidenceUsable") is not False
+            and item.get("providerUpdateCurrent") is not False
+        )
+    if measurement_type == "daily-final":
+        return status == "available" and item.get("judgementEvidenceUsable") is not False
     if item.get("aiUsableAsStrongEvidence") is False:
         return False
     if int(number(item.get("unchangedCount")) or 0) > 0:
@@ -578,7 +742,13 @@ class KISMarketSignalProvider:
         return self.bool_setting("kisMarketSignalPreferLiveDuringMarketHours", True)
 
     def investor_realtime_enabled(self) -> bool:
-        return self.bool_setting("kisInvestorRealtimeEnabled", True)
+        return self.bool_setting(
+            "kisInvestorIntradayEstimateEnabled",
+            self.bool_setting("kisInvestorRealtimeEnabled", True),
+        )
+
+    def investor_intraday_estimate_enabled(self) -> bool:
+        return self.investor_realtime_enabled()
 
     def live_refresh_seconds(self) -> int:
         return self.int_setting("kisMarketSignalLiveRefreshSeconds", 60, 0, 3600)
@@ -861,12 +1031,32 @@ class KISMarketSignalProvider:
                 next_item["unchangedFields"] = sorted(comparable_keys)
                 next_item["reason"] = "장중 이전 조회와 같은 값 " + str(unchanged_count) + "회 연속"
                 if stage == "investor":
-                    next_item["aiUsableAsStrongEvidence"] = False
-                    next_item["judgementEvidenceUsable"] = True
-                    next_item["freshnessStatus"] = "reference-repeat"
-                    next_item["latencyStatus"] = "unchanged-repeat"
-                    next_item["latencyLabel"] = INVESTOR_DELAYED_LABEL
-                    next_item["latencyReason"] = "KIS 투자자별 수급은 중요한 당일 누적 수급 근거입니다. 이전 조회와 같으면 장중 신규 변화 확인에는 쓰지 않지만 보유·매매 판단에는 반영합니다."
+                    if str(next_item.get("measurementType") or "") == "intraday-estimate":
+                        next_item["judgementEvidenceUsable"] = True
+                        next_item["freshnessStatus"] = (
+                            "intraday-estimate"
+                            if next_item.get("providerUpdateCurrent") is not False
+                            else "estimate-update-pending"
+                        )
+                        next_item["latencyStatus"] = (
+                            "scheduled-batch"
+                            if next_item.get("providerUpdateCurrent") is not False
+                            else "provider-update-pending"
+                        )
+                        next_item["latencyLabel"] = "KIS 장중 외국인·기관 추정 수급"
+                        next_item["latencyReason"] = INVESTOR_ESTIMATE_REASON
+                        next_item["reason"] = (
+                            "KIS 공식 추정 갱신 구간 "
+                            + str(next_item.get("providerUpdateSlot") or "")
+                            + " 이후 같은 가집계 값입니다. 다음 공식 갱신 전까지 정상입니다."
+                        )
+                    else:
+                        next_item["aiUsableAsStrongEvidence"] = False
+                        next_item["judgementEvidenceUsable"] = True
+                        next_item["freshnessStatus"] = "reference-repeat"
+                        next_item["latencyStatus"] = "unchanged-repeat"
+                        next_item["latencyLabel"] = INVESTOR_DELAYED_LABEL
+                        next_item["latencyReason"] = "KIS 투자자별 수급은 중요한 당일 누적 수급 근거입니다. 이전 조회와 같으면 장중 신규 변화 확인에는 쓰지 않지만 보유·매매 판단에는 반영합니다."
                 if stage not in {"price", "investor"} and unchanged_count >= stale_threshold:
                     next_item["status"] = "stale"
                     next_item["staleReason"] = "장중 같은 " + stage + " 값이 " + str(unchanged_count) + "회 연속 반복되어 지연 가능성이 있습니다."
@@ -903,12 +1093,29 @@ class KISMarketSignalProvider:
             "FID_INPUT_ISCD": symbol,
         }
 
-    def fetch_stage(self, symbol: str, stage: str, path: str, tr_id: str):
+    def fetch_stage(
+        self,
+        symbol: str,
+        stage: str,
+        path: str,
+        tr_id: str,
+        query: Dict[str, str] = None,
+    ):
         if self.circuit_open():
             self.record_circuit_skip(stage, symbol)
             return None
         try:
-            payload = self.request(stage, "GET", path, self.auth_headers(tr_id), query=self.query(symbol))
+            payload = self.request(
+                stage,
+                "GET",
+                path,
+                self.auth_headers(tr_id),
+                query=query or self.query(symbol),
+            )
+            for key in ["output", "output1", "output2"]:
+                value = payload.get(key)
+                if value not in (None, "", [], {}):
+                    return value
             for key in ["output", "output1", "output2"]:
                 if key in payload:
                     return payload.get(key)
@@ -917,18 +1124,64 @@ class KISMarketSignalProvider:
             self.record_failure(stage, symbol, error)
             return None
 
+    def reusable_intraday_investor_estimate(self, cached: Dict[str, object]) -> Dict[str, object]:
+        if not cached or not self.is_kr_regular_market_hours():
+            return {}
+        coverage = cached.get("marketSignalCoverage") if isinstance(cached.get("marketSignalCoverage"), dict) else {}
+        investor = coverage.get("investor") if isinstance(coverage.get("investor"), dict) else {}
+        expected_code, _expected_slot = investor_estimate_slot(self.now())
+        if (
+            str(investor.get("status") or "") != "available"
+            or str(investor.get("measurementType") or "") != "intraday-estimate"
+            or str(investor.get("providerUpdateCode") or "") != expected_code
+        ):
+            return {}
+        valid_until = parse_iso(investor.get("validUntil"))
+        if valid_until and self.now() > valid_until:
+            return {}
+        fields = {str(field) for field in investor.get("fields") or []}
+        values = {
+            key: cached.get(key)
+            for key in INVESTOR_SIGNAL_KEYS
+            if key in fields and cached.get(key) not in (None, "")
+        }
+        if not values:
+            return {}
+        return {"values": values, "coverage": dict(investor)}
+
     def fetch_symbol_signal(self, symbol: str) -> Dict[str, object]:
         self.fetch_access_token()
         session = self.kr_market_session()
         microstructure_available = bool(session.get("microstructureAvailable"))
+        cached_signal = self.cached_signal(symbol)
         price = self.fetch_stage(symbol, "price", PRICE_PATH, "FHKST01010100")
         ccnl = self.fetch_stage(symbol, "ccnl", CCNL_PATH, "FHKST01010300") if microstructure_available else None
-        investor = self.fetch_stage(symbol, "investor", INVESTOR_PATH, "FHKST01010900") if microstructure_available else None
+        cached_investor_estimate = self.reusable_intraday_investor_estimate(cached_signal)
+        investor_mode = ""
+        if session.get("regular") and self.investor_intraday_estimate_enabled():
+            investor_mode = "intraday-estimate"
+            expected_estimate_code, _expected_estimate_slot = investor_estimate_slot(self.now())
+            investor = (
+                None
+                if cached_investor_estimate or not expected_estimate_code
+                else self.fetch_stage(
+                    symbol,
+                    "investor-estimate",
+                    INVESTOR_ESTIMATE_PATH,
+                    INVESTOR_ESTIMATE_TR_ID,
+                    query={"MKSC_SHRN_ISCD": symbol},
+                )
+            )
+        elif microstructure_available:
+            investor_mode = "daily-final"
+            investor = self.fetch_stage(symbol, "investor-final", INVESTOR_PATH, "FHKST01010900")
+        else:
+            investor = None
         orderbook = self.fetch_stage(symbol, "orderbook", ORDERBOOK_PATH, "FHKST01010200") if microstructure_available else None
 
         signal: Dict[str, object] = {}
         coverage: Dict[str, object] = {}
-        fetched_at = utc_now_iso()
+        fetched_at = self.now().astimezone(timezone.utc).isoformat().replace("+00:00", "Z")
         if isinstance(price, dict):
             normalized_price = normalize_price(symbol, price)
             if not microstructure_available:
@@ -968,18 +1221,80 @@ class KISMarketSignalProvider:
             coverage["ccnl"] = stage_coverage("ccnl", ccnl, normalized_ccnl, ["tradeStrength", "buyVolume", "sellVolume"], fetched_at=fetched_at, source_as_of=ccnl_as_of, source_timestamp_state=ccnl_as_of_state, session=session, transport="rest", ai_usable_as_strong_evidence=True)
         else:
             coverage["ccnl"] = unavailable_stage_coverage("ccnl", session) if not microstructure_available else stage_coverage("ccnl", ccnl, {}, ["tradeStrength", "buyVolume", "sellVolume"], fetched_at=fetched_at, session=session)
-        if isinstance(investor, list):
-            normalized_investor = normalize_investor(investor)
+        if cached_investor_estimate and investor_mode == "intraday-estimate":
+            merge_if_present(signal, cached_investor_estimate.get("values") or {})
+            coverage["investor"] = dict(cached_investor_estimate.get("coverage") or {})
+        elif investor_mode == "intraday-estimate" and isinstance(investor, (list, dict)):
+            investor_rows = investor if isinstance(investor, list) else [investor]
+            normalized_investor, investor_metadata = investor_estimate_selection(investor_rows, self.now())
             merge_if_present(signal, normalized_investor)
+            coverage["investor"] = stage_coverage(
+                "investor",
+                investor,
+                normalized_investor,
+                INVESTOR_SIGNAL_KEYS,
+                fetched_at=fetched_at,
+                source_as_of=str(investor_metadata.get("sourceAsOf") or ""),
+                source_timestamp_state=str(investor_metadata.get("sourceTimestampState") or ""),
+                session=session,
+                transport="rest",
+                ai_usable_as_strong_evidence=False,
+                measurement_type="intraday-estimate",
+                measurement_metadata=investor_metadata,
+            )
+            if not normalized_investor:
+                coverage["investor"]["reason"] = "KIS 장중 외국인·기관 추정 수급의 현재 제공 구간이 아직 없습니다."
+                coverage["investor"]["judgementEvidenceUsable"] = False
+        elif investor_mode == "daily-final" and isinstance(investor, (list, dict)):
+            investor_rows = investor if isinstance(investor, list) else [investor]
+            normalized_investor = normalize_investor(investor_rows)
             investor_as_of, investor_as_of_state = stage_source_as_of("investor", investor, fetched_at)
-            investor_real_time = False
-            coverage["investor"] = stage_coverage("investor", investor, normalized_investor, INVESTOR_SIGNAL_KEYS, fetched_at=fetched_at, source_as_of=investor_as_of, source_timestamp_state=investor_as_of_state, session=session, real_time=investor_real_time, transport="rest", ai_usable_as_strong_evidence=investor_real_time)
-        elif isinstance(investor, dict):
-            normalized_investor = normalize_investor([investor])
-            merge_if_present(signal, normalized_investor)
-            investor_as_of, investor_as_of_state = stage_source_as_of("investor", investor, fetched_at)
-            investor_real_time = False
-            coverage["investor"] = stage_coverage("investor", investor, normalized_investor, INVESTOR_SIGNAL_KEYS, fetched_at=fetched_at, source_as_of=investor_as_of, source_timestamp_state=investor_as_of_state, session=session, real_time=investor_real_time, transport="rest", ai_usable_as_strong_evidence=investor_real_time)
+            final_is_current = source_as_of_matches_kst_date(investor_as_of, self.now())
+            merge_if_present(signal, normalized_investor if final_is_current else {})
+            final_metadata = {
+                "isEstimate": False,
+                "validUntil": investor_final_valid_until(self.now()),
+            }
+            coverage["investor"] = stage_coverage(
+                "investor",
+                investor,
+                normalized_investor if final_is_current else {},
+                INVESTOR_SIGNAL_KEYS,
+                fetched_at=fetched_at,
+                source_as_of=investor_as_of,
+                source_timestamp_state=investor_as_of_state,
+                session=session,
+                transport="rest",
+                ai_usable_as_strong_evidence=final_is_current,
+                measurement_type="daily-final",
+                measurement_metadata=final_metadata,
+            )
+            if not final_is_current:
+                coverage["investor"].update({
+                    "status": "stale",
+                    "freshnessStatus": "prior-close",
+                    "judgementEvidenceUsable": False,
+                    "aiUsableAsStrongEvidence": False,
+                    "staleReason": "KIS 장 마감 투자자별 확정 수급의 영업일자가 오늘과 일치하지 않습니다.",
+                })
+        elif investor_mode == "intraday-estimate":
+            _normalized_investor, investor_metadata = investor_estimate_selection([], self.now())
+            coverage["investor"] = stage_coverage(
+                "investor",
+                investor,
+                {},
+                INVESTOR_SIGNAL_KEYS,
+                fetched_at=fetched_at,
+                session=session,
+                transport="rest",
+                ai_usable_as_strong_evidence=False,
+                measurement_type="intraday-estimate",
+                measurement_metadata=investor_metadata,
+            )
+            coverage["investor"].update({
+                "judgementEvidenceUsable": False,
+                "reason": "KIS 장중 외국인·기관 추정 수급은 첫 공식 갱신인 09:30 KST 이후 사용합니다.",
+            })
         else:
             coverage["investor"] = unavailable_stage_coverage("investor", session) if not microstructure_available else stage_coverage("investor", investor, {}, INVESTOR_SIGNAL_KEYS, fetched_at=fetched_at, session=session)
         if isinstance(orderbook, dict):
@@ -1014,7 +1329,7 @@ class KISMarketSignalProvider:
         signal["marketSessionLabel"] = str(session.get("label") or "")
         signal["dataQuality"] = "actual"
         signal["updatedAt"] = fetched_at
-        signal = merge_fresh_websocket_stages(signal, self.cached_signal(symbol), max(10, self.live_refresh_seconds() * 2))
+        signal = merge_fresh_websocket_stages(signal, cached_signal, max(10, self.live_refresh_seconds() * 2))
         coverage = signal.get("marketSignalCoverage") if isinstance(signal.get("marketSignalCoverage"), dict) else coverage
         signal = remove_unreliable_investor_values(signal)
         coverage = signal.get("marketSignalCoverage") if isinstance(signal.get("marketSignalCoverage"), dict) else coverage
@@ -1039,6 +1354,23 @@ class KISMarketSignalProvider:
         else:
             signal["quoteStatus"] = "KIS " + included_text + " 반영"
             signal["quoteMessage"] = "KIS " + included_text + "을 모델링 데이터에 반영했습니다."
+        investor_coverage = coverage.get("investor") if isinstance(coverage.get("investor"), dict) else {}
+        if str(investor_coverage.get("status") or "") == "available":
+            measurement_type = str(investor_coverage.get("measurementType") or "")
+            if measurement_type == "intraday-estimate":
+                signal["quoteMessage"] = append_message(
+                    signal.get("quoteMessage"),
+                    "외국인·기관 수급은 KIS 장중 추정 가집계이며 제공 기준 "
+                    + str(investor_coverage.get("sourceAsOf") or "미확인")
+                    + "입니다. 확정값은 장 종료 후 교체됩니다.",
+                )
+            elif measurement_type == "daily-final":
+                signal["quoteMessage"] = append_message(
+                    signal.get("quoteMessage"),
+                    "외국인·기관·개인 수급은 KIS 장 마감 확정 집계이며 제공 기준 "
+                    + str(investor_coverage.get("sourceAsOf") or "미확인")
+                    + "입니다.",
+                )
         if not microstructure_available:
             signal["quoteMessage"] = str(session.get("reason") or "") or signal["quoteMessage"]
         signal = remove_unreliable_investor_values(signal)
@@ -1193,6 +1525,17 @@ class KISMarketSignalProvider:
         individual_net_volume = optional_investor_net_volume(individual_net_volume, individual_buy_volume, individual_sell_volume)
         market_signal_coverage = signal.get("marketSignalCoverage") if isinstance(signal.get("marketSignalCoverage"), dict) else position.market_signal_coverage
         investor_values_reliable = investor_stage_values_usable_for_judgement(market_signal_coverage)
+        investor_coverage = market_signal_coverage.get("investor") if isinstance(market_signal_coverage, dict) and isinstance(market_signal_coverage.get("investor"), dict) else {}
+        investor_stage_available = str(investor_coverage.get("status") or "") == "available"
+        investor_fields = {str(field) for field in investor_coverage.get("fields") or []}
+
+        def merged_investor_value(field: str, incoming, existing):
+            if not investor_values_reliable:
+                return 0.0
+            if investor_stage_available:
+                return incoming if field in investor_fields and incoming is not None else 0.0
+            return incoming if incoming is not None else existing
+
         preserve_fresh_quote = keep_fresh_position_quote(position, signal)
 
         merged_price = current_price if current_price is not None and not preserve_fresh_quote else position.current_price
@@ -1235,18 +1578,18 @@ class KISMarketSignalProvider:
             orderbook_bid_volume=orderbook_bid_volume if orderbook_bid_volume is not None else position.orderbook_bid_volume,
             orderbook_ask_volume=orderbook_ask_volume if orderbook_ask_volume is not None else position.orderbook_ask_volume,
             bid_ask_imbalance=bid_ask_imbalance if bid_ask_imbalance is not None else position.bid_ask_imbalance,
-            foreign_buy_volume=foreign_buy_volume if investor_values_reliable and foreign_buy_volume is not None else (position.foreign_buy_volume if investor_values_reliable else 0.0),
-            foreign_sell_volume=foreign_sell_volume if investor_values_reliable and foreign_sell_volume is not None else (position.foreign_sell_volume if investor_values_reliable else 0.0),
-            foreign_net_volume=foreign_net_volume if investor_values_reliable and foreign_net_volume is not None else (optional_investor_net_volume(position.foreign_net_volume, position.foreign_buy_volume, position.foreign_sell_volume) if investor_values_reliable else 0.0),
-            foreign_net_amount=foreign_net_amount if investor_values_reliable and foreign_net_amount is not None else (position.foreign_net_amount if investor_values_reliable else 0.0),
-            institution_buy_volume=institution_buy_volume if investor_values_reliable and institution_buy_volume is not None else (position.institution_buy_volume if investor_values_reliable else 0.0),
-            institution_sell_volume=institution_sell_volume if investor_values_reliable and institution_sell_volume is not None else (position.institution_sell_volume if investor_values_reliable else 0.0),
-            institution_net_volume=institution_net_volume if investor_values_reliable and institution_net_volume is not None else (optional_investor_net_volume(position.institution_net_volume, position.institution_buy_volume, position.institution_sell_volume) if investor_values_reliable else 0.0),
-            institution_net_amount=institution_net_amount if investor_values_reliable and institution_net_amount is not None else (position.institution_net_amount if investor_values_reliable else 0.0),
-            individual_buy_volume=individual_buy_volume if investor_values_reliable and individual_buy_volume is not None else (position.individual_buy_volume if investor_values_reliable else 0.0),
-            individual_sell_volume=individual_sell_volume if investor_values_reliable and individual_sell_volume is not None else (position.individual_sell_volume if investor_values_reliable else 0.0),
-            individual_net_volume=individual_net_volume if investor_values_reliable and individual_net_volume is not None else (optional_investor_net_volume(position.individual_net_volume, position.individual_buy_volume, position.individual_sell_volume) if investor_values_reliable else 0.0),
-            individual_net_amount=individual_net_amount if investor_values_reliable and individual_net_amount is not None else (position.individual_net_amount if investor_values_reliable else 0.0),
+            foreign_buy_volume=merged_investor_value("foreignBuyVolume", foreign_buy_volume, position.foreign_buy_volume),
+            foreign_sell_volume=merged_investor_value("foreignSellVolume", foreign_sell_volume, position.foreign_sell_volume),
+            foreign_net_volume=merged_investor_value("foreignNetVolume", foreign_net_volume, position.foreign_net_volume),
+            foreign_net_amount=merged_investor_value("foreignNetAmount", foreign_net_amount, position.foreign_net_amount),
+            institution_buy_volume=merged_investor_value("institutionBuyVolume", institution_buy_volume, position.institution_buy_volume),
+            institution_sell_volume=merged_investor_value("institutionSellVolume", institution_sell_volume, position.institution_sell_volume),
+            institution_net_volume=merged_investor_value("institutionNetVolume", institution_net_volume, position.institution_net_volume),
+            institution_net_amount=merged_investor_value("institutionNetAmount", institution_net_amount, position.institution_net_amount),
+            individual_buy_volume=merged_investor_value("individualBuyVolume", individual_buy_volume, position.individual_buy_volume),
+            individual_sell_volume=merged_investor_value("individualSellVolume", individual_sell_volume, position.individual_sell_volume),
+            individual_net_volume=merged_investor_value("individualNetVolume", individual_net_volume, position.individual_net_volume),
+            individual_net_amount=merged_investor_value("individualNetAmount", individual_net_amount, position.individual_net_amount),
             ma20_distance=ma20_distance,
             ma60_distance=ma60_distance,
         )

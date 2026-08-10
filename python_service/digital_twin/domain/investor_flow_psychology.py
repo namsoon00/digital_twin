@@ -26,6 +26,19 @@ def investor_flow_values_reliable(position: Position) -> bool:
     return True
 
 
+def investor_flow_measurement(position: Position) -> Dict[str, object]:
+    coverage = position.market_signal_coverage if isinstance(position.market_signal_coverage, dict) else {}
+    investor = coverage.get("investor") if isinstance(coverage.get("investor"), dict) else {}
+    measurement_type = str(investor.get("measurementType") or "").strip() or "unspecified"
+    return {
+        "investorFlowMeasurementType": measurement_type,
+        "investorFlowIsEstimate": bool(investor.get("isEstimate")) if "isEstimate" in investor else measurement_type == "intraday-estimate",
+        "investorFlowSourceAsOf": str(investor.get("sourceAsOf") or ""),
+        "investorFlowProviderUpdateSlot": str(investor.get("providerUpdateSlot") or ""),
+        "investorFlowFreshnessStatus": str(investor.get("freshnessStatus") or ""),
+    }
+
+
 def investor_flow_observation(position: Position) -> Dict[str, object]:
     """Return raw investor-flow facts without assigning investment meaning.
 
@@ -34,6 +47,7 @@ def investor_flow_observation(position: Position) -> Dict[str, object]:
     prevents a future caller from accidentally recreating a Python-side
     sentiment or risk classifier.
     """
+    measurement = investor_flow_measurement(position)
     if not investor_flow_values_reliable(position):
         return {
             "available": False,
@@ -56,6 +70,7 @@ def investor_flow_observation(position: Position) -> Dict[str, object]:
             "investorFlowBase": 0.0,
             "jointSmartMoneyInflow": False,
             "jointSmartMoneyOutflow": False,
+            **measurement,
         }
 
     foreign_volume = investor_net_volume(position.foreign_net_volume, position.foreign_buy_volume, position.foreign_sell_volume)
@@ -69,6 +84,7 @@ def investor_flow_observation(position: Position) -> Dict[str, object]:
     joint_inflow = foreign > 0 and institution > 0
     joint_outflow = foreign < 0 and institution < 0
 
+    is_estimate = bool(measurement.get("investorFlowIsEstimate"))
     return {
         "available": bool(base),
         "field": "investorFlow",
@@ -76,8 +92,8 @@ def investor_flow_observation(position: Position) -> Dict[str, object]:
         "polarity": "context",
         "evidenceRole": "context",
         "reviewLevel": "observe",
-        "dataState": "sufficient" if base else "insufficient",
-        "sentimentLabel": "투자자별 원시 수급 관측",
+        "dataState": "estimated" if is_estimate and base else "sufficient" if base else "insufficient",
+        "sentimentLabel": "투자자별 장중 추정 수급 관측" if is_estimate else "투자자별 확정 수급 관측",
         "tboxClass": "InvestorFlowObservation",
         "tboxClasses": ["Observation", "FlowObservation", "InvestorFlowObservation"],
         "foreignNetVolume": round(foreign_volume, 2),
@@ -90,6 +106,7 @@ def investor_flow_observation(position: Position) -> Dict[str, object]:
         "investorFlowBase": round(base, 2),
         "jointSmartMoneyInflow": joint_inflow,
         "jointSmartMoneyOutflow": joint_outflow,
+        **measurement,
     }
 
 

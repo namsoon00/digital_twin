@@ -25,6 +25,17 @@ from digital_twin.infrastructure.kis_market_signals import KISMarketSignalProvid
 from digital_twin.infrastructure.toss_snapshots import TossProvider, normalize_price_payload
 
 
+class MemoryQuoteCache:
+    def __init__(self, payloads=None):
+        self.payloads = dict(payloads or {})
+
+    def load(self, provider, account_id, symbol):
+        return dict(self.payloads.get(str(symbol), {}))
+
+    def save(self, provider, account_id, symbol, payload):
+        self.payloads[str(symbol)] = dict(payload or {})
+
+
 class ExternalApiSourceTests(unittest.TestCase):
     def test_fred_uses_dedicated_timeout_on_default_transport(self):
         settings = {
@@ -311,6 +322,256 @@ class ExternalApiSourceTests(unittest.TestCase):
 
         self.assertEqual(220000, merged.current_price)
         self.assertIn("KIS Open API", merged.quote_source)
+
+    def test_kis_regular_session_uses_scheduled_investor_estimate_not_close_only_totals(self):
+        calls = []
+
+        def fake_fetch_json(method, url, headers=None, body=None, query=None, timeout=12):
+            path = url.split("?", 1)[0]
+            calls.append((path, dict(query or {})))
+            if path.endswith("/oauth2/tokenP"):
+                return {"access_token": "token"}
+            if path.endswith("/inquire-price"):
+                return {"rt_cd": "0", "output": {"stck_prpr": "39000", "acml_vol": "1000"}}
+            if path.endswith("/inquire-ccnl"):
+                return {"rt_cd": "0", "output": [{"stck_prpr": "39000", "tday_rltv": "88"}]}
+            if path.endswith("/investor-trend-estimate"):
+                return {"rt_cd": "0", "output1": None, "output2": [
+                    {"bsop_hour_gb": "5", "frgn_fake_ntby_qty": "-349000", "orgn_fake_ntby_qty": "19000"},
+                    {"bsop_hour_gb": "2", "frgn_fake_ntby_qty": "-226000", "orgn_fake_ntby_qty": "-4000"},
+                    {"bsop_hour_gb": "1", "frgn_fake_ntby_qty": "-121000", "orgn_fake_ntby_qty": "0"},
+                ]}
+            if path.endswith("/inquire-asking-price-exp-ccn"):
+                return {"rt_cd": "0", "output1": {"total_bidp_rsqn": "1200", "total_askp_rsqn": "900"}}
+            raise AssertionError("unexpected KIS path: " + path)
+
+        provider = KISMarketSignalProvider(
+            settings={
+                "kisBaseUrl": "https://kis.example.test",
+                "kisAppKey": "key",
+                "kisAppSecret": "secret",
+                "kisMarketSignalGapSeconds": "0",
+                "kisInvestorIntradayEstimateEnabled": "1",
+            },
+            quote_cache=MemoryQuoteCache(),
+            fetch_json=fake_fetch_json,
+            now_provider=lambda: datetime(2026, 8, 10, 1, 5, tzinfo=timezone.utc),
+        )
+        prior = normalize_position({
+            "symbol": "035720",
+            "name": "카카오",
+            "market": "KR",
+            "currency": "KRW",
+            "foreignBuyVolume": 999,
+            "foreignSellVolume": 1,
+            "foreignNetVolume": 998,
+            "institutionNetVolume": 777,
+            "individualNetVolume": -1775,
+        })
+
+        positions, _watchlist = provider.enrich_collections([prior], [])
+        position = positions[0]
+        coverage = position.market_signal_coverage["investor"]
+
+        self.assertTrue(any(path.endswith("/investor-trend-estimate") for path, _query in calls))
+        self.assertFalse(any(path.endswith("/inquire-investor") for path, _query in calls))
+        self.assertEqual({"MKSC_SHRN_ISCD": "035720"}, next(query for path, query in calls if path.endswith("/investor-trend-estimate")))
+        self.assertEqual(-226000, position.foreign_net_volume)
+        self.assertEqual(-4000, position.institution_net_volume)
+        self.assertEqual(0, position.foreign_buy_volume)
+        self.assertEqual(0, position.foreign_sell_volume)
+        self.assertEqual(0, position.individual_net_volume)
+        self.assertEqual("intraday-estimate", coverage["measurementType"])
+        self.assertEqual("10:00", coverage["providerUpdateSlot"])
+        self.assertEqual("2026-08-10T10:00:00+09:00", coverage["sourceAsOf"])
+        self.assertEqual("scheduled-estimate", coverage["cadence"])
+        self.assertFalse(coverage["realTime"])
+        self.assertTrue(coverage["judgementEvidenceUsable"])
+        psychology = investor_flow_psychology(position)
+        self.assertEqual("estimated", psychology["dataState"])
+        self.assertEqual("intraday-estimate", psychology["investorFlowMeasurementType"])
+        self.assertTrue(psychology["investorFlowIsEstimate"])
+        self.assertIn("10:00 KST 기준", RealtimeMonitor().investor_context_line(position.to_dict()))
+
+    def test_kis_regular_session_waits_for_first_official_investor_estimate_slot(self):
+        calls = []
+
+        def fake_fetch_json(method, url, headers=None, body=None, query=None, timeout=12):
+            path = url.split("?", 1)[0]
+            calls.append(path)
+            if path.endswith("/oauth2/tokenP"):
+                return {"access_token": "token"}
+            if path.endswith("/inquire-price"):
+                return {"rt_cd": "0", "output": {"stck_prpr": "39000", "acml_vol": "1000"}}
+            if path.endswith("/inquire-ccnl"):
+                return {"rt_cd": "0", "output": [{"stck_prpr": "39000", "tday_rltv": "88"}]}
+            if path.endswith("/inquire-asking-price-exp-ccn"):
+                return {"rt_cd": "0", "output1": {"total_bidp_rsqn": "1200", "total_askp_rsqn": "900"}}
+            raise AssertionError("investor estimate must not be requested before 09:30 KST")
+
+        provider = KISMarketSignalProvider(
+            settings={
+                "kisBaseUrl": "https://kis.example.test",
+                "kisAppKey": "key",
+                "kisAppSecret": "secret",
+                "kisMarketSignalGapSeconds": "0",
+                "kisInvestorIntradayEstimateEnabled": "1",
+            },
+            quote_cache=MemoryQuoteCache(),
+            fetch_json=fake_fetch_json,
+            now_provider=lambda: datetime(2026, 8, 10, 0, 15, tzinfo=timezone.utc),
+        )
+
+        signal = provider.fetch_symbol_signal("035720")
+        coverage = signal["marketSignalCoverage"]["investor"]
+
+        self.assertFalse(any(path.endswith("/investor-trend-estimate") for path in calls))
+        self.assertEqual("missing", coverage["status"])
+        self.assertEqual("intraday-estimate", coverage["measurementType"])
+        self.assertFalse(coverage["judgementEvidenceUsable"])
+        self.assertEqual("2026-08-10T09:30:00+09:00", coverage["nextProviderUpdateAt"])
+        self.assertNotIn("foreignNetVolume", signal)
+
+    def test_kis_first_estimate_slot_does_not_treat_institution_placeholder_as_flow(self):
+        def fake_fetch_json(method, url, headers=None, body=None, query=None, timeout=12):
+            path = url.split("?", 1)[0]
+            if path.endswith("/oauth2/tokenP"):
+                return {"access_token": "token"}
+            if path.endswith("/inquire-price"):
+                return {"rt_cd": "0", "output": {"stck_prpr": "39000", "acml_vol": "1000"}}
+            if path.endswith("/inquire-ccnl"):
+                return {"rt_cd": "0", "output": [{"stck_prpr": "39000", "tday_rltv": "88"}]}
+            if path.endswith("/investor-trend-estimate"):
+                return {"rt_cd": "0", "output2": [{
+                    "bsop_hour_gb": "1",
+                    "frgn_fake_ntby_qty": "-121000",
+                    "orgn_fake_ntby_qty": "0",
+                }]}
+            if path.endswith("/inquire-asking-price-exp-ccn"):
+                return {"rt_cd": "0", "output1": {"total_bidp_rsqn": "1200", "total_askp_rsqn": "900"}}
+            raise AssertionError("unexpected KIS path: " + path)
+
+        provider = KISMarketSignalProvider(
+            settings={
+                "kisBaseUrl": "https://kis.example.test",
+                "kisAppKey": "key",
+                "kisAppSecret": "secret",
+                "kisMarketSignalGapSeconds": "0",
+            },
+            quote_cache=MemoryQuoteCache(),
+            fetch_json=fake_fetch_json,
+            now_provider=lambda: datetime(2026, 8, 10, 0, 35, tzinfo=timezone.utc),
+        )
+
+        signal = provider.fetch_symbol_signal("035720")
+        coverage = signal["marketSignalCoverage"]["investor"]
+
+        self.assertEqual(-121000, signal["foreignNetVolume"])
+        self.assertNotIn("institutionNetVolume", signal)
+        self.assertEqual(["foreignNetVolume"], coverage["fields"])
+        self.assertEqual("09:30", coverage["providerUpdateSlot"])
+
+    def test_kis_post_close_uses_current_business_day_final_investor_totals(self):
+        calls = []
+
+        def fake_fetch_json(method, url, headers=None, body=None, query=None, timeout=12):
+            path = url.split("?", 1)[0]
+            calls.append(path)
+            if path.endswith("/oauth2/tokenP"):
+                return {"access_token": "token"}
+            if path.endswith("/inquire-price"):
+                return {"rt_cd": "0", "output": {"stck_prpr": "39550", "acml_vol": "1949998"}}
+            if path.endswith("/inquire-ccnl"):
+                return {"rt_cd": "0", "output": [{"stck_prpr": "39550", "tday_rltv": "70"}]}
+            if path.endswith("/inquire-investor"):
+                return {"rt_cd": "0", "output": [{
+                    "stck_bsop_date": "20260810",
+                    "frgn_ntby_qty": "-324494",
+                    "orgn_ntby_qty": "74557",
+                    "prsn_ntby_qty": "270797",
+                }]}
+            if path.endswith("/inquire-asking-price-exp-ccn"):
+                return {"rt_cd": "0", "output1": {"total_bidp_rsqn": "1200", "total_askp_rsqn": "900"}}
+            raise AssertionError("unexpected KIS path: " + path)
+
+        provider = KISMarketSignalProvider(
+            settings={
+                "kisBaseUrl": "https://kis.example.test",
+                "kisAppKey": "key",
+                "kisAppSecret": "secret",
+                "kisMarketSignalGapSeconds": "0",
+            },
+            quote_cache=MemoryQuoteCache(),
+            fetch_json=fake_fetch_json,
+            now_provider=lambda: datetime(2026, 8, 10, 7, 0, tzinfo=timezone.utc),
+        )
+
+        signal = provider.fetch_symbol_signal("035720")
+        coverage = signal["marketSignalCoverage"]["investor"]
+
+        self.assertIn("https://kis.example.test/uapi/domestic-stock/v1/quotations/inquire-investor", calls)
+        self.assertFalse(any(path.endswith("/investor-trend-estimate") for path in calls))
+        self.assertEqual(-324494, signal["foreignNetVolume"])
+        self.assertEqual(74557, signal["institutionNetVolume"])
+        self.assertEqual(270797, signal["individualNetVolume"])
+        self.assertEqual("daily-final", coverage["measurementType"])
+        self.assertEqual("market-close-final", coverage["freshnessStatus"])
+        self.assertEqual("2026-08-10T00:00:00+09:00", coverage["sourceAsOf"])
+        self.assertTrue(coverage["aiUsableAsStrongEvidence"])
+
+    def test_kis_reuses_estimate_until_next_official_update_slot(self):
+        cached = {
+            "035720": {
+                "foreignNetVolume": -226000,
+                "institutionNetVolume": -4000,
+                "updatedAt": "2026-08-10T01:01:00Z",
+                "marketSignalCoverage": {
+                    "investor": {
+                        "status": "available",
+                        "fields": ["foreignNetVolume", "institutionNetVolume"],
+                        "measurementType": "intraday-estimate",
+                        "providerUpdateCode": "2",
+                        "providerUpdateSlot": "10:00",
+                        "providerUpdateCurrent": True,
+                        "sourceAsOf": "2026-08-10T10:00:00+09:00",
+                        "validUntil": "2026-08-10T11:30:00+09:00",
+                        "judgementEvidenceUsable": True,
+                    }
+                },
+            }
+        }
+        calls = []
+
+        def fake_fetch_json(method, url, headers=None, body=None, query=None, timeout=12):
+            path = url.split("?", 1)[0]
+            calls.append(path)
+            if path.endswith("/oauth2/tokenP"):
+                return {"access_token": "token"}
+            if path.endswith("/inquire-price"):
+                return {"rt_cd": "0", "output": {"stck_prpr": "39000", "acml_vol": "1000"}}
+            if path.endswith("/inquire-ccnl"):
+                return {"rt_cd": "0", "output": [{"stck_prpr": "39000", "tday_rltv": "88"}]}
+            if path.endswith("/inquire-asking-price-exp-ccn"):
+                return {"rt_cd": "0", "output1": {"total_bidp_rsqn": "1200", "total_askp_rsqn": "900"}}
+            raise AssertionError("estimate should remain cached until the next official slot")
+
+        provider = KISMarketSignalProvider(
+            settings={
+                "kisBaseUrl": "https://kis.example.test",
+                "kisAppKey": "key",
+                "kisAppSecret": "secret",
+                "kisMarketSignalGapSeconds": "0",
+            },
+            quote_cache=MemoryQuoteCache(cached),
+            fetch_json=fake_fetch_json,
+            now_provider=lambda: datetime(2026, 8, 10, 1, 30, tzinfo=timezone.utc),
+        )
+
+        signal = provider.fetch_symbol_signal("035720")
+
+        self.assertFalse(any(path.endswith("/investor-trend-estimate") for path in calls))
+        self.assertEqual(-226000, signal["foreignNetVolume"])
+        self.assertEqual(-4000, signal["institutionNetVolume"])
 
     def test_repeated_kis_investor_totals_remain_important_reference_evidence(self):
         provider = KISMarketSignalProvider(

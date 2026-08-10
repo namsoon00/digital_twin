@@ -1827,6 +1827,11 @@ TYPEDB_PROMOTED_TEXT_ATTRIBUTES = {
     "investorFlowEvidenceRole": "ontology-investor-flow-evidence-role",
     "investorFlowDataState": "ontology-investor-flow-data-state",
     "investorFlowReviewLevel": "ontology-investor-flow-review-level",
+    "investorFlowMeasurementType": "ontology-investor-flow-measurement-type",
+    "investorFlowIsEstimate": "ontology-investor-flow-is-estimate",
+    "investorFlowSourceAsOf": "ontology-investor-flow-source-as-of",
+    "investorFlowProviderUpdateSlot": "ontology-investor-flow-provider-update-slot",
+    "investorFlowFreshnessStatus": "ontology-investor-flow-freshness-status",
     "trendRiskState": "ontology-trend-risk-state",
     "trendReviewLevel": "ontology-trend-review-level",
     "trendEvidenceRole": "ontology-trend-evidence-role",
@@ -12014,6 +12019,11 @@ attribute ontology-investor-flow-psychology, value string;
 attribute ontology-investor-flow-evidence-role, value string;
 attribute ontology-investor-flow-data-state, value string;
 attribute ontology-investor-flow-review-level, value string;
+attribute ontology-investor-flow-measurement-type, value string;
+attribute ontology-investor-flow-is-estimate, value string;
+attribute ontology-investor-flow-source-as-of, value string;
+attribute ontology-investor-flow-provider-update-slot, value string;
+attribute ontology-investor-flow-freshness-status, value string;
 attribute ontology-trend-risk-state, value string;
 attribute ontology-trend-review-level, value string;
 attribute ontology-trend-evidence-role, value string;
@@ -12277,6 +12287,11 @@ entity ontology-node @abstract,
     owns ontology-investor-flow-evidence-role,
     owns ontology-investor-flow-data-state,
     owns ontology-investor-flow-review-level,
+    owns ontology-investor-flow-measurement-type,
+    owns ontology-investor-flow-is-estimate,
+    owns ontology-investor-flow-source-as-of,
+    owns ontology-investor-flow-provider-update-slot,
+    owns ontology-investor-flow-freshness-status,
     owns ontology-trend-risk-state,
     owns ontology-trend-review-level,
     owns ontology-trend-evidence-role,

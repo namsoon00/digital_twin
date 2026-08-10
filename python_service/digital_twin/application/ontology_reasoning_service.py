@@ -272,7 +272,7 @@ def reasoning_request_provenance(
         "targetSymbols": sorted(targets)[:80],
         "sourceObservedAt": max(observed_at) if observed_at else "",
         "changedFieldsBySymbol": {
-            symbol: sorted(values)[:30]
+            symbol: sorted(values)[:80]
             for symbol, values in sorted(changed_fields.items())
             if values
         },

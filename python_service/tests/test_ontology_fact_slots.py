@@ -59,6 +59,7 @@ class OntologyFactSlotTests(unittest.TestCase):
             ["market", "position"],
             plan["slotFamiliesBySymbol"]["005930"],
         )
+        self.assertEqual(["market", "position"], plan["slotFamilies"])
         self.assertEqual(
             [
                 "link:symbol:005930:market",

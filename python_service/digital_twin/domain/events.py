@@ -590,7 +590,7 @@ def compact_ontology_reasoning_request_payload_for_storage(payload: Mapping[str,
         compact_fields = {}
         for symbol, fields in changed_fields.items():
             clean_symbol = _event_text(symbol, 64).upper()
-            clean_fields = _event_text_list(fields, limit=30, item_limit=96)
+            clean_fields = _event_text_list(fields, limit=80, item_limit=96)
             if clean_symbol and clean_fields:
                 compact_fields[clean_symbol] = clean_fields
             if len(compact_fields) >= 200:
@@ -784,7 +784,7 @@ def market_data_collected_event(payload: Dict[str, object]) -> DomainEvent:
         if fields is None:
             fields = raw_changed_fields.get(symbol.upper())
         if isinstance(fields, (list, tuple, set)):
-            changed_fields[symbol] = [str(field or "").strip() for field in fields if str(field or "").strip()][:30]
+            changed_fields[symbol] = [str(field or "").strip() for field in fields if str(field or "").strip()][:80]
         revision = str(raw_revisions.get(symbol) or raw_revisions.get(symbol.upper()) or "").strip()
         if revision:
             revisions[symbol] = revision[:160]
@@ -1047,7 +1047,7 @@ def ontology_reasoning_requested_event(
         if fields is None:
             fields = raw_changed_fields.get(symbol.upper())
         if isinstance(fields, (list, tuple, set)):
-            changed_fields[symbol] = [str(field or "").strip() for field in fields if str(field or "").strip()][:30]
+            changed_fields[symbol] = [str(field or "").strip() for field in fields if str(field or "").strip()][:80]
         values = raw_fact_types_by_symbol.get(symbol)
         if values is None:
             values = raw_fact_types_by_symbol.get(symbol.upper())

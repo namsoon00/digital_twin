@@ -3713,11 +3713,43 @@ class ScopedABoxManifestMixin:
     def scoped_abox_relation_persistence_summary(write_plan: Dict[str, object]) -> Dict[str, object]:
         """Expose requested, inserted, and reused relation writes for audit."""
         values = dict(write_plan or {})
+        expected = dict(values.get("expectedCountsByScope") or {})
+        inserted = dict(values.get("insertedCountsByScope") or {})
+        reused = dict(values.get("reusedCountsByScope") or {})
+
+        def counts(source: Dict[str, object], scope_id: str) -> Dict[str, int]:
+            row = dict(source.get(scope_id) or {})
+            return {
+                "entityCount": max(0, int(row.get("entityCount") or 0)),
+                "relationCount": max(0, int(row.get("relationCount") or 0)),
+            }
+
+        scope_rows = []
+        for scope_id in sorted(set(expected) | set(inserted) | set(reused)):
+            requested_counts = counts(expected, scope_id)
+            inserted_counts = counts(inserted, scope_id)
+            reused_counts = counts(reused, scope_id)
+            scope_rows.append({
+                "scopeId": scope_id,
+                "scopeFamily": scope_family(scope_id),
+                "symbol": scope_symbol(scope_id),
+                "requested": requested_counts,
+                "inserted": inserted_counts,
+                "reused": reused_counts,
+            })
+        scope_rows.sort(key=lambda item: (
+            -int(item["inserted"]["entityCount"] + item["inserted"]["relationCount"]),
+            -int(item["requested"]["entityCount"] + item["requested"]["relationCount"]),
+            str(item["scopeId"]),
+        ))
         return {
-            "version": "scoped-abox-relation-persistence-v1",
+            "version": "scoped-abox-relation-persistence-v2",
             "requested": dict(values.get("requestedRelationBreakdown") or {}),
             "inserted": dict(values.get("insertedRelationBreakdown") or {}),
             "reused": dict(values.get("reusedRelationBreakdown") or {}),
+            "scopeCount": len(scope_rows),
+            "scopes": scope_rows[:40],
+            "remainingScopeCount": max(0, len(scope_rows) - 40),
         }
 
     @staticmethod
@@ -16231,9 +16263,9 @@ relation ontology-assertion,
 
         schema_function_probe = {
             "status": "not-requested",
-            "available": requested_query_mode == "schema-function",
+            "available": False,
         }
-        if requested_query_mode == "auto":
+        if requested_query_mode in {"auto", "schema-function"}:
             probe_started = time.perf_counter()
             schema_function_probe = self.probe_typedb_native_rule_functions(rules, world_id)
             schema_function_probe = {
@@ -16246,11 +16278,14 @@ relation ontology-assertion,
             }
             schema_function_probe["durationMs"] = int((time.perf_counter() - probe_started) * 1000)
         use_schema_functions = (
-            requested_query_mode == "schema-function"
-            or requested_query_mode == "auto" and bool(schema_function_probe.get("available"))
+            requested_query_mode in {"auto", "schema-function"}
+            and bool(schema_function_probe.get("available"))
         )
         report["nativeQueryMode"] = "schema-function" if use_schema_functions else "direct-typeql"
         report["schemaFunctionProbe"] = schema_function_probe
+        report["schemaFunctionFallback"] = bool(
+            requested_query_mode == "schema-function" and not use_schema_functions
+        )
 
         report["rulebox"] = {
             "ruleCount": len(rules),

@@ -622,7 +622,7 @@ def verified_monitor_snapshot_reasoning_event(
         )
         all_fact_types.update(fact_types)
         changed_symbols.append(symbol)
-        changed_fields_by_symbol[symbol] = fields[:30]
+        changed_fields_by_symbol[symbol] = fields[:80]
         changed_external_groups_by_symbol[symbol] = external_groups
         fact_types_by_symbol[symbol] = fact_types
         if assessment:

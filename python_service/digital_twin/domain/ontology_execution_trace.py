@@ -182,6 +182,18 @@ def reasoning_stage_records(
         "selectedScopes": selected_scope_rows,
         "deferredScopes": deferred_scope_rows,
     })
+    relation_persistence = _mapping(values.get("relationPersistence"))
+    persistence_scopes = [
+        dict(item)
+        for item in (relation_persistence.get("scopes") or [])[:40]
+        if isinstance(item, Mapping)
+    ]
+    add("abox-persistence", _text(values.get("status")) or "not-run", detail={
+        "version": _text(relation_persistence.get("version")),
+        "scopeCount": _integer(relation_persistence.get("scopeCount")),
+        "remainingScopeCount": _integer(relation_persistence.get("remainingScopeCount")),
+        "scopes": persistence_scopes,
+    })
     for raw_key, raw_duration in runtime_stages.items():
         stage_key = _text(raw_key)
         if not stage_key or not isinstance(raw_duration, (int, float)):

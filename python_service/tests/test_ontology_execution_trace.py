@@ -57,6 +57,18 @@ class OntologyExecutionTraceTests(unittest.TestCase):
                     },
                 },
             },
+            "relationPersistence": {
+                "version": "scoped-abox-relation-persistence-v2",
+                "scopeCount": 1,
+                "scopes": [{
+                    "scopeId": "symbol:035420:market",
+                    "scopeFamily": "market",
+                    "symbol": "035420",
+                    "requested": {"entityCount": 9, "relationCount": 7},
+                    "inserted": {"entityCount": 4, "relationCount": 3},
+                    "reused": {"entityCount": 5, "relationCount": 4},
+                }],
+            },
             "inferenceImpactPlan": {"candidateRuleIds": ["rule.price"]},
             "ruleboxExecution": {
                 "status": "ok",
@@ -117,6 +129,15 @@ class OntologyExecutionTraceTests(unittest.TestCase):
         self.assertEqual(
             "symbol:035420:market",
             scope_stage["detail"]["selectedScopes"][0]["scopeId"],
+        )
+        persistence_stage = next(
+            item for item in trace["stages"]
+            if item["stageKey"] == "abox-persistence"
+        )
+        self.assertEqual(1, persistence_stage["detail"]["scopeCount"])
+        self.assertEqual(
+            4,
+            persistence_stage["detail"]["scopes"][0]["inserted"]["entityCount"],
         )
         rules = {item["ruleId"]: item for item in trace["rules"]}
         self.assertEqual("matched", rules["rule.price"]["status"])

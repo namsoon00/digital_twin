@@ -327,6 +327,20 @@ def build_fact_slot_projection_plan(
             if unclassified_fields:
                 unclassified_fields_by_symbol[symbol] = unclassified_fields
         slots_by_symbol[symbol] = symbol_slots
+    # Shared scopes must follow the same field-level contract as symbol scopes.
+    # Keeping the legacy batch-wide closure here caused precise market events to
+    # re-select unrelated macro, valuation, and state scopes through shared
+    # dependency families.
+    if (
+        targets
+        and precise_field_routing_symbols == set(targets)
+        and not fallback_targets
+    ):
+        slots = {
+            family
+            for symbol_slots in slots_by_symbol.values()
+            for family in symbol_slots
+        }
     return {
         "version": FACT_SLOT_PROJECTION_VERSION,
         "enabled": True,

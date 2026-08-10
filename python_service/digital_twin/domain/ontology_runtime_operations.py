@@ -655,11 +655,37 @@ def compact_abox_relation_persistence(value: object) -> Dict[str, object]:
             "byScope": histogram(source.get("byScope")),
         }
 
+    def row_counts(value: object) -> Dict[str, int]:
+        source = dict(value or {}) if isinstance(value, Mapping) else {}
+        return {
+            "entityCount": max(0, _integer(source.get("entityCount"))),
+            "relationCount": max(0, _integer(source.get("relationCount"))),
+        }
+
+    scope_rows = []
+    for item in raw.get("scopes") or []:
+        if not isinstance(item, Mapping) or len(scope_rows) >= 40:
+            continue
+        scope_id = _text(item.get("scopeId"))
+        if not scope_id:
+            continue
+        scope_rows.append({
+            "scopeId": scope_id[:260],
+            "scopeFamily": _text(item.get("scopeFamily"))[:80],
+            "symbol": _text(item.get("symbol"))[:64],
+            "requested": row_counts(item.get("requested")),
+            "inserted": row_counts(item.get("inserted")),
+            "reused": row_counts(item.get("reused")),
+        })
+
     return {
         "version": _text(raw.get("version")),
         "requested": breakdown(raw.get("requested")),
         "inserted": breakdown(raw.get("inserted")),
         "reused": breakdown(raw.get("reused")),
+        "scopeCount": max(len(scope_rows), _integer(raw.get("scopeCount"))),
+        "scopes": scope_rows,
+        "remainingScopeCount": max(0, _integer(raw.get("remainingScopeCount"))),
     }
 
 
@@ -1443,7 +1469,7 @@ def build_projection_runtime_observation(
                 "factSlotChangedFieldsBySymbol": {
                     _text(symbol).upper(): [
                         _text(value)
-                        for value in (fields or [])[:30]
+                        for value in (fields or [])[:80]
                         if _text(value)
                     ]
                     for symbol, fields in dict(
@@ -1461,7 +1487,7 @@ def build_projection_runtime_observation(
                 "factSlotUnclassifiedChangedFieldsBySymbol": {
                     _text(symbol).upper(): [
                         _text(value)
-                        for value in (fields or [])[:30]
+                        for value in (fields or [])[:80]
                         if _text(value)
                     ]
                     for symbol, fields in dict(

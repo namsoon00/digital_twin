@@ -38,6 +38,11 @@ class ReadOnlyTypeDBReasoningProfileTests(unittest.TestCase):
             "rules": [rule.to_dict()],
         })
         repository.active_abox_metadata = Mock(return_value=active_abox())
+        repository.probe_typedb_native_rule_functions = Mock(return_value={
+            "status": "ok",
+            "available": True,
+            "verifiedRuleCount": 1,
+        })
         repository.match_typedb_native_rules = Mock(return_value={
             "status": "ok",
             "executedRuleCount": 1,
@@ -158,6 +163,27 @@ class ReadOnlyTypeDBReasoningProfileTests(unittest.TestCase):
             repository.match_typedb_native_rules.call_args.kwargs["use_schema_functions"]
         )
         repository.sync_typedb_native_rule_functions.assert_not_called()
+
+    def test_schema_mode_falls_back_to_direct_typeql_when_function_is_missing(self):
+        repository = self.repository()
+        repository.probe_typedb_native_rule_functions = Mock(return_value={
+            "status": "missing",
+            "available": False,
+            "missingRuleIds": [default_graph_inference_rules()[0].rule_id],
+        })
+
+        result = repository.profile_native_rule_reads({
+            "worldId": "portfolio:local:main",
+            "symbols": ["005930"],
+            "repeats": 1,
+            "nativeQueryMode": "schema-function",
+        })
+
+        self.assertEqual("direct-typeql", result["nativeQueryMode"])
+        self.assertTrue(result["schemaFunctionFallback"])
+        self.assertFalse(
+            repository.match_typedb_native_rules.call_args.kwargs["use_schema_functions"]
+        )
 
     def test_profile_reports_query_failure_without_crashing_or_writing(self):
         repository = self.repository()

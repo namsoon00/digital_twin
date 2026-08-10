@@ -258,6 +258,16 @@ class OntologyReasoningProofService:
             if schema_function_used
             else "auto"
         )
+        production_rule_ids = []
+        for item in rule_trace.get("rules") or []:
+            rule_id = str(item.get("ruleId") or "")
+            if rule_id and rule_id not in production_rule_ids:
+                production_rule_ids.append(rule_id)
+        requested_rule_ids = [
+            str(item)
+            for item in rule_ids or production_rule_ids
+            if str(item)
+        ]
         profiler = getattr(self.ontology_repository, "profile_native_rule_reads", None)
         if not callable(profiler):
             profile = {
@@ -273,17 +283,14 @@ class OntologyReasoningProofService:
                 "worldId": resolved_world_id,
                 "symbols": requested_symbols,
                 "repeats": max(1, min(3, int(repeats or 2))),
-                "ruleIds": [str(item) for item in rule_ids or [] if str(item)],
+                # Compare the exact production read set by default. Replaying
+                # every active rule both distorts the evidence and can touch a
+                # schema function that the production generation never used.
+                "ruleIds": requested_rule_ids,
                 "nativeQueryMode": replay_query_mode,
             })
         replay = summarize_read_only_replay(profile.get("samples") or [])
-        production_slow_rules = []
-        for item in rule_trace.get("rules") or []:
-            rule_id = str(item.get("ruleId") or "")
-            if rule_id and rule_id not in production_slow_rules:
-                production_slow_rules.append(rule_id)
-            if len(production_slow_rules) >= 8:
-                break
+        production_slow_rules = production_rule_ids[:8]
         replay_slow_rules = self.replay_slow_rule_ids(profile.get("samples") or [])
         overlap = sorted(set(production_slow_rules) & set(replay_slow_rules))
         verdict = classify_reasoning_bottleneck(production, replay, overlap)

@@ -1432,7 +1432,7 @@ def runtime_settings(fast_operational_read: bool = False) -> Dict[str, str]:
         # Do not pause live TypeDB inference for routine ABox retention. The
         # maintenance worker drains it when the reasoning queue is idle, and
         # the capacity guard retains its independent emergency path.
-        "ontologyAboxMaintenanceYieldEnabled": value("ontologyAboxMaintenanceYieldEnabled", "ONTOLOGY_ABOX_MAINTENANCE_YIELD_ENABLED", "0"),
+        "ontologyAboxMaintenanceYieldEnabled": value("ontologyAboxMaintenanceYieldEnabled", "ONTOLOGY_ABOX_MAINTENANCE_YIELD_ENABLED", "1"),
         "ontologyAboxMaintenanceYieldAfterSeconds": value("ontologyAboxMaintenanceYieldAfterSeconds", "ONTOLOGY_ABOX_MAINTENANCE_YIELD_AFTER_SECONDS", "120"),
         "ontologyAboxMaintenanceYieldWindowSeconds": value("ontologyAboxMaintenanceYieldWindowSeconds", "ONTOLOGY_ABOX_MAINTENANCE_YIELD_WINDOW_SECONDS", "30"),
         "ontologyAboxMaintenanceYieldRequestTtlSeconds": value("ontologyAboxMaintenanceYieldRequestTtlSeconds", "ONTOLOGY_ABOX_MAINTENANCE_YIELD_REQUEST_TTL_SECONDS", "420"),

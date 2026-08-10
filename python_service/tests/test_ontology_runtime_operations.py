@@ -380,7 +380,7 @@ class OntologyRuntimeOperationsTests(unittest.TestCase):
     def test_projection_observation_keeps_relation_write_breakdown(self):
         result = self.sample_result()
         result["relationPersistence"] = {
-            "version": "scoped-abox-relation-persistence-v1",
+            "version": "scoped-abox-relation-persistence-v2",
             "requested": {
                 "relationCount": 12,
                 "byRelationType": {"distinctCount": 1, "items": [{"key": "HAS_PRICE", "count": 12}], "remainingCount": 0},
@@ -390,15 +390,26 @@ class OntologyRuntimeOperationsTests(unittest.TestCase):
             },
             "inserted": {},
             "reused": {},
+            "scopeCount": 1,
+            "scopes": [{
+                "scopeId": "symbol:005930:market",
+                "scopeFamily": "market",
+                "symbol": "005930",
+                "requested": {"entityCount": 9, "relationCount": 12},
+                "inserted": {"entityCount": 0, "relationCount": 0},
+                "reused": {"entityCount": 9, "relationCount": 12},
+            }],
         }
 
         observation = build_projection_runtime_observation(self.sample_run(), result)
 
         metrics = observation["abox"]["relationPersistence"]
-        self.assertEqual("scoped-abox-relation-persistence-v1", metrics["version"])
+        self.assertEqual("scoped-abox-relation-persistence-v2", metrics["version"])
         self.assertEqual(12, metrics["requested"]["relationCount"])
         self.assertEqual("HAS_PRICE", metrics["requested"]["byRelationType"]["items"][0]["key"])
         self.assertEqual(0, metrics["inserted"]["relationCount"])
+        self.assertEqual(1, metrics["scopeCount"])
+        self.assertEqual(9, metrics["scopes"][0]["reused"]["entityCount"])
 
     def test_projection_observation_keeps_runtime_identity_outside_inference(self):
         result = self.sample_result()

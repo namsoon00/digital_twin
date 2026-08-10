@@ -128,6 +128,21 @@ class DomainEventStoragePayloadTests(unittest.TestCase):
             stored["factTypesBySymbol"],
         )
 
+    def test_reasoning_request_keeps_complete_position_change_field_set(self):
+        fields = [f"field_{index:02d}" for index in range(55)]
+        request = ontology_reasoning_requested_event(
+            DomainEvent(name="monitoring.snapshot_collected", aggregate_id="monitor:acct", payload={}),
+            "verified-monitor-snapshot",
+            ["AAPL"],
+            changed_count=1,
+            fact_types=["MarketQuote"],
+            changed_fields_by_symbol={"AAPL": fields},
+        )
+
+        stored = domain_event_storage_payload(request.name, request.payload)
+
+        self.assertEqual(fields, stored["changedFieldsBySymbol"]["AAPL"])
+
 
 if __name__ == "__main__":
     unittest.main()

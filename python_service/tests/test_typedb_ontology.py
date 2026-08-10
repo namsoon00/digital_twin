@@ -1309,6 +1309,27 @@ class TypeDBOntologyRepositoryTests(unittest.TestCase):
             {item["key"]: item["count"] for item in breakdown["bySymbol"]["items"]},
         )
 
+    def test_scoped_abox_persistence_summary_keeps_per_scope_row_cost(self):
+        repository = TypeDBOntologyGraphRepository("127.0.0.1:1729")
+        summary = repository.scoped_abox_relation_persistence_summary({
+            "expectedCountsByScope": {
+                "symbol:005930:market": {"entityCount": 9, "relationCount": 7},
+                "symbol:005930:flow": {"entityCount": 3, "relationCount": 2},
+            },
+            "insertedCountsByScope": {
+                "symbol:005930:market": {"entityCount": 4, "relationCount": 3},
+            },
+            "reusedCountsByScope": {
+                "symbol:005930:market": {"entityCount": 5, "relationCount": 4},
+                "symbol:005930:flow": {"entityCount": 3, "relationCount": 2},
+            },
+        })
+
+        self.assertEqual("scoped-abox-relation-persistence-v2", summary["version"])
+        self.assertEqual(2, summary["scopeCount"])
+        self.assertEqual("symbol:005930:market", summary["scopes"][0]["scopeId"])
+        self.assertEqual({"entityCount": 4, "relationCount": 3}, summary["scopes"][0]["inserted"])
+
     def test_scoped_abox_write_reports_requested_inserted_and_reused_relations(self):
         repository = TypeDBOntologyGraphRepository("127.0.0.1:1729")
         relation = {

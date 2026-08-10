@@ -61,7 +61,7 @@ def compact_reasoning_request_context(
             if not symbol or (targets and symbol not in targets):
                 continue
             if list_values:
-                cleaned = clean_list(raw_value, limit=30)
+                cleaned = clean_list(raw_value, limit=80)
                 if cleaned:
                     result[symbol] = cleaned
             else:
@@ -564,7 +564,7 @@ def projection_result_summary(result: Dict[str, object]) -> Dict[str, object]:
                     str(value or "").strip()
                     for value in values or []
                     if str(value or "").strip()
-                })[:30]
+                })[:80]
                 for symbol, values in dict(
                     target_patch.get("factSlotChangedFieldsBySymbol") or {}
                 ).items()
@@ -578,7 +578,7 @@ def projection_result_summary(result: Dict[str, object]) -> Dict[str, object]:
                     str(value or "").strip()
                     for value in values or []
                     if str(value or "").strip()
-                })[:30]
+                })[:80]
                 for symbol, values in dict(
                     target_patch.get("factSlotUnclassifiedChangedFieldsBySymbol") or {}
                 ).items()

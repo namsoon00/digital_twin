@@ -175,6 +175,34 @@ GENERIC_RESEARCH_LATEST_STATE_SLOT = "ResearchEvidenceLatestState"
 REALTIME_LATEST_STATE_SLOT = "RealtimeObservationLatestState"
 
 
+def mailbox_fact_family(fact_type: object) -> str:
+    """Map transport fact names to independently replaceable world facts."""
+
+    value = str(fact_type or "").strip()
+    normalized = value.lower().replace("_", "").replace("-", "")
+    if normalized in {"marketquote", "pricemetric"}:
+        return "price"
+    if normalized in {"tradeflow", "executionflow", "investorflow", "orderbook"}:
+        return "flow"
+    if normalized in {"technicalindicator"}:
+        return "technical"
+    if normalized in {"interestrate"}:
+        return "rates"
+    if normalized in {"fxrate"}:
+        return "fx"
+    if normalized in {"cryptomarket"}:
+        return "crypto"
+    if normalized in {"macroindicator", "marketproxy", "marketproxyinstrument"}:
+        return "macro-market"
+    if value in EVIDENCE_FACT_TYPES:
+        return "evidence"
+    if value in PORTFOLIO_FACT_TYPES:
+        return "portfolio"
+    if normalized in {"dataquality"}:
+        return "quality"
+    return normalized or "marketquote"
+
+
 def event_payload(event: object) -> Dict[str, object]:
     return dict(getattr(event, "payload", {}) or {})
 
@@ -499,7 +527,11 @@ def is_realtime_latest_state(event: object) -> bool:
     )
 
 
-def mailbox_slot_family(event: object, fact_types: Tuple[str, ...]) -> str:
+def mailbox_slot_family(
+    event: object,
+    fact_types: Tuple[str, ...],
+    fact_family: str = "",
+) -> str:
     """Return the durable latest-state identity without losing event facts.
 
     ``factFamily`` remains on the mailbox row for audit/readability. This
@@ -510,7 +542,17 @@ def mailbox_slot_family(event: object, fact_types: Tuple[str, ...]) -> str:
     if is_generic_research_latest_state(event):
         return GENERIC_RESEARCH_LATEST_STATE_SLOT
     if is_realtime_latest_state(event):
-        return REALTIME_LATEST_STATE_SLOT
+        family = str(fact_family or "").strip() or mailbox_fact_family(
+            next(iter(fact_types or ("MarketQuote",)), "MarketQuote")
+        )
+        # Preserve the existing price slot during migration. Independent
+        # current-state families receive their own suffix and cannot overwrite
+        # an unprocessed flow or technical revision for the same symbol.
+        return (
+            REALTIME_LATEST_STATE_SLOT
+            if family == "price"
+            else REALTIME_LATEST_STATE_SLOT + ":" + family
+        )
     return ",".join(fact_types) or "MarketQuote"
 
 
@@ -584,18 +626,19 @@ def durable_mailbox_entries(event: DomainEvent) -> List[Dict[str, object]]:
         symbol_fact_types = event_fact_types_for_symbol(event, symbol)
         priority = event_reasoning_priority(event)
         revision_vector = event_revision_vector(event, symbol)
-        grouped_fact_types: Dict[str, List[str]] = {}
+        grouped_fact_types: Dict[Tuple[str, str], List[str]] = {}
         for fact_type in symbol_fact_types or ("MarketQuote",):
             work_class = work_class_for_fact_types(
                 [fact_type],
                 trigger=trigger,
                 full_reconciliation=bool(event_payload(event).get("fullReconciliation")),
             )
-            grouped_fact_types.setdefault(work_class, []).append(fact_type)
-        for work_class, routed_fact_types in grouped_fact_types.items():
+            fact_family = mailbox_fact_family(fact_type)
+            grouped_fact_types.setdefault((work_class, fact_family), []).append(fact_type)
+        for (work_class, fact_family), routed_fact_types in grouped_fact_types.items():
             routed_fact_types = sorted(set(routed_fact_types))
             symbol_family = ",".join(routed_fact_types) or "MarketQuote"
-            slot_family = mailbox_slot_family(event, routed_fact_types)
+            slot_family = mailbox_slot_family(event, routed_fact_types, fact_family)
             impact_scope = work_class_impact_scope(work_class)
             reasoning_lane = work_class_reasoning_lane(work_class, priority)
             seed = "|".join([account_scope, symbol, work_class, slot_family])

@@ -938,6 +938,7 @@ def build_ontology_maintenance_runner(settings=None) -> OntologyMaintenanceRunne
         settings=configured_settings,
         reasoning_queue_probe=build_ontology_reasoning_queue_probe(configured_settings),
         capacity_guard=capacity_guard,
+        event_publisher=stores.event_log(store_settings),
     )
 
 

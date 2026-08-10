@@ -297,7 +297,7 @@ def family_for_entity(kind: object, properties: Mapping[str, object] = None, ent
         return "quality"
     if _matches_any(text, ["position", "holding-timing", "exit-exposure"]):
         return "position"
-    if _matches_any(text, ["security-line", "instrument-profile", "instrument-identity", "company", "adr", "depositary", "leveraged-etf", "single-stock-etf", "risk-budget", "profit-policy", "risk-management", "strategy-profile", "investment-strategy", "investment-archetype", "account-delivery-profile"]):
+    if _matches_any(text, ["instrument-anchor", "instrumentanchor", "security-line", "instrument-profile", "instrument-identity", "company", "adr", "depositary", "leveraged-etf", "single-stock-etf", "risk-budget", "profit-policy", "risk-management", "strategy-profile", "investment-strategy", "investment-archetype", "account-delivery-profile"]):
         return "profile"
     if _matches_any(text, ["factor", "exposure", "peer", "correlation", "sensitivity", "sector", "relative-performance"]):
         return "exposure"

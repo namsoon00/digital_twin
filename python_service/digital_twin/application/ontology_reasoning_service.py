@@ -121,6 +121,7 @@ def reasoning_request_provenance(
     fact_families_by_symbol: Dict[str, set] = {}
     revisions: Dict[str, str] = {}
     crypto_transitions: Dict[str, Dict[str, object]] = {}
+    scope_repair_requests_by_symbol: Dict[str, Dict[str, object]] = {}
     verified_source_snapshot: Dict[str, object] = {}
     for event in events or []:
         payload = event_payload(event)
@@ -168,6 +169,22 @@ def reasoning_request_provenance(
         raw_fields = raw_fields if isinstance(raw_fields, dict) else {}
         raw_revisions = payload.get("factRevisionsBySymbol")
         raw_revisions = raw_revisions if isinstance(raw_revisions, dict) else {}
+        raw_repairs = payload.get("scopeRepairRequestsBySymbol")
+        raw_repairs = raw_repairs if isinstance(raw_repairs, Mapping) else {}
+        for raw_symbol, raw_repair in raw_repairs.items():
+            symbol = str(raw_symbol or "").upper().strip()
+            repair = dict(raw_repair or {}) if isinstance(raw_repair, Mapping) else {}
+            scope_ids = sorted({
+                str(scope_id or "").strip()
+                for scope_id in repair.get("scopeIds") or []
+                if str(scope_id or "").strip()
+            })[:40]
+            request_id = str(repair.get("requestId") or "").strip()[:191]
+            if symbol and scope_ids and request_id and (not targets or symbol in targets):
+                scope_repair_requests_by_symbol[symbol] = {
+                    "requestId": request_id,
+                    "scopeIds": scope_ids,
+                }
         # A coherent execution batch can hold a quote event for one symbol
         # and a research event for another. Keep the event fact family bound
         # to its actual subjects so the scoped ABox writer does not turn the
@@ -278,6 +295,7 @@ def reasoning_request_provenance(
         },
         "factRevisionsBySymbol": dict(sorted(revisions.items())),
         "revisionVectorsBySymbol": dict(sorted(revision_vectors_by_symbol.items())),
+        "scopeRepairRequestsBySymbol": dict(sorted(scope_repair_requests_by_symbol.items())),
     }
     if crypto_transitions:
         context["cryptoTransitions"] = [

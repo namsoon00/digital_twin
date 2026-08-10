@@ -276,6 +276,8 @@ TEXT_SETTING_KEYS = [
     "ontologyAboxMaintenanceAdaptiveDrainEnabled",
     "ontologyAboxMaintenanceAdaptiveDrainMaxDeleteBatchesPerRun",
     "ontologyAboxMaintenanceAdaptiveDrainCriticalRunsBeforeIncrease",
+    "ontologyAboxMaintenanceAdaptiveDrainBacklogGrowthRunsBeforeIncrease",
+    "ontologyAboxMaintenanceAdaptiveDrainMaxConsecutiveWorldRuns",
     "ontologyAboxMaintenanceProcessIsolationEnabled",
     "ontologyAboxMaintenanceExecutionTimeoutSeconds",
     "ontologyAboxMaintenanceExecutionTimeoutGraceSeconds",
@@ -299,6 +301,7 @@ TEXT_SETTING_KEYS = [
     "ontologyScopeIntegrityAuditEnabled",
     "ontologyScopeIntegrityAuditIntervalMinutes",
     "ontologyScopeIntegrityAuditBatchSize",
+    "ontologyScopeRepairRetryMinutes",
     "ontologyReasoningUrgentReviewLevels",
     "ontologyReasoningProcessedEventLimit",
     "ontologyReasoningTypeDbNativeRuleExecutionEnabled",
@@ -1424,6 +1427,8 @@ def runtime_settings(fast_operational_read: bool = False) -> Dict[str, str]:
         "ontologyAboxMaintenanceAdaptiveDrainEnabled": value("ontologyAboxMaintenanceAdaptiveDrainEnabled", "ONTOLOGY_ABOX_MAINTENANCE_ADAPTIVE_DRAIN_ENABLED", "1"),
         "ontologyAboxMaintenanceAdaptiveDrainMaxDeleteBatchesPerRun": value("ontologyAboxMaintenanceAdaptiveDrainMaxDeleteBatchesPerRun", "ONTOLOGY_ABOX_MAINTENANCE_ADAPTIVE_DRAIN_MAX_DELETE_BATCHES_PER_RUN", "16"),
         "ontologyAboxMaintenanceAdaptiveDrainCriticalRunsBeforeIncrease": value("ontologyAboxMaintenanceAdaptiveDrainCriticalRunsBeforeIncrease", "ONTOLOGY_ABOX_MAINTENANCE_ADAPTIVE_DRAIN_CRITICAL_RUNS_BEFORE_INCREASE", "2"),
+        "ontologyAboxMaintenanceAdaptiveDrainBacklogGrowthRunsBeforeIncrease": value("ontologyAboxMaintenanceAdaptiveDrainBacklogGrowthRunsBeforeIncrease", "ONTOLOGY_ABOX_MAINTENANCE_ADAPTIVE_DRAIN_BACKLOG_GROWTH_RUNS_BEFORE_INCREASE", "2"),
+        "ontologyAboxMaintenanceAdaptiveDrainMaxConsecutiveWorldRuns": value("ontologyAboxMaintenanceAdaptiveDrainMaxConsecutiveWorldRuns", "ONTOLOGY_ABOX_MAINTENANCE_ADAPTIVE_DRAIN_MAX_CONSECUTIVE_WORLD_RUNS", "3"),
         "ontologyAboxMaintenanceProcessIsolationEnabled": value("ontologyAboxMaintenanceProcessIsolationEnabled", "ONTOLOGY_ABOX_MAINTENANCE_PROCESS_ISOLATION_ENABLED", "1"),
         "ontologyAboxMaintenanceExecutionTimeoutSeconds": value("ontologyAboxMaintenanceExecutionTimeoutSeconds", "ONTOLOGY_ABOX_MAINTENANCE_EXECUTION_TIMEOUT_SECONDS", "180"),
         "ontologyAboxMaintenanceExecutionTimeoutGraceSeconds": value("ontologyAboxMaintenanceExecutionTimeoutGraceSeconds", "ONTOLOGY_ABOX_MAINTENANCE_EXECUTION_TIMEOUT_GRACE_SECONDS", "10"),
@@ -1450,6 +1455,7 @@ def runtime_settings(fast_operational_read: bool = False) -> Dict[str, str]:
         "ontologyScopeIntegrityAuditEnabled": value("ontologyScopeIntegrityAuditEnabled", "ONTOLOGY_SCOPE_INTEGRITY_AUDIT_ENABLED", "1"),
         "ontologyScopeIntegrityAuditIntervalMinutes": value("ontologyScopeIntegrityAuditIntervalMinutes", "ONTOLOGY_SCOPE_INTEGRITY_AUDIT_INTERVAL_MINUTES", "30"),
         "ontologyScopeIntegrityAuditBatchSize": value("ontologyScopeIntegrityAuditBatchSize", "ONTOLOGY_SCOPE_INTEGRITY_AUDIT_BATCH_SIZE", "20"),
+        "ontologyScopeRepairRetryMinutes": value("ontologyScopeRepairRetryMinutes", "ONTOLOGY_SCOPE_REPAIR_RETRY_MINUTES", "30"),
         "ontologyReasoningUrgentReviewLevels": normalized_ontology_reasoning_urgent_review_levels(
             value("ontologyReasoningUrgentReviewLevels", "ONTOLOGY_REASONING_URGENT_REVIEW_LEVELS", "act,immediate")
         ),

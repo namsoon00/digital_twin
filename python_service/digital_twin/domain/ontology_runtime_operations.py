@@ -321,6 +321,20 @@ def scoped_abox_maintenance_policy(settings: Mapping[str, object] = None) -> Dic
             1,
             20,
         )),
+        "adaptiveDrainBacklogGrowthRunsBeforeIncrease": _integer(_setting_number(
+            configured,
+            "ontologyAboxMaintenanceAdaptiveDrainBacklogGrowthRunsBeforeIncrease",
+            2,
+            1,
+            20,
+        )),
+        "adaptiveDrainMaxConsecutiveWorldRuns": _integer(_setting_number(
+            configured,
+            "ontologyAboxMaintenanceAdaptiveDrainMaxConsecutiveWorldRuns",
+            3,
+            1,
+            20,
+        )),
     }
 
 

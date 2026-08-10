@@ -1,8 +1,10 @@
 """Low-priority, lease-safe retention for immutable TypeDB ABox manifests."""
 
+import hashlib
 from datetime import datetime, timedelta, timezone
 from typing import Dict, Iterable, List
 
+from ..domain.events import DomainEvent, ontology_reasoning_requested_event
 from ..domain.ontology_runtime_operations import (
     bounded_background_work_fairness,
     scoped_abox_maintenance_health,
@@ -37,7 +39,7 @@ class OntologyMaintenanceRunner:
     state in MySQL so restarts continue the round-robin world order.
     """
 
-    state_contract = "ontology-maintenance-state-v6"
+    state_contract = "ontology-maintenance-state-v7"
 
     def __init__(
         self,
@@ -46,12 +48,14 @@ class OntologyMaintenanceRunner:
         settings: Dict[str, object] = None,
         reasoning_queue_probe=None,
         capacity_guard=None,
+        event_publisher=None,
     ):
         self.ontology_repository = ontology_repository
         self.state_store = state_store
         self.settings = dict(settings or {})
         self.reasoning_queue_probe = reasoning_queue_probe
         self.capacity_guard = capacity_guard
+        self.event_publisher = event_publisher
         self.last_background_fairness: Dict[str, object] = {}
 
     def policy(self) -> Dict[str, object]:
@@ -141,6 +145,154 @@ class OntologyMaintenanceRunner:
             for world_id, value in raw.items()
             if text(world_id) and isinstance(value, dict)
         }
+
+    @staticmethod
+    def scope_repair_state(state: Dict[str, object]) -> Dict[str, Dict[str, object]]:
+        raw = state.get("scopeRepairByWorld") if isinstance(state, dict) else {}
+        if not isinstance(raw, dict):
+            return {}
+        return {
+            text(world_id): dict(value or {})
+            for world_id, value in raw.items()
+            if text(world_id) and isinstance(value, dict)
+        }
+
+    def scope_repair_retry_seconds(self) -> int:
+        return max(5 * 60, min(24 * 60 * 60, integer(
+            self.settings.get("ontologyScopeRepairRetryMinutes"),
+            30,
+        ) * 60))
+
+    def schedule_scope_repairs(
+        self,
+        world_id: str,
+        audit: Dict[str, object],
+        state: Dict[str, object],
+    ) -> tuple[Dict[str, object], Dict[str, Dict[str, object]]]:
+        """Publish one bounded subject repair request for verified drift."""
+
+        repairs = self.scope_repair_state(state)
+        previous = dict(repairs.get(world_id) or {})
+        checked_scope_ids = {
+            text(value) for value in audit.get("checkedScopeIds") or [] if text(value)
+        }
+        mismatches = [
+            dict(item) for item in audit.get("mismatches") or []
+            if isinstance(item, dict) and text(item.get("scopeId"))
+        ]
+        if not mismatches:
+            previous_scope_ids = {
+                text(value) for value in previous.get("scopeIds") or [] if text(value)
+            }
+            if previous_scope_ids and previous_scope_ids.issubset(checked_scope_ids):
+                repairs.pop(world_id, None)
+                return {
+                    "status": "resolved",
+                    "worldId": world_id,
+                    "scopeIds": sorted(previous_scope_ids),
+                }, repairs
+            return {"status": "not-required", "worldId": world_id}, repairs
+
+        by_symbol: Dict[str, List[str]] = {}
+        shared_scope_ids = []
+        for mismatch in mismatches:
+            scope_id = text(mismatch.get("scopeId"))
+            symbol = text(mismatch.get("symbol")).upper()
+            if symbol:
+                by_symbol.setdefault(symbol, []).append(scope_id)
+            else:
+                shared_scope_ids.append(scope_id)
+        for symbol in list(by_symbol):
+            by_symbol[symbol] = sorted(set(by_symbol[symbol]))[:40]
+        signature_source = "|".join(
+            [world_id]
+            + [symbol + ":" + ",".join(by_symbol[symbol]) for symbol in sorted(by_symbol)]
+        )
+        signature = hashlib.sha256(signature_source.encode("utf-8")).hexdigest()
+        now = datetime.now(timezone.utc)
+        previous_at = text(previous.get("requestedAt"))
+        retry_due = True
+        if previous_at and text(previous.get("signature")) == signature:
+            try:
+                parsed = datetime.fromisoformat(previous_at.replace("Z", "+00:00"))
+                if parsed.tzinfo is None:
+                    parsed = parsed.replace(tzinfo=timezone.utc)
+                retry_due = (now - parsed.astimezone(timezone.utc)).total_seconds() >= self.scope_repair_retry_seconds()
+            except ValueError:
+                retry_due = True
+        if not by_symbol:
+            value = {
+                "status": "manual-shared-scope-repair-required",
+                "worldId": world_id,
+                "scopeIds": sorted(set(shared_scope_ids)),
+                "automaticFullProjectionUsed": False,
+            }
+            repairs[world_id] = {**previous, **value, "signature": signature}
+            return value, repairs
+        if not retry_due:
+            return {
+                "status": "already-requested",
+                "worldId": world_id,
+                "requestId": text(previous.get("requestId")),
+                "symbols": sorted(by_symbol),
+                "scopeIds": sorted({item for values in by_symbol.values() for item in values}),
+                "sharedScopeIds": sorted(set(shared_scope_ids)),
+            }, repairs
+
+        request_id = "scope-repair:" + signature[:24] + ":" + str(int(now.timestamp()))
+        repair_requests = {
+            symbol: {"requestId": request_id, "scopeIds": scope_ids}
+            for symbol, scope_ids in sorted(by_symbol.items())
+        }
+        source_event = DomainEvent(
+            name="ontology.scope-integrity-drift-detected",
+            aggregate_id=world_id,
+            payload={
+                "accountId": text(audit.get("accountId")),
+                "worldId": world_id,
+                "sourceObservedAt": utc_now_iso(),
+            },
+        )
+        event = ontology_reasoning_requested_event(
+            source_event,
+            trigger="scope-integrity-repair",
+            symbols=sorted(by_symbol),
+            changed_count=len(mismatches),
+            observed_count=int(audit.get("checkedScopeCount") or 0),
+            fact_types=["DataQuality"],
+            fact_types_by_symbol={symbol: ["DataQuality"] for symbol in by_symbol},
+            changed_fields_by_symbol={symbol: ["scopeIntegrity"] for symbol in by_symbol},
+            fact_revisions_by_symbol={symbol: request_id for symbol in by_symbol},
+            scope_repair_requests_by_symbol=repair_requests,
+            reason="Active scoped ABox physical row count differs from its verified Manifest.",
+        )
+        publish_status = "not-configured"
+        try:
+            if self.event_publisher:
+                if hasattr(self.event_publisher, "publish"):
+                    self.event_publisher.publish(event)
+                else:
+                    self.event_publisher.handle(event)
+                publish_status = "published"
+        except Exception as error:  # noqa: BLE001 - retry remains in maintenance state.
+            publish_status = "error"
+            publish_reason = str(error)[:220]
+        else:
+            publish_reason = ""
+        value = {
+            "status": publish_status,
+            "worldId": world_id,
+            "requestId": request_id,
+            "signature": signature,
+            "symbols": sorted(by_symbol),
+            "scopeIds": sorted({item for values in by_symbol.values() for item in values}),
+            "sharedScopeIds": sorted(set(shared_scope_ids)),
+            "requestedAt": utc_now_iso(),
+            "reason": publish_reason,
+            "automaticFullProjectionUsed": False,
+        }
+        repairs[world_id] = value
+        return value, repairs
 
     def scope_integrity_audit_due(self, audit_state: Dict[str, object]) -> bool:
         stamp = text((audit_state or {}).get("lastCheckedAt"))
@@ -712,10 +864,37 @@ class OntologyMaintenanceRunner:
             candidates,
             key=lambda item: (-item[0], item[1], text(item[3].get("worldId"))),
         )[0]
+        ordered_candidates = sorted(
+            candidates,
+            key=lambda item: (-item[0], item[1], text(item[3].get("worldId"))),
+        )
+        max_consecutive = max(
+            1,
+            integer((policy or {}).get("adaptiveDrainMaxConsecutiveWorldRuns"), 3),
+        )
+        last_world_id = text((state or {}).get("lastMaintenanceWorldId"))
+        consecutive_runs = max(0, integer((state or {}).get("consecutiveMaintenanceWorldRuns")))
+        fairness_rotated = False
+        if (
+            len(ordered_candidates) > 1
+            and text(selected.get("worldId")) == last_world_id
+            and consecutive_runs >= max_consecutive
+        ):
+            _, _, selected_index, selected = next(
+                item for item in ordered_candidates
+                if text(item[3].get("worldId")) != last_world_id
+            )
+            fairness_rotated = True
         following = rows[(selected_index + 1) % len(rows)]
         return selected, text(following.get("worldId")), {
-            "mode": "inactive-manifest-priority",
+            "mode": (
+                "inactive-manifest-priority-fairness-rotation"
+                if fairness_rotated
+                else "inactive-manifest-priority"
+            ),
             "priorityInactiveManifestCount": threshold,
+            "maxConsecutiveWorldRuns": max_consecutive,
+            "previousConsecutiveWorldRuns": consecutive_runs,
             "observedInactiveManifestCounts": observed_counts,
         }
 
@@ -747,6 +926,17 @@ class OntologyMaintenanceRunner:
                 continue
             current = dict(rows.get(world_id) or {})
             inactive_count = max(0, integer(dict(inventory or {}).get("inactiveManifestCount")))
+            prior_observed = (
+                max(0, integer(current.get("lastObservedInactiveManifestCount")))
+                if current.get("lastInventoryObservedAt")
+                else inactive_count
+            )
+            observed_delta = inactive_count - prior_observed
+            growth_runs = (
+                max(0, integer(current.get("backlogGrowthRuns"))) + 1
+                if observed_delta > 0
+                else 0
+            )
             health = scoped_abox_maintenance_health({
                 "status": str(dict(inventory or {}).get("status") or "ok"),
                 "inactiveManifestCount": inactive_count,
@@ -754,7 +944,10 @@ class OntologyMaintenanceRunner:
             current.update({
                 "inventoryAvailable": True,
                 "lastInactiveManifestCount": inactive_count,
+                "previousObservedInactiveManifestCount": prior_observed,
                 "lastObservedInactiveManifestCount": inactive_count,
+                "observedBacklogDelta": observed_delta,
+                "backlogGrowthRuns": growth_runs,
                 "lastStoredManifestCount": max(0, integer(dict(inventory or {}).get("storedManifestCount"))),
                 "lastInventoryObservedAt": observed_at,
                 "lastInventoryStatus": text(dict(inventory or {}).get("status") or "ok"),
@@ -777,12 +970,25 @@ class OntologyMaintenanceRunner:
             integer(policy.get("adaptiveDrainMaxDeleteBatchesPerRun"), base_batches),
         )
         required_runs = max(1, integer(policy.get("adaptiveDrainCriticalRunsBeforeIncrease"), 2))
+        growth_required_runs = max(
+            1,
+            integer(policy.get("adaptiveDrainBacklogGrowthRunsBeforeIncrease"), 2),
+        )
         world_state = self.backlog_by_world(state).get(world_id, {})
         critical_runs = max(0, integer(world_state.get("criticalDrainRuns")))
+        growth_runs = max(0, integer(world_state.get("backlogGrowthRuns")))
         enabled = bool(policy.get("adaptiveDrainEnabled"))
         increase_steps = 0
-        if enabled and critical_runs >= required_runs:
+        safe_to_increase = bool(
+            world_state.get("lastProgress")
+            or not text(world_state.get("lastStatus"))
+        )
+        if enabled and safe_to_increase and critical_runs >= required_runs:
             increase_steps = 1 + ((critical_runs - required_runs) // required_runs)
+        growth_steps = 0
+        if enabled and safe_to_increase and growth_runs >= growth_required_runs:
+            growth_steps = 1 + ((growth_runs - growth_required_runs) // growth_required_runs)
+            increase_steps = max(increase_steps, growth_steps)
         effective_batches = min(maximum_batches, base_batches + increase_steps)
         return {
             "enabled": enabled,
@@ -790,7 +996,12 @@ class OntologyMaintenanceRunner:
             "effectiveMaxDeleteBatches": effective_batches,
             "maximumMaxDeleteBatches": maximum_batches,
             "criticalRunsBeforeIncrease": required_runs,
+            "backlogGrowthRunsBeforeIncrease": growth_required_runs,
             "criticalDrainRunsBefore": critical_runs,
+            "backlogGrowthRunsBefore": growth_runs,
+            "observedBacklogDelta": integer(world_state.get("observedBacklogDelta")),
+            "priorPassMadeProgress": bool(world_state.get("lastProgress")),
+            "safeToIncrease": safe_to_increase,
             "mode": "adaptive-drain" if effective_batches > base_batches else "bounded-base",
         }
 
@@ -876,6 +1087,10 @@ class OntologyMaintenanceRunner:
                 "batchSize": self.scope_integrity_audit_batch_size(),
                 "byWorld": self.scope_integrity_audit_state(state),
             },
+            "scopeRepair": {
+                "retrySeconds": self.scope_repair_retry_seconds(),
+                "byWorld": self.scope_repair_state(state),
+            },
         }
 
     def run_once(self) -> Dict[str, object]:
@@ -953,6 +1168,12 @@ class OntologyMaintenanceRunner:
             selection_state,
         )
         selection_state["scopeIntegrityAuditByWorld"] = integrity_audits
+        scope_repair, scope_repairs = self.schedule_scope_repairs(
+            world_id,
+            integrity_audit,
+            selection_state,
+        )
+        selection_state["scopeRepairByWorld"] = scope_repairs
         adaptive_drain = self.adaptive_drain(policy, selection_state, world_id)
         capacity_budget = self.capacity_maintenance_budget(policy, adaptive_drain, capacity)
         coordinator_lease = self.acquire_projection_coordinator_lease(world_id)
@@ -970,6 +1191,7 @@ class OntologyMaintenanceRunner:
                 "projectionCoordinator": self.projection_coordinator_summary(coordinator_lease),
                 "manifestInventory": selected_inventory,
                 "scopeIntegrityAudit": integrity_audit,
+                "scopeRepair": scope_repair,
                 "worldSelection": world_selection,
             }
             self.save_state({
@@ -1082,6 +1304,7 @@ class OntologyMaintenanceRunner:
             "capacityBudget": run_budget,
             "manifestInventory": selected_inventory,
             "scopeIntegrityAudit": integrity_audit,
+            "scopeRepair": scope_repair,
             "worldSelection": world_selection,
             "reason": text(abox.get("reason") or result.get("reason"))[:220],
         }
@@ -1112,6 +1335,12 @@ class OntologyMaintenanceRunner:
             "nextWorldId": next_world_id,
             "lastResult": compact,
             "backlogByWorld": backlog_by_world,
+            "lastMaintenanceWorldId": world_id,
+            "consecutiveMaintenanceWorldRuns": (
+                max(0, integer(previous.get("consecutiveMaintenanceWorldRuns"))) + 1
+                if text(previous.get("lastMaintenanceWorldId")) == world_id
+                else 1
+            ),
         }
         if bool(self.last_background_fairness.get("fairnessGranted")) and result_status in {"ok", "partial"}:
             next_state.update({

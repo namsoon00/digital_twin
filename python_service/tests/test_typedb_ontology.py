@@ -20,11 +20,14 @@ from digital_twin.domain.ontology_rulebox_contracts import (
     GraphRuleDerivation,
 )
 from digital_twin.domain.ontology_contracts import OntologyEntity, OntologyEvidence, OntologyRelation, PortfolioOntology
+from digital_twin.domain.ontology_fact_slots import build_fact_slot_projection_plan
 from digital_twin.domain.ontology_scopes import (
     SCOPED_ABOX_MANIFEST_VERSION,
     SCOPED_ABOX_SCOPE_TOPOLOGY_VERSION,
+    apply_scoped_abox_repair_epochs,
     apply_scoped_abox_identity,
     merge_target_scoped_abox_manifest,
+    select_target_scoped_manifest_patch,
 )
 from digital_twin.domain.ontology_native_rule_planning import (
     merge_native_rule_planner_topology,
@@ -1428,9 +1431,14 @@ class TypeDBOntologyRepositoryTests(unittest.TestCase):
     def test_scoped_abox_persistence_includes_evidence_and_support_relation_in_the_owner_scope(self):
         graph = PortfolioOntology(
             "main",
-            entities=[OntologyEntity("stock:005930", "삼성전자", "stock", {
-                "ontologyBox": "ABox", "symbol": "005930",
-            })],
+            entities=[
+                OntologyEntity("stock:005930", "삼성전자", "stock", {
+                    "ontologyBox": "ABox", "symbol": "005930",
+                }),
+                OntologyEntity("security:005930", "삼성전자 보통주", "security", {
+                    "ontologyBox": "ABox", "symbol": "005930", "tboxClass": "InstrumentAnchor",
+                }),
+            ],
             evidence=[OntologyEvidence(
                 "evidence:005930:price",
                 "stock:005930",
@@ -1454,15 +1462,87 @@ class TypeDBOntologyRepositoryTests(unittest.TestCase):
         first_generations = dict(first["scopeGenerationIds"])
         second_generations = dict(second["scopeGenerationIds"])
         self.assertNotEqual(first_generations["symbol:005930:state"], second_generations["symbol:005930:state"])
-        self.assertNotEqual(first_generations["link:symbol:005930:evidence"], second_generations["link:symbol:005930:evidence"])
+        self.assertEqual(first_generations["link:symbol:005930:evidence"], second_generations["link:symbol:005930:evidence"])
         self.assertEqual(first_generations["symbol:005930:evidence"], second_generations["symbol:005930:evidence"])
 
         _nodes, rebound_relations = repository.scoped_abox_persistence_rows(graph, ["link:symbol:005930:evidence"])
         self.assertEqual(1, len(rebound_relations))
-        stock = next(item for item in graph.entities if item.entity_id == "stock:005930")
+        stock = next(item for item in graph.entities if item.entity_id == "security:005930")
         self.assertEqual(
             ontology_storage_id(stock.properties, stock.entity_id, "node"),
             rebound_relations[0]["sourceStorageId"],
+        )
+
+    def test_scoped_abox_repair_epoch_rolls_only_subject_scope_and_dependent_links(self):
+        graph = PortfolioOntology(
+            "main",
+            entities=[
+                OntologyEntity("stock:005930", "삼성전자", "stock", {
+                    "ontologyBox": "ABox", "symbol": "005930",
+                }),
+                OntologyEntity("security:005930", "삼성전자 보통주", "security", {
+                    "ontologyBox": "ABox", "symbol": "005930", "tboxClass": "InstrumentAnchor",
+                }),
+            ],
+            evidence=[OntologyEvidence(
+                "evidence:005930:news", "stock:005930", "news", "test", "news",
+                {"ontologyBox": "ABox", "symbol": "005930"},
+            )],
+        )
+        first = apply_scoped_abox_identity(graph)
+        active = {
+            "scopePlan": deepcopy(first["scopePlan"]),
+            "scopeGenerationIds": dict(first["scopeGenerationIds"]),
+            "scopeFingerprints": dict(first["scopeFingerprints"]),
+        }
+
+        repair = apply_scoped_abox_repair_epochs(graph, active, {
+            "005930": {
+                "requestId": "repair:test:1",
+                "scopeIds": ["symbol:005930:state"],
+            },
+        })
+
+        self.assertTrue(repair["applied"])
+        self.assertIn("symbol:005930:state", repair["repairedScopeIds"])
+        self.assertNotIn("link:symbol:005930:evidence", repair["repairedScopeIds"])
+        repaired_generations = dict(graph.worldview["scopeGenerationIds"])
+        self.assertNotEqual(
+            first["scopeGenerationIds"]["symbol:005930:state"],
+            repaired_generations["symbol:005930:state"],
+        )
+        self.assertEqual(
+            first["scopeGenerationIds"]["symbol:005930:evidence"],
+            repaired_generations["symbol:005930:evidence"],
+        )
+        active.update({
+            "status": "ok",
+            "scopedAboxManifestVersion": SCOPED_ABOX_MANIFEST_VERSION,
+            "scopeTopologyVersion": SCOPED_ABOX_SCOPE_TOPOLOGY_VERSION,
+        })
+        selection = select_target_scoped_manifest_patch(
+            graph,
+            active,
+            ["005930"],
+            fact_slot_plan=build_fact_slot_projection_plan(
+                ["005930"],
+                ["quality"],
+                requested_fact_families_by_symbol={"005930": ["quality"]},
+                changed_fields_by_symbol={"005930": ["scopeIntegrity"]},
+            ),
+        )
+        self.assertIn("symbol:005930:state", selection["selectedIncomingScopeIds"])
+
+        rebuilt = apply_scoped_abox_identity(graph)
+        carried = apply_scoped_abox_repair_epochs(graph, {
+            "scopePlan": deepcopy(repair["scopePlan"]),
+            "scopeGenerationIds": dict(repair["scopeGenerationIds"]),
+            "scopeFingerprints": dict(repair["scopeFingerprints"]),
+        })
+        self.assertTrue(carried["applied"])
+        self.assertEqual(
+            repaired_generations["symbol:005930:state"],
+            graph.worldview["scopeGenerationIds"]["symbol:005930:state"],
         )
 
     def test_scoped_abox_finalize_runs_reference_aware_manifest_cleanup(self):

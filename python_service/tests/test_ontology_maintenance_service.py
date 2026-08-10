@@ -20,6 +20,14 @@ class FakeStateStore:
         self.payload = dict(payload or {})
 
 
+class FakeEventPublisher:
+    def __init__(self):
+        self.events = []
+
+    def publish(self, event):
+        self.events.append(event)
+
+
 class FakeOntologyRepository:
     def __init__(self):
         self.calls = []
@@ -124,6 +132,34 @@ class OntologyMaintenanceRunnerTests(unittest.TestCase):
         }], repository.audit_calls)
         stored = store.payload["scopeIntegrityAuditByWorld"]["portfolio:local:main"]
         self.assertEqual(7, stored["nextCursor"])
+
+    def test_integrity_mismatch_publishes_one_bounded_subject_repair_request(self):
+        repository = IntegrityAuditRepository()
+        store = FakeStateStore()
+        publisher = FakeEventPublisher()
+        runner = OntologyMaintenanceRunner(
+            repository,
+            state_store=store,
+            event_publisher=publisher,
+            settings={
+                "ontologyAboxMaintenanceWorldTypes": "portfolio",
+                "ontologyScopeIntegrityAuditIntervalMinutes": "30",
+            },
+        )
+
+        result = runner.run_once()
+
+        repair = result["maintenance"]["scopeRepair"]
+        self.assertEqual("published", repair["status"])
+        self.assertEqual(["005930"], repair["symbols"])
+        self.assertEqual(1, len(publisher.events))
+        event = publisher.events[0]
+        self.assertEqual("scope-integrity-repair", event.payload["trigger"])
+        self.assertEqual(
+            ["symbol:005930:flow"],
+            event.payload["scopeRepairRequestsBySymbol"]["005930"]["scopeIds"],
+        )
+        self.assertFalse(repair["automaticFullProjectionUsed"])
 
     def test_round_robin_uses_bounded_policy_and_persists_cursor(self):
         repository = FakeOntologyRepository()

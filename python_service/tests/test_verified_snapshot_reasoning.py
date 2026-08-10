@@ -519,12 +519,24 @@ class VerifiedSnapshotReasoningTests(unittest.TestCase):
             fact_types=["MarketQuote", "ExecutionFlow", "OrderBook"],
         )
 
-        barrier_entry = durable_mailbox_entries(barrier)[0]
-        raw_entry = durable_mailbox_entries(raw)[0]
+        barrier_entry = next(
+            entry for entry in durable_mailbox_entries(barrier)
+            if entry["mailboxSlotFamily"] == REALTIME_LATEST_STATE_SLOT
+        )
+        raw_entries = durable_mailbox_entries(raw)
+        raw_entry = next(
+            entry for entry in raw_entries
+            if entry["mailboxSlotFamily"] == REALTIME_LATEST_STATE_SLOT
+        )
 
         self.assertEqual(REALTIME_LATEST_STATE_SLOT, barrier_entry["mailboxSlotFamily"])
         self.assertEqual(REALTIME_LATEST_STATE_SLOT, raw_entry["mailboxSlotFamily"])
         self.assertEqual(barrier_entry["mailboxKey"], raw_entry["mailboxKey"])
+        self.assertEqual(2, len(raw_entries))
+        self.assertIn(
+            REALTIME_LATEST_STATE_SLOT + ":flow",
+            {entry["mailboxSlotFamily"] for entry in raw_entries},
+        )
 
     def test_calendar_updates_now_use_a_latest_state_mailbox_slot(self):
         calendar = ontology_reasoning_requested_event(

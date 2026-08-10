@@ -33,7 +33,7 @@ from .ontology_worlds import world_scoped_scope_id
 
 SCOPED_ABOX_MANIFEST_VERSION = "scoped-manifest-v1"
 SCOPED_ABOX_PERSISTENCE_MODE = "immutable-scoped-manifest"
-SCOPED_ABOX_SCOPE_TOPOLOGY_VERSION = "granular-v5-dependency-links"
+SCOPED_ABOX_SCOPE_TOPOLOGY_VERSION = "granular-v6-stable-instrument-anchor"
 
 REFERENCE_SCOPE_ID = "reference:global"
 MACRO_SCOPE_ID = "macro:global"
@@ -491,8 +491,12 @@ def _support_relation_specs(
         values = dict(evidence.value or {})
         if _clean(values.get("ontologyBox")) not in {"", "ABox"}:
             continue
-        source = _clean(evidence.subject)
+        original_source = _clean(evidence.subject)
         target = _clean(evidence.evidence_id)
+        original_source_scope = node_scopes.get(original_source, "")
+        symbol = _symbol(values.get("symbol")) or scope_symbol(original_source_scope)
+        stable_anchor = "security:" + symbol if symbol else ""
+        source = stable_anchor if stable_anchor in node_scopes else original_source
         source_scope = node_scopes.get(source, "")
         target_scope = node_scopes.get(target, "")
         if not source or not target or not source_scope or not target_scope:
@@ -507,9 +511,13 @@ def _support_relation_specs(
         if world_id:
             scope_id = world_scoped_scope_id(scope_id, world_id)
         rows.append({
-            "key": support_relation_key("HAS_EVIDENCE", source, target),
+            # Keep the source-evidence lookup key stable for callers that
+            # receive OntologyEvidence. The persisted endpoints below may use
+            # the generation-independent instrument anchor.
+            "key": support_relation_key("HAS_EVIDENCE", original_source, target),
             "source": source,
             "target": target,
+            "originalSource": original_source,
             "type": "HAS_EVIDENCE",
             "scopeId": scope_id,
             "impactFamilies": ["evidence"],
@@ -1491,6 +1499,9 @@ def apply_scoped_abox_identity(
 
     support_relation_scopes = {
         _clean(relation.get("key")): {
+            "source": _clean(relation.get("source")),
+            "target": _clean(relation.get("target")),
+            "originalSource": _clean(relation.get("originalSource")),
             "scopeId": _clean(relation.get("scopeId")),
             "scopeType": _scope_type(_clean(relation.get("scopeId"))),
             "scopeGenerationId": _clean((by_scope.get(_clean(relation.get("scopeId"))) or {}).get("generationId")),
@@ -1610,6 +1621,128 @@ def _scope_plan_counts(scope_plan: Iterable[object]) -> Dict[str, int]:
         family = _clean(item.get("scopeFamily")) or scope_family(item.get("scopeId"))
         counts[family] = counts.get(family, 0) + 1
     return dict(sorted(counts.items()))
+
+
+def apply_scoped_abox_repair_epochs(
+    graph: PortfolioOntology,
+    active_metadata: Mapping[str, object],
+    repair_requests_by_symbol: Mapping[str, object] = None,
+) -> Dict[str, object]:
+    """Create a fresh immutable generation for physically damaged scopes.
+
+    The semantic fingerprint stays separate from the repair epoch. Subsequent
+    projections retain that epoch while the source facts are unchanged, so a
+    repaired scope cannot roll back to the physically damaged storage ID. A
+    genuine source change naturally produces a new semantic generation and
+    retires the repair epoch.
+    """
+
+    worldview = dict(graph.worldview or {})
+    incoming = _scope_plan_by_id(
+        worldview.get("scopePlan") or [],
+        worldview.get("scopeGenerationIds") or {},
+        worldview.get("scopeFingerprints") or {},
+    )
+    active = _scope_plan_by_id(
+        dict(active_metadata or {}).get("scopePlan") or [],
+        dict(active_metadata or {}).get("scopeGenerationIds") or {},
+        dict(active_metadata or {}).get("scopeFingerprints") or {},
+    )
+    if not incoming:
+        return {"status": "skipped-empty-scope-plan", "applied": False}
+
+    requested_epochs: Dict[str, Set[str]] = defaultdict(set)
+    for raw_symbol, raw_request in dict(repair_requests_by_symbol or {}).items():
+        symbol = _symbol(raw_symbol)
+        request = dict(raw_request or {}) if isinstance(raw_request, Mapping) else {}
+        request_id = _clean(request.get("requestId"))
+        if not symbol or not request_id:
+            continue
+        for raw_scope_id in request.get("scopeIds") or []:
+            scope_id = _clean(raw_scope_id)
+            if scope_id in incoming and scope_symbol(scope_id) == symbol:
+                requested_epochs[scope_id].add(request_id)
+
+    # A link scope stores endpoint storage IDs. Reissue every dependent link
+    # generation together with a repaired endpoint, but never widen into an
+    # unrelated symbol or shared world scope.
+    affected = set(requested_epochs)
+    changed = True
+    while changed:
+        changed = False
+        for scope_id, item in incoming.items():
+            dependencies = set(item.get("dependencyScopeIds") or [])
+            matching = dependencies.intersection(affected)
+            if not matching or scope_id in affected:
+                continue
+            source_symbols = {scope_symbol(value) for value in matching if scope_symbol(value)}
+            if source_symbols and scope_symbol(scope_id) not in source_symbols:
+                continue
+            affected.add(scope_id)
+            for dependency in matching:
+                requested_epochs[scope_id].update(requested_epochs.get(dependency) or set())
+            changed = True
+
+    repaired_scope_ids = []
+    retained_scope_ids = []
+    plan = []
+    for scope_id in sorted(incoming):
+        item = dict(incoming[scope_id])
+        semantic_fingerprint = _clean(item.get("semanticFingerprint")) or _clean(item.get("fingerprint"))
+        epoch_values = set(requested_epochs.get(scope_id) or set())
+        active_item = dict(active.get(scope_id) or {})
+        active_semantic = (
+            _clean(active_item.get("semanticFingerprint"))
+            or _clean(active_item.get("fingerprint"))
+        )
+        active_epoch = _clean(active_item.get("repairEpoch"))
+        carried_epoch = ""
+        if not epoch_values and active_epoch and semantic_fingerprint == active_semantic:
+            carried_epoch = active_epoch
+            retained_scope_ids.append(scope_id)
+        if epoch_values or carried_epoch:
+            repair_epoch = carried_epoch or hashlib.sha256(
+                "|".join(sorted(epoch_values)).encode("utf-8")
+            ).hexdigest()[:24]
+            repair_fingerprint = hashlib.sha256(json.dumps({
+                "semanticFingerprint": semantic_fingerprint,
+                "repairEpoch": repair_epoch,
+            }, sort_keys=True, separators=(",", ":")).encode("utf-8")).hexdigest()
+            item.update({
+                "semanticFingerprint": semantic_fingerprint,
+                "repairEpoch": repair_epoch,
+                "fingerprint": repair_fingerprint,
+                "generationId": scoped_generation_id(scope_id, repair_fingerprint),
+            })
+            repaired_scope_ids.append(scope_id)
+        else:
+            item.pop("semanticFingerprint", None)
+            item.pop("repairEpoch", None)
+        plan.append(item)
+
+    if not repaired_scope_ids:
+        return {"status": "not-required", "applied": False, "scopePlan": plan}
+    identity = apply_scoped_manifest_plan(
+        graph,
+        plan,
+        account_id=worldview.get("accountId"),
+        world_id=worldview.get("worldId"),
+    )
+    graph.worldview["scopeRepair"] = {
+        "version": "scoped-abox-repair-v1",
+        "requestedScopeIds": sorted(requested_epochs),
+        "repairedScopeIds": repaired_scope_ids,
+        "retainedRepairScopeIds": retained_scope_ids,
+        "automaticFullProjectionUsed": False,
+    }
+    return {
+        "status": "applied",
+        "applied": True,
+        "requestedScopeIds": sorted(requested_epochs),
+        "repairedScopeIds": repaired_scope_ids,
+        "retainedRepairScopeIds": retained_scope_ids,
+        **identity,
+    }
 
 
 def _graph_node_scopes(graph: PortfolioOntology) -> Dict[str, str]:
@@ -1782,6 +1915,16 @@ def select_target_scoped_manifest_patch(
         fact_slot_plan,
     )
     selected = set(fact_slot_selection.get("selectedScopeIds") or selected)
+    repair_scope_ids = {
+        _clean(scope_id)
+        for scope_id in dict(worldview.get("scopeRepair") or {}).get("repairedScopeIds") or []
+        if _clean(scope_id)
+    }
+    for scope_id in repair_scope_ids:
+        item = incoming.get(scope_id) or {}
+        if item and is_requested_or_shared(scope_id) and changed_from_active(scope_id, item):
+            selected.add(scope_id)
+            selection_reasons.setdefault(scope_id, set()).add("scope-integrity-repair")
     if bool(fact_slot_selection.get("enabled")):
         for scope_id in selected:
             selection_reasons.setdefault(scope_id, set()).add("event-fact-slot")
@@ -1925,10 +2068,14 @@ def select_target_scoped_manifest_patch(
         support_scopes = dict(worldview.get("supportRelationScopes") or {})
         for evidence in graph.evidence:
             key = support_relation_key("HAS_EVIDENCE", evidence.subject, evidence.evidence_id)
-            owner_scope = _clean((support_scopes.get(key) or {}).get("scopeId"))
+            support_metadata = dict(support_scopes.get(key) or {})
+            owner_scope = _clean(support_metadata.get("scopeId"))
             if owner_scope not in selected:
                 continue
-            for endpoint in (_clean(evidence.subject), _clean(evidence.evidence_id)):
+            for endpoint in (
+                _clean(support_metadata.get("source")) or _clean(evidence.subject),
+                _clean(support_metadata.get("target")) or _clean(evidence.evidence_id),
+            ):
                 endpoint_scope = node_scopes.get(endpoint, "")
                 incoming_endpoint = incoming.get(endpoint_scope) or {}
                 endpoint_generation_changed = bool(

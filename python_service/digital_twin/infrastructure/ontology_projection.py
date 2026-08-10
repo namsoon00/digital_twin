@@ -29,6 +29,7 @@ from ..domain.ontology_scopes import (
     SCOPED_ABOX_MANIFEST_VERSION,
     SCOPED_ABOX_PERSISTENCE_MODE,
     SCOPED_ABOX_SCOPE_TOPOLOGY_VERSION,
+    apply_scoped_abox_repair_epochs,
     apply_scoped_manifest_plan,
     apply_scoped_abox_identity,
     merge_target_scoped_abox_manifest,
@@ -1083,6 +1084,11 @@ class PortfolioOntologyProjectionRecorder:
                     targetSymbolCount=len(target_scoped_patch.get("targetSymbols") or []),
                 )
                 target_patch_started = time.perf_counter()
+                scope_repair = apply_scoped_abox_repair_epochs(
+                    persistence_graph,
+                    active_abox,
+                    compact_reasoning_context.get("scopeRepairRequestsBySymbol") or {},
+                )
                 applied_target_patch = merge_target_scoped_abox_manifest(
                     persistence_graph,
                     active_abox,
@@ -1209,6 +1215,14 @@ class PortfolioOntologyProjectionRecorder:
                         "scopeIntegrityAuditDue": bool(
                             target_scoped_patch.get("scopeIntegrityAuditDue")
                         ),
+                        "scopeRepair": {
+                            key: scope_repair.get(key)
+                            for key in [
+                                "status", "applied", "requestedScopeIds",
+                                "repairedScopeIds", "retainedRepairScopeIds",
+                            ]
+                            if key in scope_repair
+                        },
                         "automaticFullProjectionBlocked": True,
                     }
                     persistence_graph.worldview["targetScopedManifestPatch"] = dict(target_scoped_patch)

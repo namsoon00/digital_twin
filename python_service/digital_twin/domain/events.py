@@ -597,6 +597,23 @@ def compact_ontology_reasoning_request_payload_for_storage(payload: Mapping[str,
                 break
         if compact_fields:
             compact["changedFieldsBySymbol"] = compact_fields
+    repair_requests = source.get("scopeRepairRequestsBySymbol")
+    if isinstance(repair_requests, Mapping):
+        compact_repairs = {}
+        for symbol, raw in repair_requests.items():
+            clean_symbol = _event_text(symbol, 64).upper()
+            value = dict(raw or {}) if isinstance(raw, Mapping) else {}
+            scope_ids = _event_text_list(value.get("scopeIds"), limit=40, item_limit=191)
+            request_id = _event_text(value.get("requestId"), 191)
+            if clean_symbol and scope_ids and request_id:
+                compact_repairs[clean_symbol] = {
+                    "requestId": request_id,
+                    "scopeIds": scope_ids,
+                }
+            if len(compact_repairs) >= 80:
+                break
+        if compact_repairs:
+            compact["scopeRepairRequestsBySymbol"] = compact_repairs
     # These are strict generation contracts. They are already bounded by their
     # own domain types, so retain them intact rather than silently weakening a
     # research acknowledgement.
@@ -1019,6 +1036,7 @@ def ontology_reasoning_requested_event(
     importance_gate: str = "fact-revision-first",
     materiality_role: str = "advisory-priority-only",
     fact_types_by_symbol: Dict[str, Iterable[str]] = None,
+    scope_repair_requests_by_symbol: Dict[str, object] = None,
 ) -> DomainEvent:
     clean_symbols = sorted(set(str(symbol or "").upper().strip() for symbol in (symbols or []) if str(symbol or "").strip()))
     clean_observation_followups = sorted({
@@ -1121,6 +1139,11 @@ def ontology_reasoning_requested_event(
             # raw provider tick without turning that distinction into an
             # investment rule condition.
             "verifiedSourceSnapshot": dict(snapshot_barrier or {}) if isinstance(snapshot_barrier, Mapping) else {},
+            "scopeRepairRequestsBySymbol": (
+                dict(scope_repair_requests_by_symbol or {})
+                if isinstance(scope_repair_requests_by_symbol, Mapping)
+                else {}
+            ),
         }),
     )
 

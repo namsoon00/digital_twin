@@ -243,10 +243,12 @@ def add_instrument_identity_concepts(
     })
     security_id = add_entity(graph, "security", symbol, company_label + " 보통주", {
         "tboxClass": "Security",
-        "tboxClasses": instrument_tbox_classes(position) + ["Security"],
+        "tboxClasses": instrument_tbox_classes(position) + ["Security", "InstrumentAnchor"],
         "symbol": symbol,
         "market": position.market,
         "currency": position.currency,
+        "instrumentAnchorId": "security:" + symbol,
+        "identityVersion": "instrument-anchor-v1",
         "source": source,
     })
     peer_key = str(position.market or "unknown") + ":" + str(position.sector or "기타")

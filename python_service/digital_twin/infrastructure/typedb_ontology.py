@@ -12732,8 +12732,15 @@ relation ontology-assertion,
 
         rows: List[Dict[str, object]] = []
         for row in self.rows_for_evidence(graph):
-            source = row.get("subject")
-            target = row.get("id")
+            original_source = row.get("subject")
+            original_target = row.get("id")
+            owner = scoped_owner("HAS_EVIDENCE", original_source, original_target)
+            metadata = support_scope_plan.get(
+                support_relation_key("HAS_EVIDENCE", original_source, original_target)
+            )
+            metadata = dict(metadata or {}) if isinstance(metadata, dict) else {}
+            source = metadata.get("source") or original_source
+            target = metadata.get("target") or original_target
             rows.append({
                 "source": source,
                 "target": target,
@@ -12751,7 +12758,7 @@ relation ontology-assertion,
                 "scopeGenerationId": row.get("scopeGenerationId") or row.get("snapshotId") or row.get("aboxSnapshotId") or "",
                 "ruleId": "",
                 "propertiesJson": json.dumps(row, ensure_ascii=False, sort_keys=True),
-                **scoped_owner("HAS_EVIDENCE", source, target),
+                **owner,
             })
         for row in self.rows_for_beliefs(graph):
             rows.append({
@@ -15382,6 +15389,7 @@ relation ontology-assertion,
         try:
             relation_types_by_symbol: Dict[str, Iterable[str]] = {}
             rule_context: Dict[str, object] = {}
+            structural_execution_plan: Dict[str, object] = {}
             if clean_symbols:
                 topology = normalize_native_rule_planner_topology(
                     planner_topology,
@@ -15434,10 +15442,32 @@ relation ontology-assertion,
                             "relationTypesBySymbol": {},
                             "preflightStatus": "degraded",
                         }
+            if clean_symbols and relation_types_by_symbol:
+                structural_execution_plan = typedb_native_rule_execution_plan(
+                    rules,
+                    clean_symbols,
+                    relation_types_by_symbol,
+                )
+                rule_context.update({
+                    "structuralCandidateRuleCount": int(
+                        structural_execution_plan.get("candidateRuleCount") or 0
+                    ),
+                    "structuralSelectedRuleCount": int(
+                        structural_execution_plan.get("selectedRuleCount") or 0
+                    ),
+                    "structuralPrunedRuleCount": int(
+                        structural_execution_plan.get("skippedRuleCount") or 0
+                    ),
+                })
             if clean_symbols and str(dict(evidence_read_index or {}).get("status") or "") == "verified":
+                hydration_rules = [
+                    item.get("rule")
+                    for item in structural_execution_plan.get("selectedEntries") or []
+                    if isinstance(item, dict) and item.get("rule")
+                ] or list(rules)
                 indexed_relation_types = sorted({
                     str(condition.get("relation_type") or condition.get("relationType") or "").upper().strip()
-                    for rule in rules
+                    for rule in hydration_rules
                     for condition in typedb_rule_condition_payloads(rule)
                     if str(condition.get("kind") or "") == "relation"
                     and normalized_condition_role(condition) == "required"
@@ -15459,6 +15489,9 @@ relation ontology-assertion,
                     )
                     rule_context["evidenceFieldIndexRowCount"] = int(
                         evidence_index_hydration.get("fieldRowCount") or 0
+                    )
+                    rule_context["evidenceFieldHydratedRelationTypeCount"] = len(
+                        indexed_relation_types
                     )
             execution_plan = typedb_native_rule_execution_plan(
                 rules,

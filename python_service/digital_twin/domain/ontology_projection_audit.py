@@ -161,6 +161,17 @@ def compact_reasoning_request_context(
             and (not targets or str(symbol or "").upper().strip() in targets)
             and isinstance(vector, Mapping)
         },
+        "scopeRepairRequestsBySymbol": {
+            str(symbol or "").upper().strip(): {
+                "requestId": str(dict(repair or {}).get("requestId") or "")[:191],
+                "scopeIds": clean_list(dict(repair or {}).get("scopeIds"), limit=40),
+            }
+            for symbol, repair in dict(values.get("scopeRepairRequestsBySymbol") or {}).items()
+            if str(symbol or "").strip()
+            and (not targets or str(symbol or "").upper().strip() in targets)
+            and isinstance(repair, Mapping)
+            and str(repair.get("requestId") or "").strip()
+        },
         # Delivery provenance only. It enables a bounded current-state ABox
         # patch after an already-outboxed raw quote, but is never a TypeDB
         # rule condition or an investment conclusion.

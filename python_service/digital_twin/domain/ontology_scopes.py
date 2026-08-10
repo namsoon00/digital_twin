@@ -33,7 +33,7 @@ from .ontology_worlds import world_scoped_scope_id
 
 SCOPED_ABOX_MANIFEST_VERSION = "scoped-manifest-v1"
 SCOPED_ABOX_PERSISTENCE_MODE = "immutable-scoped-manifest"
-SCOPED_ABOX_SCOPE_TOPOLOGY_VERSION = "granular-v4-family-links"
+SCOPED_ABOX_SCOPE_TOPOLOGY_VERSION = "granular-v5-dependency-links"
 
 REFERENCE_SCOPE_ID = "reference:global"
 MACRO_SCOPE_ID = "macro:global"
@@ -237,7 +237,20 @@ def relation_link_scope_id(
         clean_symbol = scope_symbol(source_scope) or scope_symbol(target_scope)
     if clean_symbol:
         return "link:symbol:" + clean_symbol + ":" + clean_family
-    return "link:account:" + clean_account_id + ":" + clean_family
+    dependency_scopes = sorted({
+        _clean(value)
+        for value in (source_scope, target_scope)
+        if _clean(value)
+    })
+    dependency_shard = (
+        hashlib.sha256("|".join(dependency_scopes).encode("utf-8")).hexdigest()[:12]
+        if dependency_scopes
+        else "shared"
+    )
+    return (
+        "link:account:" + clean_account_id + ":" + clean_family
+        + ":" + dependency_shard
+    )
 
 
 def _id_symbol(entity_id: object) -> str:
@@ -398,8 +411,8 @@ def scope_id_for_relation(
         # or watchlist link for that ticker.
         if symbol and macro_scopes and not source_symbol and not target_symbol:
             return relation_link_scope_id(
-                "",
-                "",
+                source_scope,
+                target_scope,
                 account_id,
                 relation_family=relation_family,
             )

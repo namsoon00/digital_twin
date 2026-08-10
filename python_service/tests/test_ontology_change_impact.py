@@ -19,6 +19,7 @@ from digital_twin.domain.ontology_scopes import (
     _scope_semantic_fingerprints,
     _scope_semantic_fingerprints_by_scope,
     apply_scoped_abox_identity,
+    relation_link_scope_id,
 )
 from digital_twin.domain.ontology_tbox import tbox_class_def, tbox_relation_def
 from digital_twin.infrastructure.graph_store_rulebox import rulebox_graph_from_rules
@@ -77,7 +78,7 @@ class OntologyChangeImpactTests(unittest.TestCase):
         self.assertEqual("symbol:005930:temporal", entity_scopes["temporal-window:005930:5d"])
         self.assertEqual("symbol:005930:evidence", entity_scopes["news-article:005930:1"])
         self.assertEqual("macro:market", entity_scopes["market-proxy-instrument:QQQ"])
-        self.assertEqual("link:account:main:exposure", relation_scopes["OBSERVES_MARKET_PROXY"])
+        self.assertTrue(relation_scopes["OBSERVES_MARKET_PROXY"].startswith("link:account:main:exposure:"))
         self.assertEqual("link:symbol:005930:flow", relation_scopes["HAS_TRADE_FLOW"])
 
         first_generations = dict(first["scopeGenerationIds"])
@@ -97,6 +98,24 @@ class OntologyChangeImpactTests(unittest.TestCase):
         self.assertEqual("005930", scope_symbol(scope_id))
         self.assertEqual("flow", scope_family(scope_id))
         self.assertEqual("link", scope_family("link:main"))
+
+    def test_account_link_scopes_are_sharded_by_endpoint_scope_pair(self):
+        crypto = relation_link_scope_id(
+            "portfolio:main",
+            "macro:crypto",
+            "main",
+            relation_family="exposure",
+        )
+        rates = relation_link_scope_id(
+            "portfolio:main",
+            "macro:rates",
+            "main",
+            relation_family="exposure",
+        )
+
+        self.assertNotEqual(crypto, rates)
+        self.assertEqual("exposure", scope_family(crypto))
+        self.assertTrue(crypto.startswith("link:account:main:exposure:"))
 
     def test_scope_identity_ignores_display_label_only_changes(self):
         graph = self.scope_graph()

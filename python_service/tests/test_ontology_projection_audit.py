@@ -406,7 +406,7 @@ class OntologyProjectionAuditTests(unittest.TestCase):
             [item["scopeId"] for item in selected],
         )
 
-    def test_target_reuse_scope_plan_keeps_v4_family_link_for_the_target(self):
+    def test_target_reuse_scope_plan_keeps_family_link_for_the_target(self):
         plan = [
             {
                 "scopeId": "link:symbol:005930:market",

@@ -172,6 +172,7 @@ def _scope_families(
     scope_id: object,
     item: Mapping[str, object],
     include_impact_families: bool = True,
+    include_semantic_families: bool = True,
 ) -> Set[str]:
     row = dict(item or {})
     values = (
@@ -179,9 +180,10 @@ def _scope_families(
         if include_impact_families
         else set()
     )
-    semantic = row.get("semanticFingerprints")
-    if isinstance(semantic, Mapping):
-        values.update(_family_values(semantic.keys()))
+    if include_semantic_families:
+        semantic = row.get("semanticFingerprints")
+        if isinstance(semantic, Mapping):
+            values.update(_family_values(semantic.keys()))
     physical = _clean(row.get("scopeFamily")).lower() or scope_family(scope_id)
     if physical:
         values.add(physical)
@@ -438,10 +440,19 @@ def select_fact_slot_scope_ids(
     for scope_id in candidates:
         item = scope_plan_by_id.get(scope_id) or {}
         symbol = scope_symbol(scope_id)
+        precise_scope = bool(
+            symbol in precise_field_routing_symbols
+            or (
+                not symbol
+                and precise_field_routing_symbols
+                == set(plan.get("targetSymbols") or [])
+            )
+        )
         families = _scope_families(
             scope_id,
             item,
-            include_impact_families=symbol not in precise_field_routing_symbols,
+            include_impact_families=not precise_scope,
+            include_semantic_families=not precise_scope,
         )
         # An unknown source type for one target must never narrow that
         # target's ABox. Shared scopes are retained too because their facts

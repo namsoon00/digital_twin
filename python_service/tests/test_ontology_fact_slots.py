@@ -46,9 +46,14 @@ class OntologyFactSlotTests(unittest.TestCase):
                 "semanticFingerprints": {"flow": "changed"},
             },
             "link:symbol:005930:market": {
-                "scopeFamily": "link",
+                "scopeFamily": "market",
                 "impactScopeFamilies": ["market"],
                 "semanticFingerprints": {"market": "changed"},
+            },
+            "symbol:005930:valuation": {
+                "scopeFamily": "valuation",
+                "impactScopeFamilies": ["valuation", "market"],
+                "semanticFingerprints": {"valuation": "changed", "market": "dependency-only"},
             },
         }
 
@@ -69,7 +74,11 @@ class OntologyFactSlotTests(unittest.TestCase):
             selection["selectedScopeIds"],
         )
         self.assertEqual(
-            ["symbol:005930:flow", "symbol:005930:temporal"],
+            [
+                "symbol:005930:flow",
+                "symbol:005930:temporal",
+                "symbol:005930:valuation",
+            ],
             selection["deferredScopeIds"],
         )
 

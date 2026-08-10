@@ -2012,6 +2012,9 @@
     state.activeExperimentSection = nextExperimentSection;
     state.activeOntologyExperimentId = nextOntologyExperimentId;
     state.workDetailLayer = nextWorkDetailLayer;
+    if (detailChanged && nextDetailType === "notification-job" && nextDetailKey) {
+      loadNotificationJobDetail(nextDetailKey);
+    }
     if (nextTab !== "notifications" || sectionChanged) state.notificationPolicyEditorOpen = false;
     if (nextTab !== "notifications" || sectionChanged) state.notificationTemplateEditorOpen = false;
     if (nextTab === state.activeTab) {
@@ -19086,7 +19089,7 @@
   }
 
   function notificationWorkDetailPayload(key) {
-    var job = notificationJobByKey(key) || activeNotificationDecisionJob(state.notificationJobItems || []);
+    var job = state.notificationJobDetails[key] || notificationJobByKey(key) || activeNotificationDecisionJob(state.notificationJobItems || []);
     if (!job) return null;
     var payload = notificationJobDetailPayload(job);
     return {
@@ -27968,6 +27971,9 @@
   applyAppTheme();
   connectRealtime();
   render();
+  if (state.workDetailLayer && state.workDetailLayer.type === "notification-job" && state.workDetailLayer.key) {
+    loadNotificationJobDetail(state.workDetailLayer.key);
+  }
   var snapshotLoadTask = load();
   var snapshotPrerequisites = [loadServerSettings(), loadServiceAccounts()];
   Promise.all(snapshotPrerequisites.map(function (task) {

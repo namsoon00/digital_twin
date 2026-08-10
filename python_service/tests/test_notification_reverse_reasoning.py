@@ -287,6 +287,8 @@ class NotificationReverseReasoningTests(unittest.TestCase):
 
         self.assertEqual(sorted(positions), positions)
         self.assertNotIn("slowRules", render_source)
+        self.assertIn("state.notificationJobDetails[key] || notificationJobByKey(key)", source)
+        self.assertIn('state.workDetailLayer.type === "notification-job"', source)
 
     def test_detail_endpoint_exposes_trace_without_bloating_list_payload(self):
         job = NotificationJob.create(

@@ -203,6 +203,91 @@ class NotificationReverseReasoningTests(unittest.TestCase):
         self.assertFalse(trace["snapshotBound"])
         self.assertIn("저장되지 않았습니다", trace["reason"])
 
+    def test_detail_trace_preserves_all_saved_rows_and_full_text(self):
+        context = notification_context()
+        relation = context["ontologyRelationContext"]
+        long_evidence = "전체 근거 " + ("가나다라마바사 " * 90).strip()
+        context["completeSources"] = [
+            {"url": "https://example.test/complete-source-" + str(index)}
+            for index in range(60)
+        ]
+        relation["facts"].update({"customFact" + str(index): "값 " + str(index) for index in range(30)})
+        relation["activeRules"] = []
+        relation["graphStoreInference"]["traces"] = []
+        hypotheses = []
+        ai_hypotheses = []
+        for index in range(25):
+            rule_id = "graph.complete.rule." + str(index)
+            trace_id = "trace:complete:" + str(index)
+            relation["activeRules"].append({
+                "ruleId": rule_id,
+                "label": "전체 규칙 " + str(index),
+                "inferenceTraceId": trace_id,
+                "evidence": [long_evidence, "근거 " + str(index)],
+            })
+            relation["graphStoreInference"]["traces"].append({
+                "id": trace_id,
+                "ruleId": rule_id,
+                "matchedConditions": [
+                    {"conditionId": "condition:" + str(condition), "summary": "관측값 " + str(condition)}
+                    for condition in range(15)
+                ],
+            })
+            hypothesis_id = "hypothesis:complete:" + str(index)
+            hypotheses.append({
+                "hypothesisId": hypothesis_id,
+                "templateLabel": "전체 가설 " + str(index),
+                "claim": long_evidence + " / " + str(index),
+                "supportingRuleIds": [rule_id],
+                "assumptions": ["전제 " + str(value) for value in range(8)],
+                "invalidationConditions": ["무효 " + str(value) for value in range(8)],
+            })
+            ai_hypotheses.append({
+                "hypothesisId": hypothesis_id,
+                "verdict": "supported",
+                "reasoning": long_evidence,
+            })
+        relation["investmentBrain"]["hypothesisSet"]["hypotheses"] = hypotheses
+        context["notificationAiValidatedResponse"]["hypotheses"] = ai_hypotheses
+        context["notificationAiValidatedResponse"]["selectedHypothesisId"] = "hypothesis:complete:0"
+        context["notificationAiValidatedResponse"]["summary"] = long_evidence
+
+        trace = build_notification_reverse_reasoning_trace(context)
+
+        self.assertFalse(trace["completeness"]["truncated"])
+        self.assertGreaterEqual(len(trace["inputFacts"]), 30)
+        self.assertEqual(25, len(trace["matchedRules"]))
+        self.assertEqual(25, len(trace["inferenceTraces"]))
+        self.assertEqual(15, len(trace["inferenceTraces"][0]["conditions"]))
+        self.assertEqual(25, len(trace["hypotheses"]))
+        self.assertEqual(24, len(trace["alternativeHypotheses"]))
+        self.assertGreaterEqual(len(trace["sources"]), 60)
+        self.assertEqual(long_evidence, trace["finalDecision"]["summary"])
+        self.assertEqual(long_evidence, trace["matchedRules"][0]["evidence"][0])
+        self.assertEqual(
+            ["abox-facts", "typedb-rule", "hypothesis", "ai-decision", "delivery"],
+            [step["id"] for step in trace["steps"]],
+        )
+
+    def test_web_renders_reasoning_in_execution_order_without_slicing_rules(self):
+        source = (Path(__file__).resolve().parents[2] / "public" / "app.js").read_text(encoding="utf-8")
+        render_source = source[
+            source.index("function renderNotificationReverseReasoning"):
+            source.index("function renderNotificationDecisionDetail")
+        ]
+        markers = [
+            'renderNotificationReasoningStep(1, "원천 데이터·ABox 사실"',
+            'renderNotificationReasoningStep(2, "TypeDB 규칙 실행"',
+            'renderNotificationReasoningStep(3, "경쟁 가설 구성"',
+            'renderNotificationReasoningStep(4, "AI 비교·최종 판단"',
+            'renderNotificationReasoningStep(5, "알림 발송"',
+        ]
+
+        positions = [render_source.index(marker) for marker in markers]
+
+        self.assertEqual(sorted(positions), positions)
+        self.assertNotIn("slowRules", render_source)
+
     def test_detail_endpoint_exposes_trace_without_bloating_list_payload(self):
         job = NotificationJob.create(
             "알림 본문",

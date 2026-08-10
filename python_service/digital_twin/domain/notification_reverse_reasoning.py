@@ -7,6 +7,7 @@ historical decision.  That distinction keeps an alert explainable even after a
 RuleBox or ABox refresh.
 """
 
+import json
 import math
 import re
 from typing import Dict, Iterable, List
@@ -15,7 +16,7 @@ from .notification_ai_context import relation_context_value
 from .notification_ai_gate_sources import all_source_urls_for_context, source_detail_map
 
 
-TRACE_VERSION = "notification-reverse-reasoning-v1"
+TRACE_VERSION = "notification-reasoning-timeline-v2"
 
 ACTION_LABELS = {
     "BUY": "매수",
@@ -85,18 +86,19 @@ FACT_FIELDS = (
 
 
 def _text(value: object, limit: int = 420) -> str:
+    """Normalize detail text without truncating the saved audit record."""
+    del limit
     text = re.sub(r"\s+", " ", str(value or "")).strip()
-    if limit and len(text) > limit:
-        return text[: limit - 3].rstrip() + "..."
     return text
 
 
 def _rows(value: object, limit: int = 24) -> List[object]:
+    del limit
     if isinstance(value, (str, bytes)):
         return [value] if str(value).strip() else []
     if not isinstance(value, list):
         return []
-    return list(value)[:limit]
+    return list(value)
 
 
 def _dict(value: object) -> Dict[str, object]:
@@ -104,13 +106,12 @@ def _dict(value: object) -> Dict[str, object]:
 
 
 def _unique(values: Iterable[object], limit: int = 12, text_limit: int = 320) -> List[str]:
+    del limit, text_limit
     result: List[str] = []
     for value in values or []:
-        text = _text(value, text_limit)
+        text = _text(value)
         if text and text not in result:
             result.append(text)
-        if len(result) >= limit:
-            break
     return result
 
 
@@ -129,19 +130,29 @@ def _display_value(value: object) -> str:
         return ("%.6f" % value).rstrip("0").rstrip(".")
     if isinstance(value, (list, tuple)):
         return ", ".join(_unique(value, limit=8, text_limit=100))
+    if isinstance(value, dict):
+        return json.dumps(value, ensure_ascii=False, sort_keys=True)
     return _text(value, 160)
 
 
 def _fact_rows(facts: Dict[str, object]) -> List[Dict[str, str]]:
     rows = []
+    known_keys = set()
     for key, label in FACT_FIELDS:
+        known_keys.add(key)
         value = facts.get(key)
         if not _present(value):
             continue
         displayed = _display_value(value)
         if displayed:
             rows.append({"key": key, "label": label, "value": displayed})
-    return rows[:18]
+    for key, value in facts.items():
+        if key in known_keys or not _present(value):
+            continue
+        displayed = _display_value(value)
+        if displayed:
+            rows.append({"key": str(key), "label": str(key), "value": displayed})
+    return rows
 
 
 def _missing_data_rows(relation: Dict[str, object], facts: Dict[str, object]) -> List[str]:
@@ -157,10 +168,34 @@ def _missing_data_rows(relation: Dict[str, object], facts: Dict[str, object]) ->
     return _unique(values, 8)
 
 
+def _all_source_urls(context: Dict[str, object]) -> List[str]:
+    """Collect every persisted source URL; prompt/message display limits do not apply."""
+    rows = list(all_source_urls_for_context(context))
+    url_keys = {"url", "sourceurl", "source_url", "link", "sourceurls"}
+
+    def visit(value: object) -> None:
+        if isinstance(value, dict):
+            for key, item in value.items():
+                if str(key or "").strip().lower() in url_keys:
+                    candidates = item if isinstance(item, list) else [item]
+                    for candidate in candidates:
+                        url = str(candidate or "").strip()
+                        if url.startswith(("http://", "https://")) and url not in rows:
+                            rows.append(url)
+                elif isinstance(item, (dict, list)):
+                    visit(item)
+        elif isinstance(value, list):
+            for item in value:
+                visit(item)
+
+    visit(context)
+    return rows
+
+
 def _source_rows(context: Dict[str, object]) -> List[Dict[str, str]]:
     details = source_detail_map(context)
     rows = []
-    for url in all_source_urls_for_context(context)[:8]:
+    for url in _all_source_urls(context):
         item = _dict(details.get(url))
         payload = _dict(item.get("payload"))
         title = _text(item.get("title") or item.get("summary") or payload.get("title"), 220)
@@ -182,11 +217,17 @@ def _rule_rows(relation: Dict[str, object], selected_rule_ids: Iterable[object])
     if decision.get("selectedRuleId"):
         selected.add(str(decision.get("selectedRuleId")))
     rows = []
-    for item in _rows(relation.get("activeRules") or relation.get("matchedRules"), 16):
-        if not isinstance(item, dict) or item.get("referenceOnly") or item.get("reference_only"):
+    seen = set()
+    rule_items = _rows(relation.get("activeRules")) + _rows(relation.get("matchedRules"))
+    for item in rule_items:
+        if not isinstance(item, dict):
             continue
         rule_id = _text(item.get("ruleId") or item.get("rule_id"), 180)
         trace_id = _text(item.get("inferenceTraceId") or item.get("inference_trace_id"), 220)
+        row_key = (rule_id, trace_id)
+        if row_key in seen:
+            continue
+        seen.add(row_key)
         rows.append({
             "ruleId": rule_id,
             "label": _text(item.get("label") or item.get("name") or rule_id, 280),
@@ -196,6 +237,7 @@ def _rule_rows(relation: Dict[str, object], selected_rule_ids: Iterable[object])
             "evidenceRole": _text(item.get("evidenceRole") or item.get("polarity") or "context", 80),
             "evidence": _unique(item.get("evidence") or [], 4, 220),
             "selected": bool(rule_id and rule_id in selected),
+            "referenceOnly": bool(item.get("referenceOnly") or item.get("reference_only")),
         })
     return rows
 
@@ -233,8 +275,6 @@ def _condition_rows(trace: Dict[str, object]) -> List[Dict[str, str]]:
             row = {"label": label, "value": value_text}
             if row not in rows:
                 rows.append(row)
-            if len(rows) >= 10:
-                return rows
     return rows
 
 
@@ -247,6 +287,7 @@ def _trace_rows(relation: Dict[str, object], rules: List[Dict[str, object]]) -> 
         if isinstance(item, dict)
     }
     rows = []
+    consumed_trace_ids = set()
     for rule in rules:
         trace = _dict(trace_by_id.get(str(rule.get("inferenceTraceId") or "")))
         if not trace:
@@ -259,11 +300,26 @@ def _trace_rows(relation: Dict[str, object], rules: List[Dict[str, object]]) -> 
                 {},
             )
         trace = _dict(trace)
+        trace_id = _text(trace.get("id") or trace.get("inferenceTraceId") or rule.get("inferenceTraceId"), 220)
+        if trace_id:
+            consumed_trace_ids.add(trace_id)
         rows.append({
             "ruleId": str(rule.get("ruleId") or ""),
             "label": str(rule.get("label") or ""),
-            "traceId": _text(trace.get("id") or trace.get("inferenceTraceId") or rule.get("inferenceTraceId"), 220),
+            "traceId": trace_id,
             "selected": bool(rule.get("selected")),
+            "conditions": _condition_rows(trace),
+        })
+    for trace in raw:
+        trace = _dict(trace)
+        trace_id = _text(trace.get("id") or trace.get("inferenceTraceId") or trace.get("traceId"), 220)
+        if trace_id and trace_id in consumed_trace_ids:
+            continue
+        rows.append({
+            "ruleId": _text(trace.get("ruleId") or trace.get("sourceRuleId"), 180),
+            "label": _text(trace.get("label") or trace.get("name") or trace.get("ruleId") or "추론 경로"),
+            "traceId": trace_id,
+            "selected": False,
             "conditions": _condition_rows(trace),
         })
     return rows
@@ -353,7 +409,7 @@ def build_notification_reverse_reasoning_trace(
     job_id: str = "",
     job_status: str = "",
 ) -> Dict[str, object]:
-    """Return a bounded, user-safe explanation of one saved alert decision."""
+    """Return the complete, snapshot-bound execution timeline for one alert."""
 
     values = _dict(context)
     relation = relation_context_value(values)
@@ -417,38 +473,40 @@ def build_notification_reverse_reasoning_trace(
         for key in ("worldId", "portfolioWorldId", "marketWorldId", "tenantId")
         if _text(relation.get(key), 180)
     }
-    alternatives = [item for item in hypotheses if item.get("hypothesisId") != selected_hypothesis_id][:4]
+    alternatives = [item for item in hypotheses if item.get("hypothesisId") != selected_hypothesis_id]
     traceability = _traceability_rows(relation, ai, selected_hypothesis)
+    fact_rows = _fact_rows(facts)
+    source_rows = _source_rows(values)
     steps = [
+        {
+            "id": "abox-facts",
+            "title": "원천 데이터·ABox 사실",
+            "summary": str(len(fact_rows)) + "개 사실, " + str(len(source_rows)) + "개 원문 출처",
+            "detail": "알림 생성 시점에 저장된 원천 데이터와 ABox 사실입니다.",
+        },
+        {
+            "id": "typedb-rule",
+            "title": "TypeDB 규칙 실행",
+            "summary": str(len(rules)) + "개 규칙, " + str(len(traces)) + "개 추론 경로",
+            "detail": _text(relation.get("inferenceGenerationId"), 180) or "추론 세대 ID 미기록",
+        },
+        {
+            "id": "hypothesis",
+            "title": "경쟁 가설 구성",
+            "summary": str(len(hypotheses)) + "개 가설을 AI 비교 입력으로 구성했습니다.",
+            "detail": "이 단계에서는 후보를 만들며, 최종 선택은 다음 AI 단계에서 일어납니다.",
+        },
+        {
+            "id": "ai-decision",
+            "title": "AI 비교·최종 판단",
+            "summary": (selected_action_label + (" · " + _text(ai.get("summary"), 260) if ai.get("summary") else "")) or "AI 판단 기록 없음",
+            "detail": _text(ai.get("disagreementReason"), 260) or "그래프 후보와 같은 방향인지 비교했습니다.",
+        },
         {
             "id": "delivery",
             "title": "알림 발송",
             "summary": _text(values.get("deliveryDecision") or job_status or "발송 판단 기록 없음", 180),
             "detail": delivery_reasons[0] if delivery_reasons else "발송 정책의 세부 사유가 저장되지 않았습니다.",
-        },
-        {
-            "id": "ai-decision",
-            "title": "AI 최종 판단",
-            "summary": (selected_action_label + (" · " + _text(ai.get("summary"), 260) if ai.get("summary") else "")) or "AI 판단 기록 없음",
-            "detail": _text(ai.get("disagreementReason"), 260) or "그래프 후보와 같은 방향인지 비교했습니다.",
-        },
-        {
-            "id": "hypothesis",
-            "title": "선택 가설",
-            "summary": _text(selected_hypothesis.get("claim"), 300) or "선택 가설 기록 없음",
-            "detail": _text(selected_hypothesis.get("reasoning"), 300) or _text(selected_hypothesis.get("evidenceStateLabel"), 160),
-        },
-        {
-            "id": "typedb-rule",
-            "title": "TypeDB 관계 규칙",
-            "summary": _text(next((item.get("label") for item in rules if item.get("selected")), ""), 240) or _text(decision.get("label"), 240) or "성립 규칙 기록 없음",
-            "detail": _text(relation.get("inferenceGenerationId"), 180) or "추론 세대 ID 미기록",
-        },
-        {
-            "id": "abox-facts",
-            "title": "ABox 사실·원천 데이터",
-            "summary": str(len(_fact_rows(facts))) + "개 핵심 사실, " + str(len(_source_rows(values))) + "개 원문 출처",
-            "detail": "수집 시점의 값과 출처만 사용했습니다.",
         },
     ]
     return {
@@ -524,11 +582,12 @@ def build_notification_reverse_reasoning_trace(
             "executed": bool(ai_execution.get("requestId")),
         },
         "selectedHypothesis": selected_hypothesis,
+        "hypotheses": hypotheses,
         "alternativeHypotheses": alternatives,
         "matchedRules": rules,
         "inferenceTraces": traces,
-        "inputFacts": _fact_rows(facts),
-        "sources": _source_rows(values),
+        "inputFacts": fact_rows,
+        "sources": source_rows,
         "missingData": _missing_data_rows(relation, facts),
         "delivery": {
             "decision": _text(values.get("deliveryDecision"), 80),
@@ -540,5 +599,13 @@ def build_notification_reverse_reasoning_trace(
             "freshnessReason": _text(values.get("dataFreshnessReason"), 220),
         },
         "traceability": traceability,
+        "completeness": {
+            "truncated": False,
+            "factCount": len(fact_rows),
+            "sourceCount": len(source_rows),
+            "ruleCount": len(rules),
+            "traceCount": len(traces),
+            "hypothesisCount": len(hypotheses),
+        },
         "steps": steps,
     }

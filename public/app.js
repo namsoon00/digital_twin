@@ -19272,8 +19272,8 @@
     if (!trace) {
       return [
         '<section class="notification-detail-section notification-reasoning-section">',
-        '<strong>판단 역추적</strong>',
-        '<p>알림 상세를 불러오는 중입니다. 생성 시점의 추론 컨텍스트가 있으면 결론부터 근거까지 연결해 표시합니다.</p>',
+        '<strong>실제 실행 순서</strong>',
+        '<p>알림 상세를 불러오는 중입니다. 생성 시점 기록을 원천 데이터부터 발송까지 시간 순서로 표시합니다.</p>',
         '</section>'
       ].join("");
     }
@@ -19289,6 +19289,9 @@
     var rules = Array.isArray(trace.matchedRules) ? trace.matchedRules : [];
     var inferenceTraces = Array.isArray(trace.inferenceTraces) ? trace.inferenceTraces : [];
     var alternatives = Array.isArray(trace.alternativeHypotheses) ? trace.alternativeHypotheses : [];
+    var hypotheses = Array.isArray(trace.hypotheses) ? trace.hypotheses : [selected].concat(alternatives).filter(function (item) {
+      return Object.keys(item || {}).length;
+    });
     var facts = Array.isArray(trace.inputFacts) ? trace.inputFacts : [];
     var sources = Array.isArray(trace.sources) ? trace.sources : [];
     var missing = Array.isArray(trace.missingData) ? trace.missingData : [];
@@ -19297,7 +19300,7 @@
       return [
         '<section class="notification-detail-section notification-reasoning-section unavailable">',
         '<div class="notification-reasoning-head">',
-        '<div><strong>판단 역추적</strong><span>결론을 현재 그래프로 다시 해석하지 않습니다.</span></div>',
+        '<div><strong>실제 실행 순서</strong><span>저장된 생성 시점 기록이 없어 현재 그래프로 재구성하지 않습니다.</span></div>',
         '<span class="tone-chip ' + escapeHtml(status.tone) + '">' + escapeHtml(status.label) + '</span>',
         '</div>',
         '<p>' + escapeHtml(trace.reason || "이 알림에는 생성 시점의 추론 컨텍스트가 없습니다.") + '</p>',
@@ -19368,9 +19371,10 @@
       var meta = [source.source, source.publishedAt ? formatClock(source.publishedAt) : "", source.impact].filter(Boolean).join(" · ");
       return '<div><strong>' + escapeHtml(source.title || "원문") + '</strong>' + (meta ? '<span>' + escapeHtml(meta) + '</span>' : '') + (source.url ? '<a href="' + escapeHtml(source.url) + '" target="_blank" rel="noopener noreferrer">원문 열기</a>' : '') + '</div>';
     });
-    var alternativeBody = notificationReasoningTraceItems(alternatives, "notification-reasoning-alternative-list", function (item) {
+    var hypothesisCandidatesBody = notificationReasoningTraceItems(hypotheses, "notification-reasoning-alternative-list", function (item) {
+      var isSelected = item.hypothesisId && item.hypothesisId === comparison.selectedHypothesisId;
       var meta = [item.stanceLabel, item.evidenceStateLabel, item.verdictLabel].filter(Boolean).join(" · ");
-      return '<div><strong>' + escapeHtml(item.label || "대안 가설") + '</strong><span>' + escapeHtml(item.claim || item.reasoning || "설명 없음") + '</span>' + (meta ? '<em>' + escapeHtml(meta) + '</em>' : '') + '</div>';
+      return '<div><strong>' + escapeHtml((isSelected ? "AI 선택 · " : "후보 · ") + (item.label || item.hypothesisId || "가설")) + '</strong><span>' + escapeHtml(item.claim || "설명 없음") + '</span>' + (item.reasoning ? '<span>' + escapeHtml(item.reasoning) + '</span>' : '') + (meta ? '<em>' + escapeHtml(meta) + '</em>' : '') + '</div>';
     });
     var auditBody = notificationReasoningTraceItems(audit, "notification-reasoning-audit-list", function (item) {
       var tone = item.state === "verified" ? "watch" : (item.state === "partial" ? "caution" : "hold");
@@ -19395,9 +19399,6 @@
     var executionLedgerBody = executionRuns.map(function (run) {
       var stages = Array.isArray(run.stages) ? run.stages : [];
       var ruleRuns = Array.isArray(run.rules) ? run.rules : [];
-      var slowRules = ruleRuns.slice().sort(function (left, right) {
-        return Number(right.durationMs || 0) - Number(left.durationMs || 0);
-      }).slice(0, 12);
       return [
         '<div class="notification-reasoning-provenance">',
         '<code>' + escapeHtml(run.runId || "run") + '</code>',
@@ -19407,31 +19408,35 @@
         '</div>',
         '<div class="notification-reasoning-audit-list">',
         stages.map(function (stage) {
-          return '<div><span class="tone-chip ' + escapeHtml(inferenceLedgerTone(stage.status)) + '">' + escapeHtml(stage.status || "-") + '</span><strong>' + escapeHtml(stage.stageKey || "-") + '</strong><em>' + escapeHtml(formatInteger(stage.durationMs || 0) + "ms") + '</em></div>';
+          var timing = [stage.startedAt ? formatClock(stage.startedAt) : "", stage.completedAt ? formatClock(stage.completedAt) : "", formatInteger(stage.durationMs || 0) + "ms"].filter(Boolean).join(" → ");
+          var detail = stage.detail && Object.keys(stage.detail).length ? '<pre class="notification-reasoning-raw">' + escapeHtml(JSON.stringify(stage.detail, null, 2)) + '</pre>' : '';
+          return '<div><span class="tone-chip ' + escapeHtml(inferenceLedgerTone(stage.status)) + '">' + escapeHtml(stage.status || "-") + '</span><strong>' + escapeHtml(stage.stageKey || "-") + '</strong><em>' + escapeHtml(timing) + '</em>' + detail + '</div>';
         }).join(""),
         '</div>',
-        notificationReasoningTraceTags(slowRules.map(function (rule) {
-          return [rule.ruleId, rule.status, formatInteger(rule.durationMs || 0) + "ms"].filter(Boolean).join(" · ");
-        }), "notification-reasoning-tags")
+        '<div class="notification-reasoning-rule-list">',
+        ruleRuns.map(function (rule) {
+          var timing = [rule.status, rule.stageKey, rule.queryMode, "query " + formatInteger(rule.queryCount || 0), formatInteger(rule.durationMs || 0) + "ms", "DB " + formatInteger(rule.queryDurationMs || 0) + "ms"].filter(Boolean).join(" · ");
+          var detail = [rule.selectedReason, rule.failureReason, (rule.targetSymbols || []).join(", ")].filter(Boolean).join(" · ");
+          return '<div class="notification-reasoning-rule"><span>' + escapeHtml(rule.matched ? "성립" : (rule.reused ? "재사용" : "실행")) + '</span><strong>' + escapeHtml(rule.ruleId || rule.ruleRunKey || "규칙") + '</strong><em>' + escapeHtml(timing) + '</em>' + (detail ? '<em>' + escapeHtml(detail) + '</em>' : '') + '</div>';
+        }).join(""),
+        '</div>'
       ].join("");
     }).join("");
     return [
       '<section class="notification-detail-section notification-reasoning-section">',
       '<div class="notification-reasoning-head">',
-      '<div><strong>판단 역추적</strong><span>이 알림의 결론에서 생성 시점의 ABox 사실까지 거슬러 확인합니다.</span></div>',
+      '<div><strong>실제 실행 순서</strong><span>원천 데이터·ABox → TypeDB 규칙 → 경쟁 가설 → AI 판단 → 알림 발송 순서입니다. 상세 데이터는 개수나 문자 수로 자르지 않습니다.</span></div>',
       '<span class="tone-chip ' + escapeHtml(status.tone) + '">' + escapeHtml(status.label) + '</span>',
       '</div>',
       '<div class="notification-reasoning-provenance">' + provenance.map(function (item) { return '<code>' + escapeHtml(item) + '</code>'; }).join("") + '</div>',
       '<ol class="notification-reasoning-flow">',
-      renderNotificationReasoningStep(1, "알림 발송", deliveryLabel, delivery.gateReason || "발송 정책과 반복 방지 정책을 통과한 결과입니다.", deliveryBody),
-      renderNotificationReasoningStep(2, "AI 최종 판단", (finalDecision.actionLabel || finalDecision.primaryAction || "판단 기록 없음") + (finalDecision.summary ? " · " + finalDecision.summary : ""), finalDecision.validationLabel || finalDecision.dataStateLabel || "검증 상태 미기록", comparisonBody),
-      renderNotificationReasoningStep(3, "선택 가설", selected.claim || "선택 가설 기록 없음", selected.reasoning || "AI가 이 가설을 다른 후보와 비교한 설명입니다.", hypothesisBody),
-      renderNotificationReasoningStep(4, "TypeDB 관계 규칙과 성립 조건", rules.length ? rules.length + "개 규칙이 이 알림 시점에 성립했습니다." : "성립 규칙 기록 없음", snapshot.inferenceGenerationId || "추론 세대 ID 미기록", ruleBody + traceBody),
-      renderNotificationReasoningStep(5, "ABox 사실과 원문", facts.length + "개 핵심 사실, " + sources.length + "개 출처", missing.length ? "부족 데이터 " + missing.length + "건은 결론 강도를 제한합니다." : "기록된 부족 데이터 없음", factBody + sourceBody + notificationReasoningTraceTags(missing, "notification-reasoning-tags caution")),
+      renderNotificationReasoningStep(1, "원천 데이터·ABox 사실", facts.length + "개 사실, " + sources.length + "개 출처", missing.length ? "부족 데이터 " + missing.length + "건도 원본과 함께 표시합니다." : "기록된 부족 데이터 없음", factBody + sourceBody + notificationReasoningTraceTags(missing, "notification-reasoning-tags caution")),
+      renderNotificationReasoningStep(2, "TypeDB 규칙 실행", rules.length + "개 규칙, " + inferenceTraces.length + "개 추론 경로", snapshot.inferenceGenerationId || "추론 세대 ID 미기록", executionLedgerBody + ruleBody + traceBody),
+      renderNotificationReasoningStep(3, "경쟁 가설 구성", hypotheses.length + "개 가설을 비교 후보로 구성했습니다.", "선택 표시는 다음 AI 단계의 결과이며, 후보 생성보다 먼저 실행된 것이 아닙니다.", hypothesisCandidatesBody),
+      renderNotificationReasoningStep(4, "AI 비교·최종 판단", (finalDecision.actionLabel || finalDecision.primaryAction || "판단 기록 없음") + (finalDecision.summary ? " · " + finalDecision.summary : ""), finalDecision.validationLabel || finalDecision.dataStateLabel || "검증 상태 미기록", aiExecutionBody + comparisonBody + hypothesisBody),
+      renderNotificationReasoningStep(5, "알림 발송", deliveryLabel, delivery.gateReason || "발송 정책과 반복 방지 정책을 통과한 결과입니다.", deliveryBody),
       '</ol>',
-      alternatives.length || (comparison.unresolvedQuestions && comparison.unresolvedQuestions.length) ? '<div class="notification-reasoning-appendix"><strong>비교한 다른 가설과 미해결 질문</strong>' + alternativeBody + notificationReasoningTraceTags(comparison.unresolvedQuestions || [], "notification-reasoning-tags") + '</div>' : '',
-      '<div class="notification-reasoning-appendix"><strong>AI 실행 경계</strong>' + aiExecutionBody + '</div>',
-      executionLedgerBody ? '<div class="notification-reasoning-appendix"><strong>투영·추론 실행 원장</strong>' + executionLedgerBody + '</div>' : '',
+      comparison.unresolvedQuestions && comparison.unresolvedQuestions.length ? '<div class="notification-reasoning-appendix"><strong>미해결 질문</strong>' + notificationReasoningTraceTags(comparison.unresolvedQuestions, "notification-reasoning-tags") + '</div>' : '',
       auditBody ? '<div class="notification-reasoning-appendix"><strong>추론 무결성</strong>' + auditBody + '</div>' : '',
       '</section>'
     ].join("");
@@ -19489,7 +19494,7 @@
       '</section>',
       '<section class="notification-detail-section primary">',
       '<strong>판단 요약</strong>',
-      '<p>' + escapeHtml(payload.preview) + '</p>',
+      '<p>' + escapeHtml((((job.reasoningTrace || {}).finalDecision || {}).summary) || payload.fullText || payload.preview) + '</p>',
       '</section>',
       renderNotificationActionFlow(job),
       !compact ? renderNotificationReverseReasoning(job) : '',

@@ -149,9 +149,12 @@ def rulebox_catalog_requires_bootstrap_repair(stored_rules: List[Dict[str, objec
 # window properties only.
 ABOX_STRUCTURAL_RELATION_TYPES = {
     "COMPARES_WITH_MARKET_PROXY",
+    "ISSUES",
     "OCCURS_IN_SESSION_PHASE",
     "WINDOW_CONTAINS_OBSERVATION",
     "PRECEDES",
+    "REPRESENTS_INSTRUMENT",
+    "REPRESENTS_STOCK",
 }
 
 

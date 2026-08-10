@@ -6240,6 +6240,39 @@ class TypeDBOntologyRepositoryTests(unittest.TestCase):
         self.assertEqual(1, persisted.worldview["runtimeProjectionRuleInputRelationTypeCount"])
         self.assertGreater(persisted.worldview["runtimeProjectionSemanticRelationTypeCount"], 1)
 
+    def test_typedb_projection_keeps_stable_instrument_identity_structure(self):
+        graph = PortfolioOntology("instrument-identity")
+        graph.entities.extend([
+            OntologyEntity("stock:000660", "SK hynix", "stock", {"ontologyBox": "ABox"}),
+            OntologyEntity("security:000660", "SK hynix common stock", "security", {
+                "ontologyBox": "ABox",
+                "tboxClass": "Security",
+                "tboxClasses": ["Security", "InstrumentAnchor"],
+            }),
+            OntologyEntity("company:000660", "SK hynix", "company", {"ontologyBox": "ABox"}),
+            OntologyEntity("runtime:irrelevant", "Runtime setting", "runtime-setting", {"ontologyBox": "ABox"}),
+        ])
+        graph.relations.extend([
+            OntologyRelation("stock:000660", "security:000660", "REPRESENTS_INSTRUMENT", properties={"ontologyBox": "ABox"}),
+            OntologyRelation("security:000660", "stock:000660", "REPRESENTS_STOCK", properties={"ontologyBox": "ABox"}),
+            OntologyRelation("company:000660", "security:000660", "ISSUES", properties={"ontologyBox": "ABox"}),
+            OntologyRelation("stock:000660", "runtime:irrelevant", "HAS_RUNTIME_SETTING", properties={"ontologyBox": "ABox"}),
+        ])
+
+        persisted = PortfolioOntologyProjectionRecorder(None).graph_for_graph_store_persistence(
+            graph,
+            {"inputRelationTypes": ["HAS_RISK_BUDGET"]},
+        )
+
+        self.assertEqual(
+            {"stock:000660", "security:000660", "company:000660"},
+            {item.entity_id for item in persisted.entities},
+        )
+        self.assertEqual(
+            {"REPRESENTS_INSTRUMENT", "REPRESENTS_STOCK", "ISSUES"},
+            {item.relation_type for item in persisted.relations},
+        )
+
     def test_typedb_projection_keeps_temporal_observation_structure(self):
         graph = PortfolioOntology("temporal-structure")
         graph.entities.extend([

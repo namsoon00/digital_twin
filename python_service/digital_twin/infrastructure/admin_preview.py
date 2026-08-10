@@ -666,6 +666,8 @@ def admin_preview_config() -> Dict[str, object]:
                     {"key": "ontologyScopeRepairRetryMinutes", "label": "스코프 자동 복구 재시도", "type": "number", "default": "30", "unit": "minutes"},
                     {"key": "ontologyAboxMaintenanceAdaptiveDrainBacklogGrowthRunsBeforeIncrease", "label": "적체 증가 후 정리 가속 횟수", "type": "number", "default": "2"},
                     {"key": "ontologyAboxMaintenanceAdaptiveDrainMaxConsecutiveWorldRuns", "label": "같은 World 연속 정리 상한", "type": "number", "default": "3"},
+                    {"key": "ontologyAboxMaintenanceExecutionReserveSeconds", "label": "정리 종료 여유(초)", "type": "number", "default": "60"},
+                    {"key": "ontologyAboxMaintenanceEstimatedDeleteBatchSeconds", "label": "삭제 배치 예상 시간(초)", "type": "number", "default": "20"},
                     {"key": "ontologyReasoningMaintenanceEnabled", "label": "추론 메일박스 정리", "type": "toggle", "default": "1"},
                     {"key": "ontologyReasoningMaintenanceIntervalSeconds", "label": "추론 메일박스 정리 주기", "type": "number", "default": "300", "unit": "seconds"},
                     {"key": "ontologyWorldProjectionDeferWhenReasoningPending", "label": "추론 대기 중 공유 세계 투영 유예", "type": "toggle", "default": "1"},

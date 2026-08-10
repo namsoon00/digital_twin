@@ -729,6 +729,8 @@ def settings_status_payload() -> Dict[str, object]:
         "ontologyAboxMaintenanceProcessIsolationEnabled",
         "ontologyAboxMaintenanceExecutionTimeoutSeconds",
         "ontologyAboxMaintenanceExecutionTimeoutGraceSeconds",
+        "ontologyAboxMaintenanceExecutionReserveSeconds",
+        "ontologyAboxMaintenanceEstimatedDeleteBatchSeconds",
         "ontologyAboxMaintenanceMaxReasoningDeferralSeconds",
         "ontologyAboxMaintenanceBusyRetrySeconds",
         "ontologyAboxMaintenancePriorityInactiveManifestCount",

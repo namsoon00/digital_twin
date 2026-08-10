@@ -180,7 +180,7 @@ class OntologyMaintenanceRunnerTests(unittest.TestCase):
         self.assertEqual("market:shared:kr", first["worldId"])
         self.assertEqual("portfolio:local:main", second["worldId"])
         self.assertEqual(7, repository.calls[0]["maxInactiveManifests"])
-        self.assertEqual(8, repository.calls[0]["maxAboxDeleteBatches"])
+        self.assertEqual(6, repository.calls[0]["maxAboxDeleteBatches"])
         self.assertEqual(150, repository.calls[0]["aboxDeleteBatchSize"])
         self.assertEqual(0, repository.calls[0]["keepInactiveManifests"])
         self.assertEqual(2, first["maintenance"]["removedManifestCount"])
@@ -540,6 +540,27 @@ class OntologyMaintenanceRunnerTests(unittest.TestCase):
         self.assertEqual("adaptive-drain", third["maintenance"]["adaptiveDrain"]["mode"])
         self.assertEqual(3, third["maintenance"]["adaptiveDrain"]["criticalDrainRuns"])
 
+    def test_runtime_budget_caps_adaptive_delete_batches_before_process_timeout(self):
+        runner = OntologyMaintenanceRunner(
+            FakeOntologyRepository(),
+            state_store=FakeStateStore(),
+            settings={
+                "ontologyAboxMaintenanceExecutionTimeoutSeconds": "180",
+                "ontologyAboxMaintenanceExecutionReserveSeconds": "60",
+                "ontologyAboxMaintenanceEstimatedDeleteBatchSeconds": "20",
+            },
+        )
+
+        budget = runner.capacity_maintenance_budget(
+            runner.policy(),
+            {"effectiveMaxDeleteBatches": 16},
+            {"capacityPriority": False},
+        )
+
+        self.assertEqual(16, budget["requestedAboxDeleteBatches"])
+        self.assertEqual(6, budget["runtimeSafeDeleteBatchCap"])
+        self.assertEqual(6, budget["maxAboxDeleteBatches"])
+
     def test_capacity_pressure_prioritizes_bounded_cleanup_over_pending_reasoning(self):
         repository = FakeOntologyRepository()
         runner = OntologyMaintenanceRunner(
@@ -563,9 +584,10 @@ class OntologyMaintenanceRunnerTests(unittest.TestCase):
 
         self.assertEqual("ok", result["status"])
         self.assertEqual(10, repository.calls[0]["maxInactiveManifests"])
-        self.assertEqual(12, repository.calls[0]["maxAboxDeleteBatches"])
+        self.assertEqual(6, repository.calls[0]["maxAboxDeleteBatches"])
         self.assertEqual(250, repository.calls[0]["aboxDeleteBatchSize"])
         self.assertEqual(1, result["maintenance"]["capacityBudget"]["capacityPriority"])
+        self.assertEqual(12, result["maintenance"]["capacityBudget"]["requestedAboxDeleteBatches"])
 
     def test_capacity_rotation_wait_blocks_cleanup_writes(self):
         repository = FakeOntologyRepository()

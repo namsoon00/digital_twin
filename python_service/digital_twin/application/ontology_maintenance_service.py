@@ -470,31 +470,65 @@ class OntologyMaintenanceRunner:
         adaptive_drain: Dict[str, object],
         capacity: Dict[str, object],
     ) -> Dict[str, int]:
-        """Increase one cleanup turn only while TypeDB is below rotation level."""
+        """Bound cleanup so an isolated turn finishes before its hard timeout."""
         base_manifests = max(1, integer(policy.get("maxManifestsPerRun"), 1))
-        base_batches = max(1, integer(adaptive_drain.get("effectiveMaxDeleteBatches"), 1))
+        requested_batches = max(1, integer(adaptive_drain.get("effectiveMaxDeleteBatches"), 1))
         base_batch_size = max(10, integer(policy.get("deleteBatchSize"), 50))
+        timeout_seconds = max(30, self.execution_timeout_seconds())
+        reserve_seconds = max(
+            10,
+            min(
+                timeout_seconds - 10,
+                integer(
+                    self.settings.get("ontologyAboxMaintenanceExecutionReserveSeconds"),
+                    60,
+                ),
+            ),
+        )
+        estimated_batch_seconds = max(
+            5,
+            integer(
+                self.settings.get("ontologyAboxMaintenanceEstimatedDeleteBatchSeconds"),
+                20,
+            ),
+        )
+        safe_batch_cap = max(
+            1,
+            (timeout_seconds - reserve_seconds) // estimated_batch_seconds,
+        )
+        bounded_batches = min(requested_batches, safe_batch_cap)
         if not bool(capacity.get("capacityPriority")):
             return {
                 "maxInactiveManifests": base_manifests,
-                "maxAboxDeleteBatches": base_batches,
+                "maxAboxDeleteBatches": bounded_batches,
                 "aboxDeleteBatchSize": base_batch_size,
                 "capacityPriority": 0,
+                "requestedAboxDeleteBatches": requested_batches,
+                "runtimeSafeDeleteBatchCap": safe_batch_cap,
+                "executionTimeoutSeconds": timeout_seconds,
+                "executionReserveSeconds": reserve_seconds,
+                "estimatedDeleteBatchSeconds": estimated_batch_seconds,
             }
+        capacity_requested_batches = max(
+            requested_batches,
+            min(50, integer(self.settings.get("typedbCapacityMaintenanceMaxDeleteBatches"), 12)),
+        )
         return {
             "maxInactiveManifests": max(
                 base_manifests,
                 min(20, integer(self.settings.get("typedbCapacityMaintenanceMaxManifests"), 10)),
             ),
-            "maxAboxDeleteBatches": max(
-                base_batches,
-                min(50, integer(self.settings.get("typedbCapacityMaintenanceMaxDeleteBatches"), 12)),
-            ),
+            "maxAboxDeleteBatches": min(capacity_requested_batches, safe_batch_cap),
             "aboxDeleteBatchSize": max(
                 base_batch_size,
                 min(500, integer(self.settings.get("typedbCapacityMaintenanceDeleteBatchSize"), 250)),
             ),
             "capacityPriority": 1,
+            "requestedAboxDeleteBatches": capacity_requested_batches,
+            "runtimeSafeDeleteBatchCap": safe_batch_cap,
+            "executionTimeoutSeconds": timeout_seconds,
+            "executionReserveSeconds": reserve_seconds,
+            "estimatedDeleteBatchSeconds": estimated_batch_seconds,
         }
 
     @staticmethod

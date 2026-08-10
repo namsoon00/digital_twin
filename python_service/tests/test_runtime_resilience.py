@@ -203,6 +203,70 @@ class RuntimeResilienceTests(unittest.TestCase):
         self.assertEqual(65000, crypto_cache.load()["markets"]["bitcoin"]["price"])
         self.assertFalse(any(not item.get("ok") for item in stored["statuses"] if item.get("source") == "CoinGecko"))
 
+    def test_crypto_cache_persistence_also_records_immutable_market_history(self):
+        class MemoryCache:
+            def __init__(self):
+                self.payload = {}
+
+            def load(self):
+                return self.payload
+
+            def replace(self, payload):
+                self.payload = payload
+
+        class EvidenceStore:
+            @staticmethod
+            def latest(**_kwargs):
+                return []
+
+        class HistoryStore:
+            def __init__(self):
+                self.calls = []
+
+            def record_positions(self, account_id, positions, observed_at, provider="", replace=True):
+                rows = list(positions or [])
+                self.calls.append((account_id, rows, observed_at, provider, replace))
+                return {"savedCount": len(rows), "symbolCount": len(rows)}
+
+        aggregate = MemoryCache()
+        dedicated = MemoryCache()
+        history = HistoryStore()
+        provider = ExternalSignalProvider(
+            settings={"externalCoinGeckoEnabled": "1"},
+            cache=aggregate,
+            crypto_cache=dedicated,
+            crypto_time_series_store=history,
+            evidence_store=EvidenceStore(),
+        )
+        signals = {
+            "cryptoFetchedAt": "2026-08-01T00:10:00Z",
+            "cryptoLastAttemptAt": "2026-08-01T00:10:00Z",
+            "cryptoMarkets": {
+                "bitcoin": {
+                    "provider": "CoinGecko",
+                    "symbol": "BTC",
+                    "name": "Bitcoin",
+                    "price": 65000,
+                    "change24h": 3.2,
+                    "lastUpdated": "2026-08-01T00:09:00Z",
+                    "fetchedAt": "2026-08-01T00:10:00Z",
+                },
+            },
+            "statuses": [],
+        }
+
+        self.assertTrue(provider.persist_crypto_market_snapshot(signals))
+
+        self.assertEqual("2026-08-01T00:09:00Z", dedicated.load()["sourceAsOf"])
+        self.assertEqual(1, len(history.calls))
+        account_id, positions, observed_at, source, replace = history.calls[0]
+        self.assertEqual("__market_data__", account_id)
+        self.assertEqual(["BTC"], [item.symbol for item in positions])
+        self.assertEqual("2026-08-01T00:10:00Z", observed_at)
+        self.assertEqual("CoinGecko coins/markets", source)
+        self.assertFalse(replace)
+        self.assertEqual(1, signals["cryptoHistory"]["savedCount"])
+
     def test_cache_only_reasoning_recovers_crypto_from_an_unrelated_aggregate_key(self):
         class MemoryCache:
             def __init__(self, payload=None):
@@ -332,6 +396,53 @@ class RuntimeResilienceTests(unittest.TestCase):
         self.assertEqual("fresh", result["cryptoFreshness"]["status"])
         self.assertEqual("dedicated", result["cryptoFreshness"]["cacheState"])
         self.assertEqual(1, len(aggregate.load()["entries"]))
+
+    def test_dedicated_crypto_cache_heals_legacy_source_timestamp_on_read(self):
+        class MemoryCache:
+            def __init__(self, payload=None):
+                self.payload = payload or {}
+
+            def load(self):
+                return self.payload
+
+            def replace(self, payload):
+                self.payload = payload
+
+        class EvidenceStore:
+            @staticmethod
+            def latest(**_kwargs):
+                return []
+
+        dedicated = MemoryCache({
+            "schemaVersion": 1,
+            "provider": "CoinGecko",
+            "dataset": "coins/markets",
+            "markets": {
+                "bitcoin": {
+                    "provider": "CoinGecko",
+                    "symbol": "BTC",
+                    "price": 65000,
+                    "lastUpdated": "2026-08-01T00:09:00Z",
+                    "fetchedAt": "2026-08-01T00:10:00Z",
+                },
+            },
+            "fetchedAt": "2026-08-01T00:10:00Z",
+            "lastAttemptAt": "2026-08-01T00:10:00Z",
+            "sourceAsOf": "2026-07-01T00:00:00Z",
+            "statusRows": [],
+        })
+        provider = ExternalSignalProvider(
+            settings={"externalCoinGeckoEnabled": "1"},
+            cache=MemoryCache(),
+            crypto_cache=dedicated,
+            evidence_store=EvidenceStore(),
+        )
+
+        snapshot, state = provider.load_crypto_market_snapshot({})
+
+        self.assertEqual("dedicated-normalized", state)
+        self.assertEqual("2026-08-01T00:09:00Z", snapshot["sourceAsOf"])
+        self.assertEqual("2026-08-01T00:09:00Z", dedicated.load()["sourceAsOf"])
 
     def test_coingecko_failure_persists_attempt_and_preserves_last_good_market(self):
         class MemoryCache:

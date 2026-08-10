@@ -311,6 +311,16 @@ class MonitorRunner:
             )
             return snapshot, []
         previous = self.store.previous.get(snapshot.account_id) or {}
+        persisted_previous = (
+            snapshot.metadata.get("previousMonitorState")
+            if self.source_snapshot_replay and isinstance(snapshot.metadata, dict)
+            else None
+        )
+        if isinstance(persisted_previous, dict):
+            persisted_at = str(persisted_previous.get("generatedAt") or "")
+            current_at = str(snapshot.generated_at or "")
+            if persisted_at and current_at and persisted_at < current_at:
+                previous = persisted_previous
         snapshot.metadata["previousMonitorState"] = self.compact_previous_state(previous)
         snapshot.metadata["monitorStateHistory"] = self.compact_monitor_history(
             self.load_snapshot_history(snapshot.account_id)

@@ -214,7 +214,14 @@ class MySQLMonitorStore(MySQLOperationalConnection):
     def sent(self) -> Dict[str, object]:
         return self.payload["sent"]
 
-    def upsert_snapshot_state_with_connection(self, connection, account_id: str, state: Dict[str, object], stamp: str = "") -> None:
+    def upsert_snapshot_state_with_connection(
+        self,
+        connection,
+        account_id: str,
+        state: Dict[str, object],
+        stamp: str = "",
+        previous_state: Dict[str, object] = None,
+    ) -> None:
         updated_at = stamp or utc_now()
         generated_at = str(state.get("generatedAt") or updated_at)
         temporal_projection = compact_monitor_state_for_ontology(
@@ -248,6 +255,7 @@ class MySQLMonitorStore(MySQLOperationalConnection):
             state,
             generated_at=generated_at,
             stamp=updated_at,
+            previous_state=previous_state,
         )
         connection.execute(
             """
@@ -269,6 +277,7 @@ class MySQLMonitorStore(MySQLOperationalConnection):
         *,
         generated_at: str = "",
         stamp: str = "",
+        previous_state: Dict[str, object] = None,
     ) -> None:
         """Persist target-scoped TypeDB input beside its verified source row.
 
@@ -290,6 +299,15 @@ class MySQLMonitorStore(MySQLOperationalConnection):
         )
         base["accountId"] = str(base.get("accountId") or normalized_account_id)
         base["generatedAt"] = str(base.get("generatedAt") or source_generated_at)
+        compact_previous = compact_monitor_state_for_ontology(
+            previous_state,
+            settings=self.runtime_settings,
+        ) if isinstance(previous_state, dict) else {}
+        previous_generated_at = str(compact_previous.get("generatedAt") or "")
+        if compact_previous and previous_generated_at and previous_generated_at < source_generated_at:
+            metadata = dict(base.get("metadata") or {})
+            metadata["previousMonitorState"] = compact_previous
+            base["metadata"] = metadata
         inputs = [("", base)]
         for symbol in sorted(reasoning_snapshot_symbols(current)):
             inputs.append((
@@ -325,9 +343,19 @@ class MySQLMonitorStore(MySQLOperationalConnection):
             tuple([normalized_account_id] + cached_symbols),
         )
 
-    def upsert_snapshot_state(self, account_id: str, state: Dict[str, object]) -> None:
+    def upsert_snapshot_state(
+        self,
+        account_id: str,
+        state: Dict[str, object],
+        previous_state: Dict[str, object] = None,
+    ) -> None:
         with self.transaction() as connection:
-            self.upsert_snapshot_state_with_connection(connection, account_id, state)
+            self.upsert_snapshot_state_with_connection(
+                connection,
+                account_id,
+                state,
+                previous_state=previous_state,
+            )
 
     def backfill_reasoning_snapshot_inputs(self, account_ids: Iterable[str] = None) -> int:
         """Seed current target-scoped inputs once during a rolling rollout.
@@ -368,8 +396,9 @@ class MySQLMonitorStore(MySQLOperationalConnection):
         return count
 
     def save_snapshot(self, snapshot: AccountSnapshot) -> None:
-        state = snapshot_state_for_persistence(snapshot, self.previous.get(snapshot.account_id))
-        self.upsert_snapshot_state(snapshot.account_id, state)
+        previous_state = self.previous.get(snapshot.account_id)
+        state = snapshot_state_for_persistence(snapshot, previous_state)
+        self.upsert_snapshot_state(snapshot.account_id, state, previous_state=previous_state)
         self.previous[snapshot.account_id] = state
 
     def sent_entries(self, events: Iterable[AlertEvent], stamp: str) -> Dict[str, str]:
@@ -606,6 +635,13 @@ class MySQLMonitoringCycleRecorder(MySQLOperationalConnection):
     ):
         if dry_run:
             return MonitoringCycleRecordResult(False, 0, "dry-run")
+        previous_states = {
+            str(account_id or ""): copy.deepcopy(
+                self.monitor_store.previous.get(str(account_id or "")) or {}
+            )
+            for account_id in account_ids or []
+            if str(account_id or "")
+        }
         snapshot_states = {}
         live_snapshots = []
         observation_candidates_by_account: Dict[str, List[Dict[str, object]]] = {}
@@ -707,7 +743,13 @@ class MySQLMonitoringCycleRecorder(MySQLOperationalConnection):
             # TypeDB work. The two writes share this transaction, so a worker
             # can never see a barrier without the exact snapshot it names.
             for account_id, state in snapshot_states.items():
-                self.monitor_store.upsert_snapshot_state_with_connection(connection, account_id, state, stamp)
+                self.monitor_store.upsert_snapshot_state_with_connection(
+                    connection,
+                    account_id,
+                    state,
+                    stamp,
+                    previous_state=previous_states.get(account_id),
+                )
             for snapshot in live_snapshots:
                 # A material quote candidate is TypeDB-first even when raw
                 # delivery is deferred. The old path only forwarded an

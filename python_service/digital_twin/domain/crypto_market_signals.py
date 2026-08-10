@@ -59,19 +59,26 @@ def crypto_market_snapshot(external_signals: Mapping[str, object] = None) -> Dic
         for coin_id, item in markets_value.items()
         if isinstance(markets_value, Mapping) and isinstance(item, Mapping)
     } if isinstance(markets_value, Mapping) else {}
-    fetched_at = str(payload.get("cryptoFetchedAt") or "").strip()
-    if not fetched_at:
-        fetched_at = _latest_timestamp(
-            item.get("fetchedAt") or item.get("lastUpdated")
-            for item in markets.values()
-        )
-    last_attempt_at = str(payload.get("cryptoLastAttemptAt") or fetched_at or "").strip()
-    source_as_of = str(payload.get("cryptoSourceAsOf") or "").strip()
-    if not source_as_of:
-        source_as_of = _latest_timestamp(
-            item.get("lastUpdated") or item.get("fetchedAt")
-            for item in markets.values()
-        )
+    market_fetched_at = _latest_timestamp(
+        item.get("fetchedAt") or item.get("lastUpdated")
+        for item in markets.values()
+    )
+    fetched_at = _latest_timestamp([
+        payload.get("cryptoFetchedAt"),
+        market_fetched_at,
+    ])
+    last_attempt_at = _latest_timestamp([
+        payload.get("cryptoLastAttemptAt"),
+        fetched_at,
+    ])
+    market_source_as_of = _latest_timestamp(
+        item.get("lastUpdated") or item.get("fetchedAt")
+        for item in markets.values()
+    )
+    # Item timestamps are the authoritative observation boundary. A legacy
+    # cache-level value can survive many successful refreshes, so only use it
+    # when the snapshot has no market rows from which to derive the source.
+    source_as_of = market_source_as_of or str(payload.get("cryptoSourceAsOf") or "").strip()
     statuses_value = payload.get("statuses")
     status_rows = [
         deepcopy(dict(item))

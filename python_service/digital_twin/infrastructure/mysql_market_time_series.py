@@ -114,6 +114,7 @@ class MySQLMarketTimeSeriesStore(MySQLOperationalConnection):
         positions: Iterable[object],
         observed_at: str,
         provider: str = "",
+        replace: bool = True,
     ) -> Dict[str, object]:
         """Persist non-account quote observations for later outcome matching."""
         if not self.enabled():
@@ -133,9 +134,16 @@ class MySQLMarketTimeSeriesStore(MySQLOperationalConnection):
                 )
                 if not observation.valid():
                     continue
-                if self.insert_observation_with_connection(connection, observation, replace=True):
+                inserted = self.insert_observation_with_connection(
+                    connection,
+                    observation,
+                    replace=replace,
+                )
+                if inserted:
                     saved += 1
                     symbols.add(observation.symbol)
+                elif not replace:
+                    continue
                 for granularity in ["15m", "1h", "1d"]:
                     aggregate_count += self.upsert_aggregate_with_connection(connection, observation, granularity)
         return {

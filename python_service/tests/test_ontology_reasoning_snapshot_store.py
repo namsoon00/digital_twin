@@ -1,3 +1,4 @@
+import copy
 import json
 import sys
 import tempfile
@@ -18,6 +19,55 @@ from mysql_fixtures import mysql_test_settings, reset_mysql_test_database, test_
 
 
 class OntologyReasoningSnapshotStoreTests(unittest.TestCase):
+    def test_reasoning_input_keeps_the_exact_previous_snapshot(self):
+        with tempfile.TemporaryDirectory() as temp:
+            reset_mysql_test_database(temp)
+            settings = mysql_test_settings(test_store_seed(temp))
+            source_store = MySQLMonitorStore(settings)
+            previous = {
+                "accountId": "main",
+                "accountLabel": "메인",
+                "provider": "toss",
+                "mode": "live",
+                "status": "ok",
+                "generatedAt": "2026-07-29T01:00:00Z",
+                "portfolio": {
+                    "total": 1000.0,
+                    "invested": 900.0,
+                    "cash": 100.0,
+                    "markets": [],
+                    "sectors": [],
+                    "concentration": 0.9,
+                },
+                "positions": {
+                    "AAPL": {
+                        "symbol": "AAPL",
+                        "name": "Apple",
+                        "current_price": 200.0,
+                        "profit_loss_rate": 5.0,
+                        "quantity": 1.0,
+                    },
+                },
+                "watchlist": {},
+                "metadata": {},
+                "externalSignals": {},
+            }
+            current = copy.deepcopy(previous)
+            current["generatedAt"] = "2026-07-29T01:03:00Z"
+            current["positions"]["AAPL"]["current_price"] = 210.0
+            current["positions"]["AAPL"]["profit_loss_rate"] = 10.0
+
+            source_store.upsert_snapshot_state("main", previous)
+            source_store.upsert_snapshot_state("main", current, previous_state=previous)
+
+            reasoning_store = MySQLOntologyReasoningMonitorStore(settings)
+            target = reasoning_store.reasoning_snapshot_state("main", target_symbols=["AAPL"])
+            persisted_previous = target["metadata"]["previousMonitorState"]
+
+            self.assertEqual("2026-07-29T01:00:00Z", persisted_previous["generatedAt"])
+            self.assertEqual(200.0, persisted_previous["positions"]["AAPL"]["current_price"])
+            self.assertEqual(210.0, target["positions"]["AAPL"]["current_price"])
+
     def test_target_scoped_cache_avoids_replaying_the_full_provider_archive(self):
         with tempfile.TemporaryDirectory() as temp:
             reset_mysql_test_database(temp)

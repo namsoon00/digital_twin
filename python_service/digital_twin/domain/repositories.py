@@ -464,6 +464,7 @@ class MarketTimeSeriesRepository(Protocol):
         positions: Iterable[object],
         observed_at: str,
         provider: str = "",
+        replace: bool = True,
     ) -> Dict[str, object]:
         ...
 

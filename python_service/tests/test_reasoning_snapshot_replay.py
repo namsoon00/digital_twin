@@ -191,6 +191,43 @@ class ReasoningSnapshotReplayTests(unittest.TestCase):
         self.assertEqual("2026-07-29T00:01:00Z", contexts[0]["sourceObservedAt"])
         self.assertTrue(recorder.source_snapshot_replay)
 
+    def test_monitor_replay_uses_the_persisted_previous_snapshot(self):
+        current_state = monitor_state()
+        previous_state = monitor_state("2026-07-29T00:00:00Z")
+        previous_state["positions"]["AAPL"]["current_price"] = 95.0
+        snapshot = account_snapshot_from_monitor_state(current_state)
+        snapshot.metadata.update({
+            "previousMonitorState": previous_state,
+            "reasoningSnapshotReplay": {"status": "ready"},
+        })
+
+        class PreviousCapturingMonitor(EmptyMonitor):
+            def __init__(self):
+                self.previous = None
+
+            def events_for_snapshot(self, _snapshot, previous):
+                self.previous = previous
+                return []
+
+        monitor = PreviousCapturingMonitor()
+        runner = MonitorRunner(
+            [account()],
+            store=SnapshotStore(current_state),
+            monitor=monitor,
+            snapshot_builder=lambda _account, reasoning_context=None: snapshot,
+            event_sender=lambda *_args, **_kwargs: None,
+            cycle_recorder=CapturingCycleRecorder(),
+            ontology_projection_enabled=False,
+            source_snapshot_replay=True,
+        )
+
+        runner.run_once(
+            symbol_filter=["AAPL"],
+            reasoning_context={"sourceObservedAt": "2026-07-29T00:01:00Z"},
+        )
+
+        self.assertEqual(95.0, monitor.previous["positions"]["AAPL"]["current_price"])
+
     def test_normal_monitor_ignores_a_stale_replay_marker_and_commits_a_source_snapshot(self):
         snapshot = AccountSnapshot(
             account_id="acct",

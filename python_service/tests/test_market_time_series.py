@@ -115,6 +115,30 @@ class MarketTimeSeriesTests(unittest.TestCase):
         self.assertEqual(4, len(connection.calls))
         self.assertIn("ON DUPLICATE KEY UPDATE", connection.calls[0][0])
 
+    def test_immutable_market_observation_does_not_reaggregate_a_duplicate(self):
+        class DuplicateConnection(RecordingConnection):
+            def execute(self, sql, params=()):
+                self.calls.append((sql, tuple(params or ())))
+                return Cursor(rowcount=0 if "INSERT IGNORE" in sql else 1)
+
+        store = MySQLMarketTimeSeriesStore.__new__(MySQLMarketTimeSeriesStore)
+        store.runtime_settings = {"marketTimeSeriesEnabled": "1"}
+        connection = DuplicateConnection()
+        store.transaction = lambda: TransactionContext(connection)
+
+        result = store.record_positions(
+            "__market_data__",
+            [position(135)],
+            "2026-07-20T06:04:00Z",
+            "CoinGecko coins/markets",
+            replace=False,
+        )
+
+        self.assertEqual(0, result["savedCount"])
+        self.assertEqual(0, result["aggregateCount"])
+        self.assertEqual(1, len(connection.calls))
+        self.assertIn("INSERT IGNORE", connection.calls[0][0])
+
     def test_temporal_window_read_is_bounded_by_snapshot_time(self):
         store = MySQLMarketTimeSeriesStore.__new__(MySQLMarketTimeSeriesStore)
         store.runtime_settings = {"marketTimeSeriesEnabled": "1"}

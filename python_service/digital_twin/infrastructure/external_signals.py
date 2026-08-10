@@ -23,7 +23,12 @@ from .external_signal_utils import (
     symbol_assignments,
     symbol_list,
 )
-from .operational_store import crypto_market_signal_cache, external_signal_cache, research_evidence_store
+from .operational_store import (
+    crypto_market_signal_cache,
+    external_signal_cache,
+    market_time_series_store,
+    research_evidence_store,
+)
 from .settings import runtime_settings
 
 
@@ -45,6 +50,7 @@ class ExternalSignalProvider(
         fetch_bytes: BytesFetcher = None,
         sleep: Callable[[float], None] = None,
         crypto_cache=None,
+        crypto_time_series_store=None,
     ):
         self.settings = settings or runtime_settings()
         uses_default_cache = cache is None
@@ -55,6 +61,11 @@ class ExternalSignalProvider(
         self.crypto_cache = crypto_cache if crypto_cache is not None else (
             crypto_market_signal_cache(self.settings) if uses_default_cache else None
         )
+        self.crypto_time_series_store = crypto_time_series_store
+        self._default_crypto_time_series_store = bool(
+            uses_default_cache and crypto_cache is None and crypto_time_series_store is None
+        )
+        self._crypto_time_series_store_factory = market_time_series_store
         self.evidence_store = evidence_store or research_evidence_store(self.settings)
         # Provider-specific timeouts use the standard transport only. Test
         # and vendor adapters keep their existing two-argument contract.

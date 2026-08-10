@@ -23,7 +23,7 @@ from .security_lines import security_lines_for_symbol
 
 
 ONTOLOGY_PROJECTION_INPUT_VERSION = "ontology-projection-input-v1"
-ONTOLOGY_REASONING_SNAPSHOT_INPUT_VERSION = "ontology-reasoning-snapshot-input-v1"
+ONTOLOGY_REASONING_SNAPSHOT_INPUT_VERSION = "ontology-reasoning-snapshot-input-v2"
 
 SYMBOL_SIGNAL_GROUPS = {
     "secFilings",

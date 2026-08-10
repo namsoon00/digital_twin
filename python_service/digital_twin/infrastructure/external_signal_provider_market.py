@@ -103,6 +103,10 @@ class ExternalSignalMarketMixin:
             # a fresh market fact into a misleading empty value.
             signals["cryptoMarkets"] = markets
             signals["cryptoFetchedAt"] = fetched_at
+            signals["cryptoSourceAsOf"] = max(
+                str(item.get("lastUpdated") or item.get("fetchedAt") or "")
+                for item in markets.values()
+            )
             self.status(
                 signals,
                 "CoinGecko",

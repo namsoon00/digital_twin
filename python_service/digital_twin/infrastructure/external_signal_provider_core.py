@@ -6,6 +6,7 @@ from typing import Callable, Dict, Iterable, List
 
 from ..domain.crypto_market_signals import (
     combine_crypto_market_snapshots,
+    crypto_market_positions,
     crypto_market_snapshot,
     merge_crypto_market_snapshot,
 )
@@ -238,10 +239,17 @@ class ExternalSignalCoreMixin:
             return {}, "missing"
         cache_state = "dedicated" if dedicated else "aggregate-fallback"
         normalized_dedicated = combine_crypto_market_snapshots(dedicated)
-        if self.crypto_cache and combined != normalized_dedicated:
+        dedicated_needs_normalization = bool(dedicated and dedicated != normalized_dedicated)
+        if self.crypto_cache and (combined != normalized_dedicated or dedicated_needs_normalization):
             try:
                 self.crypto_cache.replace(combined)
-                cache_state = "aggregate-migrated" if not dedicated else "dedicated-reconciled"
+                cache_state = (
+                    "aggregate-migrated"
+                    if not dedicated
+                    else "dedicated-normalized"
+                    if dedicated_needs_normalization and combined == normalized_dedicated
+                    else "dedicated-reconciled"
+                )
             except Exception as error:  # noqa: BLE001 - in-memory facts remain usable for this cycle.
                 self._crypto_cache_error = self.safe_error_message(error)
         return combined, cache_state
@@ -273,7 +281,6 @@ class ExternalSignalCoreMixin:
             self._crypto_market_snapshot = snapshot
             self._crypto_market_cache_state = "dedicated"
             merge_crypto_market_snapshot(signals, snapshot, cache_state="dedicated")
-            return True
         except Exception as error:  # noqa: BLE001 - vendor result remains usable in the current cycle.
             self.status(
                 signals,
@@ -283,6 +290,57 @@ class ExternalSignalCoreMixin:
                 operationalAlert=True,
             )
             return False
+        try:
+            history = self.persist_crypto_market_history(snapshot)
+            if history:
+                signals["cryptoHistory"] = history
+        except Exception as error:  # noqa: BLE001 - current vendor facts remain usable.
+            self.status(
+                signals,
+                "Crypto market history",
+                False,
+                "CoinGecko 시계열 저장 실패 · " + self.safe_error_message(error),
+                dataUsable=True,
+                operationalAlert=True,
+            )
+        return True
+
+    def persist_crypto_market_history(self, snapshot: Dict[str, object]) -> Dict[str, object]:
+        store = getattr(self, "crypto_time_series_store", None)
+        if store is None and bool(getattr(self, "_default_crypto_time_series_store", False)):
+            factory = getattr(self, "_crypto_time_series_store_factory", None)
+            if callable(factory):
+                store = factory(self.settings)
+                self.crypto_time_series_store = store
+        if store is None or not hasattr(store, "record_positions"):
+            return {}
+        fetched_at = str(snapshot.get("fetchedAt") or "").strip()
+        markets = snapshot.get("markets") if isinstance(snapshot.get("markets"), dict) else {}
+        if not fetched_at or not markets:
+            return {}
+        positions = crypto_market_positions({
+            "cryptoMarkets": markets,
+            "cryptoFetchedAt": fetched_at,
+            "cryptoSourceAsOf": str(snapshot.get("sourceAsOf") or ""),
+            "cryptoFreshness": {
+                "status": "fresh",
+                "fetchedAt": fetched_at,
+            },
+        })
+        result = store.record_positions(
+            "__market_data__",
+            positions,
+            fetched_at,
+            provider="CoinGecko coins/markets",
+            replace=False,
+        )
+        return {
+            "provider": "CoinGecko",
+            "dataset": "coins/markets",
+            "observedAt": fetched_at,
+            "savedCount": int((result or {}).get("savedCount") or 0),
+            "symbolCount": int((result or {}).get("symbolCount") or 0),
+        }
 
     def attach_stored_research_evidence(self, positions: Iterable[Position], signals: Dict[str, object]) -> None:
         if not self.evidence_store or not isinstance(signals, dict):

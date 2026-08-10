@@ -820,6 +820,10 @@ class OntologyChangeImpactTests(unittest.TestCase):
 
         self.assertTrue(plan["globalImpact"])
         self.assertTrue(plan["boundedGlobalContext"])
+        self.assertEqual(
+            ["SUBJECT", "MARKET_CONTEXT", "PORTFOLIO"],
+            plan["impactDomains"],
+        )
         self.assertEqual(1, plan["candidateRuleCount"])
         self.assertEqual(1, plan["enabledRuleCount"])
         self.assertFalse(plan["nativeRuleSelectionEligible"])
@@ -928,14 +932,21 @@ class OntologyChangeImpactTests(unittest.TestCase):
             requested_fact_families=["market"],
         )
 
-        self.assertTrue(plan["globalImpact"])
-        self.assertTrue(plan["boundedGlobalContext"])
+        self.assertFalse(plan["globalImpact"])
+        self.assertTrue(plan["snapshotGlobalImpact"])
+        self.assertTrue(plan["eventBoundaryAuthoritative"])
+        self.assertFalse(plan["boundedGlobalContext"])
+        self.assertEqual(["SUBJECT"], plan["impactDomains"])
         self.assertTrue(plan["eventScopedRuleSelection"])
         self.assertEqual(["market"], plan["routingScopeFamilies"])
         self.assertEqual(["graph.test.market.v1"], plan["candidateRuleIds"])
         self.assertEqual(
             ["macro:fx", "portfolio:main"],
             plan["deferredSharedContextScopeIds"],
+        )
+        self.assertEqual(
+            ["macro:fx", "portfolio:main"],
+            plan["deferredGlobalImpactScopeIds"],
         )
         self.assertIn(
             "event-scoped-shared-context-routing",
@@ -1243,7 +1254,7 @@ class OntologyChangeImpactTests(unittest.TestCase):
 
         trace = inference.entities[0]
         self.assertEqual("inference:test", trace.properties["inferenceGenerationId"])
-        self.assertEqual("abox-change-impact-v11", trace.properties["impactPlanVersion"])
+        self.assertEqual("abox-change-impact-v12", trace.properties["impactPlanVersion"])
         self.assertEqual(["005930"], trace.properties["inferenceImpactPlan"]["inferenceTargetSymbols"])
         self.assertEqual("subject-dependency-selected-native-evaluation", trace.properties["ruleExecutionScope"])
         self.assertFalse(trace.properties["nativeRuleSelectionApplied"])

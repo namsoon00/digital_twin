@@ -1,9 +1,10 @@
 """Operational batching policy for durable ontology reasoning work.
 
-This module chooses a bounded TypeDB target set from queue pressure and
-recent runtime evidence. It never evaluates investment facts or TypeDB rules;
-it only controls how many already-requested subjects share one coherent ABox
-and InferenceBox generation.
+TypeDB inference has one subject per generation. Queue pressure may still
+change mailbox claim and bulk persistence sizes, but it must not widen a
+native TypeQL evaluation to several instruments. The historical adaptive
+estimate is retained as telemetry so operators can see which expansion was
+prevented without letting that estimate control investment inference.
 """
 
 from __future__ import annotations
@@ -89,12 +90,13 @@ def adaptive_reasoning_batch_plan(
     oldest_wait_seconds: int,
     recent_execution: Mapping[str, object] = None,
 ) -> Dict[str, object]:
-    """Return an explainable, bounded execution plan for one queue turn.
+    """Return an explainable execution plan for one queue turn.
 
-    Normal turns retain a small native-rule subject set. When latest-state
-    work has accumulated, the runner can process a few independent symbols in
-    one coherent graph generation. A slow, failed, or timed-out preceding
-    projection immediately returns to the steady size.
+    Native TypeDB rule evaluation is deliberately single-subject. A rule
+    query commonly expands every selected source through its required and
+    optional relation branches, so treating several symbols as a persistence
+    batch can make read cost grow faster than the saved fixed write cost.
+    Non-native compatibility callers retain their configured static cap.
     """
     configured = dict(settings or {})
     hard_limit = _integer(hard_target_symbol_limit, 1, 1, 200)
@@ -293,11 +295,28 @@ def adaptive_reasoning_batch_plan(
         target_limit = steady_limit
         reason_codes.append("steady-queue")
 
+    proposed_multi_subject_limit = max(1, min(hard_limit, target_limit))
+    proposed_multi_subject_mode = mode
+    proposed_reason_codes = list(reason_codes)
+    if native_rule_execution:
+        mode = "single-subject-native"
+        target_limit = 1
+        reason_codes = [
+            "native-rule-single-subject-boundary",
+            "bulk-writes-only-no-multi-subject-inference",
+        ]
+
     return {
-        "version": "adaptive-reasoning-batch-v2",
+        "version": "single-subject-reasoning-batch-v3",
         "enabled": adaptive_enabled,
         "mode": mode,
         "targetSymbolLimit": max(1, min(hard_limit, target_limit)),
+        "singleSubjectInference": bool(native_rule_execution),
+        "multiSubjectInferenceDisabled": bool(native_rule_execution),
+        "proposedMultiSubjectLimit": proposed_multi_subject_limit,
+        "proposedMultiSubjectMode": proposed_multi_subject_mode,
+        "proposedReasonCodes": proposed_reason_codes,
+        "bulkWriteBatchingRetained": True,
         "hardTargetSymbolLimit": hard_limit,
         "steadyTargetSymbolLimit": steady_limit,
         "burstTargetSymbolLimit": burst_limit,

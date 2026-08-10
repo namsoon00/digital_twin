@@ -9,6 +9,7 @@ from digital_twin.domain.ontology_projection_audit import (
     complete_ontology_projection_run,
     inference_reuse_scope_plan_for_targets,
     inference_reuse_scope_plan_fingerprint,
+    projection_analysis_telemetry,
     projection_result_summary,
     projection_run_from_payload,
     projection_source_snapshot,
@@ -103,6 +104,49 @@ def abox_graph():
 
 
 class OntologyProjectionAuditTests(unittest.TestCase):
+    def test_projection_analysis_telemetry_distinguishes_complete_and_missing_execution_data(self):
+        complete = projection_analysis_telemetry({
+            "runtimeStages": {"nativeInferenceMs": 1250},
+            "ruleboxExecution": {
+                "nativeInferenceEvaluationComplete": True,
+                "nativeRuleSelectionApplied": True,
+                "nativeRuleSelectionCandidateCount": 1,
+                "nativeRuleSelectionExecutedCount": 2,
+                "nativeRuleSelectionDeferredCount": 3,
+                "nativeRuleSelectionFullRuleCount": 5,
+                "typedbNativeStageTimings": {"nativeRuleQueryMs": 1100},
+                "typedbNativeRuleTimingProfile": {
+                    "executedRuleCount": 2,
+                    "slowestRules": [{"ruleId": "graph.test.v1", "elapsedMs": 800}],
+                },
+            },
+            "nativeReplayValidation": {
+                "status": "verified-selected-delta",
+                "verified": True,
+            },
+        })
+        missing = projection_analysis_telemetry({
+            "ruleboxExecution": {
+                "nativeInferenceEvaluationComplete": True,
+                "nativeRuleSelectionApplied": True,
+                "nativeRuleSelectionCandidateCount": 1,
+                "nativeRuleSelectionExecutedCount": 1,
+                "nativeRuleSelectionDeferredCount": 0,
+            },
+        })
+
+        self.assertTrue(complete["complete"])
+        self.assertEqual("complete", complete["executionLedgerStatus"])
+        self.assertEqual("complete", complete["stageTimingStatus"])
+        self.assertEqual("complete", complete["ruleTimingStatus"])
+        self.assertFalse(missing["complete"])
+        self.assertEqual("incomplete", missing["executionLedgerStatus"])
+        self.assertIn("nativeRuleSelectionFullRuleCount", missing["missingFields"])
+        self.assertIn("completeSelectedDeferredLedger", missing["missingFields"])
+        self.assertIn("runtimeStages", missing["missingFields"])
+        self.assertIn("typedbNativeStageTimings", missing["missingFields"])
+        self.assertIn("perRuleTiming", missing["missingFields"])
+
     def test_projection_result_summary_keeps_native_rule_failure_context(self):
         summary = projection_result_summary({
             "status": "inference-failed-rolled-back",
@@ -1309,6 +1353,128 @@ class OntologyProjectionAuditTests(unittest.TestCase):
             "verified",
             completed[0].result_payload["inferenceReuseProof"]["status"],
         )
+
+    def test_recorder_recovers_selected_execution_only_with_complete_durable_ledger(self):
+        _snapshot, _graph, _fingerprint, run = self.build_run()
+        stored_row = {
+            "runId": run.run_id,
+            "portfolioId": run.portfolio_id,
+            "accountId": run.account_id,
+            "sourceSnapshotAt": run.source_snapshot_at,
+            "sourceSnapshotFingerprint": run.source_snapshot_fingerprint,
+            "firstObservedAt": run.first_observed_at,
+            "lastObservedAt": run.last_observed_at,
+            "startedAt": run.started_at,
+            "status": "projecting",
+            "graphStore": "typedb",
+            "projectionMode": run.projection_mode,
+            "materialFingerprint": run.material_fingerprint,
+            "aboxSnapshotId": run.abox_snapshot_id,
+            "tboxVersion": run.tbox_version,
+            "tboxFingerprint": run.tbox_fingerprint,
+            "ruleboxRulesHash": run.rulebox_rules_hash,
+            "entityCount": run.entity_count,
+            "relationCount": run.relation_count,
+            "sourceSymbols": ["005930"],
+            "context": run.context_payload,
+            "result": {},
+        }
+        completed = []
+        store = SimpleNamespace(
+            latest=lambda limit=0: [stored_row],
+            complete=lambda item: completed.append((item, {})),
+            complete_with_execution_trace=lambda item, result: completed.append((item, result)),
+        )
+        inferencebox = {
+            "status": "ok",
+            "nativeTypeDbReasoningUsed": True,
+            "nativeTypeDbReasoningCompleted": True,
+            "generationAligned": True,
+            "sourceAboxSnapshotId": run.abox_snapshot_id,
+            "targetSymbols": ["005930"],
+            "inferenceGenerationId": "inference-generation:selected-recovered",
+            "nativeRuleSelectionApplied": True,
+            "nativeRuleSelectionCandidateCount": 1,
+            "nativeRuleSelectionExecutedCount": 2,
+            "nativeRuleSelectionDeferredCount": 3,
+            "nativeRuleSelectionFullRuleCount": 5,
+            "nativeRuleSelectionExecutedRuleIds": ["graph.changed.v1", "graph.prior-match.v1"],
+            "nativeRuleSelectionDeferredRuleIds": [
+                "graph.unchanged-a.v1",
+                "graph.unchanged-b.v1",
+                "graph.unchanged-c.v1",
+            ],
+            "typedbNativeRuleExecutedCount": 2,
+            "typedbNativeRuleMatchedCount": 1,
+            "typedbNativeRuleMatchedRuleIds": ["graph.changed.v1"],
+            "typedbNativeRuleTimingProfile": {
+                "executedRuleCount": 2,
+                "slowestRules": [{"ruleId": "graph.changed.v1", "elapsedMs": 900}],
+            },
+            "typedbNativeStageTimings": {"nativeRuleQueryMs": 1100},
+        }
+        repository = SimpleNamespace(
+            store_key="typedb",
+            active_abox_metadata=lambda: {
+                "status": "ok",
+                "aboxSnapshotId": run.abox_snapshot_id,
+                "materialFingerprint": run.material_fingerprint,
+                "projectionRunId": run.run_id,
+            },
+            inferencebox_snapshot=lambda symbols, limit: {**inferencebox, "targetSymbols": list(symbols)},
+        )
+        recorder = PortfolioOntologyProjectionRecorder(repository, projection_run_store=store)
+
+        result = recorder.reconcile_interrupted_projection_audit()
+
+        self.assertEqual("recovered", result["status"])
+        self.assertEqual(1, len(completed))
+        persisted = completed[0][1]
+        self.assertEqual("verified-selected-delta", persisted["nativeReplayValidation"]["status"])
+        self.assertTrue(persisted["nativeReplayValidation"]["selectedRuleLedgerComplete"])
+        self.assertEqual(5, persisted["ruleboxExecution"]["nativeRuleSelectionFullRuleCount"])
+        self.assertEqual(2, persisted["ruleboxExecution"]["typedbNativeRuleExecutedCount"])
+        self.assertEqual(
+            {"nativeRuleQueryMs": 1100},
+            persisted["ruleboxExecution"]["typedbNativeStageTimings"],
+        )
+
+    def test_recorder_does_not_retry_reuse_proof_repair_after_selected_delta_is_verified(self):
+        _snapshot, _graph, _fingerprint, run = self.build_run()
+        stored_row = {
+            "runId": run.run_id,
+            "status": "ok",
+            "aboxSnapshotId": run.abox_snapshot_id,
+            "result": {
+                "inferenceReuseProof": {"status": "incomplete"},
+                "nativeReplayValidation": {
+                    "status": "verified-selected-delta",
+                    "verified": True,
+                },
+            },
+        }
+        store = SimpleNamespace(latest=lambda limit=0: [stored_row], complete=lambda _item: None)
+        repository = SimpleNamespace(
+            store_key="typedb",
+            active_abox_metadata=lambda: {
+                "status": "ok",
+                "aboxSnapshotId": run.abox_snapshot_id,
+                "projectionRunId": run.run_id,
+            },
+            inferencebox_snapshot=lambda symbols, limit: {
+                "status": "ok",
+                "nativeTypeDbReasoningUsed": True,
+                "generationAligned": True,
+                "sourceAboxSnapshotId": run.abox_snapshot_id,
+                "targetSymbols": list(symbols),
+            },
+        )
+        recorder = PortfolioOntologyProjectionRecorder(repository, projection_run_store=store)
+
+        result = recorder.reconcile_interrupted_projection_audit()
+
+        self.assertEqual("skipped", result["status"])
+        self.assertIn("No interrupted audit", result["reason"])
 
     def test_recorder_uses_only_matching_rulebox_audit_timing_for_preemptive_sharding(self):
         snapshot = source_snapshot()

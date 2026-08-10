@@ -202,6 +202,8 @@ class TypeDBServiceManagerTests(unittest.TestCase):
         }
         with patch.object(service_manager, "worker_specs", return_value={"typedb": spec}), \
                 patch.object(service_manager, "typedb_reset_needed", return_value={"needed": True, "reason": "size"}), \
+                patch.object(service_manager, "acquire_typedb_rotation_lock", return_value={"acquired": True}), \
+                patch.object(service_manager, "release_typedb_rotation_lock"), \
                 patch.object(service_manager, "supervisor_running", return_value=False), \
                 patch.object(service_manager, "stop") as stop, \
                 patch.object(service_manager, "run_typedb_data_retention", return_value={"status": "reset"}) as reset, \
@@ -217,6 +219,8 @@ class TypeDBServiceManagerTests(unittest.TestCase):
         spec = {"role": "typedb", "dataPath": Path("/tmp/orbit-alpha-typedb-test")}
         with patch.object(service_manager, "worker_specs", return_value={"typedb": spec}), \
                 patch.object(service_manager, "typedb_reset_needed", return_value={"needed": True, "reason": "size"}), \
+                patch.object(service_manager, "acquire_typedb_rotation_lock", return_value={"acquired": True}), \
+                patch.object(service_manager, "release_typedb_rotation_lock"), \
                 patch.object(service_manager, "supervisor_running", return_value=False), \
                 patch.object(service_manager, "stop") as stop, \
                 patch.object(service_manager, "run_typedb_data_retention", return_value={"status": "reset-failed"}), \

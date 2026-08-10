@@ -201,7 +201,7 @@
       "ontologyReasoningEnabled": "1",
       "ontologyReasoningIntervalSeconds": "10",
       "ontologyReasoningBatchSize": "200",
-      "ontologyReasoningMaxSymbolsPerRun": "3",
+      "ontologyReasoningMaxSymbolsPerRun": "1",
       "ontologySharedMarketWorldAsyncProjectionEnabled": "1",
       "ontologyReasoningMailboxEnabled": "1",
       "ontologyReasoningMailboxIngressEnabled": "1",
@@ -1594,13 +1594,13 @@
           "key": "ontologyReasoningMaxSymbolsPerRun",
           "label": "한 번에 추론할 종목 수",
           "type": "number",
-          "default": "3"
+          "default": "1"
         },
         {
           "key": "ontologyReasoningAdaptiveBatchEnabled",
           "label": "대기열 압력 기반 다종목 배치",
           "type": "toggle",
-          "default": "1"
+          "default": "0"
         },
         {
           "key": "ontologyReasoningAdaptiveBatchSteadySymbols",
@@ -1612,7 +1612,7 @@
           "key": "ontologyReasoningAdaptiveBatchBurstSymbols",
           "label": "대기 지연 시 TypeDB 대상 종목 수",
           "type": "number",
-          "default": "3"
+          "default": "1"
         },
         {
           "key": "ontologyReasoningAdaptiveBatchPendingThreshold",

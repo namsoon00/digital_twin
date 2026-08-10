@@ -3899,7 +3899,7 @@ class OntologyReasoningRunner:
         hard_limit = self.effective_max_symbols_per_run()
         if not self.native_typedb_rule_execution_enabled() and hard_limit <= 0:
             return {
-                "version": "adaptive-reasoning-batch-v2",
+                "version": "single-subject-reasoning-batch-v3",
                 "enabled": False,
                 "mode": "static-unbounded",
                 "targetSymbolLimit": 0,

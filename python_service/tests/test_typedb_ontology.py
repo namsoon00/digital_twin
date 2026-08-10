@@ -6714,6 +6714,25 @@ class TypeDBOntologyRepositoryTests(unittest.TestCase):
                         "targetSymbols": ["005930"],
                         "nativeInferenceEvaluationComplete": True,
                         "nativeInferenceOutcome": "no-match",
+                        "nativeRuleSelectionApplied": True,
+                        "nativeRuleSelectionCandidateCount": 1,
+                        "nativeRuleSelectionExecutedCount": 2,
+                        "nativeRuleSelectionDeferredCount": 3,
+                        "nativeRuleSelectionFullRuleCount": 5,
+                        "nativeRuleSelectionExecutedRuleIds": ["graph.changed.v1", "graph.prior.v1"],
+                        "nativeRuleSelectionDeferredRuleIds": [
+                            "graph.deferred-a.v1",
+                            "graph.deferred-b.v1",
+                            "graph.deferred-c.v1",
+                        ],
+                        "typedbNativeRuleExecutedCount": 2,
+                        "typedbNativeRuleMatchedCount": 1,
+                        "typedbNativeRuleMatchedRuleIds": ["graph.changed.v1"],
+                        "typedbNativeRuleTimingProfile": {
+                            "executedRuleCount": 2,
+                            "slowestRules": [{"ruleId": "graph.changed.v1", "elapsedMs": 700}],
+                        },
+                        "typedbNativeStageTimings": {"nativeRuleQueryMs": 900},
                     }),
                 }]
 
@@ -6726,6 +6745,15 @@ class TypeDBOntologyRepositoryTests(unittest.TestCase):
         self.assertEqual("abox-manifest:active", metadata["sourceAboxSnapshotId"])
         self.assertEqual(["005930"], metadata["targetSymbols"])
         self.assertTrue(metadata["nativeTypeDbReasoningCompleted"])
+        self.assertTrue(metadata["nativeRuleSelectionApplied"])
+        self.assertEqual(1, metadata["nativeRuleSelectionCandidateCount"])
+        self.assertEqual(2, metadata["nativeRuleSelectionExecutedCount"])
+        self.assertEqual(3, metadata["nativeRuleSelectionDeferredCount"])
+        self.assertEqual(5, metadata["nativeRuleSelectionFullRuleCount"])
+        self.assertEqual(["graph.changed.v1", "graph.prior.v1"], metadata["nativeRuleSelectionExecutedRuleIds"])
+        self.assertEqual(["graph.changed.v1"], metadata["typedbNativeRuleMatchedRuleIds"])
+        self.assertEqual(2, metadata["typedbNativeRuleTimingProfile"]["executedRuleCount"])
+        self.assertEqual({"nativeRuleQueryMs": 900}, metadata["typedbNativeStageTimings"])
         self.assertEqual(1, len(repository.queries))
         self.assertIn('has ontology-kind "inference-generation"', repository.queries[0])
         self.assertIn('has ontology-world-id "portfolio:local:default"', repository.queries[0])
@@ -8685,6 +8713,7 @@ class TypeDBOntologyRepositoryTests(unittest.TestCase):
     def test_service_manager_restart_preserves_typedb_unless_explicitly_requested(self):
         specs = {"typedb": {"role": "typedb", "pid": Path("/tmp/typedb.pid")}}
         with patch.object(service_manager, "worker_specs", return_value=specs), \
+                patch.object(service_manager, "supervisor_running", return_value=False), \
                 patch.object(service_manager, "read_pid", return_value=123), \
                 patch.object(service_manager, "is_running", return_value=True), \
                 patch.object(service_manager, "stop", return_value=0) as stop, \
@@ -8696,6 +8725,7 @@ class TypeDBOntologyRepositoryTests(unittest.TestCase):
             recover_lease.assert_called_once_with(specs["typedb"])
 
         with patch.object(service_manager, "worker_specs", return_value=specs), \
+                patch.object(service_manager, "supervisor_running", return_value=False), \
                 patch.object(service_manager, "stop", return_value=0) as stop, \
                 patch.object(service_manager, "start", return_value=0) as start:
             self.assertEqual(0, service_manager.restart(restart_typedb=True))

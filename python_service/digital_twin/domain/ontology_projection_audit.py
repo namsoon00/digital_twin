@@ -204,6 +204,19 @@ def compact_reasoning_request_context(
             "enabled": bool(batch_plan.get("enabled")),
             "mode": str(batch_plan.get("mode") or "")[:80],
             "targetSymbolLimit": non_negative_integer(batch_plan.get("targetSymbolLimit")),
+            "singleSubjectInference": bool(batch_plan.get("singleSubjectInference")),
+            "multiSubjectInferenceDisabled": bool(batch_plan.get("multiSubjectInferenceDisabled")),
+            "proposedMultiSubjectLimit": non_negative_integer(
+                batch_plan.get("proposedMultiSubjectLimit")
+            ),
+            "proposedMultiSubjectMode": str(
+                batch_plan.get("proposedMultiSubjectMode") or ""
+            )[:80],
+            "proposedReasonCodes": clean_list(
+                batch_plan.get("proposedReasonCodes"),
+                limit=12,
+            ),
+            "bulkWriteBatchingRetained": bool(batch_plan.get("bulkWriteBatchingRetained")),
             "hardTargetSymbolLimit": non_negative_integer(batch_plan.get("hardTargetSymbolLimit")),
             "steadyTargetSymbolLimit": non_negative_integer(batch_plan.get("steadyTargetSymbolLimit")),
             "burstTargetSymbolLimit": non_negative_integer(batch_plan.get("burstTargetSymbolLimit")),
@@ -389,6 +402,83 @@ def projection_source_snapshot_fingerprint(snapshot: AccountSnapshot) -> str:
     return _hash_payload(projection_source_snapshot(snapshot))
 
 
+def projection_analysis_telemetry(result: Mapping[str, object]) -> Dict[str, object]:
+    """Describe whether a projection left enough evidence for diagnosis.
+
+    Missing telemetry is explicit. This prevents an interrupted recovery from
+    looking like a zero-cost, zero-rule successful execution in operational
+    history and keeps performance conclusions tied to complete samples.
+    """
+    values = dict(result or {})
+    execution = (
+        dict(values.get("ruleboxExecution") or {})
+        if isinstance(values.get("ruleboxExecution"), Mapping)
+        else {}
+    )
+    replay = (
+        dict(values.get("nativeReplayValidation") or {})
+        if isinstance(values.get("nativeReplayValidation"), Mapping)
+        else {}
+    )
+    runtime_stages = (
+        dict(values.get("runtimeStages") or {})
+        if isinstance(values.get("runtimeStages"), Mapping)
+        else {}
+    )
+    native_stages = (
+        dict(execution.get("typedbNativeStageTimings") or {})
+        if isinstance(execution.get("typedbNativeStageTimings"), Mapping)
+        else {}
+    )
+    timing = native_rule_timing_profile(execution)
+    selection_applied = bool(execution.get("nativeRuleSelectionApplied"))
+    candidate_count = int(execution.get("nativeRuleSelectionCandidateCount") or 0)
+    executed_count = int(execution.get("nativeRuleSelectionExecutedCount") or 0)
+    deferred_count = int(execution.get("nativeRuleSelectionDeferredCount") or 0)
+    full_count = int(execution.get("nativeRuleSelectionFullRuleCount") or 0)
+    if selection_applied:
+        ledger_complete = bool(
+            full_count > 0
+            and executed_count >= candidate_count
+            and executed_count + deferred_count == full_count
+        )
+    else:
+        ledger_complete = bool(execution.get("nativeInferenceEvaluationComplete"))
+    missing = []
+    if not execution:
+        missing.append("ruleboxExecution")
+    if selection_applied and not full_count:
+        missing.append("nativeRuleSelectionFullRuleCount")
+    if selection_applied and not ledger_complete:
+        missing.append("completeSelectedDeferredLedger")
+    if not runtime_stages:
+        missing.append("runtimeStages")
+    if not native_stages:
+        missing.append("typedbNativeStageTimings")
+    if int(timing.get("executedRuleCount") or 0) <= 0:
+        missing.append("perRuleTiming")
+    return {
+        "version": "ontology-projection-analysis-v1",
+        "complete": not missing and ledger_complete,
+        "executionLedgerStatus": "complete" if ledger_complete else "incomplete",
+        "stageTimingStatus": "complete" if runtime_stages and native_stages else "partial",
+        "ruleTimingStatus": (
+            "complete" if int(timing.get("executedRuleCount") or 0) > 0 else "unavailable"
+        ),
+        "recoveredAfterRuntimeInterruption": bool(
+            values.get("recoveredAfterRuntimeInterruption")
+        ),
+        "recoveryMode": str(values.get("recoveryMode") or ""),
+        "candidateRuleCount": candidate_count,
+        "executedRuleCount": executed_count,
+        "deferredRuleCount": deferred_count,
+        "fullRuleCount": full_count,
+        "replayValidationStatus": str(replay.get("status") or ""),
+        "replayValidationVerified": bool(replay.get("verified")),
+        "missingFields": sorted(set(missing)),
+    }
+
+
 def projection_result_summary(result: Dict[str, object]) -> Dict[str, object]:
     """Persist a bounded audit payload instead of another full graph copy."""
     values = dict(result or {})
@@ -414,6 +504,7 @@ def projection_result_summary(result: Dict[str, object]) -> Dict[str, object]:
     replay_validation = dict(values.get("nativeReplayValidation") or {})
     native_rule_failure = dict(values.get("nativeRuleFailure") or {})
     reasoning_context = compact_reasoning_request_context(values.get("reasoningContext"))
+    analysis_telemetry = projection_analysis_telemetry(values)
     return {
         "saved": bool(values.get("saved")),
         "status": str(values.get("status") or ""),
@@ -476,7 +567,21 @@ def projection_result_summary(result: Dict[str, object]) -> Dict[str, object]:
             "coverageComplete": bool(replay_validation.get("coverageComplete")),
             "nativeEvaluationComplete": bool(replay_validation.get("nativeEvaluationComplete")),
             "generationAligned": bool(replay_validation.get("generationAligned")),
+            "verified": bool(replay_validation.get("verified")),
+            "candidateRuleCount": int(replay_validation.get("candidateRuleCount") or 0),
+            "executedRuleCount": int(replay_validation.get("executedRuleCount") or 0),
+            "deferredRuleCount": int(replay_validation.get("deferredRuleCount") or 0),
+            "fullRuleCount": int(replay_validation.get("fullRuleCount") or 0),
+            "selectedRuleLedgerComplete": bool(
+                replay_validation.get("selectedRuleLedgerComplete")
+            ),
         },
+        "analysisTelemetry": analysis_telemetry,
+        "recoveredAfterRuntimeInterruption": bool(
+            values.get("recoveredAfterRuntimeInterruption")
+        ),
+        "recoveryMode": str(values.get("recoveryMode") or ""),
+        "preservedActiveGeneration": bool(values.get("preservedActiveGeneration")),
         "nativeRuleFailure": {
             "version": str(native_rule_failure.get("version") or ""),
             "stage": str(native_rule_failure.get("stage") or ""),
@@ -575,6 +680,19 @@ def projection_result_summary(result: Dict[str, object]) -> Dict[str, object]:
             "nativeRuleSelectionPriorMatchedCount": int(execution.get("nativeRuleSelectionPriorMatchedCount") or 0),
             "nativeRuleSelectionExecutedCount": int(execution.get("nativeRuleSelectionExecutedCount") or 0),
             "nativeRuleSelectionDeferredCount": int(execution.get("nativeRuleSelectionDeferredCount") or 0),
+            "nativeRuleSelectionFullRuleCount": int(
+                execution.get("nativeRuleSelectionFullRuleCount") or 0
+            ),
+            "nativeRuleSelectionExecutedRuleIds": sorted({
+                str(value or "").strip()
+                for value in execution.get("nativeRuleSelectionExecutedRuleIds") or []
+                if str(value or "").strip()
+            })[:160],
+            "nativeRuleSelectionDeferredRuleIds": sorted({
+                str(value or "").strip()
+                for value in execution.get("nativeRuleSelectionDeferredRuleIds") or []
+                if str(value or "").strip()
+            })[:160],
             "sourceAboxGenerationMode": str(execution.get("sourceAboxGenerationMode") or ""),
             "sourceAboxGenerationValid": bool(execution.get("sourceAboxGenerationValid")),
             "sourceAboxMembershipValidation": str(execution.get("sourceAboxMembershipValidation") or ""),

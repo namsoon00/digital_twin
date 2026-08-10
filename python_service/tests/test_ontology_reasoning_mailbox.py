@@ -563,7 +563,7 @@ class OntologyReasoningMailboxTests(unittest.TestCase):
         self.assertTrue(result["maintenanceYield"]["active"])
         self.assertEqual([], self.monitor.calls)
 
-    def test_notified_observation_uses_a_bounded_priority_lane(self):
+    def test_notified_observation_uses_the_single_subject_priority_lane(self):
         observation = realtime_request(
             "observation",
             ["AAPL"],
@@ -581,11 +581,14 @@ class OntologyReasoningMailboxTests(unittest.TestCase):
 
         result = runner.run_once(force=True)
 
-        self.assertEqual(["AAPL", "MSFT"], self.monitor.calls[0])
-        self.assertEqual(2, result["batchPlan"]["targetSymbolLimit"])
+        self.assertEqual(["AAPL"], self.monitor.calls[0])
+        self.assertEqual(1, result["batchPlan"]["targetSymbolLimit"])
+        self.assertTrue(result["batchPlan"]["singleSubjectInference"])
+        self.assertEqual(2, result["batchPlan"]["proposedMultiSubjectLimit"])
         self.assertEqual(["AAPL"], result["batchPlan"]["observationFollowupSymbols"])
         self.assertEqual(["AAPL"], self.monitor.reasoning_contexts[0]["observationFollowupSymbols"])
         self.assertEqual("MARKET", result["queueDispatch"]["selectedWorkClasses"][0])
+        self.assertEqual(1, result["mailbox"]["pendingEntryCount"])
 
     def test_observation_followup_priority_survives_a_newer_latest_state_snapshot(self):
         notified = realtime_request(
@@ -1641,7 +1644,7 @@ class OntologyReasoningMailboxTests(unittest.TestCase):
         self.assertEqual(1, len(publisher.events[0].payload["triggerEventIds"]))
         self.assertEqual(1, len(self.cursor.ids))
 
-    def test_coherent_snapshot_fills_the_native_target_cap_across_source_events(self):
+    def test_coherent_snapshot_keeps_source_events_queued_behind_one_native_subject(self):
         first = realtime_request("first", ["AAPL"], "2026-07-24T00:00:00Z")
         second = realtime_request("second", ["MSFT"], "2026-07-24T00:01:00Z")
         third = realtime_request("third", ["NVDA"], "2026-07-24T00:02:00Z")
@@ -1656,13 +1659,14 @@ class OntologyReasoningMailboxTests(unittest.TestCase):
         result = runner.run_once(force=True)
 
         self.assertEqual("ok", result["status"])
-        self.assertEqual(2, result["scheduledRequestCount"])
-        self.assertEqual(2, len(result["symbols"]))
-        self.assertEqual(1, result["omittedSymbolCount"])
+        self.assertEqual(1, result["scheduledRequestCount"])
+        self.assertEqual(1, len(result["symbols"]))
+        self.assertEqual(2, result["omittedSymbolCount"])
         self.assertEqual(1, len(self.monitor.calls))
         self.assertEqual(set(result["symbols"]), set(self.monitor.calls[0]))
-        self.assertEqual(2, len(self.cursor.ids))
-        self.assertEqual(1, result["mailbox"]["pendingEntryCount"])
+        self.assertEqual(1, len(self.cursor.ids))
+        self.assertEqual(2, result["mailbox"]["pendingEntryCount"])
+        self.assertEqual(2, result["batchPlan"]["proposedMultiSubjectLimit"])
 
     def test_pending_mailbox_slot_without_a_due_symbol_does_not_run_the_whole_portfolio(self):
         event = realtime_request("waiting", ["AAPL"], "2026-07-24T00:04:00Z")

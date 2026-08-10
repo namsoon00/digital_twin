@@ -9271,6 +9271,42 @@ class TypeDBOntologyGraphRepository(GraphStoreOntologyRowMapperMixin, ScopedABox
             "nativeTypeDbReasoningCompleted": typedb_bool(metadata.get("nativeInferenceEvaluationComplete")),
             "nativeInferenceOutcome": str(metadata.get("nativeInferenceOutcome") or ""),
             "reasoningMode": str(metadata.get("reasoningMode") or ""),
+            "nativeRuleSelectionApplied": typedb_bool(
+                metadata.get("nativeRuleSelectionApplied")
+            ),
+            "nativeRuleSelectionCandidateCount": int(
+                number_or_none(metadata.get("nativeRuleSelectionCandidateCount")) or 0
+            ),
+            "nativeRuleSelectionExecutedCount": int(
+                number_or_none(metadata.get("nativeRuleSelectionExecutedCount")) or 0
+            ),
+            "nativeRuleSelectionDeferredCount": int(
+                number_or_none(metadata.get("nativeRuleSelectionDeferredCount")) or 0
+            ),
+            "nativeRuleSelectionFullRuleCount": int(
+                number_or_none(metadata.get("nativeRuleSelectionFullRuleCount")) or 0
+            ),
+            "nativeRuleSelectionExecutedRuleIds": list(
+                metadata.get("nativeRuleSelectionExecutedRuleIds") or []
+            )[:80],
+            "nativeRuleSelectionDeferredRuleIds": list(
+                metadata.get("nativeRuleSelectionDeferredRuleIds") or []
+            )[:80],
+            "typedbNativeRuleExecutedCount": int(
+                number_or_none(metadata.get("typedbNativeRuleExecutedCount")) or 0
+            ),
+            "typedbNativeRuleMatchedCount": int(
+                number_or_none(metadata.get("typedbNativeRuleMatchedCount")) or 0
+            ),
+            "typedbNativeRuleMatchedRuleIds": list(
+                metadata.get("typedbNativeRuleMatchedRuleIds") or []
+            )[:160],
+            "typedbNativeRuleTimingProfile": dict(
+                metadata.get("typedbNativeRuleTimingProfile") or {}
+            ) if isinstance(metadata.get("typedbNativeRuleTimingProfile"), dict) else {},
+            "typedbNativeStageTimings": dict(
+                metadata.get("typedbNativeStageTimings") or {}
+            ) if isinstance(metadata.get("typedbNativeStageTimings"), dict) else {},
             "querySource": "typedb-active-inference-generation-marker",
         }
 
@@ -23858,8 +23894,11 @@ def inference_rulebox_metadata(
         "nativeRuleSelectionPriorMatchedCount",
         "nativeRuleSelectionExecutedCount",
         "nativeRuleSelectionDeferredCount",
+        "nativeRuleSelectionFullRuleCount",
         "nativeRuleSelectionExecutedRuleIds",
         "nativeRuleSelectionDeferredRuleIds",
+        "typedbNativeRuleTimingProfile",
+        "typedbNativeStageTimings",
     ]
     metadata: Dict[str, object] = {}
     for row in list(entity_rows or []) + list(relation_rows or []):
@@ -23893,6 +23932,7 @@ def inference_rulebox_metadata(
         "nativeRuleSelectionPriorMatchedCount",
         "nativeRuleSelectionExecutedCount",
         "nativeRuleSelectionDeferredCount",
+        "nativeRuleSelectionFullRuleCount",
     ]:
         if key in metadata:
             metadata[key] = int(number_or_none(metadata.get(key)) or 0)

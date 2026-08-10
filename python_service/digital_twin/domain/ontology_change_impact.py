@@ -13,13 +13,13 @@ import re
 from typing import Dict, Iterable, List, Mapping, Optional, Sequence, Set
 
 
-# v10 keeps the v6 global quality/value distinction, makes dependency
+# v12 keeps the v6 global quality/value distinction, makes dependency
 # fingerprints distinguish structural changes from a value change inside the
 # same kind or relation, and separates the current mailbox event from other
 # shared facts that happened to be present in the latest persisted snapshot.
 # TypeDB still evaluates every selected RuleBox function; Python only avoids
 # scheduling rules whose actual inputs did not change for this event.
-CHANGE_IMPACT_VERSION = "abox-change-impact-v11"
+CHANGE_IMPACT_VERSION = "abox-change-impact-v12"
 DEPENDENCY_FINGERPRINT_VERSION = "rule-input-v2"
 
 SYMBOL_SCOPE_FAMILIES = {
@@ -1267,12 +1267,50 @@ def build_inference_impact_plan(
     delta = scope_delta(previous_scope_plan, next_scope_plan)
     available_symbols = sorted({_clean(item).upper() for item in snapshot_symbols or [] if _clean(item)})
     explicit_symbols = sorted({_clean(item).upper() for item in explicit_target_symbols or [] if _clean(item)})
+    event_routing = event_scoped_routing_inputs(
+        delta,
+        explicit_symbols,
+        requested_fact_families,
+        requested_fact_families_by_symbol,
+    )
     changed_scope_ids = list(delta.get("directChangedScopeIds") or delta.get("affectedScopeIds") or [])
-    global_scope_ids = sorted({
+    snapshot_global_scope_ids = sorted({
         scope_id
         for scope_id in changed_scope_ids
         if scope_type(scope_id) in GLOBAL_SCOPE_TYPES and not scope_symbol(scope_id)
     } | set(delta.get("unresolvedRelationScopeIds") or []))
+    event_scope_ids = {
+        _clean(scope_id)
+        for scope_id in event_routing.get("scopeIds") or []
+        if _clean(scope_id)
+    }
+    event_boundary_authoritative = bool(
+        explicit_symbols
+        and event_scope_ids
+        and (
+            _clean_family_values(requested_fact_families)
+            or any(
+                _clean_family_values(families)
+                for families in dict(requested_fact_families_by_symbol or {}).values()
+            )
+        )
+    )
+    # A complete monitor snapshot may contain unrelated shared changes while
+    # the durable mailbox item names one subject/fact family. Preserve those
+    # shared changes in diagnostics and their own queue revisions, but do not
+    # promote this subject turn to a market-wide execution boundary.
+    global_scope_ids = (
+        sorted(set(snapshot_global_scope_ids).intersection(event_scope_ids))
+        if event_boundary_authoritative
+        else list(snapshot_global_scope_ids)
+    )
+    deferred_global_scope_ids = sorted(
+        set(snapshot_global_scope_ids).difference(global_scope_ids)
+    )
+    snapshot_global_partition = global_scope_impact_partition(
+        delta,
+        snapshot_global_scope_ids,
+    )
     global_partition = global_scope_impact_partition(delta, global_scope_ids)
     quality_only_global_scope_ids = list(global_partition["qualityOnlyGlobalScopeIds"])
     context_only_global_scope_ids = list(global_partition["contextOnlyGlobalScopeIds"])
@@ -1281,6 +1319,7 @@ def build_inference_impact_plan(
     # cannot by itself represent a changed macro/portfolio value. It stays
     # global ABox context while allowing the quality-dependent RuleBox subset.
     global_impact = bool(global_value_scope_ids)
+    snapshot_global_impact = bool(snapshot_global_partition["globalValueScopeIds"])
     quality_scoped_global_context = bool(quality_only_global_scope_ids)
     context_scoped_global_context = bool(context_only_global_scope_ids)
     bounded_global_context = bool((global_impact or context_scoped_global_context) and explicit_symbols)
@@ -1316,12 +1355,6 @@ def build_inference_impact_plan(
     changed_families = set(delta.get("directChangedScopeFamilies") or delta.get("changedScopeFamilies") or [])
     changed_dependency_keys = set(delta.get("directChangedDependencyKeys") or [])
     dependency_fingerprint_coverage_complete = bool(delta.get("dependencyFingerprintCoverageComplete"))
-    event_routing = event_scoped_routing_inputs(
-        delta,
-        explicit_symbols,
-        requested_fact_families,
-        requested_fact_families_by_symbol,
-    )
     event_scoped_rule_selection = bool(
         event_routing.get("enabled")
         and event_routing.get("scopeFamilies")
@@ -1388,15 +1421,46 @@ def build_inference_impact_plan(
         deferred_shared_scope_ids=event_routing.get("deferredSharedScopeIds") or [],
         deferred_shared_scope_families=event_routing.get("deferredSharedScopeFamilies") or [],
     )
+    diagnostics.update({
+        "eventBoundaryAuthoritative": event_boundary_authoritative,
+        "snapshotGlobalImpact": snapshot_global_impact,
+        "snapshotGlobalScopeCount": len(snapshot_global_scope_ids),
+        "deferredGlobalScopeCount": len(deferred_global_scope_ids),
+        "deferredGlobalScopeIds": deferred_global_scope_ids,
+    })
+    if deferred_global_scope_ids:
+        diagnostics["reasonCodes"] = list(diagnostics.get("reasonCodes") or []) + [
+            "event-boundary-deferred-unrelated-global-context"
+        ]
+    impact_domains: List[str] = []
+    if target_symbols or explicit_symbols:
+        impact_domains.append("SUBJECT")
+    effective_global_types = {scope_type(scope_id) for scope_id in global_scope_ids}
+    if "macro" in effective_global_types:
+        impact_domains.append("MARKET_CONTEXT")
+    if "portfolio" in effective_global_types:
+        impact_domains.append("PORTFOLIO")
+    if effective_global_types.intersection({"policy", "reference", "episode"}):
+        impact_domains.append("SHARED_CONTEXT")
+    if not impact_domains:
+        impact_domains.append("SUBJECT")
     return {
         "version": CHANGE_IMPACT_VERSION,
         "scopeDelta": delta,
+        # Compatibility field: this now represents only the effective event
+        # boundary. The complete snapshot observation is retained separately
+        # and must never widen a subject turn by itself.
         "globalImpact": global_impact,
+        "snapshotGlobalImpact": snapshot_global_impact,
+        "eventBoundaryAuthoritative": event_boundary_authoritative,
         "impactScope": impact_scope,
+        "impactDomains": impact_domains,
         "qualityScopedGlobalContext": quality_scoped_global_context,
         "contextScopedGlobalContext": context_scoped_global_context,
         "boundedGlobalContext": bounded_global_context,
         "globalImpactScopeIds": global_scope_ids,
+        "snapshotGlobalImpactScopeIds": snapshot_global_scope_ids,
+        "deferredGlobalImpactScopeIds": deferred_global_scope_ids,
         "qualityOnlyGlobalScopeIds": quality_only_global_scope_ids,
         "contextOnlyGlobalScopeIds": context_only_global_scope_ids,
         "globalValueScopeIds": global_value_scope_ids,
@@ -1457,11 +1521,16 @@ def compact_inference_impact_plan(plan: Mapping[str, object], limit: int = 80) -
     return {
         "version": str(values.get("version") or CHANGE_IMPACT_VERSION),
         "globalImpact": bool(values.get("globalImpact")),
+        "snapshotGlobalImpact": bool(values.get("snapshotGlobalImpact")),
+        "eventBoundaryAuthoritative": bool(values.get("eventBoundaryAuthoritative")),
         "impactScope": str(values.get("impactScope") or "SUBJECT"),
+        "impactDomains": list(values.get("impactDomains") or [])[:8],
         "qualityScopedGlobalContext": bool(values.get("qualityScopedGlobalContext")),
         "contextScopedGlobalContext": bool(values.get("contextScopedGlobalContext")),
         "boundedGlobalContext": bool(values.get("boundedGlobalContext")),
         "globalImpactScopeIds": list(values.get("globalImpactScopeIds") or [])[:bounded],
+        "snapshotGlobalImpactScopeIds": list(values.get("snapshotGlobalImpactScopeIds") or [])[:bounded],
+        "deferredGlobalImpactScopeIds": list(values.get("deferredGlobalImpactScopeIds") or [])[:bounded],
         "qualityOnlyGlobalScopeIds": list(values.get("qualityOnlyGlobalScopeIds") or [])[:bounded],
         "contextOnlyGlobalScopeIds": list(values.get("contextOnlyGlobalScopeIds") or [])[:bounded],
         "globalValueScopeIds": list(values.get("globalValueScopeIds") or [])[:bounded],
@@ -1531,6 +1600,11 @@ def compact_inference_impact_plan(plan: Mapping[str, object], limit: int = 80) -
             "eventScopedScopeCount": int(diagnostics.get("eventScopedScopeCount") or 0),
             "deferredSharedScopeCount": int(diagnostics.get("deferredSharedScopeCount") or 0),
             "deferredSharedScopeFamilies": list(diagnostics.get("deferredSharedScopeFamilies") or [])[:bounded],
+            "eventBoundaryAuthoritative": bool(diagnostics.get("eventBoundaryAuthoritative")),
+            "snapshotGlobalImpact": bool(diagnostics.get("snapshotGlobalImpact")),
+            "snapshotGlobalScopeCount": int(diagnostics.get("snapshotGlobalScopeCount") or 0),
+            "deferredGlobalScopeCount": int(diagnostics.get("deferredGlobalScopeCount") or 0),
+            "deferredGlobalScopeIds": list(diagnostics.get("deferredGlobalScopeIds") or [])[:bounded],
         },
         "scopeDelta": {
             "previousScopeCount": int(delta.get("previousScopeCount") or 0),

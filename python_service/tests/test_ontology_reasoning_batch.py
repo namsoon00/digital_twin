@@ -158,8 +158,10 @@ class AdaptiveOntologyReasoningBatchTests(unittest.TestCase):
             recent_execution={"status": "ok", "durationMs": 40000},
         )
 
-        self.assertEqual("queue-pressure", plan["mode"])
-        self.assertEqual(3, plan["targetSymbolLimit"])
+        self.assertEqual("single-subject-native", plan["mode"])
+        self.assertEqual(1, plan["targetSymbolLimit"])
+        self.assertEqual(3, plan["proposedMultiSubjectLimit"])
+        self.assertTrue(plan["multiSubjectInferenceDisabled"])
         self.assertTrue(plan["pressure"])
         self.assertFalse(plan["runtimeGuard"])
 
@@ -185,8 +187,9 @@ class AdaptiveOntologyReasoningBatchTests(unittest.TestCase):
             },
         )
 
-        self.assertEqual("runtime-budget-limited", plan["mode"])
+        self.assertEqual("single-subject-native", plan["mode"])
         self.assertEqual(1, plan["targetSymbolLimit"])
+        self.assertEqual(1, plan["proposedMultiSubjectLimit"])
         self.assertEqual(1, plan["budgetTargetSymbolLimit"])
         self.assertEqual(120000, plan["estimatedPerTargetRuntimeMs"])
 
@@ -221,8 +224,9 @@ class AdaptiveOntologyReasoningBatchTests(unittest.TestCase):
         # target work. Two targets share the same native-parallel wave, so the
         # first pressure turn expands safely to two rather than pricing every
         # target as a 123s full generation.
-        self.assertEqual("queue-pressure-ramp", plan["mode"])
-        self.assertEqual(2, plan["targetSymbolLimit"])
+        self.assertEqual("single-subject-native", plan["mode"])
+        self.assertEqual(1, plan["targetSymbolLimit"])
+        self.assertEqual(2, plan["proposedMultiSubjectLimit"])
         self.assertEqual(3, plan["budgetTargetSymbolLimit"])
         self.assertEqual("projection-runtime", plan["runtimeEstimateBasis"])
         self.assertEqual(105000, plan["estimatedFixedRuntimeMs"])
@@ -256,8 +260,9 @@ class AdaptiveOntologyReasoningBatchTests(unittest.TestCase):
             },
         )
 
-        self.assertEqual("queue-pressure", plan["mode"])
-        self.assertEqual(3, plan["targetSymbolLimit"])
+        self.assertEqual("single-subject-native", plan["mode"])
+        self.assertEqual(1, plan["targetSymbolLimit"])
+        self.assertEqual(3, plan["proposedMultiSubjectLimit"])
         self.assertEqual(3, plan["rampTargetSymbolLimit"])
 
     def test_old_backlog_uses_the_measured_burst_without_one_target_ramp(self):
@@ -293,11 +298,12 @@ class AdaptiveOntologyReasoningBatchTests(unittest.TestCase):
         # target work. Four target-read workers keep all thirteen targets
         # inside the 240s budget, so a four-minute-old queue must not spend
         # twelve generations ramping one target at a time.
-        self.assertEqual("backlog-escape", plan["mode"])
-        self.assertEqual(13, plan["targetSymbolLimit"])
+        self.assertEqual("single-subject-native", plan["mode"])
+        self.assertEqual(1, plan["targetSymbolLimit"])
+        self.assertEqual(13, plan["proposedMultiSubjectLimit"])
         self.assertTrue(plan["backlogEscape"])
         self.assertEqual(120, plan["backlogBurstAgeSeconds"])
-        self.assertIn("backlog-burst-oldest-wait", plan["reasonCodes"])
+        self.assertIn("backlog-burst-oldest-wait", plan["proposedReasonCodes"])
 
     def test_slow_or_failed_projection_returns_to_the_steady_target_set(self):
         plan = adaptive_reasoning_batch_plan(
@@ -320,7 +326,7 @@ class AdaptiveOntologyReasoningBatchTests(unittest.TestCase):
             },
         )
 
-        self.assertEqual("runtime-protected", plan["mode"])
+        self.assertEqual("single-subject-native", plan["mode"])
         self.assertEqual(1, plan["targetSymbolLimit"])
         self.assertTrue(plan["runtimeGuard"])
 
@@ -368,7 +374,7 @@ class AdaptiveOntologyReasoningBatchTests(unittest.TestCase):
         self.assertEqual({"005930", "000660"}, set(symbols))
         self.assertEqual(0, omitted)
 
-    def test_native_runner_selects_multiple_symbols_in_one_coherent_queue_turn(self):
+    def test_native_runner_keeps_one_subject_and_leaves_successors_in_the_queue(self):
         source = DomainEvent(name="market_data.collected", aggregate_id="market:KR", payload={})
         request = ontology_reasoning_requested_event(
             source,
@@ -414,11 +420,12 @@ class AdaptiveOntologyReasoningBatchTests(unittest.TestCase):
             max_symbols_override=plan["targetSymbolLimit"],
         )
 
-        self.assertEqual("queue-pressure", plan["mode"])
-        self.assertEqual(3, plan["targetSymbolLimit"])
-        self.assertEqual({"005930", "000660", "035420"}, set(batches[request.event_id]))
-        self.assertEqual(set(["005930", "000660", "035420"]), set(symbols))
-        self.assertEqual(0, omitted)
+        self.assertEqual("single-subject-native", plan["mode"])
+        self.assertEqual(1, plan["targetSymbolLimit"])
+        self.assertEqual(3, plan["proposedMultiSubjectLimit"])
+        self.assertEqual(1, len(batches[request.event_id]))
+        self.assertEqual(1, len(symbols))
+        self.assertEqual(2, omitted)
 
     def test_batch_runtime_evidence_ignores_a_later_cooldown_probe(self):
         cursor = MemoryCursor({

@@ -2005,6 +2005,11 @@ class PortfolioOntologyProjectionRecorder:
                     if isinstance(item.get("result"), dict)
                     else ""
                 ) != "verified"
+                and not bool(
+                    ((item.get("result") or {}).get("nativeReplayValidation") or {}).get("verified")
+                    if isinstance(item.get("result"), dict)
+                    else False
+                )
             ), None)
             recovery_mode = "reuse-proof-repair"
         if not row:
@@ -2031,7 +2036,21 @@ class PortfolioOntologyProjectionRecorder:
         prior_execution = prior_result.get("ruleboxExecution") if isinstance(prior_result.get("ruleboxExecution"), dict) else {}
         prior_reuse = prior_result.get("priorInferenceReuse") if isinstance(prior_result.get("priorInferenceReuse"), dict) else {}
         matched_rule_ids = self.matched_rule_ids_from_inference_payload(inferencebox)
-        selection_applied = bool(prior_execution.get("nativeRuleSelectionApplied"))
+        selection_applied = bool(
+            inferencebox.get("nativeRuleSelectionApplied")
+            if "nativeRuleSelectionApplied" in inferencebox
+            else prior_execution.get("nativeRuleSelectionApplied")
+        )
+        recovered_timing = (
+            dict(inferencebox.get("typedbNativeRuleTimingProfile") or {})
+            if isinstance(inferencebox.get("typedbNativeRuleTimingProfile"), dict)
+            else {}
+        )
+        recovered_stage_timings = (
+            dict(inferencebox.get("typedbNativeStageTimings") or {})
+            if isinstance(inferencebox.get("typedbNativeStageTimings"), dict)
+            else {}
+        )
         result = {
             "saved": True,
             "status": "ok",
@@ -2056,11 +2075,38 @@ class PortfolioOntologyProjectionRecorder:
                     or inferencebox.get("nativeTypeDbReasoningUsed")
                 ),
                 "nativeRuleSelectionApplied": selection_applied,
-                "typedbNativeRuleMatchedRuleIds": matched_rule_ids,
+                "nativeRuleSelectionCandidateCount": int(
+                    inferencebox.get("nativeRuleSelectionCandidateCount") or 0
+                ),
+                "nativeRuleSelectionExecutedCount": int(
+                    inferencebox.get("nativeRuleSelectionExecutedCount") or 0
+                ),
+                "nativeRuleSelectionDeferredCount": int(
+                    inferencebox.get("nativeRuleSelectionDeferredCount") or 0
+                ),
+                "nativeRuleSelectionFullRuleCount": int(
+                    inferencebox.get("nativeRuleSelectionFullRuleCount") or 0
+                ),
+                "nativeRuleSelectionExecutedRuleIds": list(
+                    inferencebox.get("nativeRuleSelectionExecutedRuleIds") or []
+                )[:80],
+                "nativeRuleSelectionDeferredRuleIds": list(
+                    inferencebox.get("nativeRuleSelectionDeferredRuleIds") or []
+                )[:80],
+                "typedbNativeRuleExecutedCount": int(
+                    inferencebox.get("typedbNativeRuleExecutedCount") or 0
+                ),
+                "typedbNativeRuleMatchedRuleIds": list(
+                    inferencebox.get("typedbNativeRuleMatchedRuleIds")
+                    or matched_rule_ids
+                )[:160],
                 "typedbNativeRuleMatchedCount": max(
+                    int(inferencebox.get("typedbNativeRuleMatchedCount") or 0),
                     len(matched_rule_ids),
                     int(inferencebox.get("traceCount") or 0),
                 ),
+                "typedbNativeRuleTimingProfile": recovered_timing,
+                "typedbNativeStageTimings": recovered_stage_timings,
             },
             "aboxPersistenceVerification": {
                 "activePointer": {
@@ -2075,6 +2121,7 @@ class PortfolioOntologyProjectionRecorder:
                 },
             },
             "recoveredAfterRuntimeInterruption": True,
+            "recoveryMode": recovery_mode,
         }
         if prior_reuse:
             result["priorInferenceReuse"] = prior_reuse
@@ -2082,11 +2129,39 @@ class PortfolioOntologyProjectionRecorder:
         # uninterrupted projection. Without this, the next narrow change
         # cannot reuse unaffected TypeDB matches and re-runs the full catalog.
         self.attach_inference_reuse_proof(run, result)
+        replay_validation = dict(result.get("nativeReplayValidation") or {})
+        if not bool(replay_validation.get("verified")):
+            result.update({
+                "saved": False,
+                "status": "incomplete-native-coverage",
+                "reason": str(
+                    replay_validation.get("reason")
+                    or "Recovered TypeDB generation has no complete native execution ledger."
+                )[:300],
+                "preservedActiveGeneration": True,
+            })
         try:
             completed = complete_ontology_projection_run(run, result)
-            self.projection_run_store.complete(completed)
+            complete_with_trace = getattr(
+                self.projection_run_store,
+                "complete_with_execution_trace",
+                None,
+            )
+            if callable(complete_with_trace):
+                complete_with_trace(completed, result)
+            else:
+                self.projection_run_store.complete(completed)
         except Exception as error:  # noqa: BLE001 - a later cycle can prove and retry the same row.
             return {"status": "error", "reason": str(error)[:180], "runId": run.run_id}
+        if not bool(replay_validation.get("verified")):
+            return {
+                "status": "incomplete-native-coverage",
+                "runId": run.run_id,
+                "aboxSnapshotId": active_snapshot_id,
+                "inferenceGenerationId": str(inferencebox.get("inferenceGenerationId") or ""),
+                "nativeReplayValidation": replay_validation,
+                "reason": str(result.get("reason") or "")[:300],
+            }
         return {
             "status": "recovered" if recovery_mode == "interrupted-audit" else "reuse-proof-repaired",
             "runId": run.run_id,

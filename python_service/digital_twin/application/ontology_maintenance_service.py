@@ -775,12 +775,31 @@ class OntologyMaintenanceRunner:
             **previous,
             "backlogByWorld": observed_backlog,
         }
-        selected, next_world_id, world_selection = self.select_world_for_maintenance(
-            worlds,
-            selection_state,
-            manifest_inventories,
-            policy,
-        )
+        maintenance_yield = self.maintenance_yield_status(selection_state)
+        yield_world_id = text(maintenance_yield.get("worldId"))
+        yielded_world = next((
+            item
+            for item in worlds
+            if text(item.get("worldId")) == yield_world_id
+        ), None)
+        if bool(maintenance_yield.get("active")) and yielded_world:
+            selected = yielded_world
+            next_world_id = yield_world_id
+            world_selection = {
+                "mode": "maintenance-yield",
+                "worldId": yield_world_id,
+                "inactiveManifestCount": max(
+                    0,
+                    integer(maintenance_yield.get("inactiveManifestCount")),
+                ),
+            }
+        else:
+            selected, next_world_id, world_selection = self.select_world_for_maintenance(
+                worlds,
+                selection_state,
+                manifest_inventories,
+                policy,
+            )
         world_id = text(selected.get("worldId"))
         selected_inventory = dict(manifest_inventories.get(world_id) or {})
         adaptive_drain = self.adaptive_drain(policy, selection_state, world_id)
@@ -807,13 +826,31 @@ class OntologyMaintenanceRunner:
                 "lastResult": result,
             })
             return result
-        maintenance_yield = self.maintenance_yield_status(selection_state)
+        run_budget = dict(capacity_budget)
+        yield_targets_selected_world = (
+            bool(maintenance_yield.get("active"))
+            and text(maintenance_yield.get("worldId")) == world_id
+        )
+        if yield_targets_selected_world:
+            # A maintenance yield is a short writer hand-off, not an adaptive
+            # drain turn. Keep it below the advertised window by limiting the
+            # physical work; normal idle maintenance retains the larger
+            # capacity budget and can continue the same partial manifest.
+            run_budget.update({
+                "maxInactiveManifests": 1,
+                "maxAboxDeleteBatches": 1,
+                "aboxDeleteBatchSize": min(
+                    50,
+                    max(1, integer(capacity_budget.get("aboxDeleteBatchSize"), 50)),
+                ),
+                "yieldBounded": True,
+            })
         try:
             result = dict(runner({
                 "worldId": world_id,
-                "maxInactiveManifests": capacity_budget["maxInactiveManifests"],
-                "maxAboxDeleteBatches": capacity_budget["maxAboxDeleteBatches"],
-                "aboxDeleteBatchSize": capacity_budget["aboxDeleteBatchSize"],
+                "maxInactiveManifests": run_budget["maxInactiveManifests"],
+                "maxAboxDeleteBatches": run_budget["maxAboxDeleteBatches"],
+                "aboxDeleteBatchSize": run_budget["aboxDeleteBatchSize"],
                 "keepInactiveManifests": integer(policy.get("keepInactiveManifestCount"), 0),
             }) or {})
         except Exception as error:  # noqa: BLE001 - a maintenance fault must not affect native inference.
@@ -890,7 +927,7 @@ class OntologyMaintenanceRunner:
             "health": health,
             "adaptiveDrain": adaptive_drain,
             "capacityGuard": capacity,
-            "capacityBudget": capacity_budget,
+            "capacityBudget": run_budget,
             "manifestInventory": selected_inventory,
             "worldSelection": world_selection,
             "reason": text(abox.get("reason") or result.get("reason"))[:220],
@@ -935,9 +972,6 @@ class OntologyMaintenanceRunner:
                     ]
                 },
             })
-        yield_targets_selected_world = (
-            text(maintenance_yield.get("worldId")) == world_id
-        )
         if bool(maintenance_yield.get("active")) and result_status in {"ok", "partial"}:
             granted_at = utc_now_iso()
             next_state.update({

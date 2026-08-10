@@ -270,6 +270,10 @@ class OntologyMaintenanceRunnerTests(unittest.TestCase):
         self.assertEqual("consumed", result["maintenance"]["maintenanceYield"]["status"])
         self.assertEqual({}, store.payload["maintenanceYieldRequest"])
         self.assertTrue(store.payload["maintenanceYieldLastGrantedAt"])
+        self.assertEqual(1, runner.ontology_repository.calls[0]["maxInactiveManifests"])
+        self.assertEqual(1, runner.ontology_repository.calls[0]["maxAboxDeleteBatches"])
+        self.assertEqual(50, runner.ontology_repository.calls[0]["aboxDeleteBatchSize"])
+        self.assertTrue(result["maintenance"]["capacityBudget"]["yieldBounded"])
 
     def test_pending_activation_releases_active_yield_for_reasoning_recovery(self):
         class PendingActivationRepository(ManifestInventoryRepository):

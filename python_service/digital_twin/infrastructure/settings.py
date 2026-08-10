@@ -97,6 +97,7 @@ TEXT_SETTING_KEYS = [
     "kisMarketSignalPreferLiveDuringMarketHours",
     "kisMarketSignalLiveRefreshSeconds",
     "kisMarketSignalUnchangedStaleCount",
+    "kisInvestorIntradayEstimateEnabled",
     "notifyProvider",
     "telegramChatId",
     "operationsTelegramChatId",
@@ -1247,6 +1248,7 @@ def runtime_settings(fast_operational_read: bool = False) -> Dict[str, str]:
         "kisMarketSignalPreferLiveDuringMarketHours": value("kisMarketSignalPreferLiveDuringMarketHours", "KIS_MARKET_SIGNAL_PREFER_LIVE_DURING_MARKET_HOURS", "1"),
         "kisMarketSignalLiveRefreshSeconds": value("kisMarketSignalLiveRefreshSeconds", "KIS_MARKET_SIGNAL_LIVE_REFRESH_SECONDS", "60"),
         "kisMarketSignalUnchangedStaleCount": value("kisMarketSignalUnchangedStaleCount", "KIS_MARKET_SIGNAL_UNCHANGED_STALE_COUNT", "3"),
+        "kisInvestorIntradayEstimateEnabled": value("kisInvestorIntradayEstimateEnabled", "KIS_INVESTOR_INTRADAY_ESTIMATE_ENABLED", "1"),
         "kisAppKey": value("kisAppKey", "KIS_APP_KEY"),
         "kisAppSecret": value("kisAppSecret", "KIS_APP_SECRET"),
         "notifyProvider": value("notifyProvider", "NOTIFY_PROVIDER"),
@@ -1432,7 +1434,7 @@ def runtime_settings(fast_operational_read: bool = False) -> Dict[str, str]:
         # Do not pause live TypeDB inference for routine ABox retention. The
         # maintenance worker drains it when the reasoning queue is idle, and
         # the capacity guard retains its independent emergency path.
-        "ontologyAboxMaintenanceYieldEnabled": value("ontologyAboxMaintenanceYieldEnabled", "ONTOLOGY_ABOX_MAINTENANCE_YIELD_ENABLED", "1"),
+        "ontologyAboxMaintenanceYieldEnabled": value("ontologyAboxMaintenanceYieldEnabled", "ONTOLOGY_ABOX_MAINTENANCE_YIELD_ENABLED", "0"),
         "ontologyAboxMaintenanceYieldAfterSeconds": value("ontologyAboxMaintenanceYieldAfterSeconds", "ONTOLOGY_ABOX_MAINTENANCE_YIELD_AFTER_SECONDS", "120"),
         "ontologyAboxMaintenanceYieldWindowSeconds": value("ontologyAboxMaintenanceYieldWindowSeconds", "ONTOLOGY_ABOX_MAINTENANCE_YIELD_WINDOW_SECONDS", "30"),
         "ontologyAboxMaintenanceYieldRequestTtlSeconds": value("ontologyAboxMaintenanceYieldRequestTtlSeconds", "ONTOLOGY_ABOX_MAINTENANCE_YIELD_REQUEST_TTL_SECONDS", "420"),

@@ -261,11 +261,14 @@ class OntologyReasoningProofService:
         production_rule_ids = []
         for item in rule_trace.get("rules") or []:
             rule_id = str(item.get("ruleId") or "")
-            if rule_id and rule_id not in production_rule_ids:
+            query_count = int(item.get("queryCount") or 0)
+            status = str(item.get("status") or "").strip().lower()
+            executed = query_count > 0 or status in {"executed", "matched", "ok", "complete"}
+            if executed and rule_id and rule_id not in production_rule_ids:
                 production_rule_ids.append(rule_id)
         requested_rule_ids = [
             str(item)
-            for item in rule_ids or production_rule_ids
+            for item in rule_ids or production_rule_ids or ["__no-production-rule__"]
             if str(item)
         ]
         profiler = getattr(self.ontology_repository, "profile_native_rule_reads", None)

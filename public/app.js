@@ -9366,6 +9366,58 @@
     return parts.join(" · ") || condition.kind || condition.role || "-";
   }
 
+  function reasoningExecutionStageDetail(stage) {
+    stage = stage || {};
+    var detail = stage.detail && typeof stage.detail === "object" ? stage.detail : {};
+    var labels = [];
+    var key = String(stage.stageKey || "");
+    if (key === "source-fact-capture") {
+      var fieldsBySymbol = detail.changedFieldsBySymbol && typeof detail.changedFieldsBySymbol === "object" ? detail.changedFieldsBySymbol : {};
+      Object.keys(fieldsBySymbol).slice(0, 8).forEach(function (symbol) {
+        labels.push(symbol + " 변경 필드 " + (Array.isArray(fieldsBySymbol[symbol]) ? fieldsBySymbol[symbol].length : 0) + "개");
+      });
+      if (Array.isArray(detail.factTypes) && detail.factTypes.length) labels.push("사실 " + detail.factTypes.join(", "));
+    } else if (key === "abox-scope-selection") {
+      labels.push("선택 " + formatInteger(detail.selectedScopeCount || 0) + " · 유예 " + formatInteger(detail.deferredScopeCount || 0));
+      if (Array.isArray(detail.factSlotFamilies) && detail.factSlotFamilies.length) labels.push("슬롯 " + detail.factSlotFamilies.join(", "));
+      (Array.isArray(detail.selectedScopes) ? detail.selectedScopes : []).slice(0, 10).forEach(function (scope) {
+        labels.push([
+          scope.symbol || "shared",
+          scope.scopeFamily || scope.scopeId,
+          (Array.isArray(scope.reasons) ? scope.reasons : []).join(", ")
+        ].filter(Boolean).join(" · "));
+      });
+    } else if (key === "abox-persistence") {
+      var scopes = Array.isArray(detail.scopes) ? detail.scopes : [];
+      var totals = scopes.reduce(function (sum, scope) {
+        ["requested", "inserted", "reused"].forEach(function (kind) {
+          var counts = scope[kind] && typeof scope[kind] === "object" ? scope[kind] : {};
+          sum[kind] += Number(counts.entityCount || 0) + Number(counts.relationCount || 0);
+        });
+        return sum;
+      }, { requested: 0, inserted: 0, reused: 0 });
+      labels.push("스코프 " + formatInteger(detail.scopeCount || scopes.length) + " · 요청 " + formatInteger(totals.requested) + " · 신규 " + formatInteger(totals.inserted) + " · 재사용 " + formatInteger(totals.reused));
+      scopes.slice(0, 10).forEach(function (scope) {
+        var requested = scope.requested || {};
+        var inserted = scope.inserted || {};
+        var reused = scope.reused || {};
+        labels.push([
+          scope.symbol || "shared",
+          scope.scopeFamily || scope.scopeId,
+          "요청 " + formatInteger(Number(requested.entityCount || 0) + Number(requested.relationCount || 0)),
+          "신규 " + formatInteger(Number(inserted.entityCount || 0) + Number(inserted.relationCount || 0)),
+          "재사용 " + formatInteger(Number(reused.entityCount || 0) + Number(reused.relationCount || 0))
+        ].join(" · "));
+      });
+    } else if (key === "rulebox-selection") {
+      labels.push("후보 " + formatInteger(detail.candidateRuleCount || 0) + " · 실행 " + formatInteger(detail.executedRuleCount || 0) + " · 유예 " + formatInteger(detail.deferredRuleCount || 0));
+    }
+    if (!labels.length) return "";
+    return '<div class="inference-ledger-relation-strip">' + labels.map(function (label) {
+      return '<span class="chip">' + escapeHtml(label) + '</span>';
+    }).join("") + '</div>';
+  }
+
   function renderReasoningExecutionHistory(payload) {
     var history = payload.executionHistory && typeof payload.executionHistory === "object" ? payload.executionHistory : {};
     var runs = Array.isArray(history.runs) ? history.runs : [];
@@ -9428,6 +9480,7 @@
             return '<section class="inference-ledger-stage ' + escapeHtml(inferenceLedgerTone(stage.status)) + '"><b>' + escapeHtml(String(index + 1).padStart(2, "0")) + '</b><div><strong>' + escapeHtml(stage.stageKey || "-") + '</strong><span>' + escapeHtml(stage.status || "-") + '</span><em>' + escapeHtml(formatInteger(stage.durationMs || 0) + "ms") + '</em></div></section>';
           }).join(""),
           '</div>',
+          stages.map(reasoningExecutionStageDetail).join(""),
           slow.length ? '<div class="inference-ledger-relation-strip">' + slow.map(function (rule) {
             return '<span class="chip">' + escapeHtml([rule.ruleId, rule.status, formatInteger(rule.durationMs || 0) + "ms", rule.selectedReason].filter(Boolean).join(" · ")) + '</span>';
           }).join("") + '</div>' : '',

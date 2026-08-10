@@ -245,6 +245,8 @@ class ProjectionRunStore:
                 "runId": run_id,
                 "rules": [{
                     "ruleId": "graph.slow.rule.v1",
+                    "status": "executed",
+                    "queryCount": 1,
                     "queryDurationMs": 90000,
                     "durationMs": 91000,
                 }],
@@ -253,7 +255,11 @@ class ProjectionRunStore:
 
 
 class ReadOnlyRepository:
-    def profile_native_rule_reads(self, _payload):
+    def __init__(self):
+        self.last_payload = {}
+
+    def profile_native_rule_reads(self, payload):
+        self.last_payload = dict(payload or {})
         samples = []
         for index in range(2):
             samples.append({
@@ -285,8 +291,9 @@ class ReadOnlyRepository:
 
 class OntologyReasoningProofServiceTests(unittest.TestCase):
     def test_service_confirms_query_bottleneck_only_after_same_generation_replay(self):
+        repository = ReadOnlyRepository()
         service = OntologyReasoningProofService(
-            ontology_repository=ReadOnlyRepository(),
+            ontology_repository=repository,
             projection_run_store=ProjectionRunStore(),
             settings={},
         )
@@ -308,6 +315,10 @@ class OntologyReasoningProofServiceTests(unittest.TestCase):
         )
         self.assertTrue(report["readOnly"])
         self.assertFalse(report["mutatedOperationalState"])
+        self.assertEqual(
+            ["graph.slow.rule.v1"],
+            repository.last_payload["ruleIds"],
+        )
 
     def test_write_bottleneck_is_supported_but_not_replayed(self):
         verdict = classify_reasoning_bottleneck(

@@ -1890,11 +1890,24 @@ def select_target_scoped_manifest_patch(
                 continue
             for endpoint in (_clean(relation.source), _clean(relation.target)):
                 endpoint_scope = node_scopes.get(endpoint, "")
-                if endpoint_scope and endpoint_scope not in retained_active_by_scope:
+                incoming_endpoint = incoming.get(endpoint_scope) or {}
+                endpoint_generation_changed = bool(
+                    endpoint_scope
+                    and incoming_endpoint
+                    and changed_from_active(endpoint_scope, incoming_endpoint)
+                )
+                if endpoint_scope and (
+                    endpoint_scope not in retained_active_by_scope
+                    or endpoint_generation_changed
+                ):
                     include_missing_dependency(
                         endpoint_scope,
                         missing_endpoints,
-                        "required-link-endpoint",
+                        (
+                            "required-changed-link-endpoint"
+                            if endpoint_generation_changed
+                            else "required-link-endpoint"
+                        ),
                     )
         support_scopes = dict(worldview.get("supportRelationScopes") or {})
         for evidence in graph.evidence:
@@ -1904,11 +1917,24 @@ def select_target_scoped_manifest_patch(
                 continue
             for endpoint in (_clean(evidence.subject), _clean(evidence.evidence_id)):
                 endpoint_scope = node_scopes.get(endpoint, "")
-                if endpoint_scope and endpoint_scope not in retained_active_by_scope:
+                incoming_endpoint = incoming.get(endpoint_scope) or {}
+                endpoint_generation_changed = bool(
+                    endpoint_scope
+                    and incoming_endpoint
+                    and changed_from_active(endpoint_scope, incoming_endpoint)
+                )
+                if endpoint_scope and (
+                    endpoint_scope not in retained_active_by_scope
+                    or endpoint_generation_changed
+                ):
                     include_missing_dependency(
                         endpoint_scope,
                         missing_endpoints,
-                        "required-evidence-endpoint",
+                        (
+                            "required-changed-evidence-endpoint"
+                            if endpoint_generation_changed
+                            else "required-evidence-endpoint"
+                        ),
                     )
         changed = len(selected) != before
 

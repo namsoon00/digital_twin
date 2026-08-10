@@ -227,7 +227,7 @@ class OntologyFactSlotTests(unittest.TestCase):
             "main",
             entities=[
                 OntologyEntity("stock:005930", "Samsung", "stock", {
-                    "ontologyBox": "ABox", "symbol": "005930",
+                    "ontologyBox": "ABox", "symbol": "005930", "sector": "technology",
                 }),
                 OntologyEntity("price:005930", "Price", "price-metric", {
                     "ontologyBox": "ABox", "symbol": "005930", "currentPrice": 70000,
@@ -255,6 +255,7 @@ class OntologyFactSlotTests(unittest.TestCase):
             "scopeFingerprints": dict(first["scopeFingerprints"]),
         }
         next(item for item in graph.entities if item.entity_id == "price:005930").properties["currentPrice"] = 71000
+        next(item for item in graph.entities if item.entity_id == "stock:005930").properties["sector"] = "platform"
         next(item for item in graph.entities if item.entity_id == "news:005930:1").properties["headline"] = "new"
         apply_scoped_abox_identity(graph, world_id="portfolio:local:test")
 
@@ -262,7 +263,12 @@ class OntologyFactSlotTests(unittest.TestCase):
             graph,
             active,
             ["005930"],
-            fact_slot_plan=build_fact_slot_projection_plan(["005930"], ["market"]),
+            fact_slot_plan=build_fact_slot_projection_plan(
+                ["005930"],
+                ["market"],
+                requested_fact_families_by_symbol={"005930": ["market"]},
+                changed_fields_by_symbol={"005930": ["current_price"]},
+            ),
         )
 
         self.assertTrue(selection["applied"])
@@ -282,6 +288,10 @@ class OntologyFactSlotTests(unittest.TestCase):
         self.assertIn("semantic-value-change", selected_trace[market_scope]["reasons"])
         self.assertIn("event-fact-slot", selected_trace[market_scope]["reasons"])
         self.assertIn("market", selected_trace[market_scope]["semanticChangedFamilies"])
+        self.assertTrue(any(
+            "required-changed-link-endpoint" in item["reasons"]
+            for item in selected_trace.values()
+        ))
         deferred_trace = {
             item["scopeId"]: item
             for item in selection["scopeSelectionTrace"]["deferred"]

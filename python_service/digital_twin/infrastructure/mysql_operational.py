@@ -26,6 +26,7 @@ from .mysql_operational_core_stores import (
 from .mysql_notification_config import MySQLNotificationRuleStore, MySQLNotificationTemplateStore
 from .mysql_monitoring_stores import (
     MySQLEventLog,
+    MySQLMarketObservationReasoningAnchorStore,
     MySQLMonitoringCycleRecorder,
     MySQLMonitorStore,
     MySQLOntologyReasoningMonitorStore,

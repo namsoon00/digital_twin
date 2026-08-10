@@ -28,6 +28,20 @@ class FakeEventPublisher:
         self.events.append(event)
 
 
+class FakeScopeRepairOutbox:
+    def __init__(self):
+        self.calls = []
+
+    def enqueue_scope_repair(self, **payload):
+        self.calls.append(dict(payload))
+        return {
+            "status": "queued-durable-scope-repair",
+            "jobIds": ["scope-repair-job:1"],
+            "queuedSymbolCount": len(payload.get("repair_requests_by_symbol") or {}),
+            "missingSymbols": [],
+        }
+
+
 class FakeOntologyRepository:
     def __init__(self):
         self.calls = []
@@ -133,14 +147,16 @@ class OntologyMaintenanceRunnerTests(unittest.TestCase):
         stored = store.payload["scopeIntegrityAuditByWorld"]["portfolio:local:main"]
         self.assertEqual(7, stored["nextCursor"])
 
-    def test_integrity_mismatch_publishes_one_bounded_subject_repair_request(self):
+    def test_integrity_mismatch_queues_one_bounded_maintenance_repair(self):
         repository = IntegrityAuditRepository()
         store = FakeStateStore()
         publisher = FakeEventPublisher()
+        outbox = FakeScopeRepairOutbox()
         runner = OntologyMaintenanceRunner(
             repository,
             state_store=store,
             event_publisher=publisher,
+            scope_repair_outbox=outbox,
             settings={
                 "ontologyAboxMaintenanceWorldTypes": "portfolio",
                 "ontologyScopeIntegrityAuditIntervalMinutes": "30",
@@ -150,11 +166,13 @@ class OntologyMaintenanceRunnerTests(unittest.TestCase):
         result = runner.run_once()
 
         repair = result["maintenance"]["scopeRepair"]
-        self.assertEqual("published", repair["status"])
+        self.assertEqual("queued-durable-scope-repair", repair["status"])
         self.assertEqual(["005930"], repair["symbols"])
+        self.assertEqual("ontology-world-projection-outbox", repair["workBoundary"])
+        self.assertEqual(1, len(outbox.calls))
         self.assertEqual(1, len(publisher.events))
         event = publisher.events[0]
-        self.assertEqual("scope-integrity-repair", event.payload["trigger"])
+        self.assertEqual("ontology.scope-integrity-repair-requested", event.name)
         self.assertEqual(
             ["symbol:005930:flow"],
             event.payload["scopeRepairRequestsBySymbol"]["005930"]["scopeIds"],

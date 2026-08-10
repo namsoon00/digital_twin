@@ -25,10 +25,16 @@ from .settings import utc_now
 
 
 TERMINAL_STATES = {"completed", "superseded", "expired"}
+DIRECT_WORK_PREFIX = "direct:"
 
 
 def _text(value: object) -> str:
     return str(value or "").strip()
+
+
+def direct_work_key(event_id: object) -> str:
+    clean = _text(event_id)
+    return DIRECT_WORK_PREFIX + clean if clean else ""
 
 
 def local_reasoning_watch_pid(owner: object, hostname: str = "") -> int:
@@ -298,6 +304,29 @@ class MySQLOntologyReasoningMailboxStore(MySQLOperationalConnection):
                 stamp,
             ),
         )
+        if _text(state) == "direct-pending":
+            payload = source_event.get("payload") if isinstance(source_event.get("payload"), Mapping) else {}
+            symbols = [
+                _text(symbol).upper()
+                for symbol in payload.get("symbols") or []
+                if _text(symbol)
+            ]
+            MySQLOntologyReasoningMailboxStore._replace_work_item_with_connection(
+                connection,
+                {
+                    "mailboxKey": direct_work_key(event_id),
+                    "sourceEventId": event_id,
+                    "workClass": "RESEARCH" if "research" in _text(payload.get("trigger")).lower() else "DIRECT",
+                    "impactScope": "SUBJECT",
+                    "reasoningLane": "RESEARCH_REASONING" if "research" in _text(payload.get("trigger")).lower() else "REALTIME_REASONING",
+                    "marketScope": _text(payload.get("marketScope")) or "market",
+                    "ruleFamilies": [],
+                    "revisionVector": {},
+                    "symbol": symbols[0] if len(symbols) == 1 else "",
+                },
+                stamp,
+            )
+            MySQLOntologyReasoningMailboxStore._refresh_queue_state_with_connection(connection)
 
     def enqueue_with_connection(self, connection, entries: Iterable[Mapping[str, object]]) -> Dict[str, object]:
         """Transaction-aware form used by durable event ingress."""
@@ -535,12 +564,45 @@ class MySQLOntologyReasoningMailboxStore(MySQLOperationalConnection):
                 """,
                 (stamp,),
             ).fetchone() or {}
+            direct = connection.execute(
+                """
+                SELECT COUNT(*) AS pending_count,
+                       MIN(events.occurred_at) AS oldest_pending_at,
+                       SUM(CASE WHEN work.work_state = 'running' AND work.lease_until > %s THEN 1 ELSE 0 END) AS running_count,
+                       SUM(CASE WHEN work.work_state = 'retrying' THEN 1 ELSE 0 END) AS retrying_count
+                FROM ontology_reasoning_mailbox_events events
+                LEFT JOIN ontology_reasoning_work_items work
+                  ON work.mailbox_key = CONCAT('direct:', events.event_id)
+                 AND work.source_event_id = events.event_id
+                WHERE events.state = 'direct-pending'
+                """,
+                (stamp,),
+            ).fetchone() or {}
             symbols = connection.execute(
                 """
                 SELECT symbol, MIN(occurred_at) AS oldest_at FROM ontology_reasoning_mailbox
                 WHERE symbol <> '' GROUP BY symbol ORDER BY oldest_at, symbol LIMIT 80
                 """
             ).fetchall()
+            direct_events = connection.execute(
+                """
+                SELECT event_json FROM ontology_reasoning_mailbox_events
+                WHERE state = 'direct-pending'
+                ORDER BY occurred_at ASC, event_id ASC LIMIT 80
+                """
+            ).fetchall()
+            pending_symbols = [
+                _text(item.get("symbol")).upper()
+                for item in symbols or []
+                if _text(item.get("symbol"))
+            ]
+            for direct_event in direct_events or []:
+                event = _json_loads(direct_event.get("event_json"), {})
+                payload = event.get("payload") if isinstance(event, Mapping) and isinstance(event.get("payload"), Mapping) else {}
+                for symbol in payload.get("symbols") or []:
+                    clean_symbol = _text(symbol).upper()
+                    if clean_symbol and clean_symbol not in pending_symbols:
+                        pending_symbols.append(clean_symbol)
             active = connection.execute(
                 """
                 SELECT lease_owner, lease_until, last_stage, heartbeat_at
@@ -555,15 +617,14 @@ class MySQLOntologyReasoningMailboxStore(MySQLOperationalConnection):
                 "WHERE state_id = 'global' FOR UPDATE"
             ).fetchone() or {}
             values = {
-                "pending": max(0, int(row.get("pending_count") or 0)),
-                "running": max(0, int(row.get("running_count") or 0)),
-                "retrying": max(0, int(row.get("retrying_count") or 0)),
-                "symbols": [
-                    _text(item.get("symbol")).upper()
-                    for item in symbols or []
-                    if _text(item.get("symbol"))
-                ],
-                "oldest": _text(row.get("oldest_pending_at")),
+                "pending": max(0, int(row.get("pending_count") or 0)) + max(0, int(direct.get("pending_count") or 0)),
+                "running": max(0, int(row.get("running_count") or 0)) + max(0, int(direct.get("running_count") or 0)),
+                "retrying": max(0, int(row.get("retrying_count") or 0)) + max(0, int(direct.get("retrying_count") or 0)),
+                "symbols": pending_symbols[:80],
+                "oldest": min(
+                    [value for value in [_text(row.get("oldest_pending_at")), _text(direct.get("oldest_pending_at"))] if value]
+                    or [""]
+                ),
                 "activeWorker": _text(active.get("lease_owner")),
                 "activeLease": _text(active.get("lease_until")),
                 "lastStage": _text(active.get("last_stage")),
@@ -682,11 +743,21 @@ class MySQLOntologyReasoningMailboxStore(MySQLOperationalConnection):
             lease_until = (now + timedelta(seconds=seconds)).isoformat().replace("+00:00", "Z")
             with self.transaction() as connection:
                 for key, event_id in clean:
-                    current = connection.execute(
-                        "SELECT source_event_id FROM ontology_reasoning_mailbox WHERE mailbox_key = %s FOR UPDATE",
-                        (key,),
-                    ).fetchone()
-                    if not current or _text(current.get("source_event_id")) != event_id:
+                    is_direct = key == direct_work_key(event_id)
+                    if is_direct:
+                        current = connection.execute(
+                            "SELECT event_id AS source_event_id, state FROM ontology_reasoning_mailbox_events "
+                            "WHERE event_id = %s FOR UPDATE",
+                            (event_id,),
+                        ).fetchone()
+                        current_valid = bool(current and _text(current.get("state")) == "direct-pending")
+                    else:
+                        current = connection.execute(
+                            "SELECT source_event_id FROM ontology_reasoning_mailbox WHERE mailbox_key = %s FOR UPDATE",
+                            (key,),
+                        ).fetchone()
+                        current_valid = bool(current and _text(current.get("source_event_id")) == event_id)
+                    if not current_valid:
                         result["blocked"].append({"mailboxKey": key, "sourceEventId": event_id, "reason": "newer-source"})
                         continue
                     work = connection.execute(
@@ -797,10 +868,18 @@ class MySQLOntologyReasoningMailboxStore(MySQLOperationalConnection):
                 clean.append((key, event_id, symbol))
         result = {"status": "ok", "current": [], "superseded": [], "missing": []}
         for key, expected_event_id, symbol in clean:
-            query = "SELECT source_event_id, symbol FROM ontology_reasoning_mailbox WHERE mailbox_key = %s"
-            if lock_rows:
-                query += " FOR UPDATE"
-            row = connection.execute(query, (key,)).fetchone()
+            if key == direct_work_key(expected_event_id):
+                query = "SELECT event_id AS source_event_id, state FROM ontology_reasoning_mailbox_events WHERE event_id = %s"
+                if lock_rows:
+                    query += " FOR UPDATE"
+                row = connection.execute(query, (expected_event_id,)).fetchone()
+                if row and _text(row.get("state")) != "direct-pending":
+                    row = None
+            else:
+                query = "SELECT source_event_id, symbol FROM ontology_reasoning_mailbox WHERE mailbox_key = %s"
+                if lock_rows:
+                    query += " FOR UPDATE"
+                row = connection.execute(query, (key,)).fetchone()
             if not row:
                 result["missing"].append({
                     "mailboxKey": key,
@@ -1157,6 +1236,22 @@ class MySQLOntologyReasoningMailboxStore(MySQLOperationalConnection):
         terminal_state = state if state in TERMINAL_STATES else "completed"
         with self.transaction() as connection:
             for mailbox_key in clean:
+                expected = expected_by_key.get(mailbox_key) or ""
+                if expected and mailbox_key == direct_work_key(expected):
+                    row = connection.execute(
+                        "SELECT state FROM ontology_reasoning_mailbox_events WHERE event_id = %s FOR UPDATE",
+                        (expected,),
+                    ).fetchone()
+                    if not row or _text(row.get("state")) != "direct-pending":
+                        continue
+                    connection.execute(
+                        "UPDATE ontology_reasoning_mailbox_events SET state = %s, terminal_reason = %s, updated_at = %s "
+                        "WHERE event_id = %s AND state = 'direct-pending'",
+                        (terminal_state, _text(reason or terminal_state)[:255], utc_now(), expected),
+                    )
+                    self._remove_work_item_with_connection(connection, mailbox_key, expected)
+                    terminal[expected] = terminal_state
+                    continue
                 row = connection.execute(
                     "SELECT source_event_id FROM ontology_reasoning_mailbox WHERE mailbox_key = %s FOR UPDATE",
                     (mailbox_key,),
@@ -1164,7 +1259,6 @@ class MySQLOntologyReasoningMailboxStore(MySQLOperationalConnection):
                 if not row:
                     continue
                 event_id = _text(row.get("source_event_id"))
-                expected = expected_by_key.get(mailbox_key) or ""
                 if expected and event_id != expected:
                     continue
                 connection.execute("DELETE FROM ontology_reasoning_mailbox WHERE mailbox_key = %s", (mailbox_key,))
@@ -1225,6 +1319,12 @@ class MySQLOntologyReasoningMailboxStore(MySQLOperationalConnection):
                     )
                     if int(cursor.rowcount or 0) > 0:
                         sealed.append(event_id)
+                    self._remove_work_item_with_connection(
+                        connection,
+                        direct_work_key(event_id),
+                        event_id,
+                    )
+                self._refresh_queue_state_with_connection(connection)
         except Exception:
             return sealed
         return sealed

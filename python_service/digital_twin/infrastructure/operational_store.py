@@ -19,6 +19,7 @@ from .mysql_operational import (
     MySQLHypothesisLifecycleStore,
     MySQLInvestmentResearchStore,
     MySQLMarketQuoteCache,
+    MySQLMarketObservationReasoningAnchorStore,
     MySQLMarketTimeSeriesStore,
     MySQLModelReviewJobStore,
     MySQLMonitorStore,
@@ -184,6 +185,11 @@ def market_quote_cache(settings: Dict[str, str] = None):
 def market_time_series_store(settings: Dict[str, str] = None):
     configured = configured_settings(settings)
     return MySQLMarketTimeSeriesStore(configured)
+
+
+def market_observation_reasoning_anchor_store(settings: Dict[str, str] = None):
+    configured = configured_settings(settings)
+    return MySQLMarketObservationReasoningAnchorStore(configured)
 
 
 def symbol_universe_store(settings: Dict[str, str] = None):

@@ -333,6 +333,7 @@ class MySQLMailboxConnection:
     def __init__(self):
         self.events = {}
         self.slots = {}
+        self.work_items = {}
 
     def execute(self, sql, params=()):
         query = " ".join(str(sql).split())
@@ -370,6 +371,13 @@ class MySQLMailboxConnection:
                 "reason": str(values[3]),
                 "event_json": str(values[4]),
             })
+            return MySQLCursor()
+        if query.startswith("INSERT INTO ontology_reasoning_work_items"):
+            self.work_items[str(values[0])] = {
+                "source_event_id": str(values[1]),
+                "work_state": "queued",
+                "checkpoint_json": str(values[3]),
+            }
             return MySQLCursor()
         if query.startswith("INSERT INTO ontology_reasoning_mailbox ("):
             self.slots[str(values[0])] = {
@@ -538,6 +546,29 @@ class OntologyReasoningMailboxTests(unittest.TestCase):
         self.assertEqual("superseded", self.mailbox.events["old"]["state"])
         self.assertEqual(0, result["mailbox"]["pendingEntryCount"])
         self.assertEqual("ok", result["executionTelemetry"]["status"])
+
+    def test_market_observation_anchor_completes_only_after_verified_projection(self):
+        event = realtime_request("anchor-event", ["AAPL"], "2026-07-24T00:00:00Z")
+        runner = self.build_runner([event])
+        completions = []
+        runner.market_observation_completion_recorder = lambda event_ids, account_ids, symbols: (
+            completions.append({
+                "eventIds": list(event_ids or []),
+                "accountIds": list(account_ids or []),
+                "symbols": list(symbols or []),
+            })
+            or {"status": "completed", "completedCount": 1}
+        )
+
+        result = runner.run_once(force=True)
+
+        self.assertEqual("ok", result["status"])
+        self.assertEqual([{
+            "eventIds": ["anchor-event"],
+            "accountIds": [],
+            "symbols": ["AAPL"],
+        }], completions)
+        self.assertEqual(1, result["marketObservationAnchorCompletion"]["completedCount"])
 
     def test_verified_abox_yield_defers_before_starting_a_new_monitor_projection(self):
         request = realtime_request("yield", ["AAPL"], "2026-07-24T00:00:00Z")
@@ -940,6 +971,43 @@ class OntologyReasoningMailboxTests(unittest.TestCase):
         self.assertEqual(30, result["retryAfterSeconds"])
         self.assertIn("확정 모니터 스냅샷 대기", result["deferredReason"])
         self.assertEqual("deferred-source-snapshot", result["sourceSnapshotPreflight"]["status"])
+
+    def test_permanent_invalid_source_is_isolated_and_queue_continues(self):
+        invalid = realtime_request(
+            "invalid-source",
+            ["AAPL"],
+            "2026-07-24T00:02:00Z",
+            review_level="critical",
+        )
+        invalid.payload["accountId"] = "market:shared:global"
+        valid = realtime_request("valid-source", ["MSFT"], "2026-07-24T00:01:00Z")
+        valid.payload["accountId"] = "default"
+        runner = self.build_runner([invalid, valid])
+        readiness_calls = []
+
+        def readiness(context):
+            readiness_calls.append(dict(context or {}))
+            if "market:shared:global" in set(context.get("accountIds") or []):
+                return {
+                    "ready": False,
+                    "status": "rejected-source-account",
+                    "reason": "unregistered source",
+                    "permanent": True,
+                    "invalidAccountIds": ["market:shared:global"],
+                }
+            return {"ready": True, "status": "ready"}
+
+        runner.snapshot_readiness_probe = readiness
+
+        result = runner.run_once(force=True)
+
+        self.assertEqual("ok", result["status"])
+        self.assertEqual([["MSFT"]], self.monitor.calls)
+        self.assertEqual(2, len(readiness_calls))
+        self.assertIn("invalid-source", self.cursor.superseded)
+        self.assertEqual("expired", self.mailbox.events["invalid-source"]["state"])
+        self.assertEqual("completed", self.mailbox.events["valid-source"]["state"])
+        self.assertEqual(1, len(result["isolatedRequestFailures"][0]["rejectedRequestEventIds"]))
 
     def test_post_monitor_checkpoint_finishes_without_rebuilding_typedb(self):
         event = realtime_request("resume-current", ["AAPL"], "2026-07-24T00:00:00Z")
@@ -1457,6 +1525,10 @@ class OntologyReasoningMailboxTests(unittest.TestCase):
 
         self.assertEqual("direct", result["ingressKind"])
         self.assertEqual("direct-pending", connection.events["handoff-direct"]["state"])
+        work_item = connection.work_items["direct:handoff-direct"]
+        self.assertEqual("handoff-direct", work_item["source_event_id"])
+        self.assertEqual("queued", work_item["work_state"])
+        self.assertIn("reasoning-work-checkpoint-v2", work_item["checkpoint_json"])
 
     def test_orphan_recovery_only_accepts_confirmed_dead_local_scheduler_owners(self):
         self.assertEqual(451, local_reasoning_watch_pid("reasoning-watch:local:451", hostname="local"))

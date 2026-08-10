@@ -792,10 +792,22 @@ class RealtimeMonitor(MonitoringSampleDataMixin, MonitoringPositionContextMixin,
             reasoning_change_pct = (
                 (current_price - reasoning_baseline_price) / abs(reasoning_baseline_price) * 100.0
             )
+            pending_reasoning_price = number(baseline.get("pendingReasoningPrice"))
+            pending_change_pct = (
+                (current_price - pending_reasoning_price) / abs(pending_reasoning_price) * 100.0
+                if pending_reasoning_price > 0
+                else reasoning_change_pct
+            )
             delivery_change_pct = (
                 (current_price - delivery_baseline_price) / abs(delivery_baseline_price) * 100.0
             )
-            reasoning_material = abs(reasoning_change_pct) >= threshold
+            reasoning_material = (
+                abs(reasoning_change_pct) >= threshold
+                and (
+                    pending_reasoning_price <= 0
+                    or abs(pending_change_pct) >= threshold
+                )
+            )
             immediate_delivery = (
                 abs(delivery_change_pct) >= threshold
                 and self.market_observation_deliver_immediately(delivery_change_pct)
@@ -873,6 +885,8 @@ class RealtimeMonitor(MonitoringSampleDataMixin, MonitoringPositionContextMixin,
                         "changePct": round(change_pct, 4),
                         "reasoningBaselinePrice": reasoning_baseline_price,
                         "reasoningChangePct": round(reasoning_change_pct, 4),
+                        "pendingReasoningPrice": pending_reasoning_price,
+                        "pendingChangePct": round(pending_change_pct, 4),
                         "outboxBaselinePrice": delivery_baseline_price,
                         "outboxChangePct": round(delivery_change_pct, 4),
                         "initialPrice": initial_baseline_price,

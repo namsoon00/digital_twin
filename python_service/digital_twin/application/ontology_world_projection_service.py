@@ -443,16 +443,27 @@ class OntologyWorldProjectionRunner:
             job_id = str(job.get("jobId") or "")
             kind = str(job.get("projectionKind") or "market").strip().lower()
             try:
-                if kind not in {"market", "knowledge"}:
+                if kind not in {"market", "knowledge", "scope-repair"}:
                     raise ValueError("unsupported shared-world projection kind: " + kind)
                 graph = deserialize_portfolio_ontology(job.get("payload") or {})
                 world = world_from_metadata(job)
+                projection_kind = kind
+                if kind == "scope-repair":
+                    projection_kind = str(
+                        (graph.worldview or {}).get("scopeRepairSourceProjectionKind")
+                        or ("knowledge" if str(world.world_type or "") == "knowledge" else "market")
+                    ).strip().lower()
                 result = self.projection_recorder.project_shared_world_update(
                     graph,
                     world,
-                    projection_kind=kind,
+                    projection_kind=projection_kind,
                 )
                 result = dict(result or {})
+                if kind == "scope-repair":
+                    result["workKind"] = "scope-repair"
+                    result["scopeRepairRequestId"] = str(
+                        (graph.worldview or {}).get("scopeRepairRequestId") or ""
+                    )
                 if self.successful(result):
                     if bool(result.get("fullRebuild")):
                         # Normal updates must return the shared-world writer

@@ -112,6 +112,20 @@ def projection_job(kind="market"):
     }
 
 
+def scope_repair_job():
+    job = projection_job("market")
+    job["jobId"] = "world-projection:test-scope-repair"
+    job["projectionKind"] = "scope-repair"
+    job["payload"]["worldview"].update({
+        "scopeRepairRequestId": "repair:one",
+        "scopeRepairSourceProjectionKind": "market",
+        "scopeRepairRequestsBySymbol": {
+            "TEST": {"requestId": "repair:one", "scopeIds": ["symbol:TEST:market"]},
+        },
+    })
+    return job
+
+
 class OntologyWorldProjectionRunnerTests(unittest.TestCase):
     def test_default_worker_claims_one_shared_world_per_isolated_run(self):
         runner = OntologyWorldProjectionRunner(FakeOutbox([]), FakeRecorder({"status": "ok"}))
@@ -149,6 +163,20 @@ class OntologyWorldProjectionRunnerTests(unittest.TestCase):
         self.assertEqual("stock:TEST", graph.entities[0].entity_id)
         self.assertEqual("market:shared:us", world.world_id)
         self.assertEqual("market", kind)
+
+    def test_scope_repair_uses_shared_projection_worker_without_investment_queue(self):
+        outbox = FakeOutbox([scope_repair_job()])
+        recorder = FakeRecorder({"status": "ok", "saved": True})
+        runner = OntologyWorldProjectionRunner(outbox, recorder)
+
+        result = runner.run_once()
+
+        self.assertEqual(1, result["completedCount"])
+        _graph, _world, kind = recorder.calls[0]
+        self.assertEqual("market", kind)
+        stored = outbox.completed[0][2]
+        self.assertEqual("scope-repair", stored["workKind"])
+        self.assertEqual("repair:one", stored["scopeRepairRequestId"])
 
     def test_pending_live_reasoning_yields_before_claiming_shared_world_work(self):
         outbox = FakeOutbox([projection_job()])

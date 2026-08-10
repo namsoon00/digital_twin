@@ -939,6 +939,7 @@ def build_ontology_maintenance_runner(settings=None) -> OntologyMaintenanceRunne
         reasoning_queue_probe=build_ontology_reasoning_queue_probe(configured_settings),
         capacity_guard=capacity_guard,
         event_publisher=stores.event_log(store_settings),
+        scope_repair_outbox=stores.ontology_world_projection_outbox_store(store_settings),
     )
 
 
@@ -1000,18 +1001,23 @@ def build_ontology_reasoning_runner(settings=None, event_publisher=None) -> Onto
             if not requested_accounts or str(getattr(account, "account_id", "") or "").strip() in requested_accounts
         ]
         if requested_accounts and len(accounts) != len(requested_accounts):
+            registered = {
+                str(getattr(account, "account_id", "") or "").strip()
+                for account in accounts
+            }
+            invalid_accounts = sorted(requested_accounts - registered)
             return {
                 "ready": False,
-                "status": "deferred-source-snapshot",
+                "status": "rejected-source-account",
                 "reason": "The requested account has no registered monitor snapshot source.",
-                "retryAfterSeconds": 30,
+                "reasonCode": "unregistered-source-account",
+                "permanent": True,
+                "invalidAccountIds": invalid_accounts,
+                "validAccountIds": sorted(registered),
+                "retryAfterSeconds": 0,
                 "accounts": [
-                    {"accountId": account_id, "status": "deferred"}
-                    for account_id in sorted(requested_accounts)
-                    if account_id not in {
-                        str(getattr(account, "account_id", "") or "").strip()
-                        for account in accounts
-                    }
+                    {"accountId": account_id, "status": "rejected", "permanent": True}
+                    for account_id in invalid_accounts
                 ],
             }
         return snapshot_readiness_source.preflight(accounts, context)
@@ -1185,6 +1191,9 @@ def build_ontology_reasoning_runner(settings=None, event_publisher=None) -> Onto
             getattr(maintenance_state_store, "load")
             if callable(getattr(maintenance_state_store, "load", None))
             else None
+        ),
+        market_observation_completion_recorder=(
+            stores.market_observation_reasoning_anchor_store(reasoning_store_settings).complete
         ),
     )
 

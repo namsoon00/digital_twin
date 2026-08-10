@@ -134,6 +134,144 @@ def market_observation_followup_symbols(
     return symbols
 
 
+class MySQLMarketObservationReasoningAnchorStore(MySQLOperationalConnection):
+    """Track queued and TypeDB-completed quote anchors independently."""
+
+    def load(self, account_id: str) -> Dict[str, Dict[str, object]]:
+        account = str(account_id or "").strip()
+        if not account:
+            return {}
+        with self.connect() as connection:
+            rows = connection.execute(
+                """
+                SELECT symbol, completed_price, completed_at, pending_price,
+                       pending_event_id, pending_at
+                FROM market_observation_reasoning_anchors
+                WHERE account_id = %s
+                """,
+                (account,),
+            ).fetchall()
+        return {
+            str(row.get("symbol") or "").upper().strip(): {
+                "completedPrice": float(row.get("completed_price") or 0),
+                "completedAt": str(row.get("completed_at") or ""),
+                "pendingPrice": float(row.get("pending_price") or 0),
+                "pendingEventId": str(row.get("pending_event_id") or ""),
+                "pendingAt": str(row.get("pending_at") or ""),
+            }
+            for row in rows or []
+            if str(row.get("symbol") or "").strip()
+        }
+
+    @staticmethod
+    def apply_to_state(state: Dict[str, object], anchors: Dict[str, Dict[str, object]]) -> Dict[str, object]:
+        updated = copy.deepcopy(state or {})
+        metadata = dict(updated.get("metadata") or {})
+        baselines = dict(metadata.get("marketObservationBaselines") or {})
+        changed = False
+        for symbol, anchor in dict(anchors or {}).items():
+            baseline = dict(baselines.get(symbol) or {})
+            completed_price = float(anchor.get("completedPrice") or 0)
+            pending_price = float(anchor.get("pendingPrice") or 0)
+            if completed_price > 0:
+                baseline["price"] = completed_price
+                baseline["reasoningPrice"] = completed_price
+                baseline["reasoningCompletedAt"] = str(anchor.get("completedAt") or "")
+            if pending_price > 0 and str(anchor.get("pendingEventId") or ""):
+                baseline["pendingReasoningPrice"] = pending_price
+                baseline["pendingReasoningEventId"] = str(anchor.get("pendingEventId") or "")
+                baseline["reasoningQueuedAt"] = str(anchor.get("pendingAt") or "")
+            else:
+                baseline.pop("pendingReasoningPrice", None)
+                baseline.pop("pendingReasoningEventId", None)
+            if baseline:
+                baselines[symbol] = baseline
+                changed = True
+        if changed:
+            metadata["marketObservationBaselines"] = baselines
+            updated["metadata"] = metadata
+        return updated
+
+    def mark_pending_with_connection(
+        self,
+        connection,
+        account_id: str,
+        event_id: str,
+        candidates: Iterable[Dict[str, object]],
+        stamp: str,
+    ) -> int:
+        count = 0
+        for candidate in candidates or []:
+            item = dict(candidate or {}) if isinstance(candidate, dict) else {}
+            observation = item.get("marketObservation") if isinstance(item.get("marketObservation"), dict) else {}
+            symbol = str(item.get("symbol") or "").upper().strip()
+            try:
+                pending_price = float(observation.get("currentPrice") or 0)
+                completed_price = float(observation.get("reasoningBaselinePrice") or observation.get("baselinePrice") or 0)
+            except (TypeError, ValueError):
+                continue
+            if not symbol or pending_price <= 0:
+                continue
+            connection.execute(
+                """
+                INSERT INTO market_observation_reasoning_anchors (
+                    account_id, symbol, completed_price, completed_at,
+                    pending_price, pending_event_id, pending_at, updated_at
+                ) VALUES (%s, %s, %s, '', %s, %s, %s, %s)
+                ON DUPLICATE KEY UPDATE
+                    completed_price = CASE
+                        WHEN completed_price > 0 THEN completed_price
+                        ELSE VALUES(completed_price)
+                    END,
+                    pending_price = VALUES(pending_price),
+                    pending_event_id = VALUES(pending_event_id),
+                    pending_at = VALUES(pending_at),
+                    updated_at = VALUES(updated_at)
+                """,
+                (
+                    str(account_id or ""), symbol, completed_price, pending_price,
+                    str(event_id or ""), str(stamp or utc_now()), str(stamp or utc_now()),
+                ),
+            )
+            count += 1
+        return count
+
+    def complete(
+        self,
+        event_ids: Iterable[str],
+        account_ids: Iterable[str] = None,
+        symbols: Iterable[str] = None,
+    ) -> Dict[str, object]:
+        events = sorted({str(value or "").strip() for value in event_ids or [] if str(value or "").strip()})
+        accounts = sorted({str(value or "").strip() for value in account_ids or [] if str(value or "").strip()})
+        subjects = sorted({str(value or "").upper().strip() for value in symbols or [] if str(value or "").strip()})
+        if not events:
+            return {"status": "not-required", "completedCount": 0}
+        clauses = ["pending_event_id IN (" + ", ".join(["%s"] * len(events)) + ")"]
+        params = list(events)
+        if accounts:
+            clauses.append("account_id IN (" + ", ".join(["%s"] * len(accounts)) + ")")
+            params.extend(accounts)
+        if subjects:
+            clauses.append("symbol IN (" + ", ".join(["%s"] * len(subjects)) + ")")
+            params.extend(subjects)
+        stamp = utc_now()
+        with self.transaction() as connection:
+            cursor = connection.execute(
+                """
+                UPDATE market_observation_reasoning_anchors
+                SET completed_price = pending_price, completed_at = %s,
+                    pending_price = 0, pending_event_id = '', pending_at = '', updated_at = %s
+                WHERE """ + " AND ".join(clauses),
+                tuple([stamp, stamp] + params),
+            )
+        return {
+            "status": "completed",
+            "completedCount": int(getattr(cursor, "rowcount", 0) or 0),
+            "eventIds": events,
+        }
+
+
 class MySQLMonitorStore(MySQLOperationalConnection):
     def __init__(self, settings: Dict[str, str] = None):
         super().__init__(settings)
@@ -213,6 +351,19 @@ class MySQLMonitorStore(MySQLOperationalConnection):
     @property
     def sent(self) -> Dict[str, object]:
         return self.payload["sent"]
+
+    def refresh_market_observation_reasoning_anchors(self, account_id: str) -> Dict[str, object]:
+        account = str(account_id or "").strip()
+        state = self.previous.get(account) or {}
+        if not account or not isinstance(state, dict):
+            return state
+        try:
+            anchors = MySQLMarketObservationReasoningAnchorStore(self.runtime_settings).load(account)
+        except Exception:
+            return state
+        updated = MySQLMarketObservationReasoningAnchorStore.apply_to_state(state, anchors)
+        self.previous[account] = updated
+        return updated
 
     def upsert_snapshot_state_with_connection(
         self,
@@ -588,6 +739,9 @@ class MySQLMonitoringCycleRecorder(MySQLOperationalConnection):
             self.monitor_store = MySQLMonitorStore(settings)
         if self.market_time_series_store is None:
             self.market_time_series_store = MySQLMarketTimeSeriesStore(settings)
+        self.market_observation_anchor_store = MySQLMarketObservationReasoningAnchorStore(
+            self.runtime_settings
+        )
 
     def account_context_map(self) -> Dict[str, AccountConfig]:
         try:
@@ -731,10 +885,9 @@ class MySQLMonitoringCycleRecorder(MySQLOperationalConnection):
                     account_events = [event for event in outboxed_events if event.account_id == account_id]
                     if account_events:
                         snapshot_states[account_id] = apply_market_observation_outbox_baselines(state, account_events)
-            # Ordinary price candidates are TypeDB-first. Advance their
-            # cumulative anchor at the same durable source boundary that
-            # creates the replay request, not only when a raw notification is
-            # accepted by the outbox.
+            # Ordinary price candidates are TypeDB-first. Persist only their
+            # pending anchors at the same durable source boundary that creates
+            # replay work. The completed anchor advances after TypeDB succeeds.
             for account_id, state in list(snapshot_states.items()):
                 candidates = observation_candidates_by_account.get(account_id) or []
                 if candidates:
@@ -782,6 +935,13 @@ class MySQLMonitoringCycleRecorder(MySQLOperationalConnection):
                     # can recreate its mailbox row after an interrupted
                     # operational write.
                     pass
+                self.market_observation_anchor_store.mark_pending_with_connection(
+                    connection,
+                    snapshot.account_id,
+                    reasoning_event.event_id,
+                    observation_candidates_by_account.get(snapshot.account_id) or [],
+                    stamp,
+                )
             insert_domain_event_with_connection(
                 connection,
                 monitoring_cycle_completed_event(list(account_ids or []), len(snapshots), len(guarded_events), False, delivered),
@@ -965,12 +1125,21 @@ class MySQLEventLog(MySQLOperationalConnection):
             rows = connection.execute(
                 """
                 SELECT event_id, occurred_at, event_json
-                FROM ontology_reasoning_mailbox_events
-                WHERE state = 'direct-pending'
-                ORDER BY occurred_at, event_id
+                FROM ontology_reasoning_mailbox_events events
+                LEFT JOIN ontology_reasoning_work_items work
+                  ON work.mailbox_key = CONCAT('direct:', events.event_id)
+                 AND work.source_event_id = events.event_id
+                WHERE events.state = 'direct-pending'
+                  AND (
+                    work.mailbox_key IS NULL
+                    OR work.work_state = 'queued'
+                    OR (work.work_state = 'retrying' AND (work.not_before_at = '' OR work.not_before_at <= %s))
+                    OR (work.work_state = 'running' AND (work.lease_until = '' OR work.lease_until <= %s))
+                  )
+                ORDER BY events.occurred_at, events.event_id
                 LIMIT %s
                 """,
-                (bounded,),
+                (utc_now(), utc_now(), bounded),
             ).fetchall()
         events = []
         for row in rows or []:

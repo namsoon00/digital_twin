@@ -186,8 +186,8 @@ def apply_market_observation_outbox_baselines(
         previous = dict(baselines.get(symbol) or {})
         baselines[symbol] = {
             **previous,
-            "price": price,
-            "reasoningPrice": price,
+            "price": number(previous.get("reasoningPrice")) or number(previous.get("price")) or price,
+            "reasoningPrice": number(previous.get("reasoningPrice")) or number(previous.get("price")) or price,
             "outboxPrice": price,
             "initialPrice": number(previous.get("initialPrice")) or price,
             "currency": str(observation.get("currency") or "").upper().strip(),
@@ -237,11 +237,12 @@ def apply_market_observation_reasoning_baselines(
     state: Dict[str, object],
     candidates: Iterable[Dict[str, object]],
 ) -> Dict[str, object]:
-    """Advance a quote anchor once its persisted follow-up has been queued.
+    """Record a pending quote anchor without claiming inference completion.
 
     Raw delivery is now optional for ordinary changes. Advancing at the source
-    snapshot boundary prevents the same cumulative move from re-entering the
-    mailbox every poll while retaining the durable reasoning request for retry.
+    The completed reasoning anchor advances only after a verified TypeDB
+    generation. A separate pending anchor suppresses duplicate polling events
+    while keeping an unprocessed cumulative move visible across restarts.
     """
     updated = deepcopy(state or {})
     metadata = dict(updated.get("metadata") or {})
@@ -264,8 +265,9 @@ def apply_market_observation_reasoning_baselines(
         )
         baselines[symbol] = {
             **previous,
-            "price": price,
-            "reasoningPrice": price,
+            "price": number(previous.get("reasoningPrice")) or number(previous.get("price")) or price,
+            "reasoningPrice": number(previous.get("reasoningPrice")) or number(previous.get("price")) or price,
+            "pendingReasoningPrice": price,
             "initialPrice": initial_price,
             "currency": str(observation.get("currency") or "").upper().strip(),
             "source": str(observation.get("source") or "").strip(),

@@ -6,9 +6,18 @@ from datetime import datetime, timedelta, timezone
 import hashlib
 from typing import Dict, Iterable, List, Mapping
 
-from ..domain.ontology_projection_payload import serialize_portfolio_ontology
+from ..domain.ontology_projection_payload import (
+    deserialize_portfolio_ontology,
+    serialize_portfolio_ontology,
+)
 from ..domain.ontology_projection_fingerprint import material_graph_fingerprint
-from ..domain.ontology_worlds import OntologyWorld, world_metadata
+from ..domain.ontology_worlds import (
+    KNOWLEDGE_WORLD_TYPE,
+    MARKET_WORLD_TYPE,
+    OntologyWorld,
+    world_from_metadata,
+    world_metadata,
+)
 from .mysql_operational_connection import MySQLOperationalConnection
 from .mysql_operational_helpers import _json_loads
 from .operational_common import json_dumps
@@ -41,6 +50,21 @@ def _job_ids(rows) -> List[str]:
 
 def _timestamp_after(seconds: int) -> str:
     return (datetime.now(timezone.utc) + timedelta(seconds=max(0, int(seconds or 0)))).isoformat().replace("+00:00", "Z")
+
+
+def _projection_payload_symbols(payload: Mapping[str, object]) -> set:
+    symbols = set()
+    for item in payload.get("entities") or []:
+        if not isinstance(item, Mapping):
+            continue
+        properties = item.get("properties") if isinstance(item.get("properties"), Mapping) else {}
+        symbol = _clean(properties.get("symbol") or properties.get("ticker")).upper()
+        if symbol:
+            symbols.add(symbol)
+    for item in payload.get("opinions") or []:
+        if isinstance(item, Mapping) and _clean(item.get("symbol")):
+            symbols.add(_clean(item.get("symbol")).upper())
+    return symbols
 
 
 class MySQLOntologyWorldProjectionOutboxStore(MySQLOperationalConnection):
@@ -92,7 +116,14 @@ class MySQLOntologyWorldProjectionOutboxStore(MySQLOperationalConnection):
                 **payload_summary,
                 "reason": "Shared-world projection packet exceeded the durable outbox safety limit.",
             }
-        fingerprint = material_graph_fingerprint(graph)
+        # Repair commands intentionally keep the same semantic facts while
+        # changing their physical generation. Include the command packet in
+        # idempotency instead of treating it as already projected material.
+        fingerprint = (
+            _sha(payload_json)
+            if kind == "scope-repair"
+            else material_graph_fingerprint(graph)
+        )
         dedupe_key = _sha("|".join([kind, world.world_id, source_world or "unknown"]))[:64]
         payload_hash = _sha("|".join([dedupe_key, fingerprint, source_observed, payload_json]))
         job_id = "world-projection:" + payload_hash[:48]
@@ -190,6 +221,116 @@ class MySQLOntologyWorldProjectionOutboxStore(MySQLOperationalConnection):
             "sourceObservedAt": source_observed,
             "coalescedPendingUpdate": False,
             **payload_summary,
+        }
+
+    def enqueue_scope_repair(
+        self,
+        world_id: str,
+        request_id: str,
+        repair_requests_by_symbol: Mapping[str, object],
+        source_account_id: str = "",
+        source_observed_at: str = "",
+    ) -> Dict[str, object]:
+        """Clone the newest verified shared-world packets into repair work.
+
+        Scope repair changes storage generations, not investment facts. The
+        latest completed projection packet already contains the verified ABox
+        slice needed to rebuild a damaged subject, so the maintenance worker
+        can stay independent from the live reasoning queue.
+        """
+        clean_world_id = _clean(world_id)
+        world = world_from_metadata({"worldId": clean_world_id})
+        if world.world_type not in {MARKET_WORLD_TYPE, KNOWLEDGE_WORLD_TYPE}:
+            return {
+                "status": "manual-portfolio-scope-repair-required",
+                "saved": False,
+                "worldId": clean_world_id,
+                "reason": "PortfolioWorld repair requires an account snapshot and is not routed through shared-world projection work.",
+                "missingSymbols": sorted(_clean(symbol).upper() for symbol in repair_requests_by_symbol if _clean(symbol)),
+            }
+        requested = {
+            _clean(symbol).upper(): dict(value or {})
+            for symbol, value in dict(repair_requests_by_symbol or {}).items()
+            if _clean(symbol) and isinstance(value, Mapping)
+        }
+        if not requested:
+            return {"status": "not-required", "saved": False, "worldId": clean_world_id}
+
+        base_kind = "knowledge" if world.world_type == KNOWLEDGE_WORLD_TYPE else "market"
+        with self.connect() as connection:
+            rows = connection.execute(
+                """
+                SELECT * FROM ontology_world_projection_outbox
+                WHERE world_id = %s AND projection_kind = %s
+                  AND status IN (%s, %s, %s)
+                ORDER BY updated_at DESC, job_id DESC LIMIT 200
+                """,
+                (clean_world_id, base_kind, COMPLETED, PENDING, PROCESSING),
+            ).fetchall()
+
+        remaining = set(requested)
+        selected = []
+        seen_sources = set()
+        for row in rows or []:
+            payload = _json_loads(row.get("payload_json"), {})
+            if not isinstance(payload, dict):
+                continue
+            matched = remaining.intersection(_projection_payload_symbols(payload))
+            source_key = _clean(row.get("source_world_id")) or _clean(row.get("dedupe_key"))
+            if not matched or source_key in seen_sources:
+                continue
+            selected.append((dict(row), payload, sorted(matched)))
+            seen_sources.add(source_key)
+            remaining.difference_update(matched)
+            if not remaining:
+                break
+
+        job_ids = []
+        queued_symbols = set()
+        statuses = []
+        for row, payload, symbols in selected:
+            graph = deserialize_portfolio_ontology(payload)
+            graph.worldview["scopeRepairRequestId"] = _clean(request_id)
+            graph.worldview["scopeRepairRequestsBySymbol"] = {
+                symbol: requested[symbol]
+                for symbol in symbols
+            }
+            graph.worldview["scopeRepairSourceProjectionKind"] = base_kind
+            result = self.enqueue(
+                "scope-repair",
+                world,
+                graph,
+                source_world_id=_clean(row.get("source_world_id")),
+                source_account_id=_clean(row.get("source_account_id")) or _clean(source_account_id),
+                source_observed_at=_clean(source_observed_at) or _clean(row.get("source_observed_at")),
+            )
+            statuses.append(_clean(result.get("status")))
+            job_id = _clean(result.get("jobId"))
+            if job_id:
+                job_ids.append(job_id)
+                queued_symbols.update(symbols)
+
+        return {
+            "status": (
+                "queued-durable-scope-repair"
+                if job_ids and not remaining
+                else "queued-partial-scope-repair"
+                if job_ids
+                else "deferred-scope-repair-source-packet"
+            ),
+            "saved": bool(job_ids),
+            "worldId": clean_world_id,
+            "requestId": _clean(request_id),
+            "jobIds": job_ids,
+            "queuedSymbolCount": len(queued_symbols),
+            "queuedSymbols": sorted(queued_symbols),
+            "missingSymbols": sorted(remaining),
+            "sourcePacketStatuses": statuses,
+            "reason": (
+                "No verified shared-world projection packet contains the requested symbols."
+                if not job_ids
+                else ""
+            ),
         }
 
     def claim(self, worker_id: str, limit: int = 4, lease_seconds: int = 300) -> List[Dict[str, object]]:

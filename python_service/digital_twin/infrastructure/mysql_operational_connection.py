@@ -464,6 +464,20 @@ MYSQL_SCHEMA = [
     ) ENGINE=InnoDB DEFAULT CHARSET=utf8mb4 COLLATE=utf8mb4_unicode_ci
     """,
     """
+    CREATE TABLE IF NOT EXISTS market_observation_reasoning_anchors (
+        account_id VARCHAR(191) NOT NULL,
+        symbol VARCHAR(64) NOT NULL,
+        completed_price DECIMAL(24,8) NOT NULL DEFAULT 0,
+        completed_at VARCHAR(40) NOT NULL DEFAULT '',
+        pending_price DECIMAL(24,8) NOT NULL DEFAULT 0,
+        pending_event_id VARCHAR(191) NOT NULL DEFAULT '',
+        pending_at VARCHAR(40) NOT NULL DEFAULT '',
+        updated_at VARCHAR(40) NOT NULL,
+        PRIMARY KEY (account_id, symbol),
+        KEY idx_market_observation_anchor_pending (pending_event_id, account_id, symbol)
+    ) ENGINE=InnoDB DEFAULT CHARSET=utf8mb4 COLLATE=utf8mb4_unicode_ci
+    """,
+    """
     CREATE TABLE IF NOT EXISTS monitor_snapshot_history (
         account_id VARCHAR(191) NOT NULL,
         generated_at VARCHAR(40) NOT NULL DEFAULT '',

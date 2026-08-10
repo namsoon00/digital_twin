@@ -3392,6 +3392,17 @@ class PortfolioOntologyProjectionRecorder:
             # generation for every successful polling cycle.
             scoped["scopePlan"] = incoming_scope_plan
             update.worldview["scopePlan"] = incoming_scope_plan
+            scope_repair = apply_scoped_abox_repair_epochs(
+                update,
+                active_market,
+                (update.worldview or {}).get("scopeRepairRequestsBySymbol") or {},
+            )
+            if scope_repair.get("applied"):
+                incoming_scope_plan = market_scope_plan_with_observation_times(
+                    update,
+                    (update.worldview or {}).get("scopePlan") or incoming_scope_plan,
+                )
+                update.worldview["scopePlan"] = incoming_scope_plan
             market_target_patch = {
                 "status": "full-contract-rebuild" if full_contract_rebuild else "full-manifest",
                 "selectedIncomingScopeCount": len(incoming_scope_plan),
@@ -3520,6 +3531,14 @@ class PortfolioOntologyProjectionRecorder:
                     "observationRefreshedScopeIds": refreshed_scope_ids,
                     "observationMetadata": observation_refresh,
                     "targetScopedManifestPatch": market_target_patch,
+                    "scopeRepair": {
+                        key: scope_repair.get(key)
+                        for key in [
+                            "status", "applied", "requestedScopeIds",
+                            "repairedScopeIds", "retainedRepairScopeIds",
+                        ]
+                        if key in scope_repair
+                    },
                     "reason": "공용 " + ("시장" if kind == "market" else "지식") + " 사실이 현재 활성 " + world_label + "와 같아 저장과 활성화를 생략했습니다.",
                 }
             update.worldview.update({

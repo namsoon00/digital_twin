@@ -758,6 +758,7 @@ class OntologyReasoningRunner:
         rulebox_prewarm_activity_probe: Callable = None,
         rulebox_prewarm_state_writer: Callable = None,
         maintenance_yield_state_probe: Callable = None,
+        market_observation_completion_recorder: Callable = None,
     ):
         self.event_reader = event_reader
         self.cursor_store = cursor_store
@@ -782,6 +783,7 @@ class OntologyReasoningRunner:
         self.rulebox_prewarm_activity_probe = rulebox_prewarm_activity_probe
         self.rulebox_prewarm_state_writer = rulebox_prewarm_state_writer
         self.maintenance_yield_state_probe = maintenance_yield_state_probe
+        self.market_observation_completion_recorder = market_observation_completion_recorder
 
     def refresh_operational_settings(self, settings: Dict[str, object] = None) -> Dict[str, object]:
         """Apply safe scheduling changes between persistent-sidecar turns.
@@ -1117,6 +1119,67 @@ class OntologyReasoningRunner:
         value.setdefault("status", "ready" if value["ready"] else "deferred-source-snapshot")
         return value
 
+    @staticmethod
+    def request_account_ids(event: object) -> set:
+        payload = event_payload(event)
+        values = [payload.get("accountId")]
+        raw = payload.get("accountIds")
+        if isinstance(raw, str):
+            values.append(raw)
+        elif isinstance(raw, (list, tuple, set)):
+            values.extend(raw)
+        return {
+            str(value or "").strip()
+            for value in values
+            if str(value or "").strip()
+        }
+
+    def reject_invalid_source_requests(
+        self,
+        selected_requests: Iterable[object],
+        invalid_account_ids: Iterable[str],
+    ) -> Dict[str, object]:
+        invalid = {
+            str(account_id or "").strip()
+            for account_id in invalid_account_ids or []
+            if str(account_id or "").strip()
+        }
+        selected = list(selected_requests or [])
+        rejected = [
+            event for event in selected
+            if not invalid or self.request_account_ids(event).intersection(invalid)
+        ]
+        if not rejected:
+            rejected = selected
+        entries = self.mailbox_entries_for_requests(rejected)
+        states = {}
+        acknowledge = getattr(self.mailbox_store, "acknowledge", None) if self.mailbox_enabled() else None
+        if callable(acknowledge) and entries:
+            try:
+                states.update(acknowledge(
+                    entries,
+                    state="expired",
+                    reason="permanent invalid source account scope",
+                ) or {})
+            except Exception:
+                states = {}
+        for event in rejected:
+            event_id = str(getattr(event, "event_id", "") or "").strip()
+            source_event_id = self.mailbox_source_event_id(event)
+            if source_event_id and source_event_id not in states:
+                states[source_event_id] = "expired"
+            elif event_id and event_id not in states:
+                states[event_id] = "expired"
+        terminal = self.persist_terminal_mailbox_events(states)
+        return {
+            "rejectedRequestEventIds": [
+                str(getattr(event, "event_id", "") or "").strip()
+                for event in rejected
+                if str(getattr(event, "event_id", "") or "").strip()
+            ],
+            "terminal": terminal,
+        }
+
     def maintenance_yield_preflight(self) -> Dict[str, object]:
         """Read a bounded ABox maintenance hand-off before a new TypeDB batch.
 
@@ -1309,6 +1372,9 @@ class OntologyReasoningRunner:
             metadata = self.mailbox_metadata(event)
             mailbox_key = str(metadata.get("mailboxKey") or "").strip()
             source_event_id = str(metadata.get("sourceEventId") or "").strip()
+            if not mailbox_key:
+                source_event_id = str(getattr(event, "event_id", "") or "").strip()
+                mailbox_key = "direct:" + source_event_id if source_event_id else ""
             symbols = event_symbols(event)
             symbol = symbols[0] if len(symbols) == 1 else ""
             if mailbox_key and source_event_id and not any(
@@ -1319,8 +1385,8 @@ class OntologyReasoningRunner:
                     "mailboxKey": mailbox_key,
                     "sourceEventId": source_event_id,
                     "symbol": symbol,
-                    "workClass": str(metadata.get("workClass") or "MARKET"),
-                    "reasoningLane": str(metadata.get("reasoningLane") or "REALTIME_REASONING"),
+                    "workClass": str(metadata.get("workClass") or domain_event_work_class(event) or "DIRECT"),
+                    "reasoningLane": str(metadata.get("reasoningLane") or event_reasoning_lane(event) or "REALTIME_REASONING"),
                 })
         return entries
 
@@ -3424,6 +3490,12 @@ class OntologyReasoningRunner:
         return True
 
     def event_freshness(self, event: object) -> Dict[str, object]:
+        if str(event_payload(event).get("trigger") or "").strip() == "scope-integrity-repair":
+            return {
+                "status": "maintenance-boundary-migrated",
+                "reason": "레거시 저장 무결성 복구 요청을 투자 추론 큐에서 제거합니다.",
+                "shouldProcess": False,
+            }
         if self.is_off_session_reference_transition(event):
             return {
                 "status": "off-session-reference",
@@ -5421,8 +5493,26 @@ class OntologyReasoningRunner:
             started = started.replace(tzinfo=timezone.utc)
         started_at = started.astimezone(timezone.utc).isoformat().replace("+00:00", "Z")
         started_monotonic = time.perf_counter()
+        isolated_failures = []
         try:
-            result = self._run_once(limit=limit, force=force)
+            result = {}
+            # A permanently invalid request is terminalized independently.
+            # Continue in the same scheduler turn so one bad account scope
+            # cannot consume the head slot until the next polling interval.
+            for _attempt in range(8):
+                result = self._run_once(limit=limit, force=force)
+                if not bool(result.pop("_continueImmediately", False)):
+                    break
+                isolated_failures.append({
+                    key: result.get(key)
+                    for key in [
+                        "status", "rejectedRequestEventIds", "invalidAccountIds",
+                        "deferredReason", "sourceSnapshotPreflight",
+                    ]
+                    if key in result
+                })
+            if isolated_failures:
+                result["isolatedRequestFailures"] = isolated_failures
         except Exception as error:
             self.record_execution_telemetry(
                 {"status": "error", "processedCount": 0, "alertCount": 0},
@@ -5779,6 +5869,25 @@ class OntologyReasoningRunner:
             }
         source_snapshot_preflight = self.source_snapshot_preflight(reasoning_context)
         if not source_snapshot_preflight.get("ready"):
+            if bool(source_snapshot_preflight.get("permanent")):
+                invalid_accounts = list(source_snapshot_preflight.get("invalidAccountIds") or [])
+                rejection = self.reject_invalid_source_requests(
+                    selected_requests,
+                    invalid_accounts,
+                )
+                return {
+                    "status": "rejected-invalid-source-account",
+                    "processedCount": len(rejection.get("rejectedRequestEventIds") or []),
+                    "alertCount": 0,
+                    "symbols": symbols,
+                    "invalidAccountIds": invalid_accounts,
+                    "rejectedRequestEventIds": list(rejection.get("rejectedRequestEventIds") or []),
+                    "sourceSnapshotPreflight": source_snapshot_preflight,
+                    "deferredReason": str(source_snapshot_preflight.get("reason") or "Invalid source account scope."),
+                    "_continueImmediately": len(requests) > len(rejection.get("rejectedRequestEventIds") or []),
+                    "coalescedEventCount": len(durable_superseded_ids),
+                    **queue_metadata,
+                }
             retry_after_seconds = int(
                 source_snapshot_preflight.get("retryAfterSeconds")
                 or self.projection_retry_seconds()
@@ -6094,6 +6203,32 @@ class OntologyReasoningRunner:
                 **queue_metadata,
             }
         self.mark_successful_projection(runner)
+        post_projection_started = time.perf_counter()
+        account_ids = [getattr(account, "account_id", "") for account in getattr(runner, "accounts", [])]
+        trigger_event_ids = []
+        for event in selected_requests:
+            source_event_id = self.mailbox_source_event_id(event)
+            if source_event_id and source_event_id not in trigger_event_ids:
+                trigger_event_ids.append(source_event_id)
+        market_observation_anchor_completion = {"status": "not-configured", "completedCount": 0}
+        if callable(self.market_observation_completion_recorder):
+            try:
+                market_observation_anchor_completion = dict(
+                    self.market_observation_completion_recorder(
+                        trigger_event_ids,
+                        account_ids=account_ids,
+                        symbols=symbols,
+                    ) or {}
+                )
+            except Exception as error:
+                # A missed anchor acknowledgement can only cause a later
+                # latest-state quote request. It must not invalidate a verified
+                # TypeDB generation or its investment result.
+                market_observation_anchor_completion = {
+                    "status": "error",
+                    "completedCount": 0,
+                    "reason": str(error)[:180],
+                }
         self.checkpoint_mailbox_work(
             claimed_mailbox_entries,
             "post-monitor-inference-verified",
@@ -6102,15 +6237,9 @@ class OntologyReasoningRunner:
                 "projectionGate": "ready",
                 "verifiedAccountIds": sorted(verified_projection_accounts),
                 "deliveryGuard": dict(getattr(runner, "last_delivery_guard_result", {}) or {}),
+                "marketObservationAnchorCompletion": market_observation_anchor_completion,
             },
         )
-        post_projection_started = time.perf_counter()
-        account_ids = [getattr(account, "account_id", "") for account in getattr(runner, "accounts", [])]
-        trigger_event_ids = []
-        for event in selected_requests:
-            source_event_id = self.mailbox_source_event_id(event)
-            if source_event_id and source_event_id not in trigger_event_ids:
-                trigger_event_ids.append(source_event_id)
         research_refresh_requests = []
         seen_research_request_ids = set()
         for event in list(selected_requests) + list(work.get("researchHandoffRequests") or []):
@@ -6366,6 +6495,7 @@ class OntologyReasoningRunner:
             "lastProjectionRuntime": self.last_projection_runtime(),
             "reasoningContext": reasoning_context,
             "deliveryRevisionGuard": delivery_revision_guard,
+            "marketObservationAnchorCompletion": market_observation_anchor_completion,
             "staleDeliverySymbolCount": len(stale_delivery_symbols),
             "mailboxAcknowledgeError": mailbox_ack_error,
             "maintenance": maintenance,

@@ -364,8 +364,9 @@ class MonitoringForceSnapshotTests(unittest.TestCase):
         )
         baseline = updated["metadata"]["marketObservationBaselines"]["AAPL"]
 
-        self.assertEqual(101.0, baseline["price"])
-        self.assertEqual(101.0, baseline["reasoningPrice"])
+        self.assertEqual(100.0, baseline["price"])
+        self.assertEqual(100.0, baseline["reasoningPrice"])
+        self.assertEqual(101.0, baseline["pendingReasoningPrice"])
         self.assertEqual(100.0, baseline["outboxPrice"])
         self.assertEqual("2026-07-30T00:00:00Z", baseline["outboxQueuedAt"])
         self.assertEqual("2026-07-30T00:00:00Z", baseline["reasoningQueuedAt"])
@@ -380,7 +381,8 @@ class MonitoringForceSnapshotTests(unittest.TestCase):
             }],
         )
         deferred_baseline = deferred["metadata"]["marketObservationBaselines"]["AAPL"]
-        self.assertEqual(102.0, deferred_baseline["reasoningPrice"])
+        self.assertEqual(100.0, deferred_baseline["reasoningPrice"])
+        self.assertEqual(102.0, deferred_baseline["pendingReasoningPrice"])
         self.assertEqual(100.0, deferred_baseline["outboxPrice"])
         self.assertEqual("2026-07-30T00:00:00Z", deferred_baseline["outboxQueuedAt"])
 

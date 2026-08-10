@@ -4,7 +4,7 @@ import hashlib
 from datetime import datetime, timedelta, timezone
 from typing import Dict, Iterable, List
 
-from ..domain.events import DomainEvent, ontology_reasoning_requested_event
+from ..domain.events import DomainEvent
 from ..domain.ontology_runtime_operations import (
     bounded_background_work_fairness,
     scoped_abox_maintenance_health,
@@ -49,6 +49,7 @@ class OntologyMaintenanceRunner:
         reasoning_queue_probe=None,
         capacity_guard=None,
         event_publisher=None,
+        scope_repair_outbox=None,
     ):
         self.ontology_repository = ontology_repository
         self.state_store = state_store
@@ -56,6 +57,7 @@ class OntologyMaintenanceRunner:
         self.reasoning_queue_probe = reasoning_queue_probe
         self.capacity_guard = capacity_guard
         self.event_publisher = event_publisher
+        self.scope_repair_outbox = scope_repair_outbox
         self.last_background_fairness: Dict[str, object] = {}
 
     def policy(self) -> Dict[str, object]:
@@ -169,7 +171,7 @@ class OntologyMaintenanceRunner:
         audit: Dict[str, object],
         state: Dict[str, object],
     ) -> tuple[Dict[str, object], Dict[str, Dict[str, object]]]:
-        """Publish one bounded subject repair request for verified drift."""
+        """Queue one bounded maintenance repair outside investment reasoning."""
 
         repairs = self.scope_repair_state(state)
         previous = dict(repairs.get(world_id) or {})
@@ -244,43 +246,54 @@ class OntologyMaintenanceRunner:
             symbol: {"requestId": request_id, "scopeIds": scope_ids}
             for symbol, scope_ids in sorted(by_symbol.items())
         }
-        source_event = DomainEvent(
-            name="ontology.scope-integrity-drift-detected",
+        queue_status = "not-configured"
+        queue_result: Dict[str, object] = {}
+        try:
+            enqueue = getattr(self.scope_repair_outbox, "enqueue_scope_repair", None)
+            if callable(enqueue):
+                queue_result = dict(enqueue(
+                    world_id=world_id,
+                    request_id=request_id,
+                    repair_requests_by_symbol=repair_requests,
+                    source_account_id=text(audit.get("accountId")),
+                    source_observed_at=utc_now_iso(),
+                ) or {})
+                queue_status = text(queue_result.get("status")) or "queued"
+        except Exception as error:  # noqa: BLE001 - retry remains in maintenance state.
+            queue_status = "error"
+            queue_reason = str(error)[:220]
+        else:
+            queue_reason = text(queue_result.get("reason"))
+
+        # Keep a compact audit event, but never publish this command as
+        # ``ontology.reasoning.requested``. Scope repair owns TypeDB storage
+        # integrity and must not compete with investment inference work.
+        audit_event = DomainEvent(
+            name="ontology.scope-integrity-repair-requested",
             aggregate_id=world_id,
             payload={
                 "accountId": text(audit.get("accountId")),
                 "worldId": world_id,
+                "requestId": request_id,
+                "symbols": sorted(by_symbol),
+                "scopeRepairRequestsBySymbol": repair_requests,
+                "queueStatus": queue_status,
+                "jobIds": list(queue_result.get("jobIds") or []),
                 "sourceObservedAt": utc_now_iso(),
             },
         )
-        event = ontology_reasoning_requested_event(
-            source_event,
-            trigger="scope-integrity-repair",
-            symbols=sorted(by_symbol),
-            changed_count=len(mismatches),
-            observed_count=int(audit.get("checkedScopeCount") or 0),
-            fact_types=["DataQuality"],
-            fact_types_by_symbol={symbol: ["DataQuality"] for symbol in by_symbol},
-            changed_fields_by_symbol={symbol: ["scopeIntegrity"] for symbol in by_symbol},
-            fact_revisions_by_symbol={symbol: request_id for symbol in by_symbol},
-            scope_repair_requests_by_symbol=repair_requests,
-            reason="Active scoped ABox physical row count differs from its verified Manifest.",
-        )
-        publish_status = "not-configured"
         try:
             if self.event_publisher:
                 if hasattr(self.event_publisher, "publish"):
-                    self.event_publisher.publish(event)
+                    self.event_publisher.publish(audit_event)
                 else:
-                    self.event_publisher.handle(event)
-                publish_status = "published"
-        except Exception as error:  # noqa: BLE001 - retry remains in maintenance state.
-            publish_status = "error"
-            publish_reason = str(error)[:220]
-        else:
-            publish_reason = ""
+                    self.event_publisher.handle(audit_event)
+        except Exception:
+            # The durable repair command remains authoritative. An audit-log
+            # failure is reported in maintenance state on the next pass.
+            pass
         value = {
-            "status": publish_status,
+            "status": queue_status,
             "worldId": world_id,
             "requestId": request_id,
             "signature": signature,
@@ -288,7 +301,11 @@ class OntologyMaintenanceRunner:
             "scopeIds": sorted({item for values in by_symbol.values() for item in values}),
             "sharedScopeIds": sorted(set(shared_scope_ids)),
             "requestedAt": utc_now_iso(),
-            "reason": publish_reason,
+            "reason": queue_reason,
+            "jobIds": list(queue_result.get("jobIds") or []),
+            "queuedSymbolCount": int(queue_result.get("queuedSymbolCount") or 0),
+            "missingSymbols": list(queue_result.get("missingSymbols") or []),
+            "workBoundary": "ontology-world-projection-outbox",
             "automaticFullProjectionUsed": False,
         }
         repairs[world_id] = value

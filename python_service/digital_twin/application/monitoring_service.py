@@ -310,6 +310,18 @@ class MonitorRunner:
                 reason=projection["reason"],
             )
             return snapshot, []
+        refresh_reasoning_anchors = getattr(
+            self.store,
+            "refresh_market_observation_reasoning_anchors",
+            None,
+        )
+        if callable(refresh_reasoning_anchors) and not self.source_snapshot_replay:
+            try:
+                refresh_reasoning_anchors(snapshot.account_id)
+            except Exception:
+                # Anchor refresh is an operational optimization. The durable
+                # pending request remains authoritative when this read fails.
+                pass
         previous = self.store.previous.get(snapshot.account_id) or {}
         persisted_previous = (
             snapshot.metadata.get("previousMonitorState")

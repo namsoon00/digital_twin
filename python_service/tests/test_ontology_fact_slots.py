@@ -1,4 +1,5 @@
 import unittest
+from copy import deepcopy
 
 from digital_twin.domain.ontology_fact_slots import (
     build_fact_slot_projection_plan,
@@ -14,6 +15,90 @@ from digital_twin.domain.ontology_scopes import (
 
 
 class OntologyFactSlotTests(unittest.TestCase):
+    def test_precise_market_fields_route_only_changed_fact_families(self):
+        plan = build_fact_slot_projection_plan(
+            ["005930"],
+            ["market"],
+            requested_fact_families_by_symbol={"005930": ["market"]},
+            changed_fields_by_symbol={
+                "005930": ["current_price", "profit_loss_rate"],
+            },
+        )
+        scopes = {
+            "symbol:005930:market": {
+                "scopeFamily": "market",
+                "impactScopeFamilies": ["market"],
+                "semanticFingerprints": {"market": "changed"},
+            },
+            "symbol:005930:position": {
+                "scopeFamily": "position",
+                "impactScopeFamilies": ["position", "market"],
+                "semanticFingerprints": {"position": "changed"},
+            },
+            "symbol:005930:temporal": {
+                "scopeFamily": "temporal",
+                "impactScopeFamilies": ["temporal", "market"],
+                "semanticFingerprints": {"temporal": "changed"},
+            },
+            "symbol:005930:flow": {
+                "scopeFamily": "flow",
+                "impactScopeFamilies": ["flow", "market"],
+                "semanticFingerprints": {"flow": "changed"},
+            },
+            "link:symbol:005930:market": {
+                "scopeFamily": "link",
+                "impactScopeFamilies": ["market"],
+                "semanticFingerprints": {"market": "changed"},
+            },
+        }
+
+        selection = select_fact_slot_scope_ids(scopes, scopes.keys(), plan)
+
+        self.assertEqual(["005930"], plan["preciseFieldRoutingSymbols"])
+        self.assertEqual(
+            ["market", "position"],
+            plan["slotFamiliesBySymbol"]["005930"],
+        )
+        self.assertEqual(
+            [
+                "link:symbol:005930:market",
+                "symbol:005930:market",
+                "symbol:005930:position",
+            ],
+            selection["selectedScopeIds"],
+        )
+        self.assertEqual(
+            ["symbol:005930:flow", "symbol:005930:temporal"],
+            selection["deferredScopeIds"],
+        )
+
+    def test_unknown_changed_field_keeps_conservative_family_closure(self):
+        plan = build_fact_slot_projection_plan(
+            ["005930"],
+            ["market"],
+            requested_fact_families_by_symbol={"005930": ["market"]},
+            changed_fields_by_symbol={"005930": ["future_metric"]},
+        )
+
+        self.assertEqual([], plan["preciseFieldRoutingSymbols"])
+        self.assertEqual(
+            ["future_metric"],
+            plan["unclassifiedChangedFieldsBySymbol"]["005930"],
+        )
+        self.assertIn("temporal", plan["slotFamiliesBySymbol"]["005930"])
+
+    def test_market_observation_followup_retains_complete_market_closure(self):
+        plan = build_fact_slot_projection_plan(
+            ["005930"],
+            ["market"],
+            requested_fact_families_by_symbol={"005930": ["market"]},
+            changed_fields_by_symbol={"005930": ["marketObservationFollowup"]},
+        )
+
+        self.assertEqual([], plan["preciseFieldRoutingSymbols"])
+        self.assertIn("temporal", plan["slotFamiliesBySymbol"]["005930"])
+        self.assertIn("position", plan["slotFamiliesBySymbol"]["005930"])
+
     def test_market_event_selects_price_derived_facts_and_defers_evidence(self):
         plan = build_fact_slot_projection_plan(["005930"], ["market"])
         scopes = {
@@ -155,7 +240,7 @@ class OntologyFactSlotTests(unittest.TestCase):
             "status": "ok",
             "scopedAboxManifestVersion": SCOPED_ABOX_MANIFEST_VERSION,
             "scopeTopologyVersion": SCOPED_ABOX_SCOPE_TOPOLOGY_VERSION,
-            "scopePlan": [dict(item) for item in first["scopePlan"]],
+            "scopePlan": [deepcopy(item) for item in first["scopePlan"]],
             "scopeGenerationIds": dict(first["scopeGenerationIds"]),
             "scopeFingerprints": dict(first["scopeFingerprints"]),
         }
@@ -175,6 +260,35 @@ class OntologyFactSlotTests(unittest.TestCase):
         self.assertTrue(any(":market" in scope_id for scope_id in selection["selectedIncomingScopeIds"]))
         self.assertFalse(any(":evidence" in scope_id for scope_id in selection["selectedIncomingScopeIds"]))
         self.assertTrue(any(":evidence" in scope_id for scope_id in selection["deferredScopeIds"]))
+        selected_trace = {
+            item["scopeId"]: item
+            for item in selection["scopeSelectionTrace"]["selected"]
+        }
+        market_scope = next(
+            scope_id
+            for scope_id in selected_trace
+            if scope_id.startswith("symbol:005930:market")
+        )
+        self.assertIn("semantic-value-change", selected_trace[market_scope]["reasons"])
+        self.assertIn("event-fact-slot", selected_trace[market_scope]["reasons"])
+        self.assertIn("market", selected_trace[market_scope]["semanticChangedFamilies"])
+        deferred_trace = {
+            item["scopeId"]: item
+            for item in selection["scopeSelectionTrace"]["deferred"]
+        }
+        evidence_scope = next(
+            scope_id
+            for scope_id in deferred_trace
+            if scope_id.startswith("symbol:005930:evidence")
+        )
+        self.assertIn(
+            "semantic-value-change",
+            deferred_trace[evidence_scope]["reasons"],
+        )
+        self.assertIn(
+            "deferred-unrelated-event-fact-slot",
+            deferred_trace[evidence_scope]["reasons"],
+        )
 
 
 if __name__ == "__main__":

@@ -137,7 +137,50 @@ def reasoning_stage_records(
         "workClasses": list(request.get("workClasses") or []),
         "impactScopes": list(request.get("impactScopes") or []),
         "reasoningLanes": list(request.get("reasoningLanes") or []),
+        "factTypes": list(request.get("factTypes") or []),
+        "requestedScopeFamiliesBySymbol": dict(
+            request.get("requestedScopeFamiliesBySymbol") or {}
+        ),
+        "changedFieldsBySymbol": dict(request.get("changedFieldsBySymbol") or {}),
         "revisionVectorsBySymbol": dict(request.get("revisionVectorsBySymbol") or {}),
+    })
+    projection_scope = _mapping(values.get("projectionScope"))
+    target_patch = _mapping(projection_scope.get("targetScopedManifestPatch"))
+    scope_trace = _mapping(target_patch.get("scopeSelectionTrace"))
+    selected_scope_rows = [
+        dict(item)
+        for item in (scope_trace.get("selected") or [])[:40]
+        if isinstance(item, Mapping)
+    ]
+    deferred_scope_rows = [
+        dict(item)
+        for item in (scope_trace.get("deferred") or [])[:40]
+        if isinstance(item, Mapping)
+    ]
+    add("abox-scope-selection", _text(target_patch.get("status")) or "not-run", detail={
+        "mode": _text(target_patch.get("mode")),
+        "factSlotStatus": _text(target_patch.get("factSlotStatus")),
+        "factSlotFamilies": list(target_patch.get("factSlotFamilies") or []),
+        "factSlotFamiliesBySymbol": dict(
+            target_patch.get("factSlotFamiliesBySymbol") or {}
+        ),
+        "changedFieldsBySymbol": dict(
+            target_patch.get("factSlotChangedFieldsBySymbol") or {}
+        ),
+        "preciseFieldRoutingSymbols": list(
+            target_patch.get("factSlotPreciseFieldRoutingSymbols") or []
+        ),
+        "unclassifiedChangedFieldsBySymbol": dict(
+            target_patch.get("factSlotUnclassifiedChangedFieldsBySymbol") or {}
+        ),
+        "fallbackReason": _text(
+            target_patch.get("factSlotFallbackReason")
+            or target_patch.get("fallbackReason")
+        ),
+        "selectedScopeCount": _integer(target_patch.get("selectedIncomingScopeCount")),
+        "deferredScopeCount": _integer(target_patch.get("deferredScopeCount")),
+        "selectedScopes": selected_scope_rows,
+        "deferredScopes": deferred_scope_rows,
     })
     for raw_key, raw_duration in runtime_stages.items():
         stage_key = _text(raw_key)

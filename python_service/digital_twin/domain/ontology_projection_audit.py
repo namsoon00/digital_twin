@@ -492,6 +492,7 @@ def projection_result_summary(result: Dict[str, object]) -> Dict[str, object]:
     impact_plan = compact_inference_impact_plan(values.get("inferenceImpactPlan") or {})
     projection_scope = dict(values.get("projectionScope") or {})
     target_patch = dict(projection_scope.get("targetScopedManifestPatch") or {})
+    scope_selection_trace = dict(target_patch.get("scopeSelectionTrace") or {})
     runtime_identity = dict(values.get("runtimeIdentity") or {})
     ontology_world = dict(values.get("ontologyWorld") or {})
     market_world = dict(values.get("marketWorld") or {})
@@ -547,6 +548,55 @@ def projection_result_summary(result: Dict[str, object]) -> Dict[str, object]:
             "fullReconcileDeferralReason": str(
                 target_patch.get("fullReconcileDeferralReason") or ""
             )[:160],
+            "factSlotFamiliesBySymbol": {
+                str(symbol or "").upper().strip(): sorted({
+                    str(value or "").strip()
+                    for value in values or []
+                    if str(value or "").strip()
+                })[:20]
+                for symbol, values in dict(
+                    target_patch.get("factSlotFamiliesBySymbol") or {}
+                ).items()
+                if str(symbol or "").strip()
+            },
+            "factSlotChangedFieldsBySymbol": {
+                str(symbol or "").upper().strip(): sorted({
+                    str(value or "").strip()
+                    for value in values or []
+                    if str(value or "").strip()
+                })[:30]
+                for symbol, values in dict(
+                    target_patch.get("factSlotChangedFieldsBySymbol") or {}
+                ).items()
+                if str(symbol or "").strip()
+            },
+            "factSlotPreciseFieldRoutingSymbols": _clean_symbols(
+                target_patch.get("factSlotPreciseFieldRoutingSymbols") or []
+            ),
+            "factSlotUnclassifiedChangedFieldsBySymbol": {
+                str(symbol or "").upper().strip(): sorted({
+                    str(value or "").strip()
+                    for value in values or []
+                    if str(value or "").strip()
+                })[:30]
+                for symbol, values in dict(
+                    target_patch.get("factSlotUnclassifiedChangedFieldsBySymbol") or {}
+                ).items()
+                if str(symbol or "").strip()
+            },
+            "scopeSelectionTrace": {
+                "version": str(scope_selection_trace.get("version") or ""),
+                "selected": [
+                    dict(item)
+                    for item in (scope_selection_trace.get("selected") or [])[:40]
+                    if isinstance(item, Mapping)
+                ],
+                "deferred": [
+                    dict(item)
+                    for item in (scope_selection_trace.get("deferred") or [])[:40]
+                    if isinstance(item, Mapping)
+                ],
+            },
         },
         "inferenceImpactPlan": impact_plan,
         "priorInferenceReuse": {

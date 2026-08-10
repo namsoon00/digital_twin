@@ -1141,6 +1141,22 @@ class PortfolioOntologyProjectionRecorder:
                     material_snapshot_id = str(
                         scoped_identity.get("manifestId") or material_snapshot_id
                     )
+                    raw_scope_trace = dict(
+                        applied_target_patch.get("scopeSelectionTrace") or {}
+                    )
+                    scope_selection_trace = {
+                        "version": str(raw_scope_trace.get("version") or ""),
+                        "selected": [
+                            dict(item)
+                            for item in (raw_scope_trace.get("selected") or [])[:40]
+                            if isinstance(item, dict)
+                        ],
+                        "deferred": [
+                            dict(item)
+                            for item in (raw_scope_trace.get("deferred") or [])[:40]
+                            if isinstance(item, dict)
+                        ],
+                    }
                     target_scoped_patch = {
                         "status": "applied",
                         "mode": "incremental-target-scoped-manifest-patch",
@@ -1169,9 +1185,24 @@ class PortfolioOntologyProjectionRecorder:
                         "factSlotFamilies": list(
                             (applied_target_patch.get("factSlot") or {}).get("slotFamilies") or []
                         )[:20],
+                        "factSlotFamiliesBySymbol": dict(
+                            (applied_target_patch.get("factSlot") or {}).get("slotFamiliesBySymbol") or {}
+                        ),
+                        "factSlotChangedFieldsBySymbol": dict(
+                            (applied_target_patch.get("factSlot") or {}).get("changedFieldsBySymbol") or {}
+                        ),
+                        "factSlotPreciseFieldRoutingSymbols": list(
+                            (applied_target_patch.get("factSlot") or {}).get("preciseFieldRoutingSymbols") or []
+                        )[:20],
+                        "factSlotUnclassifiedChangedFieldsBySymbol": dict(
+                            (applied_target_patch.get("factSlot") or {}).get(
+                                "unclassifiedChangedFieldsBySymbol"
+                            ) or {}
+                        ),
                         "factSlotFallbackReason": str(
                             (applied_target_patch.get("factSlot") or {}).get("fallbackReason") or ""
                         ),
+                        "scopeSelectionTrace": scope_selection_trace,
                         "fullReconcileMinutes": self.scoped_full_reconcile_minutes(),
                         "fullReconcileDeferred": bool(
                             target_scoped_patch.get("fullReconcileDeferred")
@@ -1308,6 +1339,18 @@ class PortfolioOntologyProjectionRecorder:
                 "selectedScopeCount": int(target_scoped_patch.get("factSlotSelectedScopeCount") or 0),
                 "deferredScopeCount": int(target_scoped_patch.get("factSlotDeferredScopeCount") or 0),
                 "slotFamilies": list(target_scoped_patch.get("factSlotFamilies") or [])[:20],
+                "slotFamiliesBySymbol": dict(
+                    target_scoped_patch.get("factSlotFamiliesBySymbol") or {}
+                ),
+                "changedFieldsBySymbol": dict(
+                    target_scoped_patch.get("factSlotChangedFieldsBySymbol") or {}
+                ),
+                "preciseFieldRoutingSymbols": list(
+                    target_scoped_patch.get("factSlotPreciseFieldRoutingSymbols") or []
+                )[:20],
+                "unclassifiedChangedFieldsBySymbol": dict(
+                    target_scoped_patch.get("factSlotUnclassifiedChangedFieldsBySymbol") or {}
+                ),
                 "fallbackReason": str(target_scoped_patch.get("factSlotFallbackReason") or ""),
             }
             if str(target_scoped_patch.get("status") or "") == "applied":
@@ -5318,6 +5361,9 @@ class PortfolioOntologyProjectionRecorder:
                 preliminary.get("requestedFactFamilies") or [],
                 requested_fact_families_by_symbol=(reasoning_context or {}).get(
                     "requestedScopeFamiliesBySymbol"
+                ) or {},
+                changed_fields_by_symbol=(reasoning_context or {}).get(
+                    "changedFieldsBySymbol"
                 ) or {},
             ),
         }

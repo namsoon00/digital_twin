@@ -1707,21 +1707,78 @@ def select_target_scoped_manifest_patch(
             or _clean(active_item.get("fingerprint")) != _clean(item.get("fingerprint"))
         )
 
+    def changed_mapping_keys(
+        active_item: Mapping[str, object],
+        incoming_item: Mapping[str, object],
+        key: str,
+    ) -> List[str]:
+        before = dict(active_item.get(key) or {})
+        after = dict(incoming_item.get(key) or {})
+        return sorted({
+            _clean(value)
+            for value in set(before) | set(after)
+            if _clean(value) and _clean(before.get(value)) != _clean(after.get(value))
+        })
+
+    selection_reasons: Dict[str, Set[str]] = {}
+    semantic_changes_by_scope: Dict[str, List[str]] = {}
+    dependency_changes_by_scope: Dict[str, List[str]] = {}
+
+    def record_direct_change(scope_id: str, item: Mapping[str, object]) -> None:
+        active_item = active_by_scope.get(scope_id) or {}
+        reasons = selection_reasons.setdefault(scope_id, set())
+        if not active_item:
+            reasons.add("new-scope")
+            return
+        semantic_changes = changed_mapping_keys(
+            active_item,
+            item,
+            "semanticFingerprints",
+        )
+        dependency_changes = changed_mapping_keys(
+            active_item,
+            item,
+            "semanticDependencyFingerprints",
+        )
+        if semantic_changes:
+            semantic_changes_by_scope[scope_id] = semantic_changes
+            reasons.add("semantic-value-change")
+        if dependency_changes:
+            dependency_changes_by_scope[scope_id] = dependency_changes
+            reasons.add("rule-dependency-change")
+        if reasons:
+            return
+        if _clean(active_item.get("fingerprint")) != _clean(item.get("fingerprint")):
+            reasons.add("persistence-dependency-rebind")
+        elif _clean(active_item.get("generationId")) != _clean(item.get("generationId")):
+            reasons.add("generation-only-change")
+
     # A target symbol can have many independently versioned fact families.
     # Rewriting all of them for one changed quote defeats scoped persistence;
     # select only changed target/shared scopes and let stable active endpoint
     # generations satisfy the remaining links.
-    selected: Set[str] = {
-        scope_id
-        for scope_id, item in incoming.items()
-        if is_requested_or_shared(scope_id) and changed_from_active(scope_id, item)
-    }
+    selected: Set[str] = set()
+    for scope_id, item in incoming.items():
+        if not is_requested_or_shared(scope_id) or not changed_from_active(scope_id, item):
+            continue
+        selected.add(scope_id)
+        record_direct_change(scope_id, item)
     fact_slot_selection = select_fact_slot_scope_ids(
         incoming,
         selected,
         fact_slot_plan,
     )
     selected = set(fact_slot_selection.get("selectedScopeIds") or selected)
+    if bool(fact_slot_selection.get("enabled")):
+        for scope_id in selected:
+            selection_reasons.setdefault(scope_id, set()).add("event-fact-slot")
+        for scope_id in fact_slot_selection.get("deferredScopeIds") or []:
+            selection_reasons.setdefault(scope_id, set()).add(
+                "deferred-unrelated-event-fact-slot"
+            )
+    elif selected:
+        for scope_id in selected:
+            selection_reasons.setdefault(scope_id, set()).add("conservative-fallback")
 
     # A target-scoped quote follow-up is a partial current-state input. Its
     # absent scope rows have no deletion meaning; they merely remain on the
@@ -1794,13 +1851,22 @@ def select_target_scoped_manifest_patch(
     # generation rather than unnecessarily rolling its entire fact family.
     node_scopes = _graph_node_scopes(graph)
 
-    def include_missing_dependency(scope_id: str, missing: List[str]) -> None:
+    def include_missing_dependency(
+        scope_id: str,
+        missing: List[str],
+        reason: str,
+    ) -> None:
         if scope_id in selected:
+            if reason:
+                selection_reasons.setdefault(scope_id, set()).add(reason)
             return
         if scope_id not in incoming:
             missing.append(scope_id)
             return
         selected.add(scope_id)
+        selection_reasons.setdefault(scope_id, set()).add(
+            reason or "required-missing-dependency"
+        )
 
     missing_endpoints: List[str] = []
     changed = True
@@ -1812,7 +1878,11 @@ def select_target_scoped_manifest_patch(
             for dependency in row.get("dependencyScopeIds") or []:
                 dependency_id = _clean(dependency)
                 if dependency_id and dependency_id not in retained_active_by_scope:
-                    include_missing_dependency(dependency_id, missing_endpoints)
+                    include_missing_dependency(
+                        dependency_id,
+                        missing_endpoints,
+                        "required-missing-dependency",
+                    )
         for relation in graph.relations:
             properties = dict(relation.properties or {})
             owner_scope = _clean(properties.get("aboxScopeId"))
@@ -1821,7 +1891,11 @@ def select_target_scoped_manifest_patch(
             for endpoint in (_clean(relation.source), _clean(relation.target)):
                 endpoint_scope = node_scopes.get(endpoint, "")
                 if endpoint_scope and endpoint_scope not in retained_active_by_scope:
-                    include_missing_dependency(endpoint_scope, missing_endpoints)
+                    include_missing_dependency(
+                        endpoint_scope,
+                        missing_endpoints,
+                        "required-link-endpoint",
+                    )
         support_scopes = dict(worldview.get("supportRelationScopes") or {})
         for evidence in graph.evidence:
             key = support_relation_key("HAS_EVIDENCE", evidence.subject, evidence.evidence_id)
@@ -1831,7 +1905,11 @@ def select_target_scoped_manifest_patch(
             for endpoint in (_clean(evidence.subject), _clean(evidence.evidence_id)):
                 endpoint_scope = node_scopes.get(endpoint, "")
                 if endpoint_scope and endpoint_scope not in retained_active_by_scope:
-                    include_missing_dependency(endpoint_scope, missing_endpoints)
+                    include_missing_dependency(
+                        endpoint_scope,
+                        missing_endpoints,
+                        "required-evidence-endpoint",
+                    )
         changed = len(selected) != before
 
     if missing_endpoints:
@@ -1854,6 +1932,29 @@ def select_target_scoped_manifest_patch(
             or _clean((active_by_scope.get(scope_id) or {}).get("fingerprint")) != _clean(item.get("fingerprint"))
         )
     ]
+
+    def selection_trace(scope_ids: Iterable[str], disposition: str) -> List[Dict[str, object]]:
+        rows = []
+        for scope_id in sorted({_clean(value) for value in scope_ids if _clean(value)}):
+            item = incoming.get(scope_id) or active_by_scope.get(scope_id) or {}
+            reasons = sorted(selection_reasons.get(scope_id) or [])
+            if disposition == "deferred" and not reasons:
+                reasons = ["unrelated-event-fact-slot"]
+            rows.append({
+                "scopeId": scope_id,
+                "scopeFamily": _clean(item.get("scopeFamily")) or scope_family(scope_id),
+                "symbol": scope_symbol(scope_id),
+                "disposition": disposition,
+                "reasons": reasons,
+                "semanticChangedFamilies": list(
+                    semantic_changes_by_scope.get(scope_id) or []
+                ),
+                "changedDependencyKeys": list(
+                    dependency_changes_by_scope.get(scope_id) or []
+                ),
+            })
+        return rows
+
     return {
         **base,
         "status": "ready",
@@ -1865,6 +1966,11 @@ def select_target_scoped_manifest_patch(
         "retiredScopeIds": retired_scope_ids,
         "removedRelevantScopeIds": removed_relevant_scopes,
         "factSlot": fact_slot_selection,
+        "scopeSelectionTrace": {
+            "version": "target-scope-selection-trace-v1",
+            "selected": selection_trace(selected, "selected"),
+            "deferred": selection_trace(deferred, "deferred"),
+        },
     }
 
 

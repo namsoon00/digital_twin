@@ -1313,6 +1313,12 @@ def build_projection_runtime_observation(
     runtime_identity = dict(runtime_identity or {}) if isinstance(runtime_identity, Mapping) else {}
     target_patch = projection_scope.get("targetScopedManifestPatch")
     target_patch = dict(target_patch or {}) if isinstance(target_patch, Mapping) else {}
+    scope_selection_trace = target_patch.get("scopeSelectionTrace")
+    scope_selection_trace = (
+        dict(scope_selection_trace or {})
+        if isinstance(scope_selection_trace, Mapping)
+        else {}
+    )
     relation_persistence = compact_abox_relation_persistence(values.get("relationPersistence"))
     stages = _stage_timings(values)
     native_rule_timing = native_rule_timing_profile(execution)
@@ -1423,7 +1429,62 @@ def build_projection_runtime_observation(
                 "factSlotDeferredScopeCount": _integer(target_patch.get("factSlotDeferredScopeCount")),
                 "factSlotFamilies": list(target_patch.get("factSlotFamilies") or [])[:20],
                 "factSlotFallbackReason": _text(target_patch.get("factSlotFallbackReason")),
+                "factSlotFamiliesBySymbol": {
+                    _text(symbol).upper(): [
+                        _text(value)
+                        for value in (families or [])[:20]
+                        if _text(value)
+                    ]
+                    for symbol, families in dict(
+                        target_patch.get("factSlotFamiliesBySymbol") or {}
+                    ).items()
+                    if _text(symbol)
+                },
+                "factSlotChangedFieldsBySymbol": {
+                    _text(symbol).upper(): [
+                        _text(value)
+                        for value in (fields or [])[:30]
+                        if _text(value)
+                    ]
+                    for symbol, fields in dict(
+                        target_patch.get("factSlotChangedFieldsBySymbol") or {}
+                    ).items()
+                    if _text(symbol)
+                },
+                "factSlotPreciseFieldRoutingSymbols": [
+                    _text(symbol).upper()
+                    for symbol in (
+                        target_patch.get("factSlotPreciseFieldRoutingSymbols") or []
+                    )[:20]
+                    if _text(symbol)
+                ],
+                "factSlotUnclassifiedChangedFieldsBySymbol": {
+                    _text(symbol).upper(): [
+                        _text(value)
+                        for value in (fields or [])[:30]
+                        if _text(value)
+                    ]
+                    for symbol, fields in dict(
+                        target_patch.get(
+                            "factSlotUnclassifiedChangedFieldsBySymbol"
+                        ) or {}
+                    ).items()
+                    if _text(symbol)
+                },
                 "fullReconcileMinutes": _number(target_patch.get("fullReconcileMinutes")),
+                "scopeSelectionTrace": {
+                    "version": _text(scope_selection_trace.get("version")),
+                    "selected": [
+                        dict(item)
+                        for item in (scope_selection_trace.get("selected") or [])[:40]
+                        if isinstance(item, Mapping)
+                    ],
+                    "deferred": [
+                        dict(item)
+                        for item in (scope_selection_trace.get("deferred") or [])[:40]
+                        if isinstance(item, Mapping)
+                    ],
+                },
             },
         },
         "inference": {

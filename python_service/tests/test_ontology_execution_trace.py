@@ -30,6 +30,33 @@ class OntologyExecutionTraceTests(unittest.TestCase):
         result = {
             "status": "ok",
             "runtimeStages": {"graphAssemblyMs": 1200, "nativeInferenceMs": 9500},
+            "projectionScope": {
+                "targetScopedManifestPatch": {
+                    "status": "applied",
+                    "mode": "incremental-target-scoped-manifest-patch",
+                    "selectedIncomingScopeCount": 1,
+                    "deferredScopeCount": 1,
+                    "factSlotStatus": "applied",
+                    "factSlotFamilies": ["market"],
+                    "scopeSelectionTrace": {
+                        "version": "target-scope-selection-trace-v1",
+                        "selected": [{
+                            "scopeId": "symbol:035420:market",
+                            "scopeFamily": "market",
+                            "symbol": "035420",
+                            "disposition": "selected",
+                            "reasons": ["semantic-value-change", "event-fact-slot"],
+                        }],
+                        "deferred": [{
+                            "scopeId": "symbol:035420:evidence",
+                            "scopeFamily": "evidence",
+                            "symbol": "035420",
+                            "disposition": "deferred",
+                            "reasons": ["unrelated-event-fact-slot"],
+                        }],
+                    },
+                },
+            },
             "inferenceImpactPlan": {"candidateRuleIds": ["rule.price"]},
             "ruleboxExecution": {
                 "status": "ok",
@@ -81,6 +108,16 @@ class OntologyExecutionTraceTests(unittest.TestCase):
         )
         self.assertEqual(7000, native_query_stage["durationMs"])
         self.assertEqual("nativeInferenceMs", native_query_stage["detail"]["nestedUnder"])
+        scope_stage = next(
+            item for item in trace["stages"]
+            if item["stageKey"] == "abox-scope-selection"
+        )
+        self.assertEqual("applied", scope_stage["status"])
+        self.assertEqual(1, scope_stage["detail"]["selectedScopeCount"])
+        self.assertEqual(
+            "symbol:035420:market",
+            scope_stage["detail"]["selectedScopes"][0]["scopeId"],
+        )
         rules = {item["ruleId"]: item for item in trace["rules"]}
         self.assertEqual("matched", rules["rule.price"]["status"])
         self.assertEqual("changed-rule-dependency", rules["rule.price"]["selectedReason"])

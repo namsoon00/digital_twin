@@ -8,6 +8,7 @@ when a scope cannot be classified safely.
 
 from __future__ import annotations
 
+import re
 from typing import Dict, Iterable, Mapping, Set
 
 from .ontology_change_impact import scope_family, scope_symbol
@@ -36,6 +37,94 @@ FACT_SLOT_DEPENDENCY_FAMILIES = {
     "macro-crypto": {"state", "market", "temporal", "flow", "position", "valuation", "exposure", "quality", "link", "macro-crypto"},
 }
 
+# New verified events carry the exact fields that changed.  These field
+# groups are projection dependencies, not investment rules: they decide which
+# factual slots need a new immutable generation and never whether a RuleBox
+# condition matched.
+FACT_SLOT_DIRECT_FAMILIES = {
+    "market": {"market"},
+    "temporal": {"temporal"},
+    "flow": {"flow"},
+    "evidence": {"evidence"},
+    "quality": {"quality"},
+    "valuation": {"valuation"},
+    "position": {"position"},
+    "profile": {"profile"},
+    "exposure": {"exposure"},
+    "portfolio": {"portfolio", "position"},
+    "macro": {"macro"},
+    "macro-market": {"macro-market"},
+    "macro-fx": {"macro-fx"},
+    "macro-rates": {"macro-rates"},
+    "macro-crypto": {"macro-crypto"},
+}
+
+FIELD_SLOT_FAMILIES = {
+    # Quote and session facts.
+    "currentprice": {"market"},
+    "changerate": {"market"},
+    "market": {"profile"},
+    "currency": {"profile"},
+    "sector": {"profile"},
+    "symbol": {"profile"},
+    # Position and mark-to-market facts.
+    "source": {"position", "profile"},
+    "quantity": {"position"},
+    "sellablequantity": {"position"},
+    "averageprice": {"position"},
+    "exchangerate": {"position", "valuation", "exposure"},
+    "marketvalue": {"position"},
+    "profitloss": {"position"},
+    "profitlossrate": {"position"},
+    "positionremoved": {"position"},
+    # Provider quality is versioned independently from quote values.
+    "quotestatus": {"quality"},
+    "dataquality": {"quality"},
+    "sourcetimestampstate": {"quality"},
+    "freshnessstatus": {"quality"},
+    "latencystatus": {"quality"},
+    "marketsession": {"market", "quality"},
+    "marketsessionlabel": {"market", "quality"},
+    "realtime": {"quality"},
+    # Technical and flow observations.
+    "ma5": {"temporal"},
+    "ma20": {"temporal"},
+    "ma60": {"temporal"},
+    "ma120": {"temporal"},
+    "ma200": {"temporal"},
+    "ma20slope": {"temporal"},
+    "ma60slope": {"temporal"},
+    "ma5distance": {"temporal"},
+    "ma20distance": {"temporal"},
+    "ma60distance": {"temporal"},
+    "tradestrength": {"flow"},
+    "tradingvalue": {"flow"},
+    "volume": {"flow"},
+    "volumeratio": {"flow"},
+    "buyvolume": {"flow"},
+    "sellvolume": {"flow"},
+    "orderbookbidvolume": {"flow"},
+    "orderbookaskvolume": {"flow"},
+    "bidaskimbalance": {"flow"},
+    "foreignbuyvolume": {"flow"},
+    "foreignsellvolume": {"flow"},
+    "foreignnetvolume": {"flow"},
+    "foreignnetamount": {"flow"},
+    "institutionbuyvolume": {"flow"},
+    "institutionsellvolume": {"flow"},
+    "institutionnetvolume": {"flow"},
+    "institutionnetamount": {"flow"},
+    "individualbuyvolume": {"flow"},
+    "individualsellvolume": {"flow"},
+    "individualnetvolume": {"flow"},
+    "individualnetamount": {"flow"},
+    # Explicit aggregate changes intentionally retain their broader factual
+    # surface. They are infrequent and can change several account facts.
+    "portfoliocontext": {"portfolio", "position", "valuation", "exposure", "quality"},
+}
+
+FOLLOWUP_FIELD = "marketobservationfollowup"
+
 
 def _clean(value: object) -> str:
     return str(value or "").strip()
@@ -51,9 +140,45 @@ def _family_values(values: Iterable[object]) -> Set[str]:
     }
 
 
-def _scope_families(scope_id: object, item: Mapping[str, object]) -> Set[str]:
+def _field_key(value: object) -> str:
+    return re.sub(r"[^a-z0-9]", "", _clean(value).lower())
+
+
+def _field_slot_families(value: object) -> Set[str]:
+    text = _clean(value)
+    compact = _field_key(text)
+    if compact in FIELD_SLOT_FAMILIES:
+        return set(FIELD_SLOT_FAMILIES[compact])
+    external = text.lower().removeprefix("external.")
+    if external in {
+        "secilings", "secfilings", "newsheadlines", "dartdisclosures",
+        "earningsreports", "researchevidence", "verifiedclaims",
+    }:
+        return {"evidence"}
+    if external in {"companyoverviews", "yfinancedata"}:
+        return {"evidence", "profile", "valuation"}
+    if external in {"quality", "freshness", "provenance", "statuses"}:
+        return {"quality"}
+    if external in {"macro"}:
+        return {"macro-rates"}
+    if external in {"fxrates"}:
+        return {"macro-fx"}
+    if external in {"cryptomarkets"} or compact == "cryptomarkettransition":
+        return {"market", "macro-crypto", "exposure"}
+    return set()
+
+
+def _scope_families(
+    scope_id: object,
+    item: Mapping[str, object],
+    include_impact_families: bool = True,
+) -> Set[str]:
     row = dict(item or {})
-    values = _family_values(row.get("impactScopeFamilies") or [])
+    values = (
+        _family_values(row.get("impactScopeFamilies") or [])
+        if include_impact_families
+        else set()
+    )
     semantic = row.get("semanticFingerprints")
     if isinstance(semantic, Mapping):
         values.update(_family_values(semantic.keys()))
@@ -67,6 +192,7 @@ def build_fact_slot_projection_plan(
     target_symbols: Iterable[object],
     requested_fact_families: Iterable[object],
     requested_fact_families_by_symbol: Mapping[str, Iterable[object]] = None,
+    changed_fields_by_symbol: Mapping[str, Iterable[object]] = None,
 ) -> Dict[str, object]:
     """Build a conservative write-routing plan from mailbox provenance."""
     targets = sorted({
@@ -88,6 +214,20 @@ def build_fact_slot_projection_plan(
             continue
         explicitly_classified_symbols.add(symbol)
         requested_by_symbol[symbol] = _family_values(values)
+    raw_changed_fields = (
+        changed_fields_by_symbol
+        if isinstance(changed_fields_by_symbol, Mapping)
+        else {}
+    )
+    changed_fields: Dict[str, Set[str]] = {
+        _clean(symbol).upper(): {
+            _clean(value)
+            for value in values or []
+            if _clean(value)
+        }
+        for symbol, values in raw_changed_fields.items()
+        if _clean(symbol).upper() in targets
+    }
     unknown = sorted({
         family
         for family in requested
@@ -142,6 +282,8 @@ def build_fact_slot_projection_plan(
     slots_by_symbol: Dict[str, Set[str]] = {}
     fallback_targets = []
     unknown_by_symbol: Dict[str, list] = {}
+    precise_field_routing_symbols: Set[str] = set()
+    unclassified_fields_by_symbol: Dict[str, list] = {}
     for symbol in targets:
         # Older callers do not have granular provenance. Preserve their
         # existing batch-wide behavior rather than assuming a missing mapping
@@ -161,9 +303,29 @@ def build_fact_slot_projection_plan(
             if unknown_symbol_families:
                 unknown_by_symbol[symbol] = unknown_symbol_families
             continue
+        symbol_fields = changed_fields.get(symbol, set())
+        compact_fields = {_field_key(value) for value in symbol_fields}
+        unclassified_fields = sorted(
+            value
+            for value in symbol_fields
+            if not _field_slot_families(value)
+            and _field_key(value) != FOLLOWUP_FIELD
+        )
+        use_precise_fields = bool(symbol_fields and not unclassified_fields)
         symbol_slots: Set[str] = set()
-        for family in symbol_requested:
-            symbol_slots.update(FACT_SLOT_DEPENDENCY_FAMILIES[family])
+        if use_precise_fields and FOLLOWUP_FIELD not in compact_fields:
+            for family in symbol_requested:
+                symbol_slots.update(
+                    FACT_SLOT_DIRECT_FAMILIES.get(family, {family})
+                )
+            for field in symbol_fields:
+                symbol_slots.update(_field_slot_families(field))
+            precise_field_routing_symbols.add(symbol)
+        else:
+            for family in symbol_requested:
+                symbol_slots.update(FACT_SLOT_DEPENDENCY_FAMILIES[family])
+            if unclassified_fields:
+                unclassified_fields_by_symbol[symbol] = unclassified_fields
         slots_by_symbol[symbol] = symbol_slots
     return {
         "version": FACT_SLOT_PROJECTION_VERSION,
@@ -180,6 +342,12 @@ def build_fact_slot_projection_plan(
             symbol: sorted(values)
             for symbol, values in sorted(slots_by_symbol.items())
         },
+        "changedFieldsBySymbol": {
+            symbol: sorted(values)
+            for symbol, values in sorted(changed_fields.items())
+        },
+        "preciseFieldRoutingSymbols": sorted(precise_field_routing_symbols),
+        "unclassifiedChangedFieldsBySymbol": unclassified_fields_by_symbol,
         "fallbackTargetSymbols": sorted(fallback_targets),
         "unknownFactFamiliesBySymbol": unknown_by_symbol,
         "fallbackReason": "unclassified-target-event-family" if fallback_targets else "",
@@ -208,6 +376,11 @@ def select_fact_slot_scope_ids(
         for symbol in plan.get("fallbackTargetSymbols") or []
         if _clean(symbol)
     }
+    precise_field_routing_symbols = {
+        _clean(symbol).upper()
+        for symbol in plan.get("preciseFieldRoutingSymbols") or []
+        if _clean(symbol)
+    }
     base = {
         "version": FACT_SLOT_PROJECTION_VERSION,
         "requestedFactFamilies": sorted(_family_values(plan.get("requestedFactFamilies") or [])),
@@ -222,6 +395,17 @@ def select_fact_slot_scope_ids(
             for symbol, values in sorted(slots_by_symbol.items())
         },
         "fallbackTargetSymbols": sorted(fallback_targets),
+        "preciseFieldRoutingSymbols": sorted(precise_field_routing_symbols),
+        "changedFieldsBySymbol": {
+            _clean(symbol).upper(): sorted({_clean(value) for value in values or [] if _clean(value)})
+            for symbol, values in dict(plan.get("changedFieldsBySymbol") or {}).items()
+            if _clean(symbol)
+        },
+        "unclassifiedChangedFieldsBySymbol": {
+            _clean(symbol).upper(): sorted({_clean(value) for value in values or [] if _clean(value)})
+            for symbol, values in dict(plan.get("unclassifiedChangedFieldsBySymbol") or {}).items()
+            if _clean(symbol)
+        },
         "candidateScopeCount": len(candidates),
         "selectedScopeIds": list(candidates),
         "deferredScopeIds": [],
@@ -239,8 +423,12 @@ def select_fact_slot_scope_ids(
     unknown = []
     for scope_id in candidates:
         item = scope_plan_by_id.get(scope_id) or {}
-        families = _scope_families(scope_id, item)
         symbol = scope_symbol(scope_id)
+        families = _scope_families(
+            scope_id,
+            item,
+            include_impact_families=symbol not in precise_field_routing_symbols,
+        )
         # An unknown source type for one target must never narrow that
         # target's ABox. Shared scopes are retained too because their facts
         # may be an input to the unknown target's native RuleBox evaluation.

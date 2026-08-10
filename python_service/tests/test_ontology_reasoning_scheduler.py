@@ -176,6 +176,33 @@ class PersistentCountingCycle:
         return {"status": "ok", "processedCount": 0, "alertCount": 0}
 
 
+class MaintenanceTimeoutCycle:
+    def run_once(self, *_args, **_kwargs):
+        return {
+            "status": "timeout",
+            "timeout": True,
+            "durationMs": 30000,
+        }
+
+
+class MaintenanceTimeoutRecoveryRunner:
+    def process_isolation_enabled(self):
+        return True
+
+    def reasoning_queue_deferral(self):
+        return {}
+
+    def recover_dead_projection_leases(self):
+        return {
+            "status": "cleared",
+            "clearedCount": 2,
+            "clearedWorldIds": [
+                "portfolio:local:default",
+                "system:typedb-projection-coordinator",
+            ],
+        }
+
+
 class PersistentTimeoutCycle:
     persistent_worker = True
 
@@ -414,6 +441,19 @@ for raw in sys.stdin:
         self.assertEqual("ok", result["status"])
         self.assertEqual(1, runner.preflight_calls)
         self.assertEqual(1, child.calls)
+
+    def test_maintenance_scheduler_recovers_dead_writer_leases_after_timeout(self):
+        scheduler = OntologyMaintenanceScheduler(
+            MaintenanceTimeoutRecoveryRunner(),
+            60,
+            isolated_cycle=MaintenanceTimeoutCycle(),
+        )
+
+        result = scheduler.run_once()
+
+        self.assertEqual("timeout", result["status"])
+        self.assertEqual("cleared", result["timeoutLeaseRecovery"]["status"])
+        self.assertEqual(2, result["timeoutLeaseRecovery"]["clearedCount"])
 
     def test_maintenance_scheduler_retries_lease_only_deferrals_before_normal_interval(self):
         scheduler = OntologyMaintenanceScheduler(DeferredLowPriorityRunner(), 60)

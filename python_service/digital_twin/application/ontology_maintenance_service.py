@@ -370,8 +370,6 @@ class OntologyMaintenanceRunner:
             commit_fairness=commit_fairness,
             record_deferral=True,
         )
-        if bool(fairness.get("fairnessGranted")):
-            return {}
         maintenance_yield = self.request_maintenance_yield(self.state(), fairness)
         # The request is useful only when this worker is allowed to attempt
         # the shared TypeDB coordinator. A still-running reasoning batch may
@@ -385,6 +383,23 @@ class OntologyMaintenanceRunner:
                 "maintenanceYieldRequested": True,
             }
             return {}
+        if bool(fairness.get("fairnessGranted")):
+            # ABox retention used to take an automatic fairness turn after a
+            # bounded wait. A single physical TypeDB delete can outlive the
+            # maintenance child timeout, however, and then block every live
+            # portfolio projection behind its writer lease. Keep the measured
+            # fairness state for diagnostics, but require the explicit,
+            # opt-in maintenance-yield protocol before retention may interrupt
+            # a non-empty investment reasoning queue.
+            fairness = {
+                **fairness,
+                "deferred": True,
+                "fairnessGranted": False,
+                "fairnessWouldHaveGranted": True,
+                "reasonCode": "live-reasoning-strict-priority",
+                "reason": "라이브 추론 요청이 남아 있어 자동 ABox 정리 순번을 부여하지 않습니다.",
+            }
+            self.last_background_fairness = dict(fairness)
         retry_after = self.interval_seconds()
         if text(fairness.get("reasonCode")) in {
             "active-reasoning-lease",
@@ -400,6 +415,42 @@ class OntologyMaintenanceRunner:
             "backgroundFairness": fairness,
             "maintenanceYield": maintenance_yield,
             "retryAfterSeconds": retry_after,
+        }
+
+    def recover_dead_projection_leases(self) -> Dict[str, object]:
+        """Release writer leases left by a terminated maintenance child.
+
+        Recovery is deliberately limited to repository rows whose owner PID
+        belongs to this host and is no longer alive. The TypeDB adapter keeps
+        active and foreign writers intact.
+        """
+
+        recover = getattr(
+            self.ontology_repository,
+            "recover_all_dead_local_scoped_abox_write_leases",
+            None,
+        )
+        if not callable(recover):
+            return {"status": "unsupported", "clearedCount": 0}
+        try:
+            value = recover()
+        except Exception as error:  # noqa: BLE001 - normal lease expiry remains the fallback.
+            return {
+                "status": "error",
+                "clearedCount": 0,
+                "reason": str(error)[:180],
+            }
+        result = dict(value or {}) if isinstance(value, dict) else {"status": "invalid"}
+        return {
+            "status": str(result.get("status") or "unknown"),
+            "clearedCount": max(0, integer(result.get("clearedCount"))),
+            "clearedWorldIds": [
+                text(world_id)
+                for world_id in result.get("clearedWorldIds") or []
+                if text(world_id)
+            ][:20],
+            "worldCount": max(0, integer(result.get("worldCount"))),
+            "reason": text(result.get("reason"))[:180],
         }
 
     def projection_coordinator_summary(self, lease: Dict[str, object]) -> Dict[str, object]:

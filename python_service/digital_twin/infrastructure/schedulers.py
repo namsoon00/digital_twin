@@ -1470,11 +1470,28 @@ class OntologyMaintenanceScheduler:
                 return result
         if not self.process_isolation_enabled():
             return self.runner.run_once()
-        return self.isolated_cycle.run_once(
+        result = self.isolated_cycle.run_once(
             0,
             self.execution_timeout_seconds(),
             self.execution_timeout_grace_seconds(),
         )
+        if not bool(result.get("timeout")):
+            return result
+        recover = getattr(self.runner, "recover_dead_projection_leases", None)
+        if not callable(recover):
+            return result
+        try:
+            recovery = dict(recover() or {})
+        except Exception as error:  # noqa: BLE001 - lease expiry remains the final fallback.
+            recovery = {
+                "status": "error",
+                "clearedCount": 0,
+                "reason": str(error)[:180],
+            }
+        return {
+            **dict(result or {}),
+            "timeoutLeaseRecovery": recovery,
+        }
 
     def next_wait_seconds(self, result: dict) -> float:
         """Retry lease-only deferrals inside the normal maintenance interval.

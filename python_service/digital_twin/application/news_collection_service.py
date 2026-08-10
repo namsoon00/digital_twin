@@ -16,6 +16,11 @@ from ..domain.investment_research import NewsCollectionTarget, ResearchEvidence,
 from ..domain.investment_evidence_governance import canonical_evidence_url, claim_policy, claim_quality_summary, governed_evidence
 from ..domain.market_data import known_stock, number
 from ..domain.materiality import evidence_materiality
+from ..domain.news_collection_quality import (
+    annotate_news_collection_admission,
+    assess_news_collection_admission,
+    news_collection_admission_summary,
+)
 from ..domain.repositories import AccountRepository, MonitorSnapshotReader, ResearchEvidenceGateway, ResearchEvidenceRepository, SymbolUniverseRepository
 from ..domain.symbol_universe import ListedSymbol, normalize_market
 
@@ -242,12 +247,13 @@ class NewsCollectionRunner:
                 "feedOnlyRss": {"enabled": self.cleanup_enabled() and self.require_article_body_for_rss(), "deleted": 0, "status": "deferred"},
                 "duplicates": {"enabled": self.cleanup_enabled(), "deleted": 0, "status": "deferred"},
                 "entityNoise": {"enabled": self.cleanup_enabled(), "deleted": 0, "status": "deferred"},
+                "qualityRejected": {"enabled": self.cleanup_enabled(), "deleted": 0, "status": "deferred"},
             }
         # Mark the schedule before doing database work. A transient failure is
         # retried on the next maintenance interval instead of competing with
         # the active collector and analysis worker every minute.
         self._last_evidence_cleanup_at = now
-        return {
+        maintenance = {
             "due": True,
             "nextDueAt": utc_iso(now + timedelta(seconds=self.cleanup_interval_seconds())),
             "stale": self.delete_stale_news(),
@@ -255,6 +261,8 @@ class NewsCollectionRunner:
             "duplicates": self.delete_duplicate_news(),
             "entityNoise": self.delete_reclassified_entity_noise_news(),
         }
+        maintenance["qualityRejected"] = self.delete_quality_rejected_news()
+        return maintenance
 
     def delete_stale_news(self) -> Dict[str, object]:
         if not self.cleanup_enabled() or not hasattr(self.evidence_store, "delete_stale_news"):
@@ -433,6 +441,43 @@ class NewsCollectionRunner:
                 if len(targets) >= self.cleanup_batch_size():
                     break
             reason = "newsEntityResolutionReclassified"
+            if (
+                targets
+                and self.event_publisher
+                and hasattr(self.event_publisher, "dispatch_recorded")
+                and hasattr(self.evidence_store, "retract_many_with_events")
+            ):
+                mutation, events = self.evidence_store.retract_many_with_events(
+                    [item.evidence_id for item in targets],
+                    reason,
+                    lambda value: self.lifecycle_events(value, reason),
+                )
+                for event in events:
+                    self.event_publisher.dispatch_recorded(event)
+                return {
+                    "enabled": True,
+                    "deleted": int(getattr(mutation, "retracted_count", 0) or 0),
+                    "scanned": len(items),
+                    "reason": reason,
+                    "evidenceDeltas": list(getattr(mutation, "to_dict", lambda: {})().get("evidenceDeltas") or []),
+                    "inferenceChangedSymbols": list(getattr(mutation, "inference_changed_symbols", []) or []),
+                }
+            deleted = sum(1 for item in targets if self.evidence_store.delete(item.evidence_id))
+            return {"enabled": True, "deleted": deleted, "scanned": len(items), "reason": reason}
+        except Exception as error:  # noqa: BLE001 - cleanup failure should not stop fresh collection.
+            return {"enabled": True, "deleted": 0, "status": "error", "message": str(error)[:180]}
+
+    def delete_quality_rejected_news(self) -> Dict[str, object]:
+        if not self.cleanup_enabled() or not hasattr(self.evidence_store, "latest") or not hasattr(self.evidence_store, "delete"):
+            return {"enabled": self.cleanup_enabled(), "deleted": 0}
+        try:
+            items = list(self.evidence_store.latest(kind="news", limit=self.cleanup_scan_limit()) or [])
+            targets = [
+                item
+                for item in items
+                if not assess_news_collection_admission(item, self.settings).passed
+            ][: self.cleanup_batch_size()]
+            reason = "newsCollectionQualityPolicyRejected"
             if (
                 targets
                 and self.event_publisher
@@ -741,7 +786,9 @@ class NewsCollectionRunner:
         if not targets:
             return self.with_health({"status": "noTargets", "targetCount": 0, "fetchedCount": 0, "savedCount": 0, "staleDeletedCount": cleanup.get("deleted", 0), "staleCleanup": cleanup, "feedOnlyRssCleanup": feed_only_cleanup, "duplicateNewsCleanup": duplicate_cleanup, "evidenceMaintenance": maintenance, "targetSelection": selection_metadata, "collectionRun": collection_run})
         collected: List[ResearchEvidence] = []
+        observed_items: List[ResearchEvidence] = []
         governed_for_persistence: List[ResearchEvidence] = []
+        quality_assessments = []
         stale_items: List[ResearchEvidence] = []
         statuses: List[Dict[str, object]] = []
         target_failures: List[Dict[str, object]] = []
@@ -780,29 +827,50 @@ class NewsCollectionRunner:
                         analysis_kwargs["monotonic_fn"] = self.monotonic_fn
                     items = analyze_many(target, items, **analysis_kwargs)
                 items, target_stale = self.fresh_news_items(items)
-                # Persist unverified claims for audit and web review, but the
-                # strict governance policy keeps them out of investment input.
-                # The corpus includes stored rows so independently reported
-                # facts can be corroborated across collection rotations.
+                observed_items.extend(items)
                 if items:
-                    corpus = self.governance_corpus_for_target(target, items)
                     governed_evidence(
-                        corpus,
+                        items,
                         target,
                         self.max_news_age_minutes(),
                         str(self.settings.get("investmentBrainResearchMinimumSourceTrustState") or "standard"),
                         policy=claim_policy(self.settings),
                         now=self.cleanup_now(),
                     )
-                    governed_for_persistence.extend(corpus)
+                    current_assessments = [
+                        assess_news_collection_admission(item, self.settings)
+                        for item in items
+                    ]
+                    quality_assessments.extend(current_assessments)
+                    admitted_items = [
+                        annotate_news_collection_admission(item, assessment)
+                        for item, assessment in zip(items, current_assessments)
+                        if assessment.passed
+                    ]
+                    if admitted_items:
+                        corpus = [
+                            item
+                            for item in self.governance_corpus_for_target(target, admitted_items)
+                            if assess_news_collection_admission(item, self.settings).passed
+                        ]
+                        governed_evidence(
+                            corpus,
+                            target,
+                            self.max_news_age_minutes(),
+                            str(self.settings.get("investmentBrainResearchMinimumSourceTrustState") or "standard"),
+                            policy=claim_policy(self.settings),
+                            now=self.cleanup_now(),
+                        )
+                        governed_for_persistence.extend(corpus)
+                        collected.extend(admitted_items)
                     statuses.append({
-                        "source": "claim-governance",
+                        "source": "news-quality-admission",
                         "symbol": target.symbol,
                         "ok": True,
-                        "count": len(corpus),
-                        "status": "cross-cycle-corpus",
+                        "count": len(admitted_items),
+                        "rejectedCount": len(items) - len(admitted_items),
+                        "status": "quality-filtered",
                     })
-                collected.extend(items)
                 stale_items.extend(target_stale)
                 statuses.extend(target_statuses)
             except Exception as error:  # noqa: BLE001 - one target must not stall the complete collection rotation.
@@ -863,7 +931,9 @@ class NewsCollectionRunner:
                     "exhausted": budget_exhausted,
                     "deferredSymbols": deferred_symbols,
                 },
-                "fetchedCount": len(collected),
+                "fetchedCount": len(observed_items),
+                "admittedCount": len(collected),
+                "qualityRejectedCount": max(0, len(observed_items) - len(collected)),
                 "savedCount": saved,
                 "changedCount": saved,
                 "staleSkippedCount": len(stale_items),
@@ -885,7 +955,8 @@ class NewsCollectionRunner:
                 "providers": self.gateway.providers(),
                 "statuses": statuses[-50:],
                 "targetFailures": target_failures,
-                "articleAnalysisHealth": self.article_analysis_health(collected, len(stale_items), cleanup),
+                "articleAnalysisHealth": self.article_analysis_health(observed_items, len(stale_items), cleanup),
+                "collectionQuality": news_collection_admission_summary(quality_assessments),
                 "claimQuality": claim_quality_summary(collected),
                 "dataQuality": "actual",
             }
@@ -902,7 +973,7 @@ class NewsCollectionRunner:
                     "research-evidence-update",
                     ontology_symbols,
                     changed_count=len(ontology_symbols),
-                    observed_count=len(collected),
+                    observed_count=len(observed_items),
                     fact_types=["ResearchEvidence", "NewsEvent"],
                     reason="뉴스/리서치 근거 변경을 TypeDB ABox에 반영하고 네이티브 규칙 추론을 갱신합니다. 알림은 중요 변경 게이트를 별도로 통과해야 합니다.",
                     materiality_assessments=list(result.get("materialityAssessments") or []),
@@ -977,6 +1048,13 @@ class NewsCollectionRunner:
             "symbols": [target.symbol for target in targets[:50]],
             "evidence": summary,
             "articleAnalysisHealth": self.article_analysis_health(retained_news, 0, {}),
+            "collectionQualityPolicy": {
+                "enabled": truthy(self.settings.get("newsCollectionQualityGateEnabled"), True),
+                "minimumRelevanceState": str(self.settings.get("newsCollectionMinimumRelevanceState") or "direct"),
+                "minimumMaterialityState": str(self.settings.get("newsCollectionMinimumMaterialityState") or "material"),
+                "minimumSourceTrustState": str(self.settings.get("newsCollectionMinimumSourceTrustState") or "standard"),
+                "requireArticleBody": truthy(self.settings.get("newsCollectionRequireArticleBody"), True),
+            },
             "staleCleanup": {
                 "enabled": self.cleanup_enabled(),
                 "maxAgeMinutes": self.max_news_age_minutes(),

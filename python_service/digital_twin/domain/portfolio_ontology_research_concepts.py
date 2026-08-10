@@ -35,11 +35,15 @@ def event_tbox_classes(item: object) -> List[str]:
 def event_relation_properties(item: object) -> Dict[str, object]:
     polarity = str(getattr(item, "polarity", "") or "context")
     raw_payload = getattr(item, "raw_payload", {}) if isinstance(getattr(item, "raw_payload", {}), dict) else {}
+    collection_admission = raw_payload.get("collectionAdmission") if isinstance(raw_payload.get("collectionAdmission"), dict) else {}
     state = research_evidence_state(item, raw_payload)
     props = {
         "source": "research-evidence",
         "polarity": polarity,
         **state,
+        "collectionAdmissionVersion": collection_admission.get("version"),
+        "collectionAdmissionDecision": collection_admission.get("decision"),
+        "collectionQualityPassed": bool(collection_admission.get("passed")),
         "aiInfluenceLabel": str(getattr(item, "title", "") or getattr(item, "kind", "") or "리서치 근거"),
     }
     for key in [
@@ -271,6 +275,7 @@ def add_research_document_concept(
     if not shape:
         return
     raw_payload = getattr(item, "raw_payload", {}) if isinstance(getattr(item, "raw_payload", {}), dict) else {}
+    collection_admission = raw_payload.get("collectionAdmission") if isinstance(raw_payload.get("collectionAdmission"), dict) else {}
     evidence_id = str(getattr(item, "evidence_id", "") or "")
     document_id = add_entity(graph, str(shape["kind"]), evidence_id or str(getattr(item, "title", "") or ""), str(getattr(item, "title", "") or shape["tboxClass"]), {
         "tboxClass": str(shape["tboxClass"]),
@@ -286,6 +291,9 @@ def add_research_document_concept(
         "documentType": str(shape["documentType"]),
         **research_evidence_state(item, raw_payload),
         "eventType": raw_payload.get("eventType"),
+        "collectionAdmissionVersion": collection_admission.get("version"),
+        "collectionAdmissionDecision": collection_admission.get("decision"),
+        "collectionQualityPassed": bool(collection_admission.get("passed")),
     })
     source_label = str(getattr(item, "source", "") or "ResearchEvidence").strip() or "ResearchEvidence"
     source_id = add_entity(graph, "data-source", source_label, source_label, {

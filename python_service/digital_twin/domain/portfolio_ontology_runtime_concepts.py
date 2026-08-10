@@ -356,6 +356,11 @@ def add_operational_world_concepts(
     collection_policy_id = add_entity(graph, "collection-policy", "adaptive-polling", "적응형 데이터 수집 정책", {
         "tboxClass": "CollectionPolicy",
         "mode": "adaptive",
+        "newsQualityGateEnabled": str(settings.get("newsCollectionQualityGateEnabled") or "1") not in {"0", "false", "False", "off"},
+        "newsMinimumRelevanceState": str(settings.get("newsCollectionMinimumRelevanceState") or "direct"),
+        "newsMinimumMaterialityState": str(settings.get("newsCollectionMinimumMaterialityState") or "material"),
+        "newsMinimumSourceTrustState": str(settings.get("newsCollectionMinimumSourceTrustState") or "standard"),
+        "newsRequireArticleBody": str(settings.get("newsCollectionRequireArticleBody") or "1") not in {"0", "false", "False", "off"},
         "description": "데이터는 성격별 목표 주기로 갱신하고, 알림은 의미 변화가 있을 때만 검토합니다.",
     })
     market_session_id = add_entity(graph, "market-session", "runtime-market-session", "현재 시장 세션", {

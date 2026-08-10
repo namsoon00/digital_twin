@@ -544,8 +544,10 @@ def news_materiality_state(
     scope = str(relation_scope or "").strip().lower()
     polarity = str(impact_polarity or "").strip().lower()
     trust = str(source_trust_state or "").strip().lower()
-    if scope == "direct" and event in {"earnings", "guidance", "regulation", "capital_policy"}:
+    if scope == "direct" and event in {"earnings", "guidance", "regulation", "capital_policy", "listing"}:
         return "notable" if trust in {"limited", "unknown"} else "material"
+    if scope == "direct" and event == "supply_chain" and trust == "trusted" and polarity in {"risk", "support", "mixed"}:
+        return "material"
     if scope == "direct" and polarity in {"risk", "support", "mixed"}:
         return "notable"
     if scope in {"related_product", "peer", "sector"}:

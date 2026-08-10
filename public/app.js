@@ -4017,7 +4017,11 @@
       newsCollectionLookbackMinutes: settingValue("newsCollectionLookbackMinutes"),
       newsCollectionPerSymbolLimit: settingValue("newsCollectionPerSymbolLimit"),
       newsCollectionProviders: settingValue("newsCollectionProviders"),
+      newsCollectionQualityGateEnabled: settingValue("newsCollectionQualityGateEnabled"),
       newsCollectionMinimumRelevanceState: settingValue("newsCollectionMinimumRelevanceState"),
+      newsCollectionMinimumMaterialityState: settingValue("newsCollectionMinimumMaterialityState"),
+      newsCollectionMinimumSourceTrustState: settingValue("newsCollectionMinimumSourceTrustState"),
+      newsCollectionRequireArticleBody: settingValue("newsCollectionRequireArticleBody"),
       newsDigestMinimumRelevanceState: settingValue("newsDigestMinimumRelevanceState"),
       newsDigestMinimumMaterialityState: settingValue("newsDigestMinimumMaterialityState"),
       newsDigestMinimumNeutralMaterialityState: settingValue("newsDigestMinimumNeutralMaterialityState"),
@@ -24078,7 +24082,8 @@
       renderSettingsApiCard("아카이브 범위", archiveScope, [
         configuredChip("관심", settingValue("newsCollectionIncludeWatchlist") !== "0", "포함"),
         configuredChip("보유", settingValue("newsCollectionIncludeHoldings") !== "0", "포함"),
-        configuredChip("관련성", true, newsStateSettingLabel("relevance", settingValue("newsCollectionMinimumRelevanceState") || defaultSettings.newsCollectionMinimumRelevanceState))
+        configuredChip("관련성", true, newsStateSettingLabel("relevance", settingValue("newsCollectionMinimumRelevanceState") || defaultSettings.newsCollectionMinimumRelevanceState)),
+        configuredChip("저장 중요도", settingEnabled("newsCollectionQualityGateEnabled"), newsStateSettingLabel("materiality", settingValue("newsCollectionMinimumMaterialityState") || defaultSettings.newsCollectionMinimumMaterialityState))
       ]),
       renderSettingsApiCard("추론 흐름", reasoningScope, [
         configuredChip("추론", settingEnabled("ontologyReasoningEnabled"), settingValue("ontologyReasoningBatchSize") || defaultSettings.ontologyReasoningBatchSize || "20"),
@@ -24128,7 +24133,8 @@
       renderSettingsApiCard("아카이브 범위", archiveScope, [
         configuredChip("관심", settingValue("newsCollectionIncludeWatchlist") !== "0", "포함"),
         configuredChip("보유", settingValue("newsCollectionIncludeHoldings") !== "0", "포함"),
-        configuredChip("관련성", true, newsStateSettingLabel("relevance", settingValue("newsCollectionMinimumRelevanceState") || defaultSettings.newsCollectionMinimumRelevanceState))
+        configuredChip("관련성", true, newsStateSettingLabel("relevance", settingValue("newsCollectionMinimumRelevanceState") || defaultSettings.newsCollectionMinimumRelevanceState)),
+        configuredChip("저장 중요도", settingEnabled("newsCollectionQualityGateEnabled"), newsStateSettingLabel("materiality", settingValue("newsCollectionMinimumMaterialityState") || defaultSettings.newsCollectionMinimumMaterialityState))
       ]),
       renderSettingsApiCard("추론 흐름", reasoningScope, [
         configuredChip("추론", settingEnabled("ontologyReasoningEnabled"), settingValue("ontologyReasoningBatchSize") || defaultSettings.ontologyReasoningBatchSize || "20"),
@@ -24187,10 +24193,26 @@
         renderSettingField("newsCollectionLookbackMinutes", "뉴스 조회 기간(분)", "number", "180"),
         renderSettingField("newsCollectionPerSymbolLimit", "종목별 저장 기사 수", "number", "8"),
         renderSettingField("newsCollectionProviders", "뉴스 수집 채널", "text", "yahoo_search,yahoo_finance"),
+        renderSettingSelect("newsCollectionQualityGateEnabled", "저장 전 뉴스 품질 검증", [
+          { value: "1", label: "사용" },
+          { value: "0", label: "사용 안 함" }
+        ]),
         renderSettingSelect("newsCollectionMinimumRelevanceState", "저장할 최소 관련성", [
-          { value: "context", label: "관련 맥락부터" },
+          { value: "direct", label: "종목 직접 기사만" },
           { value: "related", label: "관련 기사부터" },
-          { value: "direct", label: "종목 직접 기사만" }
+          { value: "context", label: "관련 맥락부터" }
+        ]),
+        renderSettingSelect("newsCollectionMinimumMaterialityState", "저장할 최소 중요성", [
+          { value: "material", label: "중요 사건만" },
+          { value: "notable", label: "확인할 정보부터" }
+        ]),
+        renderSettingSelect("newsCollectionMinimumSourceTrustState", "저장할 최소 출처", [
+          { value: "standard", label: "일반 언론 이상" },
+          { value: "trusted", label: "신뢰 출처만" }
+        ]),
+        renderSettingSelect("newsCollectionRequireArticleBody", "저장 시 원문 본문", [
+          { value: "1", label: "본문 검증 필수" },
+          { value: "0", label: "제목·요약도 허용" }
         ]),
         renderSettingSelect("newsDigestMinimumRelevanceState", "알림에 넣을 최소 관련성", [
           { value: "related", label: "관련 기사부터" },
@@ -25972,10 +25994,26 @@
         renderSettingField("newsCollectionIntervalSeconds", "뉴스 수집 주기(초)", "number", "60"),
         renderSettingField("newsCollectionMaxSymbols", "뉴스 수집 종목 수", "number", "40"),
         renderSettingField("newsCollectionLookbackMinutes", "뉴스 조회 기간(분)", "number", "180"),
+        renderSettingSelect("newsCollectionQualityGateEnabled", "저장 전 뉴스 품질 검증", [
+          { value: "1", label: "사용" },
+          { value: "0", label: "사용 안 함" }
+        ]),
         renderSettingSelect("newsCollectionMinimumRelevanceState", "저장할 최소 관련성", [
-          { value: "context", label: "관련 맥락부터" },
+          { value: "direct", label: "종목 직접 기사만" },
           { value: "related", label: "관련 기사부터" },
-          { value: "direct", label: "종목 직접 기사만" }
+          { value: "context", label: "관련 맥락부터" }
+        ]),
+        renderSettingSelect("newsCollectionMinimumMaterialityState", "저장할 최소 중요성", [
+          { value: "material", label: "중요 사건만" },
+          { value: "notable", label: "확인할 정보부터" }
+        ]),
+        renderSettingSelect("newsCollectionMinimumSourceTrustState", "저장할 최소 출처", [
+          { value: "standard", label: "일반 언론 이상" },
+          { value: "trusted", label: "신뢰 출처만" }
+        ]),
+        renderSettingSelect("newsCollectionRequireArticleBody", "저장 시 원문 본문", [
+          { value: "1", label: "본문 검증 필수" },
+          { value: "0", label: "제목·요약도 허용" }
         ]),
         renderSettingSelect("newsDigestMinimumMaterialityState", "알림 뉴스 최소 중요성", [
           { value: "notable", label: "확인할 정보부터" },

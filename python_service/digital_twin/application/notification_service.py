@@ -17,6 +17,7 @@ from ..domain.notification_ai import enrich_notification_ai_context
 from ..domain.notification_ai_gate_contracts import NotificationAIValidatedResponse, ai_gate_enabled_for_message_type
 from ..domain.notification_ai_gate_validation import local_validated_ai_response
 from ..domain.notifications import NotificationJob, notification_debug_number
+from ..domain.notification_identity import context_with_instrument_identity, notification_instrument_symbol
 from ..domain.notification_reasoning_report import build_notification_reasoning_report, render_operator_reasoning_report
 from ..domain.ontology_decision_state import (
     DATA_STATE_LABELS,
@@ -69,6 +70,29 @@ class NotificationAIOpinionEnricher:
         context.setdefault("accountId", job.account_id)
         context.setdefault("accountLabel", job.account_label)
         job.context = enrich_notification_ai_context(context, self.settings)
+
+
+class NotificationInstrumentIdentityEnricher:
+    def __init__(self, symbol_repository=None):
+        self.symbol_repository = symbol_repository
+        self.cache: Dict[str, Dict[str, object]] = {}
+
+    def __call__(self, job: NotificationJob) -> None:
+        context = dict(job.context or {})
+        symbol = notification_instrument_symbol(context)
+        if not symbol or not self.symbol_repository:
+            return
+        identity = self.cache.get(symbol)
+        if identity is None:
+            try:
+                item = self.symbol_repository.get(symbol)
+            except Exception:  # noqa: BLE001 - identity lookup must not block notification delivery.
+                return
+            if not item:
+                return
+            identity = item.to_dict() if hasattr(item, "to_dict") else dict(item or {})
+            self.cache[symbol] = identity
+        job.context = context_with_instrument_identity(context, identity)
 
 
 class NotificationHoldingSnapshotEnricher:

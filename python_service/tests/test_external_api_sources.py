@@ -263,6 +263,24 @@ class ExternalApiSourceTests(unittest.TestCase):
         self.assertEqual(207500, merged.current_price)
         self.assertEqual("KIS Open API", merged.quote_source)
 
+    def test_kis_code_only_name_does_not_replace_resolved_company_name(self):
+        provider = KISMarketSignalProvider(settings={"kisMarketSignalsEnabled": "0"})
+        position = normalize_position({
+            "symbol": "028260",
+            "name": "삼성물산",
+            "market": "KR",
+            "currency": "KRW",
+            "currentPrice": 336500,
+        })
+
+        merged = provider.merge_position(position, {
+            "name": "028260",
+            "currentPrice": 336500,
+            "quoteSource": "KIS Open API",
+        })
+
+        self.assertEqual("삼성물산", merged.name)
+
     def test_kis_rest_price_does_not_replace_fresh_toss_quote_without_websocket_tick(self):
         provider = KISMarketSignalProvider(settings={"kisMarketSignalsEnabled": "0"})
         position = normalize_position({

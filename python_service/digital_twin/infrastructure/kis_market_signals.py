@@ -10,6 +10,7 @@ from typing import Callable, Dict, Iterable, List, Optional, Tuple
 from ..domain.data_freshness import combine_quality
 from ..domain.market_data import known_stock, number, optional_investor_net_volume, pct_distance
 from ..domain.portfolio import Position, utc_now_iso
+from ..domain.position_identity import preferred_instrument_name
 from .external_signal_utils import ExternalCircuitOpen, root_api_error
 from .operational_store import market_quote_cache
 from .settings import runtime_settings
@@ -1557,7 +1558,7 @@ class KISMarketSignalProvider:
         return replace(
             position,
             symbol=clean_symbol(position.symbol) or position.symbol,
-            name=str(signal.get("name") or position.name),
+            name=preferred_instrument_name(position.symbol, position.name, signal.get("name")),
             market=str(signal.get("market") or position.market or "KR"),
             currency=str(signal.get("currency") or position.currency or "KRW"),
             current_price=merged_price,

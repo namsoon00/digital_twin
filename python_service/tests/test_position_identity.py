@@ -2,10 +2,16 @@ import unittest
 
 from digital_twin.application.market_data_collection_service import MarketDataCollectionRunner
 from digital_twin.domain.portfolio import Position
-from digital_twin.domain.position_identity import position_with_symbol_identity
+from digital_twin.domain.position_identity import position_with_symbol_identity, preferred_instrument_name
 
 
 class PositionIdentityTests(unittest.TestCase):
+    def test_keeps_real_name_when_candidate_is_only_the_symbol(self):
+        self.assertEqual(
+            "삼성물산",
+            preferred_instrument_name("028260", "삼성물산", "028260"),
+        )
+
     def test_replaces_code_only_provider_name_with_symbol_universe_name(self):
         position = Position(symbol="066570", name="066570", market="", currency="", sector="기타")
 

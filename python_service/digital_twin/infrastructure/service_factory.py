@@ -49,6 +49,7 @@ from ..application.notification_service import (
     NotificationAIOpinionEnricher,
     NotificationHoldingSnapshotEnricher,
     NotificationHypothesisResearchEnricher,
+    NotificationInstrumentIdentityEnricher,
     NotificationQueueRunner,
 )
 from ..application.official_calendar_sync_service import OfficialCalendarSyncService
@@ -371,6 +372,9 @@ def build_notification_queue_runner(dry_run: bool = False, lane: str = "all") ->
         # while a live projection is writing.
         return queue_health_service.observe(reasoning_queue_probe())
 
+    identity_enricher = NotificationInstrumentIdentityEnricher(
+        stores.symbol_universe_store(settings),
+    )
     holding_enricher = NotificationHoldingSnapshotEnricher(
         monitor_store.load_previous,
         RealtimeMonitor(settings),
@@ -390,6 +394,7 @@ def build_notification_queue_runner(dry_run: bool = False, lane: str = "all") ->
         ai_request_enqueuer = NotificationAIRequestEnqueuer(
             stores.ai_inference_queue_store(settings),
             CompositeNotificationContextEnricher(
+                identity_enricher,
                 holding_enricher,
                 disclosure_enricher,
                 research_enricher,
@@ -420,6 +425,7 @@ def build_notification_queue_runner(dry_run: bool = False, lane: str = "all") ->
         stale_after_minutes=int(settings.get("notificationProcessingStaleMinutes") or 30),
         template_renderer=stores.notification_template_store(settings).render_job,
         context_enricher=CompositeNotificationContextEnricher(
+            identity_enricher,
             disclosure_enricher,
             NotificationAIValidatedGateEnricher(
                 notification_ai_reviewer_from_settings(settings) if dry_run else None,

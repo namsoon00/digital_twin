@@ -10,6 +10,7 @@ from typing import Callable, Dict, Iterable, List, Optional, Tuple
 from ..domain.data_freshness import combine_quality
 from ..domain.market_data import known_stock, number, optional_investor_net_volume, pct_distance
 from ..domain.portfolio import Position, utc_now_iso
+from ..domain.company_knowledge import merge_company_overview_rows
 from ..domain.position_identity import preferred_instrument_name
 from .external_signal_utils import ExternalCircuitOpen, root_api_error
 from .operational_store import market_quote_cache
@@ -1480,8 +1481,11 @@ class KISMarketSignalProvider:
             rows = kis_fundamental_external_rows(symbol, signal)
             overview = rows.get("companyOverview") if isinstance(rows.get("companyOverview"), dict) else {}
             report = rows.get("earningsReport") if isinstance(rows.get("earningsReport"), dict) else {}
-            if overview and symbol not in overviews:
-                overviews[symbol] = overview
+            if overview:
+                overviews[symbol] = merge_company_overview_rows(
+                    overviews.get(symbol) if isinstance(overviews.get(symbol), dict) else {},
+                    overview,
+                )
                 added += 1
             if report and symbol not in earnings:
                 earnings[symbol] = report

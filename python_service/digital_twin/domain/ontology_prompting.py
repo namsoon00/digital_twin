@@ -258,6 +258,7 @@ def build_ai_inference_packet(graph: PortfolioOntology) -> Dict[str, object]:
     crypto_exposure_count = len([item for item in graph.entities if item.kind == "crypto-exposure"])
     article_quality_risk_count = len([item for item in graph.entities if item.kind == "article-quality-risk"])
     valuation_context_count = len([item for item in graph.entities if item.kind in {"valuation-assumption", "revenue-exposure", "analyst-revision"}])
+    company_context_count = len([item for item in graph.entities if item.kind in {"company-financial-state", "company-governance-state", "company-capital-state", "company-valuation-state"}])
     temporal_window_count = len([item for item in graph.entities if item.kind == "temporal-window"])
     temporal_episode_count = len([item for item in graph.entities if item.kind == "trend-episode"])
     market_proxy_count = len([
@@ -278,7 +279,7 @@ def build_ai_inference_packet(graph: PortfolioOntology) -> Dict[str, object]:
         "role": "ontology-first-investment-opinion",
         "stateContract": "review-data-change-evidence-validation",
         "notificationRole": "insight-driven-dispatch",
-        "inputOrder": ["tbox", "boundedContexts", "ruleBox", "abox", "inferenceBox", "derivedRelations", "inferenceTraces", "investmentQuestions", "hypothesisSets", "decisionEpisodes", "decisionPerformance", "observedOutcomes", "operationalOntology", "temporalWindows", "coverageGaps", "macroRegimes", "marketProxyContext", "cryptoExposures", "valuationContext", "newsQuality", "reasoningCards", "relationInfluences", "researchEvidence", "signalTransitions", "factorExposure", "liquidityConstraints", "insights", "activeInvestmentOpinions", "executionPlans", "relations", "evidence", "beliefs", "opinions"],
+        "inputOrder": ["tbox", "boundedContexts", "ruleBox", "abox", "inferenceBox", "derivedRelations", "inferenceTraces", "companyContext", "investmentQuestions", "hypothesisSets", "decisionEpisodes", "decisionPerformance", "observedOutcomes", "operationalOntology", "temporalWindows", "coverageGaps", "macroRegimes", "marketProxyContext", "cryptoExposures", "valuationContext", "newsQuality", "reasoningCards", "relationInfluences", "researchEvidence", "signalTransitions", "factorExposure", "liquidityConstraints", "insights", "activeInvestmentOpinions", "executionPlans", "relations", "evidence", "beliefs", "opinions"],
         "reasoningCardCount": len(graph.reasoning_cards),
         "reasoningCardIds": [item.get("id") for item in graph.reasoning_cards],
         "graphInputs": {
@@ -300,6 +301,7 @@ def build_ai_inference_packet(graph: PortfolioOntology) -> Dict[str, object]:
             "cryptoExposureCount": crypto_exposure_count,
             "articleQualityRiskCount": article_quality_risk_count,
             "valuationContextCount": valuation_context_count,
+            "companyContextCount": company_context_count,
             "temporalWindowCount": temporal_window_count,
             "temporalEpisodeCount": temporal_episode_count,
             "marketProxyCount": market_proxy_count,
@@ -335,6 +337,7 @@ def build_ai_inference_packet(graph: PortfolioOntology) -> Dict[str, object]:
             "coverageGaps, newsQuality, source freshness가 있으면 결론 강도를 낮추고 필요한 수집 과제를 먼저 제시합니다.",
             "macroRegimes와 cryptoExposures는 종목 가격 신호의 상위 환경으로만 사용하고 단독 매수·매도 결론으로 쓰지 않습니다.",
             "marketProxyContext는 위험선호, 금리, 크레딧, IPO, 변동성, 달러, 원자재, 섹터 사이클의 배경 맥락이며 단독 매수·매도 결론으로 쓰지 않습니다.",
+            "companyContext의 재무 숫자와 경영진 목록은 회사 사실입니다. 투자 판단에는 TypeDB가 회사 사실과 가격·수급을 결합해 만든 CompanyMarketAlignment, FundamentalRisk, DilutionRisk 관계만 사용합니다.",
             "최소 세 개의 경쟁 가설을 지지·반대 근거로 비교하고, 과거 DecisionEpisode와 ObservedOutcome에서 반복 반증된 가설을 그대로 재사용하지 않습니다.",
             "hypothesis-calibration은 서로 다른 판단 에피소드의 사후 결과 표본입니다. 표본이 3개 미만이면 상태 계약을 바꾸지 않고, 그 이상이어도 제안된 보정은 설명에만 반영하며 규칙을 자동 변경하지 않습니다.",
         ],
@@ -517,6 +520,17 @@ def prompt_payload(graph: PortfolioOntology) -> Dict[str, object]:
                 "earnings-calendar-event",
             ],
             100,
+        ),
+        "companyContext": compact_entities_by_kind(
+            graph,
+            [
+                "company-financial-state",
+                "company-governance-state",
+                "company-capital-state",
+                "company-valuation-state",
+                "executive-role",
+            ],
+            80,
         ),
         "newsQuality": compact_entities_by_kind(graph, ["article-quality-risk", "article-analysis-conflict", "article-ai-analysis"], 80),
         "reasoningCards": list(graph.reasoning_cards),

@@ -86,6 +86,15 @@ EVIDENCE_FACT_TYPES = {
     "InvestmentCalendarEvent",
 }
 
+COMPANY_FACT_TYPES = {
+    "CompanyProfile",
+    "FinancialFact",
+    "FinancialStatement",
+    "GovernanceChange",
+    "CapitalStructureChange",
+    "ValuationObservation",
+}
+
 PORTFOLIO_FACT_TYPES = {
     "Portfolio",
     "PortfolioSnapshot",
@@ -200,6 +209,16 @@ def mailbox_fact_family(fact_type: object) -> str:
         return "portfolio"
     if normalized in {"dataquality"}:
         return "quality"
+    if normalized in {"companyprofile"}:
+        return "profile"
+    if normalized in {"financialfact", "financialstatement"}:
+        return "fundamental"
+    if normalized in {"governancechange"}:
+        return "governance"
+    if normalized in {"capitalstructurechange"}:
+        return "capital"
+    if normalized in {"valuationobservation"}:
+        return "company-valuation"
     return normalized or "marketquote"
 
 
@@ -283,6 +302,8 @@ def work_class_for_fact_types(
     ):
         return "RECONCILIATION"
     if clean_fact_types & EVIDENCE_FACT_TYPES:
+        return "EVIDENCE"
+    if clean_fact_types & COMPANY_FACT_TYPES:
         return "EVIDENCE"
     if clean_fact_types & MACRO_FACT_TYPES:
         return "MACRO"

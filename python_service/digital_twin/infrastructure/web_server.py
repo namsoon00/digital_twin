@@ -875,6 +875,7 @@ def settings_status_payload() -> Dict[str, object]:
         "externalDartEnabled",
         "externalDartLookbackDays",
         "externalDartCorpCodes",
+        "externalDartCompanyFundamentalsEnabled",
         "externalDartDocumentTextEnabled",
         "externalDartDocumentTextMaxChars",
         "externalNewsEnabled",

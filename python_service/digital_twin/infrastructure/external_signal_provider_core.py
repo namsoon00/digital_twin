@@ -4,6 +4,11 @@ from copy import deepcopy
 from datetime import datetime, timedelta, timezone
 from typing import Callable, Dict, Iterable, List
 
+from ..domain.company_knowledge import (
+    COMPANY_KNOWLEDGE_CACHE_VERSION,
+    company_knowledge_by_symbol,
+    merge_company_knowledge_rows,
+)
 from ..domain.crypto_market_signals import (
     combine_crypto_market_snapshots,
     crypto_market_positions,
@@ -88,13 +93,17 @@ class ExternalSignalCoreMixin:
         })
         cache_key = self.cache_key_for_positions(position_list)
         cached = self.cache.load()
+        cache_only = self.external_signal_cache_only()
+        shared_company_knowledge = self.load_shared_company_knowledge(
+            cached,
+            persist_backfill=not cache_only,
+        )
         self.provider_state = self.provider_state_from(cached)
         crypto_snapshot, crypto_cache_state = self.load_crypto_market_snapshot(cached)
         self._crypto_market_snapshot = crypto_snapshot
         self._crypto_market_cache_state = crypto_cache_state
         entry = self.cache_entry(cached, cache_key)
         cache_fresh = self.is_cache_fresh(entry)
-        cache_only = self.external_signal_cache_only()
         if cache_fresh or cache_only:
             signals = entry.get("signals") if isinstance(entry, dict) else None
             if isinstance(signals, dict):
@@ -104,6 +113,7 @@ class ExternalSignalCoreMixin:
                 # above preserves a pre-existing cache entry without changing
                 # any vendor payload.
                 signals = deepcopy(signals)
+                self.attach_shared_company_knowledge(signals, shared_company_knowledge, position_list)
                 crypto_changed = self.merge_cached_crypto_market_snapshot(
                     signals,
                     crypto_snapshot,
@@ -155,6 +165,13 @@ class ExternalSignalCoreMixin:
                 return attach_external_signal_quality(signals, positions=position_list, settings=self.settings)
 
         signals = self.fetch_signals(position_list)
+        refreshed_company_knowledge = self.company_knowledge_from_signals(signals)
+        shared_company_knowledge = self.merge_company_knowledge_maps(
+            shared_company_knowledge,
+            refreshed_company_knowledge,
+        )
+        self.persist_shared_company_knowledge(shared_company_knowledge)
+        self.attach_shared_company_knowledge(signals, shared_company_knowledge, position_list)
         self.refresh_broker_fx_rates(signals, position_list)
         self.record_research_evidence(position_list, signals)
         self.attach_stored_research_evidence(position_list, signals)
@@ -166,6 +183,100 @@ class ExternalSignalCoreMixin:
             subject_count=subject_count,
         ))
         return signals
+
+    @staticmethod
+    def merge_company_knowledge_maps(*groups: Dict[str, object]) -> Dict[str, Dict[str, object]]:
+        result: Dict[str, Dict[str, object]] = {}
+        for group in groups:
+            if not isinstance(group, dict):
+                continue
+            for raw_symbol, row in group.items():
+                symbol = str(raw_symbol or "").upper().strip()
+                if not symbol or not isinstance(row, dict):
+                    continue
+                result[symbol] = merge_company_knowledge_rows(result.get(symbol, {}), row)
+        return result
+
+    @staticmethod
+    def company_knowledge_from_signals(signals: Dict[str, object]) -> Dict[str, Dict[str, object]]:
+        source = dict(signals or {}) if isinstance(signals, dict) else {}
+        symbols = {
+            str(symbol or "").upper().strip()
+            for group in ("companyOverviews", "yfinanceData", "secFilings", "dartDisclosures", "companyKnowledge")
+            for symbol in ((source.get(group) or {}).keys() if isinstance(source.get(group), dict) else [])
+            if str(symbol or "").strip()
+        }
+        generated = company_knowledge_by_symbol(source, symbols)
+        existing = source.get("companyKnowledge") if isinstance(source.get("companyKnowledge"), dict) else {}
+        return ExternalSignalCoreMixin.merge_company_knowledge_maps(existing, generated)
+
+    def load_shared_company_knowledge(
+        self,
+        cached_external_signals: Dict[str, object],
+        *,
+        persist_backfill: bool = False,
+    ) -> Dict[str, Dict[str, object]]:
+        dedicated = {}
+        if getattr(self, "company_knowledge_cache", None):
+            try:
+                payload = self.company_knowledge_cache.load()
+                dedicated = payload.get("symbols") if isinstance(payload, dict) and isinstance(payload.get("symbols"), dict) else {}
+            except Exception:
+                dedicated = {}
+        if dedicated:
+            return self.merge_company_knowledge_maps(dedicated)
+        aggregate_groups = []
+        payload = cached_external_signals if isinstance(cached_external_signals, dict) else {}
+        direct = payload.get("signals") if isinstance(payload.get("signals"), dict) else {}
+        if direct:
+            aggregate_groups.append(self.company_knowledge_from_signals(direct))
+        entries = payload.get("entries") if isinstance(payload.get("entries"), dict) else {}
+        for entry in entries.values():
+            signals = entry.get("signals") if isinstance(entry, dict) and isinstance(entry.get("signals"), dict) else {}
+            if signals:
+                aggregate_groups.append(self.company_knowledge_from_signals(signals))
+        merged = self.merge_company_knowledge_maps(dedicated, *aggregate_groups)
+        if persist_backfill and merged and merged != dedicated:
+            self.persist_shared_company_knowledge(merged)
+        return merged
+
+    def persist_shared_company_knowledge(self, symbols: Dict[str, object]) -> None:
+        if not getattr(self, "company_knowledge_cache", None) or not symbols:
+            return
+        try:
+            self.company_knowledge_cache.replace({
+                "schemaVersion": COMPANY_KNOWLEDGE_CACHE_VERSION,
+                "updatedAt": utc_now_iso(),
+                "symbols": symbols,
+            })
+        except Exception:
+            # The existing external cache remains a complete backfill source.
+            pass
+
+    @staticmethod
+    def attach_shared_company_knowledge(
+        signals: Dict[str, object],
+        shared: Dict[str, object],
+        positions: Iterable[Position],
+    ) -> None:
+        if not isinstance(signals, dict):
+            return
+        selected = {
+            str(getattr(position, "symbol", "") or "").upper().strip()
+            for position in positions or []
+            if str(getattr(position, "symbol", "") or "").strip()
+        }
+        current = signals.get("companyKnowledge") if isinstance(signals.get("companyKnowledge"), dict) else {}
+        attached = {}
+        for symbol in sorted(selected):
+            merged = merge_company_knowledge_rows(
+                shared.get(symbol) if isinstance(shared, dict) else {},
+                current.get(symbol) if isinstance(current, dict) else {},
+            )
+            if merged:
+                attached[symbol] = merged
+        if attached:
+            signals["companyKnowledge"] = attached
 
     def external_signal_cache_only(self) -> bool:
         value = str(self.settings.get("_externalSignalsCacheOnly") or "").strip().lower()
@@ -192,6 +303,7 @@ class ExternalSignalCoreMixin:
             "dartDisclosures": {},
             "newsHeadlines": {},
             "companyOverviews": {},
+            "companyKnowledge": {},
             "earningsReports": {},
             "yfinanceData": {},
             "researchEvidence": {},

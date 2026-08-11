@@ -282,6 +282,12 @@ class MySQLExternalSignalCache(MySQLAppStore):
     store_id = "external_signals"
 
 
+class MySQLCompanyKnowledgeCache(MySQLAppStore):
+    """Shared current company facts reused by every account and world."""
+
+    store_id = "company_knowledge"
+
+
 class MySQLCryptoMarketSignalCache(MySQLAppStore):
     """Small global CoinGecko snapshot, independent from portfolio cache keys."""
 

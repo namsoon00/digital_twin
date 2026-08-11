@@ -642,6 +642,42 @@ class TypeDBOntologyRepositoryTests(unittest.TestCase):
             self.assertIn("attribute " + attribute + ", value double;", schema)
             self.assertIn("owns " + attribute + ",", schema)
 
+    def test_promoted_schema_migration_adds_only_missing_company_attributes(self):
+        repository = TypeDBOntologyGraphRepository("127.0.0.1:1729")
+        queries = []
+
+        class FakeTransaction:
+            def query(self, query):
+                queries.append(query)
+                return SimpleNamespace(resolve=lambda: None)
+
+            def commit(self):
+                queries.append("commit")
+
+            def __enter__(self):
+                return self
+
+            def __exit__(self, *_args):
+                return False
+
+        class FakeDriver:
+            def transaction(self, *_args, **_kwargs):
+                return FakeTransaction()
+
+        existing = (
+            "define\n"
+            "attribute ontology-current-price, value double;\n"
+            "entity ontology-node @abstract, owns ontology-current-price;\n"
+        )
+        imported = ((object, object, object, object, SimpleNamespace(SCHEMA="schema")), None)
+
+        repository.migrate_promoted_schema(FakeDriver(), imported, existing)
+
+        self.assertIn("attribute ontology-company-revenue, value double;", queries[0])
+        self.assertIn("owns ontology-company-revenue", queries[0])
+        self.assertNotIn("attribute ontology-current-price, value double;", queries[0])
+        self.assertEqual("commit", queries[1])
+
     def test_typedb_schema_sync_skips_write_when_base_schema_is_already_current(self):
         repository = TypeDBOntologyGraphRepository("127.0.0.1:1729")
         repository.invalidate_process_base_schema_readiness()

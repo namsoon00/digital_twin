@@ -156,7 +156,28 @@ def _add_external_signal_payload_sources(rows: "OrderedDict[str, Dict[str, objec
     if _group_has_items(signals.get("secFilings")):
         _add_source(rows, "SEC EDGAR", "미국 공시·재무팩트(submissions/companyfacts)")
     if _group_has_items(signals.get("dartDisclosures")):
-        _add_source(rows, "OpenDART", "국내 공시(list)")
+        _add_source(rows, "OpenDART", "국내 공시 목록(list)")
+    company_knowledge = signals.get("companyKnowledge") if isinstance(signals.get("companyKnowledge"), dict) else {}
+    for item in company_knowledge.values():
+        if not isinstance(item, dict):
+            continue
+        providers = {
+            str(row.get("provider") or "").strip().lower()
+            for row in item.get("provenance", [])
+            if isinstance(row, dict)
+        }
+        if any("dart" in provider for provider in providers):
+            _add_source(
+                rows,
+                "OpenDART",
+                "국내 기업개요·재무제표·임원(company/fnlttSinglAcntAll/exctvSttus)",
+            )
+        if any("sec" in provider for provider in providers):
+            _add_source(rows, "SEC EDGAR", "미국 기업 공시·표준 재무팩트(submissions/companyfacts)")
+        if any("kis" in provider for provider in providers):
+            _add_source(rows, "KIS", "국내 기업 PER·PBR·EPS·BPS·시가총액")
+        if any("yfinance" in provider or "yahoo" in provider for provider in providers):
+            _add_source(rows, "yfinance", "기업 프로필·재무제표·임원 보완 데이터")
 
     news = signals.get("newsHeadlines") if isinstance(signals.get("newsHeadlines"), dict) else {}
     for item in news.values():

@@ -1630,6 +1630,7 @@ def build_notification_ai_gate_prompt(
         "relationshipDatabaseInference.whyNow는 새로 달라진 이유이고, signalConflicts는 위험과 지지 근거의 충돌이며, inferenceTimeline은 이전 관측→현재 사실→현재 추론 세대 흐름이다. 반복 상태인지 새 의미 변화인지 먼저 구분한다.",
         "action은 executionPlan의 allowedActions·blockedActions와 TypeDB 관계의 실행 제약을 위반하지 않는 범위에서만 고른다. 코드에 적힌 고정 평균선, 손익률, 거래량, BTC, 금리, 환율 규칙으로 action을 새로 만들지 않는다.",
         "가격·수급·뉴스·공시·크립토·금리·환율 원시값은 TypeDB decisionDrivers와 activeRules가 연결한 근거일 때만 행동 판단에 사용한다. 숫자는 구체적으로 인용할 수 있지만, 입력에 없는 임계값이나 패턴을 스스로 추가하지 않는다.",
+        "회사 재무·밸류에이션·경영진·자본 구조 원시값도 같은 원칙을 적용한다. activeRules에 회사 상태와 시장 반응을 결합한 규칙이 있을 때만 행동 판단 근거로 사용하고, 단일 PER·PBR·ROE나 CEO 이름만으로 매수·매도 결론을 만들지 않는다. 회사 규칙이 성립하면 currentActionPlan에는 현재 대응을, changeAnalysis에는 새로 바뀐 회사 사실 또는 시장 확인을, nextActionPlan에는 다음 보고 기간과 무효화 조건을 서로 다르게 쓴다.",
         "실행계획의 strengthenConditions, weakenConditions, nextChecks, counterSignals와 경쟁 가설을 비교해 어떤 조건이 현재 의견을 지지하거나 약화하는지 설명한다. TypeDB 관계가 없는 단일 사실은 다음 확인 또는 부족 데이터로만 다룬다.",
         "BUY, ADD, HOLD, TRIM, SELL, AVOID 중 하나를 반드시 고르되 자동 주문 지시처럼 쓰지 않는다.",
         "대상이 관심종목이면 targetPositionRole=watchlist이고 actionPolicy=ENTRY_ONLY다. 이 정책은 온톨로지 RuleBox/InferenceBox에서 온 제약이다. 관심종목은 보유 수량이 아니므로 HOLD는 '관심 유지', BUY는 '소액 진입 검토', AVOID는 '신규 진입 회피/대기'로 판단한다. 관심종목에 대해 보유 유지, 추가매수, 분할축소, 매도처럼 보유종목용 표현을 쓰지 않는다.",

@@ -32,6 +32,10 @@ class ExternalSignalMarketMixin:
     def dart_document_text_max_chars(self) -> int:
         return max(500, min(20000, int(number(self.settings.get("externalDartDocumentTextMaxChars")) or 6000)))
 
+    def dart_company_fundamentals_enabled(self) -> bool:
+        value = str(self.settings.get("externalDartCompanyFundamentalsEnabled") or "1").strip().lower()
+        return value not in {"0", "false", "no", "off", "disabled"}
+
     def add_coingecko(self, signals: Dict[str, object]) -> bool:
         if not self.external_api_enabled("externalCoinGeckoEnabled"):
             return False
@@ -524,6 +528,16 @@ class ExternalSignalMarketMixin:
 
                 disclosure = self.guarded_call("OpenDART", "list:" + symbol, fetch_disclosure)
                 if disclosure:
+                    disclosure["fetchedAt"] = utc_now_iso()
+                    if self.dart_company_fundamentals_enabled():
+                        self.attach_opendart_company_facts(
+                            signals,
+                            disclosure,
+                            symbol,
+                            corp_code,
+                            api_key,
+                            now,
+                        )
                     receipt_no = str(disclosure.get("receiptNo") or "").strip()
                     if receipt_no and self.dart_document_text_enabled():
                         try:
@@ -547,6 +561,131 @@ class ExternalSignalMarketMixin:
                     signals["dartDisclosures"][symbol] = disclosure
             except Exception as error:  # noqa: BLE001
                 self.status_for_error(signals, "OpenDART", symbol + " ", error)
+
+    def attach_opendart_company_facts(
+        self,
+        signals: Dict[str, object],
+        disclosure: Dict[str, object],
+        symbol: str,
+        corp_code: str,
+        api_key: str,
+        now: datetime,
+    ) -> None:
+        """Attach bounded official company, statement and executive facts.
+
+        A failure in an optional endpoint must not discard the already valid
+        disclosure list.  The raw provider payload is reduced here because
+        the external-signal cache is a current source record, not a DART data
+        warehouse.
+        """
+
+        def fetch_api(endpoint: str, params: Dict[str, object]) -> Dict[str, object]:
+            payload = self.fetch_json(
+                "https://opendart.fss.or.kr/api/" + endpoint + ".json?" + urllib.parse.urlencode({
+                    "crtfc_key": api_key,
+                    "corp_code": corp_code,
+                    **params,
+                }),
+                {"Accept": "application/json"},
+            )
+            status = str(payload.get("status") or "")
+            if status and status != "000":
+                raise RuntimeError(str(payload.get("message") or status))
+            return payload
+
+        try:
+            company = self.guarded_call(
+                "OpenDART",
+                "company:" + symbol,
+                lambda: fetch_api("company", {}),
+            )
+            if isinstance(company, dict):
+                disclosure["company"] = {
+                    key: company.get(key)
+                    for key in (
+                        "corp_name", "corp_name_eng", "stock_name", "stock_code",
+                        "ceo_nm", "corp_cls", "jurir_no", "bizr_no", "adres",
+                        "hm_url", "ir_url", "induty_code", "est_dt", "acc_mt",
+                    )
+                    if company.get(key) not in (None, "")
+                }
+        except Exception as error:  # noqa: BLE001 - list data remains usable.
+            self.status_for_error(signals, "OpenDART", symbol + " company ", error)
+
+        report_candidates = []
+        if now.month >= 11:
+            report_candidates.append((str(now.year), "11014"))
+        elif now.month >= 8:
+            report_candidates.append((str(now.year), "11012"))
+        elif now.month >= 5:
+            report_candidates.append((str(now.year), "11013"))
+        report_candidates.append((str(now.year - 1), "11011"))
+        for business_year, report_code in report_candidates:
+            try:
+                statements = self.guarded_call(
+                    "OpenDART",
+                    "financials:" + symbol + ":" + business_year + ":" + report_code,
+                    lambda year=business_year, code=report_code: fetch_api("fnlttSinglAcntAll", {
+                        "bsns_year": year,
+                        "reprt_code": code,
+                        "fs_div": "CFS",
+                    }),
+                )
+                rows = statements.get("list") if isinstance(statements, dict) and isinstance(statements.get("list"), list) else []
+                if rows:
+                    disclosure["financialStatements"] = [
+                        {
+                            key: row.get(key)
+                            for key in (
+                                "rcept_no", "reprt_code", "bsns_year", "corp_code",
+                                "sj_div", "sj_nm", "account_id", "account_nm",
+                                "account_detail", "thstrm_nm", "thstrm_dt", "thstrm_amount",
+                                "frmtrm_nm", "frmtrm_dt", "frmtrm_amount",
+                                "bfefrmtrm_nm", "bfefrmtrm_dt", "bfefrmtrm_amount",
+                                "ord", "currency",
+                            )
+                            if row.get(key) not in (None, "")
+                        }
+                        for row in rows[:180]
+                        if isinstance(row, dict)
+                    ]
+                    disclosure["financialStatementBasis"] = {
+                        "businessYear": business_year,
+                        "reportCode": report_code,
+                        "scope": "CFS",
+                    }
+                    break
+            except Exception as error:  # noqa: BLE001 - try the annual fallback.
+                if (business_year, report_code) == report_candidates[-1]:
+                    self.status_for_error(signals, "OpenDART", symbol + " financials ", error)
+
+        executive_year = str(now.year - 1)
+        try:
+            executives = self.guarded_call(
+                "OpenDART",
+                "executives:" + symbol + ":" + executive_year,
+                lambda: fetch_api("exctvSttus", {
+                    "bsns_year": executive_year,
+                    "reprt_code": "11011",
+                }),
+            )
+            rows = executives.get("list") if isinstance(executives, dict) and isinstance(executives.get("list"), list) else []
+            if rows:
+                disclosure["executives"] = [
+                    {
+                        key: row.get(key)
+                        for key in (
+                            "nm", "sexdstn", "birth_ym", "ofcps", "rgist_exctv_at",
+                            "fte_at", "chrg_job", "main_career", "mxmm_shrholdr_relate",
+                            "hffc_pd", "tenure_end_on", "stlm_dt",
+                        )
+                        if row.get(key) not in (None, "")
+                    }
+                    for row in rows[:40]
+                    if isinstance(row, dict)
+                ]
+        except Exception as error:  # noqa: BLE001 - governance coverage is explicit but optional.
+            self.status_for_error(signals, "OpenDART", symbol + " executives ", error)
 
     def dart_symbols(self, positions: List[Position]) -> List[str]:
         if not self.external_api_enabled("externalDartEnabled"):

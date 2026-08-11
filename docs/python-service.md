@@ -260,6 +260,7 @@ Configuration:
 - `SECURITY_LINE_MAPPINGS`: optional line mappings in `localSymbol|companyName|role|symbol|label|market|currency|exchange|adrRatio|conversionStartDate|leverageFactor|underlyingSymbol|sourceUrl|listingDate` format.
 - `EXTERNAL_SEC_CONTACT_EMAIL`: a real SEC contact email. It is required before filing-document bodies are fetched; filing metadata and company facts remain independently collectible.
 - `EXTERNAL_DART_LOOKBACK_DAYS`: OpenDART disclosure lookback, default 14.
+- `EXTERNAL_DART_COMPANY_FUNDAMENTALS_ENABLED`: collect bounded official company overview, financial statement, and executive facts for the company KnowledgeWorld, default 1.
 - `EXTERNAL_DART_CORP_CODES`: ticker-to-corp-code mappings, for example `005930=00126380;000660=00164779`.
 
 Temporal ontology reasoning groups repeated monitor snapshots before RuleBox derives risk/support episodes. This prevents alerts from judging only the latest price point.

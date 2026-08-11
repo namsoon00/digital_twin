@@ -19,10 +19,11 @@ from copy import deepcopy
 import json
 from typing import Dict, Iterable, Mapping, Set
 
+from .company_knowledge import company_knowledge_by_symbol, merge_company_knowledge_rows
 from .security_lines import security_lines_for_symbol
 
 
-ONTOLOGY_PROJECTION_INPUT_VERSION = "ontology-projection-input-v1"
+ONTOLOGY_PROJECTION_INPUT_VERSION = "ontology-projection-input-v2"
 ONTOLOGY_REASONING_SNAPSHOT_INPUT_VERSION = "ontology-reasoning-snapshot-input-v2"
 
 SYMBOL_SIGNAL_GROUPS = {
@@ -34,6 +35,7 @@ SYMBOL_SIGNAL_GROUPS = {
     "earningsReports",
     "companyOverviews",
     "researchEvidence",
+    "companyKnowledge",
 }
 
 RESEARCH_ITEM_LIMIT = 12
@@ -421,6 +423,12 @@ def _compact_yfinance(value: object) -> Dict[str, object]:
             "longName", "shortName", "displayName", "quoteType", "currency", "exchange",
             "sector", "industry", "marketCap", "trailingPE", "forwardPE", "beta",
             "dividendYield", "bookValue", "epsTrailingTwelveMonths", "epsForward",
+            "priceToBook", "trailingEps", "returnOnEquity", "returnOnAssets",
+            "enterpriseToEbitda", "totalRevenue", "grossProfits", "operatingIncome",
+            "netIncomeToCommon", "freeCashflow", "operatingCashflow", "totalCash",
+            "totalDebt", "sharesOutstanding", "floatShares", "sharesShort",
+            "heldPercentInstitutions", "heldPercentInsiders", "website",
+            "mostRecentQuarter", "companyOfficers",
         ],
         text_limit=300,
         list_limit=8,
@@ -464,6 +472,9 @@ def _compact_company_overview(value: object) -> Dict[str, object]:
             "symbol", "name", "provider", "currency", "sector", "industry", "fetchedAt",
             "latestQuarter", "marketCapitalization", "revenueTTM", "grossProfitTTM", "ebitda",
             "profitMargin", "operatingMarginTTM", "peRatio", "pegRatio", "forwardPE", "beta",
+            "pbr", "bps", "bookValue", "trailingEPS", "epsTrailingTwelveMonths",
+            "returnOnEquity", "returnOnAssets", "enterpriseToEbitda", "freeCashFlow",
+            "operatingCashFlow", "totalDebt", "totalCash", "sharesOutstanding", "ceoName",
             "dividendYield", "analystTargetPrice", "analystRatingStrongBuy", "analystRatingBuy",
             "analystRatingHold", "analystRatingSell", "analystRatingStrongSell",
         ],
@@ -544,6 +555,84 @@ def _compact_news_headlines(value: object) -> Dict[str, object]:
     return result
 
 
+def _compact_company_knowledge(value: object) -> Dict[str, object]:
+    """Preserve the canonical company facts without provider archives.
+
+    CompanyKnowledge is already a normalized read model.  Applying the generic
+    depth-three limiter converted nested financial period rows into strings,
+    which made a cached statement disappear from change detection.  Keep a
+    deliberately small number of structured periods here; the ABox builder
+    applies its stricter current-state limits afterwards.
+    """
+
+    source = value if isinstance(value, Mapping) else {}
+    result = _selected(
+        source,
+        ["schemaVersion", "symbol", "companyName", "factRevision"],
+        text_limit=240,
+        depth=1,
+    )
+    for section in ("profile", "valuation", "ownership", "capital", "coverage"):
+        compact = _bounded_value(
+            source.get(section),
+            text_limit=320,
+            list_limit=8,
+            map_limit=50,
+            depth=3,
+        )
+        if compact:
+            result[section] = compact
+
+    financials = source.get("financials") if isinstance(source.get("financials"), Mapping) else {}
+    compact_financials = {}
+    for frequency in ("annual", "interim", "quarterly"):
+        periods = financials.get(frequency) if isinstance(financials.get(frequency), list) else []
+        compact_periods = [
+            _bounded_value(
+                period,
+                text_limit=240,
+                list_limit=6,
+                map_limit=50,
+                depth=3,
+            )
+            for period in periods[:4]
+            if isinstance(period, Mapping)
+        ]
+        if compact_periods:
+            compact_financials[frequency] = compact_periods
+    if compact_financials:
+        result["financials"] = compact_financials
+
+    governance = source.get("governance") if isinstance(source.get("governance"), Mapping) else {}
+    executives = governance.get("executives") if isinstance(governance.get("executives"), list) else []
+    compact_executives = [
+        _bounded_value(
+            item,
+            text_limit=320,
+            list_limit=4,
+            map_limit=20,
+            depth=3,
+        )
+        for item in executives[:8]
+        if isinstance(item, Mapping)
+    ]
+    if compact_executives or governance.get("executiveCount") not in (None, ""):
+        result["governance"] = {
+            "executiveCount": min(len(compact_executives), 8),
+            "executives": compact_executives,
+        }
+
+    provenance = source.get("provenance") if isinstance(source.get("provenance"), list) else []
+    compact_provenance = [
+        _selected(item, ["provider", "asOf", "scope"], text_limit=240, depth=1)
+        for item in provenance[:6]
+        if isinstance(item, Mapping)
+    ]
+    if compact_provenance:
+        result["provenance"] = compact_provenance
+    return result
+
+
 def _compact_symbol_group(
     group: str,
     value: object,
@@ -568,6 +657,8 @@ def _compact_symbol_group(
             compact = _compact_filing(item)
         elif group == "newsHeadlines":
             compact = _compact_news_headlines(item)
+        elif group == "companyKnowledge":
+            compact = _compact_company_knowledge(item)
         elif group == "researchEvidence":
             rows = item if isinstance(item, list) else []
             compact = [
@@ -699,9 +790,28 @@ def compact_symbol_external_signals_for_ontology(
     allowed_symbols = projection_signal_symbols(target_symbols, settings)
     result: Dict[str, object] = {}
     for group in sorted(SYMBOL_SIGNAL_GROUPS):
+        if group == "companyKnowledge":
+            continue
         compact = _compact_symbol_group(group, source.get(group), allowed_symbols)
         if compact:
             result[group] = compact
+    company_symbols = set(allowed_symbols)
+    if not company_symbols:
+        for group in ("companyOverviews", "yfinanceData", "secFilings", "dartDisclosures", "companyKnowledge"):
+            rows = source.get(group)
+            if isinstance(rows, Mapping):
+                company_symbols.update(_symbols(rows.keys()))
+    company_knowledge = company_knowledge_by_symbol(source, company_symbols)
+    existing_company_knowledge = _compact_symbol_group(
+        "companyKnowledge",
+        source.get("companyKnowledge"),
+        allowed_symbols,
+    )
+    for symbol, existing in existing_company_knowledge.items():
+        candidate = company_knowledge.get(symbol) if isinstance(company_knowledge.get(symbol), Mapping) else {}
+        company_knowledge[symbol] = merge_company_knowledge_rows(existing, candidate)
+    if company_knowledge:
+        result["companyKnowledge"] = company_knowledge
     return result
 
 

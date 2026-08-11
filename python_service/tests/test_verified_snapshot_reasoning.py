@@ -1,3 +1,4 @@
+import copy
 import sys
 import unittest
 from datetime import datetime
@@ -437,6 +438,51 @@ class VerifiedSnapshotReasoningTests(unittest.TestCase):
         self.assertIsNone(
             verified_monitor_snapshot_reasoning_event(current, previous.to_monitor_state())
         )
+
+    def test_company_knowledge_revision_enqueues_company_fact_families_once(self):
+        base_company = {
+            "AAPL": {
+                "schemaVersion": "company-knowledge-v1",
+                "symbol": "AAPL",
+                "factRevision": "revision-a",
+                "financials": {"annual": [{"period": "2025-09-30", "revenueGrowthPct": 5.0}]},
+                "coverage": {"financialPeriods": 1, "dataState": "partial"},
+            },
+        }
+        changed_company = copy.deepcopy(base_company)
+        changed_company["AAPL"]["factRevision"] = "revision-b"
+        changed_company["AAPL"]["financials"]["annual"][0]["revenueGrowthPct"] = 8.0
+        previous = snapshot(external_signals={"companyKnowledge": base_company})
+        current = snapshot(external_signals={"companyKnowledge": changed_company})
+
+        event = verified_monitor_snapshot_reasoning_event(current, previous.to_monitor_state())
+
+        self.assertEqual(["AAPL"], event.payload["symbols"])
+        self.assertEqual(
+            ["CapitalStructureChange", "CompanyProfile", "FinancialFact", "GovernanceChange", "ValuationObservation"],
+            event.payload["factTypesBySymbol"]["AAPL"],
+        )
+        entries = durable_mailbox_entries(event)
+        self.assertEqual({"EVIDENCE"}, {entry["workClass"] for entry in entries})
+
+    def test_price_change_reads_company_knowledge_without_company_change_event(self):
+        company = {
+            "AAPL": {
+                "schemaVersion": "company-knowledge-v1",
+                "symbol": "AAPL",
+                "factRevision": "stable-revision",
+                "financials": {"annual": [{"period": "2025-09-30", "revenueGrowthPct": 5.0}]},
+                "coverage": {"financialPeriods": 1, "dataState": "partial"},
+            },
+        }
+        previous = snapshot(external_signals={"companyKnowledge": company})
+        current = snapshot(aapl_price=102.0, external_signals={"companyKnowledge": company})
+
+        event = verified_monitor_snapshot_reasoning_event(current, previous.to_monitor_state())
+
+        self.assertEqual(["AAPL"], event.payload["symbols"])
+        self.assertEqual(["MarketQuote"], event.payload["factTypesBySymbol"]["AAPL"])
+        self.assertNotIn("external.companyKnowledge", event.payload["changedFieldsBySymbol"]["AAPL"])
 
     def test_mailbox_entries_keep_fact_types_bound_to_the_changed_symbol(self):
         previous = snapshot()

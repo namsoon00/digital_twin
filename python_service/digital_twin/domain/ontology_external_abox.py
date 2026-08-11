@@ -905,6 +905,8 @@ def external_signal_relation_properties(group: str, value: object) -> Dict[str, 
 def add_symbol_external_signal_concepts(graph: PortfolioOntology, stock_id: str, symbol: str, external_signals: Dict[str, object]) -> None:
     for row in symbol_external_signal_items(external_signals, symbol):
         group = str(row.get("group") or "")
+        if group == "companyKnowledge":
+            continue
         signal_id = add_entity(graph, "external-signal", symbol + ":" + group, group + " 외부 신호", {
             "tboxClass": "ExternalSignal",
             "tboxClasses": external_signal_classes(group),

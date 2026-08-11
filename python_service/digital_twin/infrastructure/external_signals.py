@@ -24,6 +24,7 @@ from .external_signal_utils import (
     symbol_list,
 )
 from .operational_store import (
+    company_knowledge_cache,
     crypto_market_signal_cache,
     external_signal_cache,
     market_time_series_store,
@@ -49,12 +50,16 @@ class ExternalSignalProvider(
         fetch_text: TextFetcher = None,
         fetch_bytes: BytesFetcher = None,
         sleep: Callable[[float], None] = None,
+        company_cache=None,
         crypto_cache=None,
         crypto_time_series_store=None,
     ):
         self.settings = settings or runtime_settings()
         uses_default_cache = cache is None
         self.cache = cache or external_signal_cache(self.settings)
+        self.company_knowledge_cache = company_cache if company_cache is not None else (
+            company_knowledge_cache(self.settings) if uses_default_cache else None
+        )
         # Injected aggregate caches are normally isolated unit-test doubles.
         # Production providers additionally share one compact global crypto
         # snapshot so portfolio/settings cache-key changes cannot hide it.

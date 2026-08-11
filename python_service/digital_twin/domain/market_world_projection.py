@@ -98,7 +98,7 @@ ACCOUNT_PROPERTY_KEYS = {
 # cognitive workspace. Bump this value whenever the projection contract
 # becomes stricter so existing shared Manifests are rebuilt rather than
 # preserving a legacy property slice indefinitely.
-SHARED_WORLD_PROJECTION_CONTRACT_VERSION = "shared-world-projection-v3"
+SHARED_WORLD_PROJECTION_CONTRACT_VERSION = "shared-world-projection-v4"
 
 
 def _property_key(value: object) -> str:

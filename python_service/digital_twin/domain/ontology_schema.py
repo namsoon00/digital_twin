@@ -21,7 +21,7 @@ from .ontology_tbox import (
 )
 
 
-ONTOLOGY_TBOX_VERSION = "investment-tbox-v4"
+ONTOLOGY_TBOX_VERSION = "investment-tbox-v5"
 
 
 @lru_cache(maxsize=1)

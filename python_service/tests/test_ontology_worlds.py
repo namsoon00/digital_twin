@@ -235,6 +235,39 @@ class OntologyWorldContractTests(unittest.TestCase):
         self.assertTrue(any(item.relation_type == "ISSUES" for item in projected.relations))
         self.assertEqual("KnowledgeWorld", projected.entities[0].properties["tboxClass"])
 
+    def test_knowledge_world_keeps_company_states_for_reuse_without_quote_rewrite(self):
+        graph = PortfolioOntology("account-a")
+        graph.entities.extend([
+            OntologyEntity("stock:005930", "Samsung", "stock", {
+                "ontologyBox": "ABox", "tboxClass": "Stock", "symbol": "005930", "currentPrice": 70000,
+            }),
+            OntologyEntity("company:005930", "Samsung", "company", {
+                "ontologyBox": "ABox", "tboxClass": "Company", "symbol": "005930",
+            }),
+            OntologyEntity("company-financial-state:005930:2025", "Samsung 2025", "company-financial-state", {
+                "ontologyBox": "ABox", "tboxClass": "FinancialState", "symbol": "005930",
+                "revenueGrowthPct": 8.0, "freeCashFlowMarginPct": 12.0,
+            }),
+            OntologyEntity("company-governance-state:005930", "Samsung governance", "company-governance-state", {
+                "ontologyBox": "ABox", "tboxClass": "GovernanceState", "symbol": "005930", "executiveCount": 5,
+            }),
+        ])
+        graph.relations.extend([
+            OntologyRelation("stock:005930", "company:005930", "REPRESENTS_COMPANY", properties={"ontologyBox": "ABox"}),
+            OntologyRelation("stock:005930", "company-financial-state:005930:2025", "HAS_FINANCIAL_STATE", properties={"ontologyBox": "ABox"}),
+            OntologyRelation("stock:005930", "company-governance-state:005930", "HAS_GOVERNANCE_STATE", properties={"ontologyBox": "ABox"}),
+        ])
+
+        projected = build_knowledge_world_graph(graph, knowledge_world("kr"))
+        kinds = {item.kind for item in projected.entities}
+        stock = next(item for item in projected.entities if item.entity_id == "stock:005930")
+
+        self.assertIn("company-financial-state", kinds)
+        self.assertIn("company-governance-state", kinds)
+        self.assertNotIn("currentPrice", stock.properties)
+        self.assertTrue(any(item.relation_type == "HAS_FINANCIAL_STATE" for item in projected.relations))
+        self.assertTrue(any(item.relation_type == "HAS_GOVERNANCE_STATE" for item in projected.relations))
+
     def test_market_world_prunes_stale_observations_without_erasing_fresh_account_slice(self):
         world = market_world("kr")
         old = build_market_world_graph(

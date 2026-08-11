@@ -281,17 +281,34 @@ class ExternalSignalSecMixin:
                 "SalesRevenueNet",
             ]),
             "netIncome": self.latest_sec_fact(facts, ["NetIncomeLoss", "ProfitLoss"]),
+            "grossProfit": self.latest_sec_fact(facts, ["GrossProfit"]),
+            "operatingIncome": self.latest_sec_fact(facts, ["OperatingIncomeLoss"]),
             "assets": self.latest_sec_fact(facts, ["Assets"]),
             "liabilities": self.latest_sec_fact(facts, ["Liabilities"]),
             "equity": self.latest_sec_fact(facts, ["StockholdersEquity", "StockholdersEquityIncludingPortionAttributableToNoncontrollingInterest"]),
+            "cash": self.latest_sec_fact(facts, ["CashAndCashEquivalentsAtCarryingValue", "CashCashEquivalentsRestrictedCashAndRestrictedCashEquivalents"]),
+            "totalDebt": self.latest_sec_fact(facts, ["LongTermDebtAndFinanceLeaseObligationsCurrent", "LongTermDebtCurrent", "LongTermDebt"]),
+            "operatingCashFlow": self.latest_sec_fact(facts, ["NetCashProvidedByUsedInOperatingActivities"]),
+            "capitalExpenditure": self.latest_sec_fact(facts, ["PaymentsToAcquirePropertyPlantAndEquipment"]),
+            "sharesOutstanding": self.latest_sec_fact(facts, ["EntityCommonStockSharesOutstanding"], units=("shares",)),
         }
 
-    def latest_sec_fact(self, facts: Dict[str, object], tags: List[str]) -> Dict[str, object]:
+    def latest_sec_fact(
+        self,
+        facts: Dict[str, object],
+        tags: List[str],
+        units: tuple = ("USD",),
+    ) -> Dict[str, object]:
         financial_forms = {"10-K", "10-Q", "20-F", "40-F"}
         for tag in tags:
             concept = facts.get(tag)
-            units = concept.get("units") if isinstance(concept, dict) else {}
-            values = units.get("USD") if isinstance(units, dict) else []
+            unit_rows = concept.get("units") if isinstance(concept, dict) else {}
+            values = []
+            if isinstance(unit_rows, dict):
+                for unit in units:
+                    if isinstance(unit_rows.get(unit), list):
+                        values = unit_rows.get(unit)
+                        break
             if not isinstance(values, list):
                 continue
             candidates = [
@@ -315,5 +332,6 @@ class ExternalSignalSecMixin:
                 "fy": str(latest.get("fy") or ""),
                 "fp": str(latest.get("fp") or ""),
                 "form": str(latest.get("form") or ""),
+                "unit": next((unit for unit in units if isinstance(unit_rows, dict) and isinstance(unit_rows.get(unit), list)), ""),
             }
         return {}

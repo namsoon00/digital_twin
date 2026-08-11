@@ -19,7 +19,7 @@ from typing import Dict, Iterable, List, Mapping, Optional, Sequence, Set
 # shared facts that happened to be present in the latest persisted snapshot.
 # TypeDB still evaluates every selected RuleBox function; Python only avoids
 # scheduling rules whose actual inputs did not change for this event.
-CHANGE_IMPACT_VERSION = "abox-change-impact-v12"
+CHANGE_IMPACT_VERSION = "abox-change-impact-v14"
 DEPENDENCY_FINGERPRINT_VERSION = "rule-input-v2"
 
 SYMBOL_SCOPE_FAMILIES = {
@@ -32,6 +32,10 @@ SYMBOL_SCOPE_FAMILIES = {
     "evidence",
     "quality",
     "valuation",
+    "company-valuation",
+    "fundamental",
+    "governance",
+    "capital",
     "exposure",
     # Cross-scope TypeDB assertions live in a relation-only scope. Keeping
     # edges out of their endpoint fact scopes prevents one fresh quote from
@@ -73,6 +77,12 @@ _EVENT_FACT_TYPE_SCOPE_FAMILIES = {
     "dataquality": {"quality"},
     "fxrate": {"macro-fx"},
     "interestrate": {"macro-rates"},
+    "financialfact": {"fundamental"},
+    "financialstatement": {"fundamental"},
+    "companyprofile": {"profile"},
+    "governancechange": {"governance"},
+    "capitalstructurechange": {"capital"},
+    "valuationobservation": {"company-valuation"},
 }
 
 
@@ -246,6 +256,12 @@ def family_for_field(field: object) -> str:
         return "quality"
     if value in {"adrpremiumpct", "marginofsafety", "premium", "discount"}:
         return "valuation"
+    if _matches_any(value, ["executive", "governance", "ceoname", "board", "tenure"]):
+        return "governance"
+    if _matches_any(value, ["sharesoutstanding", "floatshares", "sharesshort", "capitalstructure", "dilution"]):
+        return "capital"
+    if _matches_any(value, ["revenue", "grossprofit", "operatingincome", "netincome", "freecashflow", "operatingcashflow", "totalassets", "totalliabilities", "totalequity", "equity", "cashconversion", "debttoequity", "liabilitiestoassets", "financialstatement", "financialstate"]):
+        return "fundamental"
     if _matches_any(value, ["profitloss", "averageprice", "quantity", "marketvalue", "positionweight", "sellable", "holding"]):
         return "position"
     if _matches_any(value, ["foreign", "institution", "individual", "volume", "tradestrength", "bidask", "orderbook", "liquidity", "slippage", "execution"]):
@@ -254,7 +270,7 @@ def family_for_field(field: object) -> str:
         return "temporal"
     if _matches_any(value, ["fresh", "quality", "sourceasof", "sourcefetched", "missing", "coverage", "stale", "validity", "latency"]):
         return "quality"
-    if _matches_any(value, ["valuation", "fairvalue", "targetprice", "per", "pbr", "eps", "revenue", "earning", "fundamental"]):
+    if _matches_any(value, ["valuation", "fairvalue", "targetprice", "per", "pbr", "eps", "earning"]):
         return "valuation"
     if _matches_any(value, ["news", "disclosure", "article", "research", "event", "claim", "filing"]):
         return "evidence"
@@ -283,6 +299,14 @@ def family_for_entity(kind: object, properties: Mapping[str, object] = None, ent
         return "macro-market"
     if _matches_any(text, ["benchmark-index", "benchmark-proxy"]):
         return "macro-market"
+    if _matches_any(text, ["company-financial", "financial-state", "financial-fact", "financial-statement", "income-statement", "balance-sheet", "cash-flow-statement"]):
+        return "fundamental"
+    if _matches_any(text, ["company-governance", "governance-state", "executive-role", "board-membership", "person"]):
+        return "governance"
+    if _matches_any(text, ["company-capital", "capital-state", "capital-structure", "capital-event", "ownership-stake"]):
+        return "capital"
+    if _matches_any(text, ["company-valuation", "company-valuation-state"]):
+        return "company-valuation"
     if _matches_any(text, ["valuation", "fair-value", "fairvalue", "fundamental", "margin-of-safety", "cross-market-premium", "adr-premium"]):
         return "valuation"
     if _matches_any(text, ["news", "disclosure", "filing", "research", "article", "document", "claim", "evidence", "external-signal", "corporate-action"]):
@@ -363,6 +387,14 @@ def family_for_relation(
         return "profile"
     if _matches_any(text, ["has_margin_of_safety", "has_adr_premium", "cross_market_premium", "adr_premium"]):
         return "valuation"
+    if _matches_any(text, ["financial_state", "financial_report", "financial_statement", "financial_fact", "accounting_scope"]):
+        return "fundamental"
+    if _matches_any(text, ["governance_state", "executive_role", "role_held", "ownership_stake", "stake_held"]):
+        return "governance"
+    if _matches_any(text, ["capital_state", "capital_structure", "capital_event", "affects_share_count"]):
+        return "capital"
+    if _matches_any(text, ["company_valuation", "company-valuation"]):
+        return "company-valuation"
     if _matches_any(text, ["has_beta_to", "has_crypto_exposure", "has_factor_exposure", "exposed_to"]):
         return "exposure"
     if _matches_any(text, ["exposed_to_fx", "has_fx", "fx_rate"]):

@@ -92,6 +92,112 @@ class OntologyChangeImpactTests(unittest.TestCase):
         self.assertEqual(first_generations["symbol:005930:state"], second_generations["symbol:005930:state"])
         self.assertEqual(first_generations["macro:market"], second_generations["macro:market"])
 
+    def test_company_facts_have_independent_scopes_from_market_quotes(self):
+        graph = PortfolioOntology(
+            "main",
+            entities=[
+                OntologyEntity("stock:005930", "삼성전자", "stock", {
+                    "ontologyBox": "ABox", "symbol": "005930", "currentPrice": 70000,
+                }),
+                OntologyEntity("company-financial-state:005930:2025", "삼성전자 재무", "company-financial-state", {
+                    "ontologyBox": "ABox", "symbol": "005930", "tboxClass": "FinancialState",
+                    "revenueGrowthPct": 8.0,
+                }),
+                OntologyEntity("company-governance-state:005930", "삼성전자 경영진", "company-governance-state", {
+                    "ontologyBox": "ABox", "symbol": "005930", "tboxClass": "GovernanceState",
+                    "executiveCount": 4,
+                }),
+                OntologyEntity("company-capital-state:005930", "삼성전자 자본", "company-capital-state", {
+                    "ontologyBox": "ABox", "symbol": "005930", "tboxClass": "CapitalState",
+                    "sharesOutstanding": 100,
+                }),
+                OntologyEntity("company-valuation-state:005930", "삼성전자 회사 평가", "company-valuation-state", {
+                    "ontologyBox": "ABox", "symbol": "005930", "tboxClass": "ValuationMetric",
+                    "peRatio": 12.0, "returnOnEquityPct": 15.0,
+                }),
+                OntologyEntity("price-metric:005930:currentPrice", "현재가", "price-metric", {
+                    "ontologyBox": "ABox", "symbol": "005930", "currentPrice": 70000,
+                }),
+            ],
+            relations=[
+                OntologyRelation("stock:005930", "company-financial-state:005930:2025", "HAS_FINANCIAL_STATE", properties={"ontologyBox": "ABox"}),
+                OntologyRelation("stock:005930", "company-governance-state:005930", "HAS_GOVERNANCE_STATE", properties={"ontologyBox": "ABox"}),
+                OntologyRelation("stock:005930", "company-capital-state:005930", "HAS_CAPITAL_STATE", properties={"ontologyBox": "ABox"}),
+                OntologyRelation("stock:005930", "company-valuation-state:005930", "HAS_VALUATION_METRIC", properties={"ontologyBox": "ABox"}),
+                OntologyRelation("stock:005930", "price-metric:005930:currentPrice", "HAS_PRICE", properties={"ontologyBox": "ABox"}),
+            ],
+        )
+
+        first = apply_scoped_abox_identity(graph)
+        scopes = {item.entity_id: item.properties["aboxScopeId"] for item in graph.entities}
+        self.assertEqual("symbol:005930:fundamental", scopes["company-financial-state:005930:2025"])
+        self.assertEqual("symbol:005930:governance", scopes["company-governance-state:005930"])
+        self.assertEqual("symbol:005930:capital", scopes["company-capital-state:005930"])
+        self.assertEqual("symbol:005930:company-valuation", scopes["company-valuation-state:005930"])
+        self.assertEqual("symbol:005930:market", scopes["price-metric:005930:currentPrice"])
+
+        generations = dict(first["scopeGenerationIds"])
+        price = next(item for item in graph.entities if item.kind == "price-metric")
+        price.properties["currentPrice"] = 71000
+        second = apply_scoped_abox_identity(graph)
+
+        self.assertNotEqual(generations["symbol:005930:market"], second["scopeGenerationIds"]["symbol:005930:market"])
+        self.assertEqual(generations["symbol:005930:fundamental"], second["scopeGenerationIds"]["symbol:005930:fundamental"])
+        self.assertEqual(generations["symbol:005930:governance"], second["scopeGenerationIds"]["symbol:005930:governance"])
+        self.assertEqual(generations["symbol:005930:capital"], second["scopeGenerationIds"]["symbol:005930:capital"])
+        self.assertEqual(generations["symbol:005930:company-valuation"], second["scopeGenerationIds"]["symbol:005930:company-valuation"])
+
+    def test_market_change_selects_company_market_rule_without_rewriting_company_scope(self):
+        graph = PortfolioOntology(
+            "main",
+            entities=[
+                OntologyEntity("stock:005930", "삼성전자", "stock", {
+                    "ontologyBox": "ABox", "symbol": "005930", "ma20Distance": -1.0,
+                }),
+                OntologyEntity("company-financial-state:005930:2025", "삼성전자 재무", "company-financial-state", {
+                    "ontologyBox": "ABox", "symbol": "005930", "tboxClass": "FinancialState",
+                    "revenueGrowthPct": 8.0, "freeCashFlowMarginPct": 7.0,
+                }),
+            ],
+            relations=[
+                OntologyRelation(
+                    "stock:005930",
+                    "company-financial-state:005930:2025",
+                    "HAS_FINANCIAL_STATE",
+                    properties={"ontologyBox": "ABox"},
+                ),
+            ],
+        )
+        first = apply_scoped_abox_identity(graph)
+        stock = next(item for item in graph.entities if item.kind == "stock")
+        stock.properties["ma20Distance"] = 1.0
+        second = apply_scoped_abox_identity(graph)
+        company_rule = next(
+            rule.to_dict()
+            for rule in default_graph_inference_rules()
+            if rule.rule_id == "graph.company.market.fundamental_confirmation.support.v1"
+        )
+
+        plan = build_inference_impact_plan(
+            first["scopePlan"],
+            second["scopePlan"],
+            ["005930"],
+            explicit_target_symbols=["005930"],
+            rules=[company_rule],
+            requested_fact_families=["market"],
+            requested_fact_families_by_symbol={"005930": ["market"]},
+        )
+
+        self.assertEqual(["market"], plan["changedScopeFamilies"])
+        self.assertEqual(
+            ["graph.company.market.fundamental_confirmation.support.v1"],
+            plan["candidateRuleIds"],
+        )
+        self.assertEqual(
+            first["scopeGenerationIds"]["symbol:005930:fundamental"],
+            second["scopeGenerationIds"]["symbol:005930:fundamental"],
+        )
+
     def test_family_link_scope_keeps_symbol_routing_and_fact_family(self):
         scope_id = "link:symbol:005930:flow:world:abc123"
 
@@ -1273,7 +1379,7 @@ class OntologyChangeImpactTests(unittest.TestCase):
 
         trace = inference.entities[0]
         self.assertEqual("inference:test", trace.properties["inferenceGenerationId"])
-        self.assertEqual("abox-change-impact-v12", trace.properties["impactPlanVersion"])
+        self.assertEqual("abox-change-impact-v14", trace.properties["impactPlanVersion"])
         self.assertEqual(["005930"], trace.properties["inferenceImpactPlan"]["inferenceTargetSymbols"])
         self.assertEqual("subject-dependency-selected-native-evaluation", trace.properties["ruleExecutionScope"])
         self.assertFalse(trace.properties["nativeRuleSelectionApplied"])

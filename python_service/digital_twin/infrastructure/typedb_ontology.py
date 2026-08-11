@@ -1747,6 +1747,45 @@ TYPEDB_PROMOTED_NUMERIC_ATTRIBUTES = {
     "change24h": "ontology-change-24h",
     "change7d": "ontology-change-7d",
     "surprisePercentage": "ontology-surprise-percentage",
+    "revenue": "ontology-company-revenue",
+    "grossProfit": "ontology-company-gross-profit",
+    "operatingIncome": "ontology-company-operating-income",
+    "netIncome": "ontology-company-net-income",
+    "totalAssets": "ontology-company-total-assets",
+    "totalLiabilities": "ontology-company-total-liabilities",
+    "equity": "ontology-company-equity",
+    "cash": "ontology-company-cash",
+    "totalDebt": "ontology-company-total-debt",
+    "operatingCashFlow": "ontology-company-operating-cash-flow",
+    "capitalExpenditure": "ontology-company-capital-expenditure",
+    "freeCashFlow": "ontology-company-free-cash-flow",
+    "sharesOutstanding": "ontology-company-shares-outstanding",
+    "floatShares": "ontology-company-float-shares",
+    "sharesShort": "ontology-company-shares-short",
+    "grossMarginPct": "ontology-company-gross-margin-pct",
+    "operatingMarginPct": "ontology-company-operating-margin-pct",
+    "netMarginPct": "ontology-company-net-margin-pct",
+    "cashConversionPct": "ontology-company-cash-conversion-pct",
+    "freeCashFlowMarginPct": "ontology-company-free-cash-flow-margin-pct",
+    "debtToEquityPct": "ontology-company-debt-to-equity-pct",
+    "liabilitiesToAssetsPct": "ontology-company-liabilities-to-assets-pct",
+    "revenueGrowthPct": "ontology-company-revenue-growth-pct",
+    "operatingIncomeGrowthPct": "ontology-company-operating-income-growth-pct",
+    "netIncomeGrowthPct": "ontology-company-net-income-growth-pct",
+    "freeCashFlowGrowthPct": "ontology-company-free-cash-flow-growth-pct",
+    "sharesOutstandingGrowthPct": "ontology-company-shares-outstanding-growth-pct",
+    "pbr": "ontology-price-to-book",
+    "bookValue": "ontology-book-value",
+    "trailingEPS": "ontology-trailing-eps",
+    "returnOnEquity": "ontology-return-on-equity",
+    "returnOnAssets": "ontology-return-on-assets",
+    "returnOnEquityPct": "ontology-return-on-equity-pct",
+    "returnOnAssetsPct": "ontology-return-on-assets-pct",
+    "enterpriseToEbitda": "ontology-enterprise-to-ebitda",
+    "dividendYieldPct": "ontology-dividend-yield-pct",
+    "institutionalOwnershipPct": "ontology-institutional-ownership-pct",
+    "insiderOwnershipPct": "ontology-insider-ownership-pct",
+    "executiveCount": "ontology-executive-count",
 }
 TYPEDB_PROMOTED_TEXT_ATTRIBUTES = {
     "investmentStrategyProfile": "ontology-investment-strategy-profile",
@@ -1844,6 +1883,16 @@ TYPEDB_PROMOTED_TEXT_ATTRIBUTES = {
     "relevanceState": "ontology-relevance-state",
     "sourceTrustState": "ontology-source-trust-state",
     "materialityState": "ontology-materiality-state",
+    "period": "ontology-reporting-period",
+    "reportingFrequency": "ontology-reporting-frequency",
+    "companyFactRevision": "ontology-company-fact-revision",
+    "companyDataState": "ontology-company-data-state",
+    "ceoName": "ontology-ceo-name",
+    "personName": "ontology-person-name",
+    "executiveTitle": "ontology-executive-title",
+    "executiveResponsibility": "ontology-executive-responsibility",
+    "registeredExecutive": "ontology-registered-executive",
+    "tenureEnd": "ontology-tenure-end",
 }
 TYPEDB_FUNCTION_SUBJECT_FIELDS = {
     "source",
@@ -8007,6 +8056,48 @@ class TypeDBOntologyGraphRepository(GraphStoreOntologyRowMapperMixin, ScopedABox
                 tx.commit()
 
     @staticmethod
+    def promoted_schema_migration_required(schema_text: str) -> bool:
+        text = str(schema_text or "")
+        if "ontology-node" not in text:
+            return False
+        promoted = set(TYPEDB_PROMOTED_NUMERIC_ATTRIBUTES.values()) | set(TYPEDB_PROMOTED_TEXT_ATTRIBUTES.values())
+        return any(
+            attribute not in text or not re.search(r"\bowns\s+" + re.escape(attribute) + r"\b", text)
+            for attribute in promoted
+        )
+
+    def migrate_promoted_schema(self, driver, imported, schema_text: str) -> None:
+        """Add only new RuleBox-queryable attributes to an existing schema."""
+
+        _TypeDB, _Credentials, _DriverOptions, _DriverTlsConfig, TransactionType = imported[0]
+        text = str(schema_text or "")
+        numeric = set(TYPEDB_PROMOTED_NUMERIC_ATTRIBUTES.values())
+        string = set(TYPEDB_PROMOTED_TEXT_ATTRIBUTES.values())
+        missing_types = sorted(attribute for attribute in numeric | string if attribute not in text)
+        missing_ownership = sorted(
+            attribute
+            for attribute in numeric | string
+            if not re.search(r"\bowns\s+" + re.escape(attribute) + r"\b", text)
+        )
+        definitions = [
+            "attribute " + attribute + ", value " + ("double" if attribute in numeric else "string") + ";"
+            for attribute in missing_types
+        ]
+        if missing_ownership:
+            definitions.append(
+                "ontology-node "
+                + ", ".join("owns " + attribute for attribute in missing_ownership)
+                + ";"
+            )
+        if not definitions:
+            return
+        query = "define\n" + "\n".join(definitions)
+        with typedb_operation_timeout(self.schema_operation_timeout_seconds(), "TypeDB promoted attribute schema migration"):
+            with driver.transaction(self.database, TransactionType.SCHEMA) as tx:
+                tx.query(query).resolve()
+                tx.commit()
+
+    @staticmethod
     def ontology_semantic_schema_migration_required(schema_text: str) -> bool:
         """Whether the physical TypeDB hierarchy still flattens logical types.
 
@@ -8085,6 +8176,9 @@ class TypeDBOntologyGraphRepository(GraphStoreOntologyRowMapperMixin, ScopedABox
                     schema_text = self.typedb_schema_text(driver)
                 if self.ontology_world_schema_migration_required(schema_text):
                     self.migrate_ontology_world_schema(driver, imported)
+                    schema_text = self.typedb_schema_text(driver)
+                if self.promoted_schema_migration_required(schema_text):
+                    self.migrate_promoted_schema(driver, imported, schema_text)
                     schema_text = self.typedb_schema_text(driver)
                 if self.ontology_semantic_schema_migration_required(schema_text):
                     self.migrate_ontology_semantic_schema(driver, imported, schema_text)
@@ -11868,7 +11962,7 @@ class TypeDBOntologyGraphRepository(GraphStoreOntologyRowMapperMixin, ScopedABox
             }
 
     def schema_query(self) -> str:
-        return """
+        schema = """
 define
 attribute ontology-id, value string;
 attribute ontology-storage-id, value string;
@@ -12456,7 +12550,32 @@ relation ontology-assertion,
     owns ontology-delta-pct,
     owns ontology-exposure-ratio,
     owns ontology-position-count;
-""".strip() + "\n\n" + semantic_typeql_schema().replace("define\n", "", 1).strip()
+""".strip()
+        promoted_types = {
+            **{attribute: "double" for attribute in TYPEDB_PROMOTED_NUMERIC_ATTRIBUTES.values()},
+            **{attribute: "string" for attribute in TYPEDB_PROMOTED_TEXT_ATTRIBUTES.values()},
+        }
+        missing_promoted_types = {
+            attribute: value_type
+            for attribute, value_type in promoted_types.items()
+            if "attribute " + attribute + ", value " not in schema
+        }
+        if missing_promoted_types:
+            declarations = "\n".join(
+                "attribute " + attribute + ", value " + value_type + ";"
+                for attribute, value_type in sorted(missing_promoted_types.items())
+            )
+            ownership = "\n".join(
+                "    owns " + attribute + ","
+                for attribute in sorted(missing_promoted_types)
+            )
+            schema = schema.replace("define\n", "define\n" + declarations + "\n", 1)
+            schema = schema.replace(
+                "    plays ontology-assertion:source,",
+                ownership + "\n    plays ontology-assertion:source,",
+                1,
+            )
+        return schema + "\n\n" + semantic_typeql_schema().replace("define\n", "", 1).strip()
 
     def delete_queries(self, boxes: Iterable[str]) -> List[str]:
         queries = []

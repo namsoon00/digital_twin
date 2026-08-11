@@ -477,6 +477,7 @@ def admin_preview_config() -> Dict[str, object]:
                     {"key": "externalFredTimeoutSeconds", "label": "FRED 요청 시간 제한", "type": "number", "default": "8", "unit": "seconds"},
                     {"key": "opendartApiKey", "label": "OpenDART API Key", "type": "secret", "masked": True},
                     {"key": "externalDartEnabled", "label": "OpenDART 수집 사용", "type": "toggle", "default": "1"},
+                    {"key": "externalDartCompanyFundamentalsEnabled", "label": "OpenDART 기업·재무·임원 수집", "type": "toggle", "default": "1"},
                     {"key": "externalDartDocumentTextEnabled", "label": "OpenDART 원문 본문 수집", "type": "toggle", "default": "1"},
                     {"key": "externalDartDocumentTextMaxChars", "label": "OpenDART 원문 최대 글자", "type": "number", "default": "6000"},
                     {"key": "externalNewsEnabled", "label": "레거시 뉴스 헤드라인 수집", "type": "toggle", "default": "0"},

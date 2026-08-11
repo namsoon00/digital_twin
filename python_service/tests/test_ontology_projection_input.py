@@ -17,6 +17,32 @@ from digital_twin.infrastructure.ontology_projection import PortfolioOntologyPro
 
 class OntologyProjectionInputTests(unittest.TestCase):
 
+    def test_existing_company_knowledge_keeps_structured_periods(self):
+        source = {
+            "companyKnowledge": {
+                "AAPL": {
+                    "schemaVersion": "company-knowledge-v1",
+                    "symbol": "AAPL",
+                    "companyName": "Apple Inc.",
+                    "factRevision": "revision-one",
+                    "financials": {
+                        "annual": [{"period": "2025-09-30", "revenueGrowthPct": 5.0}],
+                        "quarterly": [{"period": "2026-06-30", "revenueGrowthPct": 8.0}],
+                    },
+                    "valuation": {"peRatio": 25.0, "returnOnEquityPct": 32.0},
+                    "provenance": [{"provider": "SEC EDGAR", "scope": "official-filing"}],
+                    "coverage": {"dataState": "sufficient", "financialPeriods": 2},
+                },
+            },
+        }
+
+        compact = compact_external_signals_for_ontology(source, target_symbols=["AAPL"])
+
+        company = compact["companyKnowledge"]["AAPL"]
+        self.assertEqual(5.0, company["financials"]["annual"][0]["revenueGrowthPct"])
+        self.assertEqual(8.0, company["financials"]["quarterly"][0]["revenueGrowthPct"])
+        self.assertEqual("sufficient", company["coverage"]["dataState"])
+
     def source_signals(self):
         return {
             "macro": {
@@ -144,6 +170,8 @@ class OntologyProjectionInputTests(unittest.TestCase):
         self.assertLess(len(payload["articleTextPreview"]), 1300)
         self.assertNotIn("history", compact["yfinanceData"]["AAPL"])
         self.assertEqual(10, compact["yfinanceData"]["AAPL"]["statementMetricCounts"]["incomeStatement"])
+        self.assertEqual("company-knowledge-v1", compact["companyKnowledge"]["AAPL"]["schemaVersion"])
+        self.assertEqual("Apple Inc.", compact["companyKnowledge"]["AAPL"]["companyName"])
         self.assertEqual(original, source)
 
         summary = projection_input_summary(source, compact, target_symbols=["AAPL"])

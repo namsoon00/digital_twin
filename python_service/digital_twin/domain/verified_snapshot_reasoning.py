@@ -430,7 +430,7 @@ def _external_for_symbol(
                 result[key] = value
     for group in (
         "secFilings", "equityQuotes", "yfinanceData", "newsHeadlines", "dartDisclosures",
-        "earningsReports", "companyOverviews", "researchEvidence",
+        "earningsReports", "companyOverviews", "companyKnowledge", "researchEvidence",
     ):
         rows = compact.get(group)
         if not isinstance(rows, Mapping) or symbol not in rows:
@@ -496,9 +496,17 @@ def _fact_types_for_change(fields: Iterable[str], external_groups: Iterable[str]
         selected.add("MarketQuote")
     if groups & {
         "secFilings", "newsHeadlines", "dartDisclosures", "earningsReports",
-        "companyOverviews", "researchEvidence", "yfinanceData",
+        "researchEvidence",
     }:
         selected.add("ResearchEvidence")
+    if "companyKnowledge" in groups:
+        selected.update({
+            "CompanyProfile",
+            "FinancialFact",
+            "GovernanceChange",
+            "CapitalStructureChange",
+            "ValuationObservation",
+        })
     if groups & {"quality", "freshness", "provenance", "statuses"}:
         selected.add("DataQuality")
     return sorted(selected or {"PortfolioSnapshot"})

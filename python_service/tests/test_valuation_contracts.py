@@ -8,7 +8,9 @@ from digital_twin.domain.instrument_profiles import instrument_profile_for_posit
 from digital_twin.domain.market_data import known_stock, normalize_position
 from digital_twin.domain.portfolio import Position
 from digital_twin.domain.ontology_relation_facts import position_signal_facts
+from digital_twin.domain.portfolio_ontology_builder import build_portfolio_ontology
 from digital_twin.domain.portfolio_calculations import portfolio_summary
+from digital_twin.domain.portfolio_ontology_valuation_concepts import external_valuation_rows, valuation_values
 from digital_twin.domain.valuation_ai_proposals import ai_valuation_proposal_rows
 from digital_twin.application.notification_ai_gate_message import compact_valuation_detail_rows
 from digital_twin.domain.valuation_contracts import (
@@ -187,20 +189,34 @@ class ValuationContractTests(unittest.TestCase):
         self.assertEqual(0, rows[0].get("fairValue", 0))
         self.assertIn("BTC 보유량", rows[0]["missingInputs"])
 
-    def test_large_model_disagreement_blocks_valuation_decision(self):
+    def test_analyst_target_is_reference_not_reproducible_fair_value(self):
         position = Position(symbol="AAPL", name="Apple", market="US", currency="USD", current_price=100)
+        external_signals = {
+            "companyOverviews": {
+                "AAPL": {
+                    "provider": "yfinance",
+                    "analystTargetPrice": 300,
+                    "analystTargetLowPrice": 250,
+                    "analystTargetHighPrice": 350,
+                    "analystOpinionCount": 20,
+                    "fetchedAt": "2026-07-20T00:00:00Z",
+                }
+            }
+        }
+        row = external_valuation_rows(external_signals, "AAPL")[0]
+        values = valuation_values(row, position)
+
+        self.assertTrue(values["valuationReferenceOnly"])
+        self.assertFalse(values["valuationDecisionEligible"])
+        self.assertEqual(0, values["fairValue"])
+        self.assertEqual(0, values["marginOfSafetyPct"])
+        self.assertEqual(300, values["analystTargetPrice"])
+        self.assertEqual(200, values["analystTargetUpsidePct"])
+
         facts = position_signal_facts(
             position,
             portfolio_summary([], account_cash=1000, fx_rates={"USD": 1400}),
-            external_signals={
-                "companyOverviews": {
-                    "AAPL": {
-                        "provider": "yfinance",
-                        "analystTargetPrice": 300,
-                        "fetchedAt": "2026-07-20T00:00:00Z",
-                    }
-                }
-            },
+            external_signals=external_signals,
             settings={
                 "valuationAssumptions": {
                     "AAPL": {"fairValue": 100, "formula": "사용자 적정가"}
@@ -209,9 +225,36 @@ class ValuationContractTests(unittest.TestCase):
             },
         )
 
-        self.assertEqual("conflict", facts["valuationConsensusStatus"])
-        self.assertEqual(2, facts["valuationModelCount"])
-        self.assertFalse(facts["valuationDecisionEligible"])
+        reference = facts["valuationAnalystTargetReference"]
+        self.assertEqual(300, reference["analystTargetPrice"])
+        self.assertIn("안전마진으로 부르지 않고", reference["explanation"])
+        self.assertEqual("single-model", facts["valuationConsensusStatus"])
+        self.assertEqual(1, facts["valuationModelCount"])
+        self.assertTrue(facts["valuationDecisionEligible"])
+
+    def test_analyst_target_abox_does_not_create_margin_of_safety(self):
+        position = Position(symbol="AAPL", name="Apple", market="US", currency="USD", current_price=100)
+        graph = build_portfolio_ontology(
+            [position],
+            portfolio_summary([position], account_cash=1000, fx_rates={"USD": 1400}),
+            external_signals={
+                "companyOverviews": {
+                    "AAPL": {
+                        "provider": "yfinance",
+                        "analystTargetPrice": 125,
+                        "analystOpinionCount": 31,
+                        "fetchedAt": "2026-08-12T00:00:00Z",
+                    }
+                }
+            },
+            portfolio_id="analyst-target-reference-test",
+            runtime_context={"settings": {"aiValuationAutoProposalEnabled": "0"}},
+        )
+
+        self.assertFalse(any(entity.kind == "margin-of-safety" for entity in graph.entities))
+        analyst = next(entity for entity in graph.entities if entity.kind == "analyst-revision")
+        self.assertTrue(analyst.properties["valuationReferenceOnly"])
+        self.assertFalse(analyst.properties["valuationDecisionEligible"])
 
 
 if __name__ == "__main__":

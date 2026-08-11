@@ -135,6 +135,8 @@ class NotificationAIDecisionBriefTests(unittest.TestCase):
         self.assertEqual("task:1", brief["research"]["decisionChangingGaps"][0]["taskId"])
         self.assertIn('"schemaVersion":"investment-ai-decision-brief-v1"', prompt)
         self.assertIn('"drawdownFromPeakPct":-4.1', prompt)
+        self.assertIn("valuationReferenceOnly=true", prompt)
+        self.assertIn("시스템 수집기가", prompt)
         self.assertNotIn('"promptContext"', prompt)
         self.assertLessEqual(len(prompt.encode("utf-8")), 28 * 1024)
 

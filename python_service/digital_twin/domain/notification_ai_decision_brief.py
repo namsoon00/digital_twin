@@ -400,6 +400,8 @@ def build_notification_ai_decision_prompt(
         "action은 allowedActions와 actionEnvelope 안에서 고르고 관심종목에는 보유종목용 행동을 적용하지 않는다.",
         "temporalWindows는 이동평균 한 시점이 아니라 기간 수익률, 낙폭, 반등, 속도 변화와 표본 충족 여부를 읽는 자료다.",
         "researchEvidence 중 검증된 근거만 행동에 사용한다. 연구 계획과 미해결 질문 자체는 행동 근거가 아니다.",
+        "valuationReferenceOnly=true인 애널리스트 목표가는 참고값이다. 세부 산식이 공개된 적정가나 안전마진으로 부르지 말고 BUY·ADD·TRIM·SELL의 직접 근거로 사용하지 않는다. valuationDecisionEligible=true인 재현 가능한 가치 계산만 행동 근거 후보로 다룬다.",
+        "가치 계산과 가격·수급 확인을 요구할 때는 사용자가 공개 시장 데이터를 직접 찾게 하지 않는다. 시스템 수집기가 재무·목표가·가격·거래·투자자 수급 갱신 시 자동 재판단한다고 설명하고, 사용자에게는 개인 손실 허용선이나 선택적인 가치 가정처럼 개인 정책만 요청할 수 있다.",
         "기존 규칙 밖의 연결을 발견하면 strategyGuide.aiHypothesis에 확인 가능한 가설로 적되 현재 action의 근거와 분리한다.",
         "모든 입력 가설을 hypotheses에서 검토하고 반대 근거가 있는 가설을 생략하지 않는다.",
         "같은 행동을 유지해도 무엇이 유지됐고 무엇이 달라졌는지 changeAnalysis에 구분한다.",

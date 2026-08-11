@@ -1697,6 +1697,8 @@ def build_notification_ai_gate_prompt(
         "가격·수급·뉴스·공시·크립토·금리·환율 원시값은 TypeDB decisionDrivers와 activeRules가 연결한 근거일 때만 행동 판단에 사용한다. 숫자는 구체적으로 인용할 수 있지만, 입력에 없는 임계값이나 패턴을 스스로 추가하지 않는다.",
         "회사 재무·밸류에이션·경영진·자본 구조 원시값도 같은 원칙을 적용한다. activeRules에 회사 상태와 시장 반응을 결합한 규칙이 있을 때만 행동 판단 근거로 사용하고, 단일 PER·PBR·ROE나 CEO 이름만으로 매수·매도 결론을 만들지 않는다. 회사 규칙이 성립하면 currentActionPlan에는 현재 대응을, changeAnalysis에는 새로 바뀐 회사 사실 또는 시장 확인을, nextActionPlan에는 다음 보고 기간과 무효화 조건을 서로 다르게 쓴다.",
         "relationshipDatabaseInference.companyValuationContext는 알림에 결정론적으로 표시되는 회사 가치 지표다. decisionRole=reference이면 참고 정보로만 설명하고 action 근거로 사용하지 않는다. decisionRole=decision-evidence이면 activeCompanyValuationRuleIds에 실제 성립한 TypeDB 회사·시장 규칙이 있으므로 해당 규칙의 재무 기준 기간, 가격 확인과 반대 근거를 함께 설명한다.",
+        "valuationReferenceOnly=true인 애널리스트 목표가는 참고값이다. 세부 산식이 공개된 적정가나 안전마진으로 부르지 말고 매수·매도 행동의 직접 근거로 사용하지 않는다. valuationDecisionEligible=true인 재현 가능한 가치 계산만 행동 근거 후보로 다룬다.",
+        "가치 계산과 가격·수급 확인에 필요한 공개 데이터는 시스템 수집기가 갱신 시 자동 재판단한다. 사용자에게 공개 재무·시세·거래·수급 데이터를 직접 찾으라고 요구하지 말고, 개인 손실 허용선이나 선택적인 가치 가정처럼 개인 정책이 필요한 경우만 사용자 확인으로 구분한다.",
         "실행계획의 strengthenConditions, weakenConditions, nextChecks, counterSignals와 경쟁 가설을 비교해 어떤 조건이 현재 의견을 지지하거나 약화하는지 설명한다. TypeDB 관계가 없는 단일 사실은 다음 확인 또는 부족 데이터로만 다룬다.",
         "BUY, ADD, HOLD, TRIM, SELL, AVOID 중 하나를 반드시 고르되 자동 주문 지시처럼 쓰지 않는다.",
         "대상이 관심종목이면 targetPositionRole=watchlist이고 actionPolicy=ENTRY_ONLY다. 이 정책은 온톨로지 RuleBox/InferenceBox에서 온 제약이다. 관심종목은 보유 수량이 아니므로 HOLD는 '관심 유지', BUY는 '소액 진입 검토', AVOID는 '신규 진입 회피/대기'로 판단한다. 관심종목에 대해 보유 유지, 추가매수, 분할축소, 매도처럼 보유종목용 표현을 쓰지 않는다.",

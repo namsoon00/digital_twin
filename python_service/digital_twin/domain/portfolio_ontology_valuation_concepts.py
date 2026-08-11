@@ -31,7 +31,7 @@ VALUATION_NUMERIC_KEYS = {
     "fairValueHigh": ("fairValueHigh", "fairValueHigh", "낙관적 적정가"),
     "fairValuePrice": ("fairValue", "fairValuePrice", "적정가"),
     "targetPrice": ("fairValue", "fairValuePrice", "목표가"),
-    "analystTargetPrice": ("fairValue", "fairValuePrice", "애널리스트 목표가"),
+    "analystTargetPrice": ("analystTargetPrice", "analystTargetPrice", "애널리스트 평균 목표가"),
     "expectedEPS": ("expectedEPS", "expectedEPS", "예상 EPS"),
     "expectedEps": ("expectedEPS", "expectedEPS", "예상 EPS"),
     "eps": ("expectedEPS", "expectedEPS", "예상 EPS"),
@@ -121,27 +121,33 @@ def external_valuation_rows(external_signals: Dict[str, object], symbol: str) ->
         if not isinstance(overview, dict):
             continue
         is_underlying = source_symbol != normalized_symbol
+        analyst_target = number(overview.get("analystTargetPrice"))
         rows.append({
             "assumptionKey": normalized_symbol + ":" + source_symbol + ":company-overview",
             "symbol": normalized_symbol,
             "sourceSymbol": source_symbol,
-            "label": (("본주 " + source_symbol + " 기반 ") if is_underlying else "") + str(overview.get("name") or normalized_symbol) + " 기업개요 밸류에이션",
+            "label": (("본주 " + source_symbol + " 기반 ") if is_underlying else "") + str(overview.get("name") or normalized_symbol) + " 상대가치·목표가 참고",
             "provider": str(overview.get("provider") or "External"),
             "source": "company-overview",
-            "fairValue": number(overview.get("analystTargetPrice")),
-            "fairValueLow": number(overview.get("analystTargetLowPrice")),
-            "fairValueHigh": number(overview.get("analystTargetHighPrice")),
+            "analystTargetPrice": analyst_target,
+            "analystTargetMedianPrice": number(overview.get("analystTargetMedianPrice")),
+            "analystTargetLowPrice": number(overview.get("analystTargetLowPrice")),
+            "analystTargetHighPrice": number(overview.get("analystTargetHighPrice")),
+            "analystOpinionCount": number(overview.get("analystOpinionCount")),
             "peRatio": number(overview.get("peRatio")),
             "forwardPE": number(overview.get("forwardPE")),
             "pegRatio": number(overview.get("pegRatio")),
             "beta": number(overview.get("beta")),
             "dividendYield": number(overview.get("dividendYield")),
-            "valuationMethod": "analyst-target-and-multiple",
-            "formula": "애널리스트 목표가와 PER/베타를 참고",
+            "valuationMethod": "analyst-consensus-reference",
+            "formula": "애널리스트 평균 목표가(세부 산식 미제공)" if analyst_target else "상대가치 지표 참고",
             "valuationAsOf": str(overview.get("fetchedAt") or ""),
             "valuationSourceType": "external",
             "valuationCurrency": str(overview.get("currency") or ""),
             "periodCompatible": True,
+            "valuationReferenceOnly": True,
+            "valuationReferenceReason": "애널리스트 목표가는 계산 산식이 공개된 적정가가 아니므로 안전마진 및 매수·매도 규칙에서 제외합니다.",
+            "valuationDecisionEligible": False,
         })
     earnings = external_signals.get("earningsReports") if isinstance(external_signals.get("earningsReports"), dict) else {}
     for source_symbol in source_symbols:
@@ -178,7 +184,13 @@ def value_for(row: Dict[str, object], *keys: str) -> float:
 
 def valuation_values(row: Dict[str, object], position: Position) -> Dict[str, object]:
     current_price = value_for(row, "currentPrice", "price") or number(position.current_price)
-    fair_value = value_for(row, "fairValue", "fairValuePrice", "targetPrice", "analystTargetPrice")
+    reference_only = bool(row.get("valuationReferenceOnly"))
+    analyst_target = value_for(row, "analystTargetPrice")
+    analyst_target_low = value_for(row, "analystTargetLowPrice")
+    analyst_target_high = value_for(row, "analystTargetHighPrice")
+    analyst_target_median = value_for(row, "analystTargetMedianPrice")
+    analyst_opinion_count = value_for(row, "analystOpinionCount")
+    fair_value = 0.0 if reference_only else value_for(row, "fairValue", "fairValuePrice", "targetPrice", "analystTargetPrice")
     fair_value_low = value_for(row, "fairValueLow") or fair_value
     fair_value_high = value_for(row, "fairValueHigh") or fair_value
     expected_eps = value_for(row, "expectedEPS", "expectedEps", "eps", "estimatedEPS", "reportedEPS")
@@ -234,7 +246,7 @@ def valuation_values(row: Dict[str, object], position: Position) -> Dict[str, ob
         missing.append("currentPrice")
     if uses_eps_multiple and not period_compatible:
         missing.append("연간/TTM EPS 기간 정보")
-    if not fair_value and not (expected_eps and target_per) and not (annual_dividend and required_yield):
+    if not reference_only and not fair_value and not (expected_eps and target_per) and not (annual_dividend and required_yield):
         if "preferred" in method_lower or "yield" in method_lower or annual_dividend or required_yield:
             missing.extend(["fairValue", "annualDividend", "requiredYieldPct"])
         else:
@@ -270,11 +282,13 @@ def valuation_values(row: Dict[str, object], position: Position) -> Dict[str, ob
         source_type = "external"
     valuation_as_of = str(row.get("valuationAsOf") or row.get("fetchedAt") or row.get("updatedAt") or "").strip()
     freshness = str(row.get("valuationFreshnessStatus") or "").strip() or valuation_freshness_status(valuation_as_of)
-    required_inputs = ["currentPrice", "fairValue"]
+    required_inputs = ["currentPrice", "analystTargetPrice"] if reference_only else ["currentPrice", "fairValue"]
     available_inputs = []
     if current_price:
         available_inputs.append("currentPrice")
-    if fair_value:
+    if reference_only and analyst_target:
+        available_inputs.append("analystTargetPrice")
+    elif fair_value:
         available_inputs.append("fairValue")
     input_state = str(row.get("valuationInputState") or valuation_input_state(required_inputs, available_inputs))
     scenario_complete = bool(value_for(row, "fairValueLow") and fair_value and value_for(row, "fairValueHigh"))
@@ -294,6 +308,10 @@ def valuation_values(row: Dict[str, object], position: Position) -> Dict[str, ob
         fair_value,
     )
     decision_eligible = bool(row.get("valuationDecisionEligible")) if "valuationDecisionEligible" in row else calculated_eligible
+    if reference_only:
+        decision_eligible = False
+        reliability_state = "partial" if analyst_target else "unavailable"
+    target_upside = ((analyst_target / current_price) - 1.0) * 100.0 if analyst_target and current_price else 0.0
     return {
         "currentPrice": round(current_price, 4) if current_price else 0.0,
         "fairValue": round(fair_value, 4) if fair_value else 0.0,
@@ -335,6 +353,14 @@ def valuation_values(row: Dict[str, object], position: Position) -> Dict[str, ob
         "valuationDataStateLabel": str(row.get("valuationDataStateLabel") or valuation_reliability_label(reliability_state)),
         "valuationDecisionEligible": decision_eligible,
         "scenarioComplete": scenario_complete,
+        "valuationReferenceOnly": reference_only,
+        "valuationReferenceReason": str(row.get("valuationReferenceReason") or ""),
+        "analystTargetPrice": round(analyst_target, 4) if analyst_target else 0.0,
+        "analystTargetMedianPrice": round(analyst_target_median, 4) if analyst_target_median else 0.0,
+        "analystTargetLowPrice": round(analyst_target_low, 4) if analyst_target_low else 0.0,
+        "analystTargetHighPrice": round(analyst_target_high, 4) if analyst_target_high else 0.0,
+        "analystTargetUpsidePct": round(target_upside, 2) if target_upside else 0.0,
+        "analystOpinionCount": int(analyst_opinion_count) if analyst_opinion_count else 0,
     }
 
 
@@ -371,6 +397,14 @@ def valuation_relation_props(row: Dict[str, object], values: Dict[str, object], 
         "valuationReliabilityState": values.get("valuationReliabilityState"),
         "valuationDataStateLabel": values.get("valuationDataStateLabel"),
         "valuationDecisionEligible": values.get("valuationDecisionEligible"),
+        "valuationReferenceOnly": values.get("valuationReferenceOnly"),
+        "valuationReferenceReason": values.get("valuationReferenceReason"),
+        "analystTargetPrice": values.get("analystTargetPrice"),
+        "analystTargetMedianPrice": values.get("analystTargetMedianPrice"),
+        "analystTargetLowPrice": values.get("analystTargetLowPrice"),
+        "analystTargetHighPrice": values.get("analystTargetHighPrice"),
+        "analystTargetUpsidePct": values.get("analystTargetUpsidePct"),
+        "analystOpinionCount": values.get("analystOpinionCount"),
         "valuationFreshnessStatus": values.get("valuationFreshnessStatus"),
         "valuationAsOf": values.get("valuationAsOf"),
         "valuationSourceType": values.get("valuationSourceType"),
@@ -598,7 +632,7 @@ def add_position_valuation_concepts(
         if len(eligible_values) >= 2 and consensus_mid
         else 0.0
     )
-    consensus_status = "conflict" if disagreement_pct > 35.0 else "agreement" if len(eligible_values) >= 2 else "single-model"
+    consensus_status = "conflict" if disagreement_pct > 35.0 else "agreement" if len(eligible_values) >= 2 else "single-model" if eligible_values else "missing"
     if consensus_status == "conflict":
         unique_rows = [
             {**row, "valuationDecisionEligible": False, "valuationConsensusBlocked": True}

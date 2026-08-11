@@ -316,6 +316,15 @@ def _valuation_multiplier_text(value: object) -> str:
 
 
 def _valuation_substitution(values: Dict[str, object], row: Dict[str, object], currency: object) -> str:
+    if bool(values.get("valuationReferenceOnly")):
+        analyst_target = number(values.get("analystTargetPrice"))
+        target_upside = number(values.get("analystTargetUpsidePct"))
+        if analyst_target:
+            result = "애널리스트 평균 목표가 = " + _valuation_price_text(analyst_target, currency)
+            if number(values.get("currentPrice")):
+                result += " · 현재가 대비 목표가 차이 " + _number_text(target_upside, 1, signed=True) + "%"
+            return result
+        return "상대가치 지표 참고"
     fair_value = number(values.get("fairValue"))
     expected_eps = number(values.get("expectedEPS"))
     target_per = number(values.get("targetPER"))
@@ -351,6 +360,17 @@ def _valuation_substitution(values: Dict[str, object], row: Dict[str, object], c
 
 
 def _valuation_explanation(values: Dict[str, object], row: Dict[str, object], currency: object) -> str:
+    if bool(values.get("valuationReferenceOnly")):
+        analyst_target = number(values.get("analystTargetPrice"))
+        target_upside = number(values.get("analystTargetUpsidePct"))
+        base = "외부 데이터가 제공한 애널리스트 평균 목표가"
+        if analyst_target:
+            base += " " + _valuation_price_text(analyst_target, currency)
+        if analyst_target and number(values.get("currentPrice")):
+            base += "는 현재가 대비 " + _number_text(target_upside, 1, signed=True) + "% 차이입니다."
+        else:
+            base += "를 참고합니다."
+        return base + " 세부 산식이 공개된 적정가가 아니므로 안전마진으로 부르지 않고 매수·매도 추론에는 직접 사용하지 않습니다."
     fair_value = number(values.get("fairValue"))
     current_price = number(values.get("currentPrice"))
     expected_eps = number(values.get("expectedEPS"))
@@ -521,6 +541,15 @@ def _valuation_facts(position: Position, external_signals: Dict[str, object], se
             "valuationRequiresUserApproval": False,
             "valuationIsAiGenerated": False,
             "valuationSourceReason": "",
+            "valuationReferenceOnly": False,
+            "valuationReferenceReason": "",
+            "valuationAnalystTargetReference": {},
+            "valuationAnalystTargetPrice": 0.0,
+            "valuationAnalystTargetMedianPrice": 0.0,
+            "valuationAnalystTargetLowPrice": 0.0,
+            "valuationAnalystTargetHighPrice": 0.0,
+            "valuationAnalystTargetUpsidePct": 0.0,
+            "valuationAnalystOpinionCount": 0,
             "valuationPerStatus": "missing",
             "valuationPerReason": "PER/EPS와 적정가 입력이 없어 PER 기준 적정가를 계산하지 않았습니다.",
             "valuationPreferredMetric": "적정가 입력 또는 외부 PER/EPS",
@@ -557,7 +586,15 @@ def _valuation_facts(position: Position, external_signals: Dict[str, object], se
         if len(eligible_fair_values) >= 2 and consensus_price
         else 0.0
     )
-    consensus_status = "conflict" if disagreement_pct > 35.0 else "agreement" if len(eligible_fair_values) >= 2 else "single-model"
+    consensus_status = "conflict" if disagreement_pct > 35.0 else "agreement" if len(eligible_fair_values) >= 2 else "single-model" if eligible_fair_values else "missing"
+    analyst_reference = next(
+        (
+            item
+            for item in rows
+            if bool(item.get("valuationReferenceOnly")) and number(item.get("analystTargetPrice"))
+        ),
+        {},
+    )
     return {
         "valuationRows": rows,
         "primaryValuation": primary,
@@ -610,6 +647,15 @@ def _valuation_facts(position: Position, external_signals: Dict[str, object], se
         "valuationRequiresUserApproval": bool(primary.get("requiresUserApproval")),
         "valuationIsAiGenerated": bool(primary.get("aiGenerated")),
         "valuationSourceReason": primary.get("sourceReason"),
+        "valuationReferenceOnly": bool(primary.get("valuationReferenceOnly")),
+        "valuationReferenceReason": primary.get("valuationReferenceReason"),
+        "valuationAnalystTargetReference": analyst_reference,
+        "valuationAnalystTargetPrice": number(analyst_reference.get("analystTargetPrice")),
+        "valuationAnalystTargetMedianPrice": number(analyst_reference.get("analystTargetMedianPrice")),
+        "valuationAnalystTargetLowPrice": number(analyst_reference.get("analystTargetLowPrice")),
+        "valuationAnalystTargetHighPrice": number(analyst_reference.get("analystTargetHighPrice")),
+        "valuationAnalystTargetUpsidePct": number(analyst_reference.get("analystTargetUpsidePct")),
+        "valuationAnalystOpinionCount": int(number(analyst_reference.get("analystOpinionCount"))),
         "valuationPerStatus": primary.get("perValuationStatus"),
         "valuationPerReason": primary.get("perValuationReason"),
         "valuationPreferredMetric": primary.get("preferredValuationMetric"),

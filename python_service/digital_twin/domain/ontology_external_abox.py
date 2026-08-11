@@ -1138,6 +1138,10 @@ def add_symbol_company_overview_concepts(graph: PortfolioOntology, stock_id: str
         "beta": number(value.get("beta")),
         "dividendYield": number(value.get("dividendYield")),
         "analystTargetPrice": number(value.get("analystTargetPrice")),
+        "analystTargetMedianPrice": number(value.get("analystTargetMedianPrice")),
+        "analystTargetLowPrice": number(value.get("analystTargetLowPrice")),
+        "analystTargetHighPrice": number(value.get("analystTargetHighPrice")),
+        "analystOpinionCount": number(value.get("analystOpinionCount")),
     }
     if any(valuation_fields.values()):
         assumption_id = add_entity(graph, "valuation-assumption", symbol + ":alpha-overview", label, {
@@ -1170,14 +1174,35 @@ def add_symbol_company_overview_concepts(graph: PortfolioOntology, stock_id: str
             "provider": str(value.get("provider") or "Alpha Vantage"),
             "revisionType": "analyst-consensus-snapshot",
             "targetPrice": number(value.get("analystTargetPrice")),
+            "analystTargetPrice": number(value.get("analystTargetPrice")),
+            "analystTargetMedianPrice": number(value.get("analystTargetMedianPrice")),
+            "analystTargetLowPrice": number(value.get("analystTargetLowPrice")),
+            "analystTargetHighPrice": number(value.get("analystTargetHighPrice")),
+            "analystOpinionCount": number(value.get("analystOpinionCount")),
+            "valuationReferenceOnly": True,
+            "valuationDecisionEligible": False,
+            "valuationReferenceReason": "세부 산식이 공개되지 않은 애널리스트 목표가 참고값",
             "strongBuy": number(value.get("analystRatingStrongBuy")),
             "buy": number(value.get("analystRatingBuy")),
             "hold": number(value.get("analystRatingHold")),
             "sell": number(value.get("analystRatingSell")),
             "strongSell": number(value.get("analystRatingStrongSell")),
         })
-        add_relation(graph, stock_id, analyst_id, "HAS_EXTERNAL_SIGNAL", weight=0.72, properties={"source": group, "polarity": "context", "aiInfluenceLabel": "애널리스트 컨센서스"})
-        add_relation(graph, stock_id, analyst_id, "HAS_VALUATION", weight=0.74, properties={"source": group, "polarity": "context", "aiInfluenceLabel": "애널리스트 컨센서스"})
+        analyst_props = {
+            "source": group,
+            "polarity": "context",
+            "aiInfluenceLabel": "애널리스트 컨센서스 참고",
+            "valuationReferenceOnly": True,
+            "valuationDecisionEligible": False,
+            "valuationReferenceReason": "세부 산식이 공개되지 않은 애널리스트 목표가 참고값",
+            "analystTargetPrice": number(value.get("analystTargetPrice")),
+            "analystTargetMedianPrice": number(value.get("analystTargetMedianPrice")),
+            "analystTargetLowPrice": number(value.get("analystTargetLowPrice")),
+            "analystTargetHighPrice": number(value.get("analystTargetHighPrice")),
+            "analystOpinionCount": number(value.get("analystOpinionCount")),
+        }
+        add_relation(graph, stock_id, analyst_id, "HAS_EXTERNAL_SIGNAL", weight=0.72, properties=analyst_props)
+        add_relation(graph, stock_id, analyst_id, "HAS_VALUATION", weight=0.74, properties=analyst_props)
     industry = str(value.get("industry") or "").strip()
     if industry:
         industry_id = add_entity(graph, "industry", industry, industry, {

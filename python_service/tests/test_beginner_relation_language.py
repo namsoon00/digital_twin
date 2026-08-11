@@ -546,12 +546,18 @@ class BeginnerRelationLanguageTests(unittest.TestCase):
         message = execution_telegram_message(context, response)
 
         self.assertTrue(any(line.startswith("밸류에이션") for line in axes))
-        self.assertIn("<b>회사 가치 판단</b>", message)
+        self.assertIn("<b>회사 가치</b>", message)
+        self.assertIn("이익 기준", message)
+        self.assertIn("자산·수익성", message)
         self.assertIn("PER 14.2배", message)
         self.assertIn("PBR 1.35배", message)
         self.assertIn("ROE +12.4%", message)
         self.assertIn("KIS Open API·OpenDART", message)
-        self.assertIn("투자 판단 근거", message)
+        self.assertIn("판단에 사용", message)
+        self.assertIn("판단 원리", message)
+        self.assertIn("기준 시각", message)
+        self.assertIn("자동 재확인", message)
+        self.assertIn("사용자 입력 불필요", message)
         self.assertNotIn("<b>밸류에이션</b>", message)
         self.assertNotIn("99,000원", message)
         self.assertIn("자료 상태", message)
@@ -577,6 +583,11 @@ class BeginnerRelationLanguageTests(unittest.TestCase):
                 "ontologyRelationContext": {
                     "facts": {
                         "currency": "USD",
+                        "currentPrice": 100,
+                        "valuationAnalystTargetPrice": 120,
+                        "valuationAnalystTargetLowPrice": 90,
+                        "valuationAnalystTargetHighPrice": 140,
+                        "valuationAnalystOpinionCount": 12,
                         "companyValuationContext": {
                             "metrics": {"peRatio": 32.5, "pbr": 5.2, "returnOnEquityPct": 8.1},
                             "currency": "USD",
@@ -592,9 +603,14 @@ class BeginnerRelationLanguageTests(unittest.TestCase):
             response,
         )
 
-        self.assertIn("<b>회사 가치 참고</b>", message)
-        self.assertIn("회사·시장 밸류에이션 규칙 미성립", message)
-        self.assertNotIn("TypeDB 회사·시장 규칙 1개 성립", message)
+        self.assertIn("<b>회사 가치</b>", message)
+        self.assertIn("목표가 참고", message)
+        self.assertIn("평균 $120", message)
+        self.assertIn("현재가 대비 +20.0%", message)
+        self.assertIn("범위 $90~$140", message)
+        self.assertIn("표본 12명", message)
+        self.assertIn("참고만 사용 · 회사·시장 가치 규칙 미성립", message)
+        self.assertNotIn("TypeDB 회사·시장 가치 규칙 1개 성립", message)
 
     def test_loss_company_valuation_does_not_render_negative_per_as_multiple(self):
         response = NotificationAIValidatedResponse(

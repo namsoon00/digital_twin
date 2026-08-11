@@ -269,8 +269,10 @@ def overview_from_yfinance(symbol: str, payload: Dict[str, object]) -> Dict[str,
         "revenueGrowth": optional_number(info.get("revenueGrowth")),
         "enterpriseToEbitda": optional_number(info.get("enterpriseToEbitda")),
         "analystTargetPrice": optional_number((payload.get("analystPriceTargets") or {}).get("mean") or info.get("targetMeanPrice")),
+        "analystTargetMedianPrice": optional_number((payload.get("analystPriceTargets") or {}).get("median") or info.get("targetMedianPrice")),
         "analystTargetLowPrice": optional_number((payload.get("analystPriceTargets") or {}).get("low") or info.get("targetLowPrice")),
         "analystTargetHighPrice": optional_number((payload.get("analystPriceTargets") or {}).get("high") or info.get("targetHighPrice")),
+        "analystOpinionCount": optional_number(info.get("numberOfAnalystOpinions")),
         "currentPrice": optional_number(quote.get("price") or info.get("currentPrice") or info.get("regularMarketPrice")),
     }
 

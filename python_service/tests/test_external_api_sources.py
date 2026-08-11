@@ -862,7 +862,7 @@ class ExternalApiSourceTests(unittest.TestCase):
             eps_trend = FakeRecordsFrame([{"period": "0q", "current": 1.3}])
             eps_revisions = FakeRecordsFrame([{"period": "0q", "upLast7days": 2}])
             recommendations_summary = FakeRecordsFrame([{"period": "0m", "buy": 12, "hold": 6}])
-            analyst_price_targets = {"mean": 125.0}
+            analyst_price_targets = {"mean": 125.0, "median": 123.0, "low": 100.0, "high": 150.0}
             institutional_holders = FakeRecordsFrame([{"Holder": "Fund A", "Shares": 1000}])
             options = ["2026-08-21"]
             actions = FakeRecordsFrame([])
@@ -891,6 +891,7 @@ class ExternalApiSourceTests(unittest.TestCase):
                     "totalRevenue": 391000000000,
                     "currentPrice": 110.0,
                     "targetMeanPrice": 125.0,
+                    "numberOfAnalystOpinions": 31,
                 }
 
             def get_earnings_dates(self, limit=16):
@@ -945,6 +946,8 @@ class ExternalApiSourceTests(unittest.TestCase):
         payload = signals["yfinanceData"]["AAPL"]
         self.assertEqual(110.0, signals["equityQuotes"]["AAPL"]["price"])
         self.assertEqual(125.0, signals["companyOverviews"]["AAPL"]["analystTargetPrice"])
+        self.assertEqual(123.0, signals["companyOverviews"]["AAPL"]["analystTargetMedianPrice"])
+        self.assertEqual(31.0, signals["companyOverviews"]["AAPL"]["analystOpinionCount"])
         self.assertEqual(1.65, signals["earningsReports"]["AAPL"]["latestQuarter"]["reportedEPS"])
         self.assertEqual(0.5, payload["optionChains"][0]["summary"]["putCallOpenInterestRatio"])
         self.assertIn("incomeStatement", payload["modulesCollected"])

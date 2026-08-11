@@ -95,13 +95,13 @@ class OntologyRuleboxPrewarmRunner:
     def require_ready_for_inference(self) -> bool:
         """Require verified functions before a native investment judgement.
 
-        This defaults to enabled so a TypeDB restart or a RuleBox deployment
-        cannot silently switch the live path to a slower, differently-shaped
-        direct TypeQL execution mode. Operators can still opt out during a
-        controlled compatibility migration.
+        Availability is the production default: bounded direct TypeQL keeps
+        live reasoning moving while the background compiler waits for an idle
+        queue. Operators can opt into a strict receipt gate for controlled
+        migrations after every active function has been prepared.
         """
         value = str(
-            self.settings.get("ontologyRuleboxPrewarmRequireReadyForInference") or "1"
+            self.settings.get("ontologyRuleboxPrewarmRequireReadyForInference") or "0"
         ).strip().lower()
         return value not in DISABLED_VALUES
 

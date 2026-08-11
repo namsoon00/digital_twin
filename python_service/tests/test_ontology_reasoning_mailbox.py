@@ -662,7 +662,7 @@ class OntologyReasoningMailboxTests(unittest.TestCase):
         self.assertEqual("no-material-change", outcomes[0]["terminalOutcome"])
         self.assertEqual(["AAPL"], outcomes[0]["alertPipeline"]["requestedSymbols"])
 
-    def test_waits_for_rulebox_prewarm_by_default_even_when_direct_fallback_is_configured(self):
+    def test_cold_rulebox_uses_direct_fallback_by_default(self):
         event = realtime_request("prewarm-gate", ["AAPL"], "2026-07-24T00:00:00Z")
         runner = self.build_runner(
             [event],
@@ -677,16 +677,19 @@ class OntologyReasoningMailboxTests(unittest.TestCase):
 
         result = runner.run_once()
 
-        self.assertEqual("deferred-rulebox-prewarm", result["status"])
-        self.assertEqual([], self.monitor.calls)
-        self.assertFalse(result["ruleboxPrewarm"]["ready"])
+        self.assertEqual("ok", result["status"])
+        self.assertEqual(1, len(self.monitor.calls))
+        self.assertNotIn("ruleboxPrewarmRequest", result)
 
     def test_cold_receipt_publishes_a_compiler_handoff_without_starting_inference(self):
         event = realtime_request("prewarm-handoff", ["AAPL"], "2026-07-24T00:00:00Z")
         published = []
         runner = self.build_runner(
             [event],
-            settings={"ontologyRuleboxPrewarmEnabled": "1"},
+            settings={
+                "ontologyRuleboxPrewarmEnabled": "1",
+                "ontologyRuleboxPrewarmRequireReadyForInference": "1",
+            },
             prewarm_state_writer=lambda payload: published.append(dict(payload or {})),
         )
         runner.rulebox_prewarm_probe = lambda: {

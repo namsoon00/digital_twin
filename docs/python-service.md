@@ -263,6 +263,7 @@ Configuration:
 - `EXTERNAL_DART_COMPANY_FUNDAMENTALS_ENABLED`: collect bounded official company overview, financial statement, and executive facts for the company KnowledgeWorld, default 1.
 - `EXTERNAL_DART_CORP_CODES`: ticker-to-corp-code mappings, for example `005930=00126380;000660=00164779`.
 - `ONTOLOGY_RULEBOX_PREWARM_ENABLED`: keep the dedicated TypeDB schema-function preparation worker enabled, especially after a clean database bootstrap or rotation, default 1.
+- `ONTOLOGY_RULEBOX_PREWARM_REQUIRE_READY_FOR_INFERENCE`: block live inference until every generated TypeDB function receipt is ready. The production default is 0 so bounded Direct TypeQL keeps alerts available while background compilation waits for an empty queue.
 
 Temporal ontology reasoning groups repeated monitor snapshots before RuleBox derives risk/support episodes. This prevents alerts from judging only the latest price point.
 

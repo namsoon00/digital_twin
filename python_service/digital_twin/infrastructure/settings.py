@@ -1767,7 +1767,7 @@ def runtime_settings(fast_operational_read: bool = False) -> Dict[str, str]:
         "ontologyRuleboxPrewarmRequireReadyForInference": value(
             "ontologyRuleboxPrewarmRequireReadyForInference",
             "ONTOLOGY_RULEBOX_PREWARM_REQUIRE_READY_FOR_INFERENCE",
-            "1",
+            "0",
         ),
         "ontologyRuleboxPrewarmDeferWhenReasoningPending": value(
             "ontologyRuleboxPrewarmDeferWhenReasoningPending",

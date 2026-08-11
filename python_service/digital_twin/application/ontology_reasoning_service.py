@@ -844,11 +844,9 @@ class OntologyReasoningRunner:
     def rulebox_prewarm_required(self) -> bool:
         """Whether a live native run must wait for compiled RuleBox receipts.
 
-        Native investment inference normally uses one verified RuleBox
-        execution mode. A TypeDB restart must not silently switch a live
-        decision to the bounded direct-TypeQL compatibility path just because
-        schema receipts are still cold. The compatibility path remains
-        available only when an operator explicitly disables this gate.
+        Production keeps the bounded direct-TypeQL compatibility path
+        available during cold starts. A strict deployment can opt into this
+        gate after all generated functions have verified receipts.
         """
         return (
             self.native_typedb_rule_execution_enabled()
@@ -858,7 +856,7 @@ class OntologyReasoningRunner:
             )
             and truthy(
                 self.settings.get("ontologyRuleboxPrewarmRequireReadyForInference"),
-                True,
+                False,
             )
         )
 

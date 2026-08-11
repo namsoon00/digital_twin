@@ -441,6 +441,157 @@ MYSQL_SCHEMA = [
     ) ENGINE=InnoDB DEFAULT CHARSET=utf8mb4 COLLATE=utf8mb4_unicode_ci
     """,
     """
+    CREATE TABLE IF NOT EXISTS investment_mandates (
+        mandate_id VARCHAR(191) PRIMARY KEY,
+        portfolio_id VARCHAR(191) NOT NULL,
+        account_id VARCHAR(191) NOT NULL,
+        policy_version VARCHAR(191) NOT NULL,
+        profile VARCHAR(64) NOT NULL DEFAULT 'balanced',
+        status VARCHAR(32) NOT NULL DEFAULT 'active',
+        effective_at VARCHAR(40) NOT NULL DEFAULT '',
+        payload_json LONGTEXT NOT NULL,
+        created_at VARCHAR(40) NOT NULL,
+        updated_at VARCHAR(40) NOT NULL,
+        KEY idx_investment_mandates_account_status (account_id, status, updated_at),
+        KEY idx_investment_mandates_portfolio_version (portfolio_id, policy_version)
+    ) ENGINE=InnoDB DEFAULT CHARSET=utf8mb4 COLLATE=utf8mb4_unicode_ci
+    """,
+    """
+    CREATE TABLE IF NOT EXISTS investment_mandate_versions (
+        mandate_version_id VARCHAR(191) PRIMARY KEY,
+        mandate_id VARCHAR(191) NOT NULL,
+        portfolio_id VARCHAR(191) NOT NULL,
+        account_id VARCHAR(191) NOT NULL,
+        policy_version VARCHAR(191) NOT NULL,
+        profile VARCHAR(64) NOT NULL DEFAULT 'balanced',
+        effective_at VARCHAR(40) NOT NULL DEFAULT '',
+        payload_json LONGTEXT NOT NULL,
+        created_at VARCHAR(40) NOT NULL,
+        UNIQUE KEY uq_investment_mandate_version (portfolio_id, policy_version),
+        KEY idx_investment_mandate_history (portfolio_id, created_at, mandate_version_id)
+    ) ENGINE=InnoDB DEFAULT CHARSET=utf8mb4 COLLATE=utf8mb4_unicode_ci
+    """,
+    """
+    CREATE TABLE IF NOT EXISTS portfolio_ledger_entries (
+        entry_id VARCHAR(191) PRIMARY KEY,
+        idempotency_key VARCHAR(255) NOT NULL,
+        portfolio_id VARCHAR(191) NOT NULL,
+        account_id VARCHAR(191) NOT NULL,
+        entry_type VARCHAR(64) NOT NULL,
+        symbol VARCHAR(64) NOT NULL DEFAULT '',
+        currency VARCHAR(16) NOT NULL DEFAULT 'KRW',
+        quantity DECIMAL(36,12) NOT NULL DEFAULT 0,
+        unit_price DECIMAL(36,12) NOT NULL DEFAULT 0,
+        amount DECIMAL(36,12) NOT NULL DEFAULT 0,
+        fee DECIMAL(36,12) NOT NULL DEFAULT 0,
+        occurred_at VARCHAR(40) NOT NULL,
+        source_reference VARCHAR(255) NOT NULL DEFAULT '',
+        payload_json LONGTEXT NOT NULL,
+        created_at VARCHAR(40) NOT NULL,
+        UNIQUE KEY uq_portfolio_ledger_idempotency (portfolio_id, idempotency_key),
+        KEY idx_portfolio_ledger_replay (portfolio_id, occurred_at, entry_id),
+        KEY idx_portfolio_ledger_account_symbol (account_id, symbol, occurred_at)
+    ) ENGINE=InnoDB DEFAULT CHARSET=utf8mb4 COLLATE=utf8mb4_unicode_ci
+    """,
+    """
+    CREATE TABLE IF NOT EXISTS portfolio_rebalance_proposals (
+        proposal_id VARCHAR(191) PRIMARY KEY,
+        portfolio_id VARCHAR(191) NOT NULL,
+        mandate_version VARCHAR(191) NOT NULL DEFAULT '',
+        exposure_snapshot_id VARCHAR(191) NOT NULL DEFAULT '',
+        status VARCHAR(32) NOT NULL DEFAULT 'review-required',
+        payload_json LONGTEXT NOT NULL,
+        created_at VARCHAR(40) NOT NULL,
+        updated_at VARCHAR(40) NOT NULL,
+        KEY idx_rebalance_proposals_portfolio_status (portfolio_id, status, created_at)
+    ) ENGINE=InnoDB DEFAULT CHARSET=utf8mb4 COLLATE=utf8mb4_unicode_ci
+    """,
+    """
+    CREATE TABLE IF NOT EXISTS investment_action_plans (
+        plan_id VARCHAR(191) PRIMARY KEY,
+        portfolio_id VARCHAR(191) NOT NULL,
+        decision_episode_id VARCHAR(191) NOT NULL,
+        policy_version VARCHAR(191) NOT NULL DEFAULT '',
+        inference_generation_id VARCHAR(191) NOT NULL DEFAULT '',
+        action VARCHAR(32) NOT NULL DEFAULT 'HOLD',
+        status VARCHAR(32) NOT NULL DEFAULT 'review-required',
+        payload_json LONGTEXT NOT NULL,
+        created_at VARCHAR(40) NOT NULL,
+        updated_at VARCHAR(40) NOT NULL,
+        KEY idx_action_plans_decision (decision_episode_id, created_at),
+        KEY idx_action_plans_portfolio_status (portfolio_id, status, created_at)
+    ) ENGINE=InnoDB DEFAULT CHARSET=utf8mb4 COLLATE=utf8mb4_unicode_ci
+    """,
+    """
+    CREATE TABLE IF NOT EXISTS trade_execution_episodes (
+        execution_episode_id VARCHAR(191) PRIMARY KEY,
+        action_plan_id VARCHAR(191) NOT NULL,
+        portfolio_id VARCHAR(191) NOT NULL,
+        status VARCHAR(32) NOT NULL DEFAULT 'pending',
+        payload_json LONGTEXT NOT NULL,
+        started_at VARCHAR(40) NOT NULL DEFAULT '',
+        completed_at VARCHAR(40) NOT NULL DEFAULT '',
+        created_at VARCHAR(40) NOT NULL,
+        updated_at VARCHAR(40) NOT NULL,
+        KEY idx_execution_episodes_plan (action_plan_id, created_at),
+        KEY idx_execution_episodes_portfolio_status (portfolio_id, status, updated_at)
+    ) ENGINE=InnoDB DEFAULT CHARSET=utf8mb4 COLLATE=utf8mb4_unicode_ci
+    """,
+    """
+    CREATE TABLE IF NOT EXISTS trade_execution_fills (
+        fill_id VARCHAR(191) PRIMARY KEY,
+        provider_execution_id VARCHAR(191) NOT NULL,
+        execution_episode_id VARCHAR(191) NOT NULL,
+        order_intent_id VARCHAR(191) NOT NULL DEFAULT '',
+        symbol VARCHAR(64) NOT NULL DEFAULT '',
+        side VARCHAR(8) NOT NULL,
+        quantity DECIMAL(36,12) NOT NULL DEFAULT 0,
+        price DECIMAL(36,12) NOT NULL DEFAULT 0,
+        fee DECIMAL(36,12) NOT NULL DEFAULT 0,
+        currency VARCHAR(16) NOT NULL DEFAULT 'KRW',
+        executed_at VARCHAR(40) NOT NULL,
+        payload_json LONGTEXT NOT NULL,
+        created_at VARCHAR(40) NOT NULL,
+        UNIQUE KEY uq_trade_fill_provider_execution (provider_execution_id),
+        KEY idx_trade_fills_episode_time (execution_episode_id, executed_at)
+    ) ENGINE=InnoDB DEFAULT CHARSET=utf8mb4 COLLATE=utf8mb4_unicode_ci
+    """,
+    """
+    CREATE TABLE IF NOT EXISTS investment_decision_reviews (
+        review_id VARCHAR(191) PRIMARY KEY,
+        decision_episode_id VARCHAR(191) NOT NULL,
+        selected_hypothesis_status VARCHAR(64) NOT NULL DEFAULT 'pending',
+        policy_compliant TINYINT(1) NOT NULL DEFAULT 0,
+        execution_compliant TINYINT(1) NOT NULL DEFAULT 0,
+        evidence_still_valid TINYINT(1) NOT NULL DEFAULT 0,
+        payload_json LONGTEXT NOT NULL,
+        reviewed_at VARCHAR(40) NOT NULL DEFAULT '',
+        created_at VARCHAR(40) NOT NULL,
+        updated_at VARCHAR(40) NOT NULL,
+        KEY idx_decision_reviews_episode_time (decision_episode_id, reviewed_at)
+    ) ENGINE=InnoDB DEFAULT CHARSET=utf8mb4 COLLATE=utf8mb4_unicode_ci
+    """,
+    """
+    CREATE TABLE IF NOT EXISTS investment_performance_attributions (
+        attribution_id VARCHAR(191) PRIMARY KEY,
+        decision_episode_id VARCHAR(191) NOT NULL,
+        action_plan_id VARCHAR(191) NOT NULL DEFAULT '',
+        execution_episode_id VARCHAR(191) NOT NULL DEFAULT '',
+        market_return_pct DECIMAL(18,8) NOT NULL DEFAULT 0,
+        instrument_return_pct DECIMAL(18,8) NOT NULL DEFAULT 0,
+        active_return_pct DECIMAL(18,8) NOT NULL DEFAULT 0,
+        execution_cost DECIMAL(36,12) NOT NULL DEFAULT 0,
+        realized_profit_loss DECIMAL(36,12) NOT NULL DEFAULT 0,
+        currency_effect_pct DECIMAL(18,8) NOT NULL DEFAULT 0,
+        payload_json LONGTEXT NOT NULL,
+        observed_at VARCHAR(40) NOT NULL DEFAULT '',
+        created_at VARCHAR(40) NOT NULL,
+        updated_at VARCHAR(40) NOT NULL,
+        KEY idx_performance_attribution_decision (decision_episode_id, observed_at),
+        KEY idx_performance_attribution_execution (execution_episode_id, observed_at)
+    ) ENGINE=InnoDB DEFAULT CHARSET=utf8mb4 COLLATE=utf8mb4_unicode_ci
+    """,
+    """
     CREATE TABLE IF NOT EXISTS monitor_snapshots (
         account_id VARCHAR(191) PRIMARY KEY,
         account_label VARCHAR(255) NOT NULL DEFAULT '',

@@ -570,6 +570,7 @@ def add_portfolio_factor_exposure_concepts(
     portfolio: PortfolioSummary,
     observed_positions: List[Position],
     runtime_context: Dict[str, object] = None,
+    mandate: Dict[str, object] = None,
 ) -> None:
     add_market_proxy_universe_concepts(graph, portfolio_node_id, runtime_context)
     total = number(portfolio.total) or number(portfolio.invested)
@@ -578,6 +579,10 @@ def add_portfolio_factor_exposure_concepts(
     currency_exposure: Dict[str, float] = {}
     raw_position_total = sum(number(position.market_value) for position in observed_positions if is_holding_position(position))
     sector_positions: Dict[str, int] = {}
+    mandate = dict(mandate or {})
+    currency_limit = number(mandate.get("fx_exposure_review_pct") or mandate.get("fxExposureReviewPct"))
+    sector_limit = number(mandate.get("max_sector_weight_pct") or mandate.get("maxSectorWeightPct"))
+    policy_version = str(mandate.get("policyVersion") or mandate.get("policy_version") or "")
     for position in observed_positions:
         if not is_holding_position(position):
             continue
@@ -602,6 +607,9 @@ def add_portfolio_factor_exposure_concepts(
             "currency": currency,
             "exposureRatio": round(ratio, 2),
             "exposureValue": round(value, 2),
+            "policyLimitRatio": round(currency_limit, 2),
+            "policyDeltaRatio": round(ratio - currency_limit, 2),
+            "policyVersion": policy_version,
         })
         add_relation(graph, portfolio_node_id, fx_id, "HAS_MARKET_EXPOSURE", weight=round(ratio / 100, 4), properties={"source": "currency-exposure", "aiInfluenceLabel": currency + " 환율 노출"})
         add_relation(graph, portfolio_node_id, exposure_id, "HAS_MARKET_EXPOSURE", weight=round(ratio / 100, 4), properties={"source": "currency-exposure", "polarity": "context", "aiInfluenceLabel": currency + " 통화 노출"})
@@ -618,6 +626,9 @@ def add_portfolio_factor_exposure_concepts(
             "sector": label,
             "exposureRatio": round(ratio, 2),
             "positionCount": position_count,
+            "policyLimitRatio": round(sector_limit, 2),
+            "policyDeltaRatio": round(ratio - sector_limit, 2),
+            "policyVersion": policy_version,
         })
         add_relation(graph, portfolio_node_id, exposure_id, "HAS_MARKET_EXPOSURE", weight=round(ratio / 100, 4), properties={"source": "sector-exposure", "polarity": "context", "aiInfluenceLabel": label + " 섹터 노출"})
 

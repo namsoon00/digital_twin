@@ -60,6 +60,7 @@ INVESTMENT_STRATEGY_PROFILES = {
         "maxPositionWeightPct": 15,
         "maxSectorWeightPct": 30,
         "fxExposureReviewPct": 8,
+        "minCashWeightPct": 15,
         "addBuyPolicy": "blocked_until_recovery",
         "addBuyWatchSignalMin": 4,
         "addBuyReviewSignalMin": 6,
@@ -79,6 +80,7 @@ INVESTMENT_STRATEGY_PROFILES = {
         "maxPositionWeightPct": 25,
         "maxSectorWeightPct": 45,
         "fxExposureReviewPct": 12,
+        "minCashWeightPct": 10,
         "addBuyPolicy": "watch_after_flow_defense",
         "addBuyWatchSignalMin": 3,
         "addBuyReviewSignalMin": 5,
@@ -98,6 +100,7 @@ INVESTMENT_STRATEGY_PROFILES = {
         "maxPositionWeightPct": 35,
         "maxSectorWeightPct": 55,
         "fxExposureReviewPct": 18,
+        "minCashWeightPct": 5,
         "addBuyPolicy": "review_after_recovery",
         "addBuyWatchSignalMin": 2,
         "addBuyReviewSignalMin": 4,
@@ -117,6 +120,7 @@ INVESTMENT_STRATEGY_PROFILES = {
         "maxPositionWeightPct": 45,
         "maxSectorWeightPct": 65,
         "fxExposureReviewPct": 25,
+        "minCashWeightPct": 3,
         "addBuyPolicy": "review_with_guardrails",
         "addBuyWatchSignalMin": 1,
         "addBuyReviewSignalMin": 3,
@@ -271,6 +275,23 @@ class AccountConfig:
     quiet_hours_timezone: str = DEFAULT_QUIET_HOURS_TIMEZONE
     message_delivery_level: str = DEFAULT_MESSAGE_DELIVERY_LEVEL
     investment_strategy_profile: str = DEFAULT_INVESTMENT_STRATEGY_PROFILE
+
+    def domain_profile(self):
+        """Expose separated account concepts without breaking legacy callers."""
+        from .account_identity import AccountDomainProfile
+
+        return AccountDomainProfile.from_legacy(self)
+
+    def investment_mandate(self, effective_at: str = ""):
+        from .investment_mandate import InvestmentMandate
+
+        account = self.domain_profile().brokerage_account
+        return InvestmentMandate.from_profile(
+            account_id=account.account_id,
+            portfolio_id=account.portfolio_id,
+            profile=self.investment_strategy_profile_payload(),
+            effective_at=effective_at,
+        )
 
     @classmethod
     def from_dict(cls, payload: Dict[str, object], settings: Dict[str, str]) -> "AccountConfig":

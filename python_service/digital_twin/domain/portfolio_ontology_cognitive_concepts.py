@@ -48,12 +48,50 @@ def add_investment_brain_concepts(
             "hypothesisSelectionSource": episode.get("hypothesisSelectionSource"),
             "hypothesisReviewCount": len(hypothesis_reviews),
             "inferenceGenerationId": episode.get("inferenceGenerationId"),
+            "portfolioId": episode.get("portfolioId") or portfolio_id,
+            "mandateId": episode.get("mandateId"),
+            "mandateVersion": episode.get("mandateVersion"),
+            "sourceAboxSnapshotId": episode.get("sourceAboxSnapshotId"),
+            "actionPlanId": episode.get("actionPlanId"),
+            "executionEpisodeIds": episode.get("executionEpisodeIds") or [],
             "decidedAt": episode.get("decidedAt"),
             "status": episode.get("status"),
             "source": episode.get("source"),
         })
         add_relation(graph, stock_id, episode_id, "HAS_DECISION_EPISODE", weight=1.0, properties={"source": "investment-brain-memory"})
         add_relation(graph, portfolio_node_id, episode_id, "HAS_DECISION_EPISODE", weight=1.0, properties={"source": "investment-brain-memory"})
+        action_plan_key = str(episode.get("actionPlanId") or "").strip()
+        if action_plan_key:
+            action_plan_id = add_entity(graph, "action-plan", action_plan_key, str(episode.get("subjectName") or symbol) + " 실행 계획", {
+                "tboxClass": "ActionPlan",
+                "portfolioId": episode.get("portfolioId") or portfolio_id,
+                "decisionEpisodeId": episode_key,
+                "action": episode.get("action"),
+                "policyVersion": episode.get("mandateVersion"),
+                "inferenceGenerationId": episode.get("inferenceGenerationId"),
+                "status": "review-required" if str(episode.get("action") or "").upper() in {"BUY", "ADD", "TRIM", "SELL"} else "informational",
+                "source": "investment-action-plan",
+            })
+            add_relation(graph, episode_id, action_plan_id, "PROPOSES_ACTION_PLAN", weight=1.0, properties={
+                "source": "investment-action-plan",
+                "policyVersion": episode.get("mandateVersion") or "",
+            })
+            for execution_key in episode.get("executionEpisodeIds") or []:
+                execution_key = str(execution_key or "").strip()
+                if not execution_key:
+                    continue
+                execution_id = add_entity(graph, "execution-episode", execution_key, str(episode.get("subjectName") or symbol) + " 실행 에피소드", {
+                    "tboxClass": "ExecutionEpisode",
+                    "portfolioId": episode.get("portfolioId") or portfolio_id,
+                    "actionPlanId": action_plan_key,
+                    "source": "trade-execution-memory",
+                })
+                add_relation(graph, action_plan_id, execution_id, "EXECUTES_ACTION_PLAN", weight=1.0, properties={
+                    "source": "trade-execution-memory",
+                })
+                add_relation(graph, execution_id, episode_id, "MATCHES_DECISION", weight=1.0, properties={
+                    "source": "trade-execution-memory",
+                })
         facts_at_decision = episode.get("factsAtDecision") if isinstance(episode.get("factsAtDecision"), dict) else {}
         outcome_contract = facts_at_decision.get("hypothesisOutcomeContract") if isinstance(facts_at_decision.get("hypothesisOutcomeContract"), dict) else {}
         if outcome_contract:
@@ -435,6 +473,7 @@ def add_investment_brain_concepts(
                 "source": "investment-brain-feedback",
             })
             add_relation(graph, episode_id, outcome_id, "RESULTED_IN_OUTCOME", weight=1.0, properties={"source": "investment-brain-feedback"})
+            add_relation(graph, episode_id, outcome_id, "PRODUCES_OUTCOME", weight=1.0, properties={"source": "investment-brain-feedback"})
             add_relation(graph, stock_id, outcome_id, "OBSERVES_OUTCOME", weight=1.0, properties={"source": "investment-brain-feedback"})
     add_hypothesis_calibration_concepts(graph, portfolio_id, episode_rows)
     add_hypothesis_outcome_assessment_concepts(

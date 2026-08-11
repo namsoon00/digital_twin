@@ -52,6 +52,13 @@ INVESTMENT_STRATEGY_APPROVED = "investment_strategy.approved"
 INVESTMENT_STRATEGY_DEPLOYED = "investment_strategy.deployed"
 INVESTMENT_STRATEGY_PERFORMANCE_RECORDED = "investment_strategy.performance_recorded"
 SYSTEM_ERROR_REPORTED = "system.error_reported"
+INVESTMENT_MANDATE_CHANGED = "investment.mandate_changed"
+PORTFOLIO_LEDGER_RECORDED = "portfolio.ledger_recorded"
+PORTFOLIO_REBALANCE_PROPOSED = "portfolio.rebalance_proposed"
+INVESTMENT_ACTION_PLAN_PROPOSED = "investment.action_plan_proposed"
+TRADE_EXECUTION_RECORDED = "trade.execution_recorded"
+INVESTMENT_DECISION_REVIEWED = "investment.decision_reviewed"
+INVESTMENT_PERFORMANCE_ATTRIBUTED = "investment.performance_attributed"
 
 
 @dataclass(frozen=True)
@@ -151,10 +158,16 @@ def operational_storage_capacity_changed_event(payload: Dict[str, object]) -> Do
 
 
 def account_saved_event(account: AccountConfig) -> DomainEvent:
+    profile = account.domain_profile()
+    mandate = account.investment_mandate()
     return DomainEvent(
         name=ACCOUNT_SAVED,
         aggregate_id=account.account_id,
-        payload={"account": account.masked()},
+        payload={
+            "account": account.masked(),
+            "accountDomain": profile.to_dict(),
+            "investmentMandate": mandate.to_dict(),
+        },
     )
 
 
@@ -163,6 +176,31 @@ def account_removed_event(account_id: str) -> DomainEvent:
         name=ACCOUNT_REMOVED,
         aggregate_id=account_id,
         payload={"accountId": account_id},
+    )
+
+
+def investment_lifecycle_event(
+    name: str,
+    aggregate_id: str,
+    payload: Dict[str, object],
+    correlation_id: str = "",
+) -> DomainEvent:
+    allowed = {
+        INVESTMENT_MANDATE_CHANGED,
+        PORTFOLIO_LEDGER_RECORDED,
+        PORTFOLIO_REBALANCE_PROPOSED,
+        INVESTMENT_ACTION_PLAN_PROPOSED,
+        TRADE_EXECUTION_RECORDED,
+        INVESTMENT_DECISION_REVIEWED,
+        INVESTMENT_PERFORMANCE_ATTRIBUTED,
+    }
+    if name not in allowed:
+        raise ValueError("Unsupported investment lifecycle event: " + str(name or ""))
+    return DomainEvent(
+        name=name,
+        aggregate_id=str(aggregate_id or "")[:191],
+        payload=dict(payload or {}),
+        correlation_id=str(correlation_id or "")[:191],
     )
 
 

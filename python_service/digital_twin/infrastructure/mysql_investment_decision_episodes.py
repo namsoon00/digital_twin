@@ -15,6 +15,7 @@ from ..domain.hypothesis_outcome_contract import (
     resolved_outcome_contract,
 )
 from ..domain.decision_performance import evaluate_decision_performance
+from ..domain.trade_execution import ActionPlan
 from .mysql_operational_connection import MySQLOperationalConnection
 from .mysql_operational_helpers import _json_loads
 from .operational_common import json_dumps
@@ -24,9 +25,19 @@ class MySQLInvestmentDecisionEpisodeStore(MySQLOperationalConnection):
     def save(self, episode: DecisionEpisode) -> DecisionEpisode:
         episode.decided_at = canonical_investment_timestamp(episode.decided_at) or utc_now_iso()
         episode.status = str(episode.status or "active")
+        plan = ActionPlan.create(
+            portfolio_id=episode.portfolio_id or "portfolio:" + str(episode.account_id or "default"),
+            decision_episode_id=episode.episode_id,
+            action=episode.action,
+            policy_version=episode.mandate_version,
+            inference_generation_id=episode.inference_generation_id,
+            created_at=episode.decided_at,
+        )
+        episode.portfolio_id = plan.portfolio_id
+        episode.action_plan_id = plan.plan_id
         stamp = utc_now_iso()
         payload = episode.to_dict()
-        with self.connect() as connection:
+        with self.transaction() as connection:
             connection.execute(
                 """
                 INSERT INTO investment_decision_episodes (
@@ -60,6 +71,28 @@ class MySQLInvestmentDecisionEpisodeStore(MySQLOperationalConnection):
                     episode.source,
                     json_dumps(payload),
                     stamp,
+                    stamp,
+                ),
+            )
+            connection.execute(
+                """
+                INSERT INTO investment_action_plans (
+                    plan_id, portfolio_id, decision_episode_id, policy_version,
+                    inference_generation_id, action, status, payload_json, created_at, updated_at
+                ) VALUES (%s, %s, %s, %s, %s, %s, %s, %s, %s, %s)
+                ON DUPLICATE KEY UPDATE status = VALUES(status),
+                    payload_json = VALUES(payload_json), updated_at = VALUES(updated_at)
+                """,
+                (
+                    plan.plan_id,
+                    plan.portfolio_id,
+                    plan.decision_episode_id,
+                    plan.policy_version,
+                    plan.inference_generation_id,
+                    plan.action,
+                    plan.status,
+                    json_dumps(plan.to_dict()),
+                    plan.created_at or stamp,
                     stamp,
                 ),
             )

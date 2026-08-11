@@ -1,0 +1,130 @@
+# Investment Domain Architecture
+
+## Purpose
+
+Orbit Alpha separates transactional truth, semantic reasoning, execution, and delivery so each can scale and fail independently. MySQL-backed domain stores own durable business facts. TypeDB owns semantic relations and investment inference. AI compares graph-backed hypotheses but does not create positions, policy, fills, or source facts. Notification delivery never changes investment meaning.
+
+## Bounded Contexts
+
+| Context | Owns | Source of truth | Main outputs |
+| --- | --- | --- | --- |
+| Account Identity | Investor, brokerage account, provider credential reference, account universe | MySQL account configuration | `BrokerageAccount`, masked domain profile |
+| Portfolio Ledger | Immutable trades, cash movements, lots, cost basis | MySQL append-only ledger | Reconstructed positions and cash |
+| Investment Mandate | Risk tolerance, loss budget, cash floor, position/sector/currency limits, allowed actions | Versioned MySQL mandate | Policy version and TBox policy facts |
+| Asset Knowledge | Company, security, listing line, market, sector, currency | Existing symbol/company stores | Stable identity graph |
+| Market Observation | Quote, volume, flow, technical, macro, provenance and freshness | Existing time-series and source stores | Observation ABox facts |
+| Research Evidence | News, disclosure, claim, verification and counter-evidence | Existing research stores | Verified evidence ABox facts |
+| Risk Exposure | Raw position, sector, currency and factor exposure | Derived immutable snapshot | Policy deltas for TypeDB rules |
+| Allocation Rebalance | Target bands, drift and review-only rebalance proposals | MySQL proposal store | Bounded rebalance legs |
+| Decision Intelligence | Question, hypotheses, inference generation and final decision | Decision episode store | `DecisionEpisode`, `ActionPlan` proposal |
+| Trade Execution | Action envelope, order intent, broker fill and reconciliation | MySQL execution stores | Immutable execution episode |
+| Outcome Learning | Observed outcome, attribution and decision review | MySQL review store | Governed learning evidence |
+| Notification Delivery | Delivery intent, gate result and receipt | Notification outbox/ledger | Channel delivery only |
+| Operations Audit | Pipeline health, leases, generations and failures | Operational stores and logs | Diagnostics and recovery signals |
+
+Credentials are referenced by ID. Raw secrets are infrastructure configuration and must never enter domain events, ABox facts, prompts, logs, or git.
+
+## Storage Roles
+
+### MySQL
+
+MySQL owns durable transactional facts:
+
+- Account configuration and active investment mandate
+- Append-only portfolio ledger entries
+- Rebalance proposals and action plans
+- Decision episodes, execution episodes, fills, and decision reviews
+- Event outbox, notification ledger, worker leases, and operational history
+
+Writes use stable IDs and unique source references. Broker fills use provider execution IDs for idempotency. A position is reconstructed from ledger entries; snapshots are reconciliation evidence and do not silently rewrite lots.
+
+### TypeDB
+
+TypeDB owns the semantic read model:
+
+- TBox classes, relation types, bounded contexts, and TypeDB schema functions
+- Current ABox observations with provenance and freshness
+- Generation-scoped InferenceBox relations and traces
+- Links between mandate, exposure, decision, execution, and outcome concepts
+
+TypeDB is not the account, ledger, order, or delivery source of truth. Projection can be replayed from MySQL and source stores.
+
+## Canonical Flow
+
+1. A source context persists a fact and publishes a compact domain event.
+2. Projection builds only the affected ABox fact families and records provenance, observation time, and policy version.
+3. Question routing selects rules by input fact family, dependency key, world scope, freshness requirement, decision stage, and cost hint.
+4. TypeDB schema functions evaluate ABox facts and materialize one immutable InferenceBox generation.
+5. The investment brain builds competing hypotheses from active traces and explicit counter-evidence.
+6. AI receives the bounded graph packet and selects a hypothesis and categorical action inside the action envelope.
+7. A `DecisionEpisode` and review-only `ActionPlan` are persisted atomically.
+8. Explicit user approval or a future governed executor may submit orders. Broker fills remain immutable.
+9. Later observations create attribution and a `DecisionReview`; learning changes remain review-only proposals.
+10. Notification delivery applies channel policy after the investment decision is complete.
+
+The trace key chain is:
+
+```text
+sourceEventId
+  -> aboxSnapshotId
+  -> inferenceGenerationId
+  -> decisionEpisodeId
+  -> actionPlanId
+  -> executionEpisodeId
+  -> providerExecutionId
+  -> decisionReviewId
+  -> notificationJobId / deliveryReceiptId
+```
+
+## Policy Reasoning
+
+Investment limits are source-backed facts, not constants embedded in rules. Python may compute raw metrics and policy deltas:
+
+```text
+policyDeltaRatio = observedExposureRatio - policyLimitRatio
+```
+
+TypeDB decides whether a breach relation exists by evaluating `policyDeltaRatio > 0`. The same concentration rule therefore works for every account profile without rule duplication or a hardcoded 35% threshold.
+
+Every executable rule carries a generated domain manifest:
+
+- Owning module and supported question types
+- Input fact families and dependency keys
+- Required freshness and provenance
+- Policy keys and world scope
+- Decision stages and effects
+- Conflict group and outcome contract
+- Failure policy and estimated cost
+
+A rule with incomplete routing metadata fails contract validation before deployment.
+
+## Performance And Scalability
+
+- Source writes and execution writes are small transactions. No external API, TypeDB query, or AI call runs while a MySQL transaction is open.
+- Domain events and work items carry compact IDs; workers load details only when processing.
+- ABox projection remains target- and fact-family-scoped. Static TBox payloads are not rebuilt per quote.
+- Policy changes invalidate exposure and decision families, not unrelated market observations.
+- Rule routing occurs before TypeDB execution. Rules outside the question, changed fact families, world scope, or freshness window are not queried.
+- InferenceBox writes are generation-scoped and bulk materialized. Failed generations preserve the last usable generation.
+- AI and notification delivery are asynchronous. Realtime collection does not wait for either.
+- Ledger and fill IDs make retries idempotent. At-least-once delivery cannot duplicate holdings or fills.
+- Outcome evaluation is horizon-scheduled and does not block current inference.
+
+## Compatibility And Migration
+
+`AccountConfig` remains a compatibility facade. `domain_profile()` separates brokerage identity, watchlist universe, and delivery policy; `investment_mandate()` creates the versioned policy contract. Existing position snapshots remain available while the append-only ledger is populated. No automatic order submission is enabled.
+
+TBox v6 layers the canonical domain modules over existing class and relation names. Existing rule IDs remain stable. New relation names are additive, and the web trace can show both historical episodes and new lifecycle records.
+
+## Definition Of Done
+
+A domain change is complete only when:
+
+1. The source aggregate and repository own the fact.
+2. A domain event contains stable IDs and no secrets.
+3. TBox classes and relations pass referential validation.
+4. ABox projection includes policy version, provenance, freshness, and missing-data state.
+5. TypeDB rule manifests identify dependencies and decision stages.
+6. Decision, plan, execution, outcome, and delivery IDs remain traceable.
+7. Retries are idempotent and transactions do not include network calls.
+8. Contract, regression, and smoke tests pass.

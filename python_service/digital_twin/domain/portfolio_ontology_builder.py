@@ -160,6 +160,9 @@ def build_portfolio_ontology(
         "strategyMaxPositionWeightPct": number(strategy_profile.get("maxPositionWeightPct")),
         "strategyMaxSectorWeightPct": number(strategy_profile.get("maxSectorWeightPct")),
         "strategyFxExposureReviewPct": number(strategy_profile.get("fxExposureReviewPct")),
+        "strategyMinCashWeightPct": number(strategy_profile.get("minCashWeightPct")),
+        "mandateId": strategy_context.get("mandateId"),
+        "policyVersion": (strategy_context.get("mandate") or {}).get("policyVersion") if isinstance(strategy_context.get("mandate"), dict) else "",
         "strategyAddBuyWatchSignalMin": number(strategy_profile.get("addBuyWatchSignalMin")),
         "strategyAddBuyReviewSignalMin": number(strategy_profile.get("addBuyReviewSignalMin")),
         "strategyAllowLossAddBuyReview": bool(strategy_profile.get("allowLossAddBuyReview")),
@@ -182,7 +185,14 @@ def build_portfolio_ontology(
             properties=abox_properties(),
         ))
     add_market_exposure_concepts(graph, portfolio_node_id, portfolio)
-    add_portfolio_factor_exposure_concepts(graph, portfolio_node_id, portfolio, reference_observed_positions, runtime_context)
+    add_portfolio_factor_exposure_concepts(
+        graph,
+        portfolio_node_id,
+        portfolio,
+        reference_observed_positions,
+        runtime_context,
+        strategy_context.get("mandate") if isinstance(strategy_context.get("mandate"), dict) else {},
+    )
     add_runtime_setting_concepts(graph, portfolio_node_id, runtime_context)
     add_runtime_metadata_concepts(graph, portfolio_node_id, runtime_context)
     add_operational_world_concepts(graph, portfolio_node_id, runtime_context, reference_observed_positions)
@@ -226,6 +236,8 @@ def build_portfolio_ontology(
         source = "watchlist" if is_watchlist_position(position) else "holding"
         holding = is_holding_position(position)
         stock_tbox_classes = instrument_tbox_classes(position) + (["WatchlistCandidate"] if source == "watchlist" else [])
+        position_policy_limit = number(strategy_profile.get("maxPositionWeightPct"))
+        position_weight_pct = round(position_weight(position, portfolio), 2)
         foreign_net_volume = investor_net_volume(position.foreign_net_volume, position.foreign_buy_volume, position.foreign_sell_volume)
         institution_net_volume = investor_net_volume(position.institution_net_volume, position.institution_buy_volume, position.institution_sell_volume)
         individual_net_volume = investor_net_volume(position.individual_net_volume, position.individual_buy_volume, position.individual_sell_volume)
@@ -247,8 +259,10 @@ def build_portfolio_ontology(
             "marketValue": number(position.market_value),
             "profitLossRate": number(position.profit_loss_rate),
             "profitLoss": number(position.profit_loss),
-            "positionWeight": round(position_weight(position, portfolio), 2),
-            "positionAccountWeight": round(position_weight(position, portfolio), 2),
+            "positionWeight": position_weight_pct,
+            "positionAccountWeight": position_weight_pct,
+            "policyLimitRatio": position_policy_limit,
+            "policyDeltaRatio": round(position_weight_pct - position_policy_limit, 2),
             "changeRate": number(position.change_rate),
             "priceChangeRate": number(position.change_rate),
             "ma5": number(position.ma5),
@@ -292,6 +306,9 @@ def build_portfolio_ontology(
             "quantity": number(position.quantity),
             "marketValue": number(position.market_value),
             "profitLossRate": number(position.profit_loss_rate),
+            "positionWeight": position_weight_pct,
+            "policyLimitRatio": position_policy_limit,
+            "policyDeltaRatio": round(position_weight_pct - position_policy_limit, 2),
             "updatedAt": position.updated_at,
             **quote_observation,
             **strategy_fact_props,

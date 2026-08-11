@@ -78,6 +78,7 @@ RULEBOX_RAW_ABOX_RUNTIME_RULE_VERSIONS: Dict[str, str] = {
 }
 RULEBOX_RAW_ABOX_RUNTIME_RULE_VERSIONS["graph.execution.capacity_safe.v1"] = "v3"
 RULEBOX_RAW_ABOX_RUNTIME_RULE_VERSIONS["graph.price.reclaim.thesis_support.v1"] = "v3"
+RULEBOX_RAW_ABOX_RUNTIME_RULE_VERSIONS["graph.portfolio.concentration.review.v1"] = "v3"
 for _rule_id in CRYPTO_MARKET_RULE_IDS | RATE_MACRO_RULE_IDS:
     RULEBOX_RAW_ABOX_RUNTIME_RULE_VERSIONS[_rule_id] = "v1"
 

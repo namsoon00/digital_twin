@@ -2341,6 +2341,22 @@ def notification_job_public_payload(job: NotificationJob, detail: bool = False, 
                 "runCount": 0,
                 "runs": [],
             }
+        try:
+            episode = context.get("investmentDecisionEpisode") if isinstance(context.get("investmentDecisionEpisode"), dict) else {}
+            episode_id = str(
+                context.get("investmentDecisionEpisodeId")
+                or episode.get("episodeId")
+                or ""
+            ).strip()
+            lifecycle = stores.investment_domain_store(runtime_settings()).lifecycle_trace(episode_id)
+            payload["investmentLifecycle"] = lifecycle
+            payload["reasoningTrace"]["investmentLifecycle"] = lifecycle
+        except Exception as error:  # noqa: BLE001 - the immutable reasoning trace remains usable.
+            payload["investmentLifecycle"] = {
+                "status": "error",
+                "reason": str(error)[:220],
+            }
+            payload["reasoningTrace"]["investmentLifecycle"] = payload["investmentLifecycle"]
     return payload
 
 

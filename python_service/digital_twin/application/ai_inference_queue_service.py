@@ -315,6 +315,8 @@ class AIInferenceQueueRunner:
                 facts,
                 str(relation_context.get("inferenceGenerationAt") or context.get("referenceDate") or ""),
             )
-            self.decision_episode_store.save(episode)
+            saved_episode = self.decision_episode_store.save(episode)
+            context["investmentDecisionEpisodeId"] = saved_episode.episode_id
+            context["investmentDecisionEpisode"] = saved_episode.to_dict()
         except Exception:  # noqa: BLE001 - the validated notification is already atomically publishable.
             return

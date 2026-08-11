@@ -12,6 +12,11 @@ from .investment_calendar import InvestmentCalendarEvent
 from .ontology_contracts import PortfolioOntology
 from .ontology_projection_audit import OntologyProjectionRun
 from .portfolio import AccountSnapshot, AlertEvent, Position
+from .investment_mandate import InvestmentMandate
+from .investment_outcomes import DecisionReview, PerformanceAttribution
+from .portfolio_ledger import PortfolioLedgerEntry
+from .portfolio_rebalancing import RebalanceProposal
+from .trade_execution import ActionPlan, ExecutionEpisode
 from .symbol_universe import ListedSymbol
 
 
@@ -29,6 +34,38 @@ class AccountRepository(Protocol):
         ...
 
     def remove(self, account_id: str) -> bool:
+        ...
+
+
+class InvestmentDomainRepository(Protocol):
+    def save_mandate(self, mandate: InvestmentMandate) -> InvestmentMandate:
+        ...
+
+    def active_mandate(self, portfolio_id: str) -> Dict[str, object]:
+        ...
+
+    def mandate_history(self, portfolio_id: str, limit: int = 100) -> List[Dict[str, object]]:
+        ...
+
+    def append_ledger_entries(self, entries: Iterable[PortfolioLedgerEntry]) -> int:
+        ...
+
+    def ledger_entries(self, portfolio_id: str, limit: int = 10000) -> List[PortfolioLedgerEntry]:
+        ...
+
+    def save_rebalance_proposal(self, proposal: RebalanceProposal) -> RebalanceProposal:
+        ...
+
+    def save_action_plan(self, plan: ActionPlan) -> ActionPlan:
+        ...
+
+    def save_execution_episode(self, episode: ExecutionEpisode) -> ExecutionEpisode:
+        ...
+
+    def save_decision_review(self, review: DecisionReview) -> DecisionReview:
+        ...
+
+    def save_performance_attribution(self, attribution: PerformanceAttribution) -> PerformanceAttribution:
         ...
 
 

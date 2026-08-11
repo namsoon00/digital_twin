@@ -19292,6 +19292,7 @@
     var comparison = trace.aiComparison && typeof trace.aiComparison === "object" ? trace.aiComparison : {};
     var aiExecution = trace.aiExecution && typeof trace.aiExecution === "object" ? trace.aiExecution : {};
     var executionLedger = trace.executionLedger && typeof trace.executionLedger === "object" ? trace.executionLedger : {};
+    var investmentLifecycle = trace.investmentLifecycle && typeof trace.investmentLifecycle === "object" ? trace.investmentLifecycle : {};
     var selected = trace.selectedHypothesis && typeof trace.selectedHypothesis === "object" ? trace.selectedHypothesis : {};
     var delivery = trace.delivery && typeof trace.delivery === "object" ? trace.delivery : {};
     var deliveryLabel = delivery.decision ? notificationDeliveryStateLabel(delivery.decision) : (job.status || "발송 판단");
@@ -19442,6 +19443,34 @@
         '</div>'
       ].join("");
     }).join("");
+    var lifecyclePlans = Array.isArray(investmentLifecycle.actionPlans) ? investmentLifecycle.actionPlans : [];
+    var lifecycleExecutions = Array.isArray(investmentLifecycle.executionEpisodes) ? investmentLifecycle.executionEpisodes : [];
+    var lifecycleFills = Array.isArray(investmentLifecycle.fills) ? investmentLifecycle.fills : [];
+    var lifecycleReviews = Array.isArray(investmentLifecycle.decisionReviews) ? investmentLifecycle.decisionReviews : [];
+    var lifecycleAttributions = Array.isArray(investmentLifecycle.performanceAttributions) ? investmentLifecycle.performanceAttributions : [];
+    var lifecycleBody = notificationReasoningTraceTags([
+      investmentLifecycle.decisionEpisodeId ? "판단 " + investmentLifecycle.decisionEpisodeId : "판단 ID 미기록",
+      "실행계획 " + lifecyclePlans.length,
+      "실행 에피소드 " + lifecycleExecutions.length,
+      "체결 " + lifecycleFills.length,
+      "성과 귀속 " + lifecycleAttributions.length,
+      "결과 리뷰 " + lifecycleReviews.length
+    ], "notification-reasoning-tags");
+    if (investmentLifecycle.decisionEpisode && Object.keys(investmentLifecycle.decisionEpisode).length) {
+      lifecycleBody += '<details class="notification-ai-prompt-audit"><summary>DecisionEpisode 전체 데이터</summary><pre>' + escapeHtml(JSON.stringify(investmentLifecycle.decisionEpisode, null, 2)) + '</pre></details>';
+    }
+    if (lifecyclePlans.length) {
+      lifecycleBody += '<details class="notification-ai-prompt-audit"><summary>ActionPlan 전체 데이터</summary><pre>' + escapeHtml(JSON.stringify(lifecyclePlans, null, 2)) + '</pre></details>';
+    }
+    if (lifecycleExecutions.length || lifecycleFills.length) {
+      lifecycleBody += '<details class="notification-ai-prompt-audit"><summary>주문·체결 전체 데이터</summary><pre>' + escapeHtml(JSON.stringify({ executionEpisodes: lifecycleExecutions, fills: lifecycleFills }, null, 2)) + '</pre></details>';
+    }
+    if (lifecycleReviews.length) {
+      lifecycleBody += '<details class="notification-ai-prompt-audit"><summary>성과·판단 리뷰 전체 데이터</summary><pre>' + escapeHtml(JSON.stringify(lifecycleReviews, null, 2)) + '</pre></details>';
+    }
+    if (lifecycleAttributions.length) {
+      lifecycleBody += '<details class="notification-ai-prompt-audit"><summary>성과 귀속 전체 데이터</summary><pre>' + escapeHtml(JSON.stringify(lifecycleAttributions, null, 2)) + '</pre></details>';
+    }
     return [
       '<section class="notification-detail-section notification-reasoning-section">',
       '<div class="notification-reasoning-head">',
@@ -19454,7 +19483,8 @@
       renderNotificationReasoningStep(2, "TypeDB 규칙 실행", rules.length + "개 규칙, " + inferenceTraces.length + "개 추론 경로", snapshot.inferenceGenerationId || "추론 세대 ID 미기록", executionLedgerBody + ruleBody + traceBody),
       renderNotificationReasoningStep(3, "경쟁 가설 구성", hypotheses.length + "개 가설을 비교 후보로 구성했습니다.", "선택 표시는 다음 AI 단계의 결과이며, 후보 생성보다 먼저 실행된 것이 아닙니다.", hypothesisCandidatesBody),
       renderNotificationReasoningStep(4, "AI 비교·최종 판단", (finalDecision.actionLabel || finalDecision.primaryAction || "판단 기록 없음") + (finalDecision.summary ? " · " + finalDecision.summary : ""), finalDecision.validationLabel || finalDecision.dataStateLabel || "검증 상태 미기록", aiExecutionBody + comparisonBody + hypothesisBody),
-      renderNotificationReasoningStep(5, "알림 발송", deliveryLabel, delivery.gateReason || "발송 정책과 반복 방지 정책을 통과한 결과입니다.", deliveryBody),
+      renderNotificationReasoningStep(5, "판단·실행·성과 수명주기", investmentLifecycle.status === "ready" ? "판단과 실행계획이 연결됐습니다." : "연결된 실행 기록이 아직 없습니다.", investmentLifecycle.decisionEpisodeId || "DecisionEpisode ID 미기록", lifecycleBody),
+      renderNotificationReasoningStep(6, "알림 발송", deliveryLabel, delivery.gateReason || "발송 정책과 반복 방지 정책을 통과한 결과입니다.", deliveryBody),
       '</ol>',
       comparison.unresolvedQuestions && comparison.unresolvedQuestions.length ? '<div class="notification-reasoning-appendix"><strong>미해결 질문</strong>' + notificationReasoningTraceTags(comparison.unresolvedQuestions, "notification-reasoning-tags") + '</div>' : '',
       auditBody ? '<div class="notification-reasoning-appendix"><strong>추론 무결성</strong>' + auditBody + '</div>' : '',

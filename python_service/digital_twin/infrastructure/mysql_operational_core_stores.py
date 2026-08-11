@@ -52,6 +52,7 @@ from .mysql_operational_helpers import (
     _sent_key_hash,
     research_evidence_change_payload,
 )
+from .mysql_investment_domain import save_mandate_with_connection
 
 
 class MySQLRuntimeSettingsStore(MySQLOperationalConnection):
@@ -231,6 +232,7 @@ class MySQLAccountRegistry(MySQLOperationalConnection):
             """,
             (account.account_id, account.notify_provider, account.telegram_bot_token, account.telegram_chat_id, account.notify_link_url, stamp),
         )
+        save_mandate_with_connection(connection, account.investment_mandate(stamp), stamp)
 
     def upsert(self, account: AccountConfig) -> None:
         with self.transaction() as connection:

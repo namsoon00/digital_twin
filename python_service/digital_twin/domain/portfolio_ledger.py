@@ -1,0 +1,236 @@
+"""Append-only portfolio ledger with deterministic position reconstruction."""
+
+from dataclasses import asdict, dataclass, field, replace
+from decimal import Decimal, InvalidOperation
+import uuid
+from typing import Dict, Iterable, List
+
+
+PORTFOLIO_LEDGER_VERSION = "portfolio-ledger-v1"
+BUY = "BUY"
+SELL = "SELL"
+CASH_DEPOSIT = "CASH_DEPOSIT"
+CASH_WITHDRAWAL = "CASH_WITHDRAWAL"
+DIVIDEND = "DIVIDEND"
+FEE = "FEE"
+SPLIT = "SPLIT"
+SNAPSHOT_RECONCILIATION = "SNAPSHOT_RECONCILIATION"
+
+
+def decimal_value(value: object) -> Decimal:
+    try:
+        return Decimal(str(value or "0"))
+    except (InvalidOperation, ValueError):
+        return Decimal("0")
+
+
+@dataclass(frozen=True)
+class PortfolioLedgerEntry:
+    entry_id: str
+    portfolio_id: str
+    account_id: str
+    entry_type: str
+    occurred_at: str
+    source_reference: str
+    symbol: str = ""
+    currency: str = "KRW"
+    quantity: Decimal = Decimal("0")
+    unit_price: Decimal = Decimal("0")
+    amount: Decimal = Decimal("0")
+    fee: Decimal = Decimal("0")
+    payload: Dict[str, object] = field(default_factory=dict)
+
+    @classmethod
+    def create(cls, portfolio_id: str, account_id: str, entry_type: str, occurred_at: str, **values):
+        source_reference = str(values.get("source_reference") or values.get("sourceReference") or "")
+        return cls(
+            entry_id=str(values.get("entry_id") or values.get("entryId") or uuid.uuid4().hex),
+            portfolio_id=str(portfolio_id or ""),
+            account_id=str(account_id or ""),
+            entry_type=str(entry_type or "").upper(),
+            occurred_at=str(occurred_at or ""),
+            source_reference=source_reference,
+            symbol=str(values.get("symbol") or "").upper(),
+            currency=str(values.get("currency") or "KRW").upper(),
+            quantity=decimal_value(values.get("quantity")),
+            unit_price=decimal_value(values.get("unit_price") or values.get("unitPrice")),
+            amount=decimal_value(values.get("amount")),
+            fee=decimal_value(values.get("fee")),
+            payload=dict(values.get("payload") or {}),
+        )
+
+    def __post_init__(self) -> None:
+        if not self.portfolio_id or not self.account_id or not self.entry_type:
+            raise ValueError("Portfolio ledger entry requires portfolio, account, and entry type.")
+        if self.quantity < 0 or self.unit_price < 0 or self.fee < 0:
+            raise ValueError("Ledger quantities, prices, and fees cannot be negative.")
+
+    def to_dict(self) -> Dict[str, object]:
+        payload = asdict(self)
+        for key in ("quantity", "unit_price", "amount", "fee"):
+            payload[key] = str(payload[key])
+        payload["version"] = PORTFOLIO_LEDGER_VERSION
+        return payload
+
+
+@dataclass(frozen=True)
+class PositionLot:
+    lot_id: str
+    portfolio_id: str
+    symbol: str
+    currency: str
+    opened_at: str
+    quantity: Decimal
+    remaining_quantity: Decimal
+    unit_cost: Decimal
+    source_reference: str = ""
+
+    @property
+    def cost_basis(self) -> Decimal:
+        return self.remaining_quantity * self.unit_cost
+
+    def to_dict(self) -> Dict[str, object]:
+        payload = asdict(self)
+        payload["quantity"] = str(self.quantity)
+        payload["remaining_quantity"] = str(self.remaining_quantity)
+        payload["unit_cost"] = str(self.unit_cost)
+        payload["costBasis"] = str(self.cost_basis)
+        return payload
+
+
+@dataclass
+class PortfolioLedgerState:
+    portfolio_id: str
+    account_id: str
+    lots: List[PositionLot] = field(default_factory=list)
+    cash: Dict[str, Decimal] = field(default_factory=dict)
+    realized_profit_loss: Dict[str, Decimal] = field(default_factory=dict)
+    applied_entry_ids: List[str] = field(default_factory=list)
+    applied_source_references: List[str] = field(default_factory=list)
+
+    def quantity(self, symbol: str) -> Decimal:
+        key = str(symbol or "").upper()
+        return sum((lot.remaining_quantity for lot in self.lots if lot.symbol == key), Decimal("0"))
+
+    def average_cost(self, symbol: str) -> Decimal:
+        key = str(symbol or "").upper()
+        lots = [lot for lot in self.lots if lot.symbol == key and lot.remaining_quantity > 0]
+        quantity = sum((lot.remaining_quantity for lot in lots), Decimal("0"))
+        return (sum((lot.cost_basis for lot in lots), Decimal("0")) / quantity) if quantity else Decimal("0")
+
+    def to_dict(self) -> Dict[str, object]:
+        symbols = sorted({item.symbol for item in self.lots if item.remaining_quantity > 0})
+        return {
+            "version": PORTFOLIO_LEDGER_VERSION,
+            "portfolioId": self.portfolio_id,
+            "accountId": self.account_id,
+            "positions": [
+                {
+                    "symbol": symbol,
+                    "quantity": str(self.quantity(symbol)),
+                    "averageCost": str(self.average_cost(symbol)),
+                }
+                for symbol in symbols
+            ],
+            "lots": [item.to_dict() for item in self.lots if item.remaining_quantity > 0],
+            "cash": {key: str(value) for key, value in self.cash.items()},
+            "realizedProfitLoss": {key: str(value) for key, value in self.realized_profit_loss.items()},
+        }
+
+
+class PortfolioLedger:
+    def __init__(self, portfolio_id: str, account_id: str):
+        self.state = PortfolioLedgerState(str(portfolio_id or ""), str(account_id or ""))
+
+    def replay(self, entries: Iterable[PortfolioLedgerEntry]) -> PortfolioLedgerState:
+        for entry in sorted(entries or [], key=lambda item: (item.occurred_at, item.entry_id)):
+            self.apply(entry)
+        return self.state
+
+    def apply(self, entry: PortfolioLedgerEntry) -> bool:
+        if entry.portfolio_id != self.state.portfolio_id or entry.account_id != self.state.account_id:
+            raise ValueError("Ledger entry aggregate does not match the ledger state.")
+        if entry.entry_id in self.state.applied_entry_ids:
+            return False
+        if entry.source_reference and entry.source_reference in self.state.applied_source_references:
+            return False
+        handler = getattr(self, "_apply_" + entry.entry_type.lower(), None)
+        if not callable(handler):
+            raise ValueError("Unsupported portfolio ledger entry type: " + entry.entry_type)
+        handler(entry)
+        self.state.applied_entry_ids.append(entry.entry_id)
+        if entry.source_reference:
+            self.state.applied_source_references.append(entry.source_reference)
+        return True
+
+    def _apply_buy(self, entry: PortfolioLedgerEntry) -> None:
+        if not entry.symbol or entry.quantity <= 0 or entry.unit_price <= 0:
+            raise ValueError("BUY requires symbol, quantity, and unit price.")
+        lot = PositionLot(
+            lot_id="lot:" + entry.entry_id,
+            portfolio_id=entry.portfolio_id,
+            symbol=entry.symbol,
+            currency=entry.currency,
+            opened_at=entry.occurred_at,
+            quantity=entry.quantity,
+            remaining_quantity=entry.quantity,
+            unit_cost=entry.unit_price + (entry.fee / entry.quantity if entry.quantity else Decimal("0")),
+            source_reference=entry.source_reference,
+        )
+        self.state.lots.append(lot)
+        cost = entry.amount or (entry.quantity * entry.unit_price)
+        self.state.cash[entry.currency] = self.state.cash.get(entry.currency, Decimal("0")) - cost - entry.fee
+
+    def _apply_sell(self, entry: PortfolioLedgerEntry) -> None:
+        if not entry.symbol or entry.quantity <= 0 or entry.unit_price <= 0:
+            raise ValueError("SELL requires symbol, quantity, and unit price.")
+        remaining = entry.quantity
+        consumed_cost = Decimal("0")
+        next_lots = []
+        for lot in self.state.lots:
+            if lot.symbol != entry.symbol or remaining <= 0 or lot.remaining_quantity <= 0:
+                next_lots.append(lot)
+                continue
+            consumed = min(remaining, lot.remaining_quantity)
+            remaining -= consumed
+            consumed_cost += consumed * lot.unit_cost
+            next_lots.append(replace(lot, remaining_quantity=lot.remaining_quantity - consumed))
+        if remaining > 0:
+            raise ValueError("SELL quantity exceeds reconstructed position quantity.")
+        self.state.lots = next_lots
+        proceeds = entry.amount or (entry.quantity * entry.unit_price)
+        realized = proceeds - entry.fee - consumed_cost
+        self.state.cash[entry.currency] = self.state.cash.get(entry.currency, Decimal("0")) + proceeds - entry.fee
+        self.state.realized_profit_loss[entry.currency] = self.state.realized_profit_loss.get(entry.currency, Decimal("0")) + realized
+
+    def _apply_cash_deposit(self, entry: PortfolioLedgerEntry) -> None:
+        self.state.cash[entry.currency] = self.state.cash.get(entry.currency, Decimal("0")) + entry.amount
+
+    def _apply_cash_withdrawal(self, entry: PortfolioLedgerEntry) -> None:
+        self.state.cash[entry.currency] = self.state.cash.get(entry.currency, Decimal("0")) - entry.amount
+
+    def _apply_dividend(self, entry: PortfolioLedgerEntry) -> None:
+        self._apply_cash_deposit(entry)
+
+    def _apply_fee(self, entry: PortfolioLedgerEntry) -> None:
+        charge = entry.amount or entry.fee
+        self.state.cash[entry.currency] = self.state.cash.get(entry.currency, Decimal("0")) - charge
+
+    def _apply_split(self, entry: PortfolioLedgerEntry) -> None:
+        ratio = decimal_value(entry.payload.get("ratio"))
+        if not entry.symbol or ratio <= 0:
+            raise ValueError("SPLIT requires symbol and positive ratio.")
+        self.state.lots = [
+            replace(
+                lot,
+                quantity=lot.quantity * ratio,
+                remaining_quantity=lot.remaining_quantity * ratio,
+                unit_cost=lot.unit_cost / ratio,
+            ) if lot.symbol == entry.symbol else lot
+            for lot in self.state.lots
+        ]
+
+    def _apply_snapshot_reconciliation(self, entry: PortfolioLedgerEntry) -> None:
+        # Reconciliation remains an immutable audit fact. It does not silently
+        # rewrite trade-derived lots; discrepancies are handled explicitly.
+        return None

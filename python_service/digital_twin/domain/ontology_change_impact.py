@@ -228,6 +228,11 @@ def family_for_field(field: object) -> str:
         "profile",
         "riskbudget",
         "profitpolicy",
+        "mandateid",
+        "policyversion",
+        "policylimitratio",
+        "limitvaluepct",
+        "mincashweightpct",
     }:
         return "profile"
     if _matches_any(value, ["tboxclass", "tboxclasses", "boundedcontext", "sourcecontext", "targetcontext", "activetbox", "tboxversion", "box"]):
@@ -276,7 +281,7 @@ def family_for_field(field: object) -> str:
         return "evidence"
     if _matches_any(value, ["fx", "usdkrw", "exchange", "yield", "interest", "policyrate", "dgs", "dff", "macro", "crypto", "vix", "benchmark"]):
         return "macro"
-    if _matches_any(value, ["factor", "beta", "correlation", "sector", "currencyexposure", "exposure"]):
+    if _matches_any(value, ["factor", "beta", "correlation", "sector", "currencyexposure", "exposure", "policydelta"]):
         return "exposure"
     if _matches_any(value, ["currentprice", "price", "ma", "high", "low", "changerate", "technical", "keylevel"]):
         return "market"
@@ -321,7 +326,7 @@ def family_for_entity(kind: object, properties: Mapping[str, object] = None, ent
         return "quality"
     if _matches_any(text, ["position", "holding-timing", "exit-exposure"]):
         return "position"
-    if _matches_any(text, ["instrument-anchor", "instrumentanchor", "security-line", "instrument-profile", "instrument-identity", "company", "adr", "depositary", "leveraged-etf", "single-stock-etf", "risk-budget", "profit-policy", "risk-management", "strategy-profile", "investment-strategy", "investment-archetype", "account-delivery-profile"]):
+    if _matches_any(text, ["instrument-anchor", "instrumentanchor", "security-line", "instrument-profile", "instrument-identity", "company", "adr", "depositary", "leveraged-etf", "single-stock-etf", "risk-budget", "profit-policy", "risk-management", "strategy-profile", "investment-strategy", "investment-archetype", "account-delivery-profile", "investment-mandate", "position-limit", "sector-limit", "currency-limit", "cash-floor", "loss-budget"]):
         return "profile"
     if _matches_any(text, ["factor", "exposure", "peer", "correlation", "sensitivity", "sector", "relative-performance"]):
         return "exposure"

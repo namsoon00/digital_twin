@@ -431,6 +431,12 @@ class DecisionEpisode:
     hypothesis_comparison_state: str = "unavailable"
     hypothesis_selection_source: str = "not-selected"
     inference_generation_id: str = ""
+    portfolio_id: str = ""
+    mandate_id: str = ""
+    mandate_version: str = ""
+    source_abox_snapshot_id: str = ""
+    action_plan_id: str = ""
+    execution_episode_ids: List[str] = field(default_factory=list)
     evidence_ids: List[str] = field(default_factory=list)
     counter_evidence_ids: List[str] = field(default_factory=list)
     unresolved_questions: List[str] = field(default_factory=list)
@@ -709,6 +715,25 @@ class DecisionEpisode:
                 or "not-selected"
             ),
             inference_generation_id=str(payload.get("inferenceGenerationId") or ""),
+            portfolio_id=str(payload.get("portfolioId") or payload.get("portfolio_id") or ""),
+            mandate_id=str(payload.get("mandateId") or payload.get("mandate_id") or ""),
+            mandate_version=str(
+                payload.get("mandateVersion")
+                or payload.get("mandate_version")
+                or payload.get("policyVersion")
+                or ""
+            ),
+            source_abox_snapshot_id=str(
+                payload.get("sourceAboxSnapshotId")
+                or payload.get("source_abox_snapshot_id")
+                or ""
+            ),
+            action_plan_id=str(payload.get("actionPlanId") or payload.get("action_plan_id") or ""),
+            execution_episode_ids=[
+                str(item)
+                for item in payload.get("executionEpisodeIds") or payload.get("execution_episode_ids") or []
+                if str(item or "").strip()
+            ],
             evidence_ids=list(payload.get("evidenceIds") or []),
             counter_evidence_ids=list(payload.get("counterEvidenceIds") or []),
             unresolved_questions=list(payload.get("unresolvedQuestions") or []),
@@ -2569,6 +2594,22 @@ def decision_episode_from_context(
         hypothesis_comparison_state=comparison.comparison_state,
         hypothesis_selection_source=comparison.selection_source,
         inference_generation_id=str(relation_context.get("inferenceGenerationId") or ""),
+        portfolio_id=str(
+            relation_context.get("portfolioId")
+            or relation_context.get("portfolioWorldId")
+            or "portfolio:" + str(context.get("accountId") or "default")
+        ),
+        mandate_id=str(
+            (relation_context.get("facts") or {}).get("mandateId")
+            if isinstance(relation_context.get("facts"), dict)
+            else ""
+        ),
+        mandate_version=str(
+            (relation_context.get("facts") or {}).get("policyVersion")
+            if isinstance(relation_context.get("facts"), dict)
+            else ""
+        ),
+        source_abox_snapshot_id=str(relation_context.get("sourceAboxSnapshotId") or ""),
         evidence_ids=evidence_ids,
         counter_evidence_ids=counter_ids,
         unresolved_questions=list(validated_response.get("unresolvedQuestions") or brain.get("selfQuestions") or []),

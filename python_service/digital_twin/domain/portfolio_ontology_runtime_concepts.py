@@ -1,6 +1,7 @@
 from typing import Dict, List
 
 from .accounts import investment_strategy_profile, message_delivery_profile
+from .investment_mandate import InvestmentMandate
 from .market_data import number
 from .ontology_contracts import PortfolioOntology, entity_id
 from .ontology_schema import add_entity, add_relation
@@ -187,6 +188,8 @@ def add_account_investment_strategy_concepts(
 ) -> Dict[str, object]:
     profile = account_investment_strategy_profile(account_context)
     profile_key = str(profile.get("profile") or "balanced")
+    account_id = str(account_context.get("accountId") or account_context.get("id") or graph.portfolio_id or "default")
+    mandate = InvestmentMandate.from_profile(account_id, graph.portfolio_id, profile)
     profile_id = add_entity(graph, "investment-strategy-profile", profile_key, str(profile.get("label") or "투자 전략 성향"), {
         "tboxClass": "InvestmentStrategyProfile",
         "tboxClasses": ["InvestmentStrategyProfile", "InvestorProfile", "StrategySignal"],
@@ -199,6 +202,7 @@ def add_account_investment_strategy_concepts(
         "maxPositionWeightPct": number(profile.get("maxPositionWeightPct")),
         "maxSectorWeightPct": number(profile.get("maxSectorWeightPct")),
         "fxExposureReviewPct": number(profile.get("fxExposureReviewPct")),
+        "minCashWeightPct": number(profile.get("minCashWeightPct")),
         "addBuyPolicy": profile.get("addBuyPolicy"),
         "addBuyWatchSignalMin": number(profile.get("addBuyWatchSignalMin")),
         "addBuyReviewSignalMin": number(profile.get("addBuyReviewSignalMin")),
@@ -216,6 +220,7 @@ def add_account_investment_strategy_concepts(
         "maxPositionWeightPct": number(profile.get("maxPositionWeightPct")),
         "maxSectorWeightPct": number(profile.get("maxSectorWeightPct")),
         "fxExposureReviewPct": number(profile.get("fxExposureReviewPct")),
+        "minCashWeightPct": number(profile.get("minCashWeightPct")),
         "addBuyPolicy": profile.get("addBuyPolicy"),
         "addBuyWatchSignalMin": number(profile.get("addBuyWatchSignalMin")),
         "addBuyReviewSignalMin": number(profile.get("addBuyReviewSignalMin")),
@@ -232,10 +237,34 @@ def add_account_investment_strategy_concepts(
     add_relation(graph, portfolio_node_id, profile_id, "USES_INVESTMENT_STRATEGY_PROFILE", weight=1.0, properties={"source": "account-context"})
     add_relation(graph, profile_id, risk_budget_id, "HAS_RISK_BUDGET", weight=1.0, properties={"source": "account-context"})
     add_relation(graph, profile_id, profit_policy_id, "HAS_PROFIT_POLICY", weight=1.0, properties={"source": "account-context"})
+    mandate_id = add_entity(graph, "investment-mandate", mandate.mandate_id, str(profile.get("label") or "투자 전략") + " 투자 정책", mandate.to_abox())
+    add_relation(graph, account_node_id, mandate_id, "GOVERNED_BY_MANDATE", weight=1.0, properties={"source": "account-policy"})
+    add_relation(graph, portfolio_node_id, mandate_id, "GOVERNED_BY_MANDATE", weight=1.0, properties={"source": "account-policy"})
+    limit_rows = [
+        ("position", "PositionLimit", mandate.max_position_weight_pct),
+        ("sector", "SectorLimit", mandate.max_sector_weight_pct),
+        ("currency", "CurrencyLimit", mandate.fx_exposure_review_pct),
+        ("cash", "CashFloor", mandate.min_cash_weight_pct),
+        ("loss", "LossBudget", abs(mandate.loss_tolerance_pct)),
+    ]
+    limit_ids = []
+    for limit_key, tbox_class, limit_value in limit_rows:
+        limit_id = add_entity(graph, "mandate-limit", mandate.mandate_id + ":" + limit_key, limit_key + " policy limit", {
+            "tboxClass": tbox_class,
+            "mandateId": mandate.mandate_id,
+            "policyVersion": mandate.policy_version,
+            "limitType": limit_key,
+            "limitValuePct": number(limit_value),
+        })
+        add_relation(graph, mandate_id, limit_id, "HAS_RISK_LIMIT", weight=1.0, properties={"source": "account-policy", "limitType": limit_key})
+        limit_ids.append(limit_id)
     return {
         "profileId": profile_id,
         "riskBudgetId": risk_budget_id,
         "profitPolicyId": profit_policy_id,
+        "mandateId": mandate_id,
+        "mandate": mandate.to_dict(),
+        "mandateLimitIds": limit_ids,
         "profile": profile,
     }
 

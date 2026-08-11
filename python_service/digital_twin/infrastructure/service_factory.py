@@ -19,6 +19,7 @@ from ..application.operational_storage_capacity_service import (
 )
 from ..application.investment_analysis_service import InvestmentAnalysisService
 from ..application.investment_brain_service import InvestmentBrainService
+from ..application.investment_domain_service import InvestmentDomainService
 from ..application.investment_research_orchestration_service import InvestmentResearchOrchestrationService, InvestmentResearchQueueRunner
 from ..application.hypothesis_proposal_service import HypothesisProposalService
 from ..application.hypothesis_lifecycle_service import HypothesisLifecycleService
@@ -499,6 +500,14 @@ def build_investment_brain_service(settings=None) -> InvestmentBrainService:
             hypothesis_review_service=hypothesis_review_service,
             quality_review_service=hypothesis_quality_review_service,
         ),
+    )
+
+
+def build_investment_domain_service(settings=None) -> InvestmentDomainService:
+    configured_settings = settings or runtime_settings()
+    return InvestmentDomainService(
+        repository=stores.investment_domain_store(configured_settings),
+        event_publisher=ontology_reasoning_event_bus(configured_settings),
     )
 
 

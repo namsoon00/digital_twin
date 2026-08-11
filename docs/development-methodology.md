@@ -116,6 +116,13 @@ Anti-patterns to avoid:
 Domain:
 
 - `python_service/digital_twin/domain/accounts.py`: account entity/value data
+- `python_service/digital_twin/domain/account_identity.py`: brokerage account identity, credential references, watchlist universe, and delivery-profile separation
+- `python_service/digital_twin/domain/investment_mandate.py`: versioned investment policy, loss/cash/exposure limits, and allowed actions
+- `python_service/digital_twin/domain/portfolio_ledger.py`: immutable ledger entries, FIFO lots, cash, cost basis, and idempotent position reconstruction
+- `python_service/digital_twin/domain/risk_exposure.py`: raw exposure snapshots and policy deltas consumed by TypeDB
+- `python_service/digital_twin/domain/portfolio_rebalancing.py`: allocation bands, drift, and review-only rebalance proposals
+- `python_service/digital_twin/domain/trade_execution.py`: action envelopes, action plans, order intents, fills, and execution episodes
+- `python_service/digital_twin/domain/investment_outcomes.py`: performance attribution and decision review contracts
 - `python_service/digital_twin/domain/portfolio.py`: positions, portfolio summaries, decisions, alert events
 - `python_service/digital_twin/domain/investment_brain.py`: investment questions, research plans, competing hypotheses, decision episodes, observed outcomes, and governed learning proposals
 - `python_service/digital_twin/domain/investment_evidence_governance.py`: evidence claims, entity resolution, freshness/source quality verification, and research-run audit contracts
@@ -124,6 +131,8 @@ Domain:
 - `python_service/digital_twin/domain/portfolio_calculations.py`: portfolio exposure, FX conversion, and summary calculations
 - `python_service/digital_twin/domain/strategy.py`: TypeDB inference-backed strategy compatibility facade, raw market facts, and categorical position decision state
 - `python_service/digital_twin/domain/ontology_tbox.py`: bounded-context TBox vocabulary, relation definitions, and ontology reasoning rule catalog
+- `python_service/digital_twin/domain/ontology_domain_tbox.py`: canonical account-to-outcome domain modules layered over the compatibility TBox
+- `python_service/digital_twin/domain/ontology_rule_manifest.py`: question, fact-family, policy, world, freshness, cost, and outcome routing metadata for every rule
 - `python_service/digital_twin/domain/ontology_contracts.py`: ontology graph data contracts such as entities, relations, evidence, beliefs, opinions, and portfolio ontology snapshots
 - `python_service/digital_twin/domain/ontology_schema.py`: TBox/ABox payloads, bounded-context property assignment, and basic ontology graph mutation helpers
 - `python_service/digital_twin/domain/ontology_relation_contracts.py`: ontology relation-reasoning data contracts, prompt template contracts, categorical review/data/change states, decision stages, and raw threshold constants
@@ -154,6 +163,7 @@ Domain:
 Application:
 
 - `python_service/digital_twin/application/account_service.py`: account-management use cases
+- `python_service/digital_twin/application/investment_domain_service.py`: mandate, ledger, rebalance, action-plan, execution, and outcome lifecycle use cases
 - `python_service/digital_twin/application/flow_lens_service.py`: flow-lens snapshot use case with injected account, snapshot, settings, FX, and symbol dependencies
 - `python_service/digital_twin/application/monitoring_service.py`: one monitoring cycle use case
 - `python_service/digital_twin/application/scheduler.py`: long-running scheduling loop around a runner
@@ -166,6 +176,7 @@ Infrastructure:
 - `python_service/digital_twin/infrastructure/operational_store.py`: runtime factory for the MySQL operational stores
 - `python_service/digital_twin/infrastructure/operational_common.py`: shared row conversion and notification helper functions used by operational store adapters
 - `python_service/digital_twin/infrastructure/mysql_operational.py`: MySQL account, runtime, event, monitoring, notification, model-review, symbol, quote, evidence, and quality-sample stores
+- `python_service/digital_twin/infrastructure/mysql_investment_domain.py`: versioned mandate, append-only ledger, rebalance, action-plan, execution, fill, review, and lifecycle-trace persistence
 - `python_service/digital_twin/infrastructure/json_monitor_state.py`: legacy JSON monitor state compatibility only
 - `python_service/digital_twin/infrastructure/toss_snapshots.py`: Toss adapter and demo snapshot fallback
 - `python_service/digital_twin/application/notification_service.py`: queued notification delivery worker
@@ -200,6 +211,13 @@ Current events:
 - `ai_inference.requested`
 - `ai_inference.completed`
 - `ai_inference.superseded`
+- `investment.mandate_changed`
+- `portfolio.ledger_recorded`
+- `portfolio.rebalance_proposed`
+- `investment.action_plan_proposed`
+- `trade.execution_recorded`
+- `investment.decision_reviewed`
+- `investment.performance_attributed`
 
 Events are persisted locally to the append-only `domain_events` table through the configured operational event-log adapter. Rebuild projections by replaying that event stream where practical instead of coupling features to mutable state tables. Event handlers must not break publishers by default. If one feature needs another feature's result, publish or subscribe to an event instead of importing the other feature's application service.
 

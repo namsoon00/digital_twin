@@ -1,37 +1,13 @@
-from dataclasses import asdict, dataclass
+from dataclasses import asdict
 from typing import Dict, List, Optional
 
-
-@dataclass(frozen=True)
-class TBoxBoundedContext:
-    key: str
-    label: str
-    description: str
-
-
-@dataclass(frozen=True)
-class TBoxClassDef:
-    name: str
-    bounded_context: str
-    label: str = ""
-    parent: str = ""
-    description: str = ""
-
-
-@dataclass(frozen=True)
-class TBoxRelationDef:
-    name: str
-    bounded_context: str
-    source_context: str = ""
-    target_context: str = ""
-    description: str = ""
-
-
-@dataclass(frozen=True)
-class TBoxRuleDef:
-    text: str
-    bounded_context: str
-    description: str = ""
+from .ontology_tbox_contracts import (
+    TBoxBoundedContext,
+    TBoxClassDef,
+    TBoxRelationDef,
+    TBoxRuleDef,
+)
+from .ontology_domain_tbox import apply_domain_tbox
 
 
 BOUNDED_CONTEXTS: List[TBoxBoundedContext] = [
@@ -982,6 +958,13 @@ RULE_DEFS: List[TBoxRuleDef] = [
     TBoxRuleDef("user-facing investment terms keep stable internal identifiers while approved level-specific renderings are managed as TypeDB language-governance concepts", "operations-dispatch"),
     TBoxRuleDef("forbidden or unregistered expressions create review-required language proposals and never mutate approved terminology automatically", "operations-dispatch"),
 ]
+
+BOUNDED_CONTEXTS, CLASS_DEFS, RELATION_DEFS, RULE_DEFS = apply_domain_tbox(
+    BOUNDED_CONTEXTS,
+    CLASS_DEFS,
+    RELATION_DEFS,
+    RULE_DEFS,
+)
 
 
 TBOX_CLASSES = [item.name for item in CLASS_DEFS]

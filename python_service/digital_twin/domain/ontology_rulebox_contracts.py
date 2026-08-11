@@ -1,5 +1,6 @@
 import re
 from dataclasses import asdict, dataclass, field as dataclass_field
+from functools import cached_property
 from typing import Dict, Iterable, List
 
 from .hypothesis_outcome_contract import HypothesisOutcomeContract
@@ -339,12 +340,23 @@ class GraphInferenceRule:
             outcome_contract=configured.outcome_contract,
         )
 
+    @cached_property
+    def resolved_execution_profile(self) -> Dict[str, object]:
+        from .ontology_rule_execution_policy import rule_execution_profile
+
+        return rule_execution_profile(self)
+
+    @cached_property
+    def resolved_domain_manifest(self) -> Dict[str, object]:
+        from .ontology_rule_manifest import rule_domain_manifest
+
+        return rule_domain_manifest(self, execution=self.resolved_execution_profile)
+
     def to_dict(self) -> Dict[str, object]:
         payload = asdict(self)
         payload["hypothesis_lifecycle"] = self.resolved_hypothesis_lifecycle().to_dict()
-        from .ontology_rule_execution_policy import rule_execution_profile
-
-        payload["execution_profile"] = rule_execution_profile(self)
+        payload["execution_profile"] = dict(self.resolved_execution_profile)
+        payload["domain_manifest"] = dict(self.resolved_domain_manifest)
         payload["conditionCount"] = len(self.conditions)
         payload["derivationCount"] = len(self.derivations)
         return payload

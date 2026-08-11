@@ -6,6 +6,8 @@ from typing import Dict, List
 from .ontology_contracts import OntologyEntity, OntologyRelation, PortfolioOntology, entity_id
 from .ontology_tbox import (
     BOUNDED_CONTEXTS,
+    CLASS_DEFS,
+    RELATION_DEFS,
     TBOX_CLASSES,
     TBOX_REASONING_RULES,
     TBOX_RELATION_TYPES,
@@ -19,9 +21,10 @@ from .ontology_tbox import (
     tbox_relation_def,
     tbox_relation_materialization_policy,
 )
+from .ontology_domain_tbox import ONTOLOGY_DOMAIN_TBOX_VERSION, tbox_domain_validation
 
 
-ONTOLOGY_TBOX_VERSION = "investment-tbox-v5"
+ONTOLOGY_TBOX_VERSION = "investment-tbox-v6"
 
 
 @lru_cache(maxsize=1)
@@ -77,6 +80,8 @@ def ontology_tbox() -> Dict[str, object]:
         "version": metadata["version"],
         "fingerprint": metadata["fingerprint"],
         "description": "Investment ontology schema: bounded contexts, classes, relation types, and reasoning rules.",
+        "domainModelVersion": ONTOLOGY_DOMAIN_TBOX_VERSION,
+        "domainValidation": tbox_domain_validation(BOUNDED_CONTEXTS, CLASS_DEFS, RELATION_DEFS),
         "boundedContexts": bounded_contexts_payload(),
         "classes": list(TBOX_CLASSES),
         "classDefinitions": class_definitions_payload(),

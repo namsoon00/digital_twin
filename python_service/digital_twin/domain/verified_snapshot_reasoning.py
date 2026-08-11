@@ -451,11 +451,30 @@ def _external_for_symbol(
 def _changed_external_groups(previous: Mapping[str, object], current: Mapping[str, object]) -> List[str]:
     groups = []
     for key in sorted(set(previous) | set(current)):
-        before = fact_signature({key: previous.get(key)}, EXTERNAL_REFRESH_FIELDS)
-        after = fact_signature({key: current.get(key)}, EXTERNAL_REFRESH_FIELDS)
+        if key == "companyKnowledge":
+            before_value = _company_knowledge_material_revisions(previous.get(key))
+            after_value = _company_knowledge_material_revisions(current.get(key))
+        else:
+            before_value = previous.get(key)
+            after_value = current.get(key)
+        before = fact_signature({key: before_value}, EXTERNAL_REFRESH_FIELDS)
+        after = fact_signature({key: after_value}, EXTERNAL_REFRESH_FIELDS)
         if before != after:
             groups.append(key)
     return groups
+
+
+def _company_knowledge_material_revisions(value: object) -> Dict[str, object]:
+    rows = value if isinstance(value, Mapping) else {}
+    return {
+        str(symbol).upper(): (
+            row.get("materialRevision")
+            or row.get("factRevision")
+            or row
+        )
+        for symbol, row in rows.items()
+        if isinstance(row, Mapping)
+    }
 
 
 def _reasoning_external_groups(

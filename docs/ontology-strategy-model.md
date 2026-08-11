@@ -254,6 +254,26 @@ API:
 
 설정의 관계 규칙과 프롬프트는 UI, 메시지, AI 리뷰 정보의 운영 계약이다. 새 투자 의미를 추가할 때는 TBox/ABox fact, RuleBox semantic profile, TypeDB schema function materialization, InferenceBox payload, AI prompt contract, 알림 문구를 함께 갱신해야 한다.
 
+## Company Valuation Snapshots
+
+시세 기반 `investmentInsight`는 공용 `CompanyKnowledge`에서 만든 `ValuationSnapshot`을 함께 읽는다. 스냅샷은 PER, 선행 PER, PBR, PEG, EPS, ROE, 배당수익률 같은 회사 평가 지표와 `ReportingBasis`, `ValuationDataQuality`, 원천·기준일을 연결한다. 회사·재무 ABox는 계정과 무관한 KnowledgeWorld로 한 번만 저장하며, 시세 이벤트는 해당 종목의 현재 MarketWorld와 기존 회사 스냅샷을 결합해 TypeDB schema function rule을 실행한다.
+
+알림의 `회사 가치 참고` 숫자는 AI가 생성하지 않고 원본 ABox 사실을 결정론적으로 표시한다. 회사 밸류에이션 규칙이 성립하지 않으면 `decisionRole=reference`로 표시하여 매수·매도 판단에서 제외한다. `quality_valuation`, `valuation_stretch`, `value_trap`, `unsupported_rerating`, `forward_expectation` 계열 규칙이 실제 InferenceBox에 성립한 경우에만 `decisionRole=decision-evidence`로 승격하고, AI 입력에 성립 규칙 ID를 함께 보낸다.
+
+미세한 공급자 반올림은 실제 표시값과 `factRevision`에는 보존하지만, 운영용 `materialRevision`을 바꾸지 않는다. 따라서 작은 PER·PBR 소수점 변화는 회사 전체 재투영을 만들지 않는다. 시장가치처럼 시세에서 이미 표현되는 값도 회사 변경 판정에서 제외한다. 이는 투자 임계치가 아니라 중복 작업 억제 계약이며, 가치 지지·부담 구간은 계속 TypeDB RuleBox 수치가 결정한다.
+
+공급자별 배당수익률 단위도 수집 경계에서 정규화한다. yfinance의 percentage-point 값과 Alpha Vantage의 decimal ratio 값을 모두 canonical ratio인 `dividendYield`와 percentage-point인 `dividendYieldPct`로 저장한다. 캐시 v1의 yfinance 값은 로드 시 v2 계약으로 교정하며, 누락된 선택 지표를 0으로 만들지 않는다. EPS가 음수이면 `적자·PER 산출 불가`, 정확히 0이면 `이익 기준 PER 산출 불가`로 구분한다.
+
+현재 회사 밸류에이션 규칙은 다음 상태를 구분한다.
+
+- 수익성·양의 EPS·적정 PER/PBR과 가격 확인이 함께 성립한 질적 가치 후보
+- 낮은 수익성과 높은 배수, 가격 약세가 겹친 밸류에이션 부담
+- 낮은 PBR과 낮은 ROE, 이익 둔화, 가격 약세가 겹친 가치 함정 위험
+- 높은 PER과 매출 둔화에도 가격이 상승한 실적 확인 없는 재평가 위험
+- 후행 PER보다 선행 PER이 크게 낮고 가격이 강한 예상 이익 개선 의존 상태
+
+밸류에이션 표시 자체는 알림 트리거가 아니다. 의미 있는 시세·재무 변경으로 TypeDB 판단 관계가 바뀌어야 기존 신규성, 쿨다운, 자료 신선도 정책을 통과할 수 있다.
+
 ## AI Valuation Proposals
 
 밸류에이션은 사용자 입력이 없어도 종목 타입별 AI 초안을 만들 수 있다. 초안은 `ActiveValuation`으로 저장해 화면과 AI 설명에는 사용할 수 있지만, `valuationDecisionEligible=false`로 저장되어 사용자 승인 전에는 TypeDB의 저평가 기회·고평가 위험 추론을 작동시키지 않는다. 항상 `AIValuationProposal`과 `UserValuationReview`를 함께 만들고 `ai_applied_pending_review` 상태를 드러낸다. 메시지는 이를 "AI 제안 자동 적용 · 사용자 검토 전"과 "참고만 사용 · 매수·매도 추론에서 제외"로 표시해야 한다.

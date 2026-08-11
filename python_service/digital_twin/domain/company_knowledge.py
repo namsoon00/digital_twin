@@ -16,7 +16,36 @@ from typing import Dict, Iterable, List, Mapping, Optional, Sequence, Tuple
 
 
 COMPANY_KNOWLEDGE_VERSION = "company-knowledge-v1"
-COMPANY_KNOWLEDGE_CACHE_VERSION = "company-knowledge-cache-v1"
+COMPANY_KNOWLEDGE_CACHE_VERSION = "company-knowledge-cache-v2"
+COMPANY_VALUATION_CONTEXT_VERSION = "company-valuation-context-v1"
+
+# Operational revision precision only. These values suppress a new company
+# projection for an insignificant provider rounding change; TypeDB RuleBox
+# still owns every investment threshold and receives the unrounded facts.
+VALUATION_MATERIAL_REVISION_DIGITS = {
+    "peRatio": 1,
+    "forwardPE": 1,
+    "pbr": 1,
+    "pegRatio": 1,
+    "bookValue": 2,
+    "trailingEPS": 2,
+    "returnOnEquity": 3,
+    "returnOnAssets": 3,
+    "returnOnEquityPct": 1,
+    "returnOnAssetsPct": 1,
+    "enterpriseToEbitda": 1,
+    "dividendYield": 3,
+    "dividendYieldPct": 1,
+    "beta": 2,
+}
+
+COMPANY_VALUATION_RULE_ID_FRAGMENTS = (
+    "quality_valuation",
+    "valuation_stretch",
+    "value_trap",
+    "unsupported_rerating",
+    "forward_expectation",
+)
 
 PROVIDER_PRIORITY = {
     "opendart": 100,
@@ -132,6 +161,28 @@ def _period_sort_key(value: object) -> Tuple[int, str]:
     return (int(digits[-8:] or 0), text)
 
 
+def latest_source_as_of(values: Iterable[object]) -> str:
+    """Return the newest provider timestamp across date-only and ISO values."""
+
+    candidates = [_clean(value) for value in values if _clean(value)]
+    if not candidates:
+        return ""
+
+    def rank(value: str) -> Tuple[float, str]:
+        try:
+            if re.fullmatch(r"\d{8}", value):
+                parsed = datetime.strptime(value, "%Y%m%d").replace(tzinfo=timezone.utc)
+            else:
+                parsed = datetime.fromisoformat(value.replace("Z", "+00:00"))
+                if parsed.tzinfo is None:
+                    parsed = parsed.replace(tzinfo=timezone.utc)
+            return (parsed.timestamp(), value)
+        except (TypeError, ValueError, OverflowError):
+            return (0.0, value)
+
+    return max(candidates, key=rank)
+
+
 def _statement_metric_rows(rows: object) -> Dict[str, Mapping[str, object]]:
     result: Dict[str, Mapping[str, object]] = {}
     for row in rows if isinstance(rows, list) else []:
@@ -233,6 +284,50 @@ def _ratio_percent(value: object) -> Optional[float]:
     # yfinance and Alpha Vantage use decimal ratios while broker datasets may
     # already expose percentages. Keep the canonical company contract explicit.
     return round(numeric * 100.0 if abs(numeric) <= 2.0 else numeric, 4)
+
+
+def _dividend_yield_contract(
+    overview: Mapping[str, object],
+    info: Mapping[str, object],
+) -> Tuple[Optional[float], Optional[float], str]:
+    raw = optional_number(_overview_value(overview, info, "dividendYield"))
+    if raw is None:
+        return None, None, ""
+    provider = _clean(overview.get("provider")).lower()
+    source_unit = _clean(overview.get("dividendYieldUnit")).lower()
+    if source_unit not in {"ratio", "percent"}:
+        source_unit = "percent" if provider == "yfinance" else "ratio"
+    ratio = raw / 100.0 if source_unit == "percent" else raw
+    return round(ratio, 8), round(ratio * 100.0, 4), source_unit
+
+
+def _normalize_company_knowledge_row(row: Mapping[str, object]) -> Dict[str, object]:
+    """Upgrade cached company rows to the canonical valuation-unit contract."""
+
+    result = dict(row or {})
+    valuation = dict(result.get("valuation") or {}) if isinstance(result.get("valuation"), Mapping) else {}
+    units = dict(result.get("valuationUnits") or {}) if isinstance(result.get("valuationUnits"), Mapping) else {}
+    if valuation and not units.get("dividendYield"):
+        overview_providers = {
+            _clean(item.get("provider")).lower()
+            for item in result.get("provenance", [])
+            if isinstance(item, Mapping) and _clean(item.get("scope")).lower() == "overview"
+        }
+        if overview_providers == {"yfinance"}:
+            raw = optional_number(valuation.get("dividendYield"))
+            if raw is not None:
+                valuation["dividendYield"] = round(raw / 100.0, 8)
+                valuation["dividendYieldPct"] = round(raw, 4)
+                units = {
+                    **units,
+                    "dividendYield": "ratio",
+                    "dividendYieldPct": "percent",
+                    "dividendYieldSourceUnit": "percent",
+                }
+    result["valuation"] = valuation
+    if units:
+        result["valuationUnits"] = units
+    return result
 
 
 def enrich_financial_periods(periods: List[Dict[str, object]], info: Mapping[str, object] = None) -> List[Dict[str, object]]:
@@ -393,6 +488,7 @@ def build_company_knowledge(
         "fiscalYearEndMonth": _clean(company.get("acc_mt")),
         "marketCapitalization": optional_number(_overview_value(overview, info, "marketCapitalization", "marketCap")),
     }
+    dividend_yield, dividend_yield_pct, dividend_source_unit = _dividend_yield_contract(overview, info)
     valuation = {
         "peRatio": optional_number(_overview_value(overview, info, "peRatio", "trailingPE")),
         "forwardPE": optional_number(_overview_value(overview, info, "forwardPE")),
@@ -405,8 +501,8 @@ def build_company_knowledge(
         "returnOnEquityPct": _ratio_percent(_overview_value(overview, info, "returnOnEquity")),
         "returnOnAssetsPct": _ratio_percent(_overview_value(overview, info, "returnOnAssets")),
         "enterpriseToEbitda": optional_number(_overview_value(overview, info, "enterpriseToEbitda")),
-        "dividendYield": optional_number(_overview_value(overview, info, "dividendYield")),
-        "dividendYieldPct": _ratio_percent(_overview_value(overview, info, "dividendYield")),
+        "dividendYield": dividend_yield,
+        "dividendYieldPct": dividend_yield_pct,
         "beta": optional_number(_overview_value(overview, info, "beta")),
     }
     ownership = {
@@ -460,18 +556,25 @@ def build_company_knowledge(
         "governance": {"executives": executives, "executiveCount": len(executives)},
         "ownership": {key: value for key, value in ownership.items() if value is not None},
         "capital": {key: value for key, value in capital.items() if value is not None},
+        "valuationUnits": {
+            "dividendYield": "ratio",
+            "dividendYieldPct": "percent",
+            "dividendYieldSourceUnit": dividend_source_unit,
+        } if dividend_yield is not None else {},
         "provenance": sources,
         "coverage": {**coverage_fields, "dataState": data_state, "missing": missing},
     }
     revision_payload = _revision_payload(payload)
     revision_source = json.dumps(revision_payload, ensure_ascii=False, sort_keys=True, separators=(",", ":"))
     payload["factRevision"] = hashlib.sha256(revision_source.encode("utf-8")).hexdigest()[:20]
+    payload["materialRevision"] = _material_revision(payload)
     return payload if sources or annual or quarterly else {}
 
 
 def _revision_payload(payload: Mapping[str, object]) -> Dict[str, object]:
     result = dict(payload or {})
     result.pop("factRevision", None)
+    result.pop("materialRevision", None)
     result["provenance"] = [
         {"provider": item.get("provider"), "scope": item.get("scope")}
         for item in result.get("provenance", [])
@@ -480,10 +583,30 @@ def _revision_payload(payload: Mapping[str, object]) -> Dict[str, object]:
     return result
 
 
+def _material_revision(payload: Mapping[str, object]) -> str:
+    result = _revision_payload(payload)
+    profile = dict(result.get("profile") or {}) if isinstance(result.get("profile"), Mapping) else {}
+    # Market capitalization follows the quote and is already represented by
+    # MarketWorld. It must not create a second company-fact reasoning turn.
+    profile.pop("marketCapitalization", None)
+    result["profile"] = profile
+    valuation = result.get("valuation") if isinstance(result.get("valuation"), Mapping) else {}
+    result["valuation"] = {
+        field: (
+            round(optional_number(value), VALUATION_MATERIAL_REVISION_DIGITS[field])
+            if field in VALUATION_MATERIAL_REVISION_DIGITS and optional_number(value) is not None
+            else value
+        )
+        for field, value in valuation.items()
+    }
+    source = json.dumps(result, ensure_ascii=False, sort_keys=True, separators=(",", ":"))
+    return hashlib.sha256(source.encode("utf-8")).hexdigest()[:20]
+
+
 def merge_company_knowledge_rows(*rows: Mapping[str, object]) -> Dict[str, object]:
     """Merge account-independent company facts without losing fresh ratios."""
 
-    valid = [dict(row) for row in rows if isinstance(row, Mapping) and row]
+    valid = [_normalize_company_knowledge_row(row) for row in rows if isinstance(row, Mapping) and row]
     if not valid:
         return {}
     result: Dict[str, object] = {
@@ -499,6 +622,12 @@ def merge_company_knowledge_rows(*rows: Mapping[str, object]) -> Dict[str, objec
             result[section] = {
                 **current,
                 **{key: value for key, value in incoming.items() if _nonempty(value)},
+            }
+        incoming_units = row.get("valuationUnits") if isinstance(row.get("valuationUnits"), Mapping) else {}
+        if incoming_units:
+            result["valuationUnits"] = {
+                **(result.get("valuationUnits") or {}),
+                **incoming_units,
             }
         incoming_financials = row.get("financials") if isinstance(row.get("financials"), Mapping) else {}
         financials = result.get("financials") if isinstance(result.get("financials"), Mapping) else {}
@@ -558,6 +687,7 @@ def merge_company_knowledge_rows(*rows: Mapping[str, object]) -> Dict[str, objec
     }
     revision_source = json.dumps(_revision_payload(result), ensure_ascii=False, sort_keys=True, separators=(",", ":"))
     result["factRevision"] = hashlib.sha256(revision_source.encode("utf-8")).hexdigest()[:20]
+    result["materialRevision"] = _material_revision(result)
     return result
 
 
@@ -601,6 +731,7 @@ def company_prompt_context(
     payload = groups.get(normalized_symbol) if isinstance(groups, Mapping) else {}
     if not isinstance(payload, Mapping) or not payload:
         return {}
+    payload = _normalize_company_knowledge_row(payload)
 
     def section(name: str, fields: Sequence[str]) -> Dict[str, object]:
         source = payload.get(name) if isinstance(payload.get(name), Mapping) else {}
@@ -675,6 +806,7 @@ def company_prompt_context(
         "symbol": normalized_symbol,
         "companyName": payload.get("companyName") or normalized_symbol,
         "factRevision": payload.get("factRevision"),
+        "materialRevision": payload.get("materialRevision"),
         "judgmentUse": "active-company-rule-only",
         "profile": section("profile", (
             "companyName", "ceoName", "sector", "industry", "establishedDate",
@@ -703,3 +835,87 @@ def company_prompt_context(
         for key, value in result.items()
         if _nonempty(value)
     }
+
+
+def company_valuation_context(
+    external_signals: Mapping[str, object],
+    symbol: object,
+    *,
+    price_as_of: object = "",
+    currency: object = "",
+) -> Dict[str, object]:
+    """Build a bounded display and AI contract from canonical company facts."""
+
+    company = company_prompt_context(external_signals, symbol)
+    valuation = company.get("valuation") if isinstance(company.get("valuation"), Mapping) else {}
+    if not valuation:
+        return {}
+    latest_financials = company.get("latestFinancials") if isinstance(company.get("latestFinancials"), Mapping) else {}
+    period_candidates = []
+    for frequency in ("annual", "interim", "quarterly"):
+        rows = latest_financials.get(frequency) if isinstance(latest_financials.get(frequency), list) else []
+        row = next((item for item in rows if isinstance(item, Mapping)), None)
+        if row and _clean(row.get("period")):
+            period_candidates.append((_period_sort_key(row.get("period")), frequency, _clean(row.get("period"))))
+    _rank, reporting_frequency, reporting_period = max(period_candidates, default=((0, ""), "", ""), key=lambda item: item[0])
+
+    provenance = company.get("provenance") if isinstance(company.get("provenance"), list) else []
+    providers = list(dict.fromkeys(
+        _clean(item.get("provider"))
+        for item in provenance
+        if isinstance(item, Mapping) and _clean(item.get("provider"))
+    ))
+    providers.sort(key=provider_priority, reverse=True)
+    providers = providers[:6]
+    source_as_of_values = [
+        _clean(item.get("asOf"))
+        for item in provenance
+        if isinstance(item, Mapping) and _clean(item.get("asOf"))
+    ]
+    coverage = company.get("coverage") if isinstance(company.get("coverage"), Mapping) else {}
+    trailing_eps = optional_number(valuation.get("trailingEPS"))
+    pe_ratio = optional_number(valuation.get("peRatio"))
+    per_status = (
+        "not-meaningful-loss"
+        if trailing_eps is not None and trailing_eps < 0
+        else "not-meaningful-zero-earnings" if trailing_eps == 0
+        else "available" if pe_ratio is not None and pe_ratio > 0
+        else "missing"
+    )
+    return {
+        "schemaVersion": COMPANY_VALUATION_CONTEXT_VERSION,
+        "symbol": _clean(symbol).upper(),
+        "companyName": company.get("companyName"),
+        "companyFactRevision": company.get("factRevision"),
+        "companyMaterialRevision": company.get("materialRevision"),
+        "decisionRole": "reference",
+        "metrics": dict(valuation),
+        "metricCount": len(valuation),
+        "currency": _clean(currency),
+        "reportingBasis": {
+            "period": reporting_period,
+            "frequency": reporting_frequency,
+        },
+        "priceAsOf": _clean(price_as_of),
+        "sourceAsOf": latest_source_as_of(source_as_of_values),
+        "sourceProviders": providers,
+        "dataState": coverage.get("dataState") or "partial",
+        "officialSource": bool(coverage.get("officialSource")),
+        "missing": list(coverage.get("missing") or [])[:8],
+        "perStatus": per_status,
+        "judgmentUse": "active-company-valuation-rule-only",
+    }
+
+
+def active_company_valuation_rule_ids(rows: object) -> List[str]:
+    result = []
+    for item in rows if isinstance(rows, list) else []:
+        if not isinstance(item, Mapping):
+            continue
+        rule_id = _clean(item.get("ruleId") or item.get("rule_id"))
+        action_group = _clean(item.get("actionGroup") or item.get("action_group")).lower()
+        if not rule_id.startswith("graph.company."):
+            continue
+        if action_group == "valuation" or any(fragment in rule_id for fragment in COMPANY_VALUATION_RULE_ID_FRAGMENTS):
+            result.append(rule_id)
+    return list(dict.fromkeys(result))

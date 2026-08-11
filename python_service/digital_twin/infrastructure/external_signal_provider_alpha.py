@@ -1,6 +1,7 @@
 import urllib.parse
 from typing import Dict, List
 
+from ..domain.company_knowledge import optional_number
 from ..domain.market_data import number
 from ..domain.portfolio import Position, utc_now_iso
 from ..domain.security_lines import related_market_symbols_for_positions
@@ -154,23 +155,24 @@ class ExternalSignalAlphaMixin:
             "industry": str(payload.get("Industry") or ""),
             "latestQuarter": str(payload.get("LatestQuarter") or ""),
             "fetchedAt": utc_now_iso(),
-            "marketCapitalization": number(payload.get("MarketCapitalization")),
-            "revenueTTM": number(payload.get("RevenueTTM")),
-            "grossProfitTTM": number(payload.get("GrossProfitTTM")),
-            "ebitda": number(payload.get("EBITDA")),
-            "profitMargin": number(payload.get("ProfitMargin")),
-            "operatingMarginTTM": number(payload.get("OperatingMarginTTM")),
-            "trailingEPS": number(payload.get("DilutedEPSTTM")),
+            "marketCapitalization": optional_number(payload.get("MarketCapitalization")),
+            "revenueTTM": optional_number(payload.get("RevenueTTM")),
+            "grossProfitTTM": optional_number(payload.get("GrossProfitTTM")),
+            "ebitda": optional_number(payload.get("EBITDA")),
+            "profitMargin": optional_number(payload.get("ProfitMargin")),
+            "operatingMarginTTM": optional_number(payload.get("OperatingMarginTTM")),
+            "trailingEPS": optional_number(payload.get("DilutedEPSTTM")),
             "epsPeriod": "ttm" if number(payload.get("DilutedEPSTTM")) else "",
-            "peRatio": number(payload.get("PERatio")),
-            "pegRatio": number(payload.get("PEGRatio")),
-            "forwardPE": number(payload.get("ForwardPE")),
-            "beta": number(payload.get("Beta")),
-            "dividendYield": number(payload.get("DividendYield")),
-            "analystTargetPrice": number(payload.get("AnalystTargetPrice")),
-            "analystRatingStrongBuy": number(payload.get("AnalystRatingStrongBuy")),
-            "analystRatingBuy": number(payload.get("AnalystRatingBuy")),
-            "analystRatingHold": number(payload.get("AnalystRatingHold")),
-            "analystRatingSell": number(payload.get("AnalystRatingSell")),
-            "analystRatingStrongSell": number(payload.get("AnalystRatingStrongSell")),
+            "peRatio": optional_number(payload.get("PERatio")),
+            "pegRatio": optional_number(payload.get("PEGRatio")),
+            "forwardPE": optional_number(payload.get("ForwardPE")),
+            "beta": optional_number(payload.get("Beta")),
+            "dividendYield": optional_number(payload.get("DividendYield")),
+            "dividendYieldUnit": "ratio" if optional_number(payload.get("DividendYield")) is not None else "",
+            "analystTargetPrice": optional_number(payload.get("AnalystTargetPrice")),
+            "analystRatingStrongBuy": optional_number(payload.get("AnalystRatingStrongBuy")),
+            "analystRatingBuy": optional_number(payload.get("AnalystRatingBuy")),
+            "analystRatingHold": optional_number(payload.get("AnalystRatingHold")),
+            "analystRatingSell": optional_number(payload.get("AnalystRatingSell")),
+            "analystRatingStrongSell": optional_number(payload.get("AnalystRatingStrongSell")),
         }

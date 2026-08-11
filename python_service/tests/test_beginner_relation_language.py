@@ -483,6 +483,24 @@ class BeginnerRelationLanguageTests(unittest.TestCase):
                 "facts": {
                     "currency": "KRW",
                     "currentPrice": 80000,
+                    "companyValuationContext": {
+                        "schemaVersion": "company-valuation-context-v1",
+                        "symbol": "005930",
+                        "metrics": {
+                            "peRatio": 14.2,
+                            "forwardPE": 11.8,
+                            "pbr": 1.35,
+                            "returnOnEquityPct": 12.4,
+                            "trailingEPS": 5634,
+                        },
+                        "currency": "KRW",
+                        "reportingBasis": {"period": "2026-03-31", "frequency": "quarterly"},
+                        "priceAsOf": "2026-08-11T01:00:00Z",
+                        "sourceAsOf": "2026-08-11T00:30:00Z",
+                        "sourceProviders": ["KIS Open API", "OpenDART"],
+                        "dataState": "sufficient",
+                        "perStatus": "available",
+                    },
                     "valuationRows": [{"sourceType": "user"}],
                     "valuationFormula": "적정가 = 예상 EPS x 목표 PER",
                     "valuationSubstitution": "9,000원 x 11배 = 99,000원",
@@ -514,7 +532,12 @@ class BeginnerRelationLanguageTests(unittest.TestCase):
                         "ruleId": "graph.valuation.margin_of_safety.opportunity.v1",
                         "label": "안전마진 + 추세/수급 확인 -> 저평가 조건 확인",
                         "strengthScore": 78,
-                    }
+                    },
+                    {
+                        "ruleId": "graph.company.market.quality_valuation.support.v1",
+                        "label": "수익성과 가격 확인",
+                        "actionGroup": "valuation",
+                    },
                 ],
             },
         }
@@ -523,11 +546,90 @@ class BeginnerRelationLanguageTests(unittest.TestCase):
         message = execution_telegram_message(context, response)
 
         self.assertTrue(any(line.startswith("밸류에이션") for line in axes))
+        self.assertIn("<b>회사 가치 판단</b>", message)
+        self.assertIn("PER 14.2배", message)
+        self.assertIn("PBR 1.35배", message)
+        self.assertIn("ROE +12.4%", message)
+        self.assertIn("KIS Open API·OpenDART", message)
+        self.assertIn("투자 판단 근거", message)
         self.assertNotIn("<b>밸류에이션</b>", message)
         self.assertNotIn("99,000원", message)
         self.assertIn("자료 상태", message)
         self.assertIn("사용자 적정가 기준 안전마진", message)
         self.assertNotIn("대입값", message)
+
+    def test_company_valuation_is_reference_without_active_company_rule(self):
+        response = NotificationAIValidatedResponse(
+            action="HOLD",
+            action_label="관심 유지",
+            validation_state="conditional",
+            data_state="partial",
+            review_level="watch",
+            summary="가격과 회사 가치 지표를 함께 확인합니다.",
+            evidence=["현재 가격 흐름을 확인합니다."],
+            next_checks=["다음 실적 확인"],
+        )
+        message = execution_telegram_message(
+            {
+                "messageType": "investmentInsight",
+                "messageDeliveryLevel": "beginner",
+                "displayTarget": "Example / TEST",
+                "ontologyRelationContext": {
+                    "facts": {
+                        "currency": "USD",
+                        "companyValuationContext": {
+                            "metrics": {"peRatio": 32.5, "pbr": 5.2, "returnOnEquityPct": 8.1},
+                            "currency": "USD",
+                            "reportingBasis": {"period": "2025-12-31", "frequency": "annual"},
+                            "sourceProviders": ["SEC EDGAR", "yfinance"],
+                            "dataState": "partial",
+                            "perStatus": "available",
+                        },
+                    },
+                    "activeRules": [{"ruleId": "graph.price.reclaim.thesis_support.v1"}],
+                },
+            },
+            response,
+        )
+
+        self.assertIn("<b>회사 가치 참고</b>", message)
+        self.assertIn("회사·시장 밸류에이션 규칙 미성립", message)
+        self.assertNotIn("TypeDB 회사·시장 규칙 1개 성립", message)
+
+    def test_loss_company_valuation_does_not_render_negative_per_as_multiple(self):
+        response = NotificationAIValidatedResponse(
+            action="HOLD",
+            action_label="관심 유지",
+            validation_state="conditional",
+            data_state="partial",
+            review_level="watch",
+            summary="적자 기업의 가치 지표를 참고합니다.",
+            evidence=[],
+            next_checks=[],
+        )
+        message = execution_telegram_message(
+            {
+                "messageType": "investmentInsight",
+                "messageDeliveryLevel": "beginner",
+                "displayTarget": "Loss Corp / LOSS",
+                "ontologyRelationContext": {
+                    "facts": {
+                        "companyValuationContext": {
+                            "metrics": {"peRatio": -3.2, "pbr": 1.1, "trailingEPS": -120},
+                            "currency": "USD",
+                            "perStatus": "not-meaningful-loss",
+                            "sourceProviders": ["SEC EDGAR"],
+                            "dataState": "partial",
+                        },
+                    },
+                    "activeRules": [],
+                },
+            },
+            response,
+        )
+
+        self.assertIn("PER 적자·산출 불가", message)
+        self.assertNotIn("PER -3.2배", message)
 
     def test_execution_message_marks_ai_valuation_proposal_as_unapproved(self):
         response = NotificationAIValidatedResponse(

@@ -3,7 +3,7 @@ from statistics import median
 from typing import Dict, Iterable, List, Optional
 
 from .alert_formatting import compact_number, price_money
-from .company_knowledge import company_prompt_context
+from .company_knowledge import company_prompt_context, company_valuation_context
 from .investment_research import research_evidence_from_external_signals, research_evidence_from_facts
 from .investor_flow_psychology import investor_flow_measurement, investor_flow_values_reliable
 from .macro_context import macro_context_facts
@@ -1011,6 +1011,14 @@ def position_signal_facts(
     bounded_company_context = company_prompt_context(external_signals, symbol)
     if bounded_company_context:
         facts["companyContext"] = bounded_company_context
+    bounded_company_valuation = company_valuation_context(
+        external_signals,
+        symbol,
+        price_as_of=position.updated_at,
+        currency=position.currency,
+    )
+    if bounded_company_valuation:
+        facts["companyValuationContext"] = bounded_company_valuation
     profile = instrument_profile_for_position(position, settings)
     delivery_level = str((account_context or {}).get("messageDeliveryLevel") or "beginner")
     profile_payload = profile.to_dict(settings, delivery_level)

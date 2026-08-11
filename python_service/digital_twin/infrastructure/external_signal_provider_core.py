@@ -224,7 +224,10 @@ class ExternalSignalCoreMixin:
             except Exception:
                 dedicated = {}
         if dedicated:
-            return self.merge_company_knowledge_maps(dedicated)
+            normalized = self.merge_company_knowledge_maps(dedicated)
+            if persist_backfill and normalized != dedicated:
+                self.persist_shared_company_knowledge(normalized)
+            return normalized
         aggregate_groups = []
         payload = cached_external_signals if isinstance(cached_external_signals, dict) else {}
         direct = payload.get("signals") if isinstance(payload.get("signals"), dict) else {}

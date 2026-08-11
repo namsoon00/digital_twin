@@ -465,6 +465,27 @@ class VerifiedSnapshotReasoningTests(unittest.TestCase):
         entries = durable_mailbox_entries(event)
         self.assertEqual({"EVIDENCE"}, {entry["workClass"] for entry in entries})
 
+    def test_insignificant_valuation_rounding_does_not_enqueue_company_turn(self):
+        previous_company = {
+            "AAPL": {
+                "schemaVersion": "company-knowledge-v1",
+                "symbol": "AAPL",
+                "factRevision": "exact-a",
+                "materialRevision": "material-same",
+                "valuation": {"peRatio": 20.01, "pbr": 3.01},
+            },
+        }
+        current_company = copy.deepcopy(previous_company)
+        current_company["AAPL"]["factRevision"] = "exact-b"
+        current_company["AAPL"]["valuation"] = {"peRatio": 20.04, "pbr": 3.04}
+
+        previous = snapshot(external_signals={"companyKnowledge": previous_company})
+        current = snapshot(external_signals={"companyKnowledge": current_company})
+
+        self.assertIsNone(
+            verified_monitor_snapshot_reasoning_event(current, previous.to_monitor_state())
+        )
+
     def test_price_change_reads_company_knowledge_without_company_change_event(self):
         company = {
             "AAPL": {

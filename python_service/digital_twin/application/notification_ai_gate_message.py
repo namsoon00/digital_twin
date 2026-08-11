@@ -9,8 +9,9 @@ except ImportError:  # pragma: no cover - Python 3.8 compatibility guard.
 
 from ..domain.accounts import investment_strategy_profile, message_delivery_profile
 from ..domain.alert_formatting import compact_number, price_money, signed_pct, trade_strength_label
+from ..domain.company_knowledge import active_company_valuation_rule_ids
 from ..domain.notification_ai import criterion_lines, notification_ai_prompt_context, relation_context_value
-from ..domain.notification_ai_context import relation_facts
+from ..domain.notification_ai_context import active_rule_items, relation_facts
 from ..domain.notification_ai_context import is_watchlist_context
 from ..domain.external_api_sources import external_api_source_line
 from ..domain.notification_ai_gate_contracts import ACTION_LABELS, MESSAGE_START_BADGE, NotificationAIValidatedResponse
@@ -2118,6 +2119,107 @@ def _valuation_per_inputs(facts: Dict[str, object], currency: object) -> str:
     )
 
 
+def _company_valuation_multiple(label: str, value: object) -> str:
+    numeric = _number(value)
+    if numeric <= 0:
+        return ""
+    return label + " " + str(round(numeric, 2)).rstrip("0").rstrip(".") + "배"
+
+
+def _company_valuation_as_of_text(value: object) -> str:
+    text = str(value or "").strip()
+    if re.fullmatch(r"\d{8}", text):
+        return text[:4] + "-" + text[4:6] + "-" + text[6:]
+    return _format_kst_timestamp(text)
+
+
+def company_valuation_presentation(context: Dict[str, object]) -> Dict[str, object]:
+    facts = relation_facts(context or {})
+    valuation = facts.get("companyValuationContext") if isinstance(facts.get("companyValuationContext"), dict) else {}
+    if not valuation:
+        return {}
+    metrics = valuation.get("metrics") if isinstance(valuation.get("metrics"), dict) else {}
+    currency = valuation.get("currency") or facts.get("currency") or "KRW"
+    metric_parts: List[str] = []
+    per_status = str(valuation.get("perStatus") or "")
+    if per_status == "not-meaningful-loss":
+        metric_parts.append("PER 적자·산출 불가")
+    elif per_status == "not-meaningful-zero-earnings":
+        metric_parts.append("PER 이익 기준 산출 불가")
+    else:
+        value = _company_valuation_multiple("PER", metrics.get("peRatio"))
+        if value:
+            metric_parts.append(value)
+    for label, key in (("선행 PER", "forwardPE"), ("PBR", "pbr"), ("PEG", "pegRatio")):
+        value = _company_valuation_multiple(label, metrics.get(key))
+        if value:
+            metric_parts.append(value)
+    if _valuation_value_present(metrics.get("returnOnEquityPct")):
+        metric_parts.append("ROE " + _valuation_pct_display(metrics.get("returnOnEquityPct")))
+    if _valuation_value_present(metrics.get("dividendYieldPct")):
+        metric_parts.append("배당수익률 " + _valuation_pct_display(metrics.get("dividendYieldPct")))
+    if len(metric_parts) < 3 and _valuation_value_present(metrics.get("trailingEPS")):
+        metric_parts.append("EPS " + _valuation_price_display(metrics.get("trailingEPS"), currency))
+
+    basis = valuation.get("reportingBasis") if isinstance(valuation.get("reportingBasis"), dict) else {}
+    frequency_label = {"annual": "연간", "interim": "중간", "quarterly": "분기"}.get(
+        str(basis.get("frequency") or ""),
+        str(basis.get("frequency") or ""),
+    )
+    period = str(basis.get("period") or "").split("T", 1)[0]
+    source_as_of = _company_valuation_as_of_text(valuation.get("sourceAsOf"))
+    price_as_of = _format_kst_timestamp(valuation.get("priceAsOf"))
+    basis_parts = [
+        " ".join(part for part in [period, frequency_label + " 재무" if frequency_label else ""] if part),
+        "지표 조회 " + source_as_of if source_as_of else "",
+        "시세 " + price_as_of if price_as_of else "",
+    ]
+    providers = "·".join(str(item) for item in valuation.get("sourceProviders") or [] if str(item or "").strip())
+    data_state = {
+        "sufficient": "충분",
+        "partial": "일부 자료",
+        "unavailable": "사용 불가",
+    }.get(str(valuation.get("dataState") or ""), str(valuation.get("dataState") or ""))
+    rule_ids = active_company_valuation_rule_ids(active_rule_items(context or {}))
+    role = (
+        "TypeDB 회사·시장 규칙 " + str(len(rule_ids)) + "개 성립 · 투자 판단 근거"
+        if rule_ids
+        else "참고 정보 · 회사·시장 밸류에이션 규칙 미성립"
+    )
+    return {
+        "title": "회사 가치 판단" if rule_ids else "회사 가치 참고",
+        "metrics": " · ".join(metric_parts[:6]),
+        "basis": " · ".join(part for part in basis_parts if part),
+        "source": " · ".join(part for part in [providers, "자료 " + data_state if data_state else ""] if part),
+        "role": role,
+        "activeRuleIds": rule_ids,
+    }
+
+
+def company_valuation_rows(context: Dict[str, object], level: str, compact: bool = False) -> List[str]:
+    presentation = company_valuation_presentation(context)
+    if not presentation or not presentation.get("metrics"):
+        return []
+    if compact:
+        return [row for row in [
+            _html_row("주요 지표", presentation.get("metrics"), level=level, max_len=320),
+            _html_row(
+                "기준·출처",
+                " · ".join(part for part in [presentation.get("basis"), presentation.get("source")] if part),
+                level=level,
+                max_len=360,
+            ),
+            _html_row("판단 역할", presentation.get("role"), level=level, max_len=280),
+        ] if row]
+    rows = [
+        _html_row("주요 지표", presentation.get("metrics"), level=level, max_len=320),
+        _html_row("기준", presentation.get("basis"), level=level, max_len=300),
+        _html_row("출처", presentation.get("source"), level=level, max_len=240),
+        _html_row("판단 역할", presentation.get("role"), level=level, max_len=280),
+    ]
+    return [row for row in rows if row]
+
+
 def valuation_detail_rows(context: Dict[str, object], level: str) -> List[str]:
     facts = relation_facts(context or {})
     if not facts:
@@ -2479,6 +2581,10 @@ def execution_telegram_message(context: Dict[str, object], response: Notificatio
         parts.extend(["", "<b>왜 알림이 왔나요?</b>", *reason_rows])
     if current_state_rows:
         parts.extend(["", "<b>현재 상황</b>", *current_state_rows])
+    company_valuation = company_valuation_presentation(context)
+    company_valuation_display_rows = company_valuation_rows(context, level)
+    if company_valuation_display_rows:
+        parts.extend(["", "<b>" + html.escape(str(company_valuation.get("title") or "회사 가치 참고"), quote=False) + "</b>", *company_valuation_display_rows])
     valuation_rows = valuation_detail_rows(context, level)
     if valuation_rows:
         parts.extend(["", "<b>밸류에이션</b>", *valuation_rows])
@@ -2529,6 +2635,10 @@ def execution_telegram_message_compact_beginner(
     flow_rows = compact_current_flow_rows(context)
     if flow_rows:
         parts.extend(["", "<b>현재 흐름</b>", *[_html_bullet(row, level) for row in flow_rows]])
+    company_valuation = company_valuation_presentation(context)
+    company_valuation_display_rows = company_valuation_rows(context, level, compact=True)
+    if company_valuation_display_rows:
+        parts.extend(["", "<b>" + html.escape(str(company_valuation.get("title") or "회사 가치 참고"), quote=False) + "</b>", *company_valuation_display_rows])
     reasons = compact_action_reason_rows(context, response)
     if reasons:
         parts.extend(["", "<b>" + compact_reason_heading(context) + "</b>", *[_html_bullet(item, level) for item in reasons]])

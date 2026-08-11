@@ -568,7 +568,7 @@ def _compact_company_knowledge(value: object) -> Dict[str, object]:
     source = value if isinstance(value, Mapping) else {}
     result = _selected(
         source,
-        ["schemaVersion", "symbol", "companyName", "factRevision"],
+        ["schemaVersion", "symbol", "companyName", "factRevision", "materialRevision"],
         text_limit=240,
         depth=1,
     )

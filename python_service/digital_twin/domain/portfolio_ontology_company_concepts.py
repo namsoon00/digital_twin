@@ -9,12 +9,13 @@ from __future__ import annotations
 
 from typing import Dict, Iterable, Mapping
 
+from .company_knowledge import COMPANY_VALUATION_CONTEXT_VERSION, latest_source_as_of
 from .market_data import number
 from .ontology_contracts import PortfolioOntology, entity_id
 from .ontology_schema import add_entity, add_relation
 
 
-COMPANY_ABOX_CONTRACT_VERSION = "company-abox-v1"
+COMPANY_ABOX_CONTRACT_VERSION = "company-abox-v2"
 FINANCIAL_PERIOD_LIMITS = {"annual": 3, "interim": 2, "quarterly": 3}
 MAX_EXECUTIVE_ROLES = 8
 
@@ -137,6 +138,7 @@ def add_company_knowledge_concepts(
                 current_state_candidates.append((_period_rank(period, frequency), state_id, props))
 
     latest_state_id = ""
+    current_state_props: Dict[str, object] = {}
     if current_state_candidates:
         _rank, latest_state_id, current_state_props = max(current_state_candidates, key=lambda item: item[0])
         add_relation(
@@ -149,18 +151,74 @@ def add_company_knowledge_concepts(
         )
 
     valuation = knowledge.get("valuation") if isinstance(knowledge.get("valuation"), dict) else {}
+    valuation_id = ""
     if valuation:
+        source_as_of_values = [
+            _text(item.get("asOf"))
+            for item in provenance
+            if isinstance(item, Mapping) and _text(item.get("asOf"))
+        ]
+        source_providers = list(dict.fromkeys(
+            _text(item.get("provider"))
+            for item in provenance
+            if isinstance(item, Mapping) and _text(item.get("provider"))
+        ))[:6]
+        raw_trailing_eps = valuation.get("trailingEPS")
+        trailing_eps = number(raw_trailing_eps)
+        pe_ratio = number(valuation.get("peRatio"))
+        per_status = (
+            "not-meaningful-loss"
+            if raw_trailing_eps not in (None, "") and trailing_eps < 0
+            else "not-meaningful-zero-earnings" if raw_trailing_eps not in (None, "") and trailing_eps == 0
+            else "available" if pe_ratio > 0
+            else "missing"
+        )
         valuation_id = add_entity(graph, "company-valuation-state", symbol, company_name + " 회사 밸류에이션 상태", {
-            "tboxClass": "ValuationMetric",
-            "tboxClasses": ["Observation", "FundamentalObservation", "ValuationMetric"],
+            "tboxClass": "ValuationSnapshot",
+            "tboxClasses": ["Observation", "FundamentalObservation", "ValuationMetric", "ValuationSnapshot"],
             "symbol": symbol,
             "companyFactRevision": revision,
             "dataState": _text(coverage.get("dataState") or "partial"),
+            "valuationDataState": _text(coverage.get("dataState") or "partial"),
+            "valuationMetricCount": len(valuation),
+            "valuationSourceAsOf": latest_source_as_of(source_as_of_values),
+            "valuationSourceProviders": source_providers,
+            "valuationOfficialSource": bool(coverage.get("officialSource")),
+            "valuationPerStatus": per_status,
+            "reportingPeriod": _text(current_state_props.get("period")),
+            "reportingFrequency": _text(current_state_props.get("reportingFrequency")),
+            "valuationContextVersion": COMPANY_VALUATION_CONTEXT_VERSION,
             **{field: number(value) for field, value in valuation.items() if value not in (None, "")},
         })
         props = _relation_properties(primary_source, "PER·PBR·ROE 회사 평가 지표")
         add_relation(graph, company_id, valuation_id, "HAS_VALUATION_METRIC", weight=0.9, properties=props)
         add_relation(graph, stock_id, valuation_id, "HAS_VALUATION_METRIC", weight=0.9, properties=props)
+        add_relation(graph, company_id, valuation_id, "HAS_VALUATION_SNAPSHOT", weight=0.95, properties=props)
+        add_relation(graph, stock_id, valuation_id, "HAS_VALUATION_SNAPSHOT", weight=0.95, properties=props)
+        basis_id = add_entity(graph, "valuation-reporting-basis", symbol, company_name + " 밸류에이션 보고 기준", {
+            "tboxClass": "ReportingBasis",
+            "tboxClasses": ["Observation", "FundamentalObservation", "ReportingBasis"],
+            "symbol": symbol,
+            "reportingPeriod": _text(current_state_props.get("period")),
+            "reportingFrequency": _text(current_state_props.get("reportingFrequency")),
+            "valuationSourceAsOf": latest_source_as_of(source_as_of_values),
+            "companyFactRevision": revision,
+        })
+        add_relation(graph, valuation_id, basis_id, "USES_REPORTING_BASIS", weight=1.0, properties=props)
+        quality_id = add_entity(graph, "valuation-data-quality", symbol, company_name + " 밸류에이션 자료 품질", {
+            "tboxClass": "ValuationDataQuality",
+            "tboxClasses": ["Observation", "DataQuality", "ValuationDataQuality"],
+            "symbol": symbol,
+            "dataState": _text(coverage.get("dataState") or "partial"),
+            "valuationMetricCount": len(valuation),
+            "valuationOfficialSource": bool(coverage.get("officialSource")),
+            "missingFields": [str(item) for item in (coverage.get("missing") or [])[:8]],
+            "valuationSourceAsOf": latest_source_as_of(source_as_of_values),
+            "companyFactRevision": revision,
+        })
+        add_relation(graph, valuation_id, quality_id, "HAS_VALUATION_DATA_QUALITY", weight=1.0, properties=props)
+        if latest_state_id:
+            add_relation(graph, valuation_id, latest_state_id, "DERIVED_FROM_FINANCIAL_FACT", weight=0.95, properties=props)
 
     capital = knowledge.get("capital") if isinstance(knowledge.get("capital"), dict) else {}
     if capital:
@@ -231,6 +289,8 @@ def add_company_knowledge_concepts(
             "dataScope": _text(item.get("scope") or "company-knowledge"),
         })
         add_relation(graph, company_id, source_id, "HAS_PROVENANCE", weight=1.0, properties=_relation_properties(provider, "회사 정보 출처"))
+        if valuation_id:
+            add_relation(graph, valuation_id, source_id, "HAS_PROVENANCE", weight=1.0, properties=_relation_properties(provider, "밸류에이션 원천"))
 
     missing = coverage.get("missing") if isinstance(coverage.get("missing"), list) else []
     if missing:

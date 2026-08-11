@@ -4,6 +4,7 @@ from contextlib import contextmanager, redirect_stderr, redirect_stdout
 from datetime import date, datetime, timezone
 from typing import Dict, Iterable, List, Tuple
 
+from ..domain.company_knowledge import optional_number
 from ..domain.market_data import number
 from ..domain.portfolio import Position, utc_now_iso
 from ..domain.symbol_universe import normalize_market
@@ -244,30 +245,33 @@ def overview_from_yfinance(symbol: str, payload: Dict[str, object]) -> Dict[str,
         "industry": str(info.get("industry") or ""),
         "latestQuarter": str(info.get("mostRecentQuarter") or ""),
         "fetchedAt": utc_now_iso(),
-        "marketCapitalization": number(info.get("marketCap")),
-        "revenueTTM": number(info.get("totalRevenue")),
-        "grossProfitTTM": number(info.get("grossProfits")),
-        "ebitda": number(info.get("ebitda")),
-        "profitMargin": number(info.get("profitMargins")),
-        "operatingMarginTTM": number(info.get("operatingMargins")),
-        "trailingEPS": number(info.get("trailingEps")),
-        "forwardEPS": number(info.get("forwardEps")),
+        "marketCapitalization": optional_number(info.get("marketCap")),
+        "revenueTTM": optional_number(info.get("totalRevenue")),
+        "grossProfitTTM": optional_number(info.get("grossProfits")),
+        "ebitda": optional_number(info.get("ebitda")),
+        "profitMargin": optional_number(info.get("profitMargins")),
+        "operatingMarginTTM": optional_number(info.get("operatingMargins")),
+        "trailingEPS": optional_number(info.get("trailingEps")),
+        "forwardEPS": optional_number(info.get("forwardEps")),
         "epsPeriod": "forward-12m" if number(info.get("forwardEps")) else "ttm" if number(info.get("trailingEps")) else "",
-        "peRatio": number(info.get("trailingPE")),
-        "pegRatio": number(info.get("pegRatio")),
-        "forwardPE": number(info.get("forwardPE")),
-        "beta": number(info.get("beta")),
-        "dividendYield": number(info.get("dividendYield")),
-        "bookValuePerShare": number(info.get("bookValue")),
-        "priceToBook": number(info.get("priceToBook")),
-        "freeCashFlow": number(info.get("freeCashflow")),
-        "earningsGrowth": number(info.get("earningsGrowth")),
-        "revenueGrowth": number(info.get("revenueGrowth")),
-        "enterpriseToEbitda": number(info.get("enterpriseToEbitda")),
-        "analystTargetPrice": number((payload.get("analystPriceTargets") or {}).get("mean") or info.get("targetMeanPrice")),
-        "analystTargetLowPrice": number((payload.get("analystPriceTargets") or {}).get("low") or info.get("targetLowPrice")),
-        "analystTargetHighPrice": number((payload.get("analystPriceTargets") or {}).get("high") or info.get("targetHighPrice")),
-        "currentPrice": number(quote.get("price") or info.get("currentPrice") or info.get("regularMarketPrice")),
+        "peRatio": optional_number(info.get("trailingPE")),
+        "pegRatio": optional_number(info.get("pegRatio")),
+        "forwardPE": optional_number(info.get("forwardPE")),
+        "beta": optional_number(info.get("beta")),
+        # Current Yahoo quoteSummary exposes dividendYield in percentage
+        # points (0.45 means 0.45%), unlike Alpha Vantage's decimal ratio.
+        "dividendYield": optional_number(info.get("dividendYield")),
+        "dividendYieldUnit": "percent" if optional_number(info.get("dividendYield")) is not None else "",
+        "bookValuePerShare": optional_number(info.get("bookValue")),
+        "priceToBook": optional_number(info.get("priceToBook")),
+        "freeCashFlow": optional_number(info.get("freeCashflow")),
+        "earningsGrowth": optional_number(info.get("earningsGrowth")),
+        "revenueGrowth": optional_number(info.get("revenueGrowth")),
+        "enterpriseToEbitda": optional_number(info.get("enterpriseToEbitda")),
+        "analystTargetPrice": optional_number((payload.get("analystPriceTargets") or {}).get("mean") or info.get("targetMeanPrice")),
+        "analystTargetLowPrice": optional_number((payload.get("analystPriceTargets") or {}).get("low") or info.get("targetLowPrice")),
+        "analystTargetHighPrice": optional_number((payload.get("analystPriceTargets") or {}).get("high") or info.get("targetHighPrice")),
+        "currentPrice": optional_number(quote.get("price") or info.get("currentPrice") or info.get("regularMarketPrice")),
     }
 
 

@@ -6,8 +6,11 @@ from pathlib import Path
 sys.path.insert(0, str(Path(__file__).resolve().parents[1]))
 
 from digital_twin.domain.company_knowledge import (
+    active_company_valuation_rule_ids,
     build_company_knowledge,
     company_prompt_context,
+    company_valuation_context,
+    latest_source_as_of,
     merge_company_overview_rows,
     merge_company_knowledge_rows,
 )
@@ -30,6 +33,7 @@ from digital_twin.infrastructure.typedb_ontology import (
     typedb_native_rule_profile,
 )
 from digital_twin.infrastructure.external_signals import ExternalSignalProvider
+from digital_twin.infrastructure.external_signal_provider_yfinance import overview_from_yfinance
 
 
 class MemoryStore:
@@ -113,6 +117,63 @@ class CompanyKnowledgeTests(unittest.TestCase):
         self.assertEqual(0.18, first["valuation"]["returnOnEquity"])
         self.assertEqual(18.0, first["valuation"]["returnOnEquityPct"])
         self.assertEqual(first["factRevision"], refreshed["factRevision"])
+        self.assertEqual(first["materialRevision"], refreshed["materialRevision"])
+
+    def test_material_revision_ignores_insignificant_multiple_rounding(self):
+        first = build_company_knowledge(
+            "TEST",
+            overview={"provider": "KIS Open API", "peRatio": 12.41, "pbr": 1.63},
+        )
+        insignificant = build_company_knowledge(
+            "TEST",
+            overview={"provider": "KIS Open API", "peRatio": 12.44, "pbr": 1.64},
+        )
+        material = build_company_knowledge(
+            "TEST",
+            overview={"provider": "KIS Open API", "peRatio": 12.6, "pbr": 1.8},
+        )
+
+        self.assertNotEqual(first["factRevision"], insignificant["factRevision"])
+        self.assertEqual(first["materialRevision"], insignificant["materialRevision"])
+        self.assertNotEqual(first["materialRevision"], material["materialRevision"])
+
+    def test_dividend_yield_unit_contract_normalizes_provider_values(self):
+        yahoo_overview = overview_from_yfinance("NVDA", {"info": {"dividendYield": 0.45}})
+        yahoo = build_company_knowledge("NVDA", overview=yahoo_overview)
+        alpha = build_company_knowledge(
+            "NVDA",
+            overview={
+                "provider": "Alpha Vantage",
+                "dividendYield": 0.0045,
+                "dividendYieldUnit": "ratio",
+            },
+        )
+
+        self.assertIsNone(yahoo_overview["trailingEPS"])
+        self.assertEqual(0.0045, yahoo["valuation"]["dividendYield"])
+        self.assertEqual(0.45, yahoo["valuation"]["dividendYieldPct"])
+        self.assertEqual(0.0045, alpha["valuation"]["dividendYield"])
+        self.assertEqual(0.45, alpha["valuation"]["dividendYieldPct"])
+
+    def test_latest_source_as_of_compares_mixed_provider_date_formats(self):
+        latest = latest_source_as_of([
+            "20260810",
+            "2026-08-11T09:55:42.757203Z",
+            "2026-08-09",
+        ])
+
+        self.assertEqual("2026-08-11T09:55:42.757203Z", latest)
+
+    def test_company_cache_v1_yfinance_dividend_yield_is_upgraded(self):
+        upgraded = merge_company_knowledge_rows({
+            "symbol": "NVDA",
+            "valuation": {"dividendYield": 0.45, "dividendYieldPct": 45.0},
+            "provenance": [{"provider": "yfinance", "scope": "overview"}],
+        })
+
+        self.assertEqual(0.0045, upgraded["valuation"]["dividendYield"])
+        self.assertEqual(0.45, upgraded["valuation"]["dividendYieldPct"])
+        self.assertEqual("ratio", upgraded["valuationUnits"]["dividendYield"])
 
     def test_company_context_reaches_relation_facts_and_final_ai_packet(self):
         knowledge = build_company_knowledge("TEST", yfinance=sample_yfinance())
@@ -125,25 +186,75 @@ class CompanyKnowledgeTests(unittest.TestCase):
         self.assertEqual(2, len(bounded["governance"]["executives"]))
 
         facts = position_signal_facts(
-            Position(symbol="TEST", name="Example Corp", current_price=100, source="watchlist"),
+            Position(
+                symbol="TEST",
+                name="Example Corp",
+                current_price=100,
+                currency="USD",
+                updated_at="2026-08-11T01:00:00Z",
+                source="watchlist",
+            ),
             PortfolioSummary(total=1000, invested=0, cash=1000, markets=[], sectors=[], concentration=0),
             external_signals,
         )
         self.assertEqual(knowledge["factRevision"], facts["companyContext"]["factRevision"])
+        self.assertEqual("2025-12-31", facts["companyValuationContext"]["reportingBasis"]["period"])
+        self.assertEqual("reference", facts["companyValuationContext"]["decisionRole"])
 
         context = {
             "messageType": "investmentInsight",
             "ontologyRelationContext": {
                 "facts": facts,
-                "activeRules": [{"ruleId": "graph.company.market.fundamental_confirmation.support.v1"}],
+                "activeRules": [{"ruleId": "graph.company.market.quality_valuation.support.v1"}],
             },
         }
         packet = ai_decision_input_packet(context, {"facts": facts}, {"level": "beginner"})
         ai_company = packet["relationshipDatabaseInference"]["companyContext"]
+        ai_valuation = packet["relationshipDatabaseInference"]["companyValuationContext"]
 
         self.assertEqual("TEST", ai_company["symbol"])
         self.assertEqual(18.0, ai_company["valuation"]["returnOnEquityPct"])
         self.assertEqual(1, len(ai_company["latestFinancials"]["annual"]))
+        self.assertEqual("decision-evidence", ai_valuation["decisionRole"])
+        self.assertEqual(
+            ["graph.company.market.quality_valuation.support.v1"],
+            ai_valuation["activeCompanyValuationRuleIds"],
+        )
+        self.assertEqual(
+            ["graph.company.market.quality_valuation.support.v1"],
+            active_company_valuation_rule_ids(context["ontologyRelationContext"]["activeRules"]),
+        )
+
+    def test_company_valuation_context_marks_loss_per_as_not_meaningful(self):
+        knowledge = build_company_knowledge(
+            "LOSS",
+            overview={
+                "provider": "KIS Open API",
+                "peRatio": -3.2,
+                "pbr": 1.1,
+                "trailingEPS": -120,
+            },
+        )
+
+        context = company_valuation_context(
+            {"companyKnowledge": {"LOSS": knowledge}},
+            "LOSS",
+            price_as_of="2026-08-11T02:00:00Z",
+            currency="KRW",
+        )
+
+        self.assertEqual("not-meaningful-loss", context["perStatus"])
+        self.assertEqual("active-company-valuation-rule-only", context["judgmentUse"])
+
+    def test_company_valuation_context_distinguishes_zero_earnings_from_loss(self):
+        knowledge = build_company_knowledge(
+            "ZERO",
+            overview={"provider": "KIS Open API", "peRatio": 0, "trailingEPS": 0, "pbr": 1.2},
+        )
+
+        context = company_valuation_context({"companyKnowledge": {"ZERO": knowledge}}, "ZERO")
+
+        self.assertEqual("not-meaningful-zero-earnings", context["perStatus"])
 
     def test_company_abox_is_bounded_and_connects_stock_to_current_company_states(self):
         graph = PortfolioOntology(portfolio_id="test")
@@ -164,6 +275,12 @@ class CompanyKnowledgeTests(unittest.TestCase):
         self.assertIn("HAS_FINANCIAL_STATE", relation_types)
         self.assertIn("HAS_GOVERNANCE_STATE", relation_types)
         self.assertIn("HAS_CAPITAL_STATE", relation_types)
+        self.assertIn("HAS_VALUATION_SNAPSHOT", relation_types)
+        self.assertIn("USES_REPORTING_BASIS", relation_types)
+        self.assertIn("HAS_VALUATION_DATA_QUALITY", relation_types)
+        self.assertEqual(1, kinds.count("company-valuation-state"))
+        self.assertEqual(1, kinds.count("valuation-reporting-basis"))
+        self.assertEqual(1, kinds.count("valuation-data-quality"))
         current_relations = [
             item
             for item in graph.relations
@@ -274,7 +391,7 @@ class CompanyKnowledgeTests(unittest.TestCase):
         shared = provider.load_shared_company_knowledge(external_payload, persist_backfill=True)
 
         self.assertEqual(2, len(shared["TEST"]["financials"]["annual"]))
-        self.assertEqual("company-knowledge-cache-v1", company_cache.payload["schemaVersion"])
+        self.assertEqual("company-knowledge-cache-v2", company_cache.payload["schemaVersion"])
         self.assertIn("TEST", company_cache.payload["symbols"])
 
     def test_company_rules_compile_to_native_typedb_functions(self):
@@ -287,6 +404,9 @@ class CompanyKnowledgeTests(unittest.TestCase):
             "graph.company.capital.dilution.risk.v1",
             "graph.company.market.quality_valuation.support.v1",
             "graph.company.market.valuation_stretch.risk.v1",
+            "graph.company.market.value_trap.risk.v1",
+            "graph.company.market.unsupported_rerating.risk.v1",
+            "graph.company.market.forward_expectation.review.v1",
             "graph.company.governance.coverage_gap.v1",
         }
         for rule_id in expected:

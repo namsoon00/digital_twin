@@ -3,6 +3,7 @@ import re
 from typing import Dict, List, Tuple
 
 from .accounts import message_delivery_profile, normalize_message_delivery_level
+from .company_knowledge import active_company_valuation_rule_ids
 from .investment_brain import hypothesis_comparison_audit
 from .investment_decision_history import previous_decision_episode_value
 from .investment_strategy_guidance import merge_strategy_context, strategy_guidance_context
@@ -852,6 +853,12 @@ def ai_decision_input_packet(
     decision_drivers = execution_plan.get("decisionDrivers") if isinstance(execution_plan.get("decisionDrivers"), list) else []
     compact_execution_plan = compact_execution_plan_for_ai(execution_plan)
     compact_decision_drivers = list(compact_execution_plan.pop("decisionDrivers", []) or [])
+    active_rules = relation_context.get("activeRules") or relation_context.get("matchedRules") or []
+    company_valuation = compact_company_valuation_context_for_ai(facts.get("companyValuationContext"))
+    valuation_rule_ids = active_company_valuation_rule_ids(active_rules)
+    if company_valuation:
+        company_valuation["decisionRole"] = "decision-evidence" if valuation_rule_ids else "reference"
+        company_valuation["activeCompanyValuationRuleIds"] = valuation_rule_ids
     strategy_context = strategy_guidance_context(context=context)
     previous_decision = previous_decision_episode_value(context)
     precomputed_action = precomputed_action_value(context)
@@ -886,12 +893,13 @@ def ai_decision_input_packet(
             "changeStateLabel": relation_context.get("changeStateLabel"),
             "conflictState": relation_context.get("conflictState"),
             "conflictStateLabel": relation_context.get("conflictStateLabel"),
-            "activeRules": compact_rule_rows(relation_context.get("activeRules") or relation_context.get("matchedRules") or [], 8),
+            "activeRules": compact_rule_rows(active_rules, 8),
             "executionPlan": compact_execution_plan,
             "decisionDrivers": compact_decision_drivers,
             "missingData": relation_context.get("missingData") or facts.get("missingData") or [],
             "relationFacts": compact_relation_facts(facts.get("relationFacts") or relation_context.get("facts") or {}),
             "companyContext": compact_company_context_for_ai(facts.get("companyContext")),
+            "companyValuationContext": company_valuation,
             "trendDynamics": facts.get("trendDynamics") or {},
             "whyNow": compact_why_now_for_ai(
                 relation_context.get("whyNow") if isinstance(relation_context.get("whyNow"), dict) else {}
@@ -1449,6 +1457,23 @@ def compact_company_context_for_ai(payload: object) -> Dict[str, object]:
     }
 
 
+def compact_company_valuation_context_for_ai(payload: object) -> Dict[str, object]:
+    payload = dict(payload or {}) if isinstance(payload, dict) else {}
+    if not payload:
+        return {}
+    keep = (
+        "schemaVersion", "symbol", "companyName", "companyFactRevision", "companyMaterialRevision",
+        "decisionRole", "metrics", "metricCount", "currency", "reportingBasis", "priceAsOf",
+        "sourceAsOf", "sourceProviders", "dataState", "officialSource", "missing", "perStatus",
+        "judgmentUse", "activeCompanyValuationRuleIds",
+    )
+    return {
+        key: payload.get(key)
+        for key in keep
+        if payload.get(key) not in (None, "", [], {})
+    }
+
+
 def compact_evidence_subgraph_for_ai(payload: object) -> Dict[str, object]:
     payload = payload if isinstance(payload, dict) else {}
     return {
@@ -1525,6 +1550,7 @@ def compact_prompt_context_for_ai(context: object) -> Dict[str, object]:
         "activeInvestmentOpinion", "researchEvidence", "hypothesisDecisionBrief", "sourceAlertEvents",
         "rawLines", "relationFacts", "trendDynamics", "missingData", "criteria", "newsHeadlines",
         "disclosure", "messageDeliveryProfile", "referenceDate", "target", "messageType",
+        "companyContext", "companyValuationContext",
     ]:
         facts.pop(key, None)
     compact["facts"] = facts
@@ -1670,6 +1696,7 @@ def build_notification_ai_gate_prompt(
         "action은 executionPlan의 allowedActions·blockedActions와 TypeDB 관계의 실행 제약을 위반하지 않는 범위에서만 고른다. 코드에 적힌 고정 평균선, 손익률, 거래량, BTC, 금리, 환율 규칙으로 action을 새로 만들지 않는다.",
         "가격·수급·뉴스·공시·크립토·금리·환율 원시값은 TypeDB decisionDrivers와 activeRules가 연결한 근거일 때만 행동 판단에 사용한다. 숫자는 구체적으로 인용할 수 있지만, 입력에 없는 임계값이나 패턴을 스스로 추가하지 않는다.",
         "회사 재무·밸류에이션·경영진·자본 구조 원시값도 같은 원칙을 적용한다. activeRules에 회사 상태와 시장 반응을 결합한 규칙이 있을 때만 행동 판단 근거로 사용하고, 단일 PER·PBR·ROE나 CEO 이름만으로 매수·매도 결론을 만들지 않는다. 회사 규칙이 성립하면 currentActionPlan에는 현재 대응을, changeAnalysis에는 새로 바뀐 회사 사실 또는 시장 확인을, nextActionPlan에는 다음 보고 기간과 무효화 조건을 서로 다르게 쓴다.",
+        "relationshipDatabaseInference.companyValuationContext는 알림에 결정론적으로 표시되는 회사 가치 지표다. decisionRole=reference이면 참고 정보로만 설명하고 action 근거로 사용하지 않는다. decisionRole=decision-evidence이면 activeCompanyValuationRuleIds에 실제 성립한 TypeDB 회사·시장 규칙이 있으므로 해당 규칙의 재무 기준 기간, 가격 확인과 반대 근거를 함께 설명한다.",
         "실행계획의 strengthenConditions, weakenConditions, nextChecks, counterSignals와 경쟁 가설을 비교해 어떤 조건이 현재 의견을 지지하거나 약화하는지 설명한다. TypeDB 관계가 없는 단일 사실은 다음 확인 또는 부족 데이터로만 다룬다.",
         "BUY, ADD, HOLD, TRIM, SELL, AVOID 중 하나를 반드시 고르되 자동 주문 지시처럼 쓰지 않는다.",
         "대상이 관심종목이면 targetPositionRole=watchlist이고 actionPolicy=ENTRY_ONLY다. 이 정책은 온톨로지 RuleBox/InferenceBox에서 온 제약이다. 관심종목은 보유 수량이 아니므로 HOLD는 '관심 유지', BUY는 '소액 진입 검토', AVOID는 '신규 진입 회피/대기'로 판단한다. 관심종목에 대해 보유 유지, 추가매수, 분할축소, 매도처럼 보유종목용 표현을 쓰지 않는다.",

@@ -262,6 +262,7 @@ Configuration:
 - `EXTERNAL_DART_LOOKBACK_DAYS`: OpenDART disclosure lookback, default 14.
 - `EXTERNAL_DART_COMPANY_FUNDAMENTALS_ENABLED`: collect bounded official company overview, financial statement, and executive facts for the company KnowledgeWorld, default 1.
 - `EXTERNAL_DART_CORP_CODES`: ticker-to-corp-code mappings, for example `005930=00126380;000660=00164779`.
+- `ONTOLOGY_RULEBOX_PREWARM_ENABLED`: keep the dedicated TypeDB schema-function preparation worker enabled, especially after a clean database bootstrap or rotation, default 1.
 
 Temporal ontology reasoning groups repeated monitor snapshots before RuleBox derives risk/support episodes. This prevents alerts from judging only the latest price point.
 

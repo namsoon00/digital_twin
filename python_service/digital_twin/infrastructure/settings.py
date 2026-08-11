@@ -1762,7 +1762,7 @@ def runtime_settings(fast_operational_read: bool = False) -> Dict[str, str]:
         "ontologyRuleboxPrewarmEnabled": value(
             "ontologyRuleboxPrewarmEnabled",
             "ONTOLOGY_RULEBOX_PREWARM_ENABLED",
-            "0",
+            "1",
         ),
         "ontologyRuleboxPrewarmRequireReadyForInference": value(
             "ontologyRuleboxPrewarmRequireReadyForInference",

@@ -1,3 +1,4 @@
+import json
 import sys
 import unittest
 from pathlib import Path
@@ -13,7 +14,14 @@ from digital_twin.domain.ontology_contracts import PortfolioOntology
 from digital_twin.domain.ontology_prompting import build_ai_inference_packet, prompt_payload
 from digital_twin.domain.ontology_rulebox_catalog import default_graph_inference_rules
 from digital_twin.domain.portfolio_ontology_company_concepts import add_company_knowledge_concepts
+from digital_twin.infrastructure.graph_store_payloads import (
+    PROMOTED_NUMERIC_ENTITY_FIELDS,
+    PROMOTED_TEXT_ENTITY_FIELDS,
+)
 from digital_twin.infrastructure.typedb_ontology import (
+    TYPEDB_PROMOTED_NUMERIC_ATTRIBUTES,
+    TYPEDB_PROMOTED_TEXT_ATTRIBUTES,
+    TypeDBOntologyGraphRepository,
     typedb_native_match_query,
     typedb_native_rule_profile,
 )
@@ -258,6 +266,41 @@ class CompanyKnowledgeTests(unittest.TestCase):
         self.assertIn("ontology-company-revenue-growth-pct", query)
         self.assertIn("ontology-company-operating-income-growth-pct", query)
         self.assertIn("ontology-ma20-distance", query)
+
+    def test_company_abox_fields_are_promoted_into_typedb_attributes(self):
+        self.assertEqual(
+            set(TYPEDB_PROMOTED_NUMERIC_ATTRIBUTES),
+            set(PROMOTED_NUMERIC_ENTITY_FIELDS),
+        )
+        self.assertEqual(
+            set(TYPEDB_PROMOTED_TEXT_ATTRIBUTES),
+            set(PROMOTED_TEXT_ENTITY_FIELDS),
+        )
+        repository = TypeDBOntologyGraphRepository("")
+        query = repository.node_insert_query(
+            {
+                "id": "company-financial-state:TEST:2025",
+                "label": "TEST 2025 financial state",
+                "kind": "company-financial-state",
+                "ontologyBox": "ABox",
+                "symbol": "TEST",
+                "tboxClass": "FinancialState",
+                "propertiesJson": json.dumps(
+                    {
+                        "revenueGrowthPct": -12.5,
+                        "operatingIncomeGrowthPct": -8.25,
+                        "period": "2025",
+                        "reportingFrequency": "annual",
+                    }
+                ),
+            },
+            "2026-08-11T00:00:00Z",
+        )
+
+        self.assertIn("has ontology-company-revenue-growth-pct -12.5", query)
+        self.assertIn("has ontology-company-operating-income-growth-pct -8.25", query)
+        self.assertIn('has ontology-reporting-period "2025"', query)
+        self.assertIn('has ontology-reporting-frequency "annual"', query)
 
 
 if __name__ == "__main__":

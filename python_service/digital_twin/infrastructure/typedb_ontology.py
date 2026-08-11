@@ -68,6 +68,8 @@ from .graph_store_lifecycle import (
 )
 from .graph_store_payloads import (
     GraphStoreOntologyRowMapperMixin,
+    PROMOTED_NUMERIC_ENTITY_FIELDS,
+    PROMOTED_TEXT_ENTITY_FIELDS,
     condition_relation_filter_values,
     list_of_strings,
     number_or_none,
@@ -1257,6 +1259,20 @@ def json_object(value: object) -> Dict[str, object]:
     except (TypeError, ValueError, json.JSONDecodeError):
         return {}
     return dict(decoded) if isinstance(decoded, dict) else {}
+
+
+def promoted_node_value(row: Dict[str, object], properties: Dict[str, object], field: str):
+    value = row.get(field)
+    return properties.get(field) if value in (None, "") else value
+
+
+def promoted_node_text_value(row: Dict[str, object], properties: Dict[str, object], field: str) -> str:
+    value = promoted_node_value(row, properties, field)
+    if isinstance(value, list):
+        return ", ".join(list_of_strings(value))
+    if isinstance(value, bool):
+        return "true" if value else "false"
+    return str(value or "")
 
 
 def list_of_strings(value: object) -> List[str]:
@@ -12934,6 +12950,7 @@ relation ontology-assertion,
         return "insert " + self.node_insert_clause(row, updated_at, "$n") + ";"
 
     def node_insert_clause(self, row: Dict[str, object], updated_at: str, variable: str) -> str:
+        properties = json_object(row.get("propertiesJson"))
         semantic_properties = {
             "tboxClass": row.get("tboxClass"),
             "tboxClasses": row.get("tboxClasses") or [],
@@ -12993,11 +13010,11 @@ relation ontology-assertion,
             + typeql_has("ontology-pe-ratio", row.get("peRatio"), numeric=True)
             + typeql_has("ontology-beta", row.get("beta"), numeric=True)
             + "".join(
-                typeql_has(attribute, row.get(field), numeric=True)
+                typeql_has(attribute, promoted_node_value(row, properties, field), numeric=True)
                 for field, attribute in TYPEDB_PROMOTED_NUMERIC_ATTRIBUTES.items()
             )
             + "".join(
-                typeql_has(attribute, row.get(field))
+                typeql_has(attribute, promoted_node_text_value(row, properties, field))
                 for field, attribute in TYPEDB_PROMOTED_TEXT_ATTRIBUTES.items()
             )
         )

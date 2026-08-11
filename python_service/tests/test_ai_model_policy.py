@@ -1,7 +1,7 @@
 import sys
 import unittest
 from pathlib import Path
-from unittest.mock import patch
+from unittest.mock import call, patch
 
 
 sys.path.insert(0, str(Path(__file__).resolve().parents[1]))
@@ -26,7 +26,7 @@ class AiModelPolicyTests(unittest.TestCase):
              patch("digital_twin.infrastructure.hypothesis_proposal_ai.codex_command", return_value=fixed_command) as proposal_command, \
              patch("digital_twin.infrastructure.hypothesis_research_planner_ai.codex_command", return_value=fixed_command) as planning_command:
             reviewer_from_settings({"modelReviewUseCodex": "1", "modelReviewCommand": "other-llm"})
-            notification_ai_reviewer_from_settings({"notificationAiUseCodex": "1", "notificationAiCommand": "other-llm"})
+            notification_reviewer = notification_ai_reviewer_from_settings({"notificationAiUseCodex": "1", "notificationAiCommand": "other-llm"})
             news_ai_analyzer_from_settings({"newsAiAnalysisUseCodex": "1", "newsAiAnalysisCommand": "other-llm"})
             disclosure_analyzer_from_settings({"dartDisclosureAiUseCodex": "1", "dartDisclosureAiCommand": "other-llm"})
             rule_change_candidate_advisor_from_settings({"ontologyRuleCandidateAiUseCodex": "1", "ontologyRuleCandidateAiCommand": "other-llm"})
@@ -42,7 +42,12 @@ class AiModelPolicyTests(unittest.TestCase):
             planning_command,
         ]:
             command.assert_called_once_with()
-        notification_command.assert_called_once_with(reasoning_effort="max")
+        notification_command.assert_called_once_with(reasoning_effort="high")
+        notification_reviewer.primary.command_factory(reasoning_effort="max")
+        self.assertEqual(
+            [call(reasoning_effort="high"), call(reasoning_effort="max")],
+            notification_command.call_args_list,
+        )
 
     def test_notification_delivery_deadline_caps_codex_gate_wait(self):
         fixed_command = "codex --model gpt-5.6-sol --config model_reasoning_effort=max exec -"

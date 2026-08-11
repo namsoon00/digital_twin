@@ -4,8 +4,8 @@ import subprocess
 from typing import Dict
 
 from ..domain.notification_ai_gate_contracts import NotificationAIValidatedResponse
+from ..domain.notification_ai_decision_brief import build_notification_ai_decision_prompt
 from ..domain.notification_ai_gate_validation import (
-    build_notification_ai_gate_prompt,
     local_validated_ai_response,
     validated_response_from_text,
 )
@@ -29,20 +29,41 @@ class CommandNotificationAIReviewer(NotificationAIReviewer):
         command: str,
         timeout_seconds: int = 300,
         source: str = "AI",
-        max_prompt_bytes: int = 48 * 1024,
+        max_prompt_bytes: int = 28 * 1024,
+        command_factory=None,
+        settings: Dict[str, object] = None,
     ):
         self.command = str(command or "").strip()
         self.timeout_seconds = max(5, int(timeout_seconds or 300))
         self.source = source
-        self.max_prompt_bytes = max(24 * 1024, min(256 * 1024, int(max_prompt_bytes or 48 * 1024)))
+        self.max_prompt_bytes = max(24 * 1024, min(256 * 1024, int(max_prompt_bytes or 28 * 1024)))
+        self.command_factory = command_factory
+        self.settings = dict(settings or {})
         self.last_prompt_bytes = 0
+        self.last_execution_profile = {}
         self.process = None
 
     def review(self, context: Dict[str, object]) -> NotificationAIValidatedResponse:
-        if not self.command:
+        execution_profile = context.get("notificationAiExecutionProfile") if isinstance(context.get("notificationAiExecutionProfile"), dict) else {}
+        reasoning_effort = str(execution_profile.get("reasoningEffort") or "").strip().lower()
+        command = (
+            self.command_factory(reasoning_effort=reasoning_effort)
+            if self.command_factory and reasoning_effort
+            else self.command
+        )
+        if not command:
             raise RuntimeError("notification AI command is not configured")
-        prompt = build_notification_ai_gate_prompt(context, max_prompt_bytes=self.max_prompt_bytes)
+        prompt = str(context.get("_notificationAiPreparedPrompt") or "") or build_notification_ai_decision_prompt(
+            context,
+            self.settings,
+            max_prompt_bytes=min(
+                self.max_prompt_bytes,
+                int(execution_profile.get("maxPromptBytes") or self.max_prompt_bytes),
+            ),
+            profile=execution_profile,
+        )
         self.last_prompt_bytes = len(prompt.encode("utf-8"))
+        self.last_execution_profile = dict(execution_profile or {})
         process_kwargs = {
             "stdin": subprocess.PIPE,
             "text": True,
@@ -55,7 +76,7 @@ class CommandNotificationAIReviewer(NotificationAIReviewer):
         if os.name != "nt":
             process_kwargs["start_new_session"] = True
         process = subprocess.Popen(
-            self.command,
+            command,
             **process_kwargs,
         )
         self.process = process
@@ -77,7 +98,10 @@ class CommandNotificationAIReviewer(NotificationAIReviewer):
             raise RuntimeError((stderr or output or "notification AI command failed").strip())
         if not output:
             raise RuntimeError("notification AI command returned empty output")
-        return validated_response_from_text(context, output, source=self.source)
+        source = self.source
+        if reasoning_effort:
+            source = "Codex AI (" + codex_model_label(reasoning_effort) + ")"
+        return validated_response_from_text(context, output, source=source)
 
     def stop(self) -> None:
         process = self.process
@@ -124,9 +148,11 @@ def notification_ai_reviewer_from_settings(
     settings = settings or runtime_settings()
     use_codex = str(settings.get("notificationAiUseCodex") or os.environ.get("NOTIFICATION_AI_USE_CODEX") or "1").strip() != "0"
     reasoning_effort = str(
-        settings.get("notificationAiReasoningEffort")
+        settings.get("notificationAiStandardReasoningEffort")
+        or os.environ.get("NOTIFICATION_AI_STANDARD_REASONING_EFFORT")
+        or settings.get("notificationAiReasoningEffort")
         or os.environ.get("NOTIFICATION_AI_REASONING_EFFORT")
-        or "max"
+        or "high"
     ).strip().lower()
     try:
         configured_timeout = int(
@@ -147,12 +173,13 @@ def notification_ai_reviewer_from_settings(
     timeout = max(5, min(max(5, configured_timeout), max(5, delivery_deadline)))
     try:
         max_prompt_bytes = int(
-            settings.get("notificationAiQueueMaxPromptBytes")
-            or os.environ.get("NOTIFICATION_AI_QUEUE_MAX_PROMPT_BYTES")
-            or 48 * 1024
+            settings.get("notificationAiDeepPromptMaxBytes")
+            or os.environ.get("NOTIFICATION_AI_DEEP_PROMPT_MAX_BYTES")
+            or settings.get("notificationAiQueueMaxPromptBytes")
+            or 36 * 1024
         )
     except (TypeError, ValueError):
-        max_prompt_bytes = 48 * 1024
+        max_prompt_bytes = 36 * 1024
     if use_codex:
         command = codex_command(reasoning_effort=reasoning_effort)
         if command:
@@ -161,8 +188,10 @@ def notification_ai_reviewer_from_settings(
                 timeout,
                 "Codex AI (" + codex_model_label(reasoning_effort) + ")",
                 max_prompt_bytes=max_prompt_bytes,
+                command_factory=codex_command,
+                settings=settings,
             )
             return FallbackNotificationAIReviewer(primary) if allow_local_fallback else primary
     if allow_local_fallback:
         return LocalNotificationAIReviewer()
-    return CommandNotificationAIReviewer("", timeout, "Codex AI unavailable", max_prompt_bytes=max_prompt_bytes)
+    return CommandNotificationAIReviewer("", timeout, "Codex AI unavailable", max_prompt_bytes=max_prompt_bytes, settings=settings)

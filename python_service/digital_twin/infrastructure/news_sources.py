@@ -655,9 +655,15 @@ class NewsSourceGateway:
                 unique.append(alias)
         if not unique:
             return target.search_query()
-        if len(unique) == 1:
-            return unique[0]
-        return "(" + " OR ".join('"' + item.replace('"', " ") + '"' for item in unique[:2]) + ")"
+        identity = unique[0] if len(unique) == 1 else "(" + " OR ".join('"' + item.replace('"', " ") + '"' for item in unique[:2]) + ")"
+        research_terms = [
+            " ".join(str(item or "").replace('"', " ").split())[:80]
+            for item in target.research_query_terms or []
+            if str(item or "").strip()
+        ][:4]
+        if not research_terms:
+            return identity
+        return identity + " (" + " OR ".join('"' + item + '"' for item in research_terms) + ")"
 
     def per_symbol_limit(self) -> int:
         return int_setting(self.settings, "newsCollectionPerSymbolLimit", 8, 1, 50)
@@ -1032,7 +1038,9 @@ class NewsSourceGateway:
         self,
         target: NewsCollectionTarget,
         source_types: Iterable[str] = None,
+        research_tasks: Iterable[Dict[str, object]] = None,
     ) -> Tuple[List[ResearchEvidence], List[Dict[str, object]]]:
+        del research_tasks
         requested = {str(item or "").strip().lower() for item in source_types or [] if str(item or "").strip()}
         if requested and not requested.intersection({"news", "news-full-text", "article", "official"}):
             return [], [{

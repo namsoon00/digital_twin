@@ -330,6 +330,7 @@ class NewsCollectionTarget:
     market: str = ""
     currency: str = ""
     sector: str = ""
+    research_query_terms: List[str] = field(default_factory=list)
 
     def normalized_symbol(self) -> str:
         return str(self.symbol or "").upper().strip()
@@ -349,9 +350,14 @@ class NewsCollectionTarget:
                 terms.append(text)
         if not terms:
             return self.normalized_symbol()
-        if len(terms) == 1:
-            return terms[0]
-        return "(" + " OR ".join('"' + term + '"' for term in terms[:2]) + ")"
+        identity = terms[0] if len(terms) == 1 else "(" + " OR ".join('"' + term + '"' for term in terms[:2]) + ")"
+        research_terms = _unique_texts(
+            " ".join(str(item or "").replace('"', " ").split())[:80]
+            for item in self.research_query_terms or []
+        )[:4]
+        if not research_terms:
+            return identity
+        return identity + " (" + " OR ".join('"' + term + '"' for term in research_terms) + ")"
 
 
 def _lower_text(value: object) -> str:

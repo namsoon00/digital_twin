@@ -134,6 +134,7 @@ class AIInferenceRequest:
         *,
         model: str = "gpt-5.6-sol",
         reasoning_effort: str = "max",
+        prompt_version: str = NOTIFICATION_AI_GATE_VERSION,
     ) -> "AIInferenceRequest":
         captured = dict(context or {})
         subject = notification_ai_subject(captured)
@@ -149,6 +150,7 @@ class AIInferenceRequest:
             inference_generation_id=subject["inferenceGenerationId"],
             context_hash=_canonical_hash(captured),
             context=captured,
+            prompt_version=_clean(prompt_version) or NOTIFICATION_AI_GATE_VERSION,
             model=_clean(model) or "gpt-5.6-sol",
             reasoning_effort=_clean(reasoning_effort).lower() or "max",
             priority=notification_ai_queue_priority(captured),

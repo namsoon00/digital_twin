@@ -174,6 +174,7 @@ class InvestmentResearchOrchestrationService:
                 started_at=started_at,
                 completed_at=utc_now_iso(),
             ))
+
         if len(cached_claims) >= self.minimum_verified_count() and not force:
             return self.persist_run(ResearchRun(
                 run_id=run_id,
@@ -228,19 +229,30 @@ class InvestmentResearchOrchestrationService:
             for item in tasks
             for source in (item.get("sourceTypes") or [])
         ))
-        max_age = min(
-            [int(item.get("maxAgeMinutes") or 360) for item in tasks] or [360]
-        )
+        max_age = min([int(item.get("maxAgeMinutes") or 360) for item in tasks] or [360])
         collected: List[ResearchEvidence] = []
         provider_statuses: List[Dict[str, object]] = []
+        research_query_terms = unique_strings(
+            term
+            for item in tasks
+            for term in (item.get("queryTerms") or [])
+        )[:6]
+        research_target = replace(target, research_query_terms=research_query_terms)
         if self.research_gateway and hasattr(self.research_gateway, "collect_for_target"):
             try:
                 collected, provider_statuses = self.research_gateway.collect_for_target(
-                    target,
+                    research_target,
                     source_types=source_types,
+                    research_tasks=tasks,
                 )
             except TypeError:
-                collected, provider_statuses = self.research_gateway.collect_for_target(target)
+                try:
+                    collected, provider_statuses = self.research_gateway.collect_for_target(
+                        research_target,
+                        source_types=source_types,
+                    )
+                except TypeError:
+                    collected, provider_statuses = self.research_gateway.collect_for_target(research_target)
         if self.article_analysis_service and hasattr(self.article_analysis_service, "analyze_many"):
             collected = self.article_analysis_service.analyze_many(target, collected)
         collection_ids = {str(item.evidence_id or "") for item in collected if isinstance(item, ResearchEvidence)}

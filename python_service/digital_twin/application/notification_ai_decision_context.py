@@ -1,0 +1,134 @@
+"""Prepare bounded internal observations for the notification AI judge."""
+
+from __future__ import annotations
+
+import time
+from collections import OrderedDict
+from copy import deepcopy
+from typing import Dict, List
+
+from ..domain.ai_inference_queue import notification_ai_subject
+from ..domain.investment_brain import canonical_investment_timestamp
+from ..domain.message_types import INVESTMENT_INSIGHT
+from ..domain.portfolio_ontology_temporal_concepts import (
+    parse_temporal_windows,
+    temporal_window_values,
+)
+
+
+AI_INTERNAL_DATA_VERSION = "notification-ai-internal-data-v1"
+TEMPORAL_AI_KEYS = (
+    "windowKey", "windowType", "lookbackDays", "lookbackMinutes",
+    "sampleCount", "validObservationCount", "requiredSampleCount",
+    "coveredSessionCount", "requiredSessionCount", "hasSufficientHistory",
+    "coverageRatio", "latestObservationQuality", "observationSource",
+    "observationGranularity", "firstObservedAt", "lastObservedAt",
+    "startPrice", "currentPrice", "priceChangePct", "peakPrice", "troughPrice",
+    "drawdownFromPeakPct", "reboundFromTroughPct", "priorPriceChangePct",
+    "recentPriceChangePct", "priceVelocityChangePct", "consecutiveDeclineCount",
+    "consecutiveAdvanceCount", "directionChangeCount", "ma20DistanceStart",
+    "ma20DistanceEnd", "ma20DistanceChange", "ma20ReclaimCount", "ma20BreakCount",
+    "ma60DistanceStart", "ma60DistanceEnd", "volumeRatioEnd", "tradeStrengthEnd",
+    "bidAskImbalanceEnd", "smartMoneyObservationCount",
+    "smartMoneyDistinctObservationCount", "smartMoneyDataState", "smartMoneyNetLatest",
+    "smartMoneyNetChange",
+)
+
+
+def compact_temporal_window(values: Dict[str, object]) -> Dict[str, object]:
+    return {
+        key: values.get(key)
+        for key in TEMPORAL_AI_KEYS
+        if values.get(key) not in (None, "", [], {})
+    }
+
+
+class NotificationAIDecisionContextEnricher:
+    """Load one subject's exact time-series windows before immutable queue capture."""
+
+    def __init__(self, time_series_store=None, settings: Dict[str, object] = None):
+        self.time_series_store = time_series_store
+        self.settings = dict(settings or {})
+        self._cache = OrderedDict()
+
+    def cache_max_entries(self) -> int:
+        try:
+            value = int(float(str(self.settings.get("notificationAiInternalDataCacheMaxEntries") or 256)))
+        except (TypeError, ValueError):
+            value = 256
+        return max(1, min(2048, value))
+
+    def enabled(self) -> bool:
+        return str(self.settings.get("notificationAiInternalDataEnabled", "1")).strip().lower() not in {
+            "0", "false", "no", "off", "disabled",
+        }
+
+    def __call__(self, job) -> None:
+        if getattr(job, "message_type", "") != INVESTMENT_INSIGHT or not self.enabled():
+            return
+        context = dict(getattr(job, "context", {}) or {})
+        if context.get("notificationAiInternalData"):
+            return
+        subject = notification_ai_subject(context)
+        symbol = str(subject.get("symbol") or "").upper().strip()
+        relation = context.get("ontologyRelationContext") if isinstance(context.get("ontologyRelationContext"), dict) else {}
+        raw_as_of = relation.get("inferenceGenerationAt") or context.get("referenceDate") or ""
+        as_of = canonical_investment_timestamp(raw_as_of)
+        started = time.monotonic()
+        audit = {
+            "status": "unavailable",
+            "source": "market-time-series",
+            "symbol": symbol,
+            "asOf": as_of,
+            "requestedWindowCount": 0,
+            "loadedWindowCount": 0,
+            "loadMs": 0,
+            "cacheHit": False,
+        }
+        windows: List[Dict[str, object]] = []
+        cache_key = (str(getattr(job, "account_id", "") or context.get("accountId") or ""), symbol, as_of)
+        try:
+            if not symbol:
+                audit["reason"] = "subject-symbol-missing"
+            elif not self.time_series_store or not hasattr(self.time_series_store, "load_temporal_windows"):
+                audit["reason"] = "time-series-store-unavailable"
+            elif cache_key in self._cache:
+                cached = deepcopy(self._cache.pop(cache_key))
+                self._cache[cache_key] = cached
+                windows = list(cached.get("temporalWindows") or [])
+                audit.update(dict(cached.get("audit") or {}))
+                audit["cacheHit"] = True
+                audit["status"] = "ready" if windows else "partial"
+            else:
+                definitions = parse_temporal_windows(self.settings.get("temporalWindowPeriods"))
+                audit["requestedWindowCount"] = len(definitions)
+                loaded = self.time_series_store.load_temporal_windows(
+                    str(getattr(job, "account_id", "") or context.get("accountId") or ""),
+                    [symbol],
+                    definitions,
+                    as_of=as_of,
+                )
+                rows_by_window = (loaded or {}).get(symbol) or {}
+                for definition in definitions:
+                    rows = list(rows_by_window.get(definition.key) or [])
+                    if not rows:
+                        continue
+                    windows.append(compact_temporal_window(temporal_window_values(rows, definition)))
+                audit["loadedWindowCount"] = len(windows)
+                audit["status"] = "ready" if windows else "partial"
+                if not windows:
+                    audit["reason"] = "no-observations-at-reference-time"
+        except Exception as error:  # noqa: BLE001 - AI can continue with graph context.
+            audit["status"] = "error"
+            audit["reason"] = str(error)[:180]
+        audit["loadMs"] = int((time.monotonic() - started) * 1000)
+        if audit.get("status") in {"ready", "partial"} and not audit.get("cacheHit"):
+            self._cache[cache_key] = deepcopy({"temporalWindows": windows, "audit": audit})
+            while len(self._cache) > self.cache_max_entries():
+                self._cache.popitem(last=False)
+        context["notificationAiInternalData"] = {
+            "schemaVersion": AI_INTERNAL_DATA_VERSION,
+            "temporalWindows": windows,
+            "audit": audit,
+        }
+        job.context = context

@@ -573,6 +573,11 @@ def build_notification_reverse_reasoning_trace(
             "promptHash": _text(ai_execution.get("promptHash"), 80),
             "promptBytes": int(ai_execution.get("promptBytes") or 0),
             "prompt": str(ai_execution.get("prompt") or ""),
+            "decisionBriefVersion": _text(ai_execution.get("decisionBriefVersion"), 120),
+            "decisionBrief": _dict(ai_execution.get("decisionBrief")),
+            "executionProfile": _dict(ai_execution.get("executionProfile")),
+            "internalDataAudit": _dict(ai_execution.get("internalDataAudit")),
+            "researchCycle": _dict(ai_execution.get("researchCycle")),
             "responseSource": _text(
                 ai_execution.get("responseSource") or ai.get("source"),
                 180,

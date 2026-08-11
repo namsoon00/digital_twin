@@ -19387,7 +19387,9 @@
       aiExecution.executed ? "실행됨" : "실행 안 함",
       aiExecution.model || "",
       aiExecution.reasoningEffort || "",
+      aiExecution.executionProfile && aiExecution.executionProfile.name ? aiExecution.executionProfile.name : "",
       aiExecution.promptVersion || "",
+      aiExecution.decisionBriefVersion || "",
       aiExecution.latencyMs ? formatInteger(aiExecution.latencyMs) + "ms" : "",
       aiExecution.promptBytes ? formatInteger(aiExecution.promptBytes) + " bytes" : ""
     ].filter(Boolean);
@@ -19397,6 +19399,15 @@
     }
     if (aiExecution.prompt) {
       aiExecutionBody += '<details class="notification-ai-prompt-audit"><summary>실제 AI 입력 프롬프트</summary><pre>' + escapeHtml(aiExecution.prompt) + '</pre></details>';
+    }
+    if (aiExecution.decisionBrief && Object.keys(aiExecution.decisionBrief).length) {
+      aiExecutionBody += '<details class="notification-ai-prompt-audit"><summary>AI Decision Brief</summary><pre>' + escapeHtml(JSON.stringify(aiExecution.decisionBrief, null, 2)) + '</pre></details>';
+    }
+    if (aiExecution.internalDataAudit && Object.keys(aiExecution.internalDataAudit).length) {
+      aiExecutionBody += '<details class="notification-ai-prompt-audit"><summary>내부 데이터 조회 감사</summary><pre>' + escapeHtml(JSON.stringify(aiExecution.internalDataAudit, null, 2)) + '</pre></details>';
+    }
+    if (aiExecution.researchCycle && Object.keys(aiExecution.researchCycle).length) {
+      aiExecutionBody += '<details class="notification-ai-prompt-audit"><summary>AI 조사 사이클</summary><pre>' + escapeHtml(JSON.stringify(aiExecution.researchCycle, null, 2)) + '</pre></details>';
     }
     var executionRuns = Array.isArray(executionLedger.runs) ? executionLedger.runs : [];
     var executionLedgerBody = executionRuns.map(function (run) {

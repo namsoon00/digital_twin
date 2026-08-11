@@ -41,6 +41,7 @@ from ..application.news_collection_service import NewsCollectionRunner
 from ..application.news_ai_analysis_service import NewsAiAnalysisService
 from ..application.news_analysis_enrichment_service import NewsAnalysisEnrichmentRunner
 from ..application.news_digest_service import NewsDigestEnqueuer, NewsDigestEventReconciler
+from ..application.notification_ai_decision_context import NotificationAIDecisionContextEnricher
 from ..application.monitoring_service import MonitorRunner
 from ..application.notification_service import (
     CompositeNotificationContextEnricher,
@@ -388,6 +389,10 @@ def build_notification_queue_runner(dry_run: bool = False, lane: str = "all") ->
         settings,
     )
     opinion_enricher = NotificationAIOpinionEnricher(settings)
+    ai_decision_context_enricher = NotificationAIDecisionContextEnricher(
+        stores.market_time_series_store(settings),
+        settings,
+    )
     ai_request_enqueuer = None
     news_digest_reconciler = None
     if not dry_run:
@@ -399,6 +404,7 @@ def build_notification_queue_runner(dry_run: bool = False, lane: str = "all") ->
                 disclosure_enricher,
                 research_enricher,
                 opinion_enricher,
+                ai_decision_context_enricher,
             ),
             settings,
             decision_episode_store=stores.investment_decision_episode_store(settings),
@@ -427,6 +433,7 @@ def build_notification_queue_runner(dry_run: bool = False, lane: str = "all") ->
         context_enricher=CompositeNotificationContextEnricher(
             identity_enricher,
             disclosure_enricher,
+            ai_decision_context_enricher,
             NotificationAIValidatedGateEnricher(
                 notification_ai_reviewer_from_settings(settings) if dry_run else None,
                 settings,

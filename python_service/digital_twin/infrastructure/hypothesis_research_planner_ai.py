@@ -46,11 +46,14 @@ class CommandHypothesisResearchPlanningAdvisor(HypothesisResearchPlanningAdvisor
 
 def hypothesis_research_planning_prompt(context: Dict[str, object]) -> str:
     return (
-        "당신은 투자 가설의 증거 수집 계획자입니다. 입력의 TypeDB 경쟁 가설을 새로 판단하거나 투자 행동을 추천하지 마세요. "
-        "새 사실, 새 가설, 새 출처, 새 근거 유형을 만들지 말고 각 가설의 allowedCollectionPolicy 안에서만 조사 작업을 제안하세요. "
-        "기본 조사 작업은 제거할 수 없으며, 당신의 출력은 추가 조사 계획일 뿐 투자 판단에 직접 쓰이지 않습니다. "
-        "출력은 JSON 객체 하나입니다. focusHypothesisIds, tasks, unresolvedQuestions만 포함하세요. tasks 각 항목은 "
-        "hypothesisId, counterHypothesisIds, question, purpose, requiredEvidenceTypes, sourceTypes, maxAgeMinutes, decisionRelevance를 포함합니다. "
+        "당신은 투자 가설의 AI 조사 분석가입니다. 투자 행동을 선택하거나 아직 수집하지 않은 사실을 사실처럼 쓰지 마세요. "
+        "기존 TypeDB 가설을 검증할 수 있고, 입력의 dataCoverageMap에 없는 정보가 결론을 바꿀 수 있다면 새로운 조사 질문도 제안할 수 있습니다. "
+        "새 조사 질문은 hypothesisId를 비우고 discoveryKind, decisionChangingRationale, expectedDecisionImpact를 반드시 채웁니다. "
+        "sourceTypes와 requiredEvidenceTypes는 dataCoverageMap의 승인 목록만 사용하고, queryTerms에는 기업명과 결합할 구체적인 검색어만 넣습니다. "
+        "기본 조사 작업은 제거할 수 없으며 출력은 조사 계획일 뿐 투자 판단이나 새 규칙이 아닙니다. "
+        "출력은 JSON 객체 하나입니다. initialAssessment, decisionChangingGaps, focusHypothesisIds, tasks, unresolvedQuestions를 포함하세요. tasks 각 항목은 "
+        "hypothesisId, counterHypothesisIds, discoveryKind, question, purpose, decisionChangingRationale, expectedDecisionImpact, "
+        "requiredEvidenceTypes, sourceTypes, queryTerms, maxAgeMinutes, decisionRelevance를 포함합니다. "
         "유효한 추가 작업이 없으면 빈 배열을 반환하세요.\n"
         + json.dumps(context, ensure_ascii=False, sort_keys=True)
     )
@@ -73,6 +76,8 @@ def planning_payload_from_text(text: str) -> Dict[str, object]:
     if not isinstance(payload, dict):
         return {}
     return {
+        "initialAssessment": str(payload.get("initialAssessment") or "")[:500],
+        "decisionChangingGaps": list(payload.get("decisionChangingGaps") or [])[:8],
         "focusHypothesisIds": list(payload.get("focusHypothesisIds") or [])[:8],
         "tasks": [item for item in payload.get("tasks") or [] if isinstance(item, dict)][:3],
         "unresolvedQuestions": list(payload.get("unresolvedQuestions") or [])[:8],

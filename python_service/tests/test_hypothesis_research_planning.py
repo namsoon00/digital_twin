@@ -109,9 +109,13 @@ class RecordingGateway:
     def __init__(self, evidence):
         self.evidence = evidence
         self.source_types = []
+        self.targets = []
+        self.research_tasks = []
 
-    def collect_for_target(self, target, source_types=None):
+    def collect_for_target(self, target, source_types=None, research_tasks=None):
         self.source_types = list(source_types or [])
+        self.targets.append(target)
+        self.research_tasks = list(research_tasks or [])
         return [self.evidence], [{"provider": "test", "status": "ok"}]
 
 
@@ -197,6 +201,53 @@ class HypothesisResearchPlanningTests(unittest.TestCase):
         self.assertEqual(2, len(planned["tasks"]))
         self.assertTrue(audit["rejectedGuidance"])
 
+    def test_ai_guidance_accepts_bounded_open_discovery_question(self):
+        context = brain_context()
+        brief = hypothesis_research_brief_from_brain(context)
+        guidance = {
+            "initialAssessment": "현재 가설만으로는 동종 기업 대비 약세 원인을 설명하지 못합니다.",
+            "decisionChangingGaps": ["주요 고객사의 투자 축소 여부"],
+            "tasks": [{
+                "hypothesisId": "",
+                "discoveryKind": "novel-connection",
+                "question": "주요 고객사의 설비투자 변화가 삼성전자 수요 전망을 바꾸는가?",
+                "purpose": "현재 가격 약세의 규칙 밖 원인을 조사합니다.",
+                "decisionChangingRationale": "수요 전망이 약해졌다면 보유 판단을 축소 검토로 바꿀 수 있습니다.",
+                "expectedDecisionImpact": ["HOLD", "TRIM"],
+                "requiredEvidenceTypes": ["customer-event", "industry-demand"],
+                "sourceTypes": ["company-ir", "news-full-text"],
+                "queryTerms": ["customer capex", "memory demand"],
+                "maxAgeMinutes": 1440,
+                "decisionRelevance": "direct",
+            }],
+        }
+
+        planned, audit = apply_ai_research_guidance(context["researchPlan"], brief, guidance)
+
+        self.assertEqual("ai-augmented", audit["status"])
+        self.assertEqual(1, len(audit["openDiscoveryTaskIds"]))
+        task = planned["tasks"][-1]
+        self.assertEqual([], task["relatedHypothesisIds"])
+        self.assertTrue(task["decisionChanging"])
+        self.assertEqual(["HOLD", "TRIM"], task["expectedDecisionImpact"])
+        self.assertEqual(["customer capex", "memory demand"], task["queryTerms"])
+
+    def test_research_target_combines_identity_with_ai_query_terms(self):
+        target = NewsCollectionTarget(
+            "005930",
+            "삼성전자",
+            "KR",
+            "KRW",
+            "반도체",
+            research_query_terms=["customer capex", "memory demand"],
+        )
+
+        query = target.search_query()
+
+        self.assertIn("삼성전자", query)
+        self.assertIn('"customer capex"', query)
+        self.assertIn('"memory demand"', query)
+
     def test_orchestrator_records_ai_planning_audit_without_granting_decision_authority(self):
         planner = HypothesisResearchPlanningService(FixedPlanner(self.valid_guidance()), settings={})
         observed_at = utc_now_iso()
@@ -244,6 +295,69 @@ class HypothesisResearchPlanningTests(unittest.TestCase):
         self.assertIn("official-filing", gateway.source_types)
         self.assertNotIn("unapproved-source", gateway.source_types)
         self.assertEqual(1, len(store.saved))
+
+    def test_orchestrator_passes_ai_discovery_terms_to_research_gateway(self):
+        observed_at = utc_now_iso()
+        evidence = ResearchEvidence(
+            evidence_id="evidence:customer-demand",
+            symbol="005930",
+            kind="news",
+            source="Reuters",
+            title="Memory customer spending update",
+            summary="A major customer updated its memory demand and capital spending plan.",
+            url="https://example.com/customer-demand",
+            observed_at=observed_at,
+            published_at=observed_at,
+            raw_payload={
+                "relationScope": "direct",
+                "sourceTrustState": "trusted",
+                "dataState": "sufficient",
+                "validationState": "ready",
+                "articleText": (
+                    "A major customer published a detailed capital spending update. "
+                    "The document identifies memory demand, delivery timing, supplier "
+                    "requirements, and the business assumptions needed for verification."
+                ),
+            },
+        )
+        guidance = {
+            "tasks": [{
+                "hypothesisId": "",
+                "discoveryKind": "novel-connection",
+                "question": "고객 투자 변화가 메모리 수요를 바꾸는가?",
+                "purpose": "규칙 밖 수요 연결을 확인합니다.",
+                "decisionChangingRationale": "수요 약화가 확인되면 보유 판단을 낮출 수 있습니다.",
+                "expectedDecisionImpact": ["HOLD", "TRIM"],
+                "requiredEvidenceTypes": ["customer-event", "industry-demand"],
+                "sourceTypes": ["news-full-text"],
+                "queryTerms": ["customer capex", "memory demand"],
+                "maxAgeMinutes": 1440,
+                "decisionRelevance": "direct",
+            }],
+        }
+        planner = HypothesisResearchPlanningService(FixedPlanner(guidance), settings={})
+        gateway = RecordingGateway(evidence)
+        service = InvestmentResearchOrchestrationService(
+            evidence_repository=MemoryEvidenceStore(),
+            research_gateway=gateway,
+            hypothesis_research_planner=planner,
+            settings={
+                "investmentBrainResearchCooldownMinutes": 0,
+                "investmentBrainResearchMinimumVerifiedCount": 1,
+            },
+        )
+        question = InvestmentQuestion.create("삼성전자 수요 연결을 조사해줘", "005930", "삼성전자", "account-1")
+
+        service.run(
+            question,
+            NewsCollectionTarget("005930", "삼성전자", "KR", "KRW", "반도체"),
+            brain_context(),
+            account_id="account-1",
+            force=True,
+        )
+
+        self.assertEqual(["customer capex", "memory demand"], gateway.targets[0].research_query_terms)
+        self.assertEqual("novel-connection", gateway.research_tasks[-1]["discoveryKind"])
 
     def test_cached_research_does_not_invoke_ai_planner_or_change_plan(self):
         observed_at = utc_now_iso()

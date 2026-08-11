@@ -35,7 +35,9 @@ class ExistingApiResearchGateway:
         self,
         target: NewsCollectionTarget,
         source_types: Iterable[str] = None,
+        research_tasks: Iterable[Dict[str, object]] = None,
     ) -> Tuple[List[ResearchEvidence], List[Dict[str, object]]]:
+        del research_tasks
         requested = normalized_source_types(source_types)
         if requested and not requested.intersection(self.SUPPORTED_SOURCE_TYPES):
             return [], [{
@@ -121,14 +123,22 @@ class CompositeInvestmentResearchGateway:
         self,
         target: NewsCollectionTarget,
         source_types: Iterable[str] = None,
+        research_tasks: Iterable[Dict[str, object]] = None,
     ) -> Tuple[List[ResearchEvidence], List[Dict[str, object]]]:
         evidence_by_id: Dict[str, ResearchEvidence] = {}
         statuses: List[Dict[str, object]] = []
         for gateway in self.gateways:
             try:
-                items, gateway_statuses = gateway.collect_for_target(target, source_types=source_types)
+                items, gateway_statuses = gateway.collect_for_target(
+                    target,
+                    source_types=source_types,
+                    research_tasks=research_tasks,
+                )
             except TypeError:
-                items, gateway_statuses = gateway.collect_for_target(target)
+                try:
+                    items, gateway_statuses = gateway.collect_for_target(target, source_types=source_types)
+                except TypeError:
+                    items, gateway_statuses = gateway.collect_for_target(target)
             except Exception as error:  # noqa: BLE001 - one research source must not block the others.
                 statuses.append({
                     "source": gateway.__class__.__name__,

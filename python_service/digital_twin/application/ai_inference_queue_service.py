@@ -11,8 +11,13 @@ from typing import Dict
 from ..domain.ai_inference_queue import AIInferenceRequest, AIInferenceResult
 from ..domain.investment_brain import decision_episode_from_context
 from ..domain.message_types import INVESTMENT_INSIGHT
+from ..domain.notification_ai_decision_brief import (
+    AI_DECISION_PROMPT_VERSION,
+    build_notification_ai_decision_prompt,
+    notification_ai_decision_brief,
+    notification_ai_execution_profile,
+)
 from ..domain.notification_ai_gate_validation import (
-    build_notification_ai_gate_prompt,
     local_validated_ai_response,
 )
 from ..domain.notifications import NotificationJob
@@ -62,11 +67,14 @@ class NotificationAIRequestEnqueuer:
                 account_id=job.account_id,
             )
         context["ontologyQualityGate"] = ontology_quality_gate_context(context, self.settings)
+        execution_profile = notification_ai_execution_profile(context, self.settings)
+        context["notificationAiExecutionProfile"] = execution_profile
         request = AIInferenceRequest.create(
             job,
             context,
             model=str(self.settings.get("notificationAiModel") or "gpt-5.6-sol"),
-            reasoning_effort=str(self.settings.get("notificationAiReasoningEffort") or "max"),
+            reasoning_effort=str(execution_profile.get("reasoningEffort") or "high"),
+            prompt_version=AI_DECISION_PROMPT_VERSION,
         )
         return self.queue.enqueue(job, request)
 
@@ -133,9 +141,21 @@ class AIInferenceQueueRunner:
                 account_id=request.account_id,
                 symbol=request.symbol,
             )
-        prompt = build_notification_ai_gate_prompt(
+        execution_profile = dict(context.get("notificationAiExecutionProfile") or {})
+        if not execution_profile:
+            execution_profile = notification_ai_execution_profile(context, self.settings)
+            context["notificationAiExecutionProfile"] = execution_profile
+        execution_profile["reasoningEffort"] = request.reasoning_effort
+        decision_brief = notification_ai_decision_brief(context, self.settings, execution_profile)
+        prompt = build_notification_ai_decision_prompt(
             context,
-            max_prompt_bytes=self.max_prompt_bytes,
+            self.settings,
+            max_prompt_bytes=min(
+                self.max_prompt_bytes,
+                int(execution_profile.get("maxPromptBytes") or self.max_prompt_bytes),
+            ),
+            profile=execution_profile,
+            decision_brief=decision_brief,
         )
         prompt_bytes = len(prompt.encode("utf-8"))
         prompt_hash = hashlib.sha256(prompt.encode("utf-8")).hexdigest()
@@ -150,8 +170,11 @@ class AIInferenceQueueRunner:
         heartbeat.start()
         started = time.monotonic()
         review_error = None
+        review_context = dict(context)
+        review_context["_notificationAiPreparedPrompt"] = prompt
+        review_context["_notificationAiPreparedDecisionBrief"] = decision_brief
         try:
-            response = self.reviewer.review(context)
+            response = self.reviewer.review(review_context)
         except Exception as error:  # noqa: BLE001 - retry policy is applied below.
             review_error = error
             response = None
@@ -179,7 +202,7 @@ class AIInferenceQueueRunner:
         if review_error is not None:
             response = local_validated_ai_response(context, source="local fallback after max retries")
             response.validation_warnings.append(
-                "MAX AI 추론이 " + str(request.attempts) + "회 실패해 TypeDB 근거 기반 로컬 설명을 사용했습니다: "
+                "AI 추론이 " + str(request.attempts) + "회 실패해 TypeDB 근거 기반 로컬 설명을 사용했습니다: "
                 + str(review_error)[:240]
             )
 
@@ -191,7 +214,7 @@ class AIInferenceQueueRunner:
         episode = self.decision_episode_context(request, context, response)
         enriched = context_with_validated_ai_response(context, response, self.settings)
         enriched["notificationAiExecutionAudit"] = {
-            "version": "notification-ai-execution-audit-v1",
+            "version": "notification-ai-execution-audit-v2",
             "status": "fallback" if "fallback" in str(response.source or "").lower() else "completed",
             "requestId": request.request_id,
             "notificationJobId": request.notification_job_id,
@@ -201,6 +224,19 @@ class AIInferenceQueueRunner:
             "promptHash": prompt_hash,
             "promptBytes": prompt_bytes,
             "prompt": prompt,
+            "decisionBriefVersion": decision_brief.get("schemaVersion"),
+            "decisionBrief": decision_brief,
+            "executionProfile": execution_profile,
+            "internalDataAudit": (
+                (context.get("notificationAiInternalData") or {}).get("audit")
+                if isinstance(context.get("notificationAiInternalData"), dict)
+                else {}
+            ),
+            "researchCycle": (
+                (context.get("ontologyRelationContext") or {}).get("researchCycle")
+                if isinstance(context.get("ontologyRelationContext"), dict)
+                else context.get("researchCycle") or {}
+            ),
             "responseSource": str(response.source or ""),
             "validationState": str(response.validation_state or ""),
             "latencyMs": latency_ms,

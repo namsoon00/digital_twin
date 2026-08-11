@@ -332,10 +332,23 @@ function checkWorkflowConsoleContract() {
   assertOk(/\.work-detail-body\s*\{[\s\S]*overflow: visible;/.test(styles), "상세 본문에 중첩 스크롤이 남아 있습니다.");
   assertOk(styles.indexOf("Centered overlay alignment for legacy detail and editor dialogs") >= 0 && code.indexOf("activeOverlayDialog") >= 0 && code.indexOf("syncOverlayPageState") >= 0 && styles.indexOf("html.oa-overlay-open") >= 0, "기존 상세·편집 팝업이 공통 중앙 레이어와 키보드·스크롤 계약을 따르지 않습니다.");
   assertOk(styles.indexOf("Workflow console continuity and detail navigation pass") >= 0 && styles.indexOf(".oa-detail-queue") >= 0, "전체 목록 상세와 포커스 스타일이 없습니다.");
+  const mobileViewportContractStart = styles.indexOf("/* Mobile viewport contract:");
+  const mobileViewportContract = mobileViewportContractStart >= 0 ? styles.slice(mobileViewportContractStart) : "";
   assertOk(
-    /styles\.css\?v=20260722-performance-ux-v\d+/.test(indexHtml) &&
-      /app\.js\?v=20260723-calendar-discovery-v\d+/.test(indexHtml),
-    "캘린더 탐색 정적 자산 cache key가 반영되지 않았습니다."
+    mobileViewportContractStart >= 0 &&
+      code.indexOf("investment-calendar-tool-menu") >= 0 &&
+      code.indexOf("investmentCalendarEventTimeLabel(event) + \" \"") >= 0 &&
+      /\.console-shell \.app-nav-tabs\s*\{[\s\S]*scroll-snap-type: x proximity;/.test(mobileViewportContract) &&
+      /\.single-screen-flow-map\s*\{[\s\S]*display: none;/.test(mobileViewportContract) &&
+      /\.investment-calendar-kpis\s*\{[\s\S]*grid-template-columns: repeat\(2, minmax\(0, 1fr\)\);/.test(mobileViewportContract) &&
+      /\.investment-calendar-month-weekdays,[\s\S]*\.investment-calendar-month-grid\s*\{[\s\S]*width: 100%;[\s\S]*min-width: 0;/.test(mobileViewportContract) &&
+      /\.investment-calendar-day-cell\s*\{[\s\S]*min-height: 60px;/.test(mobileViewportContract),
+    "모바일 네비게이션/캘린더 폭·밀도 계약이 없습니다."
+  );
+  assertOk(
+    /styles\.css\?v=20260812-mobile-layout-v\d+/.test(indexHtml) &&
+      /app\.js\?v=20260812-mobile-layout-v\d+/.test(indexHtml),
+    "모바일 레이아웃 정적 자산 cache key가 반영되지 않았습니다."
   );
 }
 
@@ -563,6 +576,14 @@ function checkFrontendAdminRender() {
       /\.investment-calendar-month-grid\s*\{[\s\S]*grid-template-columns: repeat\(7, minmax\(0, 1fr\)\);/.test(styles) &&
       /\.investment-calendar-primary-grid\s*\{[\s\S]*display: grid;[\s\S]*gap: var\(--ds-page-gap\);/.test(styles) &&
       /\.investment-calendar-candidate-panel \.investment-calendar-list\s*\{[\s\S]*grid-template-columns: repeat\(auto-fit, minmax\(320px, 1fr\)\);/.test(styles) &&
+      code.indexOf("investment-calendar-tool-menu") >= 0 &&
+      code.indexOf("investmentCalendarEventTimeLabel(event) + \" \"") >= 0 &&
+      styles.indexOf("/* Mobile viewport contract:") >= 0 &&
+      /\.investment-calendar-month-weekdays,[\s\S]*\.investment-calendar-month-grid\s*\{[\s\S]*width: 100%;[\s\S]*min-width: 0;/.test(styles) &&
+      /\.investment-calendar-day-cell\s*\{[\s\S]*min-height: 60px;/.test(styles) &&
+      /\.investment-calendar-kpis\s*\{[\s\S]*grid-template-columns: repeat\(2, minmax\(0, 1fr\)\);/.test(styles) &&
+      /\.console-shell \.app-nav-tabs\s*\{[\s\S]*scroll-snap-type: x proximity;/.test(styles) &&
+      /\.single-screen-flow-map\s*\{[\s\S]*display: none;/.test(styles) &&
       code.indexOf("investmentActionPageInfo") >= 0 &&
       code.indexOf("data-investment-action-query") >= 0 &&
       code.indexOf("data-investment-action-page") >= 0 &&

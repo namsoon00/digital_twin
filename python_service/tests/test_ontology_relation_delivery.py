@@ -186,6 +186,54 @@ class OntologyRelationDeliveryTests(unittest.TestCase):
 
         self.assertEqual("state_cooldown", found["deliverySuppressionReason"])
         self.assertEqual(previous.created_at, found["_relationPredecessorSentAt"])
+        self.assertEqual("suppressed", found["_relationPredecessorStatus"])
+
+    def test_relation_predecessor_carries_matching_initial_baseline_through_later_suppression(self):
+        baseline_context = self.context()
+        baseline_context["deliverySuppressionReason"] = "initial_graph_baseline"
+        baseline_context["ontologyRelationFingerprint"] = ontology_relation_delivery_metadata(baseline_context)["fingerprint"]
+        baseline = self.job(baseline_context)
+        baseline.status = "suppressed"
+        later_context = self.context()
+        later_context["deliverySuppressionReason"] = "state_cooldown"
+        later_context["ontologyRelationFingerprint"] = ontology_relation_delivery_metadata(later_context)["fingerprint"]
+        later = self.job(later_context)
+        later.status = "suppressed"
+        later.created_at = "2026-08-11T00:20:00Z"
+        baseline.created_at = "2026-08-11T00:00:00Z"
+        current = self.job(self.context())
+        rows = [
+            {
+                "text": later.text,
+                "payload_json": json.dumps(MySQLNotificationJobStore.compact_job_payload(later)),
+                "created_at": later.created_at,
+                "status": later.status,
+            },
+            {
+                "text": baseline.text,
+                "payload_json": json.dumps(MySQLNotificationJobStore.compact_job_payload(baseline)),
+                "created_at": baseline.created_at,
+                "status": baseline.status,
+            },
+        ]
+
+        class Result:
+            def fetchall(self):
+                return rows
+
+        class Connection:
+            def execute(self, *_args, **_kwargs):
+                return Result()
+
+        store = MySQLNotificationJobStore.__new__(MySQLNotificationJobStore)
+        found = store.relation_predecessor_with_connection(
+            Connection(),
+            current,
+            default_notification_rule("investmentInsight"),
+        )
+
+        self.assertEqual(later.created_at, found["_relationPredecessorSentAt"])
+        self.assertEqual(baseline.created_at, found["_relationBaselineObservedAt"])
 
     def test_price_only_change_keeps_relation_delivery_fingerprint_and_cooldown_group(self):
         before = self.context(current_price=70000)

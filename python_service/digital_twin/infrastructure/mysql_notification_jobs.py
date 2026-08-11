@@ -734,6 +734,12 @@ class MySQLNotificationJobStore(MySQLOperationalConnection):
             """,
             (job.message_type, cutoff_text, NOTIFICATION_HISTORY_LOOKBACK_LIMIT),
         ).fetchall()
+        selected_context: Dict[str, object] = {}
+        selected_at = ""
+        selected_status = ""
+        selected_fingerprint = ""
+        baseline_observed_at = ""
+        current_fingerprint = str(metadata.get("fingerprint") or "").strip()
         for row in rows:
             previous = self.job_from_row(row)
             if previous.job_id == job.job_id:
@@ -747,9 +753,39 @@ class MySQLNotificationJobStore(MySQLOperationalConnection):
                     continue
             elif status != "done" and not notification_history_is_recent_in_flight(row):
                 continue
-            context["_relationPredecessorSentAt"] = str(row["created_at"] or previous.created_at or "")
-            return context
-        return {}
+            created_at = str(row["created_at"] or previous.created_at or "")
+            previous_fingerprint = str(
+                context.get("ontologyRelationFingerprint")
+                or (context.get("ontologyRelationDelivery") or {}).get("fingerprint")
+                or ontology_relation_delivery_metadata(context).get("fingerprint")
+                or ""
+            ).strip()
+            carried_baseline_fingerprint = str(context.get("_relationBaselineFingerprint") or "").strip()
+            carried_baseline_at = str(context.get("_relationBaselineObservedAt") or "").strip()
+            if (
+                carried_baseline_at
+                and carried_baseline_fingerprint == current_fingerprint
+                and not baseline_observed_at
+            ):
+                baseline_observed_at = carried_baseline_at
+            if (
+                str(context.get("deliverySuppressionReason") or "") == "initial_graph_baseline"
+                and previous_fingerprint == current_fingerprint
+            ):
+                baseline_observed_at = created_at
+            if not selected_context:
+                selected_context = context
+                selected_at = created_at
+                selected_status = status
+                selected_fingerprint = previous_fingerprint
+        if not selected_context:
+            return {}
+        selected_context["_relationPredecessorSentAt"] = selected_at
+        selected_context["_relationPredecessorStatus"] = selected_status
+        if baseline_observed_at and selected_fingerprint == current_fingerprint:
+            selected_context["_relationBaselineObservedAt"] = baseline_observed_at
+            selected_context["_relationBaselineFingerprint"] = current_fingerprint
+        return selected_context
 
     def evaluate_job_with_connection(self, connection, job: NotificationJob):
         relation_delivery = ontology_relation_delivery_metadata(job.context or {})
@@ -772,12 +808,32 @@ class MySQLNotificationJobStore(MySQLOperationalConnection):
         )
         relation_previous_context = self.relation_predecessor_with_connection(connection, job, rule)
         predecessor_sent_at = str(relation_previous_context.get("_relationPredecessorSentAt") or "")
-        if predecessor_sent_at and not last_sent_at:
+        predecessor_status = str(relation_previous_context.get("_relationPredecessorStatus") or "")
+        baseline_observed_at = str(relation_previous_context.get("_relationBaselineObservedAt") or "")
+        baseline_confirmation_enabled = any(
+            condition.enabled and condition.condition_type == "baseline_age_gte"
+            for condition in rule.similarity_bypass_conditions or []
+        )
+        if predecessor_sent_at and not last_sent_at and not (
+            predecessor_status == "suppressed"
+            and baseline_confirmation_enabled
+            and baseline_observed_at
+        ):
             # A changed graph fingerprint can be a harmless relation-row
             # rebuild. Keep the most recent same-subject timestamp so the
             # state cooldown can distinguish that case from a true new alert.
             last_sent_at = predecessor_sent_at
             recent_count = max(1, int(recent_count or 0))
+        cooldown_previous_context = previous_context
+        if baseline_observed_at:
+            relation_previous_context["_relationBaselineAgeMinutes"] = age_minutes_since(baseline_observed_at)
+            cooldown_previous_context = relation_previous_context
+            context = dict(job.context or {})
+            context["_relationBaselineObservedAt"] = baseline_observed_at
+            context["_relationBaselineFingerprint"] = str(
+                relation_previous_context.get("_relationBaselineFingerprint") or ""
+            )
+            job.context = context
         relation_diff = ontology_relation_delivery_diff(job.context or {}, relation_previous_context)
         if relation_delivery:
             context = dict(job.context or {})
@@ -804,7 +860,7 @@ class MySQLNotificationJobStore(MySQLOperationalConnection):
             decision,
             rule,
             recent_count,
-            previous_context,
+            cooldown_previous_context,
             last_sent_at,
             age_minutes_since(last_sent_at),
             job,

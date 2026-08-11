@@ -246,6 +246,13 @@ def default_similarity_bypass_conditions(message_type: str) -> List[SimilarityBy
                 field="notificationAiValidatedResponse.actionLabel,notificationAiValidatedResponse.action,aiOpinion.actionLabel,aiOpinion.action",
                 description="검증된 최종 대응이 바뀌면 다시 보냅니다.",
             ),
+            SimilarityBypassCondition(
+                "confirmed_initial_graph_state",
+                "초기 관계 상태 재확인",
+                "baseline_age_gte",
+                value=30,
+                description="처음 조용히 기록한 비실행 관계 상태가 설정 시간 이상 반복 확인되면 한 번 보냅니다.",
+            ),
         ]
     if key == "holdingTiming":
         return [

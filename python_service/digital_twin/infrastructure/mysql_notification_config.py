@@ -63,6 +63,27 @@ from .mysql_operational_helpers import (
 
 
 MARKET_OBSERVATION_SIMILARITY_MIGRATION_KEY = "notification-rule-migration:market-observation-no-similarity-v1"
+NOTIFICATION_RULE_DEFAULTS_STATE_KEY = "notification-rule-defaults:active"
+NOTIFICATION_RULE_DEFAULTS_LOCK_NAME = "orbit-alpha-notification-rule-defaults"
+
+
+def notification_rule_defaults_fingerprint() -> str:
+    payload = {
+        message_type: rule.to_dict()
+        for message_type, rule in sorted(DEFAULT_NOTIFICATION_RULES.items())
+    }
+    encoded = json.dumps(payload, ensure_ascii=True, sort_keys=True, separators=(",", ":"))
+    return hashlib.sha256(encoded.encode("utf-8")).hexdigest()[:24]
+
+
+def notification_rule_defaults_marker_matches(row, fingerprint: str) -> bool:
+    if not row:
+        return False
+    try:
+        payload = json.loads(row.get("payload_json") or "{}")
+    except (AttributeError, json.JSONDecodeError, TypeError):
+        return False
+    return str(payload.get("fingerprint") or "") == str(fingerprint or "")
 
 
 class MySQLNotificationTemplateStore(MySQLOperationalConnection):
@@ -158,87 +179,133 @@ class MySQLNotificationRuleStore(MySQLOperationalConnection):
 
     def seed_defaults(self) -> None:
         stamp = utc_now()
-        with self.transaction() as connection:
-            migration_row = connection.execute(
-                "SELECT store_id FROM app_store WHERE store_id = %s",
-                (MARKET_OBSERVATION_SIMILARITY_MIGRATION_KEY,),
+        fingerprint = notification_rule_defaults_fingerprint()
+        with self.connect() as connection:
+            current_marker = connection.execute(
+                "SELECT payload_json FROM app_store WHERE store_id = %s",
+                (NOTIFICATION_RULE_DEFAULTS_STATE_KEY,),
             ).fetchone()
-            migrate_market_observation_similarity = not bool(migration_row)
-            for message_type, rule in DEFAULT_NOTIFICATION_RULES.items():
-                connection.execute(
-                    """
-                    INSERT IGNORE INTO notification_rules (
-                        message_type, enabled, conditions_json,
-                        similarity_enabled, similarity_window_minutes,
-                        similarity_bypass_conditions_json, similarity_fields_json, state_cooldown_enabled,
-                        state_cooldown_minutes, market_hours_enabled, market_hours_markets_json, updated_at
+        if notification_rule_defaults_marker_matches(current_marker, fingerprint):
+            return
+
+        with self.connect() as lock_connection:
+            lock_row = lock_connection.execute(
+                "SELECT GET_LOCK(%s, 10) AS acquired",
+                (NOTIFICATION_RULE_DEFAULTS_LOCK_NAME,),
+            ).fetchone()
+            if int((lock_row or {}).get("acquired") or 0) != 1:
+                raise RuntimeError("Notification rule defaults lock was not acquired.")
+            try:
+                current = lock_connection.execute(
+                    "SELECT payload_json FROM app_store WHERE store_id = %s",
+                    (NOTIFICATION_RULE_DEFAULTS_STATE_KEY,),
+                ).fetchone()
+                if notification_rule_defaults_marker_matches(current, fingerprint):
+                    return
+
+                def seed(connection):
+                    self._seed_defaults_with_connection(connection, stamp)
+                    connection.execute(
+                        """
+                        INSERT INTO app_store (store_id, payload_json, updated_at)
+                        VALUES (%s, %s, %s)
+                        ON DUPLICATE KEY UPDATE payload_json = VALUES(payload_json), updated_at = VALUES(updated_at)
+                        """,
+                        (
+                            NOTIFICATION_RULE_DEFAULTS_STATE_KEY,
+                            json_dumps({"fingerprint": fingerprint, "version": "notification-rule-defaults-v1"}),
+                            stamp,
+                        ),
                     )
-                    VALUES (%s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s)
-                    """,
-                    (
-                        message_type,
-                        1 if rule.enabled else 0,
-                        json_dumps([condition.to_dict() for condition in rule.conditions]),
-                        1 if rule.similarity_enabled else 0,
-                        int(rule.similarity_window_minutes),
-                        json_dumps([condition.to_dict() for condition in rule.similarity_bypass_conditions]),
-                        json_dumps(rule.similarity_fields),
-                        1 if rule.state_cooldown_enabled else 0,
-                        int(rule.state_cooldown_minutes),
-                        1 if rule.market_hours_enabled else 0,
-                        json_dumps(rule.market_hours_markets),
-                        stamp,
-                    ),
+
+                self.transaction_with_deadlock_retry("notification-rule-default-seed", seed)
+            finally:
+                lock_connection.execute(
+                    "SELECT RELEASE_LOCK(%s)",
+                    (NOTIFICATION_RULE_DEFAULTS_LOCK_NAME,),
                 )
-                row = connection.execute("SELECT * FROM notification_rules WHERE message_type = %s", (message_type,)).fetchone()
-                if row:
-                    current = rule_from_row(row)
-                    migrated_conditions = self._migrate_default_conditions(current, rule)
-                    migrated_similarity = self._migrate_default_similarity(current, rule)
-                    migrated_market_observation_similarity = (
-                        self._migrate_legacy_market_observation_similarity(current, rule)
-                        if migrate_market_observation_similarity
-                        else False
+
+    def _seed_defaults_with_connection(self, connection, stamp: str) -> None:
+        migration_row = connection.execute(
+            "SELECT store_id FROM app_store WHERE store_id = %s",
+            (MARKET_OBSERVATION_SIMILARITY_MIGRATION_KEY,),
+        ).fetchone()
+        migrate_market_observation_similarity = not bool(migration_row)
+        for message_type, rule in DEFAULT_NOTIFICATION_RULES.items():
+            connection.execute(
+                """
+                INSERT IGNORE INTO notification_rules (
+                    message_type, enabled, conditions_json,
+                    similarity_enabled, similarity_window_minutes,
+                    similarity_bypass_conditions_json, similarity_fields_json, state_cooldown_enabled,
+                    state_cooldown_minutes, market_hours_enabled, market_hours_markets_json, updated_at
+                )
+                VALUES (%s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s)
+                """,
+                (
+                    message_type,
+                    1 if rule.enabled else 0,
+                    json_dumps([condition.to_dict() for condition in rule.conditions]),
+                    1 if rule.similarity_enabled else 0,
+                    int(rule.similarity_window_minutes),
+                    json_dumps([condition.to_dict() for condition in rule.similarity_bypass_conditions]),
+                    json_dumps(rule.similarity_fields),
+                    1 if rule.state_cooldown_enabled else 0,
+                    int(rule.state_cooldown_minutes),
+                    1 if rule.market_hours_enabled else 0,
+                    json_dumps(rule.market_hours_markets),
+                    stamp,
+                ),
+            )
+            row = connection.execute("SELECT * FROM notification_rules WHERE message_type = %s", (message_type,)).fetchone()
+            if row:
+                current = rule_from_row(row)
+                migrated_conditions = self._migrate_default_conditions(current, rule)
+                migrated_similarity = self._migrate_default_similarity(current, rule)
+                migrated_market_observation_similarity = (
+                    self._migrate_legacy_market_observation_similarity(current, rule)
+                    if migrate_market_observation_similarity
+                    else False
+                )
+                set_clauses = []
+                params = []
+                if migrated_conditions:
+                    set_clauses.append("conditions_json = %s")
+                    params.append(json_dumps([condition.to_dict() for condition in current.conditions]))
+                if migrated_similarity:
+                    set_clauses.append("similarity_fields_json = %s")
+                    params.append(json_dumps(current.similarity_fields))
+                    set_clauses.append("similarity_bypass_conditions_json = %s")
+                    params.append(json_dumps([condition.to_dict() for condition in current.similarity_bypass_conditions]))
+                if migrated_market_observation_similarity:
+                    set_clauses.append("similarity_enabled = %s")
+                    params.append(1 if current.similarity_enabled else 0)
+                    set_clauses.append("similarity_window_minutes = %s")
+                    params.append(int(current.similarity_window_minutes))
+                if current.market_hours_enabled != rule.market_hours_enabled:
+                    set_clauses.append("market_hours_enabled = %s")
+                    params.append(1 if rule.market_hours_enabled else 0)
+                if set_clauses:
+                    set_clauses.append("updated_at = %s")
+                    params.append(stamp)
+                    params.append(message_type)
+                    connection.execute(
+                        "UPDATE notification_rules SET " + ", ".join(set_clauses) + " WHERE message_type = %s",
+                        params,
                     )
-                    set_clauses = []
-                    params = []
-                    if migrated_conditions:
-                        set_clauses.append("conditions_json = %s")
-                        params.append(json_dumps([condition.to_dict() for condition in current.conditions]))
-                    if migrated_similarity:
-                        set_clauses.append("similarity_fields_json = %s")
-                        params.append(json_dumps(current.similarity_fields))
-                        set_clauses.append("similarity_bypass_conditions_json = %s")
-                        params.append(json_dumps([condition.to_dict() for condition in current.similarity_bypass_conditions]))
-                    if migrated_market_observation_similarity:
-                        set_clauses.append("similarity_enabled = %s")
-                        params.append(1 if current.similarity_enabled else 0)
-                        set_clauses.append("similarity_window_minutes = %s")
-                        params.append(int(current.similarity_window_minutes))
-                    if current.market_hours_enabled != rule.market_hours_enabled:
-                        set_clauses.append("market_hours_enabled = %s")
-                        params.append(1 if rule.market_hours_enabled else 0)
-                    if set_clauses:
-                        set_clauses.append("updated_at = %s")
-                        params.append(stamp)
-                        params.append(message_type)
-                        connection.execute(
-                            "UPDATE notification_rules SET " + ", ".join(set_clauses) + " WHERE message_type = %s",
-                            params,
-                        )
-            if migrate_market_observation_similarity:
-                connection.execute(
-                    """
-                    INSERT INTO app_store (store_id, payload_json, updated_at)
-                    VALUES (%s, %s, %s)
-                    ON DUPLICATE KEY UPDATE payload_json = VALUES(payload_json), updated_at = VALUES(updated_at)
-                    """,
-                    (
-                        MARKET_OBSERVATION_SIMILARITY_MIGRATION_KEY,
-                        json_dumps({"policy": "marketObservation uses monitor cadence instead of text similarity"}),
-                        stamp,
-                    ),
-                )
+        if migrate_market_observation_similarity:
+            connection.execute(
+                """
+                INSERT INTO app_store (store_id, payload_json, updated_at)
+                VALUES (%s, %s, %s)
+                ON DUPLICATE KEY UPDATE payload_json = VALUES(payload_json), updated_at = VALUES(updated_at)
+                """,
+                (
+                    MARKET_OBSERVATION_SIMILARITY_MIGRATION_KEY,
+                    json_dumps({"policy": "marketObservation uses monitor cadence instead of text similarity"}),
+                    stamp,
+                ),
+            )
 
     def _migrate_default_conditions(self, current: NotificationRuleConfig, default_rule: NotificationRuleConfig) -> bool:
         defaults = {condition.condition_id: condition for condition in default_rule.conditions}

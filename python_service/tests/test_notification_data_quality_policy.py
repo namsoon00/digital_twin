@@ -45,7 +45,10 @@ from digital_twin.domain.portfolio import utc_now_iso
 from digital_twin.application.notification_service import NotificationQueueRunner
 from digital_twin.infrastructure.cli import public_settings_payload
 from digital_twin.infrastructure.notifications import NotificationResult, TelegramNotifier, notifier_for_operations
-from digital_twin.infrastructure.mysql_notification_config import MySQLNotificationRuleStore
+from digital_twin.infrastructure.mysql_notification_config import (
+    MySQLNotificationRuleStore,
+    notification_rule_defaults_fingerprint,
+)
 
 
 class NotificationDataQualityPolicyTests(unittest.TestCase):
@@ -84,6 +87,107 @@ class NotificationDataQualityPolicyTests(unittest.TestCase):
         self.assertEqual("baseline", decision.state_decision)
         self.assertEqual("initial_graph_baseline", decision.suppression_reason)
 
+    def test_repeated_initial_graph_state_waits_for_configured_confirmation_age(self):
+        rule = default_notification_rule("investmentInsight")
+        job = NotificationJob.create(
+            "NVIDIA 관심 유지",
+            account_id="main",
+            message_type="investmentInsight",
+            context={
+                "severity": "WATCH",
+                "symbol": "NVDA",
+                "ontologyInsight": {"subject": "NVDA", "dispatchInsightType": "watchlist"},
+                "ontologyRelationDiff": {
+                    "material": False,
+                    "changeClass": "unchanged",
+                    "decisionTransition": {"kind": "unchanged", "material": False, "currentAction": "hold"},
+                },
+            },
+        )
+        decision = evaluate_notification_rule(job, rule)
+
+        decision = apply_state_cooldown_rule(
+            decision,
+            rule,
+            sent_count=0,
+            previous_context={
+                "_relationBaselineObservedAt": "2026-08-11T00:00:00Z",
+                "_relationBaselineAgeMinutes": 29,
+            },
+            job=job,
+        )
+
+        self.assertFalse(decision.should_send)
+        self.assertEqual("baseline-confirmation-wait", decision.state_decision)
+        self.assertEqual("initial_graph_confirmation_wait", decision.suppression_reason)
+
+    def test_repeated_initial_graph_state_sends_once_after_configured_confirmation_age(self):
+        rule = default_notification_rule("investmentInsight")
+        job = NotificationJob.create(
+            "NVIDIA 관심 유지",
+            account_id="main",
+            message_type="investmentInsight",
+            context={
+                "severity": "WATCH",
+                "symbol": "NVDA",
+                "ontologyInsight": {"subject": "NVDA", "dispatchInsightType": "watchlist"},
+                "ontologyRelationDiff": {
+                    "material": False,
+                    "changeClass": "unchanged",
+                    "decisionTransition": {"kind": "unchanged", "material": False, "currentAction": "hold"},
+                },
+            },
+        )
+        decision = evaluate_notification_rule(job, rule)
+
+        decision = apply_state_cooldown_rule(
+            decision,
+            rule,
+            sent_count=0,
+            previous_context={
+                "_relationBaselineObservedAt": "2026-08-11T00:00:00Z",
+                "_relationBaselineAgeMinutes": 30,
+            },
+            job=job,
+        )
+
+        self.assertTrue(decision.should_send)
+        self.assertEqual("confirmed-baseline", decision.state_decision)
+        self.assertTrue(decision.similarity_bypassed)
+
+    def test_actionable_transition_does_not_wait_for_initial_baseline_confirmation(self):
+        rule = default_notification_rule("investmentInsight")
+        job = NotificationJob.create(
+            "NVIDIA 회피 검토",
+            account_id="main",
+            message_type="investmentInsight",
+            context={
+                "severity": "ALERT",
+                "symbol": "NVDA",
+                "ontologyInsight": {"subject": "NVDA", "dispatchInsightType": "watchlist"},
+                "ontologyRelationDiff": {
+                    "material": True,
+                    "changeClass": "material",
+                    "decisionTransition": {"kind": "action-changed", "material": True, "currentAction": "avoid"},
+                },
+            },
+        )
+        decision = evaluate_notification_rule(job, rule)
+
+        decision = apply_state_cooldown_rule(
+            decision,
+            rule,
+            sent_count=0,
+            previous_context={
+                "_relationBaselineObservedAt": "2026-08-11T00:00:00Z",
+                "_relationBaselineAgeMinutes": 5,
+            },
+            job=job,
+        )
+
+        self.assertTrue(decision.should_send)
+        self.assertEqual("new-condition", decision.state_decision)
+
     def test_market_observation_relies_on_monitor_cadence_not_the_generic_similarity_window(self):
         rule = default_notification_rule(MARKET_OBSERVATION)
 
@@ -113,6 +217,32 @@ class NotificationDataQualityPolicyTests(unittest.TestCase):
             custom,
             default_notification_rule(MARKET_OBSERVATION),
         ))
+
+    def test_current_notification_rule_defaults_marker_skips_startup_writes(self):
+        fingerprint = notification_rule_defaults_fingerprint()
+        transaction_calls = []
+
+        class Result:
+            def fetchone(self):
+                return {"payload_json": '{"fingerprint":"' + fingerprint + '"}'}
+
+        class Connection:
+            def __enter__(self):
+                return self
+
+            def __exit__(self, *_args):
+                return None
+
+            def execute(self, *_args, **_kwargs):
+                return Result()
+
+        store = MySQLNotificationRuleStore.__new__(MySQLNotificationRuleStore)
+        store.connect = lambda: Connection()
+        store.transaction_with_deadlock_retry = lambda *_args: transaction_calls.append("write")
+
+        store.seed_defaults()
+
+        self.assertEqual([], transaction_calls)
 
     def test_verified_observation_followup_can_report_an_unchanged_normal_state(self):
         context = self._typedb_relation_context({

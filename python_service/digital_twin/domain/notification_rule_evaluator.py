@@ -726,6 +726,14 @@ def similarity_bypass_match(
     field = condition.field or ""
     if condition.condition_id in DATA_QUALITY_REPEAT_BYPASS_IDS and is_data_quality_insight_context(context):
         return False, ""
+    if condition_type == "baseline_age_gte":
+        baseline_age = numeric_value(previous_context.get("_relationBaselineAgeMinutes"))
+        minimum = numeric_value(condition.value)
+        if baseline_age is None or minimum is None:
+            return False, ""
+        if baseline_age >= minimum:
+            return True, label + " " + format_rule_number(baseline_age) + "분 유지"
+        return False, ""
     if condition_type == "severity_upgrade":
         target_field = field or "severity"
         current_rank = severity_rank(field_value(context, target_field))
@@ -1015,6 +1023,45 @@ def apply_state_cooldown_rule(
         decision.state_reason = "최초 비실행 관계 상태를 알림 없이 기준선으로 저장"
         decision.reasons.append("상태 정책: " + decision.state_reason)
         decision.mark_suppressed("initial_graph_baseline", decision.state_reason)
+        return decision
+    baseline_confirmation = next((
+        condition
+        for condition in config.similarity_bypass_conditions or []
+        if condition.enabled and condition.condition_type == "baseline_age_gte"
+    ), None)
+    baseline_observed_at = str(previous_context.get("_relationBaselineObservedAt") or "").strip()
+    if (
+        baseline_confirmation
+        and baseline_observed_at
+        and decision.state_recent_sent_count <= 0
+        and not transition_is_material
+    ):
+        matched, reason = similarity_bypass_match(
+            baseline_confirmation,
+            job=job,
+            previous_context=previous_context,
+            decision=decision,
+        )
+        if matched:
+            decision.state_decision = "confirmed-baseline"
+            decision.state_reason = "반복 확인된 첫 관계 상태: " + reason
+            decision.similarity_bypassed = True
+            decision.similarity_bypass_reason = decision.state_reason
+            decision.reasons.append("상태 정책: " + decision.state_reason)
+            return decision
+        observed_age = max(0, int(numeric_value(previous_context.get("_relationBaselineAgeMinutes")) or 0))
+        required_age = max(0, int(numeric_value(baseline_confirmation.value) or 0))
+        decision.state_decision = "baseline-confirmation-wait"
+        decision.state_suppressed = True
+        decision.state_reason = (
+            "초기 관계 상태 재확인 대기: "
+            + str(observed_age)
+            + "분 / "
+            + str(required_age)
+            + "분"
+        )
+        decision.reasons.append("상태 정책: " + decision.state_reason)
+        decision.mark_suppressed("initial_graph_confirmation_wait", decision.state_reason)
         return decision
     if has_graph_transition and transition_is_material and transition_kind != "initial" and decision.state_recent_sent_count > 0:
         decision.state_decision = "meaningful-change"

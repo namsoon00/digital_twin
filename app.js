@@ -2202,7 +2202,8 @@
         { id: "insight_profit_loss_improved", label: "손익률 개선", type: "profit_loss_improved_gte", field: "", value: 1, enabled: true, description: "손익률이 1%p 이상 좋아지면 다시 보냅니다." },
         { id: "insight_ma60_crossed_below", label: "60일 평균 아래로 전환", type: "ma60_crossed_below", field: "", value: 0, enabled: true, description: "가격이 60일 평균 아래로 내려가면 다시 보냅니다." },
         { id: "insight_ma60_crossed_above", label: "60일 평균 위로 회복", type: "ma60_crossed_above", field: "", value: 0, enabled: true, description: "가격이 60일 평균 위로 회복하면 다시 보냅니다." },
-        { id: "insight_action_changed", label: "권장 대응 변경", type: "field_changed_any", field: "notificationAiValidatedResponse.actionLabel,notificationAiValidatedResponse.action,aiOpinion.actionLabel,aiOpinion.action", value: "", enabled: true, description: "검증된 최종 대응이 바뀌면 다시 보냅니다." }
+        { id: "insight_action_changed", label: "권장 대응 변경", type: "field_changed_any", field: "notificationAiValidatedResponse.actionLabel,notificationAiValidatedResponse.action,aiOpinion.actionLabel,aiOpinion.action", value: "", enabled: true, description: "검증된 최종 대응이 바뀌면 다시 보냅니다." },
+        { id: "confirmed_initial_graph_state", label: "초기 관계 상태 재확인", type: "baseline_age_gte", field: "", value: 30, enabled: true, description: "처음 조용히 기록한 비실행 관계 상태가 설정 시간 이상 반복 확인되면 한 번 보냅니다." }
       ];
     }
     return [];
@@ -19721,7 +19722,8 @@
       abs_number_delta_gte: "절대값 차이 이상",
       number_delta_gte: "숫자 증가 이상",
       number_delta_lte: "숫자 감소 이상",
-      number_multiplier_gte: "배수 증가 이상"
+      number_multiplier_gte: "배수 증가 이상",
+      baseline_age_gte: "초기 관계 유지 시간"
     };
     return labels[type] || type || "반복 예외";
   }
@@ -19731,7 +19733,7 @@
   }
 
   function notificationRuleBypassNeedsValue(type) {
-    return ["list_new_items_gte", "profit_loss_worsened_lte", "profit_loss_improved_gte", "ma60_crossed_below", "ma60_crossed_above", "abs_number_delta_gte", "number_delta_gte", "number_delta_lte", "number_multiplier_gte"].indexOf(type) >= 0;
+    return ["list_new_items_gte", "profit_loss_worsened_lte", "profit_loss_improved_gte", "ma60_crossed_below", "ma60_crossed_above", "abs_number_delta_gte", "number_delta_gte", "number_delta_lte", "number_multiplier_gte", "baseline_age_gte"].indexOf(type) >= 0;
   }
 
   function renderNotificationBypassCondition(messageType, condition, disabled) {

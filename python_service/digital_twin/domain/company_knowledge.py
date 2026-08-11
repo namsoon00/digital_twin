@@ -581,3 +581,125 @@ def company_knowledge_by_symbol(
         if payload:
             result[symbol] = payload
     return result
+
+
+def company_prompt_context(
+    external_signals: Mapping[str, object],
+    symbol: object,
+) -> Dict[str, object]:
+    """Return the bounded company facts that may accompany an AI decision.
+
+    The complete provider payload remains in MySQL and the bounded live ABox.
+    A notification only needs the latest comparable period for each reporting
+    frequency and a small governance summary. These are facts, not a Python
+    investment classification; the AI prompt requires an active TypeDB company
+    rule before using them as an action driver.
+    """
+
+    normalized_symbol = _clean(symbol).upper()
+    groups = external_signals.get("companyKnowledge") if isinstance(external_signals, Mapping) else {}
+    payload = groups.get(normalized_symbol) if isinstance(groups, Mapping) else {}
+    if not isinstance(payload, Mapping) or not payload:
+        return {}
+
+    def section(name: str, fields: Sequence[str]) -> Dict[str, object]:
+        source = payload.get(name) if isinstance(payload.get(name), Mapping) else {}
+        return {
+            field: source.get(field)
+            for field in fields
+            if _nonempty(source.get(field))
+        }
+
+    financials = payload.get("financials") if isinstance(payload.get("financials"), Mapping) else {}
+    latest_financials: Dict[str, List[Dict[str, object]]] = {}
+    financial_fields = (
+        "period",
+        "revenue",
+        "revenueGrowthPct",
+        "grossProfit",
+        "operatingIncome",
+        "operatingIncomeGrowthPct",
+        "operatingMarginPct",
+        "netIncome",
+        "netIncomeGrowthPct",
+        "netMarginPct",
+        "totalAssets",
+        "totalLiabilities",
+        "equity",
+        "debtToEquityPct",
+        "cash",
+        "totalDebt",
+        "operatingCashFlow",
+        "capitalExpenditure",
+        "freeCashFlow",
+        "sharesOutstanding",
+        "sharesGrowthPct",
+    )
+    for frequency in ("annual", "interim", "quarterly"):
+        rows = financials.get(frequency) if isinstance(financials.get(frequency), list) else []
+        latest = next((row for row in rows if isinstance(row, Mapping)), None)
+        if latest:
+            latest_financials[frequency] = [{
+                field: latest.get(field)
+                for field in financial_fields
+                if _nonempty(latest.get(field))
+            }]
+
+    governance = payload.get("governance") if isinstance(payload.get("governance"), Mapping) else {}
+    executives = []
+    for item in governance.get("executives", []) if isinstance(governance.get("executives"), list) else []:
+        if not isinstance(item, Mapping):
+            continue
+        row = {
+            field: item.get(field)
+            for field in ("name", "title", "role", "age", "yearBorn", "since", "pay")
+            if _nonempty(item.get(field))
+        }
+        if row:
+            executives.append(row)
+        if len(executives) >= 5:
+            break
+
+    provenance = [
+        {
+            field: item.get(field)
+            for field in ("provider", "scope", "asOf")
+            if _nonempty(item.get(field))
+        }
+        for item in payload.get("provenance", [])[:6]
+        if isinstance(item, Mapping)
+    ] if isinstance(payload.get("provenance"), list) else []
+
+    result = {
+        "schemaVersion": payload.get("schemaVersion") or COMPANY_KNOWLEDGE_VERSION,
+        "symbol": normalized_symbol,
+        "companyName": payload.get("companyName") or normalized_symbol,
+        "factRevision": payload.get("factRevision"),
+        "judgmentUse": "active-company-rule-only",
+        "profile": section("profile", (
+            "companyName", "ceoName", "sector", "industry", "establishedDate",
+            "fiscalYearEndMonth", "marketCapitalization",
+        )),
+        "valuation": section("valuation", (
+            "peRatio", "forwardPE", "pbr", "pegRatio", "bookValue", "trailingEPS",
+            "returnOnEquity", "returnOnEquityPct", "returnOnAssets", "returnOnAssetsPct",
+            "enterpriseToEbitda", "dividendYield", "dividendYieldPct", "beta",
+        )),
+        "latestFinancials": latest_financials,
+        "governance": {
+            "executiveCount": governance.get("executiveCount"),
+            "executives": executives,
+        },
+        "ownership": section("ownership", ("institutionalOwnershipPct", "insiderOwnershipPct")),
+        "capital": section("capital", ("sharesOutstanding", "floatShares", "sharesShort", "totalDebt", "cash")),
+        "coverage": section("coverage", (
+            "financialPeriods", "executives", "valuationFields", "capitalFields",
+            "officialSource", "dataState", "missing",
+        )),
+        "provenance": provenance,
+    }
+    return {
+        key: value
+        for key, value in result.items()
+        if _nonempty(value)
+    }

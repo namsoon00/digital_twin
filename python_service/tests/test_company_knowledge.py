@@ -7,12 +7,16 @@ sys.path.insert(0, str(Path(__file__).resolve().parents[1]))
 
 from digital_twin.domain.company_knowledge import (
     build_company_knowledge,
+    company_prompt_context,
     merge_company_overview_rows,
     merge_company_knowledge_rows,
 )
+from digital_twin.domain.notification_ai_gate_validation import ai_decision_input_packet
 from digital_twin.domain.ontology_contracts import PortfolioOntology
 from digital_twin.domain.ontology_prompting import build_ai_inference_packet, prompt_payload
+from digital_twin.domain.ontology_relation_facts import position_signal_facts
 from digital_twin.domain.ontology_rulebox_catalog import default_graph_inference_rules
+from digital_twin.domain.portfolio import PortfolioSummary, Position
 from digital_twin.domain.portfolio_ontology_company_concepts import add_company_knowledge_concepts
 from digital_twin.infrastructure.graph_store_payloads import (
     PROMOTED_NUMERIC_ENTITY_FIELDS,
@@ -109,6 +113,37 @@ class CompanyKnowledgeTests(unittest.TestCase):
         self.assertEqual(0.18, first["valuation"]["returnOnEquity"])
         self.assertEqual(18.0, first["valuation"]["returnOnEquityPct"])
         self.assertEqual(first["factRevision"], refreshed["factRevision"])
+
+    def test_company_context_reaches_relation_facts_and_final_ai_packet(self):
+        knowledge = build_company_knowledge("TEST", yfinance=sample_yfinance())
+        external_signals = {"companyKnowledge": {"TEST": knowledge}}
+        bounded = company_prompt_context(external_signals, "test")
+
+        self.assertEqual("active-company-rule-only", bounded["judgmentUse"])
+        self.assertEqual(1, len(bounded["latestFinancials"]["annual"]))
+        self.assertEqual(20.0, bounded["latestFinancials"]["annual"][0]["revenueGrowthPct"])
+        self.assertEqual(2, len(bounded["governance"]["executives"]))
+
+        facts = position_signal_facts(
+            Position(symbol="TEST", name="Example Corp", current_price=100, source="watchlist"),
+            PortfolioSummary(total=1000, invested=0, cash=1000, markets=[], sectors=[], concentration=0),
+            external_signals,
+        )
+        self.assertEqual(knowledge["factRevision"], facts["companyContext"]["factRevision"])
+
+        context = {
+            "messageType": "investmentInsight",
+            "ontologyRelationContext": {
+                "facts": facts,
+                "activeRules": [{"ruleId": "graph.company.market.fundamental_confirmation.support.v1"}],
+            },
+        }
+        packet = ai_decision_input_packet(context, {"facts": facts}, {"level": "beginner"})
+        ai_company = packet["relationshipDatabaseInference"]["companyContext"]
+
+        self.assertEqual("TEST", ai_company["symbol"])
+        self.assertEqual(18.0, ai_company["valuation"]["returnOnEquityPct"])
+        self.assertEqual(1, len(ai_company["latestFinancials"]["annual"]))
 
     def test_company_abox_is_bounded_and_connects_stock_to_current_company_states(self):
         graph = PortfolioOntology(portfolio_id="test")

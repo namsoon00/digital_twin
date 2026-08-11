@@ -3,6 +3,7 @@ from statistics import median
 from typing import Dict, Iterable, List, Optional
 
 from .alert_formatting import compact_number, price_money
+from .company_knowledge import company_prompt_context
 from .investment_research import research_evidence_from_external_signals, research_evidence_from_facts
 from .investor_flow_psychology import investor_flow_measurement, investor_flow_values_reliable
 from .macro_context import macro_context_facts
@@ -1007,6 +1008,9 @@ def position_signal_facts(
         "secFiling": dict(sec_context or {}) if isinstance(sec_context, dict) else {},
         "expectsKrMicrostructureSignals": expects_kr_microstructure_signals(position.market, position.currency, symbol),
     }
+    bounded_company_context = company_prompt_context(external_signals, symbol)
+    if bounded_company_context:
+        facts["companyContext"] = bounded_company_context
     profile = instrument_profile_for_position(position, settings)
     delivery_level = str((account_context or {}).get("messageDeliveryLevel") or "beginner")
     profile_payload = profile.to_dict(settings, delivery_level)

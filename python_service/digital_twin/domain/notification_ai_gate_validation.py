@@ -891,6 +891,7 @@ def ai_decision_input_packet(
             "decisionDrivers": compact_decision_drivers,
             "missingData": relation_context.get("missingData") or facts.get("missingData") or [],
             "relationFacts": compact_relation_facts(facts.get("relationFacts") or relation_context.get("facts") or {}),
+            "companyContext": compact_company_context_for_ai(facts.get("companyContext")),
             "trendDynamics": facts.get("trendDynamics") or {},
             "whyNow": compact_why_now_for_ai(
                 relation_context.get("whyNow") if isinstance(relation_context.get("whyNow"), dict) else {}
@@ -1408,6 +1409,44 @@ def compact_relation_facts(payload: object) -> Dict[str, object]:
     if isinstance(payload.get("researchEvidence"), list):
         payload["researchEvidence"] = compact_research_evidence_for_ai(payload["researchEvidence"], 8)
     return payload
+
+
+def compact_company_context_for_ai(payload: object) -> Dict[str, object]:
+    """Keep company facts decision-useful and bounded in the final AI packet."""
+
+    payload = dict(payload or {}) if isinstance(payload, dict) else {}
+    if not payload:
+        return {}
+    result = {
+        key: payload.get(key)
+        for key in (
+            "schemaVersion", "symbol", "companyName", "factRevision", "judgmentUse",
+            "profile", "valuation", "ownership", "capital", "coverage",
+        )
+        if payload.get(key) not in (None, "", [], {})
+    }
+    financials = payload.get("latestFinancials") if isinstance(payload.get("latestFinancials"), dict) else {}
+    result["latestFinancials"] = {
+        frequency: [dict(item) for item in rows[:1] if isinstance(item, dict)]
+        for frequency in ("annual", "interim", "quarterly")
+        for rows in [financials.get(frequency) if isinstance(financials.get(frequency), list) else []]
+        if rows
+    }
+    governance = payload.get("governance") if isinstance(payload.get("governance"), dict) else {}
+    result["governance"] = {
+        "executiveCount": governance.get("executiveCount"),
+        "executives": [dict(item) for item in governance.get("executives", [])[:5] if isinstance(item, dict)],
+    }
+    result["provenance"] = [
+        dict(item)
+        for item in payload.get("provenance", [])[:6]
+        if isinstance(item, dict)
+    ] if isinstance(payload.get("provenance"), list) else []
+    return {
+        key: value
+        for key, value in result.items()
+        if value not in (None, "", [], {})
+    }
 
 
 def compact_evidence_subgraph_for_ai(payload: object) -> Dict[str, object]:

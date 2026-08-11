@@ -29414,3 +29414,628 @@ body.oa-overlay-open {
     grid-template-columns: minmax(0, 1fr);
   }
 }
+
+/* Mobile viewport contract: compact navigation, touch-safe controls, and a
+   full-width calendar that never depends on horizontal scrolling. */
+.investment-calendar-tool-menu {
+  position: relative;
+  min-width: 0;
+}
+
+.investment-calendar-tool-menu > summary {
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  min-height: var(--ds-control-height-md);
+  list-style: none;
+  cursor: pointer;
+}
+
+.investment-calendar-tool-menu > summary::-webkit-details-marker {
+  display: none;
+}
+
+.investment-calendar-tool-menu > summary::after {
+  content: "\25BE";
+  margin-left: 7px;
+  color: currentColor;
+  font-size: 10px;
+}
+
+.investment-calendar-tool-menu[open] > summary::after {
+  transform: rotate(180deg);
+}
+
+.investment-calendar-tool-menu-list {
+  position: static;
+  z-index: 90;
+  display: grid;
+  gap: 6px;
+  width: min(260px, calc(100vw - 28px));
+  margin-top: 6px;
+  padding: 8px;
+  border: 1px solid var(--ds-card-border);
+  border-radius: var(--ds-radius-panel);
+  background: var(--panel);
+  box-shadow: var(--shadow-strong);
+}
+
+.investment-calendar-tool-menu-list .text-button {
+  width: 100%;
+  justify-content: flex-start;
+}
+
+@media (max-width: 860px) {
+  :root {
+    --mobile-page-gutter: 10px;
+  }
+
+  html,
+  body,
+  .app-shell {
+    width: 100%;
+    max-width: 100%;
+    overflow-x: clip;
+  }
+
+  .console-shell.web-style-shell,
+  .console-shell.web-style-shell.shell-home,
+  .console-shell.web-style-shell.shell-page {
+    display: grid;
+    gap: 12px;
+    width: 100%;
+    max-width: 720px;
+    margin: 0 auto;
+    padding: calc(8px + env(safe-area-inset-top)) var(--mobile-page-gutter) calc(24px + env(safe-area-inset-bottom));
+  }
+
+  .console-shell.web-style-shell .app-nav {
+    position: sticky !important;
+    top: max(6px, env(safe-area-inset-top)) !important;
+    z-index: 100;
+    grid-column: 1 !important;
+    grid-row: 1 !important;
+    grid-template-columns: 42px minmax(0, 1fr) auto;
+    grid-template-rows: 42px 42px;
+    gap: 6px 8px;
+    width: 100%;
+    min-height: 0;
+    margin: 0;
+    padding: 7px 8px;
+    border-radius: 7px;
+    overflow: hidden;
+  }
+
+  .console-shell .app-nav-brand {
+    grid-column: 1 / 3;
+    grid-row: 1;
+    display: grid;
+    grid-template-columns: 42px minmax(0, 1fr);
+    gap: 9px;
+    width: auto;
+    padding: 0;
+    border: 0;
+  }
+
+  .console-shell .app-brand-mark {
+    width: 42px;
+    height: 42px;
+  }
+
+  .console-shell .app-brand-copy {
+    display: grid;
+    align-content: center;
+  }
+
+  .console-shell .app-brand-copy strong {
+    color: #f8fafc;
+    font-size: 15px;
+  }
+
+  .console-shell .app-brand-subtitle {
+    display: none;
+  }
+
+  .console-shell .app-nav-tools {
+    grid-column: 3;
+    grid-row: 1;
+    display: flex;
+    align-items: center;
+    gap: 6px;
+    padding: 0;
+  }
+
+  .console-shell .app-nav-tools .status-pill {
+    display: none;
+  }
+
+  .console-shell .app-nav-tools .icon-button {
+    width: 42px;
+    min-width: 42px;
+    height: 42px;
+  }
+
+  .console-shell .app-nav-tabs {
+    grid-column: 1 / -1;
+    grid-row: 2;
+    display: flex;
+    align-items: stretch;
+    gap: 5px;
+    min-width: 0;
+    padding: 0;
+    overflow-x: auto;
+    overflow-y: hidden;
+    overscroll-behavior-x: contain;
+    scroll-snap-type: x proximity;
+    scrollbar-width: none;
+  }
+
+  .console-shell .app-nav-tabs::-webkit-scrollbar {
+    display: none;
+  }
+
+  .console-shell .app-nav-group {
+    display: contents;
+    min-width: 0;
+  }
+
+  .console-shell .app-nav-tab {
+    flex: 0 0 auto;
+    width: auto;
+    min-width: 68px;
+    min-height: 42px;
+    height: 42px;
+    padding: 0 12px;
+    scroll-snap-align: start;
+  }
+
+  .console-shell .nav-tab-label {
+    display: block;
+    max-width: none;
+    overflow: visible;
+    text-overflow: clip;
+  }
+
+  .console-shell .app-nav-command,
+  .console-shell .app-nav-command.no-mode,
+  .console-shell .oa-console-command,
+  .console-shell .app-nav-menu,
+  .managed-page > .page-command-strip,
+  .managed-page > .page-routine-panel {
+    display: none !important;
+  }
+
+  .console-shell.web-style-shell .workspace-layout,
+  .console-shell.web-style-shell.shell-home .workspace-layout,
+  .console-shell.web-style-shell.shell-page .workspace-layout {
+    grid-column: 1 !important;
+    grid-row: 2 !important;
+    width: 100%;
+    min-width: 0;
+  }
+
+  .managed-page,
+  .admin-grid,
+  .oa-console-page,
+  .oa-console-grid,
+  .panel,
+  .oa-surface {
+    min-width: 0;
+    width: 100%;
+  }
+
+  .managed-page,
+  .admin-grid,
+  .oa-console-page,
+  .oa-console-grid {
+    gap: 12px;
+  }
+
+  .single-screen-flow-panel {
+    grid-template-columns: minmax(0, 1fr) 38px;
+    gap: 10px;
+    min-height: 0;
+    padding: 12px 14px;
+  }
+
+  .single-screen-flow-copy {
+    gap: 3px;
+  }
+
+  .single-screen-flow-copy strong {
+    font-size: 15px;
+  }
+
+  .single-screen-flow-copy em {
+    overflow: hidden;
+    text-overflow: ellipsis;
+    white-space: nowrap;
+  }
+
+  .single-screen-flow-map {
+    display: none;
+  }
+
+  .single-screen-flow-panel .screen-info-button {
+    align-self: center;
+  }
+
+  .panel-head,
+  .investment-calendar-month-panel .panel-head,
+  .investment-calendar-selected-day-head {
+    display: grid;
+    gap: 12px;
+    min-width: 0;
+    padding: 14px;
+  }
+
+  .panel-head > div,
+  .panel-head h2,
+  .panel-head span {
+    min-width: 0;
+  }
+
+  .panel-head h2 {
+    font-size: 18px;
+    line-height: 1.25;
+    word-break: keep-all;
+    overflow-wrap: anywhere;
+  }
+
+  .panel-head > div > span {
+    font-size: 12px;
+    line-height: 1.45;
+  }
+
+  .investment-calendar-summary-panel .panel-head > div:first-child > span,
+  .investment-calendar-month-panel .panel-head > div:first-child > span {
+    display: none;
+  }
+
+  .investment-calendar-summary-actions {
+    display: grid;
+    grid-template-columns: repeat(2, minmax(0, 1fr));
+    gap: 8px;
+    width: 100%;
+  }
+
+  .investment-calendar-summary-actions > .text-button,
+  .investment-calendar-summary-actions > .investment-calendar-tool-menu,
+  .investment-calendar-tool-menu > summary {
+    width: 100%;
+    min-width: 0;
+  }
+
+  .investment-calendar-summary-actions > .investment-calendar-tool-menu {
+    grid-column: 1 / -1;
+  }
+
+  .investment-calendar-tool-menu-list {
+    position: static;
+    grid-template-columns: repeat(2, minmax(0, 1fr));
+    width: 100%;
+    margin-top: 8px;
+    box-shadow: none;
+  }
+
+  .investment-calendar-tool-menu-list .text-button {
+    min-height: 44px;
+    justify-content: center;
+    padding: 8px;
+    line-height: 1.25;
+    white-space: normal;
+  }
+
+  .investment-calendar-kpis {
+    grid-template-columns: repeat(2, minmax(0, 1fr));
+    gap: 8px;
+    margin-top: 0;
+    padding: 0 14px 14px;
+  }
+
+  .investment-calendar-kpi,
+  .console-shell .investment-calendar-kpi,
+  .console-shell [data-card-type="metric-cell"].investment-calendar-kpi {
+    min-height: 86px;
+    padding: 11px 12px;
+  }
+
+  .investment-calendar-kpi strong,
+  .console-shell .investment-calendar-kpi strong {
+    font-size: 20px;
+    line-height: 1.15;
+  }
+
+  .investment-calendar-filters {
+    grid-template-columns: repeat(2, minmax(0, 1fr));
+    gap: 8px;
+    margin: 0;
+    padding: 0 14px 14px;
+  }
+
+  .investment-calendar-filters input:first-child,
+  .investment-calendar-filters .text-button {
+    grid-column: 1 / -1;
+  }
+
+  .investment-calendar-filters input,
+  .investment-calendar-filters select,
+  .investment-calendar-filters .text-button {
+    width: 100%;
+    min-width: 0;
+    min-height: 44px;
+  }
+
+  .investment-calendar-month-controls {
+    display: grid;
+    grid-template-columns: repeat(3, minmax(0, 1fr));
+    gap: 7px;
+    width: 100%;
+  }
+
+  .investment-calendar-month-controls .mini-button {
+    width: 100%;
+    min-width: 0;
+    min-height: 40px;
+  }
+
+  .investment-calendar-month-count {
+    grid-column: 1 / -1;
+    width: 100%;
+    text-align: center;
+    white-space: normal;
+  }
+
+  .investment-calendar-month-shell {
+    gap: 14px;
+    padding: 0 8px 14px;
+  }
+
+  .investment-calendar-month-scroller {
+    width: 100%;
+    overflow: visible;
+    scrollbar-gutter: auto;
+  }
+
+  .investment-calendar-month-weekdays,
+  .investment-calendar-month-grid {
+    grid-template-columns: repeat(7, minmax(0, 1fr));
+    width: 100%;
+    min-width: 0;
+  }
+
+  .investment-calendar-month-weekdays {
+    gap: 1px;
+    padding-bottom: 6px;
+  }
+
+  .investment-calendar-month-weekdays span {
+    font-size: 11px;
+  }
+
+  .investment-calendar-day-cell {
+    gap: 2px;
+    min-width: 0;
+    min-height: 60px;
+    padding: 3px 2px 4px;
+  }
+
+  .investment-calendar-day-cell.has-events {
+    border-top-width: 2px;
+  }
+
+  .investment-calendar-day-head {
+    display: grid;
+    place-items: center;
+    gap: 1px;
+    width: 100%;
+    min-height: 42px;
+  }
+
+  .investment-calendar-day-head strong {
+    width: 26px;
+    height: 26px;
+    font-size: 12px;
+  }
+
+  .investment-calendar-day-head span {
+    min-height: 11px;
+    font-size: 9px;
+    text-align: center;
+  }
+
+  .investment-calendar-day-events {
+    display: flex;
+    align-items: center;
+    justify-content: center;
+    gap: 3px;
+    min-height: 7px;
+    pointer-events: none;
+  }
+
+  .investment-calendar-day-event {
+    display: block;
+    width: 6px;
+    min-width: 6px;
+    height: 6px;
+    min-height: 6px;
+    padding: 0;
+    border: 0;
+    border-radius: 50%;
+    background: var(--ds-card-status-neutral);
+  }
+
+  .investment-calendar-day-event.watch {
+    background: var(--amber);
+  }
+
+  .investment-calendar-day-event.danger {
+    background: var(--red);
+  }
+
+  .investment-calendar-day-event > *,
+  .investment-calendar-day-more {
+    display: none;
+  }
+
+  .investment-calendar-selected-day {
+    gap: 10px;
+    padding: 14px 6px 0;
+  }
+
+  .investment-calendar-selected-day-head {
+    grid-template-columns: minmax(0, 1fr) auto;
+    align-items: start;
+    padding: 0;
+  }
+
+  .investment-calendar-selected-day .investment-calendar-list,
+  .investment-calendar-candidate-panel .investment-calendar-list {
+    grid-template-columns: minmax(0, 1fr);
+    gap: 8px;
+  }
+
+  .investment-calendar-event,
+  .console-shell .investment-calendar-event {
+    grid-template-columns: minmax(0, 1fr);
+    gap: 10px;
+    min-height: 0;
+    padding: 12px;
+  }
+
+  .investment-calendar-event-main,
+  .console-shell .investment-calendar-event-main {
+    grid-template-columns: minmax(0, 1fr);
+    gap: 8px;
+  }
+
+  .investment-calendar-event-actions,
+  .console-shell .investment-calendar-event-actions {
+    display: grid;
+    grid-template-columns: repeat(2, minmax(0, 1fr));
+    gap: 8px;
+    width: 100%;
+  }
+
+  .investment-calendar-event-actions .text-button {
+    width: 100%;
+    min-width: 0;
+  }
+
+  .investment-calendar-primary-grid,
+  .investment-calendar-view {
+    grid-template-columns: minmax(0, 1fr);
+    gap: 12px;
+  }
+
+  .investment-calendar-candidate-toolbar,
+  .investment-calendar-candidate-pager {
+    display: grid;
+    grid-template-columns: repeat(2, minmax(0, 1fr));
+    width: 100%;
+  }
+
+  .investment-calendar-candidate-toolbar > span,
+  .investment-calendar-research-strip,
+  .investment-calendar-candidate-pager > span {
+    grid-column: 1 / -1;
+  }
+
+  .investment-calendar-form,
+  .investment-calendar-form .wide,
+  .form-actions {
+    grid-template-columns: minmax(0, 1fr);
+    grid-column: 1;
+  }
+
+  .calendar-entry-backdrop {
+    padding: 0;
+  }
+
+  .calendar-entry-modal {
+    width: 100%;
+    max-width: none;
+    min-height: 100dvh;
+    max-height: 100dvh;
+    border: 0;
+    border-radius: 0;
+  }
+
+  .oa-metric-strip {
+    grid-template-columns: repeat(2, minmax(0, 1fr));
+  }
+
+  .oa-metric {
+    min-height: 78px;
+    padding: 12px;
+  }
+
+  .oa-surface-head {
+    grid-template-columns: minmax(0, 1fr) auto;
+    gap: 10px;
+    min-height: 0;
+    padding: 14px;
+  }
+
+  .oa-surface-head p {
+    display: -webkit-box;
+    overflow: hidden;
+    white-space: normal;
+    -webkit-box-orient: vertical;
+    -webkit-line-clamp: 2;
+  }
+
+  .oa-surface-actions {
+    grid-column: 1 / -1;
+    justify-content: flex-start;
+    flex-wrap: wrap;
+  }
+
+  .oa-data-table {
+    max-width: 100%;
+    overflow-x: auto;
+    -webkit-overflow-scrolling: touch;
+  }
+
+  .oa-table-head,
+  .oa-data-row {
+    min-width: 720px;
+  }
+
+  :is(input, select, textarea, button) {
+    max-width: 100%;
+  }
+}
+
+@media (max-width: 420px) {
+  .console-shell.web-style-shell,
+  .console-shell.web-style-shell.shell-home,
+  .console-shell.web-style-shell.shell-page {
+    --mobile-page-gutter: 8px;
+  }
+
+  .console-shell .app-nav-tab {
+    min-width: 62px;
+    padding: 0 10px;
+  }
+
+  .investment-calendar-kpi,
+  .console-shell .investment-calendar-kpi,
+  .console-shell [data-card-type="metric-cell"].investment-calendar-kpi {
+    min-height: 82px;
+    padding: 10px;
+  }
+
+  .investment-calendar-tool-menu-list {
+    grid-template-columns: minmax(0, 1fr);
+  }
+
+  .investment-calendar-month-shell {
+    padding-right: 5px;
+    padding-left: 5px;
+  }
+
+  .investment-calendar-day-cell {
+    min-height: 57px;
+  }
+}

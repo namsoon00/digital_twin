@@ -372,6 +372,15 @@ function checkWorkflowConsoleContract() {
     "목록 변경일 표시와 최신순 정렬 계약이 없습니다."
   );
   assertOk(
+    code.indexOf('return raw + " (시각 미기록)"') >= 0 &&
+      code.indexOf('date.getFullYear()') >= 0 &&
+      code.indexOf('pad(date.getSeconds())') >= 0 &&
+      code.indexOf('resolvedOptions().timeZone') >= 0 &&
+      styles.indexOf("List values are audit data") >= 0 &&
+      /\.oa-reason-cell strong,[\s\S]*text-overflow: clip !important;[\s\S]*white-space: normal !important;[\s\S]*-webkit-line-clamp: unset !important;/.test(styles),
+    "목록의 전체 날짜와 잘림 없는 데이터 노출 계약이 없습니다."
+  );
+  assertOk(
     accountDomain.indexOf('"updatedAt": self.updated_at') >= 0 &&
       accountStore.indexOf("ORDER BY a.updated_at DESC") >= 0 &&
       calendarStore.indexOf("ORDER BY updated_at DESC, candidate_id DESC") >= 0 &&
@@ -380,9 +389,9 @@ function checkWorkflowConsoleContract() {
     "서버 페이징 목록의 변경일 필드 또는 최신순 정렬 계약이 없습니다."
   );
   assertOk(
-    /styles\.css\?v=20260812-latest-changed-v\d+/.test(indexHtml) &&
-      /app\.js\?v=20260812-latest-changed-v\d+/.test(indexHtml),
-    "목록 변경일 정적 자산 cache key가 반영되지 않았습니다."
+    /styles\.css\?v=20260812-full-list-values-v\d+/.test(indexHtml) &&
+      /app\.js\?v=20260812-full-list-values-v\d+/.test(indexHtml),
+    "목록 전체 데이터 정적 자산 cache key가 반영되지 않았습니다."
   );
 }
 

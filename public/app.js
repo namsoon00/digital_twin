@@ -7478,14 +7478,21 @@
 
   function formatClock(value) {
     if (!value) return "-";
+    var raw = String(value).trim();
+    if (/^\d{4}-\d{2}-\d{2}$/.test(raw)) return raw + " (시각 미기록)";
     var date = new Date(value);
     if (Number.isNaN(date.getTime())) return String(value);
-    return date.toLocaleString("ko-KR", {
-      month: "2-digit",
-      day: "2-digit",
-      hour: "2-digit",
-      minute: "2-digit"
-    });
+    var pad = function (number) { return String(number).padStart(2, "0"); };
+    var timezone = Intl.DateTimeFormat().resolvedOptions().timeZone || "local";
+    return [
+      date.getFullYear(),
+      pad(date.getMonth() + 1),
+      pad(date.getDate())
+    ].join("-") + " " + [
+      pad(date.getHours()),
+      pad(date.getMinutes()),
+      pad(date.getSeconds())
+    ].join(":") + " (" + timezone + ")";
   }
 
   var recordChangedAtFields = [

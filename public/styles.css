@@ -30203,3 +30203,62 @@ body.oa-overlay-open {
     min-height: 57px;
   }
 }
+
+/* List values are audit data: wrap them instead of clipping or line-clamping. */
+:where(
+  .oa-work-row,
+  .oa-data-row,
+  .oa-news-row,
+  .oa-operation-row,
+  .oa-settings-list > button,
+  .oa-context-row,
+  .investment-calendar-event,
+  .investment-action-row,
+  .inference-ledger-row,
+  .ontology-audit-row,
+  .macro-signal-row,
+  .macro-relation-row,
+  .ontology-execution-row,
+  .ontology-operational-row,
+  .ontology-insight-row,
+  .ontology-data-quality-row,
+  .investment-relation-text-row,
+  .account-directory-row,
+  .account-watch-card,
+  .account-watch-symbol-row,
+  .service-account-card,
+  .admin-message-row,
+  .notification-decision-row,
+  .notification-template-row,
+  .strategy-data-row,
+  .source-row,
+  .signal-row,
+  .alert-row,
+  .monitoring-instrument-row,
+  .symbol-result-row,
+  .feed-portfolio-news-row,
+  .feed-source-row,
+  .hypothesis-workspace-card,
+  .ontology-experiment-card,
+  .ontology-experiment-audit-row,
+  .strategy-proposal-card,
+  .strategy-proposal-review-log > div
+) :where(strong, em, p, small, span:not(.tone-chip):not(.status-pill):not(.chip), .record-changed-at),
+.oa-reason-cell strong,
+.oa-reason-cell em,
+.oa-open-cell,
+.oa-row-action {
+  max-width: none !important;
+  overflow: visible !important;
+  text-overflow: clip !important;
+  white-space: normal !important;
+  overflow-wrap: anywhere;
+  -webkit-line-clamp: unset !important;
+}
+
+.record-changed-at {
+  width: auto;
+  max-width: none;
+  font-variant-numeric: tabular-nums;
+  overflow-wrap: normal;
+}

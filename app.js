@@ -1,6 +1,8 @@
 (function () {
   var app = document.getElementById("app");
   var ontologyGraphInstances = {};
+  var mobileInfiniteScrollObserver = null;
+  var mobileInfiniteScrollMode = null;
   var defaultSettings = window.OrbitAlphaDefaultSettings || {};
 
   var tabs = [
@@ -1713,6 +1715,71 @@
     return workspace.scrollHeight > workspace.clientHeight + 1 ? workspace : null;
   }
 
+  function mobileInfiniteScrollEnabled() {
+    if (typeof window === "undefined") return false;
+    if (window.matchMedia) return window.matchMedia("(max-width: 860px)").matches;
+    return Number(window.innerWidth || 0) > 0 && Number(window.innerWidth || 0) <= 860;
+  }
+
+  function mergeUniqueItems(existing, incoming, keyResolver) {
+    var rows = [];
+    var seen = {};
+    (Array.isArray(existing) ? existing : []).concat(Array.isArray(incoming) ? incoming : []).forEach(function (item, index) {
+      var key = keyResolver ? keyResolver(item, index) : "";
+      key = String(key || "item:" + index);
+      if (seen[key]) return;
+      seen[key] = true;
+      rows.push(item);
+    });
+    return rows;
+  }
+
+  function renderMobileInfiniteScrollFooter(options) {
+    options = options || {};
+    var loaded = Math.max(0, Number(options.loaded || 0));
+    var total = Math.max(loaded, Number(options.total || 0));
+    var loading = Boolean(options.loading);
+    var hasNext = Boolean(options.hasNext) && !loading;
+    var status = loading
+      ? "다음 데이터를 불러오는 중입니다"
+      : (hasNext ? loaded + " / " + total + "개 표시" : (total ? total + "개를 모두 불러왔습니다" : "표시할 데이터가 없습니다"));
+    return [
+      '<div class="mobile-infinite-scroll' + (loading ? " is-loading" : (hasNext ? "" : " is-complete")) + '" data-mobile-infinite-sentinel aria-live="polite">',
+      '<span>' + escapeHtml(status) + '</span>',
+      hasNext ? '<button class="mini-button" type="button" data-mobile-infinite-next ' + String(options.nextAttributes || "") + '>더 불러오기</button>' : '',
+      '</div>'
+    ].join("");
+  }
+
+  function bindMobileInfiniteScroll() {
+    if (mobileInfiniteScrollObserver) {
+      mobileInfiniteScrollObserver.disconnect();
+      mobileInfiniteScrollObserver = null;
+    }
+    mobileInfiniteScrollMode = mobileInfiniteScrollEnabled();
+    if (!mobileInfiniteScrollMode || typeof window.IntersectionObserver !== "function") return;
+    var sentinels = Array.prototype.slice.call(app.querySelectorAll("[data-mobile-infinite-sentinel]"));
+    if (!sentinels.length) return;
+    mobileInfiniteScrollObserver = new window.IntersectionObserver(function (entries) {
+      entries.forEach(function (entry) {
+        if (!entry.isIntersecting) return;
+        var sentinel = entry.target;
+        if (sentinel.getAttribute("data-mobile-infinite-requested") === "true") return;
+        var button = sentinel.querySelector("[data-mobile-infinite-next]:not(:disabled)");
+        if (!button) return;
+        sentinel.setAttribute("data-mobile-infinite-requested", "true");
+        button.click();
+      });
+    }, {
+      root: currentWorkspaceScroller(),
+      rootMargin: "0px 0px 360px 0px",
+      threshold: 0.01
+    });
+    sentinels.forEach(function (sentinel) {
+      mobileInfiniteScrollObserver.observe(sentinel);
+    });
+  }
+
   function scrollTopNumber(value) {
     var number = Number(value || 0);
     return isFinite(number) ? Math.max(0, number) : 0;
@@ -2388,7 +2455,11 @@
   }
 
   function applyNotificationJobs(payload) {
-    state.notificationJobItems = Array.isArray(payload.jobs) ? payload.jobs : [];
+    var incomingJobs = Array.isArray(payload.jobs) ? payload.jobs : [];
+    var payloadOffset = Math.max(0, Number(payload.offset == null ? state.notificationJobsOffset : payload.offset));
+    state.notificationJobItems = mobileInfiniteScrollEnabled() && payloadOffset > 0
+      ? mergeUniqueItems(state.notificationJobItems, incomingJobs, notificationJobKey)
+      : incomingJobs;
     var visibleJobs = {};
     state.notificationJobItems.forEach(function (job) {
       visibleJobs[notificationJobKey(job)] = true;
@@ -2405,7 +2476,7 @@
     state.notificationJobsSummary = payload.summary && typeof payload.summary === "object" ? payload.summary : {};
     state.notificationJobDiagnostics = payload.diagnostics && typeof payload.diagnostics === "object" ? payload.diagnostics : {};
     state.notificationJobsTotal = Math.max(0, Number(payload.total || state.notificationJobItems.length));
-    state.notificationJobsOffset = Math.max(0, Number(payload.offset || 0));
+    state.notificationJobsOffset = payloadOffset;
     state.notificationJobsPageSize = Math.max(1, Number(payload.limit || state.notificationJobsPageSize || 20));
     state.notificationJobsLoaded = true;
     state.notificationJobsLoading = false;
@@ -6291,12 +6362,17 @@
   }
 
   function applySymbolUniverse(payload) {
+    var payloadOffset = Math.max(0, Number(payload.offset == null ? state.symbolUniverseOffset : payload.offset));
+    var incomingItems = Array.isArray(payload.items) ? payload.items : [];
+    var items = mobileInfiniteScrollEnabled() && payloadOffset > 0
+      ? mergeUniqueItems((state.symbolUniverse || {}).items, incomingItems, symbolUniverseKey)
+      : incomingItems;
     state.symbolUniverse = {
-      items: Array.isArray(payload.items) ? payload.items : [],
+      items: items,
       summary: payload.summary || { markets: [], sources: [], total: 0, maxAgeHours: 24 },
       resultTotal: Number(payload.resultTotal || 0),
       limit: Number(payload.limit || state.symbolUniverseLimit || DEFAULT_SYMBOL_UNIVERSE_LIMIT),
-      offset: Number(payload.offset || state.symbolUniverseOffset || 0),
+      offset: payloadOffset,
       hasMore: Boolean(payload.hasMore)
     };
     state.symbolUniverseLimit = state.symbolUniverse.limit;
@@ -6347,7 +6423,10 @@
     return requestJson(symbolUniversePath())
       .then(function (payload) {
         applySymbolUniverse(payload);
-        writeCachedSymbolUniverse(payload);
+        var cachedPayload = mobileInfiniteScrollEnabled()
+          ? Object.assign({}, state.symbolUniverse, { offset: 0 })
+          : payload;
+        writeCachedSymbolUniverse(cachedPayload);
       })
       .catch(function (error) {
         var message = error.message || "종목 유니버스를 읽지 못했습니다.";
@@ -7005,6 +7084,15 @@
       : requestJson("/api/investment-calendar/candidates" + investmentCalendarCandidateQueryString());
     return promise
       .then(function (payload) {
+        var requestedPage = Math.max(0, Number(state.investmentCalendarCandidatePage || 0));
+        if (mobileInfiniteScrollEnabled() && requestedPage > 0) {
+          var previous = currentInvestmentCalendarCandidates();
+          payload = Object.assign({}, payload, {
+            candidates: mergeUniqueItems(previous.candidates, payload.candidates, function (candidate, index) {
+              return String((candidate || {}).candidateId || (candidate || {}).id || [(candidate || {}).title, (candidate || {}).startsAt, index].join(":"));
+            })
+          });
+        }
         state.investmentCalendarCandidates = payload;
       })
       .catch(function (error) {
@@ -8845,6 +8933,7 @@
     }
     syncAppNavScrollState();
     syncTopbarScrollState();
+    bindMobileInfiniteScroll();
     focusWorkDetailLayer();
     var notificationDetailNeedsEvidence = state.workDetailLayer && state.workDetailLayer.type === "notification-job";
     if ((state.activeTab === "feed" || state.activeTab === "notifications" || notificationDetailNeedsEvidence) && !state.researchEvidence && !state.researchEvidenceLoading) {
@@ -10144,8 +10233,9 @@
     var page = Math.min(consolePageNumber(key), totalPages);
     if (!state.consolePages) state.consolePages = {};
     state.consolePages[key] = page;
+    var start = mobileInfiniteScrollEnabled() ? 0 : (page - 1) * pageSize;
     return {
-      items: items.slice((page - 1) * pageSize, page * pageSize),
+      items: items.slice(start, page * pageSize),
       page: page,
       total: items.length,
       totalPages: totalPages
@@ -10153,6 +10243,14 @@
   }
 
   function renderConsolePager(key, pageInfo) {
+    if (mobileInfiniteScrollEnabled()) {
+      return '<div class="oa-pager-slot" data-console-live-region="pager-' + escapeHtml(key) + '">' + renderMobileInfiniteScrollFooter({
+        loaded: pageInfo ? pageInfo.items.length : 0,
+        total: pageInfo ? pageInfo.total : 0,
+        hasNext: Boolean(pageInfo && pageInfo.page < pageInfo.totalPages),
+        nextAttributes: 'data-console-page="' + escapeHtml(key) + '" data-console-page-value="' + escapeHtml((pageInfo ? pageInfo.page : 0) + 1) + '"'
+      }) + '</div>';
+    }
     var pager = !pageInfo || pageInfo.totalPages <= 1 ? "" : [
       '<nav class="oa-pager" aria-label="목록 페이지">',
       '<span>전체 ' + escapeHtml(pageInfo.total) + '건</span>',
@@ -10741,6 +10839,15 @@
     var offset = Math.max(0, Number(state.notificationJobsOffset || 0));
     var current = Math.floor(offset / pageSize) + 1;
     var pages = Math.max(1, Math.ceil(total / pageSize));
+    if (mobileInfiniteScrollEnabled()) {
+      return renderMobileInfiniteScrollFooter({
+        loaded: (state.notificationJobItems || []).length,
+        total: total,
+        loading: state.notificationJobsLoading,
+        hasNext: current < pages,
+        nextAttributes: 'data-notification-job-page="' + escapeHtml(current + 1) + '"'
+      });
+    }
     if (pages <= 1) return "";
     return [
       '<div class="oa-pager" aria-label="알림 원장 페이지">',
@@ -11376,13 +11483,14 @@
       var serverPage = Number(serverInfo.page || 0);
       var serverOffset = Number(serverInfo.offset || serverPage * pageSize);
       var serverPageCount = Math.max(1, Number(serverInfo.pageCount || Math.ceil(serverTotal / pageSize)) || 1);
+      var cumulative = mobileInfiniteScrollEnabled();
       return {
         total: serverTotal,
         page: Math.max(0, serverPage),
         pageSize: pageSize,
         pageCount: serverPageCount,
-        start: serverTotal ? serverOffset : 0,
-        end: Math.min(serverOffset + (candidates || []).length, serverTotal),
+        start: cumulative ? 0 : (serverTotal ? serverOffset : 0),
+        end: cumulative ? Math.min((candidates || []).length, serverTotal) : Math.min(serverOffset + (candidates || []).length, serverTotal),
         visible: candidates || []
       };
     }
@@ -11391,8 +11499,9 @@
     var page = Number(state.investmentCalendarCandidatePage || 0);
     if (!Number.isFinite(page)) page = 0;
     page = Math.min(Math.max(0, page), pageCount - 1);
-    var start = page * pageSize;
+    var start = mobileInfiniteScrollEnabled() ? 0 : page * pageSize;
     var end = Math.min(start + pageSize, total);
+    if (mobileInfiniteScrollEnabled()) end = Math.min((page + 1) * pageSize, total);
     return {
       total: total,
       page: page,
@@ -11417,7 +11526,7 @@
       '</div>',
       renderInvestmentCalendarDiscoveryStatus(),
       renderInvestmentCalendarResearchStatus(),
-      candidates.length ? renderInvestmentCalendarCandidatePager(pageInfo) : '',
+      candidates.length && !mobileInfiniteScrollEnabled() ? renderInvestmentCalendarCandidatePager(pageInfo) : '',
       '<div class="investment-calendar-list">',
       state.investmentCalendarCandidatesLoading ? renderEmptyState({
         tone: "watch",
@@ -11433,6 +11542,7 @@
         meta: ["실적", "배당", "ADR/GDR", "지수 편입"]
       }) : pageInfo.visible.map(renderInvestmentCalendarCandidate).join("")),
       '</div>',
+      candidates.length && mobileInfiniteScrollEnabled() ? renderInvestmentCalendarCandidatePager(pageInfo) : '',
       '</article>'
     ].join("");
   }
@@ -11474,6 +11584,15 @@
     var from = pageInfo.total ? pageInfo.start + 1 : 0;
     var canPrev = pageInfo.page > 0;
     var canNext = pageInfo.page < pageInfo.pageCount - 1;
+    if (mobileInfiniteScrollEnabled()) {
+      return renderMobileInfiniteScrollFooter({
+        loaded: pageInfo.end,
+        total: pageInfo.total,
+        loading: state.investmentCalendarCandidatesLoading,
+        hasNext: canNext,
+        nextAttributes: 'data-calendar-candidate-page="' + escapeHtml(pageInfo.page + 1) + '"'
+      });
+    }
     return [
       '<div class="investment-calendar-candidate-toolbar">',
       '<span>후보 ' + escapeHtml(from) + '-' + escapeHtml(pageInfo.end) + ' / ' + escapeHtml(pageInfo.total) + ' · ' + escapeHtml(pageInfo.page + 1) + '/' + escapeHtml(pageInfo.pageCount) + '페이지</span>',
@@ -15308,8 +15427,9 @@
     var pageSize = Math.max(1, Number(state.investmentActionPageSize || 6));
     var totalPages = Math.max(1, Math.ceil(rows.length / pageSize));
     var page = Math.min(Math.max(1, Number(state.investmentActionPage || 1)), totalPages);
-    var start = rows.length ? (page - 1) * pageSize : 0;
+    var start = mobileInfiniteScrollEnabled() ? 0 : (rows.length ? (page - 1) * pageSize : 0);
     var end = Math.min(rows.length, start + pageSize);
+    if (mobileInfiniteScrollEnabled()) end = Math.min(rows.length, page * pageSize);
     return {
       page: page,
       pageSize: pageSize,
@@ -15341,6 +15461,14 @@
 
   function renderInvestmentActionPager(pageInfo) {
     if (!pageInfo || pageInfo.totalPages <= 1) return "";
+    if (mobileInfiniteScrollEnabled()) {
+      return renderMobileInfiniteScrollFooter({
+        loaded: pageInfo.visibleRows.length,
+        total: pageInfo.totalRows,
+        hasNext: pageInfo.page < pageInfo.totalPages,
+        nextAttributes: 'data-investment-action-page="' + escapeHtml(pageInfo.page + 1) + '"'
+      });
+    }
     return [
       '<div class="investment-action-pager"' + cardFormatAttrs("pagination-strip", "compact") + '>',
       '<button class="mini-button" type="button" data-investment-action-page="' + escapeHtml(Math.max(1, pageInfo.page - 1)) + '"' + (pageInfo.page <= 1 ? " disabled" : "") + '>이전</button>',
@@ -22934,12 +23062,13 @@
     var marketData = summary.marketData || {};
     var limit = Number(universe.limit || state.symbolUniverseLimit || DEFAULT_SYMBOL_UNIVERSE_LIMIT);
     var offset = Number(universe.offset || state.symbolUniverseOffset || 0);
+    var cumulativeMobile = mobileInfiniteScrollEnabled() && full;
     var resultTotal = Number(universe.resultTotal || 0);
     if (!resultTotal) resultTotal = state.symbolUniverseQuery || state.symbolUniverseMarket ? items.length : Number(summary.total || items.length || 0);
-    var visibleFrom = resultTotal && items.length ? offset + 1 : 0;
-    var visibleTo = resultTotal ? Math.min(offset + items.length, resultTotal) : items.length;
+    var visibleFrom = resultTotal && items.length ? (cumulativeMobile ? 1 : offset + 1) : 0;
+    var visibleTo = resultTotal ? Math.min((cumulativeMobile ? 0 : offset) + items.length, resultTotal) : items.length;
     var hasPrev = offset > 0;
-    var hasNext = Boolean(universe.hasMore || (resultTotal && offset + items.length < resultTotal));
+    var hasNext = Boolean(universe.hasMore || (!cumulativeMobile && resultTotal && offset + items.length < resultTotal));
     var renderedItems = full ? items : items.slice(0, 12);
     var emptyCatalog = !renderedItems.length;
     return [
@@ -22981,7 +23110,7 @@
       (state.symbolUniverseLoading && renderedItems.length) ? '<p class="data-refresh-status">최근 성공 목록을 먼저 보여주는 중입니다. 최신 카탈로그는 백그라운드에서 갱신합니다.</p>' : '',
       '<p class="symbol-universe-note subtle">코스피·코스닥은 KRX KIND, 나스닥은 Nasdaq Trader 심볼 디렉터리를 운영 DB에 저장합니다. 원천 호출이 실패해도 마지막 성공 목록을 계속 사용합니다.</p>',
       emptyCatalog ? renderSymbolUniverseStarterConsole(summary, sources, marketData) : '',
-      full ? '<div class="symbol-pager"><span>' + escapeHtml(resultTotal ? visibleFrom + "-" + visibleTo + " / " + resultTotal + "개 표시" : "표시할 종목 없음") + '</span><div><button class="mini-button" data-symbol-page="prev"' + (hasPrev ? "" : " disabled") + '>이전</button><button class="mini-button" data-symbol-page="next"' + (hasNext ? "" : " disabled") + '>다음</button></div></div>' : '',
+      full && !cumulativeMobile ? '<div class="symbol-pager"><span>' + escapeHtml(resultTotal ? visibleFrom + "-" + visibleTo + " / " + resultTotal + "개 표시" : "표시할 종목 없음") + '</span><div><button class="mini-button" data-symbol-page="prev"' + (hasPrev ? "" : " disabled") + '>이전</button><button class="mini-button" data-symbol-page="next"' + (hasNext ? "" : " disabled") + '>다음</button></div></div>' : '',
       full ? renderSymbolBulkActionBar(renderedItems) : '',
       full ? '<div class="symbol-result-workbench">' : '',
       '<div class="symbol-result-list">',
@@ -23002,6 +23131,13 @@
       '</div>',
       full ? renderSymbolUniverseDetailPanel(renderedItems) : '',
       full ? '</div>' : '',
+      cumulativeMobile ? renderMobileInfiniteScrollFooter({
+        loaded: items.length,
+        total: resultTotal,
+        loading: state.symbolUniverseLoading,
+        hasNext: hasNext,
+        nextAttributes: 'data-symbol-page="next"'
+      }) : '',
       '</article>'
     ].join("");
   }
@@ -27969,6 +28105,13 @@
     }, { passive: true });
     window.addEventListener("resize", function () {
       rememberRenderedPageScrollPosition();
+      var nextInfiniteScrollMode = mobileInfiniteScrollEnabled();
+      if (mobileInfiniteScrollMode !== null && mobileInfiniteScrollMode !== nextInfiniteScrollMode) {
+        mobileInfiniteScrollMode = nextInfiniteScrollMode;
+        render();
+      } else {
+        bindMobileInfiniteScroll();
+      }
       restoreRenderedPageScrollPosition();
       scheduleAppNavScrollState();
       scheduleTopbarScrollState();

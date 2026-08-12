@@ -29465,6 +29465,46 @@ body.oa-overlay-open {
   justify-content: flex-start;
 }
 
+.mobile-infinite-scroll {
+  display: grid;
+  justify-items: center;
+  gap: 8px;
+  min-width: 0;
+  width: 100%;
+  padding: 14px;
+  border-top: 1px solid var(--ds-card-border);
+  background: color-mix(in srgb, var(--panel) 94%, var(--panel-soft) 6%);
+}
+
+.mobile-infinite-scroll span {
+  color: var(--muted);
+  font-size: 12px;
+  font-weight: 820;
+  line-height: 1.35;
+  text-align: center;
+}
+
+.mobile-infinite-scroll .mini-button {
+  min-width: 132px;
+  min-height: 40px;
+}
+
+.mobile-infinite-scroll.is-loading::before {
+  content: "";
+  width: 18px;
+  height: 18px;
+  border: 2px solid color-mix(in srgb, var(--blue) 24%, var(--ds-card-border));
+  border-top-color: var(--blue);
+  border-radius: 50%;
+  animation: oa-refresh-spin 0.85s linear infinite;
+}
+
+.mobile-infinite-scroll.is-complete {
+  padding-top: 12px;
+  padding-bottom: 12px;
+  background: transparent;
+}
+
 @media (max-width: 860px) {
   :root {
     --mobile-page-gutter: 10px;
@@ -30004,6 +30044,15 @@ body.oa-overlay-open {
 
   :is(input, select, textarea, button) {
     max-width: 100%;
+  }
+
+  :is(.oa-pager, .investment-action-pager, .symbol-pager, .investment-calendar-candidate-toolbar) {
+    scroll-margin-bottom: calc(120px + env(safe-area-inset-bottom));
+  }
+
+  .mobile-infinite-scroll {
+    min-height: 68px;
+    padding-bottom: calc(14px + env(safe-area-inset-bottom));
   }
 }
 

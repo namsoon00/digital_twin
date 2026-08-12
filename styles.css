@@ -29443,6 +29443,11 @@ body.oa-overlay-open {
   font-style: normal;
 }
 
+.portfolio-lifecycle-list > div > * {
+  min-width: 0;
+  overflow-wrap: anywhere;
+}
+
 .portfolio-action-plan > div:first-child {
   display: flex;
   align-items: center;
@@ -29472,6 +29477,11 @@ body.oa-overlay-open {
   .portfolio-lifecycle-metrics,
   .portfolio-lifecycle-columns {
     grid-template-columns: minmax(0, 1fr);
+  }
+
+  .portfolio-lifecycle-list > div {
+    grid-template-columns: minmax(0, 1fr);
+    align-items: start;
   }
 }
 

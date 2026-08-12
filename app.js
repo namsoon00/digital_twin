@@ -18463,7 +18463,9 @@
     return ({
       NO_ACTION: "현재 상태 유지",
       REDUCE_POSITION_EXPOSURE: "종목 비중 축소 범위 검토",
-      RESTORE_CASH_FLOOR: "현금 하한 회복 검토"
+      RESTORE_CASH_FLOOR: "현금 하한 회복 검토",
+      INCREASE_UNDERWEIGHT_ALLOCATION: "목표 배분 하단 복원 검토",
+      REDUCE_PORTFOLIO_RISK: "포트폴리오 위험 축소 검토"
     })[String(value || "").toUpperCase()] || String(value || "후보");
   }
 
@@ -18482,6 +18484,8 @@
     var lifecycle = state.portfolioLifecycle || {};
     var reconciliation = lifecycle.reconciliation || {};
     var exposure = lifecycle.exposureSnapshot || {};
+    var risk = lifecycle.portfolioRiskSnapshot || {};
+    var rebalance = lifecycle.rebalanceProposal || {};
     var cycle = lifecycle.portfolioDecisionCycle || {};
     var checkpoint = lifecycle.snapshotCheckpoint || {};
     var activities = Array.isArray(lifecycle.recentInferredActivities) ? lifecycle.recentInferredActivities : [];
@@ -18492,7 +18496,11 @@
     var snapshotQuarantines = Array.isArray(lifecycle.recentSnapshotQuarantines) ? lifecycle.recentSnapshotQuarantines : [];
     var candidates = Array.isArray(cycle.candidates) ? cycle.candidates : [];
     var plans = Array.isArray(lifecycle.actionPlans) ? lifecycle.actionPlans : [];
+    var scenarios = Array.isArray(rebalance.scenarios) ? rebalance.scenarios : [];
+    var executions = Array.isArray(lifecycle.executionEpisodes) ? lifecycle.executionEpisodes : [];
+    var fills = Array.isArray(lifecycle.fills) ? lifecycle.fills : [];
     var attributions = Array.isArray(lifecycle.performanceAttributions) ? lifecycle.performanceAttributions : [];
+    var quality = lifecycle.decisionQualitySummary || {};
     var metrics = Array.isArray(exposure.metrics) ? exposure.metrics : [];
     return [
       '<article class="panel portfolio-lifecycle-panel">',
@@ -18504,6 +18512,8 @@
       renderAccountControlMetric("원장 대사", reconciliation.status || "대기", (reconciliation.differences || []).length + "개 차이", reconciliation.status === "matched" ? "ok" : "warn"),
       renderAccountControlMetric("최근 변화 묶음", activityEpisodes.length + "건", "스냅샷별 원장 활동", activityEpisodes.length ? "ok" : "neutral"),
       renderAccountControlMetric("정책 후보", candidates.length + "개", cycle.dataState || "자료 대기", candidates.length ? "neutral" : "warn"),
+      renderAccountControlMetric("연환산 변동성", Number(risk.sampleCount || 0) ? lifecyclePercent(risk.annualizedVolatilityPct) : "자료 대기", "표본 " + Number(risk.sampleCount || 0) + "개", Number(risk.volatilityPolicyDeltaPct || 0) > 0 ? "warn" : "neutral"),
+      renderAccountControlMetric("최대 낙폭", Number(risk.sampleCount || 0) ? lifecyclePercent(risk.maximumDrawdownPct) : "자료 대기", "상관 최대 " + Number(risk.maximumPairwiseCorrelation || 0).toFixed(2), Number(risk.drawdownPolicyDeltaPct || 0) > 0 ? "warn" : "neutral"),
       renderAccountControlMetric("실행 계획", plans.length + "개", "자동 주문 없음", plans.length ? "neutral" : "warn"),
       renderAccountControlMetric("체크포인트", "v" + Number(checkpoint.checkpointVersion || 0), snapshotQuarantines.length ? "최근 검역 " + snapshotQuarantines.length + "건" : (formatClock(checkpoint.observedAt) || "기준선 대기"), snapshotQuarantines.length ? "warn" : "neutral"),
       renderAccountControlMetric("성과 표본", attributions.length + "건", "1h · 1d · 5d · 20d", attributions.length ? "ok" : "neutral"),
@@ -18535,6 +18545,30 @@
       }).join("") : '<p class="subtle">검토할 실행 계획이 없습니다.</p>',
       '</div></section>',
       '</div>',
+      '<div class="portfolio-lifecycle-columns">',
+      '<section class="portfolio-lifecycle-section"><div class="account-board-title"><strong>리밸런싱 시나리오</strong><span>거래 비용과 회전율을 포함한 비교 후보</span></div>',
+      '<div class="portfolio-lifecycle-list">',
+      scenarios.length ? scenarios.map(function (scenario) {
+        return '<div><strong>' + escapeHtml(scenario.label || scenario.scenario_type || scenario.scenarioType || "시나리오") + '</strong><span>회전율 ' + escapeHtml(lifecyclePercent(scenario.turnover_pct == null ? scenario.turnoverPct : scenario.turnover_pct)) + '</span><em>예상 비용 ' + escapeHtml(formatMoney(Number(scenario.estimated_cost == null ? scenario.estimatedCost : scenario.estimated_cost))) + ' · ' + escapeHtml(scenario.data_state || scenario.dataState || "partial") + '</em></div>';
+      }).join("") : '<p class="subtle">정책 이탈이나 위험 초과가 없어 비교 시나리오가 없습니다.</p>',
+      '</div></section>',
+      '<section class="portfolio-lifecycle-section"><div class="account-board-title"><strong>실제 실행과 체결</strong><span>승인된 계획에 연결된 공급자 체결만 표시</span></div>',
+      '<div class="portfolio-lifecycle-list">',
+      executions.length ? executions.map(function (execution) {
+        var episodeFills = Array.isArray(execution.fills) ? execution.fills : [];
+        return '<div><strong>' + escapeHtml(execution.status || "실행") + '</strong><span>체결 ' + episodeFills.length + '건</span><em>' + escapeHtml(formatClock(execution.completedAt || execution.completed_at || execution.startedAt || execution.started_at)) + '</em></div>';
+      }).join("") : '<p class="subtle">실제 주문 제출은 꺼져 있으며 기록된 체결이 없습니다.</p>',
+      fills.slice(0, 10).map(function (fill) {
+        return '<div><strong>' + escapeHtml((fill.symbol || "종목") + " · " + (fill.side || "")) + '</strong><span>' + escapeHtml(String(fill.quantity || 0) + "주 @ " + formatMoney(Number(fill.price || 0))) + '</span><em>수수료 ' + escapeHtml(formatMoney(Number(fill.fee || 0))) + '</em></div>';
+      }).join(""),
+      '</div></section>',
+      '</div>',
+      '<section class="portfolio-lifecycle-section"><div class="account-board-title"><strong>판단 품질</strong><span>완전한 사후 표본만 초과수익 통계에 사용</span></div>',
+      '<div class="portfolio-lifecycle-list">',
+      '<div><strong>표본 상태</strong><span>전체 ' + Number(quality.sampleCount || 0) + '건 · 완전 ' + Number(quality.completeSampleCount || 0) + '건</span><em>' + escapeHtml(quality.dataState || "partial") + '</em></div>',
+      '<div><strong>벤치마크 대비</strong><span>평균 ' + escapeHtml(lifecyclePercent(quality.meanActiveReturnPct)) + '</span><em>양의 초과수익 ' + escapeHtml(lifecyclePercent(quality.positiveActiveRatePct)) + '</em></div>',
+      '<div><strong>수명주기 준수</strong><span>실행 ' + escapeHtml(lifecyclePercent(quality.executionComplianceRatePct)) + '</span><em>근거 유효 ' + escapeHtml(lifecyclePercent(quality.evidenceValidityRatePct)) + '</em></div>',
+      '</div></section>',
       '<section class="portfolio-lifecycle-section portfolio-activity-history"><div class="account-board-title"><strong>최근 보유 변화</strong><span>실계좌 전체 잔고의 전후 차이</span></div>',
       '<div class="portfolio-lifecycle-list">',
       activities.length ? activities.map(function (activity) {

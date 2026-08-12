@@ -4669,7 +4669,7 @@
   }
 
   function ontologyAuditClientSection(id, label, description, rows) {
-    rows = Array.isArray(rows) ? rows : [];
+    rows = latestChangedFirst(Array.isArray(rows) ? rows : []);
     return {
       id: id,
       label: label,
@@ -5251,7 +5251,7 @@
 
   function hypothesisWorkspaceItems() {
     var payload = hypothesisWorkspacePayload();
-    return Array.isArray(payload.items) ? payload.items : [];
+    return latestChangedFirst(Array.isArray(payload.items) ? payload.items : []);
   }
 
   function hypothesisWorkspaceItemByKey(lifecycleKey) {
@@ -5518,6 +5518,7 @@
   }
 
   function renderHypothesisPolicyVersions(rows, readOnly) {
+    rows = latestChangedFirst(rows);
     if (!rows.length) {
       return [
         '<p class="subtle hypothesis-governance-result">저장된 RuleBox 버전이 없습니다. 현재 활성 규칙을 기준선으로 한 번 기록하면 이후 변경을 복원할 수 있습니다.</p>',
@@ -5529,11 +5530,12 @@
       rows.slice(0, 6).map(function (version) {
         var id = String(version && version.id || "");
         var label = version.versionLabel || version.shortHash || id;
-        var meta = [version.createdAt ? formatClock(version.createdAt) : "", version.author || "", version.status || ""].filter(Boolean).join(" · ");
+        var meta = [version.author || "", version.status || ""].filter(Boolean).join(" · ");
         return [
           '<div>',
           '<strong>' + escapeHtml(label) + '</strong>',
           '<span>' + escapeHtml(meta || "RuleBox 버전") + '</span>',
+          renderRecordChangedAt(version),
           version.changeReason ? '<p>' + escapeHtml(version.changeReason) + '</p>' : '',
           '<button class="icon-text-button" type="button" data-hypothesis-policy-restore="' + escapeHtml(id) + '"' + (readOnly || !id ? ' disabled' : '') + '>복원 검토</button>',
           '</div>'
@@ -5601,8 +5603,7 @@
         var outcome = item.outcomeAssessment && typeof item.outcomeAssessment === "object" ? item.outcomeAssessment : {};
         var meta = [
           item.scopeLabel || "가설",
-          item.materialChange ? "새 변화" : "변화 없음",
-          item.lastTransitionAt ? formatClock(item.lastTransitionAt) : ""
+          item.materialChange ? "새 변화" : "변화 없음"
         ].filter(Boolean).join(" · ");
         return [
           '<button class="hypothesis-workspace-card" type="button" data-work-detail="hypothesis-review" data-work-detail-key="' + escapeHtml(lifecycleKey) + '">',
@@ -5612,6 +5613,7 @@
           '</div>',
           '<strong>' + escapeHtml(item.symbol || "종목") + '</strong>',
           '<em>' + escapeHtml(meta || "현재 세대") + '</em>',
+          renderRecordChangedAt(item),
           '<span class="hypothesis-workspace-card-action">상세 검토</span>',
           '</button>'
         ].join("");
@@ -6460,6 +6462,7 @@
     var items = mobileInfiniteScrollEnabled() && payloadOffset > 0
       ? mergeUniqueItems((state.symbolUniverse || {}).items, incomingItems, symbolUniverseKey)
       : incomingItems;
+    items = latestChangedFirst(items);
     state.symbolUniverse = {
       items: items,
       summary: payload.summary || { markets: [], sources: [], total: 0, maxAgeHours: 24 },
@@ -7483,6 +7486,65 @@
       hour: "2-digit",
       minute: "2-digit"
     });
+  }
+
+  var recordChangedAtFields = [
+    "updatedAt", "updated_at", "modifiedAt", "modified_at", "changedAt", "changed_at",
+    "lastModifiedAt", "last_modified_at", "lastTransitionAt", "reviewedAt", "reviewed_at",
+    "completedAt", "completed_at", "processedAt", "processed_at", "deliveredAt", "delivered_at",
+    "marketDataUpdatedAt", "lastSeenAt", "fetchedAt", "observedAt", "generatedAt", "refreshedAt",
+    "createdAt", "created_at", "publishedAt", "published_at"
+  ];
+
+  function recordChangedAt(record, fallback) {
+    if (typeof record === "number" && Number.isFinite(record) && record > 0) return record;
+    if (typeof record === "string" || record instanceof Date) {
+      return feedTimeValue(record) ? record : (fallback && feedTimeValue(fallback) ? fallback : "");
+    }
+    var sources = [];
+    if (record && typeof record === "object") {
+      sources.push(record);
+      [record.raw, record.payload, record.metadata, record.properties, record.graph, record.stateContract].forEach(function (item) {
+        if (item && typeof item === "object") sources.push(item);
+      });
+    }
+    for (var sourceIndex = 0; sourceIndex < sources.length; sourceIndex += 1) {
+      var source = sources[sourceIndex];
+      for (var fieldIndex = 0; fieldIndex < recordChangedAtFields.length; fieldIndex += 1) {
+        var value = source[recordChangedAtFields[fieldIndex]];
+        if (value && feedTimeValue(value)) return value;
+      }
+    }
+    return fallback && feedTimeValue(fallback) ? fallback : "";
+  }
+
+  function recordChangedAtValue(record, fallback) {
+    var changedAt = recordChangedAt(record, fallback);
+    return typeof changedAt === "number" ? changedAt : feedTimeValue(changedAt);
+  }
+
+  function latestChangedFirst(rows, resolver, tieBreaker) {
+    return (Array.isArray(rows) ? rows : []).map(function (row, index) {
+      var resolved = resolver ? resolver(row, index) : row;
+      return { row: row, index: index, time: recordChangedAtValue(resolved) };
+    }).sort(function (a, b) {
+      if (a.time !== b.time) return b.time - a.time;
+      var tied = tieBreaker ? Number(tieBreaker(a.row, b.row) || 0) : 0;
+      return tied || a.index - b.index;
+    }).map(function (item) { return item.row; });
+  }
+
+  function recordChangedAtText(record, fallback) {
+    var changedAt = recordChangedAt(record, fallback);
+    return changedAt ? "최종 변경 " + formatClock(changedAt) : "변경일 미확인";
+  }
+
+  function renderRecordChangedAt(record, fallback, className) {
+    var changedAt = recordChangedAt(record, fallback);
+    var tag = changedAt ? "time" : "span";
+    var datetime = changedAt ? new Date(changedAt).toISOString() : "";
+    return '<' + tag + ' class="record-changed-at ' + escapeHtml(className || "") + '"' + (datetime ? ' datetime="' + escapeHtml(datetime) + '"' : '') + '>'
+      + escapeHtml(recordChangedAtText(record, fallback)) + '</' + tag + '>';
   }
 
   function formatMoney(value) {
@@ -9525,7 +9587,7 @@
 
   function inferenceLedgerRows() {
     var payload = inferenceLedgerPayload();
-    return Array.isArray(payload.rows) ? payload.rows : [];
+    return latestChangedFirst(Array.isArray(payload.rows) ? payload.rows : []);
   }
 
   function inferenceLedgerSummary() {
@@ -9607,7 +9669,7 @@
 
   function renderReasoningExecutionHistory(payload) {
     var history = payload.executionHistory && typeof payload.executionHistory === "object" ? payload.executionHistory : {};
-    var runs = Array.isArray(history.runs) ? history.runs : [];
+    var runs = latestChangedFirst(Array.isArray(history.runs) ? history.runs : []);
     var runtime = payload.ruleRuntimeSummary && typeof payload.ruleRuntimeSummary === "object" ? payload.ruleRuntimeSummary : {};
     var slowRules = Array.isArray(runtime.rules) ? runtime.rules.slice(0, 12) : [];
     var audit = payload.ruleAudit && typeof payload.ruleAudit === "object" ? payload.ruleAudit : {};
@@ -9661,7 +9723,7 @@
           '<span class="tone-chip ' + escapeHtml(failedRules.length ? "danger" : "watch") + '">' + escapeHtml(run.lane || "CORE_REASONING") + '</span>',
           '<strong>' + escapeHtml(run.runId || "Reasoning run") + '</strong>',
           '<em>' + escapeHtml([run.accountId, run.worldId, "규칙 " + rules.length + "개"].filter(Boolean).join(" · ")) + '</em>',
-          '</div><span>' + escapeHtml(run.updatedAt || "-") + '</span></div>',
+          '</div>' + renderRecordChangedAt(run) + '</div>',
           '<div class="inference-ledger-stage-rail">',
           stages.map(function (stage, index) {
             return '<section class="inference-ledger-stage ' + escapeHtml(inferenceLedgerTone(stage.status)) + '"><b>' + escapeHtml(String(index + 1).padStart(2, "0")) + '</b><div><strong>' + escapeHtml(stage.stageKey || "-") + '</strong><span>' + escapeHtml(stage.status || "-") + '</span><em>' + escapeHtml(formatInteger(stage.durationMs || 0) + "ms") + '</em></div></section>';
@@ -9746,7 +9808,7 @@
       '<strong>' + escapeHtml([row.symbol, row.ruleLabel || row.ruleId].filter(Boolean).join(" · ") || "Inference trace") + '</strong>',
       '<em>' + escapeHtml([row.decisionStage, row.actionPolicy, review.label, data.label, validation.label].filter(Boolean).join(" · ")) + '</em>',
       '</div>',
-      '<span>' + escapeHtml(row.updatedAt || row.traceId || "-") + '</span>',
+      renderRecordChangedAt(row),
       '</div>',
       '<div class="inference-ledger-stage-rail">',
       stages.map(function (stage, index) {
@@ -10480,7 +10542,8 @@
 
   function consoleResearchItems() {
     var payload = currentResearchEvidence();
-    return Array.isArray(payload.items) ? payload.items : [];
+    var items = Array.isArray(payload.items) ? payload.items : [];
+    return latestChangedFirst(items);
   }
 
   function consoleEvidenceBySymbol() {
@@ -10550,9 +10613,10 @@
         raw: item
       };
     }).sort(function (a, b) {
+      var changedDiff = recordChangedAtValue(b) - recordChangedAtValue(a);
+      if (changedDiff) return changedDiff;
       if (a.source !== b.source) return a.source === "watchlist" ? 1 : -1;
-      if (a.impact.tone !== b.impact.tone) return consoleToneRank(b.impact.tone) - consoleToneRank(a.impact.tone);
-      return Math.abs(b.profitLossRate) - Math.abs(a.profitLossRate);
+      return String(a.symbol || "").localeCompare(String(b.symbol || ""));
     });
   }
 
@@ -10596,12 +10660,12 @@
         conflictState: conflictState,
         validationState: validationState,
         profitLossRate: numeric(row.profitLossRate),
+        updatedAt: recordChangedAt(row, recordChangedAt(graph)),
         raw: row
       };
     }).sort(function (a, b) {
-      if (a.blocked !== b.blocked) return a.blocked ? 1 : -1;
-      var reviewDiff = decisionStateMeta("review", b.reviewLevel, "normal").rank - decisionStateMeta("review", a.reviewLevel, "normal").rank;
-      if (reviewDiff) return reviewDiff;
+      var changedDiff = recordChangedAtValue(b) - recordChangedAtValue(a);
+      if (changedDiff) return changedDiff;
       return String(a.symbol || "").localeCompare(String(b.symbol || ""));
     });
   }
@@ -10614,7 +10678,8 @@
       var title = textWithKnownDisplaySymbols(job.title || "", symbol, job) || (symbol ? stockDisplayName(symbol, job) : notificationJobTypeLabel(notificationJobTypeKey(job), [job]));
       return {
         key: notificationJobKey(job),
-        time: job.createdAt,
+        time: recordChangedAt(job),
+        updatedAt: recordChangedAt(job),
         symbol: symbol,
         title: title,
         type: notificationJobTypeLabel(notificationJobTypeKey(job), [job]),
@@ -10625,6 +10690,8 @@
         channel: job.channel || job.deliveryChannel || "Telegram",
         raw: job
       };
+    }).sort(function (a, b) {
+      return recordChangedAtValue(b) - recordChangedAtValue(a);
     });
   }
 
@@ -10648,8 +10715,8 @@
         raw: experiment
       };
     }).sort(function (a, b) {
-      if (a.warnings !== b.warnings) return b.warnings - a.warnings;
-      return Date.parse(b.updatedAt || 0) - Date.parse(a.updatedAt || 0);
+      var changedDiff = recordChangedAtValue(b) - recordChangedAtValue(a);
+      return changedDiff || String(a.title || "").localeCompare(String(b.title || ""));
     });
   }
 
@@ -10667,7 +10734,8 @@
         tone: row.tone,
         action: "판단 상세",
         detailType: "investment-action",
-        detailKey: row.key
+        detailKey: row.key,
+        updatedAt: row.updatedAt
       });
     });
     (state.notificationJobItems || []).filter(function (job) {
@@ -10684,7 +10752,8 @@
         tone: notificationJobToneClass(job.status),
         action: "알림 상세",
         detailType: "notification-job",
-        detailKey: jobKey
+        detailKey: jobKey,
+        updatedAt: recordChangedAt(job)
       });
     });
     var calendarEvents = investmentCalendarUpcomingEvents();
@@ -10709,7 +10778,8 @@
         tone: Number(event.importance || 0) >= 80 ? "caution" : "hold",
         action: "일정 상세",
         detailType: "investment-calendar-event",
-        detailKey: eventKey
+        detailKey: eventKey,
+        updatedAt: recordChangedAt(event)
       });
     });
     var toss = (snapshot || {}).toss || {};
@@ -10724,12 +10794,15 @@
         tone: "danger",
         action: "연결 상세",
         detailType: "account-connections-board",
-        detailKey: ""
+        detailKey: "",
+        updatedAt: recordChangedAt(toss, (snapshot || {}).generatedAt)
       });
     }
     return tasks.sort(function (a, b) {
+      var changedDiff = recordChangedAtValue(b) - recordChangedAtValue(a);
+      if (changedDiff) return changedDiff;
       if (a.priority !== b.priority) return a.priority - b.priority;
-      return consoleToneRank(b.tone) - consoleToneRank(a.tone);
+      return String(a.target || "").localeCompare(String(b.target || ""));
     });
   }
 
@@ -10737,7 +10810,7 @@
     return [
       '<button class="oa-work-row" type="button" data-console-row-key="' + escapeHtml(task.key || [task.kind, task.detailKey].join(":")) + '" data-work-detail="' + escapeHtml(task.detailType || "") + '" data-work-detail-key="' + escapeHtml(task.detailKey || "") + '">',
       '<span class="oa-row-kind">' + escapeHtml(task.kind || "-") + '</span>',
-      '<span class="oa-row-main"><strong>' + escapeHtml(task.target || "-") + '</strong><em>' + escapeHtml(task.reason || "") + '</em></span>',
+      '<span class="oa-row-main"><strong>' + escapeHtml(task.target || "-") + '</strong><em>' + escapeHtml(task.reason || "") + '</em>' + renderRecordChangedAt(task) + '</span>',
       '<span class="tone-chip ' + escapeHtml(task.tone || "hold") + '">' + escapeHtml(task.state || "-") + '</span>',
       '<span class="oa-row-action">' + escapeHtml(task.action || "상세") + ' &rarr;</span>',
       '</button>'
@@ -10763,8 +10836,8 @@
     var tasks = selectConsoleTodayTasks(snapshot, { collapseCalendar: true });
     var urgent = tasks.filter(function (task) { return task.priority <= 2; }).length;
     var upcoming = investmentCalendarUpcomingEvents();
-    var riskHoldings = portfolio.holdings.slice().sort(function (a, b) {
-      return numeric(a.profitLossRate) - numeric(b.profitLossRate);
+    var riskHoldings = latestChangedFirst(portfolio.holdings, function (item) {
+      return recordChangedAt(item, snapshot.generatedAt);
     }).slice(0, 5);
     var metrics = [
       { label: "총 평가", value: formatMoney(portfolio.total), detail: portfolio.holdingCount + "개 보유" },
@@ -10779,7 +10852,7 @@
       riskHoldings.length ? riskHoldings.map(function (item) {
         var hasPnl = hasNumericValue(item.profitLossRate);
         var tone = hasPnl && numeric(item.profitLossRate) < 0 ? "danger" : "hold";
-        return '<div class="oa-context-row" data-console-row-key="' + escapeHtml(String(item.symbol || "")) + '"><span><strong>' + escapeHtml(stockDisplayName(item.symbol, item)) + '</strong><em>' + escapeHtml(item.symbol || "") + '</em></span><b class="' + escapeHtml(tone) + '">' + escapeHtml(optionalSignedPct(item.profitLossRate, hasPnl)) + '</b></div>';
+        return '<div class="oa-context-row" data-console-row-key="' + escapeHtml(String(item.symbol || "")) + '"><span><strong>' + escapeHtml(stockDisplayName(item.symbol, item)) + '</strong><em>' + escapeHtml(item.symbol || "") + '</em>' + renderRecordChangedAt(item, snapshot.generatedAt) + '</span><b class="' + escapeHtml(tone) + '">' + escapeHtml(optionalSignedPct(item.profitLossRate, hasPnl)) + '</b></div>';
       }).join("") : '<div class="oa-context-row"><span><strong>보유 데이터 없음</strong><em>시장 화면에서 종목을 확인하세요.</em></span></div>',
       '</div>',
       upcoming[0] ? '<div class="oa-next-event"><span>다음 일정</span><strong>' + escapeHtml(upcoming[0].title || "투자 이벤트") + '</strong><em>' + escapeHtml(formatClock(upcoming[0].startsAt)) + '</em></div>' : '',
@@ -10798,7 +10871,7 @@
     var decisionLabel = row.decision ? (row.decision.decision || row.decision.action || "판단 있음") : "판단 대기";
     return [
       '<button class="oa-data-row oa-market-row" type="button" data-console-row-key="' + escapeHtml(row.key) + '" data-work-detail="market-instrument" data-work-detail-key="' + escapeHtml(row.symbol) + '">',
-      '<span class="oa-symbol-cell"><strong>' + escapeHtml(row.name || row.symbol) + '</strong><em>' + escapeHtml([row.symbol, row.source === "watchlist" ? "관심" : "보유"].join(" · ")) + '</em></span>',
+      '<span class="oa-symbol-cell"><strong>' + escapeHtml(row.name || row.symbol) + '</strong><em>' + escapeHtml([row.symbol, row.source === "watchlist" ? "관심" : "보유"].join(" · ")) + '</em>' + renderRecordChangedAt(row) + '</span>',
       '<span><strong>' + escapeHtml(optionalPrice(row.currentPrice, row.currency, row.quoteAvailable)) + '</strong><em class="' + escapeHtml(changeTone) + '">' + escapeHtml(optionalSignedPct(row.changeRate, row.changeAvailable)) + '</em></span>',
       '<span><strong class="' + escapeHtml(flowTone) + '">' + escapeHtml(row.flowAvailable ? formatSignalVolume(row.foreignInstitutionNet) : "-") + '</strong><em>외국인+기관</em></span>',
       '<span><strong class="' + escapeHtml(row.impact.tone || "hold") + '">' + escapeHtml(row.impact.label || "근거 대기") + '</strong><em>' + escapeHtml(decisionLabel) + ' · 근거 ' + escapeHtml(row.evidenceCount) + '건</em></span>',
@@ -10815,7 +10888,7 @@
     return [
       '<button class="oa-news-row" type="button" data-console-row-key="' + escapeHtml(key) + '" data-work-detail="research-evidence" data-work-detail-key="' + escapeHtml(key) + '">',
       '<span class="tone-chip ' + escapeHtml(impact.tone || "hold") + '">' + escapeHtml(impact.label || "중립") + '</span>',
-      '<span><strong>' + escapeHtml(translation.displayTitle || "제목 없음") + '</strong><em>' + escapeHtml(researchEvidenceKoreanSummary(item)) + '</em></span>',
+      '<span><strong>' + escapeHtml(translation.displayTitle || "제목 없음") + '</strong><em>' + escapeHtml(researchEvidenceKoreanSummary(item)) + '</em>' + renderRecordChangedAt(item) + '</span>',
       '<small>' + escapeHtml([stockDisplayName(symbol, item), item.source, formatFeedTime(item.publishedAt || item.observedAt)].filter(Boolean).join(" · ")) + '</small>',
       '</button>'
     ].join("");
@@ -10864,7 +10937,7 @@
     var validation = decisionStateMeta("validation", row.validationState, "conditional");
     return [
       '<button class="oa-data-row oa-decision-row" type="button" data-console-row-key="' + escapeHtml(row.key) + '" data-work-detail="investment-action" data-work-detail-key="' + escapeHtml(row.key) + '">',
-      '<span class="oa-symbol-cell"><strong>' + escapeHtml(row.name || row.symbol) + '</strong><em>' + escapeHtml(row.symbol || "") + '</em></span>',
+      '<span class="oa-symbol-cell"><strong>' + escapeHtml(row.name || row.symbol) + '</strong><em>' + escapeHtml(row.symbol || "") + '</em>' + renderRecordChangedAt(row) + '</span>',
       '<span><strong class="' + escapeHtml(row.tone) + '">' + escapeHtml(row.decision) + '</strong><em>' + escapeHtml(decisionStateMeta("change", row.changeState, "unchanged").label) + ' · ' + escapeHtml(review.label) + '</em></span>',
       '<span class="oa-reason-cell"><strong>' + escapeHtml(row.reason) + '</strong><em>약화 조건은 상세에서 확인</em></span>',
       '<span class="oa-open-cell ' + escapeHtml(data.tone) + '">' + escapeHtml(data.label) + ' · ' + escapeHtml(validation.label) + ' &rarr;</span>',
@@ -10916,7 +10989,7 @@
   function renderAlertConsoleRow(row) {
     return [
       '<button class="oa-data-row oa-alert-row" type="button" data-console-row-key="' + escapeHtml(row.key) + '" data-work-detail="notification-job" data-work-detail-key="' + escapeHtml(row.key) + '">',
-      '<span><strong>' + escapeHtml(formatClock(row.time)) + '</strong><em>' + escapeHtml(row.channel) + '</em></span>',
+      '<span><strong>' + escapeHtml(formatClock(row.time)) + '</strong><em>' + escapeHtml(row.channel) + '</em>' + renderRecordChangedAt(row) + '</span>',
       '<span class="oa-symbol-cell"><strong>' + escapeHtml(row.title) + '</strong><em>' + escapeHtml(row.type) + '</em></span>',
       '<span><strong class="' + escapeHtml(row.movement.tone) + '">' + escapeHtml(row.movement.label) + '</strong><em>' + escapeHtml(row.movement.change || row.movement.relation || "상태") + '</em></span>',
       '<span class="oa-reason-cell"><strong>' + escapeHtml(row.reason) + '</strong><em>알림이 온 이유</em></span>',
@@ -10976,7 +11049,7 @@
     var data = decisionStateMeta("data", row.dataState, "partial");
     return [
       '<button class="oa-data-row oa-validation-row" type="button" data-console-row-key="' + escapeHtml(row.key) + '" data-work-detail="ontology-experiment" data-work-detail-key="' + escapeHtml(row.key) + '">',
-      '<span class="oa-symbol-cell"><strong>' + escapeHtml(row.title) + '</strong><em>' + escapeHtml(formatClock(row.updatedAt) || "실행 이력 없음") + '</em></span>',
+      '<span class="oa-symbol-cell"><strong>' + escapeHtml(row.title) + '</strong><em>' + escapeHtml(row.status || "실행 이력 없음") + '</em>' + renderRecordChangedAt(row) + '</span>',
       '<span><strong class="' + escapeHtml(row.tone) + '">' + escapeHtml(row.status) + '</strong><em>실험 상태</em></span>',
       '<span><strong>' + escapeHtml(row.candidateCount) + '개</strong><em>후보 규칙</em></span>',
       '<span><strong class="' + escapeHtml(row.relationDelta < 0 ? "danger" : "watch") + '">' + escapeHtml((row.relationDelta > 0 ? "+" : "") + row.relationDelta) + '</strong><em>관계 변화</em></span>',
@@ -11055,7 +11128,7 @@
         '<button type="button" class="oa-operation-row" data-console-row-key="' + escapeHtml(source.detailType) + '" data-work-detail="' + escapeHtml(source.detailType) + '" data-work-detail-key="">',
         '<span><strong>' + escapeHtml(source.label) + '</strong><em>' + escapeHtml(source.detail) + '</em></span>',
         '<span class="tone-chip ' + escapeHtml(source.tone) + '">' + escapeHtml(source.state) + '</span>',
-        '<small>' + escapeHtml(formatClock(source.updatedAt) || "시각 확인") + '</small>',
+        renderRecordChangedAt(source),
         '<b>점검 &rarr;</b>',
         '</button>'
       ].join("");
@@ -11070,7 +11143,7 @@
       ["런타임 설정", "데이터 API와 로컬 환경", "settings-runtime"]
     ];
     var settingGrid = '<div class="oa-settings-list" data-console-keyed-list="operation-settings">' + settings.map(function (item) {
-      return '<button type="button" data-console-row-key="' + escapeHtml(item[2]) + '" data-work-detail="' + escapeHtml(item[2]) + '" data-work-detail-key=""><span><strong>' + escapeHtml(item[0]) + '</strong><em>' + escapeHtml(item[1]) + '</em></span><b>&rarr;</b></button>';
+        return '<button type="button" data-console-row-key="' + escapeHtml(item[2]) + '" data-work-detail="' + escapeHtml(item[2]) + '" data-work-detail-key=""><span><strong>' + escapeHtml(item[0]) + '</strong><em>' + escapeHtml(item[1]) + '</em>' + renderRecordChangedAt(null) + '</span><b>&rarr;</b></button>';
     }).join("") + '</div>';
     return renderConsoleManagedPage("settings", metrics, [
       '<div class="oa-console-grid oa-operations-grid">',
@@ -11289,7 +11362,7 @@
   }
 
   function investmentCalendarSortEvents(events) {
-    return (events || []).slice().sort(function (a, b) {
+    return latestChangedFirst(events || [], null, function (a, b) {
       return Date.parse(a.startsAt || "") - Date.parse(b.startsAt || "");
     });
   }
@@ -11542,6 +11615,7 @@
       '<div class="investment-calendar-event-copy">',
       '<p class="label">' + escapeHtml(investmentCalendarEventTypeLabel(event.eventType)) + '</p>',
       '<h3>' + escapeHtml(event.title || "이벤트") + '</h3>',
+      renderRecordChangedAt(event),
       '<div class="notification-detail-tags">',
       '<span>중요도 ' + escapeHtml(event.importance || 0) + '</span>',
       '<span>' + escapeHtml(targets.join(" · ") || "전체 포트폴리오") + '</span>',
@@ -11563,7 +11637,7 @@
 
   function investmentCalendarCandidates() {
     var payload = currentInvestmentCalendarCandidates();
-    return Array.isArray(payload.candidates) ? payload.candidates : [];
+    return latestChangedFirst(Array.isArray(payload.candidates) ? payload.candidates : []);
   }
 
   function investmentCalendarCandidatePageInfo(candidates) {
@@ -11733,6 +11807,7 @@
       '<div class="investment-calendar-event-copy">',
       '<p class="label">' + escapeHtml((aiRecommended ? "AI 추천 · " : "") + investmentCalendarEventTypeLabel(candidate.eventType) + " · " + reason) + '</p>',
       '<h3>' + escapeHtml(candidate.title || "자동 감지 후보") + '</h3>',
+      renderRecordChangedAt(candidate),
       '<div class="notification-detail-tags">',
       '<span>중요도 ' + escapeHtml(candidate.importance || 0) + '</span>',
       '<span>' + escapeHtml(targets.join(" · ") || "전체 포트폴리오") + '</span>',
@@ -11982,10 +12057,13 @@
 
   function ontologyAuditSection(sectionId) {
     var loaded = state.ontologyAuditSections && state.ontologyAuditSections[sectionId];
-    if (loaded && typeof loaded === "object") return loaded;
+    if (loaded && typeof loaded === "object") {
+      return Object.assign({}, loaded, { rows: latestChangedFirst(Array.isArray(loaded.rows) ? loaded.rows : []) });
+    }
     var payload = ontologyAuditPayload();
     var sections = payload.sections || {};
-    return sections[sectionId] || ontologyAuditClientSection(sectionId, sectionId, "", []);
+    var section = sections[sectionId] || ontologyAuditClientSection(sectionId, sectionId, "", []);
+    return Object.assign({}, section, { rows: latestChangedFirst(Array.isArray(section.rows) ? section.rows : []) });
   }
 
   function ontologyAuditSectionLabel(sectionId) {
@@ -12121,6 +12199,7 @@
       '<span class="ontology-audit-row-side">',
       row && row.status ? '<b class="tone-chip ' + escapeHtml(tone) + '">' + escapeHtml(row.status) + '</b>' : '',
       '<i>' + escapeHtml(ontologyAuditRowPath(row)) + '</i>',
+      renderRecordChangedAt(row),
       '</span>',
       '</button>'
     ].join("");
@@ -12577,7 +12656,7 @@
   }
 
   function serviceAccounts() {
-    return Array.isArray(state.serviceAccounts) ? state.serviceAccounts : [];
+    return latestChangedFirst(Array.isArray(state.serviceAccounts) ? state.serviceAccounts : []);
   }
 
   function enabledServiceAccounts() {
@@ -13049,7 +13128,7 @@
 
   function ontologyExperimentItems() {
     var payload = ontologyExperimentPayload();
-    return Array.isArray(payload.experiments) ? payload.experiments : [];
+    return latestChangedFirst(Array.isArray(payload.experiments) ? payload.experiments : []);
   }
 
   function ontologyExperimentById(experimentId) {
@@ -13312,7 +13391,7 @@
     var history = Array.isArray(experiment.runHistory) ? experiment.runHistory.slice() : [];
     var latest = ontologyExperimentLatestRun(experiment);
     if (!history.length && (latest.completedAt || latest.promotionStatus || latest.graphRunCount)) history.push(latest);
-    return history;
+    return latestChangedFirst(history);
   }
 
   function ontologyExperimentStageCounts() {
@@ -13705,7 +13784,8 @@
           '<section class="ontology-experiment-audit-row">',
           '<strong>' + escapeHtml(entry.title) + '</strong>',
           '<span>' + escapeHtml(entry.status) + '</span>',
-          '<em>' + escapeHtml([entry.at ? formatClock(entry.at) : "", entry.detail].filter(Boolean).join(" · ")) + '</em>',
+          '<em>' + escapeHtml(entry.detail || "운영 이력") + '</em>',
+          renderRecordChangedAt(entry.at),
           '</section>'
         ].join("");
       }).join("") + '</div>' : renderEmptyState({
@@ -13944,7 +14024,7 @@
       recommendations.length ? renderOntologyExperimentRecommendationList(recommendations, 2) : '',
       applyStatus ? '<p class="subtle">운영 반영 ' + escapeHtml(ontologyApplyStatusLabel(applyStatus)) + (appliedAt ? ' · ' + escapeHtml(formatClock(appliedAt)) : '') + '</p>' : '',
       gate.reasonLabel ? '<p class="subtle">승격 게이트 ' + escapeHtml(gate.reasonLabel) + '</p>' : '',
-      latest.completedAt ? '<p class="subtle">최근 실행 ' + escapeHtml(formatClock(latest.completedAt)) + '</p>' : '',
+      renderRecordChangedAt(experiment, latest.completedAt),
       '<div class="ontology-experiment-card-actions">',
       options.selectable ? '<button class="text-button compact' + (selected ? " primary" : "") + '" type="button" data-lab-select="' + escapeHtml(id) + '"' + ontologyExperimentTooltipAttrs(ontologyExperimentActionTooltip("select")) + (!id || selected ? ' disabled' : '') + '>' + escapeHtml(selected ? "선택됨" : "검토 기준") + '</button>' : '',
       renderWorkDetailButton("ontology-experiment", id, "상세", "text-button compact", ontologyExperimentTooltipAttrs(ontologyExperimentActionTooltip("detail"))),
@@ -14019,7 +14099,7 @@
 
   function strategyProposalItems() {
     var payload = strategyProposalPayload();
-    return Array.isArray(payload.proposals) ? payload.proposals : [];
+    return latestChangedFirst(Array.isArray(payload.proposals) ? payload.proposals : []);
   }
 
   function strategyProposalSummary() {
@@ -14156,14 +14236,14 @@
         var ruleIds = strategyProposalArray(proposal.ruleIds);
         var meta = [
           symbols.slice(0, 4).join(", "),
-          ruleIds.length ? ruleIds.length + "개 룰" : "",
-          proposal.updatedAt ? formatClock(proposal.updatedAt) : ""
+          ruleIds.length ? ruleIds.length + "개 룰" : ""
         ].filter(Boolean).join(" · ");
         return [
           '<button class="strategy-proposal-card' + activeClass + '" type="button" data-strategy-proposal-select="' + escapeHtml(id) + '">',
           '<span class="tone-chip ' + escapeHtml(strategyProposalStatusTone(proposal.status)) + '">' + escapeHtml(strategyProposalStatusLabel(proposal.status)) + '</span>',
           '<strong>' + escapeHtml(proposal.title || id || "전략 제안") + '</strong>',
           '<em>' + escapeHtml(meta || "세부 정보 대기") + '</em>',
+          renderRecordChangedAt(proposal),
           '</button>'
         ].join("");
       }).join(""),
@@ -14344,7 +14424,7 @@
   }
 
   function renderStrategyProposalReviewLog(reviewLog) {
-    var rows = reviewLog.slice(-6).reverse();
+    var rows = latestChangedFirst(reviewLog, function (item) { return item && item.at; }).slice(0, 6);
     return [
       '<section class="strategy-proposal-subpanel">',
       '<div class="strategy-proposal-subpanel-head">',
@@ -14353,7 +14433,6 @@
       '</div>',
       rows.length ? '<div class="strategy-proposal-review-log">' + rows.map(function (item) {
         var meta = [
-          item.at ? formatClock(item.at) : "",
           item.reviewedBy || item.source || item.trigger || "",
           item.validationStatus || ""
         ].filter(Boolean).join(" · ");
@@ -14361,6 +14440,7 @@
           '<div>',
           '<strong>' + escapeHtml(item.action || "record") + '</strong>',
           '<span>' + escapeHtml(meta || "이력 데이터") + '</span>',
+          renderRecordChangedAt(item.at),
           '</div>'
         ].join("");
       }).join("") + '</div>' : '<p class="subtle">아직 승인 또는 검증 이력이 없습니다.</p>',
@@ -14463,11 +14543,11 @@
       return Boolean(signalIds[relation.source] || signalIds[relation.target]);
     });
     return {
-      fxSignals: fxSignals,
-      rateSignals: rateSignals,
-      fxRelations: macroRelations.filter(function (relation) { return ontologyTypeOf(relation) === "HAS_FX_EXPOSURE"; }),
-      rateRelations: macroRelations.filter(function (relation) { return ontologyTypeOf(relation) === "HAS_RATE_SENSITIVITY"; }),
-      macroRelations: macroRelations
+      fxSignals: latestChangedFirst(fxSignals),
+      rateSignals: latestChangedFirst(rateSignals),
+      fxRelations: latestChangedFirst(macroRelations.filter(function (relation) { return ontologyTypeOf(relation) === "HAS_FX_EXPOSURE"; })),
+      rateRelations: latestChangedFirst(macroRelations.filter(function (relation) { return ontologyTypeOf(relation) === "HAS_RATE_SENSITIVITY"; })),
+      macroRelations: latestChangedFirst(macroRelations)
     };
   }
 
@@ -14578,6 +14658,7 @@
       '</div>',
       '<em>' + escapeHtml(ontologyMacroValueText(entity)) + '</em>',
       '<b>' + escapeHtml(relationCount) + ' rel</b>',
+      renderRecordChangedAt(entity),
       '</div>'
     ].join("");
   }
@@ -14613,6 +14694,7 @@
       '<strong>' + escapeHtml(type) + '</strong>',
       '<span>' + escapeHtml(source + " → " + target) + '</span>',
       '<em>' + escapeHtml(label || (weight ? "weight " + weight.toFixed(2) : "-")) + '</em>',
+      renderRecordChangedAt(relation),
       '</div>'
     ].join("");
   }
@@ -15509,10 +15591,10 @@
   function investmentActionFilteredRows(rows) {
     var query = String(state.investmentActionQuery || "").trim().toLowerCase();
     rows = Array.isArray(rows) ? rows : [];
-    if (!query) return rows;
-    return rows.filter(function (row) {
+    var filtered = !query ? rows.slice() : rows.filter(function (row) {
       return investmentActionSearchText(row).indexOf(query) >= 0;
     });
+    return latestChangedFirst(filtered);
   }
 
   function investmentActionPageInfo(rows) {
@@ -15646,6 +15728,7 @@
       '<div class="investment-action-main">',
       '<strong>' + escapeHtml(name) + '</strong>',
       '<span>' + escapeHtml([row.symbol, sourceLabel(row.source), row.market, row.sector].filter(Boolean).join(" · ")) + '</span>',
+      renderRecordChangedAt(row),
       '</div>',
       '<div class="investment-action-stage">',
       '<span class="tone-chip ' + escapeHtml(row.tone || "hold") + '">' + escapeHtml(row.decision || "판단 대기") + '</span>',
@@ -16371,7 +16454,9 @@
         });
       });
     }
-    return rows;
+    return latestChangedFirst(rows, function (row) {
+      return recordChangedAt(row.plan, recordChangedAt(row.opinion));
+    });
   }
 
   function renderOntologyExecutionPlanPanel(cards, parts) {
@@ -16403,6 +16488,7 @@
       '<div class="ontology-execution-title">',
       '<strong>' + escapeHtml(row.displayName || row.symbol || "-") + '</strong>',
       '<span>' + escapeHtml([row.relation, plan.decisionStage, plan.actionGroup, plan.actionLevel].filter(Boolean).join(" · ") || "관계 조건 확인") + '</span>',
+      renderRecordChangedAt(plan, recordChangedAt(row.opinion)),
       '</div>',
       '<span class="tone-chip ' + escapeHtml(tone || "hold") + '">' + escapeHtml(primary) + '</span>',
       addBuy,
@@ -16427,7 +16513,9 @@
 
   function renderOntologyOperationalPanel(parts) {
     var operational = (parts || {}).operationalOntology || {};
-    var pipelines = Array.isArray(operational.pipelines) ? operational.pipelines : [];
+    var pipelines = latestChangedFirst(Array.isArray(operational.pipelines) ? operational.pipelines : [], function (pipeline) {
+      return recordChangedAt(pipeline, recordChangedAt(operational));
+    });
     return [
       '<section class="ontology-surface ontology-operational-surface">',
       '<div class="ontology-surface-head">',
@@ -16446,6 +16534,7 @@
           '<strong>' + escapeHtml(pipeline.key || "-") + '</strong>',
           '<span>target ' + escapeHtml(pipeline.targetMinutes || "-") + '분</span>',
           '<em>configured ' + escapeHtml(pipeline.configuredMinutes || "-") + '분</em>',
+          renderRecordChangedAt(pipeline, recordChangedAt(operational)),
           '</div>'
         ].join("");
       }).join("") : '<div class="ontology-empty">수집 파이프라인 정보가 없습니다.</div>',
@@ -16469,6 +16558,7 @@
     var insights = Array.isArray(parts.insights) && parts.insights.length
       ? parts.insights
       : (parts.aboxEntities || []).filter(function (item) { return String(item && item.kind || "") === "insight"; });
+    insights = latestChangedFirst(insights);
     return [
       '<section class="ontology-surface ontology-insight-surface">',
       '<div class="ontology-surface-head">',
@@ -16495,6 +16585,7 @@
       '</div>',
       '<span class="tone-chip ' + escapeHtml(tone || "hold") + '">' + escapeHtml(review.label) + '</span>',
       '<em>' + escapeHtml(validation.label) + '</em>',
+      renderRecordChangedAt(item),
       properties.thesis ? '<p>' + escapeHtml(textWithKnownDisplaySymbols(beginnerFriendlyText(properties.thesis), properties.symbol, { symbol: properties.symbol })) + '</p>' : '',
       '</div>'
     ].join("");
@@ -16507,6 +16598,7 @@
       : (parts.aboxEntities || []).filter(function (item) {
         return ["data-quality", "data-freshness", "provenance", "source-reliability", "missing-data"].indexOf(String(item && item.kind || "")) >= 0;
       });
+    nodes = latestChangedFirst(nodes);
     return [
       '<section class="ontology-surface ontology-data-quality-surface">',
       '<div class="ontology-surface-head">',
@@ -16537,6 +16629,7 @@
       '<span>' + escapeHtml(meta || "품질 정보") + '</span>',
       '</div>',
       '<em>' + escapeHtml(value) + '</em>',
+      renderRecordChangedAt(item),
       '</div>'
     ].join("");
   }
@@ -16830,30 +16923,33 @@
   function ontologyReadableRuleRows(parts) {
     var rules = ontologyRuleboxRules();
     if (!rules.length) {
-      return ((((parts || {}).tbox || {}).reasoningRuleDefinitions || [])).slice(0, 8).map(function (item, index) {
+      return latestChangedFirst(((((parts || {}).tbox || {}).reasoningRuleDefinitions || [])).map(function (item, index) {
         return {
           id: "tbox-rule-" + index,
           label: item.text || item.label || "TBox reasoning rule",
           detail: item.bounded_context || item.boundedContext || "reasoning-insight",
           relationTypes: [],
           conditionCount: 0,
-          derivationCount: 0
+          derivationCount: 0,
+          updatedAt: recordChangedAt(item)
         };
-      });
+      })).slice(0, 8);
     }
-    return rules.slice().sort(function (a, b) {
+    var rows = rules.slice().sort(function (a, b) {
       var priority = String(b.action_level || b.actionLevel || "").localeCompare(String(a.action_level || a.actionLevel || ""));
       return priority || ontologyRuleId(a).localeCompare(ontologyRuleId(b));
-    }).slice(0, 10).map(function (rule) {
+    }).map(function (rule) {
       return {
         id: ontologyRuleId(rule),
         label: rule.label || ontologyRuleId(rule) || "RuleBox rule",
         detail: [rule.action_group || rule.actionGroup, rule.action_level || rule.actionLevel, rule.prompt_hint || rule.promptHint].filter(Boolean).join(" · "),
         relationTypes: ontologyRuleRelationTypes(rule),
         conditionCount: ontologyRuleConditions(rule).length,
-        derivationCount: ontologyRuleDerivations(rule).length
+        derivationCount: ontologyRuleDerivations(rule).length,
+        updatedAt: recordChangedAt(rule)
       };
     });
+    return latestChangedFirst(rows).slice(0, 10);
   }
 
   function ontologyRelationPriority(type) {
@@ -16894,20 +16990,24 @@
     var groups = {};
     (parts.aboxRelations || []).forEach(function (relation) {
       var type = ontologyTypeOf(relation) || "RELATED_TO";
-      if (!groups[type]) groups[type] = { type: type, count: 0, examples: [] };
+      if (!groups[type]) groups[type] = { type: type, count: 0, examples: [], updatedAt: "" };
       groups[type].count += 1;
+      if (recordChangedAtValue(relation) > recordChangedAtValue(groups[type].updatedAt)) {
+        groups[type].updatedAt = recordChangedAt(relation);
+      }
       if (groups[type].examples.length < 3) {
         groups[type].examples.push(ontologyEndpointLabel(relation.source, labels) + " → " + ontologyEndpointLabel(relation.target, labels));
       }
     });
-    return Object.keys(groups).map(function (key) {
+    var groupedRows = Object.keys(groups).map(function (key) {
       return groups[key];
     }).sort(function (a, b) {
       var priority = ontologyRelationPriority(a.type) - ontologyRelationPriority(b.type);
       if (priority !== 0) return priority;
       if (b.count !== a.count) return b.count - a.count;
       return a.type.localeCompare(b.type);
-    }).slice(0, 12);
+    });
+    return latestChangedFirst(groupedRows).slice(0, 12);
   }
 
   function ontologyInferenceRelationTypes() {
@@ -16928,28 +17028,30 @@
     parts = parts || {};
     var labels = parts.entityLabels || {};
     var inferenceTypes = ontologyInferenceRelationTypes();
-    var rows = (parts.relations || parts.aboxRelations || []).filter(function (relation) {
+    var rows = latestChangedFirst((parts.relations || parts.aboxRelations || []).filter(function (relation) {
       var type = ontologyTypeOf(relation);
       return inferenceTypes[type] || ontologyBoxOf(relation) === "INFERENCEBOX";
-    }).slice(0, 10).map(function (relation) {
+    })).slice(0, 10).map(function (relation) {
       var props = relation.properties || {};
       return {
         type: ontologyTypeOf(relation),
         source: ontologyEndpointLabel(relation.source, labels),
         target: ontologyEndpointLabel(relation.target, labels),
         detail: [props.aiInfluenceLabel, props.decisionStage, props.ruleId].filter(Boolean).join(" · "),
-        stateLabel: decisionStateMeta("evidence", props.evidenceRole || props.evidence_role, "context").label
+        stateLabel: decisionStateMeta("evidence", props.evidenceRole || props.evidence_role, "context").label,
+        updatedAt: recordChangedAt(relation)
       };
     });
     if (rows.length) return rows;
-    return (parts.insights || []).slice(0, 6).map(function (item) {
+    return latestChangedFirst(parts.insights || []).slice(0, 6).map(function (item) {
       var props = item.properties || {};
       return {
         type: "INSIGHT",
         source: props.symbol ? stockDisplayName(props.symbol) : "ontology",
         target: ontologyEntityDisplayLabel(item, item && item.id),
         detail: [props.insightType, props.severity].filter(Boolean).join(" · "),
-        stateLabel: decisionStateMeta("review", props.reviewLevel || props.review_level, "observe").label
+        stateLabel: decisionStateMeta("review", props.reviewLevel || props.review_level, "observe").label,
+        updatedAt: recordChangedAt(item)
       };
     });
   }
@@ -17386,6 +17488,7 @@
       '<span>' + escapeHtml(row.detail || row.id || "-") + '</span>',
       '<em>' + escapeHtml(row.conditionCount + " conditions · " + row.derivationCount + " derives") + '</em>',
       row.relationTypes.length ? '<b>' + escapeHtml(row.relationTypes.slice(0, 4).join(" / ")) + '</b>' : '',
+      renderRecordChangedAt(row),
       '</div>'
     ].join("");
   }
@@ -17396,6 +17499,7 @@
       '<strong>' + escapeHtml(row.type || "-") + '</strong>',
       '<span>' + escapeHtml((row.examples || []).join(" · ") || "-") + '</span>',
       '<em>' + escapeHtml(row.count + " rows") + '</em>',
+      renderRecordChangedAt(row),
       '</div>'
     ].join("");
   }
@@ -17406,6 +17510,7 @@
       '<strong>' + escapeHtml(row.type || "-") + '</strong>',
       '<span>' + escapeHtml([row.source, row.target].filter(Boolean).join(" → ")) + '</span>',
       '<em>' + escapeHtml([row.detail, row.stateLabel].filter(Boolean).join(" · ") || "-") + '</em>',
+      renderRecordChangedAt(row),
       '</div>'
     ].join("");
   }
@@ -17702,6 +17807,7 @@
       '<div>',
       '<strong>' + escapeHtml(account.label || account.id || "-") + '</strong>',
       '<span>' + escapeHtml(account.id || "-") + ' · ' + escapeHtml(account.provider || "toss") + ' · ' + escapeHtml(enabled ? "사용" : "중지") + '</span>',
+      renderRecordChangedAt(account),
       '</div>',
       '<button class="mini-button" data-account-edit="' + escapeHtml(account.id || "") + '">수정</button>',
       '</div>',
@@ -17837,6 +17943,7 @@
       '<div>',
       '<strong>' + escapeHtml(account.label || account.id || "-") + '</strong>',
       '<span>' + escapeHtml(account.id || "-") + ' · ' + escapeHtml(account.enabled === false ? "중지" : "사용") + '</span>',
+      renderRecordChangedAt(account),
       '</div>',
       '<div class="chip-row">',
       symbols.length ? symbols.map(function (symbol) {
@@ -17925,6 +18032,7 @@
       '<div class="account-watch-symbol-main">',
       '<strong>' + escapeHtml(stockDisplayName(original, merged)) + '</strong>',
       '<span>' + escapeHtml(stockDisplayMeta(merged, [marketLabel(merged.market || "-"), merged.sector || "-"])) + '</span>',
+      renderRecordChangedAt(merged, recordChangedAt(account)),
       renderWatchAlertMeta(merged),
       '</div>',
       '<div class="account-watch-symbol-side">',
@@ -18561,6 +18669,7 @@
       accountRowStatusChip(account),
       '</div>',
       '<span class="service-account-line">' + escapeHtml(account.id || "-") + ' · ' + escapeHtml(account.provider || "toss") + ' · ' + escapeHtml(account.enabled === false ? "중지" : "사용") + '</span>',
+      renderRecordChangedAt(account),
       '<span class="service-account-line">관심 ' + escapeHtml(watchlist || "-") + '</span>',
       renderAccountExposureGrid(account),
       '</div>',
@@ -18906,7 +19015,9 @@
       '<span><strong>' + escapeHtml(group.name) + '</strong><em>' + escapeHtml(enabledCount + "/" + group.rules.length + "개 사용" + (selectedInGroup ? " · 선택됨" : "")) + '</em></span>',
       '<b>' + escapeHtml(expanded ? "접기" : "보기") + '</b>',
       '</button>',
-      expanded ? '<div class="admin-message-list">' + group.rules.map(function (rule) {
+      expanded ? '<div class="admin-message-list">' + latestChangedFirst(group.rules, function (rule) {
+        return recordChangedAt(rule, recordChangedAt(notificationTemplateForEdit(rule.key)));
+      }).map(function (rule) {
         return renderAdminMessageRow(
           rule,
           enabledAlertRule(rules, rule.key),
@@ -18933,6 +19044,7 @@
       '<label class="admin-message-main" for="' + escapeHtml(ruleId) + '">',
       '<strong>' + escapeHtml(labelWithNotificationIcon(rule.key, rule.label)) + '</strong>',
       '<em>' + escapeHtml(rule.group + " · " + rule.description) + '</em>',
+      renderRecordChangedAt(rule, recordChangedAt(template)),
       '</label>',
       '<span class="admin-cadence-field">',
       '<input data-alert-cadence="' + escapeHtml(rule.key) + '" type="number" min="10" step="10" value="' + escapeHtml(cadence) + '" />',
@@ -19219,12 +19331,12 @@
     var query = String(state.notificationJobSearch || "").trim().toLowerCase();
     var status = String(state.notificationJobStatusFilter || "all");
     var type = String(state.notificationJobTypeFilter || "all");
-    return jobs.filter(function (job) {
+    return latestChangedFirst(jobs.filter(function (job) {
       if (status !== "all" && notificationJobStatusKey(job) !== status) return false;
       if (type !== "all" && notificationJobTypeKey(job) !== type) return false;
       if (query && notificationJobSearchText(job).indexOf(query) < 0) return false;
       return true;
-    });
+    }));
   }
 
   function renderNotificationJobFilterOptions(options, currentValue, labelFn) {
@@ -19904,7 +20016,7 @@
       '<div class="notification-decision-top">',
       '<span class="tone-chip ' + escapeHtml(notificationJobToneClass(job.status)) + '">' + escapeHtml(notificationJobStatusLabel(job.status)) + '</span>',
       '<strong>' + escapeHtml(labelWithNotificationIcon(job.messageType, job.messageTypeLabel || job.messageType || "-")) + '</strong>',
-      '<span>' + escapeHtml(formatClock(job.createdAt)) + '</span>',
+      renderRecordChangedAt(job),
       '</div>',
       '<div class="notification-decision-target">' + escapeHtml(target || job.messageType || "-") + '</div>',
       '<div class="notification-decision-state">',
@@ -20297,6 +20409,7 @@
       '<div class="notification-template-meta">',
       '<strong>' + escapeHtml(detailMode ? "템플릿" : notificationTemplateLabel(item.messageType)) + '</strong>',
       '<span>' + escapeHtml(item.messageType || "-") + (item.description && !detailMode ? " · " + escapeHtml(item.description) : "") + '</span>',
+      renderRecordChangedAt(item),
       detailMode ? '' : '<div class="template-schedule-compact">' + renderMessageScheduleSummary(schedule) + '</div>',
       '</div>',
       '<textarea data-notification-template="' + escapeHtml(item.messageType || "") + '" rows="3"' + (disabled ? " disabled" : "") + '>' + escapeHtml(item.template || "") + '</textarea>',
@@ -20452,7 +20565,9 @@
   }
 
   function renderStrategyDataPanel(snapshot) {
-    var diagnostics = strategyDataDiagnostics(snapshot);
+    var diagnostics = strategyDataDiagnostics(snapshot).map(function (item) {
+      return Object.assign({}, item, { updatedAt: recordChangedAt(item, (snapshot || {}).generatedAt) });
+    });
     var issueCount = diagnostics.filter(function (item) {
       return item.tone === "caution" || item.tone === "danger";
     }).length;
@@ -20485,6 +20600,7 @@
       '<div class="strategy-data-status">',
       '<span class="tone-chip ' + escapeHtml(item.tone || "hold") + '">' + escapeHtml(item.value) + '</span>',
       '<b title="' + escapeHtml(fullSymbols) + '">' + escapeHtml(symbols) + '</b>',
+      renderRecordChangedAt(item),
       '</div>',
       '</div>'
     ].join("");
@@ -22198,10 +22314,10 @@
 
   function renderTypeDBRuleboxPanel() {
     var payload = state.ontologyRulebox || {};
-    var rules = Array.isArray(payload.rules) ? payload.rules : [];
+    var rules = latestChangedFirst(Array.isArray(payload.rules) ? payload.rules : []);
     var relationTypes = Array.isArray(payload.relationTypes) ? payload.relationTypes : [];
-    var versions = Array.isArray(payload.versions) ? payload.versions : [];
-    var candidates = Array.isArray(payload.changeCandidates) ? payload.changeCandidates : [];
+    var versions = latestChangedFirst(Array.isArray(payload.versions) ? payload.versions : []);
+    var candidates = latestChangedFirst(Array.isArray(payload.changeCandidates) ? payload.changeCandidates : []);
     var lastRun = state.ontologyRuleboxLastRun || {};
     var accountOptions = ontologyAccountOptions();
     var disabled = state.ontologyRuleboxSaving || state.ontologyRuleboxRunning || state.ontologyRuleboxProposing || state.serverSettingsLocked;
@@ -22312,6 +22428,7 @@
       '<span>' + escapeHtml(rule.enabled === false ? "disabled" : (rule.action_group || rule.actionGroup || "enabled")) + '</span>',
       '<strong>' + escapeHtml(rule.label || rule.rule_id || rule.ruleId || "Rule") + '</strong>',
       '<em>' + escapeHtml((rule.rule_id || rule.ruleId || "") + " · " + conditions.length + " conditions · " + (relationTypes.join(", ") || derivations.length + " derivations")) + '</em>',
+      renderRecordChangedAt(rule),
       '</div>'
     ].join("");
   }
@@ -22321,7 +22438,8 @@
       '<div class="source-row rulebox-version-row">',
       '<span>' + escapeHtml(version.versionLabel || version.shortHash || "-") + '</span>',
       '<strong>' + escapeHtml(version.changeReason || "변경 이유 없음") + '</strong>',
-      '<em>' + escapeHtml([formatClock(version.createdAt), (version.ruleCount || 0) + " rules", version.author || ""].filter(Boolean).join(" · ")) + '</em>',
+      '<em>' + escapeHtml([(version.ruleCount || 0) + " rules", version.author || ""].filter(Boolean).join(" · ")) + '</em>',
+      renderRecordChangedAt(version),
       '</div>'
     ].join("");
   }
@@ -22335,6 +22453,7 @@
       '<span>' + escapeHtml(candidate.status || "candidate") + '</span>',
       '<strong>' + escapeHtml(candidate.title || candidate.id || "관계 후보") + '</strong>',
       '<em>' + escapeHtml(candidate.rationale || "") + (requiresData.length ? '<br><small>' + escapeHtml("필요 데이터: " + requiresData.join(", ")) + '</small>' : '') + '</em>',
+      renderRecordChangedAt(candidate),
       '<button class="text-button" type="button" data-action="append-rulebox-candidate" data-candidate-id="' + escapeHtml(candidate.id || "") + '"' + (!canAppend || disabled ? ' disabled' : '') + '>' + escapeHtml(candidate.status === "covered" ? "반영됨" : proposed ? "JSON에 추가" : "데이터 필요") + '</button>',
       '</div>'
     ].join("");
@@ -22381,6 +22500,7 @@
           '<span>' + escapeHtml(prompt.id) + '</span>',
           '<strong>' + escapeHtml(prompt.label || prompt.id) + '</strong>',
           '<em>' + escapeHtml([prompt.version, prompt.purpose].filter(Boolean).join(" · ")) + '</em>',
+          renderRecordChangedAt(prompt),
           '</div>'
         ].join("");
       }).join("") || '<p class="subtle">등록된 프롬프트가 없습니다.</p>',
@@ -22391,11 +22511,12 @@
   }
 
   function renderModelPreviewPanel(snapshot) {
-    var items = buildTradeSignalItems(snapshot).map(function (item) {
+    var items = latestChangedFirst(buildTradeSignalItems(snapshot).map(function (item) {
       return Object.assign({}, item, { model: categoricalModelState(item) });
-    }).sort(function (a, b) {
-      if (a.model.rank !== b.model.rank) return a.model.rank - b.model.rank;
-      return String(a.symbol || "").localeCompare(String(b.symbol || ""));
+    }), function (item) {
+      return recordChangedAt(item, (snapshot || {}).generatedAt);
+    }, function (a, b) {
+      return Number((a.model || {}).rank || 0) - Number((b.model || {}).rank || 0);
     });
     return [
       '<article class="panel model-preview-panel">',
@@ -22428,6 +22549,7 @@
       '<div>',
       '<strong>' + escapeHtml(displayName) + '</strong>',
       '<span>' + escapeHtml(stockDisplayMeta(item, [sourceLabel(item.source), "현재 " + (item.currentPrice ? formatPrice(item.currentPrice, item.currency) : "-")])) + '</span>',
+      renderRecordChangedAt(item, (state.snapshot || {}).generatedAt),
       '</div>',
       '<span class="tone-chip ' + escapeHtml(model.tone || "hold") + '">' + escapeHtml(model.action) + '</span>',
       '</div>',
@@ -22541,7 +22663,7 @@
   }
 
   function renderAlertCenterPanel(snapshot) {
-    var alerts = buildAlertItems(snapshot);
+    var alerts = latestChangedFirst(buildAlertItems(snapshot));
     var stats = alertStats(alerts);
     var visibleAlerts = alerts.slice(0, 6);
     return [
@@ -22595,6 +22717,7 @@
       '<div>',
       '<strong>' + escapeHtml(title) + '</strong>',
       '<span>' + escapeHtml(meta.join(" · ")) + '</span>',
+      renderRecordChangedAt(alert),
       '</div>',
       '<span class="tone-chip hold">' + escapeHtml(alertRuleLabel(alert.rule)) + '</span>',
       '</div>',
@@ -22889,7 +23012,9 @@
   }
 
   function renderMonitoringInstrumentPanel(snapshot) {
-    var items = instrumentItems(snapshot);
+    var items = latestChangedFirst(instrumentItems(snapshot), function (item) {
+      return recordChangedAt(item, snapshot.generatedAt);
+    });
     var signalMap = {};
     buildTradeSignalItems(snapshot).forEach(function (item) {
       signalMap[item.symbol] = item;
@@ -22955,6 +23080,7 @@
       '</div>',
       '<span>' + escapeHtml(stockDisplayMeta(item, [marketLabel(item.market || "-"), item.sector || "-"])) + '</span>',
       '<span>' + escapeHtml(detailText) + '</span>',
+      renderRecordChangedAt(item),
       '</div>',
       '<div class="monitoring-instrument-side">',
       '<strong>' + escapeHtml(valueText) + '</strong>',
@@ -23512,6 +23638,7 @@
       '<div class="symbol-result-title">',
       '<strong>' + escapeHtml(stockDisplayName(symbol, item)) + '</strong>',
       '<span>' + escapeHtml(stockDisplayMeta(item, [marketLabel(item.market || item.exchange), item.sector || item.assetType || "STOCK"])) + '</span>',
+      renderRecordChangedAt(item),
       '</div>',
       '<div class="symbol-result-meta">',
       '<span>' + escapeHtml(marketLabel(item.market || item.exchange)) + '</span>',
@@ -24237,6 +24364,7 @@
       '<div>',
       '<strong>' + escapeHtml(stockDisplayName(symbol, instrument)) + '</strong>',
       '<span>' + escapeHtml([symbol, sourceLabel(instrument.source), marketLabel(instrument.market || instrument.exchange), instrument.sector || ""].filter(Boolean).join(" · ")) + '</span>',
+      renderRecordChangedAt(latest || recordChangedAt(instrument)),
       '</div>',
       '<em>' + escapeHtml("호재 " + impacts.watch + " · 악재 " + impacts.danger + " · 중립 " + impacts.hold) + '</em>',
       '<b>' + escapeHtml(related.length ? ("최근 " + feedFreshness(latest).label) : "연결 뉴스 대기") + '</b>',
@@ -24264,6 +24392,7 @@
           '<div>',
           '<strong>' + escapeHtml(row.source) + '</strong>',
           '<span>' + escapeHtml(row.kind + " · " + row.dataLabel) + '</span>',
+          renderRecordChangedAt(row.latestTime),
           '</div>',
           '<em>' + escapeHtml(row.count + "건") + '</em>',
           '<b>' + escapeHtml(row.latestLabel) + '</b>',

@@ -3,7 +3,7 @@ from typing import Dict, List
 
 from .entity import other_company_aliases, target_aliases
 from .entity_resolution import TargetEntityResolution, matched_aliases, resolve_target_entity
-from .publisher import publisher_identity
+from .provenance import annotate_source_provenance, resolve_source_provenance
 
 
 NEWS_ELIGIBILITY_VERSION = "news-eligibility-v1"
@@ -76,6 +76,7 @@ def assess_news_eligibility(
     provider: object = "",
     url: object = "",
     lifecycle_state: object = "active",
+    **_unused: object,
 ) -> NewsEligibility:
     payload = _dict(payload)
     facts = _dict(payload.get("articleFacts"))
@@ -90,12 +91,21 @@ def assess_news_eligibility(
         symbol,
         name or payload.get("name") or payload.get("companyName"),
     )
-    source_profile = publisher_identity(payload, source, provider, url).to_dict()
+    resolved_provenance = resolve_source_provenance(
+        payload,
+        title=title,
+        summary=summary,
+        source=source,
+        provider=provider,
+        url=url,
+    )
+    source_profile = _dict(payload.get("sourceIdentity")) or resolved_provenance.identity.to_dict()
+    provenance = _dict(payload.get("sourceProvenance")) or resolved_provenance.to_dict()
     active = _text(lifecycle_state or payload.get("evidenceLifecycleState") or "active").lower() == "active"
     kind = _text(payload.get("kind") or "news").lower()
     scope = _text(payload.get("relationScope")).lower()
     relevance = _text(payload.get("relevanceState")).lower()
-    trust = _text(payload.get("sourceTrustState") or facts.get("sourceTrustState")).lower()
+    trust = _text(payload.get("sourceTrustState") or source_profile.get("sourceTrustState") or facts.get("sourceTrustState")).lower()
     materiality = _text(payload.get("materialityState") or facts.get("materialityState")).lower()
     validation = _text(payload.get("validationState") or facts.get("validationState")).lower()
     read_status = _text(payload.get("articleReadStatus") or facts.get("readStatus")).lower()
@@ -103,6 +113,9 @@ def assess_news_eligibility(
     body_quality = facts.get("bodyQualityPassed") is True and payload.get("bodyQualityPassed") is not False
     summary_state = _text(summary_quality.get("state") or payload.get("summaryQualityState")).lower()
     analysis_status = _text(analysis.get("status") or payload.get("analysisStatus")).lower()
+    content_type = _text(source_profile.get("contentType") or provenance.get("contentType") or payload.get("contentType")).lower()
+    relationship = _text(provenance.get("evidenceRelationship") or payload.get("evidenceRelationship")).lower()
+    publisher_tier = _text(source_profile.get("publisherTier") or _dict(provenance.get("originalPublisher")).get("tier")).upper()
     target_confirmed = resolution.target_subject_confirmed
     if not _text(title) and quality_gate.get("targetSubjectConfirmed") is True:
         target_confirmed = True
@@ -136,6 +149,8 @@ def assess_news_eligibility(
         display_reasons.append("analysis-conflict")
     if trust not in {"standard", "trusted"}:
         display_reasons.append("source-trust-below-policy")
+    if relationship in {"exact-duplicate", "syndicated-copy"}:
+        display_reasons.append("duplicate-publication")
     display_reasons = list(dict.fromkeys(display_reasons))
     display = EligibilityLayer(not display_reasons, display_reasons)
 
@@ -146,18 +161,26 @@ def assess_news_eligibility(
         alert_reasons.append("materiality-below-policy")
     if validation == "blocked":
         alert_reasons.append("validation-blocked")
+    if content_type in {"opinion", "aggregation", "automated", "unknown"}:
+        alert_reasons.append("content-type-not-alertable")
     alert_reasons = list(dict.fromkeys(alert_reasons))
     alert = EligibilityLayer(not alert_reasons, alert_reasons)
 
     reasoning_reasons = list(alert_reasons)
     if not _bool(governance.get("investmentJudgmentEligible")):
         reasoning_reasons.append("claim-governance-not-eligible")
+    if not _bool(provenance.get("provenanceComplete")):
+        reasoning_reasons.append("source-provenance-incomplete")
+    if publisher_tier not in {"A", "B", "C"}:
+        reasoning_reasons.append("publisher-tier-below-reasoning-policy")
+    if content_type in {"opinion", "aggregation", "automated", "unknown"}:
+        reasoning_reasons.append("content-type-not-reasoning-eligible")
     reasoning_reasons = list(dict.fromkeys(reasoning_reasons))
     reasoning = EligibilityLayer(not reasoning_reasons, reasoning_reasons)
     return NewsEligibility(archive, display, alert, reasoning, resolution, source_profile)
 
 
 def annotate_news_eligibility(payload: Dict[str, object], **context: object) -> Dict[str, object]:
-    result = dict(payload or {})
+    result = annotate_source_provenance(dict(payload or {}), **context)
     result["newsEligibility"] = assess_news_eligibility(result, **context).to_dict()
     return result

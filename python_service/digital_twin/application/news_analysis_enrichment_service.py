@@ -23,6 +23,7 @@ from ..domain.news_ai_analysis import (
     summary_quality_payload,
 )
 from ..domain import news_analysis as news_domain
+from ..news_intelligence.application.analyze_article import annotate_evidence_eligibility
 
 
 DISABLED_VALUES = {"0", "false", "no", "off", "disabled"}
@@ -313,6 +314,10 @@ class NewsAnalysisEnrichmentRunner:
                     self.target_for(item),
                     item,
                     external_timeout_seconds=self.timeout_seconds(),
+                )
+                result = annotate_evidence_eligibility(
+                    result,
+                    self.settings.get("researchClaimSourceRegistry") or "",
                 )
                 payload = dict(result.raw_payload or {})
                 analysis = dict(payload.get("aiAnalysis") or {})

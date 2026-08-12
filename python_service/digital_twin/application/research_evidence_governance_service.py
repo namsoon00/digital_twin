@@ -2,6 +2,8 @@ from typing import Dict, List
 
 from ..domain.investment_evidence_governance import claim_policy, claim_quality_summary, governed_evidence
 from ..domain.investment_research import NewsCollectionTarget, ResearchEvidence
+from ..news_intelligence.application.analyze_article import annotate_evidence_eligibility
+from ..news_intelligence.application.normalize_sources import normalize_evidence_sources
 
 
 def int_setting(settings: Dict[str, object], key: str, fallback: int, lower: int = 1, upper: int = 10000) -> int:
@@ -56,6 +58,11 @@ class ResearchEvidenceGovernanceService:
     def revalidate(self, symbol: str = "", limit: int = 500) -> Dict[str, object]:
         normalized_symbol = str(symbol or "").upper().strip()
         items = self.load_items(normalized_symbol, limit)
+        news_items = [item for item in items if str(item.kind or "").lower() == "news"]
+        normalize_evidence_sources(
+            news_items,
+            self.settings.get("researchClaimSourceRegistry") or "",
+        )
         groups: Dict[str, List[ResearchEvidence]] = {}
         for item in items:
             item_symbol = str(item.symbol or "").upper().strip()
@@ -75,6 +82,25 @@ class ResearchEvidenceGovernanceService:
             written_items.extend(group)
             rejected_count += len(rejected)
             eligible_count += len(verified)
+        normalize_evidence_sources(
+            news_items,
+            self.settings.get("researchClaimSourceRegistry") or "",
+        )
+        for item in news_items:
+            annotate_evidence_eligibility(
+                item,
+                self.settings.get("researchClaimSourceRegistry") or "",
+            )
+        provenance_complete_count = 0
+        duplicate_publication_count = 0
+        unresolved_publisher_count = 0
+        for item in news_items:
+            payload = item.raw_payload if isinstance(item.raw_payload, dict) else {}
+            provenance = payload.get("sourceProvenance") if isinstance(payload.get("sourceProvenance"), dict) else {}
+            original = provenance.get("originalPublisher") if isinstance(provenance.get("originalPublisher"), dict) else {}
+            provenance_complete_count += int(bool(provenance.get("provenanceComplete")))
+            duplicate_publication_count += int(str(provenance.get("evidenceRelationship") or "") in {"exact-duplicate", "syndicated-copy"})
+            unresolved_publisher_count += int(not original.get("publisherId") or original.get("publisherId") == "unknown")
         written = self.evidence_store.upsert_many(written_items) if written_items else 0
         return {
             "status": "ok",
@@ -84,5 +110,8 @@ class ResearchEvidenceGovernanceService:
             "eligibleEvidenceCount": eligible_count,
             "rejectedEvidenceCount": rejected_count,
             "claimQuality": claim_quality_summary(written_items),
+            "provenanceCompleteCount": provenance_complete_count,
+            "duplicatePublicationCount": duplicate_publication_count,
+            "unresolvedPublisherCount": unresolved_publisher_count,
             "maxAgeMinutes": self.max_age_minutes(),
         }

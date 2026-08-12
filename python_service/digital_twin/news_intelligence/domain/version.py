@@ -1,1 +1,1 @@
-NEWS_INTELLIGENCE_VERSION = "news-intelligence-v1"
+NEWS_INTELLIGENCE_VERSION = "news-intelligence-v2"

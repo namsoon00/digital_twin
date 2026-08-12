@@ -9,6 +9,7 @@ from .data_freshness import parse_datetime
 from .investment_brain import stable_id, utc_now_iso
 from .investment_research import NewsCollectionTarget, ResearchEvidence, target_aliases
 from . import news_analysis as news_domain
+from ..news_intelligence.domain.provenance import resolve_source_provenance
 
 
 PRIMARY_SOURCE_MARKERS = (
@@ -807,52 +808,73 @@ def official_document_text(item: ResearchEvidence) -> str:
 def source_origin_for_evidence(item: ResearchEvidence, registry: Dict[str, Dict[str, object]] = None) -> Dict[str, object]:
     """Separate publisher identity, canonical article URL, and delivery channel."""
     payload = item.raw_payload if isinstance(item.raw_payload, dict) else {}
-    source = str(
-        payload.get("articlePublisher")
-        or payload.get("sourcePublisher")
-        or payload.get("publisher")
-        or item.source
-        or ""
-    ).strip()
     provider = str(payload.get("provider") or "").strip()
-    raw_url = str(
-        payload.get("articleCanonicalUrl")
-        or payload.get("canonicalUrl")
-        or item.url
-        or payload.get("articleSourceUrl")
-        or ""
-    ).strip()
-    canonical_url = canonical_evidence_url(raw_url)
-    source_key = re.sub(r"\s+", " ", source.casefold())
-    registry = registry if isinstance(registry, dict) else {}
-    matched = {}
-    for matcher, profile in registry.items():
-        if matcher and (matcher in source_key or matcher in provider.casefold() or matcher in canonical_url.casefold()):
-            matched = dict(profile or {})
-            break
-    try:
-        host = urllib.parse.urlparse(canonical_url).netloc.casefold().split(":")[0]
-    except (TypeError, ValueError):
-        host = ""
-    host = re.sub(r"^(?:www|m)\.", "", host)
-    source_identity = publisher_origin_identity(source_key)
-    host_identity = publisher_origin_identity(host)
-    origin_seed = host_identity if source_key in GENERIC_DELIVERY_CHANNELS else (source_identity or host_identity)
-    origin = str(matched.get("origin") or origin_seed or source_identity or host_identity or "unknown").strip().casefold()
-    origin = re.sub(r"[^0-9a-z가-힣.]+", "-", origin).strip("-") or "unknown"
-    tier = str(matched.get("tier") or payload.get("sourceTrustState") or item.source_trust_state or "unknown").strip().lower()
-    if tier not in SOURCE_TRUST_ORDER:
-        tier = news_domain.source_trust_state_for_source(source, provider)
-    primary = bool(matched.get("primary")) or primary_source(item) or str(item.kind or "").lower() in OFFICIAL_EVIDENCE_KINDS
+    if str(item.kind or "").lower() != "news":
+        source = str(
+            payload.get("articlePublisher")
+            or payload.get("sourcePublisher")
+            or payload.get("publisher")
+            or item.source
+            or ""
+        ).strip()
+        canonical_url = canonical_evidence_url(
+            payload.get("articleCanonicalUrl")
+            or payload.get("canonicalUrl")
+            or item.url
+            or payload.get("articleSourceUrl")
+        )
+        source_key = re.sub(r"\s+", " ", source.casefold())
+        configured_registry = registry if isinstance(registry, dict) else {}
+        matched = {}
+        for matcher, profile in configured_registry.items():
+            if matcher and (matcher in source_key or matcher in provider.casefold() or matcher in canonical_url.casefold()):
+                matched = dict(profile or {})
+                break
+        try:
+            host = urllib.parse.urlparse(canonical_url).netloc.casefold().split(":")[0]
+        except (TypeError, ValueError):
+            host = ""
+        host = re.sub(r"^(?:www|m)\.", "", host)
+        source_identity = publisher_origin_identity(source_key)
+        host_identity = publisher_origin_identity(host)
+        origin_seed = host_identity if source_key in GENERIC_DELIVERY_CHANNELS else (source_identity or host_identity)
+        origin = str(matched.get("origin") or origin_seed or source_identity or host_identity or "unknown").strip().casefold()
+        origin = re.sub(r"[^0-9a-z가-힣.]+", "-", origin).strip("-") or "unknown"
+        tier = str(matched.get("tier") or payload.get("sourceTrustState") or item.source_trust_state or "unknown").strip().lower()
+        if tier not in SOURCE_TRUST_ORDER:
+            tier = news_domain.source_trust_state_for_source(source, provider)
+        primary = bool(matched.get("primary")) or primary_source(item) or str(item.kind or "").lower() in OFFICIAL_EVIDENCE_KINDS
+        return {
+            "publisher": source or host or "unknown",
+            "origin": origin,
+            "publisherIdentity": source_identity or host_identity or origin,
+            "tier": tier,
+            "primary": primary,
+            "host": host,
+            "provider": provider,
+            "canonicalUrl": canonical_url,
+        }
+    provenance = resolve_source_provenance(
+        payload,
+        title=item.title,
+        summary=item.summary,
+        source=item.source,
+        provider=provider,
+        url=item.url,
+        published_at=item.published_at or item.observed_at,
+        registry=registry or {},
+    )
+    identity = provenance.identity
+    primary = identity.publisher_type == "official" or primary_source(item) or str(item.kind or "").lower() in OFFICIAL_EVIDENCE_KINDS
     return {
-        "publisher": source or host or "unknown",
-        "origin": origin,
-        "publisherIdentity": source_identity or host_identity or origin,
-        "tier": tier,
+        "publisher": identity.publisher,
+        "origin": identity.publisher_id or "unknown",
+        "publisherIdentity": identity.publisher_id or "unknown",
+        "tier": identity.source_trust_state,
         "primary": primary,
-        "host": host,
+        "host": identity.canonical_host,
         "provider": provider,
-        "canonicalUrl": canonical_url,
+        "canonicalUrl": provenance.canonical_url,
     }
 
 
@@ -969,6 +991,8 @@ def extracted_claims_for_evidence(
             "sourceUrl": str(item.url or ""),
             "canonicalUrl": profile["canonicalUrl"],
             "contentFingerprint": content_fingerprint,
+            "evidenceRelationship": str(payload.get("evidenceRelationship") or "original"),
+            "syndicationRootEvidenceId": str(payload.get("syndicationRootEvidenceId") or item.evidence_id or ""),
             "evidenceKind": str(item.kind or "").lower(),
             "officialDocumentAvailable": bool(
                 str(item.kind or "").lower() in OFFICIAL_EVIDENCE_KINDS
@@ -1007,6 +1031,8 @@ def extracted_claims_for_evidence(
         "sourceUrl": str(item.url or ""),
         "canonicalUrl": profile["canonicalUrl"],
         "contentFingerprint": content_fingerprint,
+        "evidenceRelationship": str(payload.get("evidenceRelationship") or "original"),
+        "syndicationRootEvidenceId": str(payload.get("syndicationRootEvidenceId") or item.evidence_id or ""),
         "evidenceKind": str(item.kind or "").lower(),
         "officialDocumentAvailable": False,
         "publishedAt": str(item.published_at or ""),
@@ -1169,6 +1195,10 @@ def claim_matches_official(
 
 def claims_are_republication(left: Dict[str, object], right: Dict[str, object]) -> bool:
     """Identify the same article transported through a different channel."""
+    left_root = str(left.get("syndicationRootEvidenceId") or "").strip()
+    right_root = str(right.get("syndicationRootEvidenceId") or "").strip()
+    if left_root and left_root == right_root:
+        return True
     left_url = str(left.get("canonicalUrl") or "").strip()
     right_url = str(right.get("canonicalUrl") or "").strip()
     if left_url and left_url == right_url:

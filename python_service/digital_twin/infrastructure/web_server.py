@@ -2566,6 +2566,13 @@ def research_evidence_article_analysis_summary(items) -> Dict[str, object]:
         "displayEligibleCount": 0,
         "alertEligibleCount": 0,
         "reasoningEligibleCount": 0,
+        "provenanceCompleteCount": 0,
+        "unresolvedPublisherCount": 0,
+        "duplicatePublicationCount": 0,
+        "independentConfirmationCount": 0,
+        "publisherTierCounts": {},
+        "contentTypeCounts": {},
+        "distributionChannelCounts": {},
     }
     for item in rows:
         eligibility = evidence_eligibility(item)
@@ -2573,6 +2580,20 @@ def research_evidence_article_analysis_summary(items) -> Dict[str, object]:
         counts["alertEligibleCount"] += int(bool(eligibility.get("alertEligible")))
         counts["reasoningEligibleCount"] += int(bool(eligibility.get("reasoningEligible")))
         raw = item.raw_payload if isinstance(getattr(item, "raw_payload", None), dict) else {}
+        source_identity = eligibility.get("sourceIdentity") if isinstance(eligibility.get("sourceIdentity"), dict) else {}
+        provenance = raw.get("sourceProvenance") if isinstance(raw.get("sourceProvenance"), dict) else {}
+        original = provenance.get("originalPublisher") if isinstance(provenance.get("originalPublisher"), dict) else {}
+        counts["provenanceCompleteCount"] += int(bool(provenance.get("provenanceComplete")))
+        counts["unresolvedPublisherCount"] += int(not source_identity.get("publisherId") or source_identity.get("publisherId") == "unknown")
+        relationship = str(provenance.get("evidenceRelationship") or raw.get("evidenceRelationship") or "")
+        counts["duplicatePublicationCount"] += int(relationship in {"exact-duplicate", "syndicated-copy"})
+        counts["independentConfirmationCount"] += int(relationship == "independent-confirmation")
+        tier = str(source_identity.get("publisherTier") or original.get("tier") or "D")
+        content_type = str(source_identity.get("contentType") or provenance.get("contentType") or "unknown")
+        channel = str(source_identity.get("distributionChannel") or provenance.get("distributionChannel") or "direct")
+        counts["publisherTierCounts"][tier] = int(counts["publisherTierCounts"].get(tier) or 0) + 1
+        counts["contentTypeCounts"][content_type] = int(counts["contentTypeCounts"].get(content_type) or 0) + 1
+        counts["distributionChannelCounts"][channel] = int(counts["distributionChannelCounts"].get(channel) or 0) + 1
         facts = raw.get("articleFacts") if isinstance(raw.get("articleFacts"), dict) else {}
         if str(raw.get("articleReadStatus") or facts.get("readStatus") or "") == "body" or bool(facts.get("bodyAvailable")):
             counts["bodyReadCount"] += 1
@@ -2625,6 +2646,10 @@ def research_evidence_list_payload(item) -> Dict[str, object]:
     raw = item.raw_payload if isinstance(item.raw_payload, dict) else {}
     states = item.state_payload()
     governance = raw.get("evidenceGovernance") if isinstance(raw.get("evidenceGovernance"), dict) else {}
+    source_identity = news_eligibility.get("sourceIdentity") if isinstance(news_eligibility.get("sourceIdentity"), dict) else {}
+    source_provenance = raw.get("sourceProvenance") if isinstance(raw.get("sourceProvenance"), dict) else {}
+    original_publisher = source_provenance.get("originalPublisher") if isinstance(source_provenance.get("originalPublisher"), dict) else {}
+    article_verification = source_provenance.get("articleVerification") if isinstance(source_provenance.get("articleVerification"), dict) else {}
     claim_ledger = raw.get("claimLedger") if isinstance(raw.get("claimLedger"), dict) else {}
     claim_summary = claim_ledger.get("summary") if isinstance(claim_ledger.get("summary"), dict) else {}
     article_summary_ko = str(raw.get("articleSummaryKo") or "")
@@ -2678,8 +2703,21 @@ def research_evidence_list_payload(item) -> Dict[str, object]:
         "displayEligible": bool(news_eligibility.get("displayEligible")) if news_eligibility else True,
         "alertEligible": bool(news_eligibility.get("alertEligible")) if news_eligibility else False,
         "reasoningEligible": bool(news_eligibility.get("reasoningEligible")) if news_eligibility else bool(governance.get("investmentJudgmentEligible")),
-        "publisher": str((news_eligibility.get("sourceIdentity") or {}).get("publisher") or raw.get("articlePublisher") or item.source),
-        "distributionChannel": str((news_eligibility.get("sourceIdentity") or {}).get("distributionChannel") or raw.get("provider") or ""),
+        "publisher": str(source_identity.get("publisher") or original_publisher.get("name") or raw.get("articlePublisher") or item.source),
+        "publisherId": str(source_identity.get("publisherId") or original_publisher.get("publisherId") or raw.get("sourceOrigin") or ""),
+        "publisherDomain": str(source_identity.get("publisherDomain") or original_publisher.get("domain") or ""),
+        "publisherTier": str(source_identity.get("publisherTier") or original_publisher.get("tier") or ""),
+        "publisherType": str(source_identity.get("publisherType") or original_publisher.get("publisherType") or ""),
+        "declaredPublisher": str(source_identity.get("declaredPublisher") or source_provenance.get("declaredPublisher") or ""),
+        "republisher": str(source_identity.get("republisher") or source_provenance.get("republisher") or ""),
+        "distributionChannel": str(source_identity.get("distributionChannel") or source_provenance.get("distributionChannel") or raw.get("provider") or ""),
+        "contentType": str(source_identity.get("contentType") or source_provenance.get("contentType") or raw.get("contentType") or ""),
+        "syndicationState": str(source_provenance.get("syndicationState") or raw.get("syndicationState") or ""),
+        "evidenceRelationship": str(source_provenance.get("evidenceRelationship") or raw.get("evidenceRelationship") or ""),
+        "provenanceComplete": bool(source_provenance.get("provenanceComplete")),
+        "sourcePath": list(source_provenance.get("sourcePath") or []),
+        "articleVerification": article_verification,
+        "sourceProvenance": source_provenance,
         "claimVerification": {
             "claimState": str(governance.get("claimState") or ""),
             "verificationStatus": str(governance.get("verificationStatus") or ""),

@@ -8,6 +8,7 @@ from digital_twin.domain.investment_research import NewsCollectionTarget, Resear
 from digital_twin.domain.ontology_contracts import PortfolioOntology
 from digital_twin.domain.ontology_schema import add_entity
 from digital_twin.domain.portfolio_ontology_research_concepts import add_governed_claim_concepts
+from digital_twin.news_intelligence.application.normalize_sources import normalize_evidence_sources
 
 
 TARGET = NewsCollectionTarget("005930", "Samsung Electronics", "KOSPI", "KRW", "semiconductor")
@@ -281,6 +282,7 @@ class ClaimVerificationTests(unittest.TestCase):
             "Samsung Electronics announced a 1 trillion won share buyback plan on Tuesday.",
             kind="disclosure",
         )
+        normalize_evidence_sources([news])
         self.govern([news, filing])
         graph = PortfolioOntology("claim-graph")
         stock_id = add_entity(graph, "stock", "005930", "Samsung Electronics", {"tboxClass": "Stock"})
@@ -288,7 +290,9 @@ class ClaimVerificationTests(unittest.TestCase):
         add_governed_claim_concepts(graph, stock_id, news, news.raw_payload)
 
         claim_entities = [item for item in graph.entities if item.kind == "verified-claim"]
+        source_entities = [item for item in graph.entities if item.kind == "research-source"]
         self.assertTrue(any(item.properties.get("tboxClass") == "VerifiedClaim" for item in claim_entities))
+        self.assertTrue(any(item.properties.get("publisherId") == "reuters" for item in source_entities))
         self.assertTrue(any(item.relation_type == "OFFICIALLY_VERIFIED_BY" for item in graph.relations))
 
 

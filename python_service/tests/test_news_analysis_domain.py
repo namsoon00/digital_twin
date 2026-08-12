@@ -728,7 +728,7 @@ class NewsAnalysisDomainTests(unittest.TestCase):
             "연합뉴스",
             "삼성전자 반도체 실적 개선 전망",
             "메모리 수요 회복과 실적 상향 기대",
-            "https://example.test/news",
+            "https://www.yna.co.kr/view/AKR20260709000100003",
             "2026-07-09T01:00:00Z",
             "support",
             11.0,

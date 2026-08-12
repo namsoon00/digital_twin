@@ -60,6 +60,13 @@ def event_relation_properties(item: object) -> Dict[str, object]:
         "analysisVersion",
         "sourceKind",
         "sourcePlatform",
+        "sourcePublisher",
+        "sourceOrigin",
+        "distributionChannel",
+        "contentType",
+        "syndicationState",
+        "evidenceRelationship",
+        "sourceProvenance",
         "entityLinks",
         "qualityGate",
         "analysisConflict",
@@ -85,7 +92,10 @@ def event_relation_properties(item: object) -> Dict[str, object]:
 
 def research_evidence_state(item: object, raw_payload: Dict[str, object]) -> Dict[str, object]:
     governance = raw_payload.get("evidenceGovernance") if isinstance(raw_payload.get("evidenceGovernance"), dict) else {}
+    news_eligibility = raw_payload.get("newsEligibility") if isinstance(raw_payload.get("newsEligibility"), dict) else {}
     eligible = bool(governance.get("investmentJudgmentEligible"))
+    if str(getattr(item, "kind", "") or "").lower() == "news" and news_eligibility:
+        eligible = eligible and bool(news_eligibility.get("reasoningEligible"))
     relation_scope = str(raw_payload.get("relationScope") or "").strip().lower()
     analysis = raw_payload.get("aiAnalysis") if isinstance(raw_payload.get("aiAnalysis"), dict) else {}
     read_scope = str(
@@ -134,7 +144,10 @@ def add_governed_claim_concepts(
     evidence_key = str(getattr(item, "evidence_id", "") or "").strip()
     if not evidence_key:
         return
-    source = str(getattr(item, "source", "") or "unknown")
+    provenance = raw_payload.get("sourceProvenance") if isinstance(raw_payload.get("sourceProvenance"), dict) else {}
+    source_identity = raw_payload.get("sourceIdentity") if isinstance(raw_payload.get("sourceIdentity"), dict) else {}
+    original_publisher = provenance.get("originalPublisher") if isinstance(provenance.get("originalPublisher"), dict) else {}
+    source = str(source_identity.get("publisher") or original_publisher.get("name") or getattr(item, "source", "") or "unknown")
     document_label = str(getattr(item, "title", "") or getattr(item, "summary", "") or evidence_key)
     document_id = add_entity(graph, "retrieved-document", evidence_key, document_label, {
         "tboxClass": "RetrievedDocument",
@@ -142,10 +155,18 @@ def add_governed_claim_concepts(
         "sourceUrl": getattr(item, "url", ""),
         "publishedAt": getattr(item, "published_at", ""),
         "observedAt": getattr(item, "observed_at", ""),
+        "publisherId": source_identity.get("publisherId") or original_publisher.get("publisherId"),
+        "publisherTier": source_identity.get("publisherTier") or original_publisher.get("tier"),
+        "distributionChannel": source_identity.get("distributionChannel") or provenance.get("distributionChannel"),
+        "evidenceRelationship": provenance.get("evidenceRelationship"),
+        "provenanceComplete": bool(provenance.get("provenanceComplete")),
     })
     source_id = add_entity(graph, "research-source", source, source, {
         "tboxClass": "DataSource",
         "sourceUrl": getattr(item, "url", ""),
+        "publisherId": source_identity.get("publisherId") or original_publisher.get("publisherId"),
+        "publisherTier": source_identity.get("publisherTier") or original_publisher.get("tier"),
+        "sourceRole": "original-publisher",
     })
     ledger = raw_payload.get("claimLedger") if isinstance(raw_payload.get("claimLedger"), dict) else {}
     claims = [dict(row) for row in ledger.get("claims") or [] if isinstance(row, dict)]
@@ -276,6 +297,9 @@ def add_research_document_concept(
         return
     raw_payload = getattr(item, "raw_payload", {}) if isinstance(getattr(item, "raw_payload", {}), dict) else {}
     collection_admission = raw_payload.get("collectionAdmission") if isinstance(raw_payload.get("collectionAdmission"), dict) else {}
+    provenance = raw_payload.get("sourceProvenance") if isinstance(raw_payload.get("sourceProvenance"), dict) else {}
+    source_identity = raw_payload.get("sourceIdentity") if isinstance(raw_payload.get("sourceIdentity"), dict) else {}
+    original_publisher = provenance.get("originalPublisher") if isinstance(provenance.get("originalPublisher"), dict) else {}
     evidence_id = str(getattr(item, "evidence_id", "") or "")
     document_id = add_entity(graph, str(shape["kind"]), evidence_id or str(getattr(item, "title", "") or ""), str(getattr(item, "title", "") or shape["tboxClass"]), {
         "tboxClass": str(shape["tboxClass"]),
@@ -294,18 +318,47 @@ def add_research_document_concept(
         "collectionAdmissionVersion": collection_admission.get("version"),
         "collectionAdmissionDecision": collection_admission.get("decision"),
         "collectionQualityPassed": bool(collection_admission.get("passed")),
+        "publisherId": source_identity.get("publisherId") or original_publisher.get("publisherId"),
+        "publisherTier": source_identity.get("publisherTier") or original_publisher.get("tier"),
+        "publisherType": source_identity.get("publisherType") or original_publisher.get("publisherType"),
+        "distributionChannel": source_identity.get("distributionChannel") or provenance.get("distributionChannel"),
+        "contentType": source_identity.get("contentType") or provenance.get("contentType"),
+        "syndicationState": provenance.get("syndicationState"),
+        "evidenceRelationship": provenance.get("evidenceRelationship"),
+        "syndicationRootEvidenceId": provenance.get("syndicationRootEvidenceId"),
+        "provenanceComplete": bool(provenance.get("provenanceComplete")),
     })
-    source_label = str(getattr(item, "source", "") or "ResearchEvidence").strip() or "ResearchEvidence"
+    source_label = str(source_identity.get("publisher") or original_publisher.get("name") or getattr(item, "source", "") or "ResearchEvidence").strip() or "ResearchEvidence"
     source_id = add_entity(graph, "data-source", source_label, source_label, {
         "tboxClass": "DataSource",
         "tboxClasses": ["DataSource", "Provenance"],
         "documentType": str(shape["documentType"]),
+        "publisherId": source_identity.get("publisherId") or original_publisher.get("publisherId"),
+        "publisherTier": source_identity.get("publisherTier") or original_publisher.get("tier"),
+        "publisherType": source_identity.get("publisherType") or original_publisher.get("publisherType"),
+        "sourceTrustState": source_identity.get("sourceTrustState"),
     })
     add_relation(graph, stock_id, document_id, "HAS_OBSERVATION", weight=1.0, evidence_ids=[evidence_id], properties=props)
     add_relation(graph, stock_id, document_id, "HAS_EXTERNAL_SIGNAL", weight=1.0, evidence_ids=[evidence_id], properties=props)
     add_relation(graph, document_id, stock_id, "MENTIONS_INSTRUMENT", weight=1.0, evidence_ids=[evidence_id], properties=props)
     add_relation(graph, event_id, document_id, "HAS_PROVENANCE", weight=1.0, evidence_ids=[evidence_id], properties={**props, "source": "research-document"})
     add_relation(graph, document_id, source_id, "HAS_PROVENANCE", weight=1.0, evidence_ids=[evidence_id], properties={**props, "source": "research-document-source"})
+    distribution_channel = str(source_identity.get("distributionChannel") or provenance.get("distributionChannel") or "").strip()
+    if distribution_channel:
+        channel_id = add_entity(graph, "data-source", "distribution:" + distribution_channel, distribution_channel, {
+            "tboxClass": "DataSource",
+            "tboxClasses": ["DataSource", "Provenance"],
+            "sourceRole": "distribution-channel",
+        })
+        add_relation(graph, document_id, channel_id, "HAS_PROVENANCE", weight=1.0, evidence_ids=[evidence_id], properties={**props, "source": "news-distribution-channel", "sourceRole": "distribution-channel"})
+    republisher = str(source_identity.get("republisher") or provenance.get("republisher") or "").strip()
+    if republisher:
+        republisher_id = add_entity(graph, "data-source", "republisher:" + republisher, republisher, {
+            "tboxClass": "DataSource",
+            "tboxClasses": ["DataSource", "Provenance"],
+            "sourceRole": "republisher",
+        })
+        add_relation(graph, document_id, republisher_id, "HAS_PROVENANCE", weight=1.0, evidence_ids=[evidence_id], properties={**props, "source": "news-republisher", "sourceRole": "republisher"})
     if thesis_id:
         add_relation(graph, document_id, thesis_id, "MATERIAL_TO", weight=1.0, evidence_ids=[evidence_id], properties=props)
     if active_opinion_id:

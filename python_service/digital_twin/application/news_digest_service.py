@@ -256,10 +256,29 @@ def event_group_key(item: Dict[str, object]) -> str:
     return kind + ":" + item_evidence_id(item)
 
 
+def item_source_profile(item: Dict[str, object]) -> Dict[str, object]:
+    payload = item_payload(item)
+    eligibility = payload.get("newsEligibility") if isinstance(payload.get("newsEligibility"), dict) else {}
+    identity = eligibility.get("sourceIdentity") if isinstance(eligibility.get("sourceIdentity"), dict) else {}
+    provenance = payload.get("sourceProvenance") if isinstance(payload.get("sourceProvenance"), dict) else {}
+    original = provenance.get("originalPublisher") if isinstance(provenance.get("originalPublisher"), dict) else {}
+    if not provenance:
+        return {
+            "publisher": clean_text(payload.get("sourcePublisher") or item.get("source") or item.get("domain")),
+            "publisherId": "",
+            "independentEvidenceKey": "",
+        }
+    return {
+        "publisher": clean_text(identity.get("publisher") or original.get("name") or payload.get("sourcePublisher") or item.get("source") or item.get("domain")),
+        "publisherId": clean_text(identity.get("publisherId") or original.get("publisherId") or payload.get("sourceOrigin")),
+        "independentEvidenceKey": clean_text(provenance.get("independentEvidenceKey")),
+    }
+
+
 def source_names(items: List[Dict[str, object]]) -> List[str]:
     rows: List[str] = []
     for item in items or []:
-        source = clean_text(item.get("source") or item.get("domain") or item_payload(item).get("sourcePublisher"))
+        source = item_source_profile(item).get("publisher")
         if source and source not in rows:
             rows.append(source)
     return rows
@@ -271,8 +290,9 @@ def event_source_items(items: List[Dict[str, object]]) -> List[Dict[str, object]
     selected: List[Dict[str, object]] = []
     seen = set()
     for item in items or []:
-        source = clean_text(item.get("source") or item.get("domain") or item_payload(item).get("sourcePublisher"))
-        key = source.casefold() or item_evidence_id(item)
+        profile = item_source_profile(item)
+        source = clean_text(profile.get("publisher"))
+        key = clean_text(profile.get("independentEvidenceKey") or profile.get("publisherId")).casefold() or source.casefold() or item_evidence_id(item)
         if not key or key in seen:
             continue
         selected.append(item)

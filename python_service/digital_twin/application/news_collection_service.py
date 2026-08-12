@@ -25,6 +25,7 @@ from ..domain.news_collection_quality import (
 from ..domain.repositories import AccountRepository, MonitorSnapshotReader, ResearchEvidenceGateway, ResearchEvidenceRepository, SymbolUniverseRepository
 from ..domain.symbol_universe import ListedSymbol, normalize_market
 from ..news_intelligence.application.analyze_article import annotate_evidence_eligibility
+from ..news_intelligence.application.normalize_sources import normalize_evidence_sources
 
 
 DISABLED_VALUES = {"0", "false", "no", "off", "disabled"}
@@ -829,6 +830,10 @@ class NewsCollectionRunner:
                         analysis_kwargs["monotonic_fn"] = self.monotonic_fn
                     items = analyze_many(target, items, **analysis_kwargs)
                 items, target_stale = self.fresh_news_items(items)
+                items = normalize_evidence_sources(
+                    items,
+                    self.settings.get("researchClaimSourceRegistry") or "",
+                )
                 observed_items.extend(items)
                 if items:
                     governed_evidence(
@@ -855,6 +860,10 @@ class NewsCollectionRunner:
                             for item in self.governance_corpus_for_target(target, admitted_items)
                             if assess_news_collection_admission(item, self.settings).passed
                         ]
+                        corpus = normalize_evidence_sources(
+                            corpus,
+                            self.settings.get("researchClaimSourceRegistry") or "",
+                        )
                         governed_evidence(
                             corpus,
                             target,
@@ -864,7 +873,10 @@ class NewsCollectionRunner:
                             now=self.cleanup_now(),
                         )
                         for item in corpus:
-                            annotate_evidence_eligibility(item)
+                            annotate_evidence_eligibility(
+                                item,
+                                self.settings.get("researchClaimSourceRegistry") or "",
+                            )
                         governed_for_persistence.extend(corpus)
                         collected.extend(admitted_items)
                     statuses.append({

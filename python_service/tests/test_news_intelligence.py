@@ -5,10 +5,13 @@ from pathlib import Path
 sys.path.insert(0, str(Path(__file__).resolve().parents[1]))
 
 from digital_twin.news_intelligence.application.analyze_article import annotate_evidence_eligibility
+from digital_twin.news_intelligence.application.normalize_sources import normalize_evidence_sources
 from digital_twin.news_intelligence.application.revalidate_articles import RevalidateNewsIntelligenceService
 from digital_twin.news_intelligence.domain.article_quality import inspect_article_body
 from digital_twin.news_intelligence.domain.eligibility import assess_news_eligibility
 from digital_twin.news_intelligence.domain.entity_resolution import matched_aliases, resolve_target_entity
+from digital_twin.news_intelligence.domain.provenance import resolve_source_provenance
+from digital_twin.news_intelligence.domain.source import SourceRegistry
 from digital_twin.news_intelligence.domain.story import story_identity
 from digital_twin.domain.events import NEWS_ARTICLE_ANALYZED, news_article_analyzed_event
 
@@ -128,6 +131,7 @@ class NewsIntelligenceTests(unittest.TestCase):
             symbol="NVDA",
             name="NVIDIA",
             source="Reuters",
+            url="https://www.reuters.com/technology/nvidia-supply-agreement",
         )
 
         self.assertTrue(result.archive.eligible)
@@ -142,6 +146,7 @@ class NewsIntelligenceTests(unittest.TestCase):
             symbol="NVDA",
             name="NVIDIA",
             source="Reuters",
+            url="https://www.reuters.com/technology/nvidia-supply-agreement",
         )
         self.assertTrue(local.archive.eligible)
         self.assertFalse(local.display.eligible)
@@ -156,6 +161,7 @@ class NewsIntelligenceTests(unittest.TestCase):
             symbol="NVDA",
             name="NVIDIA",
             source="Reuters",
+            url="https://www.reuters.com/technology/nvidia-supply-agreement",
         )
 
         self.assertTrue(result.alert.eligible)
@@ -172,6 +178,7 @@ class NewsIntelligenceTests(unittest.TestCase):
             symbol="NVDA",
             name="NVIDIA",
             source="Reuters",
+            url="https://www.reuters.com/technology/nvidia-supply-agreement",
         )
 
         self.assertTrue(result.alert.eligible)
@@ -186,6 +193,106 @@ class NewsIntelligenceTests(unittest.TestCase):
         original = {"claimId": "claim:nvda-contract", "title": "NVIDIA signs contract"}
         copy = {"duplicateOfClaimId": "claim:nvda-contract", "title": "엔비디아 계약 체결"}
         self.assertEqual(story_identity(original), story_identity(copy))
+
+    def test_canonical_domain_registry_overrides_mislabeled_yahoo_publisher(self):
+        payload = ready_payload()
+        payload.update({
+            "articlePublisher": "Yahoo Finance",
+            "provider": "Google News US",
+            "articleCanonicalUrl": "https://247wallst.com/investing/2026/08/11/apple-bear-case/",
+        })
+
+        result = resolve_source_provenance(
+            payload,
+            title="Opinion: Wall Street's Apple bear case is wrong",
+            source="Yahoo Finance",
+            provider="Google News US",
+            url=payload["articleCanonicalUrl"],
+            published_at="2026-08-11T12:00:00Z",
+        )
+
+        self.assertEqual("24/7 Wall St.", result.identity.publisher)
+        self.assertEqual("twenty-four-seven-wall-st", result.identity.publisher_id)
+        self.assertEqual("Yahoo Finance", result.identity.republisher)
+        self.assertEqual("Google News US", result.identity.distribution_channel)
+        self.assertEqual("C", result.identity.publisher_tier)
+        self.assertTrue(result.provenance_complete)
+
+    def test_google_news_is_a_channel_and_not_an_original_publisher(self):
+        result = resolve_source_provenance(
+            ready_payload(),
+            title="NVIDIA update",
+            source="Google News US",
+            provider="Google News US",
+            url="https://news.google.com/rss/articles/test",
+        )
+
+        self.assertEqual("DISCOVERY_ONLY", result.identity.publisher_tier)
+        self.assertEqual("Google News US", result.identity.distribution_channel)
+        self.assertFalse(result.provenance_complete)
+
+    def test_source_registry_extends_existing_assignment_setting(self):
+        registry = SourceRegistry("example.com=trusted,origin=example-wire")
+        entry = registry.by_host("www.example.com")
+
+        self.assertEqual("example-wire", entry.publisher_id)
+        self.assertEqual("B", entry.tier)
+        self.assertEqual("bloomberg-law", registry.by_name("Bloomberg Law News").publisher_id)
+        self.assertEqual("yonhap-infomax", registry.by_host("news.einfomax.co.kr").publisher_id)
+
+    def test_exact_republication_is_not_a_second_alert_or_reasoning_source(self):
+        first = Evidence("NVIDIA announces multi-year supply agreement", ready_payload())
+        first.evidence_id = "research:NVDA:news:original"
+        first.published_at = "2026-08-11T12:00:00Z"
+        first.observed_at = "2026-08-11T12:01:00Z"
+        first.url = "https://www.reuters.com/technology/nvidia-supply-agreement"
+        first.raw_payload.update({
+            "articlePublisher": "Reuters",
+            "provider": "Reuters",
+            "articleCanonicalUrl": first.url,
+        })
+        copied = Evidence("NVIDIA announces multi-year supply agreement", ready_payload())
+        copied.evidence_id = "research:NVDA:news:copy"
+        copied.published_at = "2026-08-11T12:05:00Z"
+        copied.observed_at = "2026-08-11T12:06:00Z"
+        copied.url = first.url + "?utm_source=google"
+        copied.raw_payload.update({
+            "articlePublisher": "Reuters",
+            "provider": "Google News US",
+            "articleCanonicalUrl": copied.url,
+        })
+
+        normalized = normalize_evidence_sources([first, copied])
+        for item in normalized:
+            annotate_evidence_eligibility(item)
+        root = next(item for item in normalized if item.evidence_id.endswith("original"))
+        duplicate = next(item for item in normalized if item.evidence_id.endswith("copy"))
+
+        self.assertEqual("original", root.raw_payload["evidenceRelationship"])
+        self.assertEqual("exact-duplicate", duplicate.raw_payload["evidenceRelationship"])
+        self.assertFalse(duplicate.raw_payload["evidenceGovernance"]["investmentJudgmentEligible"])
+        self.assertFalse(duplicate.raw_payload["newsEligibility"]["displayEligible"])
+        self.assertIn(
+            "duplicate-publication",
+            duplicate.raw_payload["newsEligibility"]["layers"]["display"]["reasonCodes"],
+        )
+
+    def test_opinion_can_be_displayed_but_not_alerted_or_used_for_reasoning(self):
+        payload = ready_payload()
+        result = assess_news_eligibility(
+            payload,
+            title="Opinion: NVIDIA valuation is too high",
+            summary="NVIDIA valuation commentary.",
+            symbol="NVDA",
+            name="NVIDIA",
+            source="Reuters",
+            url="https://www.reuters.com/breakingviews/nvidia-valuation-opinion",
+        )
+
+        self.assertTrue(result.display.eligible)
+        self.assertFalse(result.alert.eligible)
+        self.assertFalse(result.reasoning.eligible)
+        self.assertIn("content-type-not-alertable", result.alert.reason_codes)
 
     def test_revalidation_is_silent_and_blocks_wrong_subject(self):
         payload = ready_payload()

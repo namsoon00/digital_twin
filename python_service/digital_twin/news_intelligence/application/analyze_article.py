@@ -3,7 +3,7 @@ from typing import Dict
 from ..domain.eligibility import annotate_news_eligibility
 
 
-def annotate_evidence_eligibility(evidence):
+def annotate_evidence_eligibility(evidence, source_registry: object = ""):
     """Apply news-owned eligibility without importing the legacy evidence type."""
     payload = getattr(evidence, "raw_payload", {})
     payload = dict(payload or {}) if isinstance(payload, dict) else {}
@@ -17,6 +17,8 @@ def annotate_evidence_eligibility(evidence):
         source=getattr(evidence, "source", ""),
         provider=payload.get("provider") or "",
         url=getattr(evidence, "url", ""),
+        published_at=getattr(evidence, "published_at", "") or getattr(evidence, "observed_at", ""),
+        registry=source_registry,
         lifecycle_state=getattr(evidence, "lifecycle_state", "active"),
     )
     return evidence

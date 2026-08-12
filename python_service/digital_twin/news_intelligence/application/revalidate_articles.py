@@ -3,6 +3,7 @@ import json
 from typing import Dict, List
 
 from .analyze_article import annotate_evidence_eligibility
+from .normalize_sources import normalize_evidence_sources
 from ..domain.article_quality import inspect_article_body
 from ..domain.entity_resolution import resolve_target_entity
 from ..domain.version import NEWS_INTELLIGENCE_VERSION
@@ -17,6 +18,10 @@ class NewsRevalidationResult:
     blocked_body_count: int
     alert_eligible_count: int
     reasoning_eligible_count: int
+    provenance_complete_count: int
+    unresolved_publisher_count: int
+    duplicate_publication_count: int
+    independent_confirmation_count: int
 
     def to_dict(self) -> Dict[str, object]:
         return {
@@ -27,24 +32,43 @@ class NewsRevalidationResult:
             "blockedBodyCount": self.blocked_body_count,
             "alertEligibleCount": self.alert_eligible_count,
             "reasoningEligibleCount": self.reasoning_eligible_count,
+            "provenanceCompleteCount": self.provenance_complete_count,
+            "unresolvedPublisherCount": self.unresolved_publisher_count,
+            "duplicatePublicationCount": self.duplicate_publication_count,
+            "independentConfirmationCount": self.independent_confirmation_count,
             "notificationReplay": False,
         }
 
 
 class RevalidateNewsIntelligenceService:
-    def __init__(self, repository):
+    def __init__(self, repository, source_registry: object = ""):
         self.repository = repository
+        self.source_registry = source_registry
 
     def revalidate(self, symbol: str = "", limit: int = 500) -> NewsRevalidationResult:
         items = list(self.repository.latest(symbol=symbol, kind="news", limit=max(1, int(limit or 500))) or [])
+        before_payloads = {
+            str(getattr(item, "evidence_id", "") or id(item)): json.dumps(
+                getattr(item, "raw_payload", {}) or {},
+                ensure_ascii=False,
+                sort_keys=True,
+                default=str,
+            )
+            for item in items
+        }
+        items = normalize_evidence_sources(items, self.source_registry)
         changed: List[object] = []
         blocked_subject = 0
         blocked_body = 0
         alert_eligible = 0
         reasoning_eligible = 0
+        provenance_complete = 0
+        unresolved_publisher = 0
+        duplicate_publication = 0
+        independent_confirmation = 0
         for item in items:
             payload = dict(getattr(item, "raw_payload", {}) or {})
-            before = json.dumps(payload, ensure_ascii=False, sort_keys=True, default=str)
+            before = before_payloads.get(str(getattr(item, "evidence_id", "") or id(item)), "")
             facts = dict(payload.get("articleFacts") or {}) if isinstance(payload.get("articleFacts"), dict) else {}
             body = str(payload.get("articleText") or facts.get("articleText") or facts.get("bodyPreview") or "")
             if body:
@@ -84,10 +108,17 @@ class RevalidateNewsIntelligenceService:
                 blocked_subject += 1
             payload["qualityGate"] = quality_gate
             item.raw_payload = payload
-            annotate_evidence_eligibility(item)
+            annotate_evidence_eligibility(item, self.source_registry)
             eligibility = item.raw_payload.get("newsEligibility") if isinstance(item.raw_payload, dict) else {}
             alert_eligible += int(bool(eligibility.get("alertEligible")))
             reasoning_eligible += int(bool(eligibility.get("reasoningEligible")))
+            provenance = item.raw_payload.get("sourceProvenance") if isinstance(item.raw_payload.get("sourceProvenance"), dict) else {}
+            provenance_complete += int(bool(provenance.get("provenanceComplete")))
+            original = provenance.get("originalPublisher") if isinstance(provenance.get("originalPublisher"), dict) else {}
+            unresolved_publisher += int(not original.get("publisherId") or original.get("publisherId") == "unknown")
+            relationship = str(provenance.get("evidenceRelationship") or "")
+            duplicate_publication += int(relationship in {"exact-duplicate", "syndicated-copy"})
+            independent_confirmation += int(relationship == "independent-confirmation")
             after = json.dumps(item.raw_payload, ensure_ascii=False, sort_keys=True, default=str)
             if before != after:
                 changed.append(item)
@@ -100,4 +131,8 @@ class RevalidateNewsIntelligenceService:
             blocked_body,
             alert_eligible,
             reasoning_eligible,
+            provenance_complete,
+            unresolved_publisher,
+            duplicate_publication,
+            independent_confirmation,
         )

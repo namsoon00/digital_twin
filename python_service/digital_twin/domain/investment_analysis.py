@@ -1,3 +1,4 @@
+import hashlib
 from typing import Dict, List
 
 from .market_data import number
@@ -41,6 +42,71 @@ def _api_source(item: Dict[str, object]) -> str:
     return str(item.get("quoteSource") or item.get("sourceApi") or item.get("source") or "unknown")
 
 
+def _account_id(snapshot: Dict[str, object]) -> str:
+    toss = _dict(snapshot.get("toss"))
+    account = _dict(toss.get("account"))
+    return str(
+        account.get("id")
+        or account.get("accountId")
+        or snapshot.get("accountId")
+        or "default"
+    )
+
+
+def _account_label(snapshot: Dict[str, object]) -> str:
+    toss = _dict(snapshot.get("toss"))
+    account = _dict(toss.get("account"))
+    return str(
+        account.get("accountLabel")
+        or account.get("name")
+        or account.get("displayNumber")
+        or toss.get("accountLabel")
+        or "기본 계정"
+    )
+
+
+def _action_code(item: Dict[str, object], graph: Dict[str, object]) -> str:
+    context = _dict(item.get("ontologyRelationContext"))
+    decision = _dict(context.get("decision"))
+    plan = _dict(context.get("executionPlan"))
+    raw = str(
+        item.get("actionCode")
+        or item.get("action")
+        or plan.get("primaryAction")
+        or decision.get("primaryAction")
+        or ""
+    ).strip().upper()
+    aliases = {
+        "ENTRY_ELIGIBLE": "BUY",
+        "ADD_POSITION": "ADD",
+        "MAINTAIN_POSITION": "HOLD",
+        "REDUCE_POSITION": "TRIM",
+        "EXIT_POSITION": "SELL",
+        "WAIT_FOR_ONTOLOGY_INFERENCE": "BLOCKED",
+    }
+    if graph.get("blocked"):
+        return "BLOCKED"
+    normalized = aliases.get(raw, raw)
+    return normalized if normalized in {"BUY", "ADD", "HOLD", "TRIM", "SELL", "AVOID", "BLOCKED"} else "OBSERVE"
+
+
+def _decision_episode_id(item: Dict[str, object]) -> str:
+    context = _dict(item.get("ontologyRelationContext"))
+    episode = _dict(item.get("investmentDecisionEpisode") or context.get("investmentDecisionEpisode"))
+    return str(
+        item.get("decisionEpisodeId")
+        or item.get("investmentDecisionEpisodeId")
+        or context.get("investmentDecisionEpisodeId")
+        or episode.get("episodeId")
+        or ""
+    )
+
+
+def investment_decision_key(account_id: str, symbol: str, episode_id: str) -> str:
+    identity = "|".join([str(account_id or "default"), str(symbol or ""), str(episode_id or "current")])
+    return "decision:" + hashlib.sha256(identity.encode("utf-8")).hexdigest()[:24]
+
+
 def _decision_by_symbol(items: List[Dict[str, object]]) -> Dict[str, Dict[str, object]]:
     result: Dict[str, Dict[str, object]] = {}
     for item in items:
@@ -69,27 +135,44 @@ def _graph_context(item: Dict[str, object]) -> Dict[str, object]:
     }
 
 
-def _action_queue(decisions: List[Dict[str, object]], positions: List[Dict[str, object]], watchlist: List[Dict[str, object]]) -> List[Dict[str, object]]:
+def _action_queue(
+    decisions: List[Dict[str, object]],
+    positions: List[Dict[str, object]],
+    watchlist: List[Dict[str, object]],
+    account_id: str,
+    account_label: str,
+    mode: str,
+) -> List[Dict[str, object]]:
     source_by_symbol = {_symbol(item): item for item in positions + watchlist if _symbol(item)}
+    holding_symbols = {_symbol(item) for item in positions if _symbol(item)}
     rows = []
     for item in decisions:
         symbol = _symbol(item)
         source = source_by_symbol.get(symbol, {})
         graph = _graph_context(item)
+        episode_id = _decision_episode_id(item)
+        quality = _data_quality(source)
         rows.append({
+            "decisionKey": investment_decision_key(account_id, symbol, episode_id),
+            "decisionEpisodeId": episode_id,
+            "accountId": str(item.get("accountId") or source.get("accountId") or account_id),
+            "accountLabel": str(item.get("accountLabel") or source.get("accountLabel") or account_label),
             "symbol": symbol,
-            "name": _display_name(item) or _display_name(source),
+            "name": str(item.get("name") or item.get("displayName") or source.get("name") or source.get("displayName") or symbol or "-"),
             "source": str(item.get("source") or source.get("source") or ""),
+            "portfolioRole": "holding" if symbol in holding_symbols else "watchlist",
             "market": str(item.get("market") or source.get("market") or ""),
             "sector": str(item.get("sector") or source.get("sector") or ""),
             "decision": str(item.get("decision") or "판단 대기"),
+            "actionCode": _action_code(item, graph),
             "tone": str(item.get("tone") or ("caution" if graph["blocked"] else "hold")),
             "reviewLevel": str(item.get("reviewLevel") or graph.get("reviewLevel") or "observe"),
             "dataState": str(item.get("dataState") or graph.get("dataState") or "partial"),
             "validationState": str(item.get("validationState") or graph.get("validationState") or "conditional"),
             "profitLossRate": round(number(item.get("profitLossRate")) or 0, 2),
-            "dataQuality": _data_quality(source),
+            "dataQuality": quality,
             "apiSource": _api_source(source),
+            "isMock": quality.lower() in {"mock", "demo"} or str(mode or "").lower() in {"mock", "demo", "preview"},
             "updatedAt": str(source.get("updatedAt") or ""),
             "graph": graph,
             "reasons": list(item.get("reasons") or [])[:4] if isinstance(item.get("reasons"), list) else [],
@@ -202,7 +285,9 @@ def build_investment_analysis(snapshot: Dict[str, object]) -> Dict[str, object]:
     positions = [item for item in raw_positions if not _is_cash(item)]
     watchlist = _list(toss.get("watchlist") or toss.get("watchlistQuotes"))
     decisions = _list(_dict(snapshot.get("tossDecision")).get("items"))
-    queue = _action_queue(decisions, positions, watchlist)
+    account_id = _account_id(snapshot)
+    account_label = _account_label(snapshot)
+    queue = _action_queue(decisions, positions, watchlist, account_id, account_label, str(toss.get("mode") or ""))
     data_sources = _data_sources(positions, watchlist, toss)
     graph_gate = _graph_gate(snapshot, decisions)
     checklist = _list(snapshot.get("checklist"))
@@ -229,6 +314,8 @@ def build_investment_analysis(snapshot: Dict[str, object]) -> Dict[str, object]:
             "checklist": checklist,
         },
         "accountFocus": {
+            "accountId": account_id,
+            "label": account_label,
             "accountCount": 1 if toss else 0,
             "holdingCount": len(positions),
             "watchCount": len(watchlist),

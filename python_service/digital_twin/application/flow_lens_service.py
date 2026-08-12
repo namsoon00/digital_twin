@@ -994,6 +994,8 @@ class FlowLensService:
             "mode": str(source.get("mode") or "cached"),
             "status": str(source.get("status") or "최근 모니터 스냅샷"),
             "account": {
+                "accountId": str(source.get("accountId") or "default"),
+                "accountLabel": str(source.get("accountLabel") or "연결 계좌"),
                 "displayNumber": str(source.get("accountLabel") or source.get("accountId") or "연결 계좌"),
                 "type": str(source.get("provider") or "BROKERAGE").upper(),
                 "currency": str(portfolio.get("currency") or "KRW"),

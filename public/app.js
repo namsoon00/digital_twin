@@ -446,8 +446,16 @@
     notificationJobSearch: "",
     notificationJobStatusFilter: "all",
     notificationJobTypeFilter: "all",
+    notificationInboxFilter: "all",
+    notificationInboxSummary: {},
+    notificationJobsCursor: "",
+    notificationJobsNextCursor: "",
     consoleMarketSearch: "",
     consoleMarketScope: "all",
+    consoleDecisionSearch: "",
+    consoleDecisionScope: "all",
+    consoleDecisionAction: "all",
+    consoleDecisionQuality: "all",
     commandPaletteOpen: false,
     commandPaletteQuery: "",
     consolePages: { today: 1, market: 1, decision: 1, alerts: 1, validation: 1 },
@@ -759,6 +767,17 @@
     } catch (error) {
       return false;
     }
+  }
+
+  function notificationRecipientId() {
+    var stored = String(readPersistentPayload("orbitAlphaNotificationRecipientId", "") || "").trim();
+    if (stored && stored !== "local-owner") return stored;
+    var randomId = window.crypto && typeof window.crypto.randomUUID === "function"
+      ? window.crypto.randomUUID()
+      : [Date.now().toString(36), Math.random().toString(36).slice(2)].join("-");
+    var recipientId = "browser-" + randomId;
+    writePersistentPayload("orbitAlphaNotificationRecipientId", recipientId);
+    return recipientId;
   }
 
   function sendJson(path, method, payload, options) {
@@ -2474,7 +2493,8 @@
   function applyNotificationJobs(payload) {
     var incomingJobs = Array.isArray(payload.jobs) ? payload.jobs : [];
     var payloadOffset = Math.max(0, Number(payload.offset == null ? state.notificationJobsOffset : payload.offset));
-    state.notificationJobItems = mobileInfiniteScrollEnabled() && payloadOffset > 0
+    var payloadCursor = String(payload.cursor || "");
+    state.notificationJobItems = mobileInfiniteScrollEnabled() && (payloadOffset > 0 || payloadCursor)
       ? mergeUniqueItems(state.notificationJobItems, incomingJobs, notificationJobKey)
       : incomingJobs;
     var visibleJobs = {};
@@ -2491,9 +2511,12 @@
       state.activeNotificationJobKey = notificationJobKey(state.notificationJobItems[0]);
     }
     state.notificationJobsSummary = payload.summary && typeof payload.summary === "object" ? payload.summary : {};
+    state.notificationInboxSummary = payload.inboxSummary && typeof payload.inboxSummary === "object" ? payload.inboxSummary : {};
     state.notificationJobDiagnostics = payload.diagnostics && typeof payload.diagnostics === "object" ? payload.diagnostics : {};
     state.notificationJobsTotal = Math.max(0, Number(payload.total || state.notificationJobItems.length));
     state.notificationJobsOffset = payloadOffset;
+    state.notificationJobsCursor = payloadCursor;
+    state.notificationJobsNextCursor = String(payload.nextCursor || "");
     state.notificationJobsPageSize = Math.max(1, Number(payload.limit || state.notificationJobsPageSize || 20));
     state.notificationJobsLoaded = true;
     state.notificationJobsLoading = false;
@@ -2516,6 +2539,9 @@
     params.set("limit", String(state.notificationJobsPageSize || 20));
     params.set("offset", String(state.notificationJobsOffset || 0));
     params.set("scope", "investment");
+    params.set("recipientId", notificationRecipientId());
+    params.set("inbox", state.notificationInboxFilter || "all");
+    if (mobileInfiniteScrollEnabled() && state.notificationJobsCursor) params.set("cursor", state.notificationJobsCursor);
     if (state.notificationJobStatusFilter && state.notificationJobStatusFilter !== "all") params.set("status", state.notificationJobStatusFilter);
     if (state.notificationJobTypeFilter && state.notificationJobTypeFilter !== "all") params.set("messageType", state.notificationJobTypeFilter);
     if (state.notificationJobSearch) params.set("query", state.notificationJobSearch);
@@ -2540,10 +2566,16 @@
       });
   }
 
+  function resetNotificationJobsPaging() {
+    state.notificationJobsOffset = 0;
+    state.notificationJobsCursor = "";
+    state.notificationJobsNextCursor = "";
+  }
+
   function loadNotificationJobDetail(jobId) {
     var key = String(jobId || "").trim();
     if (!key || state.notificationJobDetails[key] || isStaticPreviewHost()) return Promise.resolve();
-    return requestJson("/api/notification-jobs/" + encodeURIComponent(key), {
+    return requestJson("/api/notification-jobs/" + encodeURIComponent(key) + "?recipientId=" + encodeURIComponent(notificationRecipientId()), {
       key: "notification-job:" + key,
       timeoutMs: 30000
     })
@@ -2561,6 +2593,63 @@
       .finally(function () {
         if (state.workDetailLayer && state.workDetailLayer.type === "notification-job" && state.workDetailLayer.key === key) render();
       });
+  }
+
+  function updateNotificationReceipt(jobId, changes) {
+    var key = String(jobId || "").trim();
+    if (!key) return Promise.resolve();
+    var existing = state.notificationJobItems.filter(function (item) { return notificationJobKey(item) === key; })[0] || {};
+    var next = Object.assign({}, existing, changes || {});
+    if (Object.prototype.hasOwnProperty.call(changes || {}, "read")) next.readAt = changes.read ? new Date().toISOString() : "";
+    if (Object.prototype.hasOwnProperty.call(changes || {}, "acknowledged")) {
+      next.acknowledgedAt = changes.acknowledged ? new Date().toISOString() : "";
+      if (changes.acknowledged) next.readAt = next.readAt || new Date().toISOString();
+    }
+    if (Object.prototype.hasOwnProperty.call(changes || {}, "important")) next.important = Boolean(changes.important);
+    state.notificationJobItems = state.notificationJobItems.map(function (item) {
+      return notificationJobKey(item) === key ? next : item;
+    });
+    if (state.notificationJobDetails[key]) state.notificationJobDetails[key] = Object.assign({}, state.notificationJobDetails[key], next);
+    render();
+    if (isStaticPreviewHost()) return Promise.resolve();
+    return sendJson("/api/notification-jobs/" + encodeURIComponent(key) + "/receipt", "PATCH", Object.assign({
+      recipientId: notificationRecipientId()
+    }, changes || {})).then(function (payload) {
+      var receipt = payload.receipt || {};
+      state.notificationJobItems = state.notificationJobItems.map(function (item) {
+        return notificationJobKey(item) === key ? Object.assign({}, item, receipt) : item;
+      });
+      if (state.notificationJobDetails[key]) state.notificationJobDetails[key] = Object.assign({}, state.notificationJobDetails[key], receipt);
+      state.notificationInboxSummary = payload.inboxSummary || state.notificationInboxSummary;
+      render();
+    }).catch(function (error) {
+      state.notificationJobsError = error.message || "알림 확인 상태를 저장하지 못했습니다.";
+      return loadNotificationJobs();
+    });
+  }
+
+  function markAllNotificationsRead() {
+    state.notificationJobItems = state.notificationJobItems.map(function (item) {
+      return Object.assign({}, item, { readAt: item.readAt || new Date().toISOString() });
+    });
+    Object.keys(state.notificationJobDetails || {}).forEach(function (key) {
+      state.notificationJobDetails[key] = Object.assign({}, state.notificationJobDetails[key], {
+        readAt: state.notificationJobDetails[key].readAt || new Date().toISOString()
+      });
+    });
+    state.notificationInboxSummary = Object.assign({}, state.notificationInboxSummary, { unread: 0 });
+    render();
+    if (isStaticPreviewHost()) return Promise.resolve();
+    return sendJson("/api/notification-jobs/read-all", "POST", {
+      recipientId: notificationRecipientId(),
+      scope: "investment"
+    }).then(function (payload) {
+      state.notificationInboxSummary = payload.inboxSummary || state.notificationInboxSummary;
+      render();
+    }).catch(function (error) {
+      state.notificationJobsError = error.message || "모두 읽음 상태를 저장하지 못했습니다.";
+      return loadNotificationJobs();
+    });
   }
 
   function applyNotificationSchedules(payload) {
@@ -10626,15 +10715,25 @@
       var conflictState = stateValueFromSources(sources, ["conflictState", "conflict_state"], "context-only");
       var validationState = stateValueFromSources(sources, ["validationState", "validation_state"], dataState === "sufficient" ? "conditional" : "blocked");
       var review = decisionStateMeta("review", reviewLevel, "observe");
+      var action = decisionActionMeta(row.actionCode, row.decision || row.action);
       return {
-        key: investmentActionKey(row, index),
+        key: row.decisionKey || investmentActionKey(row, index),
+        decisionKey: String(row.decisionKey || ""),
+        decisionEpisodeId: String(row.decisionEpisodeId || ""),
+        accountId: String(row.accountId || ((analysis.accountFocus || {}).accountId) || "default"),
+        accountLabel: String(row.accountLabel || ((analysis.accountFocus || {}).label) || "기본 계정"),
         symbol: String(row.symbol || "").toUpperCase(),
         name: stockDisplayName(row.symbol, row),
         decision: row.decision || row.action || "검토",
-        tone: row.tone || review.tone,
+        actionCode: action.code,
+        actionLabel: action.label,
+        tone: row.tone || action.tone || review.tone,
         reason: formatConsoleNarrative(reasons[0] || graph.reason || "근거 확인 필요"),
         invalidation: formatConsoleNarrative(investmentActionInvalidation(row)),
         quality: consoleQualityMeta(row.dataQuality || row.quality),
+        apiSource: String(row.apiSource || row.source || "investment_analysis"),
+        isMock: Boolean(row.isMock) || ["mock", "demo"].indexOf(String(row.dataQuality || row.quality || "").toLowerCase()) >= 0,
+        source: String(row.portfolioRole || row.source || "holding"),
         blocked: Boolean(graph.blocked) || reviewLevel === "blocked" || validationState === "blocked",
         reviewLevel: reviewLevel,
         dataState: dataState,
@@ -10649,6 +10748,49 @@
       var changedDiff = recordChangedAtValue(b) - recordChangedAtValue(a);
       if (changedDiff) return changedDiff;
       return String(a.symbol || "").localeCompare(String(b.symbol || ""));
+    });
+  }
+
+  function decisionActionMeta(value, fallback) {
+    var code = String(value || "").toUpperCase();
+    var text = String(fallback || "");
+    if (!code) {
+      if (/추가/.test(text)) code = "ADD";
+      else if (/매수|진입/.test(text)) code = "BUY";
+      else if (/축소/.test(text)) code = "TRIM";
+      else if (/매도|정리/.test(text)) code = "SELL";
+      else if (/보류|차단/.test(text)) code = "BLOCKED";
+      else if (/유지/.test(text)) code = "HOLD";
+      else code = "OBSERVE";
+    }
+    var values = {
+      BUY: { label: "매수 검토", tone: "watch" },
+      ADD: { label: "추가매수 검토", tone: "watch" },
+      HOLD: { label: "유지", tone: "hold" },
+      TRIM: { label: "축소 검토", tone: "caution" },
+      SELL: { label: "매도 검토", tone: "danger" },
+      AVOID: { label: "진입 회피", tone: "danger" },
+      BLOCKED: { label: "판단 보류", tone: "caution" },
+      OBSERVE: { label: "관찰", tone: "hold" }
+    };
+    return Object.assign({ code: code }, values[code] || values.OBSERVE);
+  }
+
+  function filteredConsoleDecisionRows(snapshot) {
+    var query = String(state.consoleDecisionSearch || "").trim().toLowerCase();
+    var scope = String(state.consoleDecisionScope || "all");
+    var action = String(state.consoleDecisionAction || "all");
+    var quality = String(state.consoleDecisionQuality || "all");
+    return selectConsoleDecisionRows(snapshot).filter(function (row) {
+      var isWatch = row.source === "watchlist";
+      if (scope === "holding" && isWatch) return false;
+      if (scope === "watchlist" && !isWatch) return false;
+      if (action !== "all" && row.actionCode !== action) return false;
+      if (quality === "actual" && (row.isMock || row.quality.label !== "실데이터")) return false;
+      if (quality === "mock" && !row.isMock) return false;
+      if (quality === "issue" && row.quality.tone !== "danger" && row.quality.tone !== "caution") return false;
+      if (!query) return true;
+      return [row.name, row.symbol, row.accountLabel, row.actionLabel, row.decision, row.reason, row.apiSource].join(" ").toLowerCase().indexOf(query) >= 0;
     });
   }
 
@@ -10670,6 +10812,15 @@
         status: notificationJobStatusLabel(job.status),
         tone: notificationJobToneClass(job.status),
         channel: job.channel || job.deliveryChannel || "Telegram",
+        accountId: String(job.accountId || "default"),
+        decisionEpisodeId: String(job.decisionEpisodeId || ((job.context || {}).investmentDecisionEpisodeId) || ""),
+        decisionKey: String(job.decisionKey || ((job.context || {}).decisionKey) || ""),
+        readAt: String(job.readAt || ""),
+        acknowledgedAt: String(job.acknowledgedAt || ""),
+        important: Boolean(job.important),
+        apiSource: String(job.apiSource || "notification_jobs"),
+        dataQuality: String(job.dataQuality || "actual"),
+        isMock: Boolean(job.isMock),
         raw: job
       };
     }).sort(function (a, b) {
@@ -10919,16 +11070,27 @@
     var validation = decisionStateMeta("validation", row.validationState, "conditional");
     return [
       '<button class="oa-data-row oa-decision-row" type="button" data-console-row-key="' + escapeHtml(row.key) + '" data-work-detail="investment-action" data-work-detail-key="' + escapeHtml(row.key) + '">',
-      '<span class="oa-symbol-cell"><strong>' + escapeHtml(row.name || row.symbol) + '</strong><em>' + escapeHtml(row.symbol || "") + '</em>' + renderRecordChangedAt(row) + '</span>',
-      '<span><strong class="' + escapeHtml(row.tone) + '">' + escapeHtml(row.decision) + '</strong><em>' + escapeHtml(decisionStateMeta("change", row.changeState, "unchanged").label) + ' · ' + escapeHtml(review.label) + '</em></span>',
+      '<span class="oa-symbol-cell"><strong>' + escapeHtml(row.name || row.symbol) + '</strong><em>' + escapeHtml([row.symbol, row.source === "watchlist" ? "관심" : "보유", row.accountLabel].filter(Boolean).join(" · ")) + '</em>' + renderRecordChangedAt(row) + '</span>',
+      '<span><strong class="' + escapeHtml(row.tone) + '">' + escapeHtml(row.actionLabel) + '</strong><em>' + escapeHtml(decisionStateMeta("change", row.changeState, "unchanged").label) + ' · ' + escapeHtml(review.label) + '</em></span>',
       '<span class="oa-reason-cell"><strong>' + escapeHtml(row.reason) + '</strong><em>약화 조건은 상세에서 확인</em></span>',
-      '<span class="oa-open-cell ' + escapeHtml(data.tone) + '">' + escapeHtml(data.label) + ' · ' + escapeHtml(validation.label) + ' &rarr;</span>',
+      '<span class="oa-open-cell ' + escapeHtml(data.tone) + '"><strong>' + escapeHtml(row.quality.label) + ' · ' + escapeHtml(validation.label) + '</strong><em>' + escapeHtml(row.apiSource) + (row.isMock ? ' · MOCK' : ' · ACTUAL') + '</em><b aria-hidden="true">&rarr;</b></span>',
       '</button>'
     ].join("");
   }
 
+  function renderDecisionFilterToolbar() {
+    return [
+      '<form class="oa-filter-bar oa-decision-filter" data-console-decision-form>',
+      '<label><span>판단 검색</span><input type="search" data-console-decision-search value="' + escapeHtml(state.consoleDecisionSearch || "") + '" placeholder="종목명, 코드, 근거" /></label>',
+      '<label><span>범위</span><select data-console-decision-filter="scope"><option value="all"' + (state.consoleDecisionScope === "all" ? " selected" : "") + '>전체</option><option value="holding"' + (state.consoleDecisionScope === "holding" ? " selected" : "") + '>보유</option><option value="watchlist"' + (state.consoleDecisionScope === "watchlist" ? " selected" : "") + '>관심</option></select></label>',
+      '<label><span>행동</span><select data-console-decision-filter="action"><option value="all"' + (state.consoleDecisionAction === "all" ? " selected" : "") + '>전체 행동</option><option value="BUY"' + (state.consoleDecisionAction === "BUY" ? " selected" : "") + '>매수</option><option value="ADD"' + (state.consoleDecisionAction === "ADD" ? " selected" : "") + '>추가매수</option><option value="HOLD"' + (state.consoleDecisionAction === "HOLD" ? " selected" : "") + '>유지</option><option value="TRIM"' + (state.consoleDecisionAction === "TRIM" ? " selected" : "") + '>축소</option><option value="SELL"' + (state.consoleDecisionAction === "SELL" ? " selected" : "") + '>매도</option><option value="BLOCKED"' + (state.consoleDecisionAction === "BLOCKED" ? " selected" : "") + '>보류</option></select></label>',
+      '<label><span>데이터</span><select data-console-decision-filter="quality"><option value="all"' + (state.consoleDecisionQuality === "all" ? " selected" : "") + '>전체 품질</option><option value="actual"' + (state.consoleDecisionQuality === "actual" ? " selected" : "") + '>실데이터</option><option value="mock"' + (state.consoleDecisionQuality === "mock" ? " selected" : "") + '>Mock</option><option value="issue"' + (state.consoleDecisionQuality === "issue" ? " selected" : "") + '>지연·부족</option></select></label>',
+      '</form>'
+    ].join("");
+  }
+
   function decisionQueueWorkDetailPayload() {
-    var rows = selectConsoleDecisionRows(state.snapshot || {});
+    var rows = filteredConsoleDecisionRows(state.snapshot || {});
     var page = consolePageSlice(rows, "decision", 12);
     var body = page.items.length
       ? '<div class="oa-data-table" data-console-keyed-list="decision-full"><div class="oa-table-head oa-decision-row"><span>종목</span><span>행동·확인 단계</span><span>핵심 근거</span><span>자료·검증</span></div>' + page.items.map(renderDecisionConsoleRow).join("") + '</div>'
@@ -10942,18 +11104,20 @@
   }
 
   function renderDecisionConsole(snapshot) {
-    var rows = selectConsoleDecisionRows(snapshot);
-    var blocked = rows.filter(function (row) { return row.blocked; });
-    var buy = rows.filter(function (row) { return /매수|추가/.test(row.decision); }).length;
-    var sell = rows.filter(function (row) { return /매도|축소|정리/.test(row.decision); }).length;
+    var allRows = selectConsoleDecisionRows(snapshot);
+    var rows = filteredConsoleDecisionRows(snapshot);
+    var page = consolePageSlice(rows, "decision", 10);
+    var blocked = allRows.filter(function (row) { return row.blocked; });
+    var buy = allRows.filter(function (row) { return row.actionCode === "BUY" || row.actionCode === "ADD"; }).length;
+    var sell = allRows.filter(function (row) { return row.actionCode === "SELL" || row.actionCode === "TRIM"; }).length;
     var metrics = [
-      { label: "판단 후보", value: rows.length + "건", detail: "현재 큐" },
+      { label: "판단 후보", value: allRows.length + "건", detail: "현재 상태" },
       { label: "매수 검토", value: buy + "건", detail: "조건 확인", tone: buy ? "watch" : "neutral" },
       { label: "매도 검토", value: sell + "건", detail: "위험 관리", tone: sell ? "danger" : "neutral" },
       { label: "추론 차단", value: blocked.length + "건", detail: "TypeDB 확인", tone: blocked.length ? "danger" : "watch" },
-      { label: "근거 준비", value: rows.filter(function (row) { return row.quality.tone === "watch"; }).length + "/" + rows.length, detail: "실데이터" }
+      { label: "근거 준비", value: allRows.filter(function (row) { return row.quality.tone === "watch" && !row.isMock; }).length + "/" + allRows.length, detail: "실데이터" }
     ];
-    var table = rows.length ? '<div class="oa-data-table" data-console-keyed-list="decision-primary"><div class="oa-table-head oa-decision-row"><span>종목</span><span>행동·확인 단계</span><span>핵심 근거</span><span>자료·검증</span></div>' + rows.slice(0, 10).map(renderDecisionConsoleRow).join("") + '</div>' : renderConsoleEmpty("현재 판단 후보가 없습니다", "TypeDB InferenceBox와 투자 분석 데이터가 생성되면 종목별 행동 큐가 표시됩니다.", renderWorkDetailButton("strategy-trace-board", "", "추론 상태", "text-button compact"));
+    var table = page.items.length ? '<div class="oa-data-table" data-console-keyed-list="decision-primary"><div class="oa-table-head oa-decision-row"><span>종목</span><span>행동·확인 단계</span><span>핵심 근거</span><span>자료·검증</span></div>' + page.items.map(renderDecisionConsoleRow).join("") + '</div>' : renderConsoleEmpty("조건에 맞는 판단이 없습니다", "검색어 또는 필터를 조정하세요.", renderWorkDetailButton("strategy-trace-board", "", "추론 상태", "text-button compact"));
     var reviewNeeded = rows.filter(function (row) { return row.blocked || row.dataState !== "sufficient" || row.validationState !== "ready"; });
     var blockers = reviewNeeded.length ? '<div class="oa-context-list" data-console-keyed-list="decision-blockers">' + reviewNeeded.slice(0, 6).map(function (row) {
       var label = row.blocked ? "차단" : decisionStateMeta("data", row.dataState, "partial").label;
@@ -10961,8 +11125,9 @@
       return '<button type="button" class="oa-context-row" data-console-row-key="' + escapeHtml(row.key) + '" data-work-detail="investment-action" data-work-detail-key="' + escapeHtml(row.key) + '"><span><strong>' + escapeHtml(row.name || row.symbol) + '</strong><em>' + escapeHtml(row.reason) + '</em></span><b class="' + escapeHtml(tone) + '">' + escapeHtml(label) + '</b></button>';
     }).join("") + '</div>' : renderConsoleEmpty("추가 확인 요인이 없습니다", "현재 판단 후보는 필요한 자료와 검증 상태를 갖추고 있습니다.");
     return renderConsoleManagedPage("modeling", metrics, [
+      renderDecisionFilterToolbar(),
       '<div class="oa-console-grid oa-decision-grid">',
-      renderConsoleSurface({ kicker: "ACTION QUEUE", title: "투자 행동 후보", description: "최종 행동과 가장 중요한 근거만 표시합니다.", meta: Math.min(rows.length, 10) + " / " + rows.length + "건", actions: rows.length > 10 ? renderWorkDetailButton("decision-action-queue", "", "전체 보기", "text-button compact") : "", body: renderConsoleLiveRegion("decision-primary-body", table) }),
+      renderConsoleSurface({ kicker: "CURRENT DECISIONS", title: "현재 투자 판단", description: "종목별 최신 상태와 행동, 근거, 데이터 출처를 표시합니다.", meta: page.items.length + " / " + rows.length + "건", body: renderConsoleLiveRegion("decision-primary-body", table), footer: renderConsolePager("decision", page) }),
       renderConsoleSurface({ kicker: "REVIEW", title: "확인 필요 요인", description: "자료 또는 검증이 완전하지 않은 판단만 표시합니다.", actions: reviewNeeded.length ? renderWorkDetailButton("strategy-trace-board", "", "검증 전체", "text-button compact") : "", body: renderConsoleLiveRegion("decision-blocker-body", blockers) }),
       '</div>'
     ].join(""));
@@ -10970,14 +11135,14 @@
 
   function renderAlertConsoleRow(row) {
     return [
-      '<button class="oa-data-row oa-alert-row" type="button" data-console-row-key="' + escapeHtml(row.key) + '" data-work-detail="notification-job" data-work-detail-key="' + escapeHtml(row.key) + '">',
+      '<article class="oa-data-row oa-alert-row' + (row.readAt ? "" : " unread") + (row.important ? " important" : "") + '" data-console-row-key="' + escapeHtml(row.key) + '">',
       '<span><strong>' + escapeHtml(formatClock(row.time)) + '</strong><em>' + escapeHtml(row.channel) + '</em>' + renderRecordChangedAt(row) + '</span>',
       '<span class="oa-symbol-cell"><strong>' + escapeHtml(row.title) + '</strong><em>' + escapeHtml(row.type) + '</em></span>',
       '<span><strong class="' + escapeHtml(row.movement.tone) + '">' + escapeHtml(row.movement.label) + '</strong><em>' + escapeHtml(row.movement.change || row.movement.relation || "상태") + '</em></span>',
       '<span class="oa-reason-cell"><strong>' + escapeHtml(row.reason) + '</strong><em>알림이 온 이유</em></span>',
-      '<span><strong class="' + escapeHtml(row.tone) + '">' + escapeHtml(row.status) + '</strong><em>발송 상태</em></span>',
-      '<span class="oa-open-cell">리포트 &rarr;</span>',
-      '</button>'
+      '<span><strong class="' + escapeHtml(row.tone) + '">' + escapeHtml(row.status) + '</strong><em>' + escapeHtml(row.dataQuality === "actual" && !row.isMock ? "실데이터" : "MOCK") + ' · ' + escapeHtml(row.apiSource) + '</em></span>',
+      '<span class="oa-alert-actions"><button class="icon-button" type="button" data-notification-receipt="important" data-notification-job-id="' + escapeHtml(row.key) + '" data-notification-receipt-value="' + escapeHtml(row.important ? "false" : "true") + '" aria-label="중요 표시" title="중요 표시">' + (row.important ? '&#9733;' : '&#9734;') + '</button><button class="icon-button" type="button" data-notification-receipt="acknowledged" data-notification-job-id="' + escapeHtml(row.key) + '" data-notification-receipt-value="' + escapeHtml(row.acknowledgedAt ? "false" : "true") + '" aria-label="확인 완료" title="확인 완료">&#10003;</button><button class="icon-button primary" type="button" data-work-detail="notification-job" data-work-detail-key="' + escapeHtml(row.key) + '" aria-label="알림 리포트" title="알림 리포트">&rarr;</button></span>',
+      '</article>'
     ].join("");
   }
 
@@ -10988,12 +11153,13 @@
     var current = Math.floor(offset / pageSize) + 1;
     var pages = Math.max(1, Math.ceil(total / pageSize));
     if (mobileInfiniteScrollEnabled()) {
+      var nextCursor = String(state.notificationJobsNextCursor || "");
       return renderMobileInfiniteScrollFooter({
         loaded: (state.notificationJobItems || []).length,
         total: total,
         loading: state.notificationJobsLoading,
-        hasNext: current < pages,
-        nextAttributes: 'data-notification-job-page="' + escapeHtml(current + 1) + '"'
+        hasNext: Boolean(nextCursor),
+        nextAttributes: 'data-notification-job-page="' + escapeHtml(current + 1) + '" data-notification-job-cursor="' + escapeHtml(nextCursor) + '"'
       });
     }
     if (pages <= 1) return "";
@@ -11011,18 +11177,19 @@
   function renderAlertsConsole() {
     var rows = selectConsoleAlertRows();
     var summary = state.notificationJobsSummary || state.realtime.notificationJobs || {};
+    var inbox = state.notificationInboxSummary || {};
     var initialLoading = !state.notificationJobsLoaded && !state.notificationJobsError;
     var metrics = [
-      { label: "대기", value: Number(summary.pending || 0) + "건", detail: "발송 전" },
-      { label: "발송", value: Number(summary.done || 0) + "건", detail: "완료", tone: "watch" },
-      { label: "보류", value: Number(summary.suppressed || 0) + "건", detail: "게이트 적용", tone: Number(summary.suppressed || 0) ? "caution" : "neutral" },
-      { label: "실패", value: Number(summary.failed || 0) + "건", detail: "재시도 확인", tone: Number(summary.failed || 0) ? "danger" : "watch" },
-      { label: "활성 규칙", value: notificationPolicyCatalog().filter(function (rule) { return enabledAlertRule(alertRules(), rule.key); }).length + "개", detail: "투자·운영" }
+      { label: "읽지 않음", value: Number(inbox.unread || 0) + "건", detail: "내 알림", tone: Number(inbox.unread || 0) ? "caution" : "watch" },
+      { label: "중요", value: Number(inbox.important || 0) + "건", detail: "직접 표시", tone: Number(inbox.important || 0) ? "watch" : "neutral" },
+      { label: "확인 필요", value: Number(inbox.actionRequired || 0) + "건", detail: "미확인 변화", tone: Number(inbox.actionRequired || 0) ? "danger" : "watch" },
+      { label: "전체 알림", value: Number(inbox.total || state.notificationJobsTotal || 0) + "건", detail: "최신순" },
+      { label: "전송 실패", value: Number(summary.failed || 0) + "건", detail: "전달 상태", tone: Number(summary.failed || 0) ? "danger" : "watch" }
     ];
     var toolbar = renderNotificationJobFilterToolbar(state.notificationJobItems || [], filteredNotificationJobs(state.notificationJobItems || []));
     var table = rows.length ? '<div class="oa-data-table" data-console-keyed-list="alerts-ledger"><div class="oa-table-head oa-alert-row"><span>시각</span><span>대상·유형</span><span>발송 판단</span><span>알림이 온 이유</span><span>상태</span><span></span></div>' + rows.map(renderAlertConsoleRow).join("") + '</div>' : (initialLoading ? renderConsoleListSkeleton("oa-alert-row", ["시각", "대상·유형", "발송 판단", "알림이 온 이유", "상태", ""], 5) : renderConsoleEmpty(state.notificationJobsError ? "알림 판단을 불러오지 못했습니다" : "조건에 맞는 알림이 없습니다", state.notificationJobsError || "검색어와 발송 상태를 조정하거나 알림 워커 상태를 확인하세요.", renderWorkDetailButton("notification-diagnostics-board", "", "알림 진단", "text-button compact")));
     return renderConsoleManagedPage("notifications", metrics, [
-      renderConsoleSurface({ kicker: "DISPATCH LEDGER", title: "알림 판단 원장", description: "목록에는 발송 상태와 이유만 남기고 전체 메시지는 상세에서 봅니다.", actions: renderWorkDetailButton("notification-policy-board", "", "알림 정책", "text-button compact"), body: toolbar + renderConsoleLiveRegion("alerts-ledger-body", table), footer: renderNotificationJobPager() })
+      renderConsoleSurface({ kicker: "PERSONAL INBOX", title: "알림함", description: "상태 변화 이력을 읽지 않음과 중요 표시로 관리합니다.", actions: '<button class="text-button compact" type="button" data-action="mark-all-notifications-read">모두 읽음</button>' + renderWorkDetailButton("notification-policy-board", "", "알림 정책", "text-button compact"), body: toolbar + renderConsoleLiveRegion("alerts-ledger-body", table), footer: renderNotificationJobPager() })
     ].join(""), { loading: initialLoading });
   }
 
@@ -14757,6 +14924,29 @@
     var watchlist = Array.isArray(toss.watchlist) ? toss.watchlist : [];
     var decision = (snapshot || {}).tossDecision || {};
     var items = Array.isArray(decision.items) ? decision.items : [];
+    var account = toss.account && typeof toss.account === "object" ? toss.account : {};
+    var accountId = String(account.accountId || account.id || toss.accountId || "default");
+    var accountLabel = String(account.accountLabel || account.name || toss.accountLabel || "기본 계정");
+    var sourceBySymbol = {};
+    positions.concat(watchlist).forEach(function (item) {
+      var symbol = String(item.symbol || "").toUpperCase();
+      if (symbol && !sourceBySymbol[symbol]) sourceBySymbol[symbol] = item;
+    });
+    var actionQueue = items.map(function (item) {
+      var symbol = String(item.symbol || "").toUpperCase();
+      var source = sourceBySymbol[symbol] || {};
+      var quality = String(source.dataQuality || item.dataQuality || (source.currentPrice ? "actual" : "missing"));
+      var mode = String(toss.mode || (snapshot || {}).dataMode || "").toLowerCase();
+      return Object.assign({}, item, {
+        accountId: String(item.accountId || source.accountId || accountId),
+        accountLabel: String(item.accountLabel || source.accountLabel || accountLabel),
+        portfolioRole: positions.some(function (position) { return String(position.symbol || "").toUpperCase() === symbol; }) ? "holding" : "watchlist",
+        dataQuality: quality,
+        apiSource: String(source.quoteSource || source.sourceApi || source.source || item.apiSource || "snapshot"),
+        isMock: Boolean(source.isMock || item.isMock) || ["mock", "demo"].indexOf(quality.toLowerCase()) >= 0 || ["mock", "demo", "preview"].indexOf(mode) >= 0,
+        updatedAt: item.updatedAt || source.updatedAt || (snapshot || {}).generatedAt || ""
+      });
+    });
     return {
       contract: "investment-analysis-client-fallback-v1",
       generatedAt: (snapshot || {}).generatedAt || "",
@@ -14776,11 +14966,13 @@
         checklist: Array.isArray((snapshot || {}).checklist) ? (snapshot || {}).checklist : []
       },
       accountFocus: {
+        accountId: accountId,
+        label: accountLabel,
         holdingCount: positions.length,
         watchCount: watchlist.length,
         symbols: positions.concat(watchlist).map(function (item) { return String(item.symbol || "").toUpperCase(); }).filter(Boolean)
       },
-      actionQueue: items,
+      actionQueue: actionQueue,
       dataLineage: {
         actualCount: positions.concat(watchlist).length,
         mockCount: 0,
@@ -15637,13 +15829,47 @@
 
   function investmentActionKey(row, index) {
     row = row || {};
-    return String(row.symbol || row.id || [row.name, row.source, row.decision, row.dataQuality, (row.graph || {}).reason, index].filter(Boolean).join(":"));
+    return String(row.decisionKey || row.symbol || row.id || [row.name, row.source, row.decision, row.dataQuality, (row.graph || {}).reason, index].filter(Boolean).join(":"));
   }
 
   function investmentActionByKey(key) {
     var rows = Array.isArray(investmentAnalysisModel(state.snapshot || {}).actionQueue) ? investmentAnalysisModel(state.snapshot || {}).actionQueue : [];
     return rows.filter(function (row, index) {
       return investmentActionKey(row, index) === key;
+    })[0] || null;
+  }
+
+  function notificationDecisionLinkValue(job, key) {
+    var context = job && job.context && typeof job.context === "object" ? job.context : {};
+    if (key === "decisionEpisodeId") {
+      return String((job && job.decisionEpisodeId) || context.investmentDecisionEpisodeId || context.decisionEpisodeId || "");
+    }
+    if (key === "decisionKey") return String((job && job.decisionKey) || context.decisionKey || "");
+    return "";
+  }
+
+  function relatedNotificationForInvestmentAction(row) {
+    row = row || {};
+    var episodeId = String(row.decisionEpisodeId || "");
+    var decisionKey = String(row.decisionKey || "");
+    var accountId = String(row.accountId || "default");
+    var symbol = String(row.symbol || "").toUpperCase();
+    return latestChangedFirst(state.notificationJobItems || []).filter(function (job) {
+      if (decisionKey && notificationDecisionLinkValue(job, "decisionKey") === decisionKey) return true;
+      if (episodeId && notificationDecisionLinkValue(job, "decisionEpisodeId") === episodeId) return true;
+      return Boolean(symbol) && String(job.accountId || "default") === accountId && notificationJobResolvedSymbol(job) === symbol;
+    })[0] || null;
+  }
+
+  function relatedDecisionForNotification(job) {
+    var episodeId = notificationDecisionLinkValue(job, "decisionEpisodeId");
+    var decisionKey = notificationDecisionLinkValue(job, "decisionKey");
+    var accountId = String((job && job.accountId) || "default");
+    var symbol = notificationJobResolvedSymbol(job);
+    return selectConsoleDecisionRows(state.snapshot || {}).filter(function (row) {
+      if (decisionKey && row.decisionKey === decisionKey) return true;
+      if (episodeId && row.decisionEpisodeId === episodeId) return true;
+      return Boolean(symbol) && row.accountId === accountId && row.symbol === symbol;
     })[0] || null;
   }
 
@@ -15659,6 +15885,7 @@
     var invalidation = investmentActionInvalidation(row);
     var nextWindow = investmentActionNextWindow(row);
     var linkedAlert = investmentActionLinkedAlert(row);
+    var relatedNotification = relatedNotificationForInvestmentAction(row);
     return {
       kicker: "Decision Inbox",
       title: name || row.symbol || "투자 판단 후보",
@@ -15686,7 +15913,7 @@
         }).join("") + '</div></section>' : '',
         '<section class="work-detail-section"><strong>무효화 조건</strong><p>' + escapeHtml(invalidation) + '</p></section>',
         '<section class="work-detail-section"><strong>다음 확인 시점</strong><p>' + escapeHtml(nextWindow) + '</p></section>',
-        '<section class="work-detail-section"><strong>연결 알림</strong><p>' + escapeHtml(linkedAlert) + '</p></section>',
+        '<section class="work-detail-section"><strong>연결 알림</strong><p>' + escapeHtml(relatedNotification ? "이 판단에서 생성된 최신 알림을 확인할 수 있습니다." : linkedAlert) + '</p>' + (relatedNotification ? renderWorkDetailButton("notification-job", notificationJobKey(relatedNotification), "관련 알림 보기", "text-button compact") : '') + '</section>',
         graph.blocked ? '<section class="work-detail-section"><strong>차단 조건</strong><p>' + escapeHtml(graph.basis || "InferenceBox") + '</p></section>' : ''
       ].join("")
     };
@@ -19423,12 +19650,17 @@
     var query = String(state.notificationJobSearch || "");
     var status = String(state.notificationJobStatusFilter || "all");
     var type = String(state.notificationJobTypeFilter || "all");
-    var hasFilter = Boolean(query.trim() || status !== "all" || type !== "all");
+    var inbox = String(state.notificationInboxFilter || "all");
+    var hasFilter = Boolean(query.trim() || status !== "all" || type !== "all" || inbox !== "all");
     return [
       '<form class="notification-search-panel"' + cardFormatAttrs("control-strip", "compact") + ' data-notification-search-form>',
       '<label class="notification-search-field primary">',
       '<span>검색</span>',
       '<input data-notification-job-search type="search" value="' + escapeHtml(query) + '" placeholder="종목, 알림 타입, 상태, 본문 검색" autocomplete="off" />',
+      '</label>',
+      '<label class="notification-search-field">',
+      '<span>알림함</span>',
+      '<select data-notification-job-filter="inbox"><option value="all"' + (inbox === "all" ? " selected" : "") + '>전체 알림</option><option value="unread"' + (inbox === "unread" ? " selected" : "") + '>읽지 않음</option><option value="important"' + (inbox === "important" ? " selected" : "") + '>중요</option><option value="action"' + (inbox === "action" ? " selected" : "") + '>확인 필요</option></select>',
       '</label>',
       '<label class="notification-search-field">',
       '<span>상태</span>',
@@ -20000,6 +20232,8 @@
     var visibleGateRows = compact ? [] : gateRows;
     var visibleReasons = compact ? [] : payload.reasons;
     var detailButton = compact ? '<div class="notification-detail-actions">' + renderWorkDetailButton("notification-job", notificationJobKey(job), "알림·추론 상세", "text-button primary compact") + '</div>' : '';
+    var relatedDecision = relatedDecisionForNotification(job);
+    var receiptActions = '<div class="notification-detail-actions"><button class="text-button compact" type="button" data-notification-receipt="important" data-notification-job-id="' + escapeHtml(notificationJobKey(job)) + '" data-notification-receipt-value="' + escapeHtml(job.important ? "false" : "true") + '">' + escapeHtml(job.important ? "중요 해제" : "중요 표시") + '</button><button class="text-button compact" type="button" data-notification-receipt="acknowledged" data-notification-job-id="' + escapeHtml(notificationJobKey(job)) + '" data-notification-receipt-value="' + escapeHtml(job.acknowledgedAt ? "false" : "true") + '">' + escapeHtml(job.acknowledgedAt ? "확인 취소" : "확인 완료") + '</button></div>';
     return [
       '<aside class="notification-decision-detail" aria-label="선택 알림 판단 상세">',
       '<div class="notification-detail-head">',
@@ -20010,6 +20244,7 @@
       '</div>',
       '<span class="tone-chip ' + escapeHtml(notificationJobToneClass(job.status)) + '">' + escapeHtml(notificationJobStatusLabel(job.status)) + '</span>',
       '</div>',
+      receiptActions,
       '<div class="notification-detail-metrics">',
       renderNotificationDetailMetric("발송 판단", notificationDeliveryStateLabel(job.deliveryDecision), notificationJobDecisionRoute(job).tone),
       renderNotificationDetailMetric("확인 단계", notificationReviewLevelLabel(job.deliveryReviewLevel), "muted"),
@@ -20029,6 +20264,7 @@
       '<strong>판단 요약</strong>',
       '<p>' + escapeHtml((((job.reasoningTrace || {}).finalDecision || {}).summary) || payload.fullText || payload.preview) + '</p>',
       '</section>',
+      relatedDecision ? '<section class="notification-detail-section"><strong>관련 현재 판단</strong><p>' + escapeHtml([relatedDecision.name || relatedDecision.symbol, relatedDecision.actionLabel, relatedDecision.reason].filter(Boolean).join(" · ")) + '</p>' + renderWorkDetailButton("investment-action", relatedDecision.key, "현재 판단 보기", "text-button compact") + '</section>' : '',
       renderNotificationActionFlow(job),
       !compact ? renderNotificationReverseReasoning(job) : '',
       visibleGateRows.length ? '<section class="notification-detail-section"><strong>게이트와 보류 조건</strong><div class="notification-detail-tags">' + visibleGateRows.map(function (row) {
@@ -26912,7 +27148,32 @@
       var detailButton = event.target.closest && event.target.closest("[data-work-detail]");
       if (detailButton && app.contains(detailButton)) {
         event.preventDefault();
-        openWorkDetailLayer(detailButton.getAttribute("data-work-detail"), detailButton.getAttribute("data-work-detail-key") || "");
+        var detailType = detailButton.getAttribute("data-work-detail");
+        var detailKey = detailButton.getAttribute("data-work-detail-key") || "";
+        if (detailType === "notification-job") {
+          var unreadJob = notificationJobByKey(detailKey);
+          if (unreadJob && !unreadJob.readAt) updateNotificationReceipt(detailKey, { read: true });
+        }
+        openWorkDetailLayer(detailType, detailKey);
+        return;
+      }
+      var receiptButton = event.target.closest && event.target.closest("[data-notification-receipt]");
+      if (receiptButton && app.contains(receiptButton)) {
+        event.preventDefault();
+        var receiptField = receiptButton.getAttribute("data-notification-receipt");
+        var receiptJobId = receiptButton.getAttribute("data-notification-job-id") || "";
+        var receiptValue = receiptButton.getAttribute("data-notification-receipt-value") === "true";
+        if (receiptField && receiptJobId) {
+          var receiptChange = {};
+          receiptChange[receiptField] = receiptValue;
+          updateNotificationReceipt(receiptJobId, receiptChange);
+        }
+        return;
+      }
+      var markAllRead = event.target.closest && event.target.closest('[data-action="mark-all-notifications-read"]');
+      if (markAllRead && app.contains(markAllRead)) {
+        event.preventDefault();
+        markAllNotificationsRead();
         return;
       }
       var closeButton = event.target.closest && event.target.closest("[data-work-detail-close]");
@@ -26935,7 +27196,9 @@
       if (notificationPage && app.contains(notificationPage)) {
         var nextPage = Math.max(1, Number(notificationPage.getAttribute("data-notification-job-page") || 1));
         state.notificationJobsOffset = (nextPage - 1) * Math.max(1, Number(state.notificationJobsPageSize || 20));
+        state.notificationJobsCursor = notificationPage.getAttribute("data-notification-job-cursor") || "";
         loadNotificationJobs();
+        return;
       }
       var commandButton = event.target.closest && event.target.closest('[data-action="command-palette"]');
       if (commandButton && app.contains(commandButton)) {
@@ -26951,31 +27214,63 @@
         return;
       }
       var search = event.target && event.target.closest && event.target.closest("[data-console-market-search]");
-      if (!search || !app.contains(search)) return;
-      window.clearTimeout(marketSearchTimer);
-      marketSearchTimer = window.setTimeout(function () {
-        state.consoleMarketSearch = search.value || "";
-        state.consolePages.market = 1;
-        render();
-      }, 180);
+      if (search && app.contains(search)) {
+        window.clearTimeout(marketSearchTimer);
+        marketSearchTimer = window.setTimeout(function () {
+          state.consoleMarketSearch = search.value || "";
+          state.consolePages.market = 1;
+          render();
+        }, 180);
+        return;
+      }
+      var decisionSearch = event.target && event.target.closest && event.target.closest("[data-console-decision-search]");
+      if (decisionSearch && app.contains(decisionSearch)) {
+        window.clearTimeout(marketSearchTimer);
+        marketSearchTimer = window.setTimeout(function () {
+          state.consoleDecisionSearch = decisionSearch.value || "";
+          state.consolePages.decision = 1;
+          render();
+        }, 180);
+      }
     });
     app.addEventListener("change", function (event) {
       var scope = event.target && event.target.closest && event.target.closest("[data-console-market-scope]");
-      if (!scope || !app.contains(scope)) return;
-      state.consoleMarketScope = scope.value || "all";
-      state.consolePages.market = 1;
-      render();
+      if (scope && app.contains(scope)) {
+        state.consoleMarketScope = scope.value || "all";
+        state.consolePages.market = 1;
+        render();
+        return;
+      }
+      var decisionFilter = event.target && event.target.closest && event.target.closest("[data-console-decision-filter]");
+      if (decisionFilter && app.contains(decisionFilter)) {
+        var decisionFilterName = decisionFilter.getAttribute("data-console-decision-filter");
+        if (decisionFilterName === "scope") state.consoleDecisionScope = decisionFilter.value || "all";
+        if (decisionFilterName === "action") state.consoleDecisionAction = decisionFilter.value || "all";
+        if (decisionFilterName === "quality") state.consoleDecisionQuality = decisionFilter.value || "all";
+        state.consolePages.decision = 1;
+        render();
+      }
     });
     app.addEventListener("submit", function (event) {
       var form = event.target.closest && event.target.closest("[data-console-market-form]");
-      if (!form || !app.contains(form)) return;
-      event.preventDefault();
-      var search = form.querySelector("[data-console-market-search]");
-      var scope = form.querySelector("[data-console-market-scope]");
-      state.consoleMarketSearch = search ? search.value : "";
-      state.consoleMarketScope = scope ? scope.value : "all";
-      state.consolePages.market = 1;
-      render();
+      if (form && app.contains(form)) {
+        event.preventDefault();
+        var search = form.querySelector("[data-console-market-search]");
+        var scope = form.querySelector("[data-console-market-scope]");
+        state.consoleMarketSearch = search ? search.value : "";
+        state.consoleMarketScope = scope ? scope.value : "all";
+        state.consolePages.market = 1;
+        render();
+        return;
+      }
+      var decisionForm = event.target.closest && event.target.closest("[data-console-decision-form]");
+      if (decisionForm && app.contains(decisionForm)) {
+        event.preventDefault();
+        var decisionInput = decisionForm.querySelector("[data-console-decision-search]");
+        state.consoleDecisionSearch = decisionInput ? decisionInput.value : "";
+        state.consolePages.decision = 1;
+        render();
+      }
     });
   }
 
@@ -28251,7 +28546,7 @@
       });
       field.addEventListener("change", function () {
         state.notificationJobSearch = field.value;
-        state.notificationJobsOffset = 0;
+        resetNotificationJobsPaging();
         loadNotificationJobs();
         render();
       });
@@ -28262,7 +28557,7 @@
         event.preventDefault();
         var field = form.querySelector("[data-notification-job-search]");
         state.notificationJobSearch = field ? field.value : state.notificationJobSearch;
-        state.notificationJobsOffset = 0;
+        resetNotificationJobsPaging();
         loadNotificationJobs();
         render();
       });
@@ -28273,7 +28568,8 @@
         var filter = field.getAttribute("data-notification-job-filter");
         if (filter === "status") state.notificationJobStatusFilter = field.value || "all";
         if (filter === "messageType") state.notificationJobTypeFilter = field.value || "all";
-        state.notificationJobsOffset = 0;
+        if (filter === "inbox") state.notificationInboxFilter = field.value || "all";
+        resetNotificationJobsPaging();
         loadNotificationJobs();
         render();
       });
@@ -28285,7 +28581,8 @@
         state.notificationJobSearch = "";
         state.notificationJobStatusFilter = "all";
         state.notificationJobTypeFilter = "all";
-        state.notificationJobsOffset = 0;
+        state.notificationInboxFilter = "all";
+        resetNotificationJobsPaging();
         loadNotificationJobs();
         render();
         showSnackbar("알림 검색 조건을 초기화했습니다.");
@@ -28306,6 +28603,8 @@
         var key = row.getAttribute("data-notification-job-select") || "";
         if (!key) return;
         state.activeNotificationJobKey = key;
+        var selectedJob = notificationJobByKey(key);
+        if (selectedJob && !selectedJob.readAt) updateNotificationReceipt(key, { read: true });
         render();
       };
       row.addEventListener("click", function (event) {

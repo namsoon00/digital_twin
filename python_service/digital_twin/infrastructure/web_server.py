@@ -86,6 +86,7 @@ from ..domain.investment_ubiquitous_language import (
     validate_investment_language_registry,
 )
 from ..domain.investment_research import NewsCollectionTarget
+from ..domain.investment_analysis import investment_decision_key
 from ..domain.investment_evidence_governance import claim_quality_summary
 from ..domain.news_ai_analysis import has_mojibake, local_news_ai_analysis, apply_news_ai_analysis, news_ai_analysis_is_current
 from ..domain.parsing import parse_assignments
@@ -2290,6 +2291,23 @@ def notification_job_public_payload(job: NotificationJob, detail: bool = False, 
         context,
     )
     processing_age = notification_processing_age_minutes(job)
+    episode = context.get("investmentDecisionEpisode") if isinstance(context.get("investmentDecisionEpisode"), dict) else {}
+    relation = context.get("ontologyRelationContext") if isinstance(context.get("ontologyRelationContext"), dict) else {}
+    symbol = str(context.get("symbol") or context.get("rawSymbol") or "").strip().upper()
+    decision_episode_id = str(
+        context.get("investmentDecisionEpisodeId")
+        or context.get("decisionEpisodeId")
+        or episode.get("episodeId")
+        or relation.get("investmentDecisionEpisodeId")
+        or ""
+    ).strip()
+    decision_key = str(context.get("decisionKey") or "").strip()
+    if not decision_key and symbol and decision_episode_id:
+        decision_key = investment_decision_key(job.account_id or "default", symbol, decision_episode_id)
+    data_quality = str(context.get("dataQuality") or relation.get("dataQuality") or "actual")
+    data_mode = str(context.get("dataMode") or context.get("mode") or "").lower()
+    is_mock = bool(context.get("isMock")) or data_quality.lower() in {"mock", "demo"} or data_mode in {"mock", "demo", "preview"}
+    api_source = str(context.get("apiSource") or context.get("quoteSource") or context.get("sourceApi") or "notification_jobs")
     if stale_minutes is None:
         try:
             stale_minutes = max(1, int(runtime_settings().get("notificationProcessingStaleMinutes") or 30))
@@ -2303,11 +2321,13 @@ def notification_job_public_payload(job: NotificationJob, detail: bool = False, 
         "status": job.status,
         "accountId": job.account_id,
         "accountLabel": job.account_label,
+        "decisionEpisodeId": decision_episode_id,
+        "decisionKey": decision_key,
         "createdAt": job.created_at,
         "updatedAt": job.updated_at,
         "sourceEventName": job.source_event_name,
         "title": title,
-        "symbol": str(context.get("symbol") or "").strip(),
+        "symbol": symbol,
         "rawSymbol": str(context.get("rawSymbol") or context.get("symbol") or "").strip(),
         "symbolName": str(context.get("symbolDisplayName") or context.get("displaySymbolName") or "").strip(),
         "textPreview": compact_notification_text(customer_text),
@@ -2317,6 +2337,9 @@ def notification_job_public_payload(job: NotificationJob, detail: bool = False, 
         "processingAgeMinutes": round(processing_age, 1),
         "recoverableProcessing": bool(job.status == "processing" and processing_age >= stale_minutes),
         "deliveryDecision": context.get("deliveryDecision") or ("send" if job.status in {"pending", "processing", "done"} else job.status),
+        "apiSource": api_source,
+        "dataQuality": data_quality,
+        "isMock": is_mock,
         "deliveryGateState": context.get("deliveryGateState") or "",
         "deliveryGateReason": context.get("deliveryGateReason") or "",
         "deliveryReasons": [str(item) for item in reasons],
@@ -2416,11 +2439,33 @@ def notification_job_list_payload(job: NotificationJob, stale_minutes: int) -> D
         payload["title"] = compact_notification_text(job.source_event_name or headline, 120)
     fields = {
         "jobId", "messageType", "messageTypeLabel", "messageTypeIcon", "status",
+        "accountId", "accountLabel", "decisionEpisodeId", "decisionKey",
         "createdAt", "updatedAt", "sourceEventName", "title", "symbol", "rawSymbol",
         "symbolName", "textPreview", "lastError", "suppressionSummary", "nextEligibleAt",
         "processingAgeMinutes", "recoverableProcessing", "deliveryDecision",
+        "apiSource", "dataQuality", "isMock",
     }
     return {key: value for key, value in payload.items() if key in fields}
+
+
+def encode_notification_cursor(job: NotificationJob) -> str:
+    raw = json.dumps({"updatedAt": job.updated_at or job.created_at, "jobId": job.job_id}, separators=(",", ":"))
+    return base64.urlsafe_b64encode(raw.encode("utf-8")).decode("ascii").rstrip("=")
+
+
+def decode_notification_cursor(value: str) -> Dict[str, str]:
+    cursor = str(value or "").strip()
+    if not cursor:
+        return {"updatedAt": "", "jobId": ""}
+    try:
+        padded = cursor + ("=" * (-len(cursor) % 4))
+        payload = json.loads(base64.urlsafe_b64decode(padded.encode("ascii")).decode("utf-8"))
+        return {
+            "updatedAt": str(payload.get("updatedAt") or "")[:40],
+            "jobId": str(payload.get("jobId") or "")[:191],
+        }
+    except (ValueError, TypeError, json.JSONDecodeError):
+        return {"updatedAt": "", "jobId": ""}
 
 
 def notification_jobs_payload(query: Dict[str, List[str]]) -> Dict[str, object]:
@@ -2430,6 +2475,12 @@ def notification_jobs_payload(query: Dict[str, List[str]]) -> Dict[str, object]:
     status = first_query(query, "status")
     search = first_query(query, "query") or first_query(query, "q")
     scope = (first_query(query, "scope") or "investment").strip().lower()
+    recipient_id = (first_query(query, "recipientId") or "local-owner").strip()[:191] or "local-owner"
+    inbox = (first_query(query, "inbox") or "all").strip().lower()
+    if inbox not in {"all", "unread", "important", "action"}:
+        inbox = "all"
+    cursor_value = first_query(query, "cursor") or ""
+    cursor = decode_notification_cursor(cursor_value)
     if scope not in {"investment", "operations", "all"}:
         scope = "investment"
     try:
@@ -2447,6 +2498,10 @@ def notification_jobs_payload(query: Dict[str, List[str]]) -> Dict[str, object]:
                 status=status,
                 query=search,
                 scope=scope,
+                recipient_id=recipient_id,
+                inbox=inbox,
+                cursor_updated_at=cursor["updatedAt"],
+                cursor_job_id=cursor["jobId"],
             )
         elif hasattr(store, "recent_page_with_summary"):
             jobs, total, summary = store.recent_page_with_summary(
@@ -2480,9 +2535,31 @@ def notification_jobs_payload(query: Dict[str, List[str]]) -> Dict[str, object]:
             "failed": 0,
         }
         stale_minutes = 30
+        store = None
+    receipts = {}
+    inbox_summary = {"total": total, "unread": total, "important": 0, "actionRequired": 0}
+    if store and hasattr(store, "receipt_states"):
+        receipts = store.receipt_states(recipient_id, [job.job_id for job in jobs])
+    if store and hasattr(store, "inbox_summary"):
+        inbox_summary = store.inbox_summary(recipient_id, scope=scope)
+    items = []
+    for job in jobs:
+        item = notification_job_list_payload(job, stale_minutes=stale_minutes)
+        receipt = receipts.get(job.job_id, {})
+        item.update({
+            "readAt": str(receipt.get("readAt") or ""),
+            "acknowledgedAt": str(receipt.get("acknowledgedAt") or ""),
+            "important": bool(receipt.get("important")),
+            "receiptUpdatedAt": str(receipt.get("receiptUpdatedAt") or ""),
+        })
+        items.append(item)
+    next_cursor = ""
+    if jobs and len(jobs) >= limit and offset + len(jobs) < total:
+        next_cursor = encode_notification_cursor(jobs[-1])
     return {
-        "jobs": [notification_job_list_payload(job, stale_minutes=stale_minutes) for job in jobs],
+        "jobs": items,
         "summary": summary,
+        "inboxSummary": inbox_summary,
         "diagnostics": notification_job_diagnostics(jobs),
         "limit": limit,
         "offset": offset,
@@ -2491,14 +2568,52 @@ def notification_jobs_payload(query: Dict[str, List[str]]) -> Dict[str, object]:
         "messageType": message_type,
         "status": status,
         "scope": scope,
+        "recipientId": recipient_id,
+        "inbox": inbox,
+        "cursor": cursor_value,
+        "nextCursor": next_cursor,
     }
 
 
-def notification_job_detail_payload(job_id: str) -> Dict[str, object]:
-    job = notification_queue_store().get(job_id)
+def notification_job_detail_payload(job_id: str, recipient_id: str = "local-owner") -> Dict[str, object]:
+    store = notification_queue_store()
+    job = store.get(job_id)
     if not job:
         return {}
-    return {"job": notification_job_public_payload(job, detail=True)}
+    payload = notification_job_public_payload(job, detail=True)
+    if hasattr(store, "receipt_states"):
+        receipt = store.receipt_states(recipient_id, [job.job_id]).get(job.job_id, {})
+        payload.update({
+            "readAt": str(receipt.get("readAt") or ""),
+            "acknowledgedAt": str(receipt.get("acknowledgedAt") or ""),
+            "important": bool(receipt.get("important")),
+            "receiptUpdatedAt": str(receipt.get("receiptUpdatedAt") or ""),
+        })
+    return {"job": payload}
+
+
+def update_notification_receipt_payload(job_id: str, payload: Dict[str, object]) -> Dict[str, object]:
+    body = payload if isinstance(payload, dict) else {}
+    store = notification_queue_store()
+    if not store.get(job_id):
+        return {"error": "알림을 찾지 못했습니다."}
+    receipt = store.update_receipt(
+        job_id,
+        str(body.get("recipientId") or "local-owner"),
+        read=request_bool(body.get("read")) if "read" in body else None,
+        acknowledged=request_bool(body.get("acknowledged")) if "acknowledged" in body else None,
+        important=request_bool(body.get("important")) if "important" in body else None,
+    )
+    return {"receipt": receipt, "inboxSummary": store.inbox_summary(receipt["recipientId"], scope="investment")}
+
+
+def mark_all_notifications_read_payload(payload: Dict[str, object]) -> Dict[str, object]:
+    body = payload if isinstance(payload, dict) else {}
+    recipient_id = str(body.get("recipientId") or "local-owner")
+    scope = str(body.get("scope") or "investment")
+    store = notification_queue_store()
+    updated = store.mark_all_read(recipient_id, scope=scope)
+    return {"updated": updated, "inboxSummary": store.inbox_summary(recipient_id, scope=scope)}
 
 
 def replay_notification_payload(payload: Dict[str, object]) -> Dict[str, object]:
@@ -4440,9 +4555,25 @@ class DigitalTwinHandler(BaseHTTPRequestHandler):
         if path == "/api/notification-jobs" and self.command == "GET":
             return self.send_payload(200, notification_jobs_payload(query))
 
+        if path == "/api/notification-jobs/read-all" and self.command == "POST":
+            if not self.ensure_writable("공유 모드에서는 알림 확인 상태를 변경할 수 없습니다."):
+                return
+            return self.send_payload(200, mark_all_notifications_read_payload(self.read_json_body()))
+
+        notification_receipt_match = re.match(r"^/api/notification-jobs/([^/]+)/receipt$", path)
+        if notification_receipt_match and self.command in {"POST", "PUT", "PATCH"}:
+            if not self.ensure_writable("공유 모드에서는 알림 확인 상태를 변경할 수 없습니다."):
+                return
+            job_id = urllib.parse.unquote(notification_receipt_match.group(1))
+            payload = update_notification_receipt_payload(job_id, self.read_json_body())
+            return self.send_payload(200 if not payload.get("error") else 404, payload)
+
         notification_job_match = re.match(r"^/api/notification-jobs/([^/]+)$", path)
         if notification_job_match and self.command == "GET":
-            payload = notification_job_detail_payload(urllib.parse.unquote(notification_job_match.group(1)))
+            payload = notification_job_detail_payload(
+                urllib.parse.unquote(notification_job_match.group(1)),
+                first_query(query, "recipientId") or "local-owner",
+            )
             return self.send_payload(200 if payload.get("job") else 404, payload or {"error": "알림 작업을 찾지 못했습니다."})
 
         if path == "/api/notification-jobs/replay" and self.command == "POST":

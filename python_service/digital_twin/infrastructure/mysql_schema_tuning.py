@@ -141,6 +141,18 @@ MYSQL_OPERATIONAL_INDEXES: Dict[str, Sequence[MySQLIndexDefinition]] = {
             "idx_notification_jobs_account_status_updated",
             "`account_id`, `status`, `updated_at`, `job_id`",
         ),
+        MySQLIndexDefinition(
+            "notification_jobs",
+            "idx_notification_jobs_decision_link",
+            "`account_id`, `symbol`, `decision_episode_id`, `updated_at`, `job_id`",
+        ),
+    ),
+    "notification_inbox_receipts": (
+        MySQLIndexDefinition(
+            "notification_inbox_receipts",
+            "idx_notification_inbox_recipient_important",
+            "`recipient_id`, `important`, `updated_at`, `job_id`",
+        ),
     ),
     "ai_inference_subject_heads": (
         MySQLIndexDefinition(
@@ -385,6 +397,14 @@ MYSQL_OPERATIONAL_INDEXES: Dict[str, Sequence[MySQLIndexDefinition]] = {
 
 
 MYSQL_OPERATIONAL_COLUMNS: Dict[str, Sequence[MySQLColumnDefinition]] = {
+    "notification_jobs": (
+        MySQLColumnDefinition("notification_jobs", "symbol", "VARCHAR(64) NOT NULL DEFAULT ''"),
+        MySQLColumnDefinition("notification_jobs", "decision_episode_id", "VARCHAR(191) NOT NULL DEFAULT ''"),
+        MySQLColumnDefinition("notification_jobs", "decision_key", "VARCHAR(191) NOT NULL DEFAULT ''"),
+        MySQLColumnDefinition("notification_jobs", "api_source", "VARCHAR(191) NOT NULL DEFAULT 'notification_jobs'"),
+        MySQLColumnDefinition("notification_jobs", "data_quality", "VARCHAR(32) NOT NULL DEFAULT 'actual'"),
+        MySQLColumnDefinition("notification_jobs", "is_mock", "TINYINT NOT NULL DEFAULT 0"),
+    ),
     "monitor_snapshot_history": (
         MySQLColumnDefinition(
             "monitor_snapshot_history",

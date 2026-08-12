@@ -831,6 +831,12 @@ MYSQL_SCHEMA = [
         message_type VARCHAR(191) NOT NULL DEFAULT 'notification',
         source_event_id VARCHAR(191) NOT NULL DEFAULT '',
         source_event_name VARCHAR(191) NOT NULL DEFAULT '',
+        symbol VARCHAR(64) NOT NULL DEFAULT '',
+        decision_episode_id VARCHAR(191) NOT NULL DEFAULT '',
+        decision_key VARCHAR(191) NOT NULL DEFAULT '',
+        api_source VARCHAR(191) NOT NULL DEFAULT 'notification_jobs',
+        data_quality VARCHAR(32) NOT NULL DEFAULT 'actual',
+        is_mock TINYINT NOT NULL DEFAULT 0,
         dedupe_key VARCHAR(191) DEFAULT NULL,
         status VARCHAR(32) NOT NULL DEFAULT 'pending',
         attempts INT NOT NULL DEFAULT 0,
@@ -844,6 +850,19 @@ MYSQL_SCHEMA = [
         UNIQUE KEY idx_notification_jobs_dedupe (dedupe_key),
         KEY idx_notification_jobs_status_created (status, created_at, job_id),
         KEY idx_notification_jobs_message_time_status (message_type, created_at, status)
+    ) ENGINE=InnoDB DEFAULT CHARSET=utf8mb4 COLLATE=utf8mb4_unicode_ci
+    """,
+    """
+    CREATE TABLE IF NOT EXISTS notification_inbox_receipts (
+        recipient_id VARCHAR(191) NOT NULL,
+        job_id VARCHAR(191) NOT NULL,
+        read_at VARCHAR(40) NOT NULL DEFAULT '',
+        acknowledged_at VARCHAR(40) NOT NULL DEFAULT '',
+        important TINYINT NOT NULL DEFAULT 0,
+        updated_at VARCHAR(40) NOT NULL,
+        PRIMARY KEY (recipient_id, job_id),
+        KEY idx_notification_inbox_recipient_updated (recipient_id, updated_at, job_id),
+        KEY idx_notification_inbox_recipient_read (recipient_id, read_at, job_id)
     ) ENGINE=InnoDB DEFAULT CHARSET=utf8mb4 COLLATE=utf8mb4_unicode_ci
     """,
     """

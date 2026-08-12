@@ -3,6 +3,7 @@ from threading import Lock
 from typing import Dict, List, Optional, Tuple
 
 from ..domain.data_freshness import evaluate_notification_data_freshness, sanitize_notification_context_for_freshness
+from ..domain.investment_analysis import investment_decision_key
 from ..domain.message_types import (
     HOLDING_TIMING,
     INVESTMENT_CALENDAR_REMINDER,
@@ -166,6 +167,10 @@ class MySQLNotificationJobStore(MySQLOperationalConnection):
         status: str = "",
         query: str = "",
         scope: str = "all",
+        recipient_id: str = "",
+        inbox: str = "all",
+        cursor_updated_at: str = "",
+        cursor_job_id: str = "",
     ) -> Tuple[List[NotificationJob], int, Dict[str, int]]:
         """Read a ledger page without deserializing each immutable audit payload.
 
@@ -182,25 +187,53 @@ class MySQLNotificationJobStore(MySQLOperationalConnection):
             scope,
             include_payload_query=False,
         )
+        safe_recipient = str(recipient_id or "").strip()[:191]
+        inbox_state = str(inbox or "all").strip().lower()
+        join = ""
+        if safe_recipient:
+            join = (
+                " LEFT JOIN notification_inbox_receipts AS receipt"
+                " ON receipt.job_id = notification_jobs.job_id AND receipt.recipient_id = %s"
+            )
+            params = [safe_recipient] + params
+            if inbox_state == "unread":
+                clauses.append("COALESCE(receipt.read_at, '') = ''")
+            elif inbox_state == "important":
+                clauses.append("COALESCE(receipt.important, 0) = 1")
+            elif inbox_state == "action":
+                clauses.append("notification_jobs.status IN ('pending', 'awaiting_ai', 'processing', 'failed')")
+                clauses.append("COALESCE(receipt.acknowledged_at, '') = ''")
         where = (" WHERE " + " AND ".join(clauses)) if clauses else ""
+        page_clauses = list(clauses)
+        page_params = list(params)
+        if str(cursor_updated_at or "").strip() and str(cursor_job_id or "").strip():
+            page_clauses.append(
+                "(notification_jobs.updated_at < %s OR "
+                "(notification_jobs.updated_at = %s AND notification_jobs.job_id < %s))"
+            )
+            page_params.extend([cursor_updated_at, cursor_updated_at, cursor_job_id])
+        page_where = (" WHERE " + " AND ".join(page_clauses)) if page_clauses else ""
         page_size = max(1, min(100, int(limit or 40)))
         page_offset = max(0, int(offset or 0))
-        columns = (
-            "job_id, account_id, account_label, message_type, source_event_id, "
-            "source_event_name, status, attempts, created_at, updated_at, last_error, text"
+        column_names = (
+            "job_id", "account_id", "account_label", "message_type", "source_event_id",
+            "source_event_name", "symbol", "decision_episode_id", "decision_key", "api_source",
+            "data_quality", "is_mock", "status", "attempts", "created_at", "updated_at", "last_error", "text",
         )
+        columns = ", ".join("notification_jobs." + name + " AS " + name for name in column_names)
         with self.connect() as connection:
             total_row = connection.execute(
-                "SELECT COUNT(*) AS count FROM notification_jobs" + where,
+                "SELECT COUNT(*) AS count FROM notification_jobs" + join + where,
                 params,
             ).fetchone()
             rows = connection.execute(
-                "SELECT " + columns + " FROM notification_jobs" + where
-                + " ORDER BY updated_at DESC, job_id DESC LIMIT %s OFFSET %s",
-                params + [page_size, page_offset],
+                "SELECT " + columns + " FROM notification_jobs" + join + page_where
+                + " ORDER BY notification_jobs.updated_at DESC, notification_jobs.job_id DESC LIMIT %s OFFSET %s",
+                page_params + [page_size, 0 if cursor_updated_at else page_offset],
             ).fetchall()
             summary_rows = connection.execute(
-                "SELECT status, COUNT(*) AS count FROM notification_jobs" + where + " GROUP BY status",
+                "SELECT notification_jobs.status, COUNT(*) AS count FROM notification_jobs" + join + where
+                + " GROUP BY notification_jobs.status",
                 params,
             ).fetchall()
         total = int(total_row["count"] or 0) if total_row else 0
@@ -250,6 +283,134 @@ class MySQLNotificationJobStore(MySQLOperationalConnection):
             params.extend([like, like, like])
         return clauses, params
 
+    @staticmethod
+    def notification_linkage(job: NotificationJob) -> Dict[str, object]:
+        context = job.context if isinstance(job.context, dict) else {}
+        episode = context.get("investmentDecisionEpisode") if isinstance(context.get("investmentDecisionEpisode"), dict) else {}
+        relation = context.get("ontologyRelationContext") if isinstance(context.get("ontologyRelationContext"), dict) else {}
+        symbol = str(context.get("symbol") or context.get("rawSymbol") or "").strip().upper()[:64]
+        decision_episode_id = str(
+            context.get("investmentDecisionEpisodeId")
+            or context.get("decisionEpisodeId")
+            or episode.get("episodeId")
+            or relation.get("investmentDecisionEpisodeId")
+            or ""
+        ).strip()[:191]
+        decision_key = str(context.get("decisionKey") or "").strip()[:191]
+        if not decision_key and symbol and decision_episode_id:
+            decision_key = investment_decision_key(job.account_id or "default", symbol, decision_episode_id)
+        data_quality = str(context.get("dataQuality") or relation.get("dataQuality") or "actual").strip()[:32]
+        return {
+            "symbol": symbol,
+            "decisionEpisodeId": decision_episode_id,
+            "decisionKey": decision_key,
+            "apiSource": str(context.get("apiSource") or context.get("quoteSource") or context.get("sourceApi") or "notification_jobs").strip()[:191],
+            "dataQuality": data_quality,
+            "isMock": bool(context.get("isMock")) or data_quality.lower() in {"mock", "demo"} or str(context.get("dataMode") or context.get("mode") or "").lower() in {"mock", "demo", "preview"},
+        }
+
+    def receipt_states(self, recipient_id: str, job_ids: List[str]) -> Dict[str, Dict[str, object]]:
+        recipient = str(recipient_id or "local-owner").strip()[:191] or "local-owner"
+        ids = [str(item or "").strip()[:191] for item in job_ids if str(item or "").strip()]
+        if not ids:
+            return {}
+        placeholders = ",".join(["%s"] * len(ids))
+        with self.connect() as connection:
+            rows = connection.execute(
+                "SELECT job_id, read_at, acknowledged_at, important, updated_at "
+                "FROM notification_inbox_receipts WHERE recipient_id = %s AND job_id IN (" + placeholders + ")",
+                [recipient] + ids,
+            ).fetchall()
+        return {
+            str(row.get("job_id") or ""): {
+                "readAt": str(row.get("read_at") or ""),
+                "acknowledgedAt": str(row.get("acknowledged_at") or ""),
+                "important": bool(row.get("important")),
+                "receiptUpdatedAt": str(row.get("updated_at") or ""),
+            }
+            for row in rows
+        }
+
+    def inbox_summary(self, recipient_id: str, scope: str = "investment") -> Dict[str, int]:
+        recipient = str(recipient_id or "local-owner").strip()[:191] or "local-owner"
+        clauses, params = self._recent_filters(scope=scope)
+        where = (" WHERE " + " AND ".join(clauses)) if clauses else ""
+        with self.connect() as connection:
+            row = connection.execute(
+                "SELECT COUNT(*) AS total, "
+                "SUM(CASE WHEN COALESCE(receipt.read_at, '') = '' THEN 1 ELSE 0 END) AS unread, "
+                "SUM(CASE WHEN COALESCE(receipt.important, 0) = 1 THEN 1 ELSE 0 END) AS important, "
+                "SUM(CASE WHEN notification_jobs.status IN ('pending', 'awaiting_ai', 'processing', 'failed') "
+                "AND COALESCE(receipt.acknowledged_at, '') = '' THEN 1 ELSE 0 END) AS action_required "
+                "FROM notification_jobs LEFT JOIN notification_inbox_receipts AS receipt "
+                "ON receipt.job_id = notification_jobs.job_id AND receipt.recipient_id = %s" + where,
+                [recipient] + params,
+            ).fetchone() or {}
+        return {
+            "total": int(row.get("total") or 0),
+            "unread": int(row.get("unread") or 0),
+            "important": int(row.get("important") or 0),
+            "actionRequired": int(row.get("action_required") or 0),
+        }
+
+    def update_receipt(
+        self,
+        job_id: str,
+        recipient_id: str,
+        read: Optional[bool] = None,
+        acknowledged: Optional[bool] = None,
+        important: Optional[bool] = None,
+    ) -> Dict[str, object]:
+        job_key = str(job_id or "").strip()[:191]
+        recipient = str(recipient_id or "local-owner").strip()[:191] or "local-owner"
+        if not job_key:
+            raise ValueError("Notification job id is required")
+        existing = self.receipt_states(recipient, [job_key]).get(job_key, {})
+        stamp = utc_now()
+        read_at = str(existing.get("readAt") or "")
+        acknowledged_at = str(existing.get("acknowledgedAt") or "")
+        important_value = bool(existing.get("important"))
+        if read is not None:
+            read_at = stamp if read else ""
+        if acknowledged is not None:
+            acknowledged_at = stamp if acknowledged else ""
+            if acknowledged:
+                read_at = read_at or stamp
+        if important is not None:
+            important_value = bool(important)
+        with self.connect() as connection:
+            connection.execute(
+                "INSERT INTO notification_inbox_receipts "
+                "(recipient_id, job_id, read_at, acknowledged_at, important, updated_at) "
+                "VALUES (%s, %s, %s, %s, %s, %s) "
+                "ON DUPLICATE KEY UPDATE read_at = VALUES(read_at), acknowledged_at = VALUES(acknowledged_at), "
+                "important = VALUES(important), updated_at = VALUES(updated_at)",
+                (recipient, job_key, read_at, acknowledged_at, int(important_value), stamp),
+            )
+        return {
+            "jobId": job_key,
+            "recipientId": recipient,
+            "readAt": read_at,
+            "acknowledgedAt": acknowledged_at,
+            "important": important_value,
+            "receiptUpdatedAt": stamp,
+        }
+
+    def mark_all_read(self, recipient_id: str, scope: str = "investment") -> int:
+        recipient = str(recipient_id or "local-owner").strip()[:191] or "local-owner"
+        clauses, params = self._recent_filters(scope=scope)
+        where = (" WHERE " + " AND ".join(clauses)) if clauses else ""
+        stamp = utc_now()
+        with self.connect() as connection:
+            cursor = connection.execute(
+                "INSERT INTO notification_inbox_receipts "
+                "(recipient_id, job_id, read_at, acknowledged_at, important, updated_at) "
+                "SELECT %s, notification_jobs.job_id, %s, '', 0, %s FROM notification_jobs" + where + " "
+                "ON DUPLICATE KEY UPDATE read_at = VALUES(read_at), updated_at = VALUES(updated_at)",
+                [recipient, stamp, stamp] + params,
+            )
+        return max(0, int(cursor.rowcount or 0))
+
     def get(self, job_id: str) -> Optional[NotificationJob]:
         target = str(job_id or "").strip()
         if not target:
@@ -287,13 +448,21 @@ class MySQLNotificationJobStore(MySQLOperationalConnection):
         context is represented as an empty mapping; the selected job is then
         re-read through ``get`` before its reasoning detail is rendered.
         """
+        context = {
+            "symbol": str(row.get("symbol") or ""),
+            "investmentDecisionEpisodeId": str(row.get("decision_episode_id") or ""),
+            "decisionKey": str(row.get("decision_key") or ""),
+            "apiSource": str(row.get("api_source") or "notification_jobs"),
+            "dataQuality": str(row.get("data_quality") or "actual"),
+            "isMock": bool(row.get("is_mock")),
+        }
         return NotificationJob(
             job_id=str(row.get("job_id") or ""),
             account_id=str(row.get("account_id") or ""),
             account_label=str(row.get("account_label") or ""),
             message_type=str(row.get("message_type") or "notification"),
             text=str(row.get("text") or ""),
-            context={},
+            context=context,
             status=str(row.get("status") or "pending"),
             attempts=int(row.get("attempts") or 0),
             created_at=str(row.get("created_at") or ""),
@@ -306,6 +475,7 @@ class MySQLNotificationJobStore(MySQLOperationalConnection):
     def upsert_job_with_connection(self, connection, job: NotificationJob) -> None:
         payload = self.compact_job_payload(job)
         dedupe_value = str(job.dedupe_key or "").strip()[:191] or None
+        linkage = self.notification_linkage(job)
         cursor = connection.execute(
             """
             UPDATE notification_jobs
@@ -314,6 +484,12 @@ class MySQLNotificationJobStore(MySQLOperationalConnection):
                 message_type = %s,
                 source_event_id = %s,
                 source_event_name = %s,
+                symbol = %s,
+                decision_episode_id = %s,
+                decision_key = %s,
+                api_source = %s,
+                data_quality = %s,
+                is_mock = %s,
                 dedupe_key = %s,
                 status = %s,
                 attempts = %s,
@@ -330,6 +506,12 @@ class MySQLNotificationJobStore(MySQLOperationalConnection):
                 job.message_type,
                 job.source_event_id,
                 job.source_event_name,
+                linkage["symbol"],
+                linkage["decisionEpisodeId"],
+                linkage["decisionKey"],
+                linkage["apiSource"],
+                linkage["dataQuality"],
+                int(linkage["isMock"]),
                 dedupe_value,
                 job.status,
                 job.attempts,
@@ -347,9 +529,10 @@ class MySQLNotificationJobStore(MySQLOperationalConnection):
             """
             INSERT INTO notification_jobs (
                 job_id, account_id, account_label, message_type, source_event_id, source_event_name,
-                dedupe_key, status, attempts, created_at, updated_at, last_error, text, payload_json
+                symbol, decision_episode_id, decision_key, api_source, data_quality, is_mock, dedupe_key, status, attempts,
+                created_at, updated_at, last_error, text, payload_json
             )
-            VALUES (%s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s)
+            VALUES (%s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s)
             """,
             (
                 job.job_id,
@@ -358,6 +541,12 @@ class MySQLNotificationJobStore(MySQLOperationalConnection):
                 job.message_type,
                 job.source_event_id,
                 job.source_event_name,
+                linkage["symbol"],
+                linkage["decisionEpisodeId"],
+                linkage["decisionKey"],
+                linkage["apiSource"],
+                linkage["dataQuality"],
+                int(linkage["isMock"]),
                 dedupe_value,
                 job.status,
                 job.attempts,

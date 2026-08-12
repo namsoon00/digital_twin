@@ -364,6 +364,25 @@ function checkWorkflowConsoleContract() {
     "모바일 전체 목록의 누적 로딩/무한 스크롤 계약이 없습니다."
   );
   assertOk(
+    code.indexOf("function filteredConsoleDecisionRows") >= 0 &&
+      code.indexOf('data-console-decision-filter="action"') >= 0 &&
+      code.indexOf('data-console-decision-filter="quality"') >= 0 &&
+      code.indexOf("row.actionCode === \"BUY\"") >= 0 &&
+      code.indexOf("row.apiSource") >= 0,
+    "판단 화면의 구조화 행동·데이터 출처 필터 계약이 없습니다."
+  );
+  assertOk(
+    code.indexOf("notificationRecipientId") >= 0 &&
+      code.indexOf("orbitAlphaNotificationRecipientId") >= 0 &&
+      code.indexOf("randomUUID") >= 0 &&
+      code.indexOf('data-notification-job-filter="inbox"') >= 0 &&
+      code.indexOf("updateNotificationReceipt") >= 0 &&
+      code.indexOf("markAllNotificationsRead") >= 0 &&
+      code.indexOf("data-notification-job-cursor") >= 0 &&
+      styles.indexOf("Decision state and notification history") >= 0,
+    "사용자별 알림함과 모바일 커서 목록 계약이 없습니다."
+  );
+  assertOk(
     code.indexOf("function recordChangedAt") >= 0 &&
       code.indexOf("function latestChangedFirst") >= 0 &&
       code.indexOf("function renderRecordChangedAt") >= 0 &&
@@ -389,8 +408,8 @@ function checkWorkflowConsoleContract() {
     "서버 페이징 목록의 변경일 필드 또는 최신순 정렬 계약이 없습니다."
   );
   assertOk(
-    /styles\.css\?v=20260812-full-list-values-v\d+/.test(indexHtml) &&
-      /app\.js\?v=20260812-full-list-values-v\d+/.test(indexHtml),
+    /styles\.css\?v=20260813-decision-alert-inbox-v\d+/.test(indexHtml) &&
+      /app\.js\?v=20260813-decision-alert-inbox-v\d+/.test(indexHtml),
     "목록 전체 데이터 정적 자산 cache key가 반영되지 않았습니다."
   );
 }

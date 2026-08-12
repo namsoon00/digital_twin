@@ -13,6 +13,7 @@ The PC console presents one operational question per workspace without copying f
 | Investment action and decision-time values | `DecisionItem` and TypeDB-backed InferenceBox context | Decision | evidence, chart and inference trace detail |
 | Research article and stock impact | `ResearchEvidence` | Market | Korean article summary, impact analysis and source |
 | Delivery state and dispatch reason | `NotificationJob` | Alerts | gates, full message and linked article detail |
+| Per-user notification state | `NotificationInboxReceipt` keyed by browser recipient and job | Alerts | read, acknowledged and important state |
 | Ontology graph and inference | TypeDB TBox, ABox, schema functions and InferenceBox | Validation | graph, rule and trace detail |
 | Experiment lifecycle | `OntologyExperiment` | Validation | replay, comparison and promotion detail |
 | Calendar event | investment calendar event repository | Calendar | month board, event rationale and reminder detail |
@@ -22,8 +23,10 @@ The PC console presents one operational question per workspace without copying f
 
 - Instrument: `accountId + market + symbol`; a single-account response may omit `accountId` in the visual label but not in the read-model key.
 - Research evidence: `evidenceId`.
-- Decision: server decision id, falling back to `accountId + symbol + generatedAt` only for historical compatibility.
+- Decision: `decisionKey`, derived from `accountId + symbol + decisionEpisodeId`; historical rows may fall back to the current symbol identity.
 - Notification: `jobId`.
+- Decision-to-notification link: `decisionKey`, with `decisionEpisodeId` and `accountId + symbol` as compatibility fallbacks.
+- Notification recipient: a browser-generated persistent recipient id. It separates inbox state without treating it as authenticated user identity.
 - Experiment: experiment `id`.
 - Ontology entity and relation: TypeDB entity id and relation id. Web code must not create a competing persistent relation identity.
 
@@ -40,8 +43,8 @@ The PC console presents one operational question per workspace without copying f
 
 - Today: portfolio summary, due events, urgent decisions, alert failures and data-health count.
 - Market: one instrument row per canonical identity plus linked evidence count and top impact.
-- Decision: one action row per canonical decision with action, conviction, reason, invalidation and freshness.
-- Alerts: one dispatch row per notification job with state change, trigger reason and delivery state.
+- Decision: the latest current state per canonical decision, with structured action code, reason, data quality, API source and freshness.
+- Alerts: chronological state-change history per notification job, with unread, acknowledged, important and delivery state. It is not a duplicate current-decision queue.
 - Validation: experiment rows plus TypeDB health and structural warnings.
 - Operations: provider and worker health plus settings category entry points.
 
@@ -52,3 +55,4 @@ The PC console presents one operational question per workspace without copying f
 - Eight to twelve rows per page.
 - No inline master-detail pair, nested scroll region or full record in a summary row.
 - Full records open in a full-screen detail surface with their own route-compatible identity.
+- Mobile lists use cursor-based cumulative loading and vertical records; a refresh must preserve the active workspace scroll position.

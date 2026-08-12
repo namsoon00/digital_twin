@@ -384,6 +384,46 @@ class OntologyMaintenanceRunnerTests(unittest.TestCase):
         self.assertEqual(2, runner.ontology_repository.calls[0]["maxAboxDeleteBatches"])
         self.assertEqual(150, runner.ontology_repository.calls[0]["aboxDeleteBatchSize"])
         self.assertTrue(result["maintenance"]["capacityBudget"]["yieldBounded"])
+        self.assertEqual(
+            "short-handoff",
+            result["maintenance"]["capacityBudget"]["yieldMode"],
+        )
+
+    def test_critical_backlog_yield_uses_timeout_bounded_drain_budget(self):
+        now = datetime.now(timezone.utc)
+        store = FakeStateStore({
+            "maintenanceYieldRequest": {
+                "requestedAt": now.isoformat().replace("+00:00", "Z"),
+                "expiresAt": (now + timedelta(seconds=60)).isoformat().replace("+00:00", "Z"),
+                "worldId": "portfolio:local:main",
+                "inactiveManifestCount": 40,
+            },
+            "maintenanceYieldLastRequestedAt": now.isoformat().replace("+00:00", "Z"),
+        })
+        repository = FakeOntologyRepository()
+        runner = OntologyMaintenanceRunner(
+            repository,
+            state_store=store,
+            settings={
+                "ontologyAboxMaintenanceYieldEnabled": "1",
+                "ontologyAboxMaintenanceCriticalInactiveManifestCount": "24",
+                "ontologyAboxMaintenanceExecutionTimeoutSeconds": "180",
+                "ontologyAboxMaintenanceExecutionReserveSeconds": "60",
+                "ontologyAboxMaintenanceEstimatedDeleteBatchSeconds": "20",
+            },
+            reasoning_queue_probe=lambda: {"effectivePendingCount": 0, "runningEntryCount": 0},
+        )
+
+        result = runner.run_once()
+
+        self.assertEqual("ok", result["status"])
+        self.assertEqual(4, repository.calls[0]["maxInactiveManifests"])
+        self.assertEqual(6, repository.calls[0]["maxAboxDeleteBatches"])
+        self.assertEqual(150, repository.calls[0]["aboxDeleteBatchSize"])
+        self.assertEqual(
+            "critical-drain",
+            result["maintenance"]["capacityBudget"]["yieldMode"],
+        )
 
     def test_pending_activation_releases_active_yield_for_reasoning_recovery(self):
         class PendingActivationRepository(ManifestInventoryRepository):

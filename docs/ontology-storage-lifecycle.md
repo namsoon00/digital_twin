@@ -34,8 +34,11 @@ It follows these rules:
 2. When inactive generations remain above the priority threshold for more than
    two minutes, maintenance receives one bounded writer turn before the next
    inference batch.
-3. A turn deletes at most the configured manifest and batch budget.
-4. The worker records per-world inventory and progress in MySQL. Status reads
+3. A normal hand-off stays at two delete batches. If the directly measured
+   backlog is critical, the worker uses the larger timeout-derived safe budget
+   so cleanup can catch up without crossing the isolated execution limit.
+4. A turn never exceeds the configured manifest and batch budget.
+5. The worker records per-world inventory and progress in MySQL. Status reads
    this durable state and does not scan TypeDB.
 
 Inspect it with:

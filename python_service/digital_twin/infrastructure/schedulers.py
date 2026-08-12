@@ -1518,8 +1518,9 @@ class OntologyMaintenanceScheduler:
     def should_report(self, result: dict, started: float) -> bool:
         maintenance = result.get("maintenance") if isinstance(result.get("maintenance"), dict) else {}
         removed = int(maintenance.get("removedManifestCount") or 0)
+        deleted_batches = int(maintenance.get("deletedBatchCount") or 0)
         status = str(result.get("status") or "unknown")
-        if removed:
+        if removed or deleted_batches:
             self.last_signature = ""
             self.last_report_at = 0.0
             return True
@@ -1560,6 +1561,8 @@ class OntologyMaintenanceScheduler:
                         + str(result.get("worldId") or maintenance.get("worldId") or "")
                         + " removed="
                         + str(maintenance.get("removedManifestCount") or 0)
+                        + " deleteBatches="
+                        + str(maintenance.get("deletedBatchCount") or 0)
                         + " remaining="
                         + str(maintenance.get("inactiveManifestCountRemaining") or 0),
                         flush=True,

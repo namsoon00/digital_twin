@@ -1259,21 +1259,42 @@ class OntologyMaintenanceRunner:
             and text(maintenance_yield.get("worldId")) == world_id
         )
         if yield_targets_selected_world:
-            # A maintenance yield is a short writer hand-off, not an adaptive
-            # drain turn. Keep it below the advertised window by limiting the
-            # physical work; normal idle maintenance retains the larger
-            # capacity budget and can continue the same partial manifest.
+            yield_inactive_count = max(
+                0,
+                integer(maintenance_yield.get("inactiveManifestCount")),
+            )
+            critical_yield = yield_inactive_count >= max(
+                1,
+                integer(policy.get("criticalInactiveManifestCount"), 24),
+            )
+            # A normal yield remains a short writer hand-off. Once the
+            # directly measured backlog is critical, however, clamping every
+            # turn to two batches lets new manifests arrive faster than old
+            # rows can be reclaimed. Reuse the timeout-derived safe budget in
+            # that state; it is already capped with an execution reserve.
             run_budget.update({
-                "maxInactiveManifests": 1,
-                "maxAboxDeleteBatches": min(
-                    2,
-                    max(1, integer(capacity_budget.get("maxAboxDeleteBatches"), 1)),
+                "maxInactiveManifests": (
+                    min(
+                        4,
+                        max(1, integer(capacity_budget.get("maxInactiveManifests"), 1)),
+                    )
+                    if critical_yield
+                    else 1
+                ),
+                "maxAboxDeleteBatches": (
+                    max(1, integer(capacity_budget.get("maxAboxDeleteBatches"), 1))
+                    if critical_yield
+                    else min(
+                        2,
+                        max(1, integer(capacity_budget.get("maxAboxDeleteBatches"), 1)),
+                    )
                 ),
                 "aboxDeleteBatchSize": min(
                     150,
                     max(1, integer(capacity_budget.get("aboxDeleteBatchSize"), 150)),
                 ),
                 "yieldBounded": True,
+                "yieldMode": "critical-drain" if critical_yield else "short-handoff",
             })
         try:
             result = dict(runner({

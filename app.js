@@ -24036,7 +24036,7 @@
   function feedEvidenceDataMeta(item) {
     item = item || {};
     var payload = feedEvidencePayload(item);
-    var source = String(item.source || item.provider || payload.source || payload.provider || payload.articleProvider || "").trim();
+    var source = String(item.publisher || item.source || item.provider || payload.sourcePublisher || payload.source || payload.provider || payload.articleProvider || "").trim();
     var sourceLabel = source || researchEvidenceKindLabel(item.kind || payload.kind || "근거");
     var quality = String(item.dataQuality || item.quality || payload.dataQuality || payload.sourceQuality || payload.articleAnalysisSource || payload.articleReadStatus || "").toLowerCase();
     var id = String(item.evidenceId || item.id || "").toLowerCase();
@@ -24046,10 +24046,45 @@
     var dataLabel = mock ? "mock 데이터" : (cached ? "저장/캐시 데이터" : (actual ? "실제 데이터" : "출처 미상"));
     return {
       source: sourceLabel,
+      publisherId: String(item.publisherId || ""),
+      publisherTier: String(item.publisherTier || ""),
+      publisherType: String(item.publisherType || ""),
+      republisher: String(item.republisher || ""),
+      distributionChannel: String(item.distributionChannel || ""),
+      contentType: String(item.contentType || ""),
+      contentTypeLabel: researchEvidenceContentTypeLabel(item.contentType),
+      syndicationState: String(item.syndicationState || ""),
+      relationship: String(item.evidenceRelationship || ""),
+      relationshipLabel: researchEvidenceRelationshipLabel(item.evidenceRelationship),
+      provenanceComplete: Boolean(item.provenanceComplete),
       dataLabel: dataLabel,
       tone: mock ? "caution" : (actual ? "watch" : "hold"),
       key: sourceLabel + "|" + dataLabel
     };
+  }
+
+  function researchEvidenceContentTypeLabel(value) {
+    return {
+      "official-filing": "공식 공시",
+      "official-release": "공식 발표",
+      "press-release": "보도자료",
+      reporting: "취재 기사",
+      analysis: "분석 기사",
+      opinion: "의견·칼럼",
+      aggregation: "기사 집계",
+      automated: "자동 생성"
+    }[String(value || "").toLowerCase()] || "유형 확인 중";
+  }
+
+  function researchEvidenceRelationshipLabel(value) {
+    return {
+      original: "원문",
+      "exact-duplicate": "동일 원문",
+      "syndicated-copy": "전재 기사",
+      "same-story": "동일 사건",
+      "independent-confirmation": "독립 확인",
+      "follow-up": "후속 기사"
+    }[String(value || "").toLowerCase()] || "관계 확인 중";
   }
 
   function feedEvidenceSymbols(item) {
@@ -25019,6 +25054,12 @@
         description: "한글 요약 통과 " + Number(articleAnalysis.summaryReadyCount || 0) + "건, 영문 제목 번역 완료 " + Number(articleAnalysis.translationCompleteCount || 0) + "건, 대기 " + Number(articleAnalysis.translationPendingCount || 0) + "건입니다."
       },
       {
+        label: "뉴스 출처 계보",
+        value: Number(articleAnalysis.provenanceCompleteCount || 0) + "/" + Number(articleAnalysis.newsCount || 0) + "건",
+        tone: Number(articleAnalysis.unresolvedPublisherCount || 0) ? "caution" : "watch",
+        description: "원 발행사 확인 " + Number(articleAnalysis.provenanceCompleteCount || 0) + "건, 미확인 " + Number(articleAnalysis.unresolvedPublisherCount || 0) + "건, 전재·중복 " + Number(articleAnalysis.duplicatePublicationCount || 0) + "건입니다."
+      },
+      {
         label: "공시 수집",
         value: dartEnabled ? (isConfiguredSetting("opendartApiKey") ? "준비됨" : "키 필요") : "중지",
         tone: dartEnabled && isConfiguredSetting("opendartApiKey") ? "watch" : (dartEnabled ? "caution" : "hold"),
@@ -25567,6 +25608,9 @@
       renderNotificationDetailMetric("종목 관련성", impact.relevanceLabel, "muted"),
       renderNotificationDetailMetric("근거 종류", researchEvidenceKindLabel(item.kind), "muted"),
       renderNotificationDetailMetric("출처 신뢰", impact.sourceTrustLabel, "muted"),
+      renderNotificationDetailMetric("원 발행사", sourceMeta.source || "-", sourceMeta.provenanceComplete ? "watch" : "caution"),
+      renderNotificationDetailMetric("출처 등급", sourceMeta.publisherTier || "확인 중", sourceMeta.publisherTier === "D" ? "caution" : "muted"),
+      renderNotificationDetailMetric("기사 관계", sourceMeta.relationshipLabel, sourceMeta.relationship === "exact-duplicate" || sourceMeta.relationship === "syndicated-copy" ? "caution" : "muted"),
       renderNotificationDetailMetric("데이터", sourceMeta.dataLabel, sourceMeta.tone),
       renderNotificationDetailMetric("주장 검증", claimMeta.label, claimMeta.tone),
       renderNotificationDetailMetric("번역", translation.label, translation.tone),
@@ -25587,6 +25631,10 @@
       '<div class="inline-detail-tags">',
       '<span>종목 ' + escapeHtml(displayName || symbol || "-") + '</span>',
       '<span>출처 ' + escapeHtml(sourceMeta.source || "-") + '</span>',
+      sourceMeta.republisher ? '<span>재배포 ' + escapeHtml(sourceMeta.republisher) + '</span>' : '',
+      sourceMeta.distributionChannel ? '<span>수집 채널 ' + escapeHtml(sourceMeta.distributionChannel) + '</span>' : '',
+      '<span>기사 유형 ' + escapeHtml(sourceMeta.contentTypeLabel) + '</span>',
+      '<span>기사 관계 ' + escapeHtml(sourceMeta.relationshipLabel) + '</span>',
       '<span>시간 ' + escapeHtml(formatFeedTime(time) || "-") + '</span>',
       '<span>방향 ' + escapeHtml(researchEvidencePolarityLabel(item.polarity)) + '</span>',
       '<span>독립 출처 ' + escapeHtml(String(claimMeta.independentSources || 1)) + '곳</span>',
@@ -25627,6 +25675,9 @@
         renderNotificationDetailMetric("종목 관련성", impact.relevanceLabel, "muted"),
         renderNotificationDetailMetric("근거 종류", researchEvidenceKindLabel(item.kind), "muted"),
         renderNotificationDetailMetric("출처 신뢰", impact.sourceTrustLabel, "muted"),
+        renderNotificationDetailMetric("원 발행사", sourceMeta.source || "-", sourceMeta.provenanceComplete ? "watch" : "caution"),
+        renderNotificationDetailMetric("출처 등급", sourceMeta.publisherTier || "확인 중", sourceMeta.publisherTier === "D" ? "caution" : "muted"),
+        renderNotificationDetailMetric("기사 관계", sourceMeta.relationshipLabel, sourceMeta.relationship === "exact-duplicate" || sourceMeta.relationship === "syndicated-copy" ? "caution" : "muted"),
         renderNotificationDetailMetric("데이터", sourceMeta.dataLabel, sourceMeta.tone),
         renderNotificationDetailMetric("번역", translation.label, translation.tone),
         renderNotificationDetailMetric("요약", summaryQuality.label, summaryQuality.tone),
@@ -25646,6 +25697,10 @@
         translation.showOriginal ? '<p class="subtle">원제 ' + escapeHtml(translation.original) + '</p>' : '',
         '<div class="notification-detail-tags">',
         '<span>출처 ' + escapeHtml(sourceMeta.source || "-") + '</span>',
+        sourceMeta.republisher ? '<span>재배포 ' + escapeHtml(sourceMeta.republisher) + '</span>' : '',
+        sourceMeta.distributionChannel ? '<span>수집 채널 ' + escapeHtml(sourceMeta.distributionChannel) + '</span>' : '',
+        '<span>기사 유형 ' + escapeHtml(sourceMeta.contentTypeLabel) + '</span>',
+        '<span>기사 관계 ' + escapeHtml(sourceMeta.relationshipLabel) + '</span>',
         '<span>시간 ' + escapeHtml(formatFeedTime(time) || "-") + '</span>',
         '<span>방향 ' + escapeHtml(researchEvidencePolarityLabel(item.polarity)) + '</span>',
         '<span class="' + escapeHtml(translation.tone) + '">' + escapeHtml(translation.label) + '</span>',

@@ -19,6 +19,19 @@ SPLIT = "SPLIT"
 SNAPSHOT_RECONCILIATION = "SNAPSHOT_RECONCILIATION"
 OPENING_POSITION = "OPENING_POSITION"
 OPENING_CASH = "OPENING_CASH"
+INFERRED_POSITION_INCREASE = "INFERRED_POSITION_INCREASE"
+INFERRED_POSITION_DECREASE = "INFERRED_POSITION_DECREASE"
+INFERRED_POSITION_EXIT = "INFERRED_POSITION_EXIT"
+INFERRED_CORPORATE_ACTION = "INFERRED_CORPORATE_ACTION"
+SNAPSHOT_CASH_ADJUSTMENT = "SNAPSHOT_CASH_ADJUSTMENT"
+
+INFERRED_SNAPSHOT_ENTRY_TYPES = {
+    INFERRED_POSITION_INCREASE,
+    INFERRED_POSITION_DECREASE,
+    INFERRED_POSITION_EXIT,
+    INFERRED_CORPORATE_ACTION,
+    SNAPSHOT_CASH_ADJUSTMENT,
+}
 
 
 def decimal_value(value: object) -> Decimal:
@@ -147,7 +160,19 @@ class PortfolioLedger:
         self.state = PortfolioLedgerState(str(portfolio_id or ""), str(account_id or ""))
 
     def replay(self, entries: Iterable[PortfolioLedgerEntry]) -> PortfolioLedgerState:
-        for entry in sorted(entries or [], key=lambda item: (item.occurred_at, item.entry_id)):
+        type_priority = {
+            OPENING_POSITION: 0,
+            OPENING_CASH: 0,
+            INFERRED_POSITION_INCREASE: 2,
+            INFERRED_POSITION_DECREASE: 2,
+            INFERRED_POSITION_EXIT: 2,
+            INFERRED_CORPORATE_ACTION: 2,
+            SNAPSHOT_CASH_ADJUSTMENT: 2,
+        }
+        for entry in sorted(
+            entries or [],
+            key=lambda item: (item.occurred_at, type_priority.get(item.entry_type, 1), item.entry_id),
+        ):
             self.apply(entry)
         return self.state
 
@@ -201,6 +226,49 @@ class PortfolioLedger:
         ))
 
     def _apply_opening_cash(self, entry: PortfolioLedgerEntry) -> None:
+        self.state.cash[entry.currency] = self.state.cash.get(entry.currency, Decimal("0")) + entry.amount
+
+    def _apply_inferred_position_increase(self, entry: PortfolioLedgerEntry) -> None:
+        if not entry.symbol or entry.quantity <= 0 or entry.unit_price < 0:
+            raise ValueError("INFERRED_POSITION_INCREASE requires symbol and positive quantity.")
+        self.state.lots.append(PositionLot(
+            lot_id="inferred-lot:" + entry.entry_id,
+            portfolio_id=entry.portfolio_id,
+            symbol=entry.symbol,
+            currency=entry.currency,
+            opened_at=entry.occurred_at,
+            quantity=entry.quantity,
+            remaining_quantity=entry.quantity,
+            unit_cost=entry.unit_price,
+            source_reference=entry.source_reference,
+        ))
+
+    def _consume_inferred_position(self, entry: PortfolioLedgerEntry) -> None:
+        if not entry.symbol or entry.quantity <= 0:
+            raise ValueError(entry.entry_type + " requires symbol and positive quantity.")
+        remaining = entry.quantity
+        next_lots = []
+        for lot in self.state.lots:
+            if lot.symbol != entry.symbol or remaining <= 0 or lot.remaining_quantity <= 0:
+                next_lots.append(lot)
+                continue
+            consumed = min(remaining, lot.remaining_quantity)
+            remaining -= consumed
+            next_lots.append(replace(lot, remaining_quantity=lot.remaining_quantity - consumed))
+        if remaining > Decimal("0.000001"):
+            raise ValueError(entry.entry_type + " quantity exceeds reconstructed position quantity.")
+        self.state.lots = next_lots
+
+    def _apply_inferred_position_decrease(self, entry: PortfolioLedgerEntry) -> None:
+        self._consume_inferred_position(entry)
+
+    def _apply_inferred_position_exit(self, entry: PortfolioLedgerEntry) -> None:
+        self._consume_inferred_position(entry)
+
+    def _apply_inferred_corporate_action(self, entry: PortfolioLedgerEntry) -> None:
+        self._apply_split(entry)
+
+    def _apply_snapshot_cash_adjustment(self, entry: PortfolioLedgerEntry) -> None:
         self.state.cash[entry.currency] = self.state.cash.get(entry.currency, Decimal("0")) + entry.amount
 
     def _apply_sell(self, entry: PortfolioLedgerEntry) -> None:

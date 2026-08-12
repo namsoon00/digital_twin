@@ -18,6 +18,11 @@ from ..domain.portfolio_ledger import (
     ReconciliationDifference,
     decimal_value,
 )
+from ..domain.snapshot_portfolio_activity import (
+    activity_payload,
+    infer_snapshot_ledger_entries,
+    trusted_account_snapshot,
+)
 from ..domain.portfolio_rebalancing import (
     AllocationBand,
     RebalanceLeg,
@@ -110,7 +115,9 @@ class PortfolioLifecycleObservation:
     exposure_snapshot: ExposureSnapshot
     rebalance_proposal: Optional[RebalanceProposal]
     decision_cycle: PortfolioDecisionCycle
-    broker_activity_sync: Dict[str, object] = None
+    snapshot_trust: Dict[str, object] = None
+    inferred_activities: List[Dict[str, object]] = None
+    inferred_entry_count: int = 0
     opening_entry_count: int = 0
 
     def to_dict(self) -> Dict[str, object]:
@@ -122,29 +129,46 @@ class PortfolioLifecycleObservation:
             "exposureSnapshot": self.exposure_snapshot.to_dict(),
             "rebalanceProposal": self.rebalance_proposal.to_dict() if self.rebalance_proposal else {},
             "portfolioDecisionCycle": self.decision_cycle.to_dict(),
-            "brokerActivitySync": dict(self.broker_activity_sync or {}),
+            "snapshotTrust": dict(self.snapshot_trust or {}),
+            "inferredEntryCount": self.inferred_entry_count,
+            "inferredActivities": list(self.inferred_activities or []),
         }
 
 
 class PortfolioAccountingService:
-    """Reconcile one live broker snapshot without inventing missing trades."""
+    """Reconcile complete broker balances and record bounded inferred changes."""
 
-    def __init__(self, repository, account_repository=None, broker_activity_service=None):
+    def __init__(self, repository, account_repository=None, investment_domain_service=None):
         self.repository = repository
         self.account_repository = account_repository
-        self.broker_activity_service = broker_activity_service
+        self.investment_domain_service = investment_domain_service
+
+    def append_ledger_entries(self, entries: Iterable[PortfolioLedgerEntry]) -> int:
+        rows = list(entries or [])
+        if not rows:
+            return 0
+        if self.investment_domain_service:
+            return self.investment_domain_service.append_ledger_entries(rows)
+        return self.repository.append_ledger_entries(rows)
 
     def observe_snapshot(self, snapshot: AccountSnapshot) -> Dict[str, object]:
-        if not snapshot or not snapshot.has_live_account_data():
-            return {"status": "skipped-non-live-snapshot"}
+        trusted, trust = trusted_account_snapshot(snapshot)
+        if not trusted:
+            return {"status": "skipped-untrusted-snapshot", "snapshotTrust": trust}
         portfolio_id = "portfolio:" + str(snapshot.account_id or "default")
         mandate = self.active_mandate(snapshot, portfolio_id)
         entries = list(self.repository.ledger_entries(portfolio_id, limit=100000) or [])
+        had_prior_ledger = bool(entries)
         opening_entries = self.opening_entries(snapshot, portfolio_id) if not entries else []
         if opening_entries:
-            self.repository.append_ledger_entries(opening_entries)
-            entries.extend(opening_entries)
+            self.append_ledger_entries(opening_entries)
+            entries = list(self.repository.ledger_entries(portfolio_id, limit=100000) or [])
         ledger_state = PortfolioLedger(portfolio_id, snapshot.account_id).replay(entries)
+        inferred_entries = infer_snapshot_ledger_entries(snapshot, portfolio_id, ledger_state, entries) if had_prior_ledger else []
+        inferred_entry_count = self.append_ledger_entries(inferred_entries)
+        if inferred_entries:
+            entries = list(self.repository.ledger_entries(portfolio_id, limit=100000) or [])
+            ledger_state = PortfolioLedger(portfolio_id, snapshot.account_id).replay(entries)
         reconciliation = self.reconciliation(snapshot, portfolio_id, ledger_state)
         self.repository.save_reconciliation(reconciliation)
         exposure = self.exposure_snapshot(snapshot, portfolio_id, mandate)
@@ -154,16 +178,15 @@ class PortfolioAccountingService:
             self.repository.save_rebalance_proposal(proposal)
         decision_cycle = self.portfolio_decision_cycle(snapshot, mandate, exposure, reconciliation)
         self.repository.save_portfolio_decision_cycle(decision_cycle)
-        activity_sync = {}
-        if self.broker_activity_service:
-            activity_sync = self.broker_activity_service.record_capabilities(snapshot.account_id, snapshot.provider).to_dict()
         return PortfolioLifecycleObservation(
             portfolio_id=portfolio_id,
             reconciliation=reconciliation,
             exposure_snapshot=exposure,
             rebalance_proposal=proposal,
             decision_cycle=decision_cycle,
-            broker_activity_sync=activity_sync,
+            snapshot_trust=trust,
+            inferred_activities=[activity_payload(item) for item in inferred_entries] if inferred_entry_count else [],
+            inferred_entry_count=inferred_entry_count,
             opening_entry_count=len(opening_entries),
         ).to_dict()
 
@@ -253,7 +276,7 @@ class PortfolioAccountingService:
                 expected=ledger_state.quantity(symbol),
                 observed=observed_positions.get(symbol, Decimal("0")),
                 tolerance=Decimal("0.000001"),
-                reason="공급자 거래내역 없이 잔고 스냅샷과 불변 원장을 비교한 값입니다.",
+                reason="완전한 실계좌 잔고 변화로 보정한 불변 원장과 현재 스냅샷을 비교한 값입니다.",
             )
             for symbol in symbols
         ]
@@ -265,7 +288,7 @@ class PortfolioAccountingService:
             observed=observed_cash,
             tolerance=Decimal("1"),
             currency="KRW",
-            reason="현금 입출금·체결 내역이 없으면 차이를 자동 보정하지 않습니다.",
+            reason="입출금·체결 원인이 알려지지 않은 현금 변화는 별도 잔액 조정 사실로 기록합니다.",
         ))
         balances = {
             "positions": {key: str(observed_positions[key]) for key in sorted(observed_positions)},

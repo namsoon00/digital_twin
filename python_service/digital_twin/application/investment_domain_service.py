@@ -15,6 +15,8 @@ from ..domain.events import (
 from ..domain.investment_mandate import InvestmentMandate
 from ..domain.investment_outcomes import DecisionReview, PerformanceAttribution
 from ..domain.portfolio_ledger import PortfolioLedgerEntry
+from ..domain.portfolio_ledger import INFERRED_SNAPSHOT_ENTRY_TYPES
+from ..domain.snapshot_portfolio_activity import activity_payload
 from ..domain.portfolio_rebalancing import RebalanceProposal
 from ..domain.repositories import InvestmentDomainRepository
 from ..domain.trade_execution import ActionPlan, ExecutionEpisode
@@ -48,6 +50,11 @@ class InvestmentDomainService:
         rows = list(entries or [])
         inserted = self.repository.append_ledger_entries(rows)
         if inserted and rows:
+            inferred_activities = [
+                activity_payload(item)
+                for item in rows
+                if item.entry_type in INFERRED_SNAPSHOT_ENTRY_TYPES
+            ]
             self.publish(investment_lifecycle_event(
                 PORTFOLIO_LEDGER_RECORDED,
                 rows[0].portfolio_id,
@@ -55,7 +62,10 @@ class InvestmentDomainService:
                     "portfolioId": rows[0].portfolio_id,
                     "accountId": rows[0].account_id,
                     "entryIds": [item.entry_id for item in rows],
+                    "entryTypes": [item.entry_type for item in rows],
                     "insertedCount": inserted,
+                    "inferredActivities": inferred_activities,
+                    "materialSnapshotChange": bool(inferred_activities),
                 },
                 "ledger:" + rows[0].portfolio_id,
             ))

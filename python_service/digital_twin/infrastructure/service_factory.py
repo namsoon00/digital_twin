@@ -49,7 +49,6 @@ from ..application.portfolio_lifecycle_service import (
     PortfolioAccountingService,
     TradeExecutionService,
 )
-from ..application.broker_activity_service import BrokerActivitySyncService
 from ..application.notification_service import (
     CompositeNotificationContextEnricher,
     DisclosureAnalysisNotificationEnricher,
@@ -305,6 +304,7 @@ def build_monitor_runner(
     store = monitor_store or stores.monitor_store(configured_settings)
     market_time_series_store = stores.market_time_series_store(configured_settings)
     ontology_quality_store = stores.ontology_quality_sample_store(configured_settings)
+    investment_domain_store = stores.investment_domain_store(configured_settings)
     projection_repository = ontology_repository or ontology_repository_from_settings(configured_settings)
     interval_seconds = int(os.environ.get("PYTHON_REALTIME_INTERVAL_SECONDS") or os.environ.get("REALTIME_NOTIFY_INTERVAL_SECONDS") or configured_settings.get("monitorAccountIntervalSeconds") or 120)
     publisher = event_publisher or monitor_event_bus(configured_settings)
@@ -331,7 +331,7 @@ def build_monitor_runner(
             hypothesis_lifecycle_store=stores.hypothesis_lifecycle_store(configured_settings),
             data_pipeline_health_store=stores.data_pipeline_health_store(configured_settings),
             market_time_series_store=market_time_series_store,
-            investment_domain_store=stores.investment_domain_store(configured_settings),
+            investment_domain_store=investment_domain_store,
             world_projection_outbox=stores.ontology_world_projection_outbox_store(configured_settings),
             inference_detail_outbox=stores.ontology_inference_detail_outbox_store(configured_settings),
             graph_assembly_cache_store=stores.ontology_graph_assembly_cache_store(configured_settings),
@@ -350,9 +350,9 @@ def build_monitor_runner(
             None
             if source_snapshot_replay
             else PortfolioAccountingService(
-                stores.investment_domain_store(configured_settings),
+                investment_domain_store,
                 stores.account_registry(configured_settings),
-                BrokerActivitySyncService(stores.investment_domain_store(configured_settings)),
+                InvestmentDomainService(investment_domain_store, publisher),
             )
         ),
     )
@@ -546,11 +546,6 @@ def build_trade_execution_service(settings=None) -> TradeExecutionService:
         monitor_store=stores.monitor_store(configured_settings),
         settings=configured_settings,
     )
-
-
-def build_broker_activity_sync_service(settings=None) -> BrokerActivitySyncService:
-    configured_settings = settings or runtime_settings()
-    return BrokerActivitySyncService(stores.investment_domain_store(configured_settings))
 
 
 def build_investment_research_orchestrator(settings=None, research_store=None) -> InvestmentResearchOrchestrationService:

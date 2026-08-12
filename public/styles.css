@@ -29454,26 +29454,18 @@ body.oa-overlay-open {
   grid-template-columns: minmax(0, 1fr);
 }
 
-.portfolio-plan-actions,
-.portfolio-activity-controls {
+.portfolio-plan-actions {
   display: flex;
   align-items: center;
   flex-wrap: wrap;
   gap: 8px;
 }
 
-.portfolio-activity-import {
+.portfolio-activity-history {
   display: grid;
   gap: 10px;
   padding-top: 16px;
   border-top: 1px solid var(--line, #dfe3e8);
-}
-
-.portfolio-activity-import textarea {
-  width: 100%;
-  min-height: 120px;
-  resize: vertical;
-  font-family: ui-monospace, SFMono-Regular, Menlo, Consolas, monospace;
 }
 
 @media (max-width: 860px) {

@@ -1247,6 +1247,12 @@ def build_snapshot(account: AccountConfig, external_settings: Optional[Dict[str,
     metadata.update(kis_provider.diagnostics_payload())
     metadata["accountContext"] = account_context
     metadata["marketProxyQuotes"] = market_proxy_quote_context(settings, provider.quote_cache, external_signals=external_signals)
+    complete_account_balance = mode == "live" and status == "토스 계좌 동기화"
+    metadata["accountSnapshotCompleteness"] = {
+        "holdings": "complete" if complete_account_balance else "incomplete",
+        "cash": "complete" if complete_account_balance else "incomplete",
+        "source": "toss-account-provider-response",
+    }
     return AccountSnapshot(
         account_id=account.account_id,
         account_label=account.label,

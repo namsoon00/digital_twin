@@ -4451,34 +4451,6 @@
       });
   }
 
-  function importPortfolioActivities(form) {
-    if (!form || state.portfolioLifecycleSaving) return Promise.resolve(null);
-    var textarea = form.querySelector("[data-portfolio-activity-csv]");
-    var provider = form.querySelector("[data-portfolio-activity-provider]");
-    var csv = textarea ? textarea.value : "";
-    if (!String(csv || "").trim()) {
-      showSnackbar("거래 활동 CSV 내용을 입력하세요.", "danger");
-      return Promise.resolve(null);
-    }
-    state.portfolioLifecycleSaving = true;
-    render();
-    return sendJson("/api/portfolio-lifecycle/activity-import", "POST", {
-      accountId: portfolioLifecycleAccountId(),
-      provider: provider ? provider.value : "toss",
-      csv: csv
-    }).then(function (payload) {
-      showSnackbar("거래 활동 " + Number(payload.insertedCount || 0) + "건을 원장에 반영했습니다.", "success");
-      return loadPortfolioLifecycle(true);
-    }).catch(function (error) {
-      state.portfolioLifecycleError = error.message || "거래 활동 수입에 실패했습니다.";
-      showSnackbar(state.portfolioLifecycleError, "danger");
-      return null;
-    }).finally(function () {
-      state.portfolioLifecycleSaving = false;
-      render();
-    });
-  }
-
   function reviewPortfolioActionPlan(planId, decision) {
     if (!planId || state.portfolioLifecycleSaving) return Promise.resolve(null);
     state.portfolioLifecycleSaving = true;
@@ -18495,18 +18467,28 @@
     })[String(value || "").toUpperCase()] || String(value || "후보");
   }
 
+  function lifecycleActivityLabel(activity) {
+    return ({
+      "new-position": "신규 보유 감지",
+      "position-increase": "보유 수량 증가",
+      "position-decrease": "보유 수량 감소",
+      "position-exit": "보유 종료",
+      "possible-corporate-action": "기업행동 가능성",
+      "unclassified-cash-balance-change": "현금 잔액 변화"
+    })[String((activity || {}).classification || "")] || "계좌 잔고 변화";
+  }
+
   function renderPortfolioLifecyclePanel(snapshot) {
     var lifecycle = state.portfolioLifecycle || {};
     var reconciliation = lifecycle.reconciliation || {};
     var exposure = lifecycle.exposureSnapshot || {};
     var cycle = lifecycle.portfolioDecisionCycle || {};
-    var sync = lifecycle.brokerActivitySync || {};
     var ledger = lifecycle.ledgerSummary || {};
+    var activities = Array.isArray(lifecycle.recentInferredActivities) ? lifecycle.recentInferredActivities : [];
     var candidates = Array.isArray(cycle.candidates) ? cycle.candidates : [];
     var plans = Array.isArray(lifecycle.actionPlans) ? lifecycle.actionPlans : [];
     var attributions = Array.isArray(lifecycle.performanceAttributions) ? lifecycle.performanceAttributions : [];
     var metrics = Array.isArray(exposure.metrics) ? exposure.metrics : [];
-    var provider = String(sync.provider || ((snapshot || {}).provider || "toss").toLowerCase());
     return [
       '<article class="panel portfolio-lifecycle-panel">',
       '<div class="panel-head"><div><p class="label">Portfolio Lifecycle</p><h2>계좌 의사결정 주기</h2><p class="subtle">원장 사실부터 정책 후보, 승인 계획, 실제 결과까지 같은 계좌 기준으로 추적합니다.</p></div>',
@@ -18515,7 +18497,7 @@
       state.portfolioLifecycleError ? '<p class="form-error">' + escapeHtml(state.portfolioLifecycleError) + '</p>' : '',
       '<div class="portfolio-lifecycle-metrics">',
       renderAccountControlMetric("원장 대사", reconciliation.status || "대기", (reconciliation.differences || []).length + "개 차이", reconciliation.status === "matched" ? "ok" : "warn"),
-      renderAccountControlMetric("거래 활동", sync.status || "대기", Number(sync.imported_count || sync.importedCount || 0) + "건 수입", sync.status === "imported" || sync.status === "ready" ? "ok" : "warn"),
+      renderAccountControlMetric("최근 잔고 변화", activities.length + "건", "검증된 실계좌 비교", activities.length ? "ok" : "neutral"),
       renderAccountControlMetric("정책 후보", candidates.length + "개", cycle.dataState || "자료 대기", candidates.length ? "neutral" : "warn"),
       renderAccountControlMetric("실행 계획", plans.length + "개", "자동 주문 없음", plans.length ? "neutral" : "warn"),
       renderAccountControlMetric("원장 항목", Number(ledger.entryCount || 0) + "건", Number(ledger.activityCount || 0) + "건 증분 활동", "neutral"),
@@ -18548,11 +18530,17 @@
       }).join("") : '<p class="subtle">검토할 실행 계획이 없습니다.</p>',
       '</div></section>',
       '</div>',
-      '<form class="portfolio-activity-import" data-portfolio-activity-import>',
-      '<div class="account-board-title"><strong>거래 활동 CSV 증분 수입</strong><span>현재 공급자 어댑터가 체결 이력을 제공하지 않을 때만 사용합니다.</span></div>',
-      '<div class="portfolio-activity-controls"><select data-portfolio-activity-provider><option value="' + escapeHtml(provider) + '">' + escapeHtml(provider.toUpperCase()) + '</option></select><input type="file" accept=".csv,text/csv" data-portfolio-activity-file /><button class="mini-button primary" type="submit"' + (state.portfolioLifecycleSaving ? " disabled" : "") + '>원장 반영</button></div>',
-      '<textarea rows="5" data-portfolio-activity-csv placeholder="type,occurred_at,source_reference,symbol,currency,quantity,unit_price,amount,fee"></textarea>',
-      '</form>',
+      '<section class="portfolio-lifecycle-section portfolio-activity-history"><div class="account-board-title"><strong>최근 보유 변화</strong><span>실계좌 전체 잔고의 전후 차이</span></div>',
+      '<div class="portfolio-lifecycle-list">',
+      activities.length ? activities.map(function (activity) {
+        var symbol = activity.symbol || (activity.currency ? activity.currency + " 현금" : "계좌");
+        var quantity = activity.cashDelta
+          ? "증감 " + formatMoney(Number(activity.cashDelta || 0))
+          : String(activity.previousQuantity || "0") + " → " + String(activity.observedQuantity || "0");
+        var confidence = activity.confidence === "low" ? "확인 필요" : "잔고 기준";
+        return '<div><strong>' + escapeHtml(symbol + " · " + lifecycleActivityLabel(activity)) + '</strong><span>' + escapeHtml(quantity) + '</span><em>' + escapeHtml(confidence + " · " + formatClock(activity.currentSnapshotAt || activity.occurredAt)) + '</em></div>';
+      }).join("") : '<p class="subtle">기준선 이후 감지된 보유 변화가 없습니다.</p>',
+      '</div></section>',
       '</article>'
     ].join("");
   }
@@ -27356,23 +27344,6 @@
     var lifecycleRefresh = app.querySelector("[data-portfolio-lifecycle-refresh]");
     if (lifecycleRefresh) {
       lifecycleRefresh.addEventListener("click", function () { loadPortfolioLifecycle(true); });
-    }
-
-    var activityImportForm = app.querySelector("[data-portfolio-activity-import]");
-    if (activityImportForm) {
-      activityImportForm.addEventListener("submit", function (event) {
-        event.preventDefault();
-        importPortfolioActivities(activityImportForm);
-      });
-      var activityFile = activityImportForm.querySelector("[data-portfolio-activity-file]");
-      if (activityFile) {
-        activityFile.addEventListener("change", function () {
-          var file = activityFile.files && activityFile.files[0];
-          var textarea = activityImportForm.querySelector("[data-portfolio-activity-csv]");
-          if (!file || !textarea) return;
-          file.text().then(function (content) { textarea.value = content; });
-        });
-      }
     }
 
     Array.prototype.slice.call(app.querySelectorAll("[data-action-plan-review]")).forEach(function (button) {

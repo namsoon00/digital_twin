@@ -37,8 +37,7 @@ DOMAIN_CLASS_DEFS = [
     TBoxClassDef("PortfolioLedger", "portfolio-ledger", "포트폴리오 원장"),
     TBoxClassDef("PortfolioLedgerEntry", "portfolio-ledger", "포트폴리오 원장 항목"),
     TBoxClassDef("PortfolioReconciliation", "portfolio-ledger", "포트폴리오 잔고 대사"),
-    TBoxClassDef("BrokerActivity", "portfolio-ledger", "증권사 거래 활동"),
-    TBoxClassDef("BrokerActivitySyncState", "portfolio-ledger", "증권사 거래 활동 동기화 상태"),
+    TBoxClassDef("InferredPortfolioActivity", "portfolio-ledger", "실계좌 잔고 변화 추론 활동"),
     TBoxClassDef("PositionLot", "portfolio-ledger", "포지션 로트"),
     TBoxClassDef("CashBalance", "portfolio-ledger", "현금 잔액"),
     TBoxClassDef("CashMovement", "portfolio-ledger", "현금 이동"),
@@ -79,8 +78,8 @@ DOMAIN_RELATION_DEFS = [
     TBoxRelationDef("AGGREGATES_ACCOUNT", "account-identity", "portfolio-ledger", "account-identity"),
     TBoxRelationDef("GOVERNED_BY_MANDATE", "investment-mandate", "portfolio-ledger", "investment-mandate"),
     TBoxRelationDef("RECONCILES_PORTFOLIO", "portfolio-ledger", "portfolio-ledger", "portfolio-ledger"),
-    TBoxRelationDef("RECORDS_BROKER_ACTIVITY", "portfolio-ledger", "portfolio-ledger", "portfolio-ledger"),
-    TBoxRelationDef("HAS_ACTIVITY_SYNC_STATE", "portfolio-ledger", "portfolio-ledger", "portfolio-ledger"),
+    TBoxRelationDef("RECORDS_PORTFOLIO_ACTIVITY", "portfolio-ledger", "portfolio-ledger", "portfolio-ledger"),
+    TBoxRelationDef("INFERRED_FROM_SNAPSHOT_CHANGE", "portfolio-ledger", "portfolio-ledger", "portfolio-ledger"),
     TBoxRelationDef("HAS_TARGET_BAND", "investment-mandate", "investment-mandate", "investment-mandate"),
     TBoxRelationDef("HAS_RISK_LIMIT", "investment-mandate", "investment-mandate", "investment-mandate"),
     TBoxRelationDef("HAS_EXPOSURE", "risk-exposure", "portfolio-ledger", "risk-exposure"),
@@ -105,6 +104,7 @@ DOMAIN_RELATION_DEFS = [
 
 DOMAIN_RULE_DEFS = [
     TBoxRuleDef("portfolio policy values are source-backed ABox facts and TypeDB compares exposure deltas with zero", "risk-exposure"),
+    TBoxRuleDef("inferred portfolio activity requires two complete account balance observations and never asserts unknown fees or realised profit", "portfolio-ledger"),
     TBoxRuleDef("a decision references one mandate version, one source ABox snapshot, and one inference generation", "decision-intelligence"),
     TBoxRuleDef("an executable action plan must remain inside cash, quantity, and mandate constraints", "trade-execution"),
     TBoxRuleDef("broker fills are immutable and idempotent by provider execution identity", "trade-execution"),

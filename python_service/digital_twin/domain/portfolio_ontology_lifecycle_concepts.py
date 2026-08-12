@@ -29,26 +29,36 @@ def add_portfolio_lifecycle_concepts(graph, portfolio_node_id: str, runtime_cont
         )
         add_relation(graph, reconciliation_id, portfolio_node_id, "RECONCILES_PORTFOLIO", properties={"source": "portfolio-lifecycle-store"})
 
-    activity_sync = lifecycle.get("brokerActivitySync") if isinstance(lifecycle.get("brokerActivitySync"), dict) else {}
-    if activity_sync:
-        sync_id = add_entity(
+    activities = lifecycle.get("inferredActivities") or lifecycle.get("recentInferredActivities") or []
+    for activity in activities[:20] if isinstance(activities, list) else []:
+        if not isinstance(activity, dict):
+            continue
+        activity_id = add_entity(
             graph,
-            "broker-activity-sync",
-            str(activity_sync.get("sync_id") or activity_sync.get("syncId") or "latest"),
-            "증권사 거래 활동 동기화",
+            "inferred-portfolio-activity",
+            str(activity.get("entryId") or activity.get("entry_id") or "latest"),
+            str(activity.get("instrumentName") or activity.get("symbol") or "현금 잔액") + " 잔고 변화",
             {
-                "tboxClass": "BrokerActivitySyncState",
-                "provider": activity_sync.get("provider"),
-                "status": activity_sync.get("status"),
-                "importedCount": activity_sync.get("imported_count") or activity_sync.get("importedCount") or 0,
-                "rejectedCount": activity_sync.get("rejected_count") or activity_sync.get("rejectedCount") or 0,
-                "lastActivityAt": activity_sync.get("last_activity_at") or activity_sync.get("lastActivityAt"),
-                "lastSuccessAt": activity_sync.get("last_success_at") or activity_sync.get("lastSuccessAt"),
-                "missingData": list(activity_sync.get("missing_data") or activity_sync.get("missingData") or []),
-                "source": "portfolio-lifecycle-store",
+                "tboxClass": "InferredPortfolioActivity",
+                "entryType": activity.get("entryType") or activity.get("entry_type"),
+                "classification": activity.get("classification"),
+                "confidence": activity.get("confidence"),
+                "symbol": activity.get("symbol"),
+                "currency": activity.get("currency"),
+                "previousQuantity": activity.get("previousQuantity"),
+                "observedQuantity": activity.get("observedQuantity"),
+                "quantityDelta": activity.get("quantityDelta"),
+                "cashDelta": activity.get("cashDelta"),
+                "previousSnapshotAt": activity.get("previousSnapshotAt"),
+                "currentSnapshotAt": activity.get("currentSnapshotAt"),
+                "replaceableByActualActivity": bool(activity.get("replaceableByActualActivity")),
+                "realizedProfitLossKnown": bool(activity.get("realizedProfitLossKnown")),
+                "executable": False,
+                "source": "complete-account-snapshot-difference",
             },
         )
-        add_relation(graph, portfolio_node_id, sync_id, "HAS_ACTIVITY_SYNC_STATE", properties={"source": "portfolio-lifecycle-store"})
+        add_relation(graph, portfolio_node_id, activity_id, "RECORDS_PORTFOLIO_ACTIVITY", properties={"source": "portfolio-lifecycle-store"})
+        add_relation(graph, activity_id, portfolio_node_id, "INFERRED_FROM_SNAPSHOT_CHANGE", properties={"source": "complete-account-snapshot-difference"})
 
     cycle = lifecycle.get("portfolioDecisionCycle") if isinstance(lifecycle.get("portfolioDecisionCycle"), dict) else {}
     if not cycle:

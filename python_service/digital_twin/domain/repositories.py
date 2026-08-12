@@ -14,7 +14,6 @@ from .ontology_projection_audit import OntologyProjectionRun
 from .portfolio import AccountSnapshot, AlertEvent, Position
 from .investment_mandate import InvestmentMandate
 from .investment_outcomes import DecisionReview, PerformanceAttribution
-from .broker_activity import BrokerActivitySyncState
 from .portfolio_decision_cycle import PortfolioDecisionCycle
 from .portfolio_ledger import PortfolioLedgerEntry, PortfolioReconciliation
 from .portfolio_rebalancing import RebalanceProposal
@@ -60,12 +59,6 @@ class InvestmentDomainRepository(Protocol):
         ...
 
     def save_exposure_snapshot(self, snapshot: ExposureSnapshot) -> ExposureSnapshot:
-        ...
-
-    def save_broker_activity_sync_state(self, state: BrokerActivitySyncState) -> BrokerActivitySyncState:
-        ...
-
-    def broker_activity_sync_state(self, portfolio_id: str) -> Dict[str, object]:
         ...
 
     def save_portfolio_decision_cycle(self, cycle: PortfolioDecisionCycle) -> PortfolioDecisionCycle:

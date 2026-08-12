@@ -8,7 +8,7 @@ from types import SimpleNamespace
 sys.path.insert(0, str(Path(__file__).resolve().parents[1]))
 
 from digital_twin.application.investment_outcome_observation_service import InvestmentOutcomeObservationService
-from digital_twin.application.broker_activity_service import BrokerActivitySyncService
+from digital_twin.application.investment_domain_service import InvestmentDomainService
 from digital_twin.application.portfolio_lifecycle_service import (
     DecisionActionPlanningService,
     PortfolioAccountingService,
@@ -17,10 +17,18 @@ from digital_twin.application.portfolio_lifecycle_service import (
 from digital_twin.domain.investment_brain import ObservedOutcome
 from digital_twin.domain.investment_mandate import InvestmentMandate
 from digital_twin.domain.portfolio import AccountSnapshot, PortfolioSummary, Position
+from digital_twin.domain.portfolio_ledger import (
+    INFERRED_CORPORATE_ACTION,
+    INFERRED_POSITION_DECREASE,
+    INFERRED_POSITION_EXIT,
+    INFERRED_POSITION_INCREASE,
+    SNAPSHOT_CASH_ADJUSTMENT,
+    PortfolioLedger,
+)
 from digital_twin.domain.portfolio_ontology_builder import build_portfolio_ontology
 from digital_twin.domain.trade_execution import ActionEnvelope, ActionPlan, OrderIntent
-from digital_twin.infrastructure.broker_activity_csv import parse_broker_activity_csv
 from digital_twin.infrastructure.mysql_operational_connection import MYSQL_SCHEMA
+from digital_twin.infrastructure.event_bus import EventBus
 
 
 NOW = "2026-08-12T06:00:00Z"
@@ -38,7 +46,6 @@ class MemoryInvestmentRepository:
         self.decision_reviews = []
         self.executions = []
         self.decision_cycles = {}
-        self.activity_sync = {}
         self.mandate = InvestmentMandate.from_profile(
             "main",
             "portfolio:main",
@@ -82,13 +89,6 @@ class MemoryInvestmentRepository:
     def save_portfolio_decision_cycle(self, item):
         self.decision_cycles[item.cycle_id] = item
         return item
-
-    def save_broker_activity_sync_state(self, item):
-        self.activity_sync[item.portfolio_id] = item.to_dict()
-        return item
-
-    def broker_activity_sync_state(self, portfolio_id):
-        return dict(self.activity_sync.get(portfolio_id) or {})
 
     def save_action_plan(self, item):
         self.plans[item.plan_id] = item
@@ -141,37 +141,61 @@ class MemoryInvestmentRepository:
         return item
 
 
-def live_snapshot(quantity=10, price=70000, cash=200000):
+def live_snapshot(
+    quantity=10,
+    price=70000,
+    cash=200000,
+    average_price=65000,
+    generated_at=NOW,
+    mode="live",
+    status="토스 계좌 동기화",
+    complete=True,
+    include_position=True,
+    extra_positions=None,
+):
     value = quantity * price
-    return AccountSnapshot(
-        account_id="main",
-        account_label="Main",
-        provider="toss",
-        mode="live",
-        status="토스 계좌 동기화",
-        generated_at=NOW,
-        portfolio=PortfolioSummary(
-            total=value + cash,
-            invested=value,
-            cash=cash,
-            markets=[{"market": "KR", "value": value, "ratio": value / (value + cash) * 100}],
-            sectors=[{"sector": "technology", "value": value, "ratio": value / (value + cash) * 100}],
-            concentration=value / (value + cash) * 100,
-        ),
-        positions=[Position(
+    positions = []
+    if include_position:
+        positions.append(Position(
             symbol="035420",
             name="NAVER",
             market="KR",
             currency="KRW",
             quantity=quantity,
             sellable_quantity=quantity,
-            average_price=65000,
+            average_price=average_price,
             current_price=price,
             market_value=value,
             market_value_krw=value,
             sector="technology",
             source="holding",
-        )],
+        ))
+    positions.extend(list(extra_positions or []))
+    invested = sum(item.market_value_krw for item in positions)
+    total = invested + cash
+    return AccountSnapshot(
+        account_id="main",
+        account_label="Main",
+        provider="toss",
+        mode=mode,
+        status=status,
+        generated_at=generated_at,
+        portfolio=PortfolioSummary(
+            total=total,
+            invested=invested,
+            cash=cash,
+            markets=[{"market": "KR", "value": invested, "ratio": invested / total * 100 if total else 0}],
+            sectors=[{"sector": "technology", "value": invested, "ratio": invested / total * 100 if total else 0}],
+            concentration=invested / total * 100 if total else 0,
+        ),
+        positions=positions,
+        metadata={
+            "accountSnapshotCompleteness": {
+                "holdings": "complete" if complete else "incomplete",
+                "cash": "complete" if complete else "incomplete",
+                "source": "test-account-provider",
+            },
+        },
     )
 
 
@@ -185,26 +209,49 @@ class PortfolioLifecycleServiceTests(unittest.TestCase):
 
         self.assertEqual(0, mandate.min_cash_weight_pct)
 
-    def test_snapshot_bootstrap_is_idempotent_and_later_difference_does_not_rewrite_lots(self):
+    def test_snapshot_bootstrap_and_inferred_increase_are_idempotent(self):
         repository = MemoryInvestmentRepository()
         service = PortfolioAccountingService(repository)
 
         first = service.observe_snapshot(live_snapshot())
         second = service.observe_snapshot(live_snapshot())
-        changed = service.observe_snapshot(live_snapshot(quantity=11))
+        changed = service.observe_snapshot(live_snapshot(quantity=11, generated_at="2026-08-12T06:10:00Z"))
+        repeated = service.observe_snapshot(live_snapshot(quantity=11, generated_at="2026-08-12T06:20:00Z"))
 
         self.assertEqual(2, first["openingEntryCount"])
         self.assertEqual("matched", first["reconciliation"]["status"])
         self.assertEqual(0, second["openingEntryCount"])
-        self.assertEqual(2, len(repository.entries))
-        self.assertEqual("discrepancy", changed["reconciliation"]["status"])
+        self.assertEqual(1, changed["inferredEntryCount"])
+        self.assertEqual(INFERRED_POSITION_INCREASE, changed["inferredActivities"][0]["entryType"])
+        self.assertEqual("matched", changed["reconciliation"]["status"])
+        self.assertEqual(0, repeated["inferredEntryCount"])
+        self.assertEqual(3, len(repository.entries))
         self.assertEqual(2, len(repository.decision_cycles))
         quantity_difference = next(
             item for item in changed["reconciliation"]["differences"]
             if item["differenceType"] == "position-quantity"
         )
-        self.assertEqual("10", quantity_difference["expected"])
+        self.assertEqual("11", quantity_difference["expected"])
         self.assertEqual("11", quantity_difference["observed"])
+
+    def test_repeated_round_trip_balance_changes_are_distinct_observations(self):
+        repository = MemoryInvestmentRepository()
+        service = PortfolioAccountingService(repository)
+        service.observe_snapshot(live_snapshot(quantity=10))
+
+        service.observe_snapshot(live_snapshot(quantity=11, generated_at="2026-08-12T06:10:00Z"))
+        service.observe_snapshot(live_snapshot(quantity=10, generated_at="2026-08-12T06:20:00Z"))
+        final = service.observe_snapshot(live_snapshot(quantity=11, generated_at="2026-08-12T06:30:00Z"))
+
+        self.assertEqual(1, final["inferredEntryCount"])
+        self.assertEqual(5, len(repository.entries))
+        self.assertEqual(3, len({
+            item.source_reference
+            for item in repository.entries
+            if item.entry_type in {INFERRED_POSITION_INCREASE, INFERRED_POSITION_DECREASE}
+        }))
+        state = PortfolioLedger("portfolio:main", "main").replay(repository.entries)
+        self.assertEqual("11", str(state.quantity("035420")))
 
     def test_exposure_breach_creates_review_only_rebalance_proposal(self):
         repository = MemoryInvestmentRepository()
@@ -377,29 +424,122 @@ class PortfolioLifecycleServiceTests(unittest.TestCase):
         self.assertEqual(["benchmarkReturnPct"], repository.attributions[0].missing_data)
         self.assertTrue(repository.decision_reviews[0].evidence_still_valid)
 
-    def test_csv_broker_activity_imports_only_incremental_rows(self):
+    def test_new_position_decrease_exit_and_cash_change_are_recorded_without_realized_profit(self):
         repository = MemoryInvestmentRepository()
         PortfolioAccountingService(repository).observe_snapshot(live_snapshot())
-        csv_content = "\n".join([
-            "type,occurred_at,source_reference,symbol,currency,quantity,unit_price,amount,fee",
-            "매수,2026-08-12T05:00:00Z,before,035420,KRW,1,70000,0,0",
-            "매수,2026-08-12T07:00:00Z,after,035420,KRW,1,70000,0,10",
-        ])
-
-        parsed = parse_broker_activity_csv("main", "toss", csv_content)
-        result = BrokerActivitySyncService(repository).import_activities(
-            "main", "toss", parsed["activities"], parsed["rejected"]
+        lg = Position(
+            symbol="066570",
+            name="LG전자",
+            market="KR",
+            currency="KRW",
+            quantity=3,
+            sellable_quantity=3,
+            average_price=100000,
+            current_price=105000,
+            market_value=315000,
+            market_value_krw=315000,
+            sector="technology",
         )
+        service = PortfolioAccountingService(repository)
 
-        self.assertEqual(1, result["insertedCount"])
-        self.assertEqual(1, result["rejectedCount"])
-        self.assertEqual("activity-not-after-opening-balance", result["rejected"][0]["reason"])
-        self.assertEqual(3, len(repository.entries))
+        added = service.observe_snapshot(live_snapshot(
+            cash=150000,
+            generated_at="2026-08-12T06:10:00Z",
+            extra_positions=[lg],
+        ))
+        reduced = service.observe_snapshot(live_snapshot(
+            quantity=6,
+            cash=150000,
+            generated_at="2026-08-12T06:20:00Z",
+            extra_positions=[lg],
+        ))
+        exited = service.observe_snapshot(live_snapshot(
+            quantity=0,
+            cash=150000,
+            generated_at="2026-08-12T06:30:00Z",
+            include_position=False,
+            extra_positions=[lg],
+        ))
+
+        self.assertEqual(
+            {INFERRED_POSITION_INCREASE, SNAPSHOT_CASH_ADJUSTMENT},
+            {item["entryType"] for item in added["inferredActivities"]},
+        )
+        self.assertEqual(INFERRED_POSITION_DECREASE, reduced["inferredActivities"][0]["entryType"])
+        self.assertEqual(INFERRED_POSITION_EXIT, exited["inferredActivities"][0]["entryType"])
+        state = PortfolioLedger("portfolio:main", "main").replay(repository.entries)
+        self.assertEqual("0", str(state.quantity("035420")))
+        self.assertEqual("3", str(state.quantity("066570")))
+        self.assertEqual(150000, float(state.cash["KRW"]))
+        self.assertEqual({}, state.realized_profit_loss)
+        self.assertTrue(all(
+            item.payload.get("realizedProfitLossKnown") is False
+            for item in repository.entries
+            if item.entry_type in {INFERRED_POSITION_DECREASE, INFERRED_POSITION_EXIT}
+        ))
+
+    def test_possible_split_is_low_confidence_and_does_not_claim_a_trade(self):
+        repository = MemoryInvestmentRepository()
+        service = PortfolioAccountingService(repository)
+        service.observe_snapshot(live_snapshot(quantity=10, average_price=100000))
+
+        result = service.observe_snapshot(live_snapshot(
+            quantity=20,
+            average_price=50000,
+            generated_at="2026-08-12T06:10:00Z",
+        ))
+
+        activity = result["inferredActivities"][0]
+        self.assertEqual(INFERRED_CORPORATE_ACTION, activity["entryType"])
+        self.assertEqual("possible-corporate-action", activity["classification"])
+        self.assertEqual("low", activity["confidence"])
+        self.assertTrue(activity["replaceableByActualActivity"])
+        state = PortfolioLedger("portfolio:main", "main").replay(repository.entries)
+        self.assertEqual("20", str(state.quantity("035420")))
+        self.assertEqual("50000", str(state.average_cost("035420")))
+
+    def test_incomplete_live_snapshot_cannot_mutate_the_ledger(self):
+        repository = MemoryInvestmentRepository()
+        service = PortfolioAccountingService(repository)
+        service.observe_snapshot(live_snapshot())
+
+        result = service.observe_snapshot(live_snapshot(
+            quantity=0,
+            cash=0,
+            include_position=False,
+            status="계좌 식별값 없음",
+            complete=False,
+            generated_at="2026-08-12T06:10:00Z",
+        ))
+
+        self.assertEqual("skipped-untrusted-snapshot", result["status"])
+        self.assertEqual("provider-declared-incomplete", result["snapshotTrust"]["reason"])
+        self.assertEqual(2, len(repository.entries))
+
+    def test_inferred_change_publishes_one_compact_ledger_event(self):
+        repository = MemoryInvestmentRepository()
+        event_bus = EventBus()
+        service = PortfolioAccountingService(
+            repository,
+            investment_domain_service=InvestmentDomainService(repository, event_bus),
+        )
+        service.observe_snapshot(live_snapshot())
+
+        service.observe_snapshot(live_snapshot(quantity=11, generated_at="2026-08-12T06:10:00Z"))
+
+        event = event_bus.published[-1]
+        self.assertEqual("portfolio.ledger_recorded", event.name)
+        self.assertTrue(event.payload["materialSnapshotChange"])
+        self.assertEqual(1, len(event.payload["inferredActivities"]))
+        self.assertEqual("position-increase", event.payload["inferredActivities"][0]["classification"])
 
     def test_portfolio_lifecycle_projects_as_factual_abox_candidates(self):
         repository = MemoryInvestmentRepository()
         snapshot = live_snapshot()
-        lifecycle = PortfolioAccountingService(repository).observe_snapshot(snapshot)
+        service = PortfolioAccountingService(repository)
+        service.observe_snapshot(snapshot)
+        snapshot = live_snapshot(quantity=11, generated_at="2026-08-12T06:10:00Z")
+        lifecycle = service.observe_snapshot(snapshot)
 
         graph = build_portfolio_ontology(
             snapshot.positions,
@@ -420,7 +560,10 @@ class PortfolioLifecycleServiceTests(unittest.TestCase):
         relation_types = {item.relation_type for item in graph.relations}
         self.assertIn("PortfolioDecisionCycle", classes)
         self.assertIn("PortfolioActionCandidate", classes)
+        self.assertIn("InferredPortfolioActivity", classes)
         self.assertIn("EVALUATES_PORTFOLIO_CANDIDATE", relation_types)
+        self.assertIn("RECORDS_PORTFOLIO_ACTIVITY", relation_types)
+        self.assertIn("INFERRED_FROM_SNAPSHOT_CHANGE", relation_types)
         candidates = [item for item in graph.entities if (item.properties or {}).get("tboxClass") == "PortfolioActionCandidate"]
         self.assertTrue(candidates)
         self.assertTrue(all((item.properties or {}).get("executable") is False for item in candidates))
@@ -431,7 +574,7 @@ class PortfolioLifecycleServiceTests(unittest.TestCase):
         self.assertIn("CREATE TABLE IF NOT EXISTS portfolio_reconciliations", schema)
         self.assertIn("CREATE TABLE IF NOT EXISTS portfolio_exposure_snapshots", schema)
         self.assertIn("CREATE TABLE IF NOT EXISTS investment_action_plan_reviews", schema)
-        self.assertIn("CREATE TABLE IF NOT EXISTS broker_activity_sync_states", schema)
+        self.assertNotIn("CREATE TABLE IF NOT EXISTS broker_activity_sync_states", schema)
         self.assertIn("CREATE TABLE IF NOT EXISTS portfolio_decision_cycles", schema)
 
 

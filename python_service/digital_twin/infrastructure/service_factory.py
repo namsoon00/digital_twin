@@ -78,6 +78,7 @@ from ..domain.events import (
     DATA_PIPELINE_HEALTH_CHANGED,
     ONTOLOGY_REASONING_QUEUE_HEALTH_CHANGED,
     OPERATIONAL_STORAGE_CAPACITY_CHANGED,
+    NEWS_ARTICLE_ANALYZED,
     RESEARCH_EVIDENCE_COLLECTED,
 )
 from ..domain.market_data import number
@@ -145,7 +146,7 @@ def news_event_bus(settings=None) -> EventBus:
     configured_settings = settings or runtime_settings()
     bus = default_event_bus()
     bus.subscribe(
-        RESEARCH_EVIDENCE_COLLECTED,
+        NEWS_ARTICLE_ANALYZED,
         NewsDigestEnqueuer(
             account_repository=stores.account_registry(configured_settings),
             monitor_store=stores.monitor_store(configured_settings),

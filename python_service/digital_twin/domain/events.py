@@ -34,6 +34,7 @@ SYMBOL_UNIVERSE_REFRESHED = "symbol_universe.refreshed"
 MARKET_DATA_COLLECTED = "market_data.collected"
 RESEARCH_EVIDENCE_COLLECTED = "research_evidence.collected"
 RESEARCH_EVIDENCE_LIFECYCLE_CHANGED = "research_evidence.lifecycle_changed"
+NEWS_ARTICLE_ANALYZED = "news.article_analyzed"
 DATA_PIPELINE_HEALTH_CHANGED = "data_pipeline.health_changed"
 HYPOTHESIS_RESEARCH_COMPLETED = "investment_hypothesis.research_completed"
 HYPOTHESIS_PROPOSED = "investment_hypothesis.proposed"
@@ -894,6 +895,35 @@ def research_evidence_collected_event(payload: Dict[str, object]) -> DomainEvent
             "factRevisionsBySymbol": dict(payload.get("factRevisionsBySymbol") or {}),
             "lifecycleChangedCount": int(payload.get("lifecycleChangedCount") or 0),
             "providers": list(payload.get("providers") or [])[:20],
+        },
+    )
+
+
+def news_article_analyzed_event(payload: Dict[str, object]) -> DomainEvent:
+    """Publish only alert-eligible news across the bounded-context boundary."""
+    items = []
+    for item in list(payload.get("materialChangedItems") or []):
+        if not isinstance(item, dict) or str(item.get("kind") or "").lower() != "news":
+            continue
+        raw = item.get("payload") if isinstance(item.get("payload"), dict) else {}
+        eligibility = raw.get("newsEligibility") if isinstance(raw.get("newsEligibility"), dict) else {}
+        if eligibility.get("alertEligible") is True:
+            items.append(item)
+    symbols = sorted({str(item.get("symbol") or "").upper().strip() for item in items if str(item.get("symbol") or "").strip()})
+    return DomainEvent(
+        name=NEWS_ARTICLE_ANALYZED,
+        aggregate_id="news-article:" + (",".join(symbols) or "none")[:170],
+        payload={
+            "source": str(payload.get("source") or "news-intelligence"),
+            "status": str(payload.get("status") or ""),
+            "symbols": symbols[:100],
+            "changedSymbols": symbols[:100],
+            "materialChangedSymbols": symbols[:100],
+            "materialChangedCount": len(items),
+            "materialChangedItems": items[:100],
+            "changedItems": items[:100],
+            "providers": list(payload.get("providers") or [])[:20],
+            "eligibilityPolicy": "alertEligible",
         },
     )
 

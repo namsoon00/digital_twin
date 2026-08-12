@@ -3,9 +3,13 @@ import re
 from typing import Dict, Iterable, List, Tuple
 
 from .market_data import clamp, number
+from ..news_intelligence.domain.article_quality import inspect_article_body
+from ..news_intelligence.domain.entity import COMPANY_ALIASES
+from ..news_intelligence.domain.entity_resolution import alias_pattern, resolve_target_entity
+from ..news_intelligence.domain.version import NEWS_INTELLIGENCE_VERSION
 
 
-NEWS_ANALYSIS_VERSION = "news-analysis-v7-target-scoped-summary"
+NEWS_ANALYSIS_VERSION = "news-analysis-v8-entity-roles"
 ARTICLE_DIGEST_VERSION = "article-digest-ko-v5-target-scoped"
 ARTICLE_FACTS_VERSION = "article-facts-v4-target-scoped"
 
@@ -108,21 +112,7 @@ RISK_KEYWORDS = (
     "리스크",
 )
 
-KNOWN_COMPANY_ALIASES = {
-    "005930": ["삼성전자", "Samsung Electronics", "Samsung"],
-    "000660": ["SK하이닉스", "SK Hynix", "Hynix"],
-    "035420": ["NAVER", "네이버"],
-    "005380": ["현대차", "현대자동차", "Hyundai Motor"],
-    "035720": ["카카오", "Kakao"],
-    "066570": ["LG전자", "LG Electronics"],
-    "000020": ["동화약품"],
-    "AAPL": ["Apple", "Apple Inc."],
-    "NVDA": ["NVIDIA", "Nvidia"],
-    "TSLA": ["Tesla"],
-    "PLTR": ["Palantir"],
-    "MSTR": ["MicroStrategy", "Strategy"],
-    "STRC": ["Strategy"],
-}
+KNOWN_COMPANY_ALIASES = COMPANY_ALIASES
 
 PEER_ALIASES = {
     "005930": ["SK하이닉스", "SK Hynix", "Micron", "TSMC"],
@@ -672,6 +662,7 @@ class NewsAnalysis:
         })
         return public_news_payload({
             "analysisVersion": NEWS_ANALYSIS_VERSION,
+            "newsIntelligenceVersion": NEWS_INTELLIGENCE_VERSION,
             "relationScope": self.relation_scope,
             "matchedAliases": list(self.matched_aliases),
             "mentionedPeers": list(self.mentioned_peers),
@@ -740,9 +731,7 @@ def _keyword_in_lowered_text(keyword: object, lowered_text: str) -> bool:
     term = _lower_text(keyword).strip()
     if not term:
         return False
-    if re.fullmatch(r"[a-z0-9][a-z0-9 .&+/'-]*", term):
-        return bool(re.search(r"(?<![a-z0-9])" + re.escape(term) + r"(?![a-z0-9])", lowered_text))
-    return term in lowered_text
+    return bool(alias_pattern(term).search(lowered_text))
 
 
 def _unique_texts(values: Iterable[object]) -> List[str]:
@@ -833,9 +822,10 @@ def relation_scope_is_excluded(scope: object) -> bool:
 def analysis_payload_requires_refresh(payload: Dict[str, object]) -> bool:
     payload = payload if isinstance(payload, dict) else {}
     version = str(payload.get("analysisVersion") or "").strip()
+    intelligence_version = str(payload.get("newsIntelligenceVersion") or "").strip()
     required_states = ("relevanceState", "sourceTrustState", "materialityState", "dataState", "validationState")
     return (
-        (bool(version) and version != NEWS_ANALYSIS_VERSION)
+        (bool(version) and version != NEWS_ANALYSIS_VERSION and intelligence_version != NEWS_INTELLIGENCE_VERSION)
         or not str(payload.get("relationScope") or "").strip()
         or any(not str(payload.get(key) or "").strip() for key in required_states)
     )
@@ -1076,42 +1066,7 @@ def clean_article_summary_noise(value: object, limit: int = 1200) -> str:
 def article_body_quality(article_text: object, minimum_chars: int = 280) -> Dict[str, object]:
     """Classify extraction adequacy before the text becomes investment evidence."""
     text = clean_article_body_text(article_text, 5000)
-    if not text:
-        return {
-            "state": "unavailable",
-            "passed": False,
-            "reason": "원문 본문이 수집되지 않았습니다.",
-            "charCount": 0,
-        }
-    char_count = len(text)
-    minimum = max(80, min(5000, int(minimum_chars or 280)))
-    if char_count < minimum:
-        return {
-            "state": "limited",
-            "passed": False,
-            "reason": "정제된 본문이 너무 짧아 문맥 검증에 부족합니다.",
-            "charCount": char_count,
-        }
-    sentences = [
-        compact_text(part, 360)
-        for part in re.split(r"(?<=[.!?。！？])\\s+|\\n+", text)
-        if len(compact_text(part, 360)) >= 24
-    ]
-    if len(sentences) >= 3:
-        unique_ratio = len({item.casefold() for item in sentences}) / len(sentences)
-        if unique_ratio < 0.65:
-            return {
-                "state": "limited",
-                "passed": False,
-                "reason": "본문에 반복 문장이 많아 기사 문맥으로 신뢰하기 어렵습니다.",
-                "charCount": char_count,
-            }
-    return {
-        "state": "usable",
-        "passed": True,
-        "reason": "정제된 원문 본문을 확보했습니다.",
-        "charCount": char_count,
-    }
+    return inspect_article_body(text, minimum_chars).to_dict()
 
 
 def article_quality_gate(article_facts: Dict[str, object]) -> Dict[str, object]:
@@ -2108,6 +2063,13 @@ def analyze_news_item(
     topic_hits = matched_terms(combined, topics)
     market_hits = matched_terms(combined, MARKET_TOPIC_KEYWORDS)
     other_subject_hits = other_company_subject_hits(target, normalized_title)
+    target_resolution = resolve_target_entity(
+        normalized_title,
+        normalized_summary,
+        target_symbol(target),
+        getattr(target, "name", ""),
+        aliases,
+    )
     identity = source_identity(source, provider)
     source_trust_state = source_trust_state_for_source(source, provider)
     event_type = classify_news_event_type(title_text, summary_text)
@@ -2143,6 +2105,8 @@ def analyze_news_item(
         scope = "low_confidence_context"
     elif editorial_context:
         scope = "editorial_context"
+    elif not related_product_focus and target_resolution.state != "confirmed" and (direct_title or direct_body or target_resolution.role == "broker"):
+        scope = "entity_mismatch"
     elif other_subject_hits and not direct_title:
         scope = "entity_mismatch"
     elif direct_title:
@@ -2170,6 +2134,11 @@ def analyze_news_item(
         excluded_reason = "블로그/플랫폼 출처의 낮은 신뢰도 직접 언급은 투자 판단 근거에서 제외"
     elif editorial_context:
         excluded_reason = "방송·프로그램의 해설·예고 기사로 실제 기업 사건을 확인하지 못해 투자 판단 근거에서 제외"
+    elif target_resolution.role == "broker":
+        excluded_reason = "대상 회사가 아니라 동명 증권사·금융사 명칭으로 언급된 기사"
+    elif target_resolution.state != "confirmed" and scope == "entity_mismatch":
+        subject = target_resolution.other_subject or "다른 회사·복수 종목"
+        excluded_reason = "기사 제목의 핵심 주어가 대상 종목이 아니라 " + subject + "로 보임"
     elif scope == "entity_mismatch":
         excluded_reason = "기사 제목의 핵심 주어가 대상 종목이 아니라 " + ", ".join(other_subject_hits[:3]) + "로 보임"
     elif not relation_scope_is_investable(scope):
@@ -2196,6 +2165,13 @@ def analyze_news_item(
         other_subject_hits,
         platform_alias_hits,
     )
+    entity_links.append({
+        "entity": target_symbol(target),
+        "role": "target_" + target_resolution.role,
+        "terms": _unique_texts([*target_resolution.title_aliases, *target_resolution.body_aliases]),
+        "linkState": target_resolution.state,
+        "reason": ", ".join(target_resolution.reason_codes),
+    })
     quality_gate = {
         "stage": "entity-linking",
         "decision": "accept" if relation_scope_is_investable(scope) else "exclude",
@@ -2203,8 +2179,9 @@ def analyze_news_item(
         "relationScope": scope,
         "sourceKind": str(identity.get("sourceKind") or "publisher"),
         "sourcePlatform": str(identity.get("sourcePlatform") or ""),
-        "targetSubjectConfirmed": bool(direct_title) and not editorial_context,
+        "targetSubjectConfirmed": target_resolution.target_subject_confirmed and not editorial_context,
         "relatedProductContext": bool(related_product_focus),
+        "entityResolution": target_resolution.to_dict(),
     }
     return NewsAnalysis(
         relation_scope=scope,
@@ -2219,7 +2196,7 @@ def analyze_news_item(
         mentioned_peers=peer_hits,
         topic_tags=topic_hits[:8],
         market_topics=market_hits[:8],
-        direct_mention=bool(direct_title or (direct_body and not related_product_focus)) and not editorial_context,
+        direct_mention=target_resolution.target_subject_confirmed and not editorial_context,
         excluded_reason=excluded_reason,
         normalized_title=normalized_title,
         normalized_summary=normalized_summary,

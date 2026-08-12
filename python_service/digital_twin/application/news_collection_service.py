@@ -8,6 +8,7 @@ from ..domain.accounts import AccountConfig
 from ..domain.data_freshness import age_minutes, parse_datetime, utc_iso
 from ..domain.events import (
     DomainEvent,
+    news_article_analyzed_event,
     ontology_reasoning_requested_event,
     research_evidence_collected_event,
     research_evidence_lifecycle_events,
@@ -23,6 +24,7 @@ from ..domain.news_collection_quality import (
 )
 from ..domain.repositories import AccountRepository, MonitorSnapshotReader, ResearchEvidenceGateway, ResearchEvidenceRepository, SymbolUniverseRepository
 from ..domain.symbol_universe import ListedSymbol, normalize_market
+from ..news_intelligence.application.analyze_article import annotate_evidence_eligibility
 
 
 DISABLED_VALUES = {"0", "false", "no", "off", "disabled"}
@@ -861,6 +863,8 @@ class NewsCollectionRunner:
                             policy=claim_policy(self.settings),
                             now=self.cleanup_now(),
                         )
+                        for item in corpus:
+                            annotate_evidence_eligibility(item)
                         governed_for_persistence.extend(corpus)
                         collected.extend(admitted_items)
                     statuses.append({
@@ -966,6 +970,9 @@ class NewsCollectionRunner:
                 return []
             event = research_evidence_collected_event(result)
             events = [event]
+            news_event = news_article_analyzed_event(result)
+            if int(news_event.payload.get("materialChangedCount") or 0):
+                events.append(news_event)
             ontology_symbols = list(result.get("inferenceChangedSymbols") or [])
             if ontology_symbols:
                 events.append(ontology_reasoning_requested_event(

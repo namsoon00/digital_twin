@@ -697,7 +697,7 @@ def claim_policy(settings: Dict[str, object] = None) -> Dict[str, object]:
             "officialVerificationEnabled": claim_bool(raw.get("officialVerificationEnabled"), True),
             "minimumIndependentSources": max(2, min(5, int(claim_number(raw.get("minimumIndependentSources"), 2)))),
             "crossSourceWindowHours": max(1, min(24 * 30, int(claim_number(raw.get("crossSourceWindowHours"), 72)))),
-            "similarityThreshold": max(0.2, min(0.95, claim_number(raw.get("similarityThreshold"), 0.48))),
+            "similarityThreshold": max(0.2, min(0.95, claim_number(raw.get("similarityThreshold"), 0.72))),
             "sourceRegistry": registry_value if isinstance(registry_value, dict) else source_registry(registry_value),
         }
     return {
@@ -705,7 +705,7 @@ def claim_policy(settings: Dict[str, object] = None) -> Dict[str, object]:
         "officialVerificationEnabled": claim_bool(raw.get("researchClaimOfficialVerificationEnabled"), True),
         "minimumIndependentSources": max(2, min(5, int(claim_number(raw.get("researchClaimMinimumIndependentSources"), 2)))),
         "crossSourceWindowHours": max(1, min(24 * 30, int(claim_number(raw.get("researchClaimCrossSourceWindowHours"), 72)))),
-        "similarityThreshold": max(0.2, min(0.95, claim_number(raw.get("researchClaimSimilarityThreshold"), 0.48))),
+        "similarityThreshold": max(0.2, min(0.95, claim_number(raw.get("researchClaimSimilarityThreshold"), 0.72))),
         "sourceRegistry": source_registry(raw.get("researchClaimSourceRegistry")),
     }
 

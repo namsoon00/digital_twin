@@ -734,13 +734,24 @@ class NewsAnalysisDomainTests(unittest.TestCase):
             11.0,
             0.78,
             "2026-07-09T01:00:00Z",
-            classify_news_relevance(
+            {
+                **classify_news_relevance(
                 NewsCollectionTarget("005930", "삼성전자", "KOSPI", "KRW", "반도체"),
                 "삼성전자 반도체 실적 개선 전망",
                 "메모리 수요 회복과 실적 상향 기대",
                 "연합뉴스",
                 "Google News KR",
-            ),
+                ),
+                "articleReadStatus": "body",
+                "bodyQualityPassed": True,
+                "summaryQualityState": "ready",
+                "articleSummaryQuality": {"state": "ready", "issues": []},
+                "aiAnalysis": {"status": "ok", "needsReview": False},
+                "articleFacts": {"bodyAvailable": True, "bodyQualityPassed": True, "readStatus": "body"},
+                "dataState": "sufficient",
+                "validationState": "ready",
+                "evidenceGovernance": {"investmentJudgmentEligible": True},
+            },
         )
 
         facts = research_evidence_facts([evidence.to_dict()])

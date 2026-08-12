@@ -6,6 +6,7 @@ from typing import Dict, Iterable, List, Tuple
 
 from .investment_research import NewsCollectionTarget, ResearchEvidence
 from . import news_analysis as news_domain
+from ..news_intelligence.application.analyze_article import annotate_evidence_eligibility
 
 
 NEWS_AI_ANALYSIS_VERSION = "news-ai-analysis-v15-target-scoped-summary"
@@ -1594,7 +1595,7 @@ def apply_news_ai_analysis(evidence: ResearchEvidence, analysis_payload: Dict[st
     payload = news_domain.public_news_payload(payload)
     evidence_polarity = impact_polarity if impact_polarity in {"support", "risk"} else "context"
     states = news_domain.news_state_payload(payload)
-    return ResearchEvidence(
+    result = ResearchEvidence(
         evidence_id=evidence.evidence_id,
         symbol=evidence.symbol,
         kind=evidence.kind,
@@ -1611,6 +1612,7 @@ def apply_news_ai_analysis(evidence: ResearchEvidence, analysis_payload: Dict[st
         data_state=states["dataState"],
         validation_state=states["validationState"],
     )
+    return annotate_evidence_eligibility(result)
 
 
 def build_news_ai_analysis_prompt(target: NewsCollectionTarget, evidence: ResearchEvidence) -> str:

@@ -7,6 +7,7 @@ from typing import Dict, Iterable, List, Set, Tuple
 from urllib.parse import parse_qsl, urlencode, urlsplit, urlunsplit
 
 from .news_analysis import normalized_article_title
+from ..news_intelligence.domain.story import story_identity
 
 
 TRACKING_QUERY_KEYS = {
@@ -219,28 +220,7 @@ def is_article_like(item: Dict[str, object], path: Tuple[str, ...] = ()) -> bool
 def article_story_cluster_id(item: Dict[str, object]) -> str:
     """Stable story identity across syndicated or translated article copies."""
 
-    if not isinstance(item, dict):
-        return ""
-    explicit = _first_nested_value(item, STORY_CLUSTER_KEYS)
-    if explicit:
-        if explicit.startswith("story:"):
-            return explicit
-        return _hash_key("story", explicit)
-    # Evidence governance marks syndicated copies with the first claim they
-    # repeat. Keeping that root means an original and its reprints share one
-    # story even when their titles are translated or rewritten.
-    claim_root = _first_nested_value(item, STORY_CLAIM_ROOT_KEYS)
-    if claim_root:
-        return _hash_key("story", "claim:" + claim_root)
-    symbols = _nested_values(item, ["symbol", "ticker", "relatedSymbol", "underlyingSymbol"])
-    event_type = _first_nested_value(item, ["eventType", "event_type", "newsType", "category"])
-    takeaway = normalize_article_title_for_identity(_first_nested_value(item, ["eventTakeaway", "takeaway"]))
-    title = normalize_article_title_for_identity(_first_nested_value(item, ["title", "headline", "name"]))
-    anchor = takeaway if len(takeaway) >= 16 else title
-    if not anchor:
-        return ""
-    subject = ",".join(sorted(symbol.casefold() for symbol in symbols[:5]))
-    return _hash_key("story", "|".join([subject, str(event_type or "").casefold(), anchor]))
+    return story_identity(item)
 
 
 def article_story_fact_keys(item: Dict[str, object]) -> Set[str]:

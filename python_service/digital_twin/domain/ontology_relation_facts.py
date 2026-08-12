@@ -20,6 +20,7 @@ from .portfolio_ontology_valuation_concepts import (
 from .portfolio import PortfolioSummary, Position, expects_kr_microstructure_signals
 from .valuation_ai_proposals import ai_valuation_proposal_rows
 from .volume_time_adjustment import trading_value_snapshot, volume_pace_snapshot
+from ..news_intelligence.domain.eligibility import assess_news_eligibility
 
 
 def _sector_ratio(position: Position, portfolio: PortfolioSummary) -> float:
@@ -1281,12 +1282,29 @@ def _evidence_minutes_since(item: Dict[str, object]) -> float:
     return 0.0
 
 
+def _news_reasoning_eligible(item: Dict[str, object]) -> bool:
+    payload = _evidence_payload(item)
+    result = assess_news_eligibility(
+        {**payload, **{key: value for key, value in item.items() if key != "payload"}},
+        title=item.get("title") or "",
+        summary=item.get("summary") or "",
+        symbol=item.get("symbol") or "",
+        name=payload.get("name") or payload.get("companyName") or "",
+        source=item.get("source") or "",
+        provider=item.get("provider") or payload.get("provider") or "",
+        url=item.get("url") or "",
+        lifecycle_state=item.get("evidenceLifecycleState") or payload.get("evidenceLifecycleState") or "active",
+    )
+    return result.reasoning.eligible
+
+
 def research_evidence_facts(evidence_items: Iterable[Dict[str, object]]) -> Dict[str, object]:
     news_items = [
         item
         for item in evidence_items or []
         if isinstance(item, dict) and str(item.get("kind") or "").lower() == "news"
         and news_domain.relation_scope_is_investable(_evidence_scope(item))
+        and _news_reasoning_eligible(item)
     ]
     direct = [item for item in news_items if _evidence_scope(item) == "direct"]
     peer = [item for item in news_items if _evidence_scope(item) == "peer"]

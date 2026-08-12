@@ -1360,7 +1360,7 @@ def runtime_settings(fast_operational_read: bool = False) -> Dict[str, str]:
         "researchClaimOfficialVerificationEnabled": value("researchClaimOfficialVerificationEnabled", "RESEARCH_CLAIM_OFFICIAL_VERIFICATION_ENABLED", "1"),
         "researchClaimMinimumIndependentSources": value("researchClaimMinimumIndependentSources", "RESEARCH_CLAIM_MINIMUM_INDEPENDENT_SOURCES", "2"),
         "researchClaimCrossSourceWindowHours": value("researchClaimCrossSourceWindowHours", "RESEARCH_CLAIM_CROSS_SOURCE_WINDOW_HOURS", "72"),
-        "researchClaimSimilarityThreshold": value("researchClaimSimilarityThreshold", "RESEARCH_CLAIM_SIMILARITY_THRESHOLD", "0.48"),
+        "researchClaimSimilarityThreshold": value("researchClaimSimilarityThreshold", "RESEARCH_CLAIM_SIMILARITY_THRESHOLD", "0.72"),
         "researchClaimSourceRegistry": value("researchClaimSourceRegistry", "RESEARCH_CLAIM_SOURCE_REGISTRY", ""),
         "investmentBrainResearchCooldownMinutes": value("investmentBrainResearchCooldownMinutes", "INVESTMENT_BRAIN_RESEARCH_COOLDOWN_MINUTES", "30"),
         "investmentBrainResearchWorkerIntervalSeconds": value("investmentBrainResearchWorkerIntervalSeconds", "INVESTMENT_BRAIN_RESEARCH_WORKER_INTERVAL_SECONDS", "15"),

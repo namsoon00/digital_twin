@@ -149,7 +149,7 @@ class NewsAnalysisEnrichmentRunnerTests(unittest.TestCase):
         self.assertEqual(item.evidence_id, events[0].payload["evidenceDeltas"][0]["evidenceId"])
         json.dumps(events[0].payload, ensure_ascii=False)
 
-    def test_ready_korean_local_analysis_leaves_the_async_queue(self):
+    def test_ready_korean_local_analysis_waits_for_external_analysis(self):
         evidence = ResearchEvidence(
             "research:005930:news:korean-ready",
             "005930",
@@ -180,7 +180,20 @@ class NewsAnalysisEnrichmentRunnerTests(unittest.TestCase):
         self.assertEqual("ready", applied.raw_payload["summaryQualityState"])
         self.assertEqual("local", applied.raw_payload["aiAnalysis"]["status"])
         self.assertTrue(news_ai_analysis_is_current(applied))
-        self.assertFalse(runner.should_retry(applied))
+        self.assertTrue(runner.should_retry(applied))
+
+    def test_governed_claim_is_prioritized_for_external_analysis(self):
+        regular = self.evidence()
+        governed = self.evidence()
+        governed.evidence_id = "research:AAPL:news:governed"
+        governed.raw_payload["evidenceGovernance"] = {"investmentJudgmentEligible": True}
+        runner = NewsAnalysisEnrichmentRunner(
+            evidence_store=object(),
+            analysis_service=None,
+            settings={"newsAiAnalysisAsyncEnabled": "1"},
+        )
+
+        self.assertGreater(runner.priority(governed), runner.priority(regular))
 
     def test_worker_retries_stored_summary_with_navigation_headline_contamination(self):
         evidence = ResearchEvidence(

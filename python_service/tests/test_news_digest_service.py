@@ -69,7 +69,17 @@ class NewsDigestEnqueuerTests(unittest.TestCase):
                 "articleReadStatus": "body",
                 "articleAnalysisSource": "article-body",
                 "articleSummaryKo": "애플을 직접 다룬 법적 이슈로 다음 장 가격 반응 확인이 필요합니다.",
+                "relevanceState": "direct",
+                "sourceTrustState": "trusted",
+                "materialityState": "material",
+                "dataState": "sufficient",
+                "validationState": "ready",
+                "bodyQualityPassed": True,
+                "summaryQualityState": "ready",
+                "articleSummaryQuality": {"state": "ready", "issues": []},
                 "aiAnalysis": {
+                    "status": "ok",
+                    "needsReview": False,
                     "sourceLanguage": "en",
                     "originalTitle": "Apple OpenAI lawsuit highlights broader tensions",
                     "translatedTitleKo": "애플과 OpenAI 소송이 더 큰 긴장을 부각",
@@ -78,6 +88,8 @@ class NewsDigestEnqueuerTests(unittest.TestCase):
                 "articleFacts": {
                     "readStatus": "body",
                     "readStatusLabel": "전체 본문 읽음",
+                    "bodyAvailable": True,
+                    "bodyQualityPassed": True,
                     "eventTakeaway": "애플 관련 소송·규제 이슈가 투자심리 부담으로 부각",
                     "numbers": ["12%"],
                     "topics": ["AI"],
@@ -289,6 +301,8 @@ class NewsDigestEnqueuerTests(unittest.TestCase):
         evidence = self.evidence()
         evidence.raw_payload["aiAnalysis"] = {
             "version": "news-ai-analysis-v1",
+            "status": "ok",
+            "needsReview": False,
             "sourceLanguage": "en",
             "originalTitle": "Apple OpenAI lawsuit highlights broader tensions",
             "translatedTitleKo": "애플과 OpenAI 소송이 더 큰 긴장을 부각",
@@ -331,7 +345,7 @@ class NewsDigestEnqueuerTests(unittest.TestCase):
         self.assertNotIn("핵심 근거:", job.text)
         self.assertIn("알림이 온 이유", job.text)
         self.assertIn("Apple / AAPL 관심 종목의 새 기사", job.text)
-        self.assertIn("종목 직접 관련 · 확인할 가치가 있는 변화 조건을 통과", job.text)
+        self.assertIn("종목 직접 관련 · 투자 판단에 중요한 사건 조건을 통과", job.text)
         self.assertIn("기사 한 건만으로 매수·매도를 결정하지 않고", job.text)
         self.assertNotIn("실제 영향 요약", job.text)
         self.assertNotIn("먼저 볼 것", job.text)
@@ -343,6 +357,8 @@ class NewsDigestEnqueuerTests(unittest.TestCase):
         first = self.evidence()
         first.raw_payload["aiAnalysis"] = {
             "version": "news-ai-analysis-v1",
+            "status": "ok",
+            "needsReview": False,
             "impactPolarity": "risk",
             "impactLabelKo": "악재",
             "sourceLanguage": "en",
@@ -359,12 +375,14 @@ class NewsDigestEnqueuerTests(unittest.TestCase):
         }
         first.symbol = "CPNG"
         first.title = "Coupang (CPNG) Slides Ahead Of Earnings As The Valuation Debate Heats Up"
+        first.summary = "쿠팡 실적 발표 전 주가 하락과 밸류에이션 논쟁이 핵심입니다."
         first.raw_payload.update({
             "relevanceScore": 97,
             "materialityScore": 86,
             "stockImpactPolarity": "risk",
             "stockImpactLabel": "악재",
             "stockImpactScore": 82,
+            "articleSummaryKo": "쿠팡 실적 발표 전 주가 하락과 밸류에이션 논쟁이 핵심입니다.",
         })
         monitor_store = SimpleNamespace(previous={
             "main": {
@@ -535,6 +553,8 @@ class NewsDigestEnqueuerTests(unittest.TestCase):
         first.raw_payload.update({
             "storyClusterId": "apple-openai-lawsuit-20260711",
             "aiAnalysis": {
+                "status": "ok",
+                "needsReview": False,
                 "sourceLanguage": "en",
                 "originalTitle": "Apple OpenAI lawsuit highlights broader tensions",
                 "translatedTitleKo": "애플과 OpenAI 소송이 더 큰 긴장을 부각",
@@ -548,6 +568,8 @@ class NewsDigestEnqueuerTests(unittest.TestCase):
         second.url = "https://example.test/reuters-apple-openai"
         second.raw_payload.update({"storyClusterId": "apple-openai-lawsuit-20260711"})
         second.raw_payload["aiAnalysis"] = {
+            "status": "ok",
+            "needsReview": False,
             "sourceLanguage": "en",
             "originalTitle": "Apple and OpenAI lawsuit draws regulatory attention",
             "translatedTitleKo": "애플과 OpenAI 소송이 규제 당국의 관심을 받다",

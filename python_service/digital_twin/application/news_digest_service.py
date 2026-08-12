@@ -5,7 +5,7 @@ from datetime import datetime, timedelta, timezone
 from typing import Dict, Iterable, List, Tuple
 
 from ..domain.accounts import AccountConfig
-from ..domain.events import DomainEvent, RESEARCH_EVIDENCE_COLLECTED
+from ..domain.events import DomainEvent, NEWS_ARTICLE_ANALYZED, RESEARCH_EVIDENCE_COLLECTED
 from ..domain.data_freshness import freshness_record
 from ..domain.market_data import number
 from ..domain.message_types import NEWS_DIGEST
@@ -33,6 +33,7 @@ from ..domain.sent_article_filter import (
     article_story_cluster_id,
     collect_article_identity_keys_from_context,
 )
+from ..news_intelligence.domain.eligibility import assess_news_eligibility
 
 
 KST = timezone(timedelta(hours=9))
@@ -884,6 +885,20 @@ class NewsDigestEnqueuer:
                 and state_at_least(states["materialityState"], self.minimum_materiality_state(), ("context", "notable", "material"))
                 and states["validationState"] != "blocked"
             )
+        payload = item_payload(item)
+        eligibility = assess_news_eligibility(
+            {**payload, **{key: value for key, value in item.items() if key != "payload"}},
+            title=item.get("title") or item.get("headline") or "",
+            summary=item.get("summary") or item.get("articleSummaryKo") or "",
+            symbol=item.get("symbol") or "",
+            name=payload.get("name") or payload.get("companyName") or "",
+            source=item.get("source") or item.get("domain") or "",
+            provider=item.get("provider") or payload.get("provider") or "",
+            url=item.get("url") or "",
+            lifecycle_state=item.get("evidenceLifecycleState") or payload.get("evidenceLifecycleState") or "active",
+        )
+        if not eligibility.alert.eligible:
+            return False
         summary = item_summary(item)
         if not summary or "Comprehensive" in summary or "Google News입니다" in summary or "상승-으로-date" in summary:
             return False
@@ -898,7 +913,7 @@ class NewsDigestEnqueuer:
         )
 
     def handle(self, event: DomainEvent) -> int:
-        if event.name != RESEARCH_EVIDENCE_COLLECTED:
+        if event.name not in {NEWS_ARTICLE_ANALYZED, RESEARCH_EVIDENCE_COLLECTED}:
             return 0
         items = self.event_items(event)
         if not items:

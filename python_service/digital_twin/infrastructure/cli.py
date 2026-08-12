@@ -13,6 +13,7 @@ from ..domain.mysql_minimal_retention import mysql_minimal_retention_policy
 from ..domain.monitoring import RealtimeMonitor
 from ..domain.notification_templates import template_variables, text_context
 from ..domain.portfolio import AlertEvent
+from ..news_intelligence.application.revalidate_articles import RevalidateNewsIntelligenceService
 from .admin_preview import write_admin_preview
 from .event_bus import default_event_bus
 from . import operational_store as stores
@@ -1399,6 +1400,13 @@ def kis_realtime_command(args) -> int:
 
 def news_command(args) -> int:
     settings = runtime_settings()
+    if args.news_action == "revalidate":
+        result = RevalidateNewsIntelligenceService(stores.research_evidence_store(settings)).revalidate(
+            symbol=str(args.symbol or "").upper().strip(),
+            limit=max(1, min(5000, int(args.limit or 500))),
+        )
+        print(json.dumps(result.to_dict(), ensure_ascii=False))
+        return 0
     runner = build_news_collection_runner(settings)
     if args.news_action == "status":
         print(json.dumps(runner.status(), ensure_ascii=False))
@@ -1890,6 +1898,9 @@ def build_parser() -> argparse.ArgumentParser:
     news_once.add_argument("--force", action="store_true")
     news_actions.add_parser("watch")
     news_actions.add_parser("status")
+    news_revalidate = news_actions.add_parser("revalidate")
+    news_revalidate.add_argument("--symbol", default="")
+    news_revalidate.add_argument("--limit", default="500")
     news.set_defaults(func=news_command)
 
     news_analysis = subparsers.add_parser("news-analysis", help="Enrich stored news with Korean summaries and title translations")

@@ -9,7 +9,7 @@ from datetime import datetime, timezone
 from typing import Dict, Iterable, List
 
 from ..domain.data_freshness import age_minutes, parse_datetime
-from ..domain.events import ontology_reasoning_requested_event, research_evidence_collected_event
+from ..domain.events import news_article_analyzed_event, ontology_reasoning_requested_event, research_evidence_collected_event
 from ..domain.investment_research import NewsCollectionTarget, ResearchEvidence
 from ..domain.materiality import evidence_materiality
 from ..domain.news_ai_analysis import (
@@ -133,8 +133,7 @@ class NewsAnalysisEnrichmentRunner:
         analysis_status = str(analysis.get("status") or "").lower()
         retryable_analysis = (
             analysis_status in {"fallback", "error", ""}
-            or (analysis_status == "local" and (needs_translation or needs_summary_review))
-            or (analysis_status == "deferred" and (needs_translation or needs_summary_review))
+            or analysis_status in {"local", "deferred"}
             or news_ai_analysis_retryable(item) and (needs_translation or needs_summary_review)
         )
         analysis_outdated = not news_ai_analysis_is_current(item)
@@ -164,8 +163,10 @@ class NewsAnalysisEnrichmentRunner:
         language = str(payload.get("sourceLanguage") or source_language(item.title)).lower()
         translation_pending = language == "en" and str(payload.get("translationStatus") or "").lower() != "complete"
         states = news_domain.news_state_rank(item.state_payload())
+        governance = payload.get("evidenceGovernance") if isinstance(payload.get("evidenceGovernance"), dict) else {}
         published = parse_datetime(item.published_at or item.observed_at)
         return (
+            bool(governance.get("investmentJudgmentEligible")),
             *states,
             bool(facts.get("bodyAvailable")),
             translation_pending,
@@ -257,6 +258,9 @@ class NewsAnalysisEnrichmentRunner:
         }
         event = research_evidence_collected_event(payload)
         events = [event]
+        news_event = news_article_analyzed_event(payload)
+        if int(news_event.payload.get("materialChangedCount") or 0):
+            events.append(news_event)
         inference_symbols = list(payload["inferenceChangedSymbols"])
         if inference_symbols:
             events.append(ontology_reasoning_requested_event(

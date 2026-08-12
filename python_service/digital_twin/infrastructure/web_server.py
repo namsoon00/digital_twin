@@ -91,6 +91,7 @@ from ..domain.news_ai_analysis import has_mojibake, local_news_ai_analysis, appl
 from ..domain.parsing import parse_assignments
 from ..domain.portfolio import utc_now_iso
 from ..domain.symbol_universe import symbol_search_symbol_candidates
+from ..news_intelligence.application.analyze_article import evidence_eligibility
 from ..infrastructure.event_bus import EventBus, JsonEventLog, default_event_bus
 from ..infrastructure.external_signal_utils import ExternalCircuitOpen, ExternalRateLimited, external_call_target, guarded_external_call
 from ..infrastructure.mock_market import mock_market_payload, mock_market_scenario_list
@@ -2562,8 +2563,15 @@ def research_evidence_article_analysis_summary(items) -> Dict[str, object]:
         "summaryBlockedCount": 0,
         "analysisFallbackCount": 0,
         "analysisDeferredCount": 0,
+        "displayEligibleCount": 0,
+        "alertEligibleCount": 0,
+        "reasoningEligibleCount": 0,
     }
     for item in rows:
+        eligibility = evidence_eligibility(item)
+        counts["displayEligibleCount"] += int(bool(eligibility.get("displayEligible")))
+        counts["alertEligibleCount"] += int(bool(eligibility.get("alertEligible")))
+        counts["reasoningEligibleCount"] += int(bool(eligibility.get("reasoningEligible")))
         raw = item.raw_payload if isinstance(getattr(item, "raw_payload", None), dict) else {}
         facts = raw.get("articleFacts") if isinstance(raw.get("articleFacts"), dict) else {}
         if str(raw.get("articleReadStatus") or facts.get("readStatus") or "") == "body" or bool(facts.get("bodyAvailable")):
@@ -2613,6 +2621,7 @@ def revalidate_research_evidence_payload(payload: Dict[str, object]) -> Dict[str
 
 def research_evidence_list_payload(item) -> Dict[str, object]:
     item, analysis_source = projected_research_evidence(item)
+    news_eligibility = evidence_eligibility(item) if str(item.kind or "").lower() == "news" else {}
     raw = item.raw_payload if isinstance(item.raw_payload, dict) else {}
     states = item.state_payload()
     governance = raw.get("evidenceGovernance") if isinstance(raw.get("evidenceGovernance"), dict) else {}
@@ -2664,6 +2673,13 @@ def research_evidence_list_payload(item) -> Dict[str, object]:
         "stockImpactReasonKo": str(raw.get("stockImpactReasonKo") or ""),
         "sourceKind": str(raw.get("sourceKind") or ""),
         "sourcePlatform": str(raw.get("sourcePlatform") or ""),
+        "newsEligibility": news_eligibility,
+        "archiveEligible": bool(news_eligibility.get("archiveEligible")) if news_eligibility else True,
+        "displayEligible": bool(news_eligibility.get("displayEligible")) if news_eligibility else True,
+        "alertEligible": bool(news_eligibility.get("alertEligible")) if news_eligibility else False,
+        "reasoningEligible": bool(news_eligibility.get("reasoningEligible")) if news_eligibility else bool(governance.get("investmentJudgmentEligible")),
+        "publisher": str((news_eligibility.get("sourceIdentity") or {}).get("publisher") or raw.get("articlePublisher") or item.source),
+        "distributionChannel": str((news_eligibility.get("sourceIdentity") or {}).get("distributionChannel") or raw.get("provider") or ""),
         "claimVerification": {
             "claimState": str(governance.get("claimState") or ""),
             "verificationStatus": str(governance.get("verificationStatus") or ""),

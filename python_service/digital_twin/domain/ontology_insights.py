@@ -15,6 +15,7 @@ from .message_types import (
     MONITOR_HEARTBEAT,
     ONTOLOGY_OBSERVATION_FOLLOWUP,
     ONTOLOGY_INFERENCE_MISSING,
+    PORTFOLIO_ONTOLOGY_SIGNAL,
     WATCHLIST_ONTOLOGY_SIGNAL,
     WORK_HANDOFF,
 )
@@ -46,6 +47,7 @@ SYSTEM_ALERT_TYPES = {
 INVESTMENT_SIGNAL_TYPES = {
     WATCHLIST_ONTOLOGY_SIGNAL,
     CRYPTO_ONTOLOGY_SIGNAL,
+    PORTFOLIO_ONTOLOGY_SIGNAL,
     HOLDING_TIMING,
     ONTOLOGY_OBSERVATION_FOLLOWUP,
 }
@@ -263,6 +265,8 @@ def infer_insight_type(events: List[AlertEvent]) -> str:
         return "relationshipReview"
     if CRYPTO_ONTOLOGY_SIGNAL in source_types:
         return "externalRegimeShift"
+    if PORTFOLIO_ONTOLOGY_SIGNAL in source_types:
+        return "portfolioShift"
     if WATCHLIST_ONTOLOGY_SIGNAL in source_types:
         signal_types = {
             str((event.metadata or {}).get("watchlistOntologySignalType") or "")

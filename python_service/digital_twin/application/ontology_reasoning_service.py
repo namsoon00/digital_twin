@@ -27,7 +27,11 @@ from ..domain.ontology_reasoning_queue import (
     WORK_CLASSES,
     VERIFIED_MONITOR_SNAPSHOT_TRIGGER,
     durable_mailbox_entries,
+    event_affected_symbols,
     event_has_reasoning_work,
+    event_subject_id,
+    event_subject_kind,
+    event_subject_revision,
     event_work_class as domain_event_work_class,
     event_fact_types_for_symbol,
     event_reasoning_lane,
@@ -116,6 +120,9 @@ def reasoning_request_provenance(
     }
     request_event_ids, source_event_ids, triggers, fact_types, observed_at, account_ids = set(), set(), set(), set(), [], set()
     work_classes, impact_scopes, reasoning_lanes = set(), set(), set()
+    subject_kinds, subject_ids, affected_symbols = set(), set(), set()
+    subject_revisions: Dict[str, str] = {}
+    subject_changed_fields = set()
     revision_vectors_by_symbol: Dict[str, Dict[str, str]] = {}
     changed_fields: Dict[str, set] = {}
     fact_families_by_symbol: Dict[str, set] = {}
@@ -145,6 +152,21 @@ def reasoning_request_provenance(
             impact_scopes.add(impact_scope)
         if reasoning_lane:
             reasoning_lanes.add(reasoning_lane)
+        subject_kind = event_subject_kind(event)
+        subject_id = event_subject_id(event)
+        subject_revision = event_subject_revision(event)
+        if subject_kind:
+            subject_kinds.add(subject_kind)
+        if subject_id:
+            subject_ids.add(subject_id)
+        if subject_id and subject_revision:
+            subject_revisions[subject_id] = subject_revision
+        affected_symbols.update(event_affected_symbols(event))
+        subject_changed_fields.update(
+            str(field or "").strip()
+            for field in payload.get("subjectChangedFields") or []
+            if str(field or "").strip()
+        )
         raw_account_ids = payload.get("accountIds") or payload.get("accountId") or []
         if isinstance(raw_account_ids, str):
             raw_account_ids = [raw_account_ids]
@@ -279,6 +301,11 @@ def reasoning_request_provenance(
         "workClasses": sorted(work_classes)[:8],
         "impactScopes": sorted(impact_scopes)[:8],
         "reasoningLanes": sorted(reasoning_lanes)[:8],
+        "subjectKinds": sorted(subject_kinds)[:8],
+        "subjectIds": sorted(subject_ids)[:40],
+        "affectedSymbols": sorted(affected_symbols)[:200],
+        "subjectRevisions": dict(sorted(subject_revisions.items())),
+        "subjectChangedFields": sorted(subject_changed_fields)[:80],
         "accountIds": sorted(account_ids)[:40],
         "requestedScopeFamilies": requested_scope_families_for_event_fact_types(ordered_fact_types),
         "requestedScopeFamiliesBySymbol": {
@@ -2324,6 +2351,15 @@ class OntologyReasoningRunner:
     def ordered_event_symbols(self, event: object, priority_symbols: Dict[str, int] = None) -> List[str]:
         priorities = priority_symbols or {}
         original = event_symbols(event)
+        if (
+            not original
+            and event_subject_kind(event) in {"PORTFOLIO", "ACCOUNT"}
+            and event_subject_id(event)
+        ):
+            # A first-class aggregate owns one mailbox/projection turn.
+            # ``affectedSymbols`` is added to the coherent snapshot only
+            # after this aggregate has been selected; it is not N queue work.
+            return []
         if not original:
             payload = event_payload(event)
             for field in ["targetSymbols", "affectedSymbols", "globalTargetSymbols"]:
@@ -2902,11 +2938,22 @@ class OntologyReasoningRunner:
             priority_hint = int(entry.get("priorityHint") or 0)
         except (TypeError, ValueError):
             priority_hint = 0
-        payload["symbols"] = [symbol]
+        payload["symbols"] = [symbol] if symbol else []
+        payload["subjectKind"] = str(entry.get("subjectKind") or payload.get("subjectKind") or "")
+        payload["subjectId"] = str(entry.get("subjectId") or payload.get("subjectId") or "")
+        payload["affectedSymbols"] = list(
+            entry.get("affectedSymbols") or payload.get("affectedSymbols") or []
+        )
+        payload["subjectRevision"] = str(
+            entry.get("subjectRevision") or payload.get("subjectRevision") or ""
+        )
         payload["_reasoningMailbox"] = {
             "mailboxKey": mailbox_key,
             "sourceEventId": source_event_id,
             "accountScope": str(entry.get("accountScope") or "market"),
+            "subjectKind": str(entry.get("subjectKind") or payload.get("subjectKind") or ""),
+            "subjectId": str(entry.get("subjectId") or payload.get("subjectId") or ""),
+            "subjectRevision": str(entry.get("subjectRevision") or payload.get("subjectRevision") or "")[:191],
             "factFamily": str(entry.get("factFamily") or ""),
             "factRevision": str(entry.get("factRevision") or "")[:160],
             "workClass": str(entry.get("workClass") or "MARKET"),
@@ -5802,15 +5849,31 @@ class OntologyReasoningRunner:
             event for event in requests
             if str(getattr(event, "event_id", "") or "").strip() in selected_request_ids
         ]
+        execution_symbols = list(symbols)
+        if selected_requests and not execution_symbols:
+            execution_symbols = list(dict.fromkeys(
+                symbol
+                for event in selected_requests
+                for symbol in event_affected_symbols(event)
+                if symbol
+            ))[:200]
+        # The durable mailbox still completes the one subject-level slot via
+        # ``symbol_batches``. Downstream snapshot and ABox work receives the
+        # bounded list of instruments affected by that portfolio subject.
+        symbols = execution_symbols
         queue_metadata["queueDispatch"] = self.queue_dispatch_summary(
             requests,
             selected_requests,
-            symbols,
+            execution_symbols,
             omitted_symbol_count=omitted_symbol_count,
             batch_plan=batch_plan,
         )
-        reasoning_context = reasoning_request_provenance(selected_requests, symbols)
-        selected_symbols = {str(symbol or "").upper().strip() for symbol in symbols if str(symbol or "").strip()}
+        reasoning_context = reasoning_request_provenance(selected_requests, execution_symbols)
+        selected_symbols = {
+            str(symbol or "").upper().strip()
+            for symbol in execution_symbols
+            if str(symbol or "").strip()
+        }
         selected_observation_followups = [
             symbol
             for symbol in observation_followup_symbols
@@ -6372,7 +6435,7 @@ class OntologyReasoningRunner:
         mailbox_entries = []
         for event in mailbox_cursor_requests:
             event_id = str(getattr(event, "event_id", "") or "").strip()
-            if not symbol_batches.get(event_id):
+            if event_id not in symbol_batches:
                 continue
             metadata = self.mailbox_metadata(event)
             mailbox_key = str(metadata.get("mailboxKey") or "").strip()

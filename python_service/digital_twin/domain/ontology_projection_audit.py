@@ -142,6 +142,15 @@ def compact_reasoning_request_context(
         "workClasses": clean_list(values.get("workClasses"), limit=8),
         "impactScopes": clean_list(values.get("impactScopes"), limit=8),
         "reasoningLanes": clean_list(values.get("reasoningLanes"), limit=8),
+        "subjectKinds": clean_list(values.get("subjectKinds"), limit=8),
+        "subjectIds": clean_list(values.get("subjectIds"), limit=40),
+        "affectedSymbols": _clean_symbols(values.get("affectedSymbols") or [])[:200],
+        "subjectRevisions": {
+            str(subject_id or "")[:191]: str(revision or "")[:191]
+            for subject_id, revision in dict(values.get("subjectRevisions") or {}).items()
+            if str(subject_id or "").strip() and str(revision or "").strip()
+        },
+        "subjectChangedFields": clean_list(values.get("subjectChangedFields"), limit=80),
         "requestedScopeFamilies": clean_list(values.get("requestedScopeFamilies"), limit=30),
         "requestedScopeFamiliesBySymbol": symbol_family_map(
             values.get("requestedScopeFamiliesBySymbol")

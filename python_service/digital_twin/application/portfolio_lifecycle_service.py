@@ -677,14 +677,15 @@ class PortfolioAccountingService:
             reasoning_event = ontology_reasoning_requested_event(
                 source_event,
                 "portfolio-risk-change",
-                symbols=symbols,
                 changed_count=1,
                 observed_count=len(risk.positions),
                 fact_types=fact_types,
-                fact_types_by_symbol={symbol: fact_types for symbol in symbols},
-                changed_fields_by_symbol={
-                    symbol: ["portfolioRisk", "positionRisk", "rebalanceScenario"] for symbol in symbols
-                },
+                subject_kind="PORTFOLIO",
+                subject_id=portfolio_id,
+                affected_symbols=symbols,
+                subject_revision=risk.risk_snapshot_id,
+                subject_changed_fields=["portfolioRisk", "positionRisk", "rebalanceScenario"],
+                account_id=snapshot.account_id,
                 reason="저장된 시계열에서 포트폴리오 위험 지문이 변경됐습니다.",
                 importance_gate="portfolio-risk-fingerprint-change",
             )

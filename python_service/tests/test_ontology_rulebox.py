@@ -37,6 +37,8 @@ from digital_twin.infrastructure.typedb_ontology import (
     rulebox_rules_to_payload,
     rulebox_snapshot_from_rows,
     typedb_native_match_query,
+    typedb_native_rule_execution_plan,
+    typedb_native_rule_target_work_plan,
     typedb_native_rule_profile,
 )
 from digital_twin.infrastructure.graph_store_rulebox import derivation_payload_from_row
@@ -257,6 +259,31 @@ class OntologyRuleBoxTests(unittest.TestCase):
             "ready",
             typedb_native_rule_profile(rules_by_id["graph.factor.position_crowding.v1"].to_dict())["status"],
         )
+
+    def test_portfolio_rule_does_not_bind_instrument_symbol(self):
+        rules_by_id = {item.rule_id: item for item in default_graph_inference_rules()}
+        portfolio_rule = rules_by_id["graph.portfolio.risk_policy.review.v1"]
+
+        query = typedb_native_match_query(
+            portfolio_rule.to_dict(),
+            target_symbols=["000660", "MSTR"],
+        )["query"]
+
+        self.assertIn('has ontology-kind "portfolio"', query)
+        self.assertNotIn("ontology-symbol", query)
+
+        execution = typedb_native_rule_execution_plan(
+            [portfolio_rule],
+            ["000660", "MSTR"],
+            relation_types_by_symbol={
+                "000660": ["HAS_RISK_SNAPSHOT"],
+                "MSTR": ["HAS_RISK_SNAPSHOT"],
+            },
+        )
+        work = typedb_native_rule_target_work_plan(execution["selectedEntries"])
+        self.assertEqual(1, execution["selectedRuleCount"])
+        self.assertEqual([], execution["selectedEntries"][0]["candidateSymbols"])
+        self.assertEqual(1, work["targetWorkItemCount"])
 
     def test_rulebox_derivation_keeps_its_evidence_role_over_template_default(self):
         payload = derivation_payload_from_row({

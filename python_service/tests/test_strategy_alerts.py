@@ -72,6 +72,36 @@ class StrategyAlertTests(unittest.TestCase):
 
         self.assertIsNone(event)
 
+    def test_portfolio_relation_creates_one_graph_backed_signal(self):
+        context = {
+            "activeRules": [{
+                "ruleId": "graph.portfolio.risk_policy.review.v1",
+                "label": "포트폴리오 위험 정책 초과",
+            }],
+            "decision": {
+                "label": "포트폴리오 위험 축소 점검",
+                "notificationSeverity": "WATCH",
+            },
+            "decisionState": {
+                "reviewLevel": "check",
+                "dataState": "sufficient",
+                "changeState": "new-condition",
+                "conflictState": "context-only",
+            },
+            "executionPlan": {
+                "notificationSeverity": "WATCH",
+                "nextChecks": ["위험 초과 원인 종목 확인"],
+            },
+            "promptContext": {"promptId": "portfolioRebalance"},
+        }
+
+        event = self.harness.portfolio_ontology_event(self.snapshot, context)
+
+        self.assertIsNotNone(event)
+        self.assertEqual("portfolioOntologySignal", event.rule)
+        self.assertEqual("", event.symbol)
+        self.assertEqual(["graph.portfolio.risk_policy.review.v1"], event.metadata["portfolioActiveRelationRules"])
+
     def test_crypto_alert_requires_fresh_data_materialized_rule_and_transition(self):
         self.snapshot.external_signals = {
             "cryptoFreshness": {"status": "fresh", "fetchedAt": "2026-08-01T00:00:00Z", "ageMinutes": 2},

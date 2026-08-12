@@ -9,6 +9,7 @@ from digital_twin.domain.ontology_inference_context import (
     action_envelope_from_inference,
     decision_from_inference,
     matches_from_inference,
+    portfolio_relation_context_from_snapshot,
     relation_contexts_from_snapshot,
 )
 from digital_twin.domain.ontology_relation_contracts import OntologyRuleMatch
@@ -27,6 +28,60 @@ from digital_twin.infrastructure.graph_store_inferencebox import inferencebox_re
 
 
 class OntologyInferenceContextTests(unittest.TestCase):
+    def test_portfolio_inferencebox_builds_first_class_relation_context(self):
+        relation = inferencebox_relation_payload({
+            "type": "REQUIRES_NEXT_CHECK",
+            "source": "portfolio:acct",
+            "target": "next-check:portfolio-risk",
+            "ruleId": "graph.portfolio.risk_policy.review.v1",
+            "decisionStage": "REBALANCE_REVIEW",
+            "nativeTypeDbReasoned": True,
+            "propertiesJson": json.dumps({
+                "actionGroup": "rebalance",
+                "actionLevel": "review",
+                "decisionEffect": "defer",
+                "decisionLabel": "포트폴리오 위험 축소 점검",
+                "decisionTone": "caution",
+                "candidateAction": "HOLD",
+                "notificationSeverity": "WATCH",
+                "aiInfluenceLabel": "포트폴리오 위험 정책 초과",
+                "dataState": "sufficient",
+            }),
+        })
+        snapshot = AccountSnapshot(
+            "acct",
+            "계좌",
+            "test",
+            "live",
+            "ok",
+            "2026-08-13T00:00:00Z",
+            portfolio_summary([], fx_rates={"USD": 1400}),
+            metadata={
+                "ontology": {
+                    "activeGraphStore": "projection",
+                    "projection": {
+                        "graphStore": "typedb",
+                        "inferenceBox": {
+                            "status": "ok",
+                            "graphStore": "typedb",
+                            "nativeTypeDbReasoningUsed": True,
+                            "inferenceGenerationId": "inference:test",
+                            "relations": [relation],
+                            "traces": [],
+                        },
+                    },
+                },
+            },
+        )
+
+        context = portfolio_relation_context_from_snapshot(snapshot)
+
+        self.assertEqual("typedbInferenceBox", context["source"])
+        self.assertEqual("portfolio", context["subject"]["kind"])
+        self.assertEqual("graph.portfolio.risk_policy.review.v1", context["activeRules"][0]["rule_id"])
+        self.assertEqual("REBALANCE_REVIEW", context["decision"]["decisionStage"])
+        self.assertEqual("portfolioRebalance", context["promptContext"]["promptId"])
+
     def test_inferencebox_adapter_keeps_property_decision_envelope_for_alerts(self):
         """A live native relation must not become policy-less at the adapter boundary."""
         relation = inferencebox_relation_payload({

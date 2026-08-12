@@ -1,8 +1,8 @@
 from typing import Dict, List
 
 from .crypto_market_signals import crypto_freshness, crypto_freshness_is_usable, crypto_market_positions
-from .message_types import CRYPTO_ONTOLOGY_SIGNAL, WATCHLIST_ONTOLOGY_SIGNAL
-from .ontology_inference_context import relation_contexts_from_snapshot
+from .message_types import CRYPTO_ONTOLOGY_SIGNAL, PORTFOLIO_ONTOLOGY_SIGNAL, WATCHLIST_ONTOLOGY_SIGNAL
+from .ontology_inference_context import portfolio_relation_context_from_snapshot, relation_contexts_from_snapshot
 from .ontology_insights import relation_news_event_key_suffix
 from .ontology_decision_state import (
     CHANGE_STATE_LABELS,
@@ -14,6 +14,69 @@ from .portfolio import AccountSnapshot, AlertEvent
 
 
 class StrategyAlertMixin:
+    def portfolio_ontology_event(
+        self,
+        snapshot: AccountSnapshot,
+        relation_context: Dict[str, object],
+    ):
+        active_rules = [
+            item for item in relation_context.get("activeRules") or []
+            if isinstance(item, dict)
+        ]
+        if not active_rules:
+            return None
+        decision = dict(relation_context.get("decision") or {})
+        state = dict(relation_context.get("decisionState") or {})
+        plan = dict(relation_context.get("executionPlan") or {})
+        severity = str(plan.get("notificationSeverity") or decision.get("notificationSeverity") or "WATCH").upper()
+        if severity not in {"ALERT", "WATCH"}:
+            return None
+        rule_ids = sorted({
+            str(item.get("ruleId") or item.get("rule_id") or "").strip()
+            for item in active_rules
+            if str(item.get("ruleId") or item.get("rule_id") or "").strip()
+        })
+        labels = [
+            str(item.get("label") or item.get("ruleId") or "").strip()
+            for item in active_rules
+            if str(item.get("label") or item.get("ruleId") or "").strip()
+        ]
+        lines = [
+            "포트폴리오 관계 신호",
+            "상태: " + str(decision.get("label") or "리밸런싱 조건 확인"),
+            "계좌 평가금액: " + format(round(snapshot.portfolio.total), ",") + "원",
+            "현금: " + format(round(snapshot.portfolio.cash), ",") + "원",
+            "근거 신호: " + " · ".join(labels[:4]),
+            "다음 확인: " + " · ".join(plan.get("nextChecks") or ["위험 초과 원인 종목과 리밸런싱 비용을 확인"]),
+        ]
+        return AlertEvent(
+            snapshot.account_id,
+            snapshot.account_label,
+            severity,
+            PORTFOLIO_ONTOLOGY_SIGNAL,
+            ":".join([
+                snapshot.account_id,
+                "portfolio-ontology",
+                "+".join(rule_ids[:4]) or "portfolio",
+                str(state.get("changeState") or "new-condition"),
+            ]),
+            "포트폴리오",
+            lines,
+            criteria=self.criteria(
+                "포트폴리오 위험·집중도 TypeDB 관계 규칙이 성립할 때",
+                str(decision.get("label") or "리밸런싱 조건 확인"),
+            ),
+            metadata={
+                "portfolioActiveRelationRules": rule_ids,
+                "reviewLevel": str(state.get("reviewLevel") or relation_context.get("reviewLevel") or "check"),
+                "dataState": str(state.get("dataState") or relation_context.get("dataState") or "partial"),
+                "changeState": str(state.get("changeState") or "new-condition"),
+                "conflictState": str(state.get("conflictState") or "context-only"),
+                "ontologyRelationContext": relation_context,
+                "ontologyPromptContext": relation_context.get("promptContext") or {},
+            },
+        )
+
     def watchlist_ontology_signal_type(self, relation_context: Dict[str, object]) -> str:
         decision = relation_context.get("decision") if isinstance(relation_context, dict) else {}
         plan = relation_context.get("executionPlan") if isinstance(relation_context, dict) else {}
@@ -249,6 +312,14 @@ class StrategyAlertMixin:
             if item.symbol and item.symbol.upper() not in holding_symbols and item.symbol.upper() not in {"BTC", "ETH"}
         ]
         context = reasoning_context if isinstance(reasoning_context, dict) else {}
+        if "PORTFOLIO" in {
+            str(value or "").upper().strip()
+            for value in context.get("subjectKinds") or []
+        }:
+            portfolio_context = portfolio_relation_context_from_snapshot(snapshot)
+            portfolio_event = self.portfolio_ontology_event(snapshot, portfolio_context)
+            if portfolio_event:
+                events.append(portfolio_event)
         crypto_transitions = [
             dict(item) for item in context.get("cryptoTransitions") or []
             if isinstance(item, dict)

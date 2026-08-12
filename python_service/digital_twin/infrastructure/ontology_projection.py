@@ -165,6 +165,10 @@ ABOX_STRUCTURAL_RELATION_TYPES = {
     "OBSERVED_AFTER_DECISION",
     "OBSERVES_DECISION_CYCLE",
     "EVALUATES_PORTFOLIO_CANDIDATE",
+    "HAS_RISK_SNAPSHOT",
+    "HAS_POSITION_RISK",
+    "HAS_REBALANCE_PROPOSAL",
+    "HAS_REBALANCE_SCENARIO",
 }
 
 
@@ -3685,6 +3689,11 @@ class PortfolioOntologyProjectionRecorder:
             return
         inference_symbols = self.inference_symbols(snapshot, target_symbols)
         compact_impact_plan = compact_inference_impact_plan(inference_impact_plan or {}) if inference_impact_plan else {}
+        reasoning_context = (
+            dict(result.get("reasoningContext") or {})
+            if isinstance(result.get("reasoningContext"), dict)
+            else {}
+        )
         if compact_impact_plan:
             result.setdefault("inferenceImpactPlan", compact_impact_plan)
         active_key = self.active_graph_store_key(result)
@@ -3865,6 +3874,15 @@ class PortfolioOntologyProjectionRecorder:
                 "pruneOldGenerations": False,
                 "inferenceSnapshotLimit": self.inference_snapshot_limit(),
                 "inferenceImpactPlan": compact_impact_plan,
+                "reasoningSubjectKinds": list(
+                    reasoning_context.get("subjectKinds") or []
+                ),
+                "reasoningSubjectIds": list(
+                    reasoning_context.get("subjectIds") or []
+                ),
+                "reasoningAffectedSymbols": list(
+                    reasoning_context.get("affectedSymbols") or []
+                ),
                 "nativeRulePlannerTopology": dict(
                     (result.get("nativeRulePlannerTopology") or {})
                     if isinstance(result.get("nativeRulePlannerTopology"), dict)

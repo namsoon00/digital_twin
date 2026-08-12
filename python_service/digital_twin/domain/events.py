@@ -587,6 +587,9 @@ def compact_ontology_reasoning_request_payload_for_storage(payload: Mapping[str,
         "materialityRole": 96,
         "researchRunId": 191,
         "accountId": 191,
+        "subjectKind": 40,
+        "subjectId": 191,
+        "subjectRevision": 191,
     }.items():
         text = _event_text(source.get(key), limit)
         if text:
@@ -598,6 +601,7 @@ def compact_ontology_reasoning_request_payload_for_storage(payload: Mapping[str,
             pass
     for key, limit, item_limit in (
         ("symbols", 200, 64),
+        ("affectedSymbols", 200, 64),
         ("observationFollowupSymbols", 200, 64),
         ("factTypes", 20, 96),
         ("changedEvidenceIds", 200, 191),
@@ -638,6 +642,13 @@ def compact_ontology_reasoning_request_payload_for_storage(payload: Mapping[str,
                 break
         if compact_fields:
             compact["changedFieldsBySymbol"] = compact_fields
+    subject_changed_fields = _event_text_list(
+        source.get("subjectChangedFields"),
+        limit=80,
+        item_limit=96,
+    )
+    if subject_changed_fields:
+        compact["subjectChangedFields"] = subject_changed_fields
     repair_requests = source.get("scopeRepairRequestsBySymbol")
     if isinstance(repair_requests, Mapping):
         compact_repairs = {}
@@ -1107,6 +1118,12 @@ def ontology_reasoning_requested_event(
     materiality_role: str = "advisory-priority-only",
     fact_types_by_symbol: Dict[str, Iterable[str]] = None,
     scope_repair_requests_by_symbol: Dict[str, object] = None,
+    subject_kind: str = "",
+    subject_id: str = "",
+    affected_symbols: Iterable[str] = None,
+    subject_revision: str = "",
+    subject_changed_fields: Iterable[str] = None,
+    account_id: str = "",
 ) -> DomainEvent:
     clean_symbols = sorted(set(str(symbol or "").upper().strip() for symbol in (symbols or []) if str(symbol or "").strip()))
     clean_observation_followups = sorted({
@@ -1115,6 +1132,19 @@ def ontology_reasoning_requested_event(
         if str(symbol or "").strip()
     }.intersection(clean_symbols))
     clean_fact_types = sorted(set(str(item or "").strip() for item in (fact_types or []) if str(item or "").strip()))
+    clean_subject_kind = str(subject_kind or "").upper().strip()[:40]
+    clean_subject_id = str(subject_id or "").strip()[:191]
+    clean_affected_symbols = sorted({
+        str(symbol or "").upper().strip()
+        for symbol in (affected_symbols or [])
+        if str(symbol or "").strip()
+    })[:200]
+    clean_subject_revision = str(subject_revision or "").strip()[:191]
+    clean_subject_changed_fields = [
+        str(field or "").strip()
+        for field in (subject_changed_fields or [])
+        if str(field or "").strip()
+    ][:80]
     source_payload = source_event.payload or {}
     handoff = source_payload.get("reasoningHandoff") if isinstance(source_payload.get("reasoningHandoff"), dict) else {}
     research_brief = source_payload.get("hypothesisResearchBrief") if isinstance(source_payload.get("hypothesisResearchBrief"), dict) else {}
@@ -1161,7 +1191,11 @@ def ontology_reasoning_requested_event(
     deltas = compact_evidence_delta_event_payloads(raw_deltas, limit=200)
     return DomainEvent(
         name=ONTOLOGY_REASONING_REQUESTED,
-        aggregate_id="ontology:" + (",".join(clean_symbols) or str(trigger or "all"))[:180],
+        aggregate_id="ontology:" + (
+            clean_subject_id
+            or ",".join(clean_symbols)
+            or str(trigger or "all")
+        )[:180],
         correlation_id=source_event.correlation_id or source_event.event_id,
         payload=compact_ontology_reasoning_request_payload_for_storage({
             "trigger": str(trigger or "data-update"),
@@ -1169,6 +1203,11 @@ def ontology_reasoning_requested_event(
             "sourceEventName": source_event.name,
             "sourceAggregateId": source_event.aggregate_id,
             "symbols": clean_symbols[:200],
+            "subjectKind": clean_subject_kind,
+            "subjectId": clean_subject_id,
+            "affectedSymbols": clean_affected_symbols,
+            "subjectRevision": clean_subject_revision,
+            "subjectChangedFields": clean_subject_changed_fields,
             # This is delivery/scheduling provenance for a deterministic raw
             # price observation, never a TypeDB rule condition.
             "observationFollowupSymbols": clean_observation_followups[:200],
@@ -1199,7 +1238,7 @@ def ontology_reasoning_requested_event(
             "factRevisionsBySymbol": compact_fact_revisions_for_event(revisions, limit=200),
             "changedFieldsBySymbol": changed_fields,
             "researchRunId": str(source_payload.get("runId") or ""),
-            "accountId": str(source_payload.get("accountId") or ""),
+            "accountId": str(account_id or source_payload.get("accountId") or ""),
             "changedEvidenceIds": changed_evidence_ids[:200],
             "evidenceDeltas": deltas[:200],
             "reasoningHandoff": handoff,

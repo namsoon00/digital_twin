@@ -72,6 +72,14 @@ IMPACT_SCOPES = (
     "RECONCILIATION",
 )
 
+REASONING_SUBJECT_KINDS = (
+    "INSTRUMENT",
+    "STOCK",
+    "PORTFOLIO",
+    "ACCOUNT",
+    "MARKET",
+)
+
 MACRO_FACT_TYPES = {
     "InterestRate",
     "FxRate",
@@ -243,6 +251,39 @@ def event_symbols(event: object) -> List[str]:
     return symbols
 
 
+def event_subject_kind(event: object) -> str:
+    payload = event_payload(event)
+    mailbox = payload.get("_reasoningMailbox")
+    mailbox = dict(mailbox or {}) if isinstance(mailbox, Mapping) else {}
+    explicit = str(mailbox.get("subjectKind") or payload.get("subjectKind") or "").upper().strip()
+    if explicit in REASONING_SUBJECT_KINDS:
+        return explicit
+    return "INSTRUMENT" if event_symbols(event) else "MARKET"
+
+
+def event_subject_id(event: object) -> str:
+    payload = event_payload(event)
+    mailbox = payload.get("_reasoningMailbox")
+    mailbox = dict(mailbox or {}) if isinstance(mailbox, Mapping) else {}
+    return str(mailbox.get("subjectId") or payload.get("subjectId") or "").strip()[:191]
+
+
+def event_affected_symbols(event: object) -> List[str]:
+    symbols: List[str] = []
+    for symbol in event_payload(event).get("affectedSymbols") or []:
+        clean = str(symbol or "").upper().strip()
+        if clean and clean not in symbols:
+            symbols.append(clean)
+    return symbols[:200]
+
+
+def event_subject_revision(event: object) -> str:
+    payload = event_payload(event)
+    mailbox = payload.get("_reasoningMailbox")
+    mailbox = dict(mailbox or {}) if isinstance(mailbox, Mapping) else {}
+    return str(mailbox.get("subjectRevision") or payload.get("subjectRevision") or "").strip()[:191]
+
+
 def event_fact_types_for_symbol(event: object, symbol: object) -> Tuple[str, ...]:
     """Return the source fact types attributed to one mailbox subject.
 
@@ -370,7 +411,7 @@ def event_revision_vector(event: object, symbol: object = "") -> Dict[str, str]:
     source = payload.get("verifiedSourceSnapshot")
     source = dict(source or {}) if isinstance(source, Mapping) else {}
     values = {
-        "fact": event_fact_revision(event, symbol),
+        "fact": event_fact_revision(event, symbol) or event_subject_revision(event),
         "source": str(source.get("generatedAt") or payload.get("sourceGeneratedAt") or "").strip(),
         "rules": str(payload.get("ruleboxRulesHash") or payload.get("ruleboxRevision") or "").strip(),
         "tbox": str(payload.get("tboxFingerprint") or payload.get("tboxRevision") or "").strip(),
@@ -597,7 +638,9 @@ def realtime_coalescing_key(event: object) -> Tuple[str, str, Tuple[str, ...]]:
     if event_review_level(event) == "immediate":
         return ()
     symbols = event_symbols(event)
-    if not symbols:
+    subject_kind = event_subject_kind(event)
+    subject_id = event_subject_id(event)
+    if not symbols and not (subject_kind in {"PORTFOLIO", "ACCOUNT"} and subject_id):
         return ()
     fact_types = tuple(sorted({
         str(value or "").strip()
@@ -653,7 +696,12 @@ def durable_mailbox_entries(event: DomainEvent) -> List[Dict[str, object]]:
     source_event["event_id"] = event_id
     source_event.setdefault("occurred_at", str(getattr(event, "occurred_at", "") or ""))
     entries = []
-    for symbol in event_symbols(event):
+    subject_kind = event_subject_kind(event)
+    subject_id = event_subject_id(event)
+    mailbox_subjects = event_symbols(event)
+    if not mailbox_subjects and subject_kind in {"PORTFOLIO", "ACCOUNT"} and subject_id:
+        mailbox_subjects = [""]
+    for symbol in mailbox_subjects:
         symbol_fact_types = event_fact_types_for_symbol(event, symbol)
         priority = event_reasoning_priority(event)
         revision_vector = event_revision_vector(event, symbol)
@@ -672,7 +720,13 @@ def durable_mailbox_entries(event: DomainEvent) -> List[Dict[str, object]]:
             slot_family = mailbox_slot_family(event, routed_fact_types, fact_family)
             impact_scope = work_class_impact_scope(work_class)
             reasoning_lane = work_class_reasoning_lane(work_class, priority)
-            seed = "|".join([account_scope, symbol, work_class, slot_family])
+            seed = "|".join([
+                account_scope,
+                subject_kind,
+                subject_id or symbol,
+                work_class,
+                slot_family,
+            ])
             entry_priority = mailbox_entry_priority(event, symbol)
             entries.append({
                 "mailboxKey": hashlib.sha256(seed.encode("utf-8")).hexdigest(),
@@ -680,6 +734,10 @@ def durable_mailbox_entries(event: DomainEvent) -> List[Dict[str, object]]:
                 "sourceEvent": source_event,
                 "accountScope": account_scope,
                 "symbol": symbol,
+                "subjectKind": subject_kind,
+                "subjectId": subject_id,
+                "affectedSymbols": event_affected_symbols(event),
+                "subjectRevision": event_subject_revision(event),
                 "factFamily": symbol_family,
                 "ruleFamilies": routed_fact_types,
                 "mailboxSlotFamily": slot_family,
@@ -696,6 +754,6 @@ def durable_mailbox_entries(event: DomainEvent) -> List[Dict[str, object]]:
                     and is_observation_followup_symbol(event, symbol)
                 ),
                 "occurredAt": str(getattr(event, "occurred_at", "") or ""),
-                "factRevision": event_fact_revision(event, symbol),
+                "factRevision": event_fact_revision(event, symbol) or event_subject_revision(event),
             })
     return entries

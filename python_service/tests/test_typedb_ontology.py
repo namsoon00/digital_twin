@@ -6331,6 +6331,38 @@ class TypeDBOntologyRepositoryTests(unittest.TestCase):
         self.assertEqual(1, persisted.worldview["runtimeProjectionRuleInputRelationTypeCount"])
         self.assertGreater(persisted.worldview["runtimeProjectionSemanticRelationTypeCount"], 1)
 
+    def test_typedb_projection_keeps_portfolio_lifecycle_relations_outside_rule_inputs(self):
+        graph = PortfolioOntology("portfolio-lifecycle-context")
+        graph.entities.extend([
+            OntologyEntity("portfolio:default", "Portfolio", "portfolio", {"ontologyBox": "ABox"}),
+            OntologyEntity("stock:MSTR", "Strategy", "stock", {"ontologyBox": "ABox"}),
+            OntologyEntity("risk:default", "Risk", "portfolio-risk-snapshot", {"ontologyBox": "ABox"}),
+            OntologyEntity("position-risk:MSTR", "MSTR Risk", "position-risk-metric", {"ontologyBox": "ABox"}),
+            OntologyEntity("proposal:default", "Proposal", "rebalance-proposal", {"ontologyBox": "ABox"}),
+            OntologyEntity("scenario:default", "Scenario", "rebalance-scenario", {"ontologyBox": "ABox"}),
+        ])
+        graph.relations.extend([
+            OntologyRelation("portfolio:default", "risk:default", "HAS_RISK_SNAPSHOT", properties={"ontologyBox": "ABox"}),
+            OntologyRelation("stock:MSTR", "position-risk:MSTR", "HAS_POSITION_RISK", properties={"ontologyBox": "ABox"}),
+            OntologyRelation("portfolio:default", "proposal:default", "HAS_REBALANCE_PROPOSAL", properties={"ontologyBox": "ABox"}),
+            OntologyRelation("proposal:default", "scenario:default", "HAS_REBALANCE_SCENARIO", properties={"ontologyBox": "ABox"}),
+        ])
+
+        persisted = PortfolioOntologyProjectionRecorder(None).graph_for_graph_store_persistence(
+            graph,
+            {"inputRelationTypes": ["HAS_RISK_SNAPSHOT"]},
+        )
+
+        self.assertEqual(
+            {
+                "HAS_RISK_SNAPSHOT",
+                "HAS_POSITION_RISK",
+                "HAS_REBALANCE_PROPOSAL",
+                "HAS_REBALANCE_SCENARIO",
+            },
+            {item.relation_type for item in persisted.relations},
+        )
+
     def test_typedb_projection_keeps_stable_instrument_identity_structure(self):
         graph = PortfolioOntology("instrument-identity")
         graph.entities.extend([

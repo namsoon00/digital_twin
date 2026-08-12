@@ -174,6 +174,133 @@ def relation_contexts_from_snapshot(
     return result
 
 
+def portfolio_relation_context_from_snapshot(
+    snapshot: AccountSnapshot,
+) -> Dict[str, object]:
+    """Build a graph-backed context for first-class portfolio RuleBox output."""
+
+    inferencebox = inferencebox_from_snapshot(snapshot)
+    if not inferencebox or str(inferencebox.get("status") or "").lower() not in {"ok", "partial", ""}:
+        return {}
+    if str(inferencebox.get("graphStore") or "").lower() == "typedb" and not bool(
+        inferencebox.get("nativeTypeDbReasoningUsed")
+    ):
+        return {}
+    relations = [
+        dict(item)
+        for item in inferencebox.get("relations") or []
+        if isinstance(item, dict)
+        and (
+            str(item.get("source") or "").lower().startswith("portfolio:")
+            or str(item.get("ruleId") or "").startswith("graph.portfolio.")
+        )
+    ]
+    rule_ids = {
+        str(item.get("ruleId") or "").strip()
+        for item in relations
+        if str(item.get("ruleId") or "").strip()
+    }
+    traces = [
+        dict(item)
+        for item in inferencebox.get("traces") or []
+        if isinstance(item, dict) and str(item.get("ruleId") or "").strip() in rule_ids
+    ]
+    source_name = inferencebox_source_name(inferencebox)
+    matches = matches_from_inference(
+        relations,
+        traces,
+        facts={"accountId": snapshot.account_id, "positionRole": "portfolio"},
+        source_name=source_name,
+        context_version=relation_context_version(source_name),
+    )
+    active = [item for item in matches if item.matched and not item.reference_only]
+    if not active:
+        return {}
+    review_order = {"normal": 0, "observe": 1, "check": 2, "act": 3, "immediate": 4, "blocked": -1}
+    lead = max(active, key=lambda item: review_order.get(item.review_level, 0))
+    data_state = "sufficient" if all(item.data_state == "sufficient" for item in active) else "partial"
+    decision_state = state_payload(lead.review_level, data_state, "new-condition", "context-only")
+    active_rules = [item.to_dict() for item in active]
+    decision = {
+        "basis": source_name,
+        "label": lead.decision_label or "포트폴리오 리밸런싱 점검",
+        "action": lead.candidate_action or lead.primary_action or "HOLD",
+        "actionLabel": lead.candidate_action_label or lead.primary_action_label or "조건 확인",
+        "actionGroup": lead.action_group or "rebalance",
+        "actionLevel": lead.action_level or "review",
+        "decisionStage": lead.decision_stage or "REBALANCE_REVIEW",
+        "reviewLevel": lead.review_level,
+        "dataState": data_state,
+        "notificationSeverity": lead.notification_severity or "WATCH",
+    }
+    return {
+        "engineVersion": relation_context_version(source_name),
+        "source": source_name,
+        "graphStore": str(inferencebox.get("graphStore") or "typedb"),
+        "graphStoreUsed": True,
+        "fallbackUsed": False,
+        "nativeTypeDbReasoningUsed": bool(inferencebox.get("nativeTypeDbReasoningUsed")),
+        "subject": {"kind": "portfolio", "id": "portfolio:" + snapshot.account_id, "name": "포트폴리오"},
+        "facts": {
+            "accountId": snapshot.account_id,
+            "portfolioTotal": snapshot.portfolio.total,
+            "invested": snapshot.portfolio.invested,
+            "cash": snapshot.portfolio.cash,
+            "concentrationPct": snapshot.portfolio.concentration,
+        },
+        "matchedRules": [item.to_dict() for item in matches if item.matched],
+        "activeRules": active_rules,
+        "referenceRules": [item.to_dict() for item in matches if item.reference_only],
+        "dominantSignals": [item.label for item in active[:3]],
+        "reviewLevel": decision_state["reviewLevel"],
+        "reviewLevelLabel": decision_state["reviewLevelLabel"],
+        "dataState": decision_state["dataState"],
+        "dataStateLabel": decision_state["dataStateLabel"],
+        "changeState": decision_state["changeState"],
+        "changeStateLabel": decision_state["changeStateLabel"],
+        "conflictState": decision_state["conflictState"],
+        "conflictStateLabel": decision_state["conflictStateLabel"],
+        "decisionState": decision_state,
+        "decision": decision,
+        "executionPlan": {
+            "notificationCategory": "portfolioShift",
+            "notificationSeverity": decision["notificationSeverity"],
+            "candidateAction": decision["action"],
+            "nextChecks": list(dict.fromkeys(
+                check
+                for item in active
+                for check in item.next_checks
+                if str(check or "").strip()
+            ))[:8],
+        },
+        "promptContext": {
+            "promptId": "portfolioRebalance",
+            "subject": {"kind": "portfolio", "accountId": snapshot.account_id},
+            "facts": {
+                "portfolioTotal": snapshot.portfolio.total,
+                "invested": snapshot.portfolio.invested,
+                "cash": snapshot.portfolio.cash,
+                "concentrationPct": snapshot.portfolio.concentration,
+            },
+            "activeRules": active_rules,
+        },
+        "inferenceGenerationId": str(inferencebox.get("inferenceGenerationId") or ""),
+        "inferenceGenerationAt": str(inferencebox.get("inferenceGenerationAt") or ""),
+        "sourceAboxSnapshotId": str(inferencebox.get("sourceAboxSnapshotId") or ""),
+        "activeAboxSnapshotId": str(inferencebox.get("activeAboxSnapshotId") or ""),
+        "generationAligned": bool(inferencebox.get("generationAligned")),
+        "worldId": str(inferencebox.get("worldId") or ""),
+        "accountId": snapshot.account_id,
+        "graphStoreInference": {
+            "source": source_name,
+            "graphStore": str(inferencebox.get("graphStore") or "typedb"),
+            "relations": relations,
+            "traces": traces,
+            "inferenceGenerationId": inferencebox.get("inferenceGenerationId"),
+        },
+    }
+
+
 def relation_context_from_inferencebox(
     position: Position,
     portfolio: PortfolioSummary,

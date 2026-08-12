@@ -43,6 +43,7 @@ EXPECTED_BASE_ICONS = {
     "externalEquityMove": "🇺🇸",
     "externalCryptoMove": "🪙",
     "cryptoOntologySignal": "🪙",
+    "portfolioOntologySignal": "⚖️",
     "externalMacroShift": "🏦",
     "externalDartDisclosure": "📄",
     "externalDataConnection": "🛰️",

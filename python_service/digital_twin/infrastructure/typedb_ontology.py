@@ -13,7 +13,7 @@ from concurrent.futures import ThreadPoolExecutor, as_completed
 from contextlib import contextmanager
 from decimal import Decimal, InvalidOperation
 from functools import wraps
-from typing import Dict, Iterable, List, Tuple
+from typing import Dict, Iterable, List, Set, Tuple
 
 from ..domain.ontology_contracts import OntologyEntity, OntologyEvidence, OntologyRelation, PortfolioOntology, entity_id
 from ..domain.ontology_semantics import (
@@ -18859,6 +18859,19 @@ relation ontology-assertion,
             or payload.get("targetSymbols")
             or payload.get("changedSymbols")
         )
+        reasoning_subject_kinds = sorted({
+            str(value or "").upper().strip()
+            for value in payload.get("reasoningSubjectKinds") or []
+            if str(value or "").strip()
+        })
+        reasoning_subject_ids = sorted({
+            str(value or "").strip()
+            for value in payload.get("reasoningSubjectIds") or []
+            if str(value or "").strip()
+        })
+        allowed_source_kinds = typedb_reasoning_subject_source_kinds(
+            reasoning_subject_kinds
+        )
         adaptive_target_sharding_profile = (
             dict(payload.get("nativeRuleAdaptiveTargetShardingProfile") or {})
             if isinstance(payload.get("nativeRuleAdaptiveTargetShardingProfile"), dict)
@@ -19005,6 +19018,14 @@ relation ontology-assertion,
         native_stage_timings: Dict[str, int] = {}
         try:
             parsed_rules = rulebox_rules_from_payload({"rules": rules})
+            full_parsed_rule_count = len(parsed_rules)
+            if allowed_source_kinds:
+                parsed_rules = [
+                    rule
+                    for rule in parsed_rules
+                    if str(getattr(rule, "source_kind", "") or "").strip().lower()
+                    in allowed_source_kinds
+                ]
             impact_plan = compact_inference_impact_plan(requested_impact_plan or {})
             selection_requested = typedb_bool(payload.get("typedbNativeRuleSelectionEnabled")) if "typedbNativeRuleSelectionEnabled" in payload else bool(impact_plan.get("nativeRuleSelectionEligible"))
             rule_selection = typedb_native_rule_execution_selection(
@@ -19017,6 +19038,16 @@ relation ontology-assertion,
                 bounded_global_context=bool(impact_plan.get("boundedGlobalContext")),
             )
             execution_rules = list(rule_selection.get("selectedRules") or parsed_rules)
+            rule_target_symbols = (
+                target_symbols
+                if any(
+                    typedb_source_kind_uses_symbol_scope(
+                        getattr(rule, "source_kind", "")
+                    )
+                    for rule in execution_rules
+                )
+                else []
+            )
             runtime_rulebox_metadata = dict(rulebox_metadata)
             runtime_rulebox_metadata.update({
                 "worldId": world_id,
@@ -19024,7 +19055,18 @@ relation ontology-assertion,
                 "tenantId": str(abox_metadata.get("tenantId") or payload.get("tenantId") or ""),
                 "accountId": str(abox_metadata.get("accountId") or payload.get("accountId") or ""),
                 "targetSymbols": target_symbols,
-                "incrementalScope": "symbols" if target_symbols else "all-symbols",
+                "ruleTargetSymbols": rule_target_symbols,
+                "reasoningSubjectKinds": reasoning_subject_kinds,
+                "reasoningSubjectIds": reasoning_subject_ids,
+                "reasoningSubjectFilterApplied": bool(allowed_source_kinds),
+                "reasoningSubjectAllowedSourceKinds": sorted(allowed_source_kinds),
+                "reasoningSubjectFullRuleCount": full_parsed_rule_count,
+                "reasoningSubjectSelectedRuleCount": len(parsed_rules),
+                "incrementalScope": (
+                    "portfolio-subject"
+                    if allowed_source_kinds == {"portfolio"}
+                    else "symbols" if target_symbols else "all-symbols"
+                ),
                 "ruleExecutionScope": (
                     str(
                         impact_plan.get("ruleExecutionScope")
@@ -19733,7 +19775,7 @@ relation ontology-assertion,
             invalid_abox_generation = bool(inference_graph.relations) and not source_generation_valid
             if invalid_abox_generation:
                 previous_inferencebox = self.inferencebox_snapshot(
-                    symbols=target_symbols,
+                    symbols=rule_target_symbols,
                     limit=inferencebox_limit,
                     reset_metrics=False,
                     world_id=world_id,
@@ -19861,7 +19903,11 @@ relation ontology-assertion,
             keep_count=keep_generation_count,
             world_id=world_id,
         ) if saved_ok and prune_requested else {}
-        inferencebox_payload = self.inferencebox_snapshot_from_graph(inference_graph, target_symbols, inferencebox_limit)
+        inferencebox_payload = self.inferencebox_snapshot_from_graph(
+            inference_graph,
+            rule_target_symbols,
+            inferencebox_limit,
+        )
         # ``inference_graph`` intentionally contains only materialized
         # InferenceBox facts. The calibration facts remain in the exact ABox
         # generation used for this run, so reuse that source graph here rather
@@ -19949,7 +19995,14 @@ relation ontology-assertion,
             "inferenceGenerationId": generation_id,
             "inferenceGenerationAt": generation_at,
             "targetSymbols": target_symbols,
-            "incrementalScope": "symbols" if target_symbols else "all-symbols",
+            "ruleTargetSymbols": rule_target_symbols,
+            "reasoningSubjectKinds": reasoning_subject_kinds,
+            "reasoningSubjectIds": reasoning_subject_ids,
+            "incrementalScope": (
+                "portfolio-subject"
+                if allowed_source_kinds == {"portfolio"}
+                else "symbols" if target_symbols else "all-symbols"
+            ),
             "readAboxEntityCount": before_entities,
             "readAboxRelationCount": before_relations,
             "clearResult": clear_result,
@@ -21855,16 +21908,21 @@ def typedb_native_rule_required_conditions_preflight(
         or (rule.get("source_kind") or rule.get("sourceKind") if isinstance(rule, dict) else "")
         or "stock"
     )
+    symbol_scoped_source = typedb_source_kind_uses_symbol_scope(source_kind)
     candidates = [
         item for item in graph.entities
         if str(item.kind or "") == source_kind
-        and str((item.properties or {}).get("symbol") or "").upper().strip() == clean_symbol
+        and (
+            not symbol_scoped_source
+            or str((item.properties or {}).get("symbol") or "").upper().strip() == clean_symbol
+        )
     ]
     if len(candidates) != 1:
         return {"status": "unknown", "reason": "ABox preflight has no unambiguous RuleBox source subject.", "failedConditionIds": []}
     subject = candidates[0]
     properties = typedb_preflight_properties(subject.properties or {})
-    properties.setdefault("symbol", clean_symbol)
+    if symbol_scoped_source:
+        properties.setdefault("symbol", clean_symbol)
     properties.setdefault("kind", subject.kind)
     properties.setdefault("ontologyBox", (subject.properties or {}).get("ontologyBox") or "ABox")
     failed_condition_ids: List[str] = []
@@ -21983,6 +22041,27 @@ def typedb_native_rule_query_complexity(rule: object) -> int:
     return len(conditions) + min(64, combinations) * 3
 
 
+def typedb_source_kind_uses_symbol_scope(source_kind: object) -> bool:
+    """Return whether a RuleBox source is addressed by an instrument symbol."""
+
+    return str(source_kind or "").strip().lower() not in {"portfolio", "account"}
+
+
+def typedb_reasoning_subject_source_kinds(subject_kinds: Iterable[object]) -> Set[str]:
+    """Map scheduling subjects to the RuleBox source kinds they can own."""
+
+    mapping = {
+        "INSTRUMENT": {"stock", "crypto-asset"},
+        "STOCK": {"stock"},
+        "PORTFOLIO": {"portfolio"},
+        "ACCOUNT": {"account"},
+    }
+    result: Set[str] = set()
+    for value in subject_kinds or []:
+        result.update(mapping.get(str(value or "").upper().strip(), set()))
+    return result
+
+
 def typedb_rule_execution_profile_fields(subject: object) -> Dict[str, object]:
     """Return compact RuleBox execution metadata for plans and traces."""
 
@@ -22053,14 +22132,20 @@ def typedb_native_rule_execution_plan(
         rule_id = str(getattr(rule, "rule_id", "") or (rule.get("rule_id") if isinstance(rule, dict) else "") or "")
         required_relation_types = typedb_native_rule_required_relation_types(rule)
         any_relation_types, any_relation_minimum = typedb_native_rule_any_relation_requirement(rule)
-        candidate_symbols = list(clean_symbols)
-        if clean_symbols and required_relation_types:
+        source_kind = str(
+            getattr(rule, "source_kind", "")
+            or (rule.get("source_kind") or rule.get("sourceKind") if isinstance(rule, dict) else "")
+            or "stock"
+        )
+        symbol_scoped_source = typedb_source_kind_uses_symbol_scope(source_kind)
+        candidate_symbols = list(clean_symbols) if symbol_scoped_source else []
+        if symbol_scoped_source and clean_symbols and required_relation_types:
             candidate_symbols = [
                 symbol
                 for symbol in clean_symbols
                 if required_relation_types.issubset(type_index.get(symbol, set()))
             ]
-        if candidate_symbols and any_relation_types and any_relation_minimum:
+        if symbol_scoped_source and candidate_symbols and any_relation_types and any_relation_minimum:
             candidate_symbols = [
                 symbol
                 for symbol in candidate_symbols
@@ -22071,7 +22156,7 @@ def typedb_native_rule_execution_plan(
                 ) >= any_relation_minimum
             ]
         preflight_pruned_symbols: Dict[str, Dict[str, object]] = {}
-        if candidate_symbols and preflight_graph is not None:
+        if symbol_scoped_source and candidate_symbols and preflight_graph is not None:
             retained_symbols = []
             for symbol in candidate_symbols:
                 preflight = typedb_native_rule_required_conditions_preflight(
@@ -22098,7 +22183,7 @@ def typedb_native_rule_execution_plan(
             "executionProfile": execution_profile,
             **typedb_rule_execution_profile_fields({"executionProfile": execution_profile}),
         }
-        if clean_symbols and not candidate_symbols:
+        if symbol_scoped_source and clean_symbols and not candidate_symbols:
             preflight_reasons = [
                 str(item.get("reason") or "")
                 for item in preflight_pruned_symbols.values()
@@ -22645,7 +22730,7 @@ def typedb_native_match_query(
             "activeSourceStorage",
         ))
     symbols = clean_symbols_from_payload(list(target_symbols or []))
-    if symbols:
+    if symbols and typedb_source_kind_uses_symbol_scope(source_kind):
         clauses.append(typedb_value_match("$source", "ontology-symbol", symbols, "==", "sourceSymbol"))
     columns = ["sourceId", "sourceLabel"]
     evidence_columns: List[str] = []
@@ -23778,7 +23863,7 @@ def typedb_native_function_call_query(
         typedb_scoped_manifest_member_clause("$candidate", "candidate", "$activeManifestId", world_id),
         "$candidate isa ontology-node, has ontology-kind " + typedb_string(source_kind) + ";",
     ]
-    if symbols:
+    if symbols and typedb_source_kind_uses_symbol_scope(source_kind):
         clauses.append(typedb_value_match("$candidate", "ontology-symbol", symbols, "==", "sourceSymbol"))
     if parameterized_world:
         clauses.append("let $ruleWorldId = " + typedb_string(str(world_id).strip()) + ";")
@@ -24309,6 +24394,13 @@ def inference_rulebox_metadata(
         "sourceAboxSnapshotId",
         "sourceAboxSnapshotCount",
         "targetSymbols",
+        "ruleTargetSymbols",
+        "reasoningSubjectKinds",
+        "reasoningSubjectIds",
+        "reasoningSubjectFilterApplied",
+        "reasoningSubjectAllowedSourceKinds",
+        "reasoningSubjectFullRuleCount",
+        "reasoningSubjectSelectedRuleCount",
         "incrementalScope",
         "impactPlanVersion",
         "inferenceImpactPlan",

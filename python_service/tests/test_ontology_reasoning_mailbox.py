@@ -469,10 +469,14 @@ def portfolio_risk_request(event_id, symbols, occurred_at, fact_revision=""):
     request = ontology_reasoning_requested_event(
         source,
         "portfolio-risk-change",
-        symbols,
-        changed_count=len(symbols),
+        changed_count=1,
         fact_types=["PortfolioRiskSnapshot", "PositionRiskMetric", "RebalanceScenario"],
-        fact_revisions_by_symbol={symbol: fact_revision for symbol in symbols} if fact_revision else None,
+        subject_kind="PORTFOLIO",
+        subject_id="portfolio:local:default",
+        affected_symbols=symbols,
+        subject_revision=fact_revision,
+        subject_changed_fields=["portfolioRisk", "positionRisk", "rebalanceScenario"],
+        account_id="local:default",
     )
     return DomainEvent(
         name=ONTOLOGY_REASONING_REQUESTED,
@@ -584,18 +588,22 @@ class OntologyReasoningMailboxTests(unittest.TestCase):
         first = runner.run_once(force=True)
         second = runner.run_once(force=True)
 
-        self.assertEqual(2, len(entries))
+        self.assertEqual(1, len(entries))
         self.assertEqual({"PORTFOLIO"}, {entry["workClass"] for entry in entries})
+        self.assertEqual({"PORTFOLIO"}, {entry["subjectKind"] for entry in entries})
+        self.assertEqual({"portfolio:local:default"}, {entry["subjectId"] for entry in entries})
+        self.assertEqual({"local:default"}, {entry["accountScope"] for entry in entries})
+        self.assertEqual(["000660", "MSTR"], entries[0]["affectedSymbols"])
         self.assertEqual(
             {("PortfolioRiskSnapshot", "PositionRiskMetric", "RebalanceScenario")},
             {tuple(entry["ruleFamilies"]) for entry in entries},
         )
-        self.assertEqual([["000660"], ["MSTR"]], self.monitor.calls)
+        self.assertEqual([["000660", "MSTR"]], self.monitor.calls)
         self.assertIn("old-risk", self.cursor.superseded)
         self.assertIn("new-risk", self.cursor.ids)
         self.assertEqual("superseded", self.mailbox.events["old-risk"]["state"])
         self.assertEqual("ok", first["status"])
-        self.assertEqual("ok", second["status"])
+        self.assertEqual("idle", second["status"])
 
     def test_market_observation_anchor_completes_only_after_verified_projection(self):
         event = realtime_request("anchor-event", ["AAPL"], "2026-07-24T00:00:00Z")

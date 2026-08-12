@@ -46,9 +46,15 @@ def compact_temporal_window(values: Dict[str, object]) -> Dict[str, object]:
 class NotificationAIDecisionContextEnricher:
     """Load one subject's exact time-series windows before immutable queue capture."""
 
-    def __init__(self, time_series_store=None, settings: Dict[str, object] = None):
+    def __init__(
+        self,
+        time_series_store=None,
+        settings: Dict[str, object] = None,
+        investment_domain_store=None,
+    ):
         self.time_series_store = time_series_store
         self.settings = dict(settings or {})
+        self.investment_domain_store = investment_domain_store
         self._cache = OrderedDict()
 
     def cache_max_entries(self) -> int:
@@ -131,4 +137,20 @@ class NotificationAIDecisionContextEnricher:
             "temporalWindows": windows,
             "audit": audit,
         }
+        account_id = str(getattr(job, "account_id", "") or context.get("accountId") or "")
+        if self.investment_domain_store and account_id:
+            try:
+                lifecycle = self.investment_domain_store.latest_portfolio_lifecycle("portfolio:" + account_id)
+                context["portfolioLifecycle"] = {
+                    "status": lifecycle.get("status"),
+                    "portfolioId": lifecycle.get("portfolioId"),
+                    "mandate": lifecycle.get("mandate") or {},
+                    "reconciliation": lifecycle.get("reconciliation") or {},
+                    "exposureSnapshot": lifecycle.get("exposureSnapshot") or {},
+                    "rebalanceProposal": lifecycle.get("rebalanceProposal") or {},
+                }
+                audit["portfolioLifecycleStatus"] = lifecycle.get("status") or "unavailable"
+            except Exception as error:  # noqa: BLE001 - graph facts remain the primary AI input.
+                audit["portfolioLifecycleStatus"] = "error"
+                audit["portfolioLifecycleReason"] = str(error)[:160]
         job.context = context

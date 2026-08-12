@@ -88,12 +88,14 @@ class AIInferenceQueueRunner:
         reviewer,
         settings: Dict[str, object] = None,
         decision_episode_store=None,
+        action_planning_service=None,
         worker_id: str = "",
     ):
         self.queue = queue
         self.reviewer = reviewer
         self.settings = dict(settings or {})
         self.decision_episode_store = decision_episode_store
+        self.action_planning_service = action_planning_service
         self.worker_id = str(worker_id or "notification-ai-" + uuid.uuid4().hex[:10])
         self.lease_seconds = _int_setting(self.settings, "notificationAiQueueLeaseSeconds", 360, 60, 3600)
         self.heartbeat_seconds = _int_setting(self.settings, "notificationAiQueueHeartbeatSeconds", 10, 2, 120)
@@ -212,6 +214,7 @@ class AIInferenceQueueRunner:
             context["ontologyQualityGate"] = quality_gate
         apply_ontology_quality_gate_to_response(response, quality_gate)
         episode = self.decision_episode_context(request, context, response)
+        action_plan = self.action_plan_context(context, episode)
         enriched = context_with_validated_ai_response(context, response, self.settings)
         enriched["notificationAiExecutionAudit"] = {
             "version": "notification-ai-execution-audit-v2",
@@ -252,7 +255,7 @@ class AIInferenceQueueRunner:
         published = self.queue.complete(request, self.worker_id, result, enriched)
         if not published:
             return request.request_id[:8] + " superseded-before-publish"
-        self.persist_decision_episode(request, context, episode)
+        self.persist_decision_episode(request, context, episode, action_plan)
         fallback = " fallback" if "fallback" in str(response.source or "").lower() else ""
         return (
             request.request_id[:8]
@@ -301,7 +304,24 @@ class AIInferenceQueueRunner:
             context["investmentDecisionEpisode"] = episode.to_dict()
         return episode
 
-    def persist_decision_episode(self, request, context, episode) -> None:
+    def action_plan_context(self, context, episode):
+        if not episode or not self.action_planning_service:
+            return None
+        try:
+            plan = self.action_planning_service.prepare(episode, context)
+            episode.action_plan_id = plan.plan_id
+            context["investmentActionPlan"] = plan.to_dict()
+            context["investmentActionEnvelope"] = plan.envelope.to_dict() if plan.envelope else {}
+            context["investmentDecisionEpisode"] = episode.to_dict()
+            return plan
+        except Exception as error:  # noqa: BLE001 - categorical AI decision remains usable.
+            context["investmentActionPlanning"] = {
+                "status": "error",
+                "reason": str(error)[:180],
+            }
+            return None
+
+    def persist_decision_episode(self, request, context, episode, action_plan=None) -> None:
         if not self.decision_episode_store or not episode:
             return
         try:
@@ -316,6 +336,8 @@ class AIInferenceQueueRunner:
                 str(relation_context.get("inferenceGenerationAt") or context.get("referenceDate") or ""),
             )
             saved_episode = self.decision_episode_store.save(episode)
+            if action_plan and self.action_planning_service:
+                self.action_planning_service.save(action_plan)
             context["investmentDecisionEpisodeId"] = saved_episode.episode_id
             context["investmentDecisionEpisode"] = saved_episode.to_dict()
         except Exception:  # noqa: BLE001 - the validated notification is already atomically publishable.

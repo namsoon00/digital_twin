@@ -25,6 +25,13 @@ def _actions(values: Iterable[object]) -> List[str]:
     ))
 
 
+def _first_present(values: Dict[str, object], *keys: str, default=None):
+    for key in keys:
+        if key in values and values[key] is not None:
+            return values[key]
+    return default
+
+
 @dataclass(frozen=True)
 class InvestmentMandate:
     mandate_id: str
@@ -88,6 +95,31 @@ class InvestmentMandate:
             holding_action_policy=str(values.get("holdingActionPolicy") or ""),
             watchlist_action_policy=str(values.get("watchlistActionPolicy") or ""),
             effective_at=str(effective_at or ""),
+        )
+
+    @classmethod
+    def from_dict(cls, payload: Dict[str, object]):
+        values = dict(payload or {})
+        return cls(
+            mandate_id=str(_first_present(values, "mandateId", "mandate_id", default="")),
+            portfolio_id=str(_first_present(values, "portfolioId", "portfolio_id", default="")),
+            account_id=str(_first_present(values, "accountId", "account_id", default="")),
+            profile=str(values.get("profile") or "balanced"),
+            risk_tolerance=str(_first_present(values, "riskTolerance", "risk_tolerance", default="medium")),
+            time_horizon=str(_first_present(values, "timeHorizon", "time_horizon", default="mid")),
+            loss_tolerance_pct=_number(_first_present(values, "lossTolerancePct", "loss_tolerance_pct", default=-8), -8),
+            profit_protection_pct=_number(_first_present(values, "profitProtectionPct", "profit_protection_pct", default=12), 12),
+            max_position_weight_pct=_number(_first_present(values, "maxPositionWeightPct", "max_position_weight_pct", default=25), 25),
+            max_sector_weight_pct=_number(_first_present(values, "maxSectorWeightPct", "max_sector_weight_pct", default=45), 45),
+            fx_exposure_review_pct=_number(_first_present(values, "fxExposureReviewPct", "fx_exposure_review_pct", default=12), 12),
+            min_cash_weight_pct=_number(_first_present(values, "minCashWeightPct", "min_cash_weight_pct", default=10), 10),
+            allowed_actions=_actions(_first_present(values, "allowedActions", "allowed_actions", default=DEFAULT_ALLOWED_ACTIONS)),
+            add_buy_policy=str(_first_present(values, "addBuyPolicy", "add_buy_policy", default="")),
+            holding_action_policy=str(_first_present(values, "holdingActionPolicy", "holding_action_policy", default="")),
+            watchlist_action_policy=str(_first_present(values, "watchlistActionPolicy", "watchlist_action_policy", default="")),
+            effective_at=str(_first_present(values, "effectiveAt", "effective_at", default="")),
+            version=str(values.get("version") or INVESTMENT_MANDATE_VERSION),
+            fingerprint=str(values.get("fingerprint") or values.get("policyFingerprint") or ""),
         )
 
     def calculate_fingerprint(self) -> str:

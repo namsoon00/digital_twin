@@ -14,9 +14,10 @@ from .ontology_projection_audit import OntologyProjectionRun
 from .portfolio import AccountSnapshot, AlertEvent, Position
 from .investment_mandate import InvestmentMandate
 from .investment_outcomes import DecisionReview, PerformanceAttribution
-from .portfolio_ledger import PortfolioLedgerEntry
+from .portfolio_ledger import PortfolioLedgerEntry, PortfolioReconciliation
 from .portfolio_rebalancing import RebalanceProposal
-from .trade_execution import ActionPlan, ExecutionEpisode
+from .risk_exposure import ExposureSnapshot
+from .trade_execution import ActionPlan, ActionPlanReview, ExecutionEpisode
 from .symbol_universe import ListedSymbol
 
 
@@ -53,13 +54,35 @@ class InvestmentDomainRepository(Protocol):
     def ledger_entries(self, portfolio_id: str, limit: int = 10000) -> List[PortfolioLedgerEntry]:
         ...
 
+    def save_reconciliation(self, reconciliation: PortfolioReconciliation) -> PortfolioReconciliation:
+        ...
+
+    def save_exposure_snapshot(self, snapshot: ExposureSnapshot) -> ExposureSnapshot:
+        ...
+
     def save_rebalance_proposal(self, proposal: RebalanceProposal) -> RebalanceProposal:
         ...
 
     def save_action_plan(self, plan: ActionPlan) -> ActionPlan:
         ...
 
+    def action_plan(self, plan_id: str) -> Optional[ActionPlan]:
+        ...
+
+    def save_action_plan_review(self, review: ActionPlanReview) -> ActionPlanReview:
+        ...
+
     def save_execution_episode(self, episode: ExecutionEpisode) -> ExecutionEpisode:
+        ...
+
+    def execution_feedback_for_decisions(self, decision_episode_ids: Iterable[str]) -> Dict[str, Dict[str, object]]:
+        ...
+
+    def save_outcome_reviews(
+        self,
+        attributions: Iterable[PerformanceAttribution],
+        reviews: Iterable[DecisionReview],
+    ) -> Dict[str, int]:
         ...
 
     def save_decision_review(self, review: DecisionReview) -> DecisionReview:

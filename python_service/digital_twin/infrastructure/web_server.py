@@ -108,6 +108,7 @@ from ..infrastructure.service_factory import (
     build_investment_calendar_service,
     build_investment_strategy_proposal_service,
     build_investment_brain_service,
+    build_trade_execution_service,
     build_notification_queue_runner,
     build_official_calendar_sync_service,
     build_ontology_lab_service,
@@ -545,6 +546,31 @@ def snapshot_payload() -> Dict[str, object]:
         "items": store["items"],
         "messages": store["messages"],
     }
+
+
+def portfolio_lifecycle_payload(query: Dict[str, List[str]]) -> Dict[str, object]:
+    account_id = first_query(query, "accountId") or "default"
+    portfolio_id = first_query(query, "portfolioId") or "portfolio:" + account_id
+    return stores.investment_domain_store(operational_read_settings()).latest_portfolio_lifecycle(portfolio_id)
+
+
+def review_action_plan_payload(plan_id: str, decision: str, body: Dict[str, object]) -> Dict[str, object]:
+    try:
+        return build_trade_execution_service().review_plan(
+            plan_id,
+            decision,
+            str(body.get("reviewer") or "local-user"),
+            str(body.get("reason") or ""),
+        )
+    except ValueError as error:
+        return {"status": "error", "error": str(error)}
+
+
+def execute_action_plan_payload(plan_id: str) -> Dict[str, object]:
+    try:
+        return build_trade_execution_service().submit_plan(plan_id)
+    except ValueError as error:
+        return {"status": "error", "error": str(error)}
 
 
 def settings_status_payload() -> Dict[str, object]:
@@ -4516,6 +4542,25 @@ class DigitalTwinHandler(BaseHTTPRequestHandler):
                 symbol=first_query(query, "symbol"),
                 limit=limit,
             ))
+
+        if path == "/api/portfolio-lifecycle" and self.command == "GET":
+            return self.send_payload(200, portfolio_lifecycle_payload(query), cache_control="no-store")
+
+        action_plan_match = re.match(r"^/api/action-plans/([^/]+)/(approve|reject|execute)$", path)
+        if action_plan_match and self.command == "POST":
+            if not self.ensure_writable("공유 모드에서는 실행계획을 검토하거나 제출할 수 없습니다."):
+                return
+            plan_id = urllib.parse.unquote(action_plan_match.group(1))
+            action = action_plan_match.group(2)
+            if action == "execute":
+                payload = execute_action_plan_payload(plan_id)
+            else:
+                payload = review_action_plan_payload(
+                    plan_id,
+                    "approved" if action == "approve" else "rejected",
+                    self.read_json_body(),
+                )
+            return self.send_payload(200 if payload.get("status") != "error" else 400, payload)
 
         if path == "/api/investment-brain/performance" and self.command == "GET":
             try:

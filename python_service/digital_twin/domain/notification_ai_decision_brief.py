@@ -168,6 +168,7 @@ def notification_ai_decision_brief(
     relation = _mapping(decision_input.get("relationshipDatabaseInference"))
     subject = _mapping(canonical_relation.get("subject"))
     internal = _mapping(merged.get("notificationAiInternalData"))
+    portfolio_lifecycle = _mapping(merged.get("portfolioLifecycle"))
     execution_profile = dict(profile or notification_ai_execution_profile(merged, settings))
     hypothesis_set = _mapping(relation.get("hypothesisSet"))
     research_cycle = _mapping(relation.get("researchCycle"))
@@ -240,6 +241,7 @@ def notification_ai_decision_brief(
             "investmentStrategyGuidance": decision_input.get("investmentStrategyGuidance") or {},
             "messageDeliveryProfile": decision_input.get("messageDeliveryProfile") or {},
             "actionPolicy": decision_input.get("actionPolicy"),
+            "portfolioLifecycle": portfolio_lifecycle,
         },
         "candidateOpinion": decision_input.get("precomputedOpinionCandidate") or {},
         "guardrails": {

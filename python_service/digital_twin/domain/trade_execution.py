@@ -3,7 +3,7 @@
 from dataclasses import asdict, dataclass, field
 import hashlib
 import json
-from typing import Dict, Iterable, List
+from typing import Dict, Iterable, List, Optional
 
 
 TRADE_EXECUTION_VERSION = "trade-execution-v1"
@@ -26,6 +26,8 @@ class ActionEnvelope:
     minimum_cash_after: float = 0.0
     policy_version: str = ""
     blocked_reasons: List[str] = field(default_factory=list)
+    notional_currency: str = "KRW"
+    base_currency: str = "KRW"
 
     def allows(self, action: str, quantity: float = 0.0, notional: float = 0.0) -> bool:
         value = str(action or "").upper()
@@ -80,6 +82,10 @@ class ActionPlan:
     order_intents: List[OrderIntent] = field(default_factory=list)
     status: str = "review-required"
     created_at: str = ""
+    expires_at: str = ""
+    envelope: Optional[ActionEnvelope] = None
+    invalidation_conditions: List[str] = field(default_factory=list)
+    sizing_basis: Dict[str, object] = field(default_factory=dict)
 
     @classmethod
     def create(
@@ -91,6 +97,10 @@ class ActionPlan:
         inference_generation_id: str,
         order_intents: Iterable[OrderIntent] = None,
         created_at: str = "",
+        expires_at: str = "",
+        envelope: ActionEnvelope = None,
+        invalidation_conditions: Iterable[str] = None,
+        sizing_basis: Dict[str, object] = None,
     ):
         intents = list(order_intents or [])
         action_value = str(action or "HOLD").upper()
@@ -104,6 +114,10 @@ class ActionPlan:
             order_intents=intents,
             status="review-required" if action_value in EXECUTABLE_ACTIONS else "informational",
             created_at=str(created_at or ""),
+            expires_at=str(expires_at or ""),
+            envelope=envelope,
+            invalidation_conditions=list(invalidation_conditions or []),
+            sizing_basis=dict(sizing_basis or {}),
         )
 
     def validate(self, envelope: ActionEnvelope) -> List[str]:
@@ -122,6 +136,86 @@ class ActionPlan:
     def to_dict(self) -> Dict[str, object]:
         payload = asdict(self)
         payload["order_intents"] = [item.to_dict() for item in self.order_intents]
+        payload["envelope"] = self.envelope.to_dict() if self.envelope else {}
+        payload["version"] = TRADE_EXECUTION_VERSION
+        return payload
+
+    @classmethod
+    def from_dict(cls, payload: Dict[str, object]):
+        values = dict(payload or {})
+        envelope_values = values.get("envelope") if isinstance(values.get("envelope"), dict) else {}
+        envelope = ActionEnvelope(**{
+            "portfolio_id": str(envelope_values.get("portfolio_id") or envelope_values.get("portfolioId") or values.get("portfolio_id") or values.get("portfolioId") or ""),
+            "symbol": str(envelope_values.get("symbol") or ""),
+            "allowed_actions": list(envelope_values.get("allowed_actions") or envelope_values.get("allowedActions") or []),
+            "max_buy_notional": float(envelope_values.get("max_buy_notional") or envelope_values.get("maxBuyNotional") or 0),
+            "max_buy_quantity": float(envelope_values.get("max_buy_quantity") or envelope_values.get("maxBuyQuantity") or 0),
+            "max_sell_quantity": float(envelope_values.get("max_sell_quantity") or envelope_values.get("maxSellQuantity") or 0),
+            "minimum_cash_after": float(envelope_values.get("minimum_cash_after") or envelope_values.get("minimumCashAfter") or 0),
+            "policy_version": str(envelope_values.get("policy_version") or envelope_values.get("policyVersion") or values.get("policy_version") or values.get("policyVersion") or ""),
+            "blocked_reasons": list(envelope_values.get("blocked_reasons") or envelope_values.get("blockedReasons") or []),
+            "notional_currency": str(envelope_values.get("notional_currency") or envelope_values.get("notionalCurrency") or "KRW"),
+            "base_currency": str(envelope_values.get("base_currency") or envelope_values.get("baseCurrency") or "KRW"),
+        }) if envelope_values else None
+        intents = []
+        for item in values.get("order_intents") or values.get("orderIntents") or []:
+            if not isinstance(item, dict):
+                continue
+            intents.append(OrderIntent(
+                intent_id=str(item.get("intent_id") or item.get("intentId") or ""),
+                symbol=str(item.get("symbol") or ""),
+                side=str(item.get("side") or ""),
+                quantity=float(item.get("quantity") or 0),
+                order_type=str(item.get("order_type") or item.get("orderType") or "LIMIT"),
+                limit_price=float(item.get("limit_price") or item.get("limitPrice") or 0),
+                currency=str(item.get("currency") or "KRW"),
+            ))
+        return cls(
+            plan_id=str(values.get("plan_id") or values.get("planId") or ""),
+            portfolio_id=str(values.get("portfolio_id") or values.get("portfolioId") or ""),
+            decision_episode_id=str(values.get("decision_episode_id") or values.get("decisionEpisodeId") or ""),
+            action=str(values.get("action") or "HOLD"),
+            policy_version=str(values.get("policy_version") or values.get("policyVersion") or ""),
+            inference_generation_id=str(values.get("inference_generation_id") or values.get("inferenceGenerationId") or ""),
+            order_intents=intents,
+            status=str(values.get("status") or "review-required"),
+            created_at=str(values.get("created_at") or values.get("createdAt") or ""),
+            expires_at=str(values.get("expires_at") or values.get("expiresAt") or ""),
+            envelope=envelope,
+            invalidation_conditions=list(values.get("invalidation_conditions") or values.get("invalidationConditions") or []),
+            sizing_basis=dict(values.get("sizing_basis") or values.get("sizingBasis") or {}),
+        )
+
+
+@dataclass(frozen=True)
+class ActionPlanReview:
+    review_id: str
+    plan_id: str
+    decision: str
+    reviewer: str
+    reviewed_at: str
+    reason: str = ""
+    policy_version: str = ""
+    validation_errors: List[str] = field(default_factory=list)
+
+    @classmethod
+    def create(cls, plan_id: str, decision: str, reviewer: str, reviewed_at: str, **values):
+        decision_value = str(decision or "").lower()
+        if decision_value not in {"approved", "rejected"}:
+            raise ValueError("Action plan review decision must be approved or rejected.")
+        return cls(
+            review_id=stable_execution_id("action-plan-review", plan_id, decision_value, reviewed_at, reviewer),
+            plan_id=str(plan_id or ""),
+            decision=decision_value,
+            reviewer=str(reviewer or "local-user"),
+            reviewed_at=str(reviewed_at or ""),
+            reason=str(values.get("reason") or ""),
+            policy_version=str(values.get("policy_version") or values.get("policyVersion") or ""),
+            validation_errors=list(values.get("validation_errors") or values.get("validationErrors") or []),
+        )
+
+    def to_dict(self) -> Dict[str, object]:
+        payload = asdict(self)
         payload["version"] = TRADE_EXECUTION_VERSION
         return payload
 

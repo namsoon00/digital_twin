@@ -494,6 +494,33 @@ MYSQL_SCHEMA = [
     ) ENGINE=InnoDB DEFAULT CHARSET=utf8mb4 COLLATE=utf8mb4_unicode_ci
     """,
     """
+    CREATE TABLE IF NOT EXISTS portfolio_reconciliations (
+        reconciliation_id VARCHAR(191) PRIMARY KEY,
+        portfolio_id VARCHAR(191) NOT NULL,
+        account_id VARCHAR(191) NOT NULL,
+        balance_fingerprint VARCHAR(64) NOT NULL,
+        status VARCHAR(32) NOT NULL DEFAULT 'matched',
+        difference_count INT NOT NULL DEFAULT 0,
+        source_snapshot_at VARCHAR(40) NOT NULL DEFAULT '',
+        payload_json LONGTEXT NOT NULL,
+        created_at VARCHAR(40) NOT NULL,
+        updated_at VARCHAR(40) NOT NULL,
+        UNIQUE KEY uq_portfolio_reconciliation_balance (portfolio_id, balance_fingerprint),
+        KEY idx_portfolio_reconciliation_status (portfolio_id, status, source_snapshot_at)
+    ) ENGINE=InnoDB DEFAULT CHARSET=utf8mb4 COLLATE=utf8mb4_unicode_ci
+    """,
+    """
+    CREATE TABLE IF NOT EXISTS portfolio_exposure_snapshots (
+        exposure_snapshot_id VARCHAR(191) PRIMARY KEY,
+        portfolio_id VARCHAR(191) NOT NULL,
+        observed_at VARCHAR(40) NOT NULL DEFAULT '',
+        over_policy_count INT NOT NULL DEFAULT 0,
+        payload_json LONGTEXT NOT NULL,
+        created_at VARCHAR(40) NOT NULL,
+        KEY idx_portfolio_exposure_latest (portfolio_id, observed_at, exposure_snapshot_id)
+    ) ENGINE=InnoDB DEFAULT CHARSET=utf8mb4 COLLATE=utf8mb4_unicode_ci
+    """,
+    """
     CREATE TABLE IF NOT EXISTS portfolio_rebalance_proposals (
         proposal_id VARCHAR(191) PRIMARY KEY,
         portfolio_id VARCHAR(191) NOT NULL,
@@ -520,6 +547,20 @@ MYSQL_SCHEMA = [
         updated_at VARCHAR(40) NOT NULL,
         KEY idx_action_plans_decision (decision_episode_id, created_at),
         KEY idx_action_plans_portfolio_status (portfolio_id, status, created_at)
+    ) ENGINE=InnoDB DEFAULT CHARSET=utf8mb4 COLLATE=utf8mb4_unicode_ci
+    """,
+    """
+    CREATE TABLE IF NOT EXISTS investment_action_plan_reviews (
+        review_id VARCHAR(191) PRIMARY KEY,
+        plan_id VARCHAR(191) NOT NULL,
+        decision VARCHAR(32) NOT NULL,
+        reviewer VARCHAR(191) NOT NULL DEFAULT 'local-user',
+        policy_version VARCHAR(191) NOT NULL DEFAULT '',
+        reason VARCHAR(1000) NOT NULL DEFAULT '',
+        payload_json LONGTEXT NOT NULL,
+        reviewed_at VARCHAR(40) NOT NULL,
+        created_at VARCHAR(40) NOT NULL,
+        KEY idx_action_plan_reviews_plan_time (plan_id, reviewed_at, review_id)
     ) ENGINE=InnoDB DEFAULT CHARSET=utf8mb4 COLLATE=utf8mb4_unicode_ci
     """,
     """

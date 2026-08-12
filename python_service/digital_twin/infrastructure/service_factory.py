@@ -44,6 +44,11 @@ from ..application.news_analysis_enrichment_service import NewsAnalysisEnrichmen
 from ..application.news_digest_service import NewsDigestEnqueuer, NewsDigestEventReconciler
 from ..application.notification_ai_decision_context import NotificationAIDecisionContextEnricher
 from ..application.monitoring_service import MonitorRunner
+from ..application.portfolio_lifecycle_service import (
+    DecisionActionPlanningService,
+    PortfolioAccountingService,
+    TradeExecutionService,
+)
 from ..application.notification_service import (
     CompositeNotificationContextEnricher,
     DisclosureAnalysisNotificationEnricher,
@@ -324,6 +329,7 @@ def build_monitor_runner(
             hypothesis_lifecycle_store=stores.hypothesis_lifecycle_store(configured_settings),
             data_pipeline_health_store=stores.data_pipeline_health_store(configured_settings),
             market_time_series_store=market_time_series_store,
+            investment_domain_store=stores.investment_domain_store(configured_settings),
             world_projection_outbox=stores.ontology_world_projection_outbox_store(configured_settings),
             inference_detail_outbox=stores.ontology_inference_detail_outbox_store(configured_settings),
             graph_assembly_cache_store=stores.ontology_graph_assembly_cache_store(configured_settings),
@@ -338,6 +344,14 @@ def build_monitor_runner(
         worker_id=os.environ.get("MONITOR_WORKER_ID") or ("monitor-" + uuid.uuid4().hex[:12]),
         progress_callback=progress_callback,
         source_snapshot_replay=source_snapshot_replay,
+        portfolio_lifecycle_observer=(
+            None
+            if source_snapshot_replay
+            else PortfolioAccountingService(
+                stores.investment_domain_store(configured_settings),
+                stores.account_registry(configured_settings),
+            )
+        ),
     )
 
 
@@ -393,6 +407,7 @@ def build_notification_queue_runner(dry_run: bool = False, lane: str = "all") ->
     ai_decision_context_enricher = NotificationAIDecisionContextEnricher(
         stores.market_time_series_store(settings),
         settings,
+        investment_domain_store=stores.investment_domain_store(settings),
     )
     ai_request_enqueuer = None
     news_digest_reconciler = None
@@ -460,6 +475,7 @@ def build_ai_inference_queue_runner(worker_id: str = "") -> AIInferenceQueueRunn
         reviewer=notification_ai_reviewer_from_settings(settings, allow_local_fallback=False),
         settings=settings,
         decision_episode_store=stores.investment_decision_episode_store(settings),
+        action_planning_service=build_decision_action_planning_service(settings),
         worker_id=worker_id,
     )
 
@@ -508,6 +524,24 @@ def build_investment_domain_service(settings=None) -> InvestmentDomainService:
     return InvestmentDomainService(
         repository=stores.investment_domain_store(configured_settings),
         event_publisher=ontology_reasoning_event_bus(configured_settings),
+    )
+
+
+def build_decision_action_planning_service(settings=None) -> DecisionActionPlanningService:
+    configured_settings = settings or runtime_settings()
+    return DecisionActionPlanningService(
+        repository=stores.investment_domain_store(configured_settings),
+        monitor_store=stores.monitor_store(configured_settings),
+        settings=configured_settings,
+    )
+
+
+def build_trade_execution_service(settings=None) -> TradeExecutionService:
+    configured_settings = settings or runtime_settings()
+    return TradeExecutionService(
+        stores.investment_domain_store(configured_settings),
+        monitor_store=stores.monitor_store(configured_settings),
+        settings=configured_settings,
     )
 
 

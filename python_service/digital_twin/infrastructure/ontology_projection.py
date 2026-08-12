@@ -651,6 +651,7 @@ class PortfolioOntologyProjectionRecorder:
         world_projection_outbox=None,
         inference_detail_outbox=None,
         outcome_observation_service=None,
+        investment_domain_store=None,
         graph_assembly_cache_store=None,
         settings: Dict[str, object] = None,
         source: str = "monitoring",
@@ -666,11 +667,13 @@ class PortfolioOntologyProjectionRecorder:
         self.world_projection_outbox = world_projection_outbox
         self.inference_detail_outbox = inference_detail_outbox
         self.graph_assembly_cache_store = graph_assembly_cache_store
+        self.investment_domain_store = investment_domain_store
         self.settings = dict(settings or {})
         self.outcome_observation_service = outcome_observation_service or InvestmentOutcomeObservationService(
             decision_episode_store=decision_episode_store,
             market_time_series_store=market_time_series_store,
             settings=self.settings,
+            investment_domain_store=investment_domain_store,
         )
         self.source = source or "monitoring"
 
@@ -6021,6 +6024,15 @@ class PortfolioOntologyProjectionRecorder:
             for item in selected_episodes
         ]
         rows = [item for item in rows if item]
+        if rows and self.investment_domain_store:
+            try:
+                feedback = self.investment_domain_store.lifecycle_feedback_for_decisions(
+                    item.get("episodeId") for item in rows
+                )
+                for item in rows:
+                    item.update(dict(feedback.get(str(item.get("episodeId") or "")) or {}))
+            except Exception:
+                pass
         projection["includedEpisodeCount"] = len(rows)
         projection["droppedEpisodeCount"] = max(0, len(ordered) - len(rows))
         projection["status"] = "ok"

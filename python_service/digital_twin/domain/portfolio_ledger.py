@@ -3,6 +3,8 @@
 from dataclasses import asdict, dataclass, field, replace
 from decimal import Decimal, InvalidOperation
 import uuid
+import hashlib
+import json
 from typing import Dict, Iterable, List
 
 
@@ -15,6 +17,8 @@ DIVIDEND = "DIVIDEND"
 FEE = "FEE"
 SPLIT = "SPLIT"
 SNAPSHOT_RECONCILIATION = "SNAPSHOT_RECONCILIATION"
+OPENING_POSITION = "OPENING_POSITION"
+OPENING_CASH = "OPENING_CASH"
 
 
 def decimal_value(value: object) -> Decimal:
@@ -181,6 +185,24 @@ class PortfolioLedger:
         cost = entry.amount or (entry.quantity * entry.unit_price)
         self.state.cash[entry.currency] = self.state.cash.get(entry.currency, Decimal("0")) - cost - entry.fee
 
+    def _apply_opening_position(self, entry: PortfolioLedgerEntry) -> None:
+        if not entry.symbol or entry.quantity <= 0 or entry.unit_price < 0:
+            raise ValueError("OPENING_POSITION requires symbol and positive quantity.")
+        self.state.lots.append(PositionLot(
+            lot_id="opening-lot:" + entry.entry_id,
+            portfolio_id=entry.portfolio_id,
+            symbol=entry.symbol,
+            currency=entry.currency,
+            opened_at=entry.occurred_at,
+            quantity=entry.quantity,
+            remaining_quantity=entry.quantity,
+            unit_cost=entry.unit_price,
+            source_reference=entry.source_reference,
+        ))
+
+    def _apply_opening_cash(self, entry: PortfolioLedgerEntry) -> None:
+        self.state.cash[entry.currency] = self.state.cash.get(entry.currency, Decimal("0")) + entry.amount
+
     def _apply_sell(self, entry: PortfolioLedgerEntry) -> None:
         if not entry.symbol or entry.quantity <= 0 or entry.unit_price <= 0:
             raise ValueError("SELL requires symbol, quantity, and unit price.")
@@ -234,3 +256,90 @@ class PortfolioLedger:
         # Reconciliation remains an immutable audit fact. It does not silently
         # rewrite trade-derived lots; discrepancies are handled explicitly.
         return None
+
+
+@dataclass(frozen=True)
+class ReconciliationDifference:
+    difference_type: str
+    key: str
+    expected: Decimal
+    observed: Decimal
+    tolerance: Decimal = Decimal("0")
+    currency: str = ""
+    reason: str = ""
+
+    @property
+    def delta(self) -> Decimal:
+        return self.observed - self.expected
+
+    @property
+    def matched(self) -> bool:
+        return abs(self.delta) <= self.tolerance
+
+    def to_dict(self) -> Dict[str, object]:
+        return {
+            "differenceType": self.difference_type,
+            "key": self.key,
+            "expected": str(self.expected),
+            "observed": str(self.observed),
+            "delta": str(self.delta),
+            "tolerance": str(self.tolerance),
+            "currency": self.currency,
+            "reason": self.reason,
+            "matched": self.matched,
+        }
+
+
+@dataclass(frozen=True)
+class PortfolioReconciliation:
+    reconciliation_id: str
+    portfolio_id: str
+    account_id: str
+    source_snapshot_at: str
+    balance_fingerprint: str
+    differences: List[ReconciliationDifference] = field(default_factory=list)
+    status: str = "matched"
+    source: str = "broker-snapshot"
+    created_at: str = ""
+
+    @classmethod
+    def create(
+        cls,
+        portfolio_id: str,
+        account_id: str,
+        source_snapshot_at: str,
+        differences: Iterable[ReconciliationDifference],
+        balance_values: Dict[str, object],
+        created_at: str = "",
+    ):
+        canonical = json.dumps(balance_values or {}, ensure_ascii=True, sort_keys=True, separators=(",", ":"))
+        fingerprint = hashlib.sha256(canonical.encode("utf-8")).hexdigest()[:24]
+        rows = list(differences or [])
+        unmatched = [item for item in rows if not item.matched]
+        return cls(
+            reconciliation_id="portfolio-reconciliation:" + hashlib.sha256(
+                (str(portfolio_id) + "|" + fingerprint).encode("utf-8")
+            ).hexdigest()[:24],
+            portfolio_id=str(portfolio_id or ""),
+            account_id=str(account_id or ""),
+            source_snapshot_at=str(source_snapshot_at or ""),
+            balance_fingerprint=fingerprint,
+            differences=rows,
+            status="discrepancy" if unmatched else "matched",
+            created_at=str(created_at or ""),
+        )
+
+    def to_dict(self) -> Dict[str, object]:
+        return {
+            "version": PORTFOLIO_LEDGER_VERSION,
+            "reconciliationId": self.reconciliation_id,
+            "portfolioId": self.portfolio_id,
+            "accountId": self.account_id,
+            "sourceSnapshotAt": self.source_snapshot_at,
+            "balanceFingerprint": self.balance_fingerprint,
+            "status": self.status,
+            "source": self.source,
+            "differenceCount": len([item for item in self.differences if not item.matched]),
+            "differences": [item.to_dict() for item in self.differences],
+            "createdAt": self.created_at,
+        }

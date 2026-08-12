@@ -19,6 +19,10 @@ class PerformanceAttribution:
     realized_profit_loss: float = 0.0
     currency_effect_pct: float = 0.0
     observed_at: str = ""
+    horizon_minutes: int = 0
+    benchmark_symbol: str = ""
+    data_state: str = "partial"
+    missing_data: List[str] = field(default_factory=list)
 
     @property
     def active_return_pct(self) -> float:

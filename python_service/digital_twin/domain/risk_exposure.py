@@ -18,9 +18,12 @@ class ExposureMetric:
     policy_limit_pct: float = 0.0
     observed_at: str = ""
     source: str = "portfolio-ledger"
+    policy_direction: str = "maximum"
 
     @property
     def policy_delta_pct(self) -> float:
+        if self.policy_direction == "minimum":
+            return round(float(self.policy_limit_pct) - float(self.ratio_pct), 6)
         return round(float(self.ratio_pct) - float(self.policy_limit_pct), 6)
 
     def to_dict(self) -> Dict[str, object]:
@@ -38,6 +41,7 @@ class ExposureMetric:
             "exposureRatio": self.ratio_pct,
             "policyLimitRatio": self.policy_limit_pct,
             "policyDeltaRatio": self.policy_delta_pct,
+            "policyDirection": self.policy_direction,
             "observedAt": self.observed_at,
             "source": self.source,
         }
@@ -80,5 +84,6 @@ def exposure_metrics(values: Iterable[Dict[str, object]]) -> List[ExposureMetric
             policy_limit_pct=float(item.get("policyLimitPct") or item.get("policyLimitRatio") or 0),
             observed_at=str(item.get("observedAt") or ""),
             source=str(item.get("source") or "portfolio-ledger"),
+            policy_direction=str(item.get("policyDirection") or item.get("policy_direction") or "maximum"),
         ))
     return rows

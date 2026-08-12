@@ -31,6 +31,7 @@ class MonitorRunner:
         worker_id: str = "",
         progress_callback: Callable[[str, Dict[str, object]], None] = None,
         source_snapshot_replay: bool = False,
+        portfolio_lifecycle_observer=None,
     ):
         self.accounts = list(accounts)
         self.account_map = {account.account_id: account for account in self.accounts}
@@ -59,11 +60,13 @@ class MonitorRunner:
         # mode so a stale marker can never make the ordinary monitor skip its
         # source commit and the resulting verified reasoning request.
         self.source_snapshot_replay = bool(source_snapshot_replay)
+        self.portfolio_lifecycle_observer = portfolio_lifecycle_observer
         # The reasoning worker advances its event cursor only after this
         # projection has a usable TypeDB result.
         self.last_ontology_projection_results: Dict[str, Dict[str, object]] = {}
         self.last_cycle_record_result = None
         self.last_delivery_guard_result: Dict[str, object] = {}
+        self.last_portfolio_lifecycle_results: Dict[str, Dict[str, object]] = {}
 
     def run_once(
         self,
@@ -149,6 +152,7 @@ class MonitorRunner:
             delivered_events = getattr(cycle_result, "delivered_events", None) if cycle_result is not None else None
             if delivered_events is not None:
                 all_events = list(delivered_events or [])
+            self.observe_portfolio_lifecycle(snapshots)
             if not all_events:
                 self.progress("monitor.no_events")
             self.progress(
@@ -181,6 +185,7 @@ class MonitorRunner:
                 snapshot.metadata.pop("monitorStateHistory", None)
                 self.store.save_snapshot(snapshot)
             self.store.write()
+            self.observe_portfolio_lifecycle(snapshots)
         self.progress("monitor.completed", snapshotCount=len(snapshots), eventCount=len(all_events))
         return all_events
 
@@ -228,6 +233,7 @@ class MonitorRunner:
             snapshot.metadata.pop("previousMonitorState", None)
             snapshot.metadata.pop("monitorStateHistory", None)
             self.cycle_recorder.record_cycle([account.account_id], [snapshot], events, dry_run=False)
+            self.observe_portfolio_lifecycle([snapshot])
         else:
             if snapshot.has_live_account_data():
                 self.publish(snapshot_collected_event(snapshot))
@@ -611,6 +617,35 @@ class MonitorRunner:
 
     def use_cycle_recorder(self, dry_run: bool) -> bool:
         return self.cycle_recorder is not None and not dry_run
+
+    def observe_portfolio_lifecycle(self, snapshots: Iterable[AccountSnapshot]) -> None:
+        if self.source_snapshot_replay or not self.portfolio_lifecycle_observer:
+            return
+        observer = getattr(self.portfolio_lifecycle_observer, "observe_snapshot", None)
+        if not callable(observer):
+            return
+        for snapshot in snapshots or []:
+            if not snapshot.has_live_account_data():
+                continue
+            try:
+                result = dict(observer(snapshot) or {})
+                self.last_portfolio_lifecycle_results[snapshot.account_id] = result
+                self.progress(
+                    "portfolio_lifecycle.observed",
+                    accountId=snapshot.account_id,
+                    status=result.get("status") or "ready",
+                    reconciliationStatus=(result.get("reconciliation") or {}).get("status"),
+                )
+            except Exception as error:  # noqa: BLE001 - source snapshot remains the retry boundary.
+                self.last_portfolio_lifecycle_results[snapshot.account_id] = {
+                    "status": "error",
+                    "reason": str(error)[:220],
+                }
+                self.progress(
+                    "portfolio_lifecycle.failed",
+                    accountId=snapshot.account_id,
+                    reason=str(error)[:180],
+                )
 
     def publish_cycle_completed(self, snapshots, events, dry_run: bool, delivered: bool) -> None:
         self.publish(monitoring_cycle_completed_event(

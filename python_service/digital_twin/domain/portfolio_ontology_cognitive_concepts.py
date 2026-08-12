@@ -475,6 +475,54 @@ def add_investment_brain_concepts(
             add_relation(graph, episode_id, outcome_id, "RESULTED_IN_OUTCOME", weight=1.0, properties={"source": "investment-brain-feedback"})
             add_relation(graph, episode_id, outcome_id, "PRODUCES_OUTCOME", weight=1.0, properties={"source": "investment-brain-feedback"})
             add_relation(graph, stock_id, outcome_id, "OBSERVES_OUTCOME", weight=1.0, properties={"source": "investment-brain-feedback"})
+        for attribution in episode.get("performanceAttributions") or []:
+            if not isinstance(attribution, dict):
+                continue
+            attribution_key = str(attribution.get("attribution_id") or attribution.get("attributionId") or "").strip()
+            if not attribution_key:
+                continue
+            attribution_id = add_entity(
+                graph,
+                "performance-attribution",
+                attribution_key,
+                str(episode.get("subjectName") or symbol) + " 성과 귀속",
+                {
+                    "tboxClass": "PerformanceAttribution",
+                    "marketReturnPct": attribution.get("market_return_pct") or attribution.get("marketReturnPct"),
+                    "instrumentReturnPct": attribution.get("instrument_return_pct") or attribution.get("instrumentReturnPct"),
+                    "activeReturnPct": attribution.get("activeReturnPct"),
+                    "executionCost": attribution.get("execution_cost") or attribution.get("executionCost"),
+                    "horizonMinutes": attribution.get("horizon_minutes") or attribution.get("horizonMinutes"),
+                    "dataState": attribution.get("data_state") or attribution.get("dataState"),
+                    "missingData": attribution.get("missing_data") or attribution.get("missingData") or [],
+                    "observedAt": attribution.get("observed_at") or attribution.get("observedAt"),
+                    "source": "investment-outcome-attribution",
+                },
+            )
+            add_relation(graph, attribution_id, episode_id, "ATTRIBUTED_TO", weight=1.0, properties={"source": "investment-outcome-attribution"})
+        for review in episode.get("decisionReviews") or []:
+            if not isinstance(review, dict):
+                continue
+            review_key = str(review.get("review_id") or review.get("reviewId") or "").strip()
+            if not review_key:
+                continue
+            review_id = add_entity(
+                graph,
+                "decision-review",
+                review_key,
+                str(episode.get("subjectName") or symbol) + " 판단 리뷰",
+                {
+                    "tboxClass": "DecisionReview",
+                    "selectedHypothesisStatus": review.get("selected_hypothesis_status") or review.get("selectedHypothesisStatus"),
+                    "policyCompliant": review.get("policy_compliant") if "policy_compliant" in review else review.get("policyCompliant"),
+                    "executionCompliant": review.get("execution_compliant") if "execution_compliant" in review else review.get("executionCompliant"),
+                    "evidenceStillValid": review.get("evidence_still_valid") if "evidence_still_valid" in review else review.get("evidenceStillValid"),
+                    "observations": review.get("observations") or [],
+                    "reviewedAt": review.get("reviewed_at") or review.get("reviewedAt"),
+                    "source": "investment-decision-review",
+                },
+            )
+            add_relation(graph, review_id, episode_id, "REVIEWS_DECISION", weight=1.0, properties={"source": "investment-decision-review"})
     add_hypothesis_calibration_concepts(graph, portfolio_id, episode_rows)
     add_hypothesis_outcome_assessment_concepts(
         graph,

@@ -346,8 +346,19 @@ function checkWorkflowConsoleContract() {
     "모바일 네비게이션/캘린더 폭·밀도 계약이 없습니다."
   );
   assertOk(
-    /styles\.css\?v=20260812-mobile-layout-v\d+/.test(indexHtml) &&
-      /app\.js\?v=20260812-mobile-layout-v\d+/.test(indexHtml),
+    code.indexOf("function mobileInfiniteScrollEnabled") >= 0 &&
+      code.indexOf("function bindMobileInfiniteScroll") >= 0 &&
+      code.indexOf("data-mobile-infinite-sentinel") >= 0 &&
+      code.indexOf("rootMargin: \"0px 0px 360px 0px\"") >= 0 &&
+      code.indexOf("mergeUniqueItems(state.notificationJobItems") >= 0 &&
+      code.indexOf("mergeUniqueItems((state.symbolUniverse || {}).items") >= 0 &&
+      code.indexOf("mergeUniqueItems(previous.candidates") >= 0 &&
+      /\.mobile-infinite-scroll\s*\{[\s\S]*width: 100%;/.test(styles),
+    "모바일 전체 목록의 누적 로딩/무한 스크롤 계약이 없습니다."
+  );
+  assertOk(
+    /styles\.css\?v=20260812-mobile-infinite-scroll-v\d+/.test(indexHtml) &&
+      /app\.js\?v=20260812-mobile-infinite-scroll-v\d+/.test(indexHtml),
     "모바일 레이아웃 정적 자산 cache key가 반영되지 않았습니다."
   );
 }

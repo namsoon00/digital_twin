@@ -10543,7 +10543,10 @@
   function consoleResearchItems() {
     var payload = currentResearchEvidence();
     var items = Array.isArray(payload.items) ? payload.items : [];
-    return latestChangedFirst(items);
+    return latestChangedFirst(items.filter(function (item) {
+      var kind = String(item && item.kind || "").toLowerCase();
+      return kind !== "news" || item.displayEligible !== false;
+    }));
   }
 
   function consoleEvidenceBySymbol() {

@@ -30432,3 +30432,71 @@ body.oa-overlay-open {
     overflow-wrap: anywhere;
   }
 }
+
+/* Mobile console: keep navigation and priority-queue audit values fully legible. */
+@media (max-width: 540px) {
+  .console-shell .oa-work-row {
+    grid-template-columns: 44px minmax(0, 1fr);
+    grid-template-areas:
+      "kind main"
+      ". state";
+    align-items: start;
+    gap: 9px 12px;
+    min-height: 0;
+    padding: 14px 12px;
+  }
+
+  .console-shell .oa-work-row .oa-row-kind {
+    grid-area: kind;
+    padding-top: 2px;
+    line-height: 1.4;
+  }
+
+  .console-shell .oa-work-row .oa-row-main {
+    grid-area: main;
+    gap: 5px;
+  }
+
+  .console-shell .oa-work-row .tone-chip {
+    grid-area: state;
+    justify-self: start;
+    width: fit-content;
+    max-width: 100%;
+    min-height: 32px;
+    line-height: 1.35;
+    text-align: left;
+    white-space: normal;
+    overflow-wrap: anywhere;
+  }
+}
+
+@media (max-width: 420px) {
+  .console-shell .app-nav-tabs {
+    display: block;
+    overflow: visible;
+  }
+
+  .console-shell .app-nav-group {
+    display: grid;
+    grid-template-columns: repeat(7, minmax(0, 1fr));
+    gap: 2px;
+    width: 100%;
+  }
+
+  .console-shell .app-nav-tab {
+    width: 100%;
+    min-width: 0;
+    padding: 0 2px;
+    font-size: 11px;
+  }
+}
+
+@media (max-width: 350px) {
+  .console-shell.web-style-shell .app-nav {
+    grid-template-rows: 42px auto;
+  }
+
+  .console-shell .app-nav-group {
+    grid-template-columns: repeat(4, minmax(0, 1fr));
+  }
+}

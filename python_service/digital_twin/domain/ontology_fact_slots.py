@@ -77,6 +77,9 @@ FIELD_SLOT_FAMILIES = {
     "profitloss": {"position"},
     "profitlossrate": {"position"},
     "positionremoved": {"position"},
+    "portfoliorisk": {"portfolio", "exposure"},
+    "positionrisk": {"position", "exposure"},
+    "rebalancescenario": {"portfolio", "exposure"},
     # Provider quality is versioned independently from quote values.
     "quotestatus": {"quality"},
     "dataquality": {"quality"},

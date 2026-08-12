@@ -17,8 +17,9 @@ The account-centered investment lifecycle is split into explicit ownership bound
 - Market history is loaded with one bounded SQL query for all held symbols and benchmarks.
 - External calls and TypeDB work never run inside the portfolio write transaction.
 - Analysis persistence uses one short transaction and stable content fingerprints.
-- An unchanged risk fingerprint does not create a reasoning event.
-- A changed risk fingerprint and its reasoning request are committed atomically with the new analysis bundle.
+- Every changed risk measurement may be stored, but it does not automatically create a reasoning event.
+- A reasoning event compares with the last emitted baseline and is created only for a policy/data/position transition or a cumulative change of at least 1 percentage point in annualized volatility, 0.5 percentage point in drawdown, 0.05 in maximum correlation, 0.5 percentage point in position weight, or 0.1 in measured beta.
+- A material risk event and its reasoning request are committed atomically with the new analysis bundle. Its fact types route only the portfolio, position, and exposure ABox slots instead of falling back to the complete target graph.
 - The web trace follows source order: ledger, risk, scenarios, plan, approval, execution, fill, attribution, and review.
 
 ## Execution Safety

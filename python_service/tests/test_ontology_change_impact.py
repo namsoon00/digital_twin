@@ -7,6 +7,7 @@ from digital_twin.domain.ontology_change_impact import (
     family_for_relation,
     rule_condition_dependency_profile,
     rule_dependency_profile,
+    requested_scope_families_for_event_fact_types,
     scope_family,
     scope_delta,
     scope_symbol,
@@ -31,6 +32,16 @@ from digital_twin.infrastructure.typedb_ontology import (
 
 
 class OntologyChangeImpactTests(unittest.TestCase):
+    def test_portfolio_risk_fact_types_map_to_bounded_abox_families(self):
+        self.assertEqual(
+            ["exposure", "portfolio", "position"],
+            requested_scope_families_for_event_fact_types([
+                "PortfolioRiskSnapshot",
+                "PositionRiskMetric",
+                "RebalanceScenario",
+            ]),
+        )
+
     def scope_graph(self):
         return PortfolioOntology(
             "main",

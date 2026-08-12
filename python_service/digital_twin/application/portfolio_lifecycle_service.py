@@ -38,7 +38,12 @@ from ..domain.portfolio_rebalancing import (
     RebalanceScenario,
     allocation_drifts,
 )
-from ..domain.portfolio_analytics import PortfolioRiskSnapshot, portfolio_risk_snapshot, with_policy_limits
+from ..domain.portfolio_analytics import (
+    PortfolioRiskSnapshot,
+    portfolio_risk_event_materiality,
+    portfolio_risk_snapshot,
+    with_policy_limits,
+)
 from ..domain.portfolio_decision_cycle import PortfolioActionCandidate, PortfolioDecisionCycle
 from ..domain.risk_exposure import ExposureMetric, ExposureSnapshot
 from ..domain.trade_execution import (
@@ -659,8 +664,15 @@ class PortfolioAccountingService:
         symbols = [item.symbol for item in risk.positions]
         source_event = None
         reasoning_event = None
-        if self.investment_domain_service and symbols:
-            source_event = self.investment_domain_service.risk_observed_event(risk, symbols)
+        baseline_loader = getattr(self.repository, "latest_portfolio_risk_event", None)
+        baseline = baseline_loader(portfolio_id) if callable(baseline_loader) else {}
+        materiality = portfolio_risk_event_materiality(baseline or {}, risk)
+        if self.investment_domain_service and symbols and materiality.material:
+            source_event = self.investment_domain_service.risk_observed_event(
+                risk,
+                symbols,
+                materiality.to_dict(),
+            )
             fact_types = ["PortfolioRiskSnapshot", "PositionRiskMetric", "RebalanceScenario"]
             reasoning_event = ontology_reasoning_requested_event(
                 source_event,

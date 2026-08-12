@@ -15,6 +15,26 @@ from digital_twin.domain.ontology_scopes import (
 
 
 class OntologyFactSlotTests(unittest.TestCase):
+    def test_portfolio_risk_event_routes_only_portfolio_position_and_exposure_slots(self):
+        plan = build_fact_slot_projection_plan(
+            ["MSTR"],
+            ["portfolio", "position", "exposure"],
+            requested_fact_families_by_symbol={
+                "MSTR": ["portfolio", "position", "exposure"],
+            },
+            changed_fields_by_symbol={
+                "MSTR": ["portfolioRisk", "positionRisk", "rebalanceScenario"],
+            },
+        )
+
+        self.assertTrue(plan["enabled"])
+        self.assertEqual("ready", plan["status"])
+        self.assertEqual(["MSTR"], plan["preciseFieldRoutingSymbols"])
+        self.assertEqual(
+            ["exposure", "portfolio", "position"],
+            plan["slotFamiliesBySymbol"]["MSTR"],
+        )
+
     def test_precise_market_fields_route_only_changed_fact_families(self):
         plan = build_fact_slot_projection_plan(
             ["005930"],

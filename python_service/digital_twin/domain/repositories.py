@@ -90,6 +90,9 @@ class InvestmentDomainRepository(Protocol):
     def save_risk_snapshot(self, snapshot: PortfolioRiskSnapshot) -> PortfolioRiskSnapshot:
         ...
 
+    def latest_portfolio_risk_event(self, portfolio_id: str) -> Dict[str, object]:
+        ...
+
     def save_portfolio_analysis_bundle(self, risk_snapshot, exposure, rebalance_proposal, decision_cycle, domain_event=None, reasoning_event=None) -> Dict[str, object]:
         ...
 

@@ -109,7 +109,7 @@ class InvestmentDomainService:
         ))
         return saved
 
-    def risk_observed_event(self, snapshot, symbols):
+    def risk_observed_event(self, snapshot, symbols, materiality=None):
         return investment_lifecycle_event(
             PORTFOLIO_RISK_OBSERVED,
             snapshot.portfolio_id,
@@ -121,6 +121,21 @@ class InvestmentDomainService:
                 "annualizedVolatilityPct": snapshot.annualized_volatility_pct,
                 "maximumDrawdownPct": snapshot.maximum_drawdown_pct,
                 "maximumPairwiseCorrelation": snapshot.maximum_pairwise_correlation,
+                "volatilityPolicyDeltaPct": snapshot.volatility_policy_delta_pct,
+                "drawdownPolicyDeltaPct": snapshot.drawdown_policy_delta_pct,
+                "correlationPolicyDelta": snapshot.correlation_policy_delta,
+                "dataState": snapshot.data_state,
+                "missingData": list(snapshot.missing_data),
+                "provenance": dict(snapshot.provenance or {}),
+                "positionRiskSummary": [
+                    {
+                        "symbol": item.symbol,
+                        "weightPct": item.weight_pct,
+                        "beta": item.beta,
+                    }
+                    for item in snapshot.positions
+                ],
+                "materiality": dict(materiality or {}),
                 "policyBreach": any([
                     snapshot.volatility_policy_delta_pct > 0,
                     snapshot.drawdown_policy_delta_pct > 0,

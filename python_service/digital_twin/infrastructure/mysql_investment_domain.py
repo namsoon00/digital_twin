@@ -20,6 +20,7 @@ from ..domain.portfolio_ledger import (
     execution_ledger_entries,
 )
 from ..domain.portfolio_analytics import PortfolioRiskSnapshot
+from ..domain.events import PORTFOLIO_RISK_OBSERVED
 from ..domain.snapshot_portfolio_activity import activity_payload
 from ..domain.portfolio_rebalancing import RebalanceProposal
 from ..domain.risk_exposure import ExposureSnapshot
@@ -624,6 +625,15 @@ class MySQLInvestmentDomainStore(MySQLOperationalConnection):
         with self.transaction() as connection:
             self.save_risk_snapshot_with_connection(connection, snapshot, stamp)
         return snapshot
+
+    def latest_portfolio_risk_event(self, portfolio_id: str) -> Dict[str, object]:
+        with self.connect() as connection:
+            row = connection.execute(
+                "SELECT payload_json FROM domain_events WHERE name = %s AND aggregate_id = %s "
+                "ORDER BY occurred_at DESC, event_id DESC LIMIT 1",
+                (PORTFOLIO_RISK_OBSERVED, str(portfolio_id or "")),
+            ).fetchone()
+        return _json_loads(row.get("payload_json"), {}) if row else {}
 
     def save_portfolio_analysis_bundle(
         self,

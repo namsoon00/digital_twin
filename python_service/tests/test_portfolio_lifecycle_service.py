@@ -22,7 +22,11 @@ from digital_twin.domain.investment_mandate import InvestmentMandate
 from digital_twin.domain.investment_outcomes import decision_quality_summary
 from digital_twin.domain.portfolio import AccountSnapshot, PortfolioSummary, Position
 from digital_twin.domain.portfolio_activity_episode import PortfolioSnapshotCheckpoint
-from digital_twin.domain.portfolio_analytics import portfolio_risk_snapshot, with_policy_limits
+from digital_twin.domain.portfolio_analytics import (
+    portfolio_risk_event_materiality,
+    portfolio_risk_snapshot,
+    with_policy_limits,
+)
 from digital_twin.domain.portfolio_ledger import (
     INFERRED_CORPORATE_ACTION,
     INFERRED_POSITION_DECREASE,
@@ -172,6 +176,12 @@ class MemoryInvestmentRepository:
     def save_risk_snapshot(self, item):
         self.risk_snapshots[item.risk_snapshot_id] = item
         return item
+
+    def latest_portfolio_risk_event(self, _portfolio_id):
+        for event in reversed(self.reasoning_events):
+            if getattr(event, "name", "") == "portfolio.risk_observed":
+                return dict(event.payload or {})
+        return {}
 
     def save_portfolio_analysis_bundle(self, risk_snapshot, exposure, rebalance_proposal, decision_cycle, domain_event=None, reasoning_event=None):
         changed = risk_snapshot.risk_snapshot_id not in self.risk_snapshots
@@ -341,6 +351,17 @@ class MemoryPortfolioTimeSeriesStore:
         return rows
 
 
+class MutablePortfolioTimeSeriesStore(MemoryPortfolioTimeSeriesStore):
+    def __init__(self):
+        self.latest_price_delta = 0.0
+
+    def load_portfolio_analysis_series(self, account_id, symbols, as_of="", limit_per_symbol=260):
+        rows = super().load_portfolio_analysis_series(account_id, symbols, as_of, limit_per_symbol)
+        if rows.get("035420"):
+            rows["035420"][-1]["currentPrice"] += self.latest_price_delta
+        return rows
+
+
 class PortfolioLifecycleServiceTests(unittest.TestCase):
     def test_portfolio_risk_keeps_cash_as_zero_return_weight(self):
         risk = portfolio_risk_snapshot(
@@ -388,6 +409,77 @@ class PortfolioLifecycleServiceTests(unittest.TestCase):
         self.assertEqual(-10, measured.maximum_drawdown_pct)
         self.assertGreater(conservative.drawdown_policy_delta_pct, 0)
         self.assertEqual(0, flexible.drawdown_policy_delta_pct)
+
+    def test_risk_event_materiality_accumulates_against_last_emitted_baseline(self):
+        baseline_risk = with_policy_limits(
+            portfolio_risk_snapshot(
+                "portfolio:main",
+                NOW,
+                {"035420": [
+                    {"bucketAt": "2026-08-01T00:00:00Z", "currentPrice": 100},
+                    {"bucketAt": "2026-08-02T00:00:00Z", "currentPrice": 90},
+                    {"bucketAt": "2026-08-03T00:00:00Z", "currentPrice": 95},
+                ]},
+                {"035420": 50},
+            ),
+            max_volatility_pct=100,
+            max_drawdown_pct=20,
+            max_correlation=1,
+            policy_version="policy:1",
+        )
+        baseline_event = InvestmentDomainService(MemoryInvestmentRepository()).risk_observed_event(
+            baseline_risk,
+            ["035420"],
+        ).payload
+        small = replace(
+            baseline_risk,
+            risk_snapshot_id="risk:small",
+            annualized_volatility_pct=baseline_risk.annualized_volatility_pct + 0.4,
+        )
+        accumulated = replace(
+            small,
+            risk_snapshot_id="risk:accumulated",
+            annualized_volatility_pct=baseline_risk.annualized_volatility_pct + 1.1,
+        )
+
+        self.assertFalse(portfolio_risk_event_materiality(baseline_event, small).material)
+        result = portfolio_risk_event_materiality(baseline_event, accumulated)
+        self.assertTrue(result.material)
+        self.assertIn("annualizedVolatilityPct-material-change", result.reason_codes)
+
+    def test_risk_event_materiality_always_emits_policy_and_data_transitions(self):
+        risk = with_policy_limits(
+            portfolio_risk_snapshot(
+                "portfolio:main",
+                NOW,
+                {"035420": [
+                    {"bucketAt": "2026-08-01T00:00:00Z", "currentPrice": 100},
+                    {"bucketAt": "2026-08-02T00:00:00Z", "currentPrice": 90},
+                ]},
+                {"035420": 100},
+            ),
+            max_volatility_pct=100,
+            max_drawdown_pct=20,
+            max_correlation=1,
+            policy_version="policy:1",
+        )
+        baseline = InvestmentDomainService(MemoryInvestmentRepository()).risk_observed_event(
+            risk,
+            ["035420"],
+        ).payload
+        breached = replace(
+            risk,
+            risk_snapshot_id="risk:breached",
+            volatility_policy_delta_pct=0.1,
+            data_state="complete",
+            missing_data=[],
+        )
+
+        result = portfolio_risk_event_materiality(baseline, breached)
+
+        self.assertTrue(result.material)
+        self.assertIn("risk-policy-breach-transition", result.reason_codes)
+        self.assertIn("risk-data-state-change", result.reason_codes)
 
     def test_decision_quality_uses_only_complete_attributions_for_return_statistics(self):
         summary = decision_quality_summary(
@@ -453,6 +545,27 @@ class PortfolioLifecycleServiceTests(unittest.TestCase):
         self.assertEqual("unchanged", unchanged["status"])
         self.assertIn("portfolioRiskSnapshot", unchanged)
         self.assertTrue(repository.risk_snapshots)
+
+    def test_small_risk_measurement_change_does_not_enqueue_another_reasoning_event(self):
+        repository = MemoryInvestmentRepository()
+        series = MutablePortfolioTimeSeriesStore()
+        domain_service = InvestmentDomainService(repository, EventBus())
+        service = PortfolioAccountingService(
+            repository,
+            investment_domain_service=domain_service,
+            market_time_series_store=series,
+        )
+        service.observe_snapshot(live_snapshot())
+        series.latest_price_delta = 0.01
+        service.observe_snapshot(live_snapshot(generated_at="2026-08-12T06:10:00Z"))
+        initial_event_count = len(repository.reasoning_events)
+        initial_risk_count = len(repository.risk_snapshots)
+
+        series.latest_price_delta = 0.02
+        service.observe_snapshot(live_snapshot(generated_at="2026-08-12T06:20:00Z"))
+
+        self.assertGreater(len(repository.risk_snapshots), initial_risk_count)
+        self.assertEqual(initial_event_count, len(repository.reasoning_events))
 
     def test_confirmed_fill_supersedes_matching_snapshot_inference_without_double_counting(self):
         portfolio_id = "portfolio:main"

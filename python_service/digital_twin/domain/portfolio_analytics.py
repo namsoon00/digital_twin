@@ -10,6 +10,11 @@ from typing import Dict, Iterable, List, Mapping, Optional, Tuple
 
 PORTFOLIO_ANALYTICS_VERSION = "portfolio-analytics-v1"
 TRADING_DAYS_PER_YEAR = 252
+RISK_EVENT_VOLATILITY_DELTA_PCT = 1.0
+RISK_EVENT_DRAWDOWN_DELTA_PCT = 0.5
+RISK_EVENT_CORRELATION_DELTA = 0.05
+RISK_EVENT_POSITION_WEIGHT_DELTA_PCT = 0.5
+RISK_EVENT_BETA_DELTA = 0.1
 
 
 def numeric(value: object) -> float:
@@ -176,6 +181,165 @@ class PortfolioRiskSnapshot:
             "positions": [item.to_dict() for item in self.positions],
             "correlations": [item.to_dict() for item in self.correlations],
         }
+
+
+@dataclass(frozen=True)
+class PortfolioRiskEventMateriality:
+    material: bool
+    reason_codes: List[str] = field(default_factory=list)
+    metric_deltas: Dict[str, float] = field(default_factory=dict)
+    thresholds: Dict[str, float] = field(default_factory=dict)
+    baseline_risk_snapshot_id: str = ""
+    current_risk_snapshot_id: str = ""
+
+    def to_dict(self) -> Dict[str, object]:
+        return {
+            "material": self.material,
+            "reasonCodes": list(self.reason_codes),
+            "metricDeltas": dict(self.metric_deltas),
+            "thresholds": dict(self.thresholds),
+            "baselineRiskSnapshotId": self.baseline_risk_snapshot_id,
+            "currentRiskSnapshotId": self.current_risk_snapshot_id,
+        }
+
+
+def _risk_value(payload: Mapping[str, object], camel: str, snake: str = "") -> float:
+    return numeric(payload.get(camel) if payload.get(camel) is not None else payload.get(snake))
+
+
+def _risk_position_rows(payload: Mapping[str, object]) -> Dict[str, Mapping[str, object]]:
+    raw = payload.get("positionRiskSummary") or payload.get("positions") or []
+    return {
+        str(item.get("symbol") or "").upper().strip(): item
+        for item in raw
+        if isinstance(item, Mapping) and str(item.get("symbol") or "").strip()
+    }
+
+
+def portfolio_risk_event_materiality(
+    baseline: Mapping[str, object],
+    current: PortfolioRiskSnapshot,
+) -> PortfolioRiskEventMateriality:
+    """Decide whether a measured risk change warrants another graph run.
+
+    Every measurement remains persistable. This gate only controls the domain
+    event, comparing against the last emitted baseline so many small updates
+    can accumulate into one meaningful change.
+    """
+    previous = dict(baseline or {})
+    current_payload = current.to_dict()
+    thresholds = {
+        "annualizedVolatilityPct": RISK_EVENT_VOLATILITY_DELTA_PCT,
+        "maximumDrawdownPct": RISK_EVENT_DRAWDOWN_DELTA_PCT,
+        "maximumPairwiseCorrelation": RISK_EVENT_CORRELATION_DELTA,
+        "positionWeightPct": RISK_EVENT_POSITION_WEIGHT_DELTA_PCT,
+        "beta": RISK_EVENT_BETA_DELTA,
+    }
+    baseline_id = str(previous.get("riskSnapshotId") or "")
+    if not previous or not baseline_id:
+        return PortfolioRiskEventMateriality(
+            material=True,
+            reason_codes=["initial-risk-baseline"],
+            thresholds=thresholds,
+            baseline_risk_snapshot_id=baseline_id,
+            current_risk_snapshot_id=current.risk_snapshot_id,
+        )
+    if baseline_id == current.risk_snapshot_id:
+        return PortfolioRiskEventMateriality(
+            material=False,
+            thresholds=thresholds,
+            baseline_risk_snapshot_id=baseline_id,
+            current_risk_snapshot_id=current.risk_snapshot_id,
+        )
+
+    reasons: List[str] = []
+    deltas = {
+        "annualizedVolatilityPct": round(abs(
+            current.annualized_volatility_pct
+            - _risk_value(previous, "annualizedVolatilityPct", "annualized_volatility_pct")
+        ), 6),
+        "maximumDrawdownPct": round(abs(
+            current.maximum_drawdown_pct
+            - _risk_value(previous, "maximumDrawdownPct", "maximum_drawdown_pct")
+        ), 6),
+        "maximumPairwiseCorrelation": round(abs(
+            current.maximum_pairwise_correlation
+            - _risk_value(previous, "maximumPairwiseCorrelation", "maximum_pairwise_correlation")
+        ), 6),
+        "positionWeightPct": 0.0,
+        "beta": 0.0,
+    }
+    for key in ["annualizedVolatilityPct", "maximumDrawdownPct", "maximumPairwiseCorrelation"]:
+        if deltas[key] >= thresholds[key]:
+            reasons.append(key + "-material-change")
+
+    previous_positions = _risk_position_rows(previous)
+    current_positions = _risk_position_rows(current_payload)
+    if set(previous_positions) != set(current_positions):
+        reasons.append("position-set-change")
+    for symbol in sorted(set(previous_positions) & set(current_positions)):
+        old = previous_positions[symbol]
+        new = current_positions[symbol]
+        weight_delta = abs(
+            _risk_value(new, "weightPct", "weight_pct")
+            - _risk_value(old, "weightPct", "weight_pct")
+        )
+        deltas["positionWeightPct"] = round(max(deltas["positionWeightPct"], weight_delta), 6)
+        old_beta = old.get("beta")
+        new_beta = new.get("beta")
+        if (old_beta is None) != (new_beta is None):
+            reasons.append("position-beta-availability-change")
+        elif old_beta is not None and new_beta is not None:
+            deltas["beta"] = round(max(
+                deltas["beta"],
+                abs(numeric(new_beta) - numeric(old_beta)),
+            ), 6)
+    if deltas["positionWeightPct"] >= thresholds["positionWeightPct"]:
+        reasons.append("position-weight-material-change")
+    if deltas["beta"] >= thresholds["beta"]:
+        reasons.append("position-beta-material-change")
+
+    detailed_breach_keys = {
+        "volatilityPolicyDeltaPct", "volatility_policy_delta_pct",
+        "drawdownPolicyDeltaPct", "drawdown_policy_delta_pct",
+        "correlationPolicyDelta", "correlation_policy_delta",
+    }
+    previous_breaches = (
+        _risk_value(previous, "volatilityPolicyDeltaPct", "volatility_policy_delta_pct") > 0,
+        _risk_value(previous, "drawdownPolicyDeltaPct", "drawdown_policy_delta_pct") > 0,
+        _risk_value(previous, "correlationPolicyDelta", "correlation_policy_delta") > 0,
+    )
+    current_breaches = (
+        current.volatility_policy_delta_pct > 0,
+        current.drawdown_policy_delta_pct > 0,
+        current.correlation_policy_delta > 0,
+    )
+    breach_changed = (
+        previous_breaches != current_breaches
+        if detailed_breach_keys & set(previous)
+        else bool(previous.get("policyBreach")) != any(current_breaches)
+    )
+    if breach_changed:
+        reasons.append("risk-policy-breach-transition")
+    previous_state = str(previous.get("dataState") or previous.get("data_state") or "")
+    if previous_state and previous_state != current.data_state:
+        reasons.append("risk-data-state-change")
+    previous_missing = set(previous.get("missingData") or previous.get("missing_data") or [])
+    if previous_missing and previous_missing != set(current.missing_data):
+        reasons.append("risk-missing-data-change")
+    previous_policy = str(dict(previous.get("provenance") or {}).get("policyVersion") or "")
+    current_policy = str(dict(current.provenance or {}).get("policyVersion") or "")
+    if previous_policy and previous_policy != current_policy:
+        reasons.append("risk-policy-version-change")
+
+    return PortfolioRiskEventMateriality(
+        material=bool(reasons),
+        reason_codes=list(dict.fromkeys(reasons)),
+        metric_deltas=deltas,
+        thresholds=thresholds,
+        baseline_risk_snapshot_id=baseline_id,
+        current_risk_snapshot_id=current.risk_snapshot_id,
+    )
 
 
 def with_policy_limits(

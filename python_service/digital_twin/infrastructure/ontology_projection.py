@@ -5549,7 +5549,10 @@ class PortfolioOntologyProjectionRecorder:
         ontology = snapshot.metadata.setdefault("ontology", {})
         # Runtime identity is audit metadata only. It never becomes an ABox
         # fact and therefore cannot influence an investment inference.
-        result.setdefault("runtimeIdentity", runtime_identity())
+        # Cached snapshots may carry the identity of the process that produced
+        # the previous generation. This result belongs to the current writer,
+        # so stale audit metadata must never win through ``setdefault``.
+        result["runtimeIdentity"] = runtime_identity()
         active_key = self.active_graph_store_key(result)
         result.setdefault("graphStore", active_key)
         result.setdefault("activeGraphStore", active_key)

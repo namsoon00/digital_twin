@@ -2,6 +2,7 @@ import os
 import sys
 import unittest
 from pathlib import Path
+from types import SimpleNamespace
 from unittest.mock import patch
 
 
@@ -10,6 +11,7 @@ sys.path.insert(0, str(Path(__file__).resolve().parents[1]))
 from digital_twin.application.ontology_diagnostics_service import OntologyDiagnosticsService
 from digital_twin.infrastructure import settings as runtime_settings_module
 from digital_twin.infrastructure.runtime_identity import runtime_identity
+from digital_twin.infrastructure.ontology_projection import PortfolioOntologyProjectionRecorder
 
 
 class RuntimeIdentityTests(unittest.TestCase):
@@ -59,6 +61,34 @@ class RuntimeIdentityTests(unittest.TestCase):
             settings = runtime_settings_module.runtime_settings()
 
         self.assertEqual("127.0.0.1:1739", settings["typedbAddress"])
+
+    def test_projection_writer_replaces_stale_cached_runtime_identity(self):
+        current = {
+            "contract": "orbit-runtime-identity-v1",
+            "version": "current",
+            "revision": "current-revision",
+            "source": "environment",
+            "python": "3.test",
+        }
+        snapshot = SimpleNamespace(metadata={})
+        result = {
+            "runtimeIdentity": {
+                "contract": "orbit-runtime-identity-v1",
+                "version": "stale",
+                "revision": "stale-revision",
+                "source": "cache",
+            },
+        }
+        recorder = PortfolioOntologyProjectionRecorder(SimpleNamespace(store_key="typedb"))
+
+        with patch(
+            "digital_twin.infrastructure.ontology_projection.runtime_identity",
+            return_value=current,
+        ):
+            recorder.store_projection_result(snapshot, result)
+
+        self.assertEqual(current, result["runtimeIdentity"])
+        self.assertEqual(current, snapshot.metadata["ontology"]["projection"]["runtimeIdentity"])
 
 
 if __name__ == "__main__":

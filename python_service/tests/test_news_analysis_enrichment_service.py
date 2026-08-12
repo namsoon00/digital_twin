@@ -171,9 +171,22 @@ class NewsAnalysisEnrichmentRunnerTests(unittest.TestCase):
         )
         target = NewsCollectionTarget("005930", "삼성전자", "KOSPI", "KRW", "반도체")
         applied = apply_news_ai_analysis(evidence, local_news_ai_analysis(target, evidence).to_dict())
+        calls = []
+
+        class ExternalAnalyzer:
+            def analyze_with_timeout(self, _target, current, timeout_seconds):
+                calls.append((current.evidence_id, timeout_seconds))
+                result = local_news_ai_analysis(target, current).to_dict()
+                result.update({"status": "ok", "model": "test-external-analyzer"})
+                return result
+
+            def analyze(self, current_target, current):
+                return self.analyze_with_timeout(current_target, current, 30)
+
+        service = NewsAiAnalysisService(ExternalAnalyzer(), {"newsAiAnalysisEnabled": "1"})
         runner = NewsAnalysisEnrichmentRunner(
             evidence_store=object(),
-            analysis_service=None,
+            analysis_service=service,
             settings={"newsAiAnalysisAsyncEnabled": "1"},
         )
 
@@ -181,6 +194,9 @@ class NewsAnalysisEnrichmentRunnerTests(unittest.TestCase):
         self.assertEqual("local", applied.raw_payload["aiAnalysis"]["status"])
         self.assertTrue(news_ai_analysis_is_current(applied))
         self.assertTrue(runner.should_retry(applied))
+        enriched = service.analyze_evidence(target, applied, external_timeout_seconds=15)
+        self.assertEqual([(applied.evidence_id, 15)], calls)
+        self.assertEqual("ok", enriched.raw_payload["aiAnalysis"]["status"])
 
     def test_governed_claim_is_prioritized_for_external_analysis(self):
         regular = self.evidence()

@@ -1316,12 +1316,12 @@ def article_body_quality_needs_refresh(evidence: ResearchEvidence) -> bool:
 
 
 def news_ai_analysis_retryable(evidence: ResearchEvidence) -> bool:
-    """A local fallback is useful for display but must not consume the final analysis state."""
+    """A non-external analysis is provisional and must remain in the enrichment queue."""
     payload = analysis_payload_from_evidence(evidence)
     analysis = payload.get("aiAnalysis") if isinstance(payload, dict) else {}
     if not isinstance(analysis, dict):
         return False
-    return str(analysis.get("status") or "").strip().lower() in {"fallback", "deferred", "error"}
+    return str(analysis.get("status") or "").strip().lower() in {"fallback", "deferred", "error", "local"}
 
 
 def refreshed_article_summary_quality(evidence: ResearchEvidence) -> Dict[str, object]:

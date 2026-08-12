@@ -2,6 +2,7 @@ import sys
 import unittest
 from dataclasses import replace
 from datetime import datetime, timedelta, timezone
+from decimal import Decimal
 from pathlib import Path
 from types import SimpleNamespace
 
@@ -18,8 +19,10 @@ from digital_twin.application.portfolio_lifecycle_service import (
 )
 from digital_twin.domain.investment_brain import ObservedOutcome
 from digital_twin.domain.investment_mandate import InvestmentMandate
+from digital_twin.domain.investment_outcomes import decision_quality_summary
 from digital_twin.domain.portfolio import AccountSnapshot, PortfolioSummary, Position
 from digital_twin.domain.portfolio_activity_episode import PortfolioSnapshotCheckpoint
+from digital_twin.domain.portfolio_analytics import portfolio_risk_snapshot, with_policy_limits
 from digital_twin.domain.portfolio_ledger import (
     INFERRED_CORPORATE_ACTION,
     INFERRED_POSITION_DECREASE,
@@ -27,12 +30,14 @@ from digital_twin.domain.portfolio_ledger import (
     INFERRED_POSITION_INCREASE,
     SNAPSHOT_CASH_ADJUSTMENT,
     PortfolioLedger,
+    PortfolioLedgerEntry,
+    execution_ledger_entries,
 )
 from digital_twin.domain.portfolio_ontology_builder import build_portfolio_ontology
 from digital_twin.domain.ontology_rulebox_catalog import default_graph_inference_rules
 from digital_twin.domain.ontology_validator import validate_ontology
 from digital_twin.domain.notifications import NotificationJob
-from digital_twin.domain.trade_execution import ActionEnvelope, ActionPlan, OrderIntent
+from digital_twin.domain.trade_execution import ActionEnvelope, ActionPlan, ExecutionEpisode, OrderIntent, TradeFill
 from digital_twin.infrastructure.mysql_operational_connection import MYSQL_SCHEMA
 from digital_twin.infrastructure.event_bus import EventBus
 
@@ -45,6 +50,7 @@ class MemoryInvestmentRepository:
         self.entries = []
         self.reconciliations = {}
         self.exposures = {}
+        self.risk_snapshots = {}
         self.proposals = {}
         self.plans = {}
         self.plan_reviews = []
@@ -59,6 +65,7 @@ class MemoryInvestmentRepository:
         self.notification_jobs = []
         self.snapshot_quarantines = []
         self.reasoning_events = []
+        self.lifecycle = {}
         self.prior_decisions = {}
         self.mandate = InvestmentMandate.from_profile(
             "main",
@@ -125,6 +132,7 @@ class MemoryInvestmentRepository:
         domain_event=None,
         notification_job=None,
         reasoning_event=None,
+        risk_snapshot=None,
     ):
         actual = self.checkpoint.version if self.checkpoint else 0
         if actual != expected_checkpoint_version:
@@ -135,6 +143,8 @@ class MemoryInvestmentRepository:
         self.state_snapshots.append(state_snapshot)
         self.save_reconciliation(reconciliation)
         self.save_exposure_snapshot(exposure)
+        if risk_snapshot:
+            self.save_risk_snapshot(risk_snapshot)
         if rebalance_proposal:
             self.save_rebalance_proposal(rebalance_proposal)
         self.save_portfolio_decision_cycle(decision_cycle)
@@ -158,6 +168,23 @@ class MemoryInvestmentRepository:
     def save_exposure_snapshot(self, item):
         self.exposures.setdefault(item.snapshot_id, item)
         return item
+
+    def save_risk_snapshot(self, item):
+        self.risk_snapshots[item.risk_snapshot_id] = item
+        return item
+
+    def save_portfolio_analysis_bundle(self, risk_snapshot, exposure, rebalance_proposal, decision_cycle, domain_event=None, reasoning_event=None):
+        changed = risk_snapshot.risk_snapshot_id not in self.risk_snapshots
+        self.save_risk_snapshot(risk_snapshot)
+        self.save_exposure_snapshot(exposure)
+        if rebalance_proposal:
+            self.save_rebalance_proposal(rebalance_proposal)
+        self.save_portfolio_decision_cycle(decision_cycle)
+        if changed and domain_event:
+            self.reasoning_events.append(domain_event)
+        if changed and reasoning_event:
+            self.reasoning_events.append(reasoning_event)
+        return {"status": "saved", "riskChanged": changed}
 
     def save_rebalance_proposal(self, item):
         self.proposals[item.proposal_id] = item
@@ -193,8 +220,28 @@ class MemoryInvestmentRepository:
         self.executions.append(item)
         return item
 
+    def execution_episode_for_plan(self, plan_id):
+        return next((item for item in reversed(self.executions) if item.action_plan_id == plan_id), None)
+
+    def save_execution_with_ledger(self, episode, plan, domain_event=None):
+        del domain_event
+        self.executions.append(episode)
+        rows = execution_ledger_entries(episode, plan, self.entries)
+        inserted = self.append_ledger_entries(rows)
+        return {
+            "status": episode.status,
+            "executionEpisode": episode.to_dict(),
+            "actualLedgerEntryCount": inserted,
+            "supersededInferredEntryCount": sum(
+                len(item.payload.get("supersedesEntryIds") or []) for item in rows
+            ),
+        }
+
     def lifecycle_trace(self, _episode_id):
         return {"executionEpisodes": [], "fills": []}
+
+    def latest_portfolio_lifecycle(self, _portfolio_id):
+        return dict(self.lifecycle)
 
     def execution_feedback_for_decisions(self, episode_ids):
         return {
@@ -276,7 +323,241 @@ def live_snapshot(
     )
 
 
+class MemoryPortfolioTimeSeriesStore:
+    def load_portfolio_analysis_series(self, _account_id, symbols, as_of="", limit_per_symbol=260):
+        del as_of
+        rows = {}
+        for symbol in symbols:
+            base = 100.0 if symbol == "KOSPI" else 80.0
+            rows[symbol] = [
+                {
+                    "bucketAt": "2026-07-" + str(day).zfill(2) + "T00:00:00Z",
+                    "marketSessionDate": "2026-07-" + str(day).zfill(2),
+                    "currentPrice": base + day * (1.0 if symbol == "KOSPI" else 1.5),
+                    "tradingValue": 1_000_000 + day,
+                }
+                for day in range(1, 31)
+            ][-limit_per_symbol:]
+        return rows
+
+
 class PortfolioLifecycleServiceTests(unittest.TestCase):
+    def test_portfolio_risk_keeps_cash_as_zero_return_weight(self):
+        risk = portfolio_risk_snapshot(
+            "portfolio:main",
+            NOW,
+            {
+                "035420": [
+                    {"bucketAt": "2026-08-01T00:00:00Z", "currentPrice": 100},
+                    {"bucketAt": "2026-08-02T00:00:00Z", "currentPrice": 110},
+                    {"bucketAt": "2026-08-03T00:00:00Z", "currentPrice": 121},
+                ],
+            },
+            {"035420": 50},
+        )
+
+        self.assertEqual(10.25, risk.period_return_pct)
+
+    def test_risk_snapshot_identity_changes_with_mandate_policy(self):
+        measured = portfolio_risk_snapshot(
+            "portfolio:main",
+            NOW,
+            {"035420": [
+                {"bucketAt": "2026-08-01T00:00:00Z", "currentPrice": 100},
+                {"bucketAt": "2026-08-02T00:00:00Z", "currentPrice": 90},
+            ]},
+            {"035420": 100},
+        )
+
+        conservative = with_policy_limits(
+            measured,
+            max_volatility_pct=10,
+            max_drawdown_pct=5,
+            max_correlation=0.5,
+            policy_version="policy:conservative",
+        )
+        flexible = with_policy_limits(
+            measured,
+            max_volatility_pct=100,
+            max_drawdown_pct=50,
+            max_correlation=1,
+            policy_version="policy:flexible",
+        )
+
+        self.assertNotEqual(conservative.risk_snapshot_id, flexible.risk_snapshot_id)
+        self.assertEqual(-10, measured.maximum_drawdown_pct)
+        self.assertGreater(conservative.drawdown_policy_delta_pct, 0)
+        self.assertEqual(0, flexible.drawdown_policy_delta_pct)
+
+    def test_decision_quality_uses_only_complete_attributions_for_return_statistics(self):
+        summary = decision_quality_summary(
+            [
+                {"dataState": "complete", "activeReturnPct": 2, "horizonMinutes": 60},
+                {"dataState": "complete", "activeReturnPct": -1, "horizonMinutes": 60},
+                {"dataState": "partial", "activeReturnPct": 99, "horizonMinutes": 60},
+            ],
+            [{"executionCompliant": True, "evidenceStillValid": True}],
+        )
+
+        self.assertEqual(2, summary["completeSampleCount"])
+        self.assertEqual(0.5, summary["meanActiveReturnPct"])
+        self.assertEqual(50.0, summary["positiveActiveRatePct"])
+
+    def test_action_plan_is_capped_by_matching_portfolio_policy_candidate(self):
+        repository = MemoryInvestmentRepository()
+        repository.mandate = InvestmentMandate.from_profile(
+            "main", "portfolio:main", {"maxPositionWeightPct": 90, "minCashWeightPct": 0}, NOW,
+        )
+        repository.lifecycle = {
+            "portfolioDecisionCycle": {
+                "cycleId": "cycle:cap",
+                "candidates": [{
+                    "candidateId": "candidate:cap",
+                    "candidateType": "INCREASE_UNDERWEIGHT_ALLOCATION",
+                    "affectedSymbol": "035420",
+                    "maximumNotional": 70_000,
+                }],
+            },
+            "portfolioRiskSnapshot": {"riskSnapshotId": "risk:cap"},
+        }
+        state = live_snapshot(cash=2_000_000).to_monitor_state()
+        episode = SimpleNamespace(
+            episode_id="decision:cap", portfolio_id="portfolio:main", account_id="main",
+            symbol="035420", action="ADD", mandate_version=repository.mandate.policy_version,
+            inference_generation_id="generation:cap", decided_at=NOW,
+            selected_hypothesis_id="", hypothesis_set=SimpleNamespace(hypotheses=[]),
+        )
+
+        plan = DecisionActionPlanningService(
+            repository, SimpleNamespace(load_previous=lambda _account_id: state),
+            {"investmentActionPlanSlicePct": 100},
+        ).prepare(episode, {"ontologyRelationContext": {"allowedActions": ["ADD"]}})
+
+        self.assertEqual(70_000, plan.sizing_basis["policyCandidateMaximumNotionalBase"])
+        self.assertLessEqual(plan.order_intents[0].notional, 70_000)
+        self.assertEqual(["candidate:cap"], plan.sizing_basis["policyCandidateIds"])
+
+    def test_stored_history_refreshes_risk_when_account_balance_is_unchanged(self):
+        repository = MemoryInvestmentRepository()
+        service = PortfolioAccountingService(
+            repository,
+            market_time_series_store=MemoryPortfolioTimeSeriesStore(),
+        )
+
+        first = service.observe_snapshot(live_snapshot())
+        unchanged = service.observe_snapshot(live_snapshot(generated_at="2026-08-12T06:10:00Z"))
+
+        self.assertEqual("complete", first["portfolioRiskSnapshot"]["dataState"])
+        self.assertGreater(first["portfolioRiskSnapshot"]["sampleCount"], 20)
+        self.assertIsNotNone(first["portfolioRiskSnapshot"]["positions"][0]["beta"])
+        self.assertEqual("unchanged", unchanged["status"])
+        self.assertIn("portfolioRiskSnapshot", unchanged)
+        self.assertTrue(repository.risk_snapshots)
+
+    def test_confirmed_fill_supersedes_matching_snapshot_inference_without_double_counting(self):
+        portfolio_id = "portfolio:main"
+        opening_position = PortfolioLedgerEntry.create(
+            portfolio_id, "main", "OPENING_POSITION", "2026-08-12T05:00:00Z",
+            entry_id="opening-position", source_reference="opening-position",
+            symbol="035420", quantity=10, unit_price=100,
+        )
+        opening_cash = PortfolioLedgerEntry.create(
+            portfolio_id, "main", "OPENING_CASH", "2026-08-12T05:00:00Z",
+            entry_id="opening-cash", source_reference="opening-cash", amount=1000,
+        )
+        inferred_position = PortfolioLedgerEntry.create(
+            portfolio_id, "main", INFERRED_POSITION_INCREASE, "2026-08-12T06:10:00Z",
+            entry_id="inferred-position", source_reference="snapshot:1:position:035420",
+            symbol="035420", quantity=1, unit_price=100,
+            payload={"replaceableByActualActivity": True, "observationId": "snapshot:1"},
+        )
+        inferred_cash = PortfolioLedgerEntry.create(
+            portfolio_id, "main", SNAPSHOT_CASH_ADJUSTMENT, "2026-08-12T06:10:00Z",
+            entry_id="inferred-cash", source_reference="snapshot:1:cash:KRW", amount=-100,
+            payload={"replaceableByActualActivity": True, "observationId": "snapshot:1"},
+        )
+        plan = replace(ActionPlan.create(
+            portfolio_id, "decision:fill", "ADD", "policy:1", "generation:1",
+            order_intents=[OrderIntent("intent:fill", "035420", "BUY", 1, limit_price=100)],
+        ), status="approved")
+        episode = ExecutionEpisode.for_plan(plan, "2026-08-12T06:05:00Z")
+        episode.record_fill(TradeFill(
+            "fill:1", "provider-fill:1", "intent:fill", "035420", "BUY",
+            1, 100, 0, "KRW", "2026-08-12T06:05:00Z",
+        ))
+        episode.complete("2026-08-12T06:05:01Z")
+
+        actual = execution_ledger_entries(
+            episode, plan, [opening_position, opening_cash, inferred_position, inferred_cash]
+        )
+        state = PortfolioLedger(portfolio_id, "main").replay(
+            [opening_position, opening_cash, inferred_position, inferred_cash, *actual]
+        )
+
+        self.assertEqual(Decimal("11.0"), state.quantity("035420"))
+        self.assertEqual(Decimal("900.0"), state.cash["KRW"])
+        self.assertEqual({"inferred-position", "inferred-cash"}, set(actual[0].payload["supersedesEntryIds"]))
+
+    def test_split_fills_supersede_one_aggregate_snapshot_inference(self):
+        repository = MemoryInvestmentRepository()
+        portfolio_id = "portfolio:main"
+        repository.entries = [
+            PortfolioLedgerEntry.create(
+                portfolio_id, "main", "OPENING_POSITION", "2026-08-12T05:00:00Z",
+                entry_id="opening-position-split", source_reference="opening-position-split",
+                symbol="035420", quantity=10, unit_price=100,
+            ),
+            PortfolioLedgerEntry.create(
+                portfolio_id, "main", "OPENING_CASH", "2026-08-12T05:00:00Z",
+                entry_id="opening-cash-split", source_reference="opening-cash-split", amount=1000,
+            ),
+            PortfolioLedgerEntry.create(
+                portfolio_id, "main", INFERRED_POSITION_INCREASE, "2026-08-12T06:10:00Z",
+                entry_id="inferred-position-split", source_reference="snapshot:split:position:035420",
+                symbol="035420", quantity=2, unit_price=100,
+                payload={"replaceableByActualActivity": True, "observationId": "snapshot:split"},
+            ),
+            PortfolioLedgerEntry.create(
+                portfolio_id, "main", SNAPSHOT_CASH_ADJUSTMENT, "2026-08-12T06:10:00Z",
+                entry_id="inferred-cash-split", source_reference="snapshot:split:cash:KRW", amount=-200,
+                payload={"replaceableByActualActivity": True, "observationId": "snapshot:split"},
+            ),
+        ]
+        plan = replace(ActionPlan.create(
+            portfolio_id,
+            "decision:split-fill",
+            "ADD",
+            repository.mandate.policy_version,
+            "generation:1",
+            order_intents=[OrderIntent("intent:split", "035420", "BUY", 2, limit_price=100)],
+        ), status="approved")
+        repository.save_action_plan(plan)
+        service = TradeExecutionService(repository)
+        fill_template = {
+            "orderIntentId": "intent:split", "symbol": "035420", "side": "BUY",
+            "quantity": 1, "price": 100, "fee": 0, "currency": "KRW",
+        }
+
+        service.record_fills(plan.plan_id, [{
+            **fill_template,
+            "providerExecutionId": "provider:split:1",
+            "executedAt": "2026-08-12T06:01:00Z",
+        }])
+        service.record_fills(plan.plan_id, [{
+            **fill_template,
+            "providerExecutionId": "provider:split:2",
+            "executedAt": "2026-08-12T06:02:00Z",
+        }])
+        state = PortfolioLedger(portfolio_id, "main").replay(repository.entries)
+
+        self.assertEqual(Decimal("12.0"), state.quantity("035420"))
+        self.assertEqual(Decimal("800.0"), state.cash["KRW"])
+        actual_rows = [item for item in repository.entries if item.entry_type == "BUY"]
+        self.assertEqual(
+            {"inferred-position-split", "inferred-cash-split"},
+            set(actual_rows[-1].payload["supersedesEntryIds"]),
+        )
+
     def test_mandate_round_trip_preserves_explicit_zero_limits(self):
         payload = MemoryInvestmentRepository().mandate.to_dict()
         payload["min_cash_weight_pct"] = 0
@@ -288,7 +569,7 @@ class PortfolioLifecycleServiceTests(unittest.TestCase):
 
     def test_snapshot_bootstrap_and_inferred_increase_are_idempotent(self):
         repository = MemoryInvestmentRepository()
-        service = PortfolioAccountingService(repository)
+        service = PortfolioAccountingService(repository, market_time_series_store=MemoryPortfolioTimeSeriesStore())
 
         first = service.observe_snapshot(live_snapshot())
         second = service.observe_snapshot(live_snapshot())
@@ -338,6 +619,92 @@ class PortfolioLifecycleServiceTests(unittest.TestCase):
         self.assertGreater(result["exposureSnapshot"]["metrics"][0]["policyDeltaPct"], 0)
         self.assertEqual("review-required", result["rebalanceProposal"]["status"])
         self.assertTrue(result["rebalanceProposal"]["legs"])
+
+    def test_target_allocation_replaces_duplicate_position_policy_band(self):
+        repository = MemoryInvestmentRepository()
+        repository.mandate = InvestmentMandate.from_profile(
+            "main",
+            "portfolio:main",
+            {
+                "maxPositionWeightPct": 25,
+                "maxSectorWeightPct": 100,
+                "minCashWeightPct": 0,
+                "targetAllocations": {"position:035420": 20},
+                "allocationBandPct": 5,
+            },
+            NOW,
+        )
+
+        result = PortfolioAccountingService(repository).observe_snapshot(live_snapshot())
+        drifts = result["rebalanceProposal"]["drifts"]
+
+        self.assertEqual(len(drifts), len({item["allocationKey"] for item in drifts}))
+        position_drift = next(item for item in drifts if item["allocationKey"] == "position:035420")
+        self.assertEqual(20, position_drift["band"]["target_weight_pct"])
+
+    def test_confirmed_fills_merge_incrementally_and_reject_overfill(self):
+        repository = MemoryInvestmentRepository()
+        plan = replace(ActionPlan.create(
+            "portfolio:main",
+            "decision:incremental-fill",
+            "ADD",
+            repository.mandate.policy_version,
+            "generation:1",
+            order_intents=[OrderIntent("intent:incremental", "035420", "BUY", 2, limit_price=100)],
+        ), status="approved")
+        repository.save_action_plan(plan)
+        service = TradeExecutionService(repository)
+
+        first = service.record_fills(plan.plan_id, [{
+            "providerExecutionId": "provider:fill:1",
+            "orderIntentId": "intent:incremental",
+            "symbol": "035420",
+            "side": "BUY",
+            "quantity": 1,
+            "price": 100,
+            "fee": 0,
+            "currency": "KRW",
+            "executedAt": "2026-08-12T06:01:00Z",
+        }])
+        second = service.record_fills(plan.plan_id, [{
+            "providerExecutionId": "provider:fill:2",
+            "orderIntentId": "intent:incremental",
+            "symbol": "035420",
+            "side": "BUY",
+            "quantity": 1,
+            "price": 101,
+            "fee": 0,
+            "currency": "KRW",
+            "executedAt": "2026-08-12T06:02:00Z",
+        }])
+        duplicate = service.record_fills(plan.plan_id, [{
+            "providerExecutionId": "provider:fill:2",
+            "orderIntentId": "intent:incremental",
+            "symbol": "035420",
+            "side": "BUY",
+            "quantity": 1,
+            "price": 101,
+            "fee": 0,
+            "currency": "KRW",
+            "executedAt": "2026-08-12T06:02:00Z",
+        }])
+        overfill = service.record_fills(plan.plan_id, [{
+            "providerExecutionId": "provider:fill:3",
+            "orderIntentId": "intent:incremental",
+            "symbol": "035420",
+            "side": "BUY",
+            "quantity": 1,
+            "price": 102,
+            "fee": 0,
+            "currency": "KRW",
+            "executedAt": "2026-08-12T06:03:00Z",
+        }])
+
+        self.assertEqual(1, first["actualLedgerEntryCount"])
+        self.assertEqual(1, second["actualLedgerEntryCount"])
+        self.assertEqual(2, len(second["executionEpisode"]["fills"]))
+        self.assertEqual(0, duplicate["actualLedgerEntryCount"])
+        self.assertIn("fill-quantity-exceeds-intent", overfill["validationErrors"])
 
     def test_ai_action_is_compiled_to_policy_bounded_plan_and_requires_approval(self):
         repository = MemoryInvestmentRepository()
@@ -613,7 +980,7 @@ class PortfolioLifecycleServiceTests(unittest.TestCase):
     def test_portfolio_lifecycle_projects_as_factual_abox_candidates(self):
         repository = MemoryInvestmentRepository()
         snapshot = live_snapshot()
-        service = PortfolioAccountingService(repository)
+        service = PortfolioAccountingService(repository, market_time_series_store=MemoryPortfolioTimeSeriesStore())
         service.observe_snapshot(snapshot)
         snapshot = live_snapshot(quantity=11, generated_at="2026-08-12T06:10:00Z")
         lifecycle = service.observe_snapshot(snapshot)
@@ -640,11 +1007,19 @@ class PortfolioLifecycleServiceTests(unittest.TestCase):
         self.assertIn("InferredPortfolioActivity", classes)
         self.assertIn("PortfolioActivityEpisode", classes)
         self.assertIn("PortfolioStateSnapshot", classes)
+        self.assertIn("PortfolioRiskSnapshot", classes)
+        self.assertIn("PositionRiskMetric", classes)
+        self.assertIn("BenchmarkIndex", classes)
+        self.assertIn("RebalanceScenario", classes)
         self.assertIn("EVALUATES_PORTFOLIO_CANDIDATE", relation_types)
         self.assertIn("RECORDS_PORTFOLIO_ACTIVITY", relation_types)
         self.assertIn("INFERRED_FROM_SNAPSHOT_CHANGE", relation_types)
         self.assertIn("HAS_PORTFOLIO_ACTIVITY", relation_types)
         self.assertIn("HAS_PORTFOLIO_STATE", relation_types)
+        self.assertIn("HAS_RISK_SNAPSHOT", relation_types)
+        self.assertIn("HAS_POSITION_RISK", relation_types)
+        self.assertIn("HAS_BETA_TO", relation_types)
+        self.assertIn("HAS_REBALANCE_SCENARIO", relation_types)
         candidates = [item for item in graph.entities if (item.properties or {}).get("tboxClass") == "PortfolioActionCandidate"]
         self.assertTrue(candidates)
         self.assertTrue(all((item.properties or {}).get("executable") is False for item in candidates))
@@ -703,6 +1078,7 @@ class PortfolioLifecycleServiceTests(unittest.TestCase):
 
         self.assertIn("CREATE TABLE IF NOT EXISTS portfolio_reconciliations", schema)
         self.assertIn("CREATE TABLE IF NOT EXISTS portfolio_exposure_snapshots", schema)
+        self.assertIn("CREATE TABLE IF NOT EXISTS portfolio_risk_snapshots", schema)
         self.assertIn("CREATE TABLE IF NOT EXISTS investment_action_plan_reviews", schema)
         self.assertNotIn("CREATE TABLE IF NOT EXISTS broker_activity_sync_states", schema)
         self.assertIn("CREATE TABLE IF NOT EXISTS portfolio_decision_cycles", schema)
@@ -902,6 +1278,7 @@ class PortfolioLifecycleServiceTests(unittest.TestCase):
             "portfolioState": {"stateId": "state:1", "positions": [{"symbol": "035420"}]},
             "recentActivityEpisodes": [{"episodeId": "activity:1", "classification": "probable-buy"}],
             "decisionActionObservations": [{"observationId": "observed:1", "correspondence": "aligned"}],
+            "portfolioRiskSnapshot": {"riskSnapshotId": "risk:1", "sampleCount": 60},
             "portfolioDecisionCycle": {"cycleId": "cycle:1"},
         }
         store = SimpleNamespace(latest_portfolio_lifecycle=lambda _portfolio_id: lifecycle)
@@ -916,6 +1293,7 @@ class PortfolioLifecycleServiceTests(unittest.TestCase):
 
         self.assertEqual("state:1", job.context["portfolioLifecycle"]["portfolioState"]["stateId"])
         self.assertEqual("activity:1", job.context["portfolioLifecycle"]["recentActivityEpisodes"][0]["episodeId"])
+        self.assertEqual("risk:1", job.context["portfolioLifecycle"]["portfolioRiskSnapshot"]["riskSnapshotId"])
 
 
 if __name__ == "__main__":

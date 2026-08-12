@@ -5,7 +5,7 @@ import hashlib
 from typing import Dict, Iterable, List
 
 
-PORTFOLIO_REBALANCING_VERSION = "portfolio-rebalancing-v1"
+PORTFOLIO_REBALANCING_VERSION = "portfolio-rebalancing-v2"
 
 
 @dataclass(frozen=True)
@@ -58,13 +58,41 @@ class RebalanceLeg:
     target_delta_pct: float
     maximum_notional: float = 0.0
     symbol: str = ""
+    estimated_cost: float = 0.0
+    before_weight_pct: float = 0.0
+    after_weight_pct: float = 0.0
+    rationale: str = ""
 
     def __post_init__(self) -> None:
         if str(self.side or "").upper() not in {"INCREASE", "DECREASE", "HOLD"}:
             raise ValueError("Rebalance leg side must be INCREASE, DECREASE, or HOLD.")
+        if self.maximum_notional < 0 or self.estimated_cost < 0:
+            raise ValueError("Rebalance leg notional and cost cannot be negative.")
 
     def to_dict(self) -> Dict[str, object]:
         return asdict(self)
+
+
+@dataclass(frozen=True)
+class RebalanceScenario:
+    scenario_id: str
+    scenario_type: str
+    label: str
+    legs: List[RebalanceLeg] = field(default_factory=list)
+    before_metrics: Dict[str, object] = field(default_factory=dict)
+    after_metrics: Dict[str, object] = field(default_factory=dict)
+    estimated_cost: float = 0.0
+    turnover_pct: float = 0.0
+    policy_effects: List[str] = field(default_factory=list)
+    invalidation_conditions: List[str] = field(default_factory=list)
+    data_state: str = "partial"
+    missing_data: List[str] = field(default_factory=list)
+
+    def to_dict(self) -> Dict[str, object]:
+        return {
+            **asdict(self),
+            "legs": [item.to_dict() for item in self.legs],
+        }
 
 
 @dataclass(frozen=True)
@@ -75,6 +103,8 @@ class RebalanceProposal:
     exposure_snapshot_id: str
     drifts: List[AllocationDrift] = field(default_factory=list)
     legs: List[RebalanceLeg] = field(default_factory=list)
+    scenarios: List[RebalanceScenario] = field(default_factory=list)
+    recommended_scenario_id: str = ""
     status: str = "review-required"
     created_at: str = ""
 
@@ -86,6 +116,8 @@ class RebalanceProposal:
         exposure_snapshot_id: str,
         drifts: Iterable[AllocationDrift],
         legs: Iterable[RebalanceLeg] = None,
+        scenarios: Iterable[RebalanceScenario] = None,
+        recommended_scenario_id: str = "",
         created_at: str = "",
     ):
         raw = "|".join([str(portfolio_id), str(mandate_version), str(exposure_snapshot_id)])
@@ -96,6 +128,8 @@ class RebalanceProposal:
             exposure_snapshot_id=str(exposure_snapshot_id or ""),
             drifts=list(drifts or []),
             legs=list(legs or []),
+            scenarios=list(scenarios or []),
+            recommended_scenario_id=str(recommended_scenario_id or ""),
             created_at=str(created_at or ""),
         )
 
@@ -109,6 +143,11 @@ class RebalanceProposal:
         drift_keys = {item.allocation_key for item in self.drifts if item.band_delta_pct != 0}
         if any(item.allocation_key not in drift_keys for item in self.legs if item.side != "HOLD"):
             errors.append("leg-without-band-drift")
+        scenario_ids = [item.scenario_id for item in self.scenarios]
+        if len(set(scenario_ids)) != len(scenario_ids):
+            errors.append("duplicate-rebalance-scenario")
+        if self.recommended_scenario_id and self.recommended_scenario_id not in set(scenario_ids):
+            errors.append("recommended-scenario-missing")
         return errors
 
     def to_dict(self) -> Dict[str, object]:
@@ -120,6 +159,8 @@ class RebalanceProposal:
             "exposureSnapshotId": self.exposure_snapshot_id,
             "drifts": [item.to_dict() for item in self.drifts],
             "legs": [item.to_dict() for item in self.legs],
+            "scenarios": [item.to_dict() for item in self.scenarios],
+            "recommendedScenarioId": self.recommended_scenario_id,
             "status": self.status,
             "createdAt": self.created_at,
         }

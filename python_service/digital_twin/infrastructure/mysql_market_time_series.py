@@ -199,6 +199,72 @@ class MySQLMarketTimeSeriesStore(MySQLOperationalConnection):
             "unchangedHistoricalCount": skipped,
         }
 
+    def load_portfolio_analysis_series(
+        self,
+        account_id: str,
+        symbols: Iterable[str],
+        as_of: str = "",
+        limit_per_symbol: int = 260,
+    ) -> Dict[str, List[Dict[str, object]]]:
+        """Load one bounded daily-history packet for portfolio analytics.
+
+        Global provider candles are preferred because they are consistent
+        across accounts. Account daily rollups are used only when a global
+        series is unavailable. The observed-at cutoff prevents look-ahead on
+        historical snapshot replay.
+        """
+        clean_symbols = sorted({
+            str(symbol or "").upper().strip()
+            for symbol in symbols or []
+            if str(symbol or "").strip()
+        })
+        if not self.enabled() or not clean_symbols:
+            return {}
+        limit_value = positive_int(limit_per_symbol, 260, 20, 1000)
+        cutoff = iso_utc(as_of)
+        placeholders = ",".join(["%s"] * len(clean_symbols))
+        cutoff_clause = " AND observations.observed_at <= %s" if cutoff else ""
+        params: List[object] = [
+            str(account_id or ""),
+            GLOBAL_MARKET_ACCOUNT_ID,
+            *clean_symbols,
+        ]
+        if cutoff:
+            params.append(cutoff)
+        params.append(limit_value)
+        with self.connect() as connection:
+            rows = connection.execute(
+                """
+                SELECT * FROM (
+                    SELECT observations.*,
+                           ROW_NUMBER() OVER (
+                               PARTITION BY account_id, symbol
+                               ORDER BY bucket_at DESC
+                           ) AS row_number_value
+                    FROM market_time_series_observations observations
+                    WHERE account_id IN (%s, %s)
+                      AND granularity = '1d'
+                      AND symbol IN (""" + placeholders + ")" + cutoff_clause + """
+                ) ranked
+                WHERE ranked.row_number_value <= %s
+                ORDER BY symbol, bucket_at ASC
+                """,
+                params,
+            ).fetchall()
+        grouped: Dict[tuple, List[Dict[str, object]]] = defaultdict(list)
+        for row in rows or []:
+            grouped[(str(row.get("account_id") or ""), str(row.get("symbol") or "").upper())].append(
+                self.observation_payload(row)
+            )
+        result: Dict[str, List[Dict[str, object]]] = {}
+        for symbol in clean_symbols:
+            global_rows = grouped.get((GLOBAL_MARKET_ACCOUNT_ID, symbol), [])
+            account_rows = grouped.get((str(account_id or ""), symbol), [])
+            selected = global_rows or account_rows
+            if selected:
+                result[symbol] = list(selected[-limit_value:])
+        return result
+
     def latest_daily_buckets_with_connection(self, connection, symbols: Iterable[str]) -> Dict[str, str]:
         clean_symbols = sorted({str(symbol or "").upper().strip() for symbol in symbols or [] if str(symbol or "").strip()})
         if not clean_symbols:

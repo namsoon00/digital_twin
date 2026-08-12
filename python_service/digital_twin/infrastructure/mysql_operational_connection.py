@@ -598,6 +598,23 @@ MYSQL_SCHEMA = [
     ) ENGINE=InnoDB DEFAULT CHARSET=utf8mb4 COLLATE=utf8mb4_unicode_ci
     """,
     """
+    CREATE TABLE IF NOT EXISTS portfolio_risk_snapshots (
+        risk_snapshot_id VARCHAR(191) PRIMARY KEY,
+        portfolio_id VARCHAR(191) NOT NULL,
+        observed_at VARCHAR(40) NOT NULL DEFAULT '',
+        data_state VARCHAR(32) NOT NULL DEFAULT 'partial',
+        sample_count INT NOT NULL DEFAULT 0,
+        annualized_volatility_pct DECIMAL(16,6) NOT NULL DEFAULT 0,
+        maximum_drawdown_pct DECIMAL(16,6) NOT NULL DEFAULT 0,
+        maximum_pairwise_correlation DECIMAL(16,6) NOT NULL DEFAULT 0,
+        payload_json LONGTEXT NOT NULL,
+        created_at VARCHAR(40) NOT NULL,
+        updated_at VARCHAR(40) NOT NULL,
+        KEY idx_portfolio_risk_latest (portfolio_id, observed_at, risk_snapshot_id),
+        KEY idx_portfolio_risk_state (portfolio_id, data_state, observed_at)
+    ) ENGINE=InnoDB DEFAULT CHARSET=utf8mb4 COLLATE=utf8mb4_unicode_ci
+    """,
+    """
     CREATE TABLE IF NOT EXISTS portfolio_decision_cycles (
         cycle_id VARCHAR(191) PRIMARY KEY,
         portfolio_id VARCHAR(191) NOT NULL,

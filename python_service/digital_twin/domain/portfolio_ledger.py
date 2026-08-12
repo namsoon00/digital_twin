@@ -160,6 +160,13 @@ class PortfolioLedger:
         self.state = PortfolioLedgerState(str(portfolio_id or ""), str(account_id or ""))
 
     def replay(self, entries: Iterable[PortfolioLedgerEntry]) -> PortfolioLedgerState:
+        rows = list(entries or [])
+        superseded_entry_ids = {
+            str(superseded_id)
+            for entry in rows
+            for superseded_id in list((entry.payload or {}).get("supersedesEntryIds") or [])
+            if str(superseded_id or "")
+        }
         type_priority = {
             OPENING_POSITION: 0,
             OPENING_CASH: 0,
@@ -170,9 +177,11 @@ class PortfolioLedger:
             SNAPSHOT_CASH_ADJUSTMENT: 2,
         }
         for entry in sorted(
-            entries or [],
+            rows,
             key=lambda item: (item.occurred_at, type_priority.get(item.entry_type, 1), item.entry_id),
         ):
+            if entry.entry_id in superseded_entry_ids:
+                continue
             self.apply(entry)
         return self.state
 
@@ -324,6 +333,129 @@ class PortfolioLedger:
         # Reconciliation remains an immutable audit fact. It does not silently
         # rewrite trade-derived lots; discrepancies are handled explicitly.
         return None
+
+
+def execution_ledger_entries(
+    episode: object,
+    plan: object,
+    existing_entries: Iterable[PortfolioLedgerEntry] = None,
+) -> List[PortfolioLedgerEntry]:
+    """Translate provider fills into idempotent actual ledger facts.
+
+    A later provider fill can replace one matching snapshot-inferred position
+    observation and its cash adjustment. The inferred rows stay immutable for
+    audit, while replay ignores IDs listed by the actual fill.
+    """
+    portfolio_id = str(getattr(episode, "portfolio_id", "") or getattr(plan, "portfolio_id", ""))
+    account_id = portfolio_id[len("portfolio:"):] if portfolio_id.startswith("portfolio:") else portfolio_id
+    already_superseded = {
+        str(superseded_id)
+        for item in existing_entries or []
+        for superseded_id in list((item.payload or {}).get("supersedesEntryIds") or [])
+        if str(superseded_id or "")
+    }
+    inferred = [
+        item for item in existing_entries or []
+        if item.entry_type in INFERRED_SNAPSHOT_ENTRY_TYPES
+        and bool((item.payload or {}).get("replaceableByActualActivity", False))
+        and item.entry_id not in already_superseded
+    ]
+    claimed = set()
+    fills = list(getattr(episode, "fills", None) or [])
+    fill_groups = {}
+    for fill in fills:
+        key = (
+            str(getattr(fill, "symbol", "") or "").upper(),
+            str(getattr(fill, "side", "") or "").upper(),
+        )
+        fill_groups.setdefault(key, []).append(fill)
+    superseded_by_provider_id = {}
+
+    def claim_inferred(matched: PortfolioLedgerEntry) -> List[str]:
+        superseded = [matched.entry_id]
+        claimed.add(matched.entry_id)
+        observation_id = str((matched.payload or {}).get("observationId") or "")
+        for item in inferred:
+            if (
+                item.entry_id not in claimed
+                and item.entry_type == SNAPSHOT_CASH_ADJUSTMENT
+                and str((item.payload or {}).get("observationId") or "") == observation_id
+            ):
+                superseded.append(item.entry_id)
+                claimed.add(item.entry_id)
+        return superseded
+
+    for (symbol, side), group in fill_groups.items():
+        expected_types = (
+            {INFERRED_POSITION_INCREASE}
+            if side == BUY
+            else {INFERRED_POSITION_DECREASE, INFERRED_POSITION_EXIT}
+        )
+        candidates = sorted(
+            (
+                item for item in inferred
+                if item.entry_id not in claimed
+                and item.entry_type in expected_types
+                and item.symbol == symbol
+            ),
+            key=lambda item: (item.occurred_at, item.entry_id),
+            reverse=True,
+        )
+        group_total = sum((decimal_value(getattr(fill, "quantity", 0)) for fill in group), Decimal("0"))
+        aggregate_match = next(
+            (item for item in candidates if abs(item.quantity - group_total) <= Decimal("0.000001")),
+            None,
+        )
+        if aggregate_match:
+            latest_fill = max(
+                group,
+                key=lambda item: (
+                    str(getattr(item, "executed_at", "") or ""),
+                    str(getattr(item, "provider_execution_id", "") or ""),
+                ),
+            )
+            superseded_by_provider_id[str(getattr(latest_fill, "provider_execution_id", "") or "")] = claim_inferred(
+                aggregate_match
+            )
+            continue
+        for fill in sorted(group, key=lambda item: str(getattr(item, "executed_at", "") or "")):
+            quantity = decimal_value(getattr(fill, "quantity", 0))
+            matched = next(
+                (item for item in candidates if item.entry_id not in claimed and abs(item.quantity - quantity) <= Decimal("0.000001")),
+                None,
+            )
+            if matched:
+                superseded_by_provider_id[str(getattr(fill, "provider_execution_id", "") or "")] = claim_inferred(matched)
+
+    result = []
+    for fill in fills:
+        symbol = str(getattr(fill, "symbol", "") or "").upper()
+        side = str(getattr(fill, "side", "") or "").upper()
+        quantity = decimal_value(getattr(fill, "quantity", 0))
+        provider_execution_id = str(getattr(fill, "provider_execution_id", "") or "")
+        result.append(PortfolioLedgerEntry.create(
+            portfolio_id,
+            account_id,
+            BUY if side == BUY else SELL,
+            str(getattr(fill, "executed_at", "") or ""),
+            entry_id="ledger-fill:" + hashlib.sha256(provider_execution_id.encode("utf-8")).hexdigest()[:24],
+            source_reference="provider-fill:" + provider_execution_id,
+            symbol=symbol,
+            currency=str(getattr(fill, "currency", "KRW") or "KRW"),
+            quantity=quantity,
+            unit_price=getattr(fill, "price", 0),
+            amount=quantity * decimal_value(getattr(fill, "price", 0)),
+            fee=getattr(fill, "fee", 0),
+            payload={
+                "source": "provider-execution-fill",
+                "providerExecutionId": provider_execution_id,
+                "executionEpisodeId": str(getattr(episode, "execution_episode_id", "") or ""),
+                "actionPlanId": str(getattr(plan, "plan_id", "") or ""),
+                "supersedesEntryIds": list(superseded_by_provider_id.get(provider_execution_id) or []),
+                "actualActivity": True,
+            },
+        ))
+    return result
 
 
 @dataclass(frozen=True)

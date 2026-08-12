@@ -57,7 +57,7 @@ class InvestmentDomainArchitectureTests(unittest.TestCase):
         self.assertNotIn("private-secret", str(payload))
         self.assertNotIn("private-bot-token", str(payload))
         self.assertEqual(10.0, mandate.min_cash_weight_pct)
-        self.assertTrue(mandate.policy_version.startswith("investment-mandate-v1:"))
+        self.assertTrue(mandate.policy_version.startswith("investment-mandate-v2:"))
         self.assertEqual(
             mandate.policy_version,
             account.investment_mandate("2027-01-01T00:00:00Z").policy_version,

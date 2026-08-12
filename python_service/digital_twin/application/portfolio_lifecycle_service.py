@@ -35,8 +35,10 @@ from ..domain.portfolio_rebalancing import (
     AllocationBand,
     RebalanceLeg,
     RebalanceProposal,
+    RebalanceScenario,
     allocation_drifts,
 )
+from ..domain.portfolio_analytics import PortfolioRiskSnapshot, portfolio_risk_snapshot, with_policy_limits
 from ..domain.portfolio_decision_cycle import PortfolioActionCandidate, PortfolioDecisionCycle
 from ..domain.risk_exposure import ExposureMetric, ExposureSnapshot
 from ..domain.trade_execution import (
@@ -47,6 +49,7 @@ from ..domain.trade_execution import (
     ActionPlanReview,
     ExecutionEpisode,
     OrderIntent,
+    TradeFill,
     stable_execution_id,
 )
 from .portfolio_activity_notification_service import portfolio_activity_notification_job
@@ -124,6 +127,7 @@ class PortfolioLifecycleObservation:
     exposure_snapshot: ExposureSnapshot
     rebalance_proposal: Optional[RebalanceProposal]
     decision_cycle: PortfolioDecisionCycle
+    risk_snapshot: Optional[PortfolioRiskSnapshot] = None
     snapshot_trust: Dict[str, object] = None
     inferred_activities: List[Dict[str, object]] = None
     inferred_entry_count: int = 0
@@ -143,6 +147,7 @@ class PortfolioLifecycleObservation:
             "exposureSnapshot": self.exposure_snapshot.to_dict(),
             "rebalanceProposal": self.rebalance_proposal.to_dict() if self.rebalance_proposal else {},
             "portfolioDecisionCycle": self.decision_cycle.to_dict(),
+            "portfolioRiskSnapshot": self.risk_snapshot.to_dict() if self.risk_snapshot else {},
             "snapshotTrust": dict(self.snapshot_trust or {}),
             "inferredEntryCount": self.inferred_entry_count,
             "inferredActivities": list(self.inferred_activities or []),
@@ -157,10 +162,19 @@ class PortfolioLifecycleObservation:
 class PortfolioAccountingService:
     """Reconcile complete broker balances and record bounded inferred changes."""
 
-    def __init__(self, repository, account_repository=None, investment_domain_service=None):
+    def __init__(
+        self,
+        repository,
+        account_repository=None,
+        investment_domain_service=None,
+        market_time_series_store=None,
+        settings=None,
+    ):
         self.repository = repository
         self.account_repository = account_repository
         self.investment_domain_service = investment_domain_service
+        self.market_time_series_store = market_time_series_store
+        self.settings = dict(settings or {})
 
     def append_ledger_entries(self, entries: Iterable[PortfolioLedgerEntry]) -> int:
         rows = list(entries or [])
@@ -191,6 +205,7 @@ class PortfolioAccountingService:
                 advanced = self.repository.advance_snapshot_checkpoint(expected_version, checkpoint)
                 if advanced.get("status") == "checkpoint-conflict":
                     continue
+                analysis = self.refresh_analysis(snapshot, portfolio_id, mandate)
                 return {
                     **advanced,
                     "reason": reason,
@@ -203,6 +218,7 @@ class PortfolioAccountingService:
                         **checkpoint.to_dict(),
                         "checkpointVersion": advanced.get("actualCheckpointVersion"),
                     },
+                    **analysis,
                 }
             if acceptance in {"duplicate", "stale", "quarantined"}:
                 visible_checkpoint = checkpoint
@@ -241,8 +257,9 @@ class PortfolioAccountingService:
             ledger_state = PortfolioLedger(portfolio_id, snapshot.account_id).replay(prospective_entries)
             reconciliation = self.reconciliation(snapshot, portfolio_id, ledger_state)
             exposure = self.exposure_snapshot(snapshot, portfolio_id, mandate)
-            proposal = self.rebalance_proposal(snapshot, mandate, exposure)
-            decision_cycle = self.portfolio_decision_cycle(snapshot, mandate, exposure, reconciliation)
+            risk = self.risk_snapshot(snapshot, portfolio_id, mandate, exposure)
+            proposal = self.rebalance_proposal(snapshot, mandate, exposure, risk)
+            decision_cycle = self.portfolio_decision_cycle(snapshot, mandate, exposure, reconciliation, risk, proposal)
             episode = PortfolioActivityEpisode.from_entries(inferred_entries, checkpoint, previous)
             state_snapshot = PortfolioStateSnapshot.from_snapshot(
                 snapshot,
@@ -290,6 +307,7 @@ class PortfolioAccountingService:
                 event,
                 job,
                 reasoning_event,
+                risk_snapshot=risk,
             )
             if committed.get("status") == "checkpoint-conflict":
                 continue
@@ -308,6 +326,7 @@ class PortfolioAccountingService:
                 exposure_snapshot=exposure,
                 rebalance_proposal=proposal,
                 decision_cycle=decision_cycle,
+                risk_snapshot=risk,
                 snapshot_trust=trust,
                 inferred_activities=[activity_payload(item) for item in inferred_entries] if inserted_count else [],
                 inferred_entry_count=len(inferred_entries) if inserted_count else 0,
@@ -356,10 +375,14 @@ class PortfolioAccountingService:
         self.repository.save_reconciliation(reconciliation)
         exposure = self.exposure_snapshot(snapshot, portfolio_id, mandate)
         self.repository.save_exposure_snapshot(exposure)
-        proposal = self.rebalance_proposal(snapshot, mandate, exposure)
+        risk = self.risk_snapshot(snapshot, portfolio_id, mandate, exposure)
+        saver = getattr(self.repository, "save_risk_snapshot", None)
+        if callable(saver):
+            saver(risk)
+        proposal = self.rebalance_proposal(snapshot, mandate, exposure, risk)
         if proposal:
             self.repository.save_rebalance_proposal(proposal)
-        decision_cycle = self.portfolio_decision_cycle(snapshot, mandate, exposure, reconciliation)
+        decision_cycle = self.portfolio_decision_cycle(snapshot, mandate, exposure, reconciliation, risk, proposal)
         self.repository.save_portfolio_decision_cycle(decision_cycle)
         return PortfolioLifecycleObservation(
             portfolio_id=portfolio_id,
@@ -367,6 +390,7 @@ class PortfolioAccountingService:
             exposure_snapshot=exposure,
             rebalance_proposal=proposal,
             decision_cycle=decision_cycle,
+            risk_snapshot=risk,
             snapshot_trust=trust,
             inferred_activities=[activity_payload(item) for item in inferred_entries] if inferred_entry_count else [],
             inferred_entry_count=inferred_entry_count,
@@ -566,17 +590,127 @@ class PortfolioAccountingService:
             observed_at=observed_at,
         )
 
+    def risk_snapshot(
+        self,
+        snapshot: AccountSnapshot,
+        portfolio_id: str,
+        mandate: InvestmentMandate,
+        exposure: ExposureSnapshot,
+    ) -> PortfolioRiskSnapshot:
+        weights = {
+            metric.key.upper(): metric.ratio_pct
+            for metric in exposure.metrics
+            if metric.exposure_type == "position" and metric.ratio_pct > 0
+        }
+        positions = {
+            str(item.symbol or "").upper(): item
+            for item in snapshot.positions or []
+            if not item.is_cash() and number(item.quantity) > 0
+        }
+        benchmark_by_symbol = {}
+        for symbol in weights:
+            position = positions.get(symbol)
+            market = str(getattr(position, "market", "") or "").upper()
+            currency = str(getattr(position, "currency", "") or "").upper()
+            benchmark_key = "CRYPTO" if market in {"CRYPTO", "COIN"} or currency in {"BTC", "ETH"} else (
+                "US" if market in {"US", "USA", "NASDAQ", "NYSE", "AMEX"} or currency == "USD" else "KR"
+            )
+            benchmark = mandate.benchmark_symbols.get(benchmark_key, "")
+            if benchmark:
+                benchmark_by_symbol[symbol] = benchmark
+        symbols = list(dict.fromkeys([*weights, *benchmark_by_symbol.values()]))
+        series = {}
+        loader = getattr(self.market_time_series_store, "load_portfolio_analysis_series", None)
+        if callable(loader) and symbols:
+            series = loader(
+                snapshot.account_id,
+                symbols,
+                as_of=str(snapshot.generated_at or utc_now_iso()),
+                limit_per_symbol=max(30, min(1000, int(number(self.settings.get("portfolioRiskHistoryDays")) or 260))),
+            )
+        measured = portfolio_risk_snapshot(
+            portfolio_id,
+            str(snapshot.generated_at or utc_now_iso()),
+            series,
+            weights,
+            benchmark_by_symbol,
+        )
+        return with_policy_limits(
+            measured,
+            max_volatility_pct=mandate.max_portfolio_volatility_pct,
+            max_drawdown_pct=mandate.max_portfolio_drawdown_pct,
+            max_correlation=mandate.max_pairwise_correlation,
+            policy_version=mandate.policy_version,
+        )
+
+    def refresh_analysis(
+        self,
+        snapshot: AccountSnapshot,
+        portfolio_id: str,
+        mandate: InvestmentMandate,
+    ) -> Dict[str, object]:
+        entries = list(self.repository.ledger_entries(portfolio_id, limit=100000) or [])
+        ledger_state = PortfolioLedger(portfolio_id, snapshot.account_id).replay(entries)
+        reconciliation = self.reconciliation(snapshot, portfolio_id, ledger_state)
+        exposure = self.exposure_snapshot(snapshot, portfolio_id, mandate)
+        risk = self.risk_snapshot(snapshot, portfolio_id, mandate, exposure)
+        proposal = self.rebalance_proposal(snapshot, mandate, exposure, risk)
+        cycle = self.portfolio_decision_cycle(snapshot, mandate, exposure, reconciliation, risk, proposal)
+        symbols = [item.symbol for item in risk.positions]
+        source_event = None
+        reasoning_event = None
+        if self.investment_domain_service and symbols:
+            source_event = self.investment_domain_service.risk_observed_event(risk, symbols)
+            fact_types = ["PortfolioRiskSnapshot", "PositionRiskMetric", "RebalanceScenario"]
+            reasoning_event = ontology_reasoning_requested_event(
+                source_event,
+                "portfolio-risk-change",
+                symbols=symbols,
+                changed_count=1,
+                observed_count=len(risk.positions),
+                fact_types=fact_types,
+                fact_types_by_symbol={symbol: fact_types for symbol in symbols},
+                changed_fields_by_symbol={
+                    symbol: ["portfolioRisk", "positionRisk", "rebalanceScenario"] for symbol in symbols
+                },
+                reason="저장된 시계열에서 포트폴리오 위험 지문이 변경됐습니다.",
+                importance_gate="portfolio-risk-fingerprint-change",
+            )
+        bundle_saver = getattr(self.repository, "save_portfolio_analysis_bundle", None)
+        if callable(bundle_saver):
+            saved = bundle_saver(risk, exposure, proposal, cycle, source_event, reasoning_event)
+            if saved.get("riskChanged") and self.investment_domain_service and source_event and reasoning_event:
+                self.investment_domain_service.dispatch_recorded(source_event)
+                self.investment_domain_service.dispatch_recorded(reasoning_event)
+        else:
+            self.repository.save_exposure_snapshot(exposure)
+            risk_saver = getattr(self.repository, "save_risk_snapshot", None)
+            if callable(risk_saver):
+                risk_saver(risk)
+            if proposal:
+                self.repository.save_rebalance_proposal(proposal)
+            self.repository.save_portfolio_decision_cycle(cycle)
+            if self.investment_domain_service and source_event and reasoning_event:
+                self.investment_domain_service.publish(source_event)
+                self.investment_domain_service.publish(reasoning_event)
+        return {
+            "reconciliation": reconciliation.to_dict(),
+            "exposureSnapshot": exposure.to_dict(),
+            "portfolioRiskSnapshot": risk.to_dict(),
+            "rebalanceProposal": proposal.to_dict() if proposal else {},
+            "portfolioDecisionCycle": cycle.to_dict(),
+        }
+
     def rebalance_proposal(
         self,
         snapshot: AccountSnapshot,
         mandate: InvestmentMandate,
         exposure: ExposureSnapshot,
+        risk: Optional[PortfolioRiskSnapshot] = None,
     ) -> Optional[RebalanceProposal]:
         breached = exposure.over_policy_metrics()
-        if not breached:
-            return None
         total = max(0.0, number(snapshot.portfolio.total))
-        bands = []
+        bands_by_key = {}
         current = {}
         metric_by_key = {}
         for metric in breached:
@@ -584,23 +718,105 @@ class PortfolioAccountingService:
             current[allocation_key] = metric.ratio_pct
             metric_by_key[allocation_key] = metric
             if metric.policy_direction == "minimum":
-                bands.append(AllocationBand(allocation_key, metric.policy_limit_pct, metric.policy_limit_pct, 100))
+                bands_by_key[allocation_key] = AllocationBand(
+                    allocation_key, metric.policy_limit_pct, metric.policy_limit_pct, 100
+                )
             else:
-                bands.append(AllocationBand(allocation_key, metric.policy_limit_pct, 0, metric.policy_limit_pct))
-        drifts = allocation_drifts(current, bands)
+                bands_by_key[allocation_key] = AllocationBand(
+                    allocation_key, metric.policy_limit_pct, 0, metric.policy_limit_pct
+                )
+        exposure_by_key = {
+            metric.exposure_type + ":" + metric.key: metric
+            for metric in exposure.metrics
+        }
+        band_width = max(0.0, mandate.allocation_band_pct)
+        for allocation_key, target in sorted(mandate.target_allocations.items()):
+            metric = exposure_by_key.get(allocation_key)
+            current[allocation_key] = metric.ratio_pct if metric else 0.0
+            if metric:
+                metric_by_key[allocation_key] = metric
+            bands_by_key[allocation_key] = AllocationBand(
+                allocation_key,
+                target,
+                max(0.0, target - band_width),
+                min(100.0, target + band_width),
+            )
+        drifts = allocation_drifts(current, bands_by_key.values())
         legs = []
         for drift in drifts:
             if not drift.band_delta_pct:
                 continue
-            metric = metric_by_key[drift.allocation_key]
-            if metric.exposure_type != "position":
+            metric = metric_by_key.get(drift.allocation_key)
+            exposure_type, _, exposure_key = drift.allocation_key.partition(":")
+            if exposure_type != "position":
                 continue
+            symbol = metric.key if metric else exposure_key
+            raw_notional = abs(drift.target_delta_pct) * total / 100
+            turnover_cap = mandate.max_rebalance_turnover_pct * total / 100
+            maximum_notional = min(raw_notional, turnover_cap) if turnover_cap > 0 else 0.0
             legs.append(RebalanceLeg(
                 allocation_key=drift.allocation_key,
                 side="DECREASE" if drift.band_delta_pct > 0 else "INCREASE",
-                target_delta_pct=-drift.band_delta_pct,
-                maximum_notional=abs(drift.band_delta_pct) * total / 100,
-                symbol=metric.key,
+                target_delta_pct=-drift.target_delta_pct,
+                maximum_notional=maximum_notional,
+                symbol=symbol,
+                estimated_cost=maximum_notional * mandate.estimated_transaction_cost_bps / 10000,
+                before_weight_pct=drift.current_weight_pct,
+                after_weight_pct=drift.band.target_weight_pct,
+                rationale="정책 배분 허용 범위 복원 후보",
+            ))
+        risk_breached = bool(risk and any([
+            risk.volatility_policy_delta_pct > 0,
+            risk.drawdown_policy_delta_pct > 0,
+            risk.correlation_policy_delta > 0,
+        ]))
+        if not any(item.band_delta_pct for item in drifts) and not risk_breached:
+            return None
+        before_metrics = {
+            "portfolioTotal": total,
+            "annualizedVolatilityPct": risk.annualized_volatility_pct if risk else None,
+            "maximumDrawdownPct": risk.maximum_drawdown_pct if risk else None,
+            "maximumPairwiseCorrelation": risk.maximum_pairwise_correlation if risk else None,
+        }
+        scenarios = [RebalanceScenario(
+            scenario_id="rebalance-scenario:no-action:" + exposure.snapshot_id.split(":")[-1],
+            scenario_type="NO_ACTION",
+            label="현재 구성 유지",
+            before_metrics=before_metrics,
+            after_metrics=before_metrics,
+            policy_effects=["현재 배분과 위험 상태를 유지합니다."],
+            data_state=risk.data_state if risk else "partial",
+            missing_data=list(risk.missing_data if risk else ["portfolioRiskSnapshot"]),
+        )]
+        if legs:
+            scenarios.append(RebalanceScenario(
+                scenario_id="rebalance-scenario:restore-band:" + exposure.snapshot_id.split(":")[-1],
+                scenario_type="RESTORE_POLICY_BANDS",
+                label="정책 배분 범위 복원",
+                legs=legs,
+                before_metrics=before_metrics,
+                after_metrics={**before_metrics, "allocationBandsRestored": True},
+                estimated_cost=round(sum(item.estimated_cost for item in legs), 4),
+                turnover_pct=round(sum(item.maximum_notional for item in legs) / (total or 1.0) * 100, 6),
+                policy_effects=["정책 배분 이탈을 허용 범위 안으로 되돌리는 최대 주문 후보입니다."],
+                invalidation_conditions=["시세 또는 계좌 잔고가 바뀌면 다시 계산합니다."],
+                data_state=risk.data_state if risk else "partial",
+                missing_data=list(risk.missing_data if risk else ["portfolioRiskSnapshot"]),
+            ))
+        if risk_breached:
+            scenarios.append(RebalanceScenario(
+                scenario_id="rebalance-scenario:risk-review:" + risk.risk_snapshot_id.split(":")[-1],
+                scenario_type="REDUCE_PORTFOLIO_RISK",
+                label="포트폴리오 위험 축소 검토",
+                legs=[item for item in legs if item.side == "DECREASE"],
+                before_metrics=before_metrics,
+                after_metrics={**before_metrics, "requiresGraphValidation": True},
+                estimated_cost=round(sum(item.estimated_cost for item in legs if item.side == "DECREASE"), 4),
+                turnover_pct=round(sum(item.maximum_notional for item in legs if item.side == "DECREASE") / (total or 1.0) * 100, 6),
+                policy_effects=["위험 한도 초과 원인과 축소 대상을 관계 추론에서 검증합니다."],
+                invalidation_conditions=["위험 한도 초과가 해소되면 이 시나리오는 무효입니다."],
+                data_state=risk.data_state,
+                missing_data=list(risk.missing_data),
             ))
         return RebalanceProposal.create(
             exposure.portfolio_id,
@@ -608,6 +824,7 @@ class PortfolioAccountingService:
             exposure.snapshot_id,
             drifts,
             legs,
+            scenarios,
             created_at=exposure.observed_at,
         )
 
@@ -617,6 +834,8 @@ class PortfolioAccountingService:
         mandate: InvestmentMandate,
         exposure: ExposureSnapshot,
         reconciliation: PortfolioReconciliation,
+        risk: Optional[PortfolioRiskSnapshot] = None,
+        proposal: Optional[RebalanceProposal] = None,
     ) -> PortfolioDecisionCycle:
         total = max(0.0, number(snapshot.portfolio.total)) or 1.0
         cash = max(0.0, number(snapshot.portfolio.cash))
@@ -625,8 +844,13 @@ class PortfolioAccountingService:
             "cash": cash,
             "cashWeightPct": cash / total * 100,
             "overPolicyCount": len(exposure.over_policy_metrics()),
+            "annualizedVolatilityPct": risk.annualized_volatility_pct if risk else None,
+            "maximumDrawdownPct": risk.maximum_drawdown_pct if risk else None,
+            "maximumPairwiseCorrelation": risk.maximum_pairwise_correlation if risk else None,
         }
-        source_snapshot_id = reconciliation.balance_fingerprint + ":" + exposure.snapshot_id
+        source_snapshot_id = reconciliation.balance_fingerprint + ":" + exposure.snapshot_id + ":" + (
+            risk.risk_snapshot_id if risk else "risk-unavailable"
+        )
         candidates = [PortfolioActionCandidate.create(
             source_snapshot_id,
             "NO_ACTION",
@@ -671,7 +895,43 @@ class PortfolioAccountingService:
                     required_relation_types=["EXCEEDS_POLICY", "HAS_RISK_BUDGET"],
                     data_state="partial",
                 ))
-        missing = ["positionReturnVolatility", "positionCorrelationMatrix", "portfolioBenchmarkReturn"]
+        for drift in (proposal.drifts if proposal else []):
+            if drift.band_delta_pct >= 0 or not drift.allocation_key.startswith("position:"):
+                continue
+            symbol = drift.allocation_key.split(":", 1)[1]
+            candidates.append(PortfolioActionCandidate.create(
+                source_snapshot_id,
+                "INCREASE_UNDERWEIGHT_ALLOCATION",
+                symbol + " 목표 배분 하단 복원 검토",
+                affected_symbol=symbol,
+                maximum_notional=min(
+                    abs(drift.target_delta_pct) * total / 100,
+                    mandate.max_rebalance_turnover_pct * total / 100,
+                ),
+                before_metrics={**base_metrics, "positionWeightPct": drift.current_weight_pct},
+                after_metrics={**base_metrics, "positionWeightPct": drift.band.target_weight_pct},
+                policy_effects=["사용자가 정한 목표 배분 범위의 하단을 복원하는 후보입니다."],
+                required_relation_types=["HAS_TARGET_ALLOCATION", "HAS_RISK_BUDGET"],
+                data_state=risk.data_state if risk else "partial",
+            ))
+        if risk and any([
+            risk.volatility_policy_delta_pct > 0,
+            risk.drawdown_policy_delta_pct > 0,
+            risk.correlation_policy_delta > 0,
+        ]):
+            candidates.append(PortfolioActionCandidate.create(
+                source_snapshot_id,
+                "REDUCE_PORTFOLIO_RISK",
+                "포트폴리오 위험 한도 초과 검토",
+                before_metrics=base_metrics,
+                after_metrics={**base_metrics, "requiresGraphValidation": True},
+                policy_effects=["변동성·낙폭·상관 위험의 원인 종목을 관계 추론으로 검증합니다."],
+                required_relation_types=["HAS_RISK_SNAPSHOT", "EXCEEDS_RISK_POLICY"],
+                data_state=risk.data_state,
+            ))
+        missing = list(risk.missing_data if risk else [
+            "positionReturnVolatility", "positionCorrelationMatrix", "portfolioBenchmarkReturn"
+        ])
         if reconciliation.status != "matched":
             missing.append("matchedPortfolioLedger")
         return PortfolioDecisionCycle.create(
@@ -738,6 +998,28 @@ class DecisionActionPlanningService:
         if episode.mandate_version and policy_version and episode.mandate_version != policy_version:
             blocked.append("decision-policy-version-stale")
         action = str(episode.action or "HOLD").upper()
+        lifecycle = {}
+        lifecycle_loader = getattr(self.repository, "latest_portfolio_lifecycle", None)
+        if callable(lifecycle_loader):
+            lifecycle = lifecycle_loader(portfolio_id) or {}
+        cycle = lifecycle.get("portfolioDecisionCycle") if isinstance(lifecycle.get("portfolioDecisionCycle"), dict) else {}
+        compatible_candidate_types = {
+            "BUY": {"INCREASE_UNDERWEIGHT_ALLOCATION"},
+            "ADD": {"INCREASE_UNDERWEIGHT_ALLOCATION"},
+            "TRIM": {"REDUCE_POSITION_EXPOSURE", "REDUCE_PORTFOLIO_RISK"},
+            "SELL": {"REDUCE_POSITION_EXPOSURE", "REDUCE_PORTFOLIO_RISK"},
+        }.get(action, set())
+        policy_candidates = [
+            item for item in cycle.get("candidates") or []
+            if isinstance(item, dict)
+            and str(item.get("candidate_type") or item.get("candidateType") or "").upper() in compatible_candidate_types
+            and str(item.get("affected_symbol") or item.get("affectedSymbol") or episode.symbol or "").upper()
+            in {"", str(episode.symbol or "").upper()}
+        ]
+        policy_candidate_cap_base = max([
+            number(item.get("maximum_notional") or item.get("maximumNotional"))
+            for item in policy_candidates
+        ] or [0.0])
         if action in EXECUTABLE_ACTIONS and price <= 0:
             blocked.append("current-price-missing")
         if action in {"BUY", "ADD"} and currency != "KRW" and exchange_rate <= 0:
@@ -746,19 +1028,25 @@ class DecisionActionPlanningService:
         cash_headroom = max(0.0, cash - minimum_cash_after)
         position_headroom = max(0.0, total * (mandate.max_position_weight_pct / 100) - value) if mandate else 0.0
         max_buy_notional_base = min(cash_headroom, position_headroom)
+        if policy_candidate_cap_base > 0:
+            max_buy_notional_base = min(max_buy_notional_base, policy_candidate_cap_base)
         max_buy_notional = (
             max_buy_notional_base / exchange_rate
             if currency != "KRW" and exchange_rate > 0
             else max_buy_notional_base if currency == "KRW" else 0.0
         )
         max_buy_quantity = math.floor(max_buy_notional / price) if price > 0 else 0
+        max_sell_quantity = sellable
+        if policy_candidate_cap_base > 0 and price > 0:
+            local_cap = policy_candidate_cap_base / exchange_rate if currency != "KRW" and exchange_rate > 0 else policy_candidate_cap_base
+            max_sell_quantity = min(sellable, math.floor(local_cap / price))
         envelope = ActionEnvelope(
             portfolio_id=portfolio_id,
             symbol=str(episode.symbol or "").upper(),
             allowed_actions=allowed,
             max_buy_notional=max_buy_notional,
             max_buy_quantity=max_buy_quantity,
-            max_sell_quantity=sellable,
+            max_sell_quantity=max_sell_quantity,
             minimum_cash_after=minimum_cash_after,
             policy_version=policy_version,
             blocked_reasons=blocked,
@@ -778,13 +1066,13 @@ class DecisionActionPlanningService:
                 limit_price=price,
                 currency=currency,
             ))
-        elif action in {"TRIM", "SELL"} and sellable > 0:
-            intent_quantity = sellable if action == "SELL" else max(1, math.floor(sellable * slice_ratio))
+        elif action in {"TRIM", "SELL"} and max_sell_quantity > 0:
+            intent_quantity = max_sell_quantity if action == "SELL" else max(1, math.floor(max_sell_quantity * slice_ratio))
             intents.append(OrderIntent(
                 intent_id=stable_execution_id("order-intent", episode.episode_id, action, episode.symbol),
                 symbol=str(episode.symbol or "").upper(),
                 side="SELL",
-                quantity=min(intent_quantity, sellable),
+                quantity=min(intent_quantity, max_sell_quantity),
                 order_type="LIMIT",
                 limit_price=price,
                 currency=currency,
@@ -842,6 +1130,15 @@ class DecisionActionPlanningService:
                 "cash": cash,
                 "currentPositionValue": value,
                 "maxBuyNotionalBase": max_buy_notional_base,
+                "policyCandidateMaximumNotionalBase": policy_candidate_cap_base,
+                "policyCandidateIds": [
+                    str(item.get("candidate_id") or item.get("candidateId") or "")
+                    for item in policy_candidates
+                ],
+                "portfolioDecisionCycleId": str(cycle.get("cycleId") or ""),
+                "portfolioRiskSnapshotId": str(
+                    (lifecycle.get("portfolioRiskSnapshot") or {}).get("riskSnapshotId") or ""
+                ) if isinstance(lifecycle.get("portfolioRiskSnapshot"), dict) else "",
                 "exchangeRate": exchange_rate,
                 "notionalCurrency": currency,
                 "graphAllowedActions": sorted(graph_allowed),
@@ -894,11 +1191,30 @@ class TradeExecutionService:
         gateway: BrokerOrderGateway = None,
         monitor_store=None,
         settings: Dict[str, object] = None,
+        investment_domain_service=None,
     ):
         self.repository = repository
         self.gateway = gateway or DisabledBrokerOrderGateway()
         self.monitor_store = monitor_store
         self.settings = dict(settings or {})
+        self.investment_domain_service = investment_domain_service
+
+    def persist_execution(self, episode: ExecutionEpisode, plan: ActionPlan) -> Dict[str, object]:
+        event = (
+            self.investment_domain_service.execution_recorded_event(episode)
+            if self.investment_domain_service else None
+        )
+        saver = getattr(self.repository, "save_execution_with_ledger", None)
+        if callable(saver):
+            result = saver(episode, plan, event)
+            if event:
+                self.investment_domain_service.dispatch_recorded(event)
+            return result
+        if self.investment_domain_service:
+            self.investment_domain_service.save_execution(episode)
+        else:
+            self.repository.save_execution_episode(episode)
+        return {"status": episode.status, "executionEpisode": episode.to_dict(), "actualLedgerEntryCount": 0}
 
     def review_plan(self, plan_id: str, decision: str, reviewer: str, reason: str = "") -> Dict[str, object]:
         plan = self.repository.action_plan(plan_id)
@@ -934,8 +1250,73 @@ class TradeExecutionService:
         if errors:
             return {"status": "blocked", "planId": plan.plan_id, "validationErrors": list(dict.fromkeys(errors))}
         episode = self.gateway.submit(plan)
-        self.repository.save_execution_episode(episode)
-        return {"status": episode.status, "executionEpisode": episode.to_dict()}
+        return self.persist_execution(episode, plan)
+
+    def record_fills(
+        self,
+        plan_id: str,
+        fills: Iterable[Dict[str, object]],
+        completed_at: str = "",
+    ) -> Dict[str, object]:
+        """Import confirmed provider fills without enabling order submission."""
+        plan = self.repository.action_plan(plan_id)
+        if not plan:
+            raise ValueError("Action plan not found.")
+        if plan.status != "approved":
+            return {"status": "blocked", "planId": plan.plan_id, "validationErrors": ["plan-not-approved"]}
+        intents = {item.intent_id: item for item in plan.order_intents}
+        episode_loader = getattr(self.repository, "execution_episode_for_plan", None)
+        episode = episode_loader(plan.plan_id) if callable(episode_loader) else None
+        episode = episode or ExecutionEpisode.for_plan(plan, utc_now_iso())
+        rows = [TradeFill.from_dict(item) for item in fills or [] if isinstance(item, dict)]
+        validation_errors = []
+        known_provider_ids = {item.provider_execution_id for item in episode.fills}
+        accepted_rows = []
+        for fill in rows:
+            if fill.provider_execution_id in known_provider_ids:
+                continue
+            intent = intents.get(fill.order_intent_id)
+            if not intent:
+                validation_errors.append("fill-order-intent-missing")
+                continue
+            if fill.symbol != intent.symbol or fill.side != intent.side or fill.currency != intent.currency:
+                validation_errors.append("fill-intent-mismatch")
+                continue
+            known_provider_ids.add(fill.provider_execution_id)
+            accepted_rows.append(fill)
+        if not rows:
+            validation_errors.append("confirmed-fill-missing")
+        cumulative_by_intent = {}
+        for fill in [*episode.fills, *accepted_rows]:
+            cumulative_by_intent[fill.order_intent_id] = (
+                cumulative_by_intent.get(fill.order_intent_id, 0.0) + fill.quantity
+            )
+        if any(
+            quantity > intents[intent_id].quantity + 1e-9
+            for intent_id, quantity in cumulative_by_intent.items()
+            if intent_id in intents
+        ):
+            validation_errors.append("fill-quantity-exceeds-intent")
+        if validation_errors:
+            return {
+                "status": "blocked",
+                "planId": plan.plan_id,
+                "validationErrors": list(dict.fromkeys(validation_errors)),
+            }
+        if not accepted_rows:
+            return {
+                "status": episode.status,
+                "planId": plan.plan_id,
+                "executionEpisode": episode.to_dict(),
+                "actualLedgerEntryCount": 0,
+                "duplicateFillCount": len(rows),
+            }
+        if not episode.started_at:
+            episode.started_at = min(item.executed_at for item in accepted_rows)
+        for fill in accepted_rows:
+            episode.record_fill(fill)
+        episode.complete(completed_at or max(item.executed_at for item in accepted_rows) or utc_now_iso())
+        return self.persist_execution(episode, plan)
 
     def validation_errors(self, plan: ActionPlan) -> List[str]:
         errors = []

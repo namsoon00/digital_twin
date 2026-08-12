@@ -15,6 +15,7 @@ from .portfolio import AccountSnapshot, AlertEvent, Position
 from .investment_mandate import InvestmentMandate
 from .investment_outcomes import DecisionReview, PerformanceAttribution
 from .portfolio_decision_cycle import PortfolioDecisionCycle
+from .portfolio_analytics import PortfolioRiskSnapshot
 from .portfolio_ledger import PortfolioLedgerEntry, PortfolioReconciliation
 from .portfolio_activity_episode import PortfolioSnapshotCheckpoint
 from .portfolio_rebalancing import RebalanceProposal
@@ -74,7 +75,7 @@ class InvestmentDomainRepository(Protocol):
     ) -> Dict[str, object]:
         ...
 
-    def commit_snapshot_observation(self, expected_checkpoint_version: int, checkpoint, ledger_entries, activity_episode, state_snapshot, reconciliation, exposure, rebalance_proposal, decision_cycle, decision_action_observations=None, domain_event=None, notification_job=None, reasoning_event=None) -> Dict[str, object]:
+    def commit_snapshot_observation(self, expected_checkpoint_version: int, checkpoint, ledger_entries, activity_episode, state_snapshot, reconciliation, exposure, rebalance_proposal, decision_cycle, decision_action_observations=None, domain_event=None, notification_job=None, reasoning_event=None, risk_snapshot=None) -> Dict[str, object]:
         ...
 
     def save_reconciliation(self, reconciliation: PortfolioReconciliation) -> PortfolioReconciliation:
@@ -84,6 +85,12 @@ class InvestmentDomainRepository(Protocol):
         ...
 
     def save_portfolio_decision_cycle(self, cycle: PortfolioDecisionCycle) -> PortfolioDecisionCycle:
+        ...
+
+    def save_risk_snapshot(self, snapshot: PortfolioRiskSnapshot) -> PortfolioRiskSnapshot:
+        ...
+
+    def save_portfolio_analysis_bundle(self, risk_snapshot, exposure, rebalance_proposal, decision_cycle, domain_event=None, reasoning_event=None) -> Dict[str, object]:
         ...
 
     def ontology_portfolio_lifecycle_context(self, portfolio_id: str) -> Dict[str, object]:
@@ -105,6 +112,12 @@ class InvestmentDomainRepository(Protocol):
         ...
 
     def save_execution_episode(self, episode: ExecutionEpisode) -> ExecutionEpisode:
+        ...
+
+    def execution_episode_for_plan(self, plan_id: str) -> Optional[ExecutionEpisode]:
+        ...
+
+    def save_execution_with_ledger(self, episode: ExecutionEpisode, plan: ActionPlan, domain_event=None) -> Dict[str, object]:
         ...
 
     def execution_feedback_for_decisions(self, decision_episode_ids: Iterable[str]) -> Dict[str, Dict[str, object]]:

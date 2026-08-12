@@ -148,6 +148,7 @@ class NotificationAIDecisionContextEnricher:
                     "snapshotCheckpoint": lifecycle.get("snapshotCheckpoint") or {},
                     "reconciliation": lifecycle.get("reconciliation") or {},
                     "exposureSnapshot": lifecycle.get("exposureSnapshot") or {},
+                    "portfolioRiskSnapshot": lifecycle.get("portfolioRiskSnapshot") or {},
                     "rebalanceProposal": lifecycle.get("rebalanceProposal") or {},
                     "portfolioDecisionCycle": lifecycle.get("portfolioDecisionCycle") or {},
                     "portfolioState": lifecycle.get("portfolioState") or {},

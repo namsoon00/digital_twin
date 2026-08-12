@@ -188,8 +188,8 @@ class OntologyRuleBoxTests(unittest.TestCase):
         rules_by_id = {item.rule_id: item for item in rules}
 
         self.assertEqual([], rulebox_semantic_violations(rules))
-        self.assertEqual(110, sum(item.enabled for item in rules))
-        self.assertFalse(rules_by_id["graph.benchmark.beta.context.v1"].enabled)
+        self.assertEqual(112, sum(item.enabled for item in rules))
+        self.assertTrue(rules_by_id["graph.benchmark.beta.context.v1"].enabled)
         self.assertFalse(rules_by_id["graph.data_quality.action_block.v1"].enabled)
         self.assertFalse(rules_by_id["graph.holding.trend_transition.risk.v1"].enabled)
         self.assertTrue(any(

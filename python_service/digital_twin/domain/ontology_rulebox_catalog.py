@@ -424,11 +424,8 @@ RULEBOX_V3_DUPLICATE_MERGES = {
     "graph.holding.trend_transition.risk.v1": "graph.temporal.downside_acceleration.risk.v1",
 }
 
-# The former beta edge was a static market-map label (weight 0.6), not an
-# observed beta value. Real beta remains available through valuation inputs;
-# this generic context rule stays disabled until a measured stock-to-benchmark
-# beta relation is introduced.
-RULEBOX_V3_DISABLED_RULE_IDS = {"graph.benchmark.beta.context.v1"}
+# Measured stock-to-benchmark beta is now projected from stored daily history.
+RULEBOX_V3_DISABLED_RULE_IDS = set()
 
 
 def _rulebox_v3_evidence_group_key(condition: GraphRuleCondition) -> str:
@@ -7135,6 +7132,52 @@ def default_graph_inference_rules() -> List[GraphInferenceRule]:
                     next_checks=["계좌 변화 시각 전후의 가격·뉴스·기존 판단 무효화 조건을 비교"],
                 )
             ],
+        ),
+        GraphInferenceRule(
+            rule_id="graph.portfolio.risk_policy.review.v1",
+            label="포트폴리오 시계열 위험 한도 초과 -> 위험 축소 검토",
+            version="v1",
+            source_kind="portfolio",
+            action_group="rebalance",
+            action_level="review",
+            prompt_hint="변동성·낙폭·상관 위험의 실측값과 정책 초과분을 구분하고 원인 종목과 비용을 확인한 뒤 리밸런싱을 판단합니다.",
+            any_condition_min_count=1,
+            conditions=[
+                GraphRuleCondition(
+                    "portfolio-volatility-policy-delta", "relation",
+                    "연환산 변동성이 계좌 정책 한도를 넘었습니다.",
+                    relation_type="HAS_RISK_SNAPSHOT", target_kind="portfolio-risk-snapshot",
+                    target_property_filters={"volatilityPolicyDeltaPct": {"operator": ">", "value": 0}}, role="any",
+                ),
+                GraphRuleCondition(
+                    "portfolio-drawdown-policy-delta", "relation",
+                    "최대 낙폭이 계좌 정책 한도를 넘었습니다.",
+                    relation_type="HAS_RISK_SNAPSHOT", target_kind="portfolio-risk-snapshot",
+                    target_property_filters={"drawdownPolicyDeltaPct": {"operator": ">", "value": 0}}, role="any",
+                ),
+                GraphRuleCondition(
+                    "portfolio-correlation-policy-delta", "relation",
+                    "종목 간 최대 상관이 계좌 정책 한도를 넘었습니다.",
+                    relation_type="HAS_RISK_SNAPSHOT", target_kind="portfolio-risk-snapshot",
+                    target_property_filters={"correlationPolicyDelta": {"operator": ">", "value": 0}}, role="any",
+                ),
+            ],
+            derivations=[GraphRuleDerivation(
+                relation_type="REQUIRES_NEXT_CHECK",
+                target_kind="next-check",
+                target_key="{subjectId}:portfolio-risk-policy-review",
+                target_label="{displayName} 포트폴리오 위험 축소 점검",
+                tbox_class="NextCheck",
+                tbox_classes=["NextCheck", "RiskBreach", "PortfolioRiskSnapshot"],
+                polarity="risk",
+                belief_label="포트폴리오 시계열 위험이 정책 한도를 넘어 원인 종목과 리밸런싱 비용을 함께 확인합니다.",
+                ai_influence_label="포트폴리오 위험 정책 초과",
+                action_group="rebalance",
+                action_level="review",
+                decision_stage="REBALANCE_REVIEW",
+                decision_effect="defer",
+                candidate_action="HOLD",
+            )],
         ),
         GraphInferenceRule(
             rule_id="graph.portfolio.concentration.review.v1",

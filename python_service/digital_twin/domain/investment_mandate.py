@@ -6,7 +6,7 @@ import json
 from typing import Dict, Iterable, List
 
 
-INVESTMENT_MANDATE_VERSION = "investment-mandate-v1"
+INVESTMENT_MANDATE_VERSION = "investment-mandate-v2"
 DEFAULT_ALLOWED_ACTIONS = ("BUY", "ADD", "HOLD", "TRIM", "SELL", "AVOID")
 
 
@@ -50,6 +50,18 @@ class InvestmentMandate:
     add_buy_policy: str = ""
     holding_action_policy: str = ""
     watchlist_action_policy: str = ""
+    target_allocations: Dict[str, float] = field(default_factory=dict)
+    allocation_band_pct: float = 5.0
+    max_portfolio_volatility_pct: float = 35.0
+    max_portfolio_drawdown_pct: float = 20.0
+    max_pairwise_correlation: float = 0.85
+    max_rebalance_turnover_pct: float = 20.0
+    estimated_transaction_cost_bps: float = 15.0
+    benchmark_symbols: Dict[str, str] = field(default_factory=lambda: {
+        "KR": "KOSPI",
+        "US": "SPY",
+        "CRYPTO": "BTC",
+    })
     effective_at: str = ""
     version: str = INVESTMENT_MANDATE_VERSION
     fingerprint: str = ""
@@ -64,6 +76,34 @@ class InvestmentMandate:
             raise ValueError("max_sector_weight_pct must be between 0 and 100.")
         if not 0 <= self.min_cash_weight_pct <= 100:
             raise ValueError("min_cash_weight_pct must be between 0 and 100.")
+        if not 0 <= self.allocation_band_pct <= 100:
+            raise ValueError("allocation_band_pct must be between 0 and 100.")
+        if not 0 <= self.max_pairwise_correlation <= 1:
+            raise ValueError("max_pairwise_correlation must be between 0 and 1.")
+        if not 0 <= self.max_rebalance_turnover_pct <= 100:
+            raise ValueError("max_rebalance_turnover_pct must be between 0 and 100.")
+        if self.max_portfolio_volatility_pct < 0:
+            raise ValueError("max_portfolio_volatility_pct cannot be negative.")
+        if self.max_portfolio_drawdown_pct < 0:
+            raise ValueError("max_portfolio_drawdown_pct cannot be negative.")
+        if self.estimated_transaction_cost_bps < 0:
+            raise ValueError("estimated_transaction_cost_bps cannot be negative.")
+        raw_allocations = {
+            str(key or "").strip(): _number(value)
+            for key, value in dict(self.target_allocations or {}).items()
+            if str(key or "").strip()
+        }
+        if any(value < 0 or value > 100 for value in raw_allocations.values()):
+            raise ValueError("target_allocations must be between 0 and 100 percent.")
+        allocations = raw_allocations
+        if sum(allocations.values()) > 100.000001:
+            raise ValueError("target_allocations cannot exceed 100 percent.")
+        object.__setattr__(self, "target_allocations", allocations)
+        object.__setattr__(self, "benchmark_symbols", {
+            str(key or "").upper().strip(): str(value or "").upper().strip()
+            for key, value in dict(self.benchmark_symbols or {}).items()
+            if str(key or "").strip() and str(value or "").strip()
+        })
         if not self.fingerprint:
             object.__setattr__(self, "fingerprint", self.calculate_fingerprint())
 
@@ -94,6 +134,14 @@ class InvestmentMandate:
             add_buy_policy=str(values.get("addBuyPolicy") or ""),
             holding_action_policy=str(values.get("holdingActionPolicy") or ""),
             watchlist_action_policy=str(values.get("watchlistActionPolicy") or ""),
+            target_allocations=dict(values.get("targetAllocations") or {}),
+            allocation_band_pct=_number(values.get("allocationBandPct"), 5),
+            max_portfolio_volatility_pct=_number(values.get("maxPortfolioVolatilityPct"), 35),
+            max_portfolio_drawdown_pct=_number(values.get("maxPortfolioDrawdownPct"), 20),
+            max_pairwise_correlation=_number(values.get("maxPairwiseCorrelation"), 0.85),
+            max_rebalance_turnover_pct=_number(values.get("maxRebalanceTurnoverPct"), 20),
+            estimated_transaction_cost_bps=_number(values.get("estimatedTransactionCostBps"), 15),
+            benchmark_symbols=dict(values.get("benchmarkSymbols") or {"KR": "KOSPI", "US": "SPY", "CRYPTO": "BTC"}),
             effective_at=str(effective_at or ""),
         )
 
@@ -117,6 +165,14 @@ class InvestmentMandate:
             add_buy_policy=str(_first_present(values, "addBuyPolicy", "add_buy_policy", default="")),
             holding_action_policy=str(_first_present(values, "holdingActionPolicy", "holding_action_policy", default="")),
             watchlist_action_policy=str(_first_present(values, "watchlistActionPolicy", "watchlist_action_policy", default="")),
+            target_allocations=dict(_first_present(values, "targetAllocations", "target_allocations", default={}) or {}),
+            allocation_band_pct=_number(_first_present(values, "allocationBandPct", "allocation_band_pct", default=5), 5),
+            max_portfolio_volatility_pct=_number(_first_present(values, "maxPortfolioVolatilityPct", "max_portfolio_volatility_pct", default=35), 35),
+            max_portfolio_drawdown_pct=_number(_first_present(values, "maxPortfolioDrawdownPct", "max_portfolio_drawdown_pct", default=20), 20),
+            max_pairwise_correlation=_number(_first_present(values, "maxPairwiseCorrelation", "max_pairwise_correlation", default=0.85), 0.85),
+            max_rebalance_turnover_pct=_number(_first_present(values, "maxRebalanceTurnoverPct", "max_rebalance_turnover_pct", default=20), 20),
+            estimated_transaction_cost_bps=_number(_first_present(values, "estimatedTransactionCostBps", "estimated_transaction_cost_bps", default=15), 15),
+            benchmark_symbols=dict(_first_present(values, "benchmarkSymbols", "benchmark_symbols", default={"KR": "KOSPI", "US": "SPY", "CRYPTO": "BTC"}) or {}),
             effective_at=str(_first_present(values, "effectiveAt", "effective_at", default="")),
             version=str(values.get("version") or INVESTMENT_MANDATE_VERSION),
             fingerprint=str(values.get("fingerprint") or values.get("policyFingerprint") or ""),
@@ -153,6 +209,14 @@ class InvestmentMandate:
             "maxSectorWeightPct": self.max_sector_weight_pct,
             "fxExposureReviewPct": self.fx_exposure_review_pct,
             "minCashWeightPct": self.min_cash_weight_pct,
+            "targetAllocations": dict(self.target_allocations),
+            "allocationBandPct": self.allocation_band_pct,
+            "maxPortfolioVolatilityPct": self.max_portfolio_volatility_pct,
+            "maxPortfolioDrawdownPct": self.max_portfolio_drawdown_pct,
+            "maxPairwiseCorrelation": self.max_pairwise_correlation,
+            "maxRebalanceTurnoverPct": self.max_rebalance_turnover_pct,
+            "estimatedTransactionCostBps": self.estimated_transaction_cost_bps,
+            "benchmarkSymbols": dict(self.benchmark_symbols),
             "allowedActions": list(self.allowed_actions),
             "policyVersion": self.policy_version,
             "policyFingerprint": self.fingerprint,

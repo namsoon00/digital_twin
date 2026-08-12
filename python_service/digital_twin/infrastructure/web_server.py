@@ -574,6 +574,17 @@ def execute_action_plan_payload(plan_id: str) -> Dict[str, object]:
         return {"status": "error", "error": str(error)}
 
 
+def record_action_plan_fills_payload(plan_id: str, body: Dict[str, object]) -> Dict[str, object]:
+    try:
+        return build_trade_execution_service().record_fills(
+            plan_id,
+            body.get("fills") if isinstance(body.get("fills"), list) else [],
+            str(body.get("completedAt") or ""),
+        )
+    except (TypeError, ValueError) as error:
+        return {"status": "error", "error": str(error)}
+
+
 def settings_status_payload() -> Dict[str, object]:
     settings = runtime_settings()
     public_keys = [
@@ -4619,6 +4630,16 @@ class DigitalTwinHandler(BaseHTTPRequestHandler):
                     "approved" if action == "approve" else "rejected",
                     self.read_json_body(),
                 )
+            return self.send_payload(200 if payload.get("status") != "error" else 400, payload)
+
+        action_plan_fills_match = re.match(r"^/api/action-plans/([^/]+)/fills$", path)
+        if action_plan_fills_match and self.command == "POST":
+            if not self.ensure_writable("공유 모드에서는 실제 체결을 기록할 수 없습니다."):
+                return
+            payload = record_action_plan_fills_payload(
+                urllib.parse.unquote(action_plan_fills_match.group(1)),
+                self.read_json_body(),
+            )
             return self.send_payload(200 if payload.get("status") != "error" else 400, payload)
 
         if path == "/api/investment-brain/performance" and self.command == "GET":

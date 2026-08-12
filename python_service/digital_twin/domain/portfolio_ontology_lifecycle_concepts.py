@@ -171,6 +171,86 @@ def add_portfolio_lifecycle_concepts(graph, portfolio_node_id: str, runtime_cont
         if prior_entity_id in existing_entity_ids:
             add_relation(graph, observation_id, prior_entity_id, "OBSERVED_AFTER_DECISION", properties={"causalityClaimed": False})
 
+    risk = lifecycle.get("portfolioRiskSnapshot") if isinstance(lifecycle.get("portfolioRiskSnapshot"), dict) else {}
+    if risk:
+        risk_id = add_entity(graph, "portfolio-risk-snapshot", str(risk.get("riskSnapshotId") or "latest"),
+            "포트폴리오 시계열 위험", {
+                "tboxClass": "PortfolioRiskSnapshot",
+                "annualizedVolatilityPct": number(risk.get("annualizedVolatilityPct")),
+                "maximumDrawdownPct": number(risk.get("maximumDrawdownPct")),
+                "maximumPairwiseCorrelation": number(risk.get("maximumPairwiseCorrelation")),
+                "periodReturnPct": number(risk.get("periodReturnPct")),
+                "activeReturnPct": number(risk.get("activeReturnPct")),
+                "volatilityPolicyDeltaPct": number(risk.get("volatilityPolicyDeltaPct")),
+                "drawdownPolicyDeltaPct": number(risk.get("drawdownPolicyDeltaPct")),
+                "correlationPolicyDelta": number(risk.get("correlationPolicyDelta")),
+                "sampleCount": number(risk.get("sampleCount")),
+                "dataState": risk.get("dataState"), "observedAt": risk.get("observedAt"),
+                "source": "portfolio-risk-analytics",
+            })
+        add_relation(graph, portfolio_node_id, risk_id, "HAS_RISK_SNAPSHOT", properties={"source": "portfolio-risk-analytics"})
+        if number(risk.get("correlationPolicyDelta")) > 0:
+            add_relation(graph, portfolio_node_id, risk_id, "HAS_CORRELATION_RISK", properties={"source": "portfolio-risk-analytics"})
+        for metric in risk.get("positions") or []:
+            if not isinstance(metric, dict):
+                continue
+            symbol = str(metric.get("symbol") or "").upper().strip()
+            stock_id = available_stock_id(symbol)
+            if not stock_id:
+                continue
+            metric_id = add_entity(graph, "position-risk-metric",
+                str(risk.get("riskSnapshotId") or "latest") + ":" + symbol,
+                symbol + " 시계열 위험", {
+                    "tboxClass": "PositionRiskMetric", "symbol": symbol,
+                    "positionWeight": number(metric.get("weight_pct") or metric.get("weightPct")),
+                    "periodReturnPct": number(metric.get("period_return_pct") or metric.get("periodReturnPct")),
+                    "annualizedVolatilityPct": number(metric.get("annualized_volatility_pct") or metric.get("annualizedVolatilityPct")),
+                    "maximumDrawdownPct": number(metric.get("maximum_drawdown_pct") or metric.get("maximumDrawdownPct")),
+                    "beta": metric.get("beta"),
+                    "activeReturnPct": metric.get("active_return_pct") or metric.get("activeReturnPct"),
+                    "sampleCount": number(metric.get("sample_count") or metric.get("sampleCount")),
+                    "dataState": metric.get("data_state") or metric.get("dataState"),
+                    "source": "portfolio-risk-analytics",
+                })
+            add_relation(graph, stock_id, metric_id, "HAS_POSITION_RISK", properties={"source": "portfolio-risk-analytics"})
+            benchmark_symbol = str(metric.get("benchmark_symbol") or metric.get("benchmarkSymbol") or "").upper().strip()
+            if benchmark_symbol and metric.get("beta") is not None:
+                benchmark_id = add_entity(graph, "benchmark-index",
+                    str(risk.get("riskSnapshotId") or "latest") + ":" + symbol + ":" + benchmark_symbol,
+                    benchmark_symbol + " 실측 베타", {
+                        "tboxClass": "BenchmarkIndex", "symbol": benchmark_symbol,
+                        "beta": number(metric.get("beta")),
+                        "periodReturnPct": number(metric.get("benchmark_return_pct") or metric.get("benchmarkReturnPct")),
+                        "sampleCount": number(metric.get("sample_count") or metric.get("sampleCount")),
+                        "dataState": metric.get("data_state") or metric.get("dataState"),
+                        "source": "portfolio-risk-analytics",
+                    })
+                add_relation(graph, stock_id, benchmark_id, "HAS_BETA_TO", properties={"source": "portfolio-risk-analytics"})
+
+    rebalance = lifecycle.get("rebalanceProposal") if isinstance(lifecycle.get("rebalanceProposal"), dict) else {}
+    if rebalance:
+        proposal_id = add_entity(graph, "rebalance-proposal", str(rebalance.get("proposalId") or "latest"),
+            "포트폴리오 리밸런싱 제안", {
+                "tboxClass": "RebalanceProposal", "mandateVersion": rebalance.get("mandateVersion"),
+                "scenarioCount": len(rebalance.get("scenarios") or []), "status": rebalance.get("status"),
+                "createdAt": rebalance.get("createdAt"), "source": "portfolio-rebalance-analysis",
+            })
+        add_relation(graph, portfolio_node_id, proposal_id, "HAS_REBALANCE_PROPOSAL", properties={"source": "portfolio-rebalance-analysis"})
+        for scenario in rebalance.get("scenarios") or []:
+            if not isinstance(scenario, dict):
+                continue
+            scenario_id = add_entity(graph, "rebalance-scenario",
+                str(scenario.get("scenario_id") or scenario.get("scenarioId") or "scenario"),
+                str(scenario.get("label") or "리밸런싱 시나리오"), {
+                    "tboxClass": "RebalanceScenario",
+                    "scenarioType": scenario.get("scenario_type") or scenario.get("scenarioType"),
+                    "estimatedCost": number(scenario.get("estimated_cost") or scenario.get("estimatedCost")),
+                    "turnoverPct": number(scenario.get("turnover_pct") or scenario.get("turnoverPct")),
+                    "dataState": scenario.get("data_state") or scenario.get("dataState"),
+                    "source": "portfolio-rebalance-analysis",
+                })
+            add_relation(graph, proposal_id, scenario_id, "HAS_REBALANCE_SCENARIO", properties={"source": "portfolio-rebalance-analysis"})
+
     cycle = lifecycle.get("portfolioDecisionCycle") if isinstance(lifecycle.get("portfolioDecisionCycle"), dict) else {}
     if not cycle:
         return

@@ -5,7 +5,7 @@ import hashlib
 from typing import Dict, Iterable, List, Optional
 
 from ..domain.investment_mandate import InvestmentMandate
-from ..domain.investment_outcomes import DecisionReview, PerformanceAttribution
+from ..domain.investment_outcomes import DecisionReview, PerformanceAttribution, decision_quality_summary
 from ..domain.portfolio_activity_episode import (
     DecisionActionObservation,
     PortfolioActivityEpisode,
@@ -13,7 +13,13 @@ from ..domain.portfolio_activity_episode import (
     PortfolioStateSnapshot,
 )
 from ..domain.portfolio_decision_cycle import PortfolioDecisionCycle
-from ..domain.portfolio_ledger import INFERRED_SNAPSHOT_ENTRY_TYPES, PortfolioLedgerEntry, PortfolioReconciliation
+from ..domain.portfolio_ledger import (
+    INFERRED_SNAPSHOT_ENTRY_TYPES,
+    PortfolioLedgerEntry,
+    PortfolioReconciliation,
+    execution_ledger_entries,
+)
+from ..domain.portfolio_analytics import PortfolioRiskSnapshot
 from ..domain.snapshot_portfolio_activity import activity_payload
 from ..domain.portfolio_rebalancing import RebalanceProposal
 from ..domain.risk_exposure import ExposureSnapshot
@@ -338,6 +344,7 @@ class MySQLInvestmentDomainStore(MySQLOperationalConnection):
         domain_event=None,
         notification_job=None,
         reasoning_event=None,
+        risk_snapshot: Optional[PortfolioRiskSnapshot] = None,
     ) -> Dict[str, object]:
         """CAS one complete account observation and its durable side effects."""
         rows = list(ledger_entries or [])
@@ -425,6 +432,8 @@ class MySQLInvestmentDomainStore(MySQLOperationalConnection):
                 "VALUES (%s, %s, %s, %s, %s, %s)",
                 (exposure.snapshot_id, exposure.portfolio_id, exposure.observed_at, len(exposure.over_policy_metrics()), json_dumps(exposure.to_dict()), stamp),
             )
+            if risk_snapshot:
+                self.save_risk_snapshot_with_connection(connection, risk_snapshot, stamp)
             if rebalance_proposal:
                 connection.execute(
                     "INSERT INTO portfolio_rebalance_proposals "
@@ -575,6 +584,132 @@ class MySQLInvestmentDomainStore(MySQLOperationalConnection):
             )
         return snapshot
 
+    def save_risk_snapshot_with_connection(
+        self,
+        connection,
+        snapshot: PortfolioRiskSnapshot,
+        stamp: str,
+    ) -> None:
+        connection.execute(
+            """
+            INSERT INTO portfolio_risk_snapshots (
+                risk_snapshot_id, portfolio_id, observed_at, data_state, sample_count,
+                annualized_volatility_pct, maximum_drawdown_pct,
+                maximum_pairwise_correlation, payload_json, created_at, updated_at
+            ) VALUES (%s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s)
+            ON DUPLICATE KEY UPDATE observed_at = VALUES(observed_at),
+                data_state = VALUES(data_state), sample_count = VALUES(sample_count),
+                annualized_volatility_pct = VALUES(annualized_volatility_pct),
+                maximum_drawdown_pct = VALUES(maximum_drawdown_pct),
+                maximum_pairwise_correlation = VALUES(maximum_pairwise_correlation),
+                payload_json = VALUES(payload_json), updated_at = VALUES(updated_at)
+            """,
+            (
+                snapshot.risk_snapshot_id,
+                snapshot.portfolio_id,
+                snapshot.observed_at,
+                snapshot.data_state,
+                snapshot.sample_count,
+                snapshot.annualized_volatility_pct,
+                snapshot.maximum_drawdown_pct,
+                snapshot.maximum_pairwise_correlation,
+                json_dumps(snapshot.to_dict()),
+                stamp,
+                stamp,
+            ),
+        )
+
+    def save_risk_snapshot(self, snapshot: PortfolioRiskSnapshot) -> PortfolioRiskSnapshot:
+        stamp = utc_now()
+        with self.transaction() as connection:
+            self.save_risk_snapshot_with_connection(connection, snapshot, stamp)
+        return snapshot
+
+    def save_portfolio_analysis_bundle(
+        self,
+        risk_snapshot: PortfolioRiskSnapshot,
+        exposure: ExposureSnapshot,
+        rebalance_proposal: Optional[RebalanceProposal],
+        decision_cycle: PortfolioDecisionCycle,
+        domain_event=None,
+        reasoning_event=None,
+    ) -> Dict[str, object]:
+        """Persist one derived analysis bundle without holding a source lock."""
+        stamp = utc_now()
+        with self.transaction() as connection:
+            previous_risk = connection.execute(
+                "SELECT risk_snapshot_id FROM portfolio_risk_snapshots WHERE portfolio_id = %s "
+                "ORDER BY observed_at DESC, risk_snapshot_id DESC LIMIT 1",
+                (risk_snapshot.portfolio_id,),
+            ).fetchone()
+            risk_changed = str((previous_risk or {}).get("risk_snapshot_id") or "") != risk_snapshot.risk_snapshot_id
+            connection.execute(
+                "INSERT IGNORE INTO portfolio_exposure_snapshots "
+                "(exposure_snapshot_id, portfolio_id, observed_at, over_policy_count, payload_json, created_at) "
+                "VALUES (%s, %s, %s, %s, %s, %s)",
+                (
+                    exposure.snapshot_id,
+                    exposure.portfolio_id,
+                    exposure.observed_at,
+                    len(exposure.over_policy_metrics()),
+                    json_dumps(exposure.to_dict()),
+                    stamp,
+                ),
+            )
+            self.save_risk_snapshot_with_connection(connection, risk_snapshot, stamp)
+            if rebalance_proposal:
+                connection.execute(
+                    "INSERT INTO portfolio_rebalance_proposals "
+                    "(proposal_id, portfolio_id, mandate_version, exposure_snapshot_id, status, payload_json, created_at, updated_at) "
+                    "VALUES (%s, %s, %s, %s, %s, %s, %s, %s) "
+                    "ON DUPLICATE KEY UPDATE status = VALUES(status), payload_json = VALUES(payload_json), updated_at = VALUES(updated_at)",
+                    (
+                        rebalance_proposal.proposal_id,
+                        rebalance_proposal.portfolio_id,
+                        rebalance_proposal.mandate_version,
+                        rebalance_proposal.exposure_snapshot_id,
+                        rebalance_proposal.status,
+                        json_dumps(rebalance_proposal.to_dict()),
+                        rebalance_proposal.created_at or stamp,
+                        stamp,
+                    ),
+                )
+            cycle_payload = decision_cycle.to_dict()
+            connection.execute(
+                "INSERT INTO portfolio_decision_cycles "
+                "(cycle_id, portfolio_id, account_id, policy_version, source_snapshot_id, candidate_fingerprint, "
+                "data_state, candidate_count, payload_json, created_at, updated_at) "
+                "VALUES (%s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s) "
+                "ON DUPLICATE KEY UPDATE candidate_fingerprint = VALUES(candidate_fingerprint), "
+                "data_state = VALUES(data_state), candidate_count = VALUES(candidate_count), "
+                "payload_json = VALUES(payload_json), updated_at = VALUES(updated_at)",
+                (
+                    decision_cycle.cycle_id,
+                    decision_cycle.portfolio_id,
+                    decision_cycle.account_id,
+                    decision_cycle.policy_version,
+                    decision_cycle.source_snapshot_id,
+                    decision_cycle.fingerprint,
+                    decision_cycle.data_state,
+                    len(decision_cycle.candidates),
+                    json_dumps(cycle_payload),
+                    decision_cycle.created_at or stamp,
+                    stamp,
+                ),
+            )
+            if risk_changed and domain_event:
+                insert_domain_event_with_connection(connection, domain_event)
+            if risk_changed and reasoning_event:
+                insert_domain_event_with_connection(connection, reasoning_event)
+        return {
+            "status": "saved",
+            "riskChanged": risk_changed,
+            "riskSnapshotId": risk_snapshot.risk_snapshot_id,
+            "exposureSnapshotId": exposure.snapshot_id,
+            "rebalanceProposalId": rebalance_proposal.proposal_id if rebalance_proposal else "",
+            "decisionCycleId": decision_cycle.cycle_id,
+        }
+
     def save_portfolio_decision_cycle(self, cycle: PortfolioDecisionCycle) -> PortfolioDecisionCycle:
         stamp = utc_now()
         payload = cycle.to_dict()
@@ -624,6 +759,11 @@ class MySQLInvestmentDomainStore(MySQLOperationalConnection):
                 "ORDER BY created_at DESC, cycle_id DESC LIMIT 1",
                 (portfolio_key,),
             ).fetchone()
+            risk_snapshot = connection.execute(
+                "SELECT payload_json FROM portfolio_risk_snapshots WHERE portfolio_id = %s "
+                "ORDER BY observed_at DESC, risk_snapshot_id DESC LIMIT 1",
+                (portfolio_key,),
+            ).fetchone()
             checkpoint = connection.execute(
                 "SELECT payload_json FROM portfolio_snapshot_checkpoints WHERE portfolio_id = %s",
                 (portfolio_key,),
@@ -666,6 +806,7 @@ class MySQLInvestmentDomainStore(MySQLOperationalConnection):
                 _json_loads(item.get("payload_json"), {}) for item in quarantines or []
             ],
             "portfolioDecisionCycle": _json_loads(decision_cycle.get("payload_json"), {}) if decision_cycle else {},
+            "portfolioRiskSnapshot": _json_loads(risk_snapshot.get("payload_json"), {}) if risk_snapshot else {},
         }
 
     def latest_portfolio_lifecycle(self, portfolio_id: str) -> Dict[str, object]:
@@ -680,6 +821,11 @@ class MySQLInvestmentDomainStore(MySQLOperationalConnection):
             exposure = connection.execute(
                 "SELECT payload_json FROM portfolio_exposure_snapshots WHERE portfolio_id = %s "
                 "ORDER BY observed_at DESC, exposure_snapshot_id DESC LIMIT 1",
+                (portfolio_key,),
+            ).fetchone()
+            risk_snapshot = connection.execute(
+                "SELECT payload_json FROM portfolio_risk_snapshots WHERE portfolio_id = %s "
+                "ORDER BY observed_at DESC, risk_snapshot_id DESC LIMIT 1",
                 (portfolio_key,),
             ).fetchone()
             rebalance = connection.execute(
@@ -741,6 +887,8 @@ class MySQLInvestmentDomainStore(MySQLOperationalConnection):
             ).fetchall()
             plan_ids = [str(item.get("plan_id") or "") for item in plans or [] if str(item.get("plan_id") or "")]
             plan_reviews = []
+            executions = []
+            fills = []
             if plan_ids:
                 placeholders = ",".join(["%s"] * len(plan_ids))
                 plan_reviews = connection.execute(
@@ -748,6 +896,23 @@ class MySQLInvestmentDomainStore(MySQLOperationalConnection):
                     "ORDER BY reviewed_at DESC, review_id DESC LIMIT 100",
                     tuple(plan_ids),
                 ).fetchall()
+                executions = connection.execute(
+                    "SELECT execution_episode_id, payload_json FROM trade_execution_episodes "
+                    "WHERE action_plan_id IN (" + placeholders + ") "
+                    "ORDER BY created_at DESC, execution_episode_id DESC LIMIT 100",
+                    tuple(plan_ids),
+                ).fetchall()
+                execution_ids = [
+                    str(item.get("execution_episode_id") or "")
+                    for item in executions or [] if str(item.get("execution_episode_id") or "")
+                ]
+                if execution_ids:
+                    execution_placeholders = ",".join(["%s"] * len(execution_ids))
+                    fills = connection.execute(
+                        "SELECT payload_json FROM trade_execution_fills WHERE execution_episode_id IN ("
+                        + execution_placeholders + ") ORDER BY executed_at DESC, fill_id DESC LIMIT 200",
+                        tuple(execution_ids),
+                    ).fetchall()
             attributions = connection.execute(
                 "SELECT a.payload_json FROM investment_performance_attributions a "
                 "JOIN investment_decision_episodes d ON d.episode_id = a.decision_episode_id "
@@ -761,13 +926,16 @@ class MySQLInvestmentDomainStore(MySQLOperationalConnection):
                 (account_id,),
             ).fetchall()
         mandate = self.active_mandate(portfolio_key)
+        attribution_payloads = [_json_loads(item.get("payload_json"), {}) for item in attributions or []]
+        decision_review_payloads = [_json_loads(item.get("payload_json"), {}) for item in decision_reviews or []]
         return {
-            "status": "ready" if any([mandate, reconciliation, exposure, rebalance, plans, ledger_rows]) else "unavailable",
+            "status": "ready" if any([mandate, reconciliation, exposure, risk_snapshot, rebalance, plans, ledger_rows]) else "unavailable",
             "portfolioId": portfolio_key,
             "mandate": mandate,
             "snapshotCheckpoint": _json_loads(checkpoint.get("payload_json"), {}) if checkpoint else {},
             "reconciliation": _json_loads(reconciliation.get("payload_json"), {}) if reconciliation else {},
             "exposureSnapshot": _json_loads(exposure.get("payload_json"), {}) if exposure else {},
+            "portfolioRiskSnapshot": _json_loads(risk_snapshot.get("payload_json"), {}) if risk_snapshot else {},
             "rebalanceProposal": _json_loads(rebalance.get("payload_json"), {}) if rebalance else {},
             "portfolioDecisionCycle": _json_loads(decision_cycle.get("payload_json"), {}) if decision_cycle else {},
             "ledgerSummary": {
@@ -794,8 +962,11 @@ class MySQLInvestmentDomainStore(MySQLOperationalConnection):
             ],
             "actionPlans": [_json_loads(item.get("payload_json"), {}) for item in plans or []],
             "actionPlanReviews": [_json_loads(item.get("payload_json"), {}) for item in plan_reviews or []],
-            "performanceAttributions": [_json_loads(item.get("payload_json"), {}) for item in attributions or []],
-            "decisionReviews": [_json_loads(item.get("payload_json"), {}) for item in decision_reviews or []],
+            "executionEpisodes": [_json_loads(item.get("payload_json"), {}) for item in executions or []],
+            "fills": [_json_loads(item.get("payload_json"), {}) for item in fills or []],
+            "performanceAttributions": attribution_payloads,
+            "decisionReviews": decision_review_payloads,
+            "decisionQualitySummary": decision_quality_summary(attribution_payloads, decision_review_payloads),
         }
 
     def lifecycle_feedback_for_decisions(self, decision_episode_ids: Iterable[str]) -> Dict[str, Dict[str, object]]:
@@ -997,7 +1168,20 @@ class MySQLInvestmentDomainStore(MySQLOperationalConnection):
     def save_execution_episode(self, episode: ExecutionEpisode) -> ExecutionEpisode:
         stamp = utc_now()
         with self.transaction() as connection:
-            connection.execute(
+            self.save_execution_episode_with_connection(connection, episode, stamp)
+        return episode
+
+    def execution_episode_for_plan(self, plan_id: str) -> Optional[ExecutionEpisode]:
+        with self.connect() as connection:
+            row = connection.execute(
+                "SELECT payload_json FROM trade_execution_episodes WHERE action_plan_id = %s "
+                "ORDER BY updated_at DESC, execution_episode_id DESC LIMIT 1",
+                (str(plan_id or ""),),
+            ).fetchone()
+        return ExecutionEpisode.from_dict(_json_loads(row.get("payload_json"), {})) if row else None
+
+    def save_execution_episode_with_connection(self, connection, episode: ExecutionEpisode, stamp: str) -> None:
+        connection.execute(
                 """
                 INSERT INTO trade_execution_episodes (
                     execution_episode_id, action_plan_id, portfolio_id, status,
@@ -1019,8 +1203,8 @@ class MySQLInvestmentDomainStore(MySQLOperationalConnection):
                     stamp,
                 ),
             )
-            for fill in episode.fills:
-                connection.execute(
+        for fill in episode.fills:
+            connection.execute(
                     """
                     INSERT IGNORE INTO trade_execution_fills (
                         fill_id, provider_execution_id, execution_episode_id, order_intent_id,
@@ -1044,7 +1228,25 @@ class MySQLInvestmentDomainStore(MySQLOperationalConnection):
                         stamp,
                     ),
                 )
-        return episode
+
+    def save_execution_with_ledger(self, episode: ExecutionEpisode, plan: ActionPlan, domain_event=None) -> Dict[str, object]:
+        existing = self.ledger_entries(plan.portfolio_id, limit=100000)
+        actual_entries = execution_ledger_entries(episode, plan, existing)
+        stamp = utc_now()
+        inserted = 0
+        with self.transaction() as connection:
+            self.save_execution_episode_with_connection(connection, episode, stamp)
+            inserted = self.append_ledger_entries_with_connection(connection, actual_entries, stamp)
+            if domain_event:
+                insert_domain_event_with_connection(connection, domain_event)
+        return {
+            "status": episode.status,
+            "executionEpisode": episode.to_dict(),
+            "actualLedgerEntryCount": inserted,
+            "supersededInferredEntryCount": sum(
+                len(list((item.payload or {}).get("supersedesEntryIds") or [])) for item in actual_entries
+            ),
+        }
 
     def save_decision_review(self, review: DecisionReview) -> DecisionReview:
         stamp = utc_now()

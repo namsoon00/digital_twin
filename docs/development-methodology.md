@@ -119,6 +119,7 @@ Domain:
 - `python_service/digital_twin/domain/account_identity.py`: brokerage account identity, credential references, watchlist universe, and delivery-profile separation
 - `python_service/digital_twin/domain/investment_mandate.py`: versioned investment policy, loss/cash/exposure limits, and allowed actions
 - `python_service/digital_twin/domain/portfolio_ledger.py`: immutable ledger entries, FIFO lots, cash, cost basis, and idempotent position reconstruction
+- `python_service/digital_twin/domain/portfolio_analytics.py`: stored-history portfolio return, volatility, drawdown, correlation, benchmark beta, and policy-delta calculations
 - `python_service/digital_twin/domain/risk_exposure.py`: raw exposure snapshots and policy deltas consumed by TypeDB
 - `python_service/digital_twin/domain/portfolio_rebalancing.py`: allocation bands, drift, and review-only rebalance proposals
 - `python_service/digital_twin/domain/trade_execution.py`: action envelopes, action plans, order intents, fills, and execution episodes
@@ -213,6 +214,7 @@ Current events:
 - `ai_inference.superseded`
 - `investment.mandate_changed`
 - `portfolio.ledger_recorded`
+- `portfolio.risk_observed`
 - `portfolio.rebalance_proposed`
 - `investment.action_plan_proposed`
 - `trade.execution_recorded`

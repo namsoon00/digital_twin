@@ -354,6 +354,8 @@ def build_monitor_runner(
                 investment_domain_store,
                 stores.account_registry(configured_settings),
                 InvestmentDomainService(investment_domain_store, publisher),
+                market_time_series_store,
+                configured_settings,
             )
         ),
     )
@@ -546,6 +548,10 @@ def build_trade_execution_service(settings=None) -> TradeExecutionService:
         stores.investment_domain_store(configured_settings),
         monitor_store=stores.monitor_store(configured_settings),
         settings=configured_settings,
+        investment_domain_service=InvestmentDomainService(
+            stores.investment_domain_store(configured_settings),
+            ontology_reasoning_event_bus(configured_settings),
+        ),
     )
 
 

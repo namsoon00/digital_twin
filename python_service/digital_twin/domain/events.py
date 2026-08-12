@@ -56,6 +56,7 @@ SYSTEM_ERROR_REPORTED = "system.error_reported"
 INVESTMENT_MANDATE_CHANGED = "investment.mandate_changed"
 PORTFOLIO_LEDGER_RECORDED = "portfolio.ledger_recorded"
 PORTFOLIO_REBALANCE_PROPOSED = "portfolio.rebalance_proposed"
+PORTFOLIO_RISK_OBSERVED = "portfolio.risk_observed"
 INVESTMENT_ACTION_PLAN_PROPOSED = "investment.action_plan_proposed"
 TRADE_EXECUTION_RECORDED = "trade.execution_recorded"
 INVESTMENT_DECISION_REVIEWED = "investment.decision_reviewed"
@@ -190,6 +191,7 @@ def investment_lifecycle_event(
         INVESTMENT_MANDATE_CHANGED,
         PORTFOLIO_LEDGER_RECORDED,
         PORTFOLIO_REBALANCE_PROPOSED,
+        PORTFOLIO_RISK_OBSERVED,
         INVESTMENT_ACTION_PLAN_PROPOSED,
         TRADE_EXECUTION_RECORDED,
         INVESTMENT_DECISION_REVIEWED,

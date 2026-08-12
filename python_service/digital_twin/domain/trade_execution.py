@@ -278,9 +278,32 @@ class TradeFill:
     def __post_init__(self) -> None:
         if not self.provider_execution_id:
             raise ValueError("TradeFill requires provider_execution_id for idempotency.")
+        if str(self.side or "").upper() not in {"BUY", "SELL"}:
+            raise ValueError("TradeFill side must be BUY or SELL.")
+        if self.quantity <= 0 or self.price <= 0 or self.fee < 0:
+            raise ValueError("TradeFill requires positive quantity and price and a non-negative fee.")
+        if not self.executed_at:
+            raise ValueError("TradeFill requires executed_at.")
 
     def to_dict(self) -> Dict[str, object]:
         return asdict(self)
+
+    @classmethod
+    def from_dict(cls, payload: Dict[str, object]):
+        values = dict(payload or {})
+        provider_id = str(values.get("providerExecutionId") or values.get("provider_execution_id") or "")
+        return cls(
+            fill_id=str(values.get("fillId") or values.get("fill_id") or stable_execution_id("trade-fill", provider_id)),
+            provider_execution_id=provider_id,
+            order_intent_id=str(values.get("orderIntentId") or values.get("order_intent_id") or ""),
+            symbol=str(values.get("symbol") or "").upper(),
+            side=str(values.get("side") or "").upper(),
+            quantity=float(values.get("quantity") or 0),
+            price=float(values.get("price") or 0),
+            fee=float(values.get("fee") or 0),
+            currency=str(values.get("currency") or "KRW").upper(),
+            executed_at=str(values.get("executedAt") or values.get("executed_at") or ""),
+        )
 
 
 @dataclass
@@ -300,6 +323,19 @@ class ExecutionEpisode:
             action_plan_id=plan.plan_id,
             portfolio_id=plan.portfolio_id,
             started_at=str(started_at or ""),
+        )
+
+    @classmethod
+    def from_dict(cls, payload: Dict[str, object]):
+        values = dict(payload or {})
+        return cls(
+            execution_episode_id=str(values.get("executionEpisodeId") or values.get("execution_episode_id") or ""),
+            action_plan_id=str(values.get("actionPlanId") or values.get("action_plan_id") or ""),
+            portfolio_id=str(values.get("portfolioId") or values.get("portfolio_id") or ""),
+            status=str(values.get("status") or "pending"),
+            fills=[TradeFill.from_dict(item) for item in values.get("fills") or [] if isinstance(item, dict)],
+            started_at=str(values.get("startedAt") or values.get("started_at") or ""),
+            completed_at=str(values.get("completedAt") or values.get("completed_at") or ""),
         )
 
     def record_fill(self, fill: TradeFill) -> bool:

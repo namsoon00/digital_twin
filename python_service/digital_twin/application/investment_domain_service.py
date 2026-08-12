@@ -9,6 +9,7 @@ from ..domain.events import (
     INVESTMENT_PERFORMANCE_ATTRIBUTED,
     PORTFOLIO_LEDGER_RECORDED,
     PORTFOLIO_REBALANCE_PROPOSED,
+    PORTFOLIO_RISK_OBSERVED,
     TRADE_EXECUTION_RECORDED,
     investment_lifecycle_event,
 )
@@ -108,6 +109,27 @@ class InvestmentDomainService:
         ))
         return saved
 
+    def risk_observed_event(self, snapshot, symbols):
+        return investment_lifecycle_event(
+            PORTFOLIO_RISK_OBSERVED,
+            snapshot.portfolio_id,
+            {
+                "portfolioId": snapshot.portfolio_id,
+                "riskSnapshotId": snapshot.risk_snapshot_id,
+                "sourceObservedAt": snapshot.observed_at,
+                "symbols": sorted({str(item or "").upper() for item in symbols or [] if str(item or "").strip()}),
+                "annualizedVolatilityPct": snapshot.annualized_volatility_pct,
+                "maximumDrawdownPct": snapshot.maximum_drawdown_pct,
+                "maximumPairwiseCorrelation": snapshot.maximum_pairwise_correlation,
+                "policyBreach": any([
+                    snapshot.volatility_policy_delta_pct > 0,
+                    snapshot.drawdown_policy_delta_pct > 0,
+                    snapshot.correlation_policy_delta > 0,
+                ]),
+            },
+            "portfolio-risk:" + snapshot.portfolio_id,
+        )
+
     def save_action_plan(self, plan: ActionPlan) -> ActionPlan:
         saved = self.repository.save_action_plan(plan)
         self.publish(investment_lifecycle_event(
@@ -126,7 +148,11 @@ class InvestmentDomainService:
 
     def save_execution(self, episode: ExecutionEpisode) -> ExecutionEpisode:
         saved = self.repository.save_execution_episode(episode)
-        self.publish(investment_lifecycle_event(
+        self.publish(self.execution_recorded_event(episode))
+        return saved
+
+    def execution_recorded_event(self, episode: ExecutionEpisode):
+        return investment_lifecycle_event(
             TRADE_EXECUTION_RECORDED,
             episode.execution_episode_id,
             {
@@ -137,8 +163,7 @@ class InvestmentDomainService:
                 "fillCount": len(episode.fills),
             },
             "action-plan:" + episode.action_plan_id,
-        ))
-        return saved
+        )
 
     def save_decision_review(self, review: DecisionReview) -> DecisionReview:
         saved = self.repository.save_decision_review(review)

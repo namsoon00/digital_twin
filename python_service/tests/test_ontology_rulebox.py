@@ -40,6 +40,7 @@ from digital_twin.infrastructure.typedb_ontology import (
     typedb_native_rule_execution_plan,
     typedb_native_rule_target_work_plan,
     typedb_native_rule_profile,
+    typedb_planned_candidate_symbols,
 )
 from digital_twin.infrastructure.graph_store_rulebox import derivation_payload_from_row
 from digital_twin.domain.ontology_rulebox_governance import (
@@ -284,6 +285,17 @@ class OntologyRuleBoxTests(unittest.TestCase):
         self.assertEqual(1, execution["selectedRuleCount"])
         self.assertEqual([], execution["selectedEntries"][0]["candidateSymbols"])
         self.assertEqual(1, work["targetWorkItemCount"])
+        self.assertEqual(
+            [],
+            typedb_planned_candidate_symbols(
+                execution["selectedEntries"][0],
+                ["000660", "MSTR"],
+            ),
+        )
+        self.assertEqual(
+            ["000660", "MSTR"],
+            typedb_planned_candidate_symbols({}, ["000660", "MSTR"]),
+        )
 
     def test_rulebox_derivation_keeps_its_evidence_role_over_template_default(self):
         payload = derivation_payload_from_row({

@@ -15112,7 +15112,7 @@ relation ontology-assertion,
                 },
             })
         rule_payload = rule.to_dict() if hasattr(rule, "to_dict") else dict(rule or {})
-        candidate_symbols = clean_symbols_from_payload(planned.get("candidateSymbols") or clean_symbols)
+        candidate_symbols = typedb_planned_candidate_symbols(planned, clean_symbols)
         target_work_metadata = {
             "targetWorkShardIndex": int(number_or_none(planned.get("targetWorkShardIndex")) or 0),
             "targetWorkShardCount": max(1, int(number_or_none(planned.get("targetWorkShardCount")) or 1)),
@@ -15361,8 +15361,9 @@ relation ontology-assertion,
         if not timeout_failure and not interrupted_transaction:
             return primary
 
-        candidate_symbols = clean_symbols_from_payload(
-            dict(planned or {}).get("candidateSymbols") or clean_symbols
+        candidate_symbols = typedb_planned_candidate_symbols(
+            dict(planned or {}),
+            clean_symbols,
         )
         primary_failure = dict(primary.get("failure") or {})
         primary_elapsed_ms = int(number_or_none(primary_failure.get("elapsedMs")) or 0)
@@ -16030,8 +16031,9 @@ relation ontology-assertion,
                                 ) in {"any", "optional"}
                                 for condition in (rule.conditions or [])
                             )
-                            candidate_symbols = clean_symbols_from_payload(
-                                planned.get("candidateSymbols") or clean_symbols
+                            candidate_symbols = typedb_planned_candidate_symbols(
+                                planned,
+                                clean_symbols,
                             )
                             query_plan = typedb_native_rule_runtime_query_plan(
                                 rule_payload,
@@ -16199,8 +16201,9 @@ relation ontology-assertion,
                                 "ruleId": str(getattr(rule, "rule_id", "") or ""),
                                 "status": "query-error",
                                 "reason": str(error)[:220],
-                                "candidateSymbols": clean_symbols_from_payload(
-                                    planned.get("candidateSymbols") or clean_symbols
+                                "candidateSymbols": typedb_planned_candidate_symbols(
+                                    planned,
+                                    clean_symbols,
                                 ),
                                 **typedb_rule_execution_profile_fields(planned),
                             },
@@ -22060,6 +22063,17 @@ def typedb_reasoning_subject_source_kinds(subject_kinds: Iterable[object]) -> Se
     for value in subject_kinds or []:
         result.update(mapping.get(str(value or "").upper().strip(), set()))
     return result
+
+
+def typedb_planned_candidate_symbols(
+    planned: Dict[str, object],
+    fallback_symbols: Iterable[str],
+) -> List[str]:
+    """Preserve an explicit empty scope for portfolio/account rule sources."""
+
+    if isinstance(planned, dict) and "candidateSymbols" in planned:
+        return clean_symbols_from_payload(planned.get("candidateSymbols") or [])
+    return clean_symbols_from_payload(fallback_symbols)
 
 
 def typedb_rule_execution_profile_fields(subject: object) -> Dict[str, object]:

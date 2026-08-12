@@ -1809,17 +1809,22 @@
 
   function rememberRenderedPageScrollPosition() {
     var key = renderedScrollKey();
-    if (!key) return;
+    if (!key) return null;
     var scroller = currentWorkspaceScroller();
-    state.tabScrollPositions[key] = {
+    var position = {
+      key: key,
       workspaceTop: scroller ? scrollTopNumber(scroller.scrollTop) : 0,
       windowTop: windowScrollTop()
     };
+    state.tabScrollPositions[key] = position;
+    return position;
   }
 
-  function restoreRenderedPageScrollPosition() {
+  function restoreRenderedPageScrollPosition(preferredPosition) {
     var key = renderedScrollKey() || activeScrollKey();
-    var saved = state.tabScrollPositions[key] || {};
+    var saved = preferredPosition && preferredPosition.key === key
+      ? preferredPosition
+      : (state.tabScrollPositions[key] || {});
     var scroller = currentWorkspaceScroller();
     if (scroller) {
       var workspaceTop = scrollTopNumber(saved.workspaceTop) || scrollTopNumber(saved.windowTop);
@@ -1831,6 +1836,14 @@
       var windowTop = scrollTopNumber(saved.windowTop) || scrollTopNumber(saved.workspaceTop);
       window.scrollTo(0, clampScrollTop(windowTop, maxWindowScrollTop()));
     }
+  }
+
+  function restoreRenderedPageScrollPositionAfterLayout(position) {
+    restoreRenderedPageScrollPosition(position);
+    if (!position || typeof window === "undefined" || !window.requestAnimationFrame) return;
+    window.requestAnimationFrame(function () {
+      restoreRenderedPageScrollPosition(position);
+    });
   }
 
   function bindPageScrollMemory() {
@@ -8906,7 +8919,7 @@
     }
     applyAppTheme();
     syncOverlayPageState();
-    rememberRenderedPageScrollPosition();
+    var renderedScrollPosition = rememberRenderedPageScrollPosition();
     if (state.loading && !state.snapshot) {
       destroyOntologyCytoscapeGraphs();
       app.innerHTML = renderLoading();
@@ -8928,9 +8941,9 @@
       bindActions();
       initOntologyCytoscapeGraphs();
       restoreTabBarPosition();
-      restoreRenderedPageScrollPosition();
       bindPageScrollMemory();
     }
+    restoreRenderedPageScrollPositionAfterLayout(renderedScrollPosition);
     syncAppNavScrollState();
     syncTopbarScrollState();
     bindMobileInfiniteScroll();

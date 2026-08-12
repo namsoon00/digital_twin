@@ -190,14 +190,14 @@ def runtime_slo_policy(settings: Mapping[str, object] = None) -> Dict[str, objec
         "projectionSloMs": int(_setting_number(
             configured,
             "ontologyRuntimeProjectionSloSeconds",
-            120,
+            30,
             5,
             1800,
         ) * 1000),
         "inferenceSloMs": int(_setting_number(
             configured,
             "ontologyRuntimeInferenceSloSeconds",
-            90,
+            30,
             5,
             1800,
         ) * 1000),
@@ -230,7 +230,7 @@ def scoped_abox_maintenance_policy(settings: Mapping[str, object] = None) -> Dic
     warning_count = _integer(_setting_number(
         configured,
         "ontologyAboxMaintenanceWarningInactiveManifestCount",
-        40,
+        8,
         1,
         20000,
     ))
@@ -239,7 +239,7 @@ def scoped_abox_maintenance_policy(settings: Mapping[str, object] = None) -> Dic
         _integer(_setting_number(
             configured,
             "ontologyAboxMaintenanceCriticalInactiveManifestCount",
-            120,
+            24,
             2,
             50000,
         )),
@@ -281,7 +281,7 @@ def scoped_abox_maintenance_policy(settings: Mapping[str, object] = None) -> Dic
         "keepInactiveManifestCount": _integer(_setting_number(
             configured,
             "ontologyAboxMaintenanceKeepInactiveManifestCount",
-            0,
+            1,
             0,
             5,
         )),
@@ -350,10 +350,10 @@ def scoped_abox_maintenance_yield_policy(
     """
 
     configured = settings or {}
-    # Retention is normally an idle-time concern. Yielding a live investment
-    # batch for it is an explicit operational opt-in; capacity protection has
-    # its own urgent path and must not depend on this hand-off.
-    enabled = _text(configured.get("ontologyAboxMaintenanceYieldEnabled") or "0").lower()
+    # The hand-off happens only between inference batches and only for a fresh,
+    # directly observed backlog. This prevents cleanup starvation without
+    # interrupting an active investment transaction.
+    enabled = _text(configured.get("ontologyAboxMaintenanceYieldEnabled") or "1").lower()
     priority_count = _integer(_setting_number(
         configured,
         "ontologyAboxMaintenancePriorityInactiveManifestCount",

@@ -97,6 +97,15 @@ class TableSpaceConnection(RecordingConnection):
         ])
 
 
+class RestrictedTableSpaceConnection(TableSpaceConnection):
+    def execute(self, sql, params=()):
+        rendered = str(sql)
+        if "innodb_tablespaces" in rendered:
+            self.calls.append((rendered, tuple(params or ())))
+            raise PermissionError("PROCESS privilege required")
+        return super().execute(sql, params)
+
+
 class MySQLStorageMaintenanceTests(unittest.TestCase):
     def test_realtime_fast_path_skips_schema_and_constructor_retention(self):
         self.assertTrue(mysql_operational_schema_bootstrap_enabled({}))
@@ -443,6 +452,15 @@ class MySQLStorageMaintenanceTests(unittest.TestCase):
         self.assertEqual(["ontology_world_projection_outbox"], safe["selectedTables"])
         self.assertEqual([], blocked["selectedTables"])
         self.assertEqual("insufficient-headroom", blocked["skippedTables"][0]["reason"])
+
+    def test_compaction_plan_falls_back_without_process_privilege(self):
+        connection = RestrictedTableSpaceConnection()
+
+        candidates = mysql_operational_space_reclaim_candidates(connection)
+
+        self.assertEqual(["ontology_world_projection_outbox"], [item["table"] for item in candidates])
+        self.assertEqual("information-schema-tables", candidates[0]["metadataSource"])
+        self.assertEqual(2, len(connection.calls))
 
     def test_only_disposable_test_and_smoke_databases_are_candidates(self):
         result = ephemeral_mysql_database_names(

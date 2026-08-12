@@ -545,6 +545,37 @@ class MySQLOntologyWorldProjectionOutboxStore(MySQLOperationalConnection):
             "selection": "latest-completed-per-dedupe-key",
         }
 
+    def latest_completed(self, limit: int = 100) -> List[Dict[str, object]]:
+        """Read the latest durable packet per source without changing queue state.
+
+        Blue/green TypeDB preparation runs while the active projection worker
+        is still online. Requeueing completed rows in that phase would let the
+        active and candidate stores race for the same MySQL job. A read-only
+        snapshot gives the candidate identical source facts while preserving
+        the live outbox contract.
+        """
+        bounded = max(1, min(5000, int(limit or 100)))
+        with self.connect() as connection:
+            rows = connection.execute(
+                """
+                SELECT * FROM ontology_world_projection_outbox
+                WHERE status = %s AND projection_kind IN ('market', 'knowledge')
+                ORDER BY updated_at DESC, job_id DESC
+                """,
+                (COMPLETED,),
+            ).fetchall()
+        selected = []
+        seen_dedupe_keys = set()
+        for row in rows or []:
+            dedupe_key = _clean(row.get("dedupe_key")) or _clean(row.get("job_id"))
+            if not dedupe_key or dedupe_key in seen_dedupe_keys:
+                continue
+            seen_dedupe_keys.add(dedupe_key)
+            selected.append(self.row_payload(row))
+            if len(selected) >= bounded:
+                break
+        return selected
+
     def supersede_oversized_pending(self, limit: int = 500) -> int:
         """Retire packets produced by an older unbounded projection shape."""
         bounded = max(1, min(5000, int(limit or 500)))

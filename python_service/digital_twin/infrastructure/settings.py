@@ -77,6 +77,8 @@ TEXT_SETTING_KEYS = [
     "mysqlMinimalTerminalNotificationRetentionHours",
     "mysqlMinimalCompletedWorldProjectionRetentionHours",
     "mysqlMinimalCompletedInferenceDetailRetentionHours",
+    "mysqlMinimalFailedWorldProjectionPayloadRetentionHours",
+    "mysqlMinimalFailedWorldProjectionRetentionHours",
     "mysqlMinimalProjectionPayloadRetentionHours",
     "mysqlMinimalLifecycleEventRetentionHours",
     "mysqlMinimalResearchTerminalRetentionHours",
@@ -366,6 +368,8 @@ TEXT_SETTING_KEYS = [
     "marketMaterialityVolumeRatio",
     "marketMaterialityInvestorFlowRatioPct",
     "typedbAddress",
+    "typedbHttpAddress",
+    "typedbDataPath",
     "typedbUser",
     "typedbAllowDefaultPassword",
     "typedbDatabase",
@@ -401,6 +405,9 @@ TEXT_SETTING_KEYS = [
     "typedbCapacityCriticalPercent",
     "typedbCapacityAutoRotateCooldownMinutes",
     "typedbCapacityAutoRotateFailureRetrySeconds",
+    "typedbBlueGreenRotationEnabled",
+    "typedbBlueGreenStagePortOffset",
+    "typedbBlueGreenRetiredRetentionMinutes",
     "typedbCapacityMaintenanceMaxManifests",
     "typedbCapacityMaintenanceMaxDeleteBatches",
     "typedbCapacityMaintenanceDeleteBatchSize",
@@ -948,6 +955,11 @@ def runtime_settings(fast_operational_read: bool = False) -> Dict[str, str]:
         # configuration. Prefer the process environment so a rotated secret
         # can take effect without leaving an older database value authoritative.
         env_value = configured(os.environ.get(env_name))
+        infrastructure_override = configured(
+            os.environ.get("ORBIT_INFRASTRUCTURE_OVERRIDE_ENABLED")
+        ).lower() in {"1", "true", "yes", "on"}
+        if infrastructure_override and env_value:
+            return env_value
         if key in SECRET_SETTING_KEYS and env_value:
             return env_value
         stored = configured(store.get(key))
@@ -1032,7 +1044,7 @@ def runtime_settings(fast_operational_read: bool = False) -> Dict[str, str]:
         "ontologyExecutionTraceRetentionDays": value(
             "ontologyExecutionTraceRetentionDays",
             "ONTOLOGY_EXECUTION_TRACE_RETENTION_DAYS",
-            "30",
+            "1",
         ),
         "ontologyMacroSystemicRateDeltaBp": value(
             "ontologyMacroSystemicRateDeltaBp",
@@ -1208,6 +1220,16 @@ def runtime_settings(fast_operational_read: bool = False) -> Dict[str, str]:
             "mysqlMinimalCompletedInferenceDetailRetentionHours",
             "MYSQL_MINIMAL_COMPLETED_INFERENCE_DETAIL_RETENTION_HOURS",
             "24",
+        ),
+        "mysqlMinimalFailedWorldProjectionPayloadRetentionHours": value(
+            "mysqlMinimalFailedWorldProjectionPayloadRetentionHours",
+            "MYSQL_MINIMAL_FAILED_WORLD_PROJECTION_PAYLOAD_RETENTION_HOURS",
+            "24",
+        ),
+        "mysqlMinimalFailedWorldProjectionRetentionHours": value(
+            "mysqlMinimalFailedWorldProjectionRetentionHours",
+            "MYSQL_MINIMAL_FAILED_WORLD_PROJECTION_RETENTION_HOURS",
+            "168",
         ),
         "mysqlMinimalProjectionPayloadRetentionHours": value(
             "mysqlMinimalProjectionPayloadRetentionHours",
@@ -1438,10 +1460,10 @@ def runtime_settings(fast_operational_read: bool = False) -> Dict[str, str]:
         "ontologyReasoningExecutionTimeoutBackoffSeconds": value("ontologyReasoningExecutionTimeoutBackoffSeconds", "ONTOLOGY_REASONING_EXECUTION_TIMEOUT_BACKOFF_SECONDS", "300"),
         "ontologyReasoningPreNativeTimeoutBackoffSeconds": value("ontologyReasoningPreNativeTimeoutBackoffSeconds", "ONTOLOGY_REASONING_PRE_NATIVE_TIMEOUT_BACKOFF_SECONDS", "45"),
         "ontologyReasoningQueueAlertEnabled": value("ontologyReasoningQueueAlertEnabled", "ONTOLOGY_REASONING_QUEUE_ALERT_ENABLED", "1"),
-        "ontologyReasoningQueueWarningAgeMinutes": value("ontologyReasoningQueueWarningAgeMinutes", "ONTOLOGY_REASONING_QUEUE_WARNING_AGE_MINUTES", "30"),
-        "ontologyReasoningQueueCriticalAgeMinutes": value("ontologyReasoningQueueCriticalAgeMinutes", "ONTOLOGY_REASONING_QUEUE_CRITICAL_AGE_MINUTES", "90"),
-        "ontologyReasoningQueueWarningPendingCount": value("ontologyReasoningQueueWarningPendingCount", "ONTOLOGY_REASONING_QUEUE_WARNING_PENDING_COUNT", "100"),
-        "ontologyReasoningQueueCriticalPendingCount": value("ontologyReasoningQueueCriticalPendingCount", "ONTOLOGY_REASONING_QUEUE_CRITICAL_PENDING_COUNT", "200"),
+        "ontologyReasoningQueueWarningAgeMinutes": value("ontologyReasoningQueueWarningAgeMinutes", "ONTOLOGY_REASONING_QUEUE_WARNING_AGE_MINUTES", "2"),
+        "ontologyReasoningQueueCriticalAgeMinutes": value("ontologyReasoningQueueCriticalAgeMinutes", "ONTOLOGY_REASONING_QUEUE_CRITICAL_AGE_MINUTES", "5"),
+        "ontologyReasoningQueueWarningPendingCount": value("ontologyReasoningQueueWarningPendingCount", "ONTOLOGY_REASONING_QUEUE_WARNING_PENDING_COUNT", "20"),
+        "ontologyReasoningQueueCriticalPendingCount": value("ontologyReasoningQueueCriticalPendingCount", "ONTOLOGY_REASONING_QUEUE_CRITICAL_PENDING_COUNT", "50"),
         "ontologyReasoningQueueWarningOverdueSymbols": value("ontologyReasoningQueueWarningOverdueSymbols", "ONTOLOGY_REASONING_QUEUE_WARNING_OVERDUE_SYMBOLS", "3"),
         "ontologyReasoningQueueCriticalOverdueSymbols": value("ontologyReasoningQueueCriticalOverdueSymbols", "ONTOLOGY_REASONING_QUEUE_CRITICAL_OVERDUE_SYMBOLS", "8"),
         "ontologyReasoningQueueConsecutiveObservations": value("ontologyReasoningQueueConsecutiveObservations", "ONTOLOGY_REASONING_QUEUE_CONSECUTIVE_OBSERVATIONS", "3"),
@@ -1461,9 +1483,9 @@ def runtime_settings(fast_operational_read: bool = False) -> Dict[str, str]:
         # complete a normal generation inside the isolated maintenance window.
         "ontologyAboxMaintenanceMaxDeleteBatchesPerRun": value("ontologyAboxMaintenanceMaxDeleteBatchesPerRun", "ONTOLOGY_ABOX_MAINTENANCE_MAX_DELETE_BATCHES_PER_RUN", "8"),
         "ontologyAboxMaintenanceDeleteBatchSize": value("ontologyAboxMaintenanceDeleteBatchSize", "ONTOLOGY_ABOX_MAINTENANCE_DELETE_BATCH_SIZE", "150"),
-        "ontologyAboxMaintenanceKeepInactiveManifestCount": value("ontologyAboxMaintenanceKeepInactiveManifestCount", "ONTOLOGY_ABOX_MAINTENANCE_KEEP_INACTIVE_MANIFEST_COUNT", "0"),
-        "ontologyAboxMaintenanceWarningInactiveManifestCount": value("ontologyAboxMaintenanceWarningInactiveManifestCount", "ONTOLOGY_ABOX_MAINTENANCE_WARNING_INACTIVE_MANIFEST_COUNT", "40"),
-        "ontologyAboxMaintenanceCriticalInactiveManifestCount": value("ontologyAboxMaintenanceCriticalInactiveManifestCount", "ONTOLOGY_ABOX_MAINTENANCE_CRITICAL_INACTIVE_MANIFEST_COUNT", "120"),
+        "ontologyAboxMaintenanceKeepInactiveManifestCount": value("ontologyAboxMaintenanceKeepInactiveManifestCount", "ONTOLOGY_ABOX_MAINTENANCE_KEEP_INACTIVE_MANIFEST_COUNT", "1"),
+        "ontologyAboxMaintenanceWarningInactiveManifestCount": value("ontologyAboxMaintenanceWarningInactiveManifestCount", "ONTOLOGY_ABOX_MAINTENANCE_WARNING_INACTIVE_MANIFEST_COUNT", "8"),
+        "ontologyAboxMaintenanceCriticalInactiveManifestCount": value("ontologyAboxMaintenanceCriticalInactiveManifestCount", "ONTOLOGY_ABOX_MAINTENANCE_CRITICAL_INACTIVE_MANIFEST_COUNT", "24"),
         "ontologyAboxMaintenanceAdaptiveDrainEnabled": value("ontologyAboxMaintenanceAdaptiveDrainEnabled", "ONTOLOGY_ABOX_MAINTENANCE_ADAPTIVE_DRAIN_ENABLED", "1"),
         "ontologyAboxMaintenanceAdaptiveDrainMaxDeleteBatchesPerRun": value("ontologyAboxMaintenanceAdaptiveDrainMaxDeleteBatchesPerRun", "ONTOLOGY_ABOX_MAINTENANCE_ADAPTIVE_DRAIN_MAX_DELETE_BATCHES_PER_RUN", "16"),
         "ontologyAboxMaintenanceAdaptiveDrainCriticalRunsBeforeIncrease": value("ontologyAboxMaintenanceAdaptiveDrainCriticalRunsBeforeIncrease", "ONTOLOGY_ABOX_MAINTENANCE_ADAPTIVE_DRAIN_CRITICAL_RUNS_BEFORE_INCREASE", "2"),
@@ -1478,10 +1500,10 @@ def runtime_settings(fast_operational_read: bool = False) -> Dict[str, str]:
         "ontologyAboxMaintenanceMaxReasoningDeferralSeconds": value("ontologyAboxMaintenanceMaxReasoningDeferralSeconds", "ONTOLOGY_ABOX_MAINTENANCE_MAX_REASONING_DEFERRAL_SECONDS", "120"),
         "ontologyAboxMaintenanceBusyRetrySeconds": value("ontologyAboxMaintenanceBusyRetrySeconds", "ONTOLOGY_ABOX_MAINTENANCE_BUSY_RETRY_SECONDS", "10"),
         "ontologyAboxMaintenancePriorityInactiveManifestCount": value("ontologyAboxMaintenancePriorityInactiveManifestCount", "ONTOLOGY_ABOX_MAINTENANCE_PRIORITY_INACTIVE_MANIFEST_COUNT", "8"),
-        # Do not pause live TypeDB inference for routine ABox retention. The
-        # maintenance worker drains it when the reasoning queue is idle, and
-        # the capacity guard retains its independent emergency path.
-        "ontologyAboxMaintenanceYieldEnabled": value("ontologyAboxMaintenanceYieldEnabled", "ONTOLOGY_ABOX_MAINTENANCE_YIELD_ENABLED", "0"),
+        # A verified inactive-generation backlog gets one bounded writer turn
+        # between inference batches. The active inference transaction is never
+        # interrupted; the next batch observes the durable hand-off request.
+        "ontologyAboxMaintenanceYieldEnabled": value("ontologyAboxMaintenanceYieldEnabled", "ONTOLOGY_ABOX_MAINTENANCE_YIELD_ENABLED", "1"),
         "ontologyAboxMaintenanceYieldAfterSeconds": value("ontologyAboxMaintenanceYieldAfterSeconds", "ONTOLOGY_ABOX_MAINTENANCE_YIELD_AFTER_SECONDS", "120"),
         "ontologyAboxMaintenanceYieldWindowSeconds": value("ontologyAboxMaintenanceYieldWindowSeconds", "ONTOLOGY_ABOX_MAINTENANCE_YIELD_WINDOW_SECONDS", "30"),
         "ontologyAboxMaintenanceYieldRequestTtlSeconds": value("ontologyAboxMaintenanceYieldRequestTtlSeconds", "ONTOLOGY_ABOX_MAINTENANCE_YIELD_REQUEST_TTL_SECONDS", "420"),
@@ -1490,8 +1512,8 @@ def runtime_settings(fast_operational_read: bool = False) -> Dict[str, str]:
         "ontologyProjectionCircuitFailureThreshold": value("ontologyProjectionCircuitFailureThreshold", "ONTOLOGY_PROJECTION_CIRCUIT_FAILURE_THRESHOLD", "3"),
         "ontologyProjectionCircuitCooldownSeconds": value("ontologyProjectionCircuitCooldownSeconds", "ONTOLOGY_PROJECTION_CIRCUIT_COOLDOWN_SECONDS", "300"),
         "ontologyProjectionCircuitProbeRetrySeconds": value("ontologyProjectionCircuitProbeRetrySeconds", "ONTOLOGY_PROJECTION_CIRCUIT_PROBE_RETRY_SECONDS", "15"),
-        "ontologyRuntimeProjectionSloSeconds": value("ontologyRuntimeProjectionSloSeconds", "ONTOLOGY_RUNTIME_PROJECTION_SLO_SECONDS", "120"),
-        "ontologyRuntimeInferenceSloSeconds": value("ontologyRuntimeInferenceSloSeconds", "ONTOLOGY_RUNTIME_INFERENCE_SLO_SECONDS", "90"),
+        "ontologyRuntimeProjectionSloSeconds": value("ontologyRuntimeProjectionSloSeconds", "ONTOLOGY_RUNTIME_PROJECTION_SLO_SECONDS", "30"),
+        "ontologyRuntimeInferenceSloSeconds": value("ontologyRuntimeInferenceSloSeconds", "ONTOLOGY_RUNTIME_INFERENCE_SLO_SECONDS", "30"),
         "ontologyRuntimeSloConsecutiveBreachCount": value("ontologyRuntimeSloConsecutiveBreachCount", "ONTOLOGY_RUNTIME_SLO_CONSECUTIVE_BREACH_COUNT", "3"),
         "ontologyRuntimeAuditWindowRuns": value("ontologyRuntimeAuditWindowRuns", "ONTOLOGY_RUNTIME_AUDIT_WINDOW_RUNS", "40"),
         "ontologyScopeIntegrityAuditEnabled": value("ontologyScopeIntegrityAuditEnabled", "ONTOLOGY_SCOPE_INTEGRITY_AUDIT_ENABLED", "1"),
@@ -1857,6 +1879,8 @@ def runtime_settings(fast_operational_read: bool = False) -> Dict[str, str]:
             "1",
         ),
         "typedbAddress": value("typedbAddress", "TYPEDB_ADDRESS", "127.0.0.1:1729"),
+        "typedbHttpAddress": value("typedbHttpAddress", "TYPEDB_HTTP_ADDRESS", "127.0.0.1:8000"),
+        "typedbDataPath": value("typedbDataPath", "TYPEDB_DATA_PATH", str(data_dir() / "typedb-data")),
         "typedbUser": value("typedbUser", "TYPEDB_USER", "admin"),
         "typedbAllowDefaultPassword": value(
             "typedbAllowDefaultPassword",
@@ -1939,7 +1963,7 @@ def runtime_settings(fast_operational_read: bool = False) -> Dict[str, str]:
         "typedbAutoResetEnabled": value("typedbAutoResetEnabled", "TYPEDB_AUTO_RESET_ENABLED", "0"),
         "typedbAgeResetEnabled": value("typedbAgeResetEnabled", "TYPEDB_AGE_RESET_ENABLED", "0"),
         "typedbDataRetentionHours": value("typedbDataRetentionHours", "TYPEDB_DATA_RETENTION_HOURS", "24"),
-        "typedbDataMaxSizeMb": value("typedbDataMaxSizeMb", "TYPEDB_DATA_MAX_SIZE_MB", "8192"),
+        "typedbDataMaxSizeMb": value("typedbDataMaxSizeMb", "TYPEDB_DATA_MAX_SIZE_MB", "16384"),
         "typedbMinimumFreeSpaceMb": value("typedbMinimumFreeSpaceMb", "TYPEDB_MINIMUM_FREE_SPACE_MB", "4096"),
         "typedbCapacityGuardCheckIntervalSeconds": value(
             "typedbCapacityGuardCheckIntervalSeconds",
@@ -1985,6 +2009,21 @@ def runtime_settings(fast_operational_read: bool = False) -> Dict[str, str]:
             "typedbCapacityAutoRotateFailureRetrySeconds",
             "TYPEDB_CAPACITY_AUTO_ROTATE_FAILURE_RETRY_SECONDS",
             "120",
+        ),
+        "typedbBlueGreenRotationEnabled": value(
+            "typedbBlueGreenRotationEnabled",
+            "TYPEDB_BLUE_GREEN_ROTATION_ENABLED",
+            "1",
+        ),
+        "typedbBlueGreenStagePortOffset": value(
+            "typedbBlueGreenStagePortOffset",
+            "TYPEDB_BLUE_GREEN_STAGE_PORT_OFFSET",
+            "1",
+        ),
+        "typedbBlueGreenRetiredRetentionMinutes": value(
+            "typedbBlueGreenRetiredRetentionMinutes",
+            "TYPEDB_BLUE_GREEN_RETIRED_RETENTION_MINUTES",
+            "30",
         ),
         "typedbCapacityMaintenanceMaxManifests": value(
             "typedbCapacityMaintenanceMaxManifests",

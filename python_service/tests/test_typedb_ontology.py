@@ -8809,7 +8809,7 @@ class TypeDBOntologyRepositoryTests(unittest.TestCase):
         self.assertIn("--storage.data-directory", command)
         self.assertEqual("typedb", workers["typedb"]["role"])
         self.assertEqual("24", workers["typedb"]["retentionHours"])
-        self.assertEqual("8192", workers["typedb"]["maxSizeMb"])
+        self.assertEqual("16384", workers["typedb"]["maxSizeMb"])
         self.assertEqual("0", workers["typedb"]["ageResetEnabled"])
         self.assertEqual("127.0.0.1:1729", workers["typedb"]["healthAddress"])
         self.assertEqual("1800", workers["typedb"]["startupWaitSeconds"])
@@ -8858,7 +8858,8 @@ class TypeDBOntologyRepositoryTests(unittest.TestCase):
                 SimpleNamespace(returncode=0, stdout='{"status":"ok","ruleBoxReplaced":true}', stderr=""),
             ]
 
-            with patch.object(service_manager.subprocess, "run", side_effect=results) as run, \
+            with patch.object(service_manager, "source_revision", return_value="test-revision"), \
+                    patch.object(service_manager.subprocess, "run", side_effect=results) as run, \
                     patch.object(service_manager.time, "sleep", return_value=None):
                 self.assertTrue(service_manager.ensure_typedb_seeded(spec))
 

@@ -159,11 +159,42 @@ def typedb_executable() -> str:
     return str(home_install) if home_install.exists() else ""
 
 
+def source_revision() -> str:
+    """Return the code revision that a managed process must keep for its lifetime."""
+    try:
+        result = subprocess.run(
+            ["git", "rev-parse", "--short=12", "HEAD"],
+            cwd=str(ROOT_DIR),
+            stdin=subprocess.DEVNULL,
+            stdout=subprocess.PIPE,
+            stderr=subprocess.DEVNULL,
+            text=True,
+            timeout=1,
+            check=False,
+        )
+    except (OSError, subprocess.SubprocessError):
+        return "unknown"
+    return str(result.stdout or "").strip() or "unknown"
+
+
+def managed_process_environment(spec: Dict[str, object] = None) -> Dict[str, str]:
+    environment = dict(os.environ, PYTHONUNBUFFERED="1")
+    environment.update({str(key): str(value) for key, value in dict((spec or {}).get("env") or {}).items()})
+    environment["ORBIT_RUNTIME_REVISION"] = source_revision()
+    environment.setdefault("ORBIT_RUNTIME_VERSION", "local-managed")
+    environment.setdefault("ORBIT_RUNTIME_ENV", "production")
+    return environment
+
+
 def typedb_worker_spec(settings: Dict[str, object]) -> Dict[str, object]:
     executable = typedb_executable()
     address = str((settings or {}).get("typedbAddress") or "127.0.0.1:1729").strip() or "127.0.0.1:1729"
-    data_path = data_dir() / "typedb-data"
+    configured_data_path = str((settings or {}).get("typedbDataPath") or "").strip()
+    data_path = Path(configured_data_path).expanduser() if configured_data_path else data_dir() / "typedb-data"
+    if not data_path.is_absolute():
+        data_path = ROOT_DIR / data_path
     log_dir = data_dir() / "typedb-logs"
+    http_address = str((settings or {}).get("typedbHttpAddress") or "127.0.0.1:8000").strip() or "127.0.0.1:8000"
     password = str((settings or {}).get("typedbPassword") or os.environ.get("TYPEDB_PASSWORD") or "").strip()
     allow_weak_password = truthy(
         os.environ.get("TYPEDB_ALLOW_DEFAULT_PASSWORD")
@@ -178,7 +209,7 @@ def typedb_worker_spec(settings: Dict[str, object]) -> Dict[str, object]:
         "--server.advertise-address",
         address,
         "--server.http.listen-address",
-        "127.0.0.1:8000",
+        http_address,
         "--diagnostics.monitoring.enabled",
         "false",
         "--diagnostics.reporting.metrics",
@@ -199,7 +230,7 @@ def typedb_worker_spec(settings: Dict[str, object]) -> Dict[str, object]:
         "role": "typedb",
         "dataPath": data_path,
         "retentionHours": str((settings or {}).get("typedbDataRetentionHours") or "24"),
-        "maxSizeMb": str((settings or {}).get("typedbDataMaxSizeMb") or "8192"),
+        "maxSizeMb": str((settings or {}).get("typedbDataMaxSizeMb") or "16384"),
         "minimumFreeSpaceMb": str(max(
             int_value((settings or {}).get("typedbMinimumFreeSpaceMb"), 4096, 1),
             int_value((settings or {}).get("operationalMinimumFreeSpaceMb"), 12288, 1),
@@ -216,8 +247,18 @@ def typedb_worker_spec(settings: Dict[str, object]) -> Dict[str, object]:
         "autoRotationFailureRetrySeconds": str(
             (settings or {}).get("typedbCapacityAutoRotateFailureRetrySeconds") or "120"
         ),
+        "blueGreenRotationEnabled": str(
+            (settings or {}).get("typedbBlueGreenRotationEnabled") or "1"
+        ),
+        "blueGreenStagePortOffset": str(
+            (settings or {}).get("typedbBlueGreenStagePortOffset") or "1"
+        ),
+        "blueGreenRetiredRetentionMinutes": str(
+            (settings or {}).get("typedbBlueGreenRetiredRetentionMinutes") or "30"
+        ),
         "ageResetEnabled": str((settings or {}).get("typedbAgeResetEnabled") or "0"),
         "healthAddress": address,
+        "httpAddress": http_address,
         "typedbUser": str((settings or {}).get("typedbUser") or os.environ.get("TYPEDB_USER") or "admin"),
         "typedbPassword": password,
         "typedbDatabase": str((settings or {}).get("typedbDatabase") or os.environ.get("TYPEDB_DATABASE") or "orbit_alpha_ontology"),
@@ -887,7 +928,7 @@ def status_worker(spec: Dict[str, object]) -> int:
             {
                 "ontologyTypeDbEnabled": "1",
                 "typedbMinimumFreeSpaceMb": spec.get("minimumFreeSpaceMb") or "4096",
-                "typedbDataMaxSizeMb": spec.get("maxSizeMb") or "8192",
+                "typedbDataMaxSizeMb": spec.get("maxSizeMb") or "16384",
             },
             data_path=Path(spec.get("dataPath") or data_dir() / "typedb-data"),
         )
@@ -1136,16 +1177,8 @@ def clear_typedb_shared_world_projection_rebuild_pending() -> None:
     write_typedb_retention_marker(marker)
 
 
-def bootstrap_typedb_credentials_after_reset(spec: Dict[str, object]) -> bool:
-    """Restore local TypeDB credentials after an intentional empty-store boot.
-
-    TypeDB CE recreates only ``admin/password`` after its data directory is
-    removed. The configured password remains in the local settings store, so
-    no secret needs to be regenerated or logged. This path is gated by the
-    reset marker and is disabled as soon as the configured credentials work.
-    """
-    if not typedb_credentials_bootstrap_pending():
-        return False
+def configure_fresh_typedb_credentials(spec: Dict[str, object]) -> bool:
+    """Apply configured credentials to a known fresh TypeDB CE data path."""
     components = typedb_driver_components()
     if components is None:
         return False
@@ -1178,10 +1211,19 @@ def bootstrap_typedb_credentials_after_reset(spec: Dict[str, object]) -> bool:
         except Exception:
             pass
     if not typedb_driver_ready(spec):
-        append_log(spec["log"], "credential bootstrap verification failed")
+        append_log(spec["log"], "fresh credential configuration verification failed")
+        return False
+    append_log(spec["log"], "configured TypeDB credentials applied to fresh store")
+    return True
+
+
+def bootstrap_typedb_credentials_after_reset(spec: Dict[str, object]) -> bool:
+    """Restore local TypeDB credentials after an intentional empty-store boot."""
+    if not typedb_credentials_bootstrap_pending():
+        return False
+    if not configure_fresh_typedb_credentials(spec):
         return False
     clear_typedb_credentials_bootstrap_pending()
-    append_log(spec["log"], "configured TypeDB credentials restored after reset")
     print(str(spec["label"]) + " restored configured TypeDB credentials after reset.")
     return True
 
@@ -1221,7 +1263,8 @@ def typedb_seed_command(spec: Dict[str, object]) -> List[str]:
     # server and before dependent workers start. A retained lease belongs to a
     # writer connected to the previous server process and is therefore safe to
     # reclaim now; normal live reseeds do not pass this flag.
-    command.append("--recover-scoped-write-lease")
+    if str(spec.get("role") or "") != "typedb-stage":
+        command.append("--recover-scoped-write-lease")
     if truthy(spec.get("seedReplaceRuleBox")):
         command.append("--replace-rulebox")
     if truthy(spec.get("seedKeepInference")):
@@ -1231,7 +1274,7 @@ def typedb_seed_command(spec: Dict[str, object]) -> List[str]:
 
 def typedb_shared_world_projection_rebuild_command(spec: Dict[str, object]) -> List[str]:
     limit = int_value(spec.get("sharedWorldProjectionRebuildLimit"), 100, 1)
-    return [
+    command = [
         sys.executable,
         "-u",
         "python_service/service.py",
@@ -1240,6 +1283,24 @@ def typedb_shared_world_projection_rebuild_command(spec: Dict[str, object]) -> L
         "--limit",
         str(limit),
     ]
+    if str(spec.get("role") or "") == "typedb-stage":
+        command.append("--read-only-source")
+    return command
+
+
+def typedb_subprocess_environment(spec: Dict[str, object]) -> Dict[str, str]:
+    """Pin maintenance commands to the exact TypeDB instance being managed."""
+    environment = managed_process_environment(spec)
+    environment.update({
+        "ORBIT_INFRASTRUCTURE_OVERRIDE_ENABLED": "1",
+        "TYPEDB_ADDRESS": str(spec.get("healthAddress") or "127.0.0.1:1729"),
+        "TYPEDB_DATABASE": str(spec.get("typedbDatabase") or "orbit_alpha_ontology"),
+        "TYPEDB_USER": str(spec.get("typedbUser") or "admin"),
+        "TYPEDB_PASSWORD": str(spec.get("typedbPassword") or ""),
+        "TYPEDB_TLS_ENABLED": str(spec.get("typedbTlsEnabled") or "0"),
+        "ONTOLOGY_TYPEDB_ENABLED": "1",
+    })
+    return environment
 
 
 def append_log_text(path: Path, label: str, text: str) -> None:
@@ -1252,12 +1313,22 @@ def append_log_text(path: Path, label: str, text: str) -> None:
 
 
 def ensure_typedb_seeded(spec: Dict[str, object]) -> bool:
-    if str(spec.get("role") or "") != "typedb":
+    if str(spec.get("role") or "") not in {"typedb", "typedb-stage"}:
         return True
     if not truthy(spec.get("seedOnStart")):
         append_log(spec["log"], "seed skipped")
         print(str(spec["label"]) + " RuleBox seed skipped.")
         return True
+    if str(spec.get("role") or "") == "typedb":
+        marker = read_typedb_retention_marker()
+        prepared_path = str(marker.get("blueGreenPreparedDataPath") or "").strip()
+        if bool(marker.get("blueGreenCutoverPending")) and prepared_path == str(spec.get("dataPath") or ""):
+            marker["blueGreenCutoverPending"] = False
+            marker["blueGreenCutoverActivatedAt"] = iso_now()
+            write_typedb_retention_marker(marker)
+            append_log(spec["log"], "seed skipped for prevalidated blue-green cutover")
+            print(str(spec["label"]) + " reused prevalidated blue-green seed.")
+            return True
     command = typedb_seed_command(spec)
     timeout_seconds = int_value(spec.get("seedTimeoutSeconds"), 180, 1)
     attempts = int_value(spec.get("seedRetryCount"), 2, 0) + 1
@@ -1268,7 +1339,7 @@ def ensure_typedb_seeded(spec: Dict[str, object]) -> bool:
             result = subprocess.run(
                 command,
                 cwd=str(ROOT_DIR),
-                env=dict(os.environ, PYTHONUNBUFFERED="1"),
+                env=typedb_subprocess_environment(spec),
                 stdin=subprocess.DEVNULL,
                 capture_output=True,
                 text=True,
@@ -1296,9 +1367,14 @@ def ensure_typedb_seeded(spec: Dict[str, object]) -> bool:
     return False
 
 
-def ensure_typedb_shared_world_projection_rebuilt(spec: Dict[str, object]) -> bool:
+def ensure_typedb_shared_world_projection_rebuilt(
+    spec: Dict[str, object],
+    force: bool = False,
+) -> bool:
     """Restore MySQL-backed shared-world inputs before dependent workers run."""
-    if str(spec.get("role") or "") != "typedb" or not typedb_shared_world_projection_rebuild_pending():
+    if str(spec.get("role") or "") not in {"typedb", "typedb-stage"}:
+        return True
+    if not force and not typedb_shared_world_projection_rebuild_pending():
         return True
     command = typedb_shared_world_projection_rebuild_command(spec)
     timeout_seconds = int_value(spec.get("sharedWorldProjectionRebuildTimeoutSeconds"), 900, 30)
@@ -1308,7 +1384,7 @@ def ensure_typedb_shared_world_projection_rebuilt(spec: Dict[str, object]) -> bo
         result = subprocess.run(
             command,
             cwd=str(ROOT_DIR),
-            env=dict(os.environ, PYTHONUNBUFFERED="1"),
+            env=typedb_subprocess_environment(spec),
             stdin=subprocess.DEVNULL,
             capture_output=True,
             text=True,
@@ -1325,7 +1401,8 @@ def ensure_typedb_shared_world_projection_rebuilt(spec: Dict[str, object]) -> bo
         print(str(spec["label"]) + " shared-world rebuild failed. exit=" + str(result.returncode))
         return False
     append_log_text(spec["log"], "shared-world rebuild ok", output)
-    clear_typedb_shared_world_projection_rebuild_pending()
+    if not force:
+        clear_typedb_shared_world_projection_rebuild_pending()
     print(str(spec["label"]) + " shared-world rebuild ok.")
     return True
 
@@ -1437,8 +1514,7 @@ def start_worker(spec: Dict[str, object]) -> int:
     log_path.parent.mkdir(parents=True, exist_ok=True)
     append_log(log_path, "start")
     out = log_path.open("a", encoding="utf-8")
-    process_env = dict(os.environ, PYTHONUNBUFFERED="1")
-    process_env.update({str(key): str(value) for key, value in dict(spec.get("env") or {}).items()})
+    process_env = managed_process_environment(spec)
     process = subprocess.Popen(
         spec["command"],
         cwd=str(ROOT_DIR),
@@ -1499,7 +1575,7 @@ def stop_worker(spec: Dict[str, object]) -> int:
         append_log(log_path, "stop")
         print(str(spec["label"]) + " stopped before signal delivery. pid=" + str(pid))
         return 0
-    attempts = 150 if str(spec.get("role") or "") in {"mysql", "typedb"} else 25
+    attempts = 150 if str(spec.get("role") or "") in {"mysql", "typedb", "typedb-stage"} else 25
     for _index in range(attempts):
         time.sleep(0.2)
         if not is_running(pid, spec):
@@ -1867,6 +1943,13 @@ def supervise() -> int:
                         last_typedb_capacity_notice = notice
                 else:
                     last_typedb_capacity_notice = ""
+                if typedb_spec:
+                    removed_retired = prune_retired_typedb_data_paths(typedb_spec)
+                    if removed_retired:
+                        append_log(
+                            supervisor_log_path(),
+                            "typedb retired blue-green stores removed count=" + str(len(removed_retired)),
+                        )
                 last_maintenance_at = time.monotonic()
             time.sleep(5)
     finally:
@@ -1934,18 +2017,196 @@ def typedb_maintenance(force: bool = False) -> int:
     return 0
 
 
+def typedb_blue_green_stage_spec(spec: Dict[str, object]) -> Dict[str, object]:
+    """Build a fully isolated candidate server next to the active TypeDB."""
+    host, port = typedb_host_port(spec.get("healthAddress"))
+    http_host, http_port = typedb_host_port(spec.get("httpAddress") or "127.0.0.1:8000")
+    offset = int_value(spec.get("blueGreenStagePortOffset"), 1, 1)
+    active_path = Path(spec.get("dataPath") or data_dir() / "typedb-data")
+    candidate_path = active_path.with_name(active_path.name + "-candidate")
+    candidate_log_dir = data_dir() / "typedb-logs-candidate"
+    candidate_pid = data_dir() / "typedb-candidate.pid"
+    candidate_log = data_dir() / "typedb-candidate.log"
+    address = str(host) + ":" + str(port + offset)
+    http_address = str(http_host) + ":" + str(http_port + offset)
+    executable = str((spec.get("command") or [""])[0] or typedb_executable())
+    return {
+        **dict(spec or {}),
+        "label": "TypeDB ontology graph store candidate",
+        "role": "typedb-stage",
+        "pid": candidate_pid,
+        "log": candidate_log,
+        "needle": "typedb_server_bin",
+        "dataPath": candidate_path,
+        "healthAddress": address,
+        "httpAddress": http_address,
+        "command": [
+            executable,
+            "server",
+            "--server.listen-address", address,
+            "--server.advertise-address", address,
+            "--server.http.listen-address", http_address,
+            "--diagnostics.monitoring.enabled", "false",
+            "--diagnostics.reporting.metrics", "false",
+            "--diagnostics.reporting.errors", "false",
+            "--storage.data-directory", str(candidate_path),
+            "--logging.directory", str(candidate_log_dir),
+        ],
+    }
+
+
+def wait_for_fresh_typedb_candidate(spec: Dict[str, object]) -> bool:
+    wait_seconds = int_value(spec.get("startupWaitSeconds"), 600, 30)
+    deadline = time.monotonic() + wait_seconds
+    configured = False
+    while time.monotonic() <= deadline:
+        pid = read_pid(spec["pid"])
+        if pid and not pid_exists(pid):
+            return False
+        if tcp_ready(spec.get("healthAddress")):
+            if typedb_driver_ready(spec):
+                return True
+            if not configured:
+                configured = True
+                if configure_fresh_typedb_credentials(spec):
+                    continue
+        time.sleep(0.5)
+    return False
+
+
+def prepare_typedb_blue_green_candidate(spec: Dict[str, object]) -> Dict[str, object]:
+    candidate = typedb_blue_green_stage_spec(spec)
+    candidate_path = Path(candidate["dataPath"])
+    stop_worker(candidate)
+    if candidate_path.exists():
+        shutil.rmtree(candidate_path)
+    remove_pid(candidate["pid"])
+    append_log(candidate["log"], "blue-green candidate start")
+    output = Path(candidate["log"]).open("a", encoding="utf-8")
+    process = subprocess.Popen(
+        candidate["command"],
+        cwd=str(ROOT_DIR),
+        env=managed_process_environment(candidate),
+        stdin=subprocess.DEVNULL,
+        stdout=output,
+        stderr=output,
+        start_new_session=True,
+    )
+    output.close()
+    candidate["pid"].write_text(str(process.pid) + "\n", encoding="utf-8")
+    os.chmod(candidate["pid"], 0o600)
+    try:
+        if not wait_for_fresh_typedb_candidate(candidate):
+            return {"status": "candidate-start-failed", "candidate": candidate}
+        if not ensure_typedb_seeded(candidate):
+            return {"status": "candidate-seed-failed", "candidate": candidate}
+        if not ensure_typedb_shared_world_projection_rebuilt(candidate, force=True):
+            return {"status": "candidate-world-rebuild-failed", "candidate": candidate}
+        if not typedb_driver_ready(candidate):
+            return {"status": "candidate-validation-failed", "candidate": candidate}
+        return {
+            "status": "prepared",
+            "candidate": candidate,
+            "candidateSizeBytes": directory_size_bytes(candidate_path),
+        }
+    except Exception as error:  # noqa: BLE001 - active store stays untouched.
+        return {
+            "status": "candidate-error",
+            "reason": str(error)[:300],
+            "candidate": candidate,
+        }
+
+
+def cleanup_typedb_candidate(candidate: Dict[str, object], remove_data: bool = True) -> None:
+    if candidate:
+        stop_worker(candidate)
+        if remove_data:
+            path = Path(candidate.get("dataPath") or "")
+            if path.exists():
+                shutil.rmtree(path)
+
+
+def swap_typedb_blue_green_data_paths(spec: Dict[str, object], candidate: Dict[str, object]) -> Dict[str, object]:
+    active_path = Path(spec.get("dataPath") or data_dir() / "typedb-data")
+    candidate_path = Path(candidate.get("dataPath") or "")
+    retired_path = active_path.with_name(active_path.name + "-retired-" + str(int(time.time())))
+    if not candidate_path.exists():
+        return {"status": "candidate-missing"}
+    if active_path.exists():
+        os.replace(active_path, retired_path)
+    try:
+        os.replace(candidate_path, active_path)
+    except Exception:
+        if retired_path.exists() and not active_path.exists():
+            os.replace(retired_path, active_path)
+        raise
+    marker = read_typedb_retention_marker()
+    marker.update({
+        "blueGreenCutoverPending": True,
+        "blueGreenPreparedDataPath": str(active_path),
+        "blueGreenRetiredDataPath": str(retired_path),
+        "blueGreenCutoverAt": iso_now(),
+        "credentialsBootstrapPending": False,
+        "sharedWorldProjectionRebuildPending": False,
+    })
+    write_typedb_retention_marker(marker)
+    return {"status": "swapped", "activePath": str(active_path), "retiredPath": str(retired_path)}
+
+
+def rollback_typedb_blue_green_data_paths(spec: Dict[str, object], retired_path: object) -> Dict[str, object]:
+    active_path = Path(spec.get("dataPath") or data_dir() / "typedb-data")
+    rollback_path = Path(str(retired_path or ""))
+    if not rollback_path.exists():
+        return {"status": "rollback-source-missing", "retiredPath": str(rollback_path)}
+    failed_path = active_path.with_name(active_path.name + "-failed-" + str(int(time.time())))
+    if active_path.exists():
+        os.replace(active_path, failed_path)
+    try:
+        os.replace(rollback_path, active_path)
+    except Exception:
+        if failed_path.exists() and not active_path.exists():
+            os.replace(failed_path, active_path)
+        raise
+    marker = read_typedb_retention_marker()
+    marker.update({
+        "blueGreenCutoverPending": False,
+        "blueGreenRollbackAt": iso_now(),
+        "blueGreenRollbackSourcePath": str(rollback_path),
+        "blueGreenFailedDataPath": str(failed_path),
+        "blueGreenPreparedDataPath": "",
+        "credentialsBootstrapPending": False,
+        "sharedWorldProjectionRebuildPending": False,
+    })
+    write_typedb_retention_marker(marker)
+    return {"status": "rolled-back", "activePath": str(active_path), "failedPath": str(failed_path)}
+
+
+def prune_retired_typedb_data_paths(spec: Dict[str, object]) -> List[str]:
+    active_path = Path(spec.get("dataPath") or data_dir() / "typedb-data")
+    retention_minutes = int_value(spec.get("blueGreenRetiredRetentionMinutes"), 30, 0)
+    cutoff = time.time() - retention_minutes * 60
+    removed = []
+    for path in active_path.parent.glob(active_path.name + "-retired-*"):
+        try:
+            if path.stat().st_mtime <= cutoff:
+                shutil.rmtree(path)
+                removed.append(str(path))
+        except OSError:
+            continue
+    return removed
+
+
 def typedb_rotate(
     force: bool = False,
     supervisor_owned: bool = False,
     rotation_reason: str = "",
 ) -> int:
-    """Safely rebuild an oversized TypeDB store and restart all dependents.
+    """Rebuild TypeDB beside the active store, then perform a bounded cutover.
 
-    This is intentionally the only automated-manager path that removes the
-    TypeDB data directory.  It pauses the supervisor, stops project-managed
-    workers that may hold graph connections, records the reset marker, then
-    lets the normal startup path seed the RuleBox and rebuild durable shared
-    worlds from MySQL before inference workers resume.
+    The default path seeds and validates an isolated candidate while the live
+    server remains available. Only the directory swap restarts dependents. A
+    retained rollback directory restores the prior store when cutover startup
+    fails. The legacy full-stop reset remains an explicit compatibility path.
     """
 
     specs = worker_specs()
@@ -1982,6 +2243,7 @@ def typedb_rotate(
             return 1
 
     result = {}
+    candidate = {}
     services_stopped = False
     restart_attempted = False
     try:
@@ -1992,17 +2254,45 @@ def typedb_rotate(
                 lastAutoRotationReason=str(rotation_reason or decision.get("reason") or "capacity"),
                 lastAutoRotationStatus="running",
             )
-        services_stopped = True
-        stop(include_supervisor=False)
-        try:
-            result = run_typedb_data_retention(spec, force=True)
-        except Exception as error:  # noqa: BLE001 - the stopped runtime must still be recovered.
-            result = {
-                "status": "reset-failed",
-                "reason": str(error)[:300],
-                "errorType": error.__class__.__name__,
-            }
-        if result.get("status") != "reset":
+        if truthy(spec.get("blueGreenRotationEnabled")):
+            prepared = prepare_typedb_blue_green_candidate(spec)
+            candidate = dict(prepared.get("candidate") or {})
+            if prepared.get("status") != "prepared":
+                cleanup_typedb_candidate(candidate, remove_data=True)
+                result = {
+                    "status": "candidate-failed-active-preserved",
+                    "reason": str(prepared.get("reason") or prepared.get("status") or "candidate validation failed"),
+                    "activeStorePreserved": True,
+                }
+                if supervisor_owned:
+                    record_typedb_auto_rotation_state(
+                        lastAutoRotationFinishedAt=iso_now(),
+                        lastAutoRotationStatus="candidate-failed-active-preserved",
+                        lastAutoRotationResult=result,
+                    )
+                result["failureIncident"] = record_typedb_auto_rotation_incident(
+                    spec,
+                    decision,
+                    alert_kind="typedb-auto-rotation-failed",
+                )
+                print(json.dumps(result, ensure_ascii=False, indent=2, sort_keys=True))
+                return 1
+            cleanup_typedb_candidate(candidate, remove_data=False)
+            services_stopped = True
+            stop(include_supervisor=False)
+            result = swap_typedb_blue_green_data_paths(spec, candidate)
+        else:
+            services_stopped = True
+            stop(include_supervisor=False)
+            try:
+                result = run_typedb_data_retention(spec, force=True)
+            except Exception as error:  # noqa: BLE001 - the stopped runtime must still be recovered.
+                result = {
+                    "status": "reset-failed",
+                    "reason": str(error)[:300],
+                    "errorType": error.__class__.__name__,
+                }
+        if result.get("status") not in {"reset", "swapped"}:
             recovery_status = start()
             restart_attempted = True
             result["restartStatus"] = "ok" if recovery_status == 0 else "failed"
@@ -2022,6 +2312,17 @@ def typedb_rotate(
         start_status = start()
         restart_attempted = True
         result["restartStatus"] = "ok" if start_status == 0 else "failed"
+        if start_status != 0 and result.get("status") == "swapped":
+            stop(include_supervisor=False)
+            rollback = rollback_typedb_blue_green_data_paths(spec, result.get("retiredPath"))
+            rollback_start_status = start()
+            result["rollback"] = {
+                **rollback,
+                "restartStatus": "ok" if rollback_start_status == 0 else "failed",
+            }
+            start_status = 1
+        if start_status == 0 and result.get("status") == "swapped":
+            result["retiredPathsRemoved"] = prune_retired_typedb_data_paths(spec)
         if supervisor_owned:
             record_typedb_auto_rotation_state(
                 lastAutoRotationFinishedAt=iso_now(),
@@ -2051,6 +2352,8 @@ def typedb_rotate(
                 )
         if pause_supervisor or supervisor_owned:
             end_supervisor_maintenance()
+        if candidate and read_pid(candidate.get("pid")):
+            cleanup_typedb_candidate(candidate, remove_data=False)
         release_typedb_rotation_lock(rotation_lock)
 
 

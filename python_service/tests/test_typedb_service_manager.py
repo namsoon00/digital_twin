@@ -386,6 +386,75 @@ class TypeDBServiceManagerTests(unittest.TestCase):
 
             self.assertFalse(marker.exists())
 
+    def test_blue_green_candidate_uses_an_isolated_port_and_data_path(self):
+        with tempfile.TemporaryDirectory() as temp:
+            spec = {
+                "command": ["/tmp/typedb", "server"],
+                "healthAddress": "127.0.0.1:1729",
+                "httpAddress": "127.0.0.1:8000",
+                "dataPath": Path(temp) / "typedb-data",
+                "blueGreenStagePortOffset": "3",
+            }
+
+            candidate = service_manager.typedb_blue_green_stage_spec(spec)
+
+        self.assertEqual("127.0.0.1:1732", candidate["healthAddress"])
+        self.assertEqual("127.0.0.1:8003", candidate["httpAddress"])
+        self.assertTrue(str(candidate["dataPath"]).endswith("typedb-data-candidate"))
+        self.assertIn("--storage.data-directory", candidate["command"])
+
+        self.assertNotIn("--recover-scoped-write-lease", service_manager.typedb_seed_command(candidate))
+        self.assertIn(
+            "--read-only-source",
+            service_manager.typedb_shared_world_projection_rebuild_command(candidate),
+        )
+
+    def test_blue_green_swap_keeps_a_retired_rollback_path(self):
+        with tempfile.TemporaryDirectory() as temp:
+            root = Path(temp)
+            active = root / "typedb-data"
+            candidate = root / "typedb-data-candidate"
+            active.mkdir()
+            candidate.mkdir()
+            (active / "old").write_text("old", encoding="utf-8")
+            (candidate / "new").write_text("new", encoding="utf-8")
+            marker = root / "marker.json"
+            with patch.object(service_manager, "typedb_retention_marker_path", return_value=marker):
+                result = service_manager.swap_typedb_blue_green_data_paths(
+                    {"dataPath": active},
+                    {"dataPath": candidate},
+                )
+                marker_payload = service_manager.read_typedb_retention_marker()
+
+            retired = Path(result["retiredPath"])
+            self.assertEqual("swapped", result["status"])
+            self.assertTrue((active / "new").exists())
+            self.assertTrue((retired / "old").exists())
+            self.assertTrue(marker_payload["blueGreenCutoverPending"])
+
+    def test_blue_green_rollback_restores_the_retired_store(self):
+        with tempfile.TemporaryDirectory() as temp:
+            root = Path(temp)
+            active = root / "typedb-data"
+            retired = root / "typedb-data-retired-1"
+            active.mkdir()
+            retired.mkdir()
+            (active / "candidate").write_text("candidate", encoding="utf-8")
+            (retired / "previous").write_text("previous", encoding="utf-8")
+            marker = root / "marker.json"
+            with patch.object(service_manager, "typedb_retention_marker_path", return_value=marker):
+                result = service_manager.rollback_typedb_blue_green_data_paths(
+                    {"dataPath": active},
+                    retired,
+                )
+                marker_payload = service_manager.read_typedb_retention_marker()
+
+            failed = Path(result["failedPath"])
+            self.assertEqual("rolled-back", result["status"])
+            self.assertTrue((active / "previous").exists())
+            self.assertTrue((failed / "candidate").exists())
+            self.assertFalse(marker_payload["blueGreenCutoverPending"])
+
 
 if __name__ == "__main__":
     unittest.main()

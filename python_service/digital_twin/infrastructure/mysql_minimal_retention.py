@@ -98,6 +98,23 @@ class MySQLMinimalRetentionRepository:
                   AND completed_at < """ + _cutoff_sql(),
                 (cutoffs["completedInferenceDetail"],),
             ),
+            "failedWorldProjectionPayload": self._summary(
+                """
+                SELECT COUNT(*) AS candidate_count,
+                       COALESCE(SUM(OCTET_LENGTH(payload_json) + OCTET_LENGTH(result_json)), 0) AS candidate_bytes
+                FROM `ontology_world_projection_outbox`
+                WHERE status = 'failed' AND updated_at < """ + _cutoff_sql()
+                + " AND (payload_json <> '{}' OR result_json <> '{}')",
+                (cutoffs["failedWorldProjectionPayload"],),
+            ),
+            "failedWorldProjection": self._summary(
+                """
+                SELECT COUNT(*) AS candidate_count,
+                       COALESCE(SUM(OCTET_LENGTH(payload_json) + OCTET_LENGTH(result_json)), 0) AS candidate_bytes
+                FROM `ontology_world_projection_outbox`
+                WHERE status = 'failed' AND updated_at < """ + _cutoff_sql(),
+                (cutoffs["failedWorldProjection"],),
+            ),
             "terminalNotifications": self._summary(
                 """
                 SELECT COUNT(*) AS candidate_count, COALESCE(SUM(payload_bytes), 0) AS candidate_bytes
@@ -204,6 +221,8 @@ class MySQLMinimalRetentionRepository:
             actions = [
                 ("worldProjection:completed", self._delete_world_projection_rows, (TERMINAL_WORLD_PROJECTION_STATUSES, cutoffs["completedWorldProjection"], "completed_at")),
                 ("inferenceDetail:completed", self._delete_inference_detail_rows, (cutoffs["completedInferenceDetail"],)),
+                ("worldProjection:failedPayload", self._compact_failed_world_projection_payloads, (cutoffs["failedWorldProjectionPayload"],)),
+                ("worldProjection:failed", self._delete_failed_world_projection_rows, (cutoffs["failedWorldProjection"],)),
                 ("notifications:terminal", self._delete_terminal_notifications, (policy.delivered_notification_keep_count, cutoffs["terminalNotifications"])),
                 ("snapshots:history", self._delete_snapshot_history, (policy.snapshot_history_keep_count,)),
                 ("projectionRuns:payload", self._compact_projection_payloads, (cutoffs["projectionPayload"],)),
@@ -353,6 +372,72 @@ class MySQLMinimalRetentionRepository:
             budget,
         )
         return self._result("ontology_inference_detail_outbox", deleted, bytes_deleted)
+
+    def _compact_failed_world_projection_payloads(self, policy, budget, cutoff_iso) -> Dict[str, object]:
+        candidates = self._byte_bounded_candidates(
+            """
+            SELECT job_id,
+                   OCTET_LENGTH(payload_json) + OCTET_LENGTH(result_json) AS payload_bytes
+            FROM `ontology_world_projection_outbox`
+            WHERE status = 'failed' AND updated_at < """ + _cutoff_sql()
+            + " AND (payload_json <> '{}' OR result_json <> '{}')"
+            + " ORDER BY updated_at, job_id LIMIT %s",
+            (cutoff_iso, policy.batch_size),
+            "job_id",
+            policy,
+            budget,
+        )
+        compacted = 0
+        bytes_compacted = 0
+        for row in candidates:
+            if not self._has_budget(budget):
+                break
+            job_id = str(_row_value(row, "job_id", fallback="") or "").strip()
+            if not job_id:
+                continue
+            cursor = _execute(
+                self.connection,
+                """
+                UPDATE `ontology_world_projection_outbox`
+                SET payload_json = '{}', result_json = '{}'
+                WHERE job_id = %s AND status = 'failed' AND updated_at < """ + _cutoff_sql(),
+                (job_id, cutoff_iso),
+            )
+            if _integer(getattr(cursor, "rowcount", 0)):
+                compacted += 1
+                row_bytes = _integer(_row_value(row, "payload_bytes"))
+                bytes_compacted += row_bytes
+                budget["remainingBytes"] = max(0, _integer(budget.get("remainingBytes")) - row_bytes)
+                budget["deletedBytes"] = _integer(budget.get("deletedBytes")) + row_bytes
+        return {
+            "deleted": 0,
+            "compacted": compacted,
+            "estimatedBytes": bytes_compacted,
+            "tables": {"ontology_world_projection_outbox": compacted} if compacted else {},
+        }
+
+    def _delete_failed_world_projection_rows(self, policy, budget, cutoff_iso) -> Dict[str, object]:
+        candidates = self._byte_bounded_candidates(
+            """
+            SELECT job_id,
+                   OCTET_LENGTH(payload_json) + OCTET_LENGTH(result_json) AS payload_bytes
+            FROM `ontology_world_projection_outbox`
+            WHERE status = 'failed' AND updated_at < """ + _cutoff_sql()
+            + " ORDER BY updated_at, job_id LIMIT %s",
+            (cutoff_iso, policy.batch_size),
+            "job_id",
+            policy,
+            budget,
+        )
+        deleted, bytes_deleted = self._delete_candidates(
+            "ontology_world_projection_outbox",
+            "job_id",
+            candidates,
+            "status = 'failed' AND updated_at < " + _cutoff_sql(),
+            (cutoff_iso,),
+            budget,
+        )
+        return self._result("ontology_world_projection_outbox", deleted, bytes_deleted)
 
     def _delete_terminal_notifications(self, policy, budget, keep_count, cutoff_iso) -> Dict[str, object]:
         statuses = _status_placeholders(TERMINAL_NOTIFICATION_STATUSES)

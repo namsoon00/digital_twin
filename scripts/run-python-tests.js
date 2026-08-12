@@ -31,6 +31,13 @@ function run(mode) {
   if (files.length === 0) throw new Error("No Python tests selected for mode: " + mode);
   const environment = Object.assign({}, process.env, {
     PYTHONPATH: pythonPath(process.env),
+    ORBIT_RUNTIME_ENV: "test",
+    ORBIT_RUNTIME_REVISION: "python-test-suite",
+    ORBIT_INFRASTRUCTURE_OVERRIDE_ENABLED: "1",
+    TYPEDB_ADDRESS: "127.0.0.1:1739",
+    TYPEDB_HTTP_ADDRESS: "127.0.0.1:8010",
+    TYPEDB_DATA_PATH: path.join(rootDir, "data", "test-runtime", "typedb-data"),
+    TYPEDB_DATABASE: "orbit_alpha_ontology_test",
   });
   const result = childProcess.spawnSync(
     environment.PYTHON_BIN || "python3",

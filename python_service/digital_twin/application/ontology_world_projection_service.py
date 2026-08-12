@@ -400,6 +400,57 @@ class OntologyWorldProjectionRunner:
             "reasoningQueueBypassed": True,
         }
 
+    def rebuild_candidate_from_completed(self, limit: int = 0) -> Dict[str, object]:
+        """Populate an isolated TypeDB candidate without mutating the live outbox."""
+        reader = getattr(self.outbox, "latest_completed", None)
+        if not callable(reader):
+            return {
+                "status": "unsupported",
+                "reason": "The shared-world outbox has no read-only replay contract.",
+            }
+        bounded = max(1, min(5000, int(limit or 100)))
+        try:
+            jobs = list(reader(limit=bounded) or [])
+        except Exception as error:  # noqa: BLE001 - the active outbox remains unchanged.
+            return {"status": "error", "reason": str(error)[:180], "readOnlySourceReplay": True}
+        if not jobs:
+            return {
+                "status": "empty",
+                "replayedCount": 0,
+                "readOnlySourceReplay": True,
+                "sourceQueueMutated": False,
+            }
+        replayed = []
+        failures = []
+        for job in jobs:
+            job_id = str(job.get("jobId") or "")
+            kind = str(job.get("projectionKind") or "").strip().lower()
+            try:
+                if kind not in {"market", "knowledge"}:
+                    raise ValueError("unsupported read-only shared-world projection kind: " + kind)
+                graph = deserialize_portfolio_ontology(job.get("payload") or {})
+                world = world_from_metadata(job)
+                result = dict(self.projection_recorder.project_shared_world_update(
+                    graph,
+                    world,
+                    projection_kind=kind,
+                ) or {})
+                if not self.successful(result):
+                    failures.append({"jobId": job_id, "reason": self.retry_reason(result)})
+                    continue
+                replayed.append(job_id)
+            except Exception as error:  # noqa: BLE001 - candidate failure cannot affect the active store.
+                failures.append({"jobId": job_id, "reason": str(error)[:180]})
+        return {
+            "status": "ok" if not failures else "retry-required",
+            "replayedCount": len(replayed),
+            "replayedJobIds": replayed,
+            "remainingJobIds": [item.get("jobId") for item in failures],
+            "failures": failures,
+            "readOnlySourceReplay": True,
+            "sourceQueueMutated": False,
+        }
+
     def run_once(self, limit: int = 0, bypass_reasoning_queue: bool = False) -> Dict[str, object]:
         started = time.monotonic()
         if callable(self.storage_guard):

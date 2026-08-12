@@ -710,9 +710,11 @@ def mysql_operational_space_reclaim_candidates(
 
     minimum_bytes = max(16, int(minimum_reclaim_mb or 256)) * 1024 * 1024
     limit = max(1, min(10, int(maximum_tables or 3)))
-    rows = _execute(
-        connection,
-        """
+    metadata_source = "innodb-tablespaces"
+    try:
+        rows = _execute(
+            connection,
+            """
         SELECT tables_meta.table_name AS tableName,
                COALESCE(tables_meta.data_length, 0) AS dataBytes,
                COALESCE(tables_meta.index_length, 0) AS indexBytes,
@@ -729,7 +731,27 @@ def mysql_operational_space_reclaim_candidates(
         GROUP BY tables_meta.table_name, tables_meta.data_length, tables_meta.index_length, tables_meta.data_free
         ORDER BY allocatedBytes DESC, tables_meta.table_name
         """,
-    ).fetchall()
+        ).fetchall()
+    except Exception:
+        # ``information_schema.innodb_tablespaces`` requires PROCESS on some
+        # MySQL builds. The application account deliberately does not have
+        # that server-wide privilege, so use the per-table allocator estimate
+        # exposed by ``information_schema.tables`` instead.
+        metadata_source = "information-schema-tables"
+        rows = _execute(
+            connection,
+            """
+            SELECT table_name AS tableName,
+                   COALESCE(data_length, 0) AS dataBytes,
+                   COALESCE(index_length, 0) AS indexBytes,
+                   COALESCE(data_free, 0) AS statisticalFreeBytes,
+                   COALESCE(data_length, 0) + COALESCE(index_length, 0)
+                     + COALESCE(data_free, 0) AS allocatedBytes
+            FROM information_schema.tables
+            WHERE table_schema = DATABASE()
+            ORDER BY allocatedBytes DESC, table_name
+            """,
+        ).fetchall()
     candidates = []
     for row in rows or []:
         table = str((row.get("tableName") if isinstance(row, dict) else row[0]) or "").strip()
@@ -751,6 +773,7 @@ def mysql_operational_space_reclaim_candidates(
             "reclaimableBytes": reclaimable_bytes,
             "statisticalFreeBytes": statistical_free_bytes,
             "temporaryHeadroomBytes": data_bytes + index_bytes + 64 * 1024 * 1024,
+            "metadataSource": metadata_source,
         })
         if len(candidates) >= limit:
             break

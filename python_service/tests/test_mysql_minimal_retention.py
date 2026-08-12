@@ -69,6 +69,27 @@ class ApplyConnection:
         return Cursor()
 
 
+class FailedPayloadConnection(ApplyConnection):
+    def execute(self, sql, params=()):
+        rendered = str(sql)
+        values = tuple(params or ())
+        self.calls.append((rendered, values))
+        if "SELECT GET_LOCK" in rendered:
+            return Cursor(one={"acquired": 1})
+        if "SELECT RELEASE_LOCK" in rendered:
+            return Cursor(one={"released": 1})
+        if (
+            "SELECT job_id" in rendered
+            and "ontology_world_projection_outbox" in rendered
+            and "status = 'failed'" in rendered
+            and "payload_json <> '{}'" in rendered
+        ):
+            return Cursor(rows=[{"job_id": "failed-world", "payload_bytes": 2048}])
+        if rendered.lstrip().upper().startswith(("DELETE", "UPDATE")):
+            return Cursor(rowcount=1)
+        return Cursor()
+
+
 class AuditConnection:
     def __init__(self):
         self.calls = []
@@ -96,6 +117,8 @@ class MySQLMinimalRetentionTests(unittest.TestCase):
         self.assertEqual(256 * 1024, policy.max_delete_bytes)
         self.assertEqual(30, policy.max_run_seconds)
         self.assertEqual(10, policy.audit_keep_count)
+        self.assertEqual(24, policy.failed_world_projection_payload_retention_hours)
+        self.assertEqual(24 * 7, policy.failed_world_projection_retention_hours)
 
         accelerated = mysql_minimal_retention_policy({
             "mysqlMinimalRetentionEnabled": "1",
@@ -186,6 +209,28 @@ class MySQLMinimalRetentionTests(unittest.TestCase):
         self.assertFalse(any("pending" in params or "processing" in params for _sql, params in projection_deletes))
         self.assertFalse(any("failed" in params for _sql, params in projection_deletes))
         self.assertFalse(any("investment_decision_episodes" in sql for sql, _params in connection.calls))
+
+    def test_repository_compacts_old_failed_projection_payload_without_touching_live_work(self):
+        connection = FailedPayloadConnection()
+        repository = MySQLMinimalRetentionRepository(connection)
+        policy = mysql_minimal_retention_policy({
+            "mysqlMinimalRetentionEnabled": "1",
+            "mysqlMinimalRetentionMode": "apply",
+        })
+
+        result = repository.apply(policy, now=datetime(2026, 7, 30, tzinfo=timezone.utc))
+
+        self.assertEqual(1, result["compacted"])
+        updates = [
+            (sql, params)
+            for sql, params in connection.calls
+            if sql.lstrip().startswith("UPDATE `ontology_world_projection_outbox`")
+        ]
+        self.assertEqual(1, len(updates))
+        self.assertIn("SET payload_json = '{}', result_json = '{}'", updates[0][0])
+        self.assertIn("status = 'failed'", updates[0][0])
+        self.assertEqual("failed-world", updates[0][1][0])
+        self.assertFalse(any("pending" in sql or "processing" in sql for sql, _params in updates))
 
     def test_research_cleanup_requires_completion_and_excludes_live_work_states(self):
         connection = ApplyConnection()

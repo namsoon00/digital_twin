@@ -676,22 +676,12 @@ class OntologyMaintenanceRunner:
             }
             return {}
         if bool(fairness.get("fairnessGranted")):
-            # ABox retention used to take an automatic fairness turn after a
-            # bounded wait. A single physical TypeDB delete can outlive the
-            # maintenance child timeout, however, and then block every live
-            # portfolio projection behind its writer lease. Keep the measured
-            # fairness state for diagnostics, but require the explicit,
-            # opt-in maintenance-yield protocol before retention may interrupt
-            # a non-empty investment reasoning queue.
-            fairness = {
-                **fairness,
-                "deferred": True,
-                "fairnessGranted": False,
-                "fairnessWouldHaveGranted": True,
-                "reasonCode": "live-reasoning-strict-priority",
-                "reason": "라이브 추론 요청이 남아 있어 자동 ABox 정리 순번을 부여하지 않습니다.",
-            }
+            # No live inference lease is active. Use the already bounded
+            # maintenance budget now instead of starving retention behind a
+            # perpetually non-empty queue. The shared writer coordinator still
+            # arbitrates a race with a newly starting inference transaction.
             self.last_background_fairness = dict(fairness)
+            return {}
         retry_after = self.interval_seconds()
         if text(fairness.get("reasonCode")) in {
             "active-reasoning-lease",
@@ -1112,13 +1102,25 @@ class OntologyMaintenanceRunner:
     def status(self) -> Dict[str, object]:
         policy = self.policy()
         state = self.state()
-        worlds = self.worlds()
         last_result = state.get("lastResult") if isinstance(state.get("lastResult"), dict) else {}
+        backlog = self.backlog_by_world(state)
+        known_world_ids = set(backlog)
+        next_world_id = text(state.get("nextWorldId"))
+        if next_world_id:
+            known_world_ids.add(next_world_id)
+        last_world_id = text(last_result.get("worldId"))
+        if last_world_id:
+            known_world_ids.add(last_world_id)
         return {
             "contract": self.state_contract,
             "enabled": self.enabled(),
             "worldTypes": sorted(self.configured_world_types()),
-            "worldCount": len(worlds),
+            # Status is an operational read model. Enumerating live TypeDB
+            # manifests here can wait behind a long write transaction and
+            # turn a health probe into another graph workload.
+            "worldCount": len(known_world_ids),
+            "knownWorldIds": sorted(known_world_ids),
+            "worldInventorySource": "durable-maintenance-state",
             "intervalSeconds": self.interval_seconds(),
             "busyRetrySeconds": self.busy_retry_seconds(),
             "processIsolationEnabled": self.process_isolation_enabled(),
@@ -1130,8 +1132,8 @@ class OntologyMaintenanceRunner:
             "policy": policy,
             "lastRunAt": text(state.get("lastRunAt")),
             "lastResult": dict(last_result),
-            "nextWorldId": text(state.get("nextWorldId")),
-            "backlogByWorld": self.backlog_by_world(state),
+            "nextWorldId": next_world_id,
+            "backlogByWorld": backlog,
             "scopeIntegrityAudit": {
                 "enabled": self.scope_integrity_audit_enabled(),
                 "intervalSeconds": self.scope_integrity_audit_interval_seconds(),
@@ -1263,10 +1265,13 @@ class OntologyMaintenanceRunner:
             # capacity budget and can continue the same partial manifest.
             run_budget.update({
                 "maxInactiveManifests": 1,
-                "maxAboxDeleteBatches": 1,
+                "maxAboxDeleteBatches": min(
+                    2,
+                    max(1, integer(capacity_budget.get("maxAboxDeleteBatches"), 1)),
+                ),
                 "aboxDeleteBatchSize": min(
-                    50,
-                    max(1, integer(capacity_budget.get("aboxDeleteBatchSize"), 50)),
+                    150,
+                    max(1, integer(capacity_budget.get("aboxDeleteBatchSize"), 150)),
                 ),
                 "yieldBounded": True,
             })

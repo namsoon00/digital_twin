@@ -58,6 +58,8 @@ class MySQLMinimalRetentionPolicy:
     terminal_notification_retention_hours: int
     completed_world_projection_retention_hours: int
     completed_inference_detail_retention_hours: int
+    failed_world_projection_payload_retention_hours: int
+    failed_world_projection_retention_hours: int
     projection_payload_retention_hours: int
     lifecycle_event_retention_hours: int
     research_terminal_retention_hours: int
@@ -147,6 +149,20 @@ def mysql_minimal_retention_policy(settings: Mapping[str, object] = None) -> MyS
             1,
             24 * 30,
         ),
+        failed_world_projection_payload_retention_hours=_int_setting(
+            configured,
+            "mysqlMinimalFailedWorldProjectionPayloadRetentionHours",
+            24,
+            1,
+            24 * 30,
+        ),
+        failed_world_projection_retention_hours=_int_setting(
+            configured,
+            "mysqlMinimalFailedWorldProjectionRetentionHours",
+            24 * 7,
+            24,
+            24 * 90,
+        ),
         projection_payload_retention_hours=_int_setting(
             configured,
             "mysqlMinimalProjectionPayloadRetentionHours",
@@ -208,6 +224,14 @@ def policy_cutoffs(policy: MySQLMinimalRetentionPolicy, now: datetime = None) ->
         "terminalNotifications": policy_cutoff_iso(policy.terminal_notification_retention_hours, now),
         "completedWorldProjection": policy_cutoff_iso(policy.completed_world_projection_retention_hours, now),
         "completedInferenceDetail": policy_cutoff_iso(policy.completed_inference_detail_retention_hours, now),
+        "failedWorldProjectionPayload": policy_cutoff_iso(
+            policy.failed_world_projection_payload_retention_hours,
+            now,
+        ),
+        "failedWorldProjection": policy_cutoff_iso(
+            policy.failed_world_projection_retention_hours,
+            now,
+        ),
         "projectionPayload": policy_cutoff_iso(policy.projection_payload_retention_hours, now),
         "lifecycleEvents": policy_cutoff_iso(policy.lifecycle_event_retention_hours, now),
         "researchTerminal": policy_cutoff_iso(policy.research_terminal_retention_hours, now),

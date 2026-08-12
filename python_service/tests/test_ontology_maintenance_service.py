@@ -218,7 +218,9 @@ class OntologyMaintenanceRunnerTests(unittest.TestCase):
         status = runner.status()
 
         self.assertTrue(status["enabled"])
-        self.assertEqual(3, status["worldCount"])
+        self.assertEqual(0, status["worldCount"])
+        self.assertEqual("durable-maintenance-state", status["worldInventorySource"])
+        self.assertEqual([], status["knownWorldIds"])
         self.assertEqual(100, status["policy"]["criticalInactiveManifestCount"])
         self.assertEqual(8, status["policy"]["maxDeleteBatchesPerRun"])
         self.assertEqual(150, status["policy"]["deleteBatchSize"])
@@ -379,8 +381,8 @@ class OntologyMaintenanceRunnerTests(unittest.TestCase):
         self.assertEqual({}, store.payload["maintenanceYieldRequest"])
         self.assertTrue(store.payload["maintenanceYieldLastGrantedAt"])
         self.assertEqual(1, runner.ontology_repository.calls[0]["maxInactiveManifests"])
-        self.assertEqual(1, runner.ontology_repository.calls[0]["maxAboxDeleteBatches"])
-        self.assertEqual(50, runner.ontology_repository.calls[0]["aboxDeleteBatchSize"])
+        self.assertEqual(2, runner.ontology_repository.calls[0]["maxAboxDeleteBatches"])
+        self.assertEqual(150, runner.ontology_repository.calls[0]["aboxDeleteBatchSize"])
         self.assertTrue(result["maintenance"]["capacityBudget"]["yieldBounded"])
 
     def test_pending_activation_releases_active_yield_for_reasoning_recovery(self):
@@ -424,7 +426,7 @@ class OntologyMaintenanceRunnerTests(unittest.TestCase):
         self.assertTrue(store.payload["maintenanceYieldLastReleasedAt"])
         self.assertNotIn("maintenanceYieldLastGrantedAt", store.payload)
 
-    def test_aged_maintenance_still_defers_without_explicit_yield_window(self):
+    def test_aged_maintenance_gets_a_bounded_turn_when_no_reasoning_lease_is_active(self):
         repository = FakeOntologyRepository()
         store = FakeStateStore({
             "reasoningQueueDeferredSinceAt": (
@@ -440,16 +442,11 @@ class OntologyMaintenanceRunnerTests(unittest.TestCase):
 
         result = runner.run_once()
 
-        self.assertEqual("deferred-reasoning-queue", result["status"])
-        self.assertFalse(result["backgroundFairness"]["fairnessGranted"])
-        self.assertTrue(result["backgroundFairness"]["fairnessWouldHaveGranted"])
-        self.assertEqual(
-            "live-reasoning-strict-priority",
-            result["backgroundFairness"]["reasonCode"],
-        )
-        self.assertNotIn("lastFairnessAttemptAt", store.payload)
-        self.assertNotIn("lastFairnessCompletedAt", store.payload)
-        self.assertEqual([], repository.calls)
+        self.assertEqual("ok", result["status"])
+        self.assertTrue(result["backgroundFairness"]["fairnessGranted"])
+        self.assertEqual("aged-background-turn", result["backgroundFairness"]["reasonCode"])
+        self.assertIn("lastFairnessCompletedAt", store.payload)
+        self.assertEqual(1, len(repository.calls))
 
     def test_timeout_recovery_clears_only_repository_verified_dead_leases(self):
         class RecoveringRepository(FakeOntologyRepository):
@@ -473,7 +470,7 @@ class OntologyMaintenanceRunnerTests(unittest.TestCase):
         self.assertEqual(2, result["clearedCount"])
         self.assertEqual(3, result["worldCount"])
 
-    def test_aged_queue_does_not_probe_coordinator_or_start_fairness_cooldown(self):
+    def test_aged_queue_attempts_coordinator_without_starting_cooldown_when_busy(self):
         class BusyCoordinatorRepository(FakeOntologyRepository):
             def acquire_projection_coordinator_lease(self, _owner, world_id=""):
                 return {
@@ -499,7 +496,7 @@ class OntologyMaintenanceRunnerTests(unittest.TestCase):
 
         result = runner.run_once()
 
-        self.assertEqual("deferred-reasoning-queue", result["status"])
+        self.assertEqual("deferred-projection-coordinator", result["status"])
         self.assertEqual([], repository.calls)
         self.assertNotIn("lastFairnessCompletedAt", store.payload)
 

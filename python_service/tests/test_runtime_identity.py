@@ -47,6 +47,19 @@ class RuntimeIdentityTests(unittest.TestCase):
 
         self.assertEqual("environment-secret", settings["kisAppKey"])
 
+    def test_isolated_runtime_can_override_persisted_infrastructure_endpoint(self):
+        with patch.object(runtime_settings_module, "load_local_env"), patch.object(
+            runtime_settings_module,
+            "read_settings_store",
+            return_value={"typedbAddress": "127.0.0.1:1729"},
+        ), patch.dict(os.environ, {
+            "ORBIT_INFRASTRUCTURE_OVERRIDE_ENABLED": "1",
+            "TYPEDB_ADDRESS": "127.0.0.1:1739",
+        }, clear=False):
+            settings = runtime_settings_module.runtime_settings()
+
+        self.assertEqual("127.0.0.1:1739", settings["typedbAddress"])
+
 
 if __name__ == "__main__":
     unittest.main()

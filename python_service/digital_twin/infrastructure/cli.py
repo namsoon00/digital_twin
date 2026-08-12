@@ -609,7 +609,11 @@ def ontology_world_projection_command(args) -> int:
         print(json.dumps({"status": "ok", "requeuedFailedCount": requeued, "outbox": runner.outbox.summary()}, ensure_ascii=False))
         return 0
     if args.ontology_world_projection_action == "rebuild":
-        result = runner.rebuild_after_typedb_reset(limit=limit)
+        result = (
+            runner.rebuild_candidate_from_completed(limit=limit)
+            if bool(getattr(args, "read_only_source", False))
+            else runner.rebuild_after_typedb_reset(limit=limit)
+        )
         print(json.dumps(result, ensure_ascii=False))
         return 0 if str(result.get("status") or "") in {"ok", "empty"} else 1
     if args.ontology_world_projection_action == "once":
@@ -1686,6 +1690,11 @@ def build_parser() -> argparse.ArgumentParser:
     ontology_world_projection_retry.add_argument("--limit", default="")
     ontology_world_projection_rebuild = ontology_world_projection_actions.add_parser("rebuild")
     ontology_world_projection_rebuild.add_argument("--limit", default="")
+    ontology_world_projection_rebuild.add_argument(
+        "--read-only-source",
+        action="store_true",
+        help="Replay completed packets into an isolated candidate without mutating the live outbox",
+    )
     ontology_world_projection_actions.add_parser("status")
     ontology_world_projection.set_defaults(func=ontology_world_projection_command)
 

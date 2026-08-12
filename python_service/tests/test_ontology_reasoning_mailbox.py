@@ -459,6 +459,30 @@ def realtime_request(
     )
 
 
+def portfolio_risk_request(event_id, symbols, occurred_at, fact_revision=""):
+    source = DomainEvent(
+        name="portfolio.risk_observed",
+        aggregate_id="portfolio:local:default",
+        occurred_at=occurred_at,
+        payload={"sourceObservedAt": occurred_at, "symbols": list(symbols)},
+    )
+    request = ontology_reasoning_requested_event(
+        source,
+        "portfolio-risk-change",
+        symbols,
+        changed_count=len(symbols),
+        fact_types=["PortfolioRiskSnapshot", "PositionRiskMetric", "RebalanceScenario"],
+        fact_revisions_by_symbol={symbol: fact_revision for symbol in symbols} if fact_revision else None,
+    )
+    return DomainEvent(
+        name=ONTOLOGY_REASONING_REQUESTED,
+        aggregate_id=request.aggregate_id,
+        payload=request.payload,
+        occurred_at=occurred_at,
+        event_id=event_id,
+    )
+
+
 def research_evidence_request(
     event_id,
     symbols,
@@ -546,6 +570,32 @@ class OntologyReasoningMailboxTests(unittest.TestCase):
         self.assertEqual("superseded", self.mailbox.events["old"]["state"])
         self.assertEqual(0, result["mailbox"]["pendingEntryCount"])
         self.assertEqual("ok", result["executionTelemetry"]["status"])
+
+    def test_newer_portfolio_risk_snapshot_replaces_older_source_before_typedb(self):
+        old = portfolio_risk_request(
+            "old-risk", ["000660", "MSTR"], "2026-07-24T00:00:00Z", "risk:1",
+        )
+        newest = portfolio_risk_request(
+            "new-risk", ["000660", "MSTR"], "2026-07-24T00:01:00Z", "risk:2",
+        )
+        entries = durable_mailbox_entries(newest)
+        runner = self.build_runner([old, newest])
+
+        first = runner.run_once(force=True)
+        second = runner.run_once(force=True)
+
+        self.assertEqual(2, len(entries))
+        self.assertEqual({"PORTFOLIO"}, {entry["workClass"] for entry in entries})
+        self.assertEqual(
+            {("PortfolioRiskSnapshot", "PositionRiskMetric", "RebalanceScenario")},
+            {tuple(entry["ruleFamilies"]) for entry in entries},
+        )
+        self.assertEqual([["000660"], ["MSTR"]], self.monitor.calls)
+        self.assertIn("old-risk", self.cursor.superseded)
+        self.assertIn("new-risk", self.cursor.ids)
+        self.assertEqual("superseded", self.mailbox.events["old-risk"]["state"])
+        self.assertEqual("ok", first["status"])
+        self.assertEqual("ok", second["status"])
 
     def test_market_observation_anchor_completes_only_after_verified_projection(self):
         event = realtime_request("anchor-event", ["AAPL"], "2026-07-24T00:00:00Z")

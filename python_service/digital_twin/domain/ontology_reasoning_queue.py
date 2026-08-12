@@ -104,6 +104,9 @@ PORTFOLIO_FACT_TYPES = {
     "PortfolioActivityEpisode",
     "PortfolioStateSnapshot",
     "DecisionActionObservation",
+    "PortfolioRiskSnapshot",
+    "PositionRiskMetric",
+    "RebalanceScenario",
 }
 
 MARKET_FACT_TYPES = {
@@ -155,11 +158,12 @@ COALESCIBLE_REALTIME_TRIGGERS = {
     "portfolio-snapshot-update",
 }
 
-# Investment-calendar mutations are latest-state source facts too. A later
-# calendar snapshot replaces the older calendar fact set for the same
-# account/symbol; it must not accumulate as direct replay work behind TypeDB.
+# Calendar and portfolio-risk mutations are latest-state source facts too. A
+# later snapshot replaces the older fact set for the same account/symbol; it
+# must not accumulate as direct replay work behind TypeDB.
 COALESCIBLE_LATEST_STATE_TRIGGERS = COALESCIBLE_REALTIME_TRIGGERS | {
     "investment-calendar-update",
+    "portfolio-risk-change",
 }
 
 # These updates mutate durable ResearchEvidence facts. The ABox projection

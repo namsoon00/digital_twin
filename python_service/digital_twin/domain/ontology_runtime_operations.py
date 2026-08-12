@@ -556,6 +556,7 @@ def scoped_abox_maintenance_health(
     resolved_policy = dict(policy or {}) if isinstance(policy, Mapping) else scoped_abox_maintenance_policy()
     storage_status = _text(values.get("status") or "ok").lower()
     inactive_count = max(0, _integer(values.get("inactiveManifestCount")))
+    retired_generation_backlog = max(0, _integer(values.get("retiredScopeGenerationBacklogCount")))
     warning_count = max(1, _integer(resolved_policy.get("warningInactiveManifestCount") or 40))
     critical_count = max(warning_count + 1, _integer(
         resolved_policy.get("criticalInactiveManifestCount") or 120
@@ -565,6 +566,7 @@ def scoped_abox_maintenance_health(
             "status": "warning",
             "state": "unavailable",
             "inactiveManifestCount": inactive_count,
+            "retiredScopeGenerationBacklogCount": retired_generation_backlog,
             "warningInactiveManifestCount": warning_count,
             "criticalInactiveManifestCount": critical_count,
             "drainRequired": False,
@@ -587,6 +589,7 @@ def scoped_abox_maintenance_health(
         "status": "ok" if state in {"ok", "draining"} else state,
         "state": state,
         "inactiveManifestCount": inactive_count,
+        "retiredScopeGenerationBacklogCount": retired_generation_backlog,
         "warningInactiveManifestCount": warning_count,
         "criticalInactiveManifestCount": critical_count,
         "drainRequired": inactive_count > 0,

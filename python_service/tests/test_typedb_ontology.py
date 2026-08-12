@@ -2066,6 +2066,61 @@ class TypeDBOntologyRepositoryTests(unittest.TestCase):
         self.assertEqual(["scope:two"], result["deferredScopeGenerationIds"])
         self.assertEqual(1, delete_rows.call_count)
 
+    def test_scoped_manifest_prune_deletes_each_retired_generation_once(self):
+        repository = TypeDBOntologyGraphRepository("127.0.0.1:1729")
+        markers = [
+            {"id": "marker:new", "updatedAt": "2026-08-12T00:02:00Z"},
+            {"id": "marker:old", "updatedAt": "2026-08-12T00:01:00Z"},
+        ]
+
+        def metadata(marker):
+            marker_id = str(marker.get("id") or "")
+            return {
+                "status": "ok",
+                "worldviewManifestId": "manifest:" + marker_id.split(":")[-1],
+                "scopeGenerationIds": {
+                    "shared": "scope:shared-retired",
+                    "unique": "scope:" + marker_id.split(":")[-1],
+                },
+            }
+
+        with patch.object(repository, "active_abox_metadata", return_value={
+            "status": "ok",
+            "worldviewManifestId": "manifest:active",
+            "scopeGenerationIds": {"active": "scope:active"},
+        }), patch.object(repository, "pending_abox_activation", return_value={"status": "empty"}), patch.object(
+            repository,
+            "worldview_manifest_marker_rows",
+            return_value=markers,
+        ), patch.object(
+            repository,
+            "scoped_abox_metadata_from_manifest_marker",
+            side_effect=metadata,
+        ), patch.object(repository, "delete_box_snapshot_rows_in_batches", return_value={
+            "status": "ok",
+            "deletedBatchCount": 1,
+        }) as delete_rows:
+            result = repository.prune_inactive_scoped_abox_manifests_in_driver(
+                object(),
+                (object, object, object, object, object),
+                active_manifest_id="manifest:active",
+                keep_inactive_count=0,
+                max_manifests=2,
+                max_delete_batches=10,
+                delete_batch_size=50,
+                world_id="portfolio:local:main",
+            )
+
+        deleted_snapshot_ids = [call.args[3] for call in delete_rows.call_args_list]
+        self.assertEqual("ok", result["status"])
+        self.assertEqual(3, result["plannedRetiredScopeGenerationCount"])
+        self.assertEqual(1, result["deduplicatedScopeGenerationReferenceCount"])
+        self.assertEqual(1, deleted_snapshot_ids.count("scope:shared-retired"))
+        self.assertEqual(
+            {"manifest:new", "manifest:old"},
+            set(result["removedManifestIds"]),
+        )
+
     def test_deferred_maintenance_can_be_scoped_to_portfolio_worlds(self):
         repository = TypeDBOntologyGraphRepository("127.0.0.1:1729")
         worlds = [

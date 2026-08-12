@@ -194,6 +194,39 @@ class OntologyProjectionFingerprintContractTests(unittest.TestCase):
 
         self.assertEqual(64, len(fingerprint))
 
+    def test_inference_material_fingerprint_ignores_generation_identity(self):
+        first = PortfolioOntology(
+            "inference-fingerprint",
+            entities=[OntologyEntity(
+                "inference:risk:005930",
+                "삼성전자 위험",
+                "inferred-risk",
+                {
+                    "ontologyBox": "InferenceBox",
+                    "inferenceGenerationId": "generation:first",
+                    "inferenceGenerationAt": "2026-08-12T01:00:00Z",
+                    "score": 82,
+                },
+            )],
+        )
+        second = PortfolioOntology(
+            "inference-fingerprint",
+            entities=[OntologyEntity(
+                "inference:risk:005930",
+                "삼성전자 위험",
+                "inferred-risk",
+                {
+                    "ontologyBox": "InferenceBox",
+                    "inferenceGenerationId": "generation:second",
+                    "inferenceGenerationAt": "2026-08-12T02:00:00Z",
+                    "inferenceMaterialFingerprint": "previous-audit-value",
+                    "score": 82,
+                },
+            )],
+        )
+
+        self.assertEqual(material_graph_fingerprint(first), material_graph_fingerprint(second))
+
     def test_operational_runtime_settings_do_not_enter_material_ontology(self):
         graph = PortfolioOntology("runtime-setting-contract")
         portfolio_id = add_entity(

@@ -39,7 +39,7 @@ class OntologyMaintenanceRunner:
     state in MySQL so restarts continue the round-robin world order.
     """
 
-    state_contract = "ontology-maintenance-state-v7"
+    state_contract = "ontology-maintenance-state-v8"
 
     def __init__(
         self,
@@ -988,6 +988,11 @@ class OntologyMaintenanceRunner:
                 "previousObservedInactiveManifestCount": prior_observed,
                 "lastObservedInactiveManifestCount": inactive_count,
                 "observedBacklogDelta": observed_delta,
+                "lastObservedManifestCreationCount": max(0, observed_delta),
+                "observedManifestCreationCountTotal": (
+                    max(0, integer(current.get("observedManifestCreationCountTotal")))
+                    + max(0, observed_delta)
+                ),
                 "backlogGrowthRuns": growth_runs,
                 "lastStoredManifestCount": max(0, integer(dict(inventory or {}).get("storedManifestCount"))),
                 "lastInventoryObservedAt": observed_at,
@@ -1057,6 +1062,9 @@ class OntologyMaintenanceRunner:
         inactive_remaining: int,
         removed_manifest_count: int,
         deleted_batch_count: int,
+        planned_retired_generation_count: int,
+        removed_retired_generation_count: int,
+        deduplicated_generation_reference_count: int,
         valid_world_ids: Iterable[str],
     ) -> Dict[str, Dict[str, object]]:
         rows = self.backlog_by_world(previous)
@@ -1096,6 +1104,21 @@ class OntologyMaintenanceRunner:
             "lastObservedInactiveManifestCount": inactive_remaining,
             "lastProgress": progress,
             "lastDeletedBatchCount": deleted_batch_count,
+            "lastPlannedRetiredScopeGenerationCount": planned_retired_generation_count,
+            "lastRemovedRetiredScopeGenerationCount": removed_retired_generation_count,
+            "lastDeduplicatedScopeGenerationReferenceCount": deduplicated_generation_reference_count,
+            "retiredScopeGenerationBacklogCount": max(
+                0,
+                planned_retired_generation_count - removed_retired_generation_count,
+            ),
+            "removedRetiredScopeGenerationCountTotal": (
+                max(0, integer(current.get("removedRetiredScopeGenerationCountTotal")))
+                + max(0, removed_retired_generation_count)
+            ),
+            "removedManifestCountTotal": (
+                max(0, integer(current.get("removedManifestCountTotal")))
+                + max(0, removed_manifest_count)
+            ),
         }
         return rows
 
@@ -1332,10 +1355,31 @@ class OntologyMaintenanceRunner:
         removed_manifest_count = len([
             item for item in abox.get("removedManifestIds") or [] if text(item)
         ])
+        planned_retired_generation_count = max(
+            0,
+            integer(abox.get("plannedRetiredScopeGenerationCount")),
+        )
+        removed_retired_generation_count = max(
+            0,
+            integer(
+                abox.get("removedRetiredScopeGenerationCount"),
+                len([
+                    item for item in abox.get("removedRetiredScopeGenerationIds") or [] if text(item)
+                ]),
+            ),
+        )
+        deduplicated_generation_reference_count = max(
+            0,
+            integer(abox.get("deduplicatedScopeGenerationReferenceCount")),
+        )
         health = (
             scoped_abox_maintenance_health({
                 "status": "ok" if result_status not in {"error", "disabled"} else result_status,
                 "inactiveManifestCount": inactive_remaining,
+                "retiredScopeGenerationBacklogCount": max(
+                    0,
+                    planned_retired_generation_count - removed_retired_generation_count,
+                ),
             }, policy)
             if inventory_available
             else {
@@ -1369,6 +1413,13 @@ class OntologyMaintenanceRunner:
             "inactiveManifestCountBefore": inactive_before,
             "inactiveManifestCountRemaining": inactive_remaining,
             "removedManifestCount": removed_manifest_count,
+            "plannedRetiredScopeGenerationCount": planned_retired_generation_count,
+            "removedRetiredScopeGenerationCount": removed_retired_generation_count,
+            "deduplicatedScopeGenerationReferenceCount": deduplicated_generation_reference_count,
+            "retiredScopeGenerationBacklogCount": max(
+                0,
+                planned_retired_generation_count - removed_retired_generation_count,
+            ),
             "deletedBatchCount": max(0, integer(abox.get("deletedBatchCount"))),
             "maxDeleteBatches": max(
                 0,
@@ -1397,6 +1448,9 @@ class OntologyMaintenanceRunner:
             inactive_remaining,
             removed_manifest_count,
             compact["deletedBatchCount"],
+            planned_retired_generation_count,
+            removed_retired_generation_count,
+            deduplicated_generation_reference_count,
             [item.get("worldId") for item in worlds],
         )
         current_backlog = dict(backlog_by_world.get(world_id) or {})

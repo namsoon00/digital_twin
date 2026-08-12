@@ -408,6 +408,8 @@ TEXT_SETTING_KEYS = [
     "typedbBlueGreenRotationEnabled",
     "typedbBlueGreenStagePortOffset",
     "typedbBlueGreenRetiredRetentionMinutes",
+    "typedbPortfolioWorldProjectionRebuildLimit",
+    "typedbPortfolioWorldProjectionRebuildTimeoutSeconds",
     "typedbCapacityMaintenanceMaxManifests",
     "typedbCapacityMaintenanceMaxDeleteBatches",
     "typedbCapacityMaintenanceDeleteBatchSize",
@@ -2024,6 +2026,16 @@ def runtime_settings(fast_operational_read: bool = False) -> Dict[str, str]:
             "typedbBlueGreenRetiredRetentionMinutes",
             "TYPEDB_BLUE_GREEN_RETIRED_RETENTION_MINUTES",
             "30",
+        ),
+        "typedbPortfolioWorldProjectionRebuildLimit": value(
+            "typedbPortfolioWorldProjectionRebuildLimit",
+            "TYPEDB_PORTFOLIO_WORLD_PROJECTION_REBUILD_LIMIT",
+            "20",
+        ),
+        "typedbPortfolioWorldProjectionRebuildTimeoutSeconds": value(
+            "typedbPortfolioWorldProjectionRebuildTimeoutSeconds",
+            "TYPEDB_PORTFOLIO_WORLD_PROJECTION_REBUILD_TIMEOUT_SECONDS",
+            "1800",
         ),
         "typedbCapacityMaintenanceMaxManifests": value(
             "typedbCapacityMaintenanceMaxManifests",

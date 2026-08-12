@@ -45,6 +45,7 @@ from ..domain.ontology_rulebox_governance import (
 )
 from ..domain.ontology_change_impact import compact_inference_impact_plan, scope_family, scope_symbol
 from ..domain.ontology_native_rule_planning import normalize_native_rule_planner_topology
+from ..domain.ontology_projection_fingerprint import material_graph_fingerprint
 from ..domain.ontology_runtime_operations import native_rule_timing_profile
 from ..domain.ontology_schema import default_tbox_metadata
 from ..domain.hypothesis_calibration import hypothesis_calibration_snapshot_from_abox_rows
@@ -6342,36 +6343,98 @@ class ScopedABoxManifestMixin:
                 if str(item or "").strip()
             )
         removed = []
+        removed_generation_ids = []
+        attempted_generation_ids = []
         deleted_batches = 0
         cleanup_rows = []
         remaining_batch_budget = max_batch_count
+
+        # Historical Manifests share immutable scope generations. Walking one
+        # Manifest at a time therefore revisits the same generation whenever
+        # adjacent observations reused an unchanged scope. Build the exact
+        # retired generation set first and reclaim each physical generation
+        # at most once per pass. Active and rollback generations remain
+        # protected independently of how many removable Manifests reference
+        # them.
+        removable_generation_references = []
         for metadata in removable:
-            if remaining_batch_budget <= 0:
-                break
-            manifest_id = str(metadata.get("worldviewManifestId") or metadata.get("aboxSnapshotId") or "").strip()
-            if not manifest_id:
+            removable_generation_references.extend(
+                str(item or "").strip()
+                for item in dict(metadata.get("scopeGenerationIds") or {}).values()
+                if str(item or "").strip()
+            )
+        retired_generation_ids = []
+        seen_retired_generation_ids = set()
+        for generation_id in removable_generation_references:
+            if (
+                generation_id in protected_generation_ids
+                or generation_id in seen_retired_generation_ids
+            ):
                 continue
-            cleanup = self.discard_scoped_abox_manifest_in_driver(
+            seen_retired_generation_ids.add(generation_id)
+            retired_generation_ids.append(generation_id)
+        generation_cleanup_rows = []
+        cleanup_partial = False
+        for generation_id in retired_generation_ids:
+            if remaining_batch_budget <= 0:
+                cleanup_partial = True
+                break
+            attempted_generation_ids.append(generation_id)
+            cleanup = self.delete_box_snapshot_rows_in_batches(
                 driver,
                 imported,
-                manifest_id,
-                protected_generation_ids=protected_generation_ids,
-                world_id=world_id,
-                max_delete_batches=remaining_batch_budget,
-                delete_batch_size=bounded_delete_batch_size,
+                "ABox",
+                generation_id,
+                batch_size=bounded_delete_batch_size,
+                max_batches=remaining_batch_budget,
             )
-            cleanup_rows.append(cleanup)
+            generation_cleanup_rows.append(cleanup)
             deleted = int(number_or_none(cleanup.get("deletedBatchCount")) or 0)
             deleted_batches += deleted
             remaining_batch_budget = max(0, remaining_batch_budget - deleted)
             if str(cleanup.get("status") or "") == "ok":
-                removed.append(manifest_id)
-            if str(cleanup.get("status") or "") == "partial":
+                removed_generation_ids.append(generation_id)
+            else:
+                cleanup_partial = True
                 break
-        cleanup_partial = any(
-            str(item.get("status") or "") != "ok"
-            for item in cleanup_rows
-        )
+
+        # A Manifest marker can disappear only after every physical generation
+        # that it alone retained has been reclaimed. Markers whose scopes are
+        # all protected or completed in this pass are safe to remove now.
+        removed_generation_set = set(removed_generation_ids)
+        if not cleanup_partial:
+            for metadata in removable:
+                if remaining_batch_budget <= 0:
+                    cleanup_partial = True
+                    break
+                manifest_id = str(metadata.get("worldviewManifestId") or metadata.get("aboxSnapshotId") or "").strip()
+                if not manifest_id:
+                    continue
+                required_generations = {
+                    str(item or "").strip()
+                    for item in dict(metadata.get("scopeGenerationIds") or {}).values()
+                    if str(item or "").strip() and str(item or "").strip() not in protected_generation_ids
+                }
+                if not required_generations.issubset(removed_generation_set):
+                    cleanup_partial = True
+                    continue
+                cleanup = self.delete_box_snapshot_rows_in_batches(
+                    driver,
+                    imported,
+                    "ABox",
+                    manifest_id,
+                    batch_size=bounded_delete_batch_size,
+                    max_batches=remaining_batch_budget,
+                )
+                cleanup_rows.append(cleanup)
+                deleted = int(number_or_none(cleanup.get("deletedBatchCount")) or 0)
+                deleted_batches += deleted
+                remaining_batch_budget = max(0, remaining_batch_budget - deleted)
+                if str(cleanup.get("status") or "") == "ok":
+                    removed.append(manifest_id)
+                else:
+                    cleanup_partial = True
+                    break
         return {
             "status": "partial" if cleanup_partial else "ok",
             "persistenceMode": SCOPED_ABOX_PERSISTENCE_MODE,
@@ -6387,8 +6450,18 @@ class ScopedABoxManifestMixin:
                 for item in retained
             ],
             "removedManifestIds": removed,
+            "plannedRetiredScopeGenerationCount": len(retired_generation_ids),
+            "attemptedRetiredScopeGenerationCount": len(attempted_generation_ids),
+            "attemptedRetiredScopeGenerationIds": attempted_generation_ids[:100],
+            "removedRetiredScopeGenerationCount": len(removed_generation_ids),
+            "removedRetiredScopeGenerationIds": removed_generation_ids[:100],
+            "deduplicatedScopeGenerationReferenceCount": max(
+                0,
+                len(removable_generation_references) - len(set(removable_generation_references)),
+            ),
             "remainingInactiveManifestCount": max(0, len(ordered) - len(removed)),
             "deletedBatchCount": deleted_batches,
+            "generationCleanup": generation_cleanup_rows,
             "cleanup": cleanup_rows,
         }
 
@@ -20167,6 +20240,8 @@ relation ontology-assertion,
                 "graphStore": "typedb",
                 "reason": "typedb-driver Python package is not installed: " + str(imported[1])[:160],
             }
+        inference_material_fingerprint = material_graph_fingerprint(graph)
+        graph.worldview["inferenceMaterialFingerprint"] = inference_material_fingerprint
         _TypeDB, _Credentials, _DriverOptions, _DriverTlsConfig, TransactionType = imported[0]
         node_rows = [
             row for row in self.node_rows(graph)
@@ -20302,6 +20377,7 @@ relation ontology-assertion,
                 "insertMode": "batched-candidate-activation",
                 "publicationStatus": "active" if marker_query else "legacy-unmarked",
                 "inferenceGenerationId": generation_id,
+                "inferenceMaterialFingerprint": inference_material_fingerprint,
                 "inferenceGenerationAt": str((graph.worldview or {}).get("inferenceGenerationAt") or ""),
                 "worldId": world_id,
                 "worldType": str((graph.worldview or {}).get("worldType") or ""),

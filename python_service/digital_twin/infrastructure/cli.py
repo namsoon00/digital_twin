@@ -66,6 +66,7 @@ from .service_factory import (
     build_ontology_reasoning_proof_service,
     build_ontology_reasoning_runner,
     build_ontology_reasoning_queue_probe,
+    build_ontology_portfolio_rebuild_runner,
     build_ontology_world_projection_runner,
     build_rule_change_candidate_service,
     build_symbol_universe_service,
@@ -599,6 +600,11 @@ def ontology_reasoning_command(args) -> int:
 
 def ontology_world_projection_command(args) -> int:
     settings = runtime_settings(fast_operational_read=True)
+    if args.ontology_world_projection_action == "rebuild-portfolios":
+        limit = int(getattr(args, "limit", "") or 0)
+        result = build_ontology_portfolio_rebuild_runner(settings).run(limit=limit)
+        print(json.dumps(result, ensure_ascii=False))
+        return 0 if str(result.get("status") or "") in {"ok", "empty"} else 1
     runner = build_ontology_world_projection_runner(settings)
     limit = int(getattr(args, "limit", "") or settings.get("ontologyWorldProjectionBatchSize") or 6)
     if args.ontology_world_projection_action == "status":
@@ -1695,6 +1701,11 @@ def build_parser() -> argparse.ArgumentParser:
         action="store_true",
         help="Replay completed packets into an isolated candidate without mutating the live outbox",
     )
+    ontology_world_projection_portfolios = ontology_world_projection_actions.add_parser(
+        "rebuild-portfolios",
+        help="Rebuild current PortfolioWorlds from durable MySQL monitor snapshots",
+    )
+    ontology_world_projection_portfolios.add_argument("--limit", default="")
     ontology_world_projection_actions.add_parser("status")
     ontology_world_projection.set_defaults(func=ontology_world_projection_command)
 

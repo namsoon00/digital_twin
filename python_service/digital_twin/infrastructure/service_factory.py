@@ -69,6 +69,7 @@ from ..application.ontology_maintenance_service import OntologyMaintenanceRunner
 from ..application.ontology_inference_detail_service import OntologyInferenceDetailRunner
 from ..application.ontology_rulebox_prewarm_service import OntologyRuleboxPrewarmRunner
 from ..application.ontology_world_projection_service import OntologyWorldProjectionRunner
+from ..application.ontology_portfolio_rebuild_service import OntologyPortfolioRebuildRunner
 from ..application.ontology_lab_service import OntologyLabService
 from ..application.ontology_rule_candidate_service import RuleChangeCandidateProposalService
 from ..application.symbol_universe_service import SymbolUniverseService
@@ -927,6 +928,22 @@ def build_ontology_world_projection_runner(settings=None) -> OntologyWorldProjec
         reasoning_queue_probe=build_ontology_reasoning_queue_probe(configured_settings),
         storage_guard=storage_guard,
         fairness_state_store=stores.ontology_world_projection_state_store(store_settings),
+    )
+
+
+def build_ontology_portfolio_rebuild_runner(settings=None) -> OntologyPortfolioRebuildRunner:
+    """Compose the read-only source replay used before TypeDB cutover."""
+    configured_settings = dict(settings or runtime_settings())
+    store_settings = dict(configured_settings)
+    store_settings["_skipOperationalHistoryRetention"] = "1"
+    store_settings["_skipOperationalSchemaBootstrap"] = "1"
+    return OntologyPortfolioRebuildRunner(
+        snapshot_store=stores.monitor_store(store_settings),
+        projection_recorder=PortfolioOntologyProjectionRecorder(
+            ontology_repository_from_settings(configured_settings),
+            settings=configured_settings,
+            source="typedb-blue-green-candidate-rebuild",
+        ),
     )
 
 

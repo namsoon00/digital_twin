@@ -408,6 +408,41 @@ class TypeDBServiceManagerTests(unittest.TestCase):
             "--read-only-source",
             service_manager.typedb_shared_world_projection_rebuild_command(candidate),
         )
+        self.assertEqual(
+            [
+                service_manager.sys.executable,
+                "-u",
+                "python_service/service.py",
+                "ontology-world-projection",
+                "rebuild-portfolios",
+                "--limit",
+                "20",
+            ],
+            service_manager.typedb_portfolio_world_projection_rebuild_command(candidate),
+        )
+
+    def test_candidate_portfolio_rebuild_uses_isolated_typedb_environment(self):
+        with tempfile.TemporaryDirectory() as temp:
+            spec = {
+                "label": "TypeDB candidate",
+                "role": "typedb-stage",
+                "log": Path(temp) / "candidate.log",
+                "healthAddress": "127.0.0.1:1730",
+                "portfolioWorldProjectionRebuildTimeoutSeconds": "120",
+                "portfolioWorldProjectionRebuildLimit": "8",
+            }
+            with patch.object(service_manager.subprocess, "run", return_value=SimpleNamespace(
+                returncode=0,
+                stdout='{"status":"ok","projectedPortfolioWorldCount":2}',
+                stderr="",
+            )) as run:
+                self.assertTrue(service_manager.ensure_typedb_portfolio_world_projection_rebuilt(spec))
+
+        command = run.call_args.args[0]
+        environment = run.call_args.kwargs["env"]
+        self.assertEqual("rebuild-portfolios", command[4])
+        self.assertEqual("8", command[-1])
+        self.assertEqual("127.0.0.1:1730", environment["TYPEDB_ADDRESS"])
 
     def test_blue_green_swap_keeps_a_retired_rollback_path(self):
         with tempfile.TemporaryDirectory() as temp:

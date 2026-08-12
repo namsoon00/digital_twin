@@ -74,11 +74,21 @@ and data directory while the active server continues to serve inference:
 2. Seed TBox, language data, and TypeDB schema functions.
 3. Read the latest completed shared-world packets from MySQL and project them
    into the candidate without requeueing or changing live outbox rows.
-4. Validate authenticated TypeDB access.
-5. Stop managed dependents, swap the candidate directory into the active path,
+4. Read each latest verified live account snapshot from MySQL and rebuild its
+   current PortfolioWorld ABox plus the aligned native InferenceBox. This does
+   not call providers, consume the reasoning mailbox, or enqueue alerts.
+5. Validate authenticated TypeDB access and fail the candidate when any live
+   PortfolioWorld cannot be rebuilt.
+6. Stop managed dependents, swap the candidate directory into the active path,
    and restart them.
-6. If startup fails, restore the retained previous directory and restart.
-7. Remove the retired directory after the rollback retention window.
+7. If startup fails, restore the retained previous directory and restart.
+8. Remove the retired directory after the rollback retention window.
+
+Scoped ABox retention first deduplicates generation IDs across removable
+Manifests, deletes each retired physical generation once, and removes a
+Manifest marker only after all of its unprotected generations are gone. The
+maintenance status records planned and removed generation counts, duplicate
+references avoided, and the remaining generation drain backlog per world.
 
 Candidate preparation failure never stops the active TypeDB. The previous
 store is retained for 30 minutes after a successful cutover by default.

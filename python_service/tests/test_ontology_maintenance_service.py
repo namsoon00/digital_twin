@@ -62,6 +62,9 @@ class FakeOntologyRepository:
                 "completedInactiveManifestCount": 12,
                 "remainingInactiveManifestCount": 4,
                 "removedManifestIds": ["manifest:one", "manifest:two"],
+                "plannedRetiredScopeGenerationCount": 5,
+                "removedRetiredScopeGenerationIds": ["scope:one", "scope:two", "scope:three"],
+                "deduplicatedScopeGenerationReferenceCount": 7,
                 "deletedBatchCount": 3,
             },
         }
@@ -202,6 +205,10 @@ class OntologyMaintenanceRunnerTests(unittest.TestCase):
         self.assertEqual(150, repository.calls[0]["aboxDeleteBatchSize"])
         self.assertEqual(0, repository.calls[0]["keepInactiveManifests"])
         self.assertEqual(2, first["maintenance"]["removedManifestCount"])
+        self.assertEqual(5, first["maintenance"]["plannedRetiredScopeGenerationCount"])
+        self.assertEqual(3, first["maintenance"]["removedRetiredScopeGenerationCount"])
+        self.assertEqual(2, first["maintenance"]["retiredScopeGenerationBacklogCount"])
+        self.assertEqual(7, first["maintenance"]["deduplicatedScopeGenerationReferenceCount"])
         self.assertEqual("draining", first["maintenance"]["health"]["state"])
         self.assertEqual("market:shared:kr", store.payload["nextWorldId"])
 

@@ -287,6 +287,16 @@ def typedb_worker_spec(settings: Dict[str, object]) -> Dict[str, object]:
             or os.environ.get("TYPEDB_SHARED_WORLD_PROJECTION_REBUILD_LIMIT")
             or "100"
         ),
+        "portfolioWorldProjectionRebuildTimeoutSeconds": str(
+            (settings or {}).get("typedbPortfolioWorldProjectionRebuildTimeoutSeconds")
+            or os.environ.get("TYPEDB_PORTFOLIO_WORLD_PROJECTION_REBUILD_TIMEOUT_SECONDS")
+            or "1800"
+        ),
+        "portfolioWorldProjectionRebuildLimit": str(
+            (settings or {}).get("typedbPortfolioWorldProjectionRebuildLimit")
+            or os.environ.get("TYPEDB_PORTFOLIO_WORLD_PROJECTION_REBUILD_LIMIT")
+            or "20"
+        ),
         "missingReason": (
             "TypeDB executable was not found. Install TypeDB or set TYPEDB_COMMAND."
             if not executable
@@ -1288,6 +1298,19 @@ def typedb_shared_world_projection_rebuild_command(spec: Dict[str, object]) -> L
     return command
 
 
+def typedb_portfolio_world_projection_rebuild_command(spec: Dict[str, object]) -> List[str]:
+    limit = int_value(spec.get("portfolioWorldProjectionRebuildLimit"), 20, 1)
+    return [
+        sys.executable,
+        "-u",
+        "python_service/service.py",
+        "ontology-world-projection",
+        "rebuild-portfolios",
+        "--limit",
+        str(limit),
+    ]
+
+
 def typedb_subprocess_environment(spec: Dict[str, object]) -> Dict[str, str]:
     """Pin maintenance commands to the exact TypeDB instance being managed."""
     environment = managed_process_environment(spec)
@@ -1404,6 +1427,39 @@ def ensure_typedb_shared_world_projection_rebuilt(
     if not force:
         clear_typedb_shared_world_projection_rebuild_pending()
     print(str(spec["label"]) + " shared-world rebuild ok.")
+    return True
+
+
+def ensure_typedb_portfolio_world_projection_rebuilt(spec: Dict[str, object]) -> bool:
+    """Rebuild every current account world before a candidate cutover."""
+    if str(spec.get("role") or "") != "typedb-stage":
+        return True
+    command = typedb_portfolio_world_projection_rebuild_command(spec)
+    timeout_seconds = int_value(spec.get("portfolioWorldProjectionRebuildTimeoutSeconds"), 1800, 60)
+    append_log(spec["log"], "portfolio-world rebuild start")
+    print(str(spec["label"]) + " rebuilding current PortfolioWorlds from durable MySQL snapshots.")
+    try:
+        result = subprocess.run(
+            command,
+            cwd=str(ROOT_DIR),
+            env=typedb_subprocess_environment(spec),
+            stdin=subprocess.DEVNULL,
+            capture_output=True,
+            text=True,
+            timeout=timeout_seconds,
+        )
+    except subprocess.TimeoutExpired as error:
+        output = (error.stdout or "") + ("\n" if error.stdout and error.stderr else "") + (error.stderr or "")
+        append_log_text(spec["log"], "portfolio-world rebuild timeout", output)
+        print(str(spec["label"]) + " portfolio-world rebuild timed out after " + str(timeout_seconds) + "s.")
+        return False
+    output = (result.stdout or "") + ("\n" if result.stdout and result.stderr else "") + (result.stderr or "")
+    if result.returncode != 0:
+        append_log_text(spec["log"], "portfolio-world rebuild failed exit=" + str(result.returncode), output)
+        print(str(spec["label"]) + " portfolio-world rebuild failed. exit=" + str(result.returncode))
+        return False
+    append_log_text(spec["log"], "portfolio-world rebuild ok", output)
+    print(str(spec["label"]) + " portfolio-world rebuild ok.")
     return True
 
 
@@ -2102,6 +2158,8 @@ def prepare_typedb_blue_green_candidate(spec: Dict[str, object]) -> Dict[str, ob
             return {"status": "candidate-seed-failed", "candidate": candidate}
         if not ensure_typedb_shared_world_projection_rebuilt(candidate, force=True):
             return {"status": "candidate-world-rebuild-failed", "candidate": candidate}
+        if not ensure_typedb_portfolio_world_projection_rebuilt(candidate):
+            return {"status": "candidate-portfolio-rebuild-failed", "candidate": candidate}
         if not typedb_driver_ready(candidate):
             return {"status": "candidate-validation-failed", "candidate": candidate}
         return {

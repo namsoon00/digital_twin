@@ -29,6 +29,7 @@ VOLATILE_LIFECYCLE_KEYS = {
     "indicatorFetchedAt",
     "inferenceGenerationAt",
     "inferenceGenerationId",
+    "inferenceMaterialFingerprint",
     "isCurrent",
     "latencyReason",
     "materialFingerprint",

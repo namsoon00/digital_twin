@@ -40,6 +40,9 @@ HYPOTHESIS_RESEARCH_COMPLETED = "investment_hypothesis.research_completed"
 HYPOTHESIS_PROPOSED = "investment_hypothesis.proposed"
 HYPOTHESIS_REVIEWED = "investment_hypothesis.reviewed"
 HYPOTHESIS_LIFECYCLE_TRANSITIONED = "investment_hypothesis.lifecycle_transitioned"
+HYPOTHESIS_DEVELOPMENT_TRANSITIONED = "investment_hypothesis.development_transitioned"
+HYPOTHESIS_DEVELOPMENT_VALIDATED = "investment_hypothesis.development_validated"
+HYPOTHESIS_DEVELOPMENT_DEPLOYED = "investment_hypothesis.development_deployed"
 ONTOLOGY_REASONING_REQUESTED = "ontology.reasoning_requested"
 ONTOLOGY_REASONING_COMPLETED = "ontology.reasoning_completed"
 ONTOLOGY_REASONING_QUEUE_HEALTH_CHANGED = "ontology.reasoning_queue_health_changed"
@@ -1071,6 +1074,27 @@ def hypothesis_reviewed_event(payload: Dict[str, object]) -> DomainEvent:
         name=HYPOTHESIS_REVIEWED,
         aggregate_id=str(payload.get("proposalId") or "hypothesis-proposal"),
         payload=dict(payload or {}),
+    )
+
+
+def hypothesis_development_event(payload: Dict[str, object], name: str = HYPOTHESIS_DEVELOPMENT_TRANSITIONED) -> DomainEvent:
+    case_id = str(payload.get("caseId") or payload.get("case_id") or "hypothesis-development")
+    return DomainEvent(
+        name=str(name or HYPOTHESIS_DEVELOPMENT_TRANSITIONED),
+        aggregate_id=case_id,
+        payload={
+            "caseId": case_id,
+            "status": str(payload.get("status") or ""),
+            "stage": str(payload.get("stage") or ""),
+            "symbol": str(payload.get("symbol") or "").upper(),
+            "accountId": str(payload.get("accountId") or payload.get("account_id") or ""),
+            "sourceProposalIds": list(payload.get("sourceProposalIds") or [])[:100],
+            "candidateId": str(payload.get("candidateId") or ""),
+            "experimentId": str(payload.get("experimentId") or ""),
+            "validationSummary": dict(payload.get("validationSummary") or {}),
+            "decisionImpact": dict(payload.get("decisionImpact") or {}),
+            "reason": str(payload.get("blockedReason") or payload.get("reason") or "")[:1000],
+        },
     )
 
 

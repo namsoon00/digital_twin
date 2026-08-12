@@ -229,6 +229,9 @@ npm run python:ontology-lab -- report --id <experiment-id>
 
 API:
 
+- `GET /api/investment-brain/hypothesis-development`
+- `POST /api/investment-brain/hypothesis-development/process`
+- `POST /api/investment-brain/hypothesis-development/{id}/approve`
 - `GET /api/ontology/experiments`
 - `GET /api/ontology/experiments/status`
 - `POST /api/ontology/experiments`
@@ -240,7 +243,9 @@ API:
 - `POST /api/ontology/experiments/{id}/activate`
 - `POST /api/ontology/experiments/{id}/pause`
 
-샌드박스 실행 결과의 `sandbox.mutatedOperationalRuleBox`와 `sandbox.mutatedTypeDB`는 항상 `false`여야 한다. 운영 반영은 완료된 샌드박스 결과, 그래프 실행 이력, `proposedOntologyChanges`가 있는 실험에서만 `apply` 단계로 수행한다. `apply`는 후보 관계 규칙을 RuleBox semantic profile에 저장하고, 제안된 TBox class/relation/decision stage를 그래프 저장소에 반영한 뒤 TypeDB schema function sync와 InferenceBox materialization을 다시 실행한다. 런타임 실험 기록은 `data/ontology-lab.json`에 저장되며 git에 넣지 않는다.
+샌드박스 실행 결과의 `sandbox.mutatedOperationalRuleBox`와 `sandbox.mutatedTypeDB`는 항상 `false`여야 한다. 운영 반영은 완료된 샌드박스 결과, 그래프 실행 이력, `proposedOntologyChanges`가 있는 실험에서만 `apply` 단계로 수행한다. `apply`는 후보 관계 규칙을 RuleBox semantic profile에 저장하고, 제안된 TBox class/relation/decision stage를 그래프 저장소에 반영한 뒤 TypeDB schema function sync와 InferenceBox materialization을 다시 실행한다. 런타임 실험과 실행 이력은 MySQL의 `ontology_experiments`, `ontology_experiment_runs`에 저장한다. 기존 `data/ontology-lab.json`은 MySQL 테이블이 비어 있을 때 한 번만 이관하는 레거시 입력으로만 사용한다.
+
+AI가 만든 신규 가설은 `hypothesis_development_cases`에서 제안 계보를 유지한다. 인과 구조, 근거, 중복, TypeDB 현재 ABox 재생, 과거 자료 범위, 제안 이후 홀드아웃 관측, 반증 가능성, 정책 안전 게이트를 자동으로 통과해야 `approval-required`가 된다. 이 단계까지 후보 규칙은 `enabled=false`이고 투자 판단에 사용되지 않는다. 운영 RuleBox 배포는 검증 탭의 명시적 승인으로만 실행하며, 배포 직후 TypeDB 추론에 실패하면 기준선 RuleBox 버전을 자동 복원한다.
 
 `promotionReadiness.status=promote-candidate`는 바로 `apply`할 수 있다. `needs-review` 결과는 운영 반영 전에 `reviewApproved`, `reviewedBy`, `reviewReason` 승인 payload가 필요하며, 웹 실험 탭은 확인창을 거쳐 이 승인 기록을 남긴다. `needs-data`나 실행되지 않은 AI 제안은 운영 반영할 수 없다.
 

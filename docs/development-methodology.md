@@ -169,7 +169,9 @@ Application:
 - `python_service/digital_twin/application/monitoring_service.py`: one monitoring cycle use case
 - `python_service/digital_twin/application/scheduler.py`: long-running scheduling loop around a runner
 - `python_service/digital_twin/application/investment_research_orchestration_service.py`: cache-first bounded hypothesis research, verified-evidence persistence, and re-reasoning request orchestration
-- `python_service/digital_twin/application/hypothesis_proposal_service.py`: evidence-bound novel hypothesis proposals with mandatory human governance
+- `python_service/digital_twin/domain/hypothesis_development.py`: novel-hypothesis development lifecycle, lineage, validation gates, decision-impact classification, and deployment state
+- `python_service/digital_twin/application/hypothesis_proposal_service.py`: evidence-bound novel hypothesis proposals that automatically enter the governed development pipeline
+- `python_service/digital_twin/application/hypothesis_development_service.py`: automatic causal screening, disabled RuleBox candidate compilation, TypeDB preview, historical and post-proposal validation, and explicit deployment approval orchestration
 
 Infrastructure:
 

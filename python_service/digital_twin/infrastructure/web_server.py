@@ -110,6 +110,7 @@ from ..infrastructure.service_factory import (
     build_investment_calendar_service,
     build_investment_strategy_proposal_service,
     build_investment_brain_service,
+    build_hypothesis_development_service,
     build_trade_execution_service,
     build_notification_queue_runner,
     build_official_calendar_sync_service,
@@ -1896,6 +1897,57 @@ def seed_ontology_payload(payload: Dict[str, object]) -> Dict[str, object]:
 
 def ontology_lab_service():
     return build_ontology_lab_service(runtime_settings())
+
+
+def hypothesis_development_service():
+    return build_hypothesis_development_service(runtime_settings())
+
+
+def hypothesis_development_cases_payload(query: Dict[str, List[str]]) -> Dict[str, object]:
+    try:
+        limit = int(first_query(query, "limit") or 100)
+    except ValueError:
+        limit = 100
+    return hypothesis_development_service().list(
+        status=first_query(query, "status"),
+        symbol=first_query(query, "symbol"),
+        limit=max(1, min(500, limit)),
+    )
+
+
+def hypothesis_development_case_payload(case_id: str) -> Dict[str, object]:
+    return hypothesis_development_service().report(case_id)
+
+
+def process_hypothesis_development_payload(payload: Dict[str, object]) -> Dict[str, object]:
+    body = dict(payload or {})
+    if str(body.get("caseId") or ""):
+        return hypothesis_development_service().process(str(body.get("caseId")))
+    return hypothesis_development_service().process_pending(limit=max(1, min(20, int(body.get("limit") or 5))))
+
+
+def approve_hypothesis_development_payload(case_id: str, payload: Dict[str, object]) -> Dict[str, object]:
+    service = hypothesis_development_service()
+    report = service.report(case_id)
+    case = report.get("case") if isinstance(report.get("case"), dict) else {}
+    if str(case.get("status") or "") != "approval-required":
+        return {
+            "status": "not-ready",
+            "reason": "hypothesis-development-case-not-validated",
+            "case": case,
+        }
+    experiment_id = str(case.get("experimentId") or "")
+    body = {
+        **dict(payload or {}),
+        "runRulebox": True,
+        "rollbackOnInferenceFailure": True,
+        "reviewApproved": True,
+        "reviewedBy": str((payload or {}).get("reviewedBy") or "web-main"),
+        "reviewReason": str((payload or {}).get("reviewReason") or "검증 탭에서 자동 검증 완료 가설의 운영 반영 승인"),
+    }
+    result = ontology_lab_service().apply_recommendations(experiment_id, body)
+    development = service.mark_deployed(case_id, result.get("application") or result)
+    return {"status": development.get("status") or result.get("status"), "development": development, "application": result}
 
 
 def list_ontology_experiments_payload(query: Dict[str, List[str]]) -> Dict[str, object]:
@@ -4948,6 +5000,29 @@ class DigitalTwinHandler(BaseHTTPRequestHandler):
                 status=first_query(query, "status"),
                 symbol=first_query(query, "symbol"),
                 limit=limit,
+            ))
+
+        if path == "/api/investment-brain/hypothesis-development" and self.command == "GET":
+            return self.send_payload(200, hypothesis_development_cases_payload(query))
+
+        if path == "/api/investment-brain/hypothesis-development/process" and self.command == "POST":
+            if not self.ensure_writable("공유 모드에서는 가설 자동 검증을 실행할 수 없습니다."):
+                return
+            return self.send_payload(200, process_hypothesis_development_payload(self.read_json_body()))
+
+        hypothesis_development_approve_match = re.match(r"^/api/investment-brain/hypothesis-development/([^/]+)/approve$", path)
+        if hypothesis_development_approve_match and self.command == "POST":
+            if not self.ensure_writable("공유 모드에서는 검증된 가설을 운영 반영할 수 없습니다."):
+                return
+            return self.send_payload(200, approve_hypothesis_development_payload(
+                urllib.parse.unquote(hypothesis_development_approve_match.group(1)),
+                self.read_json_body(),
+            ))
+
+        hypothesis_development_match = re.match(r"^/api/investment-brain/hypothesis-development/([^/]+)$", path)
+        if hypothesis_development_match and self.command == "GET":
+            return self.send_payload(200, hypothesis_development_case_payload(
+                urllib.parse.unquote(hypothesis_development_match.group(1)),
             ))
 
         hypothesis_proposal_match = re.match(r"^/api/investment-brain/hypothesis-proposals/([^/]+)$", path)

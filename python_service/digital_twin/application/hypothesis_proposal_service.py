@@ -5,11 +5,12 @@ from ..domain.investment_brain import NovelHypothesisProposal, stable_id
 
 
 class HypothesisProposalService:
-    def __init__(self, store, advisor=None, event_publisher=None, settings: Dict[str, object] = None):
+    def __init__(self, store, advisor=None, event_publisher=None, settings: Dict[str, object] = None, development_service=None):
         self.store = store
         self.advisor = advisor
         self.event_publisher = event_publisher
         self.settings = dict(settings or {})
+        self.development_service = development_service
 
     def propose(
         self,
@@ -43,6 +44,7 @@ class HypothesisProposalService:
                 if isinstance(item, dict) and str(item.get("claim") or "").strip():
                     existing_claims.add(str(item.get("claim") or "").strip().casefold())
         rows = []
+        development_rows = []
         for item in self.advisor.propose(context) or []:
             if not isinstance(item, dict):
                 continue
@@ -72,11 +74,24 @@ class HypothesisProposalService:
                 self.store.save_hypothesis_proposal(proposal)
             rows.append(proposal.to_dict())
             self.publish(hypothesis_proposed_event(proposal.to_dict()))
+            if self.development_service and hasattr(self.development_service, "ingest_proposal"):
+                try:
+                    development_rows.append(self.development_service.ingest_proposal(
+                        proposal.to_dict(),
+                        str(context.get("inferenceGenerationId") or ""),
+                    ))
+                except Exception as error:  # noqa: BLE001 - the persisted proposal remains available for retry.
+                    development_rows.append({
+                        "status": "error",
+                        "proposalId": proposal.proposal_id,
+                        "reason": str(error)[:500],
+                    })
         return {
             "status": "review-required" if rows else "no-valid-proposal",
             "proposalCount": len(rows),
             "proposals": rows,
             "governance": "not-usable-for-investment-judgment-until-rulebox-promotion",
+            "hypothesisDevelopment": development_rows,
         }
 
     def known_evidence_ids(self, context: Dict[str, object]) -> set:

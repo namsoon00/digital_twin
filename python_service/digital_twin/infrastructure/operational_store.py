@@ -1,7 +1,6 @@
 from typing import Dict
 
 from .mysql_monitoring import MySQLMonitorAccountJobStore
-from .ontology_lab_store import JsonOntologyExperimentStore
 from .mysql_operational import (
     MySQLAccountRegistry,
     MySQLAIInferenceQueueStore,
@@ -19,6 +18,8 @@ from .mysql_operational import (
     MySQLInvestmentDecisionEpisodeStore,
     MySQLInvestmentDomainStore,
     MySQLHypothesisLifecycleStore,
+    MySQLHypothesisDevelopmentStore,
+    MySQLOntologyExperimentStore,
     MySQLInvestmentResearchStore,
     MySQLMarketQuoteCache,
     MySQLMarketObservationReasoningAnchorStore,
@@ -245,7 +246,14 @@ def ontology_inference_detail_outbox_store(settings: Dict[str, str] = None):
 
 
 def ontology_experiment_store(settings: Dict[str, str] = None):
-    return JsonOntologyExperimentStore()
+    configured = configured_settings(settings)
+    from .settings import data_dir
+    return MySQLOntologyExperimentStore(configured, legacy_path=data_dir() / "ontology-lab.json")
+
+
+def hypothesis_development_store(settings: Dict[str, str] = None):
+    configured = configured_settings(settings)
+    return MySQLHypothesisDevelopmentStore(configured)
 
 
 def investment_strategy_proposal_store(settings: Dict[str, str] = None):

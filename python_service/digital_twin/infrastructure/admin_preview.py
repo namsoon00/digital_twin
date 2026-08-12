@@ -829,6 +829,9 @@ def admin_preview_config() -> Dict[str, object]:
                 "title": "온톨로지 실험",
                 "summary": "후보 RuleBox를 운영 그래프와 분리된 샌드박스에서 반복 검증하고, 새 모니터 스냅샷이 들어오면 활성 실험을 다시 실행합니다.",
                 "localEndpoints": [
+                    "GET /api/investment-brain/hypothesis-development",
+                    "POST /api/investment-brain/hypothesis-development/process",
+                    "POST /api/investment-brain/hypothesis-development/{id}/approve",
                     "GET /api/ontology/experiments",
                     "GET /api/ontology/experiments/status",
                     "GET /api/ontology/reasoning/status",
@@ -850,12 +853,19 @@ def admin_preview_config() -> Dict[str, object]:
                     "python3 python_service/service.py ontology-lab activate --id ontology-exp-...",
                     "npm run python:service:restart",
                 ],
-                "storage": ["data/ontology-lab.json", "data/python-ontology-lab.log"],
+                "storage": [
+                    "mysql: hypothesis_development_cases",
+                    "mysql: hypothesis_development_events",
+                    "mysql: ontology_experiments",
+                    "mysql: ontology_experiment_runs",
+                    "data/python-ontology-lab.log",
+                ],
                 "settings": [
                     {"key": "ontologyLabEnabled", "label": "실험 워커 사용", "default": "1"},
                     {"key": "ontologyLabIntervalSeconds", "label": "반복 주기", "default": "300", "unit": "seconds"},
                     {"key": "ontologyLabBatchSize", "label": "회차별 실험 수", "default": "5"},
                     {"key": "ontologyLabRunHistoryLimit", "label": "이력 보관 수", "default": "50"},
+                    {"key": "ontologyLabAutoApplyEnabled", "label": "자동 운영 반영", "default": "0"},
                 ],
             },
             {

@@ -29,6 +29,7 @@ from ..application.hypothesis_research_planner_service import HypothesisResearch
 from ..application.hypothesis_review_service import HypothesisReviewService
 from ..application.hypothesis_quality_review_service import HypothesisQualityReviewService
 from ..application.hypothesis_outcome_replay_service import HypothesisOutcomeReplayService
+from ..application.hypothesis_development_service import HypothesisDevelopmentService
 from ..application.investment_strategy_proposal_service import InvestmentStrategyProposalService
 from ..application.investment_calendar_candidate_service import InvestmentCalendarCandidateService
 from ..application.investment_calendar_discovery_service import InvestmentCalendarDiscoveryService
@@ -589,6 +590,21 @@ def build_hypothesis_proposal_service(settings=None, research_store=None) -> Hyp
     return HypothesisProposalService(
         store=research_store or stores.investment_research_store(configured_settings),
         advisor=hypothesis_proposal_advisor_from_settings(configured_settings),
+        event_publisher=default_event_bus(),
+        settings=configured_settings,
+        development_service=build_hypothesis_development_service(configured_settings, research_store),
+    )
+
+
+def build_hypothesis_development_service(settings=None, research_store=None) -> HypothesisDevelopmentService:
+    configured_settings = settings or runtime_settings()
+    return HypothesisDevelopmentService(
+        case_store=stores.hypothesis_development_store(configured_settings),
+        proposal_store=research_store or stores.investment_research_store(configured_settings),
+        experiment_store=stores.ontology_experiment_store(configured_settings),
+        rule_candidate_service=build_rule_change_candidate_service(configured_settings),
+        ontology_repository=ontology_repository_from_settings(configured_settings),
+        monitor_store=stores.monitor_store(configured_settings),
         event_publisher=default_event_bus(),
         settings=configured_settings,
     )
@@ -1305,6 +1321,7 @@ def build_ontology_lab_service(settings=None) -> OntologyLabService:
         strategy_proposal_service=build_investment_strategy_proposal_service(configured_settings),
         notification_queue=stores.notification_job_store(configured_settings),
         reasoning_queue_probe=build_ontology_reasoning_queue_probe(configured_settings),
+        hypothesis_development_service=build_hypothesis_development_service(configured_settings),
         settings=configured_settings,
     )
 

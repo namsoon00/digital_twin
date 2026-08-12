@@ -1536,6 +1536,66 @@ MYSQL_SCHEMA = [
     ) ENGINE=InnoDB DEFAULT CHARSET=utf8mb4 COLLATE=utf8mb4_unicode_ci
     """,
     """
+    CREATE TABLE IF NOT EXISTS hypothesis_development_cases (
+        case_id VARCHAR(191) PRIMARY KEY,
+        fingerprint VARCHAR(64) NOT NULL,
+        account_id VARCHAR(191) NOT NULL DEFAULT '',
+        symbol VARCHAR(64) NOT NULL DEFAULT '',
+        status VARCHAR(40) NOT NULL DEFAULT 'proposed',
+        stage VARCHAR(40) NOT NULL DEFAULT 'proposal',
+        title VARCHAR(255) NOT NULL DEFAULT '',
+        latest_proposal_id VARCHAR(191) NOT NULL DEFAULT '',
+        candidate_rule_id VARCHAR(191) NOT NULL DEFAULT '',
+        experiment_id VARCHAR(191) NOT NULL DEFAULT '',
+        payload_json LONGTEXT NOT NULL,
+        created_at VARCHAR(40) NOT NULL,
+        updated_at VARCHAR(40) NOT NULL,
+        UNIQUE KEY uq_hypothesis_development_fingerprint (fingerprint),
+        KEY idx_hypothesis_development_status_time (status, updated_at, case_id),
+        KEY idx_hypothesis_development_symbol_status (symbol, status, updated_at)
+    ) ENGINE=InnoDB DEFAULT CHARSET=utf8mb4 COLLATE=utf8mb4_unicode_ci
+    """,
+    """
+    CREATE TABLE IF NOT EXISTS hypothesis_development_events (
+        event_id VARCHAR(191) PRIMARY KEY,
+        case_id VARCHAR(191) NOT NULL,
+        event_type VARCHAR(80) NOT NULL,
+        status VARCHAR(40) NOT NULL DEFAULT '',
+        stage VARCHAR(40) NOT NULL DEFAULT '',
+        reason TEXT NOT NULL,
+        payload_json LONGTEXT NOT NULL,
+        occurred_at VARCHAR(40) NOT NULL,
+        KEY idx_hypothesis_development_events_case_time (case_id, occurred_at, event_id),
+        KEY idx_hypothesis_development_events_type_time (event_type, occurred_at)
+    ) ENGINE=InnoDB DEFAULT CHARSET=utf8mb4 COLLATE=utf8mb4_unicode_ci
+    """,
+    """
+    CREATE TABLE IF NOT EXISTS ontology_experiments (
+        experiment_id VARCHAR(191) PRIMARY KEY,
+        status VARCHAR(40) NOT NULL DEFAULT 'draft',
+        title VARCHAR(255) NOT NULL DEFAULT '',
+        source_case_id VARCHAR(191) NOT NULL DEFAULT '',
+        source_proposal_id VARCHAR(191) NOT NULL DEFAULT '',
+        symbols_json TEXT NOT NULL,
+        payload_json LONGTEXT NOT NULL,
+        created_at VARCHAR(40) NOT NULL,
+        updated_at VARCHAR(40) NOT NULL,
+        KEY idx_ontology_experiments_status_time (status, updated_at, experiment_id),
+        KEY idx_ontology_experiments_case (source_case_id, updated_at)
+    ) ENGINE=InnoDB DEFAULT CHARSET=utf8mb4 COLLATE=utf8mb4_unicode_ci
+    """,
+    """
+    CREATE TABLE IF NOT EXISTS ontology_experiment_runs (
+        run_id VARCHAR(191) PRIMARY KEY,
+        experiment_id VARCHAR(191) NOT NULL,
+        status VARCHAR(40) NOT NULL DEFAULT '',
+        completed_at VARCHAR(40) NOT NULL DEFAULT '',
+        payload_json LONGTEXT NOT NULL,
+        created_at VARCHAR(40) NOT NULL,
+        KEY idx_ontology_experiment_runs_experiment_time (experiment_id, completed_at, run_id)
+    ) ENGINE=InnoDB DEFAULT CHARSET=utf8mb4 COLLATE=utf8mb4_unicode_ci
+    """,
+    """
     CREATE TABLE IF NOT EXISTS ontology_reasoning_mailbox_events (
         event_id VARCHAR(191) PRIMARY KEY,
         occurred_at VARCHAR(40) NOT NULL DEFAULT '',

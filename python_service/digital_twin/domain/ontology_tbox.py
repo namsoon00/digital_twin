@@ -414,6 +414,9 @@ CLASS_DEFS: List[TBoxClassDef] = [
     TBoxClassDef("HypothesisTemplate", "reasoning-insight", "투자 가설 템플릿", parent="InvestmentThesis", description="승인된 TypeDB 규칙과 인과 경로에서 상황별 가설을 만드는 재사용 가능한 정의입니다."),
     TBoxClassDef("ApprovedHypothesisTemplate", "reasoning-insight", "승인 투자 가설 템플릿", parent="HypothesisTemplate"),
     TBoxClassDef("NovelHypothesisProposal", "reasoning-insight", "신규 투자 가설 제안", parent="RuleChangeCandidate", description="기존 템플릿으로 설명되지 않는 관계를 AI가 제안한 검토 전 가설입니다."),
+    TBoxClassDef("HypothesisDevelopmentCase", "reasoning-insight", "가설 개발 케이스", parent="RuleChangeCandidate", description="AI 신규 가설의 원본 계보, 후보 규칙, 자동 검증 게이트와 운영 반영 결정을 하나의 감사 단위로 추적합니다."),
+    TBoxClassDef("HypothesisValidationGate", "reasoning-insight", "가설 검증 게이트", parent="AIValidation", description="구조, 근거, TypeDB 재생, 과거 범위, 제안 후 홀드아웃 관측과 정책 안전을 독립적으로 판정합니다."),
+    TBoxClassDef("HypothesisDeploymentDecision", "reasoning-insight", "가설 운영 반영 결정", parent="PromotionDecision", description="자동 검증이 끝난 후보 규칙을 운영 RuleBox에 반영하거나 보류한 명시적 사용자 결정입니다."),
     TBoxClassDef("HypothesisSet", "reasoning-insight", "경쟁 가설 집합", description="동일한 투자 질문에 대해 활성 TypeDB 인과 가설과 근거 충분성·반사실 안전 가설을 비교하는 단위입니다."),
     TBoxClassDef("HypothesisFamily", "reasoning-insight", "가설 인과 가족", parent="InvestmentThesis", description="같은 TypeDB 인과 구조를 가진 현재 세대 후보를 하나로 묶는 안정 식별자입니다. 서로 다른 원인 경로는 같은 행동 제안이라도 합치지 않습니다."),
     TBoxClassDef("MarketHypothesis", "reasoning-insight", "시장 공통 가설", parent="InvestmentThesis", description="가격·수급·뉴스·공시·거시처럼 계정과 무관한 TypeDB 입력만으로 성립한 인과 설명의 공통 식별자입니다. 매수·매도 행동이나 보유 손익은 포함하지 않습니다."),
@@ -954,7 +957,7 @@ RULE_DEFS: List[TBoxRuleDef] = [
     TBoxRuleDef("hypothesis lifecycle transitions compare TypeDB materialized evidence across generations for audit and AI context, but never replace TypeDB investment judgement or create an action in Python", "reasoning-insight"),
     TBoxRuleDef("research tasks retrieve only decision-relevant evidence through approved source policies, then verified claims enter ABox before TypeDB re-runs inference", "reasoning-insight"),
     TBoxRuleDef("unverified or disputed claims can trigger further research but cannot independently strengthen a buy, trim, or sell opinion", "reasoning-insight"),
-    TBoxRuleDef("novel hypotheses remain review-required proposals until evidence replay and governance approval promote them into active TypeDB rules", "reasoning-insight"),
+    TBoxRuleDef("novel hypotheses automatically pass causal screening, TypeDB preview, historical replay, post-proposal holdout observation, and policy-safety gates, but only explicit human approval can deploy a validated candidate into the operational RuleBox", "reasoning-insight"),
     TBoxRuleDef("user-facing investment terms keep stable internal identifiers while approved level-specific renderings are managed as TypeDB language-governance concepts", "operations-dispatch"),
     TBoxRuleDef("forbidden or unregistered expressions create review-required language proposals and never mutate approved terminology automatically", "operations-dispatch"),
 ]

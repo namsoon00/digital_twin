@@ -902,7 +902,10 @@ class OntologyLabTests(unittest.TestCase):
             store,
             monitor_store=FakeMonitorStore(),
             notification_queue=queue,
-            settings={"ontologyLabAutoApplyMinScore": "75"},
+            settings={
+                "ontologyLabAutoApplyEnabled": "1",
+                "ontologyLabAutoApplyMinScore": "75",
+            },
         )
         experiment_id = service.create({
             "title": "AAPL auto growth lab",
@@ -933,6 +936,42 @@ class OntologyLabTests(unittest.TestCase):
         self.assertEqual("completed", experiment.status)
         self.assertEqual("applied", experiment.last_result["automation"]["status"])
         self.assertEqual("applied", experiment.run_history[0]["automation"]["status"])
+
+    def test_explicit_apply_restores_rulebox_when_inference_fails(self):
+        store = MemoryExperimentStore()
+        repository = FakeOntologyRepository()
+        repository.restore_calls = []
+        baseline = repository.rulebox_snapshot()
+        baseline["rulesHash"] = "baseline-hash"
+        baseline["versions"] = [{"id": "rulebox-version:baseline", "rulesHash": "baseline-hash"}]
+        repository.rulebox_snapshot = lambda: dict(baseline)
+        repository.ensure_rulebox_version_baseline = lambda reason: {"status": "ok", "reason": reason}
+        repository.run_rulebox = lambda payload=None: {"status": "error", "reason": "typedb-test-failure"}
+
+        def restore(version_id, reason, author):
+            repository.restore_calls.append((version_id, reason, author))
+            return {"status": "ok", "saved": True, "versionId": version_id}
+
+        repository.restore_rulebox_version = restore
+        service = OntologyLabService(repository, store, monitor_store=FakeMonitorStore())
+        experiment_id = service.create({
+            "title": "AAPL rollback lab",
+            "symbols": ["AAPL"],
+            "rules": [candidate_rule()],
+            "accountId": "acct-1",
+        })["experiment"]["id"]
+        service.run(experiment_id)
+        store.save(mark_native_materialization_ready(store.get(experiment_id)))
+
+        result = service.apply_recommendations(experiment_id, {
+            "accountId": "acct-1",
+            "reviewApproved": True,
+            "rollbackOnInferenceFailure": True,
+        })
+
+        self.assertEqual("rolled-back", result["status"])
+        self.assertEqual("rulebox-version:baseline", result["application"]["rollbackVersionId"])
+        self.assertEqual(1, len(repository.restore_calls))
 
     def test_scheduled_experiment_without_native_materialization_only_observes(self):
         store = MemoryExperimentStore()

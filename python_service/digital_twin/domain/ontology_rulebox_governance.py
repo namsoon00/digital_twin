@@ -335,7 +335,10 @@ def build_rule_change_candidate_prompt(context: Dict[str, object]) -> str:
         "- proposedRule.enabled는 반드시 false다.",
         "- ABox에 없는 데이터가 필요하면 proposedRule을 비우고 requiresData에 적는다.",
         "- relation_type, condition field, target filters는 제공된 RuleBox/InferenceBox/TBox에서 확인 가능한 형태를 우선 사용한다.",
+        "- hypothesisProposal이 있으면 그 주장 하나만 실행 가능한 후보 규칙으로 변환하고 다른 가설을 추가하지 않는다.",
+        "- hypothesisProposal의 evidence ID는 출처 계보이며 조건 field나 relation_type으로 직접 사용하지 않는다.",
         "- derivations에는 decision_stage, evidence_role, decision_effect을 포함한다.",
+        "- 자동 가설 승격 후보의 candidate_action은 HOLD로 제한하고 decision_effect은 defer 또는 constrain만 사용한다.",
         "- 중복 rule_id를 만들지 않는다.",
         "- 응답은 설명 없이 JSON 하나만 반환한다.",
         "JSON 계약:",
@@ -348,6 +351,7 @@ def build_rule_change_candidate_prompt(context: Dict[str, object]) -> str:
 def compact_candidate_context(context: Dict[str, object]) -> Dict[str, object]:
     rulebox = context.get("ruleBox") if isinstance(context.get("ruleBox"), dict) else {}
     inferencebox = context.get("inferenceBox") if isinstance(context.get("inferenceBox"), dict) else {}
+    proposal = context.get("hypothesisProposal") if isinstance(context.get("hypothesisProposal"), dict) else {}
     return {
         "trigger": context.get("trigger") or "manual",
         "symbols": list(context.get("symbols") or [])[:30],
@@ -390,6 +394,17 @@ def compact_candidate_context(context: Dict[str, object]) -> Dict[str, object]:
         "recentEvents": list(context.get("recentEvents") or [])[:20],
         "alerts": list(context.get("alerts") or [])[:20],
         "materialityAssessments": list(context.get("materialityAssessments") or [])[:20],
+        "hypothesisProposal": {
+            "caseId": proposal.get("caseId"),
+            "proposalIds": list(proposal.get("sourceProposalIds") or proposal.get("proposalIds") or [])[:20],
+            "symbol": proposal.get("symbol"),
+            "claim": proposal.get("claim"),
+            "causalPath": list(proposal.get("causalPath") or [])[:12],
+            "supportingEvidenceIds": list(proposal.get("supportingEvidenceIds") or [])[:20],
+            "counterEvidenceIds": list(proposal.get("counterEvidenceIds") or [])[:20],
+            "requiredEvidenceTypes": list(proposal.get("requiredEvidenceTypes") or [])[:12],
+            "invalidationConditions": list(proposal.get("invalidationConditions") or [])[:12],
+        } if proposal else {},
         "existingCandidates": [
             {"id": item.get("id"), "status": item.get("status"), "title": item.get("title")}
             for item in list(rulebox.get("changeCandidates") or [])[:20]

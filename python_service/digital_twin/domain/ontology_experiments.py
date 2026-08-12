@@ -31,6 +31,9 @@ class OntologyExperiment:
     active_since: str = ""
     paused_at: str = ""
     validation_warnings: List[str] = field(default_factory=list)
+    source_proposal_id: str = ""
+    source_case_id: str = ""
+    validation_contract: Dict[str, object] = field(default_factory=dict)
 
     def to_dict(self) -> Dict[str, object]:
         payload = asdict(self)
@@ -46,6 +49,9 @@ class OntologyExperiment:
         payload["activeSince"] = payload.pop("active_since")
         payload["pausedAt"] = payload.pop("paused_at")
         payload["validationWarnings"] = payload.pop("validation_warnings")
+        payload["sourceProposalId"] = payload.pop("source_proposal_id")
+        payload["sourceCaseId"] = payload.pop("source_case_id")
+        payload["validationContract"] = payload.pop("validation_contract")
         return payload
 
     @staticmethod
@@ -84,6 +90,9 @@ class OntologyExperiment:
                 for item in (payload.get("validationWarnings") or payload.get("validation_warnings") or [])
                 if str(item or "").strip()
             ],
+            source_proposal_id=str(payload.get("sourceProposalId") or payload.get("source_proposal_id") or ""),
+            source_case_id=str(payload.get("sourceCaseId") or payload.get("source_case_id") or ""),
+            validation_contract=dict(payload.get("validationContract") or payload.get("validation_contract") or {}),
         )
 
 

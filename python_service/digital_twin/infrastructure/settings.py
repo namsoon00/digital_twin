@@ -1596,7 +1596,7 @@ def runtime_settings(fast_operational_read: bool = False) -> Dict[str, str]:
         "ontologyLabIntervalSeconds": value("ontologyLabIntervalSeconds", "ONTOLOGY_LAB_INTERVAL_SECONDS", "300"),
         "ontologyLabBatchSize": value("ontologyLabBatchSize", "ONTOLOGY_LAB_BATCH_SIZE", "5"),
         "ontologyLabRunHistoryLimit": value("ontologyLabRunHistoryLimit", "ONTOLOGY_LAB_RUN_HISTORY_LIMIT", "50"),
-        "ontologyLabAutoApplyEnabled": value("ontologyLabAutoApplyEnabled", "ONTOLOGY_LAB_AUTO_APPLY_ENABLED", "1"),
+        "ontologyLabAutoApplyEnabled": value("ontologyLabAutoApplyEnabled", "ONTOLOGY_LAB_AUTO_APPLY_ENABLED", "0"),
         "ontologyLabAutoApplyValidationStates": value("ontologyLabAutoApplyValidationStates", "ONTOLOGY_LAB_AUTO_APPLY_VALIDATION_STATES", "ready"),
         "ontologyLabAutoApplyNeedsReviewEnabled": value("ontologyLabAutoApplyNeedsReviewEnabled", "ONTOLOGY_LAB_AUTO_APPLY_NEEDS_REVIEW_ENABLED", "0"),
         "ontologyLabNotifyEnabled": value("ontologyLabNotifyEnabled", "ONTOLOGY_LAB_NOTIFY_ENABLED", "1"),

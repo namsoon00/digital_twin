@@ -85,6 +85,7 @@ class OntologyLabService:
         strategy_proposal_service=None,
         notification_queue=None,
         reasoning_queue_probe: Callable[[], Dict[str, object]] = None,
+        hypothesis_development_service=None,
         settings: Dict[str, object] = None,
     ):
         self.ontology_repository = ontology_repository
@@ -94,6 +95,7 @@ class OntologyLabService:
         self.strategy_proposal_service = strategy_proposal_service
         self.notification_queue = notification_queue
         self.reasoning_queue_probe = reasoning_queue_probe
+        self.hypothesis_development_service = hypothesis_development_service
         self.settings = dict(settings or {})
 
     def list(self, limit: int = 8, offset: int = 0, summary: bool = True) -> Dict[str, object]:
@@ -175,7 +177,7 @@ class OntologyLabService:
         return int_setting(self.settings, "ontologyRuleCandidateAiMaxCandidates", 3, 1, 10)
 
     def auto_apply_enabled(self) -> bool:
-        return truthy(self.settings.get("ontologyLabAutoApplyEnabled"), True)
+        return truthy(self.settings.get("ontologyLabAutoApplyEnabled"), False)
 
     def auto_apply_needs_review_enabled(self) -> bool:
         return truthy(self.settings.get("ontologyLabAutoApplyNeedsReviewEnabled"), False)
@@ -625,6 +627,24 @@ class OntologyLabService:
         run_rulebox = truthy(payload.get("runRulebox", payload.get("run_rulebox")), True)
         stamp = utc_now_iso()
         rulebox = self.rulebox_snapshot()
+        rollback_on_inference_failure = truthy(payload.get("rollbackOnInferenceFailure"), False)
+        baseline_version_id = ""
+        if rollback_on_inference_failure and self.ontology_repository and hasattr(self.ontology_repository, "ensure_rulebox_version_baseline"):
+            try:
+                self.ontology_repository.ensure_rulebox_version_baseline("ontology-lab-pre-deployment")
+                rulebox = self.rulebox_snapshot()
+            except Exception:  # noqa: BLE001 - apply result below remains authoritative and auditable.
+                pass
+        if rollback_on_inference_failure:
+            active_hash = str(rulebox.get("rulesHash") or rulebox.get("ruleboxRulesHash") or "")
+            baseline_version = next(
+                (
+                    item for item in (rulebox.get("versions") or [])
+                    if isinstance(item, dict) and str(item.get("rulesHash") or "") == active_hash
+                ),
+                None,
+            )
+            baseline_version_id = str((baseline_version or {}).get("id") or "")
         baseline_rules = rule_payloads_from_snapshot(rulebox)
         merged_rules, added_rules, skipped_rule_ids = merge_candidate_rules(baseline_rules, candidate_rules)
         tbox_graph = ontology_lab_tbox_graph(experiment, proposed, stamp)
@@ -664,6 +684,21 @@ class OntologyLabService:
                     "experimentId": experiment.experiment_id,
                     "worldId": world_id,
                 })
+        rollback_result = {}
+        inference_status = str(inference_result.get("status") or "").lower()
+        if (
+            rollback_on_inference_failure
+            and added_rules
+            and inference_status != "ok"
+            and baseline_version_id
+            and self.ontology_repository
+            and hasattr(self.ontology_repository, "restore_rulebox_version")
+        ):
+            rollback_result = self.ontology_repository.restore_rulebox_version(
+                baseline_version_id,
+                "가설 배포 후 TypeDB 추론 실패 자동 복원",
+                "ontology-lab-auto-rollback",
+            )
         review_approval = ontology_review_approval(last_result, payload, stamp)
         application = {
             "status": ontology_application_status(rulebox_result, tbox_result, added_rules, tbox_graph.entities),
@@ -687,9 +722,20 @@ class OntologyLabService:
             "tboxSave": compact_apply_result(tbox_result),
             "inferenceRun": compact_apply_result(inference_result),
         }
+        deployment_inference_failed = rollback_on_inference_failure and bool(added_rules) and inference_status != "ok"
+        if rollback_result:
+            application["rollback"] = compact_apply_result(rollback_result)
+            application["rollbackVersionId"] = baseline_version_id
+            application["status"] = "rolled-back" if ontology_apply_succeeded(rollback_result) else "error"
+        elif deployment_inference_failed:
+            application["rollback"] = {
+                "status": "unavailable",
+                "reason": "TypeDB 추론이 실패했고 복원 가능한 RuleBox 기준선을 찾지 못했습니다.",
+            }
+            application["status"] = "error"
         if review_approval:
             application["reviewApproval"] = review_approval
-        strategy_application = self.mark_strategy_proposals_deployed(experiment, application)
+        strategy_application = self.mark_strategy_proposals_deployed(experiment, application) if application["status"] in {"applied", "already-applied"} else {}
         if strategy_application:
             application["strategyProposals"] = strategy_application
         updated_recommendations = mark_recommendations_applied(
@@ -740,9 +786,21 @@ class OntologyLabService:
         queue_deferral = self.reasoning_queue_deferral()
         if queue_deferral:
             return queue_deferral
+        development_result = (
+            self.hypothesis_development_service.process_pending(limit=max(1, int(limit or self.batch_size())))
+            if self.hypothesis_development_service and hasattr(self.hypothesis_development_service, "process_pending")
+            else {"status": "disabled", "processedCount": 0}
+        )
         active = [item for item in self.experiment_store.list() if item.status == ACTIVE_STATUS]
         if not active:
-            return {"status": "idle", "processedCount": 0, "runCount": 0, "skippedCount": 0, "experiments": []}
+            return {
+                "status": "ok" if development_result.get("processedCount") else "idle",
+                "processedCount": int(development_result.get("processedCount") or 0),
+                "runCount": 0,
+                "skippedCount": 0,
+                "experiments": [],
+                "hypothesisDevelopment": development_result,
+            }
         selected = active[: max(1, int(limit or self.batch_size()))]
         results = [
             self._run_experiment(experiment, {}, keep_active_status=True, force=force, run_kind="scheduled")
@@ -752,10 +810,11 @@ class OntologyLabService:
         skipped_count = len([item for item in results if item.get("status") == "skipped"])
         return {
             "status": "ok" if run_count else "idle",
-            "processedCount": len(results),
+            "processedCount": len(results) + int(development_result.get("processedCount") or 0),
             "runCount": run_count,
             "skippedCount": skipped_count,
             "experiments": results,
+            "hypothesisDevelopment": development_result,
         }
 
     def _run_experiment(

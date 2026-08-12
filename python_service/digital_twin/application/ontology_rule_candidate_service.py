@@ -34,23 +34,27 @@ class RuleChangeCandidateProposalService:
         alerts: Iterable[object] = None,
         account_id: str = "",
         tenant_id: str = "",
+        hypothesis_proposal: Dict[str, object] = None,
     ) -> Dict[str, object]:
         if not self.ontology_repository or not self.advisor:
             return {"status": "disabled", "reason": "Rule candidate advisor is not configured.", "candidateCount": 0, "savedCount": 0}
         clean_symbols = sorted(set(str(item or "").upper().strip() for item in (symbols or []) if str(item or "").strip()))
         world_id = portfolio_world_id(account_id, tenant_id) if str(account_id or "").strip() else ""
         context = self.build_context(clean_symbols, trigger, requests, alerts, world_id=world_id)
+        if isinstance(hypothesis_proposal, dict) and hypothesis_proposal:
+            context["hypothesisProposal"] = dict(hypothesis_proposal)
         candidates = self.advisor.propose(context)
         candidates = list(candidates or [])[: self.max_candidates()]
+        persist_as_general_candidate = not bool(hypothesis_proposal)
         save_result = self.ontology_repository.save_rule_change_candidates(candidates, {
             "trigger": trigger,
             "symbols": clean_symbols,
             "worldId": world_id,
             "promptContext": context,
-        }) if candidates and hasattr(self.ontology_repository, "save_rule_change_candidates") else {
+        }) if candidates and persist_as_general_candidate and hasattr(self.ontology_repository, "save_rule_change_candidates") else {
             "status": "skipped",
             "savedCount": 0,
-            "reason": "No candidates to save.",
+            "reason": "Hypothesis candidates are persisted only after development governance." if hypothesis_proposal else "No candidates to save.",
         }
         result = {
             "status": "ok" if candidates else "no-candidates",
@@ -69,9 +73,25 @@ class RuleChangeCandidateProposalService:
                 "inferenceRelationCount": ((context.get("inferenceBox") or {}).get("relationCount") if isinstance(context.get("inferenceBox"), dict) else 0),
             },
         }
-        if self.strategy_proposal_service and hasattr(self.strategy_proposal_service, "propose_from_rule_candidates"):
+        if not hypothesis_proposal and self.strategy_proposal_service and hasattr(self.strategy_proposal_service, "propose_from_rule_candidates"):
             result["strategyProposalResult"] = self.strategy_proposal_service.propose_from_rule_candidates(result, context)
         return result
+
+    def propose_hypothesis(
+        self,
+        proposal: Dict[str, object],
+        account_id: str = "",
+        tenant_id: str = "",
+    ) -> Dict[str, object]:
+        proposal = dict(proposal or {})
+        symbol = str(proposal.get("symbol") or "").upper().strip()
+        return self.propose(
+            symbols=[symbol] if symbol else [],
+            trigger="novel-hypothesis-auto-promotion",
+            account_id=str(account_id or proposal.get("accountId") or ""),
+            tenant_id=str(tenant_id or ""),
+            hypothesis_proposal=proposal,
+        )
 
     def build_context(
         self,

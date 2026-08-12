@@ -108,6 +108,7 @@ from ..infrastructure.service_factory import (
     build_investment_calendar_service,
     build_investment_strategy_proposal_service,
     build_investment_brain_service,
+    build_broker_activity_sync_service,
     build_trade_execution_service,
     build_notification_queue_runner,
     build_official_calendar_sync_service,
@@ -573,6 +574,20 @@ def execute_action_plan_payload(plan_id: str) -> Dict[str, object]:
         return {"status": "error", "error": str(error)}
 
 
+def import_broker_activity_payload(body: Dict[str, object]) -> Dict[str, object]:
+    account_id = str(body.get("accountId") or "default")
+    provider = str(body.get("provider") or "toss")
+    content = str(body.get("csv") or body.get("content") or "")
+    if not content.strip():
+        return {"status": "error", "error": "CSV 내용이 없습니다."}
+    if len(content.encode("utf-8")) > 2 * 1024 * 1024:
+        return {"status": "error", "error": "CSV는 2MB 이하만 수입할 수 있습니다."}
+    try:
+        return build_broker_activity_sync_service().import_csv(account_id, provider, content)
+    except ValueError as error:
+        return {"status": "error", "error": str(error)}
+
+
 def settings_status_payload() -> Dict[str, object]:
     settings = runtime_settings()
     public_keys = [
@@ -645,6 +660,11 @@ def settings_status_payload() -> Dict[str, object]:
         "investmentBrainOutcomeObservationMinutes",
         "investmentBrainOutcomeEpisodeBatchSize",
         "investmentBrainOutcomeMaxDelayMinutes",
+        "investmentActionPlanExpiryMinutes",
+        "investmentActionPlanSlicePct",
+        "investmentActionPlanSliceCount",
+        "investmentExecutionQuoteDriftPct",
+        "investmentExecutionSnapshotMaxAgeMinutes",
         "investmentBrainNotificationResearchEnabled",
         "investmentBrainNovelHypothesisAiEnabled",
         "investmentBrainNovelHypothesisAiTimeoutSeconds",
@@ -4545,6 +4565,12 @@ class DigitalTwinHandler(BaseHTTPRequestHandler):
 
         if path == "/api/portfolio-lifecycle" and self.command == "GET":
             return self.send_payload(200, portfolio_lifecycle_payload(query), cache_control="no-store")
+
+        if path == "/api/portfolio-lifecycle/activity-import" and self.command == "POST":
+            if not self.ensure_writable("공유 모드에서는 거래 활동 CSV를 수입할 수 없습니다."):
+                return
+            payload = import_broker_activity_payload(self.read_json_body())
+            return self.send_payload(200 if payload.get("status") != "error" else 400, payload)
 
         action_plan_match = re.match(r"^/api/action-plans/([^/]+)/(approve|reject|execute)$", path)
         if action_plan_match and self.command == "POST":

@@ -155,6 +155,10 @@ ABOX_STRUCTURAL_RELATION_TYPES = {
     "PRECEDES",
     "REPRESENTS_INSTRUMENT",
     "REPRESENTS_STOCK",
+    "RECONCILES_PORTFOLIO",
+    "HAS_ACTIVITY_SYNC_STATE",
+    "OBSERVES_DECISION_CYCLE",
+    "EVALUATES_PORTFOLIO_CANDIDATE",
 }
 
 
@@ -5772,6 +5776,16 @@ class PortfolioOntologyProjectionRecorder:
             target_symbols=selected_symbols,
         )
         emit("temporal_windows.done", symbolCount=len(temporal_windows))
+        portfolio_lifecycle = {}
+        if self.investment_domain_store and hasattr(self.investment_domain_store, "ontology_portfolio_lifecycle_context"):
+            emit("portfolio_lifecycle.start")
+            try:
+                portfolio_lifecycle = self.investment_domain_store.ontology_portfolio_lifecycle_context(
+                    "portfolio:" + str(snapshot.account_id or "default")
+                )
+            except Exception:  # noqa: BLE001 - lifecycle enrichment must not invalidate market inference.
+                portfolio_lifecycle = {}
+            emit("portfolio_lifecycle.done", status=str(portfolio_lifecycle.get("status") or "unavailable"))
         return {
             "settings": dict(self.settings),
             "snapshotId": "abox-snapshot:" + hashlib.sha256(snapshot_seed.encode("utf-8")).hexdigest()[:16],
@@ -5802,6 +5816,7 @@ class PortfolioOntologyProjectionRecorder:
             # exposed through operational monitoring instead.
             "dataPipelineHealth": data_pipeline_health,
             "temporalObservationWindows": temporal_windows,
+            "portfolioLifecycle": portfolio_lifecycle,
         }
 
     @staticmethod

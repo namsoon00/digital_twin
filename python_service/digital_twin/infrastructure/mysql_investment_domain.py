@@ -6,6 +6,8 @@ from typing import Dict, Iterable, List, Optional
 
 from ..domain.investment_mandate import InvestmentMandate
 from ..domain.investment_outcomes import DecisionReview, PerformanceAttribution
+from ..domain.broker_activity import BrokerActivitySyncState
+from ..domain.portfolio_decision_cycle import PortfolioDecisionCycle
 from ..domain.portfolio_ledger import PortfolioLedgerEntry, PortfolioReconciliation
 from ..domain.portfolio_rebalancing import RebalanceProposal
 from ..domain.risk_exposure import ExposureSnapshot
@@ -273,8 +275,106 @@ class MySQLInvestmentDomainStore(MySQLOperationalConnection):
             )
         return snapshot
 
+    def save_broker_activity_sync_state(self, state: BrokerActivitySyncState) -> BrokerActivitySyncState:
+        stamp = utc_now()
+        with self.transaction() as connection:
+            connection.execute(
+                """
+                INSERT INTO broker_activity_sync_states (
+                    sync_id, portfolio_id, account_id, provider, status, cursor_value,
+                    imported_count, rejected_count, last_activity_at, last_success_at,
+                    payload_json, created_at, updated_at
+                ) VALUES (%s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s)
+                ON DUPLICATE KEY UPDATE status = VALUES(status), cursor_value = VALUES(cursor_value),
+                    imported_count = VALUES(imported_count), rejected_count = VALUES(rejected_count),
+                    last_activity_at = VALUES(last_activity_at), last_success_at = VALUES(last_success_at),
+                    payload_json = VALUES(payload_json), updated_at = VALUES(updated_at)
+                """,
+                (
+                    state.sync_id,
+                    state.portfolio_id,
+                    state.account_id,
+                    state.provider,
+                    state.status,
+                    state.cursor,
+                    state.imported_count,
+                    state.rejected_count,
+                    state.last_activity_at,
+                    state.last_success_at,
+                    json_dumps(state.to_dict()),
+                    stamp,
+                    stamp,
+                ),
+            )
+        return state
+
+    def broker_activity_sync_state(self, portfolio_id: str) -> Dict[str, object]:
+        with self.connect() as connection:
+            row = connection.execute(
+                "SELECT payload_json FROM broker_activity_sync_states WHERE portfolio_id = %s "
+                "ORDER BY updated_at DESC, sync_id DESC LIMIT 1",
+                (str(portfolio_id or ""),),
+            ).fetchone()
+        return _json_loads(row.get("payload_json"), {}) if row else {}
+
+    def save_portfolio_decision_cycle(self, cycle: PortfolioDecisionCycle) -> PortfolioDecisionCycle:
+        stamp = utc_now()
+        payload = cycle.to_dict()
+        with self.transaction() as connection:
+            connection.execute(
+                """
+                INSERT INTO portfolio_decision_cycles (
+                    cycle_id, portfolio_id, account_id, policy_version, source_snapshot_id,
+                    candidate_fingerprint, data_state, candidate_count, payload_json, created_at, updated_at
+                ) VALUES (%s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s)
+                ON DUPLICATE KEY UPDATE candidate_fingerprint = VALUES(candidate_fingerprint),
+                    data_state = VALUES(data_state), candidate_count = VALUES(candidate_count),
+                    payload_json = VALUES(payload_json), updated_at = VALUES(updated_at)
+                """,
+                (
+                    cycle.cycle_id,
+                    cycle.portfolio_id,
+                    cycle.account_id,
+                    cycle.policy_version,
+                    cycle.source_snapshot_id,
+                    cycle.fingerprint,
+                    cycle.data_state,
+                    len(cycle.candidates),
+                    json_dumps(payload),
+                    cycle.created_at or stamp,
+                    stamp,
+                ),
+            )
+        return cycle
+
+    def ontology_portfolio_lifecycle_context(self, portfolio_id: str) -> Dict[str, object]:
+        portfolio_key = str(portfolio_id or "")
+        with self.connect() as connection:
+            reconciliation = connection.execute(
+                "SELECT payload_json FROM portfolio_reconciliations WHERE portfolio_id = %s "
+                "ORDER BY source_snapshot_at DESC, reconciliation_id DESC LIMIT 1",
+                (portfolio_key,),
+            ).fetchone()
+            activity_sync = connection.execute(
+                "SELECT payload_json FROM broker_activity_sync_states WHERE portfolio_id = %s "
+                "ORDER BY updated_at DESC, sync_id DESC LIMIT 1",
+                (portfolio_key,),
+            ).fetchone()
+            decision_cycle = connection.execute(
+                "SELECT payload_json FROM portfolio_decision_cycles WHERE portfolio_id = %s "
+                "ORDER BY created_at DESC, cycle_id DESC LIMIT 1",
+                (portfolio_key,),
+            ).fetchone()
+        return {
+            "portfolioId": portfolio_key,
+            "reconciliation": _json_loads(reconciliation.get("payload_json"), {}) if reconciliation else {},
+            "brokerActivitySync": _json_loads(activity_sync.get("payload_json"), {}) if activity_sync else {},
+            "portfolioDecisionCycle": _json_loads(decision_cycle.get("payload_json"), {}) if decision_cycle else {},
+        }
+
     def latest_portfolio_lifecycle(self, portfolio_id: str) -> Dict[str, object]:
         portfolio_key = str(portfolio_id or "")
+        account_id = portfolio_key[len("portfolio:"):] if portfolio_key.startswith("portfolio:") else portfolio_key
         with self.connect() as connection:
             reconciliation = connection.execute(
                 "SELECT payload_json FROM portfolio_reconciliations WHERE portfolio_id = %s "
@@ -292,19 +392,74 @@ class MySQLInvestmentDomainStore(MySQLOperationalConnection):
                 (portfolio_key,),
             ).fetchone()
             plans = connection.execute(
-                "SELECT payload_json FROM investment_action_plans WHERE portfolio_id = %s "
+                "SELECT plan_id, payload_json FROM investment_action_plans WHERE portfolio_id = %s "
                 "ORDER BY created_at DESC, plan_id DESC LIMIT 20",
                 (portfolio_key,),
             ).fetchall()
+            activity_sync = connection.execute(
+                "SELECT payload_json FROM broker_activity_sync_states WHERE portfolio_id = %s "
+                "ORDER BY updated_at DESC, sync_id DESC LIMIT 1",
+                (portfolio_key,),
+            ).fetchone()
+            decision_cycle = connection.execute(
+                "SELECT payload_json FROM portfolio_decision_cycles WHERE portfolio_id = %s "
+                "ORDER BY created_at DESC, cycle_id DESC LIMIT 1",
+                (portfolio_key,),
+            ).fetchone()
+            ledger_rows = connection.execute(
+                "SELECT payload_json FROM portfolio_ledger_entries WHERE portfolio_id = %s "
+                "ORDER BY occurred_at DESC, entry_id DESC LIMIT 100",
+                (portfolio_key,),
+            ).fetchall()
+            ledger_summary = connection.execute(
+                "SELECT COUNT(*) AS entry_count, "
+                "SUM(CASE WHEN entry_type IN ('OPENING_POSITION','OPENING_CASH') THEN 1 ELSE 0 END) AS opening_count, "
+                "SUM(CASE WHEN entry_type NOT IN ('OPENING_POSITION','OPENING_CASH') THEN 1 ELSE 0 END) AS activity_count, "
+                "MAX(occurred_at) AS last_entry_at FROM portfolio_ledger_entries WHERE portfolio_id = %s",
+                (portfolio_key,),
+            ).fetchone() or {}
+            plan_ids = [str(item.get("plan_id") or "") for item in plans or [] if str(item.get("plan_id") or "")]
+            plan_reviews = []
+            if plan_ids:
+                placeholders = ",".join(["%s"] * len(plan_ids))
+                plan_reviews = connection.execute(
+                    "SELECT payload_json FROM investment_action_plan_reviews WHERE plan_id IN (" + placeholders + ") "
+                    "ORDER BY reviewed_at DESC, review_id DESC LIMIT 100",
+                    tuple(plan_ids),
+                ).fetchall()
+            attributions = connection.execute(
+                "SELECT a.payload_json FROM investment_performance_attributions a "
+                "JOIN investment_decision_episodes d ON d.episode_id = a.decision_episode_id "
+                "WHERE d.account_id = %s ORDER BY a.observed_at DESC, a.attribution_id DESC LIMIT 100",
+                (account_id,),
+            ).fetchall()
+            decision_reviews = connection.execute(
+                "SELECT r.payload_json FROM investment_decision_reviews r "
+                "JOIN investment_decision_episodes d ON d.episode_id = r.decision_episode_id "
+                "WHERE d.account_id = %s ORDER BY r.reviewed_at DESC, r.review_id DESC LIMIT 100",
+                (account_id,),
+            ).fetchall()
         mandate = self.active_mandate(portfolio_key)
         return {
-            "status": "ready" if any([mandate, reconciliation, exposure, rebalance, plans]) else "unavailable",
+            "status": "ready" if any([mandate, reconciliation, exposure, rebalance, plans, ledger_rows]) else "unavailable",
             "portfolioId": portfolio_key,
             "mandate": mandate,
             "reconciliation": _json_loads(reconciliation.get("payload_json"), {}) if reconciliation else {},
             "exposureSnapshot": _json_loads(exposure.get("payload_json"), {}) if exposure else {},
             "rebalanceProposal": _json_loads(rebalance.get("payload_json"), {}) if rebalance else {},
+            "brokerActivitySync": _json_loads(activity_sync.get("payload_json"), {}) if activity_sync else {},
+            "portfolioDecisionCycle": _json_loads(decision_cycle.get("payload_json"), {}) if decision_cycle else {},
+            "ledgerSummary": {
+                "entryCount": int(ledger_summary.get("entry_count") or 0),
+                "openingCount": int(ledger_summary.get("opening_count") or 0),
+                "activityCount": int(ledger_summary.get("activity_count") or 0),
+                "lastEntryAt": str(ledger_summary.get("last_entry_at") or ""),
+            },
+            "ledgerEntries": [_json_loads(item.get("payload_json"), {}) for item in ledger_rows or []],
             "actionPlans": [_json_loads(item.get("payload_json"), {}) for item in plans or []],
+            "actionPlanReviews": [_json_loads(item.get("payload_json"), {}) for item in plan_reviews or []],
+            "performanceAttributions": [_json_loads(item.get("payload_json"), {}) for item in attributions or []],
+            "decisionReviews": [_json_loads(item.get("payload_json"), {}) for item in decision_reviews or []],
         }
 
     def lifecycle_feedback_for_decisions(self, decision_episode_ids: Iterable[str]) -> Dict[str, Dict[str, object]]:
@@ -464,6 +619,20 @@ class MySQLInvestmentDomainStore(MySQLOperationalConnection):
                 (str(plan_id or ""),),
             ).fetchone()
         return ActionPlan.from_dict(_json_loads(row.get("payload_json"), {})) if row else None
+
+    def latest_active_action_plan(self, portfolio_id: str, symbol: str, action: str) -> Optional[ActionPlan]:
+        with self.connect() as connection:
+            rows = connection.execute(
+                "SELECT payload_json FROM investment_action_plans WHERE portfolio_id = %s AND action = %s "
+                "AND status IN ('review-required','approved') ORDER BY created_at DESC, plan_id DESC LIMIT 25",
+                (str(portfolio_id or ""), str(action or "").upper()),
+            ).fetchall()
+        expected_symbol = str(symbol or "").upper()
+        for row in rows or []:
+            plan = ActionPlan.from_dict(_json_loads(row.get("payload_json"), {}))
+            if plan.envelope and str(plan.envelope.symbol or "").upper() == expected_symbol:
+                return plan
+        return None
 
     def save_action_plan_review(self, review: ActionPlanReview) -> ActionPlanReview:
         stamp = utc_now()

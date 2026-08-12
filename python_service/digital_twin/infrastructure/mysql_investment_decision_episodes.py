@@ -100,7 +100,7 @@ class MySQLInvestmentDecisionEpisodeStore(MySQLOperationalConnection):
 
     def outcome_horizons(self) -> List[int]:
         return outcome_horizon_minutes(
-            self.runtime_settings.get("investmentBrainOutcomeObservationMinutes") or "60,1440,10080",
+            self.runtime_settings.get("investmentBrainOutcomeObservationMinutes") or "60,1440,7200,28800",
         )
 
     def outcome_minimum_samples(self) -> int:

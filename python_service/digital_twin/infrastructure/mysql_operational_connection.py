@@ -521,6 +521,42 @@ MYSQL_SCHEMA = [
     ) ENGINE=InnoDB DEFAULT CHARSET=utf8mb4 COLLATE=utf8mb4_unicode_ci
     """,
     """
+    CREATE TABLE IF NOT EXISTS broker_activity_sync_states (
+        sync_id VARCHAR(191) PRIMARY KEY,
+        portfolio_id VARCHAR(191) NOT NULL,
+        account_id VARCHAR(191) NOT NULL,
+        provider VARCHAR(64) NOT NULL,
+        status VARCHAR(64) NOT NULL,
+        cursor_value VARCHAR(500) NOT NULL DEFAULT '',
+        imported_count INT NOT NULL DEFAULT 0,
+        rejected_count INT NOT NULL DEFAULT 0,
+        last_activity_at VARCHAR(40) NOT NULL DEFAULT '',
+        last_success_at VARCHAR(40) NOT NULL DEFAULT '',
+        payload_json LONGTEXT NOT NULL,
+        created_at VARCHAR(40) NOT NULL,
+        updated_at VARCHAR(40) NOT NULL,
+        UNIQUE KEY uq_broker_activity_sync_portfolio_provider (portfolio_id, provider),
+        KEY idx_broker_activity_sync_status (status, updated_at)
+    ) ENGINE=InnoDB DEFAULT CHARSET=utf8mb4 COLLATE=utf8mb4_unicode_ci
+    """,
+    """
+    CREATE TABLE IF NOT EXISTS portfolio_decision_cycles (
+        cycle_id VARCHAR(191) PRIMARY KEY,
+        portfolio_id VARCHAR(191) NOT NULL,
+        account_id VARCHAR(191) NOT NULL,
+        policy_version VARCHAR(191) NOT NULL,
+        source_snapshot_id VARCHAR(191) NOT NULL,
+        candidate_fingerprint VARCHAR(64) NOT NULL,
+        data_state VARCHAR(32) NOT NULL DEFAULT 'partial',
+        candidate_count INT NOT NULL DEFAULT 0,
+        payload_json LONGTEXT NOT NULL,
+        created_at VARCHAR(40) NOT NULL,
+        updated_at VARCHAR(40) NOT NULL,
+        UNIQUE KEY uq_portfolio_decision_cycle_source (portfolio_id, source_snapshot_id, policy_version),
+        KEY idx_portfolio_decision_cycle_latest (portfolio_id, created_at, cycle_id)
+    ) ENGINE=InnoDB DEFAULT CHARSET=utf8mb4 COLLATE=utf8mb4_unicode_ci
+    """,
+    """
     CREATE TABLE IF NOT EXISTS portfolio_rebalance_proposals (
         proposal_id VARCHAR(191) PRIMARY KEY,
         portfolio_id VARCHAR(191) NOT NULL,

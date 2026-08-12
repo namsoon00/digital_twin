@@ -49,6 +49,7 @@ from ..application.portfolio_lifecycle_service import (
     PortfolioAccountingService,
     TradeExecutionService,
 )
+from ..application.broker_activity_service import BrokerActivitySyncService
 from ..application.notification_service import (
     CompositeNotificationContextEnricher,
     DisclosureAnalysisNotificationEnricher,
@@ -350,6 +351,7 @@ def build_monitor_runner(
             else PortfolioAccountingService(
                 stores.investment_domain_store(configured_settings),
                 stores.account_registry(configured_settings),
+                BrokerActivitySyncService(stores.investment_domain_store(configured_settings)),
             )
         ),
     )
@@ -543,6 +545,11 @@ def build_trade_execution_service(settings=None) -> TradeExecutionService:
         monitor_store=stores.monitor_store(configured_settings),
         settings=configured_settings,
     )
+
+
+def build_broker_activity_sync_service(settings=None) -> BrokerActivitySyncService:
+    configured_settings = settings or runtime_settings()
+    return BrokerActivitySyncService(stores.investment_domain_store(configured_settings))
 
 
 def build_investment_research_orchestrator(settings=None, research_store=None) -> InvestmentResearchOrchestrationService:

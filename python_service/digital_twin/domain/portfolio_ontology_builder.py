@@ -59,6 +59,7 @@ from .portfolio_ontology_research_concepts import (
     add_research_evidence_concepts,
 )
 from .portfolio_ontology_pipeline_quality_concepts import add_position_pipeline_quality_concepts
+from .portfolio_ontology_lifecycle_concepts import add_portfolio_lifecycle_concepts
 from .portfolio_ontology_security_line_concepts import add_security_line_concepts
 from .portfolio_ontology_temporal_concepts import add_position_temporal_concepts
 from .portfolio_ontology_valuation_concepts import add_position_valuation_concepts
@@ -185,6 +186,7 @@ def build_portfolio_ontology(
             properties=abox_properties(),
         ))
     add_market_exposure_concepts(graph, portfolio_node_id, portfolio)
+    add_portfolio_lifecycle_concepts(graph, portfolio_node_id, runtime_context)
     add_portfolio_factor_exposure_concepts(
         graph,
         portfolio_node_id,

@@ -8,6 +8,7 @@ from types import SimpleNamespace
 sys.path.insert(0, str(Path(__file__).resolve().parents[1]))
 
 from digital_twin.application.investment_outcome_observation_service import InvestmentOutcomeObservationService
+from digital_twin.application.broker_activity_service import BrokerActivitySyncService
 from digital_twin.application.portfolio_lifecycle_service import (
     DecisionActionPlanningService,
     PortfolioAccountingService,
@@ -16,7 +17,9 @@ from digital_twin.application.portfolio_lifecycle_service import (
 from digital_twin.domain.investment_brain import ObservedOutcome
 from digital_twin.domain.investment_mandate import InvestmentMandate
 from digital_twin.domain.portfolio import AccountSnapshot, PortfolioSummary, Position
+from digital_twin.domain.portfolio_ontology_builder import build_portfolio_ontology
 from digital_twin.domain.trade_execution import ActionEnvelope, ActionPlan, OrderIntent
+from digital_twin.infrastructure.broker_activity_csv import parse_broker_activity_csv
 from digital_twin.infrastructure.mysql_operational_connection import MYSQL_SCHEMA
 
 
@@ -34,6 +37,8 @@ class MemoryInvestmentRepository:
         self.attributions = []
         self.decision_reviews = []
         self.executions = []
+        self.decision_cycles = {}
+        self.activity_sync = {}
         self.mandate = InvestmentMandate.from_profile(
             "main",
             "portfolio:main",
@@ -74,12 +79,34 @@ class MemoryInvestmentRepository:
         self.proposals[item.proposal_id] = item
         return item
 
+    def save_portfolio_decision_cycle(self, item):
+        self.decision_cycles[item.cycle_id] = item
+        return item
+
+    def save_broker_activity_sync_state(self, item):
+        self.activity_sync[item.portfolio_id] = item.to_dict()
+        return item
+
+    def broker_activity_sync_state(self, portfolio_id):
+        return dict(self.activity_sync.get(portfolio_id) or {})
+
     def save_action_plan(self, item):
         self.plans[item.plan_id] = item
         return item
 
     def action_plan(self, plan_id):
         return self.plans.get(plan_id)
+
+    def latest_active_action_plan(self, portfolio_id, symbol, action):
+        rows = [
+            item for item in self.plans.values()
+            if item.portfolio_id == portfolio_id
+            and item.action == action
+            and item.envelope
+            and item.envelope.symbol == symbol
+            and item.status in {"review-required", "approved"}
+        ]
+        return rows[-1] if rows else None
 
     def save_action_plan_review(self, item):
         self.plan_reviews.append(item)
@@ -171,6 +198,7 @@ class PortfolioLifecycleServiceTests(unittest.TestCase):
         self.assertEqual(0, second["openingEntryCount"])
         self.assertEqual(2, len(repository.entries))
         self.assertEqual("discrepancy", changed["reconciliation"]["status"])
+        self.assertEqual(2, len(repository.decision_cycles))
         quantity_difference = next(
             item for item in changed["reconciliation"]["differences"]
             if item["differenceType"] == "position-quantity"
@@ -233,6 +261,8 @@ class PortfolioLifecycleServiceTests(unittest.TestCase):
 
         self.assertEqual("review-required", plan.status)
         self.assertEqual(1, len(plan.order_intents))
+        self.assertGreaterEqual(len(plan.slices), 1)
+        self.assertTrue(plan.account_snapshot_fingerprint.startswith("account-snapshot:"))
         self.assertLessEqual(plan.order_intents[0].notional, plan.envelope.max_buy_notional)
         self.assertEqual("approved", approval["plan"]["status"])
         self.assertEqual("blocked", submission["status"])
@@ -347,12 +377,62 @@ class PortfolioLifecycleServiceTests(unittest.TestCase):
         self.assertEqual(["benchmarkReturnPct"], repository.attributions[0].missing_data)
         self.assertTrue(repository.decision_reviews[0].evidence_still_valid)
 
+    def test_csv_broker_activity_imports_only_incremental_rows(self):
+        repository = MemoryInvestmentRepository()
+        PortfolioAccountingService(repository).observe_snapshot(live_snapshot())
+        csv_content = "\n".join([
+            "type,occurred_at,source_reference,symbol,currency,quantity,unit_price,amount,fee",
+            "매수,2026-08-12T05:00:00Z,before,035420,KRW,1,70000,0,0",
+            "매수,2026-08-12T07:00:00Z,after,035420,KRW,1,70000,0,10",
+        ])
+
+        parsed = parse_broker_activity_csv("main", "toss", csv_content)
+        result = BrokerActivitySyncService(repository).import_activities(
+            "main", "toss", parsed["activities"], parsed["rejected"]
+        )
+
+        self.assertEqual(1, result["insertedCount"])
+        self.assertEqual(1, result["rejectedCount"])
+        self.assertEqual("activity-not-after-opening-balance", result["rejected"][0]["reason"])
+        self.assertEqual(3, len(repository.entries))
+
+    def test_portfolio_lifecycle_projects_as_factual_abox_candidates(self):
+        repository = MemoryInvestmentRepository()
+        snapshot = live_snapshot()
+        lifecycle = PortfolioAccountingService(repository).observe_snapshot(snapshot)
+
+        graph = build_portfolio_ontology(
+            snapshot.positions,
+            snapshot.portfolio,
+            portfolio_id=snapshot.account_id,
+            runtime_context={
+                "account": {"accountId": snapshot.account_id},
+                "portfolioLifecycle": lifecycle,
+            },
+            include_tbox=False,
+            include_presentation=False,
+        )
+
+        classes = {
+            str((item.properties or {}).get("tboxClass") or "")
+            for item in graph.entities
+        }
+        relation_types = {item.relation_type for item in graph.relations}
+        self.assertIn("PortfolioDecisionCycle", classes)
+        self.assertIn("PortfolioActionCandidate", classes)
+        self.assertIn("EVALUATES_PORTFOLIO_CANDIDATE", relation_types)
+        candidates = [item for item in graph.entities if (item.properties or {}).get("tboxClass") == "PortfolioActionCandidate"]
+        self.assertTrue(candidates)
+        self.assertTrue(all((item.properties or {}).get("executable") is False for item in candidates))
+
     def test_lifecycle_storage_tables_are_declared(self):
         schema = "\n".join(MYSQL_SCHEMA)
 
         self.assertIn("CREATE TABLE IF NOT EXISTS portfolio_reconciliations", schema)
         self.assertIn("CREATE TABLE IF NOT EXISTS portfolio_exposure_snapshots", schema)
         self.assertIn("CREATE TABLE IF NOT EXISTS investment_action_plan_reviews", schema)
+        self.assertIn("CREATE TABLE IF NOT EXISTS broker_activity_sync_states", schema)
+        self.assertIn("CREATE TABLE IF NOT EXISTS portfolio_decision_cycles", schema)
 
 
 if __name__ == "__main__":

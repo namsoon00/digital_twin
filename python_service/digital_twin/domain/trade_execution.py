@@ -6,7 +6,7 @@ import json
 from typing import Dict, Iterable, List, Optional
 
 
-TRADE_EXECUTION_VERSION = "trade-execution-v1"
+TRADE_EXECUTION_VERSION = "trade-execution-v2"
 EXECUTABLE_ACTIONS = {"BUY", "ADD", "TRIM", "SELL"}
 
 
@@ -72,6 +72,19 @@ class OrderIntent:
 
 
 @dataclass(frozen=True)
+class ActionPlanSlice:
+    slice_id: str
+    sequence: int
+    quantity: float
+    max_notional: float
+    trigger_conditions: List[str] = field(default_factory=list)
+    status: str = "planned"
+
+    def to_dict(self) -> Dict[str, object]:
+        return asdict(self)
+
+
+@dataclass(frozen=True)
 class ActionPlan:
     plan_id: str
     portfolio_id: str
@@ -86,6 +99,10 @@ class ActionPlan:
     envelope: Optional[ActionEnvelope] = None
     invalidation_conditions: List[str] = field(default_factory=list)
     sizing_basis: Dict[str, object] = field(default_factory=dict)
+    slices: List[ActionPlanSlice] = field(default_factory=list)
+    account_snapshot_fingerprint: str = ""
+    supersedes_plan_id: str = ""
+    execution_conditions: Dict[str, object] = field(default_factory=dict)
 
     @classmethod
     def create(
@@ -101,6 +118,10 @@ class ActionPlan:
         envelope: ActionEnvelope = None,
         invalidation_conditions: Iterable[str] = None,
         sizing_basis: Dict[str, object] = None,
+        slices: Iterable[ActionPlanSlice] = None,
+        account_snapshot_fingerprint: str = "",
+        supersedes_plan_id: str = "",
+        execution_conditions: Dict[str, object] = None,
     ):
         intents = list(order_intents or [])
         action_value = str(action or "HOLD").upper()
@@ -118,6 +139,10 @@ class ActionPlan:
             envelope=envelope,
             invalidation_conditions=list(invalidation_conditions or []),
             sizing_basis=dict(sizing_basis or {}),
+            slices=list(slices or []),
+            account_snapshot_fingerprint=str(account_snapshot_fingerprint or ""),
+            supersedes_plan_id=str(supersedes_plan_id or ""),
+            execution_conditions=dict(execution_conditions or {}),
         )
 
     def validate(self, envelope: ActionEnvelope) -> List[str]:
@@ -136,6 +161,7 @@ class ActionPlan:
     def to_dict(self) -> Dict[str, object]:
         payload = asdict(self)
         payload["order_intents"] = [item.to_dict() for item in self.order_intents]
+        payload["slices"] = [item.to_dict() for item in self.slices]
         payload["envelope"] = self.envelope.to_dict() if self.envelope else {}
         payload["version"] = TRADE_EXECUTION_VERSION
         return payload
@@ -170,6 +196,18 @@ class ActionPlan:
                 limit_price=float(item.get("limit_price") or item.get("limitPrice") or 0),
                 currency=str(item.get("currency") or "KRW"),
             ))
+        slices = []
+        for item in values.get("slices") or []:
+            if not isinstance(item, dict):
+                continue
+            slices.append(ActionPlanSlice(
+                slice_id=str(item.get("slice_id") or item.get("sliceId") or ""),
+                sequence=int(item.get("sequence") or 0),
+                quantity=float(item.get("quantity") or 0),
+                max_notional=float(item.get("max_notional") or item.get("maxNotional") or 0),
+                trigger_conditions=list(item.get("trigger_conditions") or item.get("triggerConditions") or []),
+                status=str(item.get("status") or "planned"),
+            ))
         return cls(
             plan_id=str(values.get("plan_id") or values.get("planId") or ""),
             portfolio_id=str(values.get("portfolio_id") or values.get("portfolioId") or ""),
@@ -184,6 +222,10 @@ class ActionPlan:
             envelope=envelope,
             invalidation_conditions=list(values.get("invalidation_conditions") or values.get("invalidationConditions") or []),
             sizing_basis=dict(values.get("sizing_basis") or values.get("sizingBasis") or {}),
+            slices=slices,
+            account_snapshot_fingerprint=str(values.get("account_snapshot_fingerprint") or values.get("accountSnapshotFingerprint") or ""),
+            supersedes_plan_id=str(values.get("supersedes_plan_id") or values.get("supersedesPlanId") or ""),
+            execution_conditions=dict(values.get("execution_conditions") or values.get("executionConditions") or {}),
         )
 
 

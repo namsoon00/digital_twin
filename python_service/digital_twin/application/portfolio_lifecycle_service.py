@@ -24,11 +24,13 @@ from ..domain.portfolio_rebalancing import (
     RebalanceProposal,
     allocation_drifts,
 )
+from ..domain.portfolio_decision_cycle import PortfolioActionCandidate, PortfolioDecisionCycle
 from ..domain.risk_exposure import ExposureMetric, ExposureSnapshot
 from ..domain.trade_execution import (
     EXECUTABLE_ACTIONS,
     ActionEnvelope,
     ActionPlan,
+    ActionPlanSlice,
     ActionPlanReview,
     ExecutionEpisode,
     OrderIntent,
@@ -107,6 +109,8 @@ class PortfolioLifecycleObservation:
     reconciliation: PortfolioReconciliation
     exposure_snapshot: ExposureSnapshot
     rebalance_proposal: Optional[RebalanceProposal]
+    decision_cycle: PortfolioDecisionCycle
+    broker_activity_sync: Dict[str, object] = None
     opening_entry_count: int = 0
 
     def to_dict(self) -> Dict[str, object]:
@@ -117,15 +121,18 @@ class PortfolioLifecycleObservation:
             "reconciliation": self.reconciliation.to_dict(),
             "exposureSnapshot": self.exposure_snapshot.to_dict(),
             "rebalanceProposal": self.rebalance_proposal.to_dict() if self.rebalance_proposal else {},
+            "portfolioDecisionCycle": self.decision_cycle.to_dict(),
+            "brokerActivitySync": dict(self.broker_activity_sync or {}),
         }
 
 
 class PortfolioAccountingService:
     """Reconcile one live broker snapshot without inventing missing trades."""
 
-    def __init__(self, repository, account_repository=None):
+    def __init__(self, repository, account_repository=None, broker_activity_service=None):
         self.repository = repository
         self.account_repository = account_repository
+        self.broker_activity_service = broker_activity_service
 
     def observe_snapshot(self, snapshot: AccountSnapshot) -> Dict[str, object]:
         if not snapshot or not snapshot.has_live_account_data():
@@ -145,11 +152,18 @@ class PortfolioAccountingService:
         proposal = self.rebalance_proposal(snapshot, mandate, exposure)
         if proposal:
             self.repository.save_rebalance_proposal(proposal)
+        decision_cycle = self.portfolio_decision_cycle(snapshot, mandate, exposure, reconciliation)
+        self.repository.save_portfolio_decision_cycle(decision_cycle)
+        activity_sync = {}
+        if self.broker_activity_service:
+            activity_sync = self.broker_activity_service.record_capabilities(snapshot.account_id, snapshot.provider).to_dict()
         return PortfolioLifecycleObservation(
             portfolio_id=portfolio_id,
             reconciliation=reconciliation,
             exposure_snapshot=exposure,
             rebalance_proposal=proposal,
+            decision_cycle=decision_cycle,
+            broker_activity_sync=activity_sync,
             opening_entry_count=len(opening_entries),
         ).to_dict()
 
@@ -391,6 +405,80 @@ class PortfolioAccountingService:
             created_at=exposure.observed_at,
         )
 
+    def portfolio_decision_cycle(
+        self,
+        snapshot: AccountSnapshot,
+        mandate: InvestmentMandate,
+        exposure: ExposureSnapshot,
+        reconciliation: PortfolioReconciliation,
+    ) -> PortfolioDecisionCycle:
+        total = max(0.0, number(snapshot.portfolio.total)) or 1.0
+        cash = max(0.0, number(snapshot.portfolio.cash))
+        base_metrics = {
+            "portfolioTotal": total,
+            "cash": cash,
+            "cashWeightPct": cash / total * 100,
+            "overPolicyCount": len(exposure.over_policy_metrics()),
+        }
+        source_snapshot_id = reconciliation.balance_fingerprint + ":" + exposure.snapshot_id
+        candidates = [PortfolioActionCandidate.create(
+            source_snapshot_id,
+            "NO_ACTION",
+            "현재 구성 유지",
+            before_metrics=base_metrics,
+            after_metrics=base_metrics,
+            policy_effects=["현재 정책 위반과 데이터 공백을 그대로 유지합니다."],
+            required_relation_types=["HAS_EXPOSURE", "GOVERNED_BY_MANDATE"],
+            data_state="complete" if reconciliation.status == "matched" else "partial",
+        )]
+        for metric in exposure.over_policy_metrics():
+            if metric.exposure_type == "position":
+                maximum_notional = max(0.0, metric.policy_delta_pct * total / 100)
+                after_cash = cash + maximum_notional
+                candidates.append(PortfolioActionCandidate.create(
+                    source_snapshot_id,
+                    "REDUCE_POSITION_EXPOSURE",
+                    metric.key + " 정책 초과분 검토",
+                    affected_symbol=metric.key,
+                    maximum_notional=maximum_notional,
+                    before_metrics={**base_metrics, "positionWeightPct": metric.ratio_pct},
+                    after_metrics={
+                        **base_metrics,
+                        "cash": after_cash,
+                        "cashWeightPct": after_cash / total * 100,
+                        "positionWeightPct": metric.policy_limit_pct,
+                    },
+                    policy_effects=["종목 비중을 정책 상한 안으로 낮추는 최대 범위입니다."],
+                    required_relation_types=["EXCEEDS_POLICY", "HAS_EXPOSURE", "HAS_LIQUIDITY_CONSTRAINT"],
+                    data_state="partial",
+                ))
+            elif metric.exposure_type == "cash" and metric.policy_direction == "minimum":
+                shortfall = max(0.0, metric.policy_delta_pct * total / 100)
+                candidates.append(PortfolioActionCandidate.create(
+                    source_snapshot_id,
+                    "RESTORE_CASH_FLOOR",
+                    "현금 하한 회복 검토",
+                    maximum_notional=shortfall,
+                    before_metrics=base_metrics,
+                    after_metrics={**base_metrics, "cash": cash + shortfall, "cashWeightPct": metric.policy_limit_pct},
+                    policy_effects=["현금 비중을 계좌 정책 하한까지 회복하는 부족분입니다."],
+                    required_relation_types=["EXCEEDS_POLICY", "HAS_RISK_BUDGET"],
+                    data_state="partial",
+                ))
+        missing = ["positionReturnVolatility", "positionCorrelationMatrix", "portfolioBenchmarkReturn"]
+        if reconciliation.status != "matched":
+            missing.append("matchedPortfolioLedger")
+        return PortfolioDecisionCycle.create(
+            exposure.portfolio_id,
+            snapshot.account_id,
+            mandate.policy_version,
+            source_snapshot_id,
+            candidates,
+            data_state="partial" if missing else "complete",
+            missing_data=missing,
+            created_at=exposure.observed_at,
+        )
+
 
 class DecisionActionPlanningService:
     """Compile TypeDB/AI categorical action into policy-bounded arithmetic."""
@@ -405,6 +493,9 @@ class DecisionActionPlanningService:
 
     def slice_pct(self) -> float:
         return max(1.0, min(100.0, number(self.settings.get("investmentActionPlanSlicePct")) or 25.0))
+
+    def slice_count(self) -> int:
+        return max(1, min(10, int(number(self.settings.get("investmentActionPlanSliceCount")) or 3)))
 
     def monitor_state(self, account_id: str) -> Dict[str, object]:
         return monitor_account_state(self.monitor_store, account_id)
@@ -494,6 +585,38 @@ class DecisionActionPlanningService:
             ))
         created = parse_timestamp(episode.decided_at) or datetime.now(timezone.utc)
         selected = next((item for item in episode.hypothesis_set.hypotheses if item.hypothesis_id == episode.selected_hypothesis_id), None)
+        snapshot_fingerprint = stable_execution_id(
+            "account-snapshot",
+            state.get("generatedAt"),
+            episode.symbol,
+            price,
+            quantity,
+            sellable,
+            total,
+            cash,
+            policy_version,
+        )
+        slices: List[ActionPlanSlice] = []
+        if intents:
+            intent = intents[0]
+            count = min(self.slice_count(), max(1, int(intent.quantity)))
+            remaining = intent.quantity
+            for sequence in range(1, count + 1):
+                slice_quantity = math.floor(remaining / (count - sequence + 1))
+                slice_quantity = max(1, slice_quantity) if remaining >= 1 else remaining
+                slice_quantity = min(remaining, slice_quantity)
+                remaining -= slice_quantity
+                slices.append(ActionPlanSlice(
+                    slice_id=stable_execution_id("action-plan-slice", episode.episode_id, sequence),
+                    sequence=sequence,
+                    quantity=slice_quantity,
+                    max_notional=round(slice_quantity * price, 8),
+                    trigger_conditions=["승인 시 현재 계좌·시세 재검증", "앞선 분할 실행 결과 확인" if sequence > 1 else "첫 분할 실행"],
+                ))
+        latest_plan = None
+        latest_loader = getattr(self.repository, "latest_active_action_plan", None)
+        if callable(latest_loader):
+            latest_plan = latest_loader(portfolio_id, str(episode.symbol or "").upper(), action)
         plan = ActionPlan.create(
             portfolio_id=portfolio_id,
             decision_episode_id=episode.episode_id,
@@ -517,6 +640,16 @@ class DecisionActionPlanningService:
                 "notionalCurrency": currency,
                 "graphAllowedActions": sorted(graph_allowed),
                 "mandateAllowedActions": sorted(mandate_allowed),
+            },
+            slices=slices,
+            account_snapshot_fingerprint=snapshot_fingerprint,
+            supersedes_plan_id=latest_plan.plan_id if latest_plan else "",
+            execution_conditions={
+                "approvalRequired": action in EXECUTABLE_ACTIONS,
+                "revalidateAccountSnapshot": True,
+                "revalidatePolicyVersion": True,
+                "maximumQuoteDriftPct": max(0.1, min(20.0, number(self.settings.get("investmentExecutionQuoteDriftPct")) or 2.0)),
+                "brokerSubmissionEnabled": False,
             },
         )
         if plan.validate(envelope) or (action in EXECUTABLE_ACTIONS and not intents):
@@ -632,6 +765,15 @@ class TradeExecutionService:
         current_price = number(position.get("current_price") or position.get("currentPrice"))
         if current_price <= 0:
             errors.append("current-price-missing")
+        planned_price = number(plan.sizing_basis.get("currentPrice"))
+        maximum_quote_drift = number(plan.execution_conditions.get("maximumQuoteDriftPct")) or max(
+            0.1,
+            min(20.0, number(self.settings.get("investmentExecutionQuoteDriftPct")) or 2.0),
+        )
+        if planned_price > 0 and current_price > 0:
+            quote_drift_pct = abs(current_price - planned_price) / planned_price * 100
+            if quote_drift_pct > maximum_quote_drift:
+                errors.append("quote-drift-exceeded")
         sell_quantity = sum(item.quantity for item in plan.order_intents if item.side.upper() == "SELL")
         sellable = number(position.get("sellable_quantity") or position.get("sellableQuantity") or position.get("quantity"))
         if sell_quantity > sellable:

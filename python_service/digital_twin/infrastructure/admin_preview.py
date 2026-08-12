@@ -550,7 +550,7 @@ def admin_preview_config() -> Dict[str, object]:
                     {"key": "researchClaimCorpusLimit", "label": "교차검증 보존 근거 상한", "type": "number", "default": "500"},
                     {"key": "researchClaimSimilarityThreshold", "label": "주장 일치 기준", "type": "number", "default": "0.48"},
                     {"key": "researchClaimSourceRegistry", "label": "출처 정책 레지스트리", "type": "assignmentText", "placeholder": "reuters=trusted,origin=reuters\nopendart=trusted,primary"},
-                    {"key": "investmentBrainOutcomeObservationMinutes", "label": "판단 결과 관측 시점", "type": "text", "default": "60,1440,10080", "unit": "minutes"},
+                    {"key": "investmentBrainOutcomeObservationMinutes", "label": "판단 결과 관측 시점", "type": "text", "default": "60,1440,7200,28800", "unit": "minutes"},
                     {"key": "investmentBrainOutcomeEpisodeBatchSize", "label": "결과 관측 배치", "type": "number", "default": "200"},
                     {"key": "investmentBrainOutcomeMaxDelayMinutes", "label": "결과 관측 허용 지연", "type": "number", "default": "180", "unit": "minutes"},
                     {"key": "newsCollectionRequireArticleBodyForRss", "label": "RSS 원문 본문 필수", "type": "toggle", "default": "1"},

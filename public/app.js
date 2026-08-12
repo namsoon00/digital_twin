@@ -533,6 +533,10 @@
     accountDraft: defaultAccountDraft(),
     editingAccountId: "",
     accountSaved: false,
+    portfolioLifecycle: null,
+    portfolioLifecycleLoading: false,
+    portfolioLifecycleError: "",
+    portfolioLifecycleSaving: false,
     ontologyRulebox: null,
     ontologyRuleboxJson: "",
     ontologyRuleboxLoading: false,
@@ -4418,6 +4422,82 @@
         state.ontologyReasoningStatusLoading = false;
         if (state.snapshot) render();
       });
+  }
+
+  function portfolioLifecycleAccountId() {
+    var snapshot = state.snapshot || {};
+    return String(snapshot.accountId || ((snapshot.toss || {}).accountId || "") || activeOntologyAccountId() || "default").trim();
+  }
+
+  function loadPortfolioLifecycle(force) {
+    if (isStaticPreviewHost()) return Promise.resolve(state.portfolioLifecycle);
+    if (state.portfolioLifecycleLoading && !force) return Promise.resolve(state.portfolioLifecycle);
+    state.portfolioLifecycleLoading = true;
+    state.portfolioLifecycleError = "";
+    var params = new URLSearchParams();
+    params.set("accountId", portfolioLifecycleAccountId());
+    return requestJson("/api/portfolio-lifecycle?" + params.toString(), { key: "portfolio-lifecycle", force: Boolean(force) })
+      .then(function (payload) {
+        state.portfolioLifecycle = payload || {};
+        return state.portfolioLifecycle;
+      })
+      .catch(function (error) {
+        state.portfolioLifecycleError = error.message || "계좌 의사결정 주기를 읽지 못했습니다.";
+        return null;
+      })
+      .finally(function () {
+        state.portfolioLifecycleLoading = false;
+        if (state.snapshot) render();
+      });
+  }
+
+  function importPortfolioActivities(form) {
+    if (!form || state.portfolioLifecycleSaving) return Promise.resolve(null);
+    var textarea = form.querySelector("[data-portfolio-activity-csv]");
+    var provider = form.querySelector("[data-portfolio-activity-provider]");
+    var csv = textarea ? textarea.value : "";
+    if (!String(csv || "").trim()) {
+      showSnackbar("거래 활동 CSV 내용을 입력하세요.", "danger");
+      return Promise.resolve(null);
+    }
+    state.portfolioLifecycleSaving = true;
+    render();
+    return sendJson("/api/portfolio-lifecycle/activity-import", "POST", {
+      accountId: portfolioLifecycleAccountId(),
+      provider: provider ? provider.value : "toss",
+      csv: csv
+    }).then(function (payload) {
+      showSnackbar("거래 활동 " + Number(payload.insertedCount || 0) + "건을 원장에 반영했습니다.", "success");
+      return loadPortfolioLifecycle(true);
+    }).catch(function (error) {
+      state.portfolioLifecycleError = error.message || "거래 활동 수입에 실패했습니다.";
+      showSnackbar(state.portfolioLifecycleError, "danger");
+      return null;
+    }).finally(function () {
+      state.portfolioLifecycleSaving = false;
+      render();
+    });
+  }
+
+  function reviewPortfolioActionPlan(planId, decision) {
+    if (!planId || state.portfolioLifecycleSaving) return Promise.resolve(null);
+    state.portfolioLifecycleSaving = true;
+    render();
+    return sendJson("/api/action-plans/" + encodeURIComponent(planId) + "/" + decision, "POST", {
+      reviewer: "web-owner",
+      reason: decision === "approve" ? "웹 계좌 라이프사이클 검토 승인" : "웹 계좌 라이프사이클 검토 거절"
+    }).then(function (payload) {
+      var errors = Array.isArray(payload.validationErrors) ? payload.validationErrors : [];
+      showSnackbar(errors.length ? "현재 계좌 검증에서 계획이 거절되었습니다." : "실행 계획 검토 결과를 저장했습니다.", errors.length ? "danger" : "success");
+      return loadPortfolioLifecycle(true);
+    }).catch(function (error) {
+      state.portfolioLifecycleError = error.message || "실행 계획 검토에 실패했습니다.";
+      showSnackbar(state.portfolioLifecycleError, "danger");
+      return null;
+    }).finally(function () {
+      state.portfolioLifecycleSaving = false;
+      render();
+    });
   }
 
   function seedOntologyGraph() {
@@ -18200,6 +18280,7 @@
       renderAccountCommandCenter(snapshot),
       renderAccountConnectionsPanel(snapshot),
       renderAccountBalancePanel(snapshot),
+      renderPortfolioLifecyclePanel(snapshot),
       '</div>'
     ].join("");
   }
@@ -18279,6 +18360,81 @@
       '</div>',
       '</div>',
       renderAccountBalanceAudit(snapshot),
+      '</article>'
+    ].join("");
+  }
+
+  function lifecyclePercent(value) {
+    var parsed = Number(value || 0);
+    return (parsed >= 0 ? "+" : "") + parsed.toFixed(1) + "%";
+  }
+
+  function lifecycleActionLabel(value) {
+    return ({
+      NO_ACTION: "현재 상태 유지",
+      REDUCE_POSITION_EXPOSURE: "종목 비중 축소 범위 검토",
+      RESTORE_CASH_FLOOR: "현금 하한 회복 검토"
+    })[String(value || "").toUpperCase()] || String(value || "후보");
+  }
+
+  function renderPortfolioLifecyclePanel(snapshot) {
+    var lifecycle = state.portfolioLifecycle || {};
+    var reconciliation = lifecycle.reconciliation || {};
+    var exposure = lifecycle.exposureSnapshot || {};
+    var cycle = lifecycle.portfolioDecisionCycle || {};
+    var sync = lifecycle.brokerActivitySync || {};
+    var ledger = lifecycle.ledgerSummary || {};
+    var candidates = Array.isArray(cycle.candidates) ? cycle.candidates : [];
+    var plans = Array.isArray(lifecycle.actionPlans) ? lifecycle.actionPlans : [];
+    var attributions = Array.isArray(lifecycle.performanceAttributions) ? lifecycle.performanceAttributions : [];
+    var metrics = Array.isArray(exposure.metrics) ? exposure.metrics : [];
+    var provider = String(sync.provider || ((snapshot || {}).provider || "toss").toLowerCase());
+    return [
+      '<article class="panel portfolio-lifecycle-panel">',
+      '<div class="panel-head"><div><p class="label">Portfolio Lifecycle</p><h2>계좌 의사결정 주기</h2><p class="subtle">원장 사실부터 정책 후보, 승인 계획, 실제 결과까지 같은 계좌 기준으로 추적합니다.</p></div>',
+      '<button class="text-button" type="button" data-portfolio-lifecycle-refresh>새로고침</button></div>',
+      state.portfolioLifecycleLoading ? '<div class="rule-strip"><span>계좌 라이프사이클을 읽는 중입니다.</span></div>' : '',
+      state.portfolioLifecycleError ? '<p class="form-error">' + escapeHtml(state.portfolioLifecycleError) + '</p>' : '',
+      '<div class="portfolio-lifecycle-metrics">',
+      renderAccountControlMetric("원장 대사", reconciliation.status || "대기", (reconciliation.differences || []).length + "개 차이", reconciliation.status === "matched" ? "ok" : "warn"),
+      renderAccountControlMetric("거래 활동", sync.status || "대기", Number(sync.imported_count || sync.importedCount || 0) + "건 수입", sync.status === "imported" || sync.status === "ready" ? "ok" : "warn"),
+      renderAccountControlMetric("정책 후보", candidates.length + "개", cycle.dataState || "자료 대기", candidates.length ? "neutral" : "warn"),
+      renderAccountControlMetric("실행 계획", plans.length + "개", "자동 주문 없음", plans.length ? "neutral" : "warn"),
+      renderAccountControlMetric("원장 항목", Number(ledger.entryCount || 0) + "건", Number(ledger.activityCount || 0) + "건 증분 활동", "neutral"),
+      renderAccountControlMetric("성과 표본", attributions.length + "건", "1h · 1d · 5d · 20d", attributions.length ? "ok" : "neutral"),
+      '</div>',
+      '<div class="portfolio-lifecycle-columns">',
+      '<section class="portfolio-lifecycle-section"><div class="account-board-title"><strong>정책 노출과 후보</strong><span>후보는 산술 범위이며 최종 매수·매도 판단이 아닙니다.</span></div>',
+      '<div class="portfolio-lifecycle-list">',
+      metrics.length ? metrics.slice(0, 12).map(function (metric) {
+        var ratio = metric.ratio_pct == null ? metric.ratioPct : metric.ratio_pct;
+        var overPolicy = Number(metric.policyDeltaPct || 0) > 0 && Number(metric.policy_limit_pct || metric.policyLimitPct || 0) > 0;
+        return '<div><strong>' + escapeHtml(metric.label || metric.key || metric.exposure_type || metric.exposureType || "노출") + '</strong><span>' + escapeHtml(lifecyclePercent(ratio)) + '</span><em>' + escapeHtml(overPolicy ? "정책 범위 초과" : "정책 범위 안") + '</em></div>';
+      }).join("") : '<p class="subtle">노출 스냅샷이 아직 없습니다.</p>',
+      candidates.map(function (candidate) {
+        return '<div><strong>' + escapeHtml(lifecycleActionLabel(candidate.candidate_type || candidate.candidateType)) + '</strong><span>' + escapeHtml(candidate.affected_symbol || candidate.affectedSymbol || "계좌 전체") + '</span><em>최대 ' + escapeHtml(formatMoney(candidate.maximum_notional || candidate.maximumNotional || 0)) + '</em></div>';
+      }).join(""),
+      '</div></section>',
+      '<section class="portfolio-lifecycle-section"><div class="account-board-title"><strong>검토할 실행 계획</strong><span>승인 시 현재 시세·현금·정책을 다시 검사합니다.</span></div>',
+      '<div class="portfolio-action-plan-list">',
+      plans.length ? plans.map(function (plan) {
+        var envelope = plan.envelope || {};
+        var status = String(plan.status || "review-required");
+        return [
+          '<div class="portfolio-action-plan">',
+          '<div><strong>' + escapeHtml([envelope.symbol, plan.action].filter(Boolean).join(" · ") || "실행 계획") + '</strong><span class="status-pill ' + escapeHtml(status === "approved" ? "ok" : status === "rejected" || status === "blocked" ? "warn" : "neutral") + '">' + escapeHtml(status) + '</span></div>',
+          '<p>분할 ' + escapeHtml((plan.slices || []).length) + '회 · 만료 ' + escapeHtml(formatClock(plan.expires_at || plan.expiresAt)) + '</p>',
+          status === "review-required" ? '<div class="portfolio-plan-actions"><button type="button" class="mini-button primary" data-action-plan-review="approve" data-action-plan-id="' + escapeHtml(plan.plan_id || plan.planId) + '">승인</button><button type="button" class="mini-button" data-action-plan-review="reject" data-action-plan-id="' + escapeHtml(plan.plan_id || plan.planId) + '">거절</button></div>' : '',
+          '</div>'
+        ].join("");
+      }).join("") : '<p class="subtle">검토할 실행 계획이 없습니다.</p>',
+      '</div></section>',
+      '</div>',
+      '<form class="portfolio-activity-import" data-portfolio-activity-import>',
+      '<div class="account-board-title"><strong>거래 활동 CSV 증분 수입</strong><span>현재 공급자 어댑터가 체결 이력을 제공하지 않을 때만 사용합니다.</span></div>',
+      '<div class="portfolio-activity-controls"><select data-portfolio-activity-provider><option value="' + escapeHtml(provider) + '">' + escapeHtml(provider.toUpperCase()) + '</option></select><input type="file" accept=".csv,text/csv" data-portfolio-activity-file /><button class="mini-button primary" type="submit"' + (state.portfolioLifecycleSaving ? " disabled" : "") + '>원장 반영</button></div>',
+      '<textarea rows="5" data-portfolio-activity-csv placeholder="type,occurred_at,source_reference,symbol,currency,quantity,unit_price,amount,fee"></textarea>',
+      '</form>',
       '</article>'
     ].join("");
   }
@@ -27002,6 +27158,37 @@
         saveServiceAccount();
       });
     }
+
+    var lifecycleRefresh = app.querySelector("[data-portfolio-lifecycle-refresh]");
+    if (lifecycleRefresh) {
+      lifecycleRefresh.addEventListener("click", function () { loadPortfolioLifecycle(true); });
+    }
+
+    var activityImportForm = app.querySelector("[data-portfolio-activity-import]");
+    if (activityImportForm) {
+      activityImportForm.addEventListener("submit", function (event) {
+        event.preventDefault();
+        importPortfolioActivities(activityImportForm);
+      });
+      var activityFile = activityImportForm.querySelector("[data-portfolio-activity-file]");
+      if (activityFile) {
+        activityFile.addEventListener("change", function () {
+          var file = activityFile.files && activityFile.files[0];
+          var textarea = activityImportForm.querySelector("[data-portfolio-activity-csv]");
+          if (!file || !textarea) return;
+          file.text().then(function (content) { textarea.value = content; });
+        });
+      }
+    }
+
+    Array.prototype.slice.call(app.querySelectorAll("[data-action-plan-review]")).forEach(function (button) {
+      button.addEventListener("click", function () {
+        reviewPortfolioActionPlan(
+          button.getAttribute("data-action-plan-id"),
+          button.getAttribute("data-action-plan-review")
+        );
+      });
+    });
 
     Array.prototype.slice.call(app.querySelectorAll("[data-account-field]")).forEach(function (field) {
       field.addEventListener("input", function () {

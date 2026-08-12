@@ -350,6 +350,8 @@ function checkWorkflowConsoleContract() {
       code.indexOf("function bindMobileInfiniteScroll") >= 0 &&
       code.indexOf("data-mobile-infinite-sentinel") >= 0 &&
       code.indexOf("rootMargin: \"0px 0px 360px 0px\"") >= 0 &&
+      code.indexOf("restoreRenderedPageScrollPositionAfterLayout(renderedScrollPosition)") >= 0 &&
+      code.indexOf("preferredPosition && preferredPosition.key === key") >= 0 &&
       code.indexOf("mergeUniqueItems(state.notificationJobItems") >= 0 &&
       code.indexOf("mergeUniqueItems((state.symbolUniverse || {}).items") >= 0 &&
       code.indexOf("mergeUniqueItems(previous.candidates") >= 0 &&

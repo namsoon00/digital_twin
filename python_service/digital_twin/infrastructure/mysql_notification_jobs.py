@@ -122,7 +122,7 @@ class MySQLNotificationJobStore(MySQLOperationalConnection):
                 params,
             ).fetchone()
             rows = connection.execute(
-                "SELECT text, payload_json FROM notification_jobs" + where + " ORDER BY created_at DESC, job_id DESC LIMIT %s OFFSET %s",
+                "SELECT text, payload_json FROM notification_jobs" + where + " ORDER BY updated_at DESC, job_id DESC LIMIT %s OFFSET %s",
                 params + [page_size, page_offset],
             ).fetchall()
         return [self.job_from_row(row) for row in rows], int(total_row["count"] or 0) if total_row else 0
@@ -147,7 +147,7 @@ class MySQLNotificationJobStore(MySQLOperationalConnection):
                 params,
             ).fetchone()
             rows = connection.execute(
-                "SELECT text, payload_json FROM notification_jobs" + where + " ORDER BY created_at DESC, job_id DESC LIMIT %s OFFSET %s",
+                "SELECT text, payload_json FROM notification_jobs" + where + " ORDER BY updated_at DESC, job_id DESC LIMIT %s OFFSET %s",
                 params + [page_size, page_offset],
             ).fetchall()
             summary_rows = connection.execute(
@@ -196,7 +196,7 @@ class MySQLNotificationJobStore(MySQLOperationalConnection):
             ).fetchone()
             rows = connection.execute(
                 "SELECT " + columns + " FROM notification_jobs" + where
-                + " ORDER BY created_at DESC, job_id DESC LIMIT %s OFFSET %s",
+                + " ORDER BY updated_at DESC, job_id DESC LIMIT %s OFFSET %s",
                 params + [page_size, page_offset],
             ).fetchall()
             summary_rows = connection.execute(

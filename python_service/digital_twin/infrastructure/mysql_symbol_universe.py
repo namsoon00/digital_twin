@@ -172,16 +172,24 @@ class MySQLSymbolUniverseStore(MySQLOperationalConnection):
         symbol_candidates = symbol_search_symbol_candidates(query_value)
         exact_symbol = symbol_candidates[0] if symbol_candidates else normalize_symbol(query_value)
         first_term = symbol_search_terms(query_value)[0] if query_value and symbol_search_terms(query_value) else query_value
+        order_params: List[object] = []
+        relevance_order = ""
+        if query_value:
+            relevance_order = """
+                CASE
+                    WHEN symbol = %s THEN 0
+                    WHEN symbol LIKE %s THEN 1
+                    WHEN name LIKE %s THEN 2
+                    ELSE 3
+                END,
+            """
+            order_params = [exact_symbol, exact_symbol + "%", str(first_term).strip() + "%"]
         sql = """
             SELECT * FROM symbol_universe
             WHERE """ + " AND ".join(clauses) + """
             ORDER BY
-                CASE
-                    WHEN %s != '' AND symbol = %s THEN 0
-                    WHEN %s != '' AND symbol LIKE %s THEN 1
-                    WHEN %s != '' AND name LIKE %s THEN 2
-                    ELSE 3
-                END,
+                """ + relevance_order + """
+                updated_at DESC,
                 CASE market WHEN 'KOSPI' THEN 1 WHEN 'KOSDAQ' THEN 2 WHEN 'NASDAQ' THEN 3 ELSE 9 END,
                 symbol
             LIMIT %s OFFSET %s
@@ -189,16 +197,7 @@ class MySQLSymbolUniverseStore(MySQLOperationalConnection):
         with self.connect() as connection:
             rows = connection.execute(
                 sql,
-                params + [
-                    exact_symbol,
-                    exact_symbol,
-                    exact_symbol,
-                    exact_symbol + "%",
-                    first_term,
-                    str(first_term).strip() + "%",
-                    limit_value,
-                    offset_value,
-                ],
+                params + order_params + [limit_value, offset_value],
             ).fetchall()
         return [self.row_to_symbol(row) for row in rows]
 

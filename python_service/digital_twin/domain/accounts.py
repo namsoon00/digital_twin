@@ -275,6 +275,8 @@ class AccountConfig:
     quiet_hours_timezone: str = DEFAULT_QUIET_HOURS_TIMEZONE
     message_delivery_level: str = DEFAULT_MESSAGE_DELIVERY_LEVEL
     investment_strategy_profile: str = DEFAULT_INVESTMENT_STRATEGY_PROFILE
+    created_at: str = ""
+    updated_at: str = ""
 
     def domain_profile(self):
         """Expose separated account concepts without breaking legacy callers."""
@@ -322,6 +324,8 @@ class AccountConfig:
             quiet_hours_timezone=quiet_timezone(quiet_timezone_value),
             message_delivery_level=normalize_message_delivery_level(delivery_level_value),
             investment_strategy_profile=normalize_investment_strategy_profile(strategy_profile_value or settings.get("investmentStrategyProfile")),
+            created_at=configured(payload.get("createdAt") or payload.get("created_at") or ""),
+            updated_at=configured(payload.get("updatedAt") or payload.get("updated_at") or ""),
         )
 
     def to_private_dict(self) -> Dict[str, object]:
@@ -345,6 +349,8 @@ class AccountConfig:
             "quietHoursTimezone": self.quiet_hours_timezone,
             "messageDeliveryLevel": normalize_message_delivery_level(self.message_delivery_level),
             "investmentStrategyProfile": normalize_investment_strategy_profile(self.investment_strategy_profile),
+            "createdAt": self.created_at,
+            "updatedAt": self.updated_at,
         }
 
     def masked(self) -> Dict[str, object]:
@@ -372,6 +378,8 @@ class AccountConfig:
             "messageDeliveryLevelLabel": profile["label"],
             "investmentStrategyProfile": strategy_profile["profile"],
             "investmentStrategyProfileLabel": strategy_profile["label"],
+            "createdAt": self.created_at,
+            "updatedAt": self.updated_at,
         }
 
     def message_delivery_profile(self) -> Dict[str, object]:

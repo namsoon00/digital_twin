@@ -132,7 +132,7 @@ class MySQLInvestmentCalendarCandidateStore(MySQLOperationalConnection):
         where = " WHERE " + " AND ".join(clauses) if clauses else ""
         with self.connect() as connection:
             rows = connection.execute(
-                "SELECT * FROM investment_calendar_candidates" + where + " ORDER BY created_at DESC, candidate_id LIMIT %s OFFSET %s",
+                "SELECT * FROM investment_calendar_candidates" + where + " ORDER BY updated_at DESC, candidate_id DESC LIMIT %s OFFSET %s",
                 params,
             ).fetchall()
         return [candidate_from_row(row) for row in rows]

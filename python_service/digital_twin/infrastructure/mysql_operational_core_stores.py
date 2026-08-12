@@ -124,6 +124,8 @@ class MySQLAccountRegistry(MySQLOperationalConnection):
             quiet_hours_timezone=row["quiet_hours_timezone"] or "Asia/Seoul",
             message_delivery_level=row["message_delivery_level"] or "absoluteBeginner",
             investment_strategy_profile=row["investment_strategy_profile"] or self.settings.get("investmentStrategyProfile", "balanced"),
+            created_at=row["created_at"] or "",
+            updated_at=row["updated_at"] or "",
         )
 
     def select_accounts(self, enabled_only: bool) -> List[AccountConfig]:
@@ -140,7 +142,7 @@ class MySQLAccountRegistry(MySQLOperationalConnection):
         if enabled_only:
             sql += " WHERE a.enabled = %s"
             params.append(1)
-        sql += " ORDER BY a.created_at, a.id"
+        sql += " ORDER BY a.updated_at DESC, a.id"
         with self.connect() as connection:
             rows = connection.execute(sql, params).fetchall()
         return [self.account_from_row(row) for row in rows]

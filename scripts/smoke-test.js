@@ -243,6 +243,11 @@ function checkWorkflowConsoleContract() {
   const styles = fs.readFileSync(path.join(rootDir, "public", "styles.css"), "utf8");
   const indexHtml = fs.readFileSync(path.join(rootDir, "public", "index.html"), "utf8");
   const dataContract = fs.readFileSync(path.join(rootDir, "docs", "pc-console-data-contract.md"), "utf8");
+  const accountDomain = fs.readFileSync(path.join(rootDir, "python_service", "digital_twin", "domain", "accounts.py"), "utf8");
+  const accountStore = fs.readFileSync(path.join(rootDir, "python_service", "digital_twin", "infrastructure", "mysql_operational_core_stores.py"), "utf8");
+  const calendarStore = fs.readFileSync(path.join(rootDir, "python_service", "digital_twin", "infrastructure", "mysql_investment_calendar_candidates.py"), "utf8");
+  const notificationStore = fs.readFileSync(path.join(rootDir, "python_service", "digital_twin", "infrastructure", "mysql_notification_jobs.py"), "utf8");
+  const symbolStore = fs.readFileSync(path.join(rootDir, "python_service", "digital_twin", "infrastructure", "mysql_symbol_universe.py"), "utf8");
 
   const tabBlock = code.slice(code.indexOf("var tabs = ["), code.indexOf("var bottomTabIds"));
   const activeTabs = ["overview", "calendar", "feed", "modeling", "notifications", "experiments", "settings"];
@@ -359,9 +364,25 @@ function checkWorkflowConsoleContract() {
     "모바일 전체 목록의 누적 로딩/무한 스크롤 계약이 없습니다."
   );
   assertOk(
-    /styles\.css\?v=20260812-mobile-infinite-scroll-v\d+/.test(indexHtml) &&
-      /app\.js\?v=20260812-mobile-infinite-scroll-v\d+/.test(indexHtml),
-    "모바일 레이아웃 정적 자산 cache key가 반영되지 않았습니다."
+    code.indexOf("function recordChangedAt") >= 0 &&
+      code.indexOf("function latestChangedFirst") >= 0 &&
+      code.indexOf("function renderRecordChangedAt") >= 0 &&
+      code.indexOf("최종 변경 ") >= 0 &&
+      styles.indexOf(".record-changed-at") >= 0,
+    "목록 변경일 표시와 최신순 정렬 계약이 없습니다."
+  );
+  assertOk(
+    accountDomain.indexOf('"updatedAt": self.updated_at') >= 0 &&
+      accountStore.indexOf("ORDER BY a.updated_at DESC") >= 0 &&
+      calendarStore.indexOf("ORDER BY updated_at DESC, candidate_id DESC") >= 0 &&
+      notificationStore.indexOf("ORDER BY updated_at DESC, job_id DESC") >= 0 &&
+      symbolStore.indexOf("updated_at DESC") >= 0,
+    "서버 페이징 목록의 변경일 필드 또는 최신순 정렬 계약이 없습니다."
+  );
+  assertOk(
+    /styles\.css\?v=20260812-latest-changed-v\d+/.test(indexHtml) &&
+      /app\.js\?v=20260812-latest-changed-v\d+/.test(indexHtml),
+    "목록 변경일 정적 자산 cache key가 반영되지 않았습니다."
   );
 }
 

@@ -16,6 +16,7 @@ from .investment_mandate import InvestmentMandate
 from .investment_outcomes import DecisionReview, PerformanceAttribution
 from .portfolio_decision_cycle import PortfolioDecisionCycle
 from .portfolio_ledger import PortfolioLedgerEntry, PortfolioReconciliation
+from .portfolio_activity_episode import PortfolioSnapshotCheckpoint
 from .portfolio_rebalancing import RebalanceProposal
 from .risk_exposure import ExposureSnapshot
 from .trade_execution import ActionPlan, ActionPlanReview, ExecutionEpisode
@@ -53,6 +54,27 @@ class InvestmentDomainRepository(Protocol):
         ...
 
     def ledger_entries(self, portfolio_id: str, limit: int = 10000) -> List[PortfolioLedgerEntry]:
+        ...
+
+    def snapshot_checkpoint(self, portfolio_id: str) -> Optional[PortfolioSnapshotCheckpoint]:
+        ...
+
+    def advance_snapshot_checkpoint(
+        self,
+        expected_checkpoint_version: int,
+        checkpoint: PortfolioSnapshotCheckpoint,
+    ) -> Dict[str, object]:
+        ...
+
+    def record_snapshot_quarantine(
+        self,
+        checkpoint: PortfolioSnapshotCheckpoint,
+        reason: str,
+        previous_checkpoint: Optional[PortfolioSnapshotCheckpoint] = None,
+    ) -> Dict[str, object]:
+        ...
+
+    def commit_snapshot_observation(self, expected_checkpoint_version: int, checkpoint, ledger_entries, activity_episode, state_snapshot, reconciliation, exposure, rebalance_proposal, decision_cycle, decision_action_observations=None, domain_event=None, notification_job=None, reasoning_event=None) -> Dict[str, object]:
         ...
 
     def save_reconciliation(self, reconciliation: PortfolioReconciliation) -> PortfolioReconciliation:

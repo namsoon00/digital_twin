@@ -267,6 +267,7 @@ PROMOTED_NUMERIC_ENTITY_FIELDS = [
     "institutionalOwnershipPct",
     "insiderOwnershipPct",
     "executiveCount",
+    "increaseCount20d",
 ]
 
 PROMOTED_TEXT_ENTITY_FIELDS = [
@@ -376,6 +377,9 @@ PROMOTED_TEXT_ENTITY_FIELDS = [
     "executiveResponsibility",
     "registeredExecutive",
     "tenureEnd",
+    "classification",
+    "reentered",
+    "correspondence",
 ]
 
 def condition_target_filter_values(condition: Dict[str, object], key: str) -> List[str]:

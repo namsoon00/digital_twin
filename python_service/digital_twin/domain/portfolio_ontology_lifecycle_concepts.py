@@ -4,6 +4,7 @@ from typing import Dict
 
 from .market_data import number
 from .ontology_schema import add_entity, add_relation
+from .ontology_contracts import entity_id
 
 
 def add_portfolio_lifecycle_concepts(graph, portfolio_node_id: str, runtime_context: Dict[str, object]) -> None:
@@ -30,6 +31,7 @@ def add_portfolio_lifecycle_concepts(graph, portfolio_node_id: str, runtime_cont
         add_relation(graph, reconciliation_id, portfolio_node_id, "RECONCILES_PORTFOLIO", properties={"source": "portfolio-lifecycle-store"})
 
     activities = lifecycle.get("inferredActivities") or lifecycle.get("recentInferredActivities") or []
+    activity_ids = {}
     for activity in activities[:20] if isinstance(activities, list) else []:
         if not isinstance(activity, dict):
             continue
@@ -59,6 +61,93 @@ def add_portfolio_lifecycle_concepts(graph, portfolio_node_id: str, runtime_cont
         )
         add_relation(graph, portfolio_node_id, activity_id, "RECORDS_PORTFOLIO_ACTIVITY", properties={"source": "portfolio-lifecycle-store"})
         add_relation(graph, activity_id, portfolio_node_id, "INFERRED_FROM_SNAPSHOT_CHANGE", properties={"source": "complete-account-snapshot-difference"})
+        symbol = str(activity.get("symbol") or "").upper().strip()
+        if symbol:
+            add_relation(graph, entity_id("stock", symbol), activity_id, "HAS_PORTFOLIO_ACTIVITY", properties={
+                "source": "complete-account-snapshot-difference",
+                "classification": activity.get("classification"),
+                "confidence": activity.get("confidence"),
+            })
+        activity_ids[str(activity.get("entryId") or activity.get("entry_id") or "")] = activity_id
+
+    episodes = lifecycle.get("recentActivityEpisodes") or (
+        [lifecycle.get("activityEpisode")] if isinstance(lifecycle.get("activityEpisode"), dict) and lifecycle.get("activityEpisode") else []
+    )
+    for episode in episodes[:8] if isinstance(episodes, list) else []:
+        if not isinstance(episode, dict):
+            continue
+        episode_id = add_entity(
+            graph,
+            "portfolio-activity-episode",
+            str(episode.get("episodeId") or "latest"),
+            " · ".join(episode.get("symbols") or []) + " 계좌 변화" if episode.get("symbols") else "현금 잔고 변화",
+            {
+                "tboxClass": "PortfolioActivityEpisode",
+                "classification": episode.get("classification"),
+                "confidence": episode.get("confidence"),
+                "observedAt": episode.get("observedAt"),
+                "previousObservedAt": episode.get("previousObservedAt"),
+                "cashDelta": number(episode.get("cashDelta")),
+                "estimatedNotional": number(episode.get("estimatedNotional")),
+                "symbolCount": len(episode.get("symbols") or []),
+                "replaceableByActualActivity": True,
+                "executable": False,
+                "source": "portfolio-activity-episode-store",
+            },
+        )
+        add_relation(graph, portfolio_node_id, episode_id, "RECORDS_PORTFOLIO_ACTIVITY", properties={"source": "portfolio-activity-episode-store"})
+        for entry_id in episode.get("ledgerEntryIds") or []:
+            if activity_ids.get(str(entry_id)):
+                add_relation(graph, episode_id, activity_ids[str(entry_id)], "GROUPS_LEDGER_ACTIVITY", properties={"source": "portfolio-activity-episode-store"})
+        for symbol in episode.get("symbols") or []:
+            add_relation(graph, entity_id("stock", str(symbol).upper()), episode_id, "HAS_PORTFOLIO_ACTIVITY", properties={
+                "source": "portfolio-activity-episode-store",
+                "classification": episode.get("classification"),
+                "confidence": episode.get("confidence"),
+            })
+
+    state = lifecycle.get("portfolioState") if isinstance(lifecycle.get("portfolioState"), dict) else {}
+    for item in state.get("positions") or []:
+        if not isinstance(item, dict) or not str(item.get("symbol") or "").strip():
+            continue
+        symbol = str(item.get("symbol") or "").upper().strip()
+        state_id = add_entity(
+            graph,
+            "portfolio-state",
+            str(state.get("stateId") or "latest") + ":" + symbol,
+            str(item.get("name") or symbol) + " 원장 기반 상태",
+            {
+                "tboxClass": "PortfolioStateSnapshot",
+                **dict(item),
+                "cashWeightPct": number(state.get("cashWeightPct")),
+                "sourceCheckpointVersion": state.get("sourceCheckpointVersion"),
+                "observedAt": state.get("observedAt"),
+                "executable": False,
+                "source": "portfolio-state-store",
+            },
+        )
+        add_relation(graph, entity_id("stock", symbol), state_id, "HAS_PORTFOLIO_STATE", properties={"source": "portfolio-state-store"})
+
+    for observation in (lifecycle.get("decisionActionObservations") or [])[:8]:
+        if not isinstance(observation, dict) or not str(observation.get("symbol") or "").strip():
+            continue
+        symbol = str(observation.get("symbol") or "").upper().strip()
+        observation_id = add_entity(
+            graph,
+            "decision-action-observation",
+            str(observation.get("observationId") or "latest"),
+            symbol + " 판단 이후 계좌 행동 관측",
+            {
+                "tboxClass": "DecisionActionObservation",
+                **dict(observation),
+                "executable": False,
+                "source": "decision-action-observation-store",
+            },
+        )
+        add_relation(graph, entity_id("stock", symbol), observation_id, "OBSERVES_ACCOUNT_ACTION", properties={"source": "decision-action-observation-store"})
+        prior_id = str(observation.get("priorDecisionEpisodeId") or "")
+        if prior_id:
+            add_relation(graph, observation_id, entity_id("decision-episode", prior_id), "OBSERVED_AFTER_DECISION", properties={"causalityClaimed": False})
 
     cycle = lifecycle.get("portfolioDecisionCycle") if isinstance(lifecycle.get("portfolioDecisionCycle"), dict) else {}
     if not cycle:

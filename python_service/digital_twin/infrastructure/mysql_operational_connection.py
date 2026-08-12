@@ -494,6 +494,83 @@ MYSQL_SCHEMA = [
     ) ENGINE=InnoDB DEFAULT CHARSET=utf8mb4 COLLATE=utf8mb4_unicode_ci
     """,
     """
+    CREATE TABLE IF NOT EXISTS portfolio_snapshot_checkpoints (
+        portfolio_id VARCHAR(191) PRIMARY KEY,
+        account_id VARCHAR(191) NOT NULL,
+        account_fingerprint VARCHAR(191) NOT NULL,
+        observed_at VARCHAR(40) NOT NULL,
+        balance_fingerprint VARCHAR(64) NOT NULL,
+        checkpoint_version BIGINT NOT NULL DEFAULT 0,
+        position_count INT NOT NULL DEFAULT 0,
+        status VARCHAR(32) NOT NULL DEFAULT 'accepted',
+        payload_json LONGTEXT NOT NULL,
+        created_at VARCHAR(40) NOT NULL,
+        updated_at VARCHAR(40) NOT NULL,
+        KEY idx_portfolio_checkpoint_account_time (account_id, observed_at),
+        KEY idx_portfolio_checkpoint_fingerprint (balance_fingerprint)
+    ) ENGINE=InnoDB DEFAULT CHARSET=utf8mb4 COLLATE=utf8mb4_unicode_ci
+    """,
+    """
+    CREATE TABLE IF NOT EXISTS portfolio_activity_episodes (
+        episode_id VARCHAR(191) PRIMARY KEY,
+        portfolio_id VARCHAR(191) NOT NULL,
+        account_id VARCHAR(191) NOT NULL,
+        classification VARCHAR(64) NOT NULL,
+        confidence VARCHAR(32) NOT NULL DEFAULT 'low',
+        observed_at VARCHAR(40) NOT NULL,
+        observation_fingerprint VARCHAR(64) NOT NULL,
+        payload_json LONGTEXT NOT NULL,
+        created_at VARCHAR(40) NOT NULL,
+        UNIQUE KEY uq_portfolio_activity_observation (portfolio_id, observation_fingerprint, observed_at),
+        KEY idx_portfolio_activity_latest (portfolio_id, observed_at, episode_id),
+        KEY idx_portfolio_activity_account_class (account_id, classification, observed_at)
+    ) ENGINE=InnoDB DEFAULT CHARSET=utf8mb4 COLLATE=utf8mb4_unicode_ci
+    """,
+    """
+    CREATE TABLE IF NOT EXISTS portfolio_snapshot_quarantines (
+        quarantine_id VARCHAR(191) PRIMARY KEY,
+        portfolio_id VARCHAR(191) NOT NULL,
+        account_id VARCHAR(191) NOT NULL,
+        reason VARCHAR(96) NOT NULL,
+        observed_at VARCHAR(40) NOT NULL,
+        balance_fingerprint VARCHAR(64) NOT NULL,
+        payload_json LONGTEXT NOT NULL,
+        created_at VARCHAR(40) NOT NULL,
+        UNIQUE KEY uq_portfolio_snapshot_quarantine (portfolio_id, balance_fingerprint, observed_at, reason),
+        KEY idx_portfolio_snapshot_quarantine_latest (portfolio_id, observed_at, quarantine_id)
+    ) ENGINE=InnoDB DEFAULT CHARSET=utf8mb4 COLLATE=utf8mb4_unicode_ci
+    """,
+    """
+    CREATE TABLE IF NOT EXISTS portfolio_state_snapshots (
+        state_id VARCHAR(191) PRIMARY KEY,
+        portfolio_id VARCHAR(191) NOT NULL,
+        account_id VARCHAR(191) NOT NULL,
+        observed_at VARCHAR(40) NOT NULL,
+        source_checkpoint_version BIGINT NOT NULL DEFAULT 0,
+        position_count INT NOT NULL DEFAULT 0,
+        payload_json LONGTEXT NOT NULL,
+        created_at VARCHAR(40) NOT NULL,
+        UNIQUE KEY uq_portfolio_state_checkpoint (portfolio_id, source_checkpoint_version),
+        KEY idx_portfolio_state_latest (portfolio_id, observed_at, state_id)
+    ) ENGINE=InnoDB DEFAULT CHARSET=utf8mb4 COLLATE=utf8mb4_unicode_ci
+    """,
+    """
+    CREATE TABLE IF NOT EXISTS portfolio_decision_action_observations (
+        observation_id VARCHAR(191) PRIMARY KEY,
+        portfolio_id VARCHAR(191) NOT NULL,
+        account_id VARCHAR(191) NOT NULL,
+        symbol VARCHAR(64) NOT NULL DEFAULT '',
+        activity_episode_id VARCHAR(191) NOT NULL,
+        prior_decision_episode_id VARCHAR(191) NOT NULL DEFAULT '',
+        correspondence VARCHAR(32) NOT NULL DEFAULT 'unclassified',
+        observed_at VARCHAR(40) NOT NULL,
+        payload_json LONGTEXT NOT NULL,
+        created_at VARCHAR(40) NOT NULL,
+        UNIQUE KEY uq_decision_activity_pair (activity_episode_id, prior_decision_episode_id, symbol),
+        KEY idx_decision_action_account_symbol (account_id, symbol, observed_at)
+    ) ENGINE=InnoDB DEFAULT CHARSET=utf8mb4 COLLATE=utf8mb4_unicode_ci
+    """,
+    """
     CREATE TABLE IF NOT EXISTS portfolio_reconciliations (
         reconciliation_id VARCHAR(191) PRIMARY KEY,
         portfolio_id VARCHAR(191) NOT NULL,

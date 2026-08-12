@@ -145,9 +145,14 @@ class NotificationAIDecisionContextEnricher:
                     "status": lifecycle.get("status"),
                     "portfolioId": lifecycle.get("portfolioId"),
                     "mandate": lifecycle.get("mandate") or {},
+                    "snapshotCheckpoint": lifecycle.get("snapshotCheckpoint") or {},
                     "reconciliation": lifecycle.get("reconciliation") or {},
                     "exposureSnapshot": lifecycle.get("exposureSnapshot") or {},
                     "rebalanceProposal": lifecycle.get("rebalanceProposal") or {},
+                    "portfolioDecisionCycle": lifecycle.get("portfolioDecisionCycle") or {},
+                    "portfolioState": lifecycle.get("portfolioState") or {},
+                    "recentActivityEpisodes": list(lifecycle.get("recentActivityEpisodes") or [])[:8],
+                    "decisionActionObservations": list(lifecycle.get("decisionActionObservations") or [])[:8],
                 }
                 audit["portfolioLifecycleStatus"] = lifecycle.get("status") or "unavailable"
             except Exception as error:  # noqa: BLE001 - graph facts remain the primary AI input.

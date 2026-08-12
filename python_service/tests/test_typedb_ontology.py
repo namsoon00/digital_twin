@@ -11496,6 +11496,31 @@ class TypeDBOntologyRepositoryTests(unittest.TestCase):
         self.assertNotIn("ontology-trend-episode-type", persistent_body)
         self.assertIn("ontology-risk-event-count", event_body)
 
+    def test_typedb_function_definitions_use_promoted_portfolio_activity_attributes(self):
+        rules = {
+            item.rule_id: item
+            for item in default_graph_inference_rules()
+            if item.rule_id.startswith("graph.portfolio.")
+        }
+
+        repeated_add = typedb_native_function_definition(
+            rules["graph.portfolio.repeated_loss_add.guard.v1"].to_dict()
+        )["body"]
+        concentration = typedb_native_function_definition(
+            rules["graph.portfolio.activity.concentration.review.v1"].to_dict()
+        )["body"]
+        reentry = typedb_native_function_definition(
+            rules["graph.portfolio.reentry.review.v1"].to_dict()
+        )["body"]
+        divergence = typedb_native_function_definition(
+            rules["graph.portfolio.decision_action.divergence.v1"].to_dict()
+        )["body"]
+
+        self.assertIn("ontology-position-increase-count-20d", repeated_add)
+        self.assertIn("ontology-portfolio-activity-classification", concentration)
+        self.assertIn("ontology-position-reentered", reentry)
+        self.assertIn("ontology-decision-action-correspondence", divergence)
+
     def test_typedb_schema_function_sync_uses_cache_for_same_rule_fingerprint(self):
         repository = TypeDBOntologyGraphRepository("127.0.0.1:1729")
         rule = default_graph_inference_rules()[0]

@@ -558,6 +558,7 @@ class TossProvider:
         self.auth_refreshes = 0
         self.token_cache_hits = 0
         self.token_expires_at = ""
+        self.account_source_fingerprint = ""
 
     def diagnostics_payload(self) -> Dict[str, object]:
         return {
@@ -706,6 +707,14 @@ class TossProvider:
             accounts = normalize_accounts(accounts_payload)
             selected = select_account(accounts, self.account.account_seq)
             account_seq = self.account.account_seq or str(selected.get("accountSeq") or selected.get("id") or "")
+            if account_seq:
+                self.account_source_fingerprint = hashlib.sha256(
+                    "|".join([
+                        str(self.account.provider or "").strip().lower(),
+                        self.base_url.strip().lower(),
+                        account_seq,
+                    ]).encode("utf-8")
+                ).hexdigest()
             account_cash = account_cash_amount(selected)
             account_currency = str(selected.get("currency") or "KRW")
             if not account_seq:
@@ -1245,6 +1254,13 @@ def build_snapshot(account: AccountConfig, external_settings: Optional[Dict[str,
     )
     metadata = provider.diagnostics_payload()
     metadata.update(kis_provider.diagnostics_payload())
+    metadata["accountSourceFingerprint"] = provider.account_source_fingerprint or hashlib.sha256(
+        "|".join([
+            str(account.provider or "").strip().lower(),
+            str(account.base_url or "").strip().lower(),
+            str(account.account_seq or account.account_id or "").strip(),
+        ]).encode("utf-8")
+    ).hexdigest()
     metadata["accountContext"] = account_context
     metadata["marketProxyQuotes"] = market_proxy_quote_context(settings, provider.quote_cache, external_signals=external_signals)
     complete_account_balance = mode == "live" and status == "토스 계좌 동기화"

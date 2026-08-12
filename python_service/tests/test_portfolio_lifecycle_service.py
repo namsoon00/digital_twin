@@ -1,5 +1,6 @@
 import sys
 import unittest
+from dataclasses import replace
 from datetime import datetime, timedelta, timezone
 from pathlib import Path
 from types import SimpleNamespace
@@ -9,6 +10,7 @@ sys.path.insert(0, str(Path(__file__).resolve().parents[1]))
 
 from digital_twin.application.investment_outcome_observation_service import InvestmentOutcomeObservationService
 from digital_twin.application.investment_domain_service import InvestmentDomainService
+from digital_twin.application.notification_ai_decision_context import NotificationAIDecisionContextEnricher
 from digital_twin.application.portfolio_lifecycle_service import (
     DecisionActionPlanningService,
     PortfolioAccountingService,
@@ -17,6 +19,7 @@ from digital_twin.application.portfolio_lifecycle_service import (
 from digital_twin.domain.investment_brain import ObservedOutcome
 from digital_twin.domain.investment_mandate import InvestmentMandate
 from digital_twin.domain.portfolio import AccountSnapshot, PortfolioSummary, Position
+from digital_twin.domain.portfolio_activity_episode import PortfolioSnapshotCheckpoint
 from digital_twin.domain.portfolio_ledger import (
     INFERRED_CORPORATE_ACTION,
     INFERRED_POSITION_DECREASE,
@@ -26,6 +29,8 @@ from digital_twin.domain.portfolio_ledger import (
     PortfolioLedger,
 )
 from digital_twin.domain.portfolio_ontology_builder import build_portfolio_ontology
+from digital_twin.domain.ontology_rulebox_catalog import default_graph_inference_rules
+from digital_twin.domain.notifications import NotificationJob
 from digital_twin.domain.trade_execution import ActionEnvelope, ActionPlan, OrderIntent
 from digital_twin.infrastructure.mysql_operational_connection import MYSQL_SCHEMA
 from digital_twin.infrastructure.event_bus import EventBus
@@ -46,6 +51,14 @@ class MemoryInvestmentRepository:
         self.decision_reviews = []
         self.executions = []
         self.decision_cycles = {}
+        self.checkpoint = None
+        self.activity_episodes = []
+        self.state_snapshots = []
+        self.action_observations = []
+        self.notification_jobs = []
+        self.snapshot_quarantines = []
+        self.reasoning_events = []
+        self.prior_decisions = {}
         self.mandate = InvestmentMandate.from_profile(
             "main",
             "portfolio:main",
@@ -73,6 +86,69 @@ class MemoryInvestmentRepository:
         inserted = [item for item in entries if item.source_reference not in existing]
         self.entries.extend(inserted)
         return len(inserted)
+
+    def snapshot_checkpoint(self, _portfolio_id):
+        return self.checkpoint
+
+    def advance_snapshot_checkpoint(self, expected_checkpoint_version, checkpoint):
+        actual = self.checkpoint.version if self.checkpoint else 0
+        if actual != expected_checkpoint_version:
+            return {"status": "checkpoint-conflict", "actualCheckpointVersion": actual}
+        self.checkpoint = replace(checkpoint, version=actual + 1)
+        return {"status": "unchanged", "actualCheckpointVersion": actual + 1}
+
+    def latest_decision_before(self, _account_id, symbol, _observed_at):
+        return dict(self.prior_decisions.get(symbol) or {})
+
+    def record_snapshot_quarantine(self, checkpoint, reason, previous_checkpoint=None):
+        payload = {
+            **checkpoint.to_dict(),
+            "reason": reason,
+            "previousCheckpoint": previous_checkpoint.to_dict() if previous_checkpoint else {},
+        }
+        self.snapshot_quarantines.append(payload)
+        return payload
+
+    def commit_snapshot_observation(
+        self,
+        expected_checkpoint_version,
+        checkpoint,
+        ledger_entries,
+        activity_episode,
+        state_snapshot,
+        reconciliation,
+        exposure,
+        rebalance_proposal,
+        decision_cycle,
+        decision_action_observations=None,
+        domain_event=None,
+        notification_job=None,
+        reasoning_event=None,
+    ):
+        actual = self.checkpoint.version if self.checkpoint else 0
+        if actual != expected_checkpoint_version:
+            return {"status": "checkpoint-conflict", "actualCheckpointVersion": actual, "insertedCount": 0}
+        inserted = self.append_ledger_entries(ledger_entries)
+        if activity_episode:
+            self.activity_episodes.append(activity_episode)
+        self.state_snapshots.append(state_snapshot)
+        self.save_reconciliation(reconciliation)
+        self.save_exposure_snapshot(exposure)
+        if rebalance_proposal:
+            self.save_rebalance_proposal(rebalance_proposal)
+        self.save_portfolio_decision_cycle(decision_cycle)
+        self.action_observations.extend(list(decision_action_observations or []))
+        if notification_job:
+            self.notification_jobs.append(notification_job)
+        if reasoning_event:
+            self.reasoning_events.append(reasoning_event)
+        self.checkpoint = replace(checkpoint, version=actual + 1)
+        return {
+            "status": "committed",
+            "actualCheckpointVersion": actual + 1,
+            "insertedCount": inserted,
+            "notificationQueued": bool(notification_job),
+        }
 
     def save_reconciliation(self, item):
         self.reconciliations.setdefault(item.reconciliation_id, item)
@@ -561,9 +637,13 @@ class PortfolioLifecycleServiceTests(unittest.TestCase):
         self.assertIn("PortfolioDecisionCycle", classes)
         self.assertIn("PortfolioActionCandidate", classes)
         self.assertIn("InferredPortfolioActivity", classes)
+        self.assertIn("PortfolioActivityEpisode", classes)
+        self.assertIn("PortfolioStateSnapshot", classes)
         self.assertIn("EVALUATES_PORTFOLIO_CANDIDATE", relation_types)
         self.assertIn("RECORDS_PORTFOLIO_ACTIVITY", relation_types)
         self.assertIn("INFERRED_FROM_SNAPSHOT_CHANGE", relation_types)
+        self.assertIn("HAS_PORTFOLIO_ACTIVITY", relation_types)
+        self.assertIn("HAS_PORTFOLIO_STATE", relation_types)
         candidates = [item for item in graph.entities if (item.properties or {}).get("tboxClass") == "PortfolioActionCandidate"]
         self.assertTrue(candidates)
         self.assertTrue(all((item.properties or {}).get("executable") is False for item in candidates))
@@ -576,6 +656,216 @@ class PortfolioLifecycleServiceTests(unittest.TestCase):
         self.assertIn("CREATE TABLE IF NOT EXISTS investment_action_plan_reviews", schema)
         self.assertNotIn("CREATE TABLE IF NOT EXISTS broker_activity_sync_states", schema)
         self.assertIn("CREATE TABLE IF NOT EXISTS portfolio_decision_cycles", schema)
+        self.assertIn("CREATE TABLE IF NOT EXISTS portfolio_snapshot_checkpoints", schema)
+        self.assertIn("CREATE TABLE IF NOT EXISTS portfolio_activity_episodes", schema)
+        self.assertIn("CREATE TABLE IF NOT EXISTS portfolio_snapshot_quarantines", schema)
+        self.assertIn("CREATE TABLE IF NOT EXISTS portfolio_state_snapshots", schema)
+        self.assertIn("CREATE TABLE IF NOT EXISTS portfolio_decision_action_observations", schema)
+
+    def test_checkpoint_advances_without_rewriting_unchanged_balance_and_rejects_stale_snapshot(self):
+        repository = MemoryInvestmentRepository()
+        service = PortfolioAccountingService(repository)
+
+        service.observe_snapshot(live_snapshot())
+        unchanged = service.observe_snapshot(live_snapshot(generated_at="2026-08-12T06:10:00Z"))
+        stale = service.observe_snapshot(live_snapshot(quantity=12, generated_at="2026-08-12T06:05:00Z"))
+
+        self.assertEqual("unchanged", unchanged["status"])
+        self.assertEqual(2, unchanged["snapshotCheckpoint"]["checkpointVersion"])
+        self.assertEqual("stale", stale["status"])
+        self.assertEqual("snapshot-older-than-checkpoint", stale["reason"])
+        self.assertEqual(2, len(repository.entries))
+
+    def test_sudden_empty_account_without_cash_offset_is_quarantined(self):
+        repository = MemoryInvestmentRepository()
+        service = PortfolioAccountingService(repository)
+        service.observe_snapshot(live_snapshot())
+
+        result = service.observe_snapshot(live_snapshot(
+            include_position=False,
+            cash=200000,
+            generated_at="2026-08-12T06:10:00Z",
+        ))
+
+        self.assertEqual("quarantined", result["status"])
+        self.assertEqual("all-positions-disappeared-without-cash-offset", result["reason"])
+        self.assertEqual("quarantined", result["snapshotCheckpoint"]["status"])
+        self.assertEqual(1, len(repository.snapshot_quarantines))
+        self.assertEqual(result["reason"], repository.snapshot_quarantines[0]["reason"])
+        self.assertEqual(2, len(repository.entries))
+
+    def test_position_exit_with_cash_offset_creates_probable_sell_episode_and_factual_outbox(self):
+        repository = MemoryInvestmentRepository()
+        service = PortfolioAccountingService(
+            repository,
+            investment_domain_service=InvestmentDomainService(repository, EventBus()),
+        )
+        service.observe_snapshot(live_snapshot())
+
+        result = service.observe_snapshot(live_snapshot(
+            include_position=False,
+            cash=900000,
+            generated_at="2026-08-12T06:10:00Z",
+        ))
+
+        self.assertEqual("probable-sell", result["activityEpisode"]["classification"])
+        self.assertTrue(result["factualNotificationQueued"])
+        self.assertEqual("portfolioActivityObservation", repository.notification_jobs[0].message_type)
+        self.assertIn("실제 주문·수수료·세금은 확인되지 않음", repository.notification_jobs[0].text)
+
+    def test_repeated_increases_are_derived_into_portfolio_state(self):
+        repository = MemoryInvestmentRepository()
+        service = PortfolioAccountingService(repository)
+        service.observe_snapshot(live_snapshot())
+        service.observe_snapshot(live_snapshot(quantity=11, cash=135000, generated_at="2026-08-12T06:10:00Z"))
+
+        result = service.observe_snapshot(live_snapshot(quantity=12, cash=70000, generated_at="2026-08-12T06:20:00Z"))
+
+        state = result["portfolioState"]["positions"][0]
+        self.assertEqual(2, state["increaseCount20d"])
+        self.assertEqual("probable-buy", result["activityEpisode"]["classification"])
+        self.assertFalse(result["activityEpisode"]["executable"])
+
+    def test_large_cash_mismatch_keeps_probable_activity_confidence_low(self):
+        repository = MemoryInvestmentRepository()
+        service = PortfolioAccountingService(repository)
+        service.observe_snapshot(live_snapshot())
+
+        result = service.observe_snapshot(live_snapshot(
+            quantity=11,
+            cash=0,
+            generated_at="2026-08-12T06:10:00Z",
+        ))
+
+        self.assertEqual("probable-buy", result["activityEpisode"]["classification"])
+        self.assertEqual("low", result["activityEpisode"]["confidence"])
+
+    def test_each_symbol_in_a_multi_position_change_is_compared_with_its_prior_decision(self):
+        def second_position(quantity):
+            return Position(
+                symbol="005930",
+                name="삼성전자",
+                market="KR",
+                currency="KRW",
+                quantity=quantity,
+                sellable_quantity=quantity,
+                average_price=80000,
+                current_price=82000,
+                market_value=quantity * 82000,
+                market_value_krw=quantity * 82000,
+                sector="technology",
+                source="holding",
+            )
+
+        repository = MemoryInvestmentRepository()
+        repository.prior_decisions = {
+            "035420": {"episodeId": "decision:naver", "action": "SELL", "decidedAt": "2026-08-12T05:50:00Z"},
+            "005930": {"episodeId": "decision:samsung", "action": "ADD", "decidedAt": "2026-08-12T05:50:00Z"},
+        }
+        service = PortfolioAccountingService(
+            repository,
+            investment_domain_service=InvestmentDomainService(repository, EventBus()),
+        )
+        service.observe_snapshot(live_snapshot(extra_positions=[second_position(5)]))
+
+        result = service.observe_snapshot(live_snapshot(
+            quantity=11,
+            cash=55000,
+            generated_at="2026-08-12T06:10:00Z",
+            extra_positions=[second_position(6)],
+        ))
+
+        observations = {item["symbol"]: item for item in result["decisionActionObservations"]}
+        self.assertEqual({"005930", "035420"}, set(observations))
+        self.assertEqual("contrary", observations["035420"]["correspondence"])
+        self.assertEqual("aligned", observations["005930"]["correspondence"])
+        self.assertIn("DecisionActionObservation", repository.reasoning_events[0].payload["factTypes"])
+
+    def test_provider_account_fingerprint_change_is_quarantined(self):
+        repository = MemoryInvestmentRepository()
+        service = PortfolioAccountingService(repository)
+        first = live_snapshot()
+        first.metadata["accountSourceFingerprint"] = "provider-account-a"
+        service.observe_snapshot(first)
+        changed = live_snapshot(generated_at="2026-08-12T06:10:00Z")
+        changed.metadata["accountSourceFingerprint"] = "provider-account-b"
+
+        result = service.observe_snapshot(changed)
+
+        self.assertEqual("quarantined", result["status"])
+        self.assertEqual("account-source-fingerprint-changed", result["reason"])
+
+    def test_prior_ai_decision_is_compared_with_observed_account_direction_without_causality(self):
+        repository = MemoryInvestmentRepository()
+        repository.prior_decisions["035420"] = {
+            "episodeId": "decision:previous",
+            "action": "SELL",
+            "decidedAt": "2026-08-12T05:50:00Z",
+        }
+        service = PortfolioAccountingService(repository)
+        service.observe_snapshot(live_snapshot())
+
+        result = service.observe_snapshot(live_snapshot(
+            quantity=11,
+            cash=135000,
+            generated_at="2026-08-12T06:10:00Z",
+        ))
+
+        observed = result["decisionActionObservations"][0]
+        self.assertEqual("contrary", observed["correspondence"])
+        self.assertFalse(observed["causalityClaimed"])
+
+    def test_checkpoint_conflict_retries_the_whole_observation(self):
+        class ConflictOnceRepository(MemoryInvestmentRepository):
+            def __init__(self):
+                super().__init__()
+                self.commit_calls = 0
+
+            def commit_snapshot_observation(self, *args, **kwargs):
+                self.commit_calls += 1
+                if self.commit_calls == 2:
+                    return {"status": "checkpoint-conflict", "actualCheckpointVersion": 1, "insertedCount": 0}
+                return super().commit_snapshot_observation(*args, **kwargs)
+
+        repository = ConflictOnceRepository()
+        service = PortfolioAccountingService(repository)
+        service.observe_snapshot(live_snapshot())
+
+        result = service.observe_snapshot(live_snapshot(quantity=11, generated_at="2026-08-12T06:10:00Z"))
+
+        self.assertEqual("ready", result["status"])
+        self.assertEqual(3, repository.commit_calls)
+        self.assertEqual(3, len(repository.entries))
+
+    def test_portfolio_activity_rules_and_ai_context_are_connected(self):
+        rule_ids = {item.rule_id for item in default_graph_inference_rules()}
+        self.assertTrue({
+            "graph.portfolio.repeated_loss_add.guard.v1",
+            "graph.portfolio.activity.concentration.review.v1",
+            "graph.portfolio.reentry.review.v1",
+            "graph.portfolio.decision_action.divergence.v1",
+        }.issubset(rule_ids))
+
+        lifecycle = {
+            "status": "ready",
+            "portfolioId": "portfolio:main",
+            "portfolioState": {"stateId": "state:1", "positions": [{"symbol": "035420"}]},
+            "recentActivityEpisodes": [{"episodeId": "activity:1", "classification": "probable-buy"}],
+            "decisionActionObservations": [{"observationId": "observed:1", "correspondence": "aligned"}],
+            "portfolioDecisionCycle": {"cycleId": "cycle:1"},
+        }
+        store = SimpleNamespace(latest_portfolio_lifecycle=lambda _portfolio_id: lifecycle)
+        job = NotificationJob.create(
+            "투자 판단",
+            account_id="main",
+            message_type="investmentInsight",
+            context={"symbol": "035420", "messageType": "investmentInsight"},
+        )
+
+        NotificationAIDecisionContextEnricher(investment_domain_store=store)(job)
+
+        self.assertEqual("state:1", job.context["portfolioLifecycle"]["portfolioState"]["stateId"])
+        self.assertEqual("activity:1", job.context["portfolioLifecycle"]["recentActivityEpisodes"][0]["episodeId"])
 
 
 if __name__ == "__main__":

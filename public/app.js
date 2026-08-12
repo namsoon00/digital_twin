@@ -18483,8 +18483,13 @@
     var reconciliation = lifecycle.reconciliation || {};
     var exposure = lifecycle.exposureSnapshot || {};
     var cycle = lifecycle.portfolioDecisionCycle || {};
-    var ledger = lifecycle.ledgerSummary || {};
+    var checkpoint = lifecycle.snapshotCheckpoint || {};
     var activities = Array.isArray(lifecycle.recentInferredActivities) ? lifecycle.recentInferredActivities : [];
+    var activityEpisodes = Array.isArray(lifecycle.recentActivityEpisodes) ? lifecycle.recentActivityEpisodes : [];
+    var portfolioState = lifecycle.portfolioState || {};
+    var positionStates = Array.isArray(portfolioState.positions) ? portfolioState.positions : [];
+    var actionObservations = Array.isArray(lifecycle.decisionActionObservations) ? lifecycle.decisionActionObservations : [];
+    var snapshotQuarantines = Array.isArray(lifecycle.recentSnapshotQuarantines) ? lifecycle.recentSnapshotQuarantines : [];
     var candidates = Array.isArray(cycle.candidates) ? cycle.candidates : [];
     var plans = Array.isArray(lifecycle.actionPlans) ? lifecycle.actionPlans : [];
     var attributions = Array.isArray(lifecycle.performanceAttributions) ? lifecycle.performanceAttributions : [];
@@ -18497,10 +18502,10 @@
       state.portfolioLifecycleError ? '<p class="form-error">' + escapeHtml(state.portfolioLifecycleError) + '</p>' : '',
       '<div class="portfolio-lifecycle-metrics">',
       renderAccountControlMetric("원장 대사", reconciliation.status || "대기", (reconciliation.differences || []).length + "개 차이", reconciliation.status === "matched" ? "ok" : "warn"),
-      renderAccountControlMetric("최근 잔고 변화", activities.length + "건", "검증된 실계좌 비교", activities.length ? "ok" : "neutral"),
+      renderAccountControlMetric("최근 변화 묶음", activityEpisodes.length + "건", "스냅샷별 원장 활동", activityEpisodes.length ? "ok" : "neutral"),
       renderAccountControlMetric("정책 후보", candidates.length + "개", cycle.dataState || "자료 대기", candidates.length ? "neutral" : "warn"),
       renderAccountControlMetric("실행 계획", plans.length + "개", "자동 주문 없음", plans.length ? "neutral" : "warn"),
-      renderAccountControlMetric("원장 항목", Number(ledger.entryCount || 0) + "건", Number(ledger.activityCount || 0) + "건 증분 활동", "neutral"),
+      renderAccountControlMetric("체크포인트", "v" + Number(checkpoint.checkpointVersion || 0), snapshotQuarantines.length ? "최근 검역 " + snapshotQuarantines.length + "건" : (formatClock(checkpoint.observedAt) || "기준선 대기"), snapshotQuarantines.length ? "warn" : "neutral"),
       renderAccountControlMetric("성과 표본", attributions.length + "건", "1h · 1d · 5d · 20d", attributions.length ? "ok" : "neutral"),
       '</div>',
       '<div class="portfolio-lifecycle-columns">',
@@ -18540,6 +18545,43 @@
         var confidence = activity.confidence === "low" ? "확인 필요" : "잔고 기준";
         return '<div><strong>' + escapeHtml(symbol + " · " + lifecycleActivityLabel(activity)) + '</strong><span>' + escapeHtml(quantity) + '</span><em>' + escapeHtml(confidence + " · " + formatClock(activity.currentSnapshotAt || activity.occurredAt)) + '</em></div>';
       }).join("") : '<p class="subtle">기준선 이후 감지된 보유 변화가 없습니다.</p>',
+      '</div></section>',
+      '<div class="portfolio-lifecycle-columns">',
+      '<section class="portfolio-lifecycle-section"><div class="account-board-title"><strong>활동 에피소드</strong><span>같은 스냅샷에서 확인된 종목·현금 변화를 한 묶음으로 표시</span></div>',
+      '<div class="portfolio-lifecycle-list">',
+      activityEpisodes.length ? activityEpisodes.map(function (episode) {
+        var labels = {
+          "probable-buy": "보유 증가·현금 감소 동시 관측",
+          "probable-sell": "보유 감소·현금 증가 동시 관측",
+          "position-balance-change": "보유 수량 변화",
+          "cash-balance-change": "현금 잔액 변화",
+          "possible-corporate-action": "기업행동 가능성",
+          "mixed-portfolio-change": "복합 계좌 변화"
+        };
+        var target = (episode.symbols || []).join(", ") || "현금";
+        return '<div><strong>' + escapeHtml(target + " · " + (labels[episode.classification] || episode.classification || "계좌 변화")) + '</strong><span>현금 증감 ' + escapeHtml(formatMoney(Number(episode.cashDelta || 0))) + '</span><em>' + escapeHtml((episode.confidence || "low") + " · " + formatClock(episode.observedAt)) + '</em></div>';
+      }).join("") : '<p class="subtle">기준선 이후 묶을 계좌 변화가 없습니다.</p>',
+      '</div></section>',
+      '<section class="portfolio-lifecycle-section"><div class="account-board-title"><strong>원장 기반 보유 상태</strong><span>보유 기간과 최근 증감 이력</span></div>',
+      '<div class="portfolio-lifecycle-list">',
+      positionStates.length ? positionStates.map(function (item) {
+        var activity = "20일 증가 " + Number(item.increaseCount20d || 0) + "회 · 감소 " + Number(item.decreaseCount20d || 0) + "회";
+        return '<div><strong>' + escapeHtml((item.name || item.symbol || "종목") + (item.reentered ? " · 재진입" : "")) + '</strong><span>' + escapeHtml("보유 " + Number(item.holdingDays || 0) + "일 · 비중 " + Number(item.currentWeightPct || 0).toFixed(1) + "%") + '</span><em>' + escapeHtml(activity) + '</em></div>';
+      }).join("") : '<p class="subtle">원장 기반 보유 상태가 아직 없습니다.</p>',
+      '</div></section>',
+      '</div>',
+      '<section class="portfolio-lifecycle-section"><div class="account-board-title"><strong>판단 이후 계좌 변화</strong><span>이전 AI 판단과 이후 실계좌 방향 비교 · 인과관계는 주장하지 않음</span></div>',
+      '<div class="portfolio-lifecycle-list">',
+      actionObservations.length ? actionObservations.map(function (item) {
+        var relationLabel = item.correspondence === "aligned" ? "같은 방향" : item.correspondence === "contrary" ? "반대 방향" : "직접 비교 불가";
+        return '<div><strong>' + escapeHtml((item.symbol || "종목") + " · " + relationLabel) + '</strong><span>' + escapeHtml((item.priorAction || "이전 판단 없음") + " → 계좌 " + (item.observedDirection || "변화")) + '</span><em>' + escapeHtml(Number(item.elapsedMinutes || 0) + "분 후 관측 · " + (item.priorDecisionEpisodeId || "판단 기록 없음")) + '</em></div>';
+      }).join("") : '<p class="subtle">이전 AI 판단과 연결할 계좌 변화가 없습니다.</p>',
+      '</div></section>',
+      '<section class="portfolio-lifecycle-section"><div class="account-board-title"><strong>스냅샷 검역</strong><span>기준선을 덮어쓰지 않은 비정상 계좌 응답</span></div>',
+      '<div class="portfolio-lifecycle-list">',
+      snapshotQuarantines.length ? snapshotQuarantines.map(function (item) {
+        return '<div><strong>' + escapeHtml(item.reason || item.quarantineReason || "스냅샷 검역") + '</strong><span>' + escapeHtml("보유 " + Number(item.positionCount || 0) + "개 · 현금 " + formatMoney(Number(item.cashBalance || 0))) + '</span><em>' + escapeHtml(formatClock(item.observedAt)) + '</em></div>';
+      }).join("") : '<p class="subtle">검역된 계좌 스냅샷이 없습니다.</p>',
       '</div></section>',
       '</article>'
     ].join("");

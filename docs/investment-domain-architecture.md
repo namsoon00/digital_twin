@@ -9,7 +9,7 @@ Orbit Alpha separates transactional truth, semantic reasoning, execution, and de
 | Context | Owns | Source of truth | Main outputs |
 | --- | --- | --- | --- |
 | Account Identity | Investor, brokerage account, provider credential reference, account universe | MySQL account configuration | `BrokerageAccount`, masked domain profile |
-| Portfolio Ledger | Immutable trades, cash movements, lots, cost basis | MySQL append-only ledger | Reconstructed positions and cash |
+| Portfolio Ledger | Immutable trades, complete-balance checkpoints, inferred account activity, lots and cost basis | MySQL append-only ledger and snapshot CAS | Reconstructed positions, activity episodes and derived state |
 | Investment Mandate | Risk tolerance, loss budget, cash floor, position/sector/currency limits, allowed actions | Versioned MySQL mandate | Policy version and TBox policy facts |
 | Asset Knowledge | Company, security, listing line, market, sector, currency | Existing symbol/company stores | Stable identity graph |
 | Market Observation | Quote, volume, flow, technical, macro, provenance and freshness | Existing time-series and source stores | Observation ABox facts |
@@ -32,11 +32,13 @@ MySQL owns durable transactional facts:
 
 - Account configuration and active investment mandate
 - Append-only portfolio ledger entries
+- Per-account complete-snapshot checkpoints, activity episodes, and derived portfolio state
+- Previous-decision-to-observed-account-action correspondence records without a causality claim
 - Rebalance proposals and action plans
 - Decision episodes, execution episodes, fills, and decision reviews
 - Event outbox, notification ledger, worker leases, and operational history
 
-Writes use stable IDs and unique source references. Broker fills use provider execution IDs for idempotency. A position is reconstructed from ledger entries; snapshots are reconciliation evidence and do not silently rewrite lots.
+Writes use stable IDs and unique source references. Broker fills use provider execution IDs for idempotency. A position is reconstructed from ledger entries. A provider-declared complete live balance may append explicitly labelled inferred increase, decrease, exit, corporate-action, or cash-adjustment facts when it advances the account checkpoint. The checkpoint, inferred ledger rows, activity episode, derived state, source event, reasoning request, and factual notification outbox are committed with one version-checked MySQL transaction. Unknown orders, fees, taxes, and realised profit are never invented. Stale, same-time conflicting, account-fingerprint-changing, and unexplained all-empty snapshots are quarantined instead of mutating lots.
 
 ### TypeDB
 
@@ -61,6 +63,8 @@ TypeDB is not the account, ledger, order, or delivery source of truth. Projectio
 8. Explicit user approval or a future governed executor may submit orders. Broker fills remain immutable.
 9. Later observations create attribution and a `DecisionReview`; learning changes remain review-only proposals.
 10. Notification delivery applies channel policy after the investment decision is complete.
+
+For live-account balance changes, a factual `portfolioActivityObservation` can be delivered immediately from the same durable outbox. It states only the observed before/after balance and uncertainty. The separate `investmentInsight` remains blocked until the portfolio activity and state are projected into TypeDB, relevant rules materialize an InferenceBox generation, and the AI judge reviews that graph result. Suspicious complete-balance responses are stored in `portfolio_snapshot_quarantines`; they remain visible for audit but cannot replace the accepted comparison checkpoint.
 
 The trace key chain is:
 
@@ -108,6 +112,7 @@ A rule with incomplete routing metadata fails contract validation before deploym
 - InferenceBox writes are generation-scoped and bulk materialized. Failed generations preserve the last usable generation.
 - AI and notification delivery are asynchronous. Realtime collection does not wait for either.
 - Ledger and fill IDs make retries idempotent. At-least-once delivery cannot duplicate holdings or fills.
+- Snapshot comparison uses a per-portfolio checkpoint CAS. Unchanged balances advance only the checkpoint, while changed balances write one episode and one state snapshot; concurrent workers retry the complete observation.
 - Outcome evaluation is horizon-scheduled and does not block current inference.
 
 ## Compatibility And Migration

@@ -1763,6 +1763,7 @@ TYPEDB_PROMOTED_NUMERIC_ATTRIBUTES = {
     "eventCount": "ontology-event-count",
     "riskEventCount": "ontology-risk-event-count",
     "supportEventCount": "ontology-support-event-count",
+    "increaseCount20d": "ontology-position-increase-count-20d",
     # Raw ABox delta fields. These are deliberately promoted so RuleBox native
     # functions, rather than Python materiality code, can evaluate changes.
     "delta": "ontology-delta",
@@ -1922,6 +1923,9 @@ TYPEDB_PROMOTED_TEXT_ATTRIBUTES = {
     "executiveResponsibility": "ontology-executive-responsibility",
     "registeredExecutive": "ontology-registered-executive",
     "tenureEnd": "ontology-tenure-end",
+    "classification": "ontology-portfolio-activity-classification",
+    "reentered": "ontology-position-reentered",
+    "correspondence": "ontology-decision-action-correspondence",
 }
 TYPEDB_FUNCTION_SUBJECT_FIELDS = {
     "source",

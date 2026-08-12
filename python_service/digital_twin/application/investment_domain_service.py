@@ -31,6 +31,44 @@ class InvestmentDomainService:
         if self.event_publisher:
             self.event_publisher.publish(event)
 
+    def dispatch_recorded(self, event) -> None:
+        """Dispatch an event already committed with the aggregate transaction."""
+        if not self.event_publisher:
+            return
+        dispatcher = getattr(self.event_publisher, "dispatch_recorded", None)
+        if callable(dispatcher):
+            dispatcher(event)
+        else:
+            self.event_publisher.dispatch(event)
+
+    def ledger_recorded_event(self, rows, inserted: int, activity_episode=None):
+        rows = list(rows or [])
+        if not inserted or not rows:
+            return None
+        inferred_activities = [
+            activity_payload(item)
+            for item in rows
+            if item.entry_type in INFERRED_SNAPSHOT_ENTRY_TYPES
+        ]
+        payload = {
+            "portfolioId": rows[0].portfolio_id,
+            "accountId": rows[0].account_id,
+            "entryIds": [item.entry_id for item in rows],
+            "entryTypes": [item.entry_type for item in rows],
+            "insertedCount": inserted,
+            "inferredActivities": inferred_activities,
+            "materialSnapshotChange": bool(inferred_activities),
+        }
+        if activity_episode:
+            payload["activityEpisode"] = activity_episode.to_dict()
+            payload["sourceObservedAt"] = activity_episode.observed_at
+        return investment_lifecycle_event(
+            PORTFOLIO_LEDGER_RECORDED,
+            rows[0].portfolio_id,
+            payload,
+            "ledger:" + rows[0].portfolio_id,
+        )
+
     def save_mandate(self, mandate: InvestmentMandate) -> InvestmentMandate:
         saved = self.repository.save_mandate(mandate)
         self.publish(investment_lifecycle_event(
@@ -49,26 +87,9 @@ class InvestmentDomainService:
     def append_ledger_entries(self, entries: Iterable[PortfolioLedgerEntry]) -> int:
         rows = list(entries or [])
         inserted = self.repository.append_ledger_entries(rows)
-        if inserted and rows:
-            inferred_activities = [
-                activity_payload(item)
-                for item in rows
-                if item.entry_type in INFERRED_SNAPSHOT_ENTRY_TYPES
-            ]
-            self.publish(investment_lifecycle_event(
-                PORTFOLIO_LEDGER_RECORDED,
-                rows[0].portfolio_id,
-                {
-                    "portfolioId": rows[0].portfolio_id,
-                    "accountId": rows[0].account_id,
-                    "entryIds": [item.entry_id for item in rows],
-                    "entryTypes": [item.entry_type for item in rows],
-                    "insertedCount": inserted,
-                    "inferredActivities": inferred_activities,
-                    "materialSnapshotChange": bool(inferred_activities),
-                },
-                "ledger:" + rows[0].portfolio_id,
-            ))
+        event = self.ledger_recorded_event(rows, inserted)
+        if event:
+            self.publish(event)
         return inserted
 
     def save_rebalance_proposal(self, proposal: RebalanceProposal) -> RebalanceProposal:

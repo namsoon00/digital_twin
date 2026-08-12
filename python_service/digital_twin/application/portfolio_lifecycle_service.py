@@ -8,6 +8,14 @@ import math
 from typing import Dict, Iterable, List, Optional, Protocol
 
 from ..domain.investment_mandate import InvestmentMandate
+from ..domain.events import ontology_reasoning_requested_event
+from ..domain.portfolio_activity_episode import (
+    DecisionActionObservation,
+    PortfolioActivityEpisode,
+    PortfolioSnapshotCheckpoint,
+    PortfolioStateSnapshot,
+    checkpoint_acceptance,
+)
 from ..domain.portfolio import AccountSnapshot
 from ..domain.portfolio_ledger import (
     OPENING_CASH,
@@ -41,6 +49,7 @@ from ..domain.trade_execution import (
     OrderIntent,
     stable_execution_id,
 )
+from .portfolio_activity_notification_service import portfolio_activity_notification_job
 
 
 def utc_now_iso() -> str:
@@ -119,6 +128,11 @@ class PortfolioLifecycleObservation:
     inferred_activities: List[Dict[str, object]] = None
     inferred_entry_count: int = 0
     opening_entry_count: int = 0
+    snapshot_checkpoint: Dict[str, object] = None
+    activity_episode: Dict[str, object] = None
+    portfolio_state: Dict[str, object] = None
+    decision_action_observations: List[Dict[str, object]] = None
+    factual_notification_queued: bool = False
 
     def to_dict(self) -> Dict[str, object]:
         return {
@@ -132,6 +146,11 @@ class PortfolioLifecycleObservation:
             "snapshotTrust": dict(self.snapshot_trust or {}),
             "inferredEntryCount": self.inferred_entry_count,
             "inferredActivities": list(self.inferred_activities or []),
+            "snapshotCheckpoint": dict(self.snapshot_checkpoint or {}),
+            "activityEpisode": dict(self.activity_episode or {}),
+            "portfolioState": dict(self.portfolio_state or {}),
+            "decisionActionObservations": list(self.decision_action_observations or []),
+            "factualNotificationQueued": self.factual_notification_queued,
         }
 
 
@@ -155,6 +174,170 @@ class PortfolioAccountingService:
         trusted, trust = trusted_account_snapshot(snapshot)
         if not trusted:
             return {"status": "skipped-untrusted-snapshot", "snapshotTrust": trust}
+        if not callable(getattr(self.repository, "commit_snapshot_observation", None)):
+            return self.observe_snapshot_compatibility(snapshot, trust)
+        portfolio_id = "portfolio:" + str(snapshot.account_id or "default")
+        mandate = self.active_mandate(snapshot, portfolio_id)
+        for _attempt in range(3):
+            previous = self.repository.snapshot_checkpoint(portfolio_id)
+            expected_version = previous.version if previous else 0
+            checkpoint = PortfolioSnapshotCheckpoint.from_snapshot(
+                snapshot,
+                portfolio_id,
+                version=expected_version + 1,
+            )
+            acceptance, reason = checkpoint_acceptance(previous, checkpoint)
+            if acceptance == "unchanged":
+                advanced = self.repository.advance_snapshot_checkpoint(expected_version, checkpoint)
+                if advanced.get("status") == "checkpoint-conflict":
+                    continue
+                return {
+                    **advanced,
+                    "reason": reason,
+                    "portfolioId": portfolio_id,
+                    "openingEntryCount": 0,
+                    "inferredEntryCount": 0,
+                    "inferredActivities": [],
+                    "snapshotTrust": trust,
+                    "snapshotCheckpoint": {
+                        **checkpoint.to_dict(),
+                        "checkpointVersion": advanced.get("actualCheckpointVersion"),
+                    },
+                }
+            if acceptance in {"duplicate", "stale", "quarantined"}:
+                visible_checkpoint = checkpoint
+                if acceptance == "quarantined":
+                    visible_checkpoint = replace(
+                        checkpoint,
+                        status="quarantined",
+                        quarantine_reason=reason,
+                    )
+                    recorder = getattr(self.repository, "record_snapshot_quarantine", None)
+                    if callable(recorder):
+                        recorder(visible_checkpoint, reason, previous)
+                return {
+                    "status": acceptance,
+                    "reason": reason,
+                    "portfolioId": portfolio_id,
+                    "openingEntryCount": 0,
+                    "inferredEntryCount": 0,
+                    "inferredActivities": [],
+                    "snapshotTrust": trust,
+                    "snapshotCheckpoint": visible_checkpoint.to_dict(),
+                }
+            entries = list(self.repository.ledger_entries(portfolio_id, limit=100000) or [])
+            had_prior_ledger = bool(entries)
+            opening_entries = self.opening_entries(snapshot, portfolio_id) if not entries else []
+            current_state = PortfolioLedger(portfolio_id, snapshot.account_id).replay(entries)
+            # A pre-existing ledger without a checkpoint becomes the first
+            # trusted comparison baseline; it is never retroactively rewritten.
+            inferred_entries = (
+                infer_snapshot_ledger_entries(snapshot, portfolio_id, current_state, entries)
+                if previous and had_prior_ledger
+                else []
+            )
+            rows_to_commit = opening_entries + inferred_entries
+            prospective_entries = entries + rows_to_commit
+            ledger_state = PortfolioLedger(portfolio_id, snapshot.account_id).replay(prospective_entries)
+            reconciliation = self.reconciliation(snapshot, portfolio_id, ledger_state)
+            exposure = self.exposure_snapshot(snapshot, portfolio_id, mandate)
+            proposal = self.rebalance_proposal(snapshot, mandate, exposure)
+            decision_cycle = self.portfolio_decision_cycle(snapshot, mandate, exposure, reconciliation)
+            episode = PortfolioActivityEpisode.from_entries(inferred_entries, checkpoint, previous)
+            state_snapshot = PortfolioStateSnapshot.from_snapshot(
+                snapshot,
+                portfolio_id,
+                expected_version + 1,
+                prospective_entries,
+            )
+            action_observations = self.decision_action_observations(episode)
+            event = None
+            job = None
+            if rows_to_commit and self.investment_domain_service:
+                event = self.investment_domain_service.ledger_recorded_event(
+                    rows_to_commit,
+                    len(rows_to_commit),
+                    episode,
+                )
+            if episode and event:
+                job = portfolio_activity_notification_job(episode, event, snapshot.account_label)
+            fact_types = ["PortfolioActivityEpisode", "PortfolioStateSnapshot"]
+            if action_observations:
+                fact_types.append("DecisionActionObservation")
+            reasoning_event = ontology_reasoning_requested_event(
+                event,
+                "portfolio-activity",
+                symbols=episode.symbols,
+                changed_count=len(inferred_entries),
+                observed_count=len(inferred_entries),
+                fact_types=fact_types,
+                fact_types_by_symbol={symbol: fact_types for symbol in episode.symbols},
+                changed_fields_by_symbol={symbol: ["portfolioActivity", "portfolioState"] for symbol in episode.symbols},
+                reason="완전한 실계좌 잔고에서 보유 또는 현금 변화가 확인됐습니다.",
+                importance_gate="portfolio-activity-change",
+            ) if episode and event and episode.symbols else None
+            committed = self.repository.commit_snapshot_observation(
+                expected_version,
+                checkpoint,
+                rows_to_commit,
+                episode,
+                state_snapshot,
+                reconciliation,
+                exposure,
+                proposal,
+                decision_cycle,
+                action_observations,
+                event,
+                job,
+                reasoning_event,
+            )
+            if committed.get("status") == "checkpoint-conflict":
+                continue
+            if committed.get("status") != "committed":
+                return {
+                    **committed,
+                    "portfolioId": portfolio_id,
+                    "snapshotTrust": trust,
+                }
+            inserted_count = int(committed.get("insertedCount") or 0)
+            if event and inserted_count and self.investment_domain_service:
+                self.investment_domain_service.dispatch_recorded(event)
+            return PortfolioLifecycleObservation(
+                portfolio_id=portfolio_id,
+                reconciliation=reconciliation,
+                exposure_snapshot=exposure,
+                rebalance_proposal=proposal,
+                decision_cycle=decision_cycle,
+                snapshot_trust=trust,
+                inferred_activities=[activity_payload(item) for item in inferred_entries] if inserted_count else [],
+                inferred_entry_count=len(inferred_entries) if inserted_count else 0,
+                opening_entry_count=len(opening_entries) if inserted_count else 0,
+                snapshot_checkpoint={**checkpoint.to_dict(), "checkpointVersion": committed.get("actualCheckpointVersion")},
+                activity_episode=episode.to_dict() if episode and inserted_count else {},
+                portfolio_state=state_snapshot.to_dict(),
+                decision_action_observations=[item.to_dict() for item in action_observations],
+                factual_notification_queued=bool(committed.get("notificationQueued")),
+            ).to_dict()
+        return {
+            "status": "checkpoint-conflict",
+            "reason": "concurrent-snapshot-observation-retry-exhausted",
+            "portfolioId": portfolio_id,
+            "snapshotTrust": trust,
+        }
+
+    def decision_action_observations(self, episode) -> List[DecisionActionObservation]:
+        if not episode or not callable(getattr(self.repository, "latest_decision_before", None)):
+            return []
+        rows = []
+        for symbol in episode.symbols:
+            prior = self.repository.latest_decision_before(episode.account_id, symbol, episode.observed_at)
+            observation = DecisionActionObservation.from_activity(episode, prior, symbol)
+            if observation:
+                rows.append(observation)
+        return rows
+
+    def observe_snapshot_compatibility(self, snapshot: AccountSnapshot, trust: Dict[str, object]) -> Dict[str, object]:
+        """Compatibility path for lightweight adapters that predate checkpoints."""
         portfolio_id = "portfolio:" + str(snapshot.account_id or "default")
         mandate = self.active_mandate(snapshot, portfolio_id)
         entries = list(self.repository.ledger_entries(portfolio_id, limit=100000) or [])

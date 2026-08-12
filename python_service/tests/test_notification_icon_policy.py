@@ -19,6 +19,7 @@ EXPECTED_BASE_ICONS = {
     "investmentInsight": "🧭",
     "marketObservation": "📈",
     "portfolioHoldingsSnapshot": "📋",
+    "portfolioActivityObservation": "↔️",
     "investmentCalendarReminder": "🗓️",
     "newsDigest": "🗞️",
     "modelBuy": "🟢",

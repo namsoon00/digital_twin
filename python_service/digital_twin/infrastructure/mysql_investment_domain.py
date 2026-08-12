@@ -6,6 +6,12 @@ from typing import Dict, Iterable, List, Optional
 
 from ..domain.investment_mandate import InvestmentMandate
 from ..domain.investment_outcomes import DecisionReview, PerformanceAttribution
+from ..domain.portfolio_activity_episode import (
+    DecisionActionObservation,
+    PortfolioActivityEpisode,
+    PortfolioSnapshotCheckpoint,
+    PortfolioStateSnapshot,
+)
 from ..domain.portfolio_decision_cycle import PortfolioDecisionCycle
 from ..domain.portfolio_ledger import INFERRED_SNAPSHOT_ENTRY_TYPES, PortfolioLedgerEntry, PortfolioReconciliation
 from ..domain.snapshot_portfolio_activity import activity_payload
@@ -13,7 +19,9 @@ from ..domain.portfolio_rebalancing import RebalanceProposal
 from ..domain.risk_exposure import ExposureSnapshot
 from ..domain.trade_execution import ActionPlan, ActionPlanReview, ExecutionEpisode
 from .mysql_operational_connection import MySQLOperationalConnection
+from .mysql_operational_events import insert_domain_event_with_connection
 from .mysql_operational_helpers import _json_loads
+from .mysql_notification_jobs import MySQLNotificationJobStore
 from .operational_common import json_dumps
 from .settings import utc_now
 
@@ -181,35 +189,318 @@ class MySQLInvestmentDomainStore(MySQLOperationalConnection):
         stamp = utc_now()
         inserted = 0
         with self.transaction() as connection:
-            for entry in rows:
-                cursor = connection.execute(
-                    """
-                    INSERT IGNORE INTO portfolio_ledger_entries (
-                        entry_id, idempotency_key, portfolio_id, account_id, entry_type,
-                        symbol, currency, quantity, unit_price, amount, fee, occurred_at,
-                        source_reference, payload_json, created_at
-                    ) VALUES (%s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s)
-                    """,
+            inserted = self.append_ledger_entries_with_connection(connection, rows, stamp)
+        return inserted
+
+    def append_ledger_entries_with_connection(self, connection, entries, stamp: str) -> int:
+        inserted = 0
+        for entry in entries or []:
+            cursor = connection.execute(
+                """
+                INSERT IGNORE INTO portfolio_ledger_entries (
+                    entry_id, idempotency_key, portfolio_id, account_id, entry_type,
+                    symbol, currency, quantity, unit_price, amount, fee, occurred_at,
+                    source_reference, payload_json, created_at
+                ) VALUES (%s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s)
+                """,
+                (
+                    entry.entry_id,
+                    entry.source_reference or entry.entry_id,
+                    entry.portfolio_id,
+                    entry.account_id,
+                    entry.entry_type,
+                    entry.symbol,
+                    entry.currency,
+                    str(entry.quantity),
+                    str(entry.unit_price),
+                    str(entry.amount),
+                    str(entry.fee),
+                    entry.occurred_at,
+                    entry.source_reference,
+                    json_dumps(entry.to_dict()),
+                    stamp,
+                ),
+            )
+            inserted += max(0, int(cursor.rowcount or 0))
+        return inserted
+
+    def snapshot_checkpoint(self, portfolio_id: str) -> Optional[PortfolioSnapshotCheckpoint]:
+        with self.connect() as connection:
+            row = connection.execute(
+                "SELECT payload_json, checkpoint_version FROM portfolio_snapshot_checkpoints WHERE portfolio_id = %s",
+                (str(portfolio_id or ""),),
+            ).fetchone()
+        if not row:
+            return None
+        payload = _json_loads(row.get("payload_json"), {})
+        payload["checkpointVersion"] = int(row.get("checkpoint_version") or payload.get("checkpointVersion") or 0)
+        return PortfolioSnapshotCheckpoint.from_dict(payload)
+
+    def latest_decision_before(self, account_id: str, symbol: str, observed_at: str) -> Dict[str, object]:
+        if not str(account_id or "").strip() or not str(symbol or "").strip():
+            return {}
+        with self.connect() as connection:
+            row = connection.execute(
+                "SELECT payload_json FROM investment_decision_episodes "
+                "WHERE account_id = %s AND symbol = %s AND decided_at < %s "
+                "ORDER BY decided_at DESC, episode_id DESC LIMIT 1",
+                (str(account_id), str(symbol).upper(), str(observed_at or "")),
+            ).fetchone()
+        return _json_loads(row.get("payload_json"), {}) if row else {}
+
+    def record_snapshot_quarantine(
+        self,
+        checkpoint: PortfolioSnapshotCheckpoint,
+        reason: str,
+        previous_checkpoint: Optional[PortfolioSnapshotCheckpoint] = None,
+    ) -> Dict[str, object]:
+        quarantine_id = "snapshot-quarantine:" + hashlib.sha256(
+            "|".join([
+                checkpoint.portfolio_id,
+                checkpoint.balance_fingerprint,
+                checkpoint.observed_at,
+                str(reason or ""),
+            ]).encode("utf-8")
+        ).hexdigest()[:24]
+        payload = {
+            **checkpoint.to_dict(),
+            "quarantineId": quarantine_id,
+            "reason": str(reason or ""),
+            "previousCheckpoint": previous_checkpoint.to_dict() if previous_checkpoint else {},
+        }
+        stamp = utc_now()
+        with self.connect() as connection:
+            connection.execute(
+                "INSERT IGNORE INTO portfolio_snapshot_quarantines "
+                "(quarantine_id, portfolio_id, account_id, reason, observed_at, balance_fingerprint, payload_json, created_at) "
+                "VALUES (%s, %s, %s, %s, %s, %s, %s, %s)",
+                (
+                    quarantine_id,
+                    checkpoint.portfolio_id,
+                    checkpoint.account_id,
+                    str(reason or ""),
+                    checkpoint.observed_at,
+                    checkpoint.balance_fingerprint,
+                    json_dumps(payload),
+                    stamp,
+                ),
+            )
+        return payload
+
+    def advance_snapshot_checkpoint(
+        self,
+        expected_checkpoint_version: int,
+        checkpoint: PortfolioSnapshotCheckpoint,
+    ) -> Dict[str, object]:
+        expected = max(0, int(expected_checkpoint_version or 0))
+
+        def commit(connection):
+            current = connection.execute(
+                "SELECT checkpoint_version, observed_at, balance_fingerprint "
+                "FROM portfolio_snapshot_checkpoints WHERE portfolio_id = %s FOR UPDATE",
+                (checkpoint.portfolio_id,),
+            ).fetchone()
+            actual = int(current.get("checkpoint_version") or 0) if current else 0
+            if actual != expected:
+                return {"status": "checkpoint-conflict", "actualCheckpointVersion": actual}
+            if current and str(current.get("observed_at") or "") >= checkpoint.observed_at:
+                same = str(current.get("balance_fingerprint") or "") == checkpoint.balance_fingerprint
+                return {"status": "duplicate" if same else "stale", "actualCheckpointVersion": actual}
+            next_version = expected + 1
+            stamp = utc_now()
+            payload = {**checkpoint.to_dict(), "checkpointVersion": next_version}
+            connection.execute(
+                "UPDATE portfolio_snapshot_checkpoints SET observed_at = %s, balance_fingerprint = %s, "
+                "checkpoint_version = %s, position_count = %s, status = 'accepted', payload_json = %s, updated_at = %s "
+                "WHERE portfolio_id = %s AND checkpoint_version = %s",
+                (
+                    checkpoint.observed_at, checkpoint.balance_fingerprint, next_version,
+                    checkpoint.position_count, json_dumps(payload), stamp,
+                    checkpoint.portfolio_id, expected,
+                ),
+            )
+            return {"status": "unchanged", "actualCheckpointVersion": next_version}
+
+        return self.transaction_with_deadlock_retry("portfolio-snapshot-checkpoint-advance", commit)
+
+    def commit_snapshot_observation(
+        self,
+        expected_checkpoint_version: int,
+        checkpoint: PortfolioSnapshotCheckpoint,
+        ledger_entries: Iterable[PortfolioLedgerEntry],
+        activity_episode: Optional[PortfolioActivityEpisode],
+        state_snapshot: PortfolioStateSnapshot,
+        reconciliation: PortfolioReconciliation,
+        exposure: ExposureSnapshot,
+        rebalance_proposal: Optional[RebalanceProposal],
+        decision_cycle: PortfolioDecisionCycle,
+        decision_action_observations: Iterable[DecisionActionObservation] = None,
+        domain_event=None,
+        notification_job=None,
+        reasoning_event=None,
+    ) -> Dict[str, object]:
+        """CAS one complete account observation and its durable side effects."""
+        rows = list(ledger_entries or [])
+        action_rows = list(decision_action_observations or [])
+        expected = max(0, int(expected_checkpoint_version or 0))
+        notification_store = MySQLNotificationJobStore(self.runtime_settings) if notification_job else None
+
+        def commit(connection):
+            current = connection.execute(
+                "SELECT checkpoint_version, observed_at, balance_fingerprint "
+                "FROM portfolio_snapshot_checkpoints WHERE portfolio_id = %s FOR UPDATE",
+                (checkpoint.portfolio_id,),
+            ).fetchone()
+            current_version = int(current.get("checkpoint_version") or 0) if current else 0
+            if current_version != expected:
+                return {
+                    "status": "checkpoint-conflict",
+                    "expectedCheckpointVersion": expected,
+                    "actualCheckpointVersion": current_version,
+                    "insertedCount": 0,
+                    "notificationQueued": False,
+                }
+            if current and str(current.get("observed_at") or "") >= checkpoint.observed_at:
+                same = str(current.get("balance_fingerprint") or "") == checkpoint.balance_fingerprint
+                return {
+                    "status": "duplicate" if same else "stale",
+                    "expectedCheckpointVersion": expected,
+                    "actualCheckpointVersion": current_version,
+                    "insertedCount": 0,
+                    "notificationQueued": False,
+                }
+            stamp = utc_now()
+            inserted = self.append_ledger_entries_with_connection(connection, rows, stamp)
+            if activity_episode:
+                payload = activity_episode.to_dict()
+                connection.execute(
+                    "INSERT IGNORE INTO portfolio_activity_episodes "
+                    "(episode_id, portfolio_id, account_id, classification, confidence, observed_at, "
+                    "observation_fingerprint, payload_json, created_at) "
+                    "VALUES (%s, %s, %s, %s, %s, %s, %s, %s, %s)",
                     (
-                        entry.entry_id,
-                        entry.source_reference or entry.entry_id,
-                        entry.portfolio_id,
-                        entry.account_id,
-                        entry.entry_type,
-                        entry.symbol,
-                        entry.currency,
-                        str(entry.quantity),
-                        str(entry.unit_price),
-                        str(entry.amount),
-                        str(entry.fee),
-                        entry.occurred_at,
-                        entry.source_reference,
-                        json_dumps(entry.to_dict()),
+                        activity_episode.episode_id,
+                        activity_episode.portfolio_id,
+                        activity_episode.account_id,
+                        activity_episode.classification,
+                        activity_episode.confidence,
+                        activity_episode.observed_at,
+                        activity_episode.observation_fingerprint,
+                        json_dumps(payload),
                         stamp,
                     ),
                 )
-                inserted += max(0, int(cursor.rowcount or 0))
-        return inserted
+            state_payload = state_snapshot.to_dict()
+            connection.execute(
+                "INSERT IGNORE INTO portfolio_state_snapshots "
+                "(state_id, portfolio_id, account_id, observed_at, source_checkpoint_version, position_count, payload_json, created_at) "
+                "VALUES (%s, %s, %s, %s, %s, %s, %s, %s)",
+                (
+                    state_snapshot.state_id,
+                    state_snapshot.portfolio_id,
+                    state_snapshot.account_id,
+                    state_snapshot.observed_at,
+                    state_snapshot.source_checkpoint_version,
+                    state_snapshot.position_count,
+                    json_dumps(state_payload),
+                    stamp,
+                ),
+            )
+            reconciliation_payload = reconciliation.to_dict()
+            connection.execute(
+                "INSERT IGNORE INTO portfolio_reconciliations "
+                "(reconciliation_id, portfolio_id, account_id, balance_fingerprint, status, difference_count, "
+                "source_snapshot_at, payload_json, created_at, updated_at) "
+                "VALUES (%s, %s, %s, %s, %s, %s, %s, %s, %s, %s)",
+                (
+                    reconciliation.reconciliation_id, reconciliation.portfolio_id, reconciliation.account_id,
+                    reconciliation.balance_fingerprint, reconciliation.status,
+                    int(reconciliation_payload.get("differenceCount") or 0), reconciliation.source_snapshot_at,
+                    json_dumps(reconciliation_payload), reconciliation.created_at or stamp, stamp,
+                ),
+            )
+            connection.execute(
+                "INSERT IGNORE INTO portfolio_exposure_snapshots "
+                "(exposure_snapshot_id, portfolio_id, observed_at, over_policy_count, payload_json, created_at) "
+                "VALUES (%s, %s, %s, %s, %s, %s)",
+                (exposure.snapshot_id, exposure.portfolio_id, exposure.observed_at, len(exposure.over_policy_metrics()), json_dumps(exposure.to_dict()), stamp),
+            )
+            if rebalance_proposal:
+                connection.execute(
+                    "INSERT INTO portfolio_rebalance_proposals "
+                    "(proposal_id, portfolio_id, mandate_version, exposure_snapshot_id, status, payload_json, created_at, updated_at) "
+                    "VALUES (%s, %s, %s, %s, %s, %s, %s, %s) "
+                    "ON DUPLICATE KEY UPDATE status = VALUES(status), payload_json = VALUES(payload_json), updated_at = VALUES(updated_at)",
+                    (
+                        rebalance_proposal.proposal_id, rebalance_proposal.portfolio_id,
+                        rebalance_proposal.mandate_version, rebalance_proposal.exposure_snapshot_id,
+                        rebalance_proposal.status, json_dumps(rebalance_proposal.to_dict()),
+                        rebalance_proposal.created_at or stamp, stamp,
+                    ),
+                )
+            cycle_payload = decision_cycle.to_dict()
+            connection.execute(
+                "INSERT INTO portfolio_decision_cycles "
+                "(cycle_id, portfolio_id, account_id, policy_version, source_snapshot_id, candidate_fingerprint, "
+                "data_state, candidate_count, payload_json, created_at, updated_at) "
+                "VALUES (%s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s) "
+                "ON DUPLICATE KEY UPDATE candidate_fingerprint = VALUES(candidate_fingerprint), "
+                "data_state = VALUES(data_state), candidate_count = VALUES(candidate_count), "
+                "payload_json = VALUES(payload_json), updated_at = VALUES(updated_at)",
+                (
+                    decision_cycle.cycle_id, decision_cycle.portfolio_id, decision_cycle.account_id,
+                    decision_cycle.policy_version, decision_cycle.source_snapshot_id, decision_cycle.fingerprint,
+                    decision_cycle.data_state, len(decision_cycle.candidates), json_dumps(cycle_payload),
+                    decision_cycle.created_at or stamp, stamp,
+                ),
+            )
+            for observation in action_rows:
+                payload = observation.to_dict()
+                connection.execute(
+                    "INSERT IGNORE INTO portfolio_decision_action_observations "
+                    "(observation_id, portfolio_id, account_id, symbol, activity_episode_id, "
+                    "prior_decision_episode_id, correspondence, observed_at, payload_json, created_at) "
+                    "VALUES (%s, %s, %s, %s, %s, %s, %s, %s, %s, %s)",
+                    (
+                        observation.observation_id, observation.portfolio_id, observation.account_id,
+                        observation.symbol, observation.activity_episode_id, observation.prior_decision_episode_id,
+                        observation.correspondence, observation.observed_at, json_dumps(payload), stamp,
+                    ),
+                )
+            next_version = expected + 1
+            checkpoint_payload = {**checkpoint.to_dict(), "checkpointVersion": next_version}
+            connection.execute(
+                "INSERT INTO portfolio_snapshot_checkpoints "
+                "(portfolio_id, account_id, account_fingerprint, observed_at, balance_fingerprint, checkpoint_version, "
+                "position_count, status, payload_json, created_at, updated_at) "
+                "VALUES (%s, %s, %s, %s, %s, %s, %s, 'accepted', %s, %s, %s) "
+                "ON DUPLICATE KEY UPDATE account_id = VALUES(account_id), account_fingerprint = VALUES(account_fingerprint), "
+                "observed_at = VALUES(observed_at), balance_fingerprint = VALUES(balance_fingerprint), "
+                "checkpoint_version = VALUES(checkpoint_version), position_count = VALUES(position_count), "
+                "status = 'accepted', payload_json = VALUES(payload_json), updated_at = VALUES(updated_at)",
+                (
+                    checkpoint.portfolio_id, checkpoint.account_id, checkpoint.account_fingerprint,
+                    checkpoint.observed_at, checkpoint.balance_fingerprint, next_version,
+                    checkpoint.position_count, json_dumps(checkpoint_payload), stamp, stamp,
+                ),
+            )
+            if domain_event:
+                insert_domain_event_with_connection(connection, domain_event)
+            if reasoning_event:
+                insert_domain_event_with_connection(connection, reasoning_event)
+                from .mysql_reasoning_mailbox import MySQLOntologyReasoningMailboxStore
+
+                MySQLOntologyReasoningMailboxStore.ingress_event_with_connection(connection, reasoning_event)
+            queued = bool(notification_store.enqueue_with_connection(connection, notification_job)) if notification_store and notification_job else False
+            return {
+                "status": "committed",
+                "expectedCheckpointVersion": expected,
+                "actualCheckpointVersion": next_version,
+                "insertedCount": inserted,
+                "notificationQueued": queued,
+            }
+
+        return self.transaction_with_deadlock_retry("portfolio-snapshot-observation", commit)
 
     def ledger_entries(self, portfolio_id: str, limit: int = 10000) -> List[PortfolioLedgerEntry]:
         with self.connect() as connection:
@@ -333,13 +624,46 @@ class MySQLInvestmentDomainStore(MySQLOperationalConnection):
                 "ORDER BY created_at DESC, cycle_id DESC LIMIT 1",
                 (portfolio_key,),
             ).fetchone()
+            checkpoint = connection.execute(
+                "SELECT payload_json FROM portfolio_snapshot_checkpoints WHERE portfolio_id = %s",
+                (portfolio_key,),
+            ).fetchone()
+            episodes = connection.execute(
+                "SELECT payload_json FROM portfolio_activity_episodes WHERE portfolio_id = %s "
+                "ORDER BY observed_at DESC, episode_id DESC LIMIT 8",
+                (portfolio_key,),
+            ).fetchall()
+            state = connection.execute(
+                "SELECT payload_json FROM portfolio_state_snapshots WHERE portfolio_id = %s "
+                "ORDER BY observed_at DESC, state_id DESC LIMIT 1",
+                (portfolio_key,),
+            ).fetchone()
+            action_observations = connection.execute(
+                "SELECT payload_json FROM portfolio_decision_action_observations WHERE portfolio_id = %s "
+                "ORDER BY observed_at DESC, observation_id DESC LIMIT 8",
+                (portfolio_key,),
+            ).fetchall()
+            quarantines = connection.execute(
+                "SELECT payload_json FROM portfolio_snapshot_quarantines WHERE portfolio_id = %s "
+                "ORDER BY observed_at DESC, quarantine_id DESC LIMIT 8",
+                (portfolio_key,),
+            ).fetchall()
         return {
             "portfolioId": portfolio_key,
+            "snapshotCheckpoint": _json_loads(checkpoint.get("payload_json"), {}) if checkpoint else {},
             "reconciliation": _json_loads(reconciliation.get("payload_json"), {}) if reconciliation else {},
             "recentInferredActivities": [
                 activity_payload(ledger_entry_from_payload(payload))
                 for payload in [_json_loads(item.get("payload_json"), {}) for item in inferred_rows or []]
                 if payload
+            ],
+            "recentActivityEpisodes": [_json_loads(item.get("payload_json"), {}) for item in episodes or []],
+            "portfolioState": _json_loads(state.get("payload_json"), {}) if state else {},
+            "decisionActionObservations": [
+                _json_loads(item.get("payload_json"), {}) for item in action_observations or []
+            ],
+            "recentSnapshotQuarantines": [
+                _json_loads(item.get("payload_json"), {}) for item in quarantines or []
             ],
             "portfolioDecisionCycle": _json_loads(decision_cycle.get("payload_json"), {}) if decision_cycle else {},
         }
@@ -391,6 +715,30 @@ class MySQLInvestmentDomainStore(MySQLOperationalConnection):
                 "MAX(occurred_at) AS last_entry_at FROM portfolio_ledger_entries WHERE portfolio_id = %s",
                 (portfolio_key,),
             ).fetchone() or {}
+            checkpoint = connection.execute(
+                "SELECT payload_json FROM portfolio_snapshot_checkpoints WHERE portfolio_id = %s",
+                (portfolio_key,),
+            ).fetchone()
+            activity_episodes = connection.execute(
+                "SELECT payload_json FROM portfolio_activity_episodes WHERE portfolio_id = %s "
+                "ORDER BY observed_at DESC, episode_id DESC LIMIT 20",
+                (portfolio_key,),
+            ).fetchall()
+            state_snapshot = connection.execute(
+                "SELECT payload_json FROM portfolio_state_snapshots WHERE portfolio_id = %s "
+                "ORDER BY observed_at DESC, state_id DESC LIMIT 1",
+                (portfolio_key,),
+            ).fetchone()
+            action_observations = connection.execute(
+                "SELECT payload_json FROM portfolio_decision_action_observations WHERE portfolio_id = %s "
+                "ORDER BY observed_at DESC, observation_id DESC LIMIT 20",
+                (portfolio_key,),
+            ).fetchall()
+            snapshot_quarantines = connection.execute(
+                "SELECT payload_json FROM portfolio_snapshot_quarantines WHERE portfolio_id = %s "
+                "ORDER BY observed_at DESC, quarantine_id DESC LIMIT 20",
+                (portfolio_key,),
+            ).fetchall()
             plan_ids = [str(item.get("plan_id") or "") for item in plans or [] if str(item.get("plan_id") or "")]
             plan_reviews = []
             if plan_ids:
@@ -417,6 +765,7 @@ class MySQLInvestmentDomainStore(MySQLOperationalConnection):
             "status": "ready" if any([mandate, reconciliation, exposure, rebalance, plans, ledger_rows]) else "unavailable",
             "portfolioId": portfolio_key,
             "mandate": mandate,
+            "snapshotCheckpoint": _json_loads(checkpoint.get("payload_json"), {}) if checkpoint else {},
             "reconciliation": _json_loads(reconciliation.get("payload_json"), {}) if reconciliation else {},
             "exposureSnapshot": _json_loads(exposure.get("payload_json"), {}) if exposure else {},
             "rebalanceProposal": _json_loads(rebalance.get("payload_json"), {}) if rebalance else {},
@@ -432,6 +781,16 @@ class MySQLInvestmentDomainStore(MySQLOperationalConnection):
                 activity_payload(ledger_entry_from_payload(payload))
                 for payload in [_json_loads(item.get("payload_json"), {}) for item in inferred_rows or []]
                 if payload
+            ],
+            "recentActivityEpisodes": [
+                _json_loads(item.get("payload_json"), {}) for item in activity_episodes or []
+            ],
+            "portfolioState": _json_loads(state_snapshot.get("payload_json"), {}) if state_snapshot else {},
+            "decisionActionObservations": [
+                _json_loads(item.get("payload_json"), {}) for item in action_observations or []
+            ],
+            "recentSnapshotQuarantines": [
+                _json_loads(item.get("payload_json"), {}) for item in snapshot_quarantines or []
             ],
             "actionPlans": [_json_loads(item.get("payload_json"), {}) for item in plans or []],
             "actionPlanReviews": [_json_loads(item.get("payload_json"), {}) for item in plan_reviews or []],

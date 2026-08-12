@@ -33,6 +33,7 @@ TRIGGER_ORDER = {
     "research-evidence-update": 2,
     "news-analysis-enrichment": 2,
     "portfolio-snapshot-update": 2,
+    "portfolio-activity": 6,
     "data-update": 1,
 }
 
@@ -100,6 +101,9 @@ PORTFOLIO_FACT_TYPES = {
     "PortfolioSnapshot",
     "Position",
     "Account",
+    "PortfolioActivityEpisode",
+    "PortfolioStateSnapshot",
+    "DecisionActionObservation",
 }
 
 MARKET_FACT_TYPES = {
@@ -513,6 +517,8 @@ def event_reasoning_priority(event: object) -> str:
     if review_level == "immediate":
         return "critical"
     if trigger == "investment-calendar-update":
+        return "urgent"
+    if trigger == "portfolio-activity":
         return "urgent"
     if trigger == "research-evidence-lifecycle":
         transitions = {

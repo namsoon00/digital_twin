@@ -479,6 +479,7 @@ class SharedOntologyQualityRecordCoordinator:
 
 
 SHARED_PORTFOLIO_GRAPH_ASSEMBLY_CACHE = SharedPortfolioGraphAssemblyCache()
+PORTFOLIO_GRAPH_ASSEMBLY_CACHE_CONTRACT_VERSION = "portfolio-graph-assembly-cache-v5"
 SHARED_ONTOLOGY_QUALITY_RECORD_COORDINATOR = SharedOntologyQualityRecordCoordinator()
 
 
@@ -2684,7 +2685,10 @@ class PortfolioOntologyProjectionRecorder:
             metadata.pop("investmentBrain", None)
         source_snapshot["metadata"] = metadata
         payload = {
-            "version": "portfolio-graph-assembly-cache-v4",
+            # Bump this contract whenever graph-builder behavior changes. The
+            # durable cache can outlive a worker restart, so source equality
+            # alone is not enough to prove a cached graph is reusable.
+            "version": PORTFOLIO_GRAPH_ASSEMBLY_CACHE_CONTRACT_VERSION,
             "namespace": self.graph_assembly_cache_namespace(),
             "sourceSnapshot": stable_value(source_snapshot),
             "settings": stable_value(self.settings),

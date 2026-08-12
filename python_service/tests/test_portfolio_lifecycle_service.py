@@ -30,6 +30,7 @@ from digital_twin.domain.portfolio_ledger import (
 )
 from digital_twin.domain.portfolio_ontology_builder import build_portfolio_ontology
 from digital_twin.domain.ontology_rulebox_catalog import default_graph_inference_rules
+from digital_twin.domain.ontology_validator import validate_ontology
 from digital_twin.domain.notifications import NotificationJob
 from digital_twin.domain.trade_execution import ActionEnvelope, ActionPlan, OrderIntent
 from digital_twin.infrastructure.mysql_operational_connection import MYSQL_SCHEMA
@@ -647,6 +648,55 @@ class PortfolioLifecycleServiceTests(unittest.TestCase):
         candidates = [item for item in graph.entities if (item.properties or {}).get("tboxClass") == "PortfolioActionCandidate"]
         self.assertTrue(candidates)
         self.assertTrue(all((item.properties or {}).get("executable") is False for item in candidates))
+
+    def test_target_scoped_lifecycle_omits_relations_to_out_of_scope_stocks(self):
+        snapshot = live_snapshot()
+        lifecycle = {
+            "recentInferredActivities": [
+                {
+                    "entryId": "activity:outside",
+                    "symbol": "028260",
+                    "classification": "position-increase",
+                }
+            ],
+            "recentActivityEpisodes": [
+                {
+                    "episodeId": "episode:outside",
+                    "symbols": ["028260"],
+                    "ledgerEntryIds": ["activity:outside"],
+                    "classification": "probable-buy",
+                }
+            ],
+            "portfolioState": {
+                "stateId": "state:latest",
+                "positions": [{"symbol": "028260", "increaseCount20d": 2}],
+            },
+            "decisionActionObservations": [
+                {
+                    "observationId": "observation:outside",
+                    "symbol": "028260",
+                    "priorDecisionEpisodeId": "decision-episode:outside",
+                }
+            ],
+        }
+
+        graph = build_portfolio_ontology(
+            snapshot.positions,
+            snapshot.portfolio,
+            portfolio_id=snapshot.account_id,
+            runtime_context={
+                "account": {"accountId": snapshot.account_id},
+                "portfolioLifecycle": lifecycle,
+            },
+            include_tbox=False,
+            include_presentation=False,
+        )
+
+        self.assertEqual("valid", validate_ontology(graph).status)
+        self.assertFalse(any(
+            item.source == "stock:028260" or item.target == "stock:028260"
+            for item in graph.relations
+        ))
 
     def test_lifecycle_storage_tables_are_declared(self):
         schema = "\n".join(MYSQL_SCHEMA)

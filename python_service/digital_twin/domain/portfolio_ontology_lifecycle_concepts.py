@@ -11,6 +11,11 @@ def add_portfolio_lifecycle_concepts(graph, portfolio_node_id: str, runtime_cont
     lifecycle = runtime_context.get("portfolioLifecycle") if isinstance(runtime_context, dict) else {}
     if not isinstance(lifecycle, dict) or not lifecycle:
         return
+    existing_entity_ids = {item.entity_id for item in graph.entities}
+
+    def available_stock_id(symbol: object) -> str:
+        stock_id = entity_id("stock", str(symbol or "").upper().strip())
+        return stock_id if stock_id in existing_entity_ids else ""
 
     reconciliation = lifecycle.get("reconciliation") if isinstance(lifecycle.get("reconciliation"), dict) else {}
     if reconciliation:
@@ -34,6 +39,10 @@ def add_portfolio_lifecycle_concepts(graph, portfolio_node_id: str, runtime_cont
     activity_ids = {}
     for activity in activities[:20] if isinstance(activities, list) else []:
         if not isinstance(activity, dict):
+            continue
+        symbol = str(activity.get("symbol") or "").upper().strip()
+        stock_id = available_stock_id(symbol) if symbol else ""
+        if symbol and not stock_id:
             continue
         activity_id = add_entity(
             graph,
@@ -61,9 +70,8 @@ def add_portfolio_lifecycle_concepts(graph, portfolio_node_id: str, runtime_cont
         )
         add_relation(graph, portfolio_node_id, activity_id, "RECORDS_PORTFOLIO_ACTIVITY", properties={"source": "portfolio-lifecycle-store"})
         add_relation(graph, activity_id, portfolio_node_id, "INFERRED_FROM_SNAPSHOT_CHANGE", properties={"source": "complete-account-snapshot-difference"})
-        symbol = str(activity.get("symbol") or "").upper().strip()
-        if symbol:
-            add_relation(graph, entity_id("stock", symbol), activity_id, "HAS_PORTFOLIO_ACTIVITY", properties={
+        if stock_id:
+            add_relation(graph, stock_id, activity_id, "HAS_PORTFOLIO_ACTIVITY", properties={
                 "source": "complete-account-snapshot-difference",
                 "classification": activity.get("classification"),
                 "confidence": activity.get("confidence"),
@@ -75,6 +83,13 @@ def add_portfolio_lifecycle_concepts(graph, portfolio_node_id: str, runtime_cont
     )
     for episode in episodes[:8] if isinstance(episodes, list) else []:
         if not isinstance(episode, dict):
+            continue
+        scoped_symbols = [
+            str(symbol or "").upper().strip()
+            for symbol in episode.get("symbols") or []
+            if available_stock_id(symbol)
+        ]
+        if episode.get("symbols") and not scoped_symbols:
             continue
         episode_id = add_entity(
             graph,
@@ -99,8 +114,8 @@ def add_portfolio_lifecycle_concepts(graph, portfolio_node_id: str, runtime_cont
         for entry_id in episode.get("ledgerEntryIds") or []:
             if activity_ids.get(str(entry_id)):
                 add_relation(graph, episode_id, activity_ids[str(entry_id)], "GROUPS_LEDGER_ACTIVITY", properties={"source": "portfolio-activity-episode-store"})
-        for symbol in episode.get("symbols") or []:
-            add_relation(graph, entity_id("stock", str(symbol).upper()), episode_id, "HAS_PORTFOLIO_ACTIVITY", properties={
+        for symbol in scoped_symbols:
+            add_relation(graph, available_stock_id(symbol), episode_id, "HAS_PORTFOLIO_ACTIVITY", properties={
                 "source": "portfolio-activity-episode-store",
                 "classification": episode.get("classification"),
                 "confidence": episode.get("confidence"),
@@ -111,6 +126,9 @@ def add_portfolio_lifecycle_concepts(graph, portfolio_node_id: str, runtime_cont
         if not isinstance(item, dict) or not str(item.get("symbol") or "").strip():
             continue
         symbol = str(item.get("symbol") or "").upper().strip()
+        stock_id = available_stock_id(symbol)
+        if not stock_id:
+            continue
         state_id = add_entity(
             graph,
             "portfolio-state",
@@ -126,12 +144,15 @@ def add_portfolio_lifecycle_concepts(graph, portfolio_node_id: str, runtime_cont
                 "source": "portfolio-state-store",
             },
         )
-        add_relation(graph, entity_id("stock", symbol), state_id, "HAS_PORTFOLIO_STATE", properties={"source": "portfolio-state-store"})
+        add_relation(graph, stock_id, state_id, "HAS_PORTFOLIO_STATE", properties={"source": "portfolio-state-store"})
 
     for observation in (lifecycle.get("decisionActionObservations") or [])[:8]:
         if not isinstance(observation, dict) or not str(observation.get("symbol") or "").strip():
             continue
         symbol = str(observation.get("symbol") or "").upper().strip()
+        stock_id = available_stock_id(symbol)
+        if not stock_id:
+            continue
         observation_id = add_entity(
             graph,
             "decision-action-observation",
@@ -144,10 +165,11 @@ def add_portfolio_lifecycle_concepts(graph, portfolio_node_id: str, runtime_cont
                 "source": "decision-action-observation-store",
             },
         )
-        add_relation(graph, entity_id("stock", symbol), observation_id, "OBSERVES_ACCOUNT_ACTION", properties={"source": "decision-action-observation-store"})
+        add_relation(graph, stock_id, observation_id, "OBSERVES_ACCOUNT_ACTION", properties={"source": "decision-action-observation-store"})
         prior_id = str(observation.get("priorDecisionEpisodeId") or "")
-        if prior_id:
-            add_relation(graph, observation_id, entity_id("decision-episode", prior_id), "OBSERVED_AFTER_DECISION", properties={"causalityClaimed": False})
+        prior_entity_id = entity_id("decision-episode", prior_id) if prior_id else ""
+        if prior_entity_id in existing_entity_ids:
+            add_relation(graph, observation_id, prior_entity_id, "OBSERVED_AFTER_DECISION", properties={"causalityClaimed": False})
 
     cycle = lifecycle.get("portfolioDecisionCycle") if isinstance(lifecycle.get("portfolioDecisionCycle"), dict) else {}
     if not cycle:

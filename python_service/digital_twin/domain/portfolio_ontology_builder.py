@@ -186,7 +186,6 @@ def build_portfolio_ontology(
             properties=abox_properties(),
         ))
     add_market_exposure_concepts(graph, portfolio_node_id, portfolio)
-    add_portfolio_lifecycle_concepts(graph, portfolio_node_id, runtime_context)
     add_portfolio_factor_exposure_concepts(
         graph,
         portfolio_node_id,
@@ -397,6 +396,9 @@ def build_portfolio_ontology(
         lifecycle_rows,
         max(1, min(100, hypothesis_outcome_minimum_samples)),
     )
+    # Lifecycle relations can only target stock and decision entities that
+    # belong to this full or target-scoped ABox generation.
+    add_portfolio_lifecycle_concepts(graph, portfolio_node_id, runtime_context)
     add_coverage_gap_concepts(graph, observed_positions, portfolio_id)
     graph.entities = dedupe_entities(graph.entities)
     graph.relations = dedupe_relations(graph.relations)

@@ -467,6 +467,28 @@ class TypeDBServiceManagerTests(unittest.TestCase):
             self.assertTrue((retired / "old").exists())
             self.assertTrue(marker_payload["blueGreenCutoverPending"])
 
+    def test_blue_green_retired_path_uses_cutover_time_for_retention(self):
+        with tempfile.TemporaryDirectory() as temp:
+            root = Path(temp)
+            active = root / "typedb-data"
+            retired = root / "typedb-data-retired-1900"
+            retired.mkdir()
+            os.utime(retired, (100, 100))
+            spec = {
+                "dataPath": active,
+                "blueGreenRetiredRetentionMinutes": "2",
+            }
+
+            with patch.object(service_manager.time, "time", return_value=2000):
+                retained = service_manager.prune_retired_typedb_data_paths(spec)
+            self.assertEqual([], retained)
+            self.assertTrue(retired.exists())
+
+            with patch.object(service_manager.time, "time", return_value=3000):
+                removed = service_manager.prune_retired_typedb_data_paths(spec)
+            self.assertEqual([str(retired)], removed)
+            self.assertFalse(retired.exists())
+
     def test_blue_green_rollback_restores_the_retired_store(self):
         with tempfile.TemporaryDirectory() as temp:
             root = Path(temp)

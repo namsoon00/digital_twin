@@ -2192,6 +2192,11 @@ def swap_typedb_blue_green_data_paths(spec: Dict[str, object], candidate: Dict[s
         return {"status": "candidate-missing"}
     if active_path.exists():
         os.replace(active_path, retired_path)
+        # ``os.replace`` preserves the old directory mtime. Using that stale
+        # timestamp for retention can delete the rollback store immediately
+        # after a successful cutover. Stamp the retirement boundary now; the
+        # epoch in the path remains the durable fallback when mtime changes.
+        os.utime(retired_path, None)
     try:
         os.replace(candidate_path, active_path)
     except Exception:
@@ -2246,7 +2251,16 @@ def prune_retired_typedb_data_paths(spec: Dict[str, object]) -> List[str]:
     removed = []
     for path in active_path.parent.glob(active_path.name + "-retired-*"):
         try:
-            if path.stat().st_mtime <= cutoff:
+            suffix = path.name.rsplit("-retired-", 1)[-1]
+            try:
+                retired_at = float(int(suffix))
+            except (TypeError, ValueError):
+                retired_at = 0.0
+            # Prefer the later trustworthy boundary. Existing directories may
+            # have a legacy suffix but a corrected mtime, while newly swapped
+            # paths carry both the cutover epoch and the explicit stamp.
+            retention_boundary = max(float(path.stat().st_mtime), retired_at)
+            if retention_boundary <= cutoff:
                 shutil.rmtree(path)
                 removed.append(str(path))
         except OSError:

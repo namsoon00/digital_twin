@@ -428,14 +428,16 @@ def decision_transition_presentation(context: Dict[str, object], current_action:
     """
 
     context = context if isinstance(context, dict) else {}
-    transition = decision_transition_from_context(context)
+    graph_transition = decision_transition_from_context(context)
+    ai_transition = ai_decision_transition_from_context(context)
+    transition = ai_transition or graph_transition
     if not transition:
         return {}
     kind = str(transition.get("kind") or "").strip().lower()
     previous_action = str(transition.get("previousAction") or "").strip().upper()
     next_action = _transition_action(context, transition, current_action)
-    previous_status = _normalized_action_envelope_status(transition.get("previousStatus"))
-    current_status = _normalized_action_envelope_status(action_envelope_status_from_transition(transition))
+    previous_status = _normalized_action_envelope_status(graph_transition.get("previousStatus"))
+    current_status = _normalized_action_envelope_status(action_envelope_status_from_transition(graph_transition))
     watchlist = is_watchlist_context(context)
 
     if previous_action and next_action and previous_action != next_action:
@@ -501,6 +503,15 @@ def decision_transition_presentation(context: Dict[str, object], current_action:
             "label": "보유 판단 변경",
             "summary": change + " 자동 주문이 아니라 현재 보유 판단을 다시 확인하라는 뜻입니다.",
         }
+
+    if ai_transition and watchlist and next_action == "HOLD":
+        graph_current_action = str(graph_transition.get("currentAction") or "").strip().upper()
+        if graph_current_action in {"BUY", "ADD"}:
+            return {
+                "category": "entry-candidate-held",
+                "label": "진입 후보 추가 확인",
+                "summary": "관계 분석에서 진입 후보가 생겼지만 최종 판단은 관심 유지입니다. 확인 조건이 채워질 때까지 새로 사지 않습니다.",
+            }
 
     if kind == "action-changed":
         status_presentation = _watchlist_status_transition_presentation(next_action, current_status, previous_status, context) if watchlist else {}
@@ -2197,6 +2208,38 @@ def company_valuation_presentation(context: Dict[str, object]) -> Dict[str, obje
     )
     analyst_opinion_count = int(_number(facts.get("valuationAnalystOpinionCount") or target_reference.get("analystOpinionCount")))
     current_price = _number(facts.get("currentPrice") or facts.get("valuationCurrentPrice"))
+    pe_ratio = _number(metrics.get("peRatio"))
+    pbr = _number(metrics.get("pbr"))
+    market_comparison_parts: List[str] = []
+    if current_price:
+        market_comparison_parts.append(_valuation_price_display(current_price, currency))
+    if pe_ratio > 0:
+        market_comparison_parts.append("연간 이익의 " + _compact_decimal(pe_ratio, 2) + "배(PER)")
+        market_comparison_parts.append("이익수익률 " + _compact_decimal(100.0 / pe_ratio, 1) + "%")
+    if pbr > 0:
+        market_comparison_parts.append("순자산의 " + _compact_decimal(pbr, 2) + "배(PBR)")
+
+    fair_value = _number(facts.get("valuationFairValue") or facts.get("valuationFairValuePrice"))
+    fair_value_low = _number(facts.get("valuationFairValueLow"))
+    fair_value_high = _number(facts.get("valuationFairValueHigh"))
+    decision_eligible = bool(facts.get("valuationDecisionEligible"))
+    verified_comparison_parts: List[str] = []
+    if decision_eligible and current_price and fair_value:
+        verified_comparison_parts.extend([
+            "적정가 " + _valuation_price_display(fair_value, currency),
+            "현재가 대비 산식 차이 " + signed_pct(((fair_value / current_price) - 1.0) * 100.0),
+        ])
+        if fair_value_low and fair_value_high:
+            verified_comparison_parts.append(
+                "검증 범위 "
+                + _valuation_price_display(fair_value_low, currency)
+                + "~"
+                + _valuation_price_display(fair_value_high, currency)
+            )
+    else:
+        verified_comparison_parts.append("검증 완료된 적정가 없음")
+        if bool(facts.get("valuationIsAiGenerated")) or str(facts.get("valuationSourceType") or "").strip().lower() == "ai":
+            verified_comparison_parts.append("AI 초안은 검토 전이라 제외")
     target_parts: List[str] = []
     if analyst_target:
         target_parts.append("평균 " + _valuation_price_display(analyst_target, currency))
@@ -2239,6 +2282,8 @@ def company_valuation_presentation(context: Dict[str, object]) -> Dict[str, obje
     )
     return {
         "title": "회사 가치",
+        "marketComparison": " · ".join(market_comparison_parts),
+        "verifiedComparison": " · ".join(verified_comparison_parts),
         "earnings": " · ".join(earnings_parts),
         "quality": " · ".join(quality_parts),
         "shareholder": " · ".join(shareholder_parts),
@@ -2257,6 +2302,8 @@ def company_valuation_rows(context: Dict[str, object], level: str, compact: bool
     if not presentation or not any(presentation.get(key) for key in ("earnings", "quality", "shareholder")):
         return []
     rows = [
+        _html_row("현재 주가 비교", presentation.get("marketComparison"), level=level, max_len=260),
+        _html_row("검증 적정가 비교", presentation.get("verifiedComparison"), level=level, max_len=300),
         _html_row("이익 기준", presentation.get("earnings"), level=level, max_len=220),
         _html_row("자산·수익성", presentation.get("quality"), level=level, max_len=180),
         _html_row("주주환원", presentation.get("shareholder"), level=level, max_len=120),
@@ -3068,9 +3115,9 @@ def compact_action_reason_rows(
     rows: List[str] = []
     if response.precomputed_action and response.precomputed_action != response.action:
         adjustment = (
-            "관계 분석 후보는 "
+            "관계 분석에서는 "
             + action_label_for_action(response.precomputed_action, context)
-            + "였지만 AI 최종 판단은 "
+            + " 후보가 성립했지만 최종 행동은 "
             + action_label_for_action(response.action, context)
             + "입니다."
         )

@@ -517,6 +517,13 @@ def grounded_inference_context(
                     target_properties.setdefault("observationRelationType", relation.relation_type)
                     observed_value = evidence_observed_value(target, condition)
                     item.update(observation_metadata(target_properties or {}, observed_value))
+                    matched_properties = {
+                        str(key): target_properties.get(str(key))
+                        for key in (getattr(condition, "target_property_filters", {}) or {}).keys()
+                        if target_properties.get(str(key)) not in (None, "")
+                    }
+                    if matched_properties:
+                        item["matchedTargetProperties"] = matched_properties
                     item["relationType"] = relation.relation_type
                     item["targetId"] = relation.target if relation.source == stock.entity_id else relation.source
                     item["targetKind"] = target.kind if target else ""

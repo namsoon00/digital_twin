@@ -508,6 +508,7 @@ class BeginnerRelationLanguageTests(unittest.TestCase):
                     "valuationFairValue": 99000,
                     "valuationMarginOfSafetyPct": 23.75,
                     "valuationMinimumMarginOfSafetyPct": 20,
+                    "valuationDecisionEligible": True,
                     "valuationSourceLabel": "사용자 입력",
                     "valuationReliabilityLabel": "사용자 가정",
                     "valuationDataState": "sufficient",
@@ -555,11 +556,16 @@ class BeginnerRelationLanguageTests(unittest.TestCase):
         self.assertIn("KIS Open API·OpenDART", message)
         self.assertIn("판단에 사용", message)
         self.assertIn("판단 원리", message)
+        self.assertIn("현재 주가 비교", message)
+        self.assertIn("연간 이익의 14.2배(PER)", message)
+        self.assertIn("이익수익률 7%", message)
+        self.assertIn("검증 적정가 비교", message)
+        self.assertIn("현재가 대비 산식 차이 +23.8%", message)
         self.assertIn("기준 시각", message)
         self.assertIn("자동 재확인", message)
         self.assertIn("사용자 입력 불필요", message)
         self.assertNotIn("<b>밸류에이션</b>", message)
-        self.assertNotIn("99,000원", message)
+        self.assertIn("99,000원", message)
         self.assertIn("자료 상태", message)
         self.assertIn("사용자 적정가 기준 안전마진", message)
         self.assertNotIn("대입값", message)
@@ -609,6 +615,9 @@ class BeginnerRelationLanguageTests(unittest.TestCase):
         self.assertIn("현재가 대비 +20.0%", message)
         self.assertIn("범위 $90~$140", message)
         self.assertIn("표본 12명", message)
+        self.assertIn("현재 주가 비교", message)
+        self.assertIn("$100", message)
+        self.assertIn("검증 완료된 적정가 없음", message)
         self.assertIn("참고만 사용 · 회사·시장 가치 규칙 미성립", message)
         self.assertNotIn("TypeDB 회사·시장 가치 규칙 1개 성립", message)
 

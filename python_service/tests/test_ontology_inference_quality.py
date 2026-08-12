@@ -114,6 +114,7 @@ class OntologyInferenceQualityTests(unittest.TestCase):
         conditions = {item["conditionId"]: item for item in trace.properties["matchedConditions"]}
         self.assertEqual(-12.5, conditions["holding-loss"]["observedValue"])
         self.assertEqual("relation:ma20", conditions["ma-break"]["relationId"])
+        self.assertEqual({"levelType": "ma20"}, conditions["ma-break"]["matchedTargetProperties"])
         self.assertEqual("fresh", conditions["ma-break"]["freshnessStatus"])
         self.assertEqual("sufficient", trace.properties["dataState"])
         self.assertEqual("typedb-match+abox-grounding", trace.properties["conditionDetailSource"])
@@ -268,6 +269,31 @@ class OntologyInferenceQualityTests(unittest.TestCase):
         self.assertEqual("risk", state["evidenceRole"])
         self.assertFalse(state["evidenceUsableForJudgement"])
         self.assertIn("원천 가격 기준시각", state["freshnessGateReason"])
+
+    def test_rule_data_state_ignores_unrelated_global_missing_data(self):
+        state = inference_evidence_state(
+            {
+                "type": "HAS_INFERRED_ENTRY_OPPORTUNITY",
+                "ruleId": "graph.watchlist.temporal.recovery_entry.v1",
+                "decisionEffect": "support",
+                "evidenceRole": "support",
+            },
+            {
+                "missingData": [
+                    {"key": "valuation-growth", "label": "매출 성장률"},
+                    {"key": "valuation-peer-per", "label": "피어 PER"},
+                ],
+            },
+            {
+                "dataState": "sufficient",
+                "evidenceUsableForJudgement": True,
+                "freshnessStatus": "fresh",
+                "matchedConditions": [{"conditionId": "temporal-recovery", "observedValue": 4.75}],
+            },
+        )
+
+        self.assertEqual("sufficient", state["dataState"])
+        self.assertFalse(state["judgementBlocked"])
 
     def test_material_fingerprint_ignores_poll_time_but_changes_with_price(self):
         position = normalize_position({

@@ -547,7 +547,7 @@ def matches_from_inference(
             evidence_role=role,
             decision_effect=decision_effect,
             evidence=evidence,
-            missing=list((facts or {}).get("missingData") or []),
+            missing=list(trace.get("missingData") or []),
             reference_only=bool(evidence_state.get("judgementBlocked")),
             prompt_hint=inference_prompt_hint(source_name, "relation"),
             evidence_state=evidence_state,
@@ -712,13 +712,16 @@ def inference_evidence_state(
         usable = relation.get("evidenceUsableForJudgement")
     if usable is None:
         usable = True
-    missing = list(facts.get("missingData") or [])
-    data_state = data_state_from_evidence(
-        usable=usable,
-        freshness_status=freshness,
-        missing=missing,
-        has_evidence=bool(matched_conditions or trace.get("evidenceRelationIds") or relation.get("ruleId")),
-    )
+    trace_data_state = str(trace.get("dataState") or "").strip().lower()
+    if trace_data_state in DATA_STATE_LABELS:
+        data_state = trace_data_state
+    else:
+        data_state = data_state_from_evidence(
+            usable=usable,
+            freshness_status=freshness,
+            missing=trace.get("missingData") or [],
+            has_evidence=bool(matched_conditions or trace.get("evidenceRelationIds") or relation.get("ruleId")),
+        )
     role = evidence_role_from_relation(relation)
     drivers = unique_texts([
         relation.get("aiInfluenceLabel"),

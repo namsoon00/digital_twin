@@ -195,7 +195,7 @@ class ActionEnvelopeAiGateTests(unittest.TestCase):
 
         message = execution_telegram_message(context, response)
 
-        self.assertIn("관계 분석 후보는 소액 진입 검토였지만 AI 최종 판단은 관심 유지입니다.", message)
+        self.assertIn("관계 분석에서는 소액 진입 검토 후보가 성립했지만 최종 행동은 관심 유지입니다.", message)
         self.assertIn("거래량 확인이 부족해 진입 후보를 바로 실행하지 않습니다.", message)
 
     def test_local_response_explains_entry_envelope_without_engine_terms(self):
@@ -571,6 +571,46 @@ class ActionEnvelopeAiGateTests(unittest.TestCase):
         })
 
         self.assertEqual("소액 진입 검토 시작", notification_topline_change_summary(context))
+
+    def test_topline_uses_final_ai_transition_when_graph_candidate_moves_to_buy(self):
+        context = entry_context()
+        context.update({
+            "decisionTransition": {
+                "kind": "action-changed",
+                "previousAction": "HOLD",
+                "currentAction": "BUY",
+                "previousStatus": "ENTRY_OBSERVING",
+                "currentStatus": "ENTRY_ELIGIBLE",
+            },
+            "aiDecisionTransition": {
+                "kind": "action-changed",
+                "historyAvailable": True,
+                "previousAction": "BUY",
+                "currentAction": "HOLD",
+            },
+        })
+
+        self.assertEqual("신규 매수 보류", notification_topline_change_summary(context))
+
+    def test_topline_marks_graph_buy_candidate_as_pending_when_ai_holds(self):
+        context = entry_context()
+        context.update({
+            "decisionTransition": {
+                "kind": "action-changed",
+                "previousAction": "HOLD",
+                "currentAction": "BUY",
+                "previousStatus": "ENTRY_OBSERVING",
+                "currentStatus": "ENTRY_ELIGIBLE",
+            },
+            "aiDecisionTransition": {
+                "kind": "unchanged",
+                "historyAvailable": True,
+                "previousAction": "HOLD",
+                "currentAction": "HOLD",
+            },
+        })
+
+        self.assertEqual("진입 후보 추가 확인", notification_topline_change_summary(context))
 
     def test_compact_message_hides_stale_or_unlinked_news_impact(self):
         context = entry_context()

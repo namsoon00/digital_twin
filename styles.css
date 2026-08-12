@@ -30500,3 +30500,195 @@ body.oa-overlay-open {
     grid-template-columns: repeat(4, minmax(0, 1fr));
   }
 }
+
+/* Hypothesis development keeps proposal lineage, validation gates, and deployment approval visible together. */
+.hypothesis-development-panel {
+  display: grid;
+  gap: 18px;
+}
+
+.hypothesis-development-summary {
+  display: grid;
+  grid-template-columns: repeat(4, minmax(0, 1fr));
+  gap: 10px;
+}
+
+.hypothesis-development-layout {
+  display: grid;
+  grid-template-columns: minmax(230px, 0.72fr) minmax(0, 1.8fr);
+  gap: 14px;
+  align-items: start;
+}
+
+.hypothesis-development-list,
+.hypothesis-development-gates {
+  display: grid;
+  gap: 8px;
+}
+
+.hypothesis-development-list {
+  max-height: 720px;
+  overflow: auto;
+}
+
+.hypothesis-development-case {
+  display: grid;
+  grid-template-columns: auto minmax(0, 1fr);
+  gap: 7px 9px;
+  width: 100%;
+  padding: 11px;
+  border: 1px solid var(--line);
+  border-radius: 6px;
+  color: var(--ink);
+  background: var(--surface);
+  text-align: left;
+}
+
+.hypothesis-development-case:hover,
+.hypothesis-development-case.active {
+  border-color: color-mix(in srgb, var(--blue) 58%, var(--line));
+  background: color-mix(in srgb, var(--blue) 7%, var(--surface));
+}
+
+.hypothesis-development-case strong,
+.hypothesis-development-case em,
+.hypothesis-development-case time {
+  min-width: 0;
+  overflow-wrap: anywhere;
+}
+
+.hypothesis-development-case em,
+.hypothesis-development-case time {
+  grid-column: 1 / -1;
+  color: var(--muted);
+  font-style: normal;
+}
+
+.hypothesis-development-detail {
+  display: grid;
+  gap: 14px;
+  min-width: 0;
+  padding: 16px;
+  border: 1px solid var(--line);
+  border-radius: 8px;
+  background: var(--surface);
+}
+
+.hypothesis-development-detail-head,
+.hypothesis-development-evidence {
+  display: flex;
+  justify-content: space-between;
+  gap: 12px;
+  align-items: flex-start;
+}
+
+.hypothesis-development-detail-head h3,
+.hypothesis-development-detail-head p,
+.hypothesis-development-claim {
+  margin: 0;
+}
+
+.hypothesis-development-detail-head h3 {
+  font-size: 18px;
+  line-height: 1.35;
+}
+
+.hypothesis-development-detail-head > div > span,
+.hypothesis-development-case time {
+  font-size: 12px;
+  color: var(--muted);
+}
+
+.hypothesis-development-claim {
+  padding-left: 12px;
+  border-left: 3px solid color-mix(in srgb, var(--blue) 54%, var(--line));
+  line-height: 1.6;
+}
+
+.hypothesis-development-meta {
+  display: grid;
+  grid-template-columns: repeat(2, minmax(0, 1fr));
+  gap: 8px 14px;
+}
+
+.hypothesis-development-meta span,
+.hypothesis-development-evidence span {
+  min-width: 0;
+  color: var(--muted);
+  overflow-wrap: anywhere;
+}
+
+.hypothesis-development-meta b {
+  display: block;
+  margin-bottom: 3px;
+  color: var(--ink);
+}
+
+.hypothesis-development-path {
+  display: grid;
+  gap: 6px;
+}
+
+.hypothesis-development-path span {
+  display: grid;
+  grid-template-columns: 24px minmax(0, 1fr);
+  gap: 8px;
+  align-items: start;
+  line-height: 1.45;
+}
+
+.hypothesis-development-path b {
+  display: grid;
+  place-items: center;
+  width: 22px;
+  height: 22px;
+  border: 1px solid var(--line);
+  border-radius: 50%;
+  font-size: 11px;
+}
+
+.hypothesis-development-evidence {
+  justify-content: flex-start;
+  flex-wrap: wrap;
+}
+
+.hypothesis-development-gate {
+  display: grid;
+  grid-template-columns: auto minmax(130px, 0.42fr) minmax(0, 1fr);
+  gap: 8px 12px;
+  align-items: center;
+  padding: 9px 0;
+  border-top: 1px solid var(--line);
+}
+
+.hypothesis-development-gate em {
+  color: var(--muted);
+  font-style: normal;
+  line-height: 1.45;
+  overflow-wrap: anywhere;
+}
+
+@media (max-width: 900px) {
+  .hypothesis-development-layout {
+    grid-template-columns: 1fr;
+  }
+
+  .hypothesis-development-list {
+    max-height: 260px;
+  }
+}
+
+@media (max-width: 640px) {
+  .hypothesis-development-summary,
+  .hypothesis-development-meta {
+    grid-template-columns: repeat(2, minmax(0, 1fr));
+  }
+
+  .hypothesis-development-gate {
+    grid-template-columns: auto minmax(0, 1fr);
+  }
+
+  .hypothesis-development-gate em {
+    grid-column: 1 / -1;
+  }
+}

@@ -497,6 +497,12 @@
     ontologyExperimentsLoading: false,
     ontologyExperimentsLoaded: false,
     ontologyExperimentsError: "",
+    hypothesisDevelopment: null,
+    hypothesisDevelopmentLoading: false,
+    hypothesisDevelopmentLoaded: false,
+    hypothesisDevelopmentError: "",
+    hypothesisDevelopmentAction: "",
+    activeHypothesisDevelopmentCaseId: "",
     ontologyExperimentAction: "",
     ontologyExperimentRecommendationSelections: {},
     activeExperimentSection: initialExperimentSection(),
@@ -5113,6 +5119,80 @@
       });
   }
 
+  function loadHypothesisDevelopment(force) {
+    if (isStaticPreviewHost()) {
+      state.hypothesisDevelopment = { count: 0, summary: { statuses: {} }, cases: [], events: [] };
+      state.hypothesisDevelopmentLoaded = true;
+      state.hypothesisDevelopmentError = "";
+      return Promise.resolve(state.hypothesisDevelopment);
+    }
+    if (state.hypothesisDevelopmentLoading && !force) return Promise.resolve(state.hypothesisDevelopment);
+    state.hypothesisDevelopmentLoading = true;
+    state.hypothesisDevelopmentError = "";
+    return requestJson("/api/investment-brain/hypothesis-development?limit=100", {
+      key: "hypothesis-development",
+      force: Boolean(force),
+      timeoutMs: 30000
+    }).then(function (payload) {
+      state.hypothesisDevelopment = payload && typeof payload === "object" ? payload : {};
+      state.hypothesisDevelopmentLoaded = true;
+      syncActiveHypothesisDevelopmentCaseId();
+      return state.hypothesisDevelopment;
+    }).catch(function (error) {
+      state.hypothesisDevelopmentError = error.message || "가설 자동 검증 상태를 읽지 못했습니다.";
+      return null;
+    }).finally(function () {
+      state.hypothesisDevelopmentLoading = false;
+      if (state.snapshot) render();
+    });
+  }
+
+  function processHypothesisDevelopment(caseId) {
+    var id = String(caseId || "").trim();
+    if (state.hypothesisDevelopmentAction || isStaticPreviewHost()) return;
+    state.hypothesisDevelopmentAction = "process:" + (id || "pending");
+    state.hypothesisDevelopmentError = "";
+    render();
+    sendJson("/api/investment-brain/hypothesis-development/process", "POST", id ? { caseId: id } : { limit: 5 })
+      .then(function (payload) {
+        var processed = Number(payload && payload.processedCount || (payload && payload.case ? 1 : 0));
+        showSnackbar(processed ? "가설 자동 검증을 실행했습니다." : "자동 검증할 대기 가설이 없습니다.", processed ? "success" : "caution");
+        return Promise.all([loadHypothesisDevelopment(true), loadOntologyExperiments(true)]);
+      })
+      .catch(function (error) {
+        state.hypothesisDevelopmentError = error.message || "가설 자동 검증을 실행하지 못했습니다.";
+        showSnackbar(state.hypothesisDevelopmentError, "danger");
+      })
+      .finally(function () {
+        state.hypothesisDevelopmentAction = "";
+        render();
+      });
+  }
+
+  function approveHypothesisDevelopment(caseId) {
+    var id = String(caseId || "").trim();
+    if (!id || state.hypothesisDevelopmentAction || isStaticPreviewHost()) return;
+    if (window.confirm && !window.confirm("자동 검증을 통과한 가설 규칙을 운영 RuleBox에 반영합니다. 새 TypeDB 추론이 실패하면 이전 버전으로 자동 복원됩니다. 계속할까요?")) return;
+    state.hypothesisDevelopmentAction = "approve:" + id;
+    state.hypothesisDevelopmentError = "";
+    render();
+    sendJson("/api/investment-brain/hypothesis-development/" + encodeURIComponent(id) + "/approve", "POST", ontologyAccountPayload({
+      reviewedBy: "web-main",
+      reviewReason: "검증 탭에서 자동 검증 완료 가설의 운영 배포 승인"
+    })).then(function (payload) {
+      var status = String(payload && payload.status || "");
+      if (["deployed", "observing"].indexOf(status) < 0) throw new Error("가설 규칙 운영 반영 결과: " + (status || "확인 필요"));
+      showSnackbar("검증된 가설 규칙을 운영 RuleBox에 반영했습니다.");
+      return Promise.all([loadHypothesisDevelopment(true), loadOntologyExperiments(true)]);
+    }).catch(function (error) {
+      state.hypothesisDevelopmentError = error.message || "검증된 가설 규칙을 운영 반영하지 못했습니다.";
+      showSnackbar(state.hypothesisDevelopmentError, "danger");
+    }).finally(function () {
+      state.hypothesisDevelopmentAction = "";
+      render();
+    });
+  }
+
   function runOntologyExperimentsOnce() {
     if (state.ontologyExperimentAction) return;
     if (isStaticPreviewHost()) {
@@ -9189,6 +9269,9 @@
     if (state.activeTab === "experiments" && !state.ontologyExperimentsLoaded && !state.ontologyExperimentsLoading) {
       loadOntologyExperiments(false);
     }
+    if (state.activeTab === "experiments" && !state.hypothesisDevelopmentLoaded && !state.hypothesisDevelopmentLoading) {
+      loadHypothesisDevelopment(false);
+    }
     if (shouldLoadStrategyProposals() && !state.strategyProposalsLoaded && !state.strategyProposalsLoading) {
       loadStrategyProposals(false);
     }
@@ -11209,6 +11292,29 @@
     ].join("");
   }
 
+  function renderHypothesisDevelopmentConsoleSurface() {
+    var payload = hypothesisDevelopmentPayload();
+    var cases = hypothesisDevelopmentCases();
+    var statuses = payload.summary && payload.summary.statuses && typeof payload.summary.statuses === "object" ? payload.summary.statuses : {};
+    var visible = cases.slice(0, 5);
+    var body = visible.length ? '<div class="oa-health-list">' + visible.map(function (item) {
+      var meta = hypothesisDevelopmentStatusMeta(item.status);
+      return '<div><span>' + escapeHtml((item.symbol || "-") + " · " + (item.title || item.claim || "가설")) + '</span><strong class="' + escapeHtml(meta.tone) + '">' + escapeHtml(meta.label) + '</strong></div>';
+    }).join("") + '</div>' : renderConsoleEmpty(
+      state.hypothesisDevelopmentError ? "가설 개발 큐를 불러오지 못했습니다" : "자동 승격된 신규 가설이 없습니다",
+      state.hypothesisDevelopmentError || "AI가 기존 규칙으로 설명되지 않는 인과 가설을 제안하면 자동 검증을 시작합니다.",
+      ""
+    );
+    return renderConsoleSurface({
+      kicker: "HYPOTHESIS PROMOTION",
+      title: "가설 자동 검증",
+      description: "원본 제안부터 TypeDB 재생, 제안 후 관측, 운영 승인까지 상태를 분리해 추적합니다.",
+      meta: "전체 " + cases.length + "개 · 승인 필요 " + Number(statuses["approval-required"] || 0) + "개",
+      actions: renderWorkDetailButton("experiment-validation-board", "", "가설 검증 상세", "text-button compact"),
+      body: body
+    });
+  }
+
   function renderValidationConsole(snapshot) {
     var rows = selectConsoleValidationRows();
     var page = consolePageSlice(rows, "validation", 8);
@@ -11242,7 +11348,8 @@
       '<div class="oa-console-grid oa-validation-grid">',
       renderConsoleSurface({ kicker: "EXPERIMENTS", title: "검증 작업", description: "실험별 변화와 경고만 보고 상세 리플레이는 분리합니다.", meta: rows.length + "개", body: renderConsoleLiveRegion("validation-body", table), footer: renderConsolePager("validation", page) }),
       renderConsoleSurface({ kicker: "TYPE DB", title: "온톨로지 상태", description: "구조 수치와 상세 진입점만 표시합니다.", body: graphBody }),
-      '</div>'
+      '</div>',
+      renderHypothesisDevelopmentConsoleSurface()
     ].join(""), { loading: initialLoading });
   }
 
@@ -13219,6 +13326,7 @@
     return [
       '<div class="single-tab-console experiment-unified-console">',
       renderOntologyExperimentOverviewPanel(),
+      renderHypothesisDevelopmentPanel(),
       renderOntologyExperimentPipelinePanel(),
       renderOntologyExperimentLatestPanel(),
       !experiments.length ? renderOntologyExperimentStarterPanel() : '',
@@ -13268,6 +13376,150 @@
       renderOntologyExperimentLatestPanel(),
       !experiments.length ? renderOntologyExperimentStarterPanel() : '',
       renderOntologyExperimentListPanel({ selectable: true })
+    ].join("");
+  }
+
+  function hypothesisDevelopmentPayload() {
+    return state.hypothesisDevelopment && typeof state.hypothesisDevelopment === "object"
+      ? state.hypothesisDevelopment
+      : { count: 0, summary: { statuses: {} }, cases: [], events: [] };
+  }
+
+  function hypothesisDevelopmentCases() {
+    return latestChangedFirst(Array.isArray(hypothesisDevelopmentPayload().cases) ? hypothesisDevelopmentPayload().cases : []);
+  }
+
+  function hypothesisDevelopmentCaseById(caseId) {
+    var id = String(caseId || "");
+    return hypothesisDevelopmentCases().filter(function (item) { return String(item.caseId || "") === id; })[0] || null;
+  }
+
+  function syncActiveHypothesisDevelopmentCaseId() {
+    var cases = hypothesisDevelopmentCases();
+    if (!cases.length) {
+      state.activeHypothesisDevelopmentCaseId = "";
+      return null;
+    }
+    var active = hypothesisDevelopmentCaseById(state.activeHypothesisDevelopmentCaseId);
+    if (!active) {
+      active = cases[0];
+      state.activeHypothesisDevelopmentCaseId = String(active.caseId || "");
+    }
+    return active;
+  }
+
+  function hypothesisDevelopmentStatusMeta(status) {
+    var value = String(status || "proposed").toLowerCase();
+    var labels = {
+      proposed: "제안",
+      screening: "선별 중",
+      "needs-data": "자료 필요",
+      rejected: "제외",
+      compiled: "규칙 변환",
+      validating: "검증 중",
+      validated: "검증 완료",
+      "approval-required": "승인 필요",
+      deployed: "운영 반영",
+      observing: "사후 관측",
+      strengthened: "강화",
+      weakened: "약화",
+      invalidated: "반증",
+      "needs-revision": "수정 필요",
+      blocked: "차단",
+      "rolled-back": "자동 복원",
+      retired: "종료"
+    };
+    var tone = ["blocked", "invalidated", "rolled-back"].indexOf(value) >= 0 ? "danger"
+      : (["needs-data", "needs-revision", "screening", "validating"].indexOf(value) >= 0 ? "caution"
+        : (["approval-required", "validated", "deployed", "observing", "strengthened"].indexOf(value) >= 0 ? "watch" : "hold"));
+    return { label: labels[value] || value, tone: tone };
+  }
+
+  function hypothesisDevelopmentGateMeta(status) {
+    var value = String(status || "pending").toLowerCase();
+    if (value === "passed") return { label: "통과", tone: "watch" };
+    if (value === "blocked" || value === "failed" || value === "contradicted") return { label: "차단", tone: "danger" };
+    if (value === "needs-data") return { label: "자료 필요", tone: "caution" };
+    return { label: "대기", tone: "hold" };
+  }
+
+  function renderHypothesisDevelopmentGate(gate) {
+    var meta = hypothesisDevelopmentGateMeta(gate && gate.status);
+    return [
+      '<div class="hypothesis-development-gate">',
+      '<span class="tone-chip ' + escapeHtml(meta.tone) + '">' + escapeHtml(meta.label) + '</span>',
+      '<strong>' + escapeHtml(gate && (gate.label || gate.id) || "검증") + '</strong>',
+      '<em>' + escapeHtml(gate && gate.detail || "검증 대기") + '</em>',
+      '</div>'
+    ].join("");
+  }
+
+  function renderHypothesisDevelopmentCaseDetail(item) {
+    if (!item) {
+      return '<section class="hypothesis-development-detail"><div class="ontology-empty">자동 승격된 가설 개발 케이스가 없습니다.</div></section>';
+    }
+    var status = hypothesisDevelopmentStatusMeta(item.status);
+    var gates = Array.isArray(item.validationGates) ? item.validationGates : [];
+    var path = Array.isArray(item.causalPath) ? item.causalPath : [];
+    var supporting = Array.isArray(item.supportingEvidenceIds) ? item.supportingEvidenceIds : [];
+    var counter = Array.isArray(item.counterEvidenceIds) ? item.counterEvidenceIds : [];
+    var impact = item.decisionImpact && typeof item.decisionImpact === "object" ? item.decisionImpact : {};
+    var busy = Boolean(state.hypothesisDevelopmentAction);
+    return [
+      '<section class="hypothesis-development-detail">',
+      '<div class="hypothesis-development-detail-head">',
+      '<div><p class="label">Development Case</p><h3>' + escapeHtml(item.title || item.symbol || "가설") + '</h3><span>' + escapeHtml(item.caseId || "") + '</span></div>',
+      '<span class="tone-chip ' + escapeHtml(status.tone) + '">' + escapeHtml(status.label) + '</span>',
+      '</div>',
+      '<p class="hypothesis-development-claim">' + escapeHtml(item.claim || "가설 주장이 없습니다.") + '</p>',
+      '<div class="hypothesis-development-meta">',
+      '<span><b>종목</b>' + escapeHtml(item.symbol || "-") + '</span>',
+      '<span><b>판단 영향</b>' + escapeHtml(impact.influence || "확인 전") + '</span>',
+      '<span><b>후보 규칙</b>' + escapeHtml(item.candidateId || "생성 전") + '</span>',
+      '<span><b>실험</b>' + escapeHtml(item.experimentId || "생성 전") + '</span>',
+      '</div>',
+      path.length ? '<div class="hypothesis-development-path">' + path.map(function (step, index) { return '<span><b>' + escapeHtml(index + 1) + '</b>' + escapeHtml(step) + '</span>'; }).join("") + '</div>' : '',
+      '<div class="hypothesis-development-evidence"><span>지지 근거 <strong>' + escapeHtml(supporting.length) + '</strong></span><span>반대 근거 <strong>' + escapeHtml(counter.length) + '</strong></span><span>원본 제안 <strong>' + escapeHtml((item.sourceProposalIds || []).length) + '</strong></span></div>',
+      '<div class="hypothesis-development-gates">' + gates.map(renderHypothesisDevelopmentGate).join("") + '</div>',
+      item.blockedReason ? '<p class="form-error">' + escapeHtml(item.blockedReason) + '</p>' : '',
+      '<div class="ontology-experiment-actions">',
+      '<button class="text-button" type="button" data-hypothesis-development-process="' + escapeHtml(item.caseId || "") + '"' + (busy || ["deployed", "observing", "retired"].indexOf(String(item.status || "")) >= 0 ? ' disabled' : '') + '>검증 다시 실행</button>',
+      '<button class="text-button primary" type="button" data-hypothesis-development-approve="' + escapeHtml(item.caseId || "") + '"' + (busy || String(item.status || "") !== "approval-required" ? ' disabled' : '') + '>운영 반영 승인</button>',
+      '</div>',
+      '</section>'
+    ].join("");
+  }
+
+  function renderHypothesisDevelopmentPanel() {
+    var payload = hypothesisDevelopmentPayload();
+    var cases = hypothesisDevelopmentCases();
+    var active = syncActiveHypothesisDevelopmentCaseId();
+    var statuses = payload.summary && payload.summary.statuses && typeof payload.summary.statuses === "object" ? payload.summary.statuses : {};
+    return [
+      '<article class="panel hypothesis-development-panel"' + cardTypeAttrs("process-card", cases.length ? "watch" : "hold") + '>',
+      '<div class="panel-head">',
+      '<div><p class="label">Hypothesis Promotion</p><h2>가설 자동 승격·검증</h2><p class="subtle">AI 제안을 자동 선별하고 후보 규칙과 TypeDB 검증까지 진행합니다. 운영 RuleBox 반영은 승인 후 실행됩니다.</p></div>',
+      '<div class="settings-actions"><span class="tone-chip ' + escapeHtml(Number(statuses["approval-required"] || 0) ? "watch" : "hold") + '">승인 필요 ' + escapeHtml(statuses["approval-required"] || 0) + '건</span><button class="text-button" type="button" data-hypothesis-development-refresh' + (state.hypothesisDevelopmentLoading ? ' disabled' : '') + '>새로고침</button><button class="text-button" type="button" data-hypothesis-development-process=""' + (state.hypothesisDevelopmentAction ? ' disabled' : '') + '>대기 검증</button></div>',
+      '</div>',
+      '<div class="hypothesis-development-summary">',
+      renderOntologyExperimentMetric("전체", payload.count == null ? cases.length : payload.count, "cases"),
+      renderOntologyExperimentMetric("자료 필요", statuses["needs-data"] || 0, "needs data"),
+      renderOntologyExperimentMetric("검증 완료", statuses["approval-required"] || statuses.validated || 0, "validated"),
+      renderOntologyExperimentMetric("운영 반영", Number(statuses.deployed || 0) + Number(statuses.observing || 0), "deployed"),
+      '</div>',
+      state.hypothesisDevelopmentError ? '<p class="form-error">' + escapeHtml(state.hypothesisDevelopmentError) + '</p>' : '',
+      state.hypothesisDevelopmentLoading && !state.hypothesisDevelopmentLoaded ? '<div class="rule-strip"><span>가설 개발 계보와 검증 게이트를 읽는 중입니다.</span></div>' : '',
+      '<div class="hypothesis-development-layout">',
+      '<div class="hypothesis-development-list">',
+      cases.length ? cases.slice(0, 20).map(function (item) {
+        var meta = hypothesisDevelopmentStatusMeta(item.status);
+        var selected = active && String(active.caseId || "") === String(item.caseId || "");
+        return '<button type="button" class="hypothesis-development-case' + (selected ? ' active' : '') + '" data-hypothesis-development-select="' + escapeHtml(item.caseId || "") + '"><span class="tone-chip ' + escapeHtml(meta.tone) + '">' + escapeHtml(meta.label) + '</span><strong>' + escapeHtml(item.symbol || "-") + '</strong><em>' + escapeHtml(item.title || item.claim || "가설") + '</em>' + renderRecordChangedAt(item) + '</button>';
+      }).join("") : '<div class="ontology-empty">AI 판단 뒤 생성된 신규 가설 제안을 기다리고 있습니다.</div>',
+      '</div>',
+      renderHypothesisDevelopmentCaseDetail(active),
+      '</div>',
+      '</article>'
     ].join("");
   }
 
@@ -27980,6 +28232,36 @@
         });
       });
     }
+
+    var refreshHypothesisDevelopmentButton = app.querySelector("[data-hypothesis-development-refresh]");
+    if (refreshHypothesisDevelopmentButton) {
+      refreshHypothesisDevelopmentButton.addEventListener("click", function () {
+        loadHypothesisDevelopment(true).then(function () {
+          if (!state.hypothesisDevelopmentError) showSnackbar("가설 자동 검증 상태를 다시 읽었습니다.");
+        });
+      });
+    }
+
+    Array.prototype.slice.call(app.querySelectorAll("[data-hypothesis-development-select]")).forEach(function (button) {
+      button.addEventListener("click", function () {
+        var id = String(button.getAttribute("data-hypothesis-development-select") || "");
+        if (!id || id === state.activeHypothesisDevelopmentCaseId) return;
+        state.activeHypothesisDevelopmentCaseId = id;
+        render();
+      });
+    });
+
+    Array.prototype.slice.call(app.querySelectorAll("[data-hypothesis-development-process]")).forEach(function (button) {
+      button.addEventListener("click", function () {
+        processHypothesisDevelopment(button.getAttribute("data-hypothesis-development-process"));
+      });
+    });
+
+    Array.prototype.slice.call(app.querySelectorAll("[data-hypothesis-development-approve]")).forEach(function (button) {
+      button.addEventListener("click", function () {
+        approveHypothesisDevelopment(button.getAttribute("data-hypothesis-development-approve"));
+      });
+    });
 
     Array.prototype.slice.call(app.querySelectorAll("[data-lab-section]")).forEach(function (button) {
       button.addEventListener("click", function () {

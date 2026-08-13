@@ -49,6 +49,7 @@ TEXT_SETTING_KEYS = [
     "operationalStorageWarningFreeSpaceMb",
     "operationalStorageAlertFreeSpaceMb",
     "operationalStoragePressureFreePercent",
+    "operationalStorageComponentCleanupPercent",
     "operationalStorageComponentWarningPercent",
     "operationalStorageComponentAlertPercent",
     "operationalStorageComponentCriticalPercent",
@@ -1083,6 +1084,11 @@ def runtime_settings(fast_operational_read: bool = False) -> Dict[str, str]:
             "OPERATIONAL_STORAGE_PRESSURE_FREE_PERCENT",
             "10",
         ),
+        "operationalStorageComponentCleanupPercent": value(
+            "operationalStorageComponentCleanupPercent",
+            "OPERATIONAL_STORAGE_COMPONENT_CLEANUP_PERCENT",
+            "70",
+        ),
         "operationalStorageComponentWarningPercent": value(
             "operationalStorageComponentWarningPercent",
             "OPERATIONAL_STORAGE_COMPONENT_WARNING_PERCENT",
@@ -1161,7 +1167,7 @@ def runtime_settings(fast_operational_read: bool = False) -> Dict[str, str]:
         "operationalMySqlDataMaxSizeMb": value(
             "operationalMySqlDataMaxSizeMb",
             "OPERATIONAL_MYSQL_DATA_MAX_SIZE_MB",
-            "4096",
+            "8192",
         ),
         "operationalLogMaxSizeMb": value(
             "operationalLogMaxSizeMb",

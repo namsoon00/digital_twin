@@ -275,6 +275,15 @@ def evaluate_operational_storage_capacity(
         50,
         99,
     )
+    component_cleanup_percent = min(
+        component_warning_percent,
+        _integer(
+            configured.get("operationalStorageComponentCleanupPercent"),
+            70,
+            50,
+            99,
+        ),
+    )
     component_alert_percent = max(
         component_warning_percent,
         _integer(configured.get("operationalStorageComponentAlertPercent"), 90, 50, 99),
@@ -424,7 +433,9 @@ def evaluate_operational_storage_capacity(
 
     component_names = {str(item.get("component") or "") for item in limiting_components}
     suggested_action = "정상 보존 정책으로 운영 중입니다."
-    if state == "critical":
+    if bool(values.get("coreWritesOnly")):
+        suggested_action = "핵심 투자 이력만 기록하고 재생성 가능한 분석 데이터의 수집·저장을 중단하세요."
+    elif state == "critical":
         suggested_action = "비필수 수집·분석·그래프 쓰기를 보류하고 저장공간을 즉시 확보하세요."
     elif forecast_detected:
         eta = forecast.get("etaMinutes")
@@ -459,13 +470,29 @@ def evaluate_operational_storage_capacity(
         "typedbCheckpointReferencedMb": round(_number(values.get("typedbCheckpointReferencedMb")), 1),
         "mysqlSizeMb": round(_number(values.get("mysqlSizeMb")), 1),
         "mysqlLimitMb": round(_number(values.get("mysqlLimitMb")), 1),
+        "mysqlUsagePercent": round(
+            _number(values.get("mysqlUsagePercent"))
+            or (
+                _number(values.get("mysqlSizeMb"))
+                / _number(values.get("mysqlLimitMb"))
+                * 100
+                if _number(values.get("mysqlLimitMb")) > 0
+                else 0
+            ),
+            1,
+        ),
+        "mysqlCapacityStage": str(values.get("mysqlCapacityStage") or "normal"),
+        "mysqlHardLimitReached": bool(values.get("mysqlHardLimitReached")),
+        "coreWritesOnly": bool(values.get("coreWritesOnly")),
         "logSizeMb": round(_number(values.get("logSizeMb")), 1),
         "logLimitMb": round(_number(values.get("logLimitMb")), 1),
+        "componentCleanupPercent": component_cleanup_percent,
         "componentWarningPercent": component_warning_percent,
         "componentAlertPercent": component_alert_percent,
         "componentCriticalPercent": component_critical_percent,
         "capacityLimitReached": state in {"limited", "critical"},
-        "nonEssentialWritesAllowed": bool(values.get("nonEssentialWritesAllowed", state not in {"limited", "critical"})),
+        "nonEssentialWritesAllowed": bool(values.get("nonEssentialWritesAllowed", True))
+        and state not in {"limited", "critical"},
         "cleanupMode": str(values.get("cleanupMode") or "normal"),
         "limitingComponents": limiting_components,
         "reason": str(values.get("reason") or ""),

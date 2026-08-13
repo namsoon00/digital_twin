@@ -195,8 +195,61 @@ def operational_storage_inventory(
     typedb_checkpoint = sum(apparent_size(path) for path in typedb_root.glob("*/checkpoint"))
     root_logs = sum(apparent_size(path) for path in root.glob("*.log"))
     typedb_logs = apparent_size(root / "typedb-logs")
+    mysql_size_mb = round(apparent_size(mysql_root) / 1024 / 1024, 1)
+    mysql_limit_mb = _integer(
+        configured.get("operationalMySqlDataMaxSizeMb"),
+        8192,
+        256,
+    )
+    mysql_usage_percent = round(mysql_size_mb / mysql_limit_mb * 100, 1) if mysql_limit_mb else 0.0
+    mysql_cleanup_percent = _integer(
+        configured.get("operationalStorageComponentCleanupPercent"),
+        70,
+        50,
+        99,
+    )
+    mysql_warning_percent = max(
+        mysql_cleanup_percent,
+        _integer(configured.get("operationalStorageComponentWarningPercent"), 80, 50, 99),
+    )
+    mysql_restrict_percent = max(
+        mysql_warning_percent,
+        _integer(configured.get("operationalStorageComponentAlertPercent"), 90, 50, 99),
+    )
+    mysql_critical_percent = max(
+        mysql_restrict_percent,
+        _integer(configured.get("operationalStorageComponentCriticalPercent"), 95, 50, 100),
+    )
+    mysql_stage = "normal"
+    if mysql_usage_percent >= 100:
+        mysql_stage = "core-only"
+    elif mysql_usage_percent >= mysql_critical_percent:
+        mysql_stage = "critical"
+    elif mysql_usage_percent >= mysql_restrict_percent:
+        mysql_stage = "restricted"
+    elif mysql_usage_percent >= mysql_warning_percent:
+        mysql_stage = "warning"
+    elif mysql_usage_percent >= mysql_cleanup_percent:
+        mysql_stage = "maintenance"
+
+    cleanup_mode = str(health.get("cleanupMode") or "normal")
+    if mysql_stage in {"critical", "core-only"}:
+        cleanup_mode = "emergency"
+    elif mysql_stage in {"maintenance", "warning", "restricted"} and cleanup_mode == "normal":
+        cleanup_mode = "accelerated"
+    non_essential_writes_allowed = bool(health.get("nonEssentialWritesAllowed", True))
+    if mysql_stage in {"restricted", "critical", "core-only"}:
+        non_essential_writes_allowed = False
+    reason = str(health.get("reason") or "")
+    if not reason and mysql_stage in {"restricted", "critical", "core-only"}:
+        reason = "MySQL 운영 한도에 가까워 비필수 분석 쓰기를 보류하고 핵심 투자 이력을 보호합니다."
+    elif not reason and mysql_stage in {"maintenance", "warning"}:
+        reason = "MySQL 점유율 기준에 따라 이력 정리를 가속합니다."
     return {
         **health,
+        "nonEssentialWritesAllowed": non_essential_writes_allowed,
+        "cleanupMode": cleanup_mode,
+        "reason": reason,
         "typedbSizeMb": round(typedb_physical / 1024 / 1024, 1),
         "typedbApparentSizeMb": round(typedb_apparent / 1024 / 1024, 1),
         "typedbSharedLinkedMb": round(max(0, typedb_apparent - typedb_physical) / 1024 / 1024, 1),
@@ -204,8 +257,16 @@ def operational_storage_inventory(
         "typedbCheckpointMb": round(typedb_checkpoint / 1024 / 1024, 1),
         "typedbCheckpointReferencedMb": round(typedb_checkpoint / 1024 / 1024, 1),
         "typedbLimitMb": _integer(configured.get("typedbDataMaxSizeMb"), 8192, 256),
-        "mysqlSizeMb": round(apparent_size(mysql_root) / 1024 / 1024, 1),
-        "mysqlLimitMb": _integer(configured.get("operationalMySqlDataMaxSizeMb"), 4096, 256),
+        "mysqlSizeMb": mysql_size_mb,
+        "mysqlLimitMb": mysql_limit_mb,
+        "mysqlUsagePercent": mysql_usage_percent,
+        "mysqlCapacityStage": mysql_stage,
+        "mysqlCleanupThresholdPercent": mysql_cleanup_percent,
+        "mysqlWarningThresholdPercent": mysql_warning_percent,
+        "mysqlRestrictThresholdPercent": mysql_restrict_percent,
+        "mysqlCriticalThresholdPercent": mysql_critical_percent,
+        "mysqlHardLimitReached": mysql_stage == "core-only",
+        "coreWritesOnly": mysql_stage == "core-only",
         "logSizeMb": round((root_logs + typedb_logs) / 1024 / 1024, 1),
         "logLimitMb": _integer(configured.get("operationalLogMaxSizeMb"), 512, 32),
     }

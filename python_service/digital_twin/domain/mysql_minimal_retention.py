@@ -14,7 +14,7 @@ from typing import Dict, Mapping
 
 
 FALSE_VALUES = {"", "0", "false", "no", "off", "disabled", "disable", "none"}
-MINIMAL_MYSQL_RETENTION_PROFILE = "minimal-mysql-retention-v1"
+MINIMAL_MYSQL_RETENTION_PROFILE = "minimal-mysql-retention-v2"
 
 
 def _bool_setting(settings: Mapping[str, object], key: str, fallback: bool) -> bool:

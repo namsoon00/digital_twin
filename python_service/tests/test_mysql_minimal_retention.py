@@ -99,6 +99,71 @@ class AuditConnection:
         return Cursor(rowcount=1)
 
 
+class LifecycleArchiveConnection:
+    def __init__(self, archive_fails=False):
+        self.calls = []
+        self.archive_fails = archive_fails
+        self.archived = False
+
+    def execute(self, sql, params=()):
+        rendered = str(sql)
+        values = tuple(params or ())
+        self.calls.append((rendered, values))
+        if "SELECT GET_LOCK" in rendered:
+            return Cursor(one={"acquired": 1})
+        if "SELECT RELEASE_LOCK" in rendered:
+            return Cursor(one={"released": 1})
+        if (
+            "SELECT transition_id, lifecycle_key" in rendered
+            and "investment_hypothesis_lifecycle_events" in rendered
+        ):
+            return Cursor(rows=[{
+                "transition_id": "transition-1",
+                "lifecycle_key": "hypothesis:MSTR:hold",
+                "lifecycle_id": "lifecycle-1",
+                "scope": "position",
+                "account_id": "account-1",
+                "market_id": "US",
+                "symbol": "MSTR",
+                "previous_state": "observed",
+                "current_state": "strengthened",
+                "inference_generation_id": "generation-2",
+                "previous_generation_id": "generation-1",
+                "occurred_at": "2026-07-29T10:00:00Z",
+                "material_change": 1,
+                "payload_bytes": 8192,
+            }])
+        if (
+            "INSERT IGNORE INTO `investment_hypothesis_transition_history`" in rendered
+            and "VALUES (" in rendered
+        ):
+            if self.archive_fails:
+                raise RuntimeError("archive unavailable")
+            self.archived = True
+            return Cursor(rowcount=1)
+        if rendered.lstrip().startswith("DELETE FROM `investment_hypothesis_lifecycle_events`"):
+            return Cursor(rowcount=1 if self.archived else 0)
+        return Cursor()
+
+
+class LifecycleBaselineConnection(LifecycleArchiveConnection):
+    def execute(self, sql, params=()):
+        rendered = str(sql)
+        if (
+            "INSERT IGNORE INTO `investment_hypothesis_transition_history`" in rendered
+            and "FROM `investment_hypothesis_lifecycle_states` state" in rendered
+        ):
+            self.calls.append((rendered, tuple(params or ())))
+            return Cursor(rowcount=2)
+        if (
+            "SELECT transition_id, lifecycle_key" in rendered
+            and "investment_hypothesis_lifecycle_events" in rendered
+        ):
+            self.calls.append((rendered, tuple(params or ())))
+            return Cursor()
+        return super().execute(sql, params)
+
+
 class MySQLMinimalRetentionTests(unittest.TestCase):
     def test_minimal_policy_is_opt_in_without_runtime_defaults_and_bounds_inputs(self):
         self.assertFalse(mysql_minimal_retention_policy({}).enabled)
@@ -250,6 +315,69 @@ class MySQLMinimalRetentionTests(unittest.TestCase):
         self.assertTrue(any("completed_at <> ''" in sql for sql in research_queries))
         self.assertTrue(any("status NOT IN (%s, %s, %s)" in sql for sql in research_queries))
         self.assertFalse(any("status IN ('completed'" in sql for sql in research_queries))
+
+    def test_lifecycle_payload_is_deleted_only_after_compact_history_is_archived(self):
+        connection = LifecycleArchiveConnection()
+        repository = MySQLMinimalRetentionRepository(connection)
+        policy = mysql_minimal_retention_policy({
+            "mysqlMinimalRetentionEnabled": "1",
+            "mysqlMinimalRetentionMode": "apply",
+        })
+
+        result = repository.apply(policy, now=datetime(2026, 7, 30, tzinfo=timezone.utc))
+
+        self.assertEqual(1, result["archived"])
+        self.assertEqual(1, result["deleted"])
+        archive_index = next(
+            index for index, (sql, _params) in enumerate(connection.calls)
+            if "INSERT IGNORE INTO `investment_hypothesis_transition_history`" in sql
+        )
+        delete_index = next(
+            index for index, (sql, _params) in enumerate(connection.calls)
+            if sql.lstrip().startswith("DELETE FROM `investment_hypothesis_lifecycle_events`")
+        )
+        delete_sql, delete_params = connection.calls[delete_index]
+        self.assertLess(archive_index, delete_index)
+        self.assertIn("EXISTS", delete_sql)
+        self.assertIn("investment_hypothesis_transition_history", delete_sql)
+        self.assertEqual("transition-1", delete_params[0])
+        self.assertEqual("transition-1", delete_params[2])
+
+    def test_lifecycle_payload_is_not_deleted_when_history_archive_fails(self):
+        connection = LifecycleArchiveConnection(archive_fails=True)
+        repository = MySQLMinimalRetentionRepository(connection)
+        policy = mysql_minimal_retention_policy({
+            "mysqlMinimalRetentionEnabled": "1",
+            "mysqlMinimalRetentionMode": "apply",
+        })
+
+        with self.assertRaisesRegex(RuntimeError, "archive unavailable"):
+            repository.apply(policy, now=datetime(2026, 7, 30, tzinfo=timezone.utc))
+
+        self.assertFalse(any(
+            sql.lstrip().startswith("DELETE FROM `investment_hypothesis_lifecycle_events`")
+            for sql, _params in connection.calls
+        ))
+
+    def test_current_lifecycle_states_seed_compact_history_baselines(self):
+        connection = LifecycleBaselineConnection()
+        repository = MySQLMinimalRetentionRepository(connection)
+        policy = mysql_minimal_retention_policy({
+            "mysqlMinimalRetentionEnabled": "1",
+            "mysqlMinimalRetentionMode": "apply",
+        })
+
+        result = repository.apply(policy, now=datetime(2026, 7, 30, tzinfo=timezone.utc))
+
+        self.assertEqual(2, result["archived"])
+        self.assertEqual(2, result["policies"]["lifecycle:stateBaselines"])
+        baseline_sql = next(
+            sql for sql, _params in connection.calls
+            if "FROM `investment_hypothesis_lifecycle_states` state" in sql
+            and "INSERT IGNORE" in sql
+        )
+        self.assertIn("baseline:", baseline_sql)
+        self.assertIn("NOT EXISTS", baseline_sql)
 
     def test_audit_report_excludes_preview_payloads(self):
         connection = AuditConnection()

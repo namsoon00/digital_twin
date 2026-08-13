@@ -160,6 +160,18 @@ class MySQLMinimalRetentionRepository:
                 "FROM `investment_hypothesis_lifecycle_events` WHERE occurred_at < " + _cutoff_sql(),
                 (cutoffs["lifecycleEvents"],),
             ),
+            "lifecycleStateBaselines": self._summary(
+                """
+                SELECT COUNT(*) AS candidate_count, 0 AS candidate_bytes
+                FROM `investment_hypothesis_lifecycle_states` state
+                WHERE NOT EXISTS (
+                    SELECT 1
+                    FROM `investment_hypothesis_transition_history` history
+                    WHERE history.transition_id = CONCAT('baseline:', SHA2(state.lifecycle_key, 256))
+                )
+                """,
+                (),
+            ),
             "inactiveEvidence": self._summary(
                 """
                 SELECT COUNT(*) AS candidate_count, COALESCE(SUM(OCTET_LENGTH(payload_json)), 0) AS candidate_bytes
@@ -216,6 +228,7 @@ class MySQLMinimalRetentionRepository:
         policies: Dict[str, int] = {}
         deleted_total = 0
         compacted = 0
+        archived_total = 0
         estimated_bytes = 0
         try:
             actions = [
@@ -227,7 +240,16 @@ class MySQLMinimalRetentionRepository:
                 ("snapshots:history", self._delete_snapshot_history, (policy.snapshot_history_keep_count,)),
                 ("projectionRuns:payload", self._compact_projection_payloads, (cutoffs["projectionPayload"],)),
                 ("projectionRuns:history", self._delete_projection_runs, (cutoffs["projectionPayload"],)),
-                ("lifecycle:events", self._delete_lifecycle_events, (cutoffs["lifecycleEvents"],)),
+                (
+                    "lifecycle:stateBaselines",
+                    self._archive_lifecycle_state_baselines,
+                    (self._iso(current),),
+                ),
+                (
+                    "lifecycle:events",
+                    self._archive_and_delete_lifecycle_events,
+                    (cutoffs["lifecycleEvents"], self._iso(current)),
+                ),
                 ("research:inactiveEvidence", self._delete_inactive_evidence, (cutoffs["inactiveEvidence"],)),
                 ("research:terminalRuns", self._delete_terminal_research_runs, (cutoffs["researchTerminal"],)),
                 ("audit:runs", self._delete_audit_runs, (policy.audit_keep_count,)),
@@ -240,8 +262,13 @@ class MySQLMinimalRetentionRepository:
                 changed = _integer(result.get("deleted"))
                 deleted_total += changed
                 compacted += _integer(result.get("compacted"))
+                archived_total += _integer(result.get("archived"))
                 estimated_bytes += _integer(result.get("estimatedBytes"))
-                policies[name] = changed + _integer(result.get("compacted"))
+                policies[name] = (
+                    changed
+                    + _integer(result.get("compacted"))
+                    + _integer(result.get("archived"))
+                )
                 for table, count in dict(result.get("tables") or {}).items():
                     tables[table] = tables.get(table, 0) + _integer(count)
 
@@ -268,6 +295,7 @@ class MySQLMinimalRetentionRepository:
             "status": "ok",
             "deleted": deleted_total,
             "compacted": compacted,
+            "archived": archived_total,
             "estimatedBytes": estimated_bytes,
             "tables": tables,
             "policies": policies,
@@ -283,6 +311,7 @@ class MySQLMinimalRetentionRepository:
             "profile": str((result or {}).get("profile") or ""),
             "deleted": _integer((result or {}).get("deleted")),
             "compacted": _integer((result or {}).get("compacted")),
+            "archived": _integer((result or {}).get("archived")),
             "estimatedBytes": _integer((result or {}).get("estimatedBytes")),
             "tables": dict((result or {}).get("tables") or {}),
             "policies": dict((result or {}).get("policies") or {}),
@@ -646,10 +675,20 @@ class MySQLMinimalRetentionRepository:
         )
         return self._result("ontology_projection_runs", deleted, bytes_deleted)
 
-    def _delete_lifecycle_events(self, policy, budget, cutoff_iso) -> Dict[str, object]:
+    def _archive_and_delete_lifecycle_events(
+        self,
+        policy,
+        budget,
+        cutoff_iso,
+        archived_at,
+    ) -> Dict[str, object]:
         candidates = self._byte_bounded_candidates(
             """
-            SELECT transition_id, OCTET_LENGTH(payload_json) AS payload_bytes
+            SELECT transition_id, lifecycle_key, lifecycle_id, scope,
+                   account_id, market_id, symbol, previous_state,
+                   current_state, inference_generation_id,
+                   previous_generation_id, occurred_at, material_change,
+                   OCTET_LENGTH(payload_json) AS payload_bytes
             FROM `investment_hypothesis_lifecycle_events`
             WHERE occurred_at < """ + _cutoff_sql() + " ORDER BY occurred_at, transition_id LIMIT %s",
             (cutoff_iso, policy.batch_size),
@@ -657,15 +696,131 @@ class MySQLMinimalRetentionRepository:
             policy,
             budget,
         )
-        deleted, bytes_deleted = self._delete_candidates(
-            "investment_hypothesis_lifecycle_events",
+        archived = 0
+        deleted = 0
+        bytes_deleted = 0
+        history_fields = (
             "transition_id",
-            candidates,
-            "occurred_at < " + _cutoff_sql(),
-            (cutoff_iso,),
-            budget,
+            "lifecycle_key",
+            "lifecycle_id",
+            "scope",
+            "account_id",
+            "market_id",
+            "symbol",
+            "previous_state",
+            "current_state",
+            "inference_generation_id",
+            "previous_generation_id",
+            "occurred_at",
         )
-        return self._result("investment_hypothesis_lifecycle_events", deleted, bytes_deleted)
+        for row in candidates:
+            if not self._has_budget(budget):
+                break
+            values = tuple(str(_row_value(row, field, fallback="") or "") for field in history_fields)
+            transition_id = values[0].strip()
+            if not transition_id:
+                continue
+            archive_cursor = _execute(
+                self.connection,
+                """
+                INSERT IGNORE INTO `investment_hypothesis_transition_history` (
+                    transition_id, lifecycle_key, lifecycle_id, scope,
+                    account_id, market_id, symbol, previous_state,
+                    current_state, inference_generation_id,
+                    previous_generation_id, occurred_at, material_change,
+                    archived_at
+                ) VALUES (
+                    %s, %s, %s, %s, %s, %s, %s, %s,
+                    %s, %s, %s, %s, %s, %s
+                )
+                """,
+                values + (
+                    1 if _integer(_row_value(row, "material_change")) else 0,
+                    archived_at,
+                ),
+            )
+            archived += _integer(getattr(archive_cursor, "rowcount", 0))
+            delete_cursor = _execute(
+                self.connection,
+                """
+                DELETE FROM `investment_hypothesis_lifecycle_events`
+                WHERE transition_id = %s
+                  AND occurred_at < """ + _cutoff_sql() + """
+                  AND EXISTS (
+                      SELECT 1
+                      FROM `investment_hypothesis_transition_history` history
+                      WHERE history.transition_id = %s
+                  )
+                """,
+                (transition_id, cutoff_iso, transition_id),
+            )
+            if _integer(getattr(delete_cursor, "rowcount", 0)):
+                deleted += 1
+                row_bytes = max(0, _integer(_row_value(row, "payload_bytes")))
+                bytes_deleted += row_bytes
+                budget["remainingBytes"] = max(
+                    0,
+                    _integer(budget.get("remainingBytes")) - row_bytes,
+                )
+                budget["deletedBytes"] = _integer(budget.get("deletedBytes")) + row_bytes
+        return {
+            **self._result(
+                "investment_hypothesis_lifecycle_events",
+                deleted,
+                bytes_deleted,
+            ),
+            "archived": archived,
+        }
+
+    def _archive_lifecycle_state_baselines(
+        self,
+        policy,
+        budget,
+        archived_at,
+    ) -> Dict[str, object]:
+        if not self._has_budget(budget):
+            return {"deleted": 0, "compacted": 0, "archived": 0, "estimatedBytes": 0, "tables": {}}
+        cursor = _execute(
+            self.connection,
+            """
+            INSERT IGNORE INTO `investment_hypothesis_transition_history` (
+                transition_id, lifecycle_key, lifecycle_id, scope,
+                account_id, market_id, symbol, previous_state,
+                current_state, inference_generation_id,
+                previous_generation_id, occurred_at, material_change,
+                archived_at
+            )
+            SELECT CONCAT('baseline:', SHA2(state.lifecycle_key, 256)),
+                   state.lifecycle_key, state.lifecycle_id, state.scope,
+                   state.account_id, state.market_id, state.symbol, '',
+                   state.state, state.inference_generation_id,
+                   state.previous_generation_id,
+                   COALESCE(
+                       NULLIF(state.last_transition_at, ''),
+                       NULLIF(state.last_observed_at, ''),
+                       state.updated_at
+                   ),
+                   state.material_change,
+                   %s
+            FROM `investment_hypothesis_lifecycle_states` state
+            WHERE NOT EXISTS (
+                SELECT 1
+                FROM `investment_hypothesis_transition_history` history
+                WHERE history.transition_id = CONCAT('baseline:', SHA2(state.lifecycle_key, 256))
+            )
+            ORDER BY state.updated_at, state.lifecycle_key
+            LIMIT %s
+            """,
+            (archived_at, policy.batch_size),
+        )
+        archived = _integer(getattr(cursor, "rowcount", 0))
+        return {
+            "deleted": 0,
+            "compacted": 0,
+            "archived": archived,
+            "estimatedBytes": 0,
+            "tables": {},
+        }
 
     def _delete_inactive_evidence(self, policy, budget, cutoff_iso) -> Dict[str, object]:
         candidates = self._byte_bounded_candidates(

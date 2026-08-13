@@ -1467,6 +1467,27 @@ MYSQL_SCHEMA = [
     ) ENGINE=InnoDB DEFAULT CHARSET=utf8mb4 COLLATE=utf8mb4_unicode_ci
     """,
     """
+    CREATE TABLE IF NOT EXISTS investment_hypothesis_transition_history (
+        transition_id VARCHAR(191) PRIMARY KEY,
+        lifecycle_key VARCHAR(255) NOT NULL,
+        lifecycle_id VARCHAR(191) NOT NULL DEFAULT '',
+        scope VARCHAR(32) NOT NULL DEFAULT '',
+        account_id VARCHAR(191) NOT NULL DEFAULT '',
+        market_id VARCHAR(64) NOT NULL DEFAULT '',
+        symbol VARCHAR(64) NOT NULL DEFAULT '',
+        previous_state VARCHAR(32) NOT NULL DEFAULT '',
+        current_state VARCHAR(32) NOT NULL DEFAULT '',
+        inference_generation_id VARCHAR(191) NOT NULL DEFAULT '',
+        previous_generation_id VARCHAR(191) NOT NULL DEFAULT '',
+        occurred_at VARCHAR(40) NOT NULL,
+        material_change TINYINT(1) NOT NULL DEFAULT 0,
+        archived_at VARCHAR(40) NOT NULL,
+        KEY idx_hypothesis_transition_history_subject_time (account_id, symbol, occurred_at),
+        KEY idx_hypothesis_transition_history_lifecycle_time (lifecycle_key, occurred_at),
+        KEY idx_hypothesis_transition_history_state_time (current_state, occurred_at)
+    ) ENGINE=InnoDB DEFAULT CHARSET=utf8mb4 COLLATE=utf8mb4_unicode_ci
+    """,
+    """
     CREATE TABLE IF NOT EXISTS investment_decision_outcomes (
         outcome_id VARCHAR(191) PRIMARY KEY,
         episode_id VARCHAR(191) NOT NULL,

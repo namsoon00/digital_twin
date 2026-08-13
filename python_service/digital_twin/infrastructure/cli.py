@@ -4,7 +4,7 @@ import os
 import sys
 import time
 from pathlib import Path
-from typing import Dict, List
+from typing import Dict, List, Mapping
 
 from ..application.account_service import AccountApplicationService
 from ..application.mysql_minimal_retention_service import MySQLMinimalRetentionService
@@ -1181,6 +1181,21 @@ def run_mysql_minimal_retention(
     """Run bounded MySQL retention, with an explicit backlog-drain option."""
 
     configured = dict(settings or {})
+
+    def made_meaningful_progress(result: Mapping[str, object]) -> bool:
+        if int((result or {}).get("compacted") or 0) > 0:
+            return True
+        if int((result or {}).get("archived") or 0) > 0:
+            return True
+        policies = dict((result or {}).get("policies") or {})
+        if policies:
+            return any(
+                int(count or 0) > 0
+                for name, count in policies.items()
+                if str(name) != "audit:runs"
+            )
+        return int((result or {}).get("deleted") or 0) > 0
+
     if drain and not apply:
         return {
             "status": "invalid",
@@ -1224,10 +1239,7 @@ def run_mysql_minimal_retention(
                         preview_before_apply=apply,
                     )
                     results.append(result)
-                    if not drain or (
-                        int(result.get("deleted") or 0) <= 0
-                        and int(result.get("compacted") or 0) <= 0
-                    ):
+                    if not drain or not made_meaningful_progress(result):
                         break
                 result = dict(results[-1] or {}) if results else {
                     "status": "ok",
@@ -1238,6 +1250,7 @@ def run_mysql_minimal_retention(
                 if drain:
                     total_deleted = sum(int(item.get("deleted") or 0) for item in results)
                     total_compacted = sum(int(item.get("compacted") or 0) for item in results)
+                    total_archived = sum(int(item.get("archived") or 0) for item in results)
                     total_estimated_bytes = sum(int(item.get("estimatedBytes") or 0) for item in results)
                     merged_tables = {}
                     merged_policies = {}
@@ -1248,6 +1261,7 @@ def run_mysql_minimal_retention(
                             merged_policies[str(name)] = int(merged_policies.get(str(name)) or 0) + int(count or 0)
                     result["deleted"] = total_deleted
                     result["compacted"] = total_compacted
+                    result["archived"] = total_archived
                     result["estimatedBytes"] = total_estimated_bytes
                     result["tables"] = merged_tables
                     result["policies"] = merged_policies
@@ -1255,10 +1269,8 @@ def run_mysql_minimal_retention(
                         "enabled": True,
                         "completedPasses": len(results),
                         "maxPasses": passes,
-                        "exhausted": bool(results) and (
-                            int(results[-1].get("deleted") or 0) <= 0
-                            and int(results[-1].get("compacted") or 0) <= 0
-                        ),
+                        "exhausted": bool(results)
+                        and not made_meaningful_progress(results[-1]),
                     }
             if connection_retries:
                 result["transientConnectionRetryCount"] = connection_retries

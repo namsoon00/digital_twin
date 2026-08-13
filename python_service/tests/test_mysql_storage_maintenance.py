@@ -340,6 +340,65 @@ class MySQLStorageMaintenanceTests(unittest.TestCase):
 
         self.assertEqual("invalid", result["status"])
 
+    def test_minimal_retention_drain_continues_while_history_is_being_archived(self):
+        class Store:
+            def connect(self):
+                return self
+
+            def __enter__(self):
+                return self
+
+            def __exit__(self, *_args):
+                return False
+
+        with patch(
+            "digital_twin.infrastructure.cli.MySQLOperationalConnection",
+            return_value=Store(),
+        ), patch(
+            "digital_twin.infrastructure.cli.MySQLMinimalRetentionService",
+        ) as service:
+            service.return_value.run_once.side_effect = [
+                {"status": "ok", "deleted": 0, "compacted": 0, "archived": 1000},
+                {"status": "ok", "deleted": 0, "compacted": 0, "archived": 12},
+                {"status": "ok", "deleted": 0, "compacted": 0, "archived": 0},
+            ]
+
+            result = run_mysql_minimal_retention({}, apply=True, drain=True, drain_max_passes=5)
+
+        self.assertEqual(1012, result["archived"])
+        self.assertEqual(3, result["drain"]["completedPasses"])
+        self.assertTrue(result["drain"]["exhausted"])
+
+    def test_minimal_retention_drain_ignores_self_generated_audit_cleanup(self):
+        class Store:
+            def connect(self):
+                return self
+
+            def __enter__(self):
+                return self
+
+            def __exit__(self, *_args):
+                return False
+
+        with patch(
+            "digital_twin.infrastructure.cli.MySQLOperationalConnection",
+            return_value=Store(),
+        ), patch(
+            "digital_twin.infrastructure.cli.MySQLMinimalRetentionService",
+        ) as service:
+            service.return_value.run_once.return_value = {
+                "status": "ok",
+                "deleted": 1,
+                "compacted": 0,
+                "archived": 0,
+                "policies": {"audit:runs": 1},
+            }
+
+            result = run_mysql_minimal_retention({}, apply=True, drain=True, drain_max_passes=5)
+
+        self.assertEqual(1, result["drain"]["completedPasses"])
+        self.assertTrue(result["drain"]["exhausted"])
+
     def test_connection_pool_key_keeps_maintenance_timeout_separate(self):
         store = object.__new__(MySQLOperationalConnection)
         store.runtime_settings = {"mysqlOperationTimeoutSeconds": "60"}

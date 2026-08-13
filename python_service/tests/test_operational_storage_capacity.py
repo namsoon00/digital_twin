@@ -14,7 +14,10 @@ from digital_twin.domain.message_types import (
     is_operations_delivery_message_type,
 )
 from digital_twin.domain.operational_notification_presentation import operational_notification_presentation
-from digital_twin.infrastructure.operational_storage_guard import operational_storage_inventory
+from digital_twin.infrastructure.operational_storage_guard import (
+    accelerated_mysql_cleanup_settings,
+    operational_storage_inventory,
+)
 
 
 class StateStore:
@@ -318,6 +321,36 @@ class OperationalStorageCapacityTests(unittest.TestCase):
         self.assertEqual(1, len(queue.jobs))
         self.assertIn("TypeDB 안전 재구축 시작", queue.jobs[0].text)
 
+    def test_mysql_capacity_message_explains_the_policy_limit_and_history_protection(self):
+        payload = {
+            **self.healthy_snapshot(),
+            "state": "limited",
+            "previousState": "warning",
+            "alertRequired": True,
+            "alertKind": "threshold-crossed",
+            "checkedAt": "2026-08-13T09:00:00Z",
+            "warningFreeMb": 49152,
+            "alertFreeMb": 24576,
+            "minimumFreeMb": 12288,
+            "criticalFreeMb": 6144,
+            "mysqlSizeMb": 7373,
+            "mysqlLimitMb": 8192,
+            "mysqlUsagePercent": 90.0,
+            "mysqlCapacityStage": "restricted",
+            "limitingComponents": [{"component": "mysql"}],
+            "suggestedAction": "MySQL 이력 정리를 가속하세요.",
+        }
+
+        context = OperationalStorageCapacityNotificationEnqueuer(Queue()).context(
+            payload,
+            operational_storage_capacity_changed_event(payload),
+        )
+
+        self.assertEqual("MySQL 저장공간 쓰기 제한", context["title"])
+        self.assertIn("8192MB (90.0%)", context["readableMessage"])
+        self.assertIn("비필수 쓰기 제한", context["readableMessage"])
+        self.assertIn("핵심 이력 보호", context["readableMessage"])
+
     def test_storage_capacity_uses_the_operations_delivery_channel_and_presentation(self):
         self.assertTrue(is_operations_delivery_message_type(OPERATIONAL_STORAGE_CAPACITY))
         presentation = operational_notification_presentation(
@@ -351,6 +384,75 @@ class OperationalStorageCapacityTests(unittest.TestCase):
         self.assertGreater(inventory["typedbSizeMb"], 0)
         self.assertGreater(inventory["typedbWalMb"], 0)
         self.assertGreater(inventory["typedbCheckpointMb"], 0)
+
+    def test_mysql_uses_an_eight_gigabyte_default_and_starts_cleanup_at_seventy_percent(self):
+        with tempfile.TemporaryDirectory() as temp:
+            root = Path(temp)
+            (root / "mysql-runtime").mkdir()
+
+            def size(path):
+                return int(5.75 * 1024 * 1024 * 1024) if Path(path).name == "mysql-runtime" else 0
+
+            inventory = operational_storage_inventory(
+                {},
+                data_path=root,
+                disk_usage_provider=lambda _path: SimpleNamespace(
+                    free=80 * 1024 * 1024 * 1024,
+                    total=100 * 1024 * 1024 * 1024,
+                ),
+                size_provider=size,
+            )
+
+        self.assertEqual(8192, inventory["mysqlLimitMb"])
+        self.assertEqual(71.9, inventory["mysqlUsagePercent"])
+        self.assertEqual("maintenance", inventory["mysqlCapacityStage"])
+        self.assertEqual("accelerated", inventory["cleanupMode"])
+        effective = accelerated_mysql_cleanup_settings({}, inventory)
+        self.assertEqual("500", effective["_effectiveMysqlMinimalRetentionBatchSize"])
+
+    def test_mysql_ninety_percent_stage_blocks_only_nonessential_writes(self):
+        current = datetime(2026, 8, 13, 9, 0, tzinfo=timezone.utc)
+        snapshot = {
+            **self.healthy_snapshot(),
+            "mysqlSizeMb": 7.3 * 1024,
+            "mysqlLimitMb": 8 * 1024,
+            "mysqlUsagePercent": 91.2,
+            "mysqlCapacityStage": "restricted",
+            "nonEssentialWritesAllowed": True,
+            "cleanupMode": "accelerated",
+        }
+
+        health, _event = OperationalStorageCapacityService(
+            store=StateStore(),
+            now_provider=lambda: current,
+        ).record(snapshot)
+
+        self.assertEqual("limited", health["state"])
+        self.assertFalse(health["nonEssentialWritesAllowed"])
+        self.assertFalse(health["coreWritesOnly"])
+
+    def test_mysql_hard_limit_marks_core_only_without_disabling_core_history(self):
+        with tempfile.TemporaryDirectory() as temp:
+            root = Path(temp)
+            (root / "mysql-runtime").mkdir()
+
+            def size(path):
+                return 8 * 1024 * 1024 * 1024 if Path(path).name == "mysql-runtime" else 0
+
+            inventory = operational_storage_inventory(
+                {},
+                data_path=root,
+                disk_usage_provider=lambda _path: SimpleNamespace(
+                    free=80 * 1024 * 1024 * 1024,
+                    total=100 * 1024 * 1024 * 1024,
+                ),
+                size_provider=size,
+            )
+
+        self.assertEqual("core-only", inventory["mysqlCapacityStage"])
+        self.assertTrue(inventory["coreWritesOnly"])
+        self.assertFalse(inventory["nonEssentialWritesAllowed"])
+        self.assertTrue(inventory["ready"])
 
 
 if __name__ == "__main__":

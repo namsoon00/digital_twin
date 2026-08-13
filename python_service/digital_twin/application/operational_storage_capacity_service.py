@@ -159,11 +159,22 @@ class OperationalStorageCapacityNotificationEnqueuer:
         previous = str(values.get("previousState") or "없음")
         recovered = str(values.get("alertKind") or "") == "recovered"
         kind = str(values.get("alertKind") or "")
+        components = [
+            item for item in list(values.get("limitingComponents") or [])
+            if isinstance(item, dict)
+        ]
+        component_ids = {str(item.get("component") or "") for item in components}
         title = "운영 저장공간 알림 해소" if recovered else "운영 저장공간 제한 " + {
             "warning": "경고",
             "limited": "도달",
             "critical": "심각",
         }.get(state, "상태 변경")
+        if not recovered and component_ids == {"mysql"}:
+            title = "MySQL 저장공간 " + {
+                "warning": "경고",
+                "limited": "쓰기 제한",
+                "critical": "심각",
+            }.get(state, "상태 변경")
         if kind == "runtime-write-failure":
             title = "운영 저장공간 쓰기 실패"
         elif kind == "typedb-auto-rotation":
@@ -185,9 +196,21 @@ class OperationalStorageCapacityNotificationEnqueuer:
             "• TypeDB 실제 점유: " + str(values.get("typedbSizeMb") or 0) + "MB / 한도 " + str(values.get("typedbLimitMb") or 0) + "MB"
             + " · WAL " + str(values.get("typedbWalMb") or 0) + "MB"
             + " · checkpoint 참조 " + str(values.get("typedbCheckpointReferencedMb") or values.get("typedbCheckpointMb") or 0) + "MB",
-            "• MySQL: " + str(values.get("mysqlSizeMb") or 0) + "MB / 한도 " + str(values.get("mysqlLimitMb") or 0) + "MB",
+            "• MySQL 실제 점유: " + str(values.get("mysqlSizeMb") or 0) + "MB / 운영 한도 "
+            + str(values.get("mysqlLimitMb") or 0) + "MB ("
+            + str(values.get("mysqlUsagePercent") or 0) + "%)",
+            "• MySQL 단계: " + {
+                "normal": "정상",
+                "maintenance": "예방 정리",
+                "warning": "경고",
+                "restricted": "비필수 쓰기 제한",
+                "critical": "긴급 정리",
+                "core-only": "핵심 이력만 기록",
+            }.get(str(values.get("mysqlCapacityStage") or "normal"), "정상")
+            + " · 70% 정리 시작 / 80% 경고 / 90% 비필수 쓰기 제한 / 95% 긴급 정리 / 100% 핵심 이력만 기록",
             "• 로그: " + str(values.get("logSizeMb") or 0) + "MB / 한도 " + str(values.get("logLimitMb") or 0) + "MB",
             "• 처리 모드: " + str(values.get("cleanupMode") or "normal"),
+            "• 핵심 이력 보호: 투자 결정, 판단 후 결과, 현재 가설 상태와 압축 전환 이력은 자동 삭제 대상에서 제외됩니다.",
             "• 조치: " + str(values.get("suggestedAction") or "저장공간 상태를 확인하세요."),
             "• 확인시각: " + str(values.get("checkedAt") or event.occurred_at),
         ]
@@ -218,9 +241,17 @@ class OperationalStorageCapacityNotificationEnqueuer:
                 "• 계산 기준: checkpoint 하드링크 참조 " + str(round(shared_linked_mb, 1))
                 + "MB는 실제 디스크 사용량에 중복 합산하지 않았습니다.",
             )
-        components = list(values.get("limitingComponents") or [])
         if components:
-            names = ", ".join(str(item.get("component") or "") for item in components if isinstance(item, dict))
+            labels = {
+                "sharedDisk": "공용 디스크",
+                "typedb": "TypeDB",
+                "mysql": "MySQL",
+                "logs": "로그",
+            }
+            names = ", ".join(
+                labels.get(str(item.get("component") or ""), str(item.get("component") or ""))
+                for item in components
+            )
             if names:
                 lines.insert(3, "• 제한 대상: " + names)
         text = "\n".join(lines)

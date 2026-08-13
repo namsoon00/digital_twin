@@ -40,6 +40,7 @@ class MySQLMinimalRetentionService:
                 "policy": policy.to_dict(),
                 "deleted": 0,
                 "compacted": 0,
+                "archived": 0,
                 "tables": {},
             }
 
@@ -58,6 +59,7 @@ class MySQLMinimalRetentionService:
             "preview": preview_result,
             "deleted": 0,
             "compacted": 0,
+            "archived": 0,
             "tables": {},
         }
         if mode != "apply":
@@ -69,6 +71,7 @@ class MySQLMinimalRetentionService:
             "status": str(applied.get("status") or "ok"),
             "deleted": int(applied.get("deleted") or 0),
             "compacted": int(applied.get("compacted") or 0),
+            "archived": int(applied.get("archived") or 0),
             "estimatedBytes": int(applied.get("estimatedBytes") or 0),
             "tables": dict(applied.get("tables") or {}),
             "policies": dict(applied.get("policies") or {}),

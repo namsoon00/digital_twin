@@ -557,6 +557,26 @@ class ActionEnvelopeAiGateTests(unittest.TestCase):
         self.assertIn("매도 신호가 아니라, 진입 조건을 더 확인하는 동안 새로 사지 않는다는 뜻입니다.", message)
         self.assertNotIn("매도 검토 시작", message)
 
+    def test_incomplete_hypothesis_comparison_is_labeled_as_ai_safety_hold(self):
+        context = entry_context()
+        context["messageDeliveryLevel"] = "beginner"
+        response = NotificationAIValidatedResponse(
+            action="HOLD",
+            action_label="관심 유지",
+            summary="경쟁 가설 비교가 끝나지 않아 실행 판단을 보류합니다.",
+            current_action_plan="새 주문 없이 다음 근거를 확인합니다.",
+            hypotheses=[{"hypothesisId": "hypothesis:safety"}],
+            selected_hypothesis_id="hypothesis:safety",
+            hypothesis_comparison_state="fallback",
+            hypothesis_selection_source="safety-fallback-fallback",
+            source="Codex AI (GPT-5.6 Sol · max)",
+        )
+
+        message = execution_telegram_message(context, response)
+
+        self.assertIn("[AI 안전 보류]", message)
+        self.assertNotIn("[AI] 관심 유지", message)
+
     def test_watchlist_entry_review_start_is_explicitly_limited(self):
         context = entry_context()
         context.update({

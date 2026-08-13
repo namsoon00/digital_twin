@@ -6,6 +6,7 @@ from digital_twin.domain.market_data import normalize_position
 from digital_twin.domain.market_time_series import MarketTimeSeriesObservation, market_session_date
 from digital_twin.domain.portfolio import AccountSnapshot, PortfolioSummary
 from digital_twin.domain.portfolio_ontology_builder import build_portfolio_ontology
+from digital_twin.domain.portfolio_ontology_temporal_concepts import parse_temporal_windows
 from digital_twin.infrastructure.mysql_market_time_series import MySQLMarketTimeSeriesStore
 from digital_twin.infrastructure.mysql_retention import (
     market_time_series_retention_cutoffs,
@@ -172,6 +173,52 @@ class MarketTimeSeriesTests(unittest.TestCase):
 
         requested_granularities = {params[2] for _sql, params in connection.calls}
         self.assertEqual({"3m", "1d"}, requested_granularities)
+
+    def test_store_returns_each_intraday_window_with_its_own_time_boundary(self):
+        start = datetime(2026, 7, 20, 0, 0, tzinfo=timezone.utc)
+        rows = []
+        for index in range(20):
+            stamp = (start + timedelta(minutes=index * 3)).isoformat().replace("+00:00", "Z")
+            rows.append({
+                "account_id": "main",
+                "symbol": "005930",
+                "granularity": "3m",
+                "bucket_at": stamp,
+                "observed_at": stamp,
+                "source_as_of": stamp,
+                "provider": "test",
+                "source_role": "price",
+                "name": "삼성전자",
+                "market": "KR",
+                "currency": "KRW",
+                "sample_count": 1,
+                "current_price": 100 + index,
+                "data_quality": "actual",
+            })
+
+        class WindowConnection(RecordingConnection):
+            def execute(self, sql, params=()):
+                self.calls.append((sql, tuple(params or ())))
+                granularity = params[2] if len(params) > 2 else ""
+                return Cursor(list(reversed(rows)) if granularity == "3m" else [], rowcount=0)
+
+        store = MySQLMarketTimeSeriesStore.__new__(MySQLMarketTimeSeriesStore)
+        store.runtime_settings = {"marketTimeSeriesEnabled": "1"}
+        connection = WindowConnection()
+        store.connect = lambda: TransactionContext(connection)
+        definitions = parse_temporal_windows("15M=15m:4\n1H=1h:12")
+
+        result = store.load_temporal_windows(
+            "main",
+            ["005930"],
+            definitions,
+            as_of="2026-07-20T00:57:00Z",
+        )["005930"]
+
+        self.assertEqual(6, len(result["15M"]))
+        self.assertEqual(20, len(result["1H"]))
+        self.assertEqual("2026-07-20T00:42:00Z", result["15M"][0]["bucketAt"])
+        self.assertEqual("2026-07-20T00:00:00Z", result["1H"][0]["bucketAt"])
 
     def test_snapshot_time_excludes_unclosed_daily_session(self):
         rows = [

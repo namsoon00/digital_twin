@@ -304,39 +304,421 @@ def _json_bytes(value: object) -> int:
     return len(json.dumps(value, ensure_ascii=False, separators=(",", ":"), default=str).encode("utf-8"))
 
 
+TEMPORAL_DECISION_FIELDS = (
+    "windowKey", "windowType", "lookbackDays", "lookbackMinutes",
+    "requiredSampleCount", "sampleCount", "validObservationCount",
+    "requiredSessionCount", "coveredSessionCount", "hasSufficientHistory",
+    "coverageRatio", "latestObservationQuality", "firstObservedAt", "lastObservedAt",
+    "startPrice", "currentPrice", "priceChangePct", "peakPrice", "troughPrice",
+    "troughReturnPct", "drawdownFromPeakPct", "reboundFromTroughPct",
+    "priorPriceChangePct", "recentPriceChangePct", "priceVelocityChangePct",
+    "volumeRatioEnd", "tradeStrengthEnd", "bidAskImbalanceEnd",
+    "smartMoneyDataState", "smartMoneyNetLatest", "smartMoneyNetChange",
+)
+
+HYPOTHESIS_DECISION_FIELDS = (
+    "hypothesisId", "templateId", "familyId", "label", "claim", "stance",
+    "evidenceState", "supportingRuleIds", "supportingEvidenceIds",
+    "counterEvidenceIds", "causalPathIds", "assumptions", "invalidationConditions",
+    "horizon", "scopeState", "verificationStatus", "approvalStatus",
+)
+
+DECISION_FIELDS = (
+    "basis", "label", "candidateAction", "sourceCandidateAction", "primaryAction",
+    "primaryActionLabel", "decisionStage", "decisionEffect", "actionGroup",
+    "actionLevel", "actionPolicy", "allowedActions", "blockedActions", "targetRole",
+    "judgementBlocked", "selectedRuleId", "candidateRuleIds", "reviewLevel",
+    "dataState", "changeState", "conflictState", "nextChecks",
+)
+
+ACTION_ENVELOPE_FIELDS = (
+    "status", "preferredAction", "allowedActions", "blockedActions", "aiAllowedActions",
+    "aiMayDowngrade", "aiMayUpgradeToBuy", "judgementBlocked", "selectedRuleId",
+    "drivingRuleIds", "supportRuleIds", "blockingRuleIds", "constraintRuleIds",
+    "invalidationConditions", "strengthenConditions", "nextChecks", "targetRole",
+)
+
+RULE_DECISION_FIELDS = (
+    "ruleId", "label", "relationType", "reviewLevel", "dataState", "evidenceRole",
+    "evidence", "evidenceState",
+)
+
+DRIVER_DECISION_FIELDS = (
+    "category", "direction", "evidenceRole", "label", "dataKeys", "summary",
+)
+
+EVIDENCE_DECISION_FIELDS = (
+    "evidenceId", "kind", "eventType", "title", "summary", "evidenceRole",
+    "polarity", "materialityState", "relevanceState", "validationState", "dataState",
+    "source", "sourceKind", "sourceTrustState", "publishedAt", "observedAt", "url",
+)
+
+ACCOUNT_STRATEGY_FIELDS = (
+    "label", "riskTolerance", "timeHorizon", "lossTolerancePct",
+    "profitProtectionPct", "maxPositionWeightPct", "maxSectorWeightPct",
+    "fxExposureReviewPct", "minCashWeightPct", "addBuyPolicy",
+    "allowLossAddBuyReview", "watchlistActionPolicy", "holdingActionPolicy", "profile",
+)
+
+PORTFOLIO_MANDATE_FIELDS = ACCOUNT_STRATEGY_FIELDS + (
+    "risk_tolerance", "time_horizon", "loss_tolerance_pct", "profit_protection_pct",
+    "max_position_weight_pct", "max_sector_weight_pct", "fx_exposure_review_pct",
+    "min_cash_weight_pct", "add_buy_policy", "watchlist_action_policy",
+    "holding_action_policy", "allowed_actions",
+)
+
+RELATION_FACT_PRIORITY = (
+    "currentPrice", "averagePrice", "profitLossRate", "profitLossRateDeltaPct",
+    "quantity", "sellableQuantity", "marketValue", "positionWeight", "sectorWeight",
+    "volume", "volumeRatio", "tradeStrength", "buyExecutionVolume", "sellExecutionVolume",
+    "bidAskImbalance", "foreignNetVolume", "institutionNetVolume", "individualNetVolume",
+    "ma5", "ma20", "ma60", "ma5Distance", "ma20Distance", "ma60Distance",
+    "ma20Slope", "ma60Slope", "changeRate", "currency", "market", "source",
+    "usdKrw", "macroDgs2", "macroDgs10", "macroDff", "btcPrice", "btcChange24h",
+    "btcChange7d", "valuationDecisionEligible", "valuationCurrentPrice",
+    "valuationFairValue", "valuationFairValueLow", "valuationFairValueHigh",
+)
+
+
+def _selected_fields(value: object, fields: Iterable[str]) -> Dict[str, object]:
+    row = _mapping(value)
+    return {
+        key: row.get(key)
+        for key in fields
+        if row.get(key) not in (None, "", [], {})
+    }
+
+
+def _compact_relation_facts(value: object, limit: int = 64) -> Dict[str, object]:
+    facts = _mapping(value)
+    compact: Dict[str, object] = {}
+    for key in RELATION_FACT_PRIORITY:
+        if key in facts and facts.get(key) not in (None, "", [], {}):
+            compact[key] = facts.get(key)
+    for key in sorted(facts):
+        if key in compact or len(compact) >= max(1, int(limit or 1)):
+            continue
+        item = facts.get(key)
+        if isinstance(item, (str, int, float, bool)) and item not in (None, ""):
+            compact[key] = item
+    return compact
+
+
+def _compact_temporal_windows(value: object) -> List[Dict[str, object]]:
+    rows: List[Dict[str, object]] = []
+    seen = set()
+    for item in value or []:
+        row = _selected_fields(item, TEMPORAL_DECISION_FIELDS)
+        window_key = str(row.get("windowKey") or "").upper().strip()
+        if not window_key or window_key in seen:
+            continue
+        seen.add(window_key)
+        rows.append(row)
+    return rows[:12]
+
+
+def _compact_hypotheses(value: object) -> List[Dict[str, object]]:
+    rows: List[Dict[str, object]] = []
+    seen = set()
+    for item in value or []:
+        row = _selected_fields(item, HYPOTHESIS_DECISION_FIELDS)
+        hypothesis_id = str(row.get("hypothesisId") or "").strip()
+        if not hypothesis_id or hypothesis_id in seen:
+            continue
+        seen.add(hypothesis_id)
+        for key in (
+            "supportingRuleIds", "supportingEvidenceIds", "counterEvidenceIds",
+            "causalPathIds", "assumptions", "invalidationConditions",
+        ):
+            if isinstance(row.get(key), list):
+                row[key] = list(row[key])[:8]
+        rows.append(row)
+    return rows[:12]
+
+
+def _compact_dict_rows(value: object, fields: Iterable[str], limit: int) -> List[Dict[str, object]]:
+    return [
+        row
+        for item in list(value or [])[:max(1, int(limit or 1))]
+        if (row := _selected_fields(item, fields))
+    ]
+
+
+def _compact_company_context(value: object) -> Dict[str, object]:
+    company = _mapping(value)
+    financials = _mapping(company.get("latestFinancials"))
+    return {
+        **_selected_fields(
+            company,
+            ("schemaVersion", "symbol", "companyName", "factRevision", "judgmentUse"),
+        ),
+        "profile": _selected_fields(
+            company.get("profile"),
+            ("sector", "industry", "country", "exchange", "businessSummary", "employees"),
+        ),
+        "valuation": _mapping(company.get("valuation")),
+        "ownership": _mapping(company.get("ownership")),
+        "capital": _mapping(company.get("capital")),
+        "coverage": _mapping(company.get("coverage")),
+        "latestFinancials": {
+            "annual": list(financials.get("annual") or [])[:2],
+            "quarterly": list(financials.get("quarterly") or [])[:2],
+        },
+        "governance": _mapping(company.get("governance")),
+    }
+
+
+def _compact_portfolio_lifecycle(value: object, subject_symbol: object) -> Dict[str, object]:
+    lifecycle = _mapping(value)
+    symbol = str(subject_symbol or "").upper().strip()
+    mandate = _mapping(lifecycle.get("mandate"))
+    reconciliation = _mapping(lifecycle.get("reconciliation"))
+    exposure = _mapping(lifecycle.get("exposureSnapshot"))
+    risk = _mapping(lifecycle.get("portfolioRiskSnapshot"))
+    rebalance = _mapping(lifecycle.get("rebalanceProposal"))
+    state = _mapping(lifecycle.get("portfolioState"))
+
+    metrics = []
+    for item in exposure.get("metrics") or []:
+        row = _mapping(item)
+        key = str(row.get("key") or "").upper().strip()
+        try:
+            breached = float(row.get("policyDeltaPct") or 0) > 0
+        except (TypeError, ValueError):
+            breached = False
+        if key == symbol or breached or str(row.get("exposure_type") or "") in {"cash", "currency"}:
+            metrics.append(_selected_fields(
+                row,
+                ("exposure_type", "key", "ratio_pct", "policy_limit_pct", "policyDeltaPct", "observed_at"),
+            ))
+
+    positions = [
+        _selected_fields(
+            item,
+            (
+                "symbol", "weight_pct", "period_return_pct", "maximum_drawdown_pct",
+                "annualized_volatility_pct", "beta", "data_state", "latest_observation_at",
+                "sample_count", "missing_data",
+            ),
+        )
+        for item in risk.get("positions") or []
+        if str(_mapping(item).get("symbol") or "").upper().strip() == symbol
+    ]
+    subject_positions = [
+        _selected_fields(
+            item,
+            (
+                "symbol", "currentWeightPct", "profitLossRate", "marketValueKrw",
+                "holdingDays", "openedAt", "lastIncreaseAt", "lastDecreaseAt",
+            ),
+        )
+        for item in state.get("positions") or []
+        if str(_mapping(item).get("symbol") or "").upper().strip() == symbol
+    ]
+    return {
+        **_selected_fields(lifecycle, ("status", "portfolioId")),
+        "mandate": _selected_fields(mandate, PORTFOLIO_MANDATE_FIELDS),
+        "reconciliation": _selected_fields(
+            reconciliation,
+            ("status", "differenceCount", "source", "sourceSnapshotAt", "createdAt"),
+        ),
+        "exposureSnapshot": {
+            **_selected_fields(exposure, ("observedAt",)),
+            "metrics": metrics[:10],
+        },
+        "portfolioRiskSnapshot": {
+            **_selected_fields(
+                risk,
+                (
+                    "dataState", "observedAt", "periodReturnPct", "benchmarkReturnPct",
+                    "activeReturnPct", "maximumDrawdownPct", "annualizedVolatilityPct",
+                    "maximumPairwiseCorrelation", "sampleCount", "missingData",
+                ),
+            ),
+            "subjectPositions": positions[:1],
+        },
+        "rebalanceProposal": {
+            **_selected_fields(rebalance, ("status", "createdAt", "recommendedScenarioId")),
+            "drifts": _compact_dict_rows(
+                rebalance.get("drifts"),
+                ("allocationKey", "currentWeightPct", "targetDeltaPct", "bandDeltaPct"),
+                6,
+            ),
+            "legs": _compact_dict_rows(
+                rebalance.get("legs"),
+                ("symbol", "side", "before_weight_pct", "after_weight_pct", "target_delta_pct", "rationale"),
+                6,
+            ),
+        },
+        "portfolioState": {
+            **_selected_fields(state, ("cashWeightPct", "positionCount", "observedAt")),
+            "subjectPositions": subject_positions[:1],
+        },
+    }
+
+
+def _critical_decision_brief(brief: Dict[str, object]) -> Dict[str, object]:
+    """Keep decision-bearing fields before reducing presentation detail.
+
+    A generic list or dictionary slice can silently remove long-horizon windows
+    and the hypothesis list while retaining low-value fields that happened to
+    be inserted first.  This contract makes those omissions impossible within
+    the supported twelve-window/twelve-hypothesis boundary.
+    """
+
+    current = _mapping(brief.get("currentSituation"))
+    inference = _mapping(brief.get("inference"))
+    hypothesis_set = _mapping(inference.get("hypothesisSet"))
+    research = _mapping(brief.get("research"))
+    evidence = _mapping(brief.get("evidence"))
+    account_policy = _mapping(brief.get("accountPolicy"))
+    lifecycle = _mapping(account_policy.get("portfolioLifecycle"))
+    subject = _mapping(brief.get("subject"))
+    decision_state = _mapping(brief.get("decisionState"))
+    raw_alert = _mapping(current.get("rawAlert"))
+    hypotheses = _compact_hypotheses(hypothesis_set.get("hypotheses") or [])
+    temporal_windows = _compact_temporal_windows(current.get("temporalWindows") or [])
+    return {
+        "schemaVersion": brief.get("schemaVersion"),
+        "executionProfile": brief.get("executionProfile"),
+        "question": brief.get("question"),
+        "subject": subject,
+        "decisionState": {
+            "previousFinalDecision": _selected_fields(
+                decision_state.get("previousFinalDecision"),
+                ("action", "label", "summary", "source", "generatedAt", "referenceDate"),
+            ),
+            "precomputedActionCandidate": decision_state.get("precomputedActionCandidate"),
+            "decisionTransition": _selected_fields(
+                decision_state.get("decisionTransition"),
+                ("kind", "changed", "previousAction", "currentAction", "summary", "reason"),
+            ),
+            "decision": _selected_fields(decision_state.get("decision"), DECISION_FIELDS),
+            "actionEnvelope": _selected_fields(
+                decision_state.get("actionEnvelope"),
+                ACTION_ENVELOPE_FIELDS,
+            ),
+            **_selected_fields(
+                decision_state,
+                (
+                    "allowedActions", "blockedActions", "reviewLevel", "dataState",
+                    "changeState", "conflictState",
+                ),
+            ),
+        },
+        "currentSituation": {
+            "rawAlert": {
+                **_selected_fields(raw_alert, ("messageType", "target", "referenceDate")),
+                "rawLines": list(raw_alert.get("rawLines") or [])[:12],
+                "criteria": list(raw_alert.get("criteria") or [])[:10],
+            },
+            "relationFacts": _compact_relation_facts(current.get("relationFacts"), 56),
+            "trendDynamics": current.get("trendDynamics") or {},
+            "temporalWindows": temporal_windows,
+            "companyContext": _compact_company_context(current.get("companyContext")),
+            "companyValuationContext": current.get("companyValuationContext") or {},
+        },
+        "inference": {
+            "activeRules": _compact_dict_rows(
+                inference.get("activeRules"), RULE_DECISION_FIELDS, 12,
+            ),
+            "executionPlan": _selected_fields(
+                inference.get("executionPlan"),
+                (
+                    "engineVersion", "targetRole", "actionPolicy", "candidateAction",
+                    "decisionLabel", "decisionStage", "primaryAction", "allowedActions",
+                    "blockedActions", "supportSignals", "nextChecks", "missingDataImpact",
+                ),
+            ),
+            "decisionDrivers": _compact_dict_rows(
+                inference.get("decisionDrivers"), DRIVER_DECISION_FIELDS, 10,
+            ),
+            "whyNow": inference.get("whyNow") or {},
+            "signalConflicts": inference.get("signalConflicts") or {},
+            "hypothesisSet": {
+                **{
+                    key: hypothesis_set.get(key)
+                    for key in (
+                        "hypothesisSetId", "questionId", "subjectSymbol",
+                        "inferenceGenerationId", "comparisonRequired",
+                        "minimumComparisonCount", "scopeVersion", "createdAt",
+                    )
+                    if hypothesis_set.get(key) not in (None, "", [], {})
+                },
+                "hypotheses": hypotheses,
+            },
+            "epistemicState": inference.get("epistemicState") or {},
+        },
+        "evidence": {
+            "researchEvidence": _compact_dict_rows(
+                evidence.get("researchEvidence"), EVIDENCE_DECISION_FIELDS, 8,
+            ),
+            "newsHeadlines": list(evidence.get("newsHeadlines") or [])[:5],
+            "disclosure": evidence.get("disclosure") or {},
+            "sourceAlertEvents": list(evidence.get("sourceAlertEvents") or [])[:6],
+        },
+        "research": {
+            "plan": _selected_fields(
+                research.get("plan"),
+                ("planId", "questionId", "status", "maxRounds", "createdAt", "unresolvedQuestions"),
+            ),
+            "cycle": _selected_fields(
+                research.get("cycle"),
+                (
+                    "cycleId", "status", "round", "changedEvidenceCount",
+                    "verifiedEvidenceCount", "startedAt", "completedAt",
+                ),
+            ),
+            "decisionChangingGaps": list(research.get("decisionChangingGaps") or [])[:6],
+            "verifiedEvidenceAvailable": bool(research.get("verifiedEvidenceAvailable")),
+        },
+        "dataCoverage": brief.get("dataCoverage") or {},
+        "accountPolicy": {
+            "investmentStrategy": _selected_fields(
+                account_policy.get("investmentStrategy"), ACCOUNT_STRATEGY_FIELDS,
+            ),
+            "investmentStrategyGuidance": _selected_fields(
+                account_policy.get("investmentStrategyGuidance"),
+                ("label", "profile", "stance", "actionBoundaries", "riskChecks"),
+            ),
+            "actionPolicy": account_policy.get("actionPolicy"),
+            "portfolioLifecycle": _compact_portfolio_lifecycle(
+                lifecycle,
+                subject.get("symbol"),
+            ),
+        },
+        "candidateOpinion": brief.get("candidateOpinion") or {},
+        "guardrails": brief.get("guardrails") or {},
+        "contextBudget": {
+            "status": "decision-critical",
+            "temporalWindowCount": len(temporal_windows),
+            "hypothesisCount": len(hypotheses),
+            "reason": "기간 식별자와 경쟁 가설을 우선 보존한 판단 전용 컨텍스트입니다.",
+        },
+    }
+
+
 def bounded_decision_brief(brief: Dict[str, object], budget_bytes: int) -> Dict[str, object]:
     budget = max(8 * 1024, int(budget_bytes or 8 * 1024))
+    critical = _critical_decision_brief(brief)
     for string_limit, list_limit, dict_limit in (
-        (320, 10, 40),
-        (220, 7, 28),
-        (150, 5, 20),
-        (96, 3, 12),
+        (260, 16, 64),
+        (200, 16, 56),
+        (150, 16, 48),
+        (110, 16, 40),
     ):
         bounded = _bounded_value(
-            brief,
+            critical,
             string_limit=string_limit,
             list_limit=list_limit,
             dict_limit=dict_limit,
         )
         if _json_bytes(bounded) <= budget:
             return bounded
-    compact = _bounded_value({
-        "schemaVersion": brief.get("schemaVersion"),
-        "executionProfile": brief.get("executionProfile"),
-        "question": brief.get("question"),
-        "subject": brief.get("subject"),
-        "decisionState": brief.get("decisionState"),
-        "currentSituation": brief.get("currentSituation"),
-        "inference": brief.get("inference"),
-        "research": brief.get("research"),
-        "dataCoverage": brief.get("dataCoverage"),
-        "accountPolicy": brief.get("accountPolicy"),
-        "guardrails": brief.get("guardrails"),
-    }, string_limit=72, list_limit=2, dict_limit=8)
-    compact["contextBudget"] = {
-        "status": "reduced",
-        "reason": "전체 감사 원문은 저장소에 유지하고 판단 관련 항목의 문장 길이만 줄였습니다.",
-    }
+    compact = _bounded_value(critical, string_limit=72, list_limit=16, dict_limit=32)
+    compact["contextBudget"] = dict(critical.get("contextBudget") or {})
+    compact["contextBudget"]["status"] = "minimum-decision-contract"
+    compact["contextBudget"]["reason"] = "용량 한도에서도 기간 식별자와 경쟁 가설 ID를 보존했습니다."
     return compact
 
 

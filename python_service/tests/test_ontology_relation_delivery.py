@@ -249,6 +249,12 @@ class OntologyRelationDeliveryTests(unittest.TestCase):
     def test_new_material_evidence_changes_graph_delivery_identity(self):
         before = self.context(event_key="main:news:005930:article-1")
         after = self.context(event_key="main:news:005930:article-2")
+        before["ontologyInsight"]["semanticComponents"] = {
+            "materialSourceEventKeys": ["main:news:005930:article-1"],
+        }
+        after["ontologyInsight"]["semanticComponents"] = {
+            "materialSourceEventKeys": ["main:news:005930:article-2"],
+        }
 
         diff = ontology_relation_delivery_diff(after, before)
 
@@ -261,6 +267,17 @@ class OntologyRelationDeliveryTests(unittest.TestCase):
         self.assertIn("evidenceKeys", diff["changedComponents"])
         self.assertIn("main:news:005930:article-2", diff["addedEvidenceKeys"])
         self.assertIn("main:news:005930:article-1", diff["removedEvidenceKeys"])
+
+    def test_unreviewed_new_evidence_is_context_drift_not_material_change(self):
+        before = self.context(event_key="main:news:005930:article-1")
+        after = self.context(event_key="main:news:005930:article-2")
+
+        diff = ontology_relation_delivery_diff(after, before)
+
+        self.assertTrue(diff["changed"])
+        self.assertFalse(diff["material"])
+        self.assertIn("evidenceKeys", diff["contextComponents"])
+        self.assertNotIn("evidenceKeys", diff["materialComponents"])
 
     def test_inference_generation_id_does_not_change_delivery_identity(self):
         before = self.context()

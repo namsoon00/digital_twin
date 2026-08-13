@@ -619,6 +619,7 @@ class BeginnerRelationLanguageTests(unittest.TestCase):
         self.assertIn("$100", message)
         self.assertIn("검증 완료된 적정가 없음", message)
         self.assertIn("참고만 사용 · 회사·시장 가치 규칙 미성립", message)
+        self.assertIn("기초 지표 일부 · 가치 판단 불충분", message)
         self.assertNotIn("TypeDB 회사·시장 가치 규칙 1개 성립", message)
 
     def test_loss_company_valuation_does_not_render_negative_per_as_multiple(self):

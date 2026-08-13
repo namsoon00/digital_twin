@@ -1,3 +1,4 @@
+import json
 import unittest
 
 from digital_twin.application.notification_ai_decision_context import NotificationAIDecisionContextEnricher
@@ -177,12 +178,57 @@ class NotificationAIDecisionBriefTests(unittest.TestCase):
             "fact-" + str(index): "x" * 800
             for index in range(500)
         }
+        hypothesis_ids = ["hypothesis:" + str(index) for index in range(6)]
         relation["investmentBrain"]["hypothesisSet"]["hypotheses"] = [{
             "hypothesisId": "hypothesis:" + str(index),
             "templateId": "template:" + str(index),
             "claim": "y" * 800,
             "supportingEvidenceIds": ["evidence:" + str(item) for item in range(40)],
-        } for index in range(100)]
+        } for index in range(6)]
+        window_keys = ["15M", "1H", "SESSION", "1D", "3D", "5D", "20D"]
+        context["notificationAiInternalData"]["temporalWindows"] = [{
+            "windowKey": key,
+            "windowType": "multi-day" if key.endswith("D") else "fixed-intraday",
+            "lookbackDays": index + 1,
+            "startPrice": 100 + index,
+            "currentPrice": 110 + index,
+            "priceChangePct": 10,
+            "reboundFromTroughPct": 12,
+            "hasSufficientHistory": True,
+        } for index, key in enumerate(window_keys)]
+        context["portfolioLifecycle"] = {
+            "status": "ready",
+            "portfolioId": "portfolio:main",
+            "mandate": {
+                "profile": "aggressive",
+                "max_position_weight_pct": 45,
+                "max_sector_weight_pct": 65,
+                "fx_exposure_review_pct": 25,
+            },
+            "exposureSnapshot": {
+                "observedAt": "2026-08-11T01:00:00Z",
+                "metrics": [{
+                    "exposure_type": "position",
+                    "key": "SYMBOL" + str(index),
+                    "ratio_pct": index,
+                    "policy_limit_pct": 45,
+                    "policyDeltaPct": max(0, index - 45),
+                    "unusedPayload": "z" * 500,
+                } for index in range(100)],
+            },
+            "portfolioRiskSnapshot": {
+                "dataState": "complete",
+                "positions": [{
+                    "symbol": "SYMBOL" + str(index),
+                    "period_return_pct": index,
+                    "unusedPayload": "z" * 500,
+                } for index in range(100)],
+            },
+            "rebalanceProposal": {
+                "status": "review-required",
+                "scenarios": [{"unusedPayload": "z" * 1000} for _ in range(30)],
+            },
+        }
 
         prompt = build_notification_ai_decision_prompt(
             context,
@@ -192,6 +238,20 @@ class NotificationAIDecisionBriefTests(unittest.TestCase):
 
         self.assertLessEqual(len(prompt.encode("utf-8")), 24 * 1024)
         self.assertIn('"schemaVersion":"investment-ai-decision-brief-v1"', prompt)
+        payload = json.loads(prompt.split("DecisionBrief:\n", 1)[1])
+        self.assertEqual(
+            window_keys,
+            [item["windowKey"] for item in payload["currentSituation"]["temporalWindows"]],
+        )
+        self.assertTrue(all("startPrice" in item for item in payload["currentSituation"]["temporalWindows"]))
+        self.assertEqual(
+            hypothesis_ids,
+            [item["hypothesisId"] for item in payload["inference"]["hypothesisSet"]["hypotheses"]],
+        )
+        self.assertEqual(
+            45,
+            payload["accountPolicy"]["portfolioLifecycle"]["mandate"]["max_position_weight_pct"],
+        )
 
 
 if __name__ == "__main__":

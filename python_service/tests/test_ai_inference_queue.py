@@ -247,6 +247,64 @@ class AIInferenceQueueTests(unittest.TestCase):
         self.assertTrue(enqueuer.called)
         self.assertEqual([], rendered)
 
+    def test_notification_worker_suppresses_watchlist_candidate_churn_after_ai(self):
+        job = NotificationJob.create(
+            "candidate churn",
+            account_id="main",
+            message_type="investmentInsight",
+            context={
+                "notificationAiValidatedResponse": {"action": "HOLD"},
+                "aiDecisionTransition": {
+                    "historyAvailable": True,
+                    "kind": "unchanged",
+                    "previousAction": "HOLD",
+                    "currentAction": "HOLD",
+                },
+                "decisionTransition": {
+                    "kind": "action-changed",
+                    "material": True,
+                    "previousAction": "BUY",
+                    "currentAction": "HOLD",
+                },
+                "ontologyRelationContext": {
+                    "targetRole": "watchlist",
+                    "actionEnvelope": {"targetRole": "watchlist"},
+                },
+                "ontologyInsight": {"semanticComponents": {"materialSourceEventKeys": []}},
+            },
+        )
+
+        class Queue:
+            def claim_pending(self, **_kwargs):
+                return [job]
+
+            def mark_suppressed(self, target, reason):
+                target.status = "suppressed"
+                target.last_error = reason
+
+            def mark_failed(self, *_args):
+                raise AssertionError("candidate-only churn should be suppressed, not failed")
+
+        class Accounts:
+            def load_all(self):
+                return []
+
+        sent = []
+        rendered = []
+        runner = NotificationQueueRunner(
+            queue=Queue(),
+            account_repository=Accounts(),
+            notifier_factory=lambda _account: type("Notifier", (), {"send": lambda _self, message: sent.append(message)})(),
+            template_renderer=lambda queued_job: rendered.append(queued_job.job_id) or "rendered",
+        )
+
+        self.assertEqual(1, runner.run_once(limit=1))
+        self.assertEqual("suppressed", job.status)
+        self.assertEqual([], rendered)
+        self.assertEqual([], sent)
+        self.assertEqual("suppress", job.context["finalAiDeliveryGate"]["decision"])
+        self.assertEqual("final_ai_action_unchanged", job.context["deliverySuppressionReason"])
+
 
 if __name__ == "__main__":
     unittest.main()

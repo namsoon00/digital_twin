@@ -14,6 +14,7 @@ from ..domain.message_types import (
 )
 from ..domain.monitoring import RealtimeMonitor
 from ..domain.notification_ai import enrich_notification_ai_context
+from ..domain.notification_ai_delivery import final_ai_delivery_decision
 from ..domain.notification_ai_gate_contracts import NotificationAIValidatedResponse, ai_gate_enabled_for_message_type
 from ..domain.notification_ai_gate_validation import local_validated_ai_response
 from ..domain.notifications import NotificationJob, notification_debug_number
@@ -472,6 +473,9 @@ class NotificationQueueRunner:
                     self.last_run_details.append(self.job_detail(job, "failed", str(error)[:160]))
                 processed += 1
                 continue
+            if not self.apply_final_ai_delivery_gate(job):
+                processed += 1
+                continue
             message = self.render(job)
             if not message:
                 reason = "empty rendered notification text"
@@ -511,6 +515,29 @@ class NotificationQueueRunner:
         if not ai_gate_enabled_for_message_type(job.message_type, self.settings):
             return False
         return not bool((job.context or {}).get("notificationAiValidatedResponse"))
+
+    def apply_final_ai_delivery_gate(self, job: NotificationJob) -> bool:
+        if str(job.message_type or "") != INVESTMENT_INSIGHT:
+            return True
+        context = dict(job.context or {})
+        if not context.get("notificationAiValidatedResponse"):
+            return True
+        decision = final_ai_delivery_decision(context)
+        context["finalAiDeliveryGate"] = decision
+        job.context = context
+        if decision.get("decision") != "suppress":
+            return True
+        reason = str(decision.get("reason") or "최종 AI 판단이 유지되어 푸시하지 않습니다.")
+        context["deliverySuppressionReason"] = "final_ai_action_unchanged"
+        context["deliverySuppressionDetail"] = reason
+        job.context = context
+        if hasattr(self.queue, "mark_suppressed"):
+            self.queue.mark_suppressed(job, reason)
+        else:
+            self.queue.mark_failed(job, reason)
+        self.record_operational_delivery(job, "suppressed", reason)
+        self.last_run_details.append(self.job_detail(job, "suppressed", "final AI action unchanged"))
+        return False
 
     def message_type_allowed(self, message_type: object) -> bool:
         value = str(message_type or "").strip()

@@ -523,8 +523,14 @@ def relation_delivery_diff(
                 material_components.append(key)
             elif key == "state" and transition.get("kind") == "readiness-changed":
                 material_components.append(key)
-            elif key in {"evidenceKeys", "materialSourceEventKeys"}:
+            elif key == "materialSourceEventKeys":
                 material_components.append(key)
+            elif key == "evidenceKeys":
+                # A collected article or research row is context until the
+                # ontology explicitly marks it as decision-changing. Treating
+                # every newly indexed URL as material allowed unrelated news
+                # collection to bypass an investment cooldown.
+                context_components.append(key)
             else:
                 context_components.append(key)
     for key in ["traces", "inferenceEvidenceKeys"]:

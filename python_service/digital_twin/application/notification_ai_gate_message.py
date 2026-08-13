@@ -2284,11 +2284,12 @@ def company_valuation_presentation(context: Dict[str, object]) -> Dict[str, obje
         "시세 " + price_as_of if price_as_of else "",
     ]
     providers = "·".join(str(item) for item in valuation.get("sourceProviders") or [] if str(item or "").strip())
-    data_state = {
-        "sufficient": "충분",
-        "partial": "일부 자료",
-        "unavailable": "사용 불가",
-    }.get(str(valuation.get("dataState") or ""), str(valuation.get("dataState") or ""))
+    raw_data_state = str(valuation.get("dataState") or "")
+    metric_state = {
+        "sufficient": "기초 지표 조회 완료",
+        "partial": "기초 지표 일부",
+        "unavailable": "기초 지표 사용 불가",
+    }.get(raw_data_state, raw_data_state)
     rule_ids = active_company_valuation_rule_ids(active_rule_items(context or {}))
     role = (
         "판단에 사용 · TypeDB 회사·시장 가치 규칙 " + str(len(rule_ids)) + "개 성립"
@@ -2304,7 +2305,11 @@ def company_valuation_presentation(context: Dict[str, object]) -> Dict[str, obje
         "shareholder": " · ".join(shareholder_parts),
         "targetReference": " · ".join(target_parts),
         "basis": " · ".join(part for part in basis_parts if part),
-        "source": " · ".join(part for part in [providers, "자료 " + data_state if data_state else ""] if part),
+        "source": " · ".join(part for part in [
+            providers,
+            metric_state,
+            "가치 판단 자료 충분" if decision_eligible and rule_ids else "가치 판단 불충분",
+        ] if part),
         "role": role,
         "principle": "공개 산식으로 계산한 가치와 실제 가격·거래·수급이 함께 확인될 때만 실행 근거로 사용",
         "autoReview": "공개 데이터 갱신 시 시스템이 자동 재판단 · 사용자 입력 불필요",
@@ -2780,7 +2785,16 @@ def execution_telegram_message_compact_beginner(
 
 def compact_current_action_line(context: Dict[str, object], response: NotificationAIValidatedResponse) -> str:
     source = str(response.source or "").strip().lower()
-    marker = "[관계 추론]" if source.startswith("local") else "[AI]"
+    comparison_incomplete = bool(
+        response.hypotheses
+        and str(response.hypothesis_comparison_state or "").strip().lower() != "completed"
+    )
+    if source.startswith("local"):
+        marker = "[관계 추론]"
+    elif comparison_incomplete:
+        marker = "[AI 안전 보류]" if str(response.action or "").upper() == "HOLD" else "[AI 조건부]"
+    else:
+        marker = "[AI]"
     action = action_label_for_action(response.action, context) or response.action_label
     detail = compact_sentence_count(
         customer_visible_ai_text(

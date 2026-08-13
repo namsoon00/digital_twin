@@ -46,8 +46,8 @@ class MySQLResearchEvidenceStore(MySQLOperationalConnection):
                 """
                 INSERT INTO news_analysis_work_items (
                     evidence_id, subject_revision, work_class, work_state,
-                    priority, created_at, updated_at
-                ) VALUES (%s, %s, %s, 'pending', %s, %s, %s)
+                    priority, last_error, created_at, updated_at
+                ) VALUES (%s, %s, %s, 'pending', %s, '', %s, %s)
                 ON DUPLICATE KEY UPDATE
                     work_state = IF(
                         subject_revision <> VALUES(subject_revision),

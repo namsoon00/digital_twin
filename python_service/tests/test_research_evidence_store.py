@@ -114,6 +114,28 @@ class ResearchEvidenceStoreTests(unittest.TestCase):
                 [item.evidence_id for item in store.last_changed_items],
             )
 
+    def test_news_analysis_work_queue_round_trips_against_mysql_schema(self):
+        with tempfile.TemporaryDirectory() as temp:
+            reset_mysql_test_database(temp)
+            store = MySQLResearchEvidenceStore(mysql_test_settings(test_store_seed(temp)))
+
+            self.assertEqual(1, store.enqueue_news_analysis_work([{
+                "evidenceId": "research:005930:news:queue",
+                "subjectRevision": "news-analysis:0123456789abcdef0123456789abcdef",
+                "workClass": "model",
+                "priority": 90,
+            }]))
+            claimed = store.claim_news_analysis_work("test-worker", "model", 1, lease_seconds=60)
+
+            self.assertEqual(1, len(claimed))
+            self.assertEqual("research:005930:news:queue", claimed[0]["evidenceId"])
+            self.assertEqual(1, store.finish_news_analysis_work(claimed, "test-worker"))
+            completed = [
+                row for row in store.news_analysis_work_status()["states"]
+                if row["state"] == "completed" and row["workClass"] == "model"
+            ]
+            self.assertEqual(1, completed[0]["count"])
+
     def test_stale_cleanup_skips_a_row_locked_by_another_worker(self):
         with tempfile.TemporaryDirectory() as temp:
             reset_mysql_test_database(temp)

@@ -11,6 +11,8 @@ const npxCommand = process.platform === "win32" ? "npx.cmd" : "npx";
 let serverProcess = null;
 let tunnelProcess = null;
 let printedShareUrl = false;
+let serverRestartTimer = null;
+let shuttingDown = false;
 
 function randomToken() {
   return crypto
@@ -75,6 +77,42 @@ function waitForServer(child) {
   });
 }
 
+function startServer() {
+  const child = childProcess.spawn(process.env.PYTHON_BIN || "python3", ["python_service/service.py", "web"], {
+    cwd: rootDir,
+    stdio: ["ignore", "pipe", "pipe"],
+    env: Object.assign({}, process.env, {
+      HOST: "127.0.0.1",
+      PORT: String(requestedPort),
+      SHARE_TOKEN: shareToken,
+      LOCAL_CODEX_ENABLED: "0"
+    })
+  });
+  serverProcess = child;
+  return waitForServer(child).then(function (port) {
+    child.on("exit", function (code, signal) {
+      if (shuttingDown || serverProcess !== child) return;
+      serverProcess = null;
+      console.error("공유 웹 서버가 종료되었습니다. 재시작합니다. exit=" + code + " signal=" + (signal || "-"));
+      serverRestartTimer = setTimeout(function () {
+        serverRestartTimer = null;
+        startServer().then(function (restartedPort) {
+          if (restartedPort !== port) {
+            console.error("공유 웹 서버 포트가 변경되어 터널을 유지할 수 없습니다.");
+            shutdown(1);
+            return;
+          }
+          console.log("공유 웹 서버가 다시 연결되었습니다: http://127.0.0.1:" + restartedPort);
+        }).catch(function (error) {
+          console.error(error.message || error);
+          shutdown(1);
+        });
+      }, 1000);
+    });
+    return port;
+  });
+}
+
 function printShareUrl(rawUrl) {
   if (printedShareUrl) return;
   const baseUrl = rawUrl.replace(/[),.]+$/, "").replace(/\/$/, "");
@@ -134,6 +172,11 @@ function startTunnel(provider, port) {
 }
 
 function shutdown(code) {
+  shuttingDown = true;
+  if (serverRestartTimer) {
+    clearTimeout(serverRestartTimer);
+    serverRestartTimer = null;
+  }
   if (tunnelProcess) {
     tunnelProcess.removeAllListeners("exit");
     tunnelProcess.kill("SIGTERM");
@@ -148,18 +191,7 @@ function shutdown(code) {
 
 async function main() {
   const provider = providerName();
-  serverProcess = childProcess.spawn(process.env.PYTHON_BIN || "python3", ["python_service/service.py", "web"], {
-    cwd: rootDir,
-    stdio: ["ignore", "pipe", "pipe"],
-    env: Object.assign({}, process.env, {
-      HOST: "127.0.0.1",
-      PORT: String(requestedPort),
-      SHARE_TOKEN: shareToken,
-      LOCAL_CODEX_ENABLED: "0"
-    })
-  });
-
-  const port = await waitForServer(serverProcess);
+  const port = await startServer();
   console.log("Starting " + provider + " tunnel for http://127.0.0.1:" + port);
   startTunnel(provider, port);
 }

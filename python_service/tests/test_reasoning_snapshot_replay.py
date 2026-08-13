@@ -5,7 +5,7 @@ from digital_twin.application.monitoring_service import MonitorRunner
 from digital_twin.domain.accounts import AccountConfig
 from digital_twin.domain.ontology_projection_audit import projection_source_snapshot
 from digital_twin.domain.monitoring import RealtimeMonitor
-from digital_twin.domain.portfolio import AccountSnapshot, PortfolioSummary, Position, account_snapshot_from_monitor_state
+from digital_twin.domain.portfolio import AlertEvent, AccountSnapshot, PortfolioSummary, Position, account_snapshot_from_monitor_state
 from digital_twin.domain.repositories import MonitoringCycleRecordResult
 from digital_twin.infrastructure.ontology_projection import PortfolioOntologyProjectionRecorder
 from digital_twin.infrastructure.reasoning_snapshot_source import LatestMonitorSnapshotReasoningSource
@@ -84,6 +84,25 @@ def monitor_state(generated_at="2026-07-29T00:02:00Z"):
 
 
 class ReasoningSnapshotReplayTests(unittest.TestCase):
+    def test_portfolio_scope_keeps_symbol_less_insight_for_the_matching_account(self):
+        runner = MonitorRunner.__new__(MonitorRunner)
+        portfolio_event = AlertEvent("acct", "Test", "warning", "portfolioOntologySignal", "portfolio", "Portfolio", [])
+        other_account_event = AlertEvent("other", "Other", "warning", "portfolioOntologySignal", "other", "Other", [])
+        unrelated_event = AlertEvent("acct", "Test", "warning", "systemHealth", "system", "System", [])
+
+        filtered = runner.filter_events_by_symbol(
+            [portfolio_event, other_account_event, unrelated_event],
+            {"AAPL"},
+            account_id="acct",
+            reasoning_context={
+                "subjectKinds": ["PORTFOLIO"],
+                "subjectIds": ["portfolio:acct"],
+                "accountIds": ["acct"],
+            },
+        )
+
+        self.assertEqual([portfolio_event], filtered)
+
     def test_rehydrates_an_independent_domain_snapshot(self):
         state = monitor_state()
         snapshot = account_snapshot_from_monitor_state(state)

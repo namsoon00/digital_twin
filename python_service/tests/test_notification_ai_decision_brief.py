@@ -228,6 +228,13 @@ class NotificationAIDecisionBriefTests(unittest.TestCase):
                 "status": "review-required",
                 "scenarios": [{"unusedPayload": "z" * 1000} for _ in range(30)],
             },
+            "rebalanceState": {
+                "status": "POLICY_BREACH",
+                "breachKeys": ["position:MSTR"],
+                "maximumNotionalBySymbol": {"MSTR": 5_000_000},
+                "revision": "rebalance-revision:1",
+                "unusedPayload": "z" * 1000,
+            },
         }
 
         prompt = build_notification_ai_decision_prompt(
@@ -251,6 +258,14 @@ class NotificationAIDecisionBriefTests(unittest.TestCase):
         self.assertEqual(
             45,
             payload["accountPolicy"]["portfolioLifecycle"]["mandate"]["max_position_weight_pct"],
+        )
+        self.assertEqual(
+            "POLICY_BREACH",
+            payload["accountPolicy"]["portfolioLifecycle"]["rebalanceState"]["status"],
+        )
+        self.assertEqual(
+            {"MSTR": 5_000_000},
+            payload["accountPolicy"]["portfolioLifecycle"]["rebalanceState"]["maximumNotionalBySymbol"],
         )
 
 

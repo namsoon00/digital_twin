@@ -356,6 +356,7 @@ TRIGGER_ORDER = {
     "research-evidence-update": 2,
     "news-analysis-enrichment": 2,
     "portfolio-snapshot-update": 2,
+    "portfolio-rebalance-transition": 6,
     "data-update": 1,
 }
 

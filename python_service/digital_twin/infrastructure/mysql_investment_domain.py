@@ -22,7 +22,12 @@ from ..domain.portfolio_ledger import (
 from ..domain.portfolio_analytics import PortfolioRiskSnapshot
 from ..domain.events import PORTFOLIO_RISK_OBSERVED
 from ..domain.snapshot_portfolio_activity import activity_payload
-from ..domain.portfolio_rebalancing import RebalanceProposal
+from ..domain.portfolio_rebalancing import (
+    RebalanceProposal,
+    RebalanceState,
+    RebalanceTransition,
+    rebalance_transition,
+)
 from ..domain.risk_exposure import ExposureSnapshot
 from ..domain.trade_execution import ActionPlan, ActionPlanReview, ExecutionEpisode
 from .mysql_operational_connection import MySQLOperationalConnection
@@ -92,6 +97,81 @@ def save_mandate_with_connection(connection, mandate: InvestmentMandate, stamp: 
 
 
 class MySQLInvestmentDomainStore(MySQLOperationalConnection):
+    def record_rebalance_state_with_connection(
+        self,
+        connection,
+        current_state: Optional[RebalanceState],
+        transition: Optional[RebalanceTransition],
+        domain_event=None,
+        reasoning_event=None,
+        stamp: str = "",
+    ) -> bool:
+        """CAS the emitted baseline and its mailbox ingress under one row lock."""
+        if not current_state:
+            return False
+        stamp = str(stamp or utc_now())
+        row = connection.execute(
+            "SELECT revision, event_payload_json FROM portfolio_rebalance_states "
+            "WHERE portfolio_id = %s FOR UPDATE",
+            (current_state.portfolio_id,),
+        ).fetchone()
+        previous_payload = _json_loads((row or {}).get("event_payload_json"), {})
+        previous = RebalanceState.from_dict(previous_payload) if previous_payload else None
+        verified = rebalance_transition(previous, current_state)
+        recorded_revision = str((row or {}).get("revision") or "")
+        accepted = bool(
+            transition
+            and verified
+            and domain_event
+            and reasoning_event
+            and transition.revision == verified.revision
+            and transition.revision != recorded_revision
+        )
+        current_payload = json_dumps(current_state.to_dict())
+        if row:
+            if accepted:
+                connection.execute(
+                    "UPDATE portfolio_rebalance_states SET policy_version = %s, status = %s, "
+                    "semantic_fingerprint = %s, revision = %s, transition_type = %s, observed_at = %s, "
+                    "current_payload_json = %s, event_payload_json = %s, updated_at = %s WHERE portfolio_id = %s",
+                    (
+                        current_state.policy_version, current_state.status, current_state.semantic_fingerprint,
+                        transition.revision, transition.transition_type, current_state.observed_at,
+                        current_payload, current_payload, stamp, current_state.portfolio_id,
+                    ),
+                )
+            else:
+                connection.execute(
+                    "UPDATE portfolio_rebalance_states SET policy_version = %s, status = %s, "
+                    "semantic_fingerprint = %s, observed_at = %s, current_payload_json = %s, "
+                    "updated_at = %s WHERE portfolio_id = %s",
+                    (
+                        current_state.policy_version, current_state.status, current_state.semantic_fingerprint,
+                        current_state.observed_at, current_payload, stamp, current_state.portfolio_id,
+                    ),
+                )
+        else:
+            connection.execute(
+                "INSERT INTO portfolio_rebalance_states "
+                "(portfolio_id, policy_version, status, semantic_fingerprint, revision, transition_type, "
+                "observed_at, current_payload_json, event_payload_json, created_at, updated_at) "
+                "VALUES (%s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s)",
+                (
+                    current_state.portfolio_id, current_state.policy_version, current_state.status,
+                    current_state.semantic_fingerprint, transition.revision if accepted else "",
+                    transition.transition_type if accepted else "", current_state.observed_at,
+                    current_payload, current_payload if accepted else None, stamp, stamp,
+                ),
+            )
+        if accepted and domain_event:
+            insert_domain_event_with_connection(connection, domain_event)
+        if accepted and reasoning_event:
+            insert_domain_event_with_connection(connection, reasoning_event)
+            from .mysql_reasoning_mailbox import MySQLOntologyReasoningMailboxStore
+
+            MySQLOntologyReasoningMailboxStore.ingress_event_with_connection(connection, reasoning_event)
+        return accepted
+
     def lifecycle_trace(self, decision_episode_id: str) -> Dict[str, object]:
         episode_id = str(decision_episode_id or "").strip()
         if not episode_id:
@@ -346,6 +426,10 @@ class MySQLInvestmentDomainStore(MySQLOperationalConnection):
         notification_job=None,
         reasoning_event=None,
         risk_snapshot: Optional[PortfolioRiskSnapshot] = None,
+        rebalance_state: Optional[RebalanceState] = None,
+        rebalance_transition: Optional[RebalanceTransition] = None,
+        rebalance_event=None,
+        rebalance_reasoning_event=None,
     ) -> Dict[str, object]:
         """CAS one complete account observation and its durable side effects."""
         rows = list(ledger_entries or [])
@@ -501,6 +585,14 @@ class MySQLInvestmentDomainStore(MySQLOperationalConnection):
                 from .mysql_reasoning_mailbox import MySQLOntologyReasoningMailboxStore
 
                 MySQLOntologyReasoningMailboxStore.ingress_event_with_connection(connection, reasoning_event)
+            rebalance_recorded = self.record_rebalance_state_with_connection(
+                connection,
+                rebalance_state,
+                rebalance_transition,
+                rebalance_event,
+                rebalance_reasoning_event,
+                stamp,
+            )
             queued = bool(notification_store.enqueue_with_connection(connection, notification_job)) if notification_store and notification_job else False
             return {
                 "status": "committed",
@@ -508,6 +600,7 @@ class MySQLInvestmentDomainStore(MySQLOperationalConnection):
                 "actualCheckpointVersion": next_version,
                 "insertedCount": inserted,
                 "notificationQueued": queued,
+                "rebalanceTransitionRecorded": rebalance_recorded,
             }
 
         return self.transaction_with_deadlock_retry("portfolio-snapshot-observation", commit)
@@ -635,6 +728,28 @@ class MySQLInvestmentDomainStore(MySQLOperationalConnection):
             ).fetchone()
         return _json_loads(row.get("payload_json"), {}) if row else {}
 
+    def latest_rebalance_state(self, portfolio_id: str) -> Dict[str, object]:
+        """Return the last event-worthy baseline, not every sampled state."""
+        with self.connect() as connection:
+            row = connection.execute(
+                "SELECT event_payload_json, revision, transition_type FROM portfolio_rebalance_states "
+                "WHERE portfolio_id = %s LIMIT 1",
+                (str(portfolio_id or ""),),
+            ).fetchone()
+        payload = _json_loads((row or {}).get("event_payload_json"), {})
+        if payload:
+            payload["revision"] = str((row or {}).get("revision") or "")
+            payload["lastTransitionType"] = str((row or {}).get("transition_type") or "")
+        return payload
+
+    def latest_rebalance_current_state(self, portfolio_id: str) -> Dict[str, object]:
+        with self.connect() as connection:
+            row = connection.execute(
+                "SELECT current_payload_json FROM portfolio_rebalance_states WHERE portfolio_id = %s LIMIT 1",
+                (str(portfolio_id or ""),),
+            ).fetchone()
+        return _json_loads((row or {}).get("current_payload_json"), {})
+
     def save_portfolio_analysis_bundle(
         self,
         risk_snapshot: PortfolioRiskSnapshot,
@@ -643,6 +758,10 @@ class MySQLInvestmentDomainStore(MySQLOperationalConnection):
         decision_cycle: PortfolioDecisionCycle,
         domain_event=None,
         reasoning_event=None,
+        rebalance_state: Optional[RebalanceState] = None,
+        rebalance_transition: Optional[RebalanceTransition] = None,
+        rebalance_event=None,
+        rebalance_reasoning_event=None,
     ) -> Dict[str, object]:
         """Persist one derived analysis bundle without holding a source lock."""
         stamp = utc_now()
@@ -711,6 +830,17 @@ class MySQLInvestmentDomainStore(MySQLOperationalConnection):
                 insert_domain_event_with_connection(connection, domain_event)
             if risk_changed and reasoning_event:
                 insert_domain_event_with_connection(connection, reasoning_event)
+                from .mysql_reasoning_mailbox import MySQLOntologyReasoningMailboxStore
+
+                MySQLOntologyReasoningMailboxStore.ingress_event_with_connection(connection, reasoning_event)
+            rebalance_recorded = self.record_rebalance_state_with_connection(
+                connection,
+                rebalance_state,
+                rebalance_transition,
+                rebalance_event,
+                rebalance_reasoning_event,
+                stamp,
+            )
         return {
             "status": "saved",
             "riskChanged": risk_changed,
@@ -718,6 +848,7 @@ class MySQLInvestmentDomainStore(MySQLOperationalConnection):
             "exposureSnapshotId": exposure.snapshot_id,
             "rebalanceProposalId": rebalance_proposal.proposal_id if rebalance_proposal else "",
             "decisionCycleId": decision_cycle.cycle_id,
+            "rebalanceTransitionRecorded": rebalance_recorded,
         }
 
     def save_portfolio_decision_cycle(self, cycle: PortfolioDecisionCycle) -> PortfolioDecisionCycle:
@@ -843,6 +974,11 @@ class MySQLInvestmentDomainStore(MySQLOperationalConnection):
                 "ORDER BY created_at DESC, proposal_id DESC LIMIT 1",
                 (portfolio_key,),
             ).fetchone()
+            rebalance_state = connection.execute(
+                "SELECT current_payload_json, revision, transition_type FROM portfolio_rebalance_states "
+                "WHERE portfolio_id = %s LIMIT 1",
+                (portfolio_key,),
+            ).fetchone()
             plans = connection.execute(
                 "SELECT plan_id, payload_json FROM investment_action_plans WHERE portfolio_id = %s "
                 "ORDER BY created_at DESC, plan_id DESC LIMIT 20",
@@ -938,6 +1074,10 @@ class MySQLInvestmentDomainStore(MySQLOperationalConnection):
         mandate = self.active_mandate(portfolio_key)
         attribution_payloads = [_json_loads(item.get("payload_json"), {}) for item in attributions or []]
         decision_review_payloads = [_json_loads(item.get("payload_json"), {}) for item in decision_reviews or []]
+        rebalance_state_payload = _json_loads((rebalance_state or {}).get("current_payload_json"), {})
+        if rebalance_state_payload:
+            rebalance_state_payload["revision"] = str((rebalance_state or {}).get("revision") or "")
+            rebalance_state_payload["lastTransitionType"] = str((rebalance_state or {}).get("transition_type") or "")
         return {
             "status": "ready" if any([mandate, reconciliation, exposure, risk_snapshot, rebalance, plans, ledger_rows]) else "unavailable",
             "portfolioId": portfolio_key,
@@ -947,6 +1087,7 @@ class MySQLInvestmentDomainStore(MySQLOperationalConnection):
             "exposureSnapshot": _json_loads(exposure.get("payload_json"), {}) if exposure else {},
             "portfolioRiskSnapshot": _json_loads(risk_snapshot.get("payload_json"), {}) if risk_snapshot else {},
             "rebalanceProposal": _json_loads(rebalance.get("payload_json"), {}) if rebalance else {},
+            "rebalanceState": rebalance_state_payload,
             "portfolioDecisionCycle": _json_loads(decision_cycle.get("payload_json"), {}) if decision_cycle else {},
             "ledgerSummary": {
                 "entryCount": int(ledger_summary.get("entry_count") or 0),

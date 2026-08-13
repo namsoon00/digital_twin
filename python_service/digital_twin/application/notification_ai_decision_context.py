@@ -206,6 +206,7 @@ class NotificationAIDecisionContextEnricher:
                     "exposureSnapshot": lifecycle.get("exposureSnapshot") or {},
                     "portfolioRiskSnapshot": lifecycle.get("portfolioRiskSnapshot") or {},
                     "rebalanceProposal": lifecycle.get("rebalanceProposal") or {},
+                    "rebalanceState": lifecycle.get("rebalanceState") or {},
                     "portfolioDecisionCycle": lifecycle.get("portfolioDecisionCycle") or {},
                     "portfolioState": lifecycle.get("portfolioState") or {},
                     "recentActivityEpisodes": list(lifecycle.get("recentActivityEpisodes") or [])[:8],

@@ -36,11 +36,12 @@ from ..domain.portfolio_rebalancing import (
     RebalanceLeg,
     RebalanceProposal,
     RebalanceScenario,
+    RebalanceState,
     allocation_drifts,
+    rebalance_transition,
 )
 from ..domain.portfolio_analytics import (
     PortfolioRiskSnapshot,
-    portfolio_risk_event_materiality,
     portfolio_risk_snapshot,
     with_policy_limits,
 )
@@ -142,6 +143,8 @@ class PortfolioLifecycleObservation:
     portfolio_state: Dict[str, object] = None
     decision_action_observations: List[Dict[str, object]] = None
     factual_notification_queued: bool = False
+    rebalance_state: Dict[str, object] = None
+    rebalance_transition: Dict[str, object] = None
 
     def to_dict(self) -> Dict[str, object]:
         return {
@@ -161,6 +164,8 @@ class PortfolioLifecycleObservation:
             "portfolioState": dict(self.portfolio_state or {}),
             "decisionActionObservations": list(self.decision_action_observations or []),
             "factualNotificationQueued": self.factual_notification_queued,
+            "rebalanceState": dict(self.rebalance_state or {}),
+            "rebalanceTransition": dict(self.rebalance_transition or {}),
         }
 
 
@@ -210,7 +215,14 @@ class PortfolioAccountingService:
                 advanced = self.repository.advance_snapshot_checkpoint(expected_version, checkpoint)
                 if advanced.get("status") == "checkpoint-conflict":
                     continue
-                analysis = self.refresh_analysis(snapshot, portfolio_id, mandate)
+                analysis = (
+                    self.refresh_analysis(snapshot, portfolio_id, mandate)
+                    if self.portfolio_analysis_due(portfolio_id, snapshot.generated_at)
+                    else {
+                        "analysisStatus": "deferred-unchanged-snapshot",
+                        "analysisIntervalSeconds": self.portfolio_analysis_interval_seconds(),
+                    }
+                )
                 return {
                     **advanced,
                     "reason": reason,
@@ -265,6 +277,9 @@ class PortfolioAccountingService:
             risk = self.risk_snapshot(snapshot, portfolio_id, mandate, exposure)
             proposal = self.rebalance_proposal(snapshot, mandate, exposure, risk)
             decision_cycle = self.portfolio_decision_cycle(snapshot, mandate, exposure, reconciliation, risk, proposal)
+            rebalance_state, transition, rebalance_event, rebalance_reasoning_event = self.rebalance_transition_context(
+                snapshot, mandate, exposure, risk, proposal,
+            )
             episode = PortfolioActivityEpisode.from_entries(inferred_entries, checkpoint, previous)
             state_snapshot = PortfolioStateSnapshot.from_snapshot(
                 snapshot,
@@ -313,6 +328,10 @@ class PortfolioAccountingService:
                 job,
                 reasoning_event,
                 risk_snapshot=risk,
+                rebalance_state=rebalance_state,
+                rebalance_transition=transition,
+                rebalance_event=rebalance_event,
+                rebalance_reasoning_event=rebalance_reasoning_event,
             )
             if committed.get("status") == "checkpoint-conflict":
                 continue
@@ -325,6 +344,9 @@ class PortfolioAccountingService:
             inserted_count = int(committed.get("insertedCount") or 0)
             if event and inserted_count and self.investment_domain_service:
                 self.investment_domain_service.dispatch_recorded(event)
+            if committed.get("rebalanceTransitionRecorded") and self.investment_domain_service:
+                self.investment_domain_service.dispatch_recorded(rebalance_event)
+                self.investment_domain_service.dispatch_recorded(rebalance_reasoning_event)
             return PortfolioLifecycleObservation(
                 portfolio_id=portfolio_id,
                 reconciliation=reconciliation,
@@ -341,6 +363,8 @@ class PortfolioAccountingService:
                 portfolio_state=state_snapshot.to_dict(),
                 decision_action_observations=[item.to_dict() for item in action_observations],
                 factual_notification_queued=bool(committed.get("notificationQueued")),
+                rebalance_state=rebalance_state.to_dict(),
+                rebalance_transition=transition.to_dict() if transition and committed.get("rebalanceTransitionRecorded") else {},
             ).to_dict()
         return {
             "status": "checkpoint-conflict",
@@ -348,6 +372,22 @@ class PortfolioAccountingService:
             "portfolioId": portfolio_id,
             "snapshotTrust": trust,
         }
+
+    def portfolio_analysis_interval_seconds(self) -> int:
+        return max(60, min(3600, int(number(
+            self.settings.get("portfolioAnalysisIntervalSeconds")
+        ) or 300)))
+
+    def portfolio_analysis_due(self, portfolio_id: str, observed_at: str) -> bool:
+        loader = getattr(self.repository, "latest_rebalance_current_state", None)
+        if not callable(loader):
+            return True
+        current = loader(portfolio_id) or {}
+        previous_at = parse_timestamp(current.get("observedAt") or current.get("observed_at"))
+        candidate_at = parse_timestamp(observed_at)
+        if not previous_at or not candidate_at:
+            return True
+        return (candidate_at - previous_at).total_seconds() >= self.portfolio_analysis_interval_seconds()
 
     def decision_action_observations(self, episode) -> List[DecisionActionObservation]:
         if not episode or not callable(getattr(self.repository, "latest_decision_before", None)):
@@ -661,38 +701,26 @@ class PortfolioAccountingService:
         risk = self.risk_snapshot(snapshot, portfolio_id, mandate, exposure)
         proposal = self.rebalance_proposal(snapshot, mandate, exposure, risk)
         cycle = self.portfolio_decision_cycle(snapshot, mandate, exposure, reconciliation, risk, proposal)
-        symbols = [item.symbol for item in risk.positions]
-        source_event = None
-        reasoning_event = None
-        baseline_loader = getattr(self.repository, "latest_portfolio_risk_event", None)
-        baseline = baseline_loader(portfolio_id) if callable(baseline_loader) else {}
-        materiality = portfolio_risk_event_materiality(baseline or {}, risk)
-        if self.investment_domain_service and symbols and materiality.material:
-            source_event = self.investment_domain_service.risk_observed_event(
-                risk,
-                symbols,
-                materiality.to_dict(),
-            )
-            fact_types = ["PortfolioRiskSnapshot", "PositionRiskMetric", "RebalanceScenario"]
-            reasoning_event = ontology_reasoning_requested_event(
-                source_event,
-                "portfolio-risk-change",
-                changed_count=1,
-                observed_count=len(risk.positions),
-                fact_types=fact_types,
-                subject_kind="PORTFOLIO",
-                subject_id=portfolio_id,
-                affected_symbols=symbols,
-                subject_revision=risk.risk_snapshot_id,
-                subject_changed_fields=["portfolioRisk", "positionRisk", "rebalanceScenario"],
-                account_id=snapshot.account_id,
-                reason="저장된 시계열에서 포트폴리오 위험 지문이 변경됐습니다.",
-                importance_gate="portfolio-risk-fingerprint-change",
-            )
+        rebalance_state, transition, source_event, reasoning_event = self.rebalance_transition_context(
+            snapshot, mandate, exposure, risk, proposal,
+        )
         bundle_saver = getattr(self.repository, "save_portfolio_analysis_bundle", None)
+        transition_recorded = False
         if callable(bundle_saver):
-            saved = bundle_saver(risk, exposure, proposal, cycle, source_event, reasoning_event)
-            if saved.get("riskChanged") and self.investment_domain_service and source_event and reasoning_event:
+            saved = bundle_saver(
+                risk,
+                exposure,
+                proposal,
+                cycle,
+                None,
+                None,
+                rebalance_state=rebalance_state,
+                rebalance_transition=transition,
+                rebalance_event=source_event,
+                rebalance_reasoning_event=reasoning_event,
+            )
+            if saved.get("rebalanceTransitionRecorded") and self.investment_domain_service and source_event and reasoning_event:
+                transition_recorded = True
                 self.investment_domain_service.dispatch_recorded(source_event)
                 self.investment_domain_service.dispatch_recorded(reasoning_event)
         else:
@@ -706,13 +734,66 @@ class PortfolioAccountingService:
             if self.investment_domain_service and source_event and reasoning_event:
                 self.investment_domain_service.publish(source_event)
                 self.investment_domain_service.publish(reasoning_event)
+                transition_recorded = True
         return {
             "reconciliation": reconciliation.to_dict(),
             "exposureSnapshot": exposure.to_dict(),
             "portfolioRiskSnapshot": risk.to_dict(),
             "rebalanceProposal": proposal.to_dict() if proposal else {},
+            "rebalanceState": rebalance_state.to_dict(),
+            "rebalanceTransition": transition.to_dict() if transition and transition_recorded else {},
             "portfolioDecisionCycle": cycle.to_dict(),
         }
+
+    def rebalance_transition_context(
+        self,
+        snapshot: AccountSnapshot,
+        mandate: InvestmentMandate,
+        exposure: ExposureSnapshot,
+        risk: Optional[PortfolioRiskSnapshot],
+        proposal: Optional[RebalanceProposal],
+    ):
+        current = RebalanceState.from_analysis(
+            exposure.portfolio_id,
+            mandate.policy_version,
+            exposure,
+            risk,
+            proposal,
+        )
+        baseline_loader = getattr(self.repository, "latest_rebalance_state", None)
+        baseline = baseline_loader(exposure.portfolio_id) if callable(baseline_loader) else {}
+        previous = RebalanceState.from_dict(baseline) if baseline else None
+        transition = rebalance_transition(previous, current)
+        if not transition or not self.investment_domain_service:
+            return current, transition, None, None
+        symbols = sorted({
+            *[str(item.symbol or "").upper().strip() for item in risk.positions if str(item.symbol or "").strip()],
+            *[str(item.symbol or "").upper().strip() for item in (proposal.legs if proposal else []) if str(item.symbol or "").strip()],
+        })
+        source_event = self.investment_domain_service.rebalance_transition_event(transition, symbols)
+        fact_types = [
+            "Portfolio",
+            "ExposureSnapshot",
+            "PortfolioRiskSnapshot",
+            "RebalanceProposal",
+            "RebalanceState",
+        ]
+        reasoning_event = ontology_reasoning_requested_event(
+            source_event,
+            "portfolio-rebalance-transition",
+            changed_count=1,
+            observed_count=max(1, len(symbols)),
+            fact_types=fact_types,
+            subject_kind="PORTFOLIO",
+            subject_id=exposure.portfolio_id,
+            affected_symbols=symbols,
+            subject_revision=transition.revision,
+            subject_changed_fields=["portfolioExposure", "portfolioRisk", "rebalanceState"],
+            account_id=snapshot.account_id,
+            reason="포트폴리오 정책 위반 상태가 열리거나 의미 있게 변경되거나 해소됐습니다.",
+            importance_gate="portfolio-rebalance-state-transition",
+        )
+        return current, transition, source_event, reasoning_event
 
     def rebalance_proposal(
         self,

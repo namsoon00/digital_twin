@@ -191,7 +191,7 @@ class OntologyRuleBoxTests(unittest.TestCase):
         rules_by_id = {item.rule_id: item for item in rules}
 
         self.assertEqual([], rulebox_semantic_violations(rules))
-        self.assertEqual(112, sum(item.enabled for item in rules))
+        self.assertEqual(113, sum(item.enabled for item in rules))
         self.assertTrue(rules_by_id["graph.benchmark.beta.context.v1"].enabled)
         self.assertFalse(rules_by_id["graph.data_quality.action_block.v1"].enabled)
         self.assertFalse(rules_by_id["graph.holding.trend_transition.risk.v1"].enabled)
@@ -1574,7 +1574,7 @@ class OntologyRuleBoxTests(unittest.TestCase):
         self.assertEqual("data-quality-status", price_reclaim_quality["conditionTargetKind"])
         self.assertEqual(["market-microstructure"], price_reclaim_quality["conditionTargetDataScopes"])
         self.assertEqual("any", portfolio_concentration["conditionRole"])
-        self.assertEqual("HAS_MARKET_EXPOSURE", portfolio_concentration["conditionRelationType"])
+        self.assertEqual("HAS_EXPOSURE", portfolio_concentration["conditionRelationType"])
         self.assertEqual("sector-exposure", portfolio_concentration["conditionTargetKind"])
         self.assertEqual("HAS_RISK_BUDGET", strategy_risk_budget["conditionRelationType"])
         self.assertEqual("risk-budget", strategy_risk_budget["conditionTargetKind"])

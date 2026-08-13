@@ -7,6 +7,7 @@ from ..domain.accounts import AccountConfig
 from ..domain.events import alerts_detected_event, monitoring_cycle_completed_event, snapshot_collected_event
 from ..domain.ontology_projection_input import compact_monitor_state_for_ontology
 from ..domain.ontology_projection_status import VERIFIED_MONITOR_SNAPSHOT_QUEUED
+from ..domain.message_types import PORTFOLIO_ONTOLOGY_SIGNAL
 from ..domain.portfolio import AccountSnapshot, AlertEvent
 from ..domain.repositories import MonitorAccountJob, MonitorAccountJobRepository, MonitorStateRepository, MonitoringCycleRecorder, OntologyProjectionRecorder, SnapshotMonitor
 
@@ -407,7 +408,12 @@ class MonitorRunner:
             events.extend(self.monitor.forced_holdings_snapshot_events(snapshot))
         self.progress("events.detected", accountId=account.account_id, eventCount=len(events))
         if allowed_symbols:
-            events = self.filter_events_by_symbol(events, allowed_symbols)
+            events = self.filter_events_by_symbol(
+                events,
+                allowed_symbols,
+                account_id=account.account_id,
+                reasoning_context=reasoning_context,
+            )
             self.progress("events.filtered", accountId=account.account_id, eventCount=len(events), symbolCount=len(allowed_symbols))
         detected_events = list(events)
         events = self.monitor.apply_cadence(events, self.store, force=force)
@@ -480,7 +486,13 @@ class MonitorRunner:
             and generation_aligned
             and bool(str(inference.get("sourceAboxSnapshotId") or ""))
         )
-        investment_types = {"investmentInsight", "holdingTiming", "watchlistOntologySignal", "cryptoOntologySignal"}
+        investment_types = {
+            "investmentInsight",
+            "holdingTiming",
+            "watchlistOntologySignal",
+            "cryptoOntologySignal",
+            PORTFOLIO_ONTOLOGY_SIGNAL,
+        }
 
         def event_message_type(event: AlertEvent) -> str:
             return str(
@@ -608,11 +620,45 @@ class MonitorRunner:
         attempts = max(1, int(getattr(job, "attempts", 0) or 0))
         return min(self.account_job_interval_seconds * 8, self.account_job_interval_seconds * attempts)
 
-    def filter_events_by_symbol(self, events: List[AlertEvent], allowed_symbols: set) -> List[AlertEvent]:
+    def filter_events_by_symbol(
+        self,
+        events: List[AlertEvent],
+        allowed_symbols: set,
+        account_id: str = "",
+        reasoning_context: Dict[str, object] = None,
+    ) -> List[AlertEvent]:
+        context = dict(reasoning_context or {})
+        subject_kinds = {
+            str(item or "").upper().strip()
+            for item in context.get("subjectKinds") or []
+            if str(item or "").strip()
+        }
+        subject_ids = {
+            str(item or "").strip()
+            for item in context.get("subjectIds") or []
+            if str(item or "").strip()
+        }
+        account_ids = {
+            str(item or "").strip()
+            for item in context.get("accountIds") or []
+            if str(item or "").strip()
+        }
+        portfolio_ids = {"portfolio:" + str(account_id or "").strip(), str(account_id or "").strip()}
+        portfolio_scope = bool(
+            "PORTFOLIO" in subject_kinds
+            and (not account_ids or str(account_id or "") in account_ids)
+            and (not subject_ids or bool(subject_ids.intersection(portfolio_ids)))
+        )
         return [
             event
             for event in events
             if str(event.symbol or "").upper().strip() in allowed_symbols
+            or (
+                portfolio_scope
+                and not str(event.symbol or "").strip()
+                and str(event.account_id or "") == str(account_id or "")
+                and str(event.rule or "") in {PORTFOLIO_ONTOLOGY_SIGNAL, "investmentInsight"}
+            )
         ]
 
     def use_cycle_recorder(self, dry_run: bool) -> bool:

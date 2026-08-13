@@ -271,6 +271,9 @@ class MySQLStorageMaintenanceTests(unittest.TestCase):
         ) as retention, patch(
             "digital_twin.infrastructure.cli.mysql_operational_compaction_tables",
             return_value=[],
+        ), patch(
+            "digital_twin.infrastructure.cli.observe_operational_storage_capacity",
+            return_value={},
         ), patch("digital_twin.infrastructure.cli.time.sleep") as sleep:
             result = run_mysql_operational_cleanup({"operationalHistoryRetentionEnabled": "1"})
 
@@ -401,6 +404,9 @@ class MySQLStorageMaintenanceTests(unittest.TestCase):
         ), patch(
             "digital_twin.infrastructure.cli.mysql_deadlock_retry_delay_milliseconds",
             return_value=17,
+        ), patch(
+            "digital_twin.infrastructure.cli.observe_operational_storage_capacity",
+            return_value={},
         ), patch("digital_twin.infrastructure.cli.time.sleep") as sleep:
             result = run_mysql_operational_cleanup({"operationalHistoryRetentionEnabled": "1"})
 

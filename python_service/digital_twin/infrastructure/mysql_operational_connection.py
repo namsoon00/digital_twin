@@ -645,6 +645,23 @@ MYSQL_SCHEMA = [
     ) ENGINE=InnoDB DEFAULT CHARSET=utf8mb4 COLLATE=utf8mb4_unicode_ci
     """,
     """
+    CREATE TABLE IF NOT EXISTS portfolio_rebalance_states (
+        portfolio_id VARCHAR(191) PRIMARY KEY,
+        policy_version VARCHAR(191) NOT NULL DEFAULT '',
+        status VARCHAR(32) NOT NULL DEFAULT 'WITHIN_POLICY',
+        semantic_fingerprint VARCHAR(191) NOT NULL DEFAULT '',
+        revision VARCHAR(191) NOT NULL DEFAULT '',
+        transition_type VARCHAR(32) NOT NULL DEFAULT '',
+        observed_at VARCHAR(40) NOT NULL DEFAULT '',
+        current_payload_json LONGTEXT NOT NULL,
+        event_payload_json LONGTEXT NULL,
+        created_at VARCHAR(40) NOT NULL,
+        updated_at VARCHAR(40) NOT NULL,
+        KEY idx_rebalance_states_status (status, observed_at),
+        KEY idx_rebalance_states_revision (revision)
+    ) ENGINE=InnoDB DEFAULT CHARSET=utf8mb4 COLLATE=utf8mb4_unicode_ci
+    """,
+    """
     CREATE TABLE IF NOT EXISTS investment_action_plans (
         plan_id VARCHAR(191) PRIMARY KEY,
         portfolio_id VARCHAR(191) NOT NULL,

@@ -75,7 +75,7 @@ class InvestmentDomainRepository(Protocol):
     ) -> Dict[str, object]:
         ...
 
-    def commit_snapshot_observation(self, expected_checkpoint_version: int, checkpoint, ledger_entries, activity_episode, state_snapshot, reconciliation, exposure, rebalance_proposal, decision_cycle, decision_action_observations=None, domain_event=None, notification_job=None, reasoning_event=None, risk_snapshot=None) -> Dict[str, object]:
+    def commit_snapshot_observation(self, expected_checkpoint_version: int, checkpoint, ledger_entries, activity_episode, state_snapshot, reconciliation, exposure, rebalance_proposal, decision_cycle, decision_action_observations=None, domain_event=None, notification_job=None, reasoning_event=None, risk_snapshot=None, rebalance_state=None, rebalance_transition=None, rebalance_event=None, rebalance_reasoning_event=None) -> Dict[str, object]:
         ...
 
     def save_reconciliation(self, reconciliation: PortfolioReconciliation) -> PortfolioReconciliation:
@@ -93,7 +93,13 @@ class InvestmentDomainRepository(Protocol):
     def latest_portfolio_risk_event(self, portfolio_id: str) -> Dict[str, object]:
         ...
 
-    def save_portfolio_analysis_bundle(self, risk_snapshot, exposure, rebalance_proposal, decision_cycle, domain_event=None, reasoning_event=None) -> Dict[str, object]:
+    def latest_rebalance_state(self, portfolio_id: str) -> Dict[str, object]:
+        ...
+
+    def latest_rebalance_current_state(self, portfolio_id: str) -> Dict[str, object]:
+        ...
+
+    def save_portfolio_analysis_bundle(self, risk_snapshot, exposure, rebalance_proposal, decision_cycle, domain_event=None, reasoning_event=None, rebalance_state=None, rebalance_transition=None, rebalance_event=None, rebalance_reasoning_event=None) -> Dict[str, object]:
         ...
 
     def ontology_portfolio_lifecycle_context(self, portfolio_id: str) -> Dict[str, object]:

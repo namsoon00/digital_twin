@@ -171,6 +171,67 @@ def add_portfolio_lifecycle_concepts(graph, portfolio_node_id: str, runtime_cont
         if prior_entity_id in existing_entity_ids:
             add_relation(graph, observation_id, prior_entity_id, "OBSERVED_AFTER_DECISION", properties={"causalityClaimed": False})
 
+    exposure = lifecycle.get("exposureSnapshot") if isinstance(lifecycle.get("exposureSnapshot"), dict) else {}
+    exposure_kind = {
+        "position": ("position-exposure", "PositionExposure"),
+        "sector": ("sector-exposure", "SectorExposure"),
+        "currency": ("currency-exposure", "CurrencyExposure"),
+        "cash": ("cash-exposure", "CashExposure"),
+    }
+    for metric in exposure.get("metrics") or []:
+        if not isinstance(metric, dict):
+            continue
+        metric_type = str(metric.get("exposure_type") or metric.get("exposureType") or "").lower().strip()
+        kind, tbox_class = exposure_kind.get(metric_type, ("market-exposure", "MarketExposure"))
+        metric_key = str(metric.get("key") or metric.get("exposureKey") or "unknown")
+        metric_identity = str(metric.get("exposure_id") or metric.get("exposureId") or "")
+        if not metric_identity:
+            metric_identity = str(exposure.get("snapshotId") or "latest") + ":" + metric_key
+        exposure_id = add_entity(
+            graph,
+            kind,
+            metric_identity,
+            metric_key + " 포트폴리오 노출",
+            {
+                "tboxClass": tbox_class,
+                "exposureType": metric_type,
+                "exposureKey": metric_key,
+                "exposureValue": number(metric.get("value") or metric.get("exposureValue")),
+                "exposureRatio": number(metric.get("ratio_pct") or metric.get("ratioPct") or metric.get("exposureRatio")),
+                "policyLimitRatio": number(metric.get("policy_limit_pct") or metric.get("policyLimitPct") or metric.get("policyLimitRatio")),
+                "policyDeltaRatio": number(metric.get("policyDeltaPct") or metric.get("policyDeltaRatio")),
+                "policyDirection": metric.get("policy_direction") or metric.get("policyDirection") or "maximum",
+                "observedAt": metric.get("observed_at") or metric.get("observedAt") or exposure.get("observedAt"),
+                "source": metric.get("source") or "portfolio-exposure-store",
+            },
+        )
+        add_relation(graph, portfolio_node_id, exposure_id, "HAS_EXPOSURE", properties={"source": "portfolio-exposure-store"})
+
+    rebalance_state = lifecycle.get("rebalanceState") if isinstance(lifecycle.get("rebalanceState"), dict) else {}
+    if rebalance_state:
+        state_id = add_entity(
+            graph,
+            "rebalance-state",
+            str(rebalance_state.get("semanticFingerprint") or rebalance_state.get("revision") or "latest"),
+            "포트폴리오 리밸런싱 상태",
+            {
+                "tboxClass": "RebalanceState",
+                "status": rebalance_state.get("status"),
+                "policyVersion": rebalance_state.get("policyVersion"),
+                "breachKeys": list(rebalance_state.get("breachKeys") or []),
+                "adjustmentDirections": dict(rebalance_state.get("adjustmentDirections") or {}),
+                "dataState": rebalance_state.get("dataState"),
+                "lastTransitionType": rebalance_state.get("lastTransitionType"),
+                "revision": rebalance_state.get("revision"),
+                "observedAt": rebalance_state.get("observedAt"),
+                "source": "portfolio-rebalance-state-store",
+            },
+        )
+        add_relation(graph, portfolio_node_id, state_id, "HAS_REBALANCE_STATE", properties={
+            "source": "portfolio-rebalance-state-store",
+            "transitionType": rebalance_state.get("lastTransitionType"),
+        })
+
     risk = lifecycle.get("portfolioRiskSnapshot") if isinstance(lifecycle.get("portfolioRiskSnapshot"), dict) else {}
     if risk:
         risk_id = add_entity(graph, "portfolio-risk-snapshot", str(risk.get("riskSnapshotId") or "latest"),

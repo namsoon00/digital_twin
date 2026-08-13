@@ -34,6 +34,7 @@ TRIGGER_ORDER = {
     "news-analysis-enrichment": 2,
     "portfolio-snapshot-update": 2,
     "portfolio-activity": 6,
+    "portfolio-rebalance-transition": 6,
     "data-update": 1,
 }
 
@@ -114,7 +115,10 @@ PORTFOLIO_FACT_TYPES = {
     "DecisionActionObservation",
     "PortfolioRiskSnapshot",
     "PositionRiskMetric",
+    "ExposureSnapshot",
+    "RebalanceProposal",
     "RebalanceScenario",
+    "RebalanceState",
 }
 
 MARKET_FACT_TYPES = {
@@ -172,6 +176,7 @@ COALESCIBLE_REALTIME_TRIGGERS = {
 COALESCIBLE_LATEST_STATE_TRIGGERS = COALESCIBLE_REALTIME_TRIGGERS | {
     "investment-calendar-update",
     "portfolio-risk-change",
+    "portfolio-rebalance-transition",
 }
 
 # These updates mutate durable ResearchEvidence facts. The ABox projection
@@ -198,6 +203,7 @@ GENERIC_RESEARCH_LATEST_STATE_SLOT = "ResearchEvidenceLatestState"
 # fact family, so retaining separate slots here only lets stale observations
 # queue ahead of the newest verified snapshot.
 REALTIME_LATEST_STATE_SLOT = "RealtimeObservationLatestState"
+PORTFOLIO_LATEST_STATE_SLOT = "PortfolioAnalysisLatestState"
 
 
 def mailbox_fact_family(fact_type: object) -> str:
@@ -565,6 +571,8 @@ def event_reasoning_priority(event: object) -> str:
         return "urgent"
     if trigger == "portfolio-activity":
         return "urgent"
+    if trigger == "portfolio-rebalance-transition":
+        return "urgent"
     if trigger == "research-evidence-lifecycle":
         transitions = {
             str(item.get("transition") or "").strip().lower()
@@ -613,6 +621,14 @@ def mailbox_slot_family(
     """
     if is_generic_research_latest_state(event):
         return GENERIC_RESEARCH_LATEST_STATE_SLOT
+    if (
+        event_subject_kind(event) == "PORTFOLIO"
+        and str(event_payload(event).get("trigger") or "").strip() in {
+            "portfolio-risk-change",
+            "portfolio-rebalance-transition",
+        }
+    ):
+        return PORTFOLIO_LATEST_STATE_SLOT
     if is_realtime_latest_state(event):
         family = str(fact_family or "").strip() or mailbox_fact_family(
             next(iter(fact_types or ("MarketQuote",)), "MarketQuote")

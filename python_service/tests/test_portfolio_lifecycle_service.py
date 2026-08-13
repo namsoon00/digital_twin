@@ -19,6 +19,7 @@ from digital_twin.application.portfolio_lifecycle_service import (
 )
 from digital_twin.domain.investment_brain import ObservedOutcome
 from digital_twin.domain.investment_mandate import InvestmentMandate
+from digital_twin.domain.events import DomainEvent, ontology_reasoning_requested_event
 from digital_twin.domain.investment_outcomes import decision_quality_summary
 from digital_twin.domain.portfolio import AccountSnapshot, PortfolioSummary, Position
 from digital_twin.domain.portfolio_activity_episode import PortfolioSnapshotCheckpoint
@@ -37,8 +38,13 @@ from digital_twin.domain.portfolio_ledger import (
     PortfolioLedgerEntry,
     execution_ledger_entries,
 )
+from digital_twin.domain.portfolio_rebalancing import (
+    RebalanceState,
+    rebalance_transition,
+)
 from digital_twin.domain.portfolio_ontology_builder import build_portfolio_ontology
 from digital_twin.domain.ontology_rulebox_catalog import default_graph_inference_rules
+from digital_twin.domain.ontology_reasoning_queue import durable_mailbox_entries
 from digital_twin.domain.ontology_validator import validate_ontology
 from digital_twin.domain.notifications import NotificationJob
 from digital_twin.domain.trade_execution import ActionEnvelope, ActionPlan, ExecutionEpisode, OrderIntent, TradeFill
@@ -69,6 +75,9 @@ class MemoryInvestmentRepository:
         self.notification_jobs = []
         self.snapshot_quarantines = []
         self.reasoning_events = []
+        self.rebalance_state = {}
+        self.current_rebalance_state = {}
+        self.rebalance_transitions = []
         self.lifecycle = {}
         self.prior_decisions = {}
         self.mandate = InvestmentMandate.from_profile(
@@ -137,6 +146,10 @@ class MemoryInvestmentRepository:
         notification_job=None,
         reasoning_event=None,
         risk_snapshot=None,
+        rebalance_state=None,
+        rebalance_transition=None,
+        rebalance_event=None,
+        rebalance_reasoning_event=None,
     ):
         actual = self.checkpoint.version if self.checkpoint else 0
         if actual != expected_checkpoint_version:
@@ -157,12 +170,19 @@ class MemoryInvestmentRepository:
             self.notification_jobs.append(notification_job)
         if reasoning_event:
             self.reasoning_events.append(reasoning_event)
+        rebalance_recorded = self.record_rebalance_state(
+            rebalance_state,
+            rebalance_transition,
+            rebalance_event,
+            rebalance_reasoning_event,
+        )
         self.checkpoint = replace(checkpoint, version=actual + 1)
         return {
             "status": "committed",
             "actualCheckpointVersion": actual + 1,
             "insertedCount": inserted,
             "notificationQueued": bool(notification_job),
+            "rebalanceTransitionRecorded": rebalance_recorded,
         }
 
     def save_reconciliation(self, item):
@@ -183,7 +203,49 @@ class MemoryInvestmentRepository:
                 return dict(event.payload or {})
         return {}
 
-    def save_portfolio_analysis_bundle(self, risk_snapshot, exposure, rebalance_proposal, decision_cycle, domain_event=None, reasoning_event=None):
+    def latest_rebalance_state(self, _portfolio_id):
+        return dict(self.rebalance_state or {})
+
+    def latest_rebalance_current_state(self, _portfolio_id):
+        return dict(self.current_rebalance_state or {})
+
+    def record_rebalance_state(self, current, transition, domain_event=None, reasoning_event=None):
+        if not current:
+            return False
+        self.current_rebalance_state = current.to_dict()
+        from digital_twin.domain.portfolio_rebalancing import rebalance_transition as evaluate_transition
+
+        previous = RebalanceState.from_dict(self.rebalance_state) if self.rebalance_state else None
+        verified = evaluate_transition(previous, current)
+        accepted = bool(
+            transition
+            and verified
+            and domain_event
+            and reasoning_event
+            and transition.revision == verified.revision
+        )
+        if accepted:
+            self.rebalance_state = current.to_dict()
+            self.rebalance_transitions.append(transition)
+            if domain_event:
+                self.reasoning_events.append(domain_event)
+            if reasoning_event:
+                self.reasoning_events.append(reasoning_event)
+        return accepted
+
+    def save_portfolio_analysis_bundle(
+        self,
+        risk_snapshot,
+        exposure,
+        rebalance_proposal,
+        decision_cycle,
+        domain_event=None,
+        reasoning_event=None,
+        rebalance_state=None,
+        rebalance_transition=None,
+        rebalance_event=None,
+        rebalance_reasoning_event=None,
+    ):
         changed = risk_snapshot.risk_snapshot_id not in self.risk_snapshots
         self.save_risk_snapshot(risk_snapshot)
         self.save_exposure_snapshot(exposure)
@@ -194,7 +256,17 @@ class MemoryInvestmentRepository:
             self.reasoning_events.append(domain_event)
         if changed and reasoning_event:
             self.reasoning_events.append(reasoning_event)
-        return {"status": "saved", "riskChanged": changed}
+        rebalance_recorded = self.record_rebalance_state(
+            rebalance_state,
+            rebalance_transition,
+            rebalance_event,
+            rebalance_reasoning_event,
+        )
+        return {
+            "status": "saved",
+            "riskChanged": changed,
+            "rebalanceTransitionRecorded": rebalance_recorded,
+        }
 
     def save_rebalance_proposal(self, item):
         self.proposals[item.proposal_id] = item
@@ -546,6 +618,22 @@ class PortfolioLifecycleServiceTests(unittest.TestCase):
         self.assertIn("portfolioRiskSnapshot", unchanged)
         self.assertTrue(repository.risk_snapshots)
 
+    def test_unchanged_snapshot_defers_heavy_portfolio_analysis_inside_five_minutes(self):
+        repository = MemoryInvestmentRepository()
+        service = PortfolioAccountingService(
+            repository,
+            market_time_series_store=MemoryPortfolioTimeSeriesStore(),
+        )
+        service.observe_snapshot(live_snapshot())
+        risk_count = len(repository.risk_snapshots)
+
+        result = service.observe_snapshot(live_snapshot(generated_at="2026-08-12T06:02:00Z"))
+
+        self.assertEqual("unchanged", result["status"])
+        self.assertEqual("deferred-unchanged-snapshot", result["analysisStatus"])
+        self.assertEqual(300, result["analysisIntervalSeconds"])
+        self.assertEqual(risk_count, len(repository.risk_snapshots))
+
     def test_small_risk_measurement_change_does_not_enqueue_another_reasoning_event(self):
         repository = MemoryInvestmentRepository()
         series = MutablePortfolioTimeSeriesStore()
@@ -732,6 +820,141 @@ class PortfolioLifecycleServiceTests(unittest.TestCase):
         self.assertGreater(result["exposureSnapshot"]["metrics"][0]["policyDeltaPct"], 0)
         self.assertEqual("review-required", result["rebalanceProposal"]["status"])
         self.assertTrue(result["rebalanceProposal"]["legs"])
+
+    def test_rebalance_transition_opens_once_and_ignores_small_repeated_changes(self):
+        repository = MemoryInvestmentRepository()
+        service = PortfolioAccountingService(repository)
+        snapshot = live_snapshot()
+        mandate = repository.mandate
+        exposure = service.exposure_snapshot(snapshot, "portfolio:main", mandate)
+        risk = service.risk_snapshot(snapshot, "portfolio:main", mandate, exposure)
+        proposal = service.rebalance_proposal(snapshot, mandate, exposure, risk)
+        current = RebalanceState.from_analysis(
+            "portfolio:main", mandate.policy_version, exposure, risk, proposal,
+        )
+
+        opened = rebalance_transition(None, current)
+        repeated = rebalance_transition(current, replace(
+            current,
+            exposure_deltas_pct={
+                key: value + 0.25 for key, value in current.exposure_deltas_pct.items()
+            },
+        ))
+
+        self.assertEqual("OPENED", opened.transition_type)
+        self.assertIsNone(repeated)
+
+    def test_rebalance_transition_emits_material_update_and_resolution(self):
+        repository = MemoryInvestmentRepository()
+        service = PortfolioAccountingService(repository)
+        snapshot = live_snapshot()
+        mandate = repository.mandate
+        exposure = service.exposure_snapshot(snapshot, "portfolio:main", mandate)
+        risk = service.risk_snapshot(snapshot, "portfolio:main", mandate, exposure)
+        proposal = service.rebalance_proposal(snapshot, mandate, exposure, risk)
+        current = RebalanceState.from_analysis(
+            "portfolio:main", mandate.policy_version, exposure, risk, proposal,
+        )
+        material = replace(
+            current,
+            exposure_deltas_pct={
+                key: value + 1.1 for key, value in current.exposure_deltas_pct.items()
+            },
+        )
+        resolved = replace(
+            current,
+            status="WITHIN_POLICY",
+            breach_keys=[],
+            exposure_deltas_pct={},
+            adjustment_directions={},
+            maximum_notional_by_symbol={},
+        )
+
+        updated = rebalance_transition(current, material)
+        cleared = rebalance_transition(current, resolved)
+
+        self.assertEqual("UPDATED", updated.transition_type)
+        self.assertIn("exposure-delta-material-change", updated.reason_codes)
+        self.assertEqual("RESOLVED", cleared.transition_type)
+
+    def test_portfolio_pipeline_emits_one_durable_transition_for_repeated_policy_breach(self):
+        repository = MemoryInvestmentRepository()
+        service = PortfolioAccountingService(
+            repository,
+            investment_domain_service=InvestmentDomainService(repository, EventBus()),
+        )
+
+        first = service.observe_snapshot(live_snapshot())
+        second = service.observe_snapshot(live_snapshot(generated_at="2026-08-12T06:10:00Z"))
+
+        source_events = [
+            item for item in repository.reasoning_events
+            if getattr(item, "name", "") == "portfolio.rebalance_proposed"
+        ]
+        mailbox_events = [
+            item for item in repository.reasoning_events
+            if getattr(item, "name", "") == "ontology.reasoning_requested"
+            and item.payload.get("trigger") == "portfolio-rebalance-transition"
+        ]
+        self.assertEqual("OPENED", first["rebalanceTransition"]["transitionType"])
+        self.assertEqual({}, second["rebalanceTransition"])
+        self.assertEqual(1, len(source_events))
+        self.assertEqual(1, len(mailbox_events))
+        self.assertEqual("PORTFOLIO", mailbox_events[0].payload["subjectKind"])
+        mailbox_entries = durable_mailbox_entries(mailbox_events[0])
+        self.assertEqual(1, len(mailbox_entries))
+        self.assertEqual("PORTFOLIO", mailbox_entries[0]["workClass"])
+        self.assertEqual("", mailbox_entries[0]["symbol"])
+        legacy_source = DomainEvent(
+            "portfolio.risk_observed",
+            "portfolio:main",
+            payload={"sourceObservedAt": NOW},
+        )
+        legacy_request = ontology_reasoning_requested_event(
+            legacy_source,
+            "portfolio-risk-change",
+            changed_count=1,
+            fact_types=["PortfolioRiskSnapshot", "PositionRiskMetric", "RebalanceScenario"],
+            subject_kind="PORTFOLIO",
+            subject_id="portfolio:main",
+            affected_symbols=["035420"],
+            subject_revision="risk:legacy",
+            account_id="main",
+        )
+        self.assertEqual(
+            mailbox_entries[0]["mailboxKey"],
+            durable_mailbox_entries(legacy_request)[0]["mailboxKey"],
+        )
+
+    def test_initial_within_policy_state_does_not_request_reasoning(self):
+        repository = MemoryInvestmentRepository()
+        repository.mandate = InvestmentMandate.from_profile(
+            "main",
+            "portfolio:main",
+            {
+                "maxPositionWeightPct": 100,
+                "maxSectorWeightPct": 100,
+                "fxExposureReviewPct": 100,
+                "minCashWeightPct": 0,
+                "maxPortfolioVolatilityPct": 100,
+                "maxPortfolioDrawdownPct": 100,
+                "maxPairwiseCorrelation": 1,
+            },
+            NOW,
+        )
+        service = PortfolioAccountingService(
+            repository,
+            investment_domain_service=InvestmentDomainService(repository, EventBus()),
+        )
+
+        result = service.observe_snapshot(live_snapshot())
+
+        self.assertEqual("WITHIN_POLICY", result["rebalanceState"]["status"])
+        self.assertEqual({}, result["rebalanceTransition"])
+        self.assertFalse(any(
+            getattr(item, "name", "") == "portfolio.rebalance_proposed"
+            for item in repository.reasoning_events
+        ))
 
     def test_target_allocation_replaces_duplicate_position_policy_band(self):
         repository = MemoryInvestmentRepository()
@@ -1084,7 +1307,7 @@ class PortfolioLifecycleServiceTests(unittest.TestCase):
 
         service.observe_snapshot(live_snapshot(quantity=11, generated_at="2026-08-12T06:10:00Z"))
 
-        event = event_bus.published[-1]
+        event = next(item for item in reversed(event_bus.published) if item.name == "portfolio.ledger_recorded")
         self.assertEqual("portfolio.ledger_recorded", event.name)
         self.assertTrue(event.payload["materialSnapshotChange"])
         self.assertEqual(1, len(event.payload["inferredActivities"]))
@@ -1122,6 +1345,11 @@ class PortfolioLifecycleServiceTests(unittest.TestCase):
         self.assertIn("PortfolioStateSnapshot", classes)
         self.assertIn("PortfolioRiskSnapshot", classes)
         self.assertIn("PositionRiskMetric", classes)
+        self.assertIn("PositionExposure", classes)
+        self.assertIn("SectorExposure", classes)
+        self.assertIn("CurrencyExposure", classes)
+        self.assertIn("CashExposure", classes)
+        self.assertIn("RebalanceState", classes)
         self.assertIn("BenchmarkIndex", classes)
         self.assertIn("RebalanceScenario", classes)
         self.assertIn("EVALUATES_PORTFOLIO_CANDIDATE", relation_types)
@@ -1131,6 +1359,8 @@ class PortfolioLifecycleServiceTests(unittest.TestCase):
         self.assertIn("HAS_PORTFOLIO_STATE", relation_types)
         self.assertIn("HAS_RISK_SNAPSHOT", relation_types)
         self.assertIn("HAS_POSITION_RISK", relation_types)
+        self.assertIn("HAS_EXPOSURE", relation_types)
+        self.assertIn("HAS_REBALANCE_STATE", relation_types)
         self.assertIn("HAS_BETA_TO", relation_types)
         self.assertIn("HAS_REBALANCE_SCENARIO", relation_types)
         candidates = [item for item in graph.entities if (item.properties or {}).get("tboxClass") == "PortfolioActionCandidate"]
@@ -1318,7 +1548,12 @@ class PortfolioLifecycleServiceTests(unittest.TestCase):
         self.assertEqual({"005930", "035420"}, set(observations))
         self.assertEqual("contrary", observations["035420"]["correspondence"])
         self.assertEqual("aligned", observations["005930"]["correspondence"])
-        self.assertIn("DecisionActionObservation", repository.reasoning_events[0].payload["factTypes"])
+        reasoning_event = next(
+            item for item in repository.reasoning_events
+            if getattr(item, "name", "") == "ontology.reasoning_requested"
+            and "DecisionActionObservation" in item.payload.get("factTypes", [])
+        )
+        self.assertIn("DecisionActionObservation", reasoning_event.payload["factTypes"])
 
     def test_provider_account_fingerprint_change_is_quarantined(self):
         repository = MemoryInvestmentRepository()

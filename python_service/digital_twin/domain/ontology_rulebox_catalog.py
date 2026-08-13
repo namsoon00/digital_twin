@@ -466,7 +466,7 @@ def _rulebox_v3_evidence_group_key(condition: GraphRuleCondition) -> str:
         return "data-quality"
     if relation_type in {"HAS_EXECUTION_METRIC"}:
         return "execution-capacity"
-    if relation_type in {"HAS_FACTOR_EXPOSURE", "HAS_BETA_TO", "HAS_MARKET_EXPOSURE"}:
+    if relation_type in {"HAS_FACTOR_EXPOSURE", "HAS_BETA_TO", "HAS_MARKET_EXPOSURE", "HAS_EXPOSURE"}:
         return "portfolio-exposure"
     if relation_type in {"HAS_VALUATION", "HAS_MARGIN_OF_SAFETY", "HAS_VALUATION_RISK", "HAS_VALUATION_OPPORTUNITY"}:
         return "valuation"
@@ -7193,8 +7193,8 @@ def default_graph_inference_rules() -> List[GraphInferenceRule]:
                     "position-concentration-policy-delta",
                     "relation",
                     "종목 원시 노출 비중이 계정 정책 한도를 넘었습니다.",
-                    relation_type="HAS_POSITION",
-                    target_kind="position",
+                    relation_type="HAS_EXPOSURE",
+                    target_kind="position-exposure",
                     target_property_filters={"policyDeltaRatio": {"operator": ">", "value": 0}},
                     role="any",
                 ),
@@ -7202,7 +7202,7 @@ def default_graph_inference_rules() -> List[GraphInferenceRule]:
                     "sector-concentration-ratio",
                     "relation",
                     "섹터 원시 노출 비중이 계정 정책 한도를 넘었습니다.",
-                    relation_type="HAS_MARKET_EXPOSURE",
+                    relation_type="HAS_EXPOSURE",
                     target_kind="sector-exposure",
                     target_property_filters={"policyDeltaRatio": {"operator": ">", "value": 0}},
                     role="any",
@@ -7211,8 +7211,17 @@ def default_graph_inference_rules() -> List[GraphInferenceRule]:
                     "currency-concentration-ratio",
                     "relation",
                     "외화 원시 노출 비중이 계정 정책 한도를 넘었습니다.",
-                    relation_type="HAS_MARKET_EXPOSURE",
+                    relation_type="HAS_EXPOSURE",
                     target_kind="currency-exposure",
+                    target_property_filters={"policyDeltaRatio": {"operator": ">", "value": 0}},
+                    role="any",
+                ),
+                GraphRuleCondition(
+                    "cash-policy-shortfall",
+                    "relation",
+                    "현금 원시 노출 비중이 계정 정책 하한보다 낮습니다.",
+                    relation_type="HAS_EXPOSURE",
+                    target_kind="cash-exposure",
                     target_property_filters={"policyDeltaRatio": {"operator": ">", "value": 0}},
                     role="any",
                 ),
@@ -7234,6 +7243,44 @@ def default_graph_inference_rules() -> List[GraphInferenceRule]:
                     decision_effect="defer",
                     candidate_action="HOLD",
                 )
+            ],
+        ),
+        GraphInferenceRule(
+            rule_id="graph.portfolio.rebalance.resolved.v1",
+            label="포트폴리오 정책 위반 해소 -> 리밸런싱 상태 정상화",
+            version="v1",
+            source_kind="portfolio",
+            action_group="rebalance",
+            action_level="review",
+            prompt_hint="이전 정책 위반이 해소된 사실을 설명하되, 자동 매수·매도 완료나 원인을 추정하지 않습니다.",
+            conditions=[
+                GraphRuleCondition(
+                    "portfolio-rebalance-resolved",
+                    "relation",
+                    "직전 의미 있는 리밸런싱 정책 위반이 해소됐습니다.",
+                    relation_type="HAS_REBALANCE_STATE",
+                    target_kind="rebalance-state",
+                    relation_property_filters={"transitionType": "RESOLVED"},
+                ),
+            ],
+            derivations=[
+                GraphRuleDerivation(
+                    relation_type="REQUIRES_NEXT_CHECK",
+                    target_kind="next-check",
+                    target_key="{subjectId}:portfolio-rebalance-resolved",
+                    target_label="{displayName} 리밸런싱 상태 정상화 확인",
+                    tbox_class="NextCheck",
+                    tbox_classes=["NextCheck", "RebalanceState"],
+                    polarity="support",
+                    belief_label="포트폴리오 정책 위반이 해소돼 이전 리밸런싱 점검 상태가 종료됐습니다.",
+                    ai_influence_label="포트폴리오 정책 위반 해소",
+                    action_group="rebalance",
+                    action_level="review",
+                    decision_stage="REBALANCE_REVIEW",
+                    decision_effect="support",
+                    candidate_action="HOLD",
+                    next_checks=["다음 계좌 관측에서도 정책 범위 안 상태가 유지되는지 확인"],
+                ),
             ],
         ),
     ]

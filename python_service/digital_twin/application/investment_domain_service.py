@@ -9,6 +9,7 @@ from ..domain.events import (
     INVESTMENT_PERFORMANCE_ATTRIBUTED,
     PORTFOLIO_LEDGER_RECORDED,
     PORTFOLIO_REBALANCE_PROPOSED,
+    PORTFOLIO_REBALANCE_RESOLVED,
     PORTFOLIO_RISK_OBSERVED,
     TRADE_EXECUTION_RECORDED,
     investment_lifecycle_event,
@@ -18,7 +19,7 @@ from ..domain.investment_outcomes import DecisionReview, PerformanceAttribution
 from ..domain.portfolio_ledger import PortfolioLedgerEntry
 from ..domain.portfolio_ledger import INFERRED_SNAPSHOT_ENTRY_TYPES
 from ..domain.snapshot_portfolio_activity import activity_payload
-from ..domain.portfolio_rebalancing import RebalanceProposal
+from ..domain.portfolio_rebalancing import RebalanceProposal, RebalanceTransition
 from ..domain.repositories import InvestmentDomainRepository
 from ..domain.trade_execution import ActionPlan, ExecutionEpisode
 
@@ -143,6 +144,38 @@ class InvestmentDomainService:
                 ]),
             },
             "portfolio-risk:" + snapshot.portfolio_id,
+        )
+
+    def rebalance_transition_event(self, transition: RebalanceTransition, symbols):
+        current = transition.current_state
+        event_name = (
+            PORTFOLIO_REBALANCE_RESOLVED
+            if transition.transition_type == "RESOLVED"
+            else PORTFOLIO_REBALANCE_PROPOSED
+        )
+        clean_symbols = sorted({
+            str(item or "").upper().strip()
+            for item in symbols or []
+            if str(item or "").strip()
+        })
+        return investment_lifecycle_event(
+            event_name,
+            current.portfolio_id,
+            {
+                "portfolioId": current.portfolio_id,
+                "policyVersion": current.policy_version,
+                "proposalId": current.proposal_id,
+                "sourceObservedAt": current.observed_at,
+                "symbols": clean_symbols,
+                "transition": transition.to_dict(),
+                "rebalanceStatus": current.status,
+                "breachKeys": list(current.breach_keys),
+                "adjustmentDirections": dict(current.adjustment_directions),
+                "maximumNotionalBySymbol": dict(current.maximum_notional_by_symbol),
+                "dataState": current.data_state,
+                "materialSnapshotChange": True,
+            },
+            "portfolio-rebalance:" + current.portfolio_id,
         )
 
     def save_action_plan(self, plan: ActionPlan) -> ActionPlan:

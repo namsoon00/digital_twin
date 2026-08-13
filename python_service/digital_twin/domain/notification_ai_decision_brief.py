@@ -476,6 +476,7 @@ def _compact_portfolio_lifecycle(value: object, subject_symbol: object) -> Dict[
     exposure = _mapping(lifecycle.get("exposureSnapshot"))
     risk = _mapping(lifecycle.get("portfolioRiskSnapshot"))
     rebalance = _mapping(lifecycle.get("rebalanceProposal"))
+    rebalance_state = _mapping(lifecycle.get("rebalanceState"))
     state = _mapping(lifecycle.get("portfolioState"))
 
     metrics = []
@@ -550,6 +551,16 @@ def _compact_portfolio_lifecycle(value: object, subject_symbol: object) -> Dict[
                 6,
             ),
         },
+        "rebalanceState": _selected_fields(
+            rebalance_state,
+            (
+                "status", "policyVersion", "breachKeys", "adjustmentDirections",
+                "exposureDeltasPct", "maximumNotionalBySymbol",
+                "volatilityPolicyDeltaPct", "drawdownPolicyDeltaPct",
+                "correlationPolicyDelta", "dataState", "observedAt",
+                "revision", "lastTransitionType",
+            ),
+        ),
         "portfolioState": {
             **_selected_fields(state, ("cashWeightPct", "positionCount", "observedAt")),
             "subjectPositions": subject_positions[:1],

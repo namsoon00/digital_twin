@@ -234,6 +234,25 @@ class InvestmentDomainArchitectureTests(unittest.TestCase):
             delta_filter = condition.target_property_filters["policyDeltaRatio"]
             self.assertEqual({"operator": ">", "value": 0}, delta_filter)
 
+        transition_rules = {
+            item.rule_id: item
+            for item in default_graph_inference_rules()
+            if item.rule_id.startswith("graph.portfolio.rebalance.")
+        }
+        expected_transitions = {
+            "graph.portfolio.rebalance.opened.v1": "OPENED",
+            "graph.portfolio.rebalance.updated.v1": "UPDATED",
+            "graph.portfolio.rebalance.resolved.v1": "RESOLVED",
+        }
+        self.assertEqual(set(expected_transitions), set(transition_rules))
+        for rule_id, transition_type in expected_transitions.items():
+            condition = transition_rules[rule_id].conditions[0]
+            self.assertEqual("HAS_REBALANCE_STATE", condition.relation_type)
+            self.assertEqual(
+                {"transitionType": transition_type},
+                condition.relation_property_filters,
+            )
+
     def test_decision_action_execution_and_outcome_are_linked_in_abox(self):
         graph = PortfolioOntology("portfolio:main")
         add_entity(graph, "portfolio", "portfolio:main", "Main", {"tboxClass": "Portfolio"})

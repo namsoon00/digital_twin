@@ -26,6 +26,7 @@ from digital_twin.infrastructure.external_signal_provider_yfinance import (
 )
 from digital_twin.infrastructure.external_signal_utils import sanitize_sensitive_text
 from digital_twin.infrastructure.kis_market_signals import (
+    KIS_FUNDAMENTAL_NORMALIZATION_VERSION,
     KISMarketSignalProvider,
     investor_estimate_selection,
     kis_fundamental_external_rows,
@@ -213,7 +214,7 @@ class ExternalApiSourceTests(unittest.TestCase):
             ],
             "output3": [
                 row(30, 40, 50, 60, 70),
-                row(800, 900, 1000, 1100, 1500),
+                row(66610, 127020, 130090, 138616, 101017),
                 row(10, 20, 30, 40, 50),
                 row(80, 100, 120, 160, 130),
                 row(40, 50, 60, 70, 80),
@@ -233,8 +234,9 @@ class ExternalApiSourceTests(unittest.TestCase):
         )
 
         self.assertEqual("035720", normalized["symbol"])
-        self.assertEqual(1500, normalized["earningsEstimates"][0]["base"])
+        self.assertEqual(10101.7, normalized["earningsEstimates"][0]["base"])
         self.assertEqual("fy1", normalized["earningsEstimates"][0]["period"])
+        self.assertEqual(KIS_FUNDAMENTAL_NORMALIZATION_VERSION, normalized["normalizationVersion"])
         self.assertEqual([8, 10, 12, 16], [item["value"] for item in normalized["multipleObservations"][:4]])
         self.assertEqual("historical", normalized["multipleObservations"][0]["basis"])
         self.assertEqual("current-market", normalized["multipleObservations"][-1]["basis"])
@@ -248,9 +250,27 @@ class ExternalApiSourceTests(unittest.TestCase):
             "updatedAt": "2026-08-13T00:00:00Z",
             "fundamentalEstimates": normalized,
         })
-        self.assertEqual(1500, rows["companyOverview"]["forwardEPS"])
+        self.assertEqual(10101.7, rows["companyOverview"]["forwardEPS"])
         self.assertEqual(5, len(rows["companyOverview"]["multipleObservations"]))
         self.assertEqual(5, len(rows["earningsReport"]["cycleData"]))
+
+    def test_kis_fundamental_cache_requires_current_normalization_version(self):
+        now = datetime(2026, 8, 13, tzinfo=timezone.utc)
+        provider = KISMarketSignalProvider(
+            settings={"kisFundamentalCacheHours": "24"},
+            quote_cache=MemoryQuoteCache(),
+            now_provider=lambda: now,
+        )
+        payload = {
+            "fundamentalEstimates": {
+                "fetchedAt": "2026-08-12T23:00:00Z",
+                "normalizationVersion": KIS_FUNDAMENTAL_NORMALIZATION_VERSION,
+            }
+        }
+
+        self.assertTrue(provider.fundamental_cache_fresh(payload))
+        del payload["fundamentalEstimates"]["normalizationVersion"]
+        self.assertFalse(provider.fundamental_cache_fresh(payload))
 
     def test_kis_opinions_keep_latest_target_per_brokerage(self):
         normalized = normalize_investment_opinions(

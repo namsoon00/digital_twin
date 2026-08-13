@@ -31,6 +31,7 @@ ESTIMATE_PERFORM_PATH = "/uapi/domestic-stock/v1/quotations/estimate-perform"
 ESTIMATE_PERFORM_TR_ID = "HHKST668300C0"
 INVEST_OPINION_PATH = "/uapi/domestic-stock/v1/quotations/invest-opinion"
 INVEST_OPINION_TR_ID = "FHKST663300C0"
+KIS_FUNDAMENTAL_NORMALIZATION_VERSION = "kis-fundamental-v2"
 DETAIL_SIGNAL_KEYS = [
     "tradeStrength",
     "buyVolume",
@@ -1141,6 +1142,8 @@ class KISMarketSignalProvider:
 
     def fundamental_cache_fresh(self, payload: Dict[str, object]) -> bool:
         fundamental = payload.get("fundamentalEstimates") if isinstance(payload, dict) and isinstance(payload.get("fundamentalEstimates"), dict) else {}
+        if str(fundamental.get("normalizationVersion") or "") != KIS_FUNDAMENTAL_NORMALIZATION_VERSION:
+            return False
         fetched_at = parse_iso(fundamental.get("fetchedAt"))
         return bool(fetched_at and self.now() - fetched_at < timedelta(hours=self.fundamental_cache_hours()))
 
@@ -1388,6 +1391,7 @@ class KISMarketSignalProvider:
             **opinion,
             "provider": "KIS Open API",
             "source": "estimate-perform + invest-opinion",
+            "normalizationVersion": KIS_FUNDAMENTAL_NORMALIZATION_VERSION,
             "fetchedAt": fetched_at,
         }
 
@@ -2056,7 +2060,9 @@ def normalize_estimate_perform(
             "netIncome": number(income_rows[4].get(field)),
             "netIncomeGrowthPct": _optional_tenth(income_rows[5].get(field)),
             "ebitda": number(metric_rows[0].get(field)),
-            "eps": number(metric_rows[1].get(field)),
+            # KIS output3 fixed-point ratios and per-share values use one
+            # implied decimal place (for example 101017 means KRW 10,101.7).
+            "eps": _optional_tenth(metric_rows[1].get(field)),
             "epsGrowthPct": _optional_tenth(metric_rows[2].get(field)),
             "per": _optional_tenth(metric_rows[3].get(field)),
             "enterpriseToEbitda": _optional_tenth(metric_rows[4].get(field)),
@@ -2065,7 +2071,7 @@ def normalize_estimate_perform(
             "interestCoverageRatio": _optional_tenth(metric_rows[7].get(field)),
         }
         fiscal_periods.append(row)
-        if row["eps"] > 0 and is_estimate:
+        if number(row["eps"]) > 0 and is_estimate:
             earnings_estimates.append({
                 "observationId": "kis:estimate-perform:eps:" + period,
                 "provider": "KIS Open API",
@@ -2110,6 +2116,7 @@ def normalize_estimate_perform(
         "estimateRecommendation": str(metadata.get("rcmd_name") or ""),
         "sourceAsOf": source_as_of,
         "fetchedAt": fetched_at,
+        "normalizationVersion": KIS_FUNDAMENTAL_NORMALIZATION_VERSION,
         "fiscalPeriods": fiscal_periods,
         "earningsEstimates": earnings_estimates,
         "multipleObservations": multiple_observations,

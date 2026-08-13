@@ -377,6 +377,15 @@ function checkWorkflowConsoleContract() {
       /\.investment-calendar-day-cell\s*\{[\s\S]*min-height: 60px;/.test(mobileViewportContract),
     "모바일 네비게이션/캘린더 폭·밀도 계약이 없습니다."
   );
+  const mobilePanelRhythmStart = styles.indexOf("/* Mobile panel interior rhythm:");
+  const mobilePanelRhythm = mobilePanelRhythmStart >= 0 ? styles.slice(mobilePanelRhythmStart) : "";
+  assertOk(
+    mobilePanelRhythmStart >= 0 &&
+      /\.console-shell \.panel > \.panel-head \+ \*\s*\{[\s\S]*margin-top: var\(--ds-section-gap\);/.test(mobilePanelRhythm) &&
+      /\.console-shell \.investment-calendar-type-strip\s*\{[\s\S]*padding: 0 var\(--ds-panel-pad-x\) var\(--ds-panel-pad-y\);/.test(mobilePanelRhythm) &&
+      /\.console-shell \.investment-calendar-candidate-panel > \.panel-head \+ \.investment-calendar-research-strip,[\s\S]*\.console-shell \.investment-calendar-quality-panel > \.panel-head \+ \.investment-calendar-quality-list,[\s\S]*margin-top: var\(--ds-section-gap\);/.test(mobilePanelRhythm),
+    "모바일 패널 헤더와 내부 지표·상태·큐 카드가 붙지 않도록 하는 공통 간격 계약이 없습니다."
+  );
   assertOk(
     code.indexOf("function mobileInfiniteScrollEnabled") >= 0 &&
       code.indexOf("function bindMobileInfiniteScroll") >= 0 &&
@@ -435,9 +444,9 @@ function checkWorkflowConsoleContract() {
     "서버 페이징 목록의 변경일 필드 또는 최신순 정렬 계약이 없습니다."
   );
   assertOk(
-    /styles\.css\?v=20260813-decision-detail-v\d+/.test(indexHtml) &&
-      /app\.js\?v=20260813-decision-detail-v\d+/.test(indexHtml),
-    "판단 상세 정적 자산 cache key가 반영되지 않았습니다."
+    /styles\.css\?v=\d{8}-[a-z0-9-]+-v\d+/.test(indexHtml) &&
+      /app\.js\?v=\d{8}-[a-z0-9-]+-v\d+/.test(indexHtml),
+    "정적 자산 cache key 버전 규칙이 반영되지 않았습니다."
   );
 }
 
@@ -523,7 +532,7 @@ function checkFrontendAdminRender() {
       /\.console-shell \.app-nav-command \.page-command-metrics\s*\{[\s\S]*display: none;/.test(styles) &&
       /\.console-shell \.app-nav-routine > span:not\(\.app-nav-routine-action-cell\)\s*\{[\s\S]*display: none;/.test(styles) &&
       /@media \(min-width: 861px\) and \(max-width: 1180px\)[\s\S]*\.console-shell \.app-nav-flow,[\s\S]*\.console-shell \.app-nav-command \.page-command-metrics,[\s\S]*\.console-shell \.app-nav-current em,[\s\S]*\.console-shell :is\([\s\S]*\.feed-section-tabs span[\s\S]*\)\s*\{[\s\S]*display: none;/.test(styles) &&
-      indexHtml.indexOf("styles.css?v=20260719-single-screen-console-v1") >= 0,
+      indexHtml.indexOf("styles.css?v=20260814-mobile-panel-rhythm-v1") >= 0,
     "PC 상단 영역이 탭별로 여러 줄/넘침으로 깨지지 않도록 하는 안정화 레이어가 없습니다."
   );
   assertOk(

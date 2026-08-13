@@ -17,7 +17,7 @@ from typing import Dict, Iterable, List, Mapping, Optional, Sequence, Tuple
 from .ontology_rulebox_contracts import HypothesisLifecyclePolicy
 
 
-HYPOTHESIS_LIFECYCLE_VERSION = "typedb-hypothesis-lifecycle-v2"
+HYPOTHESIS_LIFECYCLE_VERSION = "typedb-hypothesis-lifecycle-v3"
 HYPOTHESIS_LIFECYCLE_KEY_VERSION = "v2"
 HYPOTHESIS_LIFECYCLE_KEY_PREFIX = HYPOTHESIS_LIFECYCLE_KEY_VERSION + ":"
 HYPOTHESIS_LIFECYCLE_STATES = (
@@ -233,6 +233,9 @@ class HypothesisLifecycleSnapshot:
     supporting_evidence_ids: List[str] = field(default_factory=list)
     counter_evidence_ids: List[str] = field(default_factory=list)
     causal_path_ids: List[str] = field(default_factory=list)
+    supporting_evidence_keys: List[str] = field(default_factory=list)
+    counter_evidence_keys: List[str] = field(default_factory=list)
+    causal_path_keys: List[str] = field(default_factory=list)
     formation_condition_ids: List[str] = field(default_factory=list)
     matched_condition_ids: List[str] = field(default_factory=list)
     policy: Dict[str, object] = field(default_factory=dict)
@@ -266,6 +269,9 @@ class HypothesisLifecycleSnapshot:
             supporting_evidence_ids=_unique(payload.get("supportingEvidenceIds") or payload.get("supporting_evidence_ids") or []),
             counter_evidence_ids=_unique(payload.get("counterEvidenceIds") or payload.get("counter_evidence_ids") or []),
             causal_path_ids=_unique(payload.get("causalPathIds") or payload.get("causal_path_ids") or []),
+            supporting_evidence_keys=_unique(payload.get("supportingEvidenceKeys") or payload.get("supporting_evidence_keys") or []),
+            counter_evidence_keys=_unique(payload.get("counterEvidenceKeys") or payload.get("counter_evidence_keys") or []),
+            causal_path_keys=_unique(payload.get("causalPathKeys") or payload.get("causal_path_keys") or []),
             formation_condition_ids=_unique(payload.get("formationConditionIds") or payload.get("formation_condition_ids") or []),
             matched_condition_ids=_unique(payload.get("matchedConditionIds") or payload.get("matched_condition_ids") or []),
             policy=HypothesisLifecyclePolicy.from_dict(policy).to_dict(),
@@ -424,6 +430,69 @@ def lifecycle_policy_from_rows(rows: Iterable[Mapping[str, object]], fallback_co
     ).to_dict()
 
 
+def semantic_graph_row_key(row: Mapping[str, object], kind: str) -> str:
+    """Build a generation-stable meaning key from one InferenceBox row."""
+
+    item = dict(row or {}) if isinstance(row, Mapping) else {}
+    explicit = _text(
+        item.get("semanticKey")
+        or item.get("semantic_key")
+        or item.get("causalSignature")
+        or item.get("causal_signature")
+    )
+    if explicit:
+        return kind + ":explicit:" + explicit
+    relation_type = _text(item.get("relationType") or item.get("relation_type") or item.get("type"))
+    rule_id = _text(item.get("ruleId") or item.get("rule_id") or item.get("sourceRuleId"))
+    matched_conditions = sorted(_unique(
+        item.get("matchedConditionIds")
+        or item.get("matched_condition_ids")
+        or item.get("conditionIds")
+        or []
+    ))
+    shape = {
+        "kind": kind,
+        "ruleId": rule_id,
+        "relationType": relation_type,
+        "evidenceRole": _text(item.get("evidenceRole") or item.get("evidence_role")),
+        "polarity": _text(item.get("polarity")),
+        "sourceKind": _text(item.get("sourceKind") or item.get("source_kind")),
+        "targetKind": _text(item.get("targetKind") or item.get("target_kind")),
+        "tboxClass": _text(item.get("tboxClass") or item.get("tbox_class")),
+        "decisionStage": _text(item.get("decisionStage") or item.get("decision_stage")),
+        "matchedConditionIds": matched_conditions,
+    }
+    if rule_id or relation_type or matched_conditions:
+        return kind + ":shape:" + stable_fingerprint(shape)[:24]
+    return ""
+
+
+def semantic_keys_for_ids(
+    identifiers: Iterable[object],
+    rows_by_id: Mapping[str, Mapping[str, object]],
+    kind: str,
+    rule_ids: Iterable[object],
+) -> List[str]:
+    resolved = []
+    unresolved_count = 0
+    for identifier in _unique(identifiers):
+        row = rows_by_id.get(identifier) if isinstance(rows_by_id, Mapping) else None
+        key = semantic_graph_row_key(row, kind) if isinstance(row, Mapping) else ""
+        if key:
+            resolved.append(key)
+        else:
+            unresolved_count += 1
+    fallback_seed = stable_fingerprint({
+        "kind": kind,
+        "ruleIds": sorted(_unique(rule_ids)),
+    })[:20]
+    resolved.extend(
+        kind + ":unresolved-slot:" + fallback_seed + ":" + str(index + 1)
+        for index in range(unresolved_count)
+    )
+    return sorted(_unique(resolved))
+
+
 def lifecycle_snapshots_from_relation_context(
     context: Mapping[str, object],
     observed_at: str = "",
@@ -440,6 +509,12 @@ def lifecycle_snapshots_from_relation_context(
         return []
     graph_inference = context.get("graphStoreInference") if isinstance(context.get("graphStoreInference"), dict) else {}
     traces = [item for item in graph_inference.get("traces") or [] if isinstance(item, dict)]
+    relations = [item for item in graph_inference.get("relations") or [] if isinstance(item, dict)]
+    relations_by_id = {
+        _text(item.get("id") or item.get("relationId")): item
+        for item in relations
+        if _text(item.get("id") or item.get("relationId"))
+    }
     traces_by_rule: Dict[str, List[Dict[str, object]]] = {}
     for trace in traces:
         rule_id = _text(trace.get("ruleId"))
@@ -493,6 +568,14 @@ def lifecycle_snapshots_from_relation_context(
             for item in member_rows
             for value in item.get("causalPathIds") or []
         ] + [trace.get("id") for trace in member_traces])
+        traces_by_id = {
+            _text(item.get("id") or item.get("traceId")): item
+            for item in member_traces
+            if _text(item.get("id") or item.get("traceId"))
+        }
+        supporting_keys = semantic_keys_for_ids(supporting, relations_by_id, "support", rule_ids)
+        counter_keys = semantic_keys_for_ids(counter, relations_by_id, "counter", rule_ids)
+        path_keys = semantic_keys_for_ids(paths, traces_by_id, "causal-path", rule_ids)
         matched_conditions = _unique([
             value
             for trace in member_traces
@@ -524,6 +607,9 @@ def lifecycle_snapshots_from_relation_context(
             "supportingEvidenceIds": sorted(supporting),
             "counterEvidenceIds": sorted(counter),
             "causalPathIds": sorted(paths),
+            "supportingEvidenceKeys": supporting_keys,
+            "counterEvidenceKeys": counter_keys,
+            "causalPathKeys": path_keys,
             "formationConditionIds": sorted(formation),
             "matchedConditionIds": sorted(matched_conditions),
             "policy": policy,
@@ -543,6 +629,9 @@ def lifecycle_snapshots_from_relation_context(
             supporting_evidence_ids=sorted(supporting),
             counter_evidence_ids=sorted(counter),
             causal_path_ids=sorted(paths),
+            supporting_evidence_keys=supporting_keys,
+            counter_evidence_keys=counter_keys,
+            causal_path_keys=path_keys,
             formation_condition_ids=sorted(formation),
             matched_condition_ids=sorted(matched_conditions),
             policy=policy,
@@ -666,29 +755,92 @@ def evidence_delta(previous: HypothesisLifecycleRecord, snapshot: HypothesisLife
             sorted(old - current),
         )
 
+    def semantic_values(
+        older_keys: Iterable[object],
+        current_keys: Iterable[object],
+        older_ids: Iterable[object],
+        current_ids: Iterable[object],
+        kind: str,
+    ) -> Tuple[List[str], List[str]]:
+        old_keys = _unique(older_keys)
+        new_keys = _unique(current_keys)
+        if old_keys and new_keys:
+            return old_keys, new_keys
+        # A v2 snapshot has no semantic keys. Compare stable role slots for the
+        # first v3 transition so a full generation-ID rotation is not emitted
+        # as a false weakening event.
+        seed = stable_fingerprint({
+            "kind": kind,
+            "ruleIds": sorted(set(before.source_rule_ids) | set(snapshot.source_rule_ids)),
+        })[:20]
+        old_slots = [kind + ":migration-slot:" + seed + ":" + str(index + 1) for index, _ in enumerate(_unique(older_ids))]
+        new_slots = [kind + ":migration-slot:" + seed + ":" + str(index + 1) for index, _ in enumerate(_unique(current_ids))]
+        return old_slots, new_slots
+
+    support_before, support_current = semantic_values(
+        before.supporting_evidence_keys,
+        snapshot.supporting_evidence_keys,
+        before.supporting_evidence_ids,
+        snapshot.supporting_evidence_ids,
+        "support",
+    )
+    counter_before, counter_current = semantic_values(
+        before.counter_evidence_keys,
+        snapshot.counter_evidence_keys,
+        before.counter_evidence_ids,
+        snapshot.counter_evidence_ids,
+        "counter",
+    )
+    path_before, path_current = semantic_values(
+        before.causal_path_keys,
+        snapshot.causal_path_keys,
+        before.causal_path_ids,
+        snapshot.causal_path_ids,
+        "causal-path",
+    )
     values: Dict[str, List[str]] = {}
     for name, before_values, current_values in [
-        ("SupportingEvidenceIds", before.supporting_evidence_ids, snapshot.supporting_evidence_ids),
-        ("CounterEvidenceIds", before.counter_evidence_ids, snapshot.counter_evidence_ids),
-        ("CausalPathIds", before.causal_path_ids, snapshot.causal_path_ids),
+        ("SupportingEvidenceKeys", support_before, support_current),
+        ("CounterEvidenceKeys", counter_before, counter_current),
+        ("CausalPathKeys", path_before, path_current),
         ("FormationConditionIds", before.formation_condition_ids, snapshot.formation_condition_ids),
         ("RuleIds", before.source_rule_ids, snapshot.source_rule_ids),
     ]:
         added_key, added, removed_key, removed = delta(name, before_values, current_values)
         values[added_key] = added
         values[removed_key] = removed
+    for name, before_values, current_values in [
+        ("SupportingEvidenceIds", before.supporting_evidence_ids, snapshot.supporting_evidence_ids),
+        ("CounterEvidenceIds", before.counter_evidence_ids, snapshot.counter_evidence_ids),
+        ("CausalPathIds", before.causal_path_ids, snapshot.causal_path_ids),
+    ]:
+        added_key, added, removed_key, removed = delta(name, before_values, current_values)
+        values["rotated" + added_key[:1].upper() + added_key[1:]] = added
+        values["rotated" + removed_key[:1].upper() + removed_key[1:]] = removed
     return values
 
 
 def has_material_delta(delta: Mapping[str, Sequence[str]]) -> bool:
-    return any(bool(list(values or [])) for values in (delta or {}).values())
+    material_keys = {
+        "addedSupportingEvidenceKeys",
+        "removedSupportingEvidenceKeys",
+        "addedCounterEvidenceKeys",
+        "removedCounterEvidenceKeys",
+        "addedCausalPathKeys",
+        "removedCausalPathKeys",
+        "addedFormationConditionIds",
+        "removedFormationConditionIds",
+        "addedRuleIds",
+        "removedRuleIds",
+    }
+    return any(bool(list((delta or {}).get(key) or [])) for key in material_keys)
 
 
 def state_for_delta(previous: HypothesisLifecycleRecord, delta: Mapping[str, Sequence[str]]) -> Tuple[str, str]:
-    added_support = bool(delta.get("addedSupportingEvidenceIds")) or bool(delta.get("addedCausalPathIds"))
-    removed_support = bool(delta.get("removedSupportingEvidenceIds")) or bool(delta.get("removedCausalPathIds"))
-    added_counter = bool(delta.get("addedCounterEvidenceIds"))
-    removed_counter = bool(delta.get("removedCounterEvidenceIds"))
+    added_support = bool(delta.get("addedSupportingEvidenceKeys")) or bool(delta.get("addedCausalPathKeys"))
+    removed_support = bool(delta.get("removedSupportingEvidenceKeys")) or bool(delta.get("removedCausalPathKeys"))
+    added_counter = bool(delta.get("addedCounterEvidenceKeys"))
+    removed_counter = bool(delta.get("removedCounterEvidenceKeys"))
     removed_conditions = bool(delta.get("removedFormationConditionIds"))
     if (added_support or removed_counter) and not (removed_support or added_counter or removed_conditions):
         return "strengthened", "새 지지 근거 또는 인과 경로가 추가되었습니다."

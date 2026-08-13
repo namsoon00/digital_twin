@@ -20447,6 +20447,8 @@
     var snapshot = trace.snapshot && typeof trace.snapshot === "object" ? trace.snapshot : {};
     var finalDecision = trace.finalDecision && typeof trace.finalDecision === "object" ? trace.finalDecision : {};
     var comparison = trace.aiComparison && typeof trace.aiComparison === "object" ? trace.aiComparison : {};
+    var decisionAbstention = comparison.decisionAbstention && typeof comparison.decisionAbstention === "object" ? comparison.decisionAbstention : {};
+    var decisionGuardrails = Array.isArray(comparison.decisionGuardrails) ? comparison.decisionGuardrails : [];
     var aiExecution = trace.aiExecution && typeof trace.aiExecution === "object" ? trace.aiExecution : {};
     var executionLedger = trace.executionLedger && typeof trace.executionLedger === "object" ? trace.executionLedger : {};
     var investmentLifecycle = trace.investmentLifecycle && typeof trace.investmentLifecycle === "object" ? trace.investmentLifecycle : {};
@@ -20494,6 +20496,12 @@
     if (comparison.disagreementReason) {
       comparisonBody += '<p class="notification-reasoning-note"><strong>조정 이유</strong>' + escapeHtml(comparison.disagreementReason) + '</p>';
     }
+    if (decisionAbstention.abstained) {
+      comparisonBody += '<p class="notification-reasoning-note"><strong>판단 유보</strong>' + escapeHtml(decisionAbstention.reason || "가설 비교 계약을 충족하지 못해 선택 가설을 저장하지 않았습니다.") + '</p>';
+    }
+    decisionGuardrails.slice(0, 3).forEach(function (guardrail) {
+      comparisonBody += '<p class="notification-reasoning-note"><strong>' + escapeHtml(guardrail.label || "판단 안전 제한") + '</strong>' + escapeHtml(guardrail.reason || "추가 검증이 필요합니다.") + '</p>';
+    });
     var hypothesisBody = notificationReasoningTraceTags([
       selected.stanceLabel || "",
       selected.evidenceStateLabel || "",
@@ -20560,6 +20568,9 @@
     var aiExecutionBody = notificationReasoningTraceTags(aiExecutionMeta, "notification-reasoning-tags");
     if (aiExecution.promptHash) {
       aiExecutionBody += '<code>' + escapeHtml(aiExecution.promptHash) + '</code>';
+    }
+    if (aiExecution.hypothesisComparisonRepair && aiExecution.hypothesisComparisonRepair.attempted) {
+      aiExecutionBody += '<p class="notification-reasoning-note"><strong>가설 비교 교정</strong>' + escapeHtml(aiExecution.hypothesisComparisonRepair.succeeded ? "교정 후 비교 계약 통과" : "교정 후에도 판단 유보") + '</p>';
     }
     if (aiExecution.prompt) {
       aiExecutionBody += '<details class="notification-ai-prompt-audit"><summary>실제 AI 입력 프롬프트</summary><pre>' + escapeHtml(aiExecution.prompt) + '</pre></details>';
@@ -23119,7 +23130,7 @@
       '<label class="setting-field"><span>Codex 사용</span><select data-model-setting="ontologyRuleCandidateAiUseCodex"><option value="1"' + ((settingValue("ontologyRuleCandidateAiUseCodex") || defaultSettings.ontologyRuleCandidateAiUseCodex) !== "0" ? " selected" : "") + '>사용</option><option value="0"' + ((settingValue("ontologyRuleCandidateAiUseCodex") || defaultSettings.ontologyRuleCandidateAiUseCodex) === "0" ? " selected" : "") + '>로컬</option></select></label>',
       '<label class="setting-field"><span>주기(분)</span><input data-model-setting="ontologyRuleCandidateAiIntervalMinutes" type="number" min="5" step="5" value="' + escapeHtml(settingValue("ontologyRuleCandidateAiIntervalMinutes") || defaultSettings.ontologyRuleCandidateAiIntervalMinutes) + '"></label>',
       '<label class="setting-field"><span>최대 후보</span><input data-model-setting="ontologyRuleCandidateAiMaxCandidates" type="number" min="1" max="10" step="1" value="' + escapeHtml(settingValue("ontologyRuleCandidateAiMaxCandidates") || defaultSettings.ontologyRuleCandidateAiMaxCandidates) + '"></label>',
-      '<label class="setting-field"><span>자동 반영</span><select data-model-setting="ontologyLabAutoApplyEnabled"><option value="1"' + ((settingValue("ontologyLabAutoApplyEnabled") || defaultSettings.ontologyLabAutoApplyEnabled || "1") !== "0" ? " selected" : "") + '>사용</option><option value="0"' + ((settingValue("ontologyLabAutoApplyEnabled") || defaultSettings.ontologyLabAutoApplyEnabled || "1") === "0" ? " selected" : "") + '>끄기</option></select></label>',
+      '<label class="setting-field"><span>자동 반영</span><select data-model-setting="ontologyLabAutoApplyEnabled"><option value="1"' + ((settingValue("ontologyLabAutoApplyEnabled") || defaultSettings.ontologyLabAutoApplyEnabled || "0") !== "0" ? " selected" : "") + '>사용</option><option value="0"' + ((settingValue("ontologyLabAutoApplyEnabled") || defaultSettings.ontologyLabAutoApplyEnabled || "0") === "0" ? " selected" : "") + '>끄기</option></select></label>',
       '<div class="setting-field"><span>자동 반영 조건</span><strong>검증 완료 · 자료 충분</strong></div>',
       '<label class="setting-field"><span>검토 자동승인</span><select data-model-setting="ontologyLabAutoApplyNeedsReviewEnabled"><option value="0"' + ((settingValue("ontologyLabAutoApplyNeedsReviewEnabled") || defaultSettings.ontologyLabAutoApplyNeedsReviewEnabled || "0") === "0" ? " selected" : "") + '>끄기</option><option value="1"' + ((settingValue("ontologyLabAutoApplyNeedsReviewEnabled") || defaultSettings.ontologyLabAutoApplyNeedsReviewEnabled || "0") !== "0" ? " selected" : "") + '>사용</option></select></label>',
       '<label class="setting-field"><span>성장 알림</span><select data-model-setting="ontologyLabNotifyEnabled"><option value="1"' + ((settingValue("ontologyLabNotifyEnabled") || defaultSettings.ontologyLabNotifyEnabled || "1") !== "0" ? " selected" : "") + '>사용</option><option value="0"' + ((settingValue("ontologyLabNotifyEnabled") || defaultSettings.ontologyLabNotifyEnabled || "1") === "0" ? " selected" : "") + '>끄기</option></select></label>',

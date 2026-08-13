@@ -91,6 +91,8 @@ class NotificationAIValidatedResponse:
     selected_hypothesis_id: str = ""
     hypothesis_comparison_state: str = "unavailable"
     hypothesis_selection_source: str = "not-selected"
+    decision_guardrails: List[Dict[str, object]] = field(default_factory=list)
+    decision_abstention: Dict[str, object] = field(default_factory=dict)
     unresolved_questions: List[str] = field(default_factory=list)
     epistemic_summary: str = ""
     source: str = "local"
@@ -126,6 +128,8 @@ class NotificationAIValidatedResponse:
             "selectedHypothesisId": "selected_hypothesis_id",
             "hypothesisComparisonState": "hypothesis_comparison_state",
             "hypothesisSelectionSource": "hypothesis_selection_source",
+            "decisionGuardrails": "decision_guardrails",
+            "decisionAbstention": "decision_abstention",
             "unresolvedQuestions": "unresolved_questions",
             "epistemicSummary": "epistemic_summary",
             "rawResponse": "raw_response",
@@ -165,6 +169,8 @@ class NotificationAIValidatedResponse:
         payload["selectedHypothesisId"] = payload.pop("selected_hypothesis_id")
         payload["hypothesisComparisonState"] = payload.pop("hypothesis_comparison_state")
         payload["hypothesisSelectionSource"] = payload.pop("hypothesis_selection_source")
+        payload["decisionGuardrails"] = payload.pop("decision_guardrails")
+        payload["decisionAbstention"] = payload.pop("decision_abstention")
         payload["unresolvedQuestions"] = payload.pop("unresolved_questions")
         payload["epistemicSummary"] = payload.pop("epistemic_summary")
         payload["rawResponse"] = payload.pop("raw_response")

@@ -20,7 +20,7 @@ from .ontology_worlds import market_world
 
 
 INVESTMENT_BRAIN_VERSION = "ontology-investment-brain-v5"
-HYPOTHESIS_SET_VERSION = "typedb-causal-hypotheses-v5"
+HYPOTHESIS_SET_VERSION = "typedb-causal-hypotheses-v6"
 SYSTEM_ABSTENTION_TEMPLATE_ID = "hypothesis-template:system.evidence-sufficiency.v1"
 META_INFERENCE_RELATION_TYPES = {
     "EXPLAINED_BY_TRACE",
@@ -340,6 +340,24 @@ class InvestmentHypothesis:
 
 
 @dataclass(frozen=True)
+class DecisionGuardrail:
+    """A decision constraint that must never compete as an investment thesis."""
+
+    guardrail_id: str
+    guardrail_type: str
+    label: str
+    reason: str
+    status: str = "active"
+    required_checks: List[str] = field(default_factory=list)
+    missing_data: List[str] = field(default_factory=list)
+    blocked_actions: List[str] = field(default_factory=list)
+    source: str = "system-safety-policy"
+
+    def to_dict(self) -> Dict[str, object]:
+        return camelize(asdict(self))
+
+
+@dataclass(frozen=True)
 class HypothesisReview:
     """The AI's bounded assessment of one graph-derived hypothesis.
 
@@ -366,6 +384,10 @@ class HypothesisComparisonAudit:
     selection_source: str = "not-selected"
     invalid_hypothesis_ids: List[str] = field(default_factory=list)
     invalid_evidence_ids: List[str] = field(default_factory=list)
+    duplicate_hypothesis_ids: List[str] = field(default_factory=list)
+    unreviewed_hypothesis_ids: List[str] = field(default_factory=list)
+    abstained: bool = False
+    abstention_reason: str = ""
 
     def to_dict(self) -> Dict[str, object]:
         payload = camelize(asdict(self))
@@ -385,6 +407,7 @@ class HypothesisSet:
     families: List[HypothesisFamily] = field(default_factory=list)
     market_hypotheses: List[MarketHypothesis] = field(default_factory=list)
     account_overlays: List[AccountHypothesisOverlay] = field(default_factory=list)
+    decision_guardrails: List[DecisionGuardrail] = field(default_factory=list)
     scope_version: str = HYPOTHESIS_SCOPE_VERSION
     created_at: str = field(default_factory=utc_now_iso)
     version: str = HYPOTHESIS_SET_VERSION
@@ -395,6 +418,7 @@ class HypothesisSet:
         payload["families"] = [item.to_dict() for item in self.families]
         payload["marketHypotheses"] = [item.to_dict() for item in self.market_hypotheses]
         payload["accountOverlays"] = [item.to_dict() for item in self.account_overlays]
+        payload["decisionGuardrails"] = [item.to_dict() for item in self.decision_guardrails]
         return payload
 
 
@@ -430,6 +454,8 @@ class DecisionEpisode:
     hypothesis_reviews: List[HypothesisReview] = field(default_factory=list)
     hypothesis_comparison_state: str = "unavailable"
     hypothesis_selection_source: str = "not-selected"
+    decision_guardrails: List[Dict[str, object]] = field(default_factory=list)
+    decision_abstention: Dict[str, object] = field(default_factory=dict)
     inference_generation_id: str = ""
     portfolio_id: str = ""
     mandate_id: str = ""
@@ -455,6 +481,8 @@ class DecisionEpisode:
         payload["question"] = self.question.to_dict()
         payload["hypothesisSet"] = self.hypothesis_set.to_dict()
         payload["hypothesisReviews"] = [item.to_dict() for item in self.hypothesis_reviews]
+        payload["decisionGuardrails"] = [dict(item) for item in self.decision_guardrails]
+        payload["decisionAbstention"] = dict(self.decision_abstention or {})
         payload["researchPlan"] = dict(self.research_plan or {})
         payload["researchAudit"] = dict(self.research_audit or {})
         payload["outcomes"] = [item.to_dict() for item in self.outcomes]
@@ -634,6 +662,24 @@ class DecisionEpisode:
             ))
         if not account_overlays:
             account_overlays = account_overlays_from_hypotheses(hypotheses)
+        decision_guardrails = []
+        for item in hypothesis_payload.get("decisionGuardrails") or hypothesis_payload.get("decision_guardrails") or []:
+            if not isinstance(item, dict):
+                continue
+            guardrail_id = str(item.get("guardrailId") or item.get("guardrail_id") or "").strip()
+            if not guardrail_id:
+                continue
+            decision_guardrails.append(DecisionGuardrail(
+                guardrail_id=guardrail_id,
+                guardrail_type=str(item.get("guardrailType") or item.get("guardrail_type") or "decision-integrity"),
+                label=str(item.get("label") or "판단 안전 제한"),
+                reason=str(item.get("reason") or ""),
+                status=str(item.get("status") or "active"),
+                required_checks=list(item.get("requiredChecks") or item.get("required_checks") or []),
+                missing_data=list(item.get("missingData") or item.get("missing_data") or []),
+                blocked_actions=list(item.get("blockedActions") or item.get("blocked_actions") or []),
+                source=str(item.get("source") or "system-safety-policy"),
+            ))
         hypothesis_set = HypothesisSet(
             hypothesis_set_id=str(hypothesis_payload.get("hypothesisSetId") or hypothesis_payload.get("hypothesis_set_id") or ""),
             subject_symbol=str(hypothesis_payload.get("subjectSymbol") or hypothesis_payload.get("subject_symbol") or ""),
@@ -645,6 +691,7 @@ class DecisionEpisode:
             families=families,
             market_hypotheses=market_hypotheses,
             account_overlays=account_overlays,
+            decision_guardrails=decision_guardrails,
             scope_version=str(hypothesis_payload.get("scopeVersion") or hypothesis_payload.get("scope_version") or HYPOTHESIS_SCOPE_VERSION),
             created_at=str(hypothesis_payload.get("createdAt") or utc_now_iso()),
             version=str(hypothesis_payload.get("version") or HYPOTHESIS_SET_VERSION),
@@ -713,6 +760,16 @@ class DecisionEpisode:
                 payload.get("hypothesisSelectionSource")
                 or payload.get("hypothesis_selection_source")
                 or "not-selected"
+            ),
+            decision_guardrails=[
+                dict(item)
+                for item in payload.get("decisionGuardrails") or payload.get("decision_guardrails") or []
+                if isinstance(item, dict)
+            ],
+            decision_abstention=dict(
+                payload.get("decisionAbstention")
+                or payload.get("decision_abstention")
+                or {}
             ),
             inference_generation_id=str(payload.get("inferenceGenerationId") or ""),
             portfolio_id=str(payload.get("portfolioId") or payload.get("portfolio_id") or ""),
@@ -1324,16 +1381,13 @@ def build_competing_hypotheses(
         question,
     )
     hypotheses = diverse_hypotheses(hypotheses, maximum_count)
-    hypotheses = add_safety_hypotheses(
+    decision_guardrails = decision_guardrails_for_context(
         hypotheses,
-        hypothesis_seed,
         name,
         question,
         missing_data,
         signal_conflicts,
-        relation_rows,
         minimum_count,
-        maximum_count,
     )
     research_plan = research_plan_for_hypotheses(question, hypotheses, missing_data, signal_conflicts)
     return HypothesisSet(
@@ -1346,6 +1400,7 @@ def build_competing_hypotheses(
         families=hypothesis_families_from_hypotheses(hypotheses),
         market_hypotheses=market_hypotheses_from_hypotheses(hypotheses),
         account_overlays=account_overlays_from_hypotheses(hypotheses),
+        decision_guardrails=decision_guardrails,
     ), research_plan
 
 
@@ -2077,6 +2132,51 @@ def diverse_hypotheses(hypotheses: List[InvestmentHypothesis], maximum_count: in
     return selected[:maximum_count]
 
 
+def decision_guardrails_for_context(
+    hypotheses: List[InvestmentHypothesis],
+    name: str,
+    question: InvestmentQuestion,
+    missing_data: Iterable[object],
+    conflicts: Dict[str, object],
+    minimum_count: int,
+) -> List[DecisionGuardrail]:
+    """Describe evidence constraints without turning them into hypotheses."""
+
+    result: List[DecisionGuardrail] = []
+    missing = unique_texts(missing_data)
+    has_conflict = bool((conflicts or {}).get("hasConflict"))
+    if hypotheses and (len(hypotheses) < minimum_count or missing or has_conflict):
+        reasons = []
+        if len(hypotheses) < minimum_count:
+            reasons.append("독립된 TypeDB 규칙 가설이 " + str(minimum_count) + "개보다 적습니다.")
+        if missing:
+            reasons.append("필수 데이터가 비어 있습니다: " + ", ".join(missing[:4]))
+        if has_conflict:
+            reasons.append("현재 세대의 근거 방향이 서로 충돌합니다.")
+        result.append(DecisionGuardrail(
+            guardrail_id=stable_id("decision-guardrail", question.question_id, "evidence-sufficiency"),
+            guardrail_type="evidence-sufficiency",
+            label="근거 충분성 제한",
+            reason=" ".join(reasons),
+            required_checks=unique_texts([
+                "현재 TypeDB 규칙 가설을 모두 비교합니다.",
+                *(["누락 데이터를 수집한 뒤 재추론합니다."] if missing else []),
+                *(["충돌 근거의 시점과 출처를 대조합니다."] if has_conflict else []),
+            ]),
+            missing_data=missing,
+        ))
+    directional_stances = {item.stance for item in hypotheses if item.stance in {"risk", "support"}}
+    if hypotheses and len(directional_stances) < 2:
+        result.append(DecisionGuardrail(
+            guardrail_id=stable_id("decision-guardrail", question.question_id, "counterfactual-coverage"),
+            guardrail_type="counterfactual-coverage",
+            label="반대 경로 확인 필요",
+            reason=name + "의 현재 TypeDB 규칙 가설이 한 방향에 치우쳐 있어 반대 경로를 충분히 비교하지 못했습니다.",
+            required_checks=["현재 경로를 반박할 독립 근거 또는 다음 세대의 경로 반복 여부를 확인합니다."],
+        ))
+    return result
+
+
 def add_safety_hypotheses(
     hypotheses: List[InvestmentHypothesis],
     hypothesis_seed: str,
@@ -2088,6 +2188,7 @@ def add_safety_hypotheses(
     minimum_count: int,
     maximum_count: int,
 ) -> List[InvestmentHypothesis]:
+    """Legacy compatibility helper; new hypothesis sets use decision guardrails."""
     result = list(hypotheses)
     directional_stances = {item.stance for item in result if item.stance in {"risk", "support"}}
     evidence_safety_needed = len(result) < minimum_count or bool(list(missing_data or [])) or bool((conflicts or {}).get("hasConflict"))
@@ -2285,11 +2386,15 @@ def hypothesis_comparison_audit(
 
     An AI response may explain and choose among the current TypeDB hypotheses,
     but it may not silently add a new hypothesis, causal trace, or evidence ID.
-    Incomplete comparisons fall back to an explicit safety hypothesis instead
-    of treating the first TypeDB rule as an AI decision.
+    Incomplete comparisons abstain without selecting a hypothesis. Decision
+    guardrails constrain the action separately and are never selection targets.
     """
 
-    candidate_rows = [dict(item) for item in candidates or [] if isinstance(item, dict)]
+    candidate_rows = [
+        dict(item)
+        for item in candidates or []
+        if isinstance(item, dict) and is_selectable_hypothesis_payload(item)
+    ]
     candidate_by_id = {
         str(item.get("hypothesisId") or item.get("hypothesis_id") or "").strip(): item
         for item in candidate_rows
@@ -2298,6 +2403,7 @@ def hypothesis_comparison_audit(
     review_rows = [dict(item) for item in ai_reviews or [] if isinstance(item, dict)]
     review_by_id: Dict[str, Dict[str, object]] = {}
     invalid_hypothesis_ids: List[str] = []
+    duplicate_hypothesis_ids: List[str] = []
     for row in review_rows:
         hypothesis_id = str(row.get("hypothesisId") or row.get("hypothesis_id") or row.get("id") or "").strip()
         if not hypothesis_id:
@@ -2305,8 +2411,10 @@ def hypothesis_comparison_audit(
         if hypothesis_id not in candidate_by_id:
             invalid_hypothesis_ids.append(hypothesis_id)
             continue
-        if hypothesis_id not in review_by_id:
-            review_by_id[hypothesis_id] = row
+        if hypothesis_id in review_by_id:
+            duplicate_hypothesis_ids.append(hypothesis_id)
+            continue
+        review_by_id[hypothesis_id] = row
 
     invalid_evidence_ids: List[str] = []
     reviews: List[HypothesisReview] = []
@@ -2332,11 +2440,24 @@ def hypothesis_comparison_audit(
 
     requested_selected = str(requested_selected_hypothesis_id or "").strip()
     valid_selected = requested_selected if requested_selected in candidate_by_id else ""
-    all_reviews_present = bool(candidate_by_id) and all(
-        item.hypothesis_id in review_by_id and item.verdict != "unreviewed"
+    unreviewed_hypothesis_ids = [
+        item.hypothesis_id
         for item in reviews
+        if (
+            item.hypothesis_id not in review_by_id
+            or item.verdict == "unreviewed"
+            or not item.reasoning
+        )
+    ]
+    all_reviews_present = bool(candidate_by_id) and not unreviewed_hypothesis_ids
+    comparison_contract_valid = not (
+        invalid_hypothesis_ids
+        or invalid_evidence_ids
+        or duplicate_hypothesis_ids
     )
-    if valid_selected and all_reviews_present:
+    selected_review = next((item for item in reviews if item.hypothesis_id == valid_selected), None)
+    selected_review_valid = bool(selected_review and selected_review.verdict not in {"rejected", "unreviewed"})
+    if valid_selected and selected_review_valid and all_reviews_present and comparison_contract_valid:
         return HypothesisComparisonAudit(
             reviews=reviews,
             selected_hypothesis_id=valid_selected,
@@ -2344,6 +2465,8 @@ def hypothesis_comparison_audit(
             selection_source="ai-comparison",
             invalid_hypothesis_ids=unique_texts(invalid_hypothesis_ids),
             invalid_evidence_ids=unique_texts(invalid_evidence_ids),
+            duplicate_hypothesis_ids=unique_texts(duplicate_hypothesis_ids),
+            unreviewed_hypothesis_ids=[],
         )
 
     if not candidate_by_id:
@@ -2353,6 +2476,10 @@ def hypothesis_comparison_audit(
             selection_source="not-selected",
             invalid_hypothesis_ids=unique_texts(invalid_hypothesis_ids),
             invalid_evidence_ids=unique_texts(invalid_evidence_ids),
+            duplicate_hypothesis_ids=unique_texts(duplicate_hypothesis_ids),
+            unreviewed_hypothesis_ids=[],
+            abstained=True,
+            abstention_reason="현재 세대에서 선택할 TypeDB 규칙 가설이 없습니다.",
         )
 
     reviewed_ids = {
@@ -2360,20 +2487,52 @@ def hypothesis_comparison_audit(
         for item in reviews
         if item.verdict != "unreviewed"
     }
-    if requested_selected and not valid_selected:
+    if requested_selected and (not valid_selected or not selected_review_valid):
         state = "invalid-selection"
     elif reviewed_ids:
         state = "partial"
     else:
         state = "fallback"
-    safety_id = safety_hypothesis_id(candidate_by_id)
+    if requested_selected and not valid_selected:
+        reason = "AI가 현재 TypeDB 규칙 가설 집합에 없는 가설을 선택했습니다."
+    elif requested_selected and not selected_review_valid:
+        reason = "AI가 기각했거나 검토하지 않은 가설을 최종 가설로 선택했습니다."
+    elif duplicate_hypothesis_ids:
+        reason = "AI가 같은 가설을 두 번 이상 평가해 비교 계약을 충족하지 못했습니다."
+    elif invalid_evidence_ids:
+        reason = "AI가 현재 가설에 연결되지 않은 근거를 사용해 비교 계약을 충족하지 못했습니다."
+    elif unreviewed_hypothesis_ids:
+        reason = "AI가 현재 TypeDB 규칙 가설을 모두 평가하지 못했습니다."
+    else:
+        reason = "AI 가설 비교 결과가 선택 조건을 충족하지 못했습니다."
     return HypothesisComparisonAudit(
         reviews=reviews,
-        selected_hypothesis_id=safety_id,
+        selected_hypothesis_id="",
         comparison_state=state,
-        selection_source=("safety-fallback-" + state) if safety_id else "not-selected-" + state,
+        selection_source="abstained-" + state,
         invalid_hypothesis_ids=unique_texts(invalid_hypothesis_ids),
         invalid_evidence_ids=unique_texts(invalid_evidence_ids),
+        duplicate_hypothesis_ids=unique_texts(duplicate_hypothesis_ids),
+        unreviewed_hypothesis_ids=unique_texts(unreviewed_hypothesis_ids),
+        abstained=True,
+        abstention_reason=reason,
+    )
+
+
+def is_selectable_hypothesis_payload(candidate: Dict[str, object]) -> bool:
+    """Return true only for a graph/rule-backed investment hypothesis."""
+
+    item = dict(candidate or {}) if isinstance(candidate, dict) else {}
+    template_id = str(item.get("templateId") or item.get("template_id") or "")
+    approval_status = str(item.get("approvalStatus") or item.get("approval_status") or "")
+    family_source = str(item.get("familySource") or item.get("family_source") or "")
+    scope_state = str(item.get("scopeState") or item.get("scope_state") or "")
+    rule_ids = item.get("supportingRuleIds") or item.get("supporting_rule_ids") or []
+    return bool(rule_ids) and not (
+        template_id.startswith("hypothesis-template:system.")
+        or approval_status == "approved-safety-policy"
+        or family_source == "system-safety-policy"
+        or scope_state == SYSTEM_SAFETY_SCOPE
     )
 
 
@@ -2593,6 +2752,19 @@ def decision_episode_from_context(
         hypothesis_reviews=list(comparison.reviews),
         hypothesis_comparison_state=comparison.comparison_state,
         hypothesis_selection_source=comparison.selection_source,
+        decision_guardrails=(
+            [dict(item) for item in validated_response.get("decisionGuardrails") or [] if isinstance(item, dict)]
+            or [item.to_dict() for item in seed_episode.hypothesis_set.decision_guardrails]
+        ),
+        decision_abstention={
+            "abstained": comparison.abstained,
+            "reason": comparison.abstention_reason,
+            "comparisonState": comparison.comparison_state,
+            "unreviewedHypothesisIds": list(comparison.unreviewed_hypothesis_ids),
+            "invalidHypothesisIds": list(comparison.invalid_hypothesis_ids),
+            "invalidEvidenceIds": list(comparison.invalid_evidence_ids),
+            "duplicateHypothesisIds": list(comparison.duplicate_hypothesis_ids),
+        } if comparison.abstained else {},
         inference_generation_id=str(relation_context.get("inferenceGenerationId") or ""),
         portfolio_id=str(
             relation_context.get("portfolioId")
@@ -2615,6 +2787,7 @@ def decision_episode_from_context(
         unresolved_questions=list(validated_response.get("unresolvedQuestions") or brain.get("selfQuestions") or []),
         decision_summary=str(validated_response.get("summary") or ""),
         decided_at=decided_at,
+        status="abstained" if comparison.abstained else "active",
         source="notification-ai-hypothesis-competition",
         facts_at_decision={
             **dict(relation_context.get("facts") or {}),

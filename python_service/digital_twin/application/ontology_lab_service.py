@@ -100,30 +100,31 @@ class OntologyLabService:
 
     def list(self, limit: int = 8, offset: int = 0, summary: bool = True) -> Dict[str, object]:
         experiments = self.experiment_store.list()
+        active_rule_ids = self.active_rule_ids()
         page_size = max(1, min(100, int(limit or 8)))
         page_offset = max(0, int(offset or 0))
         visible = experiments[page_offset: page_offset + page_size]
         return {
-            "experiments": [self.experiment_summary_payload(item) if summary else self.experiment_payload(item) for item in visible],
+            "experiments": [self.experiment_summary_payload(item, active_rule_ids) if summary else self.experiment_payload(item, active_rule_ids) for item in visible],
             "count": len(experiments),
             "limit": page_size,
             "offset": page_offset,
             "total": len(experiments),
         }
 
-    def experiment_payload(self, experiment: OntologyExperiment) -> Dict[str, object]:
+    def experiment_payload(self, experiment: OntologyExperiment, active_rule_ids: set = None) -> Dict[str, object]:
         payload = experiment.to_dict()
-        payload["promotionGate"] = ontology_promotion_gate(experiment)
+        payload["promotionGate"] = ontology_promotion_gate(experiment, active_rule_ids)
         return payload
 
-    def experiment_summary_payload(self, experiment: OntologyExperiment) -> Dict[str, object]:
+    def experiment_summary_payload(self, experiment: OntologyExperiment, active_rule_ids: set = None) -> Dict[str, object]:
         latest = max(
             (dict(item) for item in (experiment.run_history or []) if isinstance(item, dict)),
             key=lambda item: str(item.get("completedAt") or item.get("startedAt") or ""),
             default={},
         )
         result = dict(experiment.last_result or {})
-        promotion_gate = ontology_promotion_gate(experiment)
+        promotion_gate = ontology_promotion_gate(experiment, active_rule_ids)
         return {
             "id": experiment.experiment_id,
             "title": experiment.title,
@@ -138,6 +139,7 @@ class OntologyLabService:
             "targetWorld": dict(experiment.target_world or {}),
             "warningCount": len(experiment.validation_warnings or []),
             "validationWarnings": list(experiment.validation_warnings or [])[:3],
+            "provenance": dict(experiment.provenance or {}),
             "lastRun": {
                 key: latest.get(key)
                 for key in ["startedAt", "completedAt", "status", "relationDelta", "warnings"]
@@ -233,6 +235,7 @@ class OntologyLabService:
 
     def status(self) -> Dict[str, object]:
         experiments = self.experiment_store.list()
+        active_rule_ids = self.active_rule_ids()
         statuses: Dict[str, int] = {}
         latest_run = {}
         for experiment in experiments:
@@ -260,8 +263,8 @@ class OntologyLabService:
             "deferWhenReasoningPending": self.defer_while_reasoning_pending(),
             "reasoningQueue": self.reasoning_queue_state(),
             "latestRun": latest_run,
-            "promotionSummary": ontology_promotion_summary(experiments),
-            "experiments": [self.experiment_summary_payload(item) for item in experiments[:8]],
+            "promotionSummary": ontology_promotion_summary(experiments, active_rule_ids),
+            "experiments": [self.experiment_summary_payload(item, active_rule_ids) for item in experiments[:8]],
             "total": len(experiments),
             "limit": 8,
             "offset": 0,
@@ -351,10 +354,13 @@ class OntologyLabService:
                     "sourceCandidate": compact_source_candidate(candidate, rule_id, world_context),
                 },
                 active_since=stamp if activate else "",
-                validation_warnings=warnings + [
-                    "sourceCandidateId=" + str(candidate.get("id") or ""),
-                    "sourceCandidateStatus=" + str(candidate.get("status") or ""),
-                ],
+                validation_warnings=warnings,
+                provenance={
+                    "sourceCandidateId": str(candidate.get("id") or ""),
+                    "sourceCandidateStatus": str(candidate.get("status") or ""),
+                    "sourceCandidateRuleId": rule_id,
+                    "source": "ai-rule-candidate",
+                },
             )
             self.experiment_store.save(experiment)
             existing_rule_ids.add(rule_id)
@@ -560,7 +566,7 @@ class OntologyLabService:
         experiment = self.experiment_store.get(experiment_id)
         if not experiment:
             return {"status": "not-found", "id": experiment_id}
-        return {"experiment": self.experiment_payload(experiment)}
+        return {"experiment": self.experiment_payload(experiment, self.active_rule_ids())}
 
     def run(self, experiment_id: str, payload: Dict[str, object] = None) -> Dict[str, object]:
         experiment = self.experiment_store.get(experiment_id)
@@ -1073,6 +1079,20 @@ class OntologyLabService:
             return {}
         snapshot = self.ontology_repository.rulebox_snapshot()
         return snapshot if isinstance(snapshot, dict) else {}
+
+    def active_rule_ids(self):
+        snapshot = self.rulebox_snapshot()
+        status = str(snapshot.get("status") or "").lower()
+        if not snapshot or status in {"disabled", "error", "failed", "unavailable"}:
+            return None
+        rule_payloads = rule_payloads_from_snapshot(snapshot)
+        if not rule_payloads and int(snapshot.get("ruleCount") or 0) > 0:
+            return None
+        return {
+            rule_id_from_payload(item)
+            for item in rule_payloads
+            if rule_id_from_payload(item)
+        }
 
     def save_rulebox(self, payload: Dict[str, object]) -> Dict[str, object]:
         if not self.ontology_repository or not hasattr(self.ontology_repository, "save_rulebox"):
@@ -1889,6 +1909,7 @@ PROMOTION_GATE_REASON_LABELS = {
     "experiment-needs-review-approval": "수동 검토 승인 필요",
     "experiment-readiness-not-promotable": "승격 판정 미충족",
     "experiment-has-no-ontology-proposal": "온톨로지 변경안 없음",
+    "applied-rule-missing-from-active-rulebox": "운영 RuleBox에서 반영 규칙 누락",
 }
 
 PROMOTION_GATE_STATUS_LABELS = {
@@ -1900,19 +1921,20 @@ PROMOTION_GATE_STATUS_LABELS = {
     "pending": "반영 대기",
     "disabled": "저장소 비활성",
     "error": "반영 오류",
+    "drifted": "운영 규칙 불일치",
 }
 
 
-def ontology_promotion_summary(experiments: Iterable[OntologyExperiment]) -> Dict[str, int]:
+def ontology_promotion_summary(experiments: Iterable[OntologyExperiment], active_rule_ids: set = None) -> Dict[str, int]:
     summary: Dict[str, int] = {}
     for experiment in experiments or []:
-        gate = ontology_promotion_gate(experiment)
+        gate = ontology_promotion_gate(experiment, active_rule_ids)
         status = str(gate.get("status") or "blocked")
         summary[status] = summary.get(status, 0) + 1
     return summary
 
 
-def ontology_promotion_gate(experiment: OntologyExperiment) -> Dict[str, object]:
+def ontology_promotion_gate(experiment: OntologyExperiment, active_rule_ids: set = None) -> Dict[str, object]:
     last_result = dict(getattr(experiment, "last_result", {}) or {})
     readiness = last_result.get("promotionReadiness") if isinstance(last_result.get("promotionReadiness"), dict) else {}
     sandbox = last_result.get("sandbox") if isinstance(last_result.get("sandbox"), dict) else {}
@@ -1924,8 +1946,21 @@ def ontology_promotion_gate(experiment: OntologyExperiment) -> Dict[str, object]
     reason = ontology_apply_readiness(last_result, {})
     requires_review = reason == "experiment-needs-review-approval"
     applied = apply_status in {"applied", "already-applied"}
+    applied_rule_ids = clean_text_list(
+        application.get("ruleIds")
+        or [rule_id_from_payload(item) for item in getattr(experiment, "candidate_rules", [])]
+    )
+    missing_applied_rule_ids = (
+        sorted(set(applied_rule_ids) - set(active_rule_ids or set()))
+        if applied and active_rule_ids is not None
+        else []
+    )
     status = "ready" if not reason else ("needs-review" if requires_review else "blocked")
-    if applied:
+    if missing_applied_rule_ids:
+        status = "drifted"
+        reason = "applied-rule-missing-from-active-rulebox"
+        applied = False
+    elif applied:
         status = apply_status
     elif apply_status in {"pending", "disabled", "error"}:
         status = apply_status
@@ -1938,18 +1973,36 @@ def ontology_promotion_gate(experiment: OntologyExperiment) -> Dict[str, object]
         proposed,
         apply_status,
     )
+    if active_rule_ids is not None and applied_rule_ids:
+        checks.append({
+            "id": "active-rulebox-presence",
+            "label": "운영 RuleBox 정합성",
+            "passed": not missing_applied_rule_ids,
+            "detail": (
+                "반영 규칙이 현재 RuleBox에 있습니다."
+                if not missing_applied_rule_ids
+                else "누락: " + ", ".join(missing_applied_rule_ids[:8])
+            ),
+            "blocking": True,
+        })
     return {
         "status": status,
         "statusLabel": PROMOTION_GATE_STATUS_LABELS.get(status, status or "보류"),
         "reason": reason,
         "reasonLabel": PROMOTION_GATE_REASON_LABELS.get(reason, reason or "운영 반영 가능"),
-        "canApply": bool((not reason or requires_review) and not applied and ontology_result_has_apply_targets(last_result)),
+        "canApply": bool(
+            ((not reason or requires_review) and not applied and ontology_result_has_apply_targets(last_result))
+            or missing_applied_rule_ids
+        ),
         "requiresReviewApproval": requires_review,
         "completedAt": str(last_result.get("completedAt") or ""),
         "readinessStatus": str(readiness.get("status") or ""),
         "validationState": str(readiness.get("validationState") or ""),
         "dataState": str(readiness.get("dataState") or ""),
         "applyStatus": apply_status,
+        "activeRuleboxState": "missing" if missing_applied_rule_ids else "present" if applied_rule_ids else "not-applied",
+        "appliedRuleIds": applied_rule_ids,
+        "missingAppliedRuleIds": missing_applied_rule_ids,
         "checks": checks,
     }
 

@@ -337,7 +337,7 @@ class GraphInferenceRule:
             next_data_requirements=_unique_strings(configured.next_data_requirements),
             invalidation_mode=str(configured.invalidation_mode or "typedb-rule-not-materialized").strip()
             or "typedb-rule-not-materialized",
-            outcome_contract=configured.outcome_contract,
+            outcome_contract=configured.outcome_contract.resolved(),
         )
 
     @cached_property

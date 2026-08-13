@@ -203,10 +203,11 @@ class FakeReviewer:
                     "stance": item["stance"],
                     "evidenceState": item["evidenceState"],
                     "verdict": "unresolved",
+                    "reasoning": "현재 TypeDB 근거와 반대 근거를 비교했습니다.",
                 }
                 for item in hypotheses
             ],
-            selected_hypothesis_id=hypotheses[2]["hypothesisId"],
+            selected_hypothesis_id=hypotheses[0]["hypothesisId"],
             unresolved_questions=["다음 추론 세대에서도 위험 관계가 유지되는가?"],
             epistemic_summary="위험과 지지 근거가 모두 남아 있어 잠정 판단입니다.",
             reference_date="2026-07-19T01:00:00Z",
@@ -399,11 +400,14 @@ class InvestmentBrainTest(unittest.TestCase):
         self.assertEqual("template:risk", result["byHypothesis"][0]["key"])
         self.assertEqual("1440", result["byHorizon"][0]["key"])
 
-    def test_relation_context_builds_three_competing_hypotheses_with_graph_evidence(self):
+    def test_relation_context_separates_rule_hypotheses_from_decision_guardrails(self):
         payload = hypothesis_set_from_relation_context(relation_context())
         hypotheses = payload["hypothesisSet"]["hypotheses"]
-        self.assertEqual(3, len(hypotheses))
-        self.assertEqual({"risk", "support", "uncertain"}, {item["stance"] for item in hypotheses})
+        guardrails = payload["hypothesisSet"]["decisionGuardrails"]
+        self.assertEqual(2, len(hypotheses))
+        self.assertEqual({"risk", "support"}, {item["stance"] for item in hypotheses})
+        self.assertTrue(guardrails)
+        self.assertNotIn("approved-safety-policy", {item["approvalStatus"] for item in hypotheses})
         risk = next(item for item in hypotheses if item["stance"] == "risk")
         support = next(item for item in hypotheses if item["stance"] == "support")
         self.assertIn("relation-risk", risk["supportingEvidenceIds"])
@@ -584,7 +588,8 @@ class InvestmentBrainTest(unittest.TestCase):
         self.assertEqual({"risk-variant-a", "risk-variant-b"}, set(risk[0]["supportingRuleIds"]))
         self.assertEqual(2, risk[0]["mergedRuleCount"])
         self.assertEqual("typedb-structural-signature", risk[0]["familySource"])
-        self.assertEqual(3, len(first["families"]))
+        self.assertEqual(1, len(first["families"]))
+        self.assertTrue(first["decisionGuardrails"])
 
         context["inferenceGenerationId"] = "generation-2"
         second = hypothesis_set_from_relation_context(context)["hypothesisSet"]
@@ -686,17 +691,18 @@ class InvestmentBrainTest(unittest.TestCase):
         self.assertEqual(2, len(risk))
         self.assertEqual({"ma20-risk", "ma60-risk"}, {item["supportingRuleIds"][0] for item in risk})
 
-    def test_one_sided_typedb_paths_reserve_counterfactual_safety_hypothesis(self):
+    def test_one_sided_typedb_paths_create_counterfactual_guardrail_not_hypothesis(self):
         context = relation_context()
         context["activeRules"] = [context["activeRules"][0]]
         context["graphStoreInference"]["relations"] = [context["graphStoreInference"]["relations"][0]]
         context["signalConflicts"] = {"hasConflict": False}
         context["missingData"] = []
         context["facts"]["missingData"] = []
-        hypotheses = hypothesis_set_from_relation_context(context)["hypothesisSet"]["hypotheses"]
-        self.assertGreaterEqual(len(hypotheses), 3)
-        self.assertIn("hypothesis-template:system.null-challenge.v1", {item["templateId"] for item in hypotheses})
+        hypothesis_set = hypothesis_set_from_relation_context(context)["hypothesisSet"]
+        hypotheses = hypothesis_set["hypotheses"]
+        self.assertEqual(1, len(hypotheses))
         self.assertEqual(1, len([item for item in hypotheses if item.get("supportingRuleIds")]))
+        self.assertIn("counterfactual-coverage", {item["guardrailType"] for item in hypothesis_set["decisionGuardrails"]})
 
     def test_rule_relation_polarity_is_not_overwritten_by_global_risk_pressure(self):
         context = relation_context()
@@ -743,7 +749,7 @@ class InvestmentBrainTest(unittest.TestCase):
             "epistemicSummary": "위험 가설이 잠정 우세하지만 공시 본문이 비어 있습니다.",
         }
         response = validated_response_from_payload(context, payload)
-        self.assertEqual(3, len(response.hypotheses))
+        self.assertEqual(2, len(response.hypotheses))
         self.assertEqual(selected, response.selected_hypothesis_id)
         self.assertIn("공시 본문", response.unresolved_questions[0])
         prompt = build_notification_ai_gate_prompt(context)
@@ -755,7 +761,7 @@ class InvestmentBrainTest(unittest.TestCase):
         self.assertNotIn("GRAPH_RAG_DUPLICATE_SENTINEL", compact_prompt)
         self.assertLess(len(compact_prompt), 250000)
 
-    def test_incomplete_ai_comparison_uses_safety_hypothesis_and_rejects_unknown_evidence(self):
+    def test_incomplete_ai_comparison_abstains_without_selecting_a_hypothesis(self):
         context = {
             "messageType": "investmentInsight",
             "accountId": "account-1",
@@ -771,7 +777,6 @@ class InvestmentBrainTest(unittest.TestCase):
         })
         hypotheses = brain["hypothesisSet"]["hypotheses"]
         risk = next(item for item in hypotheses if item["stance"] == "risk")
-        safety = next(item for item in hypotheses if item["approvalStatus"] == "approved-safety-policy")
         response = validated_response_from_payload(context, {
             "action": "SELL",
             "summary": "위험 가설만 우세하다고 봤습니다.",
@@ -788,13 +793,23 @@ class InvestmentBrainTest(unittest.TestCase):
         })
 
         self.assertEqual("partial", response.hypothesis_comparison_state)
-        self.assertTrue(response.hypothesis_selection_source.startswith("safety-fallback"))
-        self.assertEqual(safety["hypothesisId"], response.selected_hypothesis_id)
+        self.assertTrue(response.hypothesis_selection_source.startswith("abstained-"))
+        self.assertEqual("", response.selected_hypothesis_id)
+        self.assertTrue(response.decision_abstention["abstained"])
         self.assertEqual("HOLD", response.action)
         self.assertTrue(any("모든 경쟁 가설" in item for item in response.validation_warnings))
         self.assertTrue(any("근거 ID" in item for item in response.validation_warnings))
         reviewed_risk = next(item for item in response.hypotheses if item["hypothesisId"] == risk["hypothesisId"])
         self.assertEqual(["relation-risk"], reviewed_risk["reviewedSupportingEvidenceIds"])
+        episode = decision_episode_from_context(context, response.to_dict(), job_id="job-abstained")
+        self.assertEqual("abstained", episode.status)
+        self.assertEqual("", episode.selected_hypothesis_id)
+        self.assertTrue(episode.decision_guardrails)
+        graph = PortfolioOntology("account-1")
+        add_investment_brain_concepts(graph, "account-1", [episode.to_dict()])
+        self.assertFalse(any(item.relation_type == "SELECTS_HYPOTHESIS" for item in graph.relations))
+        self.assertTrue(any(item.relation_type == "HAS_DECISION_GUARDRAIL" for item in graph.relations))
+        self.assertTrue(any(item.relation_type == "ABSTAINS_FROM_HYPOTHESIS_SELECTION" for item in graph.relations))
 
     def test_complete_ai_comparison_is_persisted_with_selection_audit_in_abox(self):
         context = {
@@ -863,7 +878,7 @@ class InvestmentBrainTest(unittest.TestCase):
             "hypothesisSet": brain["hypothesisSet"],
             "action": "HOLD",
             "confidence": 70,
-            "selectedHypothesisId": brain["hypothesisSet"]["hypotheses"][2]["hypothesisId"],
+            "selectedHypothesisId": brain["hypothesisSet"]["hypotheses"][0]["hypothesisId"],
             "inferenceGenerationId": "generation-1",
             "unresolvedQuestions": brain["selfQuestions"],
             "researchPlan": brain["researchPlan"],
@@ -888,7 +903,8 @@ class InvestmentBrainTest(unittest.TestCase):
         })
         restored = DecisionEpisode.from_dict(episode.to_dict())
         self.assertEqual("episode-1", restored.episode_id)
-        self.assertEqual(3, len(restored.hypothesis_set.hypotheses))
+        self.assertEqual(2, len(restored.hypothesis_set.hypotheses))
+        self.assertTrue(restored.hypothesis_set.decision_guardrails)
         graph = PortfolioOntology("account-1")
         add_investment_brain_concepts(graph, "account-1", [restored.to_dict()], [{
             "proposalId": "proposal-1",
@@ -926,7 +942,8 @@ class InvestmentBrainTest(unittest.TestCase):
         result = service.ask("삼성전자를 계속 보유해야 할까?", account_id="account-1")
         self.assertEqual("answered", result["status"])
         self.assertEqual("ontology-investment-brain", result["engine"])
-        self.assertEqual(3, len(result["hypothesisSet"]["hypotheses"]))
+        self.assertEqual(2, len(result["hypothesisSet"]["hypotheses"]))
+        self.assertTrue(result["hypothesisSet"]["decisionGuardrails"])
         self.assertEqual(1, len(episode_store.saved))
         self.assertEqual("generation-1", result["inferenceGenerationId"])
 

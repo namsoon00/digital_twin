@@ -2,6 +2,7 @@
 
 from __future__ import annotations
 
+import json
 import threading
 import time
 import uuid
@@ -35,6 +36,35 @@ def _int_setting(settings: Dict[str, object], key: str, fallback: int, minimum: 
     except (TypeError, ValueError):
         value = fallback
     return max(minimum, min(maximum, value))
+
+
+def hypothesis_comparison_needs_repair(
+    message_type: object,
+    response,
+) -> bool:
+    return bool(
+        str(message_type or "") == INVESTMENT_INSIGHT
+        and getattr(response, "hypotheses", None)
+        and str(getattr(response, "hypothesis_comparison_state", "") or "") != "completed"
+    )
+
+
+def hypothesis_comparison_repair_prompt(prompt: str, response) -> str:
+    abstention = dict(getattr(response, "decision_abstention", {}) or {})
+    audit = {
+        "reason": abstention.get("reason") or "가설 비교 계약 미충족",
+        "unreviewedHypothesisIds": abstention.get("unreviewedHypothesisIds") or [],
+        "invalidHypothesisIds": abstention.get("invalidHypothesisIds") or [],
+        "invalidEvidenceIds": abstention.get("invalidEvidenceIds") or [],
+        "duplicateHypothesisIds": abstention.get("duplicateHypothesisIds") or [],
+    }
+    return (
+        str(prompt or "")
+        + "\n\n이전 응답은 아래 가설 비교 검증 오류로 거부됐다. 새로운 JSON 객체 하나만 다시 출력한다. "
+        + "입력 hypothesisSet.hypotheses의 각 hypothesisId를 정확히 한 번씩 사용하고, "
+        + "각 근거 ID는 해당 입력 가설에 실제 연결된 ID만 사용하며, selectedHypothesisId는 입력 규칙 가설 중 하나여야 한다.\n"
+        + json.dumps(audit, ensure_ascii=False, sort_keys=True)
+    )
 
 
 class NotificationAIRequestEnqueuer:
@@ -159,8 +189,9 @@ class AIInferenceQueueRunner:
             profile=execution_profile,
             decision_brief=decision_brief,
         )
-        prompt_bytes = len(prompt.encode("utf-8"))
-        prompt_hash = hashlib.sha256(prompt.encode("utf-8")).hexdigest()
+        executed_prompt = prompt
+        prompt_bytes = len(executed_prompt.encode("utf-8"))
+        prompt_hash = hashlib.sha256(executed_prompt.encode("utf-8")).hexdigest()
         stop_heartbeat = threading.Event()
         lease_lost = threading.Event()
         heartbeat = threading.Thread(
@@ -172,11 +203,40 @@ class AIInferenceQueueRunner:
         heartbeat.start()
         started = time.monotonic()
         review_error = None
+        comparison_repair_attempted = False
+        comparison_repair_succeeded = False
+        comparison_repair_error = ""
         review_context = dict(context)
         review_context["_notificationAiPreparedPrompt"] = prompt
         review_context["_notificationAiPreparedDecisionBrief"] = decision_brief
         try:
             response = self.reviewer.review(review_context)
+            if hypothesis_comparison_needs_repair(request.message_type, response):
+                comparison_repair_attempted = True
+                repair_context = dict(review_context)
+                executed_prompt = hypothesis_comparison_repair_prompt(
+                    prompt,
+                    response,
+                )
+                repair_context["_notificationAiPreparedPrompt"] = executed_prompt
+                try:
+                    repaired = self.reviewer.review(repair_context)
+                except Exception as error:  # noqa: BLE001 - a failed repair becomes an explicit abstention.
+                    comparison_repair_error = str(error)[:320]
+                    response.validation_warnings.append(
+                        "가설 비교 교정 요청이 실패해 선택 가설 없이 판단을 유보했습니다: "
+                        + comparison_repair_error
+                    )
+                else:
+                    response = repaired
+                    comparison_repair_succeeded = not hypothesis_comparison_needs_repair(
+                        request.message_type,
+                        response,
+                    )
+                    if not comparison_repair_succeeded:
+                        response.validation_warnings.append(
+                            "가설 비교를 한 번 교정했지만 계약을 충족하지 못해 선택 가설 없이 판단을 유보했습니다."
+                        )
         except Exception as error:  # noqa: BLE001 - retry policy is applied below.
             review_error = error
             response = None
@@ -184,6 +244,8 @@ class AIInferenceQueueRunner:
             stop_heartbeat.set()
             heartbeat.join(timeout=max(1.0, self.heartbeat_seconds + 1.0))
         latency_ms = int((time.monotonic() - started) * 1000)
+        prompt_bytes = len(executed_prompt.encode("utf-8"))
+        prompt_hash = hashlib.sha256(executed_prompt.encode("utf-8")).hexdigest()
         reviewer_prompt_bytes = max(
             0,
             int(getattr(self.reviewer, "last_prompt_bytes", 0) or 0),
@@ -226,7 +288,7 @@ class AIInferenceQueueRunner:
             "reasoningEffort": request.reasoning_effort,
             "promptHash": prompt_hash,
             "promptBytes": prompt_bytes,
-            "prompt": prompt,
+            "prompt": executed_prompt,
             "decisionBriefVersion": decision_brief.get("schemaVersion"),
             "decisionBrief": decision_brief,
             "executionProfile": execution_profile,
@@ -242,6 +304,13 @@ class AIInferenceQueueRunner:
             ),
             "responseSource": str(response.source or ""),
             "validationState": str(response.validation_state or ""),
+            "hypothesisComparisonRepair": {
+                "attempted": comparison_repair_attempted,
+                "succeeded": comparison_repair_succeeded,
+                "error": comparison_repair_error,
+                "finalState": str(response.hypothesis_comparison_state or ""),
+                "selectedHypothesisId": str(response.selected_hypothesis_id or ""),
+            },
             "latencyMs": latency_ms,
         }
         result = AIInferenceResult.create(
@@ -266,7 +335,6 @@ class AIInferenceQueueRunner:
             + " promptBytes="
             + str(prompt_bytes)
         )
-
     def heartbeat_loop(self, request_id: str, stop_event: threading.Event, lease_lost: threading.Event) -> None:
         while not stop_event.wait(self.heartbeat_seconds):
             try:

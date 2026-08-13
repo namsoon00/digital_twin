@@ -1,6 +1,7 @@
 from typing import Dict, Iterable, List
 
 from ..domain.hypothesis_lifecycle import (
+    HYPOTHESIS_LIFECYCLE_KEY_PREFIX,
     HypothesisLifecycleRecord,
     HypothesisLifecycleTransition,
     utc_now_iso,
@@ -39,8 +40,8 @@ class MySQLHypothesisLifecycleStore(MySQLOperationalConnection):
         scope: str = "",
         limit: int = 100,
     ) -> List[HypothesisLifecycleRecord]:
-        where: List[str] = []
-        params: List[object] = []
+        where: List[str] = ["lifecycle_key LIKE %s"]
+        params: List[object] = [HYPOTHESIS_LIFECYCLE_KEY_PREFIX + "%"]
         if account_id:
             # Shared market records remain useful to this account, but have no
             # private account id by design.
@@ -77,8 +78,8 @@ class MySQLHypothesisLifecycleStore(MySQLOperationalConnection):
         ``payload_json`` includes the full graph path and evidence delta.  It
         belongs to the selected hypothesis report, not the initial list view.
         """
-        where: List[str] = []
-        params: List[object] = []
+        where: List[str] = ["lifecycle_key LIKE %s"]
+        params: List[object] = [HYPOTHESIS_LIFECYCLE_KEY_PREFIX + "%"]
         if account_id:
             where.append("(account_id = %s OR scope = 'market')")
             params.append(str(account_id))
@@ -188,6 +189,9 @@ class MySQLHypothesisLifecycleStore(MySQLOperationalConnection):
     ) -> List[HypothesisLifecycleTransition]:
         where: List[str] = []
         params: List[object] = []
+        if not lifecycle_key:
+            where.append("lifecycle_key LIKE %s")
+            params.append(HYPOTHESIS_LIFECYCLE_KEY_PREFIX + "%")
         if account_id:
             where.append("(account_id = %s OR scope = 'market')")
             params.append(str(account_id))

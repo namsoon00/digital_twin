@@ -6,7 +6,7 @@ sys.path.insert(0, str(Path(__file__).resolve().parents[1]))
 
 from digital_twin.application.investment_strategy_proposal_service import InvestmentStrategyProposalService
 from digital_twin.application.ontology_lab_service import OntologyLabService
-from digital_twin.domain.ontology_experiments import OntologyExperiment
+from digital_twin.domain.ontology_experiments import OntologyExperiment, promotion_readiness
 from digital_twin.domain.ontology_rulebox_contracts import GraphInferenceRule
 from digital_twin.domain.investment_strategy_proposals import InvestmentStrategyProposal
 
@@ -649,6 +649,53 @@ class OntologyLabTests(unittest.TestCase):
         self.assertFalse(experiment.candidate_rules[0]["enabled"])
         self.assertEqual("suggested", experiment.last_result["status"])
         self.assertEqual("graph.lab.symbol-review.v1", experiment.last_result["sourceCandidate"]["ruleId"])
+        self.assertEqual([], experiment.validation_warnings)
+        self.assertEqual("ai-candidate:test-lab", experiment.provenance["sourceCandidateId"])
+
+    def test_legacy_source_candidate_metadata_is_migrated_out_of_validation_warnings(self):
+        experiment = OntologyExperiment.from_dict({
+            "id": "legacy-provenance",
+            "validationWarnings": [
+                "sourceCandidateId=candidate-legacy",
+                "sourceCandidateStatus=candidate",
+            ],
+        })
+
+        readiness = promotion_readiness(
+            experiment.validation_warnings,
+            {"derivedRelationCount": 1},
+            1,
+        )
+
+        self.assertEqual([], experiment.validation_warnings)
+        self.assertEqual("candidate-legacy", experiment.provenance["sourceCandidateId"])
+        self.assertEqual("promote-candidate", readiness["status"])
+
+    def test_applied_experiment_reports_rulebox_drift_when_rule_is_missing(self):
+        store = MemoryExperimentStore()
+        repository = FakeOntologyRepository()
+        service = OntologyLabService(repository, store, monitor_store=FakeMonitorStore())
+        experiment_id = service.create({
+            "title": "drift check",
+            "symbols": ["AAPL"],
+            "rules": [candidate_rule()],
+        })["experiment"]["id"]
+        experiment = store.get(experiment_id)
+        experiment.last_result = {
+            "status": "completed",
+            "completedAt": "2026-08-13T00:00:00Z",
+            "sandbox": {"graphRunCount": 1},
+            "promotionReadiness": {"status": "promote-candidate", "validationState": "ready", "dataState": "sufficient"},
+            "proposedOntologyChanges": {"ruleIds": ["graph.lab.symbol-review.v1"]},
+            "appliedOntologyChanges": {"status": "applied", "ruleIds": ["graph.lab.symbol-review.v1"]},
+        }
+        store.save(experiment)
+
+        gate = service.report(experiment_id)["experiment"]["promotionGate"]
+
+        self.assertEqual("drifted", gate["status"])
+        self.assertEqual(["graph.lab.symbol-review.v1"], gate["missingAppliedRuleIds"])
+        self.assertTrue(gate["canApply"])
 
     def test_ai_suggestion_persists_its_portfolio_world_for_scheduled_materialization(self):
         store = MemoryExperimentStore()

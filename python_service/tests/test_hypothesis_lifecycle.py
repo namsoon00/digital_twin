@@ -280,6 +280,9 @@ class HypothesisLifecycleTests(unittest.TestCase):
 
         payload = rule.to_dict()
         self.assertEqual(["required-condition"], payload["hypothesis_lifecycle"]["formationConditionIds"])
+        outcome_contract = payload["hypothesis_lifecycle"]["outcomeContract"]
+        self.assertEqual([60, 1440, 10080], outcome_contract["outcomeHorizonMinutes"])
+        self.assertEqual(3, outcome_contract["minimumIndependentEpisodes"])
         graph = rulebox_graph_from_rules([rule], include_tbox=False)
         rule_node = next(item for item in graph.entities if item.kind == "rule")
         self.assertEqual(
@@ -311,6 +314,31 @@ class HypothesisLifecycleTests(unittest.TestCase):
         maintained, transition = record_for_snapshot(observed, second, second.observed_at)
         self.assertEqual("maintained", maintained.state)
         self.assertEqual("observed", transition.previous_state)
+
+    def test_relation_and_trace_id_rotation_preserves_semantic_evidence_keys(self):
+        first_context = relation_context("generation-1")
+        first = lifecycle_snapshots_from_relation_context(first_context)[0]
+        observed, _ = record_for_snapshot(None, first, first.observed_at)
+        maintained, _ = record_for_snapshot(
+            observed,
+            replace(first, inference_generation_id="generation-2", observed_at="2026-07-23T00:01:00Z"),
+        )
+        changed = deepcopy(relation_context("generation-3"))
+        hypothesis = changed["hypothesisSet"]["hypotheses"][0]
+        hypothesis["supportingEvidenceIds"] = ["evidence:price:generation-3"]
+        hypothesis["causalPathIds"] = ["trace:aapl-trend:generation-3"]
+        trace = changed["graphStoreInference"]["traces"][0]
+        trace["id"] = "trace:aapl-trend:generation-3"
+        trace["evidenceRelationIds"] = ["evidence:price:generation-3"]
+        second = lifecycle_snapshots_from_relation_context(changed)[0]
+
+        rotated, transition = record_for_snapshot(maintained, second, second.observed_at)
+
+        self.assertEqual(first.supporting_evidence_keys, second.supporting_evidence_keys)
+        self.assertEqual(first.causal_path_keys, second.causal_path_keys)
+        self.assertEqual("maintained", rotated.state)
+        self.assertFalse(rotated.material_change)
+        self.assertIsNone(transition)
 
     def test_outcome_review_matches_a_stable_key_after_source_ids_change(self):
         first = lifecycle_snapshots_from_relation_context(relation_context("generation-1"))[0]
@@ -362,7 +390,8 @@ class HypothesisLifecycleTests(unittest.TestCase):
         strengthened, strengthened_transition = record_for_snapshot(repeated, strengthened_snapshot)
         self.assertEqual("strengthened", strengthened.state)
         self.assertTrue(strengthened_transition.material_change)
-        self.assertEqual(["evidence:volume"], strengthened.evidence_delta["addedSupportingEvidenceIds"])
+        self.assertTrue(strengthened.evidence_delta["addedSupportingEvidenceKeys"])
+        self.assertEqual(["evidence:volume"], strengthened.evidence_delta["rotatedAddedSupportingEvidenceIds"])
 
         weakened_snapshot = lifecycle_snapshot(
             generation="generation-5",
@@ -385,6 +414,29 @@ class HypothesisLifecycleTests(unittest.TestCase):
         self.assertEqual("invalidated", invalidated.state)
         self.assertIn("무효화 조건", invalidated.transition_reason)
         self.assertEqual("weakened", invalidated_transition.previous_state)
+
+    def test_generation_local_id_rotation_is_not_a_material_weakening(self):
+        observed, _ = record_for_snapshot(None, lifecycle_snapshot())
+        maintained, _ = record_for_snapshot(
+            observed,
+            lifecycle_snapshot(generation="generation-2", observed_at="2026-07-23T00:01:00Z"),
+        )
+        rotated_snapshot = lifecycle_snapshot(
+            generation="generation-3",
+            observed_at="2026-07-23T00:02:00Z",
+            support=["evidence:new-generation-price"],
+            paths=["trace:new-generation-trend"],
+        )
+
+        rotated, transition = record_for_snapshot(maintained, rotated_snapshot)
+
+        self.assertEqual("maintained", rotated.state)
+        self.assertFalse(rotated.material_change)
+        self.assertIsNone(transition)
+        self.assertEqual(
+            ["evidence:new-generation-price"],
+            rotated.evidence_delta["rotatedAddedSupportingEvidenceIds"],
+        )
 
     def test_lifecycle_expires_when_required_freshness_or_validity_fails(self):
         first = lifecycle_snapshot(policy={

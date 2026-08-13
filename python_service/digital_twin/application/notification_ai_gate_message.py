@@ -724,6 +724,21 @@ def ai_difference_rows(response: NotificationAIValidatedResponse, level: str, co
 
 def hypothesis_comparison_rows(response: NotificationAIValidatedResponse, level: str) -> List[str]:
     rows: List[str] = []
+    abstention = dict(response.decision_abstention or {})
+    if abstention.get("abstained"):
+        rows.append(_html_row(
+            "판단 유보",
+            abstention.get("reason") or "가설 비교 계약을 충족하지 못해 선택 가설을 저장하지 않았습니다.",
+            level=level,
+            max_len=360,
+        ))
+    for guardrail in [item for item in response.decision_guardrails or [] if isinstance(item, dict)][:2]:
+        rows.append(_html_row(
+            guardrail.get("label") or "판단 안전 제한",
+            guardrail.get("reason") or "추가 검증이 필요합니다.",
+            level=level,
+            max_len=360,
+        ))
     stance_labels = {
         "risk": "위험 지속 가설",
         "support": "회복·지지 가설",

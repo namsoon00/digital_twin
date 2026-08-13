@@ -60,6 +60,46 @@ def add_investment_brain_concepts(
         })
         add_relation(graph, stock_id, episode_id, "HAS_DECISION_EPISODE", weight=1.0, properties={"source": "investment-brain-memory"})
         add_relation(graph, portfolio_node_id, episode_id, "HAS_DECISION_EPISODE", weight=1.0, properties={"source": "investment-brain-memory"})
+        guardrail_rows = [
+            item
+            for item in (
+                episode.get("decisionGuardrails")
+                or hypothesis_set.get("decisionGuardrails")
+                or []
+            )
+            if isinstance(item, dict)
+        ]
+        for index, guardrail in enumerate(guardrail_rows):
+            guardrail_key = str(guardrail.get("guardrailId") or (episode_key + ":guardrail:" + str(index))).strip()
+            guardrail_id = add_entity(graph, "decision-guardrail", guardrail_key, str(guardrail.get("label") or "판단 안전 제한"), {
+                "tboxClass": "DecisionGuardrail",
+                "guardrailType": guardrail.get("guardrailType") or "decision-integrity",
+                "reason": guardrail.get("reason") or "",
+                "status": guardrail.get("status") or "active",
+                "requiredChecks": guardrail.get("requiredChecks") or [],
+                "missingData": guardrail.get("missingData") or [],
+                "blockedActions": guardrail.get("blockedActions") or [],
+                "source": guardrail.get("source") or "system-safety-policy",
+            })
+            add_relation(graph, episode_id, guardrail_id, "HAS_DECISION_GUARDRAIL", weight=1.0, properties={
+                "source": "investment-brain-memory",
+                "guardrailType": guardrail.get("guardrailType") or "decision-integrity",
+            })
+        abstention = episode.get("decisionAbstention") if isinstance(episode.get("decisionAbstention"), dict) else {}
+        if abstention.get("abstained"):
+            abstention_id = add_entity(graph, "decision-abstention", episode_key, "선택 가설 없는 판단 유보", {
+                "tboxClass": "DecisionAbstention",
+                "reason": abstention.get("reason") or "",
+                "comparisonState": abstention.get("comparisonState") or episode.get("hypothesisComparisonState") or "unavailable",
+                "unreviewedHypothesisIds": abstention.get("unreviewedHypothesisIds") or [],
+                "invalidHypothesisIds": abstention.get("invalidHypothesisIds") or [],
+                "invalidEvidenceIds": abstention.get("invalidEvidenceIds") or [],
+                "duplicateHypothesisIds": abstention.get("duplicateHypothesisIds") or [],
+                "source": "ai-hypothesis-comparison-audit",
+            })
+            add_relation(graph, episode_id, abstention_id, "ABSTAINS_FROM_HYPOTHESIS_SELECTION", weight=1.0, properties={
+                "source": "ai-hypothesis-comparison-audit",
+            })
         action_plan_key = str(episode.get("actionPlanId") or "").strip()
         if action_plan_key:
             action_plan_id = add_entity(graph, "action-plan", action_plan_key, str(episode.get("subjectName") or symbol) + " 실행 계획", {
@@ -379,7 +419,7 @@ def add_investment_brain_concepts(
             if hypothesis_key == str(episode.get("selectedHypothesisId") or ""):
                 selection_source = str(episode.get("hypothesisSelectionSource") or "not-selected")
                 add_relation(graph, episode_id, hypothesis_id, "SELECTS_HYPOTHESIS", weight=1.0, properties={
-                    "source": "ai-hypothesis-competition" if selection_source == "ai-comparison" else "hypothesis-comparison-safety-fallback",
+                    "source": "ai-hypothesis-competition" if selection_source == "ai-comparison" else "hypothesis-comparison-abstention",
                     "selectionSource": selection_source,
                     "comparisonState": episode.get("hypothesisComparisonState") or "unavailable",
                 })

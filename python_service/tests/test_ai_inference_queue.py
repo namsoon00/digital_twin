@@ -136,6 +136,67 @@ class AIInferenceQueueTests(unittest.TestCase):
         result_count = mysql_fetchone(self.seed, "SELECT COUNT(*) FROM ai_inference_results")
         self.assertEqual(1, int(result_count[0]))
 
+    def test_incomplete_hypothesis_comparison_is_repaired_once_before_publish(self):
+        job = self.create_job()
+        hypotheses = [
+            {
+                "hypothesisId": "hypothesis:risk",
+                "supportingRuleIds": ["rule:risk"],
+                "supportingEvidenceIds": ["evidence:risk"],
+            },
+            {
+                "hypothesisId": "hypothesis:support",
+                "supportingRuleIds": ["rule:support"],
+                "supportingEvidenceIds": ["evidence:support"],
+            },
+        ]
+        job.context["ontologyRelationContext"]["hypothesisSet"] = {
+            "hypothesisSetId": "set:1",
+            "hypotheses": hypotheses,
+        }
+        self.notifications.upsert_job(job)
+        request = AIInferenceRequest.create(job, job.context, reasoning_effort="max")
+        self.queue.enqueue(job, request)
+
+        class RepairReviewer:
+            def __init__(self):
+                self.calls = []
+
+            def review(self, context):
+                self.calls.append(str(context.get("_notificationAiPreparedPrompt") or ""))
+                if len(self.calls) == 1:
+                    return NotificationAIValidatedResponse(
+                        action="HOLD",
+                        hypotheses=[hypotheses[0]],
+                        hypothesis_comparison_state="partial",
+                        hypothesis_selection_source="abstained-partial",
+                        decision_abstention={
+                            "abstained": True,
+                            "reason": "AI가 현재 TypeDB 규칙 가설을 모두 평가하지 못했습니다.",
+                            "unreviewedHypothesisIds": ["hypothesis:support"],
+                        },
+                    )
+                return NotificationAIValidatedResponse(
+                    action="HOLD",
+                    hypotheses=hypotheses,
+                    selected_hypothesis_id="hypothesis:risk",
+                    hypothesis_comparison_state="completed",
+                    hypothesis_selection_source="ai-comparison",
+                )
+
+        reviewer = RepairReviewer()
+        runner = AIInferenceQueueRunner(self.queue, reviewer, worker_id="worker-repair")
+
+        self.assertEqual(1, runner.run_once(limit=1))
+
+        delivered = self.notifications.get(job.job_id)
+        repair = delivered.context["notificationAiExecutionAudit"]["hypothesisComparisonRepair"]
+        self.assertEqual(2, len(reviewer.calls))
+        self.assertTrue(repair["attempted"])
+        self.assertTrue(repair["succeeded"])
+        self.assertIn("unreviewedHypothesisIds", reviewer.calls[1])
+        self.assertEqual("hypothesis:risk", delivered.context["notificationAiValidatedResponse"]["selectedHypothesisId"])
+
     def test_runner_loads_previous_final_decision_and_never_marks_it_initial(self):
         job = self.create_job()
         request = AIInferenceRequest.create(job, job.context, reasoning_effort="max")

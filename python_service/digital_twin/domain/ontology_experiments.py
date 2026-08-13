@@ -11,6 +11,26 @@ from .portfolio import utc_now_iso
 
 
 TRACE_RELATION_TYPES = {"HAS_INFERENCE_TRACE", "TRIGGERED_INFERENCE", "EXPLAINED_BY_TRACE"}
+PROVENANCE_WARNING_FIELDS = {
+    "sourceCandidateId=": "sourceCandidateId",
+    "sourceCandidateStatus=": "sourceCandidateStatus",
+}
+
+
+def split_validation_warnings(values: Iterable[object]) -> Tuple[List[str], Dict[str, str]]:
+    warnings: List[str] = []
+    provenance: Dict[str, str] = {}
+    for raw in values or []:
+        text = str(raw or "").strip()
+        if not text:
+            continue
+        field_name = next((name for prefix, name in PROVENANCE_WARNING_FIELDS.items() if text.startswith(prefix)), "")
+        if field_name:
+            prefix = next(prefix for prefix, name in PROVENANCE_WARNING_FIELDS.items() if name == field_name)
+            provenance[field_name] = text[len(prefix):].strip()
+        elif text not in warnings:
+            warnings.append(text)
+    return warnings, provenance
 
 
 @dataclass
@@ -34,6 +54,7 @@ class OntologyExperiment:
     source_proposal_id: str = ""
     source_case_id: str = ""
     validation_contract: Dict[str, object] = field(default_factory=dict)
+    provenance: Dict[str, object] = field(default_factory=dict)
 
     def to_dict(self) -> Dict[str, object]:
         payload = asdict(self)
@@ -57,6 +78,15 @@ class OntologyExperiment:
     @staticmethod
     def from_dict(payload: Dict[str, object]):
         payload = dict(payload or {})
+        validation_warnings, legacy_provenance = split_validation_warnings(
+            payload.get("validationWarnings") or payload.get("validation_warnings") or []
+        )
+        provenance = dict(payload.get("provenance") or {})
+        provenance.update({key: value for key, value in legacy_provenance.items() if value and not provenance.get(key)})
+        last_result = normalized_experiment_last_result(
+            dict(payload.get("lastResult") or payload.get("last_result") or {}),
+            validation_warnings,
+        )
         return OntologyExperiment(
             experiment_id=str(payload.get("id") or payload.get("experimentId") or payload.get("experiment_id") or ""),
             title=str(payload.get("title") or "Ontology experiment"),
@@ -76,7 +106,7 @@ class OntologyExperiment:
             status=str(payload.get("status") or "draft"),
             created_at=str(payload.get("createdAt") or payload.get("created_at") or ""),
             updated_at=str(payload.get("updatedAt") or payload.get("updated_at") or ""),
-            last_result=dict(payload.get("lastResult") or payload.get("last_result") or {}),
+            last_result=last_result,
             run_history=[
                 dict(item)
                 for item in (payload.get("runHistory") or payload.get("run_history") or [])
@@ -85,14 +115,11 @@ class OntologyExperiment:
             last_snapshot_key=str(payload.get("lastSnapshotKey") or payload.get("last_snapshot_key") or ""),
             active_since=str(payload.get("activeSince") or payload.get("active_since") or ""),
             paused_at=str(payload.get("pausedAt") or payload.get("paused_at") or ""),
-            validation_warnings=[
-                str(item)
-                for item in (payload.get("validationWarnings") or payload.get("validation_warnings") or [])
-                if str(item or "").strip()
-            ],
+            validation_warnings=validation_warnings,
             source_proposal_id=str(payload.get("sourceProposalId") or payload.get("source_proposal_id") or ""),
             source_case_id=str(payload.get("sourceCaseId") or payload.get("source_case_id") or ""),
             validation_contract=dict(payload.get("validationContract") or payload.get("validation_contract") or {}),
+            provenance=provenance,
         )
 
 
@@ -611,8 +638,36 @@ def aggregate_graph_deltas(graph_runs: List[Dict[str, object]]) -> Dict[str, obj
     return result
 
 
+def blocking_validation_warnings(warnings: Iterable[object]) -> List[str]:
+    return split_validation_warnings(warnings)[0]
+
+
+def normalized_experiment_last_result(
+    last_result: Dict[str, object],
+    validation_warnings: Iterable[object],
+) -> Dict[str, object]:
+    result = dict(last_result or {})
+    if str(result.get("status") or "").lower() != "completed":
+        return result
+    blocking_warnings = blocking_validation_warnings(validation_warnings)
+    inference = result.get("inference") if isinstance(result.get("inference"), dict) else {}
+    aggregate_delta = inference.get("aggregateDelta") if isinstance(inference.get("aggregateDelta"), dict) else {}
+    sandbox = result.get("sandbox") if isinstance(result.get("sandbox"), dict) else {}
+    graph_runs = inference.get("graphRuns") if isinstance(inference.get("graphRuns"), list) else []
+    graph_run_count = int(sandbox.get("graphRunCount") or len(graph_runs))
+    result["validationWarnings"] = blocking_warnings
+    result["warningCount"] = len(blocking_warnings)
+    result["promotionReadiness"] = promotion_readiness(
+        blocking_warnings,
+        aggregate_delta,
+        graph_run_count,
+    )
+    return result
+
+
 def promotion_readiness(warnings: List[str], aggregate_delta: Dict[str, object], graph_run_count: int) -> Dict[str, object]:
-    if warnings:
+    blocking_warnings = blocking_validation_warnings(warnings)
+    if blocking_warnings:
         status = "needs-review"
         validation_state = "blocked"
         data_state = "partial" if graph_run_count > 0 else "insufficient"

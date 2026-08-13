@@ -52,7 +52,7 @@ VERDICT_LABELS = {
 COMPARISON_STATE_LABELS = {
     "completed": "경쟁 가설 비교 완료",
     "partial": "일부 가설만 비교됨",
-    "fallback": "안전 가설로 보수적 선택",
+    "fallback": "비교 실패로 선택 없음",
     "invalid-selection": "선택 가설 검증 실패",
     "unavailable": "가설 비교 기록 없음",
 }
@@ -558,6 +558,12 @@ def build_notification_reverse_reasoning_trace(
             "selectionSource": _text(ai.get("hypothesisSelectionSource"), 120),
             "selectedHypothesisId": selected_hypothesis_id,
             "unresolvedQuestions": _unique(ai.get("unresolvedQuestions") or [], 6, 260),
+            "decisionGuardrails": [
+                dict(item)
+                for item in ai.get("decisionGuardrails") or []
+                if isinstance(item, dict)
+            ],
+            "decisionAbstention": _dict(ai.get("decisionAbstention")),
         },
         "aiExecution": {
             "status": _text(ai_execution.get("status"), 80) or "not-executed",
@@ -578,6 +584,7 @@ def build_notification_reverse_reasoning_trace(
             "executionProfile": _dict(ai_execution.get("executionProfile")),
             "internalDataAudit": _dict(ai_execution.get("internalDataAudit")),
             "researchCycle": _dict(ai_execution.get("researchCycle")),
+            "hypothesisComparisonRepair": _dict(ai_execution.get("hypothesisComparisonRepair")),
             "responseSource": _text(
                 ai_execution.get("responseSource") or ai.get("source"),
                 180,

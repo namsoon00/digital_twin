@@ -136,6 +136,79 @@ class AIInferenceQueueTests(unittest.TestCase):
         result_count = mysql_fetchone(self.seed, "SELECT COUNT(*) FROM ai_inference_results")
         self.assertEqual(1, int(result_count[0]))
 
+    def test_result_publication_retries_storage_timeout_without_repeating_ai_review(self):
+        job = self.create_job()
+        request = AIInferenceRequest.create(job, job.context, reasoning_effort="max")
+        self.queue.enqueue(job, request)
+        original_complete = self.queue.complete
+        complete_calls = []
+
+        def flaky_complete(*args, **kwargs):
+            complete_calls.append(args[0].request_id)
+            if len(complete_calls) == 1:
+                raise RuntimeError("transient result publication timeout")
+            return original_complete(*args, **kwargs)
+
+        self.queue.complete = flaky_complete
+
+        class CountingReviewer(FakeReviewer):
+            calls = 0
+
+            def review(self, context):
+                self.calls += 1
+                return super().review(context)
+
+        reviewer = CountingReviewer()
+        runner = AIInferenceQueueRunner(
+            self.queue,
+            reviewer,
+            {
+                "notificationAiQueueStorageRetryAttempts": "2",
+                "notificationAiQueueStorageRetryBackoffMilliseconds": "1",
+            },
+            worker_id="worker-publish-retry",
+        )
+
+        self.assertEqual(1, runner.run_once(limit=1))
+        self.assertEqual(1, reviewer.calls)
+        self.assertEqual(2, len(complete_calls))
+        self.assertEqual("pending", self.notifications.get(job.job_id).status)
+        self.assertIn("completed", runner.last_run_details[0])
+
+    def test_recovery_retries_storage_timeout_and_releases_ai_lease(self):
+        job = self.create_job()
+        request = AIInferenceRequest.create(job, job.context, reasoning_effort="max")
+        self.queue.enqueue(job, request)
+        original_retry = self.queue.retry
+        retry_calls = []
+
+        def failed_complete(*_args, **_kwargs):
+            raise RuntimeError("result publication unavailable")
+
+        def flaky_retry(*args, **kwargs):
+            retry_calls.append(args[0].request_id)
+            if len(retry_calls) == 1:
+                raise RuntimeError("transient recovery timeout")
+            return original_retry(*args, **kwargs)
+
+        self.queue.complete = failed_complete
+        self.queue.retry = flaky_retry
+        runner = AIInferenceQueueRunner(
+            self.queue,
+            FakeReviewer(),
+            {
+                "notificationAiQueueStorageRetryAttempts": "2",
+                "notificationAiQueueStorageRetryBackoffMilliseconds": "1",
+            },
+            worker_id="worker-recovery-retry",
+        )
+
+        self.assertEqual(1, runner.run_once(limit=1))
+        self.assertEqual(2, len(retry_calls))
+        self.assertEqual("retry", self.queue.get(request.request_id).status)
+        self.assertEqual("awaiting_ai", self.notifications.get(job.job_id).status)
+        self.assertIn("retry", runner.last_run_details[0])
+
     def test_incomplete_hypothesis_comparison_is_repaired_once_before_publish(self):
         job = self.create_job()
         hypotheses = [

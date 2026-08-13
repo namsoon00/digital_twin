@@ -131,6 +131,20 @@ class AIInferenceQueueRunner:
         self.heartbeat_seconds = _int_setting(self.settings, "notificationAiQueueHeartbeatSeconds", 10, 2, 120)
         self.max_attempts = _int_setting(self.settings, "notificationAiQueueMaxAttempts", 2, 1, 8)
         self.retry_seconds = _int_setting(self.settings, "notificationAiQueueRetrySeconds", 30, 5, 900)
+        self.storage_retry_attempts = _int_setting(
+            self.settings,
+            "notificationAiQueueStorageRetryAttempts",
+            3,
+            1,
+            8,
+        )
+        self.storage_retry_backoff_milliseconds = _int_setting(
+            self.settings,
+            "notificationAiQueueStorageRetryBackoffMilliseconds",
+            250,
+            0,
+            5000,
+        )
         self.max_prompt_bytes = _int_setting(
             self.settings,
             "notificationAiQueueMaxPromptBytes",
@@ -253,7 +267,7 @@ class AIInferenceQueueRunner:
         if reviewer_prompt_bytes:
             prompt_bytes = reviewer_prompt_bytes
 
-        if lease_lost.is_set() or not self.queue.is_current(request.request_id, self.worker_id):
+        if lease_lost.is_set():
             return request.request_id[:8] + " superseded-during-review"
         if review_error is not None and (self.stopping or request.attempts < self.max_attempts):
             outcome = self.queue.retry(
@@ -321,7 +335,9 @@ class AIInferenceQueueRunner:
             latency_ms=latency_ms,
             prompt_bytes=prompt_bytes,
         )
-        published = self.queue.complete(request, self.worker_id, result, enriched)
+        published = self.storage_call_with_retry(
+            lambda: self.queue.complete(request, self.worker_id, result, enriched)
+        )
         if not published:
             return request.request_id[:8] + " superseded-before-publish"
         self.persist_decision_episode(request, context, episode, action_plan)
@@ -347,18 +363,41 @@ class AIInferenceQueueRunner:
 
     def recover_request(self, request: AIInferenceRequest, error: Exception) -> str:
         try:
-            if request.attempts < self.max_attempts and self.queue.is_current(request.request_id, self.worker_id):
-                outcome = self.queue.retry(
-                    request,
-                    self.worker_id,
-                    error,
-                    retry_seconds=self.retry_seconds,
+            if request.attempts < self.max_attempts:
+                outcome = self.storage_call_with_retry(
+                    lambda: self.queue.retry(
+                        request,
+                        self.worker_id,
+                        error,
+                        retry_seconds=self.retry_seconds,
+                    )
                 )
                 return request.request_id[:8] + " " + str(outcome.get("status") or "retry")
-            self.queue.fail(request, self.worker_id, error)
-            return request.request_id[:8] + " failed"
+            failed = self.storage_call_with_retry(
+                lambda: self.queue.fail(request, self.worker_id, error)
+            )
+            return request.request_id[:8] + (" failed" if failed else " lease-lost")
         except Exception as recovery_error:  # noqa: BLE001 - lease expiry is the final recovery boundary.
-            return request.request_id[:8] + " recovery-error=" + str(recovery_error)[:160]
+            return (
+                request.request_id[:8]
+                + " recovery-error attempts="
+                + str(self.storage_retry_attempts)
+                + " error="
+                + str(recovery_error)[:160]
+            )
+
+    def storage_call_with_retry(self, callback):
+        """Retry short queue publications without repeating the expensive AI call."""
+
+        for attempt in range(self.storage_retry_attempts):
+            try:
+                return callback()
+            except Exception:  # noqa: BLE001 - the final error keeps its original traceback.
+                if attempt + 1 >= self.storage_retry_attempts:
+                    raise
+                delay_ms = self.storage_retry_backoff_milliseconds * (attempt + 1)
+                if delay_ms:
+                    time.sleep(delay_ms / 1000.0)
 
     def decision_episode_context(self, request, context, response):
         if request.message_type != INVESTMENT_INSIGHT:

@@ -16,6 +16,7 @@ from .message_types import (
     MONITOR_PNL_CHANGE,
     MONITOR_TREND_CHANGE,
     MONITOR_VALUE_CHANGE,
+    PORTFOLIO_REBALANCE_REVIEW,
     WATCHLIST_BUY_CANDIDATE,
 )
 
@@ -57,6 +58,7 @@ DEFAULT_AI_GATE_MESSAGE_TYPES = {
     EXTERNAL_CRYPTO_MOVE,
     EXTERNAL_MACRO_SHIFT,
     EXTERNAL_DART_DISCLOSURE,
+    PORTFOLIO_REBALANCE_REVIEW,
 }
 
 
@@ -95,6 +97,9 @@ class NotificationAIValidatedResponse:
     decision_abstention: Dict[str, object] = field(default_factory=dict)
     unresolved_questions: List[str] = field(default_factory=list)
     epistemic_summary: str = ""
+    decision_readiness: str = "conditional"
+    causal_chain: List[Dict[str, object]] = field(default_factory=list)
+    alternative_action: Dict[str, object] = field(default_factory=dict)
     source: str = "local"
     raw_response: str = ""
 
@@ -132,6 +137,9 @@ class NotificationAIValidatedResponse:
             "decisionAbstention": "decision_abstention",
             "unresolvedQuestions": "unresolved_questions",
             "epistemicSummary": "epistemic_summary",
+            "decisionReadiness": "decision_readiness",
+            "causalChain": "causal_chain",
+            "alternativeAction": "alternative_action",
             "rawResponse": "raw_response",
         }
         allowed = set(cls.__dataclass_fields__)
@@ -173,6 +181,9 @@ class NotificationAIValidatedResponse:
         payload["decisionAbstention"] = payload.pop("decision_abstention")
         payload["unresolvedQuestions"] = payload.pop("unresolved_questions")
         payload["epistemicSummary"] = payload.pop("epistemic_summary")
+        payload["decisionReadiness"] = payload.pop("decision_readiness")
+        payload["causalChain"] = payload.pop("causal_chain")
+        payload["alternativeAction"] = payload.pop("alternative_action")
         payload["rawResponse"] = payload.pop("raw_response")
         return payload
 

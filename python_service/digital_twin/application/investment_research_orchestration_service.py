@@ -457,6 +457,14 @@ class InvestmentResearchOrchestrationService:
                 changed_count=len(inference_symbols),
                 observed_count=len(items),
                 fact_types=["ResearchEvidence", "VerifiedClaim", "VerificationRun"],
+                fact_types_by_symbol={
+                    symbol: ["ResearchEvidence", "VerifiedClaim", "VerificationRun"]
+                    for symbol in inference_symbols
+                },
+                changed_fields_by_symbol={
+                    symbol: ["external.researchEvidence", "external.verifiedClaims"]
+                    for symbol in inference_symbols
+                },
                 reason="가설 검증에서 확보한 근거를 전체 ABox 스냅샷에 반영하고 TypeDB 네이티브 추론을 다시 실행합니다.",
                 materiality_assessments=materiality,
                 fact_revisions_by_symbol=fact_revisions,

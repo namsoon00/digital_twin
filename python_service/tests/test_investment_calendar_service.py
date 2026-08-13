@@ -1138,6 +1138,7 @@ class InvestmentCalendarServiceTests(unittest.TestCase):
         events = source.events()
 
         self.assertEqual({"066570": "00401731"}, parse_opendart_corp_codes(archive_buffer.getvalue(), ["066570"]))
+        self.assertEqual({"066570": "00401731"}, parse_opendart_corp_codes(archive_buffer.getvalue()))
         self.assertEqual(1, len(events))
         self.assertEqual(["066570"], events[0].symbols)
 

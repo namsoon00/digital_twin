@@ -126,10 +126,12 @@ def reasoning_request_provenance(
     revision_vectors_by_symbol: Dict[str, Dict[str, str]] = {}
     changed_fields: Dict[str, set] = {}
     fact_families_by_symbol: Dict[str, set] = {}
+    fact_change_contracts: List[Dict[str, object]] = []
     revisions: Dict[str, str] = {}
     crypto_transitions: Dict[str, Dict[str, object]] = {}
     scope_repair_requests_by_symbol: Dict[str, Dict[str, object]] = {}
     verified_source_snapshot: Dict[str, object] = {}
+    rebalance_review_window = ""
     for event in events or []:
         payload = event_payload(event)
         mailbox = payload.get("_reasoningMailbox")
@@ -143,6 +145,9 @@ def reasoning_request_provenance(
         trigger = str(payload.get("trigger") or "").strip()
         if trigger:
             triggers.add(trigger)
+        candidate_review_window = str(payload.get("rebalanceReviewWindow") or "").strip()
+        if candidate_review_window:
+            rebalance_review_window = max(rebalance_review_window, candidate_review_window)
         work_class = str(mailbox.get("workClass") or domain_event_work_class(event)).strip().upper()
         impact_scope = str(mailbox.get("impactScope") or "").strip().upper()
         reasoning_lane = str(mailbox.get("reasoningLane") or event_reasoning_lane(event)).strip().upper()
@@ -182,6 +187,16 @@ def reasoning_request_provenance(
             if clean_fact_type:
                 fact_types.add(clean_fact_type)
                 event_fact_types.append(clean_fact_type)
+        fact_contract = payload.get("factChangeContract")
+        fact_contract = dict(fact_contract or {}) if isinstance(fact_contract, Mapping) else {}
+        if fact_contract:
+            fact_change_contracts.append({
+                "requestEventId": event_id,
+                "version": str(fact_contract.get("version") or "")[:64],
+                "status": str(fact_contract.get("status") or "")[:64],
+                "unclassifiedFactTypes": list(fact_contract.get("unclassifiedFactTypes") or [])[:20],
+                "unclassifiedFactTypesBySymbol": dict(fact_contract.get("unclassifiedFactTypesBySymbol") or {}),
+            })
         for key in ["sourceObservedAt", "sourceAsOf", "observedAt", "generatedAt", "collectedAt"]:
             stamp = str(payload.get(key) or "").strip()
             if stamp:
@@ -237,7 +252,9 @@ def reasoning_request_provenance(
                 }
         raw_fact_types_by_symbol = payload.get("factTypesBySymbol")
         raw_fact_types_by_symbol = raw_fact_types_by_symbol if isinstance(raw_fact_types_by_symbol, Mapping) else {}
-        event_families = requested_scope_families_for_event_fact_types(event_fact_types)
+        event_families = list(fact_contract.get("scopeFamilies") or []) or requested_scope_families_for_event_fact_types(event_fact_types)
+        contract_families_by_symbol = fact_contract.get("scopeFamiliesBySymbol")
+        contract_families_by_symbol = contract_families_by_symbol if isinstance(contract_families_by_symbol, Mapping) else {}
         for symbol in sorted(event_scope_symbols):
             # Retain an empty value as an explicit conservative marker for
             # an event whose fact family is unknown to this runtime.
@@ -249,9 +266,11 @@ def reasoning_request_provenance(
                 str(raw_symbol or "").upper().strip() == symbol
                 for raw_symbol in raw_fact_types_by_symbol
             )
-            symbol_families = requested_scope_families_for_event_fact_types(
+            symbol_families = list(contract_families_by_symbol.get(symbol) or []) or requested_scope_families_for_event_fact_types(
                 exact_fact_types if has_explicit_symbol_types else event_fact_types
             )
+            if not symbol_families:
+                symbol_families = event_families
             fact_families_by_symbol.setdefault(symbol, set()).update(symbol_families)
         barrier = payload.get("verifiedSourceSnapshot")
         barrier = barrier if isinstance(barrier, dict) else {}
@@ -323,6 +342,8 @@ def reasoning_request_provenance(
         "factRevisionsBySymbol": dict(sorted(revisions.items())),
         "revisionVectorsBySymbol": dict(sorted(revision_vectors_by_symbol.items())),
         "scopeRepairRequestsBySymbol": dict(sorted(scope_repair_requests_by_symbol.items())),
+        "factChangeContracts": fact_change_contracts[:80],
+        "rebalanceReviewWindow": rebalance_review_window,
     }
     if crypto_transitions:
         context["cryptoTransitions"] = [

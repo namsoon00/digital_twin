@@ -181,6 +181,21 @@ def compact_reasoning_request_context(
             and isinstance(repair, Mapping)
             and str(repair.get("requestId") or "").strip()
         },
+        "factChangeContracts": [
+            {
+                "requestEventId": str(item.get("requestEventId") or "")[:191],
+                "version": str(item.get("version") or "")[:64],
+                "status": str(item.get("status") or "")[:64],
+                "unclassifiedFactTypes": clean_list(
+                    item.get("unclassifiedFactTypes"), limit=20
+                ),
+                "unclassifiedFactTypesBySymbol": symbol_family_map(
+                    item.get("unclassifiedFactTypesBySymbol")
+                ),
+            }
+            for item in values.get("factChangeContracts") or []
+            if isinstance(item, Mapping)
+        ][:80],
         # Delivery provenance only. It enables a bounded current-state ABox
         # patch after an already-outboxed raw quote, but is never a TypeDB
         # rule condition or an investment conclusion.

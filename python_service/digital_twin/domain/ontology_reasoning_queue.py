@@ -11,6 +11,7 @@ import hashlib
 from typing import Dict, List, Mapping, Tuple
 
 from .events import DomainEvent, ONTOLOGY_REASONING_REQUESTED
+from .fact_changes import scope_families_for_fact_types
 from .verified_snapshot_reasoning import VERIFIED_MONITOR_SNAPSHOT_TRIGGER
 
 
@@ -35,6 +36,7 @@ TRIGGER_ORDER = {
     "portfolio-snapshot-update": 2,
     "portfolio-activity": 6,
     "portfolio-rebalance-transition": 6,
+    "portfolio-rebalance-review": 4,
     "data-update": 1,
 }
 
@@ -177,6 +179,7 @@ COALESCIBLE_LATEST_STATE_TRIGGERS = COALESCIBLE_REALTIME_TRIGGERS | {
     "investment-calendar-update",
     "portfolio-risk-change",
     "portfolio-rebalance-transition",
+    "portfolio-rebalance-review",
 }
 
 # These updates mutate durable ResearchEvidence facts. The ABox projection
@@ -241,6 +244,9 @@ def mailbox_fact_family(fact_type: object) -> str:
         return "capital"
     if normalized in {"valuationobservation"}:
         return "company-valuation"
+    mapped = scope_families_for_fact_types([value])
+    if mapped:
+        return mapped[0]
     return normalized or "marketquote"
 
 
@@ -348,6 +354,7 @@ def work_class_for_fact_types(
         for value in fact_types or []
         if str(value or "").strip()
     }
+    scope_families = set(scope_families_for_fact_types(clean_fact_types))
     if (
         full_reconciliation
         or "reconciliation" in clean_trigger
@@ -356,15 +363,15 @@ def work_class_for_fact_types(
         or "schema" in clean_trigger
     ):
         return "RECONCILIATION"
-    if clean_fact_types & EVIDENCE_FACT_TYPES:
+    if "evidence" in scope_families or clean_fact_types & EVIDENCE_FACT_TYPES:
         return "EVIDENCE"
-    if clean_fact_types & COMPANY_FACT_TYPES:
+    if scope_families & {"profile", "fundamental", "governance", "capital", "company-valuation"} or clean_fact_types & COMPANY_FACT_TYPES:
         return "EVIDENCE"
-    if clean_fact_types & MACRO_FACT_TYPES:
+    if any(family.startswith("macro") for family in scope_families) or clean_fact_types & MACRO_FACT_TYPES:
         return "MACRO"
-    if clean_fact_types & PORTFOLIO_FACT_TYPES:
+    if scope_families & {"portfolio", "position", "exposure"} or clean_fact_types & PORTFOLIO_FACT_TYPES:
         return "PORTFOLIO"
-    if clean_fact_types & MARKET_FACT_TYPES:
+    if scope_families & {"market", "flow", "temporal"} or clean_fact_types & MARKET_FACT_TYPES:
         return "MARKET"
     if clean_trigger in COALESCIBLE_RESEARCH_TRIGGERS or "research" in clean_trigger or "news" in clean_trigger:
         return "EVIDENCE"
@@ -491,6 +498,9 @@ def event_has_reasoning_work(event: object) -> bool:
     newly persisted ABox fact. It still needs one follow-up projection even
     when its snapshot has zero ordinary fact changes.
     """
+    contract = event_payload(event).get("factChangeContract")
+    if isinstance(contract, Mapping) and str(contract.get("status") or "").strip() == "blocked-unclassified":
+        return False
     return bool(event_changed_count(event) > 0 or observation_followup_symbols(event))
 
 
@@ -626,6 +636,7 @@ def mailbox_slot_family(
         and str(event_payload(event).get("trigger") or "").strip() in {
             "portfolio-risk-change",
             "portfolio-rebalance-transition",
+            "portfolio-rebalance-review",
         }
     ):
         return PORTFOLIO_LATEST_STATE_SLOT

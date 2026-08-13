@@ -1659,6 +1659,31 @@ class OntologyReasoningMailboxTests(unittest.TestCase):
         self.assertEqual("queued", work_item["work_state"])
         self.assertIn("reasoning-work-checkpoint-v2", work_item["checkpoint_json"])
 
+    def test_atomic_ingress_terminalizes_an_unclassified_fact_contract(self):
+        source = DomainEvent(
+            name="future.provider.updated",
+            aggregate_id="future:AAPL",
+            occurred_at="2026-07-24T00:00:00Z",
+            payload={"sourceObservedAt": "2026-07-24T00:00:00Z"},
+        )
+        event = ontology_reasoning_requested_event(
+            source,
+            "future-provider-update",
+            symbols=["AAPL"],
+            changed_count=1,
+            fact_types=["FutureProviderPayload"],
+        )
+        event = DomainEvent.from_dict({**event.to_dict(), "event_id": "blocked-unclassified"})
+        connection = MySQLMailboxConnection()
+
+        result = MySQLOntologyReasoningMailboxStore.ingress_event_with_connection(connection, event)
+
+        self.assertEqual("direct", result["ingressKind"])
+        self.assertEqual("expired", connection.events[event.event_id]["state"])
+        self.assertIn("FutureProviderPayload", connection.events[event.event_id]["reason"])
+        self.assertNotIn("direct:" + event.event_id, connection.work_items)
+        self.assertEqual({event.event_id: "expired"}, result["terminalEventStates"])
+
     def test_orphan_recovery_only_accepts_confirmed_dead_local_scheduler_owners(self):
         self.assertEqual(451, local_reasoning_watch_pid("reasoning-watch:local:451", hostname="local"))
         self.assertEqual(452, local_reasoning_watch_pid("reasoning-watch:452", hostname="local"))

@@ -1,7 +1,12 @@
 from typing import Dict, List
 
 from .crypto_market_signals import crypto_freshness, crypto_freshness_is_usable, crypto_market_positions
-from .message_types import CRYPTO_ONTOLOGY_SIGNAL, PORTFOLIO_ONTOLOGY_SIGNAL, WATCHLIST_ONTOLOGY_SIGNAL
+from .message_types import (
+    CRYPTO_ONTOLOGY_SIGNAL,
+    PORTFOLIO_ONTOLOGY_SIGNAL,
+    PORTFOLIO_REBALANCE_REVIEW,
+    WATCHLIST_ONTOLOGY_SIGNAL,
+)
 from .ontology_inference_context import portfolio_relation_context_from_snapshot, relation_contexts_from_snapshot
 from .ontology_insights import relation_news_event_key_suffix
 from .ontology_decision_state import (
@@ -18,17 +23,21 @@ class StrategyAlertMixin:
         self,
         snapshot: AccountSnapshot,
         relation_context: Dict[str, object],
+        scheduled_review: bool = False,
+        review_window: str = "",
     ):
         active_rules = [
             item for item in relation_context.get("activeRules") or []
             if isinstance(item, dict)
         ]
-        if not active_rules:
+        if not active_rules and not scheduled_review:
             return None
         decision = dict(relation_context.get("decision") or {})
         state = dict(relation_context.get("decisionState") or {})
         plan = dict(relation_context.get("executionPlan") or {})
         severity = str(plan.get("notificationSeverity") or decision.get("notificationSeverity") or "WATCH").upper()
+        if scheduled_review and severity not in {"ALERT", "WATCH"}:
+            severity = "WATCH"
         if severity not in {"ALERT", "WATCH"}:
             return None
         rule_ids = sorted({
@@ -42,23 +51,23 @@ class StrategyAlertMixin:
             if str(item.get("label") or item.get("ruleId") or "").strip()
         ]
         lines = [
-            "포트폴리오 관계 신호",
-            "상태: " + str(decision.get("label") or "리밸런싱 조건 확인"),
+            "정기 리밸런싱 검토" if scheduled_review else "포트폴리오 관계 신호",
+            "상태: " + str(decision.get("label") or ("정기 전체 점검" if scheduled_review else "리밸런싱 조건 확인")),
             "계좌 평가금액: " + format(round(snapshot.portfolio.total), ",") + "원",
             "현금: " + format(round(snapshot.portfolio.cash), ",") + "원",
-            "근거 신호: " + " · ".join(labels[:4]),
+            "근거 신호: " + (" · ".join(labels[:4]) or "정기 포트폴리오 전체 점검"),
             "다음 확인: " + " · ".join(plan.get("nextChecks") or ["위험 초과 원인 종목과 리밸런싱 비용을 확인"]),
         ]
         return AlertEvent(
             snapshot.account_id,
             snapshot.account_label,
             severity,
-            PORTFOLIO_ONTOLOGY_SIGNAL,
+            PORTFOLIO_REBALANCE_REVIEW if scheduled_review else PORTFOLIO_ONTOLOGY_SIGNAL,
             ":".join([
                 snapshot.account_id,
                 "portfolio-ontology",
                 "+".join(rule_ids[:4]) or "portfolio",
-                str(state.get("changeState") or "new-condition"),
+                review_window if scheduled_review and review_window else str(state.get("changeState") or "new-condition"),
             ]),
             "포트폴리오",
             lines,
@@ -74,6 +83,8 @@ class StrategyAlertMixin:
                 "conflictState": str(state.get("conflictState") or "context-only"),
                 "ontologyRelationContext": relation_context,
                 "ontologyPromptContext": relation_context.get("promptContext") or {},
+                "scheduledRebalanceReview": scheduled_review,
+                "rebalanceReviewWindow": review_window,
             },
         )
 
@@ -317,7 +328,16 @@ class StrategyAlertMixin:
             for value in context.get("subjectKinds") or []
         }:
             portfolio_context = portfolio_relation_context_from_snapshot(snapshot)
-            portfolio_event = self.portfolio_ontology_event(snapshot, portfolio_context)
+            scheduled_review = "portfolio-rebalance-review" in {
+                str(value or "").strip()
+                for value in context.get("triggers") or []
+            }
+            portfolio_event = self.portfolio_ontology_event(
+                snapshot,
+                portfolio_context,
+                scheduled_review=scheduled_review,
+                review_window=str(context.get("rebalanceReviewWindow") or ""),
+            )
             if portfolio_event:
                 events.append(portfolio_event)
         crypto_transitions = [

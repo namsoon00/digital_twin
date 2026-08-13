@@ -13,6 +13,7 @@ from ..domain.portfolio_calculations import (
 )
 from ..domain.portfolio import Position, utc_now_iso
 from .external_signal_utils import dart_document_text, parse_iso, symbol_assignments, symbol_list
+from .opendart_calendar_source import OPENDART_CORP_CODE_URL, parse_opendart_corp_codes
 
 
 class ExternalSignalMarketMixin:
@@ -485,14 +486,45 @@ class ExternalSignalMarketMixin:
         if not api_key:
             return
         corp_codes = symbol_assignments(self.settings.get("externalDartCorpCodes") or "")
-        if not corp_codes:
-            return
+        cached_codes = self.provider_state.get("opendart:corp-code-assignments")
+        if isinstance(cached_codes, dict):
+            corp_codes.update({
+                str(symbol or "").zfill(6): str(code or "").zfill(8)
+                for symbol, code in cached_codes.items()
+                if str(symbol or "").strip() and str(code or "").strip()
+            })
         now = datetime.now(timezone.utc)
         lookback_days = int(number(self.settings.get("externalDartLookbackDays")) or 14)
         bgn_de = (now - timedelta(days=max(1, lookback_days))).strftime("%Y%m%d")
         end_de = now.strftime("%Y%m%d")
         positions_by_symbol = {str(position.symbol or "").upper(): position for position in positions}
-        for symbol in self.limited_targets(signals, "OpenDART", self.dart_symbols(positions), "externalDartMaxSymbols", 5):
+        selected_symbols = self.limited_targets(
+            signals,
+            "OpenDART",
+            self.dart_symbols(positions),
+            "externalDartMaxSymbols",
+            5,
+        )
+        missing_symbols = [symbol for symbol in selected_symbols if symbol not in corp_codes]
+        if missing_symbols:
+            try:
+                raw_directory = self.guarded_call(
+                    "OpenDART",
+                    "corp-code-directory",
+                    lambda: self.fetch_bytes(
+                        OPENDART_CORP_CODE_URL + "?" + urllib.parse.urlencode({"crtfc_key": api_key}),
+                        {"Accept": "application/zip,application/xml"},
+                    ),
+                )
+                # The directory response already contains every listed
+                # company. Parse it once and persist the complete mapping so
+                # round-robin batches do not download the same ZIP again for
+                # each newly selected symbol.
+                corp_codes.update(parse_opendart_corp_codes(raw_directory))
+                self.provider_state["opendart:corp-code-assignments"] = dict(corp_codes)
+            except Exception as error:  # noqa: BLE001 - configured mappings remain usable.
+                self.status_for_error(signals, "OpenDART", "corp-code directory ", error)
+        for symbol in selected_symbols:
             raw_corp_code = str(corp_codes.get(symbol) or "").strip()
             if not raw_corp_code:
                 continue
@@ -516,6 +548,20 @@ class ExternalSignalMarketMixin:
                     latest = items[0] if items else {}
                     if not latest:
                         return {}
+                    normalized_items = [
+                        {
+                            "provider": "OpenDART",
+                            "corpCode": corp_code,
+                            "corpName": str(item.get("corp_name") or (position.name if position else symbol)),
+                            "reportName": str(item.get("report_nm") or ""),
+                            "receiptNo": str(item.get("rcept_no") or ""),
+                            "receiptDate": str(item.get("rcept_dt") or ""),
+                            "flrName": str(item.get("flr_nm") or ""),
+                            "remarks": str(item.get("rm") or ""),
+                        }
+                        for item in items
+                        if isinstance(item, dict) and str(item.get("rcept_no") or "").strip()
+                    ]
                     return {
                         "provider": "OpenDART",
                         "corpCode": corp_code,
@@ -524,6 +570,9 @@ class ExternalSignalMarketMixin:
                         "receiptNo": str(latest.get("rcept_no") or ""),
                         "receiptDate": str(latest.get("rcept_dt") or ""),
                         "count": len(items),
+                        # Preserve bounded filing metadata so collection does
+                        # not silently discard every filing except the newest.
+                        "items": normalized_items,
                     }
 
                 disclosure = self.guarded_call("OpenDART", "list:" + symbol, fetch_disclosure)

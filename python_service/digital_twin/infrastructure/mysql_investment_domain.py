@@ -97,6 +97,53 @@ def save_mandate_with_connection(connection, mandate: InvestmentMandate, stamp: 
 
 
 class MySQLInvestmentDomainStore(MySQLOperationalConnection):
+    def record_rebalance_review_window(
+        self,
+        portfolio_id: str,
+        review_window: str,
+        observed_at: str,
+        domain_event,
+        reasoning_event,
+    ) -> bool:
+        """Record one scheduled review and its mailbox ingress atomically."""
+        clean_portfolio_id = str(portfolio_id or "").strip()[:191]
+        clean_window = str(review_window or "").strip()[:80]
+        if not clean_portfolio_id or not clean_window or not domain_event or not reasoning_event:
+            return False
+        stamp = utc_now()
+
+        def operation(connection):
+            cursor = connection.execute(
+                """
+                INSERT IGNORE INTO portfolio_rebalance_review_windows (
+                    portfolio_id, review_window, observed_at, source_event_id,
+                    reasoning_event_id, created_at
+                ) VALUES (%s, %s, %s, %s, %s, %s)
+                """,
+                (
+                    clean_portfolio_id,
+                    clean_window,
+                    str(observed_at or "")[:40],
+                    str(domain_event.event_id or "")[:191],
+                    str(reasoning_event.event_id or "")[:191],
+                    stamp,
+                ),
+            )
+            inserted = max(0, int(getattr(cursor, "rowcount", 0) or 0)) > 0
+            if not inserted:
+                return False
+            insert_domain_event_with_connection(connection, domain_event)
+            insert_domain_event_with_connection(connection, reasoning_event)
+            from .mysql_reasoning_mailbox import MySQLOntologyReasoningMailboxStore
+
+            MySQLOntologyReasoningMailboxStore.ingress_event_with_connection(
+                connection,
+                reasoning_event,
+            )
+            return True
+
+        return bool(self.transaction_with_deadlock_retry("rebalance-review-window", operation))
+
     def record_rebalance_state_with_connection(
         self,
         connection,

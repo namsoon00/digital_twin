@@ -56,6 +56,7 @@ MYSQL_OPERATIONAL_COMPACTION_TABLES = frozenset({
     "ai_inference_subject_heads",
     "ai_inference_requests",
     "ai_inference_results",
+    "news_analysis_work_items",
     "model_review_jobs",
     "monitor_sent",
     "market_quote_cache",
@@ -75,6 +76,7 @@ MYSQL_OPERATIONAL_COMPACTION_TABLES = frozenset({
     "research_evidence",
     "market_time_series_observations",
     "ontology_reasoning_mailbox_events",
+    "portfolio_rebalance_review_windows",
     "symbol_universe",
     "symbol_universe_sources",
 })
@@ -453,6 +455,19 @@ def _delete_completed_model_review_rows(connection, cutoff_iso: str, batch_size:
         " AND `updated_at` < "
         + cutoff_sql
         + " ORDER BY `updated_at`, `job_id` LIMIT %s"
+    )
+    return _delete_one_batch(connection, sql, (cutoff_iso, batch_size))
+
+
+def _delete_completed_news_analysis_work_rows(connection, cutoff_iso: str, batch_size: int) -> int:
+    """Retain retryable and leased analysis work; prune only completed leases."""
+    cutoff_sql = "CAST(%s AS CHAR CHARACTER SET utf8mb4) COLLATE utf8mb4_unicode_ci"
+    sql = (
+        "DELETE FROM `news_analysis_work_items`"
+        " WHERE `work_state` = 'completed'"
+        " AND `completed_at` != '' AND `completed_at` < "
+        + cutoff_sql
+        + " ORDER BY `completed_at`, `evidence_id` LIMIT %s"
     )
     return _delete_one_batch(connection, sql, (cutoff_iso, batch_size))
 
@@ -933,6 +948,13 @@ def apply_mysql_operational_history_retention(
         deleted_by_table["ai_inference_results"] = ai_inference_deleted["results"]
         deleted_by_policy["terminal:ai_inference_requests"] = ai_inference_deleted["requests"]
         deleted_by_policy["time:ai_inference_results"] = ai_inference_deleted["results"]
+        news_analysis_deleted = _delete_completed_news_analysis_work_rows(
+            connection,
+            ai_inference_cutoff,
+            batch_size,
+        )
+        deleted_by_table["news_analysis_work_items"] = news_analysis_deleted
+        deleted_by_policy["terminal:news_analysis_work_items"] = news_analysis_deleted
 
         snapshot_deleted = _delete_snapshot_history_over_keep_count(
             connection,

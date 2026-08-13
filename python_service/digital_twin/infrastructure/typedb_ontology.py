@@ -6367,6 +6367,60 @@ class ScopedABoxManifestMixin:
                 "reason": str(error)[:220],
             }
 
+    def delete_worldview_manifest_markers_batch(
+        self,
+        driver,
+        imported,
+        manifest_ids: Iterable[str],
+        world_id: str = "",
+    ) -> Dict[str, object]:
+        """Delete already-safe immutable Manifest markers in one short write."""
+        clean_ids = list(dict.fromkeys(
+            str(value or "").strip()
+            for value in manifest_ids or []
+            if str(value or "").strip()
+        ))[:20]
+        if not clean_ids:
+            return {"status": "skipped", "deletedBatchCount": 0, "removedManifestIds": []}
+        _TypeDB, _Credentials, _DriverOptions, _DriverTlsConfig, TransactionType = imported[0]
+        query = (
+            "match $n isa ontology-node, "
+            'has ontology-kind "worldview-manifest-marker", '
+            'has ontology-box "ABox"'
+            + (", has ontology-world-id " + typedb_string(world_id) if str(world_id or "").strip() else "")
+            + "; "
+        )
+        marker_patterns = [
+            "$n has ontology-snapshot-id " + typedb_string(manifest_id) + ";"
+            for manifest_id in clean_ids
+        ]
+        if len(marker_patterns) == 1:
+            query += marker_patterns[0] + " "
+        else:
+            query += " or ".join("{ " + pattern + " }" for pattern in marker_patterns) + "; "
+        query += "delete $n;"
+
+        def delete_batch():
+            with typedb_operation_timeout(
+                self.write_operation_timeout_seconds(),
+                "TypeDB ABox Manifest marker delete batch",
+            ):
+                with driver.transaction(
+                    self.database,
+                    TransactionType.WRITE,
+                    options=self.write_transaction_options(),
+                ) as tx:
+                    tx.query(query).resolve()
+                    tx.commit()
+
+        self.with_typedb_retries(delete_batch)
+        return {
+            "status": "ok",
+            "deletedBatchCount": 1,
+            "removedManifestIds": clean_ids,
+            "worldId": str(world_id or "").strip(),
+        }
+
     def prune_inactive_scoped_abox_manifests_in_driver(
         self,
         driver,
@@ -6540,9 +6594,23 @@ class ScopedABoxManifestMixin:
         time_budget_exhausted = False
         resume_generation_id = ""
         resume_manifest_id = ""
+        marker_only_manifest_count = sum(
+            1
+            for metadata in removable
+            if not {
+                str(item or "").strip()
+                for item in dict(metadata.get("scopeGenerationIds") or {}).values()
+                if str(item or "").strip()
+                and str(item or "").strip() not in protected_generation_ids
+            }
+        )
+        marker_batch_reserve = min(
+            marker_only_manifest_count,
+            max(1, max_batch_count // 4) if max_batch_count >= 2 else 0,
+        )
         for generation_id in retired_generation_ids:
             if (
-                remaining_batch_budget <= 0
+                remaining_batch_budget <= marker_batch_reserve
                 or (
                     deadline_monotonic is not None
                     and time.monotonic() >= deadline_monotonic
@@ -6581,58 +6649,48 @@ class ScopedABoxManifestMixin:
         # that it alone retained has been reclaimed. Markers whose scopes are
         # all protected or completed in this pass are safe to remove now.
         removed_generation_set = set(removed_generation_ids)
-        if not cleanup_partial:
-            for metadata in removable:
-                if (
-                    remaining_batch_budget <= 0
-                    or (
-                        deadline_monotonic is not None
-                        and time.monotonic() >= deadline_monotonic
-                    )
-                ):
-                    cleanup_partial = True
-                    time_budget_exhausted = bool(
-                        deadline_monotonic is not None
-                        and time.monotonic() >= deadline_monotonic
-                    )
-                    resume_manifest_id = str(
-                        metadata.get("worldviewManifestId")
-                        or metadata.get("aboxSnapshotId")
-                        or ""
-                    ).strip()
-                    break
-                manifest_id = str(metadata.get("worldviewManifestId") or metadata.get("aboxSnapshotId") or "").strip()
-                if not manifest_id:
-                    continue
-                required_generations = {
-                    str(item or "").strip()
-                    for item in dict(metadata.get("scopeGenerationIds") or {}).values()
-                    if str(item or "").strip() and str(item or "").strip() not in protected_generation_ids
-                }
-                if not required_generations.issubset(removed_generation_set):
-                    cleanup_partial = True
-                    resume_manifest_id = resume_manifest_id or manifest_id
-                    continue
-                cleanup = self.delete_box_snapshot_rows_in_batches(
-                    driver,
-                    imported,
-                    "ABox",
-                    manifest_id,
-                    batch_size=bounded_delete_batch_size,
-                    max_batches=remaining_batch_budget,
-                    deadline_monotonic=deadline_monotonic,
-                )
-                cleanup_rows.append(cleanup)
-                deleted = int(number_or_none(cleanup.get("deletedBatchCount")) or 0)
-                deleted_batches += deleted
-                remaining_batch_budget = max(0, remaining_batch_budget - deleted)
-                if str(cleanup.get("status") or "") == "ok":
-                    removed.append(manifest_id)
-                else:
-                    cleanup_partial = True
-                    time_budget_exhausted = bool(cleanup.get("timeBudgetExhausted"))
-                    resume_manifest_id = manifest_id
-                    break
+        safe_marker_ids = []
+        for metadata in removable:
+            manifest_id = str(metadata.get("worldviewManifestId") or metadata.get("aboxSnapshotId") or "").strip()
+            if not manifest_id:
+                continue
+            required_generations = {
+                str(item or "").strip()
+                for item in dict(metadata.get("scopeGenerationIds") or {}).values()
+                if str(item or "").strip() and str(item or "").strip() not in protected_generation_ids
+            }
+            if not required_generations.issubset(removed_generation_set):
+                cleanup_partial = True
+                resume_manifest_id = resume_manifest_id or manifest_id
+                continue
+            safe_marker_ids.append(manifest_id)
+        if safe_marker_ids and remaining_batch_budget > 0 and not (
+            deadline_monotonic is not None and time.monotonic() >= deadline_monotonic
+        ):
+            # A marker is one small node, so delete the independently verified
+            # marker set in one transaction. Physical generations continue to
+            # use the bounded row batches above.
+            cleanup = self.delete_worldview_manifest_markers_batch(
+                driver,
+                imported,
+                safe_marker_ids,
+                world_id=world_id,
+            )
+            cleanup_rows.append(cleanup)
+            deleted = int(number_or_none(cleanup.get("deletedBatchCount")) or 0)
+            deleted_batches += deleted
+            remaining_batch_budget = max(0, remaining_batch_budget - deleted)
+            if str(cleanup.get("status") or "") == "ok":
+                removed.extend(cleanup.get("removedManifestIds") or safe_marker_ids)
+            else:
+                cleanup_partial = True
+                resume_manifest_id = safe_marker_ids[0]
+        elif safe_marker_ids:
+            cleanup_partial = True
+            time_budget_exhausted = bool(
+                deadline_monotonic is not None and time.monotonic() >= deadline_monotonic
+            )
+            resume_manifest_id = safe_marker_ids[0]
         return {
             "status": "partial" if cleanup_partial else "ok",
             "persistenceMode": SCOPED_ABOX_PERSISTENCE_MODE,
@@ -6642,6 +6700,8 @@ class ScopedABoxManifestMixin:
             "maxDeleteBatches": max_batch_count,
             "deleteBatchSize": bounded_delete_batch_size,
             "remainingDeleteBatchBudget": remaining_batch_budget,
+            "markerOnlyManifestCount": marker_only_manifest_count,
+            "markerDeleteBatchReserve": marker_batch_reserve,
             "completedInactiveManifestCount": len(ordered_identities),
             "retainedInactiveManifestIds": [
                 str(item.get("worldviewManifestId") or item.get("aboxSnapshotId") or "")

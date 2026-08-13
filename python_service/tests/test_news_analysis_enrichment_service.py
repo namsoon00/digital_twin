@@ -13,6 +13,7 @@ from digital_twin.domain.investment_research import NewsCollectionTarget, Resear
 from digital_twin.domain.news_ai_analysis import apply_news_ai_analysis, local_news_ai_analysis, news_ai_analysis_is_current
 from digital_twin.domain.evidence_delta import EvidenceDelta, EvidenceMutation
 from digital_twin.infrastructure.service_factory import build_news_analysis_enrichment_runner
+from digital_twin.infrastructure.mysql_operational_connection import MYSQL_SCHEMA
 
 
 class NewsAnalysisEnrichmentRunnerTests(unittest.TestCase):
@@ -178,7 +179,30 @@ class NewsAnalysisEnrichmentRunnerTests(unittest.TestCase):
         events = runner._events_for_mutation(mutation, 1)
 
         self.assertEqual(item.evidence_id, events[0].payload["evidenceDeltas"][0]["evidenceId"])
+        self.assertFalse(any(event.name == "ontology.reasoning_requested" for event in events))
         json.dumps(events[0].payload, ensure_ascii=False)
+
+    def test_only_inference_eligible_news_set_change_requests_evidence_scope_reasoning(self):
+        item = self.evidence()
+        runner = NewsAnalysisEnrichmentRunner(
+            evidence_store=object(),
+            analysis_service=None,
+            settings={},
+        )
+        mutation = EvidenceMutation(
+            written_count=1,
+            changed_symbols=["AAPL"],
+            changed_items=[item],
+            eligible_set_revisions={"AAPL": "eligible-set:two"},
+            inference_changed_symbols_override=["AAPL"],
+        )
+
+        events = runner._events_for_mutation(mutation, 1)
+        reasoning_event = next(event for event in events if event.name == "ontology.reasoning_requested")
+
+        self.assertEqual(["AAPL"], reasoning_event.payload["symbols"])
+        self.assertEqual(["evidence"], reasoning_event.payload["factChangeContract"]["scopeFamilies"])
+        self.assertEqual("ready", reasoning_event.payload["factChangeContract"]["status"])
 
     def test_ready_korean_local_analysis_waits_for_external_analysis(self):
         evidence = ResearchEvidence(
@@ -368,6 +392,177 @@ class NewsAnalysisEnrichmentRunnerTests(unittest.TestCase):
             "summary-number-not-grounded",
             repaired.raw_payload["articleSummaryQuality"]["issues"],
         )
+
+    def test_worker_uses_latest_wins_durable_queue_and_completes_its_lease(self):
+        item = self.evidence()
+
+        class Analyzer:
+            def analyze_evidence(self, _target, current, external_timeout_seconds=0):
+                self.timeout = external_timeout_seconds
+                payload = dict(current.raw_payload or {})
+                analysis = dict(payload.get("aiAnalysis") or {})
+                analysis.update({"status": "ok", "model": "durable-test"})
+                payload["aiAnalysis"] = analysis
+                payload["translationStatus"] = "complete"
+                current.raw_payload = payload
+                return current
+
+        class Store:
+            def __init__(self):
+                self.jobs = []
+                self.claimed = set()
+                self.finished = []
+                self.saved = []
+                self.last_changed_items = []
+                self.last_changed_symbols = []
+
+            def latest(self, **_kwargs):
+                return [item]
+
+            def enqueue_news_analysis_work(self, jobs):
+                self.jobs = [dict(job) for job in jobs]
+                return len(self.jobs)
+
+            def claim_news_analysis_work(self, worker_id, work_class, limit, lease_seconds):
+                rows = []
+                for job in self.jobs:
+                    if job["workClass"] != work_class or job["evidenceId"] in self.claimed:
+                        continue
+                    self.claimed.add(job["evidenceId"])
+                    rows.append({**job, "leaseOwner": worker_id, "leaseUntil": "future"})
+                    if len(rows) >= limit:
+                        break
+                return rows
+
+            def finish_news_analysis_work(self, jobs, worker_id, retry_minutes=0, error=""):
+                self.finished.extend({
+                    **dict(job),
+                    "workerId": worker_id,
+                    "retryMinutes": retry_minutes,
+                    "error": error,
+                } for job in jobs)
+                return len(list(jobs))
+
+            def get(self, evidence_id):
+                return item if evidence_id == item.evidence_id else None
+
+            def upsert_many(self, rows):
+                self.saved = list(rows)
+                self.last_changed_items = list(rows)
+                self.last_changed_symbols = ["AAPL"]
+                return len(self.saved)
+
+        store = Store()
+        runner = NewsAnalysisEnrichmentRunner(
+            evidence_store=store,
+            analysis_service=Analyzer(),
+            settings={
+                "newsAiAnalysisAsyncEnabled": "1",
+                "newsAiAnalysisWorkerBatchSize": "1",
+                "newsAiAnalysisTimeoutSeconds": "15",
+            },
+        )
+
+        result = runner.run_once()
+
+        self.assertTrue(result["durableQueueEnabled"])
+        self.assertEqual(1, result["queueEnqueuedCount"])
+        self.assertEqual(1, result["queueCompletedCount"])
+        self.assertEqual(0, result["queueRetryCount"])
+        self.assertEqual("model", store.jobs[0]["workClass"])
+        self.assertEqual(item.evidence_id, store.finished[0]["evidenceId"])
+        self.assertEqual(0, store.finished[0]["retryMinutes"])
+        self.assertIn(
+            "CREATE TABLE IF NOT EXISTS news_analysis_work_items",
+            "\n".join(MYSQL_SCHEMA),
+        )
+
+    def test_durable_queue_revision_hash_covers_changes_beyond_json_prefix(self):
+        item = self.evidence()
+
+        class QueueStore:
+            def __init__(self):
+                self.batches = []
+
+            def enqueue_news_analysis_work(self, jobs):
+                self.batches.append([dict(job) for job in jobs])
+                return len(self.batches[-1])
+
+            def claim_news_analysis_work(self, *_args, **_kwargs):
+                return []
+
+            def finish_news_analysis_work(self, *_args, **_kwargs):
+                return 0
+
+        store = QueueStore()
+        runner = NewsAnalysisEnrichmentRunner(store, object(), {})
+
+        runner.enqueue_candidates([item])
+        item.raw_payload["zzzzSemanticTail"] = "changed-after-the-shared-json-prefix"
+        runner.enqueue_candidates([item])
+
+        first_revision = store.batches[0][0]["subjectRevision"]
+        second_revision = store.batches[1][0]["subjectRevision"]
+        self.assertRegex(first_revision, r"^news-analysis:[0-9a-f]{32}$")
+        self.assertNotEqual(first_revision, second_revision)
+
+    def test_durable_queue_discards_result_when_evidence_changes_during_analysis(self):
+        initial = self.evidence()
+        revised = self.evidence()
+        revised.raw_payload["zzzzSemanticTail"] = "newer-source-revision"
+
+        class Analyzer:
+            def analyze_evidence(self, _target, current, external_timeout_seconds=0):
+                payload = dict(current.raw_payload or {})
+                payload["aiAnalysis"] = {"status": "ok", "model": "stale-result-test"}
+                current.raw_payload = payload
+                return current
+
+        class Store:
+            def __init__(self):
+                self.jobs = []
+                self.get_count = 0
+                self.finished = []
+
+            def latest(self, **_kwargs):
+                return [initial]
+
+            def enqueue_news_analysis_work(self, jobs):
+                self.jobs = [dict(job) for job in jobs]
+                return len(self.jobs)
+
+            def claim_news_analysis_work(self, worker_id, work_class, limit, lease_seconds):
+                return [
+                    {**job, "leaseOwner": worker_id, "leaseUntil": "future"}
+                    for job in self.jobs
+                    if job["workClass"] == work_class
+                ][:limit]
+
+            def finish_news_analysis_work(self, jobs, worker_id, retry_minutes=0, error=""):
+                rows = [dict(job) for job in jobs]
+                self.finished.extend(rows)
+                return len(rows)
+
+            def get(self, evidence_id):
+                self.get_count += 1
+                return initial if self.get_count == 1 else revised
+
+            def upsert_many(self, _rows):
+                raise AssertionError("stale analysis result must not be persisted")
+
+        store = Store()
+        runner = NewsAnalysisEnrichmentRunner(
+            store,
+            Analyzer(),
+            {"newsAiAnalysisAsyncEnabled": "1"},
+        )
+
+        result = runner.run_once()
+
+        self.assertEqual(1, result["processedCount"])
+        self.assertEqual(0, result["savedCount"])
+        self.assertEqual(1, result["queueStaleCompletedCount"])
+        self.assertEqual(initial.evidence_id, store.finished[0]["evidenceId"])
 
 
 if __name__ == "__main__":

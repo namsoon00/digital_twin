@@ -5,11 +5,17 @@ performs the slower structured Korean summary and English-title translation
 after evidence is already visible to the operator.
 """
 
+import copy
 from datetime import datetime, timezone
+import hashlib
+import os
+import socket
 from typing import Dict, Iterable, List
+import uuid
 
 from ..domain.data_freshness import age_minutes, parse_datetime
 from ..domain.events import news_article_analyzed_event, ontology_reasoning_requested_event, research_evidence_collected_event
+from ..domain.evidence_delta import evidence_content_signature
 from ..domain.investment_research import NewsCollectionTarget, ResearchEvidence
 from ..domain.materiality import evidence_materiality
 from ..domain.news_ai_analysis import (
@@ -64,6 +70,14 @@ class NewsAnalysisEnrichmentRunner:
         self.settings = dict(settings or {})
         self.event_publisher = event_publisher
         self.storage_guard = storage_guard
+        self.worker_id = (
+            "news-analysis:"
+            + socket.gethostname()
+            + ":"
+            + str(os.getpid())
+            + ":"
+            + uuid.uuid4().hex[:8]
+        )[:191]
 
     def enabled(self) -> bool:
         return truthy(self.settings.get("newsAiAnalysisAsyncEnabled"), True) and bool(self.analysis_service)
@@ -189,6 +203,62 @@ class NewsAnalysisEnrichmentRunner:
         rows = list(self.evidence_store.latest(kind="news", limit=self.scan_limit()) or [])
         return sorted((item for item in rows if self.should_retry(item)), key=self.priority, reverse=True)
 
+    def durable_queue_enabled(self) -> bool:
+        return all(callable(getattr(self.evidence_store, name, None)) for name in (
+            "enqueue_news_analysis_work",
+            "claim_news_analysis_work",
+            "finish_news_analysis_work",
+        ))
+
+    def queue_priority(self, item: ResearchEvidence) -> int:
+        values = self.priority(item)
+        ranks = []
+        for value in values[1:5]:
+            try:
+                ranks.append(max(0, int(value)))
+            except (TypeError, ValueError):
+                ranks.append(0)
+        while len(ranks) < 4:
+            ranks.append(0)
+        published_at = parse_datetime(item.published_at or item.observed_at)
+        age_hours = max(
+            0,
+            int((datetime.now(timezone.utc) - published_at).total_seconds() // 3600),
+        ) if published_at else 1999
+        score = (
+            (500000 if bool(values[0]) else 0)
+            + ranks[0] * 80000
+            + ranks[1] * 40000
+            + ranks[2] * 20000
+            + ranks[3] * 10000
+            + (8000 if len(values) > 5 and bool(values[5]) else 0)
+            + (4000 if len(values) > 6 and bool(values[6]) else 0)
+            + (2000 if len(values) > 7 and bool(values[7]) else 0)
+            + max(0, 1999 - min(1999, age_hours))
+        )
+        return min(1000000, score)
+
+    def enqueue_candidates(self, candidates: Iterable[ResearchEvidence]) -> int:
+        if not self.durable_queue_enabled():
+            return 0
+        jobs = []
+        for item in candidates or []:
+            work_class = "local" if self.deterministic_repair(item) else "model"
+            jobs.append({
+                "evidenceId": item.evidence_id,
+                "subjectRevision": self.work_revision(item, work_class),
+                "workClass": work_class,
+                "priority": self.queue_priority(item),
+            })
+        return int(self.evidence_store.enqueue_news_analysis_work(jobs) or 0)
+
+    @staticmethod
+    def work_revision(item: ResearchEvidence, work_class: str) -> str:
+        revision_source = evidence_content_signature(item) + ":" + str(work_class or "model")
+        return "news-analysis:" + hashlib.sha256(
+            revision_source.encode("utf-8")
+        ).hexdigest()[:32]
+
     def _status_for_candidates(self, candidates) -> Dict[str, object]:
         pending_translation = 0
         for item in candidates:
@@ -207,7 +277,14 @@ class NewsAnalysisEnrichmentRunner:
 
     def status(self) -> Dict[str, object]:
         candidates = self.candidates() if self.enabled() else []
-        return self._status_for_candidates(candidates)
+        result = self._status_for_candidates(candidates)
+        status_loader = getattr(self.evidence_store, "news_analysis_work_status", None)
+        if callable(status_loader):
+            try:
+                result["durableQueue"] = dict(status_loader() or {})
+            except Exception as error:  # noqa: BLE001 - status remains available from evidence scan.
+                result["durableQueue"] = {"durable": True, "status": "error", "reason": str(error)[:180]}
+        return result
 
     def storage_state(self) -> Dict[str, object]:
         if not callable(self.storage_guard):
@@ -271,6 +348,14 @@ class NewsAnalysisEnrichmentRunner:
                 changed_count=len(inference_symbols),
                 observed_count=processed_count,
                 fact_types=["ResearchEvidence", "NewsArticleAnalysis"],
+                fact_types_by_symbol={
+                    symbol: ["ResearchEvidence", "NewsArticleAnalysis"]
+                    for symbol in inference_symbols
+                },
+                changed_fields_by_symbol={
+                    symbol: ["external.researchEvidence"]
+                    for symbol in inference_symbols
+                },
                 reason="본문 기반 뉴스 요약·번역이 보강되어 TypeDB ABox의 리서치 근거를 갱신합니다.",
                 materiality_assessments=materiality,
                 fact_revisions_by_symbol=payload["factRevisionsBySymbol"],
@@ -296,15 +381,58 @@ class NewsAnalysisEnrichmentRunner:
                 "storage": storage,
             }
         candidates = self.candidates()
-        repair_candidates = [item for item in candidates if self.deterministic_repair(item)]
-        repair_selected = repair_candidates[: self.local_repair_batch_size()]
-        repair_ids = {item.evidence_id for item in repair_selected}
-        repair_candidate_ids = {item.evidence_id for item in repair_candidates}
-        model_candidates = [item for item in candidates if item.evidence_id not in repair_candidate_ids]
-        model_selected = model_candidates[: max(1, int(limit or self.batch_size()))]
-        selected = [*repair_selected, *model_selected]
+        durable_queue = self.durable_queue_enabled()
+        enqueued_count = self.enqueue_candidates(candidates) if durable_queue else 0
+        selected_jobs: Dict[str, Dict[str, object]] = {}
+        stale_jobs: List[Dict[str, object]] = []
+        if durable_queue:
+            lease_seconds = max(120, min(1800, self.timeout_seconds() * 3))
+            claimed = [
+                *self.evidence_store.claim_news_analysis_work(
+                    self.worker_id,
+                    "local",
+                    self.local_repair_batch_size(),
+                    lease_seconds,
+                ),
+                *self.evidence_store.claim_news_analysis_work(
+                    self.worker_id,
+                    "model",
+                    max(1, int(limit or self.batch_size())),
+                    lease_seconds,
+                ),
+            ]
+            selected = []
+            for job in claimed:
+                item = self.evidence_store.get(job.get("evidenceId"))
+                if not item or not self.should_retry(item):
+                    stale_jobs.append(job)
+                    continue
+                selected.append(item)
+                selected_jobs[item.evidence_id] = dict(job)
+            if stale_jobs:
+                self.evidence_store.finish_news_analysis_work(
+                    stale_jobs,
+                    self.worker_id,
+                )
+            repair_ids = {
+                evidence_id
+                for evidence_id, job in selected_jobs.items()
+                if str(job.get("workClass") or "") == "local"
+            }
+            repair_selected = [item for item in selected if item.evidence_id in repair_ids]
+            model_selected = [item for item in selected if item.evidence_id not in repair_ids]
+        else:
+            repair_candidates = [item for item in candidates if self.deterministic_repair(item)]
+            repair_selected = repair_candidates[: self.local_repair_batch_size()]
+            repair_ids = {item.evidence_id for item in repair_selected}
+            repair_candidate_ids = {item.evidence_id for item in repair_candidates}
+            model_candidates = [item for item in candidates if item.evidence_id not in repair_candidate_ids]
+            model_selected = model_candidates[: max(1, int(limit or self.batch_size()))]
+            selected = [*repair_selected, *model_selected]
         updated: List[ResearchEvidence] = []
         failures: List[Dict[str, object]] = []
+        retry_job_ids = set()
+        stale_result_ids = set()
         translated_count = 0
         now = utc_now_iso()
         for item in selected:
@@ -312,7 +440,7 @@ class NewsAnalysisEnrichmentRunner:
             try:
                 result = self.analysis_service.analyze_evidence(
                     self.target_for(item),
-                    item,
+                    copy.deepcopy(item),
                     external_timeout_seconds=self.timeout_seconds(),
                 )
                 result = annotate_evidence_eligibility(
@@ -327,15 +455,28 @@ class NewsAnalysisEnrichmentRunner:
                     analysis["lastExternalAttemptAt"] = now
                     if str(analysis.get("status") or "").lower() in {"fallback", "error", "deferred"}:
                         analysis["nextRetryAfterMinutes"] = self.retry_minutes()
+                        retry_job_ids.add(item.evidence_id)
                     else:
                         analysis["externalCompletedAt"] = now
                 payload["aiAnalysis"] = analysis
                 result.raw_payload = payload
+                if durable_queue:
+                    job = selected_jobs.get(item.evidence_id) or {}
+                    current = self.evidence_store.get(item.evidence_id)
+                    expected_revision = str(job.get("subjectRevision") or "")
+                    current_revision = self.work_revision(
+                        current,
+                        str(job.get("workClass") or "model"),
+                    ) if current else ""
+                    if not expected_revision or current_revision != expected_revision:
+                        stale_result_ids.add(item.evidence_id)
+                        continue
                 if str(payload.get("translationStatus") or "").lower() == "complete":
                     translated_count += 1
                 updated.append(result)
             except Exception as error:  # noqa: BLE001 - one article must not block the backlog.
                 failures.append({"evidenceId": item.evidence_id, "symbol": item.symbol, "message": str(error)[:180]})
+                retry_job_ids.add(item.evidence_id)
 
         event_state: Dict[str, object] = {}
         saved = 0
@@ -365,6 +506,43 @@ class NewsAnalysisEnrichmentRunner:
                     else:
                         self.event_publisher.handle(event)
 
+        queue_completed_count = 0
+        queue_retry_count = 0
+        queue_stale_completed_count = 0
+        if durable_queue and selected_jobs:
+            retry_jobs = [
+                selected_jobs[evidence_id]
+                for evidence_id in sorted(retry_job_ids)
+                if evidence_id in selected_jobs
+            ]
+            completed_jobs = [
+                job
+                for evidence_id, job in selected_jobs.items()
+                if evidence_id not in retry_job_ids and evidence_id not in stale_result_ids
+            ]
+            stale_result_jobs = [
+                selected_jobs[evidence_id]
+                for evidence_id in sorted(stale_result_ids)
+                if evidence_id in selected_jobs
+            ]
+            if completed_jobs:
+                queue_completed_count = self.evidence_store.finish_news_analysis_work(
+                    completed_jobs,
+                    self.worker_id,
+                )
+            if stale_result_jobs:
+                queue_stale_completed_count += self.evidence_store.finish_news_analysis_work(
+                    stale_result_jobs,
+                    self.worker_id,
+                )
+            if retry_jobs:
+                queue_retry_count = self.evidence_store.finish_news_analysis_work(
+                    retry_jobs,
+                    self.worker_id,
+                    retry_minutes=self.retry_minutes(),
+                    error="; ".join(item.get("message") or "analysis-retry-required" for item in failures)[:1000],
+                )
+
         return {
             "status": "ok",
             **self._status_for_candidates(candidates),
@@ -376,4 +554,9 @@ class NewsAnalysisEnrichmentRunner:
             "failedCount": len(failures),
             "failures": failures,
             "processedEvidenceIds": [item.evidence_id for item in selected],
+            "durableQueueEnabled": durable_queue,
+            "queueEnqueuedCount": enqueued_count,
+            "queueCompletedCount": queue_completed_count,
+            "queueRetryCount": queue_retry_count,
+            "queueStaleCompletedCount": len(stale_jobs) + queue_stale_completed_count,
         }

@@ -16,7 +16,7 @@ from typing import Dict, Iterable, List, Mapping
 from ..domain.ontology_reasoning_queue import (
     durable_mailbox_entries,
     event_as_dict,
-    event_changed_count,
+    event_has_reasoning_work,
 )
 from .mysql_operational_connection import MySQLOperationalConnection
 from .mysql_operational_helpers import _json_loads
@@ -264,12 +264,28 @@ class MySQLOntologyReasoningMailboxStore(MySQLOperationalConnection):
             result["ingressKind"] = "mailbox"
             return result
 
-        state = "direct-pending" if event_changed_count(event) > 0 else "expired"
+        actionable = event_has_reasoning_work(event)
+        state = "direct-pending" if actionable else "expired"
+        event_payload = getattr(event, "payload", {})
+        event_payload = dict(event_payload or {}) if isinstance(event_payload, Mapping) else {}
+        contract = event_payload.get("factChangeContract")
+        contract = dict(contract or {}) if isinstance(contract, Mapping) else {}
+        if str(contract.get("status") or "").strip() == "blocked-unclassified":
+            unknown = [
+                _text(value)
+                for value in contract.get("unclassifiedFactTypes") or []
+                if _text(value)
+            ]
+            terminal_reason = "blocked unclassified fact types: " + ", ".join(unknown[:10])
+        elif not actionable:
+            terminal_reason = "no actionable changed facts"
+        else:
+            terminal_reason = "non-fungible reasoning request"
         store._record_direct_event_with_connection(
             connection,
             event,
             state=state,
-            reason=("non-fungible reasoning request" if state == "direct-pending" else "no changed facts"),
+            reason=terminal_reason,
         )
         return {
             "acceptedEntryKeys": [],

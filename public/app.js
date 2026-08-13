@@ -20758,9 +20758,22 @@
     if (decisionAbstention.abstained) {
       comparisonBody += '<p class="notification-reasoning-note"><strong>판단 유보</strong>' + escapeHtml(decisionAbstention.reason || "가설 비교 계약을 충족하지 못해 선택 가설을 저장하지 않았습니다.") + '</p>';
     }
-    decisionGuardrails.slice(0, 3).forEach(function (guardrail) {
+    decisionGuardrails.forEach(function (guardrail) {
       comparisonBody += '<p class="notification-reasoning-note"><strong>' + escapeHtml(guardrail.label || "판단 안전 제한") + '</strong>' + escapeHtml(guardrail.reason || "추가 검증이 필요합니다.") + '</p>';
     });
+    var causalChain = Array.isArray(comparison.causalChain) ? comparison.causalChain : [];
+    if (comparison.decisionReadiness) {
+      comparisonBody += '<p class="notification-reasoning-note"><strong>판단 준비 상태</strong>' + escapeHtml(comparison.decisionReadiness) + '</p>';
+    }
+    causalChain.forEach(function (item) {
+      var path = [item.driver, item.channel, item.expectedEffect].filter(Boolean).join(" → ");
+      var evidenceIds = Array.isArray(item.evidenceIds) ? item.evidenceIds : [];
+      comparisonBody += '<p class="notification-reasoning-note"><strong>AI 인과 경로</strong>' + escapeHtml(path || "경로 설명 없음") + (item.status ? ' <em>' + escapeHtml(item.status) + '</em>' : '') + (evidenceIds.length ? '<code>' + escapeHtml(evidenceIds.join(", ")) + '</code>' : '') + '</p>';
+    });
+    var alternativeAction = comparison.alternativeAction && typeof comparison.alternativeAction === "object" ? comparison.alternativeAction : {};
+    if (Object.keys(alternativeAction).length) {
+      comparisonBody += '<p class="notification-reasoning-note"><strong>비교 대안</strong>' + escapeHtml([alternativeAction.actionLabel || alternativeAction.action, alternativeAction.whyNotSelected, alternativeAction.switchCondition].filter(Boolean).join(" · ")) + '</p>';
+    }
     var hypothesisBody = notificationReasoningTraceTags([
       selected.stanceLabel || "",
       selected.evidenceStateLabel || "",

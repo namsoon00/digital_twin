@@ -672,6 +672,18 @@ MYSQL_SCHEMA = [
     ) ENGINE=InnoDB DEFAULT CHARSET=utf8mb4 COLLATE=utf8mb4_unicode_ci
     """,
     """
+    CREATE TABLE IF NOT EXISTS portfolio_rebalance_review_windows (
+        portfolio_id VARCHAR(191) NOT NULL,
+        review_window VARCHAR(80) NOT NULL,
+        observed_at VARCHAR(40) NOT NULL DEFAULT '',
+        source_event_id VARCHAR(191) NOT NULL DEFAULT '',
+        reasoning_event_id VARCHAR(191) NOT NULL DEFAULT '',
+        created_at VARCHAR(40) NOT NULL,
+        PRIMARY KEY (portfolio_id, review_window),
+        KEY idx_rebalance_review_created (created_at, portfolio_id)
+    ) ENGINE=InnoDB DEFAULT CHARSET=utf8mb4 COLLATE=utf8mb4_unicode_ci
+    """,
+    """
     CREATE TABLE IF NOT EXISTS investment_action_plans (
         plan_id VARCHAR(191) PRIMARY KEY,
         portfolio_id VARCHAR(191) NOT NULL,
@@ -1106,6 +1118,25 @@ MYSQL_SCHEMA = [
         KEY idx_research_evidence_kind_time (kind, last_seen_at),
         KEY idx_research_evidence_lifecycle_kind_time (lifecycle_state, kind, published_at, evidence_id),
         KEY idx_research_evidence_lifecycle_kind_seen (lifecycle_state, kind, last_seen_at, evidence_id)
+    ) ENGINE=InnoDB DEFAULT CHARSET=utf8mb4 COLLATE=utf8mb4_unicode_ci
+    """,
+    """
+    CREATE TABLE IF NOT EXISTS news_analysis_work_items (
+        evidence_id VARCHAR(191) PRIMARY KEY,
+        subject_revision VARCHAR(191) NOT NULL DEFAULT '',
+        work_class VARCHAR(32) NOT NULL DEFAULT 'model',
+        work_state VARCHAR(32) NOT NULL DEFAULT 'pending',
+        priority INT NOT NULL DEFAULT 0,
+        lease_owner VARCHAR(191) NOT NULL DEFAULT '',
+        lease_until VARCHAR(40) NOT NULL DEFAULT '',
+        not_before_at VARCHAR(40) NOT NULL DEFAULT '',
+        attempt_count INT NOT NULL DEFAULT 0,
+        last_error TEXT NOT NULL,
+        created_at VARCHAR(40) NOT NULL,
+        updated_at VARCHAR(40) NOT NULL,
+        completed_at VARCHAR(40) NOT NULL DEFAULT '',
+        KEY idx_news_analysis_ready (work_class, work_state, not_before_at, lease_until, priority, updated_at),
+        KEY idx_news_analysis_terminal (work_state, completed_at)
     ) ENGINE=InnoDB DEFAULT CHARSET=utf8mb4 COLLATE=utf8mb4_unicode_ci
     """,
     """

@@ -2,6 +2,7 @@ import hashlib
 from dataclasses import dataclass, field
 from typing import Dict, Iterable, List, Tuple
 
+from .disclosure_taxonomy import classify_disclosure
 from .market_data import clamp, number
 from . import news_analysis as news_domain
 from .ontology_decision_state import (
@@ -649,6 +650,7 @@ def sec_research_evidence(symbol: str, sec: Dict[str, object]) -> List[ResearchE
         document_text = compact_text(latest.get("documentText") or "", 20000)
         document_quality = str(latest.get("documentTextQuality") or "metadata-only").strip()
         polarity = keyword_polarity(form + " " + company_name)
+        classification = classify_disclosure(form, form, sec.get("provider") or "SEC EDGAR")
         evidence.append(ResearchEvidence(
             evidence_id="research:" + normalized_symbol + ":sec:" + (str(latest.get("accessionNumber") or form)),
             symbol=normalized_symbol,
@@ -662,9 +664,8 @@ def sec_research_evidence(symbol: str, sec: Dict[str, object]) -> List[ResearchE
             published_at=filing_date,
             raw_payload={
                 "relationScope": "direct",
-                "eventType": "capital_policy",
+                **classification,
                 "sourceTrustState": "trusted",
-                "materialityState": "material",
                 "dataState": "sufficient" if len(document_text) >= 120 else "partial",
                 "validationState": "ready",
                 "officialDocumentText": document_text,
@@ -727,36 +728,59 @@ def research_evidence_from_facts(symbol: str, facts: Dict[str, object]) -> List[
     evidence: List[ResearchEvidence] = []
     disclosure = facts.get("dartDisclosure") if isinstance(facts.get("dartDisclosure"), dict) else {}
     if disclosure:
-        report = str(disclosure.get("reportName") or disclosure.get("report_name") or "OpenDART 공시").strip()
-        polarity = keyword_polarity(report)
-        receipt_no = str(disclosure.get("receiptNo") or disclosure.get("receipt_no") or "")
-        document_text = compact_text(disclosure.get("documentText") or "", 20000)
-        document_quality = str(disclosure.get("documentTextQuality") or "metadata-only").strip()
-        evidence.append(ResearchEvidence(
-            evidence_id="research:" + normalized_symbol + ":dart:" + (receipt_no or report),
-            symbol=normalized_symbol,
-            kind="disclosure",
-            source=str(disclosure.get("provider") or "OpenDART"),
-            title=report,
-            summary="접수일 " + str(disclosure.get("receiptDate") or disclosure.get("receipt_date") or "-"),
-            url=opendart_url(receipt_no),
-            observed_at=str(disclosure.get("receiptDate") or disclosure.get("receipt_date") or ""),
-            polarity=polarity,
-            published_at=str(disclosure.get("receiptDate") or disclosure.get("receipt_date") or ""),
-            raw_payload={
-                "relationScope": "direct",
-                "eventType": "capital_policy",
-                "sourceTrustState": "trusted",
-                "materialityState": "material",
-                "dataState": "sufficient" if len(document_text) >= 120 else "partial",
-                "validationState": "ready",
-                "officialDocumentText": document_text,
-                "officialDocumentPreview": compact_text(disclosure.get("documentTextPreview") or document_text, 700),
-                "officialDocumentQuality": document_quality,
-                "officialDocumentType": report,
-                "sourcePublisher": str(disclosure.get("provider") or "OpenDART"),
-            },
-        ))
+        raw_items = disclosure.get("items") if isinstance(disclosure.get("items"), list) else []
+        disclosure_items = [dict(item) for item in raw_items if isinstance(item, dict)] or [disclosure]
+        for disclosure_item in disclosure_items:
+            report = str(disclosure_item.get("reportName") or disclosure_item.get("report_name") or "OpenDART 공시").strip()
+            polarity = keyword_polarity(report)
+            receipt_no = str(disclosure_item.get("receiptNo") or disclosure_item.get("receipt_no") or "")
+            is_latest = receipt_no and receipt_no == str(disclosure.get("receiptNo") or "")
+            document_text = compact_text(
+                disclosure_item.get("documentText")
+                or (disclosure.get("documentText") if is_latest else ""),
+                20000,
+            )
+            document_quality = str(
+                disclosure_item.get("documentTextQuality")
+                or (disclosure.get("documentTextQuality") if is_latest else "metadata-only")
+                or "metadata-only"
+            ).strip()
+            source = str(disclosure_item.get("provider") or disclosure.get("provider") or "OpenDART")
+            classification = classify_disclosure(report, report, source)
+            receipt_date = str(
+                disclosure_item.get("receiptDate")
+                or disclosure_item.get("receipt_date")
+                or ""
+            )
+            evidence.append(ResearchEvidence(
+                evidence_id="research:" + normalized_symbol + ":dart:" + (receipt_no or report),
+                symbol=normalized_symbol,
+                kind="disclosure",
+                source=source,
+                title=report,
+                summary="접수일 " + (receipt_date or "-"),
+                url=opendart_url(receipt_no),
+                observed_at=receipt_date,
+                polarity=polarity,
+                published_at=receipt_date,
+                raw_payload={
+                    "relationScope": "direct",
+                    **classification,
+                    "sourceTrustState": "trusted",
+                    "dataState": "sufficient" if len(document_text) >= 120 else "partial",
+                    "validationState": "ready",
+                    "officialDocumentText": document_text,
+                    "officialDocumentPreview": compact_text(
+                        disclosure_item.get("documentTextPreview") or document_text,
+                        700,
+                    ),
+                    "officialDocumentQuality": document_quality,
+                    "officialDocumentType": report,
+                    "sourcePublisher": source,
+                    "receiptNo": receipt_no,
+                    "reportName": report,
+                },
+            ))
     news = facts.get("newsHeadlines") if isinstance(facts.get("newsHeadlines"), dict) else {}
     for item in (news.get("items") if isinstance(news.get("items"), list) else []):
         if not isinstance(item, dict):

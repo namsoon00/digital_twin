@@ -2747,6 +2747,51 @@ def compact_sentence_count(value: object, limit: int = 2) -> str:
     return ". ".join(parts[:limit]).rstrip(".") + "."
 
 
+def ai_causal_validation_rows(response: NotificationAIValidatedResponse) -> List[str]:
+    readiness_labels = {
+        "ready": "실행 근거 검증 완료",
+        "conditional": "조건부 판단",
+        "insufficient": "실행 근거 부족",
+    }
+    channel_labels = {
+        "revenue": "매출",
+        "cost": "비용",
+        "cash-flow": "현금흐름",
+        "cashflow": "현금흐름",
+        "valuation": "가치평가",
+        "flow": "수급",
+        "risk": "위험",
+    }
+    readiness = str(response.decision_readiness or "conditional").strip().lower()
+    rows = ["판단 준비 상태: " + readiness_labels.get(readiness, "조건부 판단")]
+    for item in response.causal_chain or []:
+        if not isinstance(item, dict):
+            continue
+        driver = customer_visible_ai_text(item.get("driver") or "")
+        channel = customer_visible_ai_text(item.get("channel") or "")
+        effect = customer_visible_ai_text(item.get("expectedEffect") or "")
+        status = str(item.get("status") or "unresolved").strip().lower()
+        if driver and channel and effect:
+            rows.append(
+                ("확인된 경로" if status == "supported" else "추가 확인 경로")
+                + ": "
+                + driver
+                + " → "
+                + channel_labels.get(channel.lower(), channel)
+                + " → "
+                + effect
+            )
+    alternative = response.alternative_action if isinstance(response.alternative_action, dict) else {}
+    alternative_label = str(alternative.get("actionLabel") or alternative.get("action") or "").strip()
+    why = customer_visible_ai_text(alternative.get("whyNotSelected") or "")
+    switch = customer_visible_ai_text(alternative.get("switchCondition") or "")
+    if alternative_label and why and switch:
+        rows.append(
+            "대안 " + alternative_label + ": 현재 제외 이유 " + why + " · 전환 조건 " + switch
+        )
+    return rows
+
+
 def execution_telegram_message(context: Dict[str, object], response: NotificationAIValidatedResponse) -> str:
     level = delivery_level_from_context(context)
     if level in {"absoluteBeginner", "beginner"}:
@@ -2789,6 +2834,8 @@ def execution_telegram_message(context: Dict[str, object], response: Notificatio
     ]
     hypothesis_rows = full_typedb_competing_inference_rows(context, response)
     parts.extend(["", "<b>TypeDB 경쟁 추론</b>", *[_html_bullet(row, level) for row in hypothesis_rows]])
+    causal_rows = ai_causal_validation_rows(response)
+    parts.extend(["", "<b>AI 인과 검증</b>", *[_html_bullet(row, level) for row in causal_rows]])
     lifecycle_rows = hypothesis_decision_brief_rows(context, response, level)
     if lifecycle_rows:
         parts.extend(["", "<b>가설 변화와 검증</b>", *lifecycle_rows])
@@ -2886,6 +2933,8 @@ def execution_telegram_message_compact_beginner(
     parts.extend(["", "<b>" + section_labels["counter"] + "</b>", *[_html_bullet(row, level) for row in counter_rows]])
     typedb_rows = full_typedb_competing_inference_rows(context, response)
     parts.extend(["", "<b>TypeDB 경쟁 추론</b>", *[_html_bullet(row, level) for row in typedb_rows]])
+    causal_rows = ai_causal_validation_rows(response)
+    parts.extend(["", "<b>AI 인과 검증</b>", *[_html_bullet(row, level) for row in causal_rows]])
     company_valuation = company_valuation_presentation(context)
     company_valuation_display_rows = company_valuation_rows(context, level, compact=True)
     if company_valuation_display_rows:

@@ -16,7 +16,7 @@ from .notification_ai_context import relation_context_value
 from .notification_ai_gate_sources import all_source_urls_for_context, source_detail_map
 
 
-TRACE_VERSION = "notification-reasoning-timeline-v2"
+TRACE_VERSION = "notification-reasoning-timeline-v3"
 
 ACTION_LABELS = {
     "BUY": "매수",
@@ -374,6 +374,8 @@ def _traceability_rows(
     graph_used = bool(relation.get("graphStoreUsed"))
     native = bool(relation.get("nativeTypeDbReasoningUsed"))
     comparison_state = _text(ai.get("hypothesisComparisonState"), 80)
+    decision_readiness = _text(ai.get("decisionReadiness"), 80)
+    causal_chain = [item for item in ai.get("causalChain") or [] if isinstance(item, dict)]
     rows = [
         {
             "label": "알림 시점 컨텍스트",
@@ -399,6 +401,14 @@ def _traceability_rows(
             "label": "선택 가설 연결",
             "state": "verified" if selected_hypothesis else "partial",
             "detail": _text(selected_hypothesis.get("hypothesisId"), 160) or "선택 가설 ID가 저장되지 않았습니다.",
+        },
+        {
+            "label": "AI 인과 경로",
+            "state": "verified" if decision_readiness == "ready" and any(
+                str(item.get("status") or "") == "supported" and item.get("evidenceIds")
+                for item in causal_chain
+            ) else "partial",
+            "detail": (decision_readiness or "조건부") + " · " + str(len(causal_chain)) + "개 경로",
         },
     ]
     return rows
@@ -545,6 +555,9 @@ def build_notification_reverse_reasoning_trace(
             "reviewLevel": _text(ai.get("reviewLevel"), 80),
             "reviewLabel": _text(ai.get("reviewLabel"), 120),
             "invalidationCondition": _text(ai.get("invalidationCondition"), 320),
+            "decisionReadiness": _text(ai.get("decisionReadiness"), 80),
+            "causalChain": [dict(item) for item in ai.get("causalChain") or [] if isinstance(item, dict)],
+            "alternativeAction": _dict(ai.get("alternativeAction")),
         },
         "aiComparison": {
             "precomputedAction": precomputed_action,
@@ -564,6 +577,9 @@ def build_notification_reverse_reasoning_trace(
                 if isinstance(item, dict)
             ],
             "decisionAbstention": _dict(ai.get("decisionAbstention")),
+            "decisionReadiness": _text(ai.get("decisionReadiness"), 80),
+            "causalChain": [dict(item) for item in ai.get("causalChain") or [] if isinstance(item, dict)],
+            "alternativeAction": _dict(ai.get("alternativeAction")),
         },
         "aiExecution": {
             "status": _text(ai_execution.get("status"), 80) or "not-executed",

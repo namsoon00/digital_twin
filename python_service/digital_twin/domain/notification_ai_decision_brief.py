@@ -20,6 +20,7 @@ from .investment_strategy_guidance import merge_strategy_context
 
 AI_DECISION_BRIEF_VERSION = "investment-ai-decision-brief-v1"
 AI_DECISION_PROMPT_VERSION = "investment-ai-judge-v2"
+AI_DECISION_CONTRACT_VERSION = "notification-ai-decision-contract-v2"
 AI_PROFILE_STANDARD = "standard"
 AI_PROFILE_DEEP_RESEARCH = "deepResearch"
 VALID_REASONING_EFFORTS = {"low", "medium", "high", "max"}
@@ -81,7 +82,7 @@ def notification_ai_execution_profile(
         deep_reasons.append("high-review-level")
     if change_state in {"direction-changed", "action-changed", "new-condition", "envelope-changed"}:
         deep_reasons.append("material-decision-change")
-    if conflict_state in {"conflicted", "contested", "blocking"}:
+    if conflict_state in {"mixed", "conflicted", "contested", "blocking"}:
         deep_reasons.append("competing-evidence")
     if bool(news_impact.get("decisionChanging")):
         deep_reasons.append("decision-changing-external-evidence")
@@ -168,7 +169,11 @@ def notification_ai_decision_brief(
     relation = _mapping(decision_input.get("relationshipDatabaseInference"))
     subject = _mapping(canonical_relation.get("subject"))
     internal = _mapping(merged.get("notificationAiInternalData"))
-    portfolio_lifecycle = _mapping(merged.get("portfolioLifecycle"))
+    portfolio_lifecycle = _compact_portfolio_lifecycle(
+        merged.get("portfolioLifecycle"),
+        subject.get("symbol") or merged.get("rawSymbol") or merged.get("symbol"),
+        include_rebalance=message_type == "portfolioRebalanceReview",
+    )
     execution_profile = dict(profile or notification_ai_execution_profile(merged, settings))
     hypothesis_set = _mapping(relation.get("hypothesisSet"))
     research_cycle = _mapping(relation.get("researchCycle"))
@@ -176,6 +181,8 @@ def notification_ai_decision_brief(
 
     return {
         "schemaVersion": AI_DECISION_BRIEF_VERSION,
+        "decisionContractVersion": AI_DECISION_CONTRACT_VERSION,
+        "messageType": message_type,
         "executionProfile": execution_profile,
         "question": relation.get("investmentQuestion") or {
             "text": _clean(merged.get("investmentBrainQuestionText") or "현재 투자 행동과 다음 확인 조건을 판단한다."),
@@ -468,7 +475,11 @@ def _compact_company_context(value: object) -> Dict[str, object]:
     }
 
 
-def _compact_portfolio_lifecycle(value: object, subject_symbol: object) -> Dict[str, object]:
+def _compact_portfolio_lifecycle(
+    value: object,
+    subject_symbol: object,
+    include_rebalance: bool = False,
+) -> Dict[str, object]:
     lifecycle = _mapping(value)
     symbol = str(subject_symbol or "").upper().strip()
     mandate = _mapping(lifecycle.get("mandate"))
@@ -516,6 +527,18 @@ def _compact_portfolio_lifecycle(value: object, subject_symbol: object) -> Dict[
         for item in state.get("positions") or []
         if str(_mapping(item).get("symbol") or "").upper().strip() == symbol
     ]
+    all_rebalance_legs = [
+        item
+        for item in rebalance.get("legs") or []
+        if isinstance(item, dict)
+    ]
+    subject_rebalance_legs = all_rebalance_legs if include_rebalance else [
+        item
+        for item in all_rebalance_legs
+        if str(_mapping(item).get("symbol") or "").upper().strip() == symbol
+    ]
+    breach_keys = [str(value or "").strip() for value in rebalance_state.get("breachKeys") or [] if str(value or "").strip()]
+    rebalance_relevant = bool(include_rebalance or subject_rebalance_legs or breach_keys)
     return {
         **_selected_fields(lifecycle, ("status", "portfolioId")),
         "mandate": _selected_fields(mandate, PORTFOLIO_MANDATE_FIELDS),
@@ -546,11 +569,11 @@ def _compact_portfolio_lifecycle(value: object, subject_symbol: object) -> Dict[
                 6,
             ),
             "legs": _compact_dict_rows(
-                rebalance.get("legs"),
+                subject_rebalance_legs,
                 ("symbol", "side", "before_weight_pct", "after_weight_pct", "target_delta_pct", "rationale"),
-                6,
+                12 if include_rebalance else 1,
             ),
-        },
+        } if rebalance_relevant else {},
         "rebalanceState": _selected_fields(
             rebalance_state,
             (
@@ -560,7 +583,7 @@ def _compact_portfolio_lifecycle(value: object, subject_symbol: object) -> Dict[
                 "correlationPolicyDelta", "dataState", "observedAt",
                 "revision", "lastTransitionType",
             ),
-        ),
+        ) if rebalance_relevant else {},
         "portfolioState": {
             **_selected_fields(state, ("cashWeightPct", "positionCount", "observedAt")),
             "subjectPositions": subject_positions[:1],
@@ -591,6 +614,8 @@ def _critical_decision_brief(brief: Dict[str, object]) -> Dict[str, object]:
     temporal_windows = _compact_temporal_windows(current.get("temporalWindows") or [])
     return {
         "schemaVersion": brief.get("schemaVersion"),
+        "decisionContractVersion": brief.get("decisionContractVersion"),
+        "messageType": brief.get("messageType"),
         "executionProfile": brief.get("executionProfile"),
         "question": brief.get("question"),
         "subject": subject,
@@ -696,6 +721,7 @@ def _critical_decision_brief(brief: Dict[str, object]) -> Dict[str, object]:
             "portfolioLifecycle": _compact_portfolio_lifecycle(
                 lifecycle,
                 subject.get("symbol"),
+                include_rebalance=str(brief.get("messageType") or "") == "portfolioRebalanceReview",
             ),
         },
         "candidateOpinion": brief.get("candidateOpinion") or {},
@@ -768,6 +794,19 @@ def build_notification_ai_decision_prompt(
         "selectedHypothesisId": "입력 가설 ID 하나",
         "unresolvedQuestions": ["추가 조사 질문"],
         "epistemicSummary": "자료와 판단 한계",
+        "decisionReadiness": "ready|conditional|insufficient",
+        "causalChain": [{
+            "driver": "검증된 변화",
+            "channel": "매출|비용|현금흐름|가치평가|수급|위험 중 하나",
+            "expectedEffect": "행동 판단에 미치는 영향",
+            "evidenceIds": ["입력 근거 ID"],
+            "status": "supported|contested|unresolved",
+        }],
+        "alternativeAction": {
+            "action": "허용된 다른 행동",
+            "whyNotSelected": "현재 선택하지 않은 검증 가능한 이유",
+            "switchCondition": "그 행동으로 바뀌는 조건",
+        },
         "strategyGuide": {
             "actionMode": "실행 방식",
             "positionSizing": "제공된 한도 안의 규모",
@@ -799,6 +838,9 @@ def build_notification_ai_decision_prompt(
         "가치 계산과 가격·수급 확인을 요구할 때는 사용자가 공개 시장 데이터를 직접 찾게 하지 않는다. 시스템 수집기가 재무·목표가·가격·거래·투자자 수급 갱신 시 자동 재판단한다고 설명하고, 사용자에게는 개인 손실 허용선이나 선택적인 가치 가정처럼 개인 정책만 요청할 수 있다.",
         "기존 규칙 밖의 연결을 발견하면 strategyGuide.aiHypothesis에 확인 가능한 가설로 적되 현재 action의 근거와 분리한다.",
         "모든 입력 가설을 hypotheses에서 검토하고 반대 근거가 있는 가설을 생략하지 않는다.",
+        "causalChain은 headline 반복이 아니라 검증된 변화가 매출·비용·현금흐름·가치평가·수급·위험을 거쳐 행동에 연결되는 경로를 근거 ID와 함께 적는다.",
+        "BUY·ADD·TRIM·SELL을 고를 때 causalChain이 검증되지 않았으면 실행 행동을 선택하지 않는다.",
+        "alternativeAction에는 허용된 현실적 대안 하나와 전환 조건을 적어 현재 선택과 비교한다.",
         "같은 행동을 유지해도 무엇이 유지됐고 무엇이 달라졌는지 changeAnalysis에 구분한다.",
         "currentActionPlan, changeAnalysis, nextActionPlan은 서로 다른 내용을 쓴다.",
         "반대 근거, 누락 자료 영향, 무효화 조건, 다음 확인을 반드시 포함한다.",

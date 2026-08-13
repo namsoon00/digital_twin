@@ -780,9 +780,28 @@ class ExternalSignalCoreMixin:
 
     def limited_targets(self, signals: Dict[str, object], source: str, values: List[str], limit_key: str, fallback: int) -> List[str]:
         limit = self.int_setting(limit_key, fallback, 1)
-        if len(values) > limit:
-            self.status(signals, source, True, "bulk cap " + str(limit) + "/" + str(len(values)))
-        return values[:limit]
+        candidates = list(values or [])
+        if len(candidates) <= limit:
+            return candidates
+        cursor_key = "bulk-cursor:" + str(source or "").strip().lower() + ":" + str(limit_key or "")
+        try:
+            cursor = int(float(str(self.provider_state.get(cursor_key) or 0))) % len(candidates)
+        except (TypeError, ValueError):
+            cursor = 0
+        selected = [
+            candidates[(cursor + offset) % len(candidates)]
+            for offset in range(limit)
+        ]
+        self.provider_state[cursor_key] = (cursor + limit) % len(candidates)
+        self.status(
+            signals,
+            source,
+            True,
+            "bulk round-robin " + str(limit) + "/" + str(len(candidates)),
+            selectedTargets=list(selected),
+            nextCursor=self.provider_state[cursor_key],
+        )
+        return selected
 
     def status(self, signals: Dict[str, object], source: str, ok: bool, message: str, **metadata) -> None:
         row = {

@@ -347,6 +347,11 @@ class PortfolioAccountingService:
             if committed.get("rebalanceTransitionRecorded") and self.investment_domain_service:
                 self.investment_domain_service.dispatch_recorded(rebalance_event)
                 self.investment_domain_service.dispatch_recorded(rebalance_reasoning_event)
+            rebalance_review_scheduled = self.schedule_rebalance_review(
+                snapshot,
+                portfolio_id,
+                rebalance_state.to_dict(),
+            )
             return PortfolioLifecycleObservation(
                 portfolio_id=portfolio_id,
                 reconciliation=reconciliation,
@@ -365,7 +370,7 @@ class PortfolioAccountingService:
                 factual_notification_queued=bool(committed.get("notificationQueued")),
                 rebalance_state=rebalance_state.to_dict(),
                 rebalance_transition=transition.to_dict() if transition and committed.get("rebalanceTransitionRecorded") else {},
-            ).to_dict()
+            ).to_dict() | {"rebalanceReviewScheduled": rebalance_review_scheduled}
         return {
             "status": "checkpoint-conflict",
             "reason": "concurrent-snapshot-observation-retry-exhausted",
@@ -388,6 +393,78 @@ class PortfolioAccountingService:
         if not previous_at or not candidate_at:
             return True
         return (candidate_at - previous_at).total_seconds() >= self.portfolio_analysis_interval_seconds()
+
+    def rebalance_review_interval_days(self) -> int:
+        return max(1, min(31, int(number(
+            self.settings.get("portfolioRebalanceReviewIntervalDays")
+        ) or 7)))
+
+    def rebalance_review_window(self, observed_at: str) -> str:
+        observed = parse_timestamp(observed_at) or datetime.now(timezone.utc)
+        interval_seconds = self.rebalance_review_interval_days() * 86400
+        window = int(observed.timestamp()) // interval_seconds
+        return "d" + str(self.rebalance_review_interval_days()) + ":" + str(window)
+
+    def schedule_rebalance_review(
+        self,
+        snapshot: AccountSnapshot,
+        portfolio_id: str,
+        rebalance_state: Dict[str, object],
+    ) -> bool:
+        recorder = getattr(self.repository, "record_rebalance_review_window", None)
+        if not callable(recorder) or not self.investment_domain_service:
+            return False
+        symbols = sorted({
+            str(item.symbol or "").upper().strip()
+            for item in snapshot.positions or []
+            if not item.is_cash() and str(item.symbol or "").strip()
+        })
+        observed_at = str(snapshot.generated_at or utc_now_iso())
+        review_window = self.rebalance_review_window(observed_at)
+        source_event = self.investment_domain_service.rebalance_review_event(
+            portfolio_id,
+            snapshot.account_id,
+            review_window,
+            observed_at,
+            symbols,
+            rebalance_state,
+        )
+        fact_types = [
+            "PortfolioRiskSnapshot",
+            "ExposureSnapshot",
+            "RebalanceProposal",
+            "RebalanceState",
+        ]
+        reasoning_event = ontology_reasoning_requested_event(
+            source_event,
+            "portfolio-rebalance-review",
+            # A portfolio is one aggregate work item. Holdings remain the
+            # affected scope and must not fan out into N queue executions.
+            symbols=[],
+            changed_count=1,
+            observed_count=len(symbols),
+            fact_types=fact_types,
+            reason="정기 포트폴리오 리밸런싱 검토 주기가 도래해 현재 비중·현금·통화·위험 관계를 함께 재평가합니다.",
+            importance_gate="scheduled-portfolio-rebalance-review",
+            subject_kind="PORTFOLIO",
+            subject_id=portfolio_id,
+            affected_symbols=symbols,
+            subject_revision=str(rebalance_state.get("revision") or review_window),
+            subject_changed_fields=["portfolioRisk", "exposure", "rebalanceState"],
+            account_id=snapshot.account_id,
+            rebalance_review_window=review_window,
+        )
+        recorded = bool(recorder(
+            portfolio_id,
+            review_window,
+            observed_at,
+            source_event,
+            reasoning_event,
+        ))
+        if recorded:
+            self.investment_domain_service.dispatch_recorded(source_event)
+            self.investment_domain_service.dispatch_recorded(reasoning_event)
+        return recorded
 
     def decision_action_observations(self, episode) -> List[DecisionActionObservation]:
         if not episode or not callable(getattr(self.repository, "latest_decision_before", None)):
@@ -743,6 +820,11 @@ class PortfolioAccountingService:
             "rebalanceState": rebalance_state.to_dict(),
             "rebalanceTransition": transition.to_dict() if transition and transition_recorded else {},
             "portfolioDecisionCycle": cycle.to_dict(),
+            "rebalanceReviewScheduled": self.schedule_rebalance_review(
+                snapshot,
+                portfolio_id,
+                rebalance_state.to_dict(),
+            ),
         }
 
     def rebalance_transition_context(

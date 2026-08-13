@@ -994,6 +994,14 @@ class NewsCollectionRunner:
                     changed_count=len(ontology_symbols),
                     observed_count=len(observed_items),
                     fact_types=["ResearchEvidence", "NewsEvent"],
+                    fact_types_by_symbol={
+                        symbol: ["ResearchEvidence", "NewsEvent"]
+                        for symbol in ontology_symbols
+                    },
+                    changed_fields_by_symbol={
+                        symbol: ["external.researchEvidence"]
+                        for symbol in ontology_symbols
+                    },
                     reason="뉴스/리서치 근거 변경을 TypeDB ABox에 반영하고 네이티브 규칙 추론을 갱신합니다. 알림은 중요 변경 게이트를 별도로 통과해야 합니다.",
                     materiality_assessments=list(result.get("materialityAssessments") or []),
                     fact_revisions_by_symbol=dict(result.get("factRevisionsBySymbol") or {}),

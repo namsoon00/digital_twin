@@ -13,6 +13,7 @@ from ..domain.ai_inference_queue import AIInferenceRequest, AIInferenceResult
 from ..domain.investment_brain import decision_episode_from_context
 from ..domain.message_types import INVESTMENT_INSIGHT
 from ..domain.notification_ai_decision_brief import (
+    AI_DECISION_CONTRACT_VERSION,
     AI_DECISION_PROMPT_VERSION,
     build_notification_ai_decision_prompt,
     notification_ai_decision_brief,
@@ -90,6 +91,7 @@ class NotificationAIRequestEnqueuer:
         context.setdefault("accountId", job.account_id)
         context.setdefault("accountLabel", job.account_label)
         context.setdefault("jobId", job.job_id)
+        context["notificationAiDecisionContractVersion"] = AI_DECISION_CONTRACT_VERSION
         if job.message_type == INVESTMENT_INSIGHT:
             context = context_with_previous_investment_decision(
                 context,

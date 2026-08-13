@@ -9,6 +9,7 @@ from ..domain.events import (
     INVESTMENT_PERFORMANCE_ATTRIBUTED,
     PORTFOLIO_LEDGER_RECORDED,
     PORTFOLIO_REBALANCE_PROPOSED,
+    PORTFOLIO_REBALANCE_REVIEW_DUE,
     PORTFOLIO_REBALANCE_RESOLVED,
     PORTFOLIO_RISK_OBSERVED,
     TRADE_EXECUTION_RECORDED,
@@ -176,6 +177,33 @@ class InvestmentDomainService:
                 "materialSnapshotChange": True,
             },
             "portfolio-rebalance:" + current.portfolio_id,
+        )
+
+    def rebalance_review_event(
+        self,
+        portfolio_id: str,
+        account_id: str,
+        review_window: str,
+        observed_at: str,
+        symbols,
+        rebalance_state,
+    ):
+        return investment_lifecycle_event(
+            PORTFOLIO_REBALANCE_REVIEW_DUE,
+            portfolio_id,
+            {
+                "portfolioId": portfolio_id,
+                "accountId": account_id,
+                "rebalanceReviewWindow": review_window,
+                "sourceObservedAt": observed_at,
+                "symbols": sorted({
+                    str(symbol or "").upper().strip()
+                    for symbol in symbols or []
+                    if str(symbol or "").strip()
+                }),
+                "rebalanceState": dict(rebalance_state or {}),
+            },
+            "portfolio-rebalance-review:" + portfolio_id + ":" + review_window,
         )
 
     def save_action_plan(self, plan: ActionPlan) -> ActionPlan:

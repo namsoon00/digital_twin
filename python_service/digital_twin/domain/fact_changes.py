@@ -1,7 +1,7 @@
 import hashlib
 import json
 import math
-from typing import Dict, Iterable, List, Optional
+from typing import Dict, Iterable, List, Mapping, Optional, Set
 
 
 
@@ -52,6 +52,141 @@ MARKET_FACT_FIELDS = (
     "marketSessionLabel",
     "realTime",
 )
+
+
+# Collection adapters use provider/domain class names while ABox persistence
+# is routed by stable factual families. Keep that translation in one domain
+# contract so a new transport name cannot silently reopen every ABox scope.
+FACT_CHANGE_CONTRACT_VERSION = "fact-change-contract-v2"
+
+FACT_TYPE_SCOPE_FAMILIES = {
+    "marketquote": {"market"},
+    "pricemetric": {"market"},
+    "technicalindicator": {"temporal"},
+    "tradeflow": {"flow"},
+    "executionflow": {"flow"},
+    "investorflow": {"flow"},
+    "orderbook": {"flow"},
+    "researchevidence": {"evidence"},
+    "newsarticle": {"evidence"},
+    "newsevent": {"evidence"},
+    "newsarticleanalysis": {"evidence"},
+    "evidencelifecycle": {"evidence"},
+    "disclosure": {"evidence"},
+    "disclosureevent": {"evidence"},
+    "verifiedclaim": {"evidence"},
+    "verificationrun": {"evidence"},
+    "investmentcalendarevent": {"temporal", "evidence"},
+    "account": {"portfolio"},
+    "portfolio": {"portfolio"},
+    "position": {"position", "portfolio"},
+    "portfoliosnapshot": {"position", "portfolio"},
+    "portfolioactivityepisode": {"position", "portfolio", "episode"},
+    "portfoliostatesnapshot": {"position", "portfolio"},
+    "decisionactionobservation": {"position", "portfolio", "episode"},
+    "portfoliorisksnapshot": {"portfolio", "exposure"},
+    "positionriskmetric": {"position", "exposure"},
+    "exposuresnapshot": {"portfolio", "exposure"},
+    "rebalanceproposal": {"portfolio", "exposure"},
+    "rebalancescenario": {"portfolio", "exposure"},
+    "rebalancestate": {"portfolio", "exposure"},
+    "dataquality": {"quality"},
+    "fxrate": {"macro-fx"},
+    "interestrate": {"macro-rates"},
+    "macroindicator": {"macro-market"},
+    "marketproxy": {"macro-market"},
+    "marketproxyinstrument": {"macro-market"},
+    "cryptomarket": {"macro-crypto"},
+    "financialfact": {"fundamental"},
+    "financialstatement": {"fundamental"},
+    "companyprofile": {"profile"},
+    "governancechange": {"governance"},
+    "capitalstructurechange": {"capital"},
+    "valuationobservation": {"company-valuation"},
+}
+
+KNOWN_SCOPE_FAMILIES = {
+    "state",
+    "profile",
+    "position",
+    "market",
+    "flow",
+    "temporal",
+    "evidence",
+    "quality",
+    "valuation",
+    "company-valuation",
+    "fundamental",
+    "governance",
+    "capital",
+    "exposure",
+    "link",
+    "macro",
+    "macro-market",
+    "macro-fx",
+    "macro-rates",
+    "macro-crypto",
+    "portfolio",
+    "policy",
+    "reference",
+    "episode",
+}
+
+
+def normalized_fact_type(value: object) -> str:
+    return "".join(character for character in str(value or "").lower() if character.isalnum())
+
+
+def scope_families_for_fact_types(fact_types: Iterable[object]) -> List[str]:
+    """Translate source fact names to stable ABox families."""
+    families: Set[str] = set()
+    for fact_type in fact_types or []:
+        text = str(fact_type or "").strip().lower()
+        if text in KNOWN_SCOPE_FAMILIES:
+            families.add(text)
+        families.update(FACT_TYPE_SCOPE_FAMILIES.get(normalized_fact_type(fact_type), set()))
+    return sorted(families)
+
+
+def unclassified_fact_types(fact_types: Iterable[object]) -> List[str]:
+    """Return transport fact names that have no declared ABox dependency."""
+    return sorted({
+        str(fact_type or "").strip()
+        for fact_type in fact_types or []
+        if str(fact_type or "").strip()
+        and str(fact_type or "").strip().lower() not in KNOWN_SCOPE_FAMILIES
+        and normalized_fact_type(fact_type) not in FACT_TYPE_SCOPE_FAMILIES
+    })
+
+
+def fact_change_contract(
+    fact_types: Iterable[object],
+    fact_types_by_symbol: Mapping[str, Iterable[object]] = None,
+) -> Dict[str, object]:
+    """Build the auditable routing contract carried by a reasoning event."""
+    clean_types = sorted({str(value or "").strip() for value in fact_types or [] if str(value or "").strip()})
+    by_symbol = {}
+    unclassified_by_symbol = {}
+    for raw_symbol, values in dict(fact_types_by_symbol or {}).items():
+        symbol = str(raw_symbol or "").upper().strip()
+        if not symbol:
+            continue
+        families = scope_families_for_fact_types(values)
+        unknown = unclassified_fact_types(values)
+        if families:
+            by_symbol[symbol] = families
+        if unknown:
+            unclassified_by_symbol[symbol] = unknown
+    unknown = unclassified_fact_types(clean_types)
+    return {
+        "version": FACT_CHANGE_CONTRACT_VERSION,
+        "status": "blocked-unclassified" if unknown or unclassified_by_symbol else "ready",
+        "factTypes": clean_types,
+        "scopeFamilies": scope_families_for_fact_types(clean_types),
+        "scopeFamiliesBySymbol": by_symbol,
+        "unclassifiedFactTypes": unknown,
+        "unclassifiedFactTypesBySymbol": unclassified_by_symbol,
+    }
 
 
 def canonical_fact_payload(payload: Dict[str, object], ignore_keys: Iterable[str] = None) -> Dict[str, object]:

@@ -59,6 +59,20 @@ def notification_context():
             "hypothesisComparisonState": "completed",
             "hypothesisSelectionSource": "ai-comparison",
             "unresolvedQuestions": ["공시 원문에서 발행 조건을 확인합니다."],
+            "decisionReadiness": "ready",
+            "causalChain": [{
+                "driver": "신규 자금조달 공시와 가격 약화",
+                "channel": "risk",
+                "expectedEffect": "보유 위험을 높임",
+                "evidenceIds": ["evidence:disclosure"],
+                "status": "supported",
+            }],
+            "alternativeAction": {
+                "action": "HOLD",
+                "actionLabel": "보유",
+                "whyNotSelected": "공시 위험이 아직 해소되지 않았습니다.",
+                "switchCondition": "공시 위험이 해소되고 가격이 회복되면 보유로 바꿉니다.",
+            },
             "hypotheses": [
                 {"hypothesisId": "hypothesis:risk", "verdict": "supported", "reasoning": "공시와 하락 추세가 같은 위험 방향입니다."},
                 {"hypothesisId": "hypothesis:support", "verdict": "weakened", "reasoning": "호가 우위는 단기 신호여서 중기 위험을 뒤집기 부족합니다."},
@@ -184,6 +198,9 @@ class NotificationReverseReasoningTests(unittest.TestCase):
         self.assertEqual("generation:20260723:005930", trace["snapshot"]["inferenceGenerationId"])
         self.assertEqual("분할축소", trace["finalDecision"]["actionLabel"])
         self.assertTrue(trace["aiComparison"]["changed"])
+        self.assertEqual("ready", trace["aiComparison"]["decisionReadiness"])
+        self.assertEqual("evidence:disclosure", trace["aiComparison"]["causalChain"][0]["evidenceIds"][0])
+        self.assertEqual("HOLD", trace["aiComparison"]["alternativeAction"]["action"])
         self.assertEqual("hypothesis:risk", trace["selectedHypothesis"]["hypothesisId"])
         self.assertTrue(trace["matchedRules"][0]["selected"])
         self.assertEqual("holding", trace["inferenceTraces"][0]["conditions"][0]["label"])
@@ -288,6 +305,8 @@ class NotificationReverseReasoningTests(unittest.TestCase):
 
         self.assertEqual(sorted(positions), positions)
         self.assertNotIn("slowRules", render_source)
+        self.assertNotIn("decisionGuardrails.slice", render_source)
+        self.assertIn("var causalChain = Array.isArray(comparison.causalChain)", render_source)
         self.assertIn("state.notificationJobDetails[key] || notificationJobByKey(key)", source)
         self.assertIn('state.workDetailLayer.type === "notification-job"', source)
         self.assertIn('renderNotificationDetailMetric("자료 상태"', source)

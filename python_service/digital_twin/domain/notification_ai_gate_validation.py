@@ -662,6 +662,101 @@ def normalized_hypothesis_comparison(
     }
 
 
+def normalized_causal_chain(
+    context: Dict[str, object],
+    payload: Dict[str, object],
+) -> List[Dict[str, object]]:
+    hypothesis_set = hypothesis_context_payload(context)
+    allowed_evidence_ids = set()
+    for hypothesis in hypothesis_set.get("hypotheses") or []:
+        if not isinstance(hypothesis, dict):
+            continue
+        for key in ("supportingEvidenceIds", "counterEvidenceIds"):
+            allowed_evidence_ids.update(
+                str(value or "").strip()
+                for value in hypothesis.get(key) or []
+                if str(value or "").strip()
+            )
+
+    # Some rule paths carry evidence rows directly instead of copying their
+    # ids into the hypothesis envelope. Traverse only explicit id fields in
+    # the immutable input context; arbitrary model text is never admitted.
+    pending = [context]
+    visited = 0
+    while pending and visited < 5000:
+        current = pending.pop()
+        visited += 1
+        if isinstance(current, dict):
+            for key, value in current.items():
+                normalized_key = str(key or "").replace("_", "").lower()
+                if normalized_key == "evidenceid":
+                    evidence_id = str(value or "").strip()
+                    if evidence_id:
+                        allowed_evidence_ids.add(evidence_id)
+                elif normalized_key in {"supportingevidenceids", "counterevidenceids"}:
+                    if isinstance(value, (list, tuple, set)):
+                        allowed_evidence_ids.update(
+                            str(item or "").strip()
+                            for item in value
+                            if str(item or "").strip()
+                        )
+                elif isinstance(value, (dict, list)):
+                    pending.append(value)
+        elif isinstance(current, list):
+            pending.extend(item for item in current if isinstance(item, (dict, list)))
+    rows = []
+    for item in payload.get("causalChain") or payload.get("causal_chain") or []:
+        if not isinstance(item, dict):
+            continue
+        driver = user_friendly_ai_text(item.get("driver") or "", 220)
+        channel = user_friendly_ai_text(item.get("channel") or "", 80)
+        expected_effect = user_friendly_ai_text(
+            item.get("expectedEffect") or item.get("expected_effect") or "",
+            260,
+        )
+        if not driver or not channel or not expected_effect:
+            continue
+        evidence_ids = [
+            str(value or "").strip()
+            for value in item.get("evidenceIds") or item.get("evidence_ids") or []
+            if str(value or "").strip()
+            and str(value or "").strip() in allowed_evidence_ids
+        ][:12]
+        status = str(item.get("status") or "unresolved").strip().lower()
+        if status not in {"supported", "contested", "unresolved"}:
+            status = "unresolved"
+        rows.append({
+            "driver": driver,
+            "channel": channel,
+            "expectedEffect": expected_effect,
+            "evidenceIds": evidence_ids,
+            "status": status,
+        })
+        if len(rows) >= 5:
+            break
+    return rows
+
+
+def normalized_alternative_action(
+    context: Dict[str, object],
+    payload: Dict[str, object],
+) -> Dict[str, object]:
+    raw = payload.get("alternativeAction") or payload.get("alternative_action") or {}
+    raw = raw if isinstance(raw, dict) else {}
+    action = normalized_action_for_target(context, str(raw.get("action") or "").upper())
+    action = normalized_action_for_rulebox_policy(context, action)
+    why = user_friendly_ai_text(raw.get("whyNotSelected") or raw.get("why_not_selected") or "", 260)
+    switch = user_friendly_ai_text(raw.get("switchCondition") or raw.get("switch_condition") or "", 260)
+    if action not in VALID_ACTIONS or not why or not switch:
+        return {}
+    return {
+        "action": action,
+        "actionLabel": ACTION_LABELS.get(action, action),
+        "whyNotSelected": why,
+        "switchCondition": switch,
+    }
+
+
 def normalized_hypothesis_reviews(
     context: Dict[str, object],
     payload: Dict[str, object] = None,
@@ -1718,6 +1813,8 @@ def build_notification_ai_gate_prompt(
         "입력된 TypeDB 사실, 검증 완료된 조사 주장, 제공된 출처 외의 시장 사건·실적·수치·업계 상식은 판단 근거로 새로 만들지 않는다. 입력에 없는 정보가 유용해 보이면 부족 데이터 또는 다음 조사 항목으로만 적고, 실제 사실처럼 단정하지 않는다.",
         "researchCycle이 있으면 investmentJudgmentEligible=true이고 reasoningRefreshed=true인 verifiedClaims만 새 판단 근거로 사용한다. rejectedClaims와 unappliedVerifiedClaims는 데이터 품질·재추론 실패를 설명하는 데만 사용하고 투자 방향의 근거로 승격하지 않는다. changedEvidenceCount가 0이면 기존 TypeDB 추론 세대를 새로운 사실처럼 해석하지 않는다.",
         "hypotheses 배열에 모든 입력 규칙 가설을 정확히 한 번씩 빠짐없이 평가하고 selectedHypothesisId에는 그중 최종 action을 가장 잘 설명하는 가설 ID 하나를 그대로 쓴다. 입력에 없는 ID, 안전 제한 ID, 중복 가설 행을 쓰면 전체 비교가 무효가 된다.",
+        "BUY·ADD·TRIM·SELL을 선택할 때는 decisionReadiness=ready로 쓰고, causalChain에 실제 입력 evidenceId가 연결된 supported 경로를 하나 이상 적는다. 이 조건이 없으면 실행 행동을 선택하지 않는다.",
+        "alternativeAction에는 허용된 현실적 대안 하나와 현재 선택하지 않은 이유, 그 대안으로 바뀌는 조건을 적는다.",
         "unresolvedQuestions에는 결론을 바꿀 수 있지만 아직 답하지 못한 질문만 쓴다. epistemicSummary에는 무엇을 알고, 무엇을 모르며, 어떤 반증이 남았는지 한 문단으로 쓴다.",
         "summary와 opinion의 첫 문장은 관계 규칙 이름이나 상태 이름을 반복하지 말고 AI가 독립적으로 고른 최종 판단과 그 이유여야 한다.",
         "currentActionPlan, changeAnalysis, nextActionPlan은 사용자 알림의 서로 다른 세 영역이다. 세 필드에 같은 문장을 바꿔 쓰지 않는다.",
@@ -1781,6 +1878,19 @@ def build_notification_ai_gate_prompt(
             "selectedHypothesisId": "one input hypothesis id",
             "unresolvedQuestions": ["string"],
             "epistemicSummary": "string",
+            "decisionReadiness": "ready|conditional|insufficient",
+            "causalChain": [{
+                "driver": "verified change",
+                "channel": "revenue|cost|cash-flow|valuation|flow|risk",
+                "expectedEffect": "decision effect",
+                "evidenceIds": ["input evidence id"],
+                "status": "supported|contested|unresolved"
+            }],
+            "alternativeAction": {
+                "action": "BUY|ADD|HOLD|TRIM|SELL|AVOID",
+                "whyNotSelected": "string",
+                "switchCondition": "string"
+            },
             "strategyGuide": {
                 "actionMode": "string",
                 "positionSizing": "string",
@@ -1916,6 +2026,15 @@ def validated_response_from_payload(
     unreviewed_hypothesis_ids = list(hypothesis_comparison.get("unreviewedHypothesisIds") or [])
     decision_guardrails = list(hypothesis_comparison.get("decisionGuardrails") or [])
     decision_abstention = dict(hypothesis_comparison.get("decisionAbstention") or {})
+    decision_readiness = str(
+        payload.get("decisionReadiness")
+        or payload.get("decision_readiness")
+        or "conditional"
+    ).strip().lower()
+    if decision_readiness not in {"ready", "conditional", "insufficient"}:
+        decision_readiness = "conditional"
+    causal_chain = normalized_causal_chain(context, payload)
+    alternative_action = normalized_alternative_action(context, payload)
     if invalid_hypothesis_ids:
         warnings.append("AI 응답에 현재 TypeDB 가설 집합에 없는 가설 ID가 있어 무시했습니다.")
     if invalid_evidence_ids:
@@ -1936,6 +2055,34 @@ def validated_response_from_payload(
         review_level = "check"
         review_label = REVIEW_LEVEL_LABELS["check"]
         append_unique_text(validation_reasons, "경쟁 가설 비교가 완료되지 않아 선택 가설 없이 판단을 유보했습니다.", 180)
+    executable_actions = {"BUY", "ADD", "TRIM", "SELL"}
+    supported_causal_path = any(
+        item.get("status") == "supported" and item.get("evidenceIds")
+        for item in causal_chain
+    )
+    strict_causal_contract = str(
+        context.get("notificationAiDecisionContractVersion") or ""
+    ).strip() == "notification-ai-decision-contract-v2"
+    if strict_causal_contract and action in executable_actions and (
+        decision_readiness != "ready" or not supported_causal_path
+    ):
+        warnings.append("실행 행동의 검증된 인과 경로가 부족해 실행 의견을 보류로 낮췄습니다.")
+        action = normalized_action_for_rulebox_policy(
+            context,
+            normalized_action_for_target(context, "HOLD"),
+        )
+        summary = "검증된 인과 경로가 충분하지 않아 지금은 실행 판단을 유보합니다."
+        opinion = "근거가 실제 실적·현금흐름·수급 또는 위험 변화로 이어지는지 확인한 뒤 다시 판단합니다."
+        validation_state = "conditional"
+        validation_label = VALIDATION_STATE_LABELS["conditional"]
+        decision_readiness = "conditional"
+        review_level = "check"
+        review_label = REVIEW_LEVEL_LABELS["check"]
+        append_unique_text(
+            validation_reasons,
+            "실행 행동에는 근거 ID가 연결된 supported 인과 경로와 ready 상태가 필요합니다.",
+            180,
+        )
     disagreement = disagreement_reason_text(precomputed_action, action, payload, evidence, counter)
     if disagreement:
         append_unique_text(counter, disagreement, 180)
@@ -2013,6 +2160,9 @@ def validated_response_from_payload(
         decision_abstention=decision_abstention,
         unresolved_questions=unresolved_questions,
         epistemic_summary=epistemic_summary,
+        decision_readiness=decision_readiness,
+        causal_chain=causal_chain,
+        alternative_action=alternative_action,
         source=source,
         raw_response=raw_response,
     )

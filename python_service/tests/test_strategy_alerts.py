@@ -102,6 +102,28 @@ class StrategyAlertTests(unittest.TestCase):
         self.assertEqual("", event.symbol)
         self.assertEqual(["graph.portfolio.risk_policy.review.v1"], event.metadata["portfolioActiveRelationRules"])
 
+    def test_scheduled_rebalance_review_is_separate_and_emits_without_emergency_rule(self):
+        context = {
+            "activeRules": [],
+            "decision": {"notificationSeverity": "NORMAL"},
+            "decisionState": {"dataState": "partial", "changeState": "scheduled"},
+            "executionPlan": {"nextChecks": ["전체 비중과 현금 정책 확인"]},
+        }
+
+        event = self.harness.portfolio_ontology_event(
+            self.snapshot,
+            context,
+            scheduled_review=True,
+            review_window="d7:123",
+        )
+
+        self.assertIsNotNone(event)
+        self.assertEqual("portfolioRebalanceReview", event.rule)
+        self.assertEqual("WATCH", event.severity)
+        self.assertTrue(event.metadata["scheduledRebalanceReview"])
+        self.assertEqual("d7:123", event.metadata["rebalanceReviewWindow"])
+        self.assertIn("d7:123", event.key)
+
     def test_crypto_alert_requires_fresh_data_materialized_rule_and_transition(self):
         self.snapshot.external_signals = {
             "cryptoFreshness": {"status": "fresh", "fetchedAt": "2026-08-01T00:00:00Z", "ageMinutes": 2},

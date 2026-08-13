@@ -437,6 +437,66 @@ class MutablePortfolioTimeSeriesStore(MemoryPortfolioTimeSeriesStore):
 
 
 class PortfolioLifecycleServiceTests(unittest.TestCase):
+    def test_weekly_rebalance_review_window_is_recorded_once_with_portfolio_reasoning_contract(self):
+        class ReviewRepository:
+            def __init__(self):
+                self.windows = set()
+                self.recorded = []
+
+            def record_rebalance_review_window(
+                self,
+                portfolio_id,
+                review_window,
+                observed_at,
+                domain_event,
+                reasoning_event,
+            ):
+                key = (portfolio_id, review_window)
+                if key in self.windows:
+                    return False
+                self.windows.add(key)
+                self.recorded.append((observed_at, domain_event, reasoning_event))
+                return True
+
+        repository = ReviewRepository()
+        domain_service = InvestmentDomainService(repository, EventBus())
+        service = PortfolioAccountingService(
+            repository,
+            investment_domain_service=domain_service,
+            settings={"portfolioRebalanceReviewIntervalDays": 7},
+        )
+        snapshot = live_snapshot()
+        rebalance_state = {"revision": "rebalance-state:one", "breachKeys": []}
+
+        first = service.schedule_rebalance_review(snapshot, "portfolio:main", rebalance_state)
+        second = service.schedule_rebalance_review(snapshot, "portfolio:main", rebalance_state)
+
+        self.assertTrue(first)
+        self.assertFalse(second)
+        self.assertEqual(1, len(repository.recorded))
+        _observed_at, source_event, reasoning_event = repository.recorded[0]
+        self.assertEqual("portfolio.rebalance_review_due", source_event.name)
+        self.assertEqual("portfolio-rebalance-review", reasoning_event.payload["trigger"])
+        self.assertEqual("PORTFOLIO", reasoning_event.payload["subjectKind"])
+        self.assertEqual([], reasoning_event.payload.get("symbols") or [])
+        self.assertEqual(
+            sorted(position.symbol for position in snapshot.positions if not position.is_cash()),
+            reasoning_event.payload["affectedSymbols"],
+        )
+        self.assertEqual("ready", reasoning_event.payload["factChangeContract"]["status"])
+        self.assertEqual(
+            ["exposure", "portfolio"],
+            reasoning_event.payload["factChangeContract"]["scopeFamilies"],
+        )
+        self.assertIn(
+            "CREATE TABLE IF NOT EXISTS portfolio_rebalance_review_windows",
+            "\n".join(MYSQL_SCHEMA),
+        )
+        mailbox_entries = durable_mailbox_entries(reasoning_event)
+        self.assertEqual(1, len(mailbox_entries))
+        self.assertEqual("PORTFOLIO", mailbox_entries[0]["workClass"])
+        self.assertEqual("", mailbox_entries[0]["symbol"])
+
     def test_portfolio_risk_keeps_cash_as_zero_return_weight(self):
         risk = portfolio_risk_snapshot(
             "portfolio:main",

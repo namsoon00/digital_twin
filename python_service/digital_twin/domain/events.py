@@ -4,6 +4,7 @@ from dataclasses import asdict, dataclass, field
 from typing import Dict, Iterable, List, Mapping
 
 from .accounts import AccountConfig
+from .fact_changes import fact_change_contract
 from .portfolio import AccountSnapshot, AlertEvent, utc_now_iso
 
 
@@ -60,6 +61,7 @@ INVESTMENT_MANDATE_CHANGED = "investment.mandate_changed"
 PORTFOLIO_LEDGER_RECORDED = "portfolio.ledger_recorded"
 PORTFOLIO_REBALANCE_PROPOSED = "portfolio.rebalance_proposed"
 PORTFOLIO_REBALANCE_RESOLVED = "portfolio.rebalance_resolved"
+PORTFOLIO_REBALANCE_REVIEW_DUE = "portfolio.rebalance_review_due"
 PORTFOLIO_RISK_OBSERVED = "portfolio.risk_observed"
 INVESTMENT_ACTION_PLAN_PROPOSED = "investment.action_plan_proposed"
 TRADE_EXECUTION_RECORDED = "trade.execution_recorded"
@@ -196,6 +198,7 @@ def investment_lifecycle_event(
         PORTFOLIO_LEDGER_RECORDED,
         PORTFOLIO_REBALANCE_PROPOSED,
         PORTFOLIO_REBALANCE_RESOLVED,
+        PORTFOLIO_REBALANCE_REVIEW_DUE,
         PORTFOLIO_RISK_OBSERVED,
         INVESTMENT_ACTION_PLAN_PROPOSED,
         TRADE_EXECUTION_RECORDED,
@@ -592,6 +595,7 @@ def compact_ontology_reasoning_request_payload_for_storage(payload: Mapping[str,
         "materialityRole": 96,
         "researchRunId": 191,
         "accountId": 191,
+        "rebalanceReviewWindow": 80,
         "subjectKind": 40,
         "subjectId": 191,
         "subjectRevision": 191,
@@ -678,6 +682,27 @@ def compact_ontology_reasoning_request_payload_for_storage(payload: Mapping[str,
         value = source.get(key)
         if isinstance(value, Mapping):
             compact[key] = dict(value)
+    contract = source.get("factChangeContract")
+    if isinstance(contract, Mapping):
+        compact["factChangeContract"] = {
+            "version": _event_text(contract.get("version"), 64),
+            "status": _event_text(contract.get("status"), 64),
+            "factTypes": _event_text_list(contract.get("factTypes"), limit=20, item_limit=96),
+            "scopeFamilies": _event_text_list(contract.get("scopeFamilies"), limit=30, item_limit=64),
+            "scopeFamiliesBySymbol": {
+                _event_text(symbol, 64).upper(): _event_text_list(values, limit=30, item_limit=64)
+                for symbol, values in dict(contract.get("scopeFamiliesBySymbol") or {}).items()
+                if _event_text(symbol, 64)
+            },
+            "unclassifiedFactTypes": _event_text_list(
+                contract.get("unclassifiedFactTypes"), limit=20, item_limit=96
+            ),
+            "unclassifiedFactTypesBySymbol": {
+                _event_text(symbol, 64).upper(): _event_text_list(values, limit=20, item_limit=96)
+                for symbol, values in dict(contract.get("unclassifiedFactTypesBySymbol") or {}).items()
+                if _event_text(symbol, 64)
+            },
+        }
     return compact
 
 
@@ -1150,6 +1175,7 @@ def ontology_reasoning_requested_event(
     subject_revision: str = "",
     subject_changed_fields: Iterable[str] = None,
     account_id: str = "",
+    rebalance_review_window: str = "",
 ) -> DomainEvent:
     clean_symbols = sorted(set(str(symbol or "").upper().strip() for symbol in (symbols or []) if str(symbol or "").strip()))
     clean_observation_followups = sorted({
@@ -1203,6 +1229,7 @@ def ontology_reasoning_requested_event(
             })
             if clean_values:
                 symbol_fact_types[symbol] = clean_values[:20]
+    change_contract = fact_change_contract(clean_fact_types, symbol_fact_types)
     source_observed_at = next((
         str(source_payload.get(key) or "").strip()
         for key in ["sourceObservedAt", "sourceAsOf", "observedAt", "generatedAt", "collectedAt"]
@@ -1244,6 +1271,9 @@ def ontology_reasoning_requested_event(
             # making an unrelated research or flow family look changed for
             # every mailbox slot. It is scheduling metadata only.
             "factTypesBySymbol": symbol_fact_types,
+            # The contract is routing provenance only. It prevents an unknown
+            # provider class name from silently widening a target projection.
+            "factChangeContract": change_contract,
             "reason": str(reason or ""),
             # Scheduling uses the original vendor/collection observation time,
             # never the delayed worker publish time, to reject stale data
@@ -1265,6 +1295,11 @@ def ontology_reasoning_requested_event(
             "changedFieldsBySymbol": changed_fields,
             "researchRunId": str(source_payload.get("runId") or ""),
             "accountId": str(account_id or source_payload.get("accountId") or ""),
+            "rebalanceReviewWindow": str(
+                rebalance_review_window
+                or source_payload.get("rebalanceReviewWindow")
+                or ""
+            )[:80],
             "changedEvidenceIds": changed_evidence_ids[:200],
             "evidenceDeltas": deltas[:200],
             "reasoningHandoff": handoff,
@@ -1300,6 +1335,8 @@ def research_evidence_lifecycle_events(payload: Dict[str, object]) -> List[Domai
             changed_count=len(symbols),
             observed_count=int(values.get("lifecycleChangedCount") or 0),
             fact_types=["ResearchEvidence", "EvidenceLifecycle"],
+            fact_types_by_symbol={symbol: ["ResearchEvidence", "EvidenceLifecycle"] for symbol in symbols},
+            changed_fields_by_symbol={symbol: ["external.researchEvidence"] for symbol in symbols},
             reason="유효 리서치 근거가 만료 또는 철회되어 TypeDB ABox와 네이티브 규칙 추론을 갱신합니다.",
             fact_revisions_by_symbol=dict(values.get("factRevisionsBySymbol") or {}),
             evidence_deltas=list(values.get("evidenceDeltas") or []),

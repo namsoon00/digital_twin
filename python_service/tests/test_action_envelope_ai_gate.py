@@ -114,6 +114,71 @@ class ActionEnvelopeAiGateTests(unittest.TestCase):
         self.assertEqual("BUY", response.action)
         self.assertTrue(any("진입 조건" in item for item in response.validation_warnings))
 
+    def test_v2_execution_contract_accepts_only_input_bound_supported_causal_path(self):
+        context = entry_context()
+        context["notificationAiDecisionContractVersion"] = "notification-ai-decision-contract-v2"
+        context["ontologyRelationContext"]["activeRules"] = [{
+            "ruleId": "graph.entry.confirmed.v1",
+            "evidence": [{"evidenceId": "evidence:price-volume:NVDA"}],
+        }]
+
+        response = validated_response_from_payload(context, {
+            "action": "BUY",
+            "summary": "가격 회복과 거래 증가가 함께 확인됐습니다.",
+            "opinion": "소액 진입을 검토합니다.",
+            "evidence": ["가격과 거래가 함께 회복됐습니다."],
+            "counterEvidence": ["정규장 지속성은 더 확인해야 합니다."],
+            "nextChecks": ["다음 정규장 거래 지속성"],
+            "decisionReadiness": "ready",
+            "causalChain": [{
+                "driver": "가격 회복과 거래 증가",
+                "channel": "flow",
+                "expectedEffect": "진입 조건의 신뢰도를 높임",
+                "evidenceIds": ["evidence:price-volume:NVDA"],
+                "status": "supported",
+            }],
+            "alternativeAction": {
+                "action": "HOLD",
+                "whyNotSelected": "현재 진입 지지 근거가 확인됐습니다.",
+                "switchCondition": "거래 증가가 사라지면 관심 유지로 바꿉니다.",
+            },
+        })
+
+        self.assertEqual("BUY", response.action)
+        self.assertEqual("ready", response.decision_readiness)
+        self.assertEqual(["evidence:price-volume:NVDA"], response.causal_chain[0]["evidenceIds"])
+        self.assertEqual("HOLD", response.alternative_action["action"])
+
+    def test_v2_execution_contract_rejects_a_hallucinated_causal_evidence_id(self):
+        context = entry_context()
+        context["notificationAiDecisionContractVersion"] = "notification-ai-decision-contract-v2"
+        context["ontologyRelationContext"]["activeRules"] = [{
+            "ruleId": "graph.entry.confirmed.v1",
+            "evidence": [{"evidenceId": "evidence:price-volume:NVDA"}],
+        }]
+
+        response = validated_response_from_payload(context, {
+            "action": "BUY",
+            "summary": "진입을 검토합니다.",
+            "opinion": "소액 진입을 검토합니다.",
+            "evidence": ["가격 회복 조건이 확인됐습니다."],
+            "counterEvidence": [],
+            "nextChecks": ["다음 정규장 확인"],
+            "decisionReadiness": "ready",
+            "causalChain": [{
+                "driver": "확인되지 않은 성장 가정",
+                "channel": "revenue",
+                "expectedEffect": "매출 증가",
+                "evidenceIds": ["evidence:invented"],
+                "status": "supported",
+            }],
+        })
+
+        self.assertEqual("HOLD", response.action)
+        self.assertEqual("conditional", response.decision_readiness)
+        self.assertEqual([], response.causal_chain[0]["evidenceIds"])
+        self.assertTrue(any("인과 경로" in item for item in response.validation_warnings))
+
     def test_ai_may_lower_entry_eligibility_with_explicit_counter_evidence(self):
         response = validated_response_from_payload(
             entry_context(),

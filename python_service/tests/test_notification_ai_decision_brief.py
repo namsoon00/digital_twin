@@ -3,6 +3,7 @@ import unittest
 
 from digital_twin.application.notification_ai_decision_context import NotificationAIDecisionContextEnricher
 from digital_twin.domain.notification_ai_decision_brief import (
+    AI_DECISION_CONTRACT_VERSION,
     AI_DECISION_BRIEF_VERSION,
     build_notification_ai_decision_prompt,
     notification_ai_decision_brief,
@@ -126,18 +127,31 @@ class NotificationAIDecisionBriefTests(unittest.TestCase):
         self.assertEqual("max", deep["reasoningEffort"])
         self.assertGreater(deep["maxPromptBytes"], standard["maxPromptBytes"])
 
+    def test_mixed_competing_evidence_uses_deep_research_profile(self):
+        context = decision_context()
+        context["ontologyRelationContext"]["conflictState"] = "mixed"
+
+        profile = notification_ai_execution_profile(context, {})
+
+        self.assertEqual("deepResearch", profile["name"])
+        self.assertIn("competing-evidence", profile["selectionReasons"])
+
     def test_brief_contains_exact_temporal_path_and_decision_changing_gap_once(self):
         context = decision_context()
         brief = notification_ai_decision_brief(context, {})
         prompt = build_notification_ai_decision_prompt(context, {}, max_prompt_bytes=28 * 1024)
 
         self.assertEqual(AI_DECISION_BRIEF_VERSION, brief["schemaVersion"])
+        self.assertEqual(AI_DECISION_CONTRACT_VERSION, brief["decisionContractVersion"])
         self.assertEqual(-4.1, brief["currentSituation"]["temporalWindows"][0]["drawdownFromPeakPct"])
         self.assertEqual("task:1", brief["research"]["decisionChangingGaps"][0]["taskId"])
         self.assertIn('"schemaVersion":"investment-ai-decision-brief-v1"', prompt)
         self.assertIn('"drawdownFromPeakPct":-4.1', prompt)
         self.assertIn("valuationReferenceOnly=true", prompt)
         self.assertIn("시스템 수집기가", prompt)
+        self.assertIn("decisionReadiness", prompt)
+        self.assertIn("causalChain", prompt)
+        self.assertIn("alternativeAction", prompt)
         self.assertNotIn('"promptContext"', prompt)
         self.assertLessEqual(len(prompt.encode("utf-8")), 28 * 1024)
 
@@ -266,6 +280,40 @@ class NotificationAIDecisionBriefTests(unittest.TestCase):
         self.assertEqual(
             {"MSTR": 5_000_000},
             payload["accountPolicy"]["portfolioLifecycle"]["rebalanceState"]["maximumNotionalBySymbol"],
+        )
+
+    def test_ordinary_symbol_decision_omits_unrelated_rebalance_legs_but_scheduled_review_keeps_them(self):
+        context = decision_context()
+        context["portfolioLifecycle"] = {
+            "status": "ready",
+            "portfolioId": "portfolio:main",
+            "rebalanceProposal": {
+                "status": "proposed",
+                "legs": [{
+                    "symbol": "MSTR",
+                    "side": "TRIM",
+                    "before_weight_pct": 55,
+                    "after_weight_pct": 45,
+                }],
+            },
+            "rebalanceState": {"status": "BALANCED", "breachKeys": []},
+        }
+
+        ordinary = notification_ai_decision_brief(context, {})
+        context["messageType"] = "portfolioRebalanceReview"
+        scheduled = notification_ai_decision_brief(context, {})
+
+        self.assertEqual(
+            {},
+            ordinary["accountPolicy"]["portfolioLifecycle"]["rebalanceProposal"],
+        )
+        self.assertEqual(
+            "proposed",
+            scheduled["accountPolicy"]["portfolioLifecycle"]["rebalanceProposal"]["status"],
+        )
+        self.assertEqual(
+            "MSTR",
+            scheduled["accountPolicy"]["portfolioLifecycle"]["rebalanceProposal"]["legs"][0]["symbol"],
         )
 
 

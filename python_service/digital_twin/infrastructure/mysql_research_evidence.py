@@ -1,3 +1,4 @@
+from datetime import datetime, timedelta, timezone
 from typing import Callable, Dict, Iterable, List, Optional, Tuple
 
 from ..domain.events import DomainEvent
@@ -22,6 +23,197 @@ from .mysql_operational_events import insert_domain_event_with_connection
 
 
 class MySQLResearchEvidenceStore(MySQLOperationalConnection):
+    def enqueue_news_analysis_work(self, jobs: Iterable[Dict[str, object]]) -> int:
+        """Upsert latest-wins durable work without copying article payloads."""
+        rows = []
+        for job in jobs or []:
+            evidence_id = str((job or {}).get("evidenceId") or "").strip()
+            revision = str((job or {}).get("subjectRevision") or "").strip()
+            work_class = str((job or {}).get("workClass") or "model").strip().lower()
+            if evidence_id and revision and work_class in {"local", "model"}:
+                rows.append((
+                    evidence_id,
+                    revision[:191],
+                    work_class,
+                    max(0, min(1000000, int((job or {}).get("priority") or 0))),
+                ))
+        if not rows:
+            return 0
+        stamp = utc_now()
+
+        def operation(connection):
+            connection.executemany(
+                """
+                INSERT INTO news_analysis_work_items (
+                    evidence_id, subject_revision, work_class, work_state,
+                    priority, created_at, updated_at
+                ) VALUES (%s, %s, %s, 'pending', %s, %s, %s)
+                ON DUPLICATE KEY UPDATE
+                    work_state = IF(
+                        subject_revision <> VALUES(subject_revision),
+                        'pending',
+                        work_state
+                    ),
+                    lease_owner = IF(subject_revision <> VALUES(subject_revision), '', lease_owner),
+                    lease_until = IF(subject_revision <> VALUES(subject_revision), '', lease_until),
+                    not_before_at = IF(subject_revision <> VALUES(subject_revision), '', not_before_at),
+                    attempt_count = IF(subject_revision <> VALUES(subject_revision), 0, attempt_count),
+                    last_error = IF(subject_revision <> VALUES(subject_revision), '', last_error),
+                    completed_at = IF(subject_revision <> VALUES(subject_revision), '', completed_at),
+                    subject_revision = VALUES(subject_revision),
+                    work_class = VALUES(work_class),
+                    priority = VALUES(priority),
+                    updated_at = VALUES(updated_at)
+                """,
+                [
+                    (evidence_id, revision, work_class, priority, stamp, stamp)
+                    for evidence_id, revision, work_class, priority in rows
+                ],
+            )
+            return len(rows)
+
+        return int(self.transaction_with_deadlock_retry("news-analysis-work-enqueue", operation) or 0)
+
+    def claim_news_analysis_work(
+        self,
+        worker_id: str,
+        work_class: str,
+        limit: int,
+        lease_seconds: int = 300,
+    ) -> List[Dict[str, object]]:
+        owner = str(worker_id or "").strip()[:191]
+        category = str(work_class or "model").strip().lower()
+        row_limit = max(1, min(100, int(limit or 1)))
+        if not owner or category not in {"local", "model"}:
+            return []
+        now = datetime.now(timezone.utc)
+        stamp = now.isoformat().replace("+00:00", "Z")
+        lease_until = (now + timedelta(seconds=max(30, min(1800, int(lease_seconds or 300))))).isoformat().replace("+00:00", "Z")
+
+        def operation(connection):
+            rows = connection.execute(
+                """
+                SELECT evidence_id, subject_revision, work_class, priority, attempt_count
+                FROM news_analysis_work_items
+                WHERE work_class = %s
+                  AND (
+                    (work_state IN ('pending', 'retrying') AND (not_before_at = '' OR not_before_at <= %s))
+                    OR (work_state = 'running' AND (lease_until = '' OR lease_until <= %s))
+                  )
+                ORDER BY priority DESC, updated_at ASC, evidence_id ASC
+                LIMIT %s
+                FOR UPDATE SKIP LOCKED
+                """,
+                (category, stamp, stamp, row_limit),
+            ).fetchall()
+            evidence_ids = [str(row.get("evidence_id") or "") for row in rows or [] if str(row.get("evidence_id") or "")]
+            if evidence_ids:
+                placeholders = ",".join(["%s"] * len(evidence_ids))
+                connection.execute(
+                    """
+                    UPDATE news_analysis_work_items
+                    SET work_state = 'running', lease_owner = %s, lease_until = %s,
+                        attempt_count = attempt_count + 1, updated_at = %s
+                    WHERE evidence_id IN (""" + placeholders + ")",
+                    (owner, lease_until, stamp, *evidence_ids),
+                )
+            claimed = []
+            for row in rows or []:
+                evidence_id = str(row.get("evidence_id") or "")
+                claimed.append({
+                    "evidenceId": evidence_id,
+                    "subjectRevision": str(row.get("subject_revision") or ""),
+                    "workClass": category,
+                    "priority": int(row.get("priority") or 0),
+                    "attemptCount": int(row.get("attempt_count") or 0) + 1,
+                    "leaseOwner": owner,
+                    "leaseUntil": lease_until,
+                })
+            return claimed
+
+        return list(self.transaction_with_deadlock_retry("news-analysis-work-claim", operation) or [])
+
+    def finish_news_analysis_work(
+        self,
+        jobs: Iterable[Dict[str, object]],
+        worker_id: str,
+        retry_minutes: int = 0,
+        error: str = "",
+    ) -> int:
+        rows = [dict(job or {}) for job in jobs or [] if str((job or {}).get("evidenceId") or "").strip()]
+        if not rows:
+            return 0
+        owner = str(worker_id or "").strip()[:191]
+        now = datetime.now(timezone.utc)
+        stamp = now.isoformat().replace("+00:00", "Z")
+        retry_at = (
+            now + timedelta(minutes=max(1, min(1440, int(retry_minutes or 0))))
+        ).isoformat().replace("+00:00", "Z") if retry_minutes else ""
+        state = "retrying" if retry_at else "completed"
+
+        def operation(connection):
+            cursor = connection.executemany(
+                """
+                UPDATE news_analysis_work_items
+                SET work_state = %s, lease_owner = '', lease_until = '',
+                    not_before_at = %s, last_error = %s, updated_at = %s,
+                    completed_at = %s
+                WHERE evidence_id = %s AND subject_revision = %s
+                  AND lease_owner = %s AND work_state = 'running'
+                """,
+                [
+                    (
+                        state,
+                        retry_at,
+                        str(error or "")[:1000],
+                        stamp,
+                        "" if retry_at else stamp,
+                        str(job.get("evidenceId") or ""),
+                        str(job.get("subjectRevision") or ""),
+                        owner,
+                    )
+                    for job in rows
+                ],
+            )
+            return max(0, int(getattr(cursor, "rowcount", 0) or 0))
+
+        return int(self.transaction_with_deadlock_retry("news-analysis-work-finish", operation) or 0)
+
+    def news_analysis_work_status(self) -> Dict[str, object]:
+        stamp = utc_now()
+        with self.connect() as connection:
+            rows = connection.execute(
+                """
+                SELECT work_state, work_class, COUNT(*) AS count,
+                       MIN(updated_at) AS oldest_updated_at,
+                       MAX(updated_at) AS latest_updated_at
+                FROM news_analysis_work_items
+                GROUP BY work_state, work_class
+                """
+            ).fetchall()
+            reclaimable = connection.execute(
+                """
+                SELECT COUNT(*) AS count
+                FROM news_analysis_work_items
+                WHERE work_state = 'running' AND (lease_until = '' OR lease_until <= %s)
+                """,
+                (stamp,),
+            ).fetchone()
+        return {
+            "durable": True,
+            "states": [
+                {
+                    "state": str(row.get("work_state") or ""),
+                    "workClass": str(row.get("work_class") or ""),
+                    "count": int(row.get("count") or 0),
+                    "oldestUpdatedAt": str(row.get("oldest_updated_at") or ""),
+                    "latestUpdatedAt": str(row.get("latest_updated_at") or ""),
+                }
+                for row in rows or []
+            ],
+            "reclaimableLeaseCount": int((reclaimable or {}).get("count") or 0),
+        }
+
     def write_batch_size(self) -> int:
         try:
             configured = int(float(str(self.runtime_settings.get("researchEvidenceWriteBatchSize") or "50").strip()))

@@ -12,6 +12,8 @@ from collections import defaultdict
 import re
 from typing import Dict, Iterable, List, Mapping, Optional, Sequence, Set
 
+from .fact_changes import scope_families_for_fact_types
+
 
 # v12 keeps the v6 global quality/value distinction, makes dependency
 # fingerprints distinguish structural changes from a value change inside the
@@ -57,44 +59,6 @@ _GLOBAL_SCOPE_TYPE_LABELS = {
     "episode": "history-context",
 }
 
-# Event fact types describe the collection/change source. They are not
-# RuleBox conditions, but translating them to the matching ABox family makes
-# it possible to compare the requested work with the immutable scope delta.
-# Unknown types deliberately remain absent so they cannot narrow native
-# evaluation.
-_EVENT_FACT_TYPE_SCOPE_FAMILIES = {
-    "marketquote": {"market"},
-    "technicalindicator": {"temporal"},
-    "executionflow": {"flow"},
-    "orderbook": {"flow"},
-    "researchevidence": {"evidence"},
-    "evidencelifecycle": {"evidence"},
-    "newsevent": {"evidence"},
-    "verifiedclaim": {"evidence"},
-    "verificationrun": {"evidence"},
-    "investmentcalendarevent": {"temporal", "evidence"},
-    "portfoliosnapshot": {"position", "portfolio"},
-    "portfolioactivityepisode": {"position", "portfolio", "episode"},
-    "portfoliostatesnapshot": {"position", "portfolio"},
-    "decisionactionobservation": {"position", "portfolio", "episode"},
-    "portfoliorisksnapshot": {"portfolio", "exposure"},
-    "positionriskmetric": {"position", "exposure"},
-    "exposuresnapshot": {"portfolio", "exposure"},
-    "rebalanceproposal": {"portfolio", "exposure"},
-    "rebalancescenario": {"portfolio", "exposure"},
-    "rebalancestate": {"portfolio", "exposure"},
-    "dataquality": {"quality"},
-    "fxrate": {"macro-fx"},
-    "interestrate": {"macro-rates"},
-    "financialfact": {"fundamental"},
-    "financialstatement": {"fundamental"},
-    "companyprofile": {"profile"},
-    "governancechange": {"governance"},
-    "capitalstructurechange": {"capital"},
-    "valuationobservation": {"company-valuation"},
-}
-
-
 def _clean(value: object) -> str:
     return str(value or "").strip()
 
@@ -116,25 +80,7 @@ def requested_scope_families_for_event_fact_types(fact_types: Iterable[object]) 
     This is intentionally conservative: unknown event types do not alter the
     candidate RuleBox list, and TypeDB remains the only evaluator.
     """
-    values: Set[str] = set()
-    known_families = set(SYMBOL_SCOPE_FAMILIES) | {
-        "macro",
-        "macro-market",
-        "macro-fx",
-        "macro-rates",
-        "macro-crypto",
-        "portfolio",
-        "policy",
-        "reference",
-        "episode",
-    }
-    for item in fact_types or []:
-        text = _lower(item)
-        compact = "".join(character for character in text if character.isalnum())
-        if text in known_families:
-            values.add(text)
-        values.update(_EVENT_FACT_TYPE_SCOPE_FAMILIES.get(compact, set()))
-    return sorted(values)
+    return scope_families_for_fact_types(fact_types)
 
 
 def scope_type(scope_id: object) -> str:

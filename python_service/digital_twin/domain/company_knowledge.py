@@ -257,7 +257,7 @@ def dart_statement_periods(rows: object) -> List[Dict[str, object]]:
                 period = _clean(row.get(period_field))
                 value = optional_number(row.get(amount_field))
                 if period and value is not None:
-                    grouped.setdefault(period, {"period": period})[field] = value
+                    grouped.setdefault(period, {"period": period, "provider": "OpenDART"})[field] = value
     return [
         grouped[period]
         for period in sorted(grouped, key=_period_sort_key, reverse=True)[:4]
@@ -378,7 +378,7 @@ def _sec_fact_periods(facts: Mapping[str, object]) -> List[Dict[str, object]]:
         period = _clean(value.get("end") or value.get("filed"))
         amount = optional_number(value.get("value"))
         if period and amount is not None:
-            rows.setdefault(period, {"period": period})[str(field)] = amount
+            rows.setdefault(period, {"period": period, "provider": "SEC EDGAR"})[str(field)] = amount
     return [rows[key] for key in sorted(rows, key=_period_sort_key, reverse=True)[:4]]
 
 
@@ -536,6 +536,20 @@ def build_company_knowledge(
         "capitalFields": len([value for value in capital.values() if value is not None]),
         "officialSource": any(provider_priority(item.get("provider")) >= 100 for item in sources),
     }
+    official_coverage = {
+        "profile": bool(company),
+        "financials": bool(official_periods or sec_filing.get("facts")),
+        "governance": any(
+            provider_priority(item.get("provider")) >= 100
+            for item in executives
+            if isinstance(item, Mapping)
+        ),
+        "capital": provider_priority(latest.get("provider")) >= 100,
+        # Market multiples still come from market-data vendors even when an
+        # official filing is present elsewhere in the same company packet.
+        "valuation": False,
+        "filings": bool(sec_filing.get("latestFiling") or dart_disclosure.get("receiptNo")),
+    }
     missing = []
     if not annual and not interim and not quarterly:
         missing.append("financial-statements")
@@ -562,7 +576,12 @@ def build_company_knowledge(
             "dividendYieldSourceUnit": dividend_source_unit,
         } if dividend_yield is not None else {},
         "provenance": sources,
-        "coverage": {**coverage_fields, "dataState": data_state, "missing": missing},
+        "coverage": {
+            **coverage_fields,
+            "officialCoverage": official_coverage,
+            "dataState": data_state,
+            "missing": missing,
+        },
     }
     revision_payload = _revision_payload(payload)
     revision_source = json.dumps(revision_payload, ensure_ascii=False, sort_keys=True, separators=(",", ":"))

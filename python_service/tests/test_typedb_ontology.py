@@ -2228,7 +2228,15 @@ class TypeDBOntologyRepositoryTests(unittest.TestCase):
         ), patch.object(repository, "delete_box_snapshot_rows_in_batches", return_value={
             "status": "ok",
             "deletedBatchCount": 1,
-        }) as delete_rows:
+        }) as delete_rows, patch.object(
+            repository,
+            "delete_worldview_manifest_markers_batch",
+            return_value={
+                "status": "ok",
+                "deletedBatchCount": 1,
+                "removedManifestIds": ["manifest:old", "manifest:new"],
+            },
+        ) as marker_delete:
             result = repository.prune_inactive_scoped_abox_manifests_in_driver(
                 object(),
                 (object, object, object, object, object),
@@ -2248,6 +2256,12 @@ class TypeDBOntologyRepositoryTests(unittest.TestCase):
         self.assertEqual(
             {"manifest:new", "manifest:old"},
             set(result["removedManifestIds"]),
+        )
+        marker_delete.assert_called_once_with(
+            unittest.mock.ANY,
+            unittest.mock.ANY,
+            ["manifest:old", "manifest:new"],
+            world_id="portfolio:local:main",
         )
 
     def test_scoped_manifest_prune_keeps_marker_when_time_slice_expires(self):
@@ -2294,6 +2308,77 @@ class TypeDBOntologyRepositoryTests(unittest.TestCase):
         self.assertEqual([], result["removedManifestIds"])
         self.assertEqual(1, delete_rows.call_count)
         self.assertIn("deadline_monotonic", delete_rows.call_args.kwargs)
+
+    def test_scoped_manifest_prune_reserves_progress_for_safe_marker_only_history(self):
+        repository = TypeDBOntologyGraphRepository("127.0.0.1:1729")
+        markers = [
+            {"id": "marker:shared", "snapshotId": "manifest:shared", "updatedAt": "2026-08-12T00:02:00Z"},
+            {"id": "marker:physical", "snapshotId": "manifest:physical", "updatedAt": "2026-08-12T00:01:00Z"},
+        ]
+
+        def metadata(manifest_id, _world_id):
+            generation_id = "scope:active" if manifest_id == "manifest:shared" else "scope:physical"
+            return {
+                "status": "ok",
+                "worldviewManifestId": manifest_id,
+                "scopeGenerationIds": {"symbol:005930:market": generation_id},
+            }
+
+        def delete_rows(_driver, _imported, _box, snapshot_id, **_kwargs):
+            if snapshot_id == "scope:physical":
+                return {"status": "partial", "deletedBatchCount": 1, "resumeRequired": True}
+            return {"status": "ok", "deletedBatchCount": 1}
+
+        with patch.object(repository, "active_abox_metadata", return_value={
+            "status": "ok",
+            "worldviewManifestId": "manifest:active",
+            "scopeGenerationIds": {"symbol:005930:market": "scope:active"},
+        }), patch.object(repository, "pending_abox_activation", return_value={"status": "empty"}), patch.object(
+            repository,
+            "worldview_manifest_marker_identity_rows",
+            return_value=markers,
+        ), patch.object(
+            repository,
+            "scoped_manifest_metadata",
+            side_effect=metadata,
+        ), patch.object(
+            repository,
+            "delete_box_snapshot_rows_in_batches",
+            side_effect=delete_rows,
+        ) as delete_call, patch.object(
+            repository,
+            "delete_worldview_manifest_markers_batch",
+            return_value={
+                "status": "ok",
+                "deletedBatchCount": 1,
+                "removedManifestIds": ["manifest:shared"],
+            },
+        ) as marker_delete_call:
+            result = repository.prune_inactive_scoped_abox_manifests_in_driver(
+                object(),
+                (object, object, object, object, object),
+                active_manifest_id="manifest:active",
+                keep_inactive_count=0,
+                max_manifests=2,
+                max_delete_batches=2,
+                delete_batch_size=50,
+                world_id="portfolio:local:main",
+            )
+
+        self.assertEqual("partial", result["status"])
+        self.assertEqual(1, result["markerOnlyManifestCount"])
+        self.assertEqual(1, result["markerDeleteBatchReserve"])
+        self.assertEqual(["manifest:shared"], result["removedManifestIds"])
+        self.assertEqual(
+            ["scope:physical"],
+            [call.args[3] for call in delete_call.call_args_list],
+        )
+        marker_delete_call.assert_called_once_with(
+            unittest.mock.ANY,
+            unittest.mock.ANY,
+            ["manifest:shared"],
+            world_id="portfolio:local:main",
+        )
 
     def test_deferred_maintenance_can_be_scoped_to_portfolio_worlds(self):
         repository = TypeDBOntologyGraphRepository("127.0.0.1:1729")

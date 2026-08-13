@@ -356,6 +356,20 @@ class CompanyKnowledgeTests(unittest.TestCase):
         self.assertEqual(2, knowledge["coverage"]["financialPeriods"])
         self.assertNotIn("financial-statements", knowledge["coverage"]["missing"])
         self.assertEqual(500.0, knowledge["capital"]["cash"])
+        self.assertTrue(knowledge["coverage"]["officialCoverage"]["financials"])
+        self.assertTrue(knowledge["coverage"]["officialCoverage"]["capital"])
+        self.assertFalse(knowledge["coverage"]["officialCoverage"]["valuation"])
+
+    def test_vendor_profile_and_multiples_are_not_labeled_as_official_filing_fields(self):
+        knowledge = build_company_knowledge("TEST", yfinance=sample_yfinance())
+
+        official = knowledge["coverage"]["officialCoverage"]
+        self.assertFalse(official["profile"])
+        self.assertFalse(official["financials"])
+        self.assertFalse(official["governance"])
+        self.assertFalse(official["capital"])
+        self.assertFalse(official["valuation"])
+        self.assertFalse(official["filings"])
 
     def test_company_merge_keeps_statement_history_and_applies_fresher_kis_ratios(self):
         existing = build_company_knowledge("TEST", yfinance=sample_yfinance())

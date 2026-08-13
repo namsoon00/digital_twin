@@ -424,10 +424,13 @@ class MySQLMinimalRetentionTests(unittest.TestCase):
 
         model_review_queries = [sql for sql, _params in connection.calls if "model_review_jobs" in sql]
         notification_queries = [sql for sql, _params in connection.calls if "notification_jobs" in sql]
+        news_analysis_queries = [sql for sql, _params in connection.calls if "news_analysis_work_items" in sql]
         self.assertTrue(any("status` = 'done'" in sql for sql in model_review_queries))
         self.assertFalse(any("'failed'" in sql for sql in model_review_queries))
         self.assertTrue(any("status` IN ('done', 'sent')" in sql for sql in notification_queries))
         self.assertFalse(any("WHERE `created_at` <" in sql for sql in notification_queries))
+        self.assertTrue(any("work_state` = 'completed'" in sql for sql in news_analysis_queries))
+        self.assertFalse(any("retrying" in sql or "running" in sql for sql in news_analysis_queries))
 
 
 if __name__ == "__main__":

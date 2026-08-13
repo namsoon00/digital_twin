@@ -79,6 +79,7 @@ class FakeOntologyRepository:
 class ManifestInventoryRepository(FakeOntologyRepository):
     def __init__(self):
         super().__init__()
+        self.inventory_calls = []
         self.inventories = {
             "portfolio:local:main": {
                 "status": "ok",
@@ -98,6 +99,7 @@ class ManifestInventoryRepository(FakeOntologyRepository):
         }
 
     def scoped_abox_manifest_inventory(self, world_id):
+        self.inventory_calls.append(world_id)
         return dict(self.inventories[world_id])
 
 
@@ -384,7 +386,12 @@ class OntologyMaintenanceRunnerTests(unittest.TestCase):
     def test_status_exposes_configured_retention_policy(self):
         runner = OntologyMaintenanceRunner(
             FakeOntologyRepository(),
-            state_store=FakeStateStore({"lastRunAt": "2026-07-26T00:00:00+00:00"}),
+            state_store=FakeStateStore({
+                "lastRunAt": "2026-07-26T00:00:00+00:00",
+                "knownWorlds": [
+                    {"worldId": "portfolio:local:main", "worldType": "portfolio"},
+                ],
+            }),
             settings={
                 "ontologyAboxMaintenanceWarningInactiveManifestCount": "30",
                 "ontologyAboxMaintenanceCriticalInactiveManifestCount": "100",
@@ -394,9 +401,9 @@ class OntologyMaintenanceRunnerTests(unittest.TestCase):
         status = runner.status()
 
         self.assertTrue(status["enabled"])
-        self.assertEqual(0, status["worldCount"])
+        self.assertEqual(1, status["worldCount"])
         self.assertEqual("durable-maintenance-state", status["worldInventorySource"])
-        self.assertEqual([], status["knownWorldIds"])
+        self.assertEqual(["portfolio:local:main"], status["knownWorldIds"])
         self.assertEqual(100, status["policy"]["criticalInactiveManifestCount"])
         self.assertEqual(2, status["policy"]["maxDeleteBatchesPerRun"])
         self.assertEqual(150, status["policy"]["deleteBatchSize"])
@@ -409,7 +416,18 @@ class OntologyMaintenanceRunnerTests(unittest.TestCase):
             "backlogByWorld": {
                 "portfolio:local:main": {
                     "lastInactiveManifestCount": 485,
-                    "inventoryAvailable": False,
+                    "lastStoredManifestCount": 486,
+                    "inventoryAvailable": True,
+                },
+                "market:shared:kr": {
+                    "lastInactiveManifestCount": 1,
+                    "lastStoredManifestCount": 2,
+                    "inventoryAvailable": True,
+                },
+                "knowledge:shared:news": {
+                    "lastInactiveManifestCount": 0,
+                    "lastStoredManifestCount": 1,
+                    "inventoryAvailable": True,
                 },
             },
         })
@@ -423,6 +441,8 @@ class OntologyMaintenanceRunnerTests(unittest.TestCase):
 
         self.assertEqual("portfolio:local:main", result["worldId"])
         self.assertEqual("inactive-manifest-priority", result["maintenance"]["worldSelection"]["mode"])
+        self.assertEqual(["portfolio:local:main"], repository.inventory_calls)
+        self.assertEqual(1, result["maintenance"]["worldSelection"]["liveInventoryReadCount"])
         self.assertEqual(13, result["maintenance"]["manifestInventory"]["inactiveManifestCount"])
         self.assertEqual(4, store.payload["backlogByWorld"]["portfolio:local:main"]["lastInactiveManifestCount"])
         self.assertEqual(1, store.payload["backlogByWorld"]["market:shared:kr"]["lastInactiveManifestCount"])
@@ -467,9 +487,10 @@ class OntologyMaintenanceRunnerTests(unittest.TestCase):
         self.assertEqual(10, result["retryAfterSeconds"])
         self.assertFalse(result["maintenance"]["inventoryAvailable"])
         self.assertEqual("deferred", result["maintenance"]["health"]["state"])
+        selected_world_id = result["worldId"]
         self.assertEqual(
-            13,
-            store.payload["backlogByWorld"]["portfolio:local:main"]["lastInactiveManifestCount"],
+            repository.inventories[selected_world_id]["inactiveManifestCount"],
+            store.payload["backlogByWorld"][selected_world_id]["lastInactiveManifestCount"],
         )
 
     def test_maintenance_yields_to_pending_reasoning_work(self):

@@ -39,7 +39,7 @@ class OntologyMaintenanceRunner:
     state in MySQL so restarts continue the round-robin world order.
     """
 
-    state_contract = "ontology-maintenance-state-v9"
+    state_contract = "ontology-maintenance-state-v10"
 
     def __init__(
         self,
@@ -866,6 +866,60 @@ class OntologyMaintenanceRunner:
             rows.append({"worldId": world_id, "worldType": world_type})
         return sorted(rows, key=lambda item: (item["worldType"], item["worldId"]))
 
+    def durable_worlds(self, state: Dict[str, object]) -> List[Dict[str, object]]:
+        """Reuse the durable world inventory instead of scanning TypeDB every minute."""
+
+        values = dict(state or {}) if isinstance(state, dict) else {}
+        by_id: Dict[str, Dict[str, object]] = {}
+
+        def remember(world_id: object, world_type: object = "") -> None:
+            clean_id = text(world_id)
+            clean_type = text(world_type or clean_id.split(":", 1)[0]).lower()
+            if not clean_id or clean_type not in self.configured_world_types():
+                return
+            by_id[clean_id] = {"worldId": clean_id, "worldType": clean_type}
+
+        for item in values.get("knownWorlds") or []:
+            if isinstance(item, dict):
+                remember(item.get("worldId"), item.get("worldType"))
+            else:
+                remember(item)
+        for key in ["backlogByWorld", "scopeIntegrityAuditByWorld", "scopeRepairByWorld"]:
+            raw = values.get(key)
+            if isinstance(raw, dict):
+                for world_id in raw:
+                    remember(world_id)
+        remember(values.get("nextWorldId"))
+        remember(values.get("lastMaintenanceWorldId"))
+        last_result = values.get("lastResult")
+        if isinstance(last_result, dict):
+            remember(last_result.get("worldId"), last_result.get("worldType"))
+        return sorted(by_id.values(), key=lambda item: (item["worldType"], item["worldId"]))
+
+    def persisted_manifest_inventories(
+        self,
+        state: Dict[str, object],
+        worlds: Iterable[Dict[str, object]],
+    ) -> Dict[str, Dict[str, object]]:
+        """Build a selection hint from the last verified per-world inventory."""
+
+        backlog = self.backlog_by_world(state)
+        results: Dict[str, Dict[str, object]] = {}
+        for world in worlds or []:
+            world_id = text(dict(world or {}).get("worldId"))
+            value = dict(backlog.get(world_id) or {})
+            if not world_id or not bool(value.get("inventoryAvailable")):
+                continue
+            results[world_id] = {
+                "status": text(value.get("lastInventoryStatus") or "persisted"),
+                "inactiveManifestCount": max(0, integer(value.get("lastInactiveManifestCount"))),
+                "storedManifestCount": max(0, integer(value.get("lastStoredManifestCount"))),
+                "available": True,
+                "reason": "",
+                "source": "durable-maintenance-state",
+            }
+        return results
+
     @staticmethod
     def manifest_inventory_available(inventory: Dict[str, object]) -> bool:
         values = dict(inventory or {}) if isinstance(inventory, dict) else {}
@@ -1256,6 +1310,14 @@ class OntologyMaintenanceRunner:
         last_result = state.get("lastResult") if isinstance(state.get("lastResult"), dict) else {}
         backlog = self.backlog_by_world(state)
         known_world_ids = set(backlog)
+        for world in state.get("knownWorlds") or []:
+            world_id = text(
+                world.get("worldId")
+                if isinstance(world, dict)
+                else world
+            )
+            if world_id:
+                known_world_ids.add(world_id)
         next_world_id = text(state.get("nextWorldId"))
         if next_world_id:
             known_world_ids.add(next_world_id)
@@ -1322,7 +1384,21 @@ class OntologyMaintenanceRunner:
                 "lastResult": result,
             })
             return result
-        worlds = self.worlds()
+        previous = self.state()
+        worlds = self.durable_worlds(previous)
+        world_inventory_source = "durable-maintenance-state"
+        if not list(previous.get("knownWorlds") or []):
+            discovered = self.worlds()
+            by_id = {
+                text(item.get("worldId")): dict(item)
+                for item in list(worlds) + list(discovered)
+                if text(item.get("worldId"))
+            }
+            worlds = sorted(
+                by_id.values(),
+                key=lambda item: (text(item.get("worldType")), text(item.get("worldId"))),
+            )
+            world_inventory_source = "typedb-bootstrap"
         if not worlds:
             return {
                 "status": "idle",
@@ -1330,19 +1406,8 @@ class OntologyMaintenanceRunner:
                 "policy": policy,
                 "reason": "No active ontology world matches the maintenance scope.",
             }
-        previous = self.state()
-        manifest_inventories = self.manifest_inventories(worlds)
-        observed_backlog = self.reconciled_observed_backlog(
-            previous,
-            manifest_inventories,
-            [item.get("worldId") for item in worlds],
-            policy,
-        )
-        selection_state = {
-            **previous,
-            "backlogByWorld": observed_backlog,
-        }
-        maintenance_yield = self.maintenance_yield_status(selection_state)
+        selection_inventories = self.persisted_manifest_inventories(previous, worlds)
+        maintenance_yield = self.maintenance_yield_status(previous)
         yield_world_id = text(maintenance_yield.get("worldId"))
         yielded_world = next((
             item
@@ -1363,12 +1428,38 @@ class OntologyMaintenanceRunner:
         else:
             selected, next_world_id, world_selection = self.select_world_for_maintenance(
                 worlds,
-                selection_state,
-                manifest_inventories,
+                previous,
+                selection_inventories,
                 policy,
             )
         world_id = text(selected.get("worldId"))
-        selected_inventory = dict(manifest_inventories.get(world_id) or {})
+        live_inventories = self.manifest_inventories([selected])
+        observed_backlog = self.reconciled_observed_backlog(
+            previous,
+            live_inventories,
+            [item.get("worldId") for item in worlds],
+            policy,
+        )
+        selection_state = {
+            **previous,
+            "knownWorlds": [dict(item) for item in worlds],
+            "worldInventorySource": world_inventory_source,
+            "backlogByWorld": observed_backlog,
+        }
+        selected_inventory = dict(
+            live_inventories.get(world_id)
+            or selection_inventories.get(world_id)
+            or {}
+        )
+        world_selection = {
+            **dict(world_selection or {}),
+            "inventorySource": (
+                "selected-world-live-read"
+                if world_id in live_inventories
+                else "durable-maintenance-state"
+            ),
+            "liveInventoryReadCount": len(live_inventories),
+        }
         integrity_audit, integrity_audits = self.run_scope_integrity_audit(
             world_id,
             selection_state,

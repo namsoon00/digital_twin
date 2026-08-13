@@ -3408,6 +3408,64 @@ class TypeDBOntologyRepositoryTests(unittest.TestCase):
             topology_merge["topology"],
         )["status"])
 
+    def test_target_scoped_manifest_index_merge_replaces_current_portfolio_aggregate(self):
+        repository = TypeDBOntologyGraphRepository("127.0.0.1:1729")
+
+        def portfolio_graph(snapshot_id, risk_delta):
+            graph = PortfolioOntology("portfolio-index-" + snapshot_id)
+            graph.entities.extend([
+                OntologyEntity("stock:MSTR", "Strategy", "stock", {
+                    "ontologyBox": "ABox", "symbol": "MSTR", "snapshotId": snapshot_id,
+                }),
+                OntologyEntity("portfolio:default", "Portfolio", "portfolio", {
+                    "ontologyBox": "ABox", "snapshotId": snapshot_id,
+                }),
+                OntologyEntity("portfolio-risk-snapshot:" + snapshot_id, "Risk", "portfolio-risk-snapshot", {
+                    "ontologyBox": "ABox", "snapshotId": snapshot_id,
+                    "volatilityPolicyDeltaPct": risk_delta,
+                }),
+            ])
+            graph.relations.append(OntologyRelation(
+                "portfolio:default", "portfolio-risk-snapshot:" + snapshot_id, "HAS_RISK_SNAPSHOT",
+                properties={"ontologyBox": "ABox", "snapshotId": snapshot_id},
+            ))
+            return graph
+
+        active_graph = portfolio_graph("active", 1.0)
+        incoming_graph = portfolio_graph("incoming", 2.0)
+        active_topology = native_rule_planner_topology(active_graph)
+        incoming_topology = native_rule_planner_topology(incoming_graph)
+        topology_merge = merge_native_rule_planner_topology(
+            active_topology,
+            incoming_topology,
+            ["MSTR"],
+        )
+        active_nodes, active_relations = repository.graph_persistence_rows(active_graph)
+        incoming_nodes, incoming_relations = repository.graph_persistence_rows(incoming_graph)
+        active_index = native_rule_evidence_read_index_from_rows(active_nodes, active_relations)
+        incoming_index = native_rule_evidence_read_index_from_rows(incoming_nodes, incoming_relations)
+
+        index_merge = merge_native_rule_evidence_read_index(
+            active_index,
+            active_topology,
+            incoming_index,
+            incoming_topology,
+            topology_merge["topology"],
+            ["MSTR"],
+        )
+
+        self.assertEqual("ok", index_merge["status"])
+        self.assertIn("PORTFOLIO:DEFAULT", index_merge["replacedSymbols"])
+        merged_index = index_merge["index"]
+        self.assertEqual(
+            incoming_index["sourceStorageIdsBySourceId"]["portfolio:default"],
+            merged_index["sourceStorageIdsBySourceId"]["portfolio:default"],
+        )
+        self.assertEqual(
+            incoming_index["relationStorageIdsBySymbolAndType"]["PORTFOLIO:DEFAULT"]["HAS_RISK_SNAPSHOT"],
+            merged_index["relationStorageIdsBySymbolAndType"]["PORTFOLIO:DEFAULT"]["HAS_RISK_SNAPSHOT"],
+        )
+
     def test_partial_active_marker_falls_back_to_active_topology_for_missing_target(self):
         graph = PortfolioOntology("partial-topology")
         graph.entities.append(OntologyEntity("stock:005930", "Samsung", "stock", {

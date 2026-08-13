@@ -620,10 +620,26 @@ def merge_native_rule_evidence_read_index(
     active_sources = dict(active.get("sourceIdsBySymbol") or {})
     incoming_sources = dict(incoming.get("sourceIdsBySymbol") or {})
     incoming_symbols = set(incoming_sources)
+    # A stock-targeted portfolio projection carries both the changed stock
+    # scopes and a freshly computed account aggregate. The caller's requested
+    # symbols list names only the stocks, so retaining the old PORTFOLIO key
+    # here would make native risk and exposure rules read a prior aggregate
+    # even though the new physical rows were persisted successfully.
+    incoming_portfolio_symbols = {
+        symbol
+        for symbol, source_ids in incoming_sources.items()
+        if symbol.startswith("PORTFOLIO:")
+        or any(str(source_id or "").startswith("portfolio:") for source_id in source_ids or [])
+    }
     replacements = {
         symbol
         for symbol in incoming_symbols
-        if not requested or symbol in requested or symbol not in active_sources
+        if (
+            not requested
+            or symbol in requested
+            or symbol not in active_sources
+            or symbol in incoming_portfolio_symbols
+        )
     }
     expected_sources = dict(merged_topology_normalized.get("sourceIdsBySymbol") or {})
     source_ids_by_symbol: Dict[str, Iterable[str]] = {}

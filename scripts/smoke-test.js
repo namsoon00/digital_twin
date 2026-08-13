@@ -304,6 +304,18 @@ function checkWorkflowConsoleContract() {
   assertOk(code.indexOf("function patchStableDashboardMarkup") >= 0 && code.indexOf("function syncStableDashboardDom") >= 0 && code.indexOf("function reconcileDashboardCollections") >= 0 && code.indexOf('data-console-row-key="') >= 0 && code.indexOf('data-render-mode", "stable-patch"') >= 0, "실시간 데이터 변경 시 canonical key 기반 DOM 부분 갱신 경로가 없습니다.");
   assertOk(code.indexOf("orbitAlphaLastSnapshotPersistent") >= 0 && code.indexOf("writePersistentPayload") >= 0, "새 탭에서도 즉시 표시할 최근 스냅샷 캐시가 없습니다.");
   assertOk(code.indexOf("formatConsoleNarrative") >= 0 && code.indexOf("compactSecurityName") >= 0, "긴 종목명과 과도한 숫자 정밀도 정리가 없습니다.");
+  assertOk(
+    code.indexOf("function investmentActionUserPresentation") >= 0 &&
+      code.indexOf("function renderInvestmentActionDecisionDetail") >= 0 &&
+      code.indexOf("지금은 매수·매도 판단을 보류합니다") >= 0 &&
+      code.indexOf("이 화면의 역할") >= 0 &&
+      code.indexOf("자동 주문은 실행하지 않습니다") >= 0 &&
+      code.indexOf('class="investment-decision-technical"') >= 0 &&
+      styles.indexOf("Human-readable investment decision detail") >= 0 &&
+      styles.indexOf(".investment-decision-conclusion") >= 0 &&
+      /\.work-detail-layer > \.work-detail-head\s*\{[\s\S]*grid-template-columns: minmax\(0, 1fr\) 44px;/.test(styles),
+    "판단 상세의 쉬운 결론·근거·다음 행동 또는 모바일 헤더 계약이 없습니다."
+  );
   assertOk(code.indexOf("researchEvidenceKoreanSummary(item)") >= 0 && code.indexOf("researchEvidenceImpactMeta(item)") >= 0, "뉴스 목록에 한글 본문 요약과 주가 영향 분석이 없습니다.");
   assertOk(code.indexOf('state.activeTab === "notifications" || notificationDetailNeedsEvidence') >= 0, "알림 상세가 연결된 뉴스 근거를 지연 로드하지 않습니다.");
   assertOk(code.indexOf("원문/출처") >= 0 && code.indexOf("기사 분석") >= 0, "알림 상세의 하단 기사 원문 진입 구조가 없습니다.");
@@ -408,9 +420,9 @@ function checkWorkflowConsoleContract() {
     "서버 페이징 목록의 변경일 필드 또는 최신순 정렬 계약이 없습니다."
   );
   assertOk(
-    /styles\.css\?v=20260813-decision-alert-inbox-v\d+/.test(indexHtml) &&
-      /app\.js\?v=20260813-decision-alert-inbox-v\d+/.test(indexHtml),
-    "목록 전체 데이터 정적 자산 cache key가 반영되지 않았습니다."
+    /styles\.css\?v=20260813-decision-detail-v\d+/.test(indexHtml) &&
+      /app\.js\?v=20260813-decision-detail-v\d+/.test(indexHtml),
+    "판단 상세 정적 자산 cache key가 반영되지 않았습니다."
   );
 }
 

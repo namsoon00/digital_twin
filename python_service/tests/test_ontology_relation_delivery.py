@@ -156,7 +156,7 @@ class OntologyRelationDeliveryTests(unittest.TestCase):
             "deliverySuppressionReason": "stale_data",
         }))
 
-    def test_relation_predecessor_uses_a_state_cooldown_suppressed_job(self):
+    def test_relation_predecessor_uses_suppressed_context_without_marking_it_sent(self):
         previous_context = self.context()
         previous_context["deliverySuppressionReason"] = "state_cooldown"
         previous = self.job(previous_context)
@@ -185,7 +185,8 @@ class OntologyRelationDeliveryTests(unittest.TestCase):
         )
 
         self.assertEqual("state_cooldown", found["deliverySuppressionReason"])
-        self.assertEqual(previous.created_at, found["_relationPredecessorSentAt"])
+        self.assertEqual(previous.created_at, found["_relationPredecessorObservedAt"])
+        self.assertNotIn("_relationPredecessorSentAt", found)
         self.assertEqual("suppressed", found["_relationPredecessorStatus"])
 
     def test_relation_predecessor_carries_matching_initial_baseline_through_later_suppression(self):
@@ -232,8 +233,81 @@ class OntologyRelationDeliveryTests(unittest.TestCase):
             default_notification_rule("investmentInsight"),
         )
 
-        self.assertEqual(later.created_at, found["_relationPredecessorSentAt"])
+        self.assertEqual(later.created_at, found["_relationPredecessorObservedAt"])
+        self.assertNotIn("_relationPredecessorSentAt", found)
         self.assertEqual(baseline.created_at, found["_relationBaselineObservedAt"])
+
+    def test_relation_predecessor_uses_older_delivery_for_cooldown_boundary(self):
+        delivered = self.job(self.context())
+        delivered.status = "done"
+        delivered.created_at = "2026-08-11T00:00:00Z"
+        suppressed_context = self.context()
+        suppressed_context["deliverySuppressionReason"] = "state_cooldown"
+        suppressed = self.job(suppressed_context)
+        suppressed.status = "suppressed"
+        suppressed.created_at = "2026-08-11T00:20:00Z"
+        current = self.job(self.context())
+        rows = [
+            {
+                "text": suppressed.text,
+                "payload_json": json.dumps(MySQLNotificationJobStore.compact_job_payload(suppressed)),
+                "created_at": suppressed.created_at,
+                "status": suppressed.status,
+            },
+            {
+                "text": delivered.text,
+                "payload_json": json.dumps(MySQLNotificationJobStore.compact_job_payload(delivered)),
+                "created_at": delivered.created_at,
+                "status": delivered.status,
+            },
+        ]
+
+        class Result:
+            def fetchall(self):
+                return rows
+
+        class Connection:
+            def execute(self, *_args, **_kwargs):
+                return Result()
+
+        store = MySQLNotificationJobStore.__new__(MySQLNotificationJobStore)
+        found = store.relation_predecessor_with_connection(
+            Connection(),
+            current,
+            default_notification_rule("investmentInsight"),
+        )
+
+        self.assertEqual("state_cooldown", found["deliverySuppressionReason"])
+        self.assertEqual(suppressed.created_at, found["_relationPredecessorObservedAt"])
+        self.assertEqual(delivered.created_at, found["_relationPredecessorSentAt"])
+        self.assertEqual("done", found["_relationPredecessorSentStatus"])
+
+    def test_suppressed_predecessor_does_not_restart_state_cooldown(self):
+        previous_context = self.context()
+        previous_context["deliverySuppressionReason"] = "state_cooldown"
+        previous_context["_relationPredecessorObservedAt"] = "2026-08-11T00:20:00Z"
+        previous_context["_relationPredecessorStatus"] = "suppressed"
+        current = self.job(self.context())
+
+        class Store(MySQLNotificationJobStore):
+            def rule_for_connection(self, _connection, message_type):
+                rule = default_notification_rule(message_type)
+                rule.market_hours_enabled = False
+                return rule
+
+            def similar_history_with_connection(self, *_args, **_kwargs):
+                return 0, {}, ""
+
+            def relation_predecessor_with_connection(self, *_args, **_kwargs):
+                return previous_context
+
+        store = Store.__new__(Store)
+        decision = store.evaluate_job_with_connection(None, current)
+
+        self.assertTrue(decision.should_send)
+        self.assertNotEqual("cooldown", decision.state_decision)
+        self.assertEqual(0, decision.state_recent_sent_count)
+        self.assertEqual("", decision.state_last_sent_at)
 
     def test_price_only_change_keeps_relation_delivery_fingerprint_and_cooldown_group(self):
         before = self.context(current_price=70000)

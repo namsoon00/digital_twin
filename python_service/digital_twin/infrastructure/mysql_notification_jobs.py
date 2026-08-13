@@ -927,6 +927,8 @@ class MySQLNotificationJobStore(MySQLOperationalConnection):
         selected_at = ""
         selected_status = ""
         selected_fingerprint = ""
+        cooldown_boundary_at = ""
+        cooldown_boundary_status = ""
         baseline_observed_at = ""
         current_fingerprint = str(metadata.get("fingerprint") or "").strip()
         for row in rows:
@@ -962,6 +964,13 @@ class MySQLNotificationJobStore(MySQLOperationalConnection):
                 and previous_fingerprint == current_fingerprint
             ):
                 baseline_observed_at = created_at
+            if status != "suppressed" and not cooldown_boundary_at:
+                # Suppressed candidates remain useful for semantic diffs, but
+                # only a delivered or still in-flight job may start cooldown.
+                # Otherwise frequent suppressed candidates move the boundary
+                # forever and the subject can never become eligible again.
+                cooldown_boundary_at = created_at
+                cooldown_boundary_status = status
             if not selected_context:
                 selected_context = context
                 selected_at = created_at
@@ -969,8 +978,11 @@ class MySQLNotificationJobStore(MySQLOperationalConnection):
                 selected_fingerprint = previous_fingerprint
         if not selected_context:
             return {}
-        selected_context["_relationPredecessorSentAt"] = selected_at
+        selected_context["_relationPredecessorObservedAt"] = selected_at
         selected_context["_relationPredecessorStatus"] = selected_status
+        if cooldown_boundary_at:
+            selected_context["_relationPredecessorSentAt"] = cooldown_boundary_at
+            selected_context["_relationPredecessorSentStatus"] = cooldown_boundary_status
         if baseline_observed_at and selected_fingerprint == current_fingerprint:
             selected_context["_relationBaselineObservedAt"] = baseline_observed_at
             selected_context["_relationBaselineFingerprint"] = current_fingerprint
@@ -997,20 +1009,12 @@ class MySQLNotificationJobStore(MySQLOperationalConnection):
         )
         relation_previous_context = self.relation_predecessor_with_connection(connection, job, rule)
         predecessor_sent_at = str(relation_previous_context.get("_relationPredecessorSentAt") or "")
-        predecessor_status = str(relation_previous_context.get("_relationPredecessorStatus") or "")
         baseline_observed_at = str(relation_previous_context.get("_relationBaselineObservedAt") or "")
-        baseline_confirmation_enabled = any(
-            condition.enabled and condition.condition_type == "baseline_age_gte"
-            for condition in rule.similarity_bypass_conditions or []
-        )
-        if predecessor_sent_at and not last_sent_at and not (
-            predecessor_status == "suppressed"
-            and baseline_confirmation_enabled
-            and baseline_observed_at
-        ):
+        if predecessor_sent_at and not last_sent_at:
             # A changed graph fingerprint can be a harmless relation-row
-            # rebuild. Keep the most recent same-subject timestamp so the
-            # state cooldown can distinguish that case from a true new alert.
+            # rebuild. Keep the most recent actually delivered/in-flight
+            # same-subject timestamp so cooldown can distinguish that case
+            # from a true new alert without treating suppression as delivery.
             last_sent_at = predecessor_sent_at
             recent_count = max(1, int(recent_count or 0))
         cooldown_previous_context = previous_context

@@ -2,11 +2,17 @@ import unittest
 from datetime import datetime, timedelta, timezone
 import sys
 from pathlib import Path
+from types import SimpleNamespace
+from unittest.mock import patch
 
 
 sys.path.insert(0, str(Path(__file__).resolve().parents[1]))
 
 from digital_twin.application.ontology_maintenance_service import OntologyMaintenanceRunner
+from digital_twin.application.ontology_portfolio_rebuild_service import (
+    OntologyPortfolioScopeRepairRunner,
+    OntologyScopeRepairRouter,
+)
 
 
 class FakeStateStore:
@@ -136,6 +142,8 @@ class OntologyMaintenanceRunnerTests(unittest.TestCase):
 
         result = runner.run_once()
 
+        self.assertEqual("deferred-scope-integrity-repair", result["status"])
+        self.assertEqual([], repository.calls)
         audit = result["maintenance"]["scopeIntegrityAudit"]
         self.assertEqual("repair-required", audit["status"])
         self.assertEqual(1, audit["mismatchCount"])
@@ -168,6 +176,8 @@ class OntologyMaintenanceRunnerTests(unittest.TestCase):
 
         result = runner.run_once()
 
+        self.assertEqual("deferred-scope-integrity-repair", result["status"])
+        self.assertEqual([], repository.calls)
         repair = result["maintenance"]["scopeRepair"]
         self.assertEqual("queued-durable-scope-repair", repair["status"])
         self.assertEqual(["005930"], repair["symbols"])
@@ -181,6 +191,164 @@ class OntologyMaintenanceRunnerTests(unittest.TestCase):
             event.payload["scopeRepairRequestsBySymbol"]["005930"]["scopeIds"],
         )
         self.assertFalse(repair["automaticFullProjectionUsed"])
+
+    def test_pending_scope_repair_does_not_starve_other_world_cleanup(self):
+        now = datetime.now(timezone.utc).isoformat().replace("+00:00", "Z")
+        repository = ManifestInventoryRepository()
+        store = FakeStateStore({
+            "nextWorldId": "portfolio:local:main",
+            "scopeIntegrityAuditByWorld": {
+                "portfolio:local:main": {"lastCheckedAt": now},
+            },
+            "scopeRepairByWorld": {
+                "portfolio:local:main": {
+                    "status": "pending-verification",
+                    "scopeIds": ["symbol:005930:flow"],
+                    "requestedAt": now,
+                },
+            },
+        })
+        runner = OntologyMaintenanceRunner(repository, state_store=store)
+
+        result = runner.run_once()
+
+        self.assertNotEqual("portfolio:local:main", result["worldId"])
+        self.assertIn(
+            "portfolio:local:main",
+            result["maintenance"]["worldSelection"]["scopeRepairBlockedWorldIds"],
+        )
+
+    def test_repaired_scope_is_target_verified_before_cleanup_resumes(self):
+        class RepairedRepository(FakeOntologyRepository):
+            def __init__(self):
+                super().__init__()
+                self.audit_calls = []
+
+            def list_ontology_worlds(self):
+                return [{"worldId": "portfolio:local:main", "worldType": "portfolio"}]
+
+            def scoped_abox_integrity_audit(self, **kwargs):
+                self.audit_calls.append(dict(kwargs))
+                return {
+                    "status": "ok",
+                    "checkedScopeIds": list(kwargs.get("scope_ids") or []),
+                    "checkedScopeCount": len(kwargs.get("scope_ids") or []),
+                    "mismatchCount": 0,
+                    "nextCursor": kwargs.get("cursor") or 0,
+                    "targetedVerification": True,
+                }
+
+        old = (datetime.now(timezone.utc) - timedelta(minutes=10)).isoformat().replace("+00:00", "Z")
+        store = FakeStateStore({
+            "scopeIntegrityAuditByWorld": {
+                "portfolio:local:main": {"lastCheckedAt": old, "nextCursor": 7},
+            },
+            "scopeRepairByWorld": {
+                "portfolio:local:main": {
+                    "status": "completed-portfolio-scope-repair",
+                    "scopeIds": ["symbol:005930:flow"],
+                    "requestedAt": old,
+                },
+            },
+        })
+        repository = RepairedRepository()
+        result = OntologyMaintenanceRunner(repository, state_store=store).run_once()
+
+        self.assertEqual("ok", result["status"])
+        self.assertEqual(
+            ["symbol:005930:flow"],
+            repository.audit_calls[0]["scope_ids"],
+        )
+        self.assertEqual("resolved", result["maintenance"]["scopeRepair"]["status"])
+        self.assertEqual(1, len(repository.calls))
+
+    def test_scope_repair_router_uses_portfolio_snapshot_path_only_for_portfolio_world(self):
+        class RepairTarget:
+            def __init__(self, status):
+                self.status = status
+                self.calls = []
+
+            def enqueue_scope_repair(self, **payload):
+                self.calls.append(dict(payload))
+                return {"status": self.status}
+
+        shared = RepairTarget("shared")
+        portfolio = RepairTarget("portfolio")
+        router = OntologyScopeRepairRouter(shared, portfolio)
+
+        portfolio_result = router.enqueue_scope_repair(
+            world_id="portfolio:local:main",
+            request_id="repair:1",
+            repair_requests_by_symbol={"005930": {"scopeIds": ["symbol:005930:flow"]}},
+        )
+        shared_result = router.enqueue_scope_repair(
+            world_id="market:shared:kr",
+            request_id="repair:2",
+            repair_requests_by_symbol={"005930": {"scopeIds": ["symbol:005930:market"]}},
+        )
+
+        self.assertEqual("portfolio", portfolio_result["status"])
+        self.assertEqual("portfolio-durable-snapshot", portfolio_result["repairRoute"])
+        self.assertEqual(1, len(portfolio.calls))
+        self.assertEqual("shared", shared_result["status"])
+        self.assertEqual("shared-world-projection-outbox", shared_result["repairRoute"])
+        self.assertEqual(1, len(shared.calls))
+
+    def test_portfolio_scope_repair_replays_only_requested_symbols_without_queue_mutation(self):
+        class SnapshotStore:
+            def load_previous(self):
+                return {"main": {"snapshot": "durable"}}
+
+        class ProjectionRecorder:
+            def __init__(self):
+                self.calls = []
+
+            def record_snapshot(self, snapshot, target_symbols=None, reasoning_context=None):
+                self.calls.append({
+                    "snapshot": snapshot,
+                    "targetSymbols": list(target_symbols or []),
+                    "reasoningContext": dict(reasoning_context or {}),
+                })
+                return {"status": "ok", "aboxSnapshotId": "manifest:repaired"}
+
+        snapshot = SimpleNamespace(
+            account_id="main",
+            generated_at="2026-08-13T00:00:00Z",
+            has_live_account_data=lambda: True,
+        )
+        recorder = ProjectionRecorder()
+        runner = OntologyPortfolioScopeRepairRunner(
+            SnapshotStore(),
+            recorder,
+            settings={"ontologyTenantId": "local"},
+        )
+        repair_requests = {
+            "005930": {
+                "requestId": "repair:1",
+                "scopeIds": ["symbol:005930:flow"],
+            },
+        }
+        with patch(
+            "digital_twin.application.ontology_portfolio_rebuild_service.account_snapshot_from_monitor_state",
+            return_value=snapshot,
+        ), patch(
+            "digital_twin.application.ontology_portfolio_rebuild_service.world_from_snapshot",
+            return_value=SimpleNamespace(world_id="portfolio:local:main"),
+        ):
+            result = runner.enqueue_scope_repair(
+                world_id="portfolio:local:main",
+                request_id="repair:1",
+                repair_requests_by_symbol=repair_requests,
+                source_account_id="main",
+            )
+
+        self.assertEqual("completed-portfolio-scope-repair", result["status"])
+        self.assertFalse(result["mutatedLiveReasoningQueue"])
+        self.assertEqual(["005930"], recorder.calls[0]["targetSymbols"])
+        self.assertEqual(
+            repair_requests,
+            recorder.calls[0]["reasoningContext"]["scopeRepairRequestsBySymbol"],
+        )
 
     def test_round_robin_uses_bounded_policy_and_persists_cursor(self):
         repository = FakeOntologyRepository()
@@ -201,8 +369,9 @@ class OntologyMaintenanceRunnerTests(unittest.TestCase):
         self.assertEqual("market:shared:kr", first["worldId"])
         self.assertEqual("portfolio:local:main", second["worldId"])
         self.assertEqual(7, repository.calls[0]["maxInactiveManifests"])
-        self.assertEqual(6, repository.calls[0]["maxAboxDeleteBatches"])
+        self.assertEqual(2, repository.calls[0]["maxAboxDeleteBatches"])
         self.assertEqual(150, repository.calls[0]["aboxDeleteBatchSize"])
+        self.assertEqual(45, repository.calls[0]["maxDurationSeconds"])
         self.assertEqual(0, repository.calls[0]["keepInactiveManifests"])
         self.assertEqual(2, first["maintenance"]["removedManifestCount"])
         self.assertEqual(5, first["maintenance"]["plannedRetiredScopeGenerationCount"])
@@ -229,8 +398,9 @@ class OntologyMaintenanceRunnerTests(unittest.TestCase):
         self.assertEqual("durable-maintenance-state", status["worldInventorySource"])
         self.assertEqual([], status["knownWorldIds"])
         self.assertEqual(100, status["policy"]["criticalInactiveManifestCount"])
-        self.assertEqual(8, status["policy"]["maxDeleteBatchesPerRun"])
+        self.assertEqual(2, status["policy"]["maxDeleteBatchesPerRun"])
         self.assertEqual(150, status["policy"]["deleteBatchSize"])
+        self.assertEqual(45, status["policy"]["sliceSeconds"])
 
     def test_live_manifest_inventory_prioritizes_backlogged_world_and_replaces_stale_state(self):
         repository = ManifestInventoryRepository()
@@ -424,8 +594,8 @@ class OntologyMaintenanceRunnerTests(unittest.TestCase):
         result = runner.run_once()
 
         self.assertEqual("ok", result["status"])
-        self.assertEqual(4, repository.calls[0]["maxInactiveManifests"])
-        self.assertEqual(6, repository.calls[0]["maxAboxDeleteBatches"])
+        self.assertEqual(2, repository.calls[0]["maxInactiveManifests"])
+        self.assertEqual(2, repository.calls[0]["maxAboxDeleteBatches"])
         self.assertEqual(150, repository.calls[0]["aboxDeleteBatchSize"])
         self.assertEqual(
             "critical-drain",
@@ -591,6 +761,7 @@ class OntologyMaintenanceRunnerTests(unittest.TestCase):
                 "ontologyAboxMaintenanceMaxDeleteBatchesPerRun": "2",
                 "ontologyAboxMaintenanceAdaptiveDrainMaxDeleteBatchesPerRun": "4",
                 "ontologyAboxMaintenanceAdaptiveDrainCriticalRunsBeforeIncrease": "2",
+                "ontologyAboxMaintenanceSliceSeconds": "80",
             },
         )
 
@@ -620,8 +791,9 @@ class OntologyMaintenanceRunnerTests(unittest.TestCase):
         )
 
         self.assertEqual(16, budget["requestedAboxDeleteBatches"])
-        self.assertEqual(6, budget["runtimeSafeDeleteBatchCap"])
-        self.assertEqual(6, budget["maxAboxDeleteBatches"])
+        self.assertEqual(2, budget["runtimeSafeDeleteBatchCap"])
+        self.assertEqual(2, budget["maxAboxDeleteBatches"])
+        self.assertEqual(45, budget["maxDurationSeconds"])
 
     def test_capacity_pressure_prioritizes_bounded_cleanup_over_pending_reasoning(self):
         repository = FakeOntologyRepository()
@@ -645,9 +817,9 @@ class OntologyMaintenanceRunnerTests(unittest.TestCase):
         result = runner.run_once()
 
         self.assertEqual("ok", result["status"])
-        self.assertEqual(10, repository.calls[0]["maxInactiveManifests"])
-        self.assertEqual(6, repository.calls[0]["maxAboxDeleteBatches"])
-        self.assertEqual(250, repository.calls[0]["aboxDeleteBatchSize"])
+        self.assertEqual(4, repository.calls[0]["maxInactiveManifests"])
+        self.assertEqual(2, repository.calls[0]["maxAboxDeleteBatches"])
+        self.assertEqual(200, repository.calls[0]["aboxDeleteBatchSize"])
         self.assertEqual(1, result["maintenance"]["capacityBudget"]["capacityPriority"])
         self.assertEqual(12, result["maintenance"]["capacityBudget"]["requestedAboxDeleteBatches"])
 

@@ -2269,6 +2269,7 @@ class ScopedABoxManifestMixin:
         world_id: str = "",
         cursor: int = 0,
         limit: int = 20,
+        scope_ids: Iterable[str] = None,
     ) -> Dict[str, object]:
         """Verify a bounded slice of the active Manifest without rewriting it.
 
@@ -2313,10 +2314,24 @@ class ScopedABoxManifestMixin:
             }
         ordered = sorted(scope_plan, key=lambda item: str(item.get("scopeId") or ""))
         bounded_limit = max(1, min(200, int(limit or 20)))
-        start = max(0, int(cursor or 0)) % len(ordered)
-        selected = ordered[start:start + bounded_limit]
-        if len(selected) < bounded_limit and len(selected) < len(ordered):
-            selected.extend(ordered[:min(start, bounded_limit - len(selected))])
+        requested_scope_ids = list(dict.fromkeys(
+            str(item or "").strip()
+            for item in scope_ids or []
+            if str(item or "").strip()
+        ))[:bounded_limit]
+        targeted_verification = bool(requested_scope_ids)
+        if targeted_verification:
+            requested_scope_id_set = set(requested_scope_ids)
+            selected = [
+                item for item in ordered
+                if str(item.get("scopeId") or "") in requested_scope_id_set
+            ]
+            start = max(0, int(cursor or 0)) % len(ordered)
+        else:
+            start = max(0, int(cursor or 0)) % len(ordered)
+            selected = ordered[start:start + bounded_limit]
+            if len(selected) < bounded_limit and len(selected) < len(ordered):
+                selected.extend(ordered[:min(start, bounded_limit - len(selected))])
         counts = self.scoped_abox_scope_row_counts_batch(
             selected,
             world_id=str(world_id or ""),
@@ -2344,7 +2359,16 @@ class ScopedABoxManifestMixin:
                 "expectedRelationCount": expected_relations,
                 "actualRelationCount": actual_relations,
             })
-        next_cursor = (start + len(selected)) % len(ordered)
+        next_cursor = (
+            start
+            if targeted_verification
+            else (start + len(selected)) % len(ordered)
+        )
+        checked_scope_ids = (
+            requested_scope_ids
+            if targeted_verification
+            else [str(item.get("scopeId") or "") for item in selected]
+        )
         return {
             "configured": True,
             "status": "repair-required" if mismatches else "ok",
@@ -2357,12 +2381,13 @@ class ScopedABoxManifestMixin:
             ),
             "activeScopeCount": len(ordered),
             "checkedScopeCount": len(selected),
-            "checkedScopeIds": [str(item.get("scopeId") or "") for item in selected],
+            "checkedScopeIds": checked_scope_ids,
             "mismatchCount": len(mismatches),
             "mismatches": mismatches[:50],
             "cursor": start,
             "nextCursor": next_cursor,
-            "cycleCompleted": next_cursor == 0,
+            "cycleCompleted": targeted_verification or next_cursor == 0,
+            "targetedVerification": targeted_verification,
             "readOnly": True,
             "automaticFullProjectionUsed": False,
         }
@@ -6313,6 +6338,7 @@ class ScopedABoxManifestMixin:
         max_delete_batches: int = None,
         delete_batch_size: int = None,
         world_id: str = "",
+        max_duration_seconds: int = None,
     ) -> Dict[str, object]:
         """Prune immutable Manifests without deleting generations still referenced.
 
@@ -6321,6 +6347,15 @@ class ScopedABoxManifestMixin:
         protected set therefore includes the active Manifest and all retained
         rollback Manifests before any old physical rows are removed.
         """
+        started_at = time.monotonic()
+        duration_limit = (
+            None
+            if max_duration_seconds is None
+            else max(5, min(300, int(max_duration_seconds or 0)))
+        )
+        deadline_monotonic = (
+            None if duration_limit is None else started_at + duration_limit
+        )
         active = self.active_abox_metadata(world_id)
         active_id = str(
             active_manifest_id
@@ -6421,9 +6456,23 @@ class ScopedABoxManifestMixin:
             retired_generation_ids.append(generation_id)
         generation_cleanup_rows = []
         cleanup_partial = False
+        time_budget_exhausted = False
+        resume_generation_id = ""
+        resume_manifest_id = ""
         for generation_id in retired_generation_ids:
-            if remaining_batch_budget <= 0:
+            if (
+                remaining_batch_budget <= 0
+                or (
+                    deadline_monotonic is not None
+                    and time.monotonic() >= deadline_monotonic
+                )
+            ):
                 cleanup_partial = True
+                time_budget_exhausted = bool(
+                    deadline_monotonic is not None
+                    and time.monotonic() >= deadline_monotonic
+                )
+                resume_generation_id = generation_id
                 break
             attempted_generation_ids.append(generation_id)
             cleanup = self.delete_box_snapshot_rows_in_batches(
@@ -6433,6 +6482,7 @@ class ScopedABoxManifestMixin:
                 generation_id,
                 batch_size=bounded_delete_batch_size,
                 max_batches=remaining_batch_budget,
+                deadline_monotonic=deadline_monotonic,
             )
             generation_cleanup_rows.append(cleanup)
             deleted = int(number_or_none(cleanup.get("deletedBatchCount")) or 0)
@@ -6442,6 +6492,8 @@ class ScopedABoxManifestMixin:
                 removed_generation_ids.append(generation_id)
             else:
                 cleanup_partial = True
+                time_budget_exhausted = bool(cleanup.get("timeBudgetExhausted"))
+                resume_generation_id = generation_id
                 break
 
         # A Manifest marker can disappear only after every physical generation
@@ -6450,8 +6502,23 @@ class ScopedABoxManifestMixin:
         removed_generation_set = set(removed_generation_ids)
         if not cleanup_partial:
             for metadata in removable:
-                if remaining_batch_budget <= 0:
+                if (
+                    remaining_batch_budget <= 0
+                    or (
+                        deadline_monotonic is not None
+                        and time.monotonic() >= deadline_monotonic
+                    )
+                ):
                     cleanup_partial = True
+                    time_budget_exhausted = bool(
+                        deadline_monotonic is not None
+                        and time.monotonic() >= deadline_monotonic
+                    )
+                    resume_manifest_id = str(
+                        metadata.get("worldviewManifestId")
+                        or metadata.get("aboxSnapshotId")
+                        or ""
+                    ).strip()
                     break
                 manifest_id = str(metadata.get("worldviewManifestId") or metadata.get("aboxSnapshotId") or "").strip()
                 if not manifest_id:
@@ -6463,6 +6530,7 @@ class ScopedABoxManifestMixin:
                 }
                 if not required_generations.issubset(removed_generation_set):
                     cleanup_partial = True
+                    resume_manifest_id = resume_manifest_id or manifest_id
                     continue
                 cleanup = self.delete_box_snapshot_rows_in_batches(
                     driver,
@@ -6471,6 +6539,7 @@ class ScopedABoxManifestMixin:
                     manifest_id,
                     batch_size=bounded_delete_batch_size,
                     max_batches=remaining_batch_budget,
+                    deadline_monotonic=deadline_monotonic,
                 )
                 cleanup_rows.append(cleanup)
                 deleted = int(number_or_none(cleanup.get("deletedBatchCount")) or 0)
@@ -6480,6 +6549,8 @@ class ScopedABoxManifestMixin:
                     removed.append(manifest_id)
                 else:
                     cleanup_partial = True
+                    time_budget_exhausted = bool(cleanup.get("timeBudgetExhausted"))
+                    resume_manifest_id = manifest_id
                     break
         return {
             "status": "partial" if cleanup_partial else "ok",
@@ -6507,6 +6578,12 @@ class ScopedABoxManifestMixin:
             ),
             "remainingInactiveManifestCount": max(0, len(ordered) - len(removed)),
             "deletedBatchCount": deleted_batches,
+            "maxDurationSeconds": duration_limit,
+            "durationMs": int((time.monotonic() - started_at) * 1000),
+            "timeBudgetExhausted": time_budget_exhausted,
+            "resumeRequired": cleanup_partial,
+            "resumeGenerationId": resume_generation_id,
+            "resumeManifestId": resume_manifest_id,
             "generationCleanup": generation_cleanup_rows,
             "cleanup": cleanup_rows,
         }
@@ -6518,6 +6595,7 @@ class ScopedABoxManifestMixin:
         max_manifests: int = None,
         max_delete_batches: int = None,
         delete_batch_size: int = None,
+        max_duration_seconds: int = None,
     ) -> Dict[str, object]:
         """Run one bounded, reference-aware scoped ABox maintenance pass."""
         imported = self.driver_imports()
@@ -6546,6 +6624,7 @@ class ScopedABoxManifestMixin:
                         max_delete_batches=max_delete_batches,
                         delete_batch_size=delete_batch_size,
                         world_id=world_id,
+                        max_duration_seconds=max_duration_seconds,
                     )
                 finally:
                     self.close_driver(driver)
@@ -6620,6 +6699,16 @@ class ScopedABoxManifestMixin:
             self.deferred_maintenance_abox_delete_batch_size()
             if requested_delete_batch_size is None
             else max(10, min(500, int(requested_delete_batch_size)))
+        )
+        requested_duration_limit = number_or_none(
+            options.get("maxDurationSeconds")
+            if options.get("maxDurationSeconds") is not None
+            else options.get("timeBudgetSeconds")
+        )
+        maintenance_duration_limit = (
+            None
+            if requested_duration_limit is None
+            else max(5, min(300, int(requested_duration_limit)))
         )
         requested_keep_inactive = number_or_none(
             options.get("keepInactiveManifests")
@@ -6742,6 +6831,12 @@ class ScopedABoxManifestMixin:
                 max_manifests=maintenance_manifest_limit,
                 max_delete_batches=maintenance_delete_batch_limit,
                 delete_batch_size=maintenance_delete_batch_size,
+                max_duration_seconds=maintenance_duration_limit,
+            )
+            abox_slice_incomplete = bool(
+                abox_result.get("timeBudgetExhausted")
+                or abox_result.get("resumeRequired")
+                or str(abox_result.get("status") or "") == "partial"
             )
             legacy_result: Dict[str, object] = {
                 "status": "not-required",
@@ -6751,8 +6846,14 @@ class ScopedABoxManifestMixin:
             # generic ABox pruning must not scan every ABox snapshot. Legacy
             # complete-world snapshots have their own stable prefixes and can
             # be safely reclaimed once a scoped Manifest is active.
-            active_abox = self.active_abox_metadata(requested_world_id)
-            if not requested_world_id and str(active_abox.get("scopedAboxManifestVersion") or "") == SCOPED_ABOX_MANIFEST_VERSION:
+            active_abox: Dict[str, object] = {}
+            if not abox_slice_incomplete and not requested_world_id:
+                active_abox = self.active_abox_metadata(requested_world_id)
+            if (
+                not abox_slice_incomplete
+                and not requested_world_id
+                and str(active_abox.get("scopedAboxManifestVersion") or "") == SCOPED_ABOX_MANIFEST_VERSION
+            ):
                 pending = self.pending_abox_activation(requested_world_id)
                 active_scope_ids = {
                     str(value or "").strip()
@@ -6786,7 +6887,12 @@ class ScopedABoxManifestMixin:
             }
             reader = getattr(self, "read_inference_generation_records", None)
             pruner = getattr(self, "prune_inferencebox_generations", None)
-            if callable(reader) and callable(pruner):
+            if abox_slice_incomplete:
+                inference_result = {
+                    "status": "deferred-maintenance-slice",
+                    "reason": "The scoped ABox cleanup slice is resumable; InferenceBox retention resumes after it releases the writer.",
+                }
+            elif callable(reader) and callable(pruner):
                 records = typedb_call_for_world(
                     reader,
                     published_only=True,
@@ -6816,6 +6922,7 @@ class ScopedABoxManifestMixin:
                 "maxInactiveManifests": maintenance_manifest_limit,
                 "maxAboxDeleteBatches": maintenance_delete_batch_limit,
                 "aboxDeleteBatchSize": maintenance_delete_batch_size,
+                "maxDurationSeconds": maintenance_duration_limit,
                 "maxOrphanGenerations": maintenance_orphan_limit,
                 "orphanScopedAbox": orphan_result,
                 "abox": abox_result,
@@ -10650,6 +10757,7 @@ class TypeDBOntologyGraphRepository(GraphStoreOntologyRowMapperMixin, ScopedABox
         snapshot_id: str,
         batch_size: int = None,
         max_batches: int = None,
+        deadline_monotonic: float = None,
     ) -> Dict[str, object]:
         """Delete one inactive ABox generation in short TypeDB writes.
 
@@ -10665,16 +10773,24 @@ class TypeDBOntologyGraphRepository(GraphStoreOntologyRowMapperMixin, ScopedABox
         configured_batch_size = self.abox_delete_batch_size() if batch_size is None else int(batch_size or 0)
         safe_batch_size = max(1, min(5000, configured_batch_size))
         safe_max_batches = None if max_batches is None else max(0, int(max_batches or 0))
+        started_at = time.monotonic()
         deleted_batches = 0
         remaining_types: List[str] = []
+        time_budget_exhausted = False
         for type_label in ["ontology-assertion", "ontology-node"]:
-            while self.box_snapshot_instance_exists(
-                driver,
-                imported,
-                clean_box,
-                clean_snapshot_id,
-                type_label,
-            ):
+            while True:
+                if deadline_monotonic is not None and time.monotonic() >= deadline_monotonic:
+                    time_budget_exhausted = True
+                    remaining_types.append(type_label)
+                    break
+                if not self.box_snapshot_instance_exists(
+                    driver,
+                    imported,
+                    clean_box,
+                    clean_snapshot_id,
+                    type_label,
+                ):
+                    break
                 if safe_max_batches is not None and deleted_batches >= safe_max_batches:
                     remaining_types.append(type_label)
                     break
@@ -10699,7 +10815,11 @@ class TypeDBOntologyGraphRepository(GraphStoreOntologyRowMapperMixin, ScopedABox
                 deleted_batches += 1
             if remaining_types:
                 break
-        if safe_max_batches is not None and deleted_batches >= safe_max_batches:
+        if (
+            not time_budget_exhausted
+            and safe_max_batches is not None
+            and deleted_batches >= safe_max_batches
+        ):
             for type_label in ["ontology-assertion", "ontology-node"]:
                 if self.box_snapshot_instance_exists(
                     driver,
@@ -10717,6 +10837,9 @@ class TypeDBOntologyGraphRepository(GraphStoreOntologyRowMapperMixin, ScopedABox
             "maxBatches": safe_max_batches,
             "deletedBatchCount": deleted_batches,
             "remainingRowTypes": remaining_types,
+            "timeBudgetExhausted": time_budget_exhausted,
+            "resumeRequired": bool(remaining_types),
+            "durationMs": int((time.monotonic() - started_at) * 1000),
         }
 
     def discard_abox_generation(self, snapshot_id: str) -> Dict[str, object]:

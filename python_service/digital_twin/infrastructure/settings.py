@@ -294,6 +294,7 @@ TEXT_SETTING_KEYS = [
     "ontologyAboxMaintenanceExecutionTimeoutSeconds",
     "ontologyAboxMaintenanceExecutionTimeoutGraceSeconds",
     "ontologyAboxMaintenanceExecutionReserveSeconds",
+    "ontologyAboxMaintenanceSliceSeconds",
     "ontologyAboxMaintenanceEstimatedDeleteBatchSeconds",
     "ontologyAboxMaintenanceDeferWhenReasoningPending",
     "ontologyAboxMaintenanceMaxReasoningDeferralSeconds",
@@ -316,6 +317,7 @@ TEXT_SETTING_KEYS = [
     "ontologyScopeIntegrityAuditIntervalMinutes",
     "ontologyScopeIntegrityAuditBatchSize",
     "ontologyScopeRepairRetryMinutes",
+    "ontologyScopeRepairVerificationMinutes",
     "ontologyReasoningUrgentReviewLevels",
     "ontologyReasoningProcessedEventLimit",
     "ontologyReasoningTypeDbNativeRuleExecutionEnabled",
@@ -405,12 +407,15 @@ TEXT_SETTING_KEYS = [
     "typedbCapacityThrottlePercent",
     "typedbCapacityAutoRotateEnabled",
     "typedbCapacityAutoRotatePercent",
+    "typedbCapacityAutoRotateFreeSpaceMb",
     "typedbCapacityCriticalPercent",
     "typedbCapacityAutoRotateCooldownMinutes",
     "typedbCapacityAutoRotateFailureRetrySeconds",
     "typedbBlueGreenRotationEnabled",
     "typedbBlueGreenStagePortOffset",
     "typedbBlueGreenRetiredRetentionMinutes",
+    "typedbBlueGreenMinimumHeadroomMb",
+    "typedbBlueGreenEstimatedCandidateMaxMb",
     "typedbPortfolioWorldProjectionRebuildLimit",
     "typedbPortfolioWorldProjectionRebuildTimeoutSeconds",
     "typedbCapacityMaintenanceMaxManifests",
@@ -1489,26 +1494,25 @@ def runtime_settings(fast_operational_read: bool = False) -> Dict[str, str]:
         "ontologyAboxMaintenanceEnabled": value("ontologyAboxMaintenanceEnabled", "ONTOLOGY_ABOX_MAINTENANCE_ENABLED", "1"),
         "ontologyAboxMaintenanceIntervalSeconds": value("ontologyAboxMaintenanceIntervalSeconds", "ONTOLOGY_ABOX_MAINTENANCE_INTERVAL_SECONDS", "60"),
         "ontologyAboxMaintenanceWorldTypes": value("ontologyAboxMaintenanceWorldTypes", "ONTOLOGY_ABOX_MAINTENANCE_WORLD_TYPES", "portfolio,market,knowledge"),
-        "ontologyAboxMaintenanceMaxManifestsPerRun": value("ontologyAboxMaintenanceMaxManifestsPerRun", "ONTOLOGY_ABOX_MAINTENANCE_MAX_MANIFESTS_PER_RUN", "8"),
-        # One inactive scoped ABox generation typically holds several
-        # hundred rows. Two 50-row delete batches never finish one generation
-        # during a busy market, so retention falls behind permanently and
-        # broadens later TypeDB reads. Keep the turn bounded, but let it
-        # complete a normal generation inside the isolated maintenance window.
-        "ontologyAboxMaintenanceMaxDeleteBatchesPerRun": value("ontologyAboxMaintenanceMaxDeleteBatchesPerRun", "ONTOLOGY_ABOX_MAINTENANCE_MAX_DELETE_BATCHES_PER_RUN", "8"),
+        "ontologyAboxMaintenanceMaxManifestsPerRun": value("ontologyAboxMaintenanceMaxManifestsPerRun", "ONTOLOGY_ABOX_MAINTENANCE_MAX_MANIFESTS_PER_RUN", "2"),
+        # Retention is resumable at the generation and row-batch boundary.
+        # Short slices release TypeDB's single writer before live inference
+        # has to wait behind a long historical cleanup transaction.
+        "ontologyAboxMaintenanceMaxDeleteBatchesPerRun": value("ontologyAboxMaintenanceMaxDeleteBatchesPerRun", "ONTOLOGY_ABOX_MAINTENANCE_MAX_DELETE_BATCHES_PER_RUN", "2"),
         "ontologyAboxMaintenanceDeleteBatchSize": value("ontologyAboxMaintenanceDeleteBatchSize", "ONTOLOGY_ABOX_MAINTENANCE_DELETE_BATCH_SIZE", "150"),
         "ontologyAboxMaintenanceKeepInactiveManifestCount": value("ontologyAboxMaintenanceKeepInactiveManifestCount", "ONTOLOGY_ABOX_MAINTENANCE_KEEP_INACTIVE_MANIFEST_COUNT", "1"),
         "ontologyAboxMaintenanceWarningInactiveManifestCount": value("ontologyAboxMaintenanceWarningInactiveManifestCount", "ONTOLOGY_ABOX_MAINTENANCE_WARNING_INACTIVE_MANIFEST_COUNT", "8"),
         "ontologyAboxMaintenanceCriticalInactiveManifestCount": value("ontologyAboxMaintenanceCriticalInactiveManifestCount", "ONTOLOGY_ABOX_MAINTENANCE_CRITICAL_INACTIVE_MANIFEST_COUNT", "24"),
         "ontologyAboxMaintenanceAdaptiveDrainEnabled": value("ontologyAboxMaintenanceAdaptiveDrainEnabled", "ONTOLOGY_ABOX_MAINTENANCE_ADAPTIVE_DRAIN_ENABLED", "1"),
-        "ontologyAboxMaintenanceAdaptiveDrainMaxDeleteBatchesPerRun": value("ontologyAboxMaintenanceAdaptiveDrainMaxDeleteBatchesPerRun", "ONTOLOGY_ABOX_MAINTENANCE_ADAPTIVE_DRAIN_MAX_DELETE_BATCHES_PER_RUN", "16"),
+        "ontologyAboxMaintenanceAdaptiveDrainMaxDeleteBatchesPerRun": value("ontologyAboxMaintenanceAdaptiveDrainMaxDeleteBatchesPerRun", "ONTOLOGY_ABOX_MAINTENANCE_ADAPTIVE_DRAIN_MAX_DELETE_BATCHES_PER_RUN", "4"),
         "ontologyAboxMaintenanceAdaptiveDrainCriticalRunsBeforeIncrease": value("ontologyAboxMaintenanceAdaptiveDrainCriticalRunsBeforeIncrease", "ONTOLOGY_ABOX_MAINTENANCE_ADAPTIVE_DRAIN_CRITICAL_RUNS_BEFORE_INCREASE", "2"),
         "ontologyAboxMaintenanceAdaptiveDrainBacklogGrowthRunsBeforeIncrease": value("ontologyAboxMaintenanceAdaptiveDrainBacklogGrowthRunsBeforeIncrease", "ONTOLOGY_ABOX_MAINTENANCE_ADAPTIVE_DRAIN_BACKLOG_GROWTH_RUNS_BEFORE_INCREASE", "2"),
         "ontologyAboxMaintenanceAdaptiveDrainMaxConsecutiveWorldRuns": value("ontologyAboxMaintenanceAdaptiveDrainMaxConsecutiveWorldRuns", "ONTOLOGY_ABOX_MAINTENANCE_ADAPTIVE_DRAIN_MAX_CONSECUTIVE_WORLD_RUNS", "3"),
         "ontologyAboxMaintenanceProcessIsolationEnabled": value("ontologyAboxMaintenanceProcessIsolationEnabled", "ONTOLOGY_ABOX_MAINTENANCE_PROCESS_ISOLATION_ENABLED", "1"),
-        "ontologyAboxMaintenanceExecutionTimeoutSeconds": value("ontologyAboxMaintenanceExecutionTimeoutSeconds", "ONTOLOGY_ABOX_MAINTENANCE_EXECUTION_TIMEOUT_SECONDS", "180"),
+        "ontologyAboxMaintenanceExecutionTimeoutSeconds": value("ontologyAboxMaintenanceExecutionTimeoutSeconds", "ONTOLOGY_ABOX_MAINTENANCE_EXECUTION_TIMEOUT_SECONDS", "120"),
         "ontologyAboxMaintenanceExecutionTimeoutGraceSeconds": value("ontologyAboxMaintenanceExecutionTimeoutGraceSeconds", "ONTOLOGY_ABOX_MAINTENANCE_EXECUTION_TIMEOUT_GRACE_SECONDS", "10"),
-        "ontologyAboxMaintenanceExecutionReserveSeconds": value("ontologyAboxMaintenanceExecutionReserveSeconds", "ONTOLOGY_ABOX_MAINTENANCE_EXECUTION_RESERVE_SECONDS", "60"),
+        "ontologyAboxMaintenanceExecutionReserveSeconds": value("ontologyAboxMaintenanceExecutionReserveSeconds", "ONTOLOGY_ABOX_MAINTENANCE_EXECUTION_RESERVE_SECONDS", "30"),
+        "ontologyAboxMaintenanceSliceSeconds": value("ontologyAboxMaintenanceSliceSeconds", "ONTOLOGY_ABOX_MAINTENANCE_SLICE_SECONDS", "45"),
         "ontologyAboxMaintenanceEstimatedDeleteBatchSeconds": value("ontologyAboxMaintenanceEstimatedDeleteBatchSeconds", "ONTOLOGY_ABOX_MAINTENANCE_ESTIMATED_DELETE_BATCH_SECONDS", "20"),
         "ontologyAboxMaintenanceDeferWhenReasoningPending": value("ontologyAboxMaintenanceDeferWhenReasoningPending", "ONTOLOGY_ABOX_MAINTENANCE_DEFER_WHEN_REASONING_PENDING", "1"),
         "ontologyAboxMaintenanceMaxReasoningDeferralSeconds": value("ontologyAboxMaintenanceMaxReasoningDeferralSeconds", "ONTOLOGY_ABOX_MAINTENANCE_MAX_REASONING_DEFERRAL_SECONDS", "120"),
@@ -1533,7 +1537,8 @@ def runtime_settings(fast_operational_read: bool = False) -> Dict[str, str]:
         "ontologyScopeIntegrityAuditEnabled": value("ontologyScopeIntegrityAuditEnabled", "ONTOLOGY_SCOPE_INTEGRITY_AUDIT_ENABLED", "1"),
         "ontologyScopeIntegrityAuditIntervalMinutes": value("ontologyScopeIntegrityAuditIntervalMinutes", "ONTOLOGY_SCOPE_INTEGRITY_AUDIT_INTERVAL_MINUTES", "30"),
         "ontologyScopeIntegrityAuditBatchSize": value("ontologyScopeIntegrityAuditBatchSize", "ONTOLOGY_SCOPE_INTEGRITY_AUDIT_BATCH_SIZE", "20"),
-        "ontologyScopeRepairRetryMinutes": value("ontologyScopeRepairRetryMinutes", "ONTOLOGY_SCOPE_REPAIR_RETRY_MINUTES", "30"),
+        "ontologyScopeRepairRetryMinutes": value("ontologyScopeRepairRetryMinutes", "ONTOLOGY_SCOPE_REPAIR_RETRY_MINUTES", "5"),
+        "ontologyScopeRepairVerificationMinutes": value("ontologyScopeRepairVerificationMinutes", "ONTOLOGY_SCOPE_REPAIR_VERIFICATION_MINUTES", "5"),
         "ontologyReasoningUrgentReviewLevels": normalized_ontology_reasoning_urgent_review_levels(
             value("ontologyReasoningUrgentReviewLevels", "ONTOLOGY_REASONING_URGENT_REVIEW_LEVELS", "act,immediate")
         ),
@@ -2009,6 +2014,11 @@ def runtime_settings(fast_operational_read: bool = False) -> Dict[str, str]:
             "TYPEDB_CAPACITY_AUTO_ROTATE_PERCENT",
             "80",
         ),
+        "typedbCapacityAutoRotateFreeSpaceMb": value(
+            "typedbCapacityAutoRotateFreeSpaceMb",
+            "TYPEDB_CAPACITY_AUTO_ROTATE_FREE_SPACE_MB",
+            "24576",
+        ),
         "typedbCapacityCriticalPercent": value(
             "typedbCapacityCriticalPercent",
             "TYPEDB_CAPACITY_CRITICAL_PERCENT",
@@ -2039,6 +2049,16 @@ def runtime_settings(fast_operational_read: bool = False) -> Dict[str, str]:
             "TYPEDB_BLUE_GREEN_RETIRED_RETENTION_MINUTES",
             "30",
         ),
+        "typedbBlueGreenMinimumHeadroomMb": value(
+            "typedbBlueGreenMinimumHeadroomMb",
+            "TYPEDB_BLUE_GREEN_MINIMUM_HEADROOM_MB",
+            "12288",
+        ),
+        "typedbBlueGreenEstimatedCandidateMaxMb": value(
+            "typedbBlueGreenEstimatedCandidateMaxMb",
+            "TYPEDB_BLUE_GREEN_ESTIMATED_CANDIDATE_MAX_MB",
+            "4096",
+        ),
         "typedbPortfolioWorldProjectionRebuildLimit": value(
             "typedbPortfolioWorldProjectionRebuildLimit",
             "TYPEDB_PORTFOLIO_WORLD_PROJECTION_REBUILD_LIMIT",
@@ -2052,17 +2072,17 @@ def runtime_settings(fast_operational_read: bool = False) -> Dict[str, str]:
         "typedbCapacityMaintenanceMaxManifests": value(
             "typedbCapacityMaintenanceMaxManifests",
             "TYPEDB_CAPACITY_MAINTENANCE_MAX_MANIFESTS",
-            "10",
+            "4",
         ),
         "typedbCapacityMaintenanceMaxDeleteBatches": value(
             "typedbCapacityMaintenanceMaxDeleteBatches",
             "TYPEDB_CAPACITY_MAINTENANCE_MAX_DELETE_BATCHES",
-            "12",
+            "4",
         ),
         "typedbCapacityMaintenanceDeleteBatchSize": value(
             "typedbCapacityMaintenanceDeleteBatchSize",
             "TYPEDB_CAPACITY_MAINTENANCE_DELETE_BATCH_SIZE",
-            "250",
+            "150",
         ),
         "typedbStartupWaitSeconds": value("typedbStartupWaitSeconds", "TYPEDB_STARTUP_WAIT_SECONDS", "1800"),
         "typedbSeedOnStart": value("typedbSeedOnStart", "TYPEDB_SEED_ON_START", "1"),

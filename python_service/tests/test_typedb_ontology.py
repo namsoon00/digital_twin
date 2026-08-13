@@ -1911,6 +1911,7 @@ class TypeDBOntologyRepositoryTests(unittest.TestCase):
             result = repository.run_deferred_maintenance({
                 "aboxDeleteBatchSize": 25,
                 "maxInactiveManifests": 20,
+                "maxAboxDeleteBatches": 2,
             })
 
         self.assertEqual("ok", result["status"])
@@ -1918,10 +1919,58 @@ class TypeDBOntologyRepositoryTests(unittest.TestCase):
         self.assertEqual("ok", result["abox"]["status"])
         self.assertEqual("ok", result["inference"]["status"])
         prune_orphans.assert_not_called()
-        self.assertEqual(8, prune_abox.call_args.kwargs["max_delete_batches"])
+        self.assertEqual(2, prune_abox.call_args.kwargs["max_delete_batches"])
         self.assertEqual(25, prune_abox.call_args.kwargs["delete_batch_size"])
         self.assertEqual(20, prune_abox.call_args.kwargs["max_manifests"])
         prune_inference.assert_called_once_with("inference:active", keep_count=2)
+
+    def test_deferred_maintenance_stops_after_the_abox_time_slice(self):
+        repository = TypeDBOntologyGraphRepository("127.0.0.1:1729")
+        with patch.object(repository, "acquire_scoped_abox_write_lease", return_value={"acquired": True}), patch.object(
+            repository,
+            "release_scoped_abox_write_lease",
+            return_value={"status": "ok"},
+        ), patch.object(repository, "prune_inactive_scoped_abox_manifests", return_value={
+            "status": "partial",
+            "timeBudgetExhausted": True,
+            "resumeRequired": True,
+        }) as prune_abox, patch.object(repository, "active_abox_metadata", return_value={}), patch.object(
+            repository,
+            "read_inference_generation_records",
+        ) as read_inference:
+            result = repository.run_deferred_maintenance({
+                "worldId": "portfolio:local:main",
+                "maxDurationSeconds": 45,
+            })
+
+        self.assertEqual("partial", result["status"])
+        self.assertEqual(45, result["maxDurationSeconds"])
+        self.assertEqual("deferred-maintenance-slice", result["inference"]["status"])
+        self.assertEqual(45, prune_abox.call_args.kwargs["max_duration_seconds"])
+        read_inference.assert_not_called()
+
+    def test_abox_delete_time_slice_exits_before_another_typedb_read(self):
+        repository = TypeDBOntologyGraphRepository("127.0.0.1:1729")
+        imported = (object, object, object, object, SimpleNamespace(WRITE="write"))
+        with patch(
+            "digital_twin.infrastructure.typedb_ontology.time.monotonic",
+            return_value=10.0,
+        ), patch.object(repository, "box_snapshot_instance_exists") as exists:
+            result = repository.delete_box_snapshot_rows_in_batches(
+                object(),
+                (imported, None),
+                "ABox",
+                "scope:retired",
+                batch_size=50,
+                max_batches=2,
+                deadline_monotonic=5.0,
+            )
+
+        self.assertEqual("partial", result["status"])
+        self.assertTrue(result["timeBudgetExhausted"])
+        self.assertTrue(result["resumeRequired"])
+        self.assertEqual(0, result["deletedBatchCount"])
+        exists.assert_not_called()
 
     def test_scoped_manifest_inventory_avoids_physical_abox_row_counts(self):
         repository = TypeDBOntologyGraphRepository("127.0.0.1:1729")
@@ -1991,6 +2040,45 @@ class TypeDBOntologyRepositoryTests(unittest.TestCase):
             {item["scopeId"] for item in audited_plan},
         )
         self.assertEqual("portfolio:local:main", counts.call_args.kwargs["world_id"])
+
+    def test_scoped_manifest_integrity_repair_verifies_requested_scope_directly(self):
+        repository = TypeDBOntologyGraphRepository("127.0.0.1:1729")
+        scope_plan = [
+            {
+                "scopeId": "symbol:000660:market",
+                "generationId": "scope:market",
+                "entityCount": 2,
+                "relationCount": 1,
+            },
+            {
+                "scopeId": "symbol:005930:flow",
+                "generationId": "scope:flow",
+                "entityCount": 3,
+                "relationCount": 2,
+            },
+        ]
+        with patch.object(repository, "active_abox_metadata", return_value={
+            "status": "ok",
+            "scopedAboxManifestVersion": SCOPED_ABOX_MANIFEST_VERSION,
+            "scopePlan": scope_plan,
+        }), patch.object(repository, "scoped_abox_scope_row_counts_batch", return_value={
+            "symbol:005930:flow": {"entityCount": 3, "relationCount": 2},
+        }) as counts:
+            result = repository.scoped_abox_integrity_audit(
+                "portfolio:local:main",
+                cursor=1,
+                limit=20,
+                scope_ids=["symbol:005930:flow"],
+            )
+
+        self.assertEqual("ok", result["status"])
+        self.assertTrue(result["targetedVerification"])
+        self.assertEqual(["symbol:005930:flow"], result["checkedScopeIds"])
+        self.assertEqual(1, result["nextCursor"])
+        self.assertEqual(
+            ["symbol:005930:flow"],
+            [item["scopeId"] for item in counts.call_args.args[0]],
+        )
 
     def test_scoped_manifest_retention_stops_at_delete_batch_budget(self):
         repository = TypeDBOntologyGraphRepository("127.0.0.1:1729")
@@ -2120,6 +2208,47 @@ class TypeDBOntologyRepositoryTests(unittest.TestCase):
             {"manifest:new", "manifest:old"},
             set(result["removedManifestIds"]),
         )
+
+    def test_scoped_manifest_prune_keeps_marker_when_time_slice_expires(self):
+        repository = TypeDBOntologyGraphRepository("127.0.0.1:1729")
+        marker = {"id": "marker:old", "updatedAt": "2026-08-12T00:01:00Z"}
+        with patch.object(repository, "active_abox_metadata", return_value={
+            "status": "ok",
+            "worldviewManifestId": "manifest:active",
+            "scopeGenerationIds": {"active": "scope:active"},
+        }), patch.object(repository, "pending_abox_activation", return_value={"status": "empty"}), patch.object(
+            repository,
+            "worldview_manifest_marker_rows",
+            return_value=[marker],
+        ), patch.object(repository, "scoped_abox_metadata_from_manifest_marker", return_value={
+            "status": "ok",
+            "worldviewManifestId": "manifest:old",
+            "scopeGenerationIds": {"symbol:005930:flow": "scope:old"},
+        }), patch.object(repository, "delete_box_snapshot_rows_in_batches", return_value={
+            "status": "partial",
+            "deletedBatchCount": 1,
+            "timeBudgetExhausted": True,
+            "resumeRequired": True,
+        }) as delete_rows:
+            result = repository.prune_inactive_scoped_abox_manifests_in_driver(
+                object(),
+                (object, object, object, object, object),
+                active_manifest_id="manifest:active",
+                keep_inactive_count=0,
+                max_manifests=1,
+                max_delete_batches=2,
+                delete_batch_size=50,
+                world_id="portfolio:local:main",
+                max_duration_seconds=45,
+            )
+
+        self.assertEqual("partial", result["status"])
+        self.assertTrue(result["timeBudgetExhausted"])
+        self.assertTrue(result["resumeRequired"])
+        self.assertEqual("scope:old", result["resumeGenerationId"])
+        self.assertEqual([], result["removedManifestIds"])
+        self.assertEqual(1, delete_rows.call_count)
+        self.assertIn("deadline_monotonic", delete_rows.call_args.kwargs)
 
     def test_deferred_maintenance_can_be_scoped_to_portfolio_worlds(self):
         repository = TypeDBOntologyGraphRepository("127.0.0.1:1729")

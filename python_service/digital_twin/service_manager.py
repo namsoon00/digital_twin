@@ -241,6 +241,9 @@ def typedb_worker_spec(settings: Dict[str, object]) -> Dict[str, object]:
         "autoResetEnabled": str((settings or {}).get("typedbAutoResetEnabled") or "0"),
         "autoRotationEnabled": str((settings or {}).get("typedbCapacityAutoRotateEnabled") or "1"),
         "autoRotationPercent": str((settings or {}).get("typedbCapacityAutoRotatePercent") or "80"),
+        "autoRotationFreeSpaceMb": str(
+            (settings or {}).get("typedbCapacityAutoRotateFreeSpaceMb") or "24576"
+        ),
         "autoRotationCooldownMinutes": str(
             (settings or {}).get("typedbCapacityAutoRotateCooldownMinutes") or "60"
         ),
@@ -255,6 +258,12 @@ def typedb_worker_spec(settings: Dict[str, object]) -> Dict[str, object]:
         ),
         "blueGreenRetiredRetentionMinutes": str(
             (settings or {}).get("typedbBlueGreenRetiredRetentionMinutes") or "30"
+        ),
+        "blueGreenMinimumHeadroomMb": str(
+            (settings or {}).get("typedbBlueGreenMinimumHeadroomMb") or "12288"
+        ),
+        "blueGreenEstimatedCandidateMaxMb": str(
+            (settings or {}).get("typedbBlueGreenEstimatedCandidateMaxMb") or "4096"
         ),
         "ageResetEnabled": str((settings or {}).get("typedbAgeResetEnabled") or "0"),
         "healthAddress": address,
@@ -690,6 +699,7 @@ def typedb_auto_rotation_needed(
     spec: Dict[str, object],
     now_epoch: float = None,
     size_provider=None,
+    disk_usage_provider=None,
 ) -> Dict[str, object]:
     """Return whether a source-verified automatic TypeDB rotation is due.
 
@@ -705,6 +715,21 @@ def typedb_auto_rotation_needed(
     maximum_mb = int_value(configured.get("maxSizeMb"), 8192, 1)
     threshold_percent = int_value(configured.get("autoRotationPercent"), 80, 50)
     threshold_percent = min(100, threshold_percent)
+    free_space_trigger_mb = int_value(
+        configured.get("autoRotationFreeSpaceMb"),
+        0,
+        0,
+    )
+    minimum_headroom_mb = int_value(
+        configured.get("blueGreenMinimumHeadroomMb"),
+        12288,
+        1024,
+    )
+    candidate_max_mb = int_value(
+        configured.get("blueGreenEstimatedCandidateMaxMb"),
+        4096,
+        512,
+    )
     cooldown_minutes = min(24 * 60, int_value(configured.get("autoRotationCooldownMinutes"), 60, 1))
     failure_retry_seconds = min(
         3600,
@@ -713,6 +738,15 @@ def typedb_auto_rotation_needed(
     size_bytes = int((size_provider or directory_size_bytes)(data_path))
     size_mb = round(size_bytes / 1024 / 1024, 1)
     usage_percent = round(size_bytes / (maximum_mb * 1024 * 1024) * 100.0, 1)
+    probe_path = data_path if data_path.exists() else data_path.parent
+    try:
+        disk_usage = (disk_usage_provider or shutil.disk_usage)(probe_path)
+        free_space_mb = round(int(getattr(disk_usage, "free", 0) or 0) / 1024 / 1024, 1)
+    except OSError:
+        free_space_mb = None
+    estimated_candidate_mb = min(size_mb, float(candidate_max_mb)) if size_mb > 0 else 0.0
+    required_staging_mb = round(minimum_headroom_mb + estimated_candidate_mb, 1)
+    staging_ready = free_space_mb is not None and free_space_mb >= required_staging_mb
     now = float(now_epoch if now_epoch is not None else time.time())
     marker = read_typedb_retention_marker()
     try:
@@ -735,6 +769,14 @@ def typedb_auto_rotation_needed(
         and size_bytes > 0
         and usage_percent >= threshold_percent
     )
+    disk_pressure_reached = bool(
+        data_path.exists()
+        and size_bytes > 0
+        and free_space_trigger_mb > 0
+        and free_space_mb is not None
+        and free_space_mb <= free_space_trigger_mb
+    )
+    rotation_triggered = threshold_reached or disk_pressure_reached
     hard_limit_reached = usage_percent >= 100.0
     if not enabled:
         return {
@@ -745,8 +787,12 @@ def typedb_auto_rotation_needed(
             "typedbUsagePercent": usage_percent,
             "thresholdPercent": threshold_percent,
             "maxSizeMb": maximum_mb,
+            "freeSpaceMb": free_space_mb,
+            "freeSpaceTriggerMb": free_space_trigger_mb,
+            "stagingReady": staging_ready,
+            "requiredStagingMb": required_staging_mb,
         }
-    if not threshold_reached:
+    if not rotation_triggered:
         return {
             "needed": False,
             "reason": "below-threshold",
@@ -758,6 +804,11 @@ def typedb_auto_rotation_needed(
             "cooldownRemainingSeconds": cooldown_remaining_seconds,
             "lastAttemptStatus": last_attempt_status,
             "retryWindowSeconds": retry_window_seconds,
+            "freeSpaceMb": free_space_mb,
+            "freeSpaceTriggerMb": free_space_trigger_mb,
+            "diskPressureReached": False,
+            "stagingReady": staging_ready,
+            "requiredStagingMb": required_staging_mb,
         }
     if cooldown_remaining_seconds > 0 and not hard_limit_reached:
         return {
@@ -771,11 +822,22 @@ def typedb_auto_rotation_needed(
             "cooldownRemainingSeconds": cooldown_remaining_seconds,
             "lastAttemptStatus": last_attempt_status,
             "retryWindowSeconds": retry_window_seconds,
+            "freeSpaceMb": free_space_mb,
+            "freeSpaceTriggerMb": free_space_trigger_mb,
+            "diskPressureReached": disk_pressure_reached,
+            "stagingReady": staging_ready,
+            "requiredStagingMb": required_staging_mb,
         }
     return {
         "needed": True,
         "reason": (
-            "size " + str(size_mb) + "MB (" + str(usage_percent) + "%) >= automatic rotation "
+            "insufficient blue-green staging headroom: free "
+            + str(free_space_mb) + "MB < required " + str(required_staging_mb) + "MB"
+            if not staging_ready
+            else "shared disk free " + str(free_space_mb) + "MB <= automatic rotation "
+            + str(free_space_trigger_mb) + "MB"
+            if disk_pressure_reached and not threshold_reached
+            else "size " + str(size_mb) + "MB (" + str(usage_percent) + "%) >= automatic rotation "
             + str(threshold_percent) + "%"
         ),
         "enabled": True,
@@ -787,6 +849,20 @@ def typedb_auto_rotation_needed(
         "lastAttemptStatus": last_attempt_status,
         "retryWindowSeconds": retry_window_seconds,
         "hardLimitReached": hard_limit_reached,
+        "trigger": (
+            "size-and-disk"
+            if threshold_reached and disk_pressure_reached
+            else "shared-disk"
+            if disk_pressure_reached
+            else "typedb-size"
+        ),
+        "freeSpaceMb": free_space_mb,
+        "freeSpaceTriggerMb": free_space_trigger_mb,
+        "diskPressureReached": disk_pressure_reached,
+        "stagingReady": staging_ready,
+        "requiredStagingMb": required_staging_mb,
+        "estimatedCandidateMb": estimated_candidate_mb,
+        "minimumHeadroomMb": minimum_headroom_mb,
     }
 
 
@@ -955,6 +1031,9 @@ def status_worker(spec: Dict[str, object]) -> int:
         print(
             "Automatic rotation: " + ("enabled" if capacity.get("enabled") else "disabled")
             + " · threshold=" + str(capacity.get("thresholdPercent") or "-") + "%"
+            + " · free=" + str(capacity.get("freeSpaceMb") or "-") + "MB"
+            + " / trigger=" + str(capacity.get("freeSpaceTriggerMb") or "-") + "MB"
+            + " · staging=" + ("ready" if capacity.get("stagingReady") else "blocked")
             + " · status=" + rotation_status
             + " · cooldown=" + str(capacity.get("cooldownRemainingSeconds") or 0) + "s"
             + " · last-attempt=" + str(capacity.get("lastAttemptStatus") or "none")
@@ -1957,6 +2036,19 @@ def supervise() -> int:
                 decision = typedb_reset_needed(typedb_spec, ignore_auto_reset=True) if typedb_spec else {}
                 automatic = typedb_auto_rotation_needed(typedb_spec) if typedb_spec else {}
                 if automatic.get("needed"):
+                    if not bool(automatic.get("stagingReady", True)):
+                        notice = str(
+                            automatic.get("reason")
+                            or "TypeDB blue-green staging headroom is insufficient"
+                        )
+                        if notice != last_typedb_auto_rotation_notice:
+                            append_log(
+                                supervisor_log_path(),
+                                "typedb automatic rotation deferred; " + notice,
+                            )
+                            last_typedb_auto_rotation_notice = notice
+                        last_maintenance_at = time.monotonic()
+                        continue
                     recovery = typedb_auto_rotation_recovery_preflight(specs)
                     if bool(recovery.get("ready")):
                         notice = str(automatic.get("reason") or "TypeDB automatic capacity rotation")

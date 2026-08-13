@@ -1507,6 +1507,7 @@ class OntologyMaintenanceScheduler:
             "deferred-projection-coordinator",
             "deferred-write-lease",
             "deferred-pending-abox-activation",
+            "deferred-scope-integrity-repair",
         }:
             return float(self.interval_seconds)
         try:
@@ -1529,6 +1530,7 @@ class OntologyMaintenanceScheduler:
             "partial",
             "deferred-write-lease",
             "deferred-pending-abox-activation",
+            "deferred-scope-integrity-repair",
             "timeout",
         }:
             signature = status + "|" + str(maintenance.get("reason") or result.get("reason") or "")[:180]
@@ -1564,7 +1566,11 @@ class OntologyMaintenanceScheduler:
                         + " deleteBatches="
                         + str(maintenance.get("deletedBatchCount") or 0)
                         + " remaining="
-                        + str(maintenance.get("inactiveManifestCountRemaining") or 0),
+                        + str(maintenance.get("inactiveManifestCountRemaining") or 0)
+                        + " durationMs="
+                        + str(maintenance.get("durationMs") or result.get("durationMs") or 0)
+                        + " resume="
+                        + str(bool(maintenance.get("resumeRequired"))),
                         flush=True,
                     )
             except Exception as error:  # noqa: BLE001 - retention never stops live inference.

@@ -39,7 +39,7 @@ class OntologyMaintenanceRunner:
     state in MySQL so restarts continue the round-robin world order.
     """
 
-    state_contract = "ontology-maintenance-state-v8"
+    state_contract = "ontology-maintenance-state-v9"
 
     def __init__(
         self,
@@ -73,7 +73,7 @@ class OntologyMaintenanceRunner:
     def execution_timeout_seconds(self) -> int:
         return max(30, min(1800, integer(
             self.settings.get("ontologyAboxMaintenanceExecutionTimeoutSeconds"),
-            180,
+            120,
         )))
 
     def execution_timeout_grace_seconds(self) -> int:
@@ -162,7 +162,13 @@ class OntologyMaintenanceRunner:
     def scope_repair_retry_seconds(self) -> int:
         return max(5 * 60, min(24 * 60 * 60, integer(
             self.settings.get("ontologyScopeRepairRetryMinutes"),
-            30,
+            5,
+        ) * 60))
+
+    def scope_repair_verification_seconds(self) -> int:
+        return max(60, min(60 * 60, integer(
+            self.settings.get("ontologyScopeRepairVerificationMinutes"),
+            5,
         ) * 60))
 
     def schedule_scope_repairs(
@@ -193,6 +199,15 @@ class OntologyMaintenanceRunner:
                     "worldId": world_id,
                     "scopeIds": sorted(previous_scope_ids),
                 }, repairs
+            if previous_scope_ids:
+                value = {
+                    **previous,
+                    "status": "pending-verification",
+                    "worldId": world_id,
+                    "scopeIds": sorted(previous_scope_ids),
+                }
+                repairs[world_id] = value
+                return value, repairs
             return {"status": "not-required", "worldId": world_id}, repairs
 
         by_symbol: Dict[str, List[str]] = {}
@@ -305,13 +320,17 @@ class OntologyMaintenanceRunner:
             "jobIds": list(queue_result.get("jobIds") or []),
             "queuedSymbolCount": int(queue_result.get("queuedSymbolCount") or 0),
             "missingSymbols": list(queue_result.get("missingSymbols") or []),
-            "workBoundary": "ontology-world-projection-outbox",
+            "workBoundary": text(queue_result.get("repairRoute")) or "ontology-world-projection-outbox",
             "automaticFullProjectionUsed": False,
         }
         repairs[world_id] = value
         return value, repairs
 
-    def scope_integrity_audit_due(self, audit_state: Dict[str, object]) -> bool:
+    def scope_integrity_audit_due(
+        self,
+        audit_state: Dict[str, object],
+        repair_state: Dict[str, object] = None,
+    ) -> bool:
         stamp = text((audit_state or {}).get("lastCheckedAt"))
         if not stamp:
             return True
@@ -322,7 +341,15 @@ class OntologyMaintenanceRunner:
         except ValueError:
             return True
         age = (datetime.now(timezone.utc) - parsed.astimezone(timezone.utc)).total_seconds()
-        return age >= self.scope_integrity_audit_interval_seconds()
+        repair_pending = bool({
+            text(value) for value in (repair_state or {}).get("scopeIds") or [] if text(value)
+        })
+        interval = (
+            self.scope_repair_verification_seconds()
+            if repair_pending
+            else self.scope_integrity_audit_interval_seconds()
+        )
+        return age >= interval
 
     def run_scope_integrity_audit(
         self,
@@ -331,9 +358,10 @@ class OntologyMaintenanceRunner:
     ) -> tuple[Dict[str, object], Dict[str, Dict[str, object]]]:
         audits = self.scope_integrity_audit_state(state)
         previous = dict(audits.get(world_id) or {})
+        repair = self.scope_repair_state(state).get(world_id, {})
         if not self.scope_integrity_audit_enabled():
             return {"status": "disabled", "readOnly": True}, audits
-        if not self.scope_integrity_audit_due(previous):
+        if not self.scope_integrity_audit_due(previous, repair):
             return {
                 "status": "not-due",
                 "readOnly": True,
@@ -345,12 +373,24 @@ class OntologyMaintenanceRunner:
         if not callable(reader):
             return {"status": "unsupported", "readOnly": True}, audits
         checked_at = utc_now_iso()
+        repair_scope_ids = [
+            text(item)
+            for item in repair.get("scopeIds") or []
+            if text(item)
+        ][:self.scope_integrity_audit_batch_size()]
         try:
-            result = dict(reader(
-                world_id=world_id,
-                cursor=max(0, integer(previous.get("nextCursor"))),
-                limit=self.scope_integrity_audit_batch_size(),
-            ) or {})
+            kwargs = {
+                "world_id": world_id,
+                "cursor": max(0, integer(previous.get("nextCursor"))),
+                "limit": self.scope_integrity_audit_batch_size(),
+            }
+            if repair_scope_ids:
+                kwargs["scope_ids"] = repair_scope_ids
+            try:
+                result = dict(reader(**kwargs) or {})
+            except TypeError:
+                kwargs.pop("scope_ids", None)
+                result = dict(reader(**kwargs) or {})
         except Exception as error:  # noqa: BLE001 - retention remains independent from audit reads.
             result = {"status": "error", "reason": str(error)[:220], "readOnly": True}
         compact = {
@@ -365,7 +405,13 @@ class OntologyMaintenanceRunner:
                 for item in (result.get("mismatches") or [])[:50]
                 if isinstance(item, dict)
             ],
+            "checkedScopeIds": [
+                text(item)
+                for item in (result.get("checkedScopeIds") or [])[:200]
+                if text(item)
+            ],
             "cycleCompleted": bool(result.get("cycleCompleted")),
+            "targetedVerification": bool(result.get("targetedVerification")),
             "readOnly": True,
             "automaticFullProjectionUsed": False,
             "reason": text(result.get("reason"))[:220],
@@ -498,9 +544,17 @@ class OntologyMaintenanceRunner:
                 timeout_seconds - 10,
                 integer(
                     self.settings.get("ontologyAboxMaintenanceExecutionReserveSeconds"),
-                    60,
+                    30,
                 ),
             ),
+        )
+        configured_slice_seconds = max(
+            10,
+            integer(policy.get("sliceSeconds"), 45),
+        )
+        slice_seconds = min(
+            configured_slice_seconds,
+            max(10, timeout_seconds - reserve_seconds),
         )
         estimated_batch_seconds = max(
             5,
@@ -511,7 +565,7 @@ class OntologyMaintenanceRunner:
         )
         safe_batch_cap = max(
             1,
-            (timeout_seconds - reserve_seconds) // estimated_batch_seconds,
+            slice_seconds // estimated_batch_seconds,
         )
         bounded_batches = min(requested_batches, safe_batch_cap)
         if not bool(capacity.get("capacityPriority")):
@@ -525,27 +579,29 @@ class OntologyMaintenanceRunner:
                 "executionTimeoutSeconds": timeout_seconds,
                 "executionReserveSeconds": reserve_seconds,
                 "estimatedDeleteBatchSeconds": estimated_batch_seconds,
+                "maxDurationSeconds": slice_seconds,
             }
         capacity_requested_batches = max(
             requested_batches,
             min(50, integer(self.settings.get("typedbCapacityMaintenanceMaxDeleteBatches"), 12)),
         )
         return {
-            "maxInactiveManifests": max(
+            "maxInactiveManifests": min(4, max(
                 base_manifests,
-                min(20, integer(self.settings.get("typedbCapacityMaintenanceMaxManifests"), 10)),
-            ),
+                integer(self.settings.get("typedbCapacityMaintenanceMaxManifests"), 2),
+            )),
             "maxAboxDeleteBatches": min(capacity_requested_batches, safe_batch_cap),
-            "aboxDeleteBatchSize": max(
+            "aboxDeleteBatchSize": min(200, max(
                 base_batch_size,
-                min(500, integer(self.settings.get("typedbCapacityMaintenanceDeleteBatchSize"), 250)),
-            ),
+                integer(self.settings.get("typedbCapacityMaintenanceDeleteBatchSize"), 150),
+            )),
             "capacityPriority": 1,
             "requestedAboxDeleteBatches": capacity_requested_batches,
             "runtimeSafeDeleteBatchCap": safe_batch_cap,
             "executionTimeoutSeconds": timeout_seconds,
             "executionReserveSeconds": reserve_seconds,
             "estimatedDeleteBatchSeconds": estimated_batch_seconds,
+            "maxDurationSeconds": slice_seconds,
         }
 
     @staticmethod
@@ -874,7 +930,21 @@ class OntologyMaintenanceRunner:
         an active portfolio from waiting behind two empty shared worlds.
         """
         rows = list(worlds or [])
-        fallback, fallback_next = self.next_world(rows, state)
+        blocked_world_ids = {
+            text(item.get("worldId"))
+            for item in rows
+            if self.scope_repair_blocks_cleanup(
+                self.scope_repair_state(state).get(text(item.get("worldId")), {})
+            ) and not self.scope_integrity_audit_due(
+                self.scope_integrity_audit_state(state).get(text(item.get("worldId")), {}),
+                self.scope_repair_state(state).get(text(item.get("worldId")), {}),
+            )
+        }
+        selectable_rows = [
+            item for item in rows
+            if text(item.get("worldId")) not in blocked_world_ids
+        ] or rows
+        fallback, fallback_next = self.next_world(selectable_rows, state)
         threshold = max(1, integer((policy or {}).get("priorityInactiveManifestCount"), 8))
         if not rows:
             return {}, "", {
@@ -883,10 +953,10 @@ class OntologyMaintenanceRunner:
                 "observedInactiveManifestCounts": {},
             }
         next_id = text((state or {}).get("nextWorldId"))
-        cursor = next((idx for idx, item in enumerate(rows) if item.get("worldId") == next_id), 0)
+        cursor = next((idx for idx, item in enumerate(selectable_rows) if item.get("worldId") == next_id), 0)
         candidates = []
         observed_counts = {}
-        for index, item in enumerate(rows):
+        for index, item in enumerate(selectable_rows):
             world_id = text(item.get("worldId"))
             inventory = dict((manifest_inventories or {}).get(world_id) or {})
             if not bool(inventory.get("available")):
@@ -900,6 +970,7 @@ class OntologyMaintenanceRunner:
                 "mode": "round-robin",
                 "priorityInactiveManifestCount": threshold,
                 "observedInactiveManifestCounts": observed_counts,
+                "scopeRepairBlockedWorldIds": sorted(blocked_world_ids),
             }
         _, _, selected_index, selected = sorted(
             candidates,
@@ -926,7 +997,7 @@ class OntologyMaintenanceRunner:
                 if text(item[3].get("worldId")) != last_world_id
             )
             fairness_rotated = True
-        following = rows[(selected_index + 1) % len(rows)]
+        following = selectable_rows[(selected_index + 1) % len(selectable_rows)]
         return selected, text(following.get("worldId")), {
             "mode": (
                 "inactive-manifest-priority-fairness-rotation"
@@ -937,6 +1008,16 @@ class OntologyMaintenanceRunner:
             "maxConsecutiveWorldRuns": max_consecutive,
             "previousConsecutiveWorldRuns": consecutive_runs,
             "observedInactiveManifestCounts": observed_counts,
+            "scopeRepairBlockedWorldIds": sorted(blocked_world_ids),
+        }
+
+    @staticmethod
+    def scope_repair_blocks_cleanup(repair: Dict[str, object]) -> bool:
+        value = dict(repair or {}) if isinstance(repair, dict) else {}
+        scope_ids = {text(item) for item in value.get("scopeIds") or [] if text(item)}
+        return bool(scope_ids) and text(value.get("status")).lower() not in {
+            "not-required",
+            "resolved",
         }
 
     @staticmethod
@@ -1122,6 +1203,53 @@ class OntologyMaintenanceRunner:
         }
         return rows
 
+    @staticmethod
+    def progress_summary(
+        backlog: Dict[str, Dict[str, object]],
+        policy: Dict[str, object],
+    ) -> Dict[str, object]:
+        rows = dict(backlog or {})
+        warning_count = max(1, integer((policy or {}).get("warningInactiveManifestCount"), 8))
+        stalled = []
+        for world_id, value in sorted(rows.items()):
+            inactive = max(0, integer((value or {}).get("lastInactiveManifestCount")))
+            no_progress = max(0, integer((value or {}).get("noProgressRuns")))
+            if inactive >= warning_count and no_progress >= 3:
+                stalled.append({
+                    "worldId": world_id,
+                    "inactiveManifestCount": inactive,
+                    "noProgressRuns": no_progress,
+                    "lastStatus": text((value or {}).get("lastStatus")),
+                    "lastProgressAt": text((value or {}).get("lastProgressAt")),
+                })
+        return {
+            "logicalRetentionMode": "resumable-generation-and-row-batches",
+            "physicalReclaimMode": "typedb-blue-green-compaction",
+            "inactiveManifestCount": sum(
+                max(0, integer((value or {}).get("lastInactiveManifestCount")))
+                for value in rows.values()
+            ),
+            "retiredScopeGenerationBacklogCount": sum(
+                max(0, integer((value or {}).get("retiredScopeGenerationBacklogCount")))
+                for value in rows.values()
+            ),
+            "removedRetiredScopeGenerationCountTotal": sum(
+                max(0, integer((value or {}).get("removedRetiredScopeGenerationCountTotal")))
+                for value in rows.values()
+            ),
+            "removedManifestCountTotal": sum(
+                max(0, integer((value or {}).get("removedManifestCountTotal")))
+                for value in rows.values()
+            ),
+            "resumeRequiredWorldIds": sorted(
+                world_id
+                for world_id, value in rows.items()
+                if bool((value or {}).get("lastResumeRequired"))
+            ),
+            "stalledWorlds": stalled,
+            "stalledWorldCount": len(stalled),
+        }
+
     def status(self) -> Dict[str, object]:
         policy = self.policy()
         state = self.state()
@@ -1157,6 +1285,7 @@ class OntologyMaintenanceRunner:
             "lastResult": dict(last_result),
             "nextWorldId": next_world_id,
             "backlogByWorld": backlog,
+            "progress": self.progress_summary(backlog, policy),
             "scopeIntegrityAudit": {
                 "enabled": self.scope_integrity_audit_enabled(),
                 "intervalSeconds": self.scope_integrity_audit_interval_seconds(),
@@ -1165,6 +1294,7 @@ class OntologyMaintenanceRunner:
             },
             "scopeRepair": {
                 "retrySeconds": self.scope_repair_retry_seconds(),
+                "verificationSeconds": self.scope_repair_verification_seconds(),
                 "byWorld": self.scope_repair_state(state),
             },
         }
@@ -1250,6 +1380,41 @@ class OntologyMaintenanceRunner:
             selection_state,
         )
         selection_state["scopeRepairByWorld"] = scope_repairs
+        if self.scope_repair_blocks_cleanup(scope_repair):
+            compact = {
+                "status": "deferred-scope-integrity-repair",
+                "worldId": world_id,
+                "worldType": text(selected.get("worldType")),
+                "manifestInventory": selected_inventory,
+                "scopeIntegrityAudit": integrity_audit,
+                "scopeRepair": scope_repair,
+                "worldSelection": world_selection,
+                "retryAfterSeconds": min(
+                    self.interval_seconds(),
+                    self.scope_repair_verification_seconds(),
+                ),
+                "reason": (
+                    "활성 ABox 스코프 불일치를 복구하고 재검증하기 전까지 "
+                    "이 월드의 과거 세대 삭제를 보류합니다."
+                ),
+            }
+            next_state = {
+                **selection_state,
+                "contract": self.state_contract,
+                "lastRunAt": utc_now_iso(),
+                "nextWorldId": next_world_id,
+                "lastResult": compact,
+            }
+            self.save_state(next_state)
+            return {
+                "contract": self.state_contract,
+                "status": compact["status"],
+                "worldId": world_id,
+                "worldType": compact["worldType"],
+                "policy": policy,
+                "maintenance": compact,
+                "retryAfterSeconds": compact["retryAfterSeconds"],
+            }
         adaptive_drain = self.adaptive_drain(policy, selection_state, world_id)
         capacity_budget = self.capacity_maintenance_budget(policy, adaptive_drain, capacity)
         coordinator_lease = self.acquire_projection_coordinator_lease(world_id)
@@ -1325,6 +1490,7 @@ class OntologyMaintenanceRunner:
                 "maxInactiveManifests": run_budget["maxInactiveManifests"],
                 "maxAboxDeleteBatches": run_budget["maxAboxDeleteBatches"],
                 "aboxDeleteBatchSize": run_budget["aboxDeleteBatchSize"],
+                "maxDurationSeconds": run_budget["maxDurationSeconds"],
                 "keepInactiveManifests": integer(policy.get("keepInactiveManifestCount"), 0),
             }) or {})
         except Exception as error:  # noqa: BLE001 - a maintenance fault must not affect native inference.
@@ -1372,6 +1538,8 @@ class OntologyMaintenanceRunner:
             0,
             integer(abox.get("deduplicatedScopeGenerationReferenceCount")),
         )
+        time_budget_exhausted = bool(abox.get("timeBudgetExhausted"))
+        resume_required = bool(abox.get("resumeRequired"))
         health = (
             scoped_abox_maintenance_health({
                 "status": "ok" if result_status not in {"error", "disabled"} else result_status,
@@ -1421,6 +1589,11 @@ class OntologyMaintenanceRunner:
                 planned_retired_generation_count - removed_retired_generation_count,
             ),
             "deletedBatchCount": max(0, integer(abox.get("deletedBatchCount"))),
+            "durationMs": max(0, integer(result.get("durationMs"))),
+            "timeBudgetExhausted": time_budget_exhausted,
+            "resumeRequired": resume_required,
+            "resumeGenerationId": text(abox.get("resumeGenerationId")),
+            "resumeManifestId": text(abox.get("resumeManifestId")),
             "maxDeleteBatches": max(
                 0,
                 integer(abox.get("maxDeleteBatches"), integer(adaptive_drain.get("effectiveMaxDeleteBatches"), 0)),
@@ -1454,6 +1627,22 @@ class OntologyMaintenanceRunner:
             [item.get("worldId") for item in worlds],
         )
         current_backlog = dict(backlog_by_world.get(world_id) or {})
+        progress_made = bool(current_backlog.get("lastProgress"))
+        current_backlog.update({
+            "lastMaintenanceDurationMs": compact["durationMs"],
+            "lastTimeBudgetExhausted": time_budget_exhausted,
+            "lastResumeRequired": resume_required,
+            "lastResumeGenerationId": compact["resumeGenerationId"],
+            "lastResumeManifestId": compact["resumeManifestId"],
+            "noProgressRuns": (
+                0
+                if progress_made
+                else max(0, integer(current_backlog.get("noProgressRuns"))) + 1
+            ),
+        })
+        if progress_made:
+            current_backlog["lastProgressAt"] = utc_now_iso()
+        backlog_by_world[world_id] = current_backlog
         compact["adaptiveDrain"] = {
             **adaptive_drain,
             "criticalDrainRuns": integer(current_backlog.get("criticalDrainRuns")),

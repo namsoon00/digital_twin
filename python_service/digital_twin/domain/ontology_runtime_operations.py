@@ -17,7 +17,7 @@ NATIVE_RULE_TIMING_PROFILE_VERSION = "typedb-native-rule-timing-v1"
 NATIVE_RULE_ADAPTIVE_TARGET_SHARDING_PROFILE_VERSION = "typedb-native-rule-adaptive-target-sharding-v1"
 NATIVE_REPLAY_VALIDATION_VERSION = "typedb-native-replay-validation-v1"
 NATIVE_RULE_FAILURE_DIAGNOSTIC_VERSION = "typedb-native-rule-failure-v1"
-SCOPED_ABOX_MAINTENANCE_POLICY_VERSION = "typedb-scoped-abox-maintenance-policy-v3"
+SCOPED_ABOX_MAINTENANCE_POLICY_VERSION = "typedb-scoped-abox-maintenance-policy-v4"
 BACKGROUND_WORK_FAIRNESS_POLICY_VERSION = "ontology-background-work-fairness-v1"
 SCOPED_ABOX_MAINTENANCE_YIELD_POLICY_VERSION = "typedb-scoped-abox-maintenance-yield-v1"
 DISABLED_VALUES = {"0", "false", "no", "off", "disabled"}
@@ -247,7 +247,7 @@ def scoped_abox_maintenance_policy(settings: Mapping[str, object] = None) -> Dic
     max_delete_batches = _integer(_setting_number(
         configured,
         "ontologyAboxMaintenanceMaxDeleteBatchesPerRun",
-        8,
+        2,
         1,
         50,
     ))
@@ -266,7 +266,7 @@ def scoped_abox_maintenance_policy(settings: Mapping[str, object] = None) -> Dic
         "maxManifestsPerRun": _integer(_setting_number(
             configured,
             "ontologyAboxMaintenanceMaxManifestsPerRun",
-            8,
+            2,
             1,
             10,
         )),
@@ -277,6 +277,13 @@ def scoped_abox_maintenance_policy(settings: Mapping[str, object] = None) -> Dic
             150,
             10,
             500,
+        )),
+        "sliceSeconds": _integer(_setting_number(
+            configured,
+            "ontologyAboxMaintenanceSliceSeconds",
+            45,
+            10,
+            300,
         )),
         "keepInactiveManifestCount": _integer(_setting_number(
             configured,
@@ -309,7 +316,7 @@ def scoped_abox_maintenance_policy(settings: Mapping[str, object] = None) -> Dic
             _integer(_setting_number(
                 configured,
                 "ontologyAboxMaintenanceAdaptiveDrainMaxDeleteBatchesPerRun",
-                16,
+                4,
                 1,
                 50,
             )),

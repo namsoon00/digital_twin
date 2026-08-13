@@ -70,7 +70,11 @@ from ..application.ontology_maintenance_service import OntologyMaintenanceRunner
 from ..application.ontology_inference_detail_service import OntologyInferenceDetailRunner
 from ..application.ontology_rulebox_prewarm_service import OntologyRuleboxPrewarmRunner
 from ..application.ontology_world_projection_service import OntologyWorldProjectionRunner
-from ..application.ontology_portfolio_rebuild_service import OntologyPortfolioRebuildRunner
+from ..application.ontology_portfolio_rebuild_service import (
+    OntologyPortfolioRebuildRunner,
+    OntologyPortfolioScopeRepairRunner,
+    OntologyScopeRepairRouter,
+)
 from ..application.ontology_lab_service import OntologyLabService
 from ..application.ontology_rule_candidate_service import RuleChangeCandidateProposalService
 from ..application.symbol_universe_service import SymbolUniverseService
@@ -1024,6 +1028,17 @@ def build_ontology_maintenance_runner(settings=None) -> OntologyMaintenanceRunne
         "maintenance",
         stores.operational_storage_capacity_state_store(store_settings),
     )
+    shared_scope_repair_outbox = stores.ontology_world_projection_outbox_store(store_settings)
+    portfolio_scope_repair = OntologyPortfolioScopeRepairRunner(
+        snapshot_store=stores.monitor_store(store_settings),
+        projection_recorder=PortfolioOntologyProjectionRecorder(
+            ontology_repository_from_settings(configured_settings),
+            graph_assembly_cache_store=stores.ontology_graph_assembly_cache_store(store_settings),
+            settings=configured_settings,
+            source="typedb-scope-integrity-repair",
+        ),
+        settings=configured_settings,
+    )
     return OntologyMaintenanceRunner(
         ontology_repository=ontology_repository_from_settings(configured_settings),
         state_store=stores.ontology_maintenance_state_store(store_settings),
@@ -1031,7 +1046,10 @@ def build_ontology_maintenance_runner(settings=None) -> OntologyMaintenanceRunne
         reasoning_queue_probe=build_ontology_reasoning_queue_probe(configured_settings),
         capacity_guard=capacity_guard,
         event_publisher=stores.event_log(store_settings),
-        scope_repair_outbox=stores.ontology_world_projection_outbox_store(store_settings),
+        scope_repair_outbox=OntologyScopeRepairRouter(
+            shared_scope_repair_outbox,
+            portfolio_scope_repair,
+        ),
     )
 
 

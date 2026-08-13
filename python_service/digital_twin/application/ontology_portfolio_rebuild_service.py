@@ -3,9 +3,10 @@
 from __future__ import annotations
 
 import time
-from typing import Dict
+from typing import Dict, Mapping
 
 from ..domain.portfolio import account_snapshot_from_monitor_state, monitor_state_has_live_account_data
+from ..domain.ontology_worlds import PORTFOLIO_WORLD_TYPE, world_from_metadata, world_from_snapshot
 
 
 SUCCESS_STATUSES = {
@@ -126,3 +127,126 @@ class OntologyPortfolioRebuildRunner:
             "rows": rows,
             "runtimeMs": int((time.perf_counter() - started) * 1000),
         }
+
+
+class OntologyPortfolioScopeRepairRunner:
+    """Repair one PortfolioWorld subject from its durable MySQL snapshot."""
+
+    def __init__(self, snapshot_store, projection_recorder, settings=None):
+        self.snapshot_store = snapshot_store
+        self.projection_recorder = projection_recorder
+        self.settings = dict(settings or {})
+
+    def enqueue_scope_repair(
+        self,
+        world_id: str,
+        request_id: str,
+        repair_requests_by_symbol: Mapping[str, object],
+        source_account_id: str = "",
+        source_observed_at: str = "",
+    ) -> Dict[str, object]:
+        started = time.perf_counter()
+        requested = {
+            str(symbol or "").upper().strip(): dict(value or {})
+            for symbol, value in dict(repair_requests_by_symbol or {}).items()
+            if str(symbol or "").strip() and isinstance(value, Mapping)
+        }
+        if not requested:
+            return {"status": "not-required", "saved": False, "worldId": str(world_id or "")}
+        try:
+            states = dict(self.snapshot_store.load_previous() or {})
+        except Exception as error:  # noqa: BLE001 - maintenance retries the durable request.
+            return {
+                "status": "deferred-portfolio-snapshot-read",
+                "saved": False,
+                "worldId": str(world_id or ""),
+                "reason": str(error)[:220],
+            }
+
+        selected_snapshot = None
+        clean_account_id = str(source_account_id or "").strip()
+        for account_id, state in sorted(states.items(), key=lambda item: str(item[0])):
+            snapshot = account_snapshot_from_monitor_state(state)
+            if snapshot is None or not snapshot.has_live_account_data():
+                continue
+            snapshot_world_id = world_from_snapshot(snapshot, self.settings).world_id
+            if str(snapshot_world_id or "") != str(world_id or ""):
+                continue
+            if clean_account_id and clean_account_id not in {
+                str(account_id or "").strip(),
+                str(snapshot.account_id or "").strip(),
+            }:
+                continue
+            selected_snapshot = snapshot
+            break
+        if selected_snapshot is None:
+            return {
+                "status": "deferred-portfolio-snapshot-missing",
+                "saved": False,
+                "worldId": str(world_id or ""),
+                "missingSymbols": sorted(requested),
+                "reason": "No live durable monitor snapshot matches the PortfolioWorld repair request.",
+            }
+
+        result = dict(self.projection_recorder.record_snapshot(
+            selected_snapshot,
+            target_symbols=sorted(requested),
+            reasoning_context={
+                "triggerTypes": ["scope-integrity-repair-maintenance"],
+                "sourceObservedAt": str(source_observed_at or selected_snapshot.generated_at or ""),
+                "scopeRepairRequestsBySymbol": requested,
+                "maintenanceRepair": True,
+                "mutatedLiveReasoningQueue": False,
+            },
+        ) or {})
+        result_status = str(result.get("status") or "error").strip()
+        successful = result_status in SUCCESS_STATUSES
+        return {
+            "status": (
+                "completed-portfolio-scope-repair"
+                if successful
+                else "deferred-portfolio-scope-repair"
+            ),
+            "saved": successful,
+            "worldId": str(world_id or ""),
+            "requestId": str(request_id or ""),
+            "queuedSymbolCount": len(requested) if successful else 0,
+            "queuedSymbols": sorted(requested) if successful else [],
+            "missingSymbols": [] if successful else sorted(requested),
+            "projectionStatus": result_status,
+            "projection": result,
+            "mutatedLiveReasoningQueue": False,
+            "durationMs": int((time.perf_counter() - started) * 1000),
+            "reason": str(result.get("reason") or "")[:220],
+        }
+
+
+class OntologyScopeRepairRouter:
+    """Route repairs to the owning world without crossing inference queues."""
+
+    def __init__(self, shared_world_outbox, portfolio_repair_runner):
+        self.shared_world_outbox = shared_world_outbox
+        self.portfolio_repair_runner = portfolio_repair_runner
+
+    def enqueue_scope_repair(self, **payload) -> Dict[str, object]:
+        world = world_from_metadata({"worldId": str(payload.get("world_id") or "")})
+        target = (
+            self.portfolio_repair_runner
+            if world.world_type == PORTFOLIO_WORLD_TYPE
+            else self.shared_world_outbox
+        )
+        enqueue = getattr(target, "enqueue_scope_repair", None)
+        if not callable(enqueue):
+            return {
+                "status": "not-configured",
+                "saved": False,
+                "worldId": world.world_id,
+                "reason": "No scope repair adapter is configured for this ontology world.",
+            }
+        result = dict(enqueue(**payload) or {})
+        result["repairRoute"] = (
+            "portfolio-durable-snapshot"
+            if world.world_type == PORTFOLIO_WORLD_TYPE
+            else "shared-world-projection-outbox"
+        )
+        return result

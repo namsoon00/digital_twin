@@ -114,6 +114,61 @@ class TypeDBServiceManagerTests(unittest.TestCase):
         self.assertFalse(decision["needed"])
         self.assertLess(decision["typedbUsagePercent"], 90)
 
+    def test_automatic_rotation_can_be_triggered_by_shared_disk_pressure(self):
+        with tempfile.TemporaryDirectory() as temp:
+            data_path = Path(temp) / "typedb-data"
+            data_path.mkdir()
+            (data_path / "segment").write_bytes(b"x" * (9 * 1024 * 1024))
+            marker = Path(temp) / "marker.json"
+            with patch.object(service_manager, "typedb_retention_marker_path", return_value=marker):
+                decision = service_manager.typedb_auto_rotation_needed(
+                    {
+                        "dataPath": data_path,
+                        "maxSizeMb": "100",
+                        "autoRotationEnabled": "1",
+                        "autoRotationPercent": "90",
+                        "autoRotationFreeSpaceMb": "1500",
+                        "blueGreenMinimumHeadroomMb": "1024",
+                        "blueGreenEstimatedCandidateMaxMb": "100",
+                    },
+                    disk_usage_provider=lambda _path: SimpleNamespace(
+                        free=1200 * 1024 * 1024,
+                        total=2000 * 1024 * 1024,
+                    ),
+                )
+
+        self.assertTrue(decision["needed"])
+        self.assertEqual("shared-disk", decision["trigger"])
+        self.assertTrue(decision["stagingReady"])
+        self.assertEqual(1200.0, decision["freeSpaceMb"])
+
+    def test_automatic_rotation_reports_insufficient_blue_green_headroom(self):
+        with tempfile.TemporaryDirectory() as temp:
+            data_path = Path(temp) / "typedb-data"
+            data_path.mkdir()
+            (data_path / "segment").write_bytes(b"x" * (100 * 1024 * 1024))
+            marker = Path(temp) / "marker.json"
+            with patch.object(service_manager, "typedb_retention_marker_path", return_value=marker):
+                decision = service_manager.typedb_auto_rotation_needed(
+                    {
+                        "dataPath": data_path,
+                        "maxSizeMb": "1000",
+                        "autoRotationEnabled": "1",
+                        "autoRotationPercent": "90",
+                        "autoRotationFreeSpaceMb": "1500",
+                        "blueGreenMinimumHeadroomMb": "1024",
+                        "blueGreenEstimatedCandidateMaxMb": "200",
+                    },
+                    disk_usage_provider=lambda _path: SimpleNamespace(
+                        free=1050 * 1024 * 1024,
+                        total=2000 * 1024 * 1024,
+                    ),
+                )
+
+        self.assertTrue(decision["needed"])
+        self.assertFalse(decision["stagingReady"])
+        self.assertIn("insufficient blue-green staging headroom", decision["reason"])
+
     def test_automatic_rotation_ignores_a_malformed_previous_attempt_timestamp(self):
         with tempfile.TemporaryDirectory() as temp:
             data_path = Path(temp) / "typedb-data"

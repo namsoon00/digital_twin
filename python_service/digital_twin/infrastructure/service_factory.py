@@ -100,7 +100,7 @@ from .ontology_graph_store import ontology_repository_from_settings
 from . import operational_store as stores
 from .ontology_projection import PortfolioOntologyProjectionRecorder
 from .typedb_storage_guard import TypeDBCapacityGuard
-from .operational_storage_guard import operational_storage_health, operational_storage_inventory
+from .operational_storage_guard import operational_storage_inventory
 from .kis_realtime_ws import KISRealtimeSymbolSelector, KISRealtimeWebSocketClient
 from .rule_change_candidate_ai import rule_change_candidate_advisor_from_settings
 from .notifications import queued_notifier_for_account
@@ -698,7 +698,7 @@ def build_news_analysis_enrichment_runner(settings=None, event_publisher=None) -
         ),
         settings=configured_settings,
         event_publisher=event_publisher or news_event_bus(configured_settings),
-        storage_guard=lambda: operational_storage_health(configured_settings),
+        storage_guard=lambda: operational_storage_inventory(configured_settings),
     )
 
 

@@ -2,6 +2,7 @@ import json
 import sys
 import unittest
 from pathlib import Path
+from unittest.mock import patch
 
 
 sys.path.insert(0, str(Path(__file__).resolve().parents[1]))
@@ -11,6 +12,7 @@ from digital_twin.application.news_analysis_enrichment_service import NewsAnalys
 from digital_twin.domain.investment_research import NewsCollectionTarget, ResearchEvidence
 from digital_twin.domain.news_ai_analysis import apply_news_ai_analysis, local_news_ai_analysis, news_ai_analysis_is_current
 from digital_twin.domain.evidence_delta import EvidenceDelta, EvidenceMutation
+from digital_twin.infrastructure.service_factory import build_news_analysis_enrichment_runner
 
 
 class NewsAnalysisEnrichmentRunnerTests(unittest.TestCase):
@@ -124,6 +126,35 @@ class NewsAnalysisEnrichmentRunnerTests(unittest.TestCase):
         self.assertEqual("deferred-low-disk", result["status"])
         self.assertEqual(0, result["processedCount"])
         self.assertEqual("guarded-low-disk", result["storage"]["status"])
+
+    def test_factory_guard_includes_mysql_capacity_stage(self):
+        settings = {"newsAiAnalysisAsyncEnabled": "1"}
+        guarded = {
+            "status": "ready",
+            "mysqlCapacityStage": "restricted",
+            "mysqlUsagePercent": 91.0,
+            "nonEssentialWritesAllowed": False,
+        }
+        with patch(
+            "digital_twin.infrastructure.service_factory.stores.research_evidence_store",
+            return_value=object(),
+        ), patch(
+            "digital_twin.infrastructure.service_factory.news_ai_analyzer_from_settings",
+            return_value=object(),
+        ), patch(
+            "digital_twin.infrastructure.service_factory.news_event_bus",
+            return_value=object(),
+        ), patch(
+            "digital_twin.infrastructure.service_factory.operational_storage_inventory",
+            return_value=guarded,
+        ) as inventory:
+            runner = build_news_analysis_enrichment_runner(settings)
+
+            storage = runner.storage_state()
+
+        self.assertEqual("restricted", storage["mysqlCapacityStage"])
+        self.assertFalse(storage["nonEssentialWritesAllowed"])
+        inventory.assert_called_once_with(settings)
 
     def test_worker_event_payload_serializes_evidence_deltas(self):
         item = self.evidence()

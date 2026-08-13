@@ -744,7 +744,7 @@ class InvestmentCalendarServiceTests(unittest.TestCase):
         self.assertEqual(3, len(candidates["review"]))
         self.assertTrue(all(item.markets == ["KOSPI"] for item in candidates["review"]))
 
-    def test_automatic_candidate_cannot_activate_without_official_url_and_time(self):
+    def test_automatic_candidate_activates_without_official_url_when_time_is_confirmed(self):
         candidate_store = MemoryCandidateStore()
         candidate_store.upsert({
             "candidateId": "estimated-earnings-candidate",
@@ -764,12 +764,24 @@ class InvestmentCalendarServiceTests(unittest.TestCase):
             },
         })
         calendar_store = MemoryCalendarStore()
-        service = InvestmentCalendarCandidateService(candidate_store, self.service(store=calendar_store))
+        service = InvestmentCalendarCandidateService(
+            candidate_store,
+            self.service(store=calendar_store),
+            now=lambda: datetime(2026, 7, 20, tzinfo=timezone.utc),
+        )
 
-        with self.assertRaisesRegex(ValueError, "공식 IR·공시 URL"):
-            service.approve_candidate("estimated-earnings-candidate", {"startsAt": "2026-07-30T10:00"})
+        result = service.approve_candidate("estimated-earnings-candidate", {"startsAt": "2026-07-30T10:00"})
 
-        self.assertEqual({}, calendar_store.events)
+        self.assertEqual("registered", result["candidate"]["status"])
+        event = calendar_store.get("estimated-earnings-event")
+        self.assertFalse(event.all_day)
+        self.assertFalse(event.payload["officialSource"])
+        self.assertEqual("confirmed", event.payload["scheduleState"])
+        self.assertEqual("user-confirmed", event.payload["scheduleVerification"])
+        self.assertEqual("사용자 확인 일정", event.source)
+        self.assertEqual("", event.source_url)
+        self.assertEqual(0, service.reconcile_all_candidates()["reopened"])
+        self.assertEqual("registered", candidate_store.get("estimated-earnings-candidate").status)
 
     def test_candidate_repair_reopens_estimates_and_rejects_keyword_noise(self):
         candidate_store = MemoryCandidateStore()
@@ -850,15 +862,15 @@ class InvestmentCalendarServiceTests(unittest.TestCase):
         candidate = next(item for item in candidate_store.candidates.values() if item.event_type == "earnings")
         approval = InvestmentCalendarCandidateService(candidate_store, calendar).approve_candidate(candidate.candidate_id, {
             "startsAt": "2026-08-05T10:00",
-            "officialSourceUrl": "https://investor.example.test/earnings",
-            "reviewNote": "IR 확인",
+            "reviewNote": "발표 시각 확인",
         })
         self.assertEqual("registered", approval["candidate"]["status"])
         approved_event = calendar_store.get(candidate.proposed_event_id)
         self.assertEqual("active", approved_event.status)
         self.assertFalse(approved_event.all_day)
-        self.assertTrue(approved_event.payload["officialSource"])
+        self.assertFalse(approved_event.payload["officialSource"])
         self.assertEqual("confirmed", approved_event.payload["scheduleState"])
+        self.assertEqual("user-confirmed", approved_event.payload["scheduleVerification"])
 
         discovery.run_once(force=True)
         self.assertEqual("active", calendar_store.get(candidate.proposed_event_id).status)

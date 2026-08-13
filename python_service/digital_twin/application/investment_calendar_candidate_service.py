@@ -84,10 +84,14 @@ class InvestmentCalendarCandidateService:
         parser = str(payload.get("sourceParser") or "").strip()
         date_source = str(payload.get("dateSource") or "").strip()
         structured_type = str(payload.get("structuredEventType") or "").strip()
+        source_names = {
+            str(candidate.source or "").strip().casefold(),
+            str(payload.get("originalSource") or "").strip().casefold(),
+        }
         return bool(
             date_source.startswith("calendar.")
             or detector == "structured-calendar-source-v1"
-            or str(candidate.source or "").strip().casefold() == "yfinance"
+            or "yfinance" in source_names
             or (
                 structured_type
                 and (
@@ -153,7 +157,7 @@ class InvestmentCalendarCandidateService:
         return {"reviewed": len(candidates), "rejected": rejected, "hidden": hidden}
 
     def reconcile_all_candidates(self, limit: int = 500) -> Dict[str, object]:
-        """Repair legacy approvals using the current official-source contract."""
+        """Repair legacy approvals using the current schedule-confirmation contract."""
         if not hasattr(self.candidate_repository, "list"):
             return {"reviewed": 0, "reopened": 0, "rejected": 0}
         rows = []
@@ -187,7 +191,7 @@ class InvestmentCalendarCandidateService:
                 updated = self.candidate_repository.mark_status(
                     candidate.candidate_id,
                     CANDIDATE_STATUS_REJECTED,
-                    "자동 정리: 구조화된 공식 일정 근거가 없습니다.",
+                    "자동 정리: 구조화된 일정 근거가 없습니다.",
                 )
                 rejected += 1 if updated else 0
                 continue
@@ -198,7 +202,6 @@ class InvestmentCalendarCandidateService:
             event_payload = getattr(event, "payload", {}) if event else {}
             confirmed = bool(
                 event
-                and bool(event_payload.get("officialSource"))
                 and not bool(event_payload.get("reviewRequired"))
                 and str(event_payload.get("scheduleState") or "") in {"confirmed", "dateConfirmed"}
             )
@@ -206,7 +209,7 @@ class InvestmentCalendarCandidateService:
                 updated = self.candidate_repository.mark_status(
                     candidate.candidate_id,
                     CANDIDATE_STATUS_PENDING,
-                    "자동 정리: 공식 출처와 확정 시각을 다시 확인해야 합니다.",
+                    "자동 정리: 발표 날짜와 시각을 다시 확인해야 합니다.",
                 )
                 reopened += 1 if updated else 0
             else:
@@ -274,7 +277,7 @@ class InvestmentCalendarCandidateService:
         event_payload = candidate.to_calendar_payload(starts_at=starts_at, account_ids=account_ids)
         candidate_payload = candidate.payload if isinstance(candidate.payload, dict) else {}
         if candidate_payload.get("autoDetected"):
-            self.apply_official_confirmation(event_payload, candidate, payload)
+            self.apply_schedule_confirmation(event_payload, candidate, payload)
             refreshed_candidate = candidate.to_dict()
             refreshed_candidate.update({
                 "startsAt": event_payload.get("startsAt"),
@@ -293,26 +296,29 @@ class InvestmentCalendarCandidateService:
         return {"candidate": updated.to_dict() if updated else candidate.to_dict(), "event": event.get("event")}
 
     @staticmethod
-    def apply_official_confirmation(event_payload: Dict[str, object], candidate, approval: Dict[str, object]) -> None:
-        """Promote automatic candidates only with an auditable official check."""
+    def apply_schedule_confirmation(event_payload: Dict[str, object], candidate, approval: Dict[str, object]) -> None:
+        """Promote automatic candidates after the user confirms an explicit schedule."""
         source_url = clean_text(
             approval.get("officialSourceUrl")
             or approval.get("official_source_url")
             or "",
             1000,
         )
-        parsed = urlparse(source_url)
-        if not (parsed.scheme in {"http", "https"} and parsed.netloc):
-            raise ValueError("자동 감지 일정은 공식 IR·공시 URL을 확인한 뒤 승인해야 합니다.")
+        if source_url:
+            parsed = urlparse(source_url)
+            if not (parsed.scheme in {"http", "https"} and parsed.netloc):
+                raise ValueError("확인 URL을 입력하려면 http 또는 https 주소를 사용해야 합니다.")
         if not has_explicit_event_time(event_payload.get("startsAt")):
-            raise ValueError("자동 감지 일정은 공식 발표 날짜와 시각을 YYYY-MM-DDTHH:MM 형식으로 확인해야 합니다.")
+            raise ValueError("자동 감지 일정은 발표 날짜와 시각을 YYYY-MM-DDTHH:MM 형식으로 확인해야 합니다.")
         original = candidate.payload if isinstance(candidate.payload, dict) else {}
         body = event_payload.get("payload") if isinstance(event_payload.get("payload"), dict) else {}
+        official_source = bool(original.get("officialSource"))
         body.update({
-            "officialSource": True,
-            "officialSourceUrl": source_url,
-            "officialVerification": "user-confirmed",
-            "officialVerifiedAt": datetime.now(timezone.utc).isoformat().replace("+00:00", "Z"),
+            "officialSource": official_source,
+            "officialSourceUrl": source_url if official_source else "",
+            "officialVerification": "source-provided" if official_source else "not-verified",
+            "scheduleVerification": "user-confirmed",
+            "scheduleVerifiedAt": datetime.now(timezone.utc).isoformat().replace("+00:00", "Z"),
             "originalSource": candidate.source,
             "originalSourceUrl": candidate.source_url,
             "originalScheduleState": original.get("scheduleState") or "estimated",
@@ -323,10 +329,14 @@ class InvestmentCalendarCandidateService:
         })
         event_payload["payload"] = body
         event_payload["allDay"] = False
-        event_payload["source"] = clean_text(approval.get("officialSourceLabel") or "사용자 확인 공식 일정", 120)
-        event_payload["sourceUrl"] = source_url
+        if official_source:
+            event_payload["source"] = candidate.source
+            event_payload["sourceUrl"] = source_url or candidate.source_url
+        else:
+            event_payload["source"] = "사용자 확인 일정"
+            event_payload["sourceUrl"] = source_url
         existing_notes = clean_text(event_payload.get("notes"), 1800)
-        event_payload["notes"] = (existing_notes + " 공식 출처와 발표 시각을 사용자 확인으로 활성화했습니다.").strip()
+        event_payload["notes"] = (existing_notes + " 발표 날짜와 시각을 사용자 확인으로 활성화했습니다.").strip()
 
     def reject_candidate(self, candidate_id: str, payload: Dict[str, object] = None) -> Dict[str, object]:
         payload = payload if isinstance(payload, dict) else {}

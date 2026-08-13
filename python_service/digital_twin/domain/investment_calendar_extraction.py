@@ -779,7 +779,7 @@ def structured_calendar_candidates_from_research_item(
                         source
                         + "의 "
                         + field
-                        + " 기반 일정입니다. 공식 IR·공시·거래소 일정으로 날짜와 발표 시각을 확인한 뒤 알림을 활성화하세요."
+                        + " 기반 일정입니다. 날짜와 발표 시각을 확인하면 등록할 수 있으며, 공식 IR·공시·거래소 출처는 별도 신뢰도 정보로 표시됩니다."
                     )
                     payload = {
                         "autoDetected": True,

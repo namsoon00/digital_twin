@@ -31500,3 +31500,22 @@ body.oa-overlay-open {
     align-self: center;
   }
 }
+
+/* Mobile panel interior rhythm: framed content must not touch its section header or shell. */
+@media (max-width: 860px) {
+  .console-shell .panel > .panel-head + * {
+    margin-top: var(--ds-section-gap);
+  }
+
+  .console-shell .investment-calendar-type-strip {
+    margin-top: var(--ds-section-gap);
+    padding: 0 var(--ds-panel-pad-x) var(--ds-panel-pad-y);
+  }
+
+  .console-shell .investment-calendar-candidate-panel > .panel-head + .investment-calendar-research-strip,
+  .console-shell .investment-calendar-quality-panel > .panel-head + .investment-calendar-quality-list,
+  .console-shell .investment-calendar-next-card > .panel-head + .investment-calendar-next-body,
+  .console-shell .investment-calendar-summary-panel > .panel-head + .investment-calendar-kpis {
+    margin-top: var(--ds-section-gap);
+  }
+}

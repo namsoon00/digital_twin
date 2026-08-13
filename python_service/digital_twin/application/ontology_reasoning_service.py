@@ -456,7 +456,14 @@ def normalized_priority_symbols(raw: object) -> Dict[str, int]:
 
 def event_subject_priority(event: object, priority_symbols: Dict[str, int] = None) -> int:
     priorities = priority_symbols or {}
-    return max([int(priorities.get(symbol, 0) or 0) for symbol in event_symbols(event)] or [0])
+    symbol_priority = max([int(priorities.get(symbol, 0) or 0) for symbol in event_symbols(event)] or [0])
+    if event_subject_kind(event) in {"PORTFOLIO", "ACCOUNT"} and event_subject_id(event):
+        # A first-class account aggregate represents every live holding even
+        # though its mailbox identity deliberately has no ticker. Treat it as
+        # holding-priority work so a material portfolio transition does not
+        # wait behind a stream of single-symbol context refreshes.
+        return max(2, symbol_priority)
+    return symbol_priority
 
 
 def event_order_key(event: object, priority_symbols: Dict[str, int] = None) -> Tuple[int, ...]:
@@ -4142,21 +4149,34 @@ class OntologyReasoningRunner:
         reserved_event_id = str(event_reservation.get("eventId") or "").strip()
         reserved_symbol = str(event_reservation.get("symbol") or "").upper().strip()
 
-        if reserved_event_id and bool(event_reservation.get("aggregateScope")):
-            reserved_event = next(
+        selected_aggregate_id = reserved_event_id if bool(event_reservation.get("aggregateScope")) else ""
+        selected_aggregate = next(
+            (
+                event for event in requested_events
+                if str(event_payload(event).get("trigger") or "").strip() == "portfolio-rebalance-transition"
+                and event_subject_kind(event) in {"PORTFOLIO", "ACCOUNT"}
+                and event_subject_id(event)
+                and event_reasoning_priority(event) in {"urgent", "critical"}
+            ),
+            None,
+        )
+        if selected_aggregate is not None and not selected_aggregate_id:
+            selected_aggregate_id = str(getattr(selected_aggregate, "event_id", "") or "").strip()
+        if selected_aggregate_id:
+            selected_aggregate = next(
                 (
                     event for event in requested_events
-                    if str(getattr(event, "event_id", "") or "").strip() == reserved_event_id
+                    if str(getattr(event, "event_id", "") or "").strip() == selected_aggregate_id
                     and event_subject_kind(event) in {"PORTFOLIO", "ACCOUNT"}
                     and event_subject_id(event)
                 ),
                 None,
             )
-            if reserved_event is not None:
+            if selected_aggregate is not None:
                 deferred_symbols = {
                     symbol
                     for event in requested_events
-                    if event is not reserved_event
+                    if event is not selected_aggregate
                     for symbol in self.due_event_symbols(
                         event,
                         progress,
@@ -4164,7 +4184,7 @@ class OntologyReasoningRunner:
                         priority_symbols,
                     )
                 }
-                return {reserved_event_id: []}, [], len(deferred_symbols)
+                return {selected_aggregate_id: []}, [], len(deferred_symbols)
 
         if self.coherent_snapshot_enabled():
             event_candidates = []

@@ -459,7 +459,13 @@ def realtime_request(
     )
 
 
-def portfolio_risk_request(event_id, symbols, occurred_at, fact_revision=""):
+def portfolio_risk_request(
+    event_id,
+    symbols,
+    occurred_at,
+    fact_revision="",
+    trigger="portfolio-risk-change",
+):
     source = DomainEvent(
         name="portfolio.risk_observed",
         aggregate_id="portfolio:local:default",
@@ -468,7 +474,7 @@ def portfolio_risk_request(event_id, symbols, occurred_at, fact_revision=""):
     )
     request = ontology_reasoning_requested_event(
         source,
-        "portfolio-risk-change",
+        trigger,
         changed_count=1,
         fact_types=["PortfolioRiskSnapshot", "PositionRiskMetric", "RebalanceScenario"],
         subject_kind="PORTFOLIO",
@@ -623,6 +629,27 @@ class OntologyReasoningMailboxTests(unittest.TestCase):
         self.assertEqual([["000660", "MSTR"]], self.monitor.calls)
         self.assertEqual("completed", self.mailbox.events["portfolio-overdue"]["state"])
         self.assertEqual("pending", self.mailbox.events["market-newer"]["state"])
+
+    def test_urgent_portfolio_transition_has_holding_priority_without_a_ticker(self):
+        portfolio = portfolio_risk_request(
+            "portfolio-transition",
+            ["000660", "MSTR"],
+            "2026-07-24T00:00:00Z",
+            "rebalance:1",
+            trigger="portfolio-rebalance-transition",
+        )
+        market = realtime_request("market-newer", ["000660"], "2026-07-24T00:01:00Z")
+        runner = self.build_runner(
+            [portfolio, market],
+            now=lambda: datetime(2026, 7, 24, 0, 2, tzinfo=timezone.utc),
+        )
+
+        result = runner.run_once(force=True)
+
+        self.assertEqual("ok", result["status"])
+        self.assertEqual(["PORTFOLIO"], result["queueDispatch"]["selectedWorkClasses"])
+        self.assertFalse(result["queueDispatch"]["eventFairnessReservationActive"])
+        self.assertEqual([["000660", "MSTR"]], self.monitor.calls)
 
     def test_market_observation_anchor_completes_only_after_verified_projection(self):
         event = realtime_request("anchor-event", ["AAPL"], "2026-07-24T00:00:00Z")

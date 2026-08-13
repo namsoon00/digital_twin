@@ -1001,7 +1001,7 @@ MYSQL_SCHEMA = [
         foreign_net_volume DOUBLE NOT NULL DEFAULT 0,
         institution_net_volume DOUBLE NOT NULL DEFAULT 0,
         individual_net_volume DOUBLE NOT NULL DEFAULT 0,
-        investor_coverage_json LONGTEXT NOT NULL,
+        investor_coverage_json LONGTEXT NULL,
         ma5 DOUBLE NOT NULL DEFAULT 0,
         ma20 DOUBLE NOT NULL DEFAULT 0,
         ma60 DOUBLE NOT NULL DEFAULT 0,

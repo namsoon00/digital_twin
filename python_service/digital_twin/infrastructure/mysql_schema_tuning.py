@@ -44,6 +44,23 @@ class MySQLColumnDefinition:
 
 
 @dataclass(frozen=True)
+class MySQLColumnCompatibilityDefinition:
+    table: str
+    name: str
+    definition_sql: str
+
+    def alter_sql(self) -> str:
+        return (
+            "ALTER TABLE "
+            + quote_identifier(self.table)
+            + " MODIFY COLUMN "
+            + quote_identifier(self.name)
+            + " "
+            + self.definition_sql
+        )
+
+
+@dataclass(frozen=True)
 class MySQLColumnRetirementDefinition:
     """A no-longer-used column that can be removed after its replacement ships."""
 
@@ -401,7 +418,7 @@ MYSQL_OPERATIONAL_COLUMNS: Dict[str, Sequence[MySQLColumnDefinition]] = {
         MySQLColumnDefinition(
             "market_time_series_observations",
             "investor_coverage_json",
-            "LONGTEXT NOT NULL",
+            "LONGTEXT NULL",
         ),
     ),
     "notification_jobs": (
@@ -597,6 +614,17 @@ MYSQL_OPERATIONAL_COLUMNS: Dict[str, Sequence[MySQLColumnDefinition]] = {
 }
 
 
+MYSQL_OPERATIONAL_COLUMN_COMPATIBILITY: Dict[str, Sequence[MySQLColumnCompatibilityDefinition]] = {
+    "market_time_series_observations": (
+        MySQLColumnCompatibilityDefinition(
+            "market_time_series_observations",
+            "investor_coverage_json",
+            "LONGTEXT NULL",
+        ),
+    ),
+}
+
+
 # The delivery system now stores only categorical conditions and state-based
 # cooldowns. These former aggregate score columns have no remaining readers.
 MYSQL_OPERATIONAL_RETIRED_COLUMNS: Dict[str, Sequence[MySQLColumnRetirementDefinition]] = {
@@ -665,6 +693,16 @@ def mysql_column_exists(connection, table: str, column_name: str) -> bool:
     return bool(cursor.fetchone())
 
 
+def mysql_column_is_nullable(connection, table: str, column_name: str) -> bool:
+    cursor = _execute(connection, "SHOW COLUMNS FROM " + quote_identifier(table) + " LIKE %s", (column_name,))
+    row = cursor.fetchone()
+    if not row:
+        return False
+    if isinstance(row, Mapping):
+        return str(row.get("Null") or row.get("NULL") or "").upper() == "YES"
+    return len(row) > 2 and str(row[2] or "").upper() == "YES"
+
+
 def ensure_mysql_columns(
     connection,
     column_map: Mapping[str, Sequence[MySQLColumnDefinition]],
@@ -684,6 +722,22 @@ def ensure_mysql_columns(
                 raise
             created.append(definition.table + "." + definition.name)
     return created
+
+
+def ensure_mysql_column_compatibility(
+    connection,
+    column_map: Mapping[str, Sequence[MySQLColumnCompatibilityDefinition]],
+) -> List[str]:
+    modified: List[str] = []
+    for table, definitions in column_map.items():
+        for definition in definitions:
+            if not mysql_column_exists(connection, table, definition.name):
+                continue
+            if mysql_column_is_nullable(connection, table, definition.name):
+                continue
+            _execute(connection, definition.alter_sql())
+            modified.append(definition.table + "." + definition.name)
+    return modified
 
 
 def retire_mysql_columns(
@@ -788,6 +842,7 @@ def ensure_mysql_key_partitions(
 def ensure_mysql_operational_schema_tuning(connection, settings: Mapping[str, object] = None) -> Dict[str, List[str]]:
     return {
         "columns": ensure_mysql_columns(connection, MYSQL_OPERATIONAL_COLUMNS),
+        "compatibleColumns": ensure_mysql_column_compatibility(connection, MYSQL_OPERATIONAL_COLUMN_COMPATIBILITY),
         "retiredColumns": retire_mysql_columns(connection, MYSQL_OPERATIONAL_RETIRED_COLUMNS),
         "indexes": ensure_mysql_indexes(connection, MYSQL_OPERATIONAL_INDEXES),
         "partitions": ensure_mysql_key_partitions(connection, MYSQL_OPERATIONAL_KEY_PARTITIONS, settings),

@@ -17,6 +17,10 @@ from digital_twin.domain.portfolio_ontology_temporal_concepts import (
     has_smart_money_flow_observation,
 )
 from digital_twin.infrastructure.mysql_market_time_series import MySQLMarketTimeSeriesStore
+from digital_twin.infrastructure.mysql_schema_tuning import (
+    MYSQL_OPERATIONAL_COLUMN_COMPATIBILITY,
+    ensure_mysql_column_compatibility,
+)
 
 
 def portfolio_summary():
@@ -39,6 +43,37 @@ def investor_coverage(fields, participant_status=None, status="available"):
 
 
 class InvestorFlowContractTests(unittest.TestCase):
+    def test_schema_tuning_makes_coverage_column_compatible_with_old_writers(self):
+        class Cursor:
+            def __init__(self, row=None):
+                self.row = row
+
+            def fetchone(self):
+                return self.row
+
+        class Connection:
+            def __init__(self):
+                self.statements = []
+
+            def execute(self, sql, params=()):
+                self.statements.append((sql, params))
+                if sql.startswith("SHOW COLUMNS"):
+                    return Cursor({"Field": "investor_coverage_json", "Null": "NO"})
+                return Cursor()
+
+        connection = Connection()
+
+        modified = ensure_mysql_column_compatibility(connection, MYSQL_OPERATIONAL_COLUMN_COMPATIBILITY)
+
+        self.assertEqual(
+            ["market_time_series_observations.investor_coverage_json"],
+            modified,
+        )
+        self.assertIn(
+            "MODIFY COLUMN `investor_coverage_json` LONGTEXT NULL",
+            connection.statements[-1][0],
+        )
+
     def test_foreign_only_estimate_does_not_create_institution_or_smart_money_fact(self):
         position = Position(
             symbol="035720",

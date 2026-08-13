@@ -1397,13 +1397,39 @@ class KISMarketSignalProvider:
 
     def fundamental_estimates_for_signal(self, symbol: str, cached: Dict[str, object]) -> Dict[str, object]:
         existing = cached.get("fundamentalEstimates") if isinstance(cached, dict) and isinstance(cached.get("fundamentalEstimates"), dict) else {}
+        existing_is_usable = str(existing.get("normalizationVersion") or "") == KIS_FUNDAMENTAL_NORMALIZATION_VERSION
+        fallback = dict(existing) if existing_is_usable else {}
         if self.fundamental_cache_fresh(cached):
-            return dict(existing)
+            return fallback
+        if not self.fundamental_estimates_enabled() or not self.configured():
+            return fallback
         if self.fundamental_refresh_count >= self.fundamental_refresh_limit():
-            return dict(existing)
+            return fallback
         self.fundamental_refresh_count += 1
+        try:
+            self.fetch_access_token()
+        except Exception as error:  # noqa: BLE001 - optional fundamentals must not block quote delivery.
+            self.record_fundamental_failure("fundamental-token", symbol, error)
+            return fallback
         refreshed = self.fetch_fundamental_estimates(symbol)
-        return refreshed or dict(existing)
+        return refreshed or fallback
+
+    def refresh_cached_fundamental_estimates(self, symbol: str, cached: Dict[str, object]) -> Dict[str, object]:
+        if not cached or self.fundamental_cache_fresh(cached):
+            return dict(cached or {})
+        existing = cached.get("fundamentalEstimates") if isinstance(cached.get("fundamentalEstimates"), dict) else {}
+        refreshed = self.fundamental_estimates_for_signal(symbol, cached)
+        updated = dict(cached)
+        if refreshed:
+            updated["fundamentalEstimates"] = refreshed
+        elif existing and str(existing.get("normalizationVersion") or "") != KIS_FUNDAMENTAL_NORMALIZATION_VERSION:
+            # Never let a known-incompatible valuation payload reach models
+            # while its bounded refresh is waiting or unavailable.
+            updated.pop("fundamentalEstimates", None)
+        if updated != cached:
+            self.save_signal(symbol, updated)
+            self.diagnostics["fundamentalCacheUpdated"] = int(self.diagnostics.get("fundamentalCacheUpdated") or 0) + 1
+        return updated
 
     def reusable_intraday_investor_estimate(self, cached: Dict[str, object]) -> Dict[str, object]:
         if not cached or not self.is_kr_regular_market_hours():
@@ -1788,6 +1814,10 @@ class KISMarketSignalProvider:
         for symbol in symbols:
             cached = self.cached_signal(symbol)
             if self.should_use_cached_signal(cached):
+                # Quote freshness and slow-moving fundamental freshness have
+                # separate lifecycles. Refresh the latter without re-fetching
+                # every quote/flow endpoint.
+                cached = self.refresh_cached_fundamental_estimates(symbol, cached)
                 cached = self.signal_for_current_session(cached)
                 cached["dataQuality"] = cached.get("dataQuality") or "cached"
                 signals[symbol] = cached

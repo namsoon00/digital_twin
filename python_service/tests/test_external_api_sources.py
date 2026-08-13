@@ -272,6 +272,69 @@ class ExternalApiSourceTests(unittest.TestCase):
         del payload["fundamentalEstimates"]["normalizationVersion"]
         self.assertFalse(provider.fundamental_cache_fresh(payload))
 
+    def test_kis_cached_quote_refreshes_fundamentals_without_refetching_quote(self):
+        now = datetime(2026, 8, 16, 3, 0, tzinfo=timezone.utc)
+        cache = MemoryQuoteCache()
+        cached = {
+            "symbol": "035420",
+            "updatedAt": "2026-08-16T02:59:00Z",
+            "fundamentalEstimates": {
+                "fetchedAt": "2026-08-16T02:58:00Z",
+                "earningsEstimates": [{"base": 101017}],
+            },
+        }
+        provider = KISMarketSignalProvider(
+            settings={
+                "kisBaseUrl": "https://kis.example.test",
+                "kisAppKey": "key",
+                "kisAppSecret": "secret",
+                "kisFundamentalEstimatesEnabled": "1",
+                "kisFundamentalRefreshSymbolsPerCycle": "2",
+            },
+            quote_cache=cache,
+            now_provider=lambda: now,
+        )
+        provider.token = "token"
+        refreshed = {
+            "normalizationVersion": KIS_FUNDAMENTAL_NORMALIZATION_VERSION,
+            "fetchedAt": "2026-08-16T03:00:00Z",
+            "earningsEstimates": [{"base": 10101.7}],
+        }
+
+        with patch.object(provider, "fetch_fundamental_estimates", return_value=refreshed) as fetch:
+            updated = provider.refresh_cached_fundamental_estimates("035420", cached)
+
+        fetch.assert_called_once_with("035420")
+        self.assertEqual(10101.7, updated["fundamentalEstimates"]["earningsEstimates"][0]["base"])
+        self.assertEqual("2026-08-16T02:59:00Z", updated["updatedAt"])
+        self.assertEqual(updated, cache.load("kis", "__market_signals__", "035420"))
+
+    def test_kis_incompatible_fundamentals_are_removed_when_refresh_fails(self):
+        provider = KISMarketSignalProvider(
+            settings={
+                "kisBaseUrl": "https://kis.example.test",
+                "kisAppKey": "key",
+                "kisAppSecret": "secret",
+                "kisFundamentalEstimatesEnabled": "1",
+            },
+            quote_cache=MemoryQuoteCache(),
+            now_provider=lambda: datetime(2026, 8, 16, 3, 0, tzinfo=timezone.utc),
+        )
+        provider.token = "token"
+        cached = {
+            "symbol": "035420",
+            "updatedAt": "2026-08-16T02:59:00Z",
+            "fundamentalEstimates": {
+                "fetchedAt": "2026-08-16T02:58:00Z",
+                "earningsEstimates": [{"base": 101017}],
+            },
+        }
+
+        with patch.object(provider, "fetch_fundamental_estimates", return_value={}):
+            updated = provider.refresh_cached_fundamental_estimates("035420", cached)
+
+        self.assertNotIn("fundamentalEstimates", updated)
+
     def test_kis_opinions_keep_latest_target_per_brokerage(self):
         normalized = normalize_investment_opinions(
             "035720",

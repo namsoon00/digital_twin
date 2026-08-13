@@ -418,21 +418,43 @@ def has_row_field(row: Dict[str, object], *fields: str) -> bool:
 
 
 def has_investor_flow_observation(row: Dict[str, object]) -> bool:
-    if not has_row_field(
-        row,
-        "foreignNetVolume",
-        "foreign_net_volume",
-        "institutionNetVolume",
-        "institution_net_volume",
-        "individualNetVolume",
-        "individual_net_volume",
-    ):
-        return False
+    observed = investor_observed_fields(row)
+    if observed:
+        return any(abs(row_number(row, camel, snake)) > 0 for camel, snake in [
+            ("foreignNetVolume", "foreign_net_volume"),
+            ("institutionNetVolume", "institution_net_volume"),
+            ("individualNetVolume", "individual_net_volume"),
+        ] if camel in observed)
     return any(abs(row_number(row, camel, snake)) > 0 for camel, snake in [
         ("foreignNetVolume", "foreign_net_volume"),
         ("institutionNetVolume", "institution_net_volume"),
         ("individualNetVolume", "individual_net_volume"),
     ])
+
+
+def investor_observed_fields(row: Dict[str, object]) -> set:
+    coverage = row.get("marketSignalCoverage") if isinstance(row.get("marketSignalCoverage"), dict) else {}
+    investor = coverage.get("investor") if isinstance(coverage.get("investor"), dict) else {}
+    return {
+        str(field)
+        for field in (investor.get("observedFields") or investor.get("fields") or [])
+        if str(field or "").strip()
+    }
+
+
+def has_smart_money_flow_observation(row: Dict[str, object]) -> bool:
+    observed = investor_observed_fields(row)
+    if observed:
+        return (
+            {"foreignNetVolume", "institutionNetVolume"}.issubset(observed)
+            and has_investor_flow_observation(row)
+        )
+    # Legacy rows did not persist per-field coverage. Require both non-zero
+    # values so a default zero cannot masquerade as an observed institution.
+    return (
+        abs(row_number(row, "foreignNetVolume", "foreign_net_volume")) > 0
+        and abs(row_number(row, "institutionNetVolume", "institution_net_volume")) > 0
+    )
 
 
 def trailing_direction_count(prices: List[float], direction: str) -> int:
@@ -499,7 +521,7 @@ def temporal_window_values(rows: List[Dict[str, object]], definition: TemporalWi
     end_price = prices[-1] if prices else 0.0
     smart_money_rows = [
         row for row in priced_rows
-        if has_investor_flow_observation(row)
+        if has_smart_money_flow_observation(row)
         and observation_is_valid(row)
     ]
     smart_money_first = smart_money_rows[0] if smart_money_rows else {}
@@ -624,11 +646,12 @@ def temporal_window_values(rows: List[Dict[str, object]], definition: TemporalWi
         values.update({
             "smartMoneyNetLatest": round(smart_money_end, 2),
             "smartMoneyNetChange": round(smart_money_end - smart_money_start, 2),
-            "individualNetLatest": round(
+        })
+        if "individualNetVolume" in investor_observed_fields(smart_money_last):
+            values["individualNetLatest"] = round(
                 row_number(smart_money_last, "individualNetVolume", "individual_net_volume"),
                 2,
-            ),
-        })
+            )
     return values
 
 
@@ -666,7 +689,7 @@ def add_temporal_observation_anchors(
     previous_id = ""
     for role, index, row in temporal_observation_anchors(rows):
         observed_at = row_timestamp(row)
-        has_flow = has_investor_flow_observation(row) and observation_is_valid(row)
+        has_flow = has_smart_money_flow_observation(row) and observation_is_valid(row)
         tbox_classes = ["Observation", "PriceObservation", "TemporalWindowObservation"]
         properties = {
             "tboxClass": "TemporalWindowObservation",

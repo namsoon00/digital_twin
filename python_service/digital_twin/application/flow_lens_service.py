@@ -11,6 +11,11 @@ from ..domain.market_data import (
     sector_from_symbol,
 )
 from ..domain.investment_analysis import build_investment_analysis
+from ..domain.investor_flow_psychology import (
+    INVESTOR_PARTY_FIELDS,
+    investor_flow_observation,
+    investor_flow_observed_fields,
+)
 from ..domain.ontology_decision_state import REVIEW_LEVEL_RANK
 from ..domain.ontology_prompting import ONTOLOGY_PROMPT_VERSION
 from ..domain.portfolio_ontology_builder import build_portfolio_ontology
@@ -40,10 +45,8 @@ MARKET_SIGNAL_FIELDS = (
 
 
 def position_payload(position: Position) -> Dict[str, object]:
-    foreign_net = investor_net_volume(position.foreign_net_volume, position.foreign_buy_volume, position.foreign_sell_volume)
-    institution_net = investor_net_volume(position.institution_net_volume, position.institution_buy_volume, position.institution_sell_volume)
-    individual_net = investor_net_volume(position.individual_net_volume, position.individual_buy_volume, position.individual_sell_volume)
-    return {
+    investor = investor_flow_observation(position)
+    payload = {
         "symbol": position.symbol,
         "name": position.name,
         "market": position.market,
@@ -72,18 +75,6 @@ def position_payload(position: Position) -> Dict[str, object]:
         "orderbookBidVolume": position.orderbook_bid_volume,
         "orderbookAskVolume": position.orderbook_ask_volume,
         "bidAskImbalance": position.bid_ask_imbalance,
-        "foreignBuyVolume": position.foreign_buy_volume,
-        "foreignSellVolume": position.foreign_sell_volume,
-        "foreignNetVolume": foreign_net,
-        "foreignNetAmount": position.foreign_net_amount,
-        "institutionBuyVolume": position.institution_buy_volume,
-        "institutionSellVolume": position.institution_sell_volume,
-        "institutionNetVolume": institution_net,
-        "institutionNetAmount": position.institution_net_amount,
-        "individualBuyVolume": position.individual_buy_volume,
-        "individualSellVolume": position.individual_sell_volume,
-        "individualNetVolume": individual_net,
-        "individualNetAmount": position.individual_net_amount,
         "ma5": position.ma5,
         "ma20": position.ma20,
         "ma60": position.ma60,
@@ -95,6 +86,22 @@ def position_payload(position: Position) -> Dict[str, object]:
         "ma60Distance": position.ma60_distance,
         "sector": position.sector,
     }
+    for key in [
+        "foreignNetVolume", "foreignNetAmount", "institutionNetVolume",
+        "institutionNetAmount", "individualNetVolume", "individualNetAmount",
+        "smartMoneyNetVolume",
+    ]:
+        if key in investor:
+            payload[key] = investor[key]
+    observed = investor_flow_observed_fields(position)
+    for fields in INVESTOR_PARTY_FIELDS.values():
+        for public_key, attr_key in [
+            (fields["buy"], fields["buy_attr"]),
+            (fields["sell"], fields["sell_attr"]),
+        ]:
+            if public_key in observed:
+                payload[public_key] = getattr(position, attr_key, 0.0)
+    return payload
 
 
 def portfolio_payload(portfolio) -> Dict[str, object]:

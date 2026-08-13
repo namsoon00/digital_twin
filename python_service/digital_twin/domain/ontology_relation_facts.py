@@ -5,9 +5,9 @@ from typing import Dict, Iterable, List, Optional
 from .alert_formatting import compact_number, price_money
 from .company_knowledge import company_prompt_context, company_valuation_context
 from .investment_research import research_evidence_from_external_signals, research_evidence_from_facts
-from .investor_flow_psychology import investor_flow_measurement, investor_flow_values_reliable
+from .investor_flow_psychology import investor_flow_contract, investor_flow_observation, investor_flow_values_reliable
 from .macro_context import macro_context_facts
-from .market_data import investor_net_volume, number
+from .market_data import number
 from . import news_analysis as news_domain
 from .accounts import investment_strategy_profile
 from .instrument_profiles import instrument_profile_for_position
@@ -45,51 +45,11 @@ def _position_account_weight(position: Position, portfolio: PortfolioSummary) ->
 
 
 def _investor_flow(position: Position) -> Dict[str, object]:
-    measurement = investor_flow_measurement(position)
-    reliable = investor_flow_values_reliable(position)
-    if not reliable:
-        # Do not emit stale investor values as neutral or directional facts.
-        # The data-state is an ABox quality observation; RuleBox rules decide
-        # what a missing or stale source means for an investment hypothesis.
-        return {
-            "foreignNetVolume": 0.0,
-            "institutionNetVolume": 0.0,
-            "individualNetVolume": 0.0,
-            "foreignNetAmount": 0.0,
-            "institutionNetAmount": 0.0,
-            "individualNetAmount": 0.0,
-            "smartMoneyNetVolume": 0.0,
-            # These are direct conjunctions of the raw foreign/institution
-            # observations. RuleBox decides whether either fact supports an
-            # investment hypothesis.
-            "jointSmartMoneyInflow": False,
-            "jointSmartMoneyOutflow": False,
-            "investorFlowBase": 0.0,
-            "investorFlowAvailable": False,
-            "investorFlowDataState": "unavailable",
-            **measurement,
-        }
-    foreign_volume = investor_net_volume(position.foreign_net_volume, position.foreign_buy_volume, position.foreign_sell_volume)
-    institution_volume = investor_net_volume(position.institution_net_volume, position.institution_buy_volume, position.institution_sell_volume)
-    individual_volume = investor_net_volume(position.individual_net_volume, position.individual_buy_volume, position.individual_sell_volume)
-    base = abs(foreign_volume) + abs(institution_volume) + abs(individual_volume)
-    joint_inflow = foreign_volume > 0 and institution_volume > 0
-    joint_outflow = foreign_volume < 0 and institution_volume < 0
-    is_estimate = bool(measurement.get("investorFlowIsEstimate"))
+    observation = investor_flow_observation(position)
     return {
-        "foreignNetVolume": round(foreign_volume, 2),
-        "institutionNetVolume": round(institution_volume, 2),
-        "individualNetVolume": round(individual_volume, 2),
-        "foreignNetAmount": round(number(position.foreign_net_amount), 2),
-        "institutionNetAmount": round(number(position.institution_net_amount), 2),
-        "individualNetAmount": round(number(position.individual_net_amount), 2),
-        "smartMoneyNetVolume": round(foreign_volume + institution_volume, 2),
-        "jointSmartMoneyInflow": joint_inflow,
-        "jointSmartMoneyOutflow": joint_outflow,
-        "investorFlowBase": round(base, 2),
-        "investorFlowAvailable": bool(base),
-        "investorFlowDataState": "estimated" if is_estimate and base else "sufficient" if base else "insufficient",
-        **measurement,
+        **observation,
+        "investorFlowAvailable": bool(observation.get("available")),
+        "investorFlowDataState": str(observation.get("dataState") or "unavailable"),
     }
 
 
@@ -924,6 +884,12 @@ def _availability_with_coverage(status: str, source: str, coverage: Dict[str, ob
         "sourceAsOf",
         "fetchedAt",
         "unchangedCount",
+        "observedFields",
+        "participantStatus",
+        "nextProviderUpdateAt",
+        "providerUpdateSlot",
+        "providerUpdateCode",
+        "measurementType",
     ]:
         if key in stage_item and stage_item.get(key) not in (None, ""):
             item[key] = stage_item.get(key)
@@ -961,12 +927,13 @@ def position_signal_facts(
     orderbook_ask_volume = number(position.orderbook_ask_volume)
     bid_ask_imbalance = number(position.bid_ask_imbalance)
     investor_values_reliable = investor_flow_values_reliable(position)
-    foreign_buy_volume = number(position.foreign_buy_volume) if investor_values_reliable else 0.0
-    foreign_sell_volume = number(position.foreign_sell_volume) if investor_values_reliable else 0.0
-    institution_buy_volume = number(position.institution_buy_volume) if investor_values_reliable else 0.0
-    institution_sell_volume = number(position.institution_sell_volume) if investor_values_reliable else 0.0
-    individual_buy_volume = number(position.individual_buy_volume) if investor_values_reliable else 0.0
-    individual_sell_volume = number(position.individual_sell_volume) if investor_values_reliable else 0.0
+    investor_observed = set(investor_flow_contract(position)["observedFields"])
+    foreign_buy_volume = number(position.foreign_buy_volume) if investor_values_reliable and "foreignBuyVolume" in investor_observed else 0.0
+    foreign_sell_volume = number(position.foreign_sell_volume) if investor_values_reliable and "foreignSellVolume" in investor_observed else 0.0
+    institution_buy_volume = number(position.institution_buy_volume) if investor_values_reliable and "institutionBuyVolume" in investor_observed else 0.0
+    institution_sell_volume = number(position.institution_sell_volume) if investor_values_reliable and "institutionSellVolume" in investor_observed else 0.0
+    individual_buy_volume = number(position.individual_buy_volume) if investor_values_reliable and "individualBuyVolume" in investor_observed else 0.0
+    individual_sell_volume = number(position.individual_sell_volume) if investor_values_reliable and "individualSellVolume" in investor_observed else 0.0
     execution_direction_proxy = bool(position.trade_strength or bid_ask_imbalance or orderbook_bid_volume or orderbook_ask_volume)
     market_signal_coverage = dict(position.market_signal_coverage or {}) if isinstance(position.market_signal_coverage, dict) else {}
     quote_status = str(position.quote_status or "")

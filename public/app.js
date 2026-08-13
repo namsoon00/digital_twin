@@ -8283,11 +8283,39 @@
     return value;
   }
 
+  function optionalSignalValue(raw, keys) {
+    var value = null;
+    keys.some(function (key) {
+      if (raw && raw[key] != null && raw[key] !== "") {
+        value = numeric(raw[key]);
+        return true;
+      }
+      return false;
+    });
+    return value;
+  }
+
+  function investorCoverageFromSignal(raw) {
+    var coverage = raw && (raw.marketSignalCoverage || raw.market_signal_coverage);
+    return coverage && coverage.investor && typeof coverage.investor === "object" ? coverage.investor : {};
+  }
+
   function marketSignalForItem(item, signalMap) {
     var symbol = String(item.symbol || "").toUpperCase();
     var fromItem = Object.assign({}, item || {}, item.marketSignal || item.tradeSignal || item.signal || {});
     var fromSettings = signalMap[symbol] || {};
     var merged = Object.assign({}, fromItem, fromSettings);
+    var investorCoverage = investorCoverageFromSignal(merged);
+    var observedInvestorFields = Array.isArray(investorCoverage.observedFields)
+      ? investorCoverage.observedFields
+      : (Array.isArray(investorCoverage.fields) ? investorCoverage.fields : []);
+    var hasInvestorCoverage = Object.keys(investorCoverage).length > 0;
+    var foreignValue = optionalSignalValue(merged, ["foreignNet", "foreignNetVolume", "foreign_net_volume", "foreignNetBuy", "foreignInvestorNet", "foreignerNetBuy"]);
+    var institutionValue = optionalSignalValue(merged, ["institutionNet", "institutionNetVolume", "institution_net_volume", "institutionNetBuy", "institutionalNet", "institutionInvestorNet"]);
+    var individualValue = optionalSignalValue(merged, ["individualNet", "individualNetVolume", "individual_net_volume", "individualNetBuy", "retailNet", "personalNetBuy"]);
+    var foreignAvailable = hasInvestorCoverage ? observedInvestorFields.indexOf("foreignNetVolume") >= 0 : foreignValue != null && foreignValue !== 0;
+    var institutionAvailable = hasInvestorCoverage ? observedInvestorFields.indexOf("institutionNetVolume") >= 0 : institutionValue != null && institutionValue !== 0;
+    var individualAvailable = hasInvestorCoverage ? observedInvestorFields.indexOf("individualNetVolume") >= 0 : individualValue != null && individualValue !== 0;
     return {
       symbol: symbol,
       tradeStrength: signalValue(merged, ["tradeStrength", "trade_strength", "executionStrength"]),
@@ -8298,9 +8326,13 @@
       priceChangeRate: signalValue(merged, ["priceChangeRate", "changeRate", "changePercent"]),
       ma20: signalValue(merged, ["ma20", "movingAverage20", "sma20"]),
       ma60: signalValue(merged, ["ma60", "movingAverage60", "sma60"]),
-      foreignNet: signalValue(merged, ["foreignNet", "foreignNetVolume", "foreign_net_volume", "foreignNetBuy", "foreignInvestorNet", "foreignerNetBuy"]),
-      institutionNet: signalValue(merged, ["institutionNet", "institutionNetVolume", "institution_net_volume", "institutionNetBuy", "institutionalNet", "institutionInvestorNet"]),
-      individualNet: signalValue(merged, ["individualNet", "individualNetVolume", "individual_net_volume", "individualNetBuy", "retailNet", "personalNetBuy"]),
+      foreignNet: foreignAvailable ? numeric(foreignValue) : null,
+      institutionNet: institutionAvailable ? numeric(institutionValue) : null,
+      individualNet: individualAvailable ? numeric(individualValue) : null,
+      foreignAvailable: foreignAvailable,
+      institutionAvailable: institutionAvailable,
+      individualAvailable: individualAvailable,
+      investorCoverage: investorCoverage,
       source: merged.signalSource || merged.provider || merged.quoteSource || (Object.keys(fromItem).length ? "account" : "")
     };
   }
@@ -10729,10 +10761,22 @@
       var evidence = evidenceMap[symbol] || [];
       var decision = decisionMap[symbol] || null;
       var signal = marketSignalForItem(item, parseMarketSignals());
-      var foreignValue = signal.foreignNet || item.foreignNet || item.foreignNetVolume;
-      var institutionValue = signal.institutionNet || item.institutionNet || item.institutionNetVolume;
-      var foreign = numeric(foreignValue);
-      var institution = numeric(institutionValue);
+      var foreign = signal.foreignAvailable ? numeric(signal.foreignNet) : 0;
+      var institution = signal.institutionAvailable ? numeric(signal.institutionNet) : 0;
+      var combinedFlowAvailable = signal.foreignAvailable && signal.institutionAvailable;
+      var partialFlowAvailable = signal.foreignAvailable || signal.institutionAvailable;
+      var participantStatus = signal.investorCoverage && signal.investorCoverage.participantStatus || {};
+      var nextProviderUpdateAt = String(signal.investorCoverage && signal.investorCoverage.nextProviderUpdateAt || "");
+      var nextProviderClock = nextProviderUpdateAt.indexOf("T") >= 0 ? nextProviderUpdateAt.split("T")[1].slice(0, 5) : "";
+      var flowDisplay = combinedFlowAvailable
+        ? formatSignalVolume(foreign + institution)
+        : (signal.foreignAvailable ? formatSignalVolume(foreign) : (signal.institutionAvailable ? formatSignalVolume(institution) : "-"));
+      var flowLabel = combinedFlowAvailable
+        ? "외국인+기관"
+        : (signal.foreignAvailable ? "외국인 추정" : (signal.institutionAvailable ? "기관 추정" : "수급 미수집"));
+      if (!combinedFlowAvailable && participantStatus.institution === "not-yet-published" && nextProviderClock) {
+        flowLabel += " · 기관 " + nextProviderClock + " 예정";
+      }
       var rawPrice = item.currentPrice;
       var quoteAvailable = hasNumericValue(rawPrice) && numeric(rawPrice) > 0;
       var changeValue = hasNumericValue(item.changeRate) ? item.changeRate : signal.priceChangeRate;
@@ -10756,7 +10800,10 @@
         changeAvailable: changeAvailable,
         profitLossRate: numeric(item.profitLossRate),
         profitLossAvailable: profitLossAvailable,
-        flowAvailable: hasNumericValue(foreignValue) || hasNumericValue(institutionValue),
+        flowAvailable: combinedFlowAvailable,
+        partialFlowAvailable: partialFlowAvailable,
+        flowDisplay: flowDisplay,
+        flowLabel: flowLabel,
         foreignInstitutionNet: foreign + institution,
         evidence: evidence,
         evidenceCount: evidence.length,
@@ -11082,14 +11129,14 @@
   }
 
   function renderMarketInstrumentRow(row) {
-    var flowTone = !row.flowAvailable ? "hold" : (row.foreignInstitutionNet > 0 ? "watch" : (row.foreignInstitutionNet < 0 ? "danger" : "hold"));
+    var flowTone = !row.partialFlowAvailable ? "hold" : (row.foreignInstitutionNet > 0 ? "watch" : (row.foreignInstitutionNet < 0 ? "danger" : "hold"));
     var changeTone = !row.changeAvailable ? "hold" : (row.changeRate > 0 ? "watch" : (row.changeRate < 0 ? "danger" : "hold"));
     var decisionLabel = row.decision ? (row.decision.decision || row.decision.action || "판단 있음") : "판단 대기";
     return [
       '<button class="oa-data-row oa-market-row" type="button" data-console-row-key="' + escapeHtml(row.key) + '" data-work-detail="market-instrument" data-work-detail-key="' + escapeHtml(row.symbol) + '">',
       '<span class="oa-symbol-cell"><strong>' + escapeHtml(row.name || row.symbol) + '</strong><em>' + escapeHtml([row.symbol, row.source === "watchlist" ? "관심" : "보유"].join(" · ")) + '</em>' + renderRecordChangedAt(row) + '</span>',
       '<span><strong>' + escapeHtml(optionalPrice(row.currentPrice, row.currency, row.quoteAvailable)) + '</strong><em class="' + escapeHtml(changeTone) + '">' + escapeHtml(optionalSignedPct(row.changeRate, row.changeAvailable)) + '</em></span>',
-      '<span><strong class="' + escapeHtml(flowTone) + '">' + escapeHtml(row.flowAvailable ? formatSignalVolume(row.foreignInstitutionNet) : "-") + '</strong><em>외국인+기관</em></span>',
+      '<span><strong class="' + escapeHtml(flowTone) + '">' + escapeHtml(row.flowDisplay) + '</strong><em>' + escapeHtml(row.flowLabel) + '</em></span>',
       '<span><strong class="' + escapeHtml(row.impact.tone || "hold") + '">' + escapeHtml(row.impact.label || "근거 대기") + '</strong><em>' + escapeHtml(decisionLabel) + ' · 근거 ' + escapeHtml(row.evidenceCount) + '건</em></span>',
       '<span class="oa-open-cell">&rarr;</span>',
       '</button>'
@@ -11424,13 +11471,13 @@
         renderNotificationDetailMetric("현재가", optionalPrice(row.currentPrice, row.currency, row.quoteAvailable), row.quoteAvailable && row.changeRate < 0 ? "danger" : "watch"),
         renderNotificationDetailMetric("등락", optionalSignedPct(row.changeRate, row.changeAvailable), row.changeAvailable && row.changeRate < 0 ? "danger" : "watch"),
         renderNotificationDetailMetric("보유 손익", row.source === "watchlist" ? "-" : optionalSignedPct(row.profitLossRate, row.profitLossAvailable), row.profitLossAvailable && row.profitLossRate < 0 ? "danger" : "watch"),
-        renderNotificationDetailMetric("외국인+기관", row.flowAvailable ? formatSignalVolume(row.foreignInstitutionNet) : "-", row.flowAvailable && row.foreignInstitutionNet < 0 ? "danger" : "watch"),
+        renderNotificationDetailMetric(row.flowLabel, row.flowDisplay, row.partialFlowAvailable && row.foreignInstitutionNet < 0 ? "danger" : "watch"),
         renderNotificationDetailMetric("뉴스 근거", row.evidenceCount + "건", row.impact.tone),
         '</div></section>',
         '<section class="work-detail-section primary"><strong>현재 상황</strong><p>' + escapeHtml([row.decision && (row.decision.decision || row.decision.action), row.impact.label, row.source === "watchlist" ? "관심 종목" : "보유 종목", row.quality.label].filter(Boolean).join(" · ") || "시장 데이터 확인") + '</p></section>',
         '<section class="work-detail-section"><strong>가격·수급</strong><div class="work-detail-list">',
         '<div class="work-detail-row"><b>가격</b><div><strong>' + escapeHtml(optionalPrice(row.currentPrice, row.currency, row.quoteAvailable)) + '</strong><span>등락 ' + escapeHtml(optionalSignedPct(row.changeRate, row.changeAvailable)) + '</span></div><em>' + escapeHtml(formatClock(row.updatedAt)) + '</em></div>',
-        '<div class="work-detail-row"><b>수급</b><div><strong>외국인+기관 ' + escapeHtml(row.flowAvailable ? formatSignalVolume(row.foreignInstitutionNet) : "-") + '</strong><span>거래량 비율 ' + escapeHtml(formatSignalRatio(signal.volumeRatio)) + '</span></div><em>' + escapeHtml(row.quality.label) + '</em></div>',
+        '<div class="work-detail-row"><b>수급</b><div><strong>' + escapeHtml(row.flowLabel + " " + row.flowDisplay) + '</strong><span>거래량 비율 ' + escapeHtml(formatSignalRatio(signal.volumeRatio)) + '</span></div><em>' + escapeHtml(row.quality.label) + '</em></div>',
         '</div></section>',
         row.decision ? '<section class="work-detail-section"><strong>연결된 투자 판단</strong><p>' + escapeHtml((row.decision.reasons || [])[0] || row.decision.decision || row.decision.action || "판단 근거 확인") + '</p>' + renderWorkDetailButton("investment-action", row.decision.consoleKey, "판단 상세", "text-button primary compact") + '</section>' : '',
         '<section class="work-detail-section"><strong>관련 뉴스</strong>',

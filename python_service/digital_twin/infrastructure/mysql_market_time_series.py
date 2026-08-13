@@ -1,3 +1,4 @@
+import json
 from collections import defaultdict
 from datetime import timedelta
 from typing import Dict, Iterable, List
@@ -12,6 +13,10 @@ from ..domain.market_time_series import (
     required_session_count,
 )
 from ..domain.portfolio import AccountSnapshot
+from ..domain.portfolio_ontology_temporal_concepts import (
+    trim_to_recent_sessions,
+    window_rows,
+)
 from .mysql_operational_connection import MySQLOperationalConnection
 
 
@@ -24,7 +29,7 @@ OBSERVATION_COLUMNS = [
     "open_price", "high_price", "low_price", "current_price", "change_rate",
     "quantity", "average_price", "profit_loss_rate", "volume", "trading_value",
     "volume_ratio", "trade_strength", "bid_ask_imbalance", "foreign_net_volume",
-    "institution_net_volume", "individual_net_volume", "ma5", "ma20", "ma60",
+    "institution_net_volume", "individual_net_volume", "investor_coverage_json", "ma5", "ma20", "ma60",
     "ma20_slope", "ma60_slope", "ma20_distance", "ma60_distance", "data_quality",
 ]
 
@@ -327,7 +332,7 @@ class MySQLMarketTimeSeriesStore(MySQLOperationalConnection):
             "observed_at", "source_as_of", "provider", "source_role", "name", "market", "currency",
             "current_price", "change_rate", "quantity", "average_price", "profit_loss_rate", "volume",
             "trading_value", "volume_ratio", "trade_strength", "bid_ask_imbalance", "foreign_net_volume",
-            "institution_net_volume", "individual_net_volume", "ma5", "ma20", "ma60", "ma20_slope",
+            "institution_net_volume", "individual_net_volume", "investor_coverage_json", "ma5", "ma20", "ma60", "ma20_slope",
             "ma60_slope", "ma20_distance", "ma60_distance", "data_quality",
         ]
         sql = (
@@ -446,7 +451,12 @@ class MySQLMarketTimeSeriesStore(MySQLOperationalConnection):
                     if self.session_count(candidate) >= required_sessions:
                         selected = candidate
                         break
-                windows[window_key] = list(reversed(selected or best))
+                ordered = list(reversed(selected or best))
+                if bool(getattr(definition, "is_intraday", False)):
+                    ordered = window_rows(ordered, definition, parse_timestamp(observation_cutoff))
+                else:
+                    ordered = trim_to_recent_sessions(ordered, required_sessions)
+                windows[window_key] = ordered
             result[symbol] = windows
         return result
 
@@ -603,6 +613,7 @@ class MySQLMarketTimeSeriesStore(MySQLOperationalConnection):
         return len({str(row.get("marketSessionDate") or row.get("bucketAt") or "")[:10] for row in rows or [] if row})
 
     def observation_payload(self, row: Dict[str, object]) -> Dict[str, object]:
+        investor_coverage = self.parse_investor_coverage(row.get("investor_coverage_json"))
         return {
             "generatedAt": str(row.get("observed_at") or row.get("bucket_at") or ""),
             "updatedAt": str(row.get("observed_at") or row.get("bucket_at") or ""),
@@ -638,6 +649,7 @@ class MySQLMarketTimeSeriesStore(MySQLOperationalConnection):
             "foreignNetVolume": float(row.get("foreign_net_volume") or 0),
             "institutionNetVolume": float(row.get("institution_net_volume") or 0),
             "individualNetVolume": float(row.get("individual_net_volume") or 0),
+            "marketSignalCoverage": {"investor": investor_coverage},
             "ma5": float(row.get("ma5") or 0),
             "ma20": float(row.get("ma20") or 0),
             "ma60": float(row.get("ma60") or 0),
@@ -647,6 +659,16 @@ class MySQLMarketTimeSeriesStore(MySQLOperationalConnection):
             "ma60Distance": float(row.get("ma60_distance") or 0),
             "dataQuality": str(row.get("data_quality") or ""),
         }
+
+    @staticmethod
+    def parse_investor_coverage(value: object) -> Dict[str, object]:
+        if isinstance(value, dict):
+            return dict(value)
+        try:
+            parsed = json.loads(str(value or "{}"))
+        except (TypeError, ValueError, json.JSONDecodeError):
+            return {}
+        return dict(parsed) if isinstance(parsed, dict) else {}
 
     def summary(self, account_id: str = "") -> Dict[str, object]:
         clauses = []

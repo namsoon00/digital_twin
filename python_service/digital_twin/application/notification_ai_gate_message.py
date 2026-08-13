@@ -918,18 +918,32 @@ def _investor_text_from_relation_facts(context: Dict[str, object]) -> str:
     if str(investor.get("status") or "").strip() != "available" or investor.get("judgementEvidenceUsable") is False:
         return ""
 
+    observed = set(investor.get("observedFields") or investor.get("fields") or [])
+    participant_status = investor.get("participantStatus") if isinstance(investor.get("participantStatus"), dict) else {}
     rows = []
     for label, prefix in [("외국인", "foreign"), ("기관", "institution"), ("개인", "individual")]:
+        public_prefix = {"foreign": "foreign", "institution": "institution", "individual": "individual"}[prefix]
+        party_observed = any(
+            public_prefix + suffix in observed
+            for suffix in ["NetVolume", "BuyVolume", "SellVolume"]
+        )
+        if not party_observed:
+            status = str(participant_status.get(prefix) or "")
+            if status == "not-yet-published":
+                next_update = str(investor.get("nextProviderUpdateAt") or "")
+                next_clock = next_update.split("T", 1)[1][:5] if "T" in next_update else ""
+                suffix = " · 장 마감 후 제공" if prefix == "individual" else (" · " + next_clock + " 갱신 예정" if next_clock else "")
+                rows.append(label + ": 아직 제공 전" + suffix)
+            elif status == "unsupported":
+                rows.append(label + ": KIS 국내 수급 미지원")
+            continue
         buy = _number(facts.get(prefix + "BuyVolume"))
         sell = _number(facts.get(prefix + "SellVolume"))
         reported_net = _number(facts.get(prefix + "NetVolume"))
         net = buy - sell if buy or sell else reported_net
-        if not any([buy, sell, net]):
-            continue
         direction = "순매수" if net > 0 else "순매도" if net < 0 else "매수·매도 균형"
         detail = label + ": " + direction
-        if net:
-            detail += " " + compact_number(abs(net)) + "주"
+        detail += " " + compact_number(abs(net)) + "주"
         if buy or sell:
             detail += " (매수 " + compact_number(buy) + "주 / 매도 " + compact_number(sell) + "주)"
         rows.append(detail)
@@ -938,7 +952,8 @@ def _investor_text_from_relation_facts(context: Dict[str, object]) -> str:
 
     measurement_type = str(investor.get("measurementType") or "")
     if measurement_type == "intraday-estimate":
-        note = "KIS 장중 외국인·기관 추정 가집계 · " + str(investor.get("providerUpdateSlot") or "기준시각 미확인") + " KST 기준 · 장 마감 확정값 아님"
+        scope = "외국인·기관" if "institutionNetVolume" in observed else "외국인"
+        note = "KIS 장중 " + scope + " 추정 가집계 · " + str(investor.get("providerUpdateSlot") or "기준시각 미확인") + " KST 기준 · 장 마감 확정값 아님"
     elif measurement_type == "daily-final":
         note = "KIS 장 마감 외국인·기관·개인 확정 집계"
     else:
@@ -2905,12 +2920,15 @@ def _compact_trend_from_facts(context: Dict[str, object]) -> str:
     return ", ".join(rows)
 
 
-def _compact_investor_fact(label: str, prefix: str, facts: Dict[str, object]) -> str:
+def _compact_investor_fact(label: str, prefix: str, facts: Dict[str, object], observed: set = None) -> str:
+    observed = observed or set()
+    if observed and not any(prefix + suffix in observed for suffix in ["NetVolume", "BuyVolume", "SellVolume"]):
+        return ""
     buy = _number(facts.get(prefix + "BuyVolume"))
     sell = _number(facts.get(prefix + "SellVolume"))
     reported_net = _number(facts.get(prefix + "NetVolume"))
     net = buy - sell if buy or sell else reported_net
-    if not any([buy, sell, net]):
+    if not observed and not any([buy, sell, net]):
         return ""
     direction = "순매수" if net > 0 else "순매도" if net < 0 else "매수·매도 균형"
     if net:
@@ -2944,13 +2962,20 @@ def compact_investor_flow_line(context: Dict[str, object]) -> str:
     if not _market_signal_stage_visible(context, "investor"):
         return ""
     facts = relation_facts(context or {})
+    investor = _market_signal_stage(context, "investor")
+    observed = set(investor.get("observedFields") or investor.get("fields") or [])
     rows = [
-        _compact_investor_fact("외국인", "foreign", facts),
-        _compact_investor_fact("기관", "institution", facts),
+        _compact_investor_fact("외국인", "foreign", facts, observed),
+        _compact_investor_fact("기관", "institution", facts, observed),
     ]
     rows = [row for row in rows if row]
     if not rows:
         rows = _compact_investor_rows_from_raw_lines(context)
+    participant_status = investor.get("participantStatus") if isinstance(investor.get("participantStatus"), dict) else {}
+    if str(participant_status.get("institution") or "") == "not-yet-published":
+        next_update = str(investor.get("nextProviderUpdateAt") or "")
+        next_clock = next_update.split("T", 1)[1][:5] if "T" in next_update else ""
+        rows.append("기관 " + (next_clock + " 갱신 예정" if next_clock else "아직 제공 전"))
     if not rows:
         return ""
     basis = _market_signal_basis_label(context, "investor")

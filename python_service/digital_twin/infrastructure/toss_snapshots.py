@@ -11,6 +11,7 @@ from typing import Dict, List, Optional, Tuple
 from ..domain.accounts import AccountConfig
 from ..domain.data_freshness import combine_quality, freshness_record, int_setting, parse_datetime
 from ..domain.instrument_profiles import market_signal_symbols
+from ..domain.investor_flow_psychology import INVESTOR_PARTY_FIELDS, investor_flow_observed_fields
 from ..domain.market_data import known_stock, normalize_position, number, pct_distance, technical_indicators_from_candles
 from ..domain.market_hours import evaluate_market_hours
 from ..domain.message_types import INVESTMENT_INSIGHT
@@ -911,18 +912,6 @@ class TossProvider:
             "tradeStrength": position.trade_strength,
             "buyVolume": position.buy_volume,
             "sellVolume": position.sell_volume,
-            "foreignBuyVolume": position.foreign_buy_volume,
-            "foreignSellVolume": position.foreign_sell_volume,
-            "foreignNetVolume": position.foreign_net_volume,
-            "foreignNetAmount": position.foreign_net_amount,
-            "institutionBuyVolume": position.institution_buy_volume,
-            "institutionSellVolume": position.institution_sell_volume,
-            "institutionNetVolume": position.institution_net_volume,
-            "institutionNetAmount": position.institution_net_amount,
-            "individualBuyVolume": position.individual_buy_volume,
-            "individualSellVolume": position.individual_sell_volume,
-            "individualNetVolume": position.individual_net_volume,
-            "individualNetAmount": position.individual_net_amount,
             "ma5": position.ma5,
             "ma20": position.ma20,
             "ma60": position.ma60,
@@ -934,6 +923,16 @@ class TossProvider:
             "ma60Distance": position.ma60_distance,
             "sector": position.sector,
         }
+        observed = investor_flow_observed_fields(position)
+        for fields in INVESTOR_PARTY_FIELDS.values():
+            for public_key, attr_key in [
+                (fields["buy"], fields["buy_attr"]),
+                (fields["sell"], fields["sell_attr"]),
+                (fields["net"], fields["net_attr"]),
+                (fields["amount"], fields["amount_attr"]),
+            ]:
+                if public_key in observed:
+                    payload[public_key] = getattr(position, attr_key, 0.0)
         try:
             self.quote_cache.save("toss", self.account.account_id, position.symbol, payload)
         except Exception:

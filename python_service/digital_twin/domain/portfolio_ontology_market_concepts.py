@@ -1,6 +1,7 @@
 from typing import Dict, List
 
-from .market_data import investor_net_volume, number
+from .investor_flow_psychology import INVESTOR_PARTY_FIELDS, investor_flow_contract, investor_flow_observation
+from .market_data import number
 from .ontology_contracts import PortfolioOntology
 from .ontology_observation_quality import profile_for_domain
 from .ontology_schema import add_entity, add_relation
@@ -202,10 +203,8 @@ def volume_profile(position: Position) -> Dict[str, object]:
         trading_value=trading_snapshot.get("tradingValue"),
         observed_at=position.updated_at,
     )
-    foreign_net_volume = investor_net_volume(position.foreign_net_volume, position.foreign_buy_volume, position.foreign_sell_volume)
-    institution_net_volume = investor_net_volume(position.institution_net_volume, position.institution_buy_volume, position.institution_sell_volume)
-    individual_net_volume = investor_net_volume(position.individual_net_volume, position.individual_buy_volume, position.individual_sell_volume)
-    return {
+    investor = investor_flow_observation(position)
+    profile = {
         "volume": round(number(position.volume), 2),
         "volumeRatio": round(number(position.volume_ratio), 3),
         "rawVolumeRatio": volume_pace.get("rawVolumeRatio"),
@@ -231,13 +230,16 @@ def volume_profile(position: Position) -> Dict[str, object]:
         "orderbookBidVolume": round(number(position.orderbook_bid_volume), 2),
         "orderbookAskVolume": round(number(position.orderbook_ask_volume), 2),
         "bidAskImbalance": round(number(position.bid_ask_imbalance), 2),
-        "foreignNetVolume": round(foreign_net_volume, 2),
-        "foreignNetAmount": round(number(position.foreign_net_amount), 2),
-        "institutionNetVolume": round(institution_net_volume, 2),
-        "institutionNetAmount": round(number(position.institution_net_amount), 2),
-        "individualNetVolume": round(individual_net_volume, 2),
-        "individualNetAmount": round(number(position.individual_net_amount), 2),
     }
+    for key in [
+        "foreignNetVolume", "foreignNetAmount", "institutionNetVolume",
+        "institutionNetAmount", "individualNetVolume", "individualNetAmount",
+        "smartMoneyNetVolume", "investorFlowObservedFields",
+        "investorFlowParticipantStatus", "investorFlowSmartMoneyAvailable",
+    ]:
+        if key in investor:
+            profile[key] = investor[key]
+    return profile
 
 def missing_market_microstructure_fields(position: Position) -> List[Dict[str, str]]:
     missing: List[Dict[str, str]] = []
@@ -257,27 +259,11 @@ def missing_market_microstructure_fields(position: Position) -> List[Dict[str, s
             {"field": "orderbookAskVolume", "label": "매도호가 잔량"},
             {"field": "bidAskImbalance", "label": "호가 불균형"},
         ])
-    if (
-        investor_net_volume(position.foreign_net_volume, position.foreign_buy_volume, position.foreign_sell_volume) == 0
-        and number(position.foreign_net_amount) == 0
-        and number(position.foreign_buy_volume) == 0
-        and number(position.foreign_sell_volume) == 0
-    ):
-        missing.append({"field": "foreignNetVolume", "label": "외국인 순매수"})
-    if (
-        investor_net_volume(position.institution_net_volume, position.institution_buy_volume, position.institution_sell_volume) == 0
-        and number(position.institution_net_amount) == 0
-        and number(position.institution_buy_volume) == 0
-        and number(position.institution_sell_volume) == 0
-    ):
-        missing.append({"field": "institutionNetVolume", "label": "기관 순매수"})
-    if (
-        investor_net_volume(position.individual_net_volume, position.individual_buy_volume, position.individual_sell_volume) == 0
-        and number(position.individual_net_amount) == 0
-        and number(position.individual_buy_volume) == 0
-        and number(position.individual_sell_volume) == 0
-    ):
-        missing.append({"field": "individualNetVolume", "label": "개인 순매수"})
+    observed = set(investor_flow_contract(position)["observedFields"])
+    for party, label in [("foreign", "외국인 순매수"), ("institution", "기관 순매수"), ("individual", "개인 순매수")]:
+        fields = INVESTOR_PARTY_FIELDS[party]
+        if not ({fields["net"], fields["buy"], fields["sell"]} & observed):
+            missing.append({"field": fields["net"], "label": label})
     return missing
 
 def quote_staleness_reason(position: Position) -> str:
@@ -362,7 +348,13 @@ def add_metric_concepts(
     observation_profiles: Dict[str, Dict[str, object]] = None,
 ) -> None:
     symbol = symbol_key(position)
+    investor_observed = set(investor_flow_contract(position)["observedFields"])
     for field_name, label, tbox_class, relation_type, kind, public_key in METRIC_CONCEPTS:
+        if public_key in {
+            "foreignNetVolume", "foreignNetAmount", "institutionNetVolume",
+            "institutionNetAmount", "individualNetVolume", "individualNetAmount",
+        } and public_key not in investor_observed:
+            continue
         value = metric_value(position, field_name)
         if value in (None, "", 0):
             continue

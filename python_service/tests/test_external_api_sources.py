@@ -21,7 +21,7 @@ from digital_twin.domain.portfolio_calculations import portfolio_summary
 from digital_twin.domain.monitoring import RealtimeMonitor
 from digital_twin.infrastructure.external_signals import ExternalSignalProvider
 from digital_twin.infrastructure.external_signal_utils import sanitize_sensitive_text
-from digital_twin.infrastructure.kis_market_signals import KISMarketSignalProvider, stage_coverage
+from digital_twin.infrastructure.kis_market_signals import KISMarketSignalProvider, investor_estimate_selection, stage_coverage
 from digital_twin.infrastructure.toss_snapshots import TossProvider, normalize_price_payload
 
 
@@ -448,6 +448,8 @@ class ExternalApiSourceTests(unittest.TestCase):
         self.assertEqual("intraday-estimate", coverage["measurementType"])
         self.assertFalse(coverage["judgementEvidenceUsable"])
         self.assertEqual("2026-08-10T09:30:00+09:00", coverage["nextProviderUpdateAt"])
+        self.assertEqual("not-yet-published", coverage["participantStatus"]["foreign"])
+        self.assertEqual("not-yet-published", coverage["participantStatus"]["institution"])
         self.assertNotIn("foreignNetVolume", signal)
 
     def test_kis_first_estimate_slot_does_not_treat_institution_placeholder_as_flow(self):
@@ -487,7 +489,35 @@ class ExternalApiSourceTests(unittest.TestCase):
         self.assertEqual(-121000, signal["foreignNetVolume"])
         self.assertNotIn("institutionNetVolume", signal)
         self.assertEqual(["foreignNetVolume"], coverage["fields"])
+        self.assertEqual(["foreignNetVolume"], coverage["observedFields"])
+        self.assertEqual("available", coverage["participantStatus"]["foreign"])
+        self.assertEqual("not-yet-published", coverage["participantStatus"]["institution"])
+        self.assertEqual("not-yet-published", coverage["participantStatus"]["individual"])
         self.assertEqual("09:30", coverage["providerUpdateSlot"])
+
+    def test_kis_second_estimate_slot_keeps_observed_zero_institution_flow(self):
+        normalized, metadata = investor_estimate_selection(
+            [{
+                "bsop_hour_gb": "2",
+                "frgn_fake_ntby_qty": "12000",
+                "orgn_fake_ntby_qty": "0",
+            }],
+            datetime(2026, 8, 10, 1, 5, tzinfo=timezone.utc),
+        )
+        coverage = stage_coverage(
+            "investor",
+            [{}],
+            normalized,
+            ["foreignNetVolume", "institutionNetVolume", "individualNetVolume"],
+            measurement_type="intraday-estimate",
+            measurement_metadata=metadata,
+        )
+
+        self.assertEqual(0, normalized["institutionNetVolume"])
+        self.assertIn("institutionNetVolume", coverage["observedFields"])
+        self.assertNotIn("institutionNetVolume", coverage["nonZeroFields"])
+        self.assertEqual("available", coverage["participantStatus"]["institution"])
+        self.assertEqual("not-yet-published", coverage["participantStatus"]["individual"])
 
     def test_kis_post_close_uses_current_business_day_final_investor_totals(self):
         calls = []
@@ -536,6 +566,11 @@ class ExternalApiSourceTests(unittest.TestCase):
         self.assertEqual("market-close-final", coverage["freshnessStatus"])
         self.assertEqual("2026-08-10T00:00:00+09:00", coverage["sourceAsOf"])
         self.assertTrue(coverage["aiUsableAsStrongEvidence"])
+        self.assertEqual({
+            "foreign": "available",
+            "institution": "available",
+            "individual": "available",
+        }, coverage["participantStatus"])
 
     def test_kis_reuses_estimate_until_next_official_update_slot(self):
         cached = {

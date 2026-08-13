@@ -245,6 +245,48 @@ def investor_estimate_valid_until(now: datetime, slot_code: str) -> str:
     return (next_at + timedelta(minutes=10)).isoformat()
 
 
+def investor_participant_status(
+    fields: Iterable[str],
+    status: str,
+    measurement_type: str,
+    measurement_metadata: Dict[str, object] = None,
+) -> Dict[str, str]:
+    observed = {str(field) for field in fields or []}
+    measurement_metadata = measurement_metadata or {}
+    result = {
+        "foreign": "available" if "foreignNetVolume" in observed else "missing",
+        "institution": "available" if "institutionNetVolume" in observed else "missing",
+        "individual": "available" if "individualNetVolume" in observed else "missing",
+    }
+    normalized_status = str(status or "missing").strip().lower()
+    if str(measurement_type or "") == "intraday-estimate" and not str(
+        measurement_metadata.get("providerExpectedUpdateCode") or ""
+    ):
+        return {
+            "foreign": "not-yet-published",
+            "institution": "not-yet-published",
+            "individual": "not-yet-published",
+        }
+    if normalized_status in {"stale", "stale-at-dispatch"}:
+        return {
+            party: "stale" if party_status == "available" else "missing"
+            for party, party_status in result.items()
+        }
+    if normalized_status not in {"available", "partial"}:
+        return {party: normalized_status for party in result}
+    if str(measurement_type or "") == "intraday-estimate":
+        # The estimate feed never publishes individual flow intraday. Its
+        # first institution estimate is the 10:00 provider slot.
+        result["individual"] = "not-yet-published"
+        selected_code = str(measurement_metadata.get("providerUpdateCode") or "")
+        expected_code = str(measurement_metadata.get("providerExpectedUpdateCode") or "")
+        if result["foreign"] != "available" and not expected_code:
+            result["foreign"] = "not-yet-published"
+        if result["institution"] != "available" and (not selected_code or selected_code == "1"):
+            result["institution"] = "not-yet-published"
+    return result
+
+
 def investor_final_valid_until(now: datetime) -> str:
     local = now.astimezone(KST) + timedelta(days=1)
     return local.replace(hour=8, minute=59, second=59, microsecond=0).isoformat()
@@ -278,7 +320,8 @@ def investor_estimate_selection(items: List[Dict[str, object]], now: datetime) -
             continue
         candidates.append((int(code), item))
     if not candidates:
-        metadata["nextProviderUpdateAt"] = kst_iso_at(now, *INVESTOR_ESTIMATE_SLOTS[expected_code])
+        metadata["providerUpdateCurrent"] = False
+        metadata["nextProviderUpdateAt"] = (now + timedelta(seconds=60)).isoformat()
         return {}, metadata
 
     selected_code_number, selected = max(candidates, key=lambda item: item[0])
@@ -389,6 +432,7 @@ def stage_coverage(
         "stage": stage,
         "status": status,
         "fields": fields,
+        "observedFields": fields,
         "nonZeroFields": non_zero_fields,
     }
     if fetched_at:
@@ -439,13 +483,18 @@ def stage_coverage(
         payload["judgementEvidenceUsable"] = True
         if investor_measurement == "intraday-estimate":
             update_current = measurement_metadata.get("providerUpdateCurrent") is not False
+            estimate_scope = "외국인·기관" if "institutionNetVolume" in fields else "외국인"
             payload["realTime"] = False
             payload["isEstimate"] = True
             payload["cadence"] = "scheduled-estimate"
             payload["freshnessStatus"] = "intraday-estimate" if update_current else "estimate-update-pending"
             payload["latencyStatus"] = "scheduled-batch" if update_current else "provider-update-pending"
-            payload["latencyLabel"] = "KIS 장중 외국인·기관 추정 수급"
-            payload["latencyReason"] = INVESTOR_ESTIMATE_REASON
+            payload["latencyLabel"] = "KIS 장중 " + estimate_scope + " 추정 수급"
+            payload["latencyReason"] = (
+                INVESTOR_ESTIMATE_REASON
+                if "institutionNetVolume" in fields
+                else "KIS 09:30 공식 추정 구간은 외국인 수급만 제공합니다. 기관은 10:00부터, 개인은 장 마감 후 확인합니다."
+            )
             payload["aiUsableAsStrongEvidence"] = False
         elif investor_measurement == "daily-final":
             payload["realTime"] = False
@@ -470,14 +519,31 @@ def stage_coverage(
             payload["freshnessStatus"] = "realtime-polled"
             payload["latencyLabel"] = "KIS 장중 누적 수급 실시간 조회"
             payload["latencyReason"] = "KIS 투자자별 수급은 WebSocket 틱 데이터가 아니라 REST 장중 누적 조회값입니다. 매 주기 새로 조회하고 반복값이면 자동으로 약한 근거로 낮춥니다."
+    if stage == "investor":
+        payload["participantStatus"] = investor_participant_status(
+            fields,
+            status,
+            str(payload.get("measurementType") or measurement_type or ""),
+            measurement_metadata,
+        )
+        payload["notYetPublishedFields"] = [
+            {
+                "foreign": "foreignNetVolume",
+                "institution": "institutionNetVolume",
+                "individual": "individualNetVolume",
+            }[party]
+            for party, party_status in payload["participantStatus"].items()
+            if party_status == "not-yet-published"
+        ]
     return payload
 
 
 def unavailable_stage_coverage(stage: str, session: Dict[str, object]) -> Dict[str, object]:
-    return {
+    payload = {
         "stage": stage,
         "status": "unavailable",
         "fields": [],
+        "observedFields": [],
         "nonZeroFields": [],
         "transport": "rest",
         "freshnessStatus": "unavailable",
@@ -486,6 +552,19 @@ def unavailable_stage_coverage(stage: str, session: Dict[str, object]) -> Dict[s
         "marketSession": str(session.get("key") or ""),
         "marketSessionLabel": str(session.get("label") or ""),
     }
+    if stage == "investor":
+        pre_open = str(session.get("key") or "") == "pre_open"
+        participant_status = "not-yet-published" if pre_open else "unavailable"
+        payload["participantStatus"] = {
+            "foreign": participant_status,
+            "institution": participant_status,
+            "individual": participant_status,
+        }
+        payload["notYetPublishedFields"] = (
+            ["foreignNetVolume", "institutionNetVolume", "individualNetVolume"]
+            if pre_open else []
+        )
+    return payload
 
 
 def coverage_has_fields(coverage: Dict[str, object], stage: str, keys: Iterable[str]) -> bool:
@@ -592,7 +671,7 @@ def investor_stage_values_reliable(coverage: Dict[str, object]) -> bool:
         return True
     status = str(item.get("status") or "").strip()
     latency_status = str(item.get("latencyStatus") or "").strip()
-    if status in {"stale", "unknown", "unavailable", "missing", "empty"}:
+    if status in {"stale", "unknown", "unavailable", "missing", "empty", "error"}:
         return False
     measurement_type = str(item.get("measurementType") or "").strip()
     if measurement_type == "intraday-estimate":
@@ -617,7 +696,7 @@ def investor_stage_values_usable_for_judgement(coverage: Dict[str, object]) -> b
     if not isinstance(item, dict) or not item:
         return True
     status = str(item.get("status") or "").strip()
-    if status in {"stale", "unknown", "unavailable", "missing", "empty"}:
+    if status in {"stale", "unknown", "unavailable", "missing", "empty", "error"}:
         return False
     if status == "available" and item.get("judgementEvidenceUsable") is not False:
         return True
@@ -848,6 +927,14 @@ class KISMarketSignalProvider:
             self.diagnostics["circuitOpen"] = True
             self.diagnostics["circuitOpenUntil"] = self.circuit_open_until.isoformat().replace("+00:00", "Z")
 
+    def latest_stage_failure(self, stage: str, symbol: str) -> Dict[str, object]:
+        for item in reversed(self.diagnostics.get("failures") or []):
+            if not isinstance(item, dict):
+                continue
+            if str(item.get("stage") or "") == str(stage or "") and str(item.get("symbol") or "") == str(symbol or ""):
+                return dict(item)
+        return {}
+
     def record_circuit_skip(self, stage: str, symbol: str) -> None:
         failures = self.diagnostics.get("failures")
         if not isinstance(failures, list):
@@ -1034,6 +1121,8 @@ class KISMarketSignalProvider:
                 next_item["reason"] = "장중 이전 조회와 같은 값 " + str(unchanged_count) + "회 연속"
                 if stage == "investor":
                     if str(next_item.get("measurementType") or "") == "intraday-estimate":
+                        next_fields = set(next_item.get("observedFields") or next_item.get("fields") or [])
+                        estimate_scope = "외국인·기관" if "institutionNetVolume" in next_fields else "외국인"
                         next_item["judgementEvidenceUsable"] = True
                         next_item["freshnessStatus"] = (
                             "intraday-estimate"
@@ -1045,8 +1134,12 @@ class KISMarketSignalProvider:
                             if next_item.get("providerUpdateCurrent") is not False
                             else "provider-update-pending"
                         )
-                        next_item["latencyLabel"] = "KIS 장중 외국인·기관 추정 수급"
-                        next_item["latencyReason"] = INVESTOR_ESTIMATE_REASON
+                        next_item["latencyLabel"] = "KIS 장중 " + estimate_scope + " 추정 수급"
+                        next_item["latencyReason"] = (
+                            INVESTOR_ESTIMATE_REASON
+                            if "institutionNetVolume" in next_fields
+                            else "KIS 09:30 공식 추정 구간은 외국인 수급만 제공합니다. 기관은 10:00부터, 개인은 장 마감 후 확인합니다."
+                        )
                         next_item["reason"] = (
                             "KIS 공식 추정 갱신 구간 "
                             + str(next_item.get("providerUpdateSlot") or "")
@@ -1074,7 +1167,13 @@ class KISMarketSignalProvider:
         if coverage_has_fields(coverage, "ccnl", ["buyVolume", "sellVolume"]):
             included.append("방향별 체결량")
         if coverage_has_fields(coverage, "investor", INVESTOR_SIGNAL_KEYS) and investor_stage_values_usable_for_judgement(coverage):
-            included.append("투자자별 수급")
+            investor_fields = set((coverage.get("investor") or {}).get("fields") or [])
+            if {"foreignNetVolume", "institutionNetVolume", "individualNetVolume"}.issubset(investor_fields):
+                included.append("투자자별 수급")
+            elif {"foreignNetVolume", "institutionNetVolume"}.issubset(investor_fields):
+                included.append("외국인·기관 추정 수급")
+            elif "foreignNetVolume" in investor_fields:
+                included.append("외국인 추정 수급")
         if coverage_has_fields(coverage, "orderbook", ["orderbookBidVolume", "orderbookAskVolume"]):
             included.append("호가 잔량")
         if included:
@@ -1149,7 +1248,15 @@ class KISMarketSignalProvider:
         }
         if not values:
             return {}
-        return {"values": values, "coverage": dict(investor)}
+        reusable_coverage = dict(investor)
+        reusable_coverage["observedFields"] = sorted(fields)
+        reusable_coverage["participantStatus"] = investor_participant_status(
+            fields,
+            str(investor.get("status") or "available"),
+            "intraday-estimate",
+            reusable_coverage,
+        )
+        return {"values": values, "coverage": reusable_coverage}
 
     def fetch_symbol_signal(self, symbol: str) -> Dict[str, object]:
         self.fetch_access_token()
@@ -1278,6 +1385,11 @@ class KISMarketSignalProvider:
                     "judgementEvidenceUsable": False,
                     "aiUsableAsStrongEvidence": False,
                     "staleReason": "KIS 장 마감 투자자별 확정 수급의 영업일자가 오늘과 일치하지 않습니다.",
+                    "participantStatus": {
+                        "foreign": "stale",
+                        "institution": "stale",
+                        "individual": "stale",
+                    },
                 })
         elif investor_mode == "intraday-estimate":
             _normalized_investor, investor_metadata = investor_estimate_selection([], self.now())
@@ -1293,10 +1405,47 @@ class KISMarketSignalProvider:
                 measurement_type="intraday-estimate",
                 measurement_metadata=investor_metadata,
             )
-            coverage["investor"].update({
-                "judgementEvidenceUsable": False,
-                "reason": "KIS 장중 외국인·기관 추정 수급은 첫 공식 갱신인 09:30 KST 이후 사용합니다.",
-            })
+            failure = self.latest_stage_failure("investor-estimate", symbol)
+            expected_code = str(investor_metadata.get("providerExpectedUpdateCode") or "")
+            if failure:
+                coverage["investor"].update({
+                    "status": "error",
+                    "judgementEvidenceUsable": False,
+                    "participantStatus": {"foreign": "error", "institution": "error", "individual": "error"},
+                    "reason": str(failure.get("message") or "KIS 투자자 수급 조회 실패"),
+                })
+            elif expected_code:
+                coverage["investor"].update({
+                    "judgementEvidenceUsable": False,
+                    "freshnessStatus": "provider-update-pending",
+                    "latencyStatus": "provider-update-pending",
+                    "reason": "KIS 공식 추정 갱신 구간 응답을 기다리고 있습니다. 다음 수집 주기에 다시 확인합니다.",
+                })
+            else:
+                coverage["investor"].update({
+                    "judgementEvidenceUsable": False,
+                    "reason": "KIS 장중 투자자 추정 수급은 첫 공식 갱신인 09:30 KST 이후 사용합니다.",
+                })
+        elif investor_mode == "daily-final":
+            coverage["investor"] = stage_coverage(
+                "investor",
+                investor,
+                {},
+                INVESTOR_SIGNAL_KEYS,
+                fetched_at=fetched_at,
+                session=session,
+                transport="rest",
+                ai_usable_as_strong_evidence=False,
+                measurement_type="daily-final",
+            )
+            failure = self.latest_stage_failure("investor-final", symbol)
+            if failure:
+                coverage["investor"].update({
+                    "status": "error",
+                    "judgementEvidenceUsable": False,
+                    "participantStatus": {"foreign": "error", "institution": "error", "individual": "error"},
+                    "reason": str(failure.get("message") or "KIS 장 마감 투자자 수급 조회 실패"),
+                })
         else:
             coverage["investor"] = unavailable_stage_coverage("investor", session) if not microstructure_available else stage_coverage("investor", investor, {}, INVESTOR_SIGNAL_KEYS, fetched_at=fetched_at, session=session)
         if isinstance(orderbook, dict):
@@ -1343,7 +1492,13 @@ class KISMarketSignalProvider:
         if coverage_has_fields(coverage, "ccnl", ["buyVolume", "sellVolume"]):
             included.append("방향별 체결량")
         if coverage_has_fields(coverage, "investor", INVESTOR_SIGNAL_KEYS) and investor_stage_values_usable_for_judgement(coverage):
-            included.append("투자자별 수급")
+            investor_fields = set((coverage.get("investor") or {}).get("fields") or [])
+            if {"foreignNetVolume", "institutionNetVolume", "individualNetVolume"}.issubset(investor_fields):
+                included.append("투자자별 수급")
+            elif {"foreignNetVolume", "institutionNetVolume"}.issubset(investor_fields):
+                included.append("외국인·기관 추정 수급")
+            elif "foreignNetVolume" in investor_fields:
+                included.append("외국인 추정 수급")
         if coverage_has_fields(coverage, "orderbook", ["orderbookBidVolume", "orderbookAskVolume"]):
             included.append("호가 잔량")
         included_text = ", ".join(included) if included else "응답 데이터"
@@ -1360,9 +1515,11 @@ class KISMarketSignalProvider:
         if str(investor_coverage.get("status") or "") == "available":
             measurement_type = str(investor_coverage.get("measurementType") or "")
             if measurement_type == "intraday-estimate":
+                investor_fields = set(investor_coverage.get("observedFields") or investor_coverage.get("fields") or [])
+                estimate_scope = "외국인·기관" if "institutionNetVolume" in investor_fields else "외국인"
                 signal["quoteMessage"] = append_message(
                     signal.get("quoteMessage"),
-                    "외국인·기관 수급은 KIS 장중 추정 가집계이며 제공 기준 "
+                    estimate_scope + " 수급은 KIS 장중 추정 가집계이며 제공 기준 "
                     + str(investor_coverage.get("sourceAsOf") or "미확인")
                     + "입니다. 확정값은 장 종료 후 교체됩니다.",
                 )
@@ -1388,12 +1545,56 @@ class KISMarketSignalProvider:
                 symbols.append(symbol)
         return symbols[:self.max_symbols()]
 
+    def with_investor_diagnostics(
+        self,
+        signals: Dict[str, Dict[str, object]],
+    ) -> Dict[str, Dict[str, object]]:
+        rows = []
+        for symbol in self.diagnostics.get("symbols") or []:
+            signal = signals.get(symbol) if isinstance(signals.get(symbol), dict) else {}
+            coverage = signal.get("marketSignalCoverage") if isinstance(signal.get("marketSignalCoverage"), dict) else {}
+            investor = coverage.get("investor") if isinstance(coverage.get("investor"), dict) else {}
+            rows.append({
+                "symbol": symbol,
+                "status": str(investor.get("status") or "missing"),
+                "observedFields": list(investor.get("observedFields") or investor.get("fields") or []),
+                "participantStatus": dict(investor.get("participantStatus") or {}) if isinstance(investor.get("participantStatus"), dict) else {},
+                "measurementType": str(investor.get("measurementType") or ""),
+                "sourceAsOf": str(investor.get("sourceAsOf") or ""),
+                "fetchedAt": str(investor.get("fetchedAt") or ""),
+                "nextProviderUpdateAt": str(investor.get("nextProviderUpdateAt") or ""),
+                "providerUpdateSlot": str(investor.get("providerUpdateSlot") or ""),
+                "dataQuality": str(signal.get("dataQuality") or ""),
+            })
+        available = len([row for row in rows if row["observedFields"]])
+        complete = len([
+            row for row in rows
+            if {"foreignNetVolume", "institutionNetVolume", "individualNetVolume"}.issubset(set(row["observedFields"]))
+        ])
+        self.diagnostics["investorFlow"] = {
+            "targetCount": len(rows),
+            "availableCount": available,
+            "completeCount": complete,
+            "partialCount": max(0, available - complete),
+            "missingCount": max(0, len(rows) - available),
+            "symbols": rows,
+        }
+        return signals
+
     def signals_for_positions(self, positions: Iterable[Position]) -> Dict[str, Dict[str, object]]:
         position_list = list(positions)
         symbols = self.symbols_for_positions(position_list)
         self.diagnostics["symbols"] = symbols
         if not self.enabled() or not symbols:
             self.diagnostics["skipped"] = len(symbols)
+            self.diagnostics["investorFlow"] = {
+                "targetCount": len(symbols),
+                "availableCount": 0,
+                "completeCount": 0,
+                "partialCount": 0,
+                "missingCount": len(symbols),
+                "symbols": [],
+            }
             return {}
 
         signals: Dict[str, Dict[str, object]] = {}
@@ -1422,7 +1623,7 @@ class KISMarketSignalProvider:
                         self.diagnostics["cached"] = int(self.diagnostics.get("cached") or 0) + 1
                     else:
                         self.diagnostics["skipped"] = int(self.diagnostics.get("skipped") or 0) + 1
-            return signals
+            return self.with_investor_diagnostics(signals)
 
         for symbol, cached in stale_symbols:
             if self.circuit_open():
@@ -1451,7 +1652,7 @@ class KISMarketSignalProvider:
                     self.diagnostics["cached"] = int(self.diagnostics.get("cached") or 0) + 1
                 else:
                     self.diagnostics["skipped"] = int(self.diagnostics.get("skipped") or 0) + 1
-        return signals
+        return self.with_investor_diagnostics(signals)
 
     def enrich_collections(self, positions: List[Position], watchlist: List[Position]) -> Tuple[List[Position], List[Position]]:
         all_positions = list(positions or []) + list(watchlist or [])

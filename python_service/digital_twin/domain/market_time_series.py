@@ -1,3 +1,4 @@
+import json
 from dataclasses import asdict, dataclass
 from datetime import datetime, timezone
 from typing import Dict, Iterable, List, Optional
@@ -135,6 +136,7 @@ class MarketTimeSeriesObservation:
     foreign_net_volume: float = 0.0
     institution_net_volume: float = 0.0
     individual_net_volume: float = 0.0
+    investor_coverage_json: str = "{}"
     ma5: float = 0.0
     ma20: float = 0.0
     ma60: float = 0.0
@@ -155,6 +157,8 @@ class MarketTimeSeriesObservation:
     ):
         stamp = iso_utc(observed_at or position.updated_at or position.source_as_of)
         price = number(position.current_price)
+        market_signal_coverage = position.market_signal_coverage if isinstance(position.market_signal_coverage, dict) else {}
+        investor_coverage = market_signal_coverage.get("investor") if isinstance(market_signal_coverage.get("investor"), dict) else {}
         return cls(
             account_id=str(account_id or ""),
             symbol=str(position.symbol or "").upper().strip(),
@@ -183,6 +187,7 @@ class MarketTimeSeriesObservation:
             foreign_net_volume=number(position.foreign_net_volume),
             institution_net_volume=number(position.institution_net_volume),
             individual_net_volume=number(position.individual_net_volume),
+            investor_coverage_json=json.dumps(investor_coverage, ensure_ascii=True, sort_keys=True, separators=(",", ":")),
             ma5=number(position.ma5),
             ma20=number(position.ma20),
             ma60=number(position.ma60),

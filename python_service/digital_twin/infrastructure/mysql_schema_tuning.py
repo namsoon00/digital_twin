@@ -397,6 +397,13 @@ MYSQL_OPERATIONAL_INDEXES: Dict[str, Sequence[MySQLIndexDefinition]] = {
 
 
 MYSQL_OPERATIONAL_COLUMNS: Dict[str, Sequence[MySQLColumnDefinition]] = {
+    "market_time_series_observations": (
+        MySQLColumnDefinition(
+            "market_time_series_observations",
+            "investor_coverage_json",
+            "LONGTEXT NOT NULL",
+        ),
+    ),
     "notification_jobs": (
         MySQLColumnDefinition("notification_jobs", "symbol", "VARCHAR(64) NOT NULL DEFAULT ''"),
         MySQLColumnDefinition("notification_jobs", "decision_episode_id", "VARCHAR(191) NOT NULL DEFAULT ''"),

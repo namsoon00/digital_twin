@@ -533,7 +533,7 @@ class MonitoringPositionContextMixin:
                 return amount * 1000000
         return amount
 
-    def investor_summary(self, label: str, buy: float, sell: float, net: float, net_amount: float, currency: str) -> str:
+    def investor_summary(self, label: str, buy: float, sell: float, net: float, net_amount: float, currency: str, observed: bool = False) -> str:
         amount_text = (", 금액 " + self.investor_amount_text(net_amount, currency)) if net_amount else ""
         if buy or sell:
             effective_net = investor_net_volume(net, buy, sell)
@@ -557,15 +557,21 @@ class MonitoringPositionContextMixin:
             return label + ": " + direction + " " + compact_number(abs(net)) + "주" + amount_text
         if net_amount:
             return label + ": 금액 " + self.investor_amount_text(net_amount, currency)
+        if observed:
+            return label + ": 매수·매도 균형 0주"
         return ""
 
-    def investor_coverage_note(self, position: Dict[str, object]) -> str:
+    def investor_coverage(self, position: Dict[str, object]) -> Dict[str, object]:
         coverage = position.get("market_signal_coverage")
         if not isinstance(coverage, dict) or not coverage:
             coverage = position.get("marketSignalCoverage")
         if not isinstance(coverage, dict):
-            return ""
+            return {}
         investor = coverage.get("investor") if isinstance(coverage.get("investor"), dict) else {}
+        return dict(investor or {})
+
+    def investor_coverage_note(self, position: Dict[str, object]) -> str:
+        investor = self.investor_coverage(position)
         if not investor:
             return ""
         status = str(investor.get("status") or "").strip()
@@ -579,7 +585,9 @@ class MonitoringPositionContextMixin:
         if status == "available" and measurement_type == "intraday-estimate":
             slot = str(investor.get("providerUpdateSlot") or "기준시각 미확인")
             update_state = "현재 공식 구간" if investor.get("providerUpdateCurrent") is not False else "다음 갱신 대기"
-            return "KIS 장중 외국인·기관 추정 가집계 · " + slot + " KST 기준 · " + update_state + " · 장 마감 확정값 아님"
+            fields = set(investor.get("observedFields") or investor.get("fields") or [])
+            scope = "외국인·기관" if "institutionNetVolume" in fields else "외국인"
+            return "KIS 장중 " + scope + " 추정 가집계 · " + slot + " KST 기준 · " + update_state + " · 장 마감 확정값 아님"
         if status == "available" and measurement_type == "daily-final":
             return "KIS 장 마감 외국인·기관·개인 확정 집계 · 제공 영업일 기준"
         if investor.get("unchangedCount") not in (None, "", 0):
@@ -609,17 +617,25 @@ class MonitoringPositionContextMixin:
         individual_sell = self.investor_value(position, "individual_sell_volume", "individualSellVolume")
         individual_net = self.investor_value(position, "individual_net_volume", "individualNetVolume")
         individual_net_amount = self.normalized_investor_net_amount(position, individual_net, self.investor_value(position, "individual_net_amount", "individualNetAmount"))
+        investor = self.investor_coverage(position)
+        observed = set(investor.get("observedFields") or investor.get("fields") or [])
+        participant_status = investor.get("participantStatus") if isinstance(investor.get("participantStatus"), dict) else {}
         summaries = [
-            self.investor_summary("외국인", foreign_buy, foreign_sell, foreign_net, foreign_net_amount, currency),
-            self.investor_summary("기관", institution_buy, institution_sell, institution_net, institution_net_amount, currency),
-            self.investor_summary("개인", individual_buy, individual_sell, individual_net, individual_net_amount, currency),
+            self.investor_summary("외국인", foreign_buy, foreign_sell, foreign_net, foreign_net_amount, currency, "foreignNetVolume" in observed or "foreignBuyVolume" in observed or "foreignSellVolume" in observed),
+            self.investor_summary("기관", institution_buy, institution_sell, institution_net, institution_net_amount, currency, "institutionNetVolume" in observed or "institutionBuyVolume" in observed or "institutionSellVolume" in observed),
+            self.investor_summary("개인", individual_buy, individual_sell, individual_net, individual_net_amount, currency, "individualNetVolume" in observed or "individualBuyVolume" in observed or "individualSellVolume" in observed),
         ]
         parts = [summary for summary in summaries if summary]
+        next_update = str(investor.get("nextProviderUpdateAt") or "")
+        next_clock = next_update.split("T", 1)[1][:5] if "T" in next_update else ""
+        for party, label in [("foreign", "외국인"), ("institution", "기관"), ("individual", "개인")]:
+            status = str(participant_status.get(party) or "")
+            if status == "not-yet-published":
+                suffix = " · " + next_clock + " 갱신 예정" if next_clock and party != "individual" else " · 장 마감 후 제공" if party == "individual" else ""
+                parts.append(label + ": 아직 제공 전" + suffix)
+            elif status == "unsupported":
+                parts.append(label + ": KIS 국내 수급 미지원")
         note = self.investor_coverage_note(position)
-        coverage = position.get("market_signal_coverage")
-        if not isinstance(coverage, dict) or not coverage:
-            coverage = position.get("marketSignalCoverage")
-        investor = coverage.get("investor") if isinstance(coverage, dict) and isinstance(coverage.get("investor"), dict) else {}
         values_usable = investor.get("judgementEvidenceUsable") is not False and str(investor.get("status") or "") == "available"
         if not parts:
             if note and not values_usable:

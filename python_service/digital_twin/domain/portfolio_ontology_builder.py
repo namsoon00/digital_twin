@@ -1,6 +1,7 @@
 from typing import Dict, Iterable, List
 
-from .market_data import investor_net_volume, number
+from .investor_flow_psychology import investor_flow_observation
+from .market_data import number
 from .ontology_contracts import (
     OntologyEntity,
     OntologyRelation,
@@ -239,9 +240,19 @@ def build_portfolio_ontology(
         stock_tbox_classes = instrument_tbox_classes(position) + (["WatchlistCandidate"] if source == "watchlist" else [])
         position_policy_limit = number(strategy_profile.get("maxPositionWeightPct"))
         position_weight_pct = round(position_weight(position, portfolio), 2)
-        foreign_net_volume = investor_net_volume(position.foreign_net_volume, position.foreign_buy_volume, position.foreign_sell_volume)
-        institution_net_volume = investor_net_volume(position.institution_net_volume, position.institution_buy_volume, position.institution_sell_volume)
-        individual_net_volume = investor_net_volume(position.individual_net_volume, position.individual_buy_volume, position.individual_sell_volume)
+        investor_observation = investor_flow_observation(position)
+        investor_root_properties = {
+            key: investor_observation[key]
+            for key in [
+                "foreignNetVolume", "foreignNetAmount", "institutionNetVolume",
+                "institutionNetAmount", "individualNetVolume", "individualNetAmount",
+                "smartMoneyNetVolume", "investorFlowObservedFields",
+                "investorFlowParticipantStatus", "investorFlowSmartMoneyAvailable",
+                "investorFlowComplete", "investorFlowMeasurementType",
+                "investorFlowSourceAsOf", "investorFlowProviderUpdateSlot",
+            ]
+            if key in investor_observation
+        }
         trading_snapshot = trading_value_snapshot(position.current_price, position.volume, position.trading_value)
         observation_profiles = position_observation_profiles(position, runtime_context)
         quote_observation = profile_for_domain(observation_profiles, "quote")
@@ -286,13 +297,7 @@ def build_portfolio_ontology(
             "tradingValueEstimated": trading_snapshot.get("tradingValueEstimated"),
             "tradingValueReliable": trading_snapshot.get("tradingValueReliable"),
             "bidAskImbalance": number(position.bid_ask_imbalance),
-            "foreignNetVolume": foreign_net_volume,
-            "foreignNetAmount": number(position.foreign_net_amount),
-            "institutionNetVolume": institution_net_volume,
-            "institutionNetAmount": number(position.institution_net_amount),
-            "individualNetVolume": individual_net_volume,
-            "individualNetAmount": number(position.individual_net_amount),
-            "smartMoneyNetVolume": foreign_net_volume + institution_net_volume,
+            **investor_root_properties,
             "updatedAt": position.updated_at,
             **quote_observation,
             "tboxClass": "Stock",

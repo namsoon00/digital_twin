@@ -71,6 +71,10 @@ The BFF contract remains the target for Flutter Web, public previews, or any fut
 | `GET` | `/api/toss/portfolio` | Return holdings plus overview totals | `GET /api/v1/holdings` | 2 |
 | `GET` | `/api/toss/positions` | Return normalized position rows | `GET /api/v1/holdings` | 2 |
 | `GET` | `/api/toss/market-signals?symbols=AAPL,005930` | Return normalized trade strength, volume, buy/sell pressure, investor flow, and orderbook imbalance | market data: current prices, trades, orderbook, candles, and any available investor flow source | 2 |
+| `GET` | `/api/service-accounts/{accountId}/watchlist` | List the account-local watchlist with full timestamps | Orbit Alpha operational DB; no Toss watchlist endpoint | 2 |
+| `POST` | `/api/service-accounts/{accountId}/watchlist` | Add one symbol and queue quote, decision, and alert refresh | Orbit Alpha operational DB + read-only market collection | 2 |
+| `PUT` | `/api/service-accounts/{accountId}/watchlist` | Replace the account-local watchlist without replacing credentials | Orbit Alpha operational DB + read-only market collection | 2 |
+| `DELETE` | `/api/service-accounts/{accountId}/watchlist/{symbol}` | Remove one symbol and queue account refresh | Orbit Alpha operational DB; no Toss watchlist endpoint | 2 |
 | `GET` | `/api/toss/buying-power?currency=KRW` | Return cash buying power | `GET /api/v1/buying-power` | 3 |
 | `GET` | `/api/toss/sellable-quantity?symbol=AAPL` | Return sellable quantity for a symbol | `GET /api/v1/sellable-quantity` | 3 |
 | `GET` | `/api/toss/commissions` | Return account commission rates | `GET /api/v1/commissions` | 3 |

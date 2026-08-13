@@ -225,6 +225,31 @@ class MySQLAccountRegistry(MySQLOperationalConnection):
             """,
             (account.account_id, account.base_url, account.client_id, account.client_secret, account.account_seq, stamp),
         )
+        normalized_watchlist = []
+        seen_watchlist = set()
+        for symbol in account.watchlist_symbols or []:
+            for normalized_symbol in split_symbols(str(symbol or "")):
+                if normalized_symbol in seen_watchlist:
+                    continue
+                seen_watchlist.add(normalized_symbol)
+                normalized_watchlist.append(normalized_symbol)
+        if normalized_watchlist:
+            placeholders = ",".join(["%s"] * len(normalized_watchlist))
+            connection.execute(
+                "DELETE FROM account_watchlist_symbols WHERE account_id = %s AND symbol NOT IN (" + placeholders + ")",
+                [account.account_id] + normalized_watchlist,
+            )
+        else:
+            connection.execute("DELETE FROM account_watchlist_symbols WHERE account_id = %s", (account.account_id,))
+        for symbol in normalized_watchlist:
+            connection.execute(
+                """
+                INSERT INTO account_watchlist_symbols (account_id, symbol, created_at, updated_at)
+                VALUES (%s, %s, %s, %s)
+                ON DUPLICATE KEY UPDATE symbol = VALUES(symbol)
+                """,
+                (account.account_id, symbol, stamp, stamp),
+            )
         connection.execute(
             """
             INSERT INTO telegram_configs (account_id, notify_provider, bot_token, chat_id, link_url, updated_at)
@@ -235,6 +260,29 @@ class MySQLAccountRegistry(MySQLOperationalConnection):
             (account.account_id, account.notify_provider, account.telegram_bot_token, account.telegram_chat_id, account.notify_link_url, stamp),
         )
         save_mandate_with_connection(connection, account.investment_mandate(stamp), stamp)
+
+    def watchlist_items(self, account_id: str) -> List[Dict[str, object]]:
+        try:
+            with self.connect() as connection:
+                rows = connection.execute(
+                    """
+                    SELECT symbol, created_at, updated_at
+                    FROM account_watchlist_symbols
+                    WHERE account_id = %s
+                    ORDER BY updated_at DESC, symbol ASC
+                    """,
+                    (account_id,),
+                ).fetchall()
+        except Exception:  # noqa: BLE001 - legacy schemas still expose the aggregate field.
+            return []
+        return [
+            {
+                "symbol": row["symbol"],
+                "createdAt": row["created_at"],
+                "updatedAt": row["updated_at"],
+            }
+            for row in rows
+        ]
 
     def upsert(self, account: AccountConfig) -> None:
         with self.transaction() as connection:
@@ -249,6 +297,7 @@ class MySQLAccountRegistry(MySQLOperationalConnection):
         with self.transaction() as connection:
             connection.execute("DELETE FROM toss_credentials WHERE account_id = %s", (account_id,))
             connection.execute("DELETE FROM telegram_configs WHERE account_id = %s", (account_id,))
+            connection.execute("DELETE FROM account_watchlist_symbols WHERE account_id = %s", (account_id,))
             cursor = connection.execute("DELETE FROM service_accounts WHERE id = %s", (account_id,))
         return int(cursor.rowcount or 0) > 0
 
@@ -256,6 +305,7 @@ class MySQLAccountRegistry(MySQLOperationalConnection):
         with self.transaction() as connection:
             connection.execute("DELETE FROM toss_credentials WHERE account_id = %s", (account_id,))
             connection.execute("DELETE FROM telegram_configs WHERE account_id = %s", (account_id,))
+            connection.execute("DELETE FROM account_watchlist_symbols WHERE account_id = %s", (account_id,))
             cursor = connection.execute("DELETE FROM service_accounts WHERE id = %s", (account_id,))
             removed = int(cursor.rowcount or 0) > 0
             if removed:

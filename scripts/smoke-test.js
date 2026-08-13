@@ -248,6 +248,7 @@ function checkWorkflowConsoleContract() {
   const calendarStore = fs.readFileSync(path.join(rootDir, "python_service", "digital_twin", "infrastructure", "mysql_investment_calendar_candidates.py"), "utf8");
   const notificationStore = fs.readFileSync(path.join(rootDir, "python_service", "digital_twin", "infrastructure", "mysql_notification_jobs.py"), "utf8");
   const symbolStore = fs.readFileSync(path.join(rootDir, "python_service", "digital_twin", "infrastructure", "mysql_symbol_universe.py"), "utf8");
+  const webServer = fs.readFileSync(path.join(rootDir, "python_service", "digital_twin", "infrastructure", "web_server.py"), "utf8");
 
   const tabBlock = code.slice(code.indexOf("var tabs = ["), code.indexOf("var bottomTabIds"));
   const activeTabs = ["overview", "calendar", "feed", "modeling", "notifications", "experiments", "settings"];
@@ -298,6 +299,20 @@ function checkWorkflowConsoleContract() {
   );
   assertOk(code.indexOf("todayQueueWorkDetailPayload") >= 0 && code.indexOf("decisionQueueWorkDetailPayload") >= 0 && code.indexOf('"today-work-queue"') >= 0 && code.indexOf('"decision-action-queue"') >= 0, "오늘/판단 목록의 전체 보기 경로가 없습니다.");
   assertOk(code.indexOf('data-work-detail="market-instrument"') >= 0 && code.indexOf('data-work-detail="notification-job"') >= 0, "목록에서 전체화면 상세로 이동하는 경로가 없습니다.");
+  assertOk(
+    ["내 종목", "전체 종목", "뉴스·수급"].every(function (label) { return code.indexOf('label: "' + label + '"') >= 0; }) &&
+      code.indexOf("renderMarketWorkspaceNavigation") >= 0 &&
+      code.indexOf("renderSymbolUniversePanel({ full: true })") >= 0 &&
+      code.indexOf("data-symbol-watch-toggle") >= 0,
+    "시장 탭의 내 종목·전체 종목·뉴스/수급 보기 또는 관심종목 직접 관리 경로가 없습니다."
+  );
+  assertOk(
+    webServer.indexOf('/api/service-accounts/([^/]+)/watchlist') >= 0 &&
+      webServer.indexOf("request_watchlist_refresh") >= 0 &&
+      accountStore.indexOf("account_watchlist_symbols") >= 0,
+    "계정별 관심종목 전용 API, 고유 저장소 또는 후속 수집 요청이 없습니다."
+  );
+  assertOk(styles.indexOf(".market-workspace-tabs") >= 0 && styles.indexOf(".watchlist-picker-backdrop") >= 0, "시장 화면 모바일 탐색 또는 계정 선택 레이어 스타일이 없습니다.");
   assertOk(code.indexOf("function workDetailUrl") >= 0 && code.indexOf('params.set("detail"') >= 0 && code.indexOf('params.set("detailKey"') >= 0 && code.indexOf("closeWorkDetailLayer") >= 0, "상세 URL과 브라우저 뒤로 가기 계약이 없습니다.");
   assertOk(code.indexOf("trapWorkDetailFocus") >= 0 && code.indexOf("restoreWorkDetailFocus") >= 0 && code.indexOf("data-work-detail-dialog") >= 0, "상세 화면의 키보드 포커스 관리가 없습니다.");
   assertOk(code.indexOf('params.set("mock", "1")') >= 0, "로컬 웹 URL에서 서버 mock 검증 모드로 연결되는 경로가 없습니다.");
@@ -2653,6 +2668,13 @@ async function checkNormalMode(port, context) {
   const accountList = await request(port, "/api/service-accounts");
   const accountListPayload = JSON.parse(accountList.body);
   assertOk(accountListPayload.accounts.some(function (account) { return account.id === "db-test"; }), "계정 DB 목록에 저장한 계정이 없습니다.");
+
+  const accountWatchlist = await request(port, "/api/service-accounts/db-test/watchlist");
+  assertOk(accountWatchlist.statusCode === 200, "계정별 관심종목 API 응답 코드가 200이 아닙니다: " + accountWatchlist.statusCode);
+  const accountWatchlistPayload = JSON.parse(accountWatchlist.body);
+  assertOk(accountWatchlistPayload.accountId === "db-test", "계정별 관심종목 API의 계정 ID가 다릅니다.");
+  assertOk(Array.isArray(accountWatchlistPayload.items) && accountWatchlistPayload.items.length === 3, "계정별 관심종목 API가 저장된 3개 종목을 반환하지 않습니다.");
+  assertOk(accountWatchlistPayload.items.every(function (item) { return item.symbol && item.updatedAt; }), "관심종목 항목에 종목 코드 또는 변경일자가 없습니다.");
 
   const removedAccount = await request(port, "/api/service-accounts/db-test", { method: "DELETE" });
   assertOk(removedAccount.statusCode === 200, "계정 DB 삭제 API 응답 코드가 200이 아닙니다: " + removedAccount.statusCode);

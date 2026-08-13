@@ -24,6 +24,7 @@ from pathlib import Path
 from typing import Dict, List
 
 from ..application.account_service import AccountApplicationService
+from ..application.account_watchlist_service import AccountWatchlistService
 from ..application.notification_ai_gate_message import (
     compact_invalidation_line,
     compact_next_action_line,
@@ -119,6 +120,8 @@ from ..infrastructure.service_factory import (
     build_ontology_reasoning_runner,
     build_rule_change_candidate_service,
     build_symbol_universe_service,
+    build_market_data_collection_runner,
+    build_monitor_runner,
     build_flow_lens_service,
     flow_lens_snapshot,
     investment_analysis_snapshot,
@@ -136,6 +139,16 @@ MAX_BODY_BYTES = 1024 * 1024
 WEB_PROXY_API_GUARD_STATE: Dict[str, object] = {}
 FLOW_LENS_READ_MODEL = None
 FLOW_LENS_READ_MODEL_LOCK = threading.Lock()
+WATCHLIST_REFRESH_LOCK = threading.Lock()
+WATCHLIST_REFRESH_STATE: Dict[str, object] = {
+    "running": False,
+    "pending": False,
+    "accountIds": set(),
+    "symbols": set(),
+    "lastStatus": "idle",
+    "lastError": "",
+    "lastFinishedAt": "",
+}
 
 NON_CADENCE_MESSAGE_GUIDES = {
     "modelReview": "판단 변화 알림이 발생하면 별도 워커가 충분히 분석한 뒤 보냅니다.",
@@ -3466,6 +3479,74 @@ def account_service() -> AccountApplicationService:
     return AccountApplicationService(registry, registry.settings, event_publisher=RealtimeEventBridge())
 
 
+def watchlist_refresh_status() -> Dict[str, object]:
+    with WATCHLIST_REFRESH_LOCK:
+        return {
+            "status": "queued" if WATCHLIST_REFRESH_STATE["running"] else str(WATCHLIST_REFRESH_STATE["lastStatus"]),
+            "running": bool(WATCHLIST_REFRESH_STATE["running"]),
+            "pending": bool(WATCHLIST_REFRESH_STATE["pending"]),
+            "accountIds": sorted(WATCHLIST_REFRESH_STATE["accountIds"]),
+            "symbols": sorted(WATCHLIST_REFRESH_STATE["symbols"]),
+            "lastError": str(WATCHLIST_REFRESH_STATE["lastError"]),
+            "lastFinishedAt": str(WATCHLIST_REFRESH_STATE["lastFinishedAt"]),
+        }
+
+
+def run_watchlist_refresh_pipeline() -> None:
+    while True:
+        with WATCHLIST_REFRESH_LOCK:
+            account_ids = set(WATCHLIST_REFRESH_STATE["accountIds"])
+            WATCHLIST_REFRESH_STATE["accountIds"] = set()
+            WATCHLIST_REFRESH_STATE["symbols"] = set()
+            WATCHLIST_REFRESH_STATE["pending"] = False
+            WATCHLIST_REFRESH_STATE["lastStatus"] = "running"
+            WATCHLIST_REFRESH_STATE["lastError"] = ""
+        try:
+            settings = runtime_settings()
+            build_market_data_collection_runner(settings=settings).run_once(force=True)
+            registry = stores.account_registry(settings)
+            accounts = [account for account in registry.load() if not account_ids or account.account_id in account_ids]
+            if accounts:
+                build_monitor_runner(accounts, settings=settings).run_once(force=True)
+            with WATCHLIST_REFRESH_LOCK:
+                WATCHLIST_REFRESH_STATE["lastStatus"] = "completed"
+        except Exception as error:  # noqa: BLE001 - the saved watchlist must remain usable when a vendor is unavailable.
+            report_runtime_error(operational_error_reporter(), "Watchlist refresh", error, "watchlist refresh pipeline")
+            with WATCHLIST_REFRESH_LOCK:
+                WATCHLIST_REFRESH_STATE["lastStatus"] = "failed"
+                WATCHLIST_REFRESH_STATE["lastError"] = str(error)[:300]
+        with WATCHLIST_REFRESH_LOCK:
+            WATCHLIST_REFRESH_STATE["lastFinishedAt"] = now()
+            if WATCHLIST_REFRESH_STATE["pending"]:
+                continue
+            WATCHLIST_REFRESH_STATE["running"] = False
+            return
+
+
+def request_watchlist_refresh(account_id: str, symbol: str, _action: str) -> Dict[str, object]:
+    should_start = False
+    with WATCHLIST_REFRESH_LOCK:
+        WATCHLIST_REFRESH_STATE["accountIds"].add(str(account_id or ""))
+        if symbol:
+            WATCHLIST_REFRESH_STATE["symbols"].add(str(symbol).upper())
+        WATCHLIST_REFRESH_STATE["pending"] = True
+        if not WATCHLIST_REFRESH_STATE["running"]:
+            WATCHLIST_REFRESH_STATE["running"] = True
+            should_start = True
+    if should_start:
+        threading.Thread(target=run_watchlist_refresh_pipeline, name="watchlist-refresh", daemon=True).start()
+    return watchlist_refresh_status()
+
+
+def account_watchlist_service() -> AccountWatchlistService:
+    registry = stores.account_registry()
+    return AccountWatchlistService(
+        registry,
+        event_publisher=RealtimeEventBridge(),
+        refresh_requester=request_watchlist_refresh,
+    )
+
+
 def symbol_universe_service():
     return build_symbol_universe_service()
 
@@ -3593,6 +3674,25 @@ def save_account_payload(payload: Dict[str, object]) -> Dict[str, object]:
 
 def remove_account_payload(account_id: str) -> Dict[str, object]:
     return {"removed": account_service().remove(account_id), "id": account_id}
+
+
+def account_watchlist_payload(account_id: str) -> Dict[str, object]:
+    return account_watchlist_service().list_payload(account_id)
+
+
+def add_account_watchlist_payload(account_id: str, payload: Dict[str, object]) -> Dict[str, object]:
+    return account_watchlist_service().add(account_id, (payload or {}).get("symbol"))
+
+
+def replace_account_watchlist_payload(account_id: str, payload: Dict[str, object]) -> Dict[str, object]:
+    symbols = (payload or {}).get("symbols")
+    if not isinstance(symbols, list):
+        raise ValueError("symbols 배열이 필요합니다.")
+    return account_watchlist_service().replace(account_id, symbols)
+
+
+def remove_account_watchlist_payload(account_id: str, symbol: str) -> Dict[str, object]:
+    return account_watchlist_service().remove(account_id, symbol)
 
 
 def parse_cookies(cookie_header: str) -> Dict[str, str]:
@@ -4412,6 +4512,25 @@ class DigitalTwinHandler(BaseHTTPRequestHandler):
                 if not self.ensure_writable("공유 모드에서는 계정 DB를 변경할 수 없습니다."):
                     return
                 return self.send_payload(200, save_account_payload(self.read_json_body()))
+
+        account_watchlist_match = re.match(r"^/api/service-accounts/([^/]+)/watchlist(?:/([^/]+))?$", path)
+        if account_watchlist_match:
+            account_id = urllib.parse.unquote(account_watchlist_match.group(1))
+            symbol = urllib.parse.unquote(account_watchlist_match.group(2) or "")
+            if self.command == "GET" and not symbol:
+                return self.send_payload(200, account_watchlist_payload(account_id))
+            if self.command == "POST" and not symbol:
+                if not self.ensure_writable("공유 모드에서는 관심 종목을 변경할 수 없습니다."):
+                    return
+                return self.send_payload(200, add_account_watchlist_payload(account_id, self.read_json_body()))
+            if self.command == "PUT" and not symbol:
+                if not self.ensure_writable("공유 모드에서는 관심 종목을 변경할 수 없습니다."):
+                    return
+                return self.send_payload(200, replace_account_watchlist_payload(account_id, self.read_json_body()))
+            if self.command == "DELETE" and symbol:
+                if not self.ensure_writable("공유 모드에서는 관심 종목을 변경할 수 없습니다."):
+                    return
+                return self.send_payload(200, remove_account_watchlist_payload(account_id, symbol))
 
         account_match = re.match(r"^/api/service-accounts/([^/]+)$", path)
         if account_match and self.command == "DELETE":

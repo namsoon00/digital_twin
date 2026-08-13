@@ -394,6 +394,16 @@ MYSQL_SCHEMA = [
     ) ENGINE=InnoDB DEFAULT CHARSET=utf8mb4 COLLATE=utf8mb4_unicode_ci
     """,
     """
+    CREATE TABLE IF NOT EXISTS account_watchlist_symbols (
+        account_id VARCHAR(191) NOT NULL,
+        symbol VARCHAR(64) NOT NULL,
+        created_at VARCHAR(40) NOT NULL,
+        updated_at VARCHAR(40) NOT NULL,
+        PRIMARY KEY (account_id, symbol),
+        KEY idx_account_watchlist_symbols_updated (account_id, updated_at, symbol)
+    ) ENGINE=InnoDB DEFAULT CHARSET=utf8mb4 COLLATE=utf8mb4_unicode_ci
+    """,
+    """
     CREATE TABLE IF NOT EXISTS toss_credentials (
         account_id VARCHAR(191) PRIMARY KEY,
         base_url TEXT NOT NULL,

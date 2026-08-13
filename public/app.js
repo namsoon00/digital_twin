@@ -366,6 +366,11 @@
     { id: "sources", label: "소스", description: "품질·신선도" },
     { id: "settings", label: "피드 설정", description: "수집 정책" }
   ];
+  var marketWorkspaceModes = [
+    { id: "mine", label: "내 종목", description: "보유·관심" },
+    { id: "universe", label: "전체 종목", description: "KOSPI·KOSDAQ·NASDAQ" },
+    { id: "news", label: "뉴스·수급", description: "시장 영향" }
+  ];
   var cachedSnapshot = loadCachedSnapshot();
   var state = {
     loading: !cachedSnapshot,
@@ -452,6 +457,7 @@
     notificationJobsNextCursor: "",
     consoleMarketSearch: "",
     consoleMarketScope: "all",
+    marketWorkspaceMode: initialMarketWorkspaceMode(),
     consoleDecisionSearch: "",
     consoleDecisionScope: "all",
     consoleDecisionAction: "all",
@@ -597,6 +603,7 @@
     watchSuggestItems: [],
     watchSuggestLoading: false,
     watchSuggestError: "",
+    watchlistAccountPickerSymbol: "",
     symbolUniverse: { items: [], summary: { markets: [], sources: [], total: 0, maxAgeHours: 24 } },
     symbolUniverseLoading: false,
     symbolUniverseRefreshing: false,
@@ -1183,6 +1190,21 @@
     return normalizeFeedSection(params.get("feed"));
   }
 
+  function normalizeMarketWorkspaceMode(value) {
+    var requested = String(value || "").toLowerCase();
+    if (["symbols", "all", "catalog", "catalogue"].indexOf(requested) >= 0) return "universe";
+    if (["impact", "feed", "news", "flow", "themes"].indexOf(requested) >= 0) return "news";
+    return marketWorkspaceModes.some(function (mode) { return mode.id === requested; }) ? requested : "mine";
+  }
+
+  function initialMarketWorkspaceMode() {
+    var params = new URLSearchParams(window.location.search);
+    var rawTab = String(params.get("tab") || "").toLowerCase();
+    if (rawTab === "symbols") return "universe";
+    if (rawTab === "watchlist") return "mine";
+    return normalizeMarketWorkspaceMode(params.get("marketView") || params.get("feed"));
+  }
+
   function initialExperimentSection() {
     var params = new URLSearchParams(window.location.search);
     return normalizeExperimentSection(params.get("lab") || params.get("experimentSection"));
@@ -1482,6 +1504,7 @@
     if (normalized !== "modeling") params.delete("strategy");
     if (normalized !== "ontology") params.delete("ontology");
     if (normalized !== "feed") params.delete("feed");
+    if (normalized !== "feed") params.delete("marketView");
     if (normalized !== "experiments") {
       params.delete("lab");
       params.delete("experimentId");
@@ -1585,6 +1608,20 @@
     return path + (query ? "?" + query : "") + hash;
   }
 
+  function marketWorkspaceUrl(mode) {
+    var normalized = normalizeMarketWorkspaceMode(mode);
+    var params = new URLSearchParams(window.location.search);
+    params.set("tab", "feed");
+    params.delete("feed");
+    params.delete("mode");
+    if (normalized === "mine") params.delete("marketView");
+    else params.set("marketView", normalized);
+    var path = window.location.pathname || "/";
+    var query = params.toString();
+    var hash = window.location.hash || "";
+    return path + (query ? "?" + query : "") + hash;
+  }
+
   function experimentSectionUrl(section, experimentId) {
     var normalized = normalizeExperimentSection(section);
     var params = new URLSearchParams(window.location.search);
@@ -1675,6 +1712,12 @@
     window.history.replaceState({ tab: "feed", feed: normalized }, "", feedSectionUrl(normalized));
   }
 
+  function writeMarketWorkspaceHistory(mode) {
+    if (!window.history || !window.history.replaceState) return;
+    var normalized = normalizeMarketWorkspaceMode(mode);
+    window.history.replaceState({ tab: "feed", marketView: normalized }, "", marketWorkspaceUrl(normalized));
+  }
+
   function writeExperimentSectionHistory(section, experimentId) {
     if (!window.history || !window.history.replaceState) return;
     var normalized = normalizeExperimentSection(section);
@@ -1718,7 +1761,7 @@
       return normalized + ":" + normalizeOntologySection(ontologySection || state.activeOntologySection);
     }
     if (normalized === "feed") {
-      return normalized + ":" + normalizeFeedSection(feedSection || state.activeFeedSection);
+      return normalized + ":" + normalizeMarketWorkspaceMode(state.marketWorkspaceMode);
     }
     if (normalized === "experiments") {
       return normalized + ":" + normalizeExperimentSection(state.activeExperimentSection);
@@ -2094,6 +2137,7 @@
     var nextStrategySection = initialStrategySection();
     var nextOntologySection = initialOntologySection();
     var nextFeedSection = initialFeedSection();
+    var nextMarketWorkspaceMode = initialMarketWorkspaceMode();
     var nextExperimentSection = initialExperimentSection();
     var nextOntologyExperimentId = initialOntologyExperimentId();
     var nextPageMode = initialPageModeForTab(nextTab);
@@ -2108,6 +2152,7 @@
     var strategySectionChanged = nextStrategySection !== state.activeStrategySection;
     var ontologySectionChanged = nextOntologySection !== state.activeOntologySection;
     var feedSectionChanged = nextFeedSection !== state.activeFeedSection;
+    var marketWorkspaceChanged = nextMarketWorkspaceMode !== state.marketWorkspaceMode;
     var experimentSectionChanged = nextExperimentSection !== state.activeExperimentSection;
     var ontologyExperimentChanged = nextOntologyExperimentId !== state.activeOntologyExperimentId;
     var pageModeChanged = activePageMode(nextTab) !== nextPageMode;
@@ -2118,6 +2163,7 @@
     state.activeStrategySection = nextStrategySection;
     state.activeOntologySection = nextOntologySection;
     state.activeFeedSection = nextFeedSection;
+    state.marketWorkspaceMode = nextMarketWorkspaceMode;
     state.activeExperimentSection = nextExperimentSection;
     state.activeOntologyExperimentId = nextOntologyExperimentId;
     state.workDetailLayer = nextWorkDetailLayer;
@@ -2133,6 +2179,7 @@
         || (strategySectionChanged && nextTab === "modeling")
         || (ontologySectionChanged && nextTab === "ontology")
         || (feedSectionChanged && nextTab === "feed")
+        || (marketWorkspaceChanged && nextTab === "feed")
         || ((experimentSectionChanged || ontologyExperimentChanged) && nextTab === "experiments")
         || pageModeChanged;
       if (shouldRender) render();
@@ -4038,15 +4085,16 @@
     state.watchSuggestLoading = false;
     state.watchSuggestError = "";
     render();
-    return sendJson("/api/service-accounts", "POST", { account: accountWatchlistPayload(account, symbols) })
-      .then(function () {
+    return sendJson("/api/service-accounts/" + encodeURIComponent(accountIdOf(account)) + "/watchlist", "PUT", { symbols: normalizeSymbols((symbols || []).join(",")) })
+      .then(function (payload) {
         state.activeWatchAccountId = accountIdOf(account);
         state.editingWatchAccountId = "";
         state.editingWatchSymbol = "";
-        return loadServiceAccounts();
+        return loadServiceAccounts().then(function () { return payload; });
       })
-      .then(function () {
-        showSnackbar("계정별 관심 종목을 저장했습니다.");
+      .then(function (payload) {
+        showSnackbar(payload && payload.refresh && payload.refresh.running ? "관심 종목을 저장했고 최신 시세 수집을 시작했습니다." : "계정별 관심 종목을 저장했습니다.");
+        return load({ refresh: true });
       })
       .catch(function (error) {
         state.watchlistError = error.message || "계정별 관심 종목을 저장하지 못했습니다.";
@@ -4072,14 +4120,64 @@
       render();
       return Promise.resolve();
     }
-    return saveAccountWatchlistSymbols(accountId, symbols.concat(next[0]));
+    if (isStaticPreviewHost() || state.serverSettingsLocked) {
+      state.watchlistError = "GitHub Pages는 읽기 전용입니다. 로컬 앱에서 관심 종목을 추가하세요.";
+      showSnackbar(state.watchlistError, "danger");
+      render();
+      return Promise.resolve();
+    }
+    state.watchlistSavingAccountId = accountId;
+    state.watchlistError = "";
+    render();
+    return sendJson("/api/service-accounts/" + encodeURIComponent(accountId) + "/watchlist", "POST", { symbol: next[0] })
+      .then(function (payload) {
+        state.activeWatchAccountId = accountId;
+        state.watchlistAccountPickerSymbol = "";
+        return loadServiceAccounts().then(function () { return payload; });
+      })
+      .then(function (payload) {
+        showSnackbar(payload && payload.refresh && payload.refresh.running ? "관심 종목에 추가했습니다. 시세·판단·알림 갱신을 시작합니다." : "관심 종목에 추가했습니다.");
+        return load({ refresh: true });
+      })
+      .catch(function (error) {
+        state.watchlistError = error.message || "관심 종목을 추가하지 못했습니다.";
+        showSnackbar(state.watchlistError, "danger");
+      })
+      .finally(function () {
+        state.watchlistSavingAccountId = "";
+        render();
+      });
   }
 
   function removeAccountWatchSymbol(accountId, symbol) {
     var removeSymbol = String(symbol || "").toUpperCase();
-    return saveAccountWatchlistSymbols(accountId, accountWatchlistSymbols(accountById(accountId)).filter(function (item) {
-      return item !== removeSymbol;
-    }));
+    if (!accountById(accountId) || !removeSymbol) return Promise.resolve();
+    if (isStaticPreviewHost() || state.serverSettingsLocked) {
+      state.watchlistError = "GitHub Pages는 읽기 전용입니다. 로컬 앱에서 관심 종목을 삭제하세요.";
+      showSnackbar(state.watchlistError, "danger");
+      render();
+      return Promise.resolve();
+    }
+    state.watchlistSavingAccountId = accountId;
+    state.watchlistError = "";
+    render();
+    return sendJson("/api/service-accounts/" + encodeURIComponent(accountId) + "/watchlist/" + encodeURIComponent(removeSymbol), "DELETE", {})
+      .then(function () {
+        state.watchlistAccountPickerSymbol = "";
+        return loadServiceAccounts();
+      })
+      .then(function () {
+        showSnackbar("관심 종목에서 삭제했습니다.");
+        return load({ refresh: true });
+      })
+      .catch(function (error) {
+        state.watchlistError = error.message || "관심 종목을 삭제하지 못했습니다.";
+        showSnackbar(state.watchlistError, "danger");
+      })
+      .finally(function () {
+        state.watchlistSavingAccountId = "";
+        render();
+      });
   }
 
   function replaceAccountWatchSymbol(accountId, original, nextValue) {
@@ -9266,6 +9364,7 @@
   function syncOverlayPageState() {
     var overlayOpen = Boolean(
       state.commandPaletteOpen
+      || state.watchlistAccountPickerSymbol
       || state.workDetailLayer
       || state.calendarEntryModalOpen
       || state.notificationTemplateEditorOpen
@@ -9329,6 +9428,12 @@
     var notificationDetailNeedsEvidence = state.workDetailLayer && state.workDetailLayer.type === "notification-job";
     if ((state.activeTab === "feed" || state.activeTab === "notifications" || notificationDetailNeedsEvidence) && !state.researchEvidence && !state.researchEvidenceLoading) {
       loadResearchEvidence(false);
+    }
+    if (state.activeTab === "feed" && !state.serviceAccountsLoaded && !state.serviceAccountsLoading) {
+      loadServiceAccounts();
+    }
+    if (state.activeTab === "feed" && normalizeMarketWorkspaceMode(state.marketWorkspaceMode) === "universe" && !state.symbolUniverseLoaded && !state.symbolUniverseLoading) {
+      loadSymbolUniverse();
     }
     if ((state.activeTab === "overview" || state.activeTab === "calendar") && !state.investmentCalendar && !state.investmentCalendarLoading) {
       loadInvestmentCalendar(false);
@@ -9489,6 +9594,7 @@
       '</div>',
       '</section>',
       renderOntologyGraphExpandedOverlay(),
+      renderWatchlistAccountPicker(),
       renderCommandPalette(snapshot),
       renderWorkDetailLayer(),
       renderCalendarEntryModal(),
@@ -9548,6 +9654,7 @@
   }
 
   function activeOverlayDialog() {
+    if (state.watchlistAccountPickerSymbol) return app.querySelector("[data-watchlist-picker-dialog]");
     if (state.commandPaletteOpen) return app.querySelector("[data-command-palette-dialog]");
     if (state.calendarEntryModalOpen) return app.querySelector(".calendar-entry-modal");
     if (state.notificationTemplateEditorOpen) return app.querySelector(".notification-template-editor-layer");
@@ -9561,7 +9668,7 @@
   function focusWorkDetailLayer() {
     var dialog = activeOverlayDialog();
     if (!dialog || dialog.contains(document.activeElement)) return;
-    var closeButton = dialog.querySelector('[data-command-palette-input], [data-work-detail-close], [data-calendar-entry-close], [data-notification-editor-close], [data-notification-template-editor-close], [data-ontology-graph-close], [data-monitoring-detail-close]');
+    var closeButton = dialog.querySelector('[data-watchlist-picker-close], [data-command-palette-input], [data-work-detail-close], [data-calendar-entry-close], [data-notification-editor-close], [data-notification-template-editor-close], [data-ontology-graph-close], [data-monitoring-detail-close]');
     (closeButton || dialog).focus();
   }
 
@@ -11214,9 +11321,63 @@
     ].join("");
   }
 
+  function renderMarketWorkspaceNavigation() {
+    return [
+      '<nav class="market-workspace-tabs" aria-label="시장 화면 보기">',
+      marketWorkspaceModes.map(function (mode) {
+        var active = normalizeMarketWorkspaceMode(state.marketWorkspaceMode) === mode.id;
+        return '<button type="button" data-market-workspace="' + escapeHtml(mode.id) + '" class="market-workspace-tab' + (active ? " active" : "") + '"' + (active ? ' aria-current="page"' : '') + '><strong>' + escapeHtml(mode.label) + '</strong><span>' + escapeHtml(mode.description) + '</span></button>';
+      }).join(""),
+      '</nav>'
+    ].join("");
+  }
+
+  function renderMarketWatchlistCommand(snapshot) {
+    var account = activeWatchAccount();
+    var accountId = accountIdOf(account);
+    var symbols = accountWatchlistSymbols(account);
+    var locked = isStaticPreviewHost() || state.serverSettingsLocked || !accountId;
+    return [
+      '<section class="market-watch-command" aria-label="관심 종목 빠른 관리">',
+      '<div class="market-watch-command-copy"><span>WATCHLIST</span><strong>' + escapeHtml(account ? watchlistAccountLabel(account) : "계정을 선택하세요") + '</strong><em>' + escapeHtml(symbols.length + "개 관심 종목") + '</em></div>',
+      '<label class="market-watch-account"><span>저장 계정</span><select data-market-watch-account' + (state.serviceAccountsLoading ? " disabled" : "") + '>' + renderWatchAccountSelectOptions() + '</select></label>',
+      '<form class="market-watch-add" data-watch-add-form data-watch-account-id="' + escapeHtml(accountId) + '">',
+      '<label><span class="sr-only">관심 종목 코드</span><input name="symbol" data-watch-symbol-input placeholder="종목 코드 입력" autocomplete="off"' + (locked ? " disabled" : "") + ' /></label>',
+      '<button class="text-button primary"' + (locked ? " disabled" : "") + '>추가</button>',
+      '</form>',
+      '<button class="text-button" type="button" data-market-workspace="universe">전체 종목에서 찾기</button>',
+      '<div class="watch-suggest-box market-watch-suggest" data-watch-suggest-list data-watch-account-id="' + escapeHtml(accountId) + '">' + renderWatchSuggestList() + '</div>',
+      '<p class="market-watch-api">저장 API /api/service-accounts/{accountId}/watchlist · 시세 Toss Open API · 종목 KRX KIND / Nasdaq Trader</p>',
+      locked ? '<p class="market-watch-readonly">' + escapeHtml(isStaticPreviewHost() || state.serverSettingsLocked ? "GitHub Pages는 읽기 전용입니다. 로컬 앱에서 추가할 수 있습니다." : "설정에서 계정을 먼저 등록하세요.") + '</p>' : '',
+      state.watchlistError ? '<p class="form-error">' + escapeHtml(state.watchlistError) + '</p>' : '',
+      '</section>'
+    ].join("");
+  }
+
+  function renderMarketMineWorkspace(snapshot, rows) {
+    var page = consolePageSlice(rows, "market", 8);
+    var toolbar = [
+      '<form class="oa-filter-bar" data-console-market-form>',
+      '<label><span>종목 검색</span><input type="search" data-console-market-search value="' + escapeHtml(state.consoleMarketSearch || "") + '" placeholder="회사명 또는 코드" /></label>',
+      '<label><span>범위</span><select data-console-market-scope><option value="all"' + (state.consoleMarketScope === "all" ? " selected" : "") + '>전체</option><option value="holding"' + (state.consoleMarketScope === "holding" ? " selected" : "") + '>보유</option><option value="watchlist"' + (state.consoleMarketScope === "watchlist" ? " selected" : "") + '>관심</option></select></label>',
+      '</form>'
+    ].join("");
+    var table = page.items.length ? '<div class="oa-data-table" data-console-keyed-list="market-instruments"><div class="oa-table-head oa-market-row"><span>종목</span><span>현재가</span><span>수급</span><span>영향·판단</span><span></span></div>' + page.items.map(renderMarketInstrumentRow).join("") + '</div>' : renderConsoleEmpty("조건에 맞는 내 종목이 없습니다", "전체 종목에서 회사를 검색해 관심 종목으로 추가하세요.", '<button class="text-button primary" type="button" data-market-workspace="universe">전체 종목 찾기</button>');
+    return [
+      renderMarketWatchlistCommand(snapshot),
+      toolbar,
+      renderConsoleSurface({ kicker: "MY INSTRUMENTS", title: "보유·관심 종목", description: "선택 계정의 보유 종목과 관심 종목을 빠짐없이 확인합니다.", meta: rows.length + "개", body: renderConsoleLiveRegion("market-instrument-body", table), footer: renderConsolePager("market", page) })
+    ].join("");
+  }
+
+  function renderMarketNewsWorkspace(evidence) {
+    var page = consolePageSlice(evidence, "marketNews", 10);
+    var news = page.items.length ? '<div class="oa-news-list" data-console-keyed-list="market-news">' + page.items.map(renderMarketNewsRow).join("") + '</div>' : (state.researchEvidenceLoading ? renderConsoleListSkeleton("oa-news-row", ["영향", "기사", "출처"], 6) : renderConsoleEmpty("저장된 시장 근거가 없습니다", "뉴스·공시 수집과 영향 분석이 완료되면 최신순으로 표시합니다.", renderWorkDetailButton("feed-source-board", "", "수집 상태", "text-button compact")));
+    return renderConsoleSurface({ kicker: "NEWS & FLOW", title: "뉴스·수급 영향", description: "최신 뉴스와 공시를 투자 영향 기준으로 확인합니다.", meta: evidence.length + "건", body: renderConsoleLiveRegion("market-news-body", news), footer: renderConsolePager("marketNews", page) });
+  }
+
   function renderMarketConsole(snapshot) {
     var rows = filteredConsoleInstrumentRows(snapshot);
-    var page = consolePageSlice(rows, "market", 8);
     var evidence = consoleResearchItems().slice().sort(compareResearchEvidenceForDisplay);
     var negative = evidence.filter(function (item) { return researchEvidenceImpactMeta(item).tone === "danger"; }).length;
     var portfolio = selectConsolePortfolio(snapshot);
@@ -11233,19 +11394,14 @@
       { label: "주요 악재", value: negative + "건", detail: "영향 분석", tone: negative ? "danger" : "watch" },
       { label: "시세 상태", value: quoteState.label, detail: quoteState.detail, tone: quoteState.tone }
     ];
-    var toolbar = [
-      '<form class="oa-filter-bar" data-console-market-form>',
-      '<label><span>종목 검색</span><input type="search" data-console-market-search value="' + escapeHtml(state.consoleMarketSearch || "") + '" placeholder="종목명 또는 코드" /></label>',
-      '<label><span>범위</span><select data-console-market-scope><option value="all"' + (state.consoleMarketScope === "all" ? " selected" : "") + '>전체</option><option value="holding"' + (state.consoleMarketScope === "holding" ? " selected" : "") + '>보유</option><option value="watchlist"' + (state.consoleMarketScope === "watchlist" ? " selected" : "") + '>관심</option></select></label>',
-      '</form>'
-    ].join("");
-    var table = page.items.length ? '<div class="oa-data-table" data-console-keyed-list="market-instruments"><div class="oa-table-head oa-market-row"><span>종목</span><span>현재가</span><span>수급</span><span>영향·판단</span><span></span></div>' + page.items.map(renderMarketInstrumentRow).join("") + '</div>' : renderConsoleEmpty("조건에 맞는 종목이 없습니다", "검색어 또는 범위를 조정하세요.");
-    var news = evidence.length ? '<div class="oa-news-list" data-console-keyed-list="market-news">' + evidence.slice(0, 5).map(renderMarketNewsRow).join("") + '</div>' : (state.researchEvidenceLoading ? renderConsoleListSkeleton("oa-news-row", ["영향", "기사", "출처"], 4) : renderConsoleEmpty("저장된 시장 근거가 없습니다", "뉴스 워커가 본문을 읽고 영향 분석을 완료하면 표시합니다.", renderWorkDetailButton("feed-source-board", "", "수집 상태", "text-button compact")));
+    var mode = normalizeMarketWorkspaceMode(state.marketWorkspaceMode);
+    var workspace = mode === "universe"
+      ? renderSymbolUniversePanel({ full: true })
+      : (mode === "news" ? renderMarketNewsWorkspace(evidence) : renderMarketMineWorkspace(snapshot, rows));
     return renderConsoleManagedPage("feed", metrics, [
-      toolbar,
-      '<div class="oa-console-grid oa-market-grid">',
-      renderConsoleSurface({ kicker: "INSTRUMENTS", title: "종목 통합 목록", description: "보유와 관심 종목을 하나의 canonical 행으로 봅니다.", meta: rows.length + "개", body: renderConsoleLiveRegion("market-instrument-body", table), footer: renderConsolePager("market", page) }),
-      renderConsoleSurface({ kicker: "MARKET IMPACT", title: "영향 뉴스", description: "본문 대신 호재·악재와 한글 요약만 표시합니다.", actions: renderWorkDetailButton("feed-impact-board", "", "전체 뉴스", "text-button compact"), body: renderConsoleLiveRegion("market-news-body", news) }),
+      renderMarketWorkspaceNavigation(),
+      '<div class="market-workspace market-workspace-' + escapeHtml(mode) + '">',
+      workspace,
       '</div>'
     ].join(""));
   }
@@ -18407,6 +18563,49 @@
     return account ? accountWatchlistSymbols(account) : watchlistSymbols();
   }
 
+  function watchlistAccountsForSymbol(symbol) {
+    var normalized = String(symbol || "").toUpperCase();
+    return (state.serviceAccounts || []).filter(function (account) {
+      return accountWatchlistSymbols(account).indexOf(normalized) >= 0;
+    });
+  }
+
+  function openWatchlistAccountPicker(symbol) {
+    var normalized = normalizeSymbols(symbol || "")[0] || "";
+    if (!normalized) return;
+    var accounts = (state.serviceAccounts || []).filter(function (account) { return account.enabled !== false; });
+    if (accounts.length <= 1) {
+      if (accounts[0]) addAccountWatchSymbol(accountIdOf(accounts[0]), normalized);
+      else showSnackbar("관심 종목을 저장할 계정을 먼저 등록하세요.", "danger");
+      return;
+    }
+    state.watchlistAccountPickerSymbol = normalized;
+    render();
+  }
+
+  function renderWatchlistAccountPicker() {
+    var symbol = String(state.watchlistAccountPickerSymbol || "").toUpperCase();
+    if (!symbol) return "";
+    var info = clientKnownStockInfo(symbol);
+    var locked = isStaticPreviewHost() || state.serverSettingsLocked;
+    return [
+      '<div class="watchlist-picker-backdrop" data-watchlist-picker-close>',
+      '<section class="watchlist-picker" role="dialog" aria-modal="true" aria-labelledby="watchlist-picker-title" tabindex="-1" data-watchlist-picker-dialog>',
+      '<header><div><span>관심 종목 계정 선택</span><h2 id="watchlist-picker-title">' + escapeHtml(stockDisplayName(symbol, info)) + '</h2><p>' + escapeHtml(symbol + "을 저장할 계정을 선택하세요.") + '</p></div><button class="icon-button" type="button" data-watchlist-picker-close title="닫기" aria-label="닫기">&times;</button></header>',
+      '<div class="watchlist-picker-accounts">',
+      (state.serviceAccounts || []).filter(function (account) { return account.enabled !== false; }).map(function (account) {
+        var accountId = accountIdOf(account);
+        var included = accountWatchlistSymbols(account).indexOf(symbol) >= 0;
+        var busy = state.watchlistSavingAccountId === accountId;
+        return '<button type="button" data-watchlist-picker-account="' + escapeHtml(accountId) + '" data-watchlist-picker-action="' + (included ? "remove" : "add") + '"' + (locked || busy ? " disabled" : "") + '><span><strong>' + escapeHtml(account.label || accountId) + '</strong><em>' + escapeHtml(accountId + " · 관심 " + accountWatchlistSymbols(account).length + "개") + '</em></span><b>' + escapeHtml(busy ? "저장 중" : (included ? "삭제" : "추가")) + '</b></button>';
+      }).join(""),
+      '</div>',
+      locked ? '<p class="watchlist-picker-readonly">GitHub Pages는 읽기 전용입니다. 로컬 앱에서 변경하세요.</p>' : '',
+      '</section>',
+      '</div>'
+    ].join("");
+  }
+
   function watchlistAccountLabel(account) {
     account = account || activeWatchAccount();
     return account ? String(account.label || account.id || "계정") : "기본 관심목록";
@@ -24410,7 +24609,7 @@
       '<section class="inline-detail-block primary">',
       '<strong>관심 편입</strong>',
       '<p>' + escapeHtml(targetText + "에 편입해 알림과 투자 판단 입력으로 연결합니다.") + '</p>',
-      '<button class="text-button primary" type="button" data-symbol-add-watch="' + escapeHtml(symbol) + '"' + (already ? " disabled" : "") + '>' + escapeHtml(already ? "이미 등록됨" : "관심목록 추가") + '</button>',
+      '<button class="text-button ' + escapeHtml(already ? "danger" : "primary") + '" type="button" data-symbol-watch-toggle="' + escapeHtml(symbol) + '"' + ((isStaticPreviewHost() || state.serverSettingsLocked) ? " disabled" : "") + '>' + escapeHtml(already ? "선택 계정에서 삭제" : "관심목록 추가") + '</button>',
       '</section>',
       '<section class="inline-detail-block">',
       '<strong>출처와 신선도</strong>',
@@ -24456,7 +24655,8 @@
       : (item.quoteStatus || "추천용 시세 수집 순서를 기다리는 중");
     var active = state.activeSymbolUniverseKey === key;
     return [
-      '<div class="symbol-result-row ' + escapeHtml(active ? "active" : "") + '"' + cardTypeAttrs("ledger-row", already ? "watch" : "hold") + cardFormatAttrs("market-ledger-row", "compact") + ' role="button" tabindex="0" data-symbol-select="' + escapeHtml(key) + '" aria-label="' + escapeHtml(stockDisplayName(symbol, item) + " 상세 보기") + '">',
+      '<div class="symbol-result-row has-watch-action ' + escapeHtml(active ? "active" : "") + '"' + cardTypeAttrs("ledger-row", already ? "watch" : "hold") + cardFormatAttrs("market-ledger-row", "compact") + '>',
+      '<button class="symbol-result-select" type="button" data-symbol-select="' + escapeHtml(key) + '" aria-label="' + escapeHtml(stockDisplayName(symbol, item) + " 상세 보기") + '">',
       '<div class="symbol-result-main">',
       '<div class="symbol-result-title">',
       '<strong>' + escapeHtml(stockDisplayName(symbol, item)) + '</strong>',
@@ -24476,6 +24676,8 @@
       '<span>' + escapeHtml((item.sector || "섹터 미분류") + " · " + targetText) + '</span>',
       '<em>' + escapeHtml(active ? "상세 표시 중" : "행 선택") + '</em>',
       '</div>',
+      '</button>',
+      '<button class="symbol-watch-toggle' + (already ? " active" : "") + '" type="button" data-symbol-watch-toggle="' + escapeHtml(symbol) + '" title="' + escapeHtml(already ? targetText + "에서 관심 종목 삭제" : "관심 종목 추가") + '" aria-label="' + escapeHtml(already ? stockDisplayName(symbol, item) + " 관심 종목 삭제" : stockDisplayName(symbol, item) + " 관심 종목 추가") + '"' + ((isStaticPreviewHost() || state.serverSettingsLocked) ? " disabled" : "") + '><span aria-hidden="true">' + (already ? "★" : "☆") + '</span></button>',
       '</div>'
     ].join("");
   }
@@ -29245,6 +29447,27 @@
       });
     }
 
+    Array.prototype.slice.call(app.querySelectorAll("[data-market-workspace]")).forEach(function (button) {
+      button.addEventListener("click", function () {
+        var mode = normalizeMarketWorkspaceMode(button.getAttribute("data-market-workspace"));
+        if (mode === state.marketWorkspaceMode) return;
+        rememberRenderedPageScrollPosition();
+        state.marketWorkspaceMode = mode;
+        writeMarketWorkspaceHistory(mode);
+        render();
+        if (mode === "universe" && !state.symbolUniverseLoaded && !state.symbolUniverseLoading) loadSymbolUniverse();
+      });
+    });
+
+    var marketWatchAccount = app.querySelector("[data-market-watch-account]");
+    if (marketWatchAccount) {
+      marketWatchAccount.addEventListener("change", function () {
+        state.activeWatchAccountId = marketWatchAccount.value || "";
+        state.watchlistError = "";
+        render();
+      });
+    }
+
     var symbolSearchForm = app.querySelector("[data-symbol-search-form]");
     if (symbolSearchForm) {
       symbolSearchForm.addEventListener("submit", function (event) {
@@ -29312,10 +29535,35 @@
       });
     });
 
-    Array.prototype.slice.call(app.querySelectorAll("[data-symbol-add-watch]")).forEach(function (button) {
+    Array.prototype.slice.call(app.querySelectorAll("[data-symbol-watch-toggle]")).forEach(function (button) {
+      button.addEventListener("click", function (event) {
+        event.stopPropagation();
+        var symbol = String(button.getAttribute("data-symbol-watch-toggle") || "").toUpperCase();
+        var account = activeWatchAccount();
+        if (account && accountWatchlistSymbols(account).indexOf(symbol) >= 0) {
+          removeAccountWatchSymbol(accountIdOf(account), symbol);
+          return;
+        }
+        openWatchlistAccountPicker(symbol);
+      });
+    });
+
+    Array.prototype.slice.call(app.querySelectorAll("[data-watchlist-picker-close]")).forEach(function (button) {
+      button.addEventListener("click", function (event) {
+        if (button.classList && button.classList.contains("watchlist-picker-backdrop") && event.target !== button) return;
+        state.watchlistAccountPickerSymbol = "";
+        render();
+      });
+    });
+
+    Array.prototype.slice.call(app.querySelectorAll("[data-watchlist-picker-account]")).forEach(function (button) {
       button.addEventListener("click", function () {
-        var symbol = String(button.getAttribute("data-symbol-add-watch") || "").toUpperCase();
-        addSymbolToPreferredWatchlist(symbol);
+        var accountId = button.getAttribute("data-watchlist-picker-account") || "";
+        var action = button.getAttribute("data-watchlist-picker-action") || "add";
+        var symbol = String(state.watchlistAccountPickerSymbol || "").toUpperCase();
+        state.activeWatchAccountId = accountId;
+        if (action === "remove") removeAccountWatchSymbol(accountId, symbol);
+        else addAccountWatchSymbol(accountId, symbol);
       });
     });
 
@@ -29407,6 +29655,11 @@
       }
       if (trapWorkDetailFocus(event)) return;
       if (event.key !== "Escape") return;
+      if (state.watchlistAccountPickerSymbol) {
+        state.watchlistAccountPickerSymbol = "";
+        render();
+        return;
+      }
       if (state.commandPaletteOpen) {
         closeCommandPalette();
         return;

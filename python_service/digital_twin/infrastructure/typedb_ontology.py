@@ -2220,8 +2220,16 @@ class ScopedABoxManifestMixin:
         useful for an operator screen but too expensive for that recurring
         selection step.
         """
+        clean_world_id = str(world_id or "").strip()
         try:
-            active = self.active_abox_metadata(world_id)
+            active_pointers = sorted(
+                self.active_worldview_manifest_pointer_identity_rows(
+                    clean_world_id,
+                    limit=1,
+                ),
+                key=lambda row: (str(row.get("updatedAt") or ""), str(row.get("id") or "")),
+                reverse=True,
+            )
         except Exception as error:  # noqa: BLE001 - maintenance can fall back to round robin.
             return {
                 "configured": bool(getattr(self, "address", "")),
@@ -2229,31 +2237,45 @@ class ScopedABoxManifestMixin:
                 "graphStore": "typedb",
                 "reason": str(error)[:180],
             }
-        scoped = str(active.get("scopedAboxManifestVersion") or "") == SCOPED_ABOX_MANIFEST_VERSION
-        if not scoped:
+        if not active_pointers:
             return {
                 "configured": bool(getattr(self, "address", "")),
-                "status": str(active.get("status") or "legacy"),
+                "status": "legacy",
                 "graphStore": "typedb",
                 "persistenceMode": "immutable-complete-generation",
-                "activeAboxSnapshotId": str(active.get("aboxSnapshotId") or ""),
                 "reason": "Active ABox has not yet been migrated to a scoped Worldview Manifest.",
             }
+        active = active_pointers[0]
+        manifest_id = str(
+            active.get("worldviewManifestId")
+            or active.get("aboxSnapshotId")
+            or active.get("snapshotId")
+            or ""
+        ).strip()
         try:
-            markers = list(self.worldview_manifest_marker_rows(world_id))
-            manifest_ids = {
-                str(item.get("worldviewManifestId") or item.get("aboxSnapshotId") or item.get("snapshotId") or "")
-                for item in markers
-            }
-            manifest_ids.discard("")
+            active_marker = self.worldview_manifest_marker_identity_rows(
+                clean_world_id,
+                manifest_id=manifest_id,
+                limit=1,
+            )
+            stored_manifest_count = self.worldview_manifest_marker_count(clean_world_id)
+            if not active_marker or stored_manifest_count <= 0:
+                return {
+                    "configured": bool(getattr(self, "address", "")),
+                    "status": "error",
+                    "graphStore": "typedb",
+                    "persistenceMode": SCOPED_ABOX_PERSISTENCE_MODE,
+                    "worldviewManifestId": manifest_id,
+                    "reason": "Active Worldview Manifest marker is unavailable.",
+                }
             return {
                 "configured": bool(getattr(self, "address", "")),
-                "status": str(active.get("status") or "ok"),
+                "status": "ok",
                 "graphStore": "typedb",
                 "persistenceMode": SCOPED_ABOX_PERSISTENCE_MODE,
-                "worldviewManifestId": str(active.get("worldviewManifestId") or active.get("aboxSnapshotId") or ""),
-                "storedManifestCount": len(manifest_ids),
-                "inactiveManifestCount": max(0, len(manifest_ids) - 1),
+                "worldviewManifestId": manifest_id,
+                "storedManifestCount": stored_manifest_count,
+                "inactiveManifestCount": max(0, stored_manifest_count - 1),
             }
         except Exception as error:  # noqa: BLE001 - a later retention turn can retry inventory.
             return {
@@ -2340,7 +2362,13 @@ class ScopedABoxManifestMixin:
         for item in selected:
             scope_id = str(item.get("scopeId") or "")
             actual = dict(counts.get(scope_id) or {})
-            expected_entities = int(number_or_none(item.get("entityCount")) or 0)
+            # OntologyEvidence is stored as an ``ontology-node`` beside
+            # regular entities. The Manifest exposes the logical counts
+            # separately, while this physical reduction returns their sum.
+            expected_entities = (
+                int(number_or_none(item.get("entityCount")) or 0)
+                + int(number_or_none(item.get("evidenceCount")) or 0)
+            )
             expected_relations = int(number_or_none(item.get("relationCount")) or 0)
             actual_entities = int(actual.get("entityCount") or 0)
             actual_relations = int(actual.get("relationCount") or 0)
@@ -3757,6 +3785,16 @@ class ScopedABoxManifestMixin:
             return counts
         clean_manifest_id = str(manifest_id or "").strip()
         clean_world_id = str(world_id or "").strip()
+        pair_patterns = [
+            "$item has ontology-scope-id " + typedb_string(scope_id)
+            + ", has ontology-snapshot-id " + typedb_string(generation_id) + ";"
+            for scope_id, generation_id in sorted(expected_pairs)
+        ]
+        pair_filter = (
+            pair_patterns[0]
+            if len(pair_patterns) == 1
+            else " or ".join("{ " + pattern + " }" for pattern in pair_patterns) + ";"
+        )
 
         def collect(type_label: str, count_key: str) -> None:
             query = (
@@ -3772,7 +3810,8 @@ class ScopedABoxManifestMixin:
                 )
                 + ", has ontology-scope-id $scopeId"
                 + ", has ontology-snapshot-id $generationId"
-                + "; reduce $count = count groupby $scopeId, $generationId;"
+                + "; " + pair_filter
+                + " reduce $count = count groupby $scopeId, $generationId;"
             )
             rows = self.read_rows(
                 query,
@@ -6392,26 +6431,68 @@ class ScopedABoxManifestMixin:
             if delete_batch_size is None
             else max(10, min(500, int(delete_batch_size or 0)))
         )
-        manifests: Dict[str, Dict[str, object]] = {}
-        for marker in self.worldview_manifest_marker_rows(world_id):
-            metadata = self.scoped_abox_metadata_from_manifest_marker(marker)
-            manifest_id = str(metadata.get("worldviewManifestId") or metadata.get("aboxSnapshotId") or "").strip()
+        # Manifest JSON contains the complete scope plan and can be large.
+        # Candidate selection needs only immutable ids and timestamps; load
+        # full metadata only for the rollback marker and this turn's bounded
+        # delete candidates after selection.
+        manifest_identities: Dict[str, Dict[str, object]] = {}
+        for marker in self.worldview_manifest_marker_identity_rows(world_id):
+            manifest_id = str(
+                marker.get("worldviewManifestId")
+                or marker.get("aboxSnapshotId")
+                or marker.get("snapshotId")
+                or ""
+            ).strip()
             if not manifest_id or manifest_id == active_id:
                 continue
-            previous = manifests.get(manifest_id)
+            previous = manifest_identities.get(manifest_id)
             if previous is None or (
                 str(marker.get("updatedAt") or ""), str(marker.get("id") or "")
             ) > (
                 str(previous.get("updatedAt") or ""), str(previous.get("id") or "")
             ):
-                manifests[manifest_id] = {**metadata, "updatedAt": str(marker.get("updatedAt") or "")}
-        ordered = sorted(
-            manifests.values(),
-            key=lambda item: (str(item.get("updatedAt") or ""), str(item.get("worldviewManifestId") or "")),
+                manifest_identities[manifest_id] = {
+                    **dict(marker),
+                    "worldviewManifestId": manifest_id,
+                }
+        ordered_identities = sorted(
+            manifest_identities.values(),
+            key=lambda item: (
+                str(item.get("updatedAt") or ""),
+                str(item.get("worldviewManifestId") or ""),
+            ),
             reverse=True,
         )
-        retained = ordered[:keep_count]
-        removable = list(reversed(ordered[keep_count:]))[:max_count]
+        retained_identities = ordered_identities[:keep_count]
+        removable_identities = list(reversed(ordered_identities[keep_count:]))[:max_count]
+
+        def load_selected_metadata(identity: Dict[str, object]) -> Dict[str, object]:
+            manifest_id = str(identity.get("worldviewManifestId") or "").strip()
+            metadata = dict(self.scoped_manifest_metadata(manifest_id, world_id) or {})
+            if str(metadata.get("status") or "") != "ok":
+                return {}
+            return {**metadata, "updatedAt": str(identity.get("updatedAt") or "")}
+
+        retained = [
+            metadata
+            for metadata in (
+                load_selected_metadata(identity)
+                for identity in retained_identities
+            )
+            if metadata
+        ]
+        removable = [
+            metadata
+            for metadata in (
+                load_selected_metadata(identity)
+                for identity in removable_identities
+            )
+            if metadata
+        ]
+        selected_metadata_missing = (
+            len(retained) != len(retained_identities)
+            or len(removable) != len(removable_identities)
+        )
         protected_generation_ids = {
             str(item or "").strip()
             for item in dict(active.get("scopeGenerationIds") or {}).values()
@@ -6455,7 +6536,7 @@ class ScopedABoxManifestMixin:
             seen_retired_generation_ids.add(generation_id)
             retired_generation_ids.append(generation_id)
         generation_cleanup_rows = []
-        cleanup_partial = False
+        cleanup_partial = selected_metadata_missing
         time_budget_exhausted = False
         resume_generation_id = ""
         resume_manifest_id = ""
@@ -6561,7 +6642,7 @@ class ScopedABoxManifestMixin:
             "maxDeleteBatches": max_batch_count,
             "deleteBatchSize": bounded_delete_batch_size,
             "remainingDeleteBatchBudget": remaining_batch_budget,
-            "completedInactiveManifestCount": len(ordered),
+            "completedInactiveManifestCount": len(ordered_identities),
             "retainedInactiveManifestIds": [
                 str(item.get("worldviewManifestId") or item.get("aboxSnapshotId") or "")
                 for item in retained
@@ -6576,7 +6657,7 @@ class ScopedABoxManifestMixin:
                 0,
                 len(removable_generation_references) - len(set(removable_generation_references)),
             ),
-            "remainingInactiveManifestCount": max(0, len(ordered) - len(removed)),
+            "remainingInactiveManifestCount": max(0, len(ordered_identities) - len(removed)),
             "deletedBatchCount": deleted_batches,
             "maxDurationSeconds": duration_limit,
             "durationMs": int((time.monotonic() - started_at) * 1000),
@@ -6584,6 +6665,7 @@ class ScopedABoxManifestMixin:
             "resumeRequired": cleanup_partial,
             "resumeGenerationId": resume_generation_id,
             "resumeManifestId": resume_manifest_id,
+            "selectedMetadataMissing": selected_metadata_missing,
             "generationCleanup": generation_cleanup_rows,
             "cleanup": cleanup_rows,
         }
@@ -9326,6 +9408,27 @@ class TypeDBOntologyGraphRepository(GraphStoreOntologyRowMapperMixin, ScopedABox
             for row in rows or []
             if str(row.get("id") or "")
         ]
+
+    def worldview_manifest_marker_count(self, world_id: str = "") -> int:
+        """Count Manifest markers without materializing their large JSON bodies."""
+        clean_world_id = str(world_id or "").strip()
+        query = (
+            "match $n isa ontology-node, "
+            "has ontology-kind \"worldview-manifest-marker\", "
+            "has ontology-box \"ABox\""
+            + (
+                ", has ontology-world-id " + typedb_string(clean_world_id)
+                if clean_world_id
+                else ""
+            )
+            + "; reduce $count = count;"
+        )
+        rows = self.read_rows(
+            query,
+            ["count"],
+            label="typedb.worldview-manifest-marker-count",
+        )
+        return max(0, int(number_or_none((rows[0] if rows else {}).get("count")) or 0))
 
     def worldview_manifest_marker_rows(
         self,

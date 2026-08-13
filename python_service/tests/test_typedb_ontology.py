@@ -1245,6 +1245,10 @@ class TypeDBOntologyRepositoryTests(unittest.TestCase):
         self.assertTrue(all("groupby $scopeId, $generationId" in query for query, _columns, _label in calls))
         self.assertTrue(all('has ontology-manifest-id "abox-manifest:next"' in query for query, _columns, _label in calls))
         self.assertTrue(all('has ontology-world-id "portfolio:local:default"' in query for query, _columns, _label in calls))
+        self.assertTrue(all('has ontology-scope-id "symbol:005930:market"' in query for query, _columns, _label in calls))
+        self.assertTrue(all('has ontology-snapshot-id "abox-scope:market"' in query for query, _columns, _label in calls))
+        self.assertTrue(all('has ontology-scope-id "symbol:005930:state"' in query for query, _columns, _label in calls))
+        self.assertTrue(all('has ontology-snapshot-id "abox-scope:state"' in query for query, _columns, _label in calls))
         self.assertTrue(all(label == "typedb.scoped-abox-count-batch" for _query, _columns, label in calls))
 
     def test_scoped_abox_storage_identity_reuses_a_prior_candidate_generation(self):
@@ -1974,21 +1978,33 @@ class TypeDBOntologyRepositoryTests(unittest.TestCase):
 
     def test_scoped_manifest_inventory_avoids_physical_abox_row_counts(self):
         repository = TypeDBOntologyGraphRepository("127.0.0.1:1729")
-        with patch.object(repository, "active_abox_metadata", return_value={
-            "status": "ok",
-            "scopedAboxManifestVersion": SCOPED_ABOX_MANIFEST_VERSION,
+        with patch.object(repository, "active_worldview_manifest_pointer_identity_rows", return_value=[{
             "worldviewManifestId": "abox-manifest:active",
-        }), patch.object(repository, "worldview_manifest_marker_rows", return_value=[
-            {"worldviewManifestId": "abox-manifest:active"},
-            {"worldviewManifestId": "abox-manifest:old-one"},
-            {"worldviewManifestId": "abox-manifest:old-two"},
-        ]), patch.object(repository, "box_row_counts") as row_counts:
+        }]), patch.object(repository, "worldview_manifest_marker_identity_rows", return_value=[{
+            "worldviewManifestId": "abox-manifest:active",
+        }]), patch.object(repository, "worldview_manifest_marker_count", return_value=3), \
+                patch.object(repository, "worldview_manifest_marker_rows") as full_markers, \
+                patch.object(repository, "active_abox_metadata") as full_active, \
+                patch.object(repository, "box_row_counts") as row_counts:
             result = repository.scoped_abox_manifest_inventory("portfolio:local:main")
 
         self.assertEqual("ok", result["status"])
         self.assertEqual(3, result["storedManifestCount"])
         self.assertEqual(2, result["inactiveManifestCount"])
+        full_markers.assert_not_called()
+        full_active.assert_not_called()
         row_counts.assert_not_called()
+
+    def test_scoped_manifest_count_does_not_select_manifest_json(self):
+        repository = TypeDBOntologyGraphRepository("127.0.0.1:1729")
+        with patch.object(repository, "read_rows", return_value=[{"count": 7}]) as read_rows:
+            result = repository.worldview_manifest_marker_count("portfolio:local:main")
+
+        self.assertEqual(7, result)
+        query = str(read_rows.call_args.args[0])
+        self.assertIn('has ontology-world-id "portfolio:local:main"', query)
+        self.assertIn("reduce $count = count", query)
+        self.assertNotIn("ontology-json", query)
 
     def test_scoped_manifest_integrity_audit_reports_only_mismatched_slice(self):
         repository = TypeDBOntologyGraphRepository("127.0.0.1:1729")
@@ -2080,6 +2096,31 @@ class TypeDBOntologyRepositoryTests(unittest.TestCase):
             [item["scopeId"] for item in counts.call_args.args[0]],
         )
 
+    def test_scoped_manifest_integrity_counts_evidence_as_physical_nodes(self):
+        repository = TypeDBOntologyGraphRepository("127.0.0.1:1729")
+        scope_id = "symbol:AAPL:evidence"
+        with patch.object(repository, "active_abox_metadata", return_value={
+            "status": "ok",
+            "scopedAboxManifestVersion": SCOPED_ABOX_MANIFEST_VERSION,
+            "scopePlan": [{
+                "scopeId": scope_id,
+                "generationId": "scope:evidence",
+                "entityCount": 32,
+                "evidenceCount": 8,
+                "relationCount": 0,
+            }],
+        }), patch.object(repository, "scoped_abox_scope_row_counts_batch", return_value={
+            scope_id: {"entityCount": 40, "relationCount": 0},
+        }):
+            result = repository.scoped_abox_integrity_audit(
+                "portfolio:local:main",
+                limit=1,
+                scope_ids=[scope_id],
+            )
+
+        self.assertEqual("ok", result["status"])
+        self.assertEqual(0, result["mismatchCount"])
+
     def test_scoped_manifest_retention_stops_at_delete_batch_budget(self):
         repository = TypeDBOntologyGraphRepository("127.0.0.1:1729")
         metadata = {
@@ -2157,18 +2198,18 @@ class TypeDBOntologyRepositoryTests(unittest.TestCase):
     def test_scoped_manifest_prune_deletes_each_retired_generation_once(self):
         repository = TypeDBOntologyGraphRepository("127.0.0.1:1729")
         markers = [
-            {"id": "marker:new", "updatedAt": "2026-08-12T00:02:00Z"},
-            {"id": "marker:old", "updatedAt": "2026-08-12T00:01:00Z"},
+            {"id": "marker:new", "snapshotId": "manifest:new", "updatedAt": "2026-08-12T00:02:00Z"},
+            {"id": "marker:old", "snapshotId": "manifest:old", "updatedAt": "2026-08-12T00:01:00Z"},
         ]
 
-        def metadata(marker):
-            marker_id = str(marker.get("id") or "")
+        def metadata(manifest_id, _world_id):
+            suffix = str(manifest_id or "").split(":")[-1]
             return {
                 "status": "ok",
-                "worldviewManifestId": "manifest:" + marker_id.split(":")[-1],
+                "worldviewManifestId": str(manifest_id),
                 "scopeGenerationIds": {
                     "shared": "scope:shared-retired",
-                    "unique": "scope:" + marker_id.split(":")[-1],
+                    "unique": "scope:" + suffix,
                 },
             }
 
@@ -2178,11 +2219,11 @@ class TypeDBOntologyRepositoryTests(unittest.TestCase):
             "scopeGenerationIds": {"active": "scope:active"},
         }), patch.object(repository, "pending_abox_activation", return_value={"status": "empty"}), patch.object(
             repository,
-            "worldview_manifest_marker_rows",
+            "worldview_manifest_marker_identity_rows",
             return_value=markers,
         ), patch.object(
             repository,
-            "scoped_abox_metadata_from_manifest_marker",
+            "scoped_manifest_metadata",
             side_effect=metadata,
         ), patch.object(repository, "delete_box_snapshot_rows_in_batches", return_value={
             "status": "ok",
@@ -2211,16 +2252,20 @@ class TypeDBOntologyRepositoryTests(unittest.TestCase):
 
     def test_scoped_manifest_prune_keeps_marker_when_time_slice_expires(self):
         repository = TypeDBOntologyGraphRepository("127.0.0.1:1729")
-        marker = {"id": "marker:old", "updatedAt": "2026-08-12T00:01:00Z"}
+        marker = {
+            "id": "marker:old",
+            "snapshotId": "manifest:old",
+            "updatedAt": "2026-08-12T00:01:00Z",
+        }
         with patch.object(repository, "active_abox_metadata", return_value={
             "status": "ok",
             "worldviewManifestId": "manifest:active",
             "scopeGenerationIds": {"active": "scope:active"},
         }), patch.object(repository, "pending_abox_activation", return_value={"status": "empty"}), patch.object(
             repository,
-            "worldview_manifest_marker_rows",
+            "worldview_manifest_marker_identity_rows",
             return_value=[marker],
-        ), patch.object(repository, "scoped_abox_metadata_from_manifest_marker", return_value={
+        ), patch.object(repository, "scoped_manifest_metadata", return_value={
             "status": "ok",
             "worldviewManifestId": "manifest:old",
             "scopeGenerationIds": {"symbol:005930:flow": "scope:old"},

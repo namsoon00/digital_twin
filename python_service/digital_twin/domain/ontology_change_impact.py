@@ -411,6 +411,8 @@ def family_for_relation(
         return "company-valuation"
     if _matches_any(text, ["has_beta_to", "has_crypto_exposure", "has_factor_exposure", "exposed_to"]):
         return "exposure"
+    if _matches_any(text, ["has_rebalance_state", "has_rebalance_proposal", "has_rebalance_scenario"]):
+        return "exposure"
     if _matches_any(text, ["exposed_to_fx", "has_fx", "fx_rate"]):
         return "exposure"
     if _matches_any(text, ["interest", "yield", "macro_regime", "market_proxy", "factor_exposure", "correlation", "sensitivity", "relative_performance"]):

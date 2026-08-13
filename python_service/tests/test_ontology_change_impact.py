@@ -42,6 +42,19 @@ class OntologyChangeImpactTests(unittest.TestCase):
             ]),
         )
 
+    def test_rebalance_transition_rules_share_the_event_exposure_family(self):
+        rules = {
+            rule.rule_id: rule
+            for rule in default_graph_inference_rules()
+        }
+
+        for transition in ["opened", "updated", "resolved"]:
+            profile = rule_dependency_profile(
+                rules[f"graph.portfolio.rebalance.{transition}.v1"]
+            )
+            self.assertIn("exposure", profile["scopeFamilies"])
+            self.assertNotIn("state", profile["scopeFamilies"])
+
     def scope_graph(self):
         return PortfolioOntology(
             "main",

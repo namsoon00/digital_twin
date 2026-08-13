@@ -1,4 +1,4 @@
-from datetime import timedelta
+from datetime import timedelta, timezone
 from typing import Dict, Iterable, List, Optional
 
 from ..domain.investment_brain import (
@@ -14,6 +14,8 @@ from ..domain.hypothesis_outcome_contract import (
     observation_domain_status,
     resolved_outcome_contract,
 )
+from ..domain.hypothesis_outcome_evaluation import evaluate_hypothesis_outcome
+from ..domain.market_time_series import market_timezone
 from ..domain.decision_performance import evaluate_decision_performance
 from ..domain.trade_execution import ActionPlan
 from .mysql_operational_connection import MySQLOperationalConnection
@@ -117,12 +119,28 @@ class MySQLInvestmentDecisionEpisodeStore(MySQLOperationalConnection):
     def episode_outcome_contract(self, episode: DecisionEpisode) -> Dict[str, object]:
         facts = episode.facts_at_decision if isinstance(episode.facts_at_decision, dict) else {}
         raw = facts.get("hypothesisOutcomeContract") if isinstance(facts.get("hypothesisOutcomeContract"), dict) else {}
-        return resolved_outcome_contract(
+        resolved = resolved_outcome_contract(
             raw,
             fallback_horizons=self.outcome_horizons(),
             fallback_minimum_samples=self.outcome_minimum_samples(),
             fallback_maximum_delay_minutes=self.outcome_max_delay_minutes(),
         )
+        for key in [
+            "contractVersion",
+            "contractFingerprint",
+            "criteriaOrigin",
+            "effectiveAt",
+            "selectedHypothesisId",
+            "sourceRuleIds",
+            "marketHypothesisId",
+            "accountHypothesisOverlayId",
+            "inferenceGenerationId",
+            "marketIndependenceKey",
+            "accountIndependenceKey",
+        ]:
+            if raw.get(key) not in (None, "", [], {}):
+                resolved[key] = raw.get(key)
+        return resolved
 
     def episode_outcome_horizons(self, episode: DecisionEpisode) -> List[int]:
         return outcome_horizon_minutes(self.episode_outcome_contract(episode).get("outcomeHorizonMinutes"))
@@ -367,6 +385,7 @@ class MySQLInvestmentDecisionEpisodeStore(MySQLOperationalConnection):
         targets: List[Dict[str, object]] = []
         for episode in episodes:
             contract = self.episode_outcome_contract(episode)
+            benchmark_symbol = contract_benchmark_symbol(contract, episode.facts_at_decision)
             for horizon_minutes in due_outcome_horizon_minutes_all(episode, observed_stamp, self.episode_outcome_horizons(episode)):
                 target_at = outcome_target_at(episode, horizon_minutes)
                 if not target_at:
@@ -384,6 +403,7 @@ class MySQLInvestmentDecisionEpisodeStore(MySQLOperationalConnection):
                     "maximumObservationDelayMinutes": contract.get("maximumObservationDelayMinutes"),
                     "requiredObservationDomains": contract.get("requiredObservationDomains") or [],
                     "hypothesisOutcomeContract": contract,
+                    "benchmarkSymbol": benchmark_symbol,
                 })
                 if len(targets) >= target_limit:
                     return targets
@@ -469,13 +489,23 @@ class MySQLInvestmentDecisionEpisodeStore(MySQLOperationalConnection):
             stance = selected_hypothesis_stance(episode)
             delay_minutes = max(0.0, (observed_time - target_time).total_seconds() / 60.0)
             contract_observation = observation_domain_status(facts, contract)
+            evaluation = evaluate_hypothesis_outcome(
+                contract,
+                stance,
+                facts,
+                change_pct,
+                horizon_minutes,
+            )
+            missing_criterion_metrics = list(evaluation.get("missingRequiredMetricIds") or [])
             calibration_eligible = (
                 delay_minutes <= self.episode_outcome_max_delay_minutes(episode)
                 and not list(contract_observation.get("missingObservationDomains") or [])
+                and not missing_criterion_metrics
             )
             eligibility = (
                 "eligible" if calibration_eligible
                 else "excluded-contract-data-gap" if contract_observation.get("missingObservationDomains")
+                else "excluded-criterion-data-gap" if missing_criterion_metrics
                 else "excluded-delayed-observation"
             )
             outcome = ObservedOutcome(
@@ -485,7 +515,7 @@ class MySQLInvestmentDecisionEpisodeStore(MySQLOperationalConnection):
                 price=current_price,
                 profit_loss_rate=number(facts.get("profitLossRate")),
                 price_change_from_decision_pct=change_pct,
-                selected_hypothesis_status=directional_hypothesis_status(stance, change_pct),
+                selected_hypothesis_status=str(evaluation.get("selectedHypothesisStatus") or "inconclusive"),
                 payload={
                     "selectedHypothesisId": episode.selected_hypothesis_id,
                     "selectedHypothesisStance": stance,
@@ -495,7 +525,22 @@ class MySQLInvestmentDecisionEpisodeStore(MySQLOperationalConnection):
                     "sourceAsOf": canonical_investment_timestamp(facts.get("sourceAsOf")) or observed_at,
                     "dataQuality": str(facts.get("dataQuality") or "unknown"),
                     "hypothesisOutcomeContract": contract,
+                    "contractFingerprint": contract.get("contractFingerprint") or "",
+                    "marketIndependenceKey": contract.get("marketIndependenceKey") or "",
+                    "accountIndependenceKey": contract.get("accountIndependenceKey") or "",
                     **contract_observation,
+                    **evaluation,
+                    "missingRequiredMetricIds": missing_criterion_metrics,
+                    "benchmarkSymbol": contract_benchmark_symbol(contract, episode.facts_at_decision),
+                    "benchmarkReturnPct": facts.get("benchmarkReturnPct"),
+                    "excessReturnPct": (
+                        round(change_pct - number(facts.get("benchmarkReturnPct")), 6)
+                        if facts.get("benchmarkReturnPct") not in (None, "")
+                        else None
+                    ),
+                    "benchmarkObservationSource": facts.get("benchmarkObservationSource") or "",
+                    "benchmarkStartAsOf": facts.get("benchmarkStartAsOf") or "",
+                    "benchmarkEndAsOf": facts.get("benchmarkEndAsOf") or "",
                     "horizonMinutes": horizon_minutes,
                     "targetAt": target_at,
                     "actualElapsedMinutes": round((observed_time - parse_datetime(episode.decided_at)).total_seconds() / 60.0, 2),
@@ -580,16 +625,18 @@ class MySQLInvestmentDecisionEpisodeStore(MySQLOperationalConnection):
                 (str(account_id or ""), str(symbol or "").upper(), min(200, minimum * 10)),
             ).fetchall()
         distinct_rows = []
-        seen_episode_ids = set()
+        seen_independence_keys = set()
         for row in rows or []:
             outcome_payload = _json_loads(row.get("outcome_json"), {})
             if not outcome_is_calibration_eligible(outcome_payload):
                 continue
             episode_payload = _json_loads(row.get("episode_json"), {})
             episode_id = str(episode_payload.get("episodeId") or "")
-            if not episode_id or episode_id in seen_episode_ids:
+            outcome_detail = outcome_payload.get("payload") if isinstance(outcome_payload.get("payload"), dict) else {}
+            independence_key = str(outcome_detail.get("accountIndependenceKey") or episode_id)
+            if not episode_id or not independence_key or independence_key in seen_independence_keys:
                 continue
-            seen_episode_ids.add(episode_id)
+            seen_independence_keys.add(independence_key)
             distinct_rows.append(row)
             if len(distinct_rows) >= minimum:
                 break
@@ -606,7 +653,7 @@ class MySQLInvestmentDecisionEpisodeStore(MySQLOperationalConnection):
         proposal = LearningProposal(
             proposal_id=stable_id("learning-proposal", account_id, symbol, ",".join(episode_ids)),
             title=str(symbol or "") + " 선택 가설 반복 반증 검토",
-            reason="서로 다른 최근 판단 " + str(minimum) + "건에서 선택 가설이 이후 가격 방향 관측으로 반복 반증됐습니다. 원천 데이터와 가설 가중치를 재검토해야 합니다.",
+            reason="서로 독립된 최근 사건 " + str(minimum) + "건에서 선택 가설이 계약 기반 사후 관측으로 반복 반증됐습니다. 원천 데이터와 가설 기준을 재검토해야 합니다.",
             source_episode_ids=episode_ids,
             affected_rule_ids=rule_ids,
             proposed_change={
@@ -697,6 +744,20 @@ def directional_hypothesis_status(stance: str, price_change_pct: float) -> str:
     return "directionally-corroborated" if price_change_pct > 0 else "directionally-contradicted"
 
 
+def contract_benchmark_symbol(contract: Dict[str, object], facts: Dict[str, object] = None) -> str:
+    source = dict(facts or {})
+    explicit = str(source.get("benchmarkSymbol") or "").upper().strip()
+    if explicit:
+        return explicit
+    for criterion in contract.get("criteria") or []:
+        if not isinstance(criterion, dict):
+            continue
+        symbol = str(criterion.get("benchmarkSymbol") or "").upper().strip()
+        if symbol:
+            return symbol
+    return ""
+
+
 def due_outcome_horizon_minutes(episode: DecisionEpisode, observed_at: str, raw_horizons: object) -> int:
     horizons = due_outcome_horizon_minutes_all(episode, observed_at, raw_horizons)
     return horizons[0] if horizons else 0
@@ -711,11 +772,12 @@ def due_outcome_horizon_minutes_all(
     observed = parse_datetime(observed_at)
     if not decided or not observed or observed <= decided:
         return []
-    elapsed_minutes = (observed - decided).total_seconds() / 60
-    return [
-        value for value in outcome_horizon_minutes(raw_horizons)
-        if elapsed_minutes >= value and not outcome_horizon_recorded(episode, value)
-    ]
+    due = []
+    for value in outcome_horizon_minutes(raw_horizons):
+        target = parse_datetime(outcome_target_at(episode, value))
+        if target and observed >= target and not outcome_horizon_recorded(episode, value):
+            due.append(value)
+    return due
 
 
 def outcome_horizon_minutes(raw_horizons: object) -> List[int]:
@@ -746,7 +808,34 @@ def outcome_target_at(episode: DecisionEpisode, horizon_minutes: int) -> str:
     decided = parse_datetime(episode.decided_at)
     if not decided or int(horizon_minutes or 0) <= 0:
         return ""
-    return (decided + timedelta(minutes=int(horizon_minutes))).isoformat().replace("+00:00", "Z")
+    target = decided + timedelta(minutes=int(horizon_minutes))
+    facts = episode.facts_at_decision if isinstance(episode.facts_at_decision, dict) else {}
+    market = str(facts.get("market") or "").upper().strip()
+    currency = str(facts.get("currency") or "").upper().strip()
+    is_crypto_market = market in {"CRYPTO", "COIN"} or currency in {"BTC", "ETH", "USDT", "USDC"}
+    traditional_market = not is_crypto_market and (market in {
+        "KR", "KOR", "KOREA", "KOSPI", "KOSDAQ", "KONEX", "KRX", "XKRX",
+        "US", "USA", "NASDAQ", "NYSE", "AMEX", "ARCA", "BATS", "XNYS", "XNAS",
+    } or currency in {"KRW", "USD"})
+    if traditional_market:
+        local_target = target.astimezone(market_timezone(market, currency))
+        while local_target.weekday() >= 5:
+            local_target += timedelta(days=1)
+        is_kr_market = market in {
+            "KR", "KOR", "KOREA", "KOSPI", "KOSDAQ", "KONEX", "KRX", "XKRX",
+        } or currency == "KRW"
+        open_hour, open_minute = (9, 0) if is_kr_market else (9, 30)
+        close_hour, close_minute = (15, 30) if is_kr_market else (16, 0)
+        session_open = local_target.replace(hour=open_hour, minute=open_minute, second=0, microsecond=0)
+        session_close = local_target.replace(hour=close_hour, minute=close_minute, second=0, microsecond=0)
+        if local_target < session_open:
+            local_target = session_open
+        elif local_target > session_close:
+            local_target = session_open + timedelta(days=1)
+            while local_target.weekday() >= 5:
+                local_target += timedelta(days=1)
+        target = local_target.astimezone(timezone.utc)
+    return target.isoformat().replace("+00:00", "Z")
 
 
 def outcome_observation_is_usable(facts: Dict[str, object], observed_at: str) -> bool:

@@ -134,6 +134,8 @@ def add_investment_brain_concepts(
                 })
         facts_at_decision = episode.get("factsAtDecision") if isinstance(episode.get("factsAtDecision"), dict) else {}
         outcome_contract = facts_at_decision.get("hypothesisOutcomeContract") if isinstance(facts_at_decision.get("hypothesisOutcomeContract"), dict) else {}
+        contract_id = ""
+        contract_criterion_ids: Dict[str, str] = {}
         if outcome_contract:
             contract_key = str(episode.get("episodeId") or episode_key) + ":outcome-contract"
             contract_id = add_entity(graph, "hypothesis-outcome-contract", contract_key, symbol + " 사후 관측 계약", {
@@ -154,6 +156,27 @@ def add_investment_brain_concepts(
             add_relation(graph, portfolio_node_id, contract_id, "HAS_HYPOTHESIS_OUTCOME_CONTRACT", weight=1.0, properties={
                 "source": "RuleBox-hypothesis-outcome-contract-snapshot",
             })
+            for index, criterion in enumerate(outcome_contract.get("criteria") or []):
+                if not isinstance(criterion, dict):
+                    continue
+                criterion_key = contract_key + ":" + str(criterion.get("criterionId") or index)
+                criterion_id = add_entity(
+                    graph,
+                    "hypothesis-outcome-criterion",
+                    criterion_key,
+                    str(criterion.get("label") or "가설 사후 검증 기준"),
+                    {
+                        "tboxClass": "HypothesisOutcomeCriterion",
+                        **dict(criterion),
+                        "contractFingerprint": outcome_contract.get("contractFingerprint") or "",
+                        "decisionEligibility": "review-only-not-action-selector",
+                        "source": "RuleBox-hypothesis-outcome-contract-snapshot",
+                    },
+                )
+                add_relation(graph, contract_id, criterion_id, "HAS_OUTCOME_CRITERION", weight=1.0, properties={
+                    "source": "RuleBox-hypothesis-outcome-contract-snapshot",
+                })
+                contract_criterion_ids[str(criterion.get("criterionId") or index)] = criterion_id
         question_key = str(question.get("questionId") or "").strip()
         if question_key:
             question_id = add_entity(graph, "investment-question", question_key, str(question.get("text") or "투자 질문"), {
@@ -496,6 +519,7 @@ def add_investment_brain_concepts(
             outcome_key = str(outcome.get("outcomeId") or "").strip()
             if not outcome_key:
                 continue
+            outcome_payload = outcome.get("payload") if isinstance(outcome.get("payload"), dict) else {}
             outcome_id = add_entity(graph, "observed-outcome", outcome_key, str(episode.get("subjectName") or symbol) + " 판단 후 결과", {
                 "tboxClass": "ObservedOutcome",
                 "observedAt": outcome.get("observedAt"),
@@ -503,18 +527,53 @@ def add_investment_brain_concepts(
                 "profitLossRate": outcome.get("profitLossRate"),
                 "priceChangeFromDecisionPct": outcome.get("priceChangeFromDecisionPct"),
                 "selectedHypothesisStatus": outcome.get("selectedHypothesisStatus"),
-                "horizonMinutes": (outcome.get("payload") or {}).get("horizonMinutes") if isinstance(outcome.get("payload"), dict) else None,
-                "targetAt": (outcome.get("payload") or {}).get("targetAt") if isinstance(outcome.get("payload"), dict) else "",
-                "observationTiming": (outcome.get("payload") or {}).get("observationTiming") if isinstance(outcome.get("payload"), dict) else "legacy-unknown",
-                "calibrationEligibility": (outcome.get("payload") or {}).get("calibrationEligibility") if isinstance(outcome.get("payload"), dict) else "legacy-unverified",
-                "observationSource": (outcome.get("payload") or {}).get("observationSource") if isinstance(outcome.get("payload"), dict) else "",
-                "sourceAsOf": (outcome.get("payload") or {}).get("sourceAsOf") if isinstance(outcome.get("payload"), dict) else "",
-                "dataQuality": (outcome.get("payload") or {}).get("dataQuality") if isinstance(outcome.get("payload"), dict) else "",
+                "horizonMinutes": outcome_payload.get("horizonMinutes"),
+                "targetAt": outcome_payload.get("targetAt") or "",
+                "observationTiming": outcome_payload.get("observationTiming") or "legacy-unknown",
+                "calibrationEligibility": outcome_payload.get("calibrationEligibility") or "legacy-unverified",
+                "observationSource": outcome_payload.get("observationSource") or "",
+                "sourceAsOf": outcome_payload.get("sourceAsOf") or "",
+                "dataQuality": outcome_payload.get("dataQuality") or "",
+                "evaluationMode": outcome_payload.get("mode") or "legacy-directional-fallback",
+                "contractFingerprint": outcome_payload.get("contractFingerprint") or "",
+                "marketIndependenceKey": outcome_payload.get("marketIndependenceKey") or "",
+                "accountIndependenceKey": outcome_payload.get("accountIndependenceKey") or "",
+                "benchmarkSymbol": outcome_payload.get("benchmarkSymbol") or "",
+                "benchmarkReturnPct": outcome_payload.get("benchmarkReturnPct"),
+                "excessReturnPct": outcome_payload.get("excessReturnPct"),
+                "benchmarkObservationSource": outcome_payload.get("benchmarkObservationSource") or "",
                 "source": "investment-brain-feedback",
             })
             add_relation(graph, episode_id, outcome_id, "RESULTED_IN_OUTCOME", weight=1.0, properties={"source": "investment-brain-feedback"})
             add_relation(graph, episode_id, outcome_id, "PRODUCES_OUTCOME", weight=1.0, properties={"source": "investment-brain-feedback"})
             add_relation(graph, stock_id, outcome_id, "OBSERVES_OUTCOME", weight=1.0, properties={"source": "investment-brain-feedback"})
+            for index, assessment in enumerate(outcome_payload.get("criterionAssessments") or []):
+                if not isinstance(assessment, dict):
+                    continue
+                assessment_key = outcome_key + ":" + str(assessment.get("criterionId") or index)
+                assessment_id = add_entity(
+                    graph,
+                    "outcome-criterion-observation",
+                    assessment_key,
+                    str(assessment.get("label") or "가설 기준 관측"),
+                    {
+                        "tboxClass": "OutcomeCriterionObservation",
+                        **dict(assessment),
+                        "outcomeId": outcome_key,
+                        "observedAt": outcome.get("observedAt"),
+                        "decisionEligibility": "historical-review-only",
+                        "source": "investment-brain-feedback",
+                    },
+                )
+                add_relation(graph, outcome_id, assessment_id, "EVALUATES_OUTCOME_CRITERION", weight=1.0, properties={
+                    "source": "investment-brain-feedback",
+                    "criterionState": assessment.get("state") or "unknown",
+                })
+                criterion_entity = contract_criterion_ids.get(str(assessment.get("criterionId") or index))
+                if criterion_entity:
+                    add_relation(graph, assessment_id, criterion_entity, "OBSERVES_OUTCOME_CRITERION", weight=1.0, properties={
+                        "source": "investment-brain-feedback",
+                    })
         for attribution in episode.get("performanceAttributions") or []:
             if not isinstance(attribution, dict):
                 continue
@@ -795,6 +854,8 @@ def add_hypothesis_calibration_concepts(
         status = str(latest.get("selectedHypothesisStatus") or "")
         template_id = str(selected.get("templateId") or "").strip()
         episode_id = str(episode.get("episodeId") or "").strip()
+        latest_payload = latest.get("payload") if isinstance(latest.get("payload"), dict) else {}
+        independence_key = str(latest_payload.get("accountIndependenceKey") or episode_id).strip()
         if not episode_id or not template_id or status not in {"directionally-corroborated", "directionally-contradicted", "inconclusive"}:
             continue
         scope_key = symbol + "|" + template_id
@@ -806,14 +867,16 @@ def add_hypothesis_calibration_concepts(
             "episodeOutcomes": {},
             "episodeHorizonOutcomes": {},
         })
-        previous = row["episodeOutcomes"].get(episode_id) or {}
+        previous = row["episodeOutcomes"].get(independence_key) or {}
         if str(latest.get("observedAt") or "") >= str(previous.get("observedAt") or ""):
-            row["episodeOutcomes"][episode_id] = {
+            row["episodeOutcomes"][independence_key] = {
                 "status": status,
                 "observedAt": str(latest.get("observedAt") or ""),
-                "horizonMinutes": positive_int((latest.get("payload") or {}).get("horizonMinutes")),
+                "horizonMinutes": positive_int(latest_payload.get("horizonMinutes")),
+                "sourceEpisodeId": episode_id,
+                "independenceKey": independence_key,
             }
-        # Overall calibration uses one latest result per decision episode. For
+        # Overall calibration uses one latest result per independent event. For
         # each horizon, however, retain that horizon's latest result so a
         # longer observation does not erase the shorter-horizon evidence.
         for outcome in outcomes:
@@ -827,13 +890,17 @@ def add_hypothesis_calibration_concepts(
             horizon = positive_int((outcome.get("payload") or {}).get("horizonMinutes"))
             if not horizon:
                 continue
+            outcome_payload = outcome.get("payload") if isinstance(outcome.get("payload"), dict) else {}
+            horizon_independence_key = str(outcome_payload.get("accountIndependenceKey") or episode_id).strip()
             per_horizon = row["episodeHorizonOutcomes"].setdefault(horizon, {})
-            previous_horizon = per_horizon.get(episode_id) or {}
+            previous_horizon = per_horizon.get(horizon_independence_key) or {}
             if str(outcome.get("observedAt") or "") >= str(previous_horizon.get("observedAt") or ""):
-                per_horizon[episode_id] = {
+                per_horizon[horizon_independence_key] = {
                     "status": outcome_status,
                     "observedAt": str(outcome.get("observedAt") or ""),
                     "horizonMinutes": horizon,
+                    "sourceEpisodeId": episode_id,
+                    "independenceKey": horizon_independence_key,
                 }
     portfolio_node_id = entity_id("portfolio", portfolio_id)
     for _, row in sorted(grouped.items()):

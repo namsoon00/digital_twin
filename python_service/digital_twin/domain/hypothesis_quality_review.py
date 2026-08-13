@@ -68,6 +68,7 @@ def quality_review_for_item(item: Mapping[str, object]) -> Dict[str, object]:
     missing_domains = values(outcome.get("missingObservationDomains"))
     excluded_reasons = outcome.get("excludedOutcomeReasons") if isinstance(outcome.get("excludedOutcomeReasons"), Mapping) else {}
     legacy_outcome_count = int(excluded_reasons.get("legacy-eligibility-not-recorded") or 0)
+    criterion_gap_count = int(excluded_reasons.get("excluded-criterion-data-gap") or 0)
     freshness_domains = required_freshness_problem(source)
     lifecycle_state = text(source.get("state")) or "observed"
     state = "stable"
@@ -79,9 +80,13 @@ def quality_review_for_item(item: Mapping[str, object]) -> Dict[str, object]:
         reason = "독립된 사후 관측에서 가설과 반대 방향의 결과가 더 많이 확인됐습니다."
         next_check = "원문 근거, 반대 근거, 관측 계약과 TypeDB 규칙 미리보기를 함께 검토합니다."
         change_type = "review-hypothesis-explanation-and-evidence-coverage"
-    elif missing_domains:
+    elif missing_domains or criterion_gap_count:
         state = "coverage-gap"
-        reason = "사후 관측에 필요한 데이터가 없어 일부 결과를 검토에서 제외했습니다: " + ", ".join(missing_domains) + "."
+        reason = (
+            "사후 관측에 필요한 데이터가 없어 일부 결과를 검토에서 제외했습니다: "
+            + (", ".join(missing_domains) if missing_domains else "구조화 검증 지표 " + str(criterion_gap_count) + "건")
+            + "."
+        )
         next_check = "누락 데이터의 수집 가능 여부와 관측 계약의 필수 도메인을 검토합니다."
         change_type = "review-outcome-observation-coverage"
     elif legacy_outcome_count:

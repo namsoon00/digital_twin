@@ -5558,6 +5558,41 @@
     }[String(value || "").toLowerCase()] || String(value || "");
   }
 
+  function hypothesisCriterionRoleLabel(value) {
+    return {
+      cause: "원인 확인",
+      result: "시장 결과",
+      invalidation: "반증 조건",
+      context: "참고 조건"
+    }[String(value || "").toLowerCase()] || String(value || "기준");
+  }
+
+  function hypothesisCriterionMetricLabel(value) {
+    return {
+      instrumentReturnPct: "종목 수익률",
+      benchmarkReturnPct: "기준 수익률",
+      excessReturnPct: "기준 대비 초과수익률",
+      profitLossRate: "계정 손익률",
+      volumeRatio: "거래량 배율",
+      tradeStrength: "체결강도",
+      foreignNetVolume: "외국인 순매수",
+      institutionNetVolume: "기관 순매수",
+      individualNetVolume: "개인 순매수",
+      shareCountChangePct: "주식 수 변화율",
+      freeCashFlowChangePct: "잉여현금흐름 변화율",
+      verifiedEventCount: "검증 사건 수",
+      counterEvidenceCount: "반대 근거 수"
+    }[String(value || "")] || String(value || "관측값");
+  }
+
+  function hypothesisCriterionStateLabel(value) {
+    return {
+      passed: "충족",
+      failed: "미충족",
+      unknown: "자료 부족"
+    }[String(value || "").toLowerCase()] || String(value || "확인 대기");
+  }
+
   function hypothesisStringList(value, limit) {
     var source = Array.isArray(value) ? value : (value ? [value] : []);
     var rows = [];
@@ -5635,6 +5670,8 @@
       '<span class="tone-chip ' + escapeHtml(reviewRequired ? "caution" : "hold") + '">품질 검토 ' + escapeHtml(reviewRequired + "건") + '</span>',
       '<span class="tone-chip ' + escapeHtml(integrity.passed === false ? "danger" : "hold") + '">' + escapeHtml(replay.status ? (integrity.passed === false ? "재생 점검 필요" : "재생 기록 있음") : "재생 전") + '</span>',
       '<span class="tone-chip hold">RuleBox 버전 ' + escapeHtml(versionRows.length + "개") + '</span>',
+      operational.ruleOutcomeContractCount != null ? '<span class="tone-chip ' + escapeHtml(Number(operational.fallbackRuleContractCount || 0) ? "caution" : "watch") + '">구조화 계약 ' + escapeHtml((operational.structuredRuleContractCount || 0) + "/" + operational.ruleOutcomeContractCount) + '</span>' : '',
+      operational.legacyLifecycleContractCount ? '<span class="tone-chip caution">이전 계약 누락 ' + escapeHtml(operational.legacyLifecycleContractCount + "건") + '</span>' : '',
       operational.symbolCount != null ? '<span class="tone-chip hold">검토 범위 ' + escapeHtml(operational.symbolCount + "종목 · 종목당 " + (operational.episodeLimitPerSymbol || "-") + "건") + '</span>' : '',
       '</div>',
       replay.summary ? '<p class="hypothesis-governance-result">' + escapeHtml(replay.summary) + '</p>' : '',
@@ -5812,6 +5849,8 @@
     var outcome = item && item.outcomeAssessment && typeof item.outcomeAssessment === "object" ? item.outcomeAssessment : {};
     var horizons = Array.isArray(outcome.horizonAssessments) ? outcome.horizonAssessments : [];
     var contract = outcome.outcomeContract && typeof outcome.outcomeContract === "object" ? outcome.outcomeContract : {};
+    var criteria = Array.isArray(contract.criteria) ? contract.criteria : [];
+    var criterionAssessments = Array.isArray(outcome.criterionAssessments) ? outcome.criterionAssessments : [];
     if (!Object.keys(outcome).length) {
       return '<section class="hypothesis-detail-section"><strong>사후 결과</strong><p>아직 연결된 사후 관측이 없습니다.</p></section>';
     }
@@ -5827,6 +5866,7 @@
       '<span>지지 ' + escapeHtml(outcome.supportedCount == null ? 0 : outcome.supportedCount) + '</span>',
       '<span>반증 ' + escapeHtml(outcome.contradictedCount == null ? 0 : outcome.contradictedCount) + '</span>',
       '<span>판단 불가 ' + escapeHtml(outcome.inconclusiveCount == null ? 0 : outcome.inconclusiveCount) + '</span>',
+      '<span>독립 사건 ' + escapeHtml(outcome.independentEpisodeCount == null ? outcome.sampleCount || 0 : outcome.independentEpisodeCount) + '</span>',
       '</div>',
       horizons.length ? '<div class="hypothesis-horizon-list">' + horizons.map(function (row) {
         return '<div><b>' + escapeHtml(hypothesisHorizonLabel(row.horizonMinutes)) + '</b><span>' + escapeHtml(row.outcomeStateLabel || "표본 부족") + ' · 표본 ' + escapeHtml(row.sampleCount == null ? 0 : row.sampleCount) + '</span></div>';
@@ -5837,8 +5877,16 @@
         '<span>확인 시점 ' + escapeHtml(hypothesisStringList(contract.outcomeHorizonMinutes, 6).map(hypothesisHorizonLabel).join(", ") || "기본") + '</span>',
         '<span>필수 데이터 ' + escapeHtml(hypothesisStringList(contract.requiredObservationDomains, 6).map(hypothesisObservationDomainLabel).join(", ") || "현재가") + '</span>',
         '<span>최소 표본 ' + escapeHtml(contract.minimumIndependentEpisodes == null ? "-" : contract.minimumIndependentEpisodes) + '건 · 최대 지연 ' + escapeHtml(contract.maximumObservationDelayMinutes == null ? "-" : contract.maximumObservationDelayMinutes) + '분</span>',
+        criteria.length ? '<div class="hypothesis-horizon-list">' + criteria.slice(0, 12).map(function (criterion) {
+          return '<div><b>' + escapeHtml(hypothesisCriterionRoleLabel(criterion.role) + " · " + (criterion.label || criterion.criterionId || "검증 기준")) + '</b><span>' + escapeHtml(hypothesisCriterionMetricLabel(criterion.metric) + " " + (criterion.operator || "") + " " + (criterion.threshold == null ? "" : criterion.threshold) + (criterion.unit || "")) + '</span></div>';
+        }).join("") + '</div>' : '<span>규칙별 검증 기준 없음 · 새 판단은 보수적 가격 기준으로 동결</span>',
         '</div>'
       ].join("") : '',
+      criterionAssessments.length ? '<div class="hypothesis-outcome-contract"><b>기준별 실제 관측</b>' + criterionAssessments.slice(0, 12).map(function (criterion) {
+        var observed = criterion.observedValue == null ? "값 없음" : String(criterion.observedValue) + String(criterion.unit || "");
+        return '<span>' + escapeHtml((criterion.label || criterion.criterionId || "기준") + " · " + hypothesisCriterionStateLabel(criterion.state) + " · " + observed) + '</span>';
+      }).join("") + '</div>' : '',
+      outcome.evaluationModeCounts && outcome.evaluationModeCounts["legacy-directional-fallback"] ? '<p class="subtle">구조화 계약 없이 가격 방향만 판정한 과거 표본 ' + escapeHtml(outcome.evaluationModeCounts["legacy-directional-fallback"]) + '건은 별도로 표시합니다.</p>' : '',
       outcome.missingObservationDomains && outcome.missingObservationDomains.length ? '<p class="subtle">필수 데이터가 비어 제외된 항목: ' + escapeHtml(hypothesisStringList(outcome.missingObservationDomains, 6).join(", ")) + '</p>' : '',
       outcome.excludedOutcomeCount ? '<p class="subtle">시점·품질 기준을 통과하지 못한 관측 ' + escapeHtml(outcome.excludedOutcomeCount) + '건은 결과 집계에서 제외했습니다.</p>' : '',
       '<p class="subtle">이 결과는 과거 검토용 기록이며 현재 투자 행동을 자동으로 바꾸지 않습니다.</p>',
@@ -5919,6 +5967,7 @@
         '<label class="setting-field"><span>최소 독립 표본</span><input name="minimumIndependentEpisodes" type="number" min="1" max="1000" value="' + escapeHtml(hypothesisPolicyValue(contract, "minimumIndependentEpisodes")) + '"' + (disabled ? " disabled" : "") + '></label>',
         '<label class="setting-field"><span>관측 최대 지연(분)</span><input name="maximumObservationDelayMinutes" type="number" min="1" max="10080" value="' + escapeHtml(hypothesisPolicyValue(contract, "maximumObservationDelayMinutes")) + '"' + (disabled ? " disabled" : "") + '></label>',
         '<label class="setting-field wide"><span>검증에서 볼 점</span><textarea name="verificationFocus" rows="2"' + (disabled ? " disabled" : "") + '>' + escapeHtml(hypothesisPolicyValue(contract, "verificationFocus")) + '</textarea></label>',
+        '<label class="setting-field wide"><span>구조화 검증 기준(JSON)</span><textarea name="outcomeCriteria" rows="8" placeholder="원인·결과·반증 기준을 JSON 배열로 입력"' + (disabled ? " disabled" : "") + '>' + escapeHtml(JSON.stringify(Array.isArray(contract.criteria) ? contract.criteria : [], null, 2)) + '</textarea></label>',
         '</div>',
         '<label class="setting-field wide"><span>변경 사유</span><textarea name="changeReason" rows="2" placeholder="변경 이유를 남기세요."' + (disabled ? " disabled" : "") + '></textarea></label>',
         '<div class="settings-actions"><button class="text-button" type="submit"' + (disabled ? " disabled" : "") + '>' + escapeHtml(state.hypothesisPolicySaving === ruleId ? "검증 중" : "TypeDB 미리보기") + '</button><button class="text-button primary" type="button" data-hypothesis-policy-approve="' + escapeHtml(ruleId) + '"' + (approveDisabled ? " disabled" : "") + '>승인 후 반영</button></div>',
@@ -6038,6 +6087,16 @@
     if (minimumIndependentEpisodes == null || maximumObservationDelayMinutes == null) {
       throw new Error("사후 관측 계약의 숫자 항목을 확인하세요.");
     }
+    var criteria = [];
+    var rawCriteria = hypothesisFormValue(form, "outcomeCriteria");
+    if (rawCriteria) {
+      try {
+        criteria = JSON.parse(rawCriteria);
+      } catch (_error) {
+        throw new Error("구조화 검증 기준은 올바른 JSON 배열이어야 합니다.");
+      }
+      if (!Array.isArray(criteria)) throw new Error("구조화 검증 기준은 JSON 배열이어야 합니다.");
+    }
     return {
       formationConditionIds: hypothesisFormList(form, "formationConditionIds"),
       invalidationConditionIds: hypothesisFormList(form, "invalidationConditionIds"),
@@ -6050,7 +6109,8 @@
         requiredObservationDomains: hypothesisFormList(form, "requiredObservationDomains"),
         minimumIndependentEpisodes: minimumIndependentEpisodes,
         maximumObservationDelayMinutes: maximumObservationDelayMinutes,
-        verificationFocus: hypothesisFormList(form, "verificationFocus")
+        verificationFocus: hypothesisFormList(form, "verificationFocus"),
+        criteria: criteria
       }
     };
   }

@@ -29,7 +29,11 @@ from digital_twin.domain.portfolio_ontology_research_concepts import add_governe
 from digital_twin.domain.ontology_schema import add_entity
 from digital_twin.domain.portfolio import AccountSnapshot, PortfolioSummary, utc_now_iso
 from digital_twin.domain.market_data import normalize_position
-from digital_twin.infrastructure.mysql_investment_decision_episodes import due_outcome_horizon_minutes
+from digital_twin.infrastructure.mysql_investment_decision_episodes import (
+    due_outcome_horizon_minutes,
+    due_outcome_horizon_minutes_all,
+    outcome_target_at,
+)
 from digital_twin.infrastructure.investment_research_gateway import (
     CompositeInvestmentResearchGateway,
     ExistingApiResearchGateway,
@@ -388,6 +392,7 @@ class InvestmentBrainTest(unittest.TestCase):
                         "horizonMinutes": 1440,
                         "observationTiming": "on-time",
                         "calibrationEligibility": "eligible",
+                        "accountIndependenceKey": "event-" + str(index),
                     },
                 }],
             })
@@ -399,6 +404,40 @@ class InvestmentBrainTest(unittest.TestCase):
         self.assertEqual("rule:risk", result["byRule"][0]["key"])
         self.assertEqual("template:risk", result["byHypothesis"][0]["key"])
         self.assertEqual("1440", result["byHorizon"][0]["key"])
+
+    def test_decision_performance_deduplicates_repeated_alerts_for_one_market_event(self):
+        episodes = []
+        for index, status in enumerate(["directionally-contradicted", "directionally-corroborated"]):
+            episodes.append({
+                "episodeId": "episode-repeat-" + str(index),
+                "accountId": "account-1",
+                "symbol": "005930",
+                "action": "HOLD",
+                "selectedHypothesisId": "hypothesis-risk",
+                "hypothesisSet": {"hypotheses": [{
+                    "hypothesisId": "hypothesis-risk",
+                    "templateId": "template:risk",
+                    "supportingRuleIds": ["rule:risk"],
+                }]},
+                "outcomes": [{
+                    "selectedHypothesisStatus": status,
+                    "observedAt": "2026-07-20T0" + str(index + 1) + ":00:00Z",
+                    "priceChangeFromDecisionPct": index,
+                    "payload": {
+                        "horizonMinutes": 60,
+                        "calibrationEligibility": "eligible",
+                        "accountIndependenceKey": "shared-market-event",
+                    },
+                }],
+            })
+
+        result = evaluate_decision_performance(episodes, minimum_sample_count=1)
+
+        self.assertEqual(2, result["outcomeCount"])
+        self.assertEqual(1, result["independentEpisodeCount"])
+        self.assertEqual(1, result["summary"]["decisiveOutcomeCount"])
+        self.assertEqual(1, result["summary"]["corroboratedCount"])
+        self.assertEqual(0, result["summary"]["contradictedCount"])
 
     def test_relation_context_separates_rule_hypotheses_from_decision_guardrails(self):
         payload = hypothesis_set_from_relation_context(relation_context())
@@ -855,6 +894,12 @@ class InvestmentBrainTest(unittest.TestCase):
         self.assertEqual("ai-comparison", episode.hypothesis_selection_source)
         self.assertEqual(selected["hypothesisId"], episode.selected_hypothesis_id)
         self.assertEqual(len(hypotheses), len(episode.hypothesis_reviews))
+        outcome_contract = episode.facts_at_decision["hypothesisOutcomeContract"]
+        self.assertEqual("rulebox-hypothesis-outcome-contract-v2", outcome_contract["contractVersion"])
+        self.assertTrue(outcome_contract["contractFingerprint"].startswith("sha256:"))
+        self.assertTrue(outcome_contract["criteria"])
+        self.assertTrue(outcome_contract["marketIndependenceKey"])
+        self.assertTrue(outcome_contract["accountIndependenceKey"])
 
         graph = PortfolioOntology("account-1")
         add_investment_brain_concepts(graph, "account-1", [episode.to_dict()])
@@ -1224,6 +1269,47 @@ class InvestmentBrainTest(unittest.TestCase):
         })
         self.assertEqual(60, due_outcome_horizon_minutes(episode, "2026-07-19T20:40:00Z", "60,1440"))
 
+    def test_stock_outcome_target_rolls_weekend_but_crypto_keeps_elapsed_time(self):
+        brain = hypothesis_set_from_relation_context(relation_context())
+        stock = DecisionEpisode.from_dict({
+            "episodeId": "episode-stock-weekend",
+            "accountId": "account-1",
+            "symbol": "005930",
+            "subjectName": "삼성전자",
+            "question": brain["question"],
+            "hypothesisSet": brain["hypothesisSet"],
+            "action": "HOLD",
+            "decidedAt": "2026-08-14T06:00:00Z",
+            "factsAtDecision": {"market": "KR", "currency": "KRW"},
+        })
+        crypto = DecisionEpisode.from_dict({
+            **stock.to_dict(),
+            "episodeId": "episode-crypto-weekend",
+            "symbol": "BTC",
+            "factsAtDecision": {"market": "CRYPTO", "currency": "USD"},
+        })
+
+        self.assertEqual("2026-08-17T06:00:00Z", outcome_target_at(stock, 1440))
+        self.assertEqual("2026-08-15T06:00:00Z", outcome_target_at(crypto, 1440))
+        self.assertEqual([], due_outcome_horizon_minutes_all(stock, "2026-08-15T06:00:00Z", [1440]))
+        self.assertEqual([1440], due_outcome_horizon_minutes_all(stock, "2026-08-17T06:00:00Z", [1440]))
+
+    def test_stock_outcome_target_uses_next_regular_session_after_close(self):
+        brain = hypothesis_set_from_relation_context(relation_context())
+        stock = DecisionEpisode.from_dict({
+            "episodeId": "episode-stock-after-close",
+            "accountId": "account-1",
+            "symbol": "005930",
+            "subjectName": "삼성전자",
+            "question": brain["question"],
+            "hypothesisSet": brain["hypothesisSet"],
+            "action": "HOLD",
+            "decidedAt": "2026-08-13T09:00:00Z",
+            "factsAtDecision": {"market": "KR", "currency": "KRW"},
+        })
+
+        self.assertEqual("2026-08-14T00:00:00Z", outcome_target_at(stock, 60))
+
     def test_outcome_service_prefers_historical_observation_at_horizon(self):
         class FakeEpisodeStore:
             def __init__(self):
@@ -1234,7 +1320,9 @@ class InvestmentBrainTest(unittest.TestCase):
                     "requestId": "target-1",
                     "episodeId": "episode-1",
                     "symbol": "005930",
+                    "benchmarkSymbol": "KOSPI",
                     "horizonMinutes": 60,
+                    "decidedAt": "2026-07-20T00:00:00Z",
                     "targetAt": "2026-07-20T01:00:00Z",
                 }]
 
@@ -1244,7 +1332,7 @@ class InvestmentBrainTest(unittest.TestCase):
 
         class FakeTimeSeriesStore:
             def load_outcome_observations(self, account_id, targets, max_delay_minutes=0):
-                return {
+                available = {
                     "target-1": {
                         "currentPrice": 71000,
                         "generatedAt": "2026-07-20T01:03:00Z",
@@ -1253,7 +1341,19 @@ class InvestmentBrainTest(unittest.TestCase):
                         "observationBasis": "historical-market-time-series",
                         "dataQuality": "actual",
                     },
+                    "target-1:benchmark-start": {
+                        "currentPrice": 100,
+                        "generatedAt": "2026-07-20T00:01:00Z",
+                        "dataQuality": "actual",
+                    },
+                    "target-1:benchmark-end": {
+                        "currentPrice": 101,
+                        "generatedAt": "2026-07-20T01:01:00Z",
+                        "dataQuality": "actual",
+                    },
                 }
+                keys = {str(item.get("requestId") or "") for item in targets}
+                return {key: value for key, value in available.items() if key in keys}
 
         snapshot = AccountSnapshot(
             "account-1", "테스트", "toss", "live", "ok", "2026-07-20T03:00:00Z",
@@ -1271,6 +1371,8 @@ class InvestmentBrainTest(unittest.TestCase):
         self.assertEqual(0, result["snapshotFallbackCount"])
         self.assertEqual("2026-07-20T01:03:00Z", store.records[0]["observedAt"])
         self.assertEqual(71000, store.records[0]["facts"]["currentPrice"])
+        self.assertEqual("KOSPI", store.records[0]["facts"]["benchmarkSymbol"])
+        self.assertEqual(1.0, store.records[0]["facts"]["benchmarkReturnPct"])
 
     def test_hypothesis_calibration_uses_independent_episode_outcomes(self):
         brain = hypothesis_set_from_relation_context(relation_context())
@@ -1289,16 +1391,23 @@ class InvestmentBrainTest(unittest.TestCase):
                     "outcomeId": "outcome-" + str(index),
                     "observedAt": "2026-07-2" + str(index) + "T01:00:00Z",
                     "selectedHypothesisStatus": status,
-                    "payload": {"calibrationEligibility": "eligible"},
+                    "payload": {
+                        "calibrationEligibility": "eligible",
+                        "accountIndependenceKey": "market-event-" + str(index),
+                    },
                 }],
             })
         episodes.append({
             **episodes[0],
+            "episodeId": "episode-duplicate-alert",
             "outcomes": [{
                 "outcomeId": "outcome-duplicate",
                 "observedAt": "2026-07-29T01:00:00Z",
                 "selectedHypothesisStatus": "directionally-corroborated",
-                "payload": {"calibrationEligibility": "eligible"},
+                "payload": {
+                    "calibrationEligibility": "eligible",
+                    "accountIndependenceKey": "market-event-0",
+                },
             }],
         })
 

@@ -14,7 +14,12 @@ from .hypothesis_scoping import (
     UNVERIFIED_SCOPE,
     inference_scope_assessment,
 )
-from .hypothesis_outcome_contract import merge_outcome_contracts
+from .hypothesis_outcome_contract import (
+    HYPOTHESIS_OUTCOME_CONTRACT_VERSION,
+    default_directional_criteria,
+    merge_outcome_contracts,
+    outcome_contract_fingerprint,
+)
 from .ontology_decision_state import DATA_STATES, REVIEW_LEVELS, VALIDATION_STATES
 from .ontology_worlds import market_world
 
@@ -862,6 +867,27 @@ def _ontology_outcome_contract_context(value: object) -> Dict[str, object]:
         "marketHypothesisId": _ontology_context_text(contract.get("marketHypothesisId"), 180),
         "accountHypothesisOverlayId": _ontology_context_text(contract.get("accountHypothesisOverlayId"), 180),
         "inferenceGenerationId": _ontology_context_text(contract.get("inferenceGenerationId"), 180),
+        "contractFingerprint": _ontology_context_text(contract.get("contractFingerprint"), 180),
+        "criteriaOrigin": _ontology_context_text(contract.get("criteriaOrigin"), 80),
+        "effectiveAt": _ontology_context_text(contract.get("effectiveAt"), 80),
+        "marketIndependenceKey": _ontology_context_text(contract.get("marketIndependenceKey"), 180),
+        "accountIndependenceKey": _ontology_context_text(contract.get("accountIndependenceKey"), 180),
+        "criteria": [
+            {
+                "criterionId": _ontology_context_text(item.get("criterionId"), 120),
+                "label": _ontology_context_text(item.get("label"), 240),
+                "role": _ontology_context_text(item.get("role"), 40),
+                "metric": _ontology_context_text(item.get("metric"), 80),
+                "operator": _ontology_context_text(item.get("operator"), 8),
+                "threshold": item.get("threshold"),
+                "unit": _ontology_context_text(item.get("unit"), 24),
+                "horizonMinutes": item.get("horizonMinutes"),
+                "required": bool(item.get("required", True)),
+                "benchmarkSymbol": _ontology_context_text(item.get("benchmarkSymbol"), 40),
+            }
+            for item in list(contract.get("criteria") or [])[:12]
+            if isinstance(item, dict)
+        ],
     }
     return {key: item for key, item in result.items() if item not in (None, "", [], {})}
 
@@ -966,6 +992,28 @@ def decision_episode_ontology_context(
                 "sourceAsOf": _ontology_context_text(payload.get("sourceAsOf"), 80),
                 "dataQuality": _ontology_context_text(payload.get("dataQuality"), 120),
                 "missingObservationDomains": _ontology_context_values(payload.get("missingObservationDomains"), limit=12),
+                "missingRequiredMetricIds": _ontology_context_values(payload.get("missingRequiredMetricIds"), limit=12),
+                "evaluationMode": _ontology_context_text(payload.get("mode"), 80),
+                "contractFingerprint": _ontology_context_text(payload.get("contractFingerprint"), 180),
+                "marketIndependenceKey": _ontology_context_text(payload.get("marketIndependenceKey"), 180),
+                "accountIndependenceKey": _ontology_context_text(payload.get("accountIndependenceKey"), 180),
+                "criterionAssessments": [
+                    {
+                        "criterionId": _ontology_context_text(item.get("criterionId"), 120),
+                        "label": _ontology_context_text(item.get("label"), 200),
+                        "role": _ontology_context_text(item.get("role"), 40),
+                        "metric": _ontology_context_text(item.get("metric"), 80),
+                        "state": _ontology_context_text(item.get("state"), 32),
+                        "observedValue": item.get("observedValue"),
+                        "threshold": item.get("threshold"),
+                        "unit": _ontology_context_text(item.get("unit"), 24),
+                    }
+                    for item in list(payload.get("criterionAssessments") or [])[:12]
+                    if isinstance(item, dict)
+                ],
+                "benchmarkSymbol": _ontology_context_text(payload.get("benchmarkSymbol"), 40),
+                "benchmarkReturnPct": payload.get("benchmarkReturnPct"),
+                "excessReturnPct": payload.get("excessReturnPct"),
             },
         })
 
@@ -2736,6 +2784,7 @@ def decision_episode_from_context(
         relation_context,
         selected_hypothesis,
         selected_id,
+        effective_at=decided_at,
     )
     return DecisionEpisode(
         episode_id=episode_id,
@@ -2803,6 +2852,7 @@ def selected_hypothesis_outcome_contract(
     relation_context: Dict[str, object],
     hypothesis: Optional[InvestmentHypothesis],
     selected_hypothesis_id: str = "",
+    effective_at: str = "",
 ) -> Dict[str, object]:
     """Freeze RuleBox outcome requirements with the exact decision episode."""
 
@@ -2820,16 +2870,34 @@ def selected_hypothesis_outcome_contract(
     if not contracts and isinstance(brief.get("selectedOutcomeContractCandidate"), dict):
         contracts.append(dict(brief.get("selectedOutcomeContractCandidate") or {}))
     if not contracts:
-        return {}
-    return {
-        **merge_outcome_contracts(contracts),
-        "contractVersion": "rulebox-hypothesis-outcome-contract-v1",
+        contracts.append({})
+    merged = merge_outcome_contracts(contracts)
+    criteria_origin = "rulebox"
+    if not list(merged.get("criteria") or []):
+        merged["criteria"] = default_directional_criteria(hypothesis.stance)
+        criteria_origin = "conservative-default" if merged["criteria"] else "not-applicable"
+    generation_id = str(relation_context.get("inferenceGenerationId") or "")
+    market_identity = hypothesis.market_hypothesis_id or hypothesis.family_id or hypothesis.template_id
+    account_identity = hypothesis.account_hypothesis_overlay_id or market_identity
+    payload = {
+        **merged,
+        "contractVersion": HYPOTHESIS_OUTCOME_CONTRACT_VERSION,
+        "criteriaOrigin": criteria_origin,
+        "effectiveAt": canonical_investment_timestamp(effective_at) or effective_at,
         "selectedHypothesisId": selected_hypothesis_id or hypothesis.hypothesis_id,
         "sourceRuleIds": rule_ids,
         "marketHypothesisId": hypothesis.market_hypothesis_id,
         "accountHypothesisOverlayId": hypothesis.account_hypothesis_overlay_id,
-        "inferenceGenerationId": str(relation_context.get("inferenceGenerationId") or ""),
+        "inferenceGenerationId": generation_id,
+        "marketIndependenceKey": stable_id(
+            "market-hypothesis-outcome-episode", market_identity, generation_id
+        ),
+        "accountIndependenceKey": stable_id(
+            "account-hypothesis-outcome-episode", account_identity, generation_id
+        ),
     }
+    payload["contractFingerprint"] = outcome_contract_fingerprint(payload)
+    return payload
 
 
 def float_or_zero(value: object) -> float:

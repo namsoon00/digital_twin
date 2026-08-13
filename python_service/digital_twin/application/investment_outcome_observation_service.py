@@ -75,6 +75,25 @@ class InvestmentOutcomeObservationService:
             targets,
             max_delay_minutes=self.max_delay_minutes(),
         )
+        benchmark_requests = []
+        for target in targets:
+            benchmark_symbol = str(target.get("benchmarkSymbol") or "").upper().strip()
+            request_id = str(target.get("requestId") or "")
+            if not benchmark_symbol or not request_id:
+                continue
+            common = {
+                "symbol": benchmark_symbol,
+                "maximumObservationDelayMinutes": target.get("maximumObservationDelayMinutes"),
+            }
+            benchmark_requests.extend([
+                {**common, "requestId": request_id + ":benchmark-start", "targetAt": target.get("decidedAt")},
+                {**common, "requestId": request_id + ":benchmark-end", "targetAt": target.get("targetAt")},
+            ])
+        benchmark_observations = self.market_time_series_store.load_outcome_observations(
+            snapshot.account_id,
+            benchmark_requests,
+            max_delay_minutes=self.max_delay_minutes(),
+        ) if benchmark_requests else {}
         snapshot_observations = self.snapshot_observations(snapshot.positions or [], observed_at)
         records = []
         historical_count = 0
@@ -93,6 +112,18 @@ class InvestmentOutcomeObservationService:
             if not facts:
                 missing_count += 1
                 continue
+            benchmark_symbol = str(target.get("benchmarkSymbol") or "").upper().strip()
+            if benchmark_symbol:
+                start = benchmark_observations.get(request_id + ":benchmark-start") or {}
+                end = benchmark_observations.get(request_id + ":benchmark-end") or {}
+                start_price = self.optional_number(start.get("currentPrice"))
+                end_price = self.optional_number(end.get("currentPrice"))
+                facts["benchmarkSymbol"] = benchmark_symbol
+                if start_price and end_price:
+                    facts["benchmarkReturnPct"] = round(((end_price / start_price) - 1) * 100, 6)
+                    facts["benchmarkObservationSource"] = "mysql-market-time-series"
+                    facts["benchmarkStartAsOf"] = start.get("sourceAsOf") or start.get("generatedAt") or ""
+                    facts["benchmarkEndAsOf"] = end.get("sourceAsOf") or end.get("generatedAt") or ""
             records.append({
                 "episodeId": target.get("episodeId"),
                 "horizonMinutes": target.get("horizonMinutes"),
@@ -143,6 +174,7 @@ class InvestmentOutcomeObservationService:
             fills = list(lifecycle.get("fills") or [])
             market_return = self.optional_number(
                 payload.get("marketReturnPct"),
+                payload.get("benchmarkReturnPct"),
                 (episode.facts_at_decision or {}).get("benchmarkReturnPct"),
             )
             missing = []

@@ -429,6 +429,15 @@ class HypothesisReviewService:
             outcome = item.get("outcomeAssessment") if isinstance(item.get("outcomeAssessment"), Mapping) else {}
             outcome_state = text(outcome.get("outcomeState")) or "insufficient-sample"
             outcome_counts[outcome_state] = int(outcome_counts.get(outcome_state, 0)) + 1
+        active_rule_contracts = [
+            dict((entry.get("policy") or {}).get("outcomeContract") or {})
+            for entry in policy_by_rule.values()
+            if isinstance(entry, Mapping)
+        ]
+        lifecycle_contracts = [
+            dict((item.get("policy") or {}).get("outcomeContract") or {})
+            for item in items
+        ]
         return {
             "version": HYPOTHESIS_DECISION_BRIEF_VERSION,
             "status": "ok" if self.hypothesis_lifecycle_store else "unavailable",
@@ -454,6 +463,11 @@ class HypothesisReviewService:
                 "episodeLimitPerSymbol": per_symbol_limit,
                 "recordLimit": max(1, min(1000, int(limit or 100))),
                 "eventLimit": max(1, min(1000, int(event_limit or 100))),
+                "ruleOutcomeContractCount": len(active_rule_contracts),
+                "structuredRuleContractCount": sum(1 for contract in active_rule_contracts if contract.get("criteria")),
+                "fallbackRuleContractCount": sum(1 for contract in active_rule_contracts if not contract.get("criteria")),
+                "lifecycleOutcomeContractCount": sum(1 for contract in lifecycle_contracts if contract.get("outcomeHorizonMinutes")),
+                "legacyLifecycleContractCount": sum(1 for contract in lifecycle_contracts if not contract.get("outcomeHorizonMinutes")),
                 "bounded": True,
                 "note": "가설 검토는 종목별 제한된 사후 관측을 읽으며, 현재 투자 판단을 변경하지 않습니다.",
             },

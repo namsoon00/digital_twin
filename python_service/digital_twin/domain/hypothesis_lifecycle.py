@@ -14,6 +14,7 @@ from dataclasses import asdict, dataclass, field
 from datetime import datetime, timedelta, timezone
 from typing import Dict, Iterable, List, Mapping, Optional, Sequence, Tuple
 
+from .hypothesis_outcome_contract import HypothesisOutcomeContract, merge_outcome_contracts
 from .ontology_rulebox_contracts import HypothesisLifecyclePolicy
 
 
@@ -420,6 +421,10 @@ def lifecycle_policy_from_rows(rows: Iterable[Mapping[str, object]], fallback_co
     next_data = _unique([value for policy in policies for value in policy.next_data_requirements])
     validity_candidates = [policy.validity_minutes for policy in policies if int(policy.validity_minutes or 0) > 0]
     modes = _unique([policy.invalidation_mode for policy in policies])
+    outcome_contract = merge_outcome_contracts([
+        policy.outcome_contract.to_dict()
+        for policy in policies
+    ])
     return HypothesisLifecyclePolicy(
         formation_condition_ids=formation,
         invalidation_condition_ids=invalidation,
@@ -427,6 +432,7 @@ def lifecycle_policy_from_rows(rows: Iterable[Mapping[str, object]], fallback_co
         required_freshness_domains=freshness,
         next_data_requirements=next_data,
         invalidation_mode=modes[0] if modes else "typedb-rule-not-materialized",
+        outcome_contract=HypothesisOutcomeContract.from_dict(outcome_contract),
     ).to_dict()
 
 

@@ -1,4 +1,5 @@
 import unittest
+from copy import deepcopy
 
 from digital_twin.application.hypothesis_lifecycle_policy_service import HypothesisLifecyclePolicyService
 from digital_twin.application.hypothesis_review_service import HypothesisReviewService
@@ -19,7 +20,7 @@ from digital_twin.domain.portfolio_ontology_cognitive_concepts import add_invest
 MARKET_ID = "market:AAPL:trend-recovery"
 
 
-def episode(episode_id, account_id, status, eligible=True, horizon_minutes=60):
+def episode(episode_id, account_id, status, eligible=True, horizon_minutes=60, market_independence_key=""):
     selected_id = "hypothesis:" + episode_id
     return {
         "episodeId": episode_id,
@@ -43,6 +44,8 @@ def episode(episode_id, account_id, status, eligible=True, horizon_minutes=60):
             "payload": {
                 "calibrationEligibility": "eligible" if eligible else "delayed",
                 "horizonMinutes": horizon_minutes,
+                "marketIndependenceKey": market_independence_key,
+                "accountIndependenceKey": "account-event:" + episode_id,
             },
         }],
     }
@@ -173,6 +176,30 @@ class HypothesisReviewTests(unittest.TestCase):
         self.assertFalse(market["automaticDeployment"])
         self.assertEqual("historical-review-only", market["decisionEligibility"])
 
+    def test_repeated_market_alerts_from_same_generation_count_once(self):
+        first = episode(
+            "episode-shared-one",
+            "account-1",
+            "directionally-corroborated",
+            market_independence_key="market-event:shared",
+        )
+        second = episode(
+            "episode-shared-two",
+            "account-2",
+            "directionally-corroborated",
+            market_independence_key="market-event:shared",
+        )
+
+        assessment = outcome_assessment_for_lifecycle(
+            market_lifecycle(),
+            [first, second],
+            minimum_samples=2,
+        )
+
+        self.assertEqual(1, assessment["sampleCount"])
+        self.assertEqual(2, assessment["matchedEpisodeCount"])
+        self.assertEqual("insufficient-sample", assessment["outcomeState"])
+
     def test_ineligible_later_observation_stays_out_of_conclusion(self):
         delayed = episode("episode-delayed", "account-1", "directionally-corroborated", eligible=False)
         assessment = outcome_assessment_for_lifecycle(account_lifecycle(), [delayed], minimum_samples=1)
@@ -238,6 +265,47 @@ class HypothesisReviewTests(unittest.TestCase):
         self.assertEqual(90, saved["hypothesis_lifecycle"]["validityMinutes"])
         self.assertNotIn("state", saved["hypothesis_lifecycle"])
 
+    def test_rulebox_policy_update_preserves_structured_outcome_criteria(self):
+        repository = FakeRuleboxRepository()
+        rule_id = repository.rule["rule_id"]
+        result = HypothesisLifecyclePolicyService(repository).update(rule_id, {
+            "outcomeContract": {
+                "outcomeHorizonMinutes": [1440],
+                "requiredObservationDomains": ["quote"],
+                "minimumIndependentEpisodes": 3,
+                "maximumObservationDelayMinutes": 180,
+                "criteria": [{
+                    "criterionId": "relative-return",
+                    "label": "시장 대비 초과수익",
+                    "role": "result",
+                    "metric": "excessReturnPct",
+                    "operator": ">=",
+                    "threshold": 1,
+                    "horizonMinutes": 1440,
+                    "benchmarkSymbol": "^KS11",
+                    "required": True,
+                }],
+            },
+        }, "구조화 기준 추가")
+
+        contract = result["updatedRule"]["policy"]["outcomeContract"]
+        self.assertEqual("relative-return", contract["criteria"][0]["criterionId"])
+        self.assertEqual("^KS11", contract["criteria"][0]["benchmarkSymbol"])
+
+    def test_rulebox_policy_rejects_relative_return_without_benchmark(self):
+        repository = FakeRuleboxRepository()
+        with self.assertRaisesRegex(ValueError, "benchmarkSymbol"):
+            HypothesisLifecyclePolicyService(repository).update(repository.rule["rule_id"], {
+                "outcomeContract": {
+                    "criteria": [{
+                        "criterionId": "relative-return",
+                        "metric": "excessReturnPct",
+                        "operator": ">=",
+                        "threshold": 1,
+                    }],
+                },
+            }, "잘못된 기준")
+
     def test_abox_projects_hypothesis_outcomes_as_historical_review_only(self):
         graph = PortfolioOntology("account-1")
         add_entity(graph, "portfolio", "account-1", "계좌", {"tboxClass": "Portfolio"})
@@ -250,6 +318,42 @@ class HypothesisReviewTests(unittest.TestCase):
         self.assertTrue(all(item.properties["automaticDeployment"] is False for item in rows))
         self.assertTrue(all(item.properties["decisionEligibility"] == "historical-review-only" for item in rows))
         self.assertIn("HAS_HYPOTHESIS_OUTCOME_ASSESSMENT", {item.relation_type for item in graph.relations})
+
+    def test_abox_projects_contract_criteria_and_observed_assessments(self):
+        observed = deepcopy(self.account_one)
+        criterion = {
+            "criterionId": "material-rise",
+            "label": "유의한 상승",
+            "role": "result",
+            "metric": "instrumentReturnPct",
+            "operator": ">=",
+            "threshold": 0.5,
+            "unit": "%",
+            "required": True,
+        }
+        observed["factsAtDecision"] = {
+            "hypothesisOutcomeContract": {
+                "contractFingerprint": "sha256:test",
+                "criteria": [criterion],
+            },
+        }
+        observed["outcomes"][0]["payload"].update({
+            "mode": "contract-criteria",
+            "contractFingerprint": "sha256:test",
+            "criterionAssessments": [{**criterion, "state": "passed", "observedValue": 1.2}],
+        })
+        graph = PortfolioOntology("account-1")
+        add_entity(graph, "portfolio", "account-1", "계좌", {"tboxClass": "Portfolio"})
+        add_entity(graph, "stock", "AAPL", "Apple", {"tboxClass": "Stock"})
+
+        add_investment_brain_concepts(graph, "account-1", [observed])
+
+        kinds = {item.kind for item in graph.entities}
+        relations = {item.relation_type for item in graph.relations}
+        self.assertIn("hypothesis-outcome-criterion", kinds)
+        self.assertIn("outcome-criterion-observation", kinds)
+        self.assertIn("HAS_OUTCOME_CRITERION", relations)
+        self.assertIn("EVALUATES_OUTCOME_CRITERION", relations)
 
     def test_ai_prompt_and_message_receive_lifecycle_context_as_explanation_only(self):
         brief = {

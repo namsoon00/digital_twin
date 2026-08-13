@@ -353,30 +353,50 @@ class MarketDataCollectionRunner:
                 continue
             for target in pending:
                 symbol = str(target.get("symbol") or "").upper().strip()
-                if not symbol or symbol in seen:
-                    continue
-                cached = self.quote_cache.load("toss", MARKET_DATA_ACCOUNT_ID, symbol)
-                enriched = {}
-                if hasattr(self.symbol_service, "enrich"):
-                    try:
-                        enriched = self.symbol_service.enrich(symbol) or {}
-                    except Exception:
-                        enriched = {}
-                base = {
-                    **dict(cached or {}),
-                    **dict(target or {}),
-                    **dict(enriched or {}),
-                    "symbol": symbol,
-                    "name": str((enriched or {}).get("name") or target.get("subjectName") or (cached or {}).get("name") or symbol),
-                    "market": str((enriched or {}).get("market") or target.get("market") or (cached or {}).get("market") or ""),
-                    "currency": str((enriched or {}).get("currency") or target.get("currency") or (cached or {}).get("currency") or ""),
-                }
-                if normalize_market(str(base.get("market") or "")) not in selected_markets:
-                    continue
-                position = self.base_position(base)
-                position.source = "decision-outcome"
-                result.append((position, base))
-                seen.add(symbol)
+                if symbol and symbol not in seen:
+                    cached = self.quote_cache.load("toss", MARKET_DATA_ACCOUNT_ID, symbol)
+                    enriched = {}
+                    if hasattr(self.symbol_service, "enrich"):
+                        try:
+                            enriched = self.symbol_service.enrich(symbol) or {}
+                        except Exception:
+                            enriched = {}
+                    base = {
+                        **dict(cached or {}),
+                        **dict(target or {}),
+                        **dict(enriched or {}),
+                        "symbol": symbol,
+                        "name": str((enriched or {}).get("name") or target.get("subjectName") or (cached or {}).get("name") or symbol),
+                        "market": str((enriched or {}).get("market") or target.get("market") or (cached or {}).get("market") or ""),
+                        "currency": str((enriched or {}).get("currency") or target.get("currency") or (cached or {}).get("currency") or ""),
+                    }
+                    if normalize_market(str(base.get("market") or "")) in selected_markets:
+                        position = self.base_position(base)
+                        position.source = "decision-outcome"
+                        result.append((position, base))
+                        seen.add(symbol)
+                benchmark_symbol = str(target.get("benchmarkSymbol") or "").upper().strip()
+                if benchmark_symbol and benchmark_symbol not in seen and len(result) < limit:
+                    benchmark_identity = {}
+                    if hasattr(self.symbol_service, "enrich"):
+                        try:
+                            benchmark_identity = self.symbol_service.enrich(benchmark_symbol) or {}
+                        except Exception:
+                            benchmark_identity = {}
+                    benchmark_base = {
+                        **dict(self.quote_cache.load("toss", MARKET_DATA_ACCOUNT_ID, benchmark_symbol) or {}),
+                        **dict(benchmark_identity or {}),
+                        "symbol": benchmark_symbol,
+                        "name": str((benchmark_identity or {}).get("name") or benchmark_symbol),
+                        "market": str((benchmark_identity or {}).get("market") or target.get("market") or ""),
+                        "currency": str((benchmark_identity or {}).get("currency") or target.get("currency") or ""),
+                        "outcomeBenchmarkFor": symbol,
+                    }
+                    if normalize_market(str(benchmark_base.get("market") or "")) in selected_markets:
+                        benchmark_position = self.base_position(benchmark_base)
+                        benchmark_position.source = "decision-outcome-benchmark"
+                        result.append((benchmark_position, benchmark_base))
+                        seen.add(benchmark_symbol)
                 if len(result) >= limit:
                     return result
         return result

@@ -210,6 +210,7 @@ def eligible_outcome_rows(
     missing_domains: List[str] = []
     matched_episode_ids: List[str] = []
     seen = set()
+    scope = text(lifecycle.get("scope")) or "account"
     for value in episodes or []:
         episode = as_dict(value)
         if not episode_matches_lifecycle(episode, lifecycle):
@@ -238,14 +239,25 @@ def eligible_outcome_rows(
             if not episode_id or key in seen:
                 continue
             seen.add(key)
+            independence_key = text(
+                payload.get("marketIndependenceKey")
+                if scope == "market"
+                else payload.get("accountIndependenceKey")
+            ) or episode_id
             rows.append({
                 "episodeId": episode_id,
+                "independentEpisodeKey": independence_key,
                 "accountId": text(episode.get("accountId")),
                 "symbol": upper(episode.get("symbol")),
                 "horizonMinutes": horizon,
                 "status": text(outcome.get("selectedHypothesisStatus")) or "inconclusive",
                 "observedAt": text(outcome.get("observedAt")),
                 "outcomeId": text(outcome.get("outcomeId")),
+                "evaluationMode": text(payload.get("mode")) or "legacy-directional-fallback",
+                "criterionAssessments": [
+                    dict(item) for item in payload.get("criterionAssessments") or []
+                    if isinstance(item, Mapping)
+                ],
             })
     return {
         "rows": rows,
@@ -286,9 +298,10 @@ def select_latest_outcome_per_episode(rows: Sequence[Mapping[str, object]]) -> L
     for raw in rows or []:
         item = dict(raw or {})
         episode_id = text(item.get("episodeId"))
-        if not episode_id:
+        independence_key = text(item.get("independentEpisodeKey")) or episode_id
+        if not independence_key:
             continue
-        current = latest.get(episode_id)
+        current = latest.get(independence_key)
         candidate_key = (integer(item.get("horizonMinutes")), text(item.get("observedAt")), text(item.get("outcomeId")))
         current_key = (
             integer(current.get("horizonMinutes")),
@@ -296,7 +309,7 @@ def select_latest_outcome_per_episode(rows: Sequence[Mapping[str, object]]) -> L
             text(current.get("outcomeId")),
         ) if current else (-1, "", "")
         if candidate_key >= current_key:
-            latest[episode_id] = item
+            latest[independence_key] = item
     return [latest[key] for key in sorted(latest)]
 
 
@@ -318,6 +331,18 @@ def outcome_assessment_for_lifecycle(
     rows = list(gathered["rows"])
     overall_rows = select_latest_outcome_per_episode(rows)
     summary = outcome_state(overall_rows, minimum)
+    evaluation_mode_counts: Dict[str, int] = {}
+    criterion_state_counts: Dict[str, int] = {}
+    criterion_rows = []
+    for row in overall_rows:
+        mode = text(row.get("evaluationMode")) or "legacy-directional-fallback"
+        evaluation_mode_counts[mode] = int(evaluation_mode_counts.get(mode) or 0) + 1
+        for criterion in row.get("criterionAssessments") or []:
+            if not isinstance(criterion, Mapping):
+                continue
+            state_value = text(criterion.get("state")) or "unknown"
+            criterion_state_counts[state_value] = int(criterion_state_counts.get(state_value) or 0) + 1
+            criterion_rows.append(dict(criterion))
     by_horizon: Dict[int, List[Dict[str, object]]] = {}
     for row in rows:
         by_horizon.setdefault(integer(row.get("horizonMinutes")), []).append(row)
@@ -352,6 +377,10 @@ def outcome_assessment_for_lifecycle(
         "excludedOutcomeReasons": gathered["excludedOutcomeReasons"],
         "missingObservationDomains": gathered["missingObservationDomains"],
         "horizonAssessments": horizon_assessments,
+        "evaluationModeCounts": evaluation_mode_counts,
+        "criterionStateCounts": criterion_state_counts,
+        "criterionAssessments": criterion_rows[:100],
+        "independentEpisodeCount": len(overall_rows),
         "decisionEligibility": "historical-review-only",
         "automaticDeployment": False,
         "summary": explanation,

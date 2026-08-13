@@ -60,16 +60,27 @@ class HypothesisOutcomeReplayService:
         excluded_count = 0
         contract_snapshot_count = 0
         legacy_contract_count = 0
+        structured_contract_count = 0
+        fingerprint_contract_count = 0
+        legacy_directional_outcome_count = 0
+        criterion_data_gap_outcome_count = 0
         duplicate_keys = []
+        duplicate_independence_keys = []
         invalid_time_episode_ids = []
         seen = set()
+        seen_independence = set()
         exclusion_reasons: Dict[str, int] = {}
         for raw in episodes or []:
             episode = as_dict(raw)
             episode_id = str(episode.get("episodeId") or "")
             facts = episode.get("factsAtDecision") if isinstance(episode.get("factsAtDecision"), Mapping) else {}
-            if isinstance(facts.get("hypothesisOutcomeContract"), Mapping):
+            contract = facts.get("hypothesisOutcomeContract") if isinstance(facts.get("hypothesisOutcomeContract"), Mapping) else {}
+            if contract:
                 contract_snapshot_count += 1
+                if contract.get("criteria"):
+                    structured_contract_count += 1
+                if contract.get("contractFingerprint"):
+                    fingerprint_contract_count += 1
             else:
                 legacy_contract_count += 1
             decided_at = parse_investment_timestamp(episode.get("decidedAt"))
@@ -86,6 +97,19 @@ class HypothesisOutcomeReplayService:
                 if decided_at and observed_at and observed_at < decided_at and episode_id not in invalid_time_episode_ids:
                     invalid_time_episode_ids.append(episode_id)
                 eligibility = str(payload.get("calibrationEligibility") or "")
+                if str(payload.get("mode") or "legacy-directional-fallback") == "legacy-directional-fallback":
+                    legacy_directional_outcome_count += 1
+                if payload.get("missingRequiredMetricIds"):
+                    criterion_data_gap_outcome_count += 1
+                independence_key = str(
+                    payload.get("accountIndependenceKey")
+                    or payload.get("marketIndependenceKey")
+                    or episode_id
+                )
+                independence_horizon_key = independence_key + "|" + horizon
+                if independence_key and horizon and independence_horizon_key in seen_independence:
+                    duplicate_independence_keys.append(independence_horizon_key)
+                seen_independence.add(independence_horizon_key)
                 if eligibility == "eligible":
                     eligible_count += 1
                 else:
@@ -99,10 +123,20 @@ class HypothesisOutcomeReplayService:
             "exclusionReasons": exclusion_reasons,
             "contractSnapshotEpisodeCount": contract_snapshot_count,
             "legacyContractEpisodeCount": legacy_contract_count,
+            "structuredContractEpisodeCount": structured_contract_count,
+            "fingerprintedContractEpisodeCount": fingerprint_contract_count,
+            "legacyDirectionalOutcomeCount": legacy_directional_outcome_count,
+            "criterionDataGapOutcomeCount": criterion_data_gap_outcome_count,
             "duplicateEpisodeHorizonKeys": duplicate_keys[:100],
+            "repeatedIndependenceHorizonKeys": duplicate_independence_keys[:100],
             "futureOrInvalidObservationEpisodeIds": invalid_time_episode_ids[:100],
             "scopeSeparation": "market-and-account-lifecycles-reviewed-separately",
             "passed": not duplicate_keys and not invalid_time_episode_ids,
+            "migrationState": (
+                "structured-contract-ready"
+                if contract_snapshot_count and structured_contract_count == contract_snapshot_count
+                else "legacy-contracts-retained"
+            ),
         }
 
     def summary(self, episode_count: int, integrity: Mapping[str, object], quality: Mapping[str, object]) -> str:

@@ -43,6 +43,18 @@ def action_adjusted_return(action: str, raw_return: float):
     return None
 
 
+def latest_independent_observations(observations: Iterable[Dict[str, object]]) -> List[Dict[str, object]]:
+    latest: Dict[str, Dict[str, object]] = {}
+    for item in observations or []:
+        independence_key = str(item.get("independentEpisodeKey") or item.get("episodeId") or "").strip()
+        if not independence_key:
+            continue
+        previous = latest.get(independence_key)
+        if previous is None or str(item.get("observedAt") or "") >= str(previous.get("observedAt") or ""):
+            latest[independence_key] = item
+    return list(latest.values())
+
+
 def performance_observations(episodes: Iterable[object]) -> List[Dict[str, object]]:
     observations: List[Dict[str, object]] = []
     for value in episodes or []:
@@ -57,6 +69,7 @@ def performance_observations(episodes: Iterable[object]) -> List[Dict[str, objec
             calibration_eligibility = str(payload.get("calibrationEligibility") or "legacy-unverified")
             observations.append({
                 "episodeId": str(episode.get("episodeId") or ""),
+                "independentEpisodeKey": str(payload.get("accountIndependenceKey") or episode.get("episodeId") or ""),
                 "accountId": str(episode.get("accountId") or ""),
                 "symbol": str(episode.get("symbol") or "").upper(),
                 "action": str(episode.get("action") or "HOLD").upper(),
@@ -112,7 +125,8 @@ def metric_slice(
     minimum_sample_count: int = 5,
 ) -> Dict[str, object]:
     rows = list(observations or [])
-    eligible_rows = [item for item in rows if item.get("calibrationEligible")]
+    independent_rows = latest_independent_observations(rows)
+    eligible_rows = latest_independent_observations(item for item in rows if item.get("calibrationEligible"))
     decisive = [item for item in eligible_rows if item.get("decisive")]
     corroborated = [item for item in decisive if item.get("corroborated")]
     contradicted = [item for item in decisive if not item.get("corroborated")]
@@ -127,16 +141,16 @@ def metric_slice(
         "key": str(key or "all"),
         "label": str(label or key or "전체"),
         "outcomeCount": len(rows),
-        "independentEpisodeCount": len({str(item.get("episodeId") or "") for item in rows if str(item.get("episodeId") or "")}),
+        "independentEpisodeCount": len(independent_rows),
         "calibrationEligibleOutcomeCount": len(eligible_rows),
-        "calibrationEligibleEpisodeCount": len({str(item.get("episodeId") or "") for item in eligible_rows if str(item.get("episodeId") or "")}),
+        "calibrationEligibleEpisodeCount": len(eligible_rows),
         "excludedOutcomeCount": len(rows) - len(eligible_rows),
         "delayedOutcomeCount": len([item for item in rows if item.get("observationTiming") == "delayed"]),
         "legacyUnverifiedOutcomeCount": len([item for item in rows if item.get("calibrationEligibility") == "legacy-unverified"]),
         "decisiveOutcomeCount": len(decisive),
         "corroboratedCount": len(corroborated),
         "contradictedCount": len(contradicted),
-        "inconclusiveCount": len([item for item in rows if not item.get("decisive")]),
+        "inconclusiveCount": len([item for item in independent_rows if not item.get("decisive")]),
         "averageRawReturnPct": round(sum(number(item.get("rawReturnPct")) for item in eligible_rows) / len(eligible_rows), 4) if eligible_rows else 0.0,
         "observedAverageRawReturnPct": round(sum(number(item.get("rawReturnPct")) for item in rows) / len(rows), 4) if rows else 0.0,
         "averageActionAdjustedReturnPct": round(avg_adjusted, 4),
@@ -188,18 +202,19 @@ def evaluate_decision_performance(
     episode_rows = [episode_payload(item) for item in episodes or []]
     observations = performance_observations(episode_rows)
     episodes_with_outcomes = {str(item.get("episodeId") or "") for item in observations if str(item.get("episodeId") or "")}
-    calibration_episodes = {str(item.get("episodeId") or "") for item in observations if item.get("calibrationEligible") and str(item.get("episodeId") or "")}
-    calibration_observations = [item for item in observations if item.get("calibrationEligible")]
+    independent_observations = latest_independent_observations(observations)
+    calibration_observations = latest_independent_observations(item for item in observations if item.get("calibrationEligible"))
     coverage = (len(episodes_with_outcomes) / len(episode_rows) * 100.0) if episode_rows else 0.0
     return {
         "status": "ok" if observations else "insufficient-data",
         "episodeCount": len(episode_rows),
         "episodeWithOutcomeCount": len(episodes_with_outcomes),
+        "independentEpisodeCount": len(independent_observations),
         "outcomeCoveragePct": round(coverage, 2),
         "outcomeCount": len(observations),
-        "calibrationEligibleEpisodeCount": len(calibration_episodes),
+        "calibrationEligibleEpisodeCount": len(calibration_observations),
         "calibrationEligibleOutcomeCount": len(calibration_observations),
-        "calibrationCoveragePct": round((len(calibration_episodes) / len(episode_rows) * 100.0), 2) if episode_rows else 0.0,
+        "calibrationCoveragePct": round((len(calibration_observations) / len(independent_observations) * 100.0), 2) if independent_observations else 0.0,
         "minimumSampleCount": int(minimum_sample_count or 0),
         "summary": metric_slice(observations, "all", "전체 판단", minimum_sample_count),
         "byHorizon": grouped_metrics(observations, "horizonMinutes", minimum_sample_count),

@@ -652,6 +652,28 @@ class OntologyReasoningMailboxTests(unittest.TestCase):
         self.assertTrue(result["maintenanceYield"]["active"])
         self.assertEqual([], self.monitor.calls)
 
+    def test_abox_yield_does_not_block_reasoning_after_bounded_window(self):
+        request = realtime_request("yield-expired", ["AAPL"], "2026-07-24T00:00:00Z")
+        runner = self.build_runner(
+            [request],
+            now=lambda: datetime(2026, 7, 24, 0, 7, tzinfo=timezone.utc),
+            settings={"ontologyAboxMaintenanceYieldEnabled": "1"},
+            maintenance_yield_probe=lambda: {
+                "maintenanceYieldRequest": {
+                    "requestedAt": "2026-07-24T00:05:00Z",
+                    "expiresAt": "2026-07-24T00:12:00Z",
+                    "worldId": "portfolio:local:main",
+                    "inactiveManifestCount": 20,
+                },
+                "maintenanceYieldLastRequestedAt": "2026-07-24T00:05:00Z",
+            },
+        )
+
+        result = runner.run_once(force=True)
+
+        self.assertEqual("ok", result["status"])
+        self.assertEqual([["AAPL"]], self.monitor.calls)
+
     def test_notified_observation_uses_the_single_subject_priority_lane(self):
         observation = realtime_request(
             "observation",

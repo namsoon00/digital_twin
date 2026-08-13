@@ -1229,11 +1229,27 @@ class OntologyReasoningRunner:
                 "reason": str(error)[:180],
             }
         state = dict(raw or {}) if isinstance(raw, Mapping) else {}
-        return scoped_abox_maintenance_yield_status(
+        status = scoped_abox_maintenance_yield_status(
             state,
             self.settings,
             now=self.now_provider(),
         )
+        if (
+            bool(status.get("active"))
+            and int(float_value(status.get("requestAgeSeconds"), 0))
+            >= int(float_value((status.get("policy") or {}).get("windowSeconds"), 30))
+        ):
+            # The durable request remains visible to the maintenance worker
+            # for its full TTL, but live inference yields only one bounded
+            # window. A timed-out cleanup must not stall investment work until
+            # that longer discovery TTL expires.
+            return {
+                **status,
+                "active": False,
+                "status": "yield-window-elapsed",
+                "retryAfterSeconds": 0,
+            }
+        return status
 
     def native_typedb_target_symbol_limit(self) -> int:
         """Bound schema-function work without reducing the complete ABox."""

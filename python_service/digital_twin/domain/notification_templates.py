@@ -1125,6 +1125,8 @@ def compact_investment_notification(rendered: str, context: Dict[str, object], m
     text = str(rendered or "").strip()
     if context_message_type(context) != "investmentInsight" or len(text) <= max_length:
         return text
+    if isinstance((context or {}).get("notificationAiValidatedResponse"), dict) and (context or {}).get("notificationAiValidatedResponse"):
+        return text
     text = re.sub(
         r'<a\s+[^>]*href=["\']([^"\']+)["\'][^>]*>(.*?)</a>',
         lambda match: re.sub(r"<[^>]+>", "", match.group(2)).strip() + ": " + match.group(1),

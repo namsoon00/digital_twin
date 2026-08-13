@@ -58,6 +58,25 @@ MESSAGE_DATA_COLLECTION_ROW_LIMIT = 6
 MESSAGE_API_SOURCE_ROW_LIMIT = 8
 KST = ZoneInfo("Asia/Seoul") if ZoneInfo else timezone(timedelta(hours=9))
 
+TEMPORAL_WINDOW_LABELS = {
+    "15M": "최근 15분",
+    "1H": "최근 1시간",
+    "SESSION": "현재 장",
+    "1D": "최근 1일",
+    "3D": "최근 3일",
+    "5D": "최근 5일",
+    "20D": "최근 20일",
+    "60D": "최근 60일",
+}
+TEMPORAL_WINDOW_ORDER = ("15M", "1H", "1D", "3D", "5D", "20D", "60D", "SESSION")
+HYPOTHESIS_VERDICT_LABELS = {
+    "supported": "AI가 지지",
+    "weakened": "AI가 약화로 판단",
+    "rejected": "AI가 기각",
+    "unreviewed": "AI 검토 전",
+    "inconclusive": "판단 보류",
+}
+
 DATA_COLLECTION_TIME_KEYS = [
     "sourceFetchedAt",
     "fetchedAt",
@@ -147,6 +166,7 @@ DATA_COLLECTION_FRESHNESS_LABELS = {
     "realtime": "실시간",
     "near-live": "준실시간",
     "last-close": "최근 마감 기준",
+    "market-close-final": "장 마감 확정",
     "reference-only": "참고용",
     "reference-repeat": "반복 참고값",
     "stale-repeat": "반복 지연",
@@ -2702,9 +2722,8 @@ def execution_telegram_message(context: Dict[str, object], response: Notificatio
         "<b>" + ai_judgment_section_title(level) + "</b>",
         *ai_judgment_rows(response, level, context),
     ]
-    hypothesis_rows = hypothesis_comparison_rows(response, level)
-    if hypothesis_rows:
-        parts.extend(["", "<b>AI 경쟁 가설</b>", *hypothesis_rows])
+    hypothesis_rows = full_typedb_competing_inference_rows(context, response)
+    parts.extend(["", "<b>TypeDB 경쟁 추론</b>", *[_html_bullet(row, level) for row in hypothesis_rows]])
     lifecycle_rows = hypothesis_decision_brief_rows(context, response, level)
     if lifecycle_rows:
         parts.extend(["", "<b>가설 변화와 검증</b>", *lifecycle_rows])
@@ -2713,10 +2732,16 @@ def execution_telegram_message(context: Dict[str, object], response: Notificatio
         parts.extend(["", "<b>왜 알림이 왔나요?</b>", *reason_rows])
     if current_state_rows:
         parts.extend(["", "<b>현재 상황</b>", *current_state_rows])
+    temporal_rows = full_temporal_analysis_rows(context)
+    parts.extend(["", "<b>시간축 분석</b>", *[_html_bullet(row, level) for row in temporal_rows]])
     company_valuation = company_valuation_presentation(context)
     company_valuation_display_rows = company_valuation_rows(context, level)
     if company_valuation_display_rows:
         parts.extend(["", "<b>" + html.escape(str(company_valuation.get("title") or "회사 가치"), quote=False) + "</b>", *company_valuation_display_rows])
+    else:
+        parts.extend(["", "<b>회사 가치</b>", _html_bullet("확인 가능한 기업가치 자료가 없거나 기업가치 평가 대상이 아닙니다.", level)])
+    portfolio_rows = full_portfolio_impact_rows(context)
+    parts.extend(["", "<b>포트폴리오 영향</b>", *[_html_bullet(row, level) for row in portfolio_rows]])
     valuation_rows = valuation_detail_rows(context, level)
     if valuation_rows:
         parts.extend(["", "<b>밸류에이션</b>", *valuation_rows])
@@ -2726,12 +2751,34 @@ def execution_telegram_message(context: Dict[str, object], response: Notificatio
     axis_rows = relation_axis_summary_rows(context, level, 4)
     if axis_rows:
         parts.extend(["", "<b>투자 판단 근거</b>", *axis_rows])
+    evidence_rows = full_decision_evidence_rows(context, response)
+    parts.extend(["", "<b>핵심 근거</b>", *[_html_bullet(row, level) for row in evidence_rows]])
+    counter_rows = full_decision_evidence_rows(context, response, counter=True)
+    parts.extend(["", "<b>반대 근거</b>", *[_html_bullet(row, level) for row in counter_rows]])
+    event_rows = full_event_and_catalyst_rows(context)
+    parts.extend(["", "<b>주요 사건·일정</b>", *[_html_bullet(row, level) for row in event_rows]])
     opinion_rows = strategy_guide_rows(context, response, level)
     if opinion_rows:
         parts.extend(["", "<b>전략 가이드</b>", *opinion_rows])
+    condition_rows = full_conditional_action_rows(context, response)
+    parts.extend(["", "<b>다음 행동</b>", *[_html_bullet(row, level) for row in condition_rows]])
+    invalidation = compact_invalidation_line(context, response)
+    parts.extend([
+        "",
+        "<b>" + _condition_presentation_label(context, response, invalidation) + "</b>",
+        _html_bullet(invalidation, level),
+    ])
     data_state_rows = customer_data_state_rows(context, level)
     if data_state_rows:
         parts.extend(["", "<b>자료 상태와 부족 데이터</b>", *data_state_rows])
+    excluded_rows = full_excluded_information_rows(context)
+    parts.extend(["", "<b>판단에서 제외한 정보</b>", *[_html_bullet(row, level) for row in excluded_rows]])
+    reliability_rows = full_data_reliability_rows(context, response)
+    parts.extend(["", "<b>자료 신뢰도</b>", *[_html_bullet(row, level) for row in reliability_rows]])
+    history_rows = full_decision_history_rows(context, response)
+    parts.extend(["", "<b>판단 이력</b>", *[_html_bullet(row, level) for row in history_rows]])
+    trace_rows = full_reasoning_trace_rows(context)
+    parts.extend(["", "<b>추론 추적</b>", *[_html_bullet(row, level) for row in trace_rows]])
     if response.source_urls:
         parts.extend(["", "<b>출처</b>"])
         parts.extend(source_url_rows(response.source_urls, context))
@@ -2767,31 +2814,50 @@ def execution_telegram_message_compact_beginner(
     flow_rows = compact_current_flow_rows(context)
     if flow_rows:
         parts.extend(["", "<b>현재 흐름</b>", *[_html_bullet(row, level) for row in flow_rows]])
+    temporal_rows = full_temporal_analysis_rows(context)
+    parts.extend(["", "<b>시간축 분석</b>", *[_html_bullet(row, level) for row in temporal_rows]])
+    reasons = compact_action_reason_rows(context, response)
+    if reasons:
+        parts.extend(["", "<b>" + compact_reason_heading(context) + "</b>", *[_html_bullet(item, level) for item in reasons]])
+    evidence_rows = full_decision_evidence_rows(context, response)
+    parts.extend(["", "<b>핵심 근거</b>", *[_html_bullet(row, level) for row in evidence_rows]])
+    counter_rows = full_decision_evidence_rows(context, response, counter=True)
+    parts.extend(["", "<b>반대 근거</b>", *[_html_bullet(row, level) for row in counter_rows]])
+    typedb_rows = full_typedb_competing_inference_rows(context, response)
+    parts.extend(["", "<b>TypeDB 경쟁 추론</b>", *[_html_bullet(row, level) for row in typedb_rows]])
     company_valuation = company_valuation_presentation(context)
     company_valuation_display_rows = company_valuation_rows(context, level, compact=True)
     if company_valuation_display_rows:
         parts.extend(["", "<b>" + html.escape(str(company_valuation.get("title") or "회사 가치"), quote=False) + "</b>", *company_valuation_display_rows])
-    reasons = compact_action_reason_rows(context, response)
-    if reasons:
-        parts.extend(["", "<b>" + compact_reason_heading(context) + "</b>", *[_html_bullet(item, level) for item in reasons]])
-    next_action = compact_next_action_line(context, response)
+    else:
+        parts.extend(["", "<b>회사 가치</b>", _html_bullet("확인 가능한 기업가치 자료가 없거나 기업가치 평가 대상이 아닙니다.", level)])
+    portfolio_rows = full_portfolio_impact_rows(context)
+    parts.extend(["", "<b>포트폴리오 영향</b>", *[_html_bullet(row, level) for row in portfolio_rows]])
+    event_rows = full_event_and_catalyst_rows(context)
+    parts.extend(["", "<b>주요 사건·일정</b>", *[_html_bullet(row, level) for row in event_rows]])
+    condition_rows = full_conditional_action_rows(context, response)
+    parts.extend(["", "<b>다음 행동</b>", *[_html_bullet(row, level) for row in condition_rows]])
     invalidation = compact_invalidation_line(context, response)
-    if next_action and _same_compact_message_text(next_action, invalidation):
-        next_action = ""
-    if next_action:
-        parts.extend(["", "<b>다음 행동</b>", _html_bullet(next_action, level)])
-    if invalidation:
-        parts.extend([
-            "",
-            "<b>" + _condition_presentation_label(context, response, invalidation) + "</b>",
-            _html_bullet(invalidation, level),
-        ])
-    data_line = compact_data_status_line(context, response)
-    if data_line:
-        parts.extend(["", "<b>자료 상태</b>", _html_bullet(data_line, level)])
+    parts.extend([
+        "",
+        "<b>" + _condition_presentation_label(context, response, invalidation) + "</b>",
+        _html_bullet(invalidation, level),
+    ])
+    excluded_rows = full_excluded_information_rows(context)
+    parts.extend(["", "<b>판단에서 제외한 정보</b>", *[_html_bullet(row, level) for row in excluded_rows]])
+    reliability_rows = full_data_reliability_rows(context, response)
+    parts.extend(["", "<b>자료 상태</b>", *[_html_bullet(row, level) for row in reliability_rows]])
     news_line = compact_news_impact_line(context)
     if news_line:
         parts.extend(["", "<b>뉴스 영향</b>", _html_bullet(news_line, level)])
+    history_rows = full_decision_history_rows(context, response)
+    parts.extend(["", "<b>판단 이력</b>", *[_html_bullet(row, level) for row in history_rows]])
+    trace_rows = full_reasoning_trace_rows(context)
+    parts.extend(["", "<b>추론 추적</b>", *[_html_bullet(row, level) for row in trace_rows]])
+    if response.source_urls:
+        parts.extend(["", "<b>원문·출처</b>", *source_url_rows(response.source_urls, context)])
+    else:
+        parts.extend(["", "<b>원문·출처</b>", _html_bullet("이번 판단에 직접 연결된 원문 URL이 없습니다.", level)])
     footer = " · ".join(part for part in ["기준 " + str(reference) if reference else "", "발송 " + sent if sent else ""] if part)
     if footer:
         parts.extend(["", "<i>" + html.escape(footer, quote=False) + "</i>"])
@@ -3258,11 +3324,11 @@ def compact_effect_driver_rows(context: Dict[str, object]) -> List[str]:
     envelope = relation_context.get("actionEnvelope") if isinstance(relation_context.get("actionEnvelope"), dict) else {}
     effect = str(envelope.get("selectedDecisionEffect") or "").strip().lower()
     categories = {
-        "support": ["trend", "news", "valuation", "flow"],
-        "defer": ["news", "disclosure", "trend", "flow"],
-        "constrain": ["macro", "fx", "rate", "market", "flow"],
-        "block": ["dataQuality"],
-    }.get(effect, ["trend", "macro", "news", "flow"])
+        "support": ["ruleboxInference", "trend", "news", "valuation", "flow"],
+        "defer": ["ruleboxInference", "news", "disclosure", "trend", "flow"],
+        "constrain": ["ruleboxInference", "trend", "flow", "macro", "fx", "rate", "market"],
+        "block": ["ruleboxInference", "dataQuality"],
+    }.get(effect, ["ruleboxInference", "trend", "news", "flow", "macro"])
     execution_plan = relation_context.get("executionPlan") if isinstance(relation_context.get("executionPlan"), dict) else {}
     drivers = execution_plan.get("decisionDrivers") if isinstance(execution_plan.get("decisionDrivers"), list) else []
     for category in categories:
@@ -3270,9 +3336,14 @@ def compact_effect_driver_rows(context: Dict[str, object]) -> List[str]:
             if not isinstance(driver, dict) or str(driver.get("category") or "") != category:
                 continue
             text = customer_visible_ai_text(driver.get("summary") or driver.get("text") or driver.get("label") or "")
-            if category == "trend":
+            if category == "ruleboxInference":
+                text = customer_visible_ai_text(driver.get("label") or "")
+            elif category == "trend":
                 text = compact_trend_reason_line(context) or text
             elif category in {"macro", "fx", "rate"}:
+                state = _macro_constraint_state(context)
+                if not state.get("rate") and not state.get("fx"):
+                    continue
                 text = compact_macro_constraint_reason(context) or text
             if text and not compact_reason_is_internal(text):
                 return [text]
@@ -3361,6 +3432,441 @@ def compact_news_impact_line(context: Dict[str, object]) -> str:
     source = customer_visible_ai_text(impact.get("source") or "")
     prefix = (source + ": ") if source else ""
     return prefix + compact_sentence_count(headline, 1)
+
+
+def _notification_ai_decision_brief(context: Dict[str, object]) -> Dict[str, object]:
+    """Return the immutable compact packet used for the delivered AI decision."""
+
+    for key in ("notificationAiExecutionAudit", "notificationAiDecisionAudit"):
+        audit = context.get(key) if isinstance(context.get(key), dict) else {}
+        brief = audit.get("decisionBrief") if isinstance(audit.get("decisionBrief"), dict) else {}
+        if brief:
+            return brief
+    return {}
+
+
+def _notification_current_situation(context: Dict[str, object]) -> Dict[str, object]:
+    brief = _notification_ai_decision_brief(context)
+    situation = brief.get("currentSituation") if isinstance(brief.get("currentSituation"), dict) else {}
+    if situation:
+        return situation
+    internal = context.get("notificationAiInternalData") if isinstance(context.get("notificationAiInternalData"), dict) else {}
+    return internal
+
+
+def _temporal_window_rows(context: Dict[str, object]) -> List[Dict[str, object]]:
+    situation = _notification_current_situation(context)
+    values = situation.get("temporalWindows") if isinstance(situation.get("temporalWindows"), list) else []
+    if not values:
+        facts = relation_facts(context or {})
+        values = facts.get("temporalWindows") if isinstance(facts.get("temporalWindows"), list) else []
+    by_key = {
+        str(item.get("windowKey") or "").strip().upper(): item
+        for item in values
+        if isinstance(item, dict) and str(item.get("windowKey") or "").strip()
+    }
+    return [by_key[key] for key in TEMPORAL_WINDOW_ORDER if key in by_key]
+
+
+def full_temporal_analysis_rows(context: Dict[str, object], limit: int = 8) -> List[str]:
+    rows: List[str] = []
+    seen_signatures = set()
+    for item in _temporal_window_rows(context):
+        window_key = str(item.get("windowKey") or "").strip().upper()
+        label = TEMPORAL_WINDOW_LABELS.get(window_key, window_key)
+        parts = []
+        if item.get("priceChangePct") not in (None, ""):
+            parts.append("가격 " + signed_pct(_number(item.get("priceChangePct"))))
+        if item.get("drawdownFromPeakPct") not in (None, "", 0, 0.0):
+            parts.append("고점 대비 " + signed_pct(_number(item.get("drawdownFromPeakPct"))))
+        if item.get("reboundFromTroughPct") not in (None, "", 0, 0.0):
+            parts.append("저점 대비 반등 " + signed_pct(_number(item.get("reboundFromTroughPct"))))
+        if item.get("priceVelocityChangePct") not in (None, "", 0, 0.0):
+            parts.append("속도 변화 " + signed_pct(_number(item.get("priceVelocityChangePct"))))
+        if not parts:
+            continue
+        signature = tuple(parts)
+        if signature in seen_signatures:
+            continue
+        seen_signatures.add(signature)
+        quality = str(item.get("latestObservationQuality") or "").strip().lower()
+        if quality and quality not in {"fresh", "realtime", "near-live"}:
+            parts.append("자료 " + quality)
+        rows.append(label + ": " + " · ".join(parts))
+        if len(rows) >= limit:
+            break
+    return rows or ["서로 비교할 수 있는 기간별 관측이 아직 충분하지 않습니다."]
+
+
+def full_decision_evidence_rows(
+    context: Dict[str, object],
+    response: NotificationAIValidatedResponse,
+    *,
+    counter: bool = False,
+    limit: int = 5,
+) -> List[str]:
+    values = response.counter_evidence if counter else response.evidence
+    rows: List[str] = []
+    for item in values or []:
+        append_unique_text(rows, customer_visible_ai_text(item), 360)
+        if len(rows) >= limit:
+            break
+    if not rows and not counter:
+        selected = next((
+            item for item in response.hypotheses or []
+            if isinstance(item, dict) and str(item.get("hypothesisId") or "") == response.selected_hypothesis_id
+        ), {})
+        append_unique_text(rows, selected.get("reasoning") or selected.get("claim"), 360)
+    fallback = (
+        "현재 결론을 약화하는 별도 반대 근거가 기록되지 않았습니다."
+        if counter else
+        "현재 결론에 연결된 검증 근거가 기록되지 않았습니다."
+    )
+    return rows or [fallback]
+
+
+def full_typedb_competing_inference_rows(
+    context: Dict[str, object],
+    response: NotificationAIValidatedResponse,
+    limit: int = 6,
+) -> List[str]:
+    relation = relation_context_value(context or {})
+    rows: List[str] = []
+    comparison_labels = {
+        "completed": "대안 판단 비교 완료",
+        "partial": "일부 대안 판단만 비교",
+        "unavailable": "대안 판단 비교 자료 없음",
+    }
+    comparison = comparison_labels.get(
+        str(response.hypothesis_comparison_state or "unavailable").strip().lower(),
+        str(response.hypothesis_comparison_state or "가설 비교 상태 미확인"),
+    )
+    append_unique_text(rows, "비교 상태: " + comparison, 180)
+    if response.precomputed_action:
+        candidate = action_label_for_action(response.precomputed_action, context)
+        final = action_label_for_action(response.action, context) or response.action_label
+        append_unique_text(rows, "TypeDB 행동 후보 " + candidate + " · AI 최종 의견 " + final, 220)
+    ordered = sorted(
+        [item for item in response.hypotheses or [] if isinstance(item, dict)],
+        key=lambda item: str(item.get("hypothesisId") or "") != response.selected_hypothesis_id,
+    )
+    for item in ordered[:max(1, limit - len(rows))]:
+        selected = str(item.get("hypothesisId") or "") == response.selected_hypothesis_id
+        role = "선택 경로" if selected else "대안 경로"
+        label = customer_visible_ai_text(
+            item.get("templateLabel") or item.get("label") or item.get("claim") or "이름 없는 가설"
+        )
+        verdict = HYPOTHESIS_VERDICT_LABELS.get(
+            str(item.get("verdict") or "").strip().lower(),
+            str(item.get("verdictLabel") or item.get("verdict") or "").strip(),
+        )
+        detail = compact_sentence_count(customer_visible_ai_text(item.get("reasoning") or ""), 1)
+        text = role + ": " + label
+        if verdict:
+            text += " · " + verdict
+        if detail and not _same_compact_message_text(label, detail):
+            text += " · " + detail
+        append_unique_text(rows, text, 520)
+    if not ordered:
+        rules = relation.get("matchedRules") or relation.get("activeRules") or []
+        unlabeled_count = 0
+        for item in rules[:3] if isinstance(rules, list) else []:
+            if isinstance(item, dict):
+                label = str(item.get("label") or "").strip()
+                if label:
+                    append_unique_text(rows, "성립 규칙: " + label, 260)
+                else:
+                    unlabeled_count += 1
+        if unlabeled_count:
+            append_unique_text(rows, "표시명이 없는 성립 규칙 " + str(unlabeled_count) + "개는 추론 추적 식별자로만 보관합니다.", 220)
+    return rows or ["현재 알림에 저장된 TypeDB 경쟁 추론이 없습니다."]
+
+
+def _portfolio_exposure_metrics(context: Dict[str, object]) -> List[Dict[str, object]]:
+    brief = _notification_ai_decision_brief(context)
+    policy = brief.get("accountPolicy") if isinstance(brief.get("accountPolicy"), dict) else {}
+    lifecycle = policy.get("portfolioLifecycle") if isinstance(policy.get("portfolioLifecycle"), dict) else {}
+    snapshot = lifecycle.get("exposureSnapshot") if isinstance(lifecycle.get("exposureSnapshot"), dict) else {}
+    return [item for item in snapshot.get("metrics") or [] if isinstance(item, dict)]
+
+
+def full_portfolio_impact_rows(context: Dict[str, object]) -> List[str]:
+    facts = relation_facts(context or {})
+    symbol = str(
+        context.get("rawSymbol")
+        or context.get("symbol")
+        or facts.get("symbol")
+        or ""
+    ).strip().upper()
+    sector = str(facts.get("sector") or "").strip()
+    metrics = _portfolio_exposure_metrics(context)
+    position = next((
+        item for item in metrics
+        if str(item.get("exposure_type") or item.get("exposureType") or "").lower() == "position"
+        and str(item.get("key") or "").strip().upper() == symbol
+    ), {})
+    sector_metric = next((
+        item for item in metrics
+        if str(item.get("exposure_type") or item.get("exposureType") or "").lower() == "sector"
+        and sector and str(item.get("key") or "").strip() == sector
+    ), {})
+    rows: List[str] = []
+
+    position_ratio = position.get("ratio_pct") if position else facts.get("positionWeight")
+    position_limit = position.get("policy_limit_pct") if position else facts.get("strategyMaxPositionWeightPct")
+    if position_ratio not in (None, ""):
+        text = "종목 비중 " + signed_pct(_number(position_ratio)).lstrip("+")
+        if position_limit not in (None, "", 0, 0.0):
+            remaining = _number(position_limit) - _number(position_ratio)
+            text += " · 계정 한도 " + signed_pct(_number(position_limit)).lstrip("+")
+            text += " · " + ("한도 여유 " + signed_pct(remaining).lstrip("+") if remaining >= 0 else "한도 초과 " + signed_pct(abs(remaining)).lstrip("+"))
+        rows.append(text)
+
+    sector_ratio = sector_metric.get("ratio_pct") if sector_metric else facts.get("sectorRatio")
+    sector_limit = sector_metric.get("policy_limit_pct") if sector_metric else facts.get("strategyMaxSectorWeightPct")
+    if sector_ratio not in (None, ""):
+        text = (sector or "해당 업종") + " 비중 " + signed_pct(_number(sector_ratio)).lstrip("+")
+        if sector_limit not in (None, "", 0, 0.0):
+            text += " · 계정 한도 " + signed_pct(_number(sector_limit)).lstrip("+")
+        rows.append(text)
+
+    fx_ratio = facts.get("fxExposureRatio")
+    fx_limit = facts.get("strategyFxExposureReviewPct")
+    if fx_ratio not in (None, "", 0, 0.0):
+        text = "외화 노출 " + signed_pct(_number(fx_ratio)).lstrip("+")
+        if fx_limit not in (None, "", 0, 0.0):
+            text += " · 점검 기준 " + signed_pct(_number(fx_limit)).lstrip("+")
+        rows.append(text)
+
+    market_value = position.get("value") if position else facts.get("marketValue")
+    if market_value not in (None, "", 0, 0.0):
+        rows.append("현재 종목 평가금액 " + price_money(_number(market_value), facts.get("fxBaseCurrency") or "KRW"))
+    return rows or ["계좌 비중과 업종·환율 노출을 계산할 수 있는 포트폴리오 자료가 없습니다."]
+
+
+def full_event_and_catalyst_rows(context: Dict[str, object], limit: int = 5) -> List[str]:
+    brief = _notification_ai_decision_brief(context)
+    evidence = brief.get("evidence") if isinstance(brief.get("evidence"), dict) else {}
+    values = list(evidence.get("researchEvidence") or [])
+    disclosure = evidence.get("disclosure") if isinstance(evidence.get("disclosure"), dict) else {}
+    if disclosure:
+        values.insert(0, disclosure)
+    if not values:
+        facts = relation_facts(context or {})
+        values.extend(item for item in facts.get("researchEvidence") or [] if isinstance(item, dict))
+        values.extend(item for item in context.get("researchEvidence") or [] if isinstance(item, dict))
+        headlines = context.get("newsHeadlines") if isinstance(context.get("newsHeadlines"), dict) else {}
+        values.extend(item for item in headlines.get("items") or [] if isinstance(item, dict))
+    rows: List[str] = []
+    seen = set()
+    for item in values:
+        if not isinstance(item, dict):
+            continue
+        kind = str(item.get("kind") or item.get("eventType") or "").strip().lower()
+        if kind not in {"news", "disclosure", "filing", "earnings", "supply_chain", "general"}:
+            continue
+        title = customer_visible_ai_text(item.get("title") or item.get("summary") or "")
+        if not title:
+            continue
+        key = str(item.get("url") or title).strip().casefold()
+        if key in seen:
+            continue
+        seen.add(key)
+        source = customer_visible_ai_text(item.get("sourcePublisher") or item.get("source") or "")
+        stamp = _format_kst_timestamp(item.get("publishedAt") or item.get("observedAt"))
+        eligible = item.get("investmentJudgmentEligible") is True
+        state = "판단 근거로 사용" if eligible else "참고·추가 검증 필요"
+        parts = [title, source, stamp, state]
+        rows.append(" · ".join(part for part in parts if part))
+        if len(rows) >= limit:
+            break
+    return rows or ["현재 판단에 연결된 주요 뉴스·공시·예정 사건이 없습니다."]
+
+
+def full_conditional_action_rows(
+    context: Dict[str, object],
+    response: NotificationAIValidatedResponse,
+    limit: int = 7,
+) -> List[str]:
+    plan = _execution_plan(context)
+    rows: List[str] = []
+    current = compact_sentence_count(
+        watchlist_friendly_text(context, response.next_action_plan or compact_next_action_line(context, response)),
+        2,
+    )
+    if current:
+        append_unique_text(rows, "다음 자동 판단: " + current, 520)
+    for label, key in (("위험 강화 조건", "strengthenConditions"), ("판단 완화 조건", "weakenConditions")):
+        values = plan.get(key) if isinstance(plan.get(key), list) else []
+        for item in values[:2]:
+            text = _customer_condition_terms(customer_visible_ai_text(item))
+            if text:
+                append_unique_text(rows, label + ": " + text, 360)
+    checks = list(response.next_checks or [])
+    checks.extend(item for item in plan.get("nextChecks") or [] if item not in checks)
+    for item in checks[:2]:
+        text = _friendly_next_check_text(context, item)
+        if text:
+            append_unique_text(rows, "다음 확인: " + text, 360)
+    return rows[:limit] or ["다음 데이터 갱신 시 현재 판단의 유지·강화·완화 조건을 자동으로 다시 비교합니다."]
+
+
+def full_excluded_information_rows(context: Dict[str, object]) -> List[str]:
+    facts = relation_facts(context or {})
+    rows: List[str] = []
+    macro_state = _macro_constraint_state(context)
+    has_macro = any(
+        facts.get(key) not in (None, "", 0, 0.0)
+        for key in ("macroDgs10", "macroDgs2", "macroDff", "usdKrwRate", "fxRateToKrw")
+    )
+    if has_macro and not macro_state.get("rate") and not macro_state.get("fx"):
+        rows.append("금리·환율: TypeDB 행동 규칙과 직접 연결되지 않아 이번 판단 변경 이유에서 제외했습니다.")
+
+    valuation = company_valuation_presentation(context)
+    if valuation and not valuation.get("activeRuleIds"):
+        rows.append("기업가치: 기초 지표는 표시하지만 회사·시장 가치 규칙이 성립하지 않아 행동 근거로 사용하지 않았습니다.")
+
+    brief = _notification_ai_decision_brief(context)
+    evidence = brief.get("evidence") if isinstance(brief.get("evidence"), dict) else {}
+    research = [item for item in evidence.get("researchEvidence") or [] if isinstance(item, dict)]
+    if research and not any(item.get("investmentJudgmentEligible") is True for item in research):
+        rows.append("뉴스·조사: 수집된 자료는 모두 조건부 또는 참고 상태여서 매수·매도 행동의 직접 근거로 사용하지 않았습니다.")
+
+    return rows or ["별도로 제외되거나 참고 전용으로 분류된 주요 정보가 없습니다."]
+
+
+def market_signal_reliability_rows(context: Dict[str, object]) -> List[str]:
+    facts = relation_facts(context or {})
+    coverage = facts.get("marketSignalCoverage") if isinstance(facts.get("marketSignalCoverage"), dict) else {}
+    rows: List[str] = []
+    stage_labels = {
+        "price": "시세",
+        "ccnl": "체결",
+        "orderbook": "호가",
+        "investor": "투자자 수급",
+    }
+    status_labels = {
+        "available": "사용 가능",
+        "partial": "일부 사용 가능",
+        "unavailable": "사용 불가",
+        "stale": "오래된 자료",
+        "missing": "자료 없음",
+    }
+    for stage in ("price", "ccnl", "orderbook", "investor"):
+        item = coverage.get(stage) if isinstance(coverage.get(stage), dict) else {}
+        if not item:
+            continue
+        raw_status = str(item.get("status") or "미확인").strip()
+        status = status_labels.get(raw_status.lower(), raw_status)
+        provider = str(item.get("provider") or "KIS").strip()
+        transport = DATA_COLLECTION_TRANSPORT_LABELS.get(
+            str(item.get("transport") or "").strip().lower(),
+            str(item.get("transport") or "").strip(),
+        )
+        freshness = DATA_COLLECTION_FRESHNESS_LABELS.get(
+            str(item.get("freshnessStatus") or item.get("latencyStatus") or "").strip().lower(),
+            str(item.get("freshnessStatus") or item.get("latencyStatus") or "").strip(),
+        )
+        source_as_of = _format_kst_timestamp(item.get("sourceAsOf"))
+        fetched_at = _format_kst_timestamp(item.get("fetchedAt"))
+        evidence_use = "AI 핵심 근거 사용 가능" if item.get("aiUsableAsStrongEvidence") is True else "AI 핵심 근거 제외"
+        if item.get("judgementEvidenceUsable") is False:
+            evidence_use = "투자 판단에서 제외"
+        parts = [provider, transport, status, freshness, "기준 " + source_as_of if source_as_of else "", "조회 " + fetched_at if fetched_at else "", evidence_use]
+        rows.append(stage_labels.get(stage, stage) + ": " + " · ".join(part for part in parts if part))
+    return rows
+
+
+def full_data_reliability_rows(
+    context: Dict[str, object],
+    response: NotificationAIValidatedResponse,
+    limit: int = 14,
+) -> List[str]:
+    state = relation_state_values(context)
+    comparison_labels = {
+        "completed": "대안 판단 비교 완료",
+        "partial": "일부 대안 판단만 비교",
+        "unavailable": "대안 판단 비교 자료 없음",
+    }
+    rows = [
+        "판단 자료: " + customer_visible_ai_text(state.get("dataLabel") or response.data_state_label or "미확인")
+        + " · AI 응답: " + customer_visible_ai_text(response.validation_label or "미확인")
+        + " · " + comparison_labels.get(
+            str(response.hypothesis_comparison_state or "unavailable").strip().lower(),
+            str(response.hypothesis_comparison_state or "가설 비교 상태 미확인"),
+        )
+    ]
+    for item in market_signal_reliability_rows(context):
+        append_unique_text(rows, item, 520)
+    for item in list(response.validation_reasons or []) + list(response.validation_warnings or []):
+        append_unique_text(rows, "검증 한계: " + customer_visible_ai_text(item), 360)
+    for item in data_quality_warning_rows(context, 3):
+        append_unique_text(rows, "자료 안내: " + item, 420)
+    for item in customer_data_note_rows(list(response.missing_data_impact))[:3]:
+        append_unique_text(rows, "부족 데이터: " + item, 420)
+    for item in data_collection_time_rows(context, 3):
+        append_unique_text(rows, item, 520)
+    return rows[:limit]
+
+
+def full_decision_history_rows(
+    context: Dict[str, object],
+    response: NotificationAIValidatedResponse,
+) -> List[str]:
+    previous = context.get("previousInvestmentDecisionEpisode") if isinstance(context.get("previousInvestmentDecisionEpisode"), dict) else {}
+    transition = ai_decision_transition_from_context(context)
+    rows: List[str] = []
+    previous_action = str(transition.get("previousAction") or previous.get("action") or "").strip().upper()
+    current_action = str(transition.get("currentAction") or response.action or "").strip().upper()
+    if previous_action:
+        text = "이전 " + action_label_for_action(previous_action, context)
+        if previous.get("decidedAt") or transition.get("previousDecidedAt"):
+            text += " (" + _format_kst_timestamp(previous.get("decidedAt") or transition.get("previousDecidedAt")) + ")"
+        text += " → 현재 " + action_label_for_action(current_action, context)
+        rows.append(text)
+    else:
+        rows.append("이 종목에 저장된 이전 AI 최종 판단이 없어 현재 판단을 기준선으로 시작합니다.")
+    if response.change_analysis:
+        append_unique_text(rows, "변화 설명: " + compact_sentence_count(customer_visible_ai_text(response.change_analysis), 2), 520)
+    if previous.get("episodeId"):
+        rows.append("이전 판단 기록 " + str(previous.get("episodeId")))
+    return rows
+
+
+def full_reasoning_trace_rows(context: Dict[str, object]) -> List[str]:
+    relation = relation_context_value(context or {})
+    audit = context.get("notificationAiExecutionAudit") if isinstance(context.get("notificationAiExecutionAudit"), dict) else {}
+    rows: List[str] = []
+    generation_id = str(relation.get("inferenceGenerationId") or "").strip()
+    if generation_id:
+        rows.append("TypeDB 추론 세대 " + generation_id)
+    source_abox = str(relation.get("sourceAboxSnapshotId") or "").strip()
+    active_abox = str(relation.get("activeAboxSnapshotId") or "").strip()
+    if source_abox or active_abox:
+        rows.append("ABox 스냅샷 " + (source_abox or active_abox) + ((" · 활성 " + active_abox) if source_abox and active_abox and source_abox != active_abox else ""))
+    rule_hash = str(relation.get("ruleboxShortHash") or relation.get("ruleboxRulesHash") or "").strip()
+    if rule_hash:
+        rows.append("규칙 묶음 버전 " + rule_hash)
+    selected_rule = ""
+    envelope = relation.get("actionEnvelope") if isinstance(relation.get("actionEnvelope"), dict) else {}
+    decision = relation.get("decision") if isinstance(relation.get("decision"), dict) else {}
+    selected_rule = str(envelope.get("selectedRuleId") or decision.get("selectedRuleId") or "").strip()
+    if selected_rule:
+        rows.append("선택 규칙 " + selected_rule)
+    request_id = str(audit.get("requestId") or "").strip()
+    model = str(audit.get("model") or "").strip()
+    if request_id or model:
+        rows.append("AI 실행 " + " · ".join(part for part in [model, request_id] if part))
+    prompt_hash = str(audit.get("promptHash") or "").strip()
+    if prompt_hash:
+        rows.append("AI 입력 해시 " + prompt_hash)
+    episode = context.get("investmentDecisionEpisode") if isinstance(context.get("investmentDecisionEpisode"), dict) else {}
+    episode_id = str(context.get("investmentDecisionEpisodeId") or episode.get("episodeId") or "").strip()
+    if episode_id:
+        rows.append("판단 기록 " + episode_id)
+    if context.get("notificationNumber"):
+        rows.append("알림 번호 " + str(context.get("notificationNumber")))
+    return rows or ["추론 세대와 AI 실행 식별자가 이 알림에 저장되지 않았습니다."]
 
 def beginner_current_state_rows(context: Dict[str, object]) -> List[str]:
     values = [

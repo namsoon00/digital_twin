@@ -6,6 +6,7 @@ from digital_twin.application.notification_ai_gate_message import execution_tele
 from digital_twin.domain.notification_ontology_sections import ontology_rule_lines, relation_axis_summary_lines
 from digital_twin.domain.notification_templates import NotificationTemplate, alert_context, compact_investment_notification, render_notification
 from digital_twin.domain.portfolio import AlertEvent, Position
+from digital_twin.infrastructure.notifications import telegram_message_chunks, telegram_plain_text
 
 
 class BeginnerRelationLanguageTests(unittest.TestCase):
@@ -42,6 +43,26 @@ class BeginnerRelationLanguageTests(unittest.TestCase):
         self.assertNotIn("<b>", compacted)
         self.assertIn("상세 링크: https://example.test/notifications", compacted)
         self.assertIn("알림 번호: N-TEST1234", compacted)
+
+    def test_validated_ai_notification_preserves_all_sections_for_multipart_delivery(self):
+        rendered = (
+            "<b>지금 행동</b>\n"
+            + ("• 전체 판단 근거입니다.\n" * 300)
+            + '\n<b>원문·출처</b>\n<a href="https://example.test/source">기사 원문</a>'
+            + "\n<b>추론 추적</b>\n• generation-42"
+        )
+
+        preserved = compact_investment_notification(rendered, {
+            "messageType": "investmentInsight",
+            "notificationAiValidatedResponse": {"action": "HOLD"},
+        })
+
+        self.assertEqual(rendered, preserved)
+        self.assertGreater(len(preserved), 3700)
+        self.assertIn("<b>추론 추적</b>", preserved)
+        multipart = "\n".join(telegram_message_chunks(telegram_plain_text(preserved)))
+        self.assertIn("기사 원문: https://example.test/source", multipart)
+        self.assertIn("추론 추적", multipart)
 
     def test_execution_capacity_signal_does_not_create_sell_opinion(self):
         opinion = build_active_investment_opinion(
@@ -180,7 +201,7 @@ class BeginnerRelationLanguageTests(unittest.TestCase):
         self.assertIn("팔아야 한다는 뜻이 아니라", joined)
         self.assertIn("매도해야 한다는 뜻은 아닙니다", joined)
 
-    def test_absolute_beginner_message_compacts_to_action_flow(self):
+    def test_absolute_beginner_message_includes_complete_action_layers_with_bounded_rows(self):
         response = NotificationAIValidatedResponse(
             action="HOLD",
             action_label="보유",
@@ -244,16 +265,28 @@ class BeginnerRelationLanguageTests(unittest.TestCase):
             "<b>자료 상태</b>",
             "근거 1",
             "근거 2",
+            "근거 3",
+            "근거 4",
+            "근거 5",
+            "반대 1",
+            "반대 4",
+            "확인 1",
+            "확인 2",
             "부족 1",
+            "부족 2",
+            "부족 3",
+            "검증 3",
+            "<b>TypeDB 경쟁 추론</b>",
+            "<b>추론 추적</b>",
         ]:
             self.assertIn(expected, message)
-        for hidden in ["근거 3", "근거 4", "근거 5", "반대 1", "확인 1", "부족 2", "부족 3", "검증 3", "고객이 실제 투자 판단 전에", "<b>밸류에이션</b>"]:
+        for hidden in ["확인 3", "확인 4", "부족 4", "부족 5", "고객이 실제 투자 판단 전에", "<b>밸류에이션</b>"]:
             self.assertNotIn(hidden, message)
         self.assertIn("[AI]", message)
         self.assertNotIn("<b>점수 안내</b>", message)
         self.assertNotIn("<b>전략 가이드</b>", message)
 
-    def test_beginner_message_uses_compact_action_flow(self):
+    def test_beginner_message_uses_complete_action_flow_with_bounded_checks(self):
         response = NotificationAIValidatedResponse(
             action="HOLD",
             action_label="보유",
@@ -283,20 +316,20 @@ class BeginnerRelationLanguageTests(unittest.TestCase):
         self.assertIn("<b>다음 행동</b>", message)
         self.assertIn("근거 1", message)
         self.assertIn("근거 2", message)
-        self.assertNotIn("근거 3", message)
-        self.assertNotIn("근거 4", message)
-        self.assertNotIn("근거 5", message)
-        self.assertNotIn("반대 1", message)
-        self.assertNotIn("반대 2", message)
-        self.assertNotIn("반대 3", message)
-        self.assertNotIn("반대 4", message)
-        self.assertNotIn("확인 1", message)
-        self.assertNotIn("확인 2", message)
+        self.assertIn("근거 3", message)
+        self.assertIn("근거 4", message)
+        self.assertIn("근거 5", message)
+        self.assertIn("반대 1", message)
+        self.assertIn("반대 2", message)
+        self.assertIn("반대 3", message)
+        self.assertIn("반대 4", message)
+        self.assertIn("확인 1", message)
+        self.assertIn("확인 2", message)
         self.assertNotIn("확인 3", message)
         self.assertNotIn("확인 4", message)
         self.assertIn("부족 1", message)
-        self.assertNotIn("부족 2", message)
-        self.assertNotIn("부족 3", message)
+        self.assertIn("부족 2", message)
+        self.assertIn("부족 3", message)
         self.assertNotIn("부족 4", message)
         self.assertNotIn("부족 5", message)
         self.assertIn("[AI]", message)

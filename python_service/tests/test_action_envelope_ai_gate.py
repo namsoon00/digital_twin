@@ -242,7 +242,13 @@ class ActionEnvelopeAiGateTests(unittest.TestCase):
 
         message = execution_telegram_message(context, response)
 
-        for heading in ["지금 행동", "이번 변화", "현재 흐름", "바뀐 이유", "다음 행동", "판단 변경 조건", "자료 상태", "뉴스 영향"]:
+        for heading in [
+            "지금 행동", "이번 변화", "현재 흐름", "시간축 분석", "바뀐 이유",
+            "핵심 근거", "반대 근거", "TypeDB 경쟁 추론", "회사 가치",
+            "포트폴리오 영향", "주요 사건·일정", "다음 행동", "판단 변경 조건",
+            "판단에서 제외한 정보", "자료 상태", "뉴스 영향", "판단 이력",
+            "추론 추적", "원문·출처",
+        ]:
             self.assertIn(heading, message)
         self.assertIn("[AI]", message)
         self.assertNotIn("API 조회 정보", message)
@@ -414,7 +420,41 @@ class ActionEnvelopeAiGateTests(unittest.TestCase):
         self.assertIn("[관심 유지] 현재 행동은 관심 유지입니다. 매수 판단으로 바뀐 것은 아닙니다.", message)
         self.assertIn("진입 시점과 금액을 보수적으로", message)
         self.assertNotIn("ENTRY_OBSERVING", message)
-        self.assertNotIn("TypeDB", message)
+        self.assertIn("TypeDB 경쟁 추론", message)
+
+    def test_observed_rates_without_materialized_macro_rule_are_not_a_decision_reason(self):
+        context = entry_context()
+        context.update({
+            "messageDeliveryLevel": "beginner",
+            "displayTarget": "NVIDIA / NVDA",
+            "rawLines": ["현재가: $207.51", "추세: 20일선보다 1.5% 높음"],
+        })
+        context["ontologyRelationContext"]["facts"].update({
+            "macroDgs10": 4.75,
+            "macroDgs2": 4.28,
+            "instrumentSensitivities": {"rate": "medium"},
+        })
+        context["ontologyRelationContext"]["actionEnvelope"]["constraintRuleIds"] = []
+        context["ontologyRelationContext"]["activeRules"] = [
+            {"ruleId": "graph.price.reclaim.thesis_support.v1", "label": "가격 회복 시도"},
+        ]
+        response = NotificationAIValidatedResponse(
+            action="HOLD",
+            action_label="관심 유지",
+            validation_state="conditional",
+            validation_label="조건부 사용",
+            data_state="partial",
+            data_state_label="일부 자료만 있음",
+            summary="가격 회복이 이어지는지 확인합니다.",
+            evidence=["가격 회복 시도가 확인됐습니다."],
+            reference_date="2026-08-13 16:00 KST",
+        )
+
+        message = execution_telegram_message(context, response)
+        reason_section = message.split("<b>핵심 근거</b>", 1)[0]
+
+        self.assertNotIn("미국 10년 금리", reason_section)
+        self.assertIn("금리·환율: TypeDB 행동 규칙과 직접 연결되지 않아 이번 판단 변경 이유에서 제외했습니다.", message)
 
     def test_compact_message_strips_ai_trace_ids_and_research_cycle_variables(self):
         context = entry_context()

@@ -18,6 +18,10 @@ from .settings import runtime_settings, utc_now
 
 
 TELEGRAM_HTML_PATTERN = re.compile(r"</?(?:b|strong|i|em|u|ins|s|strike|del|code|pre|a|blockquote)(?:\s+[^>]*)?>", re.IGNORECASE)
+TELEGRAM_LINK_PATTERN = re.compile(
+    r'<a\s+[^>]*href=["\']([^"\']+)["\'][^>]*>(.*?)</a>',
+    re.IGNORECASE | re.DOTALL,
+)
 TELEGRAM_MESSAGE_LIMIT = 3900
 TELEGRAM_API_GUARD_STATE: Dict[str, object] = {}
 
@@ -27,7 +31,15 @@ def uses_telegram_html(text: str) -> bool:
 
 
 def telegram_plain_text(text: str) -> str:
-    without_tags = TELEGRAM_HTML_PATTERN.sub("", str(text or ""))
+    with_urls = TELEGRAM_LINK_PATTERN.sub(
+        lambda match: (
+            TELEGRAM_HTML_PATTERN.sub("", match.group(2)).strip()
+            + (": " if TELEGRAM_HTML_PATTERN.sub("", match.group(2)).strip() else "")
+            + match.group(1)
+        ),
+        str(text or ""),
+    )
+    without_tags = TELEGRAM_HTML_PATTERN.sub("", with_urls)
     return unescape(without_tags)
 
 

@@ -279,7 +279,7 @@ class NotificationReasoningReportTests(unittest.TestCase):
         self.assertNotIn("🔔 새 알림", rendered)
         self.assertIn("알림 추적", rendered)
 
-    def test_compact_beginner_message_keeps_action_flow_without_debug_detail(self):
+    def test_beginner_message_keeps_complete_decision_and_audit_layers(self):
         context, article_url = notification_context()
         context.update({
             "testDispatch": True,
@@ -288,7 +288,12 @@ class NotificationReasoningReportTests(unittest.TestCase):
         enriched = context_with_validated_ai_response(context, validated_response(article_url))
         message = render_notification(NotificationTemplate.default(INVESTMENT_INSIGHT), enriched)
 
-        for heading in ["지금 행동", "이번 변화", "현재 흐름", "판단 근거", "다음 행동", "판단 변경 조건", "자료 상태"]:
+        for heading in [
+            "지금 행동", "이번 변화", "현재 흐름", "시간축 분석", "판단 근거",
+            "핵심 근거", "반대 근거", "TypeDB 경쟁 추론", "회사 가치",
+            "포트폴리오 영향", "주요 사건·일정", "다음 행동", "판단 변경 조건",
+            "판단에서 제외한 정보", "자료 상태", "판단 이력", "추론 추적", "원문·출처",
+        ]:
             self.assertIn("<b>" + heading + "</b>", message)
         self.assertIn("[AI]", message)
         self.assertIn("판단에 필요한 자료 있음", message)
@@ -298,14 +303,14 @@ class NotificationReasoningReportTests(unittest.TestCase):
         self.assertNotIn("<b>밸류에이션</b>", message)
         self.assertNotIn("ai-bitcoin-proxy-nav-draft", message)
         self.assertNotIn("<b>뉴스·공시 요약</b>", message)
-        self.assertNotIn(article_url, message)
+        self.assertIn(article_url, message)
         self.assertNotIn("<b>관계 분석으로 새로 확인한 사실</b>", message)
         self.assertNotIn("<b>전략 가이드</b>", message)
         self.assertIn("🧪 테스트 알림", message)
         self.assertIn("일부 수급·추세 조건은 메시지 검증용 테스트값", message)
-        self.assertNotIn("N-TEST1234", message)
+        self.assertIn("N-TEST1234", message)
         self.assertNotIn("EVENT_RISK_REVIEW", message)
-        self.assertNotIn("graph.disclosure.event_risk.v1", message)
+        self.assertIn("graph.disclosure.event_risk.v1", message)
 
     def test_investment_alert_excludes_other_symbol_news_from_research_refresh_snapshot(self):
         hynix_url = "https://dart.fss.or.kr/dsaf001/main.do?rcpNo=20260716000582"
@@ -382,11 +387,11 @@ class NotificationReasoningReportTests(unittest.TestCase):
         self.assertNotIn("Cross-symbol Strategy STRC article", prompt)
         self.assertNotIn(strategy_url, prompt)
         self.assertEqual([hynix_url], response.source_urls)
-        self.assertNotIn(hynix_url, message)
+        self.assertIn(hynix_url, message)
         self.assertNotIn(strategy_url, message)
         self.assertNotIn("외 1건은 웹 상세에서 확인", message)
 
-    def test_beginner_message_keeps_article_detail_out_of_the_compact_alert(self):
+    def test_beginner_message_includes_direct_article_detail_and_source(self):
         context, _article_url = notification_context()
         article_url = "https://news.example.com/tesla-founder-led"
         context.update({
@@ -426,8 +431,10 @@ class NotificationReasoningReportTests(unittest.TestCase):
         message = context_with_validated_ai_response(context, response)["telegramMessage"]
 
         self.assertNotIn("<b>뉴스·공시 요약</b>", message)
-        self.assertNotIn("기사는 일론 머스크의 창업자 중심 경영", message)
-        self.assertNotIn("투자 영향: 경영 일관성은 긍정적", message)
+        self.assertIn("<b>원문·출처</b>", message)
+        self.assertIn(article_url, message)
+        self.assertIn("기사는 일론 머스크의 창업자 중심 경영", message)
+        self.assertIn("투자 영향: 경영 일관성은 긍정적", message)
         self.assertEqual([article_url], response.source_urls)
 
     def test_watchlist_strategy_guide_does_not_describe_holdings(self):

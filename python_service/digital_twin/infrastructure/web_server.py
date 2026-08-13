@@ -2306,9 +2306,9 @@ def notification_suppression_summary(job: NotificationJob) -> str:
 def notification_job_diagnostics(jobs: List[NotificationJob]) -> Dict[str, object]:
     settings = runtime_settings()
     try:
-        stale_minutes = max(1, int(settings.get("notificationProcessingStaleMinutes") or 30))
+        stale_minutes = max(1, int(settings.get("notificationProcessingStaleMinutes") or 2))
     except (TypeError, ValueError):
-        stale_minutes = 30
+        stale_minutes = 2
     reason_counts: Dict[str, int] = {}
     stale_processing = 0
     for job in jobs:
@@ -2362,9 +2362,9 @@ def notification_job_public_payload(job: NotificationJob, detail: bool = False, 
     api_source = str(context.get("apiSource") or context.get("quoteSource") or context.get("sourceApi") or "notification_jobs")
     if stale_minutes is None:
         try:
-            stale_minutes = max(1, int(runtime_settings().get("notificationProcessingStaleMinutes") or 30))
+            stale_minutes = max(1, int(runtime_settings().get("notificationProcessingStaleMinutes") or 2))
         except (TypeError, ValueError):
-            stale_minutes = 30
+            stale_minutes = 2
     payload = {
         "jobId": job.job_id,
         "messageType": job.message_type,
@@ -2538,9 +2538,9 @@ def notification_jobs_payload(query: Dict[str, List[str]]) -> Dict[str, object]:
     try:
         settings = runtime_settings()
         try:
-            stale_minutes = max(1, int(settings.get("notificationProcessingStaleMinutes") or 30))
+            stale_minutes = max(1, int(settings.get("notificationProcessingStaleMinutes") or 2))
         except (TypeError, ValueError):
-            stale_minutes = 30
+            stale_minutes = 2
         store = notification_queue_store()
         if hasattr(store, "recent_list_page_with_summary"):
             jobs, total, summary = store.recent_list_page_with_summary(

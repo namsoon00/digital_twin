@@ -663,6 +663,88 @@ class NotificationReasoningReportTests(unittest.TestCase):
         self.assertEqual("error", customer_job.context["operatorReasoningReportStatus"])
         self.assertIn("operator queue unavailable", customer_job.context["operatorReasoningReportError"])
 
+    def test_runner_immediately_releases_claimed_batch_after_render_failure(self):
+        first = NotificationJob.create("first", account_id="main", message_type=INVESTMENT_INSIGHT)
+        second = NotificationJob.create("second", account_id="main", message_type=INVESTMENT_INSIGHT)
+
+        class ClaimedQueue(MemoryQueue):
+            def claim_pending(self, **_kwargs):
+                claimed = [item for item in self.items if item.status == "pending"]
+                for item in claimed:
+                    item.status = "processing"
+                    item.attempts += 1
+                return claimed
+
+        queue = ClaimedQueue([first, second])
+        account = AccountConfig("main", "기본 계정", "toss", "https://example.test", "", "", "", [])
+        runner = NotificationQueueRunner(
+            queue,
+            AccountRepository(account),
+            lambda _account: None,
+            template_renderer=lambda _job: (_ for _ in ()).throw(RuntimeError("render storage timeout")),
+        )
+
+        with self.assertRaisesRegex(RuntimeError, "render storage timeout"):
+            runner.run_once(limit=2)
+
+        self.assertEqual("failed", first.status)
+        self.assertEqual("failed", second.status)
+        self.assertIn("rendering", first.last_error)
+        self.assertIn("claim을 즉시 회수", second.last_error)
+
+    def test_runner_does_not_claim_jobs_when_account_lookup_fails(self):
+        job = NotificationJob.create("message", account_id="main", message_type=INVESTMENT_INSIGHT)
+
+        class Queue(MemoryQueue):
+            claimed = False
+
+            def claim_pending(self, **_kwargs):
+                self.claimed = True
+                return [job]
+
+        class FailingAccounts:
+            def load_all(self):
+                raise RuntimeError("account storage timeout")
+
+        queue = Queue([job])
+        runner = NotificationQueueRunner(queue, FailingAccounts(), lambda _account: None)
+
+        with self.assertRaisesRegex(RuntimeError, "account storage timeout"):
+            runner.run_once(limit=1)
+
+        self.assertFalse(queue.claimed)
+        self.assertEqual("pending", job.status)
+
+    def test_runner_finalizes_without_resending_when_storage_fails_after_delivery(self):
+        job = NotificationJob.create("message", account_id="main", message_type=INVESTMENT_INSIGHT)
+
+        class FlakyDoneQueue(MemoryQueue):
+            mark_done_calls = 0
+
+            def mark_done(self, target):
+                self.mark_done_calls += 1
+                if self.mark_done_calls == 1:
+                    raise RuntimeError("completion storage timeout")
+                super().mark_done(target)
+
+        queue = FlakyDoneQueue([job])
+        account = AccountConfig("main", "기본 계정", "toss", "https://example.test", "", "", "", [])
+        sent = []
+
+        class Notifier:
+            def send(self, message):
+                sent.append(message)
+                return SimpleNamespace(delivered=True, reason="")
+
+        runner = NotificationQueueRunner(queue, AccountRepository(account), lambda _account: Notifier())
+
+        with self.assertRaisesRegex(RuntimeError, "completion storage timeout"):
+            runner.run_once(limit=1)
+
+        self.assertEqual(["message"], sent)
+        self.assertEqual(2, queue.mark_done_calls)
+        self.assertEqual("done", job.status)
+
 
 if __name__ == "__main__":
     unittest.main()

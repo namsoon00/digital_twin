@@ -451,7 +451,7 @@ def build_notification_queue_runner(dry_run: bool = False, lane: str = "all") ->
         operations_notifier_factory=notifier_for_operations,
         dry_run=dry_run,
         send_gap_seconds=float(settings.get("notificationSendGapSeconds") or 0),
-        stale_after_minutes=int(settings.get("notificationProcessingStaleMinutes") or 30),
+        stale_after_minutes=int(settings.get("notificationProcessingStaleMinutes") or 2),
         template_renderer=stores.notification_template_store(settings).render_job,
         context_enricher=CompositeNotificationContextEnricher(
             identity_enricher,

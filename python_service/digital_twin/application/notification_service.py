@@ -369,7 +369,7 @@ class NotificationQueueRunner:
         operations_notifier_factory: Callable = None,
         dry_run: bool = False,
         send_gap_seconds: float = 0.0,
-        stale_after_minutes: int = 30,
+        stale_after_minutes: int = 2,
         template_renderer: Callable = None,
         context_enricher: Callable = None,
         now_provider: Callable = None,
@@ -388,7 +388,7 @@ class NotificationQueueRunner:
         self.operations_notifier_factory = operations_notifier_factory
         self.dry_run = dry_run
         self.send_gap_seconds = max(0.0, float(send_gap_seconds or 0))
-        self.stale_after_minutes = max(1, int(stale_after_minutes or 30))
+        self.stale_after_minutes = max(1, int(stale_after_minutes or 2))
         self.template_renderer = template_renderer
         self.context_enricher = context_enricher
         self.now_provider = now_provider or (lambda: datetime.now(ZoneInfo("UTC")))
@@ -403,14 +403,37 @@ class NotificationQueueRunner:
         self.news_digest_reconciler = news_digest_reconciler
         self.last_news_digest_reconciliation: Dict[str, object] = {}
         self.last_run_details = []
+        self.active_job = None
+        self.active_job_stage = ""
+        self.claimed_jobs = []
+        self.active_job_index = -1
 
     def account_map(self) -> Dict[str, object]:
         return {account.account_id: account for account in self.account_repository.load_all()}
 
     def run_once(self, limit: int = 10) -> int:
         self.last_run_details = []
+        self.active_job = None
+        self.active_job_stage = ""
+        self.claimed_jobs = []
+        self.active_job_index = -1
+        try:
+            return self._run_once(limit)
+        except Exception as error:
+            self.recover_active_job(error)
+            raise
+        finally:
+            self.active_job = None
+            self.active_job_stage = ""
+            self.claimed_jobs = []
+            self.active_job_index = -1
+
+    def _run_once(self, limit: int = 10) -> int:
         if self.news_digest_reconciler:
             self.last_news_digest_reconciliation = dict(self.news_digest_reconciler.run_once() or {})
+        # Load account configuration before claiming durable jobs. A storage
+        # timeout here must not leave an unowned processing lease behind.
+        accounts = self.account_map()
         use_claim = (not self.dry_run) and hasattr(self.queue, "claim_pending")
         if use_claim:
             try:
@@ -428,9 +451,12 @@ class NotificationQueueRunner:
             jobs = [job for job in jobs if self.message_type_allowed(job.message_type)][: int(limit or 10)]
         if not jobs:
             return 0
-        accounts = self.account_map()
+        self.claimed_jobs = list(jobs) if use_claim else []
         processed = 0
-        for job in jobs:
+        for index, job in enumerate(jobs):
+            self.active_job = job
+            self.active_job_index = index
+            self.active_job_stage = "claimed"
             if str(job.message_type or "") == OPERATOR_REASONING_REPORT and not self.operator_reports_enabled:
                 reason = "운영자 추론 보고서 알림이 비활성화되어 발송하지 않았습니다."
                 if hasattr(self.queue, "mark_suppressed"):
@@ -464,6 +490,7 @@ class NotificationQueueRunner:
                 processed += 1
                 continue
             if self.should_defer_ai_inference(job):
+                self.active_job_stage = "ai-queue-handoff"
                 try:
                     outcome = self.ai_request_enqueuer.enqueue(job)
                     status = str((outcome or {}).get("status") or "awaiting-ai")
@@ -473,9 +500,11 @@ class NotificationQueueRunner:
                     self.last_run_details.append(self.job_detail(job, "failed", str(error)[:160]))
                 processed += 1
                 continue
+            self.active_job_stage = "final-ai-gate"
             if not self.apply_final_ai_delivery_gate(job):
                 processed += 1
                 continue
+            self.active_job_stage = "rendering"
             message = self.render(job)
             if not message:
                 reason = "empty rendered notification text"
@@ -494,20 +523,53 @@ class NotificationQueueRunner:
                 self.last_run_details.append(self.job_detail(job, "dry-run"))
                 processed += 1
                 continue
+            self.active_job_stage = "delivering"
             try:
                 self.deliver(job, accounts, message)
-                operator_detail = self.capture_operator_report_after_delivery(job, message)
-                self.queue.mark_done(job)
-                self.record_operational_delivery(job, "done")
-                self.last_run_details.append(self.job_detail(job, "done", operator_detail))
-                processed += 1
             except Exception as error:  # noqa: BLE001 - one failed delivery must not stop the queue.
                 self.queue.mark_failed(job, str(error))
                 self.record_operational_delivery(job, "failed", str(error))
                 self.last_run_details.append(self.job_detail(job, "failed", str(error)[:120]))
+            else:
+                self.active_job_stage = "delivered"
+                operator_detail = self.capture_operator_report_after_delivery(job, message)
+                self.queue.mark_done(job)
+                self.active_job_stage = "done"
+                self.record_operational_delivery(job, "done")
+                self.last_run_details.append(self.job_detail(job, "done", operator_detail))
+                processed += 1
             if self.send_gap_seconds and processed < len(jobs):
                 time.sleep(self.send_gap_seconds)
         return processed
+
+    def recover_active_job(self, error: Exception) -> None:
+        """Release a claimed job immediately after an unexpected cycle error."""
+
+        job = self.active_job
+        if job is None or self.dry_run:
+            return
+        reason = "알림 처리 중 예외(" + (self.active_job_stage or "unknown") + "): " + str(error)
+        jobs = [job]
+        if self.claimed_jobs and self.active_job_index >= 0:
+            jobs = self.claimed_jobs[self.active_job_index :]
+        for index, affected_job in enumerate(jobs):
+            affected_reason = reason if index == 0 else "앞선 알림 처리 예외로 claim을 즉시 회수했습니다."
+            try:
+                if index == 0 and self.active_job_stage == "delivered":
+                    # Telegram already accepted the message. Persist completion
+                    # so a database retry cannot send the customer alert twice.
+                    self.queue.mark_done(affected_job)
+                    status = "done-after-storage-recovery"
+                else:
+                    self.queue.mark_failed(affected_job, affected_reason)
+                    status = "failed-retryable"
+                self.last_run_details.append(
+                    self.job_detail(affected_job, status, affected_reason[:160])
+                )
+            except Exception as recovery_error:  # noqa: BLE001 - scheduler still reports the original failure.
+                self.last_run_details.append(
+                    self.job_detail(affected_job, "processing-recovery-failed", str(recovery_error)[:160])
+                )
 
     def should_defer_ai_inference(self, job: NotificationJob) -> bool:
         if self.dry_run or self.ai_request_enqueuer is None:

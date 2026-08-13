@@ -1143,12 +1143,12 @@ class MySQLNotificationJobStore(MySQLOperationalConnection):
     def claim_pending(
         self,
         limit: int = 10,
-        stale_after_minutes: int = 30,
+        stale_after_minutes: int = 2,
         include_message_types: Tuple[str, ...] = (),
         exclude_message_types: Tuple[str, ...] = (),
     ) -> List[NotificationJob]:
         stamp = utc_now()
-        cutoff = (datetime.now(timezone.utc) - timedelta(minutes=max(1, int(stale_after_minutes or 30)))).isoformat().replace("+00:00", "Z")
+        cutoff = (datetime.now(timezone.utc) - timedelta(minutes=max(1, int(stale_after_minutes or 2)))).isoformat().replace("+00:00", "Z")
         requested = max(1, int(limit or 10))
         included = tuple(dict.fromkeys(str(item).strip() for item in include_message_types or () if str(item).strip()))
         excluded = tuple(dict.fromkeys(str(item).strip() for item in exclude_message_types or () if str(item).strip()))

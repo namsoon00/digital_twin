@@ -2065,7 +2065,7 @@ def runtime_settings(fast_operational_read: bool = False) -> Dict[str, str]:
         "notificationQueueIntervalSeconds": value("notificationQueueIntervalSeconds", "NOTIFICATION_QUEUE_INTERVAL_SECONDS", "30"),
         "notificationQueueBatchSize": value("notificationQueueBatchSize", "NOTIFICATION_QUEUE_BATCH_SIZE", "10"),
         "notificationSendGapSeconds": value("notificationSendGapSeconds", "NOTIFICATION_SEND_GAP_SECONDS", "1"),
-        "notificationProcessingStaleMinutes": value("notificationProcessingStaleMinutes", "NOTIFICATION_PROCESSING_STALE_MINUTES", "30"),
+        "notificationProcessingStaleMinutes": value("notificationProcessingStaleMinutes", "NOTIFICATION_PROCESSING_STALE_MINUTES", "2"),
         "sentArticleFilterEnabled": value("sentArticleFilterEnabled", "SENT_ARTICLE_FILTER_ENABLED", "1"),
         "sentArticleFilterHistoryLimit": value("sentArticleFilterHistoryLimit", "SENT_ARTICLE_FILTER_HISTORY_LIMIT", "120"),
         "monitorAccountQueueEnabled": value("monitorAccountQueueEnabled", "MONITOR_ACCOUNT_QUEUE_ENABLED", "0"),

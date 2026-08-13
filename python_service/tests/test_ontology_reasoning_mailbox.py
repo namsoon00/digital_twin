@@ -605,6 +605,25 @@ class OntologyReasoningMailboxTests(unittest.TestCase):
         self.assertEqual("ok", first["status"])
         self.assertEqual("idle", second["status"])
 
+    def test_overdue_portfolio_aggregate_runs_before_newer_market_revision(self):
+        portfolio = portfolio_risk_request(
+            "portfolio-overdue", ["000660", "MSTR"], "2026-07-24T00:00:00Z", "risk:1",
+        )
+        market = realtime_request("market-newer", ["000660"], "2026-07-24T00:15:00Z")
+        runner = self.build_runner(
+            [portfolio, market],
+            now=lambda: datetime(2026, 7, 24, 0, 16, tzinfo=timezone.utc),
+        )
+
+        result = runner.run_once(force=True)
+
+        self.assertEqual("ok", result["status"])
+        self.assertEqual(["PORTFOLIO"], result["queueDispatch"]["selectedWorkClasses"])
+        self.assertTrue(result["queueDispatch"]["eventFairnessReservationActive"])
+        self.assertEqual([["000660", "MSTR"]], self.monitor.calls)
+        self.assertEqual("completed", self.mailbox.events["portfolio-overdue"]["state"])
+        self.assertEqual("pending", self.mailbox.events["market-newer"]["state"])
+
     def test_market_observation_anchor_completes_only_after_verified_projection(self):
         event = realtime_request("anchor-event", ["AAPL"], "2026-07-24T00:00:00Z")
         runner = self.build_runner([event])

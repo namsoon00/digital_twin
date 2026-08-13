@@ -2186,7 +2186,12 @@ class OntologyReasoningRunner:
             if not event_id:
                 continue
             due_symbols = self.due_event_symbols(event, event_progress, payload, priorities)
-            if not due_symbols:
+            aggregate_scope = bool(
+                not event_symbols(event)
+                and event_subject_kind(event) in {"PORTFOLIO", "ACCOUNT"}
+                and event_subject_id(event)
+            )
+            if not due_symbols and not aggregate_scope:
                 continue
             wait_seconds = self.event_wait_seconds(event)
             rows.append({
@@ -2199,6 +2204,7 @@ class OntologyReasoningRunner:
                     payload,
                     event=event,
                 )[:20],
+                "aggregateScope": aggregate_scope,
                 "priority": event_reasoning_priority(event),
                 "trigger": str(event_payload(event).get("trigger") or ""),
             })
@@ -2232,13 +2238,18 @@ class OntologyReasoningRunner:
             cursor_payload=cursor_payload,
             priority_symbols=priority_symbols,
         )
-        overdue = [item for item in queue if item.get("state") == "overdue" and item.get("symbols")]
+        overdue = [
+            item for item in queue
+            if item.get("state") == "overdue"
+            and (item.get("symbols") or item.get("aggregateScope"))
+        ]
         selected = overdue[0] if overdue and self.fairness_drain_enabled() else {}
         return {
             "enabled": self.fairness_drain_enabled(),
             "active": bool(selected),
             "eventId": str(selected.get("eventId") or ""),
             "symbol": str((selected.get("symbols") or [""])[0] or ""),
+            "aggregateScope": bool(selected.get("aggregateScope")),
             "waitSeconds": int(selected.get("waitSeconds") or 0),
             "overdueEventCount": len(overdue),
             "reason": (
@@ -2279,7 +2290,10 @@ class OntologyReasoningRunner:
         }
         reservation_applied = bool(
             reservation.get("active")
-            and str(reservation.get("symbol") or "").upper().strip() in selected_symbol_set
+            and (
+                bool(reservation.get("aggregateScope"))
+                or str(reservation.get("symbol") or "").upper().strip() in selected_symbol_set
+            )
             and (
                 not selected_event_ids
                 or str(reservation.get("eventId") or "") in selected_event_ids
@@ -4127,6 +4141,30 @@ class OntologyReasoningRunner:
         )
         reserved_event_id = str(event_reservation.get("eventId") or "").strip()
         reserved_symbol = str(event_reservation.get("symbol") or "").upper().strip()
+
+        if reserved_event_id and bool(event_reservation.get("aggregateScope")):
+            reserved_event = next(
+                (
+                    event for event in requested_events
+                    if str(getattr(event, "event_id", "") or "").strip() == reserved_event_id
+                    and event_subject_kind(event) in {"PORTFOLIO", "ACCOUNT"}
+                    and event_subject_id(event)
+                ),
+                None,
+            )
+            if reserved_event is not None:
+                deferred_symbols = {
+                    symbol
+                    for event in requested_events
+                    if event is not reserved_event
+                    for symbol in self.due_event_symbols(
+                        event,
+                        progress,
+                        cursor_payload,
+                        priority_symbols,
+                    )
+                }
+                return {reserved_event_id: []}, [], len(deferred_symbols)
 
         if self.coherent_snapshot_enabled():
             event_candidates = []

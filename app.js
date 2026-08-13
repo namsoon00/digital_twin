@@ -10846,6 +10846,7 @@
       var validationState = stateValueFromSources(sources, ["validationState", "validation_state"], dataState === "sufficient" ? "conditional" : "blocked");
       var review = decisionStateMeta("review", reviewLevel, "observe");
       var action = decisionActionMeta(row.actionCode, row.decision || row.action);
+      var presentation = investmentActionUserPresentation(row);
       return {
         key: row.decisionKey || investmentActionKey(row, index),
         decisionKey: String(row.decisionKey || ""),
@@ -10855,10 +10856,10 @@
         symbol: String(row.symbol || "").toUpperCase(),
         name: stockDisplayName(row.symbol, row),
         decision: row.decision || row.action || "검토",
-        actionCode: action.code,
-        actionLabel: action.label,
-        tone: row.tone || action.tone || review.tone,
-        reason: formatConsoleNarrative(reasons[0] || graph.reason || "근거 확인 필요"),
+        actionCode: presentation.actionCode || action.code,
+        actionLabel: presentation.actionLabel || action.label,
+        tone: presentation.tone || row.tone || action.tone || review.tone,
+        reason: presentation.explanation || formatConsoleNarrative(reasons[0] || graph.reason || "근거 확인 필요"),
         invalidation: formatConsoleNarrative(investmentActionInvalidation(row)),
         quality: consoleQualityMeta(row.dataQuality || row.quality),
         apiSource: String(row.apiSource || row.source || "investment_analysis"),
@@ -11244,21 +11245,21 @@
       { label: "판단 후보", value: allRows.length + "건", detail: "현재 상태" },
       { label: "매수 검토", value: buy + "건", detail: "조건 확인", tone: buy ? "watch" : "neutral" },
       { label: "매도 검토", value: sell + "건", detail: "위험 관리", tone: sell ? "danger" : "neutral" },
-      { label: "추론 차단", value: blocked.length + "건", detail: "TypeDB 확인", tone: blocked.length ? "danger" : "watch" },
+      { label: "판단 보류", value: blocked.length + "건", detail: "관계 분석 대기", tone: blocked.length ? "caution" : "watch" },
       { label: "근거 준비", value: allRows.filter(function (row) { return row.quality.tone === "watch" && !row.isMock; }).length + "/" + allRows.length, detail: "실데이터" }
     ];
     var table = page.items.length ? '<div class="oa-data-table" data-console-keyed-list="decision-primary"><div class="oa-table-head oa-decision-row"><span>종목</span><span>행동·확인 단계</span><span>핵심 근거</span><span>자료·검증</span></div>' + page.items.map(renderDecisionConsoleRow).join("") + '</div>' : renderConsoleEmpty("조건에 맞는 판단이 없습니다", "검색어 또는 필터를 조정하세요.", renderWorkDetailButton("strategy-trace-board", "", "추론 상태", "text-button compact"));
     var reviewNeeded = rows.filter(function (row) { return row.blocked || row.dataState !== "sufficient" || row.validationState !== "ready"; });
     var blockers = reviewNeeded.length ? '<div class="oa-context-list" data-console-keyed-list="decision-blockers">' + reviewNeeded.slice(0, 6).map(function (row) {
-      var label = row.blocked ? "차단" : decisionStateMeta("data", row.dataState, "partial").label;
-      var tone = row.blocked ? "danger" : "caution";
+      var label = row.blocked ? "분석 대기" : decisionStateMeta("data", row.dataState, "partial").label;
+      var tone = "caution";
       return '<button type="button" class="oa-context-row" data-console-row-key="' + escapeHtml(row.key) + '" data-work-detail="investment-action" data-work-detail-key="' + escapeHtml(row.key) + '"><span><strong>' + escapeHtml(row.name || row.symbol) + '</strong><em>' + escapeHtml(row.reason) + '</em></span><b class="' + escapeHtml(tone) + '">' + escapeHtml(label) + '</b></button>';
     }).join("") + '</div>' : renderConsoleEmpty("추가 확인 요인이 없습니다", "현재 판단 후보는 필요한 자료와 검증 상태를 갖추고 있습니다.");
     return renderConsoleManagedPage("modeling", metrics, [
       renderDecisionFilterToolbar(),
       '<div class="oa-console-grid oa-decision-grid">',
-      renderConsoleSurface({ kicker: "CURRENT DECISIONS", title: "현재 투자 판단", description: "종목별 최신 상태와 행동, 근거, 데이터 출처를 표시합니다.", meta: page.items.length + " / " + rows.length + "건", body: renderConsoleLiveRegion("decision-primary-body", table), footer: renderConsolePager("decision", page) }),
-      renderConsoleSurface({ kicker: "REVIEW", title: "확인 필요 요인", description: "자료 또는 검증이 완전하지 않은 판단만 표시합니다.", actions: reviewNeeded.length ? renderWorkDetailButton("strategy-trace-board", "", "검증 전체", "text-button compact") : "", body: renderConsoleLiveRegion("decision-blocker-body", blockers) }),
+      renderConsoleSurface({ kicker: "CURRENT DECISIONS", title: "현재 투자 판단", description: "보유·관심 종목별로 지금 검토할 행동과 이유를 보여줍니다. 자동 주문은 하지 않습니다.", meta: page.items.length + " / " + rows.length + "건", body: renderConsoleLiveRegion("decision-primary-body", table), footer: renderConsolePager("decision", page) }),
+      renderConsoleSurface({ kicker: "REVIEW", title: "판단 전 확인할 것", description: "자료나 관계 분석이 아직 준비되지 않은 종목을 따로 보여줍니다.", actions: reviewNeeded.length ? renderWorkDetailButton("strategy-trace-board", "", "검증 전체", "text-button compact") : "", body: renderConsoleLiveRegion("decision-blocker-body", blockers) }),
       '</div>'
     ].join(""));
   }
@@ -15585,9 +15586,9 @@
       '<article class="panel investment-action-panel">',
       '<div class="panel-head">',
       '<div>',
-      '<p class="label">Decision Inbox</p>',
-      '<h2>종목별 실행 카드</h2>',
-      '<p class="subtle">매수·매도 결론이 아니라, 판단·무효화 조건·다음 확인·연결 알림을 한 장에서 검토하는 후보함입니다.</p>',
+      '<p class="label">종목 판단</p>',
+      '<h2>종목별 판단 후보</h2>',
+      '<p class="subtle">보유·관심 종목의 현재 결론과 이유, 다음 확인 조건을 한 곳에서 검토합니다.</p>',
       '</div>',
       '<span class="metric">' + escapeHtml(rows.length) + '</span>',
       '</div>',
@@ -15688,6 +15689,227 @@
     if (text.indexOf("usd") >= 0 || text.indexOf("환율") >= 0 || text.indexOf("금리") >= 0 || text.indexOf("미국") >= 0) return { id: "macro", label: "환율·금리 민감", tone: "hold", detail: "거시 관계와 가격 동조 확인" };
     if (investmentActionDecisionType(row) === "buy") return { id: "entry", label: "진입 후보 검증", tone: "watch", detail: "진입 근거와 무효화 조건 확인" };
     return { id: "defense", label: "보유 방어", tone: "hold", detail: "유지 조건과 반대 신호 확인" };
+  }
+
+  function formatInvestmentActionPercent(value) {
+    if (!hasNumericValue(value)) return "수집되지 않음";
+    var number = Number(String(value).replace(/,/g, "").trim());
+    return (number > 0 ? "+" : "") + number.toLocaleString("ko-KR", {
+      minimumFractionDigits: 2,
+      maximumFractionDigits: 2
+    }) + "%";
+  }
+
+  function formatInvestmentActionNarrative(value) {
+    var text = String(value == null ? "" : value).trim();
+    text = text.replace(/토스 잔고 기준 수익률이\s*([+-]?\d+(?:\.\d+)?)%입니다\.?/g, function (_match, raw) {
+      return "현재 보유 수익률은 " + formatInvestmentActionPercent(raw) + "입니다.";
+    });
+    text = text.replace(/평가손익은\s*([+-]?[\d,]+(?:\.\d+)?)\s*KRW입니다\.?/g, function (_match, raw) {
+      var number = Number(String(raw).replace(/,/g, ""));
+      return Number.isFinite(number)
+        ? "현재 평가손익은 " + number.toLocaleString("ko-KR", { maximumFractionDigits: 2 }) + "원입니다."
+        : _match;
+    });
+    text = text.replace(/매도 가능 수량은\s*([\d,]+(?:\.\d+)?)입니다\.?/g, function (_match, raw) {
+      var number = Number(String(raw).replace(/,/g, ""));
+      return Number.isFinite(number)
+        ? "현재 매도 가능 수량은 " + number.toLocaleString("ko-KR", { maximumFractionDigits: 4 }) + "주입니다."
+        : _match;
+    });
+    text = text.replace(/([+-]?\d+\.\d{3,})\s*%/g, function (_match, raw) {
+      return formatInvestmentActionPercent(raw);
+    });
+    [
+      ["Flow Lens에서는 TypeDB InferenceBox 결과가 없으면 매수·매도 판단을 만들지 않습니다.", "종목 관계 분석이 아직 준비되지 않아 매수·매도 판단을 보류합니다."],
+      ["TypeDB native rule 저장 상태 확인", "분석 규칙이 정상적으로 준비됐는지 확인"],
+      ["InferenceBox 관계 생성 여부 확인", "종목 관계 분석 결과가 생성됐는지 확인"],
+      ["온톨로지 자료 상태 확인", "관계 분석에 필요한 자료가 준비됐는지 확인"],
+      ["TypeDB InferenceBox 관계가 복구되기 전까지 판단을 보류합니다.", "종목 관계 분석 결과가 준비될 때까지 판단을 보류합니다."],
+      ["InferenceBox 없는 매수 판단", "관계 분석 없이 매수 판단하지 않기"],
+      ["InferenceBox 없는 매도 판단", "관계 분석 없이 매도 판단하지 않기"],
+      ["Python 관계 규칙 fallback", "임시 규칙으로 판단을 대신하지 않기"]
+    ].forEach(function (pair) {
+      text = text.split(pair[0]).join(pair[1]);
+    });
+    return text;
+  }
+
+  function investmentActionQualityPresentation(row) {
+    row = row || {};
+    var raw = String(row.dataQuality || row.quality || "").trim();
+    var key = raw.toLowerCase();
+    var isMock = Boolean(row.isMock) || ["mock", "demo"].indexOf(key) >= 0;
+    if (isMock) return { label: "MOCK 데이터", detail: "검증용 데이터", tone: "hold", raw: raw || "mock" };
+    if (["actual", "live", "fresh", "ok"].indexOf(key) >= 0) return { label: "실제 데이터", detail: "API에서 받은 값", tone: "watch", raw: raw || "actual" };
+    if (key === "reference") return { label: "참고 데이터", detail: "비교용 기준 정보", tone: "hold", raw: raw };
+    if (["cache", "cached"].indexOf(key) >= 0) return { label: "저장 데이터", detail: "마지막 정상 응답", tone: "caution", raw: raw };
+    if (key === "stale") return { label: "지연 데이터", detail: "최신 갱신 필요", tone: "caution", raw: raw };
+    if (["missing", "gap", "error", "failed"].indexOf(key) >= 0) return { label: "데이터 부족", detail: "수집 상태 확인 필요", tone: "danger", raw: raw };
+    return { label: raw || "상태 확인 필요", detail: "데이터 구분 미확인", tone: "hold", raw: raw || "unknown" };
+  }
+
+  function investmentActionUserPresentation(row) {
+    row = row || {};
+    var graph = row.graph || {};
+    var reasons = (Array.isArray(row.reasons) ? row.reasons : []).map(formatInvestmentActionNarrative).filter(Boolean);
+    var checks = (Array.isArray(graph.nextChecks) ? graph.nextChecks : []).map(formatInvestmentActionNarrative).filter(Boolean);
+    var action = decisionActionMeta(row.actionCode, row.decision || row.action);
+    var quality = investmentActionQualityPresentation(row);
+    var validation = investmentActionValidation(row);
+    var blocked = Boolean(graph.blocked) || action.code === "BLOCKED";
+    var copy = {
+      BUY: {
+        headline: "매수를 검토할 수 있습니다",
+        explanation: "진입 후보로 분류됐습니다. 주문 전 가격과 판단이 약해지는 조건을 함께 확인합니다.",
+        nextAction: "진입 가격과 약화 조건 확인"
+      },
+      ADD: {
+        headline: "추가 매수를 검토할 수 있습니다",
+        explanation: "보유 근거가 유지되는지 확인한 뒤 비중 확대 여부를 검토합니다.",
+        nextAction: "보유 근거와 추가 진입 가격 확인"
+      },
+      HOLD: {
+        headline: "현재 보유를 유지하며 관찰합니다",
+        explanation: "당장 비중을 바꾸기보다 유지 조건과 반대 신호를 계속 확인합니다.",
+        nextAction: "유지 조건과 반대 신호 확인"
+      },
+      TRIM: {
+        headline: "보유 비중 축소를 검토합니다",
+        explanation: "위험 신호가 확인됐습니다. 주문 전 회복 가능성과 매도 가능 수량을 함께 봅니다.",
+        nextAction: "회복 조건과 매도 가능 수량 확인"
+      },
+      SELL: {
+        headline: "매도를 검토합니다",
+        explanation: "보유 근거가 약해졌습니다. 주문 전 반대 근거와 실행 가능 수량을 다시 확인합니다.",
+        nextAction: "반대 근거와 실행 가능 수량 확인"
+      },
+      AVOID: {
+        headline: "지금은 신규 진입을 피합니다",
+        explanation: "현재 위험이 진입 근거보다 큽니다. 새 근거가 생길 때까지 관찰합니다.",
+        nextAction: "새 근거가 생길 때까지 관찰"
+      },
+      OBSERVE: {
+        headline: "지금은 관찰이 우선입니다",
+        explanation: "매수나 매도 방향을 정할 근거가 아직 충분하지 않습니다.",
+        nextAction: "다음 시세와 근거 갱신 후 재확인"
+      }
+    }[action.code] || {
+      headline: "추가 확인이 필요합니다",
+      explanation: "현재 자료만으로 행동 방향을 확정하지 않습니다.",
+      nextAction: "다음 데이터 갱신 후 재확인"
+    };
+
+    if (blocked) {
+      copy = {
+        headline: "지금은 매수·매도 판단을 보류합니다",
+        explanation: "종목 관계 분석이 완료되지 않아 현재 가격과 손익만으로 매수·매도 방향을 정하지 않습니다.",
+        nextAction: "관계 분석 완료 여부를 확인한 뒤 다시 판단"
+      };
+    }
+
+    var changedAt = recordChangedAt(row, recordChangedAt(graph));
+    var profitLoss = formatInvestmentActionPercent(row.profitLossRate);
+    var profitNumber = hasNumericValue(row.profitLossRate)
+      ? Number(String(row.profitLossRate).replace(/,/g, "").trim())
+      : null;
+    var dataIssue = ["caution", "danger"].indexOf(quality.tone) >= 0;
+    return {
+      actionCode: blocked ? "BLOCKED" : action.code,
+      actionLabel: blocked ? "판단 보류" : action.label,
+      statusLabel: blocked ? "관계 분석 대기" : (dataIssue ? "자료 확인 필요" : validation.label),
+      headline: copy.headline,
+      explanation: copy.explanation,
+      nextAction: copy.nextAction,
+      tone: blocked ? "caution" : (action.tone || row.tone || "hold"),
+      blocked: blocked,
+      evidenceTitle: blocked ? "현재 확인한 계정 정보" : "왜 이런 판단인가요?",
+      evidenceDescription: blocked
+        ? "분석은 대기 중이지만 아래 계정·시세 정보는 별도로 확인됐습니다."
+        : "현재 판단에 사용한 핵심 근거입니다.",
+      reasons: reasons,
+      checks: checks,
+      invalidation: blocked
+        ? "종목 관계 분석 결과와 필요한 자료가 준비되면 보류 상태를 해제하고 다시 판단합니다."
+        : formatInvestmentActionNarrative(investmentActionInvalidation(row)),
+      nextWindow: row.nextReviewAt
+        ? formatClock(row.nextReviewAt)
+        : (blocked ? "관계 분석이 완료되는 즉시" : formatInvestmentActionNarrative(investmentActionNextWindow(row))),
+      linkedAlert: blocked
+        ? "관계 분석 상태가 바뀌면 알림 정책에 따라 새 알림 후보를 만듭니다."
+        : formatInvestmentActionNarrative(investmentActionLinkedAlert(row)),
+      profitLoss: profitLoss,
+      profitTone: profitNumber == null ? "muted" : (profitNumber < 0 ? "danger" : (profitNumber > 0 ? "watch" : "hold")),
+      quality: quality,
+      changedAt: changedAt,
+      changedAtText: changedAt ? formatClock(changedAt) : "변경 시각 미확인",
+      validation: validation,
+      playbook: investmentActionPlaybook(row)
+    };
+  }
+
+  function renderInvestmentActionDecisionList(items, emptyText) {
+    var rows = Array.isArray(items) ? items : [];
+    if (!rows.length) return '<p class="investment-decision-empty">' + escapeHtml(emptyText || "확인된 항목이 없습니다.") + '</p>';
+    return '<ol class="investment-decision-list">' + rows.map(function (item) {
+      return '<li>' + escapeHtml(item) + '</li>';
+    }).join("") + '</ol>';
+  }
+
+  function renderInvestmentActionDecisionDetail(row, relatedNotification, inline) {
+    row = row || {};
+    var display = investmentActionUserPresentation(row);
+    var graph = row.graph || {};
+    var apiSource = String(row.apiSource || "출처 미기록");
+    var relatedAlertText = relatedNotification
+      ? "이 판단에서 만들어진 최신 알림이 있습니다. 발송 여부와 이유를 이어서 확인할 수 있습니다."
+      : display.linkedAlert;
+    var wrapperClass = "investment-decision-detail" + (inline ? " investment-action-detail inline-detail-surface investment-decision-inline" : "");
+    return [
+      '<div class="' + escapeHtml(wrapperClass) + '" data-investment-decision-detail>',
+      '<section class="investment-decision-conclusion ' + escapeHtml(display.tone) + '" aria-label="현재 결론">',
+      '<div class="investment-decision-conclusion-head"><span>현재 결론</span><span class="tone-chip ' + escapeHtml(display.tone) + '">' + escapeHtml(display.statusLabel) + '</span></div>',
+      '<h3>' + escapeHtml(display.headline) + '</h3>',
+      '<p>' + escapeHtml(display.explanation) + '</p>',
+      '<div class="investment-decision-next-action"><span>다음 행동</span><strong>' + escapeHtml(display.nextAction) + '</strong></div>',
+      '</section>',
+      '<p class="investment-decision-purpose"><strong>이 화면의 역할</strong><span>보유·관심 종목의 최근 수집 자료와 분석 결과를 모아 지금 검토할 행동과 그 이유를 설명합니다. 자동 주문은 실행하지 않습니다.</span></p>',
+      '<section class="investment-decision-facts" aria-label="판단 핵심 정보">',
+      '<div class="investment-decision-fact"><span>손익률</span><strong class="' + escapeHtml(display.profitTone) + '">' + escapeHtml(display.profitLoss) + '</strong><small>' + escapeHtml(sourceLabel(row.source) + " 종목 기준") + '</small></div>',
+      '<div class="investment-decision-fact"><span>데이터 상태</span><strong class="' + escapeHtml(display.quality.tone) + '">' + escapeHtml(display.quality.label) + '</strong><small>' + escapeHtml(display.quality.detail + " · " + apiSource) + '</small></div>',
+      '<div class="investment-decision-fact"><span>최종 변경</span><strong>' + escapeHtml(display.changedAtText) + '</strong><small>이 판단이 마지막으로 갱신된 시각</small></div>',
+      '</section>',
+      '<section class="investment-decision-section">',
+      '<header><h3>' + escapeHtml(display.evidenceTitle) + '</h3><p>' + escapeHtml(display.evidenceDescription) + '</p></header>',
+      renderInvestmentActionDecisionList(display.reasons, "연결된 계정·시세 근거가 아직 없습니다."),
+      '</section>',
+      '<section class="investment-decision-section investment-decision-review">',
+      '<header><h3>' + escapeHtml(display.blocked ? "판단을 다시 진행하려면" : "지금 확인할 것") + '</h3><p>확인이 끝나기 전에는 현재 결론을 확정 행동으로 보지 않습니다.</p></header>',
+      '<div class="investment-decision-review-time"><span>다시 볼 시점</span><strong>' + escapeHtml(display.nextWindow) + '</strong></div>',
+      renderInvestmentActionDecisionList(display.checks, "다음 데이터 갱신에서 새 근거를 확인합니다."),
+      '</section>',
+      '<section class="investment-decision-section investment-decision-change">',
+      '<header><h3>' + escapeHtml(display.blocked ? "언제 보류가 풀리나요?" : "언제 판단이 바뀌나요?") + '</h3></header>',
+      '<p>' + escapeHtml(display.invalidation) + '</p>',
+      '</section>',
+      '<section class="investment-decision-section investment-decision-alert">',
+      '<header><h3>알림 연결</h3></header>',
+      '<p>' + escapeHtml(relatedAlertText) + '</p>',
+      relatedNotification ? renderWorkDetailButton("notification-job", notificationJobKey(relatedNotification), "관련 알림 보기", "text-button compact") : '',
+      '</section>',
+      '<details class="investment-decision-technical">',
+      '<summary><span>데이터·분석 상세</span><small>사용 API와 원본 분석 상태</small></summary>',
+      '<dl>',
+      '<div><dt>원본 판단</dt><dd>' + escapeHtml(row.decision || row.action || "판단 대기") + '</dd></div>',
+      '<div><dt>검증 상태</dt><dd>' + escapeHtml(display.validation.label + " · " + display.validation.detail) + '</dd></div>',
+      '<div><dt>분석 경로</dt><dd>' + escapeHtml(display.playbook.label + " · " + display.playbook.detail) + '</dd></div>',
+      '<div><dt>데이터 구분</dt><dd>' + escapeHtml(display.quality.label + " (" + display.quality.raw + ")") + '</dd></div>',
+      '<div><dt>사용 API</dt><dd>' + escapeHtml(apiSource) + '</dd></div>',
+      graph.blocked ? '<div><dt>차단 코드</dt><dd>' + escapeHtml(graph.basis || "inference-required") + '</dd></div>' : '',
+      '</dl>',
+      '</details>',
+      '</div>'
+    ].join("");
   }
 
   function investmentDecisionStats(rows, filteredRows) {
@@ -16175,87 +16397,47 @@
   function investmentActionWorkDetailPayload(key) {
     var row = investmentActionByKey(key);
     if (!row) return null;
-    var graph = row.graph || {};
-    var reasons = Array.isArray(row.reasons) ? row.reasons : [];
-    var checks = Array.isArray(graph.nextChecks) ? graph.nextChecks : [];
     var name = row.name || stockDisplayName(row.symbol, row);
-    var validation = investmentActionValidation(row);
-    var playbook = investmentActionPlaybook(row);
-    var invalidation = investmentActionInvalidation(row);
-    var nextWindow = investmentActionNextWindow(row);
-    var linkedAlert = investmentActionLinkedAlert(row);
     var relatedNotification = relatedNotificationForInvestmentAction(row);
     return {
-      kicker: "Decision Inbox",
+      kicker: "종목 판단",
       title: name || row.symbol || "투자 판단 후보",
       meta: [row.symbol, sourceLabel(row.source), row.market, row.sector].filter(Boolean).join(" · "),
-      body: [
-        '<section class="work-detail-section">',
-        '<div class="work-detail-metric-row">',
-        renderNotificationDetailMetric("판단", row.decision || "판단 대기", row.tone || "hold"),
-        renderNotificationDetailMetric("검증 상태", validation.label, validation.tone || "hold"),
-        renderNotificationDetailMetric("플레이북", playbook.label, playbook.tone || "hold"),
-        renderNotificationDetailMetric("데이터", row.dataQuality || "-", "muted"),
-        renderNotificationDetailMetric("API", row.apiSource || "-", "muted"),
-        renderNotificationDetailMetric("손익률", String(row.profitLossRate || 0) + "%", Number(row.profitLossRate || 0) >= 0 ? "watch" : "danger"),
-        '</div>',
-        '</section>',
-        '<section class="work-detail-section primary">',
-        '<strong>요약 판단</strong>',
-        '<p>' + escapeHtml(reasons[0] || graph.reason || "다음 확인 조건을 먼저 봅니다.") + '</p>',
-        '</section>',
-        reasons.length ? '<section class="work-detail-section"><strong>판단 근거</strong><div class="notification-detail-reasons">' + reasons.map(function (reason) {
-          return '<p>' + escapeHtml(reason) + '</p>';
-        }).join("") + '</div></section>' : '',
-        checks.length ? '<section class="work-detail-section"><strong>다음 체크</strong><div class="notification-detail-tags">' + checks.map(function (item) {
-          return '<span>' + escapeHtml(item) + '</span>';
-        }).join("") + '</div></section>' : '',
-        '<section class="work-detail-section"><strong>무효화 조건</strong><p>' + escapeHtml(invalidation) + '</p></section>',
-        '<section class="work-detail-section"><strong>다음 확인 시점</strong><p>' + escapeHtml(nextWindow) + '</p></section>',
-        '<section class="work-detail-section"><strong>연결 알림</strong><p>' + escapeHtml(relatedNotification ? "이 판단에서 생성된 최신 알림을 확인할 수 있습니다." : linkedAlert) + '</p>' + (relatedNotification ? renderWorkDetailButton("notification-job", notificationJobKey(relatedNotification), "관련 알림 보기", "text-button compact") : '') + '</section>',
-        graph.blocked ? '<section class="work-detail-section"><strong>차단 조건</strong><p>' + escapeHtml(graph.basis || "InferenceBox") + '</p></section>' : ''
-      ].join("")
+      body: renderInvestmentActionDecisionDetail(row, relatedNotification, false)
     };
   }
 
   function renderInvestmentActionRow(row, index) {
     row = row || {};
-    var graph = row.graph || {};
-    var reasons = Array.isArray(row.reasons) ? row.reasons : [];
-    var checks = Array.isArray(graph.nextChecks) ? graph.nextChecks : [];
     var name = row.name || stockDisplayName(row.symbol, row);
     var key = investmentActionKey(row, index);
     var expanded = state.expandedInvestmentActionKey === key;
-    var validation = investmentActionValidation(row);
-    var playbook = investmentActionPlaybook(row);
-    var invalidation = investmentActionInvalidation(row);
-    var nextWindow = investmentActionNextWindow(row);
-    var linkedAlert = investmentActionLinkedAlert(row);
+    var display = investmentActionUserPresentation(row);
     return [
-      '<div class="investment-action-row compact ' + escapeHtml(expanded ? "active" : "") + '"' + cardTypeAttrs("action-queue-card", row.tone || "hold") + cardFormatAttrs("decision-ticket", "compact") + '>',
+      '<div class="investment-action-row compact ' + escapeHtml(expanded ? "active" : "") + '"' + cardTypeAttrs("action-queue-card", display.tone) + cardFormatAttrs("decision-ticket", "compact") + '>',
       '<div class="investment-action-main">',
       '<strong>' + escapeHtml(name) + '</strong>',
       '<span>' + escapeHtml([row.symbol, sourceLabel(row.source), row.market, row.sector].filter(Boolean).join(" · ")) + '</span>',
       renderRecordChangedAt(row),
       '</div>',
       '<div class="investment-action-stage">',
-      '<span class="tone-chip ' + escapeHtml(row.tone || "hold") + '">' + escapeHtml(row.decision || "판단 대기") + '</span>',
-      '<em>' + escapeHtml(playbook.label) + '</em>',
+      '<span class="tone-chip ' + escapeHtml(display.tone) + '">' + escapeHtml(display.actionLabel) + '</span>',
+      '<em>' + escapeHtml(display.statusLabel) + '</em>',
       '</div>',
       '<div class="investment-action-meta">',
-      '<span>데이터 <strong>' + escapeHtml(row.dataQuality || "-") + '</strong></span>',
-      '<span>손익률 <strong>' + escapeHtml(row.profitLossRate || 0) + '%</strong></span>',
-      graph.blocked ? '<span>차단 <strong>' + escapeHtml(graph.basis || "InferenceBox") + '</strong></span>' : '<span>추론 <strong>ready</strong></span>',
-      '<span>검증 <strong>' + escapeHtml(validation.label) + '</strong></span>',
+      '<span>데이터 <strong>' + escapeHtml(display.quality.label) + '</strong></span>',
+      '<span>손익률 <strong>' + escapeHtml(display.profitLoss) + '</strong></span>',
+      '<span>분석 <strong>' + escapeHtml(display.statusLabel) + '</strong></span>',
+      '<span>출처 <strong>' + escapeHtml(row.apiSource || "미기록") + '</strong></span>',
       '</div>',
-      '<p>' + escapeHtml((reasons[0] || graph.reason || "다음 확인 조건을 먼저 봅니다.")) + '</p>',
+      '<p>' + escapeHtml(display.explanation) + '</p>',
       '<div class="investment-decision-rail">',
-      renderInvestmentDecisionCell("무효화 조건", invalidation, "", playbook.tone),
-      renderInvestmentDecisionCell("다음 확인 시점", nextWindow, "", validation.tone),
-      renderInvestmentDecisionCell("연결 알림", linkedAlert, "알림 정책과 연결", row.tone || "hold"),
+      renderInvestmentDecisionCell(display.blocked ? "보류 해제 조건" : "판단 변경 조건", display.invalidation, "", display.tone),
+      renderInvestmentDecisionCell("다시 볼 시점", display.nextWindow, "", display.quality.tone),
+      renderInvestmentDecisionCell("알림", display.linkedAlert, "알림 정책과 연결", display.tone),
       '</div>',
       '<div class="investment-action-checks">',
-      '<span>' + escapeHtml(checks.length ? checks[0] : "추가 확인 대기") + '</span>',
+      '<span>' + escapeHtml(display.checks.length ? display.checks[0] : display.nextAction) + '</span>',
       '<button class="mini-button" type="button" data-investment-action-toggle="' + escapeHtml(key) + '">' + escapeHtml(expanded ? "상세 표시 중" : "상세") + '</button>',
       renderWorkDetailButton("investment-action", key, "팝업", "mini-button ghost"),
       '</div>',
@@ -16276,50 +16458,15 @@
         tone: "muted",
         label: "Detail",
         title: "투자 후보를 선택하세요",
-        description: "후보 목록은 최소 판단 정보만 보여주고, 온톨로지 근거·차단 조건·다음 체크는 상세에서 확인합니다.",
-        meta: ["근거", "차단 조건", "다음 체크"]
+        description: "후보 목록은 핵심 결론만 보여주고, 판단에 사용한 정보와 다시 확인할 조건은 상세에서 확인합니다.",
+        meta: ["결론", "확인한 정보", "다음 행동"]
       }),
       '</aside>'
     ].join("");
   }
 
   function renderInvestmentActionInlineDetail(row) {
-    row = row || {};
-    var graph = row.graph || {};
-    var reasons = Array.isArray(row.reasons) ? row.reasons : [];
-    var checks = Array.isArray(graph.nextChecks) ? graph.nextChecks : [];
-    var validation = investmentActionValidation(row);
-    var playbook = investmentActionPlaybook(row);
-    var invalidation = investmentActionInvalidation(row);
-    var nextWindow = investmentActionNextWindow(row);
-    var linkedAlert = investmentActionLinkedAlert(row);
-    return [
-      '<div class="investment-action-detail inline-detail-surface">',
-      '<div class="inline-detail-metrics">',
-      renderNotificationDetailMetric("판단", row.decision || "판단 대기", row.tone || "hold"),
-      renderNotificationDetailMetric("검증 상태", validation.label, validation.tone || "hold"),
-      renderNotificationDetailMetric("플레이북", playbook.label, playbook.tone || "hold"),
-      renderNotificationDetailMetric("데이터", row.dataQuality || "-", "muted"),
-      renderNotificationDetailMetric("API", row.apiSource || "-", "muted"),
-      renderNotificationDetailMetric("손익률", String(row.profitLossRate || 0) + "%", Number(row.profitLossRate || 0) >= 0 ? "watch" : "danger"),
-      '</div>',
-      '<section class="inline-detail-block primary">',
-      '<strong>요약 판단</strong>',
-      '<p>' + escapeHtml(reasons[0] || graph.reason || "다음 확인 조건을 먼저 봅니다.") + '</p>',
-      '</section>',
-      '<section class="inline-detail-block watch"><strong>전략 플레이북</strong><p>' + escapeHtml(playbook.label + " · " + playbook.detail) + '</p></section>',
-      reasons.length ? '<section class="inline-detail-block"><strong>판단 근거</strong><div class="inline-detail-list">' + reasons.map(function (reason) {
-        return '<span>' + escapeHtml(reason) + '</span>';
-      }).join("") + '</div></section>' : '',
-      checks.length ? '<section class="inline-detail-block"><strong>다음 체크</strong><div class="inline-detail-tags">' + checks.map(function (item) {
-        return '<span>' + escapeHtml(item) + '</span>';
-      }).join("") + '</div></section>' : '',
-      '<section class="inline-detail-block caution"><strong>무효화 조건</strong><p>' + escapeHtml(invalidation) + '</p></section>',
-      '<section class="inline-detail-block"><strong>다음 확인 시점</strong><p>' + escapeHtml(nextWindow) + '</p></section>',
-      '<section class="inline-detail-block"><strong>연결 알림</strong><p>' + escapeHtml(linkedAlert) + '</p></section>',
-      graph.blocked ? '<section class="inline-detail-block caution"><strong>차단 조건</strong><p>' + escapeHtml(graph.basis || "InferenceBox") + '</p></section>' : '',
-      '</div>'
-    ].join("");
+    return renderInvestmentActionDecisionDetail(row || {}, relatedNotificationForInvestmentAction(row || {}), true);
   }
 
   function renderInvestmentPlaybookPanel(snapshot) {

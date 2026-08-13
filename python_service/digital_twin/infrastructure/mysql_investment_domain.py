@@ -905,6 +905,21 @@ class MySQLInvestmentDomainStore(MySQLOperationalConnection):
                 "ORDER BY observed_at DESC, risk_snapshot_id DESC LIMIT 1",
                 (portfolio_key,),
             ).fetchone()
+            exposure = connection.execute(
+                "SELECT payload_json FROM portfolio_exposure_snapshots WHERE portfolio_id = %s "
+                "ORDER BY observed_at DESC, exposure_snapshot_id DESC LIMIT 1",
+                (portfolio_key,),
+            ).fetchone()
+            rebalance = connection.execute(
+                "SELECT payload_json FROM portfolio_rebalance_proposals WHERE portfolio_id = %s "
+                "ORDER BY created_at DESC, proposal_id DESC LIMIT 1",
+                (portfolio_key,),
+            ).fetchone()
+            rebalance_state = connection.execute(
+                "SELECT current_payload_json, revision, transition_type FROM portfolio_rebalance_states "
+                "WHERE portfolio_id = %s LIMIT 1",
+                (portfolio_key,),
+            ).fetchone()
             checkpoint = connection.execute(
                 "SELECT payload_json FROM portfolio_snapshot_checkpoints WHERE portfolio_id = %s",
                 (portfolio_key,),
@@ -929,7 +944,11 @@ class MySQLInvestmentDomainStore(MySQLOperationalConnection):
                 "ORDER BY observed_at DESC, quarantine_id DESC LIMIT 8",
                 (portfolio_key,),
             ).fetchall()
-        return {
+        rebalance_state_payload = _json_loads((rebalance_state or {}).get("current_payload_json"), {})
+        if rebalance_state_payload:
+            rebalance_state_payload["revision"] = str((rebalance_state or {}).get("revision") or "")
+            rebalance_state_payload["lastTransitionType"] = str((rebalance_state or {}).get("transition_type") or "")
+        payload = {
             "portfolioId": portfolio_key,
             "snapshotCheckpoint": _json_loads(checkpoint.get("payload_json"), {}) if checkpoint else {},
             "reconciliation": _json_loads(reconciliation.get("payload_json"), {}) if reconciliation else {},
@@ -946,9 +965,16 @@ class MySQLInvestmentDomainStore(MySQLOperationalConnection):
             "recentSnapshotQuarantines": [
                 _json_loads(item.get("payload_json"), {}) for item in quarantines or []
             ],
+            "exposureSnapshot": _json_loads(exposure.get("payload_json"), {}) if exposure else {},
             "portfolioDecisionCycle": _json_loads(decision_cycle.get("payload_json"), {}) if decision_cycle else {},
             "portfolioRiskSnapshot": _json_loads(risk_snapshot.get("payload_json"), {}) if risk_snapshot else {},
+            "rebalanceProposal": _json_loads(rebalance.get("payload_json"), {}) if rebalance else {},
+            "rebalanceState": rebalance_state_payload,
         }
+        payload["status"] = "ready" if any(
+            value for key, value in payload.items() if key not in {"portfolioId", "status"}
+        ) else "unavailable"
+        return payload
 
     def latest_portfolio_lifecycle(self, portfolio_id: str) -> Dict[str, object]:
         portfolio_key = str(portfolio_id or "")

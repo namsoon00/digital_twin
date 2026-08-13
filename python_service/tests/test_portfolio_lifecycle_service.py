@@ -1,3 +1,4 @@
+import json
 import sys
 import unittest
 from dataclasses import replace
@@ -50,6 +51,7 @@ from digital_twin.domain.notifications import NotificationJob
 from digital_twin.domain.trade_execution import ActionEnvelope, ActionPlan, ExecutionEpisode, OrderIntent, TradeFill
 from digital_twin.infrastructure.mysql_operational_connection import MYSQL_SCHEMA
 from digital_twin.infrastructure.event_bus import EventBus
+from digital_twin.infrastructure.mysql_investment_domain import MySQLInvestmentDomainStore
 
 
 NOW = "2026-08-12T06:00:00Z"
@@ -1366,6 +1368,60 @@ class PortfolioLifecycleServiceTests(unittest.TestCase):
         candidates = [item for item in graph.entities if (item.properties or {}).get("tboxClass") == "PortfolioActionCandidate"]
         self.assertTrue(candidates)
         self.assertTrue(all((item.properties or {}).get("executable") is False for item in candidates))
+
+    def test_mysql_ontology_lifecycle_context_includes_rebalance_transition_facts(self):
+        class QueryResult:
+            def __init__(self, one=None, many=None):
+                self.one = one
+                self.many = list(many or [])
+
+            def fetchone(self):
+                return self.one
+
+            def fetchall(self):
+                return self.many
+
+        class Connection:
+            def __enter__(self):
+                return self
+
+            def __exit__(self, *_args):
+                return False
+
+            def execute(self, sql, _params):
+                if "portfolio_exposure_snapshots" in sql:
+                    return QueryResult(one={"payload_json": json.dumps({"snapshotId": "exposure:1"})})
+                if "portfolio_rebalance_proposals" in sql:
+                    return QueryResult(one={"payload_json": json.dumps({"proposalId": "proposal:1"})})
+                if "portfolio_rebalance_states" in sql:
+                    return QueryResult(one={
+                        "current_payload_json": json.dumps({"status": "POLICY_BREACH"}),
+                        "revision": "rebalance-revision:1",
+                        "transition_type": "OPENED",
+                    })
+                if "portfolio_risk_snapshots" in sql:
+                    return QueryResult(one={"payload_json": json.dumps({"riskSnapshotId": "risk:1"})})
+                if "portfolio_ledger_entries" in sql:
+                    return QueryResult(many=[])
+                if any(table in sql for table in (
+                    "portfolio_activity_episodes",
+                    "portfolio_decision_action_observations",
+                    "portfolio_snapshot_quarantines",
+                )):
+                    return QueryResult(many=[])
+                return QueryResult()
+
+        store = object.__new__(MySQLInvestmentDomainStore)
+        store.connect = lambda: Connection()
+
+        lifecycle = store.ontology_portfolio_lifecycle_context("portfolio:main")
+
+        self.assertEqual("ready", lifecycle["status"])
+        self.assertEqual("exposure:1", lifecycle["exposureSnapshot"]["snapshotId"])
+        self.assertEqual("proposal:1", lifecycle["rebalanceProposal"]["proposalId"])
+        self.assertEqual("POLICY_BREACH", lifecycle["rebalanceState"]["status"])
+        self.assertEqual("rebalance-revision:1", lifecycle["rebalanceState"]["revision"])
+        self.assertEqual("OPENED", lifecycle["rebalanceState"]["lastTransitionType"])
 
     def test_target_scoped_lifecycle_omits_relations_to_out_of_scope_stocks(self):
         snapshot = live_snapshot()

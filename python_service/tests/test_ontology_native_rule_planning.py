@@ -13,19 +13,21 @@ class NativeRulePlannerTopologyTests(unittest.TestCase):
     def sample_graph(self):
         graph = PortfolioOntology("planner-topology")
         graph.entities.extend([
+            OntologyEntity("portfolio:default", "Portfolio", "portfolio", {}),
             OntologyEntity("stock:005930", "Samsung", "stock", {"symbol": "005930"}),
             OntologyEntity("stock:000660", "SK hynix", "stock", {"symbol": "000660"}),
             OntologyEntity("price:005930", "Price", "price-metric", {"symbol": "005930"}),
             OntologyEntity("macro:kr", "Macro", "macro-regime", {}),
         ])
         graph.relations.extend([
+            OntologyRelation("portfolio:default", "macro:kr", "HAS_RISK_SNAPSHOT"),
             OntologyRelation("stock:005930", "price:005930", "HAS_PRICE"),
             OntologyRelation("macro:kr", "stock:005930", "HAS_MACRO_REGIME"),
             OntologyRelation("stock:000660", "macro:kr", "HAS_RATE_SENSITIVITY"),
         ])
         return graph
 
-    def test_topology_contains_only_stock_subjects_and_incident_relation_types(self):
+    def test_topology_contains_rule_subjects_and_incident_relation_types(self):
         topology = native_rule_planner_topology(self.sample_graph())
 
         self.assertEqual(NATIVE_RULE_PLANNER_TOPOLOGY_VERSION, topology["version"])
@@ -35,6 +37,8 @@ class NativeRulePlannerTopologyTests(unittest.TestCase):
             topology["relationTypesBySymbol"]["005930"],
         )
         self.assertEqual(["HAS_RATE_SENSITIVITY"], topology["relationTypesBySymbol"]["000660"])
+        self.assertEqual(["portfolio:default"], topology["sourceIdsBySymbol"]["PORTFOLIO:DEFAULT"])
+        self.assertEqual(["HAS_RISK_SNAPSHOT"], topology["relationTypesBySymbol"]["PORTFOLIO:DEFAULT"])
 
     def test_normalized_topology_requires_a_matching_fingerprint_and_can_select_targets(self):
         topology = native_rule_planner_topology(self.sample_graph())

@@ -19,6 +19,16 @@ def _clean_symbol(value: object) -> str:
     return str(value or "").upper().strip()
 
 
+def _native_subject_key(entity: object) -> str:
+    kind = str(getattr(entity, "kind", "") or "")
+    properties = dict(getattr(entity, "properties", {}) or {})
+    if kind in {"stock", "crypto-asset"}:
+        return _clean_symbol(properties.get("symbol"))
+    if kind == "portfolio":
+        return _clean_symbol(getattr(entity, "entity_id", ""))
+    return ""
+
+
 def _normalized_relation_types(values: Iterable[object]) -> List[str]:
     return sorted({
         str(value or "").upper().strip()
@@ -41,10 +51,7 @@ def native_rule_planner_topology(graph: PortfolioOntology) -> Dict[str, object]:
     source_ids_by_symbol: Dict[str, Set[str]] = {}
     symbol_by_entity_id: Dict[str, str] = {}
     for entity in list(getattr(graph, "entities", []) or []):
-        if str(getattr(entity, "kind", "") or "") not in {"stock", "crypto-asset"}:
-            continue
-        properties = dict(getattr(entity, "properties", {}) or {})
-        symbol = _clean_symbol(properties.get("symbol"))
+        symbol = _native_subject_key(entity)
         entity_id = str(getattr(entity, "entity_id", "") or "").strip()
         if not symbol or not entity_id:
             continue

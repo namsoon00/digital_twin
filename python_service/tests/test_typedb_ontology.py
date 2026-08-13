@@ -3556,6 +3556,57 @@ class TypeDBOntologyRepositoryTests(unittest.TestCase):
         self.assertTrue(all("worldview-manifest-active-pointer" not in query for query in repository.queries))
         self.assertTrue(all("abox-scope-active-pointer" not in query for query in repository.queries))
 
+    def test_portfolio_any_rule_uses_manifest_indexed_physical_facts(self):
+        repository = TypeDBOntologyGraphRepository("127.0.0.1:1729")
+        graph = PortfolioOntology("portfolio-evidence-index")
+        graph.entities.extend([
+            OntologyEntity("portfolio:default", "Portfolio", "portfolio", {
+                "ontologyBox": "ABox",
+                "snapshotId": "abox-scope:portfolio",
+            }),
+            OntologyEntity("portfolio-risk-snapshot:risk-1", "Risk", "portfolio-risk-snapshot", {
+                "ontologyBox": "ABox",
+                "snapshotId": "abox-scope:portfolio",
+                "volatilityPolicyDeltaPct": 2.5,
+            }),
+        ])
+        graph.relations.append(OntologyRelation(
+            "portfolio:default",
+            "portfolio-risk-snapshot:risk-1",
+            "HAS_RISK_SNAPSHOT",
+            properties={"ontologyBox": "ABox", "snapshotId": "abox-scope:portfolio"},
+        ))
+        topology = native_rule_planner_topology(graph)
+        node_rows, relation_rows = repository.graph_persistence_rows(graph)
+        index = native_rule_evidence_read_index_from_rows(node_rows, relation_rows)
+        execution_index = typedb_native_rule_evidence_read_index_for_execution({
+            "nativeRulePlannerTopology": topology,
+            "nativeRuleEvidenceReadIndex": index,
+        })
+        rule = next(
+            item for item in default_graph_inference_rules()
+            if item.rule_id == "graph.portfolio.risk_policy.review.v1"
+        )
+        source_storage_id = execution_index["index"]["sourceStorageIdsBySourceId"]["portfolio:default"]
+        relation_storage_ids = execution_index["index"]["relationStorageIdsBySymbolAndType"][
+            "PORTFOLIO:DEFAULT"
+        ]["HAS_RISK_SNAPSHOT"]
+
+        plan = typedb_native_any_group_check_query(
+            rule.to_dict(),
+            "portfolio:default",
+            scoped_manifest_only=True,
+            world_id="portfolio:local:default",
+            active_source_storage_id=source_storage_id,
+            active_relation_storage_ids=relation_storage_ids,
+            active_relation_storage_ids_by_type={"HAS_RISK_SNAPSHOT": relation_storage_ids},
+        )
+
+        self.assertEqual("verified", execution_index["status"])
+        self.assertIn('has ontology-storage-id "' + source_storage_id + '"', plan["query"])
+        self.assertIn('has ontology-storage-id "' + relation_storage_ids[0] + '"', plan["query"])
+        self.assertNotIn('has ontology-kind "abox-scope-active-pointer"', plan["query"])
+
     def test_active_abox_relation_types_reuses_verified_manifest_evidence_index(self):
         repository = TypeDBOntologyGraphRepository("127.0.0.1:1729")
         graph = PortfolioOntology("typedb-indexed-topology")

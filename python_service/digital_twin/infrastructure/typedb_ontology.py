@@ -429,7 +429,7 @@ def native_rule_evidence_read_index_from_rows(
     evaluator.  The index exists solely so post-function materialization can
     retrieve the same evidence without a costly active-scope pointer join.
     """
-    stocks_by_id: Dict[str, str] = {}
+    subjects_by_id: Dict[str, str] = {}
     source_storage_ids_by_source_id: Dict[str, str] = {}
     source_ids_by_symbol: Dict[str, List[str]] = {}
     for row in node_rows or []:
@@ -438,13 +438,17 @@ def native_rule_evidence_read_index_from_rows(
         # BTC/ETH use the same native RuleBox execution path as stocks but
         # are materialized as crypto-asset sources. Do not make their direct
         # market rules fall back to an unbounded TypeDB topology scan.
-        if str(row.get("kind") or "") not in {"stock", "crypto-asset"}:
+        kind = str(row.get("kind") or "")
+        if kind not in {"stock", "crypto-asset", "portfolio"}:
             continue
         source_id = str(row.get("id") or "").strip()
-        symbol = str(row.get("symbol") or "").upper().strip()
+        symbol = str(
+            row.get("symbol")
+            or (source_id if kind == "portfolio" else "")
+        ).upper().strip()
         if not source_id or not symbol:
             continue
-        stocks_by_id[source_id] = symbol
+        subjects_by_id[source_id] = symbol
         source_storage_ids_by_source_id[source_id] = ontology_storage_id(row, source_id, "node")
         source_ids_by_symbol.setdefault(symbol, []).append(source_id)
 
@@ -462,8 +466,8 @@ def native_rule_evidence_read_index_from_rows(
         source_id = str(row.get("source") or "").strip()
         target_id = str(row.get("target") or "").strip()
         candidates = {
-            stocks_by_id.get(source_id, ""),
-            stocks_by_id.get(target_id, ""),
+            subjects_by_id.get(source_id, ""),
+            subjects_by_id.get(target_id, ""),
             str(row.get("symbol") or "").upper().strip(),
         }
         relation_storage_id = ontology_storage_id(row, relation_row_id(row), "relation")
@@ -14972,7 +14976,10 @@ relation ontology-assertion,
         source_storage_id = str(
             dict(index_payload.get("sourceStorageIdsBySourceId") or {}).get(str(source_id or "")) or ""
         ).strip()
-        source_symbol = symbol_from_subject(str(source_id or ""))
+        source_symbol = (
+            symbol_from_subject(str(source_id or ""))
+            or str(source_id or "").upper().strip()
+        )
         relation_storage_ids_by_type = dict(
             dict(index_payload.get("relationStorageIdsBySymbolAndType") or {}).get(source_symbol, {}) or {}
         )

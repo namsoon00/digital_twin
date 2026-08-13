@@ -5,6 +5,7 @@ import urllib.parse
 import urllib.request
 from dataclasses import replace
 from datetime import datetime, timedelta, timezone
+from statistics import median
 from typing import Callable, Dict, Iterable, List, Optional, Tuple
 
 from ..domain.data_freshness import combine_quality
@@ -26,6 +27,10 @@ INVESTOR_PATH = "/uapi/domestic-stock/v1/quotations/inquire-investor"
 INVESTOR_ESTIMATE_PATH = "/uapi/domestic-stock/v1/quotations/investor-trend-estimate"
 INVESTOR_ESTIMATE_TR_ID = "HHPTJ04160200"
 ORDERBOOK_PATH = "/uapi/domestic-stock/v1/quotations/inquire-asking-price-exp-ccn"
+ESTIMATE_PERFORM_PATH = "/uapi/domestic-stock/v1/quotations/estimate-perform"
+ESTIMATE_PERFORM_TR_ID = "HHKST668300C0"
+INVEST_OPINION_PATH = "/uapi/domestic-stock/v1/quotations/invest-opinion"
+INVEST_OPINION_TR_ID = "FHKST663300C0"
 DETAIL_SIGNAL_KEYS = [
     "tradeStrength",
     "buyVolume",
@@ -373,6 +378,26 @@ def merge_if_present(target: Dict[str, object], source: Dict[str, object]) -> Di
         if value not in (None, ""):
             target[key] = value
     return target
+
+
+def merge_observation_rows(*values: object) -> List[Dict[str, object]]:
+    result: List[Dict[str, object]] = []
+    seen = set()
+    for value in values:
+        for item in value if isinstance(value, list) else []:
+            if not isinstance(item, dict):
+                continue
+            key = (
+                str(item.get("observationId") or item.get("evidenceId") or ""),
+                str(item.get("provider") or ""),
+                str(item.get("period") or item.get("asOf") or ""),
+                number(item.get("base") or item.get("value") or item.get("eps") or item.get("per")),
+            )
+            if key in seen:
+                continue
+            seen.add(key)
+            result.append(dict(item))
+    return result
 
 
 def append_source(existing: str, addition: str) -> str:
@@ -775,6 +800,11 @@ class KISMarketSignalProvider:
         self.last_request_monotonic = 0.0
         self.consecutive_failures = 0
         self.circuit_open_until: Optional[datetime] = None
+        self.fundamental_refresh_count = 0
+        self.fundamental_consecutive_failures = 0
+        self.fundamental_circuit_open_until: Optional[datetime] = None
+        self.fundamental_failure_counts: Dict[str, int] = {}
+        self.fundamental_circuit_open_by_stage: Dict[str, datetime] = {}
         self.diagnostics: Dict[str, object] = {
             "enabled": self.enabled(),
             "configured": self.configured(),
@@ -833,6 +863,18 @@ class KISMarketSignalProvider:
 
     def live_refresh_seconds(self) -> int:
         return self.int_setting("kisMarketSignalLiveRefreshSeconds", 60, 0, 3600)
+
+    def fundamental_estimates_enabled(self) -> bool:
+        return self.bool_setting("kisFundamentalEstimatesEnabled", self.fetch_json is kis_http_json)
+
+    def fundamental_cache_hours(self) -> int:
+        return self.int_setting("kisFundamentalCacheHours", 24, 1, 24 * 30)
+
+    def fundamental_refresh_limit(self) -> int:
+        return self.int_setting("kisFundamentalRefreshSymbolsPerCycle", 2, 0, 20)
+
+    def fundamental_timeout_seconds(self) -> int:
+        return self.int_setting("kisFundamentalTimeoutSeconds", 6, 2, 12)
 
     def unchanged_stale_count(self) -> int:
         return self.int_setting("kisMarketSignalUnchangedStaleCount", 3, 1, 20)
@@ -910,6 +952,52 @@ class KISMarketSignalProvider:
     def record_success(self) -> None:
         self.consecutive_failures = 0
 
+    def record_fundamental_success(self, stage: str) -> None:
+        self.fundamental_failure_counts[str(stage or "fundamental")] = 0
+        self.fundamental_circuit_open_by_stage.pop(str(stage or "fundamental"), None)
+        self.fundamental_consecutive_failures = max(self.fundamental_failure_counts.values(), default=0)
+
+    def record_fundamental_failure(self, stage: str, symbol: str, error: Exception) -> None:
+        failures = self.diagnostics.get("fundamentalFailures")
+        if not isinstance(failures, list):
+            failures = []
+            self.diagnostics["fundamentalFailures"] = failures
+        failures.append({
+            "stage": str(stage or ""),
+            "symbol": str(symbol or ""),
+            "message": http_error_text(error),
+        })
+        del failures[:-8]
+        stage_key = str(stage or "fundamental")
+        self.fundamental_failure_counts[stage_key] = self.fundamental_failure_counts.get(stage_key, 0) + 1
+        self.fundamental_consecutive_failures = max(self.fundamental_failure_counts.values(), default=0)
+        if self.fundamental_failure_counts[stage_key] >= self.circuit_failure_threshold():
+            open_until = datetime.now(timezone.utc) + timedelta(minutes=self.circuit_cooldown_minutes())
+            self.fundamental_circuit_open_by_stage[stage_key] = open_until
+            self.fundamental_circuit_open_until = max(self.fundamental_circuit_open_by_stage.values())
+            self.diagnostics["fundamentalCircuitOpen"] = True
+            self.diagnostics["fundamentalCircuitOpenUntil"] = open_until.isoformat().replace("+00:00", "Z")
+            self.diagnostics["fundamentalCircuitOpenStages"] = sorted(self.fundamental_circuit_open_by_stage)
+
+    def fundamental_circuit_open(self, stage: str = "") -> bool:
+        current = datetime.now(timezone.utc)
+        self.fundamental_circuit_open_by_stage = {
+            key: value
+            for key, value in self.fundamental_circuit_open_by_stage.items()
+            if value > current
+        }
+        self.fundamental_circuit_open_until = max(self.fundamental_circuit_open_by_stage.values(), default=None)
+        self.diagnostics["fundamentalCircuitOpen"] = bool(self.fundamental_circuit_open_by_stage)
+        self.diagnostics["fundamentalCircuitOpenStages"] = sorted(self.fundamental_circuit_open_by_stage)
+        self.diagnostics["fundamentalCircuitOpenUntil"] = (
+            self.fundamental_circuit_open_until.isoformat().replace("+00:00", "Z")
+            if self.fundamental_circuit_open_until
+            else ""
+        )
+        if stage:
+            return str(stage) in self.fundamental_circuit_open_by_stage
+        return bool(self.fundamental_circuit_open_by_stage)
+
     def record_failure(self, stage: str, symbol: str, error: Exception) -> None:
         failures = self.diagnostics.get("failures")
         if not isinstance(failures, list):
@@ -965,26 +1053,35 @@ class KISMarketSignalProvider:
         headers: Dict[str, str],
         body: Dict[str, object] = None,
         query: Dict[str, str] = None,
+        timeout: int = 12,
+        attempts: int = None,
+        failure_domain: str = "market",
     ) -> Dict[str, object]:
-        if self.circuit_open():
+        if failure_domain == "fundamental" and self.fundamental_circuit_open(stage):
+            raise KISAPIError(stage, ExternalCircuitOpen("fundamental circuit open"))
+        if failure_domain != "fundamental" and self.circuit_open():
             raise KISAPIError(stage, self.circuit_open_error())
         last_error: Exception = RuntimeError("unknown error")
-        for attempt in range(self.retry_attempts()):
+        request_attempts = max(1, int(attempts or self.retry_attempts()))
+        for attempt in range(request_attempts):
             try:
                 self.throttle()
                 try:
-                    payload = self.fetch_json(method, self.base_url + path, headers, body, query, 12)
+                    payload = self.fetch_json(method, self.base_url + path, headers, body, query, timeout)
                 finally:
                     self.last_request_monotonic = time.monotonic()
                 if not isinstance(payload, dict):
                     raise RuntimeError("KIS 응답 형식 오류")
                 if str(payload.get("rt_cd") or "0") not in {"0", ""}:
                     raise RuntimeError(str(payload.get("msg_cd") or "") + " " + str(payload.get("msg1") or "").strip())
-                self.record_success()
+                if failure_domain == "fundamental":
+                    self.record_fundamental_success(stage)
+                else:
+                    self.record_success()
                 return payload
             except Exception as error:  # noqa: BLE001 - adapter normalizes vendor failures.
                 last_error = error
-                if attempt + 1 >= self.retry_attempts() or not retryable_http_error(error):
+                if attempt + 1 >= request_attempts or not retryable_http_error(error):
                     break
                 self.sleep(0.45 * (attempt + 1))
         raise KISAPIError(stage, last_error)
@@ -1041,6 +1138,11 @@ class KISMarketSignalProvider:
         if not updated_at:
             return None
         return max(0.0, (self.now() - updated_at).total_seconds())
+
+    def fundamental_cache_fresh(self, payload: Dict[str, object]) -> bool:
+        fundamental = payload.get("fundamentalEstimates") if isinstance(payload, dict) and isinstance(payload.get("fundamentalEstimates"), dict) else {}
+        fetched_at = parse_iso(fundamental.get("fetchedAt"))
+        return bool(fetched_at and self.now() - fetched_at < timedelta(hours=self.fundamental_cache_hours()))
 
     def is_signal_complete(self, payload: Dict[str, object]) -> bool:
         if not payload:
@@ -1225,6 +1327,80 @@ class KISMarketSignalProvider:
             self.record_failure(stage, symbol, error)
             return None
 
+    def fetch_full_stage(
+        self,
+        symbol: str,
+        stage: str,
+        path: str,
+        tr_id: str,
+        query: Dict[str, str],
+    ) -> Dict[str, object]:
+        if self.fundamental_circuit_open(stage):
+            self.diagnostics["fundamentalCircuitOpen"] = True
+            return {}
+        try:
+            return self.request(
+                stage,
+                "GET",
+                path,
+                self.auth_headers(tr_id),
+                query=query,
+                timeout=self.fundamental_timeout_seconds(),
+                attempts=1,
+                failure_domain="fundamental",
+            )
+        except KISAPIError as error:
+            self.record_fundamental_failure(stage, symbol, error)
+            return {}
+
+    def fetch_fundamental_estimates(self, symbol: str) -> Dict[str, object]:
+        if not self.fundamental_estimates_enabled():
+            return {}
+        fetched_at = self.now().astimezone(timezone.utc).isoformat().replace("+00:00", "Z")
+        estimate_payload = self.fetch_full_stage(
+            symbol,
+            "fundamental-estimate",
+            ESTIMATE_PERFORM_PATH,
+            ESTIMATE_PERFORM_TR_ID,
+            {"SHT_CD": symbol},
+        )
+        end_date = self.now().astimezone(KST).strftime("%Y%m%d")
+        start_date = (self.now().astimezone(KST) - timedelta(days=550)).strftime("%Y%m%d")
+        opinion_payload = self.fetch_full_stage(
+            symbol,
+            "fundamental-opinion",
+            INVEST_OPINION_PATH,
+            INVEST_OPINION_TR_ID,
+            {
+                "FID_COND_MRKT_DIV_CODE": "J",
+                "FID_COND_SCR_DIV_CODE": "16633",
+                "FID_INPUT_ISCD": symbol,
+                "FID_INPUT_DATE_1": start_date,
+                "FID_INPUT_DATE_2": end_date,
+            },
+        )
+        estimate = normalize_estimate_perform(symbol, estimate_payload, fetched_at, self.now())
+        opinion = normalize_investment_opinions(symbol, opinion_payload, fetched_at)
+        if not estimate and not opinion:
+            return {}
+        return {
+            **estimate,
+            **opinion,
+            "provider": "KIS Open API",
+            "source": "estimate-perform + invest-opinion",
+            "fetchedAt": fetched_at,
+        }
+
+    def fundamental_estimates_for_signal(self, symbol: str, cached: Dict[str, object]) -> Dict[str, object]:
+        existing = cached.get("fundamentalEstimates") if isinstance(cached, dict) and isinstance(cached.get("fundamentalEstimates"), dict) else {}
+        if self.fundamental_cache_fresh(cached):
+            return dict(existing)
+        if self.fundamental_refresh_count >= self.fundamental_refresh_limit():
+            return dict(existing)
+        self.fundamental_refresh_count += 1
+        refreshed = self.fetch_fundamental_estimates(symbol)
+        return refreshed or dict(existing)
+
     def reusable_intraday_investor_estimate(self, cached: Dict[str, object]) -> Dict[str, object]:
         if not cached or not self.is_kr_regular_market_hours():
             return {}
@@ -1287,6 +1463,9 @@ class KISMarketSignalProvider:
         else:
             investor = None
         orderbook = self.fetch_stage(symbol, "orderbook", ORDERBOOK_PATH, "FHKST01010200") if microstructure_available else None
+        # Slow-moving fundamentals are bounded to a few symbols per collection
+        # cycle and fetched only after latency-sensitive quote/flow stages.
+        fundamental_estimates = self.fundamental_estimates_for_signal(symbol, cached_signal)
 
         signal: Dict[str, object] = {}
         coverage: Dict[str, object] = {}
@@ -1480,6 +1659,8 @@ class KISMarketSignalProvider:
         signal["marketSessionLabel"] = str(session.get("label") or "")
         signal["dataQuality"] = "actual"
         signal["updatedAt"] = fetched_at
+        if fundamental_estimates:
+            signal["fundamentalEstimates"] = fundamental_estimates
         signal = merge_fresh_websocket_stages(signal, cached_signal, max(10, self.live_refresh_seconds() * 2))
         coverage = signal.get("marketSignalCoverage") if isinstance(signal.get("marketSignalCoverage"), dict) else coverage
         signal = remove_unreliable_investor_values(signal)
@@ -1584,6 +1765,7 @@ class KISMarketSignalProvider:
     def signals_for_positions(self, positions: Iterable[Position]) -> Dict[str, Dict[str, object]]:
         position_list = list(positions)
         symbols = self.symbols_for_positions(position_list)
+        self.fundamental_refresh_count = 0
         self.diagnostics["symbols"] = symbols
         if not self.enabled() or not symbols:
             self.diagnostics["skipped"] = len(symbols)
@@ -1683,19 +1865,24 @@ class KISMarketSignalProvider:
             overview = rows.get("companyOverview") if isinstance(rows.get("companyOverview"), dict) else {}
             report = rows.get("earningsReport") if isinstance(rows.get("earningsReport"), dict) else {}
             if overview:
-                overviews[symbol] = merge_company_overview_rows(
-                    overviews.get(symbol) if isinstance(overviews.get(symbol), dict) else {},
-                    overview,
-                )
+                existing_overview = overviews.get(symbol) if isinstance(overviews.get(symbol), dict) else {}
+                combined_overview = merge_company_overview_rows(existing_overview, overview)
+                for field in ("earningsEstimates", "multipleObservations", "cycleData", "growthData"):
+                    combined_overview[field] = merge_observation_rows(existing_overview.get(field), overview.get(field))
+                overviews[symbol] = combined_overview
                 added += 1
-            if report and symbol not in earnings:
-                earnings[symbol] = report
+            if report:
+                existing_report = earnings.get(symbol) if isinstance(earnings.get(symbol), dict) else {}
+                combined_report = {**existing_report, **report}
+                for field in ("earningsEstimates", "multipleObservations", "cycleData", "growthData"):
+                    combined_report[field] = merge_observation_rows(existing_report.get(field), report.get(field))
+                earnings[symbol] = combined_report
                 added += 1
         if added and isinstance(statuses, list):
             statuses.append({
                 "source": "KIS Open API",
                 "ok": True,
-                "message": "국내장 PER/EPS/PBR/BPS를 본주 펀더멘털 신호로 반영했습니다.",
+                "message": "국내장 PER/EPS/PBR/BPS와 추정실적·투자의견을 본주 펀더멘털 신호로 반영했습니다.",
             })
         return external_signals
 
@@ -1801,6 +1988,171 @@ class KISMarketSignalProvider:
         )
 
 
+def _payload_rows(payload: Dict[str, object], key: str) -> List[Dict[str, object]]:
+    value = payload.get(key) if isinstance(payload, dict) else None
+    rows = value if isinstance(value, list) else [value] if isinstance(value, dict) else []
+    return [dict(item) for item in rows if isinstance(item, dict)]
+
+
+def _compact_kis_date(value: object) -> str:
+    digits = "".join(character for character in str(value or "") if character.isdigit())
+    if len(digits) >= 8:
+        return digits[:4] + "-" + digits[4:6] + "-" + digits[6:8]
+    if len(digits) >= 6:
+        return digits[:4] + "-" + digits[4:6]
+    return str(value or "").strip()
+
+
+def _tenth(value: object) -> float:
+    return round(number(value) / 10.0, 4)
+
+
+def _optional_tenth(value: object):
+    if value is None or str(value).strip() == "":
+        return None
+    return _tenth(value)
+
+
+def normalize_estimate_perform(
+    symbol: str,
+    payload: Dict[str, object],
+    fetched_at: str,
+    now: datetime = None,
+) -> Dict[str, object]:
+    """Normalize KIS four-block estimate-perform response.
+
+    KIS documents output2 as six income-statement rows and output3 as eight
+    investment-metric rows.  output4 supplies the five fiscal-period columns.
+    """
+
+    if not isinstance(payload, dict):
+        return {}
+    metadata_rows = _payload_rows(payload, "output1")
+    income_rows = _payload_rows(payload, "output2")
+    metric_rows = _payload_rows(payload, "output3")
+    date_rows = _payload_rows(payload, "output4")
+    dates = [_compact_kis_date(item.get("dt")) for item in date_rows if item.get("dt")]
+    if not dates or len(income_rows) < 6 or len(metric_rows) < 8:
+        return {}
+    current = now or datetime.now(timezone.utc)
+    current_year = current.astimezone(KST).year
+    fiscal_periods: List[Dict[str, object]] = []
+    earnings_estimates: List[Dict[str, object]] = []
+    multiple_observations: List[Dict[str, object]] = []
+    cycle_data: List[Dict[str, object]] = []
+    source_as_of = _compact_kis_date(metadata_rows[0].get("estdate")) if metadata_rows else ""
+    for index, period in enumerate(dates[:5], start=1):
+        field = "data" + str(index)
+        year_digits = "".join(character for character in period if character.isdigit())[:4]
+        period_year = int(year_digits) if year_digits.isdigit() else 0
+        is_estimate = bool(period_year and period_year >= current_year)
+        row = {
+            "period": period,
+            "isEstimate": is_estimate,
+            "revenue": number(income_rows[0].get(field)),
+            "revenueGrowthPct": _optional_tenth(income_rows[1].get(field)),
+            "operatingIncome": number(income_rows[2].get(field)),
+            "operatingIncomeGrowthPct": _optional_tenth(income_rows[3].get(field)),
+            "netIncome": number(income_rows[4].get(field)),
+            "netIncomeGrowthPct": _optional_tenth(income_rows[5].get(field)),
+            "ebitda": number(metric_rows[0].get(field)),
+            "eps": number(metric_rows[1].get(field)),
+            "epsGrowthPct": _optional_tenth(metric_rows[2].get(field)),
+            "per": _optional_tenth(metric_rows[3].get(field)),
+            "enterpriseToEbitda": _optional_tenth(metric_rows[4].get(field)),
+            "returnOnEquityPct": _optional_tenth(metric_rows[5].get(field)),
+            "debtRatioPct": _optional_tenth(metric_rows[6].get(field)),
+            "interestCoverageRatio": _optional_tenth(metric_rows[7].get(field)),
+        }
+        fiscal_periods.append(row)
+        if row["eps"] > 0 and is_estimate:
+            earnings_estimates.append({
+                "observationId": "kis:estimate-perform:eps:" + period,
+                "provider": "KIS Open API",
+                "source": "estimate-perform.output3",
+                "sourceType": "broker-estimate",
+                "period": "fy1" if not earnings_estimates else "fy2" if len(earnings_estimates) == 1 else "annual",
+                "fiscalPeriod": period,
+                "asOf": source_as_of or fetched_at,
+                "isEstimate": True,
+                "base": row["eps"],
+                "growthPct": row["epsGrowthPct"],
+            })
+        if number(row["per"]) > 0:
+            multiple_observations.append({
+                "observationId": "kis:estimate-perform:per:" + period,
+                "provider": "KIS Open API",
+                "source": "estimate-perform.output3",
+                "sourceType": "broker-estimate" if is_estimate else "broker-history",
+                "basis": "current-market" if is_estimate else "historical",
+                "period": period,
+                "asOf": source_as_of or fetched_at,
+                "value": row["per"],
+            })
+        cycle_data.append({
+            "evidenceId": "kis:estimate-perform:cycle:" + period,
+            "provider": "KIS Open API",
+            "source": "estimate-perform.output2-output3",
+            "asOf": source_as_of or fetched_at,
+            "period": period,
+            "isEstimate": is_estimate,
+            "revenueGrowthPct": row["revenueGrowthPct"],
+            "operatingIncomeGrowthPct": row["operatingIncomeGrowthPct"],
+            "netIncomeGrowthPct": row["netIncomeGrowthPct"],
+            "epsGrowthPct": row["epsGrowthPct"],
+            "returnOnEquityPct": row["returnOnEquityPct"],
+        })
+    metadata = metadata_rows[0] if metadata_rows else {}
+    return {
+        "symbol": clean_symbol(metadata.get("sht_cd") or symbol),
+        "name": str(metadata.get("item_kor_nm") or known_stock(symbol)["name"]),
+        "estimateAuthor": str(metadata.get("name1") or ""),
+        "estimateRecommendation": str(metadata.get("rcmd_name") or ""),
+        "sourceAsOf": source_as_of,
+        "fetchedAt": fetched_at,
+        "fiscalPeriods": fiscal_periods,
+        "earningsEstimates": earnings_estimates,
+        "multipleObservations": multiple_observations,
+        "cycleData": cycle_data,
+    }
+
+
+def normalize_investment_opinions(symbol: str, payload: Dict[str, object], fetched_at: str) -> Dict[str, object]:
+    rows = _payload_rows(payload, "output")
+    if not rows:
+        return {}
+    latest_by_firm: Dict[str, Dict[str, object]] = {}
+    for row in sorted(rows, key=lambda item: str(item.get("stck_bsop_date") or ""), reverse=True):
+        firm = str(row.get("mbcr_name") or "unknown").strip()
+        target = number(row.get("hts_goal_prc"))
+        if firm in latest_by_firm or target <= 0:
+            continue
+        latest_by_firm[firm] = {
+            "provider": "KIS Open API",
+            "source": "invest-opinion",
+            "firm": firm,
+            "opinion": str(row.get("invt_opnn") or ""),
+            "previousOpinion": str(row.get("rgbf_invt_opnn") or ""),
+            "targetPrice": target,
+            "asOf": _compact_kis_date(row.get("stck_bsop_date")),
+        }
+    opinions = list(latest_by_firm.values())
+    targets = sorted(number(item.get("targetPrice")) for item in opinions if number(item.get("targetPrice")) > 0)
+    if not targets:
+        return {}
+    return {
+        "symbol": symbol,
+        "analystTargetPrice": round(sum(targets) / len(targets), 4),
+        "analystTargetMedianPrice": round(median(targets), 4),
+        "analystTargetLowPrice": round(min(targets), 4),
+        "analystTargetHighPrice": round(max(targets), 4),
+        "analystOpinionCount": len(targets),
+        "investmentOpinions": opinions,
+        "opinionAsOf": max((str(item.get("asOf") or "") for item in opinions), default=""),
+        "fetchedAt": fetched_at,
+    }
+
+
 def normalize_price(symbol: str, payload: Dict[str, object]) -> Dict[str, object]:
     info = known_stock(symbol)
     current_price = number(payload.get("stck_prpr"))
@@ -1849,10 +2201,14 @@ def kis_fundamental_external_rows(symbol: str, signal: Dict[str, object]) -> Dic
     pbr = number(signal.get("pbr"))
     eps = number(signal.get("reportedEPS"))
     bps = number(signal.get("bps"))
-    if not any([pe_ratio, forward_pe, pbr, eps, bps]):
+    fundamental = signal.get("fundamentalEstimates") if isinstance(signal.get("fundamentalEstimates"), dict) else {}
+    estimates = fundamental.get("earningsEstimates") if isinstance(fundamental.get("earningsEstimates"), list) else []
+    fy1 = next((item for item in estimates if isinstance(item, dict) and item.get("period") == "fy1"), {})
+    forward_eps = number(fy1.get("base"))
+    if not any([pe_ratio, forward_pe, pbr, eps, bps, forward_eps, fundamental]):
         return {}
     name = str(signal.get("name") or known_stock(symbol)["name"])
-    fetched_at = str(signal.get("updatedAt") or utc_now_iso())
+    fetched_at = str(fundamental.get("fetchedAt") or signal.get("updatedAt") or utc_now_iso())
     overview = {
         "provider": "KIS Open API",
         "source": "KIS inquire-price",
@@ -1867,9 +2223,20 @@ def kis_fundamental_external_rows(symbol: str, signal: Dict[str, object]) -> Dic
         "pbr": pbr,
         "bps": bps,
         "trailingEPS": eps,
+        "forwardEPS": forward_eps,
         "epsPeriod": "annual" if eps else "",
         "latestQuarter": "",
         "fetchedAt": fetched_at,
+        "earningsEstimates": estimates,
+        "multipleObservations": list(fundamental.get("multipleObservations") or []),
+        "cycleData": list(fundamental.get("cycleData") or []),
+        "growthData": list(fundamental.get("cycleData") or []),
+        "analystTargetPrice": number(fundamental.get("analystTargetPrice")),
+        "analystTargetMedianPrice": number(fundamental.get("analystTargetMedianPrice")),
+        "analystTargetLowPrice": number(fundamental.get("analystTargetLowPrice")),
+        "analystTargetHighPrice": number(fundamental.get("analystTargetHighPrice")),
+        "analystOpinionCount": number(fundamental.get("analystOpinionCount")),
+        "fundamentalSourceAsOf": str(fundamental.get("sourceAsOf") or fundamental.get("opinionAsOf") or ""),
     }
     earnings = {
         "provider": "KIS Open API",
@@ -1880,6 +2247,11 @@ def kis_fundamental_external_rows(symbol: str, signal: Dict[str, object]) -> Dic
         "market": "KR",
         "currency": "KRW",
         "fetchedAt": fetched_at,
+        "forwardEPS": forward_eps,
+        "earningsEstimates": estimates,
+        "multipleObservations": list(fundamental.get("multipleObservations") or []),
+        "cycleData": list(fundamental.get("cycleData") or []),
+        "growthData": list(fundamental.get("cycleData") or []),
         "latestQuarter": {
             "reportedEPS": eps,
             "estimatedEPS": 0.0,
@@ -1896,9 +2268,9 @@ def kis_fundamental_external_rows(symbol: str, signal: Dict[str, object]) -> Dic
         },
     }
     rows: Dict[str, Dict[str, object]] = {}
-    if any(number(overview.get(key)) for key in ["currentPrice", "peRatio", "forwardPE", "pbr", "bps"]):
+    if any(number(overview.get(key)) for key in ["currentPrice", "peRatio", "forwardPE", "pbr", "bps", "forwardEPS"]) or fundamental:
         rows["companyOverview"] = overview
-    if eps:
+    if eps or forward_eps:
         rows["earningsReport"] = earnings
     return rows
 

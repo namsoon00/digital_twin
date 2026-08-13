@@ -6,8 +6,6 @@ from .market_data import clamp, number
 from .portfolio import Position
 from .security_lines import SecurityLine, security_lines_for_symbol
 from .valuation_contracts import (
-    annual_eps_observation,
-    fair_value_scenarios,
     period_is_annual_per_share,
     scenario_margins,
     unique_missing,
@@ -16,6 +14,14 @@ from .valuation_contracts import (
     valuation_input_state,
     valuation_reliability_label,
     valuation_reliability_state,
+)
+from .valuation_model_evidence import (
+    FUNDAMENTAL_MODEL_VERSION,
+    collect_earnings_observations,
+    collect_multiple_observations,
+    earnings_scenario,
+    fair_value_from_evidence,
+    multiple_evidence_band,
 )
 
 
@@ -276,25 +282,6 @@ def _source_type(provider: object) -> str:
     return "external"
 
 
-def _multiple_band(archetypes: set, dgs10: float = 0.0) -> List[float]:
-    if "AIGrowth" in archetypes:
-        band = [24.0, 34.0, 44.0]
-    elif "MegaCapQuality" in archetypes and "SemiconductorCyclical" not in archetypes:
-        band = [20.0, 28.0, 34.0]
-    elif "PlatformGrowth" in archetypes:
-        band = [18.0, 26.0, 34.0]
-    elif "SemiconductorHBM" in archetypes:
-        band = [8.0, 12.0, 16.0]
-    elif "SemiconductorCyclical" in archetypes:
-        band = [7.0, 10.0, 13.0]
-    elif "HighVolatilityGrowth" in archetypes:
-        band = [10.0, 18.0, 28.0]
-    else:
-        band = [8.0, 12.0, 18.0]
-    rate_factor = clamp(1.0 - max(0.0, dgs10 - 4.0) * 0.05, 0.75, 1.0) if dgs10 else 1.0
-    return [round(item * rate_factor, 2) for item in band]
-
-
 def _fundamental_context(
     position: Position,
     external_signals: Dict[str, object],
@@ -303,28 +290,89 @@ def _fundamental_context(
     symbol = str(position.symbol or "").upper().strip()
     overviews = external_signals.get("companyOverviews") if isinstance(external_signals.get("companyOverviews"), dict) else {}
     earnings = external_signals.get("earningsReports") if isinstance(external_signals.get("earningsReports"), dict) else {}
+    companies = external_signals.get("companyKnowledge") if isinstance(external_signals.get("companyKnowledge"), dict) else {}
     source_symbol = symbol
     adr_line = None
     overview = overviews.get(source_symbol) if isinstance(overviews.get(source_symbol), dict) else {}
     report = earnings.get(source_symbol) if isinstance(earnings.get(source_symbol), dict) else {}
+    company = companies.get(source_symbol) if isinstance(companies.get(source_symbol), dict) else {}
     if not overview and not report:
         adr_line = adr_security_line_for_position(position, settings)
         if adr_line:
             source_symbol = adr_line.local_symbol
             overview = overviews.get(source_symbol) if isinstance(overviews.get(source_symbol), dict) else {}
             report = earnings.get(source_symbol) if isinstance(earnings.get(source_symbol), dict) else {}
-    eps = annual_eps_observation(overview, report)
+            company = companies.get(source_symbol) if isinstance(companies.get(source_symbol), dict) else {}
+    eps_observations = collect_earnings_observations(overview, report, company)
+    eps = earnings_scenario(eps_observations)
+    multiple_observations = collect_multiple_observations(overview, report, company)
     provider = str(overview.get("provider") or report.get("provider") or "")
     return {
         "symbol": symbol,
         "sourceSymbol": source_symbol,
         "overview": overview,
         "report": report,
+        "company": company,
         "eps": eps,
+        "epsObservations": eps_observations,
+        "multipleObservations": multiple_observations,
         "provider": provider,
         "sourceType": _source_type(provider),
         "adrLine": adr_line,
     }
+
+
+def _family_evidence(context: Dict[str, object], model_family: str) -> List[Dict[str, object]]:
+    overview = context.get("overview") if isinstance(context.get("overview"), dict) else {}
+    report = context.get("report") if isinstance(context.get("report"), dict) else {}
+    company = context.get("company") if isinstance(context.get("company"), dict) else {}
+    result: List[Dict[str, object]] = []
+    raw_key = "cycleData" if model_family == "semiconductor" else "growthData"
+    for owner, source in ((overview, "company-overview"), (report, "earnings-report")):
+        values = owner.get(raw_key)
+        rows = values if isinstance(values, list) else [values] if isinstance(values, dict) else []
+        for index, item in enumerate(rows):
+            if not isinstance(item, dict):
+                continue
+            numeric = {
+                str(key): round(number(value), 4)
+                for key, value in item.items()
+                if isinstance(value, (int, float)) and number(value) == number(value)
+            }
+            if numeric:
+                result.append({
+                    "evidenceId": raw_key + ":" + str(index),
+                    "source": source,
+                    "provider": str(item.get("provider") or owner.get("provider") or ""),
+                    "asOf": str(item.get("asOf") or owner.get("fetchedAt") or ""),
+                    **numeric,
+                })
+
+    financials = company.get("financials") if isinstance(company.get("financials"), dict) else {}
+    periods = []
+    for frequency in ("annual", "interim"):
+        rows = financials.get(frequency) if isinstance(financials.get(frequency), list) else []
+        periods.extend([dict(item) for item in rows[:3] if isinstance(item, dict)])
+    for index, item in enumerate(periods):
+        fields = (
+            ("revenueGrowthPct", "operatingIncomeGrowthPct", "operatingMarginPct", "netIncomeGrowthPct")
+            if model_family == "semiconductor"
+            else ("revenueGrowthPct", "operatingIncomeGrowthPct", "operatingMarginPct", "freeCashFlowGrowthPct")
+        )
+        numeric = {field: round(number(item.get(field)), 4) for field in fields if item.get(field) not in (None, "")}
+        if numeric:
+            result.append({
+                "evidenceId": "company-financial:" + str(item.get("period") or index),
+                "source": "company-knowledge.financials",
+                "provider": "+".join(
+                    str(entry.get("provider") or "")
+                    for entry in company.get("provenance") or []
+                    if isinstance(entry, dict) and entry.get("provider")
+                ),
+                "asOf": str(item.get("period") or ""),
+                **numeric,
+            })
+    return result
 
 
 def _fundamental_scenario_row(
@@ -340,27 +388,42 @@ def _fundamental_scenario_row(
     archetypes = set(profile.archetypes or [])
     context = _fundamental_context(position, external_signals, settings)
     eps = context.get("eps") if isinstance(context.get("eps"), dict) else {}
-    eps_value = number(eps.get("value"))
+    eps_value = number(eps.get("base"))
     eps_period = str(eps.get("period") or "")
     as_of = eps.get("asOf")
     freshness = valuation_freshness_status(as_of)
-    multiples = _multiple_band(archetypes, macro_dgs10(external_signals))
-    scenarios = fair_value_scenarios(eps_value, eps_period, multiples)
+    multiple_band = multiple_evidence_band(context.get("multipleObservations") or [], archetypes)
+    multiples = [number(multiple_band.get(key)) for key in ("low", "base", "high")]
+    scenarios = fair_value_from_evidence(eps, multiple_band)
+    family_evidence = _family_evidence(context, model_family)
     source_symbol = str(context.get("sourceSymbol") or position.symbol).upper()
     adr_line = context.get("adrLine")
+    valuation_eps = dict(eps)
+    adr_ratio = 0.0
+    fx_rate = 0.0
     missing = []
     if not eps_value:
         missing.append("연간 또는 TTM EPS")
     if model_family == "semiconductor":
-        missing.extend(["메모리 가격/업황 지표", "피어 또는 과거 PER 범위"])
+        if not family_evidence:
+            missing.append("메모리 업황 또는 실적 사이클 지표")
     else:
-        missing.extend(["매출 성장률", "영업이익률 전망", "피어 또는 과거 PER 범위"])
+        if not family_evidence:
+            missing.append("매출 성장률·영업이익률 전망")
+    if not bool(multiple_band.get("evidenceBacked")):
+        missing.append("피어 또는 과거 PER 표본 3개 이상")
     if source_symbol != str(position.symbol or "").upper() and scenarios:
         adr_ratio = number(getattr(adr_line, "adr_ratio", 0.0)) if adr_line else 0.0
         fx_rate = usdkrw_rate_for_position(position, external_signals)
         if adr_ratio and fx_rate:
             for field in ("fairValueLow", "fairValue", "fairValueBase", "fairValueHigh"):
                 scenarios[field] = round(number(scenarios.get(field)) * adr_ratio / fx_rate, 4)
+            for field in ("low", "base", "high"):
+                valuation_eps[field] = round(number(valuation_eps.get(field)) * adr_ratio / fx_rate, 6)
+            valuation_eps["sourceCurrency"] = "KRW"
+            valuation_eps["valuationCurrency"] = str(position.currency or "USD")
+            valuation_eps["adrRatio"] = round(adr_ratio, 6)
+            valuation_eps["fxRate"] = round(fx_rate, 6)
         else:
             scenarios = {}
             if not adr_ratio:
@@ -369,9 +432,51 @@ def _fundamental_scenario_row(
                 missing.append("USD/KRW 환율")
     required = ["annualEPS", "targetMultipleBand"]
     available = ["annualEPS"] if eps_value else []
-    if multiples:
+    if bool(multiple_band.get("evidenceBacked")):
         available.append("targetMultipleBand")
-    input_state = valuation_input_state(required + (["cycleData"] if model_family == "semiconductor" else ["growthData"]), available)
+    family_input = "cycleData" if model_family == "semiconductor" else "growthData"
+    if family_evidence:
+        available.append(family_input)
+    input_state = valuation_input_state(required + [family_input], available)
+    confidence_rank = {"insufficient": 0, "low": 1, "medium": 2, "high": 3}
+    confidence_values = [
+        str(eps.get("confidence") or "insufficient"),
+        str(multiple_band.get("confidence") or "insufficient"),
+    ]
+    valuation_confidence = min(
+        confidence_values,
+        key=lambda value: confidence_rank.get(value, 0),
+    )
+    eps_observation_ids = {str(item) for item in eps.get("observationIds") or [] if str(item or "")}
+    multiple_observation_ids = (
+        {str(item) for item in multiple_band.get("observationIds") or [] if str(item or "")}
+        if bool(multiple_band.get("evidenceBacked"))
+        else set()
+    )
+    all_observations = list(context.get("epsObservations") or []) + list(context.get("multipleObservations") or [])
+    input_observations = [
+        dict(item)
+        for item in all_observations
+        if isinstance(item, dict)
+        and str(item.get("observationId") or "") in (eps_observation_ids | multiple_observation_ids)
+    ]
+    excluded_observations = []
+    for item in all_observations:
+        if not isinstance(item, dict):
+            continue
+        observation_id = str(item.get("observationId") or "")
+        if observation_id in (eps_observation_ids | multiple_observation_ids):
+            continue
+        excluded_observations.append({
+            "observationId": observation_id,
+            "reason": (
+                "lower-priority-earnings-horizon"
+                if str(item.get("metric") or "") == "earnings-per-share"
+                else "target-multiple-basis-not-eligible"
+                if str(item.get("basis") or "") not in {"historical", "peer"}
+                else "target-multiple-sample-count-below-minimum"
+            ),
+        })
     reliability_state = valuation_reliability_state(
         str(context.get("sourceType") or "external"),
         input_state,
@@ -380,11 +485,14 @@ def _fundamental_scenario_row(
         scenario_complete=bool(scenarios),
     )
     method = "ai-semiconductor-eps-per-scenarios" if model_family == "semiconductor" else "ai-growth-eps-per-scenarios"
-    row = _base_row(position, method, "적정가 범위 = 연간/TTM EPS x 종목 유형별 PER 시나리오", reliability_state)
+    formula = "적정가 범위 = 출처가 확인된 연간 EPS 시나리오 x 과거·피어 PER 사분위 밴드"
+    row = _base_row(position, method, formula, reliability_state)
     row.update({
         "currentPrice": current,
         **scenarios,
-        "expectedEPS": round(eps_value, 4) if eps_value else 0.0,
+        "expectedEPS": round(number(valuation_eps.get("base")), 4) if eps_value else 0.0,
+        "expectedEPSLow": round(number(valuation_eps.get("low")), 4) if eps_value else 0.0,
+        "expectedEPSHigh": round(number(valuation_eps.get("high")), 4) if eps_value else 0.0,
         "targetPERLow": multiples[0] if len(multiples) >= 1 else 0.0,
         "targetPER": multiples[1] if len(multiples) >= 2 else 0.0,
         "targetPERHigh": multiples[2] if len(multiples) >= 3 else 0.0,
@@ -405,14 +513,38 @@ def _fundamental_scenario_row(
         "minimumMarginOfSafetyPct": number(settings.get("aiValuationSemiconductorMinimumMarginPct" if model_family == "semiconductor" else "aiValuationGrowthMinimumMarginPct")) or (18.0 if model_family == "semiconductor" else 15.0),
         "missingInputs": unique_missing(missing),
         "sourceReason": (
-            "연간/TTM EPS와 반도체 유형별 보수·기준·낙관 PER 범위를 사용했습니다. 이동평균은 적정가가 아니라 별도의 가격 흐름 근거로만 사용합니다."
-            if model_family == "semiconductor"
-            else "연간/TTM EPS와 성장주 유형별 보수·기준·낙관 PER 범위를 사용하고 금리 부담을 배수에 반영했습니다. 이동평균은 적정가 계산에서 제외합니다."
+            "연간 EPS와 실제 과거·피어 PER 표본으로 계산했습니다. 이동평균과 금리는 적정가 산식에 넣지 않았습니다."
+            if bool(multiple_band.get("evidenceBacked"))
+            else "연간 EPS는 확인했지만 과거·피어 PER 표본이 부족해 유형별 초기 밴드는 참고값으로만 표시하며 투자 판단에서는 제외합니다."
         ),
-        "perValuationStatus": "available" if scenarios else "missing",
-        "perValuationReason": "연간/TTM EPS와 같은 기간 기준의 PER 시나리오를 사용했습니다." if scenarios else "연간/TTM EPS 또는 ADR 환산 입력이 부족해 적정가 계산을 보류했습니다.",
-        "preferredValuationMetric": "연간/TTM EPS x 유형별 PER 범위",
-        "fundamentalDataSourcePriority": "KIS/공식 연간 EPS > yfinance/Alpha Vantage TTM·선행 EPS > 유형별 PER 범위",
+        "perValuationStatus": "available" if scenarios and multiple_band.get("evidenceBacked") else "provisional" if scenarios else "missing",
+        "perValuationReason": "연간 EPS와 과거·피어 PER 표본의 기간·출처를 함께 확인했습니다." if multiple_band.get("evidenceBacked") else "PER 표본이 부족해 유형별 초기 밴드를 계산 참고값으로만 사용했습니다.",
+        "preferredValuationMetric": "연간 EPS 시나리오 x 과거·피어 PER 사분위",
+        "fundamentalDataSourcePriority": "KIS/yfinance 예상 EPS > OpenDART/SEC·TTM EPS > 과거·피어 PER 표본 > 유형별 초기 밴드(참고만)",
+        "modelVersion": FUNDAMENTAL_MODEL_VERSION,
+        "valuationConfidence": valuation_confidence,
+        "epsScenario": dict(valuation_eps),
+        "multipleBand": dict(multiple_band),
+        "familyEvidence": family_evidence,
+        "inputObservations": input_observations,
+        "formulaTrace": {
+            "modelVersion": FUNDAMENTAL_MODEL_VERSION,
+            "formula": formula,
+            "sourceEarningsScenario": dict(eps),
+            "earningsScenario": dict(valuation_eps),
+            "multipleBand": dict(multiple_band),
+            "usedObservationIds": sorted(eps_observation_ids | multiple_observation_ids),
+            "excludedObservations": excluded_observations,
+            "adrConversionApplied": bool(
+                source_symbol != str(position.symbol or "").upper() and adr_ratio and fx_rate
+            ),
+            "adrRatio": round(adr_ratio, 6),
+            "fxRate": round(fx_rate, 6),
+            "sourceSymbol": source_symbol,
+        },
+        "modelExclusionReasons": unique_missing(missing),
+        "historicalMedianPER": number(multiple_band.get("base")) if "historical" in str(multiple_band.get("basis") or "") else 0.0,
+        "peerPER": number(multiple_band.get("base")) if "peer" in str(multiple_band.get("basis") or "") else 0.0,
         "valuationDecisionEligible": False,
     })
     row.update(scenario_margins(current, row.get("fairValueLow"), row.get("fairValue"), row.get("fairValueHigh")))

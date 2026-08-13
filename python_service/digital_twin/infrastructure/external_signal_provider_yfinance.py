@@ -148,6 +148,72 @@ def frame_rows(frame, limit: int = 40) -> List[Dict[str, object]]:
         return []
 
 
+def normalized_yfinance_earnings_estimates(payload: Dict[str, object], fetched_at: str) -> List[Dict[str, object]]:
+    estimates = payload.get("earningsEstimate") if isinstance(payload.get("earningsEstimate"), list) else []
+    trends = {
+        str(item.get("period") or ""): item
+        for item in (payload.get("epsTrend") if isinstance(payload.get("epsTrend"), list) else [])
+        if isinstance(item, dict)
+    }
+    revisions = {
+        str(item.get("period") or ""): item
+        for item in (payload.get("epsRevisions") if isinstance(payload.get("epsRevisions"), list) else [])
+        if isinstance(item, dict)
+    }
+    result: List[Dict[str, object]] = []
+    for item in estimates:
+        if not isinstance(item, dict):
+            continue
+        raw_period = str(item.get("period") or "").strip()
+        period = {"0y": "fy1", "+1y": "fy2"}.get(raw_period)
+        if not period:
+            continue
+        base = optional_number(item.get("avg"))
+        if base is None or base <= 0:
+            continue
+        trend = trends.get(raw_period) if isinstance(trends.get(raw_period), dict) else {}
+        revision = revisions.get(raw_period) if isinstance(revisions.get(raw_period), dict) else {}
+        thirty_days_ago = optional_number(trend.get("30daysAgo"))
+        revision_pct = ((base / thirty_days_ago) - 1.0) * 100.0 if thirty_days_ago and thirty_days_ago > 0 else 0.0
+        result.append({
+            "observationId": "yfinance:earnings-estimate:" + raw_period,
+            "provider": "yfinance",
+            "source": "earnings_estimate",
+            "sourceType": "external-consensus",
+            "period": period,
+            "asOf": fetched_at,
+            "isEstimate": True,
+            "low": optional_number(item.get("low")) or 0.0,
+            "base": base,
+            "high": optional_number(item.get("high")) or 0.0,
+            "analystCount": int(optional_number(item.get("numberOfAnalysts")) or 0),
+            "growthPct": round((optional_number(item.get("growth")) or 0.0) * 100.0, 4),
+            "revision30dPct": round(revision_pct, 4),
+            "revisionUp30d": int(optional_number(revision.get("upLast30days")) or 0),
+            "revisionDown30d": int(optional_number(revision.get("downLast30days")) or 0),
+        })
+    return result
+
+
+def normalized_yfinance_growth_data(payload: Dict[str, object], fetched_at: str) -> List[Dict[str, object]]:
+    info = payload.get("info") if isinstance(payload.get("info"), dict) else {}
+    row = {
+        "provider": "yfinance",
+        "source": "quoteSummary.info",
+        "asOf": fetched_at,
+    }
+    for target, source in (
+        ("revenueGrowthPct", "revenueGrowth"),
+        ("earningsGrowthPct", "earningsGrowth"),
+        ("operatingMarginPct", "operatingMargins"),
+        ("profitMarginPct", "profitMargins"),
+    ):
+        value = optional_number(info.get(source))
+        if value is not None:
+            row[target] = round(value * 100.0, 4)
+    return [row] if len(row) > 3 else []
+
+
 def series_rows(series, limit: int = 40) -> List[Dict[str, object]]:
     if is_empty_value(series) or not hasattr(series, "tail"):
         return []
@@ -233,6 +299,9 @@ def pick_info(info: Dict[str, object]) -> Dict[str, object]:
 def overview_from_yfinance(symbol: str, payload: Dict[str, object]) -> Dict[str, object]:
     info = payload.get("info") if isinstance(payload.get("info"), dict) else {}
     quote = payload.get("quote") if isinstance(payload.get("quote"), dict) else {}
+    fetched_at = str(payload.get("collectedAt") or utc_now_iso())
+    estimates = normalized_yfinance_earnings_estimates(payload, fetched_at)
+    fy1 = next((item for item in estimates if item.get("period") == "fy1"), {})
     return {
         "provider": "yfinance",
         "symbol": symbol,
@@ -244,7 +313,7 @@ def overview_from_yfinance(symbol: str, payload: Dict[str, object]) -> Dict[str,
         "sector": str(info.get("sector") or ""),
         "industry": str(info.get("industry") or ""),
         "latestQuarter": str(info.get("mostRecentQuarter") or ""),
-        "fetchedAt": utc_now_iso(),
+        "fetchedAt": fetched_at,
         "marketCapitalization": optional_number(info.get("marketCap")),
         "revenueTTM": optional_number(info.get("totalRevenue")),
         "grossProfitTTM": optional_number(info.get("grossProfits")),
@@ -252,8 +321,8 @@ def overview_from_yfinance(symbol: str, payload: Dict[str, object]) -> Dict[str,
         "profitMargin": optional_number(info.get("profitMargins")),
         "operatingMarginTTM": optional_number(info.get("operatingMargins")),
         "trailingEPS": optional_number(info.get("trailingEps")),
-        "forwardEPS": optional_number(info.get("forwardEps")),
-        "epsPeriod": "forward-12m" if number(info.get("forwardEps")) else "ttm" if number(info.get("trailingEps")) else "",
+        "forwardEPS": optional_number(fy1.get("base")) or optional_number(info.get("forwardEps")),
+        "epsPeriod": "forward-12m" if number(fy1.get("base")) or number(info.get("forwardEps")) else "ttm" if number(info.get("trailingEps")) else "",
         "peRatio": optional_number(info.get("trailingPE")),
         "pegRatio": optional_number(info.get("pegRatio")),
         "forwardPE": optional_number(info.get("forwardPE")),
@@ -274,6 +343,8 @@ def overview_from_yfinance(symbol: str, payload: Dict[str, object]) -> Dict[str,
         "analystTargetHighPrice": optional_number((payload.get("analystPriceTargets") or {}).get("high") or info.get("targetHighPrice")),
         "analystOpinionCount": optional_number(info.get("numberOfAnalystOpinions")),
         "currentPrice": optional_number(quote.get("price") or info.get("currentPrice") or info.get("regularMarketPrice")),
+        "earningsEstimates": estimates,
+        "growthData": normalized_yfinance_growth_data(payload, fetched_at),
     }
 
 
@@ -282,12 +353,17 @@ def earnings_report_from_yfinance(symbol: str, payload: Dict[str, object]) -> Di
     latest = earnings_rows[-1] if earnings_rows else {}
     if not isinstance(latest, dict):
         latest = {}
+    fetched_at = str(payload.get("collectedAt") or utc_now_iso())
+    estimates = normalized_yfinance_earnings_estimates(payload, fetched_at)
+    fy1 = next((item for item in estimates if item.get("period") == "fy1"), {})
     return {
         "provider": "yfinance",
         "symbol": symbol,
-        "fetchedAt": utc_now_iso(),
-        "forwardEPS": number((payload.get("info") or {}).get("forwardEps")) if isinstance(payload.get("info"), dict) else 0.0,
+        "fetchedAt": fetched_at,
+        "forwardEPS": number(fy1.get("base")) or (number((payload.get("info") or {}).get("forwardEps")) if isinstance(payload.get("info"), dict) else 0.0),
         "trailingEPS": number((payload.get("info") or {}).get("trailingEps")) if isinstance(payload.get("info"), dict) else 0.0,
+        "earningsEstimates": estimates,
+        "growthData": normalized_yfinance_growth_data(payload, fetched_at),
         "latestQuarter": {
             "fiscalDateEnding": str(latest.get("Earnings Date") or latest.get("index") or latest.get("Date") or ""),
             "reportedDate": str(latest.get("Earnings Date") or latest.get("index") or latest.get("Date") or ""),

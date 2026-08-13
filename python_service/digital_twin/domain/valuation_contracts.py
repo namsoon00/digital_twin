@@ -102,7 +102,7 @@ def fair_value_scenarios(
     eps: object,
     eps_period: object,
     target_multiples: Iterable[float],
-    eps_factors: Iterable[float] = (0.85, 1.0, 1.15),
+    eps_factors: Iterable[float] = (1.0, 1.0, 1.0),
 ) -> Dict[str, float]:
     annual_eps = number(eps)
     multiples = [number(item) for item in target_multiples]

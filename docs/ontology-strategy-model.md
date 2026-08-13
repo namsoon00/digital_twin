@@ -281,16 +281,20 @@ AI가 만든 신규 가설은 `hypothesis_development_cases`에서 제안 계보
 
 ## AI Valuation Proposals
 
-밸류에이션은 사용자 입력이 없어도 종목 타입별 AI 초안을 만들 수 있다. 초안은 `ActiveValuation`으로 저장해 화면과 AI 설명에는 사용할 수 있지만, `valuationDecisionEligible=false`로 저장되어 사용자 승인 전에는 TypeDB의 저평가 기회·고평가 위험 추론을 작동시키지 않는다. 항상 `AIValuationProposal`과 `UserValuationReview`를 함께 만들고 `ai_applied_pending_review` 상태를 드러낸다. 메시지는 이를 "AI 제안 자동 적용 · 사용자 검토 전"과 "참고만 사용 · 매수·매도 추론에서 제외"로 표시해야 한다.
+밸류에이션은 사용자 입력이 없어도 종목 타입별 초안을 만들 수 있다. 계산 자체는 `fundamental-evidence-per-v3` 같은 버전화된 결정론적 모델이 수행하며, AI는 이 결과를 설명하거나 검토할 뿐 EPS·PER 숫자를 임의로 만들지 않는다. 초안은 `ActiveValuation`으로 저장해 화면과 AI 설명에는 사용할 수 있지만, `valuationDecisionEligible=false`로 저장되어 사용자 승인 전에는 TypeDB의 저평가 기회·고평가 위험 추론을 작동시키지 않는다. 항상 `AIValuationProposal`과 `UserValuationReview`를 함께 만들고 `ai_applied_pending_review` 상태를 드러낸다. 메시지는 이를 "AI 제안 자동 적용 · 사용자 검토 전"과 "참고만 사용 · 매수·매도 추론에서 제외"로 표시해야 한다.
 
 현재 종목 타입별 초안 모델:
 
 - `ai-bitcoin-treasury-nav-scenarios`: MSTR 같은 비트코인 프록시 종목. BTC 보유량·희석주식수·순부채·우선주 부담이 모두 있을 때만 NAV 범위를 계산한다. 입력이 없으면 가격 추세를 적정가로 바꾸지 않고 계산을 보류한다.
 - `ai-preferred-income-yield-scenarios`: STRC 같은 우선주/인컴형. 연간 배당을 보수적·기준·낙관 요구수익률로 나눠 적정가 범위를 만든다.
-- `ai-semiconductor-eps-per-scenarios`: 삼성전자, SK하이닉스 같은 반도체 종목. 연간·TTM·선행 12개월 EPS와 반도체 유형별 PER 범위를 사용한다. 5/20/60일 가격 흐름은 적정가 계산에 넣지 않고 별도 추세 근거로만 쓴다.
-- `ai-growth-eps-per-scenarios`: Apple, NVIDIA, Tesla 같은 성장/플랫폼 종목. 연간 호환 EPS와 종목 유형별 PER 범위에 금리 부담을 적용한다. 성장률·마진·피어 배수가 없으면 부족 데이터와 `partial` 자료 상태를 남긴다.
+- `ai-semiconductor-eps-per-scenarios`: 삼성전자, SK하이닉스 같은 반도체 종목. KIS 추정실적, yfinance 컨센서스 또는 공식 재무의 연간·TTM·선행 12개월 EPS와 실제 과거·피어 PER 표본을 사용한다. 업황·실적 사이클 자료가 없으면 부족 데이터로 남긴다.
+- `ai-growth-eps-per-scenarios`: Apple, NVIDIA, Tesla 같은 성장/플랫폼 종목. 같은 EPS 계약과 과거·피어 PER 표본을 사용하며 매출 성장률·영업이익률 자료를 별도 적합성 근거로 요구한다. 금리와 가격 이동평균은 적정가 산식에 직접 넣지 않고 TypeDB의 별도 거시·추세 관계로 판단한다.
 
-모든 밸류에이션 ABox에는 `fairValueLow`, `fairValueBase`, `fairValueHigh`, 세 시나리오의 안전마진, `epsPeriod`, `multiplePeriod`, `valuationAsOf`, `valuationFreshnessStatus`, `valuationDataState`, `valuationReliabilityState`, `valuationDecisionEligible`을 저장한다. 분기 EPS와 연간 PER를 섞는 계산은 허용하지 않는다. TypeDB 저평가·고평가 규칙은 자료 상태가 `sufficient`이고, 검증 상태가 `ready`이며, 오래되지 않은 적정가만 사용한다. 저평가 후보는 기준 시나리오 안전마진 15% 이상이면서 보수적 시나리오 안전마진도 0% 이상이어야 한다.
+`fundamental-evidence-per-v3`는 공급자가 제시한 EPS 하단·평균·상단을 그대로 보수·기준·낙관 시나리오로 사용한다. 범위가 없는 단일 EPS에 임의의 ±15% 스트레스를 붙이지 않는다. 목표 PER은 `historical` 또는 `peer`로 분류된 표본이 3개 이상일 때만 25분위·중앙값·75분위 밴드로 채택한다. 현재 시장 PER은 관측 사실로만 저장하며 목표 배수 표본으로 재사용하지 않는다.
+
+과거·피어 표본이 부족하면 종목 유형별 초기 밴드를 `bootstrap-prior`로 표시할 수 있지만 `multipleEvidenceBacked=false`, `valuationConfidence=insufficient`, `valuationInputState=partial`을 유지한다. 사용자가 초안을 승인해도 이 상태에서는 `valuationDecisionEligible`로 승격할 수 없다.
+
+모든 밸류에이션 ABox에는 `fairValueLow`, `fairValueBase`, `fairValueHigh`, 세 시나리오의 안전마진, `epsPeriod`, `multiplePeriod`, `valuationAsOf`, `valuationFreshnessStatus`, `valuationDataState`, `valuationReliabilityState`, `valuationDecisionEligible`을 저장한다. 추가로 `ValuationModelVersion`, `ValuationInputObservation`, `EarningsScenarioObservation`, `MultipleBandObservation`, `ValuationCalculationTrace`를 만들고 원천 관측 -> 시나리오/배수 -> 계산 추적 -> 적정가 결과를 관계로 연결한다. ADR은 원본 본주 EPS, ADR 비율, 환율, 환산 EPS를 계산 추적에 함께 남긴다. 분기 EPS와 연간 PER를 섞는 계산은 허용하지 않는다. TypeDB 저평가·고평가 규칙은 자료 상태가 `sufficient`이고, 검증 상태가 `ready`이며, 오래되지 않은 적정가만 사용한다. 저평가 후보는 기준 시나리오 안전마진 15% 이상이면서 보수적 시나리오 안전마진도 0% 이상이어야 한다.
 
 검증 가능한 모델이 둘 이상이면 `ValuationConsensus` ABox가 기준 적정가 차이를 비교한다. 모델 간 차이가 합의 가격의 35%를 넘으면 `valuationConsensusStatus=conflict`로 저장하고 해당 사이클의 밸류에이션 매매 추론을 막는다. 모델별 결과와 부족 데이터는 그대로 남겨 사용자가 어느 가정이 충돌했는지 확인할 수 있게 한다.
 

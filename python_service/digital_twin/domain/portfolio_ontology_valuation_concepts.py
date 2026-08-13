@@ -376,6 +376,8 @@ def metric_rows(row: Dict[str, object]) -> Iterable[Tuple[str, str, float]]:
 
 
 def valuation_relation_props(row: Dict[str, object], values: Dict[str, object], label: str) -> Dict[str, object]:
+    multiple_band = row.get("multipleBand") if isinstance(row.get("multipleBand"), dict) else {}
+    eps_scenario = row.get("epsScenario") if isinstance(row.get("epsScenario"), dict) else {}
     return {
         "source": str(row.get("source") or row.get("provider") or "valuation"),
         "provider": str(row.get("provider") or ""),
@@ -419,6 +421,13 @@ def valuation_relation_props(row: Dict[str, object], values: Dict[str, object], 
         "perValuationReason": values.get("perValuationReason"),
         "preferredValuationMetric": values.get("preferredValuationMetric"),
         "fundamentalDataSourcePriority": values.get("fundamentalDataSourcePriority"),
+        "modelVersion": str(row.get("modelVersion") or ""),
+        "valuationConfidence": str(row.get("valuationConfidence") or ""),
+        "epsScenarioMethod": str(eps_scenario.get("method") or ""),
+        "epsObservationCount": int(number(eps_scenario.get("observationCount"))),
+        "multipleBandBasis": str(multiple_band.get("basis") or ""),
+        "multipleSampleCount": int(number(multiple_band.get("sampleCount"))),
+        "multipleEvidenceBacked": bool(multiple_band.get("evidenceBacked")),
     }
 
 
@@ -441,13 +450,14 @@ def add_valuation_row_concepts(
     tbox_classes = ["ValuationAssumption", "StrategySignal", "ValuationSignal"]
     if is_ai_proposal:
         tbox_classes.append("AIValuationProposal")
+    heavy_trace_fields = {"payload", "inputObservations", "formulaTrace", "epsScenario", "multipleBand", "familyEvidence"}
     base_props = {
         "symbol": symbol,
         "provider": str(row.get("provider") or ""),
         "source": str(row.get("source") or row.get("provider") or "valuation"),
         "assumptionKey": key,
         "label": label,
-        "payload": {k: v for k, v in row.items() if k not in {"payload"}},
+        "payload": {k: v for k, v in row.items() if k not in heavy_trace_fields},
         "approvalStatus": str(row.get("approvalStatus") or ""),
         "activeStatus": str(row.get("activeStatus") or ""),
         "requiresUserApproval": bool(row.get("requiresUserApproval")),
@@ -458,11 +468,12 @@ def add_valuation_row_concepts(
         **values,
     }
     model_label = str(row.get("valuationMethod") or values.get("valuationMethod") or "valuation-context")
-    model_id = add_entity(graph, "valuation-model", symbol + ":" + model_label, label + " 모델", {
-        "tboxClass": "ValuationModel",
-        "tboxClasses": ["ValuationModel", "StrategySignal", "ValuationSignal"],
-        "symbol": symbol,
+    model_version = str(row.get("modelVersion") or "unversioned")
+    model_id = add_entity(graph, "valuation-model", model_label + ":" + model_version, model_label + " 모델 " + model_version, {
+        "tboxClass": "ValuationModelVersion",
+        "tboxClasses": ["ValuationModel", "ValuationModelVersion", "StrategySignal", "ValuationSignal"],
         "valuationMethod": model_label,
+        "modelVersion": model_version,
         "formula": values.get("formula"),
         "source": str(row.get("source") or row.get("provider") or "valuation"),
         "provider": str(row.get("provider") or ""),
@@ -476,6 +487,88 @@ def add_valuation_row_concepts(
     add_relation(graph, stock_id, assumption_id, "HAS_VALUATION", weight=0.88, properties=props)
     add_relation(graph, stock_id, model_id, "USES_VALUATION_MODEL", weight=0.84, properties=props)
     add_relation(graph, assumption_id, model_id, "USES_VALUATION_MODEL", weight=0.84, properties=props)
+    for index, observation in enumerate(row.get("inputObservations") or []):
+        if not isinstance(observation, dict):
+            continue
+        metric = str(observation.get("metric") or "valuation-input")
+        observation_key = str(observation.get("observationId") or (metric + ":" + str(index)))
+        observation_value = number(observation.get("base") or observation.get("value"))
+        observation_id = add_entity(graph, "valuation-input-observation", symbol + ":" + key + ":" + observation_key, (position.name or symbol) + " " + metric + " " + compact_number(observation_value), {
+            "tboxClass": "ValuationInputObservation",
+            "tboxClasses": ["Observation", "FundamentalObservation", "ValuationEvidence", "ValuationInputObservation", "ValuationSignal"],
+            "symbol": symbol,
+            "field": metric,
+            "value": round(observation_value, 6),
+            "valueNumber": round(observation_value, 6),
+            "period": str(observation.get("period") or ""),
+            "asOf": str(observation.get("asOf") or ""),
+            "provider": str(observation.get("provider") or ""),
+            "source": str(observation.get("source") or ""),
+            "sourceType": str(observation.get("sourceType") or ""),
+            "basis": str(observation.get("basis") or ""),
+            "isEstimate": bool(observation.get("isEstimate")),
+            "payload": dict(observation),
+        })
+        input_props = {
+            **props,
+            "field": metric,
+            "provider": str(observation.get("provider") or ""),
+            "source": str(observation.get("source") or ""),
+            "valuationAsOf": str(observation.get("asOf") or ""),
+            "aiInfluenceLabel": "밸류에이션 입력 " + metric + " " + compact_number(observation_value),
+        }
+        add_relation(graph, stock_id, observation_id, "HAS_OBSERVATION", weight=0.8, properties=input_props)
+        add_relation(graph, model_id, observation_id, "USES_VALUATION_INPUT", weight=0.9, properties=input_props)
+        add_relation(graph, assumption_id, observation_id, "USES_VALUATION_INPUT", weight=0.9, properties=input_props)
+
+    eps_scenario = row.get("epsScenario") if isinstance(row.get("epsScenario"), dict) else {}
+    if eps_scenario:
+        eps_scenario_id = add_entity(graph, "earnings-scenario-observation", symbol + ":" + key, (position.name or symbol) + " EPS 시나리오", {
+            "tboxClass": "EarningsScenarioObservation",
+            "tboxClasses": ["Observation", "ValuationEvidence", "ValuationInputObservation", "EarningsScenarioObservation"],
+            "symbol": symbol,
+            "provider": "+".join(str(item) for item in eps_scenario.get("providers") or []),
+            "source": "valuation-evidence-model",
+            "asOf": str(eps_scenario.get("asOf") or ""),
+            "period": str(eps_scenario.get("period") or ""),
+            "expectedEPS": number(eps_scenario.get("base")),
+            "sampleCount": int(number(eps_scenario.get("observationCount"))),
+            "payload": dict(eps_scenario),
+        })
+        add_relation(graph, model_id, eps_scenario_id, "USES_EARNINGS_SCENARIO", weight=0.92, properties=props)
+        add_relation(graph, assumption_id, eps_scenario_id, "USES_EARNINGS_SCENARIO", weight=0.92, properties=props)
+
+    multiple_band = row.get("multipleBand") if isinstance(row.get("multipleBand"), dict) else {}
+    if multiple_band:
+        multiple_band_id = add_entity(graph, "multiple-band-observation", symbol + ":" + key, (position.name or symbol) + " PER 밴드", {
+            "tboxClass": "MultipleBandObservation",
+            "tboxClasses": ["Observation", "ValuationEvidence", "ValuationInputObservation", "MultipleBandObservation"],
+            "symbol": symbol,
+            "provider": "+".join(str(item) for item in multiple_band.get("providers") or []),
+            "source": "valuation-evidence-model",
+            "basis": str(multiple_band.get("basis") or ""),
+            "targetPER": number(multiple_band.get("base")),
+            "sampleCount": int(number(multiple_band.get("sampleCount"))),
+            "valuationDecisionEligible": bool(multiple_band.get("evidenceBacked")),
+            "payload": dict(multiple_band),
+        })
+        add_relation(graph, model_id, multiple_band_id, "USES_MULTIPLE_BAND", weight=0.92, properties=props)
+        add_relation(graph, assumption_id, multiple_band_id, "USES_MULTIPLE_BAND", weight=0.92, properties=props)
+
+    trace_id = ""
+    formula_trace = row.get("formulaTrace") if isinstance(row.get("formulaTrace"), dict) else {}
+    if formula_trace:
+        trace_id = add_entity(graph, "valuation-calculation-trace", symbol + ":" + key + ":" + model_version, (position.name or symbol) + " 밸류에이션 계산 추적", {
+            "tboxClass": "ValuationCalculationTrace",
+            "tboxClasses": ["ValuationAssumption", "ValuationCalculationTrace", "ValuationSignal"],
+            "symbol": symbol,
+            "modelVersion": model_version,
+            "valuationMethod": model_label,
+            "formula": values.get("formula"),
+            "source": "valuation-evidence-model",
+            "payload": dict(formula_trace),
+        })
+        add_relation(graph, assumption_id, trace_id, "HAS_VALUATION_CALCULATION_TRACE", weight=0.94, properties=props)
     if is_ai_proposal:
         add_relation(graph, stock_id, assumption_id, "HAS_AI_VALUATION_PROPOSAL", weight=0.86, properties={
             **props,
@@ -533,6 +626,8 @@ def add_valuation_row_concepts(
         })
         add_relation(graph, stock_id, estimate_id, "HAS_FAIR_VALUE_ESTIMATE", weight=0.86, properties=props)
         add_relation(graph, stock_id, estimate_id, "HAS_VALUATION", weight=0.86, properties=props)
+        if trace_id:
+            add_relation(graph, trace_id, estimate_id, "PRODUCES_VALUATION_ESTIMATE", weight=0.94, properties=props)
         range_id = add_entity(graph, "fair-value-range", symbol + ":" + key, (position.name or symbol) + " 적정가 범위", {
             "tboxClass": "FairValueRange",
             "tboxClasses": ["ValuationAssumption", "FairValueRange", "ValuationSignal"],

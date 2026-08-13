@@ -682,6 +682,7 @@ class NotificationReasoningReportTests(unittest.TestCase):
             AccountRepository(account),
             lambda _account: None,
             template_renderer=lambda _job: (_ for _ in ()).throw(RuntimeError("render storage timeout")),
+            now_provider=lambda: datetime(2026, 7, 20, 6, 30, tzinfo=timezone.utc),
         )
 
         with self.assertRaisesRegex(RuntimeError, "render storage timeout"):
@@ -736,7 +737,12 @@ class NotificationReasoningReportTests(unittest.TestCase):
                 sent.append(message)
                 return SimpleNamespace(delivered=True, reason="")
 
-        runner = NotificationQueueRunner(queue, AccountRepository(account), lambda _account: Notifier())
+        runner = NotificationQueueRunner(
+            queue,
+            AccountRepository(account),
+            lambda _account: Notifier(),
+            now_provider=lambda: datetime(2026, 7, 20, 6, 30, tzinfo=timezone.utc),
+        )
 
         with self.assertRaisesRegex(RuntimeError, "completion storage timeout"):
             runner.run_once(limit=1)

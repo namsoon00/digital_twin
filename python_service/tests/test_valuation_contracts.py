@@ -18,6 +18,13 @@ from digital_twin.domain.valuation_contracts import (
     fair_value_scenarios,
     valuation_decision_eligible,
 )
+from digital_twin.domain.valuation_model_evidence import (
+    FUNDAMENTAL_MODEL_VERSION,
+    collect_earnings_observations,
+    earnings_scenario,
+    fair_value_from_evidence,
+    multiple_evidence_band,
+)
 
 
 class ValuationContractTests(unittest.TestCase):
@@ -39,9 +46,73 @@ class ValuationContractTests(unittest.TestCase):
     def test_annual_eps_creates_bear_base_bull_range(self):
         values = fair_value_scenarios(10000, "annual", [8, 12, 16])
 
-        self.assertEqual(68000, values["fairValueLow"])
+        self.assertEqual(80000, values["fairValueLow"])
         self.assertEqual(120000, values["fairValueBase"])
-        self.assertEqual(184000, values["fairValueHigh"])
+        self.assertEqual(160000, values["fairValueHigh"])
+
+    def test_reported_consensus_range_is_used_without_synthetic_eps_stress(self):
+        scenario = earnings_scenario([
+            {
+                "observationId": "consensus:fy1",
+                "provider": "yfinance",
+                "period": "fy1",
+                "low": 900,
+                "base": 1000,
+                "high": 1150,
+                "analystCount": 18,
+            }
+        ])
+
+        self.assertEqual(900, scenario["low"])
+        self.assertEqual(1000, scenario["base"])
+        self.assertEqual(1150, scenario["high"])
+        self.assertEqual("reported-consensus-range", scenario["method"])
+        self.assertTrue(scenario["scenarioComplete"])
+
+    def test_target_multiple_band_requires_historical_or_peer_evidence(self):
+        observations = [
+            {"observationId": f"per:{value}", "provider": "KIS Open API", "basis": "historical", "value": value}
+            for value in (8, 10, 12, 16)
+        ]
+        band = multiple_evidence_band(observations, {"SemiconductorHBM"})
+
+        self.assertEqual(9.5, band["low"])
+        self.assertEqual(11, band["base"])
+        self.assertEqual(13, band["high"])
+        self.assertEqual(4, band["sampleCount"])
+        self.assertTrue(band["evidenceBacked"])
+
+        prior = multiple_evidence_band([], {"SemiconductorHBM"})
+        self.assertEqual([8, 12, 16], [prior["low"], prior["base"], prior["high"]])
+        self.assertEqual("bootstrap-prior", prior["basis"])
+        self.assertFalse(prior["evidenceBacked"])
+        self.assertEqual("insufficient", prior["confidence"])
+
+    def test_evidence_model_multiplies_observed_eps_and_per_bounds(self):
+        values = fair_value_from_evidence(
+            {"low": 900, "base": 1000, "high": 1100},
+            {"low": 20, "base": 25, "high": 30},
+        )
+
+        self.assertEqual(18000, values["fairValueLow"])
+        self.assertEqual(25000, values["fairValue"])
+        self.assertEqual(33000, values["fairValueHigh"])
+
+    def test_official_company_knowledge_can_derive_annual_eps(self):
+        observations = collect_earnings_observations(
+            {},
+            {},
+            {
+                "financials": {"annual": [{"period": "2025", "netIncome": 1200000}]},
+                "capital": {"sharesOutstanding": 1000},
+                "provenance": [{"provider": "OpenDART", "asOf": "2026-03-31"}],
+            },
+        )
+
+        self.assertEqual(1, len(observations))
+        self.assertEqual(1200, observations[0]["base"])
+        self.assertEqual("official", observations[0]["sourceType"])
+        self.assertEqual("companyKnowledge.netIncome/sharesOutstanding", observations[0]["source"])
 
     def test_unreviewed_ai_proposal_cannot_drive_investment_decision(self):
         self.assertFalse(
@@ -113,6 +184,33 @@ class ValuationContractTests(unittest.TestCase):
         self.assertNotIn("이동평균", rows[0]["formula"])
         self.assertFalse(rows[0]["valuationDecisionEligible"])
 
+    def test_user_approval_cannot_promote_bootstrap_multiple_to_decision_input(self):
+        position = Position(
+            symbol="000660",
+            name="SK하이닉스",
+            market="KR",
+            currency="KRW",
+            current_price=210000,
+        )
+        row = ai_valuation_proposal_rows(
+            position,
+            {
+                "companyOverviews": {
+                    "000660": {
+                        "provider": "KIS Open API",
+                        "fetchedAt": "2026-08-12T00:00:00Z",
+                        "forwardEPS": 10000,
+                        "cycleData": [{"operatingIncomeGrowthPct": 12}],
+                    }
+                }
+            },
+            {"valuationReviewOverrides": "000660=user_approved"},
+        )[0]
+
+        self.assertEqual("bootstrap-prior", row["multipleBand"]["basis"])
+        self.assertEqual("partial", row["valuationInputState"])
+        self.assertFalse(row["valuationDecisionEligible"])
+
     def test_kakao_uses_platform_profile_and_kis_eps_per_valuation(self):
         info = known_stock("035720")
         position = normalize_position({
@@ -176,6 +274,86 @@ class ValuationContractTests(unittest.TestCase):
         self.assertIn("현재 PER 31.13배", message)
         self.assertIn("사용 EPS 1,110원", message)
         self.assertIn("기준 PER 26배", message)
+
+    def test_evidence_backed_proposal_is_versioned_and_traceable_in_abox(self):
+        position = Position(
+            symbol="035720",
+            name="카카오",
+            market="KR",
+            currency="KRW",
+            current_price=25000,
+        )
+        overview = {
+            "provider": "KIS Open API",
+            "fetchedAt": "2026-08-12T00:00:00Z",
+            "peRatio": 30,
+            "earningsEstimates": [{
+                "observationId": "kis:eps:fy1",
+                "provider": "KIS Open API",
+                "source": "estimate-perform.output3",
+                "period": "fy1",
+                "asOf": "2026-08-12T00:00:00Z",
+                "low": 900,
+                "base": 1000,
+                "high": 1100,
+                "analystCount": 10,
+                "isEstimate": True,
+            }],
+            "multipleObservations": [
+                {
+                    "observationId": f"kis:per:{year}",
+                    "provider": "KIS Open API",
+                    "source": "estimate-perform.output3",
+                    "basis": "historical",
+                    "period": str(year),
+                    "asOf": "2026-08-12T00:00:00Z",
+                    "value": value,
+                }
+                for year, value in ((2022, 20), (2023, 24), (2024, 28), (2025, 32))
+            ],
+            "growthData": [{
+                "provider": "KIS Open API",
+                "asOf": "2026-08-12T00:00:00Z",
+                "revenueGrowthPct": 10,
+                "operatingIncomeGrowthPct": 15,
+            }],
+        }
+        settings = {"valuationReviewOverrides": "035720=user_approved"}
+        external_signals = {"companyOverviews": {"035720": overview}}
+
+        row = ai_valuation_proposal_rows(position, external_signals, settings)[0]
+
+        self.assertEqual(FUNDAMENTAL_MODEL_VERSION, row["modelVersion"])
+        self.assertEqual(26, row["targetPER"])
+        self.assertEqual(26000, row["fairValue"])
+        self.assertEqual("historical", row["multipleBand"]["basis"])
+        self.assertTrue(row["multipleBand"]["evidenceBacked"])
+        self.assertEqual("sufficient", row["valuationInputState"])
+        self.assertTrue(row["valuationDecisionEligible"])
+        self.assertNotIn("DGS10", str(row["formulaTrace"]))
+        self.assertFalse(any(item.get("basis") == "current-market" for item in row["inputObservations"]))
+        self.assertTrue(any(
+            item.get("reason") == "target-multiple-basis-not-eligible"
+            for item in row["formulaTrace"]["excludedObservations"]
+        ))
+
+        graph = build_portfolio_ontology(
+            [position],
+            portfolio_summary([position], account_cash=1000000),
+            external_signals=external_signals,
+            portfolio_id="valuation-trace-test",
+            runtime_context={"settings": settings},
+        )
+        classes = {entity.properties.get("tboxClass") for entity in graph.entities}
+        relation_types = {relation.relation_type for relation in graph.relations}
+        self.assertIn("ValuationModelVersion", classes)
+        self.assertIn("ValuationInputObservation", classes)
+        self.assertIn("EarningsScenarioObservation", classes)
+        self.assertIn("MultipleBandObservation", classes)
+        self.assertIn("ValuationCalculationTrace", classes)
+        self.assertIn("USES_VALUATION_INPUT", relation_types)
+        self.assertIn("HAS_VALUATION_CALCULATION_TRACE", relation_types)
+        self.assertIn("PRODUCES_VALUATION_ESTIMATE", relation_types)
 
     def test_bitcoin_proxy_without_treasury_inputs_has_no_fair_value(self):
         position = Position(symbol="MSTR", name="Strategy", market="US", currency="USD", current_price=100)

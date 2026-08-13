@@ -2165,6 +2165,13 @@ def _valuation_pct_display(value: object) -> str:
     return signed_pct(_number(value))
 
 
+def _valuation_multiplier_text(value: object) -> str:
+    amount = _number(value)
+    if amount <= 0:
+        return ""
+    return str(round(amount, 2)).rstrip("0").rstrip(".") + "배"
+
+
 def _valuation_per_inputs(facts: Dict[str, object], currency: object) -> str:
     current_per = _number(facts.get("valuationCurrentPER"))
     expected_eps = _number(facts.get("valuationExpectedEPS"))
@@ -2434,6 +2441,7 @@ def valuation_detail_rows(context: Dict[str, object], level: str) -> List[str]:
     source_priority = str(facts.get("valuationFundamentalDataSourcePriority") or "").strip()
     per_status_labels = {
         "available": "PER/EPS 사용",
+        "provisional": "PER/EPS 계산 참고값",
         "missing": "PER/EPS 부족",
         "not_applicable": "PER보다 다른 기준 우선",
         "conversion_missing": "PER 확인 · 환산값 부족",
@@ -2479,6 +2487,39 @@ def valuation_detail_rows(context: Dict[str, object], level: str) -> List[str]:
         "missing": "부족",
     }
     method = str(facts.get("valuationMethod") or facts.get("valuationFormula") or "").strip()
+    model_version = str(facts.get("valuationModelVersion") or "").strip()
+    confidence = str(facts.get("valuationConfidence") or "").strip()
+    confidence_label = {"high": "높음", "medium": "보통", "low": "낮음", "insufficient": "검증 부족"}.get(confidence, confidence)
+    eps_scenario = facts.get("valuationEpsScenario") if isinstance(facts.get("valuationEpsScenario"), dict) else {}
+    multiple_band = facts.get("valuationMultipleBand") if isinstance(facts.get("valuationMultipleBand"), dict) else {}
+    eps_scenario_text = ""
+    if _number(eps_scenario.get("base")):
+        eps_scenario_text = " / ".join(
+            part
+            for part in [
+                "보수 " + (_valuation_price_display(eps_scenario.get("low"), currency) or "없음"),
+                "기준 " + (_valuation_price_display(eps_scenario.get("base"), currency) or "없음"),
+                "낙관 " + (_valuation_price_display(eps_scenario.get("high"), currency) or "없음"),
+            ]
+            if part
+        )
+        eps_scenario_text += " · " + str(eps_scenario.get("period") or "기간 미확인")
+        if _number(eps_scenario.get("analystCount")):
+            eps_scenario_text += " · 표본 " + str(int(_number(eps_scenario.get("analystCount")))) + "명"
+    multiple_band_text = ""
+    if _number(multiple_band.get("base")):
+        multiple_band_text = (
+            _valuation_multiplier_text(multiple_band.get("low"))
+            + " / "
+            + _valuation_multiplier_text(multiple_band.get("base"))
+            + " / "
+            + _valuation_multiplier_text(multiple_band.get("high"))
+            + " · "
+            + str(multiple_band.get("basis") or "근거 미확인")
+            + " · 표본 "
+            + str(int(_number(multiple_band.get("sampleCount"))))
+            + "개"
+        )
     if facts.get("valuationIsAiGenerated"):
         if str(method).casefold() == "ai-current-price-anchor":
             status_text = "입력 부족 · 임시 기준"
@@ -2490,7 +2531,10 @@ def valuation_detail_rows(context: Dict[str, object], level: str) -> List[str]:
         status_text = status_labels.get(data_status, data_status)
     rows = [
         _html_row("사용 모델", method, level=level, max_len=260),
+        _html_row("모델 버전·신뢰도", " · ".join(part for part in [model_version, confidence_label] if part), level=level, max_len=220),
         _html_row("공식", formula, level=level, max_len=260),
+        _html_row("EPS 시나리오", eps_scenario_text, level=level, max_len=280),
+        _html_row("PER 근거 밴드", multiple_band_text, level=level, max_len=280),
         _html_row("대입값", substitution, level=level, max_len=260),
         _html_row("승인 상태", approval, level=level, max_len=180),
         _html_row("현재가", current or "현재가 없음", level=level),
@@ -2537,10 +2581,21 @@ def compact_valuation_detail_rows(context: Dict[str, object], level: str) -> Lis
             or facts.get("valuationPerReason")
             or ""
         ).strip()
+        model_version = str(facts.get("valuationModelVersion") or "").strip()
+        eps_scenario = facts.get("valuationEpsScenario") if isinstance(facts.get("valuationEpsScenario"), dict) else {}
+        multiple_band = facts.get("valuationMultipleBand") if isinstance(facts.get("valuationMultipleBand"), dict) else {}
+        evidence_text = ""
+        if _number(eps_scenario.get("base")):
+            evidence_text = "EPS " + _valuation_price_display(eps_scenario.get("base"), currency)
+        if _number(multiple_band.get("base")):
+            evidence_text += (" · " if evidence_text else "") + "PER " + _valuation_multiplier_text(multiple_band.get("base"))
+            evidence_text += " · " + str(multiple_band.get("basis") or "근거 미확인") + " 표본 " + str(int(_number(multiple_band.get("sampleCount")))) + "개"
         return [
             _html_row("평가 상태", "사용자 검토 전 AI 초안 · 투자 판단에서 제외", level=level, max_len=240),
             _html_row("알림 처리", "적정가·안전마진 숫자를 표시하지 않습니다.", level=level, max_len=240),
             _html_row("평가 기준", valuation_basis, level=level, max_len=240),
+            _html_row("산식 버전", model_version, level=level, max_len=180),
+            _html_row("산식 근거", evidence_text, level=level, max_len=240),
             _html_row("검증 입력", per_inputs, level=level, max_len=220),
             _html_row("확인할 데이터", missing_text or "공식 실적, 성장률 전망, 피어 또는 과거 PER 범위", level=level, max_len=260),
         ]

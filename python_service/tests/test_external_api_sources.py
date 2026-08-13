@@ -20,8 +20,19 @@ from digital_twin.domain.portfolio import AccountSnapshot, AlertEvent, Position
 from digital_twin.domain.portfolio_calculations import portfolio_summary
 from digital_twin.domain.monitoring import RealtimeMonitor
 from digital_twin.infrastructure.external_signals import ExternalSignalProvider
+from digital_twin.infrastructure.external_signal_provider_yfinance import (
+    normalized_yfinance_earnings_estimates,
+    normalized_yfinance_growth_data,
+)
 from digital_twin.infrastructure.external_signal_utils import sanitize_sensitive_text
-from digital_twin.infrastructure.kis_market_signals import KISMarketSignalProvider, investor_estimate_selection, stage_coverage
+from digital_twin.infrastructure.kis_market_signals import (
+    KISMarketSignalProvider,
+    investor_estimate_selection,
+    kis_fundamental_external_rows,
+    normalize_estimate_perform,
+    normalize_investment_opinions,
+    stage_coverage,
+)
 from digital_twin.infrastructure.toss_snapshots import TossProvider, normalize_price_payload
 
 
@@ -185,6 +196,145 @@ class ExternalApiSourceTests(unittest.TestCase):
         self.assertEqual("last-close", coverage["freshnessStatus"])
         self.assertEqual("market-close-reference", coverage["cadence"])
         self.assertEqual("market-closed-reference", coverage["latencyStatus"])
+
+    def test_kis_estimate_perform_maps_fiscal_blocks_to_valuation_evidence(self):
+        def row(*values):
+            return {f"data{index}": value for index, value in enumerate(values, start=1)}
+
+        payload = {
+            "output1": {"sht_cd": "035720", "item_kor_nm": "카카오", "estdate": "20260812"},
+            "output2": [
+                row(100, 110, 120, 130, 140),
+                row(10, 20, 30, 40, 50),
+                row(20, 30, 40, 50, 60),
+                row(15, 25, 35, 45, 55),
+                row(10, 15, 20, 25, 30),
+                row(5, 10, 15, 20, 25),
+            ],
+            "output3": [
+                row(30, 40, 50, 60, 70),
+                row(800, 900, 1000, 1100, 1500),
+                row(10, 20, 30, 40, 50),
+                row(80, 100, 120, 160, 130),
+                row(40, 50, 60, 70, 80),
+                row(100, 110, 120, 130, 140),
+                row(200, 190, 180, 170, 160),
+                row(30, 40, 50, 60, 70),
+            ],
+            "output4": [{"dt": value} for value in ("202212", "202312", "202412", "202512", "202612")],
+        }
+        payload["output2"][1]["data4"] = ""
+
+        normalized = normalize_estimate_perform(
+            "035720",
+            payload,
+            "2026-08-13T00:00:00Z",
+            now=datetime(2026, 8, 13, tzinfo=timezone.utc),
+        )
+
+        self.assertEqual("035720", normalized["symbol"])
+        self.assertEqual(1500, normalized["earningsEstimates"][0]["base"])
+        self.assertEqual("fy1", normalized["earningsEstimates"][0]["period"])
+        self.assertEqual([8, 10, 12, 16], [item["value"] for item in normalized["multipleObservations"][:4]])
+        self.assertEqual("historical", normalized["multipleObservations"][0]["basis"])
+        self.assertEqual("current-market", normalized["multipleObservations"][-1]["basis"])
+        self.assertIsNone(normalized["cycleData"][3]["revenueGrowthPct"])
+        self.assertEqual(5.0, normalized["cycleData"][-1]["revenueGrowthPct"])
+
+        rows = kis_fundamental_external_rows("035720", {
+            "symbol": "035720",
+            "name": "카카오",
+            "currentPrice": 39000,
+            "updatedAt": "2026-08-13T00:00:00Z",
+            "fundamentalEstimates": normalized,
+        })
+        self.assertEqual(1500, rows["companyOverview"]["forwardEPS"])
+        self.assertEqual(5, len(rows["companyOverview"]["multipleObservations"]))
+        self.assertEqual(5, len(rows["earningsReport"]["cycleData"]))
+
+    def test_kis_opinions_keep_latest_target_per_brokerage(self):
+        normalized = normalize_investment_opinions(
+            "035720",
+            {
+                "output": [
+                    {"stck_bsop_date": "20260812", "mbcr_name": "A증권", "hts_goal_prc": "50000", "invt_opnn": "매수"},
+                    {"stck_bsop_date": "20260701", "mbcr_name": "A증권", "hts_goal_prc": "45000", "invt_opnn": "매수"},
+                    {"stck_bsop_date": "20260811", "mbcr_name": "B증권", "hts_goal_prc": "60000", "invt_opnn": "매수"},
+                ]
+            },
+            "2026-08-13T00:00:00Z",
+        )
+
+        self.assertEqual(2, normalized["analystOpinionCount"])
+        self.assertEqual(55000, normalized["analystTargetPrice"])
+        self.assertEqual(50000, normalized["analystTargetLowPrice"])
+        self.assertEqual(60000, normalized["analystTargetHighPrice"])
+
+    def test_optional_kis_fundamental_failure_does_not_open_quote_circuit(self):
+        calls = []
+
+        def failing_fetch(method, url, headers=None, body=None, query=None, timeout=12):
+            calls.append({"method": method, "url": url, "timeout": timeout})
+            raise TimeoutError("optional fundamental timeout")
+
+        provider = KISMarketSignalProvider(
+            settings={
+                "kisBaseUrl": "https://kis.example.test",
+                "kisAppKey": "key",
+                "kisAppSecret": "secret",
+                "kisFundamentalEstimatesEnabled": "1",
+                "kisFundamentalTimeoutSeconds": "5",
+                "externalApiCircuitFailures": "1",
+                "kisMarketSignalGapSeconds": "0",
+            },
+            quote_cache=MemoryQuoteCache(),
+            fetch_json=failing_fetch,
+            sleep=lambda _seconds: None,
+        )
+        provider.token = "token"
+
+        result = provider.fetch_full_stage(
+            "035720",
+            "fundamental-estimate",
+            "/uapi/domestic-stock/v1/quotations/estimate-perform",
+            "HHKST668300C0",
+            {"SHT_CD": "035720"},
+        )
+
+        self.assertEqual({}, result)
+        self.assertEqual(1, len(calls))
+        self.assertEqual(5, calls[0]["timeout"])
+        self.assertTrue(provider.fundamental_circuit_open())
+        self.assertTrue(provider.fundamental_circuit_open("fundamental-estimate"))
+        self.assertFalse(provider.fundamental_circuit_open("fundamental-opinion"))
+        self.assertFalse(provider.circuit_open())
+        self.assertEqual(0, provider.consecutive_failures)
+        self.assertEqual(1, len(provider.diagnostics["fundamentalFailures"]))
+
+    def test_yfinance_consensus_and_growth_are_normalized_with_provenance(self):
+        payload = {
+            "earningsEstimate": [{
+                "period": "0y",
+                "avg": 12,
+                "low": 10,
+                "high": 15,
+                "numberOfAnalysts": 20,
+                "growth": 0.25,
+            }],
+            "epsTrend": [{"period": "0y", "30daysAgo": 10}],
+            "epsRevisions": [{"period": "0y", "upLast30days": 4, "downLast30days": 1}],
+            "info": {"revenueGrowth": 0.12, "earningsGrowth": 0.18, "operatingMargins": 0.22},
+        }
+
+        estimates = normalized_yfinance_earnings_estimates(payload, "2026-08-13T00:00:00Z")
+        growth = normalized_yfinance_growth_data(payload, "2026-08-13T00:00:00Z")
+
+        self.assertEqual("fy1", estimates[0]["period"])
+        self.assertEqual([10, 12, 15], [estimates[0][key] for key in ("low", "base", "high")])
+        self.assertEqual(20, estimates[0]["revision30dPct"])
+        self.assertEqual(20, estimates[0]["analystCount"])
+        self.assertEqual(12, growth[0]["revenueGrowthPct"])
+        self.assertEqual(22, growth[0]["operatingMarginPct"])
 
     def test_kis_last_close_does_not_replace_fresh_toss_premarket_quote(self):
         provider = KISMarketSignalProvider(settings={"kisMarketSignalsEnabled": "0"})

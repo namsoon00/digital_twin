@@ -290,6 +290,8 @@ class NotificationReverseReasoningTests(unittest.TestCase):
         self.assertNotIn("slowRules", render_source)
         self.assertIn("state.notificationJobDetails[key] || notificationJobByKey(key)", source)
         self.assertIn('state.workDetailLayer.type === "notification-job"', source)
+        self.assertIn('renderNotificationDetailMetric("자료 상태"', source)
+        self.assertIn("var missing = Array.isArray(trace.missingData)", render_source)
 
     def test_detail_endpoint_exposes_trace_without_bloating_list_payload(self):
         job = NotificationJob.create(
@@ -312,6 +314,8 @@ class NotificationReverseReasoningTests(unittest.TestCase):
         self.assertEqual("분할축소", detail["job"]["actionFlow"]["currentActionLabel"])
         self.assertEqual("action-changed", detail["job"]["actionFlow"]["transition"]["kind"])
         self.assertEqual("분할축소 검토 시작", detail["job"]["actionFlow"]["transition"]["label"])
+        self.assertEqual("sufficient", detail["job"]["actionFlow"]["dataReadiness"]["dataState"])
+        self.assertTrue(detail["job"]["reasoningTrace"]["missingData"])
         self.assertNotIn("reasoningTrace", notification_job_list_payload(job, stale_minutes=30))
         self.assertNotIn("actionFlow", notification_job_list_payload(job, stale_minutes=30))
 

@@ -720,7 +720,6 @@ def ai_judgment_rows(response: NotificationAIValidatedResponse, level: str, cont
     rows = [
         _html_row(ai_action_row_label(level), _ai_marked_value(action_label_for_action(response.action, context) or response.action_label), level=level),
         _html_row("확인 단계", relation_state.get("reviewLabel") or response.review_label, level=level),
-        _html_row("자료 상태", relation_state.get("dataLabel") or response.data_state_label, level=level),
         _html_row("AI 검증", response.validation_label, level=level),
         _html_row("이번 변화", relation_state.get("changeLabel"), level=level),
     ]
@@ -2658,7 +2657,6 @@ def compact_beginner_judgment_rows(
         _html_row("대응", action_label_for_action(response.action, context) or response.action_label, level=level),
         _html_row("이유", response.summary, level=level, max_len=420),
         _html_row("확인 단계", relation_state.get("reviewLabel") or response.review_label, level=level),
-        _html_row("자료 상태", relation_state.get("dataLabel") or response.data_state_label, level=level),
         _html_row("이번 변화", relation_state.get("changeLabel"), level=level),
         _html_row("AI 검증", response.validation_label, level=level),
         _html_row("계정 기준", profile, level=level),
@@ -2732,6 +2730,18 @@ def compact_sentence_count(value: object, limit: int = 2) -> str:
     if not text:
         return ""
     parts = [part.strip() for part in re.split(r"(?<=[가-힣])\.\s+(?=[가-힣$0-9])", text) if part.strip()]
+    unique_parts: List[str] = []
+    seen = set()
+    for part in parts:
+        key = re.sub(r"[^0-9a-z가-힣]+", "", part.casefold())
+        if key and key in seen:
+            continue
+        if key:
+            seen.add(key)
+        unique_parts.append(part)
+    if len(unique_parts) != len(parts):
+        suffix = "." if text.endswith(".") else ""
+        return ". ".join(unique_parts[:limit]).rstrip(".") + suffix
     if len(parts) <= limit:
         return text
     return ". ".join(parts[:limit]).rstrip(".") + "."
@@ -2823,13 +2833,8 @@ def execution_telegram_message(context: Dict[str, object], response: Notificatio
         "<b>" + _condition_presentation_label(context, response, invalidation) + "</b>",
         _html_bullet(invalidation, level),
     ])
-    data_state_rows = customer_data_state_rows(context, level)
-    if data_state_rows:
-        parts.extend(["", "<b>자료 상태와 부족 데이터</b>", *data_state_rows])
-    excluded_rows = full_excluded_information_rows(context)
+    excluded_rows = full_excluded_information_rows(context, response)
     parts.extend(["", "<b>판단에서 제외한 정보</b>", *[_html_bullet(row, level) for row in excluded_rows]])
-    reliability_rows = full_data_reliability_rows(context, response)
-    parts.extend(["", "<b>자료 신뢰도</b>", *[_html_bullet(row, level) for row in reliability_rows]])
     history_rows = full_decision_history_rows(context, response)
     parts.extend(["", "<b>판단 이력</b>", *[_html_bullet(row, level) for row in history_rows]])
     trace_rows = full_reasoning_trace_rows(context)
@@ -2871,13 +2876,14 @@ def execution_telegram_message_compact_beginner(
         parts.extend(["", "<b>현재 흐름</b>", *[_html_bullet(row, level) for row in flow_rows]])
     temporal_rows = full_temporal_analysis_rows(context)
     parts.extend(["", "<b>시간축 분석</b>", *[_html_bullet(row, level) for row in temporal_rows]])
+    section_labels = compact_decision_section_labels(context, response)
     reasons = compact_action_reason_rows(context, response)
     if reasons:
-        parts.extend(["", "<b>" + compact_reason_heading(context) + "</b>", *[_html_bullet(item, level) for item in reasons]])
+        parts.extend(["", "<b>" + section_labels["reason"] + "</b>", *[_html_bullet(item, level) for item in reasons]])
     evidence_rows = full_decision_evidence_rows(context, response)
-    parts.extend(["", "<b>핵심 근거</b>", *[_html_bullet(row, level) for row in evidence_rows]])
+    parts.extend(["", "<b>" + section_labels["support"] + "</b>", *[_html_bullet(row, level) for row in evidence_rows]])
     counter_rows = full_decision_evidence_rows(context, response, counter=True)
-    parts.extend(["", "<b>반대 근거</b>", *[_html_bullet(row, level) for row in counter_rows]])
+    parts.extend(["", "<b>" + section_labels["counter"] + "</b>", *[_html_bullet(row, level) for row in counter_rows]])
     typedb_rows = full_typedb_competing_inference_rows(context, response)
     parts.extend(["", "<b>TypeDB 경쟁 추론</b>", *[_html_bullet(row, level) for row in typedb_rows]])
     company_valuation = company_valuation_presentation(context)
@@ -2898,10 +2904,8 @@ def execution_telegram_message_compact_beginner(
         "<b>" + _condition_presentation_label(context, response, invalidation) + "</b>",
         _html_bullet(invalidation, level),
     ])
-    excluded_rows = full_excluded_information_rows(context)
+    excluded_rows = full_excluded_information_rows(context, response)
     parts.extend(["", "<b>판단에서 제외한 정보</b>", *[_html_bullet(row, level) for row in excluded_rows]])
-    reliability_rows = full_data_reliability_rows(context, response)
-    parts.extend(["", "<b>자료 상태</b>", *[_html_bullet(row, level) for row in reliability_rows]])
     news_line = compact_news_impact_line(context)
     if news_line:
         parts.extend(["", "<b>뉴스 영향</b>", _html_bullet(news_line, level)])
@@ -2946,9 +2950,26 @@ def compact_current_action_line(context: Dict[str, object], response: Notificati
     return marker + " " + action + ((". " + detail) if detail else "")
 
 
-def compact_reason_heading(context: Dict[str, object]) -> str:
+def compact_decision_section_labels(
+    context: Dict[str, object],
+    response: NotificationAIValidatedResponse,
+) -> Dict[str, str]:
     transition = ai_decision_transition_from_context(context) or decision_transition_from_context(context)
-    return "바뀐 이유" if str(transition.get("kind") or "").strip().lower() == "action-changed" else "판단 근거"
+    relation_context = relation_context_value(context or {})
+    envelope = relation_context.get("actionEnvelope") if isinstance(relation_context.get("actionEnvelope"), dict) else {}
+    status = str(envelope.get("status") or "").strip().upper()
+    action = str(response.action or "").strip().upper()
+    if action in {"HOLD", "AVOID"} and status in {"ENTRY_ELIGIBLE", "ENTRY_DEFERRED"}:
+        return {
+            "reason": "후보와 최종 판단",
+            "support": "진입 후보를 지지한 근거",
+            "counter": "관심 유지를 선택한 근거" if action == "HOLD" else "신규 진입을 피한 근거",
+        }
+    return {
+        "reason": "바뀐 이유" if str(transition.get("kind") or "").strip().lower() == "action-changed" else "판단 근거",
+        "support": "핵심 근거",
+        "counter": "반대 근거",
+    }
 
 
 def compact_decision_transition(context: Dict[str, object], response: NotificationAIValidatedResponse) -> str:
@@ -3288,6 +3309,10 @@ def compact_action_reason_rows(
     response: NotificationAIValidatedResponse,
 ) -> List[str]:
     rows: List[str] = []
+    relation_context = relation_context_value(context or {})
+    envelope = relation_context.get("actionEnvelope") if isinstance(relation_context.get("actionEnvelope"), dict) else {}
+    envelope_status = str(envelope.get("status") or "").strip().upper()
+    final_action = str(response.action or "").strip().upper()
     if response.precomputed_action and response.precomputed_action != response.action:
         adjustment = (
             "관계 분석에서는 "
@@ -3301,6 +3326,19 @@ def compact_action_reason_rows(
             1,
         )
         rows.append(adjustment + ((" " + reason) if reason else ""))
+    elif final_action in {"HOLD", "AVOID"} and envelope_status in {"ENTRY_ELIGIBLE", "ENTRY_DEFERRED"}:
+        if envelope_status == "ENTRY_ELIGIBLE":
+            rows.append(
+                "진입 조건은 성립했지만 반대 근거와 계정 제한을 반영한 최종 행동은 "
+                + action_label_for_action(final_action, context)
+                + "입니다."
+            )
+        else:
+            rows.append(
+                "진입 후보는 성립했지만 추가 확인 조건과 계정 제한을 반영한 최종 행동은 "
+                + action_label_for_action(final_action, context)
+                + "입니다."
+            )
     summary = compact_sentence_count(_message_text(response.summary, "beginner"), 1)
     summary_key = re.sub(r"[^0-9a-z가-힣]+", "", summary.casefold())
     envelope_rows = compact_envelope_reason_rows(context)
@@ -3597,10 +3635,17 @@ def full_typedb_competing_inference_rows(
         str(response.hypothesis_comparison_state or "가설 비교 상태 미확인"),
     )
     append_unique_text(rows, "비교 상태: " + comparison, 180)
+    envelope = relation.get("actionEnvelope") if isinstance(relation.get("actionEnvelope"), dict) else {}
+    envelope_status = str(envelope.get("status") or "").strip().upper()
     if response.precomputed_action:
         candidate = action_label_for_action(response.precomputed_action, context)
         final = action_label_for_action(response.action, context) or response.action_label
-        append_unique_text(rows, "TypeDB 행동 후보 " + candidate + " · AI 최종 의견 " + final, 220)
+        if envelope_status == "ENTRY_DEFERRED":
+            append_unique_text(rows, "TypeDB 후보 상태 진입 후보·추가 확인 · AI 최종 행동 " + final, 220)
+        elif envelope_status == "ENTRY_ELIGIBLE":
+            append_unique_text(rows, "TypeDB 후보 상태 소액 진입 조건 성립 · AI 최종 행동 " + final, 220)
+        else:
+            append_unique_text(rows, "TypeDB 행동 후보 " + candidate + " · AI 최종 의견 " + final, 220)
     ordered = sorted(
         [item for item in response.hypotheses or [] if isinstance(item, dict)],
         key=lambda item: str(item.get("hypothesisId") or "") != response.selected_hypothesis_id,
@@ -3665,6 +3710,15 @@ def full_portfolio_impact_rows(context: Dict[str, object]) -> List[str]:
         if str(item.get("exposure_type") or item.get("exposureType") or "").lower() == "sector"
         and sector and str(item.get("key") or "").strip() == sector
     ), {})
+    currency_metric = next((
+        item for item in metrics
+        if str(item.get("exposure_type") or item.get("exposureType") or "").lower() == "currency"
+        and str(item.get("key") or "").strip().lower() == "non-krw"
+    ), {})
+    cash_metric = next((
+        item for item in metrics
+        if str(item.get("exposure_type") or item.get("exposureType") or "").lower() == "cash"
+    ), {})
     rows: List[str] = []
 
     position_ratio = position.get("ratio_pct") if position else facts.get("positionWeight")
@@ -3685,13 +3739,50 @@ def full_portfolio_impact_rows(context: Dict[str, object]) -> List[str]:
             text += " · 계정 한도 " + signed_pct(_number(sector_limit)).lstrip("+")
         rows.append(text)
 
-    fx_ratio = facts.get("fxExposureRatio")
-    fx_limit = facts.get("strategyFxExposureReviewPct")
-    if fx_ratio not in (None, "", 0, 0.0):
-        text = "외화 노출 " + signed_pct(_number(fx_ratio)).lstrip("+")
-        if fx_limit not in (None, "", 0, 0.0):
-            text += " · 점검 기준 " + signed_pct(_number(fx_limit)).lstrip("+")
+    cash_ratio = cash_metric.get("ratio_pct") if cash_metric else None
+    cash_limit = cash_metric.get("policy_limit_pct") if cash_metric else None
+    if cash_ratio not in (None, ""):
+        text = "현금 비중 " + signed_pct(_number(cash_ratio)).lstrip("+")
+        if cash_limit not in (None, "", 0, 0.0):
+            shortfall = _number(cash_limit) - _number(cash_ratio)
+            text += " · 계정 하한 " + signed_pct(_number(cash_limit)).lstrip("+")
+            if shortfall > 0:
+                text += " · " + signed_pct(shortfall).lstrip("+").replace("%", "%p") + " 부족"
         rows.append(text)
+
+    fx_ratio = currency_metric.get("ratio_pct") if currency_metric else facts.get("fxExposureRatio")
+    fx_limit = currency_metric.get("policy_limit_pct") if currency_metric else facts.get("strategyFxExposureReviewPct")
+    if fx_ratio not in (None, "", 0, 0.0):
+        text = "전체 외화 비중 " + signed_pct(_number(fx_ratio)).lstrip("+")
+        if fx_limit not in (None, "", 0, 0.0):
+            excess = _number(fx_ratio) - _number(fx_limit)
+            text += " · 계정 한도 " + signed_pct(_number(fx_limit)).lstrip("+")
+            if excess > 0:
+                text += " · " + signed_pct(excess).lstrip("+").replace("%", "%p") + " 초과"
+        rows.append(text)
+
+    concentration_breaches = sorted(
+        [
+            item for item in metrics
+            if str(item.get("exposure_type") or item.get("exposureType") or "").lower() == "position"
+            and str(item.get("key") or "").strip().upper() != symbol
+            and _number(item.get("policy_limit_pct")) > 0
+            and _number(item.get("ratio_pct")) > _number(item.get("policy_limit_pct"))
+        ],
+        key=lambda item: _number(item.get("ratio_pct")) - _number(item.get("policy_limit_pct")),
+        reverse=True,
+    )
+    if concentration_breaches:
+        breach = concentration_breaches[0]
+        ratio = _number(breach.get("ratio_pct"))
+        limit = _number(breach.get("policy_limit_pct"))
+        rows.append(
+            "기존 종목 집중 초과: "
+            + str(breach.get("key") or "-")
+            + " " + signed_pct(ratio).lstrip("+")
+            + " · 계정 한도 " + signed_pct(limit).lstrip("+")
+            + " · " + signed_pct(ratio - limit).lstrip("+").replace("%", "%p") + " 초과"
+        )
 
     market_value = position.get("value") if position else facts.get("marketValue")
     if market_value not in (None, "", 0, 0.0):
@@ -3766,7 +3857,10 @@ def full_conditional_action_rows(
     return rows[:limit] or ["다음 데이터 갱신 시 현재 판단의 유지·강화·완화 조건을 자동으로 다시 비교합니다."]
 
 
-def full_excluded_information_rows(context: Dict[str, object]) -> List[str]:
+def full_excluded_information_rows(
+    context: Dict[str, object],
+    response: NotificationAIValidatedResponse = None,
+) -> List[str]:
     facts = relation_facts(context or {})
     rows: List[str] = []
     macro_state = _macro_constraint_state(context)
@@ -3786,6 +3880,16 @@ def full_excluded_information_rows(context: Dict[str, object]) -> List[str]:
     research = [item for item in evidence.get("researchEvidence") or [] if isinstance(item, dict)]
     if research and not any(item.get("investmentJudgmentEligible") is True for item in research):
         rows.append("뉴스·조사: 수집된 자료는 모두 조건부 또는 참고 상태여서 매수·매도 행동의 직접 근거로 사용하지 않았습니다.")
+
+    # Keep only decision-changing safety warnings in the delivered alert.
+    # Full freshness, source timestamps, and missing-field audits remain in
+    # the structured notification detail shown on the web.
+    for item in data_quality_warning_rows(context, 2):
+        append_unique_text(rows, "판단 제한: " + item, 420)
+    if response is not None:
+        for item in customer_data_note_rows(list(response.missing_data_impact)):
+            if "새 뉴스·조사 근거가 아직 갱신되지" in item:
+                append_unique_text(rows, "판단 제한: " + item, 420)
 
     return rows or ["별도로 제외되거나 참고 전용으로 분류된 주요 정보가 없습니다."]
 

@@ -262,7 +262,6 @@ class BeginnerRelationLanguageTests(unittest.TestCase):
             "<b>판단 근거</b>",
             "<b>다음 행동</b>",
             "<b>판단 변경 조건</b>",
-            "<b>자료 상태</b>",
             "근거 1",
             "근거 2",
             "근거 3",
@@ -272,15 +271,11 @@ class BeginnerRelationLanguageTests(unittest.TestCase):
             "반대 4",
             "확인 1",
             "확인 2",
-            "부족 1",
-            "부족 2",
-            "부족 3",
-            "검증 3",
             "<b>TypeDB 경쟁 추론</b>",
             "<b>추론 추적</b>",
         ]:
             self.assertIn(expected, message)
-        for hidden in ["확인 3", "확인 4", "부족 4", "부족 5", "고객이 실제 투자 판단 전에", "<b>밸류에이션</b>"]:
+        for hidden in ["확인 3", "확인 4", "부족 1", "부족 2", "부족 3", "부족 4", "부족 5", "검증 3", "고객이 실제 투자 판단 전에", "<b>밸류에이션</b>", "<b>자료 상태</b>"]:
             self.assertNotIn(hidden, message)
         self.assertIn("[AI]", message)
         self.assertNotIn("<b>점수 안내</b>", message)
@@ -327,9 +322,9 @@ class BeginnerRelationLanguageTests(unittest.TestCase):
         self.assertIn("확인 2", message)
         self.assertNotIn("확인 3", message)
         self.assertNotIn("확인 4", message)
-        self.assertIn("부족 1", message)
-        self.assertIn("부족 2", message)
-        self.assertIn("부족 3", message)
+        self.assertNotIn("부족 1", message)
+        self.assertNotIn("부족 2", message)
+        self.assertNotIn("부족 3", message)
         self.assertNotIn("부족 4", message)
         self.assertNotIn("부족 5", message)
         self.assertIn("[AI]", message)
@@ -486,7 +481,7 @@ class BeginnerRelationLanguageTests(unittest.TestCase):
 
         self.assertIn("<b>판단 근거</b>", message)
         self.assertIn("20일 평균보다 12.9%", message)
-        self.assertIn("자료 상태", message)
+        self.assertNotIn("<b>자료 상태</b>", message)
         self.assertNotIn("점수 안내", message)
         self.assertNotIn("/100점", message)
 
@@ -599,7 +594,7 @@ class BeginnerRelationLanguageTests(unittest.TestCase):
         self.assertIn("사용자 입력 불필요", message)
         self.assertNotIn("<b>밸류에이션</b>", message)
         self.assertIn("99,000원", message)
-        self.assertIn("자료 상태", message)
+        self.assertNotIn("<b>자료 상태</b>", message)
         self.assertIn("사용자 적정가 기준 안전마진", message)
         self.assertNotIn("대입값", message)
 
@@ -788,7 +783,7 @@ class BeginnerRelationLanguageTests(unittest.TestCase):
         )
 
         self.assertNotIn("<b>밸류에이션</b>", message)
-        self.assertIn("자료 상태", message)
+        self.assertNotIn("<b>자료 상태</b>", message)
         self.assertNotIn("기준 적정가", message)
         self.assertNotIn("계산 상태", message)
 

@@ -198,6 +198,89 @@ class ActionEnvelopeAiGateTests(unittest.TestCase):
         self.assertIn("관계 분석에서는 소액 진입 검토 후보가 성립했지만 최종 행동은 관심 유지입니다.", message)
         self.assertIn("거래량 확인이 부족해 진입 후보를 바로 실행하지 않습니다.", message)
 
+    def test_deferred_entry_message_separates_candidate_from_final_hold(self):
+        context = entry_context()
+        context["messageDeliveryLevel"] = "beginner"
+        context["aiDecisionTransition"] = {
+            "historyAvailable": True,
+            "kind": "unchanged",
+            "previousAction": "HOLD",
+            "currentAction": "HOLD",
+        }
+        context["ontologyRelationContext"]["actionEnvelope"].update({
+            "status": "ENTRY_DEFERRED",
+            "statusLabel": "진입 조건 추가 확인",
+            "preferredAction": "HOLD",
+            "selectedDecisionEffect": "defer",
+            "dataReadiness": {"state": "partial", "dataState": "partial", "usable": True},
+        })
+        context["notificationAiExecutionAudit"] = {
+            "decisionBrief": {
+                "accountPolicy": {
+                    "portfolioLifecycle": {
+                        "exposureSnapshot": {
+                            "metrics": [
+                                {
+                                    "exposure_type": "position",
+                                    "key": "MSTR",
+                                    "ratio_pct": 56.7,
+                                    "policy_limit_pct": 45.0,
+                                },
+                                {
+                                    "exposure_type": "currency",
+                                    "key": "non-KRW",
+                                    "ratio_pct": 60.6,
+                                    "policy_limit_pct": 25.0,
+                                },
+                                {
+                                    "exposure_type": "cash",
+                                    "key": "KRW",
+                                    "ratio_pct": 0.1,
+                                    "policy_limit_pct": 3.0,
+                                },
+                            ]
+                        }
+                    }
+                }
+            }
+        }
+        response = NotificationAIValidatedResponse(
+            action="HOLD",
+            action_label="관심 유지",
+            precomputed_action="HOLD",
+            validation_state="conditional",
+            data_state="partial",
+            review_level="check",
+            summary="가격 회복은 확인됐지만 거래와 계정 제한 때문에 관심을 유지합니다.",
+            opinion="지금은 주문하지 않습니다.",
+            change_analysis=(
+                "이전 AI 최종 판단과 같은 관심 유지입니다. "
+                "이전 AI 최종 판단과 같은 관심 유지입니다."
+            ),
+            evidence=["기간 회복과 우호적 추세 전이가 확인됐습니다."],
+            counter_evidence=["거래량과 투자자 수급 확인이 부족합니다."],
+            missing_data_impact=["웹 상세에서 확인할 체결·호가 자료가 없습니다."],
+            next_checks=["거래와 계정 한도가 복원되면 다시 판단합니다."],
+            source="test AI",
+        )
+
+        message = execution_telegram_message(context, response)
+
+        self.assertIn("<b>후보와 최종 판단</b>", message)
+        self.assertIn("진입 후보는 성립했지만 추가 확인 조건과 계정 제한을 반영한 최종 행동은 관심 유지입니다.", message)
+        self.assertIn("<b>진입 후보를 지지한 근거</b>", message)
+        self.assertIn("<b>관심 유지를 선택한 근거</b>", message)
+        self.assertIn("TypeDB 후보 상태 진입 후보·추가 확인 · AI 최종 행동 관심 유지", message)
+        self.assertNotIn("TypeDB 행동 후보 관심 유지 · AI 최종 의견 관심 유지", message)
+        self.assertIn("현금 비중 0.1% · 계정 하한 3.0% · 2.9%p 부족", message)
+        self.assertIn("전체 외화 비중 60.6% · 계정 한도 25.0% · 35.6%p 초과", message)
+        self.assertIn("기존 종목 집중 초과: MSTR 56.7% · 계정 한도 45.0% · 11.7%p 초과", message)
+        self.assertNotIn(
+            "이전 AI 최종 판단과 같은 관심 유지입니다. 이전 AI 최종 판단과 같은 관심 유지입니다.",
+            message,
+        )
+        self.assertNotIn("<b>자료 상태</b>", message)
+
     def test_local_response_explains_entry_envelope_without_engine_terms(self):
         response = local_validated_ai_response(entry_context())
 
@@ -246,10 +329,11 @@ class ActionEnvelopeAiGateTests(unittest.TestCase):
             "지금 행동", "이번 변화", "현재 흐름", "시간축 분석", "바뀐 이유",
             "핵심 근거", "반대 근거", "TypeDB 경쟁 추론", "회사 가치",
             "포트폴리오 영향", "주요 사건·일정", "다음 행동", "판단 변경 조건",
-            "판단에서 제외한 정보", "자료 상태", "뉴스 영향", "판단 이력",
+            "판단에서 제외한 정보", "뉴스 영향", "판단 이력",
             "추론 추적", "원문·출처",
         ]:
             self.assertIn(heading, message)
+        self.assertNotIn("<b>자료 상태</b>", message)
         self.assertIn("[AI]", message)
         self.assertNotIn("API 조회 정보", message)
         self.assertNotIn("뉴스·공시 요약", message)

@@ -3607,6 +3607,58 @@ class TypeDBOntologyRepositoryTests(unittest.TestCase):
         self.assertIn('has ontology-storage-id "' + relation_storage_ids[0] + '"', plan["query"])
         self.assertNotIn('has ontology-kind "abox-scope-active-pointer"', plan["query"])
 
+    def test_stock_targeted_execution_index_retains_portfolio_aggregate_facts(self):
+        repository = TypeDBOntologyGraphRepository("127.0.0.1:1729")
+        graph = PortfolioOntology("portfolio-targeted-evidence-index")
+        graph.entities.extend([
+            OntologyEntity("stock:MSTR", "Strategy", "stock", {
+                "ontologyBox": "ABox", "symbol": "MSTR", "snapshotId": "abox-scope:stock",
+            }),
+            OntologyEntity("portfolio:default", "Portfolio", "portfolio", {
+                "ontologyBox": "ABox", "snapshotId": "abox-scope:portfolio",
+            }),
+            OntologyEntity("position-exposure:MSTR", "MSTR exposure", "position-exposure", {
+                "ontologyBox": "ABox", "symbol": "MSTR", "snapshotId": "abox-scope:portfolio",
+                "policyDeltaRatio": 0.1,
+            }),
+            OntologyEntity("portfolio-risk-snapshot:risk-1", "Risk", "portfolio-risk-snapshot", {
+                "ontologyBox": "ABox", "snapshotId": "abox-scope:portfolio",
+                "volatilityPolicyDeltaPct": 2.5,
+            }),
+        ])
+        graph.relations.extend([
+            OntologyRelation(
+                "portfolio:default", "position-exposure:MSTR", "HAS_EXPOSURE",
+                properties={"ontologyBox": "ABox", "snapshotId": "abox-scope:portfolio"},
+            ),
+            OntologyRelation(
+                "portfolio:default", "portfolio-risk-snapshot:risk-1", "HAS_RISK_SNAPSHOT",
+                properties={"ontologyBox": "ABox", "snapshotId": "abox-scope:portfolio"},
+            ),
+        ])
+        topology = native_rule_planner_topology(graph)
+        node_rows, relation_rows = repository.graph_persistence_rows(graph)
+        index = native_rule_evidence_read_index_from_rows(node_rows, relation_rows)
+
+        execution_index = typedb_native_rule_evidence_read_index_for_execution({
+            "nativeRulePlannerTopology": topology,
+            "nativeRuleEvidenceReadIndex": index,
+        }, ["MSTR"])
+
+        self.assertEqual("verified", execution_index["status"])
+        self.assertEqual(
+            {"MSTR", "PORTFOLIO:DEFAULT"},
+            set(execution_index["index"]["sourceIdsBySymbol"]),
+        )
+        self.assertEqual(
+            index["sourceStorageIdsBySourceId"]["portfolio:default"],
+            execution_index["index"]["sourceStorageIdsBySourceId"]["portfolio:default"],
+        )
+        portfolio_relations = execution_index["index"]["relationStorageIdsBySymbolAndType"][
+            "PORTFOLIO:DEFAULT"
+        ]
+        self.assertEqual({"HAS_EXPOSURE", "HAS_RISK_SNAPSHOT"}, set(portfolio_relations))
+
     def test_active_abox_relation_types_reuses_verified_manifest_evidence_index(self):
         repository = TypeDBOntologyGraphRepository("127.0.0.1:1729")
         graph = PortfolioOntology("typedb-indexed-topology")

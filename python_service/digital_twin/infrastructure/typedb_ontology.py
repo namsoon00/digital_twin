@@ -776,7 +776,23 @@ def normalize_native_rule_evidence_read_index(
     if expected_sources != payload["sourceIdsBySymbol"]:
         return {"status": "invalid", "reason": "Native rule evidence read index stock subjects do not match the active planner topology."}
     requested_symbols = clean_symbols_from_payload(target_symbols or [])
-    selected_symbols = requested_symbols or sorted(source_ids_by_symbol)
+    # Portfolio work items still carry their affected stock symbols so the
+    # downstream explanation can remain target-scoped. Portfolio RuleBox
+    # sources are aggregate subjects, however, and would disappear from this
+    # execution view if it retained only those stock symbols. Keep aggregate
+    # portfolio keys alongside every requested symbol; this is an identity
+    # projection only and does not decide whether a portfolio rule matches.
+    portfolio_symbols = sorted({
+        symbol
+        for symbol, source_ids in source_ids_by_symbol.items()
+        if symbol.startswith("PORTFOLIO:")
+        or any(str(source_id or "").startswith("portfolio:") for source_id in source_ids or [])
+    })
+    selected_symbols = (
+        sorted(set(requested_symbols).union(portfolio_symbols))
+        if requested_symbols
+        else sorted(source_ids_by_symbol)
+    )
     selected_source_ids = {
         source_id
         for symbol in selected_symbols

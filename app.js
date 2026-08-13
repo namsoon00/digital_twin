@@ -7521,14 +7521,11 @@
     var startsAt = candidate.startsAt || "";
     var payload = investmentCalendarPayload(candidate);
     var automaticCandidate = Boolean(payload.autoDetected);
-    var needsOfficialConfirmation = automaticCandidate && (!payload.officialSource || payload.reviewRequired || payload.scheduleState !== "confirmed");
-    var officialSourceUrl = "";
-    if (needsOfficialConfirmation && window.prompt) {
+    var needsScheduleConfirmation = automaticCandidate && (payload.reviewRequired || payload.scheduleState !== "confirmed");
+    if (needsScheduleConfirmation && window.prompt) {
       var scheduledDate = String(startsAt || "").slice(0, 10);
-      startsAt = window.prompt("공식 공시에 기재된 발표 날짜와 시각을 입력하세요. 예: 2026-08-20T09:00", scheduledDate ? scheduledDate + "T" : "");
+      startsAt = window.prompt("확인할 발표 날짜와 시각을 입력하세요. 예: 2026-08-20T09:00", scheduledDate ? scheduledDate + "T" : "");
       if (!startsAt) return Promise.resolve();
-      officialSourceUrl = window.prompt("확인한 공식 IR·공시 URL을 입력하세요.", "");
-      if (!officialSourceUrl) return Promise.resolve();
     } else if (!startsAt && window.prompt) {
       startsAt = window.prompt("후보 승인 날짜/시간을 입력하세요. 예: 2026-08-20T09:00", "");
     }
@@ -7538,8 +7535,7 @@
     render();
     return sendJson("/api/investment-calendar/candidates/" + encodeURIComponent(id) + "/approve", "POST", {
       startsAt: startsAt,
-      officialSourceUrl: officialSourceUrl,
-      reviewNote: "UI 승인"
+      reviewNote: "UI 일정 확인"
     })
       .then(function () {
         showSnackbar("캘린더 후보를 이벤트로 등록했습니다.", "success");
@@ -11992,7 +11988,7 @@
     return [
       '<article class="panel investment-calendar-list-panel investment-calendar-candidate-panel"' + cardTypeAttrs("process-card", candidates.length ? "watch" : "hold") + '>',
       '<div class="panel-head">',
-      '<div><p class="label">CALENDAR REVIEW QUEUE</p><h2>확인 전 일정 후보</h2><span>시장 데이터와 구조화 공시에서 찾은 날짜를 공식 출처 확인 전 단계로 보관합니다.</span></div>',
+      '<div><p class="label">CALENDAR REVIEW QUEUE</p><h2>확인 전 일정 후보</h2><span>시장 데이터와 구조화 공시에서 찾은 날짜를 등록 전 검토 대상으로 보관합니다.</span></div>',
       '<span class="metric">' + escapeHtml(pending) + '</span>',
       '</div>',
       renderInvestmentCalendarDiscoveryStatus(),
@@ -12044,7 +12040,7 @@
       '<div class="investment-calendar-research-strip">',
       '<div>',
       '<strong>' + escapeHtml(state.investmentCalendarDiscovering ? "일정 탐색 실행 중" : (hasResult ? (result.status === "partial" ? "최근 일정 탐색 결과 · 일부 출처 확인 필요" : "최근 일정 탐색 결과") : "정기 일정 탐색 대기")) + '</strong>',
-      '<span>' + escapeHtml(hasResult ? ("대상 " + Number(result.targetCount || 0) + "개 · 근거 " + Number(result.evidenceCount || 0) + "개 · 확인 후보 " + Number(result.reviewCandidateCount || 0) + "개" + (sourceCount ? " · 출처 " + sourceCount + "개" : "") + (sourceErrorCount ? " · 오류 " + sourceErrorCount + "개" : "")) : "보유·관심 종목의 실적·배당·공시 날짜를 확인해 공식 확정 전에는 후보함에만 추가합니다.") + '</span>',
+      '<span>' + escapeHtml(hasResult ? ("대상 " + Number(result.targetCount || 0) + "개 · 근거 " + Number(result.evidenceCount || 0) + "개 · 확인 후보 " + Number(result.reviewCandidateCount || 0) + "개" + (sourceCount ? " · 출처 " + sourceCount + "개" : "") + (sourceErrorCount ? " · 오류 " + sourceErrorCount + "개" : "")) : "보유·관심 종목의 실적·배당·공시 날짜를 확인해 날짜와 시각을 검토하기 전에는 후보함에만 추가합니다.") + '</span>',
       '</div>',
       '<button class="mini-button primary" type="button" data-action="discover-investment-calendar"' + (state.investmentCalendarDiscovering ? ' disabled' : '') + '>' + escapeHtml(state.investmentCalendarDiscovering ? "탐색 중" : "일정 탐색") + '</button>',
       '</div>'
@@ -12082,7 +12078,7 @@
     var payload = investmentCalendarPayload(candidate);
     var aiRecommended = Boolean(payload.aiResearchRecommended);
     var automaticCandidate = Boolean(payload.autoDetected);
-    var needsOfficialConfirmation = automaticCandidate && (!payload.officialSource || payload.reviewRequired || payload.scheduleState !== "confirmed");
+    var needsScheduleConfirmation = automaticCandidate && (payload.reviewRequired || payload.scheduleState !== "confirmed");
     var dateOnly = Boolean(candidate.allDay) || payload.scheduleState === "estimated";
     var scheduleText = candidate.startsAt
       ? (dateOnly ? String(candidate.localDate || candidate.startsAt).slice(0, 10) + " · 시각 확인 필요" : formatClock(candidate.startsAt))
@@ -12123,7 +12119,7 @@
       '</div>',
       '</div>',
       '<div class="investment-calendar-event-actions">',
-      '<button class="mini-button primary" type="button" data-calendar-candidate-approve="' + escapeHtml(id) + '"' + (busy ? ' disabled' : '') + '>' + escapeHtml(busy ? "처리 중" : (needsOfficialConfirmation ? "공식 확인 후 승인" : "승인")) + '</button>',
+      '<button class="mini-button primary" type="button" data-calendar-candidate-approve="' + escapeHtml(id) + '"' + (busy ? ' disabled' : '') + '>' + escapeHtml(busy ? "처리 중" : (needsScheduleConfirmation ? "시각 확인 후 등록" : "등록")) + '</button>',
       '<button class="mini-button danger" type="button" data-calendar-candidate-reject="' + escapeHtml(id) + '"' + (busy ? ' disabled' : '') + '>거절</button>',
       '</div>',
       '</section>'

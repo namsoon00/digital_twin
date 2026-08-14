@@ -206,7 +206,9 @@ def share_session_cookie(
         SHARE_SESSION_COOKIE + "=" + configured(session),
         "Path=/",
         "HttpOnly",
-        "SameSite=Strict",
+        # Share links are commonly opened from messaging apps. Lax keeps the
+        # cookie first-party while allowing it on the token-scrubbing redirect.
+        "SameSite=Lax",
         "Max-Age=" + str(_session_days(environment) * 86400),
     ]
     if secure:

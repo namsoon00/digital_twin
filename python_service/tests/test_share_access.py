@@ -46,7 +46,7 @@ class ShareAccessTests(unittest.TestCase):
         self.assertNotIn("owner-secret", session)
         self.assertNotIn("owner-secret", cookie)
         self.assertIn("HttpOnly", cookie)
-        self.assertIn("SameSite=Strict", cookie)
+        self.assertIn("SameSite=Lax", cookie)
         self.assertIn("Secure", cookie)
         self.assertIn("Max-Age=2592000", cookie)
         self.assertEqual(SHARE_ROLE_OWNER, restored.role)

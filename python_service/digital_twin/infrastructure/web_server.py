@@ -4511,6 +4511,8 @@ class DigitalTwinHandler(BaseHTTPRequestHandler):
         if cookie:
             self.send_header("Set-Cookie", cookie)
         self.send_header("Location", location)
+        self.send_header("Cache-Control", "no-store")
+        self.send_header("Referrer-Policy", "no-referrer")
         self.send_header("Content-Length", "0")
         self.end_headers()
 

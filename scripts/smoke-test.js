@@ -2778,9 +2778,11 @@ async function checkShareMode(port) {
 
   const tokenRedirect = await request(port, "/?share_token=ci-viewer");
   assertOk(tokenRedirect.statusCode === 302, "공유 토큰 URL이 쿠키 리다이렉트를 만들지 않았습니다.");
-  const viewerCookie = String(tokenRedirect.headers["set-cookie"] || "").split(";")[0];
+  const viewerSetCookie = String(tokenRedirect.headers["set-cookie"] || "");
+  const viewerCookie = viewerSetCookie.split(";")[0];
   assertOk(viewerCookie.indexOf("dt_share_session=") >= 0, "조회자 서명 세션 쿠키가 설정되지 않았습니다.");
   assertOk(viewerCookie.indexOf("ci-viewer") < 0, "조회 토큰 원문이 쿠키에 저장됐습니다.");
+  assertOk(viewerSetCookie.indexOf("SameSite=Lax") >= 0, "외부 앱 공유 링크용 Lax 쿠키 정책이 적용되지 않았습니다.");
 
   const bootstrap = await request(port, "/api/bootstrap", { Cookie: viewerCookie });
   assertOk(bootstrap.statusCode === 200, "공유 토큰 쿠키로 API 접근이 허용되지 않았습니다.");

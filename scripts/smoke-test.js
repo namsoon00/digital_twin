@@ -398,9 +398,23 @@ function checkWorkflowConsoleContract() {
       code.indexOf("mergeUniqueItems(previous.candidates") >= 0 &&
       code.indexOf("var initialLoading = state.investmentCalendarCandidatesLoading && !candidates.length;") >= 0 &&
       code.indexOf("initialLoading ? renderEmptyState") >= 0 &&
-      code.indexOf("!state.investmentCalendarCandidatesLoading && pageInfo.page < pageInfo.pageCount - 1") >= 0 &&
+      code.indexOf('data-console-keyed-list="calendar-candidates"') >= 0 &&
+      code.indexOf('data-console-row-key="\' + escapeHtml(id)') >= 0 &&
+      code.indexOf("var requestable = hasNext && !loading;") >= 0 &&
+      code.indexOf("var navigationReady = !state.investmentCalendarCandidatesLoading;") >= 0 &&
       /\.mobile-infinite-scroll\s*\{[\s\S]*width: 100%;/.test(styles),
     "모바일 전체 목록의 누적 로딩/무한 스크롤 또는 캘린더 목록 유지 계약이 없습니다."
+  );
+  assertOk(
+    code.indexOf("function renderInvestmentCalendarCandidateConfirmation") >= 0 &&
+      code.indexOf('data-calendar-candidate-confirm-field="date"') >= 0 &&
+      code.indexOf('data-calendar-candidate-confirm-field="time"') >= 0 &&
+      code.indexOf("function submitInvestmentCalendarCandidateConfirmation") >= 0 &&
+      code.indexOf("overlayScrollPosition = renderedScrollPosition") >= 0 &&
+      code.indexOf('window.prompt("확인할 발표 날짜와 시각') < 0 &&
+      styles.indexOf(".calendar-candidate-confirm-form") >= 0 &&
+      styles.indexOf(".calendar-candidate-confirm-fields") >= 0,
+    "캘린더 후보 날짜·시각 확인 레이어 또는 오버레이 스크롤 복원 계약이 없습니다."
   );
   assertOk(
     code.indexOf("function filteredConsoleDecisionRows") >= 0 &&

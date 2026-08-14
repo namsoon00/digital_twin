@@ -3,6 +3,7 @@
   var ontologyGraphInstances = {};
   var mobileInfiniteScrollObserver = null;
   var mobileInfiniteScrollMode = null;
+  var overlayScrollPosition = null;
   var defaultSettings = window.OrbitAlphaDefaultSettings || {};
 
   var tabs = [
@@ -409,6 +410,7 @@
     investmentCalendarCandidates: null,
     investmentCalendarCandidatesLoading: false,
     investmentCalendarCandidateReviewing: "",
+    investmentCalendarCandidateConfirmation: null,
     investmentCalendarCandidatePage: 0,
     investmentCalendarFilters: { symbol: "", eventType: "", limit: "80" },
     investmentCalendarMonthOffset: 0,
@@ -1833,14 +1835,15 @@
     var loaded = Math.max(0, Number(options.loaded || 0));
     var total = Math.max(loaded, Number(options.total || 0));
     var loading = Boolean(options.loading);
-    var hasNext = Boolean(options.hasNext) && !loading;
+    var hasNext = Boolean(options.hasNext);
+    var requestable = hasNext && !loading;
     var status = loading
       ? "다음 데이터를 불러오는 중입니다"
       : (hasNext ? loaded + " / " + total + "개 표시" : (total ? total + "개를 모두 불러왔습니다" : "표시할 데이터가 없습니다"));
     return [
       '<div class="mobile-infinite-scroll' + (loading ? " is-loading" : (hasNext ? "" : " is-complete")) + '" data-mobile-infinite-sentinel aria-live="polite">',
       '<span>' + escapeHtml(status) + '</span>',
-      hasNext ? '<button class="mini-button" type="button" data-mobile-infinite-next ' + String(options.nextAttributes || "") + '>더 불러오기</button>' : '',
+      '<button class="mini-button" type="button" data-mobile-infinite-next ' + (requestable ? String(options.nextAttributes || "") : 'disabled') + (!hasNext ? ' hidden aria-hidden="true"' : '') + '>' + escapeHtml(loading ? "불러오는 중" : "더 불러오기") + '</button>',
       '</div>'
     ].join("");
   }
@@ -1904,6 +1907,13 @@
   function rememberRenderedPageScrollPosition() {
     var key = renderedScrollKey();
     if (!key) return null;
+    if (
+      overlayScrollPosition
+      && overlayScrollPosition.key === key
+      && document.documentElement.classList.contains("oa-overlay-open")
+    ) {
+      return overlayScrollPosition;
+    }
     var scroller = currentWorkspaceScroller();
     var position = {
       key: key,
@@ -7835,41 +7845,110 @@
       });
   }
 
-  function approveInvestmentCalendarCandidate(candidateId) {
+  function investmentCalendarCandidateById(candidateId) {
+    var id = String(candidateId || "").trim();
+    return (currentInvestmentCalendarCandidates().candidates || []).filter(function (item) {
+      return String((item || {}).candidateId || "") === id;
+    })[0] || null;
+  }
+
+  function openInvestmentCalendarCandidateConfirmation(candidateId) {
+    var candidate = investmentCalendarCandidateById(candidateId);
+    if (!candidate) {
+      showSnackbar("등록할 캘린더 후보를 찾지 못했습니다.", "danger");
+      return;
+    }
+    var payload = investmentCalendarPayload(candidate);
+    var startsAt = String(candidate.startsAt || "");
+    var explicitSchedule = payload.scheduleState === "confirmed" && !payload.reviewRequired;
+    var timeMatch = explicitSchedule ? startsAt.match(/T(\d{2}:\d{2})/) : null;
+    state.investmentCalendarCandidateConfirmation = {
+      candidateId: String(candidate.candidateId || ""),
+      title: String(candidate.title || "자동 감지 일정"),
+      date: String(candidate.localDate || startsAt.slice(0, 10) || ""),
+      time: timeMatch ? timeMatch[1] : "",
+      timezone: String(candidate.timezone || "Asia/Seoul"),
+      source: String(candidate.source || ""),
+      error: ""
+    };
+    state.investmentCalendarError = "";
+    render();
+  }
+
+  function closeInvestmentCalendarCandidateConfirmation() {
+    var confirmation = state.investmentCalendarCandidateConfirmation || {};
+    if (state.investmentCalendarCandidateReviewing === confirmation.candidateId) return;
+    state.investmentCalendarCandidateConfirmation = null;
+    render();
+  }
+
+  function submitInvestmentCalendarCandidateConfirmation() {
+    var confirmation = state.investmentCalendarCandidateConfirmation || {};
+    var date = String(confirmation.date || "").trim();
+    var time = String(confirmation.time || "").trim();
+    if (!/^\d{4}-\d{2}-\d{2}$/.test(date) || !/^\d{2}:\d{2}$/.test(time)) {
+      confirmation.error = "발표 날짜와 시각을 모두 선택해 주세요.";
+      state.investmentCalendarCandidateConfirmation = confirmation;
+      render();
+      return Promise.resolve();
+    }
+    var startsAt = date + "T" + time;
+    if (!Number.isFinite(Date.parse(startsAt))) {
+      confirmation.error = "유효한 발표 날짜와 시각을 선택해 주세요.";
+      state.investmentCalendarCandidateConfirmation = confirmation;
+      render();
+      return Promise.resolve();
+    }
+    confirmation.error = "";
+    state.investmentCalendarCandidateConfirmation = confirmation;
+    return approveInvestmentCalendarCandidate(confirmation.candidateId, startsAt);
+  }
+
+  function approveInvestmentCalendarCandidate(candidateId, confirmedStartsAt) {
     var id = String(candidateId || "").trim();
     if (state.serverSettingsLocked) {
       showSnackbar("조회 전용 링크에서는 캘린더 후보를 변경할 수 없습니다.", "caution");
       return Promise.resolve();
     }
     if (!id || state.investmentCalendarCandidateReviewing) return Promise.resolve();
-    var candidates = currentInvestmentCalendarCandidates().candidates || [];
-    var candidate = candidates.filter(function (item) { return item.candidateId === id; })[0] || {};
+    var candidate = investmentCalendarCandidateById(id) || {};
     var startsAt = candidate.startsAt || "";
     var payload = investmentCalendarPayload(candidate);
     var automaticCandidate = Boolean(payload.autoDetected);
     var needsScheduleConfirmation = automaticCandidate && (payload.reviewRequired || payload.scheduleState !== "confirmed");
-    if (needsScheduleConfirmation && window.prompt) {
-      var scheduledDate = String(startsAt || "").slice(0, 10);
-      startsAt = window.prompt("확인할 발표 날짜와 시각을 입력하세요. 예: 2026-08-20T09:00", scheduledDate ? scheduledDate + "T" : "");
-      if (!startsAt) return Promise.resolve();
-    } else if (!startsAt && window.prompt) {
-      startsAt = window.prompt("후보 승인 날짜/시간을 입력하세요. 예: 2026-08-20T09:00", "");
+    var explicitStartsAt = String(confirmedStartsAt || "").trim();
+    if (needsScheduleConfirmation || !startsAt) {
+      if (!explicitStartsAt) {
+        openInvestmentCalendarCandidateConfirmation(id);
+        return Promise.resolve();
+      }
+      startsAt = explicitStartsAt;
     }
     if (!startsAt) return Promise.resolve();
+    var confirmationActive = Boolean(
+      state.investmentCalendarCandidateConfirmation
+      && state.investmentCalendarCandidateConfirmation.candidateId === id
+    );
     state.investmentCalendarCandidateReviewing = id;
     state.investmentCalendarError = "";
     render();
     return sendJson("/api/investment-calendar/candidates/" + encodeURIComponent(id) + "/approve", "POST", {
       startsAt: startsAt,
-      reviewNote: "UI 일정 확인"
+      reviewNote: confirmationActive ? "UI 날짜·시각 확인" : "UI 일정 확인"
     })
       .then(function () {
+        state.investmentCalendarCandidateConfirmation = null;
         showSnackbar("캘린더 후보를 이벤트로 등록했습니다.", "success");
         return Promise.all([loadInvestmentCalendar(true), loadInvestmentCalendarCandidates(true)]);
       })
       .catch(function (error) {
-        state.investmentCalendarError = error.message || "캘린더 후보를 승인하지 못했습니다.";
-        showSnackbar(state.investmentCalendarError, "danger");
+        var message = error.message || "캘린더 후보를 승인하지 못했습니다.";
+        if (confirmationActive && state.investmentCalendarCandidateConfirmation) {
+          state.investmentCalendarCandidateConfirmation.error = message;
+        } else {
+          state.investmentCalendarError = message;
+          showSnackbar(message, "danger");
+        }
       })
       .finally(function () {
         state.investmentCalendarCandidateReviewing = "";
@@ -9534,17 +9613,22 @@
     return true;
   }
 
-  function syncOverlayPageState() {
-    var overlayOpen = Boolean(
+  function overlayPageStateOpen() {
+    return Boolean(
       state.commandPaletteOpen
       || state.watchlistAccountPickerSymbol
       || state.workDetailLayer
       || state.calendarEntryModalOpen
+      || state.investmentCalendarCandidateConfirmation
       || state.notificationTemplateEditorOpen
       || state.notificationPolicyEditorOpen
       || state.expandedOntologyGraphId
       || state.monitoringDetail
     );
+  }
+
+  function syncOverlayPageState(preferredState) {
+    var overlayOpen = typeof preferredState === "boolean" ? preferredState : overlayPageStateOpen();
     document.documentElement.classList.toggle("oa-overlay-open", overlayOpen);
     document.body.classList.toggle("oa-overlay-open", overlayOpen);
   }
@@ -9568,8 +9652,17 @@
       return;
     }
     applyAppTheme();
-    syncOverlayPageState();
-    var renderedScrollPosition = rememberRenderedPageScrollPosition();
+    var overlayWillBeOpen = overlayPageStateOpen();
+    var overlayWasOpen = document.documentElement.classList.contains("oa-overlay-open");
+    var renderedScrollPosition = overlayWasOpen && overlayScrollPosition
+      ? overlayScrollPosition
+      : rememberRenderedPageScrollPosition();
+    if (!overlayWasOpen && overlayWillBeOpen && renderedScrollPosition) {
+      overlayScrollPosition = renderedScrollPosition;
+    } else if (overlayWasOpen && !overlayWillBeOpen && overlayScrollPosition) {
+      renderedScrollPosition = overlayScrollPosition;
+    }
+    syncOverlayPageState(overlayWillBeOpen);
     if (state.loading && !state.snapshot) {
       destroyOntologyCytoscapeGraphs();
       app.innerHTML = renderLoading();
@@ -9594,6 +9687,7 @@
       bindPageScrollMemory();
     }
     restoreRenderedPageScrollPositionAfterLayout(renderedScrollPosition);
+    if (!overlayWillBeOpen) overlayScrollPosition = null;
     syncAppNavScrollState();
     syncTopbarScrollState();
     bindMobileInfiniteScroll();
@@ -9779,6 +9873,7 @@
       renderCommandPalette(snapshot),
       renderWorkDetailLayer(),
       renderCalendarEntryModal(),
+      renderInvestmentCalendarCandidateConfirmation(),
       renderSnackbar(),
       '</main>'
     ].join("");
@@ -9837,6 +9932,7 @@
   function activeOverlayDialog() {
     if (state.watchlistAccountPickerSymbol) return app.querySelector("[data-watchlist-picker-dialog]");
     if (state.commandPaletteOpen) return app.querySelector("[data-command-palette-dialog]");
+    if (state.investmentCalendarCandidateConfirmation) return app.querySelector("[data-calendar-candidate-confirm-dialog]");
     if (state.calendarEntryModalOpen) return app.querySelector(".calendar-entry-modal");
     if (state.notificationTemplateEditorOpen) return app.querySelector(".notification-template-editor-layer");
     if (state.notificationPolicyEditorOpen) return app.querySelector(".notification-policy-editor-layer");
@@ -9849,7 +9945,7 @@
   function focusWorkDetailLayer() {
     var dialog = activeOverlayDialog();
     if (!dialog || dialog.contains(document.activeElement)) return;
-    var closeButton = dialog.querySelector('[data-watchlist-picker-close], [data-command-palette-input], [data-work-detail-close], [data-calendar-entry-close], [data-notification-editor-close], [data-notification-template-editor-close], [data-ontology-graph-close], [data-monitoring-detail-close]');
+    var closeButton = dialog.querySelector('[data-watchlist-picker-close], [data-command-palette-input], [data-work-detail-close], [data-calendar-candidate-confirm-close], [data-calendar-entry-close], [data-notification-editor-close], [data-notification-template-editor-close], [data-ontology-graph-close], [data-monitoring-detail-close]');
     (closeButton || dialog).focus();
   }
 
@@ -12638,7 +12734,7 @@
       renderInvestmentCalendarDiscoveryStatus(),
       renderInvestmentCalendarResearchStatus(),
       candidates.length && !mobile ? renderInvestmentCalendarCandidatePager(pageInfo) : '',
-      '<div class="investment-calendar-list" aria-busy="' + (state.investmentCalendarCandidatesLoading ? "true" : "false") + '">',
+      '<div class="investment-calendar-list" data-console-keyed-list="calendar-candidates" aria-busy="' + (state.investmentCalendarCandidatesLoading ? "true" : "false") + '">',
       initialLoading ? renderEmptyState({
         tone: "watch",
         label: "Review",
@@ -12693,8 +12789,9 @@
 
   function renderInvestmentCalendarCandidatePager(pageInfo) {
     var from = pageInfo.total ? pageInfo.start + 1 : 0;
-    var canPrev = !state.investmentCalendarCandidatesLoading && pageInfo.page > 0;
-    var canNext = !state.investmentCalendarCandidatesLoading && pageInfo.page < pageInfo.pageCount - 1;
+    var canPrev = pageInfo.page > 0;
+    var canNext = pageInfo.page < pageInfo.pageCount - 1;
+    var navigationReady = !state.investmentCalendarCandidatesLoading;
     if (mobileInfiniteScrollEnabled()) {
       return renderMobileInfiniteScrollFooter({
         loaded: pageInfo.end,
@@ -12708,8 +12805,8 @@
       '<div class="investment-calendar-candidate-toolbar">',
       '<span>후보 ' + escapeHtml(from) + '-' + escapeHtml(pageInfo.end) + ' / ' + escapeHtml(pageInfo.total) + ' · ' + escapeHtml(pageInfo.page + 1) + '/' + escapeHtml(pageInfo.pageCount) + '페이지</span>',
       '<div class="investment-calendar-candidate-pager">',
-      '<button class="mini-button" type="button" data-calendar-candidate-page="' + escapeHtml(pageInfo.page - 1) + '"' + (canPrev ? '' : ' disabled') + '>이전</button>',
-      '<button class="mini-button" type="button" data-calendar-candidate-page="' + escapeHtml(pageInfo.page + 1) + '"' + (canNext ? '' : ' disabled') + '>다음</button>',
+      '<button class="mini-button" type="button" data-calendar-candidate-page="' + escapeHtml(pageInfo.page - 1) + '"' + (canPrev && navigationReady ? '' : ' disabled') + '>이전</button>',
+      '<button class="mini-button" type="button" data-calendar-candidate-page="' + escapeHtml(pageInfo.page + 1) + '"' + (canNext && navigationReady ? '' : ' disabled') + '>다음</button>',
       '</div>',
       '</div>'
     ].join("");
@@ -12743,7 +12840,7 @@
     var readinessState = String(candidate.readinessState || payload.readinessState || "needs-review");
     var candidateDataState = readinessState === "blocked" ? "unavailable" : (readinessState === "ready" ? "sufficient" : "partial");
     return [
-      '<section class="investment-calendar-event watch"' + cardTypeAttrs("calendar-event", "watch") + cardFormatAttrs("summary-list-card", "compact") + '>',
+      '<section class="investment-calendar-event watch" data-console-row-key="' + escapeHtml(id) + '"' + cardTypeAttrs("calendar-event", "watch") + cardFormatAttrs("summary-list-card", "compact") + '>',
       '<div class="investment-calendar-event-main">',
       '<div class="investment-calendar-event-date">',
       '<strong>' + escapeHtml(scheduleText) + '</strong>',
@@ -12785,6 +12882,39 @@
       '<button class="icon-button danger" type="button" data-calendar-entry-close aria-label="등록 닫기">&times;</button>',
       '</header>',
       renderInvestmentCalendarFormPanel({ compact: true }),
+      '</section>',
+      '</div>'
+    ].join("");
+  }
+
+  function renderInvestmentCalendarCandidateConfirmation() {
+    var confirmation = state.investmentCalendarCandidateConfirmation;
+    if (!confirmation) return "";
+    var candidate = investmentCalendarCandidateById(confirmation.candidateId) || {};
+    var targets = (candidate.symbols || []).concat(candidate.markets || []);
+    var busy = state.investmentCalendarCandidateReviewing === confirmation.candidateId;
+    return [
+      '<div class="calendar-entry-backdrop" data-calendar-candidate-confirm-close>',
+      '<section class="calendar-entry-modal calendar-candidate-confirm-modal" role="dialog" aria-modal="true" aria-labelledby="calendar-candidate-confirm-title" tabindex="-1" data-calendar-candidate-confirm-dialog>',
+      '<header class="calendar-entry-head">',
+      '<div><p class="label">SCHEDULE CONFIRMATION</p><h2 id="calendar-candidate-confirm-title">발표 시각 확인</h2><span>' + escapeHtml(confirmation.title || "자동 감지 일정") + '</span></div>',
+      '<button class="icon-button danger" type="button" data-calendar-candidate-confirm-close aria-label="시각 확인 닫기"' + (busy ? ' disabled' : '') + '>&times;</button>',
+      '</header>',
+      '<form class="calendar-candidate-confirm-form" data-calendar-candidate-confirm-form novalidate>',
+      '<div class="calendar-candidate-confirm-context">',
+      '<strong>' + escapeHtml(candidate.title || confirmation.title || "자동 감지 일정") + '</strong>',
+      '<span>' + escapeHtml([targets.join(" · "), candidate.source || confirmation.source, confirmation.timezone].filter(Boolean).join(" · ")) + '</span>',
+      '</div>',
+      '<div class="calendar-candidate-confirm-fields">',
+      '<label class="setting-field"><span>발표 날짜</span><input type="date" aria-required="true" data-calendar-candidate-confirm-field="date" value="' + escapeHtml(confirmation.date || "") + '"' + (busy ? ' disabled' : '') + '></label>',
+      '<label class="setting-field"><span>발표 시각</span><input type="time" aria-required="true" step="60" data-calendar-candidate-confirm-field="time" value="' + escapeHtml(confirmation.time || "") + '"' + (busy ? ' disabled' : '') + '></label>',
+      '</div>',
+      confirmation.error ? '<p class="form-error calendar-candidate-confirm-error" role="alert">' + escapeHtml(confirmation.error) + '</p>' : '',
+      '<div class="form-actions calendar-candidate-confirm-actions">',
+      '<button class="text-button" type="button" data-calendar-candidate-confirm-close' + (busy ? ' disabled' : '') + '>취소</button>',
+      '<button class="text-button primary" type="submit"' + (busy ? ' disabled' : '') + '>' + escapeHtml(busy ? "등록 중" : "확인하고 등록") + '</button>',
+      '</div>',
+      '</form>',
       '</section>',
       '</div>'
     ].join("");
@@ -28858,6 +28988,33 @@
       });
     });
 
+    Array.prototype.slice.call(app.querySelectorAll("[data-calendar-candidate-confirm-close]")).forEach(function (button) {
+      button.addEventListener("click", function (event) {
+        if (button.classList && button.classList.contains("calendar-entry-backdrop") && event.target !== button) return;
+        closeInvestmentCalendarCandidateConfirmation();
+      });
+    });
+
+    Array.prototype.slice.call(app.querySelectorAll("[data-calendar-candidate-confirm-field]")).forEach(function (field) {
+      var updateCandidateConfirmation = function () {
+        var name = field.getAttribute("data-calendar-candidate-confirm-field");
+        var confirmation = state.investmentCalendarCandidateConfirmation;
+        if (!name || !confirmation) return;
+        confirmation[name] = field.value;
+        confirmation.error = "";
+      };
+      field.addEventListener("input", updateCandidateConfirmation);
+      field.addEventListener("change", updateCandidateConfirmation);
+    });
+
+    var calendarCandidateConfirmForm = app.querySelector("[data-calendar-candidate-confirm-form]");
+    if (calendarCandidateConfirmForm) {
+      calendarCandidateConfirmForm.addEventListener("submit", function (event) {
+        event.preventDefault();
+        submitInvestmentCalendarCandidateConfirmation();
+      });
+    }
+
     Array.prototype.slice.call(app.querySelectorAll("[data-calendar-entry-open]")).forEach(function (button) {
       button.addEventListener("click", function () {
         state.calendarEntryModalOpen = true;
@@ -28941,17 +29098,20 @@
       });
     });
 
-    Array.prototype.slice.call(app.querySelectorAll("[data-calendar-candidate-approve]")).forEach(function (button) {
-      button.addEventListener("click", function () {
-        approveInvestmentCalendarCandidate(button.getAttribute("data-calendar-candidate-approve"));
-      });
-    });
-
-    Array.prototype.slice.call(app.querySelectorAll("[data-calendar-candidate-reject]")).forEach(function (button) {
-      button.addEventListener("click", function () {
+    var calendarCandidateList = app.querySelector('[data-console-keyed-list="calendar-candidates"]');
+    if (calendarCandidateList) {
+      calendarCandidateList.addEventListener("click", function (event) {
+        var button = event.target && event.target.closest
+          ? event.target.closest("[data-calendar-candidate-approve], [data-calendar-candidate-reject]")
+          : null;
+        if (!button || !calendarCandidateList.contains(button)) return;
+        if (button.hasAttribute("data-calendar-candidate-approve")) {
+          approveInvestmentCalendarCandidate(button.getAttribute("data-calendar-candidate-approve"));
+          return;
+        }
         rejectInvestmentCalendarCandidate(button.getAttribute("data-calendar-candidate-reject"));
       });
-    });
+    }
 
     Array.prototype.slice.call(app.querySelectorAll('[data-action="new-service-account"]')).forEach(function (newServiceAccount) {
       newServiceAccount.addEventListener("click", function () {
@@ -30273,6 +30433,10 @@
       }
       if (state.commandPaletteOpen) {
         closeCommandPalette();
+        return;
+      }
+      if (state.investmentCalendarCandidateConfirmation) {
+        closeInvestmentCalendarCandidateConfirmation();
         return;
       }
       if (state.calendarEntryModalOpen) {

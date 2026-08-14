@@ -127,6 +127,14 @@
     { id: "registry", label: "규칙·프롬프트", description: "런타임 관리" },
     { id: "trace", label: "관계 추적", description: "행·룰 검증" }
   ];
+  var ontologyCatalogTabs = [
+    { id: "overview", label: "전체 현황", description: "구조·연결 상태" },
+    { id: "classes", label: "개념", description: "TBox 개념" },
+    { id: "relations", label: "관계", description: "TBox 관계" },
+    { id: "rules", label: "실행 규칙", description: "TypeDB 규칙" },
+    { id: "hypotheses", label: "가설", description: "변화·반증" },
+    { id: "inferences", label: "추론 결과", description: "InferenceBox" }
+  ];
   var experimentSections = [
     { id: "overview", label: "현황", description: "파이프라인" },
     { id: "validation", label: "검증", description: "리플레이·비교" },
@@ -567,6 +575,19 @@
     ontologyRuleboxError: "",
     ontologyRuleboxLastRun: null,
     ontologyRuleboxChangeReason: "",
+    ontologyCatalogSummary: null,
+    ontologyCatalogSummaryLoading: false,
+    ontologyCatalogSummaryLoaded: false,
+    ontologyCatalogSummaryError: "",
+    ontologyCatalogPages: {},
+    ontologyCatalogLoading: {},
+    ontologyCatalogErrors: {},
+    ontologyCatalogFilters: {},
+    activeOntologyCatalogTab: "overview",
+    ontologyCatalogSelection: null,
+    ontologyCatalogLineage: null,
+    ontologyCatalogLineageLoading: false,
+    ontologyCatalogLineageError: "",
     investmentLanguage: null,
     investmentLanguageLoading: false,
     investmentLanguageLoaded: false,
@@ -4455,6 +4476,123 @@
         state.ontologyRuleboxLoading = false;
         if (state.snapshot) render();
       });
+  }
+
+  function ontologyCatalogFilter(section) {
+    var key = String(section || state.activeOntologyCatalogTab || "overview");
+    if (!state.ontologyCatalogFilters[key]) {
+      state.ontologyCatalogFilters[key] = {
+        query: "",
+        boundedContext: "",
+        enabled: "",
+        scope: "",
+        state: "",
+        symbol: ""
+      };
+    }
+    return state.ontologyCatalogFilters[key];
+  }
+
+  function ontologyCatalogAccountParams() {
+    var accountId = activeOntologyAccountId() || "default";
+    return accountId ? "&accountId=" + encodeURIComponent(accountId) : "";
+  }
+
+  function loadOntologyCatalogSummary(force) {
+    if (isStaticPreviewHost()) return Promise.resolve(null);
+    if (state.ontologyCatalogSummaryLoading && !force) return Promise.resolve(state.ontologyCatalogSummary);
+    if (state.ontologyCatalogSummaryLoaded && !force) return Promise.resolve(state.ontologyCatalogSummary);
+    state.ontologyCatalogSummaryLoading = true;
+    state.ontologyCatalogSummaryError = "";
+    return requestJson("/api/ontology/catalog/summary?view=compact" + ontologyCatalogAccountParams(), {
+      key: "ontology-catalog-summary",
+      force: Boolean(force),
+      timeoutMs: 15000
+    }).then(function (payload) {
+      state.ontologyCatalogSummary = payload && typeof payload === "object" ? payload : {};
+      state.ontologyCatalogSummaryLoaded = true;
+      return state.ontologyCatalogSummary;
+    }).catch(function (error) {
+      state.ontologyCatalogSummaryError = error.message || "온톨로지 카탈로그 요약을 읽지 못했습니다.";
+      state.ontologyCatalogSummary = { status: "error", reason: state.ontologyCatalogSummaryError };
+      state.ontologyCatalogSummaryLoaded = true;
+      return null;
+    }).finally(function () {
+      state.ontologyCatalogSummaryLoading = false;
+      if (state.snapshot) render();
+    });
+  }
+
+  function ontologyCatalogSectionPath(section, cursor) {
+    var filter = ontologyCatalogFilter(section);
+    var params = [
+      "limit=40",
+      "cursor=" + encodeURIComponent(cursor || "offset:0")
+    ];
+    ["query", "boundedContext", "enabled", "scope", "state", "symbol"].forEach(function (key) {
+      var value = String(filter[key] || "").trim();
+      if (value) params.push(encodeURIComponent(key) + "=" + encodeURIComponent(value));
+    });
+    return "/api/ontology/catalog/" + encodeURIComponent(section) + "?" + params.join("&") + ontologyCatalogAccountParams();
+  }
+
+  function loadOntologyCatalogSection(section, force, cursor) {
+    var key = String(section || state.activeOntologyCatalogTab || "overview");
+    if (key === "overview") return loadOntologyCatalogSummary(force);
+    if (isStaticPreviewHost()) return Promise.resolve(null);
+    if (state.ontologyCatalogLoading[key] && !force) return Promise.resolve(state.ontologyCatalogPages[key] || null);
+    if (state.ontologyCatalogPages[key] && !force && !cursor) return Promise.resolve(state.ontologyCatalogPages[key]);
+    state.ontologyCatalogLoading[key] = true;
+    state.ontologyCatalogErrors[key] = "";
+    return requestJson(ontologyCatalogSectionPath(key, cursor), {
+      key: "ontology-catalog-" + key,
+      force: Boolean(force),
+      timeoutMs: key === "inferences" ? 45000 : 20000
+    }).then(function (payload) {
+      state.ontologyCatalogPages[key] = payload && typeof payload === "object" ? payload : {};
+      return state.ontologyCatalogPages[key];
+    }).catch(function (error) {
+      state.ontologyCatalogErrors[key] = error.message || "카탈로그 목록을 읽지 못했습니다.";
+      state.ontologyCatalogPages[key] = {
+        status: "error",
+        reason: state.ontologyCatalogErrors[key],
+        items: [],
+        page: { total: 0, offset: 0, limit: 40, hasMore: false, previousCursor: "", nextCursor: "" }
+      };
+      return null;
+    }).finally(function () {
+      state.ontologyCatalogLoading[key] = false;
+      if (state.snapshot) render();
+    });
+  }
+
+  function loadOntologyCatalogLineage(type, id, symbol) {
+    var selectedType = String(type || "").trim();
+    var selectedId = String(id || "").trim();
+    if (!selectedType || !selectedId || isStaticPreviewHost()) return Promise.resolve(null);
+    state.ontologyCatalogSelection = { type: selectedType, id: selectedId, symbol: String(symbol || "") };
+    state.ontologyCatalogLineage = null;
+    state.ontologyCatalogLineageLoading = true;
+    state.ontologyCatalogLineageError = "";
+    render();
+    var path = "/api/ontology/catalog/lineage?type=" + encodeURIComponent(selectedType)
+      + "&id=" + encodeURIComponent(selectedId)
+      + (symbol ? "&symbol=" + encodeURIComponent(symbol) : "")
+      + ontologyCatalogAccountParams();
+    return requestJson(path, {
+      key: "ontology-catalog-lineage",
+      force: true,
+      timeoutMs: 45000
+    }).then(function (payload) {
+      state.ontologyCatalogLineage = payload && typeof payload === "object" ? payload : {};
+      return state.ontologyCatalogLineage;
+    }).catch(function (error) {
+      state.ontologyCatalogLineageError = error.message || "선택 항목의 추론 계보를 읽지 못했습니다.";
+      return null;
+    }).finally(function () {
+      state.ontologyCatalogLineageLoading = false;
+      if (state.snapshot) render();
+    });
   }
 
   function applyInvestmentLanguagePayload(payload) {
@@ -9185,6 +9323,7 @@
         state.ontologyStrategyDetailError = "";
         state.error = "";
         writeCachedSnapshot(snapshot);
+        loadPortfolioLifecycle(false);
       })
       .catch(function (error) {
         state.error = error.message;
@@ -9483,6 +9622,14 @@
     if (state.workDetailLayer && state.workDetailLayer.type === "strategy-rulebox-editor") {
       if (!state.ontologyRuleboxLoaded && !state.ontologyRuleboxLoading) loadOntologyRulebox(false);
       if (!state.ontologyDiagnostics && !state.ontologyDiagnosticsLoading) loadOntologyDiagnostics(false);
+    }
+    if (state.workDetailLayer && state.workDetailLayer.type === "strategy-graphs-board") {
+      if (!state.ontologyCatalogSummaryLoaded && !state.ontologyCatalogSummaryLoading) loadOntologyCatalogSummary(false);
+      if (state.activeOntologyCatalogTab !== "overview"
+          && !state.ontologyCatalogPages[state.activeOntologyCatalogTab]
+          && !state.ontologyCatalogLoading[state.activeOntologyCatalogTab]) {
+        loadOntologyCatalogSection(state.activeOntologyCatalogTab, false);
+      }
     }
     if (state.workDetailLayer && state.workDetailLayer.type === "settings-investment-language") {
       if (!state.investmentLanguageLoaded && !state.investmentLanguageLoading) loadInvestmentLanguage(false);
@@ -10362,6 +10509,231 @@
     );
   }
 
+  function ontologyCatalogSummaryPayload() {
+    return state.ontologyCatalogSummary && typeof state.ontologyCatalogSummary === "object"
+      ? state.ontologyCatalogSummary
+      : { status: state.ontologyCatalogSummaryLoading ? "loading" : "idle", counts: {}, diagnostics: [], boundedContexts: [] };
+  }
+
+  function ontologyCatalogTabMeta(tabId) {
+    return ontologyCatalogTabs.filter(function (item) { return item.id === tabId; })[0] || ontologyCatalogTabs[0];
+  }
+
+  function ontologyCatalogStatusTone(value) {
+    var status = String(value || "").toLowerCase();
+    if (["ok", "ready", "active", "aligned", "empty"].indexOf(status) >= 0) return "watch";
+    if (["warning", "drift", "partial", "world-required"].indexOf(status) >= 0) return "caution";
+    if (["error", "failed", "not-found"].indexOf(status) >= 0) return "danger";
+    return "hold";
+  }
+
+  function renderOntologyCatalogPanel() {
+    var active = ontologyCatalogTabMeta(state.activeOntologyCatalogTab);
+    var summary = ontologyCatalogSummaryPayload();
+    return [
+      '<section class="ontology-catalog" aria-label="온톨로지 카탈로그">',
+      '<header class="ontology-catalog-head">',
+      '<div><p class="label">Ontology Catalog</p><h2>전체 관계 구조와 추론 계보</h2><p>TBox 정의부터 실행 규칙, 가설, 현재 추론, 판단과 알림 연결을 같은 기준으로 확인합니다.</p></div>',
+      '<div class="ontology-catalog-head-actions"><span class="tone-chip hold">읽기 전용</span><button class="icon-button" type="button" data-action="refresh-ontology-catalog" title="카탈로그 새로고침" aria-label="카탈로그 새로고침">↻</button></div>',
+      '</header>',
+      '<nav class="ontology-catalog-tabs" aria-label="온톨로지 카탈로그 보기">',
+      ontologyCatalogTabs.map(function (item) {
+        return '<button type="button" class="' + (item.id === active.id ? "active" : "") + '" data-ontology-catalog-tab="' + escapeHtml(item.id) + '"><strong>' + escapeHtml(item.label) + '</strong><span>' + escapeHtml(item.description) + '</span></button>';
+      }).join(""),
+      '</nav>',
+      '<div class="ontology-catalog-body">',
+      active.id === "overview" ? renderOntologyCatalogOverview(summary) : renderOntologyCatalogSection(active.id),
+      '</div>',
+      '</section>'
+    ].join("");
+  }
+
+  function renderOntologyCatalogOverview(summary) {
+    var counts = summary.counts || {};
+    var deployment = summary.deployedTBox || {};
+    var rulebox = summary.rulebox || {};
+    var hypotheses = summary.hypotheses || {};
+    var inferencebox = summary.inferencebox || {};
+    var metrics = [
+      ["경계 문맥", counts.boundedContexts, "업무 의미 영역"],
+      ["TBox 개념", counts.classes, summary.sourceTBox && summary.sourceTBox.version],
+      ["TBox 관계", counts.relations, "관계 형식"],
+      ["실행 규칙", counts.executableRules, rulebox.status || "확인 대기"],
+      ["현재 가설", counts.hypotheses, hypotheses.complete === false ? "일부 집계" : "전체 집계"],
+      ["추론 세대", inferencebox.inferenceGenerationId ? 1 : "-", inferencebox.status || "계정 필요"]
+    ];
+    if (state.ontologyCatalogSummaryLoading && !state.ontologyCatalogSummaryLoaded) {
+      return '<div class="work-detail-loading"><span class="spinner"></span><p>온톨로지 구조와 배포 상태를 읽는 중입니다.</p></div>';
+    }
+    if (state.ontologyCatalogSummaryError) {
+      return '<div class="ontology-catalog-unavailable"><strong>카탈로그 요약을 읽지 못했습니다.</strong><p>' + escapeHtml(state.ontologyCatalogSummaryError) + '</p></div>';
+    }
+    return [
+      '<div class="ontology-catalog-metrics">',
+      metrics.map(function (item) {
+        return '<div><span>' + escapeHtml(item[0]) + '</span><strong>' + escapeHtml(item[1] == null ? "-" : item[1]) + '</strong><em>' + escapeHtml(item[2] || "-") + '</em></div>';
+      }).join(""),
+      '</div>',
+      '<section class="ontology-catalog-flow">',
+      '<header><strong>실제 판단 연결 순서</strong><span>표시 문구가 아니라 저장된 ID로만 다음 단계와 연결합니다.</span></header>',
+      '<ol>',
+      (summary.lineage || []).map(function (item, index) {
+        return '<li><b>' + escapeHtml(String(index + 1).padStart(2, "0")) + '</b><span>' + escapeHtml(item.label || item.type) + '</span><em>' + escapeHtml(item.type || "") + '</em></li>';
+      }).join(""),
+      '</ol>',
+      '</section>',
+      '<div class="ontology-catalog-status-line">',
+      '<div><span>소스 TBox ↔ TypeDB</span><strong>' + escapeHtml(deployment.alignment === "aligned" ? "일치" : deployment.alignment || "확인 불가") + '</strong><em>' + escapeHtml([deployment.sourceVersion, deployment.sourceFingerprint].filter(Boolean).join(" · ") || deployment.reason || "-") + '</em></div>',
+      '<div><span>실행 규칙 원본</span><strong>' + escapeHtml(rulebox.status || "확인 대기") + '</strong><em>' + escapeHtml(rulebox.source || rulebox.reason || "-") + '</em></div>',
+      '<div><span>현재 추론 세계</span><strong>' + escapeHtml(inferencebox.status || "확인 대기") + '</strong><em>' + escapeHtml(inferencebox.worldId || inferencebox.reason || "계정을 선택하면 확인합니다.") + '</em></div>',
+      '</div>',
+      '<section class="ontology-catalog-diagnostics">',
+      '<header><strong>구조 신뢰성 점검</strong><span>임의 점수 없이 정상·주의·확인 불가 상태로 표시합니다.</span></header>',
+      '<div>',
+      (summary.diagnostics || []).map(function (item) {
+        return '<article><span class="status-pill ' + escapeHtml(ontologyCatalogStatusTone(item.status)) + '">' + escapeHtml(item.status || "unknown") + '</span><p><strong>' + escapeHtml(item.label || item.id) + '</strong><em>' + escapeHtml(item.detail || "-") + '</em></p><b>' + escapeHtml(item.count || 0) + '</b></article>';
+      }).join("") || '<p class="subtle">점검 결과가 아직 없습니다.</p>',
+      '</div>',
+      '</section>'
+    ].join("");
+  }
+
+  function ontologyCatalogContextOptions() {
+    var summary = ontologyCatalogSummaryPayload();
+    return (summary.boundedContexts || []).map(function (item) {
+      return { id: item.key || "", label: item.label || item.key || "" };
+    }).filter(function (item) { return item.id; });
+  }
+
+  function renderOntologyCatalogToolbar(section) {
+    var filter = ontologyCatalogFilter(section);
+    var contexts = ontologyCatalogContextOptions();
+    var extra = "";
+    if (section === "classes" || section === "relations") {
+      extra = '<label><span>문맥</span><select data-ontology-catalog-filter="boundedContext"><option value="">전체</option>' + contexts.map(function (item) {
+        return '<option value="' + escapeHtml(item.id) + '"' + (item.id === filter.boundedContext ? " selected" : "") + '>' + escapeHtml(item.label) + '</option>';
+      }).join("") + '</select></label>';
+    } else if (section === "rules") {
+      extra = '<label><span>사용 상태</span><select data-ontology-catalog-filter="enabled"><option value="">전체</option><option value="true"' + (filter.enabled === "true" ? " selected" : "") + '>사용</option><option value="false"' + (filter.enabled === "false" ? " selected" : "") + '>중지</option></select></label>';
+    } else if (section === "hypotheses") {
+      extra = '<label><span>범위</span><select data-ontology-catalog-filter="scope"><option value="">전체</option><option value="account"' + (filter.scope === "account" ? " selected" : "") + '>계정</option><option value="market"' + (filter.scope === "market" ? " selected" : "") + '>시장</option></select></label>';
+    } else if (section === "inferences") {
+      extra = '<label><span>종목</span><input data-ontology-catalog-filter="symbol" type="text" value="' + escapeHtml(filter.symbol || "") + '" placeholder="000660"></label>';
+    }
+    return [
+      '<form class="ontology-catalog-toolbar" data-ontology-catalog-form>',
+      '<label class="ontology-catalog-search"><span>검색</span><input data-ontology-catalog-filter="query" type="search" value="' + escapeHtml(filter.query || "") + '" placeholder="ID, 이름, 종목"></label>',
+      extra,
+      '<button class="text-button primary compact" type="submit">조회</button>',
+      '</form>'
+    ].join("");
+  }
+
+  function ontologyCatalogRowType(section) {
+    return { classes: "class", relations: "relation", rules: "rule", hypotheses: "hypothesis", inferences: "inference" }[section] || section;
+  }
+
+  function ontologyCatalogRowPresentation(section, row) {
+    if (section === "classes") return {
+      title: row.label || row.name,
+      detail: [row.name, row.parent ? "부모 " + row.parent : "최상위 개념"].filter(Boolean).join(" · "),
+      meta: row.boundedContext || "문맥 없음",
+      side: row.materializationBox || "TBox"
+    };
+    if (section === "relations") return {
+      title: row.name,
+      detail: [row.sourceContext, row.targetContext].filter(Boolean).join(" → ") || "문맥 계약 없음",
+      meta: row.boundedContext || "문맥 없음",
+      side: row.materializationPolicy || "schema"
+    };
+    if (section === "rules") return {
+      title: row.label || row.ruleId,
+      detail: row.ruleId,
+      meta: "조건 " + Number(row.conditionCount || 0) + " · 파생 " + Number(row.derivationCount || 0) + " · " + ((row.relationTypes || []).slice(0, 2).join(" / ") || "관계 없음"),
+      side: row.enabled === false ? "중지" : "사용"
+    };
+    if (section === "hypotheses") return {
+      title: [row.symbol, row.scope === "market" ? "시장 가설" : "계정 가설"].filter(Boolean).join(" · ") || row.lifecycleId,
+      detail: row.lifecycleKey,
+      meta: row.transitionReason || row.inferenceGenerationId || "변화 설명 없음",
+      side: row.state || "관찰"
+    };
+    return {
+      title: [row.symbol, row.label].filter(Boolean).join(" · ") || row.traceId,
+      detail: row.ruleId || row.traceId,
+      meta: "일치 조건 " + Number(row.matchedConditionCount || 0) + " · 파생 관계 " + Number(row.relationCount || 0),
+      side: row.validationState || row.freshnessStatus || "추론"
+    };
+  }
+
+  function renderOntologyCatalogRow(section, row) {
+    var view = ontologyCatalogRowPresentation(section, row || {});
+    var selected = state.ontologyCatalogSelection && state.ontologyCatalogSelection.type === ontologyCatalogRowType(section) && state.ontologyCatalogSelection.id === String(row.id || "");
+    return [
+      '<button class="ontology-catalog-row' + (selected ? " active" : "") + '" type="button" data-ontology-catalog-select="' + escapeHtml(ontologyCatalogRowType(section)) + '" data-ontology-catalog-id="' + escapeHtml(row.id || "") + '" data-ontology-catalog-symbol="' + escapeHtml(row.symbol || "") + '">',
+      '<span><strong>' + escapeHtml(view.title || "-") + '</strong><em>' + escapeHtml(view.detail || "-") + '</em></span>',
+      '<span>' + escapeHtml(view.meta || "-") + '</span>',
+      '<b>' + escapeHtml(view.side || "-") + '</b>',
+      '</button>'
+    ].join("");
+  }
+
+  function renderOntologyCatalogSection(section) {
+    var payload = state.ontologyCatalogPages[section] || { status: "loading", items: [], page: {} };
+    var items = Array.isArray(payload.items) ? payload.items : [];
+    var page = payload.page || {};
+    var loading = Boolean(state.ontologyCatalogLoading[section]);
+    return [
+      renderOntologyCatalogToolbar(section),
+      '<div class="ontology-catalog-list-head"><span>' + escapeHtml(ontologyCatalogTabMeta(section).label) + '</span><em>' + escapeHtml(page.total == null ? "-" : page.total) + '개</em><span class="status-pill ' + escapeHtml(ontologyCatalogStatusTone(payload.status)) + '">' + escapeHtml(loading ? "loading" : payload.status || "idle") + '</span></div>',
+      loading && !items.length ? '<div class="work-detail-loading"><span class="spinner"></span><p>선택한 카탈로그를 읽는 중입니다.</p></div>' : '',
+      !loading && payload.status && ["ok", "empty"].indexOf(String(payload.status).toLowerCase()) < 0 ? '<div class="ontology-catalog-unavailable"><strong>실제 저장소 데이터를 표시할 수 없습니다.</strong><p>' + escapeHtml(payload.reason || state.ontologyCatalogErrors[section] || "상태를 확인하세요.") + '</p></div>' : '',
+      '<div class="ontology-catalog-list">',
+      items.length ? items.map(function (row) { return renderOntologyCatalogRow(section, row); }).join("") : (!loading && ["ok", "empty"].indexOf(String(payload.status).toLowerCase()) >= 0 ? '<div class="ontology-empty">조건에 맞는 항목이 없습니다.</div>' : ''),
+      '</div>',
+      '<footer class="ontology-catalog-pagination">',
+      '<button class="text-button compact" type="button" data-ontology-catalog-cursor="' + escapeHtml(page.previousCursor || "") + '"' + (!page.previousCursor || loading ? " disabled" : "") + '>이전</button>',
+      '<span>' + escapeHtml(Number(page.offset || 0) + 1) + '–' + escapeHtml(Number(page.offset || 0) + items.length) + ' / ' + escapeHtml(page.total || 0) + '</span>',
+      '<button class="text-button compact" type="button" data-ontology-catalog-cursor="' + escapeHtml(page.nextCursor || "") + '"' + (!page.nextCursor || loading ? " disabled" : "") + '>다음</button>',
+      '</footer>',
+      renderOntologyCatalogLineage(),
+    ].join("");
+  }
+
+  function ontologyCatalogLineageItemLabel(type, item) {
+    if (type === "classes") return item.label || item.name || item.id;
+    if (type === "relations") return item.name || item.id;
+    if (type === "rules") return item.label || item.ruleId || item.id;
+    if (type === "hypotheses") return [item.symbol, item.lifecycleKey].filter(Boolean).join(" · ");
+    if (type === "inferences") return [item.symbol, item.label || item.traceId].filter(Boolean).join(" · ");
+    if (type === "decisions") return [item.symbol, item.action, item.episodeId].filter(Boolean).join(" · ");
+    return [item.symbol, item.messageType, item.jobId].filter(Boolean).join(" · ");
+  }
+
+  function renderOntologyCatalogLineage() {
+    if (!state.ontologyCatalogSelection) return '<div class="ontology-catalog-lineage-empty"><strong>연결 계보</strong><span>항목을 선택하면 앞뒤 단계와 누락 연결을 표시합니다.</span></div>';
+    if (state.ontologyCatalogLineageLoading) return '<div class="work-detail-loading ontology-catalog-lineage-loading"><span class="spinner"></span><p>저장된 ID를 따라 판단과 알림 연결을 확인하는 중입니다.</p></div>';
+    if (state.ontologyCatalogLineageError) return '<div class="ontology-catalog-unavailable"><strong>계보 조회 실패</strong><p>' + escapeHtml(state.ontologyCatalogLineageError) + '</p></div>';
+    var payload = state.ontologyCatalogLineage || {};
+    var lineage = payload.lineage || {};
+    var groups = [
+      ["classes", "TBox 개념"], ["relations", "TBox 관계"], ["rules", "실행 규칙"],
+      ["hypotheses", "가설"], ["inferences", "추론"], ["decisions", "판단"], ["notifications", "알림"]
+    ];
+    return [
+      '<section class="ontology-catalog-lineage">',
+      '<header><div><span>선택한 ID</span><strong>' + escapeHtml((payload.selection || {}).id || state.ontologyCatalogSelection.id) + '</strong></div><span class="status-pill ' + escapeHtml(ontologyCatalogStatusTone(payload.status)) + '">' + escapeHtml(payload.status || "확인 대기") + '</span></header>',
+      '<div class="ontology-catalog-lineage-rail">',
+      groups.map(function (group, index) {
+        var rows = Array.isArray(lineage[group[0]]) ? lineage[group[0]] : [];
+        return '<section><b>' + escapeHtml(String(index + 1).padStart(2, "0")) + '</b><span>' + escapeHtml(group[1]) + '</span><strong>' + escapeHtml(rows.length) + '</strong><div>' + (rows.length ? rows.slice(0, 3).map(function (item) { return '<em>' + escapeHtml(ontologyCatalogLineageItemLabel(group[0], item) || item.id || "-") + '</em>'; }).join("") : '<em>연결 없음</em>') + '</div></section>';
+      }).join(""),
+      '</div>',
+      (payload.gaps || []).length ? '<div class="ontology-catalog-gaps"><strong>확인이 필요한 연결</strong>' + payload.gaps.map(function (gap) { return '<p><b>' + escapeHtml(gap.code || "gap") + '</b><span>' + escapeHtml(gap.detail || "-") + '</span></p>'; }).join("") + '</div>' : '<div class="ontology-catalog-lineage-ok">현재 조회 범위에서 누락 연결이 발견되지 않았습니다.</div>',
+      '</section>'
+    ].join("");
+  }
+
   function strategyGraphsWorkDetailPayload() {
     var snapshot = state.snapshot || {};
     var parts = ontologyStrategyParts(snapshot);
@@ -10370,6 +10742,7 @@
       "온톨로지 그래프 상세",
       "TBox, ABox, 근거 관계, 추론 결과를 전체화면으로 확인합니다.",
       renderInvestmentTabWorkspace("graphs", [
+        { role: "full", html: renderOntologyCatalogPanel() },
         { role: "full", html: renderInvestmentOntologyWorkspacePanel(snapshot, parts) }
       ])
     );
@@ -28607,6 +28980,70 @@
         });
       });
     }
+
+    Array.prototype.slice.call(app.querySelectorAll("[data-ontology-catalog-tab]")).forEach(function (button) {
+      button.addEventListener("click", function () {
+        var tabId = button.getAttribute("data-ontology-catalog-tab") || "overview";
+        state.activeOntologyCatalogTab = tabId;
+        state.ontologyCatalogSelection = null;
+        state.ontologyCatalogLineage = null;
+        state.ontologyCatalogLineageError = "";
+        render();
+        loadOntologyCatalogSection(tabId, false);
+      });
+    });
+
+    Array.prototype.slice.call(app.querySelectorAll("[data-ontology-catalog-filter]")).forEach(function (field) {
+      var updateCatalogFilter = function () {
+        var key = field.getAttribute("data-ontology-catalog-filter") || "";
+        if (key) ontologyCatalogFilter(state.activeOntologyCatalogTab)[key] = field.value;
+      };
+      field.addEventListener("input", updateCatalogFilter);
+      field.addEventListener("change", updateCatalogFilter);
+    });
+
+    var ontologyCatalogForm = app.querySelector("[data-ontology-catalog-form]");
+    if (ontologyCatalogForm) {
+      ontologyCatalogForm.addEventListener("submit", function (event) {
+        event.preventDefault();
+        state.ontologyCatalogSelection = null;
+        state.ontologyCatalogLineage = null;
+        loadOntologyCatalogSection(state.activeOntologyCatalogTab, true, "offset:0");
+      });
+    }
+
+    var refreshOntologyCatalogButton = app.querySelector('[data-action="refresh-ontology-catalog"]');
+    if (refreshOntologyCatalogButton) {
+      refreshOntologyCatalogButton.addEventListener("click", function () {
+        state.ontologyCatalogSummaryLoaded = false;
+        state.ontologyCatalogPages = {};
+        state.ontologyCatalogSelection = null;
+        state.ontologyCatalogLineage = null;
+        Promise.all([
+          loadOntologyCatalogSummary(true),
+          state.activeOntologyCatalogTab === "overview" ? Promise.resolve(null) : loadOntologyCatalogSection(state.activeOntologyCatalogTab, true, "offset:0")
+        ]).then(function () {
+          if (!state.ontologyCatalogSummaryError) showSnackbar("온톨로지 카탈로그를 다시 읽었습니다.");
+        });
+      });
+    }
+
+    Array.prototype.slice.call(app.querySelectorAll("[data-ontology-catalog-cursor]")).forEach(function (button) {
+      button.addEventListener("click", function () {
+        var cursor = button.getAttribute("data-ontology-catalog-cursor") || "";
+        if (cursor) loadOntologyCatalogSection(state.activeOntologyCatalogTab, true, cursor);
+      });
+    });
+
+    Array.prototype.slice.call(app.querySelectorAll("[data-ontology-catalog-select]")).forEach(function (button) {
+      button.addEventListener("click", function () {
+        loadOntologyCatalogLineage(
+          button.getAttribute("data-ontology-catalog-select"),
+          button.getAttribute("data-ontology-catalog-id"),
+          button.getAttribute("data-ontology-catalog-symbol")
+        );
+      });
+    });
 
     var refreshOntologyDiagnosticsButton = app.querySelector('[data-action="refresh-ontology-diagnostics"]');
     if (refreshOntologyDiagnosticsButton) {

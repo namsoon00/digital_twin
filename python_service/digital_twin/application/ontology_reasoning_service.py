@@ -770,6 +770,8 @@ class OntologyReasoningRunner:
         "ontologyReasoningAdaptiveBatchBudgetSeconds",
         "ontologyReasoningAdaptiveBatchBacklogBurstEnabled",
         "ontologyReasoningAdaptiveBatchBacklogBurstAgeSeconds",
+        "typedbNativeRuleSubjectFanoutEnabled",
+        "typedbNativeRuleSubjectParallelism",
         "ontologyReasoningBacklogDrainNoCooldownEnabled",
         "ontologyReasoningBacklogDrainNoCooldownAgeSeconds",
         "ontologyReasoningMinIntervalSeconds",

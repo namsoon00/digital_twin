@@ -323,6 +323,8 @@ TEXT_SETTING_KEYS = [
     "ontologyReasoningTypeDbNativeRuleExecutionEnabled",
     "typedbNativeRuleTargetSymbolLimit",
     "typedbNativeRuleTargetParallelism",
+    "typedbNativeRuleSubjectFanoutEnabled",
+    "typedbNativeRuleSubjectParallelism",
     "typedbNativeRuleTargetWorkShardingEnabled",
     "typedbNativeRuleAdaptiveTargetShardingEnabled",
     "typedbNativeRuleAdaptiveTargetShardingLookbackRuns",
@@ -1518,10 +1520,10 @@ def runtime_settings(fast_operational_read: bool = False) -> Dict[str, str]:
         "ontologyAboxMaintenanceMaxReasoningDeferralSeconds": value("ontologyAboxMaintenanceMaxReasoningDeferralSeconds", "ONTOLOGY_ABOX_MAINTENANCE_MAX_REASONING_DEFERRAL_SECONDS", "120"),
         "ontologyAboxMaintenanceBusyRetrySeconds": value("ontologyAboxMaintenanceBusyRetrySeconds", "ONTOLOGY_ABOX_MAINTENANCE_BUSY_RETRY_SECONDS", "10"),
         "ontologyAboxMaintenancePriorityInactiveManifestCount": value("ontologyAboxMaintenancePriorityInactiveManifestCount", "ONTOLOGY_ABOX_MAINTENANCE_PRIORITY_INACTIVE_MANIFEST_COUNT", "8"),
-        # A verified inactive-generation backlog gets one bounded writer turn
-        # between inference batches. The active inference transaction is never
-        # interrupted; the next batch observes the durable hand-off request.
-        "ontologyAboxMaintenanceYieldEnabled": value("ontologyAboxMaintenanceYieldEnabled", "ONTOLOGY_ABOX_MAINTENANCE_YIELD_ENABLED", "1"),
+        # Retention normally remains opportunistic behind investment work.
+        # Enable this only for a deliberate cleanup campaign that should get
+        # bounded writer turns between inference batches.
+        "ontologyAboxMaintenanceYieldEnabled": value("ontologyAboxMaintenanceYieldEnabled", "ONTOLOGY_ABOX_MAINTENANCE_YIELD_ENABLED", "0"),
         "ontologyAboxMaintenanceYieldAfterSeconds": value("ontologyAboxMaintenanceYieldAfterSeconds", "ONTOLOGY_ABOX_MAINTENANCE_YIELD_AFTER_SECONDS", "120"),
         "ontologyAboxMaintenanceYieldWindowSeconds": value("ontologyAboxMaintenanceYieldWindowSeconds", "ONTOLOGY_ABOX_MAINTENANCE_YIELD_WINDOW_SECONDS", "30"),
         "ontologyAboxMaintenanceYieldRequestTtlSeconds": value("ontologyAboxMaintenanceYieldRequestTtlSeconds", "ONTOLOGY_ABOX_MAINTENANCE_YIELD_REQUEST_TTL_SECONDS", "420"),
@@ -1557,6 +1559,16 @@ def runtime_settings(fast_operational_read: bool = False) -> Dict[str, str]:
             # calls without adding concurrency beyond typedbNativeRuleParallelism,
             # and can turn a four-symbol backlog drain into a timeout.
             "1",
+        ),
+        "typedbNativeRuleSubjectFanoutEnabled": value(
+            "typedbNativeRuleSubjectFanoutEnabled",
+            "TYPEDB_NATIVE_RULE_SUBJECT_FANOUT_ENABLED",
+            "0",
+        ),
+        "typedbNativeRuleSubjectParallelism": value(
+            "typedbNativeRuleSubjectParallelism",
+            "TYPEDB_NATIVE_RULE_SUBJECT_PARALLELISM",
+            "2",
         ),
         "typedbNativeRuleTargetWorkShardingEnabled": value(
             "typedbNativeRuleTargetWorkShardingEnabled",

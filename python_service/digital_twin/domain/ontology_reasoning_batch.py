@@ -298,7 +298,25 @@ def adaptive_reasoning_batch_plan(
     proposed_multi_subject_limit = max(1, min(hard_limit, target_limit))
     proposed_multi_subject_mode = mode
     proposed_reason_codes = list(reason_codes)
-    if native_rule_execution:
+    subject_fanout_enabled = bool(
+        native_rule_execution
+        and _enabled(configured.get("typedbNativeRuleSubjectFanoutEnabled"), False)
+    )
+    subject_fanout_limit = _integer(
+        configured.get("typedbNativeRuleSubjectParallelism"),
+        2,
+        1,
+        2,
+    )
+    if native_rule_execution and subject_fanout_enabled:
+        mode = "subject-fanout-native"
+        target_limit = min(proposed_multi_subject_limit, subject_fanout_limit, 2)
+        reason_codes = [
+            "native-rule-subject-fanout",
+            "shared-abox-single-inferencebox-generation",
+            "fail-closed-complete-subject-coverage",
+        ]
+    elif native_rule_execution:
         mode = "single-subject-native"
         target_limit = 1
         reason_codes = [
@@ -311,8 +329,10 @@ def adaptive_reasoning_batch_plan(
         "enabled": adaptive_enabled,
         "mode": mode,
         "targetSymbolLimit": max(1, min(hard_limit, target_limit)),
-        "singleSubjectInference": bool(native_rule_execution),
-        "multiSubjectInferenceDisabled": bool(native_rule_execution),
+        "singleSubjectInference": bool(native_rule_execution and not subject_fanout_enabled),
+        "multiSubjectInferenceDisabled": bool(native_rule_execution and not subject_fanout_enabled),
+        "subjectFanoutEnabled": subject_fanout_enabled,
+        "subjectFanoutParallelism": subject_fanout_limit if subject_fanout_enabled else 1,
         "proposedMultiSubjectLimit": proposed_multi_subject_limit,
         "proposedMultiSubjectMode": proposed_multi_subject_mode,
         "proposedReasonCodes": proposed_reason_codes,

@@ -204,6 +204,29 @@ class ReadOnlyTypeDBReasoningProfileTests(unittest.TestCase):
         self.assertFalse(result["samples"][0]["validForComparison"])
         repository.write_inferencebox_graph.assert_not_called()
 
+    def test_subject_fanout_comparison_is_read_only_and_fails_closed_without_gain(self):
+        repository = self.repository()
+        repository.write_inferencebox_graph = Mock(
+            side_effect=AssertionError("comparison must not write an InferenceBox")
+        )
+
+        result = repository.profile_native_rule_reads({
+            "worldId": "portfolio:local:main",
+            "symbols": ["005930", "035420"],
+            "repeats": 1,
+            "compareSubjectFanout": True,
+            "subjectParallelism": 2,
+        })
+
+        self.assertEqual(3, repository.match_typedb_native_rules.call_count)
+        self.assertEqual("rejected", result["subjectFanoutGate"]["status"])
+        self.assertIn(
+            "minimum-performance-gain-not-met",
+            result["subjectFanoutGate"]["reasonCodes"],
+        )
+        self.assertFalse(result["subjectFanoutGate"]["acceptedForRuntime"])
+        repository.write_inferencebox_graph.assert_not_called()
+
 
 class ProjectionRunStore:
     def latest(self, account_id="", world_id="", limit=10):
@@ -319,6 +342,25 @@ class OntologyReasoningProofServiceTests(unittest.TestCase):
             ["graph.slow.rule.v1"],
             repository.last_payload["ruleIds"],
         )
+
+    def test_service_does_not_replace_missing_production_trace_with_fake_rule(self):
+        repository = ReadOnlyRepository()
+        projection_store = ProjectionRunStore()
+        projection_store.execution_trace = lambda run_id="", limit=1: {
+            "status": "ok",
+            "runs": [{"runId": run_id, "rules": []}],
+        }
+        service = OntologyReasoningProofService(
+            ontology_repository=repository,
+            projection_run_store=projection_store,
+            settings={},
+        )
+
+        report = service.prove(account_id="main", world_id="portfolio:local:main")
+
+        self.assertEqual("inconclusive", report["status"])
+        self.assertEqual("unavailable", report["readOnlyReplay"]["profileStatus"])
+        self.assertEqual({}, repository.last_payload)
 
     def test_write_bottleneck_is_supported_but_not_replayed(self):
         verdict = classify_reasoning_bottleneck(

@@ -48,6 +48,7 @@ from ..domain.ontology_native_rule_planning import normalize_native_rule_planner
 from ..domain.ontology_projection_fingerprint import material_graph_fingerprint
 from ..domain.ontology_runtime_operations import native_rule_timing_profile
 from ..domain.ontology_schema import default_tbox_metadata
+from ..domain.ontology_subject_fanout import evaluate_subject_fanout_comparison
 from ..domain.hypothesis_calibration import hypothesis_calibration_snapshot_from_abox_rows
 from ..domain.ontology_scopes import (
     SCOPED_ABOX_MANIFEST_VERSION,
@@ -7422,6 +7423,8 @@ class TypeDBOntologyGraphRepository(GraphStoreOntologyRowMapperMixin, ScopedABox
         native_rule_execution_budget_seconds: float = DEFAULT_TYPEDB_NATIVE_RULE_EXECUTION_BUDGET_SECONDS,
         native_rule_parallelism: int = DEFAULT_TYPEDB_NATIVE_RULE_PARALLELISM,
         native_rule_target_parallelism: int = DEFAULT_TYPEDB_NATIVE_RULE_TARGET_PARALLELISM,
+        native_rule_subject_fanout_enabled: bool = False,
+        native_rule_subject_parallelism: int = 2,
         native_rule_target_work_sharding_enabled: bool = False,
         native_rule_adaptive_target_sharding_enabled: bool = True,
         native_rule_any_condition_parallelism: int = 1,
@@ -7488,6 +7491,11 @@ class TypeDBOntologyGraphRepository(GraphStoreOntologyRowMapperMixin, ScopedABox
                     or DEFAULT_TYPEDB_NATIVE_RULE_TARGET_PARALLELISM
                 ),
             ),
+        )
+        self._native_rule_subject_fanout_enabled = bool(native_rule_subject_fanout_enabled)
+        self._native_rule_subject_parallelism = max(
+            1,
+            min(2, int(number_or_none(native_rule_subject_parallelism) or 2)),
         )
         # A native rule takes the complete candidate-symbol set in one query.
         # Target splitting multiplies those queries while the existing rule
@@ -7775,6 +7783,12 @@ class TypeDBOntologyGraphRepository(GraphStoreOntologyRowMapperMixin, ScopedABox
 
     def native_rule_target_parallelism(self) -> int:
         return self._native_rule_target_parallelism
+
+    def native_rule_subject_fanout_enabled(self) -> bool:
+        return self._native_rule_subject_fanout_enabled
+
+    def native_rule_subject_parallelism(self) -> int:
+        return self._native_rule_subject_parallelism
 
     def native_rule_target_work_sharding_enabled(self) -> bool:
         return self._native_rule_target_work_sharding_enabled
@@ -16240,6 +16254,205 @@ relation ontology-assertion,
             "executed": executed,
         }
 
+    @staticmethod
+    def merge_subject_fanout_matches(results: Iterable[Dict[str, object]]) -> List[Dict[str, object]]:
+        """Merge subject reads into the same rule/source identity as a combined read."""
+        merged: Dict[str, Dict[str, object]] = {}
+        for result in results or []:
+            for raw in (result or {}).get("matches") or []:
+                item = dict(raw or {})
+                key = str(item.get("ruleId") or "") + "|" + str(item.get("sourceId") or "")
+                if key == "|":
+                    continue
+                existing = merged.get(key)
+                if not existing:
+                    merged[key] = item
+                    continue
+                existing["evidenceRelationIds"] = sorted(set(
+                    list(existing.get("evidenceRelationIds") or [])
+                    + list(item.get("evidenceRelationIds") or [])
+                ))
+                conditions = list(existing.get("matchedConditions") or [])
+                condition_ids = {
+                    str(condition.get("conditionId") or "")
+                    for condition in conditions
+                    if isinstance(condition, dict)
+                }
+                for condition in item.get("matchedConditions") or []:
+                    condition_id = str((condition or {}).get("conditionId") or "") if isinstance(condition, dict) else ""
+                    if condition_id and condition_id not in condition_ids:
+                        conditions.append(dict(condition))
+                        condition_ids.add(condition_id)
+                existing["matchedConditions"] = conditions
+        return [merged[key] for key in sorted(merged)]
+
+    def match_typedb_native_rules_by_subject(
+        self,
+        rules: Iterable[GraphInferenceRule],
+        target_symbols: Iterable[str],
+        *,
+        use_schema_functions: bool,
+        world_id: str,
+        planner_topology: Dict[str, object] = None,
+        preflight_graph: PortfolioOntology = None,
+        preflight_incoming_relations_complete: bool = False,
+        evidence_read_index: Dict[str, object] = None,
+    ) -> Dict[str, object]:
+        """Evaluate subjects independently while one caller owns the stable ABox lease.
+
+        No partial result is accepted.  The caller writes and activates one
+        InferenceBox generation only after every subject returns complete core
+        coverage, preserving the existing atomic generation boundary.
+        """
+        clean_symbols = clean_symbols_from_payload(target_symbols or [])
+        parallelism = min(self.native_rule_subject_parallelism(), len(clean_symbols))
+        started_at = time.perf_counter()
+
+        def run_subject(symbol: str) -> Dict[str, object]:
+            subject_started = time.perf_counter()
+            result = self.match_typedb_native_rules(
+                rules,
+                target_symbols=[symbol],
+                use_schema_functions=use_schema_functions,
+                world_id=world_id,
+                planner_topology=planner_topology,
+                preflight_graph=preflight_graph,
+                preflight_incoming_relations_complete=preflight_incoming_relations_complete,
+                # Subject concurrency is the only concurrency dimension in
+                # this path, preventing nested rule fanout from multiplying
+                # TypeDB transactions.
+                native_rule_parallelism=1,
+                native_rule_target_parallelism=1,
+                stable_abox_write_lease_held=False,
+                evidence_read_index=evidence_read_index,
+            )
+            return {
+                "symbol": symbol,
+                "durationMs": int((time.perf_counter() - subject_started) * 1000),
+                "result": dict(result or {}),
+            }
+
+        subject_rows: List[Dict[str, object]] = []
+        if parallelism <= 1:
+            subject_rows = [run_subject(symbol) for symbol in clean_symbols]
+        else:
+            with ThreadPoolExecutor(max_workers=parallelism) as executor:
+                futures = {executor.submit(run_subject, symbol): symbol for symbol in clean_symbols}
+                for future in as_completed(futures):
+                    symbol = futures[future]
+                    try:
+                        subject_rows.append(future.result())
+                    except Exception as error:  # noqa: BLE001 - one subject blocks activation.
+                        subject_rows.append({
+                            "symbol": symbol,
+                            "durationMs": 0,
+                            "result": {
+                                "status": "error",
+                                "reason": str(error)[:220],
+                                "coreNativeInferenceEvaluationComplete": False,
+                                "nativeInferenceEvaluationComplete": False,
+                                "matches": [],
+                                "executedRules": [],
+                                "skippedRules": [],
+                            },
+                        })
+        subject_rows.sort(key=lambda item: str(item.get("symbol") or ""))
+        results = [dict(item.get("result") or {}) for item in subject_rows]
+        complete = bool(results) and all(
+            str(item.get("status") or "") == "ok"
+            and bool(
+                item.get("coreNativeInferenceEvaluationComplete")
+                if "coreNativeInferenceEvaluationComplete" in item
+                else True
+            )
+            for item in results
+        )
+        full_complete = complete and all(bool(
+            item.get("nativeInferenceEvaluationComplete")
+            if "nativeInferenceEvaluationComplete" in item
+            else True
+        ) for item in results)
+        matches = self.merge_subject_fanout_matches(results)
+        executed_rules = [
+            dict(entry)
+            for result in results
+            for entry in result.get("executedRules") or []
+            if isinstance(entry, dict)
+        ]
+        skipped_rules = [
+            dict(entry)
+            for result in results
+            for entry in result.get("skippedRules") or []
+            if isinstance(entry, dict)
+        ]
+        subject_summary = [{
+            "symbol": str(row.get("symbol") or ""),
+            "status": str((row.get("result") or {}).get("status") or "error"),
+            "durationMs": int(row.get("durationMs") or 0),
+            "matchedCount": int(number_or_none((row.get("result") or {}).get("matchedCount")) or 0),
+            "coreEvaluationComplete": bool(
+                (row.get("result") or {}).get("coreNativeInferenceEvaluationComplete")
+                if "coreNativeInferenceEvaluationComplete" in (row.get("result") or {})
+                else str((row.get("result") or {}).get("status") or "") == "ok"
+            ),
+            "reasonCode": str((row.get("result") or {}).get("reasonCode") or ""),
+        } for row in subject_rows]
+        failures = [item for item in subject_summary if not item["coreEvaluationComplete"] or item["status"] != "ok"]
+        first_result = results[0] if results else {}
+        return {
+            "status": "ok" if complete else "partial",
+            "graphStore": "typedb",
+            "engineVersion": TYPEDB_NATIVE_RULE_ENGINE_VERSION,
+            "nativeQueryUsed": complete,
+            "schemaFunctionUsed": any(bool(item.get("schemaFunctionUsed")) for item in results),
+            "indexedEvidenceQueryUsed": any(bool(item.get("indexedEvidenceQueryUsed")) for item in results),
+            "nativeExecutionMode": "subject-fanout",
+            "nativeRuleParallelism": parallelism,
+            "nativeRuleTargetParallelism": parallelism,
+            "subjectFanoutUsed": True,
+            "subjectFanoutParallelism": parallelism,
+            "subjectFanoutDurationMs": int((time.perf_counter() - started_at) * 1000),
+            "subjectFanoutSubjects": subject_summary,
+            "subjectFanoutFailureCount": len(failures),
+            "parallelRuleExecution": parallelism > 1,
+            "nativeInferenceEvaluationComplete": full_complete,
+            "coreNativeInferenceEvaluationComplete": complete,
+            "nativeCoverageStatus": "complete" if full_complete else "blocking-rule-failure" if not complete else "core-complete-supporting-partial",
+            "blockingRuleFailureCount": len(failures),
+            "supportingRuleFailureCount": sum(int(item.get("supportingRuleFailureCount") or 0) for item in results),
+            "supportingRuleFailures": [
+                dict(failure)
+                for item in results
+                for failure in item.get("supportingRuleFailures") or []
+                if isinstance(failure, dict)
+            ],
+            "executedRuleCount": len({str(item.get("ruleId") or "") for item in executed_rules if str(item.get("ruleId") or "")}),
+            "executedRuleWorkCount": len(executed_rules),
+            "skippedRuleCount": len({str(item.get("ruleId") or "") for item in skipped_rules if str(item.get("ruleId") or "")}),
+            "skippedRuleWorkCount": len(skipped_rules),
+            "matchedCount": len(matches),
+            "readTransactionCount": sum(int(item.get("readTransactionCount") or 0) for item in results),
+            "readQueryCount": sum(int(item.get("readQueryCount") or 0) for item in results),
+            "conditionDetailQueryCount": sum(int(item.get("conditionDetailQueryCount") or 0) for item in results),
+            "matches": matches,
+            "executedRules": executed_rules,
+            "skippedRules": skipped_rules,
+            "executionPlan": dict(first_result.get("executionPlan") or {}),
+            "ruleContext": {
+                "status": "ok" if complete else "partial",
+                "symbols": clean_symbols,
+                "source": "subject-fanout",
+                "subjects": [dict(item.get("ruleContext") or {}) for item in results],
+            },
+            "evidenceFieldIndex": {
+                "status": "subject-fanout",
+                "subjects": [dict(item.get("evidenceFieldIndex") or {}) for item in results],
+            },
+            "reasonCode": "" if complete else "typedbSubjectFanoutIncomplete",
+            "reason": "" if complete else "At least one subject did not complete native TypeDB rule evaluation.",
+            "typedbQueryMetrics": self.query_metrics_snapshot(),
+        }
+
     def match_typedb_native_rules(
         self,
         rules: Iterable[GraphInferenceRule],
@@ -16257,6 +16470,21 @@ relation ontology-assertion,
     ) -> Dict[str, object]:
         rules = list(rules or [])
         clean_symbols = clean_symbols_from_payload(list(target_symbols or []))
+        if (
+            stable_abox_write_lease_held
+            and self.native_rule_subject_fanout_enabled()
+            and len(clean_symbols) > 1
+        ):
+            return self.match_typedb_native_rules_by_subject(
+                rules,
+                clean_symbols,
+                use_schema_functions=use_schema_functions,
+                world_id=world_id,
+                planner_topology=planner_topology,
+                preflight_graph=preflight_graph,
+                preflight_incoming_relations_complete=preflight_incoming_relations_complete,
+                evidence_read_index=evidence_read_index,
+            )
         # The original hot path rebuilt every rule as a raw TypeQL match when a
         # changed symbol was supplied. `any` branches in those queries can grow
         # combinatorially and have previously stalled the TypeDB server. Base
@@ -17291,6 +17519,12 @@ relation ontology-assertion,
         world_id = str(values.get("worldId") or "").strip()
         target_symbols = clean_symbols_from_payload(values.get("symbols") or values.get("targetSymbols") or [])
         repeat_count = max(1, min(3, int(number_or_none(values.get("repeats")) or 2)))
+        compare_subject_fanout = typedb_bool(values.get("compareSubjectFanout"))
+        subject_parallelism = max(1, min(2, int(number_or_none(values.get("subjectParallelism")) or 2)))
+        minimum_fanout_reduction_pct = max(
+            0.0,
+            min(95.0, float(number_or_none(values.get("minimumFanoutReductionPct")) or 40.0)),
+        )
         requested_query_mode = str(values.get("nativeQueryMode") or "").strip().lower()
         if requested_query_mode not in {"auto", "schema-function", "direct-typeql"}:
             requested_query_mode = (
@@ -17321,6 +17555,9 @@ relation ontology-assertion,
             "targetSymbols": target_symbols,
             "requestedRepeatCount": repeat_count,
             "requestedNativeQueryMode": requested_query_mode,
+            "subjectFanoutComparisonRequested": compare_subject_fanout,
+            "subjectParallelism": subject_parallelism,
+            "minimumFanoutReductionPct": minimum_fanout_reduction_pct,
             "samples": [],
         }
         if not self.address:
@@ -17465,6 +17702,107 @@ relation ontology-assertion,
                 else native_status == "ok"
             )
             graph_counts = {"entityCount": 0, "relationCount": 0, "inferenceRelationCount": 0}
+            subject_fanout_probe: Dict[str, object] = {}
+            if compare_subject_fanout:
+                if len(target_symbols) < 2:
+                    subject_fanout_probe = {
+                        "status": "rejected",
+                        "acceptedForRuntime": False,
+                        "reasonCodes": ["at-least-two-subjects-required"],
+                        "subjectCount": len(target_symbols),
+                    }
+                elif native_status == "ok" and core_evaluation_complete:
+                    fanout_started = time.perf_counter()
+
+                    def run_subject(subject_symbol: str) -> Dict[str, object]:
+                        subject_planner = typedb_native_rule_planner_topology_for_execution(
+                            before_metadata,
+                            target_symbols=[subject_symbol],
+                        )
+                        subject_topology = (
+                            dict(subject_planner.get("topology") or {})
+                            if str(subject_planner.get("status") or "") == "verified"
+                            else None
+                        )
+                        subject_evidence_index = (
+                            typedb_native_rule_evidence_read_index_for_execution(
+                                before_metadata,
+                                target_symbols=[subject_symbol],
+                            )
+                            if scoped_active_abox
+                            else evidence_read_index
+                        )
+                        subject_started = time.perf_counter()
+                        try:
+                            result = self.match_typedb_native_rules(
+                                rules,
+                                target_symbols=[subject_symbol],
+                                use_schema_functions=use_schema_functions,
+                                world_id=world_id,
+                                planner_topology=subject_topology,
+                                native_rule_parallelism=1,
+                                native_rule_target_parallelism=1,
+                                stable_abox_write_lease_held=False,
+                                evidence_read_index=subject_evidence_index,
+                            )
+                        except Exception as error:  # noqa: BLE001 - comparison fails closed.
+                            result = {
+                                "status": "query-error",
+                                "reason": str(error)[:220],
+                                "coreNativeInferenceEvaluationComplete": False,
+                                "nativeInferenceEvaluationComplete": False,
+                                "matches": [],
+                                "executedRules": [],
+                                "skippedRules": [],
+                            }
+                        return {
+                            "symbol": subject_symbol,
+                            "durationMs": int((time.perf_counter() - subject_started) * 1000),
+                            "result": result,
+                        }
+
+                    subject_rows = []
+                    if subject_parallelism == 1:
+                        subject_rows = [run_subject(symbol) for symbol in target_symbols]
+                    else:
+                        with ThreadPoolExecutor(max_workers=subject_parallelism) as executor:
+                            futures = {
+                                executor.submit(run_subject, symbol): symbol
+                                for symbol in target_symbols
+                            }
+                            for future in as_completed(futures):
+                                subject_rows.append(future.result())
+                        subject_rows.sort(key=lambda item: str(item.get("symbol") or ""))
+                    fanout_duration_ms = int((time.perf_counter() - fanout_started) * 1000)
+                    stage_timings["subjectFanoutProbeMs"] = fanout_duration_ms
+                    subject_fanout_probe = {
+                        "pendingEvaluation": True,
+                        "combinedResult": native_result,
+                        "subjectResults": [dict(item.get("result") or {}) for item in subject_rows],
+                        "combinedDurationMs": int(stage_timings.get("nativeRuleQueriesMs") or 0),
+                        "fanoutDurationMs": fanout_duration_ms,
+                        "subjectCount": len(subject_rows),
+                        "subjectParallelism": subject_parallelism,
+                        "subjects": [
+                            {
+                                "symbol": str(item.get("symbol") or ""),
+                                "status": str((item.get("result") or {}).get("status") or "error"),
+                                "durationMs": int(item.get("durationMs") or 0),
+                                "matchedCount": int(number_or_none((item.get("result") or {}).get("matchedCount")) or 0),
+                                "coreEvaluationComplete": bool(
+                                    (item.get("result") or {}).get("coreNativeInferenceEvaluationComplete")
+                                ),
+                            }
+                            for item in subject_rows
+                        ],
+                    }
+                else:
+                    subject_fanout_probe = {
+                        "status": "rejected",
+                        "acceptedForRuntime": False,
+                        "reasonCodes": ["combined-evaluation-incomplete"],
+                        "subjectCount": len(target_symbols),
+                    }
             if native_status == "ok":
                 try:
                     graph_started = time.perf_counter()
@@ -17515,6 +17853,19 @@ relation ontology-assertion,
                 and str(before_identity.get("fingerprint") or "")
                 == str(after_identity.get("fingerprint") or "")
             )
+            if subject_fanout_probe.get("pendingEvaluation"):
+                comparison = evaluate_subject_fanout_comparison(
+                    subject_fanout_probe.pop("combinedResult", {}),
+                    subject_fanout_probe.pop("subjectResults", []),
+                    combined_duration_ms=int(subject_fanout_probe.get("combinedDurationMs") or 0),
+                    fanout_duration_ms=int(subject_fanout_probe.get("fanoutDurationMs") or 0),
+                    generation_unchanged=generation_unchanged,
+                    minimum_reduction_pct=minimum_fanout_reduction_pct,
+                )
+                subject_fanout_probe.pop("pendingEvaluation", None)
+                subject_fanout_probe.update(comparison)
+            diagnostic_wall_clock_ms = int((time.perf_counter() - sample_started) * 1000)
+            fanout_probe_ms = int(stage_timings.get("subjectFanoutProbeMs") or 0)
             sample.update({
                 "status": native_status,
                 "reason": sample_reason,
@@ -17525,7 +17876,8 @@ relation ontology-assertion,
                     and core_evaluation_complete
                     and generation_unchanged
                 ),
-                "wallClockMs": int((time.perf_counter() - sample_started) * 1000),
+                "wallClockMs": max(0, diagnostic_wall_clock_ms - fanout_probe_ms),
+                "diagnosticWallClockMs": diagnostic_wall_clock_ms,
                 "coreEvaluationComplete": core_evaluation_complete,
                 "fullEvaluationComplete": full_evaluation_complete,
                 "nativeCoverageStatus": str(native_result.get("nativeCoverageStatus") or ""),
@@ -17548,6 +17900,8 @@ relation ontology-assertion,
                 "skippedRules": self.compact_native_rule_profile_rows(native_result.get("skippedRules") or []),
                 "typedbQueryMetrics": self.query_metrics_snapshot(),
             })
+            if compare_subject_fanout:
+                sample["subjectFanoutComparison"] = subject_fanout_probe
             report["samples"].append(sample)
 
         try:
@@ -17566,6 +17920,32 @@ relation ontology-assertion,
             if not report["rulebox"]["unchanged"]:
                 sample["validForComparison"] = False
         valid_count = sum(1 for item in report["samples"] if item.get("validForComparison"))
+        fanout_comparisons = [
+            dict(item.get("subjectFanoutComparison") or {})
+            for item in report["samples"]
+            if item.get("subjectFanoutComparison")
+        ]
+        if compare_subject_fanout:
+            report["subjectFanoutGate"] = {
+                "status": (
+                    "accepted"
+                    if fanout_comparisons
+                    and all(bool(item.get("acceptedForRuntime")) for item in fanout_comparisons)
+                    else "rejected"
+                ),
+                "acceptedForRuntime": bool(
+                    fanout_comparisons
+                    and all(bool(item.get("acceptedForRuntime")) for item in fanout_comparisons)
+                ),
+                "sampleCount": len(fanout_comparisons),
+                "minimumFanoutReductionPct": minimum_fanout_reduction_pct,
+                "reasonCodes": sorted({
+                    str(reason)
+                    for item in fanout_comparisons
+                    for reason in item.get("reasonCodes") or []
+                    if str(reason)
+                }),
+            }
         report.update({
             "status": "ok" if valid_count == repeat_count else "partial" if valid_count else "inconclusive",
             "validSampleCount": valid_count,
@@ -20655,6 +21035,19 @@ relation ontology-assertion,
             "typedbNativeRuleExecutedWorkCount": int(number_or_none(native_match_result.get("executedRuleWorkCount")) or 0),
             "typedbNativeRuleSkippedCount": int(number_or_none(native_match_result.get("skippedRuleCount")) or 0),
             "typedbNativeRuleTargetParallelism": int(number_or_none(native_match_result.get("nativeRuleTargetParallelism")) or 1),
+            "typedbNativeRuleSubjectFanoutUsed": bool(native_match_result.get("subjectFanoutUsed")),
+            "typedbNativeRuleSubjectFanoutParallelism": int(
+                number_or_none(native_match_result.get("subjectFanoutParallelism")) or 1
+            ),
+            "typedbNativeRuleSubjectFanoutDurationMs": int(
+                number_or_none(native_match_result.get("subjectFanoutDurationMs")) or 0
+            ),
+            "typedbNativeRuleSubjectFanoutFailureCount": int(
+                number_or_none(native_match_result.get("subjectFanoutFailureCount")) or 0
+            ),
+            "typedbNativeRuleSubjectFanoutSubjects": list(
+                native_match_result.get("subjectFanoutSubjects") or []
+            )[:8],
             "typedbNativeRuleTargetWorkShardingUsed": bool(native_match_result.get("targetWorkShardingUsed")),
             "typedbNativeRuleTargetWorkShardingEnabled": bool(native_match_result.get("targetWorkShardingEnabled")),
             "typedbNativeRuleTargetWorkShardingSuppressed": bool(native_match_result.get("targetWorkShardingSuppressed")),
@@ -20725,6 +21118,8 @@ relation ontology-assertion,
                     "skippedRules", "nativeExecutionMode", "readTransactionCount", "readQueryCount",
                     "executionPlan", "blockingRule", "typedbQueryMetrics", "timeoutFallbackUsed",
                     "timeoutFallbackRuleCount", "timeoutFallbackShardCount",
+                    "subjectFanoutUsed", "subjectFanoutParallelism", "subjectFanoutDurationMs",
+                    "subjectFanoutFailureCount", "subjectFanoutSubjects",
                 ]
                 if key in native_match_result
             },
@@ -25593,6 +25988,12 @@ def typedb_repository_from_settings(settings: Dict[str, str] = None):
         native_rule_target_parallelism=int(number_or_none(
             settings.get("typedbNativeRuleTargetParallelism")
         ) or DEFAULT_TYPEDB_NATIVE_RULE_TARGET_PARALLELISM),
+        native_rule_subject_fanout_enabled=typedb_bool(
+            settings.get("typedbNativeRuleSubjectFanoutEnabled")
+        ),
+        native_rule_subject_parallelism=int(number_or_none(
+            settings.get("typedbNativeRuleSubjectParallelism")
+        ) or 2),
         native_rule_target_work_sharding_enabled=typedb_bool(
             settings.get("typedbNativeRuleTargetWorkShardingEnabled")
         ),

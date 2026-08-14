@@ -360,7 +360,12 @@ def scoped_abox_maintenance_yield_policy(
     # The hand-off happens only between inference batches and only for a fresh,
     # directly observed backlog. This prevents cleanup starvation without
     # interrupting an active investment transaction.
-    enabled = _text(configured.get("ontologyAboxMaintenanceYieldEnabled") or "1").lower()
+    # Retention already competes through the low-priority projection
+    # coordinator and TypeDB capacity rotation has its own hard guard. A
+    # routine inactive-generation count must not pause fresh investment work;
+    # an operator can still enable bounded yield windows during a deliberate
+    # cleanup campaign.
+    enabled = _text(configured.get("ontologyAboxMaintenanceYieldEnabled") or "0").lower()
     priority_count = _integer(_setting_number(
         configured,
         "ontologyAboxMaintenancePriorityInactiveManifestCount",

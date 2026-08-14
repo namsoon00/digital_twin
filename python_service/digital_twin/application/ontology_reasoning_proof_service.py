@@ -195,6 +195,10 @@ class OntologyReasoningProofService:
         repeats: int = 2,
         production_run_limit: int = 10,
         rule_ids: Iterable[str] = None,
+        use_all_active_rules: bool = False,
+        compare_subject_fanout: bool = False,
+        subject_parallelism: int = 2,
+        minimum_fanout_reduction_pct: float = 40.0,
     ) -> Dict[str, object]:
         resolved_account_id = self.resolve_account_id(account_id)
         resolved_world_id = self.resolve_world_id(resolved_account_id, world_id)
@@ -266,11 +270,12 @@ class OntologyReasoningProofService:
             executed = query_count > 0 or status in {"executed", "matched", "ok", "complete"}
             if executed and rule_id and rule_id not in production_rule_ids:
                 production_rule_ids.append(rule_id)
-        requested_rule_ids = [
+        explicit_rule_ids = [
             str(item)
-            for item in rule_ids or production_rule_ids or ["__no-production-rule__"]
+            for item in rule_ids or []
             if str(item)
         ]
+        requested_rule_ids = explicit_rule_ids or production_rule_ids
         profiler = getattr(self.ontology_repository, "profile_native_rule_reads", None)
         if not callable(profiler):
             profile = {
@@ -280,6 +285,18 @@ class OntologyReasoningProofService:
                 "writeMethodsInvoked": [],
                 "samples": [],
                 "reason": "The active ontology repository has no read-only profiler.",
+            }
+        elif not requested_rule_ids and not use_all_active_rules:
+            profile = {
+                "status": "unavailable",
+                "readOnly": True,
+                "mutatedOperationalState": False,
+                "writeMethodsInvoked": [],
+                "samples": [],
+                "reason": (
+                    "No executed production rule trace was available. "
+                    "Pass explicit rule IDs or opt in to the complete active RuleBox replay."
+                ),
             }
         else:
             profile = profiler({
@@ -291,6 +308,9 @@ class OntologyReasoningProofService:
                 # schema function that the production generation never used.
                 "ruleIds": requested_rule_ids,
                 "nativeQueryMode": replay_query_mode,
+                "compareSubjectFanout": bool(compare_subject_fanout),
+                "subjectParallelism": max(1, min(2, int(subject_parallelism or 2))),
+                "minimumFanoutReductionPct": float(minimum_fanout_reduction_pct or 40.0),
             })
         replay = summarize_read_only_replay(profile.get("samples") or [])
         production_slow_rules = production_rule_ids[:8]
@@ -320,6 +340,7 @@ class OntologyReasoningProofService:
             "productionSlowRules": production_slow_rules,
             "productionQueryModes": production_query_modes,
             "replayQueryMode": str(profile.get("nativeQueryMode") or replay_query_mode),
+            "subjectFanoutGate": dict(profile.get("subjectFanoutGate") or {}),
             "readOnlyReplay": {
                 **replay,
                 "slowRuleIds": replay_slow_rules,

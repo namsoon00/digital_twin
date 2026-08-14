@@ -413,6 +413,12 @@ def ontology_reasoning_command(args) -> int:
             repeats=int(getattr(args, "repeats", 2) or 2),
             production_run_limit=int(getattr(args, "production_runs", 10) or 10),
             rule_ids=list(getattr(args, "rule_id", None) or []),
+            use_all_active_rules=bool(getattr(args, "all_active_rules", False)),
+            compare_subject_fanout=bool(getattr(args, "compare_subject_fanout", False)),
+            subject_parallelism=int(getattr(args, "subject_parallelism", 2) or 2),
+            minimum_fanout_reduction_pct=float(
+                getattr(args, "minimum_fanout_reduction_pct", 40) or 40
+            ),
         )
         if not bool(getattr(args, "full", False)):
             production = dict(result.get("productionEvidence") or {})
@@ -432,6 +438,7 @@ def ontology_reasoning_command(args) -> int:
                         "readQueryCount", "parallelRuleExecution", "nativeRuleParallelism",
                         "coreEvaluationComplete", "fullEvaluationComplete", "nativeCoverageStatus",
                         "supportingRuleFailureCount", "blockingRuleFailureCount", "graphCounts",
+                        "diagnosticWallClockMs", "subjectFanoutComparison",
                     ]
                     if key in sample
                 } | {
@@ -1685,6 +1692,18 @@ def build_parser() -> argparse.ArgumentParser:
     ontology_profile.add_argument("--repeats", default="2")
     ontology_profile.add_argument("--production-runs", default="10")
     ontology_profile.add_argument("--rule-id", action="append", default=[])
+    ontology_profile.add_argument(
+        "--all-active-rules",
+        action="store_true",
+        help="Replay every enabled RuleBox rule when no production rule trace is available",
+    )
+    ontology_profile.add_argument(
+        "--compare-subject-fanout",
+        action="store_true",
+        help="Compare combined targets with independent subject reads without writing graph state",
+    )
+    ontology_profile.add_argument("--subject-parallelism", default="2", choices=["1", "2"])
+    ontology_profile.add_argument("--minimum-fanout-reduction-pct", default="40")
     ontology_profile.add_argument(
         "--full",
         action="store_true",

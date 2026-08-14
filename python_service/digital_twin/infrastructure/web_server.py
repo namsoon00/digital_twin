@@ -740,6 +740,8 @@ def settings_status_payload(access: ShareAccess = None) -> Dict[str, object]:
         "ontologyReasoningTelemetryHistoryLimit",
         "typedbNativeRuleTargetSymbolLimit",
         "typedbNativeRuleTargetParallelism",
+        "typedbNativeRuleSubjectFanoutEnabled",
+        "typedbNativeRuleSubjectParallelism",
         "typedbNativeRuleTargetWorkShardingEnabled",
         "typedbNativeRuleAdaptiveTargetShardingEnabled",
         "typedbNativeRuleAdaptiveTargetShardingLookbackRuns",

@@ -739,6 +739,21 @@ def projection_result_summary(result: Dict[str, object]) -> Dict[str, object]:
             "typedbNativeRuleParallelism": int(execution.get("typedbNativeRuleParallelism") or 1),
             "typedbNativeRuleParallelUsed": bool(execution.get("typedbNativeRuleParallelUsed")),
             "typedbNativeRuleTargetParallelism": int(execution.get("typedbNativeRuleTargetParallelism") or 1),
+            "typedbNativeRuleSubjectFanoutUsed": bool(execution.get("typedbNativeRuleSubjectFanoutUsed")),
+            "typedbNativeRuleSubjectFanoutParallelism": int(
+                execution.get("typedbNativeRuleSubjectFanoutParallelism") or 1
+            ),
+            "typedbNativeRuleSubjectFanoutDurationMs": int(
+                execution.get("typedbNativeRuleSubjectFanoutDurationMs") or 0
+            ),
+            "typedbNativeRuleSubjectFanoutFailureCount": int(
+                execution.get("typedbNativeRuleSubjectFanoutFailureCount") or 0
+            ),
+            "typedbNativeRuleSubjectFanoutSubjects": [
+                dict(item)
+                for item in execution.get("typedbNativeRuleSubjectFanoutSubjects") or []
+                if isinstance(item, dict)
+            ][:8],
             "typedbNativeRuleTargetWorkShardingUsed": bool(execution.get("typedbNativeRuleTargetWorkShardingUsed")),
             "typedbNativeRuleTargetWorkShardCount": int(execution.get("typedbNativeRuleTargetWorkShardCount") or 0),
             "typedbNativeRuleWorkItemCount": int(execution.get("typedbNativeRuleWorkItemCount") or 0),

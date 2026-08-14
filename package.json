@@ -51,6 +51,8 @@
     "python:ontology-reasoning:profile": "python3 python_service/service.py ontology-reasoning profile",
     "python:ontology-reasoning:status": "python3 python_service/service.py ontology-reasoning status",
     "python:ontology-reasoning:watch": "python3 python_service/service.py ontology-reasoning watch",
+    "python:ontology-rulebox-prewarm:once": "python3 python_service/service.py ontology-rulebox-prewarm once",
+    "python:ontology-rulebox-prewarm:status": "python3 python_service/service.py ontology-rulebox-prewarm status",
     "python:ontology-world-projection:once": "python3 python_service/service.py ontology-world-projection once",
     "python:ontology-world-projection:status": "python3 python_service/service.py ontology-world-projection status",
     "python:ontology-world-projection:watch": "python3 python_service/service.py ontology-world-projection watch",

@@ -165,6 +165,30 @@ class AdaptiveOntologyReasoningBatchTests(unittest.TestCase):
         self.assertTrue(plan["pressure"])
         self.assertFalse(plan["runtimeGuard"])
 
+    def test_verified_subject_fanout_allows_only_two_native_subjects(self):
+        plan = adaptive_reasoning_batch_plan(
+            {
+                "ontologyReasoningAdaptiveBatchEnabled": "1",
+                "ontologyReasoningAdaptiveBatchSteadySymbols": "2",
+                "ontologyReasoningAdaptiveBatchBurstSymbols": "4",
+                "ontologyReasoningAdaptiveBatchPendingThreshold": "2",
+                "typedbNativeRuleSubjectFanoutEnabled": "1",
+                "typedbNativeRuleSubjectParallelism": "2",
+            },
+            native_rule_execution=True,
+            hard_target_symbol_limit=4,
+            pending_request_count=5,
+            pending_symbol_count=5,
+            oldest_wait_seconds=120,
+            recent_execution={"status": "ok", "durationMs": 40000},
+        )
+
+        self.assertEqual("subject-fanout-native", plan["mode"])
+        self.assertEqual(2, plan["targetSymbolLimit"])
+        self.assertTrue(plan["subjectFanoutEnabled"])
+        self.assertFalse(plan["singleSubjectInference"])
+        self.assertFalse(plan["multiSubjectInferenceDisabled"])
+
     def test_observed_per_target_cost_limits_a_pressure_batch_before_timeout(self):
         plan = adaptive_reasoning_batch_plan(
             {

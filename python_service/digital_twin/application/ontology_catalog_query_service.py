@@ -7,6 +7,7 @@ decision audit records through stable identifiers.
 
 from typing import Callable, Dict, Iterable, List, Mapping, Optional, Tuple
 
+from ..domain.ontology_rule_manifest import rule_domain_manifest
 from ..domain.ontology_schema import ontology_tbox
 
 
@@ -252,6 +253,9 @@ class OntologyCatalogQueryService:
             if text(item.get("decision_stage") or item.get("decisionStage"))
         ])
         rule_id = text(raw.get("rule_id") or raw.get("ruleId") or raw.get("id"))
+        manifest = item_dict(raw.get("domain_manifest") or raw.get("domainManifest"))
+        if not manifest:
+            manifest = rule_domain_manifest(raw)
         return {
             "id": rule_id,
             "type": "rule",
@@ -271,6 +275,10 @@ class OntologyCatalogQueryService:
             "actionGroup": text(raw.get("action_group") or raw.get("actionGroup")),
             "actionLevel": text(raw.get("action_level") or raw.get("actionLevel")),
             "promptHint": text(raw.get("prompt_hint") or raw.get("promptHint")),
+            "domainManifest": manifest,
+            "assessmentScope": text(manifest.get("assessmentScope")),
+            "triggerFamilies": list_values(manifest.get("triggerFamilies")),
+            "lifecycleClass": text(manifest.get("lifecycleClass")),
             "conditions": conditions,
             "derivations": derivations,
         }

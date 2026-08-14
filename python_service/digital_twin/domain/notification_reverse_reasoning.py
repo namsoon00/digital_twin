@@ -610,6 +610,7 @@ def build_notification_reverse_reasoning_trace(
             "executed": bool(ai_execution.get("requestId")),
         },
         "selectedHypothesis": selected_hypothesis,
+        "assessmentBundle": _dict(relation.get("assessmentBundle")),
         "hypotheses": hypotheses,
         "alternativeHypotheses": alternatives,
         "matchedRules": rules,

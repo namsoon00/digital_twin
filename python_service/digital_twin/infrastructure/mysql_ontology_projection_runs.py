@@ -441,7 +441,7 @@ class MySQLOntologyProjectionRunStore(MySQLOperationalConnection):
         ).strip()
         slot_rows = []
         accepted_states = {"matched", "evaluated-no-match", "not-applicable"}
-        for item in trace.get("rules") or []:
+        for item in trace.get("ruleOutcomes") or trace.get("rules") or []:
             if not isinstance(item, Mapping):
                 continue
             status = str(item.get("status") or "").strip()
@@ -904,8 +904,21 @@ class MySQLOntologyProjectionRunStore(MySQLOperationalConnection):
         with self.connect() as connection:
             rows = connection.execute(sql, params).fetchall()
         grouped: Dict[str, List[Dict[str, object]]] = {}
+        audit_rows = []
         for row in rows or []:
             item = self.rule_trace_row_payload(row)
+            status = str(item.get("status") or "").lower()
+            detailed = bool(
+                item.get("matched")
+                or int(item.get("queryCount") or 0) > 0
+                or int(item.get("queryDurationMs") or 0) > 0
+                or str(item.get("failureReason") or "").strip()
+                or status in {"matched", "evaluated-no-match", "selected"}
+                or any(token in status for token in ["error", "timeout", "failed", "blocked"])
+            )
+            if not detailed:
+                continue
+            audit_rows.append(item)
             if item["ruleId"]:
                 grouped.setdefault(item["ruleId"], []).append(item)
         summaries = []
@@ -926,6 +939,7 @@ class MySQLOntologyProjectionRunStore(MySQLOperationalConnection):
             summaries.append({
                 "ruleId": rule_id,
                 "sampleCount": len(samples),
+                "queriedCount": len([item for item in samples if int(item.get("queryCount") or 0) > 0]),
                 "matchedCount": len([item for item in samples if item.get("matched")]),
                 "failureCount": len(failed_samples),
                 "averageDurationMs": int(sum(durations) / len(durations)) if durations else 0,
@@ -945,7 +959,7 @@ class MySQLOntologyProjectionRunStore(MySQLOperationalConnection):
         )
         return {
             "status": "ok",
-            "sampleCount": len(rows or []),
+            "sampleCount": len(audit_rows),
             "ruleCount": len(summaries),
             "rules": summaries,
         }

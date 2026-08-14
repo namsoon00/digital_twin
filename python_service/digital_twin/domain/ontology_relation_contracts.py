@@ -72,6 +72,12 @@ class OntologyRuleMatch:
     notification_severity: str = ""
     rule_source_kind: str = ""
     rule_scope_families: List[str] = field(default_factory=list)
+    assessment_scope: str = ""
+    rule_domain_module: str = ""
+    rule_lifecycle_class: str = ""
+    rule_trigger_families: List[str] = field(default_factory=list)
+    rule_required_facts: List[str] = field(default_factory=list)
+    rule_output_contract: Dict[str, object] = field(default_factory=dict)
 
     def to_dict(self) -> Dict[str, object]:
         payload = asdict(self)
@@ -101,6 +107,12 @@ class OntologyRuleMatch:
         payload["notificationSeverity"] = payload.pop("notification_severity")
         payload["ruleSourceKind"] = payload.pop("rule_source_kind")
         payload["ruleScopeFamilies"] = payload.pop("rule_scope_families")
+        payload["assessmentScope"] = payload.pop("assessment_scope")
+        payload["ruleDomainModule"] = payload.pop("rule_domain_module")
+        payload["ruleLifecycleClass"] = payload.pop("rule_lifecycle_class")
+        payload["ruleTriggerFamilies"] = payload.pop("rule_trigger_families")
+        payload["ruleRequiredFacts"] = payload.pop("rule_required_facts")
+        payload["ruleOutputContract"] = payload.pop("rule_output_contract")
         return payload
 
 

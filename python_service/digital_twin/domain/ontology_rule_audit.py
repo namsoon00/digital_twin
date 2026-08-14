@@ -5,9 +5,10 @@ from typing import Dict, Iterable, List
 
 from .ontology_change_impact import rule_condition_dependency_profile
 from .ontology_rule_execution_policy import rule_execution_profile
+from .ontology_rule_manifest import rule_domain_manifest
 
 
-RULE_AUDIT_VERSION = "ontology-rule-audit-v1"
+RULE_AUDIT_VERSION = "ontology-rule-audit-v2"
 
 
 def _text(value: object) -> str:
@@ -43,6 +44,7 @@ def rule_audit_payload(
         if not rule_id:
             continue
         profile = rule_execution_profile(rule)
+        manifest = rule_domain_manifest(rule, execution=profile)
         sample = runtime_by_id.get(rule_id) or {}
         sample_count = int(sample.get("sampleCount") or 0)
         matched_count = int(sample.get("matchedCount") or 0)
@@ -57,11 +59,15 @@ def rule_audit_payload(
         elif p95_ms >= 5000:
             status = "slow"
         elif sample_count >= 10 and matched_count == 0:
-            status = "never-matched-in-sample"
+            status = "observed-no-match"
         elif sample_count:
             status = "observed"
+        elif manifest.get("lifecycleClass") == "event-driven":
+            status = "waiting-for-event"
+        elif manifest.get("lifecycleClass") == "cold":
+            status = "cold-no-sample"
         else:
-            status = "no-runtime-sample"
+            status = "routing-gap-review"
 
         dependency_profiles = [
             rule_condition_dependency_profile(condition)
@@ -77,13 +83,17 @@ def rule_audit_payload(
             item for item in dependency_profiles if bool(item.get("conservative"))
         ])
         review_reasons = []
-        if status == "no-runtime-sample":
-            review_reasons.append("실행 원장 표본 없음")
+        if status == "waiting-for-event":
+            review_reasons.append("사건 데이터가 들어올 때만 실행")
+        if status == "cold-no-sample":
+            review_reasons.append("저빈도 규칙 · 실행 표본 없음")
+        if status == "routing-gap-review":
+            review_reasons.append("상시 규칙인데 실행 표본 없음")
         if failure_count:
             review_reasons.append("실행 실패 " + str(failure_count) + "건")
         if p95_ms >= 5000:
             review_reasons.append("p95 " + str(p95_ms) + "ms")
-        if status == "never-matched-in-sample":
+        if status == "observed-no-match":
             review_reasons.append("10회 이상 실행 표본에서 성립 없음")
         if conservative_dependencies:
             review_reasons.append("보수적 의존성 " + str(conservative_dependencies) + "개")
@@ -96,6 +106,13 @@ def rule_audit_payload(
             "actionLevel": _text(_rule_value(rule, "action_level", "actionLevel")),
             "status": status,
             "executionProfile": profile,
+            "domainManifest": manifest,
+            "assessmentScope": manifest.get("assessmentScope"),
+            "triggerFamilies": list(manifest.get("triggerFamilies") or []),
+            "requiredFacts": list(manifest.get("requiredFacts") or []),
+            "evidenceFamilies": list(manifest.get("evidenceFamilies") or []),
+            "outputContract": dict(manifest.get("outputContract") or {}),
+            "lifecycleClass": manifest.get("lifecycleClass"),
             "scopeFamilies": scope_families,
             "conservativeDependencyCount": conservative_dependencies,
             "sampleCount": sample_count,
@@ -107,16 +124,46 @@ def rule_audit_payload(
             "lastStatus": _text(sample.get("lastStatus")),
             "lastUpdatedAt": _text(sample.get("lastUpdatedAt")),
             "reviewReasons": review_reasons,
+            "retirementCandidate": bool(
+                enabled
+                and sample_count >= 50
+                and matched_count == 0
+                and manifest.get("lifecycleClass") != "event-driven"
+            ),
             "automaticRuleChange": False,
         })
+
+    signature_groups: Dict[tuple, List[Dict[str, object]]] = {}
+    for row in rows:
+        manifest = row["domainManifest"]
+        signature = (
+            row.get("assessmentScope"),
+            tuple(manifest.get("dependencyKeys") or []),
+            tuple(manifest.get("decisionStages") or []),
+            tuple(manifest.get("decisionEffects") or []),
+        )
+        signature_groups.setdefault(signature, []).append(row)
+    duplicate_groups = []
+    for index, group in enumerate(
+        (items for items in signature_groups.values() if len(items) > 1),
+        start=1,
+    ):
+        group_id = "duplicate-candidate-" + str(index)
+        rule_ids = sorted(item["ruleId"] for item in group)
+        duplicate_groups.append({"groupId": group_id, "ruleIds": rule_ids})
+        for item in group:
+            item["duplicateCandidateGroup"] = group_id
+            item["reviewReasons"].append("의존성·출력 계약이 같은 중복 후보 " + str(len(group)) + "개")
 
     status_counts = Counter(item["status"] for item in rows)
     stage_counts = Counter(
         str(item["executionProfile"].get("executionStage") or "core")
         for item in rows
     )
+    scope_counts = Counter(str(item.get("assessmentScope") or "unknown") for item in rows)
+    lifecycle_counts = Counter(str(item.get("lifecycleClass") or "unknown") for item in rows)
     rows.sort(key=lambda item: (
-        {"failing": 0, "slow": 1, "never-matched-in-sample": 2, "no-runtime-sample": 3}.get(item["status"], 4),
+        {"failing": 0, "slow": 1, "routing-gap-review": 2, "observed-no-match": 3}.get(item["status"], 4),
         -int(item.get("p95DurationMs") or 0),
         item["ruleId"],
     ))
@@ -127,6 +174,10 @@ def rule_audit_payload(
         "runtimeSampleCount": int(runtime.get("sampleCount") or 0),
         "statusCounts": dict(sorted(status_counts.items())),
         "executionStageCounts": dict(sorted(stage_counts.items())),
+        "assessmentScopeCounts": dict(sorted(scope_counts.items())),
+        "lifecycleClassCounts": dict(sorted(lifecycle_counts.items())),
+        "duplicateCandidateGroups": duplicate_groups,
+        "retirementCandidateCount": len([item for item in rows if item.get("retirementCandidate")]),
         "rules": rows,
         "automaticRuleChange": False,
         "interpretation": (

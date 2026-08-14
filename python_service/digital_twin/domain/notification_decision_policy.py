@@ -4,6 +4,7 @@ from __future__ import annotations
 
 from typing import Dict, Iterable, List
 
+from .ontology_decision_assessments import without_portfolio_assessment
 from .message_types import (
     MONITOR_CASH_CHANGE,
     PORTFOLIO_ACTIVITY_OBSERVATION,
@@ -308,6 +309,10 @@ def market_decision_relation_context(value: object) -> Dict[str, object]:
     for key in ("activeRules", "matchedRules"):
         if key in relation:
             relation[key] = market_decision_rule_rows(relation.get(key))
+    if isinstance(relation.get("assessmentBundle"), dict):
+        relation["assessmentBundle"] = without_portfolio_assessment(
+            relation.get("assessmentBundle")
+        )
 
     facts = market_decision_relation_facts(relation.get("facts"))
     if isinstance(facts.get("relationFacts"), dict):

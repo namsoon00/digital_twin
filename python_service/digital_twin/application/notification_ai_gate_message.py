@@ -2895,6 +2895,8 @@ def execution_telegram_message(context: Dict[str, object], response: Notificatio
     ]
     hypothesis_rows = full_typedb_competing_inference_rows(context, response)
     parts.extend(["", "<b>TypeDB 경쟁 추론</b>", *[_html_bullet(row, level) for row in hypothesis_rows]])
+    assessment_rows = typedb_decision_assessment_rows(context)
+    parts.extend(["", "<b>온톨로지 판단 영역</b>", *[_html_bullet(row, level) for row in assessment_rows]])
     option_rows = holding_strategy_option_rows(context, response, level)
     if option_rows:
         parts.extend(["", "<b>보유 전략 선택지</b>", *option_rows])
@@ -2999,6 +3001,8 @@ def execution_telegram_message_compact_beginner(
     parts.extend(["", "<b>" + section_labels["counter"] + "</b>", *[_html_bullet(row, level) for row in counter_rows]])
     typedb_rows = full_typedb_competing_inference_rows(context, response)
     parts.extend(["", "<b>TypeDB 경쟁 추론</b>", *[_html_bullet(row, level) for row in typedb_rows]])
+    assessment_rows = typedb_decision_assessment_rows(context)
+    parts.extend(["", "<b>온톨로지 판단 영역</b>", *[_html_bullet(row, level) for row in assessment_rows]])
     option_rows = holding_strategy_option_rows(context, response, level)
     if option_rows:
         parts.extend(["", "<b>보유 전략 선택지</b>", *option_rows])
@@ -3835,6 +3839,77 @@ def full_typedb_competing_inference_rows(
         if unlabeled_count:
             append_unique_text(rows, "표시명이 없는 성립 규칙 " + str(unlabeled_count) + "개는 추론 추적 식별자로만 보관합니다.", 220)
     return rows or ["현재 알림에 저장된 TypeDB 경쟁 추론이 없습니다."]
+
+
+def typedb_decision_assessment_rows(context: Dict[str, object]) -> List[str]:
+    """Present independent TypeDB assessments without exposing internal codes."""
+
+    relation = relation_context_value(context or {})
+    brief = _notification_ai_decision_brief(context)
+    bundle = relation.get("assessmentBundle") if isinstance(relation.get("assessmentBundle"), dict) else {}
+    if not bundle and isinstance(brief.get("assessmentBundle"), dict):
+        bundle = brief["assessmentBundle"]
+    if not bundle:
+        return ["영역별 판단 자료가 아직 생성되지 않았습니다."]
+
+    quality = bundle.get("evidenceQuality") if isinstance(bundle.get("evidenceQuality"), dict) else {}
+    opinion = bundle.get("investmentOpinion") if isinstance(bundle.get("investmentOpinion"), dict) else {}
+    portfolio = bundle.get("portfolioFit") if isinstance(bundle.get("portfolioFit"), dict) else {}
+    execution = bundle.get("executionReadiness") if isinstance(bundle.get("executionReadiness"), dict) else {}
+    plan = bundle.get("recommendedPlan") if isinstance(bundle.get("recommendedPlan"), dict) else {}
+
+    quality_labels = {
+        "blocked": "핵심 근거가 부족해 판단 차단",
+        "constrained": "일부 근거만 사용 가능",
+        "deferred": "추가 확인 필요",
+        "supported": "판단에 사용할 근거 확인",
+        "observed": "관찰 근거 확인",
+        "not-evaluated": "평가할 근거 없음",
+    }
+    portfolio_labels = {
+        "blocked": "계좌 정책상 실행 차단",
+        "constrained": "계좌 한도 안에서만 실행 가능",
+        "deferred": "계좌 상태 추가 확인",
+        "supported": "계좌 정책에 적합",
+        "observed": "계좌 영향 확인",
+        "not-evaluated": "이번 판단 범위에서 제외",
+    }
+    execution_labels = {
+        "blocked": "주문 전 실행 위험으로 보류",
+        "constrained": "수량·가격 조건을 제한해 실행",
+        "deferred": "거래 조건 추가 확인",
+        "supported": "실행 가능 조건 확인",
+        "observed": "실행 조건 관찰",
+        "not-evaluated": "실행 조건 평가 전",
+    }
+    plan_labels = {
+        "judgement-blocked": "근거가 보완될 때까지 종목 판단 보류",
+        "execution-blocked": "종목 의견은 유지하고 실행만 보류",
+        "constrained": "종목 의견은 유지하고 계좌·주문 제약 안에서 실행",
+        "observe": "종목 의견은 유지하고 확인 조건을 관찰",
+        "ready": "종목 의견과 실행 조건이 함께 성립",
+    }
+
+    opinion_action = str(opinion.get("candidateAction") or plan.get("investmentAction") or "").strip().upper()
+    opinion_label = str(opinion.get("candidateActionLabel") or "").strip()
+    if not opinion_label and opinion_action:
+        opinion_label = action_label_for_action(opinion_action, context)
+    opinion_status = str(opinion.get("status") or "not-evaluated").strip().lower()
+    if opinion_label:
+        opinion_text = opinion_label + (" · 추가 확인 필요" if opinion_status == "deferred" else "")
+    else:
+        opinion_text = "성립한 종목 의견 없음"
+
+    portfolio_status = str(portfolio.get("status") or "not-evaluated").strip().lower()
+    if not includes_portfolio_rebalance_policy(context):
+        portfolio_status = "not-evaluated"
+    return [
+        "근거 품질: " + quality_labels.get(str(quality.get("status") or "not-evaluated").strip().lower(), "상태 확인 필요"),
+        "종목 의견: " + opinion_text,
+        "계좌 적합성: " + portfolio_labels.get(portfolio_status, "상태 확인 필요"),
+        "실행 가능성: " + execution_labels.get(str(execution.get("status") or "not-evaluated").strip().lower(), "상태 확인 필요"),
+        "최종 조합: " + plan_labels.get(str(plan.get("status") or "").strip().lower(), "영역별 결과 조합 전"),
+    ]
 
 
 def _portfolio_exposure_metrics(context: Dict[str, object]) -> List[Dict[str, object]]:

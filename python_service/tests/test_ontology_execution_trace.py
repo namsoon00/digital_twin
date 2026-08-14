@@ -143,8 +143,12 @@ class OntologyExecutionTraceTests(unittest.TestCase):
         self.assertEqual("matched", rules["rule.price"]["status"])
         self.assertEqual("changed-rule-dependency", rules["rule.price"]["selectedReason"])
         self.assertEqual("evaluated-no-match", rules["rule.prior"]["status"])
-        self.assertEqual("not-applicable", rules["rule.research"]["status"])
-        self.assertEqual(3, trace["summary"]["ruleRunCount"])
+        self.assertNotIn("rule.research", rules)
+        self.assertEqual(2, trace["summary"]["ruleRunCount"])
+        self.assertEqual(3, trace["summary"]["ruleOutcomeCount"])
+        self.assertEqual(1, trace["summary"]["compactedRuleCount"])
+        selection_stage = next(item for item in trace["stages"] if item["stageKey"] == "rulebox-selection")
+        self.assertEqual(1, selection_stage["detail"]["traceSummary"]["statusCounts"]["not-applicable"])
 
 
 if __name__ == "__main__":

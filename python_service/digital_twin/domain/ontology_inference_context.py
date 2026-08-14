@@ -19,6 +19,7 @@ from .ontology_decision_state import (
     semantic_relation_sort_key,
     state_payload,
 )
+from .ontology_decision_assessments import decision_assessment_bundle
 from .ontology_rulebox_contracts import (
     HOLDING_TARGET_ROLE,
     WATCHLIST_ACTION_POLICY,
@@ -364,6 +365,7 @@ def relation_context_from_inferencebox(
         return {}
     decision = decision_from_inference(facts, matches, relations, traces, source_name=source_name)
     action_envelope = decision.get("actionEnvelope") if isinstance(decision.get("actionEnvelope"), dict) else {}
+    assessment_bundle = decision_assessment_bundle(matches, relations)
     execution_plan = execution_plan_from_relation_context(facts, decision, matches)
     prompt_context = build_ai_prompt_context(prompt_id, facts, matches, settings or {}, execution_plan)
     active_matches = [item for item in matches if item.matched and not item.reference_only]
@@ -427,6 +429,7 @@ def relation_context_from_inferencebox(
         prompt_context["whyNow"] = why_now
         prompt_context["signalConflicts"] = signal_conflicts
         prompt_context["actionEnvelope"] = action_envelope
+        prompt_context["assessmentBundle"] = assessment_bundle
         prompt_context["inferenceTimeline"] = inference_timeline
         prompt_context["investmentBrain"] = investment_brain
         prompt_context["hypothesisSet"] = investment_brain.get("hypothesisSet") or {}
@@ -469,6 +472,7 @@ def relation_context_from_inferencebox(
         "whyNow": why_now,
         "signalConflicts": signal_conflicts,
         "actionEnvelope": action_envelope,
+        "assessmentBundle": assessment_bundle,
         "inferenceTimeline": inference_timeline,
         "investmentBrain": investment_brain,
         "hypothesisSet": investment_brain.get("hypothesisSet") or {},
@@ -708,6 +712,15 @@ def matches_from_inference(
             notification_severity=str(relation.get("notificationSeverity") or relation.get("notification_severity") or ""),
             rule_source_kind=str(relation.get("ruleSourceKind") or relation.get("rule_source_kind") or ""),
             rule_scope_families=string_list(relation.get("ruleScopeFamilies") or relation.get("rule_scope_families")),
+            assessment_scope=str(relation.get("assessmentScope") or relation.get("assessment_scope") or ""),
+            rule_domain_module=str(relation.get("ruleDomainModule") or relation.get("rule_domain_module") or ""),
+            rule_lifecycle_class=str(relation.get("ruleLifecycleClass") or relation.get("rule_lifecycle_class") or ""),
+            rule_trigger_families=string_list(relation.get("ruleTriggerFamilies") or relation.get("rule_trigger_families")),
+            rule_required_facts=string_list(relation.get("ruleRequiredFacts") or relation.get("rule_required_facts")),
+            rule_output_contract=(
+                dict(relation.get("ruleOutputContract") or {})
+                if isinstance(relation.get("ruleOutputContract"), dict) else {}
+            ),
         ))
     if matches:
         return sorted(matches, key=lambda item: semantic_relation_sort_key(relation_for_match(item, primary_relations)))

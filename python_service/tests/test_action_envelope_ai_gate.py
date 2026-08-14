@@ -16,6 +16,7 @@ from digital_twin.domain.notification_ai_gate_text import user_friendly_ai_text 
 from digital_twin.application.notification_ai_gate_message import (  # noqa: E402
     execution_telegram_message,
     notification_topline_change_summary,
+    typedb_decision_assessment_rows,
 )
 from digital_twin.application.notification_service import NotificationAIValidatedGateEnricher  # noqa: E402
 from digital_twin.domain.notifications import NotificationJob  # noqa: E402
@@ -920,6 +921,52 @@ class ActionEnvelopeAiGateTests(unittest.TestCase):
         )
 
         self.assertNotIn("뉴스 영향", execution_telegram_message(context, response))
+
+    def test_decision_assessments_keep_opinion_separate_from_execution_constraint(self):
+        context = entry_context()
+        context["ontologyRelationContext"]["assessmentBundle"] = {
+            "evidenceQuality": {"status": "supported"},
+            "investmentOpinion": {
+                "status": "supported",
+                "candidateAction": "BUY",
+                "candidateActionLabel": "소액 진입 검토",
+            },
+            "portfolioFit": {"status": "constrained"},
+            "executionReadiness": {"status": "blocked"},
+            "recommendedPlan": {
+                "status": "execution-blocked",
+                "investmentAction": "BUY",
+            },
+        }
+
+        rows = typedb_decision_assessment_rows(context)
+
+        self.assertIn("종목 의견: 소액 진입 검토", rows)
+        self.assertIn("계좌 적합성: 이번 판단 범위에서 제외", rows)
+        self.assertIn("실행 가능성: 주문 전 실행 위험으로 보류", rows)
+        self.assertIn("최종 조합: 종목 의견은 유지하고 실행만 보류", rows)
+
+    def test_compact_message_includes_independent_ontology_assessments(self):
+        context = entry_context()
+        context["messageDeliveryLevel"] = "beginner"
+        context["ontologyRelationContext"]["assessmentBundle"] = {
+            "evidenceQuality": {"status": "supported"},
+            "investmentOpinion": {"status": "supported", "candidateAction": "BUY"},
+            "portfolioFit": {"status": "not-evaluated"},
+            "executionReadiness": {"status": "supported"},
+            "recommendedPlan": {"status": "ready", "investmentAction": "BUY"},
+        }
+        response = NotificationAIValidatedResponse(
+            action="BUY",
+            action_label="소액 진입 검토",
+            summary="진입 근거가 확인됐습니다.",
+        )
+
+        message = execution_telegram_message(context, response)
+
+        self.assertIn("온톨로지 판단 영역", message)
+        self.assertIn("종목 의견: 소액 진입 검토", message)
+        self.assertIn("최종 조합: 종목 의견과 실행 조건이 함께 성립", message)
 
 
 if __name__ == "__main__":

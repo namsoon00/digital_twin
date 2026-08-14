@@ -20,6 +20,7 @@ from .ontology_rulebox_contracts import (
     WATCHLIST_TARGET_ROLE,
     GraphInferenceRule,
 )
+from .ontology_rule_manifest import rule_domain_manifest
 from .ontology_schema import abox_relation_properties
 
 
@@ -44,9 +45,16 @@ def materialize_rule_inference(
     hypothesis_family_key = str(getattr(rule, "hypothesis_family_key", "") or "").strip()
     family_properties = {"hypothesisFamilyKey": hypothesis_family_key} if hypothesis_family_key else {}
     dependency_profile = rule_dependency_profile(rule)
+    domain_manifest = rule_domain_manifest(rule, dependency=dependency_profile)
     rule_contract_properties = {
         "ruleSourceKind": str(rule.source_kind or ""),
         "ruleScopeFamilies": list(dependency_profile.get("scopeFamilies") or []),
+        "ruleDomainModule": domain_manifest["module"],
+        "assessmentScope": domain_manifest["assessmentScope"],
+        "ruleTriggerFamilies": domain_manifest["triggerFamilies"],
+        "ruleRequiredFacts": domain_manifest["requiredFacts"],
+        "ruleLifecycleClass": domain_manifest["lifecycleClass"],
+        "ruleOutputContract": domain_manifest["outputContract"],
     }
     lifecycle_policy = (
         rule.resolved_hypothesis_lifecycle()

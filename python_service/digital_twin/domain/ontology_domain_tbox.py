@@ -11,7 +11,7 @@ from .ontology_tbox_contracts import (
 )
 
 
-ONTOLOGY_DOMAIN_TBOX_VERSION = "investment-domain-tbox-v1"
+ONTOLOGY_DOMAIN_TBOX_VERSION = "investment-domain-tbox-v2"
 
 
 DOMAIN_BOUNDED_CONTEXTS = [
@@ -70,6 +70,12 @@ DOMAIN_CLASS_DEFS = [
     TBoxClassDef("RebalanceState", "allocation-rebalance", "리밸런싱 정책 상태"),
     TBoxClassDef("PortfolioDecisionCycle", "allocation-rebalance", "계좌 의사결정 후보 주기"),
     TBoxClassDef("PortfolioActionCandidate", "allocation-rebalance", "정책 산술 행동 후보"),
+    TBoxClassDef("EvidenceQualityAssessment", "decision-intelligence", "판단 근거의 품질 평가"),
+    TBoxClassDef("InvestmentOpinionAssessment", "decision-intelligence", "종목 자체의 투자 의견"),
+    TBoxClassDef("PortfolioFitAssessment", "allocation-rebalance", "현재 계좌와의 적합성 평가"),
+    TBoxClassDef("ExecutionReadinessAssessment", "trade-execution", "실제 실행 가능성 평가"),
+    TBoxClassDef("RecommendedInvestmentPlan", "decision-intelligence", "독립 평가를 조합한 권장 계획"),
+    TBoxClassDef("MonitoringPlan", "decision-intelligence", "다음 확인 조건과 무효화 계획"),
     TBoxClassDef("ActionEnvelope", "trade-execution", "실행 가능 범위"),
     TBoxClassDef("ActionPlan", "trade-execution", "실행 계획"),
     TBoxClassDef("ActionPlanReview", "trade-execution", "실행 계획 승인 감사"),
@@ -110,6 +116,12 @@ DOMAIN_RELATION_DEFS = [
     TBoxRelationDef("HAS_REBALANCE_STATE", "allocation-rebalance", "portfolio-ledger", "allocation-rebalance"),
     TBoxRelationDef("EVALUATES_PORTFOLIO_CANDIDATE", "allocation-rebalance", "allocation-rebalance", "allocation-rebalance"),
     TBoxRelationDef("OBSERVES_DECISION_CYCLE", "allocation-rebalance", "portfolio-ledger", "allocation-rebalance"),
+    TBoxRelationDef("HAS_EVIDENCE_QUALITY_ASSESSMENT", "decision-intelligence", "decision-intelligence", "decision-intelligence"),
+    TBoxRelationDef("HAS_INVESTMENT_OPINION", "decision-intelligence", "decision-intelligence", "decision-intelligence"),
+    TBoxRelationDef("HAS_PORTFOLIO_FIT_ASSESSMENT", "allocation-rebalance", "decision-intelligence", "allocation-rebalance"),
+    TBoxRelationDef("HAS_EXECUTION_READINESS", "trade-execution", "decision-intelligence", "trade-execution"),
+    TBoxRelationDef("COMPOSES_RECOMMENDED_PLAN", "decision-intelligence", "decision-intelligence", "decision-intelligence"),
+    TBoxRelationDef("REQUIRES_MONITORING_PLAN", "decision-intelligence", "decision-intelligence", "decision-intelligence"),
     TBoxRelationDef("CONSTRAINED_BY_ENVELOPE", "trade-execution", "trade-execution", "trade-execution"),
     TBoxRelationDef("PROPOSES_ACTION_PLAN", "trade-execution", "decision-intelligence", "trade-execution"),
     TBoxRelationDef("EXECUTES_ACTION_PLAN", "trade-execution", "trade-execution", "trade-execution"),
@@ -128,6 +140,9 @@ DOMAIN_RULE_DEFS = [
     TBoxRuleDef("portfolio policy values are source-backed ABox facts and TypeDB compares exposure deltas with zero", "risk-exposure"),
     TBoxRuleDef("inferred portfolio activity requires two complete account balance observations and never asserts unknown fees or realised profit", "portfolio-ledger"),
     TBoxRuleDef("a decision references one mandate version, one source ABox snapshot, and one inference generation", "decision-intelligence"),
+    TBoxRuleDef("an investment opinion is independent from portfolio fit and execution readiness", "decision-intelligence"),
+    TBoxRuleDef("portfolio fit and execution readiness may constrain a plan but never rewrite the investment opinion", "decision-intelligence"),
+    TBoxRuleDef("a recommended investment plan records its opinion, evidence quality, portfolio fit, execution readiness, and monitoring plan", "decision-intelligence"),
     TBoxRuleDef("an executable action plan must remain inside cash, quantity, and mandate constraints", "trade-execution"),
     TBoxRuleDef("broker fills are immutable and idempotent by provider execution identity", "trade-execution"),
     TBoxRuleDef("notification delivery never changes the investment meaning selected before dispatch", "notification-delivery"),

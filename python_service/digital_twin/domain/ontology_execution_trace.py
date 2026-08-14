@@ -88,6 +88,7 @@ def reasoning_stage_records(
     run: object,
     result: Mapping[str, object],
     settings: Mapping[str, object] = None,
+    rule_trace_summary: Mapping[str, object] = None,
 ) -> List[Dict[str, object]]:
     values = _mapping(result)
     configured = _mapping(settings)
@@ -225,6 +226,7 @@ def reasoning_stage_records(
             or execution.get("nativeRuleSelectionExecutedCount")
         ),
         "deferredRuleCount": _integer(execution.get("nativeRuleSelectionDeferredCount")),
+        "traceSummary": dict(rule_trace_summary or {}),
     })
     add("inferencebox-generation", _text(inference.get("status")) or "not-run", detail={
         "generationId": _text(inference.get("inferenceGenerationId")),
@@ -273,7 +275,7 @@ def _rule_run_key(rule_id: str, item: Mapping[str, object], index: int) -> str:
     return hashlib.sha256(seed.encode("utf-8")).hexdigest()[:32]
 
 
-def reasoning_rule_records(run: object, result: Mapping[str, object]) -> List[Dict[str, object]]:
+def reasoning_rule_outcome_records(run: object, result: Mapping[str, object]) -> List[Dict[str, object]]:
     values = _mapping(result)
     execution = _mapping(values.get("ruleboxExecution"))
     native = _native_execution_payload(values)
@@ -397,13 +399,76 @@ def reasoning_rule_records(run: object, result: Mapping[str, object]) -> List[Di
     return records
 
 
+def _detailed_rule_record(item: Mapping[str, object]) -> bool:
+    status = _text(item.get("status")).lower()
+    return bool(
+        item.get("matched")
+        or _integer(item.get("queryCount"))
+        or _integer(item.get("queryDurationMs"))
+        or _text(item.get("failureReason"))
+        or status in {"matched", "evaluated-no-match", "selected"}
+        or any(token in status for token in ("error", "timeout", "failed", "blocked"))
+    )
+
+
+def reasoning_rule_records(run: object, result: Mapping[str, object]) -> List[Dict[str, object]]:
+    """Keep detailed rows only for rules that were queried or need audit."""
+
+    return [
+        item
+        for item in reasoning_rule_outcome_records(run, result)
+        if _detailed_rule_record(item)
+    ]
+
+
+def reasoning_rule_trace_summary(
+    outcomes: Iterable[Mapping[str, object]],
+    persisted: Iterable[Mapping[str, object]],
+    result: Mapping[str, object],
+) -> Dict[str, object]:
+    outcome_rows = [dict(item) for item in outcomes or []]
+    persisted_rows = [dict(item) for item in persisted or []]
+    execution = _mapping(_mapping(result).get("ruleboxExecution"))
+    impact = _mapping(_mapping(result).get("inferenceImpactPlan"))
+    status_counts: Dict[str, int] = {}
+    for item in outcome_rows:
+        status = _text(item.get("status")) or "unknown"
+        status_counts[status] = status_counts.get(status, 0) + 1
+    catalogue_count = _integer(
+        execution.get("nativeRuleSelectionFullRuleCount")
+        or impact.get("enabledRuleCount")
+        or len(outcome_rows)
+    )
+    return {
+        "catalogueRuleCount": catalogue_count,
+        "outcomeRuleCount": len(outcome_rows),
+        "persistedDetailRuleCount": len(persisted_rows),
+        "compactedRuleCount": max(0, len(outcome_rows) - len(persisted_rows)),
+        "queriedRuleCount": len([item for item in outcome_rows if _integer(item.get("queryCount"))]),
+        "matchedRuleCount": len([item for item in outcome_rows if item.get("matched")]),
+        "failedRuleCount": len([
+            item for item in outcome_rows
+            if any(token in _text(item.get("status")).lower() for token in ("error", "timeout", "failed", "blocked"))
+        ]),
+        "statusCounts": dict(sorted(status_counts.items())),
+        "compactionApplied": len(persisted_rows) < len(outcome_rows),
+    }
+
+
 def reasoning_execution_trace_payload(
     run: object,
     result: Mapping[str, object],
     settings: Mapping[str, object] = None,
 ) -> Dict[str, object]:
-    stages = reasoning_stage_records(run, result, settings=settings)
-    rules = reasoning_rule_records(run, result)
+    outcomes = reasoning_rule_outcome_records(run, result)
+    rules = [item for item in outcomes if _detailed_rule_record(item)]
+    rule_summary = reasoning_rule_trace_summary(outcomes, rules, result)
+    stages = reasoning_stage_records(
+        run,
+        result,
+        settings=settings,
+        rule_trace_summary=rule_summary,
+    )
     return {
         "version": ONTOLOGY_EXECUTION_TRACE_VERSION,
         "runId": _text(_run_value(run, "run_id")),
@@ -415,9 +480,14 @@ def reasoning_execution_trace_payload(
         "lane": reasoning_execution_lane(run),
         "stages": stages,
         "rules": rules,
+        # Used only by the result-slot writer in the same transaction. MySQL
+        # persists the compact ``rules`` rows and the aggregate stage summary.
+        "ruleOutcomes": outcomes,
         "summary": {
             "stageCount": len(stages),
             "ruleRunCount": len(rules),
+            "ruleOutcomeCount": len(outcomes),
+            "compactedRuleCount": rule_summary["compactedRuleCount"],
             "matchedRuleCount": len([item for item in rules if item.get("matched")]),
             "failedRuleCount": len([
                 item for item in rules

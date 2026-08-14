@@ -10180,9 +10180,11 @@
     var slowRules = Array.isArray(runtime.rules) ? runtime.rules.slice(0, 12) : [];
     var audit = payload.ruleAudit && typeof payload.ruleAudit === "object" ? payload.ruleAudit : {};
     var auditRules = Array.isArray(audit.rules) ? audit.rules.filter(function (rule) {
-      return ["observed", "disabled"].indexOf(String(rule.status || "")) < 0;
+      return ["observed", "disabled", "waiting-for-event", "cold-no-sample"].indexOf(String(rule.status || "")) < 0;
     }).slice(0, 24) : [];
     var auditStages = audit.executionStageCounts && typeof audit.executionStageCounts === "object" ? audit.executionStageCounts : {};
+    var auditScopes = audit.assessmentScopeCounts && typeof audit.assessmentScopeCounts === "object" ? audit.assessmentScopeCounts : {};
+    var auditLifecycles = audit.lifecycleClassCounts && typeof audit.lifecycleClassCounts === "object" ? audit.lifecycleClassCounts : {};
     if (!runs.length && !slowRules.length && !auditRules.length) {
       return history.status === "error" ? '<p class="form-error">' + escapeHtml(history.reason || "실행 이력을 읽지 못했습니다.") + '</p>' : '';
     }
@@ -10196,10 +10198,21 @@
         "core " + formatInteger(auditStages.core || 0),
         "supporting " + formatInteger(auditStages.supporting || 0)
       ].map(function (label) { return '<span class="chip">' + escapeHtml(label) + '</span>'; }).join("") + '</div>' : '',
+      audit.ruleCount ? '<div class="inference-ledger-relation-strip">' + [
+        "종목 의견 " + formatInteger(auditScopes["investment-opinion"] || 0),
+        "근거 품질 " + formatInteger(auditScopes["evidence-quality"] || 0),
+        "계좌 적합성 " + formatInteger(auditScopes["portfolio-fit"] || 0),
+        "실행 가능성 " + formatInteger(auditScopes["execution-readiness"] || 0),
+        "상시 " + formatInteger(auditLifecycles.hot || 0),
+        "사건형 " + formatInteger(auditLifecycles["event-driven"] || 0),
+        "저빈도 " + formatInteger(auditLifecycles.cold || 0)
+      ].map(function (label) { return '<span class="chip">' + escapeHtml(label) + '</span>'; }).join("") + '</div>' : '',
       auditRules.length ? '<div class="inference-ledger-relation-strip">' + auditRules.map(function (rule) {
         var profile = rule.executionProfile && typeof rule.executionProfile === "object" ? rule.executionProfile : {};
         return '<span class="chip">' + escapeHtml([
           rule.ruleId,
+          rule.assessmentScope,
+          rule.lifecycleClass,
           profile.executionStage,
           rule.status,
           rule.p95DurationMs ? "p95 " + formatInteger(rule.p95DurationMs) + "ms" : ""
@@ -10662,7 +10675,13 @@
     if (section === "rules") return {
       title: row.label || row.ruleId,
       detail: row.ruleId,
-      meta: "조건 " + Number(row.conditionCount || 0) + " · 파생 " + Number(row.derivationCount || 0) + " · " + ((row.relationTypes || []).slice(0, 2).join(" / ") || "관계 없음"),
+      meta: [
+        row.assessmentScope || "판단 영역 미지정",
+        row.lifecycleClass || "실행군 미지정",
+        "조건 " + Number(row.conditionCount || 0),
+        "파생 " + Number(row.derivationCount || 0),
+        (row.triggerFamilies || []).slice(0, 2).join(" / ") || "트리거 없음"
+      ].join(" · "),
       side: row.enabled === false ? "중지" : "사용"
     };
     if (section === "hypotheses") return {
@@ -21144,6 +21163,7 @@
     var decisionGuardrails = Array.isArray(comparison.decisionGuardrails) ? comparison.decisionGuardrails : [];
     var aiExecution = trace.aiExecution && typeof trace.aiExecution === "object" ? trace.aiExecution : {};
     var executionLedger = trace.executionLedger && typeof trace.executionLedger === "object" ? trace.executionLedger : {};
+    var assessmentBundle = trace.assessmentBundle && typeof trace.assessmentBundle === "object" ? trace.assessmentBundle : {};
     var investmentLifecycle = trace.investmentLifecycle && typeof trace.investmentLifecycle === "object" ? trace.investmentLifecycle : {};
     var selected = trace.selectedHypothesis && typeof trace.selectedHypothesis === "object" ? trace.selectedHypothesis : {};
     var delivery = trace.delivery && typeof trace.delivery === "object" ? trace.delivery : {};
@@ -21233,6 +21253,39 @@
         '</div>'
       ].join("");
     });
+    var assessmentLabels = {
+      evidenceQuality: "근거 품질",
+      investmentOpinion: "종목 투자 의견",
+      portfolioFit: "계좌 적합성",
+      executionReadiness: "실행 가능성"
+    };
+    var assessmentStatusLabels = {
+      supported: "지지 근거 확인",
+      constrained: "제약 있음",
+      deferred: "추가 확인",
+      blocked: "판단 또는 실행 차단",
+      observed: "관찰 근거",
+      "not-evaluated": "해당 규칙 없음"
+    };
+    var assessmentBody = Object.keys(assessmentLabels).map(function (key) {
+      var item = assessmentBundle[key] && typeof assessmentBundle[key] === "object" ? assessmentBundle[key] : {};
+      if (!Object.keys(item).length) return "";
+      var details = [
+        assessmentStatusLabels[item.status] || item.status,
+        item.candidateAction ? notificationActionFlowActionLabel(item.candidateAction) : "",
+        Array.isArray(item.ruleIds) && item.ruleIds.length ? "규칙 " + item.ruleIds.length + "개" : ""
+      ].filter(Boolean).join(" · ");
+      return '<div class="notification-reasoning-rule"><span>' + escapeHtml(assessmentLabels[key]) + '</span><strong>' + escapeHtml(details || "평가 기록 없음") + '</strong>' + (item.selectedRuleId ? '<code>' + escapeHtml(item.selectedRuleId) + '</code>' : '') + '</div>';
+    }).join("");
+    var recommendedPlan = assessmentBundle.recommendedPlan && typeof assessmentBundle.recommendedPlan === "object" ? assessmentBundle.recommendedPlan : {};
+    if (Object.keys(recommendedPlan).length) {
+      assessmentBody += '<p class="notification-reasoning-note"><strong>조합 계획</strong>' + escapeHtml([
+        recommendedPlan.investmentAction ? notificationActionFlowActionLabel(recommendedPlan.investmentAction) : "투자 의견 없음",
+        recommendedPlan.status,
+        recommendedPlan.planOption
+      ].filter(Boolean).join(" · ")) + '</p>';
+    }
+    if (assessmentBody) assessmentBody = '<div class="notification-reasoning-rule-list">' + assessmentBody + '</div>';
     var traceBody = notificationReasoningTraceItems(inferenceTraces, "notification-reasoning-trace-list", function (row) {
       var conditions = Array.isArray(row.conditions) ? row.conditions : [];
       return [
@@ -21354,7 +21407,7 @@
       '<div class="notification-reasoning-provenance">' + provenance.map(function (item) { return '<code>' + escapeHtml(item) + '</code>'; }).join("") + '</div>',
       '<ol class="notification-reasoning-flow">',
       renderNotificationReasoningStep(1, "원천 데이터·ABox 사실", facts.length + "개 사실, " + sources.length + "개 출처", missing.length ? "부족 데이터 " + missing.length + "건도 원본과 함께 표시합니다." : "기록된 부족 데이터 없음", factBody + sourceBody + notificationReasoningTraceTags(missing, "notification-reasoning-tags caution")),
-      renderNotificationReasoningStep(2, "TypeDB 규칙 실행", rules.length + "개 규칙, " + inferenceTraces.length + "개 추론 경로", snapshot.inferenceGenerationId || "추론 세대 ID 미기록", executionLedgerBody + ruleBody + traceBody),
+      renderNotificationReasoningStep(2, "TypeDB 규칙 실행", rules.length + "개 규칙, " + inferenceTraces.length + "개 추론 경로 · 영역별 판단 포함", snapshot.inferenceGenerationId || "추론 세대 ID 미기록", executionLedgerBody + assessmentBody + ruleBody + traceBody),
       renderNotificationReasoningStep(3, "경쟁 가설 구성", hypotheses.length + "개 가설을 비교 후보로 구성했습니다.", "선택 표시는 다음 AI 단계의 결과이며, 후보 생성보다 먼저 실행된 것이 아닙니다.", hypothesisCandidatesBody),
       renderNotificationReasoningStep(4, "AI 비교·최종 판단", (finalDecision.actionLabel || finalDecision.primaryAction || "판단 기록 없음") + (finalDecision.summary ? " · " + finalDecision.summary : ""), finalDecision.validationLabel || finalDecision.dataStateLabel || "검증 상태 미기록", aiExecutionBody + comparisonBody + hypothesisBody),
       renderNotificationReasoningStep(5, "판단·실행·성과 수명주기", investmentLifecycle.status === "ready" ? "판단과 실행계획이 연결됐습니다." : "연결된 실행 기록이 아직 없습니다.", investmentLifecycle.decisionEpisodeId || "DecisionEpisode ID 미기록", lifecycleBody),

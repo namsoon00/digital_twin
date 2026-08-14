@@ -31,9 +31,12 @@ class OntologyRuleAuditTest(unittest.TestCase):
         audit = rule_audit_payload(rules, runtime)
         by_id = {item["ruleId"]: item for item in audit["rules"]}
 
-        self.assertEqual("never-matched-in-sample", by_id[rules[0].rule_id]["status"])
+        self.assertEqual("observed-no-match", by_id[rules[0].rule_id]["status"])
         self.assertEqual("failing", by_id[rules[1].rule_id]["status"])
-        self.assertEqual("no-runtime-sample", by_id[rules[2].rule_id]["status"])
+        self.assertIn(by_id[rules[2].rule_id]["status"], {"waiting-for-event", "cold-no-sample", "routing-gap-review"})
+        self.assertIn(by_id[rules[0].rule_id]["assessmentScope"], {
+            "evidence-quality", "investment-opinion", "portfolio-fit", "execution-readiness",
+        })
         self.assertFalse(audit["automaticRuleChange"])
 
 

@@ -4,6 +4,7 @@ from .ontology_change_impact import rule_condition_dependency_profile
 from .ontology_contracts import OntologyEntity, OntologyRelation, PortfolioOntology, entity_id
 from .ontology_rulebox_contracts import GRAPH_REASONER_VERSION, GraphInferenceRule
 from .ontology_rule_execution_policy import rule_execution_profile
+from .ontology_rule_manifest import rule_domain_manifest
 from .ontology_relation_reasoning import ONTOLOGY_RULE_ENGINE_VERSION, RelationRuleDefinition
 from .ontology_schema import abox_relation_properties
 from .ontology_threshold_policy import rulebox_threshold_policy_payloads
@@ -27,6 +28,7 @@ def add_rulebox_concepts(graph: PortfolioOntology, rules: Iterable[GraphInferenc
     add_threshold_policy_concepts(graph, registry_id)
     for rule in rules:
         execution_profile = rule_execution_profile(rule)
+        domain_manifest = rule_domain_manifest(rule, execution=execution_profile)
         rule_id = entity_id("rule", rule.rule_id)
         graph.entities.append(OntologyEntity(rule_id, rule.label, "rule", rulebox_properties({
             "tboxClass": "GraphInferenceRule",
@@ -45,6 +47,11 @@ def add_rulebox_concepts(graph: PortfolioOntology, rules: Iterable[GraphInferenc
             "failurePolicy": execution_profile["failurePolicy"],
             "costHint": execution_profile["costHint"],
             "executionProfile": execution_profile,
+            "domainManifest": domain_manifest,
+            "assessmentScope": domain_manifest["assessmentScope"],
+            "triggerFamilies": domain_manifest["triggerFamilies"],
+            "requiredFacts": domain_manifest["requiredFacts"],
+            "lifecycleClass": domain_manifest["lifecycleClass"],
             "executionStageOverride": rule.execution_stage,
             "failurePolicyOverride": rule.failure_policy,
             "costHintOverride": rule.cost_hint,

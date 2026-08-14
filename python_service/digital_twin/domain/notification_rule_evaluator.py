@@ -814,6 +814,11 @@ def similarity_bypass_match(
         if condition_type == "number_multiplier_gte" and previous != 0 and current / previous >= threshold:
             return True, label + " " + format_rule_number(previous) + " -> " + format_rule_number(current)
         return False, ""
+    if condition_type == "inference_state_changed":
+        transition = nested_dict(context.get("investmentNotificationTransition"))
+        if transition.get("changed"):
+            return True, label + ": " + str(transition.get("summary") or "최종 판단 상태가 변경됐습니다.")
+        return False, ""
     if condition_type == "profit_loss_worsened_lte":
         current = profit_loss_rate_from_context(context, job.text if job else "")
         previous = profit_loss_rate_from_context(previous_context)
@@ -1018,6 +1023,14 @@ def apply_state_cooldown_rule(
     transition_is_material = bool(transition.get("material"))
     transition_kind = str(transition.get("kind") or "")
     if has_graph_transition and transition_kind == "initial" and not transition_is_material:
+        if (
+            str(getattr(job, "message_type", "") or "") == "investmentInsight"
+            and not nested_dict(job_context.get("notificationAiValidatedResponse"))
+        ):
+            decision.state_decision = "await-final-ai-baseline"
+            decision.state_reason = "이전 최종 판단 이력을 확인한 뒤 첫 관계 상태 발송 여부를 결정"
+            decision.reasons.append("상태 정책: " + decision.state_reason)
+            return decision
         decision.state_decision = "baseline"
         decision.state_suppressed = True
         decision.state_reason = "최초 비실행 관계 상태를 알림 없이 기준선으로 저장"

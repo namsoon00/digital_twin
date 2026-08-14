@@ -316,6 +316,8 @@ class AIInferenceQueueTests(unittest.TestCase):
         self.assertEqual([("main", "005930", "")], store.calls)
         self.assertEqual("HOLD", reviewer.received_context["previousInvestmentDecisionEpisode"]["action"])
         self.assertEqual("unchanged", delivered.context["aiDecisionTransition"]["kind"])
+        self.assertFalse(delivered.context["investmentNotificationTransition"]["changed"])
+        self.assertEqual("HOLD", delivered.context["investmentNotificationState"]["action"])
         self.assertNotIn("첫 판단", delivered.context["notificationAiValidatedResponse"]["changeAnalysis"])
         self.assertIn("이전 AI 최종 판단과 같은", delivered.context["notificationAiValidatedResponse"]["changeAnalysis"])
         self.assertIn('"previousFinalDecision"', delivered.context["notificationAiExecutionAudit"]["prompt"])

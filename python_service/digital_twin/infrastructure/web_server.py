@@ -2232,6 +2232,8 @@ def notification_action_flow(context: Dict[str, object]) -> Dict[str, object]:
     if not transition:
         transition = relation_diff.get("decisionTransition") if isinstance(relation_diff.get("decisionTransition"), dict) else {}
     validated = context.get("notificationAiValidatedResponse") if isinstance(context.get("notificationAiValidatedResponse"), dict) else {}
+    user_state = context.get("investmentNotificationState") if isinstance(context.get("investmentNotificationState"), dict) else {}
+    user_transition = context.get("investmentNotificationTransition") if isinstance(context.get("investmentNotificationTransition"), dict) else {}
     target_role = str(envelope.get("targetRole") or decision.get("targetRole") or relation.get("targetRole") or "")
     action = str(validated.get("action") or envelope.get("preferredAction") or decision.get("candidateAction") or "")
     action_label = str(validated.get("actionLabel") or "") or notification_action_label(action, target_role)
@@ -2279,6 +2281,20 @@ def notification_action_flow(context: Dict[str, object]) -> Dict[str, object]:
         "statusLabel": str(envelope.get("statusLabel") or ACTION_ENVELOPE_STATUS_LABELS.get(str(envelope.get("status") or "").upper(), "조건 확인")),
         "currentAction": action,
         "currentActionLabel": action_label,
+        "userState": {
+            "code": str(user_state.get("code") or ""),
+            "label": str(user_state.get("label") or ""),
+            "readiness": str(user_state.get("readiness") or ""),
+            "readinessLabel": str(user_state.get("readinessLabel") or ""),
+        } if user_state else {},
+        "userTransition": {
+            "kind": str(user_transition.get("kind") or ""),
+            "changed": bool(user_transition.get("changed")),
+            "changedFieldLabels": [str(item) for item in user_transition.get("changedFieldLabels") or []],
+            "summary": compact_notification_text(str(user_transition.get("summary") or ""), 260),
+            "previousState": dict(user_transition.get("previousState") or {}) if isinstance(user_transition.get("previousState"), dict) else {},
+            "currentState": dict(user_transition.get("currentState") or {}) if isinstance(user_transition.get("currentState"), dict) else {},
+        } if user_transition else {},
         "transition": {
             "kind": str(transition.get("kind") or ""),
             "category": str(transition_presentation.get("category") or ""),
@@ -2366,8 +2382,10 @@ def notification_suppression_summary(job: NotificationJob) -> str:
     if context.get("quietHoursReason"):
         return str(context.get("quietHoursReason"))
     reason = str(context.get("deliverySuppressionReason") or "").strip()
-    if reason == "stale_data":
+    if reason in {"stale_data", "stale_data_at_dispatch"}:
         return "데이터 신선도 기준 미통과"
+    if reason == "stale_data_recheck_requested":
+        return "오래된 판단은 보내지 않고 최신 데이터 재수집을 예약했습니다."
     if reason == "market_closed":
         return "장 시간 외 발송 보류"
     if reason == "state_cooldown":
@@ -2478,6 +2496,9 @@ def notification_job_public_payload(job: NotificationJob, detail: bool = False, 
         "repeatBypassed": bool(context.get("repeatBypassed")),
         "repeatBypassReason": context.get("repeatBypassReason") or "",
         "deliverySuppressionReason": context.get("deliverySuppressionReason") or "",
+        "investmentNotificationState": dict(context.get("investmentNotificationState") or {}) if isinstance(context.get("investmentNotificationState"), dict) else {},
+        "investmentNotificationTransition": dict(context.get("investmentNotificationTransition") or {}) if isinstance(context.get("investmentNotificationTransition"), dict) else {},
+        "freshDataRecheck": dict(context.get("freshDataRecheck") or {}) if isinstance(context.get("freshDataRecheck"), dict) else {},
         "cooldownEnabled": bool(context.get("cooldownEnabled")),
         "cooldownMinutes": context.get("cooldownMinutes"),
         "cooldownRecentSentCount": context.get("cooldownRecentSentCount"),

@@ -34,6 +34,7 @@ def final_ai_delivery_decision(context: Mapping[str, object]) -> Dict[str, objec
     context = _mapping(context)
     validated = _mapping(context.get("notificationAiValidatedResponse"))
     ai_transition = _mapping(context.get("aiDecisionTransition"))
+    user_transition = _mapping(context.get("investmentNotificationTransition"))
     relation = _mapping(context.get("ontologyRelationContext"))
     envelope = _mapping(relation.get("actionEnvelope"))
     graph_transition = _mapping(context.get("decisionTransition")) or _mapping(
@@ -56,8 +57,50 @@ def final_ai_delivery_decision(context: Mapping[str, object]) -> Dict[str, objec
         "previousFinalAction": _text(ai_transition.get("previousAction")).upper(),
         "graphTransitionKind": _text(graph_transition.get("kind")).lower(),
         "materialSourceEventCount": len(material_sources),
+        "userStateTransitionKind": _text(user_transition.get("kind")).lower(),
+        "userStateChanged": bool(user_transition.get("changed")),
     }
-    if not validated or not ai_transition.get("historyAvailable"):
+    transition_enabled = context.get("investmentStateTransitionNotificationsEnabled") is not False
+    if transition_enabled and user_transition.get("changed"):
+        base["reason"] = "사용자에게 표시되는 최종 판단 상태가 변경됐습니다."
+        return base
+    if not validated:
+        return base
+    if not ai_transition.get("historyAvailable"):
+        if (
+            _text(graph_transition.get("kind")).lower() == "initial"
+            and not bool(graph_transition.get("material"))
+            and base["finalAction"] == "HOLD"
+        ):
+            base.update({
+                "decision": "suppress",
+                "suppressionReason": "initial_graph_baseline",
+                "reason": "첫 비실행 최종 판단 상태를 알림 없이 기준선으로 저장합니다.",
+            })
+        return base
+    if (
+        _text(graph_transition.get("kind")).lower() == "initial"
+        and not bool(graph_transition.get("material"))
+        and base["finalAction"] == "HOLD"
+        and not user_transition.get("changed")
+    ):
+        base.update({
+            "decision": "suppress",
+            "suppressionReason": "final_ai_state_unchanged",
+            "reason": "이전 최종 판단과 같은 비실행 상태라 다시 알리지 않습니다.",
+        })
+        return base
+    if (
+        user_transition.get("changed")
+        and not transition_enabled
+        and _text(ai_transition.get("kind")).lower() != "action-changed"
+        and not material_sources
+    ):
+        base.update({
+            "decision": "suppress",
+            "suppressionReason": "inference_state_notification_disabled",
+            "reason": "추론 상태 변경 알림 설정이 꺼져 있어 상태 이력만 저장합니다.",
+        })
         return base
     if _text(ai_transition.get("kind")).lower() == "action-changed":
         return base

@@ -1000,6 +1000,17 @@ class MySQLNotificationJobStore(MySQLOperationalConnection):
             context["ontologyRelationFingerprint"] = relation_delivery.get("fingerprint")
             job.context = context
         rule = self.rule_for_connection(connection, job.message_type)
+        transition_condition = next((
+            condition
+            for condition in rule.similarity_bypass_conditions or []
+            if condition.condition_id == "insight_inference_state_changed"
+        ), None)
+        if str(job.message_type or "") == "investmentInsight":
+            context = dict(job.context or {})
+            context["investmentStateTransitionNotificationsEnabled"] = bool(
+                transition_condition and transition_condition.enabled
+            )
+            job.context = context
         decision = evaluate_notification_rule(job, rule)
         recent_count, previous_context, last_sent_at = self.similar_history_with_connection(
             connection,
@@ -1091,6 +1102,18 @@ class MySQLNotificationJobStore(MySQLOperationalConnection):
         context = sanitize_notification_context_for_freshness(context, freshness_decision)
         job.context = context
         if decision.should_send and not freshness_decision.should_send:
+            if str(job.message_type or "") == INVESTMENT_INSIGHT:
+                context = dict(job.context or {})
+                context["freshnessDeferredToDispatch"] = True
+                context["freshnessDeferredReason"] = str(freshness_decision.reason or "")
+                job.context = context
+                try:
+                    self.upsert_job_with_connection(connection, job)
+                except Exception as error:
+                    if _is_duplicate_key_error(error):
+                        return False
+                    raise
+                return True
             job.status = "suppressed"
             job.updated_at = utc_now()
             job.last_error = "데이터 신선도 기준 미통과로 발송하지 않았습니다. " + str(freshness_decision.reason or "")

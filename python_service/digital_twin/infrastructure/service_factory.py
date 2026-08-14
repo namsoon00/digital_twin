@@ -114,7 +114,7 @@ from .notifications import notifier_for_operations
 from .news_sources import NewsSourceGateway
 from .news_ai_analyzer import news_ai_analyzer_from_settings
 from .external_signals import ExternalSignalProvider
-from .settings import currency_rates, runtime_settings
+from .settings import currency_rates, runtime_settings, utc_now
 from .symbol_sources import RemoteSymbolSourceGateway
 from .toss_snapshots import TossProvider, build_snapshot, demo_positions
 from .reasoning_snapshot_source import LatestMonitorSnapshotReasoningSource
@@ -390,6 +390,24 @@ def build_notification_queue_runner(dry_run: bool = False, lane: str = "all") ->
         store=stores.ontology_reasoning_cursor_store(settings),
         settings=settings,
     )
+    refresh_job_store = monitor_account_job_store_from_settings(settings) if not dry_run else None
+
+    def request_fresh_data_recheck(account_id: str, symbol: str, source_job_id: str):
+        if not refresh_job_store:
+            return {
+                "requested": True,
+                "scheduledAt": utc_now(),
+                "scheduleMode": "next-monitor-cycle",
+                "maxDelaySeconds": max(30, int(settings.get("monitorAccountIntervalSeconds") or 30)),
+                "pipeline": "monitor-snapshot-typedb-ai",
+                "reason": "다음 실시간 모니터 주기에서 새 스냅샷부터 다시 판단합니다.",
+            }
+        result = dict(refresh_job_store.request_refresh(account_id, priority=5) or {})
+        result.update({
+            "symbol": str(symbol or "").upper(),
+            "sourceJobId": str(source_job_id or ""),
+        })
+        return result
 
     def queue_health_at_dispatch():
         # Do not trust the event payload alone: an operations job can wait
@@ -476,6 +494,7 @@ def build_notification_queue_runner(dry_run: bool = False, lane: str = "all") ->
         exclude_message_types=exclude_message_types,
         ai_request_enqueuer=ai_request_enqueuer,
         news_digest_reconciler=news_digest_reconciler,
+        fresh_data_recheck_requester=request_fresh_data_recheck,
     )
 
 

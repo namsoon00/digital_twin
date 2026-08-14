@@ -248,6 +248,9 @@ class MonitorAccountJobRepository(Protocol):
     def mark_failed(self, account_id: str, error: str, next_run_at: str) -> None:
         ...
 
+    def request_refresh(self, account_id: str, priority: int = 10) -> Dict[str, object]:
+        ...
+
     def summary(self) -> Dict[str, object]:
         ...
 

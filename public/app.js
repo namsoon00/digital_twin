@@ -2384,6 +2384,7 @@
         { id: "insight_ma60_crossed_below", label: "60일 평균 아래로 전환", type: "ma60_crossed_below", field: "", value: 0, enabled: true, description: "가격이 60일 평균 아래로 내려가면 다시 보냅니다." },
         { id: "insight_ma60_crossed_above", label: "60일 평균 위로 회복", type: "ma60_crossed_above", field: "", value: 0, enabled: true, description: "가격이 60일 평균 위로 회복하면 다시 보냅니다." },
         { id: "insight_action_changed", label: "권장 대응 변경", type: "field_changed_any", field: "notificationAiValidatedResponse.actionLabel,notificationAiValidatedResponse.action,aiOpinion.actionLabel,aiOpinion.action", value: "", enabled: true, description: "검증된 최종 대응이 바뀌면 다시 보냅니다." },
+        { id: "insight_inference_state_changed", label: "추론 상태 변경", type: "inference_state_changed", field: "", value: "", enabled: true, description: "최종 행동, 확인 단계, 자료 상태 또는 AI 검증 상태가 바뀌면 다시 보냅니다." },
         { id: "confirmed_initial_graph_state", label: "초기 관계 상태 재확인", type: "baseline_age_gte", field: "", value: 30, enabled: true, description: "처음 조용히 기록한 비실행 관계 상태가 설정 시간 이상 반복 확인되면 한 번 보냅니다." }
       ];
     }
@@ -20558,6 +20559,19 @@
   function notificationJobDecisionRoute(job) {
     var decision = String((job && job.deliveryDecision) || "");
     var gateState = String((job && job.deliveryGateState) || "");
+    var inferenceTransition = job && job.investmentNotificationTransition && typeof job.investmentNotificationTransition === "object"
+      ? job.investmentNotificationTransition
+      : {};
+    var previousState = inferenceTransition.previousState && typeof inferenceTransition.previousState === "object" ? inferenceTransition.previousState : {};
+    var currentState = inferenceTransition.currentState && typeof inferenceTransition.currentState === "object" ? inferenceTransition.currentState : {};
+    if (inferenceTransition.changed) {
+      return {
+        label: "추론 상태 변경",
+        relation: previousState.label || "이전 판단",
+        change: currentState.label || "현재 판단",
+        tone: "watch"
+      };
+    }
     var tone = decision === "suppressed" || gateState === "blocked" ? "danger" : (decision === "send" ? "watch" : "hold");
     return {
       label: notificationDeliveryStateLabel(decision),
@@ -20577,6 +20591,16 @@
   function notificationJobDecisionFactors(job) {
     if (!job) return [];
     var rows = [];
+    var inferenceTransition = job.investmentNotificationTransition && typeof job.investmentNotificationTransition === "object"
+      ? job.investmentNotificationTransition
+      : {};
+    if (inferenceTransition.changed && inferenceTransition.summary) {
+      rows.push({ label: "추론 상태 변경: " + String(inferenceTransition.summary), tone: "watch" });
+    }
+    var freshRecheck = job.freshDataRecheck && typeof job.freshDataRecheck === "object" ? job.freshDataRecheck : {};
+    if (freshRecheck.requested) {
+      rows.push({ label: "오래된 판단 대신 최신 데이터 재수집을 예약했습니다.", tone: "watch" });
+    }
     if (job.deliveryGateReason) {
       rows.push({ label: String(job.deliveryGateReason), tone: notificationDecisionFactorTone(job.deliveryGateReason) });
     }
@@ -20962,6 +20986,7 @@
     var flow = job && job.actionFlow && typeof job.actionFlow === "object" ? job.actionFlow : {};
     if (!Object.keys(flow).length) return "";
     var transition = flow.transition && typeof flow.transition === "object" ? flow.transition : {};
+    var userTransition = flow.userTransition && typeof flow.userTransition === "object" ? flow.userTransition : {};
     var readiness = flow.dataReadiness && typeof flow.dataReadiness === "object" ? flow.dataReadiness : {};
     var news = flow.newsImpact && typeof flow.newsImpact === "object" ? flow.newsImpact : {};
     var nextChecks = Array.isArray(flow.nextChecks) ? flow.nextChecks : [];
@@ -20976,7 +21001,7 @@
       readiness.dataState ? renderNotificationDetailMetric("자료 상태", readiness.dataState === "sufficient" ? "판단 가능" : (readiness.dataState === "partial" ? "일부 확인" : "판단 보류"), readiness.dataState === "sufficient" ? "watch" : "caution") : "",
       '</div>'
     ].join("");
-    var change = transition.summary || "이전 알림과 같은 판단 범위입니다.";
+    var change = userTransition.summary || transition.summary || "이전 알림과 같은 판단 범위입니다.";
     var changeLabel = transition.label ? '<b>[' + escapeHtml(transition.label) + ']</b> ' : '';
     return [
       '<section class="notification-detail-section notification-action-flow-section">',
@@ -20989,6 +21014,29 @@
       news.headline ? '<p><b>결정에 반영한 뉴스</b> ' + escapeHtml([news.source, news.headline].filter(Boolean).join(": ")) + '</p>' : '',
       '</div>',
       effects.length ? '<div class="notification-detail-tags">' + effects.map(function (item) { return '<span>' + escapeHtml(item) + '</span>'; }).join("") + '</div>' : '',
+      '</section>'
+    ].join("");
+  }
+
+  function renderNotificationInferenceStateTransition(job) {
+    var transition = job && job.investmentNotificationTransition && typeof job.investmentNotificationTransition === "object"
+      ? job.investmentNotificationTransition
+      : {};
+    var current = job && job.investmentNotificationState && typeof job.investmentNotificationState === "object"
+      ? job.investmentNotificationState
+      : (transition.currentState || {});
+    if (!Object.keys(current).length && !Object.keys(transition).length) return "";
+    var previous = transition.previousState && typeof transition.previousState === "object" ? transition.previousState : {};
+    var labels = Array.isArray(transition.changedFieldLabels) ? transition.changedFieldLabels : [];
+    return [
+      '<section class="notification-detail-section notification-action-flow-section">',
+      '<strong>최종 추론 상태</strong>',
+      '<div class="notification-detail-metrics">',
+      previous.label ? renderNotificationDetailMetric("이전", previous.label, "muted") : '',
+      renderNotificationDetailMetric("현재", current.label || "판단 상태 확인", transition.changed ? "watch" : "hold"),
+      renderNotificationDetailMetric("변경 항목", labels.length ? labels.join(" · ") : (transition.historyAvailable ? "변경 없음" : "첫 기준선"), transition.changed ? "watch" : "muted"),
+      '</div>',
+      '<p>' + escapeHtml(transition.summary || "저장된 최종 AI 판단 상태입니다.") + '</p>',
       '</section>'
     ].join("");
   }
@@ -21364,6 +21412,7 @@
       renderNotificationDetailMetric("반복 판단", notificationJobSimilarityText(job), "muted"),
       renderNotificationDetailMetric("발송 가능", job.nextEligibleAt ? formatClock(job.nextEligibleAt) : "조건 충족 시", "muted"),
       '</div>',
+      renderNotificationInferenceStateTransition(job),
       '<section class="notification-detail-section notification-delivery-section">',
       '<strong>발송 판단과 근거</strong>',
       renderNotificationDecisionRoute(job),
@@ -21584,6 +21633,7 @@
       ma60_crossed_above: "60일 평균 위로 회복",
       field_changed: "상태 변경",
       field_changed_any: "권장 대응 변경",
+      inference_state_changed: "추론 상태 변경",
       abs_number_delta_gte: "절대값 차이 이상",
       number_delta_gte: "숫자 증가 이상",
       number_delta_lte: "숫자 감소 이상",

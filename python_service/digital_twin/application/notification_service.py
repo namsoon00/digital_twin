@@ -381,6 +381,7 @@ class NotificationQueueRunner:
         exclude_message_types: List[str] = None,
         ai_request_enqueuer=None,
         news_digest_reconciler=None,
+        fresh_data_recheck_requester=None,
     ):
         self.queue = queue
         self.account_repository = account_repository
@@ -401,6 +402,7 @@ class NotificationQueueRunner:
         self.exclude_message_types = tuple(dict.fromkeys(str(item).strip() for item in exclude_message_types or [] if str(item).strip()))
         self.ai_request_enqueuer = ai_request_enqueuer
         self.news_digest_reconciler = news_digest_reconciler
+        self.fresh_data_recheck_requester = fresh_data_recheck_requester
         self.last_news_digest_reconciliation: Dict[str, object] = {}
         self.last_run_details = []
         self.active_job = None
@@ -590,7 +592,9 @@ class NotificationQueueRunner:
         if decision.get("decision") != "suppress":
             return True
         reason = str(decision.get("reason") or "최종 AI 판단이 유지되어 푸시하지 않습니다.")
-        context["deliverySuppressionReason"] = "final_ai_action_unchanged"
+        context["deliverySuppressionReason"] = str(
+            decision.get("suppressionReason") or "final_ai_action_unchanged"
+        )
         context["deliverySuppressionDetail"] = reason
         job.context = context
         if hasattr(self.queue, "mark_suppressed"):
@@ -689,7 +693,10 @@ class NotificationQueueRunner:
         if decision.should_send:
             return True
         reason = stage + " 데이터 신선도 기준 미통과: " + str(decision.reason or decision.status)
-        job.context["deliverySuppressionReason"] = "stale_data_at_dispatch"
+        recheck = self.request_fresh_data_recheck(job, stage, reason)
+        job.context["deliverySuppressionReason"] = (
+            "stale_data_recheck_requested" if recheck.get("requested") else "stale_data_at_dispatch"
+        )
         if hasattr(self.queue, "mark_suppressed"):
             self.queue.mark_suppressed(job, reason)
         else:
@@ -697,6 +704,44 @@ class NotificationQueueRunner:
         self.record_operational_delivery(job, "suppressed", reason)
         self.last_run_details.append(self.job_detail(job, "suppressed", reason[:160]))
         return False
+
+    def request_fresh_data_recheck(self, job: NotificationJob, stage: str, reason: str) -> Dict[str, object]:
+        if str(job.message_type or "") != INVESTMENT_INSIGHT or not callable(self.fresh_data_recheck_requester):
+            return {"requested": False}
+        context = dict(job.context or {})
+        if isinstance(context.get("freshDataRecheck"), dict) and context["freshDataRecheck"].get("requested"):
+            return dict(context["freshDataRecheck"])
+        symbol = self.symbol_from_job(job)
+        audit = {
+            "version": "fresh-data-recheck-v1",
+            "requested": False,
+            "stage": stage,
+            "accountId": str(job.account_id or ""),
+            "symbol": symbol,
+            "reason": reason,
+        }
+        try:
+            outcome = self.fresh_data_recheck_requester(job.account_id, symbol, job.job_id)
+            if isinstance(outcome, dict):
+                audit.update(outcome)
+            audit["requested"] = bool(audit.get("requested", True))
+        except Exception as error:  # noqa: BLE001 - stale results still must remain blocked.
+            audit["error"] = str(error)[:180]
+        context["freshDataRecheck"] = audit
+        job.context = context
+        return audit
+
+    @staticmethod
+    def symbol_from_job(job: NotificationJob) -> str:
+        context = job.context if isinstance(job.context, dict) else {}
+        relation = context.get("ontologyRelationContext") if isinstance(context.get("ontologyRelationContext"), dict) else {}
+        subject = relation.get("subject") if isinstance(relation.get("subject"), dict) else {}
+        return str(
+            context.get("symbol")
+            or context.get("rawSymbol")
+            or subject.get("symbol")
+            or ""
+        ).strip().upper()
 
     def record_operational_delivery(self, job: NotificationJob, outcome: str, reason: str = "") -> None:
         """Persist best-effort delivery provenance for operations incidents."""

@@ -310,7 +310,14 @@ class MySQLMonitorAccountJobStore:
                     """
                     UPDATE monitor_account_jobs
                     SET status = 'done',
-                        next_run_at = %s,
+                        priority = CASE
+                            WHEN next_run_at > last_started_at AND next_run_at <= %s THEN priority
+                            ELSE 100
+                        END,
+                        next_run_at = CASE
+                            WHEN next_run_at > last_started_at AND next_run_at <= %s THEN next_run_at
+                            ELSE %s
+                        END,
                         locked_by = '',
                         locked_until = '',
                         attempts = 0,
@@ -319,8 +326,40 @@ class MySQLMonitorAccountJobStore:
                         updated_at = %s
                     WHERE account_id = %s
                     """,
-                    (str(next_run_at or stamp), stamp, stamp, str(account_id or "")),
+                    (stamp, stamp, str(next_run_at or stamp), stamp, stamp, str(account_id or "")),
                 )
+
+    def request_refresh(self, account_id: str, priority: int = 10) -> Dict[str, object]:
+        """Make an account due now without stealing an active monitor lease."""
+
+        clean_account_id = str(account_id or "").strip()
+        if not clean_account_id:
+            return {"requested": False, "reason": "account id missing"}
+        stamp = utc_now()
+        requested_priority = max(0, min(100, int(priority or 10)))
+        with self.transaction() as connection:
+            with connection.cursor() as cursor:
+                cursor.execute(
+                    """
+                    INSERT INTO monitor_account_jobs (
+                        account_id, status, priority, next_run_at, locked_by, locked_until,
+                        attempts, last_started_at, last_finished_at, last_error, updated_at
+                    ) VALUES (%s, 'pending', %s, %s, '', '', 0, '', '', '', %s)
+                    ON DUPLICATE KEY UPDATE
+                        status = CASE WHEN status = 'processing' THEN status ELSE 'pending' END,
+                        priority = LEAST(priority, VALUES(priority)),
+                        next_run_at = VALUES(next_run_at),
+                        updated_at = VALUES(updated_at)
+                    """,
+                    (clean_account_id, requested_priority, stamp, stamp),
+                )
+        return {
+            "requested": True,
+            "scheduledAt": stamp,
+            "accountId": clean_account_id,
+            "priority": requested_priority,
+            "pipeline": "monitor-snapshot-typedb-ai",
+        }
 
     def mark_failed(self, account_id: str, error: str, next_run_at: str) -> None:
         stamp = utc_now()
@@ -330,7 +369,14 @@ class MySQLMonitorAccountJobStore:
                     """
                     UPDATE monitor_account_jobs
                     SET status = 'failed',
-                        next_run_at = %s,
+                        priority = CASE
+                            WHEN next_run_at > last_started_at AND next_run_at <= %s THEN priority
+                            ELSE 100
+                        END,
+                        next_run_at = CASE
+                            WHEN next_run_at > last_started_at AND next_run_at <= %s THEN next_run_at
+                            ELSE %s
+                        END,
                         locked_by = '',
                         locked_until = '',
                         last_finished_at = %s,
@@ -338,7 +384,15 @@ class MySQLMonitorAccountJobStore:
                         updated_at = %s
                     WHERE account_id = %s
                     """,
-                    (str(next_run_at or stamp), stamp, str(error or "")[:500], stamp, str(account_id or "")),
+                    (
+                        stamp,
+                        stamp,
+                        str(next_run_at or stamp),
+                        stamp,
+                        str(error or "")[:500],
+                        stamp,
+                        str(account_id or ""),
+                    ),
                 )
 
     def summary(self) -> Dict[str, object]:

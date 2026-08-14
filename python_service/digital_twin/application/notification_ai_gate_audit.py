@@ -3,6 +3,10 @@ from typing import Dict, Optional
 
 from ..domain.investment_ubiquitous_language import user_facing_investment_language
 from ..domain.investment_decision_history import context_with_ai_decision_transition
+from ..domain.investment_notification_state import (
+    context_with_investment_notification_state,
+    investment_notification_transition_line,
+)
 from ..domain.notification_ai import active_investment_opinion_value, notification_ai_prompt_context, relation_context_value
 from ..domain.notification_ai_gate_contracts import (
     AI_DECISION_MODE,
@@ -221,6 +225,7 @@ def context_with_validated_ai_response(
         if isinstance(item, dict) and item.get("tboxClass") == "AIJudgmentAudit"
     ]
     enriched["notificationAiValidatedResponse"] = payload
+    enriched = context_with_investment_notification_state(enriched)
     icon = investment_notification_icon(enriched.get("messageType") or enriched.get("rule") or "", enriched)
     if icon:
         enriched["headline"] = execution_headline(enriched, response)
@@ -301,6 +306,9 @@ def context_with_validated_ai_response(
         "validatedResponse": payload,
     }
     telegram_message = prepend_execution_start_badge(execution_telegram_message(enriched, response), enriched)
+    transition_line = investment_notification_transition_line(enriched)
+    if transition_line:
+        telegram_message = transition_line + "\n\n" + telegram_message
     delivery_level = str(delivery_profile_from_context(enriched).get("level") or "beginner")
     enriched["telegramMessage"] = user_facing_investment_language(
         telegram_message,

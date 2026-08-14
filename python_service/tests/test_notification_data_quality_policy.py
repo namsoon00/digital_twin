@@ -52,7 +52,7 @@ from digital_twin.infrastructure.mysql_notification_config import (
 
 
 class NotificationDataQualityPolicyTests(unittest.TestCase):
-    def test_initial_non_actionable_graph_state_is_stored_as_a_suppressed_baseline(self):
+    def test_initial_non_actionable_graph_state_waits_for_final_ai_history_check(self):
         rule = default_notification_rule("investmentInsight")
         job = NotificationJob.create(
             "NVIDIA 관심 유지",
@@ -83,9 +83,9 @@ class NotificationDataQualityPolicyTests(unittest.TestCase):
             job=job,
         )
 
-        self.assertFalse(decision.should_send)
-        self.assertEqual("baseline", decision.state_decision)
-        self.assertEqual("initial_graph_baseline", decision.suppression_reason)
+        self.assertTrue(decision.should_send)
+        self.assertEqual("await-final-ai-baseline", decision.state_decision)
+        self.assertEqual("", decision.suppression_reason)
 
     def test_repeated_initial_graph_state_waits_for_configured_confirmation_age(self):
         rule = default_notification_rule("investmentInsight")
@@ -602,18 +602,25 @@ class NotificationDataQualityPolicyTests(unittest.TestCase):
                 target.last_error = reason
 
         sent = []
+        rechecks = []
         runner = NotificationQueueRunner(
             Queue(),
             SimpleNamespace(load_all=lambda: []),
             lambda _account: SimpleNamespace(send=lambda message: sent.append(message)),
             settings={"dataFreshnessEnabled": "1"},
             now_provider=lambda: datetime(2026, 7, 20, 0, 4, tzinfo=timezone.utc),
+            fresh_data_recheck_requester=lambda account_id, symbol, job_id: rechecks.append(
+                (account_id, symbol, job_id)
+            ) or {"requested": True, "scheduledAt": "2026-07-20T00:04:00Z"},
         )
 
         self.assertEqual(1, runner.run_once())
         self.assertEqual([], sent)
         self.assertEqual("suppressed", job.status)
         self.assertIn("AI 판단 전", job.last_error)
+        self.assertEqual([("main", "", job.job_id)], rechecks)
+        self.assertTrue(job.context["freshDataRecheck"]["requested"])
+        self.assertEqual("stale_data_recheck_requested", job.context["deliverySuppressionReason"])
 
     def test_operational_delivery_types_are_separate_from_investment_messages(self):
         self.assertTrue(is_operations_delivery_message_type(WORK_HANDOFF))

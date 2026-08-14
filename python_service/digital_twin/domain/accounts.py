@@ -3,6 +3,12 @@ from datetime import datetime
 from typing import Dict, List, Optional
 from zoneinfo import ZoneInfo
 
+from .notification_explanation import (
+    DEFAULT_NOTIFICATION_DETAIL_LEVEL,
+    normalize_notification_detail_level,
+    notification_detail_profile,
+)
+
 
 DEFAULT_QUIET_HOURS_ENABLED = True
 DEFAULT_QUIET_HOURS_START = "22:00"
@@ -14,25 +20,25 @@ DEFAULT_INVESTMENT_STRATEGY_PROFILE = "balanced"
 MESSAGE_DELIVERY_LEVELS = {
     "absoluteBeginner": {
         "label": "왕초보",
-        "description": "같은 알림 내용을 유지하되 전문 용어를 쉬운 말로 풀어서 보여줍니다.",
+        "description": "전문 용어를 쉬운 말로 풀어서 보여줍니다.",
         "detailLevel": "full_plain",
         "terminology": "plain",
         "decisionStateVisibility": "summary",
         "ruleVisibility": "explained_summary",
-        "promptInstruction": "왕초보 투자자가 오해하지 않도록 알림 항목은 줄이지 말고 같은 내용을 쉬운 단어와 짧은 문장으로 풀어 설명한다.",
+        "promptInstruction": "왕초보 투자자가 오해하지 않도록 선택된 알림 항목을 쉬운 단어와 짧은 문장으로 풀어 설명한다.",
     },
     "beginner": {
         "label": "초보",
-        "description": "같은 알림 내용을 유지하되 핵심 수치와 쉬운 이유를 함께 설명합니다.",
+        "description": "핵심 수치와 쉬운 이유를 함께 설명합니다.",
         "detailLevel": "full_guided",
         "terminology": "plain_with_basic_terms",
         "decisionStateVisibility": "guided",
         "ruleVisibility": "explained_summary",
-        "promptInstruction": "초보 투자자가 따라올 수 있도록 알림 항목은 유지하고 현재가, 평균매입가, 수익률, 다음 확인 조건을 쉬운 말과 기본 용어를 함께 써서 설명한다.",
+        "promptInstruction": "초보 투자자가 따라올 수 있도록 선택된 현재가, 평균매입가, 수익률, 다음 확인 조건을 쉬운 말과 기본 용어를 함께 써서 설명한다.",
     },
     "intermediate": {
         "label": "중수",
-        "description": "같은 알림 내용을 유지하되 가격, 수급, 추세, 부족 데이터를 표준 용어로 설명합니다.",
+        "description": "가격, 수급, 추세, 부족 데이터를 표준 용어로 설명합니다.",
         "detailLevel": "full_balanced",
         "terminology": "standard",
         "decisionStateVisibility": "detailed",
@@ -41,7 +47,7 @@ MESSAGE_DELIVERY_LEVELS = {
     },
     "advanced": {
         "label": "고수",
-        "description": "같은 알림 내용을 유지하되 관계 규칙, 검증 메모, 발송 기준을 원래 용어에 가깝게 설명합니다.",
+        "description": "관계 규칙, 검증 메모, 발송 기준을 원래 용어에 가깝게 설명합니다.",
         "detailLevel": "diagnostic",
         "terminology": "technical_allowed",
         "decisionStateVisibility": "diagnostic",
@@ -274,6 +280,7 @@ class AccountConfig:
     quiet_hours_end: str = DEFAULT_QUIET_HOURS_END
     quiet_hours_timezone: str = DEFAULT_QUIET_HOURS_TIMEZONE
     message_delivery_level: str = DEFAULT_MESSAGE_DELIVERY_LEVEL
+    notification_detail_level: str = DEFAULT_NOTIFICATION_DETAIL_LEVEL
     investment_strategy_profile: str = DEFAULT_INVESTMENT_STRATEGY_PROFILE
     created_at: str = ""
     updated_at: str = ""
@@ -303,6 +310,7 @@ class AccountConfig:
         quiet_end_value = payload.get("quietHoursEnd") if "quietHoursEnd" in payload else payload.get("quiet_hours_end")
         quiet_timezone_value = payload.get("quietHoursTimezone") if "quietHoursTimezone" in payload else payload.get("quiet_hours_timezone")
         delivery_level_value = payload.get("messageDeliveryLevel") if "messageDeliveryLevel" in payload else payload.get("message_delivery_level")
+        notification_detail_value = payload.get("notificationDetailLevel") if "notificationDetailLevel" in payload else payload.get("notification_detail_level")
         strategy_profile_value = payload.get("investmentStrategyProfile") if "investmentStrategyProfile" in payload else payload.get("investment_strategy_profile")
         return cls(
             account_id=configured(payload.get("id") or payload.get("accountId") or "default"),
@@ -323,6 +331,7 @@ class AccountConfig:
             quiet_hours_end=normalize_time_text(quiet_end_value, DEFAULT_QUIET_HOURS_END),
             quiet_hours_timezone=quiet_timezone(quiet_timezone_value),
             message_delivery_level=normalize_message_delivery_level(delivery_level_value),
+            notification_detail_level=normalize_notification_detail_level(notification_detail_value),
             investment_strategy_profile=normalize_investment_strategy_profile(strategy_profile_value or settings.get("investmentStrategyProfile")),
             created_at=configured(payload.get("createdAt") or payload.get("created_at") or ""),
             updated_at=configured(payload.get("updatedAt") or payload.get("updated_at") or ""),
@@ -348,6 +357,7 @@ class AccountConfig:
             "quietHoursEnd": self.quiet_hours_end,
             "quietHoursTimezone": self.quiet_hours_timezone,
             "messageDeliveryLevel": normalize_message_delivery_level(self.message_delivery_level),
+            "notificationDetailLevel": normalize_notification_detail_level(self.notification_detail_level),
             "investmentStrategyProfile": normalize_investment_strategy_profile(self.investment_strategy_profile),
             "createdAt": self.created_at,
             "updatedAt": self.updated_at,
@@ -355,6 +365,7 @@ class AccountConfig:
 
     def masked(self) -> Dict[str, object]:
         profile = self.message_delivery_profile()
+        detail_profile = self.notification_detail_profile()
         strategy_profile = self.investment_strategy_profile_payload()
         return {
             "id": self.account_id,
@@ -376,6 +387,8 @@ class AccountConfig:
             "quietHoursTimezone": self.quiet_hours_timezone,
             "messageDeliveryLevel": profile["level"],
             "messageDeliveryLevelLabel": profile["label"],
+            "notificationDetailLevel": detail_profile["level"],
+            "notificationDetailLevelLabel": detail_profile["label"],
             "investmentStrategyProfile": strategy_profile["profile"],
             "investmentStrategyProfileLabel": strategy_profile["label"],
             "createdAt": self.created_at,
@@ -388,13 +401,26 @@ class AccountConfig:
         profile["accountLabel"] = self.label
         return profile
 
+    def notification_detail_profile(self) -> Dict[str, object]:
+        profile = notification_detail_profile(self.notification_detail_level)
+        profile["accountId"] = self.account_id
+        profile["accountLabel"] = self.label
+        return profile
+
     def message_delivery_context(self) -> Dict[str, object]:
         profile = self.message_delivery_profile()
         context = {
             "messageDeliveryLevel": profile["level"],
             "messageDeliveryLevelLabel": profile["label"],
             "messageDeliveryProfile": profile,
+            "notifyLinkUrl": self.notify_link_url,
         }
+        detail_profile = self.notification_detail_profile()
+        context.update({
+            "notificationDetailLevel": detail_profile["level"],
+            "notificationDetailLevelLabel": detail_profile["label"],
+            "notificationDetailProfile": detail_profile,
+        })
         context.update(self.investment_strategy_context())
         return context
 

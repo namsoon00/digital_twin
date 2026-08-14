@@ -16,6 +16,10 @@ from ..domain.notification_ai_context import is_watchlist_context
 from ..domain.external_api_sources import external_api_source_line
 from ..domain.notification_ai_gate_contracts import ACTION_LABELS, MESSAGE_START_BADGE, NotificationAIValidatedResponse
 from ..domain.notification_icon_policy import investment_notification_icon, notification_title_with_context_icon
+from ..domain.notification_explanation import (
+    build_notification_explanation_packet,
+    normalize_notification_detail_level,
+)
 from ..domain.notification_decision_policy import includes_portfolio_rebalance_policy
 from ..domain.investment_ubiquitous_language import user_facing_investment_language
 from ..domain.ontology_decision_state import (
@@ -2853,7 +2857,24 @@ def ai_causal_validation_rows(response: NotificationAIValidatedResponse) -> List
     return rows
 
 
+def notification_detail_level_from_context(context: Dict[str, object]) -> str:
+    raw = context.get("notificationDetailLevel")
+    profile = context.get("notificationDetailProfile") if isinstance(context.get("notificationDetailProfile"), dict) else {}
+    if raw in (None, ""):
+        raw = profile.get("level")
+    # Old persisted jobs predate the display policy. Keep their historical full
+    # rendering while all new account contexts explicitly carry the concise default.
+    return normalize_notification_detail_level(raw) if raw not in (None, "") else "full"
+
+
 def execution_telegram_message(context: Dict[str, object], response: NotificationAIValidatedResponse) -> str:
+    detail_level = notification_detail_level_from_context(context)
+    if detail_level in {"concise", "standard"}:
+        return execution_telegram_message_progressive(context, response, detail_level)
+    return execution_telegram_message_full(context, response)
+
+
+def execution_telegram_message_full(context: Dict[str, object], response: NotificationAIValidatedResponse) -> str:
     level = delivery_level_from_context(context)
     if level in {"absoluteBeginner", "beginner"}:
         return execution_telegram_message_compact_beginner(context, response, level)
@@ -2957,6 +2978,114 @@ def execution_telegram_message(context: Dict[str, object], response: Notificatio
     if history_rows:
         parts.extend(["", "<b>판단 이력</b>", *[_html_bullet(row, level) for row in history_rows]])
     parts.extend(execution_footer(context, response, reference, sent))
+    return "\n".join(part for part in parts if str(part).strip() or part == "").strip()
+
+
+def _notification_detail_link_row(context: Dict[str, object], level: str) -> str:
+    detail_url = str(context.get("notificationDetailUrl") or context.get("notifyLinkUrl") or "").strip()
+    if not detail_url:
+        return ""
+    return (
+        "• <a href=\""
+        + html.escape(detail_url, quote=True)
+        + "\">"
+        + html.escape(_message_text("웹에서 전체 근거 보기", level), quote=False)
+        + "</a>"
+    )
+
+
+def _notification_company_value_summary(context: Dict[str, object]) -> List[str]:
+    presentation = company_valuation_presentation(context)
+    if not presentation:
+        return []
+    rows = []
+    if presentation.get("marketComparison"):
+        rows.append("현재 주가 비교: " + str(presentation["marketComparison"]))
+    if presentation.get("verifiedComparison"):
+        rows.append("적정가 검증: " + str(presentation["verifiedComparison"]))
+    if presentation.get("role"):
+        rows.append("판단 반영: " + str(presentation["role"]))
+    return rows
+
+
+def _notification_selected_inference_rows(
+    context: Dict[str, object],
+    response: NotificationAIValidatedResponse,
+) -> List[str]:
+    rows = full_typedb_competing_inference_rows(context, response)
+    selected = [row for row in rows if row.startswith("선택 경로:")]
+    candidate = [row for row in rows if row.startswith("TypeDB 행동 후보") or row.startswith("TypeDB 후보 상태")]
+    result = candidate[:1] + selected[:1]
+    if result:
+        return result
+    matched = [row for row in rows if row.startswith("성립 규칙:")]
+    return matched[:1]
+
+
+def execution_telegram_message_progressive(
+    context: Dict[str, object],
+    response: NotificationAIValidatedResponse,
+    detail_level: str,
+) -> str:
+    level = delivery_level_from_context(context)
+    headline = execution_headline(context, response)
+    target = str(context.get("displayTarget") or context.get("target") or "").strip()
+    transition = compact_sentence_count(compact_decision_transition(context, response), 1)
+    evidence = list(full_decision_evidence_rows(context, response))
+    evidence.extend(compact_action_reason_rows(context, response))
+    next_checks = [
+        compact_sentence_count(compact_next_action_line(context, response), 1),
+        compact_invalidation_line(context, response),
+    ]
+    next_checks.extend(response.next_checks or [])
+    warnings = customer_data_note_rows(list(response.missing_data_impact))
+    packet = build_notification_explanation_packet(
+        detail_level=detail_level,
+        action=compact_sentence_count(compact_current_action_line(context, response), 1),
+        change=transition,
+        current_flow=compact_current_flow_rows(context),
+        evidence=evidence,
+        counter_evidence=response.counter_evidence,
+        inference=_notification_selected_inference_rows(context, response),
+        company_value=_notification_company_value_summary(context),
+        next_checks=next_checks,
+        data_warnings=warnings,
+    )
+    parts = [
+        "<b>" + html.escape(headline, quote=False) + "</b>",
+        ("<code>" + html.escape(target, quote=False) + "</code>") if target else "",
+        "",
+        "<b>지금 행동</b>",
+        _html_bullet(packet.action, level),
+    ]
+    if packet.change:
+        parts.extend(["", "<b>이번 변화</b>", _html_bullet(packet.change, level)])
+    if packet.current_flow:
+        parts.extend(["", "<b>현재 흐름</b>", *[_html_bullet(row, level) for row in packet.current_flow]])
+    if packet.evidence:
+        parts.extend(["", "<b>핵심 근거</b>", *[_html_bullet(row, level) for row in packet.evidence]])
+    if packet.counter_evidence:
+        parts.extend(["", "<b>반대 근거</b>", *[_html_bullet(row, level) for row in packet.counter_evidence]])
+    if packet.inference:
+        parts.extend(["", "<b>TypeDB 핵심 추론</b>", *[_html_bullet(row, level) for row in packet.inference]])
+    if packet.company_value:
+        parts.extend(["", "<b>회사 가치</b>", *[_html_bullet(row, level) for row in packet.company_value]])
+    if packet.next_checks:
+        parts.extend(["", "<b>다음 판단 조건</b>", *[_html_bullet(row, level) for row in packet.next_checks]])
+    if packet.data_warnings:
+        parts.extend(["", "<b>판단에 영향을 준 데이터 한계</b>", *[_html_bullet(row, level) for row in packet.data_warnings]])
+    link_row = _notification_detail_link_row(context, level)
+    if link_row:
+        parts.extend(["", link_row])
+    reference = response.reference_date or reference_date(context)
+    sent = str(context.get("sentTime") or "").strip()
+    footer = " · ".join(part for part in [
+        "기준 " + str(reference) if reference else "",
+        "발송 " + sent if sent else "",
+        "번호 " + str(context.get("notificationNumber")) if context.get("notificationNumber") else "",
+    ] if part)
+    if footer:
+        parts.extend(["", "<i>" + html.escape(footer, quote=False) + "</i>"])
     return "\n".join(part for part in parts if str(part).strip() or part == "").strip()
 
 def execution_telegram_message_absolute_beginner(context: Dict[str, object], response: NotificationAIValidatedResponse) -> str:

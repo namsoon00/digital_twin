@@ -123,6 +123,7 @@ class MySQLAccountRegistry(MySQLOperationalConnection):
             quiet_hours_end=row["quiet_hours_end"] or "05:00",
             quiet_hours_timezone=row["quiet_hours_timezone"] or "Asia/Seoul",
             message_delivery_level=row["message_delivery_level"] or "absoluteBeginner",
+            notification_detail_level=row["notification_detail_level"] or "concise",
             investment_strategy_profile=row["investment_strategy_profile"] or self.settings.get("investmentStrategyProfile", "balanced"),
             created_at=row["created_at"] or "",
             updated_at=row["updated_at"] or "",
@@ -174,6 +175,7 @@ class MySQLAccountRegistry(MySQLOperationalConnection):
             notify_link_url=self.settings.get("notifyLinkUrl", ""),
             enabled=True,
             message_delivery_level=self.settings.get("messageDeliveryLevel", "absoluteBeginner"),
+            notification_detail_level=self.settings.get("notificationDetailLevel", "concise"),
             investment_strategy_profile=self.settings.get("investmentStrategyProfile", "balanced"),
         )
 
@@ -186,9 +188,9 @@ class MySQLAccountRegistry(MySQLOperationalConnection):
             INSERT INTO service_accounts (
                 id, label, provider, enabled, watchlist_symbols, quiet_hours_enabled,
                 quiet_hours_start, quiet_hours_end, quiet_hours_timezone, message_delivery_level,
-                investment_strategy_profile, created_at, updated_at
+                notification_detail_level, investment_strategy_profile, created_at, updated_at
             )
-            VALUES (%s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s)
+            VALUES (%s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s)
             ON DUPLICATE KEY UPDATE
                 label = VALUES(label), provider = VALUES(provider), enabled = VALUES(enabled),
                 watchlist_symbols = VALUES(watchlist_symbols),
@@ -197,6 +199,7 @@ class MySQLAccountRegistry(MySQLOperationalConnection):
                 quiet_hours_end = VALUES(quiet_hours_end),
                 quiet_hours_timezone = VALUES(quiet_hours_timezone),
                 message_delivery_level = VALUES(message_delivery_level),
+                notification_detail_level = VALUES(notification_detail_level),
                 investment_strategy_profile = VALUES(investment_strategy_profile),
                 updated_at = VALUES(updated_at)
             """,
@@ -211,6 +214,7 @@ class MySQLAccountRegistry(MySQLOperationalConnection):
                 account.quiet_hours_end,
                 account.quiet_hours_timezone,
                 account.message_delivery_level,
+                account.notification_detail_level,
                 account.investment_strategy_profile,
                 created_at,
                 stamp,

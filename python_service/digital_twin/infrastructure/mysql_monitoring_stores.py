@@ -750,7 +750,7 @@ class MySQLMonitoringCycleRecorder(MySQLOperationalConnection):
                     """
                     SELECT id, label, provider, enabled, watchlist_symbols, quiet_hours_enabled,
                            quiet_hours_start, quiet_hours_end, quiet_hours_timezone,
-                           message_delivery_level, investment_strategy_profile
+                           message_delivery_level, notification_detail_level, investment_strategy_profile
                     FROM service_accounts
                     """
                 ).fetchall()
@@ -773,6 +773,7 @@ class MySQLMonitoringCycleRecorder(MySQLOperationalConnection):
                 quiet_hours_end=row["quiet_hours_end"] or "05:00",
                 quiet_hours_timezone=row["quiet_hours_timezone"] or "Asia/Seoul",
                 message_delivery_level=row["message_delivery_level"] or self.runtime_settings.get("messageDeliveryLevel", "absoluteBeginner"),
+                notification_detail_level=row["notification_detail_level"] or self.runtime_settings.get("notificationDetailLevel", "concise"),
                 investment_strategy_profile=row["investment_strategy_profile"] or self.runtime_settings.get("investmentStrategyProfile", "balanced"),
             )
             accounts[account.account_id] = account

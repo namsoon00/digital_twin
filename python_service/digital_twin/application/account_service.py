@@ -74,6 +74,8 @@ class AccountApplicationService:
             account.quiet_hours_timezone = existing.quiet_hours_timezone
         if missing("messageDeliveryLevel", "message_delivery_level"):
             account.message_delivery_level = existing.message_delivery_level
+        if missing("notificationDetailLevel", "notification_detail_level"):
+            account.notification_detail_level = existing.notification_detail_level
         if missing("investmentStrategyProfile", "investment_strategy_profile"):
             account.investment_strategy_profile = existing.investment_strategy_profile
         return account

@@ -335,6 +335,8 @@ def sanitized_account(account) -> Dict[str, object]:
         "enabled": account.enabled,
         "messageDeliveryLevel": account.message_delivery_profile().get("level"),
         "messageDeliveryLevelLabel": account.message_delivery_profile().get("label"),
+        "notificationDetailLevel": account.notification_detail_profile().get("level"),
+        "notificationDetailLevelLabel": account.notification_detail_profile().get("label"),
     }
 
 
@@ -432,6 +434,8 @@ def admin_preview_config() -> Dict[str, object]:
                     {"key": "clientSecret", "label": "Toss Secret Key", "type": "secret", "masked": True},
                     {"key": "accountSeq", "label": "Toss 계좌 순번", "type": "text", "masked": True},
                     {"key": "watchlistSymbols", "label": "관심 종목", "type": "symbols"},
+                    {"key": "messageDeliveryLevel", "label": "알림 표현", "type": "select", "options": ["absoluteBeginner", "beginner", "intermediate", "advanced"], "default": "absoluteBeginner"},
+                    {"key": "notificationDetailLevel", "label": "알림 정보량", "type": "select", "options": ["concise", "standard", "full"], "default": "concise"},
                     {"key": "enabled", "label": "모니터링 사용", "type": "toggle", "default": True},
                 ],
             },

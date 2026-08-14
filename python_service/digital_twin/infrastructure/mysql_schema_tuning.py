@@ -439,6 +439,11 @@ MYSQL_OPERATIONAL_COLUMNS: Dict[str, Sequence[MySQLColumnDefinition]] = {
     "service_accounts": (
         MySQLColumnDefinition(
             "service_accounts",
+            "notification_detail_level",
+            "VARCHAR(32) NOT NULL DEFAULT 'concise'",
+        ),
+        MySQLColumnDefinition(
+            "service_accounts",
             "investment_strategy_profile",
             "VARCHAR(64) NOT NULL DEFAULT 'balanced'",
         ),

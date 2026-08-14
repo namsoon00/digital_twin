@@ -274,13 +274,19 @@ class InvestmentCalendarCandidateService:
         if not starts_at:
             raise ValueError("날짜가 없는 후보는 startsAt을 지정해야 승인할 수 있습니다.")
         account_ids = payload.get("accountIds") if "accountIds" in payload else None
-        event_payload = candidate.to_calendar_payload(starts_at=starts_at, account_ids=account_ids)
+        timezone_name = clean_text(payload.get("timezone") or candidate.timezone or "Asia/Seoul", 80)
+        event_payload = candidate.to_calendar_payload(
+            starts_at=starts_at,
+            account_ids=account_ids,
+            timezone_name=timezone_name,
+        )
         candidate_payload = candidate.payload if isinstance(candidate.payload, dict) else {}
         if candidate_payload.get("autoDetected"):
             self.apply_schedule_confirmation(event_payload, candidate, payload)
             refreshed_candidate = candidate.to_dict()
             refreshed_candidate.update({
                 "startsAt": event_payload.get("startsAt"),
+                "timezone": event_payload.get("timezone"),
                 "allDay": False,
                 "source": event_payload.get("source"),
                 "sourceUrl": event_payload.get("sourceUrl"),
@@ -323,6 +329,8 @@ class InvestmentCalendarCandidateService:
             "originalSourceUrl": candidate.source_url,
             "originalScheduleState": original.get("scheduleState") or "estimated",
             "scheduleState": "confirmed",
+            "timeState": "userConfirmed",
+            "timeSource": "calendar-candidate-review",
             "reviewRequired": False,
             "reviewReason": "",
             "reminderEnabled": True,

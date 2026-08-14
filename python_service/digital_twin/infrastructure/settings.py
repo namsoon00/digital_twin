@@ -20,6 +20,7 @@ DEFAULT_DATA_DIR = ROOT_DIR / "data"
 
 TEXT_SETTING_KEYS = [
     "appTheme",
+    "appTimezone",
     "watchlistSymbols",
     "mysqlUrl",
     "mysqlHost",
@@ -635,6 +636,7 @@ TEXT_SETTING_KEYS = [
     "investmentCalendarAutoExtractEnabled",
     "investmentCalendarAutoExtractRegisterUndated",
     "investmentCalendarAutoExtractReviewEnabled",
+    "investmentCalendarCandidateDefaultTime",
     "investmentCalendarAiResearchEnabled",
     "investmentCalendarAiResearchRunCollection",
     "investmentCalendarAiResearchEvidenceLimit",
@@ -987,6 +989,7 @@ def runtime_settings(fast_operational_read: bool = False) -> Dict[str, str]:
 
     settings = {
         "appTheme": value("appTheme", "APP_THEME", "light"),
+        "appTimezone": value("appTimezone", "APP_TIMEZONE", "Asia/Seoul"),
         "watchlistSymbols": value("watchlistSymbols", "WATCHLIST_SYMBOLS", "TSLA,AAPL,NVDA,000660"),
         "mysqlUrl": value("mysqlUrl", "MYSQL_URL", ""),
         "mysqlHost": value("mysqlHost", "MYSQL_HOST", "127.0.0.1"),
@@ -2284,6 +2287,7 @@ def runtime_settings(fast_operational_read: bool = False) -> Dict[str, str]:
         "investmentCalendarAutoExtractEnabled": value("investmentCalendarAutoExtractEnabled", "INVESTMENT_CALENDAR_AUTO_EXTRACT_ENABLED", "1"),
         "investmentCalendarAutoExtractRegisterUndated": value("investmentCalendarAutoExtractRegisterUndated", "INVESTMENT_CALENDAR_AUTO_EXTRACT_REGISTER_UNDATED", "0"),
         "investmentCalendarAutoExtractReviewEnabled": value("investmentCalendarAutoExtractReviewEnabled", "INVESTMENT_CALENDAR_AUTO_EXTRACT_REVIEW_ENABLED", "1"),
+        "investmentCalendarCandidateDefaultTime": value("investmentCalendarCandidateDefaultTime", "INVESTMENT_CALENDAR_CANDIDATE_DEFAULT_TIME", "09:00"),
         "investmentCalendarAiResearchEnabled": value("investmentCalendarAiResearchEnabled", "INVESTMENT_CALENDAR_AI_RESEARCH_ENABLED", "1"),
         "investmentCalendarAiResearchRunCollection": value("investmentCalendarAiResearchRunCollection", "INVESTMENT_CALENDAR_AI_RESEARCH_RUN_COLLECTION", "1"),
         "investmentCalendarAiResearchEvidenceLimit": value("investmentCalendarAiResearchEvidenceLimit", "INVESTMENT_CALENDAR_AI_RESEARCH_EVIDENCE_LIMIT", "120"),

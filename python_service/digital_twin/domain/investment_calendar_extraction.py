@@ -5,7 +5,7 @@ from datetime import datetime, timedelta, timezone
 from typing import Dict, Iterable, List, Tuple
 from urllib.parse import urlparse
 
-from .investment_calendar import calendar_timezone_for, normalized_event_markets, utc_iso
+from .investment_calendar import calendar_timezone_for, event_timezone, normalized_event_markets, utc_iso
 from .portfolio import utc_now_iso
 
 
@@ -360,25 +360,99 @@ def parse_date_from_text(text: str, reference: datetime = None):
     normalized = clean_text(text, 5000)
     match = re.search(r"(20\d{2})[-./년]\s*(\d{1,2})[-./월]\s*(\d{1,2})", normalized)
     if match:
-        return parse_year_month_day(int(match.group(1)), int(match.group(2)), int(match.group(3)))
+        return apply_text_clock(
+            parse_year_month_day(int(match.group(1)), int(match.group(2)), int(match.group(3))),
+            normalized,
+        )
     match = re.search(r"(\d{1,2})\s*월\s*(\d{1,2})\s*일", normalized)
     if match:
         parsed = parse_year_month_day(reference.year, int(match.group(1)), int(match.group(2)))
         if parsed and parsed < reference - timedelta(days=2):
             parsed = parse_year_month_day(reference.year + 1, int(match.group(1)), int(match.group(2)))
-        return parsed
+        return apply_text_clock(parsed, normalized)
     match = re.search(r"\b(\d{1,2})[/-](\d{1,2})\b", normalized)
     if match:
         parsed = parse_year_month_day(reference.year, int(match.group(1)), int(match.group(2)))
         if parsed and parsed < reference - timedelta(days=2):
             parsed = parse_year_month_day(reference.year + 1, int(match.group(1)), int(match.group(2)))
-        return parsed
+        return apply_text_clock(parsed, normalized)
     quarter = re.search(r"(20\d{2})\s*(?:년)?\s*(?:q([1-4])|([1-4])분기)", normalized, re.IGNORECASE)
     if quarter:
         q = int(quarter.group(2) or quarter.group(3))
         month = {1: 3, 2: 6, 3: 9, 4: 12}[q]
         return parse_year_month_day(int(quarter.group(1)), month, 30)
     return None
+
+
+def text_clock(value: object):
+    text = clean_text(value, 5000)
+    match = re.search(
+        r"(?:(오전|오후)\s*)?(\d{1,2}):(\d{2})(?::\d{2})?\s*(a\.?m\.?|p\.?m\.?|오전|오후)?",
+        text,
+        re.IGNORECASE,
+    )
+    if not match:
+        return None
+    hour = int(match.group(2))
+    minute = int(match.group(3))
+    marker = str(match.group(1) or match.group(4) or "").casefold().replace(".", "")
+    if marker in {"오후", "pm"} and hour < 12:
+        hour += 12
+    if marker in {"오전", "am"} and hour == 12:
+        hour = 0
+    if hour > 23 or minute > 59:
+        return None
+    return hour, minute
+
+
+def apply_text_clock(value, source: object):
+    clock = text_clock(source)
+    if not value or not clock:
+        return value
+    return value.replace(hour=clock[0], minute=clock[1], second=0, microsecond=0)
+
+
+def source_time_metadata(value: object) -> Tuple[bool, bool]:
+    text = clean_text(value, 5000)
+    explicit = text_clock(text) is not None
+    absolute = bool(explicit and re.search(r"(?:Z|[+-]\d{2}:?\d{2})\s*$", text, re.IGNORECASE))
+    return explicit, absolute
+
+
+def normalized_clock(value: object, fallback: str = "09:00") -> Tuple[int, int]:
+    match = re.fullmatch(r"(\d{1,2}):(\d{2})", clean_text(value, 20))
+    if not match:
+        match = re.fullmatch(r"(\d{1,2}):(\d{2})", fallback)
+    hour = int(match.group(1))
+    minute = int(match.group(2))
+    if hour > 23 or minute > 59:
+        return 9, 0
+    return hour, minute
+
+
+def candidate_schedule_datetime(
+    parsed: datetime,
+    event_timezone_name: str,
+    display_timezone_name: str,
+    default_time: str,
+    explicit_time: bool,
+    absolute_time: bool,
+):
+    if not parsed:
+        return None
+    if explicit_time and absolute_time:
+        return parsed
+    local_date = parsed.astimezone(KST).date()
+    hour, minute = (parsed.hour, parsed.minute) if explicit_time else normalized_clock(default_time)
+    timezone_name = event_timezone_name if explicit_time else display_timezone_name
+    return datetime(
+        local_date.year,
+        local_date.month,
+        local_date.day,
+        hour,
+        minute,
+        tzinfo=event_timezone(timezone_name),
+    )
 
 
 def parse_structured_date(value: object, reference: datetime = None):
@@ -404,12 +478,18 @@ def event_date_from_item(item: Dict[str, object], text: str, reference: datetime
         for key in STRUCTURED_DATE_KEYS:
             parsed = parse_structured_date(container.get(key), reference)
             if parsed:
-                return parsed, key
+                explicit_time, absolute_time = source_time_metadata(container.get(key))
+                return parsed, key, explicit_time, absolute_time
     parsed = parse_date_from_text(text, reference)
-    return parsed, "text" if parsed else ""
+    explicit_time, absolute_time = source_time_metadata(text)
+    return parsed, "text" if parsed else "", explicit_time, absolute_time
 
 
 def structured_calendar_dates(value: object, reference: datetime = None) -> List[datetime]:
+    return [item[0] for item in structured_calendar_schedules(value, reference)]
+
+
+def structured_calendar_schedules(value: object, reference: datetime = None) -> List[Tuple[datetime, bool, bool]]:
     values = value if isinstance(value, (list, tuple, set)) else [value]
     dates = []
     seen = set()
@@ -421,7 +501,8 @@ def structured_calendar_dates(value: object, reference: datetime = None) -> List
         if key in seen:
             continue
         seen.add(key)
-        dates.append(parsed)
+        explicit_time, absolute_time = source_time_metadata(raw)
+        dates.append((parsed, explicit_time, absolute_time))
     return dates
 
 
@@ -452,6 +533,7 @@ class CalendarEventCandidate:
     starts_at: str
     status: str
     importance: int
+    all_day: bool = False
     symbols: List[str] = field(default_factory=list)
     markets: List[str] = field(default_factory=list)
     timezone: str = "Asia/Seoul"
@@ -472,7 +554,7 @@ class CalendarEventCandidate:
             "eventType": self.event_type,
             "startsAt": self.starts_at,
             "timezone": self.timezone,
-            "allDay": True,
+            "allDay": self.all_day,
             "status": self.status,
             "importance": self.importance,
             "symbols": list(self.symbols or []),
@@ -496,7 +578,7 @@ class CalendarEventCandidate:
             "eventType": self.event_type,
             "startsAt": self.starts_at,
             "timezone": self.timezone,
-            "allDay": True,
+            "allDay": self.all_day,
             "status": "pending",
             "reviewReason": self.review_reason or "needsReview",
             "importance": self.importance,
@@ -612,6 +694,8 @@ def calendar_candidate_from_research_item(
     include_review: bool = False,
     force_review: bool = False,
     feedback: Dict[str, object] = None,
+    display_timezone: str = "Asia/Seoul",
+    default_time: str = "09:00",
 ):
     if not isinstance(item, dict):
         return None
@@ -632,16 +716,13 @@ def calendar_candidate_from_research_item(
         return None
     reference = parse_reference_datetime(item)
     event_type = str(pattern["eventType"])
-    event_date, date_source = event_date_from_item(item, text, reference)
+    event_date, date_source, explicit_time, absolute_time = event_date_from_item(item, text, reference)
     missing_date = not event_date
-    if missing_date and not register_undated:
-        event_date_utc = ""
-    elif not event_date:
+    if not event_date and register_undated:
         event_date = reference
-        event_date_utc = utc_iso(event_date)
         date_source = "reference"
-    else:
-        event_date_utc = utc_iso(event_date)
+        explicit_time = False
+        absolute_time = False
     readiness_state, readiness_reason = readiness_for(
         item,
         matched_keywords,
@@ -663,6 +744,18 @@ def calendar_candidate_from_research_item(
     symbols = [symbol] if symbol else []
     markets = markets_for_candidate(item, pattern, text)
     timezone_name = calendar_timezone_for(symbols, markets)
+    scheduled_at = candidate_schedule_datetime(
+        event_date,
+        timezone_name,
+        display_timezone,
+        default_time,
+        explicit_time,
+        absolute_time,
+    )
+    event_date_utc = utc_iso(scheduled_at) if scheduled_at and (not missing_date or register_undated) else ""
+    display_zone = event_timezone(display_timezone)
+    event_local_time = scheduled_at.astimezone(display_zone).strftime("%H:%M") if scheduled_at else ""
+    time_state = "sourceProvided" if explicit_time else ("estimatedDefault" if scheduled_at else "missing")
     status = "active" if readiness_state == "ready" and event_date and event_date >= reference - timedelta(days=2) else "tentative"
     if readiness_state != "ready":
         status = "needsReview"
@@ -691,7 +784,10 @@ def calendar_candidate_from_research_item(
         "officialSource": official,
         "sourceParser": parser,
         "dateSource": date_source,
-        "eventLocalDate": event_date.date().isoformat() if event_date else "",
+        "eventLocalDate": scheduled_at.astimezone(event_timezone(timezone_name)).date().isoformat() if scheduled_at else "",
+        "eventLocalTime": event_local_time,
+        "timeSource": date_source if explicit_time else "settings.investmentCalendarCandidateDefaultTime",
+        "timeState": time_state,
         "structuredEventType": structured_type,
         "scheduleState": "dateConfirmed" if official else "estimated",
         "reviewRequired": bool(review_reason),
@@ -706,6 +802,7 @@ def calendar_candidate_from_research_item(
         starts_at=event_date_utc,
         status=status,
         importance=int(pattern["importance"]),
+        all_day=not bool(scheduled_at),
         symbols=symbols,
         markets=markets,
         timezone=timezone_name,
@@ -724,6 +821,8 @@ def structured_calendar_candidates_from_research_item(
     item: Dict[str, object],
     force_review: bool = False,
     feedback: Dict[str, object] = None,
+    display_timezone: str = "Asia/Seoul",
+    default_time: str = "09:00",
 ) -> List[CalendarEventCandidate]:
     """Create review-first candidates from structured provider calendar fields.
 
@@ -742,6 +841,7 @@ def structured_calendar_candidates_from_research_item(
     evidence_id = clean_text(item.get("evidenceId") or item.get("id"), 191)
     symbol = clean_text(item.get("symbol"), 24).upper()
     markets = markets_for_candidate(item, {"markets": []}, source)
+    timezone_name = calendar_timezone_for([symbol] if symbol else [], markets)
     official = official_source(item)
     candidates = []
     seen = set()
@@ -750,10 +850,21 @@ def structured_calendar_candidates_from_research_item(
             for field in definition["dateKeys"]:
                 if field not in calendar:
                     continue
-                for event_date in structured_calendar_dates(calendar.get(field), reference):
+                for event_date, explicit_time, absolute_time in structured_calendar_schedules(calendar.get(field), reference):
                     if event_date < reference - timedelta(days=2):
                         continue
-                    starts_at = utc_iso(event_date)
+                    scheduled_at = candidate_schedule_datetime(
+                        event_date,
+                        timezone_name,
+                        display_timezone,
+                        default_time,
+                        explicit_time,
+                        absolute_time,
+                    )
+                    starts_at = utc_iso(scheduled_at)
+                    display_zone = event_timezone(display_timezone)
+                    event_local_time = scheduled_at.astimezone(display_zone).strftime("%H:%M")
+                    time_state = "sourceProvided" if explicit_time else "estimatedDefault"
                     identity = "|".join([definition["eventType"], definition["schedulePhase"], starts_at, symbol])
                     if identity in seen:
                         continue
@@ -794,7 +905,10 @@ def structured_calendar_candidates_from_research_item(
                         "officialSource": official,
                         "sourceParser": source_parser(item),
                         "dateSource": "calendar." + field,
-                        "eventLocalDate": event_date.date().isoformat(),
+                        "eventLocalDate": scheduled_at.astimezone(event_timezone(timezone_name)).date().isoformat(),
+                        "eventLocalTime": event_local_time,
+                        "timeSource": "calendar." + field if explicit_time else "settings.investmentCalendarCandidateDefaultTime",
+                        "timeState": time_state,
                         "structuredEventType": definition["eventType"],
                         "schedulePhase": definition["schedulePhase"],
                         "scheduleState": "confirmed" if official else "estimated",
@@ -810,9 +924,10 @@ def structured_calendar_candidates_from_research_item(
                         starts_at=starts_at,
                         status="active" if readiness_state == "ready" else "needsReview",
                         importance=int(definition["importance"]),
+                        all_day=False,
                         symbols=[symbol] if symbol else [],
                         markets=markets[:8],
-                        timezone=calendar_timezone_for([symbol] if symbol else [], markets),
+                        timezone=timezone_name,
                         source=source,
                         source_url=source_url,
                         notes=notes,
@@ -829,6 +944,8 @@ def calendar_candidates_from_research_items(
     items: Iterable[Dict[str, object]],
     register_undated: bool = False,
     feedback: Dict[str, object] = None,
+    display_timezone: str = "Asia/Seoul",
+    default_time: str = "09:00",
 ) -> List[CalendarEventCandidate]:
     candidates = []
     seen = set()
@@ -837,8 +954,15 @@ def calendar_candidates_from_research_items(
             item,
             register_undated,
             feedback=feedback,
+            display_timezone=display_timezone,
+            default_time=default_time,
         )]
-        detected.extend(structured_calendar_candidates_from_research_item(item, feedback=feedback))
+        detected.extend(structured_calendar_candidates_from_research_item(
+            item,
+            feedback=feedback,
+            display_timezone=display_timezone,
+            default_time=default_time,
+        ))
         for candidate in detected:
             if not candidate or candidate.review_required() or candidate.event_id in seen:
                 continue
@@ -852,6 +976,8 @@ def calendar_candidate_sets_from_research_items(
     register_undated: bool = False,
     force_review: bool = False,
     feedback: Dict[str, object] = None,
+    display_timezone: str = "Asia/Seoul",
+    default_time: str = "09:00",
 ) -> Dict[str, List[CalendarEventCandidate]]:
     ready = []
     review = []
@@ -864,8 +990,16 @@ def calendar_candidate_sets_from_research_items(
             include_review=True,
             force_review=force_review,
             feedback=feedback,
+            display_timezone=display_timezone,
+            default_time=default_time,
         )]
-        detected.extend(structured_calendar_candidates_from_research_item(item, force_review=force_review, feedback=feedback))
+        detected.extend(structured_calendar_candidates_from_research_item(
+            item,
+            force_review=force_review,
+            feedback=feedback,
+            display_timezone=display_timezone,
+            default_time=default_time,
+        ))
         for candidate in detected:
             if not candidate:
                 continue

@@ -733,6 +733,42 @@ class InvestmentCalendarServiceTests(unittest.TestCase):
         self.assertTrue(all(item.starts_at for item in candidates["review"]))
         self.assertTrue(all(item.review_reason == "sourceNeedsVerification" for item in candidates["review"]))
         self.assertTrue(all(item.payload["scheduleState"] == "estimated" for item in candidates["review"]))
+        self.assertTrue(all(item.payload["timeState"] == "estimatedDefault" for item in candidates["review"]))
+        self.assertTrue(all(item.payload["eventLocalTime"] == "09:00" for item in candidates["review"]))
+        self.assertTrue(all(not item.all_day for item in candidates["review"]))
+
+    def test_date_only_calendar_candidate_uses_configured_default_time_and_timezone(self):
+        evidence = self.scheduled_yfinance_evidence().to_dict()
+
+        candidates = calendar_candidate_sets_from_research_items(
+            [evidence],
+            display_timezone="America/New_York",
+            default_time="08:30",
+        )
+
+        earnings = next(item for item in candidates["review"] if item.event_type == "earnings")
+        self.assertEqual("2026-08-05T12:30:00Z", earnings.starts_at)
+        self.assertEqual("08:30", earnings.payload["eventLocalTime"])
+        self.assertEqual("estimatedDefault", earnings.payload["timeState"])
+        self.assertEqual("settings.investmentCalendarCandidateDefaultTime", earnings.payload["timeSource"])
+
+    def test_calendar_candidate_preserves_provider_timestamp(self):
+        evidence = self.scheduled_yfinance_evidence().to_dict()
+        evidence["payload"]["calendar"] = {
+            "Earnings Date": ["2026-08-05T16:30:00-04:00"],
+        }
+
+        candidates = calendar_candidate_sets_from_research_items(
+            [evidence],
+            display_timezone="Asia/Seoul",
+            default_time="09:00",
+        )
+
+        earnings = candidates["review"][0]
+        self.assertEqual("2026-08-05T20:30:00Z", earnings.starts_at)
+        self.assertEqual("05:30", earnings.payload["eventLocalTime"])
+        self.assertEqual("sourceProvided", earnings.payload["timeState"])
+        self.assertEqual("calendar.Earnings Date", earnings.payload["timeSource"])
 
     def test_structured_provider_calendar_preserves_target_market(self):
         evidence = self.scheduled_yfinance_evidence().to_dict()
@@ -770,13 +806,19 @@ class InvestmentCalendarServiceTests(unittest.TestCase):
             now=lambda: datetime(2026, 7, 20, tzinfo=timezone.utc),
         )
 
-        result = service.approve_candidate("estimated-earnings-candidate", {"startsAt": "2026-07-30T10:00"})
+        result = service.approve_candidate("estimated-earnings-candidate", {
+            "startsAt": "2026-07-30T10:00",
+            "timezone": "America/New_York",
+        })
 
         self.assertEqual("registered", result["candidate"]["status"])
         event = calendar_store.get("estimated-earnings-event")
         self.assertFalse(event.all_day)
+        self.assertEqual("2026-07-30T14:00:00Z", event.starts_at)
+        self.assertEqual("America/New_York", event.timezone)
         self.assertFalse(event.payload["officialSource"])
         self.assertEqual("confirmed", event.payload["scheduleState"])
+        self.assertEqual("userConfirmed", event.payload["timeState"])
         self.assertEqual("user-confirmed", event.payload["scheduleVerification"])
         self.assertEqual("사용자 확인 일정", event.source)
         self.assertEqual("", event.source_url)
@@ -938,7 +980,10 @@ class InvestmentCalendarServiceTests(unittest.TestCase):
         self.assertEqual("adrListing", saved.event_type)
         self.assertEqual("sec-edgar", saved.payload["sourceParser"])
         self.assertEqual("eventDate", saved.payload["dateSource"])
-        self.assertEqual("2026-08-20T04:00:00Z", saved.starts_at)
+        self.assertEqual("2026-08-20T00:00:00Z", saved.starts_at)
+        self.assertFalse(saved.all_day)
+        self.assertEqual("09:00", saved.payload["eventLocalTime"])
+        self.assertEqual("estimatedDefault", saved.payload["timeState"])
 
     def test_rejected_feedback_can_demote_borderline_candidate_to_review(self):
         item = {

@@ -153,7 +153,12 @@ class InvestmentCalendarReviewCandidate:
             "reviewNote": payload["review_note"],
         }
 
-    def to_calendar_payload(self, starts_at: str = "", account_ids: Iterable[str] = None) -> Dict[str, object]:
+    def to_calendar_payload(
+        self,
+        starts_at: str = "",
+        account_ids: Iterable[str] = None,
+        timezone_name: str = "",
+    ) -> Dict[str, object]:
         body = dict(self.payload or {})
         body.update({
             "reviewCandidateId": self.candidate_id,
@@ -166,7 +171,7 @@ class InvestmentCalendarReviewCandidate:
             "title": self.title,
             "eventType": self.event_type,
             "startsAt": clean_text(starts_at or self.starts_at, 80),
-            "timezone": self.timezone or "Asia/Seoul",
+            "timezone": clean_text(timezone_name or self.timezone or "Asia/Seoul", 80),
             "allDay": False,
             "status": "active",
             "importance": self.importance,

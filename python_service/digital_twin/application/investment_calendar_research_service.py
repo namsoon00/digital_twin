@@ -220,6 +220,8 @@ class InvestmentCalendarResearchRecommendationService:
             register_undated=False,
             force_review=True,
             feedback=self.feedback(),
+            display_timezone=str(self.settings.get("appTimezone") or "Asia/Seoul"),
+            default_time=str(self.settings.get("investmentCalendarCandidateDefaultTime") or "09:00"),
         )
         candidates = list(candidate_sets.get("review") or [])[: self.candidate_limit()]
         stored = 0

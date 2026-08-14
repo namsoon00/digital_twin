@@ -57,6 +57,16 @@ class RuntimeResilienceTests(unittest.TestCase):
     def test_coingecko_collection_interval_is_a_persistable_runtime_setting(self):
         self.assertIn("externalCoinGeckoFetchIntervalMinutes", TEXT_SETTING_KEYS)
 
+    def test_calendar_display_timezone_and_default_time_are_persistable_settings(self):
+        self.assertIn("appTimezone", TEXT_SETTING_KEYS)
+        self.assertIn("investmentCalendarCandidateDefaultTime", TEXT_SETTING_KEYS)
+        public = public_runtime_settings({
+            "appTimezone": "America/New_York",
+            "investmentCalendarCandidateDefaultTime": "08:30",
+        })
+        self.assertEqual("America/New_York", public["appTimezone"])
+        self.assertEqual("08:30", public["investmentCalendarCandidateDefaultTime"])
+
     def test_cache_only_reasoning_path_reuses_stale_external_signals_without_fetching(self):
         class MemoryCache:
             def __init__(self):

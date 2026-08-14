@@ -218,7 +218,12 @@ class InvestmentCalendarDiscoveryService:
 
     def save_discovered_candidates(self, items: Iterable[object]) -> Dict[str, object]:
         rows = [evidence_to_dict(item) for item in items or []]
-        sets = calendar_candidate_sets_from_research_items(rows, feedback=self.feedback())
+        sets = calendar_candidate_sets_from_research_items(
+            rows,
+            feedback=self.feedback(),
+            display_timezone=str(self.settings.get("appTimezone") or "Asia/Seoul"),
+            default_time=str(self.settings.get("investmentCalendarCandidateDefaultTime") or "09:00"),
+        )
         active_count = 0
         tentative_count = 0
         review_count = 0

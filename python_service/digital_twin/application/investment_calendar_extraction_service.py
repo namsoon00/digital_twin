@@ -101,6 +101,8 @@ class InvestmentCalendarExtractionService:
             self.event_items(event),
             register_undated=self.register_undated(),
             feedback=self.feedback(),
+            display_timezone=str(self.settings.get("appTimezone") or "Asia/Seoul"),
+            default_time=str(self.settings.get("investmentCalendarCandidateDefaultTime") or "09:00"),
         )
         candidates = candidate_sets["ready"]
         review_candidates = candidate_sets["review"] if self.review_enabled() else []

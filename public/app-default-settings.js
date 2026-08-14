@@ -1,6 +1,7 @@
 (function () {
   window.OrbitAlphaDefaultSettings = {
     appTheme: "light",
+    appTimezone: "Asia/Seoul",
     watchlistSymbols: "TSLA,AAPL,NVDA,000660",
     tossApiBaseUrl: "https://openapi.tossinvest.com",
     tossClientId: "",
@@ -122,6 +123,7 @@
     investmentCalendarAutoExtractEnabled: "1",
     investmentCalendarAutoExtractRegisterUndated: "0",
     investmentCalendarAutoExtractReviewEnabled: "1",
+    investmentCalendarCandidateDefaultTime: "09:00",
     investmentCalendarAiResearchEnabled: "1",
     investmentCalendarAiResearchRunCollection: "1",
     investmentCalendarAiResearchEvidenceLimit: "120",

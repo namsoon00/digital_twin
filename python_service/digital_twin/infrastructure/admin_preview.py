@@ -53,6 +53,7 @@ def display_key(key: object) -> str:
 
 PUBLIC_SETTING_KEYS = [
     "appTheme",
+    "appTimezone",
     "watchlistSymbols",
     "mysqlHost",
     "mysqlPort",
@@ -198,6 +199,7 @@ PUBLIC_SETTING_KEYS = [
     "investmentCalendarAiResearchRunCollection",
     "investmentCalendarAiResearchEvidenceLimit",
     "investmentCalendarAiResearchCandidateLimit",
+    "investmentCalendarCandidateDefaultTime",
     "investmentCalendarDiscoveryEnabled",
     "investmentCalendarDiscoveryIntervalHours",
     "investmentCalendarDiscoveryMaxSymbols",

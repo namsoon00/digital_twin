@@ -414,9 +414,22 @@ function checkWorkflowConsoleContract() {
       code.indexOf('window.prompt("확인할 발표 날짜와 시각') < 0 &&
       styles.indexOf(".calendar-candidate-confirm-form") >= 0 &&
       styles.indexOf(".calendar-candidate-confirm-fields") >= 0 &&
-      indexHtml.indexOf("styles.css?v=20260815-request-feedback-v1") >= 0 &&
-      indexHtml.indexOf("app.js?v=20260815-request-feedback-v1") >= 0,
+      indexHtml.indexOf("styles.css?v=20260815-calendar-timezone-v1") >= 0 &&
+      indexHtml.indexOf("app-default-settings.js?v=20260815-calendar-timezone-v1") >= 0 &&
+      indexHtml.indexOf("app.js?v=20260815-calendar-timezone-v1") >= 0,
     "캘린더 후보 날짜·시각 확인 레이어 또는 오버레이 스크롤 복원 계약이 없습니다."
+  );
+  assertOk(
+    code.indexOf("function currentAppTimezone") >= 0 &&
+      code.indexOf("function appDateTimeParts") >= 0 &&
+      code.indexOf('renderSettingSelect("appTimezone", "표시 시간대"') >= 0 &&
+      code.indexOf('renderSettingField("investmentCalendarCandidateDefaultTime", "캘린더 후보 기본 시각"') >= 0 &&
+      code.indexOf('timezone: currentAppTimezone()') >= 0 &&
+      code.indexOf('value === "sourceProvided"') >= 0 &&
+      code.indexOf('value === "estimatedDefault"') >= 0 &&
+      code.indexOf('value === "userConfirmed"') >= 0 &&
+      code.indexOf('join(":") + " (" + timezone') < 0,
+    "캘린더 후보 시각 상태 또는 앱 표시 시간대 설정 계약이 없습니다."
   );
   assertOk(
     indexHtml.indexOf('id="app-request-progress"') >= 0 &&
@@ -460,9 +473,10 @@ function checkWorkflowConsoleContract() {
   );
   assertOk(
     code.indexOf('return raw + " (시각 미기록)"') >= 0 &&
-      code.indexOf('date.getFullYear()') >= 0 &&
-      code.indexOf('pad(date.getSeconds())') >= 0 &&
-      code.indexOf('resolvedOptions().timeZone') >= 0 &&
+      code.indexOf('timeZone: currentAppTimezone()') >= 0 &&
+      code.indexOf('parts.year') >= 0 &&
+      code.indexOf('parts.second') >= 0 &&
+      code.indexOf('resolvedOptions().timeZone') < 0 &&
       styles.indexOf("List values are audit data") >= 0 &&
       /\.oa-reason-cell strong,[\s\S]*text-overflow: clip !important;[\s\S]*white-space: normal !important;[\s\S]*-webkit-line-clamp: unset !important;/.test(styles),
     "목록의 전체 날짜와 잘림 없는 데이터 노출 계약이 없습니다."

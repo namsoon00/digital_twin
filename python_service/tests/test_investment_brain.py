@@ -926,6 +926,26 @@ class InvestmentBrainTest(unittest.TestCase):
             "selectedHypothesisId": brain["hypothesisSet"]["hypotheses"][0]["hypothesisId"],
             "inferenceGenerationId": "generation-1",
             "unresolvedQuestions": brain["selfQuestions"],
+            "investmentView": "회복 가능성과 위험을 함께 봅니다.",
+            "executionDecision": "현재는 보유합니다.",
+            "followUpConditions": [{
+                "conditionId": "follow-up:price-recovery",
+                "field": "ma20Distance",
+                "operator": ">=",
+                "threshold": 0,
+                "purpose": "strengthen",
+                "status": "pending",
+                "observable": True,
+            }],
+            "unsupportedFollowUps": [{
+                "conditionId": "follow-up:unsupported-flow",
+                "field": "foreignNetVolume",
+                "operator": ">",
+                "threshold": 0,
+                "purpose": "strengthen",
+                "status": "unobservable",
+                "observable": False,
+            }],
             "researchPlan": brain["researchPlan"],
             "researchAudit": {
                 "runId": "research-run-1",
@@ -950,6 +970,8 @@ class InvestmentBrainTest(unittest.TestCase):
         self.assertEqual("episode-1", restored.episode_id)
         self.assertEqual(2, len(restored.hypothesis_set.hypotheses))
         self.assertTrue(restored.hypothesis_set.decision_guardrails)
+        self.assertEqual("현재는 보유합니다.", restored.execution_decision)
+        self.assertEqual("pending", restored.follow_up_conditions[0]["status"])
         graph = PortfolioOntology("account-1")
         add_investment_brain_concepts(graph, "account-1", [restored.to_dict()], [{
             "proposalId": "proposal-1",
@@ -963,6 +985,7 @@ class InvestmentBrainTest(unittest.TestCase):
         classes = {item.properties.get("tboxClass") for item in graph.entities}
         relation_types = {item.relation_type for item in graph.relations}
         self.assertIn("DecisionEpisode", classes)
+        self.assertIn("DecisionFollowUpCondition", classes)
         self.assertIn("HypothesisFamily", classes)
         self.assertIn("CompetingHypothesis", classes)
         self.assertIn("SELECTS_HYPOTHESIS", relation_types)
@@ -974,6 +997,7 @@ class InvestmentBrainTest(unittest.TestCase):
         self.assertNotIn("RejectedClaim", classes)
         self.assertIn("PRODUCES_VERIFICATION_RESULT", relation_types)
         self.assertIn("PROPOSES_HYPOTHESIS_FOR", relation_types)
+        self.assertIn("TRACKS_FOLLOW_UP", relation_types)
 
     def test_question_service_uses_typedb_and_persists_episode(self):
         episode_store = FakeDecisionEpisodeStore()

@@ -1463,6 +1463,26 @@ MYSQL_SCHEMA = [
     ) ENGINE=InnoDB DEFAULT CHARSET=utf8mb4 COLLATE=utf8mb4_unicode_ci
     """,
     """
+    CREATE TABLE IF NOT EXISTS investment_decision_follow_ups (
+        condition_id VARCHAR(191) PRIMARY KEY,
+        episode_id VARCHAR(191) NOT NULL,
+        account_id VARCHAR(191) NOT NULL DEFAULT '',
+        symbol VARCHAR(64) NOT NULL DEFAULT '',
+        field_name VARCHAR(120) NOT NULL DEFAULT '',
+        comparison_operator VARCHAR(8) NOT NULL DEFAULT '',
+        threshold_value DOUBLE NOT NULL DEFAULT 0,
+        purpose VARCHAR(32) NOT NULL DEFAULT 'switch',
+        status VARCHAR(32) NOT NULL DEFAULT 'pending',
+        observable TINYINT(1) NOT NULL DEFAULT 1,
+        payload_json LONGTEXT NOT NULL,
+        created_at VARCHAR(40) NOT NULL,
+        updated_at VARCHAR(40) NOT NULL,
+        transitioned_at VARCHAR(40) NOT NULL DEFAULT '',
+        KEY idx_decision_follow_ups_subject_status (account_id, symbol, status, updated_at),
+        KEY idx_decision_follow_ups_episode (episode_id, status, updated_at)
+    ) ENGINE=InnoDB DEFAULT CHARSET=utf8mb4 COLLATE=utf8mb4_unicode_ci
+    """,
+    """
     CREATE TABLE IF NOT EXISTS investment_hypothesis_lifecycle_states (
         lifecycle_key VARCHAR(255) PRIMARY KEY,
         lifecycle_id VARCHAR(191) NOT NULL DEFAULT '',

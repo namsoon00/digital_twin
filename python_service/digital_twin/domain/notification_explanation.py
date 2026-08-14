@@ -135,7 +135,7 @@ def build_notification_explanation_packet(
 
     level = str(profile["level"])
     concise = level == "concise"
-    current_limit = 3 if level == "standard" else 0
+    current_limit = 3 if level == "concise" else (4 if level == "standard" else 0)
     inference_limit = 1 if level == "concise" else (2 if level == "standard" else 0)
     company_limit = 3 if level == "standard" else 0
     warning_limit = 2 if level == "standard" else 1

@@ -1755,13 +1755,43 @@ class OntologyRuleBoxTests(unittest.TestCase):
         self.assertEqual([], violations)
         versions = {rule.rule_id: rule.version for rule in rules}
         for rule_id in {
-            "graph.aggressive.loss_recovery.add_buy_review.v1",
-            "graph.profit_momentum.hold_add_review.v1",
             "graph.instrument_profile.strategy_fit.support.v1",
             "graph.strategy_profile.loss_tolerance_breach.v1",
-            "graph.strategy_profile.aggressive_recovery_room.v1",
         }:
             self.assertEqual("v2", versions[rule_id])
+        for rule_id in {
+            "graph.aggressive.loss_recovery.add_buy_review.v1",
+            "graph.profit_momentum.hold_add_review.v1",
+        }:
+            self.assertEqual("v3", versions[rule_id])
+        self.assertEqual("v3", versions["graph.strategy_profile.aggressive_recovery_room.v1"])
+        aggressive = next(
+            rule for rule in rules
+            if rule.rule_id == "graph.strategy_profile.aggressive_recovery_room.v1"
+        )
+        evidence_profile = next(
+            condition for condition in aggressive.conditions
+            if condition.condition_id == "market-evidence-profile-eligible"
+        )
+        self.assertEqual("HAS_EVIDENCE_PROFILE", evidence_profile.relation_type)
+        self.assertEqual({"dataState": "sufficient"}, evidence_profile.target_property_filters)
+        self.assertIn("volume-confirmation", {item.condition_id for item in aggressive.conditions})
+
+    def test_microstructure_rules_persist_market_capability_guards(self):
+        rules = {rule.rule_id: rule for rule in default_graph_inference_rules()}
+        investor_rule = rules["graph.averaging_down.risk_guard.v1"]
+        investor_conditions = {item.condition_id: item for item in investor_rule.conditions}
+        self.assertIn("market-evidence-profile-eligible", investor_conditions)
+        unavailable = investor_conditions["market-evidence-investorFlow-unavailable"]
+        self.assertEqual("not", unavailable.role)
+        self.assertEqual("HAS_DATA_QUALITY", unavailable.relation_type)
+        self.assertEqual("investorFlow", unavailable.target_property_filters["field"])
+        self.assertIn("providerUnsupported", unavailable.target_property_filters["dataState"])
+
+        generic = rules["graph.profit_momentum.hold_add_review.v1"]
+        generic_ids = {item.condition_id for item in generic.conditions}
+        self.assertIn("market-evidence-profile-eligible", generic_ids)
+        self.assertNotIn("market-evidence-investorFlow-unavailable", generic_ids)
 
     def test_rulebox_admin_payload_roundtrips_to_graph(self):
         rules = default_graph_inference_rules()

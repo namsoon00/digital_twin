@@ -8,6 +8,7 @@ from .investment_research import research_evidence_from_external_signals, resear
 from .investor_flow_psychology import investor_flow_contract, investor_flow_observation, investor_flow_values_reliable
 from .macro_context import macro_context_facts
 from .market_data import number
+from .market_evidence_profiles import market_evidence_profile
 from . import news_analysis as news_domain
 from .accounts import investment_strategy_profile
 from .instrument_profiles import instrument_profile_for_position
@@ -1082,6 +1083,7 @@ def position_signal_facts(
         "trimOnTrendBreak": profile.trim_on_trend_break,
         "avoidAveragingDown": profile.avoid_averaging_down,
     })
+    facts["marketEvidenceProfile"] = market_evidence_profile(position, settings)
     research_by_id = {}
     for item in research_evidence_from_facts(symbol, facts) + research_evidence_from_external_signals(symbol, external_signals):
         research_by_id[item.evidence_id] = item.to_dict()

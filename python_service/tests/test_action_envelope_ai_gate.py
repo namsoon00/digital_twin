@@ -115,6 +115,79 @@ class ActionEnvelopeAiGateTests(unittest.TestCase):
         self.assertEqual("BUY", response.action)
         self.assertTrue(any("진입 조건" in item for item in response.validation_warnings))
 
+    def test_ai_follow_up_contract_rejects_provider_unsupported_fields(self):
+        context = entry_context()
+        context["ontologyRelationContext"]["facts"].update({
+            "currentPrice": 226.17,
+            "volumeRatio": 0.8,
+            "marketEvidenceProfile": {
+                "profileKey": "US_EQUITY",
+                "capabilities": {
+                    "pricePath": {"state": "fresh"},
+                    "volume": {"state": "fresh"},
+                    "investorFlow": {"state": "providerUnsupported"},
+                },
+                "observableFollowUpFields": ["currentPrice", "volumeRatio"],
+            },
+        })
+
+        response = validated_response_from_payload(context, {
+            "action": "BUY",
+            "summary": "가격 회복은 유효하지만 거래량 확인이 더 필요합니다.",
+            "opinion": "소액 진입을 검토합니다.",
+            "investmentView": "가격 회복은 투자 매력을 높이지만 거래 확인은 약합니다.",
+            "executionDecision": "현재는 소액 진입만 검토합니다.",
+            "evidence": ["가격 회복 관계가 성립했습니다."],
+            "counterEvidence": ["거래량은 평균보다 낮습니다."],
+            "followUpConditions": [
+                {"field": "volumeRatio", "operator": ">=", "threshold": 1, "purpose": "strengthen", "label": "평균 거래량 회복"},
+                {"field": "foreignNetVolume", "operator": ">", "threshold": 0, "purpose": "strengthen", "label": "외국인 순매수"},
+            ],
+        })
+
+        self.assertIn("투자 매력", response.investment_view)
+        self.assertIn("소액 진입", response.execution_decision)
+        self.assertEqual(["volumeRatio"], [item["field"] for item in response.follow_up_conditions])
+        self.assertEqual(["foreignNetVolume"], [item["field"] for item in response.unsupported_follow_ups])
+
+    def test_compact_message_separates_investment_view_and_current_provider_state(self):
+        context = entry_context()
+        context["notificationDetailLevel"] = "concise"
+        context["ontologyRelationContext"]["facts"].update({
+            "currentPrice": 226.17,
+            "volume": 1200000,
+            "volumeRatio": 0.8,
+            "marketEvidenceProfile": {
+                "profileKey": "US_EQUITY",
+                "capabilities": {
+                    "pricePath": {"state": "fresh"},
+                    "volume": {"state": "fresh"},
+                    "tradeFlow": {"state": "providerUnsupported"},
+                    "orderBook": {"state": "providerUnsupported"},
+                    "investorFlow": {"state": "providerUnsupported"},
+                },
+                "unavailableCapabilities": [
+                    {"label": "체결 방향", "state": "providerUnsupported"},
+                    {"label": "호가 잔량", "state": "providerUnsupported"},
+                    {"label": "투자자별 수급", "state": "providerUnsupported"},
+                ],
+            },
+        })
+        response = NotificationAIValidatedResponse(
+            action="HOLD",
+            action_label="관심 유지",
+            summary="가격 회복은 긍정적이지만 거래 확인은 약합니다.",
+            investment_view="가격 회복은 투자 매력을 높이지만 거래 확인은 약합니다.",
+            execution_decision="현재는 주문하지 않고 관심을 유지합니다.",
+            current_action_plan="현재는 주문하지 않고 관심을 유지합니다.",
+        )
+
+        message = execution_telegram_message(context, response)
+
+        self.assertIn("투자 관점", message)
+        self.assertIn("거래량", message)
+        self.assertIn("현재 공급자 미지원", message)
+
     def test_v2_execution_contract_accepts_only_input_bound_supported_causal_path(self):
         context = entry_context()
         context["notificationAiDecisionContractVersion"] = "notification-ai-decision-contract-v2"

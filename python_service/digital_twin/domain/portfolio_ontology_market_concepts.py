@@ -2,6 +2,7 @@ from typing import Dict, List
 
 from .investor_flow_psychology import INVESTOR_PARTY_FIELDS, investor_flow_contract, investor_flow_observation
 from .market_data import number
+from .market_evidence_profiles import CAPABILITY_LABELS, market_evidence_profile
 from .ontology_contracts import PortfolioOntology
 from .ontology_observation_quality import profile_for_domain
 from .ontology_schema import add_entity, add_relation
@@ -25,6 +26,90 @@ def metric_tbox_classes(tbox_class: str, field_name: str) -> List[str]:
 
 def symbol_key(position: Position) -> str:
     return str(position.symbol or position.name or "").upper().strip()
+
+
+def add_market_evidence_profile_concepts(
+    graph: PortfolioOntology,
+    stock_id: str,
+    position: Position,
+    source: str,
+    settings: Dict[str, object] = None,
+) -> Dict[str, object]:
+    """Project provider capabilities once for TypeDB and the final AI judge."""
+
+    profile = market_evidence_profile(position, settings)
+    symbol = symbol_key(position)
+    profile_id = add_entity(
+        graph,
+        "market-evidence-profile",
+        symbol,
+        (position.name or symbol) + " " + str(profile["label"]),
+        {
+            "tboxClass": profile["tboxClass"],
+            "tboxClasses": ["DataQuality", "MarketEvidenceProfile", profile["tboxClass"]],
+            "symbol": symbol,
+            "market": profile["market"],
+            "currency": profile["currency"],
+            "scope": "investment-evidence",
+            "dataScope": "market-evidence-profile",
+            "dataState": profile["dataState"],
+            "judgementEvidenceUsable": bool(profile["judgementEvidenceUsable"]),
+            "requiredCapabilities": list(profile["requiredCapabilities"]),
+            "confirmationCapabilities": list(profile["confirmationCapabilities"]),
+            "profileVersion": profile["version"],
+        },
+    )
+    relation_props = {
+        "source": "market-evidence-profile",
+        "scope": "investment-evidence",
+        "dataScope": "market-evidence-profile",
+        "dataState": profile["dataState"],
+        "evidenceRole": "context",
+        "aiInfluenceLabel": str(profile["label"]),
+    }
+    add_relation(graph, stock_id, profile_id, "HAS_EVIDENCE_PROFILE", weight=1.0, properties=relation_props)
+    for capability, payload in dict(profile.get("capabilities") or {}).items():
+        state = str(payload.get("state") or "missing")
+        # Fresh capability values already exist as price/flow observation
+        # entities. Not-applicable capabilities are profile semantics. Only a
+        # degraded or unsupported supply state needs a separate ABox node.
+        if state in {"fresh", "notApplicable"}:
+            continue
+        label = CAPABILITY_LABELS.get(capability, capability)
+        capability_id = add_entity(
+            graph,
+            "data-availability-assessment",
+            symbol + ":" + capability,
+            (position.name or symbol) + " " + label + " 공급 상태",
+            {
+                "tboxClass": "DataAvailabilityAssessment",
+                "tboxClasses": ["Observation", "DataQuality", "DataAvailabilityAssessment"],
+                "symbol": symbol,
+                "field": capability,
+                "label": label,
+                "scope": "investment-evidence",
+                "dataScope": "market-evidence-profile",
+                "dataState": state,
+                "status": state,
+                "observedFields": list(payload.get("observedFields") or []),
+                "sourceAsOf": str(payload.get("sourceAsOf") or ""),
+                "sourceFetchedAt": str(payload.get("fetchedAt") or ""),
+                "provider": str(payload.get("provider") or ""),
+                "reason": str(payload.get("reason") or ""),
+            },
+        )
+        capability_props = {
+            "source": "market-evidence-profile",
+            "field": capability,
+            "scope": "investment-evidence",
+            "dataScope": "market-evidence-profile",
+            "dataState": state,
+            "evidenceRole": "context" if state == "fresh" else "blocking",
+            "aiInfluenceLabel": label + " " + state,
+        }
+        add_relation(graph, profile_id, capability_id, "HAS_DATA_AVAILABILITY", weight=1.0, properties=capability_props)
+        add_relation(graph, stock_id, capability_id, "HAS_DATA_QUALITY", weight=1.0, properties=capability_props)
+    return profile
 
 
 def trend_observation_facts(position: Position) -> Dict[str, object]:

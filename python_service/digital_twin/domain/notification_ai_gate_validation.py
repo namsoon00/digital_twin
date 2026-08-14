@@ -4,6 +4,7 @@ from typing import Dict, List, Tuple
 
 from .accounts import message_delivery_profile, normalize_message_delivery_level
 from .company_knowledge import active_company_valuation_rule_ids
+from .decision_follow_up import normalize_follow_up_conditions
 from .investment_brain import hypothesis_comparison_audit, is_selectable_hypothesis_payload
 from .investment_decision_history import previous_decision_episode_value
 from .investment_strategy_guidance import merge_strategy_context, strategy_guidance_context
@@ -784,6 +785,8 @@ def local_validated_ai_response(context: Dict[str, object], source: str = "local
             review_label=REVIEW_LEVEL_LABELS["blocked"],
             summary="그래프 저장소 InferenceBox 관계가 없어 투자 판단을 만들지 않았습니다.",
             opinion="그래프 저장소의 온톨로지 추론 결과가 생성될 때까지 투자 의견을 보류합니다.",
+            investment_view="그래프 관계가 없어 현재 투자 매력과 위험을 비교하지 않았습니다.",
+            execution_decision="TypeDB 추론 결과가 생성될 때까지 주문 판단을 보류합니다.",
             evidence=[],
             counter_evidence=[],
             invalidation_condition="TypeDB InferenceBox 관계와 실행 계획이 생성되면 다시 판단합니다.",
@@ -943,6 +946,8 @@ def local_validated_ai_response(context: Dict[str, object], source: str = "local
         epistemic_summary=epistemic_summary,
         source=source,
     )
+    response.investment_view = response.summary
+    response.execution_decision = response.current_action_plan or response.opinion
     return response
 
 def delivery_profile_from_context(context: Dict[str, object]) -> Dict[str, object]:
@@ -2130,6 +2135,34 @@ def validated_response_from_payload(
             360,
         ),
     ))
+    investment_view = watchlist_friendly_text(
+        context,
+        user_friendly_ai_text(
+            payload.get("investmentView")
+            or payload.get("investment_view")
+            or summary,
+            420,
+        ),
+    )
+    execution_decision = soften_order_language(watchlist_friendly_text(
+        context,
+        user_friendly_ai_text(
+            payload.get("executionDecision")
+            or payload.get("execution_decision")
+            or current_action_plan
+            or opinion,
+            420,
+        ),
+    ))
+    relation_facts = relation_context_value(context).get("facts")
+    relation_facts = dict(relation_facts or {}) if isinstance(relation_facts, dict) else {}
+    subject = relation_context_value(context).get("subject")
+    subject = dict(subject or {}) if isinstance(subject, dict) else {}
+    follow_up_conditions, unsupported_follow_ups = normalize_follow_up_conditions(
+        payload.get("followUpConditions") or payload.get("follow_up_conditions") or [],
+        relation_facts,
+        str(subject.get("symbol") or context.get("rawSymbol") or context.get("symbol") or ""),
+    )
     response = NotificationAIValidatedResponse(
         action=action,
         action_label=action_label_for_target(context, action),
@@ -2141,6 +2174,8 @@ def validated_response_from_payload(
         review_label=REVIEW_LEVEL_LABELS.get(review_level, REVIEW_LEVEL_LABELS["check"]),
         summary=summary,
         opinion=opinion,
+        investment_view=investment_view,
+        execution_decision=execution_decision,
         current_action_plan=current_action_plan,
         change_analysis=change_analysis,
         next_action_plan=next_action_plan,
@@ -2167,6 +2202,8 @@ def validated_response_from_payload(
         decision_readiness=decision_readiness,
         causal_chain=causal_chain,
         alternative_action=alternative_action,
+        follow_up_conditions=follow_up_conditions,
+        unsupported_follow_ups=unsupported_follow_ups,
         source=source,
         raw_response=raw_response,
     )

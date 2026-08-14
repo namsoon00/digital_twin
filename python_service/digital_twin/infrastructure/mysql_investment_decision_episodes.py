@@ -8,8 +8,10 @@ from ..domain.investment_brain import (
     canonical_investment_timestamp,
     parse_investment_timestamp,
     stable_id,
+    scoped_decision_follow_ups,
     utc_now_iso,
 )
+from ..domain.decision_follow_up import evaluate_follow_up_conditions
 from ..domain.hypothesis_outcome_contract import (
     observation_domain_status,
     resolved_outcome_contract,
@@ -27,6 +29,14 @@ class MySQLInvestmentDecisionEpisodeStore(MySQLOperationalConnection):
     def save(self, episode: DecisionEpisode) -> DecisionEpisode:
         episode.decided_at = canonical_investment_timestamp(episode.decided_at) or utc_now_iso()
         episode.status = str(episode.status or "active")
+        episode.follow_up_conditions = scoped_decision_follow_ups(
+            episode.episode_id,
+            episode.follow_up_conditions,
+        )
+        episode.unsupported_follow_ups = scoped_decision_follow_ups(
+            episode.episode_id,
+            episode.unsupported_follow_ups,
+        )
         plan = ActionPlan.create(
             portfolio_id=episode.portfolio_id or "portfolio:" + str(episode.account_id or "default"),
             decision_episode_id=episode.episode_id,
@@ -98,6 +108,37 @@ class MySQLInvestmentDecisionEpisodeStore(MySQLOperationalConnection):
                     stamp,
                 ),
             )
+            for condition in list(episode.follow_up_conditions or []) + list(episode.unsupported_follow_ups or []):
+                if not isinstance(condition, dict) or not str(condition.get("conditionId") or "").strip():
+                    continue
+                connection.execute(
+                    """
+                    INSERT INTO investment_decision_follow_ups (
+                        condition_id, episode_id, account_id, symbol, field_name,
+                        comparison_operator, threshold_value, purpose, status,
+                        observable, payload_json, created_at, updated_at, transitioned_at
+                    ) VALUES (%s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s)
+                    ON DUPLICATE KEY UPDATE status = VALUES(status), observable = VALUES(observable),
+                        payload_json = VALUES(payload_json), updated_at = VALUES(updated_at),
+                        transitioned_at = VALUES(transitioned_at)
+                    """,
+                    (
+                        str(condition.get("conditionId")),
+                        episode.episode_id,
+                        episode.account_id,
+                        episode.symbol,
+                        str(condition.get("field") or ""),
+                        str(condition.get("operator") or ""),
+                        number(condition.get("threshold")),
+                        str(condition.get("purpose") or "switch"),
+                        str(condition.get("status") or "pending"),
+                        1 if condition.get("observable") is not False else 0,
+                        json_dumps(condition),
+                        stamp,
+                        stamp,
+                        str(condition.get("transitionAt") or ""),
+                    ),
+                )
         return episode
 
     def outcome_horizons(self) -> List[int]:
@@ -187,7 +228,7 @@ class MySQLInvestmentDecisionEpisodeStore(MySQLOperationalConnection):
         return outcomes
 
     def hydrate_outcomes(self, episodes: Iterable[DecisionEpisode]) -> List[DecisionEpisode]:
-        result = list(episodes or [])
+        result = self.hydrate_follow_ups(episodes)
         episode_ids = [item.episode_id for item in result if item.episode_id]
         if not episode_ids:
             return result
@@ -204,6 +245,46 @@ class MySQLInvestmentDecisionEpisodeStore(MySQLOperationalConnection):
             grouped.setdefault(str(row.get("episode_id") or ""), []).append(row)
         for episode in result:
             episode.outcomes = self.outcomes_from_rows(grouped.get(episode.episode_id, []), episode.episode_id)
+        return result
+
+    def hydrate_follow_ups(self, episodes: Iterable[DecisionEpisode]) -> List[DecisionEpisode]:
+        """Merge mutable follow-up state into immutable decision payloads.
+
+        DecisionEpisode keeps the facts and AI answer at decision time. Follow-up
+        status changes later, so the normalized table is authoritative for that
+        small mutable slice and is joined only for the bounded episodes being
+        projected or reviewed.
+        """
+
+        result = list(episodes or [])
+        episode_ids = [item.episode_id for item in result if item.episode_id]
+        if not episode_ids:
+            return result
+        placeholders = ",".join(["%s"] * len(episode_ids))
+        with self.connect() as connection:
+            rows = connection.execute(
+                "SELECT episode_id, observable, payload_json "
+                "FROM investment_decision_follow_ups WHERE episode_id IN (" + placeholders + ") "
+                "ORDER BY created_at ASC, condition_id ASC",
+                episode_ids,
+            ).fetchall()
+        grouped: Dict[str, Dict[str, List[Dict[str, object]]]] = {}
+        for row in rows or []:
+            payload = _json_loads(row.get("payload_json"), {})
+            if not payload:
+                continue
+            buckets = grouped.setdefault(
+                str(row.get("episode_id") or ""),
+                {"tracked": [], "unsupported": []},
+            )
+            key = "tracked" if bool(row.get("observable")) else "unsupported"
+            buckets[key].append(payload)
+        for episode in result:
+            buckets = grouped.get(episode.episode_id)
+            if not buckets:
+                continue
+            episode.follow_up_conditions = list(buckets["tracked"])
+            episode.unsupported_follow_ups = list(buckets["unsupported"])
         return result
 
     def episodes_by_ids(self, episode_ids: Iterable[str]) -> Dict[str, DecisionEpisode]:
@@ -420,6 +501,10 @@ class MySQLInvestmentDecisionEpisodeStore(MySQLOperationalConnection):
         if not symbol:
             return []
         observed_at = canonical_investment_timestamp(observed_at or facts.get("observedAt")) or utc_now_iso()
+        transitions = self.evaluate_follow_up_observation(account_id, symbol, facts, observed_at)
+        if transitions:
+            facts["followUpTransitions"] = transitions
+            facts["followUpTransitionCount"] = len(transitions)
         if not outcome_observation_is_usable(facts, observed_at):
             return []
         episodes = self.list(account_id=account_id, symbol=symbol, limit=self.outcome_batch_size())
@@ -439,6 +524,54 @@ class MySQLInvestmentDecisionEpisodeStore(MySQLOperationalConnection):
                 "observedAt": observed_at,
             })
         return self.record_outcome_observations(account_id, requests)
+
+    def evaluate_follow_up_observation(
+        self,
+        account_id: str,
+        symbol: str,
+        facts: Dict[str, object],
+        observed_at: str,
+    ) -> List[Dict[str, object]]:
+        """Advance only pending, observable conditions for one scoped subject."""
+
+        with self.connect() as connection:
+            rows = connection.execute(
+                """
+                SELECT condition_id, payload_json
+                FROM investment_decision_follow_ups
+                WHERE account_id = %s AND symbol = %s
+                  AND status = 'pending' AND observable = 1
+                ORDER BY updated_at ASC, condition_id ASC
+                LIMIT 80
+                """,
+                (str(account_id or ""), str(symbol or "").upper()),
+            ).fetchall()
+        transitions: List[Dict[str, object]] = []
+        for row in rows or []:
+            payload = _json_loads(row.get("payload_json"), {})
+            updated, material = evaluate_follow_up_conditions([payload], facts, observed_at)
+            if not updated or not material:
+                continue
+            condition = updated[0]
+            stamp = utc_now_iso()
+            with self.connect() as connection:
+                cursor = connection.execute(
+                    """
+                    UPDATE investment_decision_follow_ups
+                    SET status = %s, payload_json = %s, updated_at = %s, transitioned_at = %s
+                    WHERE condition_id = %s AND status = 'pending'
+                    """,
+                    (
+                        str(condition.get("status") or "pending"),
+                        json_dumps(condition),
+                        stamp,
+                        str(condition.get("transitionAt") or observed_at),
+                        str(row.get("condition_id") or ""),
+                    ),
+                )
+            if int(getattr(cursor, "rowcount", 0) or 0) > 0:
+                transitions.append(condition)
+        return transitions
 
     def record_outcome_observations(
         self,

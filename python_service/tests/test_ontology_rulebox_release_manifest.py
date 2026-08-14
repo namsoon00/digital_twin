@@ -8,6 +8,7 @@ from digital_twin.domain.ontology_rulebox_catalog import default_graph_inference
 from digital_twin.domain.ontology_rulebox_release_manifest import (
     DEPRECATED_TYPEDB_RULE_IDS,
     RULEBOX_DECISION_SCOPE_RULE_IDS,
+    RULEBOX_MARKET_EVIDENCE_GUARD_RULE_IDS,
     RULEBOX_PLATFORM_RELEASE_ADDITION_IDS,
     RULEBOX_RAW_ABOX_RUNTIME_RULE_IDS,
     RULEBOX_RUNTIME_CONTRACT_RULE_IDS,
@@ -24,7 +25,9 @@ class RuleBoxReleaseManifestTests(unittest.TestCase):
         self.assertTrue(RULEBOX_RAW_ABOX_RUNTIME_RULE_IDS.issubset(rules))
         self.assertTrue(RULEBOX_DECISION_SCOPE_RULE_IDS.issubset(rules))
         self.assertEqual(
-            RULEBOX_RAW_ABOX_RUNTIME_RULE_IDS | RULEBOX_DECISION_SCOPE_RULE_IDS,
+            RULEBOX_RAW_ABOX_RUNTIME_RULE_IDS
+            | RULEBOX_DECISION_SCOPE_RULE_IDS
+            | RULEBOX_MARKET_EVIDENCE_GUARD_RULE_IDS,
             RULEBOX_RUNTIME_CONTRACT_RULE_IDS,
         )
         self.assertFalse(DEPRECATED_TYPEDB_RULE_IDS.intersection(rules))
@@ -42,6 +45,10 @@ class RuleBoxReleaseManifestTests(unittest.TestCase):
         self.assertEqual(
             sorted(RULEBOX_DECISION_SCOPE_RULE_IDS),
             payload["decisionScopeContractRuleIds"],
+        )
+        self.assertEqual(
+            sorted(RULEBOX_MARKET_EVIDENCE_GUARD_RULE_IDS),
+            payload["marketEvidenceGuardRuleIds"],
         )
 
 

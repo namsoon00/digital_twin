@@ -24,6 +24,110 @@ WATCHLIST_ENTRY_POLICY = {
 }
 
 
+MICROSTRUCTURE_CAPABILITY_FIELDS = {
+    "tradeFlow": {"tradeStrength", "buyVolume", "sellVolume"},
+    "orderBook": {"bidAskImbalance", "orderbookBidVolume", "orderbookAskVolume"},
+    "investorFlow": {
+        "foreignNetVolume",
+        "institutionNetVolume",
+        "individualNetVolume",
+        "smartMoneyNetVolume",
+    },
+}
+UNUSABLE_CAPABILITY_STATES = [
+    "stale",
+    "sessionUnavailable",
+    "temporaryFailure",
+    "providerUnsupported",
+    "missing",
+]
+
+
+def _rule_condition_fields(condition: GraphRuleCondition) -> set:
+    fields = {str(condition.field or "").strip()} if str(condition.field or "").strip() else set()
+    target_field = dict(condition.target_property_filters or {}).get("field")
+    if isinstance(target_field, (list, tuple, set)):
+        fields.update(str(item or "").strip() for item in target_field if str(item or "").strip())
+    elif str(target_field or "").strip():
+        fields.add(str(target_field).strip())
+    return fields
+
+
+def _next_rule_version(version: str) -> str:
+    text = str(version or "v1").strip().lower()
+    try:
+        return "v" + str(int(text.removeprefix("v")) + 1)
+    except ValueError:
+        return text + ".1"
+
+
+def with_market_evidence_guards(rules: List[GraphInferenceRule]) -> List[GraphInferenceRule]:
+    """Materialize provider-capability guards into RuleBox definitions.
+
+    This is an authoring-time composition step. The resulting conditions are
+    persisted and executed as native TypeDB rules; runtime Python does not
+    choose a market-specific branch. A rule that only uses a microstructure
+    field as one optional confirmation needs the general profile. A rule that
+    requires or negates the field also needs that capability to be observable.
+    """
+
+    guarded: List[GraphInferenceRule] = []
+    for rule in rules or []:
+        if str(rule.source_kind or "").strip().lower() != "stock":
+            guarded.append(rule)
+            continue
+        touched_capabilities = set()
+        required_capabilities = set()
+        for condition in rule.conditions:
+            fields = _rule_condition_fields(condition)
+            for capability, capability_fields in MICROSTRUCTURE_CAPABILITY_FIELDS.items():
+                if not fields.intersection(capability_fields):
+                    continue
+                touched_capabilities.add(capability)
+                if str(condition.role or "required").strip().lower() in {"required", "not", "negative", "exclude"}:
+                    required_capabilities.add(capability)
+        if not touched_capabilities:
+            guarded.append(rule)
+            continue
+
+        conditions = list(rule.conditions)
+        existing_ids = {condition.condition_id for condition in conditions}
+        changed = False
+        if "market-evidence-profile-eligible" not in existing_ids:
+            conditions.append(GraphRuleCondition(
+                "market-evidence-profile-eligible",
+                "relation",
+                "해당 시장과 공급자에서 기본 판단 증거가 최신 상태입니다.",
+                relation_type="HAS_EVIDENCE_PROFILE",
+                target_kind="market-evidence-profile",
+                target_property_filters={"dataState": "sufficient"},
+            ))
+            changed = True
+        for capability in sorted(required_capabilities):
+            condition_id = "market-evidence-" + capability + "-unavailable"
+            if condition_id in existing_ids:
+                continue
+            conditions.append(GraphRuleCondition(
+                condition_id,
+                "relation",
+                capability + " 공급 상태가 오래됨·장 운영상 미제공·일시 실패·공급자 미지원이 아닙니다.",
+                relation_type="HAS_DATA_QUALITY",
+                target_kind="data-availability-assessment",
+                target_property_filters={
+                    "field": capability,
+                    "dataState": list(UNUSABLE_CAPABILITY_STATES),
+                },
+                role="not",
+            ))
+            changed = True
+        guarded.append(replace(
+            rule,
+            version=_next_rule_version(rule.version) if changed else rule.version,
+            conditions=conditions,
+        ))
+    return guarded
+
+
 # This is authored RuleBox control-plane data, not a runtime policy table.
 # ``default_graph_inference_rules`` writes these values to TypeDB derivation
 # templates, and runtime readers only consume the materialized relation
@@ -2324,12 +2428,12 @@ def default_graph_inference_rules() -> List[GraphInferenceRule]:
         ),
         GraphInferenceRule(
             rule_id="graph.strategy_profile.aggressive_recovery_room.v1",
-            label="공격형 성향 + 가격·수급 회복 -> 추가매수 여지",
-            version="v2",
+            label="공격형 성향 + 시장별 증거 회복 -> 추가매수 여지",
+            version="v3",
             source_kind="stock",
             action_group="strategyFit",
             action_level="review",
-            prompt_hint="공격형 성향에서도 추가매수는 손실 한도, 5일선 회복과 수급 확인을 통과한 경우에만 후보로 설명합니다.",
+            prompt_hint="공격형 성향에서도 추가매수는 손실 한도와 해당 시장에서 실제로 공급 가능한 가격·거래 확인을 통과한 경우에만 후보로 설명합니다.",
             any_condition_min_count=2,
             conditions=[
                 GraphRuleCondition(
@@ -2357,12 +2461,29 @@ def default_graph_inference_rules() -> List[GraphInferenceRule]:
                     value={"field": "strategyLossTolerancePct", "default": -15},
                 ),
                 GraphRuleCondition(
+                    "market-evidence-profile-eligible",
+                    "relation",
+                    "해당 시장에서 수집 가능한 증거 프로필이 현재 판단에 사용할 수 있는 상태입니다.",
+                    relation_type="HAS_EVIDENCE_PROFILE",
+                    target_kind="market-evidence-profile",
+                    target_property_filters={"dataState": "sufficient"},
+                ),
+                GraphRuleCondition(
                     "ma5-recovered",
                     "subject_property",
                     "5일 평균 가격 위로 회복했습니다.",
                     field="ma5Distance",
                     operator=">=",
                     value=0,
+                    role="any",
+                ),
+                GraphRuleCondition(
+                    "volume-confirmation",
+                    "subject_property",
+                    "해당 시장에서 제공되는 거래량이 평균 이상으로 확인을 보강합니다.",
+                    field="volumeRatio",
+                    operator=">=",
+                    value=1,
                     role="any",
                 ),
                 GraphRuleCondition(
@@ -2393,11 +2514,12 @@ def default_graph_inference_rules() -> List[GraphInferenceRule]:
                     tbox_class="StrategyFitAssessment",
                     tbox_classes=["StrategyFitAssessment", "AddBuyEligibility", "RecoveryConfirmation", "InvestorProfilePolicy"],
                     polarity="support",
-                    belief_label="공격형 성향에서 손실 한도 안의 가격·수급 회복이 확인돼 소액 분할 추가매수 후보를 검토할 수 있습니다.",
+                    belief_label="공격형 성향에서 손실 한도 안의 가격 회복과 해당 시장에서 실제 제공되는 확인 증거가 함께 성립해 소액 분할 추가매수 후보를 검토할 수 있습니다.",
                     ai_influence_label="공격형 회복 추가매수 여지",
                     action_group="strategyFit",
                     action_level="review",
                     decision_stage="ADD_BUY_REVIEW",
+                    next_checks=["해당 시장 증거 프로필에서 가격 회복과 거래 확인이 다음 관측에서도 함께 유지되는지 확인"],
                 ),
             ],
         ),
@@ -7419,4 +7541,6 @@ def default_graph_inference_rules() -> List[GraphInferenceRule]:
             ],
         ),
     ]
-    return with_rulebox_v3_governance(with_rulebox_execution_guidance(rules))
+    return with_rulebox_v3_governance(
+        with_rulebox_execution_guidance(with_market_evidence_guards(rules))
+    )

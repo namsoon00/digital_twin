@@ -3,6 +3,7 @@ from typing import Dict, Iterable, List
 
 from ..domain.investment_brain import canonical_investment_timestamp
 from ..domain.investment_outcomes import DecisionReview, PerformanceAttribution
+from ..domain.market_evidence_profiles import market_evidence_profile
 from ..domain.portfolio import AccountSnapshot
 
 
@@ -51,13 +52,23 @@ class InvestmentOutcomeObservationService:
         return int_setting(self.settings, "investmentBrainOutcomeMaxDelayMinutes", 180, 1, 60 * 24 * 14)
 
     def observe_snapshot(self, snapshot: AccountSnapshot) -> Dict[str, object]:
-        if not self.enabled():
-            return {"status": "unavailable", "reason": "결과 관측 저장소 또는 시세 이력 저장소가 연결되지 않았습니다."}
         if not snapshot or not snapshot.has_live_account_data():
             return {"status": "skipped-non-live-snapshot", "reason": "정상 live 계좌 스냅샷에서만 결과를 기록합니다."}
         observed_at = canonical_investment_timestamp(snapshot.generated_at)
         if not observed_at:
             return {"status": "skipped-invalid-snapshot-time", "reason": "스냅샷 시각을 표준 UTC 시각으로 읽지 못했습니다."}
+        snapshot_observations = self.snapshot_observations(
+            list(snapshot.positions or []) + list(snapshot.watchlist or []),
+            observed_at,
+        )
+        follow_up = self.observe_follow_ups(snapshot.account_id, snapshot_observations, observed_at)
+        if not self.enabled():
+            return {
+                "status": "follow-up-observed" if follow_up.get("transitionCount") else "outcome-store-unavailable",
+                "reason": "결과 관측 저장소 또는 시세 이력 저장소가 연결되지 않았습니다.",
+                "observedAt": observed_at,
+                "followUpObservation": follow_up,
+            }
         targets = self.decision_episode_store.pending_outcome_targets(
             snapshot.account_id,
             observed_at,
@@ -65,10 +76,11 @@ class InvestmentOutcomeObservationService:
         )
         if not targets:
             return {
-                "status": "no-due-targets",
+                "status": "follow-up-observed" if follow_up.get("transitionCount") else "no-due-targets",
                 "observedAt": observed_at,
                 "targetCount": 0,
                 "savedOutcomeCount": 0,
+                "followUpObservation": follow_up,
             }
         historical = self.market_time_series_store.load_outcome_observations(
             snapshot.account_id,
@@ -94,7 +106,6 @@ class InvestmentOutcomeObservationService:
             benchmark_requests,
             max_delay_minutes=self.max_delay_minutes(),
         ) if benchmark_requests else {}
-        snapshot_observations = self.snapshot_observations(snapshot.positions or [], observed_at)
         records = []
         historical_count = 0
         snapshot_fallback_count = 0
@@ -151,6 +162,33 @@ class InvestmentOutcomeObservationService:
             "maximumDelayMinutes": self.max_delay_minutes(),
             "performanceAttributionCount": review_result.get("attributionCount", 0),
             "decisionReviewCount": review_result.get("reviewCount", 0),
+            "followUpObservation": follow_up,
+        }
+
+    def observe_follow_ups(
+        self,
+        account_id: str,
+        observations: Dict[str, Dict[str, object]],
+        observed_at: str,
+    ) -> Dict[str, object]:
+        evaluator = getattr(self.decision_episode_store, "evaluate_follow_up_observation", None)
+        if not callable(evaluator):
+            return {"status": "unavailable", "observedSymbolCount": 0, "transitionCount": 0, "transitions": []}
+        transitions = []
+        error_count = 0
+        for symbol, facts in (observations or {}).items():
+            try:
+                for item in evaluator(account_id, symbol, dict(facts or {}), observed_at) or []:
+                    if isinstance(item, dict):
+                        transitions.append(dict(item))
+            except Exception:  # noqa: BLE001 - one subject cannot block the scoped ABox.
+                error_count += 1
+        return {
+            "status": "transitioned" if transitions else ("partial" if error_count else "unchanged"),
+            "observedSymbolCount": len(observations or {}),
+            "transitionCount": len(transitions),
+            "errorCount": error_count,
+            "transitions": transitions[:40],
         }
 
     def review_outcomes(self, outcomes: Iterable[object]) -> Dict[str, int]:
@@ -256,11 +294,39 @@ class InvestmentOutcomeObservationService:
             if not symbol or current_price <= 0:
                 continue
             quality = str(getattr(position, "data_quality", "") or "actual")
+            ma5 = self.optional_number(getattr(position, "ma5", 0)) or 0.0
+            ma20 = self.optional_number(getattr(position, "ma20", 0)) or 0.0
+            ma60 = self.optional_number(getattr(position, "ma60", 0)) or 0.0
+            ma5_distance = self.optional_number(getattr(position, "ma5_distance", 0))
+            ma20_distance = self.optional_number(getattr(position, "ma20_distance", 0))
+            ma60_distance = self.optional_number(getattr(position, "ma60_distance", 0))
+            ma5_distance = ma5_distance or (((current_price / ma5) - 1) * 100 if ma5 else 0.0)
+            ma20_distance = ma20_distance or (((current_price / ma20) - 1) * 100 if ma20 else 0.0)
+            ma60_distance = ma60_distance or (((current_price / ma60) - 1) * 100 if ma60 else 0.0)
+            foreign_net = self.optional_number(getattr(position, "foreign_net_volume", 0)) or 0.0
+            institution_net = self.optional_number(getattr(position, "institution_net_volume", 0)) or 0.0
             observations[symbol] = {
                 "currentPrice": current_price,
                 "profitLossRate": getattr(position, "profit_loss_rate", 0),
                 "priceChangeRate": getattr(position, "change_rate", 0),
+                "ma5Distance": ma5_distance,
+                "ma20Distance": ma20_distance,
+                "ma60Distance": ma60_distance,
+                "volume": getattr(position, "volume", 0),
+                "volumeRatio": getattr(position, "volume_ratio", 0),
+                "tradeStrength": getattr(position, "trade_strength", 0),
+                "buyVolume": getattr(position, "buy_volume", 0),
+                "sellVolume": getattr(position, "sell_volume", 0),
+                "bidAskImbalance": getattr(position, "bid_ask_imbalance", 0),
+                "orderbookBidVolume": getattr(position, "orderbook_bid_volume", 0),
+                "orderbookAskVolume": getattr(position, "orderbook_ask_volume", 0),
+                "foreignNetVolume": foreign_net,
+                "institutionNetVolume": institution_net,
+                "individualNetVolume": getattr(position, "individual_net_volume", 0),
+                "smartMoneyNetVolume": foreign_net + institution_net,
+                "marketEvidenceProfile": market_evidence_profile(position, self.settings),
                 "observedAt": observed_at,
+                "updatedAt": observed_at,
                 "sourceAsOf": getattr(position, "source_as_of", "") or getattr(position, "updated_at", "") or observed_at,
                 "provider": getattr(position, "quote_source", "") or getattr(position, "source", "") or "account-snapshot",
                 "observationSource": "live-account-snapshot",

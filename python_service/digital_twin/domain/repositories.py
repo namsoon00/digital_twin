@@ -377,6 +377,15 @@ class DecisionEpisodeRepository(Protocol):
     ) -> List[ObservedOutcome]:
         ...
 
+    def evaluate_follow_up_observation(
+        self,
+        account_id: str,
+        symbol: str,
+        facts: Dict[str, object],
+        observed_at: str,
+    ) -> List[Dict[str, object]]:
+        ...
+
     def pending_outcome_targets(
         self,
         account_id: str,

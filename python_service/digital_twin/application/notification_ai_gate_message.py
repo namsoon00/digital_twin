@@ -3049,7 +3049,16 @@ def execution_telegram_message_progressive(
         compact_invalidation_line(context, response),
     ]
     next_checks.extend(response.next_checks or [])
+    next_checks = [
+        str(item.get("label") or "").strip()
+        for item in response.follow_up_conditions or []
+        if isinstance(item, dict) and str(item.get("status") or "pending") == "pending"
+        and str(item.get("label") or "").strip()
+    ] + next_checks
     warnings = customer_data_note_rows(list(response.missing_data_impact))
+    unsupported = compact_provider_unsupported_line(context)
+    if unsupported:
+        warnings.append(unsupported)
     section_labels = compact_decision_section_labels(context, response)
     packet = build_notification_explanation_packet(
         detail_level=detail_level,
@@ -3066,10 +3075,15 @@ def execution_telegram_message_progressive(
     parts = [
         "<b>" + html.escape(headline, quote=False) + "</b>",
         ("<code>" + html.escape(target, quote=False) + "</code>") if target else "",
+    ]
+    investment_view = compact_sentence_count(customer_visible_ai_text(response.investment_view or response.summary), 2)
+    if investment_view:
+        parts.extend(["", "<b>투자 관점</b>", _html_bullet(investment_view, level)])
+    parts.extend([
         "",
         "<b>지금 행동</b>",
         _html_bullet(packet.action, level),
-    ]
+    ])
     if packet.change:
         parts.extend(["", "<b>이번 변화</b>", _html_bullet(packet.change, level)])
     if packet.current_flow:
@@ -3223,6 +3237,7 @@ def compact_current_action_line(context: Dict[str, object], response: Notificati
     detail = compact_sentence_count(
         customer_visible_ai_text(
             disagreement_detail
+            or response.execution_decision
             or response.current_action_plan
             or response.opinion
             or response.summary
@@ -3484,6 +3499,14 @@ def compact_current_flow_rows(context: Dict[str, object]) -> List[str]:
         rows.append("수익률 " + pnl)
     if trend:
         rows.append("가격 흐름: " + compact_sentence_count(trend, 1))
+    facts = relation_facts(context or {})
+    volume = _number(facts.get("volume"))
+    volume_ratio = _number(facts.get("volumeRatio"))
+    if volume > 0:
+        volume_row = "거래량 " + compact_number(volume)
+        if volume_ratio > 0:
+            volume_row += " · 평균 대비 " + _compact_decimal(volume_ratio, 2) + "배"
+        rows.append(volume_row)
     investor = compact_investor_flow_line(context)
     if investor:
         rows.append("투자자 수급: " + investor)
@@ -3498,7 +3521,23 @@ def compact_current_flow_rows(context: Dict[str, object]) -> List[str]:
         execution_exclusion = _market_signal_exclusion_note(context, "ccnl")
         if execution_exclusion:
             rows.append("체결 흐름: " + execution_exclusion)
+    unsupported = compact_provider_unsupported_line(context)
+    if unsupported:
+        rows.append(unsupported)
     return rows
+
+
+def compact_provider_unsupported_line(context: Dict[str, object]) -> str:
+    facts = relation_facts(context or {})
+    evidence_profile = facts.get("marketEvidenceProfile") if isinstance(facts.get("marketEvidenceProfile"), dict) else {}
+    unavailable = [
+        str(item.get("label") or "")
+        for item in evidence_profile.get("unavailableCapabilities") or []
+        if isinstance(item, dict)
+        and str(item.get("state") or "") == "providerUnsupported"
+        and str(item.get("label") or "")
+    ]
+    return "현재 공급자 미지원: " + " · ".join(unavailable[:3]) if unavailable else ""
 
 
 def compact_current_flow_line(context: Dict[str, object]) -> str:

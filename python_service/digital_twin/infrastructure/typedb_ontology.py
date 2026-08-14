@@ -23846,6 +23846,12 @@ def typedb_native_match_query(
     for index, condition in enumerate(conditions):
         condition_id = str(condition.get("condition_id") or condition.get("conditionId") or "condition-" + str(index))
         role = normalized_condition_role(condition)
+        if role in {"any", "optional"} and not include_any_conditions:
+            continue
+        if role == "not" and not include_negative_conditions:
+            continue
+        if role not in {"any", "optional", "not"} and not include_required_conditions:
+            continue
         relation_type = str(condition.get("relation_type") or condition.get("relationType") or "").upper().strip()
         active_relation_storage_ids = (
             indexed_relation_storage_ids_by_condition.get(

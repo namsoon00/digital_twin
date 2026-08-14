@@ -42,6 +42,7 @@ from .portfolio_ontology_runtime_concepts import (
 )
 from .portfolio_ontology_market_concepts import (
     add_data_source_concept,
+    add_market_evidence_profile_concepts,
     add_metric_concepts,
     add_price_level_and_liquidity_concepts,
     symbol_key,
@@ -344,6 +345,13 @@ def build_portfolio_ontology(
         add_instrument_identity_concepts(graph, stock_id, position, source)
         add_data_source_concept(graph, stock_id, position, source, observation_profiles)
         add_metric_concepts(graph, stock_id, position, source, observation_profiles)
+        add_market_evidence_profile_concepts(
+            graph,
+            stock_id,
+            position,
+            source,
+            runtime_context.get("settings") if isinstance(runtime_context.get("settings"), dict) else runtime_context,
+        )
         add_position_pipeline_quality_concepts(graph, stock_id, position, runtime_context)
         add_price_level_and_liquidity_concepts(graph, stock_id, position, source, observation_profiles)
         add_security_line_concepts(graph, stock_id, position, reference_observed_positions, external_signals, runtime_context)

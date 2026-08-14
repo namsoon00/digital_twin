@@ -60,6 +60,39 @@ def add_investment_brain_concepts(
         })
         add_relation(graph, stock_id, episode_id, "HAS_DECISION_EPISODE", weight=1.0, properties={"source": "investment-brain-memory"})
         add_relation(graph, portfolio_node_id, episode_id, "HAS_DECISION_EPISODE", weight=1.0, properties={"source": "investment-brain-memory"})
+        for follow_up in list(episode.get("followUpConditions") or []) + list(episode.get("unsupportedFollowUps") or []):
+            if not isinstance(follow_up, dict):
+                continue
+            condition_key = str(follow_up.get("conditionId") or "").strip()
+            if not condition_key:
+                continue
+            follow_up_id = add_entity(
+                graph,
+                "decision-follow-up-condition",
+                condition_key,
+                str(follow_up.get("label") or follow_up.get("field") or "판단 후속 관찰 조건"),
+                {
+                    "tboxClass": "DecisionFollowUpCondition",
+                    "symbol": symbol,
+                    "field": follow_up.get("field"),
+                    "operator": follow_up.get("operator"),
+                    "threshold": follow_up.get("threshold"),
+                    "purpose": follow_up.get("purpose"),
+                    "status": follow_up.get("status"),
+                    "observable": follow_up.get("observable"),
+                    "currentValue": follow_up.get("currentValue"),
+                    "observedAt": follow_up.get("observedAt"),
+                    "expiresAt": follow_up.get("expiresAt"),
+                    "onSatisfied": follow_up.get("onSatisfied"),
+                    "reason": follow_up.get("reason"),
+                    "source": "decision-follow-up-tracker",
+                },
+            )
+            add_relation(graph, episode_id, follow_up_id, "TRACKS_FOLLOW_UP", weight=1.0, properties={
+                "source": "decision-follow-up-tracker",
+                "field": follow_up.get("field") or "",
+                "dataState": "available" if follow_up.get("observable") is not False else "unavailable",
+            })
         guardrail_rows = [
             item
             for item in (

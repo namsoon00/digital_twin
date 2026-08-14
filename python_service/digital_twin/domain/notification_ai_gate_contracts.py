@@ -74,6 +74,8 @@ class NotificationAIValidatedResponse:
     review_label: str = "조건 확인"
     summary: str = ""
     opinion: str = ""
+    investment_view: str = ""
+    execution_decision: str = ""
     current_action_plan: str = ""
     change_analysis: str = ""
     next_action_plan: str = ""
@@ -100,6 +102,8 @@ class NotificationAIValidatedResponse:
     decision_readiness: str = "conditional"
     causal_chain: List[Dict[str, object]] = field(default_factory=list)
     alternative_action: Dict[str, object] = field(default_factory=dict)
+    follow_up_conditions: List[Dict[str, object]] = field(default_factory=list)
+    unsupported_follow_ups: List[Dict[str, object]] = field(default_factory=list)
     source: str = "local"
     raw_response: str = ""
 
@@ -117,6 +121,8 @@ class NotificationAIValidatedResponse:
             "reviewLevel": "review_level",
             "reviewLabel": "review_label",
             "currentActionPlan": "current_action_plan",
+            "investmentView": "investment_view",
+            "executionDecision": "execution_decision",
             "changeAnalysis": "change_analysis",
             "nextActionPlan": "next_action_plan",
             "counterEvidence": "counter_evidence",
@@ -140,6 +146,8 @@ class NotificationAIValidatedResponse:
             "decisionReadiness": "decision_readiness",
             "causalChain": "causal_chain",
             "alternativeAction": "alternative_action",
+            "followUpConditions": "follow_up_conditions",
+            "unsupportedFollowUps": "unsupported_follow_ups",
             "rawResponse": "raw_response",
         }
         allowed = set(cls.__dataclass_fields__)
@@ -161,6 +169,8 @@ class NotificationAIValidatedResponse:
         payload["reviewLevel"] = payload.pop("review_level")
         payload["reviewLabel"] = payload.pop("review_label")
         payload["currentActionPlan"] = payload.pop("current_action_plan")
+        payload["investmentView"] = payload.pop("investment_view")
+        payload["executionDecision"] = payload.pop("execution_decision")
         payload["changeAnalysis"] = payload.pop("change_analysis")
         payload["nextActionPlan"] = payload.pop("next_action_plan")
         payload["counterEvidence"] = payload.pop("counter_evidence")
@@ -184,6 +194,8 @@ class NotificationAIValidatedResponse:
         payload["decisionReadiness"] = payload.pop("decision_readiness")
         payload["causalChain"] = payload.pop("causal_chain")
         payload["alternativeAction"] = payload.pop("alternative_action")
+        payload["followUpConditions"] = payload.pop("follow_up_conditions")
+        payload["unsupportedFollowUps"] = payload.pop("unsupported_follow_ups")
         payload["rawResponse"] = payload.pop("raw_response")
         return payload
 

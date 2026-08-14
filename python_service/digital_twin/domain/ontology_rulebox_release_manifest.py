@@ -9,7 +9,7 @@ boundary prevents infrastructure code from becoming a second RuleBox.
 from typing import Dict, FrozenSet
 
 
-RULEBOX_RELEASE_MANIFEST_VERSION = "rulebox-release-manifest-v1"
+RULEBOX_RELEASE_MANIFEST_VERSION = "rulebox-release-manifest-v2"
 
 DEPRECATED_TYPEDB_RULE_IDS: FrozenSet[str] = frozenset({
     "shadow.market_psychology.state.v1",
@@ -83,8 +83,39 @@ RULEBOX_DECISION_SCOPE_RULE_IDS: FrozenSet[str] = frozenset({
     "graph.strategy_profile.aggressive_recovery_room.v1",
 })
 
+# Market/provider capability guards became part of these persisted native
+# rules. Older rows can mistake an unsupported feed for a neutral value, so
+# this is a runtime contract migration rather than a presentation-only edit.
+RULEBOX_MARKET_EVIDENCE_GUARD_RULE_VERSIONS: Dict[str, str] = {
+    "graph.loss_smart_money.defense.v1": "v3",
+    "graph.investor_flow.smart_money_accumulation.v1": "v3",
+    "graph.investor_flow.retail_dip_buying_risk.v1": "v3",
+    "graph.investor_flow.smart_money_outflow_risk.v1": "v3",
+    "graph.loss_smart_money.add_buy_review.v1": "v3",
+    "graph.loss_rebound.trim_moderation.v1": "v2",
+    "graph.aggressive.loss_recovery.add_buy_review.v1": "v3",
+    "graph.averaging_down.risk_guard.v1": "v3",
+    "graph.winner_momentum.add_buy_review.v1": "v3",
+    "graph.profit_momentum.hold_add_review.v1": "v3",
+    "graph.instrument_profile.cyclical_growth.recovery_add_review.v1": "v2",
+    "graph.strategy_profile.aggressive_recovery_room.v1": "v3",
+    "graph.flow.sell_pressure.v1": "v2",
+    "graph.flow.accumulation.entry.v1": "v2",
+    "graph.price.recovery.confirmed_by_flow.v1": "v3",
+    "graph.price.rebound.failure.v1": "v3",
+    "graph.flow.recovery_confirmed_by_smart_money.v1": "v3",
+    "graph.flow.price_up_smart_money_outflow.divergence.v1": "v3",
+    "graph.watchlist.direct_momentum.entry.v1": "v2",
+    "graph.news.price_reaction.risk_confirmed.v1": "v3",
+}
+RULEBOX_MARKET_EVIDENCE_GUARD_RULE_IDS: FrozenSet[str] = frozenset(
+    RULEBOX_MARKET_EVIDENCE_GUARD_RULE_VERSIONS
+)
+
 RULEBOX_RUNTIME_CONTRACT_RULE_IDS: FrozenSet[str] = frozenset(
-    RULEBOX_RAW_ABOX_RUNTIME_RULE_IDS | RULEBOX_DECISION_SCOPE_RULE_IDS
+    RULEBOX_RAW_ABOX_RUNTIME_RULE_IDS
+    | RULEBOX_DECISION_SCOPE_RULE_IDS
+    | RULEBOX_MARKET_EVIDENCE_GUARD_RULE_IDS
 )
 
 RULEBOX_RAW_ABOX_RUNTIME_RULE_VERSIONS: Dict[str, str] = {
@@ -100,6 +131,7 @@ for _rule_id in CRYPTO_MARKET_RULE_IDS | RATE_MACRO_RULE_IDS:
 RULEBOX_RUNTIME_CONTRACT_RULE_VERSIONS: Dict[str, str] = {
     **RULEBOX_RAW_ABOX_RUNTIME_RULE_VERSIONS,
     **{rule_id: "v2" for rule_id in RULEBOX_DECISION_SCOPE_RULE_IDS},
+    **RULEBOX_MARKET_EVIDENCE_GUARD_RULE_VERSIONS,
 }
 
 # Rules introduced after TypeDB became the persisted source of truth. Missing
@@ -129,6 +161,7 @@ def rulebox_release_manifest() -> Dict[str, object]:
         "deprecatedRuleIds": sorted(DEPRECATED_TYPEDB_RULE_IDS),
         "rawAboxContractRuleIds": sorted(RULEBOX_RAW_ABOX_RUNTIME_RULE_IDS),
         "decisionScopeContractRuleIds": sorted(RULEBOX_DECISION_SCOPE_RULE_IDS),
+        "marketEvidenceGuardRuleIds": sorted(RULEBOX_MARKET_EVIDENCE_GUARD_RULE_IDS),
         "platformAdditionRuleIds": sorted(RULEBOX_PLATFORM_RELEASE_ADDITION_IDS),
         "runtimeDecisionUse": False,
     }

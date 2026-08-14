@@ -89,6 +89,32 @@ def stable_id(prefix: str, *parts: object) -> str:
     return prefix + ":" + hashlib.sha256(raw.encode("utf-8")).hexdigest()[:20]
 
 
+def scoped_decision_follow_ups(
+    episode_id: str,
+    conditions: Iterable[Dict[str, object]],
+) -> List[Dict[str, object]]:
+    """Give a reusable condition meaning an episode-owned persistence ID."""
+
+    scoped = []
+    for item in conditions or []:
+        if not isinstance(item, dict):
+            continue
+        row = dict(item)
+        semantic_id = str(row.get("sourceConditionId") or row.get("conditionId") or "").strip()
+        if not semantic_id:
+            semantic_id = stable_id(
+                "follow-up-meaning",
+                row.get("field"),
+                row.get("operator"),
+                row.get("threshold"),
+                row.get("purpose"),
+            )
+        row["sourceConditionId"] = semantic_id
+        row["conditionId"] = stable_id("decision-follow-up", episode_id, semantic_id)
+        scoped.append(row)
+    return scoped
+
+
 def unique_texts(values: Iterable[object], limit: int = 12) -> List[str]:
     rows: List[str] = []
     for value in values or []:
@@ -473,6 +499,10 @@ class DecisionEpisode:
     counter_evidence_ids: List[str] = field(default_factory=list)
     unresolved_questions: List[str] = field(default_factory=list)
     decision_summary: str = ""
+    investment_view: str = ""
+    execution_decision: str = ""
+    follow_up_conditions: List[Dict[str, object]] = field(default_factory=list)
+    unsupported_follow_ups: List[Dict[str, object]] = field(default_factory=list)
     decided_at: str = field(default_factory=utc_now_iso)
     status: str = "active"
     source: str = "notification-ai"
@@ -806,6 +836,18 @@ class DecisionEpisode:
             counter_evidence_ids=list(payload.get("counterEvidenceIds") or []),
             unresolved_questions=list(payload.get("unresolvedQuestions") or []),
             decision_summary=str(payload.get("decisionSummary") or ""),
+            investment_view=str(payload.get("investmentView") or payload.get("investment_view") or ""),
+            execution_decision=str(payload.get("executionDecision") or payload.get("execution_decision") or ""),
+            follow_up_conditions=[
+                dict(item)
+                for item in payload.get("followUpConditions") or payload.get("follow_up_conditions") or []
+                if isinstance(item, dict)
+            ],
+            unsupported_follow_ups=[
+                dict(item)
+                for item in payload.get("unsupportedFollowUps") or payload.get("unsupported_follow_ups") or []
+                if isinstance(item, dict)
+            ],
             decided_at=str(payload.get("decidedAt") or utc_now_iso()),
             status=str(payload.get("status") or "active"),
             source=str(payload.get("source") or "notification-ai"),
@@ -2846,6 +2888,16 @@ def decision_episode_from_context(
         counter_evidence_ids=counter_ids,
         unresolved_questions=list(validated_response.get("unresolvedQuestions") or brain.get("selfQuestions") or []),
         decision_summary=str(validated_response.get("summary") or ""),
+        investment_view=str(validated_response.get("investmentView") or validated_response.get("summary") or ""),
+        execution_decision=str(validated_response.get("executionDecision") or validated_response.get("currentActionPlan") or ""),
+        follow_up_conditions=scoped_decision_follow_ups(
+            episode_id,
+            validated_response.get("followUpConditions") or [],
+        ),
+        unsupported_follow_ups=scoped_decision_follow_ups(
+            episode_id,
+            validated_response.get("unsupportedFollowUps") or [],
+        ),
         decided_at=decided_at,
         status="abstained" if comparison.abstained else "active",
         source="notification-ai-hypothesis-competition",

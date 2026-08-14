@@ -67,6 +67,7 @@ MYSQL_OPERATIONAL_COMPACTION_TABLES = frozenset({
     "ontology_world_projection_outbox",
     "ontology_inference_detail_outbox",
     "investment_decision_episodes",
+    "investment_decision_follow_ups",
     "investment_decision_outcomes",
     "mysql_retention_runs",
     "investment_hypothesis_lifecycle_states",

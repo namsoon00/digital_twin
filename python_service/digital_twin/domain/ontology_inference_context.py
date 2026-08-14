@@ -651,8 +651,11 @@ def matches_from_inference(
             )
             evidence_state.update({
                 "dataState": "unavailable",
+                "dataStateLabel": DATA_STATE_LABELS["unavailable"],
                 "evidenceUsableForJudgement": False,
                 "judgementBlocked": True,
+                "inferenceEligibilityStatus": "reference-only",
+                "inferenceEligibilityReason": policy_reason,
                 "freshnessGateReason": policy_reason,
                 "policyReasonCode": policy_reason_code,
                 "drivers": [
@@ -688,7 +691,7 @@ def matches_from_inference(
             decision_effect=decision_effect,
             evidence=evidence,
             missing=list(trace.get("missingData") or []),
-            reference_only=bool(evidence_state.get("judgementBlocked")),
+            reference_only=str(evidence_state.get("inferenceEligibilityStatus") or "") != "eligible",
             prompt_hint=inference_prompt_hint(source_name, "relation"),
             evidence_state=evidence_state,
             decision_stage=stage.stage_key if stage else "",
@@ -855,18 +858,25 @@ def inference_evidence_state(
     matched_conditions = [item for item in trace.get("matchedConditions") or [] if isinstance(item, dict)]
     applied_fields = unique_texts([item.get("field") for item in matched_conditions])
     domains = inference_evidence_domains(relation, trace)
-    freshness = str(trace.get("freshnessStatus") or relation.get("freshnessStatus") or "unknown")
+    freshness = str(trace.get("freshnessStatus") or relation.get("freshnessStatus") or "unknown").strip().lower()
     usable = trace.get("evidenceUsableForJudgement")
     if usable is None:
         usable = relation.get("evidenceUsableForJudgement")
     if usable is None:
         usable = True
+    freshness_blocked = freshness in {"stale", "expired", "invalid", "unavailable", "no-tick"}
+    evidence_usable = usable is not False and not freshness_blocked
     trace_data_state = str(trace.get("dataState") or "").strip().lower()
-    if trace_data_state in DATA_STATE_LABELS:
+    # A materialized trace can retain its former ``partial`` state after its
+    # source observation expires. Explicit usability and freshness always
+    # outrank that cached label when deciding whether the relation may act.
+    if not evidence_usable:
+        data_state = "unavailable"
+    elif trace_data_state in DATA_STATE_LABELS:
         data_state = trace_data_state
     else:
         data_state = data_state_from_evidence(
-            usable=usable,
+            usable=evidence_usable,
             freshness_status=freshness,
             missing=trace.get("missingData") or [],
             has_evidence=bool(matched_conditions or trace.get("evidenceRelationIds") or relation.get("ruleId")),
@@ -878,6 +888,23 @@ def inference_evidence_state(
         trace.get("label"),
         trace.get("freshnessGateReason") if usable is False else "",
     ])
+    judgement_blocked = not evidence_usable or data_state in {"unavailable", "insufficient"}
+    eligibility_status = "reference-only" if judgement_blocked else "eligible"
+    eligibility_reason = ""
+    if usable is False:
+        eligibility_reason = str(
+            trace.get("freshnessGateReason")
+            or relation.get("freshnessGateReason")
+            or "원천 근거가 판단에 사용할 수 없는 상태입니다."
+        )
+    elif freshness_blocked:
+        eligibility_reason = str(
+            trace.get("freshnessGateReason")
+            or relation.get("freshnessGateReason")
+            or ("근거 신선도 상태가 " + freshness + "입니다.")
+        )
+    elif data_state in {"unavailable", "insufficient"}:
+        eligibility_reason = "판단에 필요한 근거가 충분하지 않습니다."
     return {
         "dataState": data_state,
         "dataStateLabel": DATA_STATE_LABELS[data_state],
@@ -885,8 +912,10 @@ def inference_evidence_state(
         "evidenceDomains": domains,
         "appliedFactFields": applied_fields,
         "evidenceCount": len(matched_conditions) or len(trace.get("evidenceRelationIds") or []) or 1,
-        "evidenceUsableForJudgement": usable is not False,
-        "judgementBlocked": data_state in {"unavailable", "insufficient"},
+        "evidenceUsableForJudgement": evidence_usable,
+        "judgementBlocked": judgement_blocked,
+        "inferenceEligibilityStatus": eligibility_status,
+        "inferenceEligibilityReason": eligibility_reason,
         "freshnessStatus": freshness,
         "freshnessGateReason": str(trace.get("freshnessGateReason") or relation.get("freshnessGateReason") or ""),
         "drivers": drivers[:6],
@@ -1133,18 +1162,27 @@ def action_envelope_from_inference(
 
     facts = facts or {}
     entries: List[Dict[str, object]] = []
+    excluded_entries: List[Dict[str, object]] = []
     blocked_policy_entries: List[Dict[str, object]] = []
     for match in matches or []:
         if not match.matched:
             continue
         relation = relation_for_match(match, relations)
         if match.reference_only:
-            if bool((match.evidence_state or {}).get("judgementBlocked")):
-                blocked_policy_entries.append({
-                    "match": match,
-                    "relation": relation,
-                    "reason": str((match.evidence_state or {}).get("policyReasonCode") or "judgement-blocked"),
-                })
+            excluded = {
+                "match": match,
+                "relation": relation,
+                "reason": str(
+                    (match.evidence_state or {}).get("inferenceEligibilityReason")
+                    or (match.evidence_state or {}).get("policyReasonCode")
+                    or "judgement-evidence-ineligible"
+                ),
+            }
+            if str((match.evidence_state or {}).get("policyReasonCode") or "").startswith("missing-decision-"):
+                excluded["reason"] = str((match.evidence_state or {}).get("policyReasonCode"))
+                blocked_policy_entries.append(excluded)
+            else:
+                excluded_entries.append(excluded)
             continue
         stage = decision_stage_from_relation(relation)
         if stage is None:
@@ -1202,16 +1240,11 @@ def action_envelope_from_inference(
                 blocked_actions.append(code)
 
     by_effect = {effect: [item for item in entries if item["effect"] == effect] for effect in ("support", "defer", "constrain", "block")}
-    unusable = [
-        item for item in entries
-        if str(item["match"].data_state or "").lower() in {"unavailable", "insufficient"}
-        or bool((item["match"].evidence_state or {}).get("judgementBlocked"))
-    ]
     partial = [item for item in entries if str(item["match"].data_state or "").lower() == "partial"]
 
-    if blocked_policy_entries or unusable:
+    if not entries:
         status = "JUDGEMENT_BLOCKED"
-        driving = unusable
+        driving = []
         preferred_action = "HOLD"
     elif by_effect["block"]:
         status = "ENTRY_BLOCKED" if target_role == WATCHLIST_TARGET_ROLE else "JUDGEMENT_BLOCKED"
@@ -1259,7 +1292,7 @@ def action_envelope_from_inference(
         ai_allowed_actions = [preferred_action]
 
     blocked_rule_ids = unique_texts(
-        [item["match"].rule_id for item in unusable]
+        [item["match"].rule_id for item in excluded_entries]
         + [item["match"].rule_id for item in blocked_policy_entries]
     )[:8]
     missing_effect_rule_ids = unique_texts(
@@ -1267,12 +1300,22 @@ def action_envelope_from_inference(
         for item in blocked_policy_entries
         if item.get("reason") == "missing-decision-effect"
     )[:8]
-    data_state = "unavailable" if (unusable or blocked_policy_entries) else ("partial" if partial else "sufficient")
+    data_state = (
+        "unavailable"
+        if not entries
+        else ("partial" if partial else "sufficient")
+    )
     data_readiness = {
-        "state": "blocked" if (unusable or blocked_policy_entries) else ("partial" if partial else "ready"),
+        "state": (
+            "blocked"
+            if not entries
+            else ("partial" if partial else "ready")
+        ),
         "dataState": data_state,
-        "usable": not bool(unusable or blocked_policy_entries),
+        "usable": bool(entries),
         "blockedRuleIds": blocked_rule_ids,
+        "excludedRuleIds": unique_texts([item["match"].rule_id for item in excluded_entries])[:12],
+        "eligibleRuleIds": unique_texts([item["match"].rule_id for item in entries])[:12],
         "partialRuleIds": unique_texts([item["match"].rule_id for item in partial])[:8],
         "requiredDomains": unique_texts(
             domain
@@ -1297,7 +1340,7 @@ def action_envelope_from_inference(
     status_label = ACTION_ENVELOPE_STATUS_LABELS.get(status, "조건 확인")
     selected_entry = min(driving, key=lambda item: semantic_relation_sort_key(item["relation"])) if driving else None
     return {
-        "version": "typedb-action-envelope-v1",
+        "version": "typedb-action-envelope-v2",
         "source": "typedb-materialized-decision-effects",
         "status": status,
         "statusLabel": status_label,
@@ -1309,7 +1352,7 @@ def action_envelope_from_inference(
         "aiAllowedActions": ai_allowed_actions,
         "aiMayUpgradeToBuy": bool(target_role == WATCHLIST_TARGET_ROLE and status == "ENTRY_ELIGIBLE"),
         "aiMayDowngrade": bool(preferred_action and len(ai_allowed_actions) > 1),
-        "judgementBlocked": bool(unusable or blocked_policy_entries or by_effect["block"]),
+        "judgementBlocked": bool(not entries or by_effect["block"]),
         "dataReadiness": data_readiness,
         "missingDecisionEffectRuleIds": missing_effect_rule_ids,
         "supportRuleIds": rule_ids("support"),
@@ -1319,6 +1362,33 @@ def action_envelope_from_inference(
         "drivingRuleIds": unique_texts([item["match"].rule_id for item in driving])[:8],
         "selectedRuleId": str((selected_entry or {}).get("match").rule_id if selected_entry else ""),
         "selectedDecisionEffect": str((selected_entry or {}).get("effect") or ""),
+        "inferenceEligibilityAssessments": [
+            {
+                "tboxClass": "InferenceEligibilityAssessment",
+                "ruleId": item["match"].rule_id,
+                "status": "eligible",
+                "freshnessStatus": str((item["match"].evidence_state or {}).get("freshnessStatus") or "unknown"),
+                "evidenceUsableForJudgement": True,
+            }
+            for item in entries[:12]
+        ] + [
+            {
+                "tboxClass": "InferenceEligibilityAssessment",
+                "ruleId": item["match"].rule_id,
+                "status": "reference-only",
+                "freshnessStatus": str((item["match"].evidence_state or {}).get("freshnessStatus") or "unknown"),
+                "evidenceUsableForJudgement": False,
+                "reason": str(item.get("reason") or ""),
+            }
+            for item in (excluded_entries + blocked_policy_entries)[:12]
+        ],
+        "coreInferenceSelection": {
+            "tboxClass": "CoreInferenceSelection",
+            "selectedRuleId": str((selected_entry or {}).get("match").rule_id if selected_entry else ""),
+            "eligibleRuleIds": unique_texts([item["match"].rule_id for item in entries])[:12],
+            "excludedRuleIds": unique_texts([item["match"].rule_id for item in excluded_entries])[:12],
+            "selectionBasis": "fresh-usable-typedb-inference",
+        },
         "nextChecks": metadata_rows("next_checks", driving or entries),
         "invalidationConditions": metadata_rows("weaken_conditions", by_effect["block"] + by_effect["defer"] + by_effect["constrain"]),
         "strengthenConditions": metadata_rows("strengthen_conditions", by_effect["support"]),
@@ -1342,6 +1412,7 @@ def decision_from_inference(
         for item in matches
         if item.matched
         and not item.reference_only
+        and str((item.evidence_state or {}).get("inferenceEligibilityStatus") or "eligible") == "eligible"
         and decision_stage_from_relation(relation_for_match(item, relations)) is not None
         and decision_effect_from_relation(relation_for_match(item, relations))
     ]
@@ -1366,6 +1437,8 @@ def decision_from_inference(
             ),
             "finalDecisionOwner": "typedb-schema-function-rules",
             "candidateRuleIds": unique_texts([item.rule_id for item in matches if item.matched])[:12],
+            "eligibleRuleIds": [],
+            "excludedRuleIds": list((action_envelope.get("dataReadiness") or {}).get("excludedRuleIds") or []),
             "candidateDecisionStages": [],
             "selectedInferenceTraceId": "",
             "decisionStage": "",
@@ -1492,7 +1565,7 @@ def decision_from_inference(
     envelope_data_state = str((action_envelope.get("dataReadiness") or {}).get("dataState") or selected.data_state)
     review_level = review_level_for(stage.action_level, envelope_data_state)
     candidate_stages = []
-    for item in matches:
+    for item in candidates:
         if not item.matched:
             continue
         candidate_stage = decision_stage_from_relation(relation_for_match(item, relations))
@@ -1506,6 +1579,8 @@ def decision_from_inference(
         "selectionRole": "typedb-action-envelope-baseline-not-final-opinion",
         "finalDecisionOwner": "ai-hypothesis-competition",
         "candidateRuleIds": unique_texts([item.rule_id for item in matches if item.matched])[:12],
+        "eligibleRuleIds": unique_texts([item.rule_id for item in candidates])[:12],
+        "excludedRuleIds": list((action_envelope.get("dataReadiness") or {}).get("excludedRuleIds") or []),
         "candidateDecisionStages": unique_texts(candidate_stages)[:8],
         "selectedInferenceTraceId": str(trace.get("id") or ""),
         "decisionStage": stage.stage_key,

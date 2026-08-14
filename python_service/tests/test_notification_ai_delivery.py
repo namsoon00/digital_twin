@@ -1,6 +1,16 @@
 import unittest
 
+from digital_twin.application.notification_service import NotificationQueueRunner
 from digital_twin.domain.notification_ai_delivery import final_ai_delivery_decision
+from digital_twin.domain.notifications import NotificationJob
+
+
+class SuppressionQueue:
+    def __init__(self):
+        self.reason = ""
+
+    def mark_suppressed(self, job, reason):
+        self.reason = reason
 
 
 def watchlist_context(ai_kind="unchanged", material_sources=None):
@@ -20,7 +30,11 @@ def watchlist_context(ai_kind="unchanged", material_sources=None):
         },
         "ontologyRelationContext": {
             "targetRole": "watchlist",
-            "actionEnvelope": {"targetRole": "watchlist"},
+            "actionEnvelope": {
+                "targetRole": "watchlist",
+                "selectedRuleId": "graph.recovery.v1",
+                "dataReadiness": {"eligibleRuleIds": ["graph.recovery.v1"]},
+            },
         },
         "ontologyInsight": {
             "semanticComponents": {
@@ -49,6 +63,48 @@ class FinalAIDeliveryTests(unittest.TestCase):
 
         self.assertEqual("send", decision["decision"])
         self.assertEqual(1, decision["materialSourceEventCount"])
+
+    def test_candidate_only_holding_change_is_also_suppressed(self):
+        context = watchlist_context()
+        context["ontologyRelationContext"]["targetRole"] = "holding"
+        context["ontologyRelationContext"]["actionEnvelope"]["targetRole"] = "holding"
+
+        decision = final_ai_delivery_decision(context)
+
+        self.assertEqual("suppress", decision["decision"])
+        self.assertEqual("graph_candidate_only_change", decision["suppressionReason"])
+
+    def test_nearly_expired_snapshot_is_refreshed_before_ai_queue(self):
+        queue = SuppressionQueue()
+        requested = []
+        runner = NotificationQueueRunner(
+            queue,
+            account_repository=None,
+            notifier_factory=lambda account: None,
+            settings={
+                "notificationAiGateEnabled": "1",
+                "notificationAiFreshnessReserveMinutes": "4",
+            },
+            ai_request_enqueuer=object(),
+            fresh_data_recheck_requester=lambda account, symbol, job_id: requested.append(symbol) or {"requested": True},
+        )
+        job = NotificationJob.create(
+            "test",
+            account_id="main",
+            message_type="investmentInsight",
+            context={
+                "messageType": "investmentInsight",
+                "rawSymbol": "005930",
+                "dataFreshnessAgeMinutes": 7,
+                "dataFreshnessMaxAgeMinutes": 10,
+            },
+        )
+
+        allowed = runner.apply_ai_freshness_headroom_gate(job)
+
+        self.assertFalse(allowed)
+        self.assertEqual(["005930"], requested)
+        self.assertEqual("ai_freshness_headroom_recheck", job.context["deliverySuppressionReason"])
 
 
 if __name__ == "__main__":

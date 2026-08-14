@@ -1,6 +1,8 @@
 import time
+import hashlib
 from datetime import datetime, timezone
 from typing import Callable, Dict, List
+from urllib.parse import parse_qsl, urlencode, urlsplit, urlunsplit
 from zoneinfo import ZoneInfo
 
 from ..domain.disclosure_analysis import local_disclosure_analysis
@@ -491,6 +493,9 @@ class NotificationQueueRunner:
             if not self.apply_dispatch_freshness_gate(job, "AI 판단 전"):
                 processed += 1
                 continue
+            if not self.apply_ai_freshness_headroom_gate(job):
+                processed += 1
+                continue
             if self.should_defer_ai_inference(job):
                 self.active_job_stage = "ai-queue-handoff"
                 try:
@@ -705,6 +710,48 @@ class NotificationQueueRunner:
         self.last_run_details.append(self.job_detail(job, "suppressed", reason[:160]))
         return False
 
+    def apply_ai_freshness_headroom_gate(self, job: NotificationJob) -> bool:
+        """Refresh a nearly expired snapshot before spending AI queue time."""
+
+        if not self.should_defer_ai_inference(job):
+            return True
+        context = dict(job.context or {})
+        try:
+            age = float(context.get("dataFreshnessAgeMinutes"))
+            maximum = float(context.get("dataFreshnessMaxAgeMinutes"))
+            reserve = float(self.settings.get("notificationAiFreshnessReserveMinutes") or 4)
+        except (TypeError, ValueError):
+            return True
+        # Very short-lived realtime fields are already reduced to their
+        # required KIS stages by the freshness policy. Avoid a refresh loop for
+        # sub-five-minute evidence and reserve headroom for the decision packet.
+        if maximum < 5 or maximum - age >= max(1.0, reserve):
+            return True
+        reason = (
+            "AI 판단 전 데이터 유효시간 여유 부족: 남은 "
+            + str(round(maximum - age, 1))
+            + "분, 필요한 여유 " + str(round(reserve, 1)) + "분"
+        )
+        recheck = self.request_fresh_data_recheck(job, "AI 큐 등록 전", reason)
+        context = dict(job.context or {})
+        context["aiFreshnessHeadroomGate"] = {
+            "version": "ai-freshness-headroom-v1",
+            "decision": "refresh",
+            "ageMinutes": age,
+            "maxAgeMinutes": maximum,
+            "reserveMinutes": reserve,
+            "recheckRequested": bool(recheck.get("requested")),
+        }
+        context["deliverySuppressionReason"] = "ai_freshness_headroom_recheck"
+        job.context = context
+        if hasattr(self.queue, "mark_suppressed"):
+            self.queue.mark_suppressed(job, reason)
+        else:
+            self.queue.mark_failed(job, reason)
+        self.record_operational_delivery(job, "suppressed", reason)
+        self.last_run_details.append(self.job_detail(job, "suppressed", reason[:160]))
+        return False
+
     def request_fresh_data_recheck(self, job: NotificationJob, stage: str, reason: str) -> Dict[str, object]:
         if str(job.message_type or "") != INVESTMENT_INSIGHT or not callable(self.fresh_data_recheck_requester):
             return {"requested": False}
@@ -783,6 +830,15 @@ class NotificationQueueRunner:
         # leaving the pre-rendered source text in completed jobs.
         if rendered:
             job.text = rendered
+            context = dict(job.context or {})
+            context["notificationPresentationAudit"] = {
+                "version": "notification-presentation-v2",
+                "detailLevel": str(context.get("notificationDetailLevel") or "full"),
+                "renderedBytes": len(rendered.encode("utf-8")),
+                "renderedSha256": hashlib.sha256(rendered.encode("utf-8")).hexdigest(),
+                "detailUrl": str(context.get("notificationDetailUrl") or ""),
+            }
+            job.context = context
         return rendered
 
     def apply_send_time_context(self, job: NotificationJob) -> None:
@@ -794,12 +850,25 @@ class NotificationQueueRunner:
         sent_at = now.astimezone(timezone.utc).isoformat().replace("+00:00", "Z")
         sent_time = now.astimezone(ZoneInfo("Asia/Seoul")).strftime("%Y-%m-%d %H:%M KST")
         context = dict(job.context or {})
+        base_url = str(context.get("notifyLinkUrl") or "").strip()
+        detail_url = ""
+        if base_url:
+            parts = urlsplit(base_url)
+            query = dict(parse_qsl(parts.query, keep_blank_values=True))
+            query.update({
+                "tab": "notifications",
+                "notification": "decisions",
+                "detail": "notification-job",
+                "detailKey": str(job.job_id or ""),
+            })
+            detail_url = urlunsplit((parts.scheme, parts.netloc, parts.path, urlencode(query), parts.fragment))
         context.update({
             "jobId": job.job_id,
             "notificationNumber": notification_debug_number(job.job_id),
             "sentAt": sent_at,
             "sentTime": sent_time,
             "sentLine": "발송시각 " + sent_time,
+            "notificationDetailUrl": detail_url,
         })
         job.context = context
 

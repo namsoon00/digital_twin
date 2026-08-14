@@ -32,6 +32,52 @@ from ..domain.notification_ai_gate_validation import (
 from ..domain.notification_icon_policy import investment_notification_icon
 
 
+def _dedupe_sentences(value: object) -> str:
+    text = " ".join(str(value or "").split())
+    if not text:
+        return ""
+    sentences = re.split(r"(?<=[.!?])\s+", text)
+    result = []
+    seen = set()
+    for sentence in sentences:
+        clean = sentence.strip()
+        key = re.sub(r"[^0-9a-z가-힣]+", "", clean.casefold())
+        if not key or key in seen:
+            continue
+        seen.add(key)
+        result.append(clean)
+    return " ".join(result)
+
+
+def _dedupe_response_rows(values: object, limit: int) -> list:
+    rows = []
+    keys = []
+    for value in values or []:
+        clean = _dedupe_sentences(value)
+        key = re.sub(r"[^0-9a-z가-힣]+", "", clean.casefold())
+        if not clean or not key or any(key in known or known in key for known in keys):
+            continue
+        rows.append(clean)
+        keys.append(key)
+        if len(rows) >= limit:
+            break
+    return rows
+
+
+def normalize_validated_ai_explanation(response: NotificationAIValidatedResponse) -> None:
+    """Keep the stored AI result concise without weakening its decision."""
+
+    for field in (
+        "summary", "opinion", "current_action_plan", "change_analysis",
+        "next_action_plan", "invalidation_condition", "epistemic_summary",
+    ):
+        setattr(response, field, _dedupe_sentences(getattr(response, field, "")))
+    response.evidence = _dedupe_response_rows(response.evidence, 3)
+    response.counter_evidence = _dedupe_response_rows(response.counter_evidence, 2)
+    response.next_checks = _dedupe_response_rows(response.next_checks, 3)
+    response.missing_data_impact = _dedupe_response_rows(response.missing_data_impact, 3)
+
+
 def _ontology_id(kind: str, value: object) -> str:
     normalized = re.sub(r"[^A-Za-z0-9가-힣_.:-]+", "-", str(value or "").strip())
     return kind + ":" + (normalized or "notification")
@@ -203,6 +249,7 @@ def context_with_validated_ai_response(
     response: NotificationAIValidatedResponse,
     settings: Optional[Dict[str, object]] = None,
 ) -> Dict[str, object]:
+    normalize_validated_ai_explanation(response)
     enriched = context_with_ai_decision_transition(context or {}, response.action)
     reconciled_change, false_initial_history = reconcile_change_analysis_with_decision_history(
         enriched,
@@ -210,6 +257,7 @@ def context_with_validated_ai_response(
         response.change_analysis,
     )
     response.change_analysis = reconciled_change
+    response.change_analysis = _dedupe_sentences(response.change_analysis)
     if false_initial_history:
         warning = "저장된 이전 AI 판단과 맞지 않는 첫 판단 표현을 결정 이력 기준으로 보정했습니다."
         if warning not in response.validation_warnings:

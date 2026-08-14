@@ -27,8 +27,8 @@ from .notification_decision_policy import (
 )
 
 
-AI_DECISION_BRIEF_VERSION = "investment-ai-decision-brief-v1"
-AI_DECISION_PROMPT_VERSION = "investment-ai-judge-v2"
+AI_DECISION_BRIEF_VERSION = "investment-ai-decision-brief-v2"
+AI_DECISION_PROMPT_VERSION = "investment-ai-judge-v3"
 AI_DECISION_CONTRACT_VERSION = "notification-ai-decision-contract-v2"
 AI_PROFILE_STANDARD = "standard"
 AI_PROFILE_DEEP_RESEARCH = "deepResearch"
@@ -104,15 +104,15 @@ def notification_ai_execution_profile(
     profile = AI_PROFILE_DEEP_RESEARCH if deep_enabled and deep_reasons else AI_PROFILE_STANDARD
     if profile == AI_PROFILE_DEEP_RESEARCH:
         effort = _reasoning_effort(settings.get("notificationAiDeepReasoningEffort"), "max")
-        prompt_bytes = _int_setting(settings, "notificationAiDeepPromptMaxBytes", 36 * 1024, 24 * 1024, 96 * 1024)
+        prompt_bytes = _int_setting(settings, "notificationAiDeepPromptMaxBytes", 20 * 1024, 16 * 1024, 20 * 1024)
     else:
         effort = _reasoning_effort(
-            settings.get("notificationAiStandardReasoningEffort")
-            or settings.get("notificationAiReasoningEffort"),
-            "high",
+            settings.get("notificationAiReasoningEffort")
+            or settings.get("notificationAiStandardReasoningEffort"),
+            "max",
         )
-        prompt_bytes = _int_setting(settings, "notificationAiStandardPromptMaxBytes", 28 * 1024, 24 * 1024, 64 * 1024)
-    queue_limit = _int_setting(settings, "notificationAiQueueMaxPromptBytes", 48 * 1024, 24 * 1024, 256 * 1024)
+        prompt_bytes = _int_setting(settings, "notificationAiStandardPromptMaxBytes", 16 * 1024, 12 * 1024, 16 * 1024)
+    queue_limit = _int_setting(settings, "notificationAiQueueMaxPromptBytes", 24 * 1024, 12 * 1024, 24 * 1024)
     return {
         "version": "notification-ai-execution-profile-v1",
         "name": profile,
@@ -365,7 +365,8 @@ DECISION_FIELDS = (
     "basis", "label", "candidateAction", "sourceCandidateAction", "primaryAction",
     "primaryActionLabel", "decisionStage", "decisionEffect", "actionGroup",
     "actionLevel", "actionPolicy", "allowedActions", "blockedActions", "targetRole",
-    "judgementBlocked", "selectedRuleId", "candidateRuleIds", "reviewLevel",
+    "judgementBlocked", "selectedRuleId", "candidateRuleIds", "eligibleRuleIds",
+    "excludedRuleIds", "reviewLevel",
     "dataState", "changeState", "conflictState", "nextChecks",
 )
 
@@ -374,6 +375,7 @@ ACTION_ENVELOPE_FIELDS = (
     "aiMayDowngrade", "aiMayUpgradeToBuy", "judgementBlocked", "selectedRuleId",
     "drivingRuleIds", "supportRuleIds", "blockingRuleIds", "constraintRuleIds",
     "invalidationConditions", "strengthenConditions", "nextChecks", "targetRole",
+    "dataReadiness", "coreInferenceSelection",
 )
 
 RULE_DECISION_FIELDS = (
@@ -639,6 +641,48 @@ def _compact_portfolio_lifecycle(
     }
 
 
+def _question_bounded_active_rules(
+    values: object,
+    action_envelope: Dict[str, object],
+    limit: int = 6,
+) -> List[Dict[str, object]]:
+    """Select only usable rules that can answer this decision question."""
+
+    envelope = _mapping(action_envelope)
+    readiness = _mapping(envelope.get("dataReadiness"))
+    eligible_ids = {
+        str(item or "").strip()
+        for item in readiness.get("eligibleRuleIds") or []
+        if str(item or "").strip()
+    }
+    priority_ids = _unique([
+        envelope.get("selectedRuleId"),
+        *(envelope.get("drivingRuleIds") or []),
+        *(envelope.get("blockingRuleIds") or []),
+        *(envelope.get("constraintRuleIds") or []),
+        *(envelope.get("supportRuleIds") or []),
+        *(envelope.get("deferRuleIds") or []),
+    ], limit * 2)
+    rows = []
+    for item in values or []:
+        if not isinstance(item, dict):
+            continue
+        rule_id = str(item.get("ruleId") or "").strip()
+        evidence_state = _mapping(item.get("evidenceState"))
+        eligibility = str(evidence_state.get("inferenceEligibilityStatus") or "eligible")
+        if eligibility != "eligible" or evidence_state.get("evidenceUsableForJudgement") is False:
+            continue
+        if eligible_ids and rule_id not in eligible_ids:
+            continue
+        rows.append(dict(item))
+    rows.sort(key=lambda item: (
+        priority_ids.index(str(item.get("ruleId") or ""))
+        if str(item.get("ruleId") or "") in priority_ids else len(priority_ids),
+        str(item.get("ruleId") or ""),
+    ))
+    return rows[:limit]
+
+
 def _critical_decision_brief(brief: Dict[str, object]) -> Dict[str, object]:
     """Keep decision-bearing fields before reducing presentation detail.
 
@@ -657,6 +701,7 @@ def _critical_decision_brief(brief: Dict[str, object]) -> Dict[str, object]:
     lifecycle = _mapping(account_policy.get("portfolioLifecycle"))
     subject = _mapping(brief.get("subject"))
     decision_state = _mapping(brief.get("decisionState"))
+    action_envelope = _mapping(decision_state.get("actionEnvelope"))
     assessment_bundle = _mapping(brief.get("assessmentBundle"))
     raw_alert = _mapping(current.get("rawAlert"))
     policy_scope = _mapping(brief.get("decisionPolicyScope"))
@@ -705,10 +750,10 @@ def _critical_decision_brief(brief: Dict[str, object]) -> Dict[str, object]:
         "currentSituation": {
             "rawAlert": {
                 **_selected_fields(raw_alert, ("messageType", "target", "referenceDate")),
-                "rawLines": list(raw_alert.get("rawLines") or [])[:12],
-                "criteria": list(raw_alert.get("criteria") or [])[:10],
+                "rawLines": list(raw_alert.get("rawLines") or [])[:6],
+                "criteria": list(raw_alert.get("criteria") or [])[:5],
             },
-            "relationFacts": _compact_relation_facts(current.get("relationFacts"), 56),
+            "relationFacts": _compact_relation_facts(current.get("relationFacts"), 36),
             "trendDynamics": current.get("trendDynamics") or {},
             "temporalWindows": temporal_windows,
             "companyContext": _compact_company_context(current.get("companyContext")),
@@ -716,7 +761,9 @@ def _critical_decision_brief(brief: Dict[str, object]) -> Dict[str, object]:
         },
         "inference": {
             "activeRules": _compact_dict_rows(
-                inference.get("activeRules"), RULE_DECISION_FIELDS, 12,
+                _question_bounded_active_rules(inference.get("activeRules"), action_envelope),
+                RULE_DECISION_FIELDS,
+                6,
             ),
             "executionPlan": _selected_fields(
                 inference.get("executionPlan"),
@@ -727,7 +774,7 @@ def _critical_decision_brief(brief: Dict[str, object]) -> Dict[str, object]:
                 ),
             ),
             "decisionDrivers": _compact_dict_rows(
-                inference.get("decisionDrivers"), DRIVER_DECISION_FIELDS, 10,
+                inference.get("decisionDrivers"), DRIVER_DECISION_FIELDS, 6,
             ),
             "whyNow": inference.get("whyNow") or {},
             "signalConflicts": inference.get("signalConflicts") or {},
@@ -747,7 +794,7 @@ def _critical_decision_brief(brief: Dict[str, object]) -> Dict[str, object]:
         },
         "evidence": {
             "researchEvidence": _compact_dict_rows(
-                evidence.get("researchEvidence"), EVIDENCE_DECISION_FIELDS, 8,
+                evidence.get("researchEvidence"), EVIDENCE_DECISION_FIELDS, 5,
             ),
             "newsHeadlines": list(evidence.get("newsHeadlines") or [])[:5],
             "disclosure": evidence.get("disclosure") or {},
@@ -797,7 +844,7 @@ def _critical_decision_brief(brief: Dict[str, object]) -> Dict[str, object]:
 
 
 def bounded_decision_brief(brief: Dict[str, object], budget_bytes: int) -> Dict[str, object]:
-    budget = max(8 * 1024, int(budget_bytes or 8 * 1024))
+    budget = max(6 * 1024, int(budget_bytes or 6 * 1024))
     critical = _critical_decision_brief(brief)
     for string_limit, list_limit, dict_limit in (
         (260, 16, 64),
@@ -828,7 +875,7 @@ def build_notification_ai_decision_prompt(
     decision_brief: Dict[str, object] = None,
 ) -> str:
     execution_profile = dict(profile or notification_ai_execution_profile(context, settings))
-    maximum = max(24 * 1024, int(max_prompt_bytes or execution_profile.get("maxPromptBytes") or 28 * 1024))
+    maximum = max(12 * 1024, int(max_prompt_bytes or execution_profile.get("maxPromptBytes") or 16 * 1024))
     brief = dict(decision_brief or notification_ai_decision_brief(context, settings, execution_profile))
     schema = {
         "action": "BUY|ADD|HOLD|TRIM|SELL|AVOID",
@@ -915,7 +962,9 @@ def build_notification_ai_decision_prompt(
         "alternativeAction에는 허용된 현실적 대안 하나와 전환 조건을 적어 현재 선택과 비교한다.",
         "같은 행동을 유지해도 무엇이 유지됐고 무엇이 달라졌는지 changeAnalysis에 구분한다.",
         "currentActionPlan, changeAnalysis, nextActionPlan은 서로 다른 내용을 쓴다.",
-        "반대 근거, 누락 자료 영향, 무효화 조건, 다음 확인을 반드시 포함한다.",
+        "evidence는 핵심 3개 이하, counterEvidence는 실제 반대 근거 2개 이하, nextChecks는 판단을 바꿀 확인 2개 이하로 쓴다. 빈 항목을 억지로 채우지 않는다.",
+        "같은 사실이나 문장을 다른 필드에 반복하지 않는다. 큰 금액은 통화와 억·조 또는 million·billion 단위를 함께 써 원시 정수만 노출하지 않는다.",
+        "반대 근거, 누락 자료 영향, 무효화 조건, 다음 확인은 존재하는 범위에서 명확히 포함한다.",
         "확률이나 임의 점수, 입력에 없는 목표가·손절가·비중을 만들지 않는다.",
         "사용자 문장은 쉬운 한국어로 쓰고 내부 변수명이나 TypeDB 식별자를 그대로 설명문에 노출하지 않는다.",
         "설명 문장 없이 아래 스키마를 따르는 JSON 객체 하나만 출력한다.",
@@ -923,9 +972,9 @@ def build_notification_ai_decision_prompt(
         "DecisionBrief:",
     ]
     instruction_bytes = len("\n".join(instructions).encode("utf-8")) + 1
-    payload = bounded_decision_brief(brief, max(8 * 1024, maximum - instruction_bytes))
+    payload = bounded_decision_brief(brief, max(6 * 1024, maximum - instruction_bytes))
     rendered = "\n".join([*instructions, json.dumps(payload, ensure_ascii=False, separators=(",", ":"), default=str)])
     if len(rendered.encode("utf-8")) > maximum:
-        payload = bounded_decision_brief(brief, max(8 * 1024, maximum - instruction_bytes - 1024))
+        payload = bounded_decision_brief(brief, max(6 * 1024, maximum - instruction_bytes - 1024))
         rendered = "\n".join([*instructions, json.dumps(payload, ensure_ascii=False, separators=(",", ":"), default=str)])
     return rendered

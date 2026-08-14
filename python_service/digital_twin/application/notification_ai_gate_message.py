@@ -3012,6 +3012,17 @@ def _notification_selected_inference_rows(
     context: Dict[str, object],
     response: NotificationAIValidatedResponse,
 ) -> List[str]:
+    relation = context.get("ontologyRelationContext") if isinstance(context.get("ontologyRelationContext"), dict) else {}
+    envelope = relation.get("actionEnvelope") if isinstance(relation.get("actionEnvelope"), dict) else {}
+    readiness = envelope.get("dataReadiness") if isinstance(envelope.get("dataReadiness"), dict) else {}
+    selected_rule_id = str(envelope.get("selectedRuleId") or "").strip()
+    eligible_rule_ids = {
+        str(item or "").strip()
+        for item in readiness.get("eligibleRuleIds") or []
+        if str(item or "").strip()
+    }
+    if selected_rule_id and eligible_rule_ids and selected_rule_id not in eligible_rule_ids:
+        return []
     rows = full_typedb_competing_inference_rows(context, response)
     selected = [row for row in rows if row.startswith("선택 경로:")]
     candidate = [row for row in rows if row.startswith("TypeDB 행동 후보") or row.startswith("TypeDB 후보 상태")]

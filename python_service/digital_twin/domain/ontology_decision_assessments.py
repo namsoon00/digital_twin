@@ -77,6 +77,7 @@ def relation_assessment_scope(relation: Mapping[str, object], match: object = No
 
 def _entry(match: object, relation: Mapping[str, object]) -> Dict[str, object]:
     evidence_state = _mapping(_values(match, "evidence_state", "evidenceState"))
+    eligibility = _text(evidence_state.get("inferenceEligibilityStatus") or "eligible")
     effect = decision_effect_from_relation(dict(relation)) or _text(
         _values(match, "decision_effect", "decisionEffect")
     ).lower()
@@ -97,6 +98,10 @@ def _entry(match: object, relation: Mapping[str, object]) -> Dict[str, object]:
         "evidenceRole": _text(_values(match, "evidence_role", "evidenceRole")),
         "dataState": _text(_values(match, "data_state", "dataState")),
         "judgementBlocked": bool(evidence_state.get("judgementBlocked")),
+        "inferenceEligibilityStatus": eligibility,
+        "inferenceEligibilityReason": _text(evidence_state.get("inferenceEligibilityReason")),
+        "evidenceUsableForJudgement": evidence_state.get("evidenceUsableForJudgement") is not False,
+        "freshnessStatus": _text(evidence_state.get("freshnessStatus") or "unknown"),
         "nextChecks": list(_values(match, "next_checks", "nextChecks") or []),
         "invalidationConditions": list(_values(match, "weaken_conditions", "weakenConditions") or []),
         "strengthenConditions": list(_values(match, "strengthen_conditions", "strengthenConditions") or []),
@@ -200,6 +205,7 @@ def decision_assessment_bundle(
     """Group one aligned InferenceBox generation into independent assessments."""
 
     grouped = {scope: [] for scope in ASSESSMENT_SCOPES}
+    excluded_entries = []
     for match in matches or []:
         if not bool(_values(match, "matched")):
             continue
@@ -207,8 +213,24 @@ def decision_assessment_bundle(
         if not relation:
             continue
         scope = relation_assessment_scope(relation, match)
-        grouped[scope].append(_entry(match, relation))
+        entry = _entry(match, relation)
+        if entry.get("inferenceEligibilityStatus") != "eligible":
+            excluded_entries.append({
+                "ruleId": entry.get("ruleId"),
+                "label": entry.get("label"),
+                "assessmentScope": scope,
+                "reason": entry.get("inferenceEligibilityReason") or "판단 사용 조건을 충족하지 못했습니다.",
+                "freshnessStatus": entry.get("freshnessStatus"),
+            })
+            continue
+        grouped[scope].append(entry)
     assessments = {scope: _assessment(scope, grouped[scope]) for scope in ASSESSMENT_SCOPES}
+    quality = dict(assessments["evidence-quality"])
+    quality["excludedRuleIds"] = _strings(item.get("ruleId") for item in excluded_entries)
+    quality["excludedEntries"] = excluded_entries[:12]
+    if excluded_entries and quality.get("status") == "not-evaluated":
+        quality["status"] = "degraded"
+    assessments["evidence-quality"] = quality
     return {
         "version": DECISION_ASSESSMENT_BUNDLE_VERSION,
         "source": "typedb-inferencebox",

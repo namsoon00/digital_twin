@@ -7,7 +7,7 @@ from digital_twin.domain.ontology_decision_assessments import (
 from digital_twin.domain.ontology_relation_contracts import OntologyRuleMatch
 
 
-def match(rule_id, action, effect="support"):
+def match(rule_id, action, effect="support", eligible=True):
     return OntologyRuleMatch(
         rule_id=rule_id,
         label=rule_id,
@@ -21,6 +21,13 @@ def match(rule_id, action, effect="support"):
         evidence_role="support",
         decision_effect=effect,
         candidate_action=action,
+        reference_only=not eligible,
+        evidence_state={
+            "inferenceEligibilityStatus": "eligible" if eligible else "reference-only",
+            "evidenceUsableForJudgement": eligible,
+            "freshnessStatus": "fresh" if eligible else "stale",
+            "inferenceEligibilityReason": "기준시각 만료" if not eligible else "",
+        },
     )
 
 
@@ -74,6 +81,21 @@ class OntologyDecisionAssessmentTests(unittest.TestCase):
         self.assertEqual("BUY", scoped["recommendedPlan"]["investmentAction"])
         self.assertEqual("ready", scoped["recommendedPlan"]["status"])
         self.assertEqual("instrument-market", scoped["policyScope"])
+
+    def test_reference_only_rule_is_reported_but_not_used_as_opinion(self):
+        bundle = decision_assessment_bundle(
+            [
+                match("rule.fresh", "HOLD"),
+                match("rule.stale", "TRIM", "constrain", eligible=False),
+            ],
+            [
+                relation("rule.fresh", "investment-opinion", "HOLD"),
+                relation("rule.stale", "investment-opinion", "TRIM", "constrain"),
+            ],
+        )
+
+        self.assertEqual("HOLD", bundle["investmentOpinion"]["candidateAction"])
+        self.assertEqual(["rule.stale"], bundle["evidenceQuality"]["excludedRuleIds"])
 
 
 if __name__ == "__main__":

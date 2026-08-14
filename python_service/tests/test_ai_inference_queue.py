@@ -130,7 +130,7 @@ class AIInferenceQueueTests(unittest.TestCase):
         self.assertEqual(request.request_id, prompt_audit["requestId"])
         self.assertEqual("gpt-5.6-sol", prompt_audit["model"])
         self.assertTrue(prompt_audit["prompt"].startswith("너는 자동 주문자가 아니라 검증된 근거를 비교하는"))
-        self.assertEqual("investment-ai-decision-brief-v1", prompt_audit["decisionBriefVersion"])
+        self.assertEqual("investment-ai-decision-brief-v2", prompt_audit["decisionBriefVersion"])
         self.assertEqual("deepResearch", prompt_audit["executionProfile"]["name"])
         self.assertEqual(64, len(prompt_audit["promptHash"]))
         result_count = mysql_fetchone(self.seed, "SELECT COUNT(*) FROM ai_inference_results")
@@ -439,7 +439,7 @@ class AIInferenceQueueTests(unittest.TestCase):
         self.assertEqual([], rendered)
         self.assertEqual([], sent)
         self.assertEqual("suppress", job.context["finalAiDeliveryGate"]["decision"])
-        self.assertEqual("final_ai_action_unchanged", job.context["deliverySuppressionReason"])
+        self.assertEqual("graph_candidate_only_change", job.context["deliverySuppressionReason"])
 
 
 if __name__ == "__main__":

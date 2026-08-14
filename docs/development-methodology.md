@@ -62,10 +62,13 @@ Required flow for new investment behavior:
 13. Bound Graph RAG by the question.
     Store the complete graph and audit context, but send AI only the relevant subject, top active relations, evidence/counter-evidence subgraph, provenance, freshness, competing hypotheses, and research plan. Remove duplicated full snapshots and repeated rule payloads. Prompt-size limits are an architectural constraint; silently falling back because an unbounded graph exceeded an AI input limit is a defect.
 
-14. Test the ontology contract.
+14. Separate a matched inference from an eligible inference.
+    A TypeDB schema function may remain matched for audit while its source observation has become stale, unavailable, or explicitly unusable for judgement. Every materialized match must receive an `InferenceEligibilityAssessment`. Only fresh, usable matches with complete decision metadata may enter `CoreInferenceSelection`, action envelopes, independent assessment scopes, AI action evidence, or delivery fingerprints. Ineligible matches remain visible as reference-only evidence and must not block a usable core match merely because they coexist in the same generation. If no eligible core inference remains, persist a blocked or abstained decision instead of selecting a stale rule.
+
+15. Test the ontology contract.
     Tests for new investment behavior should verify both the source use case and the graph result: expected ABox classes, relation types, provenance/freshness fields, TypeDB schema function materialization or InferenceBox context, AI prompt payload, and final `investmentInsight` metadata. Tests should also verify the blocked path when graph inference is missing.
 
-15. Research only when a hypothesis has a decision-changing evidence gap.
+16. Research only when a hypothesis has a decision-changing evidence gap.
     Reuse verified cached evidence first. When the active hypotheses conflict or require missing evidence, create bounded `ResearchTask` records and collect only the source types required by those hypotheses. Resolve the target entity, enforce source reliability and freshness, and separate verified and rejected claims. Only verified claims may enter the investment ABox. If verified evidence changes, rebuild the complete account snapshot, project it through the graph repository, run TypeDB schema functions, and ask the AI judge only after the new InferenceBox generation is available. Research failures must preserve the last usable generation and remain visible in the audit record.
 
 Acceptable non-ontology code:

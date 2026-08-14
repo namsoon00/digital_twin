@@ -5,7 +5,7 @@ from __future__ import annotations
 from typing import Dict, Mapping
 
 
-FINAL_AI_DELIVERY_POLICY_VERSION = "final-ai-delivery-v1"
+FINAL_AI_DELIVERY_POLICY_VERSION = "final-ai-delivery-v2"
 
 
 def _mapping(value: object) -> Dict[str, object]:
@@ -23,7 +23,7 @@ def _items(value: object):
 
 
 def final_ai_delivery_decision(context: Mapping[str, object]) -> Dict[str, object]:
-    """Suppress watchlist candidate churn when the final AI action did not move.
+    """Suppress candidate churn when the final user action did not move.
 
     TypeDB owns the candidate and action envelope. The AI owns the final user
     action. Candidate movement remains auditable, but it must not bypass a push
@@ -48,6 +48,10 @@ def final_ai_delivery_decision(context: Mapping[str, object]) -> Dict[str, objec
         or []
     )
     target_role = _text(envelope.get("targetRole") or relation.get("targetRole")).lower()
+    readiness = _mapping(envelope.get("dataReadiness"))
+    selected_rule_id = _text(envelope.get("selectedRuleId"))
+    eligible_rule_ids = {_text(item) for item in _items(readiness.get("eligibleRuleIds"))}
+    selected_core_eligible = bool(selected_rule_id and selected_rule_id in eligible_rule_ids)
     base = {
         "version": FINAL_AI_DELIVERY_POLICY_VERSION,
         "decision": "send",
@@ -59,6 +63,7 @@ def final_ai_delivery_decision(context: Mapping[str, object]) -> Dict[str, objec
         "materialSourceEventCount": len(material_sources),
         "userStateTransitionKind": _text(user_transition.get("kind")).lower(),
         "userStateChanged": bool(user_transition.get("changed")),
+        "selectedCoreInferenceEligible": selected_core_eligible,
     }
     transition_enabled = context.get("investmentStateTransitionNotificationsEnabled") is not False
     if transition_enabled and user_transition.get("changed"):
@@ -108,8 +113,7 @@ def final_ai_delivery_decision(context: Mapping[str, object]) -> Dict[str, objec
         base["reason"] = "최종 행동은 유지됐지만 판단 변경 원문이 새로 확인됐습니다."
         return base
     if (
-        target_role == "watchlist"
-        and _text(ai_transition.get("kind")).lower() == "unchanged"
+        _text(ai_transition.get("kind")).lower() == "unchanged"
         and bool(graph_transition.get("material"))
         and _text(graph_transition.get("kind")).lower() in {
             "action-changed", "envelope-changed", "readiness-changed",
@@ -117,8 +121,9 @@ def final_ai_delivery_decision(context: Mapping[str, object]) -> Dict[str, objec
     ):
         base.update({
             "decision": "suppress",
+            "suppressionReason": "graph_candidate_only_change",
             "reason": (
-                "관심종목의 TypeDB 계산 후보만 바뀌고 최종 AI 행동은 "
+                "TypeDB 계산 후보만 바뀌고 최종 AI 행동은 "
                 + (base["finalAction"] or "동일")
                 + "로 유지됐으며 새 판단 변경 원문이 없어 푸시하지 않습니다."
             ),

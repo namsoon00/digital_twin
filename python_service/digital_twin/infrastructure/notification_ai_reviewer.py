@@ -29,14 +29,14 @@ class CommandNotificationAIReviewer(NotificationAIReviewer):
         command: str,
         timeout_seconds: int = 300,
         source: str = "AI",
-        max_prompt_bytes: int = 28 * 1024,
+        max_prompt_bytes: int = 16 * 1024,
         command_factory=None,
         settings: Dict[str, object] = None,
     ):
         self.command = str(command or "").strip()
         self.timeout_seconds = max(5, int(timeout_seconds or 300))
         self.source = source
-        self.max_prompt_bytes = max(24 * 1024, min(256 * 1024, int(max_prompt_bytes or 28 * 1024)))
+        self.max_prompt_bytes = max(12 * 1024, min(24 * 1024, int(max_prompt_bytes or 16 * 1024)))
         self.command_factory = command_factory
         self.settings = dict(settings or {})
         self.last_prompt_bytes = 0
@@ -152,7 +152,7 @@ def notification_ai_reviewer_from_settings(
         or os.environ.get("NOTIFICATION_AI_STANDARD_REASONING_EFFORT")
         or settings.get("notificationAiReasoningEffort")
         or os.environ.get("NOTIFICATION_AI_REASONING_EFFORT")
-        or "high"
+        or "max"
     ).strip().lower()
     try:
         configured_timeout = int(
@@ -176,10 +176,10 @@ def notification_ai_reviewer_from_settings(
             settings.get("notificationAiDeepPromptMaxBytes")
             or os.environ.get("NOTIFICATION_AI_DEEP_PROMPT_MAX_BYTES")
             or settings.get("notificationAiQueueMaxPromptBytes")
-            or 36 * 1024
+            or 20 * 1024
         )
     except (TypeError, ValueError):
-        max_prompt_bytes = 36 * 1024
+        max_prompt_bytes = 20 * 1024
     if use_codex:
         command = codex_command(reasoning_effort=reasoning_effort)
         if command:

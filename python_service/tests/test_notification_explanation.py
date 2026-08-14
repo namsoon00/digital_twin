@@ -1,9 +1,12 @@
 import unittest
+from datetime import datetime, timezone
 
+from digital_twin.application.notification_service import NotificationQueueRunner
 from digital_twin.application.notification_ai_gate_message import execution_telegram_message
 from digital_twin.domain.accounts import AccountConfig
 from digital_twin.domain.notification_ai_gate_contracts import NotificationAIValidatedResponse
 from digital_twin.domain.notification_explanation import build_notification_explanation_packet
+from digital_twin.domain.notifications import NotificationJob
 
 
 class NotificationExplanationTests(unittest.TestCase):
@@ -52,12 +55,25 @@ class NotificationExplanationTests(unittest.TestCase):
             "displayTarget": "카카오 / 035720",
             "rawLines": ["현재가: 39,400원", "수익률: +2.1%", "추세: 20일선보다 5.4% 높음"],
             "notifyLinkUrl": "https://example.test/?tab=notifications",
+            "ontologyRelationContext": {
+                "matchedRules": [{
+                    "ruleId": "graph.temporal.support.v1",
+                    "label": "기간 회복이 다음 조회에도 유지됨",
+                    "matched": True,
+                    "referenceOnly": False,
+                }],
+                "actionEnvelope": {
+                    "selectedRuleId": "graph.temporal.support.v1",
+                    "dataReadiness": {"eligibleRuleIds": ["graph.temporal.support.v1"]},
+                },
+            },
         })
 
         message = execution_telegram_message(context, self.response())
 
         self.assertIn("<b>지금 행동</b>", message)
         self.assertIn("<b>핵심 근거</b>", message)
+        self.assertIn("<b>TypeDB 핵심 추론</b>", message)
         self.assertIn("<b>다음 판단 조건</b>", message)
         self.assertIn("웹에서 전체 근거 보기", message)
         self.assertNotIn("<b>TypeDB 경쟁 추론</b>", message)
@@ -93,6 +109,27 @@ class NotificationExplanationTests(unittest.TestCase):
 
         self.assertIn("<b>TypeDB 경쟁 추론</b>", message)
         self.assertIn("<b>판단에서 제외한 정보</b>", message)
+
+    def test_send_context_links_directly_to_exact_notification_detail(self):
+        runner = NotificationQueueRunner(
+            queue=None,
+            account_repository=None,
+            notifier_factory=lambda account: None,
+            now_provider=lambda: datetime(2026, 8, 14, 1, 0, tzinfo=timezone.utc),
+        )
+        job = NotificationJob.create(
+            "test",
+            account_id="main",
+            message_type="investmentInsight",
+            context={"notifyLinkUrl": "http://127.0.0.1:3000"},
+        )
+
+        runner.apply_send_time_context(job)
+
+        detail_url = job.context["notificationDetailUrl"]
+        self.assertIn("tab=notifications", detail_url)
+        self.assertIn("detail=notification-job", detail_url)
+        self.assertIn("detailKey=" + job.job_id, detail_url)
 
 
 if __name__ == "__main__":

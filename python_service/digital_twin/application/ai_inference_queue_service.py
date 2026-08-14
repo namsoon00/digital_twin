@@ -105,7 +105,7 @@ class NotificationAIRequestEnqueuer:
             job,
             context,
             model=str(self.settings.get("notificationAiModel") or "gpt-5.6-sol"),
-            reasoning_effort=str(execution_profile.get("reasoningEffort") or "high"),
+            reasoning_effort=str(execution_profile.get("reasoningEffort") or "max"),
             prompt_version=AI_DECISION_PROMPT_VERSION,
         )
         return self.queue.enqueue(job, request)
@@ -150,9 +150,9 @@ class AIInferenceQueueRunner:
         self.max_prompt_bytes = _int_setting(
             self.settings,
             "notificationAiQueueMaxPromptBytes",
-            48 * 1024,
             24 * 1024,
-            256 * 1024,
+            12 * 1024,
+            24 * 1024,
         )
         self.last_run_details = []
         self.stopping = False

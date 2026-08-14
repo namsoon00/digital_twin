@@ -121,8 +121,8 @@ class NotificationAIDecisionBriefTests(unittest.TestCase):
         deep = notification_ai_execution_profile(decision_context("act", "new-condition"), {})
 
         self.assertEqual("standard", standard["name"])
-        self.assertEqual("high", standard["reasoningEffort"])
-        self.assertEqual(28 * 1024, standard["maxPromptBytes"])
+        self.assertEqual("max", standard["reasoningEffort"])
+        self.assertEqual(16 * 1024, standard["maxPromptBytes"])
         self.assertEqual("deepResearch", deep["name"])
         self.assertEqual("max", deep["reasoningEffort"])
         self.assertGreater(deep["maxPromptBytes"], standard["maxPromptBytes"])
@@ -139,13 +139,13 @@ class NotificationAIDecisionBriefTests(unittest.TestCase):
     def test_brief_contains_exact_temporal_path_and_decision_changing_gap_once(self):
         context = decision_context()
         brief = notification_ai_decision_brief(context, {})
-        prompt = build_notification_ai_decision_prompt(context, {}, max_prompt_bytes=28 * 1024)
+        prompt = build_notification_ai_decision_prompt(context, {}, max_prompt_bytes=16 * 1024)
 
         self.assertEqual(AI_DECISION_BRIEF_VERSION, brief["schemaVersion"])
         self.assertEqual(AI_DECISION_CONTRACT_VERSION, brief["decisionContractVersion"])
         self.assertEqual(-4.1, brief["currentSituation"]["temporalWindows"][0]["drawdownFromPeakPct"])
         self.assertEqual("task:1", brief["research"]["decisionChangingGaps"][0]["taskId"])
-        self.assertIn('"schemaVersion":"investment-ai-decision-brief-v1"', prompt)
+        self.assertIn('"schemaVersion":"investment-ai-decision-brief-v2"', prompt)
         self.assertIn('"drawdownFromPeakPct":-4.1', prompt)
         self.assertIn("valuationReferenceOnly=true", prompt)
         self.assertIn("시스템 수집기가", prompt)
@@ -153,7 +153,7 @@ class NotificationAIDecisionBriefTests(unittest.TestCase):
         self.assertIn("causalChain", prompt)
         self.assertIn("alternativeAction", prompt)
         self.assertNotIn('"promptContext"', prompt)
-        self.assertLessEqual(len(prompt.encode("utf-8")), 28 * 1024)
+        self.assertLessEqual(len(prompt.encode("utf-8")), 16 * 1024)
 
     def test_internal_context_enricher_loads_snapshot_bounded_windows(self):
         store = FakeTimeSeriesStore()
@@ -259,7 +259,7 @@ class NotificationAIDecisionBriefTests(unittest.TestCase):
         )
 
         self.assertLessEqual(len(prompt.encode("utf-8")), 24 * 1024)
-        self.assertIn('"schemaVersion":"investment-ai-decision-brief-v1"', prompt)
+        self.assertIn('"schemaVersion":"investment-ai-decision-brief-v2"', prompt)
         payload = json.loads(prompt.split("DecisionBrief:\n", 1)[1])
         self.assertEqual(
             window_keys,

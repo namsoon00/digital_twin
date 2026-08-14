@@ -908,6 +908,53 @@ class OntologyInferenceContextTests(unittest.TestCase):
         self.assertEqual("missingTypeDbDecisionEffect", decision["stagePolicySource"])
         self.assertTrue(decision["judgementBlocked"])
 
+    def test_stale_auxiliary_rule_does_not_override_fresh_core_inference(self):
+        stale_rule = {
+            "type": "HAS_INFERRED_RISK",
+            "ruleId": "graph.cross_listing.adr_premium_risk.v1",
+            "decisionStage": "HOLD_REVIEW",
+            "decisionEffect": "constrain",
+            "actionGroup": "marketStructure",
+            "actionLevel": "review",
+            "decisionTone": "caution",
+            "candidateAction": "TRIM",
+            "derivationIndex": 0,
+        }
+        fresh_rule = {
+            "type": "HAS_INFERRED_ACTION",
+            "ruleId": "graph.temporal.recovery.hold.v1",
+            "decisionStage": "HOLD_KEEP",
+            "decisionEffect": "support",
+            "actionGroup": "holdWatch",
+            "actionLevel": "watch",
+            "decisionTone": "hold",
+            "candidateAction": "HOLD",
+            "derivationIndex": 0,
+        }
+        traces = [
+            {
+                "ruleId": stale_rule["ruleId"],
+                "dataState": "partial",
+                "freshnessStatus": "stale",
+                "evidenceUsableForJudgement": False,
+            },
+            {
+                "ruleId": fresh_rule["ruleId"],
+                "dataState": "sufficient",
+                "freshnessStatus": "fresh",
+                "evidenceUsableForJudgement": True,
+            },
+        ]
+        facts = {"symbol": "000660", "source": "holding", "isHolding": True}
+
+        matches = matches_from_inference([stale_rule, fresh_rule], traces, facts=facts)
+        envelope = action_envelope_from_inference(facts, matches, [stale_rule, fresh_rule])
+
+        self.assertEqual("graph.temporal.recovery.hold.v1", envelope["selectedRuleId"])
+        self.assertEqual("HOLD", envelope["preferredAction"])
+        self.assertEqual(["graph.cross_listing.adr_premium_risk.v1"], envelope["dataReadiness"]["excludedRuleIds"])
+        self.assertFalse(envelope["judgementBlocked"])
+
     def test_strict_decision_path_blocks_python_relation_rule_fallback(self):
         position = Position(
             symbol="005930",

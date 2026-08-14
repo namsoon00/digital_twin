@@ -295,6 +295,31 @@ class OntologyInferenceQualityTests(unittest.TestCase):
         self.assertEqual("sufficient", state["dataState"])
         self.assertFalse(state["judgementBlocked"])
 
+    def test_explicitly_unusable_partial_trace_is_reference_only(self):
+        relation = {
+            "type": "HAS_INFERRED_RISK",
+            "ruleId": "graph.cross_listing.adr_premium_risk.v1",
+            "decisionStage": "HOLD_REVIEW",
+            "decisionEffect": "constrain",
+            "actionGroup": "marketStructure",
+            "actionLevel": "review",
+        }
+        trace = {
+            "ruleId": relation["ruleId"],
+            "dataState": "partial",
+            "freshnessStatus": "stale",
+            "evidenceUsableForJudgement": False,
+            "freshnessGateReason": "ADR 기준시각이 오래되었습니다.",
+        }
+
+        state = inference_evidence_state(relation, {}, trace)
+        match = matches_from_inference([relation], [trace], facts={})[0]
+
+        self.assertEqual("unavailable", state["dataState"])
+        self.assertEqual("reference-only", state["inferenceEligibilityStatus"])
+        self.assertTrue(state["judgementBlocked"])
+        self.assertTrue(match.reference_only)
+
     def test_material_fingerprint_ignores_poll_time_but_changes_with_price(self):
         position = normalize_position({
             "symbol": "AAPL",

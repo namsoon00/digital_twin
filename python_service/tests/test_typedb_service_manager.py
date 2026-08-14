@@ -498,6 +498,7 @@ class TypeDBServiceManagerTests(unittest.TestCase):
         self.assertEqual("rebuild-portfolios", command[4])
         self.assertEqual("8", command[-1])
         self.assertEqual("127.0.0.1:1730", environment["TYPEDB_ADDRESS"])
+        self.assertEqual("1", environment["TYPEDB_FRESH_CANDIDATE_REBUILD"])
 
     def test_blue_green_swap_keeps_a_retired_rollback_path(self):
         with tempfile.TemporaryDirectory() as temp:

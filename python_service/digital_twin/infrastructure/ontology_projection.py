@@ -724,6 +724,9 @@ class PortfolioOntologyProjectionRecorder:
             reasoning_context,
             target_symbols=target_symbols,
         )
+        fresh_candidate_rebuild = str(
+            self.settings.get("typedbFreshCandidateRebuild") or "0"
+        ).strip().lower() in {"1", "true", "yes", "on", "enabled"}
         portfolio_world_context = world_from_snapshot(snapshot, self.settings)
         market_world_context = market_world(
             portfolio_world_context.market_id,
@@ -778,9 +781,18 @@ class PortfolioOntologyProjectionRecorder:
             return result
         emit_progress("pending_activation_recovery.start")
         pending_recovery_started = time.perf_counter()
-        pending_activation_recovery = self.recover_pending_abox_activation(
-            portfolio_world_context.world_id,
-            max_staged_target_symbols=self.scheduler_target_symbol_limit(compact_reasoning_context),
+        pending_activation_recovery = (
+            {
+                "configured": True,
+                "status": "skipped-fresh-candidate",
+                "graphStore": "typedb",
+                "reason": "The isolated blue-green candidate has no prior PortfolioWorld activation.",
+            }
+            if fresh_candidate_rebuild
+            else self.recover_pending_abox_activation(
+                portfolio_world_context.world_id,
+                max_staged_target_symbols=self.scheduler_target_symbol_limit(compact_reasoning_context),
+            )
         )
         runtime_stages["pendingAboxActivationRecoveryMs"] = int(
             (time.perf_counter() - pending_recovery_started) * 1000
@@ -839,6 +851,7 @@ class PortfolioOntologyProjectionRecorder:
             return result
         if recovery_status not in {
             "skipped",
+            "skipped-fresh-candidate",
             "disabled",
             "finalized",
             "finalized-empty-target",
@@ -882,7 +895,10 @@ class PortfolioOntologyProjectionRecorder:
         # proof to reconcile yet. The latter is finalized as control-only
         # repair, then this cycle stages the current manifest. Avoid reading
         # historical InferenceBox rows before that bounded retry begins.
-        if recovery_status not in {"retry-required", "staged", "finalized-empty-target"}:
+        if (
+            not fresh_candidate_rebuild
+            and recovery_status not in {"retry-required", "staged", "finalized-empty-target"}
+        ):
             audit_recovery_started = time.perf_counter()
             self.reconcile_interrupted_projection_audit(portfolio_world_context.world_id)
             runtime_stages["interruptedProjectionAuditRecoveryMs"] = int(
@@ -983,7 +999,11 @@ class PortfolioOntologyProjectionRecorder:
             )
             emit_progress("active_abox_read.start")
             active_abox_started = time.perf_counter()
-            active_abox = self.active_abox_metadata(portfolio_world_context.world_id)
+            active_abox = (
+                {}
+                if fresh_candidate_rebuild
+                else self.active_abox_metadata(portfolio_world_context.world_id)
+            )
             runtime_stages["activeAboxReadMs"] = int(
                 (time.perf_counter() - active_abox_started) * 1000
             )

@@ -29,6 +29,28 @@ class OntologyPortfolioRebuildRunner:
         self.snapshot_store = snapshot_store
         self.projection_recorder = projection_recorder
 
+    @staticmethod
+    def compact_diagnostics(value: object, depth: int = 0) -> object:
+        """Keep candidate failure evidence useful without emitting graph data."""
+        if depth >= 3:
+            return str(value or "")[:220]
+        if isinstance(value, dict):
+            return {
+                str(key or "")[:80]: OntologyPortfolioRebuildRunner.compact_diagnostics(item, depth + 1)
+                for key, item in list(value.items())[:60]
+                if key not in {"scopePlan", "propertiesJson", "graph", "entities", "relations"}
+            }
+        if isinstance(value, (list, tuple)):
+            return [
+                OntologyPortfolioRebuildRunner.compact_diagnostics(item, depth + 1)
+                for item in list(value)[:40]
+            ]
+        if isinstance(value, str):
+            return value[:400]
+        if value is None or isinstance(value, (bool, int, float)):
+            return value
+        return str(value)[:220]
+
     def run(self, limit: int = 0) -> Dict[str, object]:
         started = time.perf_counter()
         try:
@@ -71,6 +93,15 @@ class OntologyPortfolioRebuildRunner:
                 continue
             projected_attempt_count += 1
             account_started = time.perf_counter()
+            progress_trace = []
+
+            def record_progress(stage, details):
+                progress_trace.append({
+                    "stage": str(stage or "")[:120],
+                    "details": self.compact_diagnostics(details),
+                })
+                del progress_trace[:-40]
+
             result = self.projection_recorder.record_snapshot(
                 snapshot,
                 reasoning_context={
@@ -79,12 +110,21 @@ class OntologyPortfolioRebuildRunner:
                     "candidateRebuild": True,
                     "readOnlySource": True,
                 },
+                progress_callback=record_progress,
             )
             status = str(result.get("status") or "error")
+            persistence_timing = (
+                result.get("timing")
+                if isinstance(result.get("timing"), dict)
+                else (result.get("aboxPersistenceTiming") or {})
+            )
             rows.append({
                 "accountId": str(snapshot.account_id or account_id or ""),
                 "status": status,
                 "projected": status in SUCCESS_STATUSES,
+                "saved": bool(result.get("saved")),
+                "reasonCode": str(result.get("reasonCode") or "")[:100],
+                "reason": str(result.get("reason") or "")[:400],
                 "worldId": str(
                     (result.get("ontologyWorld") or {}).get("worldId") or ""
                     if isinstance(result.get("ontologyWorld"), dict)
@@ -97,6 +137,9 @@ class OntologyPortfolioRebuildRunner:
                     else ""
                 ),
                 "runtimeMs": int((time.perf_counter() - account_started) * 1000),
+                "runtimeStages": self.compact_diagnostics(result.get("runtimeStages") or {}),
+                "aboxPersistence": self.compact_diagnostics(persistence_timing),
+                "progressTrace": progress_trace,
             })
 
         attempted = [

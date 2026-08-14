@@ -1669,6 +1669,12 @@ DEFAULT_TYPEDB_SCHEMA_FUNCTION_PROVISION_BATCH_SIZE = 1
 # cache construction can legitimately exceed a short transport keep-alive,
 # so the dedicated isolated worker gets a real maintenance window instead.
 DEFAULT_TYPEDB_SCHEMA_FUNCTION_PROVISION_TIMEOUT_SECONDS = 900.0
+# A fresh TypeDB database used to receive the complete 1,200+ statement base
+# schema in one transaction. TypeDB recompiles the growing type graph at that
+# boundary, so the cold blue-green candidate could exceed the driver deadline
+# before any durable schema existed. Keep each commit large enough to avoid
+# transaction chatter but bounded well below the monolithic compiler input.
+DEFAULT_TYPEDB_BASE_SCHEMA_BOOTSTRAP_BATCH_SIZE = 128
 TYPEDB_PROMOTED_NUMERIC_ATTRIBUTES = {
     "currentPrice": "ontology-current-price",
     "averagePrice": "ontology-average-price",
@@ -3707,6 +3713,7 @@ class ScopedABoxManifestMixin:
             def operation():
                 driver = self.open_driver(imported)
                 try:
+                    timing["stage"] = "schema-ready"
                     self.ensure_database(driver)
                     self.ensure_schema(driver, imported)
                     return self.cleanup_orphan_scoped_abox_candidates(
@@ -3785,13 +3792,22 @@ class ScopedABoxManifestMixin:
             return counts
         clean_manifest_id = str(manifest_id or "").strip()
         clean_world_id = str(world_id or "").strip()
-        pair_patterns = [
+        # The staged Manifest and World form an exact immutable partition.
+        # Adding hundreds of ``or`` branches for every scope/generation pair
+        # made TypeDB spend minutes compiling a verification query after a
+        # 20-second ABox write. Read the exact partition once and reject any
+        # unexpected pair in Python. Legacy callers without both identities
+        # retain the explicit pair filter.
+        manifest_partitioned = bool(clean_manifest_id and clean_world_id)
+        pair_patterns = [] if manifest_partitioned else [
             "$item has ontology-scope-id " + typedb_string(scope_id)
             + ", has ontology-snapshot-id " + typedb_string(generation_id) + ";"
             for scope_id, generation_id in sorted(expected_pairs)
         ]
         pair_filter = (
-            pair_patterns[0]
+            ""
+            if manifest_partitioned
+            else pair_patterns[0]
             if len(pair_patterns) == 1
             else " or ".join("{ " + pattern + " }" for pattern in pair_patterns) + ";"
         )
@@ -3822,6 +3838,11 @@ class ScopedABoxManifestMixin:
                 scope_id = str(row.get("scopeId") or "").strip()
                 generation_id = str(row.get("generationId") or "").strip()
                 if (scope_id, generation_id) not in expected_pairs:
+                    if manifest_partitioned:
+                        raise RuntimeError(
+                            "Scoped ABox Manifest verification found an unexpected scope generation: "
+                            + scope_id + " / " + generation_id
+                        )
                     continue
                 counts.setdefault(scope_id, {"entityCount": 0, "relationCount": 0})[count_key] = int(
                     number_or_none(row.get("count")) or 0
@@ -4073,15 +4094,20 @@ class ScopedABoxManifestMixin:
         self,
         node_rows: Iterable[Dict[str, object]],
         relation_rows: Iterable[Dict[str, object]],
+        assume_missing_storage: bool = False,
     ) -> Dict[str, object]:
         """Split a candidate into missing writes and reusable immutable rows."""
         unique_nodes, node_conflicts = self.scoped_abox_storage_rows_unique(node_rows, "node")
         unique_relations, relation_conflicts = self.scoped_abox_storage_rows_unique(relation_rows, "relation")
         node_identities = [self.scoped_abox_storage_identity(row, "node") for row in unique_nodes]
         relation_identities = [self.scoped_abox_storage_identity(row, "relation") for row in unique_relations]
-        existing = self.scoped_abox_storage_rows_by_id(
-            [item["storageId"] for item in node_identities],
-            [item["storageId"] for item in relation_identities],
+        existing = (
+            {"nodes": {}, "relations": {}}
+            if assume_missing_storage
+            else self.scoped_abox_storage_rows_by_id(
+                [item["storageId"] for item in node_identities],
+                [item["storageId"] for item in relation_identities],
+            )
         )
         existing_nodes = dict(existing.get("nodes") or {})
         existing_relations = dict(existing.get("relations") or {})
@@ -4142,6 +4168,11 @@ class ScopedABoxManifestMixin:
             "reusedNodeRows": reused_nodes,
             "reusedRelationRows": reused_relations,
             "conflicts": conflicts,
+            "storageLookupMode": (
+                "fresh-candidate-known-empty"
+                if assume_missing_storage
+                else "immutable-storage-identity-read"
+            ),
         }
 
     def scoped_abox_storage_identity_counts(
@@ -4189,11 +4220,24 @@ class ScopedABoxManifestMixin:
         imported,
         node_rows: Iterable[Dict[str, object]],
         relation_rows: Iterable[Dict[str, object]],
+        telemetry: Dict[str, object] = None,
     ) -> Dict[str, object]:
         """Write pre-resolved rows without requiring every endpoint in a slice."""
         _TypeDB, _Credentials, _DriverOptions, _DriverTlsConfig, TransactionType = imported[0]
         settings = runtime_settings()
-        reuse_plan = self.scoped_abox_storage_reuse_plan(node_rows, relation_rows)
+        trace = telemetry if isinstance(telemetry, dict) else {}
+        trace["stage"] = "storage-reuse-plan"
+        reuse_started = time.monotonic()
+        reuse_plan = self.scoped_abox_storage_reuse_plan(
+            node_rows,
+            relation_rows,
+            assume_missing_storage=self._fresh_candidate_rebuild,
+        )
+        trace["storageReusePlanMs"] = round(
+            (time.monotonic() - reuse_started) * 1000,
+            1,
+        )
+        trace["storageLookupMode"] = str(reuse_plan.get("storageLookupMode") or "")
         if str(reuse_plan.get("status") or "") != "ok":
             raise RuntimeError(
                 "Scoped ABox storage identity conflict: "
@@ -4236,6 +4280,18 @@ class ScopedABoxManifestMixin:
         relation_given_transaction_count = 0
         relation_legacy_query_count = 0
         relation_legacy_transaction_count = 0
+        trace.update({
+            "requestedNodeCount": len(reuse_plan.get("nodeRows") or []),
+            "requestedRelationCount": len(reuse_plan.get("relationRows") or []),
+            "insertedNodeCount": len(node_rows_to_insert),
+            "insertedRelationCount": len(relation_rows_to_insert),
+            "reusedNodeCount": len(reuse_plan.get("reusedNodeRows") or []),
+            "reusedRelationCount": len(reuse_plan.get("reusedRelationRows") or []),
+            "nodeQueryCount": len(node_queries),
+            "plannedRelationQueryCount": len(relation_queries),
+            "completedNodeTransactionCount": 0,
+            "completedRelationTransactionCount": 0,
+        })
 
         def write_query_batch(query_batch: List[str]) -> None:
             if not query_batch:
@@ -4258,9 +4314,13 @@ class ScopedABoxManifestMixin:
 
         # Nodes must exist before relation batches resolve their storage ids.
         # Keep the established short transaction budget for node writes.
+        trace["stage"] = "node-write"
         for offset in range(0, len(queries), batch_size):
             query_batch = queries[offset: offset + batch_size]
             write_query_batch(query_batch)
+            trace["completedNodeTransactionCount"] = int(
+                trace.get("completedNodeTransactionCount") or 0
+            ) + 1
 
         given_plans = [
             plan
@@ -4299,11 +4359,15 @@ class ScopedABoxManifestMixin:
         # Group several stable ``given`` plans into one bounded commit so a
         # normal changed-symbol projection does not acquire the schema/data
         # writer lock once per relation type.
+        trace["stage"] = "relation-write"
         for offset in range(0, len(given_plans), batch_size):
             plan_batch = given_plans[offset: offset + batch_size]
             try:
                 write_given_plan_batch(plan_batch)
                 relation_given_transaction_count += 1
+                trace["completedRelationTransactionCount"] = int(
+                    trace.get("completedRelationTransactionCount") or 0
+                ) + 1
                 relation_given_batch_count += len(plan_batch)
                 relation_given_row_count += sum(
                     len(plan.get("givenRows") or []) for plan in plan_batch
@@ -4321,6 +4385,9 @@ class ScopedABoxManifestMixin:
                 try:
                     write_given_plan_batch([plan])
                     relation_given_transaction_count += 1
+                    trace["completedRelationTransactionCount"] = int(
+                        trace.get("completedRelationTransactionCount") or 0
+                    ) + 1
                     relation_given_batch_count += 1
                     relation_given_row_count += len(rows)
                     continue
@@ -4335,12 +4402,21 @@ class ScopedABoxManifestMixin:
                 for fallback_offset in range(0, len(fallback_queries), batch_size):
                     write_query_batch(fallback_queries[fallback_offset: fallback_offset + batch_size])
                     relation_legacy_transaction_count += 1
+                    trace["completedRelationTransactionCount"] = int(
+                        trace.get("completedRelationTransactionCount") or 0
+                    ) + 1
                 relation_legacy_query_count += len(fallback_queries)
 
         for plan in legacy_plans:
             write_query_batch([str(plan.get("query") or "")])
             relation_legacy_query_count += 1
             relation_legacy_transaction_count += 1
+            trace["completedRelationTransactionCount"] = int(
+                trace.get("completedRelationTransactionCount") or 0
+            ) + 1
+        trace["stage"] = "complete"
+        trace["totalQueryMs"] = round(sum(query_durations_ms), 1)
+        trace["slowestQueryMs"] = max(query_durations_ms) if query_durations_ms else 0.0
         return {
             "queryCount": len(node_queries) + relation_given_batch_count + relation_legacy_query_count,
             "nodeQueryCount": len(node_queries),
@@ -4352,6 +4428,7 @@ class ScopedABoxManifestMixin:
             "insertedRelationCount": len(relation_rows_to_insert),
             "reusedNodeCount": len(reuse_plan.get("reusedNodeRows") or []),
             "reusedRelationCount": len(reuse_plan.get("reusedRelationRows") or []),
+            "storageLookupMode": str(reuse_plan.get("storageLookupMode") or ""),
             "expectedCountsByScope": expected_counts_by_scope,
             "insertedCountsByScope": inserted_counts_by_scope,
             "reusedCountsByScope": reused_counts_by_scope,
@@ -5305,7 +5382,14 @@ class ScopedABoxManifestMixin:
                 return {"status": "error", "reason": str(error)[:180]}
 
         try:
-            pending_before = self.pending_abox_activation(world_id)
+            pending_before = (
+                {
+                    "status": "skipped-fresh-candidate",
+                    "reason": "A newly created blue-green candidate has no pending PortfolioWorld ABox.",
+                }
+                if self._fresh_candidate_rebuild
+                else self.pending_abox_activation(world_id)
+            )
         except Exception as error:  # noqa: BLE001 - do not overlap two uncertain generations.
             release = release_write_lease()
             return {
@@ -5341,7 +5425,11 @@ class ScopedABoxManifestMixin:
             }
 
         try:
-            active_before = self.active_abox_metadata(world_id)
+            active_before = (
+                {}
+                if self._fresh_candidate_rebuild
+                else self.active_abox_metadata(world_id)
+            )
         except Exception:
             active_before = {}
         active_fingerprints = dict(active_before.get("scopeFingerprints") or {})
@@ -5409,8 +5497,11 @@ class ScopedABoxManifestMixin:
             "status": "deferred",
             "reason": "Orphan scoped ABox candidates are reclaimed by idle maintenance.",
         }
+        operation_attempt_count = 0
         try:
             def operation():
+                nonlocal operation_attempt_count
+                operation_attempt_count += 1
                 driver = self.open_driver(imported)
                 try:
                     self.ensure_database(driver)
@@ -5428,26 +5519,41 @@ class ScopedABoxManifestMixin:
                     # historical ABox generations before it wrote any data.
                     # Incomplete candidates from older manifests are handled
                     # by the idle orphan-maintenance pass under the same lease.
-                    candidate_cleanup = self.delete_box_manifest_rows_in_batches(
-                        driver,
-                        imported,
-                        "ABox",
-                        manifest_id,
-                        world_id=world_id,
+                    timing["stage"] = "candidate-cleanup"
+                    candidate_cleanup = (
+                        {
+                            "status": "skipped-fresh-candidate-first-attempt",
+                            "deletedBatchCount": 0,
+                            "reason": "The manager created this candidate database before the replay process started.",
+                        }
+                        if self._fresh_candidate_rebuild and operation_attempt_count == 1
+                        else self.delete_box_manifest_rows_in_batches(
+                            driver,
+                            imported,
+                            "ABox",
+                            manifest_id,
+                            world_id=world_id,
+                        )
                     )
+                    timing["operationAttemptCount"] = operation_attempt_count
                     timing["candidateScopeGenerationCount"] = len(candidate_generation_ids)
                     timing["candidateManifestCleanup"] = candidate_cleanup
                     timing["candidateCleanupMs"] = round((time.monotonic() - cleanup_started) * 1000, 1)
                     write_started = time.monotonic()
+                    timing["stage"] = "changed-scope-write"
+                    write_progress: Dict[str, object] = {}
+                    timing["changedScopeWriteProgress"] = write_progress
                     write_plan = self.write_persistence_rows(
                         driver,
                         imported,
                         node_rows,
                         relation_rows,
+                        telemetry=write_progress,
                     )
                     timing["changedScopeWritePlan"] = write_plan
                     timing["changedScopeWriteMs"] = round((time.monotonic() - write_started) * 1000, 1)
                     verification_started = time.monotonic()
+                    timing["stage"] = "changed-scope-verification"
                     # The write plan has already verified every reused physical
                     # row by storage identity. Re-reading every one after a
                     # successful commit doubled the largest live projection
@@ -5526,6 +5632,7 @@ class ScopedABoxManifestMixin:
                     # physical scope rows verify. This removes one TypeDB
                     # round trip without moving the active pointer.
                     control_write_started = time.monotonic()
+                    timing["stage"] = "manifest-control-write"
                     control_graph = PortfolioOntology(
                         str(graph.portfolio_id or "typedb-scoped-control"),
                         entities=[*marker_graph.entities, *pending_graph.entities],
@@ -5536,6 +5643,7 @@ class ScopedABoxManifestMixin:
                         1,
                     )
                     timing["manifestControlEntityCount"] = len(control_graph.entities)
+                    timing["stage"] = "candidate-staged"
                 finally:
                     self.close_driver(driver)
 
@@ -7325,6 +7433,7 @@ class TypeDBOntologyGraphRepository(GraphStoreOntologyRowMapperMixin, ScopedABox
         schema_function_direct_query_fallback_enabled: bool = True,
         projection_coordinator_write_enforced: bool = False,
         persistent_driver_enabled: bool = False,
+        fresh_candidate_rebuild: bool = False,
     ):
         self.address = str(address or "").strip()
         self.user = str(user or "admin").strip() or "admin"
@@ -7441,6 +7550,7 @@ class TypeDBOntologyGraphRepository(GraphStoreOntologyRowMapperMixin, ScopedABox
         self._last_rules: List[GraphInferenceRule] = []
         self._base_schema_ready_fingerprint = ""
         self._base_schema_type_names: set = set()
+        self._last_base_schema_sync: Dict[str, object] = {}
         self._schema_function_sync_cache_key = ""
         self._schema_function_sync_cache_result: Dict[str, object] = {}
         self._rulebox_snapshot_cache_at = 0.0
@@ -7463,6 +7573,11 @@ class TypeDBOntologyGraphRepository(GraphStoreOntologyRowMapperMixin, ScopedABox
         # production worker therefore retains one process-local driver while
         # its supervisor still owns a killable process boundary.
         self._persistent_driver_enabled = bool(persistent_driver_enabled)
+        # Set only by the isolated blue-green PortfolioWorld replay process.
+        # The manager has just created this database and seeded static boxes,
+        # so no PortfolioWorld ABox can be reused. Normal live repositories
+        # always retain immutable storage identity verification.
+        self._fresh_candidate_rebuild = bool(fresh_candidate_rebuild)
         self._persistent_driver = None
         self._persistent_driver_lock = threading.RLock()
         # A scoped Worldview Manifest contains the complete evidence-read
@@ -8541,6 +8656,261 @@ class TypeDBOntologyGraphRepository(GraphStoreOntologyRowMapperMixin, ScopedABox
                 tx.query(query).resolve()
                 tx.commit()
 
+    @staticmethod
+    def schema_definition_statements(schema_text: str) -> List[str]:
+        """Split a TypeQL schema into complete top-level definitions.
+
+        The base schema does not contain functions, but using a small lexical
+        scanner here still avoids treating a semicolon inside a future quoted
+        annotation as a transaction boundary.
+        """
+        statements: List[str] = []
+        current: List[str] = []
+        quote = ""
+        escaped = False
+        for character in str(schema_text or ""):
+            if quote:
+                current.append(character)
+                if escaped:
+                    escaped = False
+                elif character == "\\":
+                    escaped = True
+                elif character == quote:
+                    quote = ""
+                continue
+            if character in {'"', "'"}:
+                quote = character
+                current.append(character)
+                continue
+            if character != ";":
+                current.append(character)
+                continue
+            statement = "".join(current).strip()
+            current = []
+            statement = re.sub(r"^(?:define|redefine|undefine)\s+", "", statement, count=1)
+            if statement:
+                statements.append(statement + ";")
+        return statements
+
+    @staticmethod
+    def schema_definition_identity(statement: str) -> Tuple[str, str]:
+        match = re.match(
+            r"^\s*(attribute|entity|relation)\s+([A-Za-z_][A-Za-z0-9_-]*)\b",
+            str(statement or ""),
+        )
+        return (match.group(1), match.group(2)) if match else ("", "")
+
+    @staticmethod
+    def schema_definition_clauses(statement: str) -> List[str]:
+        """Return normalized comma-delimited clauses after a type header."""
+        text = str(statement or "").strip().rstrip(";").strip()
+        clauses: List[str] = []
+        current: List[str] = []
+        quote = ""
+        escaped = False
+        for character in text:
+            if quote:
+                current.append(character)
+                if escaped:
+                    escaped = False
+                elif character == "\\":
+                    escaped = True
+                elif character == quote:
+                    quote = ""
+                continue
+            if character in {'"', "'"}:
+                quote = character
+                current.append(character)
+                continue
+            if character == ",":
+                clauses.append(re.sub(r"\s+", " ", "".join(current)).strip())
+                current = []
+                continue
+            current.append(character)
+        if current:
+            clauses.append(re.sub(r"\s+", " ", "".join(current)).strip())
+        return [clause for clause in clauses[1:] if clause]
+
+    @staticmethod
+    def schema_subtype_parent(statement: str) -> str:
+        for clause in TypeDBOntologyGraphRepository.schema_definition_clauses(statement):
+            match = re.match(r"^sub\s+([A-Za-z_][A-Za-z0-9_-]*)$", clause)
+            if match:
+                return match.group(1)
+        return ""
+
+    @staticmethod
+    def schema_topological_definitions(statements: Iterable[str]) -> List[str]:
+        """Order subtype definitions after their parent without changing them."""
+        by_name = {}
+        source_order = []
+        for statement in statements or []:
+            _kind, name = TypeDBOntologyGraphRepository.schema_definition_identity(statement)
+            if name and name not in by_name:
+                by_name[name] = str(statement or "")
+                source_order.append(name)
+        ordered: List[str] = []
+        visiting = set()
+        visited = set()
+
+        def visit(name: str) -> None:
+            if name in visited:
+                return
+            if name in visiting:
+                raise ValueError("Cyclic TypeDB schema subtype dependency: " + name)
+            visiting.add(name)
+            parent = TypeDBOntologyGraphRepository.schema_subtype_parent(by_name[name])
+            if parent in by_name:
+                visit(parent)
+            visiting.remove(name)
+            visited.add(name)
+            ordered.append(by_name[name])
+
+        for name in source_order:
+            visit(name)
+        return ordered
+
+    @staticmethod
+    def schema_definition_batches(items: Iterable[str], batch_size: int) -> List[List[str]]:
+        rows = [str(item or "").strip() for item in items or [] if str(item or "").strip()]
+        size = max(1, int(batch_size or 1))
+        return [rows[index:index + size] for index in range(0, len(rows), size)]
+
+    def base_schema_bootstrap_plan(self, existing_schema_text: str = "") -> List[Dict[str, object]]:
+        """Build a resumable, dependency-ordered base-schema write plan."""
+        expected_statements = self.schema_definition_statements(self.schema_query())
+        existing_statements = self.schema_definition_statements(existing_schema_text)
+        expected_by_identity = {
+            self.schema_definition_identity(statement): statement
+            for statement in expected_statements
+            if all(self.schema_definition_identity(statement))
+        }
+        existing_by_identity = {
+            self.schema_definition_identity(statement): statement
+            for statement in existing_statements
+            if all(self.schema_definition_identity(statement))
+        }
+        existing_names = {name for _kind, name in existing_by_identity}
+        batch_size = DEFAULT_TYPEDB_BASE_SCHEMA_BOOTSTRAP_BATCH_SIZE
+        plan: List[Dict[str, object]] = []
+
+        def append_definition_batches(phase: str, definitions: Iterable[str]) -> None:
+            for batch in self.schema_definition_batches(definitions, batch_size):
+                plan.append({
+                    "phase": phase,
+                    "definitionCount": len(batch),
+                    "query": "define\n" + "\n".join(batch),
+                })
+
+        missing_attributes = [
+            statement
+            for (kind, name), statement in expected_by_identity.items()
+            if kind == "attribute" and name not in existing_names
+        ]
+        append_definition_batches("attributes", missing_attributes)
+
+        assertion_identity = ("relation", "ontology-assertion")
+        node_identity = ("entity", "ontology-node")
+        expected_assertion = expected_by_identity.get(assertion_identity, "")
+        expected_node = expected_by_identity.get(node_identity, "")
+        if assertion_identity not in existing_by_identity:
+            plan.append({
+                "phase": "core-relation",
+                "definitionCount": 1,
+                "query": "define\nrelation ontology-assertion, relates source, relates target;",
+            })
+        if node_identity not in existing_by_identity:
+            plan.append({
+                "phase": "core-entity",
+                "definitionCount": 1,
+                "query": "define\nentity ontology-node @abstract;",
+            })
+
+        def missing_extension_clauses(identity: Tuple[str, str], expected_statement: str) -> List[str]:
+            actual = existing_by_identity.get(identity, "")
+            actual_clauses = set(self.schema_definition_clauses(actual))
+            return [
+                clause
+                for clause in self.schema_definition_clauses(expected_statement)
+                if clause.startswith(("owns ", "plays ")) and clause not in actual_clauses
+            ]
+
+        for identity, expected_statement, phase in [
+            (assertion_identity, expected_assertion, "core-relation-ownership"),
+            (node_identity, expected_node, "core-entity-contract"),
+        ]:
+            _kind, name = identity
+            clauses = missing_extension_clauses(identity, expected_statement)
+            for batch in self.schema_definition_batches(clauses, batch_size):
+                plan.append({
+                    "phase": phase,
+                    "definitionCount": len(batch),
+                    "query": "define\n" + name + " " + ", ".join(batch) + ";",
+                })
+
+        semantic_entity_names = set(semantic_class_types().values())
+        entity_definitions = self.schema_topological_definitions([
+            statement
+            for (kind, name), statement in expected_by_identity.items()
+            if kind == "entity" and name != "ontology-node" and name not in existing_names
+        ])
+        append_definition_batches(
+            "core-entity-subtypes",
+            [
+                statement for statement in entity_definitions
+                if self.schema_definition_identity(statement)[1] not in semantic_entity_names
+            ],
+        )
+        append_definition_batches(
+            "semantic-entity-subtypes",
+            [
+                statement for statement in entity_definitions
+                if self.schema_definition_identity(statement)[1] in semantic_entity_names
+            ],
+        )
+
+        semantic_relation_names = set(semantic_relation_types().values())
+        append_definition_batches(
+            "semantic-relation-subtypes",
+            [
+                statement
+                for (kind, name), statement in expected_by_identity.items()
+                if kind == "relation"
+                and name in semantic_relation_names
+                and name not in existing_names
+            ],
+        )
+        return plan
+
+    def synchronize_base_schema_batches(self, driver, imported, schema_text: str = "") -> Dict[str, object]:
+        """Apply a cold or partially written schema through bounded commits."""
+        _TypeDB, _Credentials, _DriverOptions, _DriverTlsConfig, TransactionType = imported[0]
+        plan = self.base_schema_bootstrap_plan(schema_text)
+        phase_counts: Dict[str, int] = {}
+        started_at = time.perf_counter()
+        for item in plan:
+            phase = str(item.get("phase") or "schema")
+            phase_counts[phase] = phase_counts.get(phase, 0) + 1
+            query = str(item.get("query") or "")
+            with typedb_operation_timeout(
+                self.schema_operation_timeout_seconds(),
+                "TypeDB base schema batch " + phase,
+            ):
+                with driver.transaction(self.database, TransactionType.SCHEMA) as tx:
+                    tx.query(query).resolve()
+                    tx.commit()
+        result = {
+            "mode": "bounded-schema-batches",
+            "batchSize": DEFAULT_TYPEDB_BASE_SCHEMA_BOOTSTRAP_BATCH_SIZE,
+            "queryCount": len(plan),
+            "definitionCount": sum(int(item.get("definitionCount") or 0) for item in plan),
+            "phaseQueryCounts": phase_counts,
+            "durationMs": int((time.perf_counter() - started_at) * 1000),
+            "resumed": bool(str(schema_text or "").strip() not in {"", "define"}),
+        }
+        self._last_base_schema_sync = dict(result)
+        return result
+
     def ensure_schema(self, driver, imported) -> None:
         schema = self.schema_query()
         schema_fingerprint = hashlib.sha256(schema.encode("utf-8")).hexdigest()
@@ -8597,11 +8967,7 @@ class TypeDBOntologyGraphRepository(GraphStoreOntologyRowMapperMixin, ScopedABox
             # On a new database or an older driver without schema inspection,
             # fall through to the idempotent schema definition below.
             pass
-        _TypeDB, _Credentials, _DriverOptions, _DriverTlsConfig, TransactionType = imported[0]
-        with typedb_operation_timeout(self.schema_operation_timeout_seconds(), "TypeDB base schema sync"):
-            with driver.transaction(self.database, TransactionType.SCHEMA) as tx:
-                tx.query(schema).resolve()
-                tx.commit()
+        self.synchronize_base_schema_batches(driver, imported, schema_text)
         self._base_schema_ready_fingerprint = schema_fingerprint
         self.mark_process_base_schema_ready(schema_fingerprint)
 
@@ -14435,6 +14801,7 @@ relation ontology-assertion,
             result.update(expected)
             return result
         started_at = time.perf_counter()
+        self._last_base_schema_sync = {}
         try:
             def operation():
                 driver = self.open_driver(imported)
@@ -14462,6 +14829,11 @@ relation ontology-assertion,
             "status": "ok",
             "graphStore": "typedb",
             "durationMs": int((time.perf_counter() - started_at) * 1000),
+            "schemaSync": dict(self._last_base_schema_sync or {
+                "mode": "current-schema-contract",
+                "queryCount": 0,
+                "definitionCount": 0,
+            }),
             **expected,
         }
 
@@ -25255,4 +25627,7 @@ def typedb_repository_from_settings(settings: Dict[str, str] = None):
         persistent_driver_enabled=True
         if settings.get("typedbPersistentDriverEnabled") in (None, "")
         else typedb_bool(settings.get("typedbPersistentDriverEnabled")),
+        fresh_candidate_rebuild=typedb_bool(
+            settings.get("typedbFreshCandidateRebuild")
+        ),
     )

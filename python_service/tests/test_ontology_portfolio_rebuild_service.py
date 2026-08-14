@@ -17,10 +17,16 @@ class ProjectionRecorder:
         self.status = status
         self.calls = []
 
-    def record_snapshot(self, snapshot, reasoning_context=None):
+    def record_snapshot(self, snapshot, reasoning_context=None, progress_callback=None):
         self.calls.append((snapshot, dict(reasoning_context or {})))
+        if progress_callback:
+            progress_callback("ontology_projection.start", {"elapsedMs": 0})
         return {
             "status": self.status,
+            "saved": self.status == "ok",
+            "reason": "candidate projection failed" if self.status != "ok" else "",
+            "runtimeStages": {"graphBuildMs": 12, "aboxPersistenceMs": 34},
+            "timing": {"stage": "candidate-staged" if self.status == "ok" else "changed-scope-write"},
             "activeAboxSnapshotId": "abox:" + snapshot.account_id,
             "ontologyWorld": {"worldId": "portfolio:local:" + snapshot.account_id},
             "inferenceBox": {"inferenceGenerationId": "inference:" + snapshot.account_id},
@@ -73,6 +79,10 @@ class OntologyPortfolioRebuildRunnerTests(unittest.TestCase):
         ).run()
         self.assertEqual("error", failed["status"])
         self.assertEqual(1, failed["failedPortfolioWorldCount"])
+        self.assertEqual("candidate projection failed", failed["rows"][0]["reason"])
+        self.assertEqual("changed-scope-write", failed["rows"][0]["aboxPersistence"]["stage"])
+        self.assertEqual(12, failed["rows"][0]["runtimeStages"]["graphBuildMs"])
+        self.assertEqual("ontology_projection.start", failed["rows"][0]["progressTrace"][0]["stage"])
 
     def test_fails_closed_when_live_worlds_exceed_rebuild_limit(self):
         recorder = ProjectionRecorder()

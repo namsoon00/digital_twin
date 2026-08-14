@@ -1517,11 +1517,17 @@ def ensure_typedb_portfolio_world_projection_rebuilt(spec: Dict[str, object]) ->
     timeout_seconds = int_value(spec.get("portfolioWorldProjectionRebuildTimeoutSeconds"), 1800, 60)
     append_log(spec["log"], "portfolio-world rebuild start")
     print(str(spec["label"]) + " rebuilding current PortfolioWorlds from durable MySQL snapshots.")
+    environment = typedb_subprocess_environment(spec)
+    # This subprocess targets a database created moments earlier by this
+    # manager. It cannot contain a prior PortfolioWorld ABox, so the recorder
+    # may skip historical storage-identity reads while retaining every normal
+    # live-path reuse and conflict check.
+    environment["TYPEDB_FRESH_CANDIDATE_REBUILD"] = "1"
     try:
         result = subprocess.run(
             command,
             cwd=str(ROOT_DIR),
-            env=typedb_subprocess_environment(spec),
+            env=environment,
             stdin=subprocess.DEVNULL,
             capture_output=True,
             text=True,

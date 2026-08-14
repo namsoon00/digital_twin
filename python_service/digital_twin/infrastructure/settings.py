@@ -1909,6 +1909,11 @@ def runtime_settings(fast_operational_read: bool = False) -> Dict[str, str]:
         "typedbPassword": value("typedbPassword", "TYPEDB_PASSWORD", ""),
         "typedbDatabase": value("typedbDatabase", "TYPEDB_DATABASE", "orbit_alpha_ontology"),
         "typedbTlsEnabled": value("typedbTlsEnabled", "TYPEDB_TLS_ENABLED", "0"),
+        "typedbFreshCandidateRebuild": value(
+            "typedbFreshCandidateRebuild",
+            "TYPEDB_FRESH_CANDIDATE_REBUILD",
+            "0",
+        ),
         "typedbTimeoutSeconds": value("typedbTimeoutSeconds", "TYPEDB_TIMEOUT_SECONDS", "20"),
         "typedbRetryCount": value("typedbRetryCount", "TYPEDB_RETRY_COUNT", "2"),
         "typedbInferenceGenerationKeepCount": value("typedbInferenceGenerationKeepCount", "TYPEDB_INFERENCE_GENERATION_KEEP_COUNT", "1"),

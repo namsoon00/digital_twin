@@ -746,8 +746,61 @@ class TypeDBOntologyRepositoryTests(unittest.TestCase):
         with patch.object(repository, "base_schema_contract_state", side_effect=AssertionError("manifest read before schema")):
             repository.ensure_schema(driver, imported)
 
-        self.assertEqual(repository.schema_query(), queries[0])
-        self.assertEqual("commit", queries[1])
+        schema_queries = [query for query in queries if query != "commit"]
+        self.assertGreater(len(schema_queries), 5)
+        self.assertEqual(len(schema_queries), queries.count("commit"))
+        self.assertNotIn(repository.schema_query(), schema_queries)
+        self.assertLess(max(len(query.encode("utf-8")) for query in schema_queries), 20000)
+        planned_types = {
+            repository.schema_definition_identity(statement)
+            for query in schema_queries
+            for statement in repository.schema_definition_statements(query)
+            if all(repository.schema_definition_identity(statement))
+        }
+        expected_types = {
+            repository.schema_definition_identity(statement)
+            for statement in repository.schema_definition_statements(repository.schema_query())
+            if all(repository.schema_definition_identity(statement))
+        }
+        self.assertTrue(expected_types.issubset(planned_types))
+
+    def test_typedb_base_schema_batch_plan_orders_parents_and_resumes_partial_schema(self):
+        repository = TypeDBOntologyGraphRepository("127.0.0.1:1729")
+        expected = repository.schema_definition_statements(repository.schema_query())
+        full_plan = repository.base_schema_bootstrap_plan("define\n")
+        full_queries = [str(item.get("query") or "") for item in full_plan]
+
+        self.assertTrue(full_plan)
+        self.assertEqual("attributes", full_plan[0]["phase"])
+        self.assertIn("core-relation", [item["phase"] for item in full_plan])
+        self.assertIn("semantic-entity-subtypes", [item["phase"] for item in full_plan])
+        self.assertIn("semantic-relation-subtypes", [item["phase"] for item in full_plan])
+        self.assertLess(max(len(query.encode("utf-8")) for query in full_queries), 20000)
+
+        entity_order = []
+        entity_parent = {}
+        for query in full_queries:
+            for statement in repository.schema_definition_statements(query):
+                kind, name = repository.schema_definition_identity(statement)
+                if kind == "entity":
+                    entity_order.append(name)
+                    entity_parent[name] = repository.schema_subtype_parent(statement)
+        entity_index = {name: index for index, name in enumerate(entity_order)}
+        for name, parent in entity_parent.items():
+            if parent in entity_index:
+                self.assertLess(entity_index[parent], entity_index[name])
+
+        initial_definitions = [
+            statement
+            for statement in expected
+            if repository.schema_definition_identity(statement)[0] == "attribute"
+        ][:140]
+        partial_schema = "define\n" + "\n".join(initial_definitions)
+        resumed_plan = repository.base_schema_bootstrap_plan(partial_schema)
+        resumed_text = "\n".join(str(item.get("query") or "") for item in resumed_plan)
+        for statement in initial_definitions:
+            _kind, name = repository.schema_definition_identity(statement)
+            self.assertNotIn("attribute " + name + ",", resumed_text)
 
     def test_typedb_schema_readiness_is_reused_by_fresh_repository_instances(self):
         address = "typedb-schema-cache.test:1729"
@@ -1226,7 +1279,6 @@ class TypeDBOntologyRepositoryTests(unittest.TestCase):
                 return [
                     {"scopeId": "symbol:005930:market", "generationId": "abox-scope:market", "count": 4},
                     {"scopeId": "symbol:005930:state", "generationId": "abox-scope:state", "count": 2},
-                    {"scopeId": "symbol:005930:market", "generationId": "abox-scope:old", "count": 99},
                 ]
             return [
                 {"scopeId": "symbol:005930:market", "generationId": "abox-scope:market", "count": 5},
@@ -1245,11 +1297,24 @@ class TypeDBOntologyRepositoryTests(unittest.TestCase):
         self.assertTrue(all("groupby $scopeId, $generationId" in query for query, _columns, _label in calls))
         self.assertTrue(all('has ontology-manifest-id "abox-manifest:next"' in query for query, _columns, _label in calls))
         self.assertTrue(all('has ontology-world-id "portfolio:local:default"' in query for query, _columns, _label in calls))
-        self.assertTrue(all('has ontology-scope-id "symbol:005930:market"' in query for query, _columns, _label in calls))
-        self.assertTrue(all('has ontology-snapshot-id "abox-scope:market"' in query for query, _columns, _label in calls))
-        self.assertTrue(all('has ontology-scope-id "symbol:005930:state"' in query for query, _columns, _label in calls))
-        self.assertTrue(all('has ontology-snapshot-id "abox-scope:state"' in query for query, _columns, _label in calls))
+        self.assertTrue(all('has ontology-scope-id $scopeId' in query for query, _columns, _label in calls))
+        self.assertTrue(all('has ontology-snapshot-id $generationId' in query for query, _columns, _label in calls))
+        self.assertTrue(all('has ontology-scope-id "symbol:005930:market"' not in query for query, _columns, _label in calls))
+        self.assertTrue(all('has ontology-snapshot-id "abox-scope:market"' not in query for query, _columns, _label in calls))
         self.assertTrue(all(label == "typedb.scoped-abox-count-batch" for _query, _columns, label in calls))
+
+    def test_scoped_abox_manifest_verification_rejects_unexpected_scope_generation(self):
+        repository = TypeDBOntologyGraphRepository("127.0.0.1:1729")
+
+        with patch.object(repository, "read_rows", return_value=[{
+            "scopeId": "symbol:005930:market",
+            "generationId": "abox-scope:unexpected",
+            "count": 1,
+        }]):
+            with self.assertRaisesRegex(RuntimeError, "unexpected scope generation"):
+                repository.scoped_abox_scope_row_counts_batch([
+                    {"scopeId": "symbol:005930:market", "generationId": "abox-scope:market"},
+                ], manifest_id="abox-manifest:next", world_id="portfolio:local:default")
 
     def test_scoped_abox_storage_identity_reuses_a_prior_candidate_generation(self):
         graph = PortfolioOntology(
@@ -1293,6 +1358,42 @@ class TypeDBOntologyRepositoryTests(unittest.TestCase):
         self.assertTrue(queries)
         self.assertTrue(all("ontology-storage-id" in query for query, _columns, _label in queries))
         self.assertTrue(all("ontology-manifest-id" not in query for query, _columns, _label in queries))
+
+    def test_fresh_candidate_rebuild_skips_impossible_storage_reuse_reads(self):
+        repository = TypeDBOntologyGraphRepository(
+            "127.0.0.1:1729",
+            fresh_candidate_rebuild=True,
+        )
+        node = {
+            "id": "stock:005930",
+            "ontologyBox": "ABox",
+            "snapshotId": "abox-scope:fresh",
+            "scopeId": "symbol:005930:state",
+        }
+        relation = {
+            "id": "has-price:fresh",
+            "ontologyBox": "ABox",
+            "snapshotId": "abox-scope:fresh",
+            "scopeId": "link:symbol:005930:market",
+        }
+
+        with patch.object(
+            repository,
+            "scoped_abox_storage_rows_by_id",
+            side_effect=AssertionError("fresh candidate must not read prior ABox identities"),
+        ):
+            plan = repository.scoped_abox_storage_reuse_plan(
+                [node],
+                [relation],
+                assume_missing_storage=repository._fresh_candidate_rebuild,
+            )
+
+        self.assertEqual("ok", plan["status"])
+        self.assertEqual("fresh-candidate-known-empty", plan["storageLookupMode"])
+        self.assertEqual([node], plan["nodeRowsToInsert"])
+        self.assertEqual([relation], plan["relationRowsToInsert"])
+        self.assertEqual([], plan["reusedNodeRows"])
+        self.assertEqual([], plan["reusedRelationRows"])
 
     def test_scoped_abox_write_skips_reused_storage_rows(self):
         repository = TypeDBOntologyGraphRepository("127.0.0.1:1729")

@@ -248,6 +248,432 @@
   }
 }
 
+@media (max-width: 1180px) and (min-width: 861px) {
+  .console-shell .symbol-refresh-nav-task {
+    width: 40px;
+    min-width: 40px;
+    padding: 0;
+    justify-content: center;
+  }
+
+  .console-shell .symbol-refresh-nav-task > strong {
+    position: absolute;
+    width: 1px;
+    height: 1px;
+    overflow: hidden;
+    clip: rect(0, 0, 0, 0);
+    white-space: nowrap;
+  }
+}
+
+/* Symbol catalog background work keeps progress actionable across every tab. */
+.snackbar {
+  gap: 12px;
+  justify-content: space-between;
+}
+
+.snackbar > span {
+  min-width: 0;
+  overflow-wrap: anywhere;
+}
+
+.snackbar > button {
+  flex: 0 0 auto;
+  min-height: 34px;
+  border: 1px solid currentColor;
+  border-radius: 6px;
+  background: transparent;
+  color: inherit;
+  padding: 0 10px;
+  font: inherit;
+  cursor: pointer;
+}
+
+.symbol-refresh-nav-task {
+  display: inline-flex;
+  align-items: center;
+  gap: 7px;
+  min-width: 0;
+  min-height: 40px;
+  border: 1px solid #405166;
+  border-radius: 7px;
+  background: #182635;
+  color: #f7f9fb;
+  padding: 0 10px;
+  cursor: pointer;
+}
+
+.symbol-refresh-nav-task > span {
+  display: grid;
+  place-items: center;
+  width: 20px;
+  height: 20px;
+  color: #8fc1ff;
+  font-size: 15px;
+  font-weight: 900;
+}
+
+.symbol-refresh-nav-task > strong {
+  max-width: 180px;
+  overflow: hidden;
+  font-size: 11px;
+  line-height: 1.2;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+
+.symbol-refresh-nav-task.active > span {
+  animation: oa-symbol-refresh-spin 1.15s linear infinite;
+}
+
+.symbol-refresh-nav-task.completed {
+  border-color: color-mix(in srgb, var(--green) 68%, #405166);
+}
+
+.symbol-refresh-nav-task.failed {
+  border-color: color-mix(in srgb, var(--red) 72%, #405166);
+}
+
+@keyframes oa-symbol-refresh-spin {
+  to { transform: rotate(360deg); }
+}
+
+.symbol-refresh-status {
+  scroll-margin-top: 96px;
+  outline: none;
+}
+
+.symbol-refresh-status:focus-visible {
+  outline: 2px solid var(--focus);
+  outline-offset: 3px;
+}
+
+.symbol-refresh-status-head {
+  grid-template-columns: minmax(0, 1fr) auto 34px;
+  gap: 10px;
+}
+
+.symbol-refresh-status-head > span:first-child {
+  display: grid;
+  gap: 2px;
+  min-width: 0;
+}
+
+.symbol-refresh-status-head > span:first-child > strong,
+.symbol-refresh-status-head > span:first-child > em {
+  min-width: 0;
+  overflow-wrap: anywhere;
+}
+
+.symbol-refresh-status-head > span:first-child > em {
+  color: var(--muted);
+  font-size: 11px;
+  font-style: normal;
+  font-weight: 720;
+}
+
+.symbol-refresh-status-head > .icon-button.compact {
+  width: 34px;
+  min-width: 34px;
+  height: 34px;
+  min-height: 34px;
+}
+
+.symbol-refresh-status-body {
+  display: grid;
+  gap: 10px;
+}
+
+.symbol-refresh-status.compact {
+  gap: 7px;
+  padding-block: 10px;
+}
+
+.symbol-refresh-track.is-active::after {
+  position: absolute;
+  inset: 0 auto 0 0;
+  width: 18%;
+  border-radius: inherit;
+  background: color-mix(in srgb, var(--blue) 48%, transparent);
+  content: "";
+  animation: oa-symbol-refresh-track 1.25s ease-in-out infinite;
+}
+
+@keyframes oa-symbol-refresh-track {
+  from { transform: translateX(-110%); }
+  to { transform: translateX(660%); }
+}
+
+.symbol-refresh-stage-rail {
+  display: grid;
+  grid-template-columns: repeat(4, minmax(0, 1fr));
+  gap: 0;
+  margin: 2px 0 0;
+  padding: 0;
+  list-style: none;
+}
+
+.symbol-refresh-stage-rail li {
+  position: relative;
+  display: grid;
+  justify-items: center;
+  gap: 5px;
+  min-width: 0;
+  color: var(--muted);
+  text-align: center;
+}
+
+.symbol-refresh-stage-rail li:not(:last-child)::after {
+  position: absolute;
+  top: 10px;
+  left: calc(50% + 14px);
+  right: calc(-50% + 14px);
+  height: 1px;
+  background: var(--line);
+  content: "";
+}
+
+.symbol-refresh-stage-rail li > span {
+  position: relative;
+  z-index: 1;
+  display: grid;
+  place-items: center;
+  width: 22px;
+  height: 22px;
+  border: 1px solid var(--line);
+  border-radius: 50%;
+  background: var(--panel);
+  font-size: 10px;
+  font-weight: 900;
+}
+
+.symbol-refresh-stage-rail li > em {
+  font-size: 10px;
+  font-style: normal;
+  font-weight: 760;
+  line-height: 1.3;
+  overflow-wrap: anywhere;
+}
+
+.symbol-refresh-stage-rail li.done,
+.symbol-refresh-stage-rail li.active {
+  color: var(--blue);
+}
+
+.symbol-refresh-stage-rail li.done > span,
+.symbol-refresh-stage-rail li.active > span {
+  border-color: var(--blue);
+}
+
+.symbol-refresh-stage-rail li.active > span {
+  background: var(--blue);
+  color: var(--ds-color-on-action);
+}
+
+.symbol-refresh-friendly-error {
+  color: var(--red) !important;
+  font-weight: 780;
+}
+
+.symbol-refresh-error-detail {
+  color: var(--muted);
+  font-size: 11px;
+}
+
+.symbol-refresh-error-detail summary {
+  width: fit-content;
+  cursor: pointer;
+  font-weight: 800;
+}
+
+.symbol-refresh-error-detail code {
+  display: block;
+  margin-top: 7px;
+  color: var(--muted);
+  font-family: ui-monospace, SFMono-Regular, Menlo, monospace;
+  line-height: 1.5;
+  overflow-wrap: anywhere;
+  white-space: pre-wrap;
+}
+
+.symbol-refresh-actions {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 7px;
+}
+
+.symbol-refresh-history {
+  margin: 0 16px 12px;
+  border-bottom: 1px solid var(--line);
+}
+
+.symbol-refresh-history > summary {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: 12px;
+  min-height: 40px;
+  color: var(--muted);
+  cursor: pointer;
+  font-size: 12px;
+  font-weight: 820;
+  list-style: none;
+}
+
+.symbol-refresh-history > summary::-webkit-details-marker {
+  display: none;
+}
+
+.symbol-refresh-history > summary em {
+  font-style: normal;
+}
+
+.symbol-refresh-history-list {
+  display: grid;
+  padding-bottom: 10px;
+}
+
+.symbol-refresh-history-row {
+  display: grid;
+  grid-template-columns: minmax(0, 1fr) auto;
+  gap: 12px;
+  min-width: 0;
+  padding: 9px 0;
+  border-top: 1px solid var(--line);
+}
+
+.symbol-refresh-history-row > span {
+  display: grid;
+  gap: 3px;
+  min-width: 0;
+}
+
+.symbol-refresh-history-row > span:last-child {
+  justify-items: end;
+  text-align: right;
+}
+
+.symbol-refresh-history-row strong,
+.symbol-refresh-history-row em {
+  min-width: 0;
+  overflow-wrap: anywhere;
+}
+
+.symbol-refresh-history-row strong {
+  color: var(--ink);
+  font-size: 11px;
+}
+
+.symbol-refresh-history-row em {
+  color: var(--muted);
+  font-size: 10px;
+  font-style: normal;
+}
+
+.symbol-result-row.is-refreshed {
+  border-color: color-mix(in srgb, var(--green) 54%, var(--line));
+  box-shadow: inset 3px 0 0 var(--green);
+}
+
+.symbol-refresh-change {
+  flex: 0 0 auto;
+  border: 1px solid color-mix(in srgb, var(--green) 55%, var(--line));
+  border-radius: 5px;
+  color: var(--green);
+  padding: 2px 5px;
+  font-size: 9px;
+  font-style: normal;
+  font-weight: 850;
+  line-height: 1.2;
+  white-space: nowrap;
+}
+
+.text-button.is-loading::before {
+  width: 13px;
+  height: 13px;
+  border: 2px solid currentColor;
+  border-right-color: transparent;
+  border-radius: 50%;
+  content: "";
+  animation: oa-symbol-refresh-spin 0.8s linear infinite;
+}
+
+@media (max-width: 860px) {
+  .symbol-refresh-nav-task {
+    width: 40px;
+    min-width: 40px;
+    height: 40px;
+    padding: 0;
+    justify-content: center;
+  }
+
+  .symbol-refresh-nav-task > strong {
+    position: absolute;
+    width: 1px;
+    height: 1px;
+    overflow: hidden;
+    clip: rect(0, 0, 0, 0);
+    white-space: nowrap;
+  }
+
+  .symbol-refresh-status {
+    margin-inline: var(--ds-panel-pad-x);
+    scroll-margin-top: calc(78px + env(safe-area-inset-top));
+  }
+
+  .symbol-refresh-status-head {
+    grid-template-columns: minmax(0, 1fr) 34px;
+  }
+
+  .symbol-refresh-status-head > span:nth-child(2) {
+    grid-column: 1;
+    font-size: 10px;
+  }
+
+  .symbol-refresh-status-head > .icon-button.compact {
+    grid-column: 2;
+    grid-row: 1 / span 2;
+  }
+
+  .symbol-refresh-stage-rail {
+    grid-template-columns: repeat(2, minmax(0, 1fr));
+    gap: 10px 0;
+  }
+
+  .symbol-refresh-stage-rail li:nth-child(2)::after {
+    display: none;
+  }
+
+  .symbol-refresh-actions {
+    display: grid;
+    grid-template-columns: minmax(0, 1fr);
+  }
+
+  .symbol-refresh-actions .text-button {
+    width: 100%;
+  }
+
+  .symbol-refresh-history {
+    margin-inline: var(--ds-panel-pad-x);
+  }
+
+  .symbol-refresh-history-row {
+    grid-template-columns: minmax(0, 1fr) minmax(72px, auto);
+  }
+
+  .symbol-result-title {
+    flex-wrap: wrap;
+  }
+}
+
+@media (prefers-reduced-motion: reduce) {
+  .symbol-refresh-nav-task.active > span,
+  .symbol-refresh-track.is-active::after,
+  .text-button.is-loading::before {
+    animation: none;
+  }
+}
+
 /* Read-only ontology catalog: canonical schema through alert lineage. */
 .ontology-catalog {
   max-width: 100%;
@@ -32450,5 +32876,62 @@ button.icon-button.is-request-busy .button-activity-spinner {
   .console-shell .investment-calendar-next-card > .panel-head + .investment-calendar-next-body,
   .console-shell .investment-calendar-summary-panel > .panel-head + .investment-calendar-kpis {
     margin-top: var(--ds-section-gap);
+  }
+}
+
+/* Final cascade placement for the cross-tab symbol refresh controls. */
+.console-shell .symbol-refresh-status {
+  scroll-margin-top: 96px;
+}
+
+.console-shell .symbol-refresh-status-head {
+  grid-template-columns: minmax(0, 1fr) auto 34px;
+  gap: 10px;
+}
+
+.console-shell .symbol-refresh-status-head > span:first-child {
+  display: grid;
+  gap: 2px;
+  min-width: 0;
+}
+
+.console-shell .symbol-refresh-status-head > .icon-button.compact {
+  width: 34px;
+  min-width: 34px;
+  height: 34px;
+  min-height: 34px;
+}
+
+.console-shell .symbol-result-row.is-refreshed {
+  border-color: color-mix(in srgb, var(--green) 54%, var(--line));
+  box-shadow: inset 3px 0 0 var(--green);
+}
+
+@media (max-width: 860px) {
+  .console-shell .symbol-refresh-status {
+    margin-inline: var(--ds-panel-pad-x);
+    scroll-margin-top: calc(78px + env(safe-area-inset-top));
+  }
+
+  .console-shell .symbol-refresh-status-head {
+    grid-template-columns: minmax(0, 1fr) 34px;
+  }
+
+  .console-shell .symbol-refresh-status-head > span:nth-child(2) {
+    grid-column: 1;
+    font-size: 10px;
+  }
+
+  .console-shell .symbol-refresh-status-head > .icon-button.compact {
+    grid-column: 2;
+    grid-row: 1 / span 2;
+  }
+
+  .console-shell .symbol-refresh-history {
+    margin-inline: var(--ds-panel-pad-x);
+  }
+
+  .console-shell .symbol-result-title {
+    flex-wrap: wrap;
   }
 }

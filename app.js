@@ -739,6 +739,14 @@
     return String(control.getAttribute("aria-label") || control.textContent || control.value || "").replace(/\s+/g, " ").trim();
   }
 
+  function networkActivityControlIsIconOnly(control) {
+    return Boolean(
+      control
+      && control.matches
+      && control.matches('.icon-button, .symbol-watch-toggle, [data-network-busy-icon-only="true"]')
+    );
+  }
+
   function networkActivityFormDescriptor(form) {
     if (!form || !form.attributes) return null;
     var attributes = Array.prototype.slice.call(form.attributes);
@@ -808,6 +816,7 @@
   function markNetworkBusyControl(control, key, label) {
     if (!control || control.__orbitAlphaNetworkBusy) return;
     var rect = control.getBoundingClientRect ? control.getBoundingClientRect() : { width: 0 };
+    var iconOnly = networkActivityControlIsIconOnly(control);
     control.__orbitAlphaNetworkBusy = {
       html: control.innerHTML,
       value: control.value,
@@ -833,7 +842,7 @@
     spinner.className = "button-activity-spinner";
     spinner.setAttribute("aria-hidden", "true");
     control.appendChild(spinner);
-    if (!control.classList.contains("icon-button")) {
+    if (!iconOnly) {
       var copy = document.createElement("span");
       copy.className = "button-activity-label";
       copy.textContent = label;
@@ -8537,6 +8546,35 @@
     })[0] || null;
   }
 
+  function removeInvestmentCalendarCandidateFromLocalList(candidateId) {
+    var id = String(candidateId || "").trim();
+    var payload = state.investmentCalendarCandidates;
+    if (!id || !payload || !Array.isArray(payload.candidates)) return;
+    var candidates = payload.candidates.filter(function (candidate) {
+      return String((candidate || {}).candidateId || "") !== id;
+    });
+    var removed = payload.candidates.length - candidates.length;
+    if (!removed) return;
+    var summary = Object.assign({}, payload.summary || {});
+    var pending = Number(summary.pending);
+    if (Number.isFinite(pending)) summary.pending = Math.max(0, pending - removed);
+    var storedPending = Number(summary.storedPending);
+    if (Number.isFinite(storedPending)) summary.storedPending = Math.max(0, storedPending - removed);
+    var pageInfo = Object.assign({}, payload.pageInfo || {});
+    var total = Number(pageInfo.total);
+    if (Number.isFinite(total)) {
+      pageInfo.total = Math.max(0, total - removed);
+      pageInfo.pageCount = Math.max(1, Math.ceil(pageInfo.total / Math.max(1, Number(pageInfo.pageSize || INVESTMENT_CALENDAR_CANDIDATE_PAGE_SIZE))));
+      pageInfo.hasNext = Number(pageInfo.page || 0) + 1 < pageInfo.pageCount;
+    }
+    state.investmentCalendarCandidates = Object.assign({}, payload, {
+      candidates: candidates,
+      summary: summary,
+      total: Number.isFinite(Number(payload.total)) ? Math.max(0, Number(payload.total) - removed) : payload.total,
+      pageInfo: pageInfo
+    });
+  }
+
   function openInvestmentCalendarCandidateConfirmation(candidateId) {
     var candidate = investmentCalendarCandidateById(candidateId);
     if (!candidate) {
@@ -8621,8 +8659,11 @@
       timezone: currentAppTimezone(),
       reviewNote: confirmationActive ? "UI 날짜·시각 확인" : "UI 일정 확인"
     })
-      .then(function () {
+      .then(function (result) {
         state.investmentCalendarCandidateConfirmation = null;
+        if (String((((result || {}).candidate || {}).status) || "").toLowerCase() !== "pending") {
+          removeInvestmentCalendarCandidateFromLocalList(id);
+        }
         showSnackbar("캘린더 후보를 이벤트로 등록했습니다.", "success");
         return Promise.all([loadInvestmentCalendar(true), loadInvestmentCalendarCandidates(true)]);
       })
@@ -8655,7 +8696,10 @@
     return sendJson("/api/investment-calendar/candidates/" + encodeURIComponent(id) + "/reject", "POST", {
       reviewNote: "UI 거절"
     })
-      .then(function () {
+      .then(function (result) {
+        if (String((((result || {}).candidate || {}).status) || "").toLowerCase() !== "pending") {
+          removeInvestmentCalendarCandidateFromLocalList(id);
+        }
         showSnackbar("캘린더 후보를 거절했습니다.", "success");
         return Promise.all([loadInvestmentCalendar(true), loadInvestmentCalendarCandidates(true)]);
       })
@@ -26182,7 +26226,7 @@
       '<em>' + escapeHtml(active ? "상세 표시 중" : "행 선택") + '</em>',
       '</div>',
       '</button>',
-      '<button class="symbol-watch-toggle' + (already ? " active" : "") + '" type="button" data-symbol-watch-toggle="' + escapeHtml(symbol) + '" title="' + escapeHtml(already ? targetText + "에서 관심 종목 삭제" : "관심 종목 추가") + '" aria-label="' + escapeHtml(already ? stockDisplayName(symbol, item) + " 관심 종목 삭제" : stockDisplayName(symbol, item) + " 관심 종목 추가") + '"' + ((isStaticPreviewHost() || state.serverSettingsLocked) ? " disabled" : "") + '><span aria-hidden="true">' + (already ? "★" : "☆") + '</span></button>',
+      '<button class="symbol-watch-toggle' + (already ? " active" : "") + '" type="button" data-symbol-watch-toggle="' + escapeHtml(symbol) + '" data-network-busy-icon-only="true" title="' + escapeHtml(already ? targetText + "에서 관심 종목 삭제" : "관심 종목 추가") + '" aria-label="' + escapeHtml(already ? stockDisplayName(symbol, item) + " 관심 종목 삭제" : stockDisplayName(symbol, item) + " 관심 종목 추가") + '"' + ((isStaticPreviewHost() || state.serverSettingsLocked) ? " disabled" : "") + '><span aria-hidden="true">' + (already ? "★" : "☆") + '</span></button>',
       '</div>'
     ].join("");
   }

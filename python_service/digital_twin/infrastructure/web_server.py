@@ -616,6 +616,7 @@ def settings_status_payload(access: ShareAccess = None) -> Dict[str, object]:
     settings = runtime_settings()
     public_keys = [
         "appTheme",
+        "appTimezone",
         "watchlistSymbols",
         "mysqlUrl",
         "mysqlHost",
@@ -1026,6 +1027,7 @@ def settings_status_payload(access: ShareAccess = None) -> Dict[str, object]:
         "investmentCalendarAutoExtractEnabled",
         "investmentCalendarAutoExtractRegisterUndated",
         "investmentCalendarAutoExtractReviewEnabled",
+        "investmentCalendarCandidateDefaultTime",
         "investmentCalendarAiResearchEnabled",
         "investmentCalendarAiResearchRunCollection",
         "investmentCalendarAiResearchEvidenceLimit",

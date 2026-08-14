@@ -2030,6 +2030,8 @@ class PythonServiceTests(unittest.TestCase):
 
     def test_runtime_settings_store_masks_kis_credentials(self):
         save_runtime_settings({
+            "appTimezone": "America/New_York",
+            "investmentCalendarCandidateDefaultTime": "08:30",
             "kisBaseUrl": "https://openapi.koreainvestment.com:9443",
             "kisAppKey": "app-key",
             "kisAppSecret": "app-secret",
@@ -2050,6 +2052,8 @@ class PythonServiceTests(unittest.TestCase):
         self.assertIn("aiPromptPolicy", status["settings"])
         self.assertIn("kisMarketSignalUnchangedStaleCount", status["settings"])
         self.assertEqual("0", status["settings"]["operatorReasoningReportEnabled"])
+        self.assertEqual("America/New_York", status["settings"]["appTimezone"])
+        self.assertEqual("08:30", status["settings"]["investmentCalendarCandidateDefaultTime"])
         self.assertTrue(status["configured"]["kisAppKey"])
         self.assertTrue(status["configured"]["kisAppSecret"])
         self.assertNotIn("kisAccountNo", status["configured"])

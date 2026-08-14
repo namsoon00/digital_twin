@@ -25008,6 +25008,59 @@ html[data-theme="dark"] .ontology-graph-expanded-toolbar .icon-button.danger {
   background: transparent;
 }
 
+.calendar-candidate-confirm-modal {
+  width: min(620px, calc(100vw - 40px));
+}
+
+.calendar-candidate-confirm-form {
+  display: grid;
+  gap: var(--ds-section-gap);
+  min-width: 0;
+  padding: var(--ds-panel-pad-y) var(--ds-panel-pad-x);
+}
+
+.calendar-candidate-confirm-context {
+  display: grid;
+  gap: var(--ds-space-2);
+  min-width: 0;
+  padding-bottom: var(--ds-section-gap);
+  border-bottom: 1px solid var(--ds-card-border);
+}
+
+.calendar-candidate-confirm-context strong,
+.calendar-candidate-confirm-context span {
+  min-width: 0;
+  overflow-wrap: anywhere;
+}
+
+.calendar-candidate-confirm-context strong {
+  color: var(--ink);
+  font-size: var(--ds-type-title);
+  line-height: 1.35;
+}
+
+.calendar-candidate-confirm-context span {
+  color: var(--muted);
+  font-size: var(--ds-type-label);
+  font-weight: 760;
+  line-height: 1.5;
+}
+
+.calendar-candidate-confirm-fields {
+  display: grid;
+  grid-template-columns: repeat(2, minmax(0, 1fr));
+  gap: var(--ds-space-4);
+  min-width: 0;
+}
+
+.calendar-candidate-confirm-error {
+  margin: 0;
+}
+
+.calendar-candidate-confirm-actions {
+  justify-content: flex-end;
+}
+
 @media (min-width: 1181px) {
   .notification-decision-body.has-detail {
     grid-template-columns: minmax(360px, 0.42fr) minmax(0, 1fr);
@@ -25042,6 +25095,14 @@ html[data-theme="dark"] .ontology-graph-expanded-toolbar .icon-button.danger {
 
   .calendar-entry-head {
     display: grid;
+  }
+
+  .calendar-candidate-confirm-modal {
+    width: 100%;
+  }
+
+  .calendar-candidate-confirm-fields {
+    grid-template-columns: minmax(0, 1fr);
   }
 
   .inline-detail-row {

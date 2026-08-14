@@ -148,6 +148,16 @@ class OntologyReasoningQueueHealthTests(unittest.TestCase):
                                 "deferredScopeCount": 4,
                             },
                         },
+                        "inference": {
+                            "subjectFanoutUsed": True,
+                            "subjectFanoutParallelism": 2,
+                            "subjectFanoutDurationMs": 3210,
+                            "subjectFanoutFailureCount": 0,
+                            "subjectFanoutSubjects": [
+                                {"symbol": "005930", "status": "ok"},
+                                {"symbol": "000660", "status": "ok"},
+                            ],
+                        },
                     },
                 },
             },
@@ -158,6 +168,11 @@ class OntologyReasoningQueueHealthTests(unittest.TestCase):
         self.assertEqual("abc123", summary["runtimeIdentity"]["revision"])
         self.assertEqual("full-global-impact", summary["targetScopedManifestPatch"]["status"])
         self.assertEqual(4, summary["targetScopedManifestPatch"]["deferredScopeCount"])
+        self.assertTrue(summary["typedbNativeRuleSubjectFanoutUsed"])
+        self.assertEqual(2, summary["typedbNativeRuleSubjectFanoutParallelism"])
+        self.assertEqual(3210, summary["typedbNativeRuleSubjectFanoutDurationMs"])
+        self.assertEqual(0, summary["typedbNativeRuleSubjectFanoutFailureCount"])
+        self.assertEqual("005930", summary["typedbNativeRuleSubjectFanoutSubjects"][0]["symbol"])
 
     def test_critical_request_age_escalates_immediately(self):
         health = evaluate_ontology_reasoning_queue_health(

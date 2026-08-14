@@ -436,6 +436,14 @@ class OntologyRuntimeOperationsTests(unittest.TestCase):
             "typedbNativeRuleExecutedCount": 4,
             "typedbNativeRuleExecutedWorkCount": 6,
             "typedbNativeRuleTargetParallelism": 2,
+            "typedbNativeRuleSubjectFanoutUsed": True,
+            "typedbNativeRuleSubjectFanoutParallelism": 2,
+            "typedbNativeRuleSubjectFanoutDurationMs": 3100,
+            "typedbNativeRuleSubjectFanoutFailureCount": 0,
+            "typedbNativeRuleSubjectFanoutSubjects": [
+                {"symbol": "005930", "status": "ok"},
+                {"symbol": "000660", "status": "ok"},
+            ],
             "typedbNativeRuleTargetWorkShardingUsed": True,
             "typedbNativeRuleTargetWorkShardCount": 2,
             "typedbNativeRuleWorkItemCount": 6,
@@ -455,6 +463,11 @@ class OntologyRuntimeOperationsTests(unittest.TestCase):
         self.assertEqual(4, observation["inference"]["executedRuleCount"])
         self.assertEqual(6, observation["inference"]["executedRuleWorkCount"])
         self.assertEqual(2, observation["inference"]["targetParallelism"])
+        self.assertTrue(observation["inference"]["subjectFanoutUsed"])
+        self.assertEqual(2, observation["inference"]["subjectFanoutParallelism"])
+        self.assertEqual(3100, observation["inference"]["subjectFanoutDurationMs"])
+        self.assertEqual(0, observation["inference"]["subjectFanoutFailureCount"])
+        self.assertEqual("005930", observation["inference"]["subjectFanoutSubjects"][0]["symbol"])
         self.assertTrue(observation["inference"]["targetWorkShardingUsed"])
         self.assertEqual(2, observation["inference"]["targetWorkShardCount"])
         self.assertEqual(6, observation["inference"]["targetWorkItemCount"])

@@ -1573,6 +1573,21 @@ def build_projection_runtime_observation(
             ),
             "executedRuleWorkCount": _integer(execution.get("typedbNativeRuleExecutedWorkCount")),
             "targetParallelism": _integer(execution.get("typedbNativeRuleTargetParallelism")),
+            "subjectFanoutUsed": bool(execution.get("typedbNativeRuleSubjectFanoutUsed")),
+            "subjectFanoutParallelism": _integer(
+                execution.get("typedbNativeRuleSubjectFanoutParallelism")
+            ),
+            "subjectFanoutDurationMs": _integer(
+                execution.get("typedbNativeRuleSubjectFanoutDurationMs")
+            ),
+            "subjectFanoutFailureCount": _integer(
+                execution.get("typedbNativeRuleSubjectFanoutFailureCount")
+            ),
+            "subjectFanoutSubjects": [
+                dict(item)
+                for item in execution.get("typedbNativeRuleSubjectFanoutSubjects") or []
+                if isinstance(item, Mapping)
+            ][:8],
             "targetWorkShardingUsed": bool(execution.get("typedbNativeRuleTargetWorkShardingUsed")),
             "targetWorkShardCount": _integer(execution.get("typedbNativeRuleTargetWorkShardCount")),
             "targetWorkItemCount": _integer(execution.get("typedbNativeRuleWorkItemCount")),

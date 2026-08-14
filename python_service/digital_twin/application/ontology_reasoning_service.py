@@ -4814,6 +4814,24 @@ class OntologyReasoningRunner:
                 if str(key or "")
             },
             "targetParallelism": int(float_value(inference.get("targetParallelism"), 0.0)),
+            "typedbNativeRuleSubjectFanoutUsed": bool(inference.get("subjectFanoutUsed")),
+            "typedbNativeRuleSubjectFanoutParallelism": int(float_value(
+                inference.get("subjectFanoutParallelism"),
+                0.0,
+            )),
+            "typedbNativeRuleSubjectFanoutDurationMs": int(float_value(
+                inference.get("subjectFanoutDurationMs"),
+                0.0,
+            )),
+            "typedbNativeRuleSubjectFanoutFailureCount": int(float_value(
+                inference.get("subjectFanoutFailureCount"),
+                0.0,
+            )),
+            "typedbNativeRuleSubjectFanoutSubjects": [
+                dict(item)
+                for item in inference.get("subjectFanoutSubjects") or []
+                if isinstance(item, dict)
+            ][:8],
             "targetWorkShardingUsed": bool(inference.get("targetWorkShardingUsed")),
             "targetWorkShardCount": int(float_value(inference.get("targetWorkShardCount"), 0.0)),
             "targetWorkItemCount": int(float_value(inference.get("targetWorkItemCount"), 0.0)),
@@ -5547,6 +5565,11 @@ class OntologyReasoningRunner:
                     "status", "targetSymbolCount", "candidateRuleCount", "enabledRuleCount",
                     "candidateRuleRatioPct", "executedRuleCount", "executedRuleWorkCount",
                     "targetParallelism", "targetWorkShardingUsed", "targetWorkShardCount",
+                    "typedbNativeRuleSubjectFanoutUsed",
+                    "typedbNativeRuleSubjectFanoutParallelism",
+                    "typedbNativeRuleSubjectFanoutDurationMs",
+                    "typedbNativeRuleSubjectFanoutFailureCount",
+                    "typedbNativeRuleSubjectFanoutSubjects",
                     "targetWorkItemCount", "commitMode", "affectedScopeCount",
                     "directChangedScopeCount", "globalImpact", "globalImpactDiagnostics",
                     "targetScopedManifestPatch", "runtimeIdentity", "replayValidation",

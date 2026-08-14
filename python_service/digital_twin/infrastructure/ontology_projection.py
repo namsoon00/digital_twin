@@ -81,8 +81,8 @@ from ..domain.ontology_fact_slots import build_fact_slot_projection_plan
 from ..domain.ontology_rulebox_release_manifest import (
     DEPRECATED_TYPEDB_RULE_IDS,
     RULEBOX_PLATFORM_RELEASE_ADDITION_IDS,
-    RULEBOX_RAW_ABOX_RUNTIME_RULE_IDS,
-    RULEBOX_RAW_ABOX_RUNTIME_RULE_VERSIONS,
+    RULEBOX_RUNTIME_CONTRACT_RULE_IDS,
+    RULEBOX_RUNTIME_CONTRACT_RULE_VERSIONS,
 )
 from ..domain.portfolio_ontology_temporal_concepts import parse_temporal_windows
 from ..domain.portfolio import AccountSnapshot
@@ -124,8 +124,8 @@ def rulebox_catalog_requires_bootstrap_repair(stored_rules: List[Dict[str, objec
 
     Presentation-only differences are owned by the persisted RuleBox and do
     not justify rebuilding the default catalog on each realtime projection.
-    The checks below mirror the historical automatic migration cases that can
-    make a native rule incompatible with the current ABox shape.
+    The checks below mirror automatic migration cases that can make a native
+    rule incompatible with the current ABox shape or decision-policy scope.
     """
     rules = [item for item in stored_rules or [] if isinstance(item, dict)]
     if not rules:
@@ -139,7 +139,7 @@ def rulebox_catalog_requires_bootstrap_repair(stored_rules: List[Dict[str, objec
         return True
     for item in rules:
         rule_id = rule_id_from_payload(item)
-        expected_version = RULEBOX_RAW_ABOX_RUNTIME_RULE_VERSIONS.get(rule_id)
+        expected_version = RULEBOX_RUNTIME_CONTRACT_RULE_VERSIONS.get(rule_id)
         if expected_version and str(item.get("version") or "").strip() != expected_version:
             return True
     return False
@@ -594,14 +594,14 @@ def migrate_typedb_rule_catalog(
         default_version = str(default_rule.get("version") or "").strip()
         stored_version = str(rule.get("version") or "").strip()
         if (
-            rule_id in RULEBOX_RAW_ABOX_RUNTIME_RULE_IDS
+            rule_id in RULEBOX_RUNTIME_CONTRACT_RULE_IDS
             and bool(default_version)
             and stored_version != default_version
         ):
-            # The input predicates changed from semantic Python ABox edges to
-            # raw facts. Preserve only the administrative enable/disable flag;
-            # keeping old conditions would make native TypeDB inference read
-            # relations that the new ABox deliberately no longer creates.
+            # The executable condition contract changed. Preserve only the
+            # administrative enable/disable flag; keeping old conditions
+            # would make native TypeDB inference read an incompatible ABox or
+            # cross a decision-policy scope that the new catalog separates.
             replacement = deepcopy(default_rule)
             if "enabled" in rule:
                 replacement["enabled"] = bool(rule.get("enabled"))

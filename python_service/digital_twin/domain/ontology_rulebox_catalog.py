@@ -1251,11 +1251,11 @@ def default_graph_inference_rules() -> List[GraphInferenceRule]:
         GraphInferenceRule(
             rule_id="graph.aggressive.loss_recovery.add_buy_review.v1",
             label="공격형 계정 + 손실 반등 + 수급 회복 -> 조건부 추가매수 검토 추론",
-            version="v1",
+            version="v2",
             source_kind="stock",
             action_group="addBuy",
             action_level="review",
-            prompt_hint="공격형 계정이라도 손실 종목 추가매수는 5일선 회복, 60일선 방어, 비중 여유, 거래·수급 확인이 함께 있을 때만 소액 분할 검토로 설명합니다.",
+            prompt_hint="공격형 계정이라도 손실 종목 추가매수는 5일선 회복, 60일선 방어와 거래·수급 확인이 함께 있을 때만 소액 분할 검토로 설명합니다.",
             any_condition_min_count=2,
             conditions=[
                 GraphRuleCondition(
@@ -1305,14 +1305,6 @@ def default_graph_inference_rules() -> List[GraphInferenceRule]:
                     field="ma60Distance",
                     operator=">=",
                     value=-1,
-                ),
-                GraphRuleCondition(
-                    "position-room",
-                    "subject_property",
-                    "계좌 내 종목 비중이 공격형 한도 안에 있습니다.",
-                    field="positionAccountWeight",
-                    operator="<=",
-                    value=35,
                 ),
                 GraphRuleCondition(
                     "volume-confirmation",
@@ -1753,7 +1745,7 @@ def default_graph_inference_rules() -> List[GraphInferenceRule]:
         GraphInferenceRule(
             rule_id="graph.profit_momentum.hold_add_review.v1",
             label="수익 보유 + 단기 상승 유지 -> 보유·추가매수 비교 추론",
-            version="v1",
+            version="v2",
             source_kind="stock",
             action_group="addBuy",
             action_level="review",
@@ -1799,14 +1791,6 @@ def default_graph_inference_rules() -> List[GraphInferenceRule]:
                     field="ma20Distance",
                     operator=">=",
                     value=-3,
-                ),
-                GraphRuleCondition(
-                    "position-room",
-                    "subject_property",
-                    "종목 비중이 과도하지 않습니다.",
-                    field="positionAccountWeight",
-                    operator="<=",
-                    value=30,
                 ),
                 GraphRuleCondition(
                     "positive-price-change",
@@ -1930,11 +1914,11 @@ def default_graph_inference_rules() -> List[GraphInferenceRule]:
         GraphInferenceRule(
             rule_id="graph.instrument_profile.strategy_fit.support.v1",
             label="종목 타입 + 투자 성향 일치 -> 보유/진입 가설 보강",
-            version="v1",
+            version="v2",
             source_kind="stock",
             action_group="strategyFit",
             action_level="review",
-            prompt_hint="종목 타입이 계정 성향과 맞을 때도 즉시 매수 결론이 아니라 비중 한도, 가격 회복, 수급 확인을 함께 설명합니다.",
+            prompt_hint="종목 타입이 계정 성향과 맞을 때도 즉시 매수 결론이 아니라 가격 회복과 수급 확인을 함께 설명합니다.",
             any_condition_min_count=1,
             conditions=[
                 GraphRuleCondition(
@@ -1959,15 +1943,6 @@ def default_graph_inference_rules() -> List[GraphInferenceRule]:
                     relation_type="HAS_INSTRUMENT_PROFILE",
                     target_kind="instrument-profile",
                     target_property_filters={"allowAddOnStrength": True},
-                    role="any",
-                ),
-                GraphRuleCondition(
-                    "position-weight-room",
-                    "subject_property",
-                    "종목 비중이 성향 한도 안에 있습니다.",
-                    field="positionAccountWeight",
-                    operator="<=",
-                    value={"field": "strategyMaxPositionWeightPct", "default": 25},
                     role="any",
                 ),
             ],
@@ -2289,12 +2264,12 @@ def default_graph_inference_rules() -> List[GraphInferenceRule]:
         ),
         GraphInferenceRule(
             rule_id="graph.strategy_profile.loss_tolerance_breach.v1",
-            label="투자 성향 손실 한도 초과 + 비중 부담 -> 손실 관리 강화",
-            version="v1",
+            label="투자 성향 손실 한도 초과 + 추세 약화 -> 손실 관리 강화",
+            version="v2",
             source_kind="stock",
             action_group="strategyFit",
             action_level="review",
-            prompt_hint="손실률만 보지 않고 계정 투자 성향의 손실 허용폭과 종목 비중 한도를 같이 비교해 설명합니다.",
+            prompt_hint="손실률만 보지 않고 계정 투자 성향의 손실 허용폭과 가격 회복 상태를 같이 비교해 설명합니다.",
             any_condition_min_count=1,
             conditions=[
                 GraphRuleCondition(
@@ -2321,15 +2296,6 @@ def default_graph_inference_rules() -> List[GraphInferenceRule]:
                     value={"field": "strategyLossTolerancePct", "default": -8},
                 ),
                 GraphRuleCondition(
-                    "position-over-budget",
-                    "subject_property",
-                    "종목 비중이 계정 성향의 단일 종목 한도를 넘었습니다.",
-                    field="positionAccountWeight",
-                    operator=">=",
-                    value={"field": "strategyMaxPositionWeightPct", "default": 25},
-                    role="any",
-                ),
-                GraphRuleCondition(
                     "ma20-weak",
                     "subject_property",
                     "20일 평균 가격보다 낮아 손실 회복이 아직 확인되지 않았습니다.",
@@ -2348,7 +2314,7 @@ def default_graph_inference_rules() -> List[GraphInferenceRule]:
                     tbox_class="StrategyMismatchRisk",
                     tbox_classes=["StrategyMismatchRisk", "RiskBudget", "InvestorProfilePolicy", "ActionabilityAssessment"],
                     polarity="risk",
-                    belief_label="계정 투자 성향의 손실 허용 기준을 넘었고 비중 또는 추세 부담이 있어 손실 관리가 우선입니다.",
+                    belief_label="계정 투자 성향의 손실 허용 기준을 넘었고 가격 회복도 확인되지 않아 손실 관리가 우선입니다.",
                     ai_influence_label="투자 성향 손실 한도 초과",
                     action_group="strategyFit",
                     action_level="review",
@@ -2358,12 +2324,12 @@ def default_graph_inference_rules() -> List[GraphInferenceRule]:
         ),
         GraphInferenceRule(
             rule_id="graph.strategy_profile.aggressive_recovery_room.v1",
-            label="공격형 성향 + 회복·비중 여유 -> 추가매수 여지",
-            version="v1",
+            label="공격형 성향 + 가격·수급 회복 -> 추가매수 여지",
+            version="v2",
             source_kind="stock",
             action_group="strategyFit",
             action_level="review",
-            prompt_hint="공격형 성향에서도 추가매수는 손실 한도, 비중 한도, 5일선 회복, 수급 확인을 통과한 경우에만 후보로 설명합니다.",
+            prompt_hint="공격형 성향에서도 추가매수는 손실 한도, 5일선 회복과 수급 확인을 통과한 경우에만 후보로 설명합니다.",
             any_condition_min_count=2,
             conditions=[
                 GraphRuleCondition(
@@ -2389,14 +2355,6 @@ def default_graph_inference_rules() -> List[GraphInferenceRule]:
                     field="profitLossRate",
                     operator=">=",
                     value={"field": "strategyLossTolerancePct", "default": -15},
-                ),
-                GraphRuleCondition(
-                    "position-room",
-                    "subject_property",
-                    "종목 비중이 공격형 한도 안에 있습니다.",
-                    field="positionAccountWeight",
-                    operator="<=",
-                    value={"field": "strategyMaxPositionWeightPct", "default": 35},
                 ),
                 GraphRuleCondition(
                     "ma5-recovered",
@@ -2435,7 +2393,7 @@ def default_graph_inference_rules() -> List[GraphInferenceRule]:
                     tbox_class="StrategyFitAssessment",
                     tbox_classes=["StrategyFitAssessment", "AddBuyEligibility", "RecoveryConfirmation", "InvestorProfilePolicy"],
                     polarity="support",
-                    belief_label="공격형 성향에서 손실·비중·회복 조건이 관리 가능해 소액 분할 추가매수 후보를 검토할 수 있습니다.",
+                    belief_label="공격형 성향에서 손실 한도 안의 가격·수급 회복이 확인돼 소액 분할 추가매수 후보를 검토할 수 있습니다.",
                     ai_influence_label="공격형 회복 추가매수 여지",
                     action_group="strategyFit",
                     action_level="review",

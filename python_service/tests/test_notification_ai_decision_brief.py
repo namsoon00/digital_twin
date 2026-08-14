@@ -187,6 +187,7 @@ class NotificationAIDecisionBriefTests(unittest.TestCase):
 
     def test_large_graph_context_stays_within_prompt_budget(self):
         context = decision_context("act", "new-condition")
+        context["messageType"] = "portfolioRebalanceReview"
         relation = context["ontologyRelationContext"]
         relation["facts"] = {
             "fact-" + str(index): "x" * 800
@@ -282,11 +283,54 @@ class NotificationAIDecisionBriefTests(unittest.TestCase):
             payload["accountPolicy"]["portfolioLifecycle"]["rebalanceState"]["maximumNotionalBySymbol"],
         )
 
-    def test_ordinary_symbol_decision_omits_unrelated_rebalance_legs_but_scheduled_review_keeps_them(self):
+    def test_ordinary_symbol_decision_excludes_rebalance_policy_but_scheduled_review_keeps_it(self):
         context = decision_context()
+        context["rawLines"] = [
+            "현재가: 70,000원",
+            "계좌 평가금액: 5,000만 원",
+            "현금 비중: 0.1%",
+        ]
+        context["investmentStrategy"] = {
+            "label": "공격형",
+            "riskTolerance": "very_high",
+            "lossTolerancePct": -15,
+            "maxPositionWeightPct": 45,
+            "maxSectorWeightPct": 65,
+            "fxExposureReviewPct": 25,
+            "minCashWeightPct": 3,
+            "promptInstruction": "집중도와 현금 하한을 확인합니다.",
+            "profile": "aggressive",
+        }
+        context["investmentStrategyGuidance"] = {
+            "label": "공격형",
+            "profile": "aggressive",
+            "riskChecks": ["최대 종목 비중 45%"],
+            "actionBoundaries": ["집중도 초과 시 추가 진입 제한"],
+        }
+        context["ontologyRelationContext"]["facts"].update({
+            "positionWeight": 7.0,
+            "sectorRatio": 32.0,
+            "fxExposureRatio": 59.0,
+            "strategyMaxPositionWeightPct": 45.0,
+            "strategyMaxSectorWeightPct": 65.0,
+            "strategyFxExposureReviewPct": 25.0,
+        })
         context["portfolioLifecycle"] = {
             "status": "ready",
             "portfolioId": "portfolio:main",
+            "mandate": {
+                "max_position_weight_pct": 45,
+                "min_cash_weight_pct": 3,
+            },
+            "exposureSnapshot": {
+                "metrics": [{
+                    "exposure_type": "cash",
+                    "key": "KRW",
+                    "ratio_pct": 0.1,
+                    "policy_limit_pct": 3,
+                    "policyDeltaPct": 2.9,
+                }],
+            },
             "rebalanceProposal": {
                 "status": "proposed",
                 "legs": [{
@@ -296,17 +340,43 @@ class NotificationAIDecisionBriefTests(unittest.TestCase):
                     "after_weight_pct": 45,
                 }],
             },
-            "rebalanceState": {"status": "BALANCED", "breachKeys": []},
+            "rebalanceState": {"status": "POLICY_BREACH", "breachKeys": ["cash:KRW"]},
+            "portfolioState": {
+                "cashWeightPct": 0.1,
+                "positions": [{
+                    "symbol": "005930",
+                    "currentWeightPct": 7.0,
+                    "profitLossRate": 2.0,
+                    "holdingDays": 10,
+                }],
+            },
         }
 
         ordinary = notification_ai_decision_brief(context, {})
         context["messageType"] = "portfolioRebalanceReview"
         scheduled = notification_ai_decision_brief(context, {})
 
-        self.assertEqual(
-            {},
-            ordinary["accountPolicy"]["portfolioLifecycle"]["rebalanceProposal"],
+        self.assertEqual("instrument-market", ordinary["decisionPolicyScope"]["name"])
+        self.assertEqual("excluded", ordinary["decisionPolicyScope"]["portfolioRebalancePolicy"])
+        self.assertNotIn("mandate", ordinary["accountPolicy"]["portfolioLifecycle"])
+        self.assertNotIn("exposureSnapshot", ordinary["accountPolicy"]["portfolioLifecycle"])
+        self.assertNotIn("rebalanceProposal", ordinary["accountPolicy"]["portfolioLifecycle"])
+        self.assertNotIn("rebalanceState", ordinary["accountPolicy"]["portfolioLifecycle"])
+        self.assertNotIn(
+            "currentWeightPct",
+            ordinary["accountPolicy"]["portfolioLifecycle"]["portfolioState"]["subjectPositions"][0],
         )
+        self.assertNotIn("maxPositionWeightPct", ordinary["accountPolicy"]["investmentStrategy"])
+        self.assertNotIn("minCashWeightPct", ordinary["accountPolicy"]["investmentStrategy"])
+        self.assertNotIn("riskChecks", ordinary["accountPolicy"]["investmentStrategyGuidance"])
+        self.assertNotIn("positionWeight", ordinary["currentSituation"]["relationFacts"])
+        self.assertNotIn("fxExposureRatio", ordinary["currentSituation"]["relationFacts"])
+        self.assertNotIn("계좌 평가금액: 5,000만 원", ordinary["currentSituation"]["rawAlert"]["rawLines"])
+        self.assertNotIn("현금 비중: 0.1%", ordinary["currentSituation"]["rawAlert"]["rawLines"])
+        self.assertIn("현재가: 70,000원", ordinary["currentSituation"]["rawAlert"]["rawLines"])
+        self.assertTrue(ordinary["guardrails"]["mustIgnorePortfolioRebalancePolicy"])
+        self.assertEqual("portfolio-rebalance", scheduled["decisionPolicyScope"]["name"])
+        self.assertEqual(45, scheduled["accountPolicy"]["portfolioLifecycle"]["mandate"]["max_position_weight_pct"])
         self.assertEqual(
             "proposed",
             scheduled["accountPolicy"]["portfolioLifecycle"]["rebalanceProposal"]["status"],
@@ -315,6 +385,68 @@ class NotificationAIDecisionBriefTests(unittest.TestCase):
             "MSTR",
             scheduled["accountPolicy"]["portfolioLifecycle"]["rebalanceProposal"]["legs"][0]["symbol"],
         )
+        self.assertFalse(scheduled["guardrails"]["mustIgnorePortfolioRebalancePolicy"])
+
+    def test_market_scope_blocks_legacy_action_selected_from_position_weight(self):
+        context = decision_context()
+        relation = context["ontologyRelationContext"]
+        relation["activeRules"] = [
+            {
+                "rule_id": "graph.profit_momentum.hold_add_review.v1",
+                "label": "수익 구간 추가매수 후보",
+                "actionGroup": "addBuy",
+                "evidenceState": {
+                    "appliedFactFields": ["profitLossRate", "positionAccountWeight"],
+                },
+            },
+            {
+                "rule_id": "graph.price.recovery.confirmed_by_flow.v1",
+                "label": "가격·수급 회복",
+                "actionGroup": "recovery",
+                "evidenceState": {
+                    "appliedFactFields": ["ma20Distance", "smartMoneyNetVolume"],
+                },
+            },
+        ]
+        relation["decision"] = {
+            "candidateAction": "ADD",
+            "selectedRuleId": "graph.profit_momentum.hold_add_review.v1",
+            "targetRole": "holding",
+        }
+        relation["actionEnvelope"] = {
+            "preferredAction": "ADD",
+            "allowedActions": ["ADD", "HOLD"],
+            "selectedRuleId": "graph.profit_momentum.hold_add_review.v1",
+            "targetRole": "holding",
+        }
+        relation["investmentBrain"]["hypothesisSet"]["hypotheses"] = [
+            {
+                "hypothesisId": "hypothesis:weighted-add",
+                "claim": "계좌 비중 여유를 포함한 추가매수 가설",
+                "supportingRuleIds": ["graph.profit_momentum.hold_add_review.v1"],
+            },
+            {
+                "hypothesisId": "hypothesis:market-recovery",
+                "claim": "가격과 수급 회복 가설",
+                "supportingRuleIds": ["graph.price.recovery.confirmed_by_flow.v1"],
+            },
+        ]
+
+        brief = notification_ai_decision_brief(context, {})
+        prompt = build_notification_ai_decision_prompt(context, {}, decision_brief=brief)
+
+        self.assertEqual("HOLD", brief["decisionState"]["decision"]["candidateAction"])
+        self.assertTrue(brief["decisionState"]["decision"]["judgementBlocked"])
+        self.assertEqual(
+            ["graph.price.recovery.confirmed_by_flow.v1"],
+            [item["ruleId"] for item in brief["inference"]["activeRules"]],
+        )
+        self.assertEqual(
+            ["hypothesis:market-recovery"],
+            [item["hypothesisId"] for item in brief["inference"]["hypothesisSet"]["hypotheses"]],
+        )
+        self.assertNotIn("positionAccountWeight", prompt)
+        self.assertNotIn("계좌 비중 여유", prompt)
 
 
 if __name__ == "__main__":

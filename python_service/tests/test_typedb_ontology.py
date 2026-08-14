@@ -11679,7 +11679,7 @@ class TypeDBOntologyRepositoryTests(unittest.TestCase):
         self.assertIn('has ontology-storage-id "ontology-storage:active-mstr"', query)
         self.assertNotIn('has ontology-kind "abox-scope-active-pointer"', query)
 
-    def test_typedb_any_group_check_indexes_mixed_relation_and_subject_conditions(self):
+    def test_typedb_any_group_check_indexes_market_scope_relation_condition(self):
         rule = next(
             item
             for item in default_graph_inference_rules()
@@ -11698,11 +11698,11 @@ class TypeDBOntologyRepositoryTests(unittest.TestCase):
         )
         query = plan["query"]
 
-        self.assertEqual("exists-any-manifest-indexed-mixed", plan["anyConditionCheckMode"])
+        self.assertEqual("exists-any-manifest-indexed-source", plan["anyConditionCheckMode"])
         self.assertIn('has ontology-storage-id "ontology-storage:active-naver"', query)
-        self.assertIn('has ontology-storage-id "ontology-storage:active-profile"', query)
-        self.assertIn("ontology-position-account-weight", query)
+        self.assertIn('has ontology-relation-type "HAS_INSTRUMENT_PROFILE"', query)
         self.assertIn("ontology-allow-add-on-strength", query)
+        self.assertNotIn("ontology-position-account-weight", query)
         self.assertNotIn('has ontology-kind "abox-scope-active-pointer"', query)
         self.assertNotIn("abox-active-member", query)
 
@@ -12078,7 +12078,7 @@ class TypeDBOntologyRepositoryTests(unittest.TestCase):
         self.assertIn("ontology-profit-loss-rate", body)
         self.assertIn("ontology-ma5-distance", body)
         self.assertIn("ontology-ma60-distance", body)
-        self.assertIn("ontology-position-account-weight-pct", body)
+        self.assertNotIn("ontology-position-account-weight-pct", body)
         self.assertIn("ontology-smart-money-net-volume", any_group_query)
         self.assertIn("ontology-bid-ask-imbalance", any_group_query)
 
@@ -12126,6 +12126,8 @@ class TypeDBOntologyRepositoryTests(unittest.TestCase):
 
         self.assertIn("ontology-position-increase-count-20d", repeated_add)
         self.assertIn("ontology-portfolio-activity-classification", concentration)
+        self.assertIn("ontology-position-account-weight-pct", concentration)
+        self.assertIn("$subjectValue10 > 30.0", concentration)
         self.assertIn("ontology-position-reentered", reentry)
         self.assertIn("ontology-decision-action-correspondence", divergence)
 

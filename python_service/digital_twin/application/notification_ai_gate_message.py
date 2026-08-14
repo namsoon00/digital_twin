@@ -16,6 +16,7 @@ from ..domain.notification_ai_context import is_watchlist_context
 from ..domain.external_api_sources import external_api_source_line
 from ..domain.notification_ai_gate_contracts import ACTION_LABELS, MESSAGE_START_BADGE, NotificationAIValidatedResponse
 from ..domain.notification_icon_policy import investment_notification_icon, notification_title_with_context_icon
+from ..domain.notification_decision_policy import includes_portfolio_rebalance_policy
 from ..domain.investment_ubiquitous_language import user_facing_investment_language
 from ..domain.ontology_decision_state import (
     ACTION_ENVELOPE_STATUS_LABELS,
@@ -2910,8 +2911,9 @@ def execution_telegram_message(context: Dict[str, object], response: Notificatio
         parts.extend(["", "<b>" + html.escape(str(company_valuation.get("title") or "회사 가치"), quote=False) + "</b>", *company_valuation_display_rows])
     else:
         parts.extend(["", "<b>회사 가치</b>", _html_bullet("확인 가능한 기업가치 자료가 없거나 기업가치 평가 대상이 아닙니다.", level)])
-    portfolio_rows = full_portfolio_impact_rows(context)
-    parts.extend(["", "<b>포트폴리오 영향</b>", *[_html_bullet(row, level) for row in portfolio_rows]])
+    if includes_portfolio_rebalance_policy(context):
+        portfolio_rows = full_portfolio_impact_rows(context)
+        parts.extend(["", "<b>포트폴리오 영향</b>", *[_html_bullet(row, level) for row in portfolio_rows]])
     valuation_rows = valuation_detail_rows(context, level)
     if valuation_rows:
         parts.extend(["", "<b>밸류에이션</b>", *valuation_rows])
@@ -3002,8 +3004,9 @@ def execution_telegram_message_compact_beginner(
         parts.extend(["", "<b>" + html.escape(str(company_valuation.get("title") or "회사 가치"), quote=False) + "</b>", *company_valuation_display_rows])
     else:
         parts.extend(["", "<b>회사 가치</b>", _html_bullet("확인 가능한 기업가치 자료가 없거나 기업가치 평가 대상이 아닙니다.", level)])
-    portfolio_rows = full_portfolio_impact_rows(context)
-    parts.extend(["", "<b>포트폴리오 영향</b>", *[_html_bullet(row, level) for row in portfolio_rows]])
+    if includes_portfolio_rebalance_policy(context):
+        portfolio_rows = full_portfolio_impact_rows(context)
+        parts.extend(["", "<b>포트폴리오 영향</b>", *[_html_bullet(row, level) for row in portfolio_rows]])
     event_rows = full_event_and_catalyst_rows(context)
     parts.extend(["", "<b>주요 사건·일정</b>", *[_html_bullet(row, level) for row in event_rows]])
     condition_rows = full_conditional_action_rows(context, response)
@@ -3438,14 +3441,28 @@ def compact_action_reason_rows(
         rows.append(adjustment + ((" " + reason) if reason else ""))
     elif final_action in {"HOLD", "AVOID"} and envelope_status in {"ENTRY_ELIGIBLE", "ENTRY_DEFERRED"}:
         if envelope_status == "ENTRY_ELIGIBLE":
+            constraints = (
+                "반대 근거와 계정 제한을"
+                if includes_portfolio_rebalance_policy(context)
+                else "반대 근거를"
+            )
             rows.append(
-                "진입 조건은 성립했지만 반대 근거와 계정 제한을 반영한 최종 행동은 "
+                "진입 조건은 성립했지만 "
+                + constraints
+                + " 반영한 최종 행동은 "
                 + action_label_for_action(final_action, context)
                 + "입니다."
             )
         else:
+            constraints = (
+                "추가 확인 조건과 계정 제한을"
+                if includes_portfolio_rebalance_policy(context)
+                else "추가 확인 조건을"
+            )
             rows.append(
-                "진입 후보는 성립했지만 추가 확인 조건과 계정 제한을 반영한 최종 행동은 "
+                "진입 후보는 성립했지만 "
+                + constraints
+                + " 반영한 최종 행동은 "
                 + action_label_for_action(final_action, context)
                 + "입니다."
             )
@@ -3973,6 +3990,11 @@ def full_excluded_information_rows(
 ) -> List[str]:
     facts = relation_facts(context or {})
     rows: List[str] = []
+    if not includes_portfolio_rebalance_policy(context):
+        rows.append(
+            "포트폴리오 리밸런싱: 이번 종목 시세 판단에서는 현금 하한, 목표 비중, "
+            "집중도, 외화 노출과 포트폴리오 위험 정책을 사용하지 않았습니다."
+        )
     macro_state = _macro_constraint_state(context)
     has_macro = any(
         facts.get(key) not in (None, "", 0, 0.0)

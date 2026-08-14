@@ -1424,11 +1424,6 @@ class OntologyRuleBoxTests(unittest.TestCase):
             for item in condition_rows
             if item["id"] == "rule-condition:graph.aggressive.loss_recovery.add_buy_review.v1:aggressive-profile"
         )
-        aggressive_position_room = next(
-            item
-            for item in condition_rows
-            if item["id"] == "rule-condition:graph.aggressive.loss_recovery.add_buy_review.v1:position-room"
-        )
         profit_momentum_profile = next(
             item
             for item in condition_rows
@@ -1621,8 +1616,6 @@ class OntologyRuleBoxTests(unittest.TestCase):
         self.assertEqual("smartMoneyNetVolume", loss_rebound_smart_money["conditionField"])
         self.assertEqual("investmentStrategyProfile", aggressive_profile["conditionField"])
         self.assertEqual("aggressive", aggressive_profile["conditionValueString"])
-        self.assertEqual("positionAccountWeight", aggressive_position_room["conditionField"])
-        self.assertEqual(35.0, aggressive_position_room["conditionValueNumber"])
         self.assertEqual("investmentStrategyProfile", profit_momentum_profile["conditionField"])
         self.assertIn("growth", profit_momentum_profile["conditionValueString"])
         self.assertIn("aggressive", profit_momentum_profile["conditionValueString"])
@@ -1748,6 +1741,27 @@ class OntologyRuleBoxTests(unittest.TestCase):
         self.assertIn("DIVERGES_FROM_FLOW", relation_types)
         self.assertIn("CONFIRMS_EVENT_IMPACT", relation_types)
         self.assertIn("HAS_DILUTION_RISK", relation_types)
+
+    def test_symbol_decision_rules_do_not_depend_on_portfolio_rebalance_weight(self):
+        rules = default_graph_inference_rules()
+        violations = []
+        for rule in rules:
+            if rule.action_group == "rebalance":
+                continue
+            for condition in rule.conditions:
+                if condition.field == "positionAccountWeight":
+                    violations.append(rule.rule_id + ":" + condition.key)
+
+        self.assertEqual([], violations)
+        versions = {rule.rule_id: rule.version for rule in rules}
+        for rule_id in {
+            "graph.aggressive.loss_recovery.add_buy_review.v1",
+            "graph.profit_momentum.hold_add_review.v1",
+            "graph.instrument_profile.strategy_fit.support.v1",
+            "graph.strategy_profile.loss_tolerance_breach.v1",
+            "graph.strategy_profile.aggressive_recovery_room.v1",
+        }:
+            self.assertEqual("v2", versions[rule_id])
 
     def test_rulebox_admin_payload_roundtrips_to_graph(self):
         rules = default_graph_inference_rules()

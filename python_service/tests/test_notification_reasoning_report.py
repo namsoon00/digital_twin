@@ -291,11 +291,12 @@ class NotificationReasoningReportTests(unittest.TestCase):
         for heading in [
             "지금 행동", "이번 변화", "현재 흐름", "시간축 분석", "판단 근거",
             "핵심 근거", "반대 근거", "TypeDB 경쟁 추론", "회사 가치",
-            "포트폴리오 영향", "주요 사건·일정", "다음 행동", "판단 변경 조건",
+            "주요 사건·일정", "다음 행동", "판단 변경 조건",
             "판단에서 제외한 정보", "판단 이력", "추론 추적", "원문·출처",
         ]:
             self.assertIn("<b>" + heading + "</b>", message)
         self.assertNotIn("<b>자료 상태</b>", message)
+        self.assertNotIn("<b>포트폴리오 영향</b>", message)
         self.assertIn("[AI]", message)
         self.assertNotIn("판단에 필요한 자료 있음", message)
         self.assertNotIn("/100점", message)

@@ -72,6 +72,21 @@ RULEBOX_RAW_ABOX_RUNTIME_RULE_IDS: FrozenSet[str] = frozenset({
     "graph.execution.capacity_safe.v1",
 })
 
+# Portfolio allocation constraints moved to dedicated rebalance rules. These
+# symbol decision rules now consume only instrument-market facts and need one
+# persisted RuleBox replacement while preserving administrator enable state.
+RULEBOX_DECISION_SCOPE_RULE_IDS: FrozenSet[str] = frozenset({
+    "graph.aggressive.loss_recovery.add_buy_review.v1",
+    "graph.profit_momentum.hold_add_review.v1",
+    "graph.instrument_profile.strategy_fit.support.v1",
+    "graph.strategy_profile.loss_tolerance_breach.v1",
+    "graph.strategy_profile.aggressive_recovery_room.v1",
+})
+
+RULEBOX_RUNTIME_CONTRACT_RULE_IDS: FrozenSet[str] = frozenset(
+    RULEBOX_RAW_ABOX_RUNTIME_RULE_IDS | RULEBOX_DECISION_SCOPE_RULE_IDS
+)
+
 RULEBOX_RAW_ABOX_RUNTIME_RULE_VERSIONS: Dict[str, str] = {
     rule_id: "v2"
     for rule_id in RULEBOX_RAW_ABOX_RUNTIME_RULE_IDS
@@ -81,6 +96,11 @@ RULEBOX_RAW_ABOX_RUNTIME_RULE_VERSIONS["graph.price.reclaim.thesis_support.v1"] 
 RULEBOX_RAW_ABOX_RUNTIME_RULE_VERSIONS["graph.portfolio.concentration.review.v1"] = "v3"
 for _rule_id in CRYPTO_MARKET_RULE_IDS | RATE_MACRO_RULE_IDS:
     RULEBOX_RAW_ABOX_RUNTIME_RULE_VERSIONS[_rule_id] = "v1"
+
+RULEBOX_RUNTIME_CONTRACT_RULE_VERSIONS: Dict[str, str] = {
+    **RULEBOX_RAW_ABOX_RUNTIME_RULE_VERSIONS,
+    **{rule_id: "v2" for rule_id in RULEBOX_DECISION_SCOPE_RULE_IDS},
+}
 
 # Rules introduced after TypeDB became the persisted source of truth. Missing
 # platform rules are appended without replacing edited or disabled rows.
@@ -108,6 +128,7 @@ def rulebox_release_manifest() -> Dict[str, object]:
         "version": RULEBOX_RELEASE_MANIFEST_VERSION,
         "deprecatedRuleIds": sorted(DEPRECATED_TYPEDB_RULE_IDS),
         "rawAboxContractRuleIds": sorted(RULEBOX_RAW_ABOX_RUNTIME_RULE_IDS),
+        "decisionScopeContractRuleIds": sorted(RULEBOX_DECISION_SCOPE_RULE_IDS),
         "platformAdditionRuleIds": sorted(RULEBOX_PLATFORM_RELEASE_ADDITION_IDS),
         "runtimeDecisionUse": False,
     }

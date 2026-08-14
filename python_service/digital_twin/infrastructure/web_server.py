@@ -3,7 +3,6 @@ import csv
 import errno
 import gzip
 import hashlib
-import hmac
 import html
 import json
 import mimetypes
@@ -126,6 +125,18 @@ from ..infrastructure.service_factory import (
     build_flow_lens_service,
     flow_lens_snapshot,
     investment_analysis_snapshot,
+)
+from ..infrastructure.share_access import (
+    SHARE_ROLE_OWNER,
+    SHARE_ROLE_VIEWER,
+    ShareAccess,
+    anonymous_access,
+    authenticate_share_token,
+    issue_share_session,
+    local_owner_access,
+    share_access_from_cookie,
+    share_mode_enabled,
+    share_session_cookie,
 )
 from ..infrastructure.flow_lens_read_model import FlowLensReadModel
 from ..infrastructure.settings import ROOT_DIR, read_json, runtime_settings, save_runtime_settings, write_private_json
@@ -601,7 +612,7 @@ def record_action_plan_fills_payload(plan_id: str, body: Dict[str, object]) -> D
         return {"status": "error", "error": str(error)}
 
 
-def settings_status_payload() -> Dict[str, object]:
+def settings_status_payload(access: ShareAccess = None) -> Dict[str, object]:
     settings = runtime_settings()
     public_keys = [
         "appTheme",
@@ -1092,6 +1103,7 @@ def settings_status_payload() -> Dict[str, object]:
     for optional_key in ["valuationAssumptions", "marketSignalInputs"]:
         if configured(settings.get(optional_key)):
             public[optional_key] = settings[optional_key]
+    resolved_access = access or (anonymous_access() if share_mode_enabled() else local_owner_access())
     return {
         "settings": public,
         "configured": {
@@ -1112,14 +1124,15 @@ def settings_status_payload() -> Dict[str, object]:
             "typedbPassword": bool(settings.get("typedbPassword")),
             "mysqlPassword": bool(settings.get("mysqlPassword")),
         },
-        "locked": bool(configured(os.environ.get("SHARE_TOKEN"))),
+        "locked": bool(resolved_access.shared and not resolved_access.writable),
+        "shareAccess": resolved_access.to_public_dict(),
     }
 
 
-def save_settings_payload(payload: Dict[str, object]) -> Dict[str, object]:
+def save_settings_payload(payload: Dict[str, object], access: ShareAccess = None) -> Dict[str, object]:
     requested = payload.get("settings") if isinstance(payload.get("settings"), dict) else payload
     save_runtime_settings(requested if isinstance(requested, dict) else {})
-    status = settings_status_payload()
+    status = settings_status_payload(access)
     new_domain_event(
         SETTINGS_UPDATED,
         "runtime",
@@ -3736,19 +3749,6 @@ def remove_account_watchlist_payload(account_id: str, symbol: str) -> Dict[str, 
     return account_watchlist_service().remove(account_id, symbol)
 
 
-def parse_cookies(cookie_header: str) -> Dict[str, str]:
-    cookies = {}
-    for part in str(cookie_header or "").split(";"):
-        if "=" not in part:
-            continue
-        key, value = part.split("=", 1)
-        key = key.strip()
-        if not key:
-            continue
-        cookies[key] = urllib.parse.unquote(value.strip())
-    return cookies
-
-
 def share_denied_page() -> str:
     return "".join([
         "<!doctype html>",
@@ -4494,23 +4494,31 @@ class DigitalTwinHandler(BaseHTTPRequestHandler):
         self.end_headers()
 
     def authorize_share(self) -> bool:
-        expected = configured(os.environ.get("SHARE_TOKEN"))
-        if not expected:
+        if not share_mode_enabled():
+            self._share_access = local_owner_access()
             return True
         parsed = self.parsed()
         query = self.parsed_query()
-        supplied = first_query(query, "share_token")
-        if supplied and hmac.compare_digest(supplied, expected):
-            clean_query = {key: values for key, values in query.items() if key != "share_token"}
+        supplied_owner = first_query(query, "owner_token")
+        supplied_viewer = first_query(query, "share_token")
+        supplied = supplied_owner or supplied_viewer
+        requested_role = SHARE_ROLE_OWNER if supplied_owner else (SHARE_ROLE_VIEWER if supplied_viewer else "")
+        access, matched_token = authenticate_share_token(supplied, requested_role)
+        if access.authenticated:
+            self._share_access = access
+            clean_query = {key: values for key, values in query.items() if key not in {"share_token", "owner_token"}}
             encoded = urllib.parse.urlencode(clean_query, doseq=True)
-            clean_path = parsed.path + (("?" + encoded) if encoded else "")
+            clean_path = (parsed.path or "/") + (("?" + encoded) if encoded else "")
+            forwarded_proto = configured(self.headers.get("X-Forwarded-Proto")).lower()
+            secure = forwarded_proto == "https" or configured(self.headers.get("CF-Visitor")).lower().find("https") >= 0
             self.send_redirect(
                 clean_path,
-                "dt_share_token=" + urllib.parse.quote(supplied) + "; Path=/; HttpOnly; SameSite=Lax; Max-Age=86400",
+                share_session_cookie(issue_share_session(access, matched_token), secure=secure),
             )
             return False
-        cookies = parse_cookies(self.headers.get("Cookie", ""))
-        if hmac.compare_digest(cookies.get("dt_share_token", ""), expected):
+        access = share_access_from_cookie(self.headers.get("Cookie", ""))
+        self._share_access = access
+        if access.authenticated:
             return True
         if self.path_name().startswith("/api/"):
             self.send_payload(401, {"error": "공유 접근 토큰이 필요합니다."})
@@ -4518,11 +4526,20 @@ class DigitalTwinHandler(BaseHTTPRequestHandler):
             self.send_payload(401, share_denied_page(), "text/html; charset=utf-8")
         return False
 
+    def share_access(self) -> ShareAccess:
+        return getattr(self, "_share_access", local_owner_access() if not share_mode_enabled() else anonymous_access())
+
     def handle_request(self):
         if not self.authorize_share():
             return
         path = self.path_name()
         try:
+            if (
+                path.startswith("/api/")
+                and self.command in {"POST", "PUT", "PATCH", "DELETE"}
+                and not self.share_access().writable
+            ):
+                return self.send_payload(403, {"error": "조회 전용 링크에서는 데이터를 변경할 수 없습니다."})
             if path.startswith("/api/"):
                 self.handle_api(path)
             else:
@@ -4539,13 +4556,16 @@ class DigitalTwinHandler(BaseHTTPRequestHandler):
             self.send_payload(500, {"error": str(error) or "서버 오류"})
 
     def ensure_writable(self, message: str) -> bool:
-        if configured(os.environ.get("SHARE_TOKEN")):
+        if not self.share_access().writable:
             self.send_payload(403, {"error": message})
             return False
         return True
 
     def handle_api(self, path: str):
         query = self.parsed_query()
+        if path == "/api/share/access" and self.command == "GET":
+            return self.send_payload(200, self.share_access().to_public_dict())
+
         if path == "/api/service-accounts":
             if self.command == "GET":
                 return self.send_payload(200, service_accounts_payload())
@@ -4581,11 +4601,11 @@ class DigitalTwinHandler(BaseHTTPRequestHandler):
 
         if path == "/api/settings":
             if self.command == "GET":
-                return self.send_payload(200, settings_status_payload())
+                return self.send_payload(200, settings_status_payload(self.share_access()))
             if self.command == "PUT":
                 if not self.ensure_writable("공유 모드에서는 서버 설정을 변경할 수 없습니다."):
                     return
-                return self.send_payload(200, save_settings_payload(self.read_json_body()))
+                return self.send_payload(200, save_settings_payload(self.read_json_body(), self.share_access()))
 
         if path == "/api/ontology/rulebox":
             if self.command == "GET":

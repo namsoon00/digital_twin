@@ -2776,12 +2776,45 @@ async function checkShareMode(port) {
   const blockedApi = await request(port, "/api/bootstrap");
   assertOk(blockedApi.statusCode === 401, "공유 토큰 없는 API 접근이 차단되지 않았습니다.");
 
-  const tokenRedirect = await request(port, "/?share_token=ci-token");
+  const tokenRedirect = await request(port, "/?share_token=ci-viewer");
   assertOk(tokenRedirect.statusCode === 302, "공유 토큰 URL이 쿠키 리다이렉트를 만들지 않았습니다.");
-  assertOk(String(tokenRedirect.headers["set-cookie"] || "").indexOf("dt_share_token=") >= 0, "공유 토큰 쿠키가 설정되지 않았습니다.");
+  const viewerCookie = String(tokenRedirect.headers["set-cookie"] || "").split(";")[0];
+  assertOk(viewerCookie.indexOf("dt_share_session=") >= 0, "조회자 서명 세션 쿠키가 설정되지 않았습니다.");
+  assertOk(viewerCookie.indexOf("ci-viewer") < 0, "조회 토큰 원문이 쿠키에 저장됐습니다.");
 
-  const bootstrap = await request(port, "/api/bootstrap", { Cookie: "dt_share_token=ci-token" });
+  const bootstrap = await request(port, "/api/bootstrap", { Cookie: viewerCookie });
   assertOk(bootstrap.statusCode === 200, "공유 토큰 쿠키로 API 접근이 허용되지 않았습니다.");
+
+  const viewerSettings = await request(port, "/api/settings", { Cookie: viewerCookie });
+  assertOk(viewerSettings.statusCode === 200, "조회자 설정 상태를 읽을 수 없습니다.");
+  const viewerSettingsPayload = JSON.parse(viewerSettings.body);
+  assertOk(viewerSettingsPayload.locked === true, "조회자 설정이 쓰기 가능 상태로 노출됐습니다.");
+  assertOk(viewerSettingsPayload.shareAccess && viewerSettingsPayload.shareAccess.role === "viewer", "조회자 역할이 설정 상태에 없습니다.");
+
+  const blockedWrite = await request(port, "/api/settings", {
+    method: "PUT",
+    headers: { Cookie: viewerCookie, "Content-Type": "application/json" },
+    body: JSON.stringify({ settings: { appTheme: "dark" } })
+  });
+  assertOk(blockedWrite.statusCode === 403, "조회자가 변경 API를 호출할 수 있습니다.");
+
+  const ownerRedirect = await request(port, "/?owner_token=ci-owner");
+  assertOk(ownerRedirect.statusCode === 302, "소유자 토큰 URL이 쿠키 리다이렉트를 만들지 않았습니다.");
+  const ownerCookie = String(ownerRedirect.headers["set-cookie"] || "").split(";")[0];
+  assertOk(ownerCookie.indexOf("dt_share_session=") >= 0, "소유자 서명 세션 쿠키가 설정되지 않았습니다.");
+  assertOk(ownerCookie.indexOf("ci-owner") < 0, "소유자 토큰 원문이 쿠키에 저장됐습니다.");
+
+  const ownerSettings = await request(port, "/api/settings", { Cookie: ownerCookie });
+  const ownerSettingsPayload = JSON.parse(ownerSettings.body);
+  assertOk(ownerSettings.statusCode === 200 && ownerSettingsPayload.locked === false, "소유자 설정이 잠겨 있습니다.");
+  assertOk(ownerSettingsPayload.shareAccess && ownerSettingsPayload.shareAccess.role === "owner", "소유자 역할이 설정 상태에 없습니다.");
+
+  const ownerWrite = await request(port, "/api/settings", {
+    method: "PUT",
+    headers: { Cookie: ownerCookie, "Content-Type": "application/json" },
+    body: JSON.stringify({ settings: { appTheme: "dark" } })
+  });
+  assertOk(ownerWrite.statusCode === 200, "소유자 세션으로 변경 API를 호출할 수 없습니다.");
 }
 
 async function checkLiveTossMode(port) {
@@ -2816,7 +2849,12 @@ async function main() {
       TOSS_CLIENT_SECRET: "fake-client-secret"
     }, checkLiveTossMode);
   });
-  await withServer({ SHARE_TOKEN: "ci-token" }, checkShareMode);
+  await withServer({
+    SHARE_TOKEN: "ci-viewer",
+    SHARE_OWNER_TOKEN: "ci-owner",
+    SHARE_SESSION_SECRET: "ci-session-secret",
+    SHARE_SESSION_DAYS: "30"
+  }, checkShareMode);
   console.log("Smoke test passed");
 }
 

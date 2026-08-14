@@ -1,12 +1,14 @@
 const childProcess = require("child_process");
 const crypto = require("crypto");
+const fs = require("fs");
 const path = require("path");
 
 const rootDir = path.resolve(__dirname, "..");
 const requestedPort = Number(process.env.PORT || 3000);
-const shareToken = String(process.env.SHARE_TOKEN || randomToken());
 const requestedProvider = String(process.env.TUNNEL_PROVIDER || "").trim().toLowerCase();
 const npxCommand = process.platform === "win32" ? "npx.cmd" : "npx";
+const credentialsPath = path.resolve(process.env.SHARE_CREDENTIALS_PATH || path.join(rootDir, "data", "share-access.json"));
+const shareCredentials = loadOrCreateShareCredentials();
 
 let serverProcess = null;
 let tunnelProcess = null;
@@ -14,13 +16,41 @@ let printedShareUrl = false;
 let serverRestartTimer = null;
 let shuttingDown = false;
 
-function randomToken() {
+function randomToken(bytes) {
   return crypto
-    .randomBytes(18)
+    .randomBytes(bytes || 24)
     .toString("base64")
     .replace(/\+/g, "-")
     .replace(/\//g, "_")
     .replace(/=+$/g, "");
+}
+
+function readShareCredentials() {
+  try {
+    const payload = JSON.parse(fs.readFileSync(credentialsPath, "utf8"));
+    return payload && typeof payload === "object" ? payload : {};
+  } catch (error) {
+    if (error && error.code === "ENOENT") return {};
+    throw error;
+  }
+}
+
+function loadOrCreateShareCredentials() {
+  const saved = readShareCredentials();
+  const credentials = {
+    viewToken: String(process.env.SHARE_VIEW_TOKEN || process.env.SHARE_TOKEN || saved.viewToken || randomToken()),
+    ownerToken: String(process.env.SHARE_OWNER_TOKEN || saved.ownerToken || randomToken()),
+    sessionSecret: String(process.env.SHARE_SESSION_SECRET || saved.sessionSecret || randomToken(32)),
+    sessionDays: Math.max(1, Math.min(90, Number(process.env.SHARE_SESSION_DAYS || saved.sessionDays || 30) || 30)),
+    createdAt: String(saved.createdAt || new Date().toISOString()),
+    updatedAt: new Date().toISOString()
+  };
+  fs.mkdirSync(path.dirname(credentialsPath), { recursive: true, mode: 0o700 });
+  const temporaryPath = credentialsPath + ".tmp-" + process.pid;
+  fs.writeFileSync(temporaryPath, JSON.stringify(credentials, null, 2) + "\n", { encoding: "utf8", mode: 0o600 });
+  fs.renameSync(temporaryPath, credentialsPath);
+  fs.chmodSync(credentialsPath, 0o600);
+  return credentials;
 }
 
 function commandExists(command) {
@@ -84,7 +114,11 @@ function startServer() {
     env: Object.assign({}, process.env, {
       HOST: "127.0.0.1",
       PORT: String(requestedPort),
-      SHARE_TOKEN: shareToken,
+      SHARE_TOKEN: shareCredentials.viewToken,
+      SHARE_VIEW_TOKEN: shareCredentials.viewToken,
+      SHARE_OWNER_TOKEN: shareCredentials.ownerToken,
+      SHARE_SESSION_SECRET: shareCredentials.sessionSecret,
+      SHARE_SESSION_DAYS: String(shareCredentials.sessionDays),
       LOCAL_CODEX_ENABLED: "0"
     })
   });
@@ -118,10 +152,14 @@ function printShareUrl(rawUrl) {
   const baseUrl = rawUrl.replace(/[),.]+$/, "").replace(/\/$/, "");
   printedShareUrl = true;
   console.log("");
-  console.log("External share URL:");
-  console.log(baseUrl + "/?share_token=" + encodeURIComponent(shareToken));
+  console.log("External viewer URL:");
+  console.log(baseUrl + "/?share_token=" + encodeURIComponent(shareCredentials.viewToken));
   console.log("");
-  console.log("Share token: " + shareToken);
+  console.log("External owner URL:");
+  console.log(baseUrl + "/?owner_token=" + encodeURIComponent(shareCredentials.ownerToken));
+  console.log("");
+  console.log("Share credentials: " + credentialsPath);
+  console.log("Signed browser session: " + shareCredentials.sessionDays + " days");
   console.log("Local Codex is disabled for this shared session. Press Ctrl+C to stop.");
 }
 

@@ -396,8 +396,11 @@ function checkWorkflowConsoleContract() {
       code.indexOf("mergeUniqueItems(state.notificationJobItems") >= 0 &&
       code.indexOf("mergeUniqueItems((state.symbolUniverse || {}).items") >= 0 &&
       code.indexOf("mergeUniqueItems(previous.candidates") >= 0 &&
+      code.indexOf("var initialLoading = state.investmentCalendarCandidatesLoading && !candidates.length;") >= 0 &&
+      code.indexOf("initialLoading ? renderEmptyState") >= 0 &&
+      code.indexOf("!state.investmentCalendarCandidatesLoading && pageInfo.page < pageInfo.pageCount - 1") >= 0 &&
       /\.mobile-infinite-scroll\s*\{[\s\S]*width: 100%;/.test(styles),
-    "모바일 전체 목록의 누적 로딩/무한 스크롤 계약이 없습니다."
+    "모바일 전체 목록의 누적 로딩/무한 스크롤 또는 캘린더 목록 유지 계약이 없습니다."
   );
   assertOk(
     code.indexOf("function filteredConsoleDecisionRows") >= 0 &&

@@ -255,10 +255,10 @@ class NotificationAIDecisionBriefTests(unittest.TestCase):
         prompt = build_notification_ai_decision_prompt(
             context,
             {},
-            max_prompt_bytes=24 * 1024,
+            max_prompt_bytes=16 * 1024,
         )
 
-        self.assertLessEqual(len(prompt.encode("utf-8")), 24 * 1024)
+        self.assertLessEqual(len(prompt.encode("utf-8")), 16 * 1024)
         self.assertIn('"schemaVersion":"investment-ai-decision-brief-v2"', prompt)
         payload = json.loads(prompt.split("DecisionBrief:\n", 1)[1])
         self.assertEqual(

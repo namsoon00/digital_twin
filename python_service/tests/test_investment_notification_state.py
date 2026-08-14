@@ -12,6 +12,7 @@ def context_for_state(
     review_level="check",
     data_state="partial",
     validation_state="conditional",
+    decision_readiness="conditional",
     previous=None,
 ):
     return {
@@ -20,6 +21,7 @@ def context_for_state(
             "reviewLevel": review_level,
             "dataState": data_state,
             "validationState": validation_state,
+            "decisionReadiness": decision_readiness,
         },
         "previousInvestmentDecisionEpisode": previous or {},
         "aiDecisionTransition": {
@@ -43,13 +45,14 @@ def context_for_state(
 
 
 class InvestmentNotificationStateTests(unittest.TestCase):
-    def test_same_action_with_readiness_change_is_a_user_state_transition(self):
+    def test_same_action_with_validation_change_is_audit_only_when_decision_stays_conditional(self):
         previous = {
             "episodeId": "decision-episode:lg-previous",
             "action": "HOLD",
             "reviewLevel": "check",
             "dataState": "partial",
             "validationState": "conditional",
+            "decisionReadiness": "conditional",
             "decidedAt": "2026-08-14T00:02:00Z",
         }
         context = context_with_investment_notification_state(context_for_state(
@@ -63,7 +66,33 @@ class InvestmentNotificationStateTests(unittest.TestCase):
         self.assertTrue(transition["changed"])
         self.assertEqual("readiness-changed", transition["kind"])
         self.assertEqual(["reviewLevel", "dataState", "validationState"], transition["changedFields"])
-        self.assertIn("관심 유지 · 추가 확인 → 관심 유지 · 판단 가능", transition["summary"])
+        self.assertFalse(transition["material"])
+        self.assertIn("관심 유지 · 추가 확인", transition["summary"])
+        decision = final_ai_delivery_decision(context)
+        self.assertEqual("suppress", decision["decision"])
+        self.assertEqual("non_actionable_readiness_change", decision["suppressionReason"])
+
+    def test_blocked_to_ready_transition_is_material(self):
+        previous = {
+            "episodeId": "decision-episode:lg-previous",
+            "action": "HOLD",
+            "reviewLevel": "blocked",
+            "dataState": "insufficient",
+            "validationState": "blocked",
+            "decisionReadiness": "insufficient",
+            "decidedAt": "2026-08-14T00:02:00Z",
+        }
+        context = context_with_investment_notification_state(context_for_state(
+            review_level="act",
+            data_state="sufficient",
+            validation_state="ready",
+            decision_readiness="ready",
+            previous=previous,
+        ))
+
+        transition = context["investmentNotificationTransition"]
+        self.assertTrue(transition["material"])
+        self.assertIn("decisionReadiness", transition["changedFields"])
         self.assertEqual("send", final_ai_delivery_decision(context)["decision"])
 
     def test_unchanged_initial_graph_state_is_not_realerted(self):
@@ -73,6 +102,7 @@ class InvestmentNotificationStateTests(unittest.TestCase):
             "reviewLevel": "check",
             "dataState": "partial",
             "validationState": "conditional",
+            "decisionReadiness": "conditional",
         }
         context = context_with_investment_notification_state(context_for_state(previous=previous))
 
@@ -96,6 +126,7 @@ class InvestmentNotificationStateTests(unittest.TestCase):
             "reviewLevel": "check",
             "dataState": "partial",
             "validationState": "conditional",
+            "decisionReadiness": "conditional",
         }
         context = context_with_investment_notification_state(context_for_state(
             action="BUY",
@@ -115,6 +146,7 @@ class InvestmentNotificationStateTests(unittest.TestCase):
             "reviewLevel": "check",
             "dataState": "partial",
             "validationState": "conditional",
+            "decisionReadiness": "conditional",
         }
         context = context_with_investment_notification_state(context_for_state(
             data_state="sufficient",

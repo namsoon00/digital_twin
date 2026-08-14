@@ -7,8 +7,8 @@ from typing import Dict, Mapping
 from .investment_decision_history import previous_decision_episode_value
 
 
-INVESTMENT_NOTIFICATION_STATE_VERSION = "investment-notification-state-v1"
-INVESTMENT_NOTIFICATION_TRANSITION_VERSION = "investment-notification-transition-v1"
+INVESTMENT_NOTIFICATION_STATE_VERSION = "investment-notification-state-v2"
+INVESTMENT_NOTIFICATION_TRANSITION_VERSION = "investment-notification-transition-v2"
 
 ACTION_LABELS = {
     "BUY": "매수 검토",
@@ -27,9 +27,10 @@ READINESS_LABELS = {
 
 FIELD_LABELS = {
     "action": "행동",
+    "decisionReadiness": "판단 준비 상태",
     "reviewLevel": "확인 단계",
     "dataState": "자료 상태",
-    "validationState": "검증 상태",
+    "validationState": "AI 응답 검증",
 }
 
 FIELD_VALUE_LABELS = {
@@ -48,9 +49,14 @@ FIELD_VALUE_LABELS = {
         "unavailable": "사용 불가",
     },
     "validationState": {
-        "ready": "검증 완료",
-        "conditional": "조건부",
-        "blocked": "검증 보류",
+        "ready": "통과",
+        "conditional": "조건부 통과",
+        "blocked": "사용 불가",
+    },
+    "decisionReadiness": {
+        "ready": "판단 가능",
+        "conditional": "추가 확인",
+        "insufficient": "판단 보류",
     },
 }
 
@@ -63,12 +69,37 @@ def _text(value: object) -> str:
     return " ".join(str(value or "").strip().split())
 
 
-def _readiness(review_level: str, data_state: str, validation_state: str) -> str:
+def _readiness(
+    review_level: str,
+    data_state: str,
+    validation_state: str,
+    decision_readiness: str,
+) -> str:
     if review_level == "blocked" or data_state in {"insufficient", "unavailable"} or validation_state == "blocked":
         return "blocked"
+    if decision_readiness == "insufficient":
+        return "blocked"
+    if decision_readiness == "conditional":
+        return "conditional"
     if data_state != "sufficient" or validation_state != "ready":
         return "conditional"
     return "ready"
+
+
+def _normalized_decision_readiness(
+    value: object,
+    review_level: str,
+    data_state: str,
+    validation_state: str,
+) -> str:
+    normalized = _text(value).lower()
+    if normalized in {"ready", "conditional", "insufficient"}:
+        return normalized
+    if review_level == "blocked" or data_state in {"insufficient", "unavailable"} or validation_state == "blocked":
+        return "insufficient"
+    if data_state == "sufficient" and validation_state == "ready":
+        return "ready"
+    return "conditional"
 
 
 def _dimension_value_label(key: str, value: str, state: Mapping[str, object]) -> str:
@@ -89,7 +120,13 @@ def investment_notification_state_from_values(
     review_level = _text(values.get("reviewLevel") or values.get("review_level")).lower()
     data_state = _text(values.get("dataState") or values.get("data_state")).lower()
     validation_state = _text(values.get("validationState") or values.get("validation_state")).lower()
-    readiness = _readiness(review_level, data_state, validation_state)
+    decision_readiness = _normalized_decision_readiness(
+        values.get("decisionReadiness") or values.get("decision_readiness"),
+        review_level,
+        data_state,
+        validation_state,
+    )
+    readiness = _readiness(review_level, data_state, validation_state, decision_readiness)
     role = _text(target_role).lower()
     action_label = _text(values.get("actionLabel") or values.get("action_label"))
     if not action_label:
@@ -98,6 +135,7 @@ def investment_notification_state_from_values(
         action_label = "관심 유지" if role == "watchlist" else "보유 유지"
     dimensions = {
         "action": action,
+        "decisionReadiness": decision_readiness,
         "reviewLevel": review_level,
         "dataState": data_state,
         "validationState": validation_state,
@@ -108,6 +146,7 @@ def investment_notification_state_from_values(
         "code": code,
         "action": action,
         "actionLabel": action_label,
+        "decisionReadiness": decision_readiness,
         "reviewLevel": review_level,
         "dataState": data_state,
         "validationState": validation_state,
@@ -173,7 +212,9 @@ def investment_notification_transition(context: Mapping[str, object]) -> Dict[st
     changed = bool(changed_fields)
     if "action" in changed_fields:
         kind = "action-changed"
-    elif any(key in changed_fields for key in ("dataState", "validationState")):
+    elif "decisionReadiness" in changed_fields or any(
+        key in changed_fields for key in ("dataState", "validationState")
+    ):
         kind = "readiness-changed"
     elif "reviewLevel" in changed_fields:
         kind = "review-level-changed"
@@ -182,12 +223,17 @@ def investment_notification_transition(context: Mapping[str, object]) -> Dict[st
     summary = previous["label"] + " → " + current["label"]
     if changes:
         summary += " (" + ", ".join(changes) + ")"
+    readiness_boundary_changed = bool(
+        previous.get("readiness") != current.get("readiness")
+        and "blocked" in {previous.get("readiness"), current.get("readiness")}
+    )
+    material = bool("action" in changed_fields or readiness_boundary_changed)
     return {
         "version": INVESTMENT_NOTIFICATION_TRANSITION_VERSION,
         "kind": kind,
         "historyAvailable": True,
         "changed": changed,
-        "material": changed,
+        "material": material,
         "changedFields": changed_fields,
         "changedFieldLabels": [FIELD_LABELS[key] for key in changed_fields],
         "previousState": previous,
@@ -211,6 +257,6 @@ def context_with_investment_notification_state(context: Mapping[str, object]) ->
 
 def investment_notification_transition_line(context: Mapping[str, object]) -> str:
     transition = _mapping(_mapping(context).get("investmentNotificationTransition"))
-    if not transition.get("changed"):
+    if not transition.get("material"):
         return ""
     return "판단 상태 변경: " + _text(transition.get("summary"))

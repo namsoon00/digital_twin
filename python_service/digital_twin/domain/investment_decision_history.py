@@ -43,6 +43,7 @@ def compact_decision_episode_memory(value: object) -> Dict[str, object]:
         "reviewLevel": _text(_value(payload, "reviewLevel", "review_level")),
         "dataState": _text(_value(payload, "dataState", "data_state")),
         "validationState": _text(_value(payload, "validationState", "validation_state")),
+        "decisionReadiness": _text(_value(payload, "decisionReadiness", "decision_readiness")),
         "inferenceGenerationId": _text(_value(payload, "inferenceGenerationId", "inference_generation_id")),
         "selectedHypothesisId": _text(_value(payload, "selectedHypothesisId", "selected_hypothesis_id")),
         "decisionSummary": _text(_value(payload, "decisionSummary", "decision_summary")),

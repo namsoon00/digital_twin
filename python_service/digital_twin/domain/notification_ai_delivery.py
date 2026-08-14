@@ -5,7 +5,7 @@ from __future__ import annotations
 from typing import Dict, Mapping
 
 
-FINAL_AI_DELIVERY_POLICY_VERSION = "final-ai-delivery-v2"
+FINAL_AI_DELIVERY_POLICY_VERSION = "final-ai-delivery-v3"
 
 
 def _mapping(value: object) -> Dict[str, object]:
@@ -66,7 +66,7 @@ def final_ai_delivery_decision(context: Mapping[str, object]) -> Dict[str, objec
         "selectedCoreInferenceEligible": selected_core_eligible,
     }
     transition_enabled = context.get("investmentStateTransitionNotificationsEnabled") is not False
-    if transition_enabled and user_transition.get("changed"):
+    if transition_enabled and user_transition.get("material"):
         base["reason"] = "사용자에게 표시되는 최종 판단 상태가 변경됐습니다."
         return base
     if not validated:
@@ -111,6 +111,20 @@ def final_ai_delivery_decision(context: Mapping[str, object]) -> Dict[str, objec
         return base
     if material_sources:
         base["reason"] = "최종 행동은 유지됐지만 판단 변경 원문이 새로 확인됐습니다."
+        return base
+    if (
+        user_transition.get("changed")
+        and not user_transition.get("material")
+        and _text(ai_transition.get("kind")).lower() != "action-changed"
+    ):
+        base.update({
+            "decision": "suppress",
+            "suppressionReason": "non_actionable_readiness_change",
+            "reason": (
+                "최종 행동은 유지됐고 판단 차단·복구가 아닌 자료 또는 AI 응답 검증 상태만 "
+                "바뀌어 웹 판단 이력에만 기록합니다."
+            ),
+        })
         return base
     if (
         _text(ai_transition.get("kind")).lower() == "unchanged"

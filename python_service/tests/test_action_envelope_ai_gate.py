@@ -332,10 +332,15 @@ class ActionEnvelopeAiGateTests(unittest.TestCase):
 
         message = execution_telegram_message(context, response)
 
+        self.assertIn("[AI] 지금은 매수하지 않고 관심종목으로 유지합니다.", message)
         self.assertIn("<b>후보와 최종 판단</b>", message)
         self.assertIn("진입 후보는 성립했지만 추가 확인 조건을 반영한 최종 행동은 관심 유지입니다.", message)
         self.assertIn("<b>진입 후보를 지지한 근거</b>", message)
         self.assertIn("<b>관심 유지를 선택한 근거</b>", message)
+        self.assertLess(
+            message.index("<b>관심 유지를 선택한 근거</b>"),
+            message.index("<b>진입 후보를 지지한 근거</b>"),
+        )
         self.assertIn("TypeDB 후보 상태 진입 후보·추가 확인 · AI 최종 행동 관심 유지", message)
         self.assertNotIn("TypeDB 행동 후보 관심 유지 · AI 최종 의견 관심 유지", message)
         self.assertNotIn("<b>포트폴리오 영향</b>", message)
@@ -732,6 +737,12 @@ class ActionEnvelopeAiGateTests(unittest.TestCase):
         self.assertNotIn("뉴스 영향", message)
         for internal in ["entry_observing", "supportingEvidenceIds", "relation-evidence", "changedEvidenceCount", "reasoningRefreshed"]:
             self.assertNotIn(internal, message)
+
+    def test_customer_evidence_normalizes_repeated_terminal_periods(self):
+        self.assertEqual(
+            "순이익은 43.2% 감소했습니다.",
+            user_friendly_ai_text("순이익은 43.2% 감소했습니다.."),
+        )
 
     def test_existing_validated_response_rebuilds_stale_presentation_cache(self):
         context = entry_context()

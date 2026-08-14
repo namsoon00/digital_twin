@@ -145,6 +145,7 @@ def customer_visible_ai_text(value: object) -> str:
             result,
             flags=re.IGNORECASE,
         )
+    result = re.sub(r"(?<=[0-9A-Za-z가-힣%])\.{2,}(?=\s|$)", ".", result)
     return re.sub(r"\s+", " ", result).strip()
 
 def _raw_lines(context: Dict[str, object]) -> List[str]:
@@ -157,7 +158,14 @@ def _raw_lines(context: Dict[str, object]) -> List[str]:
 def _text(value: object, limit: int = 220) -> str:
     cleaned = " ".join(str(value or "").split())
     if limit > 3 and len(cleaned) > limit:
-        return cleaned[: limit - 3].rstrip() + "..."
+        boundary = max(
+            cleaned.rfind(". ", 0, limit),
+            cleaned.rfind(" · ", 0, limit),
+            cleaned.rfind(", ", 0, limit),
+        )
+        if boundary < int(limit * 0.6):
+            boundary = limit - 1
+        return cleaned[:boundary].rstrip(" .,·") + "…"
     return cleaned
 
 
@@ -274,7 +282,19 @@ def user_friendly_ai_text(value: object, limit: int = 220) -> str:
 
 
 def user_friendly_ai_list(value: object, limit: int = 5) -> List[str]:
-    return _list([user_friendly_ai_text(item, 180) for item in _list(value, limit * 2)], limit)
+    raw = list(value) if isinstance(value, (list, tuple)) else ([value] if value else [])
+    rows: List[str] = []
+    seen = set()
+    for item in raw:
+        text = user_friendly_ai_text(item, 360)
+        key = re.sub(r"[^0-9a-z가-힣]+", "", text.casefold())
+        if not text or not key or key in seen:
+            continue
+        seen.add(key)
+        rows.append(text)
+        if len(rows) >= max(1, int(limit or 1)):
+            break
+    return rows
 
 
 def append_unique_text(rows: List[str], value: object, limit: int = 180) -> None:

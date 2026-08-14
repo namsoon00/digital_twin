@@ -455,6 +455,7 @@ class DecisionEpisode:
     review_level: str
     data_state: str
     validation_state: str
+    decision_readiness: str = "conditional"
     selected_hypothesis_id: str = ""
     hypothesis_reviews: List[HypothesisReview] = field(default_factory=list)
     hypothesis_comparison_state: str = "unavailable"
@@ -752,6 +753,11 @@ class DecisionEpisode:
             validation_state=known_state(
                 payload.get("validationState") or payload.get("validation_state"),
                 VALIDATION_STATES,
+                "conditional",
+            ),
+            decision_readiness=known_state(
+                payload.get("decisionReadiness") or payload.get("decision_readiness"),
+                {"ready", "conditional", "insufficient"},
                 "conditional",
             ),
             selected_hypothesis_id=str(payload.get("selectedHypothesisId") or ""),
@@ -2797,6 +2803,11 @@ def decision_episode_from_context(
         review_level=known_state(validated_response.get("reviewLevel"), REVIEW_LEVELS, "check"),
         data_state=known_state(validated_response.get("dataState"), DATA_STATES, "partial"),
         validation_state=known_state(validated_response.get("validationState"), VALIDATION_STATES, "conditional"),
+        decision_readiness=known_state(
+            validated_response.get("decisionReadiness"),
+            {"ready", "conditional", "insufficient"},
+            "conditional",
+        ),
         selected_hypothesis_id=selected_id,
         hypothesis_reviews=list(comparison.reviews),
         hypothesis_comparison_state=comparison.comparison_state,

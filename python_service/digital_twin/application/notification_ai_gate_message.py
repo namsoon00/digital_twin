@@ -3042,14 +3042,15 @@ def execution_telegram_message_progressive(
     headline = execution_headline(context, response)
     target = str(context.get("displayTarget") or context.get("target") or "").strip()
     transition = compact_sentence_count(compact_decision_transition(context, response), 1)
-    evidence = list(full_decision_evidence_rows(context, response))
-    evidence.extend(compact_action_reason_rows(context, response))
+    evidence = list(compact_action_reason_rows(context, response))
+    evidence.extend(full_decision_evidence_rows(context, response))
     next_checks = [
         compact_sentence_count(compact_next_action_line(context, response), 1),
         compact_invalidation_line(context, response),
     ]
     next_checks.extend(response.next_checks or [])
     warnings = customer_data_note_rows(list(response.missing_data_impact))
+    section_labels = compact_decision_section_labels(context, response)
     packet = build_notification_explanation_packet(
         detail_level=detail_level,
         action=compact_sentence_count(compact_current_action_line(context, response), 1),
@@ -3074,9 +3075,9 @@ def execution_telegram_message_progressive(
     if packet.current_flow:
         parts.extend(["", "<b>현재 흐름</b>", *[_html_bullet(row, level) for row in packet.current_flow]])
     if packet.evidence:
-        parts.extend(["", "<b>핵심 근거</b>", *[_html_bullet(row, level) for row in packet.evidence]])
+        parts.extend(["", "<b>" + section_labels["support"] + "</b>", *[_html_bullet(row, level) for row in packet.evidence]])
     if packet.counter_evidence:
-        parts.extend(["", "<b>반대 근거</b>", *[_html_bullet(row, level) for row in packet.counter_evidence]])
+        parts.extend(["", "<b>" + section_labels["counter"] + "</b>", *[_html_bullet(row, level) for row in packet.counter_evidence]])
     if packet.inference:
         parts.extend(["", "<b>TypeDB 핵심 추론</b>", *[_html_bullet(row, level) for row in packet.inference]])
     if packet.company_value:
@@ -3197,19 +3198,41 @@ def compact_current_action_line(context: Dict[str, object], response: Notificati
         marker = "[AI 안전 보류]" if str(response.action or "").upper() == "HOLD" else "[AI 조건부]"
     else:
         marker = "[AI]"
-    action = action_label_for_action(response.action, context) or response.action_label
+    action = str(response.action or "").strip().upper()
+    watchlist = is_watchlist_context(context)
+    explicit_actions = {
+        "BUY": "소액 분할매수를 검토합니다." if watchlist else "매수를 검토합니다.",
+        "ADD": "추가매수를 검토합니다.",
+        "HOLD": (
+            "지금은 매수하지 않고 관심종목으로 유지합니다."
+            if watchlist else
+            "지금은 매도·추가매수 없이 보유를 유지합니다."
+        ),
+        "TRIM": "보유 수량의 일부를 줄이는 분할축소를 검토합니다.",
+        "SELL": "매도를 우선 검토합니다.",
+        "AVOID": "지금은 신규 진입을 피합니다.",
+    }
+    action_sentence = explicit_actions.get(
+        action,
+        (action_label_for_action(action, context) or response.action_label or "판단을 확인합니다.") + ".",
+    )
+    alternative = response.alternative_action if isinstance(response.alternative_action, dict) else {}
+    disagreement_detail = ""
+    if response.precomputed_action and response.precomputed_action != response.action:
+        disagreement_detail = alternative.get("whyNotSelected") or response.disagreement_reason
     detail = compact_sentence_count(
         customer_visible_ai_text(
-            response.current_action_plan
+            disagreement_detail
+            or response.current_action_plan
             or response.opinion
             or response.summary
             or ""
         ),
-        2,
+        1,
     )
-    if detail and _same_compact_message_text(action, detail):
-        return marker + " " + detail
-    return marker + " " + action + ((". " + detail) if detail else "")
+    if detail and not _same_compact_message_text(action_sentence, detail):
+        return marker + " " + action_sentence + " " + detail
+    return marker + " " + action_sentence
 
 
 def compact_decision_section_labels(
@@ -3224,8 +3247,8 @@ def compact_decision_section_labels(
     if action in {"HOLD", "AVOID"} and status in {"ENTRY_ELIGIBLE", "ENTRY_DEFERRED"}:
         return {
             "reason": "후보와 최종 판단",
-            "support": "진입 후보를 지지한 근거",
-            "counter": "관심 유지를 선택한 근거" if action == "HOLD" else "신규 진입을 피한 근거",
+            "support": "관심 유지를 선택한 근거" if action == "HOLD" else "신규 진입을 피한 근거",
+            "counter": "진입 후보를 지지한 근거",
         }
     return {
         "reason": "바뀐 이유" if str(transition.get("kind") or "").strip().lower() == "action-changed" else "판단 근거",

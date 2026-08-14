@@ -185,6 +185,75 @@ def _add_buy_assessment_from_matches(
     }
 
 
+def _profit_take_assessment_from_matches(
+    facts: Dict[str, object],
+    matches: List[OntologyRuleMatch],
+) -> Dict[str, object]:
+    """Summarize only TypeDB-authored profit-taking action relations."""
+
+    active = [
+        item
+        for item in _active_matches(matches)
+        if str(item.action_group or "").strip() == "profitTake"
+        or str(item.decision_stage or "").strip().upper() in {"PROFIT_PARTIAL", "PROFIT_SPLIT", "PROFIT_PROTECT"}
+    ]
+
+    def action_code(item: OntologyRuleMatch) -> str:
+        return str(item.candidate_action or "").strip().upper()
+
+    allowed = [item for item in active if action_code(item) == "TRIM"]
+    blocked = [
+        item
+        for item in active
+        if "TRIM" in {str(code or "").strip().upper() for code in item.blocked_actions or []}
+    ]
+    watches = [item for item in active if action_code(item) == "HOLD"]
+    if allowed and blocked:
+        state = "conflict"
+        label = "이익실현 허용·차단 관계가 함께 있음"
+        status_text = "TypeDB가 분할 이익실현 후보와 차단 관계를 함께 만들었습니다. 차단 관계가 해소될 때까지 실행하지 않습니다."
+        guidance = blocked + allowed
+    elif allowed:
+        state = "allow"
+        label = str(allowed[0].decision_label or allowed[0].label or "분할 이익실현 검토")
+        status_text = "TypeDB가 분할 이익실현 검토 관계를 만들었습니다. 전량 매도가 아니라 보유와 비교할 후보입니다."
+        guidance = allowed
+    elif blocked:
+        state = "block"
+        label = str(blocked[0].decision_label or blocked[0].label or "이익실현 보류")
+        status_text = "TypeDB가 분할 이익실현 차단 관계를 만들었습니다."
+        guidance = blocked
+    elif watches:
+        state = "watch"
+        label = str(watches[0].decision_label or watches[0].label or "수익 보호 관찰")
+        status_text = "TypeDB가 수익 보호 관찰 관계를 만들었지만 분할 이익실현 허용 관계는 아직 없습니다."
+        guidance = watches
+    else:
+        state = "none"
+        label = "이익실현 관련 TypeDB 관계 없음"
+        status_text = "분할 이익실현 허용 또는 차단 관계가 이번 InferenceBox 결과에 없습니다."
+        guidance = []
+    next_checks: List[str] = []
+    for item in guidance:
+        for value in item.next_checks:
+            _append_unique(next_checks, value)
+    return {
+        "state": state,
+        "label": label,
+        "statusText": status_text,
+        "investmentProfile": str(
+            facts.get("investmentStrategyProfileLabel")
+            or facts.get("investmentStrategyProfile")
+            or ""
+        ).strip(),
+        "allowedReasons": [str(item.label or item.decision_label or "") for item in allowed][:5],
+        "blockedReasons": [str(item.label or item.decision_label or "") for item in blocked][:5],
+        "watchReasons": [str(item.label or item.decision_label or "") for item in watches][:5],
+        "ruleIds": [str(item.rule_id or "") for item in allowed + blocked + watches][:8],
+        "nextChecks": next_checks[:5],
+    }
+
+
 def _instrument_profile_driver(facts: Dict[str, object], rows: List[Dict[str, object]], seen: set) -> None:
     profile_label = str(facts.get("instrumentProfileLabel") or "").strip()
     archetypes = [str(item) for item in (facts.get("instrumentArchetypes") or []) if str(item or "").strip()]
@@ -436,6 +505,7 @@ def execution_plan_from_relation_context(
             missing_impact.append(name + (": " + effect if effect else "는 판단 강도를 낮춥니다."))
 
     add_buy_assessment = _add_buy_assessment_from_matches(facts, matches)
+    profit_take_assessment = _profit_take_assessment_from_matches(facts, matches)
     source_keys = [
         "currentPrice", "averagePrice", "profitLossRate", "ma5Distance", "ma20Distance", "ma60Distance",
         "volume", "volumeRatio", "rawVolumeRatio", "timeAdjustedVolumeRatio", "expectedVolumeRatioNow",
@@ -492,5 +562,6 @@ def execution_plan_from_relation_context(
         "notificationSeverity": str(decision.get("notificationSeverity") or ""),
         "decisionDrivers": decision_drivers_from_relation_context(facts, decision, matches),
         "addBuyAssessment": add_buy_assessment,
+        "profitTakeAssessment": profit_take_assessment,
         "sourceFacts": source_facts,
     }

@@ -64,6 +64,45 @@ class BeginnerRelationLanguageTests(unittest.TestCase):
         self.assertIn("기사 원문: https://example.test/source", multipart)
         self.assertIn("추론 추적", multipart)
 
+    def test_holding_alert_compares_hold_add_and_profit_taking_options(self):
+        context = {
+            "messageType": "investmentInsight",
+            "messageDeliveryLevel": "beginner",
+            "displayTarget": "현대차 / 005380",
+            "ontologyRelationContext": {
+                "executionPlan": {
+                    "addBuyAssessment": {
+                        "state": "allow",
+                        "label": "조건부 추가매수 검토",
+                        "allowedReasons": ["가격 회복 + 거래 확인"],
+                    },
+                    "profitTakeAssessment": {
+                        "state": "none",
+                        "label": "이익실현 관련 TypeDB 관계 없음",
+                    },
+                },
+                "actionEnvelope": {
+                    "status": "HOLDING_REVIEW",
+                    "preferredAction": "HOLD",
+                },
+            },
+        }
+        response = NotificationAIValidatedResponse(
+            action="HOLD",
+            action_label="보유",
+            summary="가격 회복은 확인됐지만 추가 실행 조건은 아직 부족합니다.",
+            current_action_plan="현재 보유를 유지합니다.",
+            hypothesis_comparison_state="completed",
+            source="ai",
+        )
+
+        message = execution_telegram_message(context, response)
+
+        self.assertIn("<b>보유 전략 선택지</b>", message)
+        self.assertIn("<b>보유</b>: <code>AI 최종 선택", message)
+        self.assertIn("<b>추가매수</b>: <code>TypeDB 후보 성립 · AI 최종 판단에서는 보류", message)
+        self.assertIn("<b>분할 이익실현</b>: <code>현재 추천 근거 미성립", message)
+
     def test_execution_capacity_signal_does_not_create_sell_opinion(self):
         opinion = build_active_investment_opinion(
             self.holding_position(),

@@ -152,6 +152,71 @@ class OntologyInferenceContextTests(unittest.TestCase):
         self.assertIn("TypeDB", plan["addBuyAssessment"]["statusText"])
         self.assertNotIn("addBuyEligibilityStage", plan["sourceFacts"])
 
+    def test_execution_plan_keeps_profit_taking_separate_from_risk_trim(self):
+        facts = {
+            "symbol": "005380",
+            "name": "현대차",
+            "market": "KR",
+            "source": "holding",
+            "isHolding": True,
+            "profitLossRate": 14.0,
+            "investmentStrategyProfile": "aggressive",
+        }
+        decision = {
+            "decisionStage": "HOLD_KEEP",
+            "actionGroup": "holdWatch",
+            "actionLevel": "watch",
+            "label": "보유 유지",
+        }
+        matches = [
+            OntologyRuleMatch(
+                rule_id="graph.profit_harvest.path_deceleration.v1",
+                label="수익 보유 + 기간 상승 후 둔화",
+                version="typedb",
+                relation_type="ALLOWS_ACTION",
+                signal_type="holdingTiming",
+                matched=True,
+                review_level="review",
+                review_label="확인 필요",
+                data_state="sufficient",
+                evidence_role="support",
+                decision_stage="PROFIT_PARTIAL",
+                action_group="profitTake",
+                action_level="review",
+                decision_label="수익 보호 기준 점검",
+                candidate_action="TRIM",
+                candidate_action_label="분할 이익실현",
+                allowed_actions=["TRIM", "HOLD"],
+                next_checks=["목표 수익률, 분할 수량, 재진입 조건을 확인"],
+            ),
+            OntologyRuleMatch(
+                rule_id="graph.temporal.persistent_decline.risk.v1",
+                label="기간 하락 지속",
+                version="typedb",
+                relation_type="HAS_INFERRED_RISK",
+                signal_type="holdingTiming",
+                matched=True,
+                review_level="review",
+                review_label="확인 필요",
+                data_state="sufficient",
+                evidence_role="risk",
+                decision_stage="TEMPORAL_RISK",
+                action_group="temporalRisk",
+                action_level="review",
+                decision_label="기간 경로 위험 점검",
+                candidate_action="TRIM",
+            ),
+        ]
+
+        plan = execution_plan_from_relation_context(facts, decision, matches)
+
+        self.assertEqual("allow", plan["profitTakeAssessment"]["state"])
+        self.assertEqual(
+            ["graph.profit_harvest.path_deceleration.v1"],
+            plan["profitTakeAssessment"]["ruleIds"],
+        )
+        self.assertIn("분할 이익실현", plan["profitTakeAssessment"]["statusText"])
+
     def test_instrument_profile_driver_uses_tbox_domain_language(self):
         profile = InstrumentProfile(
             symbol="CPNG",

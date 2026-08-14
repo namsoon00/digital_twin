@@ -94,6 +94,16 @@ DEFAULT_RELATION_RULES = [
         ["profitLossRate", "currentPrice", "ma20", "ma60"],
     ),
     RelationRuleDefinition(
+        "graph.profit_harvest.path_deceleration.v1",
+        "수익 보유 + 기간 상승 후 둔화 -> 분할 이익실현 검토",
+        "v1",
+        "PROFIT_PARTIAL",
+        "profit_take",
+        "투자 성향별 수익 보호 기준을 넘고 5일·20일 가격 경로의 상승 속도 둔화 또는 고점 후 되밀림이 확인될 때",
+        "수익률 한 점만 보지 않고 보유, 추가매수, 분할 이익실현을 경쟁 행동으로 비교합니다.",
+        ["profitLossRate", "strategyProfitProtectionPct", "temporalWindows"],
+    ),
+    RelationRuleDefinition(
         "holding.loss_guard.breakdown.v1",
         "손실 보유 + 기준선 이탈 -> 손실 관리",
         "v1",

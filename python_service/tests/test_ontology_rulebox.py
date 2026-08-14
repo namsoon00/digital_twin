@@ -191,7 +191,7 @@ class OntologyRuleBoxTests(unittest.TestCase):
         rules_by_id = {item.rule_id: item for item in rules}
 
         self.assertEqual([], rulebox_semantic_violations(rules))
-        self.assertEqual(115, sum(item.enabled for item in rules))
+        self.assertEqual(116, sum(item.enabled for item in rules))
         self.assertTrue(rules_by_id["graph.benchmark.beta.context.v1"].enabled)
         self.assertFalse(rules_by_id["graph.data_quality.action_block.v1"].enabled)
         self.assertFalse(rules_by_id["graph.holding.trend_transition.risk.v1"].enabled)
@@ -214,6 +214,21 @@ class OntologyRuleBoxTests(unittest.TestCase):
             and rule.resolved_hypothesis_lifecycle().required_freshness_domains
             for rule in rules
             if rule.enabled
+        ))
+
+        profit_harvest = rules_by_id["graph.profit_harvest.path_deceleration.v1"]
+        temporal_conditions = [
+            item
+            for item in profit_harvest.conditions
+            if item.relation_type == "HAS_TEMPORAL_WINDOW"
+        ]
+        self.assertEqual(2, len(temporal_conditions))
+        self.assertTrue(all(item.role == "any" for item in temporal_conditions))
+        self.assertTrue(any(
+            item.tbox_class == "ProfitTakingEligibility"
+            and item.candidate_action == "TRIM"
+            and item.allowed_actions == ["TRIM", "HOLD"]
+            for item in profit_harvest.derivations
         ))
         rulebox_rules_from_payload(
             {"rules": rulebox_rules_to_payload(rules)},

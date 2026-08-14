@@ -1432,7 +1432,7 @@ def compact_execution_plan_for_ai(payload: object) -> Dict[str, object]:
         "engineVersion", "subject", "targetRole", "actionPolicy", "actionGroup", "actionLevel",
         "candidateAction", "candidateActionLabel", "decisionLabel", "decisionStage",
         "primaryAction", "primaryActionLabel", "notificationCategory", "notificationSeverity",
-        "actionEnvelopeStatus", "actionEnvelopeStatusLabel", "addBuyAssessment",
+        "actionEnvelopeStatus", "actionEnvelopeStatusLabel", "addBuyAssessment", "profitTakeAssessment",
     ]
     compact = {key: plan.get(key) for key in keep_keys if plan.get(key) not in (None, "", [], {})}
     for key, limit in list_keys.items():
@@ -1823,6 +1823,7 @@ def build_notification_ai_gate_prompt(
         "nextActionPlan에는 다음에 확인할 데이터, 확인 시점 또는 사건, 그 결과에 따라 현재 행동을 어떻게 다시 볼지를 한두 문장으로 쓴다. currentActionPlan이나 invalidationCondition을 반복하지 않는다.",
         "관계 규칙명, 확인 단계, 자료 상태, 사전 계산 후보는 판단 재료다. 사용자에게 보이는 문장에서는 가격·수급·뉴스·공시·반대 근거를 비교한 결론을 먼저 말한다.",
         "relationshipDatabaseInference.decisionDrivers는 온톨로지 실행계획이 고른 핵심 판단 축이다. 이 항목을 입력 순서대로 읽고, 방향(risk/support/counter/context), evidenceRole, dataKeys를 근거·반대근거·다음 확인에 반영한다.",
+        "보유 종목이면 relationshipDatabaseInference.executionPlan의 addBuyAssessment와 profitTakeAssessment를 함께 읽는다. TypeDB state=allow인 행동만 실제 대안으로 다루고, 현재 최종 action이 HOLD여도 추가매수와 분할 이익실현 중 무엇이 성립·보류·미성립인지 비교한다. 이익실현은 profitTakeAssessment가 허용한 TRIM일 때만 수익 보호 목적이라고 설명하고, 손실 축소나 위험 축소 TRIM을 이익실현으로 바꾸어 부르지 않는다.",
         "relationshipDatabaseInference.whyNow는 새로 달라진 이유이고, signalConflicts는 위험과 지지 근거의 충돌이며, inferenceTimeline은 이전 관측→현재 사실→현재 추론 세대 흐름이다. 반복 상태인지 새 의미 변화인지 먼저 구분한다.",
         "action은 executionPlan의 allowedActions·blockedActions와 TypeDB 관계의 실행 제약을 위반하지 않는 범위에서만 고른다. 코드에 적힌 고정 평균선, 손익률, 거래량, BTC, 금리, 환율 규칙으로 action을 새로 만들지 않는다.",
         "가격·수급·뉴스·공시·크립토·금리·환율 원시값은 TypeDB decisionDrivers와 activeRules가 연결한 근거일 때만 행동 판단에 사용한다. 숫자는 구체적으로 인용할 수 있지만, 입력에 없는 임계값이나 패턴을 스스로 추가하지 않는다.",

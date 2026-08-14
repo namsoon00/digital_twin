@@ -1738,6 +1738,61 @@ def _execution_plan_list(context: Dict[str, object], *keys: str) -> List[str]:
     return rows
 
 
+def holding_strategy_option_rows(
+    context: Dict[str, object],
+    response: NotificationAIValidatedResponse,
+    level: str,
+) -> List[str]:
+    """Show graph-backed holding alternatives without creating a new action."""
+
+    if is_watchlist_context(context or {}):
+        return []
+    plan = _execution_plan(context)
+    if not plan:
+        return []
+
+    current = str(response.action or "HOLD").strip().upper()
+    rows = [
+        _html_row(
+            "보유",
+            "AI 최종 선택" if current == "HOLD" else "현재 선택 아님",
+            level=level,
+            max_len=220,
+        )
+    ]
+
+    def assessment_row(label: str, action: str, key: str) -> str:
+        assessment = plan.get(key) if isinstance(plan.get(key), dict) else {}
+        state = str(assessment.get("state") or "none").strip().lower()
+        reason_rows = (
+            assessment.get("allowedReasons")
+            if state == "allow"
+            else assessment.get("blockedReasons")
+            if state in {"block", "conflict"}
+            else assessment.get("watchReasons")
+        ) or []
+        reason = str(reason_rows[0] if reason_rows else assessment.get("label") or "").strip()
+        if current == action and state == "allow":
+            status = "AI 최종 선택 · TypeDB 후보 성립"
+        elif state == "allow":
+            status = "TypeDB 후보 성립 · AI 최종 판단에서는 보류"
+        elif state == "conflict":
+            status = "허용·차단 관계 충돌 · 현재 실행 보류"
+        elif state == "block":
+            status = "TypeDB 차단 관계 성립 · 현재 실행 보류"
+        elif current == action:
+            status = "현재 행동은 선택됐지만 이 목적의 TypeDB 근거는 미성립"
+        else:
+            status = "현재 추천 근거 미성립"
+        if reason:
+            status += " · " + reason
+        return _html_row(label, status, level=level, max_len=360)
+
+    rows.append(assessment_row("추가매수", "ADD", "addBuyAssessment"))
+    rows.append(assessment_row("분할 이익실현", "TRIM", "profitTakeAssessment"))
+    return [row for row in rows if row]
+
+
 def _derived_action_mode(context: Dict[str, object], response: NotificationAIValidatedResponse) -> str:
     return (
         _strategy_guide_value(response, "actionMode")
@@ -2834,6 +2889,9 @@ def execution_telegram_message(context: Dict[str, object], response: Notificatio
     ]
     hypothesis_rows = full_typedb_competing_inference_rows(context, response)
     parts.extend(["", "<b>TypeDB 경쟁 추론</b>", *[_html_bullet(row, level) for row in hypothesis_rows]])
+    option_rows = holding_strategy_option_rows(context, response, level)
+    if option_rows:
+        parts.extend(["", "<b>보유 전략 선택지</b>", *option_rows])
     causal_rows = ai_causal_validation_rows(response)
     parts.extend(["", "<b>AI 인과 검증</b>", *[_html_bullet(row, level) for row in causal_rows]])
     lifecycle_rows = hypothesis_decision_brief_rows(context, response, level)
@@ -2933,6 +2991,9 @@ def execution_telegram_message_compact_beginner(
     parts.extend(["", "<b>" + section_labels["counter"] + "</b>", *[_html_bullet(row, level) for row in counter_rows]])
     typedb_rows = full_typedb_competing_inference_rows(context, response)
     parts.extend(["", "<b>TypeDB 경쟁 추론</b>", *[_html_bullet(row, level) for row in typedb_rows]])
+    option_rows = holding_strategy_option_rows(context, response, level)
+    if option_rows:
+        parts.extend(["", "<b>보유 전략 선택지</b>", *option_rows])
     causal_rows = ai_causal_validation_rows(response)
     parts.extend(["", "<b>AI 인과 검증</b>", *[_html_bullet(row, level) for row in causal_rows]])
     company_valuation = company_valuation_presentation(context)

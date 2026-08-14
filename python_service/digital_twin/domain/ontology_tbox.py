@@ -384,6 +384,7 @@ CLASS_DEFS: List[TBoxClassDef] = [
     TBoxClassDef("MomentumConfirmation", "reasoning-insight", "상승 흐름 확인", parent="ActionabilityAssessment"),
     TBoxClassDef("FlowConfirmation", "reasoning-insight", "수급 확인", parent="ActionabilityAssessment", description="가격 신호가 거래량, 체결강도, 외국인·기관 수급과 같은 방향으로 확인된 상태입니다."),
     TBoxClassDef("ProfitProtection", "reasoning-insight", "수익 보호", parent="ActionabilityAssessment"),
+    TBoxClassDef("ProfitTakingEligibility", "reasoning-insight", "분할 이익실현 검토 가능성", parent="ProfitProtection", description="보유 수익, 기간 상승 경로와 상승 둔화가 함께 확인되어 전량 매도가 아닌 분할 이익실현을 경쟁 행동으로 검토할 수 있는 상태입니다."),
     TBoxClassDef("InvestorFlowRisk", "risk-exposure", "투자자 수급 위험", parent="Risk"),
     TBoxClassDef("InvestorProfilePolicy", "strategy-thesis", "투자 성향 정책", parent="ActionPolicy"),
     TBoxClassDef("StrategyFitAssessment", "reasoning-insight", "투자 성향 적합 판단", parent="ActionabilityAssessment", description="종목 타입, 계정 성향, 비중 한도가 서로 맞는지 판단한 추론입니다."),

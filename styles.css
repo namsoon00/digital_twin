@@ -277,6 +277,10 @@
   overflow-wrap: anywhere;
 }
 
+.snackbar.is-empty {
+  display: none;
+}
+
 .snackbar > button {
   flex: 0 0 auto;
   min-height: 34px;
@@ -32933,5 +32937,54 @@ button.icon-button.is-request-busy .button-activity-spinner {
 
   .console-shell .symbol-result-title {
     flex-wrap: wrap;
+  }
+}
+
+/* Mobile native vertical scrolling: avoid momentum resets and sticky blur repaints. */
+@media (max-width: 860px) {
+  html,
+  body,
+  .app-shell {
+    overscroll-behavior-y: auto;
+    scroll-behavior: auto;
+  }
+
+  body {
+    touch-action: pan-x pan-y pinch-zoom;
+    -webkit-overflow-scrolling: touch;
+  }
+
+  .console-shell.web-style-shell .app-nav {
+    -webkit-backdrop-filter: none !important;
+    backdrop-filter: none !important;
+    transition: transform 220ms ease-out, opacity 180ms ease-out;
+    will-change: transform;
+  }
+
+  .console-shell .workspace-layout,
+  .console-shell .workspace-main,
+  .console-shell .managed-page,
+  .console-shell .admin-grid {
+    height: auto;
+    max-height: none;
+    overflow-y: visible;
+    overscroll-behavior-y: auto;
+  }
+
+  .console-shell :is(
+    .notification-decision-list,
+    .symbol-result-list,
+    .account-card-list,
+    .watch-account-list,
+    .account-watch-symbol-list,
+    .monitoring-instrument-list,
+    .admin-message-group-list,
+    .research-evidence-list,
+    .investment-calendar-list
+  ) {
+    max-height: none;
+    overflow-y: visible;
+    overscroll-behavior-y: auto;
+    -webkit-overflow-scrolling: auto;
   }
 }

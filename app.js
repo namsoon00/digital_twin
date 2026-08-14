@@ -371,6 +371,9 @@
   var appNavLastScrollY = 0;
   var appNavHidden = false;
   var appNavScrollTicking = false;
+  var appNavScrollDirection = 0;
+  var appNavScrollDistance = 0;
+  var lastPageScrollActivityAt = 0;
   var topbarCollapsed = false;
   var topbarScrollTicking = false;
   var workDetailReturnFocus = null;
@@ -1344,11 +1347,14 @@
   }
 
   function renderSnackbar() {
-    if (!state.snackbar || !state.snackbar.message) return "";
+    var snackbar = state.snackbar || {};
+    var message = String(snackbar.message || "");
+    var action = snackbar.action || {};
+    var visible = Boolean(message);
     return [
-      '<div class="snackbar ' + escapeHtml(state.snackbar.tone || "success") + '" role="status">',
-      '<span>' + escapeHtml(state.snackbar.message) + '</span>',
-      state.snackbar.action ? '<button type="button" data-snackbar-action="' + escapeHtml(state.snackbar.action.name) + '">' + escapeHtml(state.snackbar.action.label) + '</button>' : '',
+      '<div class="snackbar ' + escapeHtml(snackbar.tone || "success") + (visible ? "" : " is-empty") + '" role="status" aria-hidden="' + (visible ? "false" : "true") + '">',
+      '<span>' + escapeHtml(message) + '</span>',
+      '<button type="button" data-snackbar-action="' + escapeHtml(action.name || "") + '"' + (action.name && action.label ? '' : ' hidden disabled aria-hidden="true"') + '>' + escapeHtml(action.label || "확인") + '</button>',
       '</div>'
     ].join("");
   }
@@ -2276,9 +2282,17 @@
     }
   }
 
+  function notePageScrollActivity() {
+    lastPageScrollActivityAt = Date.now();
+  }
+
+  function pageScrollRecentlyActive() {
+    return Date.now() - lastPageScrollActivityAt < 180;
+  }
+
   function restoreRenderedPageScrollPositionAfterLayout(position) {
     restoreRenderedPageScrollPosition(position);
-    if (!position || typeof window === "undefined" || !window.requestAnimationFrame) return;
+    if (!position || pageScrollRecentlyActive() || typeof window === "undefined" || !window.requestAnimationFrame) return;
     window.requestAnimationFrame(function () {
       restoreRenderedPageScrollPosition(position);
     });
@@ -2288,6 +2302,7 @@
     var scroller = currentWorkspaceScroller();
     if (!scroller) return;
     scroller.addEventListener("scroll", function () {
+      notePageScrollActivity();
       rememberRenderedPageScrollPosition();
       scheduleTopbarScrollState();
     }, { passive: true });
@@ -2332,7 +2347,9 @@
   }
 
   function setAppNavHidden(hidden) {
-    appNavHidden = Boolean(hidden);
+    var nextHidden = Boolean(hidden);
+    if (appNavHidden === nextHidden) return;
+    appNavHidden = nextHidden;
     var nav = currentAppNav();
     if (!nav) return;
     nav.classList.toggle("is-hidden", appNavHidden);
@@ -2345,19 +2362,27 @@
     if (!mobile) {
       setAppNavHidden(false);
       appNavLastScrollY = scrollY;
+      appNavScrollDirection = 0;
+      appNavScrollDistance = 0;
       return;
     }
     var delta = scrollY - appNavLastScrollY;
+    var direction = delta > 1 ? 1 : (delta < -1 ? -1 : 0);
+    if (direction) {
+      if (direction !== appNavScrollDirection) appNavScrollDistance = 0;
+      appNavScrollDirection = direction;
+      appNavScrollDistance += Math.abs(delta);
+    }
     if (Math.abs(delta) > 3) closeAppNavMenu();
-    if (scrollY > 120 && delta >= 0) {
-      setAppNavHidden(true);
-    } else if (scrollY > 72 && delta > 6) {
-      setAppNavHidden(true);
-    } else if (scrollY < 48 || delta < -8) {
+    if (scrollY < 48) {
       setAppNavHidden(false);
-    } else {
-      var nav = currentAppNav();
-      if (nav) nav.classList.toggle("is-hidden", appNavHidden);
+      appNavScrollDistance = 0;
+    } else if (direction > 0 && scrollY > 140 && appNavScrollDistance >= 44) {
+      setAppNavHidden(true);
+      appNavScrollDistance = 0;
+    } else if (direction < 0 && appNavScrollDistance >= 56) {
+      setAppNavHidden(false);
+      appNavScrollDistance = 0;
     }
     appNavLastScrollY = scrollY;
   }
@@ -10349,7 +10374,7 @@
     }
     syncNetworkActivityDom();
     decorateRenderedBusyControls();
-    restoreRenderedPageScrollPositionAfterLayout(renderedScrollPosition);
+    if (!patchedDashboard) restoreRenderedPageScrollPositionAfterLayout(renderedScrollPosition);
     if (!overlayWillBeOpen) overlayScrollPosition = null;
     syncAppNavScrollState();
     syncTopbarScrollState();
@@ -10517,7 +10542,7 @@
     var showHomeDeskbar = state.activeTab === "overview";
     var subtitle = (structure.objective || tab.description || "운영") + " · 마지막 데이터 " + formatClock(snapshot.generatedAt) + " · " + freshness.label + " (" + freshness.detail + ")";
     return [
-      '<main class="shell console-shell ' + escapeHtml(webStyleContract.shellClass) + (showHomeDeskbar ? " shell-home" : " shell-page") + '" data-web-style="' + escapeHtml(webStyleContract.id) + '" data-web-style-version="' + escapeHtml(webStyleContract.version) + '" data-active-group="' + escapeHtml(structure.groupId) + '">',
+      '<main class="shell console-shell ' + escapeHtml(webStyleContract.shellClass) + (showHomeDeskbar ? " shell-home" : " shell-page") + (topbarCollapsed ? " topbar-collapsed" : "") + '" data-web-style="' + escapeHtml(webStyleContract.id) + '" data-web-style-version="' + escapeHtml(webStyleContract.version) + '" data-active-group="' + escapeHtml(structure.groupId) + '">',
       renderAppNavigation(tab, modeLabel, modeClass, snapshot),
       '<section class="topbar web-style-topbar" data-style-region="topbar">',
       '<div class="topbar-copy">',
@@ -11764,7 +11789,7 @@
       ].join("");
     }
     return [
-      '<nav class="app-nav web-style-nav" data-style-region="navigation" aria-label="앱 네비게이션">',
+      '<nav class="app-nav web-style-nav' + (appNavHidden ? " is-hidden" : "") + '" data-style-region="navigation" aria-label="앱 네비게이션">',
       '<div class="app-nav-brand">',
       '<span class="app-brand-mark" aria-hidden="true"><span></span></span>',
       '<div class="app-brand-copy">',
@@ -11801,14 +11826,14 @@
     var active = symbolUniverseRefreshActive(refresh);
     var terminal = refresh.jobId && symbolUniverseRefreshTerminal(refresh);
     var unacknowledged = terminal && String(state.symbolUniverseRefreshAcknowledgedJobId || "") !== String(refresh.jobId || "");
-    if (!active && !unacknowledged) return "";
+    var visible = active || unacknowledged;
     var stage = symbolUniverseRefreshStageMeta(refresh);
-    var tone = active ? "active" : (refresh.status === "completed" ? "completed" : "failed");
+    var tone = active ? "active" : (refresh.status === "completed" ? "completed" : (visible ? "failed" : "idle"));
     var label = active
       ? stage.label
-      : (refresh.status === "completed" ? "종목 갱신 완료" : refresh.status === "partial" ? "일부 갱신 완료" : "종목 갱신 확인");
+      : (refresh.status === "completed" ? "종목 갱신 완료" : refresh.status === "partial" ? "일부 갱신 완료" : visible ? "종목 갱신 확인" : "종목 갱신 대기");
     return [
-      '<button class="symbol-refresh-nav-task ' + escapeHtml(tone) + '" type="button" data-action="open-symbol-universe-refresh" aria-label="' + escapeHtml(label + " 결과 보기") + '">',
+      '<button class="symbol-refresh-nav-task ' + escapeHtml(tone) + '" type="button" data-action="open-symbol-universe-refresh" aria-label="' + escapeHtml(label + (visible ? " 결과 보기" : "")) + '"' + (visible ? '' : ' hidden disabled aria-hidden="true"') + '>',
       '<span aria-hidden="true">' + (active ? "↻" : refresh.status === "completed" ? "✓" : "!") + '</span>',
       '<strong>' + escapeHtml(label) + '</strong>',
       '</button>'
@@ -31260,6 +31285,7 @@
   if (window.addEventListener) {
     window.addEventListener("popstate", syncTabFromLocation);
     window.addEventListener("scroll", function () {
+      notePageScrollActivity();
       rememberRenderedPageScrollPosition();
       scheduleAppNavScrollState();
       scheduleTopbarScrollState();

@@ -34,6 +34,7 @@ from ..application.notification_ai_gate_message import (
     prepend_execution_start_badge,
 )
 from ..application.notification_replay_service import NotificationReplayService
+from ..application.ontology_catalog_query_service import OntologyCatalogQueryService
 from ..application.ontology_diagnostics_service import OntologyDiagnosticsService
 from ..application.research_evidence_governance_service import ResearchEvidenceGovernanceService
 from ..application.symbol_universe_service import DEFAULT_SYMBOL_SEEDS, seed_symbol
@@ -1132,6 +1133,46 @@ def save_settings_payload(payload: Dict[str, object]) -> Dict[str, object]:
 
 def ontology_rulebox_payload() -> Dict[str, object]:
     return ontology_repository_from_settings(runtime_settings()).rulebox_snapshot()
+
+
+def ontology_catalog_api_payload(section: str, query: Dict[str, List[str]]) -> Dict[str, object]:
+    """Read one ontology catalog section without mutating graph state."""
+
+    settings = operational_read_settings()
+    section_id = str(section or "summary").strip().lower()
+    account_id = str(first_query(query, "accountId") or first_query(query, "account") or "").strip()
+    world_id = ontology_world_id_from_query(query)
+    include_lineage = section_id == "lineage"
+    service = OntologyCatalogQueryService(
+        ontology_repository=ontology_repository_from_settings(settings),
+        hypothesis_lifecycle_store=stores.hypothesis_lifecycle_store(settings),
+        decision_episode_store=stores.investment_decision_episode_store(settings) if include_lineage else None,
+        notification_job_store=stores.notification_job_store(settings) if include_lineage else None,
+    )
+    if section_id == "summary":
+        return service.summary(world_id=world_id, account_id=account_id)
+    if section_id == "lineage":
+        return service.lineage(
+            item_type=str(first_query(query, "type") or ""),
+            item_id=str(first_query(query, "id") or ""),
+            world_id=world_id,
+            account_id=account_id,
+            symbol=str(first_query(query, "symbol") or "").upper(),
+        )
+    return service.list_section(
+        section=section_id,
+        query=str(first_query(query, "query") or first_query(query, "q") or ""),
+        cursor=str(first_query(query, "cursor") or ""),
+        limit=safe_int(first_query(query, "limit"), 40, 1, 100),
+        bounded_context=str(first_query(query, "boundedContext") or first_query(query, "context") or ""),
+        enabled=str(first_query(query, "enabled") or "").lower(),
+        scope=str(first_query(query, "scope") or ""),
+        state=str(first_query(query, "state") or ""),
+        symbol=str(first_query(query, "symbol") or "").upper(),
+        account_id=account_id,
+        market_id=str(first_query(query, "marketId") or first_query(query, "market") or ""),
+        world_id=world_id,
+    )
 
 
 def save_ontology_rulebox_payload(payload: Dict[str, object]) -> Dict[str, object]:
@@ -4553,6 +4594,16 @@ class DigitalTwinHandler(BaseHTTPRequestHandler):
                 if not self.ensure_writable("공유 모드에서는 TypeDB RuleBox를 변경할 수 없습니다."):
                     return
                 return self.send_payload(200, save_ontology_rulebox_payload(self.read_json_body()))
+
+        ontology_catalog_match = re.match(
+            r"^/api/ontology/catalog/(summary|classes|relations|rules|hypotheses|inferences|lineage)$",
+            path,
+        )
+        if ontology_catalog_match and self.command == "GET":
+            return self.send_payload(200, ontology_catalog_api_payload(
+                ontology_catalog_match.group(1),
+                query,
+            ))
 
         if path == "/api/ontology/language":
             if self.command == "GET":

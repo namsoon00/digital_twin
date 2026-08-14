@@ -72,6 +72,9 @@ class MySQLHypothesisLifecycleStore(MySQLOperationalConnection):
         market_id: str = "",
         scope: str = "",
         limit: int = 100,
+        offset: int = 0,
+        search: str = "",
+        state: str = "",
     ) -> List[HypothesisLifecycleRecord]:
         """Return lifecycle list metadata without pulling historical snapshots.
 
@@ -92,7 +95,20 @@ class MySQLHypothesisLifecycleStore(MySQLOperationalConnection):
         if scope:
             where.append("scope = %s")
             params.append(str(scope))
-        params.append(max(1, min(1000, int(limit or 100))))
+        if state:
+            where.append("state = %s")
+            params.append(str(state))
+        if str(search or "").strip():
+            where.append(
+                "(lifecycle_key LIKE %s OR lifecycle_id LIKE %s OR symbol LIKE %s "
+                "OR family_id LIKE %s OR transition_reason LIKE %s)"
+            )
+            needle = "%" + str(search).strip() + "%"
+            params.extend([needle, needle, needle, needle, needle])
+        params.extend([
+            max(1, min(1000, int(limit or 100))),
+            max(0, int(offset or 0)),
+        ])
         columns = (
             "lifecycle_key, lifecycle_id, scope, account_id, portfolio_world_id, "
             "market_world_id, market_id, symbol, family_id, state, first_observed_at, "
@@ -103,10 +119,50 @@ class MySQLHypothesisLifecycleStore(MySQLOperationalConnection):
         sql = "SELECT " + columns + " FROM investment_hypothesis_lifecycle_states"
         if where:
             sql += " WHERE " + " AND ".join(where)
-        sql += " ORDER BY updated_at DESC, lifecycle_key ASC LIMIT %s"
+        sql += " ORDER BY updated_at DESC, lifecycle_key ASC LIMIT %s OFFSET %s"
         with self.connect() as connection:
             rows = connection.execute(sql, tuple(params)).fetchall()
         return [self.record_from_summary_row(row) for row in rows or []]
+
+    def count_current(
+        self,
+        account_id: str = "",
+        symbol: str = "",
+        market_id: str = "",
+        scope: str = "",
+        search: str = "",
+        state: str = "",
+    ) -> int:
+        """Count the current hypothesis inbox without reading JSON snapshots."""
+
+        where: List[str] = ["lifecycle_key LIKE %s"]
+        params: List[object] = [HYPOTHESIS_LIFECYCLE_KEY_PREFIX + "%"]
+        if account_id:
+            where.append("(account_id = %s OR scope = 'market')")
+            params.append(str(account_id))
+        if symbol:
+            where.append("symbol = %s")
+            params.append(str(symbol).upper())
+        if market_id:
+            where.append("market_id = %s")
+            params.append(str(market_id))
+        if scope:
+            where.append("scope = %s")
+            params.append(str(scope))
+        if state:
+            where.append("state = %s")
+            params.append(str(state))
+        if str(search or "").strip():
+            where.append(
+                "(lifecycle_key LIKE %s OR lifecycle_id LIKE %s OR symbol LIKE %s "
+                "OR family_id LIKE %s OR transition_reason LIKE %s)"
+            )
+            needle = "%" + str(search).strip() + "%"
+            params.extend([needle, needle, needle, needle, needle])
+        sql = "SELECT COUNT(*) AS count FROM investment_hypothesis_lifecycle_states WHERE " + " AND ".join(where)
+        with self.connect() as connection:
+            row = connection.execute(sql, tuple(params)).fetchone()
+        return int(row["count"] or 0) if row else 0
 
     def current_for_subjects(
         self,

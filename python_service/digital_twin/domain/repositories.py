@@ -415,6 +415,30 @@ class HypothesisLifecycleRepository(Protocol):
     ) -> List[HypothesisLifecycleRecord]:
         ...
 
+    def list_current_summary(
+        self,
+        account_id: str = "",
+        symbol: str = "",
+        market_id: str = "",
+        scope: str = "",
+        limit: int = 100,
+        offset: int = 0,
+        search: str = "",
+        state: str = "",
+    ) -> List[HypothesisLifecycleRecord]:
+        ...
+
+    def count_current(
+        self,
+        account_id: str = "",
+        symbol: str = "",
+        market_id: str = "",
+        scope: str = "",
+        search: str = "",
+        state: str = "",
+    ) -> int:
+        ...
+
     def current_for_subjects(
         self,
         account_id: str,

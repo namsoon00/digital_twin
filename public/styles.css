@@ -30134,6 +30134,8 @@ button.is-state-busy:not(.icon-button):not(.refresh-button) {
 
 button.is-request-busy {
   min-width: var(--request-busy-min-width, auto);
+  max-width: 100%;
+  overflow: hidden;
 }
 
 button.is-request-busy:disabled,
@@ -30153,9 +30155,16 @@ button.is-state-busy:not(.refresh-button)::before {
   animation: oa-request-spin 0.72s linear infinite;
 }
 
-button.icon-button.is-request-busy .button-activity-spinner {
+button:is(.icon-button, .symbol-watch-toggle, [data-network-busy-icon-only="true"]).is-request-busy .button-activity-spinner {
   width: 16px;
   height: 16px;
+}
+
+button:is(.symbol-watch-toggle, [data-network-busy-icon-only="true"]).is-request-busy {
+  display: inline-grid;
+  place-items: center;
+  padding: 0;
+  white-space: nowrap;
 }
 
 .button-activity-label {

@@ -77,6 +77,11 @@ class OntologyRuleMatch:
     rule_lifecycle_class: str = ""
     rule_trigger_families: List[str] = field(default_factory=list)
     rule_required_facts: List[str] = field(default_factory=list)
+    rule_context_requirements: List[Dict[str, object]] = field(default_factory=list)
+    rule_invalidation_contract: Dict[str, object] = field(default_factory=dict)
+    rule_derived_outputs: List[Dict[str, object]] = field(default_factory=list)
+    context_completeness_policy: Dict[str, object] = field(default_factory=dict)
+    rule_dependency_contract_version: str = ""
     rule_output_contract: Dict[str, object] = field(default_factory=dict)
 
     def to_dict(self) -> Dict[str, object]:
@@ -112,6 +117,11 @@ class OntologyRuleMatch:
         payload["ruleLifecycleClass"] = payload.pop("rule_lifecycle_class")
         payload["ruleTriggerFamilies"] = payload.pop("rule_trigger_families")
         payload["ruleRequiredFacts"] = payload.pop("rule_required_facts")
+        payload["ruleContextRequirements"] = payload.pop("rule_context_requirements")
+        payload["ruleInvalidationContract"] = payload.pop("rule_invalidation_contract")
+        payload["ruleDerivedOutputs"] = payload.pop("rule_derived_outputs")
+        payload["contextCompletenessPolicy"] = payload.pop("context_completeness_policy")
+        payload["ruleDependencyContractVersion"] = payload.pop("rule_dependency_contract_version")
         payload["ruleOutputContract"] = payload.pop("rule_output_contract")
         return payload
 

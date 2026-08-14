@@ -454,7 +454,18 @@ class MySQLOntologyProjectionRunStore(MySQLOperationalConnection):
                 for symbol in item.get("targetSymbols") or run.source_symbols or []
                 if str(symbol or "").strip()
             })
+            precise_matched_symbols = {
+                str(symbol or "").upper().strip()
+                for symbol in item.get("matchedTargetSymbols") or []
+                if str(symbol or "").strip()
+            }
+            has_precise_match_state = "matchedTargetSymbols" in item
             for symbol in symbols:
+                symbol_matched = (
+                    symbol in precise_matched_symbols
+                    if has_precise_match_state
+                    else matched
+                )
                 revision_vector = revision_vectors.get(symbol)
                 revision_vector = (
                     dict(revision_vector or {})
@@ -468,7 +479,7 @@ class MySQLOntologyProjectionRunStore(MySQLOperationalConnection):
                     str(run.rulebox_rules_hash or ""),
                     str(run.tbox_fingerprint or ""),
                     scope_fingerprint,
-                    "matched" if matched else "not-matched",
+                    "matched" if symbol_matched else "not-matched",
                     generation_id,
                 ])
                 slot_rows.append((
@@ -480,8 +491,8 @@ class MySQLOntologyProjectionRunStore(MySQLOperationalConnection):
                     str(run.rulebox_rules_hash or ""),
                     str(run.tbox_fingerprint or ""),
                     scope_fingerprint,
-                    "matched" if matched else "not-matched",
-                    1 if matched else 0,
+                    "matched" if symbol_matched else "not-matched",
+                    1 if symbol_matched else 0,
                     catalog_rule_count,
                     generation_id,
                     source_abox_snapshot_id,
@@ -605,6 +616,13 @@ class MySQLOntologyProjectionRunStore(MySQLOperationalConnection):
             "expectedRuleCount": expected,
             "coveredRuleCountBySymbol": {
                 symbol: len(states) for symbol, states in by_symbol.items()
+            },
+            "ruleStatesBySymbol": {
+                symbol: {
+                    rule_id: "matched" if matched else "not-matched"
+                    for rule_id, matched in sorted(states.items())
+                }
+                for symbol, states in sorted(by_symbol.items())
             },
             "reusedTargetSymbols": targets,
             "inferenceGenerationId": ",".join(generation_ids)[:640],

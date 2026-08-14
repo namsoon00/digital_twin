@@ -720,6 +720,29 @@ def matches_from_inference(
             rule_lifecycle_class=str(relation.get("ruleLifecycleClass") or relation.get("rule_lifecycle_class") or ""),
             rule_trigger_families=string_list(relation.get("ruleTriggerFamilies") or relation.get("rule_trigger_families")),
             rule_required_facts=string_list(relation.get("ruleRequiredFacts") or relation.get("rule_required_facts")),
+            rule_context_requirements=[
+                dict(item)
+                for item in relation.get("ruleContextRequirements") or relation.get("rule_context_requirements") or []
+                if isinstance(item, dict)
+            ],
+            rule_invalidation_contract=(
+                dict(relation.get("ruleInvalidationContract") or {})
+                if isinstance(relation.get("ruleInvalidationContract"), dict) else {}
+            ),
+            rule_derived_outputs=[
+                dict(item)
+                for item in relation.get("ruleDerivedOutputs") or relation.get("rule_derived_outputs") or []
+                if isinstance(item, dict)
+            ],
+            context_completeness_policy=(
+                dict(relation.get("contextCompletenessPolicy") or {})
+                if isinstance(relation.get("contextCompletenessPolicy"), dict) else {}
+            ),
+            rule_dependency_contract_version=str(
+                relation.get("ruleDependencyContractVersion")
+                or relation.get("rule_dependency_contract_version")
+                or ""
+            ),
             rule_output_contract=(
                 dict(relation.get("ruleOutputContract") or {})
                 if isinstance(relation.get("ruleOutputContract"), dict) else {}

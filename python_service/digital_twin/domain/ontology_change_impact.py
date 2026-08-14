@@ -1488,6 +1488,15 @@ def build_inference_impact_plan(
             if impact_scope == "MARKET_CONTEXT"
             else "subject-dependency-selected-native-evaluation"
         ),
+        "contextRetention": {
+            "aboxReadMode": "complete-active-world",
+            "activeScopeCount": int(delta.get("nextScopeCount") or 0),
+            "changedScopeCount": len(delta.get("directChangedScopeIds") or []),
+            "affectedScopeCount": len(delta.get("affectedScopeIds") or []),
+            "candidateRulesOnly": True,
+            "unchangedFactsRetained": True,
+            "priorValidInferencesRetained": True,
+        },
         "nativeRuleSelectionEligible": bool(
             candidate_profiles
             and len(candidate_profiles) < len(enabled_profiles)
@@ -1557,6 +1566,43 @@ def compact_inference_impact_plan(plan: Mapping[str, object], limit: int = 80) -
             values.get("ruleExecutionScope")
             or "subject-dependency-selected-native-evaluation"
         ),
+        "contextRetention": {
+            "aboxReadMode": str(
+                (values.get("contextRetention") or {}).get("aboxReadMode")
+                if isinstance(values.get("contextRetention"), Mapping)
+                else ""
+            ),
+            "activeScopeCount": int(
+                (values.get("contextRetention") or {}).get("activeScopeCount") or 0
+                if isinstance(values.get("contextRetention"), Mapping)
+                else 0
+            ),
+            "changedScopeCount": int(
+                (values.get("contextRetention") or {}).get("changedScopeCount") or 0
+                if isinstance(values.get("contextRetention"), Mapping)
+                else 0
+            ),
+            "affectedScopeCount": int(
+                (values.get("contextRetention") or {}).get("affectedScopeCount") or 0
+                if isinstance(values.get("contextRetention"), Mapping)
+                else 0
+            ),
+            "candidateRulesOnly": bool(
+                (values.get("contextRetention") or {}).get("candidateRulesOnly")
+                if isinstance(values.get("contextRetention"), Mapping)
+                else False
+            ),
+            "unchangedFactsRetained": bool(
+                (values.get("contextRetention") or {}).get("unchangedFactsRetained")
+                if isinstance(values.get("contextRetention"), Mapping)
+                else False
+            ),
+            "priorValidInferencesRetained": bool(
+                (values.get("contextRetention") or {}).get("priorValidInferencesRetained")
+                if isinstance(values.get("contextRetention"), Mapping)
+                else False
+            ),
+        },
         "nativeRuleSelectionEligible": bool(values.get("nativeRuleSelectionEligible")),
         "nativeRuleSelectionEligibilityReason": str(values.get("nativeRuleSelectionEligibilityReason") or ""),
         "nativeRuleSelectionApplied": bool(values.get("nativeRuleSelectionApplied")),

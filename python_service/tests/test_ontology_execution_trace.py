@@ -12,6 +12,42 @@ class OntologyExecutionTraceTests(unittest.TestCase):
         self.assertEqual("CONTEXT_REASONING", reasoning_lane_for_priority("market"))
         self.assertEqual("CONTEXT_REASONING", reasoning_lane_for_priority("research"))
 
+    def test_rule_outcome_keeps_precise_matched_subjects_in_a_multi_symbol_run(self):
+        run = SimpleNamespace(
+            run_id="run:subjects",
+            world_id="portfolio:local:main",
+            account_id="main",
+            source_snapshot_at="2026-08-15T00:00:00Z",
+            source_symbols=["005930", "000660"],
+            started_at="2026-08-15T00:00:00Z",
+            completed_at="2026-08-15T00:00:01Z",
+            context_payload={},
+        )
+        result = {
+            "status": "ok",
+            "ruleboxExecution": {
+                "status": "ok",
+                "nativeRuleSelectionApplied": False,
+                "typedbNativeRuleMatchedRuleIds": ["rule.flow"],
+                "nativeMatchResult": {
+                    "matches": [{"ruleId": "rule.flow", "sourceId": "stock:005930"}],
+                    "executedRules": [{
+                        "ruleId": "rule.flow",
+                        "candidateSymbols": ["005930", "000660"],
+                        "queryCount": 1,
+                    }],
+                },
+            },
+            "inferenceBox": {"inferenceGenerationId": "generation:subjects"},
+        }
+
+        trace = reasoning_execution_trace_payload(run, result)
+
+        outcome = trace["ruleOutcomes"][0]
+        self.assertTrue(outcome["matched"])
+        self.assertEqual(["005930"], outcome["matchedTargetSymbols"])
+        self.assertEqual(["000660", "005930"], sorted(outcome["targetSymbols"]))
+
     def test_execution_trace_records_stages_rules_and_disabled_ai(self):
         run = SimpleNamespace(
             run_id="run:1",

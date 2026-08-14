@@ -6,7 +6,8 @@ from .ontology_change_impact import rule_dependency_profile
 from .ontology_rule_execution_policy import rule_execution_profile
 
 
-ONTOLOGY_RULE_MANIFEST_VERSION = "ontology-rule-domain-manifest-v2"
+ONTOLOGY_RULE_MANIFEST_VERSION = "ontology-rule-domain-manifest-v3"
+RULE_DEPENDENCY_CONTRACT_VERSION = "ontology-rule-dependency-contract-v1"
 
 ASSESSMENT_SCOPES = (
     "evidence-quality",
@@ -150,6 +151,83 @@ def rule_evidence_families(dependency: Dict[str, object]) -> List[str]:
     return sorted(result)
 
 
+def rule_condition_contracts(dependency: Dict[str, object]) -> List[Dict[str, object]]:
+    """Expose condition inputs without copying thresholds into the scheduler.
+
+    The scheduler may use dependency identities to select TypeDB functions,
+    while TypeDB remains responsible for evaluating operators and values.
+    Every condition is retained as context because an unchanged news,
+    governance, or valuation fact can still explain a fresh price result.
+    """
+
+    rows = []
+    for item in dependency.get("conditionProfiles") or []:
+        if not isinstance(item, dict):
+            continue
+        role = str(item.get("role") or "required").strip().lower()
+        rows.append({
+            "conditionId": str(item.get("conditionId") or "").strip(),
+            "role": role,
+            "scopeFamilies": list(item.get("scopeFamilies") or []),
+            "dependencyKeys": list(item.get("dependencyKeys") or []),
+            "conditionKind": str(item.get("conditionKind") or "").strip(),
+            "field": str(item.get("field") or "").strip(),
+            "relationType": str(item.get("relationType") or "").strip(),
+            "targetKind": str(item.get("targetKind") or "").strip(),
+            "conservative": bool(item.get("conservative")),
+            "canTriggerEvaluation": True,
+            "canInvalidatePriorResult": True,
+        })
+    return rows
+
+
+def rule_derived_outputs(rule: object) -> List[Dict[str, object]]:
+    rows = []
+    for item in _items(_value(rule, "derivations")):
+        relation_type = str(_value(item, "relation_type", "relationType") or "").strip()
+        target_kind = str(_value(item, "target_kind", "targetKind") or "").strip()
+        rows.append({
+            "relationType": relation_type,
+            "targetKind": target_kind,
+            "tboxClass": str(_value(item, "tbox_class", "tboxClass") or "").strip(),
+            "decisionStage": str(_value(item, "decision_stage", "decisionStage") or "").strip(),
+            "decisionEffect": str(_value(item, "decision_effect", "decisionEffect") or "").strip(),
+            "dependencyKey": (
+                "relation:" + relation_type.lower().replace("_", "-")
+                if relation_type
+                else ""
+            ),
+        })
+    return rows
+
+
+def rule_invalidation_contract(
+    condition_contracts: Iterable[Dict[str, object]],
+    lifecycle: Dict[str, object],
+) -> Dict[str, object]:
+    condition_rows = [dict(item) for item in condition_contracts or []]
+    return {
+        "mode": str(lifecycle.get("invalidationMode") or "typedb-rule-not-materialized"),
+        "conditionIds": sorted({
+            str(item.get("conditionId") or "").strip()
+            for item in condition_rows
+            if str(item.get("conditionId") or "").strip()
+        } | {
+            str(item or "").strip()
+            for item in lifecycle.get("invalidationConditionIds") or []
+            if str(item or "").strip()
+        }),
+        "dependencyKeys": sorted({
+            str(key or "").strip()
+            for item in condition_rows
+            for key in item.get("dependencyKeys") or []
+            if str(key or "").strip()
+        }),
+        "freshnessDomains": list(lifecycle.get("requiredFreshnessDomains") or []),
+        "expiresAfterMinutes": int(lifecycle.get("validityMinutes") or 0),
+    }
+
+
 def assessment_output_contract(scope: str, effects: Iterable[str]) -> Dict[str, object]:
     output_type = {
         "evidence-quality": "EvidenceQualityAssessment",
@@ -198,6 +276,9 @@ def rule_domain_manifest(
     })
     lifecycle = _value(rule, "hypothesis_lifecycle", "hypothesisLifecycle")
     lifecycle_payload = lifecycle.to_dict() if hasattr(lifecycle, "to_dict") else dict(lifecycle or {}) if isinstance(lifecycle, dict) else {}
+    condition_contracts = rule_condition_contracts(dependency)
+    invalidation_contract = rule_invalidation_contract(condition_contracts, lifecycle_payload)
+    derived_outputs = rule_derived_outputs(rule)
     policy_keys = []
     rule_id = str(_value(rule, "rule_id", "ruleId") or "")
     if rule_id == "graph.portfolio.concentration.review.v1":
@@ -213,9 +294,20 @@ def rule_domain_manifest(
         "questionTypes": rule_question_types(rule, module),
         "inputFactFamilies": families,
         "triggerFamilies": [value for value in families if value != "unknown"],
+        "triggerDependencies": condition_contracts,
         "evidenceFamilies": rule_evidence_families(dependency),
         "requiredFacts": list(dependency.get("dependencyKeys") or []),
         "dependencyKeys": list(dependency.get("dependencyKeys") or []),
+        "requiredContext": condition_contracts,
+        "contextCompletenessPolicy": {
+            "aboxReadMode": "complete-active-world",
+            "ruleExecutionMode": "dependency-selected-single-pass",
+            "retainUnchangedFacts": True,
+            "retainPriorValidInferences": True,
+        },
+        "invalidationContract": invalidation_contract,
+        "derivedOutputs": derived_outputs,
+        "dependencyContractVersion": RULE_DEPENDENCY_CONTRACT_VERSION,
         "requiredFreshness": list(lifecycle_payload.get("requiredFreshnessDomains") or []),
         "requiredProvenance": ["source", "observedAt"],
         "policyKeys": policy_keys,
@@ -251,6 +343,11 @@ def validate_rule_domain_manifests(rules: Iterable[object]) -> Dict[str, object]
         or not item.get("decisionStages")
         or item.get("assessmentScope") not in ASSESSMENT_SCOPES
         or not item.get("outputContract")
+        or not item.get("triggerDependencies")
+        or not item.get("requiredContext")
+        or not item.get("invalidationContract")
+        or not item.get("derivedOutputs")
+        or item.get("dependencyContractVersion") != RULE_DEPENDENCY_CONTRACT_VERSION
     ]
     conservative = [item["ruleId"] for item in manifests if item.get("conservativeRouting")]
     return {

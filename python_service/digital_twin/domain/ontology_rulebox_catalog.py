@@ -98,9 +98,9 @@ def with_market_evidence_guards(rules: List[GraphInferenceRule]) -> List[GraphIn
                 "market-evidence-profile-eligible",
                 "relation",
                 "해당 시장과 공급자에서 기본 판단 증거가 최신 상태입니다.",
-                relation_type="HAS_EVIDENCE_PROFILE",
-                target_kind="market-evidence-profile",
-                target_property_filters={"dataState": "sufficient"},
+                relation_type="HAS_DATA_QUALITY",
+                target_kind="data-availability-assessment",
+                target_property_filters={"field": "judgementEvidence", "dataState": "sufficient"},
             ))
             changed = True
         for capability in sorted(required_capabilities):
@@ -2464,9 +2464,9 @@ def default_graph_inference_rules() -> List[GraphInferenceRule]:
                     "market-evidence-profile-eligible",
                     "relation",
                     "해당 시장에서 수집 가능한 증거 프로필이 현재 판단에 사용할 수 있는 상태입니다.",
-                    relation_type="HAS_EVIDENCE_PROFILE",
-                    target_kind="market-evidence-profile",
-                    target_property_filters={"dataState": "sufficient"},
+                    relation_type="HAS_DATA_QUALITY",
+                    target_kind="data-availability-assessment",
+                    target_property_filters={"field": "judgementEvidence", "dataState": "sufficient"},
                 ),
                 GraphRuleCondition(
                     "ma5-recovered",

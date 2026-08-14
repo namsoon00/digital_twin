@@ -35,7 +35,7 @@ def add_market_evidence_profile_concepts(
     source: str,
     settings: Dict[str, object] = None,
 ) -> Dict[str, object]:
-    """Project provider capabilities once for TypeDB and the final AI judge."""
+    """Project a stable market contract and separate live availability facts."""
 
     profile = market_evidence_profile(position, settings)
     symbol = symbol_key(position)
@@ -52,8 +52,7 @@ def add_market_evidence_profile_concepts(
             "currency": profile["currency"],
             "scope": "investment-evidence",
             "dataScope": "market-evidence-profile",
-            "dataState": profile["dataState"],
-            "judgementEvidenceUsable": bool(profile["judgementEvidenceUsable"]),
+            "profileKey": profile["profileKey"],
             "requiredCapabilities": list(profile["requiredCapabilities"]),
             "confirmationCapabilities": list(profile["confirmationCapabilities"]),
             "profileVersion": profile["version"],
@@ -63,11 +62,42 @@ def add_market_evidence_profile_concepts(
         "source": "market-evidence-profile",
         "scope": "investment-evidence",
         "dataScope": "market-evidence-profile",
-        "dataState": profile["dataState"],
         "evidenceRole": "context",
         "aiInfluenceLabel": str(profile["label"]),
     }
     add_relation(graph, stock_id, profile_id, "HAS_EVIDENCE_PROFILE", weight=1.0, properties=relation_props)
+    overall_id = add_entity(
+        graph,
+        "data-availability-assessment",
+        symbol + ":judgementEvidence",
+        (position.name or symbol) + " 판단 증거 공급 상태",
+        {
+            "tboxClass": "DataAvailabilityAssessment",
+            "tboxClasses": ["Observation", "DataQuality", "DataAvailabilityAssessment"],
+            "symbol": symbol,
+            "field": "judgementEvidence",
+            "label": "판단 증거",
+            "scope": "investment-evidence",
+            "dataScope": "market-evidence-availability",
+            "dataState": profile["dataState"],
+            "status": profile["dataState"],
+            "judgementEvidenceUsable": bool(profile["judgementEvidenceUsable"]),
+            "profileKey": profile["profileKey"],
+            "profileVersion": profile["version"],
+        },
+    )
+    overall_props = {
+        "source": "market-evidence-profile",
+        "field": "judgementEvidence",
+        "scope": "investment-evidence",
+        "dataScope": "market-evidence-availability",
+        "dataState": profile["dataState"],
+        "evidenceRole": "context" if profile["judgementEvidenceUsable"] else "blocking",
+        "aiInfluenceLabel": "판단 증거 " + str(profile["dataState"]),
+    }
+    add_relation(graph, profile_id, overall_id, "HAS_DATA_AVAILABILITY", weight=1.0, properties=overall_props)
+    add_relation(graph, stock_id, overall_id, "HAS_DATA_QUALITY", weight=1.0, properties=overall_props)
+    add_relation(graph, stock_id, overall_id, "HAS_DATA_AVAILABILITY", weight=1.0, properties=overall_props)
     for capability, payload in dict(profile.get("capabilities") or {}).items():
         state = str(payload.get("state") or "missing")
         # Fresh capability values already exist as price/flow observation
@@ -109,6 +139,7 @@ def add_market_evidence_profile_concepts(
         }
         add_relation(graph, profile_id, capability_id, "HAS_DATA_AVAILABILITY", weight=1.0, properties=capability_props)
         add_relation(graph, stock_id, capability_id, "HAS_DATA_QUALITY", weight=1.0, properties=capability_props)
+        add_relation(graph, stock_id, capability_id, "HAS_DATA_AVAILABILITY", weight=1.0, properties=capability_props)
     return profile
 
 

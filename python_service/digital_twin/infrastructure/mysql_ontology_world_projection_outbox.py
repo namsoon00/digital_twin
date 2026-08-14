@@ -413,6 +413,36 @@ class MySQLOntologyWorldProjectionOutboxStore(MySQLOperationalConnection):
             )
         return int(getattr(cursor, "rowcount", 0) or 0) == 1
 
+    def yield_claimed(self, job_id: str, worker_id: str, reason: object = "") -> bool:
+        """Return a just-claimed background write without charging a retry.
+
+        This is an admission-control handoff, not an execution failure. It is
+        used when live reasoning arrives between the preflight queue check and
+        the shared-world worker's TypeDB write boundary.
+        """
+
+        stamp = utc_now()
+        with self.transaction() as connection:
+            cursor = connection.execute(
+                """
+                UPDATE ontology_world_projection_outbox
+                SET status = %s, attempts = GREATEST(attempts - 1, 0),
+                    available_at = %s, lease_owner = '', lease_expires_at = '',
+                    last_error = %s, updated_at = %s
+                WHERE job_id = %s AND status = %s AND lease_owner = %s
+                """,
+                (
+                    PENDING,
+                    stamp,
+                    _clean(reason)[:1000],
+                    stamp,
+                    _clean(job_id),
+                    PROCESSING,
+                    _clean(worker_id),
+                ),
+            )
+        return int(getattr(cursor, "rowcount", 0) or 0) == 1
+
     def retry(
         self,
         job_id: str,

@@ -275,6 +275,16 @@ def _rule_run_key(rule_id: str, item: Mapping[str, object], index: int) -> str:
     return hashlib.sha256(seed.encode("utf-8")).hexdigest()[:32]
 
 
+def _match_symbol(item: Mapping[str, object], source_symbols: Iterable[object]) -> str:
+    source_id = _text(item.get("sourceId")).upper()
+    if not source_id:
+        return ""
+    for symbol in _symbols(source_symbols):
+        if source_id == symbol or source_id.endswith(":" + symbol):
+            return symbol
+    return ""
+
+
 def reasoning_rule_outcome_records(run: object, result: Mapping[str, object]) -> List[Dict[str, object]]:
     values = _mapping(result)
     execution = _mapping(values.get("ruleboxExecution"))
@@ -311,6 +321,20 @@ def reasoning_rule_outcome_records(run: object, result: Mapping[str, object]) ->
         for value in execution.get("typedbNativeRuleMatchedRuleIds") or []
         if _text(value)
     )
+    matched_symbols_by_rule: Dict[str, set] = {}
+    match_identity_complete_by_rule: Dict[str, bool] = {}
+    for item in native.get("matches") or []:
+        if not isinstance(item, Mapping):
+            continue
+        rule_id = _text(item.get("ruleId"))
+        if not rule_id:
+            continue
+        symbol = _match_symbol(item, source_symbols)
+        if symbol:
+            matched_symbols_by_rule.setdefault(rule_id, set()).add(symbol)
+            match_identity_complete_by_rule[rule_id] = True
+        else:
+            match_identity_complete_by_rule.setdefault(rule_id, False)
     raw_rows = []
     for status_group, rows in (
         ("executed", native.get("executedRules") or execution.get("executedRules") or []),
@@ -328,8 +352,19 @@ def reasoning_rule_outcome_records(run: object, result: Mapping[str, object]) ->
     for index, (status_group, item) in enumerate(raw_rows):
         rule_id = _text(item.get("ruleId"))
         item_status = _text(item.get("status"))
+        symbols = _symbols(item.get("candidateSymbols") or source_symbols)
+        precise_match_symbols = matched_symbols_by_rule.get(rule_id, set())
+        has_precise_match_identity = bool(match_identity_complete_by_rule.get(rule_id))
+        matched_target_symbols = sorted(set(symbols).intersection(precise_match_symbols))
+        record_matched = bool(matched_target_symbols)
+        if rule_id in matched_ids and not has_precise_match_identity:
+            # Older adapters did not expose a sourceId. Preserve their safe,
+            # conservative rule-level result until a precise TypeDB row is
+            # available rather than rewriting an existing match as false.
+            record_matched = True
+            matched_target_symbols = list(symbols)
         if status_group == "executed":
-            status = "matched" if rule_id in matched_ids else "evaluated-no-match"
+            status = "matched" if record_matched else "evaluated-no-match"
         elif status_group == "selected":
             status = "selected"
         elif status_group == "deferred":
@@ -347,7 +382,6 @@ def reasoning_rule_outcome_records(run: object, result: Mapping[str, object]) ->
         elapsed_ms = _integer(item.get("elapsedMs"))
         cost_class = "slow" if elapsed_ms >= 10000 else "moderate" if elapsed_ms >= 3000 else "fast"
         execution_stage = _text(item.get("executionStage")) or "core"
-        symbols = _symbols(item.get("candidateSymbols") or source_symbols)
         records.append({
             "version": ONTOLOGY_EXECUTION_TRACE_VERSION,
             "runId": run_id,
@@ -370,7 +404,8 @@ def reasoning_rule_outcome_records(run: object, result: Mapping[str, object]) ->
             "durationMs": elapsed_ms,
             "queryDurationMs": _integer(item.get("queryDurationMs")),
             "targetSymbols": symbols,
-            "matched": rule_id in matched_ids,
+            "matchedTargetSymbols": matched_target_symbols,
+            "matched": record_matched,
             "reused": status_group == "selected" and rule_id not in candidate_ids,
             "failureReason": _text(item.get("reason"))[:500],
             "costClass": cost_class,

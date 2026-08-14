@@ -1339,6 +1339,14 @@ def _slo_state(
             "severity": "warning",
             "message": "A projection waited for the serialized TypeDB writer boundary.",
         })
+    equivalence = result.get("incrementalEquivalenceAudit")
+    equivalence = dict(equivalence or {}) if isinstance(equivalence, Mapping) else {}
+    if str(equivalence.get("status") or "") == "mismatch-reconciled":
+        violations.append({
+            "code": "incremental_inference_mismatch_reconciled",
+            "severity": "warning",
+            "message": "A sampled full TypeDB pass corrected stale incremental rule slots.",
+        })
     severity = "critical" if any(item["severity"] == "critical" for item in violations) else "warning" if violations else "ok"
     return {
         "state": severity,
@@ -1395,6 +1403,12 @@ def build_projection_runtime_observation(
         dict(replay_validation)
         if isinstance(replay_validation, Mapping)
         else native_replay_validation(values)
+    )
+    equivalence_audit = values.get("incrementalEquivalenceAudit")
+    equivalence_audit = (
+        dict(equivalence_audit)
+        if isinstance(equivalence_audit, Mapping)
+        else {}
     )
     duration_ms = iso_duration_ms(
         getattr(projection_run, "started_at", ""),
@@ -1623,6 +1637,16 @@ def build_projection_runtime_observation(
                 "coverageComplete": bool(replay_validation.get("coverageComplete")),
                 "nativeEvaluationComplete": bool(replay_validation.get("nativeEvaluationComplete")),
                 "generationAligned": bool(replay_validation.get("generationAligned")),
+            },
+            "incrementalEquivalenceAudit": {
+                "version": _text(equivalence_audit.get("version")),
+                "status": _text(equivalence_audit.get("status")),
+                "verified": bool(equivalence_audit.get("verified")),
+                "reconciledByFullEvaluation": bool(
+                    equivalence_audit.get("reconciledByFullEvaluation")
+                ),
+                "comparedRuleCount": _integer(equivalence_audit.get("comparedRuleCount")),
+                "mismatchCount": _integer(equivalence_audit.get("mismatchCount")),
             },
         },
         "abox": {

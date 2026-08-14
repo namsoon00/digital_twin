@@ -488,6 +488,52 @@ class OntologyWorldProjectionRunner:
             purged_oversized = int(purge() or 0)
         reasoning_queue = self.reasoning_queue_state()
         jobs = list(self.outbox.claim(self.worker_id, bounded, self.lease_seconds()) or [])
+        post_claim_reasoning_queue = self.reasoning_queue_state() if jobs else reasoning_queue
+        post_claim_pending = self.reasoning_pending_count(post_claim_reasoning_queue)
+        fairness_granted = bool(self.last_background_fairness.get("fairnessGranted"))
+        if (
+            jobs
+            and not bypass_reasoning_queue
+            and self.defer_while_reasoning_pending()
+            and post_claim_pending > 0
+            and not fairness_granted
+        ):
+            yielded = []
+            yield_claimed = getattr(self.outbox, "yield_claimed", None)
+            for job in jobs:
+                job_id = str(job.get("jobId") or "")
+                if callable(yield_claimed) and yield_claimed(
+                    job_id,
+                    self.worker_id,
+                    "live reasoning arrived after shared-world claim",
+                ):
+                    yielded.append(job_id)
+                    continue
+                # Compatibility stores without the admission handoff retain
+                # the job through their normal retry contract.
+                self.outbox.retry(
+                    job_id,
+                    self.worker_id,
+                    "live reasoning arrived after shared-world claim",
+                    max_attempts=self.max_attempts(),
+                )
+            self.last_run_details = ["deferred-reasoning-queue-after-claim"]
+            return {
+                "status": "deferred-reasoning-queue-after-claim",
+                "workerId": self.worker_id,
+                "claimedCount": len(jobs),
+                "yieldedCount": len(yielded),
+                "yieldedJobIds": yielded,
+                "completedCount": 0,
+                "retryCount": 0,
+                "reasoningQueue": post_claim_reasoning_queue,
+                "reason": (
+                    "공유 월드 작업 점유 뒤 라이브 추론 "
+                    + str(post_claim_pending)
+                    + "건이 도착해 TypeDB 쓰기 전에 작업을 양보했습니다."
+                ),
+                "durationMs": int((time.monotonic() - started) * 1000),
+            }
         completed, retried = [], []
         details = []
         for job in jobs:

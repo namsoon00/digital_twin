@@ -194,6 +194,16 @@ def notification_ai_decision_brief(
         )
         decision_input["precomputedOpinionCandidate"] = {}
     relation = _mapping(decision_input.get("relationshipDatabaseInference"))
+    active_rule_rows = [
+        dict(item)
+        for item in relation.get("activeRules") or []
+        if isinstance(item, dict)
+    ]
+    context_policies = [
+        dict(item.get("contextCompletenessPolicy") or {})
+        for item in active_rule_rows
+        if isinstance(item.get("contextCompletenessPolicy"), dict)
+    ]
     subject = _mapping(canonical_relation.get("subject"))
     internal = _mapping(decision_context.get("notificationAiInternalData"))
     portfolio_lifecycle = _compact_portfolio_lifecycle(
@@ -247,7 +257,24 @@ def notification_ai_decision_brief(
             "companyValuationContext": relation.get("companyValuationContext") or {},
         },
         "inference": {
-            "activeRules": relation.get("activeRules") or [],
+            "activeRules": active_rule_rows,
+            "contextCoverage": {
+                "activeRuleCount": len(active_rule_rows),
+                "contractedRuleCount": len(context_policies),
+                "aboxReadMode": sorted({
+                    str(item.get("aboxReadMode") or "")
+                    for item in context_policies
+                    if str(item.get("aboxReadMode") or "")
+                }),
+                "unchangedFactsRetained": bool(context_policies) and all(
+                    bool(item.get("retainUnchangedFacts"))
+                    for item in context_policies
+                ),
+                "priorValidInferencesRetained": bool(context_policies) and all(
+                    bool(item.get("retainPriorValidInferences"))
+                    for item in context_policies
+                ),
+            },
             "executionPlan": relation.get("executionPlan") or {},
             "decisionDrivers": relation.get("decisionDrivers") or [],
             "whyNow": relation.get("whyNow") or {},

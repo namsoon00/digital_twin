@@ -1104,6 +1104,13 @@ def compact_rule_rows(rows: object, limit: int = 16) -> List[Dict[str, object]]:
             "evidenceRole": item.get("evidenceRole") or item.get("evidence_role"),
             "evidence": evidence_rows,
             "evidenceState": evidence_state,
+            "assessmentScope": item.get("assessmentScope") or item.get("assessment_scope"),
+            "ruleRequiredFacts": list(
+                item.get("ruleRequiredFacts") or item.get("rule_required_facts") or []
+            )[:20],
+            "contextCompletenessPolicy": item.get("contextCompletenessPolicy") or {},
+            "ruleInvalidationContract": item.get("ruleInvalidationContract") or {},
+            "ruleDerivedOutputs": list(item.get("ruleDerivedOutputs") or [])[:4],
         })
         if len(result) >= limit:
             break

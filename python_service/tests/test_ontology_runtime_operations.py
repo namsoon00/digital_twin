@@ -530,8 +530,23 @@ class OntologyRuntimeOperationsTests(unittest.TestCase):
             "nativeTypeDbReasoningCompleted": True,
             "targetSymbols": ["005930"],
         })
+        result["incrementalEquivalenceAudit"] = {
+            "version": "incremental-inference-equivalence-v1",
+            "status": "mismatch-reconciled",
+            "verified": False,
+            "reconciledByFullEvaluation": True,
+            "comparedRuleCount": 12,
+            "mismatchCount": 1,
+        }
 
         observation = build_projection_runtime_observation(self.sample_run(), result)
+
+        self.assertEqual(
+            "mismatch-reconciled",
+            observation["inference"]["incrementalEquivalenceAudit"]["status"],
+        )
+        self.assertEqual(1, observation["inference"]["incrementalEquivalenceAudit"]["mismatchCount"])
+        self.assertEqual("warning", observation["slo"]["state"])
 
         self.assertEqual(9, observation["inference"]["enabledRuleCount"])
         self.assertEqual(100, observation["inference"]["candidateRuleRatioPct"])

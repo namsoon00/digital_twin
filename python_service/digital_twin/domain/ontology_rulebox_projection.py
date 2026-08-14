@@ -89,16 +89,19 @@ def add_rulebox_concepts(graph: PortfolioOntology, rules: Iterable[GraphInferenc
             dependency_id = entity_id("rule-dependency", rule.rule_id + ":" + condition.condition_id)
             graph.entities.append(OntologyEntity(dependency_id, condition.description, "rule-dependency", rulebox_properties({
                 "tboxClass": "RuleDependency",
-                "tboxClasses": ["RuleDependency", "RuleCondition"],
+                "tboxClasses": ["RuleDependency", "RuleCondition", "ContextRequirement", "InferenceInvalidator"],
                 "ruleId": rule.rule_id,
                 "conditionId": condition.condition_id,
                 "scopeFamilies": list(dependency.get("scopeFamilies") or []),
+                "dependencyKeys": list(dependency.get("dependencyKeys") or []),
                 "conditionKind": dependency.get("conditionKind"),
                 "field": dependency.get("field"),
                 "relationType": dependency.get("relationType"),
                 "targetKind": dependency.get("targetKind"),
                 "role": dependency.get("role"),
                 "conservative": bool(dependency.get("conservative")),
+                "canTriggerEvaluation": True,
+                "canInvalidatePriorResult": True,
             })))
             graph.relations.append(OntologyRelation(
                 rule_id,
@@ -112,6 +115,30 @@ def add_rulebox_concepts(graph: PortfolioOntology, rules: Iterable[GraphInferenc
                     "conservative": bool(dependency.get("conservative")),
                 }),
             ))
+            graph.relations.append(OntologyRelation(
+                rule_id,
+                dependency_id,
+                "REQUIRES_CONTEXT",
+                weight=1.0,
+                properties=rulebox_relation_properties("REQUIRES_CONTEXT", {
+                    "ruleId": rule.rule_id,
+                    "conditionId": condition.condition_id,
+                    "dependencyKeys": list(dependency.get("dependencyKeys") or []),
+                    "retainWhenUnchanged": True,
+                }),
+            ))
+            graph.relations.append(OntologyRelation(
+                rule_id,
+                dependency_id,
+                "INVALIDATED_BY",
+                weight=1.0,
+                properties=rulebox_relation_properties("INVALIDATED_BY", {
+                    "ruleId": rule.rule_id,
+                    "conditionId": condition.condition_id,
+                    "dependencyKeys": list(dependency.get("dependencyKeys") or []),
+                    "evaluationAuthority": "typedb",
+                }),
+            ))
         for index, derivation in enumerate(rule.derivations):
             template_id = entity_id("relation-template", rule.rule_id + ":" + str(index))
             derivation_payload = derivation.to_dict()
@@ -119,7 +146,7 @@ def add_rulebox_concepts(graph: PortfolioOntology, rules: Iterable[GraphInferenc
             derivation_payload["action_level"] = derivation.action_level or rule.action_level
             graph.entities.append(OntologyEntity(template_id, derivation.target_label, "relation-template", rulebox_properties({
                 "tboxClass": "RelationTemplate",
-                "tboxClasses": ["RelationTemplate", "DerivedAssertion", "RuleDecisionPolicy", "RulePriorityPolicy"],
+                "tboxClasses": ["RelationTemplate", "DerivedAssertion", "DerivedFactLineage", "RuleDecisionPolicy", "RulePriorityPolicy"],
                 "ruleId": rule.rule_id,
                 "relationType": derivation.relation_type,
                 "derivationIndex": index,
@@ -133,6 +160,18 @@ def add_rulebox_concepts(graph: PortfolioOntology, rules: Iterable[GraphInferenc
                 properties=rulebox_relation_properties("DERIVES_RELATION", {
                     "ruleId": rule.rule_id,
                     "relationType": derivation.relation_type,
+                }),
+            ))
+            graph.relations.append(OntologyRelation(
+                rule_id,
+                template_id,
+                "DERIVES_FACT",
+                weight=1.0,
+                properties=rulebox_relation_properties("DERIVES_FACT", {
+                    "ruleId": rule.rule_id,
+                    "relationType": derivation.relation_type,
+                    "targetKind": derivation.target_kind,
+                    "evaluationAuthority": "typedb",
                 }),
             ))
 

@@ -1732,6 +1732,13 @@
           "default": "1"
         },
         {
+          "key": "typedbIncrementalEquivalenceAuditSamplePct",
+          "label": "증분 추론 전체 규칙 검증 표본",
+          "type": "number",
+          "default": "1",
+          "unit": "%"
+        },
+        {
           "key": "typedbNativeRuleParallelism",
           "label": "TypeDB 규칙 병렬 실행 수",
           "type": "number",

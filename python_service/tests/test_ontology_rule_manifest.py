@@ -16,6 +16,14 @@ class OntologyRuleManifestTests(unittest.TestCase):
         self.assertGreater(payload["ruleCount"], 100)
         self.assertTrue(all(item["assessmentScope"] in ASSESSMENT_SCOPES for item in payload["manifests"]))
         self.assertTrue(all(item["outputContract"] for item in payload["manifests"]))
+        self.assertTrue(all(item["triggerDependencies"] for item in payload["manifests"]))
+        self.assertTrue(all(item["requiredContext"] for item in payload["manifests"]))
+        self.assertTrue(all(item["invalidationContract"] for item in payload["manifests"]))
+        self.assertTrue(all(item["derivedOutputs"] for item in payload["manifests"]))
+        self.assertTrue(all(
+            item["contextCompletenessPolicy"]["retainUnchangedFacts"]
+            for item in payload["manifests"]
+        ))
 
     def test_assessment_scope_separates_policy_and_execution_from_opinion(self):
         self.assertEqual("investment-opinion", rule_assessment_scope({}, ["trend", "flow"]))

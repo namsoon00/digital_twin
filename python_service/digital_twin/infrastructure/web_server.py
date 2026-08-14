@@ -769,6 +769,7 @@ def settings_status_payload(access: ShareAccess = None) -> Dict[str, object]:
         "typedbNativeRuleAdaptiveTargetShardingLookbackRuns",
         "typedbNativeRuleAdaptiveTargetShardingParallelism",
         "typedbNativeRuleSelectionEnabled",
+        "typedbIncrementalEquivalenceAuditSamplePct",
         "typedbNativeRuleParallelism",
         "typedbNativeRuleExecutionBudgetSeconds",
         "typedbNativeRuleDirectQueryFallbackEnabled",

@@ -12,6 +12,7 @@ class FakeOutbox:
         self.jobs = list(jobs)
         self.completed = []
         self.retries = []
+        self.yielded = []
         self.pruned = 0
         self.rebuild_requeue_result = None
         self.rebuild_requeue_limits = []
@@ -24,6 +25,10 @@ class FakeOutbox:
 
     def complete(self, job_id, worker_id, result):
         self.completed.append((job_id, worker_id, dict(result or {})))
+        return True
+
+    def yield_claimed(self, job_id, worker_id, reason):
+        self.yielded.append((job_id, worker_id, reason))
         return True
 
     def retry(self, job_id, worker_id, reason, max_attempts):
@@ -205,6 +210,27 @@ class OntologyWorldProjectionRunnerTests(unittest.TestCase):
         self.assertEqual([], recorder.calls)
         self.assertEqual(2, result["reasoningQueue"]["effectivePendingCount"])
         self.assertEqual("active-reasoning-lease", result["backgroundFairness"]["reasonCode"])
+
+    def test_live_reasoning_arriving_after_claim_yields_before_typedb_write(self):
+        probes = iter([
+            {"effectivePendingCount": 0},
+            {"effectivePendingCount": 0},
+            {"effectivePendingCount": 2, "runningEntryCount": 1},
+        ])
+        outbox = FakeOutbox([projection_job()])
+        recorder = FakeRecorder({"status": "ok", "saved": True})
+        runner = OntologyWorldProjectionRunner(
+            outbox,
+            recorder,
+            reasoning_queue_probe=lambda: next(probes),
+        )
+
+        result = runner.run_once(limit=1)
+
+        self.assertEqual("deferred-reasoning-queue-after-claim", result["status"])
+        self.assertEqual(1, result["yieldedCount"])
+        self.assertEqual([], recorder.calls)
+        self.assertEqual(1, len(outbox.yielded))
 
     def test_aged_shared_projection_gets_one_fairness_turn_between_reasoning_leases(self):
         outbox = FakeOutbox([projection_job()])

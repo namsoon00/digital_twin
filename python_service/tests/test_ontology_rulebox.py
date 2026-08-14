@@ -1773,8 +1773,11 @@ class OntologyRuleBoxTests(unittest.TestCase):
             condition for condition in aggressive.conditions
             if condition.condition_id == "market-evidence-profile-eligible"
         )
-        self.assertEqual("HAS_EVIDENCE_PROFILE", evidence_profile.relation_type)
-        self.assertEqual({"dataState": "sufficient"}, evidence_profile.target_property_filters)
+        self.assertEqual("HAS_DATA_QUALITY", evidence_profile.relation_type)
+        self.assertEqual(
+            {"field": "judgementEvidence", "dataState": "sufficient"},
+            evidence_profile.target_property_filters,
+        )
         self.assertIn("volume-confirmation", {item.condition_id for item in aggressive.conditions})
 
     def test_microstructure_rules_persist_market_capability_guards(self):

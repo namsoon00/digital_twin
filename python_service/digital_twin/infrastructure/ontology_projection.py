@@ -87,6 +87,7 @@ from ..domain.ontology_rulebox_release_manifest import (
 from ..domain.portfolio_ontology_temporal_concepts import parse_temporal_windows
 from ..domain.portfolio import AccountSnapshot
 from ..domain.investment_brain import decision_episode_ontology_context
+from ..domain.incremental_inference_equivalence import compare_incremental_rule_states
 from ..domain.hypothesis_lifecycle import HYPOTHESIS_LIFECYCLE_KEY_PREFIX
 from .graph_store_rulebox import rulebox_rules_to_payload
 from .runtime_identity import runtime_identity
@@ -3724,6 +3725,7 @@ class PortfolioOntologyProjectionRecorder:
             "matchedRuleIds": [],
             "matchedRuleCount": 0,
         }
+        equivalence_audit_requested = False
         adaptive_target_sharding_profile: Dict[str, object] = {}
         if active_key == "typedb":
             adaptive_target_sharding_profile = self.adaptive_native_rule_target_sharding_profile(
@@ -3837,11 +3839,24 @@ class PortfolioOntologyProjectionRecorder:
                     projection_scope = result.get("projectionScope")
                     if isinstance(projection_scope, dict):
                         projection_scope["inferenceImpactPlan"] = compact_impact_plan
+                equivalence_audit_requested = self.incremental_equivalence_audit_selected(
+                    snapshot,
+                    inference_symbols,
+                    compact_impact_plan,
+                    selection_context,
+                )
                 result["priorInferenceReuse"] = {
                     key: value
                     for key, value in selection_context.items()
-                    if key not in {"matchedRuleIds", "inferenceImpactPlan"}
+                    if key not in {"matchedRuleIds", "inferenceImpactPlan", "ruleStatesBySymbol"}
                 }
+                if equivalence_audit_requested:
+                    result["incrementalEquivalenceAudit"] = {
+                        "status": "requested-full-evaluation",
+                        "verified": False,
+                        "samplePct": self.incremental_equivalence_audit_sample_pct(),
+                        "reason": "A bounded sample is running the full TypeDB catalogue before slot reconciliation.",
+                    }
         try:
             if active_key == "typedb":
                 preparer = getattr(self.repository, "prepare_pending_abox_activation_for_inference", None)
@@ -3908,7 +3923,11 @@ class PortfolioOntologyProjectionRecorder:
                     if isinstance(result.get("nativeRulePlannerTopology"), dict)
                     else {}
                 ),
-                "typedbNativeRuleSelectionEnabled": self.settings.get("typedbNativeRuleSelectionEnabled", "1"),
+                "typedbNativeRuleSelectionEnabled": (
+                    "0"
+                    if equivalence_audit_requested
+                    else self.settings.get("typedbNativeRuleSelectionEnabled", "1")
+                ),
                 "priorInferenceReusable": bool(selection_context.get("reusable")),
                 "priorMatchedRuleIds": list(selection_context.get("matchedRuleIds") or []),
                 "priorInferenceProofSource": str(selection_context.get("proofSource") or ""),
@@ -3943,6 +3962,13 @@ class PortfolioOntologyProjectionRecorder:
             else:
                 execution = {"status": "error", "reason": "non-dict RuleBox result", "graphStore": active_key}
             result["ruleboxExecution"] = execution
+            if equivalence_audit_requested and str(execution.get("status") or "").lower() == "ok":
+                result["incrementalEquivalenceAudit"] = compare_incremental_rule_states(
+                    selection_context.get("ruleStatesBySymbol") or {},
+                    execution,
+                    inference_symbols,
+                    compact_impact_plan.get("deferredRuleIds") or [],
+                )
             if str(execution.get("status") or "") == "deferred-inference-write-lease":
                 # Do not inspect an older generation or roll back a candidate
                 # while the lease owner is still creating its aligned result.
@@ -5161,6 +5187,40 @@ class PortfolioOntologyProjectionRecorder:
         diagnostics["reasonCodes"] = reason_codes
         base["diagnostics"] = diagnostics
         return base
+
+    def incremental_equivalence_audit_sample_pct(self) -> int:
+        return self.integer_setting(
+            "typedbIncrementalEquivalenceAuditSamplePct",
+            1,
+            0,
+            20,
+        )
+
+    def incremental_equivalence_audit_selected(
+        self,
+        snapshot: AccountSnapshot,
+        symbols: List[str],
+        impact_plan: Dict[str, object],
+        selection_context: Dict[str, object],
+    ) -> bool:
+        """Select a deterministic low-rate full pass for reuse validation."""
+
+        sample_pct = self.incremental_equivalence_audit_sample_pct()
+        if (
+            sample_pct <= 0
+            or str(selection_context.get("proofSource") or "") != "typedb-rule-result-slots"
+            or not isinstance(selection_context.get("ruleStatesBySymbol"), dict)
+            or not impact_plan.get("deferredRuleIds")
+        ):
+            return False
+        seed = "|".join([
+            str(snapshot.account_id or ""),
+            str(snapshot.generated_at or ""),
+            ",".join(sorted(str(symbol or "").upper().strip() for symbol in symbols or [])),
+            ",".join(str(rule_id or "") for rule_id in impact_plan.get("candidateRuleIds") or []),
+        ])
+        bucket = int(hashlib.sha256(seed.encode("utf-8")).hexdigest()[:8], 16) % 100
+        return bucket < sample_pct
 
     def snapshot_symbols(self, snapshot: AccountSnapshot) -> List[str]:
         symbols = []

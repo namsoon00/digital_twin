@@ -53,6 +53,11 @@ def materialize_rule_inference(
         "assessmentScope": domain_manifest["assessmentScope"],
         "ruleTriggerFamilies": domain_manifest["triggerFamilies"],
         "ruleRequiredFacts": domain_manifest["requiredFacts"],
+        "ruleContextRequirements": domain_manifest["requiredContext"],
+        "ruleInvalidationContract": domain_manifest["invalidationContract"],
+        "ruleDerivedOutputs": domain_manifest["derivedOutputs"],
+        "contextCompletenessPolicy": domain_manifest["contextCompletenessPolicy"],
+        "ruleDependencyContractVersion": domain_manifest["dependencyContractVersion"],
         "ruleLifecycleClass": domain_manifest["lifecycleClass"],
         "ruleOutputContract": domain_manifest["outputContract"],
     }

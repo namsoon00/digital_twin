@@ -38,6 +38,12 @@ def decision_context(review_level="observe", change_state="unchanged"):
                 "ruleId": "graph.temporal.support.v1",
                 "label": "가격 방어 확인",
                 "evidenceRole": "support",
+                "ruleRequiredFacts": ["kind:stock:field:currentprice"],
+                "contextCompletenessPolicy": {
+                    "aboxReadMode": "complete-active-world",
+                    "retainUnchangedFacts": True,
+                    "retainPriorValidInferences": True,
+                },
             }],
             "executionPlan": {
                 "primaryAction": "HOLD",
@@ -145,6 +151,11 @@ class NotificationAIDecisionBriefTests(unittest.TestCase):
         self.assertEqual(AI_DECISION_CONTRACT_VERSION, brief["decisionContractVersion"])
         self.assertEqual(-4.1, brief["currentSituation"]["temporalWindows"][0]["drawdownFromPeakPct"])
         self.assertEqual("task:1", brief["research"]["decisionChangingGaps"][0]["taskId"])
+        self.assertEqual(
+            ["complete-active-world"],
+            brief["inference"]["contextCoverage"]["aboxReadMode"],
+        )
+        self.assertTrue(brief["inference"]["contextCoverage"]["unchangedFactsRetained"])
         self.assertIn('"schemaVersion":"investment-ai-decision-brief-v2"', prompt)
         self.assertIn('"drawdownFromPeakPct":-4.1', prompt)
         self.assertIn("valuationReferenceOnly=true", prompt)

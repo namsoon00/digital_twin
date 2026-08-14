@@ -538,6 +538,7 @@ def projection_result_summary(result: Dict[str, object]) -> Dict[str, object]:
     inference_detail_outbox = dict(values.get("inferenceDetailOutbox") or {})
     native_stage_timings = dict(execution.get("typedbNativeStageTimings") or {})
     replay_validation = dict(values.get("nativeReplayValidation") or {})
+    equivalence_audit = dict(values.get("incrementalEquivalenceAudit") or {})
     native_rule_failure = dict(values.get("nativeRuleFailure") or {})
     reasoning_context = compact_reasoning_request_context(values.get("reasoningContext"))
     analysis_telemetry = projection_analysis_telemetry(values)
@@ -658,6 +659,22 @@ def projection_result_summary(result: Dict[str, object]) -> Dict[str, object]:
             "selectedRuleLedgerComplete": bool(
                 replay_validation.get("selectedRuleLedgerComplete")
             ),
+        },
+        "incrementalEquivalenceAudit": {
+            "version": str(equivalence_audit.get("version") or ""),
+            "status": str(equivalence_audit.get("status") or ""),
+            "verified": bool(equivalence_audit.get("verified")),
+            "reconciledByFullEvaluation": bool(
+                equivalence_audit.get("reconciledByFullEvaluation")
+            ),
+            "comparedRuleCount": int(equivalence_audit.get("comparedRuleCount") or 0),
+            "mismatchCount": int(equivalence_audit.get("mismatchCount") or 0),
+            "reason": str(equivalence_audit.get("reason") or "")[:300],
+            "mismatches": [
+                dict(item)
+                for item in equivalence_audit.get("mismatches") or []
+                if isinstance(item, Mapping)
+            ][:20],
         },
         "analysisTelemetry": analysis_telemetry,
         "recoveredAfterRuntimeInterruption": bool(

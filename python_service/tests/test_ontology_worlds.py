@@ -461,6 +461,52 @@ class OntologyWorldContractTests(unittest.TestCase):
         self.assertIn('has ontology-world-id "portfolio:tenant-a:account-a"', clause)
         self.assertIn('has ontology-world-id "portfolio:tenant-a:account-a"', inference_generation_delete_queries("generation:1", first_world)[0])
 
+    def test_static_evidence_profile_and_live_availability_have_separate_shared_world_owners(self):
+        graph = PortfolioOntology("account-a")
+        graph.entities.extend([
+            OntologyEntity("stock:NVDA", "NVIDIA", "stock", {
+                "ontologyBox": "ABox", "tboxClass": "Stock", "symbol": "NVDA",
+            }),
+            OntologyEntity("market-evidence-profile:NVDA", "US profile", "market-evidence-profile", {
+                "ontologyBox": "ABox", "tboxClass": "USEquityEvidenceProfile", "symbol": "NVDA",
+                "profileKey": "US_EQUITY",
+            }),
+            OntologyEntity("data-availability-assessment:NVDA:judgementEvidence", "Live availability", "data-availability-assessment", {
+                "ontologyBox": "ABox", "tboxClass": "DataAvailabilityAssessment", "symbol": "NVDA",
+                "field": "judgementEvidence", "dataState": "sufficient",
+            }),
+        ])
+        graph.relations.extend([
+            OntologyRelation(
+                "stock:NVDA", "market-evidence-profile:NVDA", "HAS_EVIDENCE_PROFILE",
+                properties={"ontologyBox": "ABox"},
+            ),
+            OntologyRelation(
+                "stock:NVDA", "data-availability-assessment:NVDA:judgementEvidence", "HAS_DATA_AVAILABILITY",
+                properties={"ontologyBox": "ABox"},
+            ),
+        ])
+
+        market = build_market_world_graph(graph, market_world("us"))
+        knowledge = build_knowledge_world_graph(graph, knowledge_world("us"))
+
+        self.assertIn(
+            "data-availability-assessment:NVDA:judgementEvidence",
+            {item.entity_id for item in market.entities},
+        )
+        self.assertNotIn(
+            "market-evidence-profile:NVDA",
+            {item.entity_id for item in market.entities},
+        )
+        self.assertIn(
+            "market-evidence-profile:NVDA",
+            {item.entity_id for item in knowledge.entities},
+        )
+        self.assertNotIn(
+            "data-availability-assessment:NVDA:judgementEvidence",
+            {item.entity_id for item in knowledge.entities},
+        )
+
     def test_parameterized_native_rule_function_binds_the_requested_world_at_call_time(self):
         rule = next(item for item in default_graph_inference_rules() if item.rule_id == "graph.loss_guard.breakdown.v1")
         world = "portfolio:tenant-a:account-a"

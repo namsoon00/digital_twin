@@ -976,6 +976,10 @@ class OntologyProjectionAuditTests(unittest.TestCase):
 
         self.assertTrue(complete["reusable"])
         self.assertEqual(["graph.rule.one"], complete["matchedRuleIds"])
+        self.assertEqual({
+            "graph.rule.one": "matched",
+            "graph.rule.two": "not-matched",
+        }, complete["ruleStatesBySymbol"]["005930"])
         self.assertFalse(incomplete["reusable"])
         self.assertEqual(["005930"], incomplete["incompleteSymbols"])
 

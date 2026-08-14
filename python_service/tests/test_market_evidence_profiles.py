@@ -92,10 +92,20 @@ class MarketEvidenceProfileTests(unittest.TestCase):
         profiles = [entity for entity in graph.entities if entity.kind == "market-evidence-profile"]
         availability = [entity for entity in graph.entities if entity.kind == "data-availability-assessment"]
         self.assertEqual(1, len(profiles))
-        self.assertEqual("sufficient", profiles[0].properties["dataState"])
-        self.assertEqual(4, len(availability))
-        self.assertNotIn("fresh", {entity.properties["dataState"] for entity in availability})
+        self.assertEqual("ADR", profiles[0].properties["profileKey"])
+        self.assertNotIn("dataState", profiles[0].properties)
+        self.assertEqual(5, len(availability))
+        overall = next(item for item in availability if item.properties["field"] == "judgementEvidence")
+        self.assertEqual("sufficient", overall.properties["dataState"])
+        degraded = [item for item in availability if item is not overall]
+        self.assertNotIn("fresh", {entity.properties["dataState"] for entity in degraded})
         self.assertIn("HAS_EVIDENCE_PROFILE", {relation.relation_type for relation in graph.relations})
+        self.assertTrue(any(
+            relation.source == stock_id
+            and relation.target == overall.entity_id
+            and relation.relation_type == "HAS_DATA_AVAILABILITY"
+            for relation in graph.relations
+        ))
 
     def test_follow_up_only_tracks_observable_adr_fields(self):
         item = position("SKHY", "NASDAQ", "USD")

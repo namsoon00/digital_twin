@@ -1,4 +1,4 @@
-from typing import Dict, Iterable, List
+from typing import Callable, Dict, Iterable, List, Optional
 
 from ..domain.data_freshness import age_minutes, int_setting
 from ..domain.market_data import known_stock
@@ -217,25 +217,47 @@ class SymbolUniverseService:
             "source": "symbol-universe-suggest",
         }
 
-    def refresh(self, markets: Iterable[str] = None) -> Dict[str, object]:
+    def refresh(
+        self,
+        markets: Iterable[str] = None,
+        on_progress: Optional[Callable[[Dict[str, object]], None]] = None,
+    ) -> Dict[str, object]:
         selected = [str(market or "").upper() for market in (markets or SUPPORTED_MARKETS)]
         selected = [market for market in selected if market in SUPPORTED_MARKETS]
         if not selected:
             selected = list(SUPPORTED_MARKETS)
         results: List[Dict[str, object]] = []
+
+        def report(market: str, stage: str, count: int = 0, error: str = "") -> None:
+            if not on_progress:
+                return
+            on_progress({
+                "market": market,
+                "stage": stage,
+                "count": max(0, int(count or 0)),
+                "error": str(error or "")[:300],
+            })
+
         for market in selected:
             descriptor = self.source_gateway.source_descriptor(market)
             try:
+                report(market, "connecting")
+                report(market, "fetching")
                 items = self.source_gateway.fetch_market_symbols(market)
+                report(market, "saving", len(items))
                 if hasattr(self.store, "refresh_market"):
                     count = self.store.refresh_market(market, descriptor["source"], descriptor["sourceUrl"], items)
                 else:
                     count = self.store.upsert_many(items)
                     self.store.mark_source(market, descriptor["source"], descriptor["sourceUrl"], "ok", count=count)
+                report(market, "verifying", count)
                 results.append({"market": market, "status": "ok", "count": count, **descriptor})
             except Exception as error:  # noqa: BLE001 - one source failure must not discard cached symbols.
                 self.store.mark_source(market, descriptor["source"], descriptor["sourceUrl"], "error", error=str(error))
+                report(market, "failed", error=str(error))
                 results.append({"market": market, "status": "error", "count": 0, "error": str(error), **descriptor})
+        if selected:
+            report(selected[-1], "summarizing")
         return {"results": results, "summary": self.summary()}
 
     def enrich(self, symbol: str) -> Dict[str, object]:

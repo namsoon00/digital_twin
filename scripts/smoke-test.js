@@ -319,9 +319,20 @@ function checkWorkflowConsoleContract() {
       code.indexOf("function loadSymbolUniverseRefreshStatus") >= 0 &&
       code.indexOf("silent: true") >= 0 &&
       code.indexOf("function renderSymbolUniverseRefreshStatus") >= 0 &&
+      code.indexOf("function renderSymbolUniverseRefreshStageRail") >= 0 &&
+      code.indexOf("function renderSymbolUniverseNavTask") >= 0 &&
+      code.indexOf("function renderSymbolUniverseRefreshHistory") >= 0 &&
+      code.indexOf('data-action=\"retry-symbol-refresh\"') >= 0 &&
+      code.indexOf('event.target.closest(\'[data-action="refresh-symbol-universe"]\')') >= 0 &&
+      code.indexOf("snapshotSymbolUniverseRefreshContext") >= 0 &&
+      code.indexOf("symbolUniverseChangedKeys") >= 0 &&
       code.indexOf('eventType === "symbol_universe.refresh_requested" ? "websocket-request" : "websocket"') >= 0 &&
-      styles.indexOf(".symbol-refresh-track") >= 0,
-    "전체 종목 갱신의 비동기 접수, 상태 조회 폴백, WebSocket 완료 반영 또는 진행률 UI 계약이 없습니다."
+      webServer.indexOf('"stageItemCount"') >= 0 &&
+      webServer.indexOf("on_progress=update_progress") >= 0 &&
+      styles.indexOf(".symbol-refresh-track") >= 0 &&
+      styles.indexOf(".symbol-refresh-stage-rail") >= 0 &&
+      styles.indexOf(".symbol-refresh-nav-task") >= 0,
+    "전체 종목 갱신의 단계형 진행, 상태 폴백, 다중 버튼, 실패 복구, 전역 작업 표시 또는 목록 맥락 보존 계약이 없습니다."
   );
   assertOk(styles.indexOf(".market-workspace-tabs") >= 0 && styles.indexOf(".watchlist-picker-backdrop") >= 0, "시장 화면 모바일 탐색 또는 계정 선택 레이어 스타일이 없습니다.");
   assertOk(code.indexOf("function workDetailUrl") >= 0 && code.indexOf('params.set("detail"') >= 0 && code.indexOf('params.set("detailKey"') >= 0 && code.indexOf("closeWorkDetailLayer") >= 0, "상세 URL과 브라우저 뒤로 가기 계약이 없습니다.");
@@ -425,9 +436,9 @@ function checkWorkflowConsoleContract() {
       code.indexOf('window.prompt("확인할 발표 날짜와 시각') < 0 &&
       styles.indexOf(".calendar-candidate-confirm-form") >= 0 &&
       styles.indexOf(".calendar-candidate-confirm-fields") >= 0 &&
-      indexHtml.indexOf("styles.css?v=20260815-async-symbol-refresh-v1") >= 0 &&
-      indexHtml.indexOf("app-default-settings.js?v=20260815-async-symbol-refresh-v1") >= 0 &&
-      indexHtml.indexOf("app.js?v=20260815-async-symbol-refresh-v1") >= 0,
+      indexHtml.indexOf("styles.css?v=20260815-symbol-refresh-interactions-v2") >= 0 &&
+      indexHtml.indexOf("app-default-settings.js?v=20260815-symbol-refresh-interactions-v2") >= 0 &&
+      indexHtml.indexOf("app.js?v=20260815-symbol-refresh-interactions-v2") >= 0,
     "캘린더 후보 날짜·시각 확인 레이어 또는 오버레이 스크롤 복원 계약이 없습니다."
   );
   assertOk(

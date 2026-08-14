@@ -23,6 +23,10 @@ class SymbolUniverseRefreshJobTests(unittest.TestCase):
                 "startedAt": "",
                 "finishedAt": "",
                 "lastError": "",
+                "stage": "idle",
+                "currentMarket": "",
+                "stageItemCount": 0,
+                "updatedAt": "",
             })
 
     def wait_for_terminal_status(self, job_id, timeout=2.0):
@@ -41,11 +45,15 @@ class SymbolUniverseRefreshJobTests(unittest.TestCase):
         started = threading.Event()
         calls = []
 
-        def refresh(markets):
+        def refresh(markets, on_progress=None):
             market = markets[0]
             calls.append(market)
+            if on_progress:
+                on_progress({"market": market, "stage": "fetching", "count": 0})
             started.set()
             release.wait(1.0)
+            if on_progress:
+                on_progress({"market": market, "stage": "saving", "count": 10})
             return {
                 "results": [{"market": market, "status": "ok", "count": 10}],
                 "summary": {"total": len(calls) * 10},
@@ -63,6 +71,10 @@ class SymbolUniverseRefreshJobTests(unittest.TestCase):
         self.assertFalse(first["coalesced"])
         self.assertTrue(first["running"])
         self.assertTrue(started.wait(0.5))
+        running = web_server.symbol_universe_refresh_status(first["jobId"])
+        self.assertEqual("fetching", running["stage"])
+        self.assertEqual("KOSPI", running["currentMarket"])
+        self.assertGreater(running["progressPercent"], 0)
 
         second = web_server.request_symbol_universe_refresh({"markets": ["NASDAQ"]})
         self.assertTrue(second["coalesced"])
@@ -82,7 +94,7 @@ class SymbolUniverseRefreshJobTests(unittest.TestCase):
     @mock.patch.object(web_server, "new_domain_event")
     @mock.patch.object(web_server, "symbol_universe_service")
     def test_refresh_failure_is_terminal_and_keeps_error_for_status_polling(self, service_factory, publish):
-        service_factory.return_value = SimpleNamespace(refresh=lambda markets: {
+        service_factory.return_value = SimpleNamespace(refresh=lambda markets, on_progress=None: {
             "results": [{"market": markets[0], "status": "error", "count": 0, "error": "source timeout"}],
             "summary": {"total": 0},
         })

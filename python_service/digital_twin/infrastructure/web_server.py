@@ -177,6 +177,10 @@ SYMBOL_UNIVERSE_REFRESH_STATE: Dict[str, object] = {
     "startedAt": "",
     "finishedAt": "",
     "lastError": "",
+    "stage": "idle",
+    "currentMarket": "",
+    "stageItemCount": 0,
+    "updatedAt": "",
 }
 
 NON_CADENCE_MESSAGE_GUIDES = {
@@ -3762,7 +3766,22 @@ def _symbol_universe_refresh_status_locked() -> Dict[str, object]:
     total = len(markets)
     finished = len(completed)
     status = str(SYMBOL_UNIVERSE_REFRESH_STATE["status"] or "idle")
-    progress = 100 if status in {"completed", "partial", "failed"} and total else round((finished / total) * 100) if total else 0
+    stage = str(SYMBOL_UNIVERSE_REFRESH_STATE.get("stage") or "idle")
+    stage_progress = {
+        "queued": 3,
+        "connecting": 10,
+        "fetching": 35,
+        "saving": 72,
+        "verifying": 88,
+        "summarizing": 94,
+    }.get(stage, 0)
+    progress = (
+        100
+        if status in {"completed", "partial", "failed"} and total
+        else round(((finished * 100) + stage_progress) / total)
+        if total
+        else 0
+    )
     return {
         "jobId": str(SYMBOL_UNIVERSE_REFRESH_STATE["jobId"] or ""),
         "status": status,
@@ -3779,6 +3798,10 @@ def _symbol_universe_refresh_status_locked() -> Dict[str, object]:
         "startedAt": str(SYMBOL_UNIVERSE_REFRESH_STATE["startedAt"] or ""),
         "finishedAt": str(SYMBOL_UNIVERSE_REFRESH_STATE["finishedAt"] or ""),
         "lastError": str(SYMBOL_UNIVERSE_REFRESH_STATE["lastError"] or ""),
+        "stage": stage,
+        "currentMarket": str(SYMBOL_UNIVERSE_REFRESH_STATE.get("currentMarket") or ""),
+        "stageItemCount": int(SYMBOL_UNIVERSE_REFRESH_STATE.get("stageItemCount") or 0),
+        "updatedAt": str(SYMBOL_UNIVERSE_REFRESH_STATE.get("updatedAt") or ""),
     }
 
 
@@ -3808,6 +3831,10 @@ def symbol_universe_refresh_status(job_id: str = "") -> Dict[str, object]:
             "finishedAt": "",
             "lastError": "갱신 작업 상태를 찾을 수 없습니다. 서버가 재시작되었을 수 있습니다.",
             "latestJobId": "",
+            "stage": "unknown",
+            "currentMarket": "",
+            "stageItemCount": 0,
+            "updatedAt": "",
         }
     return status
 
@@ -3851,12 +3878,26 @@ def run_symbol_universe_refresh_pipeline(job_id: str) -> None:
             SYMBOL_UNIVERSE_REFRESH_STATE["pendingMarkets"].difference_update(batch)
             SYMBOL_UNIVERSE_REFRESH_STATE["status"] = "running"
             SYMBOL_UNIVERSE_REFRESH_STATE["startedAt"] = SYMBOL_UNIVERSE_REFRESH_STATE["startedAt"] or now()
+            SYMBOL_UNIVERSE_REFRESH_STATE["stage"] = "connecting"
+            SYMBOL_UNIVERSE_REFRESH_STATE["currentMarket"] = batch[0] if batch else ""
+            SYMBOL_UNIVERSE_REFRESH_STATE["stageItemCount"] = 0
+            SYMBOL_UNIVERSE_REFRESH_STATE["updatedAt"] = now()
 
         for market in batch:
             try:
                 if service is None:
                     service = symbol_universe_service()
-                payload = service.refresh([market])
+
+                def update_progress(progress: Dict[str, object]) -> None:
+                    with SYMBOL_UNIVERSE_REFRESH_LOCK:
+                        if SYMBOL_UNIVERSE_REFRESH_STATE["jobId"] != job_id:
+                            return
+                        SYMBOL_UNIVERSE_REFRESH_STATE["stage"] = str(progress.get("stage") or "running")
+                        SYMBOL_UNIVERSE_REFRESH_STATE["currentMarket"] = str(progress.get("market") or market)
+                        SYMBOL_UNIVERSE_REFRESH_STATE["stageItemCount"] = int(progress.get("count") or 0)
+                        SYMBOL_UNIVERSE_REFRESH_STATE["updatedAt"] = now()
+
+                payload = service.refresh([market], on_progress=update_progress)
                 rows = [dict(item) for item in (payload.get("results") or []) if isinstance(item, dict)]
                 result = next((item for item in rows if str(item.get("market") or "").upper() == market), None)
                 result = result or {"market": market, "status": "error", "count": 0, "error": "갱신 결과가 없습니다."}
@@ -3870,6 +3911,10 @@ def run_symbol_universe_refresh_pipeline(job_id: str) -> None:
                     return
                 _replace_symbol_universe_market_result(result)
                 SYMBOL_UNIVERSE_REFRESH_STATE["completedMarkets"].add(market)
+                SYMBOL_UNIVERSE_REFRESH_STATE["stage"] = "market_completed"
+                SYMBOL_UNIVERSE_REFRESH_STATE["currentMarket"] = market
+                SYMBOL_UNIVERSE_REFRESH_STATE["stageItemCount"] = int(result.get("count") or 0)
+                SYMBOL_UNIVERSE_REFRESH_STATE["updatedAt"] = now()
                 if summary:
                     SYMBOL_UNIVERSE_REFRESH_STATE["summary"] = dict(summary)
 
@@ -3894,6 +3939,9 @@ def run_symbol_universe_refresh_pipeline(job_id: str) -> None:
             SYMBOL_UNIVERSE_REFRESH_STATE["running"] = False
             SYMBOL_UNIVERSE_REFRESH_STATE["finishedAt"] = now()
             SYMBOL_UNIVERSE_REFRESH_STATE["lastError"] = "; ".join(errors)[:500]
+            SYMBOL_UNIVERSE_REFRESH_STATE["stage"] = final_status
+            SYMBOL_UNIVERSE_REFRESH_STATE["currentMarket"] = ""
+            SYMBOL_UNIVERSE_REFRESH_STATE["updatedAt"] = now()
             final_payload = _symbol_universe_refresh_status_locked()
             break
 
@@ -3925,6 +3973,10 @@ def request_symbol_universe_refresh(payload: Dict[str, object]) -> Dict[str, obj
                 "startedAt": "",
                 "finishedAt": "",
                 "lastError": "",
+                "stage": "queued",
+                "currentMarket": "",
+                "stageItemCount": 0,
+                "updatedAt": now(),
             })
             should_start = True
         SYMBOL_UNIVERSE_REFRESH_STATE["markets"].update(markets)

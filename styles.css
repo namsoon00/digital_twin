@@ -29558,6 +29558,105 @@ body.oa-overlay-open {
   border: 0;
 }
 
+/* Shared network request feedback. */
+.app-request-progress {
+  position: fixed;
+  inset: 0 0 auto;
+  z-index: 2147483000;
+  height: 3px;
+  overflow: hidden;
+  background: color-mix(in srgb, var(--blue) 18%, transparent);
+  opacity: 0;
+  pointer-events: none;
+  transition: opacity 120ms ease;
+}
+
+.app-request-progress.is-active {
+  opacity: 1;
+}
+
+.app-request-progress > span {
+  display: block;
+  width: 38%;
+  height: 100%;
+  background: var(--blue);
+  transform: translate3d(-120%, 0, 0);
+}
+
+.app-request-progress.is-active > span {
+  animation: oa-request-progress 1.15s ease-in-out infinite;
+}
+
+@keyframes oa-request-progress {
+  0% { transform: translate3d(-120%, 0, 0); }
+  55% { transform: translate3d(115%, 0, 0); }
+  100% { transform: translate3d(300%, 0, 0); }
+}
+
+button.is-request-busy,
+button.is-state-busy:not(.refresh-button) {
+  align-items: center;
+  justify-content: center;
+  gap: 7px;
+  cursor: progress;
+}
+
+button.is-request-busy:not(.icon-button),
+button.is-state-busy:not(.icon-button):not(.refresh-button) {
+  display: inline-flex;
+}
+
+button.is-request-busy {
+  min-width: var(--request-busy-min-width, auto);
+}
+
+button.is-request-busy:disabled,
+button.is-state-busy:disabled {
+  opacity: 0.82;
+}
+
+.button-activity-spinner,
+button.is-state-busy:not(.refresh-button)::before {
+  content: "";
+  flex: 0 0 auto;
+  width: 13px;
+  height: 13px;
+  border: 2px solid currentColor;
+  border-right-color: transparent;
+  border-radius: 50%;
+  animation: oa-request-spin 0.72s linear infinite;
+}
+
+button.icon-button.is-request-busy .button-activity-spinner {
+  width: 16px;
+  height: 16px;
+}
+
+.button-activity-label {
+  min-width: 0;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+
+@keyframes oa-request-spin {
+  to { transform: rotate(360deg); }
+}
+
+@media (prefers-reduced-motion: reduce) {
+  .app-request-progress.is-active > span {
+    width: 100%;
+    animation: none;
+    transform: none;
+    opacity: 0.72;
+  }
+
+  .button-activity-spinner,
+  button.is-state-busy:not(.refresh-button)::before {
+    animation-duration: 1.4s;
+  }
+}
+
 .refresh-button.is-loading > span {
   display: inline-block;
   animation: oa-refresh-spin 0.85s linear infinite;

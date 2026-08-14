@@ -148,6 +148,12 @@ def relation_contexts_from_snapshot(
         and isinstance(snapshot.metadata.get("hypothesisLifecycle"), dict)
         else {}
     )
+    account_context = (
+        snapshot.metadata.get("accountContext")
+        if isinstance(snapshot.metadata, dict)
+        and isinstance(snapshot.metadata.get("accountContext"), dict)
+        else {}
+    )
     holding_symbols = {str(item.symbol or "").upper() for item in snapshot.positions or [] if getattr(item, "symbol", "") and not item.is_cash()}
     for position in positions:
         symbol = str(position.symbol or "").upper().strip()
@@ -168,6 +174,7 @@ def relation_contexts_from_snapshot(
                 if isinstance(lifecycle_by_symbol.get(symbol), dict)
                 else {}
             ),
+            account_context=account_context,
         )
         if context:
             result[symbol] = context
@@ -313,6 +320,7 @@ def relation_context_from_inferencebox(
     portfolio_world_id: str = "",
     market_world_id: str = "",
     hypothesis_lifecycle: Optional[Dict[str, object]] = None,
+    account_context: Optional[Dict[str, object]] = None,
 ) -> Dict[str, object]:
     symbol = str(position.symbol or "").upper().strip()
     if not symbol or not isinstance(inferencebox, dict):
@@ -334,6 +342,7 @@ def relation_context_from_inferencebox(
         position_with_source(position, source),
         portfolio,
         external_signals or {},
+        account_context=account_context or {},
         settings=settings or {},
     )
     observation_profiles = position_observation_profiles(

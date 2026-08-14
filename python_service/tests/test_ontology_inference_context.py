@@ -704,6 +704,12 @@ class OntologyInferenceContextTests(unittest.TestCase):
             portfolio,
             positions=[position],
             metadata={
+                "accountContext": {
+                    "investmentStrategyProfile": "aggressive",
+                    "investmentStrategy": {
+                        "profile": "aggressive",
+                    },
+                },
                 "ontology": {
                     "typedb": {
                         "inferenceBox": {
@@ -772,6 +778,9 @@ class OntologyInferenceContextTests(unittest.TestCase):
         self.assertIn("whyNow", contexts["005930"]["promptContext"])
         self.assertIn("signalConflicts", contexts["005930"]["promptContext"])
         self.assertIn("inferenceTimeline", contexts["005930"]["promptContext"])
+        self.assertEqual("aggressive", contexts["005930"]["facts"]["investmentStrategyProfile"])
+        self.assertEqual("공격형", contexts["005930"]["facts"]["investmentStrategyProfileLabel"])
+        self.assertEqual(25.0, contexts["005930"]["facts"]["strategyProfitProtectionPct"])
 
         decisions = decisions_for_positions(
             [position],

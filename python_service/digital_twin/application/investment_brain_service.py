@@ -991,6 +991,7 @@ class InvestmentBrainService:
                 prompt_id="investmentBrainQuestion",
                 account_id=account_id,
                 portfolio_world_id=world_id,
+                account_context=account_context,
             )
             context.setdefault("worldId", world_id)
             context.setdefault("accountId", account_id)

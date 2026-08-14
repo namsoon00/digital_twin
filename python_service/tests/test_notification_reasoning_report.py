@@ -150,6 +150,12 @@ def relation_context():
 
 def notification_context():
     article_url = "https://example.com/mstr-filing"
+    relation = relation_context()
+    relation["facts"]["temporalWindows"] = [
+        {"windowKey": "SESSION", "priceChangePct": -0.5},
+        {"windowKey": "5D", "priceChangePct": 1.8},
+        {"windowKey": "20D", "priceChangePct": -6.2},
+    ]
     return {
         "messageType": INVESTMENT_INSIGHT,
         "accountId": "main",
@@ -169,7 +175,26 @@ def notification_context():
             "추세: 20일선 $98.43보다 0.8% 낮음, 60일선 $139.22보다 29.8% 낮음",
             "수급: 거래량 61,577(0.2x)",
         ],
-        "ontologyRelationContext": relation_context(),
+        "ontologyRelationContext": relation,
+        "previousInvestmentDecisionEpisode": {
+            "episodeId": "decision-episode:mstr:previous",
+            "action": "HOLD",
+            "decidedAt": "2026-07-18T05:00:00Z",
+        },
+        "aiDecisionTransition": {
+            "historyAvailable": True,
+            "kind": "unchanged",
+            "previousAction": "HOLD",
+            "currentAction": "HOLD",
+        },
+        "newsImpact": {
+            "decisionChanging": True,
+            "decisionInlineEligible": True,
+            "decisionDriverConfirmed": True,
+            "source": "example.com",
+            "headline": "Strategy files financing update",
+            "url": article_url,
+        },
         "newsHeadlines": {
             "items": [{
                 "title": "Strategy files financing update",
@@ -279,7 +304,7 @@ class NotificationReasoningReportTests(unittest.TestCase):
         self.assertNotIn("🔔 새 알림", rendered)
         self.assertIn("알림 추적", rendered)
 
-    def test_beginner_message_keeps_complete_decision_and_audit_layers(self):
+    def test_beginner_message_keeps_customer_decision_layers_without_operator_audit_sections(self):
         context, article_url = notification_context()
         context.update({
             "testDispatch": True,
@@ -292,9 +317,14 @@ class NotificationReasoningReportTests(unittest.TestCase):
             "지금 행동", "이번 변화", "현재 흐름", "시간축 분석", "판단 근거",
             "핵심 근거", "반대 근거", "TypeDB 경쟁 추론", "회사 가치",
             "주요 사건·일정", "다음 행동", "판단 변경 조건",
-            "판단에서 제외한 정보", "판단 이력", "추론 추적", "원문·출처",
+            "판단에서 제외한 정보", "뉴스 영향", "판단 이력",
         ]:
             self.assertIn("<b>" + heading + "</b>", message)
+        self.assertNotIn("<b>추론 추적</b>", message)
+        self.assertNotIn("<b>원문·출처</b>", message)
+        self.assertNotIn("<b>출처</b>", message)
+        self.assertIn("장중 -0.5% · 5일 +1.8% · 20일 -6.2%", message)
+        self.assertNotIn("decision-episode:mstr:previous", message)
         self.assertNotIn("<b>자료 상태</b>", message)
         self.assertNotIn("<b>포트폴리오 영향</b>", message)
         self.assertIn("[AI]", message)
@@ -312,7 +342,7 @@ class NotificationReasoningReportTests(unittest.TestCase):
         self.assertIn("일부 수급·추세 조건은 메시지 검증용 테스트값", message)
         self.assertIn("N-TEST1234", message)
         self.assertNotIn("EVENT_RISK_REVIEW", message)
-        self.assertIn("graph.disclosure.event_risk.v1", message)
+        self.assertNotIn("graph.disclosure.event_risk.v1", message)
 
     def test_investment_alert_excludes_other_symbol_news_from_research_refresh_snapshot(self):
         hynix_url = "https://dart.fss.or.kr/dsaf001/main.do?rcpNo=20260716000582"
@@ -389,9 +419,10 @@ class NotificationReasoningReportTests(unittest.TestCase):
         self.assertNotIn("Cross-symbol Strategy STRC article", prompt)
         self.assertNotIn(strategy_url, prompt)
         self.assertEqual([hynix_url], response.source_urls)
-        self.assertIn(hynix_url, message)
+        self.assertNotIn(hynix_url, message)
         self.assertNotIn(strategy_url, message)
         self.assertNotIn("외 1건은 웹 상세에서 확인", message)
+        self.assertNotIn("<b>원문·출처</b>", message)
 
     def test_beginner_message_includes_direct_article_detail_and_source(self):
         context, _article_url = notification_context()
@@ -400,6 +431,14 @@ class NotificationReasoningReportTests(unittest.TestCase):
             "displayTarget": "Tesla / TSLA",
             "target": "Tesla / TSLA",
             "symbol": "TSLA",
+            "newsImpact": {
+                "decisionChanging": True,
+                "decisionInlineEligible": True,
+                "decisionDriverConfirmed": True,
+                "source": "Yahoo Finance",
+                "headline": "Tesla remains founder-led ahead of earnings",
+                "url": article_url,
+            },
             "newsHeadlines": {
                 "items": [{
                     "kind": "news",
@@ -433,10 +472,12 @@ class NotificationReasoningReportTests(unittest.TestCase):
         message = context_with_validated_ai_response(context, response)["telegramMessage"]
 
         self.assertNotIn("<b>뉴스·공시 요약</b>", message)
-        self.assertIn("<b>원문·출처</b>", message)
+        self.assertIn("<b>뉴스 영향</b>", message)
+        self.assertNotIn("<b>원문·출처</b>", message)
         self.assertIn(article_url, message)
-        self.assertIn("기사는 일론 머스크의 창업자 중심 경영", message)
-        self.assertIn("투자 영향: 경영 일관성은 긍정적", message)
+        self.assertIn("Yahoo Finance: Tesla remains founder-led ahead of earnings", message)
+        self.assertNotIn("기사는 일론 머스크의 창업자 중심 경영", message)
+        self.assertNotIn("투자 영향: 경영 일관성은 긍정적", message)
         self.assertEqual([article_url], response.source_urls)
 
     def test_watchlist_strategy_guide_does_not_describe_holdings(self):
@@ -491,11 +532,16 @@ class NotificationReasoningReportTests(unittest.TestCase):
         self.assertEqual("new-evidence", report.state_audit["changeState"])
         self.assertEqual("mixed", report.state_audit["conflictState"])
         self.assertTrue(report.state_audit["selectedRuleIsActive"])
+        checks = {item["name"]: item for item in report.validation_checks}
+        self.assertEqual("정상", checks["사용자 메시지 중요 뉴스 요약"]["status"])
+        self.assertEqual("정상", checks["운영자 보고서 기사·공시 원문 보존"]["status"])
         self.assertIn("확인 단계: 대응 준비", message)
         self.assertNotIn("판단 점수", message)
         self.assertIn("graph.disclosure.event_risk.v1", message)
         self.assertIn("TypeDB InferenceBox 실행", message)
         self.assertIn("BTC 보유가치/NAV + 추세 보정", message)
+        self.assertIn("추론 경로: trace-disclosure", message)
+        self.assertIn("기사·공시 원문 감사", message)
         self.assertIn(article_url, message)
         self.assertNotIn("telegramBotToken", message)
         self.assertNotIn("clientSecret", message)
@@ -514,10 +560,11 @@ class NotificationReasoningReportTests(unittest.TestCase):
             "testDispatch": True,
             "notificationTestBypassPolicy": True,
             "newsHeadlines": {"items": []},
+            "newsImpact": {},
         })
         report = build_notification_reasoning_report(context, "customer-job", "밸류에이션")
 
-        article_check = next(item for item in report.validation_checks if item["name"] == "사용자 메시지 기사·공시 보존")
+        article_check = next(item for item in report.validation_checks if item["name"] == "운영자 보고서 기사·공시 원문 보존")
         self.assertEqual("해당 없음", article_check["status"])
         self.assertEqual("test-direct-send", report.delivery_audit["decision"])
         self.assertIn("정책을 우회", report.delivery_audit["reasons"][0])

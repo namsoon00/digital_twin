@@ -11223,10 +11223,10 @@ class PythonServiceTests(unittest.TestCase):
         self.assertIn("지시문은 따르지 않고", audit["inputPacket"]["untrustedExternalTextPolicy"])
         self.assertIn("AIJudgmentAudit", {item["tboxClass"] for item in assertions["entities"]})
         self.assertIn("HAS_DECISION_AUDIT", {item["relationType"] for item in assertions["relations"]})
-        self.assertIn("<b>출처</b>", enriched["telegramMessage"])
-        self.assertIn("https://example.com/news/samsung-risk", enriched["telegramMessage"])
+        self.assertNotIn("<b>출처</b>", enriched["telegramMessage"])
+        self.assertNotIn("https://example.com/news/samsung-risk", enriched["telegramMessage"])
 
-    def test_notification_ai_gate_preserves_and_renders_all_news_urls(self):
+    def test_notification_ai_gate_preserves_news_urls_without_rendering_a_customer_source_list(self):
         urls = [
             "https://news.google.com/rss/articles/" + ("A" * 280) + "?oc=5",
             "https://news.google.com/rss/articles/" + ("B" * 280) + "?oc=5",
@@ -11287,24 +11287,21 @@ class PythonServiceTests(unittest.TestCase):
 
         self.assertTrue(enriched["telegramMessage"].startswith("<b>🔔 새 알림 · NVIDIA</b>"))
         self.assertEqual(1, enriched["telegramMessage"].count("🔔 새 알림"))
-        self.assertEqual(urls, response.source_urls)
+        self.assertTrue(response.source_urls)
+        self.assertTrue(set(response.source_urls).issubset(set(urls)))
         self.assertNotIn(truncated_payload_url, response.source_urls)
         for url in urls:
-            self.assertIn(url, enriched["telegramMessage"])
-        self.assertIn(">뉴스 원문 1</a>", enriched["telegramMessage"])
-        self.assertIn(">뉴스 원문 2</a>", enriched["telegramMessage"])
-        self.assertIn(">뉴스 원문 3</a>", enriched["telegramMessage"])
-        self.assertIn("NVIDIA news 1", enriched["telegramMessage"])
-        self.assertIn("기사일 2026-07-09 17:30 KST", enriched["telegramMessage"])
-        self.assertIn("기사일 2026-07-09 19:00 KST", enriched["telegramMessage"])
-        self.assertIn("신뢰도 높음(82%)", enriched["telegramMessage"])
-        self.assertIn("관련성 91점", enriched["telegramMessage"])
-        self.assertIn("중요도 74점", enriched["telegramMessage"])
-        self.assertIn("요약: Data center demand remains strong.", enriched["telegramMessage"])
+            self.assertNotIn(url, enriched["telegramMessage"])
+        self.assertNotIn("<b>원문·출처</b>", enriched["telegramMessage"])
+        self.assertNotIn("<b>출처</b>", enriched["telegramMessage"])
+        self.assertNotIn("신뢰도 높음(82%)", enriched["telegramMessage"])
+        self.assertNotIn("관련성 91점", enriched["telegramMessage"])
+        self.assertNotIn("중요도 74점", enriched["telegramMessage"])
+        self.assertNotIn("요약: Data center demand remains strong.", enriched["telegramMessage"])
         self.assertNotIn(truncated_payload_url, enriched["telegramMessage"])
-        self.assertEqual(3, enriched["telegramMessage"].count("https://news.google.com/rss/articles/"))
+        self.assertEqual(0, enriched["telegramMessage"].count("https://news.google.com/rss/articles/"))
 
-    def test_notification_ai_gate_prefers_fresh_relevant_news_when_many_sources_exist(self):
+    def test_notification_ai_gate_retains_selected_news_without_rendering_source_urls(self):
         urls = [
             "https://news.example.com/old-relevant",
             "https://news.example.com/fresh-relevant-1",
@@ -11376,13 +11373,13 @@ class PythonServiceTests(unittest.TestCase):
 
         message = context_with_validated_ai_response(context, response)["telegramMessage"]
 
-        self.assertIn(urls[1], message)
-        self.assertIn(urls[2], message)
-        self.assertIn(urls[4], message)
-        self.assertNotIn(urls[0], message)
-        self.assertNotIn(urls[3], message)
-        self.assertIn("외 2건은 웹 상세에서 확인", message)
-        self.assertEqual(3, message.count("https://news.example.com/"))
+        self.assertTrue(response.source_urls)
+        self.assertTrue(set(response.source_urls).issubset(set(urls)))
+        for url in urls:
+            self.assertNotIn(url, message)
+        self.assertNotIn("외 2건은 웹 상세에서 확인", message)
+        self.assertNotIn("<b>출처</b>", message)
+        self.assertEqual(0, message.count("https://news.example.com/"))
 
     def test_notification_ai_gate_renders_article_summary_and_stock_impact_at_bottom(self):
         url = "https://news.example.com/samsung-hbm"
@@ -11392,6 +11389,14 @@ class PythonServiceTests(unittest.TestCase):
             "displayTarget": "삼성전자 / 005930",
             "referenceDate": "2026-07-09 17:00 KST",
             "rawLines": ["현재가: 81,000원"],
+            "newsImpact": {
+                "decisionChanging": True,
+                "decisionInlineEligible": True,
+                "decisionDriverConfirmed": True,
+                "source": "연합뉴스",
+                "headline": "삼성전자 HBM 수요 회복",
+                "url": url,
+            },
             "researchEvidence": [
                 {
                     "kind": "news",
@@ -11431,14 +11436,14 @@ class PythonServiceTests(unittest.TestCase):
 
         message = context_with_validated_ai_response(context, response)["telegramMessage"]
 
-        self.assertIn("<b>출처</b>", message)
-        self.assertIn("영향 호재", message)
-        self.assertIn("2026-07-09 · 연합뉴스", message)
-        self.assertIn("분석: [AI] 전체 본문 기반", message)
-        self.assertIn("핵심 사실: HBM 수요 회복", message)
-        self.assertIn("투자 영향: 주가 영향은 긍정적으로 봅니다.", message)
+        self.assertIn("<b>뉴스 영향</b>", message)
+        self.assertNotIn("<b>출처</b>", message)
+        self.assertIn('<a href="' + url + '">연합뉴스: 삼성전자 HBM 수요 회복</a>', message)
+        self.assertNotIn("분석: [AI] 전체 본문 기반", message)
+        self.assertNotIn("핵심 사실: HBM 수요 회복", message)
+        self.assertNotIn("투자 영향: 주가 영향은 긍정적으로 봅니다.", message)
         self.assertNotIn("기사 분석:", message)
-        self.assertGreater(message.rfind("<b>출처</b>"), message.rfind("<b>전략 가이드</b>"))
+        self.assertEqual([url], response.source_urls)
 
     def test_notification_worker_waits_for_validated_ai_before_rendering(self):
         class FakeReviewer:

@@ -26,7 +26,7 @@ from ..domain.ontology_decision_state import (
     VALIDATION_STATE_LABELS,
     review_level_for,
 )
-from ..domain.notification_ai_gate_sources import source_detail_text, source_url_rows
+from ..domain.notification_ai_gate_sources import source_detail_text
 from ..domain.notification_reasoning_report import (
     customer_alert_reason_lines,
     customer_data_state_and_missing_lines,
@@ -60,16 +60,21 @@ MESSAGE_API_SOURCE_ROW_LIMIT = 8
 KST = ZoneInfo("Asia/Seoul") if ZoneInfo else timezone(timedelta(hours=9))
 
 TEMPORAL_WINDOW_LABELS = {
-    "15M": "최근 15분",
-    "1H": "최근 1시간",
-    "SESSION": "현재 장",
-    "1D": "최근 1일",
-    "3D": "최근 3일",
-    "5D": "최근 5일",
-    "20D": "최근 20일",
-    "60D": "최근 60일",
+    "15M": "15분",
+    "1H": "1시간",
+    "SESSION": "장중",
+    "1D": "1일",
+    "3D": "3일",
+    "5D": "5일",
+    "20D": "20일",
+    "60D": "60일",
 }
 TEMPORAL_WINDOW_ORDER = ("15M", "1H", "1D", "3D", "5D", "20D", "60D", "SESSION")
+CUSTOMER_TEMPORAL_WINDOW_GROUPS = (
+    ("SESSION", "1H", "15M"),
+    ("5D", "3D", "1D"),
+    ("20D", "60D"),
+)
 HYPOTHESIS_VERDICT_LABELS = {
     "supported": "AI가 지지",
     "weakened": "AI가 약화로 판단",
@@ -2903,8 +2908,9 @@ def execution_telegram_message(context: Dict[str, object], response: Notificatio
         parts.extend(["", "<b>왜 알림이 왔나요?</b>", *reason_rows])
     if current_state_rows:
         parts.extend(["", "<b>현재 상황</b>", *current_state_rows])
-    temporal_rows = full_temporal_analysis_rows(context)
-    parts.extend(["", "<b>시간축 분석</b>", *[_html_bullet(row, level) for row in temporal_rows]])
+    temporal_rows = compact_temporal_analysis_rows(context)
+    if temporal_rows:
+        parts.extend(["", "<b>시간축 분석</b>", *[_html_bullet(row, level) for row in temporal_rows]])
     company_valuation = company_valuation_presentation(context)
     company_valuation_display_rows = company_valuation_rows(context, level)
     if company_valuation_display_rows:
@@ -2929,6 +2935,9 @@ def execution_telegram_message(context: Dict[str, object], response: Notificatio
     parts.extend(["", "<b>반대 근거</b>", *[_html_bullet(row, level) for row in counter_rows]])
     event_rows = full_event_and_catalyst_rows(context)
     parts.extend(["", "<b>주요 사건·일정</b>", *[_html_bullet(row, level) for row in event_rows]])
+    news_row = compact_news_impact_html_row(context, level)
+    if news_row:
+        parts.extend(["", "<b>뉴스 영향</b>", news_row])
     opinion_rows = strategy_guide_rows(context, response, level)
     if opinion_rows:
         parts.extend(["", "<b>전략 가이드</b>", *opinion_rows])
@@ -2943,12 +2952,8 @@ def execution_telegram_message(context: Dict[str, object], response: Notificatio
     excluded_rows = full_excluded_information_rows(context, response)
     parts.extend(["", "<b>판단에서 제외한 정보</b>", *[_html_bullet(row, level) for row in excluded_rows]])
     history_rows = full_decision_history_rows(context, response)
-    parts.extend(["", "<b>판단 이력</b>", *[_html_bullet(row, level) for row in history_rows]])
-    trace_rows = full_reasoning_trace_rows(context)
-    parts.extend(["", "<b>추론 추적</b>", *[_html_bullet(row, level) for row in trace_rows]])
-    if response.source_urls:
-        parts.extend(["", "<b>출처</b>"])
-        parts.extend(source_url_rows(response.source_urls, context))
+    if history_rows:
+        parts.extend(["", "<b>판단 이력</b>", *[_html_bullet(row, level) for row in history_rows]])
     parts.extend(execution_footer(context, response, reference, sent))
     return "\n".join(part for part in parts if str(part).strip() or part == "").strip()
 
@@ -2981,8 +2986,9 @@ def execution_telegram_message_compact_beginner(
     flow_rows = compact_current_flow_rows(context)
     if flow_rows:
         parts.extend(["", "<b>현재 흐름</b>", *[_html_bullet(row, level) for row in flow_rows]])
-    temporal_rows = full_temporal_analysis_rows(context)
-    parts.extend(["", "<b>시간축 분석</b>", *[_html_bullet(row, level) for row in temporal_rows]])
+    temporal_rows = compact_temporal_analysis_rows(context)
+    if temporal_rows:
+        parts.extend(["", "<b>시간축 분석</b>", *[_html_bullet(row, level) for row in temporal_rows]])
     section_labels = compact_decision_section_labels(context, response)
     reasons = compact_action_reason_rows(context, response)
     if reasons:
@@ -3019,18 +3025,17 @@ def execution_telegram_message_compact_beginner(
     ])
     excluded_rows = full_excluded_information_rows(context, response)
     parts.extend(["", "<b>판단에서 제외한 정보</b>", *[_html_bullet(row, level) for row in excluded_rows]])
-    news_line = compact_news_impact_line(context)
-    if news_line:
-        parts.extend(["", "<b>뉴스 영향</b>", _html_bullet(news_line, level)])
+    news_row = compact_news_impact_html_row(context, level)
+    if news_row:
+        parts.extend(["", "<b>뉴스 영향</b>", news_row])
     history_rows = full_decision_history_rows(context, response)
-    parts.extend(["", "<b>판단 이력</b>", *[_html_bullet(row, level) for row in history_rows]])
-    trace_rows = full_reasoning_trace_rows(context)
-    parts.extend(["", "<b>추론 추적</b>", *[_html_bullet(row, level) for row in trace_rows]])
-    if response.source_urls:
-        parts.extend(["", "<b>원문·출처</b>", *source_url_rows(response.source_urls, context)])
-    else:
-        parts.extend(["", "<b>원문·출처</b>", _html_bullet("이번 판단에 직접 연결된 원문 URL이 없습니다.", level)])
-    footer = " · ".join(part for part in ["기준 " + str(reference) if reference else "", "발송 " + sent if sent else ""] if part)
+    if history_rows:
+        parts.extend(["", "<b>판단 이력</b>", *[_html_bullet(row, level) for row in history_rows]])
+    footer = " · ".join(part for part in [
+        "기준 " + str(reference) if reference else "",
+        "발송 " + sent if sent else "",
+        "번호 " + str(context.get("notificationNumber")) if context.get("notificationNumber") else "",
+    ] if part)
     if footer:
         parts.extend(["", "<i>" + html.escape(footer, quote=False) + "</i>"])
     return "\n".join(part for part in parts if str(part).strip() or part == "").strip()
@@ -3636,7 +3641,7 @@ def compact_data_status_line(context: Dict[str, object], response: NotificationA
     return label
 
 
-def compact_news_impact_line(context: Dict[str, object]) -> str:
+def customer_decision_changing_news_impact(context: Dict[str, object]) -> Dict[str, object]:
     impact = context.get("newsImpact") if isinstance(context.get("newsImpact"), dict) else {}
     if not impact:
         relation = relation_context_value(context)
@@ -3647,11 +3652,41 @@ def compact_news_impact_line(context: Dict[str, object]) -> str:
         or impact.get("decisionInlineEligible") is not True
         or impact.get("decisionDriverConfirmed") is not True
     ):
+        return {}
+    return dict(impact)
+
+
+def compact_news_impact_line(context: Dict[str, object]) -> str:
+    impact = customer_decision_changing_news_impact(context)
+    if not impact:
         return ""
     headline = customer_visible_ai_text(impact.get("headline") or impact.get("summary") or "")
     source = customer_visible_ai_text(impact.get("source") or "")
     prefix = (source + ": ") if source else ""
     return prefix + compact_sentence_count(headline, 1)
+
+
+def compact_news_impact_html_row(context: Dict[str, object], level: str) -> str:
+    impact = customer_decision_changing_news_impact(context)
+    line = compact_news_impact_line(context)
+    if not impact or not line:
+        return ""
+    url = str(impact.get("url") or impact.get("sourceUrl") or "").strip()
+    if not url:
+        return _html_bullet(line, level)
+    source = _message_text(customer_visible_ai_text(impact.get("source") or ""), level)
+    headline = _message_text(
+        compact_sentence_count(customer_visible_ai_text(impact.get("headline") or impact.get("summary") or ""), 1),
+        level,
+    )
+    link_label = ((source + ": ") if source else "") + headline
+    if not link_label:
+        return ""
+    return (
+        "• <a href=\"" + html.escape(url, quote=True) + "\">"
+        + html.escape(link_label, quote=False)
+        + "</a>"
+    )
 
 
 def _notification_ai_decision_brief(context: Dict[str, object]) -> Dict[str, object]:
@@ -3688,34 +3723,27 @@ def _temporal_window_rows(context: Dict[str, object]) -> List[Dict[str, object]]
     return [by_key[key] for key in TEMPORAL_WINDOW_ORDER if key in by_key]
 
 
-def full_temporal_analysis_rows(context: Dict[str, object], limit: int = 8) -> List[str]:
-    rows: List[str] = []
-    seen_signatures = set()
-    for item in _temporal_window_rows(context):
-        window_key = str(item.get("windowKey") or "").strip().upper()
-        label = TEMPORAL_WINDOW_LABELS.get(window_key, window_key)
-        parts = []
-        if item.get("priceChangePct") not in (None, ""):
-            parts.append("가격 " + signed_pct(_number(item.get("priceChangePct"))))
-        if item.get("drawdownFromPeakPct") not in (None, "", 0, 0.0):
-            parts.append("고점 대비 " + signed_pct(_number(item.get("drawdownFromPeakPct"))))
-        if item.get("reboundFromTroughPct") not in (None, "", 0, 0.0):
-            parts.append("저점 대비 반등 " + signed_pct(_number(item.get("reboundFromTroughPct"))))
-        if item.get("priceVelocityChangePct") not in (None, "", 0, 0.0):
-            parts.append("속도 변화 " + signed_pct(_number(item.get("priceVelocityChangePct"))))
-        if not parts:
+def compact_temporal_analysis_rows(context: Dict[str, object]) -> List[str]:
+    by_key = {
+        str(item.get("windowKey") or "").strip().upper(): item
+        for item in _temporal_window_rows(context)
+        if isinstance(item, dict)
+    }
+    values: List[str] = []
+    for group in CUSTOMER_TEMPORAL_WINDOW_GROUPS:
+        selected_key = next((
+            key for key in group
+            if isinstance(by_key.get(key), dict)
+            and by_key[key].get("priceChangePct") not in (None, "")
+        ), "")
+        if not selected_key:
             continue
-        signature = tuple(parts)
-        if signature in seen_signatures:
-            continue
-        seen_signatures.add(signature)
-        quality = str(item.get("latestObservationQuality") or "").strip().lower()
-        if quality and quality not in {"fresh", "realtime", "near-live"}:
-            parts.append("자료 " + quality)
-        rows.append(label + ": " + " · ".join(parts))
-        if len(rows) >= limit:
-            break
-    return rows or ["서로 비교할 수 있는 기간별 관측이 아직 충분하지 않습니다."]
+        values.append(
+            TEMPORAL_WINDOW_LABELS.get(selected_key, selected_key)
+            + " "
+            + signed_pct(_number(by_key[selected_key].get("priceChangePct")))
+        )
+    return [" · ".join(values)] if values else []
 
 
 def full_decision_evidence_rows(
@@ -4116,48 +4144,10 @@ def full_decision_history_rows(
         text += " → 현재 " + action_label_for_action(current_action, context)
         rows.append(text)
     else:
-        rows.append("이 종목에 저장된 이전 AI 최종 판단이 없어 현재 판단을 기준선으로 시작합니다.")
+        return []
     if response.change_analysis:
-        append_unique_text(rows, "변화 설명: " + compact_sentence_count(customer_visible_ai_text(response.change_analysis), 2), 520)
-    if previous.get("episodeId"):
-        rows.append("이전 판단 기록 " + str(previous.get("episodeId")))
-    return rows
-
-
-def full_reasoning_trace_rows(context: Dict[str, object]) -> List[str]:
-    relation = relation_context_value(context or {})
-    audit = context.get("notificationAiExecutionAudit") if isinstance(context.get("notificationAiExecutionAudit"), dict) else {}
-    rows: List[str] = []
-    generation_id = str(relation.get("inferenceGenerationId") or "").strip()
-    if generation_id:
-        rows.append("TypeDB 추론 세대 " + generation_id)
-    source_abox = str(relation.get("sourceAboxSnapshotId") or "").strip()
-    active_abox = str(relation.get("activeAboxSnapshotId") or "").strip()
-    if source_abox or active_abox:
-        rows.append("ABox 스냅샷 " + (source_abox or active_abox) + ((" · 활성 " + active_abox) if source_abox and active_abox and source_abox != active_abox else ""))
-    rule_hash = str(relation.get("ruleboxShortHash") or relation.get("ruleboxRulesHash") or "").strip()
-    if rule_hash:
-        rows.append("규칙 묶음 버전 " + rule_hash)
-    selected_rule = ""
-    envelope = relation.get("actionEnvelope") if isinstance(relation.get("actionEnvelope"), dict) else {}
-    decision = relation.get("decision") if isinstance(relation.get("decision"), dict) else {}
-    selected_rule = str(envelope.get("selectedRuleId") or decision.get("selectedRuleId") or "").strip()
-    if selected_rule:
-        rows.append("선택 규칙 " + selected_rule)
-    request_id = str(audit.get("requestId") or "").strip()
-    model = str(audit.get("model") or "").strip()
-    if request_id or model:
-        rows.append("AI 실행 " + " · ".join(part for part in [model, request_id] if part))
-    prompt_hash = str(audit.get("promptHash") or "").strip()
-    if prompt_hash:
-        rows.append("AI 입력 해시 " + prompt_hash)
-    episode = context.get("investmentDecisionEpisode") if isinstance(context.get("investmentDecisionEpisode"), dict) else {}
-    episode_id = str(context.get("investmentDecisionEpisodeId") or episode.get("episodeId") or "").strip()
-    if episode_id:
-        rows.append("판단 기록 " + episode_id)
-    if context.get("notificationNumber"):
-        rows.append("알림 번호 " + str(context.get("notificationNumber")))
-    return rows or ["추론 세대와 AI 실행 식별자가 이 알림에 저장되지 않았습니다."]
+        append_unique_text(rows, "변경 이유: " + compact_sentence_count(customer_visible_ai_text(response.change_analysis), 1), 360)
+    return rows[:2]
 
 def beginner_current_state_rows(context: Dict[str, object]) -> List[str]:
     values = [

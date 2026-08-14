@@ -411,8 +411,29 @@ class ActionEnvelopeAiGateTests(unittest.TestCase):
                 "decisionDriverConfirmed": True,
                 "source": "Reuters",
                 "headline": "NVIDIA won a new data-center supply contract.",
+                "url": "https://example.test/nvidia-contract",
+            },
+            "previousInvestmentDecisionEpisode": {
+                "episodeId": "decision-episode:previous",
+                "action": "HOLD",
+                "decidedAt": "2026-07-26T01:00:00Z",
+            },
+            "aiDecisionTransition": {
+                "historyAvailable": True,
+                "kind": "action-changed",
+                "previousAction": "HOLD",
+                "currentAction": "BUY",
             },
         })
+        context["ontologyRelationContext"]["facts"]["temporalWindows"] = [
+            {"windowKey": "15M", "priceChangePct": 0.4},
+            {"windowKey": "1H", "priceChangePct": 0.8},
+            {"windowKey": "SESSION", "priceChangePct": 1.1},
+            {"windowKey": "3D", "priceChangePct": 1.9},
+            {"windowKey": "5D", "priceChangePct": 2.8},
+            {"windowKey": "20D", "priceChangePct": -7.4},
+            {"windowKey": "60D", "priceChangePct": -12.0},
+        ]
         response = NotificationAIValidatedResponse(
             action="BUY",
             action_label="소액 진입 검토",
@@ -425,6 +446,7 @@ class ActionEnvelopeAiGateTests(unittest.TestCase):
             summary="진입 지지 관계가 확인됐고 거시 부담은 진입 시점과 규모를 제한하는 조건입니다.",
             evidence=["가격 회복 관계와 진입 지지 관계가 함께 확인됐습니다."],
             counter_evidence=["거시 부담이 남아 있어 한 번에 크게 진입하지 않습니다."],
+            change_analysis="관심 유지에서 소액 진입 검토로 바뀌었고 가격 회복 근거가 새로 확인됐습니다.",
             invalidation_condition="진입 지지 관계가 사라지거나 직접 반대 뉴스가 확인되면 다시 봅니다.",
             next_checks=["정규장 거래량이 유지되는지 확인"],
             reference_date="2026-07-27 10:00 KST",
@@ -438,9 +460,18 @@ class ActionEnvelopeAiGateTests(unittest.TestCase):
             "핵심 근거", "반대 근거", "TypeDB 경쟁 추론", "회사 가치",
             "주요 사건·일정", "다음 행동", "판단 변경 조건",
             "판단에서 제외한 정보", "뉴스 영향", "판단 이력",
-            "추론 추적", "원문·출처",
         ]:
             self.assertIn(heading, message)
+        self.assertIn("장중 +1.1% · 5일 +2.8% · 20일 -7.4%", message)
+        self.assertNotIn("15분 +0.4%", message)
+        self.assertNotIn("60일 -12.0%", message)
+        self.assertIn("관심 유지", message)
+        self.assertIn("현재 소액 진입 검토", message)
+        self.assertNotIn("decision-episode:previous", message)
+        self.assertNotIn("<b>추론 추적</b>", message)
+        self.assertNotIn("<b>원문·출처</b>", message)
+        self.assertNotIn("<b>출처</b>", message)
+        self.assertIn('<a href="https://example.test/nvidia-contract">', message)
         self.assertNotIn("<b>자료 상태</b>", message)
         self.assertNotIn("<b>포트폴리오 영향</b>", message)
         self.assertIn("[AI]", message)

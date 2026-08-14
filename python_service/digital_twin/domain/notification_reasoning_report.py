@@ -268,6 +268,7 @@ def _decision_and_state_audit(relation: Dict[str, object], active_rules: List[Di
 
 
 def _validation_checks(
+    context: Dict[str, object],
     relation: Dict[str, object],
     decision: Dict[str, object],
     state_audit: Dict[str, object],
@@ -276,6 +277,14 @@ def _validation_checks(
 ) -> List[Dict[str, str]]:
     active_rules = relation.get("activeRules") if isinstance(relation.get("activeRules"), list) else []
     graph_store = str(relation.get("graphStore") or "")
+    news_impact = context.get("newsImpact") if isinstance(context.get("newsImpact"), dict) else {}
+    if not news_impact:
+        news_impact = relation.get("newsImpact") if isinstance(relation.get("newsImpact"), dict) else {}
+    customer_news_expected = bool(
+        news_impact.get("decisionChanging")
+        and news_impact.get("decisionInlineEligible") is True
+        and news_impact.get("decisionDriverConfirmed") is True
+    )
     checks = [
         {
             "name": "그래프 저장소 추론 사용",
@@ -313,13 +322,18 @@ def _validation_checks(
             "detail": "사용자 메시지의 밸류에이션 영역 확인",
         },
         {
-            "name": "사용자 메시지 기사·공시 보존",
+            "name": "사용자 메시지 중요 뉴스 요약",
             "status": (
                 "정상"
-                if source_items and any(term in customer_message for term in ["원문/출처", "<b>출처</b>", "뉴스", "공시"])
-                else "오류" if source_items else "해당 없음"
+                if customer_news_expected and "<b>뉴스 영향</b>" in customer_message
+                else "오류" if customer_news_expected else "해당 없음"
             ),
-            "detail": "기사·공시 원문 " + (str(len(source_items)) + "건을 사용자 메시지와 대조" if source_items else "없음"),
+            "detail": "판단을 바꾼 뉴스만 고객 메시지에 한 줄로 표시합니다.",
+        },
+        {
+            "name": "운영자 보고서 기사·공시 원문 보존",
+            "status": "정상" if source_items else "해당 없음",
+            "detail": "기사·공시 원문 " + (str(len(source_items)) + "건 보존" if source_items else "없음"),
         },
         {
             "name": "TBox 전체 타입 검증",
@@ -424,7 +438,7 @@ def build_notification_reasoning_report(context: Dict[str, object], customer_job
         inferred_facts=inferred_facts,
         decision=decision,
         state_audit=state_audit,
-        validation_checks=_validation_checks(relation, decision, state_audit, customer_message, source_items),
+        validation_checks=_validation_checks(values, relation, decision, state_audit, customer_message, source_items),
         ai_audit={
             "engineVersion": ai.get("engineVersion"),
             "source": ai.get("source"),

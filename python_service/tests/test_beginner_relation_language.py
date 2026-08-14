@@ -311,10 +311,9 @@ class BeginnerRelationLanguageTests(unittest.TestCase):
             "확인 1",
             "확인 2",
             "<b>TypeDB 경쟁 추론</b>",
-            "<b>추론 추적</b>",
         ]:
             self.assertIn(expected, message)
-        for hidden in ["확인 3", "확인 4", "부족 1", "부족 2", "부족 3", "부족 4", "부족 5", "검증 3", "고객이 실제 투자 판단 전에", "<b>밸류에이션</b>", "<b>자료 상태</b>"]:
+        for hidden in ["확인 3", "확인 4", "부족 1", "부족 2", "부족 3", "부족 4", "부족 5", "검증 3", "고객이 실제 투자 판단 전에", "<b>밸류에이션</b>", "<b>자료 상태</b>", "<b>추론 추적</b>", "<b>원문·출처</b>", "<b>출처</b>", "<b>시간축 분석</b>", "<b>판단 이력</b>"]:
             self.assertNotIn(hidden, message)
         self.assertIn("[AI]", message)
         self.assertNotIn("<b>점수 안내</b>", message)

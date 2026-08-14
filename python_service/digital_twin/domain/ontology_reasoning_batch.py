@@ -1,10 +1,8 @@
 """Operational batching policy for durable ontology reasoning work.
 
-TypeDB inference has one subject per generation. Queue pressure may still
-change mailbox claim and bulk persistence sizes, but it must not widen a
-native TypeQL evaluation to several instruments. The historical adaptive
-estimate is retained as telemetry so operators can see which expansion was
-prevented without letting that estimate control investment inference.
+Native TypeDB inference normally keeps one subject per generation. A verified
+subject-fanout path may evaluate at most two independent subjects against one
+stable ABox generation, then commit one complete InferenceBox generation.
 """
 
 from __future__ import annotations
@@ -92,11 +90,10 @@ def adaptive_reasoning_batch_plan(
 ) -> Dict[str, object]:
     """Return an explainable execution plan for one queue turn.
 
-    Native TypeDB rule evaluation is deliberately single-subject. A rule
-    query commonly expands every selected source through its required and
-    optional relation branches, so treating several symbols as a persistence
-    batch can make read cost grow faster than the saved fixed write cost.
-    Non-native compatibility callers retain their configured static cap.
+    Native TypeDB rule evaluation is single-subject unless the verified
+    subject-fanout path is enabled. That path is capped at two subjects and
+    fails closed unless both independent evaluations complete. Non-native
+    compatibility callers retain their configured static cap.
     """
     configured = dict(settings or {})
     hard_limit = _integer(hard_target_symbol_limit, 1, 1, 200)
@@ -194,7 +191,21 @@ def adaptive_reasoning_batch_plan(
         projection_runtime_ms,
         _native_inference_runtime_ms(execution),
     )
-    target_parallelism = _target_parallelism(configured, hard_limit)
+    subject_fanout_enabled = bool(
+        native_rule_execution
+        and _enabled(configured.get("typedbNativeRuleSubjectFanoutEnabled"), False)
+    )
+    subject_fanout_limit = _integer(
+        configured.get("typedbNativeRuleSubjectParallelism"),
+        2,
+        1,
+        2,
+    )
+    target_parallelism = (
+        subject_fanout_limit
+        if subject_fanout_enabled
+        else _target_parallelism(configured, hard_limit)
+    )
     estimate_basis_runtime_ms = projection_runtime_ms or recent_runtime
     estimate_basis = "projection-runtime" if projection_runtime_ms else (
         "monitor-and-projection-runtime" if recent_runtime else "unavailable"
@@ -298,24 +309,31 @@ def adaptive_reasoning_batch_plan(
     proposed_multi_subject_limit = max(1, min(hard_limit, target_limit))
     proposed_multi_subject_mode = mode
     proposed_reason_codes = list(reason_codes)
-    subject_fanout_enabled = bool(
-        native_rule_execution
-        and _enabled(configured.get("typedbNativeRuleSubjectFanoutEnabled"), False)
-    )
-    subject_fanout_limit = _integer(
-        configured.get("typedbNativeRuleSubjectParallelism"),
-        2,
-        1,
-        2,
-    )
     if native_rule_execution and subject_fanout_enabled:
         mode = "subject-fanout-native"
-        target_limit = min(proposed_multi_subject_limit, subject_fanout_limit, 2)
+        fanout_bootstrap = bool(
+            pressure
+            and not runtime_guard
+            and hard_limit >= 2
+            and pending_symbols >= 2
+            and subject_fanout_limit >= 2
+        )
+        # A previous one-subject runtime cannot price two independent reads
+        # that run in one parallel wave. Without one bounded bootstrap sample,
+        # the adaptive budget remains at one forever and the verified fanout
+        # path can never produce its own runtime evidence.
+        target_limit = min(
+            max(proposed_multi_subject_limit, 2 if fanout_bootstrap else 1),
+            subject_fanout_limit,
+            2,
+        )
         reason_codes = [
             "native-rule-subject-fanout",
             "shared-abox-single-inferencebox-generation",
             "fail-closed-complete-subject-coverage",
         ]
+        if fanout_bootstrap and baseline_target_symbol_count < 2:
+            reason_codes.append("bounded-fanout-runtime-bootstrap")
     elif native_rule_execution:
         mode = "single-subject-native"
         target_limit = 1

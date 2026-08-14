@@ -189,6 +189,66 @@ class AdaptiveOntologyReasoningBatchTests(unittest.TestCase):
         self.assertFalse(plan["singleSubjectInference"])
         self.assertFalse(plan["multiSubjectInferenceDisabled"])
 
+    def test_subject_fanout_bootstraps_two_subjects_from_single_subject_runtime(self):
+        plan = adaptive_reasoning_batch_plan(
+            {
+                "ontologyReasoningAdaptiveBatchEnabled": "1",
+                "ontologyReasoningAdaptiveBatchSteadySymbols": "1",
+                "ontologyReasoningAdaptiveBatchBurstSymbols": "2",
+                "ontologyReasoningAdaptiveBatchPendingThreshold": "2",
+                "ontologyReasoningAdaptiveBatchBudgetSeconds": "90",
+                "typedbNativeRuleSubjectFanoutEnabled": "1",
+                "typedbNativeRuleSubjectParallelism": "2",
+            },
+            native_rule_execution=True,
+            hard_target_symbol_limit=2,
+            pending_request_count=12,
+            pending_symbol_count=7,
+            oldest_wait_seconds=120,
+            recent_execution={
+                "status": "ok",
+                "stageTiming": {"monitorAndProjectionMs": 66862},
+                "projectionRuntime": {
+                    "durationMs": 66862,
+                    "nativeInferenceMs": 29608,
+                    "targetSymbolCount": 1,
+                },
+            },
+        )
+
+        self.assertEqual("subject-fanout-native", plan["mode"])
+        self.assertEqual(2, plan["targetSymbolLimit"])
+        self.assertEqual(2, plan["targetParallelism"])
+        self.assertIn("bounded-fanout-runtime-bootstrap", plan["reasonCodes"])
+
+    def test_subject_fanout_does_not_override_the_runtime_guard(self):
+        plan = adaptive_reasoning_batch_plan(
+            {
+                "ontologyReasoningAdaptiveBatchEnabled": "1",
+                "ontologyReasoningAdaptiveBatchSteadySymbols": "1",
+                "ontologyReasoningAdaptiveBatchBurstSymbols": "2",
+                "ontologyReasoningAdaptiveBatchPendingThreshold": "2",
+                "ontologyReasoningAdaptiveBatchRuntimeGuardSeconds": "180",
+                "typedbNativeRuleSubjectFanoutEnabled": "1",
+                "typedbNativeRuleSubjectParallelism": "2",
+            },
+            native_rule_execution=True,
+            hard_target_symbol_limit=2,
+            pending_request_count=12,
+            pending_symbol_count=7,
+            oldest_wait_seconds=120,
+            recent_execution={
+                "status": "timeout",
+                "durationMs": 360000,
+                "projectionRuntime": {"targetSymbolCount": 1},
+            },
+        )
+
+        self.assertEqual("subject-fanout-native", plan["mode"])
+        self.assertEqual(1, plan["targetSymbolLimit"])
+        self.assertTrue(plan["runtimeGuard"])
+        self.assertNotIn("bounded-fanout-runtime-bootstrap", plan["reasonCodes"])
+
     def test_observed_per_target_cost_limits_a_pressure_batch_before_timeout(self):
         plan = adaptive_reasoning_batch_plan(
             {

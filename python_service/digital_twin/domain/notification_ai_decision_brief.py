@@ -952,9 +952,17 @@ def _minimum_hypotheses(value: object, *, emergency: bool = False) -> List[Dict[
                 "evidenceState", "verificationStatus", "approvalStatus", "scopeState",
             ),
         )
-        compact["claim"] = _clean(compact.get("claim"), 72 if emergency else 120)
+        compact["claim"] = _clean(compact.get("claim"), 48 if emergency else 120)
+        if emergency:
+            for key in ("templateId", "familyId", "evidenceState", "approvalStatus", "scopeState"):
+                compact.pop(key, None)
         id_limit = 1 if emergency else 3
-        for key in ("supportingEvidenceIds", "counterEvidenceIds", "causalPathIds"):
+        id_fields = (
+            ("supportingEvidenceIds", "counterEvidenceIds")
+            if emergency else
+            ("supportingEvidenceIds", "counterEvidenceIds", "causalPathIds")
+        )
+        for key in id_fields:
             values = [str(value or "").strip() for value in row.get(key) or [] if str(value or "").strip()]
             if values:
                 compact[key] = values[:id_limit]
@@ -973,12 +981,97 @@ def _minimum_temporal_windows(value: object, *, emergency: bool = False) -> List
     )
     if emergency:
         fields = (
-            "windowKey", "sampleCount", "requiredSampleCount", "hasSufficientHistory",
-            "lastObservedAt", "startPrice", "currentPrice", "priceChangePct", "drawdownFromPeakPct",
-            "reboundFromTroughPct", "priceVelocityChangePct", "volumeRatioEnd",
-            "smartMoneyDataState",
+            "windowKey", "sampleCount", "hasSufficientHistory",
+            "startPrice", "priceChangePct", "drawdownFromPeakPct",
+            "reboundFromTroughPct", "priceVelocityChangePct",
         )
     return [_selected_fields(item, fields) for item in list(value or [])[:12] if isinstance(item, dict)]
+
+
+def _minimum_company_context(value: object, *, emergency: bool = False) -> Dict[str, object]:
+    company = _mapping(value)
+    financials = _mapping(company.get("latestFinancials"))
+    financial_fields = (
+        "period", "revenue", "revenueGrowthPct", "operatingIncome",
+        "operatingIncomeGrowthPct", "netIncome", "netIncomeGrowthPct", "freeCashFlow",
+    )
+    annual = _compact_dict_rows(financials.get("annual"), financial_fields, 1)
+    quarterly = _compact_dict_rows(financials.get("quarterly"), financial_fields, 1)
+    payload = {
+        **_selected_fields(
+            company,
+            ("symbol", "companyName", "factRevision", "materialRevision", "judgmentUse"),
+        ),
+        "profile": _selected_fields(company.get("profile"), ("sector", "industry", "country")),
+        "valuation": _selected_fields(
+            company.get("valuation"),
+            (
+                "peRatio", "forwardPE", "pbr", "pegRatio", "trailingEPS",
+                "returnOnEquityPct", "dividendYieldPct", "enterpriseToEbitda",
+            ),
+        ),
+        "latestFinancials": {
+            "annual": annual,
+            "quarterly": quarterly,
+        },
+        "coverage": _selected_fields(
+            company.get("coverage"),
+            ("dataState", "officialSource", "financialPeriods", "valuationFields"),
+        ),
+    }
+    if emergency:
+        payload["profile"] = _selected_fields(company.get("profile"), ("sector",))
+        payload["valuation"] = _selected_fields(
+            company.get("valuation"),
+            ("peRatio", "forwardPE", "pbr", "pegRatio", "returnOnEquityPct"),
+        )
+        payload["latestFinancials"] = {"latest": (quarterly or annual)[:1]}
+        payload["coverage"] = _selected_fields(company.get("coverage"), ("dataState",))
+    return _bounded_value(
+        payload,
+        string_limit=72 if emergency else 100,
+        list_limit=1 if emergency else 2,
+        dict_limit=12,
+    )
+
+
+def _minimum_rule_rows(value: object, *, emergency: bool = False) -> List[Dict[str, object]]:
+    fields = (
+        ("ruleId", "label", "evidenceRole")
+        if emergency else
+        (
+            "ruleId", "label", "relationType", "reviewLevel", "dataState",
+            "evidenceRole", "evidenceState",
+        )
+    )
+    return [
+        _bounded_value(
+            _selected_fields(item, fields),
+            string_limit=72 if emergency else 100,
+            list_limit=1,
+            dict_limit=8,
+        )
+        for item in list(value or [])[:4]
+        if isinstance(item, dict)
+    ]
+
+
+def _minimum_driver_rows(value: object, *, emergency: bool = False) -> List[Dict[str, object]]:
+    fields = (
+        ("category", "direction", "evidenceRole", "summary")
+        if emergency else
+        ("category", "direction", "evidenceRole", "label", "summary")
+    )
+    return [
+        _bounded_value(
+            _selected_fields(item, fields),
+            string_limit=72 if emergency else 100,
+            list_limit=1,
+            dict_limit=6,
+        )
+        for item in list(value or [])[:2 if emergency else 4]
+        if isinstance(item, dict)
+    ]
 
 
 def _minimum_decision_brief(critical: Dict[str, object], *, emergency: bool = False) -> Dict[str, object]:
@@ -991,6 +1084,185 @@ def _minimum_decision_brief(critical: Dict[str, object], *, emergency: bool = Fa
     research = _mapping(critical.get("research"))
     account_policy = _mapping(critical.get("accountPolicy"))
     assessment = _mapping(critical.get("assessmentBundle"))
+    if emergency:
+        decision_payload = _bounded_value(
+            _selected_fields(
+                decision_state.get("decision"),
+                (
+                    "primaryAction", "decisionEffect", "judgementBlocked",
+                    "selectedRuleId", "targetRole",
+                ),
+            ),
+            string_limit=72,
+            list_limit=2,
+            dict_limit=12,
+        )
+        envelope_payload = _bounded_value(
+            _selected_fields(
+                envelope,
+                (
+                    "status", "preferredAction", "allowedActions", "blockedActions",
+                    "judgementBlocked", "selectedRuleId", "drivingRuleIds",
+                    "blockingRuleIds", "constraintRuleIds", "targetRole",
+                ),
+            ),
+            string_limit=72,
+            list_limit=1,
+            dict_limit=12,
+        )
+        assessment_payload = {
+            "investmentOpinion": _bounded_value(
+                _selected_fields(
+                    assessment.get("investmentOpinion"),
+                    (
+                        "status", "candidateAction", "selectedRuleId", "judgementBlocked",
+                        "decisionEffectCounts", "assessmentScope",
+                    ),
+                ),
+                string_limit=72,
+                list_limit=2,
+                dict_limit=8,
+            ),
+            "executionReadiness": _bounded_value(
+                _selected_fields(
+                    assessment.get("executionReadiness"),
+                    ("status", "selectedRuleId", "judgementBlocked", "assessmentScope"),
+                ),
+                string_limit=72,
+                list_limit=1,
+                dict_limit=6,
+            ),
+            "recommendedPlan": _bounded_value(
+                _selected_fields(
+                    assessment.get("recommendedPlan"),
+                    (
+                        "status", "type", "investmentAction", "planOption",
+                        "executionConstraintRuleIds", "meaningPreserved",
+                    ),
+                ),
+                string_limit=72,
+                list_limit=1,
+                dict_limit=7,
+            ),
+        }
+        execution_plan_payload = _bounded_value(
+            _selected_fields(
+                inference.get("executionPlan"),
+                (
+                    "primaryAction", "candidateAction", "allowedActions", "blockedActions",
+                    "decisionStage", "targetRole", "nextChecks", "missingDataImpact",
+                ),
+            ),
+            string_limit=72,
+            list_limit=1,
+            dict_limit=9,
+        )
+        question_payload = _selected_fields(
+            critical.get("question"),
+            ("questionId", "intent", "horizon"),
+        )
+        research_evidence_payload = _bounded_value(
+            _compact_dict_rows(
+                evidence.get("researchEvidence"),
+                (
+                    "evidenceId", "kind", "title", "evidenceRole", "validationState",
+                    "dataState", "source", "observedAt",
+                ),
+                1,
+            ),
+            string_limit=72,
+            list_limit=1,
+            dict_limit=8,
+        )
+        research_gaps_payload = _bounded_value(
+            _compact_dict_rows(
+                research.get("decisionChangingGaps"),
+                ("taskId", "question", "decisionRelevance", "status"),
+                1,
+            ),
+            string_limit=72,
+            list_limit=1,
+            dict_limit=4,
+        )
+        raw_coverage = _mapping(critical.get("dataCoverage"))
+        coverage_payload = {
+            "missingData": _bounded_value(
+                _compact_dict_rows(
+                    raw_coverage.get("missingData"),
+                    ("key", "label", "effect"),
+                    1,
+                ),
+                string_limit=72,
+                list_limit=1,
+                dict_limit=3,
+            ),
+            "internalDataAudit": _selected_fields(
+                raw_coverage.get("internalDataAudit"),
+                ("status", "loadedWindowCount", "requiredWindowCount", "cacheHit"),
+            ),
+            "temporalWindowCount": raw_coverage.get("temporalWindowCount"),
+        }
+        guardrails_payload = _selected_fields(
+            critical.get("guardrails"),
+            (
+                "mustReviewEveryInputHypothesis", "mustRespectActionEnvelope",
+                "mustIgnorePortfolioRebalancePolicy",
+            ),
+        )
+    else:
+        decision_payload = _bounded_value(
+            decision_state.get("decision") or {},
+            string_limit=100,
+            list_limit=3,
+            dict_limit=14,
+        )
+        envelope_payload = _selected_fields(
+            envelope,
+            (
+                "status", "preferredAction", "allowedActions", "blockedActions",
+                "judgementBlocked", "selectedRuleId", "drivingRuleIds",
+                "blockingRuleIds", "constraintRuleIds", "targetRole",
+                "invalidationConditions", "nextChecks",
+            ),
+        )
+        assessment_payload = {
+            key: _bounded_value(
+                assessment.get(key),
+                string_limit=100,
+                list_limit=2,
+                dict_limit=10,
+            )
+            for key in ("evidenceQuality", "investmentOpinion", "executionReadiness", "recommendedPlan")
+            if assessment.get(key) not in (None, "", [], {})
+        }
+        execution_plan_payload = _bounded_value(
+            inference.get("executionPlan") or {},
+            string_limit=100,
+            list_limit=3,
+            dict_limit=12,
+        )
+        question_payload = _bounded_value(
+            critical.get("question") or {}, string_limit=120, list_limit=2, dict_limit=8,
+        )
+        research_evidence_payload = _bounded_value(
+            list(evidence.get("researchEvidence") or [])[:3],
+            string_limit=120,
+            list_limit=3,
+            dict_limit=10,
+        )
+        research_gaps_payload = _bounded_value(
+            list(research.get("decisionChangingGaps") or [])[:2],
+            string_limit=120,
+            list_limit=2,
+            dict_limit=8,
+        )
+        coverage_payload = _bounded_value(
+            critical.get("dataCoverage") or {},
+            string_limit=100,
+            list_limit=3,
+            dict_limit=10,
+        )
+        guardrails_payload = critical.get("guardrails") or {}
     payload = {
         "schemaVersion": critical.get("schemaVersion"),
         "decisionContractVersion": critical.get("decisionContractVersion"),
@@ -1003,9 +1275,7 @@ def _minimum_decision_brief(critical: Dict[str, object], *, emergency: bool = Fa
             critical.get("executionProfile"),
             ("name", "reasoningEffort", "selectionReasons"),
         ),
-        "question": _bounded_value(
-            critical.get("question") or {}, string_limit=120, list_limit=2, dict_limit=8,
-        ),
+        "question": question_payload,
         "subject": _selected_fields(
             critical.get("subject"),
             ("symbol", "name", "market", "targetRole", "referenceDate"),
@@ -1016,36 +1286,14 @@ def _minimum_decision_brief(critical: Dict[str, object], *, emergency: bool = Fa
                 ("action", "summary", "referenceDate"),
             ),
             "precomputedActionCandidate": decision_state.get("precomputedActionCandidate"),
-            "decision": _bounded_value(
-                decision_state.get("decision") or {},
-                string_limit=100,
-                list_limit=3,
-                dict_limit=14,
-            ),
-            "actionEnvelope": _selected_fields(
-                envelope,
-                (
-                    "status", "preferredAction", "allowedActions", "blockedActions",
-                    "judgementBlocked", "selectedRuleId", "drivingRuleIds",
-                    "blockingRuleIds", "constraintRuleIds", "targetRole",
-                    "invalidationConditions", "nextChecks",
-                ),
-            ),
+            "decision": decision_payload,
+            "actionEnvelope": envelope_payload,
             **_selected_fields(
                 decision_state,
                 ("allowedActions", "blockedActions", "reviewLevel", "dataState", "conflictState"),
             ),
         },
-        "assessmentBundle": {
-            key: _bounded_value(
-                assessment.get(key),
-                string_limit=100,
-                list_limit=2,
-                dict_limit=10,
-            )
-            for key in ("evidenceQuality", "investmentOpinion", "executionReadiness", "recommendedPlan")
-            if assessment.get(key) not in (None, "", [], {})
-        },
+        "assessmentBundle": assessment_payload,
         "currentSituation": {
             "relationFacts": _bounded_value(
                 _compact_relation_facts(current.get("relationFacts"), 14 if emergency else 24),
@@ -1056,11 +1304,8 @@ def _minimum_decision_brief(critical: Dict[str, object], *, emergency: bool = Fa
             "temporalWindows": _minimum_temporal_windows(
                 current.get("temporalWindows"), emergency=emergency,
             ),
-            "companyContext": _bounded_value(
-                current.get("companyContext") or {},
-                string_limit=100,
-                list_limit=1,
-                dict_limit=14,
+            "companyContext": _minimum_company_context(
+                current.get("companyContext"), emergency=emergency,
             ),
             "companyValuationContext": _bounded_value(
                 current.get("companyValuationContext") or {},
@@ -1070,23 +1315,12 @@ def _minimum_decision_brief(critical: Dict[str, object], *, emergency: bool = Fa
             ),
         },
         "inference": {
-            "activeRules": _bounded_value(
-                list(inference.get("activeRules") or [])[:4],
-                string_limit=100,
-                list_limit=4,
-                dict_limit=10,
+            "activeRules": _minimum_rule_rows(
+                inference.get("activeRules"), emergency=emergency,
             ),
-            "executionPlan": _bounded_value(
-                inference.get("executionPlan") or {},
-                string_limit=100,
-                list_limit=3,
-                dict_limit=12,
-            ),
-            "decisionDrivers": _bounded_value(
-                list(inference.get("decisionDrivers") or [])[:4],
-                string_limit=100,
-                list_limit=4,
-                dict_limit=10,
+            "executionPlan": execution_plan_payload,
+            "decisionDrivers": _minimum_driver_rows(
+                inference.get("decisionDrivers"), emergency=emergency,
             ),
             "hypothesisSet": {
                 **_selected_fields(
@@ -1099,28 +1333,13 @@ def _minimum_decision_brief(critical: Dict[str, object], *, emergency: bool = Fa
             },
         },
         "evidence": {
-            "researchEvidence": _bounded_value(
-                list(evidence.get("researchEvidence") or [])[:2 if emergency else 3],
-                string_limit=120,
-                list_limit=2 if emergency else 3,
-                dict_limit=10,
-            ),
+            "researchEvidence": research_evidence_payload,
         },
         "research": {
-            "decisionChangingGaps": _bounded_value(
-                list(research.get("decisionChangingGaps") or [])[:2],
-                string_limit=120,
-                list_limit=2,
-                dict_limit=8,
-            ),
+            "decisionChangingGaps": research_gaps_payload,
             "verifiedEvidenceAvailable": research.get("verifiedEvidenceAvailable"),
         },
-        "dataCoverage": _bounded_value(
-            critical.get("dataCoverage") or {},
-            string_limit=100,
-            list_limit=3,
-            dict_limit=10,
-        ),
+        "dataCoverage": coverage_payload,
         "accountPolicy": {
             "actionPolicy": account_policy.get("actionPolicy"),
             "decisionPolicyScope": _selected_fields(
@@ -1134,7 +1353,7 @@ def _minimum_decision_brief(critical: Dict[str, object], *, emergency: bool = Fa
                 dict_limit=10,
             ),
         },
-        "guardrails": critical.get("guardrails") or {},
+        "guardrails": guardrails_payload,
         "contextBudget": {
             **_mapping(critical.get("contextBudget")),
             "status": "emergency-decision-contract" if emergency else "minimum-decision-contract",
@@ -1143,6 +1362,9 @@ def _minimum_decision_brief(critical: Dict[str, object], *, emergency: bool = Fa
     if emergency:
         payload["currentSituation"].pop("companyValuationContext", None)
         payload["assessmentBundle"].pop("evidenceQuality", None)
+        payload["contextBudget"].pop("reason", None)
+        if _clean(_mapping(critical.get("decisionPolicyScope")).get("name"), 40).lower() != "portfolio-rebalance":
+            payload["accountPolicy"].pop("portfolioLifecycle", None)
     return payload
 
 

@@ -283,6 +283,73 @@ class NotificationAIDecisionBriefTests(unittest.TestCase):
             payload["accountPolicy"]["portfolioLifecycle"]["rebalanceState"]["maximumNotionalBySymbol"],
         )
 
+    def test_production_shaped_symbol_context_preserves_ontology_contract_at_standard_limit(self):
+        context = decision_context()
+        relation = context["ontologyRelationContext"]
+        rule_ids = ["graph.production.rule." + str(index) for index in range(4)]
+        relation["activeRules"] = [{
+            "ruleId": rule_id,
+            "label": "운영 규칙 " + str(index),
+            "relationType": "HAS_INFERENCE_TRACE",
+            "evidenceRole": "support" if index % 2 == 0 else "risk",
+            "evidence": {"detail": "r" * 2000, "rows": ["r" * 500 for _ in range(10)]},
+        } for index, rule_id in enumerate(rule_ids)]
+        hypothesis_ids = ["hypothesis-instance:" + (str(index) * 24) for index in range(5)]
+        relation["investmentBrain"]["hypothesisSet"]["hypotheses"] = [{
+            "hypothesisId": hypothesis_id,
+            "templateId": "hypothesis-template:" + (str(index) * 32),
+            "claim": "경쟁 가설 " + ("h" * 1000),
+            "stance": "support" if index % 2 == 0 else "risk",
+            "verificationStatus": "verified-by-current-evidence",
+            "supportingEvidenceIds": ["relation-evidence:" + ("s" * 160)],
+            "counterEvidenceIds": ["relation-evidence:" + ("c" * 160)],
+        } for index, hypothesis_id in enumerate(hypothesis_ids)]
+        window_keys = ["15M", "1H", "SESSION", "1D", "3D", "5D", "20D"]
+        context["notificationAiInternalData"]["temporalWindows"] = [{
+            "windowKey": key,
+            "sampleCount": 100 + index,
+            "requiredSampleCount": 10,
+            "hasSufficientHistory": True,
+            "startPrice": 100 + index,
+            "currentPrice": 110 + index,
+            "priceChangePct": 10,
+            "drawdownFromPeakPct": -5,
+            "reboundFromTroughPct": 12,
+            "priceVelocityChangePct": 2,
+        } for index, key in enumerate(window_keys)]
+        relation["companyContext"] = {
+            "symbol": "NVDA",
+            "companyName": "NVIDIA",
+            "factRevision": "company-fact:" + ("f" * 80),
+            "judgmentUse": "reference",
+            "profile": {"sector": "Technology", "industry": "Semiconductors", "businessSummary": "x" * 5000},
+            "valuation": {
+                "peRatio": 35.0, "forwardPE": 22.0, "pbr": 20.0,
+                "pegRatio": 0.8, "returnOnEquityPct": 80.0,
+            },
+            "latestFinancials": {
+                "annual": [{"period": "2026", "revenue": 1000, "netIncome": 200, "unused": "x" * 5000}],
+                "quarterly": [{"period": "2026-Q1", "revenue": 300, "netIncome": 70, "unused": "x" * 5000}],
+            },
+            "coverage": {"dataState": "sufficient", "officialSource": "SEC EDGAR"},
+        }
+        relation["assessmentBundle"] = {
+            "investmentOpinion": {
+                "status": "candidate-ready", "candidateAction": "BUY",
+                "selectedRuleId": rule_ids[0], "entries": [{"unused": "a" * 4000} for _ in range(10)],
+            },
+            "executionReadiness": {"status": "conditional", "entries": [{"unused": "a" * 4000}]},
+            "recommendedPlan": {"status": "constrained", "investmentAction": "BUY"},
+        }
+
+        prompt = build_notification_ai_decision_prompt(context, {}, max_prompt_bytes=16 * 1024)
+        payload = json.loads(prompt.split("DecisionBrief:\n", 1)[1])
+
+        self.assertLessEqual(len(prompt.encode("utf-8")), 16 * 1024)
+        self.assertEqual(window_keys, [item["windowKey"] for item in payload["currentSituation"]["temporalWindows"]])
+        self.assertEqual(hypothesis_ids, [item["hypothesisId"] for item in payload["inference"]["hypothesisSet"]["hypotheses"]])
+        self.assertEqual(rule_ids, [item["ruleId"] for item in payload["inference"]["activeRules"]])
+
     def test_ordinary_symbol_decision_excludes_rebalance_policy_but_scheduled_review_keeps_it(self):
         context = decision_context()
         context["rawLines"] = [

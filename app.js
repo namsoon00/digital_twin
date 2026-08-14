@@ -12627,6 +12627,8 @@
     var candidates = investmentCalendarCandidates();
     var pageInfo = investmentCalendarCandidatePageInfo(candidates);
     var pending = Number((payload.summary || {}).pending || candidates.length || 0);
+    var mobile = mobileInfiniteScrollEnabled();
+    var initialLoading = state.investmentCalendarCandidatesLoading && !candidates.length;
     return [
       '<article class="panel investment-calendar-list-panel investment-calendar-candidate-panel"' + cardTypeAttrs("process-card", candidates.length ? "watch" : "hold") + '>',
       '<div class="panel-head">',
@@ -12635,9 +12637,9 @@
       '</div>',
       renderInvestmentCalendarDiscoveryStatus(),
       renderInvestmentCalendarResearchStatus(),
-      candidates.length && !mobileInfiniteScrollEnabled() ? renderInvestmentCalendarCandidatePager(pageInfo) : '',
-      '<div class="investment-calendar-list">',
-      state.investmentCalendarCandidatesLoading ? renderEmptyState({
+      candidates.length && !mobile ? renderInvestmentCalendarCandidatePager(pageInfo) : '',
+      '<div class="investment-calendar-list" aria-busy="' + (state.investmentCalendarCandidatesLoading ? "true" : "false") + '">',
+      initialLoading ? renderEmptyState({
         tone: "watch",
         label: "Review",
         title: "자동 감지 후보를 조회하고 있습니다",
@@ -12651,7 +12653,7 @@
         meta: ["실적", "배당", "ADR/GDR", "지수 편입"]
       }) : pageInfo.visible.map(renderInvestmentCalendarCandidate).join("")),
       '</div>',
-      candidates.length && mobileInfiniteScrollEnabled() ? renderInvestmentCalendarCandidatePager(pageInfo) : '',
+      candidates.length && mobile ? renderInvestmentCalendarCandidatePager(pageInfo) : '',
       '</article>'
     ].join("");
   }
@@ -12691,8 +12693,8 @@
 
   function renderInvestmentCalendarCandidatePager(pageInfo) {
     var from = pageInfo.total ? pageInfo.start + 1 : 0;
-    var canPrev = pageInfo.page > 0;
-    var canNext = pageInfo.page < pageInfo.pageCount - 1;
+    var canPrev = !state.investmentCalendarCandidatesLoading && pageInfo.page > 0;
+    var canNext = !state.investmentCalendarCandidatesLoading && pageInfo.page < pageInfo.pageCount - 1;
     if (mobileInfiniteScrollEnabled()) {
       return renderMobileInfiniteScrollFooter({
         loaded: pageInfo.end,

@@ -351,6 +351,9 @@
   var realtimeSocket = null;
   var realtimeReconnectTimer = null;
   var realtimeReloadTimer = null;
+  var symbolUniverseRefreshPollTimer = null;
+  var symbolUniverseRefreshLoadedJobId = "";
+  var symbolUniverseRefreshNotifiedJobId = "";
   var snapshotPollTimer = null;
   var scheduledRenderFrame = 0;
   var activeJsonRequests = {};
@@ -635,6 +638,9 @@
     symbolUniverse: { items: [], summary: { markets: [], sources: [], total: 0, maxAgeHours: 24 } },
     symbolUniverseLoading: false,
     symbolUniverseRefreshing: false,
+    symbolUniverseRefresh: { status: "idle", running: false, jobId: "", completedCount: 0, totalCount: 0, progressPercent: 0 },
+    symbolUniverseRefreshStatusLoading: false,
+    symbolUniverseRefreshStatusLoaded: false,
     symbolUniverseLoaded: false,
     symbolUniverseError: "",
     symbolUniverseQuery: "",
@@ -916,7 +922,7 @@
     var controller = typeof window.AbortController === "function" ? new window.AbortController() : null;
     var timeoutMs = Math.max(1000, Number(options.timeoutMs || REQUEST_TIMEOUT_MS));
     var timeout = controller ? setTimeout(function () { controller.abort(); }, timeoutMs) : null;
-    var activityId = beginNetworkActivity(path, "GET");
+    var activityId = options.silent ? "" : beginNetworkActivity(path, "GET");
     var request = fetch(path, {
       headers: { "Accept": "application/json" },
       cache: "no-store",
@@ -932,7 +938,7 @@
     }).finally(function () {
       if (timeout) clearTimeout(timeout);
       if (activeJsonRequests[key] === request) delete activeJsonRequests[key];
-      endNetworkActivity(activityId);
+      if (activityId) endNetworkActivity(activityId);
     });
     activeJsonRequests[key] = request;
     return request;
@@ -1122,7 +1128,7 @@
           tasks.push(loadNotificationSchedules());
         } else if (/^investment_strategy\./.test(eventType)) {
           tasks.push(loadStrategyProposals(true));
-        } else if (/^symbol_universe\./.test(eventType)) {
+        } else if (/^symbol_universe\.(refreshed|refresh_failed)$/.test(eventType)) {
           tasks.push(loadSymbolUniverse());
         } else if (/^(dashboard\.snapshot_ready|monitoring\.snapshot_collected|app\.|chat\.)/.test(eventType)) {
           tasks.push(load());
@@ -1191,6 +1197,18 @@
     if (event.name === "investment_strategy.performance_recorded") {
       return { message: "투자 전략 성과 표본을 기록했습니다.", tone: "success" };
     }
+    if (event.name === "symbol_universe.refresh_requested") {
+      return { message: "전체 종목 목록 갱신을 시작했습니다.", tone: "success" };
+    }
+    if (event.name === "symbol_universe.refreshed") {
+      return {
+        message: payload.status === "partial" ? "전체 종목 목록을 일부 갱신했습니다." : "전체 종목 목록 갱신을 완료했습니다.",
+        tone: payload.status === "partial" ? "caution" : "success"
+      };
+    }
+    if (event.name === "symbol_universe.refresh_failed") {
+      return { message: "전체 종목 목록 갱신에 실패했습니다. 마지막 성공 목록을 유지합니다.", tone: "danger" };
+    }
     return null;
   }
 
@@ -1228,6 +1246,13 @@
       markRealtimeState(true, eventType);
       render();
       return;
+    }
+    if (/^symbol_universe\.(refresh_requested|refreshed|refresh_failed)$/.test(eventType)) {
+      var refreshEventApplied = applySymbolUniverseRefreshStatus(
+        message.payload || {},
+        eventType === "symbol_universe.refresh_requested" ? "websocket-request" : "websocket"
+      );
+      if (refreshEventApplied === false) return;
     }
     recordRealtimeEvent((message.payload && message.payload.event) || {
       name: eventType,
@@ -7287,6 +7312,123 @@
       });
   }
 
+  function symbolUniverseRefreshActive(payload) {
+    var status = String((payload || {}).status || "").toLowerCase();
+    return Boolean((payload || {}).running) || ["submitting", "queued", "running"].indexOf(status) >= 0;
+  }
+
+  function symbolUniverseRefreshTerminal(payload) {
+    return ["completed", "partial", "failed", "unknown"].indexOf(String((payload || {}).status || "").toLowerCase()) >= 0;
+  }
+
+  function normalizedSymbolUniverseRefreshStatus(payload) {
+    payload = payload && typeof payload === "object" ? payload : {};
+    var markets = Array.isArray(payload.markets) ? payload.markets : [];
+    var completedMarkets = Array.isArray(payload.completedMarkets) ? payload.completedMarkets : [];
+    var totalCount = Math.max(0, Number(payload.totalCount == null ? markets.length : payload.totalCount));
+    var completedCount = Math.max(0, Number(payload.completedCount == null ? completedMarkets.length : payload.completedCount));
+    var status = String(payload.status || "idle").toLowerCase();
+    var progress = Number(payload.progressPercent);
+    if (!Number.isFinite(progress)) progress = totalCount ? Math.round((completedCount / totalCount) * 100) : 0;
+    return Object.assign({}, payload, {
+      jobId: String(payload.jobId || ""),
+      status: status,
+      running: Boolean(payload.running) || ["submitting", "queued", "running"].indexOf(status) >= 0,
+      markets: markets,
+      completedMarkets: completedMarkets,
+      completedCount: completedCount,
+      totalCount: totalCount,
+      progressPercent: Math.max(0, Math.min(100, progress)),
+      results: Array.isArray(payload.results) ? payload.results : []
+    });
+  }
+
+  function symbolUniverseRefreshCompletionMessage(payload) {
+    var status = String((payload || {}).status || "");
+    if (status === "completed") return { message: "전체 종목 목록 갱신을 완료했습니다.", tone: "success" };
+    if (status === "partial") return { message: "일부 시장만 갱신했습니다. 실패한 시장은 마지막 성공 목록을 유지합니다.", tone: "caution" };
+    if (status === "failed") return { message: "전체 종목 목록 갱신에 실패했습니다. 마지막 성공 목록을 유지합니다.", tone: "danger" };
+    if (status === "unknown") return { message: "이전 갱신 상태가 만료되어 최신 목록을 다시 확인합니다.", tone: "caution" };
+    return null;
+  }
+
+  function clearSymbolUniverseRefreshPoll() {
+    if (symbolUniverseRefreshPollTimer) clearTimeout(symbolUniverseRefreshPollTimer);
+    symbolUniverseRefreshPollTimer = null;
+  }
+
+  function scheduleSymbolUniverseRefreshPoll(delayMs) {
+    clearSymbolUniverseRefreshPoll();
+    if (!symbolUniverseRefreshActive(state.symbolUniverseRefresh)) return;
+    symbolUniverseRefreshPollTimer = setTimeout(function () {
+      symbolUniverseRefreshPollTimer = null;
+      loadSymbolUniverseRefreshStatus(true);
+    }, Math.max(1000, Number(delayMs || 2000)));
+  }
+
+  function applySymbolUniverseRefreshStatus(payload, source) {
+    var next = normalizedSymbolUniverseRefreshStatus(payload);
+    var current = state.symbolUniverseRefresh || {};
+    if (current.jobId && symbolUniverseRefreshActive(current)) {
+      if (!next.jobId) return false;
+      if (current.jobId !== next.jobId && source !== "websocket-request" && !next.superseded) return false;
+    }
+    state.symbolUniverseRefresh = next;
+    state.symbolUniverseRefreshing = symbolUniverseRefreshActive(next);
+    state.symbolUniverseRefreshStatusLoaded = true;
+    if (state.symbolUniverseRefreshing) {
+      state.symbolUniverseError = "";
+      scheduleSymbolUniverseRefreshPoll(2000);
+      return true;
+    }
+    clearSymbolUniverseRefreshPoll();
+    if (next.jobId && symbolUniverseRefreshTerminal(next)) state.symbolUniverseError = "";
+    if (!symbolUniverseRefreshTerminal(next) || !next.jobId) return true;
+    if (next.jobId !== symbolUniverseRefreshNotifiedJobId && source === "poll") {
+      var notice = symbolUniverseRefreshCompletionMessage(next);
+      if (notice) showSnackbar(notice.message, notice.tone);
+      symbolUniverseRefreshNotifiedJobId = next.jobId;
+    } else if (source === "websocket") {
+      symbolUniverseRefreshNotifiedJobId = next.jobId;
+    }
+    if (next.jobId !== symbolUniverseRefreshLoadedJobId && source === "poll") {
+      symbolUniverseRefreshLoadedJobId = next.jobId;
+      loadSymbolUniverse();
+    } else if (source === "websocket") {
+      symbolUniverseRefreshLoadedJobId = next.jobId;
+    }
+    return true;
+  }
+
+  function loadSymbolUniverseRefreshStatus(force) {
+    if (isStaticPreviewHost()) {
+      state.symbolUniverseRefreshStatusLoaded = true;
+      return Promise.resolve(null);
+    }
+    if (state.symbolUniverseRefreshStatusLoading && !force) return Promise.resolve(state.symbolUniverseRefresh);
+    state.symbolUniverseRefreshStatusLoading = true;
+    var jobId = String((state.symbolUniverseRefresh || {}).jobId || "");
+    var path = "/api/symbol-universe/refresh/status" + (jobId ? "?jobId=" + encodeURIComponent(jobId) : "");
+    return requestJson(path, { key: "symbol-universe-refresh-status", timeoutMs: 8000, force: true, silent: true })
+      .then(function (payload) {
+        applySymbolUniverseRefreshStatus(payload, force ? "poll" : "initial");
+        return payload;
+      })
+      .catch(function (error) {
+        if (symbolUniverseRefreshActive(state.symbolUniverseRefresh)) {
+          state.symbolUniverseRefresh = Object.assign({}, state.symbolUniverseRefresh, {
+            pollError: error.message || "갱신 상태를 확인하지 못했습니다."
+          });
+          scheduleSymbolUniverseRefreshPoll(4000);
+        }
+        return null;
+      })
+      .finally(function () {
+        state.symbolUniverseRefreshStatusLoading = false;
+        if (state.snapshot) render();
+      });
+  }
+
   function refreshSymbolUniverse() {
     if (isStaticPreviewHost() || state.serverSettingsLocked) {
       state.symbolUniverseError = "공유 모드에서는 종목 유니버스를 갱신할 수 없습니다.";
@@ -7296,22 +7438,31 @@
     }
     state.symbolUniverseRefreshing = true;
     state.symbolUniverseError = "";
-    render();
     var markets = state.symbolUniverseMarket ? [state.symbolUniverseMarket] : ["KOSPI", "KOSDAQ", "NASDAQ"];
-    return sendJson("/api/symbol-universe/refresh", "POST", { markets: markets })
+    state.symbolUniverseRefresh = normalizedSymbolUniverseRefreshStatus({
+      status: "submitting",
+      running: true,
+      markets: markets,
+      completedMarkets: [],
+      completedCount: 0,
+      totalCount: markets.length,
+      progressPercent: 0
+    });
+    render();
+    return sendJson("/api/symbol-universe/refresh", "POST", { markets: markets }, { timeoutMs: 10000 })
       .then(function (payload) {
-        if (payload.summary) {
-          state.symbolUniverse.summary = payload.summary;
-        }
-        showSnackbar("전체 종목 목록을 갱신했습니다.");
-        return loadSymbolUniverse();
+        applySymbolUniverseRefreshStatus(payload, "request");
+        showSnackbar(payload.coalesced ? "진행 중인 목록 갱신에 요청을 합쳤습니다." : "목록 갱신을 접수했습니다. 화면을 벗어나도 계속 처리됩니다.");
+        scheduleSymbolUniverseRefreshPoll(1200);
+        return payload;
       })
       .catch(function (error) {
+        state.symbolUniverseRefreshing = false;
+        state.symbolUniverseRefresh = normalizedSymbolUniverseRefreshStatus({ status: "failed", lastError: error.message || "" });
         state.symbolUniverseError = error.message || "종목 유니버스를 갱신하지 못했습니다.";
         showSnackbar(state.symbolUniverseError, "danger");
       })
       .finally(function () {
-        state.symbolUniverseRefreshing = false;
         render();
       });
   }
@@ -9981,6 +10132,9 @@
     }
     if (state.activeTab === "feed" && normalizeMarketWorkspaceMode(state.marketWorkspaceMode) === "universe" && !state.symbolUniverseLoaded && !state.symbolUniverseLoading) {
       loadSymbolUniverse();
+    }
+    if (state.activeTab === "feed" && normalizeMarketWorkspaceMode(state.marketWorkspaceMode) === "universe" && !state.symbolUniverseRefreshStatusLoaded && !state.symbolUniverseRefreshStatusLoading) {
+      loadSymbolUniverseRefreshStatus(false);
     }
     if ((state.activeTab === "overview" || state.activeTab === "calendar") && !state.investmentCalendar && !state.investmentCalendarLoading) {
       loadInvestmentCalendar(false);
@@ -19509,6 +19663,8 @@
       "monitoring.snapshot_collected": "모니터링 스냅샷",
       "monitoring.alerts_detected": "모니터링 알림",
       "monitoring.cycle_completed": "모니터링 사이클",
+      "symbol_universe.refresh_requested": "전체 종목 갱신 시작",
+      "symbol_universe.refresh_failed": "전체 종목 갱신 실패",
       "symbol_universe.refreshed": "전체 종목 갱신"
     }[name] || name || "-";
   }
@@ -25333,6 +25489,49 @@
     return (item.stale ? "갱신 필요" : "신선") + " · " + formatClock(item.lastSeenAt);
   }
 
+  function symbolUniverseRefreshButtonLabel() {
+    var refresh = state.symbolUniverseRefresh || {};
+    if (symbolUniverseRefreshActive(refresh)) {
+      var completed = Number(refresh.completedCount || 0);
+      var total = Number(refresh.totalCount || 0);
+      return total ? "갱신 중 " + completed + "/" + total : "갱신 요청 중";
+    }
+    if (state.symbolUniverseLoading) return "조회 중";
+    return "목록 갱신";
+  }
+
+  function renderSymbolUniverseRefreshStatus() {
+    var refresh = state.symbolUniverseRefresh || {};
+    var status = String(refresh.status || "idle");
+    var active = symbolUniverseRefreshActive(refresh);
+    if (!active && (!refresh.jobId || ["completed", "partial", "failed"].indexOf(status) < 0)) return "";
+    var completed = Number(refresh.completedCount || 0);
+    var total = Number(refresh.totalCount || (refresh.markets || []).length || 0);
+    var percent = Math.max(0, Math.min(100, Number(refresh.progressPercent || 0)));
+    var title = active
+      ? (status === "submitting" || status === "queued" ? "갱신 요청을 접수하는 중" : "전체 종목 목록 갱신 중")
+      : (status === "completed" ? "전체 종목 목록 갱신 완료" : status === "partial" ? "일부 시장 갱신 완료" : "종목 목록 갱신 실패");
+    var detail = active
+      ? "서버에서 계속 처리됩니다. 다른 화면으로 이동하거나 브라우저를 다시 열어도 상태를 이어서 확인합니다."
+      : (status === "completed" ? "저장된 최신 목록을 불러왔습니다." : "갱신하지 못한 시장은 마지막 성공 목록을 계속 사용합니다.");
+    var resultText = (refresh.results || []).map(function (item) {
+      var label = marketLabel(item.market);
+      if (item.status === "ok") return label + " " + Number(item.count || 0) + "개";
+      return label + " 실패" + (item.error ? " · " + item.error : "");
+    });
+    return [
+      '<section class="symbol-refresh-status ' + escapeHtml(active ? "active" : status) + '" aria-live="polite">',
+      '<div class="symbol-refresh-status-head"><strong>' + escapeHtml(title) + '</strong><span>' + escapeHtml(total ? completed + "/" + total + " 시장" : "준비 중") + '</span></div>',
+      '<div class="symbol-refresh-track" role="progressbar" aria-label="전체 종목 목록 갱신 진행률" aria-valuemin="0" aria-valuemax="100" aria-valuenow="' + escapeHtml(percent) + '"><span style="width:' + escapeHtml(percent) + '%"></span></div>',
+      '<p>' + escapeHtml(detail) + '</p>',
+      resultText.length ? '<div class="symbol-refresh-results">' + resultText.map(function (item) { return '<span>' + escapeHtml(item) + '</span>'; }).join("") + '</div>' : '',
+      refresh.pollError && active ? '<em>' + escapeHtml(refresh.pollError) + ' 자동으로 다시 확인합니다.</em>' : '',
+      refresh.lastError && !active ? '<em>' + escapeHtml(refresh.lastError) + '</em>' : '',
+      refresh.finishedAt && !active ? '<small>완료 ' + escapeHtml(formatClock(refresh.finishedAt)) + '</small>' : '',
+      '</section>'
+    ].join("");
+  }
+
   function renderSymbolUniversePanel(options) {
     var full = Boolean(options && options.full);
     var universe = state.symbolUniverse || {};
@@ -25385,8 +25584,9 @@
       }).join("") + '</select></label>' : '',
       full ? '<label><span>추가 대상</span><select name="watchAccount" data-symbol-add-account>' + renderWatchAccountSelectOptions() + '</select></label>' : '',
       '<button class="text-button primary">검색</button>',
-      '<button class="text-button" type="button" data-action="refresh-symbol-universe"' + (state.symbolUniverseLoading || state.symbolUniverseRefreshing ? ' disabled' : '') + '>' + escapeHtml(state.symbolUniverseRefreshing || state.symbolUniverseLoading ? "갱신 중" : "목록 갱신") + '</button>',
+      '<button class="text-button" type="button" data-action="refresh-symbol-universe"' + (state.symbolUniverseLoading || state.symbolUniverseRefreshing ? ' disabled' : '') + '>' + escapeHtml(symbolUniverseRefreshButtonLabel()) + '</button>',
       '</form>',
+      renderSymbolUniverseRefreshStatus(),
       state.symbolUniverseError ? '<p class="form-error">' + escapeHtml(state.symbolUniverseError) + '</p>' : '',
       (state.symbolUniverseLoading && renderedItems.length) ? '<p class="data-refresh-status">최근 성공 목록을 먼저 보여주는 중입니다. 최신 카탈로그는 백그라운드에서 갱신합니다.</p>' : '',
       '<p class="symbol-universe-note subtle">코스피·코스닥은 KRX KIND, 나스닥은 Nasdaq Trader 심볼 디렉터리를 운영 DB에 저장합니다. 원천 호출이 실패해도 마지막 성공 목록을 계속 사용합니다.</p>',
@@ -25407,7 +25607,7 @@
         title: "검색 조건에 맞는 종목이 없습니다",
         description: "시장 필터와 검색어를 줄이거나 목록 갱신을 실행해 최신 카탈로그를 다시 불러오세요.",
         meta: [marketLabel(state.symbolUniverseMarket || "전체"), state.symbolUniverseQuery || "검색어 없음"],
-        action: '<button class="text-button primary" type="button" data-action="refresh-symbol-universe"' + (state.symbolUniverseLoading || state.symbolUniverseRefreshing ? ' disabled' : '') + '>' + escapeHtml(state.symbolUniverseRefreshing || state.symbolUniverseLoading ? "갱신 중" : "카탈로그 갱신") + '</button>'
+        action: '<button class="text-button primary" type="button" data-action="refresh-symbol-universe"' + (state.symbolUniverseLoading || state.symbolUniverseRefreshing ? ' disabled' : '') + '>' + escapeHtml(symbolUniverseRefreshButtonLabel()) + '</button>'
       })),
       '</div>',
       full ? renderSymbolUniverseDetailPanel(renderedItems) : '',
@@ -25443,7 +25643,7 @@
       '<span>03 다음 행동</span>',
       '<strong>' + escapeHtml(quoteCount ? "관심 목록 편입" : "목록 갱신") + '</strong>',
       '<p>카탈로그를 갱신한 뒤 계정별 관심 종목 후보로 넘깁니다.</p>',
-      '<button class="text-button primary" type="button" data-action="refresh-symbol-universe"' + (state.symbolUniverseLoading || state.symbolUniverseRefreshing ? ' disabled' : '') + '>' + escapeHtml(state.symbolUniverseRefreshing || state.symbolUniverseLoading ? "갱신 중" : "목록 갱신") + '</button>',
+      '<button class="text-button primary" type="button" data-action="refresh-symbol-universe"' + (state.symbolUniverseLoading || state.symbolUniverseRefreshing ? ' disabled' : '') + '>' + escapeHtml(symbolUniverseRefreshButtonLabel()) + '</button>',
       '</section>',
       '</div>'
     ].join("");

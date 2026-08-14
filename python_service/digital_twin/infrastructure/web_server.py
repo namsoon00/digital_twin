@@ -36,7 +36,7 @@ from ..application.notification_replay_service import NotificationReplayService
 from ..application.ontology_catalog_query_service import OntologyCatalogQueryService
 from ..application.ontology_diagnostics_service import OntologyDiagnosticsService
 from ..application.research_evidence_governance_service import ResearchEvidenceGovernanceService
-from ..application.symbol_universe_service import DEFAULT_SYMBOL_SEEDS, seed_symbol
+from ..application.symbol_universe_service import DEFAULT_SYMBOL_SEEDS, SUPPORTED_MARKETS, seed_symbol
 from ..domain.events import (
     APP_ITEM_REMOVED,
     APP_ITEM_UPDATED,
@@ -53,6 +53,8 @@ from ..domain.events import (
     NOTIFICATION_TEMPLATE_UPDATED,
     NOTIFICATION_TEST_REQUESTED,
     SETTINGS_UPDATED,
+    SYMBOL_UNIVERSE_REFRESH_FAILED,
+    SYMBOL_UNIVERSE_REFRESH_REQUESTED,
     SYMBOL_UNIVERSE_REFRESHED,
     DomainEvent,
     research_evidence_lifecycle_events,
@@ -160,6 +162,21 @@ WATCHLIST_REFRESH_STATE: Dict[str, object] = {
     "lastStatus": "idle",
     "lastError": "",
     "lastFinishedAt": "",
+}
+SYMBOL_UNIVERSE_REFRESH_LOCK = threading.Lock()
+SYMBOL_UNIVERSE_REFRESH_STATE: Dict[str, object] = {
+    "jobId": "",
+    "running": False,
+    "status": "idle",
+    "markets": set(),
+    "pendingMarkets": set(),
+    "completedMarkets": set(),
+    "results": [],
+    "summary": {},
+    "requestedAt": "",
+    "startedAt": "",
+    "finishedAt": "",
+    "lastError": "",
 }
 
 NON_CADENCE_MESSAGE_GUIDES = {
@@ -3726,19 +3743,211 @@ def fallback_symbol_universe_summary(warning: str = "") -> Dict[str, object]:
     }
 
 
-def refresh_symbol_universe_payload(payload: Dict[str, object]) -> Dict[str, object]:
+def requested_symbol_universe_markets(payload: Dict[str, object]) -> List[str]:
     raw_markets = payload.get("markets") if isinstance(payload, dict) else None
     if isinstance(raw_markets, str):
-        markets = [item.strip() for item in raw_markets.split(",") if item.strip()]
+        requested = [item.strip().upper() for item in raw_markets.split(",") if item.strip()]
     elif isinstance(raw_markets, list):
-        markets = [str(item or "").strip() for item in raw_markets if str(item or "").strip()]
+        requested = [str(item or "").strip().upper() for item in raw_markets if str(item or "").strip()]
     else:
-        markets = None
+        requested = list(SUPPORTED_MARKETS)
+    supported = [str(market or "").upper() for market in SUPPORTED_MARKETS]
+    selected = [market for market in supported if market in requested]
+    return selected or supported
+
+
+def _symbol_universe_refresh_status_locked() -> Dict[str, object]:
+    markets = [market for market in SUPPORTED_MARKETS if market in SYMBOL_UNIVERSE_REFRESH_STATE["markets"]]
+    completed = [market for market in markets if market in SYMBOL_UNIVERSE_REFRESH_STATE["completedMarkets"]]
+    total = len(markets)
+    finished = len(completed)
+    status = str(SYMBOL_UNIVERSE_REFRESH_STATE["status"] or "idle")
+    progress = 100 if status in {"completed", "partial", "failed"} and total else round((finished / total) * 100) if total else 0
+    return {
+        "jobId": str(SYMBOL_UNIVERSE_REFRESH_STATE["jobId"] or ""),
+        "status": status,
+        "running": bool(SYMBOL_UNIVERSE_REFRESH_STATE["running"]),
+        "pending": bool(SYMBOL_UNIVERSE_REFRESH_STATE["pendingMarkets"]),
+        "markets": markets,
+        "completedMarkets": completed,
+        "completedCount": finished,
+        "totalCount": total,
+        "progressPercent": progress,
+        "results": [dict(item) for item in SYMBOL_UNIVERSE_REFRESH_STATE["results"]],
+        "summary": dict(SYMBOL_UNIVERSE_REFRESH_STATE["summary"]),
+        "requestedAt": str(SYMBOL_UNIVERSE_REFRESH_STATE["requestedAt"] or ""),
+        "startedAt": str(SYMBOL_UNIVERSE_REFRESH_STATE["startedAt"] or ""),
+        "finishedAt": str(SYMBOL_UNIVERSE_REFRESH_STATE["finishedAt"] or ""),
+        "lastError": str(SYMBOL_UNIVERSE_REFRESH_STATE["lastError"] or ""),
+    }
+
+
+def symbol_universe_refresh_status(job_id: str = "") -> Dict[str, object]:
+    with SYMBOL_UNIVERSE_REFRESH_LOCK:
+        status = _symbol_universe_refresh_status_locked()
+    requested_job_id = configured(job_id)
+    if requested_job_id and status["jobId"] and requested_job_id != status["jobId"]:
+        status["requestedJobId"] = requested_job_id
+        status["superseded"] = True
+        return status
+    if requested_job_id and not status["jobId"]:
+        return {
+            "jobId": requested_job_id,
+            "status": "unknown",
+            "running": False,
+            "pending": False,
+            "markets": [],
+            "completedMarkets": [],
+            "completedCount": 0,
+            "totalCount": 0,
+            "progressPercent": 0,
+            "results": [],
+            "summary": {},
+            "requestedAt": "",
+            "startedAt": "",
+            "finishedAt": "",
+            "lastError": "갱신 작업 상태를 찾을 수 없습니다. 서버가 재시작되었을 수 있습니다.",
+            "latestJobId": "",
+        }
+    return status
+
+
+def _replace_symbol_universe_market_result(result: Dict[str, object]) -> None:
+    market = str(result.get("market") or "").upper()
+    rows = [
+        dict(item)
+        for item in SYMBOL_UNIVERSE_REFRESH_STATE["results"]
+        if str(item.get("market") or "").upper() != market
+    ]
+    rows.append(dict(result))
+    order = {market_name: index for index, market_name in enumerate(SUPPORTED_MARKETS)}
+    SYMBOL_UNIVERSE_REFRESH_STATE["results"] = sorted(
+        rows,
+        key=lambda item: order.get(str(item.get("market") or "").upper(), len(order)),
+    )
+
+
+def run_symbol_universe_refresh_pipeline(job_id: str) -> None:
+    try:
+        new_domain_event(
+            SYMBOL_UNIVERSE_REFRESH_REQUESTED,
+            job_id,
+            {"jobId": job_id, "status": "running", "markets": symbol_universe_refresh_status(job_id)["markets"]},
+        )
+    except Exception as error:  # noqa: BLE001 - event transport cannot cancel the accepted refresh.
+        report_runtime_error(operational_error_reporter(), "Symbol universe refresh", error, "refresh requested event")
+
+    service = None
+    while True:
+        with SYMBOL_UNIVERSE_REFRESH_LOCK:
+            if SYMBOL_UNIVERSE_REFRESH_STATE["jobId"] != job_id:
+                return
+            batch = [
+                market
+                for market in SUPPORTED_MARKETS
+                if market in SYMBOL_UNIVERSE_REFRESH_STATE["pendingMarkets"]
+                and market not in SYMBOL_UNIVERSE_REFRESH_STATE["completedMarkets"]
+            ]
+            SYMBOL_UNIVERSE_REFRESH_STATE["pendingMarkets"].difference_update(batch)
+            SYMBOL_UNIVERSE_REFRESH_STATE["status"] = "running"
+            SYMBOL_UNIVERSE_REFRESH_STATE["startedAt"] = SYMBOL_UNIVERSE_REFRESH_STATE["startedAt"] or now()
+
+        for market in batch:
+            try:
+                if service is None:
+                    service = symbol_universe_service()
+                payload = service.refresh([market])
+                rows = [dict(item) for item in (payload.get("results") or []) if isinstance(item, dict)]
+                result = next((item for item in rows if str(item.get("market") or "").upper() == market), None)
+                result = result or {"market": market, "status": "error", "count": 0, "error": "갱신 결과가 없습니다."}
+                summary = payload.get("summary") if isinstance(payload.get("summary"), dict) else {}
+            except Exception as error:  # noqa: BLE001 - one market must not stop the remaining catalog refresh.
+                result = {"market": market, "status": "error", "count": 0, "error": str(error)[:300]}
+                summary = {}
+                report_runtime_error(operational_error_reporter(), "Symbol universe refresh", error, market)
+            with SYMBOL_UNIVERSE_REFRESH_LOCK:
+                if SYMBOL_UNIVERSE_REFRESH_STATE["jobId"] != job_id:
+                    return
+                _replace_symbol_universe_market_result(result)
+                SYMBOL_UNIVERSE_REFRESH_STATE["completedMarkets"].add(market)
+                if summary:
+                    SYMBOL_UNIVERSE_REFRESH_STATE["summary"] = dict(summary)
+
+        with SYMBOL_UNIVERSE_REFRESH_LOCK:
+            if SYMBOL_UNIVERSE_REFRESH_STATE["jobId"] != job_id:
+                return
+            remaining = set(SYMBOL_UNIVERSE_REFRESH_STATE["pendingMarkets"]).difference(
+                SYMBOL_UNIVERSE_REFRESH_STATE["completedMarkets"]
+            )
+            if remaining:
+                continue
+            results = [dict(item) for item in SYMBOL_UNIVERSE_REFRESH_STATE["results"]]
+            errors = [str(item.get("error") or item.get("status") or "error") for item in results if item.get("status") != "ok"]
+            success_count = len([item for item in results if item.get("status") == "ok"])
+            if errors and not success_count:
+                final_status = "failed"
+            elif errors:
+                final_status = "partial"
+            else:
+                final_status = "completed"
+            SYMBOL_UNIVERSE_REFRESH_STATE["status"] = final_status
+            SYMBOL_UNIVERSE_REFRESH_STATE["running"] = False
+            SYMBOL_UNIVERSE_REFRESH_STATE["finishedAt"] = now()
+            SYMBOL_UNIVERSE_REFRESH_STATE["lastError"] = "; ".join(errors)[:500]
+            final_payload = _symbol_universe_refresh_status_locked()
+            break
+
+    event_name = SYMBOL_UNIVERSE_REFRESH_FAILED if final_payload["status"] == "failed" else SYMBOL_UNIVERSE_REFRESHED
+    try:
+        new_domain_event(event_name, job_id, final_payload)
+    except Exception as error:  # noqa: BLE001 - status polling remains available when event delivery fails.
+        report_runtime_error(operational_error_reporter(), "Symbol universe refresh", error, "refresh completion event")
+
+
+def request_symbol_universe_refresh(payload: Dict[str, object]) -> Dict[str, object]:
+    markets = requested_symbol_universe_markets(payload)
+    should_start = False
+    coalesced = False
+    with SYMBOL_UNIVERSE_REFRESH_LOCK:
+        if SYMBOL_UNIVERSE_REFRESH_STATE["running"]:
+            coalesced = True
+        else:
+            SYMBOL_UNIVERSE_REFRESH_STATE.update({
+                "jobId": new_id("symbol-refresh"),
+                "running": True,
+                "status": "queued",
+                "markets": set(),
+                "pendingMarkets": set(),
+                "completedMarkets": set(),
+                "results": [],
+                "summary": {},
+                "requestedAt": now(),
+                "startedAt": "",
+                "finishedAt": "",
+                "lastError": "",
+            })
+            should_start = True
+        SYMBOL_UNIVERSE_REFRESH_STATE["markets"].update(markets)
+        SYMBOL_UNIVERSE_REFRESH_STATE["pendingMarkets"].update(markets)
+        job_id = str(SYMBOL_UNIVERSE_REFRESH_STATE["jobId"])
+        status = _symbol_universe_refresh_status_locked()
+    if should_start:
+        threading.Thread(
+            target=run_symbol_universe_refresh_pipeline,
+            args=(job_id,),
+            name="symbol-universe-refresh",
+            daemon=True,
+        ).start()
+    return {**status, "accepted": True, "coalesced": coalesced}
+
+
+def refresh_symbol_universe_payload(payload: Dict[str, object]) -> Dict[str, object]:
+    markets = requested_symbol_universe_markets(payload)
     result = symbol_universe_service().refresh(markets)
     new_domain_event(
         SYMBOL_UNIVERSE_REFRESHED,
         ",".join(markets or []) or "all",
-        {"summary": result.get("summary") or {}, "markets": markets or []},
+        {"status": "completed", "summary": result.get("summary") or {}, "markets": markets or []},
     )
     return result
 
@@ -4805,10 +5014,13 @@ class DigitalTwinHandler(BaseHTTPRequestHandler):
             if self.command == "GET":
                 return self.send_payload(200, symbol_universe_suggest_payload(query))
 
+        if path == "/api/symbol-universe/refresh/status" and self.command == "GET":
+            return self.send_payload(200, symbol_universe_refresh_status(first_query(query, "jobId")))
+
         if path == "/api/symbol-universe/refresh" and self.command == "POST":
             if not self.ensure_writable("공유 모드에서는 종목 유니버스를 갱신할 수 없습니다."):
                 return
-            return self.send_payload(200, refresh_symbol_universe_payload(self.read_json_body()))
+            return self.send_payload(202, request_symbol_universe_refresh(self.read_json_body()))
 
         if path == "/api/notification-templates":
             if self.command == "GET":

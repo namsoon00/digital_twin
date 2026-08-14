@@ -3861,11 +3861,26 @@
 
   function messageDeliveryLevelOptions() {
     return [
-      { value: "absoluteBeginner", label: "왕초보", description: "같은 내용 · 전문 용어를 쉬운 말로" },
-      { value: "beginner", label: "초보", description: "같은 내용 · 쉬운 말과 기본 용어 함께" },
-      { value: "intermediate", label: "중수", description: "같은 내용 · 표준 투자 용어로" },
-      { value: "advanced", label: "고수", description: "같은 내용 · 원래 용어와 검증 근거 유지" }
+      { value: "absoluteBeginner", label: "왕초보", description: "전문 용어를 쉬운 말로" },
+      { value: "beginner", label: "초보", description: "쉬운 말과 기본 용어 함께" },
+      { value: "intermediate", label: "중수", description: "표준 투자 용어로" },
+      { value: "advanced", label: "고수", description: "원래 용어와 검증 표현 유지" }
     ];
+  }
+
+  function notificationDetailLevelOptions() {
+    return [
+      { value: "concise", label: "간결", description: "행동·변화·핵심 근거·변경 조건" },
+      { value: "standard", label: "표준", description: "현재 흐름·핵심 추론·회사 가치 포함" },
+      { value: "full", label: "전체", description: "웹 상세 수준의 모든 분석 표시" }
+    ];
+  }
+
+  function normalizeNotificationDetailLevel(value) {
+    var text = String(value || "").trim();
+    var aliases = { "간결": "concise", "표준": "standard", "전체": "full", compact: "concise", normal: "standard", detailed: "full" };
+    var normalized = aliases[text] || text;
+    return notificationDetailLevelOptions().some(function (item) { return item.value === normalized; }) ? normalized : "concise";
   }
 
   function normalizeMessageDeliveryLevel(value) {
@@ -3923,6 +3938,8 @@
       clientSecret: "",
       accountSeq: "",
       watchlistSymbols: currentSettings.watchlistSymbols || defaultSettings.watchlistSymbols,
+      messageDeliveryLevel: "absoluteBeginner",
+      notificationDetailLevel: "concise",
       enabled: true
     };
   }
@@ -3992,6 +4009,8 @@
       clientSecret: "",
       accountSeq: textValueUnlessBoolean(account.accountSeq),
       watchlistSymbols: Array.isArray(account.watchlistSymbols) ? account.watchlistSymbols.join(",") : String(account.watchlistSymbols || ""),
+      messageDeliveryLevel: normalizeMessageDeliveryLevel(account.messageDeliveryLevel),
+      notificationDetailLevel: normalizeNotificationDetailLevel(account.notificationDetailLevel),
       enabled: account.enabled !== false
     };
   }
@@ -4005,6 +4024,8 @@
       baseUrl: String(draft.baseUrl || "https://openapi.tossinvest.com").trim(),
       accountSeq: String(draft.accountSeq || "").trim(),
       watchlistSymbols: normalizeSymbols(draft.watchlistSymbols || "").join(","),
+      messageDeliveryLevel: normalizeMessageDeliveryLevel(draft.messageDeliveryLevel),
+      notificationDetailLevel: normalizeNotificationDetailLevel(draft.notificationDetailLevel),
       enabled: draft.enabled !== false
     };
     if (String(draft.clientId || "").trim()) payload.clientId = String(draft.clientId || "").trim();
@@ -20037,6 +20058,8 @@
       renderAccountField("clientSecret", "Toss Secret Key", state.showSecrets ? "text" : "password", "새 값 입력 시 교체", { configured: Boolean(editingAccount && editingAccount.clientSecret) }),
       renderAccountField("accountSeq", "계좌 순번", "text", "선택", { configured: Boolean(editingAccount && editingAccount.accountSeq) }),
       renderAccountField("watchlistSymbols", "관심 종목", "text", "NVDA,005930", { wide: true }),
+      renderAccountSelectField("messageDeliveryLevel", "알림 표현", messageDeliveryLevelOptions()),
+      renderAccountSelectField("notificationDetailLevel", "알림 정보량", notificationDetailLevelOptions()),
       '<label class="admin-check-field">',
       '<input data-account-field="enabled" type="checkbox"' + (draft.enabled !== false ? " checked" : "") + ' />',
       '<span>이 계정을 모니터링에 사용</span>',
@@ -20063,6 +20086,23 @@
       '<span>' + escapeHtml(label) + '</span>',
       '<input data-account-field="' + escapeHtml(name) + '" name="' + escapeHtml(name) + '" type="' + escapeHtml(type || "text") + '" value="' + escapeHtml(value) + '" placeholder="' + escapeHtml(fieldPlaceholder) + '" autocomplete="off"' + (options.required ? " required" : "") + (options.disabled ? " disabled" : "") + ' />',
       options.configured ? '<em class="setting-field-note">저장됨</em>' : '',
+      '</label>'
+    ].join("");
+  }
+
+  function renderAccountSelectField(name, label, options) {
+    var draft = state.accountDraft || defaultAccountDraft();
+    var value = String(draft[name] || "");
+    var selected = (options || []).filter(function (item) { return item.value === value; })[0];
+    return [
+      '<label class="setting-field">',
+      '<span>' + escapeHtml(label) + '</span>',
+      '<select data-account-field="' + escapeHtml(name) + '" name="' + escapeHtml(name) + '">',
+      (options || []).map(function (item) {
+        return '<option value="' + escapeHtml(item.value) + '"' + (item.value === value ? ' selected' : '') + '>' + escapeHtml(item.label) + '</option>';
+      }).join(""),
+      '</select>',
+      selected && selected.description ? '<em class="setting-field-note">' + escapeHtml(selected.description) + '</em>' : '',
       '</label>'
     ].join("");
   }

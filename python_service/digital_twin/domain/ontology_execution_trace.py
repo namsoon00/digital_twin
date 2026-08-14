@@ -401,13 +401,13 @@ def reasoning_rule_outcome_records(run: object, result: Mapping[str, object]) ->
 
 def _detailed_rule_record(item: Mapping[str, object]) -> bool:
     status = _text(item.get("status")).lower()
+    failed = any(token in status for token in ("error", "timeout", "failed", "blocked"))
     return bool(
         item.get("matched")
         or _integer(item.get("queryCount"))
         or _integer(item.get("queryDurationMs"))
-        or _text(item.get("failureReason"))
         or status in {"matched", "evaluated-no-match", "selected"}
-        or any(token in status for token in ("error", "timeout", "failed", "blocked"))
+        or failed
     )
 
 

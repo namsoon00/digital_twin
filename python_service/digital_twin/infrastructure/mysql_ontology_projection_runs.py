@@ -908,13 +908,13 @@ class MySQLOntologyProjectionRunStore(MySQLOperationalConnection):
         for row in rows or []:
             item = self.rule_trace_row_payload(row)
             status = str(item.get("status") or "").lower()
+            failed = any(token in status for token in ["error", "timeout", "failed", "blocked"])
             detailed = bool(
                 item.get("matched")
                 or int(item.get("queryCount") or 0) > 0
                 or int(item.get("queryDurationMs") or 0) > 0
-                or str(item.get("failureReason") or "").strip()
                 or status in {"matched", "evaluated-no-match", "selected"}
-                or any(token in status for token in ["error", "timeout", "failed", "blocked"])
+                or failed
             )
             if not detailed:
                 continue

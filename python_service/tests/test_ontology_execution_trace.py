@@ -89,7 +89,16 @@ class OntologyExecutionTraceTests(unittest.TestCase):
                         {"ruleId": "rule.prior", "elapsedMs": 1200, "queryCount": 1},
                     ],
                     "skippedRules": [
-                        {"ruleId": "rule.research", "status": "not-applicable"},
+                        {
+                            "ruleId": "rule.research",
+                            "status": "not-applicable",
+                            "failureReason": "Active ABox has no required relation type.",
+                        },
+                        {
+                            "ruleId": "rule.failed",
+                            "status": "query-error",
+                            "failureReason": "TypeDB query failed.",
+                        },
                     ],
                 },
             },
@@ -144,8 +153,9 @@ class OntologyExecutionTraceTests(unittest.TestCase):
         self.assertEqual("changed-rule-dependency", rules["rule.price"]["selectedReason"])
         self.assertEqual("evaluated-no-match", rules["rule.prior"]["status"])
         self.assertNotIn("rule.research", rules)
-        self.assertEqual(2, trace["summary"]["ruleRunCount"])
-        self.assertEqual(3, trace["summary"]["ruleOutcomeCount"])
+        self.assertEqual("query-error", rules["rule.failed"]["status"])
+        self.assertEqual(3, trace["summary"]["ruleRunCount"])
+        self.assertEqual(4, trace["summary"]["ruleOutcomeCount"])
         self.assertEqual(1, trace["summary"]["compactedRuleCount"])
         selection_stage = next(item for item in trace["stages"] if item["stageKey"] == "rulebox-selection")
         self.assertEqual(1, selection_stage["detail"]["traceSummary"]["statusCounts"]["not-applicable"])

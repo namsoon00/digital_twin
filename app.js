@@ -1299,6 +1299,57 @@
     return value;
   }
 
+  function appTimezoneOptions() {
+    return [
+      { value: "Asia/Seoul", label: "서울" },
+      { value: "America/New_York", label: "뉴욕" },
+      { value: "America/Chicago", label: "시카고" },
+      { value: "America/Los_Angeles", label: "로스앤젤레스" },
+      { value: "Europe/London", label: "런던" },
+      { value: "Europe/Berlin", label: "프랑크푸르트" },
+      { value: "Asia/Tokyo", label: "도쿄" },
+      { value: "Asia/Hong_Kong", label: "홍콩" },
+      { value: "Asia/Singapore", label: "싱가포르" },
+      { value: "Australia/Sydney", label: "시드니" },
+      { value: "UTC", label: "UTC" }
+    ];
+  }
+
+  function currentAppTimezone() {
+    var value = String((state && state.settings && state.settings.appTimezone) || defaultSettings.appTimezone || "Asia/Seoul").trim();
+    try {
+      new Intl.DateTimeFormat("en-US", { timeZone: value }).format(new Date());
+      return value;
+    } catch (error) {
+      return "Asia/Seoul";
+    }
+  }
+
+  function appTimezoneLabel(value) {
+    var key = String(value || currentAppTimezone());
+    var option = appTimezoneOptions().filter(function (item) { return item.value === key; })[0];
+    return option ? option.label : key;
+  }
+
+  function appDateTimeParts(value) {
+    var date = value instanceof Date ? value : new Date(value || "");
+    if (Number.isNaN(date.getTime())) return null;
+    var parts = {};
+    new Intl.DateTimeFormat("en-CA", {
+      timeZone: currentAppTimezone(),
+      year: "numeric",
+      month: "2-digit",
+      day: "2-digit",
+      hour: "2-digit",
+      minute: "2-digit",
+      second: "2-digit",
+      hourCycle: "h23"
+    }).formatToParts(date).forEach(function (part) {
+      if (part.type !== "literal") parts[part.type] = part.value;
+    });
+    return parts;
+  }
+
   function resolvedAppTheme() {
     var theme = currentAppTheme();
     if (theme === "system" && window.matchMedia) {
@@ -4503,6 +4554,8 @@
     syncModelAlertThresholdSettings();
     return {
       appTheme: settingValue("appTheme"),
+      appTimezone: settingValue("appTimezone"),
+      investmentCalendarCandidateDefaultTime: settingValue("investmentCalendarCandidateDefaultTime"),
       watchlistSymbols: settingValue("watchlistSymbols"),
       tossApiBaseUrl: settingValue("tossApiBaseUrl"),
       tossClientId: settingValue("tossClientId"),
@@ -7667,17 +7720,18 @@
 
   function localDateTimeInput(date) {
     var value = date instanceof Date ? date : new Date();
-    var pad = function (number) { return String(number).padStart(2, "0"); };
+    var parts = appDateTimeParts(value);
+    if (!parts) return "";
     return [
-      value.getFullYear(),
+      parts.year,
       "-",
-      pad(value.getMonth() + 1),
+      parts.month,
       "-",
-      pad(value.getDate()),
+      parts.day,
       "T",
-      pad(value.getHours()),
+      parts.hour,
       ":",
-      pad(value.getMinutes())
+      parts.minute
     ].join("");
   }
 
@@ -7689,7 +7743,7 @@
       title: "",
       eventType: "earnings",
       startsAt: localDateTimeInput(start),
-      timezone: "Asia/Seoul",
+      timezone: currentAppTimezone(),
       importance: "70",
       symbolsText: "",
       marketsText: "",
@@ -7941,7 +7995,7 @@
       title: draft.title,
       eventType: draft.eventType,
       startsAt: draft.startsAt,
-      timezone: draft.timezone || "Asia/Seoul",
+      timezone: currentAppTimezone(),
       importance: draft.importance,
       symbols: csvTokens(draft.symbolsText),
       markets: csvTokens(draft.marketsText),
@@ -8083,14 +8137,13 @@
     }
     var payload = investmentCalendarPayload(candidate);
     var startsAt = String(candidate.startsAt || "");
-    var explicitSchedule = payload.scheduleState === "confirmed" && !payload.reviewRequired;
-    var timeMatch = explicitSchedule ? startsAt.match(/T(\d{2}:\d{2})/) : null;
+    var scheduleParts = appDateTimeParts(startsAt);
     state.investmentCalendarCandidateConfirmation = {
       candidateId: String(candidate.candidateId || ""),
       title: String(candidate.title || "자동 감지 일정"),
-      date: String(candidate.localDate || startsAt.slice(0, 10) || ""),
-      time: timeMatch ? timeMatch[1] : "",
-      timezone: String(candidate.timezone || "Asia/Seoul"),
+      date: scheduleParts ? [scheduleParts.year, scheduleParts.month, scheduleParts.day].join("-") : String(candidate.localDate || startsAt.slice(0, 10) || ""),
+      time: scheduleParts ? [scheduleParts.hour, scheduleParts.minute].join(":") : String(payload.eventLocalTime || ""),
+      timezone: currentAppTimezone(),
       source: String(candidate.source || ""),
       error: ""
     };
@@ -8157,6 +8210,7 @@
     render();
     return sendJson("/api/investment-calendar/candidates/" + encodeURIComponent(id) + "/approve", "POST", {
       startsAt: startsAt,
+      timezone: currentAppTimezone(),
       reviewNote: confirmationActive ? "UI 날짜·시각 확인" : "UI 일정 확인"
     })
       .then(function () {
@@ -8249,19 +8303,17 @@
     if (!value) return "-";
     var raw = String(value).trim();
     if (/^\d{4}-\d{2}-\d{2}$/.test(raw)) return raw + " (시각 미기록)";
-    var date = new Date(value);
-    if (Number.isNaN(date.getTime())) return String(value);
-    var pad = function (number) { return String(number).padStart(2, "0"); };
-    var timezone = Intl.DateTimeFormat().resolvedOptions().timeZone || "local";
+    var parts = appDateTimeParts(value);
+    if (!parts) return String(value);
     return [
-      date.getFullYear(),
-      pad(date.getMonth() + 1),
-      pad(date.getDate())
+      parts.year,
+      parts.month,
+      parts.day
     ].join("-") + " " + [
-      pad(date.getHours()),
-      pad(date.getMinutes()),
-      pad(date.getSeconds())
-    ].join(":") + " (" + timezone + ")";
+      parts.hour,
+      parts.minute,
+      parts.second
+    ].join(":");
   }
 
   var recordChangedAtFields = [
@@ -12521,17 +12573,16 @@
   }
 
   function investmentCalendarDayKey(value) {
-    var date = value instanceof Date ? value : new Date(value || "");
-    if (Number.isNaN(date.getTime())) return "";
-    var year = date.getFullYear();
-    var month = String(date.getMonth() + 1).padStart(2, "0");
-    var day = String(date.getDate()).padStart(2, "0");
-    return year + "-" + month + "-" + day;
+    var raw = String(value || "");
+    if (/^\d{4}-\d{2}-\d{2}$/.test(raw)) return raw;
+    var parts = appDateTimeParts(value);
+    return parts ? [parts.year, parts.month, parts.day].join("-") : "";
   }
 
   function investmentCalendarEventDayKey(event) {
     var localDate = String((event || {}).localDate || "");
-    return /^\d{4}-\d{2}-\d{2}$/.test(localDate) ? localDate : investmentCalendarDayKey((event || {}).startsAt);
+    if ((event || {}).allDay && /^\d{4}-\d{2}-\d{2}$/.test(localDate)) return localDate;
+    return investmentCalendarDayKey((event || {}).startsAt);
   }
 
   function investmentCalendarScheduleLabel(event) {
@@ -12542,8 +12593,10 @@
   }
 
   function investmentCalendarMonthDate() {
-    var now = new Date();
-    return new Date(now.getFullYear(), now.getMonth() + Number(state.investmentCalendarMonthOffset || 0), 1);
+    var parts = appDateTimeParts(new Date());
+    var year = parts ? Number(parts.year) : new Date().getFullYear();
+    var month = parts ? Number(parts.month) - 1 : new Date().getMonth();
+    return new Date(year, month + Number(state.investmentCalendarMonthOffset || 0), 1);
   }
 
   function investmentCalendarMonthKey(date) {
@@ -12567,9 +12620,19 @@
 
   function investmentCalendarEventTimeLabel(event) {
     if ((event || {}).allDay) return "종일";
-    var date = new Date((event || {}).startsAt || "");
-    if (Number.isNaN(date.getTime())) return "시간 미정";
-    return date.toLocaleTimeString("ko-KR", { hour: "2-digit", minute: "2-digit" });
+    var parts = appDateTimeParts((event || {}).startsAt);
+    return parts ? parts.hour + ":" + parts.minute : "시간 미정";
+  }
+
+  function investmentCalendarTimeStateLabel(event) {
+    var payload = investmentCalendarPayload(event);
+    var value = String(payload.timeState || "");
+    if (value === "userConfirmed") return "사용자 확인 시각";
+    if (value === "sourceProvided") return "출처 제공 시각";
+    if (value === "estimatedDefault") return "확인 전 기본 시각";
+    if (payload.autoDetected && payload.scheduleState === "estimated") return "확인 전 기본 시각";
+    if ((event || {}).allDay) return "종일 일정";
+    return "등록 시각";
   }
 
   function investmentCalendarTargetLabel(event) {
@@ -12729,7 +12792,6 @@
       '</select></label>',
       '<label class="setting-field"><span>시작</span><input data-calendar-field="startsAt" type="datetime-local" value="' + escapeHtml(draft.startsAt || "") + '"></label>',
       '<label class="setting-field"><span>중요도</span><input data-calendar-field="importance" type="number" min="0" max="100" step="1" value="' + escapeHtml(draft.importance || "70") + '"></label>',
-      '<label class="setting-field"><span>타임존</span><input data-calendar-field="timezone" type="text" autocomplete="off" value="' + escapeHtml(draft.timezone || "Asia/Seoul") + '"></label>',
       '<label class="setting-field"><span>종목</span><input data-calendar-field="symbolsText" type="text" autocomplete="off" value="' + escapeHtml(draft.symbolsText || "") + '" placeholder="005930,AAPL"></label>',
       '<label class="setting-field"><span>시장</span><input data-calendar-field="marketsText" type="text" autocomplete="off" value="' + escapeHtml(draft.marketsText || "") + '" placeholder="KOSPI,NASDAQ"></label>',
       '<label class="setting-field"><span>알림(분 전)</span><input data-calendar-field="reminderOffsetsText" type="text" autocomplete="off" value="' + escapeHtml(draft.reminderOffsetsText || "1440,60,0") + '"></label>',
@@ -12876,7 +12938,7 @@
       '<div class="investment-calendar-event-main">',
       '<div class="investment-calendar-event-date">',
       '<strong>' + escapeHtml(investmentCalendarScheduleLabel(event)) + '</strong>',
-      '<span>' + escapeHtml(event.timezone || "UTC") + '</span>',
+      '<span>' + escapeHtml(investmentCalendarTimeStateLabel(event)) + '</span>',
       '</div>',
       '<div class="investment-calendar-event-copy">',
       '<p class="label">' + escapeHtml(investmentCalendarEventTypeLabel(event.eventType)) + '</p>',
@@ -13049,9 +13111,9 @@
     var aiRecommended = Boolean(payload.aiResearchRecommended);
     var automaticCandidate = Boolean(payload.autoDetected);
     var needsScheduleConfirmation = automaticCandidate && (payload.reviewRequired || payload.scheduleState !== "confirmed");
-    var dateOnly = Boolean(candidate.allDay) || payload.scheduleState === "estimated";
+    var timeState = String(payload.timeState || (candidate.allDay ? "estimatedDefault" : "sourceProvided"));
     var scheduleText = candidate.startsAt
-      ? (dateOnly ? String(candidate.localDate || candidate.startsAt).slice(0, 10) + " · 시각 확인 필요" : formatClock(candidate.startsAt))
+      ? formatClock(candidate.startsAt) + (timeState === "estimatedDefault" ? " · 시각 확인 필요" : "")
       : "날짜 필요";
     var reviewReason = String(candidate.reviewReason || "");
     var reason = {
@@ -13131,7 +13193,7 @@
       '<form class="calendar-candidate-confirm-form" data-calendar-candidate-confirm-form novalidate>',
       '<div class="calendar-candidate-confirm-context">',
       '<strong>' + escapeHtml(candidate.title || confirmation.title || "자동 감지 일정") + '</strong>',
-      '<span>' + escapeHtml([targets.join(" · "), candidate.source || confirmation.source, confirmation.timezone].filter(Boolean).join(" · ")) + '</span>',
+      '<span>' + escapeHtml([targets.join(" · "), candidate.source || confirmation.source, investmentCalendarTimeStateLabel(candidate)].filter(Boolean).join(" · ")) + '</span>',
       '</div>',
       '<div class="calendar-candidate-confirm-fields">',
       '<label class="setting-field"><span>발표 날짜</span><input type="date" aria-required="true" data-calendar-candidate-confirm-field="date" value="' + escapeHtml(confirmation.date || "") + '"' + (busy ? ' disabled' : '') + '></label>',
@@ -13244,7 +13306,7 @@
         '</section>',
         '<div class="work-detail-metric-row">',
         renderNotificationDetailMetric("중요도", event.importance || 0, tone),
-        renderNotificationDetailMetric("시간대", event.timezone || "UTC", "muted"),
+        renderNotificationDetailMetric("시각 상태", investmentCalendarTimeStateLabel(event), "muted"),
         renderNotificationDetailMetric("알림", investmentCalendarReminderLabel(event), "muted"),
         '</div>',
         '<section class="work-detail-section">',
@@ -27858,6 +27920,7 @@
       '<div class="settings-api-grid">',
       renderSettingsApiCard("앱 환경", appThemeLabel(settingValue("appTheme") || defaultSettings.appTheme), [
         configuredChip("테마", true, appThemeLabel(settingValue("appTheme") || defaultSettings.appTheme)),
+        configuredChip("표시 시각", true, appTimezoneLabel(settingValue("appTimezone") || defaultSettings.appTimezone)),
         configuredChip("종목 카탈로그", Boolean(settingValue("symbolUniverseMaxAgeHours")), (settingValue("symbolUniverseMaxAgeHours") || defaultSettings.symbolUniverseMaxAgeHours) + "시간")
       ]),
       renderSettingsApiCard("알림 전달", settingValue("notifyProvider") || "telegram", [
@@ -28339,6 +28402,8 @@
         { value: "dark", label: "다크" },
         { value: "system", label: "시스템 설정" }
         ]),
+        renderSettingSelect("appTimezone", "표시 시간대", appTimezoneOptions()),
+        renderSettingField("investmentCalendarCandidateDefaultTime", "캘린더 후보 기본 시각", "time", "09:00"),
         renderSettingField("symbolUniverseMaxAgeHours", "전체 종목 신선도(시간)", "number", "24")
       ].join(""), "display"),
       '</div>',
@@ -30373,6 +30438,9 @@
         state.settings[name] = field.value;
         state.settingsSaved = false;
         if (name === "appTheme") applyAppTheme();
+        if (name === "appTimezone" && state.investmentCalendarDraft) {
+          state.investmentCalendarDraft.timezone = currentAppTimezone();
+        }
         refreshSettingsSaveControls();
       };
       field.addEventListener("input", updateSettingField);

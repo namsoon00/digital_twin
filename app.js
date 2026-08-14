@@ -439,6 +439,7 @@
     serverSettingsLoaded: false,
     serverSettingsError: "",
     serverSettingsLocked: false,
+    shareAccess: { role: "local-owner", writable: true, capabilities: ["read", "write"] },
     serverConfigured: {},
     notificationTemplates: [],
     notificationTemplateVariables: [],
@@ -2264,6 +2265,9 @@
     state.settings = syncedModelAlertSettings(Object.assign({}, state.settings, nextSettings));
     state.serverConfigured = payload.configured || {};
     state.serverSettingsLocked = Boolean(payload.locked);
+    state.shareAccess = payload.shareAccess && typeof payload.shareAccess === "object"
+      ? payload.shareAccess
+      : { role: state.serverSettingsLocked ? "viewer" : "local-owner", writable: !state.serverSettingsLocked, capabilities: state.serverSettingsLocked ? ["read"] : ["read", "write"] };
     state.serverSettingsLoaded = true;
     state.serverSettingsError = "";
     state.settingsSaved = true;
@@ -7811,6 +7815,10 @@
 
   function approveInvestmentCalendarCandidate(candidateId) {
     var id = String(candidateId || "").trim();
+    if (state.serverSettingsLocked) {
+      showSnackbar("조회 전용 링크에서는 캘린더 후보를 변경할 수 없습니다.", "caution");
+      return Promise.resolve();
+    }
     if (!id || state.investmentCalendarCandidateReviewing) return Promise.resolve();
     var candidates = currentInvestmentCalendarCandidates().candidates || [];
     var candidate = candidates.filter(function (item) { return item.candidateId === id; })[0] || {};
@@ -7849,6 +7857,10 @@
 
   function rejectInvestmentCalendarCandidate(candidateId) {
     var id = String(candidateId || "").trim();
+    if (state.serverSettingsLocked) {
+      showSnackbar("조회 전용 링크에서는 캘린더 후보를 변경할 수 없습니다.", "caution");
+      return Promise.resolve();
+    }
     if (!id || state.investmentCalendarCandidateReviewing) return Promise.resolve();
     if (window.confirm && !window.confirm("선택한 캘린더 후보를 거절할까요?")) return Promise.resolve();
     state.investmentCalendarCandidateReviewing = id;
@@ -12664,6 +12676,7 @@
     var targets = (candidate.symbols || []).concat(candidate.markets || []);
     var id = candidate.candidateId || "";
     var busy = state.investmentCalendarCandidateReviewing === id;
+    var readOnly = isStaticPreviewHost() || state.serverSettingsLocked;
     var payload = investmentCalendarPayload(candidate);
     var aiRecommended = Boolean(payload.aiResearchRecommended);
     var automaticCandidate = Boolean(payload.autoDetected);
@@ -12708,8 +12721,8 @@
       '</div>',
       '</div>',
       '<div class="investment-calendar-event-actions">',
-      '<button class="mini-button primary" type="button" data-calendar-candidate-approve="' + escapeHtml(id) + '"' + (busy ? ' disabled' : '') + '>' + escapeHtml(busy ? "처리 중" : (needsScheduleConfirmation ? "시각 확인 후 등록" : "등록")) + '</button>',
-      '<button class="mini-button danger" type="button" data-calendar-candidate-reject="' + escapeHtml(id) + '"' + (busy ? ' disabled' : '') + '>거절</button>',
+      '<button class="mini-button primary" type="button" data-calendar-candidate-approve="' + escapeHtml(id) + '"' + (busy || readOnly ? ' disabled' : '') + '>' + escapeHtml(readOnly ? "조회 전용" : (busy ? "처리 중" : (needsScheduleConfirmation ? "시각 확인 후 등록" : "등록"))) + '</button>',
+      '<button class="mini-button danger" type="button" data-calendar-candidate-reject="' + escapeHtml(id) + '"' + (busy || readOnly ? ' disabled' : '') + '>' + escapeHtml(readOnly ? "변경 불가" : "거절") + '</button>',
       '</div>',
       '</section>'
     ].join("");
@@ -27751,6 +27764,8 @@
   }
 
   function renderSettingsRuntimeInlineDetail() {
+    var accessRole = String(state.shareAccess && state.shareAccess.role || "local-owner");
+    var accessLabel = accessRole === "owner" ? "원격 소유자" : (accessRole === "viewer" ? "조회 전용" : "로컬 소유자");
     return [
       '<div class="settings-runtime-inline inline-detail-surface">',
       '<section class="inline-detail-block primary">',
@@ -27759,6 +27774,7 @@
       '</section>',
       '<div class="inline-detail-grid">',
       renderSettingsDiagnosticMini("저장 상태", settingsStatusLabel(), settingsStatusTone(), settingsHasPendingChanges() ? "변경사항 저장 필요" : "로컬 설정과 동기화됨"),
+      renderSettingsDiagnosticMini("접속 권한", accessLabel, state.serverSettingsLocked ? "caution" : "watch", state.serverSettingsLocked ? "조회 권한으로 연결됨" : "변경 권한으로 연결됨"),
       renderSettingsDiagnosticMini("서버 잠금", state.serverSettingsLocked ? "읽기전용" : "수정 가능", state.serverSettingsLocked ? "caution" : "watch", state.serverSettingsLocked ? "공유 모드에서는 서버 설정 저장이 잠겨 있습니다." : "로컬 운영 DB 저장 가능"),
       renderSettingsDiagnosticMini("외부 API", configuredCount(["alphaVantageApiKey", "coingeckoApiKey", "fredApiKey", "opendartApiKey"]) + "/4", "hold", "Alpha, CoinGecko, FRED, OpenDART 준비도"),
       renderSettingsDiagnosticMini("최근 오류", state.serverSettingsError ? "확인 필요" : "없음", state.serverSettingsError ? "danger" : "watch", state.serverSettingsError || "설정 API 오류가 없습니다."),

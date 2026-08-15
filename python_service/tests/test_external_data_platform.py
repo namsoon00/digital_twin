@@ -1,6 +1,7 @@
 import unittest
 import time
 from datetime import datetime, timezone
+from unittest.mock import patch
 
 from digital_twin.application.external_data.collection_service import ExternalDataCollectionService
 from digital_twin.application.external_data.contracts import (
@@ -15,6 +16,7 @@ from digital_twin.application.external_data.read_model_service import ExternalSi
 from digital_twin.application.external_data.registry import ExternalDatasetRegistry
 from digital_twin.infrastructure.external_api.legacy_import import LegacyExternalSignalImporter
 from digital_twin.infrastructure.external_api.adapters.sec import SecSubmissionsAdapter
+from digital_twin.infrastructure.external_api.adapters.yfinance import YFinanceProfileAdapter
 
 
 NOW = datetime(2026, 8, 16, 0, 0, tzinfo=timezone.utc)
@@ -268,6 +270,36 @@ class ExternalDataPlatformTest(unittest.TestCase):
 
         self.assertEqual(["AAPL"], [item.partition_key for item in without_contact])
         self.assertEqual(["AAPL", "PLTR"], [item.partition_key for item in with_contact])
+
+    def test_optional_yfinance_profiles_store_legitimate_empty_results(self):
+        adapter = YFinanceProfileAdapter("options")
+        job = CollectionJob(
+            adapter.descriptor.dataset_id,
+            "000660",
+            adapter.descriptor.provider_id,
+            adapter.descriptor.priority,
+            ExternalSubject("000660", symbol="000660", market="KR", currency="KRW"),
+        )
+
+        class EmptyProfileProvider:
+            @staticmethod
+            def yfinance_query_symbol(_position):
+                return "000660.KS"
+
+            @staticmethod
+            def fetch_yfinance_symbol(_yf, _symbol, _query_symbol, profiles=None):
+                self.assertEqual(["options"], profiles)
+                return {"collectedAt": "2026-08-16T00:00:00Z", "modulesCollected": []}
+
+        with patch(
+            "digital_twin.infrastructure.external_api.adapters.yfinance.legacy_provider",
+            return_value=EmptyProfileProvider(),
+        ):
+            result = adapter.fetch(job, {})
+
+        self.assertEqual({}, result.payload)
+        self.assertFalse(result.quality["dataUsable"])
+        self.assertEqual("not-available", result.source_revision)
 
     def test_read_model_merges_facts_and_surfaces_stale_and_failed_sources(self):
         read_model = ExternalSignalsReadModelService(MemoryFactStore())

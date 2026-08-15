@@ -42,6 +42,8 @@ PROFILE_POLICIES = {
     },
 }
 
+OPTIONAL_EMPTY_PROFILES = {"options", "news", "analyst"}
+
 
 class YFinanceProfileAdapter:
     def __init__(self, profile: str):
@@ -86,6 +88,20 @@ class YFinanceProfileAdapter:
             profiles=[self.profile],
         )
         if not payload.get("modulesCollected"):
+            if self.profile in OPTIONAL_EMPTY_PROFILES:
+                return observation(
+                    self.descriptor,
+                    job.subject.symbol,
+                    {},
+                    preferred_revision="not-available",
+                    preferred_source_as_of=str(payload.get("collectedAt") or ""),
+                    watermark={"availability": "not-available"},
+                    quality={
+                        "dataUsable": False,
+                        "provider": self.descriptor.provider_id,
+                        "availability": "not-applicable-or-empty",
+                    },
+                )
             raise RuntimeError("yfinance " + self.profile + " returned no usable modules")
         signals = empty_signals()
         signals["yfinanceData"][job.subject.symbol] = payload

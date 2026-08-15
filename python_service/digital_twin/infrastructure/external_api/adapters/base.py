@@ -177,6 +177,7 @@ def observation(
     preferred_revision: str = "",
     preferred_source_as_of: str = "",
     watermark: Dict[str, object] = None,
+    quality: Dict[str, object] = None,
 ) -> SourceObservation:
     fetched_at = utc_now_iso()
     return SourceObservation(
@@ -187,7 +188,7 @@ def observation(
         source_as_of=preferred_source_as_of or source_as_of(fragment, fetched_at),
         fetched_at=fetched_at,
         payload=fragment,
-        quality={"dataUsable": True, "provider": descriptor.provider_id},
+        quality=dict(quality or {"dataUsable": True, "provider": descriptor.provider_id}),
         watermark=dict(watermark or {}),
     )
 

@@ -7,12 +7,38 @@ but it never evaluates a rule condition or reports an investment judgement.
 
 import hashlib
 import json
+import math
 from typing import Dict, Iterable, List, Mapping, Set
 
 from .ontology_contracts import PortfolioOntology
 
 
 NATIVE_RULE_PLANNER_TOPOLOGY_VERSION = "native-rule-planner-topology-v1"
+
+# These are the raw source attributes referenced by the current TypeDB
+# schema-function RuleBox.  Persisting this bounded negative-planning index
+# avoids opening an expensive function when the exact ABox source plainly
+# contradicts a required condition.  It never contains derived judgements and
+# never proves a rule match; TypeDB remains the sole rule evaluator.
+NATIVE_RULE_PLANNER_SUBJECT_PROPERTY_FIELDS = {
+    "bidAskImbalance",
+    "foreignNetVolume",
+    "individualNetVolume",
+    "institutionNetVolume",
+    "investmentStrategyProfile",
+    "ma20Distance",
+    "ma5Distance",
+    "ma60Distance",
+    "positionAccountWeight",
+    "positionRole",
+    "priceChangeRate",
+    "profitLossRate",
+    "smartMoneyNetVolume",
+    "source",
+    "timeAdjustedVolumeRatio",
+    "tradeStrength",
+    "volumeRatio",
+}
 
 
 def _clean_symbol(value: object) -> str:
@@ -37,6 +63,58 @@ def _normalized_relation_types(values: Iterable[object]) -> List[str]:
     })
 
 
+def _planner_property_value(value: object):
+    """Return a small JSON-safe scalar/list value or ``None`` when unsafe."""
+    if isinstance(value, bool):
+        return value
+    if isinstance(value, (int, float)):
+        return value if not isinstance(value, float) or math.isfinite(value) else None
+    if isinstance(value, str):
+        return value[:240]
+    if isinstance(value, (list, tuple, set)):
+        values = [
+            normalized
+            for item in list(value)[:24]
+            for normalized in [_planner_property_value(item)]
+            if normalized is not None and not isinstance(normalized, list)
+        ]
+        return values
+    return None
+
+
+def _planner_subject_properties(entity: object, symbol: str) -> Dict[str, object]:
+    properties = dict(getattr(entity, "properties", {}) or {})
+    nested = properties.get("properties")
+    if isinstance(nested, Mapping):
+        properties.update(dict(nested))
+    properties.setdefault("symbol", symbol)
+    properties.setdefault("kind", str(getattr(entity, "kind", "") or ""))
+    result: Dict[str, object] = {}
+    for field in sorted(NATIVE_RULE_PLANNER_SUBJECT_PROPERTY_FIELDS | {
+        "kind", "ontologyBox", "symbol", "tboxClass",
+    }):
+        normalized = _planner_property_value(properties.get(field))
+        if normalized is not None:
+            result[field] = normalized
+    return result
+
+
+def _normalized_subject_properties(value: object) -> Dict[str, object]:
+    if not isinstance(value, Mapping):
+        return {}
+    result: Dict[str, object] = {}
+    for field, raw_value in value.items():
+        clean_field = str(field or "").strip()
+        if clean_field not in NATIVE_RULE_PLANNER_SUBJECT_PROPERTY_FIELDS | {
+            "kind", "ontologyBox", "symbol", "tboxClass",
+        }:
+            continue
+        normalized = _planner_property_value(raw_value)
+        if normalized is not None:
+            result[clean_field] = normalized
+    return result
+
+
 def _topology_fingerprint(payload: Mapping[str, object]) -> str:
     canonical = json.dumps(dict(payload or {}), ensure_ascii=True, sort_keys=True, separators=(",", ":"))
     return "native-rule-topology:" + hashlib.sha256(canonical.encode("utf-8")).hexdigest()[:24]
@@ -49,6 +127,7 @@ def native_rule_planner_topology(graph: PortfolioOntology) -> Dict[str, object]:
     every numeric/text/negative condition remain TypeDB schema-function work.
     """
     source_ids_by_symbol: Dict[str, Set[str]] = {}
+    subject_entities_by_symbol: Dict[str, List[object]] = {}
     symbol_by_entity_id: Dict[str, str] = {}
     for entity in list(getattr(graph, "entities", []) or []):
         symbol = _native_subject_key(entity)
@@ -56,6 +135,7 @@ def native_rule_planner_topology(graph: PortfolioOntology) -> Dict[str, object]:
         if not symbol or not entity_id:
             continue
         source_ids_by_symbol.setdefault(symbol, set()).add(entity_id)
+        subject_entities_by_symbol.setdefault(symbol, []).append(entity)
         symbol_by_entity_id[entity_id] = symbol
 
     relation_types_by_symbol: Dict[str, Set[str]] = {
@@ -87,6 +167,13 @@ def native_rule_planner_topology(graph: PortfolioOntology) -> Dict[str, object]:
         "relationTypesBySymbol": {
             symbol: _normalized_relation_types(values)
             for symbol, values in sorted(relation_types_by_symbol.items())
+        },
+        # A property entry is emitted only for an unambiguous source subject.
+        # Duplicate source entities remain unknown and are never pre-pruned.
+        "subjectPropertiesBySymbol": {
+            symbol: _planner_subject_properties(entities[0], symbol)
+            for symbol, entities in sorted(subject_entities_by_symbol.items())
+            if len(entities) == 1
         },
     }
     return {
@@ -123,8 +210,15 @@ def normalize_native_rule_planner_topology(
         return {"status": "invalid", "reason": "Native rule planner topology is not a complete projection graph index."}
     raw_sources = raw.get("sourceIdsBySymbol") if isinstance(raw.get("sourceIdsBySymbol"), Mapping) else {}
     raw_relations = raw.get("relationTypesBySymbol") if isinstance(raw.get("relationTypesBySymbol"), Mapping) else {}
+    subject_property_index_available = "subjectPropertiesBySymbol" in raw
+    raw_subject_properties = (
+        raw.get("subjectPropertiesBySymbol")
+        if isinstance(raw.get("subjectPropertiesBySymbol"), Mapping)
+        else {}
+    )
     source_ids_by_symbol: Dict[str, List[str]] = {}
     relation_types_by_symbol: Dict[str, List[str]] = {}
+    subject_properties_by_symbol: Dict[str, Dict[str, object]] = {}
     symbols = set()
     for raw_symbol, raw_values in raw_sources.items():
         symbol = _clean_symbol(raw_symbol)
@@ -140,6 +234,12 @@ def normalize_native_rule_planner_topology(
             continue
         relation_types_by_symbol[symbol] = _normalized_relation_types(raw_values or [])
         symbols.add(symbol)
+    if subject_property_index_available:
+        for raw_symbol, raw_values in raw_subject_properties.items():
+            symbol = _clean_symbol(raw_symbol)
+            if not symbol or not isinstance(raw_values, Mapping):
+                continue
+            subject_properties_by_symbol[symbol] = _normalized_subject_properties(raw_values)
     for symbol in symbols:
         source_ids_by_symbol.setdefault(symbol, [])
         relation_types_by_symbol.setdefault(symbol, [])
@@ -156,6 +256,14 @@ def normalize_native_rule_planner_topology(
             for symbol in sorted(symbols)
         },
     }
+    # Preserve fingerprints written before the optional property index was
+    # introduced. Their missing index means unknown, never an empty source.
+    if subject_property_index_available:
+        payload["subjectPropertiesBySymbol"] = {
+            symbol: subject_properties_by_symbol[symbol]
+            for symbol in sorted(subject_properties_by_symbol)
+            if symbol in symbols
+        }
     fingerprint = _topology_fingerprint(payload)
     if str(raw.get("fingerprint") or "") != fingerprint:
         return {"status": "invalid", "reason": "Native rule planner topology fingerprint does not match its contents."}
@@ -174,6 +282,12 @@ def normalize_native_rule_planner_topology(
             symbol: list(payload["relationTypesBySymbol"].get(symbol, []))
             for symbol in selected
         },
+        "subjectPropertiesBySymbol": {
+            symbol: dict(payload.get("subjectPropertiesBySymbol", {}).get(symbol) or {})
+            for symbol in selected
+            if symbol in payload.get("subjectPropertiesBySymbol", {})
+        },
+        "subjectPropertyIndexAvailable": subject_property_index_available,
     }
 
 
@@ -216,8 +330,10 @@ def merge_native_rule_planner_topology(
     }
     active_sources = dict(active.get("sourceIdsBySymbol") or {})
     active_relations = dict(active.get("relationTypesBySymbol") or {})
+    active_properties = dict(active.get("subjectPropertiesBySymbol") or {})
     incoming_sources = dict(incoming.get("sourceIdsBySymbol") or {})
     incoming_relations = dict(incoming.get("relationTypesBySymbol") or {})
+    incoming_properties = dict(incoming.get("subjectPropertiesBySymbol") or {})
     incoming_symbols = set(incoming_sources) | set(incoming_relations)
 
     # A partial input may intentionally omit a source while it waits for a
@@ -238,9 +354,18 @@ def merge_native_rule_planner_topology(
         for symbol, values in active_relations.items()
         if symbol not in replaced
     }
+    merged_properties = {
+        symbol: dict(values or {})
+        for symbol, values in active_properties.items()
+        if symbol not in replaced
+    }
     for symbol in replaced:
         merged_sources[symbol] = list(incoming_sources.get(symbol) or [])
         merged_relations[symbol] = list(incoming_relations.get(symbol) or [])
+        if symbol in incoming_properties:
+            merged_properties[symbol] = dict(incoming_properties.get(symbol) or {})
+        else:
+            merged_properties.pop(symbol, None)
 
     payload = {
         "version": NATIVE_RULE_PLANNER_TOPOLOGY_VERSION,
@@ -255,6 +380,14 @@ def merge_native_rule_planner_topology(
             for symbol in sorted(merged_sources)
         },
     }
+    if bool(active.get("subjectPropertyIndexAvailable")) or bool(
+        incoming.get("subjectPropertyIndexAvailable")
+    ):
+        payload["subjectPropertiesBySymbol"] = {
+            symbol: _normalized_subject_properties(values)
+            for symbol, values in sorted(merged_properties.items())
+            if symbol in merged_sources
+        }
     topology = {
         **payload,
         "fingerprint": _topology_fingerprint(payload),

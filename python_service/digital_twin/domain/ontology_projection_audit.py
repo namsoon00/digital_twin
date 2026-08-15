@@ -763,6 +763,15 @@ def projection_result_summary(result: Dict[str, object]) -> Dict[str, object]:
             })[:160],
             "typedbNativeRuleParallelism": int(execution.get("typedbNativeRuleParallelism") or 1),
             "typedbNativeRuleParallelUsed": bool(execution.get("typedbNativeRuleParallelUsed")),
+            "typedbNativeRuleSubjectRuleParallelism": int(
+                execution.get("typedbNativeRuleSubjectRuleParallelism") or 1
+            ),
+            "typedbNativeRuleTotalReadParallelismCap": int(
+                execution.get("typedbNativeRuleTotalReadParallelismCap") or 1
+            ),
+            "typedbNativeRuleEffectiveTotalReadParallelism": int(
+                execution.get("typedbNativeRuleEffectiveTotalReadParallelism") or 1
+            ),
             "typedbNativeRuleTargetParallelism": int(execution.get("typedbNativeRuleTargetParallelism") or 1),
             "typedbNativeRuleSubjectFanoutUsed": bool(execution.get("typedbNativeRuleSubjectFanoutUsed")),
             "typedbNativeRuleSubjectFanoutParallelism": int(

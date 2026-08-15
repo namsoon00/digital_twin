@@ -329,6 +329,8 @@ class ReasoningEngineShadowRunner:
         except Exception as error:  # noqa: BLE001 - fail safe for a low-priority shadow worker.
             return {"ready": False, "status": "probe-error", "reason": str(error)[:180]}
         pending = integer(state.get("effectivePendingCount"), 0)
+        running = integer(state.get("runningEntryCount"), 0)
+        retrying = integer(state.get("retryingEntryCount"), 0)
         maximum = integer(
             self.settings.get("reasoningEngineShadowActiveQueueMaxPending"),
             0,
@@ -336,11 +338,24 @@ class ReasoningEngineShadowRunner:
             100000,
         )
         health = str((state.get("queueHealth") or {}).get("status") or state.get("status") or "").lower()
-        ready = pending <= maximum and health not in {"critical", "error", "blocked"}
+        unhealthy = health in {"critical", "error", "blocked"}
+        ready = running == 0 and retrying == 0 and pending <= maximum and not unhealthy
+        reason_code = ""
+        if running > 0:
+            reason_code = "active-reasoning-running"
+        elif retrying > 0:
+            reason_code = "active-reasoning-retrying"
+        elif pending > maximum:
+            reason_code = "active-queue-pending"
+        elif unhealthy:
+            reason_code = "active-queue-unhealthy"
         return {
             "ready": ready,
             "status": "ready" if ready else "active-queue-pressure",
+            "reasonCode": reason_code,
             "effectivePendingCount": pending,
+            "runningEntryCount": running,
+            "retryingEntryCount": retrying,
             "maximumPendingCount": maximum,
             "activeQueueStatus": health,
         }
@@ -399,6 +414,12 @@ class ReasoningEngineShadowRunner:
         if not job:
             return {"status": "idle", "processedCount": 0, "activeQueueGuard": guard}
         payload = dict(job.get("payload") or {})
+        claimed_at = datetime.now(timezone.utc)
+        queued_at = parsed_utc(payload.get("queuedAt"))
+        queue_wait_ms = max(
+            0,
+            int((claimed_at - queued_at).total_seconds() * 1000),
+        ) if queued_at else 0
         required_contract_fields = {
             "baselineOutcome": Mapping,
             "sourceStates": Mapping,
@@ -502,11 +523,9 @@ class ReasoningEngineShadowRunner:
             comparison["validationCohortId"] = str(payload.get("validationCohortId") or "")
             comparison["candidateRuntimeRevision"] = str(payload.get("candidateRuntimeRevision") or "")
             comparison["ruleboxFingerprint"] = str(runner_release.get("ruleboxFingerprint") or "")
-            queued_at = parsed_utc(payload.get("queuedAt"))
-            comparison["queueWaitMs"] = max(
-                0,
-                int((datetime.now(timezone.utc) - queued_at).total_seconds() * 1000),
-            ) if queued_at else 0
+            comparison["queueWaitMs"] = queue_wait_ms
+            comparison["candidateExecutionMs"] = duration_ms
+            comparison["candidateStartedAt"] = claimed_at.isoformat()
             comparison["candidateWarmup"] = (
                 str(deployment_before_run.get("status") or "") == "provisioning"
             )

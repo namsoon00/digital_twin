@@ -1,3 +1,5 @@
+import hashlib
+import json
 import unittest
 
 from digital_twin.domain.ontology_contracts import OntologyEntity, OntologyRelation, PortfolioOntology
@@ -14,8 +16,12 @@ class NativeRulePlannerTopologyTests(unittest.TestCase):
         graph = PortfolioOntology("planner-topology")
         graph.entities.extend([
             OntologyEntity("portfolio:default", "Portfolio", "portfolio", {}),
-            OntologyEntity("stock:005930", "Samsung", "stock", {"symbol": "005930"}),
-            OntologyEntity("stock:000660", "SK hynix", "stock", {"symbol": "000660"}),
+            OntologyEntity("stock:005930", "Samsung", "stock", {
+                "symbol": "005930", "source": "holding", "profitLossRate": -4.2,
+            }),
+            OntologyEntity("stock:000660", "SK hynix", "stock", {
+                "symbol": "000660", "source": "watchlist", "ma20Distance": 3.5,
+            }),
             OntologyEntity("price:005930", "Price", "price-metric", {"symbol": "005930"}),
             OntologyEntity("macro:kr", "Macro", "macro-regime", {}),
         ])
@@ -37,6 +43,8 @@ class NativeRulePlannerTopologyTests(unittest.TestCase):
             topology["relationTypesBySymbol"]["005930"],
         )
         self.assertEqual(["HAS_RATE_SENSITIVITY"], topology["relationTypesBySymbol"]["000660"])
+        self.assertEqual("holding", topology["subjectPropertiesBySymbol"]["005930"]["source"])
+        self.assertEqual(-4.2, topology["subjectPropertiesBySymbol"]["005930"]["profitLossRate"])
         self.assertEqual(["portfolio:default"], topology["sourceIdsBySymbol"]["PORTFOLIO:DEFAULT"])
         self.assertEqual(["HAS_RISK_SNAPSHOT"], topology["relationTypesBySymbol"]["PORTFOLIO:DEFAULT"])
 
@@ -54,6 +62,22 @@ class NativeRulePlannerTopologyTests(unittest.TestCase):
 
         self.assertEqual("invalid", invalid["status"])
         self.assertIn("fingerprint", invalid["reason"])
+
+    def test_legacy_topology_without_subject_properties_remains_valid_and_unknown(self):
+        topology = native_rule_planner_topology(self.sample_graph())
+        topology.pop("subjectPropertiesBySymbol")
+        payload = {key: value for key, value in topology.items() if key != "fingerprint"}
+        canonical = json.dumps(payload, ensure_ascii=True, sort_keys=True, separators=(",", ":"))
+        topology["fingerprint"] = (
+            "native-rule-topology:"
+            + hashlib.sha256(canonical.encode("utf-8")).hexdigest()[:24]
+        )
+
+        normalized = normalize_native_rule_planner_topology(topology, ["005930"])
+
+        self.assertEqual("ok", normalized["status"])
+        self.assertFalse(normalized["subjectPropertyIndexAvailable"])
+        self.assertEqual({}, normalized["subjectPropertiesBySymbol"])
 
     def test_manifest_fingerprint_changes_when_the_execution_topology_changes(self):
         graph = self.sample_graph()

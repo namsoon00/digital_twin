@@ -1587,6 +1587,15 @@ def build_projection_runtime_observation(
             ),
             "executedRuleWorkCount": _integer(execution.get("typedbNativeRuleExecutedWorkCount")),
             "targetParallelism": _integer(execution.get("typedbNativeRuleTargetParallelism")),
+            "subjectRuleParallelism": _integer(
+                execution.get("typedbNativeRuleSubjectRuleParallelism")
+            ),
+            "totalReadParallelismCap": _integer(
+                execution.get("typedbNativeRuleTotalReadParallelismCap")
+            ),
+            "effectiveTotalReadParallelism": _integer(
+                execution.get("typedbNativeRuleEffectiveTotalReadParallelism")
+            ),
             "subjectFanoutUsed": bool(execution.get("typedbNativeRuleSubjectFanoutUsed")),
             "subjectFanoutParallelism": _integer(
                 execution.get("typedbNativeRuleSubjectFanoutParallelism")

@@ -89,8 +89,10 @@ class OntologySubjectFanoutTests(unittest.TestCase):
     def test_repository_merges_two_complete_subject_reads(self):
         repository = TypeDBOntologyGraphRepository(
             address="127.0.0.1:1729",
+            native_rule_parallelism=2,
             native_rule_subject_fanout_enabled=True,
             native_rule_subject_parallelism=2,
+            native_rule_total_read_parallelism=4,
             persistent_driver_enabled=False,
         )
 
@@ -124,6 +126,44 @@ class OntologySubjectFanoutTests(unittest.TestCase):
         self.assertEqual(2, merged["matchedCount"])
         self.assertEqual(2, merged["readQueryCount"])
         self.assertEqual(2, repository.match_typedb_native_rules.call_count)
+        self.assertTrue(all(
+            call.kwargs.get("stable_abox_write_lease_held") is True
+            for call in repository.match_typedb_native_rules.call_args_list
+        ))
+        self.assertTrue(all(
+            call.kwargs.get("native_rule_parallelism") == 2
+            for call in repository.match_typedb_native_rules.call_args_list
+        ))
+        self.assertEqual(2, merged["subjectRuleParallelism"])
+        self.assertEqual(4, merged["totalReadParallelismCap"])
+        self.assertEqual(4, merged["effectiveTotalReadParallelism"])
+
+    def test_repository_fanout_divides_global_read_cap_across_subjects(self):
+        repository = TypeDBOntologyGraphRepository(
+            address="127.0.0.1:1729",
+            native_rule_parallelism=4,
+            native_rule_subject_fanout_enabled=True,
+            native_rule_subject_parallelism=2,
+            native_rule_total_read_parallelism=3,
+            persistent_driver_enabled=False,
+        )
+        repository.match_typedb_native_rules = Mock(return_value=result([], []))
+
+        merged = TypeDBOntologyGraphRepository.match_typedb_native_rules_by_subject(
+            repository,
+            [],
+            ["AAA", "BBB"],
+            use_schema_functions=True,
+            world_id="portfolio:local:main",
+        )
+
+        self.assertEqual(1, merged["subjectRuleParallelism"])
+        self.assertEqual(3, merged["totalReadParallelismCap"])
+        self.assertEqual(2, merged["effectiveTotalReadParallelism"])
+        self.assertTrue(all(
+            call.kwargs.get("native_rule_parallelism") == 1
+            for call in repository.match_typedb_native_rules.call_args_list
+        ))
 
     def test_repository_fanout_fails_whole_generation_when_one_subject_fails(self):
         repository = TypeDBOntologyGraphRepository(

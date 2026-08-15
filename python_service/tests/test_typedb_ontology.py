@@ -8,7 +8,7 @@ from copy import deepcopy
 from contextlib import contextmanager
 from datetime import datetime, timedelta, timezone
 from pathlib import Path
-from threading import Event, Lock
+from threading import Event, Lock, current_thread
 from types import SimpleNamespace
 from unittest.mock import ANY, call, patch
 
@@ -3371,6 +3371,35 @@ class TypeDBOntologyRepositoryTests(unittest.TestCase):
         self.assertEqual(2, len(created))
         self.assertEqual([180000, 900000], [item[1] for item in created])
 
+    def test_native_rule_read_driver_uses_and_closes_a_bounded_dedicated_channel(self):
+        repository = TypeDBOntologyGraphRepository(
+            "127.0.0.1:1729",
+            persistent_driver_enabled=True,
+            native_rule_dedicated_read_driver_enabled=True,
+        )
+
+        class FakeDriver:
+            def __init__(self):
+                self.closed = 0
+
+            def close(self):
+                self.closed += 1
+
+        dedicated = FakeDriver()
+        imported = object()
+        with patch.object(repository, "create_driver", return_value=dedicated) as create, \
+                patch.object(repository, "open_driver") as shared:
+            opened = repository.open_native_rule_read_driver(
+                imported,
+                request_timeout_seconds=7,
+            )
+            repository.close_native_rule_read_driver(opened)
+
+        self.assertIs(dedicated, opened)
+        create.assert_called_once_with(imported, request_timeout_seconds=7)
+        shared.assert_not_called()
+        self.assertEqual(1, dedicated.closed)
+
     def test_typedb_schema_transaction_options_cover_compiler_and_schema_lock_timeout(self):
         repository = TypeDBOntologyGraphRepository(
             "127.0.0.1:1729",
@@ -3586,11 +3615,33 @@ class TypeDBOntologyRepositoryTests(unittest.TestCase):
             def transaction(self, *_args, **_kwargs):
                 return FakeTransaction()
 
-        imported = (object, object, object, object, SimpleNamespace(READ="read"))
+        native_driver_threads = []
+
+        def open_native_driver_stub(*_args, **_kwargs):
+            native_driver_threads.append(current_thread().name)
+            return FakeDriver()
+
+        imported = (
+            SimpleNamespace(driver=lambda *_args, **_kwargs: None),
+            object,
+            object,
+            object,
+            SimpleNamespace(READ="read"),
+        )
         with patch.object(repository, "driver_imports", return_value=(imported, None)), \
-                patch.object(repository, "open_driver", side_effect=lambda *_args, **_kwargs: FakeDriver()), \
+                patch.object(
+                    repository,
+                    "open_driver",
+                    side_effect=lambda *_args, **_kwargs: FakeDriver(),
+                ), \
+                patch.object(
+                    repository,
+                    "open_native_rule_read_driver",
+                    side_effect=open_native_driver_stub,
+                ) as open_native_driver, \
                 patch.object(repository, "ensure_database"), \
                 patch.object(repository, "close_driver"), \
+                patch.object(repository, "close_native_rule_read_driver") as close_native_driver, \
                 patch.object(repository, "read_transaction_options", return_value=None), \
                 patch.object(repository, "active_abox_rule_context", return_value={
                     "status": "ok",
@@ -3598,7 +3649,12 @@ class TypeDBOntologyRepositoryTests(unittest.TestCase):
                     "sourceIdsBySymbol": {"005930": ["stock:005930"]},
                 }):
             result = repository.match_typedb_native_rules(
-                [rule("graph.parallel.a.v1"), rule("graph.parallel.b.v1")],
+                [
+                    rule("graph.parallel.a.v1"),
+                    rule("graph.parallel.b.v1"),
+                    rule("graph.parallel.c.v1"),
+                    rule("graph.parallel.d.v1"),
+                ],
                 target_symbols=["005930"],
                 native_rule_parallelism=2,
                 stable_abox_write_lease_held=True,
@@ -3607,11 +3663,14 @@ class TypeDBOntologyRepositoryTests(unittest.TestCase):
         self.assertEqual("ok", result["status"])
         self.assertTrue(result["parallelRuleExecution"])
         self.assertEqual(2, result["nativeRuleParallelism"])
-        self.assertEqual(2, result["readTransactionCount"])
-        self.assertEqual(2, result["readQueryCount"])
-        self.assertEqual(2, len(transactions))
+        self.assertEqual(4, result["readTransactionCount"])
+        self.assertEqual(4, result["readQueryCount"])
+        self.assertEqual(4, len(transactions))
         self.assertGreaterEqual(active["maximum"], 2)
-        self.assertEqual(2, len(result["executedRules"]))
+        self.assertEqual(2, open_native_driver.call_count, native_driver_threads)
+        self.assertEqual(2, close_native_driver.call_count)
+        self.assertEqual(4, len(result["executedRules"]))
+        self.assertTrue(all(item["dedicatedReadDriverReused"] for item in result["executedRules"]))
         self.assertTrue(all(int(item["elapsedMs"]) > 0 for item in result["executedRules"]))
         self.assertTrue(all(int(item["queryDurationMs"]) > 0 for item in result["executedRules"]))
 
@@ -4420,7 +4479,150 @@ class TypeDBOntologyRepositoryTests(unittest.TestCase):
         )
         self.assertEqual("matched-rule-types", graph.worldview["nativeEvidenceRead"]["relationReadScope"])
 
-    def test_scoped_native_rule_run_blocks_when_manifest_lacks_evidence_read_index(self):
+    def test_active_manifest_evidence_index_rebuild_reads_exact_active_storage_rows(self):
+        repository = TypeDBOntologyGraphRepository("127.0.0.1:1729")
+        graph = PortfolioOntology("active-index-repair")
+        graph.entities.append(OntologyEntity(
+            "stock:005930",
+            "Samsung",
+            "stock",
+            {"ontologyBox": "ABox", "symbol": "005930"},
+        ))
+        topology = native_rule_planner_topology(graph)
+        active = {
+            "status": "ok",
+            "worldId": "portfolio:local:default",
+            "worldviewManifestId": "abox-manifest:active",
+            "aboxSnapshotId": "abox-manifest:active",
+            "scopedAboxManifestVersion": SCOPED_ABOX_MANIFEST_VERSION,
+            "scopeGenerationIds": {"symbol:005930:state": "abox-scope:stock"},
+            "nativeRulePlannerTopology": topology,
+        }
+        rows = [
+            [{
+                "sourceId": "stock:005930",
+                "sourceStorageId": "ontology-storage:stock-active",
+                "sourceSnapshotId": "abox-scope:stock",
+            }],
+            [{
+                "sourceId": "stock:005930",
+                "relationStorageId": "ontology-storage:price-active",
+                "relationType": "HAS_PRICE",
+                "relationSnapshotId": "abox-scope:stock",
+            }],
+            [],
+            [],
+        ]
+        with patch.object(repository, "read_rows", side_effect=rows) as read_rows:
+            result = repository.rebuild_active_manifest_native_rule_evidence_read_index(
+                active,
+                world_id="portfolio:local:default",
+            )
+
+        self.assertEqual("ok", result["status"])
+        self.assertEqual(4, result["readQueryCount"])
+        self.assertEqual(
+            "ontology-storage:stock-active",
+            result["index"]["sourceStorageIdsBySourceId"]["stock:005930"],
+        )
+        self.assertEqual(
+            ["ontology-storage:price-active"],
+            result["index"]["relationStorageIdsBySymbolAndType"]["005930"]["HAS_PRICE"],
+        )
+        self.assertIn("ontology-storage-id $sourceStorageId", read_rows.call_args_list[0].args[0])
+        self.assertIn("ontology-storage-id $relationStorageId", read_rows.call_args_list[1].args[0])
+
+    def test_active_manifest_evidence_index_repair_adopts_existing_write_lease(self):
+        repository = TypeDBOntologyGraphRepository("127.0.0.1:1729")
+        graph = PortfolioOntology("active-index-repair")
+        graph.entities.append(OntologyEntity(
+            "stock:005930",
+            "Samsung",
+            "stock",
+            {"ontologyBox": "ABox", "symbol": "005930"},
+        ))
+        topology = native_rule_planner_topology(graph)
+        index_graph = PortfolioOntology("active-index-rows")
+        index_graph.entities.append(OntologyEntity(
+            "stock:005930",
+            "Samsung",
+            "stock",
+            {
+                "ontologyBox": "ABox",
+                "symbol": "005930",
+                "worldId": "portfolio:local:default",
+                "snapshotId": "abox-scope:stock",
+            },
+        ))
+        node_rows, relation_rows = repository.graph_persistence_rows(index_graph)
+        index = native_rule_evidence_read_index_from_rows(node_rows, relation_rows)
+        active = {
+            "status": "ok",
+            "worldId": "portfolio:local:default",
+            "worldType": "portfolio",
+            "accountId": "default",
+            "worldviewManifestId": "abox-manifest:active",
+            "aboxSnapshotId": "abox-manifest:active",
+            "scopedAboxManifestVersion": SCOPED_ABOX_MANIFEST_VERSION,
+            "scopePlan": [{
+                "scopeId": "symbol:005930:holding",
+                "generationId": "abox-scope:stock",
+            }],
+            "scopeGenerationIds": {"symbol:005930:holding": "abox-scope:stock"},
+            "nativeRulePlannerTopology": topology,
+        }
+        verified = {**active, "nativeRuleEvidenceReadIndex": index}
+        marker = {
+            "id": "worldview-manifest-marker:active",
+            "label": "Worldview Manifest abox-manifest:active",
+            "snapshotId": "abox-manifest:active",
+            "worldviewManifestId": "abox-manifest:active",
+            "propertiesJson": json.dumps({
+                "ontologyBox": "ABox",
+                "worldId": "portfolio:local:default",
+                "worldType": "portfolio",
+                "accountId": "default",
+                "snapshotId": "abox-manifest:active",
+                "aboxSnapshotId": "abox-manifest:active",
+                "worldviewManifestId": "abox-manifest:active",
+                "scopePlan": active["scopePlan"],
+                "scopeGenerationIds": active["scopeGenerationIds"],
+                "nativeRulePlannerTopology": topology,
+            }),
+        }
+        rebuilt = {
+            "status": "ok",
+            "manifestId": "abox-manifest:active",
+            "index": index,
+            "sourceCount": 1,
+            "relationCount": 0,
+            "readQueryCount": 3,
+            "durationMs": 12,
+        }
+        with patch.object(repository, "active_abox_metadata", side_effect=[active, verified]), \
+                patch.object(repository, "rebuild_active_manifest_native_rule_evidence_read_index", return_value=rebuilt), \
+                patch.object(repository, "worldview_manifest_marker_rows", return_value=[marker]), \
+                patch.object(repository, "replace_scoped_manifest_marker_graph", return_value={"saved": True, "status": "ok"}) as replace, \
+                patch.object(repository, "acquire_scoped_abox_write_lease") as acquire, \
+                patch.object(repository, "release_scoped_abox_write_lease") as release:
+            result = repository.repair_active_manifest_native_rule_evidence_index(
+                active,
+                world_id="portfolio:local:default",
+                expected_manifest_id="abox-manifest:active",
+                stable_write_lease_held=True,
+            )
+
+        self.assertEqual("ok", result["status"])
+        acquire.assert_not_called()
+        release.assert_not_called()
+        replacement_properties = replace.call_args.args[0].entities[0].properties
+        self.assertEqual(index["fingerprint"], replacement_properties["nativeRuleEvidenceReadIndex"]["fingerprint"])
+        self.assertEqual(
+            "recovered-active-membership",
+            replacement_properties["nativeRuleEvidenceReadIndexMerge"]["status"],
+        )
+
+    def test_scoped_native_rule_run_blocks_when_manifest_index_repair_is_unavailable(self):
         repository = TypeDBOntologyGraphRepository("127.0.0.1:1729")
         topology_graph = PortfolioOntology("missing-evidence-index")
         topology_graph.entities.append(OntologyEntity("stock:005930", "Samsung", "stock", {"symbol": "005930"}))
@@ -4449,6 +4651,10 @@ class TypeDBOntologyRepositoryTests(unittest.TestCase):
                 }), \
                 patch.object(repository, "rulebox_snapshot", return_value=rule_snapshot), \
                 patch.object(repository, "schema_function_prewarm_readiness", return_value={"status": "ok"}), \
+                patch.object(repository, "repair_active_manifest_native_rule_evidence_index", return_value={
+                    "status": "repair-read-failed",
+                    "reason": "test repair failure",
+                }), \
                 patch.object(repository, "match_typedb_native_rules", return_value=native_match), \
                 patch.object(repository, "load_graph_for_native_matches") as graph_load:
             result = repository.run_rulebox({"symbols": ["005930"]})
@@ -4610,6 +4816,45 @@ class TypeDBOntologyRepositoryTests(unittest.TestCase):
             for item in plan["skippedEntries"]
         ))
         self.assertEqual(0, plan["queryLimit"])
+
+    def test_manifest_subject_properties_prune_only_a_provably_wrong_rule_source(self):
+        rule = GraphInferenceRule(
+            rule_id="graph.test.watchlist.only.v1",
+            label="Watchlist only",
+            version="v1",
+            source_kind="stock",
+            conditions=[GraphRuleCondition(
+                condition_id="watchlist-source",
+                kind="subject_property",
+                description="Watchlist source",
+                field="source",
+                operator="==",
+                value="watchlist",
+            )],
+            derivations=[],
+            action_group="watch",
+            action_level="review",
+            prompt_hint="test",
+        )
+
+        holding_plan = typedb_native_rule_execution_plan(
+            [rule],
+            ["SKHY"],
+            {"SKHY": []},
+            subject_properties_by_symbol={
+                "SKHY": {"kind": "stock", "symbol": "SKHY", "source": "holding"},
+            },
+        )
+        legacy_plan = typedb_native_rule_execution_plan(
+            [rule],
+            ["SKHY"],
+            {"SKHY": []},
+        )
+
+        self.assertEqual([], holding_plan["selectedEntries"])
+        self.assertEqual("not-applicable-preflight", holding_plan["skippedEntries"][0]["status"])
+        self.assertEqual(1, holding_plan["subjectPropertyPreflightPrunedSymbolCount"])
+        self.assertEqual([rule.rule_id], [item["ruleId"] for item in legacy_plan["selectedEntries"]])
 
     def test_typedb_native_rule_execution_plan_never_starves_non_temporal_rules(self):
         rules = default_graph_inference_rules()
@@ -5221,6 +5466,21 @@ class TypeDBOntologyRepositoryTests(unittest.TestCase):
         self.assertEqual("fresh-read-transaction", result["executed"]["interruptedTransactionRetryMode"])
         self.assertEqual(2, result["readTransactionCount"])
         self.assertEqual(1, result["readQueryCount"])
+
+    def test_closed_native_read_transaction_is_recognized_for_one_safe_retry(self):
+        result = {
+            "status": "partial",
+            "failure": {
+                "status": "query-error",
+                "reason": "The transaction is closed and no further operation is allowed.",
+            },
+        }
+
+        self.assertTrue(
+            TypeDBOntologyGraphRepository.native_rule_entry_has_interrupted_transaction_failure(
+                result
+            )
+        )
 
     def test_parallel_native_rule_match_uses_serial_timeout_recovery_before_merging(self):
         repository = TypeDBOntologyGraphRepository(
@@ -6880,6 +7140,7 @@ class TypeDBOntologyRepositoryTests(unittest.TestCase):
             "typedbAddress": "127.0.0.1:1729",
             "typedbNativeRuleParallelism": "2",
             "typedbNativeRuleTargetParallelism": "9",
+            "typedbNativeRuleTotalReadParallelism": "3",
         })
         factory_adaptive_target_sharding_disabled = typedb_repository_from_settings({
             "ontologyTypeDbEnabled": "1",
@@ -6899,6 +7160,8 @@ class TypeDBOntologyRepositoryTests(unittest.TestCase):
         self.assertEqual(4, factory_default.native_rule_parallelism())
         self.assertEqual(1, factory_default.native_rule_target_parallelism())
         self.assertEqual(2, factory_target_parallel.native_rule_target_parallelism())
+        self.assertEqual(4, factory_default.native_rule_total_read_parallelism())
+        self.assertEqual(3, factory_target_parallel.native_rule_total_read_parallelism())
         self.assertTrue(factory_default.native_rule_adaptive_target_sharding_enabled())
         self.assertFalse(factory_adaptive_target_sharding_disabled.native_rule_adaptive_target_sharding_enabled())
         self.assertFalse(direct._inference_write_lease_enabled)

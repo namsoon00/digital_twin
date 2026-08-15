@@ -1,5 +1,7 @@
 import unittest
+from datetime import datetime, timedelta, timezone
 from types import SimpleNamespace
+from unittest.mock import patch
 
 from digital_twin.application.reasoning_shadow_service import (
     ReasoningEngineShadowRunner,
@@ -408,6 +410,7 @@ class ReasoningShadowTests(unittest.TestCase):
         registry = FakeRegistry()
         baseline_release = self.release(registry, "v1")
         candidate_release = self.release(registry, "v2")
+        queued_at = datetime(2026, 8, 15, 0, 0, tzinfo=timezone.utc)
         queue.job = {
             "jobId": "job-1",
             "sourceEventId": "event-1",
@@ -431,14 +434,32 @@ class ReasoningShadowTests(unittest.TestCase):
                 }),
                 "baselineOutcome": baseline,
                 "reasoningContext": {},
+                "queuedAt": queued_at.isoformat(),
             },
         }
         comparisons = FakeComparisonStore()
+
+        class ClaimClock(datetime):
+            candidate_finished = False
+
+            @classmethod
+            def now(cls, tz=None):
+                value = queued_at + timedelta(
+                    seconds=20 if cls.candidate_finished else 2
+                )
+                return value if tz is not None else value.replace(tzinfo=None)
+
+        class MarkingCandidateRunner(FakeCandidateRunner):
+            def run_once(self, **kwargs):
+                result = super().run_once(**kwargs)
+                ClaimClock.candidate_finished = True
+                return result
+
         worker = ReasoningEngineShadowRunner(
             queue,
             comparisons,
             registry,
-            candidate_runner_factory=lambda payload: FakeCandidateRunner(
+            candidate_runner_factory=lambda payload: MarkingCandidateRunner(
                 release_identity=payload["candidateReleaseIdentity"]
             ),
             temporal_snapshot_service=FakeTemporalService(),
@@ -449,13 +470,51 @@ class ReasoningShadowTests(unittest.TestCase):
             },
         )
 
-        result = worker.run_once()
+        with patch(
+            "digital_twin.application.reasoning_shadow_service.datetime",
+            ClaimClock,
+        ):
+            result = worker.run_once()
 
         self.assertEqual("completed", result["status"])
         self.assertEqual("equivalent", result["comparisonStatus"])
         self.assertEqual(["job-1"], queue.completed)
         self.assertEqual("shadow", registry.status)
         self.assertEqual(0, comparisons.rows[0]["shadowDeliveryCount"])
+        self.assertEqual(2000, comparisons.rows[0]["queueWaitMs"])
+        self.assertEqual(
+            comparisons.rows[0]["candidateDurationMs"],
+            comparisons.rows[0]["candidateExecutionMs"],
+        )
+
+    def test_shadow_worker_yields_when_active_reasoning_is_running_without_pending_rows(self):
+        worker = ReasoningEngineShadowRunner(
+            FakeQueue(),
+            FakeComparisonStore(),
+            FakeRegistry(),
+            candidate_runner_factory=lambda payload: FakeCandidateRunner(),
+            temporal_snapshot_service=FakeTemporalService(),
+            temporal_definitions=[],
+            settings={
+                "reasoningEngineShadowEnabled": "1",
+                "reasoningEngineShadowYieldToActiveQueue": "1",
+                "reasoningEngineShadowActiveQueueMaxPending": "0",
+            },
+            active_queue_probe=lambda: {
+                "status": "healthy",
+                "effectivePendingCount": 0,
+                "runningEntryCount": 1,
+                "retryingEntryCount": 0,
+            },
+        )
+
+        result = worker.run_once()
+
+        self.assertEqual("deferred-active-queue", result["status"])
+        self.assertEqual(
+            "active-reasoning-running",
+            result["activeQueueGuard"]["reasonCode"],
+        )
 
     def test_shadow_delivery_attempt_is_recorded_as_a_promotion_violation(self):
         queue = FakeQueue()

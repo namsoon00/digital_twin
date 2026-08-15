@@ -436,6 +436,9 @@ class OntologyRuntimeOperationsTests(unittest.TestCase):
             "typedbNativeRuleExecutedCount": 4,
             "typedbNativeRuleExecutedWorkCount": 6,
             "typedbNativeRuleTargetParallelism": 2,
+            "typedbNativeRuleSubjectRuleParallelism": 2,
+            "typedbNativeRuleTotalReadParallelismCap": 4,
+            "typedbNativeRuleEffectiveTotalReadParallelism": 4,
             "typedbNativeRuleSubjectFanoutUsed": True,
             "typedbNativeRuleSubjectFanoutParallelism": 2,
             "typedbNativeRuleSubjectFanoutDurationMs": 3100,
@@ -463,6 +466,9 @@ class OntologyRuntimeOperationsTests(unittest.TestCase):
         self.assertEqual(4, observation["inference"]["executedRuleCount"])
         self.assertEqual(6, observation["inference"]["executedRuleWorkCount"])
         self.assertEqual(2, observation["inference"]["targetParallelism"])
+        self.assertEqual(2, observation["inference"]["subjectRuleParallelism"])
+        self.assertEqual(4, observation["inference"]["totalReadParallelismCap"])
+        self.assertEqual(4, observation["inference"]["effectiveTotalReadParallelism"])
         self.assertTrue(observation["inference"]["subjectFanoutUsed"])
         self.assertEqual(2, observation["inference"]["subjectFanoutParallelism"])
         self.assertEqual(3100, observation["inference"]["subjectFanoutDurationMs"])

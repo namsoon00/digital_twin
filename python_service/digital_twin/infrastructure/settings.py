@@ -331,6 +331,7 @@ TEXT_SETTING_KEYS = [
     "typedbNativeRuleTargetParallelism",
     "typedbNativeRuleSubjectFanoutEnabled",
     "typedbNativeRuleSubjectParallelism",
+    "typedbNativeRuleTotalReadParallelism",
     "typedbNativeRuleTargetWorkShardingEnabled",
     "typedbNativeRuleAdaptiveTargetShardingEnabled",
     "typedbNativeRuleAdaptiveTargetShardingLookbackRuns",
@@ -397,6 +398,7 @@ TEXT_SETTING_KEYS = [
     "typedbNativeRuleExecutionEnabled",
     "typedbNativeRuleDirectQueryFallbackEnabled",
     "typedbNativeRuleQueryTimeoutSeconds",
+    "typedbNativeRuleDedicatedReadDriverEnabled",
     "typedbNativeRuleExecutionBudgetSeconds",
     "typedbNativeRuleParallelism",
     "typedbNativeRuleAnyConditionParallelism",
@@ -1633,6 +1635,11 @@ def runtime_settings(fast_operational_read: bool = False) -> Dict[str, str]:
             "TYPEDB_NATIVE_RULE_SUBJECT_PARALLELISM",
             "2",
         ),
+        "typedbNativeRuleTotalReadParallelism": value(
+            "typedbNativeRuleTotalReadParallelism",
+            "TYPEDB_NATIVE_RULE_TOTAL_READ_PARALLELISM",
+            "4",
+        ),
         "typedbNativeRuleTargetWorkShardingEnabled": value(
             "typedbNativeRuleTargetWorkShardingEnabled",
             "TYPEDB_NATIVE_RULE_TARGET_WORK_SHARDING_ENABLED",
@@ -2023,6 +2030,11 @@ def runtime_settings(fast_operational_read: bool = False) -> Dict[str, str]:
             "typedbNativeRuleQueryTimeoutSeconds",
             "TYPEDB_NATIVE_RULE_QUERY_TIMEOUT_SECONDS",
             "30",
+        ),
+        "typedbNativeRuleDedicatedReadDriverEnabled": value(
+            "typedbNativeRuleDedicatedReadDriverEnabled",
+            "TYPEDB_NATIVE_RULE_DEDICATED_READ_DRIVER_ENABLED",
+            "1",
         ),
         "typedbNativeRuleExecutionBudgetSeconds": value(
             "typedbNativeRuleExecutionBudgetSeconds",

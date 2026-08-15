@@ -772,6 +772,7 @@ class OntologyReasoningRunner:
         "ontologyReasoningAdaptiveBatchBacklogBurstAgeSeconds",
         "typedbNativeRuleSubjectFanoutEnabled",
         "typedbNativeRuleSubjectParallelism",
+        "typedbNativeRuleTotalReadParallelism",
         "ontologyReasoningBacklogDrainNoCooldownEnabled",
         "ontologyReasoningBacklogDrainNoCooldownAgeSeconds",
         "ontologyReasoningMinIntervalSeconds",
@@ -4833,6 +4834,18 @@ class OntologyReasoningRunner:
                 "relationCount": int(float_value(native_preflight.get("relationCount"), 0.0)),
             },
             "targetParallelism": int(float_value(inference.get("targetParallelism"), 0.0)),
+            "subjectRuleParallelism": int(float_value(
+                inference.get("subjectRuleParallelism"),
+                0.0,
+            )),
+            "totalReadParallelismCap": int(float_value(
+                inference.get("totalReadParallelismCap"),
+                0.0,
+            )),
+            "effectiveTotalReadParallelism": int(float_value(
+                inference.get("effectiveTotalReadParallelism"),
+                0.0,
+            )),
             "typedbNativeRuleSubjectFanoutUsed": bool(inference.get("subjectFanoutUsed")),
             "typedbNativeRuleSubjectFanoutParallelism": int(float_value(
                 inference.get("subjectFanoutParallelism"),
@@ -5587,7 +5600,8 @@ class OntologyReasoningRunner:
                     "aboxReusedPhysicalRowCount", "aboxInsertedNodeCount", "aboxInsertedRelationCount",
                     "status", "targetSymbolCount", "candidateRuleCount", "enabledRuleCount",
                     "candidateRuleRatioPct", "executedRuleCount", "executedRuleWorkCount",
-                    "targetParallelism", "targetWorkShardingUsed", "targetWorkShardCount",
+                    "targetParallelism", "subjectRuleParallelism", "totalReadParallelismCap",
+                    "effectiveTotalReadParallelism", "targetWorkShardingUsed", "targetWorkShardCount",
                     "typedbNativeRuleSubjectFanoutUsed",
                     "typedbNativeRuleSubjectFanoutParallelism",
                     "typedbNativeRuleSubjectFanoutDurationMs",

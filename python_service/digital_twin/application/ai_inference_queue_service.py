@@ -77,11 +77,13 @@ class NotificationAIRequestEnqueuer:
         context_preparer=None,
         settings: Dict[str, object] = None,
         decision_episode_store=None,
+        continuity_service=None,
     ):
         self.queue = queue
         self.context_preparer = context_preparer
         self.settings = dict(settings or {})
         self.decision_episode_store = decision_episode_store
+        self.continuity_service = continuity_service
 
     def enqueue(self, job: NotificationJob) -> Dict[str, object]:
         if self.context_preparer:
@@ -96,6 +98,7 @@ class NotificationAIRequestEnqueuer:
             context = context_with_previous_investment_decision(
                 context,
                 self.decision_episode_store,
+                self.continuity_service,
                 account_id=job.account_id,
             )
         context["ontologyQualityGate"] = ontology_quality_gate_context(context, self.settings)
@@ -120,6 +123,7 @@ class AIInferenceQueueRunner:
         reviewer,
         settings: Dict[str, object] = None,
         decision_episode_store=None,
+        continuity_service=None,
         action_planning_service=None,
         worker_id: str = "",
     ):
@@ -127,6 +131,7 @@ class AIInferenceQueueRunner:
         self.reviewer = reviewer
         self.settings = dict(settings or {})
         self.decision_episode_store = decision_episode_store
+        self.continuity_service = continuity_service
         self.action_planning_service = action_planning_service
         self.worker_id = str(worker_id or "notification-ai-" + uuid.uuid4().hex[:10])
         self.lease_seconds = _int_setting(self.settings, "notificationAiQueueLeaseSeconds", 360, 60, 3600)
@@ -186,6 +191,7 @@ class AIInferenceQueueRunner:
             context = context_with_previous_investment_decision(
                 context,
                 self.decision_episode_store,
+                self.continuity_service,
                 account_id=request.account_id,
                 symbol=request.symbol,
             )
@@ -294,6 +300,11 @@ class AIInferenceQueueRunner:
         episode = self.decision_episode_context(request, context, response)
         action_plan = self.action_plan_context(context, episode)
         enriched = context_with_validated_ai_response(context, response, self.settings)
+        continuity_packet = (
+            dict(context.get("decisionContinuityPacket") or {})
+            if isinstance(context.get("decisionContinuityPacket"), dict)
+            else {}
+        )
         enriched["notificationAiExecutionAudit"] = {
             "version": "notification-ai-execution-audit-v2",
             "status": "fallback" if "fallback" in str(response.source or "").lower() else "completed",
@@ -307,6 +318,13 @@ class AIInferenceQueueRunner:
             "prompt": executed_prompt,
             "decisionBriefVersion": decision_brief.get("schemaVersion"),
             "decisionBrief": decision_brief,
+            "decisionContinuity": {
+                "contractVersion": str(continuity_packet.get("contractVersion") or ""),
+                "packetId": str(continuity_packet.get("packetId") or ""),
+                "materialFingerprint": str(continuity_packet.get("materialFingerprint") or ""),
+                "status": str(continuity_packet.get("status") or "unavailable"),
+                "summary": dict(continuity_packet.get("summary") or {}),
+            },
             "executionProfile": execution_profile,
             "internalDataAudit": (
                 (context.get("notificationAiInternalData") or {}).get("audit")

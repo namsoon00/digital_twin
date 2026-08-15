@@ -52,6 +52,15 @@ of being released on trust. The RuleBox fingerprint is frozen after the first
 successful V2 comparison; a changed RuleBox requires a new candidate release
 so results from different releases cannot be mixed.
 
+The final AI boundary uses the engine-neutral `DecisionContinuityPacket` v2.
+It carries the prior decision identity, selected hypothesis, follow-up state,
+observed account action, outcome, execution feedback, and lifecycle review as
+one bounded immutable input. This separates an engine upgrade from memory
+semantics: V1 and a future AI-enabled V2 comparison must receive the same
+packet fingerprint before their decisions are compared. The current TypeDB
+shadow remains a graph-only comparison and therefore does not claim AI-decision
+parity until that additional promotion gate is enabled.
+
 ## Shadow Comparison Contract
 
 The active reasoning worker stores one bounded immutable handoff after a successful V1

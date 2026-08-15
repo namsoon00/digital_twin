@@ -578,7 +578,8 @@ MYSQL_SCHEMA = [
         payload_json LONGTEXT NOT NULL,
         created_at VARCHAR(40) NOT NULL,
         UNIQUE KEY uq_decision_activity_pair (activity_episode_id, prior_decision_episode_id, symbol),
-        KEY idx_decision_action_account_symbol (account_id, symbol, observed_at)
+        KEY idx_decision_action_account_symbol (account_id, symbol, observed_at),
+        KEY idx_decision_action_prior_subject (prior_decision_episode_id, account_id, symbol, observed_at)
     ) ENGINE=InnoDB DEFAULT CHARSET=utf8mb4 COLLATE=utf8mb4_unicode_ci
     """,
     """

@@ -928,6 +928,86 @@ class MySQLInvestmentDomainStore(MySQLOperationalConnection):
             )
         return cycle
 
+    def decision_continuity_context(
+        self,
+        portfolio_id: str,
+        account_id: str,
+        symbol: str,
+        decision_episode_id: str,
+    ) -> Dict[str, object]:
+        """Read only the position and account observations linked to one decision."""
+
+        portfolio_key = str(portfolio_id or "")
+        account_key = str(account_id or "")
+        symbol_key = str(symbol or "").upper().strip()
+        decision_key = str(decision_episode_id or "").strip()
+        with self.connect() as connection:
+            action_observations = connection.execute(
+                "SELECT activity_episode_id, payload_json "
+                "FROM portfolio_decision_action_observations "
+                "WHERE account_id = %s AND symbol = %s AND prior_decision_episode_id = %s "
+                "ORDER BY observed_at DESC, observation_id DESC LIMIT 4",
+                (account_key, symbol_key, decision_key),
+            ).fetchall()
+            state = connection.execute(
+                "SELECT payload_json FROM portfolio_state_snapshots WHERE portfolio_id = %s "
+                "ORDER BY observed_at DESC, state_id DESC LIMIT 1",
+                (portfolio_key,),
+            ).fetchone()
+            activity_ids = [
+                str(item.get("activity_episode_id") or "")
+                for item in action_observations or []
+                if str(item.get("activity_episode_id") or "")
+            ]
+            activities = []
+            if activity_ids:
+                placeholders = ",".join(["%s"] * len(activity_ids))
+                activities = connection.execute(
+                    "SELECT episode_id, payload_json FROM portfolio_activity_episodes "
+                    "WHERE episode_id IN (" + placeholders + ")",
+                    tuple(activity_ids),
+                ).fetchall()
+
+        activity_by_id = {
+            str(item.get("episode_id") or ""): _json_loads(item.get("payload_json"), {})
+            for item in activities or []
+        }
+        observations = []
+        for item in action_observations or []:
+            observation = _json_loads(item.get("payload_json"), {})
+            activity = activity_by_id.get(str(item.get("activity_episode_id") or ""), {})
+            instrument = next((
+                dict(row)
+                for row in activity.get("instrumentChanges") or []
+                if isinstance(row, dict) and str(row.get("symbol") or "").upper().strip() == symbol_key
+            ), {})
+            for key in (
+                "previousQuantity", "observedQuantity", "quantityDelta", "confidence",
+            ):
+                if instrument.get(key) not in (None, ""):
+                    observation[key] = instrument.get(key)
+            observations.append(observation)
+
+        state_payload = _json_loads((state or {}).get("payload_json"), {})
+        position = next((
+            dict(item)
+            for item in state_payload.get("positions") or []
+            if isinstance(item, dict) and str(item.get("symbol") or "").upper().strip() == symbol_key
+        ), {})
+        if position:
+            position["observedAt"] = state_payload.get("observedAt") or ""
+            position["observationState"] = "observed"
+        else:
+            position = {
+                "symbol": symbol_key,
+                "observedAt": state_payload.get("observedAt") or "",
+                "observationState": "not-held" if state_payload else "unavailable",
+            }
+        return {
+            "actionObservations": observations,
+            "currentPosition": position,
+        }
+
     def ontology_portfolio_lifecycle_context(self, portfolio_id: str) -> Dict[str, object]:
         portfolio_key = str(portfolio_id or "")
         with self.connect() as connection:

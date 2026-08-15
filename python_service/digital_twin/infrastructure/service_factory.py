@@ -10,6 +10,7 @@ from ..application.ai_inference_queue_service import (
     NotificationAIRequestEnqueuer,
 )
 from ..application.data_pipeline_health_service import DataPipelineHealthNotificationEnqueuer, DataPipelineHealthService
+from ..application.decision_continuity_service import DecisionContinuityService
 from ..application.ontology_reasoning_queue_health_service import (
     OntologyReasoningQueueHealthNotificationEnqueuer,
     OntologyReasoningQueueHealthService,
@@ -395,6 +396,9 @@ def build_notification_queue_runner(dry_run: bool = False, lane: str = "all") ->
     include_message_types = []
     exclude_message_types = []
     monitor_store = stores.monitor_store(settings)
+    decision_episode_store = stores.investment_decision_episode_store(settings)
+    investment_domain_store = stores.investment_domain_store(settings)
+    continuity_service = DecisionContinuityService(decision_episode_store, investment_domain_store)
     investment_brain_service = build_investment_brain_service(settings)
     reasoning_queue_probe = build_ontology_reasoning_queue_probe(settings)
     queue_health_service = OntologyReasoningQueueHealthService(
@@ -447,7 +451,7 @@ def build_notification_queue_runner(dry_run: bool = False, lane: str = "all") ->
     ai_decision_context_enricher = NotificationAIDecisionContextEnricher(
         stores.market_time_series_store(settings),
         settings,
-        investment_domain_store=stores.investment_domain_store(settings),
+        investment_domain_store=investment_domain_store,
     )
     ai_request_enqueuer = None
     news_digest_reconciler = None
@@ -463,7 +467,8 @@ def build_notification_queue_runner(dry_run: bool = False, lane: str = "all") ->
                 ai_decision_context_enricher,
             ),
             settings,
-            decision_episode_store=stores.investment_decision_episode_store(settings),
+            decision_episode_store=decision_episode_store,
+            continuity_service=continuity_service,
         )
         news_digest_reconciler = NewsDigestEventReconciler(
             event_reader=stores.event_log(settings),
@@ -511,11 +516,17 @@ def build_notification_queue_runner(dry_run: bool = False, lane: str = "all") ->
 
 def build_ai_inference_queue_runner(worker_id: str = "") -> AIInferenceQueueRunner:
     settings = runtime_settings()
+    decision_episode_store = stores.investment_decision_episode_store(settings)
+    continuity_service = DecisionContinuityService(
+        decision_episode_store,
+        stores.investment_domain_store(settings),
+    )
     return AIInferenceQueueRunner(
         queue=stores.ai_inference_queue_store(settings),
         reviewer=notification_ai_reviewer_from_settings(settings, allow_local_fallback=False),
         settings=settings,
-        decision_episode_store=stores.investment_decision_episode_store(settings),
+        decision_episode_store=decision_episode_store,
+        continuity_service=continuity_service,
         action_planning_service=build_decision_action_planning_service(settings),
         worker_id=worker_id,
     )

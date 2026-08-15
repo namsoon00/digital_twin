@@ -230,6 +230,7 @@ def notification_ai_decision_audit(
         "strategyGuideQuality": guide_quality,
         "decisionHistory": dict((context or {}).get("investmentDecisionHistory") or {}),
         "previousFinalDecision": dict((context or {}).get("previousInvestmentDecisionEpisode") or {}),
+        "decisionContinuity": dict((context or {}).get("decisionContinuityPacket") or {}),
         "aiDecisionTransition": dict((context or {}).get("aiDecisionTransition") or {}),
         "inputSummary": {
             "rawLineCount": len(decision_input.get("rawAlert", {}).get("rawLines") or []),
@@ -238,6 +239,10 @@ def notification_ai_decision_audit(
             "newsHeadlineCount": len(decision_input.get("newsHeadlines") or []),
             "sourceAlertEventCount": len(decision_input.get("sourceAlertEvents") or []),
             "hasDisclosure": bool(decision_input.get("disclosure")),
+            "hasDecisionContinuity": bool((context or {}).get("decisionContinuityPacket")),
+            "decisionContinuitySummary": dict(
+                ((context or {}).get("decisionContinuityPacket") or {}).get("summary") or {}
+            ) if isinstance((context or {}).get("decisionContinuityPacket"), dict) else {},
         },
         "inputPacket": decision_input,
         "rawResponseSnippet": _text(response.raw_response, 1200),

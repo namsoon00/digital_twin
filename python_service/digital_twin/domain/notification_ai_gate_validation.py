@@ -2199,6 +2199,7 @@ def validated_response_from_payload(
     ).strip() in {
         "notification-ai-decision-contract-v2",
         "notification-ai-decision-contract-v3",
+        "notification-ai-decision-contract-v4",
     }
     if strict_causal_contract and action in executable_actions and (
         decision_readiness != "ready" or not supported_causal_path

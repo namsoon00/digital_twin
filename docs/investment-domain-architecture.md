@@ -58,11 +58,14 @@ TypeDB is not the account, ledger, order, or delivery source of truth. Projectio
 3. Question routing selects rules by input fact family, dependency key, world scope, freshness requirement, decision stage, and cost hint.
 4. TypeDB schema functions evaluate ABox facts and materialize one immutable InferenceBox generation.
 5. The investment brain builds competing hypotheses from active traces and explicit counter-evidence.
-6. AI receives the bounded graph packet and selects a hypothesis and categorical action inside the action envelope.
-7. A `DecisionEpisode` and review-only `ActionPlan` are persisted atomically.
-8. Explicit user approval or a future governed executor may submit orders. Broker fills remain immutable.
-9. Later observations create attribution and a `DecisionReview`; learning changes remain review-only proposals.
-10. Notification delivery applies channel policy after the investment decision is complete.
+6. The decision-continuity assembler loads the immediately prior decision plus its bounded follow-up, observed outcome, account-activity, execution, and review facts.
+7. AI receives the bounded graph packet and `DecisionContinuityPacket` and selects a hypothesis and categorical action inside the action envelope.
+8. A `DecisionEpisode` and review-only `ActionPlan` are persisted atomically.
+9. Explicit user approval or a future governed executor may submit orders. Broker fills remain immutable.
+10. Later observations create attribution and a `DecisionReview`; learning changes remain review-only proposals.
+11. Notification delivery applies channel policy after the investment decision is complete.
+
+`DecisionContinuityPacket` is a read-only memory contract, not another inference engine. It distinguishes `observed`, `not-observed`, `pending`, and `not-applicable`; an unchanged balance never means the user deliberately chose `HOLD`. A quantity change is linked to the prior decision for comparison but explicitly carries `causalityClaimed=false`. The packet is captured once when an AI request enters the durable queue and the worker reuses the same packet, so later database changes cannot mutate an in-flight judgement.
 
 For live-account balance changes, a factual `portfolioActivityObservation` can be delivered immediately from the same durable outbox. It states only the observed before/after balance and uncertainty. The separate `investmentInsight` remains blocked until the portfolio activity and state are projected into TypeDB, relevant rules materialize an InferenceBox generation, and the AI judge reviews that graph result. Suspicious complete-balance responses are stored in `portfolio_snapshot_quarantines`; they remain visible for audit but cannot replace the accepted comparison checkpoint.
 
@@ -111,6 +114,7 @@ A rule with incomplete routing metadata fails contract validation before deploym
 - Rule routing occurs before TypeDB execution. Rules outside the question, changed fact families, world scope, or freshness window are not queried.
 - InferenceBox writes are generation-scoped and bulk materialized. Failed generations preserve the last usable generation.
 - AI and notification delivery are asynchronous. Realtime collection does not wait for either.
+- Decision continuity reads one indexed prior episode and only its linked observations. It never hydrates the full account lifecycle or re-runs TypeDB, and the AI worker does not repeat the read after queue capture.
 - Ledger and fill IDs make retries idempotent. At-least-once delivery cannot duplicate holdings or fills.
 - Snapshot comparison uses a per-portfolio checkpoint CAS. Unchanged balances advance only the checkpoint, while changed balances write one episode and one state snapshot; concurrent workers retry the complete observation.
 - Outcome evaluation is horizon-scheduled and does not block current inference.

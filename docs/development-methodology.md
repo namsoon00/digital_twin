@@ -74,19 +74,22 @@ Required flow for new investment behavior:
 11. Persist decisions and evaluate outcomes.
     Save every final AI investment judgement as a `DecisionEpisode` with its `InvestmentQuestion`, `HypothesisSet`, selected hypothesis, inference generation, evidence IDs, and facts at decision time. Evaluate later ontology observations at configured horizons and project `ObservedOutcome` facts back into the ABox. Do not count repeated observations of one decision as multiple independent decisions.
 
-12. Keep learning proposals under governance.
+12. Carry decision continuity into the next judgement.
+    Every subsequent AI judgement for the same account and symbol must receive one bounded `DecisionContinuityPacket` containing the prior decision, selected hypothesis, observable follow-up transitions, observed outcomes, account quantity changes, execution feedback, and lifecycle reviews. Capture it once before enqueueing the immutable AI request and reuse it in the worker. A missing quantity change is not an intentional `HOLD`, and a detected quantity change is not proof that the user followed the notification. Do not reload the full portfolio lifecycle or re-run TypeDB to assemble this packet.
+
+13. Keep learning proposals under governance.
     Repeatedly contradicted decisions may create a `LearningProposal`. AI research may also create a `NovelHypothesisProposal` when approved active TypeDB templates cannot explain the verified evidence. Neither proposal may edit TypeDB schema functions, RuleBox data, prompts, or collection policy automatically. Approval means that the proposal is eligible for rule design, not deployed. Promotion requires evidence review, historical replay, TypeDB rule preview, explicit review, and deployment audit. Runtime learning is proposal generation, not unsupervised production mutation.
 
-13. Bound Graph RAG by the question.
+14. Bound Graph RAG by the question.
     Store the complete graph and audit context, but send AI only the relevant subject, top active relations, evidence/counter-evidence subgraph, provenance, freshness, competing hypotheses, and research plan. Remove duplicated full snapshots and repeated rule payloads. Prompt-size limits are an architectural constraint; silently falling back because an unbounded graph exceeded an AI input limit is a defect.
 
-14. Separate a matched inference from an eligible inference.
+15. Separate a matched inference from an eligible inference.
     A TypeDB schema function may remain matched for audit while its source observation has become stale, unavailable, or explicitly unusable for judgement. Every materialized match must receive an `InferenceEligibilityAssessment`. Only fresh, usable matches with complete decision metadata may enter `CoreInferenceSelection`, action envelopes, independent assessment scopes, AI action evidence, or delivery fingerprints. Ineligible matches remain visible as reference-only evidence and must not block a usable core match merely because they coexist in the same generation. If no eligible core inference remains, persist a blocked or abstained decision instead of selecting a stale rule.
 
-15. Test the ontology contract.
+16. Test the ontology contract.
     Tests for new investment behavior should verify both the source use case and the graph result: expected ABox classes, relation types, provenance/freshness fields, TypeDB schema function materialization or InferenceBox context, AI prompt payload, and final `investmentInsight` metadata. Tests should also verify the blocked path when graph inference is missing.
 
-16. Research only when a hypothesis has a decision-changing evidence gap.
+17. Research only when a hypothesis has a decision-changing evidence gap.
     Reuse verified cached evidence first. When the active hypotheses conflict or require missing evidence, create bounded `ResearchTask` records and collect only the source types required by those hypotheses. Resolve the target entity, enforce source reliability and freshness, and separate verified and rejected claims. Only verified claims may enter the investment ABox. If verified evidence changes, rebuild the complete account snapshot, project it through the graph repository, run TypeDB schema functions, and ask the AI judge only after the new InferenceBox generation is available. Research failures must preserve the last usable generation and remain visible in the audit record.
 
 Acceptable non-ontology code:
@@ -147,6 +150,7 @@ Domain:
 - `python_service/digital_twin/domain/investment_outcomes.py`: performance attribution and decision review contracts
 - `python_service/digital_twin/domain/portfolio.py`: positions, portfolio summaries, decisions, alert events
 - `python_service/digital_twin/domain/investment_brain.py`: investment questions, research plans, competing hypotheses, decision episodes, observed outcomes, and governed learning proposals
+- `python_service/digital_twin/domain/decision_continuity.py`: bounded prior-decision, follow-up, account-action, execution, and outcome memory contract
 - `python_service/digital_twin/domain/investment_evidence_governance.py`: evidence claims, entity resolution, freshness/source quality verification, and research-run audit contracts
 - `python_service/digital_twin/domain/analytics.py`: compatibility facade for legacy analytics imports only
 - `python_service/digital_twin/domain/market_data.py`: market-data normalization, symbol hints, moving-average helpers, and numeric coercion
@@ -205,6 +209,7 @@ Infrastructure:
 - `python_service/digital_twin/infrastructure/toss_snapshots.py`: Toss adapter and demo snapshot fallback
 - `python_service/digital_twin/application/notification_service.py`: queued notification delivery worker
 - `python_service/digital_twin/application/ai_inference_queue_service.py`: immutable notification AI request handoff, leased MAX inference, validation, and result publication
+- `python_service/digital_twin/application/decision_continuity_service.py`: indexed prior-decision continuity assembler used before AI queue capture
 - `python_service/digital_twin/infrastructure/notifications.py`: notification queue adapters plus console and Telegram delivery
 - `python_service/digital_twin/infrastructure/event_bus.py`: synchronous event bus with operational event-log default
 - `python_service/digital_twin/infrastructure/model_review_queue.py`: async model-review queue interface fed by decision-change events

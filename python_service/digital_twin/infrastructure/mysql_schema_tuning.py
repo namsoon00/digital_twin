@@ -90,6 +90,13 @@ class MySQLKeyPartitionDefinition:
 
 
 MYSQL_OPERATIONAL_INDEXES: Dict[str, Sequence[MySQLIndexDefinition]] = {
+    "portfolio_decision_action_observations": (
+        MySQLIndexDefinition(
+            "portfolio_decision_action_observations",
+            "idx_decision_action_prior_subject",
+            "`prior_decision_episode_id`, `account_id`, `symbol`, `observed_at`",
+        ),
+    ),
     "reasoning_engine_comparisons": (
         MySQLIndexDefinition(
             "reasoning_engine_comparisons",

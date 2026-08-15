@@ -2977,6 +2977,9 @@ def execution_telegram_message_full(context: Dict[str, object], response: Notifi
     history_rows = full_decision_history_rows(context, response)
     if history_rows:
         parts.extend(["", "<b>판단 이력</b>", *[_html_bullet(row, level) for row in history_rows]])
+    continuity_rows = decision_continuity_rows(context)
+    if continuity_rows:
+        parts.extend(["", "<b>직전 판단 추적</b>", *[_html_bullet(row, level) for row in continuity_rows]])
     parts.extend(execution_footer(context, response, reference, sent))
     return "\n".join(part for part in parts if str(part).strip() or part == "").strip()
 
@@ -3086,6 +3089,9 @@ def execution_telegram_message_progressive(
     ])
     if packet.change:
         parts.extend(["", "<b>이번 변화</b>", _html_bullet(packet.change, level)])
+    continuity_rows = decision_continuity_rows(context, 2)
+    if continuity_rows:
+        parts.extend(["", "<b>직전 판단 추적</b>", *[_html_bullet(row, level) for row in continuity_rows]])
     if packet.current_flow:
         parts.extend(["", "<b>현재 흐름</b>", *[_html_bullet(row, level) for row in packet.current_flow]])
     if packet.evidence:
@@ -4425,6 +4431,56 @@ def full_decision_history_rows(
     if response.change_analysis:
         append_unique_text(rows, "변경 이유: " + compact_sentence_count(customer_visible_ai_text(response.change_analysis), 1), 360)
     return rows[:2]
+
+
+def decision_continuity_rows(context: Dict[str, object], limit: int = 3) -> List[str]:
+    """Show material observations after the prior decision without claiming causality."""
+
+    packet = context.get("decisionContinuityPacket") if isinstance(context.get("decisionContinuityPacket"), dict) else {}
+    if not packet:
+        return []
+    rows: List[str] = []
+    transitioned = [
+        item for item in packet.get("followUpConditions") or []
+        if isinstance(item, dict) and str(item.get("status") or "") in {"satisfied", "invalidated", "expired"}
+    ]
+    status_labels = {"satisfied": "성립", "invalidated": "무효화", "expired": "만료"}
+    for item in transitioned[:1]:
+        label = str(item.get("label") or item.get("field") or "후속 조건").strip()
+        rows.append("직전 판단 후속 조건 " + status_labels.get(str(item.get("status") or ""), "변경") + ": " + label)
+    observations = [item for item in packet.get("actionObservations") or [] if isinstance(item, dict)]
+    if observations:
+        item = observations[0]
+        direction = {"increase": "증가", "decrease": "감소"}.get(
+            str(item.get("observedDirection") or ""),
+            "변화",
+        )
+        quantity = ""
+        if item.get("previousQuantity") not in (None, "") and item.get("observedQuantity") not in (None, ""):
+            quantity = " " + str(item.get("previousQuantity")) + " → " + str(item.get("observedQuantity")) + "주"
+        rows.append(
+            "계좌 보유수량 " + direction + quantity
+            + "가 관측됐습니다. 이전 알림을 따른 행동인지는 단정하지 않습니다."
+        )
+    outcomes = [item for item in packet.get("observedOutcomes") or [] if isinstance(item, dict)]
+    if outcomes:
+        item = outcomes[-1]
+        detail = []
+        if item.get("priceChangeFromDecisionPct") not in (None, ""):
+            detail.append("판단 시점 대비 가격 " + signed_pct(float(item.get("priceChangeFromDecisionPct") or 0)))
+        status = str(item.get("selectedHypothesisStatus") or "").strip()
+        if status:
+            hypothesis_status = {
+                "supported": "지지됨",
+                "weakened": "약화됨",
+                "rejected": "기각됨",
+                "invalidated": "무효화됨",
+                "pending": "관찰 중",
+            }.get(status.lower(), status)
+            detail.append("선택 가설 " + hypothesis_status)
+        if detail:
+            rows.append("관측 결과: " + " · ".join(detail))
+    return rows[:max(1, int(limit or 1))]
 
 def beginner_current_state_rows(context: Dict[str, object]) -> List[str]:
     values = [

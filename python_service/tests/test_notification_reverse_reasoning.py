@@ -315,6 +315,9 @@ class NotificationReverseReasoningTests(unittest.TestCase):
         self.assertIn("function renderNotificationDetailDisclosure", source)
         self.assertIn('"추론 과정 상세"', source)
         self.assertIn('detailFacts.length + "개 사실', source)
+        self.assertIn("notificationDetailDisclosureOpen", source)
+        self.assertIn('data-notification-detail-disclosure-key', source)
+        self.assertIn('reasoningDisclosurePrefix + "6"', source)
 
     def test_detail_endpoint_exposes_trace_without_bloating_list_payload(self):
         job = NotificationJob.create(

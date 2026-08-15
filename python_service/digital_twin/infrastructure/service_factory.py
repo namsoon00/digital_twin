@@ -40,6 +40,7 @@ from ..application.investment_calendar_research_service import InvestmentCalenda
 from ..application.investment_calendar_service import InvestmentCalendarRunner, InvestmentCalendarService
 from ..application.kis_realtime_service import KISRealtimeWebSocketRunner
 from ..application.market_data_collection_service import MarketDataCollectionRunner
+from ..application.external_data.collection_service import ExternalDataCollectionService
 from ..application.model_review_service import ModelReviewRunner
 from ..application.news_collection_service import NewsCollectionRunner
 from ..application.news_ai_analysis_service import NewsAiAnalysisService
@@ -124,6 +125,8 @@ from .notifications import notifier_for_operations
 from .news_sources import NewsSourceGateway
 from .news_ai_analyzer import news_ai_analyzer_from_settings
 from .external_signals import ExternalSignalProvider
+from .external_api.adapters import default_external_dataset_registry
+from .external_api.legacy_import import LegacyExternalSignalImporter
 from .settings import currency_rates, runtime_settings, utc_now
 from .symbol_sources import RemoteSymbolSourceGateway
 from .toss_snapshots import TossProvider, build_snapshot, demo_positions
@@ -691,6 +694,24 @@ def build_market_data_collection_runner(settings=None, event_publisher=None) -> 
         external_signal_refresher=lambda positions: ExternalSignalProvider(
             settings=configured_settings,
         ).signals_for_positions(positions, cache_scope="account-snapshot"),
+    )
+
+
+def build_external_data_collection_runner(settings=None) -> ExternalDataCollectionService:
+    configured_settings = dict(settings or runtime_settings())
+    registry = default_external_dataset_registry(configured_settings)
+    store = stores.external_data_store(configured_settings)
+    return ExternalDataCollectionService(
+        settings=configured_settings,
+        registry=registry,
+        store=store,
+        legacy_importer=LegacyExternalSignalImporter(
+            stores.external_signal_cache(configured_settings),
+            store,
+            registry,
+            configured_settings,
+        ),
+        worker_id="external-data-" + str(os.getpid()),
     )
 
 

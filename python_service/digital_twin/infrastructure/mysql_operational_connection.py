@@ -439,6 +439,107 @@ MYSQL_SCHEMA = [
     ) ENGINE=InnoDB DEFAULT CHARSET=utf8mb4 COLLATE=utf8mb4_unicode_ci
     """,
     """
+    CREATE TABLE IF NOT EXISTS external_dataset_state (
+        dataset_id VARCHAR(191) NOT NULL,
+        partition_key VARCHAR(191) NOT NULL,
+        provider_id VARCHAR(96) NOT NULL,
+        subject_json TEXT NOT NULL,
+        watermark_json TEXT NOT NULL,
+        priority INT NOT NULL DEFAULT 50,
+        active TINYINT NOT NULL DEFAULT 1,
+        job_status VARCHAR(32) NOT NULL DEFAULT 'pending',
+        next_due_at VARCHAR(40) NOT NULL,
+        last_attempt_at VARCHAR(40) NOT NULL DEFAULT '',
+        last_success_at VARCHAR(40) NOT NULL DEFAULT '',
+        source_as_of VARCHAR(80) NOT NULL DEFAULT '',
+        lease_owner VARCHAR(191) NOT NULL DEFAULT '',
+        lease_until VARCHAR(40) NOT NULL DEFAULT '',
+        attempt_count INT NOT NULL DEFAULT 0,
+        consecutive_failures INT NOT NULL DEFAULT 0,
+        last_error VARCHAR(500) NOT NULL DEFAULT '',
+        created_at VARCHAR(40) NOT NULL,
+        updated_at VARCHAR(40) NOT NULL,
+        PRIMARY KEY (dataset_id, partition_key),
+        KEY idx_external_dataset_due (active, job_status, next_due_at, priority),
+        KEY idx_external_dataset_provider (provider_id, job_status, next_due_at)
+    ) ENGINE=InnoDB DEFAULT CHARSET=utf8mb4 COLLATE=utf8mb4_unicode_ci
+    """,
+    """
+    CREATE TABLE IF NOT EXISTS external_fact_current (
+        dataset_id VARCHAR(191) NOT NULL,
+        subject_key VARCHAR(191) NOT NULL,
+        provider_id VARCHAR(96) NOT NULL,
+        source_revision VARCHAR(191) NOT NULL,
+        payload_hash CHAR(64) NOT NULL,
+        source_as_of VARCHAR(80) NOT NULL DEFAULT '',
+        fetched_at VARCHAR(40) NOT NULL,
+        expires_at VARCHAR(40) NOT NULL,
+        payload_json LONGTEXT NOT NULL,
+        quality_json TEXT NOT NULL,
+        updated_at VARCHAR(40) NOT NULL,
+        PRIMARY KEY (dataset_id, subject_key),
+        KEY idx_external_fact_subject (subject_key, dataset_id),
+        KEY idx_external_fact_freshness (expires_at, dataset_id)
+    ) ENGINE=InnoDB DEFAULT CHARSET=utf8mb4 COLLATE=utf8mb4_unicode_ci
+    """,
+    """
+    CREATE TABLE IF NOT EXISTS external_fact_revision (
+        revision_id VARCHAR(191) PRIMARY KEY,
+        dataset_id VARCHAR(191) NOT NULL,
+        subject_key VARCHAR(191) NOT NULL,
+        provider_id VARCHAR(96) NOT NULL,
+        source_revision VARCHAR(191) NOT NULL,
+        payload_hash CHAR(64) NOT NULL,
+        source_as_of VARCHAR(80) NOT NULL DEFAULT '',
+        fetched_at VARCHAR(40) NOT NULL,
+        payload_json LONGTEXT NOT NULL,
+        quality_json TEXT NOT NULL,
+        created_at VARCHAR(40) NOT NULL,
+        UNIQUE KEY uq_external_fact_source_revision (dataset_id, subject_key, source_revision),
+        KEY idx_external_fact_revision_subject (subject_key, dataset_id, created_at)
+    ) ENGINE=InnoDB DEFAULT CHARSET=utf8mb4 COLLATE=utf8mb4_unicode_ci
+    """,
+    """
+    CREATE TABLE IF NOT EXISTS external_provider_state (
+        provider_id VARCHAR(96) NOT NULL,
+        bucket_id VARCHAR(191) NOT NULL,
+        window_date VARCHAR(16) NOT NULL DEFAULT '',
+        request_count INT NOT NULL DEFAULT 0,
+        next_allowed_at VARCHAR(40) NOT NULL DEFAULT '',
+        circuit_open_until VARCHAR(40) NOT NULL DEFAULT '',
+        consecutive_failures INT NOT NULL DEFAULT 0,
+        health_state VARCHAR(32) NOT NULL DEFAULT 'unknown',
+        last_attempt_at VARCHAR(40) NOT NULL DEFAULT '',
+        last_success_at VARCHAR(40) NOT NULL DEFAULT '',
+        last_error VARCHAR(500) NOT NULL DEFAULT '',
+        updated_at VARCHAR(40) NOT NULL,
+        PRIMARY KEY (provider_id, bucket_id),
+        KEY idx_external_provider_health (health_state, updated_at)
+    ) ENGINE=InnoDB DEFAULT CHARSET=utf8mb4 COLLATE=utf8mb4_unicode_ci
+    """,
+    """
+    CREATE TABLE IF NOT EXISTS external_collection_runs (
+        run_id VARCHAR(191) PRIMARY KEY,
+        dataset_id VARCHAR(191) NOT NULL,
+        partition_key VARCHAR(191) NOT NULL,
+        provider_id VARCHAR(96) NOT NULL,
+        worker_id VARCHAR(191) NOT NULL DEFAULT '',
+        run_status VARCHAR(32) NOT NULL,
+        started_at VARCHAR(40) NOT NULL,
+        completed_at VARCHAR(40) NOT NULL,
+        duration_ms INT NOT NULL DEFAULT 0,
+        response_bytes BIGINT NOT NULL DEFAULT 0,
+        source_as_of VARCHAR(80) NOT NULL DEFAULT '',
+        source_revision VARCHAR(191) NOT NULL DEFAULT '',
+        material_change TINYINT NOT NULL DEFAULT 0,
+        error_message VARCHAR(500) NOT NULL DEFAULT '',
+        created_at VARCHAR(40) NOT NULL,
+        KEY idx_external_collection_dataset_time (dataset_id, completed_at),
+        KEY idx_external_collection_provider_time (provider_id, completed_at),
+        KEY idx_external_collection_status_time (run_status, completed_at)
+    ) ENGINE=InnoDB DEFAULT CHARSET=utf8mb4 COLLATE=utf8mb4_unicode_ci
+    """,
+    """
     CREATE TABLE IF NOT EXISTS domain_events (
         event_id VARCHAR(191) PRIMARY KEY,
         name VARCHAR(191) NOT NULL,

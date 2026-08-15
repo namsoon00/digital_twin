@@ -61,3 +61,4 @@ from .mysql_versioned_runtime import (
     MySQLTimeSeriesBackendRegistryStore,
     MySQLTimeSeriesProjectionOutboxStore,
 )
+from .external_api.mysql_stores import MySQLExternalDataStore

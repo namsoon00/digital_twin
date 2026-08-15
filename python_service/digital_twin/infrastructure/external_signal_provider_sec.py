@@ -127,11 +127,17 @@ class ExternalSignalSecMixin:
         digits = "".join(ch for ch in str(value or "") if ch.isdigit())
         return digits.zfill(10) if digits else ""
 
-    def add_sec_edgar(self, signals: Dict[str, object], positions: List[Position]) -> None:
+    def add_sec_edgar(
+        self,
+        signals: Dict[str, object],
+        positions: List[Position],
+        include_facts: bool = True,
+        include_document: bool = None,
+    ) -> None:
         symbols = self.limited_targets(signals, "SEC EDGAR", self.sec_symbols(positions), "externalSecMaxSymbols", 3)
         if not symbols:
             return
-        document_text_enabled = self.sec_document_text_enabled()
+        document_text_enabled = self.sec_document_text_enabled() if include_document is None else bool(include_document)
         document_access_configured = self.sec_document_access_configured()
         if document_text_enabled and not document_access_configured:
             self.status(
@@ -187,6 +193,7 @@ class ExternalSignalSecMixin:
 
                 submissions = self.guarded_call("SEC EDGAR", "submissions:" + symbol, fetch_submissions)
                 filing = self.latest_sec_filing(submissions, cik)
+                recent_filings = self.recent_sec_filings(submissions, cik)
                 if filing and document_text_enabled and filing.get("url"):
                     if not document_access_configured:
                         filing.update({
@@ -212,18 +219,23 @@ class ExternalSignalSecMixin:
                             filing.update({"documentText": "", "documentTextPreview": "", "documentTextQuality": "unavailable"})
                             self.status_for_error(signals, "SEC EDGAR", symbol + " filing document ", error)
 
-                def fetch_facts():
-                    return self.fetch_json("https://data.sec.gov/api/xbrl/companyfacts/CIK" + cik + ".json", self.sec_headers())
+                facts: Dict[str, object] = {}
+                if include_facts:
+                    def fetch_facts():
+                        return self.fetch_json("https://data.sec.gov/api/xbrl/companyfacts/CIK" + cik + ".json", self.sec_headers())
 
-                facts = self.guarded_call("SEC EDGAR", "companyfacts:" + symbol, fetch_facts)
-                signals["secFilings"][symbol] = {
+                    facts = self.guarded_call("SEC EDGAR", "companyfacts:" + symbol, fetch_facts)
+                row = {
                     "provider": "SEC EDGAR",
                     "symbol": symbol,
                     "cik": cik,
                     "companyName": str(submissions.get("name") or facts.get("entityName") or symbol),
                     "latestFiling": filing,
-                    "facts": self.sec_company_facts_summary(facts),
+                    "recentFilings": recent_filings,
                 }
+                if include_facts:
+                    row["facts"] = self.sec_company_facts_summary(facts)
+                signals["secFilings"][symbol] = row
             except Exception as error:  # noqa: BLE001
                 self.status_for_error(signals, "SEC EDGAR", symbol + " ", error)
 
@@ -240,7 +252,7 @@ class ExternalSignalSecMixin:
     def latest_sec_filing(self, payload: Dict[str, object], cik: str) -> Dict[str, object]:
         recent = payload.get("filings", {}).get("recent", {}) if isinstance(payload.get("filings"), dict) else {}
         forms = recent.get("form") if isinstance(recent.get("form"), list) else []
-        preferred_forms = {"10-K", "10-Q", "8-K", "20-F", "40-F", "6-K"}
+        preferred_forms = {"10-K", "10-Q", "8-K", "20-F", "40-F", "6-K", "3", "4", "5", "13F-HR", "13F-HR/A"}
         selected_index = next((index for index, form in enumerate(forms) if str(form or "").upper() in preferred_forms), None)
         if selected_index is None and forms:
             selected_index = 0
@@ -268,6 +280,41 @@ class ExternalSignalSecMixin:
             "primaryDocument": primary_document,
             "url": filing_url,
         }
+
+    def recent_sec_filings(self, payload: Dict[str, object], cik: str, limit: int = 20) -> List[Dict[str, object]]:
+        recent = payload.get("filings", {}).get("recent", {}) if isinstance(payload.get("filings"), dict) else {}
+        forms = recent.get("form") if isinstance(recent.get("form"), list) else []
+        selected_forms = {"10-K", "10-Q", "8-K", "20-F", "40-F", "6-K", "3", "4", "5", "13F-HR", "13F-HR/A"}
+        cik_path = str(int(cik)) if cik and cik.isdigit() else cik.lstrip("0")
+
+        def value(key: str, index: int) -> str:
+            values = recent.get(key) if isinstance(recent.get(key), list) else []
+            return str(values[index] or "") if index < len(values) else ""
+
+        result: List[Dict[str, object]] = []
+        for index, form in enumerate(forms):
+            normalized_form = str(form or "").upper()
+            if normalized_form not in selected_forms:
+                continue
+            accession = value("accessionNumber", index)
+            primary_document = value("primaryDocument", index)
+            accession_path = accession.replace("-", "")
+            url = (
+                "https://www.sec.gov/Archives/edgar/data/" + cik_path + "/" + accession_path + "/" + primary_document
+                if cik_path and accession_path and primary_document
+                else ""
+            )
+            result.append({
+                "form": str(form or ""),
+                "filingDate": value("filingDate", index),
+                "reportDate": value("reportDate", index),
+                "accessionNumber": accession,
+                "primaryDocument": primary_document,
+                "url": url,
+            })
+            if len(result) >= max(1, int(limit or 20)):
+                break
+        return result
 
     def sec_company_facts_summary(self, payload: Dict[str, object]) -> Dict[str, object]:
         facts = payload.get("facts", {}).get("us-gaap", {}) if isinstance(payload.get("facts"), dict) else {}

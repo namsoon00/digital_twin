@@ -51,6 +51,7 @@ from .service_factory import (
     build_investment_research_queue_runner,
     build_investment_strategy_proposal_service,
     build_kis_realtime_websocket_runner,
+    build_external_data_collection_runner,
     build_market_data_collection_runner,
     build_model_review_runner,
     build_monitor_runner,
@@ -78,6 +79,7 @@ from .schedulers import (
     InvestmentResearchScheduler,
     KISRealtimeWebSocketScheduler,
     MIN_REALTIME_INTERVAL_SECONDS,
+    ExternalDataCollectionScheduler,
     MarketDataCollectionScheduler,
     ModelReviewScheduler,
     NewsCollectionScheduler,
@@ -1569,6 +1571,21 @@ def market_data_command(args) -> int:
     return 1
 
 
+def external_data_command(args) -> int:
+    settings = runtime_settings()
+    runner = build_external_data_collection_runner(settings)
+    if args.external_data_action == "status":
+        print(json.dumps(runner.status(), ensure_ascii=False))
+        return 0
+    if args.external_data_action == "once":
+        print(json.dumps(runner.run_once(force=args.force), ensure_ascii=False))
+        return 0
+    if args.external_data_action == "watch":
+        ExternalDataCollectionScheduler(runner, runner.interval_seconds()).run_forever()
+        return 0
+    return 1
+
+
 def kis_realtime_command(args) -> int:
     settings = runtime_settings()
     runner = build_kis_realtime_websocket_runner(settings)
@@ -2129,6 +2146,14 @@ def build_parser() -> argparse.ArgumentParser:
     market_data_actions.add_parser("watch")
     market_data_actions.add_parser("status")
     market_data.set_defaults(func=market_data_command)
+
+    external_data = subparsers.add_parser("external-data", help="Collect dataset-aware external market facts")
+    external_data_actions = external_data.add_subparsers(dest="external_data_action", required=True)
+    external_once = external_data_actions.add_parser("once")
+    external_once.add_argument("--force", action="store_true")
+    external_data_actions.add_parser("watch")
+    external_data_actions.add_parser("status")
+    external_data.set_defaults(func=external_data_command)
 
     kis_realtime = subparsers.add_parser("kis-realtime", help="Collect KIS realtime price and orderbook over WebSocket")
     kis_realtime_actions = kis_realtime.add_subparsers(dest="kis_realtime_action", required=True)

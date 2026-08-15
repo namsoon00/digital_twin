@@ -21,6 +21,13 @@ from .infrastructure.operational_storage_guard import storage_directory_physical
 
 
 BASE_WORKERS = {
+    "external-data": {
+        "label": "Python external data collector",
+        "pid": data_dir() / "python-external-data.pid",
+        "log": data_dir() / "python-external-data.log",
+        "command": [sys.executable, "-u", "python_service/service.py", "external-data", "watch"],
+        "needle": "python_service/service.py external-data watch",
+    },
     "monitor": {
         "label": "Python realtime monitor",
         "pid": data_dir() / "python-monitor.pid",

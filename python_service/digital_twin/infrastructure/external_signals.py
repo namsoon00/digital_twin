@@ -80,3 +80,15 @@ class ExternalSignalProvider(
         self.fetch_bytes = fetch_bytes or self.default_fetch_bytes
         self.sleep = sleep or time.sleep
         self.provider_state: Dict[str, object] = {}
+        self.external_data_read_model = None
+        platform_enabled = str(self.settings.get("externalDataPlatformEnabled") or "").strip().lower()
+        legacy_collection = str(self.settings.get("_externalDataLegacyCollection") or "").strip().lower()
+        if (
+            uses_default_cache
+            and platform_enabled not in {"", "0", "false", "no", "off", "disabled"}
+            and legacy_collection in {"", "0", "false", "no", "off", "disabled"}
+        ):
+            from ..application.external_data.read_model_service import ExternalSignalsReadModelService
+            from .operational_store import external_data_store
+
+            self.external_data_read_model = ExternalSignalsReadModelService(external_data_store(self.settings))

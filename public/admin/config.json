@@ -13,7 +13,7 @@
     "공유 미리보기에서는 서버 설정과 계정 DB 쓰기를 차단합니다."
   ],
   "localData": {
-    "generatedAt": "2026-08-15T13:22:50.998395Z",
+    "generatedAt": "2026-08-15T23:16:49.340210Z",
     "sources": {
       "settings": "data/settings.json",
       "settingsExists": true
@@ -108,6 +108,15 @@
       "dataFreshnessDisclosureMaxAgeMinutes": "120",
       "externalApiFetchIntervalMinutes": "30",
       "externalSignalCacheMaxAgeMinutes": "30",
+      "externalDataPlatformEnabled": "1",
+      "externalDataWorkerIntervalSeconds": "15",
+      "externalDataSubjectRefreshSeconds": "300",
+      "externalDataWorkerBatchSize": "6",
+      "externalDataWorkerConcurrency": "3",
+      "externalDataLeaseSeconds": "180",
+      "externalDataRateLimitInlineWaitSeconds": "2",
+      "externalDataRunRetentionDays": "30",
+      "externalDataRevisionRetentionDays": "365",
       "externalAlphaEnabled": "1",
       "externalYFinanceEnabled": "1",
       "externalYFinanceMaxSymbols": "8",
@@ -3413,6 +3422,70 @@
       ]
     },
     {
+      "id": "external-data-collector",
+      "title": "외부 데이터 모듈 수집",
+      "summary": "공급자별 어댑터를 독립 주기로 실행하고 현재 사실, 변경 이력, 호출 예산과 상태를 정규화해 저장합니다.",
+      "localEndpoints": [
+        "GET /api/external-data/status"
+      ],
+      "commands": [
+        "npm run python:external-data:once",
+        "npm run python:external-data:status",
+        "npm run python:external-data:watch"
+      ],
+      "storage": [
+        "mysql: external_dataset_state",
+        "mysql: external_fact_current",
+        "mysql: external_fact_revision",
+        "mysql: external_provider_state",
+        "mysql: external_collection_runs"
+      ],
+      "fields": [
+        {
+          "key": "externalDataPlatformEnabled",
+          "label": "모듈 수집 활성화",
+          "type": "boolean",
+          "default": "1"
+        },
+        {
+          "key": "externalDataWorkerIntervalSeconds",
+          "label": "작업 확인 주기(초)",
+          "type": "number",
+          "default": "15"
+        },
+        {
+          "key": "externalDataWorkerBatchSize",
+          "label": "작업 배치",
+          "type": "number",
+          "default": "6"
+        },
+        {
+          "key": "externalDataWorkerConcurrency",
+          "label": "공급자 병렬 수",
+          "type": "number",
+          "default": "3"
+        },
+        {
+          "key": "externalDataRateLimitInlineWaitSeconds",
+          "label": "짧은 호출간격 대기(초)",
+          "type": "number",
+          "default": "2"
+        },
+        {
+          "key": "externalDataRunRetentionDays",
+          "label": "실행 지표 보존(일)",
+          "type": "number",
+          "default": "30"
+        },
+        {
+          "key": "externalDataRevisionRetentionDays",
+          "label": "변경 이력 보존(일)",
+          "type": "number",
+          "default": "365"
+        }
+      ]
+    },
+    {
       "id": "model-review",
       "title": "모델 리뷰 워커",
       "summary": "투자 인사이트 안의 판단 변화 원본 신호를 큐에 넣고, 관계 분석의 투자 관점·반대 신호와 다음 실험을 작성합니다.",
@@ -3583,5 +3656,5 @@
       ]
     }
   ],
-  "buildId": "98b40ef8954e"
+  "buildId": "04f64461ef41"
 }

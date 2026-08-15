@@ -479,7 +479,13 @@ class ExternalSignalMarketMixin:
             "cacheStatus": "stored-cache",
         }
 
-    def add_opendart(self, signals: Dict[str, object], positions: List[Position]) -> None:
+    def add_opendart(
+        self,
+        signals: Dict[str, object],
+        positions: List[Position],
+        include_fundamentals: bool = None,
+        include_document: bool = None,
+    ) -> None:
         if not self.external_api_enabled("externalDartEnabled"):
             return
         api_key = str(self.settings.get("opendartApiKey") or "").strip()
@@ -578,7 +584,12 @@ class ExternalSignalMarketMixin:
                 disclosure = self.guarded_call("OpenDART", "list:" + symbol, fetch_disclosure)
                 if disclosure:
                     disclosure["fetchedAt"] = utc_now_iso()
-                    if self.dart_company_fundamentals_enabled():
+                    collect_fundamentals = (
+                        self.dart_company_fundamentals_enabled()
+                        if include_fundamentals is None
+                        else bool(include_fundamentals)
+                    )
+                    if collect_fundamentals:
                         self.attach_opendart_company_facts(
                             signals,
                             disclosure,
@@ -588,7 +599,8 @@ class ExternalSignalMarketMixin:
                             now,
                         )
                     receipt_no = str(disclosure.get("receiptNo") or "").strip()
-                    if receipt_no and self.dart_document_text_enabled():
+                    collect_document = self.dart_document_text_enabled() if include_document is None else bool(include_document)
+                    if receipt_no and collect_document:
                         try:
                             def fetch_document():
                                 url = "https://opendart.fss.or.kr/api/document.xml?" + urllib.parse.urlencode({

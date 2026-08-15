@@ -486,10 +486,23 @@ class ExternalSignalYFinanceMixin:
                 else:
                     self.status_for_error(signals, "yfinance", symbol + " ", error)
 
-    def fetch_yfinance_symbol(self, yf, symbol: str, query_symbol: str) -> Dict[str, object]:
+    def fetch_yfinance_symbol(
+        self,
+        yf,
+        symbol: str,
+        query_symbol: str,
+        profiles: Iterable[str] = None,
+    ) -> Dict[str, object]:
         with quiet_yfinance_io():
             ticker = yf.Ticker(query_symbol)
         collected_at = utc_now_iso()
+        selected_profiles = {
+            str(item or "").strip()
+            for item in (profiles or YFINANCE_FRESHNESS_PROFILES.keys())
+            if str(item or "").strip() in YFINANCE_FRESHNESS_PROFILES
+        }
+        if not selected_profiles:
+            selected_profiles = set(YFINANCE_FRESHNESS_PROFILES)
         errors: List[Dict[str, object]] = []
         expected_missing: List[Dict[str, object]] = []
         period = str(self.settings.get("externalYFinanceHistoryPeriod") or "1y")
@@ -522,21 +535,27 @@ class ExternalSignalYFinanceMixin:
                 errors.append({"section": name, "message": str(error)[:180]})
                 return None
 
-        history_rows = capture(
-            "history",
-            lambda: ticker.history(period=period, interval=interval, auto_adjust=False, actions=True),
-            lambda value: frame_rows(value, history_rows_limit),
-        ) or []
+        history_rows = []
+        if "price" in selected_profiles:
+            history_rows = capture(
+                "history",
+                lambda: ticker.history(period=period, interval=interval, auto_adjust=False, actions=True),
+                lambda value: frame_rows(value, history_rows_limit),
+            ) or []
         payload: Dict[str, object] = {
             "provider": "yfinance",
             "symbol": symbol,
             "querySymbol": query_symbol,
             "collectedAt": collected_at,
-            "historyPeriod": period,
-            "historyInterval": interval,
-            "quote": latest_history_quote(history_rows),
-            "history": history_rows,
+            "profilesCollected": sorted(selected_profiles),
         }
+        if "price" in selected_profiles:
+            payload.update({
+                "historyPeriod": period,
+                "historyInterval": interval,
+                "quote": latest_history_quote(history_rows),
+                "history": history_rows,
+            })
 
         sections = {
             "historyMetadata": lambda: getattr(ticker, "history_metadata", {}),
@@ -575,39 +594,53 @@ class ExternalSignalYFinanceMixin:
             "shares": lambda: series_rows(ticker.get_shares_full(), table_rows_limit) if hasattr(ticker, "get_shares_full") else [],
         }
         for name, getter in sections.items():
+            profile = YFINANCE_MODULE_PROFILES.get(name, "fundamental")
+            if profile not in selected_profiles:
+                continue
             value = capture(name, getter)
             if not is_empty_value(value):
                 payload[name] = value
 
-        options = capture("options", lambda: list(getattr(ticker, "options", []) or [])) or []
-        payload["options"] = options
+        options = []
         chains = []
-        for expiration in options[:option_expirations]:
-            try:
-                with quiet_yfinance_io():
-                    chain = ticker.option_chain(expiration)
-            except Exception as error:  # noqa: BLE001 - option expirations can disappear intraday.
-                if is_expected_yfinance_missing_error(error):
-                    expected_missing.append({
-                        "section": "optionChain:" + str(expiration),
-                        "status": "expected-missing",
-                        "reason": "option-chain-not-available",
-                    })
+        if "options" in selected_profiles:
+            options = capture("options", lambda: list(getattr(ticker, "options", []) or [])) or []
+            payload["options"] = options
+            for expiration in options[:option_expirations]:
+                try:
+                    with quiet_yfinance_io():
+                        chain = ticker.option_chain(expiration)
+                except Exception as error:  # noqa: BLE001 - option expirations can disappear intraday.
+                    if is_expected_yfinance_missing_error(error):
+                        expected_missing.append({
+                            "section": "optionChain:" + str(expiration),
+                            "status": "expected-missing",
+                            "reason": "option-chain-not-available",
+                        })
+                        continue
+                    errors.append({"section": "optionChain:" + str(expiration), "message": str(error)[:180]})
                     continue
-                errors.append({"section": "optionChain:" + str(expiration), "message": str(error)[:180]})
-                continue
-            calls = frame_rows(getattr(chain, "calls", None), option_rows_limit)
-            puts = frame_rows(getattr(chain, "puts", None), option_rows_limit)
-            chains.append({
-                "expiration": str(expiration),
-                "summary": option_summary(calls, puts),
-                "calls": calls,
-                "puts": puts,
-            })
+                calls = frame_rows(getattr(chain, "calls", None), option_rows_limit)
+                puts = frame_rows(getattr(chain, "puts", None), option_rows_limit)
+                chains.append({
+                    "expiration": str(expiration),
+                    "summary": option_summary(calls, puts),
+                    "calls": calls,
+                    "puts": puts,
+                })
         if chains:
             payload["optionChains"] = chains
 
-        modules = [key for key, value in payload.items() if key not in {"provider", "symbol", "querySymbol", "collectedAt"} and not is_empty_value(value)]
+        metadata_fields = {
+            "provider",
+            "symbol",
+            "querySymbol",
+            "collectedAt",
+            "profilesCollected",
+            "historyPeriod",
+            "historyInterval",
+        }
+        modules = [key for key, value in payload.items() if key not in metadata_fields and not is_empty_value(value)]
         payload["modulesCollected"] = modules
         payload["freshness"] = self.yfinance_freshness_summary(payload)
         payload["moduleFreshness"] = self.yfinance_module_freshness(payload)

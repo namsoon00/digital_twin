@@ -91,6 +91,23 @@ class ExternalSignalCoreMixin:
             for position in position_list
             if str(getattr(position, "symbol", "") or "").strip()
         })
+        if getattr(self, "external_data_read_model", None):
+            platform_signals = self.external_data_read_model.signals_for_subjects([
+                str(getattr(position, "symbol", "") or "").upper().strip()
+                for position in position_list
+                if str(getattr(position, "symbol", "") or "").strip()
+            ])
+            platform_state = platform_signals.get("externalDataPlatform") if isinstance(platform_signals, dict) else {}
+            if int((platform_state or {}).get("factCount") or 0) > 0:
+                shared_company_knowledge = self.load_shared_company_knowledge({}, persist_backfill=False)
+                self.provider_state = {}
+                self._crypto_market_snapshot = {}
+                self._crypto_market_cache_state = "normalized-facts"
+                self.attach_shared_company_knowledge(platform_signals, shared_company_knowledge, position_list)
+                self.refresh_broker_fx_rates(platform_signals, position_list)
+                signals = attach_external_signal_quality(platform_signals, positions=position_list, settings=self.settings)
+                self.attach_stored_research_evidence(position_list, signals)
+                return signals
         cache_key = self.cache_key_for_positions(position_list)
         cached = self.cache.load()
         cache_only = self.external_signal_cache_only()
@@ -104,6 +121,21 @@ class ExternalSignalCoreMixin:
         self._crypto_market_cache_state = crypto_cache_state
         entry = self.cache_entry(cached, cache_key)
         cache_fresh = self.is_cache_fresh(entry)
+        if getattr(self, "external_data_read_model", None):
+            from ..application.external_data.read_model_service import merge_external_signal_read_models
+
+            platform_signals = self.external_data_read_model.signals_for_subjects([
+                str(getattr(position, "symbol", "") or "").upper().strip()
+                for position in position_list
+                if str(getattr(position, "symbol", "") or "").strip()
+            ])
+            legacy_signals = entry.get("signals") if isinstance(entry, dict) and isinstance(entry.get("signals"), dict) else {}
+            signals = merge_external_signal_read_models(legacy_signals, platform_signals)
+            self.attach_shared_company_knowledge(signals, shared_company_knowledge, position_list)
+            self.refresh_broker_fx_rates(signals, position_list)
+            signals = attach_external_signal_quality(signals, positions=position_list, settings=self.settings)
+            self.attach_stored_research_evidence(position_list, signals)
+            return signals
         if cache_fresh or cache_only:
             signals = entry.get("signals") if isinstance(entry, dict) else None
             if isinstance(signals, dict):

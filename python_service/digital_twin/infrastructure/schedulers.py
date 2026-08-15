@@ -1665,6 +1665,51 @@ class MarketDataCollectionScheduler:
             wait_until_running(lambda: self.running, end_at)
 
 
+class ExternalDataCollectionScheduler:
+    def __init__(self, runner, interval_seconds: int, error_reporter=None):
+        self.runner = runner
+        self.interval_seconds = max(5, int(interval_seconds or 15))
+        self.error_reporter = error_reporter or operational_error_reporter()
+        self.running = True
+
+    def stop(self, *_args) -> None:
+        self.running = False
+
+    def run_forever(self) -> None:
+        install_stop_handlers(self.stop)
+        print("Python external data collector started. interval=" + str(self.interval_seconds) + "s", flush=True)
+        while self.running:
+            started = time.monotonic()
+            try:
+                result = self.runner.run_once()
+                print(
+                    "External data collection "
+                    + str(result.get("status"))
+                    + " processed="
+                    + str(result.get("processedCount", 0))
+                    + " failed="
+                    + str(result.get("failureCount", 0)),
+                    flush=True,
+                )
+                for item in result.get("results") or []:
+                    if str(item.get("status") or "") != "error":
+                        continue
+                    error = RuntimeError(str(item.get("error") or "external provider collection failed"))
+                    report_runtime_error(
+                        self.error_reporter,
+                        "Python external data collector",
+                        error,
+                        str(item.get("datasetId") or "external dataset")
+                        + "/"
+                        + str(item.get("partitionKey") or "global"),
+                    )
+            except Exception as error:  # noqa: BLE001 - durable jobs are retried on the next cycle.
+                print("Python external data collector error: " + str(error), flush=True)
+                report_runtime_error(self.error_reporter, "Python external data collector", error, "collection cycle")
+            end_at = time.monotonic() + max(1.0, self.interval_seconds - (time.monotonic() - started))
+            wait_until_running(lambda: self.running, end_at)
+
+
 class KISRealtimeWebSocketScheduler:
     def __init__(self, runner, reconnect_delay_seconds: int = 5, error_reporter=None):
         self.runner = runner

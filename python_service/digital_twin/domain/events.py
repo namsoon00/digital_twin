@@ -39,6 +39,8 @@ RESEARCH_EVIDENCE_COLLECTED = "research_evidence.collected"
 RESEARCH_EVIDENCE_LIFECYCLE_CHANGED = "research_evidence.lifecycle_changed"
 NEWS_ARTICLE_ANALYZED = "news.article_analyzed"
 DATA_PIPELINE_HEALTH_CHANGED = "data_pipeline.health_changed"
+EXTERNAL_FACT_CHANGED = "external_data.fact_changed"
+EXTERNAL_PROVIDER_HEALTH_CHANGED = "external_data.provider_health_changed"
 HYPOTHESIS_RESEARCH_COMPLETED = "investment_hypothesis.research_completed"
 HYPOTHESIS_PROPOSED = "investment_hypothesis.proposed"
 HYPOTHESIS_REVIEWED = "investment_hypothesis.reviewed"
@@ -151,6 +153,58 @@ def system_error_reported_event(
             "fingerprint": str(fingerprint or ""),
             "occurrenceCount": max(1, int(occurrence_count or 1)),
         },
+    )
+
+
+def external_fact_changed_event(
+    dataset_id: str,
+    subject_key: str,
+    provider_id: str,
+    source_revision: str,
+    source_as_of: str,
+    change_type: str,
+    changed_fields: Iterable[str] = None,
+    reason: str = "",
+) -> DomainEvent:
+    dataset = str(dataset_id or "external").strip()
+    subject = str(subject_key or "global").strip()
+    return DomainEvent(
+        name=EXTERNAL_FACT_CHANGED,
+        aggregate_id=(dataset + ":" + subject)[:191],
+        payload={
+            "datasetId": dataset[:191],
+            "subjectKey": subject[:191],
+            "providerId": str(provider_id or "")[:96],
+            "sourceRevision": str(source_revision or "")[:191],
+            "sourceAsOf": str(source_as_of or "")[:80],
+            "changeType": str(change_type or "revision")[:64],
+            "changedFields": [str(item or "")[:120] for item in list(changed_fields or [])[:40] if str(item or "")],
+            "reason": str(reason or "")[:500],
+        },
+        correlation_id=("external-fact:" + dataset + ":" + subject)[:191],
+    )
+
+
+def external_provider_health_changed_event(
+    provider_id: str,
+    bucket_id: str,
+    previous_state: str,
+    current_state: str,
+    message: str = "",
+) -> DomainEvent:
+    provider = str(provider_id or "external").strip()
+    bucket = str(bucket_id or "default").strip()
+    return DomainEvent(
+        name=EXTERNAL_PROVIDER_HEALTH_CHANGED,
+        aggregate_id=("external-provider:" + provider + ":" + bucket)[:191],
+        payload={
+            "providerId": provider[:96],
+            "bucketId": bucket[:191],
+            "previousState": str(previous_state or "unknown")[:32],
+            "currentState": str(current_state or "unknown")[:32],
+            "message": str(message or "")[:500],
+        },
+        correlation_id=("external-provider-health:" + provider + ":" + bucket)[:191],
     )
 
 

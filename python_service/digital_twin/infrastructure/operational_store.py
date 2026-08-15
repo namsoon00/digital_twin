@@ -51,6 +51,7 @@ from .mysql_operational import (
     MySQLTemporalFeatureSnapshotStore,
     MySQLTimeSeriesBackendRegistryStore,
     MySQLTimeSeriesProjectionOutboxStore,
+    MySQLExternalDataStore,
 )
 from .settings import runtime_settings
 
@@ -80,6 +81,11 @@ def app_store(settings: Dict[str, str] = None):
 def external_signal_cache(settings: Dict[str, str] = None):
     configured = configured_settings(settings)
     return MySQLExternalSignalCache(configured)
+
+
+def external_data_store(settings: Dict[str, str] = None):
+    configured = configured_settings(settings)
+    return MySQLExternalDataStore(configured)
 
 
 def company_knowledge_cache(settings: Dict[str, str] = None):

@@ -122,6 +122,7 @@ from ..infrastructure.service_factory import (
     build_ontology_reasoning_runner,
     build_rule_change_candidate_service,
     build_symbol_universe_service,
+    build_external_data_collection_runner,
     build_market_data_collection_runner,
     build_monitor_runner,
     build_flow_lens_service,
@@ -450,6 +451,17 @@ def realtime_status_payload() -> Dict[str, object]:
         "aiInferenceQueue": ai_inference_queue,
         "storeWarning": store_warning,
     }
+
+
+def external_data_status_payload() -> Dict[str, object]:
+    try:
+        return build_external_data_collection_runner().status()
+    except Exception as error:  # noqa: BLE001 - status remains inspectable while MySQL starts.
+        return {
+            "enabled": False,
+            "status": "unavailable",
+            "error": str(error)[:500],
+        }
 
 
 def new_id(prefix: str) -> str:
@@ -5319,6 +5331,9 @@ class DigitalTwinHandler(BaseHTTPRequestHandler):
 
         if path == "/api/realtime/status" and self.command == "GET":
             return self.send_payload(200, realtime_status_payload())
+
+        if path == "/api/external-data/status" and self.command == "GET":
+            return self.send_payload(200, external_data_status_payload(), cache_control="no-store")
 
         if path == "/api/profile" and self.command == "PUT":
             body = self.read_json_body()

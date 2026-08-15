@@ -196,6 +196,17 @@ class MySQLMinimalRetentionRepository:
                 "FROM `temporal_feature_snapshots` WHERE created_at < " + _cutoff_sql(),
                 (cutoffs["temporalFeatureSnapshots"],),
             ),
+            "reasoningShadowJobs": self._summary(
+                "SELECT COUNT(*) AS candidate_count, COALESCE(SUM(OCTET_LENGTH(payload_json)), 0) AS candidate_bytes "
+                "FROM `reasoning_engine_shadow_jobs` WHERE job_status IN ('completed', 'failed', 'superseded') "
+                "AND updated_at < " + _cutoff_sql(),
+                (cutoffs["reasoningShadowJobs"],),
+            ),
+            "reasoningComparisons": self._summary(
+                "SELECT COUNT(*) AS candidate_count, COALESCE(SUM(OCTET_LENGTH(payload_json)), 0) AS candidate_bytes "
+                "FROM `reasoning_engine_comparisons` WHERE created_at < " + _cutoff_sql(),
+                (cutoffs["reasoningComparisons"],),
+            ),
             "auditRuns": self._summary(
                 """
                 SELECT COUNT(*) AS candidate_count, COALESCE(SUM(OCTET_LENGTH(report_json)), 0) AS candidate_bytes
@@ -271,6 +282,16 @@ class MySQLMinimalRetentionRepository:
                     "temporalFeatureSnapshots:history",
                     self._delete_temporal_feature_snapshots,
                     (cutoffs["temporalFeatureSnapshots"],),
+                ),
+                (
+                    "reasoningShadowJobs:terminal",
+                    self._delete_reasoning_shadow_jobs,
+                    (cutoffs["reasoningShadowJobs"],),
+                ),
+                (
+                    "reasoningComparisons:history",
+                    self._delete_reasoning_comparisons,
+                    (cutoffs["reasoningComparisons"],),
                 ),
                 ("audit:runs", self._delete_audit_runs, (policy.audit_keep_count,)),
             ]
@@ -461,6 +482,48 @@ class MySQLMinimalRetentionRepository:
             budget,
         )
         return self._result("temporal_feature_snapshots", deleted, bytes_deleted)
+
+    def _delete_reasoning_shadow_jobs(self, policy, budget, cutoff_iso) -> Dict[str, object]:
+        statuses = ("completed", "failed", "superseded")
+        candidates = self._byte_bounded_candidates(
+            "SELECT job_id, OCTET_LENGTH(payload_json) AS payload_bytes "
+            "FROM `reasoning_engine_shadow_jobs` WHERE job_status IN ("
+            + _status_placeholders(statuses) + ") AND updated_at < " + _cutoff_sql()
+            + " ORDER BY updated_at, job_id LIMIT %s",
+            statuses + (cutoff_iso, policy.batch_size),
+            "job_id",
+            policy,
+            budget,
+        )
+        deleted, bytes_deleted = self._delete_candidates(
+            "reasoning_engine_shadow_jobs",
+            "job_id",
+            candidates,
+            "job_status IN (" + _status_placeholders(statuses) + ") AND updated_at < " + _cutoff_sql(),
+            statuses + (cutoff_iso,),
+            budget,
+        )
+        return self._result("reasoning_engine_shadow_jobs", deleted, bytes_deleted)
+
+    def _delete_reasoning_comparisons(self, policy, budget, cutoff_iso) -> Dict[str, object]:
+        candidates = self._byte_bounded_candidates(
+            "SELECT comparison_id, OCTET_LENGTH(payload_json) AS payload_bytes "
+            "FROM `reasoning_engine_comparisons` WHERE created_at < " + _cutoff_sql()
+            + " ORDER BY created_at, comparison_id LIMIT %s",
+            (cutoff_iso, policy.batch_size),
+            "comparison_id",
+            policy,
+            budget,
+        )
+        deleted, bytes_deleted = self._delete_candidates(
+            "reasoning_engine_comparisons",
+            "comparison_id",
+            candidates,
+            "created_at < " + _cutoff_sql(),
+            (cutoff_iso,),
+            budget,
+        )
+        return self._result("reasoning_engine_comparisons", deleted, bytes_deleted)
 
     def _compact_failed_world_projection_payloads(self, policy, budget, cutoff_iso) -> Dict[str, object]:
         candidates = self._byte_bounded_candidates(

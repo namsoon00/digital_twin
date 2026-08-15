@@ -84,6 +84,13 @@ BASE_WORKERS = {
         "command": [sys.executable, "-u", "python_service/service.py", "ontology-reasoning", "watch"],
         "needle": "python_service/service.py ontology-reasoning watch",
     },
+    "reasoning-engine-shadow": {
+        "label": "Python V2 reasoning shadow worker",
+        "pid": data_dir() / "python-reasoning-shadow.pid",
+        "log": data_dir() / "python-reasoning-shadow.log",
+        "command": [sys.executable, "-u", "python_service/service.py", "reasoning-engine", "shadow-watch"],
+        "needle": "python_service/service.py reasoning-engine shadow-watch",
+    },
     "ontology-world-projection": {
         "label": "Python shared ontology world projection worker",
         "pid": data_dir() / "python-ontology-world-projection.pid",

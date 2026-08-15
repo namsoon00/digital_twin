@@ -25,6 +25,10 @@ from ..domain.ontology_projection_fingerprint import (
     material_graph_fingerprint,
     stable_value,
 )
+from ..domain.reasoning_shadow import (
+    frozen_projection_runtime_context,
+    pack_projection_runtime_contexts,
+)
 from ..domain.ontology_scopes import (
     SCOPED_ABOX_MANIFEST_VERSION,
     SCOPED_ABOX_PERSISTENCE_MODE,
@@ -35,6 +39,7 @@ from ..domain.ontology_scopes import (
     merge_target_scoped_abox_manifest,
     select_target_scoped_manifest_patch,
     scoped_manifest_id,
+    target_scope_manifest_fingerprint,
 )
 from ..domain.ontology_worlds import knowledge_world, market_world, world_from_snapshot, world_metadata
 from ..domain.knowledge_world_projection import build_knowledge_world_graph, knowledge_world_coverage
@@ -360,6 +365,7 @@ class SharedPortfolioGraphAssemblyCache:
                 "ageMs": int((now - float(entry.get("createdMonotonic") or now)) * 1000),
                 "graph": deepcopy(entry["graph"]),
                 "persistenceGraph": deepcopy(entry["persistenceGraph"]),
+                "runtimeContextPacket": deepcopy(entry.get("runtimeContextPacket") or {}),
             }
 
     def put(
@@ -368,6 +374,7 @@ class SharedPortfolioGraphAssemblyCache:
         graph: PortfolioOntology,
         persistence_graph: PortfolioOntology,
         max_entries: int,
+        runtime_context_packet: Dict[str, object] = None,
     ) -> None:
         if not key or max_entries <= 0:
             return
@@ -377,6 +384,7 @@ class SharedPortfolioGraphAssemblyCache:
                 "createdMonotonic": time.monotonic(),
                 "graph": deepcopy(graph),
                 "persistenceGraph": deepcopy(persistence_graph),
+                "runtimeContextPacket": deepcopy(runtime_context_packet or {}),
             }
             while len(self.entries) > max_entries:
                 self.entries.popitem(last=False)
@@ -484,7 +492,7 @@ class SharedOntologyQualityRecordCoordinator:
 
 
 SHARED_PORTFOLIO_GRAPH_ASSEMBLY_CACHE = SharedPortfolioGraphAssemblyCache()
-PORTFOLIO_GRAPH_ASSEMBLY_CACHE_CONTRACT_VERSION = "portfolio-graph-assembly-cache-v5"
+PORTFOLIO_GRAPH_ASSEMBLY_CACHE_CONTRACT_VERSION = "portfolio-graph-assembly-cache-v8-filtered-context-boundary"
 SHARED_ONTOLOGY_QUALITY_RECORD_COORDINATOR = SharedOntologyQualityRecordCoordinator()
 
 
@@ -669,6 +677,7 @@ class PortfolioOntologyProjectionRecorder:
         outcome_observation_service=None,
         investment_domain_store=None,
         graph_assembly_cache_store=None,
+        runtime_context_overrides: Dict[str, Dict[str, object]] = None,
         settings: Dict[str, object] = None,
         source: str = "monitoring",
     ):
@@ -683,6 +692,12 @@ class PortfolioOntologyProjectionRecorder:
         self.world_projection_outbox = world_projection_outbox
         self.inference_detail_outbox = inference_detail_outbox
         self.graph_assembly_cache_store = graph_assembly_cache_store
+        self.runtime_context_overrides = {
+            str(account_id or ""): frozen_projection_runtime_context(context)
+            for account_id, context in dict(runtime_context_overrides or {}).items()
+            if str(account_id or "") and isinstance(context, dict)
+        }
+        self.last_runtime_contexts: Dict[str, Dict[str, object]] = {}
         self.investment_domain_store = investment_domain_store
         self.settings = dict(settings or {})
         self.outcome_observation_service = outcome_observation_service or InvestmentOutcomeObservationService(
@@ -1120,6 +1135,11 @@ class PortfolioOntologyProjectionRecorder:
                     target_symbols,
                     reasoning_context=compact_reasoning_context,
                 )
+            # Preserve the semantic scope produced from this immutable source
+            # before it is merged with each deployment's older active
+            # generations. Shadow parity is about equal inputs; the merged
+            # store scope remains a separate diagnostic below.
+            source_scope_plan = deepcopy(scoped_identity.get("scopePlan") or [])
             if target_scoped_patch.get("eligible"):
                 emit_progress(
                     "target_manifest_patch.start",
@@ -1504,6 +1524,14 @@ class PortfolioOntologyProjectionRecorder:
                     "대상별 TypeDB 네이티브 규칙을 완전 평가합니다."
                 ),
             }
+            comparison_scope = target_scope_manifest_fingerprint(
+                source_scope_plan,
+                inference_symbols,
+            )
+            persisted_comparison_scope = target_scope_manifest_fingerprint(
+                scoped_identity.get("scopePlan") or [],
+                inference_symbols,
+            )
             # Identical facts must still be persisted once when upgrading from
             # the legacy complete-generation pointer. Otherwise a quiet market
             # could leave the old full-rewrite ABox active indefinitely.
@@ -1544,6 +1572,8 @@ class PortfolioOntologyProjectionRecorder:
                     "materialChangeDetected": False,
                     "aboxValidation": validation.to_dict(),
                     "projectionScope": projection_scope,
+                    "comparisonScope": comparison_scope,
+                    "persistedComparisonScope": persisted_comparison_scope,
                     "inferenceImpactPlan": compact_impact_plan,
                     "reasoningContext": compact_reasoning_context,
                     "runtimeStages": runtime_stages,
@@ -1674,6 +1704,8 @@ class PortfolioOntologyProjectionRecorder:
                 )
                 result["materialChangeDetected"] = True
                 result["projectionScope"] = projection_scope
+                result["comparisonScope"] = comparison_scope
+                result["persistedComparisonScope"] = persisted_comparison_scope
                 result["graphInput"] = dict(graph_input)
                 result["inferenceImpactPlan"] = compact_impact_plan
                 result["reasoningContext"] = compact_reasoning_context
@@ -2652,6 +2684,7 @@ class PortfolioOntologyProjectionRecorder:
         cache_key: str,
         graph: PortfolioOntology,
         persistence_graph: PortfolioOntology,
+        runtime_context_packet: Dict[str, object] = None,
     ) -> Dict[str, object]:
         if not self.graph_assembly_persistent_cache_enabled():
             return {"status": "disabled"}
@@ -2666,6 +2699,7 @@ class PortfolioOntologyProjectionRecorder:
                 self.graph_assembly_persistent_cache_ttl_seconds(),
                 self.graph_assembly_persistent_cache_max_entries(),
                 self.graph_assembly_persistent_cache_max_payload_bytes(),
+                runtime_context_packet,
             )
         except Exception as error:  # noqa: BLE001 - durable cache writes are best effort.
             return {"status": "error", "reason": str(error)[:180]}
@@ -2693,6 +2727,7 @@ class PortfolioOntologyProjectionRecorder:
         snapshot: AccountSnapshot,
         rule_catalog: Dict[str, object],
         active_tbox: Dict[str, object],
+        runtime_context: Dict[str, object],
         target_symbols: List[str] = None,
         input_mode: str = "full",
     ) -> str:
@@ -2709,15 +2744,31 @@ class PortfolioOntologyProjectionRecorder:
         else:
             metadata.pop("investmentBrain", None)
         source_snapshot["metadata"] = metadata
+        frozen_runtime_context = frozen_projection_runtime_context(runtime_context)
         payload = {
             # Bump this contract whenever graph-builder behavior changes. The
             # durable cache can outlive a worker restart, so source equality
             # alone is not enough to prove a cached graph is reusable.
             "version": PORTFOLIO_GRAPH_ASSEMBLY_CACHE_CONTRACT_VERSION,
             "namespace": self.graph_assembly_cache_namespace(),
-            "sourceSnapshot": stable_value(source_snapshot),
+            # Cache reuse is stricter than material-generation reuse.  The
+            # observation clock and provider timestamps can change freshness,
+            # session and data-quality facts even when price/volume values are
+            # unchanged.  Removing those fields here previously returned a
+            # stale flow/quality graph while the replay packet contained the
+            # current context.
+            "sourceSnapshot": source_snapshot,
             "settings": stable_value(self.settings),
             "activeTBox": stable_value(active_tbox),
+            "runtimeContextHash": hashlib.sha256(
+                json.dumps(
+                    frozen_runtime_context,
+                    ensure_ascii=False,
+                    sort_keys=True,
+                    separators=(",", ":"),
+                    default=str,
+                ).encode("utf-8")
+            ).hexdigest(),
             "ruleboxRulesHash": str((rule_catalog or {}).get("ruleboxRulesHash") or ""),
             "targetSymbols": sorted({str(symbol or "").upper().strip() for symbol in target_symbols or [] if str(symbol or "").strip()}),
             "inputMode": str(input_mode or "full"),
@@ -2777,12 +2828,67 @@ class PortfolioOntologyProjectionRecorder:
         active_tbox = self.active_tbox_context()
         stage_timings["activeTBoxReadMs"] = int((time.perf_counter() - active_tbox_started) * 1000)
         emit("active_tbox.done", runtimeMs=stage_timings["activeTBoxReadMs"], status=str(active_tbox.get("status") or ""))
+        emit("runtime_context.start")
+        runtime_context_started = time.perf_counter()
+        runtime_context = self.runtime_context(
+            snapshot,
+            active_tbox=active_tbox,
+            target_symbols=input_symbols if input_mode == "target-scoped" else None,
+            progress_callback=lambda stage, **details: emit(
+                "runtime_context." + str(stage or "unknown"), **details
+            ),
+        )
+        try:
+            runtime_context_packet = pack_projection_runtime_contexts({
+                snapshot.account_id: self.last_runtime_contexts.get(snapshot.account_id)
+                or frozen_projection_runtime_context(runtime_context),
+            })
+        except ValueError:
+            # Graph assembly remains decision-critical. An oversized optional
+            # shadow replay packet may skip V2 sampling, but must never block
+            # the active V1 projection.
+            runtime_context_packet = {}
+        stage_timings["runtimeContextMs"] = int(
+            (time.perf_counter() - runtime_context_started) * 1000
+        )
+        emit("runtime_context.done", runtimeMs=stage_timings["runtimeContextMs"])
+        decision_memory = (
+            runtime_context.get("decisionEpisodeProjection")
+            if isinstance(runtime_context, dict)
+            else {}
+        )
+        if isinstance(decision_memory, dict):
+            stage_timings["decisionEpisodeSourceCount"] = int(
+                decision_memory.get("sourceEpisodeCount") or 0
+            )
+            stage_timings["decisionEpisodeIncludedCount"] = int(
+                decision_memory.get("includedEpisodeCount") or 0
+            )
+            stage_timings["decisionEpisodeDroppedCount"] = int(
+                decision_memory.get("droppedEpisodeCount") or 0
+            )
+        lifecycle_projection = (
+            runtime_context.get("hypothesisLifecycleAboxProjection")
+            if isinstance(runtime_context, dict)
+            else {}
+        )
+        if isinstance(lifecycle_projection, dict):
+            stage_timings["hypothesisLifecycleAboxProjectionMs"] = int(
+                lifecycle_projection.get("readMs") or 0
+            )
+            stage_timings["hypothesisLifecycleAboxRecordCount"] = int(
+                lifecycle_projection.get("recordCount") or 0
+            )
+            stage_timings["hypothesisLifecycleAboxProjectionEnabled"] = (
+                1 if lifecycle_projection.get("enabled") else 0
+            )
         cache_enabled = self.graph_assembly_cache_enabled()
         emit("cache_key.start")
         cache_key = self.graph_assembly_cache_key(
             graph_input_snapshot,
             rule_catalog,
             active_tbox,
+            runtime_context,
             target_symbols=input_symbols,
             input_mode=input_mode,
         ) if cache_enabled else ""
@@ -2832,6 +2938,7 @@ class PortfolioOntologyProjectionRecorder:
                 graph,
                 persistence_graph,
                 self.graph_assembly_cache_max_entries(),
+                persistent_cache_result.get("runtimeContextPacket") or {},
             )
             return (
                 deepcopy(graph),
@@ -2849,26 +2956,6 @@ class PortfolioOntologyProjectionRecorder:
                 },
             )
 
-        emit("runtime_context.start")
-        runtime_context_started = time.perf_counter()
-        runtime_context = self.runtime_context(
-            snapshot,
-            active_tbox=active_tbox,
-            target_symbols=input_symbols if input_mode == "target-scoped" else None,
-            progress_callback=lambda stage, **details: emit("runtime_context." + str(stage or "unknown"), **details),
-        )
-        stage_timings["runtimeContextMs"] = int((time.perf_counter() - runtime_context_started) * 1000)
-        emit("runtime_context.done", runtimeMs=stage_timings["runtimeContextMs"])
-        decision_memory = runtime_context.get("decisionEpisodeProjection") if isinstance(runtime_context, dict) else {}
-        if isinstance(decision_memory, dict):
-            stage_timings["decisionEpisodeSourceCount"] = int(decision_memory.get("sourceEpisodeCount") or 0)
-            stage_timings["decisionEpisodeIncludedCount"] = int(decision_memory.get("includedEpisodeCount") or 0)
-            stage_timings["decisionEpisodeDroppedCount"] = int(decision_memory.get("droppedEpisodeCount") or 0)
-        lifecycle_projection = runtime_context.get("hypothesisLifecycleAboxProjection") if isinstance(runtime_context, dict) else {}
-        if isinstance(lifecycle_projection, dict):
-            stage_timings["hypothesisLifecycleAboxProjectionMs"] = int(lifecycle_projection.get("readMs") or 0)
-            stage_timings["hypothesisLifecycleAboxRecordCount"] = int(lifecycle_projection.get("recordCount") or 0)
-            stage_timings["hypothesisLifecycleAboxProjectionEnabled"] = 1 if lifecycle_projection.get("enabled") else 0
         emit("ontology_graph.start")
         assembly_started = time.perf_counter()
         graph = build_portfolio_ontology(
@@ -2900,6 +2987,7 @@ class PortfolioOntologyProjectionRecorder:
                 graph,
                 persistence_graph,
                 self.graph_assembly_cache_max_entries(),
+                runtime_context_packet,
             )
             emit("persistent_cache_write.start")
             persistent_cache_write_started = time.perf_counter()
@@ -2907,6 +2995,7 @@ class PortfolioOntologyProjectionRecorder:
                 cache_key,
                 graph,
                 persistence_graph,
+                runtime_context_packet,
             )
             stage_timings["graphAssemblyPersistentCacheWriteMs"] = int(
                 (time.perf_counter() - persistent_cache_write_started) * 1000
@@ -5796,6 +5885,13 @@ class PortfolioOntologyProjectionRecorder:
         target_symbols: List[str] = None,
         progress_callback: Callable[..., None] = None,
     ) -> Dict[str, object]:
+        account_id = str(snapshot.account_id or "")
+        override = self.runtime_context_overrides.get(account_id)
+        if override:
+            frozen = frozen_projection_runtime_context(override)
+            self.last_runtime_contexts[account_id] = frozen
+            return deepcopy(frozen)
+
         def emit(stage: str, **details) -> None:
             if not callable(progress_callback):
                 return
@@ -5897,7 +5993,7 @@ class PortfolioOntologyProjectionRecorder:
             except Exception:  # noqa: BLE001 - lifecycle enrichment must not invalidate market inference.
                 portfolio_lifecycle = {}
             emit("portfolio_lifecycle.done", status=str(portfolio_lifecycle.get("status") or "unavailable"))
-        return {
+        result = {
             "settings": dict(self.settings),
             "snapshotId": "abox-snapshot:" + hashlib.sha256(snapshot_seed.encode("utf-8")).hexdigest()[:16],
             "asOf": as_of,
@@ -5929,6 +6025,13 @@ class PortfolioOntologyProjectionRecorder:
             "temporalObservationWindows": temporal_windows,
             "portfolioLifecycle": portfolio_lifecycle,
         }
+        # V1 and any replay engine must consume the same ontology-owned
+        # context. Returning the unfiltered runtime settings here while only
+        # storing the filtered replay packet made shadow parity impossible and
+        # could let infrastructure wiring affect factual graph construction.
+        frozen = frozen_projection_runtime_context(result)
+        self.last_runtime_contexts[account_id] = frozen
+        return deepcopy(frozen)
 
     @staticmethod
     def factual_runtime_metadata(

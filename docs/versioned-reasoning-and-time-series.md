@@ -24,7 +24,9 @@ flowchart LR
     QuestDB -. after promotion .-> ActivePort
     ActivePort --> Feature[Immutable TemporalFeatureSnapshot]
     Feature --> V1[V1 active TypeDB reasoning]
-    Feature -. replay and comparison .-> V2[V2 provisioning/shadow]
+    V1 --> Frozen[Immutable source and outcome packet]
+    Frozen -. durable shadow queue .-> V2[V2 isolated TypeDB reasoning]
+    Feature -. MySQL and QuestDB parity .-> V2
     V1 --> Delivery[Notification delivery]
     V2 -. delivery forbidden .-> Compare[Parity and outcome comparison]
     Compare --> Gate{Promotion gate}
@@ -37,13 +39,76 @@ flowchart LR
 - `questdb-shadow`: live shadow write target. It cannot affect investment
   judgement while MySQL remains active.
 - `ontology-v1-active`: active and delivery-authorized reasoning deployment.
-- `ontology-v2-shadow`: provisioning deployment. It has no notification
-  delivery capability and cannot be promoted without comparison evidence.
+- `ontology-v2-shadow`: isolated candidate deployment in
+  `orbit_alpha_ontology_shadow_v2`. It replays the exact bounded source packet
+  consumed by V1, reads the QuestDB temporal binding, and cannot access a real
+  notification transport.
 
-The current TypeDB inference implementation remains V1. Registering V2 does
-not pretend that a second inference implementation is already validated. It
-creates the isolated release slot, bindings, and promotion contract needed to
-build and replay V2 without changing V1.
+V2 deliberately starts with the same approved TBox and TypeDB schema-function
+RuleBox as V1. Its first job is to prove that the version boundary, alternate
+time-series binding, independent graph database, and deployment controls are
+real. A later V2 rule or prompt change can then be measured against V1 instead
+of being released on trust. The RuleBox fingerprint is frozen after the first
+successful V2 comparison; a changed RuleBox requires a new candidate release
+so results from different releases cannot be mixed.
+
+## Shadow Comparison Contract
+
+The active reasoning worker stores one bounded immutable handoff after a successful V1
+generation. It contains the source monitor state selected by V1, source
+snapshot identifiers, target account and symbols, graph-backed alert
+candidates, TypeDB projection receipts, and a compressed projection-runtime
+context packet. The runtime packet freezes only the allowlisted financial,
+evidence, policy, and temporal inputs that V1 actually read; connection
+settings, credentials, API keys, and notification transports are excluded.
+V1 constructs its graph from that filtered context too. Filtering only the V2
+packet is invalid because it gives the engines different factual inputs.
+
+V1 first rehydrates that bounded packet and uses it for its own TypeDB
+projection. V2 receives the same packet byte-for-byte; the shadow contract
+therefore compares engines rather than an unbounded V1 input with a compacted
+V2 input.
+
+The low-priority V2 worker:
+
+1. starts only while the active inference queue is empty by default;
+2. claims the latest job for an account/symbol scope;
+3. replays the packet into the isolated TypeDB database;
+4. compares MySQL and QuestDB temporal feature snapshots at the same `as_of`;
+5. compares the target-symbol scope closure, rule slots, evidence, selected
+   decisions, and latency;
+6. records every difference in MySQL and records any attempted shadow delivery
+   as a promotion-blocking violation.
+
+The comparison scope starts from the exact symbols used to construct V1's
+graph, then follows their declared dependency scopes. Symbols later added by
+impact routing remain visible as inference targets, but they do not silently
+expand the source-fact comparison boundary. Unrelated account symbols are
+deliberately excluded, so a
+V1/V2 result is not marked different merely because their isolated databases
+retain different older generations. Graph-assembly caches persist the same
+compressed runtime packet with the graph, allowing a restarted worker to
+replay the exact V1 inputs instead of querying newer MySQL state.
+Cache reuse requires the complete observation clock and provider provenance as
+well as values and policy context. Material-generation fingerprints may ignore
+polling timestamps, but a graph cache must not: `generatedAt`, `asOf`, or a
+provider timestamp can change freshness, market-session, flow, and data-quality
+facts even when the last price is unchanged.
+
+Older queued work for the same scope is superseded. Completed jobs and
+comparison history have independent retention policies, so the durable source
+archive remains MySQL while TypeDB retains only active reasoning state.
+The scheduler takes the union of requested symbols and the symbols actually
+evaluated in V1's TypeDB receipt. A newer packet supersedes older queued work
+for the same account set, even when graph impact routing expanded the symbols.
+An expired `processing` lease is returned to `retry`, preventing a terminated
+shadow worker from leaving a permanent queue entry. The default 60-minute
+lease includes the one-time empty-database TBox bootstrap.
+The first provisioning comparison is retained for audit but excluded from the
+steady-state p95 latency promotion gate.
+Legacy or malformed jobs without a verifiable V1 projection receipt, source
+state, or runtime context are terminally discarded as `invalid-input`; they
+are not retried and cannot block the queue.
 
 ## Storage Contract
 
@@ -85,10 +150,16 @@ A reasoning candidate cannot become active unless all of these hold:
 
 - deployment status is `candidate`;
 - engine health is ready;
+- the minimum configured number of comparisons and distinct symbols is met;
 - fact parity is 100 percent;
 - rule-slot coverage is 100 percent;
 - there are no unexplained decision differences;
-- the shadow deployment has delivered zero notifications.
+- the shadow deployment has delivered zero notifications;
+- the comparison window is fresh and candidate p95 latency is within the
+  configured ratio to V1.
+
+`candidate` and `promote` commands calculate these gates from stored comparison
+history. Operators do not provide hand-written parity values.
 
 Time-series promotion must separately prove backend health, an empty pending
 projection queue, acceptable watermark lag, and temporal feature parity on a
@@ -107,12 +178,18 @@ python3 python_service/service.py time-series-platform candidate --backend-id qu
 python3 python_service/service.py time-series-platform promote --backend-id questdb-shadow --account-id <account> --symbols 005930,NVDA
 python3 python_service/service.py time-series-platform rollback
 npm run python:reasoning-engine:status
+npm run python:reasoning-engine:shadow
+npm run python:reasoning-engine:comparisons
+python3 python_service/service.py reasoning-engine candidate --deployment-id ontology-v2-shadow
+python3 python_service/service.py reasoning-engine promote --deployment-id ontology-v2-shadow
+python3 python_service/service.py reasoning-engine rollback
 ```
 
 Read-only HTTP status is also available:
 
 - `GET /api/time-series-platform/status`
 - `GET /api/reasoning-engine/status`
+- `GET /api/reasoning-engine/comparisons`
 
 Runtime settings select bindings without leaking database details into the
 domain:
@@ -123,6 +200,10 @@ domain:
 - `REASONING_ENGINE_ACTIVE_DEPLOYMENT_ID`
 - `REASONING_ENGINE_DELIVERY_DEPLOYMENT_ID`
 - `REASONING_ENGINE_CANDIDATE_DEPLOYMENT_ID`
+- `REASONING_ENGINE_SHADOW_ENABLED`
+- `REASONING_ENGINE_SHADOW_TYPEDB_DATABASE`
+- `REASONING_ENGINE_PROMOTION_MINIMUM_COMPARISONS`
+- `REASONING_ENGINE_PROMOTION_MINIMUM_SYMBOLS`
 
 ## Adding V3 Or Another Database
 

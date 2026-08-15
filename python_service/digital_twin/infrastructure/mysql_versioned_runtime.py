@@ -326,6 +326,335 @@ class MySQLReasoningEngineRegistryStore(MySQLOperationalConnection):
         }
 
 
+class MySQLReasoningShadowJobStore(MySQLOperationalConnection):
+    """Durable latest-state handoff from the delivery engine to V2."""
+
+    def enqueue(
+        self,
+        baseline_deployment_id: str,
+        candidate_deployment_id: str,
+        source_event_id: str,
+        scope_key: str,
+        dedupe_key: str,
+        payload: Mapping[str, object],
+    ) -> Dict[str, object]:
+        stamp = iso_utc()
+        job_id = "reasoning-shadow:" + uuid.uuid4().hex
+        clean_scope = str(scope_key or "global")[:191]
+        clean_candidate = str(candidate_deployment_id or "")[:191]
+        with self.transaction() as connection:
+            cursor = connection.execute(
+                """
+                INSERT IGNORE INTO reasoning_engine_shadow_jobs (
+                    job_id, dedupe_key, scope_key, baseline_deployment_id,
+                    candidate_deployment_id, source_event_id, payload_json,
+                    job_status, available_at, created_at, updated_at
+                ) VALUES (%s, %s, %s, %s, %s, %s, %s, 'queued', %s, %s, %s)
+                """,
+                (
+                    job_id,
+                    str(dedupe_key or "")[:191],
+                    clean_scope,
+                    str(baseline_deployment_id or "")[:191],
+                    clean_candidate,
+                    str(source_event_id or "")[:191],
+                    canonical_json(dict(payload or {})),
+                    stamp,
+                    stamp,
+                    stamp,
+                ),
+            )
+            saved = bool(int(getattr(cursor, "rowcount", 0) or 0))
+            if saved:
+                connection.execute(
+                    """
+                    UPDATE reasoning_engine_shadow_jobs
+                    SET job_status = 'superseded', completed_at = %s,
+                        lease_owner = '', lease_expires_at = '', updated_at = %s,
+                        last_error = 'A newer immutable shadow input owns this scope.'
+                    WHERE candidate_deployment_id = %s AND scope_key = %s
+                      AND job_id <> %s AND job_status IN ('queued', 'retry')
+                    """,
+                    (stamp, stamp, clean_candidate, clean_scope, job_id),
+                )
+        return {"saved": saved, "jobId": job_id if saved else "", "status": "queued" if saved else "duplicate"}
+
+    def claim(self, candidate_deployment_id: str, worker_id: str, lease_seconds: int = 3600) -> Dict[str, object]:
+        stamp = iso_utc()
+        lease_until = iso_utc(utc_now() + timedelta(seconds=max(60, int(lease_seconds or 3600))))
+        with self.transaction() as connection:
+            connection.execute(
+                """
+                UPDATE reasoning_engine_shadow_jobs
+                SET job_status = 'retry', lease_owner = '', lease_expires_at = '',
+                    available_at = %s,
+                    last_error = 'The previous shadow worker lease expired; retrying safely.',
+                    updated_at = %s
+                WHERE candidate_deployment_id = %s AND job_status = 'processing'
+                  AND lease_expires_at <> '' AND lease_expires_at < %s
+                """,
+                (stamp, stamp, str(candidate_deployment_id or ""), stamp),
+            )
+            row = connection.execute(
+                """
+                SELECT * FROM reasoning_engine_shadow_jobs
+                WHERE candidate_deployment_id = %s
+                  AND job_status IN ('queued', 'retry')
+                  AND (available_at = '' OR available_at <= %s)
+                  AND (lease_expires_at = '' OR lease_expires_at < %s)
+                ORDER BY created_at, job_id
+                LIMIT 1 FOR UPDATE SKIP LOCKED
+                """,
+                (str(candidate_deployment_id or ""), stamp, stamp),
+            ).fetchone()
+            if not row:
+                return {}
+            job_id = str(row.get("job_id") or "")
+            connection.execute(
+                """
+                UPDATE reasoning_engine_shadow_jobs
+                SET job_status = 'processing', lease_owner = %s,
+                    lease_expires_at = %s, updated_at = %s
+                WHERE job_id = %s
+                """,
+                (str(worker_id or "reasoning-shadow"), lease_until, stamp, job_id),
+            )
+        return self.row_payload(row)
+
+    def complete(self, job_id: str) -> None:
+        stamp = iso_utc()
+        with self.connect() as connection:
+            connection.execute(
+                """
+                UPDATE reasoning_engine_shadow_jobs
+                SET job_status = 'completed', lease_owner = '', lease_expires_at = '',
+                    last_error = '', completed_at = %s, updated_at = %s
+                WHERE job_id = %s
+                """,
+                (stamp, stamp, str(job_id or "")),
+            )
+
+    def defer(self, job_id: str, reason: str, retry_after_seconds: int = 30) -> None:
+        with self.connect() as connection:
+            connection.execute(
+                """
+                UPDATE reasoning_engine_shadow_jobs
+                SET job_status = 'queued', lease_owner = '', lease_expires_at = '',
+                    available_at = %s, last_error = %s, updated_at = %s
+                WHERE job_id = %s
+                """,
+                (
+                    iso_utc(utc_now() + timedelta(seconds=max(1, int(retry_after_seconds or 30)))),
+                    str(reason or "")[:500],
+                    iso_utc(),
+                    str(job_id or ""),
+                ),
+            )
+
+    def discard(self, job_id: str, reason: str) -> None:
+        stamp = iso_utc()
+        with self.connect() as connection:
+            connection.execute(
+                """
+                UPDATE reasoning_engine_shadow_jobs
+                SET job_status = 'failed', lease_owner = '', lease_expires_at = '',
+                    available_at = '', last_error = %s, completed_at = %s,
+                    updated_at = %s
+                WHERE job_id = %s
+                """,
+                (str(reason or "")[:500], stamp, stamp, str(job_id or "")),
+            )
+
+    def retry(self, job_id: str, error: str, max_attempts: int = 5) -> Dict[str, object]:
+        with self.transaction() as connection:
+            row = connection.execute(
+                "SELECT attempts FROM reasoning_engine_shadow_jobs WHERE job_id = %s FOR UPDATE",
+                (str(job_id or ""),),
+            ).fetchone() or {"attempts": 0}
+            attempts = int(row.get("attempts") or 0) + 1
+            terminal = attempts >= max(1, int(max_attempts or 5))
+            delay = min(1800, 15 * (2 ** min(6, attempts - 1)))
+            connection.execute(
+                """
+                UPDATE reasoning_engine_shadow_jobs
+                SET job_status = %s, attempts = %s, lease_owner = '',
+                    lease_expires_at = '', available_at = %s, last_error = %s,
+                    completed_at = %s, updated_at = %s
+                WHERE job_id = %s
+                """,
+                (
+                    "failed" if terminal else "retry",
+                    attempts,
+                    "" if terminal else iso_utc(utc_now() + timedelta(seconds=delay)),
+                    str(error or "")[:500],
+                    iso_utc() if terminal else "",
+                    iso_utc(),
+                    str(job_id or ""),
+                ),
+            )
+        return {"jobId": str(job_id or ""), "attemptCount": attempts, "terminal": terminal}
+
+    def summary(self) -> Dict[str, object]:
+        with self.connect() as connection:
+            rows = connection.execute(
+                """
+                SELECT candidate_deployment_id, job_status, COUNT(*) AS row_count,
+                       MIN(created_at) AS oldest, MAX(updated_at) AS latest
+                FROM reasoning_engine_shadow_jobs
+                GROUP BY candidate_deployment_id, job_status
+                """
+            ).fetchall()
+        deployments: Dict[str, Dict[str, object]] = {}
+        for row in rows or []:
+            deployment_id = str(row.get("candidate_deployment_id") or "")
+            status = str(row.get("job_status") or "")
+            item = deployments.setdefault(deployment_id, {
+                "candidateDeploymentId": deployment_id,
+                "counts": {},
+                "oldest": {},
+                "latest": {},
+            })
+            item["counts"][status] = int(row.get("row_count") or 0)
+            item["oldest"][status] = str(row.get("oldest") or "")
+            item["latest"][status] = str(row.get("latest") or "")
+        return {"deployments": list(deployments.values())}
+
+    @staticmethod
+    def row_payload(row: Mapping[str, object]) -> Dict[str, object]:
+        values = dict(row or {})
+        return {
+            "jobId": str(values.get("job_id") or ""),
+            "dedupeKey": str(values.get("dedupe_key") or ""),
+            "scopeKey": str(values.get("scope_key") or ""),
+            "baselineDeploymentId": str(values.get("baseline_deployment_id") or ""),
+            "candidateDeploymentId": str(values.get("candidate_deployment_id") or ""),
+            "sourceEventId": str(values.get("source_event_id") or ""),
+            "payload": json_value(values.get("payload_json"), {}),
+            "status": str(values.get("job_status") or ""),
+            "attemptCount": int(values.get("attempts") or 0),
+            "createdAt": str(values.get("created_at") or ""),
+            "updatedAt": str(values.get("updated_at") or ""),
+        }
+
+
+class MySQLReasoningEngineComparisonStore(MySQLOperationalConnection):
+    def record(
+        self,
+        baseline_deployment_id: str,
+        candidate_deployment_id: str,
+        source_event_id: str,
+        comparison: Mapping[str, object],
+    ) -> Dict[str, object]:
+        values = dict(comparison or {})
+        comparison_id = "reasoning-comparison:" + uuid.uuid4().hex
+        stamp = iso_utc()
+        with self.connect() as connection:
+            connection.execute(
+                """
+                INSERT INTO reasoning_engine_comparisons (
+                    comparison_id, baseline_deployment_id, candidate_deployment_id,
+                    source_event_id, comparison_status, fact_parity_pct,
+                    rule_slot_coverage_pct, unexplained_decision_difference_count,
+                    shadow_delivery_count, payload_json, created_at, updated_at
+                ) VALUES (%s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s)
+                """,
+                (
+                    comparison_id,
+                    str(baseline_deployment_id or "")[:191],
+                    str(candidate_deployment_id or "")[:191],
+                    str(source_event_id or "")[:191],
+                    str(values.get("status") or "unknown")[:32],
+                    float(values.get("factParityPct") or 0.0),
+                    float(values.get("ruleSlotCoveragePct") or 0.0),
+                    int(values.get("unexplainedDecisionDifferenceCount") or 0),
+                    int(values.get("shadowDeliveryCount") or 0),
+                    canonical_json(values),
+                    stamp,
+                    stamp,
+                ),
+            )
+        return {"comparisonId": comparison_id, "createdAt": stamp, **values}
+
+    def latest(self, candidate_deployment_id: str, limit: int = 100) -> List[Dict[str, object]]:
+        with self.connect() as connection:
+            rows = connection.execute(
+                """
+                SELECT * FROM reasoning_engine_comparisons
+                WHERE candidate_deployment_id = %s
+                ORDER BY created_at DESC, comparison_id DESC LIMIT %s
+                """,
+                (str(candidate_deployment_id or ""), max(1, min(1000, int(limit or 100)))),
+            ).fetchall()
+        return [self.row_payload(row) for row in rows or []]
+
+    def summary(self, candidate_deployment_id: str, limit: int = 200) -> Dict[str, object]:
+        rows = self.latest(candidate_deployment_id, limit=limit)
+        status_counts: Dict[str, int] = {}
+        symbols = set()
+        fact_values, rule_values, baseline_durations, candidate_durations = [], [], [], []
+        unexplained = 0
+        shadow_deliveries = 0
+        for index, row in enumerate(rows):
+            status = str(row.get("status") or "unknown")
+            status_counts[status] = status_counts.get(status, 0) + 1
+            fact_values.append(float(row.get("factParityPct") or 0.0))
+            rule_values.append(float(row.get("ruleSlotCoveragePct") or 0.0))
+            unexplained += int(row.get("unexplainedDecisionDifferenceCount") or 0)
+            shadow_deliveries += int(row.get("shadowDeliveryCount") or 0)
+            payload = dict(row.get("payload") or {})
+            symbols.update(str(value or "").upper().strip() for value in payload.get("symbols") or [] if str(value or "").strip())
+            warmup = bool(payload.get("candidateWarmup")) or (
+                len(rows) > 1 and index == len(rows) - 1
+            )
+            if not warmup:
+                baseline_durations.append(int(payload.get("baselineDurationMs") or 0))
+                candidate_durations.append(int(payload.get("candidateDurationMs") or 0))
+
+        def percentile95(values: List[int]) -> int:
+            ordered = sorted(max(0, int(value or 0)) for value in values)
+            if not ordered:
+                return 0
+            return ordered[min(len(ordered) - 1, max(0, int(round(len(ordered) * 0.95 + 0.499)) - 1))]
+
+        return {
+            "candidateDeploymentId": str(candidate_deployment_id or ""),
+            "sampleCount": len(rows),
+            "statusCounts": status_counts,
+            "equivalentCount": int(status_counts.get("equivalent") or 0),
+            "equivalentPct": round(100.0 * int(status_counts.get("equivalent") or 0) / len(rows), 3) if rows else 0.0,
+            "factParityPct": round(sum(fact_values) / len(fact_values), 3) if fact_values else 0.0,
+            "minimumFactParityPct": min(fact_values) if fact_values else 0.0,
+            "ruleSlotCoveragePct": round(sum(rule_values) / len(rule_values), 3) if rule_values else 0.0,
+            "minimumRuleSlotCoveragePct": min(rule_values) if rule_values else 0.0,
+            "unexplainedDecisionDifferenceCount": unexplained,
+            "shadowDeliveryCount": shadow_deliveries,
+            "distinctSymbolCount": len(symbols),
+            "symbols": sorted(symbols),
+            "baselineP95DurationMs": percentile95(baseline_durations),
+            "candidateP95DurationMs": percentile95(candidate_durations),
+            "latestComparisonAt": str(rows[0].get("createdAt") or "") if rows else "",
+        }
+
+    @staticmethod
+    def row_payload(row: Mapping[str, object]) -> Dict[str, object]:
+        values = dict(row or {})
+        payload = json_value(values.get("payload_json"), {})
+        return {
+            "comparisonId": str(values.get("comparison_id") or ""),
+            "baselineDeploymentId": str(values.get("baseline_deployment_id") or ""),
+            "candidateDeploymentId": str(values.get("candidate_deployment_id") or ""),
+            "sourceEventId": str(values.get("source_event_id") or ""),
+            "status": str(values.get("comparison_status") or ""),
+            "factParityPct": float(values.get("fact_parity_pct") or 0.0),
+            "ruleSlotCoveragePct": float(values.get("rule_slot_coverage_pct") or 0.0),
+            "unexplainedDecisionDifferenceCount": int(values.get("unexplained_decision_difference_count") or 0),
+            "shadowDeliveryCount": int(values.get("shadow_delivery_count") or 0),
+            "payload": payload,
+            "createdAt": str(values.get("created_at") or ""),
+            "updatedAt": str(values.get("updated_at") or ""),
+        }
+
+
 class MySQLTimeSeriesProjectionOutboxStore(MySQLOperationalConnection):
     def enqueue_with_connection(
         self,

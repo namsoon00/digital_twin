@@ -1577,6 +1577,47 @@ def scoped_manifest_material_fingerprint(scope_plan: Iterable[object]) -> str:
     return hashlib.sha256(encoded.encode("utf-8")).hexdigest()
 
 
+def target_scope_manifest_fingerprint(
+    scope_plan: Iterable[object],
+    target_symbols: Iterable[object],
+) -> Dict[str, object]:
+    """Fingerprint target-owned scopes and their transitive dependencies."""
+
+    rows = _scope_plan_by_id(scope_plan)
+    targets = {
+        _symbol(value)
+        for value in target_symbols or []
+        if _symbol(value)
+    }
+    selected = {
+        scope_id
+        for scope_id in rows
+        if scope_symbol(scope_id) in targets
+    }
+    changed = True
+    while changed:
+        changed = False
+        for scope_id in tuple(selected):
+            for dependency_id in rows.get(scope_id, {}).get("dependencyScopeIds") or []:
+                if dependency_id in rows and dependency_id not in selected:
+                    selected.add(dependency_id)
+                    changed = True
+    payload = {
+        scope_id: _clean(
+            rows[scope_id].get("semanticFingerprint")
+            or rows[scope_id].get("fingerprint")
+        )
+        for scope_id in sorted(selected)
+    }
+    encoded = json.dumps(payload, ensure_ascii=False, sort_keys=True, separators=(",", ":"))
+    return {
+        "fingerprint": hashlib.sha256(encoded.encode("utf-8")).hexdigest(),
+        "scopeCount": len(payload),
+        "scopeManifest": payload,
+        "targetSymbols": sorted(targets),
+    }
+
+
 def _scope_plan_by_id(
     scope_plan: Iterable[object],
     scope_generations: Mapping[str, object] = None,

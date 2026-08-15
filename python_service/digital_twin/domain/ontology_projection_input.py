@@ -967,6 +967,43 @@ def compact_monitor_state_for_reasoning_symbol(
     return result
 
 
+def frozen_monitor_state_for_reasoning(
+    state: Mapping[str, object] = None,
+    *,
+    target_symbols: Iterable[object] = None,
+    settings: Mapping[str, object] = None,
+) -> Dict[str, object]:
+    """Freeze one bounded, replayable source packet for shadow inference.
+
+    The packet contains observations only.  It preserves the exact prior-state
+    and temporal-history inputs already selected by the active engine so an
+    asynchronous candidate cannot accidentally read a newer monitor row.
+    """
+
+    source = state if isinstance(state, Mapping) else {}
+    result = compact_monitor_state_for_reasoning_base(source, settings=settings)
+    symbol_signals = compact_symbol_external_signals_for_ontology(
+        source.get("externalSignals"),
+        target_symbols=target_symbols,
+        settings=settings,
+    )
+    if symbol_signals:
+        result.setdefault("externalSignals", {}).update(symbol_signals)
+    source_metadata = source.get("metadata") if isinstance(source.get("metadata"), Mapping) else {}
+    metadata = result.setdefault("metadata", {})
+    for key in ("previousMonitorState", "monitorStateHistory"):
+        value = source_metadata.get(key)
+        if value not in (None, "", [], {}):
+            metadata[key] = deepcopy(value)
+    metadata["reasoningSnapshotReplay"] = {
+        "status": "ready",
+        "mode": "immutable-shadow-input",
+        "immutableInput": True,
+        "snapshotGeneratedAt": str(source.get("generatedAt") or ""),
+    }
+    return result
+
+
 def compact_monitor_state_for_ontology(
     state: Mapping[str, object] = None,
     *,

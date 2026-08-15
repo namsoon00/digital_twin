@@ -1193,6 +1193,20 @@ def reasoning_engine_platform_status_payload() -> Dict[str, object]:
     return build_reasoning_engine_platform(runtime_settings()).initialize()
 
 
+def reasoning_engine_comparisons_payload(query: Dict[str, List[str]]) -> Dict[str, object]:
+    settings = runtime_settings()
+    deployment_id = str(first_query(query, "deploymentId") or "ontology-v2-shadow")
+    try:
+        limit = max(1, min(200, int(first_query(query, "limit") or 50)))
+    except (TypeError, ValueError):
+        limit = 50
+    store = stores.reasoning_engine_comparison_store(settings)
+    return {
+        "summary": store.summary(deployment_id, limit=limit),
+        "comparisons": store.latest(deployment_id, limit=limit),
+    }
+
+
 def ontology_rulebox_payload() -> Dict[str, object]:
     return ontology_repository_from_settings(runtime_settings()).rulebox_snapshot()
 
@@ -4924,6 +4938,9 @@ class DigitalTwinHandler(BaseHTTPRequestHandler):
 
         if path == "/api/reasoning-engine/status" and self.command == "GET":
             return self.send_payload(200, reasoning_engine_platform_status_payload())
+
+        if path == "/api/reasoning-engine/comparisons" and self.command == "GET":
+            return self.send_payload(200, reasoning_engine_comparisons_payload(query))
 
         if path == "/api/ontology/rulebox":
             if self.command == "GET":

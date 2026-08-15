@@ -1177,6 +1177,30 @@ MYSQL_SCHEMA = [
     ) ENGINE=InnoDB DEFAULT CHARSET=utf8mb4 COLLATE=utf8mb4_unicode_ci
     """,
     """
+    CREATE TABLE IF NOT EXISTS reasoning_engine_shadow_jobs (
+        job_id VARCHAR(191) PRIMARY KEY,
+        dedupe_key VARCHAR(191) NOT NULL,
+        scope_key VARCHAR(191) NOT NULL,
+        baseline_deployment_id VARCHAR(191) NOT NULL,
+        candidate_deployment_id VARCHAR(191) NOT NULL,
+        source_event_id VARCHAR(191) NOT NULL DEFAULT '',
+        payload_json LONGTEXT NOT NULL,
+        job_status VARCHAR(32) NOT NULL DEFAULT 'queued',
+        attempts INT NOT NULL DEFAULT 0,
+        available_at VARCHAR(40) NOT NULL,
+        lease_owner VARCHAR(191) NOT NULL DEFAULT '',
+        lease_expires_at VARCHAR(40) NOT NULL DEFAULT '',
+        last_error TEXT NOT NULL,
+        created_at VARCHAR(40) NOT NULL,
+        updated_at VARCHAR(40) NOT NULL,
+        completed_at VARCHAR(40) NOT NULL DEFAULT '',
+        UNIQUE KEY uq_reasoning_shadow_dedupe (candidate_deployment_id, dedupe_key),
+        KEY idx_reasoning_shadow_status_available (job_status, available_at),
+        KEY idx_reasoning_shadow_scope_status (candidate_deployment_id, scope_key, job_status),
+        KEY idx_reasoning_shadow_candidate_time (candidate_deployment_id, created_at)
+    ) ENGINE=InnoDB DEFAULT CHARSET=utf8mb4 COLLATE=utf8mb4_unicode_ci
+    """,
+    """
     CREATE TABLE IF NOT EXISTS symbol_universe (
         market VARCHAR(64) NOT NULL,
         symbol VARCHAR(64) NOT NULL,

@@ -23,7 +23,7 @@ from .operational_common import json_dumps
 from .settings import utc_now
 
 
-CACHE_PAYLOAD_VERSION = "ontology-graph-assembly-cache-v1"
+CACHE_PAYLOAD_VERSION = "ontology-graph-assembly-cache-v2"
 
 
 def _timestamp_after(seconds: float) -> str:
@@ -76,6 +76,7 @@ class MySQLOntologyGraphAssemblyCacheStore(MySQLOperationalConnection):
                 "payloadBytes": int(row.get("payload_bytes") or 0),
                 "graph": graph,
                 "persistenceGraph": persistence_graph,
+                "runtimeContextPacket": payload.get("runtimeContextPacket") or {},
             }
         except Exception as error:  # noqa: BLE001 - cache failure must not block a live TypeDB cycle.
             return {"status": "miss", "reason": str(error)[:180]}
@@ -88,6 +89,7 @@ class MySQLOntologyGraphAssemblyCacheStore(MySQLOperationalConnection):
         ttl_seconds: float,
         max_entries: int,
         max_payload_bytes: int,
+        runtime_context_packet: Dict[str, object] = None,
     ) -> Dict[str, object]:
         key = str(cache_key or "").strip()
         if not key or ttl_seconds <= 0:
@@ -97,6 +99,7 @@ class MySQLOntologyGraphAssemblyCacheStore(MySQLOperationalConnection):
                 "version": CACHE_PAYLOAD_VERSION,
                 "graph": serialize_portfolio_ontology(graph),
                 "persistenceGraph": serialize_portfolio_ontology(persistence_graph),
+                "runtimeContextPacket": dict(runtime_context_packet or {}),
             }
             payload_json = json_dumps(payload)
         except Exception as error:  # noqa: BLE001 - cache serialisation is never a correctness dependency.

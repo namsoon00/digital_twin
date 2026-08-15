@@ -818,6 +818,7 @@ class OntologyReasoningRunner:
         rulebox_prewarm_state_writer: Callable = None,
         maintenance_yield_state_probe: Callable = None,
         market_observation_completion_recorder: Callable = None,
+        reasoning_shadow_scheduler=None,
     ):
         self.event_reader = event_reader
         self.cursor_store = cursor_store
@@ -843,6 +844,7 @@ class OntologyReasoningRunner:
         self.rulebox_prewarm_state_writer = rulebox_prewarm_state_writer
         self.maintenance_yield_state_probe = maintenance_yield_state_probe
         self.market_observation_completion_recorder = market_observation_completion_recorder
+        self.reasoning_shadow_scheduler = reasoning_shadow_scheduler
 
     def refresh_operational_settings(self, settings: Dict[str, object] = None) -> Dict[str, object]:
         """Apply safe scheduling changes between persistent-sidecar turns.
@@ -5611,6 +5613,16 @@ class OntologyReasoningRunner:
                 for item in projection_failures[:8]
                 if isinstance(item, dict)
             ]
+        reasoning_shadow = result.get("reasoningShadow")
+        if isinstance(reasoning_shadow, dict):
+            summary["reasoningShadow"] = {
+                key: reasoning_shadow.get(key)
+                for key in [
+                    "status", "saved", "jobId", "candidateDeploymentId",
+                    "symbolCount", "reason",
+                ]
+                if key in reasoning_shadow
+            }
         failure_yield = result.get("mailboxFailureYield")
         if isinstance(failure_yield, dict):
             summary["mailboxFailureYield"] = {
@@ -6620,6 +6632,22 @@ class OntologyReasoningRunner:
         else:
             maintenance = self.run_maintenance_if_due()
         stage_timing["maintenanceMs"] = int((time.perf_counter() - maintenance_started) * 1000)
+        shadow_schedule = {"status": "not-configured", "saved": False}
+        if self.reasoning_shadow_scheduler is not None:
+            try:
+                shadow_schedule = dict(self.reasoning_shadow_scheduler.schedule(
+                    runner,
+                    served_requests,
+                    served_symbols,
+                    reasoning_context,
+                    int(stage_timing.get("monitorAndProjectionMs") or 0),
+                ) or {})
+            except Exception as error:  # noqa: BLE001 - V2 must never delay or invalidate V1 delivery.
+                shadow_schedule = {
+                    "status": "enqueue-error",
+                    "saved": False,
+                    "reason": str(error)[:180],
+                }
         status = "partial" if blocked_request_ids or mailbox_ack_error else "ok"
         post_mailbox = self.mailbox_summary()
         post_mailbox.update({
@@ -6697,6 +6725,7 @@ class OntologyReasoningRunner:
             "mailboxAcknowledgeError": mailbox_ack_error,
             "maintenance": maintenance,
             "stageTiming": stage_timing,
+            "reasoningShadow": shadow_schedule,
             "deferredReason": (
                 "검증 근거가 같은 계정 월드의 새 ABox/InferenceBox 세대에 정렬될 때까지 해당 리서치 요청을 유지합니다."
                 if blocked_request_ids

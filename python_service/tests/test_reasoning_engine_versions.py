@@ -1,5 +1,6 @@
 import unittest
 
+from digital_twin.application.reasoning_engine_platform import ReasoningEnginePlatformService
 from digital_twin.domain.reasoning_engine_versions import (
     EngineReleaseBundle,
     ReasoningEngineDescriptor,
@@ -39,6 +40,45 @@ class ReasoningEngineVersionTests(unittest.TestCase):
             ("fact-parity-incomplete", "shadow-delivery-detected"),
             promotion_blockers(descriptor(), {"status": "ready"}, unsafe),
         )
+
+    def test_history_gate_requires_coverage_freshness_and_zero_delivery(self):
+        class Registry:
+            def get(self, deployment_id):
+                return {
+                    "deploymentId": deployment_id,
+                    "status": "shadow",
+                    "health": {"status": "ready"},
+                }
+
+        class Comparisons:
+            def summary(self, deployment_id, limit=200):
+                del deployment_id, limit
+                return {
+                    "sampleCount": 20,
+                    "distinctSymbolCount": 5,
+                    "minimumFactParityPct": 100.0,
+                    "minimumRuleSlotCoveragePct": 100.0,
+                    "unexplainedDecisionDifferenceCount": 0,
+                    "shadowDeliveryCount": 0,
+                    "statusCounts": {"equivalent": 20},
+                    "baselineP95DurationMs": 100,
+                    "candidateP95DurationMs": 120,
+                    "latestComparisonAt": "2099-01-01T00:00:00Z",
+                }
+
+        platform = ReasoningEnginePlatformService(
+            Registry(),
+            {
+                "reasoningEnginePromotionMinimumComparisons": "20",
+                "reasoningEnginePromotionMinimumSymbols": "5",
+            },
+            comparison_store=Comparisons(),
+        )
+
+        readiness = platform.promotion_readiness("ontology-v2-shadow")
+
+        self.assertTrue(readiness["ready"])
+        self.assertEqual([], readiness["blockers"])
 
 
 if __name__ == "__main__":

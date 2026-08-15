@@ -1134,15 +1134,64 @@ def time_series_platform_command(args) -> int:
 
 def reasoning_engine_platform_command(args) -> int:
     from .reasoning_engine_factory import build_reasoning_engine_platform
+    from .service_factory import build_reasoning_engine_shadow_runner
 
-    platform = build_reasoning_engine_platform(runtime_settings())
+    configured = runtime_settings()
+    platform = build_reasoning_engine_platform(configured)
     state = platform.initialize()
     if args.reasoning_engine_action == "status":
         print(json.dumps(state, ensure_ascii=False))
         return 0
-    if args.reasoning_engine_action == "rollback":
-        print(json.dumps(platform.rollback(), ensure_ascii=False))
+    if args.reasoning_engine_action == "shadow-once":
+        runner = build_reasoning_engine_shadow_runner(
+            configured,
+            worker_id=getattr(args, "worker_id", ""),
+        )
+        print(json.dumps(runner.run_once(), ensure_ascii=False))
         return 0
+    if args.reasoning_engine_action == "shadow-watch":
+        build_reasoning_engine_shadow_runner(
+            configured,
+            worker_id=getattr(args, "worker_id", ""),
+        ).watch()
+        return 0
+    if args.reasoning_engine_action == "comparisons":
+        rows = platform.comparison_store.latest(
+            args.deployment_id,
+            limit=args.limit,
+        ) if platform.comparison_store is not None else []
+        print(json.dumps({
+            "summary": platform.comparison_store.summary(args.deployment_id, limit=args.limit)
+            if platform.comparison_store is not None else {},
+            "comparisons": rows,
+        }, ensure_ascii=False))
+        return 0
+    if args.reasoning_engine_action == "candidate":
+        result = platform.mark_candidate(args.deployment_id)
+        print(json.dumps(result, ensure_ascii=False))
+        return 0 if result.get("status") == "candidate" else 2
+    if args.reasoning_engine_action == "promote":
+        result = platform.promote_from_history(args.deployment_id)
+        if result.get("status") == "promoted":
+            control = dict(result.get("control") or {})
+            save_runtime_settings({
+                "reasoningEngineActiveDeploymentId": control.get("active_deployment_id") or args.deployment_id,
+                "reasoningEngineDeliveryDeploymentId": control.get("delivery_deployment_id") or args.deployment_id,
+                "reasoningEngineCandidateDeploymentId": control.get("candidate_deployment_id") or "",
+            })
+        print(json.dumps(result, ensure_ascii=False))
+        return 0 if result.get("status") == "promoted" else 2
+    if args.reasoning_engine_action == "rollback":
+        result = platform.rollback()
+        if result.get("status") == "rolled-back":
+            control = dict(result.get("control") or {})
+            save_runtime_settings({
+                "reasoningEngineActiveDeploymentId": control.get("active_deployment_id") or "ontology-v1-active",
+                "reasoningEngineDeliveryDeploymentId": control.get("delivery_deployment_id") or "ontology-v1-active",
+                "reasoningEngineCandidateDeploymentId": control.get("candidate_deployment_id") or "",
+            })
+        print(json.dumps(result, ensure_ascii=False))
+        return 0 if result.get("status") == "rolled-back" else 2
     return 1
 
 
@@ -2001,6 +2050,16 @@ def build_parser() -> argparse.ArgumentParser:
     reasoning_engine = subparsers.add_parser("reasoning-engine", help="Manage versioned reasoning-engine deployments")
     reasoning_engine_actions = reasoning_engine.add_subparsers(dest="reasoning_engine_action", required=True)
     reasoning_engine_actions.add_parser("status")
+    reasoning_shadow_once = reasoning_engine_actions.add_parser("shadow-once")
+    reasoning_shadow_once.add_argument("--worker-id", default="")
+    reasoning_shadow_watch = reasoning_engine_actions.add_parser("shadow-watch")
+    reasoning_shadow_watch.add_argument("--worker-id", default="")
+    reasoning_comparisons = reasoning_engine_actions.add_parser("comparisons")
+    reasoning_comparisons.add_argument("--deployment-id", default="ontology-v2-shadow")
+    reasoning_comparisons.add_argument("--limit", type=int, default=50)
+    for action_name in ["candidate", "promote"]:
+        action = reasoning_engine_actions.add_parser(action_name)
+        action.add_argument("--deployment-id", default="ontology-v2-shadow")
     reasoning_engine_actions.add_parser("rollback")
     reasoning_engine.set_defaults(func=reasoning_engine_platform_command)
 

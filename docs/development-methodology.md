@@ -16,7 +16,16 @@ This project uses a local-first, DDD-oriented, event-driven architecture. Future
 - Treat reasoning engines as immutable versioned deployments. TBox, RuleBox,
   prompt, feature-set, graph-store, and time-series bindings form one release
   bundle. Only the delivery deployment may emit notifications; shadow and
-  candidate deployments must have a hard zero-delivery guarantee.
+  candidate deployments must have a hard zero-delivery guarantee. Freeze the
+  candidate RuleBox fingerprint after its first successful comparison and
+  never combine comparison history from different release fingerprints under
+  one deployment ID.
+- Make replay inputs identical before comparing engine outputs. The active and
+  shadow engines must consume the same secret-free ontology runtime context,
+  original graph-input symbols, source observation clock, and temporal feature
+  snapshot. A material fingerprint may omit polling provenance; a reusable
+  graph cache key may not omit fields that affect freshness, session, flow, or
+  data-quality facts.
 - Do not pass API keys, Telegram tokens, client secrets, or raw account credentials through events, docs, tests, or git-tracked files.
 - Keep old top-level Python modules only as compatibility re-export modules. New code should import from the layer package directly.
 - Build investment-analysis features ontology-first. New investment facts, relationships, semantic rules, AI context, and notification triggers must enter the TBox/ABox/TypeDB schema function rule/InferenceBox flow before they influence user-facing investment judgement.

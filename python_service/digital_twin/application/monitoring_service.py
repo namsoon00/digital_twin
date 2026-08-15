@@ -1,14 +1,18 @@
 import inspect
 import uuid
+from copy import deepcopy
 from datetime import datetime, timedelta, timezone
 from typing import Callable, Dict, Iterable, List
 
 from ..domain.accounts import AccountConfig
 from ..domain.events import alerts_detected_event, monitoring_cycle_completed_event, snapshot_collected_event
-from ..domain.ontology_projection_input import compact_monitor_state_for_ontology
+from ..domain.ontology_projection_input import (
+    compact_monitor_state_for_ontology,
+    frozen_monitor_state_for_reasoning,
+)
 from ..domain.ontology_projection_status import VERIFIED_MONITOR_SNAPSHOT_QUEUED
 from ..domain.message_types import PORTFOLIO_ONTOLOGY_SIGNAL
-from ..domain.portfolio import AccountSnapshot, AlertEvent
+from ..domain.portfolio import AccountSnapshot, AlertEvent, account_snapshot_from_monitor_state
 from ..domain.repositories import MonitorAccountJob, MonitorAccountJobRepository, MonitorStateRepository, MonitoringCycleRecorder, OntologyProjectionRecorder, SnapshotMonitor
 
 
@@ -32,6 +36,7 @@ class MonitorRunner:
         worker_id: str = "",
         progress_callback: Callable[[str, Dict[str, object]], None] = None,
         source_snapshot_replay: bool = False,
+        projection_symbol_filters_by_account: Dict[str, Iterable[str]] = None,
         portfolio_lifecycle_observer=None,
     ):
         self.accounts = list(accounts)
@@ -61,6 +66,17 @@ class MonitorRunner:
         # mode so a stale marker can never make the ordinary monitor skip its
         # source commit and the resulting verified reasoning request.
         self.source_snapshot_replay = bool(source_snapshot_replay)
+        self.projection_symbol_filters_by_account = {
+            str(account_id or ""): {
+                str(symbol or "").upper().strip()
+                for symbol in symbols or []
+                if str(symbol or "").strip()
+            }
+            for account_id, symbols in dict(
+                projection_symbol_filters_by_account or {}
+            ).items()
+            if str(account_id or "")
+        }
         self.portfolio_lifecycle_observer = portfolio_lifecycle_observer
         # The reasoning worker advances its event cursor only after this
         # projection has a usable TypeDB result.
@@ -68,6 +84,9 @@ class MonitorRunner:
         self.last_cycle_record_result = None
         self.last_delivery_guard_result: Dict[str, object] = {}
         self.last_portfolio_lifecycle_results: Dict[str, Dict[str, object]] = {}
+        self.last_detected_alert_events: List[AlertEvent] = []
+        self.last_reasoning_source_states: Dict[str, Dict[str, object]] = {}
+        self.last_projection_runtime_contexts: Dict[str, Dict[str, object]] = {}
 
     def run_once(
         self,
@@ -107,6 +126,9 @@ class MonitorRunner:
         delivery_guard=None,
     ) -> List[AlertEvent]:
         self.last_ontology_projection_results = {}
+        self.last_detected_alert_events = []
+        self.last_reasoning_source_states = {}
+        self.last_projection_runtime_contexts = {}
         self.progress("monitor.start", accountCount=len(self.accounts), dryRun=bool(dry_run), force=bool(force))
         all_events: List[AlertEvent] = []
         snapshots = []
@@ -340,11 +362,35 @@ class MonitorRunner:
             current_at = str(snapshot.generated_at or "")
             if persisted_at and current_at and persisted_at < current_at:
                 previous = persisted_previous
-        snapshot.metadata["previousMonitorState"] = self.compact_previous_state(previous)
-        snapshot.metadata["monitorStateHistory"] = self.compact_monitor_history(
-            self.load_snapshot_history(snapshot.account_id)
+        immutable_shadow_input = bool(
+            self.source_snapshot_replay
+            and isinstance(replay, dict)
+            and replay.get("immutableInput")
         )
+        if not immutable_shadow_input:
+            snapshot.metadata["previousMonitorState"] = self.compact_previous_state(previous)
+            snapshot.metadata["monitorStateHistory"] = self.compact_monitor_history(
+                self.load_snapshot_history(snapshot.account_id)
+            )
         snapshot.metadata.setdefault("ontology", {})["previousStateAvailable"] = bool(previous)
+        if immutable_shadow_input:
+            # ``FrozenReasoningSnapshotSource`` already contains the exact
+            # packet consumed by V1. Compacting it a second time can trim a
+            # bounded history or target-scoped collection again, making V2's
+            # facts differ even though the durable input is unchanged.
+            frozen_source_state = snapshot.to_monitor_state()
+        else:
+            frozen_source_state = frozen_monitor_state_for_reasoning(
+                snapshot.to_monitor_state(),
+                target_symbols=allowed_symbols,
+                settings=getattr(self.monitor, "settings", None),
+            )
+        self.last_reasoning_source_states[snapshot.account_id] = frozen_source_state
+        if self.source_snapshot_replay and not immutable_shadow_input:
+            normalized_snapshot = account_snapshot_from_monitor_state(frozen_source_state)
+            if normalized_snapshot is None:
+                raise RuntimeError("The immutable reasoning source packet cannot be rehydrated")
+            snapshot = normalized_snapshot
         # Dry-run and the isolated reasoning replay still execute the exact
         # TypeDB path.  The ordinary realtime monitor, however, persists the
         # verified source snapshot first and leaves the generation to the
@@ -354,9 +400,13 @@ class MonitorRunner:
         projection_enabled = self.ontology_projection_enabled or dry_run
         if projection_enabled:
             self.progress("ontology_projection.start", accountId=account.account_id)
+            projection_symbols = self.projection_symbol_filters_by_account.get(
+                account.account_id,
+                allowed_symbols,
+            )
             self.record_ontology_projection(
                 snapshot,
-                target_symbols=allowed_symbols,
+                target_symbols=projection_symbols,
                 reasoning_context=reasoning_context,
             )
             projection = snapshot.metadata.get("ontology", {}).get("projection") if isinstance(snapshot.metadata.get("ontology"), dict) else {}
@@ -416,6 +466,7 @@ class MonitorRunner:
             )
             self.progress("events.filtered", accountId=account.account_id, eventCount=len(events), symbolCount=len(allowed_symbols))
         detected_events = list(events)
+        self.last_detected_alert_events.extend(detected_events)
         events = self.monitor.apply_cadence(events, self.store, force=force)
         self.record_investment_alert_pipeline(
             snapshot,
@@ -739,6 +790,16 @@ class MonitorRunner:
 
                 kwargs["progress_callback"] = projection_progress
             recorder(snapshot, **kwargs)
+            contexts = getattr(
+                self.ontology_projection_recorder,
+                "last_runtime_contexts",
+                {},
+            ) or {}
+            runtime_context = contexts.get(snapshot.account_id)
+            if isinstance(runtime_context, dict):
+                self.last_projection_runtime_contexts[snapshot.account_id] = deepcopy(
+                    runtime_context
+                )
         except Exception as error:  # noqa: BLE001 - graph persistence must not block monitoring.
             result = {"saved": False, "status": "error", "reason": str(error)[:180]}
             snapshot.metadata.setdefault("ontology", {})["projection"] = result

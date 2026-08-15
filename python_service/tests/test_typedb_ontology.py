@@ -468,14 +468,161 @@ class TypeDBOntologyRepositoryTests(unittest.TestCase):
         first_graph, first_persistence, first = recorder.build_graph_assembly(snapshot, catalog)
         first_graph.worldview["callerMutation"] = True
         first_persistence.worldview["callerMutation"] = True
-        # A polling timestamp is provenance, not a changed market fact.
-        snapshot.generated_at = "2026-07-23T00:01:00Z"
         second_graph, second_persistence, second = recorder.build_graph_assembly(snapshot, catalog)
 
         self.assertEqual("miss", first["status"])
         self.assertEqual("hit", second["status"])
         self.assertNotIn("callerMutation", second_graph.worldview)
         self.assertNotIn("callerMutation", second_persistence.worldview)
+
+    def test_projection_graph_cache_invalidates_when_observation_clock_changes(self):
+        class Repository:
+            store_key = "typedb"
+            address = "observation-clock-cache-unit-test"
+            database = "observation-clock-cache-unit-test"
+
+            def active_tbox_metadata(self):
+                return {"status": "ok", "fingerprint": "observation-clock-tbox"}
+
+        snapshot = AccountSnapshot(
+            "main",
+            "메인",
+            "toss",
+            "live",
+            "ok",
+            "2026-07-23T00:00:00Z",
+            PortfolioSummary(total=1000, invested=1000, cash=0, markets=[], sectors=[], concentration=0),
+            positions=[Position(
+                "AAPL",
+                "Apple",
+                market="US",
+                currency="USD",
+                quantity=1,
+                current_price=100,
+                market_value=100,
+                market_value_krw=140000,
+            )],
+        )
+        catalog = {
+            "ruleboxRulesHash": "observation-clock-rule-catalog",
+            "rules": rulebox_rules_to_payload(default_graph_inference_rules()),
+        }
+        recorder = PortfolioOntologyProjectionRecorder(
+            Repository(),
+            settings={
+                "ontologyProjectionGraphCacheEnabled": "1",
+                "ontologyProjectionGraphCacheTtlSeconds": "60",
+                "ontologyProjectionGraphCacheMaxEntries": "4",
+            },
+        )
+        with SHARED_PORTFOLIO_GRAPH_ASSEMBLY_CACHE.lock:
+            SHARED_PORTFOLIO_GRAPH_ASSEMBLY_CACHE.entries.clear()
+
+        _, _, first = recorder.build_graph_assembly(snapshot, catalog)
+        snapshot.generated_at = "2026-07-23T00:01:00Z"
+        _, _, second = recorder.build_graph_assembly(snapshot, catalog)
+
+        self.assertEqual("miss", first["status"])
+        self.assertEqual("miss", second["status"])
+
+    def test_projection_graph_cache_invalidates_when_runtime_context_changes(self):
+        class Repository:
+            store_key = "typedb"
+            address = "runtime-context-cache-unit-test"
+            database = "runtime-context-cache-unit-test"
+
+            def active_tbox_metadata(self):
+                return {"status": "ok", "fingerprint": "runtime-context-tbox"}
+
+        snapshot = AccountSnapshot(
+            "main",
+            "메인",
+            "toss",
+            "live",
+            "ok",
+            "2026-07-23T00:00:00Z",
+            PortfolioSummary(total=1000, invested=1000, cash=0, markets=[], sectors=[], concentration=0),
+            positions=[Position(
+                "AAPL",
+                "Apple",
+                market="US",
+                currency="USD",
+                quantity=1,
+                current_price=100,
+                market_value=100,
+                market_value_krw=140000,
+            )],
+        )
+        catalog = {
+            "ruleboxRulesHash": "runtime-context-rule-catalog",
+            "rules": rulebox_rules_to_payload(default_graph_inference_rules()),
+        }
+        recorder = PortfolioOntologyProjectionRecorder(
+            Repository(),
+            settings={
+                "ontologyProjectionGraphCacheEnabled": "1",
+                "ontologyProjectionGraphCacheTtlSeconds": "60",
+                "ontologyProjectionGraphCacheMaxEntries": "4",
+            },
+        )
+        with SHARED_PORTFOLIO_GRAPH_ASSEMBLY_CACHE.lock:
+            SHARED_PORTFOLIO_GRAPH_ASSEMBLY_CACHE.entries.clear()
+
+        with patch.object(
+            recorder,
+            "runtime_context",
+            side_effect=[
+                {"investorFlows": {"AAPL": {"foreignNetVolume": 10}}},
+                {"investorFlows": {"AAPL": {"foreignNetVolume": 20}}},
+            ],
+        ):
+            _, _, first = recorder.build_graph_assembly(snapshot, catalog)
+            _, _, second = recorder.build_graph_assembly(snapshot, catalog)
+
+        self.assertEqual("miss", first["status"])
+        self.assertEqual("miss", second["status"])
+
+    def test_projection_runtime_context_uses_the_same_filtered_packet_as_shadow_replay(self):
+        class Repository:
+            store_key = "typedb"
+
+            def active_tbox_metadata(self):
+                return {"status": "ok", "fingerprint": "runtime-context-boundary-tbox"}
+
+        snapshot = AccountSnapshot(
+            "main",
+            "메인",
+            "toss",
+            "live",
+            "ok",
+            "2026-07-23T00:00:00Z",
+            PortfolioSummary(total=1000, invested=1000, cash=0, markets=[], sectors=[], concentration=0),
+            positions=[Position(
+                "AAPL",
+                "Apple",
+                market="US",
+                currency="USD",
+                quantity=1,
+                current_price=100,
+                market_value=100,
+                market_value_krw=140000,
+            )],
+        )
+        recorder = PortfolioOntologyProjectionRecorder(
+            Repository(),
+            settings={
+                "investmentStrategyProfile": "aggressive",
+                "temporalWindowPeriods": "15m,1h,1d",
+                "typedbAddress": "127.0.0.1:1729",
+            },
+        )
+
+        context = recorder.runtime_context(snapshot)
+
+        self.assertEqual("aggressive", context["settings"]["investmentStrategyProfile"])
+        self.assertEqual("15m,1h,1d", context["settings"]["temporalWindowPeriods"])
+        self.assertNotIn("typedbAddress", context["settings"])
+        self.assertEqual(context, recorder.last_runtime_contexts["main"])
 
     def test_projection_graph_assembly_reuses_exact_persistent_cache_after_worker_restart(self):
         class Repository:
@@ -499,10 +646,16 @@ class TypeDBOntologyRepositoryTests(unittest.TestCase):
                     "ageMs": 1,
                     "graph": deepcopy(value[0]),
                     "persistenceGraph": deepcopy(value[1]),
+                    "runtimeContextPacket": deepcopy(value[2]),
                 }
 
             def put(self, key, graph, persistence_graph, *_args):
-                self.rows[key] = (deepcopy(graph), deepcopy(persistence_graph))
+                packet = _args[-1] if _args and isinstance(_args[-1], dict) else {}
+                self.rows[key] = (
+                    deepcopy(graph),
+                    deepcopy(persistence_graph),
+                    deepcopy(packet),
+                )
                 return {"status": "stored"}
 
         snapshot = AccountSnapshot(
@@ -560,6 +713,12 @@ class TypeDBOntologyRepositoryTests(unittest.TestCase):
         self.assertEqual("miss", first_result["status"])
         self.assertEqual("hit", restarted_result["status"])
         self.assertEqual("persistent", restarted_result["cacheLayer"])
+        self.assertTrue(durable_cache.rows)
+        self.assertTrue(next(iter(durable_cache.rows.values()))[2])
+        self.assertEqual(
+            first.last_runtime_contexts.get("main"),
+            restarted.last_runtime_contexts.get("main"),
+        )
         graph.worldview["callerMutation"] = True
         self.assertNotIn("callerMutation", persistence_graph.worldview)
 

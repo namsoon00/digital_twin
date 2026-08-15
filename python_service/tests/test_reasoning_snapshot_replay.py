@@ -1,4 +1,5 @@
 import unittest
+from copy import deepcopy
 from datetime import datetime, timezone
 
 from digital_twin.application.monitoring_service import MonitorRunner
@@ -9,6 +10,7 @@ from digital_twin.domain.portfolio import AlertEvent, AccountSnapshot, Portfolio
 from digital_twin.domain.repositories import MonitoringCycleRecordResult
 from digital_twin.infrastructure.ontology_projection import PortfolioOntologyProjectionRecorder
 from digital_twin.infrastructure.reasoning_snapshot_source import LatestMonitorSnapshotReasoningSource
+from digital_twin.infrastructure.service_factory import FrozenReasoningSnapshotSource
 
 
 class SnapshotStore:
@@ -246,6 +248,98 @@ class ReasoningSnapshotReplayTests(unittest.TestCase):
         )
 
         self.assertEqual(95.0, monitor.previous["positions"]["AAPL"]["current_price"])
+
+    def test_immutable_shadow_input_is_not_compacted_a_second_time(self):
+        state = monitor_state()
+        state["metadata"] = {
+            "ontology": {"previousStateAvailable": True},
+            "monitorStateHistory": [
+                {"generatedAt": "2026-07-28T%02d:00:00Z" % hour}
+                for hour in range(12)
+            ],
+            "reasoningSnapshotReplay": {
+                "status": "ready",
+                "mode": "immutable-shadow-input",
+                "immutableInput": True,
+                "snapshotGeneratedAt": state["generatedAt"],
+            },
+        }
+        immutable_state = deepcopy(state)
+        runner = MonitorRunner(
+            [account()],
+            store=SnapshotStore(monitor_state("2026-07-29T00:00:00Z")),
+            monitor=EmptyMonitor(),
+            snapshot_builder=lambda _account, reasoning_context=None: account_snapshot_from_monitor_state(
+                deepcopy(immutable_state)
+            ),
+            event_sender=lambda *_args, **_kwargs: None,
+            cycle_recorder=CapturingCycleRecorder(),
+            ontology_projection_enabled=False,
+            source_snapshot_replay=True,
+        )
+
+        runner.run_once(symbol_filter=["AAPL"])
+
+        replayed = runner.last_reasoning_source_states["acct"]
+        self.assertEqual(
+            12,
+            len((replayed.get("metadata") or {}).get("monitorStateHistory") or []),
+        )
+        self.assertTrue(
+            ((replayed.get("metadata") or {}).get("reasoningSnapshotReplay") or {}).get(
+                "immutableInput"
+            )
+        )
+
+    def test_shadow_source_marks_the_v1_packet_as_immutable(self):
+        source = FrozenReasoningSnapshotSource({"acct": monitor_state()})
+
+        snapshot = source(account())
+
+        replay = snapshot.metadata["reasoningSnapshotReplay"]
+        self.assertEqual("immutable-shadow-input", replay["mode"])
+        self.assertTrue(replay["immutableInput"])
+        self.assertEqual(snapshot.generated_at, replay["snapshotGeneratedAt"])
+
+    def test_shadow_projection_replays_v1_input_symbols_not_expanded_output_symbols(self):
+        captured = []
+
+        class ProjectionRecorder:
+            def __init__(self):
+                self.last_runtime_contexts = {}
+
+            def record_snapshot(self, snapshot, target_symbols=None, **_kwargs):
+                captured.append(list(target_symbols or []))
+                self.last_runtime_contexts[snapshot.account_id] = {
+                    "investorFlows": {"AAPL": {"foreignNetVolume": 10}},
+                }
+                snapshot.metadata.setdefault("ontology", {})["projection"] = {
+                    "saved": True,
+                    "status": "ok",
+                }
+
+        runner = MonitorRunner(
+            [account()],
+            store=SnapshotStore(monitor_state()),
+            monitor=EmptyMonitor(),
+            snapshot_builder=lambda _account: account_snapshot_from_monitor_state(
+                monitor_state()
+            ),
+            event_sender=lambda *_args, **_kwargs: None,
+            ontology_projection_recorder=ProjectionRecorder(),
+            ontology_projection_enabled=True,
+            projection_symbol_filters_by_account={"acct": ["AAPL"]},
+        )
+
+        runner.run_once(dry_run=True, symbol_filter=["MSFT"])
+
+        self.assertEqual([["AAPL"]], captured)
+        self.assertEqual(
+            10,
+            runner.last_projection_runtime_contexts["acct"]["investorFlows"]["AAPL"][
+                "foreignNetVolume"
+            ],
+        )
 
     def test_normal_monitor_ignores_a_stale_replay_marker_and_commits_a_source_snapshot(self):
         snapshot = AccountSnapshot(

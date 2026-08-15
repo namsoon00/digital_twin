@@ -46,6 +46,8 @@ from .mysql_operational import (
     MySQLRuntimeSettingsStore,
     MySQLSymbolUniverseStore,
     MySQLReasoningEngineRegistryStore,
+    MySQLReasoningEngineComparisonStore,
+    MySQLReasoningShadowJobStore,
     MySQLTemporalFeatureSnapshotStore,
     MySQLTimeSeriesBackendRegistryStore,
     MySQLTimeSeriesProjectionOutboxStore,
@@ -219,6 +221,14 @@ def temporal_feature_snapshot_store(settings: Dict[str, str] = None):
 
 def reasoning_engine_registry_store(settings: Dict[str, str] = None):
     return MySQLReasoningEngineRegistryStore(configured_settings(settings))
+
+
+def reasoning_engine_comparison_store(settings: Dict[str, str] = None):
+    return MySQLReasoningEngineComparisonStore(configured_settings(settings))
+
+
+def reasoning_shadow_job_store(settings: Dict[str, str] = None):
+    return MySQLReasoningShadowJobStore(configured_settings(settings))
 
 
 def market_observation_reasoning_anchor_store(settings: Dict[str, str] = None):

@@ -54,7 +54,9 @@ from .mysql_ontology_inference_detail_outbox import MySQLOntologyInferenceDetail
 from .mysql_reasoning_mailbox import MySQLOntologyReasoningMailboxStore
 from .mysql_investment_domain import MySQLInvestmentDomainStore
 from .mysql_versioned_runtime import (
+    MySQLReasoningEngineComparisonStore,
     MySQLReasoningEngineRegistryStore,
+    MySQLReasoningShadowJobStore,
     MySQLTemporalFeatureSnapshotStore,
     MySQLTimeSeriesBackendRegistryStore,
     MySQLTimeSeriesProjectionOutboxStore,

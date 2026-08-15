@@ -1,5 +1,6 @@
 """Versioned reasoning-engine release registration and guarded switching."""
 
+from datetime import datetime, timezone
 from typing import Dict, Iterable, Mapping
 
 from ..domain.reasoning_engine_versions import (
@@ -11,9 +12,25 @@ from ..domain.time_series_storage import TEMPORAL_FEATURE_SET_VERSION
 
 
 class ReasoningEnginePlatformService:
-    def __init__(self, registry, settings=None):
+    def __init__(self, registry, settings=None, comparison_store=None, shadow_queue=None):
         self.registry = registry
         self.settings = dict(settings or {})
+        self.comparison_store = comparison_store
+        self.shadow_queue = shadow_queue
+
+    def int_setting(self, key: str, fallback: int, lower: int = 0, upper: int = 100000) -> int:
+        try:
+            value = int(float(str(self.settings.get(key) or fallback)))
+        except (TypeError, ValueError):
+            value = fallback
+        return max(lower, min(upper, value))
+
+    def float_setting(self, key: str, fallback: float, lower: float = 0.0, upper: float = 100000.0) -> float:
+        try:
+            value = float(str(self.settings.get(key) or fallback))
+        except (TypeError, ValueError):
+            value = fallback
+        return max(lower, min(upper, value))
 
     def descriptors(self):
         from ..domain.ontology_rulebox_release_manifest import RULEBOX_RELEASE_MANIFEST_VERSION
@@ -81,10 +98,133 @@ class ReasoningEnginePlatformService:
             if candidate not in known or candidate in {active, delivery}:
                 candidate = ""
             control = self.registry.set_control(active, delivery, candidate)
-        return {
+        response = {
             "control": control.to_dict(),
             "deployments": self.registry.list(),
         }
+        candidate_id = str(control.candidate_deployment_id or "")
+        if self.shadow_queue is not None:
+            response["shadowQueue"] = self.shadow_queue.summary()
+        if self.comparison_store is not None and candidate_id:
+            response["comparisonSummary"] = self.comparison_store.summary(
+                candidate_id,
+                limit=self.int_setting("reasoningEnginePromotionComparisonLookback", 200, 1, 2000),
+            )
+            response["promotionReadiness"] = self.promotion_readiness(candidate_id)
+        return response
+
+    @staticmethod
+    def timestamp(value: object):
+        try:
+            parsed = datetime.fromisoformat(str(value or "").replace("Z", "+00:00"))
+        except ValueError:
+            return None
+        if parsed.tzinfo is None:
+            parsed = parsed.replace(tzinfo=timezone.utc)
+        return parsed.astimezone(timezone.utc)
+
+    def promotion_readiness(self, deployment_id: str) -> Dict[str, object]:
+        row = self.registry.get(deployment_id)
+        summary = (
+            self.comparison_store.summary(
+                deployment_id,
+                limit=self.int_setting("reasoningEnginePromotionComparisonLookback", 200, 1, 2000),
+            )
+            if self.comparison_store is not None
+            else {}
+        )
+        blockers = []
+        if str(row.get("status") or "") not in {"shadow", "candidate"}:
+            blockers.append("engine-not-shadow-or-candidate")
+        health = dict(row.get("health") or {})
+        if str(health.get("status") or "").lower() not in {"ready", "healthy"}:
+            blockers.append("engine-unhealthy")
+        if int(summary.get("sampleCount") or 0) < self.int_setting(
+            "reasoningEnginePromotionMinimumComparisons", 20, 1, 10000
+        ):
+            blockers.append("insufficient-comparison-samples")
+        if int(summary.get("distinctSymbolCount") or 0) < self.int_setting(
+            "reasoningEnginePromotionMinimumSymbols", 5, 1, 10000
+        ):
+            blockers.append("insufficient-symbol-coverage")
+        if float(summary.get("minimumFactParityPct") or 0.0) < 100.0:
+            blockers.append("fact-parity-incomplete")
+        if float(summary.get("minimumRuleSlotCoveragePct") or 0.0) < 100.0:
+            blockers.append("rule-slot-coverage-incomplete")
+        if int(summary.get("unexplainedDecisionDifferenceCount") or 0) > 0:
+            blockers.append("unexplained-decision-differences")
+        if int(summary.get("shadowDeliveryCount") or 0) > 0:
+            blockers.append("shadow-delivery-detected")
+        if int((summary.get("statusCounts") or {}).get("candidate-failed") or 0) > 0:
+            blockers.append("candidate-execution-failures")
+        baseline_p95 = int(summary.get("baselineP95DurationMs") or 0)
+        candidate_p95 = int(summary.get("candidateP95DurationMs") or 0)
+        latency_ratio = round(candidate_p95 / baseline_p95, 3) if baseline_p95 > 0 else 0.0
+        max_latency_ratio = self.float_setting(
+            "reasoningEnginePromotionMaximumLatencyRatio", 3.0, 1.0, 100.0
+        )
+        if baseline_p95 > 0 and latency_ratio > max_latency_ratio:
+            blockers.append("candidate-latency-regression")
+        latest = self.timestamp(summary.get("latestComparisonAt"))
+        maximum_age = self.int_setting(
+            "reasoningEnginePromotionMaximumComparisonAgeSeconds", 3600, 60, 7 * 24 * 60 * 60
+        )
+        age_seconds = (
+            max(0, int((datetime.now(timezone.utc) - latest).total_seconds()))
+            if latest
+            else None
+        )
+        if age_seconds is None or age_seconds > maximum_age:
+            blockers.append("comparison-window-stale")
+        return {
+            "ready": not blockers,
+            "deploymentId": str(deployment_id or ""),
+            "blockers": list(dict.fromkeys(blockers)),
+            "comparison": summary,
+            "health": health,
+            "latencyRatio": latency_ratio,
+            "maximumLatencyRatio": max_latency_ratio,
+            "latestComparisonAgeSeconds": age_seconds,
+            "maximumComparisonAgeSeconds": maximum_age,
+        }
+
+    def mark_candidate(self, deployment_id: str) -> Dict[str, object]:
+        readiness = self.promotion_readiness(deployment_id)
+        if not readiness.get("ready"):
+            return {
+                "status": "blocked",
+                "deploymentId": str(deployment_id or ""),
+                "blockers": readiness.get("blockers") or [],
+                "promotionReadiness": readiness,
+            }
+        row = self.registry.get(deployment_id)
+        if str(row.get("status") or "") == "shadow":
+            row = self.registry.transition(deployment_id, "candidate")
+        return {"status": "candidate", "deployment": row, "promotionReadiness": readiness}
+
+    def promote_from_history(self, deployment_id: str) -> Dict[str, object]:
+        readiness = self.promotion_readiness(deployment_id)
+        if not readiness.get("ready"):
+            return {
+                "status": "blocked",
+                "deploymentId": str(deployment_id or ""),
+                "blockers": readiness.get("blockers") or [],
+                "promotionReadiness": readiness,
+            }
+        row = self.registry.get(deployment_id)
+        if str(row.get("status") or "") != "candidate":
+            return {
+                "status": "blocked",
+                "deploymentId": str(deployment_id or ""),
+                "blockers": ["engine-not-candidate"],
+                "promotionReadiness": readiness,
+            }
+        summary = dict(readiness.get("comparison") or {})
+        summary.update({
+            "factParityPct": summary.get("minimumFactParityPct"),
+            "ruleSlotCoveragePct": summary.get("minimumRuleSlotCoveragePct"),
+        })
+        return self.promote(deployment_id, readiness.get("health") or {}, summary)
 
     def promote(self, deployment_id: str, health: Mapping[str, object], comparison: Mapping[str, object]):
         row = self.registry.get(deployment_id)

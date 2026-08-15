@@ -31076,7 +31076,8 @@ button:is(.symbol-watch-toggle, [data-network-busy-icon-only="true"]).is-request
   min-height: 40px;
 }
 
-.mobile-infinite-scroll.is-loading::before {
+.mobile-infinite-scroll.is-loading::before,
+.mobile-infinite-scroll.is-prefetching::before {
   content: "";
   width: 18px;
   height: 18px;
@@ -31084,6 +31085,10 @@ button:is(.symbol-watch-toggle, [data-network-busy-icon-only="true"]).is-request
   border-top-color: var(--blue);
   border-radius: 50%;
   animation: oa-refresh-spin 0.85s linear infinite;
+}
+
+.mobile-infinite-scroll.is-prefetching {
+  color: var(--muted);
 }
 
 .mobile-infinite-scroll.is-complete {

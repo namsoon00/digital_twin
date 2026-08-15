@@ -411,9 +411,12 @@ function checkWorkflowConsoleContract() {
   );
   assertOk(
     code.indexOf("function mobileInfiniteScrollEnabled") >= 0 &&
+      code.indexOf("function mobileInfiniteScrollPrefetchDistance") >= 0 &&
       code.indexOf("function bindMobileInfiniteScroll") >= 0 &&
       code.indexOf("data-mobile-infinite-sentinel") >= 0 &&
-      code.indexOf("rootMargin: \"0px 0px 360px 0px\"") >= 0 &&
+      code.indexOf('data-mobile-infinite-prefetch="next-page"') >= 0 &&
+      code.indexOf('rootMargin: "0px 0px " + mobileInfiniteScrollPrefetchDistance() + "px 0px"') >= 0 &&
+      code.indexOf('button.textContent = "다음 페이지 준비 중"') >= 0 &&
       code.indexOf("restoreRenderedPageScrollPositionAfterLayout(renderedScrollPosition)") >= 0 &&
       code.indexOf("preferredPosition && preferredPosition.key === key") >= 0 &&
       code.indexOf("mergeUniqueItems(state.notificationJobItems") >= 0 &&
@@ -425,6 +428,10 @@ function checkWorkflowConsoleContract() {
       code.indexOf('data-console-row-key="\' + escapeHtml(id)') >= 0 &&
       code.indexOf("var requestable = hasNext && !loading;") >= 0 &&
       code.indexOf("var navigationReady = !state.investmentCalendarCandidatesLoading;") >= 0 &&
+      code.match(/var incrementalLoad = mobileInfiniteScrollEnabled\(\)/g).length >= 3 &&
+      code.indexOf("if (!incrementalLoad && state.snapshot) render();") >= 0 &&
+      code.indexOf("if (!incrementalLoad) render();") >= 0 &&
+      styles.indexOf(".mobile-infinite-scroll.is-prefetching::before") >= 0 &&
       /\.mobile-infinite-scroll\s*\{[\s\S]*width: 100%;/.test(styles),
     "모바일 전체 목록의 누적 로딩/무한 스크롤 또는 캘린더 목록 유지 계약이 없습니다."
   );
@@ -466,9 +473,9 @@ function checkWorkflowConsoleContract() {
       code.indexOf('window.prompt("확인할 발표 날짜와 시각') < 0 &&
       styles.indexOf(".calendar-candidate-confirm-form") >= 0 &&
       styles.indexOf(".calendar-candidate-confirm-fields") >= 0 &&
-      indexHtml.indexOf("styles.css?v=20260815-notification-progressive-detail-v1") >= 0 &&
-      indexHtml.indexOf("app-default-settings.js?v=20260815-notification-progressive-detail-v1") >= 0 &&
-      indexHtml.indexOf("app.js?v=20260815-notification-progressive-detail-v1") >= 0,
+      indexHtml.indexOf("styles.css?v=20260815-mobile-next-page-prefetch-v1") >= 0 &&
+      indexHtml.indexOf("app-default-settings.js?v=20260815-mobile-next-page-prefetch-v1") >= 0 &&
+      indexHtml.indexOf("app.js?v=20260815-mobile-next-page-prefetch-v1") >= 0,
     "캘린더 후보 날짜·시각 확인 레이어 또는 오버레이 스크롤 복원 계약이 없습니다."
   );
   assertOk(

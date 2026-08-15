@@ -2316,6 +2316,123 @@
     });
   }
 
+  function renderedElementPath(element) {
+    if (!element || !app || element === app) return [];
+    var path = [];
+    var current = element;
+    while (current && current !== app) {
+      var parent = current.parentElement;
+      if (!parent) return null;
+      var index = Array.prototype.indexOf.call(parent.children || [], current);
+      if (index < 0) return null;
+      path.unshift(index);
+      current = parent;
+    }
+    return current === app ? path : null;
+  }
+
+  function renderedElementAtPath(path) {
+    if (!Array.isArray(path)) return null;
+    var current = app;
+    for (var index = 0; current && index < path.length; index += 1) {
+      current = current.children && current.children[path[index]];
+    }
+    return current || null;
+  }
+
+  function renderedElementIdentity(element) {
+    if (!element || !element.attributes) return [];
+    return Array.prototype.slice.call(element.attributes).filter(function (attribute) {
+      var name = String(attribute.name || "");
+      return name === "id" || name === "name" || name.indexOf("data-") === 0;
+    }).filter(function (attribute) {
+      return [
+        "data-render-mode",
+        "data-dashboard-render-mode",
+        "data-network-busy",
+        "data-network-busy-icon-only",
+        "data-mobile-infinite-requested"
+      ].indexOf(attribute.name) < 0;
+    }).map(function (attribute) {
+      return [attribute.name, attribute.value];
+    });
+  }
+
+  function renderedElementMatches(snapshot, element) {
+    if (!snapshot || !element || String(element.tagName || "") !== snapshot.tagName) return false;
+    return (snapshot.identity || []).every(function (attribute) {
+      return element.getAttribute(attribute[0]) === attribute[1];
+    });
+  }
+
+  function rememberRenderedInteractiveState() {
+    if (!app || !app.querySelectorAll) return null;
+    var scrollPositions = Array.prototype.slice.call(app.querySelectorAll("*")).map(function (element) {
+      var top = scrollTopNumber(element.scrollTop);
+      var left = scrollTopNumber(element.scrollLeft);
+      if (!top && !left) return null;
+      var path = renderedElementPath(element);
+      if (!path) return null;
+      return {
+        path: path,
+        tagName: String(element.tagName || ""),
+        identity: renderedElementIdentity(element),
+        top: top,
+        left: left
+      };
+    }).filter(Boolean);
+    var activeElement = document.activeElement;
+    var focus = activeElement && activeElement !== document.body && app.contains(activeElement) ? {
+      path: renderedElementPath(activeElement),
+      tagName: String(activeElement.tagName || ""),
+      identity: renderedElementIdentity(activeElement),
+      selectionStart: typeof activeElement.selectionStart === "number" ? activeElement.selectionStart : null,
+      selectionEnd: typeof activeElement.selectionEnd === "number" ? activeElement.selectionEnd : null
+    } : null;
+    return { scrollPositions: scrollPositions, focus: focus };
+  }
+
+  function restoreRenderedElementScrollPositions(snapshot) {
+    if (!snapshot) return;
+    (snapshot.scrollPositions || []).forEach(function (saved) {
+      var element = renderedElementAtPath(saved.path);
+      if (!renderedElementMatches(saved, element)) return;
+      element.scrollTop = saved.top;
+      element.scrollLeft = saved.left;
+    });
+  }
+
+  function focusElementWithoutScroll(element) {
+    if (!element || !element.focus) return false;
+    try {
+      element.focus({ preventScroll: true });
+    } catch (error) {
+      element.focus();
+    }
+    return document.activeElement === element;
+  }
+
+  function restoreRenderedInteractiveStateAfterLayout(snapshot) {
+    if (!snapshot) return;
+    restoreRenderedElementScrollPositions(snapshot);
+    var focus = snapshot.focus;
+    var element = focus ? renderedElementAtPath(focus.path) : null;
+    if (focus && renderedElementMatches(focus, element) && focusElementWithoutScroll(element)) {
+      if (focus.selectionStart != null && focus.selectionEnd != null && element.setSelectionRange) {
+        try {
+          element.setSelectionRange(focus.selectionStart, focus.selectionEnd);
+        } catch (error) {
+          // Some input types expose selectionStart but do not accept setSelectionRange.
+        }
+      }
+    }
+    restoreRenderedElementScrollPositions(snapshot);
+    if (pageScrollRecentlyActive() || typeof window === "undefined" || !window.requestAnimationFrame) return;
+    window.requestAnimationFrame(function () {
+      restoreRenderedElementScrollPositions(snapshot);
+    });
+  }
+
   function bindPageScrollMemory() {
     var scroller = currentWorkspaceScroller();
     if (!scroller) return;
@@ -2324,6 +2441,11 @@
       rememberRenderedPageScrollPosition();
       scheduleTopbarScrollState();
     }, { passive: true });
+  }
+
+  function bindRenderedScrollActivity() {
+    if (!app || !app.addEventListener) return;
+    app.addEventListener("scroll", notePageScrollActivity, { passive: true, capture: true });
   }
 
   function currentShell() {
@@ -10405,6 +10527,7 @@
     applyAppTheme();
     var overlayWillBeOpen = overlayPageStateOpen();
     var overlayWasOpen = document.documentElement.classList.contains("oa-overlay-open");
+    var renderedInteractiveState = rememberRenderedInteractiveState();
     var renderedScrollPosition = overlayWasOpen && overlayScrollPosition
       ? overlayScrollPosition
       : rememberRenderedPageScrollPosition();
@@ -10442,7 +10565,10 @@
     }
     syncNetworkActivityDom();
     decorateRenderedBusyControls();
-    if (!patchedDashboard) restoreRenderedPageScrollPositionAfterLayout(renderedScrollPosition);
+    if (!patchedDashboard) {
+      restoreRenderedPageScrollPositionAfterLayout(renderedScrollPosition);
+      restoreRenderedInteractiveStateAfterLayout(renderedInteractiveState);
+    }
     if (!overlayWillBeOpen) overlayScrollPosition = null;
     syncAppNavScrollState();
     syncTopbarScrollState();
@@ -10705,7 +10831,7 @@
     var dialog = activeOverlayDialog();
     if (!dialog || dialog.contains(document.activeElement)) return;
     var closeButton = dialog.querySelector('[data-watchlist-picker-close], [data-command-palette-input], [data-work-detail-close], [data-calendar-candidate-confirm-close], [data-calendar-entry-close], [data-notification-editor-close], [data-notification-template-editor-close], [data-ontology-graph-close], [data-monitoring-detail-close]');
-    (closeButton || dialog).focus();
+    focusElementWithoutScroll(closeButton || dialog);
   }
 
   function restoreWorkDetailFocus() {
@@ -31519,6 +31645,7 @@
 
   bindNetworkActivityControls();
   bindDelegatedConsoleActions();
+  bindRenderedScrollActivity();
   applyAppTheme();
   connectRealtime();
   render();

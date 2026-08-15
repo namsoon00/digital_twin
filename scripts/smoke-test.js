@@ -438,7 +438,7 @@ function checkWorkflowConsoleContract() {
   assertOk(
     code.indexOf("function notePageScrollActivity") >= 0 &&
       code.indexOf("pageScrollRecentlyActive()") >= 0 &&
-      code.indexOf("if (!patchedDashboard) restoreRenderedPageScrollPositionAfterLayout(renderedScrollPosition)") >= 0 &&
+      code.indexOf("restoreRenderedPageScrollPositionAfterLayout(renderedScrollPosition)") >= 0 &&
       code.indexOf("appNavScrollDistance >= 44") >= 0 &&
       code.indexOf('(appNavHidden ? " is-hidden" : "")') >= 0 &&
       code.indexOf("var snackbar = state.snackbar || {}") >= 0 &&
@@ -447,6 +447,18 @@ function checkWorkflowConsoleContract() {
       styles.indexOf("backdrop-filter: none !important") >= 0 &&
       styles.indexOf("touch-action: pan-x pan-y pinch-zoom") >= 0,
     "모바일 관성 스크롤 유지, 상단 내비게이션 히스테리시스 또는 sticky blur 제거 계약이 없습니다."
+  );
+  assertOk(
+    code.indexOf("function rememberRenderedInteractiveState") >= 0 &&
+      code.indexOf('app.querySelectorAll("*")') >= 0 &&
+      code.indexOf("function bindRenderedScrollActivity") >= 0 &&
+      code.indexOf("function restoreRenderedInteractiveStateAfterLayout") >= 0 &&
+      code.indexOf("restoreRenderedElementScrollPositions(snapshot)") >= 0 &&
+      code.indexOf("focusElementWithoutScroll(element)") >= 0 &&
+      code.indexOf("element.focus({ preventScroll: true })") >= 0 &&
+      code.indexOf("restoreRenderedInteractiveStateAfterLayout(renderedInteractiveState)") >= 0 &&
+      code.indexOf("focusElementWithoutScroll(closeButton || dialog)") >= 0,
+    "선택·검색·상세 갱신 시 중첩 목록 스크롤과 포커스를 보존하는 공통 렌더 계약이 없습니다."
   );
   assertOk(
     code.indexOf("function removeInvestmentCalendarCandidateFromLocalList") >= 0 &&
@@ -473,9 +485,9 @@ function checkWorkflowConsoleContract() {
       code.indexOf('window.prompt("확인할 발표 날짜와 시각') < 0 &&
       styles.indexOf(".calendar-candidate-confirm-form") >= 0 &&
       styles.indexOf(".calendar-candidate-confirm-fields") >= 0 &&
-      indexHtml.indexOf("styles.css?v=20260815-notification-disclosure-state-v1") >= 0 &&
-      indexHtml.indexOf("app-default-settings.js?v=20260815-notification-disclosure-state-v1") >= 0 &&
-      indexHtml.indexOf("app.js?v=20260815-notification-disclosure-state-v1") >= 0,
+      indexHtml.indexOf("styles.css?v=20260815-interaction-scroll-state-v1") >= 0 &&
+      indexHtml.indexOf("app-default-settings.js?v=20260815-interaction-scroll-state-v1") >= 0 &&
+      indexHtml.indexOf("app.js?v=20260815-interaction-scroll-state-v1") >= 0,
     "캘린더 후보 날짜·시각 확인 레이어 또는 오버레이 스크롤 복원 계약이 없습니다."
   );
   assertOk(

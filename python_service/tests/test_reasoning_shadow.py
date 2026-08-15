@@ -393,6 +393,14 @@ class ReasoningShadowTests(unittest.TestCase):
         self.assertEqual(0, queue.saved["payload"]["baselineOutcome"]["deliveryCount"])
         self.assertTrue(queue.saved["payload"]["candidateReleaseFingerprint"])
         self.assertTrue(queue.saved["payload"]["validationCohortId"])
+        self.assertEqual(
+            queue.saved["payload"]["candidateReleaseFingerprint"],
+            registry.health["candidateReleaseFingerprint"],
+        )
+        self.assertEqual(
+            "rulebox-release-1",
+            registry.health["ruleboxFingerprint"],
+        )
 
     def test_shadow_worker_records_comparison_and_promotes_to_shadow_only(self):
         queue = FakeQueue()

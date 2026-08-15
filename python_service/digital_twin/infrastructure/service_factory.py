@@ -1486,11 +1486,13 @@ def build_reasoning_engine_shadow_runner(settings=None, worker_id: str = "") -> 
         active_hash = str(
             active_rulebox.get("sourceRulesHash")
             or active_rulebox.get("rulesHash")
+            or active_rulebox.get("ruleboxRulesHash")
             or payload_hash(active_rulebox.get("rules") or [])
         )
         candidate_hash = str(
             candidate_rulebox.get("sourceRulesHash")
             or candidate_rulebox.get("rulesHash")
+            or candidate_rulebox.get("ruleboxRulesHash")
             or payload_hash(candidate_rulebox.get("rules") or [])
         )
         candidate_deployment = registry_store.get(candidate_deployment_id)

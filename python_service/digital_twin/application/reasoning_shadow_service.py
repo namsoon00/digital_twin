@@ -163,6 +163,27 @@ class ReasoningShadowScheduler:
             candidate_deployment,
             rulebox_fingerprint,
         )
+        candidate_health = dict(candidate_deployment.get("health") or {})
+        frozen_rulebox = str(candidate_health.get("ruleboxFingerprint") or "")
+        if frozen_rulebox and frozen_rulebox != rulebox_fingerprint:
+            return {
+                "status": "candidate-release-rulebox-drift",
+                "saved": False,
+                "candidateDeploymentId": candidate_id,
+            }
+        self.registry.update_health(candidate_id, {
+            **candidate_health,
+            "ruleboxFingerprint": rulebox_fingerprint,
+            "candidateReleaseId": str(candidate_release.get("releaseId") or ""),
+            "candidateReleaseFingerprint": str(
+                candidate_release.get("releaseFingerprint") or ""
+            ),
+            "releaseFingerprint": str(candidate_release.get("releaseFingerprint") or ""),
+            "candidateRuntimeRevision": str(
+                candidate_release.get("runtimeRevision") or ""
+            ),
+            "validationCohortId": str(candidate_release.get("validationCohortId") or ""),
+        })
         projection_results = dict(
             getattr(monitor_runner, "last_ontology_projection_results", {}) or {}
         )
@@ -545,7 +566,9 @@ class ReasoningEngineShadowRunner:
                     20,
                 ),
             )
+            prior_health = dict(self.registry.get(candidate_id).get("health") or {})
             self.registry.update_health(candidate_id, {
+                **prior_health,
                 "status": "degraded" if not retry.get("terminal") else "blocked",
                 "lastError": str(error)[:240],
                 "lastFailureAt": iso_utc(),

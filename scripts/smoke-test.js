@@ -466,9 +466,9 @@ function checkWorkflowConsoleContract() {
       code.indexOf('window.prompt("확인할 발표 날짜와 시각') < 0 &&
       styles.indexOf(".calendar-candidate-confirm-form") >= 0 &&
       styles.indexOf(".calendar-candidate-confirm-fields") >= 0 &&
-      indexHtml.indexOf("styles.css?v=20260815-calendar-company-names-v5") >= 0 &&
-      indexHtml.indexOf("app-default-settings.js?v=20260815-calendar-company-names-v5") >= 0 &&
-      indexHtml.indexOf("app.js?v=20260815-calendar-company-names-v5") >= 0,
+      indexHtml.indexOf("styles.css?v=20260815-notification-progressive-detail-v1") >= 0 &&
+      indexHtml.indexOf("app-default-settings.js?v=20260815-notification-progressive-detail-v1") >= 0 &&
+      indexHtml.indexOf("app.js?v=20260815-notification-progressive-detail-v1") >= 0,
     "캘린더 후보 날짜·시각 확인 레이어 또는 오버레이 스크롤 복원 계약이 없습니다."
   );
   assertOk(
@@ -2095,7 +2095,11 @@ function checkFrontendAdminRender() {
       notificationHtml.indexOf("notification-decision-detail") >= 0 &&
         notificationHtml.indexOf('data-work-detail="notification-job"') >= 0 &&
         code.indexOf("renderNotificationDecisionDetail(activeJob, { compact: true })") >= 0 &&
-        code.indexOf("!compact && fingerprint") >= 0,
+        code.indexOf("function renderNotificationDetailDisclosure") >= 0 &&
+        code.indexOf('"추론 과정 상세"') >= 0 &&
+        code.indexOf('class="notification-reasoning-step-disclosure"') >= 0 &&
+        styles.indexOf(".notification-detail-disclosure") >= 0 &&
+        styles.indexOf(".notification-reasoning-step-detail") >= 0,
       "최근 알림 판단 전체 fingerprint가 상세 리포트 레이어로 분리되지 않았습니다.",
     );
     assertOk(notificationHtml.indexOf('data-action="refresh-notification-jobs"') >= 0, "최근 알림 판단 새로고침 버튼이 없습니다.");

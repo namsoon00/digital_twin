@@ -21925,6 +21925,19 @@
     ].join("");
   }
 
+  function renderNotificationDetailDisclosure(title, description, body, className) {
+    if (!body) return "";
+    return [
+      '<details class="notification-detail-disclosure ' + escapeHtml(className || "") + '">',
+      '<summary>',
+      '<span><strong>' + escapeHtml(title || "상세 정보") + '</strong><em>' + escapeHtml(description || "전체 기록을 확인합니다.") + '</em></span>',
+      '<span class="notification-detail-disclosure-icon" aria-hidden="true">&#9662;</span>',
+      '</summary>',
+      '<div class="notification-detail-disclosure-body">' + body + '</div>',
+      '</details>'
+    ].join("");
+  }
+
   function notificationJobDetailPayload(job) {
     var resolvedSymbol = notificationJobResolvedSymbol(job);
     var displaySymbol = resolvedSymbol ? stockDisplayName(resolvedSymbol, job) : "";
@@ -22100,12 +22113,17 @@
     return [
       '<li class="notification-reasoning-step">',
       '<span class="notification-reasoning-index" aria-hidden="true">' + escapeHtml(String(index)) + '</span>',
-      '<div class="notification-reasoning-step-copy">',
+      '<details class="notification-reasoning-step-disclosure">',
+      '<summary>',
+      '<span class="notification-reasoning-step-copy">',
       '<strong>' + escapeHtml(title) + '</strong>',
-      summary ? '<p>' + escapeHtml(summary) + '</p>' : '',
+      summary ? '<span class="notification-reasoning-step-summary">' + escapeHtml(summary) + '</span>' : '',
       detail ? '<em>' + escapeHtml(detail) + '</em>' : '',
-      body || '',
-      '</div>',
+      '</span>',
+      '<span class="notification-detail-disclosure-icon" aria-hidden="true">&#9662;</span>',
+      '</summary>',
+      '<div class="notification-reasoning-step-detail">' + (body || '<p class="notification-reasoning-empty">추가 세부 기록이 없습니다.</p>') + '</div>',
+      '</details>',
       '</li>'
     ].join("");
   }
@@ -22366,7 +22384,7 @@
     return [
       '<section class="notification-detail-section notification-reasoning-section">',
       '<div class="notification-reasoning-head">',
-      '<div><strong>실제 실행 순서</strong><span>원천 데이터·ABox → TypeDB 규칙 → 경쟁 가설 → AI 판단 → 알림 발송 순서입니다. 상세 데이터는 개수나 문자 수로 자르지 않습니다.</span></div>',
+      '<div><strong>실제 실행 순서</strong><span>단계별 요약을 먼저 표시합니다. 각 단계를 열면 생성 시점의 전체 데이터를 확인할 수 있습니다.</span></div>',
       '<span class="tone-chip ' + escapeHtml(status.tone) + '">' + escapeHtml(status.label) + '</span>',
       '</div>',
       '<div class="notification-reasoning-provenance">' + provenance.map(function (item) { return '<code>' + escapeHtml(item) + '</code>'; }).join("") + '</div>',
@@ -22410,6 +22428,59 @@
     var visibleReasons = compact ? [] : payload.reasons;
     var detailButton = compact ? '<div class="notification-detail-actions">' + renderWorkDetailButton("notification-job", notificationJobKey(job), "알림·추론 상세", "text-button primary compact") + '</div>' : '';
     var relatedDecision = relatedDecisionForNotification(job);
+    var actionFlow = job.actionFlow && typeof job.actionFlow === "object" ? job.actionFlow : {};
+    var currentAction = actionFlow.currentActionLabel || notificationActionFlowActionLabel(actionFlow.currentAction);
+    var detailTrace = notificationReverseReasoningTrace(job) || {};
+    var detailFacts = Array.isArray(detailTrace.inputFacts) ? detailTrace.inputFacts : [];
+    var detailRules = Array.isArray(detailTrace.matchedRules) ? detailTrace.matchedRules : [];
+    var detailHypotheses = Array.isArray(detailTrace.hypotheses) ? detailTrace.hypotheses : [];
+    var detailSources = Array.isArray(detailTrace.sources) ? detailTrace.sources : [];
+    var researchEvidenceCount = compact ? 0 : notificationJobResearchEvidence(job).length;
+    var deliveryDetails = !compact ? [
+      '<div class="notification-detail-metrics notification-detail-secondary-metrics">',
+      renderNotificationDetailMetric("확인 단계", notificationReviewLevelLabel(job.deliveryReviewLevel), "muted"),
+      renderNotificationDetailMetric("반복 판단", notificationJobSimilarityText(job), "muted"),
+      renderNotificationDetailMetric("발송 가능", job.nextEligibleAt ? formatClock(job.nextEligibleAt) : "조건 충족 시", "muted"),
+      '</div>',
+      renderNotificationInferenceStateTransition(job),
+      visibleGateRows.length ? '<section class="notification-detail-section"><strong>게이트와 보류 조건</strong><div class="notification-detail-tags">' + visibleGateRows.map(function (row) {
+        return '<span>' + escapeHtml(textWithKnownDisplaySymbols(row, payload.resolvedSymbol, job)) + '</span>';
+      }).join("") + '</div></section>' : '',
+      visibleReasons.length ? '<section class="notification-detail-section"><strong>판단 근거</strong><div class="notification-detail-reasons">' + visibleReasons.map(function (reason) {
+        return '<p>' + escapeHtml(textWithKnownDisplaySymbols(reason, payload.resolvedSymbol, job)) + '</p>';
+      }).join("") + '</div></section>' : ''
+    ].join("") : "";
+    var messageDetails = !compact ? [
+      payload.fullText && payload.fullText !== payload.preview ? '<section class="notification-detail-section"><strong>전체 메시지</strong><pre class="notification-full-message">' + escapeHtml(payload.fullText) + '</pre></section>' : '',
+      fingerprint ? '<section class="notification-detail-section"><strong>중복 판단 키</strong><code class="notification-fingerprint">' + escapeHtml(fingerprint) + '</code></section>' : ''
+    ].join("") : "";
+    var researchDetails = !compact ? renderNotificationJobResearchEvidence(job) : "";
+    var extendedDetails = compact ? "" : [
+      renderNotificationDetailDisclosure(
+        "발송 조건 상세",
+        [notificationReviewLevelLabel(job.deliveryReviewLevel), notificationJobSimilarityText(job), job.nextEligibleAt ? "다음 가능 " + formatClock(job.nextEligibleAt) : "조건 충족 시 발송"].filter(Boolean).join(" · "),
+        deliveryDetails,
+        "delivery"
+      ),
+      renderNotificationDetailDisclosure(
+        "추론 과정 상세",
+        detailFacts.length + "개 사실 · " + detailRules.length + "개 규칙 · " + detailHypotheses.length + "개 가설 · " + detailSources.length + "개 출처",
+        renderNotificationReverseReasoning(job),
+        "reasoning"
+      ),
+      renderNotificationDetailDisclosure(
+        "전체 메시지·식별 정보",
+        [payload.fullText ? formatInteger(payload.fullText.length) + "자 메시지" : "전체 메시지 없음", fingerprint ? "중복 판단 키 있음" : "중복 판단 키 없음"].join(" · "),
+        messageDetails,
+        "message"
+      ),
+      renderNotificationDetailDisclosure(
+        "관련 원문·출처",
+        researchEvidenceCount ? researchEvidenceCount + "건의 기사 분석" : "연결된 기사 없음",
+        researchDetails,
+        "sources"
+      )
+    ].join("");
     var receiptActions = '<div class="notification-detail-actions"><button class="text-button compact" type="button" data-notification-receipt="important" data-notification-job-id="' + escapeHtml(notificationJobKey(job)) + '" data-notification-receipt-value="' + escapeHtml(job.important ? "false" : "true") + '">' + escapeHtml(job.important ? "중요 해제" : "중요 표시") + '</button><button class="text-button compact" type="button" data-notification-receipt="acknowledged" data-notification-job-id="' + escapeHtml(notificationJobKey(job)) + '" data-notification-receipt-value="' + escapeHtml(job.acknowledgedAt ? "false" : "true") + '">' + escapeHtml(job.acknowledgedAt ? "확인 취소" : "확인 완료") + '</button></div>';
     return [
       '<aside class="notification-decision-detail" aria-label="선택 알림 판단 상세">',
@@ -22424,13 +22495,16 @@
       receiptActions,
       '<div class="notification-detail-metrics">',
       renderNotificationDetailMetric("발송 판단", notificationDeliveryStateLabel(job.deliveryDecision), notificationJobDecisionRoute(job).tone),
-      renderNotificationDetailMetric("확인 단계", notificationReviewLevelLabel(job.deliveryReviewLevel), "muted"),
+      renderNotificationDetailMetric("지금 행동", currentAction, actionFlow.status === "ENTRY_ELIGIBLE" ? "watch" : "hold"),
       renderNotificationDetailMetric("이번 변화", notificationChangeStateLabel(job.deliveryChangeState), "muted"),
       renderNotificationDetailMetric("상태", notificationJobStatusLabel(job.status), notificationJobToneClass(job.status)),
-      renderNotificationDetailMetric("반복 판단", notificationJobSimilarityText(job), "muted"),
-      renderNotificationDetailMetric("발송 가능", job.nextEligibleAt ? formatClock(job.nextEligibleAt) : "조건 충족 시", "muted"),
       '</div>',
-      renderNotificationInferenceStateTransition(job),
+      '<section class="notification-detail-section primary">',
+      '<strong>판단 요약</strong>',
+      '<p>' + escapeHtml((((job.reasoningTrace || {}).finalDecision || {}).summary) || payload.fullText || payload.preview) + '</p>',
+      '</section>',
+      renderNotificationActionFlow(job),
+      relatedDecision ? '<section class="notification-detail-section"><strong>관련 현재 판단</strong><p>' + escapeHtml([relatedDecision.name || relatedDecision.symbol, relatedDecision.actionLabel, relatedDecision.reason].filter(Boolean).join(" · ")) + '</p>' + renderWorkDetailButton("investment-action", relatedDecision.key, "현재 판단 보기", "text-button compact") + '</section>' : '',
       '<section class="notification-detail-section notification-delivery-section">',
       '<strong>발송 판단과 근거</strong>',
       renderNotificationDecisionRoute(job),
@@ -22438,24 +22512,9 @@
         return '<span class="' + escapeHtml(factor.tone || "hold") + '">' + escapeHtml(textWithKnownDisplaySymbols(factor.label, payload.resolvedSymbol, job)) + '</span>';
       }).join("") + '</div>' : '<p>발송 판단 근거가 아직 기록되지 않았습니다.</p>',
       '</section>',
-      '<section class="notification-detail-section primary">',
-      '<strong>판단 요약</strong>',
-      '<p>' + escapeHtml((((job.reasoningTrace || {}).finalDecision || {}).summary) || payload.fullText || payload.preview) + '</p>',
-      '</section>',
-      relatedDecision ? '<section class="notification-detail-section"><strong>관련 현재 판단</strong><p>' + escapeHtml([relatedDecision.name || relatedDecision.symbol, relatedDecision.actionLabel, relatedDecision.reason].filter(Boolean).join(" · ")) + '</p>' + renderWorkDetailButton("investment-action", relatedDecision.key, "현재 판단 보기", "text-button compact") + '</section>' : '',
-      renderNotificationActionFlow(job),
-      !compact ? renderNotificationReverseReasoning(job) : '',
-      visibleGateRows.length ? '<section class="notification-detail-section"><strong>게이트와 보류 조건</strong><div class="notification-detail-tags">' + visibleGateRows.map(function (row) {
-        return '<span>' + escapeHtml(textWithKnownDisplaySymbols(row, payload.resolvedSymbol, job)) + '</span>';
-      }).join("") + '</div></section>' : '',
-      visibleReasons.length ? '<section class="notification-detail-section"><strong>판단 근거</strong><div class="notification-detail-reasons">' + visibleReasons.map(function (reason) {
-        return '<p>' + escapeHtml(textWithKnownDisplaySymbols(reason, payload.resolvedSymbol, job)) + '</p>';
-      }).join("") + '</div></section>' : '',
       compact ? '<p class="data-refresh-status">전체 메시지, 전체 근거, 중복 키는 상세 리포트에서 확인합니다.</p>' : '',
       detailButton,
-      !compact && payload.fullText && payload.fullText !== payload.preview ? '<section class="notification-detail-section"><strong>전체 메시지</strong><pre class="notification-full-message">' + escapeHtml(payload.fullText) + '</pre></section>' : '',
-      !compact && fingerprint ? '<section class="notification-detail-section"><strong>중복 판단 키</strong><code class="notification-fingerprint">' + escapeHtml(fingerprint) + '</code></section>' : '',
-      !compact ? renderNotificationJobResearchEvidence(job) : '',
+      extendedDetails,
       '</aside>'
     ].join("");
   }

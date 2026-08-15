@@ -311,6 +311,10 @@ class NotificationReverseReasoningTests(unittest.TestCase):
         self.assertIn('state.workDetailLayer.type === "notification-job"', source)
         self.assertIn('renderNotificationDetailMetric("자료 상태"', source)
         self.assertIn("var missing = Array.isArray(trace.missingData)", render_source)
+        self.assertIn('class="notification-reasoning-step-disclosure"', source)
+        self.assertIn("function renderNotificationDetailDisclosure", source)
+        self.assertIn('"추론 과정 상세"', source)
+        self.assertIn('detailFacts.length + "개 사실', source)
 
     def test_detail_endpoint_exposes_trace_without_bloating_list_payload(self):
         job = NotificationJob.create(

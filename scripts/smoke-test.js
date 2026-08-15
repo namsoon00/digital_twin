@@ -246,6 +246,7 @@ function checkWorkflowConsoleContract() {
   const accountDomain = fs.readFileSync(path.join(rootDir, "python_service", "digital_twin", "domain", "accounts.py"), "utf8");
   const accountStore = fs.readFileSync(path.join(rootDir, "python_service", "digital_twin", "infrastructure", "mysql_operational_core_stores.py"), "utf8");
   const calendarStore = fs.readFileSync(path.join(rootDir, "python_service", "digital_twin", "infrastructure", "mysql_investment_calendar_candidates.py"), "utf8");
+  const calendarSymbolProjection = fs.readFileSync(path.join(rootDir, "python_service", "digital_twin", "application", "symbol_display_projection.py"), "utf8");
   const notificationStore = fs.readFileSync(path.join(rootDir, "python_service", "digital_twin", "infrastructure", "mysql_notification_jobs.py"), "utf8");
   const symbolStore = fs.readFileSync(path.join(rootDir, "python_service", "digital_twin", "infrastructure", "mysql_symbol_universe.py"), "utf8");
   const webServer = fs.readFileSync(path.join(rootDir, "python_service", "digital_twin", "infrastructure", "web_server.py"), "utf8");
@@ -449,6 +450,14 @@ function checkWorkflowConsoleContract() {
     "캘린더 처리 후보의 누적 목록 제거 또는 아이콘형 진행 상태 레이아웃 계약이 없습니다."
   );
   assertOk(
+    code.indexOf("function investmentCalendarDisplayTitle") >= 0 &&
+      code.indexOf("function investmentCalendarTargetLabel") >= 0 &&
+      code.indexOf("investmentCalendarSymbolMetaLabel(candidate)") >= 0 &&
+      calendarSymbolProjection.indexOf('row["symbolDetails"] = details') >= 0 &&
+      calendarSymbolProjection.indexOf('row["displayTitle"] = _display_title') >= 0,
+    "캘린더 이벤트·후보의 회사명 우선 표시와 종목 코드 보조 정보 계약이 없습니다."
+  );
+  assertOk(
     code.indexOf("function renderInvestmentCalendarCandidateConfirmation") >= 0 &&
       code.indexOf('data-calendar-candidate-confirm-field="date"') >= 0 &&
       code.indexOf('data-calendar-candidate-confirm-field="time"') >= 0 &&
@@ -457,9 +466,9 @@ function checkWorkflowConsoleContract() {
       code.indexOf('window.prompt("확인할 발표 날짜와 시각') < 0 &&
       styles.indexOf(".calendar-candidate-confirm-form") >= 0 &&
       styles.indexOf(".calendar-candidate-confirm-fields") >= 0 &&
-      indexHtml.indexOf("styles.css?v=20260815-calendar-queue-busy-layout-v4") >= 0 &&
-      indexHtml.indexOf("app-default-settings.js?v=20260815-calendar-queue-busy-layout-v4") >= 0 &&
-      indexHtml.indexOf("app.js?v=20260815-calendar-queue-busy-layout-v4") >= 0,
+      indexHtml.indexOf("styles.css?v=20260815-calendar-company-names-v5") >= 0 &&
+      indexHtml.indexOf("app-default-settings.js?v=20260815-calendar-company-names-v5") >= 0 &&
+      indexHtml.indexOf("app.js?v=20260815-calendar-company-names-v5") >= 0,
     "캘린더 후보 날짜·시각 확인 레이어 또는 오버레이 스크롤 복원 계약이 없습니다."
   );
   assertOk(

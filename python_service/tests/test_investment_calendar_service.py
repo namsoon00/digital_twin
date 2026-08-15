@@ -138,6 +138,17 @@ class MemoryCandidateStore:
         return result
 
 
+class MemorySymbolStore:
+    def __init__(self, items=None):
+        self.items = {
+            str(item.get("symbol") or "").upper(): dict(item)
+            for item in items or []
+        }
+
+    def get(self, symbol, market=""):
+        return self.items.get(str(symbol or "").upper())
+
+
 class MemoryResearchEvidenceStore:
     def __init__(self, items=None):
         self.items = list(items or [])
@@ -214,14 +225,41 @@ class InvestmentCalendarServiceTests(unittest.TestCase):
             ["AAPL"],
         )
 
-    def service(self, store=None, queue=None, publisher=None):
+    def service(self, store=None, queue=None, publisher=None, symbol_store=None):
         return InvestmentCalendarService(
             repository=store or MemoryCalendarStore(),
             account_repository=SimpleNamespace(load_all=lambda: [self.account()]),
             notification_queue=queue or MemoryQueue(),
             settings={"investmentCalendarReminderLookbackMinutes": "180"},
             event_publisher=publisher or MemoryPublisher(),
+            symbol_repository=symbol_store,
         )
+
+    def test_calendar_read_model_uses_company_name_and_keeps_symbol_code(self):
+        store = MemoryCalendarStore()
+        store.upsert(InvestmentCalendarEvent.from_payload({
+            "eventId": "samsung-cnt-earnings",
+            "title": "028260 실적 발표 예정",
+            "eventType": "earnings",
+            "startsAt": "2026-10-27T09:00:00+09:00",
+            "symbols": ["028260"],
+            "markets": ["KOSPI"],
+        }))
+        symbol_store = MemorySymbolStore([{
+            "symbol": "028260",
+            "name": "삼성물산",
+            "market": "KOSPI",
+            "sector": "기타 전문 도매업",
+        }])
+
+        result = self.service(store=store, symbol_store=symbol_store).list_events({
+            "from": "2026-01-01T00:00:00Z",
+            "to": "2026-12-31T23:59:59Z",
+        })
+
+        self.assertEqual("삼성물산 실적 발표 예정", result["events"][0]["displayTitle"])
+        self.assertEqual("삼성물산", result["events"][0]["displayName"])
+        self.assertEqual("028260", result["events"][0]["symbolDetails"][0]["symbol"])
 
     def scheduled_yfinance_evidence(self):
         return ResearchEvidence(
@@ -669,6 +707,33 @@ class InvestmentCalendarServiceTests(unittest.TestCase):
         self.assertEqual(3, result["pageInfo"]["offset"])
         self.assertTrue(result["pageInfo"]["hasPrev"])
         self.assertTrue(result["pageInfo"]["hasNext"])
+
+    def test_candidate_read_model_uses_company_name_and_keeps_symbol_code(self):
+        candidate_store = MemoryCandidateStore()
+        candidate_store.upsert({
+            "candidateId": "candidate-028260",
+            "proposedEventId": "event-028260",
+            "title": "028260 실적 발표 예정",
+            "eventType": "earnings",
+            "startsAt": "2026-10-27T00:00:00Z",
+            "symbols": ["028260"],
+            "markets": ["KOSPI"],
+        })
+        service = InvestmentCalendarCandidateService(
+            candidate_repository=candidate_store,
+            calendar_service=self.service(),
+            symbol_repository=MemorySymbolStore([{
+                "symbol": "028260",
+                "name": "삼성물산",
+                "market": "KOSPI",
+            }]),
+        )
+
+        result = service.list_candidates({"status": "pending", "limit": 20})
+
+        self.assertEqual("삼성물산 실적 발표 예정", result["candidates"][0]["displayTitle"])
+        self.assertEqual("삼성물산", result["candidates"][0]["displayName"])
+        self.assertEqual("028260", result["candidates"][0]["symbolDetails"][0]["symbol"])
 
     def test_ai_research_recommendation_saves_pending_review_candidate_without_registering_event(self):
         calendar_store = MemoryCalendarStore()

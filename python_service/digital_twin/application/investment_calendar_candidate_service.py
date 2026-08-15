@@ -13,14 +13,16 @@ from ..domain.investment_calendar_candidates import (
     InvestmentCalendarReviewCandidate,
 )
 from ..domain.security_lines import security_lines_for_symbol
+from .symbol_display_projection import enrich_symbol_display_records
 
 
 class InvestmentCalendarCandidateService:
-    def __init__(self, candidate_repository, calendar_service, settings: Dict[str, object] = None, now=None):
+    def __init__(self, candidate_repository, calendar_service, settings: Dict[str, object] = None, now=None, symbol_repository=None):
         self.candidate_repository = candidate_repository
         self.calendar_service = calendar_service
         self.settings = dict(settings or {})
         self.now = now or (lambda: datetime.now(timezone.utc))
+        self.symbol_repository = symbol_repository
 
     def list_candidates(self, query: Dict[str, object] = None) -> Dict[str, object]:
         query = query if isinstance(query, dict) else {}
@@ -52,8 +54,12 @@ class InvestmentCalendarCandidateService:
             summary["storedPending"] = stored_total
             summary["pending"] = total
         summary["hiddenAutomaticCandidates"] = len(hidden)
+        candidate_rows = enrich_symbol_display_records(
+            [candidate.to_dict() for candidate in candidates],
+            self.symbol_repository,
+        )
         return {
-            "candidates": [candidate.to_dict() for candidate in candidates],
+            "candidates": candidate_rows,
             "summary": summary,
             "feedback": self.candidate_repository.feedback_summary(),
             "status": status,

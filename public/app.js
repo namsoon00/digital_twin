@@ -8586,7 +8586,7 @@
     var scheduleParts = appDateTimeParts(startsAt);
     state.investmentCalendarCandidateConfirmation = {
       candidateId: String(candidate.candidateId || ""),
-      title: String(candidate.title || "자동 감지 일정"),
+      title: investmentCalendarDisplayTitle(candidate, "자동 감지 일정"),
       date: scheduleParts ? [scheduleParts.year, scheduleParts.month, scheduleParts.day].join("-") : String(candidate.localDate || startsAt.slice(0, 10) || ""),
       time: scheduleParts ? [scheduleParts.hour, scheduleParts.minute].join(":") : String(payload.eventLocalTime || ""),
       timezone: currentAppTimezone(),
@@ -12476,7 +12476,7 @@
         key: "calendar:" + eventKey,
         priority: Number(event.importance || 0) >= 80 ? 2 : 4,
         kind: "일정",
-        target: event.title || "투자 이벤트",
+        target: investmentCalendarDisplayTitle(event, "투자 이벤트"),
         reason: formatConsoleNarrative(investmentCalendarImpactText(event)),
         state: formatClock(event.startsAt),
         tone: Number(event.importance || 0) >= 80 ? "caution" : "hold",
@@ -13110,8 +13110,37 @@
     return "등록 시각";
   }
 
+  function investmentCalendarSymbolDetails(event) {
+    return Array.isArray((event || {}).symbolDetails) ? event.symbolDetails : [];
+  }
+
+  function investmentCalendarSymbolDetail(event, symbol) {
+    var normalized = String(symbol || "").trim().toUpperCase();
+    return investmentCalendarSymbolDetails(event).filter(function (detail) {
+      return String((detail || {}).symbol || "").trim().toUpperCase() === normalized;
+    })[0] || { symbol: normalized };
+  }
+
+  function investmentCalendarDisplayText(event, value) {
+    var text = String(value || "");
+    ((event || {}).symbols || []).forEach(function (symbol) {
+      text = textWithDisplaySymbol(text, symbol, investmentCalendarSymbolDetail(event, symbol));
+    });
+    return text;
+  }
+
+  function investmentCalendarDisplayTitle(event, fallback) {
+    return investmentCalendarDisplayText(event, (event || {}).displayTitle || (event || {}).title || fallback || "투자 이벤트");
+  }
+
+  function investmentCalendarSymbolMetaLabel(event) {
+    return uniqueTextItems(((event || {}).symbols || []).concat((event || {}).markets || [])).join(" · ");
+  }
+
   function investmentCalendarTargetLabel(event) {
-    var targets = ((event || {}).symbols || []).concat(((event || {}).markets || []));
+    var targets = ((event || {}).symbols || []).map(function (symbol) {
+      return stockDisplayName(symbol, investmentCalendarSymbolDetail(event, symbol));
+    }).concat(((event || {}).markets || []));
     return targets.slice(0, 3).join(" · ") || "전체 포트폴리오";
   }
 
@@ -13140,7 +13169,7 @@
 
   function investmentCalendarImpactText(event) {
     var payload = investmentCalendarPayload(event);
-    if (payload.investmentImpact) return String(payload.investmentImpact || "");
+    if (payload.investmentImpact) return investmentCalendarDisplayText(event, payload.investmentImpact);
     var target = investmentCalendarTargetLabel(event);
     var type = (event || {}).eventType || "";
     if (type === "adrListing") return "ADR/GDR 상장은 해외 투자자 접근성, 거래 유동성, 원주와 예탁증서 간 가격 차이를 통해 " + target + "의 재평가와 변동성에 영향을 줄 수 있습니다.";
@@ -13378,13 +13407,12 @@
   function renderInvestmentCalendarDayEventChip(event) {
     var tone = investmentCalendarTone(event);
     var key = event.eventId || event.id || event.title || "";
-    var targets = (event.symbols || []).concat(event.markets || []);
     var dayKey = investmentCalendarEventDayKey(event);
     return [
-      '<button class="investment-calendar-day-event ' + escapeHtml(tone) + '" type="button" data-calendar-event-detail="' + escapeHtml(key) + '" data-calendar-event-day="' + escapeHtml(dayKey) + '" aria-label="' + escapeHtml(investmentCalendarEventTimeLabel(event) + " " + (event.title || "이벤트")) + '">',
+      '<button class="investment-calendar-day-event ' + escapeHtml(tone) + '" type="button" data-calendar-event-detail="' + escapeHtml(key) + '" data-calendar-event-day="' + escapeHtml(dayKey) + '" aria-label="' + escapeHtml(investmentCalendarEventTimeLabel(event) + " " + investmentCalendarDisplayTitle(event, "이벤트")) + '">',
       '<span>' + escapeHtml(investmentCalendarEventTimeLabel(event)) + '</span>',
-      '<strong>' + escapeHtml(event.title || "이벤트") + '</strong>',
-      '<em>' + escapeHtml(targets.slice(0, 2).join(" · ") || investmentCalendarEventTypeLabel(event.eventType)) + '</em>',
+      '<strong>' + escapeHtml(investmentCalendarDisplayTitle(event, "이벤트")) + '</strong>',
+      '<em>' + escapeHtml(investmentCalendarTargetLabel(event) || investmentCalendarEventTypeLabel(event.eventType)) + '</em>',
       '</button>'
     ].join("");
   }
@@ -13406,7 +13434,6 @@
 
   function renderInvestmentCalendarEvent(event) {
     var tone = investmentCalendarTone(event);
-    var targets = (event.symbols || []).concat(event.markets || []);
     var key = event.eventId || event.id || event.title || "";
     return [
       '<section class="investment-calendar-event ' + escapeHtml(tone) + '"' + cardTypeAttrs("calendar-event", tone) + cardFormatAttrs("summary-list-card", "compact") + '>',
@@ -13417,16 +13444,17 @@
       '</div>',
       '<div class="investment-calendar-event-copy">',
       '<p class="label">' + escapeHtml(investmentCalendarEventTypeLabel(event.eventType)) + '</p>',
-      '<h3>' + escapeHtml(event.title || "이벤트") + '</h3>',
+      '<h3>' + escapeHtml(investmentCalendarDisplayTitle(event, "이벤트")) + '</h3>',
       renderRecordChangedAt(event),
       '<div class="notification-detail-tags">',
       '<span>중요도 ' + escapeHtml(event.importance || 0) + '</span>',
-      '<span>' + escapeHtml(targets.join(" · ") || "전체 포트폴리오") + '</span>',
+      '<span>' + escapeHtml(investmentCalendarTargetLabel(event)) + '</span>',
+      investmentCalendarSymbolMetaLabel(event) ? '<span>' + escapeHtml(investmentCalendarSymbolMetaLabel(event)) + '</span>' : '',
       String(event.status || "").toLowerCase() === "tentative" ? '<span>검토 전 일정</span>' : '',
       investmentCalendarPayload(event).timeState === "operationalDefault" ? '<span>시각은 알림 기준</span>' : '',
       '<span>' + escapeHtml(investmentCalendarReminderLabel(event)) + '</span>',
       '</div>',
-      event.notes ? '<p class="subtle">' + escapeHtml(event.notes) + '</p>' : '',
+      event.notes ? '<p class="subtle">' + escapeHtml(investmentCalendarDisplayText(event, event.notes)) + '</p>' : '',
       renderInvestmentCalendarImpactPreview(event),
       '</div>',
       '</div>',
@@ -13578,7 +13606,6 @@
   }
 
   function renderInvestmentCalendarCandidate(candidate) {
-    var targets = (candidate.symbols || []).concat(candidate.markets || []);
     var id = candidate.candidateId || "";
     var busy = state.investmentCalendarCandidateReviewing === id;
     var readOnly = isStaticPreviewHost() || state.serverSettingsLocked;
@@ -13613,14 +13640,15 @@
       '</div>',
       '<div class="investment-calendar-event-copy">',
       '<p class="label">' + escapeHtml((aiRecommended ? "AI 추천 · " : "") + investmentCalendarEventTypeLabel(candidate.eventType) + " · " + reason) + '</p>',
-      '<h3>' + escapeHtml(candidate.title || "자동 감지 후보") + '</h3>',
+      '<h3>' + escapeHtml(investmentCalendarDisplayTitle(candidate, "자동 감지 후보")) + '</h3>',
       renderRecordChangedAt(candidate),
       '<div class="notification-detail-tags">',
       '<span>중요도 ' + escapeHtml(candidate.importance || 0) + '</span>',
-      '<span>' + escapeHtml(targets.join(" · ") || "전체 포트폴리오") + '</span>',
+      '<span>' + escapeHtml(investmentCalendarTargetLabel(candidate)) + '</span>',
+      investmentCalendarSymbolMetaLabel(candidate) ? '<span>' + escapeHtml(investmentCalendarSymbolMetaLabel(candidate)) + '</span>' : '',
       '<span>' + escapeHtml(candidate.source || "research-evidence") + '</span>',
       '</div>',
-      candidate.notes ? '<p class="subtle">' + escapeHtml(candidate.notes) + '</p>' : '',
+      candidate.notes ? '<p class="subtle">' + escapeHtml(investmentCalendarDisplayText(candidate, candidate.notes)) + '</p>' : '',
       renderInvestmentCalendarImpactPreview(candidate),
       renderInvestmentCalendarWatchList(candidate),
       '</div>',
@@ -13656,7 +13684,6 @@
     var confirmation = state.investmentCalendarCandidateConfirmation;
     if (!confirmation) return "";
     var candidate = investmentCalendarCandidateById(confirmation.candidateId) || {};
-    var targets = (candidate.symbols || []).concat(candidate.markets || []);
     var busy = state.investmentCalendarCandidateReviewing === confirmation.candidateId;
     return [
       '<div class="calendar-entry-backdrop" data-calendar-candidate-confirm-close>',
@@ -13667,8 +13694,8 @@
       '</header>',
       '<form class="calendar-candidate-confirm-form" data-calendar-candidate-confirm-form novalidate>',
       '<div class="calendar-candidate-confirm-context">',
-      '<strong>' + escapeHtml(candidate.title || confirmation.title || "자동 감지 일정") + '</strong>',
-      '<span>' + escapeHtml([targets.join(" · "), candidate.source || confirmation.source, investmentCalendarTimeStateLabel(candidate)].filter(Boolean).join(" · ")) + '</span>',
+      '<strong>' + escapeHtml(investmentCalendarDisplayTitle(candidate, confirmation.title || "자동 감지 일정")) + '</strong>',
+      '<span>' + escapeHtml([investmentCalendarTargetLabel(candidate), investmentCalendarSymbolMetaLabel(candidate), candidate.source || confirmation.source, investmentCalendarTimeStateLabel(candidate)].filter(Boolean).join(" · ")) + '</span>',
       '</div>',
       '<div class="calendar-candidate-confirm-fields">',
       '<label class="setting-field"><span>발표 날짜</span><input type="date" aria-required="true" data-calendar-candidate-confirm-field="date" value="' + escapeHtml(confirmation.date || "") + '"' + (busy ? ' disabled' : '') + '></label>',
@@ -13703,7 +13730,7 @@
       '<div class="investment-calendar-next-body">',
       '<strong class="investment-calendar-next-time">' + escapeHtml(next.startsAt ? investmentCalendarScheduleLabel(next) : "등록 대기") + '</strong>',
       '<em>' + escapeHtml((String(next.status || "").toLowerCase() === "tentative" ? "검토 전 · " : "") + nextType + " · " + nextTarget) + '</em>',
-      '<span class="investment-calendar-next-title">' + escapeHtml(next.title || "예정 이벤트를 등록하면 알림 후보가 생성됩니다.") + '</span>',
+      '<span class="investment-calendar-next-title">' + escapeHtml(next.startsAt ? investmentCalendarDisplayTitle(next, "투자 이벤트") : "예정 이벤트를 등록하면 알림 후보가 생성됩니다.") + '</span>',
       '</div>',
       renderCalendarEntryButton("이벤트 등록", "text-button primary"),
       '</section>',
@@ -13755,13 +13782,12 @@
   function investmentCalendarEventWorkDetailPayload(key) {
     var event = investmentCalendarEventByKey(key);
     if (!event) return null;
-    var targets = (event.symbols || []).concat(event.markets || []);
     var tone = investmentCalendarTone(event);
     var payload = investmentCalendarPayload(event);
     return {
       kicker: "Calendar Event",
-      title: event.title || "투자 이벤트",
-      meta: [investmentCalendarEventTypeLabel(event.eventType), event.startsAt ? formatClock(event.startsAt) : "", targets.join(" · ")].filter(Boolean).join(" · "),
+      title: investmentCalendarDisplayTitle(event, "투자 이벤트"),
+      meta: [investmentCalendarEventTypeLabel(event.eventType), event.startsAt ? formatClock(event.startsAt) : "", investmentCalendarTargetLabel(event), investmentCalendarSymbolMetaLabel(event)].filter(Boolean).join(" · "),
       body: [
         '<section class="work-detail-section primary">',
         '<strong>투자 영향</strong>',
@@ -13771,13 +13797,13 @@
         payload.positiveScenario || payload.negativeScenario ? [
           '<section class="work-detail-section">',
           '<strong>시나리오</strong>',
-          payload.positiveScenario ? '<p><b>긍정</b> ' + escapeHtml(payload.positiveScenario) + '</p>' : '',
-          payload.negativeScenario ? '<p><b>부정</b> ' + escapeHtml(payload.negativeScenario) + '</p>' : '',
+          payload.positiveScenario ? '<p><b>긍정</b> ' + escapeHtml(investmentCalendarDisplayText(event, payload.positiveScenario)) + '</p>' : '',
+          payload.negativeScenario ? '<p><b>부정</b> ' + escapeHtml(investmentCalendarDisplayText(event, payload.negativeScenario)) + '</p>' : '',
           '</section>'
         ].join("") : '',
         '<section class="work-detail-section primary">',
         '<strong>이벤트 요약</strong>',
-        '<p>' + escapeHtml(event.notes || "등록된 메모가 없습니다. 이벤트 시점과 대상 종목을 확인한 뒤 알림 후보로 이어집니다.") + '</p>',
+        '<p>' + escapeHtml(investmentCalendarDisplayText(event, event.notes || "등록된 메모가 없습니다. 이벤트 시점과 대상 종목을 확인한 뒤 알림 후보로 이어집니다.")) + '</p>',
         '</section>',
         '<div class="work-detail-metric-row">',
         renderNotificationDetailMetric("중요도", event.importance || 0, tone),
@@ -13786,7 +13812,7 @@
         '</div>',
         '<section class="work-detail-section">',
         '<strong>대상</strong>',
-        '<p>' + escapeHtml(targets.join(" · ") || "전체 포트폴리오") + '</p>',
+        '<p>' + escapeHtml([investmentCalendarTargetLabel(event), investmentCalendarSymbolMetaLabel(event)].filter(Boolean).join(" · ")) + '</p>',
         '</section>'
       ].join(""),
       footer: '<button class="mini-button danger" type="button" data-calendar-delete="' + escapeHtml(event.eventId || "") + '">삭제</button>'

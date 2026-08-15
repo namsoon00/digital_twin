@@ -733,6 +733,7 @@ def build_investment_calendar_service(settings=None, event_publisher=None) -> In
         notification_queue=stores.notification_job_store(configured_settings),
         settings=configured_settings,
         event_publisher=event_publisher or default_event_bus(),
+        symbol_repository=stores.symbol_universe_store(configured_settings),
     )
 
 
@@ -746,6 +747,7 @@ def build_official_calendar_sync_service(settings=None, event_publisher=None) ->
         candidate_repository=stores.investment_calendar_candidate_store(configured_settings),
         calendar_service=calendar_service,
         settings=configured_settings,
+        symbol_repository=stores.symbol_universe_store(configured_settings),
     )
     return OfficialCalendarSyncService(
         calendar_service=calendar_service,
@@ -765,6 +767,7 @@ def build_investment_calendar_candidate_service(settings=None, event_publisher=N
         candidate_repository=stores.investment_calendar_candidate_store(configured_settings),
         calendar_service=build_investment_calendar_service(configured_settings, event_publisher),
         settings=configured_settings,
+        symbol_repository=stores.symbol_universe_store(configured_settings),
     )
 
 

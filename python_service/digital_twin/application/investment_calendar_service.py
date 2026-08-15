@@ -25,6 +25,7 @@ from ..domain.investment_strategy_guidance import event_strategy_guidance, merge
 from ..domain.message_types import INVESTMENT_CALENDAR_REMINDER
 from ..domain.notifications import NotificationJob
 from ..domain.portfolio import utc_now_iso
+from .symbol_display_projection import enrich_symbol_display_records
 
 
 DISABLED_VALUES = {"0", "false", "no", "off", "disabled"}
@@ -121,12 +122,14 @@ class InvestmentCalendarService:
         notification_queue=None,
         settings: Dict[str, object] = None,
         event_publisher=None,
+        symbol_repository=None,
     ):
         self.repository = repository
         self.account_repository = account_repository
         self.notification_queue = notification_queue
         self.settings = dict(settings or {})
         self.event_publisher = event_publisher
+        self.symbol_repository = symbol_repository
 
     def enabled(self) -> bool:
         return truthy(self.settings.get("investmentCalendarEnabled"), True)
@@ -181,9 +184,13 @@ class InvestmentCalendarService:
         ]
         summary["upcoming"] = len(upcoming_events)
         summary["nextStartsAt"] = upcoming_events[0].starts_at if upcoming_events else ""
+        event_rows = enrich_symbol_display_records(
+            [event.to_dict() for event in events],
+            self.symbol_repository,
+        )
         return {
             "generatedAt": utc_now_iso(),
-            "events": [event.to_dict() for event in events],
+            "events": event_rows,
             "summary": summary,
             "eventTypes": [{"type": key, "label": label} for key, label in EVENT_TYPE_LABELS.items()],
             "from": from_at,

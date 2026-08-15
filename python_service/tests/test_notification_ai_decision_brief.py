@@ -59,6 +59,7 @@ def decision_context(review_level="observe", change_state="unchanged"):
                         "templateId": "template:hold",
                         "claim": "가격 방어가 이어질 수 있다.",
                         "stance": "support",
+                        "supportingRuleIds": ["graph.temporal.support.v1"],
                         "supportingEvidenceIds": ["relation:1"],
                     }],
                 },
@@ -156,7 +157,7 @@ class NotificationAIDecisionBriefTests(unittest.TestCase):
             brief["inference"]["contextCoverage"]["aboxReadMode"],
         )
         self.assertTrue(brief["inference"]["contextCoverage"]["unchangedFactsRetained"])
-        self.assertIn('"schemaVersion":"investment-ai-decision-brief-v2"', prompt)
+        self.assertIn('"schemaVersion":"' + AI_DECISION_BRIEF_VERSION + '"', prompt)
         self.assertIn('"drawdownFromPeakPct":-4.1', prompt)
         self.assertIn("valuationReferenceOnly=true", prompt)
         self.assertIn("시스템 수집기가", prompt)
@@ -209,6 +210,7 @@ class NotificationAIDecisionBriefTests(unittest.TestCase):
             "hypothesisId": "hypothesis:" + str(index),
             "templateId": "template:" + str(index),
             "claim": "y" * 800,
+            "supportingRuleIds": ["graph.temporal.support.v1"],
             "supportingEvidenceIds": ["evidence:" + str(item) for item in range(40)],
         } for index in range(6)]
         window_keys = ["15M", "1H", "SESSION", "1D", "3D", "5D", "20D"]
@@ -270,7 +272,7 @@ class NotificationAIDecisionBriefTests(unittest.TestCase):
         )
 
         self.assertLessEqual(len(prompt.encode("utf-8")), 16 * 1024)
-        self.assertIn('"schemaVersion":"investment-ai-decision-brief-v2"', prompt)
+        self.assertIn('"schemaVersion":"' + AI_DECISION_BRIEF_VERSION + '"', prompt)
         payload = json.loads(prompt.split("DecisionBrief:\n", 1)[1])
         self.assertEqual(
             window_keys,
@@ -312,6 +314,7 @@ class NotificationAIDecisionBriefTests(unittest.TestCase):
             "claim": "경쟁 가설 " + ("h" * 1000),
             "stance": "support" if index % 2 == 0 else "risk",
             "verificationStatus": "verified-by-current-evidence",
+            "supportingRuleIds": [rule_ids[index % len(rule_ids)]],
             "supportingEvidenceIds": ["relation-evidence:" + ("s" * 160)],
             "counterEvidenceIds": ["relation-evidence:" + ("c" * 160)],
         } for index, hypothesis_id in enumerate(hypothesis_ids)]

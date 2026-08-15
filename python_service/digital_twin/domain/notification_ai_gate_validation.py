@@ -4,6 +4,13 @@ from typing import Dict, List, Tuple
 
 from .accounts import message_delivery_profile, normalize_message_delivery_level
 from .company_knowledge import active_company_valuation_rule_ids
+from .decision_evidence_contract import (
+    cap_decision_readiness,
+    decision_readiness_contract,
+    hypothesis_set_evidence_summary,
+    material_action_transition_contract,
+    temporal_evidence_summary,
+)
 from .decision_follow_up import normalize_follow_up_conditions
 from .investment_brain import hypothesis_comparison_audit, is_selectable_hypothesis_payload
 from .investment_decision_history import previous_decision_episode_value
@@ -571,6 +578,43 @@ def hypothesis_context_payload(context: Dict[str, object]) -> Dict[str, object]:
     return hypothesis_set if isinstance(hypothesis_set, dict) else {}
 
 
+def normalize_temporal_evidence_claims(
+    context: Dict[str, object],
+    rows: List[str],
+) -> Tuple[List[str], bool]:
+    """Do not let loaded, overlapping windows masquerade as rule confirmations."""
+
+    internal = context.get("notificationAiInternalData")
+    internal = internal if isinstance(internal, dict) else {}
+    relation = relation_context_value(context or {})
+    facts = relation.get("facts") if isinstance(relation.get("facts"), dict) else {}
+    windows = internal.get("temporalWindows") or facts.get("temporalWindows") or []
+    summary = temporal_evidence_summary(windows, relation)
+    loaded = int(summary.get("loadedWindowCount") or 0)
+    matched = int(summary.get("matchedWindowCount") or 0)
+    if loaded <= 0 or matched >= loaded:
+        return rows, False
+    suspicious = re.compile(r"(?:^|\D)" + re.escape(str(loaded)) + r"\s*개\s*(?:기간|시간|구간)")
+    normalized: List[str] = []
+    changed = False
+    for row in rows:
+        text = str(row or "")
+        if suspicious.search(text) and any(token in text for token in ("표본", "근거", "활성", "성립")):
+            changed = True
+            continue
+        normalized.append(text)
+    if changed:
+        matched_keys = ", ".join(summary.get("matchedWindowKeys") or []) or "없음"
+        normalized.insert(
+            0,
+            str(loaded)
+            + "개 시간 구간을 조회했고, 그중 TypeDB 규칙을 충족한 구간은 "
+            + str(matched)
+            + "개(" + matched_keys + ")입니다.",
+        )
+    return normalized[:5], changed
+
+
 def normalized_hypothesis_comparison(
     context: Dict[str, object],
     payload: Dict[str, object] = None,
@@ -582,6 +626,7 @@ def normalized_hypothesis_comparison(
         for item in hypothesis_set.get("hypotheses") or []
         if isinstance(item, dict) and is_selectable_hypothesis_payload(item)
     ]
+    evidence_summary = hypothesis_set_evidence_summary(hypothesis_set)
     audit = hypothesis_comparison_audit(
         candidates,
         [item for item in payload.get("hypotheses") or [] if isinstance(item, dict)],
@@ -637,6 +682,8 @@ def normalized_hypothesis_comparison(
     )
     return {
         "hypotheses": reviews,
+        "decisionEvidenceSummary": evidence_summary,
+        "referenceHypotheses": list(evidence_summary.get("referenceHypotheses") or []),
         "selectedHypothesisId": audit.selected_hypothesis_id,
         "hypothesisComparisonState": audit.comparison_state,
         "hypothesisSelectionSource": audit.selection_source,
@@ -826,6 +873,16 @@ def local_validated_ai_response(context: Dict[str, object], source: str = "local
         # available.  Preserve the current TypeDB entry eligibility rather
         # than letting a stale legacy opinion silently erase it.
         action = "BUY"
+    system_readiness = decision_readiness_contract(context)
+    if (
+        action in {"BUY", "ADD", "TRIM", "SELL"}
+        and bool(system_readiness.get("evaluated"))
+        and system_readiness.get("state") != "ready"
+    ):
+        action = normalized_action_for_rulebox_policy(
+            context,
+            normalized_action_for_target(context, "HOLD"),
+        )
     evidence = []
     for item in _driver_rows(context, ["risk", "support", "neutral"], 5):
         evidence.append(item)
@@ -872,6 +929,12 @@ def local_validated_ai_response(context: Dict[str, object], source: str = "local
     warnings: List[str] = []
     append_watchlist_action_warning(context, original_action, action, warnings)
     append_rulebox_action_policy_warning(context, target_normalized_action, action, warnings)
+    if bool(system_readiness.get("evaluated")) and system_readiness.get("state") != "ready":
+        warnings.append(
+            "시스템 증거 계약이 "
+            + str(system_readiness.get("state"))
+            + " 상태라 로컬 실행 의견을 만들지 않았습니다."
+        )
     source_urls = source_urls_from_context(context)
     validation_state, data_state, review_level, validation_label, validation_reasons = validation_state_for_response(
         context,
@@ -1169,7 +1232,18 @@ def compact_hypothesis_set_for_ai(payload: object) -> Dict[str, object]:
         ]
         if hypothesis_set.get(key) not in (None, "", [], {})
     }
+    evidence_summary = hypothesis_set_evidence_summary(hypothesis_set)
+    compact["decisionEvidenceSummary"] = {
+        key: evidence_summary.get(key)
+        for key in (
+            "version", "totalHypothesisCount", "eligibleHypothesisCount",
+            "eligibleFamilyCount", "referenceHypothesisCount",
+            "eligibleHypothesisIds", "referenceHypothesisIds", "eligibleFamilyIds",
+        )
+        if evidence_summary.get(key) not in (None, "", [], {})
+    }
     hypotheses: List[Dict[str, object]] = []
+    reference_hypotheses: List[Dict[str, object]] = []
     keys = [
         "hypothesisId", "familyId", "causalSignature", "templateId", "templateLabel",
         "claim", "stance", "scopeState", "marketHypothesisId", "accountHypothesisOverlayId",
@@ -1188,10 +1262,22 @@ def compact_hypothesis_set_for_ai(payload: object) -> Dict[str, object]:
         for key in ["supportingEvidenceIds", "counterEvidenceIds", "causalPathIds"]:
             if key in row and isinstance(row[key], list):
                 row[key] = row[key][:6]
-        hypotheses.append(row)
-        if len(hypotheses) >= 6:
+        if is_selectable_hypothesis_payload(item):
+            if len(hypotheses) < 6:
+                hypotheses.append(row)
+        elif len(reference_hypotheses) < 4:
+            reference_hypotheses.append({
+                key: row.get(key)
+                for key in [
+                    "hypothesisId", "templateId", "templateLabel", "stance",
+                    "approvalStatus", "verificationStatus",
+                ]
+                if row.get(key) not in (None, "", [], {})
+            })
+        if len(hypotheses) >= 6 and len(reference_hypotheses) >= 4:
             break
     compact["hypotheses"] = hypotheses
+    compact["referenceHypotheses"] = reference_hypotheses[:4]
     return compact
 
 
@@ -1965,6 +2051,14 @@ def validated_response_from_payload(
     summary = watchlist_friendly_text(context, user_friendly_ai_text(payload.get("summary") or fallback.summary))
     opinion = soften_order_language(watchlist_friendly_text(context, user_friendly_ai_text(payload.get("opinion") or fallback.opinion)))
     raw_evidence = watchlist_friendly_rows(context, user_friendly_ai_list(payload.get("evidence") or [], 5))
+    raw_evidence, temporal_claim_corrected = normalize_temporal_evidence_claims(
+        context,
+        raw_evidence,
+    )
+    if temporal_claim_corrected:
+        warnings.append(
+            "조회된 시간 구간 수를 규칙 성립 수로 표현한 문장을 실제 TypeDB 일치 구간 기준으로 보정했습니다."
+        )
     raw_counter = watchlist_friendly_rows(context, user_friendly_ai_list(payload.get("counterEvidence") or payload.get("counter_evidence") or [], 4))
     if envelope_disagreement_required(context, action):
         explicit_disagreement = str(payload.get("disagreementReason") or payload.get("disagreement_reason") or "").strip()
@@ -2030,8 +2124,19 @@ def validated_response_from_payload(
     selected_hypothesis_id = str(hypothesis_comparison.get("selectedHypothesisId") or "")
     unresolved_questions = list(hypothesis_comparison.get("unresolvedQuestions") or [])
     epistemic_summary = str(hypothesis_comparison.get("epistemicSummary") or "")
-    if len(hypotheses) < 3:
-        warnings.append("경쟁 가설이 3개 미만이라 최종 판단의 가설 비교 범위가 제한됐습니다.")
+    evidence_summary = dict(hypothesis_comparison.get("decisionEvidenceSummary") or {})
+    hypothesis_set = hypothesis_context_payload(context)
+    try:
+        minimum_comparison_count = int(float(str(hypothesis_set.get("minimumComparisonCount") or 3)))
+    except (TypeError, ValueError):
+        minimum_comparison_count = 3
+    minimum_comparison_count = max(1, min(6, minimum_comparison_count))
+    if int(evidence_summary.get("eligibleFamilyCount") or len(hypotheses)) < minimum_comparison_count:
+        warnings.append(
+            "판단 가능한 독립 경쟁 가설군이 "
+            + str(minimum_comparison_count)
+            + "개 미만이라 최종 판단의 비교 범위가 제한됐습니다."
+        )
     comparison_state = str(hypothesis_comparison.get("hypothesisComparisonState") or "unavailable")
     selection_source = str(hypothesis_comparison.get("hypothesisSelectionSource") or "not-selected")
     if hypotheses and comparison_state != "completed":
@@ -2049,6 +2154,19 @@ def validated_response_from_payload(
     ).strip().lower()
     if decision_readiness not in {"ready", "conditional", "insufficient"}:
         decision_readiness = "conditional"
+    system_readiness = decision_readiness_contract(context)
+    uncapped_decision_readiness = decision_readiness
+    if bool(system_readiness.get("evaluated")):
+        decision_readiness = cap_decision_readiness(
+            decision_readiness,
+            system_readiness.get("state"),
+        )
+        if decision_readiness != uncapped_decision_readiness:
+            warnings.append(
+                "AI 판단 준비 상태가 시스템 증거 계약보다 높아 "
+                + decision_readiness
+                + " 상태로 낮췄습니다."
+            )
     causal_chain = normalized_causal_chain(context, payload)
     alternative_action = normalized_alternative_action(context, payload)
     if invalid_hypothesis_ids:
@@ -2078,7 +2196,10 @@ def validated_response_from_payload(
     )
     strict_causal_contract = str(
         context.get("notificationAiDecisionContractVersion") or ""
-    ).strip() == "notification-ai-decision-contract-v2"
+    ).strip() in {
+        "notification-ai-decision-contract-v2",
+        "notification-ai-decision-contract-v3",
+    }
     if strict_causal_contract and action in executable_actions and (
         decision_readiness != "ready" or not supported_causal_path
     ):
@@ -2097,6 +2218,34 @@ def validated_response_from_payload(
         append_unique_text(
             validation_reasons,
             "실행 행동에는 근거 ID가 연결된 supported 인과 경로와 ready 상태가 필요합니다.",
+            180,
+        )
+    transition_contract = material_action_transition_contract(context, action)
+    if (
+        bool(transition_contract.get("actionChanged"))
+        and bool(transition_contract.get("evaluated"))
+        and not bool(transition_contract.get("allowsActionChange"))
+    ):
+        previous_action = str(transition_contract.get("previousAction") or "HOLD").upper()
+        if previous_action not in VALID_ACTIONS:
+            previous_action = "HOLD"
+        action = normalized_action_for_rulebox_policy(
+            context,
+            normalized_action_for_target(context, previous_action),
+        )
+        summary = "실질적인 새 근거가 없어 이전 행동 판단을 유지합니다."
+        opinion = "새 세대 기준선만 생성된 상태이므로 가격·수급·재무의 실제 변화가 확인될 때 다시 판단합니다."
+        validation_state = "conditional"
+        validation_label = VALIDATION_STATE_LABELS["conditional"]
+        decision_readiness = "conditional"
+        review_level = "check"
+        review_label = REVIEW_LEVEL_LABELS["check"]
+        warnings.append(
+            "비실질 초기 기준선에서 발생한 노출 확대 행동 변경을 이전 판단으로 되돌렸습니다."
+        )
+        append_unique_text(
+            validation_reasons,
+            "행동 변경에는 이전 값과 현재 값이 모두 있는 사실 변화 또는 실질 소스 이벤트가 필요합니다.",
             180,
         )
     disagreement = disagreement_reason_text(precomputed_action, action, payload, evidence, counter)
@@ -2161,6 +2310,16 @@ def validated_response_from_payload(
             420,
         ),
     ))
+    if (
+        bool(transition_contract.get("evaluated"))
+        and not bool(transition_contract.get("allowsActionChange"))
+    ):
+        current_action_plan = opinion
+        change_analysis = (
+            "이전 판단과 다른 행동 후보가 생성됐지만 가격·수급·재무의 실질 변화가 없어 "
+            "행동 변경으로 인정하지 않았습니다."
+        )
+        execution_decision = current_action_plan
     relation_facts = relation_context_value(context).get("facts")
     relation_facts = dict(relation_facts or {}) if isinstance(relation_facts, dict) else {}
     subject = relation_context_value(context).get("subject")

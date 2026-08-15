@@ -56,6 +56,30 @@ class FinalAIDeliveryTests(unittest.TestCase):
 
         self.assertEqual("send", decision["decision"])
 
+    def test_non_material_graph_rebaseline_cannot_send_action_change(self):
+        context = watchlist_context(ai_kind="action-changed")
+        context["notificationAiValidatedResponse"]["action"] = "BUY"
+        context["aiDecisionTransition"].update({
+            "previousAction": "HOLD",
+            "currentAction": "BUY",
+        })
+        context["decisionTransition"] = {
+            "kind": "initial",
+            "material": False,
+            "previousAction": "",
+            "currentAction": "BUY",
+        }
+        context["investmentNotificationTransition"] = {
+            "changed": True,
+            "material": True,
+            "kind": "action-changed",
+        }
+
+        decision = final_ai_delivery_decision(context)
+
+        self.assertEqual("suppress", decision["decision"])
+        self.assertEqual("non_material_action_rebaseline", decision["suppressionReason"])
+
     def test_decision_changing_source_is_sent_even_when_action_is_unchanged(self):
         decision = final_ai_delivery_decision(
             watchlist_context(material_sources=["main:news:035720:article-1"]),

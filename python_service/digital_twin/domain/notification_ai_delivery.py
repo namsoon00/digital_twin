@@ -5,7 +5,7 @@ from __future__ import annotations
 from typing import Dict, Mapping
 
 
-FINAL_AI_DELIVERY_POLICY_VERSION = "final-ai-delivery-v3"
+FINAL_AI_DELIVERY_POLICY_VERSION = "final-ai-delivery-v4"
 
 
 def _mapping(value: object) -> Dict[str, object]:
@@ -66,9 +66,6 @@ def final_ai_delivery_decision(context: Mapping[str, object]) -> Dict[str, objec
         "selectedCoreInferenceEligible": selected_core_eligible,
     }
     transition_enabled = context.get("investmentStateTransitionNotificationsEnabled") is not False
-    if transition_enabled and user_transition.get("material"):
-        base["reason"] = "사용자에게 표시되는 최종 판단 상태가 변경됐습니다."
-        return base
     if not validated:
         return base
     if not ai_transition.get("historyAvailable"):
@@ -82,6 +79,25 @@ def final_ai_delivery_decision(context: Mapping[str, object]) -> Dict[str, objec
                 "suppressionReason": "initial_graph_baseline",
                 "reason": "첫 비실행 최종 판단 상태를 알림 없이 기준선으로 저장합니다.",
             })
+        return base
+    if (
+        _text(ai_transition.get("kind")).lower() == "action-changed"
+        and bool(graph_transition)
+        and _text(graph_transition.get("kind")).lower() == "initial"
+        and not bool(graph_transition.get("material"))
+        and not material_sources
+    ):
+        base.update({
+            "decision": "suppress",
+            "suppressionReason": "non_material_action_rebaseline",
+            "reason": (
+                "최종 행동 후보는 바뀌었지만 그래프의 실질 변화나 새 판단 원문이 없어 "
+                "기준선 이력에만 기록합니다."
+            ),
+        })
+        return base
+    if transition_enabled and user_transition.get("material"):
+        base["reason"] = "사용자에게 표시되는 최종 판단 상태가 변경됐습니다."
         return base
     if (
         _text(graph_transition.get("kind")).lower() == "initial"

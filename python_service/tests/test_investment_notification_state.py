@@ -119,7 +119,7 @@ class InvestmentNotificationStateTests(unittest.TestCase):
         self.assertEqual("suppress", decision["decision"])
         self.assertEqual("initial_graph_baseline", decision["suppressionReason"])
 
-    def test_action_change_remains_material(self):
+    def test_action_change_without_material_graph_delta_is_a_rebaseline(self):
         previous = {
             "episodeId": "decision-episode:lg-previous",
             "action": "HOLD",
@@ -137,7 +137,9 @@ class InvestmentNotificationStateTests(unittest.TestCase):
         ))
 
         self.assertEqual("action-changed", context["investmentNotificationTransition"]["kind"])
-        self.assertEqual("send", final_ai_delivery_decision(context)["decision"])
+        decision = final_ai_delivery_decision(context)
+        self.assertEqual("suppress", decision["decision"])
+        self.assertEqual("non_material_action_rebaseline", decision["suppressionReason"])
 
     def test_state_transition_setting_can_store_without_sending(self):
         previous = {

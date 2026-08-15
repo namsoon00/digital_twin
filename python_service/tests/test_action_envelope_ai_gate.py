@@ -253,6 +253,90 @@ class ActionEnvelopeAiGateTests(unittest.TestCase):
         self.assertEqual([], response.causal_chain[0]["evidenceIds"])
         self.assertTrue(any("인과 경로" in item for item in response.validation_warnings))
 
+    def test_v3_reference_only_hypothesis_cannot_unlock_entry_action(self):
+        context = entry_context()
+        context["notificationAiDecisionContractVersion"] = "notification-ai-decision-contract-v3"
+        relation = context["ontologyRelationContext"]
+        relation["actionEnvelope"].update({
+            "selectedRuleId": "graph.entry.confirmed.v1",
+            "dataReadiness": {
+                "state": "ready",
+                "usable": True,
+                "eligibleRuleIds": ["graph.entry.confirmed.v1", "graph.entry.risk.v1"],
+            },
+        })
+        relation["activeRules"] = [{
+            "ruleId": "graph.entry.confirmed.v1",
+            "evidence": [{"evidenceId": "evidence:price:NVDA"}],
+        }]
+        relation["investmentBrain"] = {
+            "hypothesisSet": {
+                "minimumComparisonCount": 3,
+                "hypotheses": [
+                    {
+                        "hypothesisId": "hypothesis:support",
+                        "familyId": "family:support",
+                        "stance": "support",
+                        "evidenceState": "supported",
+                        "supportingRuleIds": ["graph.entry.confirmed.v1"],
+                        "supportingEvidenceIds": ["evidence:price:NVDA"],
+                    },
+                    {
+                        "hypothesisId": "hypothesis:risk",
+                        "familyId": "family:risk",
+                        "stance": "risk",
+                        "evidenceState": "contested",
+                        "supportingRuleIds": ["graph.entry.risk.v1"],
+                        "supportingEvidenceIds": ["evidence:risk:NVDA"],
+                    },
+                    {
+                        "hypothesisId": "hypothesis:valuation-reference",
+                        "familyId": "family:valuation",
+                        "stance": "context",
+                        "evidenceState": "blocked",
+                        "supportingRuleIds": ["graph.valuation.reference.v1"],
+                        "supportingEvidenceIds": ["evidence:valuation:NVDA"],
+                    },
+                ],
+            },
+        }
+
+        response = validated_response_from_payload(context, {
+            "action": "BUY",
+            "summary": "세 가설을 비교해 진입합니다.",
+            "opinion": "소액 진입을 검토합니다.",
+            "evidence": ["가격 회복이 확인됐습니다."],
+            "counterEvidence": ["위험 경로도 남아 있습니다."],
+            "decisionReadiness": "ready",
+            "hypotheses": [
+                {
+                    "hypothesisId": "hypothesis:support",
+                    "verdict": "supported",
+                    "reasoning": "가격 근거가 연결됐습니다.",
+                    "supportingEvidenceIds": ["evidence:price:NVDA"],
+                },
+                {
+                    "hypothesisId": "hypothesis:risk",
+                    "verdict": "weakened",
+                    "reasoning": "위험은 있으나 주경로보다 약합니다.",
+                    "supportingEvidenceIds": ["evidence:risk:NVDA"],
+                },
+            ],
+            "selectedHypothesisId": "hypothesis:support",
+            "causalChain": [{
+                "driver": "가격 회복",
+                "channel": "수급",
+                "expectedEffect": "진입 가능성 증가",
+                "evidenceIds": ["evidence:price:NVDA"],
+                "status": "supported",
+            }],
+        })
+
+        self.assertEqual("HOLD", response.action)
+        self.assertEqual("conditional", response.decision_readiness)
+        self.assertEqual(2, len(response.hypotheses))
+        self.assertTrue(any("시스템 증거 계약" in item for item in response.validation_warnings))
+
     def test_ai_may_lower_entry_eligibility_with_explicit_counter_evidence(self):
         response = validated_response_from_payload(
             entry_context(),
@@ -270,6 +354,43 @@ class ActionEnvelopeAiGateTests(unittest.TestCase):
         self.assertEqual("HOLD", response.action)
         self.assertEqual("BUY", response.precomputed_action)
         self.assertIn("직접 위험 뉴스", response.disagreement_reason)
+
+    def test_loaded_temporal_windows_are_rewritten_to_actual_rule_matches(self):
+        context = entry_context()
+        keys = ["15M", "1H", "SESSION", "1D", "3D", "5D", "20D"]
+        context["notificationAiInternalData"] = {
+            "temporalWindows": [
+                {"windowKey": key, "hasSufficientHistory": True}
+                for key in keys
+            ],
+        }
+        relation = context["ontologyRelationContext"]
+        relation["actionEnvelope"].update({
+            "selectedRuleId": "graph.entry.confirmed.v1",
+            "dataReadiness": {"eligibleRuleIds": ["graph.entry.confirmed.v1"]},
+        })
+        relation["graphStoreInference"] = {
+            "traces": [{
+                "id": "trace:20d",
+                "ruleId": "graph.entry.confirmed.v1",
+                "matchedConditions": [{
+                    "relationType": "HAS_TEMPORAL_WINDOW",
+                    "targetKind": "temporal-window",
+                    "matchedTargetProperties": {"windowKey": "20D"},
+                }],
+            }],
+        }
+
+        response = validated_response_from_payload(context, {
+            "action": "HOLD",
+            "summary": "관심을 유지합니다.",
+            "opinion": "추가 확인합니다.",
+            "evidence": ["충분한 이력이 있는 7개 기간 표본에서 회복 관계가 활성화됐습니다."],
+            "counterEvidence": ["거래량 확인이 약합니다."],
+        })
+
+        self.assertIn("규칙을 충족한 구간은 1개(20D)", response.evidence[0])
+        self.assertTrue(any("시간 구간 수" in item for item in response.validation_warnings))
 
     def test_counter_evidence_becomes_auditable_disagreement_when_reason_is_omitted(self):
         response = validated_response_from_payload(

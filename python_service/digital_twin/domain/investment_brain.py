@@ -5,6 +5,11 @@ import json
 import re
 from typing import Dict, Iterable, List, Optional
 
+from .decision_evidence_contract import (
+    decision_eligible_hypothesis_payload,
+    hypothesis_decision_eligibility,
+    hypothesis_set_evidence_summary,
+)
 from .hypothesis_scoping import (
     ACCOUNT_ONLY_SCOPE,
     HYPOTHESIS_SCOPE_VERSION,
@@ -367,7 +372,11 @@ class InvestmentHypothesis:
     blocked_actions: List[str] = field(default_factory=list)
 
     def to_dict(self) -> Dict[str, object]:
-        return camelize(asdict(self))
+        payload = camelize(asdict(self))
+        eligibility = hypothesis_decision_eligibility(payload)
+        payload["decisionEligibility"] = eligibility["status"]
+        payload["decisionEligibilityReasons"] = eligibility["reasons"]
+        return payload
 
 
 @dataclass(frozen=True)
@@ -450,6 +459,7 @@ class HypothesisSet:
         payload["marketHypotheses"] = [item.to_dict() for item in self.market_hypotheses]
         payload["accountOverlays"] = [item.to_dict() for item in self.account_overlays]
         payload["decisionGuardrails"] = [item.to_dict() for item in self.decision_guardrails]
+        payload["decisionEvidenceSummary"] = hypothesis_set_evidence_summary(payload)
         return payload
 
 
@@ -2239,12 +2249,20 @@ def decision_guardrails_for_context(
     """Describe evidence constraints without turning them into hypotheses."""
 
     result: List[DecisionGuardrail] = []
+    eligible_hypotheses = [
+        item for item in hypotheses
+        if decision_eligible_hypothesis_payload(item.to_dict())
+    ]
     missing = unique_texts(missing_data)
     has_conflict = bool((conflicts or {}).get("hasConflict"))
-    if hypotheses and (len(hypotheses) < minimum_count or missing or has_conflict):
+    if hypotheses and (len(eligible_hypotheses) < minimum_count or missing or has_conflict):
         reasons = []
-        if len(hypotheses) < minimum_count:
-            reasons.append("독립된 TypeDB 규칙 가설이 " + str(minimum_count) + "개보다 적습니다.")
+        if len(eligible_hypotheses) < minimum_count:
+            reasons.append(
+                "판단 가능한 독립 TypeDB 규칙 가설이 "
+                + str(minimum_count)
+                + "개보다 적습니다."
+            )
         if missing:
             reasons.append("필수 데이터가 비어 있습니다: " + ", ".join(missing[:4]))
         if has_conflict:
@@ -2261,7 +2279,10 @@ def decision_guardrails_for_context(
             ]),
             missing_data=missing,
         ))
-    directional_stances = {item.stance for item in hypotheses if item.stance in {"risk", "support"}}
+    directional_stances = {
+        item.stance for item in eligible_hypotheses
+        if item.stance in {"risk", "support"}
+    }
     if hypotheses and len(directional_stances) < 2:
         result.append(DecisionGuardrail(
             guardrail_id=stable_id("decision-guardrail", question.question_id, "counterfactual-coverage"),
@@ -2624,7 +2645,7 @@ def is_selectable_hypothesis_payload(candidate: Dict[str, object]) -> bool:
     family_source = str(item.get("familySource") or item.get("family_source") or "")
     scope_state = str(item.get("scopeState") or item.get("scope_state") or "")
     rule_ids = item.get("supportingRuleIds") or item.get("supporting_rule_ids") or []
-    return bool(rule_ids) and not (
+    return bool(rule_ids) and decision_eligible_hypothesis_payload(item) and not (
         template_id.startswith("hypothesis-template:system.")
         or approval_status == "approved-safety-policy"
         or family_source == "system-safety-policy"

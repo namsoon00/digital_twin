@@ -20852,6 +20852,96 @@ html[data-theme="dark"] .ontology-graph-expanded-toolbar .icon-button.danger {
   overflow-wrap: anywhere;
 }
 
+.notification-detail-disclosure {
+  min-width: 0;
+  border-top: 1px solid var(--ds-card-border);
+}
+
+.notification-detail-disclosure:last-child {
+  border-bottom: 1px solid var(--ds-card-border);
+}
+
+.notification-detail-disclosure > summary,
+.notification-reasoning-step-disclosure > summary {
+  display: grid;
+  grid-template-columns: minmax(0, 1fr) 36px;
+  gap: var(--ds-space-4);
+  align-items: center;
+  min-width: 0;
+  cursor: pointer;
+  list-style: none;
+}
+
+.notification-detail-disclosure > summary {
+  min-height: 64px;
+  padding: var(--ds-space-4) 0;
+}
+
+.notification-detail-disclosure > summary::-webkit-details-marker,
+.notification-reasoning-step-disclosure > summary::-webkit-details-marker {
+  display: none;
+}
+
+.notification-detail-disclosure > summary > span:first-child {
+  display: grid;
+  gap: 3px;
+  min-width: 0;
+}
+
+.notification-detail-disclosure > summary strong {
+  color: var(--ink);
+  font-size: var(--ds-type-label);
+  font-weight: 950;
+}
+
+.notification-detail-disclosure > summary em {
+  color: var(--muted);
+  font-size: var(--ds-type-caption);
+  font-style: normal;
+  font-weight: 760;
+  line-height: 1.45;
+  overflow-wrap: anywhere;
+}
+
+.notification-detail-disclosure-icon {
+  display: grid;
+  width: 36px;
+  height: 36px;
+  place-items: center;
+  color: var(--muted);
+  font-size: 14px;
+  transition: transform 160ms ease, color 160ms ease;
+}
+
+.notification-detail-disclosure[open] > summary .notification-detail-disclosure-icon,
+.notification-reasoning-step-disclosure[open] > summary .notification-detail-disclosure-icon {
+  color: var(--blue);
+  transform: rotate(180deg);
+}
+
+.notification-detail-disclosure-body {
+  display: grid;
+  gap: var(--ds-space-4);
+  min-width: 0;
+  padding: 0 0 var(--ds-space-5);
+}
+
+.notification-detail-disclosure-body > .notification-detail-section {
+  border-right: 0;
+  border-bottom: 0;
+  border-left: 0;
+  border-radius: 0;
+  background: transparent;
+}
+
+.notification-detail-disclosure-body > .notification-detail-section:first-child {
+  border-top: 0;
+}
+
+.notification-detail-secondary-metrics {
+  margin-top: var(--ds-space-2);
+}
+
 .notification-reasoning-section {
   gap: var(--ds-space-5);
   border-left: 3px solid var(--green);
@@ -20957,6 +21047,28 @@ html[data-theme="dark"] .ontology-graph-expanded-toolbar .icon-button.danger {
   padding: 2px 0 var(--ds-space-2);
 }
 
+.notification-reasoning-step-disclosure {
+  min-width: 0;
+}
+
+.notification-reasoning-step-disclosure > summary {
+  align-items: start;
+}
+
+.notification-reasoning-step-detail {
+  display: grid;
+  gap: var(--ds-space-3);
+  min-width: 0;
+  padding: var(--ds-space-3) 0 var(--ds-space-2);
+}
+
+.notification-reasoning-empty {
+  margin: 0;
+  color: var(--muted);
+  font-size: var(--ds-type-caption);
+  line-height: 1.45;
+}
+
 .notification-reasoning-step-copy > strong {
   color: var(--ink);
   font-size: var(--ds-type-label);
@@ -20964,6 +21076,7 @@ html[data-theme="dark"] .ontology-graph-expanded-toolbar .icon-button.danger {
 }
 
 .notification-reasoning-step-copy > p,
+.notification-reasoning-step-summary,
 .notification-reasoning-note {
   margin: 0;
   color: var(--ink);
@@ -21213,6 +21326,20 @@ html[data-theme="dark"] .ontology-graph-expanded-toolbar .icon-button.danger {
 }
 
 @media (max-width: 860px) {
+  .notification-detail-disclosure > summary {
+    min-height: 60px;
+  }
+
+  .notification-detail-disclosure > summary,
+  .notification-reasoning-step-disclosure > summary {
+    gap: var(--ds-space-3);
+  }
+
+  .notification-detail-disclosure-body > .notification-detail-section {
+    padding-right: 0;
+    padding-left: 0;
+  }
+
   .notification-reasoning-head {
     grid-template-columns: 1fr;
   }

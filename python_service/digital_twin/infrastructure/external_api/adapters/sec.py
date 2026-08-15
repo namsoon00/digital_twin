@@ -1,6 +1,8 @@
 from typing import Dict, Iterable, List
 
 from ....application.external_data.contracts import CollectionJob, CollectionPartition, DatasetDescriptor, ExternalSubject
+from ...external_signal_provider_sec import DEFAULT_SEC_COMPANY_CIKS
+from ...external_signal_utils import symbol_assignments
 from .base import empty_signals, equity_partitions, legacy_provider, observation, position_for, require_payload, source_as_of
 
 
@@ -9,6 +11,29 @@ def is_us_equity(subject: ExternalSubject) -> bool:
     return bool(symbol and not symbol.isdigit() and (
         subject.market in {"US", "NASDAQ", "NYSE", "AMEX"} or subject.currency == "USD"
     ))
+
+
+def sec_collectable_subjects(
+    descriptor: DatasetDescriptor,
+    subjects: Iterable[ExternalSubject],
+    settings: Dict[str, object],
+) -> List[CollectionPartition]:
+    provider = legacy_provider(settings, externalSecEnabled="1")
+    mapped = {
+        provider.sec_symbol_key(symbol)
+        for symbol, cik in {
+            **DEFAULT_SEC_COMPANY_CIKS,
+            **symbol_assignments(settings.get("externalSecCompanyCiks") or ""),
+        }.items()
+        if provider.normalize_cik(cik)
+    }
+    ticker_lookup_enabled = provider.sec_ticker_lookup_configured()
+    return equity_partitions(
+        descriptor,
+        subjects,
+        lambda subject: is_us_equity(subject)
+        and (provider.sec_symbol_key(subject.symbol) in mapped or ticker_lookup_enabled),
+    )
 
 
 class SecSubmissionsAdapter:
@@ -29,8 +54,8 @@ class SecSubmissionsAdapter:
         materiality_policy="source-revision",
     )
 
-    def partitions(self, subjects: Iterable[ExternalSubject], _settings: Dict[str, object]) -> List[CollectionPartition]:
-        return equity_partitions(self.descriptor, subjects, is_us_equity)
+    def partitions(self, subjects: Iterable[ExternalSubject], settings: Dict[str, object]) -> List[CollectionPartition]:
+        return sec_collectable_subjects(self.descriptor, subjects, settings)
 
     def fetch(self, job: CollectionJob, settings: Dict[str, object]):
         provider = legacy_provider(
@@ -77,8 +102,8 @@ class SecCompanyFactsAdapter:
         materiality_policy="source-revision",
     )
 
-    def partitions(self, subjects: Iterable[ExternalSubject], _settings: Dict[str, object]) -> List[CollectionPartition]:
-        return equity_partitions(self.descriptor, subjects, is_us_equity)
+    def partitions(self, subjects: Iterable[ExternalSubject], settings: Dict[str, object]) -> List[CollectionPartition]:
+        return sec_collectable_subjects(self.descriptor, subjects, settings)
 
     def fetch(self, job: CollectionJob, settings: Dict[str, object]):
         provider = legacy_provider(

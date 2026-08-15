@@ -14,6 +14,7 @@ from digital_twin.application.external_data.fact_transition_service import Exter
 from digital_twin.application.external_data.read_model_service import ExternalSignalsReadModelService
 from digital_twin.application.external_data.registry import ExternalDatasetRegistry
 from digital_twin.infrastructure.external_api.legacy_import import LegacyExternalSignalImporter
+from digital_twin.infrastructure.external_api.adapters.sec import SecSubmissionsAdapter
 
 
 NOW = datetime(2026, 8, 16, 0, 0, tzinfo=timezone.utc)
@@ -254,6 +255,19 @@ class ExternalDataPlatformTest(unittest.TestCase):
         self.assertEqual("external_fact_current", cache.payload["migratedTo"])
         self.assertEqual(1, cache.replace_count)
         self.assertEqual("migration already checked", second["reason"])
+
+    def test_sec_partitions_skip_unmapped_symbols_without_compliant_contact(self):
+        adapter = SecSubmissionsAdapter()
+        subjects = [
+            ExternalSubject("AAPL", symbol="AAPL", market="US", currency="USD"),
+            ExternalSubject("PLTR", symbol="PLTR", market="US", currency="USD"),
+        ]
+
+        without_contact = adapter.partitions(subjects, {"externalSecUserAgent": "OrbitAlpha/1.0 local-contact"})
+        with_contact = adapter.partitions(subjects, {"externalSecUserAgent": "OrbitAlpha/1.0 owner@example.com"})
+
+        self.assertEqual(["AAPL"], [item.partition_key for item in without_contact])
+        self.assertEqual(["AAPL", "PLTR"], [item.partition_key for item in with_contact])
 
     def test_read_model_merges_facts_and_surfaces_stale_and_failed_sources(self):
         read_model = ExternalSignalsReadModelService(MemoryFactStore())

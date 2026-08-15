@@ -6,16 +6,27 @@ from typing import Dict, Iterable, List
 from ..domain.market_time_series import (
     MarketTimeSeriesObservation,
     bucket_start,
+    completed_daily_rows,
     granularity_preferences,
     iso_utc,
+    limit_temporal_rows,
     market_session_date,
     parse_timestamp,
     required_session_count,
+    snapshot_safe_granularity_preferences,
+    temporal_observation_payload,
+    temporal_session_count,
 )
 from ..domain.portfolio import AccountSnapshot
 from ..domain.portfolio_ontology_temporal_concepts import (
     trim_to_recent_sessions,
     window_rows,
+)
+from ..domain.time_series_storage import (
+    TIME_SERIES_CONTRACT_VERSION,
+    TimeSeriesBackendDescriptor,
+    TimeSeriesCapabilities,
+    TimeSeriesWatermark,
 )
 from .mysql_operational_connection import MySQLOperationalConnection
 
@@ -50,25 +61,49 @@ def positive_int(value: object, fallback: int, lower: int = 1, upper: int = 1000
     return max(lower, min(upper, parsed))
 
 
-def snapshot_safe_granularity_preferences(definition: object) -> List[str]:
-    """Choose immutable history sources when reproducing one snapshot.
-
-    The 15-minute and hourly rows are rolling aggregates and may be updated
-    in-place while the market is open.  Account 3-minute observations are
-    append-only, while global daily candles are the durable source for longer
-    history.  A replay must not mix either mutable aggregate into an earlier
-    snapshot.
-    """
-    preferences = list(granularity_preferences(getattr(definition, "key", "")))
-    try:
-        lookback_days = float(getattr(definition, "lookback_days", 1) or 1)
-    except (TypeError, ValueError):
-        lookback_days = 1.0
-    preferred = ["1d", "3m"] if lookback_days > 5 else ["3m", "1d"]
-    return [granularity for granularity in preferred if granularity in preferences]
-
-
 class MySQLMarketTimeSeriesStore(MySQLOperationalConnection):
+    backend_id = "mysql-primary"
+
+    def descriptor(self) -> TimeSeriesBackendDescriptor:
+        return TimeSeriesBackendDescriptor(
+            backend_id=self.backend_id,
+            adapter_name="mysql",
+            adapter_version="mysql-market-time-series-v1",
+            status="active",
+            contract_version=TIME_SERIES_CONTRACT_VERSION,
+            capabilities=TimeSeriesCapabilities(
+                idempotent_upsert=True,
+                window_functions=True,
+                batch_ingestion=True,
+                point_in_time_read=True,
+            ),
+        )
+
+    def health(self) -> Dict[str, object]:
+        try:
+            with self.connect() as connection:
+                row = connection.execute("SELECT 1 AS ready").fetchone() or {}
+            status = "ready" if int(row.get("ready") or 0) == 1 else "unhealthy"
+            error = ""
+        except Exception as caught:  # noqa: BLE001 - backend health is returned as data.
+            status = "unavailable"
+            error = str(caught)[:240]
+        return {"backendId": self.backend_id, "adapter": "mysql", "status": status, "error": error}
+
+    def watermark(self) -> TimeSeriesWatermark:
+        try:
+            with self.connect() as connection:
+                row = connection.execute(
+                    "SELECT MAX(observed_at) AS observed_through FROM market_time_series_observations"
+                ).fetchone() or {}
+            return TimeSeriesWatermark(
+                backend_id=self.backend_id,
+                observed_through=str(row.get("observed_through") or ""),
+                status="ready",
+            )
+        except Exception as error:  # noqa: BLE001 - callers compare unavailable candidates safely.
+            return TimeSeriesWatermark(self.backend_id, "", status="unavailable:" + str(error)[:120])
+
     def enabled(self) -> bool:
         return str(self.runtime_settings.get("marketTimeSeriesEnabled", "1")).strip().lower() not in {
             "0", "false", "no", "off", "disabled",
@@ -170,6 +205,7 @@ class MySQLMarketTimeSeriesStore(MySQLOperationalConnection):
         saved = 0
         skipped = 0
         symbols = set()
+        projected_rows = []
         with self.transaction() as connection:
             latest_buckets = self.latest_daily_buckets_with_connection(connection, candles_by_symbol.keys())
             for symbol, candles in dict(candles_by_symbol or {}).items():
@@ -196,13 +232,71 @@ class MySQLMarketTimeSeriesStore(MySQLOperationalConnection):
                     if self.insert_observation_with_connection(connection, observation, replace=True):
                         saved += 1
                         symbols.add(observation.symbol)
+                        projected_rows.append(observation.to_row())
                     latest_buckets[observation.symbol] = max(latest_bucket, observation.bucket_at)
         return {
             "enabled": True,
             "savedCount": saved,
             "symbolCount": len(symbols),
             "unchangedHistoricalCount": skipped,
+            "_projectedRows": projected_rows,
         }
+
+    def projectable_rows_with_connection(
+        self,
+        connection,
+        account_ids: Iterable[str] = (),
+        symbols: Iterable[str] = (),
+        observed_ats: Iterable[str] = (),
+        granularities: Iterable[str] = (),
+        providers: Iterable[str] = (),
+        observed_after: str = "",
+        limit: int = 10000,
+        offset: int = 0,
+        after_key: Dict[str, object] = None,
+    ) -> List[Dict[str, object]]:
+        clauses = []
+        params: List[object] = []
+        for column, values in [
+            ("account_id", account_ids),
+            ("symbol", symbols),
+            ("observed_at", observed_ats),
+            ("granularity", granularities),
+            ("provider", providers),
+        ]:
+            clean_values = sorted({str(value or "").strip() for value in values or [] if str(value or "").strip()})
+            if not clean_values:
+                continue
+            clauses.append(column + " IN (" + ",".join(["%s"] * len(clean_values)) + ")")
+            params.extend(clean_values)
+        where = " WHERE " + " AND ".join(clauses) if clauses else ""
+        if str(observed_after or "").strip():
+            where += (" AND " if where else " WHERE ") + "observed_at > %s"
+            params.append(iso_utc(observed_after))
+        cursor_key = dict(after_key or {})
+        if all(str(cursor_key.get(key) or "") for key in ["account_id", "symbol", "granularity", "bucket_at"]):
+            cursor_clause = "(account_id, symbol, granularity, bucket_at) > (%s, %s, %s, %s)"
+            where += (" AND " if where else " WHERE ") + cursor_clause
+            params.extend([
+                str(cursor_key.get("account_id") or ""),
+                str(cursor_key.get("symbol") or ""),
+                str(cursor_key.get("granularity") or ""),
+                str(cursor_key.get("bucket_at") or ""),
+            ])
+        bounded_limit = max(1, min(50000, int(limit or 10000)))
+        bounded_offset = max(0, int(offset or 0))
+        params.extend([bounded_limit, bounded_offset])
+        rows = connection.execute(
+            "SELECT " + ",".join(OBSERVATION_COLUMNS)
+            + " FROM market_time_series_observations" + where
+            + " ORDER BY account_id, symbol, granularity, bucket_at LIMIT %s OFFSET %s",
+            params,
+        ).fetchall()
+        return [dict(row or {}) for row in rows or []]
+
+    def projectable_rows(self, **kwargs) -> List[Dict[str, object]]:
+        with self.connect() as connection:
+            return self.projectable_rows_with_connection(connection, **kwargs)
 
     def load_portfolio_analysis_series(
         self,
@@ -468,23 +562,7 @@ class MySQLMarketTimeSeriesStore(MySQLOperationalConnection):
         snapshot itself supplies the current observation, so only prior,
         completed sessions may provide replay history.
         """
-        cutoff = parse_timestamp(snapshot_at)
-        if not cutoff:
-            return []
-        completed = []
-        for raw in rows or []:
-            row = dict(raw or {})
-            market = row.get("market") or ""
-            currency = row.get("currency") or ""
-            cutoff_session = market_session_date(cutoff, market, currency)
-            row_session = market_session_date(
-                row.get("bucketAt") or row.get("generatedAt") or row.get("observedAt"),
-                market,
-                currency,
-            )
-            if cutoff_session and row_session and row_session < cutoff_session:
-                completed.append(row)
-        return completed
+        return completed_daily_rows(rows, snapshot_at)
 
     def preferred_rows(self, account_rows: List[Dict[str, object]], global_rows: List[Dict[str, object]]) -> List[Dict[str, object]]:
         account_sessions = self.session_count(account_rows)
@@ -599,66 +677,13 @@ class MySQLMarketTimeSeriesStore(MySQLOperationalConnection):
         required_sessions: int,
         maximum: int,
     ) -> List[Dict[str, object]]:
-        if granularity == "1d":
-            target = min(maximum, required_sessions)
-        elif granularity == "1h":
-            target = min(maximum, max(24, required_sessions * 10))
-        elif granularity == "15m":
-            target = min(maximum, max(80, required_sessions * 32))
-        else:
-            target = maximum
-        return list(rows[:target])
+        return limit_temporal_rows(rows, granularity, required_sessions, maximum)
 
     def session_count(self, rows: Iterable[Dict[str, object]]) -> int:
-        return len({str(row.get("marketSessionDate") or row.get("bucketAt") or "")[:10] for row in rows or [] if row})
+        return temporal_session_count(rows)
 
     def observation_payload(self, row: Dict[str, object]) -> Dict[str, object]:
-        investor_coverage = self.parse_investor_coverage(row.get("investor_coverage_json"))
-        return {
-            "generatedAt": str(row.get("observed_at") or row.get("bucket_at") or ""),
-            "updatedAt": str(row.get("observed_at") or row.get("bucket_at") or ""),
-            "sourceAsOf": str(row.get("source_as_of") or ""),
-            "bucketAt": str(row.get("bucket_at") or ""),
-            "marketSessionDate": market_session_date(
-                row.get("bucket_at"),
-                row.get("market"),
-                row.get("currency"),
-            ),
-            "symbol": str(row.get("symbol") or ""),
-            "name": str(row.get("name") or ""),
-            "market": str(row.get("market") or ""),
-            "currency": str(row.get("currency") or ""),
-            "source": str(row.get("source_role") or ""),
-            "provider": str(row.get("provider") or ""),
-            "observationGranularity": str(row.get("granularity") or ""),
-            "observationSource": "mysql-market-time-series",
-            "sampleCountInBucket": int(row.get("sample_count") or 0),
-            "openPrice": float(row.get("open_price") or 0),
-            "highPrice": float(row.get("high_price") or 0),
-            "lowPrice": float(row.get("low_price") or 0),
-            "currentPrice": float(row.get("current_price") or 0),
-            "changeRate": float(row.get("change_rate") or 0),
-            "quantity": float(row.get("quantity") or 0),
-            "averagePrice": float(row.get("average_price") or 0),
-            "profitLossRate": float(row.get("profit_loss_rate") or 0),
-            "volume": float(row.get("volume") or 0),
-            "tradingValue": float(row.get("trading_value") or 0),
-            "volumeRatio": float(row.get("volume_ratio") or 0),
-            "tradeStrength": float(row.get("trade_strength") or 0),
-            "bidAskImbalance": float(row.get("bid_ask_imbalance") or 0),
-            "foreignNetVolume": float(row.get("foreign_net_volume") or 0),
-            "institutionNetVolume": float(row.get("institution_net_volume") or 0),
-            "individualNetVolume": float(row.get("individual_net_volume") or 0),
-            "marketSignalCoverage": {"investor": investor_coverage},
-            "ma5": float(row.get("ma5") or 0),
-            "ma20": float(row.get("ma20") or 0),
-            "ma60": float(row.get("ma60") or 0),
-            "ma20Slope": float(row.get("ma20_slope") or 0),
-            "ma60Slope": float(row.get("ma60_slope") or 0),
-            "ma20Distance": float(row.get("ma20_distance") or 0),
-            "ma60Distance": float(row.get("ma60_distance") or 0),
-            "dataQuality": str(row.get("data_quality") or ""),
-        }
+        return temporal_observation_payload(row, "mysql-market-time-series")
 
     @staticmethod
     def parse_investor_coverage(value: object) -> Dict[str, object]:

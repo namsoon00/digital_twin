@@ -64,6 +64,8 @@ class MySQLMinimalRetentionPolicy:
     lifecycle_event_retention_hours: int
     research_terminal_retention_hours: int
     inactive_evidence_retention_hours: int
+    completed_time_series_projection_retention_hours: int
+    temporal_feature_snapshot_retention_hours: int
     audit_keep_count: int
     market_time_series_retention_days: Dict[str, int]
 
@@ -191,6 +193,20 @@ def mysql_minimal_retention_policy(settings: Mapping[str, object] = None) -> MyS
             1,
             24 * 90,
         ),
+        completed_time_series_projection_retention_hours=_int_setting(
+            configured,
+            "mysqlMinimalCompletedTimeSeriesProjectionRetentionHours",
+            6,
+            1,
+            24 * 30,
+        ),
+        temporal_feature_snapshot_retention_hours=_int_setting(
+            configured,
+            "mysqlMinimalTemporalFeatureSnapshotRetentionHours",
+            24,
+            1,
+            24 * 30,
+        ),
         audit_keep_count=_int_setting(
             configured,
             "mysqlMinimalRetentionAuditKeepCount",
@@ -236,6 +252,14 @@ def policy_cutoffs(policy: MySQLMinimalRetentionPolicy, now: datetime = None) ->
         "lifecycleEvents": policy_cutoff_iso(policy.lifecycle_event_retention_hours, now),
         "researchTerminal": policy_cutoff_iso(policy.research_terminal_retention_hours, now),
         "inactiveEvidence": policy_cutoff_iso(policy.inactive_evidence_retention_hours, now),
+        "completedTimeSeriesProjection": policy_cutoff_iso(
+            policy.completed_time_series_projection_retention_hours,
+            now,
+        ),
+        "temporalFeatureSnapshots": policy_cutoff_iso(
+            policy.temporal_feature_snapshot_retention_hours,
+            now,
+        ),
         **{
             "marketTimeSeries:" + granularity: policy_cutoff_iso(days * 24, now)
             for granularity, days in policy.market_time_series_retention_days.items()

@@ -1058,6 +1058,125 @@ MYSQL_SCHEMA = [
     ) ENGINE=InnoDB DEFAULT CHARSET=utf8mb4 COLLATE=utf8mb4_unicode_ci
     """,
     """
+    CREATE TABLE IF NOT EXISTS time_series_backend_deployments (
+        backend_id VARCHAR(191) PRIMARY KEY,
+        adapter_name VARCHAR(64) NOT NULL,
+        adapter_version VARCHAR(64) NOT NULL,
+        deployment_status VARCHAR(32) NOT NULL DEFAULT 'registered',
+        contract_version VARCHAR(64) NOT NULL,
+        capabilities_json LONGTEXT NOT NULL,
+        settings_json LONGTEXT NOT NULL,
+        last_health_json LONGTEXT NOT NULL,
+        created_at VARCHAR(40) NOT NULL,
+        updated_at VARCHAR(40) NOT NULL,
+        KEY idx_time_series_backend_status (deployment_status, updated_at)
+    ) ENGINE=InnoDB DEFAULT CHARSET=utf8mb4 COLLATE=utf8mb4_unicode_ci
+    """,
+    """
+    CREATE TABLE IF NOT EXISTS time_series_backend_control (
+        control_id VARCHAR(64) PRIMARY KEY,
+        active_backend_id VARCHAR(191) NOT NULL DEFAULT '',
+        shadow_backend_id VARCHAR(191) NOT NULL DEFAULT '',
+        candidate_backend_id VARCHAR(191) NOT NULL DEFAULT '',
+        version BIGINT NOT NULL DEFAULT 0,
+        updated_at VARCHAR(40) NOT NULL
+    ) ENGINE=InnoDB DEFAULT CHARSET=utf8mb4 COLLATE=utf8mb4_unicode_ci
+    """,
+    """
+    INSERT IGNORE INTO time_series_backend_control (
+        control_id, updated_at
+    ) VALUES ('global', '')
+    """,
+    """
+    CREATE TABLE IF NOT EXISTS time_series_projection_outbox (
+        job_id VARCHAR(191) PRIMARY KEY,
+        backend_id VARCHAR(191) NOT NULL,
+        dedupe_key VARCHAR(191) NOT NULL,
+        operation_name VARCHAR(64) NOT NULL,
+        source_event_id VARCHAR(191) NOT NULL DEFAULT '',
+        source_observed_at VARCHAR(40) NOT NULL DEFAULT '',
+        payload_json LONGTEXT NOT NULL,
+        job_status VARCHAR(32) NOT NULL DEFAULT 'queued',
+        lease_owner VARCHAR(191) NOT NULL DEFAULT '',
+        lease_until VARCHAR(40) NOT NULL DEFAULT '',
+        available_at VARCHAR(40) NOT NULL DEFAULT '',
+        attempt_count INT NOT NULL DEFAULT 0,
+        last_error VARCHAR(255) NOT NULL DEFAULT '',
+        created_at VARCHAR(40) NOT NULL,
+        updated_at VARCHAR(40) NOT NULL,
+        UNIQUE KEY uq_time_series_projection_dedupe (backend_id, dedupe_key),
+        KEY idx_time_series_projection_ready (backend_id, job_status, available_at, lease_until, created_at),
+        KEY idx_time_series_projection_source (source_event_id)
+    ) ENGINE=InnoDB DEFAULT CHARSET=utf8mb4 COLLATE=utf8mb4_unicode_ci
+    """,
+    """
+    CREATE TABLE IF NOT EXISTS temporal_feature_snapshots (
+        snapshot_id VARCHAR(191) PRIMARY KEY,
+        feature_set_version VARCHAR(64) NOT NULL,
+        backend_id VARCHAR(191) NOT NULL,
+        account_id VARCHAR(191) NOT NULL DEFAULT '',
+        as_of VARCHAR(40) NOT NULL DEFAULT '',
+        watermark_json LONGTEXT NOT NULL,
+        symbols_json LONGTEXT NOT NULL,
+        windows_json LONGTEXT NOT NULL,
+        payload_hash VARCHAR(64) NOT NULL,
+        created_at VARCHAR(40) NOT NULL,
+        KEY idx_temporal_feature_account_time (account_id, as_of, created_at),
+        KEY idx_temporal_feature_backend_time (backend_id, as_of, created_at),
+        KEY idx_temporal_feature_hash (payload_hash)
+    ) ENGINE=InnoDB DEFAULT CHARSET=utf8mb4 COLLATE=utf8mb4_unicode_ci
+    """,
+    """
+    CREATE TABLE IF NOT EXISTS reasoning_engine_deployments (
+        deployment_id VARCHAR(191) PRIMARY KEY,
+        engine_family VARCHAR(64) NOT NULL,
+        engine_version VARCHAR(64) NOT NULL,
+        deployment_status VARCHAR(32) NOT NULL DEFAULT 'registered',
+        graph_store_binding VARCHAR(191) NOT NULL DEFAULT '',
+        time_series_backend_id VARCHAR(191) NOT NULL DEFAULT '',
+        release_bundle_json LONGTEXT NOT NULL,
+        capabilities_json LONGTEXT NOT NULL,
+        last_health_json LONGTEXT NOT NULL,
+        created_at VARCHAR(40) NOT NULL,
+        updated_at VARCHAR(40) NOT NULL,
+        UNIQUE KEY uq_reasoning_engine_release (engine_family, engine_version, deployment_id),
+        KEY idx_reasoning_engine_status (deployment_status, updated_at)
+    ) ENGINE=InnoDB DEFAULT CHARSET=utf8mb4 COLLATE=utf8mb4_unicode_ci
+    """,
+    """
+    CREATE TABLE IF NOT EXISTS reasoning_engine_control (
+        control_id VARCHAR(64) PRIMARY KEY,
+        active_deployment_id VARCHAR(191) NOT NULL DEFAULT '',
+        delivery_deployment_id VARCHAR(191) NOT NULL DEFAULT '',
+        candidate_deployment_id VARCHAR(191) NOT NULL DEFAULT '',
+        version BIGINT NOT NULL DEFAULT 0,
+        updated_at VARCHAR(40) NOT NULL
+    ) ENGINE=InnoDB DEFAULT CHARSET=utf8mb4 COLLATE=utf8mb4_unicode_ci
+    """,
+    """
+    INSERT IGNORE INTO reasoning_engine_control (
+        control_id, updated_at
+    ) VALUES ('global', '')
+    """,
+    """
+    CREATE TABLE IF NOT EXISTS reasoning_engine_comparisons (
+        comparison_id VARCHAR(191) PRIMARY KEY,
+        baseline_deployment_id VARCHAR(191) NOT NULL,
+        candidate_deployment_id VARCHAR(191) NOT NULL,
+        source_event_id VARCHAR(191) NOT NULL DEFAULT '',
+        comparison_status VARCHAR(32) NOT NULL DEFAULT 'pending',
+        fact_parity_pct DECIMAL(6,3) NOT NULL DEFAULT 0,
+        rule_slot_coverage_pct DECIMAL(6,3) NOT NULL DEFAULT 0,
+        unexplained_decision_difference_count INT NOT NULL DEFAULT 0,
+        shadow_delivery_count INT NOT NULL DEFAULT 0,
+        payload_json LONGTEXT NOT NULL,
+        created_at VARCHAR(40) NOT NULL,
+        updated_at VARCHAR(40) NOT NULL,
+        KEY idx_reasoning_comparison_candidate_time (candidate_deployment_id, created_at),
+        KEY idx_reasoning_comparison_status_time (comparison_status, created_at)
+    ) ENGINE=InnoDB DEFAULT CHARSET=utf8mb4 COLLATE=utf8mb4_unicode_ci
+    """,
+    """
     CREATE TABLE IF NOT EXISTS symbol_universe (
         market VARCHAR(64) NOT NULL,
         symbol VARCHAR(64) NOT NULL,

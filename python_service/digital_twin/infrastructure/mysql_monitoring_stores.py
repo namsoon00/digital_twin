@@ -76,7 +76,6 @@ from .mysql_operational_helpers import (
 
 from .mysql_notification_config import MySQLNotificationTemplateStore
 from .mysql_market_stores import MySQLModelReviewJobStore
-from .mysql_market_time_series import MySQLMarketTimeSeriesStore
 
 
 def snapshot_state_for_persistence(snapshot: AccountSnapshot, previous: Dict[str, object] = None) -> Dict[str, object]:
@@ -587,10 +586,12 @@ class MySQLMonitorStore(MySQLOperationalConnection):
         delivery_guard=None,
         source_snapshot_replay: bool = False,
     ):
+        from .time_series_factory import build_versioned_time_series_store
+
         return MySQLMonitoringCycleRecorder(
             self.runtime_settings,
             monitor_store=self,
-            market_time_series_store=MySQLMarketTimeSeriesStore(self.runtime_settings),
+            market_time_series_store=build_versioned_time_series_store(self.runtime_settings),
         ).record_cycle(
             account_ids,
             snapshots,
@@ -738,7 +739,9 @@ class MySQLMonitoringCycleRecorder(MySQLOperationalConnection):
         if self.monitor_store is None:
             self.monitor_store = MySQLMonitorStore(settings)
         if self.market_time_series_store is None:
-            self.market_time_series_store = MySQLMarketTimeSeriesStore(settings)
+            from .time_series_factory import build_versioned_time_series_store
+
+            self.market_time_series_store = build_versioned_time_series_store(settings)
         self.market_observation_anchor_store = MySQLMarketObservationReasoningAnchorStore(
             self.runtime_settings
         )

@@ -135,6 +135,13 @@ BASE_WORKERS = {
         "command": [sys.executable, "-u", "python_service/service.py", "maintenance", "watch"],
         "needle": "python_service/service.py maintenance watch",
     },
+    "time-series-projection": {
+        "label": "Python time-series backend projection worker",
+        "pid": data_dir() / "python-time-series-projection.pid",
+        "log": data_dir() / "python-time-series-projection.log",
+        "command": [sys.executable, "-u", "python_service/service.py", "time-series-platform", "watch"],
+        "needle": "python_service/service.py time-series-platform watch",
+    },
 }
 
 MAX_NOTIFICATION_AI_WORKERS = 8
@@ -325,6 +332,46 @@ def mysql_executable() -> str:
     return shutil.which("mysqld") or "/usr/local/opt/mysql/bin/mysqld"
 
 
+def questdb_executable() -> str:
+    explicit = str(os.environ.get("QUESTDB_COMMAND") or "").strip()
+    if explicit:
+        return explicit
+    return shutil.which("questdb") or "/usr/local/opt/questdb/bin/questdb"
+
+
+def questdb_worker_spec(settings: Dict[str, object]) -> Dict[str, object]:
+    executable = questdb_executable()
+    configured_path = str((settings or {}).get("questDbDataPath") or "").strip()
+    data_path = Path(configured_path).expanduser() if configured_path else data_dir() / "questdb-data"
+    if not data_path.is_absolute():
+        data_path = ROOT_DIR / data_path
+    http_url = str((settings or {}).get("questDbHttpUrl") or "http://127.0.0.1:9000").strip()
+    address = http_url.split("://", 1)[-1].split("/", 1)[0]
+    command = [executable, "start", "-d", str(data_path), "-n", "-f"] if executable and Path(executable).exists() else []
+    return {
+        "label": "QuestDB time-series store",
+        "pid": data_dir() / "questdb.pid",
+        "log": data_dir() / "questdb.log",
+        "command": command,
+        "needle": "questdb.sh start -d " + str(data_path),
+        "needles": ["questdb.sh start -d " + str(data_path), "io.questdb.ServerMain"],
+        "role": "questdb",
+        "env": {
+            "JAVA_HOME": "/usr/local/opt/openjdk",
+            "QDB_HTTP_NET_BIND_TO": "127.0.0.1:9000",
+            "QDB_HTTP_MIN_NET_BIND_TO": "127.0.0.1:9003",
+            "QDB_LINE_TCP_NET_BIND_TO": "127.0.0.1:9009",
+            "QDB_LINE_UDP_BIND_TO": "127.0.0.1:9009",
+            "QDB_QWP_UDP_BIND_TO": "127.0.0.1:9007",
+            "QDB_PG_NET_BIND_TO": "127.0.0.1:8812",
+        },
+        "dataPath": data_path,
+        "healthAddress": address,
+        "startupWaitSeconds": str((settings or {}).get("questDbStartupWaitSeconds") or "90"),
+        "missingReason": "QuestDB executable was not found. Install QuestDB or set QUESTDB_COMMAND." if not command else "",
+    }
+
+
 def mysql_worker_spec(settings: Dict[str, object]) -> Dict[str, object]:
     executable = mysql_executable()
     connection_settings = mysql_settings(settings)
@@ -470,6 +517,8 @@ def worker_specs() -> Dict[str, Dict[str, object]]:
         workers["mysql"] = mysql_worker_spec(settings)
     if typedb_requested(settings):
         workers["typedb"] = typedb_worker_spec(settings)
+    if truthy((settings or {}).get("timeSeriesQuestDbEnabled")):
+        workers["questdb"] = questdb_worker_spec(settings)
     # Schema-function readiness is a prerequisite for investment inference.
     # Start its dedicated worker before collectors can create fresh reasoning
     # pressure; the reasoning worker itself still fails closed until the
@@ -523,6 +572,48 @@ def pid_exists(pid: int) -> bool:
         return False
     try:
         os.kill(pid, 0)
+    except OSError:
+        return False
+    return True
+
+
+def recover_project_questdb_pid(spec: Dict[str, object]) -> int:
+    """Adopt an orphaned QuestDB launcher only when it owns this workspace data path."""
+
+    if str(spec.get("role") or "") != "questdb" or os.name == "nt":
+        return 0
+    data_path = str(Path(spec.get("dataPath") or "").resolve())
+    if not data_path:
+        return 0
+    try:
+        output = subprocess.check_output(
+            ["ps", "-axo", "pid=,pgid=,command="],
+            text=True,
+            stderr=subprocess.DEVNULL,
+        )
+    except (OSError, subprocess.CalledProcessError):
+        return 0
+    candidates = []
+    for line in output.splitlines():
+        parts = line.strip().split(None, 2)
+        if len(parts) != 3:
+            continue
+        try:
+            pid, process_group = int(parts[0]), int(parts[1])
+        except ValueError:
+            continue
+        command = parts[2]
+        if data_path not in command or not is_worker_command(command, spec):
+            continue
+        candidates.append((0 if pid == process_group else 1, pid))
+    return sorted(candidates)[0][1] if candidates else 0
+
+
+def process_group_exists(process_group: int) -> bool:
+    if not process_group or os.name == "nt":
+        return False
+    try:
+        os.killpg(process_group, 0)
     except OSError:
         return False
     return True
@@ -1598,7 +1689,7 @@ def clear_typedb_rulebox_prewarm_activity() -> bool:
 def start_worker(spec: Dict[str, object]) -> int:
     if spec.get("missingReason") or not spec.get("command"):
         print(str(spec["label"]) + " not started. " + str(spec.get("missingReason") or "Command is not configured."))
-        return 1 if str(spec.get("role") or "") in {"mysql", "typedb", "web"} else 0
+        return 1 if str(spec.get("role") or "") in {"mysql", "typedb", "questdb", "web"} else 0
     pid_path = spec["pid"]
     log_path = spec["log"]
     existing = read_pid(pid_path)
@@ -1615,7 +1706,15 @@ def start_worker(spec: Dict[str, object]) -> int:
     if existing:
         remove_pid(pid_path)
     role = str(spec.get("role") or "")
-    if role in {"mysql", "web"} and tcp_ready(spec.get("healthAddress")):
+    if role == "questdb":
+        recovered = recover_project_questdb_pid(spec)
+        if recovered and is_running(recovered, spec):
+            pid_path.write_text(str(recovered) + "\n", encoding="utf-8")
+            os.chmod(pid_path, 0o600)
+            append_log(log_path, "adopt orphaned project QuestDB pid=" + str(recovered))
+            print(str(spec["label"]) + " adopted existing project process. pid=" + str(recovered))
+            return status_worker(spec)
+    if role in {"mysql", "questdb", "web"} and tcp_ready(spec.get("healthAddress")):
         print(str(spec["label"]) + " not started. Canonical address is already owned by an unmanaged process: " + str(spec.get("healthAddress") or ""))
         return 1
     fresh_mysql_data_path = False
@@ -1678,7 +1777,7 @@ def start_worker(spec: Dict[str, object]) -> int:
             return 1
         if not clear_typedb_rulebox_prewarm_activity():
             append_log(log_path, "RuleBox compiler activity marker could not be cleared after TypeDB restart")
-    elif role in {"mysql", "web"}:
+    elif role in {"mysql", "questdb", "web"}:
         if not wait_for_tcp_service(spec):
             print(str(spec["label"]) + " did not become ready at " + str(spec.get("healthAddress") or ""))
             return 1
@@ -1709,8 +1808,18 @@ def stop_worker(spec: Dict[str, object]) -> int:
         remove_pid(pid_path)
         print(str(spec["label"]) + " was not running. Removed stale pid file.")
         return 0
+    role = str(spec.get("role") or "")
+    process_group = 0
+    if role == "questdb" and os.name != "nt":
+        try:
+            process_group = os.getpgid(pid)
+        except OSError:
+            process_group = 0
     try:
-        os.kill(pid, signal.SIGTERM)
+        if process_group:
+            os.killpg(process_group, signal.SIGTERM)
+        else:
+            os.kill(pid, signal.SIGTERM)
     except ProcessLookupError:
         remove_pid(pid_path)
         append_log(log_path, "stop")
@@ -1719,13 +1828,17 @@ def stop_worker(spec: Dict[str, object]) -> int:
     attempts = 150 if str(spec.get("role") or "") in {"mysql", "typedb", "typedb-stage"} else 25
     for _index in range(attempts):
         time.sleep(0.2)
-        if not is_running(pid, spec):
+        still_running = process_group_exists(process_group) if process_group else is_running(pid, spec)
+        if not still_running:
             remove_pid(pid_path)
             append_log(log_path, "stop")
             print(str(spec["label"]) + " stopped. pid=" + str(pid))
             return 0
     try:
-        os.kill(pid, signal.SIGKILL)
+        if process_group:
+            os.killpg(process_group, signal.SIGKILL)
+        else:
+            os.kill(pid, signal.SIGKILL)
     except ProcessLookupError:
         remove_pid(pid_path)
         append_log(log_path, "stop")

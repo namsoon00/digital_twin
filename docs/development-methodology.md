@@ -8,6 +8,15 @@ This project uses a local-first, DDD-oriented, event-driven architecture. Future
 - Keep use-case orchestration in `application/`.
 - Keep database, files, HTTP APIs, external vendors, process management, and runtime composition in `infrastructure/`.
 - Use domain events as contracts between feature slices.
+- Keep time-series database products behind `domain/time_series_storage.py`.
+  Reasoning code consumes immutable `TemporalFeatureSnapshot` packets and must
+  not import MySQL, QuestDB, or a future vendor driver. New backends are first
+  registered as shadow targets, replayed from the durable outbox, compared at
+  the feature boundary, and promoted through the control plane.
+- Treat reasoning engines as immutable versioned deployments. TBox, RuleBox,
+  prompt, feature-set, graph-store, and time-series bindings form one release
+  bundle. Only the delivery deployment may emit notifications; shadow and
+  candidate deployments must have a hard zero-delivery guarantee.
 - Do not pass API keys, Telegram tokens, client secrets, or raw account credentials through events, docs, tests, or git-tracked files.
 - Keep old top-level Python modules only as compatibility re-export modules. New code should import from the layer package directly.
 - Build investment-analysis features ontology-first. New investment facts, relationships, semantic rules, AI context, and notification triggers must enter the TBox/ABox/TypeDB schema function rule/InferenceBox flow before they influence user-facing investment judgement.

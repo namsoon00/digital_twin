@@ -186,6 +186,16 @@ class MySQLMinimalRetentionRepository:
                 + _status_placeholders(ACTIVE_RESEARCH_RUN_STATUSES) + ") AND updated_at < " + _cutoff_sql(),
                 tuple(ACTIVE_RESEARCH_RUN_STATUSES) + (cutoffs["researchTerminal"],),
             ),
+            "completedTimeSeriesProjection": self._summary(
+                "SELECT COUNT(*) AS candidate_count, COALESCE(SUM(OCTET_LENGTH(payload_json)), 0) AS candidate_bytes "
+                "FROM `time_series_projection_outbox` WHERE job_status = 'completed' AND updated_at < " + _cutoff_sql(),
+                (cutoffs["completedTimeSeriesProjection"],),
+            ),
+            "temporalFeatureSnapshots": self._summary(
+                "SELECT COUNT(*) AS candidate_count, COALESCE(SUM(OCTET_LENGTH(windows_json)), 0) AS candidate_bytes "
+                "FROM `temporal_feature_snapshots` WHERE created_at < " + _cutoff_sql(),
+                (cutoffs["temporalFeatureSnapshots"],),
+            ),
             "auditRuns": self._summary(
                 """
                 SELECT COUNT(*) AS candidate_count, COALESCE(SUM(OCTET_LENGTH(report_json)), 0) AS candidate_bytes
@@ -252,6 +262,16 @@ class MySQLMinimalRetentionRepository:
                 ),
                 ("research:inactiveEvidence", self._delete_inactive_evidence, (cutoffs["inactiveEvidence"],)),
                 ("research:terminalRuns", self._delete_terminal_research_runs, (cutoffs["researchTerminal"],)),
+                (
+                    "timeSeriesProjection:completed",
+                    self._delete_completed_time_series_projection,
+                    (cutoffs["completedTimeSeriesProjection"],),
+                ),
+                (
+                    "temporalFeatureSnapshots:history",
+                    self._delete_temporal_feature_snapshots,
+                    (cutoffs["temporalFeatureSnapshots"],),
+                ),
                 ("audit:runs", self._delete_audit_runs, (policy.audit_keep_count,)),
             ]
             for name, action, arguments in actions:
@@ -401,6 +421,46 @@ class MySQLMinimalRetentionRepository:
             budget,
         )
         return self._result("ontology_inference_detail_outbox", deleted, bytes_deleted)
+
+    def _delete_completed_time_series_projection(self, policy, budget, cutoff_iso) -> Dict[str, object]:
+        candidates = self._byte_bounded_candidates(
+            "SELECT job_id, OCTET_LENGTH(payload_json) AS payload_bytes "
+            "FROM `time_series_projection_outbox` WHERE job_status = 'completed' AND updated_at < "
+            + _cutoff_sql() + " ORDER BY updated_at, job_id LIMIT %s",
+            (cutoff_iso, policy.batch_size),
+            "job_id",
+            policy,
+            budget,
+        )
+        deleted, bytes_deleted = self._delete_candidates(
+            "time_series_projection_outbox",
+            "job_id",
+            candidates,
+            "job_status = 'completed' AND updated_at < " + _cutoff_sql(),
+            (cutoff_iso,),
+            budget,
+        )
+        return self._result("time_series_projection_outbox", deleted, bytes_deleted)
+
+    def _delete_temporal_feature_snapshots(self, policy, budget, cutoff_iso) -> Dict[str, object]:
+        candidates = self._byte_bounded_candidates(
+            "SELECT snapshot_id, OCTET_LENGTH(windows_json) AS payload_bytes "
+            "FROM `temporal_feature_snapshots` WHERE created_at < " + _cutoff_sql()
+            + " ORDER BY created_at, snapshot_id LIMIT %s",
+            (cutoff_iso, policy.batch_size),
+            "snapshot_id",
+            policy,
+            budget,
+        )
+        deleted, bytes_deleted = self._delete_candidates(
+            "temporal_feature_snapshots",
+            "snapshot_id",
+            candidates,
+            "created_at < " + _cutoff_sql(),
+            (cutoff_iso,),
+            budget,
+        )
+        return self._result("temporal_feature_snapshots", deleted, bytes_deleted)
 
     def _compact_failed_world_projection_payloads(self, policy, budget, cutoff_iso) -> Dict[str, object]:
         candidates = self._byte_bounded_candidates(

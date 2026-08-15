@@ -5536,6 +5536,10 @@ class OntologyReasoningRunner:
             "coalescedEventCount": int(result.get("coalescedEventCount") or 0),
             "staleRequestCount": int(result.get("staleRequestCount") or 0),
             "deferredReason": str(result.get("deferredReason") or "")[:240],
+            "reasoningEngineDeploymentId": str(result.get("reasoningEngineDeploymentId") or ""),
+            "reasoningEngineVersion": str(result.get("reasoningEngineVersion") or ""),
+            "reasoningTimeSeriesBackendId": str(result.get("reasoningTimeSeriesBackendId") or ""),
+            "reasoningFeatureSetVersion": str(result.get("reasoningFeatureSetVersion") or ""),
         }
         if error is not None:
             summary["error"] = str(error)[:240]
@@ -5688,6 +5692,16 @@ class OntologyReasoningRunner:
                 error=error,
             )
             raise
+        result["reasoningEngineDeploymentId"] = str(
+            self.settings.get("_reasoningEngineDeploymentId") or "ontology-v1-active"
+        )
+        result["reasoningEngineVersion"] = str(self.settings.get("_reasoningEngineVersion") or "v1")
+        result["reasoningTimeSeriesBackendId"] = str(
+            self.settings.get("_reasoningTimeSeriesBackendId") or "mysql-primary"
+        )
+        result["reasoningFeatureSetVersion"] = str(
+            self.settings.get("_reasoningFeatureSetVersion") or "temporal-features-v1"
+        )
         recorded = self.record_execution_telemetry(result, started_at, started_monotonic)
         return self.record_queue_health(recorded)
 

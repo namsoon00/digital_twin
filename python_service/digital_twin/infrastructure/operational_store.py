@@ -45,6 +45,10 @@ from .mysql_operational import (
     MySQLResearchEvidenceStore,
     MySQLRuntimeSettingsStore,
     MySQLSymbolUniverseStore,
+    MySQLReasoningEngineRegistryStore,
+    MySQLTemporalFeatureSnapshotStore,
+    MySQLTimeSeriesBackendRegistryStore,
+    MySQLTimeSeriesProjectionOutboxStore,
 )
 from .settings import runtime_settings
 
@@ -192,7 +196,29 @@ def market_quote_cache(settings: Dict[str, str] = None):
 
 def market_time_series_store(settings: Dict[str, str] = None):
     configured = configured_settings(settings)
+    from .time_series_factory import build_versioned_time_series_store
+    return build_versioned_time_series_store(configured)
+
+
+def raw_mysql_market_time_series_store(settings: Dict[str, str] = None):
+    configured = configured_settings(settings)
     return MySQLMarketTimeSeriesStore(configured)
+
+
+def time_series_backend_registry_store(settings: Dict[str, str] = None):
+    return MySQLTimeSeriesBackendRegistryStore(configured_settings(settings))
+
+
+def time_series_projection_outbox_store(settings: Dict[str, str] = None):
+    return MySQLTimeSeriesProjectionOutboxStore(configured_settings(settings))
+
+
+def temporal_feature_snapshot_store(settings: Dict[str, str] = None):
+    return MySQLTemporalFeatureSnapshotStore(configured_settings(settings))
+
+
+def reasoning_engine_registry_store(settings: Dict[str, str] = None):
+    return MySQLReasoningEngineRegistryStore(configured_settings(settings))
 
 
 def market_observation_reasoning_anchor_store(settings: Dict[str, str] = None):

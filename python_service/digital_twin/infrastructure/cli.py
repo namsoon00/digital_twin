@@ -1049,6 +1049,103 @@ def settings_command(args) -> int:
     return 1
 
 
+def time_series_platform_command(args) -> int:
+    from .time_series_factory import (
+        build_time_series_adapters,
+        build_time_series_backend_platform,
+        build_time_series_projection_runner,
+        initialize_time_series_registry,
+    )
+    from ..domain.portfolio_ontology_temporal_concepts import parse_temporal_windows
+
+    configured = runtime_settings()
+    adapters = build_time_series_adapters(configured)
+    registry = initialize_time_series_registry(configured, adapters)
+    runner = build_time_series_projection_runner(configured, worker_id=getattr(args, "worker_id", ""))
+    if args.time_series_action == "status":
+        health = {}
+        for backend_id, adapter in adapters.items():
+            health[backend_id] = adapter.health()
+            registry.update_health(backend_id, health[backend_id])
+        print(json.dumps({
+            "control": registry.control(),
+            "deployments": registry.list(),
+            "health": health,
+            "queue": runner.outbox.summary(),
+        }, ensure_ascii=False))
+        return 0
+    if args.time_series_action == "project-once":
+        print(json.dumps(runner.run_once(), ensure_ascii=False))
+        return 0
+    if args.time_series_action == "watch":
+        runner.watch()
+        return 0
+    if args.time_series_action == "backfill":
+        source = stores.raw_mysql_market_time_series_store(configured)
+        result = runner.enqueue_backfill(
+            source,
+            args.backend_id,
+            args.max_rows,
+            args.batch_size,
+            args.observed_after,
+        )
+        print(json.dumps(result, ensure_ascii=False))
+        return 0
+    platform = build_time_series_backend_platform(configured)
+    if args.time_series_action == "candidate":
+        print(json.dumps(platform.mark_candidate(args.backend_id), ensure_ascii=False))
+        return 0
+    if args.time_series_action in {"compare", "promote"}:
+        symbols = split_symbols(args.symbols or configured.get("watchlistSymbols") or "")
+        if not symbols:
+            raise ValueError("At least one comparison symbol is required")
+        definitions = parse_temporal_windows(configured.get("temporalWindowPeriods"))
+        comparison = platform.compare(
+            args.backend_id,
+            args.account_id,
+            symbols,
+            definitions,
+            args.as_of,
+        )
+        if args.time_series_action == "compare":
+            print(json.dumps(comparison, ensure_ascii=False))
+            return 0 if comparison.get("status") == "equivalent" else 2
+        result = platform.promote(args.backend_id, comparison)
+        if result.get("status") == "promoted":
+            control = dict(result.get("control") or {})
+            save_runtime_settings({
+                "timeSeriesActiveBackendId": control.get("activeBackendId") or args.backend_id,
+                "timeSeriesShadowBackendId": control.get("shadowBackendId") or "",
+            })
+        print(json.dumps(result, ensure_ascii=False))
+        return 0 if result.get("status") == "promoted" else 2
+    if args.time_series_action == "rollback":
+        result = platform.rollback()
+        if result.get("status") == "rolled-back":
+            control = dict(result.get("control") or {})
+            save_runtime_settings({
+                "timeSeriesActiveBackendId": control.get("activeBackendId") or "mysql-primary",
+                "timeSeriesShadowBackendId": control.get("shadowBackendId") or "",
+            })
+        print(json.dumps(result, ensure_ascii=False))
+        return 0 if result.get("status") == "rolled-back" else 2
+    return 1
+
+
+def reasoning_engine_platform_command(args) -> int:
+    from .reasoning_engine_factory import build_reasoning_engine_platform
+
+    platform = build_reasoning_engine_platform(runtime_settings())
+    state = platform.initialize()
+    if args.reasoning_engine_action == "status":
+        print(json.dumps(state, ensure_ascii=False))
+        return 0
+    if args.reasoning_engine_action == "rollback":
+        print(json.dumps(platform.rollback(), ensure_ascii=False))
+        return 0
+    return 1
+
+
 def app_store_command(args) -> int:
     store = stores.app_store()
     if args.store_action == "raw-json":
@@ -1877,6 +1974,35 @@ def build_parser() -> argparse.ArgumentParser:
     settings_actions.add_parser("save-json")
     settings_actions.add_parser("replace-json")
     settings.set_defaults(func=settings_command)
+
+    time_series = subparsers.add_parser("time-series-platform", help="Manage replaceable time-series backends")
+    time_series_actions = time_series.add_subparsers(dest="time_series_action", required=True)
+    time_series_actions.add_parser("status")
+    time_series_once = time_series_actions.add_parser("project-once")
+    time_series_once.add_argument("--worker-id", default="")
+    time_series_watch = time_series_actions.add_parser("watch")
+    time_series_watch.add_argument("--worker-id", default="")
+    time_series_backfill = time_series_actions.add_parser("backfill")
+    time_series_backfill.add_argument("--backend-id", default="questdb-shadow")
+    time_series_backfill.add_argument("--batch-size", type=int, default=50)
+    time_series_backfill.add_argument("--max-rows", type=int, default=0)
+    time_series_backfill.add_argument("--observed-after", default="")
+    time_series_candidate = time_series_actions.add_parser("candidate")
+    time_series_candidate.add_argument("--backend-id", default="questdb-shadow")
+    for action_name in ["compare", "promote"]:
+        action = time_series_actions.add_parser(action_name)
+        action.add_argument("--backend-id", default="questdb-shadow")
+        action.add_argument("--account-id", required=True)
+        action.add_argument("--symbols", required=True)
+        action.add_argument("--as-of", default="")
+    time_series_actions.add_parser("rollback")
+    time_series.set_defaults(func=time_series_platform_command)
+
+    reasoning_engine = subparsers.add_parser("reasoning-engine", help="Manage versioned reasoning-engine deployments")
+    reasoning_engine_actions = reasoning_engine.add_subparsers(dest="reasoning_engine_action", required=True)
+    reasoning_engine_actions.add_parser("status")
+    reasoning_engine_actions.add_parser("rollback")
+    reasoning_engine.set_defaults(func=reasoning_engine_platform_command)
 
     app_store = subparsers.add_parser("store", help="Manage app store data")
     app_store_actions = app_store.add_subparsers(dest="store_action", required=True)

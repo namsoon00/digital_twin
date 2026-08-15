@@ -1092,6 +1092,33 @@ def build_ontology_reasoning_proof_service(settings=None) -> OntologyReasoningPr
 
 def build_ontology_reasoning_runner(settings=None, event_publisher=None) -> OntologyReasoningRunner:
     configured_settings = settings or runtime_settings()
+    from .reasoning_engine_factory import build_reasoning_engine_platform
+
+    engine_platform = build_reasoning_engine_platform(configured_settings)
+    engine_state = engine_platform.initialize()
+    configured_settings = dict(configured_settings)
+    configured_settings["_reasoningEngineDeploymentId"] = str(
+        (engine_state.get("control") or {}).get("active_deployment_id")
+        or (engine_state.get("control") or {}).get("activeDeploymentId")
+        or "ontology-v1-active"
+    )
+    active_deployment = next(
+        (
+            row for row in engine_state.get("deployments") or []
+            if str(row.get("deploymentId") or "") == configured_settings["_reasoningEngineDeploymentId"]
+        ),
+        {},
+    )
+    release_bundle = dict(active_deployment.get("releaseBundle") or {})
+    configured_settings["_reasoningEngineVersion"] = str(active_deployment.get("engineVersion") or "v1")
+    configured_settings["_reasoningTimeSeriesBackendId"] = str(
+        active_deployment.get("timeSeriesBackendId") or "mysql-primary"
+    )
+    configured_settings["_reasoningFeatureSetVersion"] = str(
+        release_bundle.get("feature_set_version")
+        or release_bundle.get("featureSetVersion")
+        or "temporal-features-v1"
+    )
     reasoning_store_settings = dict(configured_settings)
     reasoning_store_settings["_skipOperationalHistoryRetention"] = "1"
     reasoning_store_settings["_skipOperationalSchemaBootstrap"] = "1"

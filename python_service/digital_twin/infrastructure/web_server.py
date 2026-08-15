@@ -1170,6 +1170,29 @@ def save_settings_payload(payload: Dict[str, object], access: ShareAccess = None
     return status
 
 
+def time_series_platform_status_payload() -> Dict[str, object]:
+    from .time_series_factory import build_time_series_adapters, initialize_time_series_registry
+
+    settings = runtime_settings()
+    adapters = build_time_series_adapters(settings)
+    registry = initialize_time_series_registry(settings, adapters)
+    health = {backend_id: adapter.health() for backend_id, adapter in adapters.items()}
+    for backend_id, payload in health.items():
+        registry.update_health(backend_id, payload)
+    return {
+        "control": registry.control(),
+        "deployments": registry.list(),
+        "health": health,
+        "queue": stores.time_series_projection_outbox_store(settings).summary(),
+    }
+
+
+def reasoning_engine_platform_status_payload() -> Dict[str, object]:
+    from .reasoning_engine_factory import build_reasoning_engine_platform
+
+    return build_reasoning_engine_platform(runtime_settings()).initialize()
+
+
 def ontology_rulebox_payload() -> Dict[str, object]:
     return ontology_repository_from_settings(runtime_settings()).rulebox_snapshot()
 
@@ -4895,6 +4918,12 @@ class DigitalTwinHandler(BaseHTTPRequestHandler):
                 if not self.ensure_writable("공유 모드에서는 서버 설정을 변경할 수 없습니다."):
                     return
                 return self.send_payload(200, save_settings_payload(self.read_json_body(), self.share_access()))
+
+        if path == "/api/time-series-platform/status" and self.command == "GET":
+            return self.send_payload(200, time_series_platform_status_payload())
+
+        if path == "/api/reasoning-engine/status" and self.command == "GET":
+            return self.send_payload(200, reasoning_engine_platform_status_payload())
 
         if path == "/api/ontology/rulebox":
             if self.command == "GET":

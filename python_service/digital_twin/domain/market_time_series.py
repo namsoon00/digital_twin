@@ -49,6 +49,18 @@ def parse_timestamp(value: object) -> Optional[datetime]:
     return parsed.astimezone(timezone.utc)
 
 
+def snapshot_safe_granularity_preferences(definition: object) -> List[str]:
+    """Choose immutable inputs when reproducing a historical snapshot."""
+
+    preferences = list(granularity_preferences(getattr(definition, "key", "")))
+    try:
+        lookback_days = float(getattr(definition, "lookback_days", 1) or 1)
+    except (TypeError, ValueError):
+        lookback_days = 1.0
+    preferred = ["1d", "3m"] if lookback_days > 5 else ["3m", "1d"]
+    return [granularity for granularity in preferred if granularity in preferences]
+
+
 def iso_utc(value: object) -> str:
     parsed = parse_timestamp(value)
     if not parsed:
@@ -254,3 +266,108 @@ def required_session_count(lookback_days: object) -> int:
     except (TypeError, ValueError):
         value = 1.0
     return max(1, int(round(value)))
+
+
+def temporal_session_count(rows: Iterable[Dict[str, object]]) -> int:
+    return len({
+        str(row.get("marketSessionDate") or row.get("bucketAt") or "")[:10]
+        for row in rows or []
+        if row
+    })
+
+
+def limit_temporal_rows(
+    rows: List[Dict[str, object]],
+    granularity: str,
+    required_sessions: int,
+    maximum: int,
+) -> List[Dict[str, object]]:
+    if granularity == "1d":
+        target = min(maximum, required_sessions)
+    elif granularity == "1h":
+        target = min(maximum, max(24, required_sessions * 10))
+    elif granularity == "15m":
+        target = min(maximum, max(80, required_sessions * 32))
+    else:
+        target = maximum
+    return list(rows[:target])
+
+
+def completed_daily_rows(rows: Iterable[Dict[str, object]], snapshot_at: str) -> List[Dict[str, object]]:
+    cutoff = parse_timestamp(snapshot_at)
+    if not cutoff:
+        return []
+    completed = []
+    for raw in rows or []:
+        row = dict(raw or {})
+        market = row.get("market") or ""
+        currency = row.get("currency") or ""
+        cutoff_session = market_session_date(cutoff, market, currency)
+        row_session = market_session_date(
+            row.get("bucketAt") or row.get("generatedAt") or row.get("observedAt"),
+            market,
+            currency,
+        )
+        if cutoff_session and row_session and row_session < cutoff_session:
+            completed.append(row)
+    return completed
+
+
+def temporal_observation_payload(
+    row: Dict[str, object],
+    observation_source: str,
+) -> Dict[str, object]:
+    raw_coverage = row.get("investor_coverage_json")
+    if isinstance(raw_coverage, dict):
+        investor_coverage = dict(raw_coverage)
+    else:
+        try:
+            parsed_coverage = json.loads(str(raw_coverage or "{}"))
+        except (TypeError, ValueError, json.JSONDecodeError):
+            parsed_coverage = {}
+        investor_coverage = dict(parsed_coverage) if isinstance(parsed_coverage, dict) else {}
+    return {
+        "generatedAt": str(row.get("observed_at") or row.get("bucket_at") or ""),
+        "updatedAt": str(row.get("observed_at") or row.get("bucket_at") or ""),
+        "sourceAsOf": str(row.get("source_as_of") or ""),
+        "bucketAt": str(row.get("bucket_at") or ""),
+        "marketSessionDate": market_session_date(
+            row.get("bucket_at"),
+            row.get("market"),
+            row.get("currency"),
+        ),
+        "symbol": str(row.get("symbol") or ""),
+        "name": str(row.get("name") or ""),
+        "market": str(row.get("market") or ""),
+        "currency": str(row.get("currency") or ""),
+        "source": str(row.get("source_role") or ""),
+        "provider": str(row.get("provider") or ""),
+        "observationGranularity": str(row.get("granularity") or ""),
+        "observationSource": str(observation_source or "time-series-store"),
+        "sampleCountInBucket": int(row.get("sample_count") or 0),
+        "openPrice": float(row.get("open_price") or 0),
+        "highPrice": float(row.get("high_price") or 0),
+        "lowPrice": float(row.get("low_price") or 0),
+        "currentPrice": float(row.get("current_price") or 0),
+        "changeRate": float(row.get("change_rate") or 0),
+        "quantity": float(row.get("quantity") or 0),
+        "averagePrice": float(row.get("average_price") or 0),
+        "profitLossRate": float(row.get("profit_loss_rate") or 0),
+        "volume": float(row.get("volume") or 0),
+        "tradingValue": float(row.get("trading_value") or 0),
+        "volumeRatio": float(row.get("volume_ratio") or 0),
+        "tradeStrength": float(row.get("trade_strength") or 0),
+        "bidAskImbalance": float(row.get("bid_ask_imbalance") or 0),
+        "foreignNetVolume": float(row.get("foreign_net_volume") or 0),
+        "institutionNetVolume": float(row.get("institution_net_volume") or 0),
+        "individualNetVolume": float(row.get("individual_net_volume") or 0),
+        "marketSignalCoverage": {"investor": investor_coverage},
+        "ma5": float(row.get("ma5") or 0),
+        "ma20": float(row.get("ma20") or 0),
+        "ma60": float(row.get("ma60") or 0),
+        "ma20Slope": float(row.get("ma20_slope") or 0),
+        "ma60Slope": float(row.get("ma60_slope") or 0),
+        "ma20Distance": float(row.get("ma20_distance") or 0),
+        "ma60Distance": float(row.get("ma60_distance") or 0),
+        "dataQuality": str(row.get("data_quality") or ""),
+    }

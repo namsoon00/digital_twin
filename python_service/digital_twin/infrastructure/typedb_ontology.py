@@ -10314,6 +10314,9 @@ class TypeDBOntologyGraphRepository(GraphStoreOntologyRowMapperMixin, ScopedABox
         marker = markers[0]
         metadata = inference_rulebox_metadata([marker], [])
         target_symbols = clean_symbols_from_payload(metadata.get("targetSymbols") or marker.get("targetSymbols") or [])
+        full_completed = typedb_bool(metadata.get("nativeInferenceEvaluationComplete"))
+        core_completed = typedb_bool(metadata.get("coreNativeInferenceEvaluationComplete"))
+        decision_eligible = native_inference_decision_eligible(metadata)
         return {
             "configured": True,
             "status": "ok",
@@ -10327,7 +10330,18 @@ class TypeDBOntologyGraphRepository(GraphStoreOntologyRowMapperMixin, ScopedABox
             ).strip(),
             "sourceAboxSnapshotId": str(metadata.get("sourceAboxSnapshotId") or marker.get("sourceAboxSnapshotId") or "").strip(),
             "targetSymbols": target_symbols,
-            "nativeTypeDbReasoningCompleted": typedb_bool(metadata.get("nativeInferenceEvaluationComplete")),
+            # A support-only rule may fail after every core action rule has
+            # completed.  That generation remains decision-safe, but it must
+            # retain the partial-coverage provenance instead of pretending
+            # every explanatory rule succeeded.
+            "nativeTypeDbReasoningCompleted": decision_eligible,
+            "nativeTypeDbFullReasoningCompleted": full_completed,
+            "coreNativeInferenceEvaluationComplete": core_completed,
+            "nativeCoverageStatus": str(metadata.get("nativeCoverageStatus") or ""),
+            "supportingRuleFailureCount": int(
+                number_or_none(metadata.get("supportingRuleFailureCount")) or 0
+            ),
+            "supportingRuleFailures": list(metadata.get("supportingRuleFailures") or [])[:20],
             "nativeInferenceOutcome": str(metadata.get("nativeInferenceOutcome") or ""),
             "reasoningMode": str(metadata.get("reasoningMode") or ""),
             "nativeRuleSelectionApplied": typedb_bool(
@@ -25534,6 +25548,10 @@ def inference_rulebox_metadata(
         "typedbNativeRuleExecutedCount",
         "typedbNativeRuleSkippedCount",
         "nativeInferenceEvaluationComplete",
+        "coreNativeInferenceEvaluationComplete",
+        "nativeCoverageStatus",
+        "supportingRuleFailureCount",
+        "supportingRuleFailures",
         "nativeInferenceOutcome",
         "nativeInferenceNoMatch",
         "pythonCompatibilityReasonerUsed",
@@ -25598,10 +25616,23 @@ def inference_rulebox_metadata(
         "nativeRuleSelectionExecutedCount",
         "nativeRuleSelectionDeferredCount",
         "nativeRuleSelectionFullRuleCount",
+        "supportingRuleFailureCount",
     ]:
         if key in metadata:
             metadata[key] = int(number_or_none(metadata.get(key)) or 0)
     return metadata
+
+
+def native_inference_decision_eligible(metadata: Dict[str, object]) -> bool:
+    """Accept a complete core while preserving support-only coverage gaps."""
+    values = dict(metadata or {})
+    if typedb_bool(values.get("nativeInferenceEvaluationComplete")):
+        return True
+    return bool(
+        typedb_bool(values.get("coreNativeInferenceEvaluationComplete"))
+        and str(values.get("nativeCoverageStatus") or "").strip().lower()
+        == "core-complete-supporting-partial"
+    )
 
 
 def row_inference_generation_id(row: Dict[str, object]) -> str:

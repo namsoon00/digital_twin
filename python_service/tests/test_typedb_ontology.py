@@ -7796,6 +7796,45 @@ class TypeDBOntologyRepositoryTests(unittest.TestCase):
         self.assertIn('has ontology-kind "inference-generation"', repository.queries[0])
         self.assertIn('has ontology-world-id "portfolio:local:default"', repository.queries[0])
 
+    def test_inferencebox_recovery_metadata_accepts_core_complete_supporting_gap(self):
+        class MarkerRepository(TypeDBOntologyGraphRepository):
+            def __init__(self):
+                super().__init__("127.0.0.1:1729")
+
+            def read_rows(self, _query, _columns, **_kwargs):
+                return [{
+                    "id": "inference-generation:partial",
+                    "label": "Active InferenceBox",
+                    "kind": "inference-generation",
+                    "snapshotId": "inference-generation:partial",
+                    "updatedAt": "2026-08-15T00:00:00Z",
+                    "json": json.dumps({
+                        "inferenceGenerationId": "inference-generation:partial",
+                        "sourceAboxSnapshotId": "abox-manifest:partial",
+                        "targetSymbols": ["000660"],
+                        "nativeInferenceEvaluationComplete": False,
+                        "coreNativeInferenceEvaluationComplete": True,
+                        "nativeCoverageStatus": "core-complete-supporting-partial",
+                        "supportingRuleFailureCount": 1,
+                        "supportingRuleFailures": [{
+                            "ruleId": "graph.support.v1",
+                            "failurePolicy": "preserve-core-with-gap",
+                            "supportOnly": True,
+                        }],
+                        "nativeInferenceOutcome": "matched",
+                    }),
+                }]
+
+        metadata = MarkerRepository().inferencebox_recovery_metadata(
+            "portfolio:local:default"
+        )
+
+        self.assertTrue(metadata["nativeTypeDbReasoningCompleted"])
+        self.assertFalse(metadata["nativeTypeDbFullReasoningCompleted"])
+        self.assertTrue(metadata["coreNativeInferenceEvaluationComplete"])
+        self.assertEqual("core-complete-supporting-partial", metadata["nativeCoverageStatus"])
+        self.assertEqual(1, metadata["supportingRuleFailureCount"])
+
     def test_inferencebox_commit_proof_checks_only_active_marker_and_abox_pointer(self):
         class CommitProofRepository(TypeDBOntologyGraphRepository):
             def __init__(self):

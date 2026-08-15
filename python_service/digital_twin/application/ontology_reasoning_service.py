@@ -4738,6 +4738,11 @@ class OntologyReasoningRunner:
         impact = scope.get("impactDiagnostics") if isinstance(scope.get("impactDiagnostics"), dict) else {}
         target_patch = scope.get("targetScopedManifestPatch") if isinstance(scope.get("targetScopedManifestPatch"), dict) else {}
         replay = inference.get("replayValidation") if isinstance(inference.get("replayValidation"), dict) else {}
+        native_preflight = (
+            inference.get("nativeRulePreflight")
+            if isinstance(inference.get("nativeRulePreflight"), dict)
+            else {}
+        )
         runtime_identity = observation.get("runtimeIdentity") if isinstance(observation.get("runtimeIdentity"), dict) else {}
         return {
             "durationMs": int(float_value(observation.get("durationMs"), 0.0)),
@@ -4814,6 +4819,18 @@ class OntologyReasoningRunner:
                 str(key): int(float_value(value, 0.0))
                 for key, value in native_stage_timings.items()
                 if str(key or "")
+            },
+            "nativeRulePreflight": {
+                "status": str(native_preflight.get("status") or ""),
+                "mode": str(native_preflight.get("mode") or ""),
+                "reason": str(native_preflight.get("reason") or "")[:220],
+                "sourceCount": int(float_value(native_preflight.get("sourceCount"), 0.0)),
+                "loadedSourceCount": int(float_value(
+                    native_preflight.get("loadedSourceCount"),
+                    0.0,
+                )),
+                "entityCount": int(float_value(native_preflight.get("entityCount"), 0.0)),
+                "relationCount": int(float_value(native_preflight.get("relationCount"), 0.0)),
             },
             "targetParallelism": int(float_value(inference.get("targetParallelism"), 0.0)),
             "typedbNativeRuleSubjectFanoutUsed": bool(inference.get("subjectFanoutUsed")),
@@ -5579,6 +5596,7 @@ class OntologyReasoningRunner:
                     "targetWorkItemCount", "commitMode", "affectedScopeCount",
                     "directChangedScopeCount", "globalImpact", "globalImpactDiagnostics",
                     "targetScopedManifestPatch", "runtimeIdentity", "replayValidation",
+                    "nativeRulePreflight",
                 ]
                 if key in projection_runtime
             }

@@ -149,6 +149,15 @@ class OntologyReasoningQueueHealthTests(unittest.TestCase):
                             },
                         },
                         "inference": {
+                            "nativeRulePreflight": {
+                                "status": "verified-partial",
+                                "mode": "persisted-projection-topology",
+                                "reason": "Changed scopes were supplied by the projection.",
+                                "sourceCount": 12,
+                                "loadedSourceCount": 12,
+                                "entityCount": 44,
+                                "relationCount": 61,
+                            },
                             "subjectFanoutUsed": True,
                             "subjectFanoutParallelism": 2,
                             "subjectFanoutDurationMs": 3210,
@@ -173,6 +182,9 @@ class OntologyReasoningQueueHealthTests(unittest.TestCase):
         self.assertEqual(3210, summary["typedbNativeRuleSubjectFanoutDurationMs"])
         self.assertEqual(0, summary["typedbNativeRuleSubjectFanoutFailureCount"])
         self.assertEqual("005930", summary["typedbNativeRuleSubjectFanoutSubjects"][0]["symbol"])
+        self.assertEqual("verified-partial", summary["nativeRulePreflight"]["status"])
+        self.assertEqual("persisted-projection-topology", summary["nativeRulePreflight"]["mode"])
+        self.assertEqual(12, summary["nativeRulePreflight"]["loadedSourceCount"])
 
     def test_critical_request_age_escalates_immediately(self):
         health = evaluate_ontology_reasoning_queue_health(

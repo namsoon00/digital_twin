@@ -40,6 +40,99 @@ NATIVE_RULE_PLANNER_SUBJECT_PROPERTY_FIELDS = {
     "volumeRatio",
 }
 
+# Relation evidence keeps only scalar fields that current and future RuleBox
+# filters can inspect. A missing field remains unknown during planning, so an
+# omitted value can never create a false negative rule decision.
+NATIVE_RULE_PLANNER_RELATION_TARGET_PROPERTY_FIELDS = {
+    "allowAddOnStrength",
+    "avoidAveragingDown",
+    "beta",
+    "cashConversionPct",
+    "change24h",
+    "change7d",
+    "changeRate",
+    "classification",
+    "consecutiveDeclineCount",
+    "conservativeMarginOfSafetyPct",
+    "correlationPolicyDelta",
+    "correspondence",
+    "coverageRatio",
+    "cryptoSymbol",
+    "dataScope",
+    "dataState",
+    "debtToEquityPct",
+    "delta",
+    "delta5dBp",
+    "deltaPct",
+    "drawdownFromPeakPct",
+    "drawdownPolicyDeltaPct",
+    "factor",
+    "field",
+    "forwardPE",
+    "freeCashFlowGrowthPct",
+    "freeCashFlowMarginPct",
+    "group",
+    "hasSufficientHistory",
+    "impactPolarity",
+    "increaseCount20d",
+    "instrumentArchetype",
+    "levelType",
+    "ma20Distance",
+    "ma60Distance",
+    "marginOfSafetyPct",
+    "materialityPassed",
+    "materialityState",
+    "needsReview",
+    "operatingIncomeGrowthPct",
+    "operatingMarginPct",
+    "pair",
+    "pbr",
+    "peRatio",
+    "peakReturnPct",
+    "polarity",
+    "policyDeltaRatio",
+    "previousValue",
+    "priceChangePct",
+    "priceVelocityChangePct",
+    "priorPriceChangePct",
+    "proxyChangeRate",
+    "rateSeriesId",
+    "readScope",
+    "reboundFromTroughPct",
+    "recentPriceChangePct",
+    "reentered",
+    "relationScope",
+    "relativeReturnPct",
+    "returnOnEquityPct",
+    "revenueGrowthPct",
+    "riskEventCount",
+    "sensitivityLevel",
+    "sharesOutstandingGrowthPct",
+    "smartMoneyDistinctObservationCount",
+    "smartMoneyNetChange",
+    "smartMoneyNetLatest",
+    "smartMoneyObservationCount",
+    "sourceTrustState",
+    "staleObservationCount",
+    "supportEventCount",
+    "surprisePercentage",
+    "trailingEPS",
+    "trimOnTrendBreak",
+    "troughReturnPct",
+    "validObservationRatio",
+    "valuationDataState",
+    "valuationDecisionEligible",
+    "value",
+    "volatilityPolicyDeltaPct",
+    "windowKey",
+}
+NATIVE_RULE_PLANNER_RELATION_PROPERTY_FIELDS = {
+    "evidenceRole",
+    "transitionType",
+    "weight",
+}
+NATIVE_RULE_PLANNER_RELATION_EVIDENCE_LIMIT_PER_SYMBOL = 256
+
 
 def _clean_symbol(value: object) -> str:
     return str(value or "").upper().strip()
@@ -115,6 +208,90 @@ def _normalized_subject_properties(value: object) -> Dict[str, object]:
     return result
 
 
+def _planner_filtered_properties(
+    value: object,
+    allowed_fields: Set[str],
+) -> Dict[str, object]:
+    if not isinstance(value, Mapping):
+        return {}
+    properties = dict(value)
+    nested = properties.get("properties")
+    if isinstance(nested, Mapping):
+        properties.update(dict(nested))
+    result: Dict[str, object] = {}
+    for field in sorted(allowed_fields):
+        normalized = _planner_property_value(properties.get(field))
+        if normalized is not None:
+            result[field] = normalized
+    return result
+
+
+def _normalized_relation_evidence_entry(value: object) -> Dict[str, object]:
+    if not isinstance(value, Mapping):
+        return {}
+    relation_type = str(value.get("relationType") or "").upper().strip()
+    direction = str(value.get("direction") or "out").lower().strip()
+    target_kind = str(value.get("targetKind") or "").strip()
+    if not relation_type or direction not in {"in", "out"} or not target_kind:
+        return {}
+    return {
+        "relationType": relation_type,
+        "direction": direction,
+        "targetKind": target_kind,
+        "targetProperties": _planner_filtered_properties(
+            value.get("targetProperties"),
+            NATIVE_RULE_PLANNER_RELATION_TARGET_PROPERTY_FIELDS,
+        ),
+        "relationProperties": _planner_filtered_properties(
+            value.get("relationProperties"),
+            NATIVE_RULE_PLANNER_RELATION_PROPERTY_FIELDS,
+        ),
+    }
+
+
+def _relation_evidence_for_subject(
+    graph: PortfolioOntology,
+    subject_id: str,
+) -> Dict[str, object]:
+    entities_by_id = {
+        str(getattr(entity, "entity_id", "") or ""): entity
+        for entity in list(getattr(graph, "entities", []) or [])
+        if str(getattr(entity, "entity_id", "") or "")
+    }
+    entries: List[Dict[str, object]] = []
+    complete = True
+    for relation in list(getattr(graph, "relations", []) or []):
+        source_id = str(getattr(relation, "source", "") or "")
+        target_id = str(getattr(relation, "target", "") or "")
+        if source_id == subject_id:
+            direction, endpoint_id = "out", target_id
+        elif target_id == subject_id:
+            direction, endpoint_id = "in", source_id
+        else:
+            continue
+        endpoint = entities_by_id.get(endpoint_id)
+        if endpoint is None:
+            complete = False
+            continue
+        entry = _normalized_relation_evidence_entry({
+            "relationType": str(getattr(relation, "relation_type", "") or ""),
+            "direction": direction,
+            "targetKind": str(getattr(endpoint, "kind", "") or ""),
+            "targetProperties": dict(getattr(endpoint, "properties", {}) or {}),
+            "relationProperties": {
+                **dict(getattr(relation, "properties", {}) or {}),
+                "weight": getattr(relation, "weight", None),
+            },
+        })
+        if entry:
+            entries.append(entry)
+    entries.sort(key=lambda item: json.dumps(item, ensure_ascii=True, sort_keys=True, separators=(",", ":")))
+    if len(entries) > NATIVE_RULE_PLANNER_RELATION_EVIDENCE_LIMIT_PER_SYMBOL:
+        complete = False
+        entries = entries[:NATIVE_RULE_PLANNER_RELATION_EVIDENCE_LIMIT_PER_SYMBOL]
+    return {"complete": complete, "entries": entries}
+
+
 def _topology_fingerprint(payload: Mapping[str, object]) -> str:
     canonical = json.dumps(dict(payload or {}), ensure_ascii=True, sort_keys=True, separators=(",", ":"))
     return "native-rule-topology:" + hashlib.sha256(canonical.encode("utf-8")).hexdigest()[:24]
@@ -156,6 +333,19 @@ def native_rule_planner_topology(graph: PortfolioOntology) -> Dict[str, object]:
             if symbol and symbol in relation_types_by_symbol:
                 relation_types_by_symbol[symbol].add(relation_type)
 
+    relation_evidence_by_symbol: Dict[str, List[Dict[str, object]]] = {}
+    relation_evidence_complete_by_symbol: Dict[str, bool] = {}
+    for symbol, entities in sorted(subject_entities_by_symbol.items()):
+        if len(entities) != 1:
+            relation_evidence_complete_by_symbol[symbol] = False
+            continue
+        evidence = _relation_evidence_for_subject(
+            graph,
+            str(getattr(entities[0], "entity_id", "") or ""),
+        )
+        relation_evidence_by_symbol[symbol] = list(evidence.get("entries") or [])
+        relation_evidence_complete_by_symbol[symbol] = bool(evidence.get("complete"))
+
     payload = {
         "version": NATIVE_RULE_PLANNER_TOPOLOGY_VERSION,
         "complete": True,
@@ -175,6 +365,8 @@ def native_rule_planner_topology(graph: PortfolioOntology) -> Dict[str, object]:
             for symbol, entities in sorted(subject_entities_by_symbol.items())
             if len(entities) == 1
         },
+        "relationEvidenceBySymbol": relation_evidence_by_symbol,
+        "relationEvidenceCompleteBySymbol": relation_evidence_complete_by_symbol,
     }
     return {
         **payload,
@@ -210,15 +402,39 @@ def normalize_native_rule_planner_topology(
         return {"status": "invalid", "reason": "Native rule planner topology is not a complete projection graph index."}
     raw_sources = raw.get("sourceIdsBySymbol") if isinstance(raw.get("sourceIdsBySymbol"), Mapping) else {}
     raw_relations = raw.get("relationTypesBySymbol") if isinstance(raw.get("relationTypesBySymbol"), Mapping) else {}
-    subject_property_index_available = "subjectPropertiesBySymbol" in raw
+    subject_property_index_available = (
+        bool(raw.get("subjectPropertyIndexAvailable"))
+        if "subjectPropertyIndexAvailable" in raw
+        else "subjectPropertiesBySymbol" in raw
+    )
     raw_subject_properties = (
         raw.get("subjectPropertiesBySymbol")
         if isinstance(raw.get("subjectPropertiesBySymbol"), Mapping)
         else {}
     )
+    relation_evidence_index_available = (
+        bool(raw.get("relationEvidenceIndexAvailable"))
+        if "relationEvidenceIndexAvailable" in raw
+        else (
+            "relationEvidenceBySymbol" in raw
+            and "relationEvidenceCompleteBySymbol" in raw
+        )
+    )
+    raw_relation_evidence = (
+        raw.get("relationEvidenceBySymbol")
+        if isinstance(raw.get("relationEvidenceBySymbol"), Mapping)
+        else {}
+    )
+    raw_relation_evidence_complete = (
+        raw.get("relationEvidenceCompleteBySymbol")
+        if isinstance(raw.get("relationEvidenceCompleteBySymbol"), Mapping)
+        else {}
+    )
     source_ids_by_symbol: Dict[str, List[str]] = {}
     relation_types_by_symbol: Dict[str, List[str]] = {}
     subject_properties_by_symbol: Dict[str, Dict[str, object]] = {}
+    relation_evidence_by_symbol: Dict[str, List[Dict[str, object]]] = {}
+    relation_evidence_complete_by_symbol: Dict[str, bool] = {}
     symbols = set()
     for raw_symbol, raw_values in raw_sources.items():
         symbol = _clean_symbol(raw_symbol)
@@ -240,6 +456,24 @@ def normalize_native_rule_planner_topology(
             if not symbol or not isinstance(raw_values, Mapping):
                 continue
             subject_properties_by_symbol[symbol] = _normalized_subject_properties(raw_values)
+    if relation_evidence_index_available:
+        for raw_symbol, raw_values in raw_relation_evidence.items():
+            symbol = _clean_symbol(raw_symbol)
+            if not symbol or not isinstance(raw_values, (list, tuple)):
+                continue
+            entries = [
+                normalized
+                for item in list(raw_values)[:NATIVE_RULE_PLANNER_RELATION_EVIDENCE_LIMIT_PER_SYMBOL]
+                for normalized in [_normalized_relation_evidence_entry(item)]
+                if normalized
+            ]
+            entries.sort(key=lambda item: json.dumps(item, ensure_ascii=True, sort_keys=True, separators=(",", ":")))
+            relation_evidence_by_symbol[symbol] = entries
+            relation_evidence_complete_by_symbol[symbol] = bool(
+                raw_relation_evidence_complete.get(raw_symbol)
+                if raw_symbol in raw_relation_evidence_complete
+                else raw_relation_evidence_complete.get(symbol)
+            ) and len(raw_values) <= NATIVE_RULE_PLANNER_RELATION_EVIDENCE_LIMIT_PER_SYMBOL
     for symbol in symbols:
         source_ids_by_symbol.setdefault(symbol, [])
         relation_types_by_symbol.setdefault(symbol, [])
@@ -263,6 +497,15 @@ def normalize_native_rule_planner_topology(
             symbol: subject_properties_by_symbol[symbol]
             for symbol in sorted(subject_properties_by_symbol)
             if symbol in symbols
+        }
+    if relation_evidence_index_available:
+        payload["relationEvidenceBySymbol"] = {
+            symbol: relation_evidence_by_symbol.get(symbol, [])
+            for symbol in sorted(symbols)
+        }
+        payload["relationEvidenceCompleteBySymbol"] = {
+            symbol: bool(relation_evidence_complete_by_symbol.get(symbol))
+            for symbol in sorted(symbols)
         }
     fingerprint = _topology_fingerprint(payload)
     if str(raw.get("fingerprint") or "") != fingerprint:
@@ -288,6 +531,17 @@ def normalize_native_rule_planner_topology(
             if symbol in payload.get("subjectPropertiesBySymbol", {})
         },
         "subjectPropertyIndexAvailable": subject_property_index_available,
+        "relationEvidenceBySymbol": {
+            symbol: list(payload.get("relationEvidenceBySymbol", {}).get(symbol) or [])
+            for symbol in selected
+            if symbol in payload.get("relationEvidenceBySymbol", {})
+        },
+        "relationEvidenceCompleteBySymbol": {
+            symbol: bool(payload.get("relationEvidenceCompleteBySymbol", {}).get(symbol))
+            for symbol in selected
+            if symbol in payload.get("relationEvidenceCompleteBySymbol", {})
+        },
+        "relationEvidenceIndexAvailable": relation_evidence_index_available,
     }
 
 
@@ -331,10 +585,14 @@ def merge_native_rule_planner_topology(
     active_sources = dict(active.get("sourceIdsBySymbol") or {})
     active_relations = dict(active.get("relationTypesBySymbol") or {})
     active_properties = dict(active.get("subjectPropertiesBySymbol") or {})
+    active_evidence = dict(active.get("relationEvidenceBySymbol") or {})
+    active_evidence_complete = dict(active.get("relationEvidenceCompleteBySymbol") or {})
     incoming_sources = dict(incoming.get("sourceIdsBySymbol") or {})
     incoming_relations = dict(incoming.get("relationTypesBySymbol") or {})
     incoming_properties = dict(incoming.get("subjectPropertiesBySymbol") or {})
-    incoming_symbols = set(incoming_sources) | set(incoming_relations)
+    incoming_evidence = dict(incoming.get("relationEvidenceBySymbol") or {})
+    incoming_evidence_complete = dict(incoming.get("relationEvidenceCompleteBySymbol") or {})
+    incoming_symbols = set(incoming_sources) | set(incoming_relations) | set(incoming_evidence)
 
     # A partial input may intentionally omit a source while it waits for a
     # follow-up observation.  Do not erase the active source in that case.
@@ -359,6 +617,16 @@ def merge_native_rule_planner_topology(
         for symbol, values in active_properties.items()
         if symbol not in replaced
     }
+    merged_evidence = {
+        symbol: list(values or [])
+        for symbol, values in active_evidence.items()
+        if symbol not in replaced
+    }
+    merged_evidence_complete = {
+        symbol: bool(value)
+        for symbol, value in active_evidence_complete.items()
+        if symbol not in replaced
+    }
     for symbol in replaced:
         merged_sources[symbol] = list(incoming_sources.get(symbol) or [])
         merged_relations[symbol] = list(incoming_relations.get(symbol) or [])
@@ -366,6 +634,14 @@ def merge_native_rule_planner_topology(
             merged_properties[symbol] = dict(incoming_properties.get(symbol) or {})
         else:
             merged_properties.pop(symbol, None)
+        if symbol in incoming_evidence:
+            merged_evidence[symbol] = list(incoming_evidence.get(symbol) or [])
+            merged_evidence_complete[symbol] = bool(
+                incoming_evidence_complete.get(symbol)
+            )
+        else:
+            merged_evidence.pop(symbol, None)
+            merged_evidence_complete[symbol] = False
 
     payload = {
         "version": NATIVE_RULE_PLANNER_TOPOLOGY_VERSION,
@@ -387,6 +663,24 @@ def merge_native_rule_planner_topology(
             symbol: _normalized_subject_properties(values)
             for symbol, values in sorted(merged_properties.items())
             if symbol in merged_sources
+        }
+    if bool(active.get("relationEvidenceIndexAvailable")) or bool(
+        incoming.get("relationEvidenceIndexAvailable")
+    ):
+        payload["relationEvidenceBySymbol"] = {
+            symbol: [
+                normalized
+                for item in list(merged_evidence.get(symbol) or [])[
+                    :NATIVE_RULE_PLANNER_RELATION_EVIDENCE_LIMIT_PER_SYMBOL
+                ]
+                for normalized in [_normalized_relation_evidence_entry(item)]
+                if normalized
+            ]
+            for symbol in sorted(merged_sources)
+        }
+        payload["relationEvidenceCompleteBySymbol"] = {
+            symbol: bool(merged_evidence_complete.get(symbol))
+            for symbol in sorted(merged_sources)
         }
     topology = {
         **payload,

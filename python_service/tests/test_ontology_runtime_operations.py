@@ -435,6 +435,9 @@ class OntologyRuntimeOperationsTests(unittest.TestCase):
         result["ruleboxExecution"].update({
             "typedbNativeRuleExecutedCount": 4,
             "typedbNativeRuleExecutedWorkCount": 6,
+            "typedbNativeManifestEvidencePreflightEnabled": True,
+            "typedbNativeRelationEvidencePreflightEnabled": True,
+            "typedbNativeManifestEvidencePreflightPrunedSymbolCount": 5,
             "typedbNativeRuleTargetParallelism": 2,
             "typedbNativeRuleSubjectRuleParallelism": 2,
             "typedbNativeRuleTotalReadParallelismCap": 4,
@@ -465,6 +468,9 @@ class OntologyRuntimeOperationsTests(unittest.TestCase):
         self.assertEqual(["000660"], observation["inference"]["notEvaluatedSymbols"])
         self.assertEqual(4, observation["inference"]["executedRuleCount"])
         self.assertEqual(6, observation["inference"]["executedRuleWorkCount"])
+        self.assertTrue(observation["inference"]["manifestEvidencePreflightEnabled"])
+        self.assertTrue(observation["inference"]["relationEvidencePreflightEnabled"])
+        self.assertEqual(5, observation["inference"]["manifestEvidencePreflightPrunedSymbolCount"])
         self.assertEqual(2, observation["inference"]["targetParallelism"])
         self.assertEqual(2, observation["inference"]["subjectRuleParallelism"])
         self.assertEqual(4, observation["inference"]["totalReadParallelismCap"])

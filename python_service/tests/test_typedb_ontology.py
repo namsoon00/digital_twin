@@ -4856,6 +4856,139 @@ class TypeDBOntologyRepositoryTests(unittest.TestCase):
         self.assertEqual(1, holding_plan["subjectPropertyPreflightPrunedSymbolCount"])
         self.assertEqual([rule.rule_id], [item["ruleId"] for item in legacy_plan["selectedEntries"]])
 
+    def test_manifest_relation_evidence_prunes_a_proven_news_filter_mismatch(self):
+        rule = next(
+            item for item in default_graph_inference_rules()
+            if item.rule_id == "graph.news.direct_material_support.v1"
+        )
+        relation_evidence = {
+            "005930": [
+                {
+                    "relationType": "HAS_EXTERNAL_SIGNAL",
+                    "direction": "out",
+                    "targetKind": "research-evidence",
+                    "targetProperties": {
+                        "relationScope": "direct",
+                        "polarity": "risk",
+                        "materialityPassed": True,
+                        "materialityState": "material",
+                        "sourceTrustState": "trusted",
+                    },
+                    "relationProperties": {},
+                },
+                {
+                    "relationType": "HAS_OBSERVATION",
+                    "direction": "out",
+                    "targetKind": "fact-change",
+                    "targetProperties": {"materialityPassed": True},
+                    "relationProperties": {},
+                },
+            ],
+        }
+
+        mismatch_plan = typedb_native_rule_execution_plan(
+            [rule],
+            ["005930"],
+            {"005930": ["HAS_EXTERNAL_SIGNAL", "HAS_OBSERVATION"]},
+            relation_evidence_by_symbol=relation_evidence,
+            relation_evidence_complete_by_symbol={"005930": True},
+        )
+        incomplete_plan = typedb_native_rule_execution_plan(
+            [rule],
+            ["005930"],
+            {"005930": ["HAS_EXTERNAL_SIGNAL", "HAS_OBSERVATION"]},
+            relation_evidence_by_symbol=relation_evidence,
+            relation_evidence_complete_by_symbol={"005930": False},
+        )
+
+        self.assertEqual([], mismatch_plan["selectedEntries"])
+        self.assertEqual(1, mismatch_plan["manifestEvidencePreflightPrunedSymbolCount"])
+        self.assertEqual(
+            ["direct-material-support"],
+            mismatch_plan["skippedEntries"][0]["preflightPrunedSymbols"]["005930"]["failedConditionIds"],
+        )
+        self.assertEqual([rule.rule_id], [item["ruleId"] for item in incomplete_plan["selectedEntries"]])
+
+    def test_manifest_evidence_combines_subject_and_relation_any_conditions(self):
+        rule = next(
+            item for item in default_graph_inference_rules()
+            if item.rule_id == "graph.winner_momentum.add_buy_review.v1"
+        )
+        relation_evidence = {
+            "005930": [
+                {
+                    "relationType": "HAS_INSTRUMENT_PROFILE",
+                    "direction": "out",
+                    "targetKind": "instrument-profile",
+                    "targetProperties": {"allowAddOnStrength": True},
+                    "relationProperties": {},
+                },
+                *[
+                    {
+                        "relationType": "HAS_TECHNICAL_INDICATOR",
+                        "direction": "out",
+                        "targetKind": "key-level",
+                        "targetProperties": {"levelType": level, "value": 1.0},
+                        "relationProperties": {},
+                    }
+                    for level in ["ma5", "ma20", "ma60"]
+                ],
+                *[
+                    {
+                        "relationType": "HAS_TRADE_FLOW",
+                        "direction": "out",
+                        "targetKind": "flow-metric",
+                        "targetProperties": {"field": field, "value": value},
+                        "relationProperties": {},
+                    }
+                    for field, value in [
+                        ("volumeRatio", 0.5),
+                        ("tradeStrength", 90),
+                        ("bidAskImbalance", -2),
+                    ]
+                ],
+                {
+                    "relationType": "HAS_DATA_QUALITY",
+                    "direction": "out",
+                    "targetKind": "data-availability-assessment",
+                    "targetProperties": {
+                        "field": "judgementEvidence",
+                        "dataState": "sufficient",
+                    },
+                    "relationProperties": {},
+                },
+            ],
+        }
+
+        plan = typedb_native_rule_execution_plan(
+            [rule],
+            ["005930"],
+            {
+                "005930": [
+                    "HAS_INSTRUMENT_PROFILE",
+                    "HAS_TECHNICAL_INDICATOR",
+                    "HAS_TRADE_FLOW",
+                    "HAS_DATA_QUALITY",
+                ],
+            },
+            subject_properties_by_symbol={
+                "005930": {
+                    "kind": "stock",
+                    "source": "holding",
+                    "profitLossRate": 5,
+                    "smartMoneyNetVolume": -1,
+                },
+            },
+            relation_evidence_by_symbol=relation_evidence,
+            relation_evidence_complete_by_symbol={"005930": True},
+        )
+
+        self.assertEqual([], plan["selectedEntries"])
+        self.assertEqual(
+            ["any-group"],
+            plan["skippedEntries"][0]["preflightPrunedSymbols"]["005930"]["failedConditionIds"],
+        )
+
     def test_typedb_native_rule_execution_plan_never_starves_non_temporal_rules(self):
         rules = default_graph_inference_rules()
         plan = typedb_native_rule_execution_plan(

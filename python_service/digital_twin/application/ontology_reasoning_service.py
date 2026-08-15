@@ -4816,6 +4816,16 @@ class OntologyReasoningRunner:
             "candidateRuleRatioPct": float(float_value(inference.get("candidateRuleRatioPct"), 0.0)),
             "executedRuleCount": int(float_value(inference.get("executedRuleCount"), 0.0)),
             "executedRuleWorkCount": int(float_value(inference.get("executedRuleWorkCount"), 0.0)),
+            "manifestEvidencePreflightEnabled": bool(
+                inference.get("manifestEvidencePreflightEnabled")
+            ),
+            "relationEvidencePreflightEnabled": bool(
+                inference.get("relationEvidencePreflightEnabled")
+            ),
+            "manifestEvidencePreflightPrunedSymbolCount": int(float_value(
+                inference.get("manifestEvidencePreflightPrunedSymbolCount"),
+                0.0,
+            )),
             "nativeStageTimings": {
                 str(key): int(float_value(value, 0.0))
                 for key, value in native_stage_timings.items()
@@ -5600,6 +5610,8 @@ class OntologyReasoningRunner:
                     "aboxReusedPhysicalRowCount", "aboxInsertedNodeCount", "aboxInsertedRelationCount",
                     "status", "targetSymbolCount", "candidateRuleCount", "enabledRuleCount",
                     "candidateRuleRatioPct", "executedRuleCount", "executedRuleWorkCount",
+                    "manifestEvidencePreflightEnabled", "relationEvidencePreflightEnabled",
+                    "manifestEvidencePreflightPrunedSymbolCount",
                     "targetParallelism", "subjectRuleParallelism", "totalReadParallelismCap",
                     "effectiveTotalReadParallelism", "targetWorkShardingUsed", "targetWorkShardCount",
                     "typedbNativeRuleSubjectFanoutUsed",

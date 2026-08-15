@@ -1586,6 +1586,15 @@ def build_projection_runtime_observation(
                 or execution.get("nativeRuleSelectionExecutedCount")
             ),
             "executedRuleWorkCount": _integer(execution.get("typedbNativeRuleExecutedWorkCount")),
+            "manifestEvidencePreflightEnabled": bool(
+                execution.get("typedbNativeManifestEvidencePreflightEnabled")
+            ),
+            "relationEvidencePreflightEnabled": bool(
+                execution.get("typedbNativeRelationEvidencePreflightEnabled")
+            ),
+            "manifestEvidencePreflightPrunedSymbolCount": _integer(
+                execution.get("typedbNativeManifestEvidencePreflightPrunedSymbolCount")
+            ),
             "targetParallelism": _integer(execution.get("typedbNativeRuleTargetParallelism")),
             "subjectRuleParallelism": _integer(
                 execution.get("typedbNativeRuleSubjectRuleParallelism")

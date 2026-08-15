@@ -761,6 +761,15 @@ def projection_result_summary(result: Dict[str, object]) -> Dict[str, object]:
                 for value in execution.get("typedbNativeRuleMatchedRuleIds") or []
                 if str(value or "").strip()
             })[:160],
+            "typedbNativeManifestEvidencePreflightEnabled": bool(
+                execution.get("typedbNativeManifestEvidencePreflightEnabled")
+            ),
+            "typedbNativeRelationEvidencePreflightEnabled": bool(
+                execution.get("typedbNativeRelationEvidencePreflightEnabled")
+            ),
+            "typedbNativeManifestEvidencePreflightPrunedSymbolCount": int(
+                execution.get("typedbNativeManifestEvidencePreflightPrunedSymbolCount") or 0
+            ),
             "typedbNativeRuleParallelism": int(execution.get("typedbNativeRuleParallelism") or 1),
             "typedbNativeRuleParallelUsed": bool(execution.get("typedbNativeRuleParallelUsed")),
             "typedbNativeRuleSubjectRuleParallelism": int(

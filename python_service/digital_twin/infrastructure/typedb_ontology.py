@@ -345,6 +345,8 @@ def typedb_native_rule_planner_topology_for_execution(
             "relationTypesBySymbol": {},
             "sourceIdsBySymbol": {},
             "subjectPropertiesBySymbol": {},
+            "relationEvidenceBySymbol": {},
+            "relationEvidenceCompleteBySymbol": {},
         }
     requested_symbols = clean_symbols_from_payload(target_symbols or [])
     missing_requested_symbols = [
@@ -366,6 +368,8 @@ def typedb_native_rule_planner_topology_for_execution(
             "relationTypesBySymbol": {},
             "sourceIdsBySymbol": {},
             "subjectPropertiesBySymbol": {},
+            "relationEvidenceBySymbol": {},
+            "relationEvidenceCompleteBySymbol": {},
         }
     stored = normalize_native_rule_planner_topology(
         active.get("nativeRulePlannerTopology"),
@@ -390,6 +394,13 @@ def typedb_native_rule_planner_topology_for_execution(
         execution_topology["subjectPropertiesBySymbol"] = dict(
             stored_full.get("subjectPropertiesBySymbol") or {}
         )
+    if bool(stored_full.get("relationEvidenceIndexAvailable")):
+        execution_topology["relationEvidenceBySymbol"] = dict(
+            stored_full.get("relationEvidenceBySymbol") or {}
+        )
+        execution_topology["relationEvidenceCompleteBySymbol"] = dict(
+            stored_full.get("relationEvidenceCompleteBySymbol") or {}
+        )
     return {
         "status": "verified",
         "source": "projection-payload-verified" if supplied_matches else "active-manifest",
@@ -404,6 +415,11 @@ def typedb_native_rule_planner_topology_for_execution(
         "sourceIdsBySymbol": dict(stored.get("sourceIdsBySymbol") or {}),
         "subjectPropertiesBySymbol": dict(stored.get("subjectPropertiesBySymbol") or {}),
         "subjectPropertyIndexAvailable": bool(stored.get("subjectPropertyIndexAvailable")),
+        "relationEvidenceBySymbol": dict(stored.get("relationEvidenceBySymbol") or {}),
+        "relationEvidenceCompleteBySymbol": dict(
+            stored.get("relationEvidenceCompleteBySymbol") or {}
+        ),
+        "relationEvidenceIndexAvailable": bool(stored.get("relationEvidenceIndexAvailable")),
         "symbols": list(stored.get("symbols") or []),
     }
 
@@ -17186,6 +17202,8 @@ relation ontology-assertion,
         try:
             relation_types_by_symbol: Dict[str, Iterable[str]] = {}
             subject_properties_by_symbol: Dict[str, Dict[str, object]] = {}
+            relation_evidence_by_symbol: Dict[str, List[Dict[str, object]]] = {}
+            relation_evidence_complete_by_symbol: Dict[str, bool] = {}
             rule_context: Dict[str, object] = {}
             structural_execution_plan: Dict[str, object] = {}
             if clean_symbols:
@@ -17198,6 +17216,12 @@ relation ontology-assertion,
                     source_ids_by_symbol = dict(topology.get("sourceIdsBySymbol") or {})
                     subject_properties_by_symbol = dict(
                         topology.get("subjectPropertiesBySymbol") or {}
+                    )
+                    relation_evidence_by_symbol = dict(
+                        topology.get("relationEvidenceBySymbol") or {}
+                    )
+                    relation_evidence_complete_by_symbol = dict(
+                        topology.get("relationEvidenceCompleteBySymbol") or {}
                     )
                     source_count = sum(
                         1
@@ -17214,6 +17238,9 @@ relation ontology-assertion,
                         "sourceIdsBySymbol": source_ids_by_symbol,
                         "subjectPropertyIndexAvailable": bool(
                             topology.get("subjectPropertyIndexAvailable")
+                        ),
+                        "relationEvidenceIndexAvailable": bool(
+                            topology.get("relationEvidenceIndexAvailable")
                         ),
                         "preflightStatus": "persisted-projection-topology",
                         "preflightSourceCount": source_count,
@@ -17252,6 +17279,8 @@ relation ontology-assertion,
                     clean_symbols,
                     relation_types_by_symbol,
                     subject_properties_by_symbol=subject_properties_by_symbol,
+                    relation_evidence_by_symbol=relation_evidence_by_symbol,
+                    relation_evidence_complete_by_symbol=relation_evidence_complete_by_symbol,
                 )
                 rule_context.update({
                     "structuralCandidateRuleCount": int(
@@ -17315,6 +17344,8 @@ relation ontology-assertion,
                 preflight_graph=preflight_graph,
                 preflight_incoming_relations_complete=preflight_incoming_relations_complete,
                 subject_properties_by_symbol=subject_properties_by_symbol,
+                relation_evidence_by_symbol=relation_evidence_by_symbol,
+                relation_evidence_complete_by_symbol=relation_evidence_complete_by_symbol,
             )
             for item in execution_plan.get("skippedEntries") or []:
                 skipped_rules.append({
@@ -20898,6 +20929,9 @@ relation ontology-assertion,
                 "nativeRulePlannerSubjectPropertyIndexAvailable": bool(
                     planner_topology.get("subjectPropertyIndexAvailable")
                 ),
+                "nativeRulePlannerRelationEvidenceIndexAvailable": bool(
+                    planner_topology.get("relationEvidenceIndexAvailable")
+                ),
                 "nativeRuleEvidenceReadIndexStatus": str(evidence_read_index.get("status") or ""),
                 "nativeRuleEvidenceReadIndexSource": str(evidence_read_index.get("source") or ""),
                 "nativeRuleEvidenceReadIndexFingerprint": str(evidence_read_index.get("fingerprint") or ""),
@@ -21049,6 +21083,12 @@ relation ontology-assertion,
                     preflight_incoming_relations_complete=preflight_incoming_relations_complete,
                     subject_properties_by_symbol=dict(
                         planner_topology.get("subjectPropertiesBySymbol") or {}
+                    ),
+                    relation_evidence_by_symbol=dict(
+                        planner_topology.get("relationEvidenceBySymbol") or {}
+                    ),
+                    relation_evidence_complete_by_symbol=dict(
+                        planner_topology.get("relationEvidenceCompleteBySymbol") or {}
                     ),
                 )
                 if str(planner_topology.get("status") or "") == "verified"
@@ -21271,6 +21311,7 @@ relation ontology-assertion,
             native_rule_timing = native_rule_timing_profile(native_match_result)
             native_rule_timing["wallClockMs"] = native_stage_timings["nativeRuleQueriesMs"]
             evidence_field_index = dict(native_match_result.get("evidenceFieldIndex") or {})
+            native_execution_plan = dict(native_match_result.get("executionPlan") or {})
             runtime_rulebox_metadata.update({
                 "typedbNativeRuleQueryStatus": str(native_match_result.get("status") or ""),
                 "typedbNativeRuleQueryUsed": bool(native_match_result.get("nativeQueryUsed")),
@@ -21290,6 +21331,17 @@ relation ontology-assertion,
                 "typedbNativeRuleExecutedCount": int(number_or_none(native_match_result.get("executedRuleCount")) or 0),
                 "typedbNativeRuleExecutedWorkCount": int(number_or_none(native_match_result.get("executedRuleWorkCount")) or 0),
                 "typedbNativeRuleSkippedCount": int(number_or_none(native_match_result.get("skippedRuleCount")) or 0),
+                "typedbNativeManifestEvidencePreflightEnabled": bool(
+                    native_execution_plan.get("manifestEvidencePreflightEnabled")
+                ),
+                "typedbNativeRelationEvidencePreflightEnabled": bool(
+                    native_execution_plan.get("relationEvidencePreflightEnabled")
+                ),
+                "typedbNativeManifestEvidencePreflightPrunedSymbolCount": int(
+                    number_or_none(
+                        native_execution_plan.get("manifestEvidencePreflightPrunedSymbolCount")
+                    ) or 0
+                ),
                 "nativeInferenceEvaluationComplete": bool(
                     native_match_result.get("nativeInferenceEvaluationComplete", True)
                 ),
@@ -21792,6 +21844,23 @@ relation ontology-assertion,
             "typedbNativeRuleExecutedCount": int(number_or_none(native_match_result.get("executedRuleCount")) or 0),
             "typedbNativeRuleExecutedWorkCount": int(number_or_none(native_match_result.get("executedRuleWorkCount")) or 0),
             "typedbNativeRuleSkippedCount": int(number_or_none(native_match_result.get("skippedRuleCount")) or 0),
+            "typedbNativeManifestEvidencePreflightEnabled": bool(
+                dict(native_match_result.get("executionPlan") or {}).get(
+                    "manifestEvidencePreflightEnabled"
+                )
+            ),
+            "typedbNativeRelationEvidencePreflightEnabled": bool(
+                dict(native_match_result.get("executionPlan") or {}).get(
+                    "relationEvidencePreflightEnabled"
+                )
+            ),
+            "typedbNativeManifestEvidencePreflightPrunedSymbolCount": int(
+                number_or_none(
+                    dict(native_match_result.get("executionPlan") or {}).get(
+                        "manifestEvidencePreflightPrunedSymbolCount"
+                    )
+                ) or 0
+            ),
             "typedbNativeRuleSubjectRuleParallelism": int(
                 number_or_none(native_match_result.get("subjectRuleParallelism")) or 1
             ),
@@ -23990,6 +24059,172 @@ def typedb_native_rule_subject_properties_preflight(
     }
 
 
+def typedb_native_rule_manifest_evidence_preflight(
+    rule: object,
+    symbol: str,
+    subject_properties_by_symbol: Dict[str, Dict[str, object]] = None,
+    relation_evidence_by_symbol: Dict[str, List[Dict[str, object]]] = None,
+    relation_evidence_complete_by_symbol: Dict[str, bool] = None,
+) -> Dict[str, object]:
+    """Prove an impossible rule from one exact Manifest evidence index.
+
+    Subject and relation alternatives are evaluated together so an N-of-M
+    group can be rejected only when every indexed branch is conclusively
+    false. A positive result remains merely possible and still goes to TypeDB.
+    """
+    clean_symbol = str(symbol or "").upper().strip()
+    property_index = dict(subject_properties_by_symbol or {})
+    relation_index = dict(relation_evidence_by_symbol or {})
+    relation_completeness = dict(relation_evidence_complete_by_symbol or {})
+    subject_available = clean_symbol in property_index
+    relation_available = clean_symbol in relation_index
+    relation_complete = bool(relation_completeness.get(clean_symbol))
+    if not subject_available and not relation_available:
+        return {
+            "status": "unknown",
+            "reason": "Active Manifest has no exact subject or relation evidence index.",
+            "failedConditionIds": [],
+        }
+    properties = typedb_preflight_properties(
+        dict(property_index.get(clean_symbol) or {})
+    ) if subject_available else {}
+    properties.setdefault("symbol", clean_symbol)
+    source_kind = str(
+        getattr(rule, "source_kind", "")
+        or (rule.get("source_kind") or rule.get("sourceKind") if isinstance(rule, dict) else "")
+        or "stock"
+    )
+    indexed_kind = str(properties.get("kind") or "").strip()
+    if indexed_kind and indexed_kind != source_kind:
+        return {
+            "status": "impossible",
+            "reason": "Active Manifest source kind does not match the RuleBox source kind.",
+            "failedConditionIds": ["source-kind"],
+        }
+    evidence_entries = [
+        dict(item)
+        for item in relation_index.get(clean_symbol) or []
+        if isinstance(item, dict)
+    ]
+
+    def relation_verdict(condition: Dict[str, object]):
+        if not relation_available or not relation_complete:
+            return None
+        relation_type = str(
+            condition.get("relation_type") or condition.get("relationType") or ""
+        ).upper().strip()
+        direction = str(condition.get("direction") or "out").lower().strip()
+        target_kind = str(
+            condition.get("target_kind") or condition.get("targetKind") or ""
+        ).strip()
+        if not relation_type:
+            return None
+        unknown = False
+        for entry in evidence_entries:
+            if str(entry.get("relationType") or "").upper().strip() != relation_type:
+                continue
+            if str(entry.get("direction") or "out").lower().strip() != direction:
+                continue
+            if target_kind and str(entry.get("targetKind") or "") != target_kind:
+                continue
+            target_match = typedb_preflight_filters_match(
+                dict(entry.get("targetProperties") or {}),
+                condition.get("target_property_filters")
+                or condition.get("targetPropertyFilters")
+                or {},
+            )
+            relation_match = typedb_preflight_filters_match(
+                dict(entry.get("relationProperties") or {}),
+                condition.get("relation_property_filters")
+                or condition.get("relationPropertyFilters")
+                or {},
+            )
+            if target_match is False or relation_match is False:
+                continue
+            if target_match is None or relation_match is None:
+                unknown = True
+                continue
+            return True
+        return None if unknown else False
+
+    def condition_verdict(condition: Dict[str, object]):
+        kind = str(condition.get("kind") or "")
+        if kind == "subject_property":
+            if not subject_available:
+                return None
+            return typedb_preflight_value_matches(
+                properties.get(str(condition.get("field") or "")),
+                condition.get("operator") or "==",
+                condition.get("value"),
+            )
+        if kind == "relation":
+            return relation_verdict(condition)
+        return None
+
+    required_failures = []
+    negative_matches = []
+    any_conditions = []
+    unknown = False
+    for condition in typedb_rule_condition_payloads(rule):
+        role = normalized_condition_role(condition)
+        condition_id = str(
+            condition.get("condition_id") or condition.get("conditionId") or ""
+        )
+        if role in {"any", "optional"}:
+            any_conditions.append(condition)
+            continue
+        verdict = condition_verdict(condition)
+        if role == "not":
+            if verdict is True:
+                negative_matches.append(condition_id or "negative-condition")
+            elif verdict is None:
+                unknown = True
+            continue
+        if verdict is False:
+            required_failures.append(condition_id)
+        elif verdict is None:
+            unknown = True
+    if required_failures:
+        return {
+            "status": "impossible",
+            "reason": "Active Manifest contradicts required RuleBox evidence.",
+            "failedConditionIds": [item for item in required_failures if item],
+        }
+    if negative_matches:
+        return {
+            "status": "impossible",
+            "reason": "Active Manifest satisfies a RuleBox negative condition that must be absent.",
+            "failedConditionIds": ["not:" + item for item in negative_matches],
+        }
+    if any_conditions:
+        raw_minimum = getattr(rule, "any_condition_min_count", None)
+        if raw_minimum is None and isinstance(rule, dict):
+            raw_minimum = rule.get("any_condition_min_count") or rule.get("anyConditionMinCount")
+        minimum = max(1, int(number_or_none(raw_minimum) or 1))
+        possible_count = 0
+        unknown_count = 0
+        for condition in any_conditions:
+            verdict = condition_verdict(condition)
+            if verdict is True:
+                possible_count += 1
+            elif verdict is None:
+                unknown_count += 1
+        if possible_count + unknown_count < minimum:
+            return {
+                "status": "impossible",
+                "reason": "Active Manifest cannot satisfy the RuleBox any-condition minimum.",
+                "failedConditionIds": ["any-group"],
+                "anyConditionMinimum": minimum,
+                "anyConditionPossibleCount": possible_count,
+                "anyConditionUnknownCount": unknown_count,
+            }
+    return {
+        "status": "unknown" if unknown else "possible",
+        "reason": "" if not unknown else "Some indexed Manifest evidence remains unknown.",
+        "failedConditionIds": [],
+    }
+
+
 def typedb_native_rule_query_complexity(rule: object) -> int:
     """Estimate query cost from persisted rule shape, never from market data."""
     conditions = typedb_rule_condition_payloads(rule)
@@ -24087,6 +24322,8 @@ def typedb_native_rule_execution_plan(
     preflight_graph: PortfolioOntology = None,
     preflight_incoming_relations_complete: bool = True,
     subject_properties_by_symbol: Dict[str, Dict[str, object]] = None,
+    relation_evidence_by_symbol: Dict[str, List[Dict[str, object]]] = None,
+    relation_evidence_complete_by_symbol: Dict[str, bool] = None,
 ) -> Dict[str, object]:
     """Build a complete TypeDB-function plan for selected ABox subjects.
 
@@ -24139,18 +24376,25 @@ def typedb_native_rule_execution_plan(
             ]
         preflight_pruned_symbols: Dict[str, Dict[str, object]] = {}
         subject_property_pruned_symbols: Dict[str, Dict[str, object]] = {}
-        if symbol_scoped_source and candidate_symbols and subject_properties_by_symbol:
+        manifest_evidence_pruned_symbols: Dict[str, Dict[str, object]] = {}
+        if symbol_scoped_source and candidate_symbols and (
+            subject_properties_by_symbol or relation_evidence_by_symbol
+        ):
             retained_symbols = []
             for symbol in candidate_symbols:
-                preflight = typedb_native_rule_subject_properties_preflight(
+                preflight = typedb_native_rule_manifest_evidence_preflight(
                     rule,
                     symbol,
                     subject_properties_by_symbol,
+                    relation_evidence_by_symbol,
+                    relation_evidence_complete_by_symbol,
                 )
                 if str(preflight.get("status") or "") == "impossible":
-                    preflight = {**preflight, "source": "manifest-subject-properties"}
+                    preflight = {**preflight, "source": "manifest-evidence-index"}
                     preflight_pruned_symbols[symbol] = preflight
-                    subject_property_pruned_symbols[symbol] = preflight
+                    manifest_evidence_pruned_symbols[symbol] = preflight
+                    if subject_properties_by_symbol and not relation_evidence_by_symbol:
+                        subject_property_pruned_symbols[symbol] = preflight
                     continue
                 retained_symbols.append(symbol)
             candidate_symbols = retained_symbols
@@ -24179,6 +24423,7 @@ def typedb_native_rule_execution_plan(
             "queryComplexity": typedb_native_rule_query_complexity(rule),
             "preflightPrunedSymbols": preflight_pruned_symbols,
             "subjectPropertyPreflightPrunedSymbols": subject_property_pruned_symbols,
+            "manifestEvidencePreflightPrunedSymbols": manifest_evidence_pruned_symbols,
             "executionProfile": execution_profile,
             **typedb_rule_execution_profile_fields({"executionProfile": execution_profile}),
         }
@@ -24236,6 +24481,10 @@ def typedb_native_rule_execution_plan(
         "skippedRuleCount": len(skipped_entries),
         "preflightEnabled": preflight_graph is not None,
         "subjectPropertyPreflightEnabled": bool(subject_properties_by_symbol),
+        "manifestEvidencePreflightEnabled": bool(
+            subject_properties_by_symbol or relation_evidence_by_symbol
+        ),
+        "relationEvidencePreflightEnabled": bool(relation_evidence_by_symbol),
         "preflightIncomingRelationsComplete": bool(preflight_incoming_relations_complete),
         "preflightPrunedRuleCount": len([
             item for item in skipped_entries
@@ -24247,6 +24496,10 @@ def typedb_native_rule_execution_plan(
         ),
         "subjectPropertyPreflightPrunedSymbolCount": sum(
             len(dict(item.get("subjectPropertyPreflightPrunedSymbols") or {}))
+            for item in entries
+        ),
+        "manifestEvidencePreflightPrunedSymbolCount": sum(
+            len(dict(item.get("manifestEvidencePreflightPrunedSymbols") or {}))
             for item in entries
         ),
         "selectedEntries": selected_entries,
@@ -24458,11 +24711,16 @@ def typedb_native_rule_execution_plan_summary(plan: Dict[str, object]) -> Dict[s
         "skippedRuleCount": len(skipped),
         "preflightEnabled": bool(payload.get("preflightEnabled")),
         "subjectPropertyPreflightEnabled": bool(payload.get("subjectPropertyPreflightEnabled")),
+        "manifestEvidencePreflightEnabled": bool(payload.get("manifestEvidencePreflightEnabled")),
+        "relationEvidencePreflightEnabled": bool(payload.get("relationEvidencePreflightEnabled")),
         "preflightIncomingRelationsComplete": bool(payload.get("preflightIncomingRelationsComplete", True)),
         "preflightPrunedRuleCount": int(number_or_none(payload.get("preflightPrunedRuleCount")) or 0),
         "preflightPrunedSymbolCount": int(number_or_none(payload.get("preflightPrunedSymbolCount")) or 0),
         "subjectPropertyPreflightPrunedSymbolCount": int(
             number_or_none(payload.get("subjectPropertyPreflightPrunedSymbolCount")) or 0
+        ),
+        "manifestEvidencePreflightPrunedSymbolCount": int(
+            number_or_none(payload.get("manifestEvidencePreflightPrunedSymbolCount")) or 0
         ),
         "skippedByStatus": status_counts,
         "selectedRules": [

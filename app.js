@@ -2166,6 +2166,11 @@
     return Number(window.innerWidth || 0) > 0 && Number(window.innerWidth || 0) <= 860;
   }
 
+  function mobileInfiniteScrollPrefetchDistance() {
+    var viewportHeight = Math.max(0, Number((typeof window !== "undefined" && window.innerHeight) || 0));
+    return Math.round(Math.max(960, Math.min(1600, viewportHeight * 1.5)));
+  }
+
   function mergeUniqueItems(existing, incoming, keyResolver) {
     var rows = [];
     var seen = {};
@@ -2190,7 +2195,7 @@
       ? "다음 데이터를 불러오는 중입니다"
       : (hasNext ? loaded + " / " + total + "개 표시" : (total ? total + "개를 모두 불러왔습니다" : "표시할 데이터가 없습니다"));
     return [
-      '<div class="mobile-infinite-scroll' + (loading ? " is-loading" : (hasNext ? "" : " is-complete")) + '" data-mobile-infinite-sentinel aria-live="polite">',
+      '<div class="mobile-infinite-scroll' + (loading ? " is-loading" : (hasNext ? "" : " is-complete")) + '" data-mobile-infinite-sentinel data-mobile-infinite-prefetch="next-page" aria-live="polite">',
       '<span>' + escapeHtml(status) + '</span>',
       '<button class="mini-button" type="button" data-mobile-infinite-next ' + (requestable ? String(options.nextAttributes || "") : 'disabled') + (!hasNext ? ' hidden aria-hidden="true"' : '') + '>' + escapeHtml(loading ? "불러오는 중" : "더 불러오기") + '</button>',
       '</div>'
@@ -2215,10 +2220,13 @@
         if (!button) return;
         sentinel.setAttribute("data-mobile-infinite-requested", "true");
         button.click();
+        sentinel.classList.add("is-prefetching");
+        button.disabled = true;
+        button.textContent = "다음 페이지 준비 중";
       });
     }, {
       root: currentWorkspaceScroller(),
-      rootMargin: "0px 0px 360px 0px",
+      rootMargin: "0px 0px " + mobileInfiniteScrollPrefetchDistance() + "px 0px",
       threshold: 0.01
     });
     sentinels.forEach(function (sentinel) {
@@ -2984,9 +2992,13 @@
   }
 
   function loadNotificationJobs() {
+    if (state.notificationJobsLoading) return Promise.resolve();
+    var incrementalLoad = mobileInfiniteScrollEnabled()
+      && Boolean((state.notificationJobItems || []).length)
+      && Boolean(Number(state.notificationJobsOffset || 0) > 0 || state.notificationJobsCursor);
     state.notificationJobsLoading = true;
     state.notificationJobsError = "";
-    if (state.snapshot) render();
+    if (!incrementalLoad && state.snapshot) render();
     if (isStaticPreviewHost()) {
       applyNotificationJobs({ jobs: [], summary: {} });
       state.notificationJobsLoading = false;
@@ -7376,6 +7388,9 @@
     var cached = loadCachedSymbolUniverse();
     var requestedLimit = Math.max(1, Math.min(500, Number(state.symbolUniverseLimit || DEFAULT_SYMBOL_UNIVERSE_LIMIT)));
     var requestedOffset = Math.max(0, Number(state.symbolUniverseOffset || 0));
+    var incrementalLoad = mobileInfiniteScrollEnabled()
+      && requestedOffset > 0
+      && Boolean(((state.symbolUniverse || {}).items || []).length);
     if (cached && (!state.symbolUniverseLoaded || !(state.symbolUniverse.items || []).length)) {
       applySymbolUniverse(cached);
       state.symbolUniverseLimit = requestedLimit;
@@ -7387,7 +7402,7 @@
     }
     state.symbolUniverseLoading = true;
     state.symbolUniverseError = "";
-    if (state.snapshot) render();
+    if (!incrementalLoad && state.snapshot) render();
     if (isStaticPreviewHost()) {
       applySymbolUniverse(defaultSymbolUniversePayload());
       state.symbolUniverseLoading = false;
@@ -8339,15 +8354,19 @@
   function loadInvestmentCalendarCandidates(force) {
     if (state.investmentCalendarCandidatesLoading) return Promise.resolve();
     if (state.investmentCalendarCandidates && !force) return Promise.resolve(state.investmentCalendarCandidates);
+    var requestedCandidatePage = Math.max(0, Number(state.investmentCalendarCandidatePage || 0));
+    var incrementalLoad = mobileInfiniteScrollEnabled()
+      && requestedCandidatePage > 0
+      && Boolean(currentInvestmentCalendarCandidates().candidates.length);
     state.investmentCalendarCandidatesLoading = true;
     state.investmentCalendarError = "";
-    render();
+    if (!incrementalLoad) render();
     var promise = isStaticPreviewHost()
       ? Promise.resolve(staticInvestmentCalendarCandidatesPayload())
       : requestJson("/api/investment-calendar/candidates" + investmentCalendarCandidateQueryString());
     return promise
       .then(function (payload) {
-        var requestedPage = Math.max(0, Number(state.investmentCalendarCandidatePage || 0));
+        var requestedPage = requestedCandidatePage;
         if (mobileInfiniteScrollEnabled() && requestedPage > 0) {
           var previous = currentInvestmentCalendarCandidates();
           payload = Object.assign({}, payload, {

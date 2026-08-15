@@ -13,7 +13,7 @@
     "공유 미리보기에서는 서버 설정과 계정 DB 쓰기를 차단합니다."
   ],
   "localData": {
-    "generatedAt": "2026-07-29T01:24:49.448707Z",
+    "generatedAt": "2026-08-15T13:22:50.998395Z",
     "sources": {
       "settings": "data/settings.json",
       "settingsExists": true
@@ -40,7 +40,9 @@
           "005380",
           "066570",
           "035420",
-          "035720"
+          "035720",
+          "028260",
+          "000680"
         ],
         "notifyProvider": "telegram",
         "telegramBotToken": true,
@@ -48,11 +50,14 @@
         "notifyLinkUrl": "http://127.0.0.1:3000",
         "enabled": true,
         "messageDeliveryLevel": "absoluteBeginner",
-        "messageDeliveryLevelLabel": "왕초보"
+        "messageDeliveryLevelLabel": "왕초보",
+        "notificationDetailLevel": "concise",
+        "notificationDetailLevelLabel": "간결"
       }
     ],
     "settings": {
       "appTheme": "light",
+      "appTimezone": "Asia/Seoul",
       "watchlistSymbols": "TSLA,AAPL,NVDA,000660",
       "mysqlHost": "127.0.0.1",
       "mysqlPort": "3306",
@@ -64,9 +69,12 @@
       "fxRates": "KRW=1\nUSD=1400",
       "fairValueFormula": "eps * targetPer * growthWeight * qualityWeight * riskWeight",
       "monitorAccountQueueEnabled": "0",
-      "monitorAccountIntervalSeconds": "180",
+      "monitorAccountIntervalSeconds": "120",
       "monitorAccountBatchSize": "10",
       "monitorAccountLockSeconds": "600",
+      "marketObservationRawDeliveryMode": "always",
+      "marketObservationImmediatePriceChangePct": "3",
+      "marketObservationImmediateCadenceMinutes": "10",
       "modelName": "나의 매수/매도 모델",
       "modelHypothesis": "손익, 가격 흐름, 수급, 가치, 뉴스와 반대 근거를 상태로 나눠 행동 조건을 결정한다.",
       "alertThresholds": "volumeRatioHigh=2\nbuyShareHigh=65\nsellShareHigh=65\norderbookImbalance=25\nmomentumUp=3\nmomentumDown=-3\nmarketCashLow=10\npriceNearPercent=1\nstaleMinutes=30\npendingOrderMinutes=30",
@@ -83,22 +91,23 @@
       "kisMarketSignalPreferLiveDuringMarketHours": "1",
       "kisMarketSignalLiveRefreshSeconds": "60",
       "kisMarketSignalUnchangedStaleCount": "3",
+      "kisInvestorIntradayEstimateEnabled": "1",
       "marketDataMaxAgeMinutes": "240",
       "marketSignalDataCollectionEnabled": "1",
       "marketSignalDataBatchSize": "12",
       "dataFreshnessEnabled": "1",
       "dataFreshnessDefaultMaxAgeMinutes": "10",
       "dataFreshnessQuoteMaxAgeMinutes": "10",
-      "dataFreshnessKisPriceMaxAgeMinutes": "3",
-      "dataFreshnessKisMicrostructureMaxAgeMinutes": "2",
+      "dataFreshnessKisPriceMaxAgeMinutes": "10",
+      "dataFreshnessKisMicrostructureMaxAgeMinutes": "10",
       "dataFreshnessKisInvestorMaxAgeMinutes": "30",
       "dataFreshnessExternalMaxAgeMinutes": "10",
       "dataFreshnessExternalEquityMaxAgeMinutes": "10",
-      "dataFreshnessExternalCryptoMaxAgeMinutes": "10",
+      "dataFreshnessExternalCryptoMaxAgeMinutes": "25",
       "dataFreshnessMacroMaxAgeMinutes": "120",
       "dataFreshnessDisclosureMaxAgeMinutes": "120",
       "externalApiFetchIntervalMinutes": "30",
-      "externalSignalCacheMaxAgeMinutes": "10",
+      "externalSignalCacheMaxAgeMinutes": "30",
       "externalAlphaEnabled": "1",
       "externalYFinanceEnabled": "1",
       "externalYFinanceMaxSymbols": "8",
@@ -117,6 +126,7 @@
       "externalYFinanceAnalystMaxAgeMinutes": "10080",
       "externalYFinanceFundamentalMaxAgeMinutes": "129600",
       "externalCoinGeckoEnabled": "1",
+      "externalCoinGeckoFetchIntervalMinutes": "10",
       "externalFredEnabled": "1",
       "externalFredSeries": "DGS10,DGS2,DFF",
       "externalFredTimeoutSeconds": "8",
@@ -140,7 +150,7 @@
       "externalNewsLookbackHours": "48",
       "externalResearchEvidenceMaxItems": "8",
       "newsCollectionEnabled": "1",
-      "newsCollectionIntervalSeconds": "60",
+      "newsCollectionIntervalSeconds": "120",
       "newsCollectionRunBudgetSeconds": "45",
       "newsCollectionMaxSymbols": "6",
       "newsCollectionLookbackMinutes": "180",
@@ -156,7 +166,11 @@
       "newsCollectionGoogleOriginalUrlResolveEnabled": "1",
       "newsCollectionGoogleOriginalUrlMaxPerTarget": "2",
       "newsCollectionGoogleOriginalUrlMaxPerRun": "12",
-      "newsCollectionMinimumRelevanceState": "context",
+      "newsCollectionQualityGateEnabled": "1",
+      "newsCollectionMinimumRelevanceState": "direct",
+      "newsCollectionMinimumMaterialityState": "material",
+      "newsCollectionMinimumSourceTrustState": "standard",
+      "newsCollectionRequireArticleBody": "1",
       "newsDigestMinimumRelevanceState": "direct",
       "newsDigestMinimumMaterialityState": "notable",
       "newsDigestMinimumNeutralMaterialityState": "material",
@@ -170,19 +184,20 @@
       "newsEvidenceMaxAgeMinutes": "4320",
       "newsAiAnalysisEnabled": "1",
       "newsAiAnalysisUseCodex": "1",
-      "newsAiAnalysisTimeoutSeconds": "90",
+      "newsAiAnalysisTimeoutSeconds": "300",
       "newsAiAnalysisInlineTimeoutSeconds": "8",
       "newsAiAnalysisInlineEnabled": "0",
       "newsAiAnalysisAsyncEnabled": "1",
       "newsAiAnalysisWorkerIntervalSeconds": "60",
       "newsAiAnalysisWorkerBatchSize": "1",
       "newsAiAnalysisWorkerScanLimit": "160",
-      "newsAiAnalysisRetryMinutes": "30",
+      "newsAiAnalysisRetryMinutes": "5",
       "researchClaimCorpusLimit": "500",
       "investmentCalendarAiResearchEnabled": "1",
       "investmentCalendarAiResearchRunCollection": "1",
       "investmentCalendarAiResearchEvidenceLimit": "120",
       "investmentCalendarAiResearchCandidateLimit": "50",
+      "investmentCalendarCandidateDefaultTime": "09:00",
       "investmentCalendarDiscoveryEnabled": "1",
       "investmentCalendarDiscoveryIntervalHours": "12",
       "investmentCalendarDiscoveryMaxSymbols": "12",
@@ -198,10 +213,24 @@
       "investmentCalendarBokPolicyDecisionEnabled": "1",
       "investmentCalendarBokPolicyDecisionTimeKst": "09:00",
       "investmentCalendarBokPolicyDecisionLookaheadYears": "1",
+      "ontologyDecisionEpisodeContextPerSymbolLimit": "3",
+      "ontologyDecisionEpisodeContextMaxEpisodes": "24",
+      "ontologyDecisionEpisodeContextHypothesisLimit": "3",
+      "ontologyDecisionEpisodeContextOutcomeLimit": "8",
+      "ontologyMonitorInlineProjectionEnabled": "0",
       "ontologyReasoningEnabled": "1",
-      "ontologyReasoningIntervalSeconds": "10",
+      "ontologyReasoningIntervalSeconds": "5",
       "ontologyReasoningBatchSize": "200",
-      "ontologyReasoningMaxSymbolsPerRun": "1",
+      "ontologyReasoningMaxSymbolsPerRun": "2",
+      "ontologyReasoningAdaptiveBatchEnabled": "0",
+      "ontologyReasoningAdaptiveBatchSteadySymbols": "1",
+      "ontologyReasoningAdaptiveBatchBurstSymbols": "1",
+      "ontologyReasoningAdaptiveBatchPendingThreshold": "2",
+      "ontologyReasoningAdaptiveBatchAgeSeconds": "30",
+      "ontologyReasoningAdaptiveBatchRuntimeGuardSeconds": "300",
+      "ontologyReasoningAdaptiveBatchBudgetSeconds": "270",
+      "ontologyReasoningAdaptiveBatchBacklogBurstEnabled": "0",
+      "ontologyReasoningAdaptiveBatchBacklogBurstAgeSeconds": "120",
       "ontologySharedMarketWorldAsyncProjectionEnabled": "1",
       "ontologyReasoningMailboxEnabled": "1",
       "ontologyReasoningMailboxIngressEnabled": "1",
@@ -216,16 +245,40 @@
       "ontologyReasoningTelemetryHistoryLimit": "24",
       "ontologyReasoningMinIntervalSeconds": "180",
       "ontologyReasoningUrgentMinIntervalSeconds": "60",
+      "ontologyReasoningCriticalMinIntervalSeconds": "30",
+      "ontologyReasoningMarketMinIntervalSeconds": "120",
+      "ontologyReasoningResearchMinIntervalSeconds": "300",
+      "ontologyReasoningObservationFollowupTargetLimit": "3",
+      "ontologyReasoningVerifiedSnapshotFastDrainEnabled": "1",
+      "ontologyReasoningBacklogDrainNoCooldownEnabled": "1",
+      "ontologyReasoningBacklogDrainNoCooldownAgeSeconds": "120",
       "ontologyReasoningFairnessMaxWaitSeconds": "900",
       "ontologyReasoningFairnessDrainEnabled": "1",
+      "ontologyReasoningFairnessDrainMinIntervalSeconds": "0",
+      "ontologyReasoningPersistentWorkerEnabled": "1",
+      "typedbNativeRuleTargetSymbolLimit": "2",
+      "typedbNativeRuleTargetParallelism": "1",
+      "typedbNativeRuleSubjectFanoutEnabled": "1",
+      "typedbNativeRuleSubjectParallelism": "2",
+      "typedbNativeRuleTotalReadParallelism": "4",
+      "typedbNativeRuleAdaptiveTargetShardingEnabled": "1",
+      "typedbNativeRuleAdaptiveTargetShardingLookbackRuns": "12",
+      "typedbNativeRuleAdaptiveTargetShardingParallelism": "2",
+      "typedbNativeRuleSelectionEnabled": "1",
+      "typedbIncrementalEquivalenceAuditSamplePct": "1",
+      "typedbNativeRuleParallelism": "2",
+      "typedbNativeRuleExecutionBudgetSeconds": "300",
+      "typedbNativeRuleDirectQueryFallbackEnabled": "1",
+      "typedbPersistentDriverEnabled": "1",
       "ontologyReasoningQueueAlertEnabled": "1",
-      "ontologyReasoningQueueWarningAgeMinutes": "30",
-      "ontologyReasoningQueueCriticalAgeMinutes": "90",
-      "ontologyReasoningQueueWarningPendingCount": "100",
-      "ontologyReasoningQueueCriticalPendingCount": "200",
+      "ontologyReasoningQueueWarningAgeMinutes": "2",
+      "ontologyReasoningQueueCriticalAgeMinutes": "5",
+      "ontologyReasoningQueueWarningPendingCount": "20",
+      "ontologyReasoningQueueCriticalPendingCount": "50",
       "ontologyReasoningQueueWarningOverdueSymbols": "3",
       "ontologyReasoningQueueCriticalOverdueSymbols": "8",
       "ontologyReasoningQueueConsecutiveObservations": "3",
+      "ontologyReasoningQueueNoProgressMinutes": "15",
       "ontologyReasoningQueueAlertReminderMinutes": "60",
       "ontologyReasoningUrgentReviewLevels": "act,immediate",
       "ontologyLabEnabled": "1",
@@ -237,6 +290,7 @@
       "marketMaterialityTrendDistancePct": "2",
       "marketMaterialityTrendDistanceChangePct": "1",
       "marketMaterialityVolumeRatio": "1.5",
+      "marketMaterialityInvestorFlowRatioPct": "15",
       "dartDisclosureAiAnalysisEnabled": "1",
       "dartDisclosureAiUseCodex": "1",
       "dartDisclosureAiTimeoutSeconds": "90"
@@ -262,7 +316,17 @@
           "unit": ""
         },
         {
+          "key": "marketObservation",
+          "default": 1,
+          "unit": ""
+        },
+        {
           "key": "portfolioHoldingsSnapshot",
+          "default": 1,
+          "unit": ""
+        },
+        {
+          "key": "portfolioActivityObservation",
           "default": 1,
           "unit": ""
         },
@@ -282,6 +346,21 @@
           "unit": ""
         },
         {
+          "key": "cryptoOntologySignal",
+          "default": 1,
+          "unit": ""
+        },
+        {
+          "key": "portfolioOntologySignal",
+          "default": 1,
+          "unit": ""
+        },
+        {
+          "key": "portfolioRebalanceReview",
+          "default": 1,
+          "unit": ""
+        },
+        {
           "key": "holdingTiming",
           "default": 1,
           "unit": ""
@@ -293,6 +372,11 @@
         },
         {
           "key": "ontologyReasoningQueue",
+          "default": 1,
+          "unit": ""
+        },
+        {
+          "key": "operationalStorageCapacity",
           "default": 1,
           "unit": ""
         },
@@ -313,6 +397,11 @@
         }
       ],
       "alertThresholds": [
+        {
+          "key": "marketObservationPriceChangePct",
+          "default": 2.0,
+          "unit": ""
+        },
         {
           "key": "volumeRatioHigh",
           "default": 2.0,
@@ -548,8 +637,18 @@
           "unit": "minutes"
         },
         {
+          "key": "marketObservation",
+          "default": 60,
+          "unit": "minutes"
+        },
+        {
           "key": "portfolioHoldingsSnapshot",
           "default": 10,
+          "unit": "minutes"
+        },
+        {
+          "key": "portfolioActivityObservation",
+          "default": 1,
           "unit": "minutes"
         },
         {
@@ -568,6 +667,21 @@
           "unit": "minutes"
         },
         {
+          "key": "cryptoOntologySignal",
+          "default": 10,
+          "unit": "minutes"
+        },
+        {
+          "key": "portfolioOntologySignal",
+          "default": 10,
+          "unit": "minutes"
+        },
+        {
+          "key": "portfolioRebalanceReview",
+          "default": 10080,
+          "unit": "minutes"
+        },
+        {
           "key": "holdingTiming",
           "default": 10,
           "unit": "minutes"
@@ -579,6 +693,11 @@
         },
         {
           "key": "ontologyReasoningQueue",
+          "default": 60,
+          "unit": "minutes"
+        },
+        {
+          "key": "operationalStorageCapacity",
           "default": 60,
           "unit": "minutes"
         },
@@ -665,6 +784,29 @@
           "key": "watchlistSymbols",
           "label": "관심 종목",
           "type": "symbols"
+        },
+        {
+          "key": "messageDeliveryLevel",
+          "label": "알림 표현",
+          "type": "select",
+          "options": [
+            "absoluteBeginner",
+            "beginner",
+            "intermediate",
+            "advanced"
+          ],
+          "default": "absoluteBeginner"
+        },
+        {
+          "key": "notificationDetailLevel",
+          "label": "알림 정보량",
+          "type": "select",
+          "options": [
+            "concise",
+            "standard",
+            "full"
+          ],
+          "default": "concise"
         },
         {
           "key": "enabled",
@@ -919,6 +1061,12 @@
           "default": "1"
         },
         {
+          "key": "externalDartCompanyFundamentalsEnabled",
+          "label": "OpenDART 기업·재무·임원 수집",
+          "type": "toggle",
+          "default": "1"
+        },
+        {
           "key": "externalDartDocumentTextEnabled",
           "label": "OpenDART 원문 본문 수집",
           "type": "toggle",
@@ -958,7 +1106,7 @@
           "key": "externalSignalCacheMaxAgeMinutes",
           "label": "외부 신호 캐시 TTL",
           "type": "number",
-          "default": "10",
+          "default": "30",
           "unit": "minutes"
         },
         {
@@ -1009,6 +1157,12 @@
           "default": "3"
         },
         {
+          "key": "kisInvestorIntradayEstimateEnabled",
+          "label": "KIS 장중 외국인·기관 추정 수급",
+          "type": "toggle",
+          "default": "1"
+        },
+        {
           "key": "dataFreshnessExternalMaxAgeMinutes",
           "label": "외부 신호 신선도",
           "type": "number",
@@ -1026,7 +1180,7 @@
           "key": "dataFreshnessExternalCryptoMaxAgeMinutes",
           "label": "크립토 신호 신선도",
           "type": "number",
-          "default": "10",
+          "default": "25",
           "unit": "minutes"
         },
         {
@@ -1051,6 +1205,39 @@
           "unit": "minutes"
         },
         {
+          "key": "marketObservationRawDeliveryMode",
+          "label": "시세 원시 알림 발송 방식",
+          "type": "select",
+          "options": [
+            "critical-only",
+            "typedb-first",
+            "always",
+            "disabled"
+          ],
+          "default": "critical-only"
+        },
+        {
+          "key": "marketObservationImmediatePriceChangePct",
+          "label": "시세 원시 즉시 알림 기준",
+          "type": "number",
+          "default": "3",
+          "unit": "%"
+        },
+        {
+          "key": "marketObservationImmediateCadenceMinutes",
+          "label": "시세 원시 즉시 알림 보호 주기",
+          "type": "number",
+          "default": "10",
+          "unit": "minutes"
+        },
+        {
+          "key": "monitorAccountIntervalSeconds",
+          "label": "계좌 시세 확인 주기",
+          "type": "number",
+          "default": "120",
+          "unit": "seconds"
+        },
+        {
           "key": "externalFredSeries",
           "label": "FRED 지표",
           "type": "text"
@@ -1059,6 +1246,13 @@
           "key": "externalCryptoIds",
           "label": "CoinGecko 코인 ID",
           "type": "text"
+        },
+        {
+          "key": "externalCoinGeckoFetchIntervalMinutes",
+          "label": "CoinGecko 수집 주기",
+          "type": "number",
+          "default": "10",
+          "unit": "minutes"
         },
         {
           "key": "externalDartCorpCodes",
@@ -1121,7 +1315,7 @@
           "key": "newsCollectionIntervalSeconds",
           "label": "뉴스 수집 주기",
           "type": "number",
-          "default": "60",
+          "default": "120",
           "unit": "seconds"
         },
         {
@@ -1224,10 +1418,42 @@
           "unit": "characters"
         },
         {
+          "key": "newsCollectionQualityGateEnabled",
+          "label": "뉴스 저장 품질 게이트",
+          "type": "toggle",
+          "default": "1"
+        },
+        {
           "key": "newsCollectionMinimumRelevanceState",
           "label": "뉴스 수집 최소 관련성",
           "type": "text",
-          "default": "context"
+          "default": "direct"
+        },
+        {
+          "key": "newsCollectionMinimumMaterialityState",
+          "label": "뉴스 저장 최소 중요 상태",
+          "type": "select",
+          "options": [
+            "notable",
+            "material"
+          ],
+          "default": "material"
+        },
+        {
+          "key": "newsCollectionMinimumSourceTrustState",
+          "label": "뉴스 저장 최소 출처 상태",
+          "type": "select",
+          "options": [
+            "standard",
+            "trusted"
+          ],
+          "default": "standard"
+        },
+        {
+          "key": "newsCollectionRequireArticleBody",
+          "label": "뉴스 저장 시 원문 본문 필수",
+          "type": "toggle",
+          "default": "1"
         },
         {
           "key": "newsDigestMinimumRelevanceState",
@@ -1316,7 +1542,7 @@
           "key": "investmentBrainOutcomeObservationMinutes",
           "label": "판단 결과 관측 시점",
           "type": "text",
-          "default": "60,1440,10080",
+          "default": "60,1440,7200,28800",
           "unit": "minutes"
         },
         {
@@ -1572,6 +1798,36 @@
           "unit": "bytes"
         },
         {
+          "key": "ontologyDecisionEpisodeContextPerSymbolLimit",
+          "label": "종목별 최근 판단 이력",
+          "type": "number",
+          "default": "3"
+        },
+        {
+          "key": "ontologyDecisionEpisodeContextMaxEpisodes",
+          "label": "실시간 추론 판단 이력 상한",
+          "type": "number",
+          "default": "24"
+        },
+        {
+          "key": "ontologyDecisionEpisodeContextHypothesisLimit",
+          "label": "판단 이력당 가설 상한",
+          "type": "number",
+          "default": "3"
+        },
+        {
+          "key": "ontologyDecisionEpisodeContextOutcomeLimit",
+          "label": "판단 이력당 결과 관측 상한",
+          "type": "number",
+          "default": "8"
+        },
+        {
+          "key": "ontologyMonitorInlineProjectionEnabled",
+          "label": "모니터에서 TypeDB 즉시 추론(운영 시 끔)",
+          "type": "toggle",
+          "default": "0"
+        },
+        {
           "key": "ontologyReasoningEnabled",
           "label": "데이터 변경 추론 사용",
           "type": "toggle",
@@ -1592,7 +1848,7 @@
         },
         {
           "key": "ontologyReasoningMaxSymbolsPerRun",
-          "label": "한 번에 추론할 종목 수",
+          "label": "한 세대에 TypeDB 추론할 종목 상한",
           "type": "number",
           "default": "1"
         },
@@ -1618,27 +1874,40 @@
           "key": "ontologyReasoningAdaptiveBatchPendingThreshold",
           "label": "다종목 배치 대기 요청 기준",
           "type": "number",
-          "default": "4"
+          "default": "2"
         },
         {
           "key": "ontologyReasoningAdaptiveBatchAgeSeconds",
           "label": "다종목 배치 대기 시간 기준",
           "type": "number",
-          "default": "60",
+          "default": "30",
           "unit": "seconds"
         },
         {
           "key": "ontologyReasoningAdaptiveBatchRuntimeGuardSeconds",
           "label": "느린 추론 시 단일 종목 복귀 기준",
           "type": "number",
-          "default": "180",
+          "default": "300",
           "unit": "seconds"
         },
         {
           "key": "ontologyReasoningAdaptiveBatchBudgetSeconds",
           "label": "다종목 추론 실행 예산",
           "type": "number",
-          "default": "150",
+          "default": "300",
+          "unit": "seconds"
+        },
+        {
+          "key": "ontologyReasoningAdaptiveBatchBacklogBurstEnabled",
+          "label": "오래된 대기열 즉시 다종목 배치",
+          "type": "toggle",
+          "default": "0"
+        },
+        {
+          "key": "ontologyReasoningAdaptiveBatchBacklogBurstAgeSeconds",
+          "label": "대기열 대형 배치 전환 기준",
+          "type": "number",
+          "default": "120",
           "unit": "seconds"
         },
         {
@@ -1717,11 +1986,47 @@
           "key": "typedbNativeRuleTargetSymbolLimit",
           "label": "TypeDB 네이티브 추론 대상 종목 상한",
           "type": "number",
-          "default": "3"
+          "default": "4"
         },
         {
           "key": "typedbNativeRuleTargetParallelism",
           "label": "TypeDB 대상 종목 읽기 병렬 수",
+          "type": "number",
+          "default": "4"
+        },
+        {
+          "key": "typedbNativeRuleSubjectFanoutEnabled",
+          "label": "TypeDB 종목별 독립 추론",
+          "type": "toggle",
+          "default": "0"
+        },
+        {
+          "key": "typedbNativeRuleSubjectParallelism",
+          "label": "TypeDB 종목 추론 병렬 수",
+          "type": "number",
+          "default": "2"
+        },
+        {
+          "key": "typedbNativeRuleTotalReadParallelism",
+          "label": "TypeDB 전체 규칙 읽기 병렬 상한",
+          "type": "number",
+          "default": "4"
+        },
+        {
+          "key": "typedbNativeRuleAdaptiveTargetShardingEnabled",
+          "label": "느린 TypeDB 규칙 사전 대상 분할",
+          "type": "toggle",
+          "default": "1"
+        },
+        {
+          "key": "typedbNativeRuleAdaptiveTargetShardingLookbackRuns",
+          "label": "느린 규칙 실행 이력 조회 수",
+          "type": "number",
+          "default": "12"
+        },
+        {
+          "key": "typedbNativeRuleAdaptiveTargetShardingParallelism",
+          "label": "느린 규칙 대상 분할 수",
           "type": "number",
           "default": "2"
         },
@@ -1745,6 +2050,19 @@
           "default": "2"
         },
         {
+          "key": "typedbNativeRuleExecutionBudgetSeconds",
+          "label": "TypeDB 네이티브 규칙 전체 실행 예산",
+          "type": "number",
+          "default": "240",
+          "unit": "seconds"
+        },
+        {
+          "key": "typedbNativeRuleDirectQueryFallbackEnabled",
+          "label": "함수 미준비 시 제한된 직접 TypeQL 추론",
+          "type": "toggle",
+          "default": "1"
+        },
+        {
           "key": "ontologyReasoningMinIntervalSeconds",
           "label": "종목별 추론 병합 간격",
           "type": "number",
@@ -1759,8 +2077,54 @@
           "unit": "seconds"
         },
         {
+          "key": "ontologyReasoningCriticalMinIntervalSeconds",
+          "label": "즉시 확인 추론 최소 간격",
+          "type": "number",
+          "default": "30",
+          "unit": "seconds"
+        },
+        {
+          "key": "ontologyReasoningMarketMinIntervalSeconds",
+          "label": "시세·수급 추론 최소 간격",
+          "type": "number",
+          "default": "120",
+          "unit": "seconds"
+        },
+        {
+          "key": "ontologyReasoningResearchMinIntervalSeconds",
+          "label": "일반 뉴스·리서치 추론 최소 간격",
+          "type": "number",
+          "default": "300",
+          "unit": "seconds"
+        },
+        {
+          "key": "ontologyReasoningObservationFollowupTargetLimit",
+          "label": "시세 후속 확인 동시 종목 상한",
+          "type": "number",
+          "default": "3"
+        },
+        {
+          "key": "ontologyReasoningVerifiedSnapshotFastDrainEnabled",
+          "label": "확정 스냅샷 즉시 다음 추론",
+          "type": "toggle",
+          "default": "1"
+        },
+        {
+          "key": "ontologyReasoningBacklogDrainNoCooldownEnabled",
+          "label": "오래된 대기열 세대 간 대기 제거",
+          "type": "toggle",
+          "default": "1"
+        },
+        {
+          "key": "ontologyReasoningBacklogDrainNoCooldownAgeSeconds",
+          "label": "세대 간 대기 제거 기준",
+          "type": "number",
+          "default": "120",
+          "unit": "seconds"
+        },
+        {
           "key": "ontologyReasoningFairnessMaxWaitSeconds",
-          "label": "추론 대기 종목 우선 처리 시간",
+          "label": "추론 대기 이벤트·종목 우선 처리 시간",
           "type": "number",
           "default": "900",
           "unit": "seconds"
@@ -1773,9 +2137,9 @@
         },
         {
           "key": "ontologyReasoningFairnessDrainMinIntervalSeconds",
-          "label": "우선 처리 최소 보호 대기",
+          "label": "우선 처리 최소 보호 대기(0=즉시)",
           "type": "number",
-          "default": "60",
+          "default": "0",
           "unit": "seconds"
         },
         {
@@ -1829,6 +2193,13 @@
           "default": "3"
         },
         {
+          "key": "ontologyReasoningQueueNoProgressMinutes",
+          "label": "처리 진행 신호 정체 시간",
+          "type": "number",
+          "default": "15",
+          "unit": "minutes"
+        },
+        {
           "key": "ontologyReasoningQueueAlertReminderMinutes",
           "label": "지연 운영 알림 재전송",
           "type": "number",
@@ -1861,10 +2232,16 @@
           "default": "1"
         },
         {
+          "key": "ontologyReasoningPersistentWorkerEnabled",
+          "label": "추론 영구 격리 워커(연결 재사용)",
+          "type": "toggle",
+          "default": "1"
+        },
+        {
           "key": "ontologyReasoningExecutionTimeoutSeconds",
           "label": "추론 실행 시간 상한",
           "type": "number",
-          "default": "240",
+          "default": "360",
           "unit": "seconds"
         },
         {
@@ -1915,6 +2292,94 @@
           "default": "20"
         },
         {
+          "key": "ontologyScopeRepairRetryMinutes",
+          "label": "스코프 자동 복구 재시도",
+          "type": "number",
+          "default": "5",
+          "unit": "minutes"
+        },
+        {
+          "key": "ontologyScopeRepairVerificationMinutes",
+          "label": "스코프 복구 재검증",
+          "type": "number",
+          "default": "5",
+          "unit": "minutes"
+        },
+        {
+          "key": "ontologyAboxMaintenanceEnabled",
+          "label": "ABox 이력 정리",
+          "type": "toggle",
+          "default": "1"
+        },
+        {
+          "key": "ontologyAboxMaintenanceIntervalSeconds",
+          "label": "ABox 정리 점검 주기",
+          "type": "number",
+          "default": "60",
+          "unit": "seconds"
+        },
+        {
+          "key": "ontologyAboxMaintenanceMaxManifestsPerRun",
+          "label": "정리당 매니페스트 상한",
+          "type": "number",
+          "default": "2"
+        },
+        {
+          "key": "ontologyAboxMaintenanceMaxDeleteBatchesPerRun",
+          "label": "정리당 삭제 배치 상한",
+          "type": "number",
+          "default": "2"
+        },
+        {
+          "key": "ontologyAboxMaintenanceDeleteBatchSize",
+          "label": "ABox 삭제 배치 크기",
+          "type": "number",
+          "default": "150"
+        },
+        {
+          "key": "ontologyAboxMaintenanceKeepInactiveManifestCount",
+          "label": "롤백용 비활성 세대 보관",
+          "type": "number",
+          "default": "1"
+        },
+        {
+          "key": "ontologyAboxMaintenanceAdaptiveDrainMaxDeleteBatchesPerRun",
+          "label": "적체 시 삭제 배치 최대",
+          "type": "number",
+          "default": "4"
+        },
+        {
+          "key": "ontologyAboxMaintenanceAdaptiveDrainBacklogGrowthRunsBeforeIncrease",
+          "label": "적체 증가 후 정리 가속 횟수",
+          "type": "number",
+          "default": "2"
+        },
+        {
+          "key": "ontologyAboxMaintenanceAdaptiveDrainMaxConsecutiveWorldRuns",
+          "label": "같은 World 연속 정리 상한",
+          "type": "number",
+          "default": "3"
+        },
+        {
+          "key": "ontologyAboxMaintenanceExecutionReserveSeconds",
+          "label": "정리 종료 여유(초)",
+          "type": "number",
+          "default": "30"
+        },
+        {
+          "key": "ontologyAboxMaintenanceSliceSeconds",
+          "label": "ABox 정리 1회 시간 예산",
+          "type": "number",
+          "default": "45",
+          "unit": "seconds"
+        },
+        {
+          "key": "ontologyAboxMaintenanceEstimatedDeleteBatchSeconds",
+          "label": "삭제 배치 예상 시간(초)",
+          "type": "number",
+          "default": "20"
+        },
+        {
           "key": "ontologyReasoningMaintenanceEnabled",
           "label": "추론 메일박스 정리",
           "type": "toggle",
@@ -1934,10 +2399,162 @@
           "default": "1"
         },
         {
+          "key": "ontologyInferenceDetailOutboxEnabled",
+          "label": "InferenceBox 상세 읽기 아웃박스",
+          "type": "toggle",
+          "default": "1"
+        },
+        {
+          "key": "ontologyInferenceDetailDeferWhenReasoningPending",
+          "label": "추론 대기 중 상세 읽기 유예",
+          "type": "toggle",
+          "default": "1"
+        },
+        {
+          "key": "ontologyInferenceDetailIntervalSeconds",
+          "label": "상세 읽기 점검 주기",
+          "type": "number",
+          "default": "15",
+          "unit": "seconds"
+        },
+        {
+          "key": "ontologyRuleboxPrewarmEnabled",
+          "label": "RuleBox 함수 사전 준비 워커",
+          "type": "toggle",
+          "default": "1"
+        },
+        {
+          "key": "ontologyRuleboxPrewarmRequireReadyForInference",
+          "label": "함수 준비 전 투자 판단 보류",
+          "type": "toggle",
+          "default": "0"
+        },
+        {
+          "key": "ontologyRuleboxPrewarmDeferWhenReasoningPending",
+          "label": "추론 대기 중 함수 사전 준비 유예",
+          "type": "toggle",
+          "default": "1"
+        },
+        {
+          "key": "ontologyRuleboxPrewarmBacklogRecoveryEnabled",
+          "label": "오래된 대기열 컴파일 위험 진단",
+          "type": "toggle",
+          "default": "0"
+        },
+        {
+          "key": "ontologyRuleboxPrewarmBacklogRecoveryAgeSeconds",
+          "label": "함수 준비 우선 복구 대기 기준",
+          "type": "number",
+          "default": "90",
+          "unit": "seconds"
+        },
+        {
+          "key": "ontologyRuleboxPrewarmBacklogRecoveryMinPendingEntries",
+          "label": "함수 준비 우선 복구 최소 대기 수",
+          "type": "number",
+          "default": "2"
+        },
+        {
+          "key": "ontologyRuleboxPrewarmBacklogRecoveryRetrySeconds",
+          "label": "함수 준비 복구 재점검",
+          "type": "number",
+          "default": "5",
+          "unit": "seconds"
+        },
+        {
+          "key": "ontologyRuleboxPrewarmIntervalSeconds",
+          "label": "RuleBox 함수 사전 준비 유휴 점검 주기",
+          "type": "number",
+          "default": "15",
+          "unit": "seconds"
+        },
+        {
+          "key": "ontologyRuleboxPrewarmIdleQuietSeconds",
+          "label": "RuleBox 함수 준비 전 큐 무활동 시간",
+          "type": "number",
+          "default": "300",
+          "unit": "seconds"
+        },
+        {
+          "key": "ontologyRuleboxPrewarmExecutionTimeoutSeconds",
+          "label": "RuleBox 함수 준비 유지보수 시간 상한",
+          "type": "number",
+          "default": "1500",
+          "unit": "seconds"
+        },
+        {
+          "key": "ontologyRuleboxPrewarmProcessIsolationEnabled",
+          "label": "RuleBox 함수 준비 프로세스 격리",
+          "type": "toggle",
+          "default": "1"
+        },
+        {
           "key": "ontologyAboxMaintenanceDeferWhenReasoningPending",
           "label": "추론 대기 중 ABox 정리 유예",
           "type": "toggle",
           "default": "1"
+        },
+        {
+          "key": "ontologyAboxMaintenanceMaxReasoningDeferralSeconds",
+          "label": "ABox 정리 최대 유예",
+          "type": "number",
+          "default": "120",
+          "unit": "seconds"
+        },
+        {
+          "key": "ontologyAboxMaintenanceBusyRetrySeconds",
+          "label": "ABox 정리 유휴 구간 재확인",
+          "type": "number",
+          "default": "10",
+          "unit": "seconds"
+        },
+        {
+          "key": "ontologyAboxMaintenancePriorityInactiveManifestCount",
+          "label": "ABox 적체 우선 선택 기준",
+          "type": "number",
+          "default": "8",
+          "unit": "generations"
+        },
+        {
+          "key": "ontologyAboxMaintenanceYieldEnabled",
+          "label": "ABox 정리를 위해 추론 일시 양보",
+          "type": "toggle",
+          "default": "0"
+        },
+        {
+          "key": "ontologyAboxMaintenanceYieldAfterSeconds",
+          "label": "ABox 정리 창 요청 대기",
+          "type": "number",
+          "default": "120",
+          "unit": "seconds"
+        },
+        {
+          "key": "ontologyAboxMaintenanceYieldWindowSeconds",
+          "label": "ABox 정리 창 길이",
+          "type": "number",
+          "default": "30",
+          "unit": "seconds"
+        },
+        {
+          "key": "ontologyAboxMaintenanceYieldRequestTtlSeconds",
+          "label": "ABox 정리 요청 유효시간",
+          "type": "number",
+          "default": "420",
+          "unit": "seconds"
+        },
+        {
+          "key": "ontologyAboxMaintenanceYieldCooldownSeconds",
+          "label": "ABox 정리 창 최소 간격",
+          "type": "number",
+          "default": "120",
+          "unit": "seconds"
+        },
+        {
+          "key": "ontologyAboxMaintenanceYieldInventoryMaxAgeSeconds",
+          "label": "ABox 적체 관측 유효시간",
+          "type": "number",
+          "default": "900",
+          "unit": "seconds"
         },
         {
           "key": "ontologyReasoningUrgentReviewLevels",
@@ -2003,6 +2620,13 @@
           "type": "number",
           "default": "1.5",
           "unit": "x"
+        },
+        {
+          "key": "marketMaterialityInvestorFlowRatioPct",
+          "label": "외국인·기관 수급 중요 비중",
+          "type": "number",
+          "default": "15",
+          "unit": "%"
         },
         {
           "key": "dartDisclosureAiAnalysisEnabled",
@@ -2090,6 +2714,12 @@
           "default": "2"
         },
         {
+          "key": "typedbPersistentDriverEnabled",
+          "label": "TypeDB 연결 프로세스 재사용",
+          "type": "toggle",
+          "default": "1"
+        },
+        {
           "key": "typedbProcessSchemaFunctionCacheEnabled",
           "label": "TypeDB 함수 검증 프로세스 캐시",
           "type": "toggle",
@@ -2104,15 +2734,15 @@
         },
         {
           "key": "typedbSchemaFunctionProvisionBatchSize",
-          "label": "TypeDB 함수 배포 배치 규칙 수",
+          "label": "TypeDB 함수 배포 유지보수 배치 규칙 수",
           "type": "number",
-          "default": "3"
+          "default": "1"
         },
         {
           "key": "typedbSchemaFunctionProvisionTimeoutSeconds",
-          "label": "TypeDB 함수 배포 제한",
+          "label": "TypeDB 함수 배포 완료 대기",
           "type": "number",
-          "default": "30",
+          "default": "900",
           "unit": "seconds"
         },
         {
@@ -2160,6 +2790,68 @@
           "default": "0"
         },
         {
+          "key": "typedbCapacityAutoRotateEnabled",
+          "label": "TypeDB 용량 자동 회전",
+          "type": "toggle",
+          "default": "1"
+        },
+        {
+          "key": "typedbCapacityThrottlePercent",
+          "label": "TypeDB 배경 쓰기 완화 기준",
+          "type": "number",
+          "default": "70",
+          "unit": "%"
+        },
+        {
+          "key": "typedbCapacityAutoRotatePercent",
+          "label": "TypeDB 안전 재구축 기준",
+          "type": "number",
+          "default": "80",
+          "unit": "%"
+        },
+        {
+          "key": "typedbCapacityAutoRotateFreeSpaceMb",
+          "label": "공용 디스크 기반 재구축 기준",
+          "type": "number",
+          "default": "24576",
+          "unit": "MB"
+        },
+        {
+          "key": "typedbCapacityCriticalPercent",
+          "label": "TypeDB 심각 기준",
+          "type": "number",
+          "default": "90",
+          "unit": "%"
+        },
+        {
+          "key": "typedbCapacityAutoRotateCooldownMinutes",
+          "label": "TypeDB 자동 회전 재시도 간격",
+          "type": "number",
+          "default": "60",
+          "unit": "minutes"
+        },
+        {
+          "key": "typedbCapacityAutoRotateFailureRetrySeconds",
+          "label": "TypeDB 회전 실패 재시도 간격",
+          "type": "number",
+          "default": "120",
+          "unit": "seconds"
+        },
+        {
+          "key": "typedbBlueGreenMinimumHeadroomMb",
+          "label": "블루그린 전환 후 최소 여유",
+          "type": "number",
+          "default": "12288",
+          "unit": "MB"
+        },
+        {
+          "key": "typedbBlueGreenEstimatedCandidateMaxMb",
+          "label": "블루그린 후보 예상 상한",
+          "type": "number",
+          "default": "4096",
+          "unit": "MB"
+        },
+        {
           "key": "typedbAgeResetEnabled",
           "label": "TypeDB 보관 시간 점검",
           "type": "toggle",
@@ -2176,7 +2868,7 @@
           "key": "typedbDataMaxSizeMb",
           "label": "TypeDB 최대 용량",
           "type": "number",
-          "default": "2048",
+          "default": "8192",
           "unit": "MB"
         },
         {
@@ -2185,6 +2877,13 @@
           "type": "number",
           "default": "4096",
           "unit": "MB"
+        },
+        {
+          "key": "typedbStartupWaitSeconds",
+          "label": "TypeDB 재시작 준비 대기",
+          "type": "number",
+          "default": "1800",
+          "unit": "seconds"
         }
       ]
     },
@@ -2212,7 +2911,17 @@
             "unit": ""
           },
           {
+            "key": "marketObservation",
+            "default": 1,
+            "unit": ""
+          },
+          {
             "key": "portfolioHoldingsSnapshot",
+            "default": 1,
+            "unit": ""
+          },
+          {
+            "key": "portfolioActivityObservation",
             "default": 1,
             "unit": ""
           },
@@ -2232,6 +2941,21 @@
             "unit": ""
           },
           {
+            "key": "cryptoOntologySignal",
+            "default": 1,
+            "unit": ""
+          },
+          {
+            "key": "portfolioOntologySignal",
+            "default": 1,
+            "unit": ""
+          },
+          {
+            "key": "portfolioRebalanceReview",
+            "default": 1,
+            "unit": ""
+          },
+          {
             "key": "holdingTiming",
             "default": 1,
             "unit": ""
@@ -2243,6 +2967,11 @@
           },
           {
             "key": "ontologyReasoningQueue",
+            "default": 1,
+            "unit": ""
+          },
+          {
+            "key": "operationalStorageCapacity",
             "default": 1,
             "unit": ""
           },
@@ -2263,6 +2992,11 @@
           }
         ],
         "alertThresholds": [
+          {
+            "key": "marketObservationPriceChangePct",
+            "default": 2.0,
+            "unit": ""
+          },
           {
             "key": "volumeRatioHigh",
             "default": 2,
@@ -2498,8 +3232,18 @@
             "unit": "minutes"
           },
           {
+            "key": "marketObservation",
+            "default": 60,
+            "unit": "minutes"
+          },
+          {
             "key": "portfolioHoldingsSnapshot",
             "default": 10,
+            "unit": "minutes"
+          },
+          {
+            "key": "portfolioActivityObservation",
+            "default": 1,
             "unit": "minutes"
           },
           {
@@ -2518,6 +3262,21 @@
             "unit": "minutes"
           },
           {
+            "key": "cryptoOntologySignal",
+            "default": 10,
+            "unit": "minutes"
+          },
+          {
+            "key": "portfolioOntologySignal",
+            "default": 10,
+            "unit": "minutes"
+          },
+          {
+            "key": "portfolioRebalanceReview",
+            "default": 10080,
+            "unit": "minutes"
+          },
+          {
             "key": "holdingTiming",
             "default": 10,
             "unit": "minutes"
@@ -2529,6 +3288,11 @@
           },
           {
             "key": "ontologyReasoningQueue",
+            "default": 60,
+            "unit": "minutes"
+          },
+          {
+            "key": "operationalStorageCapacity",
             "default": 60,
             "unit": "minutes"
           },
@@ -2707,6 +3471,9 @@
       "title": "온톨로지 실험",
       "summary": "후보 RuleBox를 운영 그래프와 분리된 샌드박스에서 반복 검증하고, 새 모니터 스냅샷이 들어오면 활성 실험을 다시 실행합니다.",
       "localEndpoints": [
+        "GET /api/investment-brain/hypothesis-development",
+        "POST /api/investment-brain/hypothesis-development/process",
+        "POST /api/investment-brain/hypothesis-development/{id}/approve",
         "GET /api/ontology/experiments",
         "GET /api/ontology/experiments/status",
         "GET /api/ontology/reasoning/status",
@@ -2729,7 +3496,10 @@
         "npm run python:service:restart"
       ],
       "storage": [
-        "data/ontology-lab.json",
+        "mysql: hypothesis_development_cases",
+        "mysql: hypothesis_development_events",
+        "mysql: ontology_experiments",
+        "mysql: ontology_experiment_runs",
         "data/python-ontology-lab.log"
       ],
       "settings": [
@@ -2753,6 +3523,11 @@
           "key": "ontologyLabRunHistoryLimit",
           "label": "이력 보관 수",
           "default": "50"
+        },
+        {
+          "key": "ontologyLabAutoApplyEnabled",
+          "label": "자동 운영 반영",
+          "default": "0"
         }
       ]
     },
@@ -2808,5 +3583,5 @@
       ]
     }
   ],
-  "buildId": "bb404d9cfa09"
+  "buildId": "98b40ef8954e"
 }

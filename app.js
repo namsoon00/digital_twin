@@ -518,6 +518,7 @@
     notificationJobsSummary: {},
     notificationJobDiagnostics: {},
     notificationJobDetails: {},
+    notificationDetailDisclosureOpen: {},
     notificationJobsTotal: 0,
     notificationJobsOffset: 0,
     notificationJobsPageSize: 20,
@@ -10237,6 +10238,10 @@
     });
     Array.prototype.slice.call(target.querySelectorAll("details")).forEach(function (details) {
       details.addEventListener("toggle", function () {
+        var disclosureKey = details.getAttribute("data-notification-detail-disclosure-key") || "";
+        if (disclosureKey) {
+          state.notificationDetailDisclosureOpen[disclosureKey] = Boolean(details.open);
+        }
         if (typeof window !== "undefined" && window.requestAnimationFrame) {
           window.requestAnimationFrame(function () { resizeTextareasIn(details); });
         } else {
@@ -21944,10 +21949,12 @@
     ].join("");
   }
 
-  function renderNotificationDetailDisclosure(title, description, body, className) {
+  function renderNotificationDetailDisclosure(title, description, body, className, disclosureKey) {
     if (!body) return "";
+    var stateKey = String(disclosureKey || className || title || "notification-detail");
+    var disclosureOpen = Boolean(state.notificationDetailDisclosureOpen[stateKey]);
     return [
-      '<details class="notification-detail-disclosure ' + escapeHtml(className || "") + '">',
+      '<details class="notification-detail-disclosure ' + escapeHtml(className || "") + '" data-notification-detail-disclosure-key="' + escapeHtml(stateKey) + '"' + (disclosureOpen ? ' open' : '') + '>',
       '<summary>',
       '<span><strong>' + escapeHtml(title || "상세 정보") + '</strong><em>' + escapeHtml(description || "전체 기록을 확인합니다.") + '</em></span>',
       '<span class="notification-detail-disclosure-icon" aria-hidden="true">&#9662;</span>',
@@ -22128,11 +22135,13 @@
     }).join("") + '</div>';
   }
 
-  function renderNotificationReasoningStep(index, title, summary, detail, body) {
+  function renderNotificationReasoningStep(index, title, summary, detail, body, disclosureKey) {
+    var stateKey = String(disclosureKey || "notification-reasoning-step:" + index);
+    var disclosureOpen = Boolean(state.notificationDetailDisclosureOpen[stateKey]);
     return [
       '<li class="notification-reasoning-step">',
       '<span class="notification-reasoning-index" aria-hidden="true">' + escapeHtml(String(index)) + '</span>',
-      '<details class="notification-reasoning-step-disclosure">',
+      '<details class="notification-reasoning-step-disclosure" data-notification-detail-disclosure-key="' + escapeHtml(stateKey) + '"' + (disclosureOpen ? ' open' : '') + '>',
       '<summary>',
       '<span class="notification-reasoning-step-copy">',
       '<strong>' + escapeHtml(title) + '</strong>',
@@ -22180,6 +22189,7 @@
     var sources = Array.isArray(trace.sources) ? trace.sources : [];
     var missing = Array.isArray(trace.missingData) ? trace.missingData : [];
     var audit = Array.isArray(trace.traceability) ? trace.traceability : [];
+    var reasoningDisclosurePrefix = "notification-job:" + notificationJobKey(job) + ":reasoning-step:";
     if (trace.status === "unavailable") {
       return [
         '<section class="notification-detail-section notification-reasoning-section unavailable">',
@@ -22408,12 +22418,12 @@
       '</div>',
       '<div class="notification-reasoning-provenance">' + provenance.map(function (item) { return '<code>' + escapeHtml(item) + '</code>'; }).join("") + '</div>',
       '<ol class="notification-reasoning-flow">',
-      renderNotificationReasoningStep(1, "원천 데이터·ABox 사실", facts.length + "개 사실, " + sources.length + "개 출처", missing.length ? "부족 데이터 " + missing.length + "건도 원본과 함께 표시합니다." : "기록된 부족 데이터 없음", factBody + sourceBody + notificationReasoningTraceTags(missing, "notification-reasoning-tags caution")),
-      renderNotificationReasoningStep(2, "TypeDB 규칙 실행", rules.length + "개 규칙, " + inferenceTraces.length + "개 추론 경로 · 영역별 판단 포함", snapshot.inferenceGenerationId || "추론 세대 ID 미기록", executionLedgerBody + assessmentBody + ruleBody + traceBody),
-      renderNotificationReasoningStep(3, "경쟁 가설 구성", hypotheses.length + "개 가설을 비교 후보로 구성했습니다.", "선택 표시는 다음 AI 단계의 결과이며, 후보 생성보다 먼저 실행된 것이 아닙니다.", hypothesisCandidatesBody),
-      renderNotificationReasoningStep(4, "AI 비교·최종 판단", (finalDecision.actionLabel || finalDecision.primaryAction || "판단 기록 없음") + (finalDecision.summary ? " · " + finalDecision.summary : ""), finalDecision.validationLabel || finalDecision.dataStateLabel || "검증 상태 미기록", aiExecutionBody + comparisonBody + hypothesisBody),
-      renderNotificationReasoningStep(5, "판단·실행·성과 수명주기", investmentLifecycle.status === "ready" ? "판단과 실행계획이 연결됐습니다." : "연결된 실행 기록이 아직 없습니다.", investmentLifecycle.decisionEpisodeId || "DecisionEpisode ID 미기록", lifecycleBody),
-      renderNotificationReasoningStep(6, "알림 발송", deliveryLabel, delivery.gateReason || "발송 정책과 반복 방지 정책을 통과한 결과입니다.", deliveryBody),
+      renderNotificationReasoningStep(1, "원천 데이터·ABox 사실", facts.length + "개 사실, " + sources.length + "개 출처", missing.length ? "부족 데이터 " + missing.length + "건도 원본과 함께 표시합니다." : "기록된 부족 데이터 없음", factBody + sourceBody + notificationReasoningTraceTags(missing, "notification-reasoning-tags caution"), reasoningDisclosurePrefix + "1"),
+      renderNotificationReasoningStep(2, "TypeDB 규칙 실행", rules.length + "개 규칙, " + inferenceTraces.length + "개 추론 경로 · 영역별 판단 포함", snapshot.inferenceGenerationId || "추론 세대 ID 미기록", executionLedgerBody + assessmentBody + ruleBody + traceBody, reasoningDisclosurePrefix + "2"),
+      renderNotificationReasoningStep(3, "경쟁 가설 구성", hypotheses.length + "개 가설을 비교 후보로 구성했습니다.", "선택 표시는 다음 AI 단계의 결과이며, 후보 생성보다 먼저 실행된 것이 아닙니다.", hypothesisCandidatesBody, reasoningDisclosurePrefix + "3"),
+      renderNotificationReasoningStep(4, "AI 비교·최종 판단", (finalDecision.actionLabel || finalDecision.primaryAction || "판단 기록 없음") + (finalDecision.summary ? " · " + finalDecision.summary : ""), finalDecision.validationLabel || finalDecision.dataStateLabel || "검증 상태 미기록", aiExecutionBody + comparisonBody + hypothesisBody, reasoningDisclosurePrefix + "4"),
+      renderNotificationReasoningStep(5, "판단·실행·성과 수명주기", investmentLifecycle.status === "ready" ? "판단과 실행계획이 연결됐습니다." : "연결된 실행 기록이 아직 없습니다.", investmentLifecycle.decisionEpisodeId || "DecisionEpisode ID 미기록", lifecycleBody, reasoningDisclosurePrefix + "5"),
+      renderNotificationReasoningStep(6, "알림 발송", deliveryLabel, delivery.gateReason || "발송 정책과 반복 방지 정책을 통과한 결과입니다.", deliveryBody, reasoningDisclosurePrefix + "6"),
       '</ol>',
       comparison.unresolvedQuestions && comparison.unresolvedQuestions.length ? '<div class="notification-reasoning-appendix"><strong>미해결 질문</strong>' + notificationReasoningTraceTags(comparison.unresolvedQuestions, "notification-reasoning-tags") + '</div>' : '',
       auditBody ? '<div class="notification-reasoning-appendix"><strong>추론 무결성</strong>' + auditBody + '</div>' : '',
@@ -22474,30 +22484,35 @@
       fingerprint ? '<section class="notification-detail-section"><strong>중복 판단 키</strong><code class="notification-fingerprint">' + escapeHtml(fingerprint) + '</code></section>' : ''
     ].join("") : "";
     var researchDetails = !compact ? renderNotificationJobResearchEvidence(job) : "";
+    var detailDisclosurePrefix = "notification-job:" + notificationJobKey(job) + ":";
     var extendedDetails = compact ? "" : [
       renderNotificationDetailDisclosure(
         "발송 조건 상세",
         [notificationReviewLevelLabel(job.deliveryReviewLevel), notificationJobSimilarityText(job), job.nextEligibleAt ? "다음 가능 " + formatClock(job.nextEligibleAt) : "조건 충족 시 발송"].filter(Boolean).join(" · "),
         deliveryDetails,
-        "delivery"
+        "delivery",
+        detailDisclosurePrefix + "delivery"
       ),
       renderNotificationDetailDisclosure(
         "추론 과정 상세",
         detailFacts.length + "개 사실 · " + detailRules.length + "개 규칙 · " + detailHypotheses.length + "개 가설 · " + detailSources.length + "개 출처",
         renderNotificationReverseReasoning(job),
-        "reasoning"
+        "reasoning",
+        detailDisclosurePrefix + "reasoning"
       ),
       renderNotificationDetailDisclosure(
         "전체 메시지·식별 정보",
         [payload.fullText ? formatInteger(payload.fullText.length) + "자 메시지" : "전체 메시지 없음", fingerprint ? "중복 판단 키 있음" : "중복 판단 키 없음"].join(" · "),
         messageDetails,
-        "message"
+        "message",
+        detailDisclosurePrefix + "message"
       ),
       renderNotificationDetailDisclosure(
         "관련 원문·출처",
         researchEvidenceCount ? researchEvidenceCount + "건의 기사 분석" : "연결된 기사 없음",
         researchDetails,
-        "sources"
+        "sources",
+        detailDisclosurePrefix + "sources"
       )
     ].join("");
     var receiptActions = '<div class="notification-detail-actions"><button class="text-button compact" type="button" data-notification-receipt="important" data-notification-job-id="' + escapeHtml(notificationJobKey(job)) + '" data-notification-receipt-value="' + escapeHtml(job.important ? "false" : "true") + '">' + escapeHtml(job.important ? "중요 해제" : "중요 표시") + '</button><button class="text-button compact" type="button" data-notification-receipt="acknowledged" data-notification-job-id="' + escapeHtml(notificationJobKey(job)) + '" data-notification-receipt-value="' + escapeHtml(job.acknowledgedAt ? "false" : "true") + '">' + escapeHtml(job.acknowledgedAt ? "확인 취소" : "확인 완료") + '</button></div>';

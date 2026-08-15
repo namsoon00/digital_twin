@@ -6,6 +6,7 @@ from digital_twin.domain.reasoning_engine_versions import (
     ReasoningEngineDescriptor,
     engine_transition_allowed,
     promotion_blockers,
+    reasoning_release_identity,
 )
 
 
@@ -22,6 +23,26 @@ def descriptor(status="candidate"):
 
 
 class ReasoningEngineVersionTests(unittest.TestCase):
+    def test_release_identity_changes_with_runtime_or_rulebox(self):
+        first = reasoning_release_identity(descriptor(), "rules-a")
+        second = reasoning_release_identity(descriptor(), "rules-a")
+        changed_rules = reasoning_release_identity(descriptor(), "rules-b")
+        changed_runtime_descriptor = ReasoningEngineDescriptor(
+            **{
+                **descriptor().__dict__,
+                "release_bundle": EngineReleaseBundle(
+                    "tbox-v1", "rulebox-v1", "prompt-v1", "features-v1",
+                    runtime_revision="revision-b",
+                ),
+            }
+        )
+        changed_runtime = reasoning_release_identity(changed_runtime_descriptor, "rules-a")
+
+        self.assertEqual(first, second)
+        self.assertNotEqual(first["releaseFingerprint"], changed_rules["releaseFingerprint"])
+        self.assertNotEqual(first["releaseFingerprint"], changed_runtime["releaseFingerprint"])
+        self.assertTrue(first["validationCohortId"].startswith("reasoning-cohort:"))
+
     def test_shadow_must_become_candidate_before_active(self):
         self.assertTrue(engine_transition_allowed("shadow", "candidate"))
         self.assertFalse(engine_transition_allowed("shadow", "active"))
@@ -51,11 +72,15 @@ class ReasoningEngineVersionTests(unittest.TestCase):
                 }
 
         class Comparisons:
-            def summary(self, deployment_id, limit=200):
-                del deployment_id, limit
+            def summary(self, deployment_id, limit=200, **kwargs):
+                del deployment_id, limit, kwargs
                 return {
                     "sampleCount": 20,
                     "distinctSymbolCount": 5,
+                    "nonEmptyNativeInferenceSampleCount": 20,
+                    "nonEmptyDecisionSampleCount": 20,
+                    "distinctMatchedRuleCount": 5,
+                    "marketClassCount": 2,
                     "minimumFactParityPct": 100.0,
                     "minimumRuleSlotCoveragePct": 100.0,
                     "unexplainedDecisionDifferenceCount": 0,
@@ -63,6 +88,7 @@ class ReasoningEngineVersionTests(unittest.TestCase):
                     "statusCounts": {"equivalent": 20},
                     "baselineP95DurationMs": 100,
                     "candidateP95DurationMs": 120,
+                    "queueWaitP95Ms": 20,
                     "latestComparisonAt": "2099-01-01T00:00:00Z",
                 }
 
@@ -71,6 +97,10 @@ class ReasoningEngineVersionTests(unittest.TestCase):
             {
                 "reasoningEnginePromotionMinimumComparisons": "20",
                 "reasoningEnginePromotionMinimumSymbols": "5",
+                "reasoningEnginePromotionMinimumNativeInferenceSamples": "20",
+                "reasoningEnginePromotionMinimumDecisionSamples": "20",
+                "reasoningEnginePromotionMinimumMatchedRules": "5",
+                "reasoningEnginePromotionMinimumMarketClasses": "2",
             },
             comparison_store=Comparisons(),
         )

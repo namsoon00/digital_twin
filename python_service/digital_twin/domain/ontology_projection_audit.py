@@ -749,10 +749,18 @@ def projection_result_summary(result: Dict[str, object]) -> Dict[str, object]:
         "ruleboxExecution": {
             "status": str(execution.get("status") or ""),
             "reason": str(execution.get("reason") or "")[:500],
+            "rulesHash": str(execution.get("rulesHash") or ""),
+            "sourceRulesHash": str(execution.get("sourceRulesHash") or ""),
+            "ruleboxRulesHash": str(execution.get("ruleboxRulesHash") or ""),
             "selectedRuleCount": int(execution.get("selectedRuleCount") or 0),
             "matchedRuleCount": int(execution.get("matchedRuleCount") or 0),
             "typedbNativeRuleExecutedCount": int(execution.get("typedbNativeRuleExecutedCount") or 0),
             "typedbNativeRuleMatchedCount": int(execution.get("typedbNativeRuleMatchedCount") or 0),
+            "typedbNativeRuleMatchedRuleIds": sorted({
+                str(value or "").strip()
+                for value in execution.get("typedbNativeRuleMatchedRuleIds") or []
+                if str(value or "").strip()
+            })[:160],
             "typedbNativeRuleParallelism": int(execution.get("typedbNativeRuleParallelism") or 1),
             "typedbNativeRuleParallelUsed": bool(execution.get("typedbNativeRuleParallelUsed")),
             "typedbNativeRuleTargetParallelism": int(execution.get("typedbNativeRuleTargetParallelism") or 1),
@@ -808,6 +816,15 @@ def projection_result_summary(result: Dict[str, object]) -> Dict[str, object]:
                 for value in execution.get("nativeRuleSelectionDeferredRuleIds") or []
                 if str(value or "").strip()
             })[:160],
+            "nativeRulePreflightStatus": str(execution.get("nativeRulePreflightStatus") or ""),
+            "nativeRulePreflightMode": str(execution.get("nativeRulePreflightMode") or ""),
+            "nativeRulePreflightReason": str(execution.get("nativeRulePreflightReason") or "")[:220],
+            "nativeRulePreflightSourceCount": int(execution.get("nativeRulePreflightSourceCount") or 0),
+            "nativeRulePreflightLoadedSourceCount": int(
+                execution.get("nativeRulePreflightLoadedSourceCount") or 0
+            ),
+            "nativeRulePreflightEntityCount": int(execution.get("nativeRulePreflightEntityCount") or 0),
+            "nativeRulePreflightRelationCount": int(execution.get("nativeRulePreflightRelationCount") or 0),
             "sourceAboxGenerationMode": str(execution.get("sourceAboxGenerationMode") or ""),
             "sourceAboxGenerationValid": bool(execution.get("sourceAboxGenerationValid")),
             "sourceAboxMembershipValidation": str(execution.get("sourceAboxMembershipValidation") or ""),

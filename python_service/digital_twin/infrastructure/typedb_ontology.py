@@ -983,13 +983,29 @@ def typedb_projection_preflight_graph_for_execution(
         for entity in list(getattr(projection_graph, "entities", []) or [])
         if str(entity.entity_id or "").strip()
     }
-    if not expected_source_ids or not expected_source_ids.issubset(graph_source_ids):
+    loaded_source_ids = expected_source_ids & graph_source_ids
+    if not expected_source_ids or not loaded_source_ids:
         return {
             "status": "incomplete",
             "mode": "projection-verified-in-memory",
-            "reason": "Projection graph does not contain every active target stock source.",
+            "reason": "Projection graph contains none of the active target stock sources.",
             "sourceCount": len(expected_source_ids),
-            "loadedSourceCount": len(expected_source_ids & graph_source_ids),
+            "loadedSourceCount": len(loaded_source_ids),
+        }
+    if not expected_source_ids.issubset(graph_source_ids):
+        return {
+            "status": "partial",
+            "mode": "projection-verified-in-memory-partial",
+            "reason": (
+                "Projection graph contains a verified subset of routed target stocks; "
+                "missing subjects remain unknown and cannot be negatively pruned."
+            ),
+            "sourceCount": len(expected_source_ids),
+            "loadedSourceCount": len(loaded_source_ids),
+            "missingSourceIds": sorted(expected_source_ids - graph_source_ids)[:40],
+            "entityCount": len(list(getattr(projection_graph, "entities", []) or [])),
+            "relationCount": len(list(getattr(projection_graph, "relations", []) or [])),
+            "graph": projection_graph,
         }
     return {
         "status": "ok",
@@ -7428,6 +7444,7 @@ class TypeDBOntologyGraphRepository(GraphStoreOntologyRowMapperMixin, ScopedABox
         native_rule_target_work_sharding_enabled: bool = False,
         native_rule_adaptive_target_sharding_enabled: bool = True,
         native_rule_any_condition_parallelism: int = 1,
+        native_rule_durable_preflight_fallback_enabled: bool = False,
         inference_write_lease_enabled: bool = False,
         process_schema_function_cache_enabled: bool = False,
         schema_function_probe_interval_seconds: float = 300.0,
@@ -7517,6 +7534,9 @@ class TypeDBOntologyGraphRepository(GraphStoreOntologyRowMapperMixin, ScopedABox
                 self._native_rule_parallelism,
                 int(number_or_none(native_rule_any_condition_parallelism) or 1),
             ),
+        )
+        self._native_rule_durable_preflight_fallback_enabled = bool(
+            native_rule_durable_preflight_fallback_enabled
         )
         # The production composition root enables this durable lease. Bare
         # adapters retain the old unlocked behavior for isolated migrations
@@ -7798,6 +7818,9 @@ class TypeDBOntologyGraphRepository(GraphStoreOntologyRowMapperMixin, ScopedABox
 
     def native_rule_any_condition_parallelism(self) -> int:
         return self._native_rule_any_condition_parallelism
+
+    def native_rule_durable_preflight_fallback_enabled(self) -> bool:
+        return self._native_rule_durable_preflight_fallback_enabled
 
     def schema_function_provision_batch_size(self) -> int:
         return self._schema_function_provision_batch_size
@@ -20216,15 +20239,16 @@ relation ontology-assertion,
                     target_symbols=target_symbols,
                     world_id=world_id,
                 )
-                if str(projection_preflight.get("status") or "") == "ok":
+                projection_preflight_status = str(projection_preflight.get("status") or "")
+                if projection_preflight_status in {"ok", "partial"}:
                     preflight_graph = projection_preflight.get("graph")
-                    preflight_incoming_relations_complete = True
+                    preflight_incoming_relations_complete = projection_preflight_status == "ok"
                     native_preflight.update({
                         key: value
                         for key, value in projection_preflight.items()
                         if key != "graph"
                     })
-                elif preflight_source_ids:
+                elif preflight_source_ids and self.native_rule_durable_preflight_fallback_enabled():
                     try:
                         preflight_graph_candidate = typedb_call_for_world(
                             self.load_graph_for_native_matches,
@@ -20271,11 +20295,20 @@ relation ontology-assertion,
                             "mode": "manifest-storage-index",
                             "reason": "Manifest-indexed preflight lookup failed: " + str(error)[:180],
                         })
-                else:
+                elif not preflight_source_ids:
                     native_preflight.update({
                         "status": "incomplete",
                         "mode": "manifest-storage-index",
                         "reason": "Manifest planner topology has no target stock source IDs.",
+                    })
+                else:
+                    native_preflight.update({
+                        "status": "skipped",
+                        "mode": "planner-topology-only",
+                        "reason": (
+                            "Durable TypeDB preflight reread is disabled; TypeDB evaluates "
+                            "the surviving native rules without a second ABox graph read."
+                        ),
                     })
             native_stage_timings["preflightReadMs"] = int(
                 (time.perf_counter() - preflight_started) * 1000
@@ -20285,6 +20318,9 @@ relation ontology-assertion,
                 "nativeRulePreflightMode": str(native_preflight.get("mode") or ""),
                 "nativeRulePreflightReason": str(native_preflight.get("reason") or "")[:220],
                 "nativeRulePreflightSourceCount": int(number_or_none(native_preflight.get("sourceCount")) or 0),
+                "nativeRulePreflightLoadedSourceCount": int(
+                    number_or_none(native_preflight.get("loadedSourceCount")) or 0
+                ),
                 "nativeRulePreflightEntityCount": int(number_or_none(native_preflight.get("entityCount")) or 0),
                 "nativeRulePreflightRelationCount": int(number_or_none(native_preflight.get("relationCount")) or 0),
                 "typedbNativeStageTimings": dict(native_stage_timings),
@@ -26009,6 +26045,9 @@ def typedb_repository_from_settings(settings: Dict[str, str] = None):
         native_rule_any_condition_parallelism=int(number_or_none(
             settings.get("typedbNativeRuleAnyConditionParallelism")
         ) or 1),
+        native_rule_durable_preflight_fallback_enabled=typedb_bool(
+            settings.get("typedbNativeRuleDurablePreflightFallbackEnabled")
+        ),
         inference_write_lease_enabled=True
         if settings.get("typedbInferenceWriteLeaseEnabled") in (None, "")
         else typedb_bool(settings.get("typedbInferenceWriteLeaseEnabled")),

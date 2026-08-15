@@ -1156,12 +1156,23 @@ def reasoning_engine_platform_command(args) -> int:
         ).watch()
         return 0
     if args.reasoning_engine_action == "comparisons":
+        release = platform.release_identity(args.deployment_id)
+        comparison_filters = {
+            "candidate_release_fingerprint": str(release.get("releaseFingerprint") or ""),
+            "validation_cohort_id": str(release.get("validationCohortId") or ""),
+        }
         rows = platform.comparison_store.latest(
             args.deployment_id,
             limit=args.limit,
+            **comparison_filters,
         ) if platform.comparison_store is not None else []
         print(json.dumps({
-            "summary": platform.comparison_store.summary(args.deployment_id, limit=args.limit)
+            "release": release,
+            "summary": platform.comparison_store.summary(
+                args.deployment_id,
+                limit=args.limit,
+                **comparison_filters,
+            )
             if platform.comparison_store is not None else {},
             "comparisons": rows,
         }, ensure_ascii=False))

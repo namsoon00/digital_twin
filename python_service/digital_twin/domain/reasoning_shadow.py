@@ -19,7 +19,7 @@ from typing import Dict, Iterable, Mapping, Sequence, Tuple
 from .portfolio_ontology_catalog import OPERATIONAL_PIPELINES, SETTING_CONCEPT_TYPES
 
 
-REASONING_SHADOW_CONTRACT_VERSION = "reasoning-shadow-comparison-v1"
+REASONING_SHADOW_CONTRACT_VERSION = "reasoning-shadow-comparison-v2"
 PROJECTION_RUNTIME_CONTEXT_PACKET_VERSION = "projection-runtime-context-zlib-v1"
 MAX_PROJECTION_RUNTIME_CONTEXT_BYTES = 16 * 1024 * 1024
 
@@ -264,6 +264,30 @@ def projection_receipt_packet(account_id: str, projection: Mapping[str, object])
     runtime = _mapping(values.get("runtimeStages"))
     comparison_scope = _mapping(values.get("comparisonScope"))
     persisted_scope = _mapping(values.get("persistedComparisonScope"))
+    execution = _mapping(values.get("ruleboxExecution"))
+    native_stage_values = _mapping(
+        execution.get("typedbNativeStageTimings")
+        or execution.get("nativeStageTimings")
+    )
+    stage_allowlist = {
+        "totalMs", "graphAssemblyMs", "aboxPersistenceMs", "nativeInferenceMs",
+        "inferenceDetailOutboxMs", "decisionEpisodeMs", "qualityRecordMs",
+    }
+    runtime_stages = {
+        str(key): max(0, int(_rounded(value)))
+        for key, value in runtime.items()
+        if str(key) in stage_allowlist and isinstance(value, (int, float))
+    }
+    native_stage_timings = {
+        str(key): max(0, int(_rounded(value)))
+        for key, value in native_stage_values.items()
+        if str(key) and isinstance(value, (int, float))
+    }
+    matched_rule_ids = _strings(
+        execution.get("typedbNativeRuleMatchedRuleIds")
+        or execution.get("matchedRuleIds")
+        or []
+    )
     return {
         "accountId": str(account_id or ""),
         "status": str(values.get("status") or ""),
@@ -285,6 +309,34 @@ def projection_receipt_packet(account_id: str, projection: Mapping[str, object])
         ),
         "targetSymbols": list(_strings(inference.get("targetSymbols") or [])),
         "durationMs": int(_rounded(runtime.get("totalMs"))),
+        "runtimeStages": runtime_stages,
+        "nativeStageTimings": native_stage_timings,
+        "nativeMatchedRuleCount": int(_rounded(
+            execution.get("typedbNativeRuleMatchedCount")
+            or inference.get("typedbNativeRuleMatchedCount")
+        )),
+        "nativeMatchedRuleIds": list(matched_rule_ids),
+        "nativeExecutedRuleIds": list(_strings(
+            execution.get("nativeRuleSelectionExecutedRuleIds") or []
+        )),
+        "ruleboxFingerprint": str(
+            execution.get("ruleboxRulesHash")
+            or execution.get("rulesHash")
+            or execution.get("sourceRulesHash")
+            or values.get("ruleboxFingerprint")
+            or ""
+        ),
+        "nativeRulePreflight": {
+            "status": str(execution.get("nativeRulePreflightStatus") or ""),
+            "mode": str(execution.get("nativeRulePreflightMode") or ""),
+            "reason": str(execution.get("nativeRulePreflightReason") or "")[:220],
+            "sourceCount": int(_rounded(execution.get("nativeRulePreflightSourceCount"))),
+            "loadedSourceCount": int(_rounded(
+                execution.get("nativeRulePreflightLoadedSourceCount")
+            )),
+            "entityCount": int(_rounded(execution.get("nativeRulePreflightEntityCount"))),
+            "relationCount": int(_rounded(execution.get("nativeRulePreflightRelationCount"))),
+        },
     }
 
 
@@ -379,6 +431,107 @@ def _coverage(baseline: Iterable[str], candidate: Iterable[str]) -> float:
     if not left:
         return 100.0
     return round(100.0 * len(left.intersection(right)) / len(left), 3)
+
+
+def _market_class(symbol: object) -> str:
+    value = str(symbol or "").upper().strip()
+    if not value:
+        return ""
+    if value.isdigit() and len(value) == 6:
+        return "KR-EQUITY"
+    if value in {"BTC", "ETH", "SOL", "XRP"} or value.endswith(("-USD", "USDT")):
+        return "CRYPTO"
+    return "US-EQUITY"
+
+
+def _percentile95(values: Iterable[object]) -> int:
+    ordered = sorted(max(0, int(_rounded(value))) for value in values or [])
+    if not ordered:
+        return 0
+    index = min(len(ordered) - 1, max(0, int(round(len(ordered) * 0.95 + 0.499)) - 1))
+    return ordered[index]
+
+
+def reasoning_comparison_summary(
+    rows: Iterable[Mapping[str, object]],
+    candidate_deployment_id: str = "",
+    candidate_release_fingerprint: str = "",
+    validation_cohort_id: str = "",
+) -> Dict[str, object]:
+    """Aggregate only one immutable validation cohort into promotion evidence."""
+
+    items = [dict(row) for row in rows or [] if isinstance(row, Mapping)]
+    status_counts: Dict[str, int] = {}
+    symbols, markets, actions, matched_rule_ids = set(), set(), set(), set()
+    fact_values, rule_values, baseline_durations, candidate_durations, queue_waits = [], [], [], [], []
+    baseline_stage_values: Dict[str, list] = {}
+    candidate_stage_values: Dict[str, list] = {}
+    unexplained = shadow_deliveries = nonempty_decisions = nonempty_native = decision_subjects = 0
+    for index, row in enumerate(items):
+        status = str(row.get("status") or "unknown")
+        status_counts[status] = status_counts.get(status, 0) + 1
+        fact_values.append(float(row.get("factParityPct") or 0.0))
+        rule_values.append(float(row.get("ruleSlotCoveragePct") or 0.0))
+        unexplained += int(row.get("unexplainedDecisionDifferenceCount") or 0)
+        shadow_deliveries += int(row.get("shadowDeliveryCount") or 0)
+        payload = _mapping(row.get("payload"))
+        row_symbols = _strings(payload.get("symbols") or [])
+        symbols.update(row_symbols)
+        markets.update(
+            str(value or "")
+            for value in payload.get("marketClasses") or [_market_class(value) for value in row_symbols]
+            if str(value or "")
+        )
+        actions.update(str(value or "") for value in payload.get("candidateActions") or [] if str(value or ""))
+        matched_rule_ids.update(
+            str(value or "") for value in payload.get("candidateMatchedRuleIds") or [] if str(value or "")
+        )
+        subject_count = int(payload.get("subjectCount") or 0)
+        native_count = int(payload.get("candidateNativeMatchedRuleCount") or 0)
+        decision_subjects += subject_count
+        nonempty_decisions += int(subject_count > 0)
+        nonempty_native += int(native_count > 0)
+        warmup = bool(payload.get("candidateWarmup")) or (len(items) > 1 and index == len(items) - 1)
+        if not warmup:
+            baseline_durations.append(int(payload.get("baselineDurationMs") or 0))
+            candidate_durations.append(int(payload.get("candidateDurationMs") or 0))
+            queue_waits.append(int(payload.get("queueWaitMs") or 0))
+            for stage, value in _mapping(payload.get("baselinePhaseDurationsMs")).items():
+                baseline_stage_values.setdefault(str(stage), []).append(value)
+            for stage, value in _mapping(payload.get("candidatePhaseDurationsMs")).items():
+                candidate_stage_values.setdefault(str(stage), []).append(value)
+    return {
+        "candidateDeploymentId": str(candidate_deployment_id or ""),
+        "candidateReleaseFingerprint": str(candidate_release_fingerprint or ""),
+        "validationCohortId": str(validation_cohort_id or ""),
+        "sampleCount": len(items),
+        "statusCounts": status_counts,
+        "equivalentCount": int(status_counts.get("equivalent") or 0),
+        "equivalentPct": round(100.0 * int(status_counts.get("equivalent") or 0) / len(items), 3) if items else 0.0,
+        "factParityPct": round(sum(fact_values) / len(fact_values), 3) if fact_values else 0.0,
+        "minimumFactParityPct": min(fact_values) if fact_values else 0.0,
+        "ruleSlotCoveragePct": round(sum(rule_values) / len(rule_values), 3) if rule_values else 0.0,
+        "minimumRuleSlotCoveragePct": min(rule_values) if rule_values else 0.0,
+        "unexplainedDecisionDifferenceCount": unexplained,
+        "shadowDeliveryCount": shadow_deliveries,
+        "distinctSymbolCount": len(symbols),
+        "symbols": sorted(symbols),
+        "marketClassCount": len(markets),
+        "marketClasses": sorted(markets),
+        "candidateActionCount": len(actions),
+        "candidateActions": sorted(actions),
+        "nonEmptyDecisionSampleCount": nonempty_decisions,
+        "nonEmptyNativeInferenceSampleCount": nonempty_native,
+        "decisionSubjectCount": decision_subjects,
+        "distinctMatchedRuleCount": len(matched_rule_ids),
+        "matchedRuleIds": sorted(matched_rule_ids),
+        "baselineP95DurationMs": _percentile95(baseline_durations),
+        "candidateP95DurationMs": _percentile95(candidate_durations),
+        "queueWaitP95Ms": _percentile95(queue_waits),
+        "baselinePhaseP95Ms": {key: _percentile95(values) for key, values in sorted(baseline_stage_values.items())},
+        "candidatePhaseP95Ms": {key: _percentile95(values) for key, values in sorted(candidate_stage_values.items())},
+        "latestComparisonAt": str(items[0].get("createdAt") or "") if items else "",
+    }
 
 
 @dataclass(frozen=True)
@@ -572,6 +725,39 @@ def compare_engine_outcomes(
             for symbol in projection.get("targetSymbols") or []
         ]
     )
+    baseline_native_rule_ids = _strings(
+        rule_id
+        for projection in baseline_projections.values()
+        for rule_id in projection.get("nativeMatchedRuleIds") or []
+    )
+    candidate_native_rule_ids = _strings(
+        rule_id
+        for projection in candidate_projections.values()
+        for rule_id in projection.get("nativeMatchedRuleIds") or []
+    )
+    baseline_native_count = sum(
+        int(projection.get("nativeMatchedRuleCount") or 0)
+        for projection in baseline_projections.values()
+    )
+    candidate_native_count = sum(
+        int(projection.get("nativeMatchedRuleCount") or 0)
+        for projection in candidate_projections.values()
+    )
+    candidate_actions = _strings(
+        item.get("candidateAction")
+        for rows in candidate_groups.values()
+        for item in rows
+    )
+
+    def phase_totals(projections: Mapping[str, Mapping[str, object]]) -> Dict[str, int]:
+        totals: Dict[str, int] = {}
+        for projection in projections.values():
+            for prefix, field in (("projection.", "runtimeStages"), ("typedb.", "nativeStageTimings")):
+                for stage, value in _mapping(projection.get(field)).items():
+                    key = prefix + str(stage)
+                    totals[key] = totals.get(key, 0) + max(0, int(_rounded(value)))
+        return totals
+
     payload = {
         "contractVersion": REASONING_SHADOW_CONTRACT_VERSION,
         "baselineDeploymentId": str(_mapping(baseline).get("deploymentId") or ""),
@@ -580,6 +766,16 @@ def compare_engine_outcomes(
         "candidateDurationMs": int(_mapping(candidate).get("durationMs") or 0),
         "symbols": list(symbols),
         "subjectCount": len(keys),
+        "nonEmptyDecision": bool(keys),
+        "baselineNativeMatchedRuleCount": baseline_native_count,
+        "candidateNativeMatchedRuleCount": candidate_native_count,
+        "nonEmptyNativeInference": candidate_native_count > 0,
+        "baselineMatchedRuleIds": list(baseline_native_rule_ids),
+        "candidateMatchedRuleIds": list(candidate_native_rule_ids),
+        "candidateActions": list(candidate_actions),
+        "marketClasses": sorted({_market_class(symbol) for symbol in symbols if _market_class(symbol)}),
+        "baselinePhaseDurationsMs": phase_totals(baseline_projections),
+        "candidatePhaseDurationsMs": phase_totals(candidate_projections),
         "decisionDifferences": differences,
         "projectionDifferences": projection_differences,
         "temporalComparisons": temporal_rows,

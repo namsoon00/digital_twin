@@ -96,6 +96,7 @@ from ..domain.monitoring import RealtimeMonitor
 from ..domain.portfolio import account_snapshot_from_monitor_state
 from ..domain.portfolio_ontology_temporal_concepts import parse_temporal_windows
 from ..domain.reasoning_shadow import payload_hash, unpack_projection_runtime_contexts
+from ..domain.reasoning_engine_versions import reasoning_release_identity
 from ..domain.ontology_worlds import portfolio_world_id
 from .event_bus import EventBus, default_event_bus
 from .bok_calendar_source import BokPolicyDecisionCalendarSource
@@ -1494,7 +1495,11 @@ def build_reasoning_engine_shadow_runner(settings=None, worker_id: str = "") -> 
         )
         candidate_deployment = registry_store.get(candidate_deployment_id)
         candidate_health = dict(candidate_deployment.get("health") or {})
-        frozen_hash = str(candidate_health.get("releaseFingerprint") or "")
+        frozen_hash = str(candidate_health.get("ruleboxFingerprint") or "")
+        if not frozen_hash and not str(candidate_health.get("candidateReleaseId") or ""):
+            # Compatibility with the pre-v2 health contract, where the field
+            # named releaseFingerprint contained only the RuleBox hash.
+            frozen_hash = str(candidate_health.get("releaseFingerprint") or "")
         if frozen_hash and active_hash != frozen_hash:
             raise RuntimeError(
                 "The active RuleBox changed after the V2 release was frozen; "
@@ -1523,6 +1528,15 @@ def build_reasoning_engine_shadow_runner(settings=None, worker_id: str = "") -> 
             payload.get("candidateDeploymentId") or "ontology-v2-shadow"
         )
         release_sync = synchronize_candidate_release(candidate_deployment_id)
+        release_identity = reasoning_release_identity(
+            registry_store.get(candidate_deployment_id),
+            release_sync.get("rulesHash") or "",
+        )
+        expected_release_identity = dict(payload.get("candidateReleaseIdentity") or {})
+        if expected_release_identity and str(
+            expected_release_identity.get("releaseFingerprint") or ""
+        ) != str(release_identity.get("releaseFingerprint") or ""):
+            raise RuntimeError("Candidate release identity changed after the shadow input was captured")
         # Storage bindings are isolated, but the investment-world input must
         # be identical to V1. Passing the candidate DB/backend controls into
         # ``PortfolioOntologyProjectionRecorder.settings`` would turn
@@ -1599,7 +1613,9 @@ def build_reasoning_engine_shadow_runner(settings=None, worker_id: str = "") -> 
         )
         runner.shadow_delivery_count = 0
         runner.shadow_notification_sink = notification_sink
-        runner.shadow_release_fingerprint = str(release_sync.get("rulesHash") or "")
+        runner.shadow_rulebox_fingerprint = str(release_sync.get("rulesHash") or "")
+        runner.shadow_release_identity = release_identity
+        runner.shadow_release_fingerprint = str(release_identity.get("releaseFingerprint") or "")
         return runner
 
     return ReasoningEngineShadowRunner(

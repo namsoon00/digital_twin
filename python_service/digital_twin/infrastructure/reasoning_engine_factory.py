@@ -6,10 +6,12 @@ from .mysql_versioned_runtime import (
     MySQLReasoningEngineComparisonStore,
     MySQLReasoningShadowJobStore,
 )
+from .runtime_identity import runtime_identity
 
 
 def build_reasoning_engine_platform(settings=None):
     configured = dict(settings or {})
+    configured["_runtimeIdentity"] = runtime_identity()
     return ReasoningEnginePlatformService(
         MySQLReasoningEngineRegistryStore(configured),
         configured,

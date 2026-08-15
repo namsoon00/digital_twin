@@ -7,6 +7,7 @@ from ..domain.reasoning_engine_versions import (
     EngineReleaseBundle,
     ReasoningEngineDescriptor,
     promotion_blockers,
+    reasoning_release_identity,
 )
 from ..domain.time_series_storage import TEMPORAL_FEATURE_SET_VERSION
 
@@ -38,22 +39,27 @@ class ReasoningEnginePlatformService:
         from ..infrastructure.typedb_ontology import TYPEDB_NATIVE_RULE_ENGINE_VERSION
 
         active_backend = str(self.settings.get("timeSeriesActiveBackendId") or "mysql-primary")
-        common_bundle = EngineReleaseBundle(
+        runtime = dict(self.settings.get("_runtimeIdentity") or {})
+        common_bundle_values = dict(
             tbox_release_id=ONTOLOGY_TBOX_VERSION,
             rulebox_release_id=RULEBOX_RELEASE_MANIFEST_VERSION,
             prompt_release_id="investment-notification-prompt-registry-current",
             feature_set_version=TEMPORAL_FEATURE_SET_VERSION,
             source_contract_versions=("typedb-semantic-storage-v2", "time-series-storage-contract-v1"),
+            runtime_revision=str(runtime.get("revision") or "unknown"),
         )
         return [
             ReasoningEngineDescriptor(
                 engine_family="ontology-investment-brain",
                 engine_version="v1",
-                deployment_id="ontology-v1-active",
+                deployment_id=str(self.settings.get("reasoningEngineActiveDeploymentId") or "ontology-v1-active"),
                 status="active",
                 graph_store_binding=TYPEDB_NATIVE_RULE_ENGINE_VERSION,
                 time_series_backend_id=active_backend,
-                release_bundle=common_bundle,
+                release_bundle=EngineReleaseBundle(
+                    **common_bundle_values,
+                    release_id=str(self.settings.get("reasoningEngineActiveReleaseId") or "ontology-v1-release-r2"),
+                ),
                 capabilities={
                     "typedbNativeInference": True,
                     "productionDelivery": True,
@@ -64,11 +70,14 @@ class ReasoningEnginePlatformService:
             ReasoningEngineDescriptor(
                 engine_family="ontology-investment-brain",
                 engine_version="v2",
-                deployment_id="ontology-v2-shadow",
+                deployment_id=str(self.settings.get("reasoningEngineCandidateDeploymentId") or "ontology-v2-shadow"),
                 status="provisioning",
                 graph_store_binding=TYPEDB_NATIVE_RULE_ENGINE_VERSION,
                 time_series_backend_id=str(self.settings.get("timeSeriesShadowBackendId") or "questdb-shadow"),
-                release_bundle=common_bundle,
+                release_bundle=EngineReleaseBundle(
+                    **common_bundle_values,
+                    release_id=str(self.settings.get("reasoningEngineCandidateReleaseId") or "ontology-v2-release-r2"),
+                ),
                 capabilities={
                     "typedbNativeInference": True,
                     "productionDelivery": False,
@@ -77,6 +86,42 @@ class ReasoningEnginePlatformService:
                 },
             ),
         ]
+
+    def release_identity(self, deployment_id: str) -> Dict[str, str]:
+        row = self.registry.get(deployment_id)
+        health = dict(row.get("health") or {})
+        bundle = dict(row.get("releaseBundle") or {})
+        bundle_release_id = str(bundle.get("release_id") or bundle.get("releaseId") or deployment_id)
+        bundle_runtime_revision = str(
+            bundle.get("runtime_revision") or bundle.get("runtimeRevision") or "unknown"
+        )
+        health_matches_bundle = bool(
+            str(health.get("candidateReleaseId") or "") == bundle_release_id
+            and str(health.get("candidateRuntimeRevision") or "") == bundle_runtime_revision
+        )
+        if health_matches_bundle and str(
+            health.get("candidateReleaseFingerprint") or health.get("releaseFingerprint") or ""
+        ):
+            return {
+                "releaseId": str(
+                    health.get("candidateReleaseId")
+                    or bundle_release_id
+                    or deployment_id
+                ),
+                "runtimeRevision": str(
+                    health.get("candidateRuntimeRevision")
+                    or bundle_runtime_revision
+                    or "unknown"
+                ),
+                "ruleboxFingerprint": str(health.get("ruleboxFingerprint") or ""),
+                "releaseFingerprint": str(
+                    health.get("candidateReleaseFingerprint")
+                    or health.get("releaseFingerprint")
+                    or ""
+                ),
+                "validationCohortId": str(health.get("validationCohortId") or ""),
+            }
+        return reasoning_release_identity(row, health.get("ruleboxFingerprint") or "")
 
     def initialize(self) -> Dict[str, object]:
         descriptors = self.descriptors()
@@ -103,12 +148,19 @@ class ReasoningEnginePlatformService:
             "deployments": self.registry.list(),
         }
         candidate_id = str(control.candidate_deployment_id or "")
+        candidate_release = self.release_identity(candidate_id) if candidate_id else {}
         if self.shadow_queue is not None:
-            response["shadowQueue"] = self.shadow_queue.summary()
+            response["shadowQueue"] = self.shadow_queue.summary(
+                candidate_id,
+                str(candidate_release.get("releaseId") or ""),
+                str(candidate_release.get("runtimeRevision") or ""),
+            )
         if self.comparison_store is not None and candidate_id:
             response["comparisonSummary"] = self.comparison_store.summary(
                 candidate_id,
                 limit=self.int_setting("reasoningEnginePromotionComparisonLookback", 200, 1, 2000),
+                candidate_release_fingerprint=str(candidate_release.get("releaseFingerprint") or ""),
+                validation_cohort_id=str(candidate_release.get("validationCohortId") or ""),
             )
             response["promotionReadiness"] = self.promotion_readiness(candidate_id)
         return response
@@ -125,10 +177,13 @@ class ReasoningEnginePlatformService:
 
     def promotion_readiness(self, deployment_id: str) -> Dict[str, object]:
         row = self.registry.get(deployment_id)
+        release = self.release_identity(deployment_id)
         summary = (
             self.comparison_store.summary(
                 deployment_id,
                 limit=self.int_setting("reasoningEnginePromotionComparisonLookback", 200, 1, 2000),
+                candidate_release_fingerprint=str(release.get("releaseFingerprint") or ""),
+                validation_cohort_id=str(release.get("validationCohortId") or ""),
             )
             if self.comparison_store is not None
             else {}
@@ -140,13 +195,29 @@ class ReasoningEnginePlatformService:
         if str(health.get("status") or "").lower() not in {"ready", "healthy"}:
             blockers.append("engine-unhealthy")
         if int(summary.get("sampleCount") or 0) < self.int_setting(
-            "reasoningEnginePromotionMinimumComparisons", 20, 1, 10000
+            "reasoningEnginePromotionMinimumComparisons", 100, 1, 10000
         ):
             blockers.append("insufficient-comparison-samples")
         if int(summary.get("distinctSymbolCount") or 0) < self.int_setting(
-            "reasoningEnginePromotionMinimumSymbols", 5, 1, 10000
+            "reasoningEnginePromotionMinimumSymbols", 10, 1, 10000
         ):
             blockers.append("insufficient-symbol-coverage")
+        if int(summary.get("nonEmptyNativeInferenceSampleCount") or 0) < self.int_setting(
+            "reasoningEnginePromotionMinimumNativeInferenceSamples", 30, 1, 10000
+        ):
+            blockers.append("insufficient-native-inference-coverage")
+        if int(summary.get("nonEmptyDecisionSampleCount") or 0) < self.int_setting(
+            "reasoningEnginePromotionMinimumDecisionSamples", 30, 1, 10000
+        ):
+            blockers.append("insufficient-decision-coverage")
+        if int(summary.get("distinctMatchedRuleCount") or 0) < self.int_setting(
+            "reasoningEnginePromotionMinimumMatchedRules", 5, 1, 10000
+        ):
+            blockers.append("insufficient-matched-rule-coverage")
+        if int(summary.get("marketClassCount") or 0) < self.int_setting(
+            "reasoningEnginePromotionMinimumMarketClasses", 2, 1, 10
+        ):
+            blockers.append("insufficient-market-coverage")
         if float(summary.get("minimumFactParityPct") or 0.0) < 100.0:
             blockers.append("fact-parity-incomplete")
         if float(summary.get("minimumRuleSlotCoveragePct") or 0.0) < 100.0:
@@ -155,7 +226,10 @@ class ReasoningEnginePlatformService:
             blockers.append("unexplained-decision-differences")
         if int(summary.get("shadowDeliveryCount") or 0) > 0:
             blockers.append("shadow-delivery-detected")
-        if int((summary.get("statusCounts") or {}).get("candidate-failed") or 0) > 0:
+        execution_failures = int((summary.get("statusCounts") or {}).get("candidate-failed") or 0)
+        if execution_failures > self.int_setting(
+            "reasoningEnginePromotionMaximumExecutionFailures", 0, 0, 10000
+        ):
             blockers.append("candidate-execution-failures")
         baseline_p95 = int(summary.get("baselineP95DurationMs") or 0)
         candidate_p95 = int(summary.get("candidateP95DurationMs") or 0)
@@ -165,6 +239,17 @@ class ReasoningEnginePlatformService:
         )
         if baseline_p95 > 0 and latency_ratio > max_latency_ratio:
             blockers.append("candidate-latency-regression")
+        maximum_candidate_p95 = self.int_setting(
+            "reasoningEnginePromotionMaximumCandidateP95Ms", 90000, 1000, 3600000
+        )
+        if candidate_p95 <= 0 or candidate_p95 > maximum_candidate_p95:
+            blockers.append("candidate-absolute-latency-slo-breached")
+        queue_wait_p95 = int(summary.get("queueWaitP95Ms") or 0)
+        maximum_queue_wait_p95 = self.int_setting(
+            "reasoningEnginePromotionMaximumQueueWaitP95Ms", 60000, 1000, 3600000
+        )
+        if queue_wait_p95 > maximum_queue_wait_p95:
+            blockers.append("candidate-queue-wait-slo-breached")
         latest = self.timestamp(summary.get("latestComparisonAt"))
         maximum_age = self.int_setting(
             "reasoningEnginePromotionMaximumComparisonAgeSeconds", 3600, 60, 7 * 24 * 60 * 60
@@ -184,6 +269,9 @@ class ReasoningEnginePlatformService:
             "health": health,
             "latencyRatio": latency_ratio,
             "maximumLatencyRatio": max_latency_ratio,
+            "release": release,
+            "maximumCandidateP95Ms": maximum_candidate_p95,
+            "maximumQueueWaitP95Ms": maximum_queue_wait_p95,
             "latestComparisonAgeSeconds": age_seconds,
             "maximumComparisonAgeSeconds": maximum_age,
         }

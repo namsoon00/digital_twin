@@ -8,12 +8,16 @@ from digital_twin.application.reasoning_shadow_service import (
 from digital_twin.domain.portfolio import AlertEvent
 from digital_twin.domain.ontology_scopes import target_scope_manifest_fingerprint
 from digital_twin.domain.ontology_change_impact import macro_scope_id, symbol_scope_id
-from digital_twin.domain.reasoning_engine_versions import EngineControlState
+from digital_twin.domain.reasoning_engine_versions import (
+    EngineControlState,
+    reasoning_release_identity,
+)
 from digital_twin.domain.reasoning_shadow import (
     compare_engine_outcomes,
     engine_outcome_packet,
     frozen_projection_runtime_context,
     pack_projection_runtime_contexts,
+    reasoning_comparison_summary,
     unpack_projection_runtime_contexts,
 )
 
@@ -24,6 +28,12 @@ def projection(fingerprint="facts-1", status="ok"):
         "status": status,
         "materialFingerprint": fingerprint,
         "runtimeStages": {"totalMs": 10},
+        "ruleboxExecution": {
+            "sourceRulesHash": "rulebox-release-1",
+            "typedbNativeRuleMatchedCount": 1,
+            "typedbNativeRuleMatchedRuleIds": ["graph.holding.v1"],
+            "typedbNativeStageTimings": {"nativeRuleQueriesMs": 4},
+        },
         "graphInput": {"mode": "target-scoped", "targetSymbols": ["005930"]},
         "comparisonScope": {"fingerprint": "target-facts-1", "scopeCount": 3},
         "inferenceBox": {
@@ -87,7 +97,23 @@ class FakeRegistry:
         return EngineControlState("v1", "v1", "v2", 1)
 
     def get(self, deployment_id):
-        return {"deploymentId": deployment_id, "status": self.status, "health": self.health}
+        return {
+            "deploymentId": deployment_id,
+            "engineFamily": "ontology-investment-brain",
+            "engineVersion": str(deployment_id),
+            "status": self.status,
+            "graphStoreBinding": "typedb-v9",
+            "timeSeriesBackendId": "questdb-shadow" if deployment_id == "v2" else "mysql-primary",
+            "releaseBundle": {
+                "release_id": str(deployment_id) + "-release",
+                "tbox_release_id": "tbox-v1",
+                "rulebox_release_id": "rulebox-v1",
+                "prompt_release_id": "prompt-v1",
+                "feature_set_version": "features-v1",
+                "runtime_revision": "test-revision",
+            },
+            "health": self.health,
+        }
 
     def transition(self, deployment_id, status):
         self.status = status
@@ -110,8 +136,8 @@ class FakeQueue:
         self.saved = kwargs
         return {"saved": True, "jobId": "job-1", "status": "queued"}
 
-    def claim(self, candidate_id, worker_id, lease_seconds=900):
-        del candidate_id, worker_id, lease_seconds
+    def claim(self, candidate_id, worker_id, lease_seconds=900, **kwargs):
+        del candidate_id, worker_id, lease_seconds, kwargs
         job, self.job = self.job, None
         return dict(job or {})
 
@@ -142,12 +168,15 @@ class FakeTemporalService:
 
 
 class FakeCandidateRunner:
-    def __init__(self, delivery_attempts=0):
+    def __init__(self, delivery_attempts=0, release_identity=None):
         self.last_detected_alert_events = [event()]
         self.last_ontology_projection_results = {"main": projection()}
         self.shadow_delivery_count = 0
         self.shadow_notification_sink = SimpleNamespace(attempt_count=delivery_attempts)
-        self.shadow_release_fingerprint = "rulebox-release-1"
+        self.shadow_release_identity = dict(release_identity or {})
+        self.shadow_release_fingerprint = str(
+            self.shadow_release_identity.get("releaseFingerprint") or ""
+        )
 
     def run_once(self, **kwargs):
         self.kwargs = kwargs
@@ -155,6 +184,12 @@ class FakeCandidateRunner:
 
 
 class ReasoningShadowTests(unittest.TestCase):
+    @staticmethod
+    def release(registry, deployment_id):
+        return reasoning_release_identity(
+            registry.get(deployment_id),
+            "rulebox-release-1",
+        )
     def test_target_scope_fingerprint_excludes_unrelated_symbols_and_keeps_dependencies(self):
         target_scope = symbol_scope_id("005930", "price")
         dependency_scope = macro_scope_id("fx")
@@ -241,6 +276,36 @@ class ReasoningShadowTests(unittest.TestCase):
         self.assertEqual(100.0, result["ruleSlotCoveragePct"])
         self.assertEqual(0, result["unexplainedDecisionDifferenceCount"])
         self.assertEqual(["005930"], result["symbols"])
+        self.assertEqual(1, result["candidateNativeMatchedRuleCount"])
+        self.assertEqual(["graph.holding.v1"], result["candidateMatchedRuleIds"])
+        self.assertEqual(["KR-EQUITY"], result["marketClasses"])
+
+    def test_summary_requires_substantive_native_and_decision_coverage(self):
+        rows = [{
+            "status": "equivalent",
+            "factParityPct": 100,
+            "ruleSlotCoveragePct": 100,
+            "createdAt": "2026-08-15T00:00:00Z",
+            "payload": {
+                "symbols": ["005930", "NVDA"],
+                "subjectCount": 1,
+                "candidateNativeMatchedRuleCount": 2,
+                "candidateMatchedRuleIds": ["graph.a", "graph.b"],
+                "candidateActions": ["HOLD"],
+                "candidateDurationMs": 120,
+                "baselineDurationMs": 100,
+                "queueWaitMs": 30,
+                "candidatePhaseDurationsMs": {"typedb.preflightReadMs": 2},
+            },
+        }]
+
+        summary = reasoning_comparison_summary(rows, "v2", "release-fp", "cohort-1")
+
+        self.assertEqual(1, summary["nonEmptyDecisionSampleCount"])
+        self.assertEqual(1, summary["nonEmptyNativeInferenceSampleCount"])
+        self.assertEqual(2, summary["distinctMatchedRuleCount"])
+        self.assertEqual(2, summary["marketClassCount"])
+        self.assertEqual(2, summary["candidatePhaseP95Ms"]["typedb.preflightReadMs"])
 
     def test_equal_source_scope_ignores_different_retained_store_history(self):
         baseline_projection = projection("baseline-history")
@@ -326,10 +391,15 @@ class ReasoningShadowTests(unittest.TestCase):
         self.assertGreater(result["projectionRuntimeContextBytes"], 0)
         self.assertGreater(result["projectionRuntimeContextCompressedBytes"], 0)
         self.assertEqual(0, queue.saved["payload"]["baselineOutcome"]["deliveryCount"])
+        self.assertTrue(queue.saved["payload"]["candidateReleaseFingerprint"])
+        self.assertTrue(queue.saved["payload"]["validationCohortId"])
 
     def test_shadow_worker_records_comparison_and_promotes_to_shadow_only(self):
         queue = FakeQueue()
         baseline = engine_outcome_packet("v1", [event()], {"main": projection()}, 100)
+        registry = FakeRegistry()
+        baseline_release = self.release(registry, "v1")
+        candidate_release = self.release(registry, "v2")
         queue.job = {
             "jobId": "job-1",
             "sourceEventId": "event-1",
@@ -337,6 +407,12 @@ class ReasoningShadowTests(unittest.TestCase):
             "payload": {
                 "baselineDeploymentId": "v1",
                 "candidateDeploymentId": "v2",
+                "baselineReleaseIdentity": baseline_release,
+                "candidateReleaseIdentity": candidate_release,
+                "baselineReleaseId": baseline_release["releaseId"],
+                "candidateReleaseId": candidate_release["releaseId"],
+                "candidateRuntimeRevision": candidate_release["runtimeRevision"],
+                "validationCohortId": candidate_release["validationCohortId"],
                 "accountIds": ["main"],
                 "symbols": ["005930"],
                 "sourceSnapshotIds": {"main": "2026-08-15T00:00:00Z"},
@@ -349,13 +425,14 @@ class ReasoningShadowTests(unittest.TestCase):
                 "reasoningContext": {},
             },
         }
-        registry = FakeRegistry()
         comparisons = FakeComparisonStore()
         worker = ReasoningEngineShadowRunner(
             queue,
             comparisons,
             registry,
-            candidate_runner_factory=lambda payload: FakeCandidateRunner(),
+            candidate_runner_factory=lambda payload: FakeCandidateRunner(
+                release_identity=payload["candidateReleaseIdentity"]
+            ),
             temporal_snapshot_service=FakeTemporalService(),
             temporal_definitions=[{"key": "1d"}],
             settings={
@@ -374,6 +451,9 @@ class ReasoningShadowTests(unittest.TestCase):
 
     def test_shadow_delivery_attempt_is_recorded_as_a_promotion_violation(self):
         queue = FakeQueue()
+        registry = FakeRegistry()
+        baseline_release = self.release(registry, "v1")
+        candidate_release = self.release(registry, "v2")
         queue.job = {
             "jobId": "job-2",
             "sourceEventId": "event-2",
@@ -381,6 +461,12 @@ class ReasoningShadowTests(unittest.TestCase):
             "payload": {
                 "baselineDeploymentId": "v1",
                 "candidateDeploymentId": "v2",
+                "baselineReleaseIdentity": baseline_release,
+                "candidateReleaseIdentity": candidate_release,
+                "baselineReleaseId": baseline_release["releaseId"],
+                "candidateReleaseId": candidate_release["releaseId"],
+                "candidateRuntimeRevision": candidate_release["runtimeRevision"],
+                "validationCohortId": candidate_release["validationCohortId"],
                 "accountIds": ["main"],
                 "symbols": ["005930"],
                 "sourceSnapshotIds": {"main": "2026-08-15T00:00:00Z"},
@@ -396,12 +482,14 @@ class ReasoningShadowTests(unittest.TestCase):
             },
         }
         comparisons = FakeComparisonStore()
-        registry = FakeRegistry()
         worker = ReasoningEngineShadowRunner(
             queue,
             comparisons,
             registry,
-            candidate_runner_factory=lambda payload: FakeCandidateRunner(delivery_attempts=1),
+            candidate_runner_factory=lambda payload: FakeCandidateRunner(
+                delivery_attempts=1,
+                release_identity=payload["candidateReleaseIdentity"],
+            ),
             temporal_snapshot_service=FakeTemporalService(),
             temporal_definitions=[{"key": "1d"}],
             settings={

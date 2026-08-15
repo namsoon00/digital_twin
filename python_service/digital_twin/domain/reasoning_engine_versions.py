@@ -1,10 +1,15 @@
 """Versioned reasoning-engine contracts and promotion rules."""
 
+import hashlib
+import json
 from dataclasses import asdict, dataclass, field
 from typing import Dict, Iterable, Mapping, Protocol, Tuple
 
 
 REASONING_ENGINE_CONTRACT_VERSION = "investment-reasoning-engine-contract-v1"
+REASONING_ENGINE_RUNTIME_CONTRACT_VERSION = "versioned-reasoning-runtime-v2"
+REASONING_ENGINE_RELEASE_IDENTITY_VERSION = "reasoning-engine-release-identity-v1"
+REASONING_ENGINE_COMPARISON_CONTRACT_VERSION = "reasoning-shadow-comparison-v2"
 
 ENGINE_STATUSES = {
     "registered",
@@ -47,11 +52,93 @@ class EngineReleaseBundle:
     prompt_release_id: str
     feature_set_version: str
     source_contract_versions: Tuple[str, ...] = ()
+    release_id: str = ""
+    runtime_contract_version: str = REASONING_ENGINE_RUNTIME_CONTRACT_VERSION
+    runtime_revision: str = ""
+    comparison_contract_version: str = REASONING_ENGINE_COMPARISON_CONTRACT_VERSION
 
     def to_dict(self) -> Dict[str, object]:
         payload = asdict(self)
         payload["source_contract_versions"] = list(self.source_contract_versions)
         return payload
+
+
+def _release_bundle_value(bundle: Mapping[str, object], snake: str, camel: str) -> object:
+    return bundle.get(snake) if snake in bundle else bundle.get(camel)
+
+
+def reasoning_release_identity(
+    descriptor: object,
+    rulebox_fingerprint: object = "",
+) -> Dict[str, str]:
+    """Build an immutable identity for one executable reasoning release.
+
+    Deployment health and mutable status are deliberately excluded. A code,
+    schema, prompt, source contract, storage binding, or RuleBox change starts
+    a new validation cohort even when the logical deployment ID is unchanged.
+    """
+
+    values = descriptor.to_dict() if hasattr(descriptor, "to_dict") else dict(descriptor or {})
+    bundle = dict(values.get("releaseBundle") or values.get("release_bundle") or {})
+    logical_release_id = str(
+        _release_bundle_value(bundle, "release_id", "releaseId")
+        or values.get("releaseId")
+        or values.get("deploymentId")
+        or values.get("deployment_id")
+        or "unversioned-release"
+    ).strip()
+    runtime_revision = str(
+        _release_bundle_value(bundle, "runtime_revision", "runtimeRevision")
+        or values.get("runtimeRevision")
+        or "unknown"
+    ).strip()
+    semantic_payload = {
+        "identityVersion": REASONING_ENGINE_RELEASE_IDENTITY_VERSION,
+        "engineFamily": str(values.get("engineFamily") or values.get("engine_family") or ""),
+        "engineVersion": str(values.get("engineVersion") or values.get("engine_version") or ""),
+        "deploymentId": str(values.get("deploymentId") or values.get("deployment_id") or ""),
+        "graphStoreBinding": str(values.get("graphStoreBinding") or values.get("graph_store_binding") or ""),
+        "timeSeriesBackendId": str(values.get("timeSeriesBackendId") or values.get("time_series_backend_id") or ""),
+        "releaseBundle": {
+            "releaseId": logical_release_id,
+            "tboxReleaseId": str(_release_bundle_value(bundle, "tbox_release_id", "tboxReleaseId") or ""),
+            "ruleboxReleaseId": str(_release_bundle_value(bundle, "rulebox_release_id", "ruleboxReleaseId") or ""),
+            "promptReleaseId": str(_release_bundle_value(bundle, "prompt_release_id", "promptReleaseId") or ""),
+            "featureSetVersion": str(_release_bundle_value(bundle, "feature_set_version", "featureSetVersion") or ""),
+            "sourceContractVersions": sorted(
+                str(item or "")
+                for item in (
+                    _release_bundle_value(bundle, "source_contract_versions", "sourceContractVersions") or []
+                )
+                if str(item or "")
+            ),
+            "runtimeContractVersion": str(
+                _release_bundle_value(bundle, "runtime_contract_version", "runtimeContractVersion")
+                or REASONING_ENGINE_RUNTIME_CONTRACT_VERSION
+            ),
+            "runtimeRevision": runtime_revision,
+            "comparisonContractVersion": str(
+                _release_bundle_value(bundle, "comparison_contract_version", "comparisonContractVersion")
+                or REASONING_ENGINE_COMPARISON_CONTRACT_VERSION
+            ),
+        },
+        "ruleboxFingerprint": str(rulebox_fingerprint or "").strip(),
+    }
+    encoded = json.dumps(
+        semantic_payload,
+        ensure_ascii=True,
+        sort_keys=True,
+        separators=(",", ":"),
+    ).encode("utf-8")
+    fingerprint = hashlib.sha256(encoded).hexdigest()
+    return {
+        "identityVersion": REASONING_ENGINE_RELEASE_IDENTITY_VERSION,
+        "releaseId": logical_release_id,
+        "runtimeRevision": runtime_revision,
+        "ruleboxFingerprint": str(rulebox_fingerprint or "").strip(),
+        "releaseFingerprint": fingerprint,
+        "validationCohortId": "reasoning-cohort:" + fingerprint[:24],
+    }
 
 
 @dataclass(frozen=True)

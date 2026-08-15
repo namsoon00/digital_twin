@@ -1622,12 +1622,28 @@ def build_projection_runtime_observation(
             "nativeRuleSelectionApplied": bool(execution.get("nativeRuleSelectionApplied")),
             "nativeRuleSelectionFallbackReason": _text(execution.get("nativeRuleSelectionFallbackReason")),
             "matchedRuleCount": matched_rule_count,
+            "matchedRuleIds": sorted({
+                _text(value)
+                for value in execution.get("typedbNativeRuleMatchedRuleIds") or []
+                if _text(value)
+            })[:160],
             "traceCount": trace_count,
             "relationCount": _integer(inference.get("relationCount")),
             "entityCount": _integer(inference.get("entityCount")),
             "executionStatus": _text(execution.get("status")),
             "nativeRuleTiming": native_rule_timing,
             "nativeStageTimings": native_stage_timings,
+            "nativeRulePreflight": {
+                "status": _text(execution.get("nativeRulePreflightStatus")),
+                "mode": _text(execution.get("nativeRulePreflightMode")),
+                "reason": _text(execution.get("nativeRulePreflightReason"))[:220],
+                "sourceCount": _integer(execution.get("nativeRulePreflightSourceCount")),
+                "loadedSourceCount": _integer(
+                    execution.get("nativeRulePreflightLoadedSourceCount")
+                ),
+                "entityCount": _integer(execution.get("nativeRulePreflightEntityCount")),
+                "relationCount": _integer(execution.get("nativeRulePreflightRelationCount")),
+            },
             "replayValidation": {
                 "version": _text(replay_validation.get("version")),
                 "status": _text(replay_validation.get("status")),

@@ -16,6 +16,7 @@ from ..domain.reasoning_shadow import (
     pack_projection_runtime_contexts,
     payload_hash,
 )
+from ..domain.reasoning_engine_versions import reasoning_release_identity
 
 
 DISABLED_VALUES = {"", "0", "false", "no", "off", "disabled"}
@@ -38,6 +39,27 @@ def integer(value: object, fallback: int, lower: int = 0, upper: int = 100000) -
 
 def iso_utc() -> str:
     return datetime.now(timezone.utc).isoformat().replace("+00:00", "Z")
+
+
+def parsed_utc(value: object):
+    try:
+        parsed = datetime.fromisoformat(str(value or "").replace("Z", "+00:00"))
+    except ValueError:
+        return None
+    if parsed.tzinfo is None:
+        parsed = parsed.replace(tzinfo=timezone.utc)
+    return parsed.astimezone(timezone.utc)
+
+
+def outcome_rulebox_fingerprint(outcome: Mapping[str, object]) -> str:
+    fingerprints = sorted({
+        str(item.get("ruleboxFingerprint") or "").strip()
+        for item in dict(outcome or {}).get("projections") or []
+        if isinstance(item, Mapping) and str(item.get("ruleboxFingerprint") or "").strip()
+    })
+    if not fingerprints:
+        return ""
+    return fingerprints[0] if len(fingerprints) == 1 else payload_hash(fingerprints)
 
 
 class ReasoningShadowScheduler:
@@ -124,6 +146,23 @@ class ReasoningShadowScheduler:
         )
         if not baseline_verifiable or len(baseline_projections) != len(source_states):
             return {"status": "baseline-not-verifiable", "saved": False}
+        baseline_deployment = self.registry.get(baseline_id)
+        candidate_deployment = self.registry.get(candidate_id)
+        baseline_health = dict(baseline_deployment.get("health") or {})
+        rulebox_fingerprint = (
+            outcome_rulebox_fingerprint(baseline_outcome)
+            or str(baseline_health.get("ruleboxFingerprint") or "")
+        )
+        if not rulebox_fingerprint:
+            return {"status": "missing-rulebox-release-fingerprint", "saved": False}
+        baseline_release = reasoning_release_identity(
+            baseline_deployment,
+            rulebox_fingerprint,
+        )
+        candidate_release = reasoning_release_identity(
+            candidate_deployment,
+            rulebox_fingerprint,
+        )
         projection_results = dict(
             getattr(monitor_runner, "last_ontology_projection_results", {}) or {}
         )
@@ -167,10 +206,17 @@ class ReasoningShadowScheduler:
             "accounts": sorted(source_states),
         })[:40]
         payload = {
-            "contractVersion": "reasoning-shadow-job-v1",
+            "contractVersion": "reasoning-shadow-job-v2",
             "queuedAt": iso_utc(),
             "baselineDeploymentId": baseline_id,
             "candidateDeploymentId": candidate_id,
+            "baselineReleaseIdentity": baseline_release,
+            "candidateReleaseIdentity": candidate_release,
+            "baselineReleaseId": str(baseline_release.get("releaseId") or ""),
+            "candidateReleaseId": str(candidate_release.get("releaseId") or ""),
+            "candidateReleaseFingerprint": str(candidate_release.get("releaseFingerprint") or ""),
+            "validationCohortId": str(candidate_release.get("validationCohortId") or ""),
+            "candidateRuntimeRevision": str(candidate_release.get("runtimeRevision") or ""),
             "sourceEventIds": source_event_ids,
             "accountIds": sorted(source_states),
             "symbols": clean_symbols,
@@ -187,6 +233,7 @@ class ReasoningShadowScheduler:
         }
         dedupe_key = payload_hash({
             "candidate": candidate_id,
+            "candidateReleaseFingerprint": candidate_release.get("releaseFingerprint"),
             "sourceSnapshots": source_snapshot_ids,
             "symbols": clean_symbols,
             "baselineOutcomeHash": baseline_outcome.get("outcomeHash"),
@@ -204,6 +251,8 @@ class ReasoningShadowScheduler:
             "saved": bool(result.get("saved")),
             "jobId": str(result.get("jobId") or ""),
             "candidateDeploymentId": candidate_id,
+            "candidateReleaseId": str(candidate_release.get("releaseId") or ""),
+            "validationCohortId": str(candidate_release.get("validationCohortId") or ""),
             "sourceSnapshotIds": source_snapshot_ids,
             "symbolCount": len(clean_symbols),
             "projectionRuntimeContextBytes": int(
@@ -302,6 +351,18 @@ class ReasoningEngineShadowRunner:
         guard = self.active_queue_guard()
         if not guard.get("ready"):
             return {"status": "deferred-active-queue", "processedCount": 0, "activeQueueGuard": guard}
+        current_deployment = self.registry.get(candidate_id)
+        current_bundle = dict(current_deployment.get("releaseBundle") or {})
+        current_release_id = str(
+            current_bundle.get("release_id")
+            or current_bundle.get("releaseId")
+            or candidate_id
+        )
+        current_runtime_revision = str(
+            current_bundle.get("runtime_revision")
+            or current_bundle.get("runtimeRevision")
+            or "unknown"
+        )
         job = self.queue.claim(
             candidate_id,
             self.worker_id,
@@ -311,6 +372,8 @@ class ReasoningEngineShadowRunner:
                 60,
                 7200,
             ),
+            candidate_release_id=current_release_id,
+            candidate_runtime_revision=current_runtime_revision,
         )
         if not job:
             return {"status": "idle", "processedCount": 0, "activeQueueGuard": guard}
@@ -320,6 +383,8 @@ class ReasoningEngineShadowRunner:
             "sourceStates": Mapping,
             "projectionTargetSymbolsByAccount": Mapping,
             "projectionRuntimeContextPacket": Mapping,
+            "baselineReleaseIdentity": Mapping,
+            "candidateReleaseIdentity": Mapping,
         }
         missing_contract_fields = [
             key
@@ -354,10 +419,32 @@ class ReasoningEngineShadowRunner:
                 "jobId": str(job.get("jobId") or ""),
                 "reason": reason,
             }
+        expected_release = dict(payload.get("candidateReleaseIdentity") or {})
+        current_release = reasoning_release_identity(
+            current_deployment,
+            expected_release.get("ruleboxFingerprint") or "",
+        )
+        if (
+            str(current_release.get("releaseFingerprint") or "")
+            != str(expected_release.get("releaseFingerprint") or "")
+        ):
+            reason = "Shadow job belongs to a stale candidate release and was discarded."
+            self.queue.discard(str(job.get("jobId") or ""), reason)
+            return {
+                "status": "stale-release-input",
+                "processedCount": 0,
+                "jobId": str(job.get("jobId") or ""),
+                "reason": reason,
+            }
         deployment_before_run = self.registry.get(candidate_id)
         started = time.perf_counter()
         try:
             runner = self.candidate_runner_factory(payload)
+            runner_release = dict(getattr(runner, "shadow_release_identity", {}) or {})
+            if str(runner_release.get("releaseFingerprint") or "") != str(
+                expected_release.get("releaseFingerprint") or ""
+            ):
+                raise RuntimeError("V2 runtime release does not match the immutable shadow job release")
             candidate_events = runner.run_once(
                 dry_run=True,
                 force=False,
@@ -381,9 +468,7 @@ class ReasoningEngineShadowRunner:
                     ) or 0),
                 ),
             )
-            release_fingerprint = str(
-                getattr(runner, "shadow_release_fingerprint", "") or ""
-            )
+            release_fingerprint = str(runner_release.get("releaseFingerprint") or "")
             temporal = self.temporal_comparisons(payload)
             comparison = compare_engine_outcomes(
                 payload.get("baselineOutcome") or {},
@@ -391,6 +476,16 @@ class ReasoningEngineShadowRunner:
                 temporal,
             ).to_dict()
             comparison["candidateReleaseFingerprint"] = release_fingerprint
+            comparison["baselineReleaseId"] = str(payload.get("baselineReleaseId") or "")
+            comparison["candidateReleaseId"] = str(payload.get("candidateReleaseId") or "")
+            comparison["validationCohortId"] = str(payload.get("validationCohortId") or "")
+            comparison["candidateRuntimeRevision"] = str(payload.get("candidateRuntimeRevision") or "")
+            comparison["ruleboxFingerprint"] = str(runner_release.get("ruleboxFingerprint") or "")
+            queued_at = parsed_utc(payload.get("queuedAt"))
+            comparison["queueWaitMs"] = max(
+                0,
+                int((datetime.now(timezone.utc) - queued_at).total_seconds() * 1000),
+            ) if queued_at else 0
             comparison["candidateWarmup"] = (
                 str(deployment_before_run.get("status") or "") == "provisioning"
             )
@@ -419,7 +514,12 @@ class ReasoningEngineShadowRunner:
                 "lastComparisonAt": recorded.get("createdAt"),
                 "durationMs": duration_ms,
                 "shadowDeliveryCount": comparison.get("shadowDeliveryCount"),
+                "ruleboxFingerprint": str(runner_release.get("ruleboxFingerprint") or ""),
+                "candidateReleaseId": str(runner_release.get("releaseId") or ""),
+                "candidateReleaseFingerprint": release_fingerprint if candidate_usable else "",
                 "releaseFingerprint": release_fingerprint if candidate_usable else "",
+                "candidateRuntimeRevision": str(runner_release.get("runtimeRevision") or ""),
+                "validationCohortId": str(runner_release.get("validationCohortId") or ""),
             })
             return {
                 "status": "completed",

@@ -1194,6 +1194,8 @@ def reasoning_engine_platform_status_payload() -> Dict[str, object]:
 
 
 def reasoning_engine_comparisons_payload(query: Dict[str, List[str]]) -> Dict[str, object]:
+    from .reasoning_engine_factory import build_reasoning_engine_platform
+
     settings = runtime_settings()
     deployment_id = str(first_query(query, "deploymentId") or "ontology-v2-shadow")
     try:
@@ -1201,9 +1203,29 @@ def reasoning_engine_comparisons_payload(query: Dict[str, List[str]]) -> Dict[st
     except (TypeError, ValueError):
         limit = 50
     store = stores.reasoning_engine_comparison_store(settings)
+    platform = build_reasoning_engine_platform(settings)
+    platform.initialize()
+    release = platform.release_identity(deployment_id)
+    historical = str(first_query(query, "historical") or "").strip().lower() in {
+        "1", "true", "yes", "on",
+    }
+    release_fingerprint = "" if historical else str(release.get("releaseFingerprint") or "")
+    cohort_id = "" if historical else str(release.get("validationCohortId") or "")
     return {
-        "summary": store.summary(deployment_id, limit=limit),
-        "comparisons": store.latest(deployment_id, limit=limit),
+        "release": release,
+        "historical": historical,
+        "summary": store.summary(
+            deployment_id,
+            limit=limit,
+            candidate_release_fingerprint=release_fingerprint,
+            validation_cohort_id=cohort_id,
+        ),
+        "comparisons": store.latest(
+            deployment_id,
+            limit=limit,
+            candidate_release_fingerprint=release_fingerprint,
+            validation_cohort_id=cohort_id,
+        ),
     }
 
 

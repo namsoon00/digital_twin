@@ -12,6 +12,7 @@ from ..domain.reasoning_engine_versions import (
     engine_status,
     engine_transition_allowed,
 )
+from ..domain.reasoning_shadow import reasoning_comparison_summary
 from ..domain.time_series_storage import (
     TemporalFeatureSnapshot,
     TimeSeriesBackendDescriptor,
@@ -342,14 +343,19 @@ class MySQLReasoningShadowJobStore(MySQLOperationalConnection):
         job_id = "reasoning-shadow:" + uuid.uuid4().hex
         clean_scope = str(scope_key or "global")[:191]
         clean_candidate = str(candidate_deployment_id or "")[:191]
+        clean_release_id = str(dict(payload or {}).get("candidateReleaseId") or "")[:191]
+        clean_runtime_revision = str(
+            dict(payload or {}).get("candidateRuntimeRevision") or ""
+        )[:64]
         with self.transaction() as connection:
             cursor = connection.execute(
                 """
                 INSERT IGNORE INTO reasoning_engine_shadow_jobs (
                     job_id, dedupe_key, scope_key, baseline_deployment_id,
-                    candidate_deployment_id, source_event_id, payload_json,
+                    candidate_deployment_id, candidate_release_id,
+                    candidate_runtime_revision, source_event_id, payload_json,
                     job_status, available_at, created_at, updated_at
-                ) VALUES (%s, %s, %s, %s, %s, %s, %s, 'queued', %s, %s, %s)
+                ) VALUES (%s, %s, %s, %s, %s, %s, %s, %s, %s, 'queued', %s, %s, %s)
                 """,
                 (
                     job_id,
@@ -357,6 +363,8 @@ class MySQLReasoningShadowJobStore(MySQLOperationalConnection):
                     clean_scope,
                     str(baseline_deployment_id or "")[:191],
                     clean_candidate,
+                    clean_release_id,
+                    clean_runtime_revision,
                     str(source_event_id or "")[:191],
                     canonical_json(dict(payload or {})),
                     stamp,
@@ -379,7 +387,14 @@ class MySQLReasoningShadowJobStore(MySQLOperationalConnection):
                 )
         return {"saved": saved, "jobId": job_id if saved else "", "status": "queued" if saved else "duplicate"}
 
-    def claim(self, candidate_deployment_id: str, worker_id: str, lease_seconds: int = 3600) -> Dict[str, object]:
+    def claim(
+        self,
+        candidate_deployment_id: str,
+        worker_id: str,
+        lease_seconds: int = 3600,
+        candidate_release_id: str = "",
+        candidate_runtime_revision: str = "",
+    ) -> Dict[str, object]:
         stamp = iso_utc()
         lease_until = iso_utc(utc_now() + timedelta(seconds=max(60, int(lease_seconds or 3600))))
         with self.transaction() as connection:
@@ -395,17 +410,26 @@ class MySQLReasoningShadowJobStore(MySQLOperationalConnection):
                 """,
                 (stamp, stamp, str(candidate_deployment_id or ""), stamp),
             )
+            filters = ""
+            params = [str(candidate_deployment_id or "")]
+            if str(candidate_release_id or ""):
+                filters += " AND candidate_release_id = %s"
+                params.append(str(candidate_release_id or ""))
+            if str(candidate_runtime_revision or ""):
+                filters += " AND candidate_runtime_revision = %s"
+                params.append(str(candidate_runtime_revision or ""))
             row = connection.execute(
                 """
                 SELECT * FROM reasoning_engine_shadow_jobs
                 WHERE candidate_deployment_id = %s
+                """ + filters + """
                   AND job_status IN ('queued', 'retry')
                   AND (available_at = '' OR available_at <= %s)
                   AND (lease_expires_at = '' OR lease_expires_at < %s)
                 ORDER BY created_at, job_id
                 LIMIT 1 FOR UPDATE SKIP LOCKED
                 """,
-                (str(candidate_deployment_id or ""), stamp, stamp),
+                (*params, stamp, stamp),
             ).fetchone()
             if not row:
                 return {}
@@ -494,22 +518,48 @@ class MySQLReasoningShadowJobStore(MySQLOperationalConnection):
             )
         return {"jobId": str(job_id or ""), "attemptCount": attempts, "terminal": terminal}
 
-    def summary(self) -> Dict[str, object]:
+    def summary(
+        self,
+        candidate_deployment_id: str = "",
+        candidate_release_id: str = "",
+        candidate_runtime_revision: str = "",
+    ) -> Dict[str, object]:
+        filters = []
+        params = []
+        if str(candidate_deployment_id or ""):
+            filters.append("candidate_deployment_id = %s")
+            params.append(str(candidate_deployment_id or ""))
+        if str(candidate_release_id or ""):
+            filters.append("candidate_release_id = %s")
+            params.append(str(candidate_release_id or ""))
+        if str(candidate_runtime_revision or ""):
+            filters.append("candidate_runtime_revision = %s")
+            params.append(str(candidate_runtime_revision or ""))
+        where_sql = " WHERE " + " AND ".join(filters) if filters else ""
         with self.connect() as connection:
             rows = connection.execute(
                 """
-                SELECT candidate_deployment_id, job_status, COUNT(*) AS row_count,
+                SELECT candidate_deployment_id, candidate_release_id,
+                       candidate_runtime_revision, job_status, COUNT(*) AS row_count,
                        MIN(created_at) AS oldest, MAX(updated_at) AS latest
                 FROM reasoning_engine_shadow_jobs
-                GROUP BY candidate_deployment_id, job_status
-                """
+                """ + where_sql + """
+                GROUP BY candidate_deployment_id, candidate_release_id,
+                         candidate_runtime_revision, job_status
+                """,
+                tuple(params),
             ).fetchall()
         deployments: Dict[str, Dict[str, object]] = {}
         for row in rows or []:
             deployment_id = str(row.get("candidate_deployment_id") or "")
+            release_id = str(row.get("candidate_release_id") or "")
+            runtime_revision = str(row.get("candidate_runtime_revision") or "")
+            deployment_key = "|".join([deployment_id, release_id, runtime_revision])
             status = str(row.get("job_status") or "")
-            item = deployments.setdefault(deployment_id, {
+            item = deployments.setdefault(deployment_key, {
                 "candidateDeploymentId": deployment_id,
+                "candidateReleaseId": release_id,
+                "candidateRuntimeRevision": runtime_revision,
                 "counts": {},
                 "oldest": {},
                 "latest": {},
@@ -528,6 +578,8 @@ class MySQLReasoningShadowJobStore(MySQLOperationalConnection):
             "scopeKey": str(values.get("scope_key") or ""),
             "baselineDeploymentId": str(values.get("baseline_deployment_id") or ""),
             "candidateDeploymentId": str(values.get("candidate_deployment_id") or ""),
+            "candidateReleaseId": str(values.get("candidate_release_id") or ""),
+            "candidateRuntimeRevision": str(values.get("candidate_runtime_revision") or ""),
             "sourceEventId": str(values.get("source_event_id") or ""),
             "payload": json_value(values.get("payload_json"), {}),
             "status": str(values.get("job_status") or ""),
@@ -553,15 +605,23 @@ class MySQLReasoningEngineComparisonStore(MySQLOperationalConnection):
                 """
                 INSERT INTO reasoning_engine_comparisons (
                     comparison_id, baseline_deployment_id, candidate_deployment_id,
-                    source_event_id, comparison_status, fact_parity_pct,
+                    baseline_release_id, candidate_release_id,
+                    candidate_release_fingerprint, validation_cohort_id,
+                    candidate_runtime_revision, source_event_id,
+                    comparison_status, fact_parity_pct,
                     rule_slot_coverage_pct, unexplained_decision_difference_count,
                     shadow_delivery_count, payload_json, created_at, updated_at
-                ) VALUES (%s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s)
+                ) VALUES (%s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s)
                 """,
                 (
                     comparison_id,
                     str(baseline_deployment_id or "")[:191],
                     str(candidate_deployment_id or "")[:191],
+                    str(values.get("baselineReleaseId") or "")[:191],
+                    str(values.get("candidateReleaseId") or "")[:191],
+                    str(values.get("candidateReleaseFingerprint") or "")[:64],
+                    str(values.get("validationCohortId") or "")[:96],
+                    str(values.get("candidateRuntimeRevision") or "")[:64],
                     str(source_event_id or "")[:191],
                     str(values.get("status") or "unknown")[:32],
                     float(values.get("factParityPct") or 0.0),
@@ -575,65 +635,51 @@ class MySQLReasoningEngineComparisonStore(MySQLOperationalConnection):
             )
         return {"comparisonId": comparison_id, "createdAt": stamp, **values}
 
-    def latest(self, candidate_deployment_id: str, limit: int = 100) -> List[Dict[str, object]]:
+    def latest(
+        self,
+        candidate_deployment_id: str,
+        limit: int = 100,
+        candidate_release_fingerprint: str = "",
+        validation_cohort_id: str = "",
+    ) -> List[Dict[str, object]]:
+        filters = ["candidate_deployment_id = %s"]
+        params = [str(candidate_deployment_id or "")]
+        if str(candidate_release_fingerprint or ""):
+            filters.append("candidate_release_fingerprint = %s")
+            params.append(str(candidate_release_fingerprint or ""))
+        if str(validation_cohort_id or ""):
+            filters.append("validation_cohort_id = %s")
+            params.append(str(validation_cohort_id or ""))
         with self.connect() as connection:
             rows = connection.execute(
                 """
                 SELECT * FROM reasoning_engine_comparisons
-                WHERE candidate_deployment_id = %s
+                WHERE """ + " AND ".join(filters) + """
                 ORDER BY created_at DESC, comparison_id DESC LIMIT %s
                 """,
-                (str(candidate_deployment_id or ""), max(1, min(1000, int(limit or 100)))),
+                (*params, max(1, min(1000, int(limit or 100)))),
             ).fetchall()
         return [self.row_payload(row) for row in rows or []]
 
-    def summary(self, candidate_deployment_id: str, limit: int = 200) -> Dict[str, object]:
-        rows = self.latest(candidate_deployment_id, limit=limit)
-        status_counts: Dict[str, int] = {}
-        symbols = set()
-        fact_values, rule_values, baseline_durations, candidate_durations = [], [], [], []
-        unexplained = 0
-        shadow_deliveries = 0
-        for index, row in enumerate(rows):
-            status = str(row.get("status") or "unknown")
-            status_counts[status] = status_counts.get(status, 0) + 1
-            fact_values.append(float(row.get("factParityPct") or 0.0))
-            rule_values.append(float(row.get("ruleSlotCoveragePct") or 0.0))
-            unexplained += int(row.get("unexplainedDecisionDifferenceCount") or 0)
-            shadow_deliveries += int(row.get("shadowDeliveryCount") or 0)
-            payload = dict(row.get("payload") or {})
-            symbols.update(str(value or "").upper().strip() for value in payload.get("symbols") or [] if str(value or "").strip())
-            warmup = bool(payload.get("candidateWarmup")) or (
-                len(rows) > 1 and index == len(rows) - 1
-            )
-            if not warmup:
-                baseline_durations.append(int(payload.get("baselineDurationMs") or 0))
-                candidate_durations.append(int(payload.get("candidateDurationMs") or 0))
-
-        def percentile95(values: List[int]) -> int:
-            ordered = sorted(max(0, int(value or 0)) for value in values)
-            if not ordered:
-                return 0
-            return ordered[min(len(ordered) - 1, max(0, int(round(len(ordered) * 0.95 + 0.499)) - 1))]
-
-        return {
-            "candidateDeploymentId": str(candidate_deployment_id or ""),
-            "sampleCount": len(rows),
-            "statusCounts": status_counts,
-            "equivalentCount": int(status_counts.get("equivalent") or 0),
-            "equivalentPct": round(100.0 * int(status_counts.get("equivalent") or 0) / len(rows), 3) if rows else 0.0,
-            "factParityPct": round(sum(fact_values) / len(fact_values), 3) if fact_values else 0.0,
-            "minimumFactParityPct": min(fact_values) if fact_values else 0.0,
-            "ruleSlotCoveragePct": round(sum(rule_values) / len(rule_values), 3) if rule_values else 0.0,
-            "minimumRuleSlotCoveragePct": min(rule_values) if rule_values else 0.0,
-            "unexplainedDecisionDifferenceCount": unexplained,
-            "shadowDeliveryCount": shadow_deliveries,
-            "distinctSymbolCount": len(symbols),
-            "symbols": sorted(symbols),
-            "baselineP95DurationMs": percentile95(baseline_durations),
-            "candidateP95DurationMs": percentile95(candidate_durations),
-            "latestComparisonAt": str(rows[0].get("createdAt") or "") if rows else "",
-        }
+    def summary(
+        self,
+        candidate_deployment_id: str,
+        limit: int = 200,
+        candidate_release_fingerprint: str = "",
+        validation_cohort_id: str = "",
+    ) -> Dict[str, object]:
+        rows = self.latest(
+            candidate_deployment_id,
+            limit=limit,
+            candidate_release_fingerprint=candidate_release_fingerprint,
+            validation_cohort_id=validation_cohort_id,
+        )
+        return reasoning_comparison_summary(
+            rows,
+            candidate_deployment_id=candidate_deployment_id,
+            candidate_release_fingerprint=candidate_release_fingerprint,
+            validation_cohort_id=validation_cohort_id,
+        )
 
     @staticmethod
     def row_payload(row: Mapping[str, object]) -> Dict[str, object]:
@@ -643,6 +689,11 @@ class MySQLReasoningEngineComparisonStore(MySQLOperationalConnection):
             "comparisonId": str(values.get("comparison_id") or ""),
             "baselineDeploymentId": str(values.get("baseline_deployment_id") or ""),
             "candidateDeploymentId": str(values.get("candidate_deployment_id") or ""),
+            "baselineReleaseId": str(values.get("baseline_release_id") or ""),
+            "candidateReleaseId": str(values.get("candidate_release_id") or ""),
+            "candidateReleaseFingerprint": str(values.get("candidate_release_fingerprint") or ""),
+            "validationCohortId": str(values.get("validation_cohort_id") or ""),
+            "candidateRuntimeRevision": str(values.get("candidate_runtime_revision") or ""),
             "sourceEventId": str(values.get("source_event_id") or ""),
             "status": str(values.get("comparison_status") or ""),
             "factParityPct": float(values.get("fact_parity_pct") or 0.0),

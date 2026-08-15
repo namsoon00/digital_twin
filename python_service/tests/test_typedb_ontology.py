@@ -422,6 +422,56 @@ class TypeDBOntologyRepositoryTests(unittest.TestCase):
         self.assertEqual("incomplete", rejected["status"])
         self.assertNotIn("graph", rejected)
 
+    def test_projection_preflight_graph_accepts_verified_partial_target_without_complete_absence(self):
+        graph = PortfolioOntology(
+            "main",
+            entities=[OntologyEntity("stock:AAPL", "Apple", "stock", {
+                "ontologyBox": "ABox", "symbol": "AAPL",
+            })],
+            worldview={
+                "worldId": "portfolio:local:main",
+                "worldviewManifestId": "abox-manifest:active",
+                "runtimeProjectionMode": "abox-facts-only-typedb-native-rules",
+            },
+        )
+        graph_topology = native_rule_planner_topology(graph)
+        retained_graph = PortfolioOntology(
+            "main",
+            entities=[OntologyEntity("stock:MSFT", "Microsoft", "stock", {
+                "ontologyBox": "ABox", "symbol": "MSFT",
+            })],
+        )
+        full_topology = merge_native_rule_planner_topology(
+            graph_topology,
+            native_rule_planner_topology(retained_graph),
+        )["topology"]
+        # The active manifest fingerprint covers the routed topology while the
+        # just-written graph intentionally contains only the changed target.
+        graph.worldview["nativeRulePlannerTopology"] = full_topology
+        active = {
+            "status": "ok",
+            "worldId": "portfolio:local:main",
+            "worldviewManifestId": "abox-manifest:active",
+            "nativeRulePlannerTopology": full_topology,
+        }
+        execution_topology = typedb_native_rule_planner_topology_for_execution(
+            active, full_topology, ["AAPL", "MSFT"]
+        )
+
+        result = typedb_projection_preflight_graph_for_execution(
+            graph,
+            "abox-manifest:active",
+            active,
+            execution_topology,
+            ["AAPL", "MSFT"],
+            "portfolio:local:main",
+        )
+
+        self.assertEqual("partial", result["status"])
+        self.assertEqual(2, result["sourceCount"])
+        self.assertEqual(1, result["loadedSourceCount"])
+        self.assertIs(graph, result["graph"])
+
     def test_projection_graph_assembly_cache_reuses_identical_source_without_shared_mutation(self):
         class Repository:
             store_key = "typedb"

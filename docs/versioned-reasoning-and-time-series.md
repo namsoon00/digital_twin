@@ -200,10 +200,62 @@ domain:
 - `REASONING_ENGINE_ACTIVE_DEPLOYMENT_ID`
 - `REASONING_ENGINE_DELIVERY_DEPLOYMENT_ID`
 - `REASONING_ENGINE_CANDIDATE_DEPLOYMENT_ID`
+- `REASONING_ENGINE_ACTIVE_RELEASE_ID`
+- `REASONING_ENGINE_CANDIDATE_RELEASE_ID`
 - `REASONING_ENGINE_SHADOW_ENABLED`
 - `REASONING_ENGINE_SHADOW_TYPEDB_DATABASE`
 - `REASONING_ENGINE_PROMOTION_MINIMUM_COMPARISONS`
 - `REASONING_ENGINE_PROMOTION_MINIMUM_SYMBOLS`
+- `REASONING_ENGINE_PROMOTION_MINIMUM_NATIVE_INFERENCE_SAMPLES`
+- `REASONING_ENGINE_PROMOTION_MINIMUM_DECISION_SAMPLES`
+- `REASONING_ENGINE_PROMOTION_MINIMUM_MATCHED_RULES`
+- `REASONING_ENGINE_PROMOTION_MINIMUM_MARKET_CLASSES`
+- `REASONING_ENGINE_PROMOTION_MAXIMUM_CANDIDATE_P95_MS`
+- `REASONING_ENGINE_PROMOTION_MAXIMUM_QUEUE_WAIT_P95_MS`
+
+## Immutable Release Cohorts
+
+A deployment name such as `ontology-v2-shadow` is a stable slot, not a
+validation identity. Every comparison is bound to a fingerprint containing
+the runtime revision, TBox, RuleBox, prompt, temporal feature set, source
+contracts, graph/time-series bindings, and the concrete RuleBox hash. Any
+change starts a new `validationCohortId`. Promotion status and the default HTTP
+comparison view read only that cohort; older rows remain historical audit data.
+
+Queued shadow jobs carry the same immutable release identity. A worker claims
+only jobs for its current logical release and runtime revision, then verifies
+the full fingerprint before TypeDB execution. Old jobs are never replayed by a
+new code release.
+
+## Substantive Promotion Evidence
+
+Parity by itself is not sufficient because two empty outputs can be 100%
+equal. Promotion additionally requires configurable minimums for:
+
+- comparisons and distinct symbols;
+- samples with at least one TypeDB native match;
+- samples with at least one user-facing decision candidate;
+- distinct matched RuleBox rules and market classes;
+- absolute candidate p95 runtime and shadow queue-wait p95;
+- zero delivery attempts and no unexplained differences.
+
+Comparison rows keep bounded per-phase timings for projection and TypeDB native
+execution. These timings are operational evidence only and never become
+investment facts.
+
+## Native Preflight Read Policy
+
+The projection worker passes its just-persisted, manifest-verified ABox graph
+to native rule execution. A complete target graph can prove negative
+conditions. A verified partial graph may optimize only the subjects it
+contains; missing subjects stay unknown, so their rules cannot be pruned.
+TypeDB still evaluates every surviving rule and remains the sole investment
+rule evaluator.
+
+The expensive durable ABox reread is disabled in the realtime path by default
+with `TYPEDB_NATIVE_RULE_DURABLE_PREFLIGHT_FALLBACK_ENABLED=0`. It can be
+enabled for diagnostics or a controlled rollback without changing inference
+semantics.
 
 ## Adding V3 Or Another Database
 

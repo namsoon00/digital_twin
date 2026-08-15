@@ -1163,6 +1163,11 @@ MYSQL_SCHEMA = [
         comparison_id VARCHAR(191) PRIMARY KEY,
         baseline_deployment_id VARCHAR(191) NOT NULL,
         candidate_deployment_id VARCHAR(191) NOT NULL,
+        baseline_release_id VARCHAR(191) NOT NULL DEFAULT '',
+        candidate_release_id VARCHAR(191) NOT NULL DEFAULT '',
+        candidate_release_fingerprint VARCHAR(64) NOT NULL DEFAULT '',
+        validation_cohort_id VARCHAR(96) NOT NULL DEFAULT '',
+        candidate_runtime_revision VARCHAR(64) NOT NULL DEFAULT '',
         source_event_id VARCHAR(191) NOT NULL DEFAULT '',
         comparison_status VARCHAR(32) NOT NULL DEFAULT 'pending',
         fact_parity_pct DECIMAL(6,3) NOT NULL DEFAULT 0,
@@ -1173,6 +1178,7 @@ MYSQL_SCHEMA = [
         created_at VARCHAR(40) NOT NULL,
         updated_at VARCHAR(40) NOT NULL,
         KEY idx_reasoning_comparison_candidate_time (candidate_deployment_id, created_at),
+        KEY idx_reasoning_comparison_release_time (candidate_deployment_id, candidate_release_fingerprint, created_at),
         KEY idx_reasoning_comparison_status_time (comparison_status, created_at)
     ) ENGINE=InnoDB DEFAULT CHARSET=utf8mb4 COLLATE=utf8mb4_unicode_ci
     """,
@@ -1183,6 +1189,8 @@ MYSQL_SCHEMA = [
         scope_key VARCHAR(191) NOT NULL,
         baseline_deployment_id VARCHAR(191) NOT NULL,
         candidate_deployment_id VARCHAR(191) NOT NULL,
+        candidate_release_id VARCHAR(191) NOT NULL DEFAULT '',
+        candidate_runtime_revision VARCHAR(64) NOT NULL DEFAULT '',
         source_event_id VARCHAR(191) NOT NULL DEFAULT '',
         payload_json LONGTEXT NOT NULL,
         job_status VARCHAR(32) NOT NULL DEFAULT 'queued',
@@ -1197,7 +1205,8 @@ MYSQL_SCHEMA = [
         UNIQUE KEY uq_reasoning_shadow_dedupe (candidate_deployment_id, dedupe_key),
         KEY idx_reasoning_shadow_status_available (job_status, available_at),
         KEY idx_reasoning_shadow_scope_status (candidate_deployment_id, scope_key, job_status),
-        KEY idx_reasoning_shadow_candidate_time (candidate_deployment_id, created_at)
+        KEY idx_reasoning_shadow_candidate_time (candidate_deployment_id, created_at),
+        KEY idx_reasoning_shadow_release_ready (candidate_deployment_id, candidate_release_id, candidate_runtime_revision, job_status, created_at)
     ) ENGINE=InnoDB DEFAULT CHARSET=utf8mb4 COLLATE=utf8mb4_unicode_ci
     """,
     """

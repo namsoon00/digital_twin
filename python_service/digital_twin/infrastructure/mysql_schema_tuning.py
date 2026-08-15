@@ -90,6 +90,20 @@ class MySQLKeyPartitionDefinition:
 
 
 MYSQL_OPERATIONAL_INDEXES: Dict[str, Sequence[MySQLIndexDefinition]] = {
+    "reasoning_engine_comparisons": (
+        MySQLIndexDefinition(
+            "reasoning_engine_comparisons",
+            "idx_reasoning_comparison_release_time",
+            "`candidate_deployment_id`, `candidate_release_fingerprint`, `created_at`",
+        ),
+    ),
+    "reasoning_engine_shadow_jobs": (
+        MySQLIndexDefinition(
+            "reasoning_engine_shadow_jobs",
+            "idx_reasoning_shadow_release_ready",
+            "`candidate_deployment_id`, `candidate_release_id`, `candidate_runtime_revision`, `job_status`, `created_at`",
+        ),
+    ),
     "service_accounts": (
         MySQLIndexDefinition("service_accounts", "idx_service_accounts_enabled_created", "`enabled`, `created_at`, `id`"),
     ),
@@ -414,6 +428,17 @@ MYSQL_OPERATIONAL_INDEXES: Dict[str, Sequence[MySQLIndexDefinition]] = {
 
 
 MYSQL_OPERATIONAL_COLUMNS: Dict[str, Sequence[MySQLColumnDefinition]] = {
+    "reasoning_engine_comparisons": (
+        MySQLColumnDefinition("reasoning_engine_comparisons", "baseline_release_id", "VARCHAR(191) NOT NULL DEFAULT ''"),
+        MySQLColumnDefinition("reasoning_engine_comparisons", "candidate_release_id", "VARCHAR(191) NOT NULL DEFAULT ''"),
+        MySQLColumnDefinition("reasoning_engine_comparisons", "candidate_release_fingerprint", "VARCHAR(64) NOT NULL DEFAULT ''"),
+        MySQLColumnDefinition("reasoning_engine_comparisons", "validation_cohort_id", "VARCHAR(96) NOT NULL DEFAULT ''"),
+        MySQLColumnDefinition("reasoning_engine_comparisons", "candidate_runtime_revision", "VARCHAR(64) NOT NULL DEFAULT ''"),
+    ),
+    "reasoning_engine_shadow_jobs": (
+        MySQLColumnDefinition("reasoning_engine_shadow_jobs", "candidate_release_id", "VARCHAR(191) NOT NULL DEFAULT ''"),
+        MySQLColumnDefinition("reasoning_engine_shadow_jobs", "candidate_runtime_revision", "VARCHAR(64) NOT NULL DEFAULT ''"),
+    ),
     "market_time_series_observations": (
         MySQLColumnDefinition(
             "market_time_series_observations",

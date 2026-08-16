@@ -149,6 +149,45 @@ class ReasoningSnapshotReplayTests(unittest.TestCase):
         self.assertEqual("deferred", replay["status"])
         self.assertIn("predates", replay["reason"])
 
+    def test_source_reads_the_exact_verified_history_boundary(self):
+        class PointInTimeStore(SnapshotStore):
+            def __init__(self):
+                super().__init__(monitor_state("2026-07-29T00:05:00Z"))
+                self.requested = []
+
+            def reasoning_snapshot_metadata_at(self, account_id, generated_at):
+                self.requested.append((account_id, generated_at, "metadata"))
+                return {
+                    "accountId": account_id,
+                    "mode": "live",
+                    "status": "ok",
+                    "generatedAt": generated_at,
+                }
+
+            def reasoning_snapshot_state_at(self, account_id, generated_at, target_symbols=None):
+                self.requested.append((account_id, generated_at, tuple(target_symbols or [])))
+                return monitor_state(generated_at)
+
+        store = PointInTimeStore()
+        source = LatestMonitorSnapshotReasoningSource(
+            store,
+            now_provider=lambda: datetime(2026, 7, 29, 0, 6, tzinfo=timezone.utc),
+        )
+        context = {
+            "sourceObservedAt": "2026-07-29T00:02:00Z",
+            "targetSymbols": ["AAPL"],
+            "verifiedSourceSnapshots": [{
+                "accountId": "acct",
+                "generatedAt": "2026-07-29T00:02:00Z",
+            }],
+        }
+
+        self.assertTrue(source.preflight([account()], context)["ready"])
+        snapshot = source(account(), context)
+
+        self.assertEqual("2026-07-29T00:02:00Z", snapshot.generated_at)
+        self.assertIn(("acct", "2026-07-29T00:02:00Z", ("AAPL",)), store.requested)
+
     def test_preflight_reads_only_the_snapshot_boundary_before_replay(self):
         class MetadataStore(SnapshotStore):
             def __init__(self):

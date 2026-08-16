@@ -20,6 +20,19 @@ This project uses a local-first, DDD-oriented, event-driven architecture. Future
   candidate RuleBox fingerprint after its first successful comparison and
   never combine comparison history from different release fingerprints under
   one deployment ID.
+- A new reasoning-engine version must consume durable source events through
+  its own leased queue and implement the version-neutral
+  `InvestmentReasoningEngine` contract. It must not call the preceding
+  version, wait for its completion, or construct its orchestration runner.
+  Shared domain ports and approved TBox/RuleBox releases may be reused; input
+  assembly, TypeDB execution, decision-candidate construction, health, and
+  delivery authorization remain explicit replaceable stages. Stable V1/V2/V3
+  deployment IDs are separate from the mutable active/delivery/candidate
+  control pointers.
+- A reasoning request bound to `verifiedSourceSnapshot.generatedAt` must read
+  that exact MySQL snapshot-history row. Never substitute a newer snapshot.
+  If the point-in-time row is unavailable, defer or reject the request with an
+  auditable reason before opening a TypeDB write transaction.
 - Make replay inputs identical before comparing engine outputs. The active and
   shadow engines must consume the same secret-free ontology runtime context,
   original graph-input symbols, source observation clock, and temporal feature
@@ -214,6 +227,7 @@ Infrastructure:
 - `python_service/digital_twin/infrastructure/json_monitor_state.py`: legacy JSON monitor state compatibility only
 - `python_service/digital_twin/infrastructure/toss_snapshots.py`: Toss adapter and demo snapshot fallback
 - `python_service/digital_twin/application/notification_service.py`: queued notification delivery worker
+- `python_service/digital_twin/application/independent_reasoning_engine.py`: independent versioned reasoning input assembly, scoped graph execution, candidate construction, and leased job orchestration
 - `python_service/digital_twin/application/ai_inference_queue_service.py`: immutable notification AI request handoff, leased MAX inference, validation, and result publication
 - `python_service/digital_twin/application/decision_continuity_service.py`: indexed prior-decision continuity assembler used before AI queue capture
 - `python_service/digital_twin/infrastructure/notifications.py`: notification queue adapters plus console and Telegram delivery
@@ -226,6 +240,12 @@ Infrastructure:
 - `python_service/digital_twin/infrastructure/ontology_graph_store.py`: graph-store composition root; runtime code should import this factory instead of constructing the database adapter directly
 - `python_service/digital_twin/infrastructure/typedb_ontology.py`: TypeDB graph-store adapter; production InferenceBox output is materialized from TypeDB ABox facts and TypeDB schema functions into TypeDB InferenceBox, not from a non-TypeDB runtime fallback. InferenceBox writes must be generation-scoped so a failed materialization does not erase the last usable graph-backed judgement.
 - `python_service/digital_twin/infrastructure/service_factory.py`: runtime composition of use cases and adapters
+
+Versioned reasoning engines must own separate durable queue, graph-database,
+release, and delivery-authorization boundaries. Promotion must switch the
+active deployment and read-side graph binding together. A switched-out engine
+must fail closed before consuming another request even if its old process is
+still shutting down.
 
 Compatibility modules:
 

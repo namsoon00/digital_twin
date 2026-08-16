@@ -55,6 +55,7 @@ from .mysql_reasoning_mailbox import MySQLOntologyReasoningMailboxStore
 from .mysql_investment_domain import MySQLInvestmentDomainStore
 from .mysql_versioned_runtime import (
     MySQLReasoningEngineComparisonStore,
+    MySQLReasoningEngineJobStore,
     MySQLReasoningEngineRegistryStore,
     MySQLReasoningShadowJobStore,
     MySQLTemporalFeatureSnapshotStore,

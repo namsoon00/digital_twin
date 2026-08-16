@@ -66,6 +66,7 @@ from .mysql_notification_jobs import MySQLNotificationJobStore
 from .mysql_operational_connection import MYSQL_SCHEMA, MySQLConnectionProxy, MySQLOperationalConnection
 from .mysql_operational_events import domain_event_from_row, insert_domain_event_with_connection
 from .mysql_reasoning_mailbox import MySQLOntologyReasoningMailboxStore
+from .mysql_versioned_runtime import MySQLReasoningEngineJobStore
 from .mysql_operational_helpers import (
     _is_duplicate_key_error,
     _json_loads,
@@ -337,6 +338,46 @@ class MySQLMonitorStore(MySQLOperationalConnection):
                 ).fetchall()
         history = [_json_loads(row["payload_json"], {}) for row in reversed(rows)]
         return [item for item in history if item]
+
+    def reasoning_snapshot_state_at(
+        self,
+        account_id: str,
+        generated_at: str,
+        target_symbols=None,
+    ) -> Dict[str, object]:
+        """Read the immutable monitor snapshot named by a reasoning request."""
+
+        del target_symbols  # Historical projection rows are already compact ontology inputs.
+        with self.connect() as connection:
+            row = connection.execute(
+                """
+                SELECT payload_json, projection_payload_json
+                FROM monitor_snapshot_history
+                WHERE account_id = %s AND generated_at = %s
+                LIMIT 1
+                """,
+                (str(account_id or ""), str(generated_at or "")),
+            ).fetchone() or {}
+        payload = _json_loads(
+            row.get("projection_payload_json") or row.get("payload_json"),
+            {},
+        )
+        return dict(payload or {}) if isinstance(payload, dict) else {}
+
+    def reasoning_snapshot_metadata_at(
+        self,
+        account_id: str,
+        generated_at: str,
+    ) -> Dict[str, object]:
+        state = self.reasoning_snapshot_state_at(account_id, generated_at)
+        if not state:
+            return {}
+        return {
+            "accountId": str(state.get("accountId") or account_id or ""),
+            "mode": str(state.get("mode") or ""),
+            "status": str(state.get("status") or ""),
+            "generatedAt": str(state.get("generatedAt") or generated_at or ""),
+        }
 
     def load_sent(self) -> Dict[str, object]:
         with self.connect() as connection:
@@ -939,6 +980,13 @@ class MySQLMonitoringCycleRecorder(MySQLOperationalConnection):
                     # can recreate its mailbox row after an interrupted
                     # operational write.
                     pass
+                try:
+                    MySQLReasoningEngineJobStore.ingress_event_with_connection(connection, reasoning_event)
+                except Exception:
+                    # The append-only source event remains available for
+                    # bounded ingress repair if the independent queue is
+                    # temporarily unavailable.
+                    pass
                 self.market_observation_anchor_store.mark_pending_with_connection(
                     connection,
                     snapshot.account_id,
@@ -977,6 +1025,12 @@ class MySQLEventLog(MySQLOperationalConnection):
                     # The event remains durable and the runner's bounded
                     # reconciliation query will recover it.  A queue-summary
                     # migration must never reject a source fact.
+                    pass
+                try:
+                    MySQLReasoningEngineJobStore.ingress_event_with_connection(connection, event)
+                except Exception:
+                    # V2 ingestion is isolated from the source transaction.
+                    # The durable domain event remains the repair boundary.
                     pass
 
     def research_evidence_events_after(
@@ -1031,6 +1085,40 @@ class MySQLEventLog(MySQLOperationalConnection):
                 LIMIT %s
                 """,
                 (ONTOLOGY_REASONING_REQUESTED, bounded),
+            ).fetchall()
+        return [domain_event_from_row(row) for row in reversed(rows)]
+
+    def unmaterialized_reasoning_engine_events(
+        self,
+        deployment_id: str,
+        after_occurred_at: str = "",
+        limit: int = 0,
+    ) -> List[DomainEvent]:
+        """Repair recent source events missing the independent V2 inbox."""
+
+        bounded = max(1, min(200, int(limit or 20)))
+        with self.connect() as connection:
+            rows = connection.execute(
+                """
+                SELECT events.event_id, events.name, events.aggregate_id,
+                       events.occurred_at, events.correlation_id,
+                       events.payload_json, events.event_json
+                FROM domain_events events
+                LEFT JOIN reasoning_engine_jobs jobs
+                  ON jobs.deployment_id = %s
+                 AND jobs.source_event_id = events.event_id
+                WHERE events.name = %s
+                  AND events.occurred_at >= %s
+                  AND jobs.job_id IS NULL
+                ORDER BY events.occurred_at DESC, events.event_id DESC
+                LIMIT %s
+                """,
+                (
+                    str(deployment_id or ""),
+                    ONTOLOGY_REASONING_REQUESTED,
+                    str(after_occurred_at or "1970-01-01T00:00:00Z"),
+                    bounded,
+                ),
             ).fetchall()
         return [domain_event_from_row(row) for row in reversed(rows)]
 

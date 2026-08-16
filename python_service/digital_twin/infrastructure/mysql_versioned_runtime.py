@@ -13,6 +13,7 @@ from ..domain.reasoning_engine_versions import (
     engine_transition_allowed,
 )
 from ..domain.reasoning_shadow import reasoning_comparison_summary
+from ..domain.independent_reasoning import independent_reasoning_request
 from ..domain.time_series_storage import (
     TemporalFeatureSnapshot,
     TimeSeriesBackendDescriptor,
@@ -586,6 +587,341 @@ class MySQLReasoningShadowJobStore(MySQLOperationalConnection):
             "attemptCount": int(values.get("attempts") or 0),
             "createdAt": str(values.get("created_at") or ""),
             "updatedAt": str(values.get("updated_at") or ""),
+        }
+
+
+class MySQLReasoningEngineJobStore(MySQLOperationalConnection):
+    """Direct source-event queue for independently executable engines."""
+
+    @staticmethod
+    def target_deployments_with_connection(connection) -> List[str]:
+        control = connection.execute(
+            "SELECT active_deployment_id, delivery_deployment_id, candidate_deployment_id "
+            "FROM reasoning_engine_control WHERE control_id = 'global'"
+        ).fetchone() or {}
+        requested = list(dict.fromkeys(
+            str(control.get(key) or "").strip()
+            for key in ["active_deployment_id", "delivery_deployment_id", "candidate_deployment_id"]
+            if str(control.get(key) or "").strip()
+        ))
+        deployments = []
+        if requested:
+            placeholders = ",".join(["%s"] * len(requested))
+            rows = connection.execute(
+                "SELECT deployment_id FROM reasoning_engine_deployments "
+                "WHERE engine_version = 'v2' AND deployment_id IN (" + placeholders + ")",
+                tuple(requested),
+            ).fetchall()
+            deployments = [
+                str(row.get("deployment_id") or "").strip()
+                for row in rows or []
+                if str(row.get("deployment_id") or "").strip()
+            ]
+        # Engine registration and source ingestion can race during a cold
+        # service start. The stable V2 slot preserves the source event until
+        # the independent worker initializes its deployment descriptor.
+        return sorted(set(deployments or ["ontology-v2-shadow"]))
+
+    @staticmethod
+    def event_priority(event) -> int:
+        payload = dict(getattr(event, "payload", {}) or {})
+        level = str(payload.get("reviewLevel") or payload.get("materialityReviewLevel") or "").lower()
+        return {"critical": 100, "urgent": 90, "caution": 80, "check": 70, "observe": 50}.get(level, 60)
+
+    @classmethod
+    def ingress_event_with_connection(cls, connection, event) -> Dict[str, object]:
+        deployments = cls.target_deployments_with_connection(connection)
+        stamp = iso_utc()
+        saved_jobs = []
+        superseded = 0
+        for deployment_id in deployments:
+            request = independent_reasoning_request(deployment_id, [event])
+            job_id = "reasoning-engine-job:" + uuid.uuid4().hex
+            cursor = connection.execute(
+                """
+                INSERT IGNORE INTO reasoning_engine_jobs (
+                    job_id, deployment_id, source_event_id, scope_key,
+                    input_fingerprint, request_json, result_json, job_status,
+                    priority, supersedable, available_at, created_at, updated_at
+                ) VALUES (%s, %s, %s, %s, %s, %s, '{}', 'queued', %s, %s, %s, %s, %s)
+                """,
+                (
+                    job_id,
+                    str(deployment_id or "")[:191],
+                    str(getattr(event, "event_id", "") or "")[:191],
+                    request.scope_id[:191],
+                    request.input_fingerprint[:64],
+                    canonical_json({
+                        "request": request.to_dict(),
+                        "sourceEvent": event.to_dict(),
+                    }),
+                    cls.event_priority(event),
+                    1 if request.supersedable else 0,
+                    stamp,
+                    stamp,
+                    stamp,
+                ),
+            )
+            saved = bool(int(getattr(cursor, "rowcount", 0) or 0))
+            if not saved:
+                continue
+            saved_jobs.append(job_id)
+            if request.supersedable:
+                updated = connection.execute(
+                    """
+                    UPDATE reasoning_engine_jobs
+                    SET job_status = 'superseded', completed_at = %s,
+                        lease_owner = '', lease_expires_at = '', updated_at = %s,
+                        last_error = 'A newer direct source revision owns this scope.'
+                    WHERE deployment_id = %s AND scope_key = %s
+                      AND job_id <> %s AND supersedable = 1
+                      AND job_status IN ('queued', 'retry')
+                    """,
+                    (stamp, stamp, deployment_id, request.scope_id, job_id),
+                )
+                superseded += int(getattr(updated, "rowcount", 0) or 0)
+        return {
+            "saved": bool(saved_jobs),
+            "savedJobIds": saved_jobs,
+            "deploymentIds": deployments,
+            "supersededCount": superseded,
+        }
+
+    def ingress_event(self, event) -> Dict[str, object]:
+        """Idempotently materialize one durable source event for V2."""
+
+        with self.transaction() as connection:
+            return self.ingress_event_with_connection(connection, event)
+
+    def claim(self, deployment_id: str, worker_id: str, limit: int = 1, lease_seconds: int = 600) -> List[Dict[str, object]]:
+        stamp = iso_utc()
+        lease_until = iso_utc(utc_now() + timedelta(seconds=max(60, int(lease_seconds or 600))))
+        bounded = max(1, min(20, int(limit or 1)))
+        with self.transaction() as connection:
+            connection.execute(
+                """
+                UPDATE reasoning_engine_jobs
+                SET job_status = 'retry', lease_owner = '', lease_expires_at = '',
+                    available_at = %s,
+                    last_error = 'The prior V2 worker lease expired; retrying safely.',
+                    updated_at = %s
+                WHERE deployment_id = %s AND job_status = 'processing'
+                  AND lease_expires_at <> '' AND lease_expires_at < %s
+                """,
+                (stamp, stamp, str(deployment_id or ""), stamp),
+            )
+            rows = connection.execute(
+                """
+                SELECT * FROM reasoning_engine_jobs
+                WHERE deployment_id = %s
+                  AND job_status IN ('queued', 'retry')
+                  AND (available_at = '' OR available_at <= %s)
+                  AND (lease_expires_at = '' OR lease_expires_at < %s)
+                ORDER BY priority DESC, created_at, job_id
+                LIMIT %s FOR UPDATE SKIP LOCKED
+                """,
+                (str(deployment_id or ""), stamp, stamp, bounded),
+            ).fetchall()
+            job_ids = [str(row.get("job_id") or "") for row in rows or []]
+            if not job_ids:
+                return []
+            placeholders = ",".join(["%s"] * len(job_ids))
+            connection.execute(
+                "UPDATE reasoning_engine_jobs SET job_status = 'processing', lease_owner = %s, "
+                "lease_expires_at = %s, claimed_at = %s, "
+                "queue_wait_ms = TIMESTAMPDIFF(MICROSECOND, STR_TO_DATE(REPLACE(REPLACE(created_at, 'T', ' '), 'Z', ''), '%%Y-%%m-%%d %%H:%%i:%%s.%%f'), UTC_TIMESTAMP(6)) DIV 1000, "
+                "updated_at = %s WHERE job_id IN (" + placeholders + ")",
+                (str(worker_id or "reasoning-v2"), lease_until, stamp, stamp, *job_ids),
+            )
+        return [self.row_payload(row) for row in rows or []]
+
+    def complete(self, job_id: str, result: Mapping[str, object]) -> None:
+        stamp = iso_utc()
+        values = dict(result or {})
+        with self.connect() as connection:
+            connection.execute(
+                """
+                UPDATE reasoning_engine_jobs
+                SET job_status = 'completed', result_json = %s,
+                    duration_ms = %s, lease_owner = '', lease_expires_at = '',
+                    last_error = '', completed_at = %s, updated_at = %s
+                WHERE job_id = %s
+                """,
+                (
+                    canonical_json(values),
+                    max(0, int(values.get("duration_ms") or values.get("durationMs") or 0)),
+                    stamp,
+                    stamp,
+                    str(job_id or ""),
+                ),
+            )
+
+    def defer(self, job_id: str, reason: str, retry_after_seconds: int = 15) -> None:
+        with self.connect() as connection:
+            connection.execute(
+                """
+                UPDATE reasoning_engine_jobs
+                SET job_status = 'queued', lease_owner = '', lease_expires_at = '',
+                    available_at = %s, last_error = %s, updated_at = %s
+                WHERE job_id = %s
+                """,
+                (
+                    iso_utc(utc_now() + timedelta(seconds=max(1, int(retry_after_seconds or 15)))),
+                    str(reason or "")[:500],
+                    iso_utc(),
+                    str(job_id or ""),
+                ),
+            )
+
+    def retry(self, job_id: str, error: str, max_attempts: int = 3) -> Dict[str, object]:
+        with self.transaction() as connection:
+            row = connection.execute(
+                "SELECT attempts FROM reasoning_engine_jobs WHERE job_id = %s FOR UPDATE",
+                (str(job_id or ""),),
+            ).fetchone() or {"attempts": 0}
+            attempts = int(row.get("attempts") or 0) + 1
+            terminal = attempts >= max(1, int(max_attempts or 3))
+            delay = min(900, 10 * (2 ** min(6, attempts - 1)))
+            stamp = iso_utc()
+            connection.execute(
+                """
+                UPDATE reasoning_engine_jobs
+                SET job_status = %s, attempts = %s, lease_owner = '',
+                    lease_expires_at = '', available_at = %s, last_error = %s,
+                    completed_at = %s, updated_at = %s
+                WHERE job_id = %s
+                """,
+                (
+                    "failed" if terminal else "retry",
+                    attempts,
+                    "" if terminal else iso_utc(utc_now() + timedelta(seconds=delay)),
+                    str(error or "")[:500],
+                    stamp if terminal else "",
+                    stamp,
+                    str(job_id or ""),
+                ),
+            )
+        return {"jobId": str(job_id or ""), "attemptCount": attempts, "terminal": terminal}
+
+    def get(self, job_id: str) -> Dict[str, object]:
+        with self.connect() as connection:
+            row = connection.execute(
+                "SELECT * FROM reasoning_engine_jobs WHERE job_id = %s",
+                (str(job_id or ""),),
+            ).fetchone()
+        return self.row_payload(row) if row else {}
+
+    @staticmethod
+    def percentile(values: Iterable[int], percentile: float = 0.95) -> int:
+        ordered = sorted(max(0, int(value or 0)) for value in values or [])
+        if not ordered:
+            return 0
+        index = max(0, min(len(ordered) - 1, int((len(ordered) - 1) * percentile + 0.999999)))
+        return ordered[index]
+
+    def summary(self, deployment_id: str = "", lookback: int = 200) -> Dict[str, object]:
+        params = []
+        where = ""
+        if str(deployment_id or ""):
+            where = " WHERE deployment_id = %s"
+            params.append(str(deployment_id or ""))
+        with self.connect() as connection:
+            counts = connection.execute(
+                "SELECT job_status, COUNT(*) AS row_count, MIN(created_at) AS oldest, MAX(updated_at) AS latest "
+                "FROM reasoning_engine_jobs" + where + " GROUP BY job_status",
+                tuple(params),
+            ).fetchall()
+            completed_where = where + (" AND" if where else " WHERE") + " job_status = 'completed'"
+            rows = connection.execute(
+                "SELECT * FROM reasoning_engine_jobs" + completed_where + " ORDER BY completed_at DESC LIMIT %s",
+                (*params, max(1, min(2000, int(lookback or 200)))),
+            ).fetchall()
+        count_map = {str(row.get("job_status") or ""): int(row.get("row_count") or 0) for row in counts or []}
+        oldest = {str(row.get("job_status") or ""): str(row.get("oldest") or "") for row in counts or []}
+        latest = {str(row.get("job_status") or ""): str(row.get("latest") or "") for row in counts or []}
+        unique_runs = {}
+        for row in rows or []:
+            result = json_value(row.get("result_json"), {})
+            run_id = str(
+                result.get("request_id")
+                or result.get("requestId")
+                or row.get("job_id")
+                or ""
+            )
+            unique_runs.setdefault(run_id, (row, result))
+        run_rows = [item[0] for item in unique_runs.values()]
+        results = [item[1] for item in unique_runs.values()]
+        symbols = sorted({
+            str(symbol or "").upper().strip()
+            for result in results
+            for symbol in result.get("symbols") or []
+            if str(symbol or "").strip()
+        })
+        successful = [result for result in results if str(result.get("status") or "") in {"ok", "partial"}]
+        trace_complete = [result for result in results if result.get("trace_complete") or result.get("traceComplete")]
+        candidate_runs = [result for result in results if result.get("candidate_events") or result.get("candidateEvents")]
+        shadow_delivery_authorized = [
+            result for result in results
+            if result.get("delivery_authorized") or result.get("deliveryAuthorized")
+        ]
+        pending_times = [
+            _timestamp
+            for status, _timestamp in oldest.items()
+            if status in {"queued", "retry", "processing"} and _timestamp
+        ]
+        oldest_pending_age = 0
+        if pending_times:
+            try:
+                pending_at = min(
+                    datetime.fromisoformat(value.replace("Z", "+00:00"))
+                    for value in pending_times
+                )
+                if pending_at.tzinfo is None:
+                    pending_at = pending_at.replace(tzinfo=timezone.utc)
+                oldest_pending_age = max(0, int((utc_now() - pending_at.astimezone(timezone.utc)).total_seconds()))
+            except ValueError:
+                oldest_pending_age = 0
+        return {
+            "deploymentId": str(deployment_id or ""),
+            "counts": count_map,
+            "oldest": oldest,
+            "latest": latest,
+            "sampleCount": len(results),
+            "successfulRunCount": len(successful),
+            "traceCompleteRunCount": len(trace_complete),
+            "candidateEventRunCount": len(candidate_runs),
+            "shadowDeliveryAuthorizedRunCount": len(shadow_delivery_authorized),
+            "distinctSymbolCount": len(symbols),
+            "symbols": symbols[:200],
+            "durationP95Ms": self.percentile([int(row.get("duration_ms") or 0) for row in run_rows]),
+            "queueWaitP95Ms": self.percentile([int(row.get("queue_wait_ms") or 0) for row in run_rows]),
+            "failureCount": int(count_map.get("failed") or 0),
+            "pendingCount": sum(int(count_map.get(status) or 0) for status in ["queued", "retry", "processing"]),
+            "oldestPendingAgeSeconds": oldest_pending_age,
+            "latestCompletedAt": str(rows[0].get("completed_at") or "") if rows else "",
+        }
+
+    @staticmethod
+    def row_payload(row: Mapping[str, object]) -> Dict[str, object]:
+        values = dict(row or {})
+        request = json_value(values.get("request_json"), {})
+        return {
+            "jobId": str(values.get("job_id") or ""),
+            "deploymentId": str(values.get("deployment_id") or ""),
+            "sourceEventId": str(values.get("source_event_id") or ""),
+            "scopeKey": str(values.get("scope_key") or ""),
+            "inputFingerprint": str(values.get("input_fingerprint") or ""),
+            "request": dict(request.get("request") or {}),
+            "sourceEvent": dict(request.get("sourceEvent") or {}),
+            "result": json_value(values.get("result_json"), {}),
+            "status": str(values.get("job_status") or ""),
+            "attemptCount": int(values.get("attempts") or 0),
+            "priority": int(values.get("priority") or 0),
+            "queueWaitMs": int(values.get("queue_wait_ms") or 0),
+            "durationMs": int(values.get("duration_ms") or 0),
+            "createdAt": str(values.get("created_at") or ""),
+            "updatedAt": str(values.get("updated_at") or ""),
+            "completedAt": str(values.get("completed_at") or ""),
         }
 
 

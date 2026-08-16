@@ -280,6 +280,10 @@ def policy_cutoffs(policy: MySQLMinimalRetentionPolicy, now: datetime = None) ->
             policy.reasoning_shadow_job_retention_hours,
             now,
         ),
+        "reasoningEngineJobs": policy_cutoff_iso(
+            policy.reasoning_shadow_job_retention_hours,
+            now,
+        ),
         "reasoningComparisons": policy_cutoff_iso(
             policy.reasoning_comparison_retention_hours,
             now,

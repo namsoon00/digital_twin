@@ -1,4 +1,6 @@
 import unittest
+from types import SimpleNamespace
+from unittest.mock import patch
 
 from digital_twin.application.reasoning_engine_platform import ReasoningEnginePlatformService
 from digital_twin.domain.reasoning_engine_versions import (
@@ -23,6 +25,82 @@ def descriptor(status="candidate"):
 
 
 class ReasoningEngineVersionTests(unittest.TestCase):
+    def test_deployments_bind_to_separate_graph_databases(self):
+        class Registry:
+            rows = {}
+
+            def upsert(self, item):
+                self.rows[item.deployment_id] = item.to_dict()
+
+            def get(self, deployment_id):
+                return self.rows.get(deployment_id, {})
+
+        registry = Registry()
+        platform = ReasoningEnginePlatformService(
+            registry,
+            {
+                "reasoningEngineV1TypeDbDatabase": "ontology-v1-blue",
+                "reasoningEngineV2TypeDbDatabase": "ontology-v2-green",
+            },
+        )
+        for item in platform.descriptors():
+            registry.upsert(item)
+
+        self.assertEqual("ontology-v1-blue", platform.graph_database_for("ontology-v1-active"))
+        self.assertEqual("ontology-v2-green", platform.graph_database_for("ontology-v2-shadow"))
+        self.assertEqual("v2", platform.engine_version_for("ontology-v2-shadow"))
+
+    def test_cli_promotion_switches_control_and_active_graph_database_together(self):
+        from digital_twin.infrastructure.cli import reasoning_engine_platform_command
+
+        class Platform:
+            comparison_store = None
+
+            def initialize(self):
+                return {
+                    "control": {"active_deployment_id": "ontology-v1-active"},
+                }
+
+            def engine_version_for(self, deployment_id):
+                return "v2" if deployment_id == "ontology-v2-shadow" else "v1"
+
+            def graph_database_for(self, deployment_id):
+                self.last_database_deployment = deployment_id
+                return "ontology-v2-green"
+
+            def promote_from_history(self, deployment_id):
+                return {
+                    "status": "promoted",
+                    "control": {
+                        "active_deployment_id": deployment_id,
+                        "delivery_deployment_id": deployment_id,
+                        "candidate_deployment_id": "ontology-v1-active",
+                    },
+                }
+
+        platform = Platform()
+        saved = {}
+        args = SimpleNamespace(
+            reasoning_engine_action="promote",
+            deployment_id="ontology-v2-shadow",
+        )
+        with patch(
+            "digital_twin.infrastructure.reasoning_engine_factory.build_reasoning_engine_platform",
+            return_value=platform,
+        ), patch(
+            "digital_twin.infrastructure.cli.runtime_settings",
+            return_value={"typedbDatabase": "ontology-v1-blue"},
+        ), patch(
+            "digital_twin.infrastructure.cli.save_runtime_settings",
+            side_effect=lambda values: saved.update(values),
+        ):
+            status = reasoning_engine_platform_command(args)
+
+        self.assertEqual(0, status)
+        self.assertEqual("v2", saved["reasoningEngineActiveVersion"])
+        self.assertEqual("ontology-v2-green", saved["typedbDatabase"])
+        self.assertEqual("ontology-v1-blue", saved["reasoningEngineV1TypeDbDatabase"])
+
     def test_release_identity_changes_with_runtime_or_rulebox(self):
         first = reasoning_release_identity(descriptor(), "rules-a")
         second = reasoning_release_identity(descriptor(), "rules-a")
@@ -108,6 +186,50 @@ class ReasoningEngineVersionTests(unittest.TestCase):
         readiness = platform.promotion_readiness("ontology-v2-shadow")
 
         self.assertTrue(readiness["ready"])
+        self.assertEqual([], readiness["blockers"])
+
+    def test_independent_v2_gate_uses_its_own_runs_instead_of_v1_parity(self):
+        class Registry:
+            def get(self, deployment_id):
+                return {
+                    "deploymentId": deployment_id,
+                    "status": "shadow",
+                    "health": {"status": "ready", "independentExecution": True},
+                    "releaseBundle": {},
+                }
+
+        class Jobs:
+            def summary(self, deployment_id, lookback=200):
+                del deployment_id, lookback
+                return {
+                    "sampleCount": 8,
+                    "successfulRunCount": 8,
+                    "traceCompleteRunCount": 8,
+                    "candidateEventRunCount": 3,
+                    "distinctSymbolCount": 4,
+                    "failureCount": 0,
+                    "shadowDeliveryAuthorizedRunCount": 0,
+                    "durationP95Ms": 1200,
+                    "queueWaitP95Ms": 50,
+                    "latestCompletedAt": "2099-01-01T00:00:00Z",
+                    "oldestPendingAgeSeconds": 0,
+                }
+
+        platform = ReasoningEnginePlatformService(
+            Registry(),
+            {
+                "reasoningEngineV2IndependentEnabled": "1",
+                "reasoningEngineV2PromotionMinimumRuns": "5",
+                "reasoningEngineV2PromotionMinimumSymbols": "3",
+            },
+            comparison_store=None,
+            independent_job_store=Jobs(),
+        )
+
+        readiness = platform.promotion_readiness("ontology-v2-shadow")
+
+        self.assertTrue(readiness["ready"])
+        self.assertEqual("independent-v2", readiness["mode"])
         self.assertEqual([], readiness["blockers"])
 
 

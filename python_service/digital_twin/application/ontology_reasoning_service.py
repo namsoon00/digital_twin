@@ -820,6 +820,7 @@ class OntologyReasoningRunner:
         maintenance_yield_state_probe: Callable = None,
         market_observation_completion_recorder: Callable = None,
         reasoning_shadow_scheduler=None,
+        execution_authorized_provider: Callable = None,
     ):
         self.event_reader = event_reader
         self.cursor_store = cursor_store
@@ -846,6 +847,7 @@ class OntologyReasoningRunner:
         self.maintenance_yield_state_probe = maintenance_yield_state_probe
         self.market_observation_completion_recorder = market_observation_completion_recorder
         self.reasoning_shadow_scheduler = reasoning_shadow_scheduler
+        self.execution_authorized_provider = execution_authorized_provider or (lambda: True)
 
     def refresh_operational_settings(self, settings: Dict[str, object] = None) -> Dict[str, object]:
         """Apply safe scheduling changes between persistent-sidecar turns.
@@ -5715,6 +5717,23 @@ class OntologyReasoningRunner:
         return response
 
     def run_once(self, limit: int = 0, force: bool = False) -> Dict[str, object]:
+        try:
+            execution_authorized = bool(self.execution_authorized_provider())
+        except Exception:  # noqa: BLE001 - an uncertain engine lease must fail closed.
+            execution_authorized = False
+        if not execution_authorized:
+            return {
+                "status": "inactive-engine",
+                "processedCount": 0,
+                "alertCount": 0,
+                "reasoningEngineDeploymentId": str(
+                    self.settings.get("_reasoningEngineDeploymentId") or "ontology-v1-active"
+                ),
+                "reasoningEngineVersion": str(
+                    self.settings.get("_reasoningEngineVersion") or "v1"
+                ),
+                "reason": "The deployment is not the active delivery reasoning engine.",
+            }
         started = self.now_provider()
         if started.tzinfo is None:
             started = started.replace(tzinfo=timezone.utc)

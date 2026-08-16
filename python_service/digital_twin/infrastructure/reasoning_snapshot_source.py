@@ -69,11 +69,41 @@ class LatestMonitorSnapshotReasoningSource:
             if str(symbol or "").strip()
         ]
 
+    @staticmethod
+    def source_snapshot_boundary(
+        account_id: str,
+        reasoning_context: Dict[str, object] = None,
+    ) -> Dict[str, object]:
+        context = reasoning_context if isinstance(reasoning_context, dict) else {}
+        for value in context.get("verifiedSourceSnapshots") or []:
+            if not isinstance(value, dict):
+                continue
+            boundary_account = str(value.get("accountId") or "").strip()
+            if boundary_account and boundary_account != str(account_id or "").strip():
+                continue
+            if str(value.get("generatedAt") or "").strip():
+                return dict(value)
+        return {}
+
     def current_state(
         self,
         account_id: str,
         reasoning_context: Dict[str, object] = None,
     ) -> Dict[str, object]:
+        boundary = self.source_snapshot_boundary(account_id, reasoning_context)
+        boundary_generated_at = str(boundary.get("generatedAt") or "").strip()
+        point_in_time_reader = getattr(self.monitor_store, "reasoning_snapshot_state_at", None)
+        if boundary_generated_at and callable(point_in_time_reader):
+            try:
+                state = point_in_time_reader(
+                    str(account_id or ""),
+                    boundary_generated_at,
+                    target_symbols=self.target_symbols(reasoning_context),
+                )
+            except Exception:
+                state = None
+            if isinstance(state, dict) and state:
+                return copy.deepcopy(state)
         reader = getattr(self.monitor_store, "reasoning_snapshot_state", None)
         if callable(reader):
             try:
@@ -89,7 +119,11 @@ class LatestMonitorSnapshotReasoningSource:
         state = previous.get(str(account_id or "")) if isinstance(previous, dict) else {}
         return copy.deepcopy(state) if isinstance(state, dict) else {}
 
-    def current_state_metadata(self, account_id: str) -> Dict[str, object]:
+    def current_state_metadata(
+        self,
+        account_id: str,
+        reasoning_context: Dict[str, object] = None,
+    ) -> Dict[str, object]:
         """Read only the durable source boundary needed before TypeDB work.
 
         The full persisted monitor snapshot can contain a sizeable research
@@ -98,6 +132,22 @@ class LatestMonitorSnapshotReasoningSource:
         stores expose a narrow metadata read; lightweight compatibility
         stores retain the in-memory fallback.
         """
+        boundary = self.source_snapshot_boundary(account_id, reasoning_context)
+        boundary_generated_at = str(boundary.get("generatedAt") or "").strip()
+        point_in_time_reader = getattr(self.monitor_store, "reasoning_snapshot_metadata_at", None)
+        if boundary_generated_at and callable(point_in_time_reader):
+            try:
+                value = point_in_time_reader(str(account_id or ""), boundary_generated_at)
+            except Exception:
+                value = None
+            if isinstance(value, dict) and value:
+                return dict(value)
+            return {
+                "accountId": str(account_id or ""),
+                "mode": "missing",
+                "status": "Point-in-time monitor snapshot is unavailable",
+                "generatedAt": boundary_generated_at,
+            }
         reader = getattr(self.monitor_store, "snapshot_metadata", None)
         if callable(reader):
             try:
@@ -178,7 +228,7 @@ class LatestMonitorSnapshotReasoningSource:
             account_id = str(getattr(account, "account_id", "") or "").strip()
             if not account_id:
                 continue
-            metadata = self.current_state_metadata(account_id)
+            metadata = self.current_state_metadata(account_id, reasoning_context)
             if not monitor_state_has_live_account_data(metadata):
                 account_rows.append({
                     "accountId": account_id,

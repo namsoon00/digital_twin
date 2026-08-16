@@ -35,6 +35,7 @@
     "python:time-series:backfill": "python3 python_service/service.py time-series-platform backfill",
     "python:time-series:compare": "python3 python_service/service.py time-series-platform compare",
     "python:reasoning-engine:status": "python3 python_service/service.py reasoning-engine status",
+    "python:reasoning-engine:v2": "python3 python_service/service.py reasoning-engine v2-once",
     "python:reasoning-engine:shadow": "python3 python_service/service.py reasoning-engine shadow-once",
     "python:reasoning-engine:comparisons": "python3 python_service/service.py reasoning-engine comparisons",
     "python:news:once": "python3 python_service/service.py news once",

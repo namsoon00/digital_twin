@@ -1312,6 +1312,35 @@ MYSQL_SCHEMA = [
     ) ENGINE=InnoDB DEFAULT CHARSET=utf8mb4 COLLATE=utf8mb4_unicode_ci
     """,
     """
+    CREATE TABLE IF NOT EXISTS reasoning_engine_jobs (
+        job_id VARCHAR(191) PRIMARY KEY,
+        deployment_id VARCHAR(191) NOT NULL,
+        source_event_id VARCHAR(191) NOT NULL,
+        scope_key VARCHAR(191) NOT NULL,
+        input_fingerprint VARCHAR(64) NOT NULL,
+        request_json LONGTEXT NOT NULL,
+        result_json LONGTEXT NOT NULL,
+        job_status VARCHAR(32) NOT NULL DEFAULT 'queued',
+        priority INT NOT NULL DEFAULT 60,
+        supersedable TINYINT NOT NULL DEFAULT 0,
+        attempts INT NOT NULL DEFAULT 0,
+        available_at VARCHAR(40) NOT NULL DEFAULT '',
+        lease_owner VARCHAR(191) NOT NULL DEFAULT '',
+        lease_expires_at VARCHAR(40) NOT NULL DEFAULT '',
+        claimed_at VARCHAR(40) NOT NULL DEFAULT '',
+        queue_wait_ms BIGINT NOT NULL DEFAULT 0,
+        duration_ms BIGINT NOT NULL DEFAULT 0,
+        last_error TEXT NOT NULL,
+        created_at VARCHAR(40) NOT NULL,
+        updated_at VARCHAR(40) NOT NULL,
+        completed_at VARCHAR(40) NOT NULL DEFAULT '',
+        UNIQUE KEY uq_reasoning_engine_job_event (deployment_id, source_event_id),
+        KEY idx_reasoning_engine_job_ready (deployment_id, job_status, available_at, priority, created_at),
+        KEY idx_reasoning_engine_job_scope (deployment_id, scope_key, job_status, created_at),
+        KEY idx_reasoning_engine_job_completed (deployment_id, completed_at)
+    ) ENGINE=InnoDB DEFAULT CHARSET=utf8mb4 COLLATE=utf8mb4_unicode_ci
+    """,
+    """
     CREATE TABLE IF NOT EXISTS symbol_universe (
         market VARCHAR(64) NOT NULL,
         symbol VARCHAR(64) NOT NULL,

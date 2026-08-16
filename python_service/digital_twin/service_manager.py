@@ -92,11 +92,15 @@ BASE_WORKERS = {
         "needle": "python_service/service.py ontology-reasoning watch",
     },
     "reasoning-engine-shadow": {
-        "label": "Python V2 reasoning shadow worker",
+        "label": "Python independent V2 reasoning worker",
         "pid": data_dir() / "python-reasoning-shadow.pid",
         "log": data_dir() / "python-reasoning-shadow.log",
-        "command": [sys.executable, "-u", "python_service/service.py", "reasoning-engine", "shadow-watch"],
-        "needle": "python_service/service.py reasoning-engine shadow-watch",
+        "command": [sys.executable, "-u", "python_service/service.py", "reasoning-engine", "v2-watch"],
+        "needle": "python_service/service.py reasoning-engine v2-watch",
+        "needles": [
+            "python_service/service.py reasoning-engine v2-watch",
+            "python_service/service.py reasoning-engine shadow-watch",
+        ],
     },
     "ontology-world-projection": {
         "label": "Python shared ontology world projection worker",
@@ -521,6 +525,26 @@ def disabled_notification_ai_worker_specs(
     }
 
 
+def active_reasoning_engine_version(settings: Dict[str, object]) -> str:
+    explicit = str((settings or {}).get("reasoningEngineActiveVersion") or "").strip().lower()
+    if explicit:
+        return explicit
+    active_id = str((settings or {}).get("reasoningEngineActiveDeploymentId") or "").strip()
+    v2_id = str((settings or {}).get("reasoningEngineV2DeploymentId") or "ontology-v2-shadow").strip()
+    return "v2" if active_id and active_id == v2_id else "v1"
+
+
+def disabled_reasoning_worker_specs(
+    active_specs: Dict[str, Dict[str, object]],
+) -> Dict[str, Dict[str, object]]:
+    """Return switched-out reasoning workers that still own a managed PID."""
+    return {
+        name: BASE_WORKERS[name]
+        for name in ("ontology-reasoning", "reasoning-engine-shadow")
+        if name not in active_specs and read_pid(BASE_WORKERS[name]["pid"])
+    }
+
+
 def worker_specs() -> Dict[str, Dict[str, object]]:
     try:
         settings = runtime_settings()
@@ -539,10 +563,16 @@ def worker_specs() -> Dict[str, Dict[str, object]]:
     # verified receipt for the active RuleBox/TBox is ready.
     if "ontology-rulebox-prewarm" in BASE_WORKERS:
         workers["ontology-rulebox-prewarm"] = BASE_WORKERS["ontology-rulebox-prewarm"]
+    active_engine_version = active_reasoning_engine_version(settings)
+    independent_v2_enabled = truthy(
+        (settings or {}).get("reasoningEngineV2IndependentEnabled", "1")
+    )
     workers.update({
         name: spec
         for name, spec in BASE_WORKERS.items()
         if name != "ontology-rulebox-prewarm"
+        and not (name == "ontology-reasoning" and active_engine_version != "v1")
+        and not (name == "reasoning-engine-shadow" and not independent_v2_enabled)
     })
     # Zero is an explicit operational pause: keep collection and deterministic
     # notifications running without launching external AI inference workers.
@@ -1899,6 +1929,7 @@ def stop(excluded_roles=None, include_supervisor: bool = True) -> int:
     excluded = {str(role or "").strip() for role in (excluded_roles or set())}
     specs = worker_specs()
     specs.update(disabled_notification_ai_worker_specs(specs))
+    specs.update(disabled_reasoning_worker_specs(specs))
     for spec in reversed(list(specs.values())):
         if str(spec.get("role") or "").strip() in excluded:
             continue
@@ -2153,6 +2184,8 @@ def supervise() -> int:
                 continue
             specs = worker_specs()
             for spec in disabled_notification_ai_worker_specs(specs).values():
+                stop_worker(spec)
+            for spec in disabled_reasoning_worker_specs(specs).values():
                 stop_worker(spec)
             for spec in specs.values():
                 if stopping["value"]:

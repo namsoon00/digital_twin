@@ -1,9 +1,10 @@
 import tempfile
 import unittest
 from pathlib import Path
-from unittest.mock import patch
+from unittest.mock import Mock, patch
 
 from digital_twin import service_manager
+from digital_twin.application.ontology_reasoning_service import OntologyReasoningRunner
 from digital_twin.infrastructure.schedulers import AIInferenceQueueScheduler
 
 
@@ -36,6 +37,27 @@ class AIInferenceWorkerRuntimeTests(unittest.TestCase):
 
         self.assertFalse([name for name in specs if name.startswith("notification-ai")])
 
+    def test_service_manager_switches_off_v1_worker_when_v2_is_active(self):
+        with patch.object(service_manager, "runtime_settings", return_value={
+            "notificationAiQueueWorkerCount": "0",
+            "ontologyTypeDbEnabled": "0",
+            "mysqlRuntimeManaged": "0",
+            "reasoningEngineActiveVersion": "v2",
+            "reasoningEngineV2IndependentEnabled": "1",
+        }):
+            specs = service_manager.worker_specs()
+
+        self.assertNotIn("ontology-reasoning", specs)
+        self.assertIn("reasoning-engine-shadow", specs)
+
+    def test_service_manager_finds_switched_out_reasoning_worker(self):
+        active_specs = {"reasoning-engine-shadow": service_manager.BASE_WORKERS["reasoning-engine-shadow"]}
+
+        with patch.object(service_manager, "read_pid", return_value=123):
+            disabled = service_manager.disabled_reasoning_worker_specs(active_specs)
+
+        self.assertEqual(["ontology-reasoning"], list(disabled))
+
     def test_service_manager_finds_configured_out_ai_workers_with_pid_files(self):
         active_specs = service_manager.notification_ai_worker_specs(1)
 
@@ -57,6 +79,7 @@ class AIInferenceWorkerRuntimeTests(unittest.TestCase):
         }
         with patch.object(service_manager, "worker_specs", return_value=active), \
              patch.object(service_manager, "disabled_notification_ai_worker_specs", return_value=disabled), \
+             patch.object(service_manager, "disabled_reasoning_worker_specs", return_value={}), \
              patch.object(service_manager, "stop_worker") as stop_worker:
             self.assertEqual(0, service_manager.stop(include_supervisor=False))
 
@@ -75,6 +98,25 @@ class AIInferenceWorkerRuntimeTests(unittest.TestCase):
             self.assertEqual(0, service_manager.start())
 
         self.assertEqual(3, start_worker.call_count)
+
+    def test_v1_reasoning_runner_fails_closed_after_engine_switch(self):
+        monitor_runner_factory = Mock()
+        runner = OntologyReasoningRunner(
+            event_reader=None,
+            cursor_store=None,
+            monitor_runner_factory=monitor_runner_factory,
+            settings={
+                "_reasoningEngineDeploymentId": "ontology-v1-active",
+                "_reasoningEngineVersion": "v1",
+            },
+            execution_authorized_provider=lambda: False,
+        )
+
+        result = runner.run_once()
+
+        self.assertEqual("inactive-engine", result["status"])
+        self.assertEqual(0, result["processedCount"])
+        monitor_runner_factory.assert_not_called()
 
     def test_supervisor_recognizes_an_unmanaged_web_server_as_healthy(self):
         spec = {

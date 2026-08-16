@@ -23,13 +23,16 @@ flowchart LR
     MySQL --> ActivePort[Active time-series port]
     QuestDB -. after promotion .-> ActivePort
     ActivePort --> Feature[Immutable TemporalFeatureSnapshot]
+    MySQL --> Events[Durable reasoning source events]
+    Events --> V1Queue[V1 mailbox]
+    Events --> V2Queue[V2 direct leased queue]
     Feature --> V1[V1 active TypeDB reasoning]
-    V1 --> Frozen[Immutable source and outcome packet]
-    Frozen -. durable shadow queue .-> V2[V2 isolated TypeDB reasoning]
-    Feature -. MySQL and QuestDB parity .-> V2
+    V1Queue --> V1
+    V2Queue --> V2[V2 independent TypeDB reasoning]
+    Feature --> V2
     V1 --> Delivery[Notification delivery]
-    V2 -. delivery forbidden .-> Compare[Parity and outcome comparison]
-    Compare --> Gate{Promotion gate}
+    V2 -. shadow delivery forbidden .-> Health[V2 health, trace and latency evidence]
+    Health --> Gate{Promotion gate}
     Gate -->|approved| Delivery
 ```
 
@@ -39,27 +42,69 @@ flowchart LR
 - `questdb-shadow`: live shadow write target. It cannot affect investment
   judgement while MySQL remains active.
 - `ontology-v1-active`: active and delivery-authorized reasoning deployment.
-- `ontology-v2-shadow`: isolated candidate deployment in
-  `orbit_alpha_ontology_shadow_v2`. It replays the exact bounded source packet
-  consumed by V1, reads the QuestDB temporal binding, and cannot access a real
-  notification transport.
+- `ontology-v2-shadow`: independently executable candidate deployment in
+  `orbit_alpha_ontology_shadow_v2`. The same durable source event is inserted
+  directly into its own leased queue in the source transaction. It does not
+  wait for V1, construct `MonitorRunner`, or consume a V1 result. While shadow
+  or candidate, delivery authorization is false even if it produces an alert
+  candidate.
 
-V2 deliberately starts with the same approved TBox and TypeDB schema-function
-RuleBox as V1. Its first job is to prove that the version boundary, alternate
-time-series binding, independent graph database, and deployment controls are
-real. A later V2 rule or prompt change can then be measured against V1 instead
-of being released on trust. The RuleBox fingerprint is frozen after the first
-successful V2 comparison; a changed RuleBox requires a new candidate release
-so results from different releases cannot be mixed.
+V2 can reuse an approved TBox/RuleBox release while retaining independent
+input assembly, scoped TypeDB projection/inference, candidate construction,
+health, and delivery handoff. This is reuse of domain contracts, not a call
+into V1. A later V3 can replace any of these stages behind the same engine and
+source-event contracts.
+
+`reasoning_engine_jobs` is the V2 source inbox. Latest-state work can supersede
+an older queued revision in the same scope; non-fungible governance and
+research work is retained. Jobs use leases, bounded retries, queue-wait and
+stage timings, input fingerprints, source ABox IDs, inference generation IDs,
+and candidate output. Terminal rows use the normal bounded MySQL retention
+policy.
+
+Compatible pending events are claimed as one bounded batch and projected as a
+union of affected symbols. Events with a different verified snapshot boundary
+are deferred to a separate turn, so batching never mixes point-in-time facts.
+Stored results contain identifiers, counts, SLO violations, and stage timings;
+the multi-megabyte scope plan and semantic fingerprint map stay in their
+owning TypeDB/projection audit instead of being copied into every queue and
+deployment-health row.
+
+When a source event contains a verified monitor snapshot boundary, V2 reads
+the exact `monitor_snapshot_history` row at that `generatedAt`. A later current
+snapshot is not an acceptable replacement. This keeps delayed execution and
+replay deterministic.
 
 The final AI boundary uses the engine-neutral `DecisionContinuityPacket` v2.
 It carries the prior decision identity, selected hypothesis, follow-up state,
 observed account action, outcome, execution feedback, and lifecycle review as
 one bounded immutable input. This separates an engine upgrade from memory
-semantics: V1 and a future AI-enabled V2 comparison must receive the same
-packet fingerprint before their decisions are compared. The current TypeDB
-shadow remains a graph-only comparison and therefore does not claim AI-decision
-parity until that additional promotion gate is enabled.
+semantics. When V2 is active and delivery-authorized, its graph-backed alert
+candidate enters the existing durable notification and AI queues with this
+continuity packet; while shadow or candidate, that handoff is blocked.
+
+## Legacy V1 Parity Path
+
+The immutable V1/V2 parity runner and comparison tables remain available as a
+compatibility and investigation tool. They are not the execution dependency
+or promotion authority when `REASONING_ENGINE_V2_INDEPENDENT_ENABLED=1`.
+
+## Independent V2 Contract
+
+The independent worker performs one bounded pipeline:
+
+1. claim a source event from `reasoning_engine_jobs`;
+2. resolve account, symbol, fact-family, and point-in-time snapshot scope;
+3. project that scope to the isolated V2 TypeDB database;
+4. require native TypeDB completion, aligned generation IDs, source ABox IDs,
+   and inference traces;
+5. translate verified InferenceBox output into graph-backed candidates;
+6. block delivery in shadow/candidate, or hand active candidates to the common
+   notification and AI queues;
+7. persist the result and update deployment health.
+
+Input assembly, inference execution, candidate construction, and queue running
+are separate application components. None imports a database driver.
 
 ## Shadow Comparison Contract
 
@@ -155,20 +200,29 @@ worker removes older records in bounded batches.
 
 ## Promotion Rules
 
-A reasoning candidate cannot become active unless all of these hold:
+A V2 independent reasoning candidate cannot become active unless all of these hold:
 
 - deployment status is `candidate`;
 - engine health is ready;
-- the minimum configured number of comparisons and distinct symbols is met;
-- fact parity is 100 percent;
-- rule-slot coverage is 100 percent;
-- there are no unexplained decision differences;
-- the shadow deployment has delivered zero notifications;
-- the comparison window is fresh and candidate p95 latency is within the
-  configured ratio to V1.
+- the minimum configured number of successful V2 runs and distinct symbols is met;
+- every successful run has aligned source ABox and inference generation traces;
+- execution failures stay within the configured limit;
+- the shadow deployment has authorized zero deliveries;
+- V2 p95 execution time, queue-wait p95, oldest pending age, and latest run
+  freshness are within their configured limits.
 
-`candidate` and `promote` commands calculate these gates from stored comparison
-history. Operators do not provide hand-written parity values.
+`candidate` and `promote` commands calculate these gates from V2's own durable
+job history. V1 outcome equality is not a requirement for an independently
+evolving engine. The legacy parity report remains diagnostic only.
+
+Promotion is a runtime switch, not only a status change. Each deployment owns
+an immutable TypeDB database binding. The promote/rollback command updates the
+active deployment, delivery deployment, active engine version, and the TypeDB
+database used by read-side services as one switch operation. A V1 runner
+checks the durable control row before every turn and fails closed after V2 is
+active. The service supervisor then removes the switched-out V1 process. This
+prevents two engines from producing investment notifications during a restart
+or rollback window.
 
 Time-series promotion must separately prove backend health, an empty pending
 projection queue, acceptable watermark lag, and temporal feature parity on a
@@ -187,8 +241,9 @@ python3 python_service/service.py time-series-platform candidate --backend-id qu
 python3 python_service/service.py time-series-platform promote --backend-id questdb-shadow --account-id <account> --symbols 005930,NVDA
 python3 python_service/service.py time-series-platform rollback
 npm run python:reasoning-engine:status
-npm run python:reasoning-engine:shadow
+npm run python:reasoning-engine:v2
 npm run python:reasoning-engine:comparisons
+python3 python_service/service.py reasoning-engine v2-watch
 python3 python_service/service.py reasoning-engine candidate --deployment-id ontology-v2-shadow
 python3 python_service/service.py reasoning-engine promote --deployment-id ontology-v2-shadow
 python3 python_service/service.py reasoning-engine rollback
@@ -209,10 +264,25 @@ domain:
 - `REASONING_ENGINE_ACTIVE_DEPLOYMENT_ID`
 - `REASONING_ENGINE_DELIVERY_DEPLOYMENT_ID`
 - `REASONING_ENGINE_CANDIDATE_DEPLOYMENT_ID`
+- `REASONING_ENGINE_V1_DEPLOYMENT_ID`
+- `REASONING_ENGINE_V2_DEPLOYMENT_ID`
+- `REASONING_ENGINE_ACTIVE_VERSION`
+- `REASONING_ENGINE_V1_TYPEDB_DATABASE`
+- `REASONING_ENGINE_V2_TYPEDB_DATABASE`
 - `REASONING_ENGINE_ACTIVE_RELEASE_ID`
 - `REASONING_ENGINE_CANDIDATE_RELEASE_ID`
 - `REASONING_ENGINE_SHADOW_ENABLED`
 - `REASONING_ENGINE_SHADOW_TYPEDB_DATABASE`
+- `REASONING_ENGINE_V2_INDEPENDENT_ENABLED`
+- `REASONING_ENGINE_V2_INTERVAL_SECONDS`
+- `REASONING_ENGINE_V2_LEASE_SECONDS`
+- `REASONING_ENGINE_V2_MAX_ATTEMPTS`
+- `REASONING_ENGINE_V2_BATCH_SIZE`
+- `REASONING_ENGINE_V2_INGRESS_REPAIR_LOOKBACK_HOURS`
+- `REASONING_ENGINE_V2_INGRESS_REPAIR_BATCH_SIZE`
+- `REASONING_ENGINE_V2_PROMOTION_MINIMUM_RUNS`
+- `REASONING_ENGINE_V2_PROMOTION_MINIMUM_SYMBOLS`
+- `REASONING_ENGINE_V2_PROMOTION_MINIMUM_CANDIDATE_RUNS`
 - `REASONING_ENGINE_PROMOTION_MINIMUM_COMPARISONS`
 - `REASONING_ENGINE_PROMOTION_MINIMUM_SYMBOLS`
 - `REASONING_ENGINE_PROMOTION_MINIMUM_NATIVE_INFERENCE_SAMPLES`
@@ -222,7 +292,7 @@ domain:
 - `REASONING_ENGINE_PROMOTION_MAXIMUM_CANDIDATE_P95_MS`
 - `REASONING_ENGINE_PROMOTION_MAXIMUM_QUEUE_WAIT_P95_MS`
 
-## Immutable Release Cohorts
+## Legacy Comparison Cohorts
 
 A deployment name such as `ontology-v2-shadow` is a stable slot, not a
 validation identity. Every comparison is bound to a fingerprint containing
@@ -236,7 +306,7 @@ only jobs for its current logical release and runtime revision, then verifies
 the full fingerprint before TypeDB execution. Old jobs are never replayed by a
 new code release.
 
-## Substantive Promotion Evidence
+## Legacy Parity Evidence
 
 Parity by itself is not sufficient because two empty outputs can be 100%
 equal. Promotion additionally requires configurable minimums for:
@@ -269,8 +339,10 @@ semantics.
 ## Adding V3 Or Another Database
 
 For V3, implement `InvestmentReasoningEngine`, register a new immutable release
-bundle, replay the same feature snapshots, and pass the existing promotion
-gate. Do not add `if version == ...` branches to investment domain code.
+bundle and graph-database binding, add its managed worker adapter, replay the
+same feature snapshots, and pass the existing promotion gate. Engine selection
+belongs to the control plane and service manager; do not add `if version == ...`
+branches to investment domain code.
 
 For another time-series database, implement the ingest, query, and lifecycle
 ports, register its descriptor in the infrastructure factory, and project the

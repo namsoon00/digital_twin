@@ -20,6 +20,13 @@ from ..application.operational_storage_capacity_service import (
     OperationalStorageCapacityService,
 )
 from ..application.investment_analysis_service import InvestmentAnalysisService
+from ..application.independent_reasoning_engine import (
+    GraphDecisionCandidateBuilder,
+    IndependentReasoningInputAssembler,
+    IndependentReasoningJobRunner,
+    ScopedTypeDBInferenceExecutor,
+    V2ReasoningEngine,
+)
 from ..application.investment_brain_service import InvestmentBrainService
 from ..application.investment_domain_service import InvestmentDomainService
 from ..application.investment_research_orchestration_service import InvestmentResearchOrchestrationService, InvestmentResearchQueueRunner
@@ -1150,15 +1157,15 @@ def build_ontology_reasoning_runner(settings=None, event_publisher=None) -> Onto
     engine_platform = build_reasoning_engine_platform(configured_settings)
     engine_state = engine_platform.initialize()
     configured_settings = dict(configured_settings)
-    configured_settings["_reasoningEngineDeploymentId"] = str(
-        (engine_state.get("control") or {}).get("active_deployment_id")
-        or (engine_state.get("control") or {}).get("activeDeploymentId")
+    v1_deployment_id = str(
+        configured_settings.get("reasoningEngineV1DeploymentId")
         or "ontology-v1-active"
     )
+    configured_settings["_reasoningEngineDeploymentId"] = v1_deployment_id
     active_deployment = next(
         (
             row for row in engine_state.get("deployments") or []
-            if str(row.get("deploymentId") or "") == configured_settings["_reasoningEngineDeploymentId"]
+            if str(row.get("deploymentId") or "") == v1_deployment_id
         ),
         {},
     )
@@ -1352,11 +1359,26 @@ def build_ontology_reasoning_runner(settings=None, event_publisher=None) -> Onto
         "reasoning",
         stores.operational_storage_capacity_state_store(reasoning_store_settings),
     )
-    reasoning_shadow_scheduler = ReasoningShadowScheduler(
-        stores.reasoning_shadow_job_store(reasoning_store_settings),
-        stores.reasoning_engine_registry_store(reasoning_store_settings),
-        configured_settings,
+    reasoning_shadow_scheduler = (
+        None
+        if setting_truthy(configured_settings.get("reasoningEngineV2IndependentEnabled"), True)
+        else ReasoningShadowScheduler(
+            stores.reasoning_shadow_job_store(reasoning_store_settings),
+            stores.reasoning_engine_registry_store(reasoning_store_settings),
+            configured_settings,
+        )
     )
+    reasoning_engine_registry = stores.reasoning_engine_registry_store(reasoning_store_settings)
+
+    def execution_authorized():
+        control = reasoning_engine_registry.control()
+        deployment = reasoning_engine_registry.get(v1_deployment_id)
+        return bool(
+            str(control.active_deployment_id or "") == v1_deployment_id
+            and str(control.delivery_deployment_id or "") == v1_deployment_id
+            and str(deployment.get("status") or "") == "active"
+        )
+
     return OntologyReasoningRunner(
         event_reader=event_log,
         cursor_store=cursor_store,
@@ -1413,6 +1435,7 @@ def build_ontology_reasoning_runner(settings=None, event_publisher=None) -> Onto
             stores.market_observation_reasoning_anchor_store(reasoning_store_settings).complete
         ),
         reasoning_shadow_scheduler=reasoning_shadow_scheduler,
+        execution_authorized_provider=execution_authorized,
     )
 
 
@@ -1480,6 +1503,20 @@ class ShadowNotificationSink:
         )
 
 
+class V2InferenceDetailReceiptSink:
+    """Enable commit-proof fast path without coupling V2 to V1's DB worker."""
+
+    def enqueue(self, **kwargs):
+        return {
+            "status": "v2-on-demand-detail",
+            "saved": False,
+            "eventuallyConsistent": False,
+            "inferenceGenerationId": str(kwargs.get("inference_generation_id") or ""),
+            "sourceAboxSnapshotId": str(kwargs.get("source_abox_snapshot_id") or ""),
+            "reason": "V2 keeps native rows in its own TypeDB and reads full detail only on demand.",
+        }
+
+
 def build_reasoning_engine_shadow_runner(settings=None, worker_id: str = "") -> ReasoningEngineShadowRunner:
     """Compose the isolated V2 TypeDB + QuestDB candidate worker."""
 
@@ -1490,7 +1527,8 @@ def build_reasoning_engine_shadow_runner(settings=None, worker_id: str = "") -> 
     registry_store = stores.reasoning_engine_registry_store(store_settings)
     candidate_base_settings = dict(configured)
     candidate_base_settings["typedbDatabase"] = str(
-        configured.get("reasoningEngineShadowTypeDbDatabase")
+        configured.get("reasoningEngineV2TypeDbDatabase")
+        or configured.get("reasoningEngineShadowTypeDbDatabase")
         or "orbit_alpha_ontology_shadow_v2"
     )
     candidate_base_settings["timeSeriesActiveBackendId"] = str(
@@ -1672,6 +1710,141 @@ def build_reasoning_engine_shadow_runner(settings=None, worker_id: str = "") -> 
         settings=configured,
         active_queue_probe=build_ontology_reasoning_queue_probe(configured),
         worker_id=worker_id,
+    )
+
+
+def build_v2_reasoning_engine(settings=None) -> V2ReasoningEngine:
+    """Compose V2 from source ports without constructing MonitorRunner."""
+
+    configured = dict(settings or runtime_settings())
+    from .reasoning_engine_factory import build_reasoning_engine_platform
+
+    platform = build_reasoning_engine_platform(configured)
+    platform.initialize()
+    descriptor = next(
+        (
+            item for item in platform.descriptors()
+            if str(item.engine_version or "") == "v2"
+        ),
+        None,
+    )
+    if descriptor is None:
+        raise RuntimeError("The V2 reasoning deployment descriptor is unavailable")
+
+    candidate_settings = dict(configured)
+    candidate_settings["typedbDatabase"] = platform.graph_database_for(
+        descriptor.deployment_id
+    )
+    candidate_settings["timeSeriesActiveBackendId"] = str(
+        configured.get("timeSeriesShadowBackendId") or "questdb-shadow"
+    )
+    candidate_settings["typedbNativeRuleExecutionEnabled"] = "1"
+    candidate_settings["ontologyReasoningTypeDbNativeRuleExecutionEnabled"] = "1"
+    candidate_settings["ontologySharedMarketWorldAsyncProjectionEnabled"] = "0"
+    candidate_settings["ontologyInferenceDetailOutboxEnabled"] = "1"
+    candidate_settings["ontologyAsyncQualityRecordEnabled"] = "0"
+    candidate_settings["_reasoningEngineDeploymentId"] = descriptor.deployment_id
+    candidate_settings["_reasoningEngineVersion"] = descriptor.engine_version
+    candidate_settings["_reasoningTimeSeriesBackendId"] = descriptor.time_series_backend_id
+    candidate_settings["_reasoningFeatureSetVersion"] = descriptor.release_bundle.feature_set_version
+    store_settings = dict(configured)
+    store_settings["_skipOperationalHistoryRetention"] = "1"
+    store_settings["_skipOperationalSchemaBootstrap"] = "1"
+    monitor_store = stores.ontology_reasoning_monitor_store(store_settings)
+    account_repository = stores.account_registry(store_settings)
+    snapshot_source = LatestMonitorSnapshotReasoningSource(
+        monitor_store,
+        settings=candidate_settings,
+    )
+    repository = ontology_repository_from_settings(candidate_settings)
+    try:
+        candidate_rulebox = dict(repository.rulebox_snapshot() or {})
+    except Exception:
+        candidate_rulebox = {}
+    rulebox_fingerprint = str(
+        candidate_rulebox.get("sourceRulesHash")
+        or candidate_rulebox.get("rulesHash")
+        or candidate_rulebox.get("ruleboxRulesHash")
+        or ""
+    )
+    release_identity = reasoning_release_identity(descriptor, rulebox_fingerprint)
+    time_series_store = QuestDBTimeSeriesAdapter(
+        candidate_settings,
+        descriptor.time_series_backend_id,
+    )
+    projection_recorder = PortfolioOntologyProjectionRecorder(
+        repository,
+        quality_store=stores.ontology_quality_sample_store(store_settings),
+        projection_run_store=stores.ontology_projection_run_store(store_settings),
+        decision_episode_store=stores.investment_decision_episode_store(store_settings),
+        hypothesis_proposal_store=stores.investment_research_store(store_settings),
+        hypothesis_lifecycle_store=stores.hypothesis_lifecycle_store(store_settings),
+        data_pipeline_health_store=stores.data_pipeline_health_store(store_settings),
+        market_time_series_store=time_series_store,
+        investment_domain_store=stores.investment_domain_store(store_settings),
+        world_projection_outbox=None,
+        inference_detail_outbox=V2InferenceDetailReceiptSink(),
+        graph_assembly_cache_store=None,
+        settings=candidate_settings,
+        source="reasoning-engine-v2-independent",
+    )
+    registry_store = stores.reasoning_engine_registry_store(store_settings)
+    existing_health = dict((registry_store.get(descriptor.deployment_id) or {}).get("health") or {})
+    existing_health.update({
+        "candidateReleaseId": release_identity.get("releaseId"),
+        "candidateRuntimeRevision": release_identity.get("runtimeRevision"),
+        "candidateReleaseFingerprint": release_identity.get("releaseFingerprint"),
+        "releaseFingerprint": release_identity.get("releaseFingerprint"),
+        "validationCohortId": release_identity.get("validationCohortId"),
+        "ruleboxFingerprint": release_identity.get("ruleboxFingerprint"),
+        "independentExecution": True,
+        "directSourceEvents": True,
+        "monitorRunnerUsed": False,
+    })
+    registry_store.update_health(descriptor.deployment_id, existing_health)
+
+    def delivery_authorized():
+        control = registry_store.control()
+        deployment = registry_store.get(descriptor.deployment_id)
+        return bool(
+            str(control.delivery_deployment_id or "") == descriptor.deployment_id
+            and str(control.active_deployment_id or "") == descriptor.deployment_id
+            and str(deployment.get("status") or "") == "active"
+        )
+
+    return V2ReasoningEngine(
+        descriptor=descriptor,
+        input_assembler=IndependentReasoningInputAssembler(
+            account_repository,
+            snapshot_source,
+            monitor_store,
+            candidate_settings,
+        ),
+        inference_executor=ScopedTypeDBInferenceExecutor(projection_recorder),
+        candidate_builder=GraphDecisionCandidateBuilder(
+            RealtimeMonitor(candidate_settings),
+            monitor_store,
+        ),
+        cycle_recorder=stores.monitoring_cycle_recorder(
+            store_settings,
+            monitor_store,
+            time_series_store,
+        ),
+        delivery_authorized_provider=delivery_authorized,
+        settings=candidate_settings,
+        release_identity=release_identity,
+    )
+
+
+def build_v2_reasoning_job_runner(settings=None, worker_id: str = "") -> IndependentReasoningJobRunner:
+    configured = dict(settings or runtime_settings())
+    return IndependentReasoningJobRunner(
+        queue=stores.reasoning_engine_job_store(configured),
+        engine=build_v2_reasoning_engine(configured),
+        registry=stores.reasoning_engine_registry_store(configured),
+        settings=configured,
+        worker_id=worker_id,
+        event_reader=stores.event_log(configured),
     )
 
 

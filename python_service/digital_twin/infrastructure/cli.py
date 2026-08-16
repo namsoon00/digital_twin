@@ -1136,7 +1136,10 @@ def time_series_platform_command(args) -> int:
 
 def reasoning_engine_platform_command(args) -> int:
     from .reasoning_engine_factory import build_reasoning_engine_platform
-    from .service_factory import build_reasoning_engine_shadow_runner
+    from .service_factory import (
+        build_reasoning_engine_shadow_runner,
+        build_v2_reasoning_job_runner,
+    )
 
     configured = runtime_settings()
     platform = build_reasoning_engine_platform(configured)
@@ -1153,6 +1156,19 @@ def reasoning_engine_platform_command(args) -> int:
         return 0
     if args.reasoning_engine_action == "shadow-watch":
         build_reasoning_engine_shadow_runner(
+            configured,
+            worker_id=getattr(args, "worker_id", ""),
+        ).watch()
+        return 0
+    if args.reasoning_engine_action == "v2-once":
+        result = build_v2_reasoning_job_runner(
+            configured,
+            worker_id=getattr(args, "worker_id", ""),
+        ).run_once()
+        print(json.dumps(result, ensure_ascii=False))
+        return 0
+    if args.reasoning_engine_action == "v2-watch":
+        build_v2_reasoning_job_runner(
             configured,
             worker_id=getattr(args, "worker_id", ""),
         ).watch()
@@ -1184,24 +1200,49 @@ def reasoning_engine_platform_command(args) -> int:
         print(json.dumps(result, ensure_ascii=False))
         return 0 if result.get("status") == "candidate" else 2
     if args.reasoning_engine_action == "promote":
+        previous_control = dict(state.get("control") or {})
+        previous_active_id = str(
+            previous_control.get("active_deployment_id")
+            or previous_control.get("activeDeploymentId")
+            or ""
+        )
+        previous_active_version = platform.engine_version_for(previous_active_id)
+        previous_graph_database = str(configured.get("typedbDatabase") or "").strip()
         result = platform.promote_from_history(args.deployment_id)
         if result.get("status") == "promoted":
             control = dict(result.get("control") or {})
-            save_runtime_settings({
+            active_id = str(
+                control.get("active_deployment_id")
+                or args.deployment_id
+            )
+            active_version = platform.engine_version_for(active_id)
+            switched_settings = {
                 "reasoningEngineActiveDeploymentId": control.get("active_deployment_id") or args.deployment_id,
                 "reasoningEngineDeliveryDeploymentId": control.get("delivery_deployment_id") or args.deployment_id,
                 "reasoningEngineCandidateDeploymentId": control.get("candidate_deployment_id") or "",
-            })
+                "reasoningEngineActiveVersion": active_version,
+                "typedbDatabase": platform.graph_database_for(active_id),
+            }
+            if previous_active_version == "v1" and previous_graph_database:
+                switched_settings["reasoningEngineV1TypeDbDatabase"] = previous_graph_database
+            save_runtime_settings(switched_settings)
         print(json.dumps(result, ensure_ascii=False))
         return 0 if result.get("status") == "promoted" else 2
     if args.reasoning_engine_action == "rollback":
         result = platform.rollback()
         if result.get("status") == "rolled-back":
             control = dict(result.get("control") or {})
+            active_id = str(
+                control.get("active_deployment_id")
+                or configured.get("reasoningEngineV1DeploymentId")
+                or "ontology-v1-active"
+            )
             save_runtime_settings({
-                "reasoningEngineActiveDeploymentId": control.get("active_deployment_id") or "ontology-v1-active",
-                "reasoningEngineDeliveryDeploymentId": control.get("delivery_deployment_id") or "ontology-v1-active",
+                "reasoningEngineActiveDeploymentId": active_id,
+                "reasoningEngineDeliveryDeploymentId": control.get("delivery_deployment_id") or active_id,
                 "reasoningEngineCandidateDeploymentId": control.get("candidate_deployment_id") or "",
+                "reasoningEngineActiveVersion": platform.engine_version_for(active_id),
+                "typedbDatabase": platform.graph_database_for(active_id),
             })
         print(json.dumps(result, ensure_ascii=False))
         return 0 if result.get("status") == "rolled-back" else 2
@@ -2082,6 +2123,10 @@ def build_parser() -> argparse.ArgumentParser:
     reasoning_shadow_once.add_argument("--worker-id", default="")
     reasoning_shadow_watch = reasoning_engine_actions.add_parser("shadow-watch")
     reasoning_shadow_watch.add_argument("--worker-id", default="")
+    reasoning_v2_once = reasoning_engine_actions.add_parser("v2-once")
+    reasoning_v2_once.add_argument("--worker-id", default="")
+    reasoning_v2_watch = reasoning_engine_actions.add_parser("v2-watch")
+    reasoning_v2_watch.add_argument("--worker-id", default="")
     reasoning_comparisons = reasoning_engine_actions.add_parser("comparisons")
     reasoning_comparisons.add_argument("--deployment-id", default="ontology-v2-shadow")
     reasoning_comparisons.add_argument("--limit", type=int, default=50)

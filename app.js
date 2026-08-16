@@ -10506,6 +10506,12 @@
     document.body.classList.toggle("oa-overlay-open", overlayOpen);
   }
 
+  function syncRenderedOverlayPageState() {
+    var overlayOpen = Boolean(activeOverlayDialog());
+    syncOverlayPageState(overlayOpen);
+    return overlayOpen;
+  }
+
   function render() {
     if (renderSuppressionDepth > 0) {
       renderQueuedDuringSuppression = true;
@@ -10536,14 +10542,15 @@
     } else if (overlayWasOpen && !overlayWillBeOpen && overlayScrollPosition) {
       renderedScrollPosition = overlayScrollPosition;
     }
-    syncOverlayPageState(overlayWillBeOpen);
     if (state.loading && !state.snapshot) {
+      syncOverlayPageState(false);
       destroyOntologyCytoscapeGraphs();
       app.innerHTML = renderLoading();
       syncNetworkActivityDom();
       return;
     }
     if (!state.snapshot) {
+      syncOverlayPageState(false);
       destroyOntologyCytoscapeGraphs();
       app.innerHTML = renderError();
       bindAutoGrowingTextareas(app);
@@ -10569,7 +10576,8 @@
       restoreRenderedPageScrollPositionAfterLayout(renderedScrollPosition);
       restoreRenderedInteractiveStateAfterLayout(renderedInteractiveState);
     }
-    if (!overlayWillBeOpen) overlayScrollPosition = null;
+    var overlayRenderedOpen = syncRenderedOverlayPageState();
+    if (!overlayRenderedOpen) overlayScrollPosition = null;
     syncAppNavScrollState();
     syncTopbarScrollState();
     bindMobileInfiniteScroll();
@@ -10843,7 +10851,7 @@
       return button.getAttribute("data-work-detail") === target.type
         && String(button.getAttribute("data-work-detail-key") || "") === String(target.key || "");
     })[0];
-    if (match && match.focus) match.focus();
+    if (match) focusElementWithoutScroll(match);
   }
 
   function trapWorkDetailFocus(event) {
@@ -31573,6 +31581,9 @@
 
   if (window.addEventListener) {
     window.addEventListener("popstate", syncTabFromLocation);
+    window.addEventListener("pageshow", function () {
+      syncRenderedOverlayPageState();
+    });
     window.addEventListener("scroll", function () {
       notePageScrollActivity();
       rememberRenderedPageScrollPosition();

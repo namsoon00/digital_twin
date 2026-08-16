@@ -1514,7 +1514,12 @@ class PortfolioOntologyProjectionRecorder:
                 compact_impact_plan,
                 initial_projection=not bool(active_abox.get("aboxSnapshotId")),
             )
-            inference_symbols = self.inference_symbols(
+            explicit_inference_symbols = (
+                self.inference_symbols(snapshot, target_symbols)
+                if target_symbols
+                else []
+            )
+            inference_symbols = explicit_inference_symbols or self.inference_symbols(
                 snapshot,
                 inference_impact_plan.get("inferenceTargetSymbols") or target_symbols,
             )
@@ -5386,7 +5391,12 @@ class PortfolioOntologyProjectionRecorder:
             reasoning_context=reasoning_context,
         )
         available = self.snapshot_symbols(snapshot)
-        inferred = self.inference_symbols(
+        explicit = (
+            self.inference_symbols(snapshot, requested_symbols)
+            if requested_symbols
+            else []
+        )
+        inferred = explicit or self.inference_symbols(
             snapshot,
             preliminary.get("inferenceTargetSymbols") or requested_symbols,
         )
@@ -5397,9 +5407,9 @@ class PortfolioOntologyProjectionRecorder:
             scheduler_target_symbol_limit=self.scheduler_target_symbol_limit(reasoning_context),
         )
         # ``inference_symbols`` falls back to the full snapshot when its
-        # argument is empty. This branch needs the literal scheduler request
-        # to distinguish a chosen subject from a whole-world cycle.
-        explicit = self.inference_symbols(snapshot, requested_symbols) if requested_symbols else []
+        # argument is empty. An explicit scheduler request is authoritative:
+        # impact analysis may select rule families and shared context, but it
+        # must not append unrelated subjects to this execution turn.
         integrity_age_minutes = self.scope_integrity_audit_age_minutes(active_metadata)
         integrity_due = (
             integrity_age_minutes is None

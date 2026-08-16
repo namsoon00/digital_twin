@@ -829,7 +829,6 @@ class OntologyInferenceQualityTests(unittest.TestCase):
         repository = ScopeAwareRepository()
         recorder = PortfolioOntologyProjectionRecorder(
             repository,
-            settings={"typedbNativeRuleTargetSymbolLimit": "1"},
         )
         first = recorder.record_snapshot(
             self.snapshot_with_positions([samsung, hynix], utc_now_iso())
@@ -864,6 +863,7 @@ class OntologyInferenceQualityTests(unittest.TestCase):
         self.assertEqual(2, second["graphInput"]["referencePositionCount"])
         self.assertEqual("applied", patch["status"])
         self.assertEqual(["005930"], patch["targetSymbols"])
+        self.assertEqual(["005930"], repository.target_symbols)
         self.assertNotEqual(first_generations[samsung_market_scope], final_generations[samsung_market_scope])
         self.assertEqual(first_generations[hynix_market_scope], final_generations[hynix_market_scope])
 

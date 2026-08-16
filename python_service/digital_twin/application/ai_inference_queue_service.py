@@ -104,10 +104,17 @@ class NotificationAIRequestEnqueuer:
         context["ontologyQualityGate"] = ontology_quality_gate_context(context, self.settings)
         execution_profile = notification_ai_execution_profile(context, self.settings)
         context["notificationAiExecutionProfile"] = execution_profile
+        model = str(self.settings.get("notificationAiModel") or "gpt-5.6-sol")
+        context["notificationAiReplayManifest"] = {
+            "promptVersion": AI_DECISION_PROMPT_VERSION,
+            "modelVersion": model,
+            "decisionContractVersion": AI_DECISION_CONTRACT_VERSION,
+            "reasoningEffort": str(execution_profile.get("reasoningEffort") or "max"),
+        }
         request = AIInferenceRequest.create(
             job,
             context,
-            model=str(self.settings.get("notificationAiModel") or "gpt-5.6-sol"),
+            model=model,
             reasoning_effort=str(execution_profile.get("reasoningEffort") or "max"),
             prompt_version=AI_DECISION_PROMPT_VERSION,
         )

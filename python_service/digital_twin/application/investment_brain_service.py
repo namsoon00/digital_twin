@@ -15,6 +15,10 @@ from ..domain.investment_evidence_governance import (
 )
 from ..domain.hypothesis_calibration import attach_abox_hypothesis_calibrations
 from ..domain.message_types import INVESTMENT_INSIGHT
+from ..domain.notification_ai_decision_brief import (
+    AI_DECISION_CONTRACT_VERSION,
+    AI_DECISION_PROMPT_VERSION,
+)
 from ..domain.ontology_inference_context import relation_context_from_inferencebox
 from ..domain.ontology_worlds import portfolio_world_id
 from ..domain.portfolio import PortfolioSummary, Position
@@ -155,6 +159,12 @@ class InvestmentBrainService:
             "criteria": ["TypeDB 동적 인과 가설 비교", "반대 근거와 데이터 공백 조사", "검증 근거 반영 후 공통 AI 심판"],
             "ontologyRelationContext": relation_context,
             "investmentBrainQuestion": question.to_dict(),
+            "notificationAiReplayManifest": {
+                "promptVersion": AI_DECISION_PROMPT_VERSION,
+                "modelVersion": str(self.settings.get("notificationAiModel") or "gpt-5.6-sol"),
+                "decisionContractVersion": AI_DECISION_CONTRACT_VERSION,
+                "reasoningEffort": "max",
+            },
         }
         response = self.reviewer.review(context)
         response_payload = response.to_dict()

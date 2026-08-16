@@ -225,6 +225,11 @@ class DecisionContinuityTests(unittest.TestCase):
             "notification-ai-decision-contract-v4",
             queue.request.context["notificationAiDecisionContractVersion"],
         )
+        self.assertEqual(
+            "investment-ai-judge-v5",
+            queue.request.context["notificationAiReplayManifest"]["promptVersion"],
+        )
+        self.assertTrue(queue.request.context["notificationAiReplayManifest"]["modelVersion"])
 
     def test_ai_brief_and_prompt_keep_continuity_contract(self):
         context = {

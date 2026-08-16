@@ -113,6 +113,7 @@ from ..infrastructure.service_factory import (
     build_investment_calendar_service,
     build_investment_strategy_proposal_service,
     build_investment_brain_service,
+    build_historical_decision_replay_service,
     build_hypothesis_development_service,
     build_trade_execution_service,
     build_notification_queue_runner,
@@ -5478,6 +5479,31 @@ class DigitalTwinHandler(BaseHTTPRequestHandler):
                 account_id=configured(body.get("accountId")) or first_query(query, "accountId"),
                 symbol=configured(body.get("symbol")) or first_query(query, "symbol"),
                 limit=limit,
+            ))
+
+        if path == "/api/investment-brain/decision-replay" and self.command in {"GET", "POST"}:
+            body = self.read_json_body() if self.command == "POST" else {}
+            try:
+                limit = int(body.get("limit") or first_query(query, "limit") or 500)
+            except (TypeError, ValueError):
+                limit = 500
+            try:
+                case_limit = int(body.get("caseLimit") or first_query(query, "caseLimit") or 30)
+            except (TypeError, ValueError):
+                case_limit = 30
+            include_cases_value = body.get("includeCases")
+            if include_cases_value is None:
+                include_cases_value = first_query(query, "includeCases")
+            include_cases = str(include_cases_value or "").strip().lower() in {"1", "true", "yes", "on"}
+            return self.send_payload(200, build_historical_decision_replay_service(
+                operational_read_settings(),
+            ).run(
+                account_id=str(body.get("accountId") or first_query(query, "accountId") or ""),
+                symbol=str(body.get("symbol") or first_query(query, "symbol") or ""),
+                limit=limit,
+                include_cases=include_cases,
+                case_limit=case_limit,
+                replay_mode=str(body.get("replayMode") or first_query(query, "replayMode") or "strict-replay"),
             ))
 
         if path == "/api/investment-brain/hypothesis-quality-review" and self.command == "POST":

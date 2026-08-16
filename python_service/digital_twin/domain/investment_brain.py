@@ -26,6 +26,7 @@ from .hypothesis_outcome_contract import (
     outcome_contract_fingerprint,
 )
 from .ontology_decision_state import DATA_STATES, REVIEW_LEVELS, VALIDATION_STATES
+from .ontology_schema import tbox_fingerprint
 from .ontology_worlds import market_world
 
 
@@ -2855,6 +2856,7 @@ def decision_episode_from_context(
         selected_id,
         effective_at=decided_at,
     )
+    replay_manifest = decision_replay_manifest(context, relation_context)
     return DecisionEpisode(
         episode_id=episode_id,
         account_id=str(context.get("accountId") or ""),
@@ -2925,11 +2927,76 @@ def decision_episode_from_context(
         facts_at_decision={
             **dict(relation_context.get("facts") or {}),
             **({"hypothesisOutcomeContract": outcome_contract} if outcome_contract else {}),
+            **({"engineManifest": replay_manifest} if replay_manifest else {}),
             **({"decisionReferenceDateRaw": raw_decided_at} if raw_decided_at != decided_at else {}),
         },
         research_plan=dict(brain.get("researchPlan") or relation_context.get("researchPlan") or {}),
         research_audit=dict(relation_context.get("researchCycle") or {}),
     )
+
+
+def decision_replay_manifest(
+    context: Dict[str, object],
+    relation_context: Dict[str, object],
+) -> Dict[str, object]:
+    """Freeze the release identities required for later engine comparison."""
+
+    frozen = (
+        context.get("notificationAiReplayManifest")
+        if isinstance(context.get("notificationAiReplayManifest"), dict)
+        else {}
+    )
+    execution = (
+        context.get("notificationAiExecutionAudit")
+        if isinstance(context.get("notificationAiExecutionAudit"), dict)
+        else {}
+    )
+    prompt_context = (
+        relation_context.get("promptContext")
+        if isinstance(relation_context.get("promptContext"), dict)
+        else {}
+    )
+    graph_inference = (
+        relation_context.get("graphStoreInference")
+        if isinstance(relation_context.get("graphStoreInference"), dict)
+        else {}
+    )
+    typedb_inference = (
+        relation_context.get("typedbInference")
+        if isinstance(relation_context.get("typedbInference"), dict)
+        else {}
+    )
+    return {
+        "tboxFingerprint": str(
+            relation_context.get("tboxFingerprint")
+            or graph_inference.get("tboxFingerprint")
+            or typedb_inference.get("tboxFingerprint")
+            or tbox_fingerprint()
+        ),
+        "ruleboxFingerprint": str(
+            relation_context.get("ruleboxRulesHash")
+            or relation_context.get("ruleboxFingerprint")
+            or graph_inference.get("ruleboxFingerprint")
+            or typedb_inference.get("ruleboxFingerprint")
+            or ""
+        ),
+        "promptVersion": str(
+            frozen.get("promptVersion")
+            or execution.get("promptVersion")
+            or prompt_context.get("promptVersion")
+            or ""
+        ),
+        "modelVersion": str(
+            frozen.get("modelVersion")
+            or execution.get("model")
+            or ""
+        ),
+        "decisionContractVersion": str(frozen.get("decisionContractVersion") or ""),
+        "reasoningEffort": str(frozen.get("reasoningEffort") or execution.get("reasoningEffort") or ""),
+        "reasoningEngineVersion": str(relation_context.get("engineVersion") or ""),
+        "inferenceGenerationId": str(relation_context.get("inferenceGenerationId") or ""),
+        "sourceAboxSnapshotId": str(relation_context.get("sourceAboxSnapshotId") or ""),
+    }
 
 
 def selected_hypothesis_outcome_contract(

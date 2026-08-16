@@ -31,6 +31,7 @@ from ..application.hypothesis_research_planner_service import HypothesisResearch
 from ..application.hypothesis_review_service import HypothesisReviewService
 from ..application.hypothesis_quality_review_service import HypothesisQualityReviewService
 from ..application.hypothesis_outcome_replay_service import HypothesisOutcomeReplayService
+from ..application.historical_decision_replay_service import HistoricalDecisionReplayService
 from ..application.hypothesis_development_service import HypothesisDevelopmentService
 from ..application.investment_strategy_proposal_service import InvestmentStrategyProposalService
 from ..application.investment_calendar_candidate_service import InvestmentCalendarCandidateService
@@ -571,6 +572,15 @@ def build_investment_brain_service(settings=None) -> InvestmentBrainService:
             hypothesis_review_service=hypothesis_review_service,
             quality_review_service=hypothesis_quality_review_service,
         ),
+    )
+
+
+def build_historical_decision_replay_service(settings=None) -> HistoricalDecisionReplayService:
+    """Build the read-only point-in-time replay audit without heavy brain dependencies."""
+
+    configured_settings = settings or runtime_settings()
+    return HistoricalDecisionReplayService(
+        decision_episode_store=stores.investment_decision_episode_store(configured_settings),
     )
 
 

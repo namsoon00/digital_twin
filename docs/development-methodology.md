@@ -26,6 +26,12 @@ This project uses a local-first, DDD-oriented, event-driven architecture. Future
   snapshot. A material fingerprint may omit polling provenance; a reusable
   graph cache key may not omit fields that affect freshness, session, flow, or
   data-quality facts.
+- Historical decision replay must follow `docs/point-in-time-decision-replay.md`.
+  Keep the market reference clock separate from the final persistence clock,
+  read immutable decision facts separately from mutable outcomes/follow-ups,
+  and reject every observation that was not known by the replay cutoff. Never
+  rewrite a legacy decision with current engine metadata to make it appear
+  exactly replayable.
 - Do not pass API keys, Telegram tokens, client secrets, or raw account credentials through events, docs, tests, or git-tracked files.
 - Keep old top-level Python modules only as compatibility re-export modules. New code should import from the layer package directly.
 - Build investment-analysis features ontology-first. New investment facts, relationships, semantic rules, AI context, and notification triggers must enter the TBox/ABox/TypeDB schema function rule/InferenceBox flow before they influence user-facing investment judgement.

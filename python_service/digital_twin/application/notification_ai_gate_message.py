@@ -15,7 +15,8 @@ from ..domain.notification_ai_context import active_rule_items, relation_facts
 from ..domain.notification_ai_context import is_watchlist_context
 from ..domain.external_api_sources import external_api_source_line
 from ..domain.notification_ai_gate_contracts import ACTION_LABELS, MESSAGE_START_BADGE, NotificationAIValidatedResponse
-from ..domain.notification_icon_policy import investment_notification_icon, notification_title_with_context_icon
+from ..domain.notification_icon_policy import notification_message_icon
+from ..domain.notification_title_policy import investment_action_title, investment_notification_title
 from ..domain.notification_explanation import (
     build_notification_explanation_packet,
     normalize_notification_detail_level,
@@ -635,6 +636,18 @@ def prepend_execution_start_badge(rendered: str, context: Dict[str, object] = No
     text = str(rendered or "").strip()
     if not text:
         return text
+    values = dict(context or {})
+    contextual_title = investment_notification_title(
+        values.get("messageType") or values.get("rule") or "",
+        values,
+        values.get("displayTarget") or values.get("target") or values.get("title") or "",
+    )
+    first_line = html.unescape(re.sub(r"<[^>]+>", "", text.splitlines()[0])).strip()
+    if contextual_title and first_line == contextual_title:
+        return text
+    contextual_icon = notification_message_icon(values.get("messageType") or values.get("rule") or "", values)
+    if contextual_icon and first_line.startswith(contextual_icon + " "):
+        return text
     summary = notification_topline_change_summary(context or {})
     plain_badge = labeled_message_start_badge(MESSAGE_START_BADGE, context or {})
     html_badge = "<b>" + html.escape(plain_badge, quote=False) + "</b>"
@@ -869,53 +882,26 @@ def target_name_for_headline(target: object) -> str:
             break
     return text[:24].rstrip()
 
-def title_prefix_from_headline(headline: str) -> str:
-    text = str(headline or "").strip()
-    match = re.match(r"^(\[[^\]]+\]\s+(?:\S+\s+)?)", text)
-    return match.group(1).strip() if match else ""
-
 def action_headline(response: NotificationAIValidatedResponse, context: Dict[str, object] = None) -> str:
-    action = response.action
-    if is_watchlist_context(context or {}):
-        if action in {"BUY", "ADD"}:
-            return "소액 진입 조건 점검"
-        if action == "HOLD":
-            return "관심 유지·진입 조건 확인"
-        if action in {"TRIM", "SELL", "AVOID"}:
-            return "신규 진입 회피"
-    if action == "BUY":
-        return "매수 조건 점검"
-    if action == "ADD":
-        return "추가매수 조건 점검"
-    if action == "HOLD":
-        return "보유 유지·다음 조건 확인"
-    if action == "TRIM":
-        return "분할축소 우선 점검"
-    if action == "SELL":
-        return "매도 우선 점검"
-    if action == "AVOID":
-        return "신규 진입 회피"
-    return response.action_label or "대응 기준 점검"
+    return investment_action_title(response.action, is_watchlist_context(context or {})) or response.action_label or "대응 기준 점검"
 
 def execution_headline(context: Dict[str, object], response: NotificationAIValidatedResponse) -> str:
     presentation_context = dict(context or {})
     presentation_context["notificationAiValidatedResponse"] = response.to_dict()
-    headline = notification_title_with_context_icon(
+    headline = investment_notification_title(
         presentation_context.get("messageType") or presentation_context.get("rule") or "",
-        presentation_context.get("headline") or presentation_context.get("title") or "알림",
         presentation_context,
+        presentation_context.get("displayTarget") or presentation_context.get("target") or presentation_context.get("title") or "",
     )
-    prefix = title_prefix_from_headline(headline)
-    if not prefix:
-        prefix = investment_notification_icon(
-            presentation_context.get("messageType") or presentation_context.get("rule") or "",
-            presentation_context,
-        )
+    if headline:
+        return headline
     target = target_name_for_headline(context.get("displayTarget") or context.get("target") or context.get("title") or "")
     action = action_headline(response, context)
-    if target:
-        return " ".join(part for part in [prefix, target + ": " + action] if part)
-    return " ".join(part for part in [prefix, action] if part) or headline
+    icon = notification_message_icon(
+        presentation_context.get("messageType") or presentation_context.get("rule") or "",
+        presentation_context,
+    )
+    return " ".join(part for part in [icon, ((target + " · ") if target else "") + action] if part)
 
 def _plain_value(context: Dict[str, object], label: str) -> str:
     if label == "투자자":

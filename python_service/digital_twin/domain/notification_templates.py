@@ -85,6 +85,7 @@ from .notification_title_rules import (
 )
 from .notifications import notification_debug_number
 from .notification_start_badge import labeled_message_start_badge
+from .notification_title_policy import investment_notification_title
 from .operational_notification_presentation import (
     operational_message_start_badge,
     operational_presentation_context,
@@ -397,7 +398,22 @@ def alert_context(event: AlertEvent) -> Dict[str, object]:
     title_icon = notification_title_icon(event.rule, raw_lines, event)
     title_headline = notification_title_headline(event.rule, raw_lines, event, message_type_label or event.title)
     target_value = target_display_value(event.title, raw_symbol, display_symbol)
-    headline = targeted_headline(status_headline, title_icon, target_value, title_headline)
+    title_context = dict(metadata)
+    title_context.update({
+        "messageType": event.rule,
+        "rule": event.rule,
+        "title": event.title,
+        "target": event.target(),
+        "displayTarget": target_value,
+        "symbol": event.symbol,
+        "rawSymbol": raw_symbol,
+        "symbolDisplayName": display_symbol,
+        "displaySymbolName": display_symbol,
+        "metadata": metadata,
+    })
+    headline = investment_notification_title(event.rule, title_context, target_value)
+    if not headline:
+        headline = targeted_headline(status_headline, title_icon, target_value, title_headline)
     target_line = "대상: " + target_value if target_value else ""
     criteria = event_criterion_lines(event, raw_lines, trigger_summary)
     signals = notification_signal_categories(event.rule, raw_lines)
@@ -1085,6 +1101,15 @@ def prepend_message_start_badge(rendered: str, rich: bool = False, context: Dict
     if not text:
         return text
     if context_message_type(context or {}) == OPERATOR_REASONING_REPORT:
+        return text
+    values = dict(context or {})
+    contextual_title = investment_notification_title(
+        context_message_type(values),
+        values,
+        values.get("displayTarget") or values.get("target") or values.get("title") or "",
+    )
+    first_line = html.unescape(re.sub(r"<[^>]+>", "", text.splitlines()[0])).strip()
+    if contextual_title and first_line == contextual_title:
         return text
     base_badge = operational_message_start_badge(context or {}, MESSAGE_START_BADGE)
     plain_badge = labeled_message_start_badge(base_badge, context or {})

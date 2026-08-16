@@ -11,6 +11,8 @@ from digital_twin.domain.notification_icon_policy import (  # noqa: E402
     notification_title_with_context_icon,
 )
 from digital_twin.domain.notification_title_rules import notification_title_icon  # noqa: E402
+from digital_twin.domain.notification_title_policy import investment_notification_title  # noqa: E402
+from digital_twin.domain.notification_templates import NotificationTemplate, alert_context, render_notification  # noqa: E402
 from digital_twin.domain.portfolio import AlertEvent  # noqa: E402
 
 
@@ -169,6 +171,86 @@ class NotificationIconPolicyTests(unittest.TestCase):
             "⏸️ NVIDIA",
             notification_title_with_context_icon("investmentInsight", "NVIDIA", legacy_context),
         )
+
+    def test_structured_title_shows_the_final_action_transition(self):
+        context = investment_context("HOLD", "BUY", "ENTRY_ELIGIBLE")
+        context["displayTarget"] = "NVIDIA / NVDA"
+
+        self.assertEqual(
+            "🟢 NVIDIA · 관심 유지 → 소액 진입 검토",
+            investment_notification_title("investmentInsight", context),
+        )
+
+    def test_final_ai_transition_wins_over_a_graph_candidate_change(self):
+        context = investment_context("HOLD", "BUY", "ENTRY_ELIGIBLE")
+        context.update({
+            "displayTarget": "NVIDIA / NVDA",
+            "notificationAiValidatedResponse": {"action": "HOLD"},
+            "aiDecisionTransition": {
+                "historyAvailable": True,
+                "kind": "unchanged",
+                "previousAction": "HOLD",
+                "currentAction": "HOLD",
+            },
+        })
+
+        self.assertEqual(
+            "👀 NVIDIA · 관심 유지",
+            investment_notification_title("investmentInsight", context),
+        )
+
+    def test_non_material_graph_transition_is_not_presented_as_an_action_change(self):
+        context = investment_context("HOLD", "BUY", "ENTRY_ELIGIBLE")
+        context["displayTarget"] = "NVIDIA / NVDA"
+        context["decisionTransition"]["material"] = False
+
+        self.assertEqual(
+            "🟢 NVIDIA · 소액 진입 검토",
+            investment_notification_title("investmentInsight", context),
+        )
+
+    def test_unavailable_data_uses_a_blocked_judgement_title(self):
+        context = investment_context("", "HOLD", "JUDGEMENT_BLOCKED", data_state="unavailable")
+        context["displayTarget"] = "NVIDIA / NVDA"
+
+        self.assertEqual(
+            "⚠️ NVIDIA · 판단 보류",
+            investment_notification_title("investmentInsight", context),
+        )
+
+    def test_holding_title_uses_one_action_icon_and_plain_action_label(self):
+        context = investment_context("", "HOLD", "HOLDING_REVIEW", watchlist=False)
+        context.update({"displayTarget": "Strategy / MSTR", "companyName": "Strategy"})
+
+        self.assertEqual(
+            "⚖️ Strategy · 보유 유지",
+            investment_notification_title("investmentInsight", context),
+        )
+
+    def test_rendered_investment_message_has_one_title_and_no_generic_badge(self):
+        context = investment_context("HOLD", "BUY", "ENTRY_ELIGIBLE")
+        event = AlertEvent(
+            "account-1",
+            "계좌",
+            "WATCH",
+            "investmentInsight",
+            "nvda-entry",
+            "NVIDIA",
+            [],
+            symbol="NVDA",
+            metadata=context,
+        )
+
+        rendered = render_notification(
+            NotificationTemplate("investmentInsight", "{telegramMessage}"),
+            alert_context(event),
+        )
+
+        title = "🟢 NVIDIA · 관심 유지 → 소액 진입 검토"
+        self.assertTrue(rendered.startswith("<b>" + title + "</b>"))
+        self.assertEqual(1, rendered.count(title))
+        self.assertNotIn("🔔 새 알림", rendered)
+        self.assertNotIn("[관찰]", rendered)
 
 
 if __name__ == "__main__":

@@ -1022,7 +1022,7 @@ class ActionEnvelopeAiGateTests(unittest.TestCase):
         message = execution_telegram_message(context, response)
 
         self.assertEqual("신규 매수 보류", notification_topline_change_summary(context))
-        self.assertIn("<b>[관찰] ⏸️ NVIDIA: 관심 유지·진입 조건 확인</b>", message)
+        self.assertIn("<b>⏸️ NVIDIA · 소액 진입 검토 → 관심 유지</b>", message)
         self.assertIn("[신규 매수 보류] 소액 진입 검토에서 관심 유지로 바뀌었습니다.", message)
         self.assertIn("매도 신호가 아니라, 진입 조건을 더 확인하는 동안 새로 사지 않는다는 뜻입니다.", message)
         self.assertNotIn("매도 검토 시작", message)

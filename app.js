@@ -1052,28 +1052,114 @@
     instrumentTimelineChart = null;
   }
 
-  function instrumentChartEventMarkers(events, candles) {
-    if (!candles.length) return [];
-    var times = candles.map(function (item) { return Math.floor(Date.parse(item.time || "") / 1000); }).filter(Number.isFinite);
-    if (!times.length) return [];
-    var minimum = times[0];
-    var maximum = times[times.length - 1];
+  function instrumentEventEpochSeconds(value) {
+    var raw = String(value || "").trim();
+    if (/^\d{8}$/.test(raw)) {
+      return Math.floor(Date.UTC(Number(raw.slice(0, 4)), Number(raw.slice(4, 6)) - 1, Number(raw.slice(6, 8))) / 1000);
+    }
+    var parsed = Date.parse(raw);
+    return Number.isFinite(parsed) ? Math.floor(parsed / 1000) : NaN;
+  }
+
+  function nearestInstrumentCandleIndex(times, target) {
+    if (!times.length) return -1;
+    var low = 0;
+    var high = times.length - 1;
+    while (low <= high) {
+      var middle = Math.floor((low + high) / 2);
+      if (times[middle] === target) return middle;
+      if (times[middle] < target) low = middle + 1;
+      else high = middle - 1;
+    }
+    if (low <= 0) return 0;
+    if (low >= times.length) return times.length - 1;
+    return Math.abs(times[low] - target) < Math.abs(times[low - 1] - target) ? low : low - 1;
+  }
+
+  function instrumentChartEventProjection(events, candles, options) {
+    options = options || {};
     var labels = { evidence: "뉴스", calendar: "일정", decision: "판단", hypothesis: "가설", notification: "알림" };
-    var colors = { positive: "#0f8f72", negative: "#c9485b", warning: "#c6871a", neutral: "#2563a6" };
-    return (events || []).map(function (event) {
-      var occurred = Math.floor(Date.parse(event.occurredAt || "") / 1000);
-      if (!Number.isFinite(occurred) || occurred < minimum || occurred > maximum) return null;
-      var nearest = times.reduce(function (selected, time) {
-        return Math.abs(time - occurred) < Math.abs(selected - occurred) ? time : selected;
-      }, times[0]);
+    var typePriority = { notification: 5, decision: 4, calendar: 3, hypothesis: 2, evidence: 1 };
+    var tonePriority = { negative: 4, warning: 3, positive: 2, neutral: 1 };
+    var typeColors = { evidence: "#2563a6", calendar: "#c6871a", decision: "#0f8f72", hypothesis: "#7c5cbf", notification: "#c9485b", event: "#64748b" };
+    var times = (candles || []).map(function (item) {
+      return instrumentEventEpochSeconds(item && item.time);
+    }).filter(Number.isFinite).sort(function (left, right) { return left - right; });
+    if (!times.length) return { markers: [], markerCount: 0, representedEventCount: 0, groupedEventCount: 0, labelCount: 0 };
+    var buckets = {};
+    (events || []).forEach(function (event) {
+      var occurred = instrumentEventEpochSeconds(event && event.occurredAt);
+      if (!Number.isFinite(occurred) || occurred < times[0] || occurred > times[times.length - 1]) return;
+      var candleIndex = nearestInstrumentCandleIndex(times, occurred);
+      if (candleIndex < 0) return;
+      var candleTime = times[candleIndex];
+      var key = String(candleTime);
+      if (!buckets[key]) {
+        buckets[key] = { time: candleTime, candleIndex: candleIndex, events: [], typeCounts: {}, toneCounts: {} };
+      }
+      var type = labels[event.type] ? event.type : "event";
+      var tone = tonePriority[event.tone] ? event.tone : "neutral";
+      buckets[key].events.push(event);
+      buckets[key].typeCounts[type] = (buckets[key].typeCounts[type] || 0) + 1;
+      buckets[key].toneCounts[tone] = (buckets[key].toneCounts[tone] || 0) + 1;
+    });
+    var clusters = Object.keys(buckets).map(function (key) {
+      var bucket = buckets[key];
+      var types = Object.keys(bucket.typeCounts).sort(function (left, right) {
+        return bucket.typeCounts[right] - bucket.typeCounts[left]
+          || (typePriority[right] || 0) - (typePriority[left] || 0)
+          || left.localeCompare(right);
+      });
+      var tones = Object.keys(bucket.toneCounts).sort(function (left, right) {
+        return (tonePriority[right] || 0) - (tonePriority[left] || 0)
+          || bucket.toneCounts[right] - bucket.toneCounts[left];
+      });
+      bucket.primaryType = types[0] || "event";
+      bucket.primaryTone = tones[0] || "neutral";
+      bucket.count = bucket.events.length;
+      bucket.label = (labels[bucket.primaryType] || "사건") + (bucket.count > 1 ? " " + bucket.count : "");
+      bucket.labelScore = bucket.count * 10 + (tonePriority[bucket.primaryTone] || 0) * 4 + (typePriority[bucket.primaryType] || 0);
+      return bucket;
+    }).sort(function (left, right) { return left.time - right.time; });
+    var chartWidth = Math.max(280, Number(options.chartWidth || 720));
+    var labelCapacity = Math.max(4, Math.floor(chartWidth / 64));
+    var labelGap = Math.max(1, Math.ceil(times.length / labelCapacity));
+    var labelWinners = {};
+    clusters.forEach(function (cluster) {
+      var segment = Math.floor(cluster.candleIndex / labelGap);
+      var selected = labelWinners[segment];
+      if (!selected || cluster.labelScore > selected.labelScore || (cluster.labelScore === selected.labelScore && cluster.time > selected.time)) {
+        labelWinners[segment] = cluster;
+      }
+    });
+    var markers = clusters.map(function (cluster) {
+      var shape = cluster.primaryType === "calendar"
+        ? "square"
+        : cluster.primaryType === "decision"
+          ? (cluster.primaryTone === "negative" ? "arrowDown" : "arrowUp")
+          : "circle";
       return {
-        time: nearest,
-        position: event.tone === "negative" ? "belowBar" : "aboveBar",
-        color: colors[event.tone] || colors.neutral,
-        shape: event.type === "decision" ? "arrowDown" : event.type === "calendar" ? "square" : "circle",
-        text: labels[event.type] || "사건"
+        id: "instrument-event-cluster:" + cluster.time,
+        time: cluster.time,
+        position: cluster.primaryTone === "negative" ? "belowBar" : "aboveBar",
+        color: typeColors[cluster.primaryType] || typeColors.event,
+        shape: shape,
+        size: cluster.count >= 8 ? 1.6 : cluster.count >= 3 ? 1.3 : 1,
+        text: labelWinners[Math.floor(cluster.candleIndex / labelGap)] === cluster ? cluster.label : ""
       };
-    }).filter(Boolean).sort(function (a, b) { return a.time - b.time; }).slice(-80);
+    });
+    var representedEventCount = clusters.reduce(function (total, cluster) { return total + cluster.count; }, 0);
+    return {
+      markers: markers,
+      markerCount: markers.length,
+      representedEventCount: representedEventCount,
+      groupedEventCount: Math.max(0, representedEventCount - markers.length),
+      labelCount: markers.filter(function (marker) { return Boolean(marker.text); }).length
+    };
+  }
+
+  function instrumentChartEventMarkers(events, candles, options) {
+    return instrumentChartEventProjection(events, candles, options).markers;
   }
 
   function initInstrumentTimelineChart() {
@@ -1146,7 +1232,7 @@
           color: Number(item.close || 0) >= Number(item.open || item.close || 0) ? "rgba(15,143,114,.38)" : "rgba(201,72,91,.34)"
         };
       }).filter(function (item) { return Number.isFinite(item.time); }));
-      var markers = instrumentChartEventMarkers(payload.events || [], candles);
+      var markers = instrumentChartEventMarkers(payload.events || [], candles, { chartWidth: container.clientWidth });
       if (markers.length && window.LightweightCharts.createSeriesMarkers) {
         window.LightweightCharts.createSeriesMarkers(candleSeries, markers);
       }
@@ -1701,7 +1787,7 @@
 
   function registerOrbitAlphaServiceWorker() {
     if (window.location.protocol === "file:" || typeof navigator === "undefined" || !("serviceWorker" in navigator)) return;
-    navigator.serviceWorker.register("service-worker.js?v=20260817-app-experience-v1", { updateViaCache: "none" }).then(function (registration) {
+    navigator.serviceWorker.register("service-worker.js?v=20260817-chart-event-clusters-v2", { updateViaCache: "none" }).then(function (registration) {
       appServiceWorkerRegistration = registration;
       if (registration.waiting && navigator.serviceWorker.controller) {
         appShellStatus.updateAvailable = true;
@@ -13570,11 +13656,14 @@
       counts[event.type] = (counts[event.type] || 0) + 1;
       return counts;
     }, {});
+    var markerProjection = instrumentChartEventProjection(payload.events || [], series.candles || [], {
+      chartWidth: Math.max(280, Math.min(980, Number(window.innerWidth || 720) - 48))
+    });
     return [
       '<section class="instrument-chart-workspace">',
-      '<header><div><span class="label">PRICE + EVENTS</span><h3>가격과 사건을 한 흐름으로 보기</h3><p>캔들 위 표식은 같은 기간의 뉴스, 일정, 판단, 가설 전환, 알림입니다.</p></div><span class="tone-chip ' + escapeHtml(view.staticPreview ? "caution" : "watch") + '">' + escapeHtml(view.staticPreview ? "STATIC" : "ACTUAL") + '</span></header>',
+      '<header><div><span class="label">PRICE + EVENTS</span><h3>가격과 사건을 한 흐름으로 보기</h3><p>같은 캔들의 사건은 하나의 표식으로 묶고 대표 유형과 건수를 표시합니다.</p></div><span class="tone-chip ' + escapeHtml(view.staticPreview ? "caution" : "watch") + '">' + escapeHtml(view.staticPreview ? "STATIC" : "ACTUAL") + '</span></header>',
       ranges,
-      '<div class="instrument-chart-meta"><span>간격 <strong>' + escapeHtml((payload.query || {}).interval || "-") + '</strong></span><span>캔들 <strong>' + escapeHtml(series.pointCount || 0) + '개</strong></span><span>사건 <strong>' + escapeHtml((payload.events || []).length) + '건</strong></span><span>최신 <strong>' + escapeHtml(formatClock(series.latestAt)) + '</strong></span></div>',
+      '<div class="instrument-chart-meta"><span>간격 <strong>' + escapeHtml((payload.query || {}).interval || "-") + '</strong></span><span>캔들 <strong>' + escapeHtml(series.pointCount || 0) + '개</strong></span><span>사건 <strong>' + escapeHtml((payload.events || []).length) + '건</strong><small>차트 표식 ' + escapeHtml(markerProjection.markerCount) + '개</small></span><span>최신 <strong>' + escapeHtml(formatClock(series.latestAt)) + '</strong></span></div>',
       status,
       '<div class="instrument-event-legend"><span class="evidence">뉴스 ' + escapeHtml(eventCounts.evidence || 0) + '</span><span class="calendar">일정 ' + escapeHtml(eventCounts.calendar || 0) + '</span><span class="decision">판단 ' + escapeHtml(eventCounts.decision || 0) + '</span><span class="hypothesis">가설 ' + escapeHtml(eventCounts.hypothesis || 0) + '</span><span class="notification">알림 ' + escapeHtml(eventCounts.notification || 0) + '</span></div>',
       renderInstrumentTimelineSources(payload),

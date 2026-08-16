@@ -1,4 +1,4 @@
-const SHELL_CACHE = "orbit-alpha-shell-20260817-app-experience-v1";
+const SHELL_CACHE = "orbit-alpha-shell-20260817-chart-event-clusters-v2";
 const APP_SHELL = [
   "./",
   "./index.html",

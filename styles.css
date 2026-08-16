@@ -25177,7 +25177,7 @@ html[data-theme="dark"] .ontology-graph-expanded-toolbar .icon-button.danger {
     left: 0 !important;
     z-index: 1200 !important;
     display: grid !important;
-    grid-template-columns: repeat(5, minmax(0, 1fr)) !important;
+    grid-template-columns: repeat(6, minmax(0, 1fr)) !important;
     gap: 0 !important;
     width: 100% !important;
     min-height: calc(var(--bottom-tabs-height) + env(safe-area-inset-bottom)) !important;
@@ -33778,7 +33778,7 @@ body.oa-overlay-open {
     left: 0 !important;
     z-index: 1200 !important;
     display: grid !important;
-    grid-template-columns: repeat(5, minmax(0, 1fr)) !important;
+    grid-template-columns: repeat(6, minmax(0, 1fr)) !important;
     gap: 0 !important;
     width: 100% !important;
     min-height: calc(var(--bottom-tabs-height) + env(safe-area-inset-bottom)) !important;

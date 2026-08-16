@@ -27,8 +27,8 @@
     pageClass: "web-style-page",
     commandClass: "web-style-command-strip"
   };
-  var bottomTabIds = ["overview", "feed", "modeling", "notifications", "calendar"];
-  var managementTabIds = ["experiments", "settings"];
+  var bottomTabIds = ["overview", "feed", "modeling", "notifications", "calendar", "settings"];
+  var managementTabIds = ["experiments"];
   var navigationGroups = [
     { id: "workspace", label: "투자 콘솔", description: "오늘의 시장과 판단", tabIds: bottomTabIds }
   ];
@@ -1017,7 +1017,10 @@
       state.instrumentTimelineErrors[cacheKey] = "";
       return payload;
     }).catch(function (error) {
-      state.instrumentTimelineErrors[cacheKey] = error.message || "종목 타임라인을 불러오지 못했습니다.";
+      var message = error.message || "종목 타임라인을 불러오지 못했습니다.";
+      state.instrumentTimelineErrors[cacheKey] = message.indexOf("API를 찾지 못했습니다") >= 0
+        ? "현재 공유 서버가 타임라인 API를 아직 로드하지 못했습니다. 화면을 새로고침한 뒤 다시 조회하세요."
+        : message;
       return null;
     }).finally(function () {
       state.instrumentTimelineLoading[cacheKey] = false;
@@ -2573,7 +2576,29 @@
       selectionStart: typeof activeElement.selectionStart === "number" ? activeElement.selectionStart : null,
       selectionEnd: typeof activeElement.selectionEnd === "number" ? activeElement.selectionEnd : null
     } : null;
-    return { scrollPositions: scrollPositions, focus: focus };
+    var disclosures = Array.prototype.slice.call(app.querySelectorAll("details:not(.app-nav-menu)")).map(function (element) {
+      return {
+        path: renderedElementPath(element),
+        tagName: String(element.tagName || ""),
+        identity: renderedElementIdentity(element),
+        open: Boolean(element.open)
+      };
+    }).filter(function (item) { return item.path; });
+    return { scrollPositions: scrollPositions, focus: focus, disclosures: disclosures };
+  }
+
+  function restoreRenderedDisclosureState(snapshot) {
+    if (!snapshot) return;
+    (snapshot.disclosures || []).forEach(function (saved) {
+      var element = renderedElementAtPath(saved.path);
+      if (!renderedElementMatches(saved, element)) {
+        element = Array.prototype.slice.call(app.querySelectorAll(String(saved.tagName || "details").toLowerCase())).filter(function (candidate) {
+          return renderedElementMatches(saved, candidate);
+        })[0] || null;
+      }
+      if (!element || String(element.tagName || "") !== "DETAILS") return;
+      element.open = Boolean(saved.open);
+    });
   }
 
   function restoreRenderedElementScrollPositions(snapshot) {
@@ -10756,6 +10781,7 @@
     }
     syncNetworkActivityDom();
     decorateRenderedBusyControls();
+    restoreRenderedDisclosureState(renderedInteractiveState);
     if (!patchedDashboard) {
       restoreRenderedPageScrollPositionAfterLayout(renderedScrollPosition);
       restoreRenderedInteractiveStateAfterLayout(renderedInteractiveState);
@@ -12339,9 +12365,7 @@
   }
 
   function renderTabs() {
-    var bottomTabs = tabs.filter(function (tab) {
-      return bottomTabIds.indexOf(tab.id) >= 0;
-    });
+    var bottomTabs = bottomTabIds.map(tabById).filter(Boolean);
     return [
       '<nav class="tab-bar" aria-label="주요 탭" style="--tab-count:' + bottomTabs.length + '">',
       bottomTabs.map(function (tab) {
@@ -13339,7 +13363,8 @@
       key: key,
       payload: (state.instrumentTimelines || {})[key] || null,
       loading: Boolean((state.instrumentTimelineLoading || {})[key]),
-      error: String((state.instrumentTimelineErrors || {})[key] || "")
+      error: String((state.instrumentTimelineErrors || {})[key] || ""),
+      staticPreview: isStaticPreviewHost()
     };
   }
 
@@ -13397,7 +13422,9 @@
     var ranges = '<div class="instrument-range-control" role="group" aria-label="차트 기간">' + rangeOptions.map(function (option) {
       return '<button type="button" data-instrument-range="' + option[0] + '" data-instrument-symbol="' + escapeHtml(row.symbol) + '" class="' + (view.range === option[0] ? "active" : "") + '">' + option[1] + '</button>';
     }).join("") + '</div>';
-    var status = view.loading
+    var status = view.staticPreview
+      ? '<div class="instrument-chart-state"><strong>GitHub Pages는 정적 화면입니다.</strong><p>실시간 타임라인 API와 운영 DB는 로컬 또는 공유 앱에서 조회할 수 있습니다. 정적 화면에는 임의의 캔들을 표시하지 않습니다.</p></div>'
+      : view.loading
       ? '<div class="instrument-chart-state is-loading"><span></span><strong>가격·사건 데이터를 조회하고 있습니다.</strong></div>'
       : view.error
         ? '<div class="instrument-chart-state is-error"><strong>' + escapeHtml(view.error) + '</strong><button type="button" class="text-button" data-instrument-timeline-refresh="' + escapeHtml(row.symbol) + '">다시 조회</button></div>'
@@ -13410,7 +13437,7 @@
     }, {});
     return [
       '<section class="instrument-chart-workspace">',
-      '<header><div><span class="label">PRICE + EVENTS</span><h3>가격과 사건을 한 흐름으로 보기</h3><p>캔들 위 표식은 같은 기간의 뉴스, 일정, 판단, 가설 전환, 알림입니다.</p></div><span class="tone-chip watch">ACTUAL</span></header>',
+      '<header><div><span class="label">PRICE + EVENTS</span><h3>가격과 사건을 한 흐름으로 보기</h3><p>캔들 위 표식은 같은 기간의 뉴스, 일정, 판단, 가설 전환, 알림입니다.</p></div><span class="tone-chip ' + escapeHtml(view.staticPreview ? "caution" : "watch") + '">' + escapeHtml(view.staticPreview ? "STATIC" : "ACTUAL") + '</span></header>',
       ranges,
       '<div class="instrument-chart-meta"><span>간격 <strong>' + escapeHtml((payload.query || {}).interval || "-") + '</strong></span><span>캔들 <strong>' + escapeHtml(series.pointCount || 0) + '개</strong></span><span>사건 <strong>' + escapeHtml((payload.events || []).length) + '건</strong></span><span>최신 <strong>' + escapeHtml(formatClock(series.latestAt)) + '</strong></span></div>',
       status,
@@ -13455,6 +13482,7 @@
 
   function renderInstrumentTimeline(row, view) {
     var events = (view.payload || {}).events || [];
+    if (view.staticPreview) return '<div class="instrument-chart-state"><strong>정적 화면에서는 운영 타임라인을 조회하지 않습니다.</strong><p>로컬 또는 공유 앱에서 실제 운영 DB의 뉴스·일정·판단·가설·알림 이력을 확인하세요.</p></div>';
     if (view.loading && !events.length) return '<div class="instrument-chart-state is-loading"><span></span><strong>전체 사건을 불러오고 있습니다.</strong></div>';
     if (view.error && !events.length) return '<div class="instrument-chart-state is-error"><strong>' + escapeHtml(view.error) + '</strong><button type="button" class="text-button" data-instrument-timeline-refresh="' + escapeHtml(row.symbol) + '">다시 조회</button></div>';
     return [
@@ -17934,6 +17962,7 @@
       ? "이 판단에서 만들어진 최신 알림이 있습니다. 발송 여부와 이유를 이어서 확인할 수 있습니다."
       : display.linkedAlert;
     var wrapperClass = "investment-decision-detail" + (inline ? " investment-action-detail inline-detail-surface investment-decision-inline" : "");
+    var technicalDisclosureKey = "investment-decision-technical:" + investmentActionKey(row, 0);
     return [
       '<div class="' + escapeHtml(wrapperClass) + '" data-investment-decision-detail>',
       '<section class="investment-decision-conclusion ' + escapeHtml(display.tone) + '" aria-label="현재 결론">',
@@ -17966,7 +17995,7 @@
       '<p>' + escapeHtml(relatedAlertText) + '</p>',
       relatedNotification ? renderWorkDetailButton("notification-job", notificationJobKey(relatedNotification), "관련 알림 보기", "text-button compact") : '',
       '</section>',
-      '<details class="investment-decision-technical">',
+      '<details class="investment-decision-technical" data-disclosure-key="' + escapeHtml(technicalDisclosureKey) + '">',
       '<summary><span>데이터·분석 상세</span><small>사용 API와 원본 분석 상태</small></summary>',
       '<dl>',
       '<div><dt>원본 판단</dt><dd>' + escapeHtml(row.decision || row.action || "판단 대기") + '</dd></div>',

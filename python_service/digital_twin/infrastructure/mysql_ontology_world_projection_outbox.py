@@ -96,6 +96,40 @@ class MySQLOntologyWorldProjectionOutboxStore(MySQLOperationalConnection):
         source_world = _clean(source_world_id) or _clean((getattr(graph, "worldview", {}) or {}).get("sourcePortfolioWorldId"))
         source_account = _clean(source_account_id)
         source_observed = _clean(source_observed_at) or _clean((getattr(graph, "worldview", {}) or {}).get("sourceObservedAt"))
+        dedupe_key = _sha("|".join([kind, world.world_id, source_world or "unknown"]))[:64]
+
+        # Most PortfolioWorld updates do not alter their shared MarketWorld or
+        # KnowledgeWorld facts. Check the durable material receipt before
+        # serializing the graph; the transaction below repeats this lookup to
+        # preserve idempotency when another worker completes concurrently.
+        if kind != "scope-repair":
+            fingerprint = material_graph_fingerprint(graph)
+            with self.connect() as connection:
+                completed = connection.execute(
+                    """
+                    SELECT job_id, completed_at FROM ontology_world_projection_outbox
+                    WHERE dedupe_key = %s AND material_fingerprint = %s AND status = %s
+                    ORDER BY updated_at DESC LIMIT 1
+                    """,
+                    (dedupe_key, fingerprint, COMPLETED),
+                ).fetchone()
+            if completed:
+                return {
+                    **target,
+                    "status": "already-projected-material",
+                    "saved": False,
+                    "eventuallyConsistent": True,
+                    "projectionKind": kind,
+                    "jobId": _clean(completed.get("job_id")),
+                    "materialFingerprint": fingerprint,
+                    "completedAt": _clean(completed.get("completed_at")),
+                    "payloadBytes": 0,
+                    "entityCount": len(getattr(graph, "entities", []) or []),
+                    "relationCount": len(getattr(graph, "relations", []) or []),
+                    "evidenceCount": len(getattr(graph, "evidence", []) or []),
+                    "payloadSerializationSkipped": True,
+                }
+
         payload = serialize_portfolio_ontology(graph)
         payload_json = json_dumps(payload)
         payload_bytes = len(payload_json.encode("utf-8"))
@@ -122,9 +156,8 @@ class MySQLOntologyWorldProjectionOutboxStore(MySQLOperationalConnection):
         fingerprint = (
             _sha(payload_json)
             if kind == "scope-repair"
-            else material_graph_fingerprint(graph)
+            else fingerprint
         )
-        dedupe_key = _sha("|".join([kind, world.world_id, source_world or "unknown"]))[:64]
         payload_hash = _sha("|".join([dedupe_key, fingerprint, source_observed, payload_json]))
         job_id = "world-projection:" + payload_hash[:48]
         stamp = utc_now()

@@ -7072,6 +7072,64 @@ class TypeDBOntologyRepositoryTests(unittest.TestCase):
             [item[1] for item in driver.calls if item[0] == "query"],
         )
 
+    def test_typedb_fresh_inference_generation_skips_predelete(self):
+        class FakePromise:
+            def resolve(self):
+                return []
+
+        class FakeTransaction:
+            def __init__(self, calls):
+                self.calls = calls
+
+            def __enter__(self):
+                return self
+
+            def __exit__(self, _exc_type, _exc, _traceback):
+                return False
+
+            def query(self, query, given_rows=None):
+                self.calls.append(("query", query, given_rows))
+                return FakePromise()
+
+            def commit(self):
+                self.calls.append(("commit", "", None))
+
+        class FakeDriver:
+            def __init__(self):
+                self.calls = []
+
+            def transaction(self, *_args, **_kwargs):
+                return FakeTransaction(self.calls)
+
+        graph = PortfolioOntology("typedb-fresh-inference")
+        graph.worldview = {
+            "inferenceGenerationId": "inference-generation:fresh",
+            "freshInferenceGeneration": True,
+            "sourceAboxSnapshotId": "abox:active",
+        }
+        graph.entities.append(OntologyEntity(
+            "inference:fresh",
+            "Fresh inference",
+            "inference",
+            {"ontologyBox": "InferenceBox"},
+        ))
+        repository = TypeDBOntologyGraphRepository("127.0.0.1:1729", retry_count=0)
+        driver = FakeDriver()
+
+        with patch.object(repository, "open_driver", return_value=driver), \
+                patch.object(repository, "close_driver"), \
+                patch.object(repository, "ensure_database"), \
+                patch.object(repository, "batched_node_insert_queries", return_value=["insert fresh node"]), \
+                patch.object(repository, "inferencebox_given_relation_insert_plans", return_value=[]), \
+                patch.object(repository, "validate_inference_generation_candidate", return_value={"valid": True}), \
+                patch.object(repository, "activate_inference_generation", return_value={"activated": True}):
+            result = repository.write_inferencebox_graph(graph)
+
+        queries = [item[1] for item in driver.calls if item[0] == "query"]
+        self.assertTrue(result["saved"])
+        self.assertTrue(result["writeTiming"]["candidateDeleteSkipped"])
+        self.assertFalse(any("delete" in query.lower() for query in queries))
+
     def test_typedb_inferencebox_write_streams_same_shape_relations_as_given_rows(self):
         class FakePromise:
             def resolve(self):
@@ -8437,9 +8495,19 @@ class TypeDBOntologyRepositoryTests(unittest.TestCase):
             "inference-trace",
             {"ontologyBox": "InferenceBox"},
         ))
-        with patch.object(repository, "read_inferencebox_entity_rows", return_value=[{"kind": "inference-trace"}]), patch.object(repository, "read_inferencebox_relation_rows", return_value=[{"type": "HAS_INFERENCE_TRACE"}]), patch.object(repository, "active_abox_snapshot_id", return_value="abox:active"):
+        candidate_summary = {
+            "status": "ok",
+            "entityCount": 2,
+            "relationCount": 1,
+            "traceCount": 1,
+            "candidateMarkerPresent": True,
+            "metadata": {"sourceAboxSnapshotId": "abox:active"},
+            "readTransactionCount": 1,
+            "readQueryCount": 4,
+        }
+        with patch.object(repository, "inference_generation_candidate_summary", return_value=candidate_summary), patch.object(repository, "active_abox_snapshot_id", return_value="abox:active"):
             valid = repository.validate_inference_generation_candidate(graph, "generation:candidate", 1, 1)
-        with patch.object(repository, "read_inferencebox_entity_rows", return_value=[{"kind": "inference-trace"}]), patch.object(repository, "read_inferencebox_relation_rows", return_value=[{"type": "HAS_INFERENCE_TRACE"}]), patch.object(repository, "active_abox_snapshot_id", return_value="abox:new"):
+        with patch.object(repository, "inference_generation_candidate_summary", return_value=candidate_summary), patch.object(repository, "active_abox_snapshot_id", return_value="abox:new"):
             invalid = repository.validate_inference_generation_candidate(graph, "generation:candidate", 1, 1)
 
         self.assertTrue(valid["valid"])
@@ -8456,23 +8524,61 @@ class TypeDBOntologyRepositoryTests(unittest.TestCase):
             "nativeInferenceEvaluationComplete": True,
             "nativeInferenceOutcome": "no-match",
         }
-        marker = {
-            "kind": "inference-generation-candidate",
-            "snapshotId": "generation:empty",
-            "propertiesJson": json.dumps({
+        summary = {
+            "status": "ok",
+            "entityCount": 1,
+            "relationCount": 0,
+            "traceCount": 0,
+            "candidateMarkerPresent": True,
+            "metadata": {
                 "nativeInferenceEvaluationComplete": True,
                 "nativeInferenceOutcome": "no-match",
                 "sourceAboxSnapshotId": "abox:active",
-            }),
+            },
+            "readTransactionCount": 1,
+            "readQueryCount": 4,
         }
-        with patch.object(repository, "read_inferencebox_entity_rows", return_value=[marker]), \
-                patch.object(repository, "read_inferencebox_relation_rows", return_value=[]), \
+        with patch.object(repository, "inference_generation_candidate_summary", return_value=summary), \
                 patch.object(repository, "active_abox_snapshot_id", return_value="abox:active"):
             result = repository.validate_inference_generation_candidate(graph, "generation:empty", 0, 0)
 
         self.assertTrue(result["valid"])
         self.assertTrue(result["nativeInferenceEvaluationComplete"])
         self.assertTrue(result["candidateMarkerPresent"])
+
+    def test_typedb_candidate_validation_reuses_stable_abox_write_lease(self):
+        repository = TypeDBOntologyGraphRepository("127.0.0.1:1729")
+        graph = PortfolioOntology("candidate-stable-lease")
+        graph.worldview = {
+            "sourceAboxSnapshotId": "abox:stable",
+            "sourceAboxGenerationValid": True,
+            "sourceAboxValidatedUnderWriteLease": True,
+        }
+        summary = {
+            "status": "ok",
+            "entityCount": 1,
+            "relationCount": 0,
+            "traceCount": 0,
+            "candidateMarkerPresent": True,
+            "metadata": {
+                "nativeInferenceEvaluationComplete": True,
+                "sourceAboxSnapshotId": "abox:stable",
+            },
+            "readTransactionCount": 1,
+            "readQueryCount": 4,
+        }
+        with patch.object(repository, "inference_generation_candidate_summary", return_value=summary), \
+                patch.object(repository, "active_abox_snapshot_id") as active_pointer:
+            result = repository.validate_inference_generation_candidate(
+                graph,
+                "generation:stable",
+                0,
+                0,
+            )
+
+        self.assertTrue(result["valid"])
+        self.assertEqual("stable-write-lease", result["sourceAboxValidationMode"])
+        active_pointer.assert_not_called()
 
     def test_typedb_inferencebox_insert_queries_batch_rows(self):
         repository = TypeDBOntologyGraphRepository("127.0.0.1:1729")

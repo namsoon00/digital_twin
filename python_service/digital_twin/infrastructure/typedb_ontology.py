@@ -20766,7 +20766,9 @@ relation ontology-assertion,
             typedb_bool(payload.get("forceSchemaFunctionSync"))
             or typedb_bool(payload.get("forceRuleFunctionSync"))
         )
-        generation_id = str(payload.get("generationId") or inference_generation_id())
+        requested_generation_id = str(payload.get("generationId") or "").strip()
+        generation_id = requested_generation_id or inference_generation_id()
+        fresh_inference_generation = not bool(requested_generation_id)
         generation_at = utc_now()
         clear_requested = force_clear_requested and destructive_clear_allowed
         clear_result = {}
@@ -20961,6 +20963,8 @@ relation ontology-assertion,
                 "worldType": str(abox_metadata.get("worldType") or payload.get("worldType") or ""),
                 "tenantId": str(abox_metadata.get("tenantId") or payload.get("tenantId") or ""),
                 "accountId": str(abox_metadata.get("accountId") or payload.get("accountId") or ""),
+                "freshInferenceGeneration": fresh_inference_generation,
+                "sourceAboxValidatedUnderWriteLease": stable_abox_write_lease_held,
                 "targetSymbols": target_symbols,
                 "ruleTargetSymbols": rule_target_symbols,
                 "reasoningSubjectKinds": reasoning_subject_kinds,
@@ -21829,6 +21833,26 @@ relation ontology-assertion,
             native_stage_timings["inferenceBoxWriteMs"] = int(
                 (time.perf_counter() - inference_write_started) * 1000
             )
+            inference_write_timing = (
+                dict(save_result.get("writeTiming") or {})
+                if isinstance(save_result.get("writeTiming"), dict)
+                else {}
+            )
+            for source_key, target_key in {
+                "candidateDeleteMs": "inferenceBoxCandidateDeleteMs",
+                "candidateNodeWriteMs": "inferenceBoxNodeWriteMs",
+                "candidateRelationWriteMs": "inferenceBoxRelationWriteMs",
+                "candidateMarkerMs": "inferenceBoxCandidateMarkerMs",
+                "candidateValidationMs": "inferenceBoxCandidateValidationMs",
+                "activationMs": "inferenceBoxActivationMs",
+                "totalQueryMs": "inferenceBoxQueryMs",
+            }.items():
+                value = number_or_none(inference_write_timing.get(source_key))
+                if value is not None:
+                    native_stage_timings[target_key] = int(max(0, value))
+            runtime_rulebox_metadata["inferenceBoxCandidateDeleteSkipped"] = bool(
+                inference_write_timing.get("candidateDeleteSkipped")
+            )
             runtime_rulebox_metadata["typedbNativeStageTimings"] = dict(native_stage_timings)
         except Exception as error:  # noqa: BLE001 - expose materialization failures to monitoring diagnostics.
             return {
@@ -22344,6 +22368,9 @@ relation ontology-assertion,
         }
         generation_id = str((graph.worldview or {}).get("inferenceGenerationId") or "").strip()
         world_id = str((graph.worldview or {}).get("worldId") or "").strip()
+        fresh_generation = typedb_bool(
+            (graph.worldview or {}).get("freshInferenceGeneration")
+        )
         marker_query = self.node_insert_query(
             inference_generation_marker_row(graph, node_rows, relation_rows, "candidate"),
             updated_at,
@@ -22387,8 +22414,11 @@ relation ontology-assertion,
 
                         candidate_queries = (
                             inference_generation_delete_queries(generation_id, world_id=world_id)
-                            if generation_id
+                            if generation_id and not fresh_generation
                             else []
+                        )
+                        write_timing["candidateDeleteSkipped"] = bool(
+                            generation_id and fresh_generation
                         )
                         candidate_started = time.monotonic()
                         write_query_chunks(candidate_queries, "candidateDelete")
@@ -22589,6 +22619,121 @@ relation ontology-assertion,
                 "writeTiming": write_timing,
             }
 
+    def inference_generation_candidate_summary(
+        self,
+        generation_id: str,
+        world_id: str = "",
+    ) -> Dict[str, object]:
+        """Validate a staged generation without loading every JSON row.
+
+        Counts and the candidate marker are read in one transaction. The
+        marker carries the native evaluation and source ABox proof, while the
+        aggregate counts detect partial writes without paying the cost of
+        deserializing the complete InferenceBox.
+        """
+        clean_generation_id = str(generation_id or "").strip()
+        clean_world_id = str(world_id or "").strip()
+        if not clean_generation_id:
+            return {
+                "status": "invalid",
+                "entityCount": 0,
+                "relationCount": 0,
+                "traceCount": 0,
+                "candidateMarkerPresent": False,
+                "metadata": {},
+            }
+        imported = self.driver_imports()
+        if imported[0] is None:
+            raise RuntimeError(
+                "typedb-driver Python package is not installed: "
+                + str(imported[1])[:160]
+            )
+        _TypeDB, _Credentials, _DriverOptions, _DriverTlsConfig, TransactionType = imported[0]
+        generation_clause = (
+            "has ontology-snapshot-id " + typedb_string(clean_generation_id)
+        )
+        world_clause = (
+            ", has ontology-world-id " + typedb_string(clean_world_id)
+            if clean_world_id
+            else ""
+        )
+
+        def count_query(type_label: str, kind: str = "") -> str:
+            return (
+                "match $item isa " + type_label
+                + ', has ontology-box "InferenceBox", '
+                + generation_clause
+                + world_clause
+                + (', has ontology-kind "' + kind + '"' if kind else "")
+                + "; reduce $count = count;"
+            )
+
+        marker_query = (
+            "match $item isa ontology-node, "
+            'has ontology-box "InferenceBox", '
+            + generation_clause
+            + world_clause
+            + ', has ontology-kind "inference-generation-candidate", '
+            + "has ontology-json $json; limit 1;"
+        )
+
+        def operation():
+            driver = self.open_driver(imported)
+            try:
+                self.ensure_database(driver)
+                with driver.transaction(
+                    self.database,
+                    TransactionType.READ,
+                    self.read_transaction_options(),
+                ) as tx:
+                    entity_rows = self.read_rows_in_transaction(
+                        tx,
+                        count_query("ontology-node"),
+                        ["count"],
+                        label="typedb.inference-candidate-summary.entities",
+                    )
+                    relation_rows = self.read_rows_in_transaction(
+                        tx,
+                        count_query("ontology-assertion"),
+                        ["count"],
+                        label="typedb.inference-candidate-summary.relations",
+                    )
+                    trace_rows = self.read_rows_in_transaction(
+                        tx,
+                        count_query("ontology-node", "inference-trace"),
+                        ["count"],
+                        label="typedb.inference-candidate-summary.traces",
+                    )
+                    marker_rows = self.read_rows_in_transaction(
+                        tx,
+                        marker_query,
+                        ["json"],
+                        label="typedb.inference-candidate-summary.marker",
+                    )
+                    marker = json_object(
+                        (marker_rows[0] if marker_rows else {}).get("json")
+                    )
+                    return {
+                        "status": "ok",
+                        "entityCount": int(number_or_none(
+                            (entity_rows[0] if entity_rows else {}).get("count")
+                        ) or 0),
+                        "relationCount": int(number_or_none(
+                            (relation_rows[0] if relation_rows else {}).get("count")
+                        ) or 0),
+                        "traceCount": int(number_or_none(
+                            (trace_rows[0] if trace_rows else {}).get("count")
+                        ) or 0),
+                        "candidateMarkerPresent": bool(marker_rows),
+                        "metadata": marker,
+                        "readTransactionCount": 1,
+                        "readQueryCount": 4,
+                    }
+            finally:
+                self.close_driver(driver)
+
+        return self.with_typedb_retries(operation)
+
     def validate_inference_generation_candidate(
         self,
         graph: PortfolioOntology,
@@ -22597,28 +22742,39 @@ relation ontology-assertion,
         expected_relation_count: int,
         world_id: str = "",
     ) -> Dict[str, object]:
-        entity_rows = self.read_inferencebox_entity_rows(generation_id, [], 0, world_id=world_id)
-        relation_rows = self.read_inferencebox_relation_rows(generation_id, [], 0, world_id=world_id)
-        metadata = inference_rulebox_metadata(entity_rows, relation_rows)
+        summary = self.inference_generation_candidate_summary(
+            generation_id,
+            world_id=world_id,
+        )
+        metadata = dict(summary.get("metadata") or {})
         expected_source_abox = str((graph.worldview or {}).get("sourceAboxSnapshotId") or metadata.get("sourceAboxSnapshotId") or "").strip()
-        active_abox = self.active_abox_snapshot_id(world_id)
-        actual_relations = len(relation_rows)
-        actual_traces = len([row for row in entity_rows if str(row.get("kind") or "") == "inference-trace"])
+        stable_source_alignment = bool(
+            typedb_bool((graph.worldview or {}).get("sourceAboxValidatedUnderWriteLease"))
+            and typedb_bool((graph.worldview or {}).get("sourceAboxGenerationValid"))
+            and expected_source_abox
+        )
+        active_abox = (
+            expected_source_abox
+            if stable_source_alignment
+            else self.active_abox_snapshot_id(world_id)
+        )
+        actual_entities = int(number_or_none(summary.get("entityCount")) or 0)
+        actual_relations = int(number_or_none(summary.get("relationCount")) or 0)
+        actual_traces = int(number_or_none(summary.get("traceCount")) or 0)
         expected_traces = len([item for item in graph.entities if item.kind == "inference-trace"])
         native_evaluation_completed = typedb_bool(metadata.get("nativeInferenceEvaluationComplete"))
-        candidate_marker_present = any(
-            str(row.get("kind") or "") == "inference-generation-candidate"
-            and row_inference_generation_id(row) == str(generation_id or "")
-            for row in entity_rows
-        )
+        candidate_marker_present = bool(summary.get("candidateMarkerPresent"))
         reasons = []
-        if expected_relation_count > 0 and actual_relations < expected_relation_count:
+        # One additional node is the candidate publication marker itself.
+        if actual_entities != int(expected_entity_count or 0) + 1:
+            reasons.append("candidate-entity-count-mismatch")
+        if actual_relations != int(expected_relation_count or 0):
             reasons.append("candidate-relation-count-mismatch")
         if expected_relation_count <= 0 and not native_evaluation_completed:
             reasons.append("candidate-empty-evaluation-not-complete")
-        if expected_relation_count <= 0 and not candidate_marker_present:
+        if not candidate_marker_present:
             reasons.append("candidate-generation-marker-missing")
-        if expected_traces > 0 and actual_traces < expected_traces:
+        if actual_traces != expected_traces:
             reasons.append("candidate-trace-count-mismatch")
         if not expected_source_abox:
             reasons.append("candidate-source-abox-missing")
@@ -22630,7 +22786,8 @@ relation ontology-assertion,
             "reason": ", ".join(reasons),
             "generationId": generation_id,
             "expectedEntityCount": int(expected_entity_count or 0),
-            "actualEntityCount": len(entity_rows),
+            "actualEntityCount": max(0, actual_entities - (1 if candidate_marker_present else 0)),
+            "actualStoredEntityCount": actual_entities,
             "expectedRelationCount": int(expected_relation_count or 0),
             "actualRelationCount": actual_relations,
             "expectedTraceCount": expected_traces,
@@ -22641,6 +22798,14 @@ relation ontology-assertion,
             "nativeInferenceEvaluationComplete": native_evaluation_completed,
             "nativeInferenceOutcome": str(metadata.get("nativeInferenceOutcome") or ""),
             "candidateMarkerPresent": candidate_marker_present,
+            "validationMode": "aggregate-marker",
+            "readTransactionCount": int(number_or_none(summary.get("readTransactionCount")) or 0),
+            "readQueryCount": int(number_or_none(summary.get("readQueryCount")) or 0),
+            "sourceAboxValidationMode": (
+                "stable-write-lease"
+                if stable_source_alignment
+                else "active-pointer-read"
+            ),
         }
 
     def activate_inference_generation(

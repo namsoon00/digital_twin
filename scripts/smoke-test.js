@@ -298,6 +298,14 @@ function checkWorkflowConsoleContract() {
     "웹 앱 설치, 연결 상태, 모바일 뷰포트 또는 아이콘 하단 탐색 계약이 없습니다."
   );
   assertOk(code.indexOf("loadInstrumentTimeline") >= 0 && code.indexOf("initInstrumentTimelineChart") >= 0, "종목 실제 시계열 차트 흐름이 연결되지 않았습니다.");
+  assertOk(
+    code.indexOf("function instrumentChartEventProjection") >= 0
+      && code.indexOf("function nearestInstrumentCandleIndex") >= 0
+      && code.indexOf("labelWinners") >= 0
+      && code.indexOf("markerProjection.markerCount") >= 0
+      && styles.indexOf(".instrument-event-legend span::before") >= 0,
+    "차트 사건 클러스터링, 모바일 라벨 밀도 또는 간결한 범례 계약이 없습니다."
+  );
   assertOk(code.indexOf("data-instrument-workspace-tab") >= 0 && code.indexOf("data-instrument-timeline-refresh") >= 0, "종목 워크스페이스 탐색 계약이 없습니다.");
   assertOk(webServer.indexOf('/api/instruments/') >= 0 && webServer.indexOf("InstrumentTimelineQuery") >= 0, "종목 타임라인 API가 등록되지 않았습니다.");
   assertOk(indexHtml.indexOf("lightweight-charts.standalone.production.js") >= 0, "로컬 캔들 차트 런타임이 로드되지 않았습니다.");

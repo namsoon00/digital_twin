@@ -308,10 +308,13 @@ class OntologyFactSlotTests(unittest.TestCase):
         self.assertIn("semantic-value-change", selected_trace[market_scope]["reasons"])
         self.assertIn("event-fact-slot", selected_trace[market_scope]["reasons"])
         self.assertIn("market", selected_trace[market_scope]["semanticChangedFamilies"])
-        self.assertFalse(any(
-            "required-changed-link-endpoint" in item["reasons"]
-            for item in selected_trace.values()
-        ))
+        self.assertTrue(
+            any(
+                "required-changed-link-endpoint" in item["reasons"]
+                for item in selected_trace.values()
+            ),
+            selected_trace,
+        )
         deferred_trace = {
             item["scopeId"]: item
             for item in selection["scopeSelectionTrace"]["deferred"]

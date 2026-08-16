@@ -1809,8 +1809,10 @@ def select_target_scoped_manifest_patch(
 
     The complete source graph stays available in memory, but an incremental
     worker should only materialize the triggering symbols and shared facts.
-    An old active generation is a valid endpoint for a newly written link, so
-    dependencies are added only when that endpoint has no active generation.
+    A selected link may reuse an unchanged active endpoint. When an endpoint
+    scope changed, however, the incoming link can reference a node that did
+    not exist in the active generation, so that direct endpoint scope must be
+    staged with the link.
     """
 
     worldview = dict(graph.worldview or {})
@@ -2043,9 +2045,10 @@ def select_target_scoped_manifest_patch(
             "selectedDependencyScopeIds": selected_dependency_references,
         }
 
-    # A relation can point to a brand new endpoint that has never been active.
-    # Include that endpoint locally; otherwise retain an active endpoint
-    # generation rather than unnecessarily rolling its entire fact family.
+    # A relation can point to a brand new endpoint inside an existing scope.
+    # The active scope marker alone cannot prove that exact endpoint exists.
+    # Stage changed direct dependencies with a selected link; unchanged active
+    # endpoint generations remain reusable without expanding the patch.
     node_scopes = _graph_node_scopes(graph)
 
     def include_missing_dependency(
@@ -2065,6 +2068,22 @@ def select_target_scoped_manifest_patch(
             reason or "required-missing-dependency"
         )
 
+    def dependency_requires_staging(scope_id: str) -> bool:
+        item = incoming.get(scope_id)
+        if not item:
+            return scope_id not in retained_active_by_scope
+        return (
+            scope_id not in retained_active_by_scope
+            or changed_from_active(scope_id, item)
+        )
+
+    def dependency_reason(scope_id: str, changed_reason: str, missing_reason: str) -> str:
+        return (
+            changed_reason
+            if scope_id in retained_active_by_scope
+            else missing_reason
+        )
+
     missing_endpoints: List[str] = []
     changed = True
     while changed:
@@ -2074,11 +2093,15 @@ def select_target_scoped_manifest_patch(
             row = incoming.get(scope_id) or {}
             for dependency in row.get("dependencyScopeIds") or []:
                 dependency_id = _clean(dependency)
-                if dependency_id and dependency_id not in retained_active_by_scope:
+                if dependency_id and dependency_requires_staging(dependency_id):
                     include_missing_dependency(
                         dependency_id,
                         missing_endpoints,
-                        "required-missing-dependency",
+                        dependency_reason(
+                            dependency_id,
+                            "required-changed-dependency",
+                            "required-missing-dependency",
+                        ),
                     )
         for relation in graph.relations:
             properties = dict(relation.properties or {})
@@ -2087,11 +2110,15 @@ def select_target_scoped_manifest_patch(
                 continue
             for endpoint in (_clean(relation.source), _clean(relation.target)):
                 endpoint_scope = node_scopes.get(endpoint, "")
-                if endpoint_scope and endpoint_scope not in retained_active_by_scope:
+                if endpoint_scope and dependency_requires_staging(endpoint_scope):
                     include_missing_dependency(
                         endpoint_scope,
                         missing_endpoints,
-                        "required-link-endpoint",
+                        dependency_reason(
+                            endpoint_scope,
+                            "required-changed-link-endpoint",
+                            "required-link-endpoint",
+                        ),
                     )
         support_scopes = dict(worldview.get("supportRelationScopes") or {})
         for evidence in graph.evidence:
@@ -2105,11 +2132,15 @@ def select_target_scoped_manifest_patch(
                 _clean(support_metadata.get("target")) or _clean(evidence.evidence_id),
             ):
                 endpoint_scope = node_scopes.get(endpoint, "")
-                if endpoint_scope and endpoint_scope not in retained_active_by_scope:
+                if endpoint_scope and dependency_requires_staging(endpoint_scope):
                     include_missing_dependency(
                         endpoint_scope,
                         missing_endpoints,
-                        "required-evidence-endpoint",
+                        dependency_reason(
+                            endpoint_scope,
+                            "required-changed-evidence-endpoint",
+                            "required-evidence-endpoint",
+                        ),
                     )
         changed = len(selected) != before
 

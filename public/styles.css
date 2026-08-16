@@ -33129,3 +33129,51 @@ button:is(.symbol-watch-toggle, [data-network-busy-icon-only="true"]).is-request
     -webkit-overflow-scrolling: auto;
   }
 }
+
+/* The document owns page scrolling. Dialog backdrops become the only scroll
+   root while an overlay is visible, including on iOS Safari. */
+html:not(.oa-overlay-open) {
+  overflow-x: hidden;
+  overflow-y: auto;
+}
+
+body:not(.oa-overlay-open),
+body:not(.oa-overlay-open) .app-shell {
+  overflow: visible;
+}
+
+html.oa-overlay-open,
+body.oa-overlay-open {
+  overflow: hidden;
+}
+
+.work-detail-backdrop,
+.notification-policy-modal-backdrop,
+.notification-template-modal-backdrop,
+.monitoring-detail-backdrop,
+.calendar-entry-backdrop,
+.ontology-graph-expanded-backdrop,
+.watchlist-picker-backdrop,
+.command-palette-backdrop {
+  touch-action: pan-y pinch-zoom;
+  -webkit-overflow-scrolling: touch;
+}
+
+@media (max-width: 860px) {
+  html:not(.oa-overlay-open) {
+    overflow-x: hidden;
+    overflow-y: auto;
+  }
+
+  body:not(.oa-overlay-open),
+  body:not(.oa-overlay-open) .app-shell {
+    overflow: visible;
+  }
+
+  .work-detail-backdrop {
+    height: 100dvh;
+    max-height: 100dvh;
+    overflow-x: hidden !important;
+    overflow-y: auto !important;
+  }
+}

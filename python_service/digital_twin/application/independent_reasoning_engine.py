@@ -113,6 +113,11 @@ def compact_projection_result(projection: object) -> Dict[str, object]:
     )
     slo = values.get("slo") if isinstance(values.get("slo"), Mapping) else {}
     audit = values.get("projectionAudit") if isinstance(values.get("projectionAudit"), Mapping) else {}
+    shared = (
+        values.get("sharedInstrumentInference")
+        if isinstance(values.get("sharedInstrumentInference"), Mapping)
+        else {}
+    )
     return {
         "configured": bool(values.get("configured")),
         "saved": bool(values.get("saved")),
@@ -150,17 +155,46 @@ def compact_projection_result(projection: object) -> Dict[str, object]:
             "runId": str(audit.get("runId") or ""),
             "activeAboxSnapshotId": str(audit.get("activeAboxSnapshotId") or ""),
         },
+        "sharedInstrumentInference": {
+            "contractVersion": str(shared.get("contractVersion") or ""),
+            "executionMode": str(shared.get("executionMode") or ""),
+            "decisionAuthority": str(shared.get("decisionAuthority") or ""),
+            "sharedSymbolCount": int(shared.get("sharedSymbolCount") or 0),
+            "symbols": {
+                str(symbol): {
+                    key: value.get(key)
+                    for key in [
+                        "overlayId", "overlayStatus", "sharedSnapshotIds",
+                        "sharedSemanticFingerprints", "sharedSourceAsOf",
+                        "sharedMarketRuleIds", "accountRuleIds", "reuseEligible",
+                    ]
+                    if key in value
+                }
+                for symbol, value in dict(shared.get("symbols") or {}).items()
+                if isinstance(value, Mapping)
+            },
+        },
     }
 
 
 class IndependentReasoningInputAssembler:
     """Build point-in-time snapshots from the durable monitor source."""
 
-    def __init__(self, account_repository, snapshot_source, monitor_store, settings=None):
+    def __init__(
+        self,
+        account_repository,
+        snapshot_source,
+        monitor_store,
+        settings=None,
+        instrument_subscription_index=None,
+        instrument_subscription_state_source=None,
+    ):
         self.account_repository = account_repository
         self.snapshot_source = snapshot_source
         self.monitor_store = monitor_store
         self.settings = dict(settings or {})
+        self.instrument_subscription_index = instrument_subscription_index
+        self.instrument_subscription_state_source = instrument_subscription_state_source or monitor_store
 
     def temporal_history_limit(self) -> int:
         return _int_setting(self.settings, "temporalWindowHistoryLimit", 96, 6, 500)
@@ -174,6 +208,30 @@ class IndependentReasoningInputAssembler:
         ]
         if requested or not request.symbols:
             return selected
+        indexed_accounts = []
+        lookup = getattr(self.instrument_subscription_index, "account_ids_for_symbols", None)
+        if callable(lookup):
+            try:
+                indexed_accounts = list(lookup(request.symbols) or [])
+            except Exception:
+                indexed_accounts = []
+        if not indexed_accounts:
+            repair = getattr(self.instrument_subscription_index, "ensure_subscription_index", None)
+            if callable(repair):
+                try:
+                    repair(
+                        accounts,
+                        getattr(self.instrument_subscription_state_source, "previous", {}) or {},
+                    )
+                    indexed_accounts = list(lookup(request.symbols) or []) if callable(lookup) else []
+                except Exception:
+                    indexed_accounts = []
+        if indexed_accounts:
+            indexed = set(str(value or "") for value in indexed_accounts)
+            return [
+                account for account in selected
+                if str(getattr(account, "account_id", "") or "") in indexed
+            ]
         target_symbols = set(request.symbols)
         previous = getattr(self.monitor_store, "previous", {}) or {}
         scoped = []
@@ -388,6 +446,7 @@ class V2ReasoningEngine:
         settings=None,
         release_identity=None,
         reasoning_orchestrator=None,
+        shared_inference_service=None,
     ):
         self._descriptor = descriptor
         self.input_assembler = input_assembler
@@ -398,6 +457,7 @@ class V2ReasoningEngine:
         self.settings = dict(settings or {})
         self._release_identity = dict(release_identity or {})
         self.reasoning_orchestrator = reasoning_orchestrator
+        self.shared_inference_service = shared_inference_service
         self.last_result = None
         self.results_by_request_id = {}
 
@@ -474,6 +534,27 @@ class V2ReasoningEngine:
         projection_started = time.perf_counter()
         projection_results = self.inference_executor.execute(request, snapshots)
         stages["projectionAndInferenceMs"] = int((time.perf_counter() - projection_started) * 1000)
+        shared_publication = {"status": "not-configured"}
+        if self.shared_inference_service is not None:
+            shared_started = time.perf_counter()
+            try:
+                shared_publication = dict(
+                    self.shared_inference_service.publish_verified_results(
+                        projection_results,
+                        request.symbols,
+                        snapshots=snapshots,
+                        observed_at=request.source_observed_at,
+                    ) or {}
+                )
+            except Exception as error:  # noqa: BLE001 - dual-run publication cannot alter the verified decision.
+                shared_publication = {
+                    "status": "error",
+                    "reason": str(error)[:240],
+                    "decisionPathAffected": False,
+                }
+            stages["sharedInferencePublicationMs"] = int(
+                (time.perf_counter() - shared_started) * 1000
+            )
         identities = {
             account_id: projection_inference_identity(value)
             for account_id, value in projection_results.items()
@@ -598,6 +679,7 @@ class V2ReasoningEngine:
             reasoning_lane=reasoning_case.fact_delta.lane if reasoning_case else "",
             release_fingerprint=str(self._release_identity.get("releaseFingerprint") or ""),
             validation_cohort_id=str(self._release_identity.get("validationCohortId") or ""),
+            shared_inference=shared_publication,
         )
         return self.remember(result)
 

@@ -2031,10 +2031,18 @@ def select_target_scoped_manifest_patch(
         if scope_symbol(scope_id) in requested_symbols
         and scope_requires_v8_bounded_slot(scope_id)
     )
-    topology_migration = bool(
+    topology_migration_required = bool(
         active_topology_version != SCOPED_ABOX_SCOPE_TOPOLOGY_VERSION
         or legacy_target_scope_ids
     )
+    topology_migration = {
+        "applied": topology_migration_required,
+        "fromVersion": active_topology_version,
+        "toVersion": SCOPED_ABOX_SCOPE_TOPOLOGY_VERSION,
+        "legacyTargetScopeIds": legacy_target_scope_ids,
+        "subjectScoped": True,
+        "fullWorldRewriteUsed": False,
+    }
     base.update({
         "scopeTopologyMigration": topology_migration,
         "activeScopeTopologyVersion": active_topology_version,
@@ -2143,7 +2151,7 @@ def select_target_scoped_manifest_patch(
         fact_slot_plan,
     )
     selected = set(fact_slot_selection.get("selectedScopeIds") or selected)
-    if topology_migration:
+    if topology_migration_required:
         # Replace one complete subject boundary so v7 and v8 copies of the
         # same fact never coexist in the active manifest. Other subjects stay
         # on their verified v7 generations until their own durable event.
@@ -2182,7 +2190,7 @@ def select_target_scoped_manifest_patch(
     # active verified manifest until an explicit scoped source fact proves removal.
     # Treating those omissions as retirement forced a full manifest rewrite
     # (and frequently a 300s+ TypeDB cycle) for a small price observation.
-    if topology_migration:
+    if topology_migration_required:
         # A topology migration is deliberately subject-scoped. Shared and
         # unrelated subject scopes may not be present in the partial incoming
         # graph, so retiring them here would silently remove verified facts.
@@ -2414,14 +2422,7 @@ def select_target_scoped_manifest_patch(
             "selected": selection_trace(selected, "selected"),
             "deferred": selection_trace(deferred, "deferred"),
         },
-        "scopeTopologyMigration": {
-            "applied": topology_migration,
-            "fromVersion": active_topology_version,
-            "toVersion": SCOPED_ABOX_SCOPE_TOPOLOGY_VERSION,
-            "legacyTargetScopeIds": legacy_target_scope_ids,
-            "subjectScoped": True,
-            "fullWorldRewriteUsed": False,
-        },
+        "scopeTopologyMigration": topology_migration,
     }
 
 

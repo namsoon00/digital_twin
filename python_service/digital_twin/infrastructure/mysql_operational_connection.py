@@ -401,7 +401,76 @@ MYSQL_SCHEMA = [
         created_at VARCHAR(40) NOT NULL,
         updated_at VARCHAR(40) NOT NULL,
         PRIMARY KEY (account_id, symbol),
-        KEY idx_account_watchlist_symbols_updated (account_id, updated_at, symbol)
+        KEY idx_account_watchlist_symbols_updated (account_id, updated_at, symbol),
+        KEY idx_account_watchlist_symbols_reverse (symbol, account_id)
+    ) ENGINE=InnoDB DEFAULT CHARSET=utf8mb4 COLLATE=utf8mb4_unicode_ci
+    """,
+    """
+    CREATE TABLE IF NOT EXISTS account_instrument_subscriptions (
+        account_id VARCHAR(191) NOT NULL,
+        symbol VARCHAR(64) NOT NULL,
+        position_role VARCHAR(32) NOT NULL DEFAULT 'watchlist',
+        source_revision VARCHAR(191) NOT NULL DEFAULT '',
+        source_as_of VARCHAR(40) NOT NULL DEFAULT '',
+        active TINYINT NOT NULL DEFAULT 1,
+        created_at VARCHAR(40) NOT NULL,
+        updated_at VARCHAR(40) NOT NULL,
+        PRIMARY KEY (account_id, symbol),
+        KEY idx_account_instrument_reverse (symbol, active, account_id),
+        KEY idx_account_instrument_account (account_id, active, updated_at)
+    ) ENGINE=InnoDB DEFAULT CHARSET=utf8mb4 COLLATE=utf8mb4_unicode_ci
+    """,
+    """
+    CREATE TABLE IF NOT EXISTS shared_instrument_inference_snapshots (
+        snapshot_id VARCHAR(191) PRIMARY KEY,
+        deployment_id VARCHAR(191) NOT NULL,
+        symbol VARCHAR(64) NOT NULL,
+        market_id VARCHAR(64) NOT NULL DEFAULT '',
+        semantic_fingerprint CHAR(64) NOT NULL,
+        source_fingerprint CHAR(64) NOT NULL,
+        release_fingerprint VARCHAR(191) NOT NULL DEFAULT '',
+        rulebox_hash VARCHAR(191) NOT NULL DEFAULT '',
+        inference_generation_id VARCHAR(191) NOT NULL,
+        source_abox_snapshot_id VARCHAR(191) NOT NULL,
+        source_as_of VARCHAR(40) NOT NULL,
+        consistency_status VARCHAR(32) NOT NULL,
+        source_account_count INT NOT NULL DEFAULT 1,
+        payload_json LONGTEXT NOT NULL,
+        created_at VARCHAR(40) NOT NULL,
+        UNIQUE KEY uq_shared_inference_source (deployment_id, symbol, source_fingerprint),
+        KEY idx_shared_inference_subject_time (deployment_id, symbol, source_as_of),
+        KEY idx_shared_inference_created (created_at)
+    ) ENGINE=InnoDB DEFAULT CHARSET=utf8mb4 COLLATE=utf8mb4_unicode_ci
+    """,
+    """
+    CREATE TABLE IF NOT EXISTS shared_instrument_inference_heads (
+        deployment_id VARCHAR(191) NOT NULL,
+        symbol VARCHAR(64) NOT NULL,
+        snapshot_id VARCHAR(191) NOT NULL,
+        semantic_fingerprint CHAR(64) NOT NULL,
+        source_as_of VARCHAR(40) NOT NULL,
+        updated_at VARCHAR(40) NOT NULL,
+        PRIMARY KEY (deployment_id, symbol),
+        KEY idx_shared_inference_head_snapshot (snapshot_id)
+    ) ENGINE=InnoDB DEFAULT CHARSET=utf8mb4 COLLATE=utf8mb4_unicode_ci
+    """,
+    """
+    CREATE TABLE IF NOT EXISTS portfolio_inference_overlays (
+        overlay_id VARCHAR(191) PRIMARY KEY,
+        deployment_id VARCHAR(191) NOT NULL,
+        account_id VARCHAR(191) NOT NULL,
+        symbol VARCHAR(64) NOT NULL,
+        shared_snapshot_ids_json TEXT NOT NULL,
+        inference_generation_id VARCHAR(191) NOT NULL,
+        source_abox_snapshot_id VARCHAR(191) NOT NULL,
+        account_fingerprint CHAR(64) NOT NULL,
+        overlay_status VARCHAR(32) NOT NULL,
+        payload_json LONGTEXT NOT NULL,
+        created_at VARCHAR(40) NOT NULL,
+        UNIQUE KEY uq_portfolio_overlay_source (deployment_id, account_id, symbol, inference_generation_id),
+        KEY idx_portfolio_overlay_latest (deployment_id, account_id, symbol, created_at),
+        KEY idx_portfolio_overlay_shared (symbol, created_at),
+        KEY idx_portfolio_overlay_created (created_at)
     ) ENGINE=InnoDB DEFAULT CHARSET=utf8mb4 COLLATE=utf8mb4_unicode_ci
     """,
     """

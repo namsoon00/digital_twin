@@ -90,6 +90,13 @@ class MySQLKeyPartitionDefinition:
 
 
 MYSQL_OPERATIONAL_INDEXES: Dict[str, Sequence[MySQLIndexDefinition]] = {
+    "account_watchlist_symbols": (
+        MySQLIndexDefinition(
+            "account_watchlist_symbols",
+            "idx_account_watchlist_symbols_reverse",
+            "`symbol`, `account_id`",
+        ),
+    ),
     "portfolio_decision_action_observations": (
         MySQLIndexDefinition(
             "portfolio_decision_action_observations",

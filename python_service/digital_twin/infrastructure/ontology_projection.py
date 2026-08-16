@@ -7,6 +7,7 @@ from typing import Callable, Dict, List, Set
 import hashlib
 import json
 import time
+import traceback
 
 from ..application.investment_outcome_observation_service import InvestmentOutcomeObservationService
 from ..domain.ontology_contracts import PortfolioOntology
@@ -752,8 +753,11 @@ class PortfolioOntologyProjectionRecorder:
         runtime_stages: Dict[str, int] = {}
         projection_run = None
         pending_activation_recovery: Dict[str, object] = {}
+        current_stage = "start"
 
         def emit_progress(stage: str, **details) -> None:
+            nonlocal current_stage
+            current_stage = str(stage or "unknown")
             if not callable(progress_callback):
                 return
             payload = dict(details or {})
@@ -1918,7 +1922,14 @@ class PortfolioOntologyProjectionRecorder:
                         or getattr(sample, "overall_score", "")
                     )
         except Exception as error:  # noqa: BLE001 - ontology projection must not block realtime monitoring.
-            result = {"saved": False, "status": "error", "reason": str(error)[:180]}
+            result = {
+                "saved": False,
+                "status": "error",
+                "reason": str(error)[:180],
+                "errorType": type(error).__name__,
+                "failureStage": current_stage,
+                "errorTrace": traceback.format_exc()[-2000:],
+            }
             emit_progress("error", status="error", reason=str(error)[:180])
         runtime_stages["totalMs"] = int((time.perf_counter() - projection_started) * 1000)
         result.setdefault("runtimeStages", runtime_stages)

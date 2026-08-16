@@ -334,6 +334,17 @@ def relation_context_from_inferencebox(
     if not bool(inferencebox.get("nativeTypeDbReasoningUsed")) and not inferencebox.get("relations") and not inferencebox.get("traces"):
         return {}
     source_name = inferencebox_source_name(inferencebox)
+    shared_root = (
+        inferencebox.get("sharedInstrumentInference")
+        if isinstance(inferencebox.get("sharedInstrumentInference"), dict)
+        else {}
+    )
+    shared_symbols = shared_root.get("symbols") if isinstance(shared_root.get("symbols"), dict) else {}
+    shared_inference = (
+        dict(shared_symbols.get(symbol) or {})
+        if isinstance(shared_symbols.get(symbol), dict)
+        else {}
+    )
     context_version = relation_context_version(source_name)
     relations = symbol_inference_relations(symbol, inferencebox.get("relations") or [])
     traces = symbol_inference_traces(symbol, inferencebox.get("traces") or [])
@@ -435,6 +446,8 @@ def relation_context_from_inferencebox(
         prompt_context["hypothesisSet"] = investment_brain.get("hypothesisSet") or {}
         prompt_context["hypothesisCalibration"] = investment_brain.get("hypothesisCalibration") or {}
         prompt_context["researchPlan"] = investment_brain.get("researchPlan") or {}
+        if shared_inference:
+            prompt_context["sharedInstrumentInference"] = shared_inference
         if hypothesis_lifecycle:
             prompt_context["hypothesisLifecycle"] = dict(hypothesis_lifecycle)
     return {
@@ -480,6 +493,7 @@ def relation_context_from_inferencebox(
         "researchPlan": investment_brain.get("researchPlan") or {},
         "hypothesisLifecycle": dict(hypothesis_lifecycle or {}),
         "hypothesisTemplates": investment_brain.get("hypothesisTemplates") or [],
+        "sharedInstrumentInference": shared_inference,
         "selfQuestions": investment_brain.get("selfQuestions") or [],
         "epistemicState": investment_brain.get("epistemicState") or {},
         "inferenceGenerationId": str(inferencebox.get("inferenceGenerationId") or ""),
@@ -523,6 +537,7 @@ def relation_context_from_inferencebox(
             "ruleboxRulesHash": inferencebox.get("ruleboxRulesHash"),
             "ruleboxRuleCount": inferencebox.get("ruleboxRuleCount"),
             "hypothesisCalibration": investment_brain.get("hypothesisCalibration") or {},
+            "sharedInstrumentInference": shared_inference,
         },
         "typedbInference": {
             "source": source_name,
@@ -543,6 +558,7 @@ def relation_context_from_inferencebox(
             "ruleboxRulesHash": inferencebox.get("ruleboxRulesHash"),
             "ruleboxRuleCount": inferencebox.get("ruleboxRuleCount"),
             "hypothesisCalibration": investment_brain.get("hypothesisCalibration") or {},
+            "sharedInstrumentInference": shared_inference,
         },
     }
 

@@ -149,6 +149,7 @@ class IndependentReasoningResult:
     reasoning_lane: str = ""
     release_fingerprint: str = ""
     validation_cohort_id: str = ""
+    shared_inference: Dict[str, object] = field(default_factory=dict)
     contract_version: str = INDEPENDENT_REASONING_RESULT_VERSION
 
     def to_dict(self) -> Dict[str, object]:

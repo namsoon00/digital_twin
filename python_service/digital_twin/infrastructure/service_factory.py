@@ -28,6 +28,7 @@ from ..application.independent_reasoning_engine import (
     V2ReasoningEngine,
 )
 from ..application.investment_reasoning import InvestmentReasoningOrchestrator
+from ..application.shared_instrument_inference_service import SharedInstrumentInferenceService
 from ..application.investment_brain_service import InvestmentBrainService
 from ..application.investment_domain_service import InvestmentDomainService
 from ..application.investment_research_orchestration_service import InvestmentResearchOrchestrationService, InvestmentResearchQueueRunner
@@ -1398,6 +1399,18 @@ def build_ontology_reasoning_runner(settings=None, event_publisher=None) -> Onto
         )
     )
     reasoning_engine_registry = stores.reasoning_engine_registry_store(reasoning_store_settings)
+    shared_inference_service = SharedInstrumentInferenceService(
+        stores.shared_instrument_inference_store(reasoning_store_settings),
+        v1_deployment_id,
+        str(active_release_identity.get("releaseFingerprint") or ""),
+    )
+
+    def publish_shared_inference(projection_results, symbols, runner):
+        return shared_inference_service.publish_verified_results(
+            projection_results,
+            symbols,
+            states=getattr(runner, "last_reasoning_source_states", {}) or {},
+        )
 
     def execution_authorized():
         control = reasoning_engine_registry.control()
@@ -1465,6 +1478,7 @@ def build_ontology_reasoning_runner(settings=None, event_publisher=None) -> Onto
         ),
         reasoning_shadow_scheduler=reasoning_shadow_scheduler,
         execution_authorized_provider=execution_authorized,
+        shared_inference_publisher=publish_shared_inference,
     )
 
 
@@ -1780,6 +1794,7 @@ def build_v2_reasoning_engine(settings=None) -> V2ReasoningEngine:
     store_settings["_skipOperationalHistoryRetention"] = "1"
     store_settings["_skipOperationalSchemaBootstrap"] = "1"
     monitor_store = stores.ontology_reasoning_monitor_store(store_settings)
+    subscription_state_store = stores.monitor_store(store_settings)
     account_repository = stores.account_registry(store_settings)
     snapshot_source = LatestMonitorSnapshotReasoningSource(
         monitor_store,
@@ -1824,6 +1839,12 @@ def build_v2_reasoning_engine(settings=None) -> V2ReasoningEngine:
         source="reasoning-engine-v2-independent",
     )
     registry_store = stores.reasoning_engine_registry_store(store_settings)
+    shared_inference_store = stores.shared_instrument_inference_store(store_settings)
+    shared_inference_service = SharedInstrumentInferenceService(
+        shared_inference_store,
+        descriptor.deployment_id,
+        str(release_identity.get("releaseFingerprint") or ""),
+    )
     existing_health = dict((registry_store.get(descriptor.deployment_id) or {}).get("health") or {})
     existing_health.update({
         "candidateReleaseId": release_identity.get("releaseId"),
@@ -1854,6 +1875,8 @@ def build_v2_reasoning_engine(settings=None) -> V2ReasoningEngine:
             snapshot_source,
             monitor_store,
             candidate_settings,
+            instrument_subscription_index=shared_inference_service,
+            instrument_subscription_state_source=subscription_state_store,
         ),
         inference_executor=ScopedTypeDBInferenceExecutor(projection_recorder),
         candidate_builder=GraphDecisionCandidateBuilder(
@@ -1871,6 +1894,7 @@ def build_v2_reasoning_engine(settings=None) -> V2ReasoningEngine:
         reasoning_orchestrator=InvestmentReasoningOrchestrator(
             stores.investment_reasoning_case_store(store_settings)
         ),
+        shared_inference_service=shared_inference_service,
     )
 
 

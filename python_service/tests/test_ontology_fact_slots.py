@@ -487,6 +487,41 @@ class OntologyFactSlotTests(unittest.TestCase):
             graph.worldview["scopeTopologyVersion"],
         )
 
+    def test_manifest_repair_path_keeps_topology_migration_as_structured_metadata(self):
+        graph = PortfolioOntology(
+            "main",
+            entities=[OntologyEntity("stock:005930", "Samsung", "stock", {
+                "ontologyBox": "ABox", "symbol": "005930",
+            })],
+        )
+        first = apply_scoped_abox_identity(graph, world_id="portfolio:local:test")
+        active_scope_plan = [deepcopy(item) for item in first["scopePlan"]]
+        active_scope_plan.append({
+            "scopeId": "reference:removed-catalog",
+            "scopeFamily": "reference",
+            "generationId": "reference:g1",
+            "fingerprint": "reference:f1",
+        })
+
+        result = select_target_scoped_manifest_patch(
+            graph,
+            {
+                "status": "ok",
+                "scopedAboxManifestVersion": SCOPED_ABOX_MANIFEST_VERSION,
+                "scopeTopologyVersion": SCOPED_ABOX_SCOPE_TOPOLOGY_VERSION,
+                "scopePlan": active_scope_plan,
+            },
+            ["005930"],
+        )
+
+        self.assertEqual("skipped-removed-scope-requires-full-refresh", result["status"])
+        self.assertIsInstance(result["scopeTopologyMigration"], dict)
+        self.assertFalse(result["scopeTopologyMigration"]["applied"])
+        self.assertEqual(
+            SCOPED_ABOX_SCOPE_TOPOLOGY_VERSION,
+            result["scopeTopologyMigration"]["toVersion"],
+        )
+
 
 if __name__ == "__main__":
     unittest.main()

@@ -80,6 +80,8 @@ MYSQL_OPERATIONAL_COMPACTION_TABLES = frozenset({
     "portfolio_rebalance_review_windows",
     "symbol_universe",
     "symbol_universe_sources",
+    "shared_instrument_inference_snapshots",
+    "portfolio_inference_overlays",
 })
 
 
@@ -418,6 +420,28 @@ def _delete_stale_rows(connection, target: MySQLRetentionTarget, cutoff_iso: str
         + " LIMIT %s"
     )
     return _delete_one_batch(connection, sql, (cutoff_iso, batch_size))
+
+
+def _delete_stale_shared_inference_rows(connection, cutoff_iso: str, batch_size: int) -> Dict[str, int]:
+    """Retain active shared heads while bounding immutable dual-run history."""
+
+    overlays = _delete_one_batch(
+        connection,
+        "DELETE FROM `portfolio_inference_overlays` WHERE `created_at` < %s "
+        "ORDER BY `created_at`, `overlay_id` LIMIT %s",
+        (cutoff_iso, batch_size),
+    )
+    snapshots = _delete_one_batch(
+        connection,
+        "DELETE FROM `shared_instrument_inference_snapshots` WHERE snapshot_id IN ("
+        "SELECT snapshot_id FROM (SELECT s.snapshot_id "
+        "FROM `shared_instrument_inference_snapshots` s "
+        "LEFT JOIN `shared_instrument_inference_heads` h ON h.snapshot_id = s.snapshot_id "
+        "WHERE s.created_at < %s AND h.snapshot_id IS NULL "
+        "ORDER BY s.created_at, s.snapshot_id LIMIT %s) expired_shared_inference)",
+        (cutoff_iso, batch_size),
+    )
+    return {"snapshots": snapshots, "overlays": overlays}
 
 
 def _delete_suppressed_notification_rows(connection, cutoff_iso: str, batch_size: int) -> int:
@@ -931,6 +955,16 @@ def apply_mysql_operational_history_retention(
             deleted = _delete_stale_rows(connection, target, cutoff_iso, batch_size)
             deleted_by_table[target.table] = deleted
             deleted_by_policy["time:" + target.table] = deleted
+
+        shared_inference_deleted = _delete_stale_shared_inference_rows(
+            connection,
+            cutoff_iso,
+            batch_size,
+        )
+        deleted_by_table["shared_instrument_inference_snapshots"] = shared_inference_deleted["snapshots"]
+        deleted_by_table["portfolio_inference_overlays"] = shared_inference_deleted["overlays"]
+        deleted_by_policy["time:shared_instrument_inference_snapshots"] = shared_inference_deleted["snapshots"]
+        deleted_by_policy["time:portfolio_inference_overlays"] = shared_inference_deleted["overlays"]
 
         terminal_notification_deleted = _delete_terminal_notification_rows(connection, cutoff_iso, batch_size)
         deleted_by_table["notification_jobs"] = terminal_notification_deleted

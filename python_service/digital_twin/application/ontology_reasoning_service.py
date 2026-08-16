@@ -821,6 +821,7 @@ class OntologyReasoningRunner:
         market_observation_completion_recorder: Callable = None,
         reasoning_shadow_scheduler=None,
         execution_authorized_provider: Callable = None,
+        shared_inference_publisher: Callable = None,
     ):
         self.event_reader = event_reader
         self.cursor_store = cursor_store
@@ -848,6 +849,7 @@ class OntologyReasoningRunner:
         self.market_observation_completion_recorder = market_observation_completion_recorder
         self.reasoning_shadow_scheduler = reasoning_shadow_scheduler
         self.execution_authorized_provider = execution_authorized_provider or (lambda: True)
+        self.shared_inference_publisher = shared_inference_publisher
 
     def refresh_operational_settings(self, settings: Dict[str, object] = None) -> Dict[str, object]:
         """Apply safe scheduling changes between persistent-sidecar turns.
@@ -6512,6 +6514,26 @@ class OntologyReasoningRunner:
                 "coalescedEventCount": len(durable_superseded_ids),
                 **queue_metadata,
             }
+        shared_inference_publication = {"status": "not-configured"}
+        if callable(self.shared_inference_publisher):
+            shared_started = time.perf_counter()
+            try:
+                shared_inference_publication = dict(
+                    self.shared_inference_publisher(
+                        getattr(runner, "last_ontology_projection_results", {}) or {},
+                        symbols,
+                        runner,
+                    ) or {}
+                )
+            except Exception as error:  # noqa: BLE001 - this dual-run read model cannot change a verified result.
+                shared_inference_publication = {
+                    "status": "error",
+                    "reason": str(error)[:240],
+                    "decisionPathAffected": False,
+                }
+            stage_timing["sharedInferencePublicationMs"] = int(
+                (time.perf_counter() - shared_started) * 1000
+            )
         self.mark_successful_projection(runner)
         post_projection_started = time.perf_counter()
         account_ids = [getattr(account, "account_id", "") for account in getattr(runner, "accounts", [])]
@@ -6827,6 +6849,7 @@ class OntologyReasoningRunner:
             "maintenance": maintenance,
             "stageTiming": stage_timing,
             "reasoningShadow": shadow_schedule,
+            "sharedInstrumentInference": shared_inference_publication,
             "deferredReason": (
                 "검증 근거가 같은 계정 월드의 새 ABox/InferenceBox 세대에 정렬될 때까지 해당 리서치 요청을 유지합니다."
                 if blocked_request_ids

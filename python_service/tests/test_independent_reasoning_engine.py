@@ -184,6 +184,29 @@ class IndependentReasoningEngineTests(unittest.TestCase):
 
         self.assertEqual(["nvidia"], [account.account_id for account in selected])
 
+    def test_symbol_event_uses_subscription_reverse_index_before_account_scan(self):
+        accounts = [
+            SimpleNamespace(account_id="nvidia", watchlist_symbols=[]),
+            SimpleNamespace(account_id="tesla", watchlist_symbols=[]),
+        ]
+        reverse_index = SimpleNamespace(
+            account_ids_for_symbols=lambda symbols: ["nvidia"] if list(symbols) == ["NVDA"] else []
+        )
+        assembler = IndependentReasoningInputAssembler(
+            SimpleNamespace(load=lambda: accounts),
+            snapshot_source=SimpleNamespace(),
+            monitor_store=SimpleNamespace(previous={}),
+            instrument_subscription_index=reverse_index,
+        )
+        request = independent_reasoning_request(
+            "ontology-v2-shadow",
+            [source_event(account_ids=[])],
+        )
+
+        selected = assembler.selected_accounts(request)
+
+        self.assertEqual(["nvidia"], [account.account_id for account in selected])
+
     def test_shadow_run_produces_trace_but_never_hands_off_delivery(self):
         recorder = FakeCycleRecorder()
         engine = V2ReasoningEngine(

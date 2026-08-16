@@ -53,6 +53,7 @@ from .mysql_operational import (
     MySQLTemporalFeatureSnapshotStore,
     MySQLTimeSeriesBackendRegistryStore,
     MySQLTimeSeriesProjectionOutboxStore,
+    MySQLSharedInstrumentInferenceStore,
     MySQLExternalDataStore,
 )
 from .settings import runtime_settings
@@ -237,6 +238,10 @@ def reasoning_engine_comparison_store(settings: Dict[str, str] = None):
 
 def reasoning_engine_job_store(settings: Dict[str, str] = None):
     return MySQLReasoningEngineJobStore(configured_settings(settings))
+
+
+def shared_instrument_inference_store(settings: Dict[str, str] = None):
+    return MySQLSharedInstrumentInferenceStore(configured_settings(settings))
 
 
 def investment_reasoning_case_store(settings: Dict[str, str] = None):

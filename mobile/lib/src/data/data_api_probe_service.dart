@@ -156,7 +156,7 @@ class DataApiProbeClient {
           uri,
           headers: {
             'Accept': 'application/json',
-            'User-Agent': 'MarketFlow/1.0',
+            'User-Agent': 'OrbitAlpha/1.0',
             if (apiKey.isNotEmpty) 'x-cg-demo-api-key': apiKey,
           },
         )

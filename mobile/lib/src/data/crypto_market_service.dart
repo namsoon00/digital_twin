@@ -190,7 +190,7 @@ class CoinGeckoCryptoMarketService implements CryptoMarketService {
     });
     final headers = <String, String>{
       'Accept': 'application/json',
-      'User-Agent': 'MarketFlow/1.0',
+      'User-Agent': 'OrbitAlpha/1.0',
       if (isConfigured) 'x-cg-demo-api-key': _effectiveApiKey,
     };
     final response = await _client

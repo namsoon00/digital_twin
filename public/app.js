@@ -1,6 +1,9 @@
 (function () {
   var app = document.getElementById("app");
   var ontologyGraphInstances = {};
+  var instrumentTimelineChart = null;
+  var instrumentTimelineChartObserver = null;
+  var instrumentTimelineChartFrame = 0;
   var mobileInfiniteScrollObserver = null;
   var mobileInfiniteScrollMode = null;
   var overlayScrollPosition = null;
@@ -24,10 +27,10 @@
     pageClass: "web-style-page",
     commandClass: "web-style-command-strip"
   };
-  var bottomTabIds = ["overview", "calendar", "feed", "modeling", "notifications", "experiments", "settings"];
-  var managementTabIds = [];
+  var bottomTabIds = ["overview", "feed", "modeling", "notifications", "calendar"];
+  var managementTabIds = ["experiments", "settings"];
   var navigationGroups = [
-    { id: "workspace", label: "투자 콘솔", description: "오늘부터 운영까지 한 흐름", tabIds: bottomTabIds }
+    { id: "workspace", label: "투자 콘솔", description: "오늘의 시장과 판단", tabIds: bottomTabIds }
   ];
   var pageStructureCatalog = {
     overview: {
@@ -390,6 +393,7 @@
   var marketWorkspaceModes = [
     { id: "mine", label: "내 종목", description: "보유·관심" },
     { id: "universe", label: "전체 종목", description: "KOSPI·KOSDAQ·NASDAQ" },
+    { id: "flow", label: "자금 흐름", description: "자산·섹터·신규 흐름" },
     { id: "news", label: "뉴스·수급", description: "시장 영향" }
   ];
   var cachedSnapshot = loadCachedSnapshot();
@@ -664,6 +668,11 @@
     activeSymbolUniverseKey: "",
     monitoringDetail: null,
     workDetailLayer: initialWorkDetailLayer(),
+    instrumentTimelines: {},
+    instrumentTimelineLoading: {},
+    instrumentTimelineErrors: {},
+    instrumentWorkspaceTabs: {},
+    instrumentTimelineRanges: {},
     expandedOntologyGraphId: ""
   };
 
@@ -965,6 +974,180 @@
     });
     activeJsonRequests[key] = request;
     return request;
+  }
+
+  function instrumentWorkspaceTab(symbol) {
+    var value = String((state.instrumentWorkspaceTabs || {})[String(symbol || "").toUpperCase()] || "summary");
+    return ["summary", "chart", "decision", "timeline"].indexOf(value) >= 0 ? value : "summary";
+  }
+
+  function instrumentTimelineRange(symbol) {
+    var value = String((state.instrumentTimelineRanges || {})[String(symbol || "").toUpperCase()] || "3m");
+    return ["1d", "1w", "1m", "3m", "6m", "1y", "3y", "all"].indexOf(value) >= 0 ? value : "3m";
+  }
+
+  function instrumentTimelineCacheKey(symbol, range) {
+    return String(symbol || "").toUpperCase() + ":" + String(range || "3m");
+  }
+
+  function currentInstrumentTimeline(symbol) {
+    return (state.instrumentTimelines || {})[instrumentTimelineCacheKey(symbol, instrumentTimelineRange(symbol))] || null;
+  }
+
+  function loadInstrumentTimeline(symbol, force) {
+    var normalized = String(symbol || "").toUpperCase().trim();
+    if (!normalized || isStaticPreviewHost()) return Promise.resolve(null);
+    var range = instrumentTimelineRange(normalized);
+    var cacheKey = instrumentTimelineCacheKey(normalized, range);
+    if (!force && state.instrumentTimelines[cacheKey]) return Promise.resolve(state.instrumentTimelines[cacheKey]);
+    if (state.instrumentTimelineLoading[cacheKey]) return activeJsonRequests["instrument-timeline:" + cacheKey] || Promise.resolve(null);
+    state.instrumentTimelineLoading[cacheKey] = true;
+    state.instrumentTimelineErrors[cacheKey] = "";
+    render();
+    var account = activeWatchAccount();
+    var accountId = accountIdOf(account);
+    var params = new URLSearchParams({ range: range });
+    if (accountId) params.set("accountId", accountId);
+    return requestJson("/api/instruments/" + encodeURIComponent(normalized) + "/timeline?" + params.toString(), {
+      key: "instrument-timeline:" + cacheKey,
+      timeoutMs: 16000,
+      force: Boolean(force)
+    }).then(function (payload) {
+      state.instrumentTimelines[cacheKey] = payload;
+      state.instrumentTimelineErrors[cacheKey] = "";
+      return payload;
+    }).catch(function (error) {
+      state.instrumentTimelineErrors[cacheKey] = error.message || "종목 타임라인을 불러오지 못했습니다.";
+      return null;
+    }).finally(function () {
+      state.instrumentTimelineLoading[cacheKey] = false;
+      render();
+    });
+  }
+
+  function destroyInstrumentTimelineChart() {
+    if (instrumentTimelineChartFrame && window.cancelAnimationFrame) {
+      window.cancelAnimationFrame(instrumentTimelineChartFrame);
+      instrumentTimelineChartFrame = 0;
+    }
+    if (instrumentTimelineChartObserver) {
+      instrumentTimelineChartObserver.disconnect();
+      instrumentTimelineChartObserver = null;
+    }
+    if (instrumentTimelineChart && instrumentTimelineChart.chart) {
+      instrumentTimelineChart.chart.remove();
+    }
+    instrumentTimelineChart = null;
+  }
+
+  function instrumentChartEventMarkers(events, candles) {
+    if (!candles.length) return [];
+    var times = candles.map(function (item) { return Math.floor(Date.parse(item.time || "") / 1000); }).filter(Number.isFinite);
+    if (!times.length) return [];
+    var minimum = times[0];
+    var maximum = times[times.length - 1];
+    var labels = { evidence: "뉴스", calendar: "일정", decision: "판단", hypothesis: "가설", notification: "알림" };
+    var colors = { positive: "#0f8f72", negative: "#c9485b", warning: "#c6871a", neutral: "#2563a6" };
+    return (events || []).map(function (event) {
+      var occurred = Math.floor(Date.parse(event.occurredAt || "") / 1000);
+      if (!Number.isFinite(occurred) || occurred < minimum || occurred > maximum) return null;
+      var nearest = times.reduce(function (selected, time) {
+        return Math.abs(time - occurred) < Math.abs(selected - occurred) ? time : selected;
+      }, times[0]);
+      return {
+        time: nearest,
+        position: event.tone === "negative" ? "belowBar" : "aboveBar",
+        color: colors[event.tone] || colors.neutral,
+        shape: event.type === "decision" ? "arrowDown" : event.type === "calendar" ? "square" : "circle",
+        text: labels[event.type] || "사건"
+      };
+    }).filter(Boolean).sort(function (a, b) { return a.time - b.time; }).slice(-80);
+  }
+
+  function initInstrumentTimelineChart() {
+    var container = app.querySelector("[data-instrument-candle-chart]");
+    if (!container || !window.LightweightCharts) {
+      if (instrumentTimelineChart) destroyInstrumentTimelineChart();
+      return;
+    }
+    var payloadKey = container.getAttribute("data-instrument-candle-chart") || "";
+    var payload = (state.instrumentTimelines || {})[payloadKey];
+    var candles = payload && payload.series && Array.isArray(payload.series.candles) ? payload.series.candles : [];
+    if (!candles.length) {
+      if (instrumentTimelineChart) destroyInstrumentTimelineChart();
+      return;
+    }
+    destroyInstrumentTimelineChart();
+    var create = function () {
+      instrumentTimelineChartFrame = 0;
+      if (!container.isConnected) return;
+      var styles = window.getComputedStyle(document.documentElement);
+      var chart = window.LightweightCharts.createChart(container, {
+        width: Math.max(280, container.clientWidth),
+        height: Math.max(320, container.clientHeight || 380),
+        layout: {
+          background: { type: "solid", color: styles.getPropertyValue("--panel").trim() || "#ffffff" },
+          textColor: styles.getPropertyValue("--muted").trim() || "#667085",
+          fontFamily: "Inter, Pretendard, -apple-system, BlinkMacSystemFont, sans-serif"
+        },
+        grid: {
+          vertLines: { color: styles.getPropertyValue("--line").trim() || "#e4e7ec" },
+          horzLines: { color: styles.getPropertyValue("--line").trim() || "#e4e7ec" }
+        },
+        rightPriceScale: { borderColor: styles.getPropertyValue("--line").trim() || "#e4e7ec" },
+        timeScale: {
+          borderColor: styles.getPropertyValue("--line").trim() || "#e4e7ec",
+          timeVisible: String((payload.query || {}).interval || "1d") !== "1d",
+          secondsVisible: false,
+          rightOffset: 3
+        },
+        crosshair: { mode: window.LightweightCharts.CrosshairMode.Normal }
+      });
+      var candleSeries = chart.addSeries(window.LightweightCharts.CandlestickSeries, {
+        upColor: "#0f8f72",
+        downColor: "#c9485b",
+        wickUpColor: "#0f8f72",
+        wickDownColor: "#c9485b",
+        borderVisible: false
+      });
+      var candleData = candles.map(function (item) {
+        return {
+          time: Math.floor(Date.parse(item.time || "") / 1000),
+          open: Number(item.open || item.close || 0),
+          high: Number(item.high || item.close || 0),
+          low: Number(item.low || item.close || 0),
+          close: Number(item.close || 0)
+        };
+      }).filter(function (item) { return Number.isFinite(item.time) && item.close > 0; });
+      candleSeries.setData(candleData);
+      var volumeSeries = chart.addSeries(window.LightweightCharts.HistogramSeries, {
+        priceFormat: { type: "volume" },
+        priceScaleId: "",
+        lastValueVisible: false,
+        priceLineVisible: false
+      });
+      volumeSeries.priceScale().applyOptions({ scaleMargins: { top: 0.82, bottom: 0 } });
+      volumeSeries.setData(candles.map(function (item) {
+        return {
+          time: Math.floor(Date.parse(item.time || "") / 1000),
+          value: Number(item.volume || 0),
+          color: Number(item.close || 0) >= Number(item.open || item.close || 0) ? "rgba(15,143,114,.38)" : "rgba(201,72,91,.34)"
+        };
+      }).filter(function (item) { return Number.isFinite(item.time); }));
+      var markers = instrumentChartEventMarkers(payload.events || [], candles);
+      if (markers.length && window.LightweightCharts.createSeriesMarkers) {
+        window.LightweightCharts.createSeriesMarkers(candleSeries, markers);
+      }
+      chart.timeScale().fitContent();
+      instrumentTimelineChart = { chart: chart, container: container, payloadKey: payloadKey };
+      if (window.ResizeObserver) {
+        instrumentTimelineChartObserver = new ResizeObserver(function () {
+          if (container.isConnected) chart.applyOptions({ width: Math.max(280, container.clientWidth) });
+        });
+        instrumentTimelineChartObserver.observe(container);
+      }
+    };
+    instrumentTimelineChartFrame = window.requestAnimationFrame ? window.requestAnimationFrame(create) : window.setTimeout(create, 0);
   }
 
   function loadCachedSnapshot() {
@@ -1567,7 +1750,8 @@
   function normalizeMarketWorkspaceMode(value) {
     var requested = String(value || "").toLowerCase();
     if (["symbols", "all", "catalog", "catalogue"].indexOf(requested) >= 0) return "universe";
-    if (["impact", "feed", "news", "flow", "themes"].indexOf(requested) >= 0) return "news";
+    if (["capital", "money-flow", "money", "themes"].indexOf(requested) >= 0) return "flow";
+    if (["impact", "feed", "news"].indexOf(requested) >= 0) return "news";
     return marketWorkspaceModes.some(function (mode) { return mode.id === requested; }) ? requested : "mine";
   }
 
@@ -6822,7 +7006,7 @@
         ? '<div class="work-detail-loading"><span class="spinner"></span><p>가설 근거와 사후 결과를 읽는 중입니다.</p></div>'
         : (error
           ? '<p class="form-error">' + escapeHtml(error) + '</p>'
-          : (item ? renderHypothesisWorkspaceDetail(item) : '<div class="ontology-empty">표시할 가설 상세가 없습니다.</div>'))
+          : (item ? renderInstrumentWorkspaceLink(item.symbol, "종목 전체 흐름") + renderHypothesisWorkspaceDetail(item) : '<div class="ontology-empty">표시할 가설 상세가 없습니다.</div>'))
     );
   }
 
@@ -10582,6 +10766,13 @@
     syncTopbarScrollState();
     bindMobileInfiniteScroll();
     focusWorkDetailLayer();
+    initInstrumentTimelineChart();
+    if (state.workDetailLayer && state.workDetailLayer.type === "market-instrument" && state.workDetailLayer.key) {
+      var timelineKey = instrumentTimelineCacheKey(state.workDetailLayer.key, instrumentTimelineRange(state.workDetailLayer.key));
+      if (!state.instrumentTimelines[timelineKey] && !state.instrumentTimelineLoading[timelineKey]) {
+        loadInstrumentTimeline(state.workDetailLayer.key, false);
+      }
+    }
     var notificationDetailNeedsEvidence = state.workDetailLayer && state.workDetailLayer.type === "notification-job";
     if ((state.activeTab === "feed" || state.activeTab === "notifications" || notificationDetailNeedsEvidence) && !state.researchEvidence && !state.researchEvidenceLoading) {
       loadResearchEvidence(false);
@@ -10801,6 +10992,9 @@
     }
     writeWorkDetailHistory(type, key);
     render();
+    if (state.workDetailLayer.type === "market-instrument") {
+      loadInstrumentTimeline(state.workDetailLayer.key, false);
+    }
   }
 
   function closeWorkDetailLayer() {
@@ -10926,7 +11120,8 @@
       "experiment-proposals-board",
       "ontology-audit-section",
       "hypothesis-review",
-      "hypothesis-governance"
+      "hypothesis-governance",
+      "market-instrument"
     ];
     var largeDetails = [
       "today-work-queue",
@@ -12408,6 +12603,8 @@
         impact: impact,
         decision: decision,
         quality: quality,
+        apiSource: item.apiSource || item.provider || item.sourceApi || ((((snapshot || {}).toss || {}).mode === "live") ? "Toss Open API" : "로컬 저장 시세"),
+        isMock: Boolean(item.isMock || item.mock || item.dataMode === "mock" || (snapshot || {}).preview),
         updatedAt: item.updatedAt || ((snapshot || {}).generatedAt || ""),
         raw: item
       };
@@ -12811,6 +13008,20 @@
     return renderConsoleSurface({ kicker: "NEWS & FLOW", title: "뉴스·수급 영향", description: "최신 뉴스와 공시를 투자 영향 기준으로 확인합니다.", meta: evidence.length + "건", body: renderConsoleLiveRegion("market-news-body", news), footer: renderConsolePager("marketNews", page) });
   }
 
+  function renderMarketFlowWorkspace(snapshot) {
+    return [
+      '<div class="market-flow-workspace">',
+      renderInvestmentMoneyFlowPanel(snapshot),
+      renderConsoleSurface({
+        kicker: "FLOW METHOD",
+        title: "새 자금 흐름을 읽는 기준",
+        description: "자산·섹터 간 이동과 아직 확정되지 않은 구조 변화를 분리합니다.",
+        body: '<div class="oa-health-list"><div><span>관측</span><strong>가격·거래량·수급</strong></div><div><span>연결</span><strong>뉴스·공시·거시 사건</strong></div><div><span>검증</span><strong>가설·규칙·관계 변화</strong></div></div>'
+      }),
+      '</div>'
+    ].join("");
+  }
+
   function renderMarketConsole(snapshot) {
     var rows = filteredConsoleInstrumentRows(snapshot);
     var evidence = consoleResearchItems().slice().sort(compareResearchEvidenceForDisplay);
@@ -12832,7 +13043,9 @@
     var mode = normalizeMarketWorkspaceMode(state.marketWorkspaceMode);
     var workspace = mode === "universe"
       ? renderSymbolUniversePanel({ full: true })
-      : (mode === "news" ? renderMarketNewsWorkspace(evidence) : renderMarketMineWorkspace(snapshot, rows));
+      : (mode === "flow"
+        ? renderMarketFlowWorkspace(snapshot)
+        : (mode === "news" ? renderMarketNewsWorkspace(evidence) : renderMarketMineWorkspace(snapshot, rows)));
     return renderConsoleManagedPage("feed", metrics, [
       renderMarketWorkspaceNavigation(),
       '<div class="market-workspace market-workspace-' + escapeHtml(mode) + '">',
@@ -13104,38 +13317,173 @@
     ].join(""));
   }
 
+  function renderInstrumentWorkspaceLink(symbol, label) {
+    var normalized = String(symbol || "").toUpperCase().trim();
+    var available = selectConsoleInstrumentRows(state.snapshot || {}).some(function (row) {
+      return row.symbol === normalized;
+    });
+    if (!normalized || !available) return "";
+    return [
+      '<section class="instrument-context-link">',
+      '<span><strong>' + escapeHtml(stockDisplayName(normalized, clientKnownStockInfo(normalized))) + '</strong><em>차트·판단·가설·사건을 같은 종목 화면에서 확인</em></span>',
+      renderWorkDetailButton("market-instrument", normalized, label || "종목 작업공간", "text-button compact"),
+      '</section>'
+    ].join("");
+  }
+
+  function instrumentTimelineViewState(symbol) {
+    var range = instrumentTimelineRange(symbol);
+    var key = instrumentTimelineCacheKey(symbol, range);
+    return {
+      range: range,
+      key: key,
+      payload: (state.instrumentTimelines || {})[key] || null,
+      loading: Boolean((state.instrumentTimelineLoading || {})[key]),
+      error: String((state.instrumentTimelineErrors || {})[key] || "")
+    };
+  }
+
+  function renderInstrumentWorkspaceNavigation(symbol) {
+    var active = instrumentWorkspaceTab(symbol);
+    var tabs = [
+      ["summary", "요약"],
+      ["chart", "차트"],
+      ["decision", "판단"],
+      ["timeline", "타임라인"]
+    ];
+    return '<nav class="instrument-workspace-tabs" aria-label="종목 상세 보기">' + tabs.map(function (item) {
+      return '<button type="button" data-instrument-workspace-tab="' + item[0] + '" data-instrument-symbol="' + escapeHtml(symbol) + '" class="' + (active === item[0] ? "active" : "") + '"' + (active === item[0] ? ' aria-current="page"' : '') + '>' + escapeHtml(item[1]) + '</button>';
+    }).join("") + '</nav>';
+  }
+
+  function renderInstrumentSummary(row) {
+    var signal = marketSignalForItem(row.raw || {}, parseMarketSignals());
+    var evidence = row.evidence || [];
+    return [
+      '<section class="work-detail-section instrument-summary-metrics"><div class="work-detail-metric-row work-detail-metric-row--five">',
+      renderNotificationDetailMetric("현재가", optionalPrice(row.currentPrice, row.currency, row.quoteAvailable), row.quoteAvailable && row.changeRate < 0 ? "danger" : "watch"),
+      renderNotificationDetailMetric("등락", optionalSignedPct(row.changeRate, row.changeAvailable), row.changeAvailable && row.changeRate < 0 ? "danger" : "watch"),
+      renderNotificationDetailMetric("보유 손익", row.source === "watchlist" ? "-" : optionalSignedPct(row.profitLossRate, row.profitLossAvailable), row.profitLossAvailable && row.profitLossRate < 0 ? "danger" : "watch"),
+      renderNotificationDetailMetric(row.flowLabel, row.flowDisplay, row.partialFlowAvailable && row.foreignInstitutionNet < 0 ? "danger" : "watch"),
+      renderNotificationDetailMetric("뉴스 근거", row.evidenceCount + "건", row.impact.tone),
+      '</div></section>',
+      '<section class="work-detail-section primary instrument-current-state"><div><span class="label">CURRENT STATE</span><strong>현재 상황</strong></div><p>' + escapeHtml([row.decision && (row.decision.decision || row.decision.action), row.impact.label, row.source === "watchlist" ? "관심 종목" : "보유 종목", row.quality.label].filter(Boolean).join(" · ") || "시장 데이터 확인") + '</p></section>',
+      '<div class="instrument-summary-grid">',
+      '<section class="work-detail-section"><strong>가격·수급</strong><div class="work-detail-list">',
+      '<div class="work-detail-row"><b>가격</b><div><strong>' + escapeHtml(optionalPrice(row.currentPrice, row.currency, row.quoteAvailable)) + '</strong><span>등락 ' + escapeHtml(optionalSignedPct(row.changeRate, row.changeAvailable)) + '</span></div><em>' + escapeHtml(formatClock(row.updatedAt)) + '</em></div>',
+      '<div class="work-detail-row"><b>수급</b><div><strong>' + escapeHtml(row.flowLabel + " " + row.flowDisplay) + '</strong><span>거래량 비율 ' + escapeHtml(formatSignalRatio(signal.volumeRatio)) + '</span></div><em>' + escapeHtml(row.quality.label) + '</em></div>',
+      '</div></section>',
+      '<section class="work-detail-section"><strong>연결 상태</strong><div class="instrument-link-summary">',
+      '<span><b>' + escapeHtml(row.decision ? "판단 연결" : "판단 대기") + '</b><em>' + escapeHtml(row.decision ? ((row.decision.reasons || [])[0] || row.decision.action || "판단 근거") : "추론 결과가 생성되면 연결됩니다.") + '</em></span>',
+      '<span><b>근거 ' + escapeHtml(evidence.length) + '건</b><em>' + escapeHtml(evidence.length ? "뉴스·공시 상세는 타임라인에서 확인" : "연결된 뉴스 근거 없음") + '</em></span>',
+      '</div></section>',
+      '</div>',
+      '<section class="instrument-data-contract"><span class="tone-chip ' + escapeHtml(row.isMock ? "caution" : "watch") + '">' + escapeHtml(row.isMock ? "MOCK" : "ACTUAL") + '</span><p><strong>' + escapeHtml(row.apiSource || "시세 출처 미기록") + '</strong><em>최종 변경 ' + escapeHtml(formatClock(row.updatedAt)) + '</em></p></section>'
+    ].join("");
+  }
+
+  function renderInstrumentTimelineSources(payload) {
+    var sources = payload && Array.isArray(payload.sources) ? payload.sources : [];
+    if (!sources.length) return "";
+    return '<section class="instrument-source-strip" aria-label="사용 데이터 출처">' + sources.map(function (source) {
+      return '<div><span class="tone-chip watch">ACTUAL</span><p><strong>' + escapeHtml(source.dataset || "데이터") + '</strong><em>' + escapeHtml([source.store, (source.providers || []).join(", "), source.count + "건"].filter(Boolean).join(" · ")) + '</em></p></div>';
+    }).join("") + '</section>';
+  }
+
+  function renderInstrumentChart(row, view) {
+    var payload = view.payload || {};
+    var series = payload.series || {};
+    var rangeOptions = [["1d", "1일"], ["1w", "1주"], ["1m", "1개월"], ["3m", "3개월"], ["6m", "6개월"], ["1y", "1년"], ["3y", "3년"], ["all", "전체"]];
+    var ranges = '<div class="instrument-range-control" role="group" aria-label="차트 기간">' + rangeOptions.map(function (option) {
+      return '<button type="button" data-instrument-range="' + option[0] + '" data-instrument-symbol="' + escapeHtml(row.symbol) + '" class="' + (view.range === option[0] ? "active" : "") + '">' + option[1] + '</button>';
+    }).join("") + '</div>';
+    var status = view.loading
+      ? '<div class="instrument-chart-state is-loading"><span></span><strong>가격·사건 데이터를 조회하고 있습니다.</strong></div>'
+      : view.error
+        ? '<div class="instrument-chart-state is-error"><strong>' + escapeHtml(view.error) + '</strong><button type="button" class="text-button" data-instrument-timeline-refresh="' + escapeHtml(row.symbol) + '">다시 조회</button></div>'
+        : series.availability === "no-data"
+          ? '<div class="instrument-chart-state"><strong>저장된 실제 시계열이 없습니다.</strong><p>모의 캔들은 표시하지 않습니다. 다음 시세 수집 후 이 위치에 실제 데이터가 나타납니다.</p><button type="button" class="text-button" data-instrument-timeline-refresh="' + escapeHtml(row.symbol) + '">새로고침</button></div>'
+          : '<div class="instrument-candle-chart" data-instrument-candle-chart="' + escapeHtml(view.key) + '" aria-label="' + escapeHtml((row.name || row.symbol) + " 실제 캔들 차트") + '"></div>';
+    var eventCounts = (payload.events || []).reduce(function (counts, event) {
+      counts[event.type] = (counts[event.type] || 0) + 1;
+      return counts;
+    }, {});
+    return [
+      '<section class="instrument-chart-workspace">',
+      '<header><div><span class="label">PRICE + EVENTS</span><h3>가격과 사건을 한 흐름으로 보기</h3><p>캔들 위 표식은 같은 기간의 뉴스, 일정, 판단, 가설 전환, 알림입니다.</p></div><span class="tone-chip watch">ACTUAL</span></header>',
+      ranges,
+      '<div class="instrument-chart-meta"><span>간격 <strong>' + escapeHtml((payload.query || {}).interval || "-") + '</strong></span><span>캔들 <strong>' + escapeHtml(series.pointCount || 0) + '개</strong></span><span>사건 <strong>' + escapeHtml((payload.events || []).length) + '건</strong></span><span>최신 <strong>' + escapeHtml(formatClock(series.latestAt)) + '</strong></span></div>',
+      status,
+      '<div class="instrument-event-legend"><span class="evidence">뉴스 ' + escapeHtml(eventCounts.evidence || 0) + '</span><span class="calendar">일정 ' + escapeHtml(eventCounts.calendar || 0) + '</span><span class="decision">판단 ' + escapeHtml(eventCounts.decision || 0) + '</span><span class="hypothesis">가설 ' + escapeHtml(eventCounts.hypothesis || 0) + '</span><span class="notification">알림 ' + escapeHtml(eventCounts.notification || 0) + '</span></div>',
+      renderInstrumentTimelineSources(payload),
+      '</section>'
+    ].join("");
+  }
+
+  function renderInstrumentEventRow(event) {
+    var labels = { evidence: "뉴스·공시", calendar: "일정", decision: "투자 판단", hypothesis: "가설 전환", notification: "알림" };
+    var action = event.detailType && event.detailKey
+      ? renderWorkDetailButton(event.detailType, event.detailKey, "상세", "mini-button")
+      : "";
+    return [
+      '<article class="instrument-timeline-event ' + escapeHtml(event.tone || "neutral") + '" data-console-row-key="' + escapeHtml(event.id || [event.type, event.occurredAt].join(":")) + '">',
+      '<time datetime="' + escapeHtml(event.occurredAt || "") + '">' + escapeHtml(formatClock(event.occurredAt)) + '</time>',
+      '<span class="instrument-event-type">' + escapeHtml(labels[event.type] || event.type || "사건") + '</span>',
+      '<div><strong>' + escapeHtml(event.title || "상태 변경") + '</strong><p>' + escapeHtml(event.summary || "상세 설명이 기록되지 않았습니다.") + '</p><em>' + escapeHtml(event.source || "출처 미기록") + '</em></div>',
+      action,
+      '</article>'
+    ].join("");
+  }
+
+  function renderInstrumentDecision(row, view) {
+    var events = ((view.payload || {}).events || []).filter(function (event) {
+      return event.type === "decision" || event.type === "hypothesis";
+    });
+    var current = row.decision
+      ? '<section class="work-detail-section primary"><span class="label">CURRENT DECISION</span><strong>' + escapeHtml(row.decision.action || row.decision.decision || "판단 확인") + '</strong><p>' + escapeHtml((row.decision.reasons || [])[0] || "판단 근거 상세를 확인하세요.") + '</p>' + renderWorkDetailButton("investment-action", row.decision.consoleKey, "판단 근거 전체", "text-button primary compact") + '</section>'
+      : '<div class="instrument-empty"><strong>현재 연결된 투자 판단이 없습니다.</strong><p>추론과 검증을 통과한 판단이 생성되면 가설 세대와 함께 표시합니다.</p></div>';
+    return [
+      '<section class="instrument-decision-workspace">',
+      current,
+      '<header><div><span class="label">REASONING HISTORY</span><h3>판단과 가설 변화</h3><p>최종 행동만 보지 않고 어떤 가설 세대에서 상태가 바뀌었는지 추적합니다.</p></div>',
+      renderWorkDetailButton("strategy-graphs-board", "", "관계·규칙 보기", "text-button compact"),
+      '</header>',
+      events.length ? '<div class="instrument-timeline-list" data-console-keyed-list="instrument-decision-events">' + events.map(renderInstrumentEventRow).join("") + '</div>' : '<div class="instrument-empty"><strong>저장된 판단·가설 변경 이력이 없습니다.</strong><p>실제 추론 이력만 표시하며 빈 구간을 임의로 채우지 않습니다.</p></div>',
+      '</section>'
+    ].join("");
+  }
+
+  function renderInstrumentTimeline(row, view) {
+    var events = (view.payload || {}).events || [];
+    if (view.loading && !events.length) return '<div class="instrument-chart-state is-loading"><span></span><strong>전체 사건을 불러오고 있습니다.</strong></div>';
+    if (view.error && !events.length) return '<div class="instrument-chart-state is-error"><strong>' + escapeHtml(view.error) + '</strong><button type="button" class="text-button" data-instrument-timeline-refresh="' + escapeHtml(row.symbol) + '">다시 조회</button></div>';
+    return [
+      '<section class="instrument-timeline-workspace">',
+      '<header><div><span class="label">AUDIT TIMELINE</span><h3>종목 사건 타임라인</h3><p>뉴스·공시·일정·판단·가설 전환·알림을 변경 시각 최신순으로 추적합니다.</p></div><strong>' + escapeHtml(events.length) + '건</strong></header>',
+      events.length ? '<div class="instrument-timeline-list" data-console-keyed-list="instrument-all-events">' + events.map(renderInstrumentEventRow).join("") + '</div>' : '<div class="instrument-empty"><strong>연결된 사건이 없습니다.</strong><p>실제 운영 DB에 저장된 사건이 생기면 이 위치에 표시합니다.</p></div>',
+      renderInstrumentTimelineSources(view.payload),
+      '</section>'
+    ].join("");
+  }
+
   function marketInstrumentWorkDetailPayload(key) {
     var symbol = String(key || "").toUpperCase();
     var row = selectConsoleInstrumentRows(state.snapshot || {}).filter(function (item) { return item.symbol === symbol; })[0];
     if (!row) return null;
-    var signal = marketSignalForItem(row.raw || {}, parseMarketSignals());
-    var evidence = row.evidence || [];
+    var active = instrumentWorkspaceTab(symbol);
+    var view = instrumentTimelineViewState(symbol);
+    var content = active === "chart"
+      ? renderInstrumentChart(row, view)
+      : active === "decision"
+        ? renderInstrumentDecision(row, view)
+        : active === "timeline"
+          ? renderInstrumentTimeline(row, view)
+          : renderInstrumentSummary(row);
     return {
-      kicker: "Instrument Context",
+      kicker: "Instrument Workspace",
       title: row.name || row.symbol,
-      meta: [row.symbol, row.market, row.source === "watchlist" ? "관심" : "보유", formatClock(row.updatedAt)].filter(Boolean).join(" · "),
-      body: [
-        '<section class="work-detail-section"><div class="work-detail-metric-row work-detail-metric-row--five">',
-        renderNotificationDetailMetric("현재가", optionalPrice(row.currentPrice, row.currency, row.quoteAvailable), row.quoteAvailable && row.changeRate < 0 ? "danger" : "watch"),
-        renderNotificationDetailMetric("등락", optionalSignedPct(row.changeRate, row.changeAvailable), row.changeAvailable && row.changeRate < 0 ? "danger" : "watch"),
-        renderNotificationDetailMetric("보유 손익", row.source === "watchlist" ? "-" : optionalSignedPct(row.profitLossRate, row.profitLossAvailable), row.profitLossAvailable && row.profitLossRate < 0 ? "danger" : "watch"),
-        renderNotificationDetailMetric(row.flowLabel, row.flowDisplay, row.partialFlowAvailable && row.foreignInstitutionNet < 0 ? "danger" : "watch"),
-        renderNotificationDetailMetric("뉴스 근거", row.evidenceCount + "건", row.impact.tone),
-        '</div></section>',
-        '<section class="work-detail-section primary"><strong>현재 상황</strong><p>' + escapeHtml([row.decision && (row.decision.decision || row.decision.action), row.impact.label, row.source === "watchlist" ? "관심 종목" : "보유 종목", row.quality.label].filter(Boolean).join(" · ") || "시장 데이터 확인") + '</p></section>',
-        '<section class="work-detail-section"><strong>가격·수급</strong><div class="work-detail-list">',
-        '<div class="work-detail-row"><b>가격</b><div><strong>' + escapeHtml(optionalPrice(row.currentPrice, row.currency, row.quoteAvailable)) + '</strong><span>등락 ' + escapeHtml(optionalSignedPct(row.changeRate, row.changeAvailable)) + '</span></div><em>' + escapeHtml(formatClock(row.updatedAt)) + '</em></div>',
-        '<div class="work-detail-row"><b>수급</b><div><strong>' + escapeHtml(row.flowLabel + " " + row.flowDisplay) + '</strong><span>거래량 비율 ' + escapeHtml(formatSignalRatio(signal.volumeRatio)) + '</span></div><em>' + escapeHtml(row.quality.label) + '</em></div>',
-        '</div></section>',
-        row.decision ? '<section class="work-detail-section"><strong>연결된 투자 판단</strong><p>' + escapeHtml((row.decision.reasons || [])[0] || row.decision.decision || row.decision.action || "판단 근거 확인") + '</p>' + renderWorkDetailButton("investment-action", row.decision.consoleKey, "판단 상세", "text-button primary compact") + '</section>' : '',
-        '<section class="work-detail-section"><strong>관련 뉴스</strong>',
-        evidence.length ? '<div class="work-detail-list">' + evidence.slice(0, 3).map(function (item) {
-          var impact = researchEvidenceImpactMeta(item);
-          var translation = researchEvidenceTranslationMeta(item);
-          return '<div class="work-detail-row"><span class="tone-chip ' + escapeHtml(impact.tone) + '">' + escapeHtml(impact.label) + '</span><div><strong>' + escapeHtml(translation.displayTitle || "제목 없음") + '</strong><span>' + escapeHtml(researchEvidenceKoreanSummary(item)) + '</span></div>' + renderWorkDetailButton("research-evidence", item.consoleKey, "기사 분석", "mini-button") + '</div>';
-        }).join("") + '</div>' + (evidence.length > 3 ? renderWorkDetailButton("feed-impact-board", "", "뉴스 전체", "text-button compact") : "") : '<p>연결된 뉴스 근거가 없습니다.</p>',
-        '</section>'
-      ].join("")
+      meta: [row.symbol, row.market, row.source === "watchlist" ? "관심" : "보유", "최종 변경 " + formatClock(row.updatedAt)].filter(Boolean).join(" · "),
+      body: renderInstrumentWorkspaceNavigation(symbol) + '<div class="instrument-workspace-body" data-instrument-workspace-active="' + escapeHtml(active) + '">' + content + '</div>'
     };
   }
 
@@ -13947,6 +14295,7 @@
       title: investmentCalendarDisplayTitle(event, "투자 이벤트"),
       meta: [investmentCalendarEventTypeLabel(event.eventType), event.startsAt ? formatClock(event.startsAt) : "", investmentCalendarTargetLabel(event), investmentCalendarSymbolMetaLabel(event)].filter(Boolean).join(" · "),
       body: [
+        renderInstrumentWorkspaceLink((event.symbols || [])[0], "종목 전체 흐름"),
         '<section class="work-detail-section primary">',
         '<strong>투자 영향</strong>',
         '<p>' + escapeHtml(investmentCalendarImpactText(event)) + '</p>',
@@ -18123,7 +18472,7 @@
       kicker: "종목 판단",
       title: name || row.symbol || "투자 판단 후보",
       meta: [row.symbol, sourceLabel(row.source), row.market, row.sector].filter(Boolean).join(" · "),
-      body: renderInvestmentActionDecisionDetail(row, relatedNotification, false)
+      body: renderInstrumentWorkspaceLink(row.symbol, "종목 전체 흐름") + renderInvestmentActionDecisionDetail(row, relatedNotification, false)
     };
   }
 
@@ -22070,7 +22419,7 @@
       kicker: "Notification Decision",
       title: payload.title || payload.displaySymbol || job.messageTypeLabel || job.messageType || "알림 판단",
       meta: [payload.displaySymbol, labelWithNotificationIcon(job.messageType, job.messageTypeLabel || job.messageType), formatClock(job.createdAt)].filter(Boolean).join(" · "),
-      body: renderNotificationDecisionDetail(job)
+      body: renderInstrumentWorkspaceLink(payload.resolvedSymbol, "종목 전체 흐름") + renderNotificationDecisionDetail(job)
     };
   }
 
@@ -29771,6 +30120,30 @@
       if (paletteResult && app.contains(paletteResult)) {
         event.preventDefault();
         activateCommandPaletteResult(paletteResult.getAttribute("data-command-palette-result"), paletteResult.getAttribute("data-command-palette-key"));
+        return;
+      }
+      var instrumentTab = event.target.closest && event.target.closest("[data-instrument-workspace-tab]");
+      if (instrumentTab && app.contains(instrumentTab)) {
+        event.preventDefault();
+        var instrumentSymbol = String(instrumentTab.getAttribute("data-instrument-symbol") || "").toUpperCase();
+        state.instrumentWorkspaceTabs[instrumentSymbol] = instrumentTab.getAttribute("data-instrument-workspace-tab") || "summary";
+        render();
+        if (state.instrumentWorkspaceTabs[instrumentSymbol] !== "summary") loadInstrumentTimeline(instrumentSymbol, false);
+        return;
+      }
+      var instrumentRange = event.target.closest && event.target.closest("[data-instrument-range]");
+      if (instrumentRange && app.contains(instrumentRange)) {
+        event.preventDefault();
+        var rangeSymbol = String(instrumentRange.getAttribute("data-instrument-symbol") || "").toUpperCase();
+        state.instrumentTimelineRanges[rangeSymbol] = instrumentRange.getAttribute("data-instrument-range") || "3m";
+        render();
+        loadInstrumentTimeline(rangeSymbol, false);
+        return;
+      }
+      var instrumentRefresh = event.target.closest && event.target.closest("[data-instrument-timeline-refresh]");
+      if (instrumentRefresh && app.contains(instrumentRefresh)) {
+        event.preventDefault();
+        loadInstrumentTimeline(instrumentRefresh.getAttribute("data-instrument-timeline-refresh"), true);
         return;
       }
       var detailButton = event.target.closest && event.target.closest("[data-work-detail]");

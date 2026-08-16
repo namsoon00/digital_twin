@@ -990,7 +990,7 @@ void main() {
   testWidgets('MarketFlow opens on the live flow dashboard', (tester) async {
     await pumpMarketFlowApp(tester);
 
-    expect(find.text('MarketFlow'), findsOneWidget);
+    expect(find.text('Orbit Alpha'), findsOneWidget);
     expect(
       find.byWidgetPredicate(
         (widget) =>
@@ -1065,7 +1065,9 @@ void main() {
   testWidgets('MarketFlow switches to the journal tab', (tester) async {
     await pumpMarketFlowApp(tester);
 
-    await tester.tap(find.text('기록'));
+    await tester.tap(find.byKey(const ValueKey('nav-routine')));
+    await tester.pumpAndSettle();
+    await tester.tap(find.byKey(const ValueKey('routine-journal-tab')));
     await tester.pumpAndSettle();
 
     expect(find.text('감 기록'), findsOneWidget);
@@ -1075,16 +1077,28 @@ void main() {
   testWidgets('MarketFlow shows the economic feed tab', (tester) async {
     await pumpMarketFlowApp(tester);
 
-    await tester.tap(find.byKey(const ValueKey('nav-feed')));
+    await tester.tap(find.byKey(const ValueKey('nav-market')));
     await tester.pumpAndSettle();
 
     final feedList = find.byKey(const ValueKey('economic-feed-list'));
+    final feedScroll = find.descendant(
+      of: feedList,
+      matching: find.byType(Scrollable),
+    ).first;
     expect(find.text('경제가 돌아가는 방향'), findsOneWidget);
     expect(find.text('AI CAPEX 자금이 반도체에서 전력 인프라로 확산'), findsWidgets);
-    expect(find.text('트렌드 스냅샷'), findsOneWidget);
-    expect(find.text('반복 키워드'), findsOneWidget);
     expect(find.textContaining('피드 갱신'), findsOneWidget);
     expect(find.byTooltip('대표 뉴스 열기'), findsOneWidget);
+
+    await tester.scrollUntilVisible(
+      find.text('트렌드 스냅샷'),
+      160,
+      scrollable: feedScroll,
+    );
+    await tester.pumpAndSettle();
+
+    expect(find.text('트렌드 스냅샷'), findsOneWidget);
+    expect(find.text('반복 키워드'), findsOneWidget);
 
     await tester.drag(feedList, const Offset(0, -320));
     await tester.pumpAndSettle();
@@ -1099,11 +1113,13 @@ void main() {
 
     expect(find.text('경제 피드'), findsOneWidget);
     expect(find.text('AI CAPEX 자금이 반도체에서 전력 인프라로 확산'), findsWidgets);
-    expect(find.text('MarketFlow Theme Map · 18분 전'), findsOneWidget);
+    expect(find.text('Orbit Alpha Theme Map · 18분 전'), findsOneWidget);
     expect(find.textContaining('reuters.com'), findsWidgets);
     expect(find.byTooltip('상세 페이지 열기'), findsWidgets);
 
-    await tester.tap(find.text('AI CAPEX 자금이 반도체에서 전력 인프라로 확산').last);
+    await tester.drag(feedList, const Offset(0, 100));
+    await tester.pumpAndSettle();
+    await tester.tap(find.byTooltip('상세 페이지 열기').last);
     await tester.pumpAndSettle();
 
     expect(find.text('원문 기사 열기'), findsOneWidget);
@@ -1117,8 +1133,15 @@ void main() {
   ) async {
     await pumpMarketFlowApp(tester);
 
-    await tester.tap(find.text('체크'));
+    await tester.tap(find.byKey(const ValueKey('nav-routine')));
     await tester.pumpAndSettle();
+    final checklistList = find.byKey(
+      const ValueKey('investment-checklist-list'),
+    );
+    final checklistScroll = find.descendant(
+      of: checklistList,
+      matching: find.byType(Scrollable),
+    ).first;
 
     expect(find.text('오늘 데이터 확인'), findsOneWidget);
     expect(find.text('시장 펄스'), findsOneWidget);
@@ -1128,7 +1151,7 @@ void main() {
     await tester.scrollUntilVisible(
       find.text('체크 캘린더'),
       320,
-      scrollable: find.byType(Scrollable).first,
+      scrollable: checklistScroll,
     );
     await tester.pumpAndSettle();
 
@@ -1137,7 +1160,7 @@ void main() {
     await tester.scrollUntilVisible(
       find.text('오늘 투자 전 체크'),
       360,
-      scrollable: find.byType(Scrollable).first,
+      scrollable: checklistScroll,
     );
     await tester.pumpAndSettle();
 
@@ -1154,7 +1177,7 @@ void main() {
     await tester.scrollUntilVisible(
       find.text('체크 항목 추가'),
       260,
-      scrollable: find.byType(Scrollable).first,
+      scrollable: checklistScroll,
     );
     await tester.pumpAndSettle();
 
@@ -1167,7 +1190,7 @@ void main() {
     await tester.scrollUntilVisible(
       find.text('메모 저장'),
       260,
-      scrollable: find.byType(Scrollable).first,
+      scrollable: checklistScroll,
     );
     await tester.pumpAndSettle();
 
@@ -1181,8 +1204,15 @@ void main() {
   testWidgets('MarketFlow shows global capital flows', (tester) async {
     await pumpMarketFlowApp(tester);
 
-    await tester.tap(find.text('자금'));
+    await tester.tap(find.byKey(const ValueKey('nav-market')));
     await tester.pumpAndSettle();
+    await tester.tap(find.byKey(const ValueKey('market-capital-tab')));
+    await tester.pumpAndSettle();
+    final capitalList = find.byKey(const ValueKey('capital-flow-list'));
+    final capitalScroll = find.descendant(
+      of: capitalList,
+      matching: find.byType(Scrollable),
+    ).first;
 
     expect(find.text('종합 플로우 캔들'), findsOneWidget);
     expect(find.text('보기 단위'), findsOneWidget);
@@ -1204,6 +1234,9 @@ void main() {
 
     await dismissModal(tester, find.text('종합 플로우 상세'));
 
+    await tester.drag(capitalList, const Offset(0, -180));
+    await tester.pumpAndSettle();
+
     await tester.tap(find.text('일별'));
     await tester.pumpAndSettle();
 
@@ -1219,7 +1252,7 @@ void main() {
     await tester.scrollUntilVisible(
       find.text('코인 마켓'),
       360,
-      scrollable: find.byType(Scrollable).first,
+      scrollable: capitalScroll,
     );
     await tester.pumpAndSettle();
 
@@ -1240,7 +1273,7 @@ void main() {
     await tester.scrollUntilVisible(
       find.text('필요 API 맵'),
       360,
-      scrollable: find.byType(Scrollable).first,
+      scrollable: capitalScroll,
     );
     await tester.pumpAndSettle();
 
@@ -1262,7 +1295,7 @@ void main() {
     await tester.scrollUntilVisible(
       find.text('CoinGecko API'),
       360,
-      scrollable: find.byType(Scrollable).first,
+      scrollable: capitalScroll,
     );
     await tester.pumpAndSettle();
 
@@ -1271,7 +1304,7 @@ void main() {
     await tester.scrollUntilVisible(
       find.text('세계 자금 흐름'),
       360,
-      scrollable: find.byType(Scrollable).first,
+      scrollable: capitalScroll,
     );
     await tester.pumpAndSettle();
 
@@ -1290,7 +1323,7 @@ void main() {
     await tester.scrollUntilVisible(
       find.text('디지털 자산 베타'),
       360,
-      scrollable: find.byType(Scrollable).first,
+      scrollable: capitalScroll,
     );
     await tester.pumpAndSettle();
 
@@ -1299,7 +1332,7 @@ void main() {
     await tester.scrollUntilVisible(
       find.text('금/안전자산 축적'),
       360,
-      scrollable: find.byType(Scrollable).first,
+      scrollable: capitalScroll,
     );
     await tester.pumpAndSettle();
 
@@ -1308,7 +1341,7 @@ void main() {
     await tester.scrollUntilVisible(
       find.text('새 흐름 후보'),
       360,
-      scrollable: find.byType(Scrollable).first,
+      scrollable: capitalScroll,
     );
     await tester.pumpAndSettle();
 

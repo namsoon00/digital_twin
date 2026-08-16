@@ -398,17 +398,8 @@ class _AppShellState extends State<AppShell> {
 
   @override
   Widget build(BuildContext context) {
-    final screens = [
-      DashboardScreen(
-        user: _currentUser,
-        pulses: _pulses,
-        themes: _themes,
-        equities: _equities,
-        quotes: _quotes,
-        quoteSnapshot: _quoteSnapshot,
-        onRefreshQuotes: _refreshLiveQuotes,
-      ),
-      EconomicFeedScreen(
+    final marketHub = _MarketHubScreen(
+      feed: EconomicFeedScreen(
         feeds: _economicFeeds,
         feedChannels: _feedChannels,
         feedSnapshot: _feedSnapshot,
@@ -419,7 +410,7 @@ class _AppShellState extends State<AppShell> {
         apiSources: widget.repository.dataApiSources,
         quoteSnapshot: _quoteSnapshot,
       ),
-      CapitalFlowScreen(
+      capital: CapitalFlowScreen(
         apiSources: widget.repository.dataApiSources,
         candles: widget.repository.globalFlowCandles,
         flows: widget.repository.capitalFlows,
@@ -428,9 +419,10 @@ class _AppShellState extends State<AppShell> {
         onRefreshCryptoAssets: _refreshCryptoAssets,
         emergingFlows: widget.repository.emergingCapitalFlows,
       ),
-      ThemeBoardScreen(themes: _themes),
-      WatchlistScreen(equities: _equities, quotes: _quotes),
-      InvestmentChecklistScreen(
+      themes: ThemeBoardScreen(themes: _themes),
+    );
+    final routineHub = _RoutineHubScreen(
+      checklist: InvestmentChecklistScreen(
         day: _checklistDay,
         selectedDate: _selectedChecklistDate,
         focusedMonth: _focusedChecklistMonth,
@@ -453,7 +445,24 @@ class _AppShellState extends State<AppShell> {
         onSaveNote: _saveChecklistNote,
         onResetDay: _resetChecklistDay,
       ),
-      JournalScreen(entries: _userJournals, onAddEntry: _openJournalComposer),
+      journal: JournalScreen(
+        entries: _userJournals,
+        onAddEntry: _openJournalComposer,
+      ),
+    );
+    final screens = [
+      DashboardScreen(
+        user: _currentUser,
+        pulses: _pulses,
+        themes: _themes,
+        equities: _equities,
+        quotes: _quotes,
+        quoteSnapshot: _quoteSnapshot,
+        onRefreshQuotes: _refreshLiveQuotes,
+      ),
+      marketHub,
+      WatchlistScreen(equities: _equities, quotes: _quotes),
+      routineHub,
       SettingsScreen(
         apiSources: widget.repository.dataApiSources,
         dataApiKeySettings: _dataApiKeySettings,
@@ -508,23 +517,13 @@ class _AppShellState extends State<AppShell> {
           NavigationDestination(
             icon: Icon(Icons.dashboard_outlined),
             selectedIcon: Icon(Icons.dashboard),
-            label: '흐름',
-          ),
-          NavigationDestination(
-            icon: Icon(Icons.dynamic_feed_outlined),
-            key: ValueKey('nav-feed'),
-            selectedIcon: Icon(Icons.dynamic_feed),
-            label: '피드',
+            label: '오늘',
           ),
           NavigationDestination(
             icon: Icon(Icons.public_outlined),
+            key: ValueKey('nav-market'),
             selectedIcon: Icon(Icons.public),
-            label: '자금',
-          ),
-          NavigationDestination(
-            icon: Icon(Icons.bubble_chart_outlined),
-            selectedIcon: Icon(Icons.bubble_chart),
-            label: '테마',
+            label: '시장',
           ),
           NavigationDestination(
             icon: Icon(Icons.format_list_bulleted),
@@ -533,19 +532,80 @@ class _AppShellState extends State<AppShell> {
           ),
           NavigationDestination(
             icon: Icon(Icons.fact_check_outlined),
+            key: ValueKey('nav-routine'),
             selectedIcon: Icon(Icons.fact_check),
-            label: '체크',
-          ),
-          NavigationDestination(
-            icon: Icon(Icons.edit_note_outlined),
-            selectedIcon: Icon(Icons.edit_note),
-            label: '기록',
+            label: '루틴',
           ),
           NavigationDestination(
             icon: Icon(Icons.settings_outlined),
+            key: ValueKey('nav-settings'),
             selectedIcon: Icon(Icons.settings),
             label: '설정',
           ),
+        ],
+      ),
+    );
+  }
+}
+
+class _MarketHubScreen extends StatelessWidget {
+  const _MarketHubScreen({
+    required this.feed,
+    required this.capital,
+    required this.themes,
+  });
+
+  final Widget feed;
+  final Widget capital;
+  final Widget themes;
+
+  @override
+  Widget build(BuildContext context) {
+    return DefaultTabController(
+      length: 3,
+      child: Column(
+        children: [
+          const Padding(
+            padding: EdgeInsets.fromLTRB(16, 0, 16, 8),
+            child: TabBar(
+              dividerHeight: 0,
+              tabs: [
+                Tab(key: ValueKey('market-feed-tab'), text: '경제 피드'),
+                Tab(key: ValueKey('market-capital-tab'), text: '자금 흐름'),
+                Tab(key: ValueKey('market-theme-tab'), text: '테마'),
+              ],
+            ),
+          ),
+          Expanded(child: TabBarView(children: [feed, capital, themes])),
+        ],
+      ),
+    );
+  }
+}
+
+class _RoutineHubScreen extends StatelessWidget {
+  const _RoutineHubScreen({required this.checklist, required this.journal});
+
+  final Widget checklist;
+  final Widget journal;
+
+  @override
+  Widget build(BuildContext context) {
+    return DefaultTabController(
+      length: 2,
+      child: Column(
+        children: [
+          const Padding(
+            padding: EdgeInsets.fromLTRB(16, 0, 16, 8),
+            child: TabBar(
+              dividerHeight: 0,
+              tabs: [
+                Tab(key: ValueKey('routine-checklist-tab'), text: '체크리스트'),
+                Tab(key: ValueKey('routine-journal-tab'), text: '투자 기록'),
+              ],
+            ),
+          ),
+          Expanded(child: TabBarView(children: [checklist, journal])),
         ],
       ),
     );
@@ -572,7 +632,7 @@ class _ShellHeader extends StatelessWidget {
             crossAxisAlignment: CrossAxisAlignment.start,
             children: [
               Text(
-                'MarketFlow',
+                'Orbit Alpha',
                 style: Theme.of(context).textTheme.displaySmall,
               ),
               const SizedBox(height: 4),
@@ -1786,6 +1846,7 @@ class _CapitalFlowScreenState extends State<CapitalFlowScreen> {
     }).length;
 
     return ListView(
+      key: const ValueKey('capital-flow-list'),
       padding: const EdgeInsets.fromLTRB(16, 4, 16, 20),
       children: [
         Row(
@@ -6014,6 +6075,7 @@ class _InvestmentChecklistScreenState extends State<InvestmentChecklistScreen> {
         .length;
 
     return ListView(
+      key: const ValueKey('investment-checklist-list'),
       padding: const EdgeInsets.fromLTRB(16, 4, 16, 20),
       children: [
         Row(

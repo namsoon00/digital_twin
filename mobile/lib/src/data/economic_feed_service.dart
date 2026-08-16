@@ -333,7 +333,7 @@ class MarketNewsEconomicFeedService implements EconomicFeedService {
                 : 'application/rss+xml, application/xml;q=0.9, */*;q=0.8',
             'Cache-Control': 'no-cache',
             'Pragma': 'no-cache',
-            'User-Agent': 'MarketFlow/1.0',
+            'User-Agent': 'OrbitAlpha/1.0',
           },
         )
         .timeout(const Duration(seconds: 12));
@@ -819,7 +819,7 @@ class GdeltNewsEconomicFeedService implements EconomicFeedService {
             'Accept': 'application/json, text/plain;q=0.9, */*;q=0.8',
             'Cache-Control': 'no-cache',
             'Pragma': 'no-cache',
-            'User-Agent': 'MarketFlow/1.0',
+            'User-Agent': 'OrbitAlpha/1.0',
           },
         )
         .timeout(const Duration(seconds: 12));
@@ -1324,7 +1324,7 @@ class GoogleNewsEconomicFeedService implements EconomicFeedService {
             'Accept': 'application/rss+xml, application/xml;q=0.9, */*;q=0.8',
             'Cache-Control': 'no-cache',
             'Pragma': 'no-cache',
-            'User-Agent': 'MarketFlow/1.0',
+            'User-Agent': 'OrbitAlpha/1.0',
           },
         )
         .timeout(const Duration(seconds: 10));

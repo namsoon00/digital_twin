@@ -8,11 +8,11 @@ import 'src/screens/app_shell.dart';
 import 'src/theme/app_theme.dart';
 
 void main() {
-  runApp(const MarketFlowApp());
+  runApp(const OrbitAlphaApp());
 }
 
-class MarketFlowApp extends StatefulWidget {
-  const MarketFlowApp({
+class OrbitAlphaApp extends StatefulWidget {
+  const OrbitAlphaApp({
     this.repository = const MockFlowRepository(),
     this.cryptoMarketService,
     this.economicFeedService,
@@ -24,10 +24,10 @@ class MarketFlowApp extends StatefulWidget {
   final EconomicFeedService? economicFeedService;
 
   @override
-  State<MarketFlowApp> createState() => _MarketFlowAppState();
+  State<OrbitAlphaApp> createState() => _OrbitAlphaAppState();
 }
 
-class _MarketFlowAppState extends State<MarketFlowApp>
+class _OrbitAlphaAppState extends State<OrbitAlphaApp>
     with WidgetsBindingObserver {
   final _settingsRepository = SettingsRepository();
   AppThemePreference _themePreference = AppThemePreference.dark;
@@ -80,7 +80,7 @@ class _MarketFlowAppState extends State<MarketFlowApp>
     AppColors.use(AppTheme.paletteFor(_themePreference, platformBrightness));
 
     return MaterialApp(
-      title: 'MarketFlow',
+      title: 'Orbit Alpha',
       debugShowCheckedModeBanner: false,
       theme: AppTheme.light,
       darkTheme: AppTheme.dark,
@@ -97,4 +97,14 @@ class _MarketFlowAppState extends State<MarketFlowApp>
       ),
     );
   }
+}
+
+@Deprecated('Use OrbitAlphaApp')
+class MarketFlowApp extends OrbitAlphaApp {
+  const MarketFlowApp({
+    super.repository,
+    super.cryptoMarketService,
+    super.economicFeedService,
+    super.key,
+  });
 }

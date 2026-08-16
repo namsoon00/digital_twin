@@ -100,7 +100,7 @@
     "web:restart": "node scripts/restart-web-service.js"
   },
   "dependencies": {
-    "cytoscape": "^3.34.0"
-  },
-  "devDependencies": {}
+    "cytoscape": "^3.34.0",
+    "lightweight-charts": "^5.2.1"
+  }
 }

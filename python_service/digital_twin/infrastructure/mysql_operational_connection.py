@@ -991,7 +991,8 @@ MYSQL_SCHEMA = [
         payload_json LONGTEXT NOT NULL,
         UNIQUE KEY idx_notification_jobs_dedupe (dedupe_key),
         KEY idx_notification_jobs_status_created (status, created_at, job_id),
-        KEY idx_notification_jobs_message_time_status (message_type, created_at, status)
+        KEY idx_notification_jobs_message_time_status (message_type, created_at, status),
+        KEY idx_notification_jobs_symbol_account_updated (symbol, account_id, updated_at, job_id)
     ) ENGINE=InnoDB DEFAULT CHARSET=utf8mb4 COLLATE=utf8mb4_unicode_ci
     """,
     """

@@ -101,6 +101,32 @@ class MySQLNotificationJobStore(MySQLOperationalConnection):
         jobs, _ = self.recent_page(limit=limit, message_type=message_type, status=status)
         return jobs
 
+    def recent_for_symbol(
+        self,
+        symbol: str,
+        account_id: str = "",
+        limit: int = 100,
+    ) -> List[NotificationJob]:
+        """Load the bounded notification trace for one indexed instrument."""
+
+        clean_symbol = str(symbol or "").upper().strip()[:64]
+        if not clean_symbol:
+            return []
+        clauses = ["symbol = %s"]
+        params: List[object] = [clean_symbol]
+        if str(account_id or "").strip():
+            clauses.append("account_id = %s")
+            params.append(str(account_id).strip()[:191])
+        params.append(max(1, min(200, int(limit or 100))))
+        with self.connect() as connection:
+            rows = connection.execute(
+                "SELECT text, payload_json FROM notification_jobs WHERE "
+                + " AND ".join(clauses)
+                + " ORDER BY updated_at DESC, job_id DESC LIMIT %s",
+                params,
+            ).fetchall()
+        return [self.job_from_row(row) for row in rows or []]
+
     def recent_page(
         self,
         limit: int = 40,

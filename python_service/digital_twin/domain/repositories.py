@@ -627,6 +627,16 @@ class MarketTimeSeriesRepository(Protocol):
     ) -> Dict[str, Dict[str, List[Dict[str, object]]]]:
         ...
 
+    def load_instrument_series(
+        self,
+        account_id: str,
+        symbol: str,
+        granularity: str = "1d",
+        limit: int = 260,
+        as_of: str = "",
+    ) -> List[Dict[str, object]]:
+        ...
+
     def summary(self, account_id: str = "") -> Dict[str, object]:
         ...
 

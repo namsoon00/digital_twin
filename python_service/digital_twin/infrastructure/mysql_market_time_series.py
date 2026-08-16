@@ -364,6 +364,61 @@ class MySQLMarketTimeSeriesStore(MySQLOperationalConnection):
                 result[symbol] = list(selected[-limit_value:])
         return result
 
+    def load_instrument_series(
+        self,
+        account_id: str,
+        symbol: str,
+        granularity: str = "1d",
+        limit: int = 260,
+        as_of: str = "",
+    ) -> List[Dict[str, object]]:
+        """Load one bounded chart series, preferring global provider candles."""
+
+        clean_symbol = str(symbol or "").upper().strip()
+        clean_granularity = str(granularity or "1d").lower().strip()
+        if clean_granularity not in {"3m", "15m", "1h", "1d"}:
+            clean_granularity = "1d"
+        if not self.enabled() or not clean_symbol:
+            return []
+        row_limit = positive_int(limit, 260, 20, 2000)
+        cutoff = iso_utc(as_of)
+        cutoff_clause = " AND observations.observed_at <= %s" if cutoff else ""
+        params: List[object] = [
+            str(account_id or ""),
+            GLOBAL_MARKET_ACCOUNT_ID,
+            clean_symbol,
+            clean_granularity,
+        ]
+        if cutoff:
+            params.append(cutoff)
+        params.append(row_limit)
+        with self.connect() as connection:
+            rows = connection.execute(
+                """
+                SELECT * FROM (
+                    SELECT observations.*,
+                           ROW_NUMBER() OVER (
+                               PARTITION BY account_id
+                               ORDER BY bucket_at DESC
+                           ) AS row_number_value
+                    FROM market_time_series_observations observations
+                    WHERE account_id IN (%s, %s)
+                      AND symbol = %s
+                      AND granularity = %s
+                """ + cutoff_clause + """
+                ) ranked
+                WHERE ranked.row_number_value <= %s
+                ORDER BY account_id, bucket_at ASC
+                """,
+                params,
+            ).fetchall()
+        grouped: Dict[str, List[Dict[str, object]]] = defaultdict(list)
+        for row in rows or []:
+            grouped[str(row.get("account_id") or "")].append(self.observation_payload(row))
+        global_rows = grouped.get(GLOBAL_MARKET_ACCOUNT_ID, [])
+        account_rows = grouped.get(str(account_id or ""), [])
+        return list((global_rows or account_rows)[-row_limit:])
+
     def latest_daily_buckets_with_connection(self, connection, symbols: Iterable[str]) -> Dict[str, str]:
         clean_symbols = sorted({str(symbol or "").upper().strip() for symbol in symbols or [] if str(symbol or "").strip()})
         if not clean_symbols:

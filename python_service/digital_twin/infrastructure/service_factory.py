@@ -47,6 +47,7 @@ from ..application.investment_calendar_discovery_service import InvestmentCalend
 from ..application.investment_calendar_extraction_service import InvestmentCalendarExtractionService
 from ..application.investment_calendar_research_service import InvestmentCalendarResearchRecommendationService
 from ..application.investment_calendar_service import InvestmentCalendarRunner, InvestmentCalendarService
+from ..application.instrument_timeline_query_service import InstrumentTimelineQueryService
 from ..application.kis_realtime_service import KISRealtimeWebSocketRunner
 from ..application.market_data_collection_service import MarketDataCollectionRunner
 from ..application.external_data.collection_service import ExternalDataCollectionService
@@ -802,6 +803,19 @@ def build_investment_calendar_service(settings=None, event_publisher=None) -> In
         settings=configured_settings,
         event_publisher=event_publisher or default_event_bus(),
         symbol_repository=stores.symbol_universe_store(configured_settings),
+    )
+
+
+def build_instrument_timeline_query_service(settings=None) -> InstrumentTimelineQueryService:
+    configured_settings = settings or runtime_settings()
+    return InstrumentTimelineQueryService(
+        time_series_store=stores.market_time_series_store(configured_settings),
+        evidence_store=stores.research_evidence_store(configured_settings),
+        calendar_store=stores.investment_calendar_store(configured_settings),
+        decision_episode_store=stores.investment_decision_episode_store(configured_settings),
+        hypothesis_lifecycle_store=stores.hypothesis_lifecycle_store(configured_settings),
+        notification_job_store=stores.notification_job_store(configured_settings),
+        symbol_store=stores.symbol_universe_store(configured_settings),
     )
 
 

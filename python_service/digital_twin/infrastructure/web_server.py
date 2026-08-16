@@ -36,6 +36,7 @@ from ..application.notification_replay_service import NotificationReplayService
 from ..application.ontology_catalog_query_service import OntologyCatalogQueryService
 from ..application.ontology_diagnostics_service import OntologyDiagnosticsService
 from ..application.research_evidence_governance_service import ResearchEvidenceGovernanceService
+from ..domain.instrument_timeline import InstrumentTimelineQuery
 from ..application.symbol_universe_service import DEFAULT_SYMBOL_SEEDS, SUPPORTED_MARKETS, seed_symbol
 from ..domain.events import (
     APP_ITEM_REMOVED,
@@ -111,6 +112,7 @@ from ..infrastructure.service_factory import (
     build_investment_calendar_research_service,
     build_investment_calendar_runner,
     build_investment_calendar_service,
+    build_instrument_timeline_query_service,
     build_investment_strategy_proposal_service,
     build_investment_brain_service,
     build_historical_decision_replay_service,
@@ -5399,6 +5401,21 @@ class DigitalTwinHandler(BaseHTTPRequestHandler):
 
         if path == "/api/investment-brain/questions" and self.command == "POST":
             return self.send_payload(200, investment_brain_question_payload(self.read_json_body()))
+
+        instrument_timeline_match = re.match(r"^/api/instruments/([^/]+)/timeline$", path)
+        if instrument_timeline_match and self.command == "GET":
+            try:
+                payload = build_instrument_timeline_query_service(operational_read_settings()).query(
+                    InstrumentTimelineQuery(
+                        symbol=urllib.parse.unquote(instrument_timeline_match.group(1)),
+                        account_id=first_query(query, "accountId"),
+                        range_key=first_query(query, "range") or "3m",
+                        interval=first_query(query, "interval"),
+                    )
+                )
+            except ValueError as error:
+                return self.send_payload(400, {"error": str(error)})
+            return self.send_payload(200, payload, cache_control="no-store")
 
         if path == "/api/investment-brain/episodes" and self.command == "GET":
             try:

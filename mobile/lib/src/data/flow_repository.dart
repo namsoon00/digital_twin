@@ -90,7 +90,7 @@ class MockFlowRepository implements FlowRepository {
       region: MarketRegion.unitedStates,
       title: 'AI CAPEX 자금이 반도체에서 전력 인프라로 확산',
       summary: 'GPU와 클라우드 중심의 자금 흐름이 전력망, 냉각, 데이터센터 리츠까지 넓어지는 선형 흐름입니다.',
-      source: 'MarketFlow Theme Map',
+      source: 'Orbit Alpha Theme Map',
       url: 'https://www.reuters.com/technology/',
       channelId: 'ai-capex',
       channelName: 'AI CAPEX',
@@ -556,7 +556,7 @@ class MockFlowRepository implements FlowRepository {
       change24hPercent: 2.1,
       change7dPercent: 5.8,
       updatedAt: null,
-      provider: 'MarketFlow mock',
+      provider: 'Orbit Alpha mock',
     ),
     CryptoAsset(
       id: 'ethereum',
@@ -570,7 +570,7 @@ class MockFlowRepository implements FlowRepository {
       change24hPercent: 1.7,
       change7dPercent: 4.3,
       updatedAt: null,
-      provider: 'MarketFlow mock',
+      provider: 'Orbit Alpha mock',
     ),
     CryptoAsset(
       id: 'solana',
@@ -584,7 +584,7 @@ class MockFlowRepository implements FlowRepository {
       change24hPercent: 3.6,
       change7dPercent: 8.4,
       updatedAt: null,
-      provider: 'MarketFlow mock',
+      provider: 'Orbit Alpha mock',
     ),
     CryptoAsset(
       id: 'ripple',
@@ -598,7 +598,7 @@ class MockFlowRepository implements FlowRepository {
       change24hPercent: -0.6,
       change7dPercent: 2.9,
       updatedAt: null,
-      provider: 'MarketFlow mock',
+      provider: 'Orbit Alpha mock',
     ),
     CryptoAsset(
       id: 'binancecoin',
@@ -612,7 +612,7 @@ class MockFlowRepository implements FlowRepository {
       change24hPercent: 0.8,
       change7dPercent: 3.2,
       updatedAt: null,
-      provider: 'MarketFlow mock',
+      provider: 'Orbit Alpha mock',
     ),
     CryptoAsset(
       id: 'usd-coin',
@@ -626,7 +626,7 @@ class MockFlowRepository implements FlowRepository {
       change24hPercent: 0.0,
       change7dPercent: 0.0,
       updatedAt: null,
-      provider: 'MarketFlow mock',
+      provider: 'Orbit Alpha mock',
     ),
     CryptoAsset(
       id: 'tether',
@@ -640,7 +640,7 @@ class MockFlowRepository implements FlowRepository {
       change24hPercent: 0.0,
       change7dPercent: 0.0,
       updatedAt: null,
-      provider: 'MarketFlow mock',
+      provider: 'Orbit Alpha mock',
     ),
     CryptoAsset(
       id: 'dogecoin',
@@ -654,7 +654,7 @@ class MockFlowRepository implements FlowRepository {
       change24hPercent: 1.2,
       change7dPercent: 6.1,
       updatedAt: null,
-      provider: 'MarketFlow mock',
+      provider: 'Orbit Alpha mock',
     ),
   ];
 

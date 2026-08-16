@@ -505,7 +505,7 @@ class FlowCandle {
     required this.goldFlow,
     required this.koreaFlow,
     this.dataQuality = MarketDataQuality.mock,
-    this.dataProvider = 'MarketFlow mock',
+    this.dataProvider = 'Orbit Alpha mock',
   });
 
   final String label;
@@ -542,7 +542,7 @@ class CapitalFlow {
     required this.trend,
     required this.updatedLabel,
     this.dataQuality = MarketDataQuality.mock,
-    this.dataProvider = 'MarketFlow mock',
+    this.dataProvider = 'Orbit Alpha mock',
   });
 
   final String id;

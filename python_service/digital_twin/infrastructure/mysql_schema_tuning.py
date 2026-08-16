@@ -167,6 +167,11 @@ MYSQL_OPERATIONAL_INDEXES: Dict[str, Sequence[MySQLIndexDefinition]] = {
         MySQLIndexDefinition("notification_jobs", "idx_notification_jobs_created", "`created_at`, `job_id`"),
         MySQLIndexDefinition(
             "notification_jobs",
+            "idx_notification_jobs_symbol_account_updated",
+            "`symbol`, `account_id`, `updated_at`, `job_id`",
+        ),
+        MySQLIndexDefinition(
+            "notification_jobs",
             "idx_notification_jobs_type_status_created",
             "`message_type`, `status`, `created_at`, `job_id`",
         ),

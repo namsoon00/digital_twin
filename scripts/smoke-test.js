@@ -257,7 +257,16 @@ function checkWorkflowConsoleContract() {
   assertOk(activeTabs.every(function (id) { return tabBlock.indexOf('id: "' + id + '"') >= 0; }), "7개 업무 탭 ID가 모두 정의되지 않았습니다.");
   assertOk(tabLabels.every(function (label) { return tabBlock.indexOf('label: "' + label + '"') >= 0; }), "7개 업무 탭명이 모두 정의되지 않았습니다.");
   assertOk((tabBlock.match(/\{ id:/g) || []).length === 7, "상위 업무 탭은 정확히 7개여야 합니다.");
-  assertOk(code.indexOf('var managementTabIds = [];') >= 0 && code.indexOf("var pageModeEnabledTabs = [];") >= 0, "이전 운영 메뉴나 결과/설정 하위 탭이 활성 상태로 남아 있습니다.");
+  assertOk(
+    code.indexOf('var bottomTabIds = ["overview", "feed", "modeling", "notifications", "calendar"];') >= 0
+      && code.indexOf('var managementTabIds = ["experiments", "settings"];') >= 0
+      && code.indexOf("var pageModeEnabledTabs = [];") >= 0,
+    "모바일 핵심 5탭과 관리 메뉴 2탭 구성이 일치하지 않습니다."
+  );
+  assertOk(code.indexOf("loadInstrumentTimeline") >= 0 && code.indexOf("initInstrumentTimelineChart") >= 0, "종목 실제 시계열 차트 흐름이 연결되지 않았습니다.");
+  assertOk(code.indexOf("data-instrument-workspace-tab") >= 0 && code.indexOf("data-instrument-timeline-refresh") >= 0, "종목 워크스페이스 탐색 계약이 없습니다.");
+  assertOk(webServer.indexOf('/api/instruments/') >= 0 && webServer.indexOf("InstrumentTimelineQuery") >= 0, "종목 타임라인 API가 등록되지 않았습니다.");
+  assertOk(indexHtml.indexOf("lightweight-charts.standalone.production.js") >= 0, "로컬 캔들 차트 런타임이 로드되지 않았습니다.");
 
   [
     'watchlist: "feed"',
@@ -497,9 +506,9 @@ function checkWorkflowConsoleContract() {
       code.indexOf('window.prompt("확인할 발표 날짜와 시각') < 0 &&
       styles.indexOf(".calendar-candidate-confirm-form") >= 0 &&
       styles.indexOf(".calendar-candidate-confirm-fields") >= 0 &&
-      indexHtml.indexOf("styles.css?v=20260816-scroll-root-v1") >= 0 &&
-      indexHtml.indexOf("app-default-settings.js?v=20260816-scroll-root-v1") >= 0 &&
-      indexHtml.indexOf("app.js?v=20260816-scroll-root-v1") >= 0,
+      /styles\.css\?v=[^"]+/.test(indexHtml) &&
+      /app-default-settings\.js\?v=[^"]+/.test(indexHtml) &&
+      /app\.js\?v=[^"]+/.test(indexHtml),
     "캘린더 후보 날짜·시각 확인 레이어 또는 오버레이 스크롤 복원 계약이 없습니다."
   );
   assertOk(
@@ -1951,11 +1960,8 @@ function checkFrontendAdminRender() {
     assertOk(designSystemDoc.indexOf("업무 탭에서는 상단 상태 카드 묶음을 렌더링하지 않는다") >= 0 && designSystemDoc.indexOf("app-nav-command") >= 0 && designSystemDoc.indexOf("app-nav-routine") >= 0 && designSystemDoc.indexOf("page-flow-spine") >= 0, "디자인 시스템 문서에 단일 command/routine rail/흐름 계약이 없습니다.");
     assertOk(code.indexOf("syncTopbarScrollState") >= 0 && code.indexOf("topbar-collapsed") >= 0, "상단 제목 영역을 스크롤 상태에 따라 접는 로직이 없습니다.");
     assertOk(styles.indexOf(".shell-page.topbar-collapsed") >= 0 && styles.indexOf(".topbar-collapsed .topbar") >= 0, "상단 제목 영역 접힘 레이아웃 스타일이 없습니다.");
-    assertOk(
-      /var bottomTabIds = \[[^\]]*"notifications"[^\]]*"modeling"[^\]]*\];/.test(code),
-      "하단 핵심 탭에 알림과 투자 분석이 배치되지 않았습니다."
-    );
-    assertOk(code.indexOf('var managementTabIds = ["accounts", "symbols", "feed", "system", "settings"];') >= 0, "상단 운영 메뉴 탭 구성이 역할과 맞지 않습니다.");
+    assertOk(code.indexOf('var bottomTabIds = ["overview", "feed", "modeling", "notifications", "calendar"];') >= 0, "하단 핵심 5탭 구성이 역할과 맞지 않습니다.");
+    assertOk(code.indexOf('var managementTabIds = ["experiments", "settings"];') >= 0, "관리 메뉴 탭 구성이 역할과 맞지 않습니다.");
     assertOk(styles.indexOf(".app-nav-tab.active") >= 0 && styles.indexOf(".app-nav-menu") >= 0, "앱 네비게이션 활성 탭과 모바일 관리 메뉴 스타일 규칙이 없습니다.");
     assertOk(styles.indexOf("@media (min-width: 861px)") >= 0 && styles.indexOf(".tab-bar {\n    display: none;") >= 0, "데스크톱에서 하단 탭을 숨기는 규칙이 없습니다.");
     assertOk(styles.indexOf("position: sticky") >= 0 && styles.indexOf("bottom: 0;") >= 0 && styles.indexOf("backdrop-filter: blur(18px)") >= 0 && styles.indexOf(".app-nav.is-hidden") >= 0, "모바일 앱바 접힘/하단탭 고정 반응형 규칙이 없습니다.");

@@ -86,6 +86,258 @@
   --bottom-tabs-height: 66px;
 }
 
+/* App-like web shell: installability, connectivity, touch navigation and
+   visual-viewport stability shared by browser and standalone display modes. */
+:root {
+  --oa-visual-viewport-height: 100dvh;
+}
+
+.app-runtime-banner {
+  position: fixed;
+  top: calc(82px + env(safe-area-inset-top));
+  left: 50%;
+  z-index: 1190;
+  display: grid;
+  grid-template-columns: 10px minmax(0, 1fr) auto;
+  gap: 10px;
+  align-items: center;
+  width: min(680px, calc(100vw - 28px));
+  min-height: 54px;
+  padding: 10px 12px;
+  border: 1px solid var(--line-strong);
+  border-radius: 8px;
+  color: var(--ink);
+  background: var(--panel);
+  box-shadow: var(--shadow-strong);
+  transform: translateX(-50%);
+}
+
+.app-runtime-banner > div {
+  display: grid;
+  gap: 2px;
+  min-width: 0;
+}
+
+.app-runtime-banner strong,
+.app-runtime-banner p {
+  margin: 0;
+  overflow-wrap: anywhere;
+}
+
+.app-runtime-banner strong {
+  font-size: 13px;
+  line-height: 1.35;
+}
+
+.app-runtime-banner p {
+  color: var(--muted);
+  font-size: 11px;
+  font-weight: 700;
+  line-height: 1.4;
+}
+
+.app-runtime-indicator {
+  width: 8px;
+  height: 8px;
+  border-radius: 50%;
+  background: var(--amber);
+  box-shadow: 0 0 0 4px var(--amber-soft);
+}
+
+.app-runtime-banner.update .app-runtime-indicator {
+  background: var(--green);
+  box-shadow: 0 0 0 4px var(--green-soft);
+}
+
+.app-tool-icon,
+.tab-icon {
+  display: block;
+  flex: 0 0 auto;
+  background: currentColor;
+  -webkit-mask: var(--tab-icon) center / contain no-repeat;
+  mask: var(--tab-icon) center / contain no-repeat;
+}
+
+.app-tool-icon {
+  width: 18px;
+  height: 18px;
+}
+
+.app-tool-icon.install {
+  --tab-icon: url("icons/download.svg");
+}
+
+.app-tool-icon.search {
+  --tab-icon: url("icons/search.svg");
+}
+
+.app-tool-icon.refresh {
+  --tab-icon: url("icons/refresh-cw.svg");
+}
+
+.app-tool-icon.experiments {
+  --tab-icon: url("icons/flask-conical.svg");
+}
+
+.tab-icon {
+  width: 21px;
+  height: 21px;
+  margin: 0 auto;
+}
+
+.tab-icon[data-tab-icon="overview"] { --tab-icon: url("icons/house.svg"); }
+.tab-icon[data-tab-icon="feed"] { --tab-icon: url("icons/chart-no-axes-combined.svg"); }
+.tab-icon[data-tab-icon="modeling"] { --tab-icon: url("icons/brain-circuit.svg"); }
+.tab-icon[data-tab-icon="notifications"] { --tab-icon: url("icons/bell.svg"); }
+.tab-icon[data-tab-icon="calendar"] { --tab-icon: url("icons/calendar-days.svg"); }
+.tab-icon[data-tab-icon="settings"] { --tab-icon: url("icons/settings.svg"); }
+.tab-icon[data-tab-icon="experiments"] { --tab-icon: url("icons/flask-conical.svg"); }
+
+.console-shell.is-tab-transitioning .workspace-main > * {
+  animation: oa-tab-enter 180ms ease-out both;
+}
+
+@keyframes oa-tab-enter {
+  from {
+    opacity: 0.72;
+    transform: translateY(4px);
+  }
+  to {
+    opacity: 1;
+    transform: translateY(0);
+  }
+}
+
+.oa-standalone body {
+  min-height: var(--oa-visual-viewport-height);
+}
+
+.oa-offline .app-request-progress.is-active span {
+  background: var(--amber);
+}
+
+@media (max-width: 860px) {
+  :root {
+    --bottom-tabs-height: 70px;
+  }
+
+  .console-shell.web-style-shell,
+  .console-shell.web-style-shell.shell-home,
+  .console-shell.web-style-shell.shell-page {
+    min-height: var(--oa-visual-viewport-height);
+  }
+
+  .app-runtime-banner {
+    top: calc(66px + env(safe-area-inset-top));
+    grid-template-columns: 9px minmax(0, 1fr) auto;
+    width: calc(100vw - 20px);
+    min-height: 52px;
+    padding: 9px 10px;
+  }
+
+  .app-runtime-banner p {
+    display: -webkit-box;
+    overflow: hidden;
+    -webkit-box-orient: vertical;
+    -webkit-line-clamp: 2;
+  }
+
+  .console-shell .workspace-layout > .tab-bar {
+    min-height: calc(var(--bottom-tabs-height) + env(safe-area-inset-bottom)) !important;
+    padding: 4px 5px calc(4px + env(safe-area-inset-bottom)) !important;
+    border-color: var(--line) !important;
+    background: color-mix(in srgb, var(--panel) 97%, transparent) !important;
+  }
+
+  .console-shell .workspace-layout > .tab-bar button {
+    position: relative;
+    display: grid;
+    grid-template-rows: 23px 17px;
+    align-content: center;
+    justify-items: center;
+    gap: 3px;
+    min-height: 58px;
+    padding: 4px 1px 3px;
+    border-radius: 6px;
+    color: var(--muted);
+    background: transparent;
+    font-size: 10px;
+    font-weight: 850;
+  }
+
+  .console-shell .workspace-layout > .tab-bar button:hover {
+    color: var(--muted);
+    background: transparent;
+  }
+
+  .console-shell .workspace-layout > .tab-bar button.active,
+  .console-shell .workspace-layout > .tab-bar button.active:hover {
+    color: var(--blue);
+    background: var(--blue-soft);
+  }
+
+  .console-shell .workspace-layout > .tab-bar button.active::before {
+    content: "";
+    position: absolute;
+    top: 0;
+    left: 50%;
+    width: 22px;
+    height: 2px;
+    border-radius: 0 0 2px 2px;
+    background: var(--blue);
+    transform: translateX(-50%);
+  }
+
+  .console-shell .workspace-layout > .tab-bar .tab-label {
+    line-height: 17px;
+  }
+
+  .console-shell .app-nav-menu summary > strong,
+  .console-shell .app-nav-menu summary > span:not(.app-tool-icon) {
+    display: none !important;
+  }
+
+  .console-shell .app-nav-menu summary > .app-tool-icon {
+    display: block !important;
+    width: 18px;
+    height: 18px;
+    color: #101820 !important;
+  }
+
+  .console-shell .workspace-layout > .tab-bar .tab-description {
+    display: none !important;
+  }
+
+  .work-detail-backdrop,
+  .notification-policy-modal-backdrop,
+  .notification-template-modal-backdrop,
+  .monitoring-detail-backdrop,
+  .calendar-entry-backdrop,
+  .ontology-graph-expanded-backdrop,
+  .watchlist-picker-backdrop,
+  .command-palette-backdrop {
+    height: var(--oa-visual-viewport-height) !important;
+    max-height: var(--oa-visual-viewport-height) !important;
+  }
+}
+
+@media (max-width: 390px) {
+  .console-shell .workspace-layout > .tab-bar button {
+    font-size: 9px;
+  }
+
+  .tab-icon {
+    width: 20px;
+    height: 20px;
+  }
+}
+
+@media (prefers-reduced-motion: reduce) {
+  .console-shell.is-tab-transitioning .workspace-main > * {
+    animation: none;
+  }
+}
+
 .investment-calendar-view {
   grid-template-columns: minmax(0, 1.1fr) minmax(320px, 0.9fr);
   align-items: start;
@@ -33790,5 +34042,70 @@ body.oa-overlay-open {
 
   .console-shell .workspace-layout > .tab-bar .tab-description {
     display: none !important;
+  }
+}
+
+/* Final app-shell cascade lock. Keep these rules after legacy responsive layers. */
+@media (max-width: 860px) {
+  .console-shell.web-style-shell,
+  .console-shell.web-style-shell.shell-home,
+  .console-shell.web-style-shell.shell-page {
+    min-height: var(--oa-visual-viewport-height);
+  }
+
+  .console-shell .workspace-layout > .tab-bar {
+    min-height: calc(70px + env(safe-area-inset-bottom)) !important;
+    padding: 4px 5px calc(4px + env(safe-area-inset-bottom)) !important;
+    border-color: var(--line) !important;
+    background: color-mix(in srgb, var(--panel) 97%, transparent) !important;
+  }
+
+  .console-shell .workspace-layout > .tab-bar button {
+    position: relative !important;
+    display: grid !important;
+    grid-template-rows: 23px 17px !important;
+    align-content: center !important;
+    justify-items: center !important;
+    gap: 3px !important;
+    min-height: 58px !important;
+    padding: 4px 1px 3px !important;
+    border-radius: 6px !important;
+    color: var(--muted) !important;
+    background: transparent !important;
+    font-size: 10px !important;
+  }
+
+  .console-shell .workspace-layout > .tab-bar button.active,
+  .console-shell .workspace-layout > .tab-bar button.active:hover {
+    color: var(--blue) !important;
+    background: var(--blue-soft) !important;
+  }
+
+  .console-shell .workspace-layout > .tab-bar button.active::before {
+    content: "";
+    position: absolute;
+    top: 0;
+    left: 50%;
+    width: 22px;
+    height: 2px;
+    border-radius: 0 0 2px 2px;
+    background: var(--blue);
+    transform: translateX(-50%);
+  }
+
+  .console-shell .workspace-layout > .tab-bar .tab-label {
+    line-height: 17px;
+  }
+
+  .work-detail-backdrop,
+  .notification-policy-modal-backdrop,
+  .notification-template-modal-backdrop,
+  .monitoring-detail-backdrop,
+  .calendar-entry-backdrop,
+  .ontology-graph-expanded-backdrop,
+  .watchlist-picker-backdrop,
+  .command-palette-backdrop {
+    height: var(--oa-visual-viewport-height) !important;
+    max-height: var(--oa-visual-viewport-height) !important;
   }
 }

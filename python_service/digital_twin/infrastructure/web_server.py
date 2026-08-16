@@ -5838,10 +5838,11 @@ class DigitalTwinHandler(BaseHTTPRequestHandler):
         content_type = mimetypes.guess_type(str(file_path))[0] or "application/octet-stream"
         data = file_path.read_bytes()
         etag = '"' + hashlib.sha256(data).hexdigest()[:20] + '"'
+        cache_control = "no-cache" if file_path.name in {"index.html", "service-worker.js", "manifest.webmanifest"} else "public, max-age=31536000, immutable"
         if self.headers.get("If-None-Match") == etag:
             self.send_response(304)
             self.send_header("ETag", etag)
-            self.send_header("Cache-Control", "no-cache" if file_path.name == "index.html" else "public, max-age=31536000, immutable")
+            self.send_header("Cache-Control", cache_control)
             self.end_headers()
             return
         compressed = False
@@ -5850,7 +5851,7 @@ class DigitalTwinHandler(BaseHTTPRequestHandler):
             compressed = True
         self.send_response(200)
         self.send_header("Content-Type", content_type + ("; charset=utf-8" if content_type.startswith(("text/", "application/javascript", "application/json")) else ""))
-        self.send_header("Cache-Control", "no-cache" if file_path.name == "index.html" else "public, max-age=31536000, immutable")
+        self.send_header("Cache-Control", cache_control)
         self.send_header("ETag", etag)
         self.send_header("Vary", "Accept-Encoding")
         if compressed:

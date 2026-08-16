@@ -242,6 +242,8 @@ function checkWorkflowConsoleContract() {
   const code = appDefaultsCode + "\n" + fs.readFileSync(path.join(rootDir, "public", "app.js"), "utf8");
   const styles = fs.readFileSync(path.join(rootDir, "public", "styles.css"), "utf8");
   const indexHtml = fs.readFileSync(path.join(rootDir, "public", "index.html"), "utf8");
+  const manifest = JSON.parse(fs.readFileSync(path.join(rootDir, "public", "manifest.webmanifest"), "utf8"));
+  const serviceWorker = fs.readFileSync(path.join(rootDir, "public", "service-worker.js"), "utf8");
   const dataContract = fs.readFileSync(path.join(rootDir, "docs", "pc-console-data-contract.md"), "utf8");
   const accountDomain = fs.readFileSync(path.join(rootDir, "python_service", "digital_twin", "domain", "accounts.py"), "utf8");
   const accountStore = fs.readFileSync(path.join(rootDir, "python_service", "digital_twin", "infrastructure", "mysql_operational_core_stores.py"), "utf8");
@@ -262,6 +264,38 @@ function checkWorkflowConsoleContract() {
       && code.indexOf('var managementTabIds = ["experiments"];') >= 0
       && code.indexOf("var pageModeEnabledTabs = [];") >= 0,
     "모바일 핵심 6탭과 검증 관리 메뉴 구성이 일치하지 않습니다."
+  );
+  assertOk(
+    indexHtml.indexOf('viewport-fit=cover') >= 0
+      && indexHtml.indexOf('interactive-widget=resizes-content') >= 0
+      && indexHtml.indexOf('rel="manifest"') >= 0
+      && indexHtml.indexOf('apple-mobile-web-app-capable') >= 0,
+    "모바일 안전영역 또는 설치형 웹 앱 메타데이터가 없습니다."
+  );
+  assertOk(
+    manifest.display === "standalone"
+      && manifest.start_url === "./?source=pwa"
+      && Array.isArray(manifest.icons)
+      && manifest.icons.some(function (icon) { return icon.sizes === "192x192"; })
+      && manifest.icons.some(function (icon) { return icon.sizes === "512x512"; }),
+    "PWA standalone 실행 또는 필수 앱 아이콘 계약이 없습니다."
+  );
+  assertOk(
+    serviceWorker.indexOf('orbit-alpha-shell-') >= 0
+      && serviceWorker.indexOf('url.pathname.indexOf("/api/")') >= 0
+      && serviceWorker.indexOf('request.mode === "navigate"') >= 0
+      && serviceWorker.indexOf('SKIP_WAITING') >= 0,
+    "앱 셸 오프라인 재진입, API 캐시 제외 또는 업데이트 적용 계약이 없습니다."
+  );
+  assertOk(
+    code.indexOf("function registerOrbitAlphaServiceWorker") >= 0
+      && code.indexOf('window.addEventListener("beforeinstallprompt"') >= 0
+      && code.indexOf('window.addEventListener("online"') >= 0
+      && code.indexOf('window.addEventListener("offline"') >= 0
+      && code.indexOf("function syncAppViewportHeight") >= 0
+      && code.indexOf('class="tab-icon"') >= 0
+      && styles.indexOf("Final app-shell cascade lock") >= 0,
+    "웹 앱 설치, 연결 상태, 모바일 뷰포트 또는 아이콘 하단 탐색 계약이 없습니다."
   );
   assertOk(code.indexOf("loadInstrumentTimeline") >= 0 && code.indexOf("initInstrumentTimelineChart") >= 0, "종목 실제 시계열 차트 흐름이 연결되지 않았습니다.");
   assertOk(code.indexOf("data-instrument-workspace-tab") >= 0 && code.indexOf("data-instrument-timeline-refresh") >= 0, "종목 워크스페이스 탐색 계약이 없습니다.");
@@ -2890,6 +2924,19 @@ async function checkNormalMode(port, context) {
   const staticMockMarketPayload = JSON.parse(staticMockMarket.body);
   assertOk(staticMockMarketPayload.request && staticMockMarketPayload.request.staticFile === true, "정적 mock market JSON 표시가 없습니다.");
   assertOk(staticMockMarketPayload.series && Array.isArray(staticMockMarketPayload.series.NVDA.candles), "정적 NVDA mock candle 배열이 없습니다.");
+
+  const webManifest = await request(port, "/manifest.webmanifest");
+  assertOk(webManifest.statusCode === 200, "PWA manifest 응답 코드가 200이 아닙니다: " + webManifest.statusCode);
+  assertOk(webManifest.headers["cache-control"] === "no-cache", "PWA manifest가 최신 버전 확인 가능한 캐시 정책이 아닙니다.");
+  assertOk(JSON.parse(webManifest.body).display === "standalone", "PWA manifest standalone 표시가 없습니다.");
+
+  const serviceWorker = await request(port, "/service-worker.js");
+  assertOk(serviceWorker.statusCode === 200, "서비스 워커 응답 코드가 200이 아닙니다: " + serviceWorker.statusCode);
+  assertOk(serviceWorker.headers["cache-control"] === "no-cache", "서비스 워커가 no-cache 정책으로 제공되지 않습니다.");
+  assertOk(serviceWorker.body.indexOf("orbit-alpha-shell-") >= 0, "서비스 워커 앱 셸 캐시가 없습니다.");
+
+  const appIcon = await request(port, "/icons/orbit-alpha-192.png");
+  assertOk(appIcon.statusCode === 200 && appIcon.headers["content-type"] === "image/png", "PWA 192px 앱 아이콘을 제공하지 못합니다.");
 
   const adminRedirect = await request(port, "/admin");
   assertOk(adminRedirect.statusCode === 302 && adminRedirect.headers.location === "/admin/", "Python admin preview 디렉터리 리다이렉트가 없습니다.");

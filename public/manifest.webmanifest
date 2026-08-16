@@ -1,0 +1,50 @@
+{
+  "id": "./",
+  "name": "Orbit Alpha",
+  "short_name": "Orbit Alpha",
+  "description": "보유·관심 종목의 시장 데이터, 투자 판단, 일정과 알림을 관리하는 금융 콘솔",
+  "lang": "ko-KR",
+  "dir": "ltr",
+  "start_url": "./?source=pwa",
+  "scope": "./",
+  "display": "standalone",
+  "display_override": ["window-controls-overlay", "standalone", "minimal-ui"],
+  "orientation": "any",
+  "background_color": "#101820",
+  "theme_color": "#101820",
+  "categories": ["finance", "business", "productivity"],
+  "icons": [
+    {
+      "src": "icons/orbit-alpha-192.png",
+      "sizes": "192x192",
+      "type": "image/png",
+      "purpose": "any maskable"
+    },
+    {
+      "src": "icons/orbit-alpha-512.png",
+      "sizes": "512x512",
+      "type": "image/png",
+      "purpose": "any maskable"
+    }
+  ],
+  "shortcuts": [
+    {
+      "name": "오늘의 판단",
+      "short_name": "오늘",
+      "url": "./?tab=overview",
+      "icons": [{ "src": "icons/orbit-alpha-192.png", "sizes": "192x192" }]
+    },
+    {
+      "name": "시장 탐색",
+      "short_name": "시장",
+      "url": "./?tab=feed",
+      "icons": [{ "src": "icons/orbit-alpha-192.png", "sizes": "192x192" }]
+    },
+    {
+      "name": "알림 확인",
+      "short_name": "알림",
+      "url": "./?tab=notifications",
+      "icons": [{ "src": "icons/orbit-alpha-192.png", "sizes": "192x192" }]
+    }
+  ]
+}

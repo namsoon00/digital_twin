@@ -723,6 +723,7 @@ class MySQLReasoningEngineJobStore(MySQLOperationalConnection):
                 """
                 UPDATE reasoning_engine_jobs
                 SET job_status = 'retry', lease_owner = '', lease_expires_at = '',
+                    heartbeat_at = '',
                     available_at = %s,
                     last_error = 'The prior V2 worker lease expired; retrying safely.',
                     updated_at = %s
@@ -834,6 +835,7 @@ class MySQLReasoningEngineJobStore(MySQLOperationalConnection):
                 """
                 UPDATE reasoning_engine_jobs
                 SET job_status = 'queued', lease_owner = '', lease_expires_at = '',
+                    heartbeat_at = '',
                     available_at = %s, last_error = %s, updated_at = %s
                 WHERE job_id = %s
                 """,
@@ -859,7 +861,7 @@ class MySQLReasoningEngineJobStore(MySQLOperationalConnection):
                 """
                 UPDATE reasoning_engine_jobs
                 SET job_status = %s, attempts = %s, lease_owner = '',
-                    lease_expires_at = '', available_at = %s, last_error = %s,
+                    lease_expires_at = '', heartbeat_at = '', available_at = %s, last_error = %s,
                     completed_at = %s, updated_at = %s
                 WHERE job_id = %s
                 """,

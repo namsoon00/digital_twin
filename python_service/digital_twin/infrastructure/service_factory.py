@@ -61,7 +61,7 @@ from ..application.portfolio_lifecycle_service import (
     PortfolioAccountingService,
     TradeExecutionService,
 )
-from ..application.notification_service import (
+from ..application.notification.workflow import (
     CompositeNotificationContextEnricher,
     DisclosureAnalysisNotificationEnricher,
     NotificationAIValidatedGateEnricher,
@@ -126,10 +126,8 @@ from .typedb_storage_guard import TypeDBCapacityGuard
 from .operational_storage_guard import operational_storage_inventory
 from .kis_realtime_ws import KISRealtimeSymbolSelector, KISRealtimeWebSocketClient
 from .rule_change_candidate_ai import rule_change_candidate_advisor_from_settings
-from .notifications import queued_notifier_for_account
-from .notifications import send_events
-from .notifications import notifier_for_account
-from .notifications import notifier_for_operations
+from .notification.ingress import queued_notifier_for_account, send_events
+from .notification.transport import notifier_for_account, notifier_for_operations
 from .news_sources import NewsSourceGateway
 from .news_ai_analyzer import news_ai_analyzer_from_settings
 from .external_signals import ExternalSignalProvider

@@ -25,7 +25,7 @@ from ..domain.notification_ai_gate_validation import (
 from ..domain.notifications import NotificationJob
 from .notification_ai_gate_audit import context_with_validated_ai_response
 from .notification_decision_memory import context_with_previous_investment_decision
-from .notification_service import (
+from .notification.quality import (
     apply_ontology_quality_gate_to_response,
     ontology_quality_gate_context,
 )

@@ -1,176 +1,27 @@
-import json
-import re
-import urllib.error
-import urllib.request
-from html import unescape
-from typing import Dict, Iterable
+"""Compatibility facade for the notification infrastructure package."""
 
-from ..domain.accounts import AccountConfig
-from ..domain.data_freshness import data_freshness_required, freshness_record
-from ..domain.events import DomainEvent
-from ..domain.message_types import PORTFOLIO_HOLDINGS_SNAPSHOT
-from ..domain.notification_ai import enrich_notification_ai_context
-from ..domain.notification_templates import alert_context, text_context
-from ..domain.notifications import NotificationJob
-from ..domain.portfolio import AlertEvent
-from .external_signal_utils import guarded_external_call, root_api_error
-from .settings import runtime_settings, utc_now
-
-
-TELEGRAM_HTML_PATTERN = re.compile(r"</?(?:b|strong|i|em|u|ins|s|strike|del|code|pre|a|blockquote)(?:\s+[^>]*)?>", re.IGNORECASE)
-TELEGRAM_LINK_PATTERN = re.compile(
-    r'<a\s+[^>]*href=["\']([^"\']+)["\'][^>]*>(.*?)</a>',
-    re.IGNORECASE | re.DOTALL,
+from .notification.ingress import (
+    QueueingNotifier,
+    account_delivery_context,
+    enqueue_text,
+    notification_queue,
+    notification_templates,
+    queued_notifier_for_account,
+    send_events,
 )
-TELEGRAM_MESSAGE_LIMIT = 3900
-TELEGRAM_API_GUARD_STATE: Dict[str, object] = {}
-
-
-def uses_telegram_html(text: str) -> bool:
-    return bool(TELEGRAM_HTML_PATTERN.search(str(text or "")))
-
-
-def telegram_plain_text(text: str) -> str:
-    with_urls = TELEGRAM_LINK_PATTERN.sub(
-        lambda match: (
-            TELEGRAM_HTML_PATTERN.sub("", match.group(2)).strip()
-            + (": " if TELEGRAM_HTML_PATTERN.sub("", match.group(2)).strip() else "")
-            + match.group(1)
-        ),
-        str(text or ""),
-    )
-    without_tags = TELEGRAM_HTML_PATTERN.sub("", with_urls)
-    return unescape(without_tags)
-
-
-def telegram_message_chunks(text: str, limit: int = TELEGRAM_MESSAGE_LIMIT) -> Iterable[str]:
-    remaining = str(text or "").strip()
-    if not remaining:
-        return []
-    chunks = []
-    max_length = max(500, int(limit or TELEGRAM_MESSAGE_LIMIT))
-    while len(remaining) > max_length:
-        split_at = remaining.rfind("\n", 0, max_length)
-        if split_at < max_length // 2:
-            split_at = remaining.rfind(" ", 0, max_length)
-        if split_at < max_length // 2:
-            split_at = max_length
-        chunk = remaining[:split_at].strip()
-        if chunk:
-            chunks.append(chunk)
-        remaining = remaining[split_at:].strip()
-    if remaining:
-        chunks.append(remaining)
-    return chunks
-
-
-class NotificationResult:
-    def __init__(self, delivered: bool, label: str, reason: str = "", queued: int = 0):
-        self.delivered = delivered
-        self.label = label
-        self.reason = reason
-        self.queued = queued
-
-
-class ConsoleNotifier:
-    label = "Console"
-
-    def send(self, text: str) -> NotificationResult:
-        print(text)
-        return NotificationResult(False, self.label, "콘솔 전용 모드")
-
-
-class TelegramNotifier:
-    label = "Telegram"
-
-    def __init__(self, bot_token: str, chat_id: str):
-        self.bot_token = bot_token
-        self.chat_id = chat_id
-
-    def post_message(self, payload: Dict[str, object]) -> NotificationResult:
-        body = json.dumps({
-            "disable_web_page_preview": True,
-            **payload,
-        }).encode("utf-8")
-        request = urllib.request.Request(
-            "https://api.telegram.org/bot" + self.bot_token + "/sendMessage",
-            data=body,
-            method="POST",
-            headers={"Content-Type": "application/json", "Accept": "application/json"},
-        )
-        try:
-            def send_request():
-                with urllib.request.urlopen(request, timeout=12) as response:
-                    return json.loads(response.read().decode("utf-8") or "{}")
-
-            payload = guarded_external_call(
-                runtime_settings(),
-                "Telegram",
-                "sendMessage",
-                send_request,
-                state=TELEGRAM_API_GUARD_STATE,
-                rate_limit_seconds=0,
-            )
-            if isinstance(payload, dict):
-                if payload.get("ok") is False:
-                    return NotificationResult(False, self.label, str(payload.get("description") or "발송 실패"))
-        except urllib.error.HTTPError as error:
-            detail = ""
-            try:
-                payload = json.loads(error.read().decode("utf-8", "replace") or "{}")
-                detail = str(payload.get("description") or "")
-            except (ValueError, OSError):
-                detail = ""
-            reason = str(error)
-            if detail:
-                reason = reason + " · " + detail
-            return NotificationResult(False, self.label, reason)
-        except (urllib.error.URLError, ValueError) as error:
-            return NotificationResult(False, self.label, str(error))
-        except RuntimeError as error:
-            original = root_api_error(error)
-            if isinstance(original, urllib.error.HTTPError):
-                detail = ""
-                try:
-                    payload = json.loads(original.read().decode("utf-8", "replace") or "{}")
-                    detail = str(payload.get("description") or "")
-                except (ValueError, OSError):
-                    detail = ""
-                reason = str(error)
-                if detail:
-                    reason = reason + " · " + detail
-                return NotificationResult(False, self.label, reason)
-            return NotificationResult(False, self.label, str(error))
-        return NotificationResult(True, self.label)
-
-    def send(self, text: str) -> NotificationResult:
-        if not self.bot_token or not self.chat_id:
-            return NotificationResult(False, self.label, "텔레그램 토큰 또는 chat id 미설정")
-        if len(str(text or "")) > TELEGRAM_MESSAGE_LIMIT:
-            chunks = list(telegram_message_chunks(telegram_plain_text(text)))
-            total = len(chunks)
-            for index, chunk in enumerate(chunks, start=1):
-                label = ("(" + str(index) + "/" + str(total) + ")\n") if total > 1 else ""
-                result = self.post_message({
-                    "chat_id": self.chat_id,
-                    "text": label + chunk,
-                })
-                if not result.delivered:
-                    return result
-            return NotificationResult(True, self.label)
-        payload: Dict[str, object] = {
-            "chat_id": self.chat_id,
-            "text": text,
-        }
-        if uses_telegram_html(text):
-            payload["parse_mode"] = "HTML"
-        result = self.post_message(payload)
-        if not result.delivered and payload.get("parse_mode") == "HTML":
-            fallback = dict(payload)
-            fallback.pop("parse_mode", None)
-            fallback["text"] = telegram_plain_text(text)
-            return self.post_message(fallback)
-        return result
+from .notification.transport import (
+    TELEGRAM_API_GUARD_STATE,
+    TELEGRAM_HTML_PATTERN,
+    TELEGRAM_LINK_PATTERN,
+    TELEGRAM_MESSAGE_LIMIT,
+    ConsoleNotifier,
+    NotificationResult,
+    TelegramNotifier,
+    telegram_message_chunks,
+    telegram_plain_text,
+    uses_telegram_html,
+)
+from .settings import runtime_settings
 
 
 def notifier_from_settings():
@@ -181,7 +32,7 @@ def notifier_from_settings():
     return ConsoleNotifier()
 
 
-def notifier_for_account(account: AccountConfig = None):
+def notifier_for_account(account=None):
     if not account:
         return notifier_from_settings()
     provider = str(account.notify_provider or "").strip().lower()
@@ -190,16 +41,9 @@ def notifier_for_account(account: AccountConfig = None):
     return notifier_from_settings()
 
 
-def notifier_for_operations(account: AccountConfig = None):
+def notifier_for_operations(account=None):
     settings = runtime_settings()
-    # A dedicated operations bot remains preferred.  Local-first deployments
-    # commonly configure only the primary Telegram bot, however, and a
-    # storage incident must not become silent solely for that reason.
-    token = str(
-        settings.get("operationsTelegramBotToken")
-        or settings.get("telegramBotToken")
-        or ""
-    ).strip()
+    token = str(settings.get("operationsTelegramBotToken") or settings.get("telegramBotToken") or "").strip()
     chat_id = str(
         settings.get("operationsTelegramChatId")
         or settings.get("telegramChatId")
@@ -210,150 +54,25 @@ def notifier_for_operations(account: AccountConfig = None):
     notifier.label = "Telegram Operations"
     return notifier
 
-
-def notification_queue():
-    from .operational_store import notification_job_store
-
-    return notification_job_store()
-
-
-def notification_templates():
-    from .operational_store import notification_template_store
-
-    return notification_template_store()
-
-
-def account_delivery_context(account: AccountConfig = None) -> Dict[str, object]:
-    if account and hasattr(account, "message_delivery_context"):
-        return account.message_delivery_context()
-    return {}
-
-
-class QueueingNotifier:
-    label = "Notification Queue"
-
-    def __init__(
-        self,
-        account: AccountConfig = None,
-        message_type: str = "notification",
-        queue=None,
-        source_event: DomainEvent = None,
-        dedupe_key: str = "",
-    ):
-        self.account = account
-        self.message_type = message_type
-        self.queue = queue or notification_queue()
-        self.source_event = source_event
-        self.dedupe_key = dedupe_key
-
-    def send(self, text: str) -> NotificationResult:
-        context = text_context(
-            text,
-            self.message_type,
-            self.account.account_id if self.account else "",
-            self.account.label if self.account else "",
-        )
-        context.update(account_delivery_context(self.account))
-        if self.message_type == PORTFOLIO_HOLDINGS_SNAPSHOT and data_freshness_required(self.message_type):
-            context.setdefault("dataFreshnessRequired", True)
-            context.setdefault(
-                "dataFreshness",
-                freshness_record(
-                    "manualPortfolioSnapshot",
-                    self.message_type,
-                    settings=runtime_settings(),
-                    source_fetched_at=context.get("eventGeneratedAt") or context.get("referenceDate") or utc_now(),
-                    data_quality="manual",
-                ),
-            )
-        job = NotificationJob.create(
-            text,
-            account_id=self.account.account_id if self.account else "",
-            account_label=self.account.label if self.account else "",
-            message_type=self.message_type,
-            source_event_id=self.source_event.event_id if self.source_event else "",
-            source_event_name=self.source_event.name if self.source_event else "",
-            dedupe_key=self.dedupe_key,
-            context=context,
-        )
-        if not job.text:
-            return NotificationResult(False, self.label, "empty notification text")
-        if not self.queue.enqueue(job):
-            return NotificationResult(False, self.label, job.last_error or "notification queue enqueue failed")
-        return NotificationResult(True, self.label, "queued=1", queued=1)
-
-
-def queued_notifier_for_account(
-    account: AccountConfig = None,
-    message_type: str = "notification",
-    queue=None,
-    source_event: DomainEvent = None,
-    dedupe_key: str = "",
-):
-    return QueueingNotifier(
-        account,
-        message_type=message_type,
-        queue=queue,
-        source_event=source_event,
-        dedupe_key=dedupe_key,
-    )
-
-
-def enqueue_text(
-    text: str,
-    account: AccountConfig = None,
-    message_type: str = "notification",
-    dry_run: bool = False,
-    queue=None,
-    source_event: DomainEvent = None,
-    dedupe_key: str = "",
-) -> NotificationResult:
-    if dry_run:
-        print(text)
-        return NotificationResult(False, "Dry Run", "dry-run")
-    return queued_notifier_for_account(
-        account,
-        message_type=message_type,
-        queue=queue,
-        source_event=source_event,
-        dedupe_key=dedupe_key,
-    ).send(text)
-
-
-def send_events(
-    events: Iterable[AlertEvent],
-    dry_run: bool = False,
-    accounts: Dict[str, AccountConfig] = None,
-    queue=None,
-    source_event: DomainEvent = None,
-) -> NotificationResult:
-    events = list(events)
-    templates = notification_templates()
-    ai_settings = runtime_settings()
-    contexts = []
-    for event in events:
-        context = alert_context(event)
-        account = accounts.get(event.account_id) if accounts else None
-        context.update(account_delivery_context(account))
-        context = enrich_notification_ai_context(context, ai_settings)
-        contexts.append(context)
-    messages = [templates.render(event.rule, context) for event, context in zip(events, contexts)]
-    if dry_run:
-        print("\n\n".join(messages) if messages else "No messages.")
-        return NotificationResult(False, "Dry Run", "dry-run")
-    target_queue = queue or notification_queue()
-    queued = 0
-    for event, message, context in zip(events, messages, contexts):
-        job = NotificationJob.create(
-            message,
-            account_id=event.account_id,
-            account_label=event.account_label,
-            message_type=event.rule or "alert",
-            source_event_id=source_event.event_id if source_event else "",
-            source_event_name=source_event.name if source_event else "",
-            dedupe_key=":".join(["outbox", source_event.event_id, event.key]) if source_event else "",
-            context=context,
-        )
-        if target_queue.enqueue(job):
-            queued += 1
-    return NotificationResult(True, "Notification Queue", "queued=" + str(queued), queued=queued)
+__all__ = [
+    "TELEGRAM_API_GUARD_STATE",
+    "TELEGRAM_HTML_PATTERN",
+    "TELEGRAM_LINK_PATTERN",
+    "TELEGRAM_MESSAGE_LIMIT",
+    "ConsoleNotifier",
+    "NotificationResult",
+    "QueueingNotifier",
+    "TelegramNotifier",
+    "account_delivery_context",
+    "enqueue_text",
+    "notification_queue",
+    "notification_templates",
+    "notifier_for_account",
+    "notifier_for_operations",
+    "notifier_from_settings",
+    "queued_notifier_for_account",
+    "send_events",
+    "telegram_message_chunks",
+    "telegram_plain_text",
+    "uses_telegram_html",
+]

@@ -211,6 +211,8 @@ Application:
 - `python_service/digital_twin/application/investment_domain_service.py`: mandate, ledger, rebalance, action-plan, execution, and outcome lifecycle use cases
 - `python_service/digital_twin/application/flow_lens_service.py`: flow-lens snapshot use case with injected account, snapshot, settings, FX, and symbol dependencies
 - `python_service/digital_twin/application/monitoring_service.py`: one monitoring cycle use case
+- `python_service/digital_twin/application/notification/`: version-neutral notification ingress, admission, dispatch eligibility, rendering, channel dispatch, quality policy, lifecycle trace query, and queue workflow
+- `python_service/digital_twin/application/notification_service.py`: compatibility facade for legacy notification-worker imports only
 - `python_service/digital_twin/application/scheduler.py`: long-running scheduling loop around a runner
 - `python_service/digital_twin/application/investment_research_orchestration_service.py`: cache-first bounded hypothesis research, verified-evidence persistence, and re-reasoning request orchestration
 - `python_service/digital_twin/domain/hypothesis_development.py`: novel-hypothesis development lifecycle, lineage, validation gates, decision-impact classification, and deployment state
@@ -226,11 +228,11 @@ Infrastructure:
 - `python_service/digital_twin/infrastructure/mysql_investment_domain.py`: versioned mandate, append-only ledger, rebalance, action-plan, execution, fill, review, and lifecycle-trace persistence
 - `python_service/digital_twin/infrastructure/json_monitor_state.py`: legacy JSON monitor state compatibility only
 - `python_service/digital_twin/infrastructure/toss_snapshots.py`: Toss adapter and demo snapshot fallback
-- `python_service/digital_twin/application/notification_service.py`: queued notification delivery worker
 - `python_service/digital_twin/application/independent_reasoning_engine.py`: independent versioned reasoning input assembly, scoped graph execution, candidate construction, and leased job orchestration
 - `python_service/digital_twin/application/ai_inference_queue_service.py`: immutable notification AI request handoff, leased MAX inference, validation, and result publication
 - `python_service/digital_twin/application/decision_continuity_service.py`: indexed prior-decision continuity assembler used before AI queue capture
-- `python_service/digital_twin/infrastructure/notifications.py`: notification queue adapters plus console and Telegram delivery
+- `python_service/digital_twin/infrastructure/notification/`: durable queue ingress adapters and concrete console/Telegram channel transports
+- `python_service/digital_twin/infrastructure/notifications.py`: compatibility facade for legacy notification-infrastructure imports only
 - `python_service/digital_twin/infrastructure/event_bus.py`: synchronous event bus with operational event-log default
 - `python_service/digital_twin/infrastructure/model_review_queue.py`: async model-review queue interface fed by decision-change events
 - `python_service/digital_twin/infrastructure/model_reviewer.py`: Codex/LLM command adapter with local fallback

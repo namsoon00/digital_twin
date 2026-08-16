@@ -995,6 +995,35 @@ MYSQL_SCHEMA = [
     ) ENGINE=InnoDB DEFAULT CHARSET=utf8mb4 COLLATE=utf8mb4_unicode_ci
     """,
     """
+    CREATE TABLE IF NOT EXISTS notification_lifecycle_events (
+        event_id VARCHAR(191) PRIMARY KEY,
+        job_id VARCHAR(191) NOT NULL,
+        stage VARCHAR(64) NOT NULL,
+        outcome VARCHAR(64) NOT NULL DEFAULT '',
+        reason TEXT NOT NULL,
+        metadata_json LONGTEXT NOT NULL,
+        created_at VARCHAR(40) NOT NULL,
+        KEY idx_notification_lifecycle_job_time (job_id, created_at, event_id),
+        KEY idx_notification_lifecycle_stage_time (stage, created_at, event_id)
+    ) ENGINE=InnoDB DEFAULT CHARSET=utf8mb4 COLLATE=utf8mb4_unicode_ci
+    """,
+    """
+    CREATE TABLE IF NOT EXISTS notification_delivery_attempts (
+        attempt_id VARCHAR(191) PRIMARY KEY,
+        job_id VARCHAR(191) NOT NULL,
+        channel VARCHAR(64) NOT NULL DEFAULT '',
+        audience VARCHAR(64) NOT NULL DEFAULT '',
+        provider VARCHAR(191) NOT NULL DEFAULT '',
+        status VARCHAR(32) NOT NULL DEFAULT 'started',
+        reason TEXT NOT NULL,
+        metadata_json LONGTEXT NOT NULL,
+        started_at VARCHAR(40) NOT NULL,
+        completed_at VARCHAR(40) NOT NULL DEFAULT '',
+        KEY idx_notification_delivery_job_time (job_id, started_at, attempt_id),
+        KEY idx_notification_delivery_status_time (status, started_at, attempt_id)
+    ) ENGINE=InnoDB DEFAULT CHARSET=utf8mb4 COLLATE=utf8mb4_unicode_ci
+    """,
+    """
     CREATE TABLE IF NOT EXISTS notification_inbox_receipts (
         recipient_id VARCHAR(191) NOT NULL,
         job_id VARCHAR(191) NOT NULL,

@@ -4,6 +4,7 @@ import json
 from datetime import datetime, timedelta, timezone
 from typing import Dict, Iterable, List, Optional
 
+from ..application.notification.intake import NotificationIngressService
 from ..domain.accounts import AccountConfig, split_symbols
 from ..domain.data_freshness import evaluate_notification_data_freshness
 from ..domain.events import (
@@ -16,7 +17,6 @@ from ..domain.events import (
 )
 from ..domain.fact_changes import fact_signature, research_evidence_fact_payload
 from ..domain.investment_research import ResearchEvidence
-from ..domain.investment_strategy_guidance import append_strategy_block, merge_strategy_context
 from ..domain.message_types import MARKET_OBSERVATION
 from ..domain.market_observations import (
     apply_market_observation_outbox_baselines,
@@ -36,8 +36,8 @@ from ..domain.notification_rules import (
     evaluate_notification_rule,
     notification_fingerprint,
 )
-from ..domain.notification_templates import DEFAULT_NOTIFICATION_TEMPLATES, NotificationTemplate, alert_context, render_notification
-from ..domain.notifications import NotificationJob, notification_debug_number
+from ..domain.notification_templates import DEFAULT_NOTIFICATION_TEMPLATES, NotificationTemplate, render_notification
+from ..domain.notifications import notification_debug_number
 from ..domain.ontology_quality import OntologyQualitySample, build_ontology_quality_sample
 from ..domain.ontology_projection_input import (
     compact_monitor_state_for_ontology,
@@ -773,6 +773,7 @@ class MySQLMonitoringCycleRecorder(MySQLOperationalConnection):
         settings: Dict[str, str] = None,
         monitor_store: MySQLMonitorStore = None,
         market_time_series_store=None,
+        notification_ingress=None,
     ):
         self.monitor_store = monitor_store
         self.market_time_series_store = market_time_series_store
@@ -785,6 +786,10 @@ class MySQLMonitoringCycleRecorder(MySQLOperationalConnection):
             self.market_time_series_store = build_versioned_time_series_store(settings)
         self.market_observation_anchor_store = MySQLMarketObservationReasoningAnchorStore(
             self.runtime_settings
+        )
+        self.notification_ingress = notification_ingress or NotificationIngressService(
+            template_renderer=MySQLNotificationTemplateStore(self.runtime_settings).render,
+            settings=self.runtime_settings,
         )
 
     def account_context_map(self) -> Dict[str, AccountConfig]:
@@ -906,19 +911,10 @@ class MySQLMonitoringCycleRecorder(MySQLOperationalConnection):
                 insert_domain_event_with_connection(connection, alert_source_event)
                 for event in guarded_events:
                     account_context = account_contexts.get(event.account_id)
-                    context = merge_strategy_context(alert_context(event), account_context, self.runtime_settings)
-                    if str(event.rule or "") == "investmentInsight":
-                        context = append_strategy_block(context)
-                    message = MySQLNotificationTemplateStore(self.runtime_settings).render(event.rule, context)
-                    job = NotificationJob.create(
-                        message,
-                        account_id=event.account_id,
-                        account_label=event.account_label,
-                        message_type=event.rule or "alert",
-                        source_event_id=alert_source_event.event_id,
-                        source_event_name=alert_source_event.name,
-                        dedupe_key=":".join(["outbox", alert_source_event.event_id, event.key]),
-                        context=context,
+                    job = self.notification_ingress.job_from_alert(
+                        event,
+                        source_event=alert_source_event,
+                        account_context=account_context,
                     )
                     if notification_store.enqueue_with_connection(connection, job):
                         queued += 1

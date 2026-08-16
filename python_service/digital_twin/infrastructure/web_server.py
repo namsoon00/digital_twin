@@ -2833,6 +2833,20 @@ def notification_job_detail_payload(job_id: str, recipient_id: str = "local-owne
             "important": bool(receipt.get("important")),
             "receiptUpdatedAt": str(receipt.get("receiptUpdatedAt") or ""),
         })
+    try:
+        from ..application.notification.query import NotificationTraceQueryService
+
+        payload["notificationTrace"] = NotificationTraceQueryService(store).trace_for_job(job.job_id)
+    except Exception as error:  # noqa: BLE001 - the saved notification remains readable without its timeline.
+        payload["notificationTrace"] = {
+            "contractVersion": "notification-trace-v1",
+            "jobId": job.job_id,
+            "status": "error",
+            "reason": str(error)[:220],
+            "lifecycle": [],
+            "deliveryAttempts": [],
+            "timeline": [],
+        }
     return {"job": payload}
 
 

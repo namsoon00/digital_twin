@@ -1,8 +1,9 @@
 from datetime import datetime, timedelta, timezone
 from threading import Lock
 from typing import Dict, List, Optional, Tuple
+import uuid
 
-from ..domain.data_freshness import evaluate_notification_data_freshness, sanitize_notification_context_for_freshness
+from ..application.notification.admission import NotificationAdmissionPolicy
 from ..domain.investment_analysis import investment_decision_key
 from ..domain.message_types import (
     HOLDING_TIMING,
@@ -19,18 +20,14 @@ from ..domain.notification_rules import (
     DEFAULT_NOTIFICATION_RULES,
     NotificationRuleConfig,
     attach_previous_profit_loss_context,
-    apply_market_hours_rule,
-    apply_similarity_rule,
-    apply_state_cooldown_rule,
     default_notification_rule,
-    evaluate_notification_rule,
     notification_fingerprint,
-    ontology_relation_delivery_diff,
     ontology_relation_delivery_metadata,
     notification_subject_group_key,
     notification_state_group_key,
 )
 from ..domain.notifications import NotificationJob
+from ..domain.notification.lifecycle import NotificationLifecycleEvent
 from ..domain.ontology_relation_delivery import suppressed_relation_context_is_comparable
 from ..domain.sent_article_filter import (
     article_filter_context_summary,
@@ -46,7 +43,6 @@ from .mysql_operational_helpers import _is_duplicate_key_error, _json_loads
 from .operational_common import (
     MAX_NOTIFICATION_DELIVERY_ATTEMPTS,
     NOTIFICATION_HISTORY_LOOKBACK_LIMIT,
-    age_minutes_since,
     json_dumps,
     notification_history_is_recent_in_flight,
     rule_from_row,
@@ -58,8 +54,9 @@ class MySQLNotificationJobStore(MySQLOperationalConnection):
     _article_delivery_ledger_backfill_lock = Lock()
     _article_delivery_ledger_backfill_ready = set()
 
-    def __init__(self, settings: Dict[str, str] = None):
+    def __init__(self, settings: Dict[str, str] = None, admission_policy=None):
         super().__init__(settings)
+        self.admission_policy = admission_policy or NotificationAdmissionPolicy()
         from .mysql_operational import MySQLNotificationRuleStore
 
         MySQLNotificationRuleStore(self.runtime_settings)
@@ -421,6 +418,166 @@ class MySQLNotificationJobStore(MySQLOperationalConnection):
                 (target,),
             ).fetchone()
         return self.job_from_row(row) if row else None
+
+    def record_lifecycle_with_connection(
+        self,
+        connection,
+        job: NotificationJob,
+        stage: str,
+        outcome: str,
+        reason: str = "",
+        metadata: Dict[str, object] = None,
+    ) -> Dict[str, object]:
+        details = {
+            "messageType": str(job.message_type or ""),
+            "status": str(job.status or ""),
+            "attempts": int(job.attempts or 0),
+            **dict(metadata or {}),
+        }
+        event = NotificationLifecycleEvent(
+            job_id=str(job.job_id or ""),
+            stage=str(stage or ""),
+            outcome=str(outcome or ""),
+            reason=str(reason or "")[:2000],
+            metadata=details,
+        )
+        payload = event.to_dict()
+        connection.execute(
+            "INSERT INTO notification_lifecycle_events "
+            "(event_id, job_id, stage, outcome, reason, metadata_json, created_at) "
+            "VALUES (%s, %s, %s, %s, %s, %s, %s)",
+            (
+                payload["eventId"],
+                payload["jobId"],
+                payload["stage"],
+                payload["outcome"],
+                payload["reason"],
+                json_dumps(payload["metadata"]),
+                payload["createdAt"],
+            ),
+        )
+        return payload
+
+    def record_lifecycle(
+        self,
+        job: NotificationJob,
+        stage: str,
+        outcome: str,
+        reason: str = "",
+        metadata: Dict[str, object] = None,
+    ) -> Dict[str, object]:
+        with self.transaction() as connection:
+            return self.record_lifecycle_with_connection(
+                connection,
+                job,
+                stage,
+                outcome,
+                reason,
+                metadata,
+            )
+
+    def lifecycle_for_job(self, job_id: str) -> List[Dict[str, object]]:
+        with self.connect() as connection:
+            rows = connection.execute(
+                "SELECT event_id, job_id, stage, outcome, reason, metadata_json, created_at "
+                "FROM notification_lifecycle_events WHERE job_id = %s "
+                "ORDER BY created_at, event_id",
+                (str(job_id or "")[:191],),
+            ).fetchall()
+        return [
+            {
+                "eventId": str(row.get("event_id") or ""),
+                "jobId": str(row.get("job_id") or ""),
+                "stage": str(row.get("stage") or ""),
+                "outcome": str(row.get("outcome") or ""),
+                "reason": str(row.get("reason") or ""),
+                "metadata": _json_loads(row.get("metadata_json"), {}),
+                "createdAt": str(row.get("created_at") or ""),
+            }
+            for row in rows
+        ]
+
+    def start_delivery_attempt(
+        self,
+        job: NotificationJob,
+        channel: str,
+        audience: str,
+        metadata: Dict[str, object] = None,
+    ) -> str:
+        attempt_id = uuid.uuid4().hex
+        stamp = utc_now()
+        with self.transaction() as connection:
+            connection.execute(
+                "INSERT INTO notification_delivery_attempts "
+                "(attempt_id, job_id, channel, audience, provider, status, reason, metadata_json, started_at, completed_at) "
+                "VALUES (%s, %s, %s, %s, '', 'started', '', %s, %s, '')",
+                (
+                    attempt_id,
+                    str(job.job_id or "")[:191],
+                    str(channel or "")[:64],
+                    str(audience or "")[:64],
+                    json_dumps(dict(metadata or {})),
+                    stamp,
+                ),
+            )
+            self.record_lifecycle_with_connection(
+                connection,
+                job,
+                "dispatching",
+                "started",
+                metadata={"attemptId": attempt_id, "channel": channel, "audience": audience},
+            )
+        return attempt_id
+
+    def complete_delivery_attempt(
+        self,
+        job: NotificationJob,
+        attempt_id: str,
+        delivered: bool,
+        provider: str = "",
+        reason: str = "",
+        metadata: Dict[str, object] = None,
+    ) -> None:
+        stamp = utc_now()
+        status = "delivered" if delivered else "failed"
+        with self.transaction() as connection:
+            connection.execute(
+                "UPDATE notification_delivery_attempts SET provider = %s, status = %s, reason = %s, "
+                "metadata_json = %s, completed_at = %s WHERE attempt_id = %s AND job_id = %s",
+                (
+                    str(provider or "")[:191],
+                    status,
+                    str(reason or "")[:2000],
+                    json_dumps(dict(metadata or {})),
+                    stamp,
+                    str(attempt_id or "")[:191],
+                    str(job.job_id or "")[:191],
+                ),
+            )
+
+    def delivery_attempts_for_job(self, job_id: str) -> List[Dict[str, object]]:
+        with self.connect() as connection:
+            rows = connection.execute(
+                "SELECT attempt_id, job_id, channel, audience, provider, status, reason, metadata_json, "
+                "started_at, completed_at FROM notification_delivery_attempts WHERE job_id = %s "
+                "ORDER BY started_at, attempt_id",
+                (str(job_id or "")[:191],),
+            ).fetchall()
+        return [
+            {
+                "attemptId": str(row.get("attempt_id") or ""),
+                "jobId": str(row.get("job_id") or ""),
+                "channel": str(row.get("channel") or ""),
+                "audience": str(row.get("audience") or ""),
+                "provider": str(row.get("provider") or ""),
+                "status": str(row.get("status") or ""),
+                "reason": str(row.get("reason") or ""),
+                "metadata": _json_loads(row.get("metadata_json"), {}),
+                "startedAt": str(row.get("started_at") or ""),
+                "completedAt": str(row.get("completed_at") or ""),
+            }
+            for row in rows
+        ]
 
     @staticmethod
     def compact_job_payload(job: NotificationJob) -> Dict[str, object]:
@@ -989,29 +1146,9 @@ class MySQLNotificationJobStore(MySQLOperationalConnection):
         return selected_context
 
     def evaluate_job_with_connection(self, connection, job: NotificationJob):
-        relation_delivery = ontology_relation_delivery_metadata(job.context or {})
-        if relation_delivery:
-            context = dict(job.context or {})
-            context["ontologyRelationDelivery"] = {
-                "version": relation_delivery.get("version"),
-                "fingerprint": relation_delivery.get("fingerprint"),
-                "signature": relation_delivery.get("signature"),
-            }
-            context["ontologyRelationFingerprint"] = relation_delivery.get("fingerprint")
-            job.context = context
+        policy = getattr(self, "admission_policy", None) or NotificationAdmissionPolicy()
         rule = self.rule_for_connection(connection, job.message_type)
-        transition_condition = next((
-            condition
-            for condition in rule.similarity_bypass_conditions or []
-            if condition.condition_id == "insight_inference_state_changed"
-        ), None)
-        if str(job.message_type or "") == "investmentInsight":
-            context = dict(job.context or {})
-            context["investmentStateTransitionNotificationsEnabled"] = bool(
-                transition_condition and transition_condition.enabled
-            )
-            job.context = context
-        decision = evaluate_notification_rule(job, rule)
+        decision = policy.prepare(job, rule)
         recent_count, previous_context, last_sent_at = self.similar_history_with_connection(
             connection,
             job,
@@ -1019,59 +1156,15 @@ class MySQLNotificationJobStore(MySQLOperationalConnection):
             decision.fingerprint,
         )
         relation_previous_context = self.relation_predecessor_with_connection(connection, job, rule)
-        predecessor_sent_at = str(relation_previous_context.get("_relationPredecessorSentAt") or "")
-        baseline_observed_at = str(relation_previous_context.get("_relationBaselineObservedAt") or "")
-        if predecessor_sent_at and not last_sent_at:
-            # A changed graph fingerprint can be a harmless relation-row
-            # rebuild. Keep the most recent actually delivered/in-flight
-            # same-subject timestamp so cooldown can distinguish that case
-            # from a true new alert without treating suppression as delivery.
-            last_sent_at = predecessor_sent_at
-            recent_count = max(1, int(recent_count or 0))
-        cooldown_previous_context = previous_context
-        if baseline_observed_at:
-            relation_previous_context["_relationBaselineAgeMinutes"] = age_minutes_since(baseline_observed_at)
-            cooldown_previous_context = relation_previous_context
-            context = dict(job.context or {})
-            context["_relationBaselineObservedAt"] = baseline_observed_at
-            context["_relationBaselineFingerprint"] = str(
-                relation_previous_context.get("_relationBaselineFingerprint") or ""
-            )
-            job.context = context
-        relation_diff = ontology_relation_delivery_diff(job.context or {}, relation_previous_context)
-        if relation_delivery:
-            context = dict(job.context or {})
-            context["ontologyRelationDiff"] = relation_diff
-            transition = relation_diff.get("decisionTransition") if isinstance(relation_diff.get("decisionTransition"), dict) else {}
-            if transition:
-                context["decisionTransition"] = transition
-            context.pop("newsImpact", None)
-            news_impact = news_story_impact_from_context(context)
-            if news_impact:
-                decision_driver_confirmed = news_story_is_decision_driver(news_impact, context)
-                decision_changing = news_story_changes_decision(news_impact, relation_diff, context)
-                news_impact["decisionDriverConfirmed"] = decision_driver_confirmed
-                news_impact["decisionChanging"] = decision_changing
-                news_impact["deliveryMode"] = "decision-inline" if decision_changing else "event-digest"
-                if decision_changing:
-                    context["newsImpact"] = news_impact
-            job.context = context
-        if relation_diff.get("material") and relation_diff.get("changedComponents") not in ([], ["initial"]):
-            reason = "관계 그래프 변화: " + str(relation_diff.get("reason") or "의미 있는 관계 변화")
-            if reason not in decision.reasons:
-                decision.reasons.append(reason)
-        decision = apply_state_cooldown_rule(
-            decision,
-            rule,
-            recent_count,
-            cooldown_previous_context,
-            last_sent_at,
-            age_minutes_since(last_sent_at),
+        return policy.evaluate(
             job,
+            rule,
+            decision,
+            recent_count=recent_count,
+            previous_context=previous_context,
+            last_sent_at=last_sent_at,
+            relation_previous_context=relation_previous_context,
         )
-        decision = apply_similarity_rule(decision, rule, recent_count, previous_context, job)
-        decision = attach_previous_profit_loss_context(decision, job, previous_context)
-        return apply_market_hours_rule(decision, rule, job)
 
     def enqueue_with_connection(self, connection, job: NotificationJob) -> bool:
         if not job.text.strip():
@@ -1089,66 +1182,38 @@ class MySQLNotificationJobStore(MySQLOperationalConnection):
                 return False
 
         if self.apply_sent_article_filter_with_connection(connection, job):
+            self.record_lifecycle_with_connection(connection, job, "received", "accepted")
+            self.record_lifecycle_with_connection(
+                connection,
+                job,
+                "eligibility_checked",
+                "suppressed",
+                job.last_error,
+                {"suppressionReason": str((job.context or {}).get("deliverySuppressionReason") or "")},
+            )
             return False
 
         decision = self.evaluate_job_with_connection(connection, job)
-        context = dict(job.context or {})
-        context.update(decision.to_context())
-        state_group_key = notification_state_group_key(job)
-        if state_group_key:
-            context["deliveryStateGroupKey"] = state_group_key
-        freshness_decision = evaluate_notification_data_freshness(context, self.runtime_settings)
-        context.update(freshness_decision.to_context())
-        context = sanitize_notification_context_for_freshness(context, freshness_decision)
-        job.context = context
-        if decision.should_send and not freshness_decision.should_send:
-            if str(job.message_type or "") == INVESTMENT_INSIGHT:
-                context = dict(job.context or {})
-                context["freshnessDeferredToDispatch"] = True
-                context["freshnessDeferredReason"] = str(freshness_decision.reason or "")
-                job.context = context
-                try:
-                    self.upsert_job_with_connection(connection, job)
-                except Exception as error:
-                    if _is_duplicate_key_error(error):
-                        return False
-                    raise
-                return True
-            job.status = "suppressed"
+        policy = getattr(self, "admission_policy", None) or NotificationAdmissionPolicy()
+        outcome = policy.apply_result(job, decision, self.runtime_settings)
+        if job.status == "suppressed":
             job.updated_at = utc_now()
-            job.last_error = "데이터 신선도 기준 미통과로 발송하지 않았습니다. " + str(freshness_decision.reason or "")
-            job.context["deliverySuppressionReason"] = "stale_data"
-            try:
-                self.upsert_job_with_connection(connection, job)
-            except Exception as error:
-                if _is_duplicate_key_error(error):
-                    return False
-                raise
-            return False
-        if not decision.should_send:
-            job.status = "suppressed"
-            job.updated_at = utc_now()
-            if decision.suppression_reason == "market_closed":
-                job.last_error = "장 시간 외라 발송하지 않았습니다. " + str(decision.market_hours_reason or "")
-            elif decision.suppression_reason == "state_cooldown":
-                job.last_error = decision.state_reason or "같은 임계값 상태가 지속되어 발송하지 않았습니다."
-            else:
-                job.last_error = decision.gate_reason or "발송 조건을 충족하지 않아 보내지 않았습니다."
-            try:
-                self.upsert_job_with_connection(connection, job)
-            except Exception as error:
-                if _is_duplicate_key_error(error):
-                    return False
-                raise
-            return False
-
         try:
             self.upsert_job_with_connection(connection, job)
         except Exception as error:
             if _is_duplicate_key_error(error):
                 return False
             raise
-        return True
+        self.record_lifecycle_with_connection(connection, job, "received", "accepted")
+        self.record_lifecycle_with_connection(
+            connection,
+            job,
+            "eligibility_checked",
+            "accepted" if outcome.accepted else "suppressed",
+            outcome.reason,
+            {"suppressionReason": str((job.context or {}).get("deliverySuppressionReason") or "")},
+        )
+        return bool(outcome.accepted)
 
     def enqueue(self, job: NotificationJob) -> bool:
         with self.transaction() as connection:
@@ -1268,6 +1333,12 @@ class MySQLNotificationJobStore(MySQLOperationalConnection):
                         ),
                     )
                     if cursor.rowcount:
+                        self.record_lifecycle_with_connection(
+                            connection,
+                            job,
+                            "eligibility_checked",
+                            "claimed",
+                        )
                         claimed.append(job)
         return claimed
 
@@ -1284,6 +1355,7 @@ class MySQLNotificationJobStore(MySQLOperationalConnection):
                 "UPDATE notification_jobs SET processing_started_at = %s WHERE job_id = %s",
                 (job.updated_at, job.job_id),
             )
+            self.record_lifecycle_with_connection(connection, job, "eligibility_checked", "claimed")
         return job
 
     def mark_done(self, job: NotificationJob) -> None:
@@ -1293,18 +1365,23 @@ class MySQLNotificationJobStore(MySQLOperationalConnection):
         with self.transaction() as connection:
             self.upsert_job_with_connection(connection, job)
             self.record_article_delivery_with_connection(connection, job)
+            self.record_lifecycle_with_connection(connection, job, "delivered", "done")
 
     def mark_failed(self, job: NotificationJob, error: str) -> None:
         job.status = "failed"
         job.last_error = error
         job.updated_at = utc_now()
-        self.update(job)
+        with self.transaction() as connection:
+            self.upsert_job_with_connection(connection, job)
+            self.record_lifecycle_with_connection(connection, job, "failed", "retryable", error)
 
     def mark_suppressed(self, job: NotificationJob, reason: str) -> None:
         job.status = "suppressed"
         job.last_error = str(reason or "알림 정책으로 발송하지 않았습니다.")
         job.updated_at = utc_now()
-        self.update(job)
+        with self.transaction() as connection:
+            self.upsert_job_with_connection(connection, job)
+            self.record_lifecycle_with_connection(connection, job, "suppressed", "suppressed", job.last_error)
 
     def summary(self) -> Dict[str, int]:
         with self.connect() as connection:

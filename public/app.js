@@ -22242,6 +22242,50 @@
     return trace && typeof trace === "object" ? trace : null;
   }
 
+  function renderNotificationLifecycleTrace(job) {
+    var trace = job && job.notificationTrace && typeof job.notificationTrace === "object"
+      ? job.notificationTrace
+      : {};
+    var timeline = Array.isArray(trace.timeline) ? trace.timeline : [];
+    if (!timeline.length) {
+      return '<p class="notification-reasoning-empty">이 알림은 모듈화 이전 기록이거나 처리 수명주기 감사 정보가 없습니다.</p>';
+    }
+    var stageLabels = {
+      received: "요청 수신",
+      eligibility_checked: "발송 적격성 확인",
+      awaiting_decision: "AI 판단 대기",
+      ready_to_render: "렌더링 준비",
+      rendered: "메시지 렌더링",
+      dispatching: "채널 전송 시도",
+      delivered: "발송 완료",
+      suppressed: "발송 보류",
+      superseded: "최신 요청으로 대체",
+      expired: "유효시간 만료",
+      failed: "처리 실패"
+    };
+    var body = '<div class="notification-reasoning-trace-list">' + timeline.map(function (item) {
+      var metadata = item.metadata && typeof item.metadata === "object" ? item.metadata : {};
+      var detail = [
+        item.outcome || "",
+        metadata.channel ? "채널 " + metadata.channel : "",
+        metadata.provider ? "공급자 " + metadata.provider : "",
+        item.reason || ""
+      ].filter(Boolean).join(" · ");
+      return [
+        '<div class="notification-reasoning-trace-row">',
+        '<span class="tone-chip ' + escapeHtml(item.stage === "failed" ? "caution" : (item.stage === "delivered" ? "watch" : "hold")) + '">' + escapeHtml(String(item.sequence || "-")) + '</span>',
+        '<strong>' + escapeHtml(stageLabels[item.stage] || item.stage || "처리 단계") + '</strong>',
+        '<em>' + escapeHtml(formatClock(item.at) || item.at || "시각 미기록") + '</em>',
+        detail ? '<span>' + escapeHtml(detail) + '</span>' : '',
+        '</div>'
+      ].join("");
+    }).join("") + '</div>';
+    body += '<details class="notification-ai-prompt-audit"><summary>알림 처리 전체 감사 데이터</summary><pre>'
+      + escapeHtml(JSON.stringify(trace, null, 2))
+      + '</pre></details>';
+    return body;
+  }
+
   function notificationReasoningTraceStatusMeta(status) {
     var key = String(status || "unavailable");
     var labels = {
@@ -22633,6 +22677,13 @@
         renderNotificationReverseReasoning(job),
         "reasoning",
         detailDisclosurePrefix + "reasoning"
+      ),
+      renderNotificationDetailDisclosure(
+        "알림 처리 수명주기",
+        Array.isArray(((job.notificationTrace || {}).timeline)) ? job.notificationTrace.timeline.length + "개 처리 기록 · 실제 저장 시각 순" : "처리 기록 없음",
+        renderNotificationLifecycleTrace(job),
+        "lifecycle",
+        detailDisclosurePrefix + "lifecycle"
       ),
       renderNotificationDetailDisclosure(
         "전체 메시지·식별 정보",

@@ -227,6 +227,42 @@ class OntologyProjectionFingerprintContractTests(unittest.TestCase):
 
         self.assertEqual(material_graph_fingerprint(first), material_graph_fingerprint(second))
 
+    def test_scoped_semantic_fingerprint_ignores_creation_clock_and_tbox_decoration(self):
+        graph = PortfolioOntology(
+            "semantic-scope-contract",
+            entities=[OntologyEntity(
+                "stock:005930",
+                "삼성전자",
+                "stock",
+                {
+                    "ontologyBox": "ABox",
+                    "symbol": "005930",
+                    "currentPrice": 70000,
+                    "createdAt": "2026-08-16T00:00:00Z",
+                    "tboxClass": "Stock",
+                },
+            )],
+        )
+        first = apply_scoped_abox_identity(graph)
+        first_scope = first["scopePlan"][0]
+
+        graph.entities[0].properties.update({
+            "createdAt": "2026-08-16T01:00:00Z",
+            "tboxClass": "ListedStock",
+        })
+        second = apply_scoped_abox_identity(graph)
+        second_scope = second["scopePlan"][0]
+
+        self.assertNotEqual(first_scope["fingerprint"], second_scope["fingerprint"])
+        self.assertEqual(
+            first_scope["semanticFingerprints"],
+            second_scope["semanticFingerprints"],
+        )
+        self.assertEqual(
+            first_scope["semanticDependencyFingerprints"],
+            second_scope["semanticDependencyFingerprints"],
+        )
+
     def test_operational_runtime_settings_do_not_enter_material_ontology(self):
         graph = PortfolioOntology("runtime-setting-contract")
         portfolio_id = add_entity(

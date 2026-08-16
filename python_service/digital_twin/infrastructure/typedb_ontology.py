@@ -7821,6 +7821,7 @@ class TypeDBOntologyGraphRepository(GraphStoreOntologyRowMapperMixin, ScopedABox
         self._schema_function_sync_cache_key = ""
         self._schema_function_sync_cache_result: Dict[str, object] = {}
         self._rulebox_snapshot_cache_at = 0.0
+        self._rulebox_snapshot_cache_full_load_at = 0.0
         self._rulebox_snapshot_cache_result: Dict[str, object] = {}
         self._query_metrics: List[Dict[str, object]] = []
         self._query_metrics_lock = threading.Lock()
@@ -8078,6 +8079,7 @@ class TypeDBOntologyGraphRepository(GraphStoreOntologyRowMapperMixin, ScopedABox
 
     def clear_rulebox_snapshot_cache(self) -> None:
         self._rulebox_snapshot_cache_at = 0.0
+        self._rulebox_snapshot_cache_full_load_at = 0.0
         self._rulebox_snapshot_cache_result = {}
 
     def schema_function_process_cache_key(self, sync_fingerprint: str) -> Tuple[str, str, str, bool, str]:
@@ -11741,6 +11743,30 @@ class TypeDBOntologyGraphRepository(GraphStoreOntologyRowMapperMixin, ScopedABox
         # single-edge plan used by the live ABox writer.
         return max(1, min(1, int(parsed)))
 
+    def inferencebox_given_relation_writes_enabled(
+        self,
+        settings: Dict[str, object] = None,
+    ) -> bool:
+        values = dict(runtime_settings() if settings is None else settings or {})
+        raw = values.get("typedbInferenceBoxGivenRelationWritesEnabled")
+        if raw is None:
+            return True
+        return str(raw).strip().lower() not in {
+            "0", "false", "no", "off", "disabled",
+        }
+
+    def inferencebox_given_relation_batch_size(
+        self,
+        settings: Dict[str, object] = None,
+    ) -> int:
+        values = dict(runtime_settings() if settings is None else settings or {})
+        configured = number_or_none(
+            values.get("typedbInferenceBoxGivenRelationBatchSize")
+        )
+        if configured is None:
+            configured = 50
+        return max(1, min(250, int(configured)))
+
     def box_instance_exists(self, driver, imported, box: str, type_label: str) -> bool:
         _TypeDB, _Credentials, _DriverOptions, _DriverTlsConfig, TransactionType = imported[0]
         query = (
@@ -14784,6 +14810,24 @@ relation ontology-assertion,
             *self.batched_relation_insert_queries(relation_rows, updated_at, relation_batch_size, max_query_bytes),
         ]
 
+    def inferencebox_given_relation_insert_plans(
+        self,
+        rows: Iterable[Dict[str, object]],
+        updated_at: str,
+        settings: Dict[str, object] = None,
+    ) -> List[Dict[str, object]]:
+        values = dict(runtime_settings() if settings is None else settings or {})
+        values["typedbABoxGivenRelationWritesEnabled"] = (
+            "1" if self.inferencebox_given_relation_writes_enabled(values) else "0"
+        )
+        values["typedbABoxGivenRelationBatchSize"] = str(
+            self.inferencebox_given_relation_batch_size(values)
+        )
+        values["typedbABoxRelationBatchSize"] = str(
+            self.inferencebox_relation_batch_size(values)
+        )
+        return self.given_relation_insert_plans(rows, updated_at, settings=values)
+
     @staticmethod
     def seed_static_manifest_entity_id() -> str:
         return "ontology-seed-manifest:typedb-static-v1"
@@ -15953,6 +15997,33 @@ relation ontology-assertion,
         rulebox_snapshot_id = str(
             (manifest.get("metadata") or {}).get("ruleboxSnapshotId") or ""
         ).strip() if str(manifest.get("status") or "") == "ok" else ""
+        full_cache_age = time.time() - float(
+            self._rulebox_snapshot_cache_full_load_at or 0
+        )
+        maximum_full_cache_age = max(
+            300.0,
+            min(1800.0, self.rulebox_snapshot_cache_seconds() * 10.0),
+        )
+        cached_snapshot_id = str(
+            (self._rulebox_snapshot_cache_result or {}).get("ruleboxSnapshotId") or ""
+        ).strip()
+        if (
+            self._rulebox_snapshot_cache_result
+            and rulebox_snapshot_id
+            and cached_snapshot_id == rulebox_snapshot_id
+            and full_cache_age <= maximum_full_cache_age
+        ):
+            # RuleBox rows are immutable under a content-addressed static
+            # manifest. A lightweight manifest read is enough to prove that
+            # the executable policy is unchanged; periodically force a full
+            # governance refresh so cross-process version history remains
+            # visible as well.
+            self._rulebox_snapshot_cache_at = time.time()
+            cached = copy.deepcopy(self._rulebox_snapshot_cache_result)
+            cached["cached"] = True
+            cached["ruleBoxSnapshotCached"] = True
+            cached["ruleBoxManifestRevalidated"] = True
+            return cached
         try:
             if rulebox_snapshot_id:
                 entities = [
@@ -16013,6 +16084,7 @@ relation ontology-assertion,
         snapshot["nativeReasoningProfile"] = typedb_native_reasoning_profile(snapshot.get("rules") or [])
         snapshot["ruleBoxSnapshotCached"] = False
         self._rulebox_snapshot_cache_at = time.time()
+        self._rulebox_snapshot_cache_full_load_at = self._rulebox_snapshot_cache_at
         self._rulebox_snapshot_cache_result = copy.deepcopy(snapshot)
         return snapshot
 
@@ -22250,12 +22322,25 @@ relation ontology-assertion,
             if str(row.get("ontologyBox") or "") == "InferenceBox"
         ]
         updated_at = utc_now()
-        queries = self.inferencebox_insert_queries(node_rows, relation_rows, updated_at)
+        settings = runtime_settings()
+        node_queries = self.batched_node_insert_queries(
+            node_rows,
+            updated_at,
+            int(number_or_none(settings.get("typedbInferenceBoxNodeBatchSize")) or 25),
+            self.write_query_max_bytes(settings),
+        )
+        relation_write_plans = self.inferencebox_given_relation_insert_plans(
+            relation_rows,
+            updated_at,
+            settings=settings,
+        )
+        planned_batch_count = len(node_queries) + len(relation_write_plans)
         write_timing: Dict[str, object] = {
-            "queryCount": len(queries),
-            "nodeQueryCount": sum(1 for query in queries if str(query).lstrip().startswith("insert ")),
-            "relationQueryCount": sum(1 for query in queries if str(query).lstrip().startswith("match ")),
+            "queryCount": planned_batch_count,
+            "nodeQueryCount": len(node_queries),
+            "relationQueryCount": len(relation_write_plans),
             "relationBatchSize": self.inferencebox_relation_batch_size(),
+            "relationGivenBatchSize": self.inferencebox_given_relation_batch_size(),
         }
         generation_id = str((graph.worldview or {}).get("inferenceGenerationId") or "").strip()
         world_id = str((graph.worldview or {}).get("worldId") or "").strip()
@@ -22274,6 +22359,10 @@ relation ontology-assertion,
                         self.ensure_database(driver)
                         transaction_query_count = self.inferencebox_write_transaction_query_count()
                         write_timing["transactionQueryCount"] = transaction_query_count
+                        write_timing["relationGivenBatchCount"] = 0
+                        write_timing["relationGivenRowCount"] = 0
+                        write_timing["relationGivenFallbackCount"] = 0
+                        write_timing["relationLegacyQueryCount"] = 0
 
                         def write_query_chunks(query_rows: Iterable[str], stage: str) -> None:
                             query_list = [str(query) for query in query_rows or [] if str(query or "").strip()]
@@ -22301,13 +22390,110 @@ relation ontology-assertion,
                             if generation_id
                             else []
                         )
-                        candidate_queries.extend(queries)
+                        candidate_started = time.monotonic()
+                        write_query_chunks(candidate_queries, "candidateDelete")
+                        write_query_chunks(node_queries, "candidateNodeWrite")
+
+                        given_plans = [
+                            plan for plan in relation_write_plans
+                            if str(plan.get("query") or "")
+                            and list(plan.get("givenRows") or [])
+                        ]
+                        legacy_plans = [
+                            plan for plan in relation_write_plans
+                            if str(plan.get("query") or "")
+                            and not list(plan.get("givenRows") or [])
+                        ]
+
+                        def write_given_plan_batch(plans: List[Dict[str, object]]) -> None:
+                            if not plans:
+                                return
+
+                            def write_given_transaction():
+                                with driver.transaction(
+                                    self.database,
+                                    TransactionType.WRITE,
+                                    options=self.write_transaction_options(),
+                                ) as tx:
+                                    for plan in plans:
+                                        query_started = time.monotonic()
+                                        tx.query(
+                                            str(plan.get("query") or ""),
+                                            given_rows=list(plan.get("givenRows") or []),
+                                        ).resolve()
+                                        query_durations_ms.append(round(
+                                            (time.monotonic() - query_started) * 1000,
+                                            1,
+                                        ))
+                                    tx.commit()
+
+                            self.with_typedb_retries(write_given_transaction)
+
+                        relation_started = time.monotonic()
+                        for offset in range(0, len(given_plans), transaction_query_count):
+                            plan_batch = given_plans[offset: offset + transaction_query_count]
+                            try:
+                                write_given_plan_batch(plan_batch)
+                                write_timing["relationGivenBatchCount"] += len(plan_batch)
+                                write_timing["relationGivenRowCount"] += sum(
+                                    len(plan.get("givenRows") or [])
+                                    for plan in plan_batch
+                                )
+                                continue
+                            except Exception:
+                                pass
+
+                            for plan in plan_batch:
+                                try:
+                                    write_given_plan_batch([plan])
+                                    write_timing["relationGivenBatchCount"] += 1
+                                    write_timing["relationGivenRowCount"] += len(
+                                        plan.get("givenRows") or []
+                                    )
+                                    continue
+                                except Exception:
+                                    write_timing["relationGivenFallbackCount"] += 1
+                                fallback_queries = self.batched_relation_insert_queries(
+                                    list(plan.get("rows") or []),
+                                    updated_at,
+                                    self.inferencebox_relation_batch_size(settings),
+                                    self.write_query_max_bytes(settings),
+                                )
+                                write_query_chunks(
+                                    fallback_queries,
+                                    "candidateRelationFallback",
+                                )
+                                write_timing["relationLegacyQueryCount"] += len(
+                                    fallback_queries
+                                )
+
+                        for plan in legacy_plans:
+                            write_query_chunks(
+                                [str(plan.get("query") or "")],
+                                "candidateRelationLegacy",
+                            )
+                            write_timing["relationLegacyQueryCount"] += 1
+                        write_timing["candidateRelationWriteMs"] = round(
+                            (time.monotonic() - relation_started) * 1000,
+                            1,
+                        )
                         if marker_query:
-                            candidate_queries.append(marker_query)
-                        write_query_chunks(candidate_queries, "candidateCommit")
-                        write_timing["candidateDeleteMs"] = 0.0
-                        write_timing["candidateWriteMs"] = write_timing.get("candidateCommitMs", 0.0)
-                        write_timing["candidateMarkerMs"] = 0.0
+                            write_query_chunks([marker_query], "candidateMarker")
+                        write_timing["candidateCommitMs"] = round(
+                            (time.monotonic() - candidate_started) * 1000,
+                            1,
+                        )
+                        write_timing["candidateWriteMs"] = write_timing.get(
+                            "candidateCommitMs", 0.0
+                        )
+                        write_timing["relationWriteMode"] = (
+                            "given-rows"
+                            if write_timing["relationGivenBatchCount"]
+                            and not write_timing["relationGivenFallbackCount"]
+                            else "given-rows-with-legacy-fallback"
+                            if write_timing["relationGivenBatchCount"]
+                            else "legacy-single-edge"
+                        )
                     finally:
                         self.close_driver(driver)
                         write_timing["slowestQueryMs"] = max(query_durations_ms) if query_durations_ms else 0.0
@@ -22333,7 +22519,7 @@ relation ontology-assertion,
                     "entityCount": len(node_rows),
                     "relationCount": len(relation_rows),
                     "statementCount": statement_count,
-                    "batchCount": len(queries),
+                    "batchCount": planned_batch_count,
                     "insertMode": "batched-candidate",
                     "publicationStatus": "candidate",
                     "preservedPreviousInference": True,
@@ -22354,7 +22540,7 @@ relation ontology-assertion,
                     "entityCount": len(node_rows),
                     "relationCount": len(relation_rows),
                     "statementCount": statement_count,
-                    "batchCount": len(queries),
+                    "batchCount": planned_batch_count,
                     "insertMode": "batched-candidate",
                     "publicationStatus": "candidate",
                     "preservedPreviousInference": True,
@@ -22371,7 +22557,7 @@ relation ontology-assertion,
                 "entityCount": len(node_rows),
                 "relationCount": len(relation_rows),
                 "statementCount": statement_count,
-                "batchCount": len(queries),
+                "batchCount": planned_batch_count,
                 "insertMode": "batched-candidate-activation",
                 "publicationStatus": "active" if marker_query else "legacy-unmarked",
                 "inferenceGenerationId": generation_id,
@@ -22396,7 +22582,7 @@ relation ontology-assertion,
                 "entityCount": len(node_rows),
                 "relationCount": len(relation_rows),
                 "statementCount": statement_count,
-                "batchCount": len(queries),
+                "batchCount": planned_batch_count,
                 "insertMode": "batched",
                 "publicationStatus": "not-published",
                 "inferenceGenerationId": generation_id,

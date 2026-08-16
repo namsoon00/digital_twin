@@ -309,6 +309,79 @@ class IndependentReasoningEngineTests(unittest.TestCase):
         self.assertEqual(2, len(engine.calls[0]))
         self.assertEqual(2, len(queue.completed))
 
+    def test_runner_defers_jobs_beyond_native_unique_symbol_limit(self):
+        events = [
+            source_event("NVDA", []),
+            source_event("TSLA", []),
+            source_event("AAPL", []),
+        ]
+
+        class Queue:
+            def __init__(self):
+                self.completed = []
+                self.deferred = []
+
+            def claim(self, *_args, **_kwargs):
+                return [
+                    {"jobId": "job:" + str(index), "sourceEvent": event.to_dict()}
+                    for index, event in enumerate(events)
+                ]
+
+            def complete(self, job_id, result):
+                self.completed.append((job_id, result["request_id"]))
+
+            def defer(self, job_id, reason, delay):
+                self.deferred.append((job_id, reason, delay))
+
+            def summary(self, _deployment_id):
+                return {"pendingCount": len(self.deferred)}
+
+        class Engine:
+            def __init__(self):
+                self.calls = []
+
+            def descriptor(self):
+                return descriptor()
+
+            def consume(self, source_events):
+                self.calls.append(list(source_events))
+                return {
+                    "request_id": "request:native-bounded",
+                    "status": "ok",
+                    "retryable": False,
+                }
+
+            def health(self):
+                return {"status": "ready", "monitorRunnerUsed": False}
+
+        class Registry:
+            def get(self, _deployment_id):
+                return {"health": {}}
+
+            def update_health(self, _deployment_id, _health):
+                return None
+
+        queue = Queue()
+        engine = Engine()
+        runner = IndependentReasoningJobRunner(
+            queue,
+            engine,
+            Registry(),
+            settings={
+                "reasoningEngineV2RealtimeBatchSize": "3",
+                "typedbNativeRuleTargetSymbolLimit": "2",
+            },
+        )
+
+        result = runner.run_once()
+
+        self.assertEqual(2, result["processedCount"])
+        self.assertEqual(2, len(engine.calls[0]))
+        self.assertEqual(2, len(queue.completed))
+        self.assertEqual("job:2", queue.deferred[0][0])
+        self.assertIn("target-symbol limit", queue.deferred[0][1])
+        self.assertEqual(1, result["result"]["capacity_deferred_job_count"])
+
     def test_runner_claims_only_the_realtime_lane_batch_limit(self):
         class Queue:
             def __init__(self):

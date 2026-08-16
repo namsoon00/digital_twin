@@ -6925,8 +6925,8 @@ class TypeDBOntologyRepositoryTests(unittest.TestCase):
             def __exit__(self, _exc_type, _exc, _traceback):
                 return False
 
-            def query(self, query):
-                self.calls.append(("query", query))
+            def query(self, query, given_rows=None):
+                self.calls.append(("query", query, given_rows))
                 return FakePromise()
 
             def commit(self):
@@ -7060,7 +7060,8 @@ class TypeDBOntologyRepositoryTests(unittest.TestCase):
         with patch.object(repository, "open_driver", return_value=driver), \
                 patch.object(repository, "close_driver"), \
                 patch.object(repository, "ensure_database"), \
-                patch.object(repository, "inferencebox_insert_queries", return_value=["insert one", "insert two", "insert three"]), \
+                patch.object(repository, "batched_node_insert_queries", return_value=["insert one", "insert two", "insert three"]), \
+                patch.object(repository, "inferencebox_given_relation_insert_plans", return_value=[]), \
                 patch.object(repository, "inferencebox_write_transaction_query_count", return_value=2):
             result = repository.write_inferencebox_graph(graph)
 
@@ -7070,6 +7071,74 @@ class TypeDBOntologyRepositoryTests(unittest.TestCase):
             ["insert one", "insert two", "insert three"],
             [item[1] for item in driver.calls if item[0] == "query"],
         )
+
+    def test_typedb_inferencebox_write_streams_same_shape_relations_as_given_rows(self):
+        class FakePromise:
+            def resolve(self):
+                return []
+
+        class FakeTransaction:
+            def __init__(self, calls):
+                self.calls = calls
+
+            def __enter__(self):
+                return self
+
+            def __exit__(self, _exc_type, _exc, _traceback):
+                return False
+
+            def query(self, query, given_rows=None):
+                self.calls.append(("query", query, given_rows))
+                return FakePromise()
+
+            def commit(self):
+                self.calls.append(("commit", "", None))
+
+        class FakeDriver:
+            def __init__(self):
+                self.calls = []
+
+            def transaction(self, *_args, **_kwargs):
+                return FakeTransaction(self.calls)
+
+        graph = PortfolioOntology(
+            "typedb-inference-given",
+            entities=[
+                OntologyEntity("stock:005930", "Samsung", "stock", {
+                    "ontologyBox": "InferenceBox",
+                }),
+                OntologyEntity("risk:005930", "Risk", "inferred-risk", {
+                    "ontologyBox": "InferenceBox",
+                }),
+                OntologyEntity("trace:005930", "Trace", "inference-trace", {
+                    "ontologyBox": "InferenceBox",
+                }),
+            ],
+            relations=[
+                OntologyRelation("stock:005930", "risk:005930", "HAS_INFERRED_RISK", properties={
+                    "ontologyBox": "InferenceBox",
+                }),
+                OntologyRelation("stock:005930", "trace:005930", "HAS_INFERENCE_TRACE", properties={
+                    "ontologyBox": "InferenceBox",
+                }),
+            ],
+        )
+        repository = TypeDBOntologyGraphRepository("127.0.0.1:1729", retry_count=0)
+        driver = FakeDriver()
+
+        with patch.object(repository, "open_driver", return_value=driver), \
+                patch.object(repository, "close_driver"), \
+                patch.object(repository, "ensure_database"), \
+                patch.object(repository, "batched_node_insert_queries", return_value=[]):
+            result = repository.write_inferencebox_graph(graph)
+
+        given_calls = [
+            item for item in driver.calls
+            if item[0] == "query" and item[2]
+        ]
+        self.assertEqual(2, sum(len(item[2]) for item in given_calls))
+        self.assertEqual("given-rows", result["writeTiming"]["relationWriteMode"])
+        self.assertEqual(2, result["writeTiming"]["relationGivenRowCount"])
 
     def test_typedb_inferencebox_write_transaction_query_count_is_bounded(self):
         repository = TypeDBOntologyGraphRepository("127.0.0.1:1729")
@@ -8078,6 +8147,30 @@ class TypeDBOntologyRepositoryTests(unittest.TestCase):
             snapshot = repository.rulebox_snapshot()
 
         self.assertTrue(snapshot["cached"])
+        self.assertTrue(snapshot["ruleBoxSnapshotCached"])
+
+    def test_typedb_rulebox_snapshot_reuses_rows_when_static_manifest_is_unchanged(self):
+        repository = TypeDBOntologyGraphRepository("127.0.0.1:1729")
+        repository._rulebox_snapshot_cache_at = time.time() - 90
+        repository._rulebox_snapshot_cache_full_load_at = time.time() - 90
+        repository._rulebox_snapshot_cache_result = {
+            "status": "ok",
+            "rules": [],
+            "ruleCount": 0,
+            "ruleboxSnapshotId": "rulebox:snapshot:stable",
+        }
+
+        with patch.object(repository, "read_seed_static_manifest", return_value={
+            "status": "ok",
+            "metadata": {"ruleboxSnapshotId": "rulebox:snapshot:stable"},
+        }), patch.object(
+            repository,
+            "read_entity_rows",
+            side_effect=AssertionError("stable RuleBox rows should not be reloaded"),
+        ):
+            snapshot = repository.rulebox_snapshot()
+
+        self.assertTrue(snapshot["ruleBoxManifestRevalidated"])
         self.assertTrue(snapshot["ruleBoxSnapshotCached"])
 
     def test_typedb_inferencebox_scoped_helpers_filter_generation_and_symbol(self):

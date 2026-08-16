@@ -695,6 +695,7 @@ def _semantic_properties(values: Mapping[str, object]) -> Dict[str, object]:
         for key, value in dict(values or {}).items()
         if re.sub(r"[^a-z0-9]", "", str(key or "").lower()) not in _GENERATED_SCOPE_PROPERTY_KEYS
         and re.sub(r"[^a-z0-9]", "", str(key or "").lower()) not in _IMMATERIAL_OBSERVATION_PROPERTY_KEYS
+        and re.sub(r"[^a-z0-9]", "", str(key or "").lower()) not in _SEMANTIC_METADATA_FIELDS
     }
 
 
@@ -980,6 +981,7 @@ def _scope_fragment_payloads_with_semantic_fingerprints_and_dependencies(
             for key in dict(raw_values or {})
             if re.sub(r"[^a-z0-9]", "", str(key or "").lower()) not in _GENERATED_SCOPE_PROPERTY_KEYS
             and re.sub(r"[^a-z0-9]", "", str(key or "").lower()) not in _IMMATERIAL_OBSERVATION_PROPERTY_KEYS
+            and re.sub(r"[^a-z0-9]", "", str(key or "").lower()) not in _SEMANTIC_METADATA_FIELDS
         }
 
     for entity in graph.entities:
@@ -1952,6 +1954,32 @@ def select_target_scoped_manifest_patch(
             continue
         selected.add(scope_id)
         record_direct_change(scope_id, item)
+
+    # An authoritative mailbox event owns a narrow set of fact slots. A
+    # symbol-less link whose assertion did not change can still receive a new
+    # storage generation only because one of its global endpoints was rebuilt
+    # while assembling the complete in-memory graph. Rebinding that unrelated
+    # link expands a calendar/news update into reference, profile, exposure,
+    # and macro writes. Keep the active link and endpoint generations until
+    # their own source event reports a semantic or rule-dependency change.
+    if bool((fact_slot_plan or {}).get("eventBoundaryAuthoritative")):
+        persistence_only_shared_links = {
+            scope_id
+            for scope_id in selected
+            if _scope_type(scope_id) == "link"
+            and not scope_symbol(scope_id)
+            and bool(selection_reasons.get(scope_id))
+            and set(selection_reasons.get(scope_id) or []).issubset({
+                "persistence-dependency-rebind",
+                "generation-only-change",
+            })
+        }
+        selected.difference_update(persistence_only_shared_links)
+        for scope_id in persistence_only_shared_links:
+            selection_reasons.setdefault(scope_id, set()).update({
+                "deferred-shared-persistence-rebind",
+                "deferred-unrelated-event-fact-slot",
+            })
     fact_slot_selection = select_fact_slot_scope_ids(
         incoming,
         selected,

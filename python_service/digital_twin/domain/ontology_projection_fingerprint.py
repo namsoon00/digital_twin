@@ -13,6 +13,7 @@ VOLATILE_LIFECYCLE_KEYS = {
     "activeTboxRelationCount",
     "asOf",
     "checkedAt",
+    "createdAt",
     "fetchedAt",
     "firstObservedAt",
     "generatedAt",

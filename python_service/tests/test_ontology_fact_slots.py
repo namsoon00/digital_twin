@@ -350,6 +350,66 @@ class OntologyFactSlotTests(unittest.TestCase):
         self.assertNotIn("market", plan["slotFamiliesBySymbol"]["005930"])
         self.assertNotIn("financial", plan["slotFamiliesBySymbol"]["005930"])
 
+    def test_authoritative_event_defers_unrelated_shared_link_rebind(self):
+        graph = PortfolioOntology(
+            "main",
+            entities=[
+                OntologyEntity("temporal:005930", "Temporal", "temporal-observation", {
+                    "ontologyBox": "ABox", "symbol": "005930", "return1d": 1,
+                }),
+                OntologyEntity("portfolio:main", "Portfolio", "portfolio", {
+                    "ontologyBox": "ABox", "accountId": "main",
+                }),
+                OntologyEntity("reference:taxonomy", "Taxonomy", "catalog-entry", {
+                    "ontologyBox": "ABox", "version": "1",
+                }),
+            ],
+            relations=[OntologyRelation(
+                "portfolio:main",
+                "reference:taxonomy",
+                "USES_REFERENCE",
+                properties={"ontologyBox": "ABox"},
+            )],
+        )
+        first = apply_scoped_abox_identity(graph, world_id="portfolio:local:test")
+        active = {
+            "status": "ok",
+            "scopedAboxManifestVersion": SCOPED_ABOX_MANIFEST_VERSION,
+            "scopeTopologyVersion": SCOPED_ABOX_SCOPE_TOPOLOGY_VERSION,
+            "scopePlan": [deepcopy(item) for item in first["scopePlan"]],
+            "scopeGenerationIds": dict(first["scopeGenerationIds"]),
+            "scopeFingerprints": dict(first["scopeFingerprints"]),
+        }
+        graph.entities[0].properties["return1d"] = 2
+        graph.entities[2].properties["version"] = "2"
+        apply_scoped_abox_identity(graph, world_id="portfolio:local:test")
+
+        selection = select_target_scoped_manifest_patch(
+            graph,
+            active,
+            ["005930"],
+            fact_slot_plan=build_fact_slot_projection_plan(
+                ["005930"],
+                ["temporal"],
+                requested_fact_families_by_symbol={"005930": ["temporal"]},
+                changed_fields_by_symbol={"005930": ["price_path"]},
+                event_boundary_authoritative=True,
+            ),
+        )
+
+        self.assertEqual(1, len(selection["selectedIncomingScopeIds"]))
+        self.assertIn(":temporal:", selection["selectedIncomingScopeIds"][0])
+        shared_link = next(
+            scope_id for scope_id in selection["deferredScopeIds"]
+            if scope_id.startswith("link:account:")
+        )
+        trace = {
+            item["scopeId"]: item
+            for item in selection["scopeSelectionTrace"]["deferred"]
+        }
+        self.assertIn("persistence-dependency-rebind", trace[shared_link]["reasons"])
+        self.assertIn("deferred-shared-persistence-rebind", trace[shared_link]["reasons"])
+
 
 if __name__ == "__main__":
     unittest.main()

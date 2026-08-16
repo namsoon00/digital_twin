@@ -12,6 +12,7 @@ from ..domain.independent_reasoning import (
     IndependentReasoningRequest,
     IndependentReasoningResult,
     independent_reasoning_request,
+    reasoning_event_scope,
 )
 from ..domain.investment_reasoning import FactDelta
 from ..domain.message_types import PORTFOLIO_ONTOLOGY_SIGNAL
@@ -687,12 +688,20 @@ class IndependentReasoningJobRunner:
         batch_key = self.batch_compatibility_key(jobs[0])
         reasoning_lane = self.reasoning_lane(jobs[0])
         compatible_jobs = [job for job in jobs if self.batch_compatibility_key(job) == batch_key]
-        selected_jobs = compatible_jobs[:self.lane_batch_limit(reasoning_lane)]
+        lane_limit = self.lane_batch_limit(reasoning_lane)
+        selected_jobs, capacity_deferred_jobs = self.select_native_bounded_jobs(
+            compatible_jobs[:lane_limit]
+        )
         deferred_jobs = [job for job in jobs if job not in selected_jobs]
         for job in deferred_jobs:
+            capacity_deferred = job in capacity_deferred_jobs
             self.queue.defer(
                 job["jobId"],
-                "A different point-in-time boundary owns the current V2 batch.",
+                (
+                    "The current V2 micro-batch reached the native TypeDB target-symbol limit."
+                    if capacity_deferred
+                    else "A different point-in-time boundary owns the current V2 batch."
+                ),
                 1,
             )
         job_ids = [job["jobId"] for job in selected_jobs]
@@ -725,6 +734,8 @@ class IndependentReasoningJobRunner:
             result["batch_job_count"] = len(selected_jobs)
             result["batch_job_ids"] = job_ids
             result["reasoning_lane"] = reasoning_lane
+            result["native_target_symbol_limit"] = self.native_target_symbol_limit()
+            result["capacity_deferred_job_count"] = len(capacity_deferred_jobs)
             status = str(result.get("status") or "")
             if status == "deferred" and result.get("retryable"):
                 for job_id in job_ids:
@@ -828,6 +839,42 @@ class IndependentReasoningJobRunner:
             "RECONCILIATION": ("reasoningEngineV2ReconciliationBatchSize", 6),
         }.get(str(lane or "CONTEXT"), ("reasoningEngineV2ContextBatchSize", 3))
         return _int_setting(self.settings, key, fallback, 1, 20)
+
+    def native_target_symbol_limit(self) -> int:
+        return _int_setting(
+            self.settings,
+            "typedbNativeRuleTargetSymbolLimit",
+            4,
+            1,
+            200,
+        )
+
+    @staticmethod
+    def job_symbols(job: Mapping[str, object]):
+        event = DomainEvent.from_dict(dict(job.get("sourceEvent") or {}))
+        return tuple(reasoning_event_scope(event).get("symbols") or [])
+
+    def select_native_bounded_jobs(self, jobs):
+        """Fit compatible jobs into one complete native subject generation.
+
+        The projection adapter enforces the same target-symbol limit. Keeping
+        the queue selection within that boundary prevents a six-job
+        reconciliation batch from completing even though TypeDB evaluated
+        only its first four unique symbols.
+        """
+        selected = []
+        deferred = []
+        selected_symbols = set()
+        limit = self.native_target_symbol_limit()
+        for job in jobs or []:
+            symbols = set(self.job_symbols(job))
+            combined = selected_symbols | symbols
+            if selected and symbols and len(combined) > limit:
+                deferred.append(job)
+                continue
+            selected.append(job)
+            selected_symbols = combined
+        return selected, deferred
 
     def heartbeat_seconds(self) -> int:
         return _int_setting(self.settings, "reasoningEngineV2HeartbeatSeconds", 15, 2, 120)

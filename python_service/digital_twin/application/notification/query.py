@@ -31,20 +31,33 @@ class NotificationTraceQueryService:
             })
         for attempt in attempts:
             timeline.append({
-                "kind": "deliveryAttempt",
-                "id": str(attempt.get("attemptId") or ""),
+                "kind": "deliveryAttemptStarted",
+                "id": str(attempt.get("attemptId") or "") + ":started",
                 "at": str(attempt.get("startedAt") or ""),
                 "stage": "dispatching",
-                "outcome": str(attempt.get("status") or ""),
-                "reason": str(attempt.get("reason") or ""),
+                "outcome": "started",
+                "reason": "",
                 "metadata": {
                     "channel": str(attempt.get("channel") or ""),
                     "audience": str(attempt.get("audience") or ""),
-                    "provider": str(attempt.get("provider") or ""),
-                    "completedAt": str(attempt.get("completedAt") or ""),
                     **dict(attempt.get("metadata") or {}),
                 },
             })
+            if str(attempt.get("completedAt") or ""):
+                timeline.append({
+                    "kind": "deliveryAttemptCompleted",
+                    "id": str(attempt.get("attemptId") or "") + ":completed",
+                    "at": str(attempt.get("completedAt") or ""),
+                    "stage": "delivery_result",
+                    "outcome": str(attempt.get("status") or ""),
+                    "reason": str(attempt.get("reason") or ""),
+                    "metadata": {
+                        "channel": str(attempt.get("channel") or ""),
+                        "audience": str(attempt.get("audience") or ""),
+                        "provider": str(attempt.get("provider") or ""),
+                        **dict(attempt.get("metadata") or {}),
+                    },
+                })
         timeline.sort(key=lambda item: (item.get("at") or "", item.get("id") or ""))
         for sequence, item in enumerate(timeline, start=1):
             item["sequence"] = sequence

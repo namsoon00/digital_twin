@@ -181,11 +181,12 @@ class NotificationModularizationTests(unittest.TestCase):
 
         self.assertEqual("notification-trace-v1", trace["contractVersion"])
         self.assertEqual(
-            ["received", "rendered", "dispatching"],
+            ["received", "rendered", "dispatching", "delivery_result"],
             [item["stage"] for item in trace["timeline"]],
         )
-        self.assertEqual([1, 2, 3], [item["sequence"] for item in trace["timeline"]])
-        self.assertEqual("Telegram", trace["timeline"][2]["metadata"]["provider"])
+        self.assertEqual([1, 2, 3, 4], [item["sequence"] for item in trace["timeline"]])
+        self.assertEqual("started", trace["timeline"][2]["outcome"])
+        self.assertEqual("Telegram", trace["timeline"][3]["metadata"]["provider"])
 
     def test_lifecycle_contract_rejects_out_of_order_delivery(self):
         self.assertTrue(notification_transition_allowed("rendered", "dispatching"))

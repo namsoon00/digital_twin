@@ -71,7 +71,10 @@ The old `application/notification_service.py` and
    hashed.
 6. A delivery attempt is stored before calling Telegram or another channel.
 7. The attempt and terminal lifecycle state are updated after the channel
-   result. Failed jobs remain retryable under the existing queue policy.
+   result. The read model exposes attempt start and channel completion as
+   separate timeline entries so a mutable final attempt status cannot appear
+   at its earlier start time. Failed jobs remain retryable under the existing
+   queue policy.
 8. `/api/notification-jobs/{id}` returns the complete lifecycle and delivery
    timeline. The notification detail UI displays it in stored chronological
    order and exposes the full JSON audit payload.

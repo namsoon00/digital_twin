@@ -22257,6 +22257,7 @@
       ready_to_render: "렌더링 준비",
       rendered: "메시지 렌더링",
       dispatching: "채널 전송 시도",
+      delivery_result: "채널 전송 결과",
       delivered: "발송 완료",
       suppressed: "발송 보류",
       superseded: "최신 요청으로 대체",

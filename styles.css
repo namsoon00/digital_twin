@@ -24743,6 +24743,573 @@ html[data-theme="dark"] .ontology-graph-expanded-toolbar .icon-button.danger {
   }
 }
 
+/* Instrument workspace: price, decisions and auditable events share one stable detail surface. */
+.instrument-workspace-tabs {
+  position: sticky;
+  top: 0;
+  z-index: 5;
+  display: grid;
+  grid-template-columns: repeat(4, minmax(0, 1fr));
+  gap: 4px;
+  margin: -24px -24px 20px;
+  padding: 10px 24px;
+  border-bottom: 1px solid var(--line);
+  background: color-mix(in srgb, var(--panel) 96%, transparent);
+}
+
+.instrument-workspace-tabs button,
+.instrument-range-control button {
+  min-width: 0;
+  min-height: 42px;
+  border: 1px solid transparent;
+  border-radius: 5px;
+  background: transparent;
+  color: var(--muted);
+  font: inherit;
+  font-size: 13px;
+  font-weight: 850;
+  cursor: pointer;
+}
+
+.instrument-workspace-tabs button.active,
+.instrument-range-control button.active {
+  border-color: color-mix(in srgb, var(--blue) 45%, var(--line));
+  background: color-mix(in srgb, var(--blue) 10%, var(--panel));
+  color: var(--ink);
+  box-shadow: inset 0 -2px 0 var(--blue);
+}
+
+.instrument-workspace-tabs button:focus-visible,
+.instrument-range-control button:focus-visible {
+  outline: 2px solid var(--focus);
+  outline-offset: 2px;
+}
+
+.instrument-workspace-body,
+.instrument-chart-workspace,
+.instrument-decision-workspace,
+.instrument-timeline-workspace {
+  display: grid;
+  gap: 16px;
+  min-width: 0;
+}
+
+.instrument-summary-grid {
+  display: grid;
+  grid-template-columns: minmax(0, 1.15fr) minmax(0, .85fr);
+  gap: 16px;
+  min-width: 0;
+}
+
+.instrument-current-state {
+  display: grid;
+  grid-template-columns: minmax(180px, .45fr) minmax(0, 1fr);
+  align-items: center;
+  gap: 18px;
+}
+
+.instrument-current-state > div,
+.instrument-link-summary,
+.instrument-link-summary > span {
+  display: grid;
+  gap: 5px;
+}
+
+.instrument-current-state p,
+.instrument-link-summary em {
+  margin: 0;
+  color: var(--muted);
+  font-style: normal;
+  line-height: 1.55;
+}
+
+.instrument-link-summary > span + span {
+  padding-top: 12px;
+  border-top: 1px solid var(--line);
+}
+
+.instrument-data-contract,
+.instrument-source-strip > div {
+  display: flex;
+  align-items: center;
+  gap: 10px;
+  min-width: 0;
+  padding: 12px 14px;
+  border: 1px solid var(--line);
+  border-radius: 6px;
+  background: var(--panel-soft);
+}
+
+.instrument-context-link {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: 14px;
+  margin-bottom: 14px;
+  padding: 12px 14px;
+  border: 1px solid color-mix(in srgb, var(--blue) 38%, var(--line));
+  border-radius: 6px;
+  background: color-mix(in srgb, var(--blue) 7%, var(--panel));
+}
+
+.instrument-context-link > span {
+  display: grid;
+  gap: 3px;
+  min-width: 0;
+}
+
+.instrument-context-link em {
+  color: var(--muted);
+  font-size: 12px;
+  font-style: normal;
+  overflow-wrap: anywhere;
+}
+
+.instrument-data-contract p,
+.instrument-source-strip p {
+  display: grid;
+  gap: 2px;
+  min-width: 0;
+  margin: 0;
+}
+
+.instrument-data-contract em,
+.instrument-source-strip em {
+  color: var(--muted);
+  font-size: 12px;
+  font-style: normal;
+  overflow-wrap: anywhere;
+}
+
+.instrument-chart-workspace > header,
+.instrument-decision-workspace > header,
+.instrument-timeline-workspace > header {
+  display: flex;
+  align-items: flex-start;
+  justify-content: space-between;
+  gap: 16px;
+}
+
+.instrument-chart-workspace > header > div,
+.instrument-decision-workspace > header > div,
+.instrument-timeline-workspace > header > div {
+  display: grid;
+  gap: 5px;
+  min-width: 0;
+}
+
+.instrument-chart-workspace h3,
+.instrument-decision-workspace h3,
+.instrument-timeline-workspace h3 {
+  margin: 0;
+  color: var(--ink);
+  font-size: 20px;
+  letter-spacing: 0;
+}
+
+.instrument-chart-workspace header p,
+.instrument-decision-workspace header p,
+.instrument-timeline-workspace header p {
+  margin: 0;
+  color: var(--muted);
+  line-height: 1.5;
+}
+
+.instrument-range-control {
+  display: grid;
+  grid-template-columns: repeat(8, minmax(0, 1fr));
+  gap: 4px;
+  padding: 4px;
+  border: 1px solid var(--line);
+  border-radius: 7px;
+  background: var(--panel-soft);
+}
+
+.instrument-chart-meta {
+  display: grid;
+  grid-template-columns: repeat(4, minmax(0, 1fr));
+  border: 1px solid var(--line);
+  border-radius: 6px;
+  background: var(--panel);
+}
+
+.instrument-chart-meta span {
+  display: grid;
+  gap: 4px;
+  min-width: 0;
+  padding: 10px 12px;
+  color: var(--muted);
+  font-size: 12px;
+}
+
+.instrument-chart-meta span + span {
+  border-left: 1px solid var(--line);
+}
+
+.instrument-chart-meta strong {
+  color: var(--ink);
+  font-size: 14px;
+  overflow-wrap: anywhere;
+}
+
+.instrument-candle-chart {
+  width: 100%;
+  min-width: 0;
+  height: 430px;
+  border: 1px solid var(--line);
+  border-radius: 6px;
+  background: var(--panel);
+  overflow: hidden;
+}
+
+.instrument-chart-state,
+.instrument-empty {
+  display: grid;
+  place-items: center;
+  gap: 8px;
+  min-height: 260px;
+  padding: 28px;
+  border: 1px solid var(--line);
+  border-radius: 6px;
+  background: var(--panel-soft);
+  color: var(--ink);
+  text-align: center;
+}
+
+.instrument-chart-state p,
+.instrument-empty p {
+  max-width: 620px;
+  margin: 0;
+  color: var(--muted);
+  line-height: 1.55;
+}
+
+.instrument-chart-state.is-loading > span {
+  width: 24px;
+  height: 24px;
+  border: 2px solid color-mix(in srgb, var(--blue) 24%, var(--line));
+  border-top-color: var(--blue);
+  border-radius: 50%;
+  animation: oa-refresh-spin .8s linear infinite;
+}
+
+.instrument-chart-state.is-error {
+  border-color: color-mix(in srgb, var(--red) 45%, var(--line));
+  color: var(--red);
+}
+
+.instrument-event-legend {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 8px;
+}
+
+.instrument-event-legend span {
+  padding: 6px 9px;
+  border: 1px solid var(--line);
+  border-left-width: 3px;
+  border-radius: 4px;
+  color: var(--muted);
+  background: var(--panel);
+  font-size: 12px;
+  font-weight: 800;
+}
+
+.instrument-event-legend .evidence { border-left-color: #2563a6; }
+.instrument-event-legend .calendar { border-left-color: #c6871a; }
+.instrument-event-legend .decision { border-left-color: #0f8f72; }
+.instrument-event-legend .hypothesis { border-left-color: #7c5cbf; }
+.instrument-event-legend .notification { border-left-color: #c9485b; }
+
+.instrument-source-strip {
+  display: grid;
+  grid-template-columns: repeat(3, minmax(0, 1fr));
+  gap: 8px;
+}
+
+.instrument-timeline-list {
+  display: grid;
+  min-width: 0;
+  border: 1px solid var(--line);
+  border-radius: 6px;
+  background: var(--panel);
+  overflow: hidden;
+}
+
+.instrument-timeline-event {
+  display: grid;
+  grid-template-columns: 172px 92px minmax(0, 1fr) auto;
+  align-items: start;
+  gap: 14px;
+  min-width: 0;
+  padding: 14px;
+  border-left: 3px solid var(--blue);
+}
+
+.instrument-timeline-event + .instrument-timeline-event {
+  border-top: 1px solid var(--line);
+}
+
+.instrument-timeline-event.positive { border-left-color: #0f8f72; }
+.instrument-timeline-event.negative { border-left-color: #c9485b; }
+.instrument-timeline-event.warning { border-left-color: #c6871a; }
+
+.instrument-timeline-event time,
+.instrument-event-type {
+  color: var(--muted);
+  font-size: 12px;
+  font-weight: 800;
+  line-height: 1.45;
+}
+
+.instrument-timeline-event > div {
+  display: grid;
+  gap: 4px;
+  min-width: 0;
+}
+
+.instrument-timeline-event p,
+.instrument-timeline-event em {
+  margin: 0;
+  color: var(--muted);
+  font-size: 13px;
+  font-style: normal;
+  line-height: 1.5;
+  overflow-wrap: anywhere;
+}
+
+.market-flow-workspace {
+  display: grid;
+  grid-template-columns: minmax(0, 1.5fr) minmax(280px, .5fr);
+  gap: 12px;
+  min-width: 0;
+}
+
+@media (max-width: 860px) {
+  .console-shell.web-style-shell,
+  .console-shell.web-style-shell.shell-home,
+  .console-shell.web-style-shell.shell-page {
+    gap: 10px;
+    padding-bottom: calc(var(--bottom-tabs-height) + env(safe-area-inset-bottom) + 20px) !important;
+  }
+
+  .console-shell.web-style-shell .app-nav {
+    grid-template-columns: minmax(0, 1fr) 46px auto !important;
+    grid-template-rows: 46px !important;
+    gap: 6px !important;
+  }
+
+  .console-shell .app-nav-brand {
+    grid-column: 1 !important;
+    grid-row: 1 !important;
+  }
+
+  .console-shell .app-nav-tabs {
+    display: none !important;
+  }
+
+  .console-shell .app-nav-menu {
+    position: relative;
+    grid-column: 2 !important;
+    grid-row: 1 !important;
+    display: block !important;
+    align-self: center;
+  }
+
+  .console-shell .app-nav-menu summary {
+    display: grid;
+    place-items: center;
+    width: 42px;
+    height: 42px;
+    padding: 0;
+    border: 1px solid #334155;
+    border-radius: 6px;
+    color: #f8fafc;
+    cursor: pointer;
+    list-style: none;
+  }
+
+  .console-shell .app-nav-menu summary::-webkit-details-marker,
+  .console-shell .app-nav-menu summary span {
+    display: none;
+  }
+
+  .console-shell .app-nav-menu summary strong {
+    font-size: 11px;
+  }
+
+  .console-shell .app-nav-menu-list {
+    position: absolute;
+    top: 48px;
+    right: 0;
+    z-index: 60;
+    display: grid;
+    width: 180px;
+    padding: 6px;
+    border: 1px solid #334155;
+    border-radius: 6px;
+    background: var(--oa-nav);
+    box-shadow: 0 14px 36px rgba(0, 0, 0, .28);
+  }
+
+  .console-shell .app-nav-menu-item {
+    min-height: 44px;
+    border: 0;
+    border-radius: 4px;
+    background: transparent;
+    color: #dbe4ef;
+    text-align: left;
+  }
+
+  .console-shell .app-nav-tools {
+    grid-column: 3 !important;
+    grid-row: 1 !important;
+  }
+
+  .console-shell .symbol-refresh-nav-task {
+    display: none !important;
+  }
+
+  .console-shell .workspace-layout > .tab-bar {
+    position: fixed !important;
+    right: 0 !important;
+    bottom: 0 !important;
+    left: 0 !important;
+    z-index: 1200 !important;
+    display: grid !important;
+    grid-template-columns: repeat(5, minmax(0, 1fr)) !important;
+    gap: 0 !important;
+    width: 100% !important;
+    min-height: calc(var(--bottom-tabs-height) + env(safe-area-inset-bottom)) !important;
+    padding: 5px 6px calc(5px + env(safe-area-inset-bottom)) !important;
+    border-width: 1px 0 0 !important;
+    border-radius: 0 !important;
+    background: color-mix(in srgb, var(--panel) 96%, transparent) !important;
+    box-shadow: 0 -8px 24px rgba(15, 23, 42, .12) !important;
+    transform: none !important;
+  }
+
+  .console-shell .workspace-layout > .tab-bar button {
+    min-height: 52px;
+    padding: 0 2px;
+    border-radius: 5px;
+    font-size: 12px;
+  }
+
+  .console-shell .workspace-layout > .tab-bar .tab-description {
+    display: none;
+  }
+
+  .instrument-workspace-tabs {
+    margin: -20px -16px 16px;
+    padding: 8px 12px;
+  }
+
+  .instrument-summary-grid,
+  .market-flow-workspace {
+    grid-template-columns: minmax(0, 1fr);
+  }
+
+  .instrument-current-state {
+    grid-template-columns: minmax(0, 1fr);
+    gap: 8px;
+  }
+
+  .instrument-range-control {
+    grid-template-columns: repeat(4, minmax(0, 1fr));
+  }
+
+  .instrument-chart-meta {
+    grid-template-columns: repeat(2, minmax(0, 1fr));
+  }
+
+  .instrument-chart-meta span:nth-child(3) {
+    border-top: 1px solid var(--line);
+    border-left: 0;
+  }
+
+  .instrument-chart-meta span:nth-child(4) {
+    border-top: 1px solid var(--line);
+  }
+
+  .instrument-candle-chart {
+    height: min(420px, 62dvh);
+  }
+
+  .instrument-source-strip {
+    grid-template-columns: minmax(0, 1fr);
+  }
+
+  .instrument-timeline-event {
+    grid-template-columns: minmax(0, 1fr) auto;
+    gap: 6px 10px;
+    padding: 13px 12px;
+  }
+
+  .instrument-timeline-event time,
+  .instrument-event-type {
+    grid-column: 1;
+  }
+
+  .instrument-timeline-event > div {
+    grid-column: 1 / -1;
+  }
+
+  .instrument-timeline-event > .mini-button {
+    grid-column: 2;
+    grid-row: 1 / span 2;
+    align-self: center;
+  }
+}
+
+@media (max-width: 420px) {
+  .console-shell .app-nav-tabs {
+    display: none !important;
+  }
+
+  .console-shell .app-brand-mark {
+    width: 38px;
+    height: 38px;
+  }
+
+  .console-shell .app-nav-tools .icon-button,
+  .console-shell .app-nav-menu summary {
+    width: 38px;
+    min-width: 38px;
+    height: 38px;
+  }
+
+  .instrument-workspace-tabs {
+    gap: 2px;
+    padding-inline: 8px;
+  }
+
+  .instrument-workspace-tabs button {
+    min-height: 40px;
+    padding-inline: 2px;
+    font-size: 12px;
+  }
+
+  .instrument-chart-workspace > header,
+  .instrument-decision-workspace > header,
+  .instrument-timeline-workspace > header,
+  .instrument-data-contract,
+  .instrument-source-strip > div {
+    align-items: flex-start;
+  }
+
+  .instrument-context-link {
+    align-items: stretch;
+    flex-direction: column;
+  }
+
+  .instrument-chart-workspace > header,
+  .instrument-decision-workspace > header,
+  .instrument-timeline-workspace > header {
+    flex-direction: column;
+  }
+}
+
 /* PC card type taxonomy layer */
 [data-card-type] {
   --card-type-accent: var(--ds-card-status-neutral);
@@ -33175,5 +33742,53 @@ body.oa-overlay-open {
     max-height: 100dvh;
     overflow-x: hidden !important;
     overflow-y: auto !important;
+  }
+
+  /* Final mobile shell lock: later legacy rules must not restore seven top tabs. */
+  .console-shell.web-style-shell .app-nav {
+    grid-template-columns: minmax(0, 1fr) 46px auto !important;
+    grid-template-rows: 46px !important;
+    gap: 6px !important;
+  }
+
+  .console-shell .app-nav-brand {
+    grid-column: 1 !important;
+    grid-row: 1 !important;
+  }
+
+  .console-shell .app-nav-tabs {
+    display: none !important;
+  }
+
+  .console-shell .app-nav-menu {
+    grid-column: 2 !important;
+    grid-row: 1 !important;
+    display: block !important;
+  }
+
+  .console-shell .app-nav-tools {
+    grid-column: 3 !important;
+    grid-row: 1 !important;
+  }
+
+  .console-shell .workspace-layout > .tab-bar {
+    position: fixed !important;
+    right: 0 !important;
+    bottom: 0 !important;
+    left: 0 !important;
+    z-index: 1200 !important;
+    display: grid !important;
+    grid-template-columns: repeat(5, minmax(0, 1fr)) !important;
+    gap: 0 !important;
+    width: 100% !important;
+    min-height: calc(var(--bottom-tabs-height) + env(safe-area-inset-bottom)) !important;
+    padding: 5px 6px calc(5px + env(safe-area-inset-bottom)) !important;
+    border-width: 1px 0 0 !important;
+    border-radius: 0 !important;
+    transform: none !important;
+  }
+
+  .console-shell .workspace-layout > .tab-bar .tab-description {
+    display: none !important;
   }
 }

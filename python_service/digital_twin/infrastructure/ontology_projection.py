@@ -5270,8 +5270,18 @@ class PortfolioOntologyProjectionRecorder:
         of them in one native TypeDB cycle defeats the worker's configured
         per-cycle symbol bound. The complete ABox remains active for each
         rule; only the current RuleBox subjects are sequenced across cycles.
+        An explicit request is already a complete scheduler decision and must
+        never be refilled with unrelated holdings merely because the configured
+        upper bound has spare capacity.
         """
+        requested = (
+            self.inference_symbols(snapshot, requested_symbols)
+            if requested_symbols
+            else []
+        )
         limit = self.native_inference_symbol_limit()
+        if requested:
+            return requested[:limit] if limit else requested
         if not limit:
             return list(inferred_symbols or [])
         try:
@@ -5280,10 +5290,9 @@ class PortfolioOntologyProjectionRecorder:
             scheduled_limit = 0
         if scheduled_limit:
             limit = min(limit, scheduled_limit)
-        requested = self.inference_symbols(snapshot, requested_symbols)
         available = self.snapshot_symbols(snapshot)
         ordered = []
-        for symbol in list(requested) + list(inferred_symbols or []) + available:
+        for symbol in list(inferred_symbols or []) + available:
             clean = str(symbol or "").upper().strip()
             if clean and clean in available and clean not in ordered:
                 ordered.append(clean)

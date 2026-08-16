@@ -597,7 +597,7 @@ class OntologyInferenceQualityTests(unittest.TestCase):
         )
         recorder = PortfolioOntologyProjectionRecorder(
             MemoryProjectionRepository(),
-            settings={"typedbNativeRuleTargetSymbolLimit": "1"},
+            settings={"typedbNativeRuleTargetSymbolLimit": "3"},
         )
 
         symbols = recorder.bounded_native_inference_symbols(

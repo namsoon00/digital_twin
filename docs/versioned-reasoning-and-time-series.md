@@ -394,6 +394,37 @@ with `TYPEDB_NATIVE_RULE_DURABLE_PREFLIGHT_FALLBACK_ENABLED=0`. It can be
 enabled for diagnostics or a controlled rollback without changing inference
 semantics.
 
+## Projection Namespace And Incremental Proof
+
+V1, V2, and a future V3 may share MySQL infrastructure, but they must never
+share projection proof rows. Every projection run and native-rule result slot
+is bound to one execution namespace derived from:
+
+- reasoning-engine deployment ID;
+- concrete TypeDB database;
+- immutable release fingerprint;
+- validation cohort ID.
+
+The TypeDB databases remain physically separate. The MySQL namespace prevents
+their audit and incremental-execution indexes from being mistaken for one
+another.
+
+Incremental rule execution is allowed only after every enabled RuleBox rule
+for each target symbol has a result from one coherent inference generation,
+source ABox, projection run, scope plan, and input fingerprint. Matching row
+counts assembled from several generations are invalid. When this proof is
+missing, the engine performs one complete native RuleBox bootstrap. A later
+incremental run inherits the unaffected states from that single prior
+generation, replaces all executed rule states with current TypeDB outcomes,
+and writes a new complete generation. MySQL schedules this work but never
+evaluates an investment rule.
+
+Source events also retain their verified fact-change boundary through the V2
+queue. For example, a news or calendar update may project evidence, temporal,
+and required link scopes without replaying unrelated price, position, macro,
+or company-value scopes. An unclassified event fails closed to the existing
+conservative target projection.
+
 ## Adding V3 Or Another Database
 
 For V3, implement `InvestmentReasoningEngine`, register a new immutable release

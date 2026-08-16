@@ -308,7 +308,7 @@ class OntologyFactSlotTests(unittest.TestCase):
         self.assertIn("semantic-value-change", selected_trace[market_scope]["reasons"])
         self.assertIn("event-fact-slot", selected_trace[market_scope]["reasons"])
         self.assertIn("market", selected_trace[market_scope]["semanticChangedFamilies"])
-        self.assertTrue(any(
+        self.assertFalse(any(
             "required-changed-link-endpoint" in item["reasons"]
             for item in selected_trace.values()
         ))
@@ -329,6 +329,23 @@ class OntologyFactSlotTests(unittest.TestCase):
             "deferred-unrelated-event-fact-slot",
             deferred_trace[evidence_scope]["reasons"],
         )
+
+    def test_authoritative_event_boundary_does_not_expand_calendar_change_to_market_facts(self):
+        plan = build_fact_slot_projection_plan(
+            ["005930"],
+            ["temporal", "evidence"],
+            requested_fact_families_by_symbol={"005930": ["temporal", "evidence"]},
+            changed_fields_by_symbol={"005930": ["calendar_event"]},
+            event_boundary_authoritative=True,
+        )
+
+        self.assertTrue(plan["eventBoundaryAuthoritative"])
+        self.assertEqual(
+            ["evidence", "link", "temporal"],
+            plan["slotFamiliesBySymbol"]["005930"],
+        )
+        self.assertNotIn("market", plan["slotFamiliesBySymbol"]["005930"])
+        self.assertNotIn("financial", plan["slotFamiliesBySymbol"]["005930"])
 
 
 if __name__ == "__main__":

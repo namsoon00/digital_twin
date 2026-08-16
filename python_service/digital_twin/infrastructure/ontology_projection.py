@@ -708,6 +708,39 @@ class PortfolioOntologyProjectionRecorder:
         )
         self.source = source or "monitoring"
 
+    def execution_namespace(self) -> Dict[str, str]:
+        deployment_id = str(
+            self.settings.get("_reasoningEngineDeploymentId")
+            or self.settings.get("reasoningEngineActiveDeploymentId")
+            or "ontology-v1-active"
+        ).strip()
+        graph_database = str(
+            self.settings.get("typedbDatabase") or "orbit_alpha_ontology"
+        ).strip()
+        release_fingerprint = str(
+            self.settings.get("_reasoningEngineReleaseFingerprint")
+            or runtime_identity().get("revision")
+            or "local-runtime"
+        ).strip()
+        validation_cohort_id = str(
+            self.settings.get("_reasoningEngineValidationCohortId") or ""
+        ).strip()
+        material = "|".join([
+            deployment_id,
+            graph_database,
+            release_fingerprint,
+            validation_cohort_id,
+        ])
+        return {
+            "executionNamespaceId": "projection-namespace:" + hashlib.sha256(
+                material.encode("utf-8")
+            ).hexdigest()[:32],
+            "engineDeploymentId": deployment_id,
+            "graphDatabase": graph_database,
+            "releaseFingerprint": release_fingerprint,
+            "validationCohortId": validation_cohort_id,
+        }
+
     def record_snapshot(
         self,
         snapshot: AccountSnapshot,
@@ -3809,6 +3842,14 @@ class PortfolioOntologyProjectionRecorder:
         active_key = self.active_graph_store_key(result)
         world_id = str(world_id or result.get("worldId") or ((result.get("ontologyWorld") or {}).get("worldId") if isinstance(result.get("ontologyWorld"), dict) else "") or "").strip()
         runtime_stages = result.setdefault("runtimeStages", {})
+        catalog_rule_ids = [
+            rule_id_from_payload(rule)
+            for rule in self.rulebox_rules_for_impact()
+            if rule_id_from_payload(rule) and rule.get("enabled", True) is not False
+        ]
+        # Private handoff to the MySQL execution-proof writer. This catalogue
+        # never enters the ABox or the user-facing ontology snapshot.
+        result["_ruleResultSlotCatalogRuleIds"] = catalog_rule_ids
         selection_context = {
             "reusable": False,
             "matchedRuleIds": [],
@@ -3939,6 +3980,10 @@ class PortfolioOntologyProjectionRecorder:
                     for key, value in selection_context.items()
                     if key not in {"matchedRuleIds", "inferenceImpactPlan", "ruleStatesBySymbol"}
                 }
+                if bool(selection_context.get("reusable")):
+                    result["_priorRuleStatesBySymbol"] = dict(
+                        selection_context.get("ruleStatesBySymbol") or {}
+                    )
                 if equivalence_audit_requested:
                     result["incrementalEquivalenceAudit"] = {
                         "status": "requested-full-evaluation",
@@ -3986,6 +4031,18 @@ class PortfolioOntologyProjectionRecorder:
                         result["preservedActiveGeneration"] = True
                         result["reason"] = result["ruleboxExecution"]["reason"]
                         return
+            bootstrap_full_rule_coverage = bool(
+                active_key == "typedb" and not selection_context.get("reusable")
+            )
+            if bootstrap_full_rule_coverage:
+                result.setdefault("priorInferenceReuse", {}).update({
+                    "bootstrapRequired": True,
+                    "fallbackReason": str(
+                        selection_context.get("fallbackReason")
+                        or selection_context.get("reason")
+                        or "coherent-rule-result-slot-proof-unavailable"
+                    ),
+                })
             payload = {
                 "worldId": world_id,
                 "worldType": str((result.get("ontologyWorld") or {}).get("worldType") or "") if isinstance(result.get("ontologyWorld"), dict) else "",
@@ -3999,7 +4056,9 @@ class PortfolioOntologyProjectionRecorder:
                 "inferenceSnapshotLimit": self.inference_snapshot_limit(),
                 "inferenceImpactPlan": compact_impact_plan,
                 "reasoningSubjectKinds": list(
-                    reasoning_context.get("subjectKinds") or []
+                    []
+                    if bootstrap_full_rule_coverage
+                    else reasoning_context.get("subjectKinds") or []
                 ),
                 "reasoningSubjectIds": list(
                     reasoning_context.get("subjectIds") or []
@@ -4014,7 +4073,7 @@ class PortfolioOntologyProjectionRecorder:
                 ),
                 "typedbNativeRuleSelectionEnabled": (
                     "0"
-                    if equivalence_audit_requested
+                    if equivalence_audit_requested or bootstrap_full_rule_coverage
                     else self.settings.get("typedbNativeRuleSelectionEnabled", "1")
                 ),
                 "priorInferenceReusable": bool(selection_context.get("reusable")),
@@ -4757,17 +4816,10 @@ class PortfolioOntologyProjectionRecorder:
     ) -> Dict[str, object]:
         """Prove which unaffected native rules must be re-materialized.
 
-        This is a reuse proof, not a Python rule evaluation. A verified,
-        target-scoped projection audit is checked first because it is a local
-        MySQL read and can prove that another symbol's manifest update did not
-        invalidate this target. If no such proof exists, the fallback reads an
-        InferenceBox aligned to the active immutable ABox. In either case we
-        compare saved scope identities with the candidate Manifest and ask
-        TypeDB to re-run every rule affected since that target was last
-        evaluated, plus every prior match.
-
-        Missing provenance, a RuleBox/TBox change, or an opaque old scope
-        deliberately falls back to a complete RuleBox slice.
+        This is a reuse proof, not a Python rule evaluation. Only the compact
+        MySQL full-catalog slot generation is accepted. Reading an old
+        InferenceBox can recover matched IDs, but cannot prove all non-matches
+        came from one generation, so it must trigger a full bootstrap instead.
         """
         audited = self.audited_prior_rule_selection_context(
             snapshot,
@@ -4779,35 +4831,12 @@ class PortfolioOntologyProjectionRecorder:
             requested_fact_families=requested_fact_families,
             requested_fact_families_by_symbol=requested_fact_families_by_symbol,
         )
-        if audited:
-            return audited
-        active_abox = self.active_abox_metadata(world_id)
-        inferencebox = self.existing_inference_result(snapshot, inference_symbols, world_id=world_id)
-        reusable = self.inference_result_is_reusable(
-            inferencebox,
-            active_abox,
-            inference_symbols,
-        )
-        rule_ids = []
-        if reusable:
-            rule_ids = self.matched_rule_ids_from_inference_payload(inferencebox)
-            return {
-                "reusable": True,
-                "proofSource": "active-aligned-inference",
-                "matchedRuleIds": rule_ids[:160],
-                "matchedRuleCount": len(rule_ids),
-                "inferenceGenerationId": str(inferencebox.get("inferenceGenerationId") or ""),
-                "sourceAboxSnapshotId": str(inferencebox.get("sourceAboxSnapshotId") or ""),
-                "fallbackReason": "",
-            }
-        return {
+        return audited or {
             "reusable": False,
             "proofSource": "",
             "matchedRuleIds": [],
             "matchedRuleCount": 0,
-            "inferenceGenerationId": str(inferencebox.get("inferenceGenerationId") or ""),
-            "sourceAboxSnapshotId": str(inferencebox.get("sourceAboxSnapshotId") or ""),
-            "fallbackReason": "prior-aligned-inference-unavailable",
+            "fallbackReason": "coherent-rule-result-slot-proof-unavailable",
         }
 
     def adaptive_native_rule_target_sharding_profile(
@@ -4835,19 +4864,16 @@ class PortfolioOntologyProjectionRecorder:
             min(160, int(policy.get("lookbackRunLimit") or 12) * 4),
         )
         try:
-            try:
-                rows = self.projection_run_store.latest(
-                    account_id=str(snapshot.account_id or ""),
-                    limit=read_limit,
-                    world_id=world_id,
-                )
-            except TypeError as error:
-                if "unexpected keyword" not in str(error) and "world_id" not in str(error):
-                    raise
-                rows = self.projection_run_store.latest(
-                    account_id=str(snapshot.account_id or ""),
-                    limit=read_limit,
-                )
+            namespace = self.execution_namespace()
+            rows = self.projection_run_store.latest(
+                account_id=str(snapshot.account_id or ""),
+                limit=read_limit,
+                world_id=world_id,
+                execution_namespace_id=str(namespace.get("executionNamespaceId") or ""),
+                engine_deployment_id=str(namespace.get("engineDeploymentId") or ""),
+                graph_database=str(namespace.get("graphDatabase") or ""),
+                release_fingerprint=str(namespace.get("releaseFingerprint") or ""),
+            )
         except Exception:
             profile = native_rule_adaptive_target_sharding_profile([], self.settings)
             profile["source"] = "projection-audit-read-failed"
@@ -4922,7 +4948,11 @@ class PortfolioOntologyProjectionRecorder:
         })
         if not targets:
             return {}
-        current_rules = self.rulebox_rules_for_impact()
+        current_rules = [
+            rule
+            for rule in self.rulebox_rules_for_impact()
+            if rule.get("enabled", True) is not False
+        ]
         slot_reader = getattr(
             self.projection_run_store,
             "active_rule_result_slot_context",
@@ -4930,6 +4960,7 @@ class PortfolioOntologyProjectionRecorder:
         )
         if callable(slot_reader):
             try:
+                namespace = self.execution_namespace()
                 slot_context = slot_reader(
                     world_id=world_id,
                     account_id=str(snapshot.account_id or ""),
@@ -4937,146 +4968,18 @@ class PortfolioOntologyProjectionRecorder:
                     rulebox_rules_hash=rulebox_rules_hash,
                     tbox_fingerprint=tbox_fingerprint,
                     expected_rule_count=len(current_rules),
+                    execution_namespace_id=str(namespace.get("executionNamespaceId") or ""),
+                    engine_deployment_id=str(namespace.get("engineDeploymentId") or ""),
+                    graph_database=str(namespace.get("graphDatabase") or ""),
+                    release_fingerprint=str(namespace.get("releaseFingerprint") or ""),
                 )
             except Exception:
                 slot_context = {}
             if bool((slot_context or {}).get("reusable")):
                 return dict(slot_context)
-        if len(targets) > 1:
-            target_contexts = [
-                self.audited_prior_rule_selection_context(
-                    snapshot,
-                    [target],
-                    candidate_scope_plan=candidate_scope_plan,
-                    rulebox_rules_hash=rulebox_rules_hash,
-                    tbox_fingerprint=tbox_fingerprint,
-                    world_id=world_id,
-                    requested_fact_families=requested_fact_families,
-                    requested_fact_families_by_symbol=requested_fact_families_by_symbol,
-                )
-                for target in targets
-            ]
-            if not all(context.get("reusable") for context in target_contexts):
-                return {}
-            return self.combine_audited_target_rule_selection_contexts(
-                targets,
-                target_contexts,
-            )
-        current_scope_plan = inference_reuse_scope_plan(candidate_scope_plan or [])
-        if (
-            not hasattr(self.projection_run_store, "latest")
-            or not current_scope_plan
-            or not str(rulebox_rules_hash or "").strip()
-        ):
-            return {}
-        try:
-            try:
-                rows = self.projection_run_store.latest(
-                    account_id=str(snapshot.account_id or ""),
-                    limit=160,
-                    world_id=world_id,
-                )
-            except TypeError as error:
-                if "unexpected keyword" not in str(error) and "world_id" not in str(error):
-                    raise
-                rows = self.projection_run_store.latest(account_id=str(snapshot.account_id or ""), limit=160)
-        except Exception:
-            return {}
-        for row in rows or []:
-            if not isinstance(row, dict):
-                continue
-            if str(row.get("status") or "").lower() != "ok":
-                continue
-            if str(row.get("graphStore") or "").strip() != "typedb":
-                continue
-            source_symbols = {
-                str(symbol or "").upper().strip()
-                for symbol in row.get("sourceSymbols") or []
-                if str(symbol or "").strip()
-            }
-            if targets[0] not in source_symbols:
-                continue
-            result = row.get("result") if isinstance(row.get("result"), dict) else {}
-            proof = result.get("inferenceReuseProof") if isinstance(result.get("inferenceReuseProof"), dict) else {}
-            if str(proof.get("status") or "") != "verified" or not bool(proof.get("coverageComplete")):
-                continue
-            proof_targets = {
-                str(symbol or "").upper().strip()
-                for symbol in proof.get("targetSymbols") or []
-                if str(symbol or "").strip()
-            }
-            if targets[0] not in proof_targets:
-                continue
-            if str(proof.get("ruleboxRulesHash") or "") != str(rulebox_rules_hash or ""):
-                continue
-            if tbox_fingerprint and str(proof.get("tboxFingerprint") or "") != str(tbox_fingerprint):
-                continue
-            context = row.get("context") if isinstance(row.get("context"), dict) else {}
-            topology = context.get("scopeTopology") if isinstance(context.get("scopeTopology"), dict) else {}
-            prior_scope_plan = inference_reuse_scope_plan(topology.get("inferenceReuseScopePlan") or [])
-            if not prior_scope_plan:
-                continue
-            prior_scope_fingerprint = inference_reuse_scope_plan_fingerprint(prior_scope_plan)
-            if (
-                str(topology.get("inferenceReuseScopePlanFingerprint") or "") != prior_scope_fingerprint
-                or str(proof.get("scopePlanFingerprint") or "") != prior_scope_fingerprint
-            ):
-                continue
-            source_abox_snapshot_id = str(proof.get("sourceAboxSnapshotId") or "").strip()
-            # Older audit rows can retain the predecessor in
-            # ``activeAboxSnapshotId`` even though their own immutable ABox
-            # and aligned InferenceBox are complete. The run's ABox identity
-            # is equally authoritative here; the verified proof and matching
-            # scope/rule/TBox contracts above still remain mandatory.
-            audited_abox_snapshot_ids = {
-                str(row.get("activeAboxSnapshotId") or "").strip(),
-                str(row.get("aboxSnapshotId") or "").strip(),
-            }
-            audited_abox_snapshot_ids.discard("")
-            if not source_abox_snapshot_id or source_abox_snapshot_id not in audited_abox_snapshot_ids:
-                continue
-            # Validate the whole immutable plan above, then calculate this
-            # worker's candidate slice from its own scopes and dependencies.
-            # Other holdings can change while a one-symbol worker waits for
-            # the TypeDB lease; they must not reopen every rule for this
-            # target.
-            prior_target_scope_plan = inference_reuse_scope_plan_for_targets(
-                prior_scope_plan,
-                targets,
-            )
-            current_target_scope_plan = inference_reuse_scope_plan_for_targets(
-                current_scope_plan,
-                targets,
-            )
-            historical_plan = build_inference_impact_plan(
-                prior_target_scope_plan,
-                current_target_scope_plan,
-                targets,
-                explicit_target_symbols=targets,
-                rules=current_rules,
-                requested_fact_families=requested_fact_families,
-                requested_fact_families_by_symbol=requested_fact_families_by_symbol,
-            )
-            if not bool(historical_plan.get("nativeRuleSelectionEligible")):
-                continue
-            matched_rule_ids = self.matched_rule_ids_from_inference_payload(proof)
-            return {
-                "reusable": True,
-                "proofSource": "audited-target-scope-proof",
-                "proofRunId": str(row.get("runId") or ""),
-                "matchedRuleIds": matched_rule_ids,
-                "matchedRuleCount": len(matched_rule_ids),
-                "inferenceGenerationId": str(proof.get("inferenceGenerationId") or ""),
-                "sourceAboxSnapshotId": source_abox_snapshot_id,
-                "inferenceImpactPlan": historical_plan,
-                "candidateRuleIds": list(historical_plan.get("candidateRuleIds") or []),
-                "deferredRuleIds": list(historical_plan.get("deferredRuleIds") or []),
-                "recomputedCandidateRuleCount": int(historical_plan.get("candidateRuleCount") or 0),
-                "recomputedChangedScopeCount": len(
-                    list((historical_plan.get("scopeDelta") or {}).get("changedScopeIds") or [])
-                ),
-                "fallbackReason": "",
-            }
+        # Old projection rows retained only matched IDs and could not prove
+        # the state of every non-matching rule from one generation. Never use
+        # that partial history as an incremental execution proof.
         return {}
 
     def combine_audited_target_rule_selection_contexts(
@@ -5531,6 +5434,11 @@ class PortfolioOntologyProjectionRecorder:
                 changed_fields_by_symbol=(reasoning_context or {}).get(
                     "changedFieldsBySymbol"
                 ) or {},
+                event_boundary_authoritative=bool(
+                    (reasoning_context or {}).get(
+                        "eventFactBoundaryAuthoritative"
+                    )
+                ),
             ),
         }
         # A reasoning worker can intentionally schedule one subject even when
@@ -5729,6 +5637,7 @@ class PortfolioOntologyProjectionRecorder:
             target_symbols=inference_symbols,
             rulebox_metadata=rulebox_metadata,
             reasoning_context=reasoning_context,
+            execution_namespace=self.execution_namespace(),
         )
         try:
             self.projection_run_store.begin(run)
@@ -5792,6 +5701,8 @@ class PortfolioOntologyProjectionRecorder:
                     "sourceSnapshotRecorded": True,
                     "reason": str(error)[:180],
                 }
+        result.pop("_ruleResultSlotCatalogRuleIds", None)
+        result.pop("_priorRuleStatesBySymbol", None)
         ontology[active_key] = result
         ontology["projection"] = result
         ontology["activeGraphStore"] = active_key
@@ -5846,6 +5757,10 @@ class PortfolioOntologyProjectionRecorder:
             and scope_plan_fingerprint == str(topology.get("inferenceReuseScopePlanFingerprint") or "")
             and bool(projection_run.rulebox_rules_hash)
             and bool(projection_run.tbox_fingerprint)
+            and bool(projection_run.execution_namespace_id)
+            and bool(projection_run.engine_deployment_id)
+            and bool(projection_run.graph_database)
+            and bool(projection_run.release_fingerprint)
             and bool(target_symbols)
             and source_abox_snapshot_id == expected_abox_snapshot_id
             and coverage_complete
@@ -5864,6 +5779,10 @@ class PortfolioOntologyProjectionRecorder:
             "status": "verified" if verified else "incomplete",
             "reason": reason,
             "coverageComplete": coverage_complete,
+            "executionNamespaceId": str(projection_run.execution_namespace_id or ""),
+            "engineDeploymentId": str(projection_run.engine_deployment_id or ""),
+            "graphDatabase": str(projection_run.graph_database or ""),
+            "releaseFingerprint": str(projection_run.release_fingerprint or ""),
             "sourceAboxSnapshotId": source_abox_snapshot_id,
             "inferenceGenerationId": str(inference.get("inferenceGenerationId") or ""),
             "targetSymbols": target_symbols,

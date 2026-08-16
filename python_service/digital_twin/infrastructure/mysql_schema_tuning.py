@@ -312,6 +312,11 @@ MYSQL_OPERATIONAL_INDEXES: Dict[str, Sequence[MySQLIndexDefinition]] = {
         ),
         MySQLIndexDefinition(
             "ontology_projection_runs",
+            "idx_ontology_projection_runs_namespace",
+            "`execution_namespace_id`, `world_id`, `updated_at`, `run_id`",
+        ),
+        MySQLIndexDefinition(
+            "ontology_projection_runs",
             "idx_ontology_projection_runs_status_updated",
             "`status`, `updated_at`, `run_id`",
         ),
@@ -340,7 +345,7 @@ MYSQL_OPERATIONAL_INDEXES: Dict[str, Sequence[MySQLIndexDefinition]] = {
         MySQLIndexDefinition(
             "ontology_reasoning_rule_result_slots",
             "idx_reasoning_rule_slots_catalog",
-            "`world_id`, `account_id`, `rulebox_rules_hash`, `tbox_fingerprint`, `symbol`",
+            "`execution_namespace_id`, `world_id`, `account_id`, `rulebox_rules_hash`, `tbox_fingerprint`, `symbol`",
         ),
         MySQLIndexDefinition(
             "ontology_reasoning_rule_result_slots",
@@ -504,6 +509,31 @@ MYSQL_OPERATIONAL_COLUMNS: Dict[str, Sequence[MySQLColumnDefinition]] = {
     "ontology_projection_runs": (
         MySQLColumnDefinition(
             "ontology_projection_runs",
+            "execution_namespace_id",
+            "VARCHAR(64) NOT NULL DEFAULT ''",
+        ),
+        MySQLColumnDefinition(
+            "ontology_projection_runs",
+            "engine_deployment_id",
+            "VARCHAR(96) NOT NULL DEFAULT ''",
+        ),
+        MySQLColumnDefinition(
+            "ontology_projection_runs",
+            "graph_database",
+            "VARCHAR(96) NOT NULL DEFAULT ''",
+        ),
+        MySQLColumnDefinition(
+            "ontology_projection_runs",
+            "release_fingerprint",
+            "VARCHAR(64) NOT NULL DEFAULT ''",
+        ),
+        MySQLColumnDefinition(
+            "ontology_projection_runs",
+            "validation_cohort_id",
+            "VARCHAR(96) NOT NULL DEFAULT ''",
+        ),
+        MySQLColumnDefinition(
+            "ontology_projection_runs",
             "tenant_id",
             "VARCHAR(191) NOT NULL DEFAULT ''",
         ),
@@ -521,6 +551,33 @@ MYSQL_OPERATIONAL_COLUMNS: Dict[str, Sequence[MySQLColumnDefinition]] = {
             "ontology_projection_runs",
             "market_world_id",
             "VARCHAR(191) NOT NULL DEFAULT ''",
+        ),
+    ),
+    "ontology_reasoning_rule_result_slots": (
+        MySQLColumnDefinition(
+            "ontology_reasoning_rule_result_slots",
+            "execution_namespace_id",
+            "VARCHAR(64) NOT NULL DEFAULT ''",
+        ),
+        MySQLColumnDefinition(
+            "ontology_reasoning_rule_result_slots",
+            "engine_deployment_id",
+            "VARCHAR(96) NOT NULL DEFAULT ''",
+        ),
+        MySQLColumnDefinition(
+            "ontology_reasoning_rule_result_slots",
+            "graph_database",
+            "VARCHAR(96) NOT NULL DEFAULT ''",
+        ),
+        MySQLColumnDefinition(
+            "ontology_reasoning_rule_result_slots",
+            "release_fingerprint",
+            "VARCHAR(64) NOT NULL DEFAULT ''",
+        ),
+        MySQLColumnDefinition(
+            "ontology_reasoning_rule_result_slots",
+            "validation_cohort_id",
+            "VARCHAR(96) NOT NULL DEFAULT ''",
         ),
     ),
     "ontology_reasoning_run_stages": (
@@ -824,6 +881,53 @@ def ensure_mysql_indexes(
     return created
 
 
+def mysql_primary_key_columns(connection, table: str) -> List[str]:
+    cursor = _execute(
+        connection,
+        """
+        SELECT COLUMN_NAME
+        FROM information_schema.STATISTICS
+        WHERE TABLE_SCHEMA = DATABASE()
+          AND TABLE_NAME = %s
+          AND INDEX_NAME = 'PRIMARY'
+        ORDER BY SEQ_IN_INDEX
+        """,
+        (table,),
+    )
+    columns: List[str] = []
+    for row in cursor.fetchall() or []:
+        if isinstance(row, Mapping):
+            value = row.get("COLUMN_NAME") or row.get("column_name")
+        else:
+            value = row[0] if row else ""
+        clean = str(value or "").strip()
+        if clean:
+            columns.append(clean)
+    return columns
+
+
+def ensure_reasoning_rule_slot_namespace_primary_key(connection) -> List[str]:
+    """Separate V1/V2/V3 result slots before any proof can be reused."""
+    table = "ontology_reasoning_rule_result_slots"
+    expected = ["execution_namespace_id", "world_id", "symbol", "rule_id"]
+    current = mysql_primary_key_columns(connection, table)
+    if current == expected:
+        return []
+    if not current:
+        _execute(
+            connection,
+            "ALTER TABLE `" + table + "` ADD PRIMARY KEY "
+            "(`execution_namespace_id`, `world_id`, `symbol`, `rule_id`)",
+        )
+    else:
+        _execute(
+            connection,
+            "ALTER TABLE `" + table + "` DROP PRIMARY KEY, ADD PRIMARY KEY "
+            "(`execution_namespace_id`, `world_id`, `symbol`, `rule_id`)",
+        )
+    return [table + ".PRIMARY"]
+
+
 def mysql_partitioning_mode(settings: Mapping[str, object] = None) -> str:
     configured = settings or {}
     raw = str(
@@ -891,8 +995,11 @@ def ensure_mysql_key_partitions(
 
 
 def ensure_mysql_operational_schema_tuning(connection, settings: Mapping[str, object] = None) -> Dict[str, List[str]]:
+    columns = ensure_mysql_columns(connection, MYSQL_OPERATIONAL_COLUMNS)
+    primary_keys = ensure_reasoning_rule_slot_namespace_primary_key(connection)
     return {
-        "columns": ensure_mysql_columns(connection, MYSQL_OPERATIONAL_COLUMNS),
+        "columns": columns,
+        "primaryKeys": primary_keys,
         "compatibleColumns": ensure_mysql_column_compatibility(connection, MYSQL_OPERATIONAL_COLUMN_COMPATIBILITY),
         "retiredColumns": retire_mysql_columns(connection, MYSQL_OPERATIONAL_RETIRED_COLUMNS),
         "indexes": ensure_mysql_indexes(connection, MYSQL_OPERATIONAL_INDEXES),

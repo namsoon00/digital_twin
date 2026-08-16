@@ -43,6 +43,7 @@ class MySQLOntologyProjectionRunStore(MySQLOperationalConnection):
         connection,
         stamp: str,
         world_id: str = "",
+        execution_namespace_id: str = "",
         stale_after_seconds: int = 0,
     ) -> Dict[str, object]:
         stale_after = int(stale_after_seconds or self.projection_audit_stale_after_seconds())
@@ -54,6 +55,10 @@ class MySQLOntologyProjectionRunStore(MySQLOperationalConnection):
         if clean_world_id:
             clauses.append("world_id = %s")
             params.append(clean_world_id)
+        clean_namespace_id = str(execution_namespace_id or "").strip()
+        if clean_namespace_id:
+            clauses.append("execution_namespace_id = %s")
+            params.append(clean_namespace_id)
         cursor = connection.execute(
             """
             UPDATE ontology_projection_runs
@@ -78,6 +83,7 @@ class MySQLOntologyProjectionRunStore(MySQLOperationalConnection):
         return {
             "status": "ok",
             "worldId": clean_world_id,
+            "executionNamespaceId": clean_namespace_id,
             "staleAfterSeconds": stale_after,
             "cutoff": cutoff,
             "abortedCount": aborted_count,
@@ -112,6 +118,7 @@ class MySQLOntologyProjectionRunStore(MySQLOperationalConnection):
                 connection,
                 stamp,
                 world_id=str(run.world_id or ""),
+                execution_namespace_id=str(run.execution_namespace_id or ""),
             )
             connection.execute(
                 """
@@ -120,12 +127,14 @@ class MySQLOntologyProjectionRunStore(MySQLOperationalConnection):
                     world_type, market_world_id, source_snapshot_at,
                     source_snapshot_fingerprint, first_observed_at, last_observed_at,
                     started_at, completed_at, activated_at, status, graph_store,
+                    execution_namespace_id, engine_deployment_id, graph_database,
+                    release_fingerprint, validation_cohort_id,
                     projection_mode, material_fingerprint, abox_snapshot_id,
                     active_abox_snapshot_id, tbox_version, tbox_fingerprint,
                     rulebox_rules_hash, entity_count, relation_count,
                     inference_generation_id, inference_status, source_symbols_json,
                     context_payload_json, result_payload_json, created_at, updated_at
-                ) VALUES (%s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s)
+                ) VALUES (%s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s)
                 ON DUPLICATE KEY UPDATE
                     portfolio_id = VALUES(portfolio_id),
                     account_id = VALUES(account_id),
@@ -139,6 +148,11 @@ class MySQLOntologyProjectionRunStore(MySQLOperationalConnection):
                     started_at = VALUES(started_at),
                     status = VALUES(status),
                     graph_store = VALUES(graph_store),
+                    execution_namespace_id = VALUES(execution_namespace_id),
+                    engine_deployment_id = VALUES(engine_deployment_id),
+                    graph_database = VALUES(graph_database),
+                    release_fingerprint = VALUES(release_fingerprint),
+                    validation_cohort_id = VALUES(validation_cohort_id),
                     projection_mode = VALUES(projection_mode),
                     material_fingerprint = VALUES(material_fingerprint),
                     abox_snapshot_id = VALUES(abox_snapshot_id),
@@ -171,6 +185,11 @@ class MySQLOntologyProjectionRunStore(MySQLOperationalConnection):
                     activated_at = %s,
                     status = %s,
                     graph_store = %s,
+                    execution_namespace_id = %s,
+                    engine_deployment_id = %s,
+                    graph_database = %s,
+                    release_fingerprint = %s,
+                    validation_cohort_id = %s,
                     projection_mode = %s,
                     tenant_id = %s,
                     world_id = %s,
@@ -198,6 +217,11 @@ class MySQLOntologyProjectionRunStore(MySQLOperationalConnection):
                 run.activated_at,
                 run.status,
                 run.graph_store,
+                run.execution_namespace_id,
+                run.engine_deployment_id,
+                run.graph_database,
+                run.release_fingerprint,
+                run.validation_cohort_id,
                 run.projection_mode,
                 run.tenant_id,
                 run.world_id,
@@ -363,11 +387,13 @@ class MySQLOntologyProjectionRunStore(MySQLOperationalConnection):
         trace: Mapping[str, object],
         stamp: str,
     ) -> None:
-        """Index only completed TypeDB rule outcomes for incremental reuse.
+        """Persist one coherent full-catalog proof for every target symbol.
 
-        The slot is an execution index, not an inference engine. A future run
-        may use a complete, version-aligned slot set only to select prior
-        matches for another TypeDB evaluation.
+        Incremental TypeDB execution may evaluate only changed rules. The
+        resulting slot generation still has to be complete: unaffected states
+        are inherited from one previously coherent generation, then every
+        executed rule is replaced by the current TypeDB outcome. This table is
+        an execution proof and never evaluates a rule itself.
         """
         inference = (
             dict(result.get("inferenceBox") or {})
@@ -393,20 +419,23 @@ class MySQLOntologyProjectionRunStore(MySQLOperationalConnection):
             or not str(run.tbox_fingerprint or "").strip()
         ):
             return
-        impact = (
-            dict(result.get("inferenceImpactPlan") or {})
-            if isinstance(result.get("inferenceImpactPlan"), Mapping)
-            else {}
-        )
-        catalog_rule_count = max(
+        catalog_rule_ids = sorted({
+            str(rule_id or "").strip()
+            for rule_id in result.get("_ruleResultSlotCatalogRuleIds") or []
+            if str(rule_id or "").strip()
+        })
+        catalog_rule_count = len(catalog_rule_ids)
+        reported_rule_count = max(
             0,
-            int(
-                execution.get("nativeRuleSelectionFullRuleCount")
-                or impact.get("enabledRuleCount")
-                or 0
-            ),
+            int(execution.get("nativeRuleSelectionFullRuleCount") or 0),
         )
-        if not catalog_rule_count:
+        if not catalog_rule_count or not reported_rule_count or reported_rule_count > catalog_rule_count:
+            return
+        namespace_id = str(run.execution_namespace_id or "").strip()
+        deployment_id = str(run.engine_deployment_id or "").strip()
+        graph_database = str(run.graph_database or "").strip()
+        release_fingerprint = str(run.release_fingerprint or "").strip()
+        if not all([namespace_id, deployment_id, graph_database, release_fingerprint]):
             return
         proof = (
             dict(result.get("inferenceReuseProof") or {})
@@ -439,55 +468,126 @@ class MySQLOntologyProjectionRunStore(MySQLOperationalConnection):
             or run.abox_snapshot_id
             or ""
         ).strip()
-        slot_rows = []
-        accepted_states = {"matched", "evaluated-no-match", "not-applicable"}
+        if not source_abox_snapshot_id or not scope_fingerprint:
+            return
+        targets = sorted({
+            str(symbol or "").upper().strip()
+            for symbol in run.source_symbols or []
+            if str(symbol or "").strip()
+        })
+        if not targets:
+            return
+        prior_states = (
+            dict(result.get("_priorRuleStatesBySymbol") or {})
+            if isinstance(result.get("_priorRuleStatesBySymbol"), Mapping)
+            else {}
+        )
+        inherit_prior_generation = bool(prior_states)
+        states_by_symbol: Dict[str, Dict[str, bool]] = {}
+        for symbol in targets:
+            previous = prior_states.get(symbol)
+            previous = dict(previous or {}) if isinstance(previous, Mapping) else {}
+            if inherit_prior_generation and set(previous) != set(catalog_rule_ids):
+                return
+            states_by_symbol[symbol] = {
+                rule_id: (
+                    str(previous.get(rule_id) or "").strip().lower() == "matched"
+                    if inherit_prior_generation
+                    else False
+                )
+                for rule_id in catalog_rule_ids
+            }
+        reported_executed_rule_ids = (
+            execution.get("nativeRuleSelectionExecutedRuleIds")
+            or execution.get("executedRuleIds")
+            or []
+        )
+        executed_rule_ids = {
+            str(rule_id or "").strip()
+            for rule_id in (
+                reported_executed_rule_ids
+                if inherit_prior_generation
+                else catalog_rule_ids
+            )
+            if str(rule_id or "").strip() in states_by_symbol[targets[0]]
+        }
+        if not executed_rule_ids:
+            return
+        for states in states_by_symbol.values():
+            for rule_id in executed_rule_ids:
+                states[rule_id] = False
+        rule_versions: Dict[str, str] = {}
+        matched_rule_ids = set()
+        precise_matches = set()
         for item in trace.get("ruleOutcomes") or trace.get("rules") or []:
             if not isinstance(item, Mapping):
                 continue
-            status = str(item.get("status") or "").strip()
             rule_id = str(item.get("ruleId") or "").strip()
-            if not rule_id or status not in accepted_states:
+            if rule_id not in executed_rule_ids:
                 continue
-            matched = bool(item.get("matched"))
-            symbols = sorted({
-                str(symbol or "").upper().strip()
-                for symbol in item.get("targetSymbols") or run.source_symbols or []
-                if str(symbol or "").strip()
+            rule_versions[rule_id] = str(item.get("ruleVersion") or "")
+            if not bool(item.get("matched")):
+                continue
+            matched_rule_ids.add(rule_id)
+            raw_precise = item.get("matchedTargetSymbols")
+            if isinstance(raw_precise, (list, tuple, set)) and raw_precise:
+                matched_targets = {
+                    str(symbol or "").upper().strip()
+                    for symbol in raw_precise
+                    if str(symbol or "").strip()
+                }
+                precise_matches.add(rule_id)
+            else:
+                matched_targets = {
+                    str(symbol or "").upper().strip()
+                    for symbol in item.get("targetSymbols") or targets
+                    if str(symbol or "").strip()
+                }
+            for symbol in matched_targets.intersection(targets):
+                states_by_symbol[symbol][rule_id] = True
+        for key in ["typedbNativeRuleMatchedRuleIds", "matchedRuleIds"]:
+            matched_rule_ids.update({
+                str(rule_id or "").strip()
+                for rule_id in execution.get(key) or inference.get(key) or result.get(key) or []
+                if str(rule_id or "").strip() in executed_rule_ids
             })
-            precise_matched_symbols = {
-                str(symbol or "").upper().strip()
-                for symbol in item.get("matchedTargetSymbols") or []
-                if str(symbol or "").strip()
-            }
-            has_precise_match_state = "matchedTargetSymbols" in item
-            for symbol in symbols:
-                symbol_matched = (
-                    symbol in precise_matched_symbols
-                    if has_precise_match_state
-                    else matched
-                )
+        # Some TypeDB adapters report only the aggregate matched rule set. In
+        # that case mark every requested target. This may re-evaluate an extra
+        # rule later, but can never suppress a required rule evaluation.
+        for rule_id in matched_rule_ids.difference(precise_matches):
+            if any(states[rule_id] for states in states_by_symbol.values()):
+                continue
+            for states in states_by_symbol.values():
+                states[rule_id] = True
+        common_input_fingerprint = hashlib.sha256("|".join([
+            namespace_id,
+            str(run.source_snapshot_fingerprint or ""),
+            source_abox_snapshot_id,
+            generation_id,
+            scope_fingerprint,
+            str(run.rulebox_rules_hash or ""),
+            str(run.tbox_fingerprint or ""),
+        ]).encode("utf-8")).hexdigest()
+        slot_rows = []
+        for symbol, states in sorted(states_by_symbol.items()):
+            for rule_id, symbol_matched in sorted(states.items()):
                 revision_vector = revision_vectors.get(symbol)
                 revision_vector = (
                     dict(revision_vector or {})
                     if isinstance(revision_vector, Mapping)
                     else {}
                 )
-                fingerprint_seed = "|".join([
-                    str(run.world_id or ""),
-                    symbol,
-                    rule_id,
-                    str(run.rulebox_rules_hash or ""),
-                    str(run.tbox_fingerprint or ""),
-                    scope_fingerprint,
-                    "matched" if symbol_matched else "not-matched",
-                    generation_id,
-                ])
                 slot_rows.append((
+                    namespace_id,
+                    deployment_id,
+                    graph_database,
+                    release_fingerprint,
+                    str(run.validation_cohort_id or ""),
                     str(run.world_id or ""),
                     str(run.account_id or ""),
                     symbol,
                     rule_id,
-                    str(item.get("ruleVersion") or ""),
+                    rule_versions.get(rule_id, ""),
                     str(run.rulebox_rules_hash or ""),
                     str(run.tbox_fingerprint or ""),
                     scope_fingerprint,
@@ -497,7 +597,7 @@ class MySQLOntologyProjectionRunStore(MySQLOperationalConnection):
                     generation_id,
                     source_abox_snapshot_id,
                     str(run.run_id or ""),
-                    hashlib.sha256(fingerprint_seed.encode("utf-8")).hexdigest(),
+                    common_input_fingerprint,
                     json_dumps(revision_vector),
                     stamp,
                     stamp,
@@ -506,13 +606,19 @@ class MySQLOntologyProjectionRunStore(MySQLOperationalConnection):
             connection,
             """
             INSERT INTO ontology_reasoning_rule_result_slots (
+                execution_namespace_id, engine_deployment_id, graph_database,
+                release_fingerprint, validation_cohort_id,
                 world_id, account_id, symbol, rule_id, rule_version,
                 rulebox_rules_hash, tbox_fingerprint, scope_plan_fingerprint,
                 result_state, matched, catalog_rule_count,
                 inference_generation_id, source_abox_snapshot_id, source_run_id,
                 input_fingerprint, revision_vector_json, created_at, updated_at
-            ) VALUES (%s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s)
+            ) VALUES (%s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s)
             ON DUPLICATE KEY UPDATE
+                engine_deployment_id = VALUES(engine_deployment_id),
+                graph_database = VALUES(graph_database),
+                release_fingerprint = VALUES(release_fingerprint),
+                validation_cohort_id = VALUES(validation_cohort_id),
                 account_id = VALUES(account_id), rule_version = VALUES(rule_version),
                 rulebox_rules_hash = VALUES(rulebox_rules_hash),
                 tbox_fingerprint = VALUES(tbox_fingerprint),
@@ -537,8 +643,12 @@ class MySQLOntologyProjectionRunStore(MySQLOperationalConnection):
         rulebox_rules_hash: str,
         tbox_fingerprint: str,
         expected_rule_count: int,
+        execution_namespace_id: str = "",
+        engine_deployment_id: str = "",
+        graph_database: str = "",
+        release_fingerprint: str = "",
     ) -> Dict[str, object]:
-        """Return prior matches only when every target has full catalog coverage."""
+        """Return prior matches only from one coherent generation per target."""
         targets = sorted({
             str(symbol or "").upper().strip()
             for symbol in symbols or []
@@ -547,6 +657,7 @@ class MySQLOntologyProjectionRunStore(MySQLOperationalConnection):
         expected = max(0, int(expected_rule_count or 0))
         if (
             not str(world_id or "").strip()
+            or not str(execution_namespace_id or "").strip()
             or not targets
             or not str(rulebox_rules_hash or "").strip()
             or not str(tbox_fingerprint or "").strip()
@@ -555,41 +666,53 @@ class MySQLOntologyProjectionRunStore(MySQLOperationalConnection):
             return {"reusable": False, "reason": "incomplete-result-slot-request"}
         placeholders = ", ".join(["%s"] * len(targets))
         with self.connect() as connection:
+            clauses = [
+                "execution_namespace_id = %s", "world_id = %s", "account_id = %s",
+                "rulebox_rules_hash = %s", "tbox_fingerprint = %s",
+            ]
+            params: List[object] = [
+                str(execution_namespace_id or ""), str(world_id or ""),
+                str(account_id or ""), str(rulebox_rules_hash or ""),
+                str(tbox_fingerprint or ""),
+            ]
+            for column, value in [
+                ("engine_deployment_id", engine_deployment_id),
+                ("graph_database", graph_database),
+                ("release_fingerprint", release_fingerprint),
+            ]:
+                if str(value or "").strip():
+                    clauses.append(column + " = %s")
+                    params.append(str(value or "").strip())
+            params.extend(targets)
             rows = connection.execute(
                 "SELECT symbol, rule_id, matched, catalog_rule_count, inference_generation_id, "
-                "source_abox_snapshot_id, source_run_id FROM ontology_reasoning_rule_result_slots "
-                "WHERE world_id = %s AND account_id = %s "
-                "AND rulebox_rules_hash = %s AND tbox_fingerprint = %s "
-                "AND symbol IN (" + placeholders + ")",
-                (
-                    str(world_id or ""),
-                    str(account_id or ""),
-                    str(rulebox_rules_hash or ""),
-                    str(tbox_fingerprint or ""),
-                    *targets,
-                ),
+                "source_abox_snapshot_id, source_run_id, scope_plan_fingerprint, "
+                "input_fingerprint, execution_namespace_id FROM ontology_reasoning_rule_result_slots "
+                "WHERE " + " AND ".join(clauses) + " AND symbol IN (" + placeholders + ")",
+                tuple(params),
             ).fetchall()
         by_symbol = {symbol: {} for symbol in targets}
-        generation_ids = []
-        source_run_ids = []
-        source_abox_ids = []
+        provenance_by_symbol = {symbol: set() for symbol in targets}
+        catalog_counts_by_symbol = {symbol: set() for symbol in targets}
         for row in rows or []:
             symbol = str(row.get("symbol") or "").upper().strip()
             rule_id = str(row.get("rule_id") or "").strip()
             if symbol not in by_symbol or not rule_id:
                 continue
             by_symbol[symbol][rule_id] = bool(row.get("matched"))
-            for key, target in [
-                ("inference_generation_id", generation_ids),
-                ("source_run_id", source_run_ids),
-                ("source_abox_snapshot_id", source_abox_ids),
-            ]:
-                value = str(row.get(key) or "").strip()
-                if value and value not in target:
-                    target.append(value)
+            catalog_counts_by_symbol[symbol].add(int(row.get("catalog_rule_count") or 0))
+            provenance = tuple(
+                str(row.get(key) or "").strip()
+                for key in [
+                    "inference_generation_id", "source_abox_snapshot_id", "source_run_id",
+                    "scope_plan_fingerprint", "input_fingerprint", "execution_namespace_id",
+                ]
+            )
+            provenance_by_symbol[symbol].add(provenance)
         incomplete = [
             symbol for symbol, states in by_symbol.items()
-            if len(states) < expected
+            if len(states) != expected
+            or catalog_counts_by_symbol[symbol] != {expected}
         ]
         if incomplete:
             return {
@@ -602,6 +725,23 @@ class MySQLOntologyProjectionRunStore(MySQLOperationalConnection):
                 },
                 "incompleteSymbols": incomplete,
             }
+        incoherent = [
+            symbol
+            for symbol, provenance in provenance_by_symbol.items()
+            if len(provenance) != 1 or not all(next(iter(provenance), ()))
+        ]
+        if incoherent:
+            return {
+                "reusable": False,
+                "proofSource": "typedb-rule-result-slots",
+                "reason": "result-slot-generation-incoherent",
+                "expectedRuleCount": expected,
+                "incoherentSymbols": incoherent,
+            }
+        provenances = {
+            symbol: next(iter(values))
+            for symbol, values in provenance_by_symbol.items()
+        }
         matched_rule_ids = sorted({
             rule_id
             for states in by_symbol.values()
@@ -625,9 +765,11 @@ class MySQLOntologyProjectionRunStore(MySQLOperationalConnection):
                 for symbol, states in sorted(by_symbol.items())
             },
             "reusedTargetSymbols": targets,
-            "inferenceGenerationId": ",".join(generation_ids)[:640],
-            "proofRunId": ",".join(source_run_ids)[:640],
-            "sourceAboxSnapshotId": ",".join(source_abox_ids)[:640],
+            "executionNamespaceId": str(execution_namespace_id or ""),
+            "inferenceGenerationId": ",".join(sorted({item[0] for item in provenances.values()}))[:640],
+            "proofRunId": ",".join(sorted({item[2] for item in provenances.values()}))[:640],
+            "sourceAboxSnapshotId": ",".join(sorted({item[1] for item in provenances.values()}))[:640],
+            "scopePlanFingerprint": ",".join(sorted({item[3] for item in provenances.values()}))[:640],
             "fallbackReason": "",
         }
 
@@ -637,6 +779,7 @@ class MySQLOntologyProjectionRunStore(MySQLOperationalConnection):
         account_id: str = "",
         symbols: List[str] = None,
         limit: int = 5000,
+        execution_namespace_id: str = "",
     ) -> Dict[str, object]:
         """Expose bounded current slot coverage for the ontology ledger UI."""
         clauses = []
@@ -647,6 +790,9 @@ class MySQLOntologyProjectionRunStore(MySQLOperationalConnection):
         if str(account_id or "").strip():
             clauses.append("account_id = %s")
             params.append(str(account_id or "").strip())
+        if str(execution_namespace_id or "").strip():
+            clauses.append("execution_namespace_id = %s")
+            params.append(str(execution_namespace_id or "").strip())
         targets = sorted({
             str(symbol or "").upper().strip()
             for symbol in symbols or []
@@ -656,10 +802,11 @@ class MySQLOntologyProjectionRunStore(MySQLOperationalConnection):
             clauses.append("symbol IN (" + ", ".join(["%s"] * len(targets)) + ")")
             params.extend(targets)
         sql = (
-            "SELECT world_id, account_id, symbol, rule_id, rule_version, "
+            "SELECT execution_namespace_id, engine_deployment_id, graph_database, "
+            "release_fingerprint, world_id, account_id, symbol, rule_id, rule_version, "
             "rulebox_rules_hash, tbox_fingerprint, result_state, matched, "
             "catalog_rule_count, inference_generation_id, source_abox_snapshot_id, "
-            "source_run_id, input_fingerprint, revision_vector_json, updated_at "
+            "source_run_id, scope_plan_fingerprint, input_fingerprint, revision_vector_json, updated_at "
             "FROM ontology_reasoning_rule_result_slots"
         )
         if clauses:
@@ -673,8 +820,14 @@ class MySQLOntologyProjectionRunStore(MySQLOperationalConnection):
             symbol = str(row.get("symbol") or "").upper().strip()
             if not symbol:
                 continue
-            target = by_symbol.setdefault(symbol, {
+            namespace_id = str(row.get("execution_namespace_id") or "")
+            summary_key = namespace_id + "|" + symbol
+            target = by_symbol.setdefault(summary_key, {
                 "symbol": symbol,
+                "executionNamespaceId": namespace_id,
+                "engineDeploymentId": str(row.get("engine_deployment_id") or ""),
+                "graphDatabase": str(row.get("graph_database") or ""),
+                "releaseFingerprint": str(row.get("release_fingerprint") or ""),
                 "coveredRuleCount": 0,
                 "catalogRuleCount": 0,
                 "matchedRuleCount": 0,
@@ -682,21 +835,34 @@ class MySQLOntologyProjectionRunStore(MySQLOperationalConnection):
                 "ruleboxRulesHash": str(row.get("rulebox_rules_hash") or ""),
                 "tboxFingerprint": str(row.get("tbox_fingerprint") or ""),
                 "latestUpdatedAt": str(row.get("updated_at") or ""),
+                "provenance": set(),
             })
             target["coveredRuleCount"] = int(target["coveredRuleCount"] or 0) + 1
             target["catalogRuleCount"] = max(
                 int(target["catalogRuleCount"] or 0),
                 int(row.get("catalog_rule_count") or 0),
             )
+            target["provenance"].add((
+                str(row.get("inference_generation_id") or ""),
+                str(row.get("source_run_id") or ""),
+                str(row.get("source_abox_snapshot_id") or ""),
+                str(row.get("scope_plan_fingerprint") or ""),
+                str(row.get("input_fingerprint") or ""),
+            ))
             if bool(row.get("matched")):
                 target["matchedRuleCount"] = int(target["matchedRuleCount"] or 0) + 1
                 target["matchedRuleIds"].append(str(row.get("rule_id") or ""))
         for target in by_symbol.values():
+            coherent = len(target["provenance"]) == 1 and all(
+                next(iter(target["provenance"]), ())
+            )
             target["coverageComplete"] = bool(
                 int(target.get("catalogRuleCount") or 0)
-                and int(target.get("coveredRuleCount") or 0)
-                >= int(target.get("catalogRuleCount") or 0)
+                and int(target.get("coveredRuleCount") or 0) == int(target.get("catalogRuleCount") or 0)
+                and coherent
             )
+            target["generationCoherent"] = coherent
+            target.pop("provenance", None)
         return {
             "status": "ok",
             "slotCount": len(rows or []),
@@ -707,7 +873,16 @@ class MySQLOntologyProjectionRunStore(MySQLOperationalConnection):
             "symbols": list(by_symbol.values()),
         }
 
-    def latest(self, account_id: str = "", limit: int = 50, world_id: str = "") -> List[Dict[str, object]]:
+    def latest(
+        self,
+        account_id: str = "",
+        limit: int = 50,
+        world_id: str = "",
+        execution_namespace_id: str = "",
+        engine_deployment_id: str = "",
+        graph_database: str = "",
+        release_fingerprint: str = "",
+    ) -> List[Dict[str, object]]:
         clauses = []
         params: List[object] = []
         if account_id:
@@ -716,6 +891,15 @@ class MySQLOntologyProjectionRunStore(MySQLOperationalConnection):
         if world_id:
             clauses.append("world_id = %s")
             params.append(str(world_id or ""))
+        for column, value in [
+            ("execution_namespace_id", execution_namespace_id),
+            ("engine_deployment_id", engine_deployment_id),
+            ("graph_database", graph_database),
+            ("release_fingerprint", release_fingerprint),
+        ]:
+            if str(value or "").strip():
+                clauses.append(column + " = %s")
+                params.append(str(value or "").strip())
         sql = "SELECT * FROM ontology_projection_runs"
         if clauses:
             sql += " WHERE " + " AND ".join(clauses)
@@ -1034,6 +1218,11 @@ class MySQLOntologyProjectionRunStore(MySQLOperationalConnection):
             run.activated_at,
             run.status,
             run.graph_store,
+            run.execution_namespace_id,
+            run.engine_deployment_id,
+            run.graph_database,
+            run.release_fingerprint,
+            run.validation_cohort_id,
             run.projection_mode,
             run.material_fingerprint,
             run.abox_snapshot_id,
@@ -1071,6 +1260,11 @@ class MySQLOntologyProjectionRunStore(MySQLOperationalConnection):
             "activatedAt": str(row.get("activated_at") or ""),
             "status": str(row.get("status") or ""),
             "graphStore": str(row.get("graph_store") or ""),
+            "executionNamespaceId": str(row.get("execution_namespace_id") or ""),
+            "engineDeploymentId": str(row.get("engine_deployment_id") or ""),
+            "graphDatabase": str(row.get("graph_database") or ""),
+            "releaseFingerprint": str(row.get("release_fingerprint") or ""),
+            "validationCohortId": str(row.get("validation_cohort_id") or ""),
             "projectionMode": str(row.get("projection_mode") or ""),
             "materialFingerprint": str(row.get("material_fingerprint") or ""),
             "aboxSnapshotId": str(row.get("abox_snapshot_id") or ""),

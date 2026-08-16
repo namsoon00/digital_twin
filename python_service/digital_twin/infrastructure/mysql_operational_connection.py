@@ -1598,6 +1598,11 @@ MYSQL_SCHEMA = [
         activated_at VARCHAR(40) NOT NULL DEFAULT '',
         status VARCHAR(64) NOT NULL DEFAULT 'projecting',
         graph_store VARCHAR(64) NOT NULL DEFAULT '',
+        execution_namespace_id VARCHAR(64) NOT NULL DEFAULT '',
+        engine_deployment_id VARCHAR(96) NOT NULL DEFAULT '',
+        graph_database VARCHAR(96) NOT NULL DEFAULT '',
+        release_fingerprint VARCHAR(64) NOT NULL DEFAULT '',
+        validation_cohort_id VARCHAR(96) NOT NULL DEFAULT '',
         projection_mode VARCHAR(128) NOT NULL DEFAULT '',
         material_fingerprint VARCHAR(64) NOT NULL DEFAULT '',
         abox_snapshot_id VARCHAR(191) NOT NULL DEFAULT '',
@@ -1616,6 +1621,9 @@ MYSQL_SCHEMA = [
         updated_at VARCHAR(40) NOT NULL,
         KEY idx_ontology_projection_runs_account_updated (account_id, updated_at, run_id),
         KEY idx_ontology_projection_runs_world_updated (world_id, updated_at, run_id),
+        KEY idx_ontology_projection_runs_namespace (
+            execution_namespace_id, world_id, updated_at, run_id
+        ),
         KEY idx_ontology_projection_runs_abox (abox_snapshot_id),
         KEY idx_ontology_projection_runs_material (account_id, material_fingerprint)
     ) ENGINE=InnoDB DEFAULT CHARSET=utf8mb4 COLLATE=utf8mb4_unicode_ci
@@ -1682,6 +1690,11 @@ MYSQL_SCHEMA = [
     """,
     """
     CREATE TABLE IF NOT EXISTS ontology_reasoning_rule_result_slots (
+        execution_namespace_id VARCHAR(64) NOT NULL DEFAULT '',
+        engine_deployment_id VARCHAR(96) NOT NULL DEFAULT '',
+        graph_database VARCHAR(96) NOT NULL DEFAULT '',
+        release_fingerprint VARCHAR(64) NOT NULL DEFAULT '',
+        validation_cohort_id VARCHAR(96) NOT NULL DEFAULT '',
         world_id VARCHAR(191) NOT NULL,
         account_id VARCHAR(191) NOT NULL DEFAULT '',
         symbol VARCHAR(64) NOT NULL,
@@ -1700,9 +1713,10 @@ MYSQL_SCHEMA = [
         revision_vector_json LONGTEXT NOT NULL,
         created_at VARCHAR(40) NOT NULL,
         updated_at VARCHAR(40) NOT NULL,
-        PRIMARY KEY (world_id, symbol, rule_id),
+        PRIMARY KEY (execution_namespace_id, world_id, symbol, rule_id),
         KEY idx_reasoning_rule_slots_catalog (
-            world_id, account_id, rulebox_rules_hash, tbox_fingerprint, symbol
+            execution_namespace_id, world_id, account_id,
+            rulebox_rules_hash, tbox_fingerprint, symbol
         ),
         KEY idx_reasoning_rule_slots_generation (inference_generation_id, account_id, updated_at),
         KEY idx_reasoning_rule_slots_rule (rule_id, matched, updated_at)

@@ -1508,6 +1508,7 @@ def ontology_inference_ledger_api_payload(query: Dict[str, List[str]]) -> Dict[s
             world_id=world_id,
             symbols=symbols,
             limit=safe_int(first_query(query, "slotLimit"), 5000, 100, 10000),
+            execution_namespace_id=str(first_query(query, "executionNamespaceId") or ""),
         )
         payload["ruleAudit"] = rule_audit_payload(
             rulebox.get("rules") or [],

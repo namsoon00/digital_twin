@@ -1178,7 +1178,14 @@ def build_ontology_reasoning_runner(settings=None, event_publisher=None) -> Onto
         {},
     )
     release_bundle = dict(active_deployment.get("releaseBundle") or {})
+    active_release_identity = engine_platform.release_identity(v1_deployment_id)
     configured_settings["_reasoningEngineVersion"] = str(active_deployment.get("engineVersion") or "v1")
+    configured_settings["_reasoningEngineReleaseFingerprint"] = str(
+        active_release_identity.get("releaseFingerprint") or ""
+    )
+    configured_settings["_reasoningEngineValidationCohortId"] = str(
+        active_release_identity.get("validationCohortId") or ""
+    )
     configured_settings["_reasoningTimeSeriesBackendId"] = str(
         active_deployment.get("timeSeriesBackendId") or "mysql-primary"
     )
@@ -1776,6 +1783,12 @@ def build_v2_reasoning_engine(settings=None) -> V2ReasoningEngine:
         or ""
     )
     release_identity = reasoning_release_identity(descriptor, rulebox_fingerprint)
+    candidate_settings["_reasoningEngineReleaseFingerprint"] = str(
+        release_identity.get("releaseFingerprint") or ""
+    )
+    candidate_settings["_reasoningEngineValidationCohortId"] = str(
+        release_identity.get("validationCohortId") or ""
+    )
     time_series_store = QuestDBTimeSeriesAdapter(
         candidate_settings,
         descriptor.time_series_backend_id,

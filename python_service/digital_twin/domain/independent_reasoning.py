@@ -219,6 +219,88 @@ def independent_reasoning_request(
         "scopeId": scope_id,
     }
     fingerprint = _hash(input_material)
+    requested_scope_families = set()
+    requested_scope_families_by_symbol = {}
+    changed_fields_by_symbol = {}
+    fact_revisions_by_symbol = {}
+    revision_vectors_by_symbol = {}
+    fact_change_contracts = []
+    authoritative_fact_boundary = True
+    for event, scope in zip(events, scopes):
+        payload = dict(event.payload or {})
+        contract = payload.get("factChangeContract")
+        if not isinstance(contract, Mapping):
+            authoritative_fact_boundary = False
+            continue
+        status = str(contract.get("status") or "").strip()
+        unclassified = _texts(contract.get("unclassifiedFactTypes") or [])
+        unclassified_by_symbol = {
+            str(symbol or "").upper().strip(): list(_texts(values))
+            for symbol, values in dict(
+                contract.get("unclassifiedFactTypesBySymbol") or {}
+            ).items()
+            if str(symbol or "").strip() and _texts(values)
+        }
+        if status != "ready" or unclassified or unclassified_by_symbol:
+            authoritative_fact_boundary = False
+        families = set(_texts(contract.get("scopeFamilies") or []))
+        requested_scope_families.update(families)
+        contract_by_symbol = {
+            str(symbol or "").upper().strip(): set(_texts(values))
+            for symbol, values in dict(
+                contract.get("scopeFamiliesBySymbol") or {}
+            ).items()
+            if str(symbol or "").strip() and _texts(values)
+        }
+        event_symbols = [
+            str(symbol or "").upper().strip()
+            for symbol in scope.get("symbols") or []
+            if str(symbol or "").strip()
+        ]
+        for symbol in event_symbols:
+            requested_scope_families_by_symbol.setdefault(symbol, set()).update(
+                contract_by_symbol.get(symbol) or families
+            )
+        for symbol, values in contract_by_symbol.items():
+            requested_scope_families_by_symbol.setdefault(symbol, set()).update(values)
+        for symbol, values in dict(payload.get("changedFieldsBySymbol") or {}).items():
+            clean_symbol = str(symbol or "").upper().strip()
+            if clean_symbol:
+                changed_fields_by_symbol.setdefault(clean_symbol, set()).update(
+                    _texts(values)
+                )
+        subject_fields = _texts(payload.get("subjectChangedFields") or [])
+        if subject_fields and len(event_symbols) == 1:
+            changed_fields_by_symbol.setdefault(event_symbols[0], set()).update(
+                subject_fields
+            )
+        for symbol, revision in dict(payload.get("factRevisionsBySymbol") or {}).items():
+            clean_symbol = str(symbol or "").upper().strip()
+            clean_revision = str(revision or "").strip()
+            if clean_symbol and clean_revision:
+                fact_revisions_by_symbol[clean_symbol] = clean_revision
+        for symbol, vector in dict(payload.get("revisionVectorsBySymbol") or {}).items():
+            clean_symbol = str(symbol or "").upper().strip()
+            if clean_symbol and isinstance(vector, Mapping):
+                revision_vectors_by_symbol[clean_symbol] = {
+                    str(key or "").strip(): str(value or "").strip()
+                    for key, value in vector.items()
+                    if str(key or "").strip() and str(value or "").strip()
+                }
+        fact_change_contracts.append({
+            "requestEventId": str(event.event_id or ""),
+            "version": str(contract.get("version") or ""),
+            "status": status,
+            "scopeFamilies": sorted(families),
+            "scopeFamiliesBySymbol": {
+                symbol: sorted(values)
+                for symbol, values in sorted(contract_by_symbol.items())
+            },
+            "unclassifiedFactTypes": list(unclassified),
+            "unclassifiedFactTypesBySymbol": unclassified_by_symbol,
+        })
+    if len(fact_change_contracts) != len(events):
+        authoritative_fact_boundary = False
     context = {
         "sourceEventIds": [event.event_id for event in events],
         "accountIds": list(account_ids),
@@ -229,6 +311,19 @@ def independent_reasoning_request(
         "subjectKinds": sorted({str(scope.get("subjectKind") or "") for scope in scopes if scope.get("subjectKind")}),
         "subjectIds": sorted({str(scope.get("subjectId") or "") for scope in scopes if scope.get("subjectId")}),
         "workClasses": sorted({str(scope.get("workClass") or "") for scope in scopes if scope.get("workClass")}),
+        "requestedScopeFamilies": sorted(requested_scope_families),
+        "requestedScopeFamiliesBySymbol": {
+            symbol: sorted(values)
+            for symbol, values in sorted(requested_scope_families_by_symbol.items())
+        },
+        "changedFieldsBySymbol": {
+            symbol: sorted(values)
+            for symbol, values in sorted(changed_fields_by_symbol.items())
+        },
+        "factRevisionsBySymbol": fact_revisions_by_symbol,
+        "revisionVectorsBySymbol": revision_vectors_by_symbol,
+        "factChangeContracts": fact_change_contracts,
+        "eventFactBoundaryAuthoritative": authoritative_fact_boundary,
         "verifiedSourceSnapshots": [
             dict((event.payload or {}).get("verifiedSourceSnapshot") or {})
             for event in events

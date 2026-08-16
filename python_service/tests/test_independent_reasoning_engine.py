@@ -135,6 +135,36 @@ class IndependentReasoningEngineTests(unittest.TestCase):
 
         self.assertEqual(["TSLA"], reasoning_event_scope(event)["symbols"])
 
+    def test_request_preserves_the_authoritative_source_fact_boundary(self):
+        event = source_event("NVDA")
+        event.payload.update({
+            "subjectChangedFields": ["published_at", "headline"],
+            "factRevisionsBySymbol": {"NVDA": "news-revision:7"},
+            "revisionVectorsBySymbol": {"NVDA": {"evidence": "7"}},
+            "factChangeContract": {
+                "version": "fact-change-contract-v1",
+                "status": "ready",
+                "scopeFamilies": ["evidence"],
+                "scopeFamiliesBySymbol": {"NVDA": ["evidence"]},
+                "unclassifiedFactTypes": [],
+                "unclassifiedFactTypesBySymbol": {},
+            },
+        })
+
+        request = independent_reasoning_request("ontology-v2-shadow", [event])
+
+        self.assertTrue(request.context["eventFactBoundaryAuthoritative"])
+        self.assertEqual(["evidence"], request.context["requestedScopeFamilies"])
+        self.assertEqual(
+            {"NVDA": ["evidence"]},
+            request.context["requestedScopeFamiliesBySymbol"],
+        )
+        self.assertEqual(
+            ["headline", "published_at"],
+            request.context["changedFieldsBySymbol"]["NVDA"],
+        )
+        self.assertEqual("news-revision:7", request.context["factRevisionsBySymbol"]["NVDA"])
+
     def test_symbol_event_selects_only_affected_accounts(self):
         accounts = [
             SimpleNamespace(account_id="nvidia", watchlist_symbols=["NVDA"]),

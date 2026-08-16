@@ -20920,8 +20920,11 @@ relation ontology-assertion,
                 "nativeRuleSelectionExecutedCount": len(rule_selection.get("selectedRuleIds") or []),
                 "nativeRuleSelectionDeferredCount": len(rule_selection.get("deferredRuleIds") or []),
                 "nativeRuleSelectionFullRuleCount": int(rule_selection.get("fullRuleCount") or 0),
-                "nativeRuleSelectionExecutedRuleIds": list(rule_selection.get("selectedRuleIds") or [])[:80],
-                "nativeRuleSelectionDeferredRuleIds": list(rule_selection.get("deferredRuleIds") or [])[:80],
+                "nativeRuleSelectionFullRuleIds": list(
+                    rule_selection.get("selectedRuleIds") or []
+                ) + list(rule_selection.get("deferredRuleIds") or []),
+                "nativeRuleSelectionExecutedRuleIds": list(rule_selection.get("selectedRuleIds") or [])[:200],
+                "nativeRuleSelectionDeferredRuleIds": list(rule_selection.get("deferredRuleIds") or [])[:200],
                 "nativeRulePlannerTopologyStatus": str(planner_topology.get("status") or ""),
                 "nativeRulePlannerTopologySource": str(planner_topology.get("source") or ""),
                 "nativeRulePlannerTopologyFingerprint": str(planner_topology.get("fingerprint") or ""),

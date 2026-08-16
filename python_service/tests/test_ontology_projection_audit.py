@@ -104,6 +104,13 @@ def abox_graph():
 
 
 class OntologyProjectionAuditTests(unittest.TestCase):
+    EXECUTION_NAMESPACE = {
+        "engineDeploymentId": "ontology-v2-shadow",
+        "graphDatabase": "orbit_alpha_ontology_shadow_v2",
+        "releaseFingerprint": "release-test-1",
+        "validationCohortId": "cohort-test-1",
+    }
+
     def test_projection_analysis_telemetry_distinguishes_complete_and_missing_execution_data(self):
         complete = projection_analysis_telemetry({
             "runtimeStages": {"nativeInferenceMs": 1250},
@@ -204,6 +211,7 @@ class OntologyProjectionAuditTests(unittest.TestCase):
             "typedb",
             target_symbols=["005930"],
             rulebox_metadata={"ruleboxRulesHash": "rulebox-hash"},
+            execution_namespace=self.EXECUTION_NAMESPACE,
             started_at="2026-07-20T00:01:05Z",
         )
         return snapshot, graph, fingerprint, run
@@ -510,7 +518,22 @@ class OntologyProjectionAuditTests(unittest.TestCase):
             {**prior_scope_plan[-1], "generationId": "other-b", "fingerprint": "other-b", "semanticFingerprints": {"state": "other-b"}},
         ]
         scope_fingerprint = inference_reuse_scope_plan_fingerprint(prior_scope_plan)
-        audit_store = SimpleNamespace(latest=lambda **_kwargs: [{
+        audit_store = SimpleNamespace(
+            active_rule_result_slot_context=lambda **_kwargs: {
+                "reusable": True,
+                "proofSource": "typedb-rule-result-slots",
+                "matchedRuleIds": ["flow-rule"],
+                "matchedRuleCount": 1,
+                "ruleStatesBySymbol": {"005930": {
+                    "market-rule": "not-matched",
+                    "flow-rule": "matched",
+                    "quality-rule": "not-matched",
+                }},
+                "proofRunId": "projection:prior",
+                "inferenceGenerationId": "inference:prior",
+                "sourceAboxSnapshotId": "abox:prior",
+            },
+            latest=lambda **_kwargs: [{
             "runId": "projection:prior",
             "status": "ok",
             "graphStore": "typedb",
@@ -536,7 +559,8 @@ class OntologyProjectionAuditTests(unittest.TestCase):
                     "scopePlanFingerprint": scope_fingerprint,
                 },
             },
-        }])
+            }],
+        )
         repository = ReuseRepository()
         recorder = PortfolioOntologyProjectionRecorder(repository, projection_run_store=audit_store)
         recorder._rulebox_impact_rules = [
@@ -566,11 +590,9 @@ class OntologyProjectionAuditTests(unittest.TestCase):
         )
 
         self.assertTrue(context["reusable"])
-        self.assertEqual("audited-target-scope-proof", context["proofSource"])
+        self.assertEqual("typedb-rule-result-slots", context["proofSource"])
         self.assertEqual("projection:prior", context["proofRunId"])
         self.assertEqual(["flow-rule"], context["matchedRuleIds"])
-        self.assertEqual(["market-rule"], context["inferenceImpactPlan"]["candidateRuleIds"])
-        self.assertEqual(1, context["recomputedChangedScopeCount"])
         self.assertEqual(0, repository.active_read_count)
         self.assertEqual(0, repository.inference_read_count)
 
@@ -630,10 +652,27 @@ class OntologyProjectionAuditTests(unittest.TestCase):
                 }},
             }
 
-        audit_store = SimpleNamespace(latest=lambda **_kwargs: [
-            audit_row("005930", prior_a, "projection:005930"),
-            audit_row("000660", prior_b, "projection:000660"),
-        ])
+        audit_store = SimpleNamespace(
+            active_rule_result_slot_context=lambda **_kwargs: {
+                "reusable": True,
+                "proofSource": "typedb-rule-result-slots",
+                "matchedRuleIds": ["flow-rule"],
+                "matchedRuleCount": 1,
+                "reusedTargetSymbols": ["000660", "005930"],
+                "ruleStatesBySymbol": {
+                    symbol: {
+                        "market-rule": "not-matched",
+                        "flow-rule": "matched",
+                        "quality-rule": "not-matched",
+                    }
+                    for symbol in ["000660", "005930"]
+                },
+            },
+            latest=lambda **_kwargs: [
+                audit_row("005930", prior_a, "projection:005930"),
+                audit_row("000660", prior_b, "projection:000660"),
+            ],
+        )
         recorder = PortfolioOntologyProjectionRecorder(ReuseRepository(), projection_run_store=audit_store)
         recorder._rulebox_impact_rules = [
             {
@@ -662,24 +701,9 @@ class OntologyProjectionAuditTests(unittest.TestCase):
         )
 
         self.assertTrue(context["reusable"])
-        self.assertEqual("audited-target-scope-proofs", context["proofSource"])
+        self.assertEqual("typedb-rule-result-slots", context["proofSource"])
         self.assertEqual(["000660", "005930"], context["reusedTargetSymbols"])
-        self.assertEqual(["market-rule"], context["candidateRuleIds"])
         self.assertEqual(["flow-rule"], context["matchedRuleIds"])
-
-        current_plan = {
-            "candidateRuleIds": ["market-rule", "flow-rule", "quality-rule"],
-            "deferredRuleIds": [],
-            "candidateRuleCount": 3,
-            "enabledRuleCount": 3,
-            "nativeRuleSelectionEligible": False,
-            "diagnostics": {"reasonCodes": []},
-        }
-        selected_plan = recorder.impact_plan_with_audited_candidates(current_plan, context)
-
-        self.assertTrue(selected_plan["nativeRuleSelectionEligible"])
-        self.assertEqual(["market-rule"], selected_plan["candidateRuleIds"])
-        self.assertEqual(["flow-rule", "quality-rule"], selected_plan["deferredRuleIds"])
 
     def test_recorder_rejects_audited_proof_when_rulebox_version_changed(self):
         class ReuseRepository:
@@ -740,7 +764,7 @@ class OntologyProjectionAuditTests(unittest.TestCase):
         )
 
         self.assertFalse(context["reusable"])
-        self.assertEqual("prior-aligned-inference-unavailable", context["fallbackReason"])
+        self.assertEqual("coherent-rule-result-slot-proof-unavailable", context["fallbackReason"])
 
     def test_recorder_persists_a_complete_typedb_target_reuse_proof(self):
         snapshot = source_snapshot()
@@ -765,6 +789,7 @@ class OntologyProjectionAuditTests(unittest.TestCase):
             "typedb",
             target_symbols=["005930"],
             rulebox_metadata={"ruleboxRulesHash": "rulebox-current"},
+            execution_namespace=self.EXECUTION_NAMESPACE,
         )
         result = {
             "saved": True,
@@ -928,6 +953,13 @@ class OntologyProjectionAuditTests(unittest.TestCase):
                 "sourceAboxSnapshotId": run.abox_snapshot_id,
                 "generationAligned": True,
             },
+            "inferenceReuseProof": {
+                "scopePlanFingerprint": run.context_payload["scopeTopology"]["inferenceReuseScopePlanFingerprint"],
+            },
+            "_ruleResultSlotCatalogRuleIds": ["graph.test.core.v1"],
+            "_priorRuleStatesBySymbol": {
+                "005930": {"graph.test.core.v1": "not-matched"},
+            },
         }
         completed = complete_ontology_projection_run(
             run,
@@ -955,10 +987,11 @@ class OntologyProjectionAuditTests(unittest.TestCase):
             item for item in connection.calls
             if "INSERT INTO ontology_reasoning_rule_result_slots" in item[0]
         )
-        self.assertEqual(run.world_id, slot_call[1][0])
-        self.assertEqual("005930", slot_call[1][2])
-        self.assertEqual("graph.test.core.v1", slot_call[1][3])
-        self.assertEqual(1, slot_call[1][9])
+        self.assertEqual(run.execution_namespace_id, slot_call[1][0])
+        self.assertEqual(run.world_id, slot_call[1][5])
+        self.assertEqual("005930", slot_call[1][7])
+        self.assertEqual("graph.test.core.v1", slot_call[1][8])
+        self.assertEqual(1, slot_call[1][14])
 
     def test_rule_result_slots_are_reusable_only_with_complete_catalog_coverage(self):
         rows = [
@@ -970,6 +1003,9 @@ class OntologyProjectionAuditTests(unittest.TestCase):
                 "inference_generation_id": "generation:1",
                 "source_abox_snapshot_id": "abox:1",
                 "source_run_id": "run:1",
+                "scope_plan_fingerprint": "scope:1",
+                "input_fingerprint": "input:1",
+                "execution_namespace_id": "namespace:1",
             },
             {
                 "symbol": "005930",
@@ -979,6 +1015,9 @@ class OntologyProjectionAuditTests(unittest.TestCase):
                 "inference_generation_id": "generation:1",
                 "source_abox_snapshot_id": "abox:1",
                 "source_run_id": "run:1",
+                "scope_plan_fingerprint": "scope:1",
+                "input_fingerprint": "input:1",
+                "execution_namespace_id": "namespace:1",
             },
         ]
         connection = RecordingConnection(rows=rows)
@@ -992,6 +1031,7 @@ class OntologyProjectionAuditTests(unittest.TestCase):
             rulebox_rules_hash="rules:1",
             tbox_fingerprint="tbox:1",
             expected_rule_count=2,
+            execution_namespace_id="namespace:1",
         )
         incomplete = store.active_rule_result_slot_context(
             world_id="portfolio:local:main",
@@ -1000,6 +1040,7 @@ class OntologyProjectionAuditTests(unittest.TestCase):
             rulebox_rules_hash="rules:1",
             tbox_fingerprint="tbox:1",
             expected_rule_count=3,
+            execution_namespace_id="namespace:1",
         )
 
         self.assertTrue(complete["reusable"])
@@ -1019,6 +1060,111 @@ class OntologyProjectionAuditTests(unittest.TestCase):
         self.assertEqual(2, summary["slotCount"])
         self.assertEqual(1, summary["completeSymbolCount"])
         self.assertEqual(["graph.rule.one"], summary["symbols"][0]["matchedRuleIds"])
+
+    def test_rule_result_slots_reject_a_mixed_generation_even_with_full_row_count(self):
+        rows = [
+            {
+                "symbol": "005930",
+                "rule_id": "graph.rule.one",
+                "matched": 1,
+                "catalog_rule_count": 2,
+                "inference_generation_id": "generation:1",
+                "source_abox_snapshot_id": "abox:1",
+                "source_run_id": "run:1",
+                "scope_plan_fingerprint": "scope:1",
+                "input_fingerprint": "input:1",
+                "execution_namespace_id": "namespace:v2",
+            },
+            {
+                "symbol": "005930",
+                "rule_id": "graph.rule.two",
+                "matched": 0,
+                "catalog_rule_count": 2,
+                "inference_generation_id": "generation:2",
+                "source_abox_snapshot_id": "abox:2",
+                "source_run_id": "run:2",
+                "scope_plan_fingerprint": "scope:2",
+                "input_fingerprint": "input:2",
+                "execution_namespace_id": "namespace:v2",
+            },
+        ]
+        connection = RecordingConnection(rows=rows)
+        store = MySQLOntologyProjectionRunStore.__new__(MySQLOntologyProjectionRunStore)
+        store.connect = lambda: ConnectionContext(connection)
+
+        context = store.active_rule_result_slot_context(
+            world_id="portfolio:local:main",
+            account_id="main",
+            symbols=["005930"],
+            rulebox_rules_hash="rules:1",
+            tbox_fingerprint="tbox:1",
+            expected_rule_count=2,
+            execution_namespace_id="namespace:v2",
+            engine_deployment_id="ontology-v2-shadow",
+            graph_database="orbit_alpha_ontology_shadow_v2",
+            release_fingerprint="release:2",
+        )
+
+        self.assertFalse(context["reusable"])
+        self.assertEqual("result-slot-generation-incoherent", context["reason"])
+        self.assertIn("execution_namespace_id = %s", connection.calls[0][0])
+
+    def test_incremental_slot_write_inherits_one_generation_and_replaces_executed_rules(self):
+        _snapshot, _graph, _fingerprint, run = self.build_run()
+        connection = RecordingConnection()
+        store = MySQLOntologyProjectionRunStore.__new__(MySQLOntologyProjectionRunStore)
+        result = {
+            "status": "ok",
+            "ruleboxExecution": {
+                "status": "ok",
+                "nativeRuleSelectionApplied": True,
+                "nativeRuleSelectionFullRuleCount": 2,
+                "nativeRuleSelectionExecutedRuleIds": ["graph.rule.two"],
+                "typedbNativeRuleMatchedRuleIds": ["graph.rule.two"],
+            },
+            "inferenceBox": {
+                "generationAligned": True,
+                "inferenceGenerationId": "generation:current",
+                "sourceAboxSnapshotId": run.abox_snapshot_id,
+            },
+            "inferenceReuseProof": {
+                "scopePlanFingerprint": run.context_payload["scopeTopology"]["inferenceReuseScopePlanFingerprint"],
+            },
+            "_ruleResultSlotCatalogRuleIds": ["graph.rule.one", "graph.rule.two"],
+            "_priorRuleStatesBySymbol": {"005930": {
+                "graph.rule.one": "matched",
+                "graph.rule.two": "not-matched",
+            }},
+        }
+        trace = {
+            "inferenceGenerationId": "generation:current",
+            "ruleOutcomes": [{
+                "ruleId": "graph.rule.two",
+                "ruleVersion": "v2",
+                "status": "matched",
+                "matched": True,
+                "matchedTargetSymbols": ["005930"],
+            }],
+        }
+
+        store._upsert_rule_result_slots_with_connection(
+            connection,
+            run,
+            result,
+            trace,
+            "2026-08-16T00:00:00Z",
+        )
+
+        inserts = [
+            params
+            for sql, params in connection.calls
+            if "INSERT INTO ontology_reasoning_rule_result_slots" in sql
+        ]
+        self.assertEqual(2, len(inserts))
+        self.assertEqual({"graph.rule.one", "graph.rule.two"}, {row[8] for row in inserts})
+        self.assertTrue(all(row[14] == 1 for row in inserts))
+        self.assertEqual({"generation:current"}, {row[16] for row in inserts})
+        self.assertEqual(1, len({row[19] for row in inserts}))
 
     def test_projection_audit_keeps_runtime_identity_and_patch_fallback(self):
         _snapshot, _graph, _fingerprint, run = self.build_run()
@@ -1265,6 +1411,11 @@ class OntologyProjectionAuditTests(unittest.TestCase):
             "startedAt": run.started_at,
             "status": "projecting",
             "graphStore": "typedb",
+            "executionNamespaceId": run.execution_namespace_id,
+            "engineDeploymentId": run.engine_deployment_id,
+            "graphDatabase": run.graph_database,
+            "releaseFingerprint": run.release_fingerprint,
+            "validationCohortId": run.validation_cohort_id,
             "projectionMode": run.projection_mode,
             "materialFingerprint": run.material_fingerprint,
             "aboxSnapshotId": run.abox_snapshot_id,
@@ -1340,6 +1491,11 @@ class OntologyProjectionAuditTests(unittest.TestCase):
             "startedAt": run.started_at,
             "status": "ok",
             "graphStore": "typedb",
+            "executionNamespaceId": run.execution_namespace_id,
+            "engineDeploymentId": run.engine_deployment_id,
+            "graphDatabase": run.graph_database,
+            "releaseFingerprint": run.release_fingerprint,
+            "validationCohortId": run.validation_cohort_id,
             "projectionMode": run.projection_mode,
             "materialFingerprint": run.material_fingerprint,
             "aboxSnapshotId": run.abox_snapshot_id,

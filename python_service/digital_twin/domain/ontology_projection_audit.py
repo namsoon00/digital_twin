@@ -155,6 +155,9 @@ def compact_reasoning_request_context(
         "requestedScopeFamiliesBySymbol": symbol_family_map(
             values.get("requestedScopeFamiliesBySymbol")
         ),
+        "eventFactBoundaryAuthoritative": bool(
+            values.get("eventFactBoundaryAuthoritative")
+        ),
         "targetSymbols": sorted(targets)[:80],
         "sourceObservedAt": str(values.get("sourceObservedAt") or "").strip()[:80],
         "changedFieldsBySymbol": symbol_map(values.get("changedFieldsBySymbol"), list_values=True),
@@ -395,6 +398,10 @@ def inference_reuse_proof_summary(proof: Dict[str, object]) -> Dict[str, object]
         "status": str(values.get("status") or ""),
         "reason": str(values.get("reason") or "")[:300],
         "coverageComplete": bool(values.get("coverageComplete")),
+        "executionNamespaceId": str(values.get("executionNamespaceId") or ""),
+        "engineDeploymentId": str(values.get("engineDeploymentId") or ""),
+        "graphDatabase": str(values.get("graphDatabase") or ""),
+        "releaseFingerprint": str(values.get("releaseFingerprint") or ""),
         "sourceAboxSnapshotId": str(values.get("sourceAboxSnapshotId") or ""),
         "inferenceGenerationId": str(values.get("inferenceGenerationId") or ""),
         "targetSymbols": _clean_symbols(values.get("targetSymbols") or []),
@@ -874,6 +881,11 @@ class OntologyProjectionRun:
     activated_at: str
     status: str
     graph_store: str
+    execution_namespace_id: str
+    engine_deployment_id: str
+    graph_database: str
+    release_fingerprint: str
+    validation_cohort_id: str
     projection_mode: str
     material_fingerprint: str
     abox_snapshot_id: str
@@ -926,6 +938,11 @@ def projection_run_from_payload(payload: Dict[str, object]) -> OntologyProjectio
         activated_at=str(value("activated_at", "activatedAt") or ""),
         status=str(value("status") or ""),
         graph_store=str(value("graph_store", "graphStore") or ""),
+        execution_namespace_id=str(value("execution_namespace_id", "executionNamespaceId") or ""),
+        engine_deployment_id=str(value("engine_deployment_id", "engineDeploymentId") or ""),
+        graph_database=str(value("graph_database", "graphDatabase") or ""),
+        release_fingerprint=str(value("release_fingerprint", "releaseFingerprint") or ""),
+        validation_cohort_id=str(value("validation_cohort_id", "validationCohortId") or ""),
         projection_mode=str(value("projection_mode", "projectionMode") or ""),
         material_fingerprint=str(value("material_fingerprint", "materialFingerprint") or ""),
         abox_snapshot_id=str(value("abox_snapshot_id", "aboxSnapshotId") or ""),
@@ -952,6 +969,7 @@ def build_ontology_projection_run(
     target_symbols: Iterable[object] = None,
     rulebox_metadata: Dict[str, object] = None,
     reasoning_context: Mapping[str, object] = None,
+    execution_namespace: Mapping[str, object] = None,
     started_at: str = "",
 ) -> OntologyProjectionRun:
     worldview = dict(getattr(graph, "worldview", {}) or {})
@@ -964,10 +982,24 @@ def build_ontology_projection_run(
         if not item.is_cash()
     ])
     stamp = str(started_at or utc_now_iso())
+    namespace = dict(execution_namespace or {})
+    engine_deployment_id = str(namespace.get("engineDeploymentId") or "").strip()
+    graph_database = str(namespace.get("graphDatabase") or "").strip()
+    release_fingerprint = str(namespace.get("releaseFingerprint") or "").strip()
+    validation_cohort_id = str(namespace.get("validationCohortId") or "").strip()
+    execution_namespace_id = str(namespace.get("executionNamespaceId") or "").strip()
+    if not execution_namespace_id:
+        execution_namespace_id = "projection-namespace:" + _hash_payload({
+            "engineDeploymentId": engine_deployment_id,
+            "graphDatabase": graph_database,
+            "releaseFingerprint": release_fingerprint,
+            "validationCohortId": validation_cohort_id,
+        })[:32]
     # Material fingerprints can recur after an intervening market move. Keep
     # every activation occurrence for audit, rather than overwriting the old
     # record merely because its facts happen to match again.
     run_seed = "|".join([
+        execution_namespace_id,
         str(worldview.get("worldId") or ""),
         str(snapshot.account_id or "account"),
         str(material_fingerprint or ""),
@@ -1005,6 +1037,11 @@ def build_ontology_projection_run(
         activated_at="",
         status="projecting",
         graph_store=str(graph_store or "typedb"),
+        execution_namespace_id=execution_namespace_id,
+        engine_deployment_id=engine_deployment_id,
+        graph_database=graph_database,
+        release_fingerprint=release_fingerprint,
+        validation_cohort_id=validation_cohort_id,
         projection_mode=str(worldview.get("runtimeProjectionMode") or "abox-facts-only"),
         material_fingerprint=str(material_fingerprint or ""),
         abox_snapshot_id=str(abox_snapshot_id or ""),
@@ -1029,6 +1066,13 @@ def build_ontology_projection_run(
                 "worldId": str(worldview.get("worldId") or ""),
                 "worldType": str(worldview.get("worldType") or ""),
                 "marketWorldId": str(worldview.get("marketWorldId") or ""),
+            },
+            "executionNamespace": {
+                "executionNamespaceId": execution_namespace_id,
+                "engineDeploymentId": engine_deployment_id,
+                "graphDatabase": graph_database,
+                "releaseFingerprint": release_fingerprint,
+                "validationCohortId": validation_cohort_id,
             },
             "sourceSnapshotSummary": {
                 "mode": str(snapshot.mode or ""),

@@ -206,6 +206,7 @@ def build_fact_slot_projection_plan(
     requested_fact_families: Iterable[object],
     requested_fact_families_by_symbol: Mapping[str, Iterable[object]] = None,
     changed_fields_by_symbol: Mapping[str, Iterable[object]] = None,
+    event_boundary_authoritative: bool = False,
 ) -> Dict[str, object]:
     """Build a conservative write-routing plan from mailbox provenance."""
     targets = sorted({
@@ -291,7 +292,13 @@ def build_fact_slot_projection_plan(
         }
     slots: Set[str] = set()
     for family in requested:
-        slots.update(FACT_SLOT_DEPENDENCY_FAMILIES[family])
+        slots.update(
+            FACT_SLOT_DIRECT_FAMILIES.get(family, {family})
+            if event_boundary_authoritative
+            else FACT_SLOT_DEPENDENCY_FAMILIES[family]
+        )
+    if event_boundary_authoritative:
+        slots.add("link")
     slots_by_symbol: Dict[str, Set[str]] = {}
     fallback_targets = []
     unknown_by_symbol: Dict[str, list] = {}
@@ -326,7 +333,13 @@ def build_fact_slot_projection_plan(
         )
         use_precise_fields = bool(symbol_fields and not unclassified_fields)
         symbol_slots: Set[str] = set()
-        if use_precise_fields and FOLLOWUP_FIELD not in compact_fields:
+        if event_boundary_authoritative:
+            for family in symbol_requested:
+                symbol_slots.update(
+                    FACT_SLOT_DIRECT_FAMILIES.get(family, {family})
+                )
+            symbol_slots.add("link")
+        elif use_precise_fields and FOLLOWUP_FIELD not in compact_fields:
             for family in symbol_requested:
                 symbol_slots.update(
                     FACT_SLOT_DIRECT_FAMILIES.get(family, {family})
@@ -378,6 +391,7 @@ def build_fact_slot_projection_plan(
         "fallbackTargetSymbols": sorted(fallback_targets),
         "unknownFactFamiliesBySymbol": unknown_by_symbol,
         "fallbackReason": "unclassified-target-event-family" if fallback_targets else "",
+        "eventBoundaryAuthoritative": bool(event_boundary_authoritative),
     }
 
 

@@ -1,6 +1,7 @@
 """Independent V2 reasoning execution without the monitoring runner."""
 
 import inspect
+import threading
 import time
 from copy import deepcopy
 from datetime import datetime, timezone
@@ -12,6 +13,7 @@ from ..domain.independent_reasoning import (
     IndependentReasoningResult,
     independent_reasoning_request,
 )
+from ..domain.investment_reasoning import FactDelta
 from ..domain.message_types import PORTFOLIO_ONTOLOGY_SIGNAL
 from ..domain.ontology_projection_input import compact_monitor_state_for_ontology
 
@@ -79,6 +81,7 @@ def alert_event_payload(event: object) -> Dict[str, object]:
             "reviewLevel",
             "dataState",
             "validationState",
+            "investmentReasoningCaseId",
         ]
         if source_metadata.get(key) not in (None, "", [], {})
     }
@@ -383,6 +386,7 @@ class V2ReasoningEngine:
         delivery_authorized_provider=None,
         settings=None,
         release_identity=None,
+        reasoning_orchestrator=None,
     ):
         self._descriptor = descriptor
         self.input_assembler = input_assembler
@@ -392,6 +396,7 @@ class V2ReasoningEngine:
         self.delivery_authorized_provider = delivery_authorized_provider or (lambda: False)
         self.settings = dict(settings or {})
         self._release_identity = dict(release_identity or {})
+        self.reasoning_orchestrator = reasoning_orchestrator
         self.last_result = None
         self.results_by_request_id = {}
 
@@ -410,6 +415,9 @@ class V2ReasoningEngine:
             "releaseIdentity": dict(self._release_identity),
         }
 
+    def release_identity(self) -> Dict[str, object]:
+        return dict(self._release_identity)
+
     def consume(self, source_events: Iterable[Mapping[str, object]]) -> Dict[str, object]:
         request = independent_reasoning_request(
             self._descriptor.deployment_id,
@@ -422,11 +430,22 @@ class V2ReasoningEngine:
         started_at = utc_now_iso()
         started = time.perf_counter()
         stages = {}
+        reasoning_case = (
+            self.reasoning_orchestrator.start(request, self._release_identity)
+            if self.reasoning_orchestrator is not None
+            else None
+        )
         input_started = time.perf_counter()
         assembled = self.input_assembler.assemble(request)
         stages["inputAssemblyMs"] = int((time.perf_counter() - input_started) * 1000)
         preflight = dict(assembled.get("preflight") or {})
         if assembled.get("status") != "ready":
+            if reasoning_case is not None:
+                reasoning_case = self.reasoning_orchestrator.defer(
+                    reasoning_case.case_id,
+                    str(preflight.get("reason") or "Point-in-time input is not ready."),
+                    retryable=not bool(preflight.get("permanent")),
+                )
             result = IndependentReasoningResult(
                 request_id=request.request_id,
                 deployment_id=request.deployment_id,
@@ -440,10 +459,17 @@ class V2ReasoningEngine:
                 retry_after_seconds=int(preflight.get("retryAfterSeconds") or 15),
                 reason=str(preflight.get("reason") or "Point-in-time input is not ready."),
                 stage_durations_ms=stages,
+                reasoning_case_id=reasoning_case.case_id if reasoning_case else "",
+                reasoning_case_stage=reasoning_case.stage if reasoning_case else "",
+                reasoning_lane=reasoning_case.fact_delta.lane if reasoning_case else "",
+                release_fingerprint=str(self._release_identity.get("releaseFingerprint") or ""),
+                validation_cohort_id=str(self._release_identity.get("validationCohortId") or ""),
             )
             return self.remember(result)
 
         snapshots = list(assembled.get("snapshots") or [])
+        if reasoning_case is not None:
+            reasoning_case = self.reasoning_orchestrator.input_ready(reasoning_case.case_id)
         projection_started = time.perf_counter()
         projection_results = self.inference_executor.execute(request, snapshots)
         stages["projectionAndInferenceMs"] = int((time.perf_counter() - projection_started) * 1000)
@@ -453,6 +479,17 @@ class V2ReasoningEngine:
         }
         verified_accounts = [account_id for account_id, value in identities.items() if value["verified"]]
         failed_accounts = [account_id for account_id, value in identities.items() if not value["verified"]]
+        compact_projections = {
+            account_id: compact_projection_result(value)
+            for account_id, value in projection_results.items()
+        }
+        if reasoning_case is not None and verified_accounts:
+            reasoning_case = self.reasoning_orchestrator.inference_completed(
+                reasoning_case.case_id,
+                identities,
+                compact_projections,
+                stages["projectionAndInferenceMs"],
+            )
         candidate_started = time.perf_counter()
         candidates = self.candidate_builder.build(
             request,
@@ -464,6 +501,15 @@ class V2ReasoningEngine:
         stages["candidateBuildMs"] = int((time.perf_counter() - candidate_started) * 1000)
         detected_events = list(candidates.get("detected") or [])
         ready_events = list(candidates.get("ready") or [])
+        if reasoning_case is not None and verified_accounts:
+            reasoning_case = self.reasoning_orchestrator.hypotheses_ready(
+                reasoning_case.case_id,
+                detected_events,
+            )
+            self.reasoning_orchestrator.attach_case_context(
+                reasoning_case.case_id,
+                [*detected_events, *ready_events],
+            )
         delivery_authorized = bool(self.delivery_authorized_provider())
         delivery_events = []
         ai_handoff_status = "shadow-delivery-blocked"
@@ -477,7 +523,7 @@ class V2ReasoningEngine:
                 source_snapshot_replay=True,
             )
             delivery_events = list(getattr(cycle, "delivered_events", None) or ready_events)
-            ai_handoff_status = "notification-ai-queue-enqueued" if int(getattr(cycle, "queued", 0) or 0) else "no-delivery-candidate"
+            ai_handoff_status = "notification-queue-enqueued" if int(getattr(cycle, "queued", 0) or 0) else "no-delivery-candidate"
             stages["deliveryHandoffMs"] = int((time.perf_counter() - delivery_started) * 1000)
         elif delivery_authorized:
             ai_handoff_status = "delivery-recorder-unavailable"
@@ -501,6 +547,19 @@ class V2ReasoningEngine:
                 ),
                 "Independent V2 TypeDB inference is not ready.",
             ))
+        if reasoning_case is not None:
+            if not verified_accounts:
+                reasoning_case = self.reasoning_orchestrator.defer(
+                    reasoning_case.case_id,
+                    reason,
+                    retryable=retryable,
+                )
+            elif not delivery_authorized or not ready_events or ai_handoff_status == "no-delivery-candidate":
+                reasoning_case = self.reasoning_orchestrator.complete_without_ai(
+                    reasoning_case.case_id,
+                    "Shadow execution or delivery policy produced no AI judgement request.",
+                    source="typedb-shadow" if not delivery_authorized else "typedb-no-delivery",
+                )
         source_ids = tuple(
             value["sourceAboxSnapshotId"] for value in identities.values()
             if value["sourceAboxSnapshotId"]
@@ -520,10 +579,7 @@ class V2ReasoningEngine:
             symbols=request.symbols,
             source_abox_snapshot_ids=source_ids,
             inference_generation_ids=generation_ids,
-            projection_results={
-                account_id: compact_projection_result(value)
-                for account_id, value in projection_results.items()
-            },
+            projection_results=compact_projections,
             candidate_events=tuple(alert_event_payload(event) for event in detected_events),
             delivery_events=tuple(alert_event_payload(event) for event in delivery_events),
             delivery_authorized=delivery_authorized,
@@ -536,6 +592,11 @@ class V2ReasoningEngine:
             retry_after_seconds=max(1, retry_after) if retryable else 0,
             reason=reason,
             stage_durations_ms=stages,
+            reasoning_case_id=reasoning_case.case_id if reasoning_case else "",
+            reasoning_case_stage=reasoning_case.stage if reasoning_case else "",
+            reasoning_lane=reasoning_case.fact_delta.lane if reasoning_case else "",
+            release_fingerprint=str(self._release_identity.get("releaseFingerprint") or ""),
+            validation_cohort_id=str(self._release_identity.get("validationCohortId") or ""),
         )
         return self.remember(result)
 
@@ -592,21 +653,41 @@ class IndependentReasoningJobRunner:
             return {"status": "disabled", "processedCount": 0}
         descriptor = self.engine.descriptor()
         repaired = self.repair_ingress(descriptor.deployment_id)
+        lane_provider = getattr(self.queue, "next_lane", None)
+        lane_hint = str(lane_provider(descriptor.deployment_id) or "") if callable(lane_provider) else ""
+        claim_limit = (
+            self.lane_batch_limit(lane_hint)
+            if lane_hint
+            else _int_setting(self.settings, "reasoningEngineV2BatchSize", 6, 1, 20)
+        )
+        claim_kwargs = {
+            "limit": claim_limit,
+            "lease_seconds": _int_setting(
+                self.settings,
+                "reasoningEngineV2LeaseSeconds",
+                600,
+                60,
+                3600,
+            ),
+        }
+        if lane_hint and "reasoning_lane" in inspect.signature(self.queue.claim).parameters:
+            claim_kwargs["reasoning_lane"] = lane_hint
         jobs = self.queue.claim(
             descriptor.deployment_id,
             self.worker_id,
-            limit=_int_setting(self.settings, "reasoningEngineV2BatchSize", 6, 1, 20),
-            lease_seconds=_int_setting(self.settings, "reasoningEngineV2LeaseSeconds", 600, 60, 3600),
+            **claim_kwargs,
         )
         if not jobs:
             return {
                 "status": "idle",
                 "processedCount": 0,
                 "repairedIngressCount": repaired,
-                "queue": self.queue.summary(descriptor.deployment_id),
+                "queue": self.queue_summary(descriptor.deployment_id),
             }
         batch_key = self.batch_compatibility_key(jobs[0])
-        selected_jobs = [job for job in jobs if self.batch_compatibility_key(job) == batch_key]
+        reasoning_lane = self.reasoning_lane(jobs[0])
+        compatible_jobs = [job for job in jobs if self.batch_compatibility_key(job) == batch_key]
+        selected_jobs = compatible_jobs[:self.lane_batch_limit(reasoning_lane)]
         deferred_jobs = [job for job in jobs if job not in selected_jobs]
         for job in deferred_jobs:
             self.queue.defer(
@@ -616,13 +697,34 @@ class IndependentReasoningJobRunner:
             )
         job_ids = [job["jobId"] for job in selected_jobs]
         try:
+            release_provider = getattr(self.engine, "release_identity", None)
+            release_identity = dict(release_provider() or {}) if callable(release_provider) else {}
+            binder = getattr(self.queue, "bind_release", None)
+            if callable(binder):
+                binder(job_ids, release_identity, reasoning_lane)
             events = [
                 DomainEvent.from_dict(dict(job.get("sourceEvent") or {}))
                 for job in selected_jobs
             ]
-            result = self.engine.consume(events)
+            stop_heartbeat = threading.Event()
+            lease_lost = threading.Event()
+            heartbeat = threading.Thread(
+                target=self.heartbeat_loop,
+                args=(job_ids, stop_heartbeat, lease_lost),
+                name="v2-reasoning-heartbeat-" + self.worker_id[-12:],
+                daemon=True,
+            )
+            heartbeat.start()
+            try:
+                result = self.engine.consume(events)
+            finally:
+                stop_heartbeat.set()
+                heartbeat.join(timeout=max(1, self.heartbeat_seconds() + 1))
+            if lease_lost.is_set():
+                raise RuntimeError("The V2 reasoning lease was lost during TypeDB execution.")
             result["batch_job_count"] = len(selected_jobs)
             result["batch_job_ids"] = job_ids
+            result["reasoning_lane"] = reasoning_lane
             status = str(result.get("status") or "")
             if status == "deferred" and result.get("retryable"):
                 for job_id in job_ids:
@@ -634,7 +736,11 @@ class IndependentReasoningJobRunner:
                 outcome = "deferred"
             else:
                 for job_id in job_ids:
-                    self.queue.complete(job_id, result)
+                    parameters = inspect.signature(self.queue.complete).parameters
+                    if "worker_id" in parameters:
+                        self.queue.complete(job_id, result, worker_id=self.worker_id)
+                    else:
+                        self.queue.complete(job_id, result)
                 outcome = "completed"
             health = dict((self.registry.get(descriptor.deployment_id) or {}).get("health") or {})
             health.update(self.engine.health())
@@ -642,7 +748,7 @@ class IndependentReasoningJobRunner:
                 "lastJobId": job_ids[-1],
                 "lastJobIds": job_ids,
                 "lastRunAt": utc_now_iso(),
-                "queue": self.queue.summary(descriptor.deployment_id),
+                "queue": self.queue_summary(descriptor.deployment_id),
             })
             self.registry.update_health(descriptor.deployment_id, health)
             return {
@@ -674,7 +780,7 @@ class IndependentReasoningJobRunner:
                 "lastJobIds": job_ids,
                 "lastError": str(error)[:300],
                 "lastRunAt": utc_now_iso(),
-                "queue": self.queue.summary(descriptor.deployment_id),
+                "queue": self.queue_summary(descriptor.deployment_id),
             })
             self.registry.update_health(descriptor.deployment_id, health)
             return {
@@ -705,7 +811,58 @@ class IndependentReasoningJobRunner:
             account_ids,
             str(boundary.get("accountId") or ""),
             str(boundary.get("generatedAt") or ""),
+            IndependentReasoningJobRunner.reasoning_lane(job),
         )
+
+    @staticmethod
+    def reasoning_lane(job: Mapping[str, object]) -> str:
+        event = DomainEvent.from_dict(dict(job.get("sourceEvent") or {}))
+        deployment_id = str(job.get("deploymentId") or "reasoning-v2")
+        request = independent_reasoning_request(deployment_id, [event])
+        return FactDelta.from_request(request).lane
+
+    def lane_batch_limit(self, lane: str) -> int:
+        key, fallback = {
+            "REALTIME": ("reasoningEngineV2RealtimeBatchSize", 1),
+            "CONTEXT": ("reasoningEngineV2ContextBatchSize", 3),
+            "RECONCILIATION": ("reasoningEngineV2ReconciliationBatchSize", 6),
+        }.get(str(lane or "CONTEXT"), ("reasoningEngineV2ContextBatchSize", 3))
+        return _int_setting(self.settings, key, fallback, 1, 20)
+
+    def heartbeat_seconds(self) -> int:
+        return _int_setting(self.settings, "reasoningEngineV2HeartbeatSeconds", 15, 2, 120)
+
+    def heartbeat_loop(self, job_ids, stop_event, lease_lost) -> None:
+        callback = getattr(self.queue, "heartbeat", None)
+        if not callable(callback):
+            return
+        lease_seconds = _int_setting(
+            self.settings,
+            "reasoningEngineV2LeaseSeconds",
+            600,
+            60,
+            3600,
+        )
+        while not stop_event.wait(self.heartbeat_seconds()):
+            try:
+                alive = callback(job_ids, self.worker_id, lease_seconds)
+            except Exception:
+                continue
+            if not alive:
+                lease_lost.set()
+                return
+
+    def queue_summary(self, deployment_id: str) -> Dict[str, object]:
+        release_provider = getattr(self.engine, "release_identity", None)
+        release = dict(release_provider() or {}) if callable(release_provider) else {}
+        parameters = inspect.signature(self.queue.summary).parameters
+        if "release_fingerprint" in parameters:
+            return self.queue.summary(
+                deployment_id,
+                release_fingerprint=str(release.get("releaseFingerprint") or ""),
+                validation_cohort_id=str(release.get("validationCohortId") or ""),
+            )
+        return self.queue.summary(deployment_id)
 
     def repair_ingress(self, deployment_id: str) -> int:
         reader = getattr(self.event_reader, "unmaterialized_reasoning_engine_events", None)

@@ -1243,6 +1243,31 @@ def reasoning_engine_comparisons_payload(query: Dict[str, List[str]]) -> Dict[st
     }
 
 
+def investment_reasoning_cases_payload(query: Dict[str, List[str]]) -> Dict[str, object]:
+    settings = runtime_settings()
+    store = stores.investment_reasoning_case_store(settings)
+    case_id = str(first_query(query, "caseId") or "").strip()
+    if case_id:
+        reasoning_case = store.get(case_id)
+        return {
+            "status": "ok" if reasoning_case else "not-found",
+            "case": reasoning_case.to_dict() if reasoning_case else {},
+        }
+    deployment_id = str(first_query(query, "deploymentId") or "").strip()
+    symbol = str(first_query(query, "symbol") or "").upper().strip()
+    release_fingerprint = str(first_query(query, "releaseFingerprint") or "").strip()
+    try:
+        limit = max(1, min(200, int(first_query(query, "limit") or 20)))
+    except (TypeError, ValueError):
+        limit = 20
+    cases = store.latest(deployment_id=deployment_id, symbol=symbol, limit=limit)
+    return {
+        "status": "ok",
+        "summary": store.summary(deployment_id, release_fingerprint),
+        "cases": [reasoning_case.to_dict() for reasoning_case in cases],
+    }
+
+
 def ontology_rulebox_payload() -> Dict[str, object]:
     return ontology_repository_from_settings(runtime_settings()).rulebox_snapshot()
 
@@ -4991,6 +5016,9 @@ class DigitalTwinHandler(BaseHTTPRequestHandler):
 
         if path == "/api/reasoning-engine/comparisons" and self.command == "GET":
             return self.send_payload(200, reasoning_engine_comparisons_payload(query))
+
+        if path == "/api/investment-reasoning/cases" and self.command == "GET":
+            return self.send_payload(200, investment_reasoning_cases_payload(query))
 
         if path == "/api/ontology/rulebox":
             if self.command == "GET":

@@ -27,6 +27,7 @@ from ..application.independent_reasoning_engine import (
     ScopedTypeDBInferenceExecutor,
     V2ReasoningEngine,
 )
+from ..application.investment_reasoning import InvestmentReasoningOrchestrator
 from ..application.investment_brain_service import InvestmentBrainService
 from ..application.investment_domain_service import InvestmentDomainService
 from ..application.investment_research_orchestration_service import InvestmentResearchOrchestrationService, InvestmentResearchQueueRunner
@@ -463,8 +464,12 @@ def build_notification_queue_runner(dry_run: bool = False, lane: str = "all") ->
         investment_domain_store=investment_domain_store,
     )
     ai_request_enqueuer = None
+    reasoning_orchestrator = None
     news_digest_reconciler = None
     if not dry_run:
+        reasoning_orchestrator = InvestmentReasoningOrchestrator(
+            stores.investment_reasoning_case_store(settings)
+        )
         ai_request_enqueuer = NotificationAIRequestEnqueuer(
             stores.ai_inference_queue_store(settings),
             CompositeNotificationContextEnricher(
@@ -478,6 +483,7 @@ def build_notification_queue_runner(dry_run: bool = False, lane: str = "all") ->
             settings,
             decision_episode_store=decision_episode_store,
             continuity_service=continuity_service,
+            reasoning_orchestrator=reasoning_orchestrator,
         )
         news_digest_reconciler = NewsDigestEventReconciler(
             event_reader=stores.event_log(settings),
@@ -518,6 +524,7 @@ def build_notification_queue_runner(dry_run: bool = False, lane: str = "all") ->
         include_message_types=include_message_types,
         exclude_message_types=exclude_message_types,
         ai_request_enqueuer=ai_request_enqueuer,
+        reasoning_orchestrator=reasoning_orchestrator,
         news_digest_reconciler=news_digest_reconciler,
         fresh_data_recheck_requester=request_fresh_data_recheck,
     )
@@ -537,6 +544,9 @@ def build_ai_inference_queue_runner(worker_id: str = "") -> AIInferenceQueueRunn
         decision_episode_store=decision_episode_store,
         continuity_service=continuity_service,
         action_planning_service=build_decision_action_planning_service(settings),
+        reasoning_orchestrator=InvestmentReasoningOrchestrator(
+            stores.investment_reasoning_case_store(settings)
+        ),
         worker_id=worker_id,
     )
 
@@ -1831,6 +1841,9 @@ def build_v2_reasoning_engine(settings=None) -> V2ReasoningEngine:
         delivery_authorized_provider=delivery_authorized,
         settings=candidate_settings,
         release_identity=release_identity,
+        reasoning_orchestrator=InvestmentReasoningOrchestrator(
+            stores.investment_reasoning_case_store(store_settings)
+        ),
     )
 
 

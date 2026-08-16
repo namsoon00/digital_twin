@@ -67,6 +67,7 @@ class MySQLMinimalRetentionPolicy:
     completed_time_series_projection_retention_hours: int
     temporal_feature_snapshot_retention_hours: int
     reasoning_shadow_job_retention_hours: int
+    investment_reasoning_case_retention_hours: int
     reasoning_comparison_retention_hours: int
     audit_keep_count: int
     market_time_series_retention_days: Dict[str, int]
@@ -216,6 +217,13 @@ def mysql_minimal_retention_policy(settings: Mapping[str, object] = None) -> MyS
             1,
             24 * 30,
         ),
+        investment_reasoning_case_retention_hours=_int_setting(
+            configured,
+            "mysqlMinimalInvestmentReasoningCaseRetentionHours",
+            24 * 7,
+            24,
+            24 * 90,
+        ),
         reasoning_comparison_retention_hours=_int_setting(
             configured,
             "mysqlMinimalReasoningComparisonRetentionHours",
@@ -282,6 +290,10 @@ def policy_cutoffs(policy: MySQLMinimalRetentionPolicy, now: datetime = None) ->
         ),
         "reasoningEngineJobs": policy_cutoff_iso(
             policy.reasoning_shadow_job_retention_hours,
+            now,
+        ),
+        "investmentReasoningCases": policy_cutoff_iso(
+            policy.investment_reasoning_case_retention_hours,
             now,
         ),
         "reasoningComparisons": policy_cutoff_iso(

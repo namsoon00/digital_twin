@@ -78,12 +78,14 @@ class NotificationAIRequestEnqueuer:
         settings: Dict[str, object] = None,
         decision_episode_store=None,
         continuity_service=None,
+        reasoning_orchestrator=None,
     ):
         self.queue = queue
         self.context_preparer = context_preparer
         self.settings = dict(settings or {})
         self.decision_episode_store = decision_episode_store
         self.continuity_service = continuity_service
+        self.reasoning_orchestrator = reasoning_orchestrator
 
     def enqueue(self, job: NotificationJob) -> Dict[str, object]:
         if self.context_preparer:
@@ -102,6 +104,21 @@ class NotificationAIRequestEnqueuer:
                 account_id=job.account_id,
             )
         context["ontologyQualityGate"] = ontology_quality_gate_context(context, self.settings)
+        reasoning_case_context = (
+            context.get("investmentReasoningCase")
+            if isinstance(context.get("investmentReasoningCase"), dict)
+            else {}
+        )
+        reasoning_case_id = str(
+            context.get("investmentReasoningCaseId")
+            or reasoning_case_context.get("caseId")
+            or ""
+        )
+        if reasoning_case_id and self.reasoning_orchestrator is not None:
+            context = self.reasoning_orchestrator.capture_ai_context(
+                reasoning_case_id,
+                context,
+            )
         execution_profile = notification_ai_execution_profile(context, self.settings)
         context["notificationAiExecutionProfile"] = execution_profile
         model = str(self.settings.get("notificationAiModel") or "gpt-5.6-sol")
@@ -118,7 +135,16 @@ class NotificationAIRequestEnqueuer:
             reasoning_effort=str(execution_profile.get("reasoningEffort") or "max"),
             prompt_version=AI_DECISION_PROMPT_VERSION,
         )
-        return self.queue.enqueue(job, request)
+        outcome = self.queue.enqueue(job, request)
+        if reasoning_case_id and self.reasoning_orchestrator is not None:
+            status = str(outcome.get("status") or "")
+            if status in {"awaiting-ai", "pending", "processing", "retry"}:
+                self.reasoning_orchestrator.ai_queued(
+                    reasoning_case_id,
+                    str(outcome.get("requestId") or request.request_id),
+                    request.notification_job_id,
+                )
+        return outcome
 
 
 class AIInferenceQueueRunner:
@@ -132,6 +158,7 @@ class AIInferenceQueueRunner:
         decision_episode_store=None,
         continuity_service=None,
         action_planning_service=None,
+        reasoning_orchestrator=None,
         worker_id: str = "",
     ):
         self.queue = queue
@@ -140,6 +167,7 @@ class AIInferenceQueueRunner:
         self.decision_episode_store = decision_episode_store
         self.continuity_service = continuity_service
         self.action_planning_service = action_planning_service
+        self.reasoning_orchestrator = reasoning_orchestrator
         self.worker_id = str(worker_id or "notification-ai-" + uuid.uuid4().hex[:10])
         self.lease_seconds = _int_setting(self.settings, "notificationAiQueueLeaseSeconds", 360, 60, 3600)
         self.heartbeat_seconds = _int_setting(self.settings, "notificationAiQueueHeartbeatSeconds", 10, 2, 120)
@@ -293,6 +321,14 @@ class AIInferenceQueueRunner:
             )
             return request.request_id[:8] + " " + str(outcome.get("status") or "retry")
         if review_error is not None:
+            reasoning_case_id = str(context.get("investmentReasoningCaseId") or "")
+            if reasoning_case_id and self.reasoning_orchestrator is not None:
+                failed = self.storage_call_with_retry(
+                    lambda: self.queue.fail(request, self.worker_id, review_error)
+                )
+                if failed:
+                    self.reasoning_orchestrator.ai_failed(context, str(review_error))
+                return request.request_id[:8] + (" failed" if failed else " lease-lost")
             response = local_validated_ai_response(context, source="local fallback after max retries")
             response.validation_warnings.append(
                 "AI 추론이 " + str(request.attempts) + "회 실패해 TypeDB 근거 기반 로컬 설명을 사용했습니다: "
@@ -362,11 +398,32 @@ class AIInferenceQueueRunner:
             latency_ms=latency_ms,
             prompt_bytes=prompt_bytes,
         )
+        if self.reasoning_orchestrator is not None:
+            valid, validation_reason = self.reasoning_orchestrator.validate_ai_result(
+                enriched,
+                result,
+            )
+            if not valid:
+                failed = self.storage_call_with_retry(
+                    lambda: self.queue.fail(request, self.worker_id, validation_reason)
+                )
+                if failed:
+                    self.reasoning_orchestrator.ai_failed(enriched, validation_reason)
+                return request.request_id[:8] + (
+                    " blocked-invalid-reasoning-contract" if failed else " lease-lost"
+                )
         published = self.storage_call_with_retry(
             lambda: self.queue.complete(request, self.worker_id, result, enriched)
         )
         if not published:
             return request.request_id[:8] + " superseded-before-publish"
+        if self.reasoning_orchestrator is not None:
+            try:
+                self.storage_call_with_retry(
+                    lambda: self.reasoning_orchestrator.ai_completed(request, enriched, result)
+                )
+            except Exception:  # noqa: BLE001 - notification publication remains authoritative.
+                pass
         self.persist_decision_episode(request, context, episode, action_plan)
         fallback = " fallback" if "fallback" in str(response.source or "").lower() else ""
         return (
@@ -403,6 +460,11 @@ class AIInferenceQueueRunner:
             failed = self.storage_call_with_retry(
                 lambda: self.queue.fail(request, self.worker_id, error)
             )
+            if failed and self.reasoning_orchestrator is not None:
+                try:
+                    self.reasoning_orchestrator.ai_failed(request.context, str(error))
+                except Exception:  # noqa: BLE001 - queue failure state remains authoritative.
+                    pass
             return request.request_id[:8] + (" failed" if failed else " lease-lost")
         except Exception as recovery_error:  # noqa: BLE001 - lease expiry is the final recovery boundary.
             return (

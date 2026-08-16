@@ -16,6 +16,7 @@ from .mysql_operational import (
     MySQLInvestmentCalendarStore,
     MySQLInvestmentStrategyProposalStore,
     MySQLInvestmentDecisionEpisodeStore,
+    MySQLInvestmentReasoningCaseStore,
     MySQLInvestmentDomainStore,
     MySQLHypothesisLifecycleStore,
     MySQLHypothesisDevelopmentStore,
@@ -236,6 +237,10 @@ def reasoning_engine_comparison_store(settings: Dict[str, str] = None):
 
 def reasoning_engine_job_store(settings: Dict[str, str] = None):
     return MySQLReasoningEngineJobStore(configured_settings(settings))
+
+
+def investment_reasoning_case_store(settings: Dict[str, str] = None):
+    return MySQLInvestmentReasoningCaseStore(configured_settings(settings))
 
 
 def reasoning_shadow_job_store(settings: Dict[str, str] = None):

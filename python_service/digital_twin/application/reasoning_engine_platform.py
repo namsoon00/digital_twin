@@ -1,5 +1,6 @@
 """Versioned reasoning-engine release registration and guarded switching."""
 
+import inspect
 from datetime import datetime, timezone
 from typing import Dict, Iterable, Mapping
 
@@ -45,6 +46,22 @@ class ReasoningEnginePlatformService:
         except (TypeError, ValueError):
             value = fallback
         return max(lower, min(upper, value))
+
+    def independent_queue_summary(
+        self,
+        deployment_id: str,
+        release: Mapping[str, object],
+    ) -> Dict[str, object]:
+        lookback = self.int_setting("reasoningEnginePromotionComparisonLookback", 200, 1, 2000)
+        parameters = inspect.signature(self.independent_job_store.summary).parameters
+        if "release_fingerprint" not in parameters:
+            return self.independent_job_store.summary(deployment_id, lookback=lookback)
+        return self.independent_job_store.summary(
+            deployment_id,
+            lookback=lookback,
+            release_fingerprint=str(release.get("releaseFingerprint") or ""),
+            validation_cohort_id=str(release.get("validationCohortId") or ""),
+        )
 
     def descriptors(self):
         from ..domain.ontology_rulebox_release_manifest import RULEBOX_RELEASE_MANIFEST_VERSION
@@ -214,9 +231,9 @@ class ReasoningEnginePlatformService:
                 validation_cohort_id=str(candidate_release.get("validationCohortId") or ""),
             )
         if self.independent_job_store is not None and candidate_id:
-            response["independentQueue"] = self.independent_job_store.summary(
+            response["independentQueue"] = self.independent_queue_summary(
                 candidate_id,
-                lookback=self.int_setting("reasoningEnginePromotionComparisonLookback", 200, 1, 2000),
+                candidate_release,
             )
         if candidate_id:
             response["promotionReadiness"] = self.promotion_readiness(candidate_id)
@@ -338,9 +355,10 @@ class ReasoningEnginePlatformService:
     def independent_promotion_readiness(self, deployment_id: str) -> Dict[str, object]:
         row = self.registry.get(deployment_id)
         health = dict(row.get("health") or {})
-        summary = self.independent_job_store.summary(
+        release = self.release_identity(deployment_id)
+        summary = self.independent_queue_summary(
             deployment_id,
-            lookback=self.int_setting("reasoningEnginePromotionComparisonLookback", 200, 1, 2000),
+            release,
         )
         blockers = []
         if str(row.get("status") or "") not in {"shadow", "candidate"}:
@@ -406,7 +424,7 @@ class ReasoningEnginePlatformService:
             "blockers": list(dict.fromkeys(blockers)),
             "independentExecution": summary,
             "health": health,
-            "release": self.release_identity(deployment_id),
+            "release": release,
             "minimumSuccessfulRuns": minimum_runs,
             "maximumCandidateP95Ms": maximum_candidate_p95,
             "maximumQueueWaitP95Ms": maximum_queue_wait_p95,

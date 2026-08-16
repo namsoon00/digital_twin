@@ -14,6 +14,7 @@ from ..domain.reasoning_engine_versions import (
 )
 from ..domain.reasoning_shadow import reasoning_comparison_summary
 from ..domain.independent_reasoning import independent_reasoning_request
+from ..domain.investment_reasoning import FactDelta
 from ..domain.time_series_storage import (
     TemporalFeatureSnapshot,
     TimeSeriesBackendDescriptor,
@@ -642,8 +643,8 @@ class MySQLReasoningEngineJobStore(MySQLOperationalConnection):
                 INSERT IGNORE INTO reasoning_engine_jobs (
                     job_id, deployment_id, source_event_id, scope_key,
                     input_fingerprint, request_json, result_json, job_status,
-                    priority, supersedable, available_at, created_at, updated_at
-                ) VALUES (%s, %s, %s, %s, %s, %s, '{}', 'queued', %s, %s, %s, %s, %s)
+                    priority, supersedable, reasoning_lane, available_at, created_at, updated_at
+                ) VALUES (%s, %s, %s, %s, %s, %s, '{}', 'queued', %s, %s, %s, %s, %s, %s)
                 """,
                 (
                     job_id,
@@ -657,6 +658,7 @@ class MySQLReasoningEngineJobStore(MySQLOperationalConnection):
                     }),
                     cls.event_priority(event),
                     1 if request.supersedable else 0,
+                    FactDelta.from_request(request).lane,
                     stamp,
                     stamp,
                     stamp,
@@ -693,7 +695,26 @@ class MySQLReasoningEngineJobStore(MySQLOperationalConnection):
         with self.transaction() as connection:
             return self.ingress_event_with_connection(connection, event)
 
-    def claim(self, deployment_id: str, worker_id: str, limit: int = 1, lease_seconds: int = 600) -> List[Dict[str, object]]:
+    def next_lane(self, deployment_id: str) -> str:
+        stamp = iso_utc()
+        with self.connect() as connection:
+            row = connection.execute(
+                "SELECT reasoning_lane FROM reasoning_engine_jobs WHERE deployment_id = %s "
+                "AND job_status IN ('queued', 'retry') AND (available_at = '' OR available_at <= %s) "
+                "ORDER BY priority DESC, CASE reasoning_lane WHEN 'REALTIME' THEN 0 "
+                "WHEN 'CONTEXT' THEN 1 ELSE 2 END, created_at, job_id LIMIT 1",
+                (str(deployment_id or ""), stamp),
+            ).fetchone()
+        return str((row or {}).get("reasoning_lane") or "")
+
+    def claim(
+        self,
+        deployment_id: str,
+        worker_id: str,
+        limit: int = 1,
+        lease_seconds: int = 600,
+        reasoning_lane: str = "",
+    ) -> List[Dict[str, object]]:
         stamp = iso_utc()
         lease_until = iso_utc(utc_now() + timedelta(seconds=max(60, int(lease_seconds or 600))))
         bounded = max(1, min(20, int(limit or 1)))
@@ -710,6 +731,8 @@ class MySQLReasoningEngineJobStore(MySQLOperationalConnection):
                 """,
                 (stamp, stamp, str(deployment_id or ""), stamp),
             )
+            lane_filter = " AND reasoning_lane = %s" if str(reasoning_lane or "") else ""
+            lane_params = (str(reasoning_lane or ""),) if lane_filter else ()
             rows = connection.execute(
                 """
                 SELECT * FROM reasoning_engine_jobs
@@ -717,10 +740,12 @@ class MySQLReasoningEngineJobStore(MySQLOperationalConnection):
                   AND job_status IN ('queued', 'retry')
                   AND (available_at = '' OR available_at <= %s)
                   AND (lease_expires_at = '' OR lease_expires_at < %s)
-                ORDER BY priority DESC, created_at, job_id
+                """ + lane_filter + """
+                ORDER BY priority DESC, CASE reasoning_lane WHEN 'REALTIME' THEN 0
+                    WHEN 'CONTEXT' THEN 1 ELSE 2 END, created_at, job_id
                 LIMIT %s FOR UPDATE SKIP LOCKED
                 """,
-                (str(deployment_id or ""), stamp, stamp, bounded),
+                (str(deployment_id or ""), stamp, stamp, *lane_params, bounded),
             ).fetchall()
             job_ids = [str(row.get("job_id") or "") for row in rows or []]
             if not job_ids:
@@ -728,33 +753,80 @@ class MySQLReasoningEngineJobStore(MySQLOperationalConnection):
             placeholders = ",".join(["%s"] * len(job_ids))
             connection.execute(
                 "UPDATE reasoning_engine_jobs SET job_status = 'processing', lease_owner = %s, "
-                "lease_expires_at = %s, claimed_at = %s, "
+                "lease_expires_at = %s, heartbeat_at = %s, claimed_at = %s, "
                 "queue_wait_ms = TIMESTAMPDIFF(MICROSECOND, STR_TO_DATE(REPLACE(REPLACE(created_at, 'T', ' '), 'Z', ''), '%%Y-%%m-%%d %%H:%%i:%%s.%%f'), UTC_TIMESTAMP(6)) DIV 1000, "
                 "updated_at = %s WHERE job_id IN (" + placeholders + ")",
-                (str(worker_id or "reasoning-v2"), lease_until, stamp, stamp, *job_ids),
+                (str(worker_id or "reasoning-v2"), lease_until, stamp, stamp, stamp, *job_ids),
             )
         return [self.row_payload(row) for row in rows or []]
 
-    def complete(self, job_id: str, result: Mapping[str, object]) -> None:
+    def bind_release(
+        self,
+        job_ids: Iterable[str],
+        release_identity: Mapping[str, object],
+        reasoning_lane: str,
+    ) -> None:
+        selected = [str(job_id or "") for job_id in job_ids or [] if str(job_id or "")]
+        if not selected:
+            return
+        release = dict(release_identity or {})
+        placeholders = ",".join(["%s"] * len(selected))
+        with self.connect() as connection:
+            connection.execute(
+                "UPDATE reasoning_engine_jobs SET release_fingerprint = %s, "
+                "validation_cohort_id = %s, runtime_revision = %s, reasoning_lane = %s "
+                "WHERE job_id IN (" + placeholders + ")",
+                (
+                    str(release.get("releaseFingerprint") or "")[:64],
+                    str(release.get("validationCohortId") or "")[:96],
+                    str(release.get("runtimeRevision") or "")[:64],
+                    str(reasoning_lane or "CONTEXT")[:32],
+                    *selected,
+                ),
+            )
+
+    def heartbeat(self, job_ids: Iterable[str], worker_id: str, lease_seconds: int) -> bool:
+        selected = [str(job_id or "") for job_id in job_ids or [] if str(job_id or "")]
+        if not selected:
+            return False
+        stamp = iso_utc()
+        lease_until = iso_utc(utc_now() + timedelta(seconds=max(60, int(lease_seconds or 600))))
+        placeholders = ",".join(["%s"] * len(selected))
+        with self.connect() as connection:
+            cursor = connection.execute(
+                "UPDATE reasoning_engine_jobs SET heartbeat_at = %s, lease_expires_at = %s, "
+                "updated_at = %s WHERE job_status = 'processing' AND lease_owner = %s "
+                "AND job_id IN (" + placeholders + ")",
+                (stamp, lease_until, stamp, str(worker_id or ""), *selected),
+            )
+        return int(getattr(cursor, "rowcount", 0) or 0) == len(selected)
+
+    def complete(self, job_id: str, result: Mapping[str, object], worker_id: str = "") -> None:
         stamp = iso_utc()
         values = dict(result or {})
         with self.connect() as connection:
-            connection.execute(
+            where = "job_id = %s"
+            params = [str(job_id or "")]
+            if str(worker_id or ""):
+                where += " AND job_status = 'processing' AND lease_owner = %s"
+                params.append(str(worker_id or ""))
+            cursor = connection.execute(
                 """
                 UPDATE reasoning_engine_jobs
                 SET job_status = 'completed', result_json = %s,
                     duration_ms = %s, lease_owner = '', lease_expires_at = '',
-                    last_error = '', completed_at = %s, updated_at = %s
-                WHERE job_id = %s
-                """,
+                    heartbeat_at = '', last_error = '', completed_at = %s, updated_at = %s
+                WHERE """ + where,
                 (
                     canonical_json(values),
                     max(0, int(values.get("duration_ms") or values.get("durationMs") or 0)),
                     stamp,
                     stamp,
-                    str(job_id or ""),
+                    *params,
                 ),
             )
+            if str(worker_id or "") and int(getattr(cursor, "rowcount", 0) or 0) != 1:
+                raise RuntimeError("The V2 reasoning job lease was lost before completion publication.")
 
     def defer(self, job_id: str, reason: str, retry_after_seconds: int = 15) -> None:
         with self.connect() as connection:
@@ -819,24 +891,51 @@ class MySQLReasoningEngineJobStore(MySQLOperationalConnection):
         index = max(0, min(len(ordered) - 1, int((len(ordered) - 1) * percentile + 0.999999)))
         return ordered[index]
 
-    def summary(self, deployment_id: str = "", lookback: int = 200) -> Dict[str, object]:
+    def summary(
+        self,
+        deployment_id: str = "",
+        lookback: int = 200,
+        release_fingerprint: str = "",
+        validation_cohort_id: str = "",
+    ) -> Dict[str, object]:
         params = []
         where = ""
         if str(deployment_id or ""):
             where = " WHERE deployment_id = %s"
             params.append(str(deployment_id or ""))
+        cohort_conditions = []
+        cohort_params = list(params)
+        if str(release_fingerprint or ""):
+            cohort_conditions.append("release_fingerprint = %s")
+            cohort_params.append(str(release_fingerprint or ""))
+        if str(validation_cohort_id or ""):
+            cohort_conditions.append("validation_cohort_id = %s")
+            cohort_params.append(str(validation_cohort_id or ""))
+        cohort_where = where
+        for condition in cohort_conditions:
+            cohort_where += (" AND " if cohort_where else " WHERE ") + condition
         with self.connect() as connection:
             counts = connection.execute(
                 "SELECT job_status, COUNT(*) AS row_count, MIN(created_at) AS oldest, MAX(updated_at) AS latest "
                 "FROM reasoning_engine_jobs" + where + " GROUP BY job_status",
                 tuple(params),
             ).fetchall()
-            completed_where = where + (" AND" if where else " WHERE") + " job_status = 'completed'"
+            cohort_counts = connection.execute(
+                "SELECT job_status, COUNT(*) AS row_count FROM reasoning_engine_jobs"
+                + cohort_where
+                + " GROUP BY job_status",
+                tuple(cohort_params),
+            ).fetchall()
+            completed_where = cohort_where + (" AND" if cohort_where else " WHERE") + " job_status = 'completed'"
             rows = connection.execute(
                 "SELECT * FROM reasoning_engine_jobs" + completed_where + " ORDER BY completed_at DESC LIMIT %s",
-                (*params, max(1, min(2000, int(lookback or 200)))),
+                (*cohort_params, max(1, min(2000, int(lookback or 200)))),
             ).fetchall()
         count_map = {str(row.get("job_status") or ""): int(row.get("row_count") or 0) for row in counts or []}
+        cohort_count_map = {
+            str(row.get("job_status") or ""): int(row.get("row_count") or 0)
+            for row in cohort_counts or []
+        }
         oldest = {str(row.get("job_status") or ""): str(row.get("oldest") or "") for row in counts or []}
         latest = {str(row.get("job_status") or ""): str(row.get("latest") or "") for row in counts or []}
         unique_runs = {}
@@ -883,7 +982,10 @@ class MySQLReasoningEngineJobStore(MySQLOperationalConnection):
                 oldest_pending_age = 0
         return {
             "deploymentId": str(deployment_id or ""),
+            "releaseFingerprint": str(release_fingerprint or ""),
+            "validationCohortId": str(validation_cohort_id or ""),
             "counts": count_map,
+            "cohortCounts": cohort_count_map,
             "oldest": oldest,
             "latest": latest,
             "sampleCount": len(results),
@@ -895,7 +997,7 @@ class MySQLReasoningEngineJobStore(MySQLOperationalConnection):
             "symbols": symbols[:200],
             "durationP95Ms": self.percentile([int(row.get("duration_ms") or 0) for row in run_rows]),
             "queueWaitP95Ms": self.percentile([int(row.get("queue_wait_ms") or 0) for row in run_rows]),
-            "failureCount": int(count_map.get("failed") or 0),
+            "failureCount": int(cohort_count_map.get("failed") or 0),
             "pendingCount": sum(int(count_map.get(status) or 0) for status in ["queued", "retry", "processing"]),
             "oldestPendingAgeSeconds": oldest_pending_age,
             "latestCompletedAt": str(rows[0].get("completed_at") or "") if rows else "",
@@ -919,6 +1021,11 @@ class MySQLReasoningEngineJobStore(MySQLOperationalConnection):
             "priority": int(values.get("priority") or 0),
             "queueWaitMs": int(values.get("queue_wait_ms") or 0),
             "durationMs": int(values.get("duration_ms") or 0),
+            "releaseFingerprint": str(values.get("release_fingerprint") or ""),
+            "validationCohortId": str(values.get("validation_cohort_id") or ""),
+            "runtimeRevision": str(values.get("runtime_revision") or ""),
+            "reasoningLane": str(values.get("reasoning_lane") or ""),
+            "heartbeatAt": str(values.get("heartbeat_at") or ""),
             "createdAt": str(values.get("created_at") or ""),
             "updatedAt": str(values.get("updated_at") or ""),
             "completedAt": str(values.get("completed_at") or ""),

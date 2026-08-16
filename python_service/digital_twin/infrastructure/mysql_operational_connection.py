@@ -1356,7 +1356,12 @@ MYSQL_SCHEMA = [
         available_at VARCHAR(40) NOT NULL DEFAULT '',
         lease_owner VARCHAR(191) NOT NULL DEFAULT '',
         lease_expires_at VARCHAR(40) NOT NULL DEFAULT '',
+        heartbeat_at VARCHAR(40) NOT NULL DEFAULT '',
         claimed_at VARCHAR(40) NOT NULL DEFAULT '',
+        release_fingerprint VARCHAR(64) NOT NULL DEFAULT '',
+        validation_cohort_id VARCHAR(96) NOT NULL DEFAULT '',
+        runtime_revision VARCHAR(64) NOT NULL DEFAULT '',
+        reasoning_lane VARCHAR(32) NOT NULL DEFAULT 'CONTEXT',
         queue_wait_ms BIGINT NOT NULL DEFAULT 0,
         duration_ms BIGINT NOT NULL DEFAULT 0,
         last_error TEXT NOT NULL,
@@ -1366,7 +1371,31 @@ MYSQL_SCHEMA = [
         UNIQUE KEY uq_reasoning_engine_job_event (deployment_id, source_event_id),
         KEY idx_reasoning_engine_job_ready (deployment_id, job_status, available_at, priority, created_at),
         KEY idx_reasoning_engine_job_scope (deployment_id, scope_key, job_status, created_at),
-        KEY idx_reasoning_engine_job_completed (deployment_id, completed_at)
+        KEY idx_reasoning_engine_job_completed (deployment_id, completed_at),
+        KEY idx_reasoning_engine_job_release (deployment_id, release_fingerprint, job_status, completed_at)
+    ) ENGINE=InnoDB DEFAULT CHARSET=utf8mb4 COLLATE=utf8mb4_unicode_ci
+    """,
+    """
+    CREATE TABLE IF NOT EXISTS investment_reasoning_cases (
+        case_id VARCHAR(191) PRIMARY KEY,
+        request_id VARCHAR(191) NOT NULL,
+        deployment_id VARCHAR(191) NOT NULL,
+        release_fingerprint VARCHAR(64) NOT NULL DEFAULT '',
+        validation_cohort_id VARCHAR(96) NOT NULL DEFAULT '',
+        reasoning_lane VARCHAR(32) NOT NULL DEFAULT 'CONTEXT',
+        stage VARCHAR(32) NOT NULL DEFAULT 'CREATED',
+        primary_symbol VARCHAR(64) NOT NULL DEFAULT '',
+        account_ids_json TEXT NOT NULL,
+        symbols_json TEXT NOT NULL,
+        payload_json LONGTEXT NOT NULL,
+        case_version INT NOT NULL DEFAULT 1,
+        created_at VARCHAR(40) NOT NULL,
+        updated_at VARCHAR(40) NOT NULL,
+        completed_at VARCHAR(40) NOT NULL DEFAULT '',
+        UNIQUE KEY uq_investment_reasoning_request (request_id),
+        KEY idx_investment_reasoning_deployment_stage (deployment_id, stage, updated_at),
+        KEY idx_investment_reasoning_release_stage (release_fingerprint, stage, updated_at),
+        KEY idx_investment_reasoning_symbol_time (primary_symbol, updated_at)
     ) ENGINE=InnoDB DEFAULT CHARSET=utf8mb4 COLLATE=utf8mb4_unicode_ci
     """,
     """

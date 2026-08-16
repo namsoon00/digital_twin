@@ -111,6 +111,13 @@ MYSQL_OPERATIONAL_INDEXES: Dict[str, Sequence[MySQLIndexDefinition]] = {
             "`candidate_deployment_id`, `candidate_release_id`, `candidate_runtime_revision`, `job_status`, `created_at`",
         ),
     ),
+    "reasoning_engine_jobs": (
+        MySQLIndexDefinition(
+            "reasoning_engine_jobs",
+            "idx_reasoning_engine_job_release",
+            "`deployment_id`, `release_fingerprint`, `job_status`, `completed_at`",
+        ),
+    ),
     "service_accounts": (
         MySQLIndexDefinition("service_accounts", "idx_service_accounts_enabled_created", "`enabled`, `created_at`, `id`"),
     ),
@@ -435,6 +442,13 @@ MYSQL_OPERATIONAL_INDEXES: Dict[str, Sequence[MySQLIndexDefinition]] = {
 
 
 MYSQL_OPERATIONAL_COLUMNS: Dict[str, Sequence[MySQLColumnDefinition]] = {
+    "reasoning_engine_jobs": (
+        MySQLColumnDefinition("reasoning_engine_jobs", "heartbeat_at", "VARCHAR(40) NOT NULL DEFAULT ''"),
+        MySQLColumnDefinition("reasoning_engine_jobs", "release_fingerprint", "VARCHAR(64) NOT NULL DEFAULT ''"),
+        MySQLColumnDefinition("reasoning_engine_jobs", "validation_cohort_id", "VARCHAR(96) NOT NULL DEFAULT ''"),
+        MySQLColumnDefinition("reasoning_engine_jobs", "runtime_revision", "VARCHAR(64) NOT NULL DEFAULT ''"),
+        MySQLColumnDefinition("reasoning_engine_jobs", "reasoning_lane", "VARCHAR(32) NOT NULL DEFAULT 'CONTEXT'"),
+    ),
     "reasoning_engine_comparisons": (
         MySQLColumnDefinition("reasoning_engine_comparisons", "baseline_release_id", "VARCHAR(191) NOT NULL DEFAULT ''"),
         MySQLColumnDefinition("reasoning_engine_comparisons", "candidate_release_id", "VARCHAR(191) NOT NULL DEFAULT ''"),

@@ -285,6 +285,7 @@ class NotificationQueueRunner:
         include_message_types: List[str] = None,
         exclude_message_types: List[str] = None,
         ai_request_enqueuer=None,
+        reasoning_orchestrator=None,
         news_digest_reconciler=None,
         fresh_data_recheck_requester=None,
     ):
@@ -306,6 +307,7 @@ class NotificationQueueRunner:
         self.include_message_types = tuple(dict.fromkeys(str(item).strip() for item in include_message_types or [] if str(item).strip()))
         self.exclude_message_types = tuple(dict.fromkeys(str(item).strip() for item in exclude_message_types or [] if str(item).strip()))
         self.ai_request_enqueuer = ai_request_enqueuer
+        self.reasoning_orchestrator = reasoning_orchestrator
         self.news_digest_reconciler = news_digest_reconciler
         self.fresh_data_recheck_requester = fresh_data_recheck_requester
         self.rendering_service = NotificationRenderingService(
@@ -467,6 +469,7 @@ class NotificationQueueRunner:
                 self.active_job_stage = "delivered"
                 operator_detail = self.capture_operator_report_after_delivery(job, message)
                 self.queue.mark_done(job)
+                self.mark_reasoning_case_published(job)
                 self.active_job_stage = "done"
                 self.record_operational_delivery(job, "done")
                 self.last_run_details.append(self.job_detail(job, "done", operator_detail))
@@ -492,6 +495,7 @@ class NotificationQueueRunner:
                     # Telegram already accepted the message. Persist completion
                     # so a database retry cannot send the customer alert twice.
                     self.queue.mark_done(affected_job)
+                    self.mark_reasoning_case_published(affected_job)
                     status = "done-after-storage-recovery"
                 else:
                     self.queue.mark_failed(affected_job, affected_reason)
@@ -503,6 +507,14 @@ class NotificationQueueRunner:
                 self.last_run_details.append(
                     self.job_detail(affected_job, "processing-recovery-failed", str(recovery_error)[:160])
                 )
+
+    def mark_reasoning_case_published(self, job: NotificationJob) -> None:
+        if self.reasoning_orchestrator is None:
+            return
+        try:
+            self.reasoning_orchestrator.notification_published(dict(job.context or {}))
+        except Exception:  # noqa: BLE001 - delivery completion remains authoritative.
+            return
 
     def should_defer_ai_inference(self, job: NotificationJob) -> bool:
         if self.dry_run or self.ai_request_enqueuer is None:

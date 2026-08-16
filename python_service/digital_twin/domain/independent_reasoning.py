@@ -8,8 +8,8 @@ from typing import Dict, Iterable, Mapping, Tuple
 from .events import DomainEvent, ONTOLOGY_REASONING_REQUESTED
 
 
-INDEPENDENT_REASONING_REQUEST_VERSION = "independent-reasoning-request-v1"
-INDEPENDENT_REASONING_RESULT_VERSION = "independent-reasoning-result-v1"
+INDEPENDENT_REASONING_REQUEST_VERSION = "independent-reasoning-request-v2"
+INDEPENDENT_REASONING_RESULT_VERSION = "independent-reasoning-result-v2"
 
 
 def _texts(values: object, uppercase: bool = False) -> Tuple[str, ...]:
@@ -144,6 +144,11 @@ class IndependentReasoningResult:
     retry_after_seconds: int = 0
     reason: str = ""
     stage_durations_ms: Dict[str, int] = field(default_factory=dict)
+    reasoning_case_id: str = ""
+    reasoning_case_stage: str = ""
+    reasoning_lane: str = ""
+    release_fingerprint: str = ""
+    validation_cohort_id: str = ""
     contract_version: str = INDEPENDENT_REASONING_RESULT_VERSION
 
     def to_dict(self) -> Dict[str, object]:
@@ -223,6 +228,7 @@ def independent_reasoning_request(
         "triggers": sorted({str(scope.get("trigger") or "") for scope in scopes}),
         "subjectKinds": sorted({str(scope.get("subjectKind") or "") for scope in scopes if scope.get("subjectKind")}),
         "subjectIds": sorted({str(scope.get("subjectId") or "") for scope in scopes if scope.get("subjectId")}),
+        "workClasses": sorted({str(scope.get("workClass") or "") for scope in scopes if scope.get("workClass")}),
         "verifiedSourceSnapshots": [
             dict((event.payload or {}).get("verifiedSourceSnapshot") or {})
             for event in events

@@ -55,6 +55,58 @@ health, and delivery handoff. This is reuse of domain contracts, not a call
 into V1. A later V3 can replace any of these stages behind the same engine and
 source-event contracts.
 
+## InvestmentReasoning Module
+
+Inference, hypotheses, and AI judgement form one logical bounded context named
+`InvestmentReasoning`. They are one traceable decision process, but remain
+separate runtime workers so a slow AI call cannot hold a TypeDB lease and a
+TypeDB retry cannot duplicate an outbound notification.
+
+```mermaid
+flowchart LR
+    Delta[FactDelta] --> Case[ReasoningCase]
+    Case --> Input[Point-in-time input]
+    Input --> TypeDB[TypeDB native inference]
+    TypeDB --> Hypotheses[Graph hypothesis set]
+    Hypotheses --> AIQueue[Durable AI queue]
+    AIQueue --> AI[AI judgement]
+    AI --> Validate[Contract validation]
+    Validate --> Notify[Notification queue]
+    Notify --> Published[Delivered and published]
+```
+
+One durable `ReasoningCase` carries the request ID, changed fact families,
+execution lane, source ABox snapshot IDs, inference generation IDs, competing
+hypotheses, AI request/result, final action, and stage history. The lifecycle
+is `CREATED -> INPUT_READY -> INFERENCE_COMPLETED -> HYPOTHESES_READY ->
+AI_PENDING -> AI_COMPLETED -> VALIDATED -> PUBLISHED`. Shadow or no-delivery
+executions end at `COMPLETED`; retryable point-in-time gaps use `DEFERRED`;
+invalid graph/AI contracts use `BLOCKED`.
+
+The AI worker may select and explain only a hypothesis already present in the
+TypeDB-derived hypothesis set. An empty set, an unknown selected hypothesis,
+or an invalid action blocks publication. `VALIDATED` means the AI result was
+accepted and the notification was returned to the delivery queue;
+`PUBLISHED` is recorded only after the channel confirms delivery.
+
+`reasoning_engine_jobs` owns worker leasing. Every claimed job is bound to the
+current release fingerprint and validation cohort, and its lease is extended
+by heartbeat during TypeDB execution. Historical releases remain visible for
+audit but p95 execution/failure evidence is calculated from the current
+release cohort. Operational pending counts intentionally cover all releases
+so old work cannot disappear from queue health.
+
+Fact changes use three execution lanes without changing inference semantics:
+
+| Lane | Typical input | Default batch |
+| --- | --- | --- |
+| `REALTIME` | price, trade, order book, investor flow, PnL | 1 |
+| `CONTEXT` | financials, disclosures, research, macro context | 3 |
+| `RECONCILIATION` | backfill, maintenance, consistency repair | 6 |
+
+The lane controls scheduling and bounded batching only. TypeDB still evaluates
+the applicable graph rules and produces the hypothesis set.
+
 `reasoning_engine_jobs` is the V2 source inbox. Latest-state work can supersede
 an older queued revision in the same scope; non-fungible governance and
 research work is retained. Jobs use leases, bounded retries, queue-wait and
@@ -254,6 +306,8 @@ Read-only HTTP status is also available:
 - `GET /api/time-series-platform/status`
 - `GET /api/reasoning-engine/status`
 - `GET /api/reasoning-engine/comparisons`
+- `GET /api/investment-reasoning/cases`
+- `GET /api/investment-reasoning/cases?caseId=<reasoning-case-id>`
 
 Runtime settings select bindings without leaking database details into the
 domain:
@@ -278,6 +332,10 @@ domain:
 - `REASONING_ENGINE_V2_LEASE_SECONDS`
 - `REASONING_ENGINE_V2_MAX_ATTEMPTS`
 - `REASONING_ENGINE_V2_BATCH_SIZE`
+- `REASONING_ENGINE_V2_HEARTBEAT_SECONDS`
+- `REASONING_ENGINE_V2_REALTIME_BATCH_SIZE`
+- `REASONING_ENGINE_V2_CONTEXT_BATCH_SIZE`
+- `REASONING_ENGINE_V2_RECONCILIATION_BATCH_SIZE`
 - `REASONING_ENGINE_V2_INGRESS_REPAIR_LOOKBACK_HOURS`
 - `REASONING_ENGINE_V2_INGRESS_REPAIR_BATCH_SIZE`
 - `REASONING_ENGINE_V2_PROMOTION_MINIMUM_RUNS`

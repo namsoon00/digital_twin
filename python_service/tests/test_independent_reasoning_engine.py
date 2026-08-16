@@ -188,7 +188,7 @@ class IndependentReasoningEngineTests(unittest.TestCase):
         result = engine.consume([source_event()])
 
         self.assertTrue(result["delivery_authorized"])
-        self.assertEqual("notification-ai-queue-enqueued", result["ai_handoff_status"])
+        self.assertEqual("notification-queue-enqueued", result["ai_handoff_status"])
         self.assertEqual(1, recorder.calls)
 
     def test_persisted_projection_result_excludes_the_full_scope_plan(self):
@@ -266,7 +266,10 @@ class IndependentReasoningEngineTests(unittest.TestCase):
             queue,
             engine,
             Registry(),
-            settings={"reasoningEngineV2BatchSize": "6"},
+            settings={
+                "reasoningEngineV2BatchSize": "6",
+                "reasoningEngineV2RealtimeBatchSize": "2",
+            },
         )
 
         result = runner.run_once()
@@ -275,6 +278,51 @@ class IndependentReasoningEngineTests(unittest.TestCase):
         self.assertEqual(1, len(engine.calls))
         self.assertEqual(2, len(engine.calls[0]))
         self.assertEqual(2, len(queue.completed))
+
+    def test_runner_claims_only_the_realtime_lane_batch_limit(self):
+        class Queue:
+            def __init__(self):
+                self.claim_call = {}
+
+            def next_lane(self, _deployment_id):
+                return "REALTIME"
+
+            def claim(self, deployment_id, worker_id, limit, lease_seconds, reasoning_lane=""):
+                self.claim_call = {
+                    "deploymentId": deployment_id,
+                    "workerId": worker_id,
+                    "limit": limit,
+                    "leaseSeconds": lease_seconds,
+                    "reasoningLane": reasoning_lane,
+                }
+                return []
+
+            def summary(self, _deployment_id):
+                return {"pendingCount": 0}
+
+        class Engine:
+            def descriptor(self):
+                return descriptor()
+
+            def release_identity(self):
+                return {}
+
+        queue = Queue()
+        runner = IndependentReasoningJobRunner(
+            queue,
+            Engine(),
+            SimpleNamespace(),
+            settings={
+                "reasoningEngineV2BatchSize": "6",
+                "reasoningEngineV2RealtimeBatchSize": "1",
+            },
+        )
+
+        result = runner.run_once()
+
+        self.assertEqual("idle", result["status"])
+        self.assertEqual(1, queue.claim_call["limit"])
+        self.assertEqual("REALTIME", queue.claim_call["reasoningLane"])
 
 
 if __name__ == "__main__":

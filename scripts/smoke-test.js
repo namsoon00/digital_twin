@@ -258,15 +258,16 @@ function checkWorkflowConsoleContract() {
   assertOk(tabLabels.every(function (label) { return tabBlock.indexOf('label: "' + label + '"') >= 0; }), "7개 업무 탭명이 모두 정의되지 않았습니다.");
   assertOk((tabBlock.match(/\{ id:/g) || []).length === 7, "상위 업무 탭은 정확히 7개여야 합니다.");
   assertOk(
-    code.indexOf('var bottomTabIds = ["overview", "feed", "modeling", "notifications", "calendar"];') >= 0
-      && code.indexOf('var managementTabIds = ["experiments", "settings"];') >= 0
+    code.indexOf('var bottomTabIds = ["overview", "feed", "modeling", "notifications", "calendar", "settings"];') >= 0
+      && code.indexOf('var managementTabIds = ["experiments"];') >= 0
       && code.indexOf("var pageModeEnabledTabs = [];") >= 0,
-    "모바일 핵심 5탭과 관리 메뉴 2탭 구성이 일치하지 않습니다."
+    "모바일 핵심 6탭과 검증 관리 메뉴 구성이 일치하지 않습니다."
   );
   assertOk(code.indexOf("loadInstrumentTimeline") >= 0 && code.indexOf("initInstrumentTimelineChart") >= 0, "종목 실제 시계열 차트 흐름이 연결되지 않았습니다.");
   assertOk(code.indexOf("data-instrument-workspace-tab") >= 0 && code.indexOf("data-instrument-timeline-refresh") >= 0, "종목 워크스페이스 탐색 계약이 없습니다.");
   assertOk(webServer.indexOf('/api/instruments/') >= 0 && webServer.indexOf("InstrumentTimelineQuery") >= 0, "종목 타임라인 API가 등록되지 않았습니다.");
   assertOk(indexHtml.indexOf("lightweight-charts.standalone.production.js") >= 0, "로컬 캔들 차트 런타임이 로드되지 않았습니다.");
+  assertOk(code.indexOf("restoreRenderedDisclosureState") >= 0 && code.indexOf("disclosures: disclosures") >= 0 && code.indexOf('data-disclosure-key=') >= 0, "자동 갱신 후 상세 펼침 상태를 복원하는 계약이 없습니다.");
 
   [
     'watchlist: "feed"',
@@ -1960,8 +1961,8 @@ function checkFrontendAdminRender() {
     assertOk(designSystemDoc.indexOf("업무 탭에서는 상단 상태 카드 묶음을 렌더링하지 않는다") >= 0 && designSystemDoc.indexOf("app-nav-command") >= 0 && designSystemDoc.indexOf("app-nav-routine") >= 0 && designSystemDoc.indexOf("page-flow-spine") >= 0, "디자인 시스템 문서에 단일 command/routine rail/흐름 계약이 없습니다.");
     assertOk(code.indexOf("syncTopbarScrollState") >= 0 && code.indexOf("topbar-collapsed") >= 0, "상단 제목 영역을 스크롤 상태에 따라 접는 로직이 없습니다.");
     assertOk(styles.indexOf(".shell-page.topbar-collapsed") >= 0 && styles.indexOf(".topbar-collapsed .topbar") >= 0, "상단 제목 영역 접힘 레이아웃 스타일이 없습니다.");
-    assertOk(code.indexOf('var bottomTabIds = ["overview", "feed", "modeling", "notifications", "calendar"];') >= 0, "하단 핵심 5탭 구성이 역할과 맞지 않습니다.");
-    assertOk(code.indexOf('var managementTabIds = ["experiments", "settings"];') >= 0, "관리 메뉴 탭 구성이 역할과 맞지 않습니다.");
+    assertOk(code.indexOf('var bottomTabIds = ["overview", "feed", "modeling", "notifications", "calendar", "settings"];') >= 0, "하단 핵심 6탭 구성이 역할과 맞지 않습니다.");
+    assertOk(code.indexOf('var managementTabIds = ["experiments"];') >= 0, "검증 관리 메뉴 구성이 역할과 맞지 않습니다.");
     assertOk(styles.indexOf(".app-nav-tab.active") >= 0 && styles.indexOf(".app-nav-menu") >= 0, "앱 네비게이션 활성 탭과 모바일 관리 메뉴 스타일 규칙이 없습니다.");
     assertOk(styles.indexOf("@media (min-width: 861px)") >= 0 && styles.indexOf(".tab-bar {\n    display: none;") >= 0, "데스크톱에서 하단 탭을 숨기는 규칙이 없습니다.");
     assertOk(styles.indexOf("position: sticky") >= 0 && styles.indexOf("bottom: 0;") >= 0 && styles.indexOf("backdrop-filter: blur(18px)") >= 0 && styles.indexOf(".app-nav.is-hidden") >= 0, "모바일 앱바 접힘/하단탭 고정 반응형 규칙이 없습니다.");
@@ -2629,6 +2630,13 @@ async function checkNormalMode(port, context) {
   assertOk(Array.isArray(universeSuggestPayload.items), "종목 자동완성 API items가 배열이 아닙니다.");
   assertOk(universeSuggestPayload.items[0] && universeSuggestPayload.items[0].symbol === "PLTR", "팔란티어 자동완성이 PLTR을 첫 후보로 반환하지 않습니다.");
   assertOk(!Object.prototype.hasOwnProperty.call(universeSuggestPayload, "summary"), "종목 자동완성 API가 무거운 summary payload를 포함합니다.");
+
+  const instrumentTimeline = await request(port, "/api/instruments/AAPL/timeline?range=1m");
+  assertOk(instrumentTimeline.statusCode === 200, "종목 타임라인 API 응답 코드가 200이 아닙니다: " + instrumentTimeline.statusCode);
+  const instrumentTimelinePayload = JSON.parse(instrumentTimeline.body);
+  assertOk(instrumentTimelinePayload.instrument && instrumentTimelinePayload.instrument.symbol === "AAPL", "종목 타임라인 API의 종목 식별자가 맞지 않습니다.");
+  assertOk(instrumentTimelinePayload.series && instrumentTimelinePayload.series.dataMode === "actual", "종목 타임라인 API가 실제 데이터 계약을 지키지 않습니다.");
+  assertOk(Array.isArray(instrumentTimelinePayload.series.candles), "종목 타임라인 API candles가 배열이 아닙니다.");
 
   const savedSettings = await request(port, "/api/settings", {
     method: "PUT",

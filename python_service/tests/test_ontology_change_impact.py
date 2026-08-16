@@ -99,8 +99,8 @@ class OntologyChangeImpactTests(unittest.TestCase):
         self.assertEqual("symbol:005930:state", entity_scopes["stock:005930"])
         self.assertEqual("symbol:005930:market", entity_scopes["price-metric:005930:currentPrice"])
         self.assertEqual("symbol:005930:flow", entity_scopes["flow-metric:005930:volume"])
-        self.assertEqual("symbol:005930:temporal", entity_scopes["temporal-window:005930:5d"])
-        self.assertEqual("symbol:005930:evidence", entity_scopes["news-article:005930:1"])
+        self.assertEqual("symbol:005930:temporal:window:5d", entity_scopes["temporal-window:005930:5d"])
+        self.assertTrue(entity_scopes["news-article:005930:1"].startswith("symbol:005930:evidence:bucket:"))
         self.assertEqual("macro:market", entity_scopes["market-proxy-instrument:QQQ"])
         self.assertTrue(relation_scopes["OBSERVES_MARKET_PROXY"].startswith("link:account:main:exposure:"))
         self.assertEqual("link:symbol:005930:flow", relation_scopes["HAS_TRADE_FLOW"])
@@ -157,7 +157,7 @@ class OntologyChangeImpactTests(unittest.TestCase):
         self.assertEqual("symbol:005930:fundamental", scopes["company-financial-state:005930:2025"])
         self.assertEqual("symbol:005930:governance", scopes["company-governance-state:005930"])
         self.assertEqual("symbol:005930:capital", scopes["company-capital-state:005930"])
-        self.assertEqual("symbol:005930:company-valuation", scopes["company-valuation-state:005930"])
+        self.assertTrue(scopes["company-valuation-state:005930"].startswith("symbol:005930:company-valuation:bucket:"))
         self.assertEqual("symbol:005930:market", scopes["price-metric:005930:currentPrice"])
 
         generations = dict(first["scopeGenerationIds"])
@@ -169,7 +169,11 @@ class OntologyChangeImpactTests(unittest.TestCase):
         self.assertEqual(generations["symbol:005930:fundamental"], second["scopeGenerationIds"]["symbol:005930:fundamental"])
         self.assertEqual(generations["symbol:005930:governance"], second["scopeGenerationIds"]["symbol:005930:governance"])
         self.assertEqual(generations["symbol:005930:capital"], second["scopeGenerationIds"]["symbol:005930:capital"])
-        self.assertEqual(generations["symbol:005930:company-valuation"], second["scopeGenerationIds"]["symbol:005930:company-valuation"])
+        company_valuation_scope = scopes["company-valuation-state:005930"]
+        self.assertEqual(
+            generations[company_valuation_scope],
+            second["scopeGenerationIds"][company_valuation_scope],
+        )
 
     def test_market_change_selects_company_market_rule_without_rewriting_company_scope(self):
         graph = PortfolioOntology(
@@ -514,6 +518,57 @@ class OntologyChangeImpactTests(unittest.TestCase):
         self.assertEqual(["graph.test.current-price.v1"], plan["candidateRuleIds"])
         self.assertTrue(plan["nativeRuleSelectionEligible"])
 
+    def test_dependency_routing_distinguishes_trigger_invalidation_and_context_only(self):
+        before = [{
+            "scopeId": "symbol:005930:market",
+            "generationId": "market-a",
+            "semanticFingerprints": {"market": "market-a"},
+            "semanticDependencyFingerprintVersion": DEPENDENCY_FINGERPRINT_VERSION,
+            "semanticDependencyFingerprints": {"field:currentprice": "price-a"},
+        }]
+        after = [{
+            **before[0],
+            "generationId": "market-b",
+            "semanticFingerprints": {"market": "market-b"},
+            "semanticDependencyFingerprints": {"field:currentprice": "price-b"},
+        }]
+        rules = [
+            {
+                "ruleId": "graph.test.trigger.v1",
+                "conditions": [{
+                    "field": "currentPrice",
+                    "changeTrigger": True,
+                    "invalidationTrigger": False,
+                }],
+            },
+            {
+                "ruleId": "graph.test.invalidation.v1",
+                "conditions": [{
+                    "field": "currentPrice",
+                    "changeTrigger": False,
+                    "invalidationTrigger": True,
+                }],
+            },
+            {
+                "ruleId": "graph.test.context.v1",
+                "conditions": [{
+                    "field": "currentPrice",
+                    "changeTrigger": False,
+                    "invalidationTrigger": False,
+                }],
+            },
+        ]
+
+        plan = build_inference_impact_plan(before, after, ["005930"], rules=rules)
+
+        self.assertEqual(["graph.test.trigger.v1"], plan["triggerRuleIds"])
+        self.assertEqual(["graph.test.invalidation.v1"], plan["invalidationRuleIds"])
+        self.assertEqual(
+            ["graph.test.trigger.v1", "graph.test.invalidation.v1"],
+            plan["candidateRuleIds"],
+        )
+        self.assertEqual(["graph.test.context.v1"], plan["deferredRuleIds"])
+
     def test_per_symbol_request_does_not_reopen_other_changed_families_in_same_scope(self):
         before = [{
             "scopeId": "symbol:005930:state",
@@ -838,8 +893,11 @@ class OntologyChangeImpactTests(unittest.TestCase):
         self.assertTrue(dependencies)
         self.assertTrue(all(item.properties.get("tboxClass") == "RuleDependency" for item in dependencies))
         self.assertTrue(any(item.relation_type == "HAS_RULE_DEPENDENCY" for item in graph.relations))
+        self.assertTrue(any(item.relation_type == "TRIGGERS_EVALUATION" for item in graph.relations))
+        self.assertTrue(any(item.relation_type == "INVALIDATED_BY" for item in graph.relations))
         self.assertIsNotNone(tbox_class_def("RuleDependency"))
         self.assertIsNotNone(tbox_relation_def("HAS_RULE_DEPENDENCY"))
+        self.assertIsNotNone(tbox_relation_def("TRIGGERS_EVALUATION"))
 
     def test_dependency_profiles_keep_typed_static_conditions_out_of_state(self):
         rules = {
@@ -1150,6 +1208,39 @@ class OntologyChangeImpactTests(unittest.TestCase):
         self.assertEqual([], compact["diagnostics"]["reasonCodes"])
         self.assertEqual(0, compact["diagnostics"]["globalScopeCount"])
 
+    def test_compact_impact_plan_never_truncates_executable_rule_routes(self):
+        candidate_ids = [f"graph.test.candidate.{index}" for index in range(95)]
+        deferred_ids = [f"graph.test.deferred.{index}" for index in range(23)]
+
+        compact = compact_inference_impact_plan({
+            "candidateRuleIds": candidate_ids,
+            "triggerRuleIds": candidate_ids,
+            "invalidationRuleIds": candidate_ids,
+            "deferredRuleIds": deferred_ids,
+            "candidateRuleCount": len(candidate_ids),
+            "enabledRuleCount": len(candidate_ids) + len(deferred_ids),
+            "nativeRuleSelectionEligible": True,
+            "ruleRoutingComplete": True,
+        })
+
+        self.assertEqual(candidate_ids, compact["candidateRuleIds"])
+        self.assertEqual(deferred_ids, compact["deferredRuleIds"])
+        self.assertTrue(compact["ruleRoutingComplete"])
+        self.assertTrue(compact["nativeRuleSelectionEligible"])
+
+    def test_compact_impact_plan_disables_incremental_selection_when_route_is_incomplete(self):
+        compact = compact_inference_impact_plan({
+            "candidateRuleIds": ["graph.test.only-one"],
+            "deferredRuleIds": ["graph.test.deferred"],
+            "candidateRuleCount": 2,
+            "enabledRuleCount": 3,
+            "nativeRuleSelectionEligible": True,
+            "ruleRoutingComplete": True,
+        })
+
+        self.assertFalse(compact["ruleRoutingComplete"])
+        self.assertFalse(compact["nativeRuleSelectionEligible"])
+
     def test_unknown_abox_property_keeps_its_entity_fact_family(self):
         graph = self.scope_graph()
         flow = next(item for item in graph.entities if item.entity_id == "flow-metric:005930:volume")
@@ -1192,9 +1283,14 @@ class OntologyChangeImpactTests(unittest.TestCase):
             first["scopeGenerationIds"]["symbol:005930:market"],
             second["scopeGenerationIds"]["symbol:005930:market"],
         )
+        temporal_scope = next(
+            scope_id
+            for scope_id in first["scopeGenerationIds"]
+            if scope_id.startswith("symbol:005930:temporal:window:")
+        )
         self.assertEqual(
-            first["scopeGenerationIds"]["symbol:005930:temporal"],
-            second["scopeGenerationIds"]["symbol:005930:temporal"],
+            first["scopeGenerationIds"][temporal_scope],
+            second["scopeGenerationIds"][temporal_scope],
         )
         self.assertEqual([], delta["changedScopeIds"])
 
@@ -1347,7 +1443,7 @@ class OntologyChangeImpactTests(unittest.TestCase):
         scopes = {item.entity_id: item.properties["aboxScopeId"] for item in graph.entities}
 
         self.assertEqual("symbol:005930:flow", scopes["slippage-estimate:005930"])
-        self.assertEqual("symbol:005930:quality", scopes["data-source:KIS:005930"])
+        self.assertTrue(scopes["data-source:KIS:005930"].startswith("symbol:005930:quality:bucket:"))
         self.assertEqual("portfolio:main", scopes["market-exposure:main:US"])
         self.assertEqual("portfolio:main", scopes["risk:semiconductors-correlation"])
 
@@ -1457,6 +1553,82 @@ class OntologyChangeImpactTests(unittest.TestCase):
         self.assertTrue(full_global["selectionApplied"])
         self.assertEqual([rule_ids[0], rule_ids[1]], full_global["selectedRuleIds"])
         self.assertEqual("", full_global["fallbackReason"])
+
+    def test_v8_bounds_evidence_relations_and_changes_only_one_bucket(self):
+        graph = PortfolioOntology(
+            "main",
+            entities=[OntologyEntity("stock:005930", "Samsung", "stock", {
+                "ontologyBox": "ABox", "symbol": "005930",
+            })] + [
+                OntologyEntity(f"news-article:005930:{index}", f"News {index}", "news-article", {
+                    "ontologyBox": "ABox", "symbol": "005930", "headline": f"headline-{index}",
+                })
+                for index in range(64)
+            ],
+            relations=[
+                OntologyRelation(
+                    "stock:005930",
+                    f"news-article:005930:{index}",
+                    "HAS_EXTERNAL_SIGNAL",
+                    properties={"ontologyBox": "ABox", "symbol": "005930"},
+                )
+                for index in range(64)
+            ],
+        )
+
+        first = apply_scoped_abox_identity(graph)
+        evidence_rows = [
+            item for item in first["scopePlan"]
+            if item["scopeFamily"] == "evidence"
+        ]
+        self.assertGreaterEqual(len(evidence_rows), 16)
+        self.assertLessEqual(max(int(item["relationCount"]) for item in evidence_rows), 12)
+
+        changed = next(
+            item for item in graph.entities
+            if item.entity_id == "news-article:005930:7"
+        )
+        changed.properties["headline"] = "materially-updated"
+        second = apply_scoped_abox_identity(graph)
+        delta = scope_delta(first["scopePlan"], second["scopePlan"])
+
+        self.assertEqual(1, len(delta["directChangedScopeIds"]))
+        self.assertLessEqual(len(delta["generationChangedScopeIds"]), 2)
+        self.assertEqual(["evidence"], delta["directChangedScopeFamilies"])
+
+    def test_v8_versions_temporal_windows_independently(self):
+        graph = PortfolioOntology(
+            "main",
+            entities=[
+                OntologyEntity("stock:005930", "Samsung", "stock", {
+                    "ontologyBox": "ABox", "symbol": "005930",
+                }),
+                OntologyEntity("temporal-window:005930:5d", "5d", "temporal-window", {
+                    "ontologyBox": "ABox", "symbol": "005930", "window": "5d", "returnPct": 2.0,
+                }),
+                OntologyEntity("temporal-window:005930:20d", "20d", "temporal-window", {
+                    "ontologyBox": "ABox", "symbol": "005930", "window": "20d", "returnPct": 8.0,
+                }),
+            ],
+            relations=[
+                OntologyRelation("stock:005930", "temporal-window:005930:5d", "HAS_TEMPORAL_WINDOW", properties={"ontologyBox": "ABox"}),
+                OntologyRelation("stock:005930", "temporal-window:005930:20d", "HAS_TEMPORAL_WINDOW", properties={"ontologyBox": "ABox"}),
+            ],
+        )
+
+        first = apply_scoped_abox_identity(graph)
+        five_day = next(item for item in graph.entities if item.entity_id.endswith(":5d"))
+        five_day.properties["returnPct"] = 3.0
+        second = apply_scoped_abox_identity(graph)
+
+        self.assertNotEqual(
+            first["scopeGenerationIds"]["symbol:005930:temporal:window:5d"],
+            second["scopeGenerationIds"]["symbol:005930:temporal:window:5d"],
+        )
+        self.assertEqual(
+            first["scopeGenerationIds"]["symbol:005930:temporal:window:20d"],
+            second["scopeGenerationIds"]["symbol:005930:temporal:window:20d"],
+        )
 
 
 if __name__ == "__main__":

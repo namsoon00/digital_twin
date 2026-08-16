@@ -1800,22 +1800,27 @@ class TypeDBOntologyRepositoryTests(unittest.TestCase):
         )
         first = apply_scoped_abox_identity(graph)
         repository = TypeDBOntologyGraphRepository("127.0.0.1:1729")
+        evidence_scope = graph.evidence[0].value["aboxScopeId"]
+        link_scope = next(
+            item["scopeId"]
+            for item in graph.worldview["supportRelationScopes"].values()
+        )
 
-        nodes, relations = repository.scoped_abox_persistence_rows(graph, ["link:symbol:005930:evidence"])
+        nodes, relations = repository.scoped_abox_persistence_rows(graph, [link_scope])
 
         self.assertEqual(set(), {row["id"] for row in nodes})
         self.assertEqual(["HAS_EVIDENCE"], [row["type"] for row in relations])
-        self.assertTrue(all(row["scopeId"] == "link:symbol:005930:evidence" for row in nodes + relations))
+        self.assertTrue(all(row["scopeId"] == link_scope for row in nodes + relations))
 
         graph.entities[0].properties["currentPrice"] = 71000
         second = apply_scoped_abox_identity(graph)
         first_generations = dict(first["scopeGenerationIds"])
         second_generations = dict(second["scopeGenerationIds"])
         self.assertNotEqual(first_generations["symbol:005930:state"], second_generations["symbol:005930:state"])
-        self.assertEqual(first_generations["link:symbol:005930:evidence"], second_generations["link:symbol:005930:evidence"])
-        self.assertEqual(first_generations["symbol:005930:evidence"], second_generations["symbol:005930:evidence"])
+        self.assertEqual(first_generations[link_scope], second_generations[link_scope])
+        self.assertEqual(first_generations[evidence_scope], second_generations[evidence_scope])
 
-        _nodes, rebound_relations = repository.scoped_abox_persistence_rows(graph, ["link:symbol:005930:evidence"])
+        _nodes, rebound_relations = repository.scoped_abox_persistence_rows(graph, [link_scope])
         self.assertEqual(1, len(rebound_relations))
         stock = next(item for item in graph.entities if item.entity_id == "security:005930")
         self.assertEqual(
@@ -1840,6 +1845,11 @@ class TypeDBOntologyRepositoryTests(unittest.TestCase):
             )],
         )
         first = apply_scoped_abox_identity(graph)
+        evidence_scope = graph.evidence[0].value["aboxScopeId"]
+        link_scope = next(
+            item["scopeId"]
+            for item in graph.worldview["supportRelationScopes"].values()
+        )
         active = {
             "scopePlan": deepcopy(first["scopePlan"]),
             "scopeGenerationIds": dict(first["scopeGenerationIds"]),
@@ -1855,15 +1865,15 @@ class TypeDBOntologyRepositoryTests(unittest.TestCase):
 
         self.assertTrue(repair["applied"])
         self.assertIn("symbol:005930:state", repair["repairedScopeIds"])
-        self.assertNotIn("link:symbol:005930:evidence", repair["repairedScopeIds"])
+        self.assertNotIn(link_scope, repair["repairedScopeIds"])
         repaired_generations = dict(graph.worldview["scopeGenerationIds"])
         self.assertNotEqual(
             first["scopeGenerationIds"]["symbol:005930:state"],
             repaired_generations["symbol:005930:state"],
         )
         self.assertEqual(
-            first["scopeGenerationIds"]["symbol:005930:evidence"],
-            repaired_generations["symbol:005930:evidence"],
+            first["scopeGenerationIds"][evidence_scope],
+            repaired_generations[evidence_scope],
         )
         active.update({
             "status": "ok",

@@ -100,8 +100,9 @@ def add_rulebox_concepts(graph: PortfolioOntology, rules: Iterable[GraphInferenc
                 "targetKind": dependency.get("targetKind"),
                 "role": dependency.get("role"),
                 "conservative": bool(dependency.get("conservative")),
-                "canTriggerEvaluation": True,
-                "canInvalidatePriorResult": True,
+                "canTriggerEvaluation": bool(dependency.get("canTriggerEvaluation", True)),
+                "canInvalidatePriorResult": bool(dependency.get("canInvalidatePriorResult", True)),
+                "contextOnly": bool(dependency.get("contextOnly")),
             })))
             graph.relations.append(OntologyRelation(
                 rule_id,
@@ -113,6 +114,19 @@ def add_rulebox_concepts(graph: PortfolioOntology, rules: Iterable[GraphInferenc
                     "conditionId": condition.condition_id,
                     "scopeFamilies": list(dependency.get("scopeFamilies") or []),
                     "conservative": bool(dependency.get("conservative")),
+                }),
+            ))
+            graph.relations.append(OntologyRelation(
+                rule_id,
+                dependency_id,
+                "TRIGGERS_EVALUATION",
+                weight=1.0,
+                properties=rulebox_relation_properties("TRIGGERS_EVALUATION", {
+                    "ruleId": rule.rule_id,
+                    "conditionId": condition.condition_id,
+                    "dependencyKeys": list(dependency.get("dependencyKeys") or []),
+                    "enabled": bool(dependency.get("canTriggerEvaluation", True)),
+                    "evaluationAuthority": "typedb",
                 }),
             ))
             graph.relations.append(OntologyRelation(
@@ -137,6 +151,7 @@ def add_rulebox_concepts(graph: PortfolioOntology, rules: Iterable[GraphInferenc
                     "conditionId": condition.condition_id,
                     "dependencyKeys": list(dependency.get("dependencyKeys") or []),
                     "evaluationAuthority": "typedb",
+                    "enabled": bool(dependency.get("canInvalidatePriorResult", True)),
                 }),
             ))
         for index, derivation in enumerate(rule.derivations):

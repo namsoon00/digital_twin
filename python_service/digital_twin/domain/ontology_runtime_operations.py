@@ -1376,6 +1376,12 @@ def build_projection_runtime_observation(
     runtime_identity = dict(runtime_identity or {}) if isinstance(runtime_identity, Mapping) else {}
     target_patch = projection_scope.get("targetScopedManifestPatch")
     target_patch = dict(target_patch or {}) if isinstance(target_patch, Mapping) else {}
+    topology_migration = target_patch.get("scopeTopologyMigration")
+    topology_migration = (
+        dict(topology_migration or {})
+        if isinstance(topology_migration, Mapping)
+        else {}
+    )
     scope_selection_trace = target_patch.get("scopeSelectionTrace")
     scope_selection_trace = (
         dict(scope_selection_trace or {})
@@ -1493,6 +1499,23 @@ def build_projection_runtime_observation(
                 "selectedIncomingScopeCount": _integer(target_patch.get("selectedIncomingScopeCount")),
                 "reusedActiveScopeCount": _integer(target_patch.get("reusedActiveScopeCount")),
                 "deferredScopeCount": _integer(target_patch.get("deferredScopeCount")),
+                "scopeTopologyVersion": _text(target_patch.get("scopeTopologyVersion")),
+                "boundedScopeCount": _integer(target_patch.get("boundedScopeCount")),
+                "selectedBoundedScopeCount": _integer(
+                    target_patch.get("selectedBoundedScopeCount")
+                ),
+                "scopeTopologyMigration": {
+                    "applied": bool(topology_migration.get("applied")),
+                    "fromVersion": _text(topology_migration.get("fromVersion")),
+                    "toVersion": _text(topology_migration.get("toVersion")),
+                    "legacyTargetScopeCount": len(
+                        topology_migration.get("legacyTargetScopeIds") or []
+                    ),
+                    "subjectScoped": bool(topology_migration.get("subjectScoped")),
+                    "fullWorldRewriteUsed": bool(
+                        topology_migration.get("fullWorldRewriteUsed")
+                    ),
+                },
                 "factSlotStatus": _text(target_patch.get("factSlotStatus")),
                 "factSlotSelectedScopeCount": _integer(target_patch.get("factSlotSelectedScopeCount")),
                 "factSlotDeferredScopeCount": _integer(target_patch.get("factSlotDeferredScopeCount")),
@@ -1575,7 +1598,10 @@ def build_projection_runtime_observation(
             "notEvaluatedSymbols": not_evaluated_symbols[:20],
             "targetCoverageStatus": target_coverage_status,
             "candidateRuleCount": _integer(plan.get("candidateRuleCount")),
+            "triggerRuleCount": len(plan.get("triggerRuleIds") or []),
+            "invalidationRuleCount": len(plan.get("invalidationRuleIds") or []),
             "enabledRuleCount": _integer(plan.get("enabledRuleCount")),
+            "ruleRoutingComplete": bool(plan.get("ruleRoutingComplete")),
             "candidateRuleRatioPct": _number(impact_diagnostics.get("candidateRuleRatioPct")),
             "nativeRuleSelectionEligibilityReason": _text(
                 plan.get("nativeRuleSelectionEligibilityReason")

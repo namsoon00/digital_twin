@@ -1,7 +1,7 @@
 import re
 from dataclasses import asdict, dataclass, field as dataclass_field
 from functools import cached_property
-from typing import Dict, Iterable, List
+from typing import Dict, Iterable, List, Optional
 
 from .hypothesis_outcome_contract import HypothesisOutcomeContract
 
@@ -150,6 +150,12 @@ class GraphRuleCondition:
     # TypeDB compiler counts this key, rather than duplicated condition rows,
     # so one investor-flow snapshot cannot masquerade as two confirmations.
     evidence_group_key: str = ""
+    # Change-routing metadata. None preserves the conservative legacy
+    # contract (the condition can both trigger evaluation and invalidate a
+    # prior result). False is an explicit authored context-only boundary; it
+    # never changes how TypeDB evaluates the condition once a rule is run.
+    change_trigger: Optional[bool] = None
+    invalidation_trigger: Optional[bool] = None
 
     def to_dict(self) -> Dict[str, object]:
         payload = asdict(self)
@@ -159,11 +165,26 @@ class GraphRuleCondition:
             payload.pop("hypothesis_scope", None)
         if not payload.get("evidence_group_key"):
             payload.pop("evidence_group_key", None)
+        if payload.get("change_trigger") is None:
+            payload.pop("change_trigger", None)
+        if payload.get("invalidation_trigger") is None:
+            payload.pop("invalidation_trigger", None)
         return payload
 
     @staticmethod
     def from_dict(payload: Dict[str, object]):
         payload = dict(payload or {})
+
+        def optional_bool(*keys: str) -> Optional[bool]:
+            for key in keys:
+                if key not in payload or payload.get(key) is None:
+                    continue
+                value = payload.get(key)
+                if isinstance(value, bool):
+                    return value
+                return str(value or "").strip().lower() in {"1", "true", "yes", "on"}
+            return None
+
         return GraphRuleCondition(
             condition_id=str(payload.get("condition_id") or payload.get("conditionId") or ""),
             kind=str(payload.get("kind") or ""),
@@ -188,6 +209,13 @@ class GraphRuleCondition:
                 payload.get("evidence_group_key")
                 or payload.get("evidenceGroupKey")
                 or ""
+            ),
+            change_trigger=optional_bool(
+                "change_trigger", "changeTrigger", "can_trigger_evaluation", "canTriggerEvaluation",
+            ),
+            invalidation_trigger=optional_bool(
+                "invalidation_trigger", "invalidationTrigger",
+                "can_invalidate_prior_result", "canInvalidatePriorResult",
             ),
         )
 

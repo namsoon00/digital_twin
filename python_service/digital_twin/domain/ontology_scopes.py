@@ -33,10 +33,21 @@ from .ontology_worlds import world_scoped_scope_id
 
 SCOPED_ABOX_MANIFEST_VERSION = "scoped-manifest-v1"
 SCOPED_ABOX_PERSISTENCE_MODE = "immutable-scoped-manifest"
-SCOPED_ABOX_SCOPE_TOPOLOGY_VERSION = "granular-v7-persisted-instrument-anchor"
+SCOPED_ABOX_SCOPE_TOPOLOGY_VERSION = "granular-v8-bounded-fact-slots"
 
 REFERENCE_SCOPE_ID = "reference:global"
 MACRO_SCOPE_ID = "macro:global"
+
+# These buckets are physical persistence boundaries, not investment
+# thresholds. They keep immutable generations bounded while preserving every
+# fact in the active ABox manifest. Counts are release-versioned through the
+# scope topology so changing them requires an explicit topology migration.
+BOUNDED_SCOPE_BUCKET_COUNTS = {
+    "evidence": 16,
+    "quality": 8,
+    "valuation": 8,
+    "company-valuation": 8,
+}
 
 _SYMBOL_PREFIXES = (
     "stock:",
@@ -210,6 +221,87 @@ def _scope_id(scope_type: str, value: str = "") -> str:
     return scope_type + ":" + clean_value
 
 
+def _scope_slot_token(value: object, fallback: str = "unknown") -> str:
+    token = re.sub(r"[^a-z0-9_.-]+", "-", _clean(value).lower()).strip("-.")
+    return (token or fallback)[:48]
+
+
+def _bounded_bucket(value: object, bucket_count: int) -> str:
+    count = max(1, int(bucket_count or 1))
+    digest = hashlib.sha256(_clean(value).encode("utf-8")).hexdigest()
+    width = max(2, len(str(count - 1)))
+    return str(int(digest[:12], 16) % count).zfill(width)
+
+
+def _temporal_window_token(
+    identity: object,
+    properties: Mapping[str, object] = None,
+) -> str:
+    values = dict(properties or {})
+    for key in (
+        "windowId", "window", "horizon", "period", "lookback",
+        "timeframe", "interval", "windowLabel",
+    ):
+        if _clean(values.get(key)):
+            return _scope_slot_token(values.get(key), "current")
+    text = _clean(identity).lower()
+    matches = re.findall(r"(?:^|:|-)(15m|30m|1h|2h|4h|1d|3d|5d|10d|20d|60d|120d|200d)(?:$|:|-)", text)
+    return _scope_slot_token(matches[-1] if matches else "current", "current")
+
+
+def bounded_fact_scope_id(
+    base_scope_id: object,
+    family: object,
+    identity: object,
+    properties: Mapping[str, object] = None,
+) -> str:
+    """Return a stable bounded physical slot for one semantic fact.
+
+    The family prefix remains unchanged, so impact routing and TypeDB rule
+    dependencies continue to operate on the same ontology vocabulary. Only
+    immutable persistence ownership becomes more granular.
+    """
+
+    base = _clean(base_scope_id)
+    clean_family = _clean(family).lower()
+    if not base:
+        return base
+    if clean_family == "temporal":
+        return base + ":window:" + _temporal_window_token(identity, properties)
+    bucket_count = BOUNDED_SCOPE_BUCKET_COUNTS.get(clean_family)
+    if bucket_count:
+        return base + ":bucket:" + _bounded_bucket(identity, bucket_count)
+    return base
+
+
+def _scope_slot_suffix(scope_id: object) -> str:
+    """Read a bounded slot suffix while ignoring the world ownership suffix."""
+
+    parts = [item for item in _clean(scope_id).split(":") if item]
+    if "world" in parts:
+        parts = parts[:parts.index("world")]
+    for marker in ("window", "bucket"):
+        if marker in parts:
+            index = parts.index(marker)
+            if index + 1 < len(parts):
+                return ":" + marker + ":" + parts[index + 1]
+    return ""
+
+
+def scope_requires_v8_bounded_slot(scope_id: object) -> bool:
+    """Whether one active v7 symbol scope still needs online migration."""
+
+    clean_scope = _clean(scope_id)
+    if not scope_symbol(clean_scope) or _scope_type(clean_scope) not in {"symbol", "link"}:
+        return False
+    family = scope_family(clean_scope)
+    if family == "temporal":
+        return ":window:" not in clean_scope
+    if family in BOUNDED_SCOPE_BUCKET_COUNTS:
+        return ":bucket:" not in clean_scope
+    return False
+
+
 def relation_link_scope_id(
     source_scope: object,
     target_scope: object,
@@ -235,8 +327,19 @@ def relation_link_scope_id(
     clean_symbol = _symbol(symbol)
     if not clean_symbol:
         clean_symbol = scope_symbol(source_scope) or scope_symbol(target_scope)
+    slot_suffix = ""
+    for endpoint_scope in (target_scope, source_scope):
+        if scope_family(endpoint_scope) == clean_family:
+            slot_suffix = _scope_slot_suffix(endpoint_scope)
+            if slot_suffix:
+                break
+    if not slot_suffix and clean_family in BOUNDED_SCOPE_BUCKET_COUNTS:
+        slot_suffix = ":bucket:" + _bounded_bucket(
+            "|".join(sorted({_clean(source_scope), _clean(target_scope)})),
+            BOUNDED_SCOPE_BUCKET_COUNTS[clean_family],
+        )
     if clean_symbol:
-        return "link:symbol:" + clean_symbol + ":" + clean_family
+        return "link:symbol:" + clean_symbol + ":" + clean_family + slot_suffix
     dependency_scopes = sorted({
         _clean(value)
         for value in (source_scope, target_scope)
@@ -249,7 +352,7 @@ def relation_link_scope_id(
     )
     return (
         "link:account:" + clean_account_id + ":" + clean_family
-        + ":" + dependency_shard
+        + slot_suffix + ":" + dependency_shard
     )
 
 
@@ -298,7 +401,12 @@ def _explicit_entity_scope(entity: OntologyEntity, account_id: str) -> str:
         return _scope_id("portfolio", account_id)
     symbol = _symbol(properties.get("symbol"))
     if symbol:
-        return symbol_scope_id(symbol, family)
+        return bounded_fact_scope_id(
+            symbol_scope_id(symbol, family),
+            family,
+            entity.entity_id,
+            properties,
+        )
     if any(token in kind for token in _EPISODE_TOKENS):
         return _scope_id("episode", account_id)
     if any(token in kind for token in _EVIDENCE_TOKENS):
@@ -307,7 +415,12 @@ def _explicit_entity_scope(entity: OntologyEntity, account_id: str) -> str:
     if entity_id.startswith(_SYMBOL_PREFIXES):
         candidate = _id_symbol(entity.entity_id)
         if candidate:
-            return symbol_scope_id(candidate, family)
+            return bounded_fact_scope_id(
+                symbol_scope_id(candidate, family),
+                family,
+                entity.entity_id,
+                properties,
+            )
     return ""
 
 
@@ -360,9 +473,12 @@ def _propagate_entity_scopes(graph: PortfolioOntology, scopes: MutableMapping[st
                 if neighbour in scopes and scope_symbol(scopes[neighbour])
             }
             if len(candidates) == 1:
-                scopes[entity_id] = symbol_scope_id(
-                    next(iter(candidates)),
-                    family_for_entity(entity.kind, entity.properties, entity.entity_id),
+                family = family_for_entity(entity.kind, entity.properties, entity.entity_id)
+                scopes[entity_id] = bounded_fact_scope_id(
+                    symbol_scope_id(next(iter(candidates)), family),
+                    family,
+                    entity.entity_id,
+                    entity.properties,
                 )
                 changed = True
         if not changed:
@@ -423,6 +539,12 @@ def scope_id_for_relation(
             symbol,
             relation_family,
         )
+    if (
+        source_scope
+        and source_scope == target_scope
+        and scope_family(source_scope) == relation_family
+    ):
+        return source_scope
     explicit = _clean(properties.get("aboxScopeId"))
     if explicit:
         return explicit
@@ -431,13 +553,33 @@ def scope_id_for_relation(
     if symbol and macro_scopes and not source_symbol and not target_symbol:
         return sorted(macro_scopes, key=_scope_rank)[0]
     if symbol:
-        return symbol_scope_id(symbol, relation_family)
+        return bounded_fact_scope_id(
+            symbol_scope_id(symbol, relation_family),
+            relation_family,
+            support_relation_key(relation.relation_type, source_id, target_id),
+            properties,
+        )
     if source_symbol and source_symbol == target_symbol:
-        return symbol_scope_id(source_symbol, relation_family)
+        return bounded_fact_scope_id(
+            symbol_scope_id(source_symbol, relation_family),
+            relation_family,
+            support_relation_key(relation.relation_type, source_id, target_id),
+            properties,
+        )
     if source_symbol:
-        return symbol_scope_id(source_symbol, relation_family)
+        return bounded_fact_scope_id(
+            symbol_scope_id(source_symbol, relation_family),
+            relation_family,
+            support_relation_key(relation.relation_type, source_id, target_id),
+            properties,
+        )
     if target_symbol:
-        return symbol_scope_id(target_symbol, relation_family)
+        return bounded_fact_scope_id(
+            symbol_scope_id(target_symbol, relation_family),
+            relation_family,
+            support_relation_key(relation.relation_type, source_id, target_id),
+            properties,
+        )
     candidates = [
         source_scope,
         target_scope,
@@ -458,7 +600,12 @@ def scope_id_for_evidence(evidence: OntologyEvidence, entity_scopes: Mapping[str
     if not symbol:
         symbol = scope_symbol(subject_scope)
     if symbol:
-        return symbol_scope_id(symbol, "evidence")
+        return bounded_fact_scope_id(
+            symbol_scope_id(symbol, "evidence"),
+            "evidence",
+            evidence.evidence_id,
+            properties,
+        )
     if subject_scope:
         return subject_scope
     return _scope_id("evidence", account_id)
@@ -1877,13 +2024,23 @@ def select_target_scoped_manifest_patch(
             "applied": False,
             "fallbackReason": "active-scoped-manifest-version-mismatch",
         }
-    if str(active.get("scopeTopologyVersion") or "") != SCOPED_ABOX_SCOPE_TOPOLOGY_VERSION:
-        return {
-            **base,
-            "status": "skipped-active-topology-migration",
-            "applied": False,
-            "fallbackReason": "active-scope-topology-version-mismatch",
-        }
+    active_topology_version = str(active.get("scopeTopologyVersion") or "")
+    legacy_target_scope_ids = sorted(
+        scope_id
+        for scope_id in active_by_scope
+        if scope_symbol(scope_id) in requested_symbols
+        and scope_requires_v8_bounded_slot(scope_id)
+    )
+    topology_migration = bool(
+        active_topology_version != SCOPED_ABOX_SCOPE_TOPOLOGY_VERSION
+        or legacy_target_scope_ids
+    )
+    base.update({
+        "scopeTopologyMigration": topology_migration,
+        "activeScopeTopologyVersion": active_topology_version,
+        "targetScopeTopologyVersion": SCOPED_ABOX_SCOPE_TOPOLOGY_VERSION,
+        "legacyTargetScopeIds": legacy_target_scope_ids,
+    })
 
     def is_requested_or_shared(scope_id: str) -> bool:
         symbol = scope_symbol(scope_id)
@@ -1986,6 +2143,19 @@ def select_target_scoped_manifest_patch(
         fact_slot_plan,
     )
     selected = set(fact_slot_selection.get("selectedScopeIds") or selected)
+    if topology_migration:
+        # Replace one complete subject boundary so v7 and v8 copies of the
+        # same fact never coexist in the active manifest. Other subjects stay
+        # on their verified v7 generations until their own durable event.
+        for scope_id, item in incoming.items():
+            if scope_symbol(scope_id) not in requested_symbols:
+                continue
+            selected.add(scope_id)
+            selection_reasons.setdefault(scope_id, set()).add(
+                "bounded-scope-topology-migration"
+            )
+            if changed_from_active(scope_id, item):
+                record_direct_change(scope_id, item)
     repair_scope_ids = {
         _clean(scope_id)
         for scope_id in dict(worldview.get("scopeRepair") or {}).get("repairedScopeIds") or []
@@ -2012,11 +2182,24 @@ def select_target_scoped_manifest_patch(
     # active verified manifest until an explicit scoped source fact proves removal.
     # Treating those omissions as retirement forced a full manifest rewrite
     # (and frequently a 300s+ TypeDB cycle) for a small price observation.
-    removed_relevant_scopes = [] if retain_missing_target_scopes else sorted(
-        scope_id
-        for scope_id in active_by_scope
-        if scope_id not in incoming and is_requested_or_shared(scope_id)
-    )
+    if topology_migration:
+        # A topology migration is deliberately subject-scoped. Shared and
+        # unrelated subject scopes may not be present in the partial incoming
+        # graph, so retiring them here would silently remove verified facts.
+        removed_relevant_scopes = sorted(
+            scope_id
+            for scope_id in active_by_scope
+            if scope_id not in incoming
+            and scope_symbol(scope_id) in requested_symbols
+        )
+    elif retain_missing_target_scopes:
+        removed_relevant_scopes = []
+    else:
+        removed_relevant_scopes = sorted(
+            scope_id
+            for scope_id in active_by_scope
+            if scope_id not in incoming and is_requested_or_shared(scope_id)
+        )
     retired_scope_ids = sorted(
         scope_id
         for scope_id in removed_relevant_scopes
@@ -2231,6 +2414,14 @@ def select_target_scoped_manifest_patch(
             "selected": selection_trace(selected, "selected"),
             "deferred": selection_trace(deferred, "deferred"),
         },
+        "scopeTopologyMigration": {
+            "applied": topology_migration,
+            "fromVersion": active_topology_version,
+            "toVersion": SCOPED_ABOX_SCOPE_TOPOLOGY_VERSION,
+            "legacyTargetScopeIds": legacy_target_scope_ids,
+            "subjectScoped": True,
+            "fullWorldRewriteUsed": False,
+        },
     }
 
 
@@ -2308,6 +2499,9 @@ def apply_scoped_manifest_plan(
         "snapshotId": manifest_id,
         "worldviewManifestId": manifest_id,
         "materialFingerprint": fingerprint,
+        "scopedAboxManifestVersion": SCOPED_ABOX_MANIFEST_VERSION,
+        "scopeTopologyVersion": SCOPED_ABOX_SCOPE_TOPOLOGY_VERSION,
+        "persistenceMode": SCOPED_ABOX_PERSISTENCE_MODE,
         "scopePlan": rows,
         "scopeGenerationIds": generations,
         "scopeFingerprints": fingerprints,
@@ -2367,6 +2561,9 @@ def merge_target_scoped_abox_manifest(
         "deferredScopeIds": list(selection.get("deferredScopeIds") or []),
         "retiredScopeIds": list(selection.get("retiredScopeIds") or []),
         "factSlot": dict(selection.get("factSlot") or {}),
+        "scopeTopologyMigration": dict(
+            selection.get("scopeTopologyMigration") or {}
+        ) if isinstance(selection.get("scopeTopologyMigration"), Mapping) else {},
     }
     graph.worldview["targetScopedManifestPatch"] = patch_metadata
     return {

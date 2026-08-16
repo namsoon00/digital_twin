@@ -543,6 +543,28 @@ def rule_condition_dependency_profile(condition: object) -> Dict[str, object]:
     if conservative:
         families.discard("unknown")
         families.add("unknown")
+    raw_change_trigger = _condition_value(condition, "change_trigger", "changeTrigger")
+    if raw_change_trigger is None:
+        raw_change_trigger = _condition_value(
+            condition, "can_trigger_evaluation", "canTriggerEvaluation",
+        )
+    raw_invalidation_trigger = _condition_value(
+        condition, "invalidation_trigger", "invalidationTrigger",
+    )
+    if raw_invalidation_trigger is None:
+        raw_invalidation_trigger = _condition_value(
+            condition, "can_invalidate_prior_result", "canInvalidatePriorResult",
+        )
+
+    def routing_bool(value: object, fallback: bool = True) -> bool:
+        if value is None:
+            return fallback
+        if isinstance(value, bool):
+            return value
+        return _lower(value) in {"1", "true", "yes", "on"}
+
+    can_trigger = routing_bool(raw_change_trigger)
+    can_invalidate = routing_bool(raw_invalidation_trigger)
     return {
         "conditionId": condition_id,
         "conditionKind": kind,
@@ -560,6 +582,9 @@ def rule_condition_dependency_profile(condition: object) -> Dict[str, object]:
         )),
         "role": _clean(_condition_value(condition, "role", "conditionRole")) or "required",
         "conservative": conservative,
+        "canTriggerEvaluation": can_trigger,
+        "canInvalidatePriorResult": can_invalidate,
+        "contextOnly": not can_trigger and not can_invalidate,
     }
 
 
@@ -866,6 +891,7 @@ def _rule_may_depend_on(
     changed_families: Set[str],
     changed_dependency_keys: Set[str] = None,
     dependency_fingerprint_coverage_complete: bool = False,
+    capability: str = "either",
 ) -> bool:
     families = {str(value or "") for value in profile.get("scopeFamilies") or []}
     if not changed_families or "unknown" in families or "state" in changed_families:
@@ -881,6 +907,11 @@ def _rule_may_depend_on(
         item for item in profile.get("conditionProfiles") or []
         if isinstance(item, Mapping)
         and _families_intersect(item.get("scopeFamilies") or [], changed_families)
+        and (
+            capability == "either"
+            or capability == "trigger" and bool(item.get("canTriggerEvaluation", True))
+            or capability == "invalidation" and bool(item.get("canInvalidatePriorResult", True))
+        )
     ]
     if not conditions:
         return False
@@ -1371,14 +1402,35 @@ def build_inference_impact_plan(
         if event_scoped_rule_selection
         else changed_dependency_keys
     )
-    candidate_profiles = [
+    trigger_profiles = [
         profile for profile in enabled_profiles
         if _rule_may_depend_on(
             profile,
             routing_families,
             routing_dependency_keys,
             routing_dependency_fingerprint_coverage_complete,
+            capability="trigger",
         )
+    ]
+    invalidation_profiles = [
+        profile for profile in enabled_profiles
+        if _rule_may_depend_on(
+            profile,
+            routing_families,
+            routing_dependency_keys,
+            routing_dependency_fingerprint_coverage_complete,
+            capability="invalidation",
+        )
+    ]
+    trigger_rule_ids = {
+        str(profile.get("ruleId") or "") for profile in trigger_profiles
+    }
+    invalidation_rule_ids = {
+        str(profile.get("ruleId") or "") for profile in invalidation_profiles
+    }
+    candidate_profiles = [
+        profile for profile in enabled_profiles
+        if str(profile.get("ruleId") or "") in trigger_rule_ids | invalidation_rule_ids
     ]
     deferred_profiles = [
         profile for profile in enabled_profiles
@@ -1461,6 +1513,8 @@ def build_inference_impact_plan(
         "explicitTargetSymbols": explicit_symbols,
         "inferenceTargetSymbols": target_symbols,
         "candidateRuleIds": [str(profile.get("ruleId") or "") for profile in candidate_profiles],
+        "triggerRuleIds": [str(profile.get("ruleId") or "") for profile in trigger_profiles],
+        "invalidationRuleIds": [str(profile.get("ruleId") or "") for profile in invalidation_profiles],
         "deferredRuleIds": [str(profile.get("ruleId") or "") for profile in deferred_profiles],
         "candidateRuleCount": len(candidate_profiles),
         "ruleDependencyCount": len(profiles),
@@ -1501,6 +1555,7 @@ def build_inference_impact_plan(
             candidate_profiles
             and len(candidate_profiles) < len(enabled_profiles)
         ),
+        "ruleRoutingComplete": True,
         "nativeRuleSelectionEligibilityReason": selection_eligibility_reason or "candidate-subset-within-safe-context",
         "nativeRuleSelectionApplied": False,
         "diagnostics": diagnostics,
@@ -1513,7 +1568,7 @@ def build_inference_impact_plan(
 
 
 def compact_inference_impact_plan(plan: Mapping[str, object], limit: int = 80) -> Dict[str, object]:
-    """Keep audit, TypeDB metadata, and diagnostics bounded."""
+    """Keep audit metadata bounded without truncating executable rule ids."""
     values = dict(plan or {})
     if not values:
         return {}
@@ -1521,6 +1576,20 @@ def compact_inference_impact_plan(plan: Mapping[str, object], limit: int = 80) -
     diagnostics = values.get("diagnostics")
     diagnostics = dict(diagnostics or {}) if isinstance(diagnostics, Mapping) else {}
     bounded = max(1, int(limit or 80))
+    candidate_rule_ids = list(values.get("candidateRuleIds") or [])
+    trigger_rule_ids = list(values.get("triggerRuleIds") or [])
+    invalidation_rule_ids = list(values.get("invalidationRuleIds") or [])
+    deferred_rule_ids = list(values.get("deferredRuleIds") or [])
+    candidate_rule_count = int(values.get("candidateRuleCount") or 0)
+    enabled_rule_count = int(values.get("enabledRuleCount") or 0)
+    rule_routing_complete = bool(
+        values.get("ruleRoutingComplete", True)
+        and len(candidate_rule_ids) == candidate_rule_count
+        and (
+            not enabled_rule_count
+            or len(set(candidate_rule_ids) | set(deferred_rule_ids)) == enabled_rule_count
+        )
+    )
     return {
         "version": str(values.get("version") or CHANGE_IMPACT_VERSION),
         "globalImpact": bool(values.get("globalImpact")),
@@ -1539,11 +1608,16 @@ def compact_inference_impact_plan(plan: Mapping[str, object], limit: int = 80) -
         "globalValueScopeIds": list(values.get("globalValueScopeIds") or [])[:bounded],
         "explicitTargetSymbols": list(values.get("explicitTargetSymbols") or [])[:bounded],
         "inferenceTargetSymbols": list(values.get("inferenceTargetSymbols") or [])[:bounded],
-        "candidateRuleIds": list(values.get("candidateRuleIds") or [])[:bounded],
-        "deferredRuleIds": list(values.get("deferredRuleIds") or [])[:bounded],
-        "candidateRuleCount": int(values.get("candidateRuleCount") or 0),
+        # These lists are executable routing contracts, not presentation
+        # diagnostics. Truncating one can silently omit a TypeDB function.
+        "candidateRuleIds": candidate_rule_ids,
+        "triggerRuleIds": trigger_rule_ids,
+        "invalidationRuleIds": invalidation_rule_ids,
+        "deferredRuleIds": deferred_rule_ids,
+        "candidateRuleCount": candidate_rule_count,
         "ruleDependencyCount": int(values.get("ruleDependencyCount") or 0),
-        "enabledRuleCount": int(values.get("enabledRuleCount") or 0),
+        "enabledRuleCount": enabled_rule_count,
+        "ruleRoutingComplete": rule_routing_complete,
         "changedScopeFamilies": list(values.get("changedScopeFamilies") or [])[:bounded],
         "changedDependencyKeys": list(values.get("changedDependencyKeys") or [])[:bounded],
         "routingScopeFamilies": list(values.get("routingScopeFamilies") or [])[:bounded],
@@ -1603,7 +1677,9 @@ def compact_inference_impact_plan(plan: Mapping[str, object], limit: int = 80) -
                 else False
             ),
         },
-        "nativeRuleSelectionEligible": bool(values.get("nativeRuleSelectionEligible")),
+        "nativeRuleSelectionEligible": bool(
+            values.get("nativeRuleSelectionEligible") and rule_routing_complete
+        ),
         "nativeRuleSelectionEligibilityReason": str(values.get("nativeRuleSelectionEligibilityReason") or ""),
         "nativeRuleSelectionApplied": bool(values.get("nativeRuleSelectionApplied")),
         "diagnostics": {

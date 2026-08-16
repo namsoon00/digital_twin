@@ -1276,6 +1276,22 @@ class PortfolioOntologyProjectionRecorder:
                         "retiredScopeIds": list(
                             applied_target_patch.get("retiredScopeIds") or []
                         ),
+                        "scopeTopologyVersion": str(
+                            (persistence_graph.worldview or {}).get("scopeTopologyVersion") or ""
+                        ),
+                        "scopeTopologyMigration": dict(
+                            applied_target_patch.get("scopeTopologyMigration") or {}
+                        ),
+                        "boundedScopeCount": len([
+                            item for item in applied_target_patch.get("scopePlan") or []
+                            if ":bucket:" in str(item.get("scopeId") or "")
+                            or ":window:" in str(item.get("scopeId") or "")
+                        ]),
+                        "selectedBoundedScopeCount": len([
+                            scope_id
+                            for scope_id in applied_target_patch.get("selectedIncomingScopeIds") or []
+                            if ":bucket:" in str(scope_id) or ":window:" in str(scope_id)
+                        ]),
                         "factSlotStatus": str(
                             (applied_target_patch.get("factSlot") or {}).get("status") or ""
                         ),
@@ -1357,6 +1373,9 @@ class PortfolioOntologyProjectionRecorder:
                             "retiredScopeIds": list(
                                 applied_target_patch.get("retiredScopeIds") or []
                             )[:50],
+                            "scopeTopologyMigration": dict(
+                                applied_target_patch.get("scopeTopologyMigration") or {}
+                            ),
                             "retainedDependencyScopeIds": list(
                                 applied_target_patch.get("retainedDependencyScopeIds") or []
                             )[:50],
@@ -1389,6 +1408,9 @@ class PortfolioOntologyProjectionRecorder:
                         ),
                         "deferredScopeCount": len(
                             applied_target_patch.get("deferredScopeIds") or []
+                        ),
+                        "scopeTopologyMigration": dict(
+                            applied_target_patch.get("scopeTopologyMigration") or {}
                         ),
                     }
             emit_progress("abox_validation.start")

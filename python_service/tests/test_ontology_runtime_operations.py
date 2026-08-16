@@ -315,6 +315,17 @@ class OntologyRuntimeOperationsTests(unittest.TestCase):
                     "selectedIncomingScopeCount": 2,
                     "reusedActiveScopeCount": 10,
                     "deferredScopeCount": 0,
+                    "scopeTopologyVersion": "granular-v8-bounded-fact-slots",
+                    "boundedScopeCount": 48,
+                    "selectedBoundedScopeCount": 2,
+                    "scopeTopologyMigration": {
+                        "applied": True,
+                        "fromVersion": "granular-v7-persisted-instrument-anchor",
+                        "toVersion": "granular-v8-bounded-fact-slots",
+                        "legacyTargetScopeIds": ["symbol:005930:evidence"],
+                        "subjectScoped": True,
+                        "fullWorldRewriteUsed": False,
+                    },
                     "scopeIntegrityAuditIntervalMinutes": 30,
                     "scopeIntegrityAuditDue": True,
                     "automaticFullProjectionBlocked": True,
@@ -324,6 +335,9 @@ class OntologyRuntimeOperationsTests(unittest.TestCase):
                 "globalImpact": False,
                 "inferenceTargetSymbols": ["005930"],
                 "candidateRuleCount": 3,
+                "triggerRuleIds": ["rule-a", "rule-b"],
+                "invalidationRuleIds": ["rule-b", "rule-c"],
+                "ruleRoutingComplete": True,
                 "changedScopeFamilies": ["flow"],
                 "scopeDelta": {
                     "previousScopeCount": 12,
@@ -371,12 +385,20 @@ class OntologyRuntimeOperationsTests(unittest.TestCase):
         self.assertEqual(1, observation["scope"]["changedScopeCount"])
         self.assertEqual(2, observation["scope"]["affectedScopeCount"])
         self.assertEqual(3, observation["inference"]["candidateRuleCount"])
+        self.assertEqual(2, observation["inference"]["triggerRuleCount"])
+        self.assertEqual(2, observation["inference"]["invalidationRuleCount"])
+        self.assertTrue(observation["inference"]["ruleRoutingComplete"])
         self.assertEqual(2, observation["inference"]["matchedRuleCount"])
         self.assertEqual(4200, observation["inference"]["nativeStageTimings"]["nativeRuleQueriesMs"])
         self.assertTrue(observation["inference"]["generationAligned"])
         self.assertEqual(1, observation["abox"]["cleanup"]["removedManifestCount"])
         self.assertEqual("applied", observation["scope"]["targetScopedManifestPatch"]["status"])
         self.assertEqual(10, observation["scope"]["targetScopedManifestPatch"]["reusedActiveScopeCount"])
+        topology = observation["scope"]["targetScopedManifestPatch"]
+        self.assertEqual("granular-v8-bounded-fact-slots", topology["scopeTopologyVersion"])
+        self.assertEqual(48, topology["boundedScopeCount"])
+        self.assertEqual(1, topology["scopeTopologyMigration"]["legacyTargetScopeCount"])
+        self.assertFalse(topology["scopeTopologyMigration"]["fullWorldRewriteUsed"])
         self.assertEqual("warning", observation["slo"]["state"])
 
     def test_projection_observation_keeps_relation_write_breakdown(self):

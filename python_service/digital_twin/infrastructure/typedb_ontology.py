@@ -44,6 +44,7 @@ from ..domain.ontology_rulebox_governance import (
     rulebox_version_payload,
 )
 from ..domain.ontology_change_impact import compact_inference_impact_plan, scope_family, scope_symbol
+from ..domain.ontology_rule_manifest import rule_dependency_reverse_index
 from ..domain.ontology_native_rule_planning import normalize_native_rule_planner_topology
 from ..domain.ontology_projection_fingerprint import material_graph_fingerprint
 from ..domain.ontology_runtime_operations import native_rule_timing_profile
@@ -1252,6 +1253,7 @@ def rulebox_runtime_metadata(rules_payload: List[Dict[str, object]]) -> Dict[str
         ])
         for stage in ["critical", "core", "supporting"]
     }
+    dependency_index = rule_dependency_reverse_index(rules_payload)
     return {
         "ruleboxRulesHash": rules_hash,
         "ruleboxShortHash": rules_hash[:12],
@@ -1261,6 +1263,9 @@ def rulebox_runtime_metadata(rules_payload: List[Dict[str, object]]) -> Dict[str
         "ruleboxEngineVersion": GRAPH_REASONER_VERSION,
         "ruleExecutionPolicyVersion": RULE_EXECUTION_POLICY_VERSION,
         "ruleExecutionStageCounts": stage_counts,
+        "ruleDependencyIndexVersion": str(dependency_index.get("version") or ""),
+        "ruleDependencyIndexFingerprint": str(dependency_index.get("fingerprint") or ""),
+        "ruleDependencyIndexRuleCount": int(dependency_index.get("ruleCount") or 0),
     }
 
 
@@ -5489,6 +5494,9 @@ class ScopedABoxManifestMixin:
         """Stage changed scopes before native inference activates a Manifest."""
         scope_plan = self.scoped_abox_plan(graph)
         worldview = dict(getattr(graph, "worldview", {}) or {})
+        topology_migration = dict(
+            (worldview.get("targetScopedManifestPatch") or {}).get("scopeTopologyMigration") or {}
+        ) if isinstance(worldview.get("targetScopedManifestPatch"), dict) else {}
         world_id = str(worldview.get("worldId") or "").strip()
         manifest_id = str(worldview.get("worldviewManifestId") or worldview.get("aboxSnapshotId") or "").strip()
         inference_target_symbols = clean_symbols_from_payload(
@@ -5926,6 +5934,17 @@ class ScopedABoxManifestMixin:
                 "accountId": str(worldview.get("accountId") or graph.portfolio_id or ""),
                 "scopePlan": scope_plan,
                 "changedScopeIds": changed_scope_ids,
+                "scopeTopologyVersion": str(worldview.get("scopeTopologyVersion") or ""),
+                "scopeTopologyMigration": topology_migration,
+                "boundedScopeCount": len([
+                    item for item in scope_plan
+                    if ":bucket:" in str(item.get("scopeId") or "")
+                    or ":window:" in str(item.get("scopeId") or "")
+                ]),
+                "changedBoundedScopeCount": len([
+                    scope_id for scope_id in changed_scope_ids
+                    if ":bucket:" in scope_id or ":window:" in scope_id
+                ]),
                 "pendingAboxActivation": pending_after,
                 "changedScopeEntityCount": len(node_rows),
                 "changedScopeRelationCount": len(relation_rows),
@@ -5975,6 +5994,8 @@ class ScopedABoxManifestMixin:
                 "accountId": str(worldview.get("accountId") or graph.portfolio_id or ""),
                 "changedScopeIds": changed_scope_ids,
                 "scopePlan": scope_plan,
+                "scopeTopologyVersion": str(worldview.get("scopeTopologyVersion") or ""),
+                "scopeTopologyMigration": topology_migration,
                 "preservedActiveGeneration": bool(previous_manifest_id),
                 "reasonCode": typedb_error_code(error),
                 "reason": str(error)[:220],
@@ -20902,6 +20923,7 @@ relation ontology-assertion,
                 "impactPlanVersion": str(compact_impact_plan.get("version") or ""),
                 "ruleExecutionScope": str(compact_impact_plan.get("ruleExecutionScope") or "complete-native-evaluation"),
                 "nativeRuleSelectionApplied": bool(compact_impact_plan.get("nativeRuleSelectionApplied")),
+                "ruleRoutingComplete": bool(compact_impact_plan.get("ruleRoutingComplete")),
             })
         native_profile = typedb_native_reasoning_profile(rules)
         rulebox_metadata.update(typedb_native_profile_metadata(native_profile))
@@ -20991,7 +21013,12 @@ relation ontology-assertion,
                 ),
                 "nativeRuleSelectionApplied": bool(rule_selection.get("selectionApplied")),
                 "nativeRuleSelectionFallbackReason": str(rule_selection.get("fallbackReason") or ""),
+                "nativeRuleRoutingComplete": bool(impact_plan.get("ruleRoutingComplete")),
                 "nativeRuleSelectionCandidateCount": len(rule_selection.get("candidateRuleIds") or []),
+                "nativeRuleTriggerCandidateCount": len(impact_plan.get("triggerRuleIds") or []),
+                "nativeRuleInvalidationCandidateCount": len(
+                    impact_plan.get("invalidationRuleIds") or []
+                ),
                 "nativeRuleSelectionPriorMatchedCount": len(rule_selection.get("priorMatchedRuleIds") or []),
                 "nativeRuleSelectionExecutedCount": len(rule_selection.get("selectedRuleIds") or []),
                 "nativeRuleSelectionDeferredCount": len(rule_selection.get("deferredRuleIds") or []),

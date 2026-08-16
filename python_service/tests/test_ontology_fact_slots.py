@@ -10,6 +10,7 @@ from digital_twin.domain.ontology_scopes import (
     SCOPED_ABOX_MANIFEST_VERSION,
     SCOPED_ABOX_SCOPE_TOPOLOGY_VERSION,
     apply_scoped_abox_identity,
+    merge_target_scoped_abox_manifest,
     select_target_scoped_manifest_patch,
 )
 
@@ -409,6 +410,82 @@ class OntologyFactSlotTests(unittest.TestCase):
         }
         self.assertIn("persistence-dependency-rebind", trace[shared_link]["reasons"])
         self.assertIn("deferred-shared-persistence-rebind", trace[shared_link]["reasons"])
+
+    def test_v8_online_migration_replaces_only_the_requested_subject(self):
+        graph = PortfolioOntology(
+            "main",
+            entities=[
+                OntologyEntity("temporal:005930:5d", "Temporal", "temporal-observation", {
+                    "ontologyBox": "ABox", "symbol": "005930", "window": "5d", "return": 1.2,
+                }),
+                OntologyEntity("news:005930:1", "News", "news-article", {
+                    "ontologyBox": "ABox", "symbol": "005930", "headline": "verified",
+                }),
+            ],
+        )
+        apply_scoped_abox_identity(graph, world_id="portfolio:local:test")
+        active = {
+            "status": "ok",
+            "scopedAboxManifestVersion": SCOPED_ABOX_MANIFEST_VERSION,
+            "scopeTopologyVersion": "granular-v7-persisted-instrument-anchor",
+            "scopePlan": [
+                {
+                    "scopeId": "symbol:005930:temporal",
+                    "scopeFamily": "temporal",
+                    "generationId": "legacy-temporal",
+                    "fingerprint": "legacy-temporal",
+                },
+                {
+                    "scopeId": "symbol:005930:evidence",
+                    "scopeFamily": "evidence",
+                    "generationId": "legacy-evidence",
+                    "fingerprint": "legacy-evidence",
+                },
+                {
+                    "scopeId": "symbol:000660:temporal",
+                    "scopeFamily": "temporal",
+                    "generationId": "other-subject",
+                    "fingerprint": "other-subject",
+                },
+                {
+                    "scopeId": "reference:legacy-catalog",
+                    "scopeFamily": "reference",
+                    "generationId": "shared-reference",
+                    "fingerprint": "shared-reference",
+                },
+            ],
+        }
+
+        result = merge_target_scoped_abox_manifest(graph, active, ["005930"])
+
+        self.assertTrue(result["applied"])
+        self.assertTrue(result["scopeTopologyMigration"]["applied"])
+        self.assertEqual(
+            ["symbol:005930:evidence", "symbol:005930:temporal"],
+            result["retiredScopeIds"],
+        )
+        merged_scope_ids = {
+            item["scopeId"]
+            for item in result["scopePlan"]
+        }
+        self.assertIn("symbol:000660:temporal", merged_scope_ids)
+        self.assertIn("reference:legacy-catalog", merged_scope_ids)
+        self.assertFalse({
+            "symbol:005930:evidence",
+            "symbol:005930:temporal",
+        } & merged_scope_ids)
+        self.assertTrue(any(
+            scope_id.startswith("symbol:005930:evidence:bucket:")
+            for scope_id in merged_scope_ids
+        ))
+        self.assertTrue(any(
+            scope_id.startswith("symbol:005930:temporal:window:5d")
+            for scope_id in merged_scope_ids
+        ))
+        self.assertEqual(
+            SCOPED_ABOX_SCOPE_TOPOLOGY_VERSION,
+            graph.worldview["scopeTopologyVersion"],
+        )
 
 
 if __name__ == "__main__":

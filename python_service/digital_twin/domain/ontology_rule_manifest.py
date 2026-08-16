@@ -1,13 +1,17 @@
 """Governed, question-scoped metadata for every executable TypeDB rule."""
 
+import hashlib
+import json
+
 from typing import Dict, Iterable, List
 
 from .ontology_change_impact import rule_dependency_profile
 from .ontology_rule_execution_policy import rule_execution_profile
 
 
-ONTOLOGY_RULE_MANIFEST_VERSION = "ontology-rule-domain-manifest-v3"
-RULE_DEPENDENCY_CONTRACT_VERSION = "ontology-rule-dependency-contract-v1"
+ONTOLOGY_RULE_MANIFEST_VERSION = "ontology-rule-domain-manifest-v4"
+RULE_DEPENDENCY_CONTRACT_VERSION = "ontology-rule-dependency-contract-v2"
+RULE_DEPENDENCY_INDEX_VERSION = "ontology-rule-dependency-index-v1"
 
 ASSESSMENT_SCOPES = (
     "evidence-quality",
@@ -175,8 +179,9 @@ def rule_condition_contracts(dependency: Dict[str, object]) -> List[Dict[str, ob
             "relationType": str(item.get("relationType") or "").strip(),
             "targetKind": str(item.get("targetKind") or "").strip(),
             "conservative": bool(item.get("conservative")),
-            "canTriggerEvaluation": True,
-            "canInvalidatePriorResult": True,
+            "canTriggerEvaluation": bool(item.get("canTriggerEvaluation", True)),
+            "canInvalidatePriorResult": bool(item.get("canInvalidatePriorResult", True)),
+            "contextOnly": bool(item.get("contextOnly")),
         })
     return rows
 
@@ -357,4 +362,76 @@ def validate_rule_domain_manifests(rules: Iterable[object]) -> Dict[str, object]
         "invalidRuleIds": invalid,
         "conservativeRuleIds": conservative,
         "manifests": manifests,
+    }
+
+
+def rule_dependency_reverse_index(rules: Iterable[object]) -> Dict[str, object]:
+    """Compile immutable change-routing lookups for one RuleBox release.
+
+    The index selects TypeDB functions; it never evaluates a condition. Full
+    active ABox context remains available to every selected function.
+    """
+
+    manifests = [
+        dict(getattr(rule, "resolved_domain_manifest"))
+        if hasattr(rule, "resolved_domain_manifest")
+        else rule_domain_manifest(rule)
+        for rule in rules or []
+    ]
+    indexes = {
+        "triggerByDependencyKey": {},
+        "invalidationByDependencyKey": {},
+        "contextByDependencyKey": {},
+        "triggerByFamily": {},
+        "invalidationByFamily": {},
+        "contextByFamily": {},
+    }
+
+    def add(index_name: str, key: object, rule_id: str) -> None:
+        clean_key = str(key or "").strip()
+        if not clean_key or not rule_id:
+            return
+        values = indexes[index_name].setdefault(clean_key, [])
+        if rule_id not in values:
+            values.append(rule_id)
+
+    for manifest in manifests:
+        rule_id = str(manifest.get("ruleId") or "").strip()
+        for condition in manifest.get("requiredContext") or []:
+            dependency_keys = list(condition.get("dependencyKeys") or [])
+            families = list(condition.get("scopeFamilies") or [])
+            for key in dependency_keys:
+                add("contextByDependencyKey", key, rule_id)
+            for family in families:
+                add("contextByFamily", family, rule_id)
+            if bool(condition.get("canTriggerEvaluation", True)):
+                for key in dependency_keys:
+                    add("triggerByDependencyKey", key, rule_id)
+                for family in families:
+                    add("triggerByFamily", family, rule_id)
+            if bool(condition.get("canInvalidatePriorResult", True)):
+                for key in dependency_keys:
+                    add("invalidationByDependencyKey", key, rule_id)
+                for family in families:
+                    add("invalidationByFamily", family, rule_id)
+    for values in indexes.values():
+        for key in list(values):
+            values[key] = sorted(values[key])
+    fingerprint_payload = {
+        "version": RULE_DEPENDENCY_INDEX_VERSION,
+        "manifestVersion": ONTOLOGY_RULE_MANIFEST_VERSION,
+        "dependencyContractVersion": RULE_DEPENDENCY_CONTRACT_VERSION,
+        "indexes": indexes,
+    }
+    fingerprint = hashlib.sha256(json.dumps(
+        fingerprint_payload,
+        ensure_ascii=False,
+        sort_keys=True,
+        separators=(",", ":"),
+    ).encode("utf-8")).hexdigest()
+    return {
+        **fingerprint_payload,
+        **indexes,
+        "ruleCount": len(manifests),
+        "fingerprint": fingerprint,
     }

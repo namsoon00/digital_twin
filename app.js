@@ -8,6 +8,15 @@
   var mobileInfiniteScrollMode = null;
   var overlayScrollPosition = null;
   var defaultSettings = window.OrbitAlphaDefaultSettings || {};
+  var deferredInstallPrompt = null;
+  var appServiceWorkerRegistration = null;
+  var serviceWorkerReloadPending = false;
+  var pendingTabTransition = false;
+  var appShellStatus = {
+    online: typeof navigator === "undefined" || navigator.onLine !== false,
+    installAvailable: false,
+    updateAvailable: false
+  };
 
   var tabs = [
     { id: "overview", label: "오늘", description: "판단·일정·위험", groupId: "workspace" },
@@ -1624,6 +1633,98 @@
     var theme = resolvedAppTheme();
     document.documentElement.setAttribute("data-theme", theme);
     document.documentElement.setAttribute("data-theme-setting", currentAppTheme());
+    var themeMeta = document.querySelector('meta[name="theme-color"]');
+    if (themeMeta) themeMeta.setAttribute("content", theme === "dark" ? "#101820" : "#f3f5f8");
+  }
+
+  function isStandaloneApp() {
+    return Boolean(
+      (window.matchMedia && window.matchMedia("(display-mode: standalone)").matches)
+      || (typeof navigator !== "undefined" && navigator.standalone === true)
+    );
+  }
+
+  function isIosBrowser() {
+    if (typeof navigator === "undefined") return false;
+    return /iPad|iPhone|iPod/.test(String(navigator.userAgent || "")) && !window.MSStream;
+  }
+
+  function canOfferAppInstall() {
+    return !isStandaloneApp() && Boolean(deferredInstallPrompt || isIosBrowser());
+  }
+
+  function syncAppViewportHeight() {
+    var viewport = window.visualViewport;
+    var height = Math.max(0, Number((viewport && viewport.height) || window.innerHeight || 0));
+    if (height) document.documentElement.style.setProperty("--oa-visual-viewport-height", Math.round(height) + "px");
+  }
+
+  function syncAppDocumentMetadata() {
+    var tab = activeTabMeta();
+    document.title = (tab && tab.label ? tab.label + " · " : "") + appBrandName;
+    document.documentElement.classList.toggle("oa-standalone", isStandaloneApp());
+    document.documentElement.classList.toggle("oa-offline", !appShellStatus.online);
+  }
+
+  function installOrbitAlpha() {
+    if (isStandaloneApp()) {
+      showSnackbar("이미 앱으로 실행 중입니다.", "success");
+      return;
+    }
+    if (!deferredInstallPrompt) {
+      showSnackbar(isIosBrowser() ? "공유 버튼을 누른 뒤 ‘홈 화면에 추가’를 선택하세요." : "브라우저 메뉴에서 앱 설치를 선택하세요.", "success");
+      return;
+    }
+    var prompt = deferredInstallPrompt;
+    prompt.prompt();
+    prompt.userChoice.then(function (choice) {
+      deferredInstallPrompt = null;
+      appShellStatus.installAvailable = false;
+      if (choice && choice.outcome === "accepted") showSnackbar("Orbit Alpha를 앱으로 설치했습니다.", "success");
+      render();
+    }).catch(function () {
+      deferredInstallPrompt = null;
+      appShellStatus.installAvailable = false;
+      render();
+    });
+  }
+
+  function applyServiceWorkerUpdate() {
+    var waiting = appServiceWorkerRegistration && appServiceWorkerRegistration.waiting;
+    if (!waiting) {
+      window.location.reload();
+      return;
+    }
+    serviceWorkerReloadPending = true;
+    waiting.postMessage({ type: "SKIP_WAITING" });
+  }
+
+  function registerOrbitAlphaServiceWorker() {
+    if (window.location.protocol === "file:" || typeof navigator === "undefined" || !("serviceWorker" in navigator)) return;
+    navigator.serviceWorker.register("service-worker.js?v=20260817-app-experience-v1", { updateViaCache: "none" }).then(function (registration) {
+      appServiceWorkerRegistration = registration;
+      if (registration.waiting && navigator.serviceWorker.controller) {
+        appShellStatus.updateAvailable = true;
+        render();
+      }
+      registration.addEventListener("updatefound", function () {
+        var worker = registration.installing;
+        if (!worker) return;
+        worker.addEventListener("statechange", function () {
+          if (worker.state === "installed" && navigator.serviceWorker.controller) {
+            appShellStatus.updateAvailable = true;
+            render();
+          }
+        });
+      });
+    }).catch(function () {
+      appServiceWorkerRegistration = null;
+    });
+    navigator.serviceWorker.addEventListener("controllerchange", function () {
+      if (!serviceWorkerReloadPending) return;
+      serviceWorkerReloadPending = false;
+      window.location.reload();
+    });
   }
 
   function isStaticPreviewHost() {
@@ -2859,6 +2960,7 @@
     if (nextTab === state.activeTab) return;
     rememberTabBarPosition();
     var priorTab = state.activeTab;
+    pendingTabTransition = true;
     state.activeTab = nextTab;
     if (nextTab !== "notifications") state.monitoringDetail = null;
     if (nextTab !== "notifications") state.notificationPolicyEditorOpen = false;
@@ -2928,6 +3030,7 @@
     }
     rememberTabBarPosition();
     state.previousTab = state.activeTab;
+    pendingTabTransition = true;
     state.activeTab = nextTab;
     if (nextTab !== "notifications") state.monitoringDetail = null;
     render();
@@ -10740,6 +10843,7 @@
       return;
     }
     applyAppTheme();
+    syncAppDocumentMetadata();
     var overlayWillBeOpen = overlayPageStateOpen();
     var overlayWasOpen = document.documentElement.classList.contains("oa-overlay-open");
     var renderedInteractiveState = rememberRenderedInteractiveState();
@@ -10793,6 +10897,13 @@
     bindMobileInfiniteScroll();
     focusWorkDetailLayer();
     initInstrumentTimelineChart();
+    if (pendingTabTransition) {
+      pendingTabTransition = false;
+      window.setTimeout(function () {
+        var shell = app.querySelector(".console-shell.is-tab-transitioning");
+        if (shell) shell.classList.remove("is-tab-transitioning");
+      }, 220);
+    }
     if (state.workDetailLayer && state.workDetailLayer.type === "market-instrument" && state.workDetailLayer.key) {
       var timelineKey = instrumentTimelineCacheKey(state.workDetailLayer.key, instrumentTimelineRange(state.workDetailLayer.key));
       if (!state.instrumentTimelines[timelineKey] && !state.instrumentTimelineLoading[timelineKey]) {
@@ -10961,8 +11072,9 @@
     var showHomeDeskbar = state.activeTab === "overview";
     var subtitle = (structure.objective || tab.description || "운영") + " · 마지막 데이터 " + formatClock(snapshot.generatedAt) + " · " + freshness.label + " (" + freshness.detail + ")";
     return [
-      '<main class="shell console-shell ' + escapeHtml(webStyleContract.shellClass) + (showHomeDeskbar ? " shell-home" : " shell-page") + (topbarCollapsed ? " topbar-collapsed" : "") + '" data-web-style="' + escapeHtml(webStyleContract.id) + '" data-web-style-version="' + escapeHtml(webStyleContract.version) + '" data-active-group="' + escapeHtml(structure.groupId) + '">',
+      '<main class="shell console-shell ' + escapeHtml(webStyleContract.shellClass) + (showHomeDeskbar ? " shell-home" : " shell-page") + (topbarCollapsed ? " topbar-collapsed" : "") + (pendingTabTransition ? " is-tab-transitioning" : "") + '" data-web-style="' + escapeHtml(webStyleContract.id) + '" data-web-style-version="' + escapeHtml(webStyleContract.version) + '" data-active-group="' + escapeHtml(structure.groupId) + '">',
       renderAppNavigation(tab, modeLabel, modeClass, snapshot),
+      renderAppRuntimeBanner(),
       '<section class="topbar web-style-topbar" data-style-region="topbar">',
       '<div class="topbar-copy">',
       '<p class="eyebrow">' + escapeHtml(structure.groupLabel + " / " + structure.layer) + '</p>',
@@ -12179,6 +12291,28 @@
     ].join("");
   }
 
+  function renderAppRuntimeBanner() {
+    if (!appShellStatus.online) {
+      return [
+        '<aside class="app-runtime-banner offline" role="status" aria-live="polite">',
+        '<span class="app-runtime-indicator" aria-hidden="true"></span>',
+        '<div><strong>오프라인 화면</strong><p>저장된 화면을 유지합니다. 연결되면 최신 데이터를 다시 확인합니다.</p></div>',
+        '<button class="text-button compact" type="button" data-action="retry-connectivity">재연결</button>',
+        '</aside>'
+      ].join("");
+    }
+    if (appShellStatus.updateAvailable) {
+      return [
+        '<aside class="app-runtime-banner update" role="status" aria-live="polite">',
+        '<span class="app-runtime-indicator" aria-hidden="true"></span>',
+        '<div><strong>새 버전 준비됨</strong><p>현재 위치를 유지한 채 최신 웹 앱으로 전환할 수 있습니다.</p></div>',
+        '<button class="text-button primary compact" type="button" data-action="apply-app-update">업데이트</button>',
+        '</aside>'
+      ].join("");
+    }
+    return "";
+  }
+
   function navTabButton(tab, className) {
     var active = state.activeTab === tab.id;
     var structure = pageStructureMeta(tab.id);
@@ -12225,7 +12359,7 @@
       '</div>',
       managementTabs.length ? [
         '<details class="app-nav-menu">',
-        '<summary><strong>운영</strong><span>' + escapeHtml(managementActive ? activeTab.label : "관리 탭") + '</span></summary>',
+        '<summary title="검증 도구" aria-label="검증 도구"><span class="app-tool-icon experiments" aria-hidden="true"></span><strong>검증</strong><span>' + escapeHtml(managementActive ? activeTab.label : "관리 탭") + '</span></summary>',
         '<div class="app-nav-menu-list">',
         managementTabs.map(function (tab) {
           return navTabButton(tab, "app-nav-menu-item");
@@ -12236,8 +12370,9 @@
       '<div class="app-nav-tools">',
       renderSymbolUniverseNavTask(),
       '<span class="status-pill ' + modeClass + '">' + escapeHtml(modeLabel) + "</span>",
-      '<button class="icon-button" type="button" data-action="command-palette" title="전체 검색" aria-label="전체 검색">&#8981;</button>',
-      '<button class="icon-button refresh-button' + (state.refreshing ? " is-loading" : "") + '" type="button" data-action="refresh" title="' + (state.refreshing ? "데이터 갱신 중" : "새로고침") + '" aria-label="' + (state.refreshing ? "데이터 갱신 중" : "새로고침") + '"' + (state.refreshing ? " disabled aria-busy=\"true\"" : "") + '><span aria-hidden="true">↻</span></button>',
+      '<button class="icon-button app-install-button" type="button" data-action="install-app" title="앱으로 설치" aria-label="Orbit Alpha 앱으로 설치"' + (canOfferAppInstall() ? '' : ' hidden aria-hidden="true"') + '><span class="app-tool-icon install" aria-hidden="true"></span></button>',
+      '<button class="icon-button" type="button" data-action="command-palette" title="전체 검색" aria-label="전체 검색"><span class="app-tool-icon search" aria-hidden="true"></span></button>',
+      '<button class="icon-button refresh-button' + (state.refreshing ? " is-loading" : "") + '" type="button" data-action="refresh" title="' + (state.refreshing ? "데이터 갱신 중" : "새로고침") + '" aria-label="' + (state.refreshing ? "데이터 갱신 중" : "새로고침") + '"' + (state.refreshing ? " disabled aria-busy=\"true\"" : "") + '><span class="app-tool-icon refresh" aria-hidden="true"></span></button>',
       '</div>',
       renderAppNavCommand(activeTab.id, snapshot),
       '</nav>'
@@ -12370,7 +12505,7 @@
       '<nav class="tab-bar" aria-label="주요 탭" style="--tab-count:' + bottomTabs.length + '">',
       bottomTabs.map(function (tab) {
         var active = state.activeTab === tab.id;
-        return '<button type="button" class="' + (active ? "active" : "") + '" data-tab="' + escapeHtml(tab.id) + '"' + (active ? ' aria-current="page"' : "") + '><span class="tab-label">' + escapeHtml(tab.label) + '</span><span class="tab-description">' + escapeHtml(tab.description || "") + '</span></button>';
+        return '<button type="button" class="' + (active ? "active" : "") + '" data-tab="' + escapeHtml(tab.id) + '"' + (active ? ' aria-current="page"' : "") + '><span class="tab-icon" data-tab-icon="' + escapeHtml(tab.id) + '" aria-hidden="true"></span><span class="tab-label">' + escapeHtml(tab.label) + '</span><span class="tab-description">' + escapeHtml(tab.description || "") + '</span></button>';
       }).join(""),
       '</nav>'
     ].join("");
@@ -30091,6 +30226,28 @@
         if (!state.symbolUniverseRefreshing && !state.symbolUniverseLoading) refreshSymbolUniverse();
         return;
       }
+      var installApp = event.target.closest && event.target.closest('[data-action="install-app"]');
+      if (installApp && app.contains(installApp)) {
+        event.preventDefault();
+        installOrbitAlpha();
+        return;
+      }
+      var retryConnectivity = event.target.closest && event.target.closest('[data-action="retry-connectivity"]');
+      if (retryConnectivity && app.contains(retryConnectivity)) {
+        event.preventDefault();
+        if (typeof navigator !== "undefined" && navigator.onLine === false) {
+          showSnackbar("아직 네트워크에 연결되지 않았습니다.", "danger");
+        } else if (!state.refreshing) {
+          load({ refresh: true });
+        }
+        return;
+      }
+      var applyAppUpdate = event.target.closest && event.target.closest('[data-action="apply-app-update"]');
+      if (applyAppUpdate && app.contains(applyAppUpdate)) {
+        event.preventDefault();
+        applyServiceWorkerUpdate();
+        return;
+      }
       var openSymbolRefresh = event.target.closest && event.target.closest('[data-action="open-symbol-universe-refresh"], [data-snackbar-action="open-symbol-universe-refresh"]');
       if (openSymbolRefresh && app.contains(openSymbolRefresh)) {
         event.preventDefault();
@@ -32034,6 +32191,28 @@
   }
 
   if (window.addEventListener) {
+    window.addEventListener("beforeinstallprompt", function (event) {
+      event.preventDefault();
+      deferredInstallPrompt = event;
+      appShellStatus.installAvailable = true;
+      render();
+    });
+    window.addEventListener("appinstalled", function () {
+      deferredInstallPrompt = null;
+      appShellStatus.installAvailable = false;
+      syncAppDocumentMetadata();
+      showSnackbar("Orbit Alpha가 홈 화면에 설치되었습니다.", "success");
+    });
+    window.addEventListener("online", function () {
+      appShellStatus.online = true;
+      showSnackbar("연결이 복구되었습니다. 최신 데이터를 확인합니다.", "success");
+      render();
+      if (!state.refreshing) load({ refresh: true });
+    });
+    window.addEventListener("offline", function () {
+      appShellStatus.online = false;
+      render();
+    });
     window.addEventListener("popstate", syncTabFromLocation);
     window.addEventListener("pageshow", function () {
       syncRenderedOverlayPageState();
@@ -32112,6 +32291,12 @@
   bindDelegatedConsoleActions();
   bindRenderedScrollActivity();
   applyAppTheme();
+  syncAppViewportHeight();
+  if (window.visualViewport) {
+    window.visualViewport.addEventListener("resize", syncAppViewportHeight, { passive: true });
+    window.visualViewport.addEventListener("scroll", syncAppViewportHeight, { passive: true });
+  }
+  registerOrbitAlphaServiceWorker();
   connectRealtime();
   render();
   if (state.workDetailLayer && state.workDetailLayer.type === "notification-job" && state.workDetailLayer.key) {

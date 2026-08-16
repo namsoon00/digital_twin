@@ -146,9 +146,23 @@ class OntologyReasoningQueueHealthTests(unittest.TestCase):
                                 "fallbackReason": "global-value-context-without-explicit-subject",
                                 "targetSymbolCount": 2,
                                 "deferredScopeCount": 4,
+                                "scopeTopologyVersion": "granular-v8-bounded-fact-slots",
+                                "boundedScopeCount": 48,
+                                "selectedBoundedScopeCount": 3,
+                                "scopeTopologyMigration": {
+                                    "applied": True,
+                                    "fromVersion": "granular-v7-persisted-instrument-anchor",
+                                    "toVersion": "granular-v8-bounded-fact-slots",
+                                    "legacyTargetScopeCount": 17,
+                                    "subjectScoped": True,
+                                    "fullWorldRewriteUsed": False,
+                                },
                             },
                         },
                         "inference": {
+                            "triggerRuleCount": 5,
+                            "invalidationRuleCount": 2,
+                            "ruleRoutingComplete": True,
                             "nativeRulePreflight": {
                                 "status": "verified-partial",
                                 "mode": "persisted-projection-topology",
@@ -177,6 +191,18 @@ class OntologyReasoningQueueHealthTests(unittest.TestCase):
         self.assertEqual("abc123", summary["runtimeIdentity"]["revision"])
         self.assertEqual("full-global-impact", summary["targetScopedManifestPatch"]["status"])
         self.assertEqual(4, summary["targetScopedManifestPatch"]["deferredScopeCount"])
+        self.assertEqual(
+            "granular-v8-bounded-fact-slots",
+            summary["targetScopedManifestPatch"]["scopeTopologyVersion"],
+        )
+        self.assertEqual(3, summary["targetScopedManifestPatch"]["selectedBoundedScopeCount"])
+        self.assertTrue(summary["targetScopedManifestPatch"]["scopeTopologyMigration"]["applied"])
+        self.assertFalse(
+            summary["targetScopedManifestPatch"]["scopeTopologyMigration"]["fullWorldRewriteUsed"]
+        )
+        self.assertEqual(5, summary["triggerRuleCount"])
+        self.assertEqual(2, summary["invalidationRuleCount"])
+        self.assertTrue(summary["ruleRoutingComplete"])
         self.assertTrue(summary["typedbNativeRuleSubjectFanoutUsed"])
         self.assertEqual(2, summary["typedbNativeRuleSubjectFanoutParallelism"])
         self.assertEqual(3210, summary["typedbNativeRuleSubjectFanoutDurationMs"])

@@ -4814,7 +4814,13 @@ class OntologyReasoningRunner:
             )),
             "targetCoverageStatus": str(inference.get("targetCoverageStatus") or ""),
             "candidateRuleCount": int(float_value(inference.get("candidateRuleCount"), 0.0)),
+            "triggerRuleCount": int(float_value(inference.get("triggerRuleCount"), 0.0)),
+            "invalidationRuleCount": int(float_value(
+                inference.get("invalidationRuleCount"),
+                0.0,
+            )),
             "enabledRuleCount": int(float_value(inference.get("enabledRuleCount"), 0.0)),
+            "ruleRoutingComplete": bool(inference.get("ruleRoutingComplete")),
             "candidateRuleRatioPct": float(float_value(inference.get("candidateRuleRatioPct"), 0.0)),
             "executedRuleCount": int(float_value(inference.get("executedRuleCount"), 0.0)),
             "executedRuleWorkCount": int(float_value(inference.get("executedRuleWorkCount"), 0.0)),
@@ -4898,6 +4904,37 @@ class OntologyReasoningRunner:
                 "selectedIncomingScopeCount": int(float_value(target_patch.get("selectedIncomingScopeCount"), 0.0)),
                 "reusedActiveScopeCount": int(float_value(target_patch.get("reusedActiveScopeCount"), 0.0)),
                 "deferredScopeCount": int(float_value(target_patch.get("deferredScopeCount"), 0.0)),
+                "scopeTopologyVersion": str(target_patch.get("scopeTopologyVersion") or ""),
+                "boundedScopeCount": int(float_value(target_patch.get("boundedScopeCount"), 0.0)),
+                "selectedBoundedScopeCount": int(float_value(
+                    target_patch.get("selectedBoundedScopeCount"),
+                    0.0,
+                )),
+                "scopeTopologyMigration": {
+                    "applied": bool(
+                        (target_patch.get("scopeTopologyMigration") or {}).get("applied")
+                    ),
+                    "fromVersion": str(
+                        (target_patch.get("scopeTopologyMigration") or {}).get("fromVersion") or ""
+                    ),
+                    "toVersion": str(
+                        (target_patch.get("scopeTopologyMigration") or {}).get("toVersion") or ""
+                    ),
+                    "legacyTargetScopeCount": int(float_value(
+                        (target_patch.get("scopeTopologyMigration") or {}).get(
+                            "legacyTargetScopeCount"
+                        ),
+                        0.0,
+                    )),
+                    "subjectScoped": bool(
+                        (target_patch.get("scopeTopologyMigration") or {}).get("subjectScoped")
+                    ),
+                    "fullWorldRewriteUsed": bool(
+                        (target_patch.get("scopeTopologyMigration") or {}).get(
+                            "fullWorldRewriteUsed"
+                        )
+                    ),
+                },
                 "factSlotStatus": str(target_patch.get("factSlotStatus") or ""),
                 "factSlotSelectedScopeCount": int(float_value(target_patch.get("factSlotSelectedScopeCount"), 0.0)),
                 "factSlotDeferredScopeCount": int(float_value(target_patch.get("factSlotDeferredScopeCount"), 0.0)),
@@ -5610,7 +5647,8 @@ class OntologyReasoningRunner:
                     "aboxChangedScopeTransactionCount", "aboxChangedScopeTransactionQueryCount",
                     "aboxManifestVerificationReadCount",
                     "aboxReusedPhysicalRowCount", "aboxInsertedNodeCount", "aboxInsertedRelationCount",
-                    "status", "targetSymbolCount", "candidateRuleCount", "enabledRuleCount",
+                    "status", "targetSymbolCount", "candidateRuleCount", "triggerRuleCount",
+                    "invalidationRuleCount", "enabledRuleCount", "ruleRoutingComplete",
                     "candidateRuleRatioPct", "executedRuleCount", "executedRuleWorkCount",
                     "manifestEvidencePreflightEnabled", "relationEvidencePreflightEnabled",
                     "manifestEvidencePreflightPrunedSymbolCount",

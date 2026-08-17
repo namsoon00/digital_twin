@@ -25,7 +25,7 @@
     { id: "modeling", label: "판단", description: "액션·근거", groupId: "workspace" },
     { id: "notifications", label: "알림", description: "상태·발송", groupId: "workspace" },
     { id: "experiments", label: "검증", description: "규칙·온톨로지", groupId: "workspace" },
-    { id: "settings", label: "운영", description: "계정·데이터·설정", groupId: "workspace" }
+    { id: "settings", label: "설정", description: "계정·환경·운영", groupId: "workspace" }
   ];
   var appBrandName = "Orbit Alpha";
   var appBrandSubtitle = "포트폴리오 신호 궤도 관제";
@@ -103,10 +103,10 @@
       workflow: ["구조 이해", "이벤트 흐름", "운영 기준"]
     },
     settings: {
-      layer: "운영 관리",
-      entity: "계정·데이터·설정",
-      objective: "계정 연결, 데이터 품질, 런타임 상태와 설정 진입점을 한 화면에서 관리합니다.",
-      workflow: ["연결 상태", "운영 이상", "설정 관리"]
+      layer: "설정 관리",
+      entity: "계정·앱 환경·시스템 운영",
+      objective: "투자 계정, 개인 화면 환경, 시스템 운영 설정을 적용 범위에 맞게 분리해 관리합니다.",
+      workflow: ["범위 선택", "상태 확인", "설정 편집"]
     }
   };
   var notificationSections = [
@@ -122,6 +122,11 @@
     { id: "connections", label: "연결", description: "증권사 인증" },
     { id: "balance", label: "자산 검증", description: "금액 산식" },
     { id: "history", label: "데이터 이력", description: "신선도" }
+  ];
+  var settingsSections = [
+    { id: "account", label: "계정", description: "투자 계정과 증권사 연결", scope: "계정별" },
+    { id: "preferences", label: "내 환경", description: "화면과 알림 수신", scope: "사용자 환경" },
+    { id: "operations", label: "운영 관리", description: "데이터와 실행 상태", scope: "시스템 전체" }
   ];
   var strategySections = [
     { id: "overview", label: "오늘의 판단", description: "액션 큐" },
@@ -507,6 +512,7 @@
     consolePages: { today: 1, market: 1, decision: 1, alerts: 1, validation: 1 },
     activeNotificationSection: initialNotificationSection(),
     activeAccountSection: initialAccountSection(),
+    activeSettingsSection: initialSettingsSection(),
     activeStrategySection: initialStrategySection(),
     activeFeedSection: initialFeedSection(),
     activeInvestmentChartPeriod: "1d",
@@ -1812,7 +1818,7 @@
 
   function registerOrbitAlphaServiceWorker() {
     if (window.location.protocol === "file:" || typeof navigator === "undefined" || !("serviceWorker" in navigator)) return;
-    navigator.serviceWorker.register("service-worker.js?v=20260817-app-responsiveness-v1", { updateViaCache: "none" }).then(function (registration) {
+    navigator.serviceWorker.register("service-worker.js?v=20260817-settings-scope-v1", { updateViaCache: "none" }).then(function (registration) {
       appServiceWorkerRegistration = registration;
       if (registration.waiting && navigator.serviceWorker.controller) {
         appShellStatus.updateAvailable = true;
@@ -1911,6 +1917,13 @@
   function initialAccountSection() {
     var params = new URLSearchParams(window.location.search);
     return normalizeAccountSection(params.get("account"));
+  }
+
+  function initialSettingsSection() {
+    var params = new URLSearchParams(window.location.search);
+    var rawTab = String(params.get("tab") || "").toLowerCase();
+    if (rawTab === "accounts" && !params.get("settings")) return "account";
+    return normalizeSettingsSection(params.get("settings"));
   }
 
   function initialStrategySection() {
@@ -2121,6 +2134,14 @@
     return accountSections.some(function (section) { return section.id === requested; }) ? requested : "status";
   }
 
+  function normalizeSettingsSection(value) {
+    var requested = String(value || "").toLowerCase();
+    if (["accounts", "identity", "connections", "brokerage"].indexOf(requested) >= 0) return "account";
+    if (["personal", "environment", "display", "app"].indexOf(requested) >= 0) return "preferences";
+    if (["operation", "runtime", "system", "data", "diagnostics"].indexOf(requested) >= 0) return "operations";
+    return settingsSections.some(function (section) { return section.id === requested; }) ? requested : "account";
+  }
+
   function normalizeStrategySection(value) {
     var requested = String(value || "").toLowerCase();
     if (requested === "data" || requested === "cards" || requested === "card") return "evidence";
@@ -2251,6 +2272,12 @@
     })[0] || accountSections[0];
   }
 
+  function activeSettingsSectionMeta() {
+    return settingsSections.filter(function (section) {
+      return section.id === state.activeSettingsSection;
+    })[0] || settingsSections[0];
+  }
+
   function activeStrategySectionMeta() {
     return strategySections.filter(function (section) {
       return section.id === state.activeStrategySection;
@@ -2278,6 +2305,7 @@
     if (normalized !== "ontology") params.delete("ontology");
     if (normalized !== "feed") params.delete("feed");
     if (normalized !== "feed") params.delete("marketView");
+    if (normalized !== "settings") params.delete("settings");
     if (normalized !== "experiments") {
       params.delete("lab");
       params.delete("experimentId");
@@ -2332,6 +2360,26 @@
     } else {
       params.set("notification", normalized);
     }
+    var path = window.location.pathname || "/";
+    var query = params.toString();
+    var hash = window.location.hash || "";
+    return path + (query ? "?" + query : "") + hash;
+  }
+
+  function settingsSectionUrl(section) {
+    var normalized = normalizeSettingsSection(section);
+    var params = new URLSearchParams(window.location.search);
+    params.set("tab", "settings");
+    params.delete("account");
+    params.delete("notification");
+    params.delete("strategy");
+    params.delete("ontology");
+    params.delete("feed");
+    params.delete("mode");
+    params.delete("detail");
+    params.delete("detailKey");
+    if (normalized === "account") params.delete("settings");
+    else params.set("settings", normalized);
     var path = window.location.pathname || "/";
     var query = params.toString();
     var hash = window.location.hash || "";
@@ -2473,6 +2521,12 @@
     window.history.replaceState({ tab: "accounts", account: normalized }, "", accountSectionUrl(normalized));
   }
 
+  function writeSettingsSectionHistory(section) {
+    if (!window.history || !window.history.replaceState) return;
+    var normalized = normalizeSettingsSection(section);
+    window.history.replaceState({ tab: "settings", settings: normalized }, "", settingsSectionUrl(normalized));
+  }
+
   function writeStrategySectionHistory(section) {
     if (!window.history || !window.history.replaceState) return;
     var normalized = normalizeStrategySection(section);
@@ -2538,6 +2592,9 @@
     }
     if (normalized === "experiments") {
       return normalized + ":" + normalizeExperimentSection(state.activeExperimentSection);
+    }
+    if (normalized === "settings") {
+      return normalized + ":" + normalizeSettingsSection(state.activeSettingsSection);
     }
     return normalized;
   }
@@ -3151,6 +3208,7 @@
   function syncTabFromLocation() {
     var nextTab = initialTab();
     var nextAccountSection = initialAccountSection();
+    var nextSettingsSection = initialSettingsSection();
     var nextNotificationSection = initialNotificationSection();
     var nextStrategySection = initialStrategySection();
     var nextOntologySection = initialOntologySection();
@@ -3166,6 +3224,7 @@
     var nextDetailKey = String((nextWorkDetailLayer || {}).key || "");
     var detailChanged = currentDetailType !== nextDetailType || currentDetailKey !== nextDetailKey;
     var accountSectionChanged = nextAccountSection !== state.activeAccountSection;
+    var settingsSectionChanged = nextSettingsSection !== state.activeSettingsSection;
     var sectionChanged = nextNotificationSection !== state.activeNotificationSection;
     var strategySectionChanged = nextStrategySection !== state.activeStrategySection;
     var ontologySectionChanged = nextOntologySection !== state.activeOntologySection;
@@ -3177,6 +3236,7 @@
     if (!state.pageViewModes) state.pageViewModes = {};
     state.pageViewModes[nextTab] = nextPageMode;
     state.activeAccountSection = nextAccountSection;
+    state.activeSettingsSection = nextSettingsSection;
     state.activeNotificationSection = nextNotificationSection;
     state.activeStrategySection = nextStrategySection;
     state.activeOntologySection = nextOntologySection;
@@ -3193,6 +3253,7 @@
     if (nextTab === state.activeTab) {
       var shouldRender = detailChanged
         || (accountSectionChanged && nextTab === "accounts")
+        || (settingsSectionChanged && nextTab === "settings")
         || (sectionChanged && nextTab === "notifications")
         || (strategySectionChanged && nextTab === "modeling")
         || (ontologySectionChanged && nextTab === "ontology")
@@ -11538,6 +11599,12 @@
       "settings-investment-language",
       "notification-delivery-settings",
       "notification-threshold-settings",
+      "settings-user-notifications",
+      "settings-preferences",
+      "settings-data-sources",
+      "settings-ai-runtime",
+      "settings-operations-notifications",
+      "settings-diagnostics",
       "settings-runtime"
     ];
     var wideDetails = [
@@ -11662,6 +11729,12 @@
     if (type === "notification-delivery-settings") return notificationDeliveryWorkDetailPayload();
     if (type === "notification-rule-diagnostics") return notificationRuleDiagnosticsWorkDetailPayload();
     if (type === "notification-threshold-settings") return notificationThresholdWorkDetailPayload();
+    if (type === "settings-user-notifications") return settingsUserNotificationsWorkDetailPayload();
+    if (type === "settings-preferences") return settingsPreferencesWorkDetailPayload();
+    if (type === "settings-data-sources") return settingsDataSourcesWorkDetailPayload();
+    if (type === "settings-ai-runtime") return settingsAiRuntimeWorkDetailPayload();
+    if (type === "settings-operations-notifications") return settingsOperationsNotificationsWorkDetailPayload();
+    if (type === "settings-diagnostics") return settingsDiagnosticsWorkDetailPayload();
     if (type === "settings-runtime") return settingsRuntimeWorkDetailPayload();
     return null;
   }
@@ -12940,8 +13013,10 @@
 
   function renderConsoleManagedPage(pageId, metrics, content, options) {
     var structure = pageStructureMeta(pageId);
+    options = options || {};
     return [
       '<div class="managed-page oa-console-page oa-console-page-' + escapeHtml(pageId) + '" data-console-workspace="' + escapeHtml(pageId) + '" data-structure-layer="' + escapeHtml(structure.layer) + '">',
+      options.leading || '',
       renderConsoleMetricStrip(metrics, options),
       content,
       '</div>'
@@ -13733,13 +13808,27 @@
     var activeAccounts = enabledServiceAccounts();
     var sources = selectConsoleOperationSources(snapshot);
     var failures = sources.filter(function (source) { return source.tone === "danger" || source.tone === "caution"; }).length;
-    var metrics = [
-      { label: "활성 계정", value: activeAccounts.length + "/" + accounts.length, detail: "서비스 계정" },
+    var section = normalizeSettingsSection(state.activeSettingsSection);
+    var activeAccount = activeWatchAccount();
+    var metrics = section === "account" ? [
+      { label: "등록 계정", value: accounts.length + "개", detail: "계정별 원장" },
+      { label: "활성 계정", value: activeAccounts.length + "개", detail: "모니터링 대상", tone: activeAccounts.length ? "watch" : "caution" },
+      { label: "현재 계정", value: activeAccount ? (activeAccount.label || accountIdOf(activeAccount)) : "미선택", detail: activeAccount ? accountIdOf(activeAccount) : "계정 등록 필요" },
+      { label: "관심 종목", value: activeAccount ? accountWatchlistSymbols(activeAccount).length + "개" : "0개", detail: "현재 계정" },
+      { label: "수정 권한", value: state.serverSettingsLocked ? "읽기전용" : "수정 가능", detail: state.serverSettingsLocked ? "공유 화면" : "로컬 소유자", tone: state.serverSettingsLocked ? "caution" : "watch" }
+    ] : (section === "preferences" ? [
+      { label: "테마", value: appThemeLabel(settingValue("appTheme") || defaultSettings.appTheme), detail: "앱 표시" },
+      { label: "시간대", value: currentAppTimezone(), detail: "날짜·캘린더" },
+      { label: "기본 시각", value: settingValue("investmentCalendarCandidateDefaultTime") || defaultSettings.investmentCalendarCandidateDefaultTime || "09:00", detail: "캘린더 후보" },
+      { label: "투자 알림", value: settingValue("notifyProvider") || "telegram", detail: "사용자 채널" },
+      { label: "저장 상태", value: settingsStatusLabel(), detail: "앱 설정 DB", tone: settingsStatusTone() }
+    ] : [
       { label: "데이터 소스", value: sources.filter(function (source) { return source.tone === "watch"; }).length + "/" + sources.length, detail: "정상·준비" },
       { label: "운영 이상", value: failures + "건", detail: "확인 필요", tone: failures ? "danger" : "watch" },
       { label: "실시간", value: state.realtime.connected ? "연결" : "폴링", detail: "WebSocket", tone: state.realtime.connected ? "watch" : "caution" },
-      { label: "설정 상태", value: state.serverSettingsLoaded ? "로드됨" : "확인", detail: "MySQL", tone: state.serverSettingsLoaded ? "watch" : "caution" }
-    ];
+      { label: "외부 API", value: configuredCount(["alphaVantageApiKey", "coingeckoApiKey", "fredApiKey", "opendartApiKey"]) + "/4", detail: "키 준비도" },
+      { label: "설정 DB", value: state.serverSettingsLoaded ? "연결" : "확인", detail: "시스템 전체", tone: state.serverSettingsLoaded ? "watch" : "caution" }
+    ]);
     var sourceList = '<div class="oa-operation-list" data-console-keyed-list="operation-sources">' + sources.map(function (source) {
       return [
         '<button type="button" class="oa-operation-row" data-console-row-key="' + escapeHtml(source.detailType) + '" data-work-detail="' + escapeHtml(source.detailType) + '" data-work-detail-key="">',
@@ -13750,24 +13839,110 @@
         '</button>'
       ].join("");
     }).join("") + '</div>';
-    var settings = [
-      ["계정·API", "계정 식별, Toss 인증, 알림 채널", "account-identity-board"],
-      ["자산 산식", "현금, 환율, 보유 원장 검증", "account-balance-board"],
-      ["알림 정책", "메시지 타입, 발송 게이트", "notification-policy-board"],
-      ["전달 채널", "Telegram, 링크, 저장 상태", "notification-delivery-settings"],
-      ["모델·RuleBox", "TypeDB 규칙과 모델 정책", "strategy-rulebox-editor"],
-      ["보편언어", "승인 용어, 수준별 표현, 금지 표현", "settings-investment-language"],
-      ["런타임 설정", "데이터 API와 로컬 환경", "settings-runtime"]
-    ];
-    var settingGrid = '<div class="oa-settings-list" data-console-keyed-list="operation-settings">' + settings.map(function (item) {
-        return '<button type="button" data-console-row-key="' + escapeHtml(item[2]) + '" data-work-detail="' + escapeHtml(item[2]) + '" data-work-detail-key=""><span><strong>' + escapeHtml(item[0]) + '</strong><em>' + escapeHtml(item[1]) + '</em>' + renderRecordChangedAt(null) + '</span><b>&rarr;</b></button>';
+    var content = section === "account"
+      ? renderAccountSettingsScope(snapshot, accounts, activeAccount)
+      : (section === "preferences" ? renderPreferenceSettingsScope() : renderSystemOperationsScope(sourceList));
+    return renderConsoleManagedPage("settings", metrics, content, {
+      leading: renderSettingsScopeNavigation()
+    });
+  }
+
+  function renderSettingsScopeNavigation() {
+    var active = normalizeSettingsSection(state.activeSettingsSection);
+    var meta = activeSettingsSectionMeta();
+    return [
+      '<section class="settings-scope-shell">',
+      '<div class="settings-scope-heading"><div><span>SETTINGS SCOPE</span><strong>설정 범위</strong><p>계정별 · 사용자 환경 · 시스템 전체</p></div><em>' + escapeHtml(meta.scope) + '</em></div>',
+      '<nav class="settings-scope-tabs" role="tablist" aria-label="설정 범위">',
+      settingsSections.map(function (item) {
+        var selected = item.id === active;
+        return [
+          '<button type="button" role="tab" data-settings-section="' + escapeHtml(item.id) + '" class="' + (selected ? "active" : "") + '" aria-selected="' + (selected ? "true" : "false") + '">',
+          '<span><strong>' + escapeHtml(item.label) + '</strong><em>' + escapeHtml(item.description) + '</em></span>',
+          '<small>' + escapeHtml(item.scope) + '</small>',
+          '</button>'
+        ].join("");
+      }).join(""),
+      '</nav>',
+      '</section>'
+    ].join("");
+  }
+
+  function renderScopedSettingsList(key, items) {
+    return '<div class="oa-settings-list scoped-settings-list" data-console-keyed-list="' + escapeHtml(key) + '">' + (items || []).map(function (item) {
+      return [
+        '<button type="button" data-console-row-key="' + escapeHtml(item.detailType) + '" data-work-detail="' + escapeHtml(item.detailType) + '" data-work-detail-key="' + escapeHtml(item.detailKey || "") + '">',
+        '<span><small class="settings-scope-chip ' + escapeHtml(item.tone || "neutral") + '">' + escapeHtml(item.scope) + '</small><strong>' + escapeHtml(item.title) + '</strong><em>' + escapeHtml(item.description) + '</em></span>',
+        '<b>' + escapeHtml(item.action || "열기") + ' &rarr;</b>',
+        '</button>'
+      ].join("");
     }).join("") + '</div>';
-    return renderConsoleManagedPage("settings", metrics, [
-      '<div class="oa-console-grid oa-operations-grid">',
-      renderConsoleSurface({ kicker: "DATA SOURCES", title: "운영 상태", description: "평가액 대신 연결·신선도·실패 단계만 관리합니다.", body: renderConsoleLiveRegion("operation-source-body", sourceList) }),
-      renderConsoleSurface({ kicker: "SETTINGS", title: "설정 카테고리", description: "설정 폼은 클릭 후 전체화면에서 편집합니다.", body: renderConsoleLiveRegion("operation-settings-body", settingGrid) }),
+  }
+
+  function renderAccountSettingsScope(snapshot, accounts, activeAccount) {
+    var accountOptions = accounts.length ? accounts.map(function (account) {
+      var id = accountIdOf(account);
+      return '<option value="' + escapeHtml(id) + '"' + (activeAccount && id === accountIdOf(activeAccount) ? ' selected' : '') + '>' + escapeHtml(account.label || id) + '</option>';
+    }).join("") : '<option value="">등록된 계정 없음</option>';
+    var context = [
+      '<div class="settings-account-context">',
+      '<label><span>현재 관리 계정</span><select data-settings-account-select' + (accounts.length ? '' : ' disabled') + '>' + accountOptions + '</select></label>',
+      '<div><span class="settings-scope-chip account">계정별</span><strong>' + escapeHtml(activeAccount ? (activeAccount.label || accountIdOf(activeAccount)) : "계정을 먼저 등록하세요") + '</strong><em>' + escapeHtml(activeAccount ? accountIdOf(activeAccount) + " · 관심 " + accountWatchlistSymbols(activeAccount).length + "개" : "계정마다 인증, 관심 종목, 알림 표현을 따로 관리합니다.") + '</em></div>',
       '</div>'
-    ].join(""));
+    ].join("");
+    var items = [
+      { title: "계정 목록과 식별 정보", description: "계정 이름, 증권사, API 자격 정보, 관심 종목", scope: "계정별", tone: "account", detailType: "account-identity-board", action: "관리" },
+      { title: "증권사 연결과 데이터 출처", description: "Toss 연결 가능성, 실제·캐시·mock 데이터 품질", scope: "계정별", tone: "account", detailType: "account-connections-board", action: "점검" },
+      { title: "자산 원장 검증", description: "현금, 환율, 평가액과 보유 수량 산식", scope: "계정별", tone: "account", detailType: "account-balance-board", action: "검증" },
+      { title: "계정 데이터 이력", description: "스냅샷 생성 시각, 캐시와 데이터 신선도", scope: "계정별", tone: "account", detailType: "account-history-board", action: "확인" }
+    ];
+    return [
+      '<div class="oa-console-grid settings-scope-content settings-account-scope">',
+      renderConsoleSurface({ kicker: "ACCOUNT CONTEXT", title: "투자 계정", description: "선택한 계정의 연결과 원장만 관리합니다.", body: context }),
+      renderConsoleSurface({ kicker: "ACCOUNT SETTINGS", title: "계정 설정", description: "시스템 운영값과 분리된 계정별 설정입니다.", body: renderScopedSettingsList("account-settings", items) }),
+      '</div>'
+    ].join("");
+  }
+
+  function renderPreferenceSettingsScope() {
+    var items = [
+      { title: "화면과 시간 표시", description: "테마, 시간대, 캘린더 기본 시각과 종목 신선도 표시", scope: "앱 환경", tone: "preferences", detailType: "settings-preferences", action: "편집" },
+      { title: "투자 알림 수신", description: "투자 인사이트와 뉴스를 받을 Telegram 채널과 링크", scope: "사용자 채널", tone: "preferences", detailType: "settings-user-notifications", action: "편집" }
+    ];
+    var boundary = [
+      '<div class="settings-boundary-list">',
+      '<div><span>이 화면에서 변경</span><strong>테마 · 시간대 · 캘린더 기본 시각 · 투자 알림 수신</strong></div>',
+      '<div><span>계정에서 변경</span><strong>증권 인증 · 관심 종목 · 계정 알림 표현</strong></div>',
+      '<div><span>운영 관리에서 변경</span><strong>API 키 · 워커 · 추론 · 데이터 신선도 정책</strong></div>',
+      '</div>'
+    ].join("");
+    return [
+      '<div class="oa-console-grid settings-scope-content settings-preference-scope">',
+      renderConsoleSurface({ kicker: "APP PREFERENCES", title: "내 환경", description: "투자 데이터나 워커 동작을 바꾸지 않는 표시 설정입니다.", body: renderScopedSettingsList("preference-settings", items) }),
+      renderConsoleSurface({ kicker: "SCOPE GUIDE", title: "설정 경계", description: "값이 적용되는 범위를 확인하고 변경합니다.", body: boundary }),
+      '</div>'
+    ].join("");
+  }
+
+  function renderSystemOperationsScope(sourceList) {
+    var items = [
+      { title: "외부 데이터와 API", description: "시세·수급·뉴스·공시·거시 API 키와 수집 정책", scope: "시스템 전체", tone: "operations", detailType: "settings-data-sources", action: "편집" },
+      { title: "AI 추론 실행", description: "AI 사용 여부, 병렬 워커와 추론 깊이", scope: "시스템 전체", tone: "operations", detailType: "settings-ai-runtime", action: "편집" },
+      { title: "운영자 알림 채널", description: "연결 장애, 파이프라인과 추론 상태 전용 채널", scope: "관리자 전용", tone: "operations", detailType: "settings-operations-notifications", action: "편집" },
+      { title: "저장소와 실행 진단", description: "설정 DB, 외부 API, 추론 대기열과 최근 오류", scope: "관리자 전용", tone: "operations", detailType: "settings-diagnostics", action: "진단" }
+    ];
+    var governance = [
+      { title: "추론 규칙과 관계", description: "TypeDB 규칙과 현재 관계는 투자 판단에서 관리", scope: "판단·검증", tone: "governance", detailType: "strategy-rulebox-editor", action: "이동" },
+      { title: "가설과 반증", description: "가설 수명주기와 승격 판단은 검증 워크벤치에서 관리", scope: "판단·검증", tone: "governance", detailType: "hypothesis-governance", action: "이동" },
+      { title: "투자 보편언어", description: "온톨로지 식별자와 사용자 표현의 승인 체계", scope: "온톨로지", tone: "governance", detailType: "settings-investment-language", action: "관리" }
+    ];
+    return [
+      '<div class="oa-console-grid oa-operations-grid settings-scope-content settings-operations-scope">',
+      renderConsoleSurface({ kicker: "SYSTEM HEALTH", title: "운영 상태", description: "연결·신선도·실패 단계만 점검합니다.", body: renderConsoleLiveRegion("operation-source-body", sourceList) }),
+      renderConsoleSurface({ kicker: "SYSTEM SETTINGS", title: "운영 설정", description: "모든 계정과 백그라운드 작업에 적용됩니다.", body: renderScopedSettingsList("operation-settings", items) }),
+      renderConsoleSurface({ kicker: "GOVERNANCE", title: "판단 체계 관리", description: "추론·가설·규칙·관계는 일반 운영값과 분리해 관리합니다.", className: "settings-governance-surface", body: renderScopedSettingsList("governance-settings", governance) }),
+      '</div>'
+    ].join("");
   }
 
   function renderInstrumentWorkspaceLink(symbol, label) {
@@ -29911,7 +30086,7 @@
       {
         tab: "계정·연결",
         result: "계정 상태, Toss 연결, 자산 검증, 데이터 이력",
-        setting: "계정 식별값, API secret, 계좌 seq, 알림 채널",
+        setting: "계정 식별값, API secret, 계좌 seq, 알림 표현",
         href: "?tab=accounts&account=identity",
         action: "계정 설정"
       },
@@ -30089,6 +30264,83 @@
     };
   }
 
+  function renderSettingsScopeEditorIntro(scope, title, description) {
+    return [
+      '<section class="settings-editor-scope">',
+      '<span class="settings-scope-chip">' + escapeHtml(scope) + '</span>',
+      '<div><strong>' + escapeHtml(title) + '</strong><p>' + escapeHtml(description) + '</p></div>',
+      '</section>'
+    ].join("");
+  }
+
+  function settingsPreferencesWorkDetailPayload() {
+    return editorWorkDetailPayload(
+      "App Preferences",
+      "화면과 시간 표시",
+      "앱 환경 · 테마, 시간대, 캘린더 기본 시각",
+      renderSettingsScopeEditorIntro("앱 환경", "표시 설정", "투자 계정이나 수집 워커를 바꾸지 않고 화면에 보이는 형식만 조정합니다.")
+        + renderSettingsEnvironmentPanel()
+        + renderSettingsSmartSavePanel()
+    );
+  }
+
+  function settingsUserNotificationsWorkDetailPayload() {
+    return editorWorkDetailPayload(
+      "User Delivery",
+      "투자 알림 수신",
+      "사용자 채널 · 투자 인사이트와 뉴스 전달",
+      renderSettingsScopeEditorIntro("사용자 채널", "투자 알림 전달", "증권 계정 인증이나 운영 장애 알림과 분리된 사용자 투자 알림 채널입니다.")
+        + '<article class="panel settings-delivery-panel"><div class="settings-body">'
+        + renderSettingsUserDeliveryGroup()
+        + renderSettingsSmartSavePanel()
+        + '</div></article>'
+    );
+  }
+
+  function settingsOperationsNotificationsWorkDetailPayload() {
+    return editorWorkDetailPayload(
+      "Operations Delivery",
+      "운영자 알림 채널",
+      "관리자 전용 · 장애와 파이프라인 상태 전달",
+      renderSettingsScopeEditorIntro("관리자 전용", "운영 알림 전달", "투자 의견이 아니라 연결 장애, 수집 실패, 추론 상태와 작업 완료만 전달합니다.")
+        + '<article class="panel settings-delivery-panel"><div class="settings-body">'
+        + renderSettingsOperationsDeliveryGroup()
+        + renderSettingsSmartSavePanel()
+        + '</div></article>'
+    );
+  }
+
+  function settingsAiRuntimeWorkDetailPayload() {
+    return editorWorkDetailPayload(
+      "AI Runtime",
+      "AI 추론 실행 설정",
+      "시스템 전체 · AI 사용 여부와 워커 실행량",
+      renderSettingsScopeEditorIntro("시스템 전체", "AI 추론 런타임", "TypeDB 추론 결과를 검증하는 실행 엔진과 처리량에 적용됩니다.")
+        + renderSettingsAiOperationsPanel()
+    );
+  }
+
+  function settingsDataSourcesWorkDetailPayload() {
+    return editorWorkDetailPayload(
+      "Data Operations",
+      "외부 데이터와 API",
+      "시스템 전체 · API 키, 수집, 신선도와 매핑",
+      renderSettingsScopeEditorIntro("시스템 전체", "데이터 수집 정책", "이 값은 모든 투자 계정의 수집 워커와 데이터 품질 판정에 적용됩니다.")
+        + renderSettingsExternalDataPanel()
+        + renderSettingsSmartSavePanel()
+    );
+  }
+
+  function settingsDiagnosticsWorkDetailPayload() {
+    return editorWorkDetailPayload(
+      "Operations Diagnostics",
+      "저장소와 실행 진단",
+      "관리자 전용 · 설정 DB, API와 추론 대기열",
+      renderSettingsScopeEditorIntro("관리자 전용", "시스템 진단", "조회와 점검만 수행하며 투자 계정 값은 이 화면에서 수정하지 않습니다.")
+        + renderSettingsDiagnosticsPanel()
+    );
+  }
+
   function renderSettingsDiagnosticMini(label, value, tone, detail) {
     return [
       '<section class="work-detail-card ' + escapeHtml(tone || "hold") + '"' + cardFormatAttrs("summary-list-card", "compact") + '>',
@@ -30125,7 +30377,6 @@
   }
 
   function renderSettingsDeliverySettingsPanel() {
-    var secretType = state.showSecrets ? "text" : "password";
     return [
       '<article class="panel settings-delivery-panel">',
       '<div class="panel-head">',
@@ -30135,23 +30386,33 @@
       '</div>',
       '</div>',
       '<div class="settings-body">',
-      renderSettingsGroup("계정 알림 채널", "투자 인사이트와 뉴스처럼 계정 사용자에게 전달할 채널입니다.", [
-        renderSettingField("notifyProvider", "알림 제공자", "text", "telegram"),
-        renderSettingSelect("operatorReasoningReportEnabled", "운영자 추론 보고서", [
-          { value: "0", label: "끄기" },
-          { value: "1", label: "사용" }
-        ]),
-        renderSettingField("telegramBotToken", "Telegram Bot Token", secretType, "bot token", { preserveConfigured: true }),
-        renderSettingField("telegramChatId", "Telegram Chat ID", "text", "chat id", { preserveConfigured: true }),
-        renderSettingField("notifyLinkUrl", "알림 링크 URL", "url", "http://127.0.0.1:3000?tab=notifications")
-      ].join(""), "delivery"),
-      renderSettingsGroup("운영 알림 채널", "연결 장애, 데이터 파이프라인, 추론 상태, 작업 완료 알림만 별도 봇으로 보냅니다.", [
-        renderSettingField("operationsTelegramBotToken", "운영 알림 Bot Token", secretType, "operations bot token", { preserveConfigured: true }),
-        renderSettingField("operationsTelegramChatId", "운영 알림 Chat ID", "text", "기존 Chat ID 사용 가능", { preserveConfigured: true })
-      ].join(""), "operations-delivery"),
+      renderSettingsUserDeliveryGroup(),
+      renderSettingsOperationsDeliveryGroup(),
       '</div>',
       '</article>'
     ].join("");
+  }
+
+  function renderSettingsUserDeliveryGroup() {
+    var secretType = state.showSecrets ? "text" : "password";
+    return renderSettingsGroup("투자 알림 채널", "투자 인사이트와 뉴스를 앱 사용자에게 전달할 채널입니다.", [
+      renderSettingField("notifyProvider", "알림 제공자", "text", "telegram"),
+      renderSettingField("telegramBotToken", "Telegram Bot Token", secretType, "bot token", { preserveConfigured: true }),
+      renderSettingField("telegramChatId", "Telegram Chat ID", "text", "chat id", { preserveConfigured: true }),
+      renderSettingField("notifyLinkUrl", "알림 링크 URL", "url", "http://127.0.0.1:3000?tab=notifications")
+    ].join(""), "delivery");
+  }
+
+  function renderSettingsOperationsDeliveryGroup() {
+    var secretType = state.showSecrets ? "text" : "password";
+    return renderSettingsGroup("운영 알림 채널", "연결 장애, 데이터 파이프라인, 추론 상태, 작업 완료 알림만 별도 봇으로 보냅니다.", [
+      renderSettingSelect("operatorReasoningReportEnabled", "운영자 추론 보고서", [
+        { value: "0", label: "끄기" },
+        { value: "1", label: "사용" }
+      ]),
+      renderSettingField("operationsTelegramBotToken", "운영 알림 Bot Token", secretType, "operations bot token", { preserveConfigured: true }),
+      renderSettingField("operationsTelegramChatId", "운영 알림 Chat ID", "text", "기존 Chat ID 사용 가능", { preserveConfigured: true })
+    ].join(""), "operations-delivery");
   }
 
   function renderSettingsAiOperationsPanel() {
@@ -31861,6 +32122,25 @@
         render({ transition: "section" });
       });
     });
+
+    Array.prototype.slice.call(app.querySelectorAll("[data-settings-section]")).forEach(function (button) {
+      button.addEventListener("click", function () {
+        var section = normalizeSettingsSection(button.getAttribute("data-settings-section"));
+        if (section === state.activeSettingsSection) return;
+        rememberRenderedPageScrollPosition();
+        state.activeSettingsSection = section;
+        writeSettingsSectionHistory(section);
+        render({ transition: "section" });
+      });
+    });
+
+    var settingsAccountSelect = app.querySelector("[data-settings-account-select]");
+    if (settingsAccountSelect) {
+      settingsAccountSelect.addEventListener("change", function () {
+        state.activeWatchAccountId = settingsAccountSelect.value || "";
+        render({ transition: "section" });
+      });
+    }
 
     Array.prototype.slice.call(app.querySelectorAll("[data-strategy-section]")).forEach(function (button) {
       button.addEventListener("click", function () {

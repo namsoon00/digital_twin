@@ -255,7 +255,7 @@ function checkWorkflowConsoleContract() {
 
   const tabBlock = code.slice(code.indexOf("var tabs = ["), code.indexOf("var bottomTabIds"));
   const activeTabs = ["overview", "calendar", "feed", "modeling", "notifications", "experiments", "settings"];
-  const tabLabels = ["오늘", "캘린더", "시장", "판단", "알림", "검증", "운영"];
+  const tabLabels = ["오늘", "캘린더", "시장", "판단", "알림", "검증", "설정"];
   assertOk(activeTabs.every(function (id) { return tabBlock.indexOf('id: "' + id + '"') >= 0; }), "7개 업무 탭 ID가 모두 정의되지 않았습니다.");
   assertOk(tabLabels.every(function (label) { return tabBlock.indexOf('label: "' + label + '"') >= 0; }), "7개 업무 탭명이 모두 정의되지 않았습니다.");
   assertOk((tabBlock.match(/\{ id:/g) || []).length === 7, "상위 업무 탭은 정확히 7개여야 합니다.");
@@ -355,6 +355,32 @@ function checkWorkflowConsoleContract() {
   ].forEach(function (renderer) {
     assertOk(code.indexOf("function " + renderer) >= 0, "업무 화면 renderer가 없습니다: " + renderer);
   });
+  assertOk(
+    code.indexOf('var settingsSections = [') >= 0 &&
+      ["계정", "내 환경", "운영 관리"].every(function (label) { return code.indexOf('label: "' + label + '"') >= 0; }) &&
+      code.indexOf("data-settings-section") >= 0 &&
+      code.indexOf("writeSettingsSectionHistory") >= 0,
+    "설정 탭이 계정·앱 환경·시스템 운영 범위로 분리되지 않았습니다."
+  );
+  assertOk(
+    [
+      "settings-user-notifications",
+      "settings-preferences",
+      "settings-data-sources",
+      "settings-ai-runtime",
+      "settings-operations-notifications",
+      "settings-diagnostics"
+    ].every(function (detailType) { return code.indexOf('"' + detailType + '"') >= 0; }) &&
+      code.indexOf("renderSettingsScopeEditorIntro") >= 0,
+    "범위별 설정 상세 편집 경로가 없습니다."
+  );
+  assertOk(
+    styles.indexOf(".settings-scope-shell") >= 0 &&
+      styles.indexOf(".settings-scope-tabs") >= 0 &&
+      styles.indexOf(".settings-scope-chip") >= 0 &&
+      styles.indexOf("Final settings-scope overrides") >= 0,
+    "설정 범위 선택과 모바일 반응형 스타일 계약이 없습니다."
+  );
   assertOk(code.indexOf('data-console-workspace="') >= 0 && code.indexOf("renderConsoleMetricStrip") >= 0 && code.indexOf("renderConsoleSurface") >= 0, "공통 콘솔 화면 계약이 없습니다.");
   assertOk(
     code.indexOf('params.set("limit", String(state.notificationJobsPageSize || 20))') >= 0 &&

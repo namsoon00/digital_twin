@@ -1116,7 +1116,7 @@
     var times = (candles || []).map(function (item) {
       return instrumentEventEpochSeconds(item && item.time);
     }).filter(Number.isFinite).sort(function (left, right) { return left - right; });
-    if (!times.length) return { markers: [], markerCount: 0, representedEventCount: 0, groupedEventCount: 0, labelCount: 0 };
+    if (!times.length) return { markers: [], clusters: [], markerCount: 0, representedEventCount: 0, groupedEventCount: 0, labelCount: 0 };
     var buckets = {};
     (events || []).forEach(function (event) {
       var occurred = instrumentEventEpochSeconds(event && event.occurredAt);
@@ -1182,6 +1182,7 @@
     var representedEventCount = clusters.reduce(function (total, cluster) { return total + cluster.count; }, 0);
     return {
       markers: markers,
+      clusters: clusters,
       markerCount: markers.length,
       representedEventCount: representedEventCount,
       groupedEventCount: Math.max(0, representedEventCount - markers.length),
@@ -1191,6 +1192,81 @@
 
   function instrumentChartEventMarkers(events, candles, options) {
     return instrumentChartEventProjection(events, candles, options).markers;
+  }
+
+  function instrumentEventDetailTarget(event) {
+    var type = String(event && event.detailType || "").trim();
+    var key = String(event && event.detailKey || "").trim();
+    return type && key ? { type: type, key: key } : null;
+  }
+
+  function instrumentEventGroupKey(payloadKey, selector) {
+    return String(payloadKey || "") + "|" + String(selector || "");
+  }
+
+  function parseInstrumentEventGroupKey(key) {
+    var value = String(key || "");
+    var separator = value.lastIndexOf("|");
+    if (separator <= 0 || separator >= value.length - 1) return null;
+    var payloadKey = value.slice(0, separator);
+    var selector = value.slice(separator + 1);
+    var cacheSeparator = payloadKey.lastIndexOf(":");
+    if (cacheSeparator <= 0 || cacheSeparator >= payloadKey.length - 1) return null;
+    return {
+      payloadKey: payloadKey,
+      symbol: payloadKey.slice(0, cacheSeparator),
+      range: payloadKey.slice(cacheSeparator + 1),
+      selector: selector
+    };
+  }
+
+  function ensureInstrumentEventGroupTimeline(key) {
+    var parsed = parseInstrumentEventGroupKey(key);
+    if (!parsed) return;
+    state.instrumentTimelineRanges[parsed.symbol] = parsed.range;
+    if (!state.instrumentTimelines[parsed.payloadKey]
+      && !state.instrumentTimelineLoading[parsed.payloadKey]
+      && !state.instrumentTimelineErrors[parsed.payloadKey]) {
+      loadInstrumentTimeline(parsed.symbol, false);
+    }
+  }
+
+  function instrumentEventGroupRows(payloadKey, selector) {
+    var payload = (state.instrumentTimelines || {})[String(payloadKey || "")];
+    if (!payload) return [];
+    var events = Array.isArray(payload.events) ? payload.events : [];
+    if (String(selector || "").indexOf("type:") === 0) {
+      var type = String(selector).slice(5);
+      return events.filter(function (event) { return event.type === type; });
+    }
+    if (String(selector || "").indexOf("time:") === 0) {
+      var target = Number(String(selector).slice(5));
+      var candles = payload.series && Array.isArray(payload.series.candles) ? payload.series.candles : [];
+      var projection = instrumentChartEventProjection(events, candles, { chartWidth: 720 });
+      var cluster = (projection.clusters || []).filter(function (item) { return item.time === target; })[0];
+      return cluster ? cluster.events : [];
+    }
+    return [];
+  }
+
+  function openInstrumentEventGroup(payloadKey, selector) {
+    var events = instrumentEventGroupRows(payloadKey, selector);
+    if (!events.length) {
+      showSnackbar("연결된 사건 상세를 찾지 못했습니다.", "caution");
+      return;
+    }
+    var target = events.length === 1 ? instrumentEventDetailTarget(events[0]) : null;
+    if (target) {
+      openWorkDetailLayer(target.type, target.key);
+      return;
+    }
+    openWorkDetailLayer("instrument-event-group", instrumentEventGroupKey(payloadKey, selector));
+  }
+
+  function instrumentChartHoveredMarkerId(param) {
+    var hovered = param && param.hoveredInfo;
+    if (hovered && hovered.objectKind === "series-marker" && hovered.objectId) return String(hovered.objectId);
+    return String(param && param.hoveredObjectId || "");
   }
 
   function initInstrumentTimelineChart() {
@@ -1267,6 +1343,15 @@
       if (markers.length && window.LightweightCharts.createSeriesMarkers) {
         window.LightweightCharts.createSeriesMarkers(candleSeries, markers);
       }
+      chart.subscribeCrosshairMove(function (param) {
+        var markerId = instrumentChartHoveredMarkerId(param);
+        container.classList.toggle("has-event-target", markerId.indexOf("instrument-event-cluster:") === 0);
+      });
+      chart.subscribeClick(function (param) {
+        var markerId = instrumentChartHoveredMarkerId(param);
+        if (markerId.indexOf("instrument-event-cluster:") !== 0) return;
+        openInstrumentEventGroup(payloadKey, "time:" + markerId.slice("instrument-event-cluster:".length));
+      });
       chart.timeScale().fitContent();
       instrumentTimelineChart = { chart: chart, container: container, payloadKey: payloadKey };
       if (window.ResizeObserver) {
@@ -7364,6 +7449,8 @@
         })[0] || null
       });
     }
+    var timelineFallback = !item ? instrumentTimelineEventWorkDetailPayload("hypothesis-review", key) : null;
+    if (timelineFallback) return timelineFallback;
     return editorWorkDetailPayload(
       "Hypothesis Review",
       item ? ((item.symbol || "종목") + " 가설 검증") : "가설 검증 상세",
@@ -11264,6 +11351,9 @@
         loadInstrumentTimeline(state.workDetailLayer.key, false);
       }
     }
+    if (state.workDetailLayer && state.workDetailLayer.type === "instrument-event-group" && state.workDetailLayer.key) {
+      ensureInstrumentEventGroupTimeline(state.workDetailLayer.key);
+    }
     var notificationDetailNeedsEvidence = state.workDetailLayer && state.workDetailLayer.type === "notification-job";
     if ((state.activeTab === "feed" || state.activeTab === "notifications" || notificationDetailNeedsEvidence) && !state.researchEvidence && !state.researchEvidenceLoading) {
       loadResearchEvidence(false);
@@ -11476,6 +11566,9 @@
       state.activeHypothesisLifecycleKey = state.workDetailLayer.key;
       loadHypothesisWorkspaceDetail(state.workDetailLayer.key);
     }
+    if (state.workDetailLayer.type === "investment-calendar-event" && !state.investmentCalendar && !state.investmentCalendarLoading) {
+      loadInvestmentCalendar(false);
+    }
     if (state.workDetailLayer.type === "hypothesis-governance") {
       loadHypothesisPolicyVersions(false);
     }
@@ -11486,6 +11579,9 @@
     render({ transition: "detail-open" });
     if (state.workDetailLayer.type === "market-instrument") {
       loadInstrumentTimeline(state.workDetailLayer.key, false);
+    }
+    if (state.workDetailLayer.type === "instrument-event-group") {
+      ensureInstrumentEventGroupTimeline(state.workDetailLayer.key);
     }
   }
 
@@ -11633,6 +11729,7 @@
       "account-balance-board",
       "account-history-board",
       "account-identity-board",
+      "instrument-event-group",
       "notification-candidates-board",
       "notification-policy-board",
       "notification-templates-board",
@@ -11686,6 +11783,7 @@
     if (type === "today-work-queue") return todayQueueWorkDetailPayload();
     if (type === "decision-action-queue") return decisionQueueWorkDetailPayload();
     if (type === "market-instrument") return marketInstrumentWorkDetailPayload(key);
+    if (type === "instrument-event-group") return instrumentEventGroupWorkDetailPayload(key);
     if (type === "feed-impact-board") return feedImpactBoardWorkDetailPayload();
     if (type === "feed-theme-board") return feedThemeBoardWorkDetailPayload();
     if (type === "feed-portfolio-board") return feedPortfolioBoardWorkDetailPayload();
@@ -11707,13 +11805,13 @@
     if (type === "experiment-promotion-board") return experimentPromotionWorkDetailPayload();
     if (type === "experiment-audit-board") return experimentAuditWorkDetailPayload();
     if (type === "experiment-proposals-board") return experimentProposalsWorkDetailPayload();
-    if (type === "notification-job") return notificationWorkDetailPayload(key);
-    if (type === "feed-impact" || type === "research-evidence") return researchEvidenceWorkDetailPayload(key);
+    if (type === "notification-job") return notificationWorkDetailPayload(key) || instrumentTimelineEventWorkDetailPayload(type, key);
+    if (type === "feed-impact" || type === "research-evidence") return researchEvidenceWorkDetailPayload(key) || instrumentTimelineEventWorkDetailPayload(type, key);
     if (type === "feed-pipeline") return feedPipelineWorkDetailPayload();
     if (type === "feed-sources") return feedSourcesWorkDetailPayload();
     if (type === "feed-quality") return feedQualityWorkDetailPayload();
-    if (type === "investment-action") return investmentActionWorkDetailPayload(key);
-    if (type === "investment-calendar-event") return investmentCalendarEventWorkDetailPayload(key);
+    if (type === "investment-action") return investmentActionWorkDetailPayload(key) || instrumentTimelineEventWorkDetailPayload(type, key);
+    if (type === "investment-calendar-event") return investmentCalendarEventWorkDetailPayload(key) || instrumentTimelineEventWorkDetailPayload(type, key);
     if (type === "investment-reasoning-card") return investmentReasoningCardWorkDetailPayload(key);
     if (type === "ontology-experiment") return ontologyExperimentWorkDetailPayload(key);
     if (type === "feed-settings-editor") return feedSettingsWorkDetailPayload(key);
@@ -11722,7 +11820,7 @@
     if (type === "strategy-model-policy-editor") return strategyModelPolicyWorkDetailPayload();
     if (type === "settings-investment-language") return investmentLanguageWorkDetailPayload();
     if (type === "strategy-trace-detail") return strategyTraceWorkDetailPayload(key);
-    if (type === "hypothesis-review") return hypothesisReviewWorkDetailPayload(key);
+    if (type === "hypothesis-review") return hypothesisReviewWorkDetailPayload(key) || instrumentTimelineEventWorkDetailPayload(type, key);
     if (type === "hypothesis-governance") return hypothesisGovernanceWorkDetailPayload();
     if (type === "ontology-audit-section") return ontologyAuditSectionWorkDetailPayload(key);
     if (type === "ontology-audit-row") return ontologyAuditRowWorkDetailPayload(key);
@@ -13439,10 +13537,10 @@
       riskHoldings.length ? riskHoldings.map(function (item) {
         var hasPnl = hasNumericValue(item.profitLossRate);
         var tone = hasPnl && numeric(item.profitLossRate) < 0 ? "danger" : "hold";
-        return '<div class="oa-context-row" data-console-row-key="' + escapeHtml(String(item.symbol || "")) + '"><span><strong>' + escapeHtml(stockDisplayName(item.symbol, item)) + '</strong><em>' + escapeHtml(item.symbol || "") + '</em>' + renderRecordChangedAt(item, snapshot.generatedAt) + '</span><b class="' + escapeHtml(tone) + '">' + escapeHtml(optionalSignedPct(item.profitLossRate, hasPnl)) + '</b></div>';
+        return '<button type="button" class="oa-context-row" data-console-row-key="' + escapeHtml(String(item.symbol || "")) + '" data-work-detail="market-instrument" data-work-detail-key="' + escapeHtml(item.symbol || "") + '"><span><strong>' + escapeHtml(stockDisplayName(item.symbol, item)) + '</strong><em>' + escapeHtml(item.symbol || "") + '</em>' + renderRecordChangedAt(item, snapshot.generatedAt) + '</span><b class="' + escapeHtml(tone) + '">' + escapeHtml(optionalSignedPct(item.profitLossRate, hasPnl)) + '</b></button>';
       }).join("") : '<div class="oa-context-row"><span><strong>보유 데이터 없음</strong><em>시장 화면에서 종목을 확인하세요.</em></span></div>',
       '</div>',
-      upcoming[0] ? '<div class="oa-next-event"><span>다음 일정</span><strong>' + escapeHtml(upcoming[0].title || "투자 이벤트") + '</strong><em>' + escapeHtml(formatClock(upcoming[0].startsAt)) + '</em></div>' : '',
+      upcoming[0] ? '<button type="button" class="oa-next-event" data-work-detail="investment-calendar-event" data-work-detail-key="' + escapeHtml(upcoming[0].eventId || upcoming[0].id || upcoming[0].title || "") + '"><span>다음 일정</span><strong>' + escapeHtml(upcoming[0].title || "투자 이벤트") + '</strong><em>' + escapeHtml(formatClock(upcoming[0].startsAt)) + '</em><b aria-hidden="true">&rarr;</b></button>' : '',
     ].join("");
     return renderConsoleManagedPage("overview", metrics, [
       '<div class="oa-console-grid oa-console-grid-primary">',
@@ -14009,7 +14107,7 @@
       '<div class="work-detail-row"><b>수급</b><div><strong>' + escapeHtml(row.flowLabel + " " + row.flowDisplay) + '</strong><span>거래량 비율 ' + escapeHtml(formatSignalRatio(signal.volumeRatio)) + '</span></div><em>' + escapeHtml(row.quality.label) + '</em></div>',
       '</div></section>',
       '<section class="work-detail-section"><strong>연결 상태</strong><div class="instrument-link-summary">',
-      '<span><b>' + escapeHtml(row.decision ? "판단 연결" : "판단 대기") + '</b><em>' + escapeHtml(row.decision ? ((row.decision.reasons || [])[0] || row.decision.action || "판단 근거") : "추론 결과가 생성되면 연결됩니다.") + '</em></span>',
+      '<span><b>' + escapeHtml(row.decision ? "판단 연결" : "판단 대기") + '</b><em>' + escapeHtml(row.decision ? ((row.decision.reasons || [])[0] || row.decision.action || "판단 근거") : "추론 결과가 생성되면 연결됩니다.") + '</em>' + (row.decision && row.decision.consoleKey ? renderWorkDetailButton("investment-action", row.decision.consoleKey, "판단 상세", "text-button compact") : '') + '</span>',
       '<span><b>근거 ' + escapeHtml(evidence.length) + '건</b><em>' + escapeHtml(evidence.length ? "뉴스·공시 상세는 타임라인에서 확인" : "연결된 뉴스 근거 없음") + '</em></span>',
       '</div></section>',
       '</div>',
@@ -14041,7 +14139,7 @@
         ? '<div class="instrument-chart-state is-error"><strong>' + escapeHtml(view.error) + '</strong><button type="button" class="text-button" data-instrument-timeline-refresh="' + escapeHtml(row.symbol) + '">다시 조회</button></div>'
         : series.availability === "no-data"
           ? '<div class="instrument-chart-state"><strong>저장된 실제 시계열이 없습니다.</strong><p>모의 캔들은 표시하지 않습니다. 다음 시세 수집 후 이 위치에 실제 데이터가 나타납니다.</p><button type="button" class="text-button" data-instrument-timeline-refresh="' + escapeHtml(row.symbol) + '">새로고침</button></div>'
-          : '<div class="instrument-candle-chart" data-instrument-candle-chart="' + escapeHtml(view.payloadKey || view.key) + '" aria-label="' + escapeHtml((row.name || row.symbol) + " 실제 캔들 차트") + '"></div>';
+          : '<div class="instrument-candle-chart" data-instrument-candle-chart="' + escapeHtml(view.payloadKey || view.key) + '" aria-label="' + escapeHtml((row.name || row.symbol) + " 실제 캔들 차트. 사건 표식을 선택하면 연결된 상세를 엽니다.") + '"></div>';
     var continuity = hasCandles && view.loading
       ? '<div class="instrument-chart-refreshing" role="status"><span aria-hidden="true"></span><strong>' + escapeHtml(view.range) + ' 구간을 준비하는 동안 이전 차트를 유지합니다.</strong></div>'
       : (hasCandles && view.stale && view.error
@@ -14061,25 +14159,144 @@
       continuity,
       '<div class="instrument-chart-meta"><span>간격 <strong>' + escapeHtml((payload.query || {}).interval || "-") + '</strong></span><span>캔들 <strong>' + escapeHtml(series.pointCount || 0) + '개</strong></span><span>사건 <strong>' + escapeHtml((payload.events || []).length) + '건</strong><small>차트 표식 ' + escapeHtml(markerProjection.markerCount) + '개</small></span><span>최신 <strong>' + escapeHtml(formatClock(series.latestAt)) + '</strong></span></div>',
       status,
-      '<div class="instrument-event-legend"><span class="evidence">뉴스 ' + escapeHtml(eventCounts.evidence || 0) + '</span><span class="calendar">일정 ' + escapeHtml(eventCounts.calendar || 0) + '</span><span class="decision">판단 ' + escapeHtml(eventCounts.decision || 0) + '</span><span class="hypothesis">가설 ' + escapeHtml(eventCounts.hypothesis || 0) + '</span><span class="notification">알림 ' + escapeHtml(eventCounts.notification || 0) + '</span></div>',
+      '<div class="instrument-event-legend" aria-label="사건 유형별 상세">' + [
+        ["evidence", "뉴스"],
+        ["calendar", "일정"],
+        ["decision", "판단"],
+        ["hypothesis", "가설"],
+        ["notification", "알림"]
+      ].map(function (item) {
+        var count = Number(eventCounts[item[0]] || 0);
+        return '<button type="button" class="' + item[0] + '" data-instrument-event-group="' + escapeHtml(view.payloadKey || view.key) + '" data-instrument-event-selector="type:' + item[0] + '"' + (count ? '' : ' disabled') + '>' + escapeHtml(item[1] + " " + count) + '</button>';
+      }).join("") + '</div>',
       renderInstrumentTimelineSources(payload),
       '</section>'
     ].join("");
   }
 
-  function renderInstrumentEventRow(event) {
+  function instrumentEventTypeLabel(type) {
     var labels = { evidence: "뉴스·공시", calendar: "일정", decision: "투자 판단", hypothesis: "가설 전환", notification: "알림" };
-    var action = event.detailType && event.detailKey
-      ? renderWorkDetailButton(event.detailType, event.detailKey, "상세", "mini-button")
-      : "";
+    return labels[String(type || "")] || String(type || "사건");
+  }
+
+  function renderInstrumentEventRow(event) {
+    var target = instrumentEventDetailTarget(event);
+    var rowKey = event.id || [event.type, event.occurredAt].join(":");
+    var opening = target
+      ? '<button type="button" class="instrument-timeline-event ' + escapeHtml(event.tone || "neutral") + '" data-console-row-key="' + escapeHtml(rowKey) + '" data-work-detail="' + escapeHtml(target.type) + '" data-work-detail-key="' + escapeHtml(target.key) + '" aria-label="' + escapeHtml((event.title || "상태 변경") + " 상세 보기") + '">'
+      : '<article class="instrument-timeline-event ' + escapeHtml(event.tone || "neutral") + '" data-console-row-key="' + escapeHtml(rowKey) + '">';
     return [
-      '<article class="instrument-timeline-event ' + escapeHtml(event.tone || "neutral") + '" data-console-row-key="' + escapeHtml(event.id || [event.type, event.occurredAt].join(":")) + '">',
+      opening,
       '<time datetime="' + escapeHtml(event.occurredAt || "") + '">' + escapeHtml(formatClock(event.occurredAt)) + '</time>',
-      '<span class="instrument-event-type">' + escapeHtml(labels[event.type] || event.type || "사건") + '</span>',
+      '<span class="instrument-event-type">' + escapeHtml(instrumentEventTypeLabel(event.type)) + '</span>',
       '<div><strong>' + escapeHtml(event.title || "상태 변경") + '</strong><p>' + escapeHtml(event.summary || "상세 설명이 기록되지 않았습니다.") + '</p><em>' + escapeHtml(event.source || "출처 미기록") + '</em></div>',
-      action,
-      '</article>'
+      target ? '<span class="instrument-timeline-event-action">상세 <b aria-hidden="true">&rarr;</b></span>' : '',
+      target ? '</button>' : '</article>'
     ].join("");
+  }
+
+  function instrumentTimelineEventReference(detailType, detailKey) {
+    var type = String(detailType || "");
+    var key = String(detailKey || "");
+    var payloadKeys = Object.keys(state.instrumentTimelines || {}).reverse();
+    for (var index = 0; index < payloadKeys.length; index += 1) {
+      var payload = state.instrumentTimelines[payloadKeys[index]] || {};
+      var event = (payload.events || []).filter(function (item) {
+        return String(item.detailType || "") === type && String(item.detailKey || "") === key;
+      })[0];
+      if (event) return { event: event, payload: payload, payloadKey: payloadKeys[index] };
+    }
+    return null;
+  }
+
+  function instrumentEventMetadataValue(value) {
+    if (value == null || value === "") return "-";
+    if (typeof value === "boolean") return value ? "예" : "아니요";
+    if (typeof value === "object") {
+      try {
+        return JSON.stringify(value);
+      } catch (error) {
+        return String(value);
+      }
+    }
+    return String(value);
+  }
+
+  function instrumentEventMetadataLabel(key) {
+    var labels = {
+      evidenceRole: "근거 역할",
+      dataState: "데이터 상태",
+      eventType: "일정 유형",
+      importance: "중요도",
+      inferenceGenerationId: "추론 세대",
+      decisionReadiness: "판단 준비 상태",
+      previousState: "이전 상태",
+      currentState: "현재 상태",
+      materialChange: "중요 변화",
+      status: "발송 상태",
+      messageType: "알림 유형"
+    };
+    return labels[key] || key;
+  }
+
+  function instrumentTimelineEventWorkDetailPayload(detailType, detailKey) {
+    var reference = instrumentTimelineEventReference(detailType, detailKey);
+    if (!reference) return null;
+    var event = reference.event;
+    var payload = reference.payload || {};
+    var instrument = payload.instrument || {};
+    var metadata = event.metadata && typeof event.metadata === "object" ? event.metadata : {};
+    var metadataRows = Object.keys(metadata).map(function (key) {
+      return '<div class="work-detail-row"><b>' + escapeHtml(instrumentEventMetadataLabel(key)) + '</b><div><strong>' + escapeHtml(instrumentEventMetadataValue(metadata[key])) + '</strong></div></div>';
+    }).join("");
+    return {
+      kicker: "Instrument Event",
+      title: event.title || instrumentEventTypeLabel(event.type),
+      meta: [instrument.name || instrument.symbol, instrument.symbol, instrumentEventTypeLabel(event.type), formatClock(event.occurredAt)].filter(Boolean).join(" · "),
+      body: [
+        renderInstrumentWorkspaceLink(instrument.symbol, "종목 전체 흐름"),
+        '<section class="work-detail-section primary"><strong>사건 요약</strong><p>' + escapeHtml(event.summary || "상세 설명이 기록되지 않았습니다.") + '</p></section>',
+        '<section class="work-detail-section"><strong>원본 기록</strong><div class="work-detail-list">',
+        '<div class="work-detail-row"><b>발생 시각</b><div><strong>' + escapeHtml(formatClock(event.occurredAt)) + '</strong></div></div>',
+        '<div class="work-detail-row"><b>출처</b><div><strong>' + escapeHtml(event.source || "출처 미기록") + '</strong></div></div>',
+        '<div class="work-detail-row"><b>기록 ID</b><div><strong>' + escapeHtml(event.id || detailKey || "-") + '</strong></div></div>',
+        metadataRows,
+        '</div></section>'
+      ].join("")
+    };
+  }
+
+  function instrumentEventGroupWorkDetailPayload(key) {
+    var parsed = parseInstrumentEventGroupKey(key);
+    if (!parsed) return null;
+    var payload = (state.instrumentTimelines || {})[parsed.payloadKey];
+    var error = String((state.instrumentTimelineErrors || {})[parsed.payloadKey] || "");
+    if (!payload) {
+      return {
+        kicker: "Chart Events",
+        title: error ? "차트 사건을 불러오지 못했습니다" : "차트 사건을 불러오는 중",
+        meta: [parsed.symbol, parsed.range].filter(Boolean).join(" · "),
+        body: error
+          ? '<div class="instrument-chart-state is-error"><strong>' + escapeHtml(error) + '</strong><button type="button" class="text-button" data-instrument-timeline-refresh="' + escapeHtml(parsed.symbol) + '">다시 조회</button></div>'
+          : '<div class="work-detail-loading"><span class="spinner"></span><p>선택한 기간의 실제 사건 기록을 읽고 있습니다.</p></div>'
+      };
+    }
+    var events = instrumentEventGroupRows(parsed.payloadKey, parsed.selector);
+    var instrument = payload.instrument || {};
+    var type = parsed.selector.indexOf("type:") === 0 ? parsed.selector.slice(5) : "";
+    var epoch = parsed.selector.indexOf("time:") === 0 ? Number(parsed.selector.slice(5)) : NaN;
+    var selectedAt = Number.isFinite(epoch) ? new Date(epoch * 1000).toISOString() : "";
+    var title = type
+      ? instrumentEventTypeLabel(type) + " " + events.length + "건"
+      : formatClock(selectedAt) + " 사건 " + events.length + "건";
+    return {
+      kicker: type ? "Event Category" : "Chart Event Cluster",
+      title: title,
+      meta: [instrument.name || instrument.symbol || parsed.symbol, parsed.range, "최신 변경순"].filter(Boolean).join(" · "),
+      body: events.length
+        ? '<section class="instrument-event-group-detail"><div class="instrument-timeline-list" data-console-keyed-list="instrument-event-group">' + events.map(renderInstrumentEventRow).join("") + '</div>' + renderInstrumentTimelineSources(payload) + '</section>'
+        : '<div class="instrument-empty"><strong>연결된 사건이 없습니다.</strong><p>현재 기간의 실제 사건 기록에서 선택한 항목을 찾지 못했습니다.</p></div>'
+    };
   }
 
   function renderInstrumentDecision(row, view) {
@@ -23061,7 +23278,7 @@
   }
 
   function notificationWorkDetailPayload(key) {
-    var job = state.notificationJobDetails[key] || notificationJobByKey(key) || activeNotificationDecisionJob(state.notificationJobItems || []);
+    var job = state.notificationJobDetails[key] || notificationJobByKey(key) || (!key ? activeNotificationDecisionJob(state.notificationJobItems || []) : null);
     if (!job) return null;
     var payload = notificationJobDetailPayload(job);
     return {
@@ -30895,6 +31112,15 @@
         state.instrumentTimelineRanges[rangeSymbol] = instrumentRange.getAttribute("data-instrument-range") || "3m";
         render();
         loadInstrumentTimeline(rangeSymbol, false);
+        return;
+      }
+      var instrumentEventGroup = event.target.closest && event.target.closest("[data-instrument-event-group]");
+      if (instrumentEventGroup && app.contains(instrumentEventGroup)) {
+        event.preventDefault();
+        openInstrumentEventGroup(
+          instrumentEventGroup.getAttribute("data-instrument-event-group"),
+          instrumentEventGroup.getAttribute("data-instrument-event-selector")
+        );
         return;
       }
       var instrumentRefresh = event.target.closest && event.target.closest("[data-instrument-timeline-refresh]");

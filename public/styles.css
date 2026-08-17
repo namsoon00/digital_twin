@@ -15035,13 +15035,39 @@ button.oa-context-row:hover {
 }
 
 .oa-next-event {
+  position: relative;
   display: grid;
   gap: 4px;
+  width: calc(100% - 36px);
   margin: 16px 18px 18px;
   padding: 14px;
   border: 1px solid var(--oa-surface-border);
   border-radius: 5px;
   background: var(--panel-soft);
+  color: var(--ink);
+  font: inherit;
+  text-align: left;
+  cursor: pointer;
+  transition: border-color 120ms ease, background-color 120ms ease;
+}
+
+.oa-next-event:hover,
+.oa-next-event:focus-visible {
+  border-color: color-mix(in srgb, var(--blue) 55%, var(--oa-surface-border));
+  background: var(--oa-row-hover);
+}
+
+.oa-next-event:focus-visible {
+  outline: 2px solid var(--focus);
+  outline-offset: 2px;
+}
+
+.oa-next-event > b {
+  position: absolute;
+  right: 14px;
+  top: 50%;
+  color: var(--blue);
+  transform: translateY(-50%);
 }
 
 .oa-next-event span,
@@ -25701,6 +25727,10 @@ html[data-theme="dark"] .ontology-graph-expanded-toolbar .icon-button.danger {
   overflow: hidden;
 }
 
+.instrument-candle-chart.has-event-target {
+  cursor: pointer;
+}
+
 .instrument-chart-state,
 .instrument-empty {
   display: grid;
@@ -25747,16 +25777,40 @@ html[data-theme="dark"] .ontology-graph-expanded-toolbar .icon-button.danger {
   border-bottom: 1px solid var(--line);
 }
 
-.instrument-event-legend span {
+.instrument-event-legend button {
   display: inline-flex;
   align-items: center;
   gap: 6px;
+  min-height: 34px;
+  padding: 5px 7px;
+  border: 1px solid transparent;
+  border-radius: 5px;
+  background: transparent;
   color: var(--muted);
+  font: inherit;
   font-size: 12px;
   font-weight: 800;
+  cursor: pointer;
 }
 
-.instrument-event-legend span::before {
+.instrument-event-legend button:hover:not(:disabled),
+.instrument-event-legend button:focus-visible {
+  border-color: var(--line);
+  background: var(--panel-soft);
+  color: var(--ink);
+}
+
+.instrument-event-legend button:focus-visible {
+  outline: 2px solid var(--focus);
+  outline-offset: 1px;
+}
+
+.instrument-event-legend button:disabled {
+  cursor: default;
+  opacity: .52;
+}
+
+.instrument-event-legend button::before {
   width: 7px;
   height: 7px;
   border-radius: 50%;
@@ -25792,8 +25846,31 @@ html[data-theme="dark"] .ontology-graph-expanded-toolbar .icon-button.danger {
   align-items: start;
   gap: 14px;
   min-width: 0;
+  width: 100%;
   padding: 14px;
+  border: 0;
   border-left: 3px solid var(--blue);
+  border-radius: 0;
+  background: var(--panel);
+  color: var(--ink);
+  font: inherit;
+  text-align: left;
+}
+
+button.instrument-timeline-event {
+  cursor: pointer;
+  transition: background-color 120ms ease;
+}
+
+button.instrument-timeline-event:hover {
+  background: var(--panel-soft);
+}
+
+button.instrument-timeline-event:focus-visible {
+  position: relative;
+  z-index: 1;
+  outline: 2px solid var(--focus);
+  outline-offset: -2px;
 }
 
 .instrument-timeline-event + .instrument-timeline-event {
@@ -25826,6 +25903,23 @@ html[data-theme="dark"] .ontology-graph-expanded-toolbar .icon-button.danger {
   font-style: normal;
   line-height: 1.5;
   overflow-wrap: anywhere;
+}
+
+.instrument-timeline-event-action {
+  display: inline-flex;
+  align-items: center;
+  align-self: center;
+  gap: 5px;
+  color: var(--blue);
+  font-size: 12px;
+  font-weight: 850;
+  white-space: nowrap;
+}
+
+.instrument-event-group-detail {
+  display: grid;
+  gap: 14px;
+  min-width: 0;
 }
 
 .market-flow-workspace {
@@ -26005,7 +26099,8 @@ html[data-theme="dark"] .ontology-graph-expanded-toolbar .icon-button.danger {
     grid-column: 1 / -1;
   }
 
-  .instrument-timeline-event > .mini-button {
+  .instrument-timeline-event > .mini-button,
+  .instrument-timeline-event > .instrument-timeline-event-action {
     grid-column: 2;
     grid-row: 1 / span 2;
     align-self: center;

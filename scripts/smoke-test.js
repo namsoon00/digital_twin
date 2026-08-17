@@ -303,8 +303,17 @@ function checkWorkflowConsoleContract() {
       && code.indexOf("function nearestInstrumentCandleIndex") >= 0
       && code.indexOf("labelWinners") >= 0
       && code.indexOf("markerProjection.markerCount") >= 0
-      && styles.indexOf(".instrument-event-legend span::before") >= 0,
+      && styles.indexOf(".instrument-event-legend button::before") >= 0,
     "차트 사건 클러스터링, 모바일 라벨 밀도 또는 간결한 범례 계약이 없습니다."
+  );
+  assertOk(
+    code.indexOf("function openInstrumentEventGroup") >= 0
+      && code.indexOf('hovered.objectKind === "series-marker"') >= 0
+      && code.indexOf('data-instrument-event-group=') >= 0
+      && code.indexOf('type === "instrument-event-group"') >= 0
+      && code.indexOf("instrumentTimelineEventWorkDetailPayload(type, key)") >= 0
+      && styles.indexOf("button.instrument-timeline-event") >= 0,
+    "차트 표식, 사건 유형, 타임라인 행 또는 원본 대체 상세의 이동 계약이 없습니다."
   );
   assertOk(
     code.indexOf("function primeActiveTabData") >= 0

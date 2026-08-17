@@ -306,6 +306,19 @@ function checkWorkflowConsoleContract() {
       && styles.indexOf(".instrument-event-legend span::before") >= 0,
     "차트 사건 클러스터링, 모바일 라벨 밀도 또는 간결한 범례 계약이 없습니다."
   );
+  assertOk(
+    code.indexOf("function primeActiveTabData") >= 0
+      && code.indexOf('render({ transition: "tab" })') >= 0
+      && code.indexOf("document.startViewTransition") >= 0
+      && code.indexOf("function reconcileWorkDetailLayer") >= 0
+      && code.indexOf("function reconcileDashboardMainRegion") >= 0
+      && code.indexOf("NETWORK_ACTIVITY_REVEAL_MS = 180") >= 0
+      && code.indexOf("viewportHeight * 2.25") >= 0
+      && code.indexOf("instrumentTimelineLastKeys") >= 0
+      && styles.indexOf("view-transition-name: oa-content") >= 0
+      && styles.indexOf(".instrument-chart-refreshing") >= 0,
+    "앱형 화면 전환, 선로딩, 상세 국소 갱신 또는 콘텐츠 유지형 지연 로딩 계약이 없습니다."
+  );
   assertOk(code.indexOf("data-instrument-workspace-tab") >= 0 && code.indexOf("data-instrument-timeline-refresh") >= 0, "종목 워크스페이스 탐색 계약이 없습니다.");
   assertOk(webServer.indexOf('/api/instruments/') >= 0 && webServer.indexOf("InstrumentTimelineQuery") >= 0, "종목 타임라인 API가 등록되지 않았습니다.");
   assertOk(indexHtml.indexOf("lightweight-charts.standalone.production.js") >= 0, "로컬 캔들 차트 런타임이 로드되지 않았습니다.");
@@ -513,7 +526,8 @@ function checkWorkflowConsoleContract() {
   );
   assertOk(
     code.indexOf("function rememberRenderedInteractiveState") >= 0 &&
-      code.indexOf('app.querySelectorAll("*")') >= 0 &&
+      code.indexOf("function renderedScrollableElements") >= 0 &&
+      code.indexOf('"[data-preserve-scroll]"') >= 0 &&
       code.indexOf("function bindRenderedScrollActivity") >= 0 &&
       code.indexOf("function restoreRenderedInteractiveStateAfterLayout") >= 0 &&
       code.indexOf("restoreRenderedElementScrollPositions(snapshot)") >= 0 &&

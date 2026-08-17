@@ -1,3 +1,4 @@
+import json
 import os
 import tempfile
 import unittest
@@ -9,6 +10,98 @@ from digital_twin import service_manager
 
 
 class TypeDBServiceManagerTests(unittest.TestCase):
+    def test_typedb_worker_manages_every_reasoning_database_for_rotation(self):
+        spec = service_manager.typedb_worker_spec({
+            "typedbPassword": "test-strong-password",
+            "typedbDatabase": "ontology_primary",
+            "reasoningEngineV1TypeDbDatabase": "ontology_primary",
+            "reasoningEngineV2TypeDbDatabase": "ontology_v2",
+            "reasoningEngineShadowTypeDbDatabase": "ontology_v2",
+        })
+
+        self.assertEqual(
+            ["ontology_primary", "ontology_v2"],
+            spec["managedTypeDbDatabases"],
+        )
+        database_specs = service_manager.typedb_blue_green_database_specs(
+            service_manager.typedb_blue_green_stage_spec(spec)
+        )
+        self.assertEqual(
+            ["ontology_primary", "ontology_v2"],
+            [item["typedbDatabase"] for item in database_specs],
+        )
+
+    def test_blue_green_candidate_validates_each_reasoning_database(self):
+        with tempfile.TemporaryDirectory() as temp:
+            spec = {
+                "label": "TypeDB ontology graph store",
+                "role": "typedb",
+                "pid": Path(temp) / "typedb.pid",
+                "log": Path(temp) / "typedb.log",
+                "command": ["typedb", "server"],
+                "needle": "typedb_server_bin",
+                "dataPath": Path(temp) / "typedb-data",
+                "healthAddress": "127.0.0.1:1729",
+                "httpAddress": "127.0.0.1:8000",
+                "typedbDatabase": "ontology_primary",
+                "managedTypeDbDatabases": ["ontology_primary", "ontology_v2"],
+            }
+            seen = []
+
+            def remember(database_spec, *args, **kwargs):
+                seen.append(str(database_spec.get("typedbDatabase") or ""))
+                return True
+
+            with patch.object(service_manager, "stop_worker", return_value=0), \
+                    patch.object(service_manager, "launch_typedb_stage_process", return_value=True), \
+                    patch.object(service_manager, "ensure_typedb_seeded", side_effect=remember), \
+                    patch.object(service_manager, "validate_typedb_candidate_inference_runtime", return_value={
+                        "ready": True,
+                        "mode": "direct-typeql-fallback",
+                    }), \
+                    patch.object(service_manager, "ensure_typedb_shared_world_projection_rebuilt", return_value=True), \
+                    patch.object(service_manager, "ensure_typedb_portfolio_world_projection_rebuilt", return_value=True), \
+                    patch.object(service_manager, "typedb_driver_ready", return_value=True):
+                prepared = service_manager.prepare_typedb_blue_green_candidate(spec)
+
+        self.assertEqual("prepared", prepared["status"])
+        self.assertEqual(["ontology_primary", "ontology_v2"], seen)
+        self.assertEqual(["ontology_primary", "ontology_v2"], prepared["validatedDatabases"])
+        self.assertEqual({
+            "ontology_primary": "direct-typeql-fallback",
+            "ontology_v2": "direct-typeql-fallback",
+        }, prepared["validatedInferenceModes"])
+
+    def test_blue_green_candidate_requires_functions_or_direct_typeql_fallback(self):
+        command_result = SimpleNamespace(
+            returncode=0,
+            stdout=json.dumps({
+                "prewarm": {
+                    "functionsReady": False,
+                    "ruleCount": 118,
+                },
+            }),
+            stderr="",
+        )
+        spec = {
+            "schemaFunctionDirectQueryFallbackEnabled": "1",
+            "typedbDatabase": "ontology_v2",
+        }
+
+        with patch.object(service_manager.subprocess, "run", return_value=command_result):
+            ready = service_manager.validate_typedb_candidate_inference_runtime(spec)
+
+        self.assertTrue(ready["ready"])
+        self.assertEqual("direct-typeql-fallback", ready["mode"])
+        self.assertEqual(118, ready["ruleCount"])
+
+        spec["schemaFunctionDirectQueryFallbackEnabled"] = "0"
+        with patch.object(service_manager.subprocess, "run", return_value=command_result):
+            blocked = service_manager.validate_typedb_candidate_inference_runtime(spec)
+
+        self.assertFalse(blocked["ready"])
+        self.assertEqual("blocked", blocked["status"])
+
     def test_wait_for_typedb_ready_bootstraps_only_pending_fresh_store(self):
         with tempfile.TemporaryDirectory() as temp:
             spec = {
@@ -262,6 +355,7 @@ class TypeDBServiceManagerTests(unittest.TestCase):
                 patch.object(service_manager, "supervisor_running", return_value=False), \
                 patch.object(service_manager, "stop") as stop, \
                 patch.object(service_manager, "run_typedb_data_retention", return_value={"status": "reset"}) as reset, \
+                patch.object(service_manager, "record_typedb_auto_rotation_state") as record_state, \
                 patch.object(service_manager, "start", return_value=0) as start:
             status = service_manager.typedb_rotate()
 
@@ -269,6 +363,7 @@ class TypeDBServiceManagerTests(unittest.TestCase):
         stop.assert_called_once_with(include_supervisor=False)
         reset.assert_called_once_with(spec, force=True)
         start.assert_called_once_with()
+        self.assertEqual("ok", record_state.call_args_list[-1].kwargs["lastAutoRotationStatus"])
 
     def test_typedb_rotate_recovers_workers_and_alerts_when_reset_fails(self):
         spec = {"role": "typedb", "dataPath": Path("/tmp/orbit-alpha-typedb-test")}
@@ -280,6 +375,7 @@ class TypeDBServiceManagerTests(unittest.TestCase):
                 patch.object(service_manager, "stop") as stop, \
                 patch.object(service_manager, "run_typedb_data_retention", return_value={"status": "reset-failed"}), \
                 patch.object(service_manager, "start", return_value=0) as start, \
+                patch.object(service_manager, "record_typedb_auto_rotation_state") as record_state, \
                 patch.object(service_manager, "record_typedb_auto_rotation_incident", return_value={"recorded": True}) as incident:
             status = service_manager.typedb_rotate(force=True)
 
@@ -291,6 +387,7 @@ class TypeDBServiceManagerTests(unittest.TestCase):
             {"needed": True, "reason": "size"},
             alert_kind="typedb-auto-rotation-failed",
         )
+        self.assertEqual("reset-failed", record_state.call_args_list[-1].kwargs["lastAutoRotationStatus"])
 
     def test_cli_start_restores_configured_supervisor_instead_of_leaving_unmanaged_workers(self):
         with patch.object(service_manager, "configured_supervisor_available", return_value=True), \
@@ -475,6 +572,59 @@ class TypeDBServiceManagerTests(unittest.TestCase):
             ],
             service_manager.typedb_portfolio_world_projection_rebuild_command(candidate),
         )
+        self.assertEqual("1200", candidate["seedTimeoutSeconds"])
+
+    def test_candidate_seed_retry_stops_all_data_path_owners_before_restart(self):
+        with tempfile.TemporaryDirectory() as temp:
+            spec = {
+                "label": "TypeDB candidate",
+                "role": "typedb-stage",
+                "pid": Path(temp) / "candidate.pid",
+                "log": Path(temp) / "candidate.log",
+                "dataPath": Path(temp) / "typedb-data-candidate",
+            }
+            with patch.object(service_manager, "stop_worker") as stop, \
+                    patch.object(
+                        service_manager,
+                        "stop_typedb_stage_data_path_processes",
+                        return_value=True,
+                    ) as stop_owners, \
+                    patch.object(
+                        service_manager,
+                        "clear_typedb_stage_incomplete_checkpoints",
+                        return_value=[],
+                    ) as clear_checkpoints, \
+                    patch.object(
+                        service_manager,
+                        "launch_typedb_stage_process",
+                        return_value=True,
+                    ) as launch:
+                restarted = service_manager.restart_typedb_stage_for_seed_retry(spec)
+
+        self.assertTrue(restarted)
+        stop.assert_called_once_with(spec)
+        stop_owners.assert_called_once_with(spec)
+        clear_checkpoints.assert_called_once_with(spec)
+        launch.assert_called_once_with(spec, "seed retry candidate restart")
+
+    def test_candidate_retry_removes_only_incomplete_checkpoint_workdirs(self):
+        with tempfile.TemporaryDirectory() as temp:
+            data_path = Path(temp) / "typedb-data-candidate"
+            checkpoint = data_path / "ontology" / "checkpoint"
+            checkpoint.mkdir(parents=True)
+            incomplete = checkpoint / "checkpoint-1.tmp"
+            complete = checkpoint / "checkpoint-2"
+            incomplete.mkdir()
+            complete.mkdir()
+            (incomplete / "MANIFEST").write_text("partial", encoding="utf-8")
+            (complete / "MANIFEST").write_text("complete", encoding="utf-8")
+
+            removed = service_manager.clear_typedb_stage_incomplete_checkpoints({
+                "dataPath": data_path,
+            })
+            self.assertEqual([str(incomplete)], removed)
+            self.assertFalse(incomplete.exists())
+            self.assertTrue(complete.exists())
 
     def test_candidate_portfolio_rebuild_uses_isolated_typedb_environment(self):
         with tempfile.TemporaryDirectory() as temp:

@@ -1649,8 +1649,8 @@ def merge_flat_properties(row: Dict[str, object], props: Dict[str, object]) -> D
     return merged
 
 
-TYPEDB_NATIVE_REASONING_PROFILE_VERSION = "typedb-native-rule-profile-v9"
-TYPEDB_NATIVE_RULE_ENGINE_VERSION = "typedb-schema-function-rule-engine-v9"
+TYPEDB_NATIVE_REASONING_PROFILE_VERSION = "typedb-native-rule-profile-v10"
+TYPEDB_NATIVE_RULE_ENGINE_VERSION = "typedb-schema-function-rule-engine-v10"
 TYPEDB_NATIVE_REASONING_MODE = "typedb-native-rule-materialized"
 TYPEDB_NATIVE_BLOCKED_MODE = "typedb-native-rule-materialization-blocked"
 TYPEDB_NATIVE_REQUIRED_MODE = "typedb-native-rule-materialization-required"
@@ -1721,7 +1721,12 @@ DEFAULT_TYPEDB_SCHEMA_FUNCTION_PROVISION_TIMEOUT_SECONDS = 900.0
 # boundary, so the cold blue-green candidate could exceed the driver deadline
 # before any durable schema existed. Keep each commit large enough to avoid
 # transaction chatter but bounded well below the monolithic compiler input.
-DEFAULT_TYPEDB_BASE_SCHEMA_BOOTSTRAP_BATCH_SIZE = 128
+# TypeDB recompiles the affected schema graph for each definition transaction.
+# A 128-definition cold-start batch can exceed the driver keep-alive, while a
+# 24-definition plan repeats that global compilation enough to stall a fresh
+# candidate. Sixty-four stays below the observed oversized-query boundary and
+# cuts the cold schema to a resumable middle ground.
+DEFAULT_TYPEDB_BASE_SCHEMA_BOOTSTRAP_BATCH_SIZE = 64
 TYPEDB_PROMOTED_NUMERIC_ATTRIBUTES = {
     "currentPrice": "ontology-current-price",
     "averagePrice": "ontology-average-price",
@@ -7867,6 +7872,7 @@ class TypeDBOntologyGraphRepository(GraphStoreOntologyRowMapperMixin, ScopedABox
         # so no PortfolioWorld ABox can be reused. Normal live repositories
         # always retain immutable storage identity verification.
         self._fresh_candidate_rebuild = bool(fresh_candidate_rebuild)
+        self._database_created_in_process = False
         self._persistent_driver = None
         self._persistent_driver_lock = threading.RLock()
         # A scoped Worldview Manifest contains the complete evidence-read
@@ -8688,17 +8694,21 @@ class TypeDBOntologyGraphRepository(GraphStoreOntologyRowMapperMixin, ScopedABox
     def ensure_database(self, driver) -> None:
         databases = getattr(driver, "databases", None)
         if databases is None:
+            self._database_created_in_process = False
             return
         try:
             contains = getattr(databases, "contains", None)
             if callable(contains) and contains(self.database):
+                self._database_created_in_process = False
                 return
         except Exception:
             pass
         try:
             databases.create(self.database)
+            self._database_created_in_process = True
             self.invalidate_process_base_schema_readiness()
         except Exception as error:
+            self._database_created_in_process = False
             if "already" not in str(error).lower() and "exist" not in str(error).lower():
                 raise
 
@@ -9247,6 +9257,16 @@ class TypeDBOntologyGraphRepository(GraphStoreOntologyRowMapperMixin, ScopedABox
             return
         if self.process_base_schema_is_ready(schema_fingerprint):
             self._base_schema_ready_fingerprint = schema_fingerprint
+            return
+        # A blue-green candidate is created from an empty storage directory.
+        # Probing types that cannot exist yet only spends the full driver
+        # timeout and can poison the first connection. Bootstrap the bounded
+        # base contract directly; retries can still resume from inspected text.
+        schema_text = ""
+        if self._fresh_candidate_rebuild and self._database_created_in_process:
+            self.synchronize_base_schema_batches(driver, imported, schema_text)
+            self._base_schema_ready_fingerprint = schema_fingerprint
+            self.mark_process_base_schema_ready(schema_fingerprint)
             return
         try:
             schema_text = self.typedb_schema_text(driver)
@@ -16641,7 +16661,7 @@ relation ontology-assertion,
                 read_transaction_count += 1
                 read_call_count += 1
                 any_condition_query_count = 0
-                if rows and has_any_conditions:
+                if rows and has_any_conditions and not bool(query_plan.get("anyConditionsVerified")):
                     verified_rows = []
                     for row in rows:
                         remaining_seconds = deadline - time.monotonic()
@@ -16688,6 +16708,10 @@ relation ontology-assertion,
                             },
                         }
                     rows = verified_rows
+                elif rows and has_any_conditions:
+                    for row in rows:
+                        row["_matchedAnyConditionIds"] = []
+                        row["_anyConditionsVerified"] = True
                 return {
                     "status": "ok",
                     "rule": rule,
@@ -17018,6 +17042,7 @@ relation ontology-assertion,
         target_symbols: Iterable[str],
         *,
         use_schema_functions: bool,
+        schema_function_ready_rule_ids: Iterable[str] = None,
         world_id: str,
         planner_topology: Dict[str, object] = None,
         preflight_graph: PortfolioOntology = None,
@@ -17048,6 +17073,7 @@ relation ontology-assertion,
                 rules,
                 target_symbols=[symbol],
                 use_schema_functions=use_schema_functions,
+                schema_function_ready_rule_ids=schema_function_ready_rule_ids,
                 world_id=world_id,
                 planner_topology=planner_topology,
                 preflight_graph=preflight_graph,
@@ -17202,6 +17228,7 @@ relation ontology-assertion,
         rules: Iterable[GraphInferenceRule],
         target_symbols: Iterable[str] = None,
         use_schema_functions: bool = True,
+        schema_function_ready_rule_ids: Iterable[str] = None,
         world_id: str = "",
         planner_topology: Dict[str, object] = None,
         preflight_graph: PortfolioOntology = None,
@@ -17223,6 +17250,7 @@ relation ontology-assertion,
                 rules,
                 clean_symbols,
                 use_schema_functions=use_schema_functions,
+                schema_function_ready_rule_ids=schema_function_ready_rule_ids,
                 world_id=world_id,
                 planner_topology=planner_topology,
                 preflight_graph=preflight_graph,
@@ -17235,9 +17263,29 @@ relation ontology-assertion,
         # clauses stay in persisted TypeDB schema functions; N-of-M clauses
         # are verified as bounded, source-specific TypeQL reads only after a
         # base match exists.
-        schema_function_query = bool(use_schema_functions)
+        ready_schema_rule_ids = (
+            None
+            if schema_function_ready_rule_ids is None
+            else {
+                str(rule_id or "").strip()
+                for rule_id in schema_function_ready_rule_ids
+                if str(rule_id or "").strip()
+            }
+        )
+
+        def schema_function_query_for(planned: Dict[str, object]) -> bool:
+            if not use_schema_functions:
+                return False
+            if ready_schema_rule_ids is None:
+                return True
+            rule = planned.get("rule") if isinstance(planned, dict) else None
+            return str(getattr(rule, "rule_id", "") or "") in ready_schema_rule_ids
+
+        schema_function_query = bool(use_schema_functions and ready_schema_rule_ids is None)
         execution_mode = (
-            "typedb-schema-function-filtered-planned"
+            "typedb-native-per-rule-function-readiness"
+            if use_schema_functions and ready_schema_rule_ids is not None
+            else "typedb-schema-function-filtered-planned"
             if schema_function_query and clean_symbols
             else "typedb-schema-function"
             if schema_function_query
@@ -17716,6 +17764,7 @@ relation ontology-assertion,
                                 })
                                 continue
                             rule_payload = rule.to_dict() if hasattr(rule, "to_dict") else dict(rule or {})
+                            rule_schema_function_query = schema_function_query_for(planned)
                             function_name = typedb_native_rule_function_name(rule.rule_id, world_id)
                             has_any_conditions = any(
                                 normalized_condition_role(
@@ -17730,7 +17779,7 @@ relation ontology-assertion,
                             query_plan = typedb_native_rule_runtime_query_plan(
                                 rule_payload,
                                 candidate_symbols,
-                                schema_function_query=schema_function_query,
+                                schema_function_query=rule_schema_function_query,
                                 scoped_manifest_only=scoped_manifest_only,
                                 world_id=world_id,
                                 evidence_read_index=evidence_read_index,
@@ -17784,7 +17833,9 @@ relation ontology-assertion,
                                 break
                             any_condition_query_count = 0
                             any_condition_failure = False
-                            if rows and has_any_conditions:
+                            if rows and has_any_conditions and not bool(
+                                query_plan.get("anyConditionsVerified")
+                            ):
                                 verified_rows = []
                                 for row in rows:
                                     remaining_seconds = deadline - time.monotonic()
@@ -17851,6 +17902,10 @@ relation ontology-assertion,
                                     # snapshot.
                                     break
                                 rows = verified_rows
+                            elif rows and has_any_conditions:
+                                for row in rows:
+                                    row["_matchedAnyConditionIds"] = []
+                                    row["_anyConditionsVerified"] = True
                             executed_rules.append({
                                 "ruleId": rule.rule_id,
                                 "nativeRuleId": typedb_native_rule_id(rule.rule_id),
@@ -17909,7 +17964,7 @@ relation ontology-assertion,
                                 self.execute_typedb_native_rule_entry(
                                     planned,
                                     clean_symbols,
-                                    schema_function_query,
+                                    schema_function_query_for(planned),
                                     world_id,
                                     scoped_manifest_only,
                                     imported,
@@ -18010,7 +18065,7 @@ relation ontology-assertion,
                             completed,
                             planned,
                             clean_symbols,
-                            schema_function_query,
+                            schema_function_query_for(planned),
                             world_id,
                             scoped_manifest_only,
                             imported,
@@ -19161,6 +19216,33 @@ relation ontology-assertion,
             # treated as an indefinitely in-flight schema transaction.
             "could not resolve function",
         ])
+
+    @classmethod
+    def native_rule_result_reports_missing_schema_function(
+        cls,
+        result: Dict[str, object],
+    ) -> bool:
+        """Detect a stale deployment receipt in a completed native read.
+
+        Blue-green data replacement can preserve an ABox receipt while the
+        content-addressed schema function itself is absent from the new TypeDB
+        schema. The complete generation is retried with direct TypeQL rather
+        than leaving an otherwise valid investment request in the mailbox.
+        """
+        payload = dict(result or {})
+        messages = [payload.get("reason"), payload.get("reasonCode")]
+        for key in ["skippedRules", "supportingRuleFailures"]:
+            messages.extend(
+                value
+                for item in payload.get(key) or []
+                if isinstance(item, dict)
+                for value in [item.get("reason"), item.get("reasonCode")]
+            )
+        return any(
+            cls.schema_function_call_reports_missing(message)
+            for message in messages
+            if message
+        )
 
     def probe_typedb_schema_function_calls(
         self,
@@ -21260,6 +21342,13 @@ relation ontology-assertion,
             schema_function_sync_used = bool(schema_function_rules) and (
                 str(function_sync_result.get("status") or "") == "ok"
             )
+            verified_schema_function_rule_ids = {
+                str((item or {}).get("ruleId") or "").strip()
+                for item in function_sync_result.get("syncedRules") or []
+                if isinstance(item, dict) and str(item.get("ruleId") or "").strip()
+            }
+            if not schema_function_sync_used:
+                verified_schema_function_rule_ids.clear()
             indexed_rule_count = int(function_sync_plan.get("indexedEvidenceRuleCount") or 0)
             if schema_function_direct_query_fallback:
                 execution_mode = "typedb-native-direct-typeql-fallback"
@@ -21396,6 +21485,7 @@ relation ontology-assertion,
                 execution_rules,
                 target_symbols=target_symbols,
                 use_schema_functions=not schema_function_direct_query_fallback,
+                schema_function_ready_rule_ids=verified_schema_function_rule_ids,
                 world_id=world_id,
                 planner_topology=(
                     dict(planner_topology.get("topology") or {})
@@ -21410,6 +21500,36 @@ relation ontology-assertion,
                 stable_abox_write_lease_held=stable_abox_write_lease_held,
                 evidence_read_index=evidence_read_index,
             )
+            schema_function_runtime_fallback = False
+            if (
+                self.schema_function_direct_query_fallback_enabled()
+                and self.native_rule_result_reports_missing_schema_function(native_match_result)
+            ):
+                # A deployment receipt is an index, not physical proof that a
+                # function survived a blue-green schema replacement. Retry the
+                # complete immutable ABox generation through TypeDB's direct
+                # TypeQL path so one stale receipt cannot stall the queue.
+                native_match_result = typedb_call_for_world(
+                    self.match_typedb_native_rules,
+                    execution_rules,
+                    target_symbols=target_symbols,
+                    use_schema_functions=False,
+                    schema_function_ready_rule_ids=[],
+                    world_id=world_id,
+                    planner_topology=(
+                        dict(planner_topology.get("topology") or {})
+                        if str(planner_topology.get("status") or "") == "verified"
+                        else None
+                    ),
+                    preflight_graph=preflight_graph,
+                    preflight_incoming_relations_complete=preflight_incoming_relations_complete,
+                    native_rule_parallelism=1,
+                    native_rule_target_parallelism=1,
+                    adaptive_target_sharding_profile=adaptive_target_sharding_profile,
+                    stable_abox_write_lease_held=stable_abox_write_lease_held,
+                    evidence_read_index=evidence_read_index,
+                )
+                schema_function_runtime_fallback = True
             native_stage_timings["nativeRuleQueriesMs"] = int(
                 (time.perf_counter() - native_query_started) * 1000
             )
@@ -21422,6 +21542,7 @@ relation ontology-assertion,
                 "typedbNativeRuleQueryStatus": str(native_match_result.get("status") or ""),
                 "typedbNativeRuleQueryUsed": bool(native_match_result.get("nativeQueryUsed")),
                 "typedbSchemaFunctionQueryUsed": bool(native_match_result.get("schemaFunctionUsed")),
+                "typedbSchemaFunctionRuntimeFallbackUsed": schema_function_runtime_fallback,
                 "typedbNativeIndexedRuleQueryUsed": bool(native_match_result.get("indexedEvidenceQueryUsed")),
                 "typedbNativeEvidenceFieldIndexStatus": str(evidence_field_index.get("status") or ""),
                 "typedbNativeEvidenceFieldIndexChunkCount": int(number_or_none(evidence_field_index.get("chunkCount")) or 0),
@@ -25469,8 +25590,9 @@ def typedb_native_match_query(
     if any_conditions and include_any_conditions:
         # An N-of-M group is evidence-based, not condition-row-based. Two
         # aliases of one raw observation must contribute one confirmation.
-        # Use the first durable RuleBox condition entity in each evidence
-        # group as the TypeDB count token, so the reducer stays fully native.
+        # N=1 is a pure existence predicate and must not pay for RuleBox token
+        # joins or aggregation. Higher cardinalities use one durable condition
+        # entity per evidence group as the TypeDB count token.
         any_group_representatives: Dict[str, str] = {}
         for condition_index, condition in any_conditions:
             condition_id = str(condition.get("condition_id") or condition.get("conditionId") or "condition-" + str(condition_index))
@@ -25520,25 +25642,32 @@ def typedb_native_match_query(
                     or condition.get("evidenceGroupKey")
                     or condition_id
                 ).strip() or condition_id
-                token_condition_id = any_group_representatives[evidence_group]
-                token_id = entity_id("rule-condition", rule_id + ":" + token_condition_id)
-                branch_clauses.append(
-                    "$anyConditionToken isa ontology-node, has ontology-box \"RuleBox\", has ontology-id "
-                    + typedb_string(token_id)
-                    + ";"
-                )
+                if any_min_count > 1:
+                    token_condition_id = any_group_representatives[evidence_group]
+                    token_id = entity_id("rule-condition", rule_id + ":" + token_condition_id)
+                    branch_clauses.append(
+                        "$anyConditionToken isa ontology-node, has ontology-box \"RuleBox\", has ontology-id "
+                        + typedb_string(token_id)
+                        + ";"
+                    )
                 branches.append("{ " + " ".join(branch_clauses) + " }")
         if not branches:
             return {"ruleId": rule_id, "query": "", "columns": columns, "reason": "any conditions produced no TypeQL branches"}
-        # `count($anyConditionToken)` counts distinct independent evidence
-        # groups, represented by durable RuleBox condition entities, not
-        # relation rows or duplicate aliases of the same raw observation.
-        query += (
-            " match " + " or ".join(branches) + ";"
-            + " reduce $anyConditionCount = count($anyConditionToken) groupby $source;"
-            + " match $anyConditionCount >= " + str(any_min_count) + ";"
-            + " $source has ontology-id $sourceId, has ontology-label $sourceLabel;"
-        )
+        if any_min_count == 1:
+            query += (
+                " match " + " or ".join(branches) + ";"
+                + " $source has ontology-id $sourceId, has ontology-label $sourceLabel;"
+            )
+        else:
+            # `count($anyConditionToken)` counts distinct independent evidence
+            # groups, represented by durable RuleBox condition entities, not
+            # relation rows or duplicate aliases of the same raw observation.
+            query += (
+                " match " + " or ".join(branches) + ";"
+                + " reduce $anyConditionCount = count($anyConditionToken) groupby $source;"
+                + " match $anyConditionCount >= " + str(any_min_count) + ";"
+                + " $source has ontology-id $sourceId, has ontology-label $sourceLabel;"
+            )
         # The reduce stage intentionally drops relation variables. Detailed
         # evidence is collected only by the opt-in condition-detail path.
         evidence_columns = []
@@ -26235,11 +26364,16 @@ def typedb_native_indexed_evidence_match_query(
             "reason": "A verified active-Manifest evidence index and explicit target symbol are required.",
         }
     conditions = [item for item in rule.get("conditions") or [] if isinstance(item, dict)]
+    source_kind = str(rule.get("source_kind") or rule.get("sourceKind") or "stock")
+    has_any_conditions = any(
+        normalized_condition_role(condition) in {"any", "optional"}
+        for condition in conditions
+    )
     indexed_relation_types = sorted({
         str(condition.get("relation_type") or condition.get("relationType") or "").upper().strip()
         for condition in conditions
         if str(condition.get("kind") or "") == "relation"
-        and normalized_condition_role(condition) in {"required", "not"}
+        and normalized_condition_role(condition) in {"required", "not", "any", "optional"}
         and str(condition.get("relation_type") or condition.get("relationType") or "").strip()
     })
     if not indexed_relation_types:
@@ -26247,7 +26381,7 @@ def typedb_native_indexed_evidence_match_query(
             "status": "not-eligible",
             "ruleId": rule_id,
             "query": "",
-            "reason": "Rule has no required or negative relation predicate to anchor by active evidence storage identity.",
+            "reason": "Rule has no relation predicate to anchor by active evidence storage identity.",
         }
     source_ids_by_symbol = dict(index.get("sourceIdsBySymbol") or {})
     source_storage_by_id = dict(index.get("sourceStorageIdsBySourceId") or {})
@@ -26255,9 +26389,27 @@ def typedb_native_indexed_evidence_match_query(
     relation_ids_by_symbol_type_field = dict(
         index.get("relationStorageIdsBySymbolAndTypeAndField") or {}
     )
+    indexed_source_symbols = list(symbols)
+    if not typedb_source_kind_uses_symbol_scope(source_kind):
+        # The execution index has already been narrowed to the requested stock
+        # plus its shared portfolio/market context. Select the authored
+        # aggregate source by its stable physical identity prefix. Passing all
+        # stock sources here makes a one-row portfolio rule form a broad
+        # source/relation product before the ontology-kind predicate can prune
+        # it, which is the dominant timeout shape for portfolio any-rules.
+        source_prefix = source_kind.lower().strip() + ":"
+        indexed_source_symbols = sorted({
+            str(symbol or "").upper().strip()
+            for symbol, source_ids in source_ids_by_symbol.items()
+            if str(symbol or "").strip()
+            and any(
+                str(item or "").lower().strip().startswith(source_prefix)
+                for item in source_ids or []
+            )
+        })
     source_storage_ids = sorted({
         str(source_storage_by_id.get(str(source_id or "")) or "").strip()
-        for symbol in symbols
+        for symbol in indexed_source_symbols
         for source_id in source_ids_by_symbol.get(symbol, []) or []
         if str(source_storage_by_id.get(str(source_id or "")) or "").strip()
     })
@@ -26290,7 +26442,7 @@ def typedb_native_indexed_evidence_match_query(
     def type_storage_ids(relation_type: str) -> List[str]:
         return sorted({
             str(storage_id or "").strip()
-            for symbol in symbols
+            for symbol in indexed_source_symbols
             for storage_id in dict(relation_ids_by_symbol_and_type.get(symbol) or {}).get(relation_type, []) or []
             if str(storage_id or "").strip()
         })
@@ -26326,7 +26478,7 @@ def typedb_native_indexed_evidence_match_query(
         field_values = condition_field_values(condition)
         field_storage_ids = sorted({
             str(storage_id or "").strip()
-            for symbol in symbols
+            for symbol in indexed_source_symbols
             for field_value in field_values
             for storage_id in dict(
                 dict(relation_ids_by_symbol_type_field.get(symbol) or {}).get(relation_type, {})
@@ -26336,10 +26488,14 @@ def typedb_native_indexed_evidence_match_query(
         storage_ids = field_storage_ids or relation_storage_ids_by_type.get(relation_type, [])
         if storage_ids:
             relation_storage_ids_by_condition[condition_id] = storage_ids
-    storage_identity_count = len(source_storage_ids) + sum(
-        len(values)
-        for values in relation_storage_ids_by_condition.values()
-    )
+    storage_identity_count = len({
+        *source_storage_ids,
+        *[
+            storage_id
+            for values in relation_storage_ids_by_type.values()
+            for storage_id in values
+        ],
+    })
     if storage_identity_count > NATIVE_RULE_INDEXED_QUERY_MAX_STORAGE_IDS:
         return {
             "status": "not-eligible",
@@ -26352,7 +26508,7 @@ def typedb_native_indexed_evidence_match_query(
         rule,
         [],
         scoped_manifest_only=False,
-        include_any_conditions=False,
+        include_any_conditions=has_any_conditions,
         world_id=world_id,
         active_source_storage_ids=source_storage_ids,
         active_relation_storage_ids_by_type=relation_storage_ids_by_type,
@@ -26370,7 +26526,12 @@ def typedb_native_indexed_evidence_match_query(
         "status": "ok",
         "indexedEvidenceQuery": True,
         "schemaFunctionQuery": False,
-        "queryMode": "typedb-manifest-evidence-index",
+        "queryMode": (
+            "typedb-manifest-evidence-index-any-combined"
+            if has_any_conditions
+            else "typedb-manifest-evidence-index"
+        ),
+        "anyConditionsVerified": has_any_conditions,
         "storageIdentityCount": storage_identity_count,
         "activeEvidenceRelationTypes": indexed_relation_types,
         "activeEvidenceRelationStorageMode": (

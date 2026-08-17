@@ -771,6 +771,7 @@ class IndependentReasoningJobRunner:
         settings=None,
         worker_id: str = "",
         event_reader=None,
+        execution_guard=None,
     ):
         import os
         import socket
@@ -781,6 +782,7 @@ class IndependentReasoningJobRunner:
         self.registry = registry
         self.settings = dict(settings or {})
         self.event_reader = event_reader
+        self.execution_guard = execution_guard
         self.worker_id = worker_id or (socket.gethostname() + ":" + str(os.getpid()) + ":v2-" + uuid.uuid4().hex[:8])
 
     def enabled(self) -> bool:
@@ -792,6 +794,33 @@ class IndependentReasoningJobRunner:
         descriptor = self.engine.descriptor()
         lease_recovery = self.recover_dead_local_leases(descriptor.deployment_id)
         repaired = self.repair_ingress(descriptor.deployment_id)
+        guard = self.execution_readiness()
+        if not bool(guard.get("ready", True)):
+            health = dict((self.registry.get(descriptor.deployment_id) or {}).get("health") or {})
+            health.update({
+                "status": "deferred",
+                "independentExecution": True,
+                "directSourceEvents": True,
+                "monitorRunnerUsed": False,
+                "lastRunAt": utc_now_iso(),
+                "executionGuard": guard,
+                "queue": self.queue_summary(descriptor.deployment_id),
+            })
+            self.registry.update_health(descriptor.deployment_id, health)
+            return {
+                "status": "deferred",
+                "processedCount": 0,
+                "retryable": True,
+                "retryAfterSeconds": int(guard.get("retryAfterSeconds") or 30),
+                "reason": str(
+                    guard.get("reason")
+                    or "The V2 TypeDB execution boundary is temporarily unavailable."
+                )[:300],
+                "executionGuard": guard,
+                "repairedIngressCount": repaired,
+                "leaseRecovery": lease_recovery,
+                "queue": health["queue"],
+            }
         lane_provider = getattr(self.queue, "next_lane", None)
         lane_hint = str(lane_provider(descriptor.deployment_id) or "") if callable(lane_provider) else ""
         claim_limit = (
@@ -964,6 +993,25 @@ class IndependentReasoningJobRunner:
                 "reason": str(error)[:300],
                 "retries": retries,
             }
+
+    def execution_readiness(self) -> Dict[str, object]:
+        if not callable(self.execution_guard):
+            return {"ready": True, "status": "not-configured"}
+        try:
+            result = self.execution_guard()
+        except Exception as error:  # noqa: BLE001 - TypeDB writes fail closed when the guard is unavailable.
+            return {
+                "ready": False,
+                "status": "unavailable",
+                "reason": "V2 TypeDB execution guard failed: " + str(error)[:220],
+                "retryAfterSeconds": 30,
+            }
+        values = dict(result or {}) if isinstance(result, Mapping) else {}
+        values.setdefault("ready", False)
+        values.setdefault("status", "unavailable")
+        if not values.get("ready"):
+            values.setdefault("retryAfterSeconds", 30)
+        return values
 
     @staticmethod
     def batch_compatibility_key(job: Mapping[str, object]):

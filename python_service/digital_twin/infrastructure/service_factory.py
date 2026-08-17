@@ -1829,6 +1829,33 @@ def build_v2_reasoning_engine(settings=None) -> V2ReasoningEngine:
     )
     if str(candidate_rulebox.get("status") or "") != "ok" or not candidate_rulebox.get("rules"):
         raise RuntimeError("The independent V2 RuleBox release is unavailable or empty")
+    prewarm_status_reader = getattr(repository, "schema_function_prewarm_status", None)
+    schema_function_readiness = {}
+    if callable(prewarm_status_reader):
+        try:
+            schema_function_readiness = dict(prewarm_status_reader() or {})
+        except Exception as error:  # noqa: BLE001 - startup must fail closed without a fallback path.
+            schema_function_readiness = {
+                "status": "error",
+                "functionsReady": False,
+                "reason": str(error)[:220],
+            }
+    direct_fallback_reader = getattr(
+        repository,
+        "schema_function_direct_query_fallback_enabled",
+        None,
+    )
+    direct_typeql_fallback_ready = bool(
+        callable(direct_fallback_reader) and direct_fallback_reader()
+    )
+    if (
+        schema_function_readiness
+        and not bool(schema_function_readiness.get("functionsReady"))
+        and not direct_typeql_fallback_ready
+    ):
+        raise RuntimeError(
+            "The independent V2 TypeDB functions are not ready and its direct TypeQL fallback is disabled"
+        )
     release_identity = reasoning_release_identity(descriptor, rulebox_fingerprint)
     candidate_settings["_reasoningEngineReleaseFingerprint"] = str(
         release_identity.get("releaseFingerprint") or ""
@@ -1889,6 +1916,11 @@ def build_v2_reasoning_engine(settings=None) -> V2ReasoningEngine:
         "ruleboxOwnership": "v2-release-frozen",
         "ruleInventory": rule_inventory,
         "ruleInventoryReleaseReady": bool(rule_inventory.get("releaseReady")),
+        "schemaFunctionReadiness": {
+            "status": str(schema_function_readiness.get("status") or "unknown"),
+            "functionsReady": bool(schema_function_readiness.get("functionsReady")),
+            "directTypeqlFallbackReady": direct_typeql_fallback_ready,
+        },
     })
     registry_store.update_health(descriptor.deployment_id, existing_health)
 
@@ -1936,6 +1968,9 @@ def build_v2_reasoning_engine(settings=None) -> V2ReasoningEngine:
 
 def build_v2_reasoning_job_runner(settings=None, worker_id: str = "") -> IndependentReasoningJobRunner:
     configured = dict(settings or runtime_settings())
+    store_settings = dict(configured)
+    store_settings["_skipOperationalHistoryRetention"] = "1"
+    store_settings["_skipOperationalSchemaBootstrap"] = "1"
     return IndependentReasoningJobRunner(
         queue=stores.reasoning_engine_job_store(configured),
         engine=build_v2_reasoning_engine(configured),
@@ -1943,6 +1978,11 @@ def build_v2_reasoning_job_runner(settings=None, worker_id: str = "") -> Indepen
         settings=configured,
         worker_id=worker_id,
         event_reader=stores.event_log(configured),
+        execution_guard=typedb_capacity_guard(
+            configured,
+            "reasoning-v2",
+            stores.operational_storage_capacity_state_store(store_settings),
+        ),
     )
 
 

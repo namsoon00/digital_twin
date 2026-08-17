@@ -199,7 +199,11 @@ class ReasoningEnginePlatformService:
         active = control.active_deployment_id
         delivery = control.delivery_deployment_id
         candidate = control.candidate_deployment_id
-        if active not in known or delivery not in known:
+        if (
+            active not in known
+            or delivery not in known
+            or (candidate and candidate not in known)
+        ):
             active = str(self.settings.get("reasoningEngineActiveDeploymentId") or "ontology-v1-active")
             delivery = str(self.settings.get("reasoningEngineDeliveryDeploymentId") or active)
             candidate = str(self.settings.get("reasoningEngineCandidateDeploymentId") or "ontology-v2-shadow")

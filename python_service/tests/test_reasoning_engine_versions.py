@@ -4,6 +4,7 @@ from unittest.mock import patch
 
 from digital_twin.application.reasoning_engine_platform import ReasoningEnginePlatformService
 from digital_twin.domain.reasoning_engine_versions import (
+    EngineControlState,
     EngineReleaseBundle,
     ReasoningEngineDescriptor,
     engine_transition_allowed,
@@ -25,6 +26,36 @@ def descriptor(status="candidate"):
 
 
 class ReasoningEngineVersionTests(unittest.TestCase):
+    def test_v2_watch_waits_for_release_database_without_process_exit(self):
+        from digital_twin.infrastructure.cli import watch_v2_reasoning_engine
+
+        watched = []
+        attempts = []
+
+        class Runner:
+            def watch(self):
+                watched.append(True)
+
+        def factory(settings, worker_id=""):
+            attempts.append((settings, worker_id))
+            if len(attempts) == 1:
+                raise RuntimeError("release database is rebuilding")
+            return Runner()
+
+        sleeps = []
+        result = watch_v2_reasoning_engine(
+            factory,
+            {"reasoningEngineV2IndependentEnabled": "1"},
+            worker_id="v2-test",
+            retry_seconds=7,
+            sleep=sleeps.append,
+        )
+
+        self.assertEqual(0, result)
+        self.assertEqual([7.0], sleeps)
+        self.assertEqual([True], watched)
+        self.assertEqual(2, len(attempts))
+
     def test_deployments_bind_to_separate_graph_databases(self):
         class Registry:
             rows = {}
@@ -49,6 +80,51 @@ class ReasoningEngineVersionTests(unittest.TestCase):
         self.assertEqual("ontology-v1-blue", platform.graph_database_for("ontology-v1-active"))
         self.assertEqual("ontology-v2-green", platform.graph_database_for("ontology-v2-shadow"))
         self.assertEqual("v2", platform.engine_version_for("ontology-v2-shadow"))
+
+    def test_initialize_repoints_an_obsolete_candidate_to_the_configured_v2_release(self):
+        class Registry:
+            def __init__(self):
+                self.rows = {}
+                self.control_value = EngineControlState(
+                    active_deployment_id="ontology-v1-active",
+                    delivery_deployment_id="ontology-v1-active",
+                    candidate_deployment_id="ontology-v2-shadow-r2",
+                    version=3,
+                )
+
+            def upsert(self, item):
+                self.rows[item.deployment_id] = item.to_dict()
+
+            def get(self, deployment_id):
+                return self.rows.get(deployment_id, {})
+
+            def list(self):
+                return list(self.rows.values())
+
+            def control(self):
+                return self.control_value
+
+            def set_control(self, active, delivery, candidate):
+                self.control_value = EngineControlState(
+                    active_deployment_id=active,
+                    delivery_deployment_id=delivery,
+                    candidate_deployment_id=candidate,
+                    version=4,
+                )
+                return self.control_value
+
+        registry = Registry()
+        platform = ReasoningEnginePlatformService(registry, {
+            "reasoningEngineV2DeploymentId": "ontology-v2-shadow-r3",
+            "reasoningEngineCandidateDeploymentId": "ontology-v2-shadow-r3",
+        })
+
+        state = platform.initialize()
+
+        self.assertEqual(
+            "ontology-v2-shadow-r3",
+            state["control"]["candidate_deployment_id"],
+        )
 
     def test_cli_promotion_switches_control_and_active_graph_database_together(self):
         from digital_twin.infrastructure.cli import reasoning_engine_platform_command

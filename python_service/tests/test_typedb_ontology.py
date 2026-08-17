@@ -1050,6 +1050,59 @@ class TypeDBOntologyRepositoryTests(unittest.TestCase):
         }
         self.assertTrue(expected_types.issubset(planned_types))
 
+    def test_typedb_schema_sync_bootstraps_from_empty_text_when_schema_inspection_fails(self):
+        repository = TypeDBOntologyGraphRepository(
+            "typedb-schema-read-failure.test:1729",
+            database="schema_read_failure_test",
+        )
+        repository.invalidate_process_base_schema_readiness()
+        imported = (object, object, object, object, SimpleNamespace(SCHEMA="schema"))
+
+        with patch.object(
+            repository,
+            "typedb_schema_text",
+            side_effect=RuntimeError("fresh candidate schema unavailable"),
+        ), patch.object(
+            repository,
+            "synchronize_base_schema_batches",
+            return_value={"status": "ok"},
+        ) as synchronize:
+            repository.ensure_schema(object(), imported)
+
+        synchronize.assert_called_once()
+        self.assertEqual("", synchronize.call_args.args[2])
+        repository.invalidate_process_base_schema_readiness()
+
+    def test_fresh_candidate_bootstraps_without_schema_inspection(self):
+        repository = TypeDBOntologyGraphRepository(
+            "typedb-fresh-candidate.test:1729",
+            database="fresh_candidate_bootstrap_test",
+            fresh_candidate_rebuild=True,
+        )
+        repository.invalidate_process_base_schema_readiness()
+        repository._database_created_in_process = True
+        imported = (object, object, object, object, SimpleNamespace(SCHEMA="schema"))
+
+        with patch.object(
+            repository,
+            "typedb_schema_text",
+            side_effect=AssertionError("fresh candidate must not inspect schema"),
+        ) as inspect_schema, patch.object(
+            repository,
+            "synchronize_base_schema_batches",
+            return_value={"queryCount": 1},
+        ) as synchronize, patch.object(
+            repository,
+            "mark_process_base_schema_ready",
+        ) as mark_ready:
+            repository.ensure_schema(object(), imported)
+
+        inspect_schema.assert_not_called()
+        synchronize.assert_called_once()
+        self.assertEqual("", synchronize.call_args.args[2])
+        mark_ready.assert_called_once()
+        repository.invalidate_process_base_schema_readiness()
+
     def test_typedb_base_schema_batch_plan_orders_parents_and_resumes_partial_schema(self):
         repository = TypeDBOntologyGraphRepository("127.0.0.1:1729")
         expected = repository.schema_definition_statements(repository.schema_query())
@@ -1061,6 +1114,10 @@ class TypeDBOntologyRepositoryTests(unittest.TestCase):
         self.assertIn("core-relation", [item["phase"] for item in full_plan])
         self.assertIn("semantic-entity-subtypes", [item["phase"] for item in full_plan])
         self.assertIn("semantic-relation-subtypes", [item["phase"] for item in full_plan])
+        self.assertLessEqual(
+            max(int(item.get("definitionCount") or 0) for item in full_plan),
+            64,
+        )
         self.assertLess(max(len(query.encode("utf-8")) for query in full_queries), 20000)
 
         entity_order = []
@@ -3642,6 +3699,53 @@ class TypeDBOntologyRepositoryTests(unittest.TestCase):
             result["ruleContext"]["preflightStatus"],
         )
 
+    def test_typedb_native_match_uses_direct_typeql_for_rule_without_verified_function(self):
+        repository = TypeDBOntologyGraphRepository("127.0.0.1:1729", query_timeout_seconds=17)
+        rule = default_graph_inference_rules()[0]
+        queries = []
+
+        class FakePromise:
+            def resolve(self):
+                return []
+
+        class FakeTransaction:
+            def __enter__(self):
+                return self
+
+            def __exit__(self, _exc_type, _exc, _traceback):
+                return False
+
+            def query(self, query):
+                queries.append(query)
+                return FakePromise()
+
+        class FakeDriver:
+            def transaction(self, *_args, **_kwargs):
+                return FakeTransaction()
+
+        imported = (object, object, object, object, SimpleNamespace(READ="read"))
+        with patch.object(repository, "driver_imports", return_value=(imported, None)), \
+                patch.object(repository, "open_driver", return_value=FakeDriver()), \
+                patch.object(repository, "ensure_database"), \
+                patch.object(repository, "close_driver"), \
+                patch.object(repository, "active_abox_rule_context", return_value={
+                    "status": "ok",
+                    "relationTypesBySymbol": {"005930": ["HAS_RISK_BUDGET", "HAS_TECHNICAL_INDICATOR"]},
+                    "sourceIdsBySymbol": {"005930": ["stock:005930"]},
+                }):
+            result = repository.match_typedb_native_rules(
+                [rule],
+                target_symbols=["005930"],
+                use_schema_functions=True,
+                schema_function_ready_rule_ids=[],
+            )
+
+        self.assertEqual("ok", result["status"])
+        self.assertEqual("typedb-native-per-rule-function-readiness", result["nativeExecutionMode"])
+        self.assertFalse(result["schemaFunctionUsed"])
+        self.assertNotIn("let $source in orbit_rule_", queries[0])
+
+
     def test_typedb_filtered_schema_function_match_uses_verified_manifest_topology_without_readback(self):
         repository = TypeDBOntologyGraphRepository("127.0.0.1:1729", query_timeout_seconds=17)
         rule = default_graph_inference_rules()[0]
@@ -4492,6 +4596,69 @@ class TypeDBOntologyRepositoryTests(unittest.TestCase):
             "PORTFOLIO:DEFAULT"
         ]
         self.assertEqual({"HAS_EXPOSURE", "HAS_RISK_SNAPSHOT"}, set(portfolio_relations))
+        portfolio_rule = next(
+            item
+            for item in default_graph_inference_rules()
+            if item.rule_id == "graph.portfolio.risk_policy.review.v1"
+        )
+        combined_plan = typedb_native_indexed_evidence_match_query(
+            portfolio_rule.to_dict(),
+            ["MSTR"],
+            execution_index,
+            "portfolio:local:default",
+        )
+
+        self.assertEqual("ok", combined_plan["status"])
+        self.assertTrue(combined_plan["anyConditionsVerified"])
+        self.assertEqual(
+            "typedb-manifest-evidence-index-any-combined",
+            combined_plan["queryMode"],
+        )
+        self.assertIn(
+            index["sourceStorageIdsBySourceId"]["portfolio:default"],
+            combined_plan["query"],
+        )
+        self.assertNotIn(
+            index["sourceStorageIdsBySourceId"]["stock:MSTR"],
+            combined_plan["query"],
+        )
+        self.assertEqual(2, combined_plan["storageIdentityCount"])
+        self.assertNotIn("reduce $anyConditionCount = count", combined_plan["query"])
+        self.assertNotIn("$anyConditionToken", combined_plan["query"])
+
+    def test_materiality_any_one_rule_uses_exists_without_rulebox_count(self):
+        rule = next(
+            item
+            for item in default_graph_inference_rules()
+            if item.rule_id == "graph.materiality.alert_candidate.v1"
+        )
+        evidence_index = {
+            "status": "verified",
+            "index": {
+                "sourceIdsBySymbol": {"005930": ["stock:005930"]},
+                "sourceStorageIdsBySourceId": {
+                    "stock:005930": "ontology-storage:stock-005930",
+                },
+                "relationStorageIdsBySymbolAndType": {
+                    "005930": {
+                        "HAS_OBSERVATION": ["ontology-storage:observation-005930"],
+                    },
+                },
+            },
+        }
+
+        plan = typedb_native_indexed_evidence_match_query(
+            rule.to_dict(),
+            ["005930"],
+            evidence_index,
+            "portfolio:local:default",
+        )
+
+        self.assertEqual("ok", plan["status"])
+        self.assertTrue(plan["anyConditionsVerified"])
+        self.assertIn("ontology-storage:observation-005930", plan["query"])
+        self.assertNotIn("$anyConditionToken", plan["query"])
+        self.assertNotIn("reduce $anyConditionCount", plan["query"])
 
     def test_active_abox_relation_types_reuses_verified_manifest_evidence_index(self):
         repository = TypeDBOntologyGraphRepository("127.0.0.1:1729")
@@ -10499,6 +10666,37 @@ class TypeDBOntologyRepositoryTests(unittest.TestCase):
 
             self.assertIn("seed failed attempt=1 exit=1", spec["log"].read_text(encoding="utf-8"))
 
+    def test_service_manager_restarts_only_candidate_between_seed_attempts(self):
+        with tempfile.TemporaryDirectory() as temp:
+            spec = {
+                "label": "TypeDB ontology graph store candidate",
+                "role": "typedb-stage",
+                "log": Path(temp) / "typedb-candidate.log",
+                "seedOnStart": "1",
+                "seedReplaceRuleBox": "1",
+                "seedKeepInference": "1",
+                "seedTimeoutSeconds": "5",
+                "seedRetryCount": "1",
+            }
+            results = [
+                SimpleNamespace(returncode=1, stdout="", stderr="schema timeout"),
+                SimpleNamespace(returncode=0, stdout='{"status":"ok"}', stderr=""),
+            ]
+
+            with patch.object(service_manager, "source_revision", return_value="test-revision"), \
+                    patch.object(service_manager.subprocess, "run", side_effect=results) as run, \
+                    patch.object(
+                        service_manager,
+                        "restart_typedb_stage_for_seed_retry",
+                        return_value=True,
+                    ) as restart_candidate, \
+                    patch.object(service_manager.time, "sleep") as sleep:
+                self.assertTrue(service_manager.ensure_typedb_seeded(spec))
+
+            self.assertEqual(2, run.call_count)
+            restart_candidate.assert_called_once_with(spec)
+            sleep.assert_not_called()
+
     def test_service_manager_does_not_start_dependents_when_typedb_is_not_ready(self):
         calls = []
         specs = {
@@ -12913,8 +13111,11 @@ class TypeDBOntologyRepositoryTests(unittest.TestCase):
 
         self.assertEqual("native-preflight-selected", plan["candidateSource"])
         self.assertEqual(2, plan["candidateRuleCount"])
-        self.assertEqual([capacity_rule.rule_id], plan["indexedEvidenceRuleIds"])
-        self.assertEqual([source_only_rule.rule_id], plan["schemaFunctionRuleIds"])
+        self.assertEqual(
+            {capacity_rule.rule_id, source_only_rule.rule_id},
+            set(plan["indexedEvidenceRuleIds"]),
+        )
+        self.assertEqual([], plan["schemaFunctionRuleIds"])
         self.assertEqual(1, plan["preflightSkippedRuleCount"])
         self.assertEqual("forced-complete-execution", forced["candidateSource"])
         self.assertEqual(
@@ -13365,6 +13566,19 @@ class TypeDBOntologyRepositoryTests(unittest.TestCase):
         )
 
         self.assertTrue(TypeDBOntologyGraphRepository.schema_function_call_reports_missing(error))
+
+    def test_typedb_native_result_missing_function_classifier_reads_rule_failures(self):
+        result = {
+            "status": "partial",
+            "skippedRules": [{
+                "ruleId": "graph.portfolio.risk_policy.review.v1",
+                "reason": "[REP4] Could not resolve function with name 'orbit_rule_missing'.",
+            }],
+        }
+
+        self.assertTrue(
+            TypeDBOntologyGraphRepository.native_rule_result_reports_missing_schema_function(result)
+        )
 
 
 if __name__ == "__main__":

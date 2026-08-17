@@ -543,6 +543,48 @@ class IndependentReasoningEngineTests(unittest.TestCase):
         self.assertEqual(2, len(engine.calls[0]))
         self.assertEqual(2, len(queue.completed))
 
+    def test_runner_does_not_claim_jobs_when_typedb_execution_guard_is_blocked(self):
+        class Queue:
+            def claim(self, *_args, **_kwargs):
+                raise AssertionError("blocked V2 worker must not claim TypeDB work")
+
+            def summary(self, _deployment_id):
+                return {"pendingCount": 3}
+
+        class Engine:
+            def descriptor(self):
+                return descriptor()
+
+        class Registry:
+            def __init__(self):
+                self.health = {}
+
+            def get(self, _deployment_id):
+                return {"health": dict(self.health)}
+
+            def update_health(self, _deployment_id, health):
+                self.health = dict(health)
+
+        registry = Registry()
+        runner = IndependentReasoningJobRunner(
+            Queue(),
+            Engine(),
+            registry,
+            execution_guard=lambda: {
+                "ready": False,
+                "status": "rotation-required",
+                "reason": "TypeDB rotation is active.",
+            },
+        )
+
+        result = runner.run_once()
+
+        self.assertEqual("deferred", result["status"])
+        self.assertEqual(0, result["processedCount"])
+        self.assertEqual("rotation-required", result["executionGuard"]["status"])
+        self.assertEqual(3, result["queue"]["pendingCount"])
+        self.assertEqual("deferred", registry.health["status"])
+
     def test_runner_defers_jobs_beyond_native_unique_symbol_limit(self):
         events = [
             source_event("NVDA", []),

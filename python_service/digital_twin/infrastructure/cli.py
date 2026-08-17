@@ -1134,6 +1134,29 @@ def time_series_platform_command(args) -> int:
     return 1
 
 
+def watch_v2_reasoning_engine(
+    runner_factory,
+    settings: Dict[str, object],
+    worker_id: str = "",
+    retry_seconds: float = 30.0,
+    sleep=time.sleep,
+) -> int:
+    """Keep the managed V2 process alive while its release DB is rebuilding."""
+    while True:
+        try:
+            runner = runner_factory(settings, worker_id=worker_id)
+        except RuntimeError as error:
+            print(
+                "Independent V2 reasoning deferred until its release is ready. reason="
+                + str(error)[:240],
+                flush=True,
+            )
+            sleep(max(1.0, float(retry_seconds or 30.0)))
+            continue
+        runner.watch()
+        return 0
+
+
 def reasoning_engine_platform_command(args) -> int:
     from .reasoning_engine_factory import build_reasoning_engine_platform
     from .service_factory import (
@@ -1168,11 +1191,11 @@ def reasoning_engine_platform_command(args) -> int:
         print(json.dumps(result, ensure_ascii=False))
         return 0
     if args.reasoning_engine_action == "v2-watch":
-        build_v2_reasoning_job_runner(
+        return watch_v2_reasoning_engine(
+            build_v2_reasoning_job_runner,
             configured,
             worker_id=getattr(args, "worker_id", ""),
-        ).watch()
-        return 0
+        )
     if args.reasoning_engine_action == "comparisons":
         release = platform.release_identity(args.deployment_id)
         comparison_filters = {

@@ -803,6 +803,9 @@ class OntologyInferenceQualityTests(unittest.TestCase):
                     "scopeFingerprints": dict(worldview.get("scopeFingerprints") or {}),
                     "asOf": str(worldview.get("asOf") or ""),
                     "lastFullScopeReconcileAt": str(worldview.get("lastFullScopeReconcileAt") or ""),
+                    "nativeRulePlannerTopology": copy.deepcopy(
+                        worldview.get("nativeRulePlannerTopology") or {}
+                    ),
                 }
                 return {"saved": True, "status": "ok", "graphStore": "typedb"}
 
@@ -834,6 +837,24 @@ class OntologyInferenceQualityTests(unittest.TestCase):
             self.snapshot_with_positions([samsung, hynix], utc_now_iso())
         )
         first_generations = dict(repository.active["scopeGenerationIds"])
+        target_baseline = recorder.record_snapshot(
+            self.snapshot_with_positions([samsung, hynix], utc_now_iso()),
+            target_symbols=["005930"],
+        )
+        unchanged = recorder.record_snapshot(
+            self.snapshot_with_positions([samsung, hynix], utc_now_iso()),
+            target_symbols=["005930"],
+        )
+        self.assertTrue(target_baseline["saved"])
+        self.assertFalse(
+            unchanged["saved"],
+            unchanged.get("projectionScope", {}).get("targetScopedManifestPatch"),
+        )
+        self.assertIn(unchanged["status"], {
+            "unchanged-material-facts",
+            "unchanged-material-facts-reasoning-retry",
+        })
+        self.assertEqual(2, repository.save_count)
         changed_samsung = normalize_position({
             **samsung.to_dict(),
             "currentPrice": 71000,

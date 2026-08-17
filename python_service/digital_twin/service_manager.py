@@ -226,6 +226,21 @@ def typedb_worker_spec(settings: Dict[str, object]) -> Dict[str, object]:
         or (settings or {}).get("typedbAllowDefaultPassword")
     )
     weak_password = password.lower() in {"", "admin", "password", "typedb"}
+    primary_database = str(
+        (settings or {}).get("typedbDatabase")
+        or os.environ.get("TYPEDB_DATABASE")
+        or "orbit_alpha_ontology"
+    ).strip() or "orbit_alpha_ontology"
+    managed_databases = []
+    for database in [
+        primary_database,
+        (settings or {}).get("reasoningEngineV1TypeDbDatabase"),
+        (settings or {}).get("reasoningEngineV2TypeDbDatabase"),
+        (settings or {}).get("reasoningEngineShadowTypeDbDatabase"),
+    ]:
+        clean = str(database or "").strip()
+        if clean and clean not in managed_databases:
+            managed_databases.append(clean)
     command = [
         executable,
         "server",
@@ -295,7 +310,8 @@ def typedb_worker_spec(settings: Dict[str, object]) -> Dict[str, object]:
         "httpAddress": http_address,
         "typedbUser": str((settings or {}).get("typedbUser") or os.environ.get("TYPEDB_USER") or "admin"),
         "typedbPassword": password,
-        "typedbDatabase": str((settings or {}).get("typedbDatabase") or os.environ.get("TYPEDB_DATABASE") or "orbit_alpha_ontology"),
+        "typedbDatabase": primary_database,
+        "managedTypeDbDatabases": managed_databases,
         "typedbTlsEnabled": str((settings or {}).get("typedbTlsEnabled") or os.environ.get("TYPEDB_TLS_ENABLED") or "0"),
         # A durable TypeDB may need several minutes to replay its WAL and
         # rebuild the type cache after a clean server restart.  Treating that
@@ -305,6 +321,11 @@ def typedb_worker_spec(settings: Dict[str, object]) -> Dict[str, object]:
         "seedOnStart": str((settings or {}).get("typedbSeedOnStart") or os.environ.get("TYPEDB_SEED_ON_START") or "1"),
         "seedReplaceRuleBox": str((settings or {}).get("typedbSeedReplaceRuleBox") or os.environ.get("TYPEDB_SEED_REPLACE_RULEBOX") or "1"),
         "seedKeepInference": str((settings or {}).get("typedbSeedKeepInference") or os.environ.get("TYPEDB_SEED_KEEP_INFERENCE") or "1"),
+        "schemaFunctionDirectQueryFallbackEnabled": str(
+            (settings or {}).get("typedbNativeRuleDirectQueryFallbackEnabled")
+            or os.environ.get("TYPEDB_NATIVE_RULE_DIRECT_QUERY_FALLBACK_ENABLED")
+            or "0"
+        ),
         # A fresh TypeDB needs to persist the complete static TBox, RuleBox,
         # and language contract before any ABox worker is allowed to run.
         # The safe one-query static writes intentionally trade bootstrap speed
@@ -1525,6 +1546,16 @@ def typedb_portfolio_world_projection_rebuild_command(spec: Dict[str, object]) -
     ]
 
 
+def typedb_rulebox_prewarm_status_command(_spec: Dict[str, object]) -> List[str]:
+    return [
+        sys.executable,
+        "-u",
+        "python_service/service.py",
+        "ontology-rulebox-prewarm",
+        "status",
+    ]
+
+
 def typedb_subprocess_environment(spec: Dict[str, object]) -> Dict[str, str]:
     """Pin maintenance commands to the exact TypeDB instance being managed."""
     environment = managed_process_environment(spec)
@@ -1547,6 +1578,117 @@ def append_log_text(path: Path, label: str, text: str) -> None:
     path.parent.mkdir(parents=True, exist_ok=True)
     with path.open("a", encoding="utf-8") as handle:
         handle.write(text.rstrip() + "\n")
+
+
+def launch_typedb_stage_process(spec: Dict[str, object], log_label: str) -> bool:
+    """Launch an isolated candidate without touching its committed data."""
+    append_log(spec["log"], log_label)
+    output = Path(spec["log"]).open("a", encoding="utf-8")
+    try:
+        process = subprocess.Popen(
+            spec["command"],
+            cwd=str(ROOT_DIR),
+            env=managed_process_environment(spec),
+            stdin=subprocess.DEVNULL,
+            stdout=output,
+            stderr=output,
+            start_new_session=True,
+        )
+    finally:
+        output.close()
+    spec["pid"].write_text(str(process.pid) + "\n", encoding="utf-8")
+    os.chmod(spec["pid"], 0o600)
+    return wait_for_fresh_typedb_candidate(spec)
+
+
+def typedb_process_ids_for_data_path(data_path: object) -> List[int]:
+    """Find only TypeDB processes that explicitly own one managed data path."""
+    if os.name == "nt":
+        return []
+    path = str(Path(data_path or "").resolve()) if data_path else ""
+    if not path:
+        return []
+    try:
+        output = subprocess.check_output(
+            ["ps", "-axo", "pid=,command="],
+            text=True,
+            stderr=subprocess.DEVNULL,
+        )
+    except (OSError, subprocess.CalledProcessError):
+        return []
+    result = []
+    for line in output.splitlines():
+        parts = line.strip().split(None, 1)
+        if len(parts) != 2 or path not in parts[1] or "typedb_server_bin" not in parts[1]:
+            continue
+        try:
+            pid = int(parts[0])
+        except ValueError:
+            continue
+        if pid > 1 and pid != os.getpid():
+            result.append(pid)
+    return sorted(set(result))
+
+
+def stop_typedb_stage_data_path_processes(spec: Dict[str, object]) -> bool:
+    """Stop orphaned candidate owners before reopening RocksDB files."""
+    pids = typedb_process_ids_for_data_path(spec.get("dataPath"))
+    for pid in pids:
+        try:
+            os.kill(pid, signal.SIGTERM)
+        except ProcessLookupError:
+            continue
+    deadline = time.monotonic() + 30.0
+    while pids and time.monotonic() < deadline:
+        pids = [pid for pid in pids if pid_exists(pid)]
+        if pids:
+            time.sleep(0.2)
+    for pid in pids:
+        try:
+            os.kill(pid, signal.SIGKILL)
+        except ProcessLookupError:
+            continue
+    return not any(pid_exists(pid) for pid in pids)
+
+
+def clear_typedb_stage_incomplete_checkpoints(spec: Dict[str, object]) -> List[str]:
+    """Remove crash-only checkpoint workdirs after every owner is stopped."""
+    raw_data_path = str(spec.get("dataPath") or "").strip()
+    removed = []
+    if not raw_data_path:
+        return removed
+    data_path = Path(raw_data_path)
+    if not data_path.exists():
+        return removed
+    for path in data_path.glob("*/checkpoint/*.tmp"):
+        try:
+            if path.is_dir():
+                shutil.rmtree(path)
+            else:
+                path.unlink()
+            removed.append(str(path))
+        except OSError:
+            continue
+    return removed
+
+
+def restart_typedb_stage_for_seed_retry(spec: Dict[str, object]) -> bool:
+    """Cancel a detached schema commit, then resume from durable batches."""
+    if str(spec.get("role") or "") != "typedb-stage":
+        return False
+    append_log(spec["log"], "seed retry requires candidate server restart")
+    stop_worker(spec)
+    if not stop_typedb_stage_data_path_processes(spec):
+        append_log(spec["log"], "seed retry candidate data path still owned")
+        return False
+    removed = clear_typedb_stage_incomplete_checkpoints(spec)
+    if removed:
+        append_log(
+            spec["log"],
+            "seed retry removed incomplete checkpoints count=" + str(len(removed)),
+        )
+    remove_pid(spec["pid"])
+    return launch_typedb_stage_process(spec, "seed retry candidate restart")
 
 
 def ensure_typedb_seeded(spec: Dict[str, object]) -> bool:
@@ -1599,9 +1741,76 @@ def ensure_typedb_seeded(spec: Dict[str, object]) -> bool:
             )
             print(str(spec["label"]) + " RuleBox seed failed. exit=" + str(result.returncode))
         if attempt < attempts:
-            time.sleep(1.0)
+            # A TypeDB schema commit may continue compiling after the Python
+            # driver times out or is terminated. Starting another seed client
+            # against that server only queues behind the detached transaction.
+            # A blue-green candidate is isolated, so restart only that server;
+            # committed schema batches remain durable and the next attempt
+            # resumes from schema inspection. The active graph is untouched.
+            if str(spec.get("role") or "") == "typedb-stage":
+                if not restart_typedb_stage_for_seed_retry(spec):
+                    append_log(spec["log"], "seed retry candidate restart failed")
+                    return False
+            else:
+                time.sleep(1.0)
     print(str(spec["label"]) + " RuleBox seed failed after " + str(attempts) + " attempts.")
     return False
+
+
+def validate_typedb_candidate_inference_runtime(spec: Dict[str, object]) -> Dict[str, object]:
+    """Require a complete native-rule read path before blue-green cutover.
+
+    Generated TypeDB functions are an optimization. A fresh candidate can be
+    activated while they are still staging only when bounded direct TypeQL is
+    explicitly enabled; the following portfolio rebuild then exercises that
+    fallback against real durable snapshots.
+    """
+    try:
+        result = subprocess.run(
+            typedb_rulebox_prewarm_status_command(spec),
+            cwd=str(ROOT_DIR),
+            env=typedb_subprocess_environment(spec),
+            stdin=subprocess.DEVNULL,
+            capture_output=True,
+            text=True,
+            timeout=120,
+        )
+    except (OSError, subprocess.SubprocessError) as error:
+        return {
+            "status": "error",
+            "ready": False,
+            "reason": str(error)[:220],
+        }
+    if result.returncode != 0:
+        return {
+            "status": "error",
+            "ready": False,
+            "reason": str(result.stderr or result.stdout or "RuleBox readiness command failed")[:220],
+        }
+    try:
+        payload = json.loads(str(result.stdout or "{}"))
+    except json.JSONDecodeError as error:
+        return {
+            "status": "error",
+            "ready": False,
+            "reason": "Invalid RuleBox readiness response: " + str(error)[:180],
+        }
+    prewarm = dict(payload.get("prewarm") or {})
+    functions_ready = bool(prewarm.get("functionsReady"))
+    direct_fallback_ready = truthy(spec.get("schemaFunctionDirectQueryFallbackEnabled"))
+    return {
+        "status": "ready" if functions_ready or direct_fallback_ready else "blocked",
+        "ready": bool(functions_ready or direct_fallback_ready),
+        "mode": "schema-functions" if functions_ready else "direct-typeql-fallback",
+        "functionsReady": functions_ready,
+        "directTypeqlFallbackReady": direct_fallback_ready,
+        "ruleCount": int_value(prewarm.get("ruleCount"), 0, 0),
+        "reason": (
+            ""
+            if functions_ready or direct_fallback_ready
+            else "TypeDB schema functions are incomplete and direct TypeQL fallback is disabled."
+        ),
+    }
 
 
 def ensure_typedb_shared_world_projection_rebuilt(
@@ -2354,6 +2563,13 @@ def typedb_blue_green_stage_spec(spec: Dict[str, object]) -> Dict[str, object]:
         "log": candidate_log,
         "needle": "typedb_server_bin",
         "dataPath": candidate_path,
+        # TypeDB 3.12 can spend more than 15 minutes compiling the first cold
+        # schema commit. Interrupting it during checkpoint replacement may
+        # leave a transient checkpoint directory that crashes the next server.
+        "seedTimeoutSeconds": str(max(
+            1200,
+            int_value(spec.get("seedTimeoutSeconds"), 900, 1),
+        )),
         "healthAddress": address,
         "httpAddress": http_address,
         "command": [
@@ -2369,6 +2585,24 @@ def typedb_blue_green_stage_spec(spec: Dict[str, object]) -> Dict[str, object]:
             "--logging.directory", str(candidate_log_dir),
         ],
     }
+
+
+def typedb_blue_green_database_specs(candidate: Dict[str, object]) -> List[Dict[str, object]]:
+    """Return one candidate contract for every deployed reasoning database."""
+    primary = str(candidate.get("typedbDatabase") or "orbit_alpha_ontology").strip()
+    names = []
+    for value in [primary, *(candidate.get("managedTypeDbDatabases") or [])]:
+        clean = str(value or "").strip()
+        if clean and clean not in names:
+            names.append(clean)
+    return [
+        {
+            **dict(candidate),
+            "label": str(candidate.get("label") or "TypeDB candidate") + " [" + name + "]",
+            "typedbDatabase": name,
+        }
+        for name in names
+    ]
 
 
 def wait_for_fresh_typedb_candidate(spec: Dict[str, object]) -> bool:
@@ -2397,35 +2631,55 @@ def prepare_typedb_blue_green_candidate(spec: Dict[str, object]) -> Dict[str, ob
     if candidate_path.exists():
         shutil.rmtree(candidate_path)
     remove_pid(candidate["pid"])
-    append_log(candidate["log"], "blue-green candidate start")
-    output = Path(candidate["log"]).open("a", encoding="utf-8")
-    process = subprocess.Popen(
-        candidate["command"],
-        cwd=str(ROOT_DIR),
-        env=managed_process_environment(candidate),
-        stdin=subprocess.DEVNULL,
-        stdout=output,
-        stderr=output,
-        start_new_session=True,
-    )
-    output.close()
-    candidate["pid"].write_text(str(process.pid) + "\n", encoding="utf-8")
-    os.chmod(candidate["pid"], 0o600)
     try:
-        if not wait_for_fresh_typedb_candidate(candidate):
+        if not launch_typedb_stage_process(candidate, "blue-green candidate start"):
             return {"status": "candidate-start-failed", "candidate": candidate}
-        if not ensure_typedb_seeded(candidate):
-            return {"status": "candidate-seed-failed", "candidate": candidate}
-        if not ensure_typedb_shared_world_projection_rebuilt(candidate, force=True):
-            return {"status": "candidate-world-rebuild-failed", "candidate": candidate}
-        if not ensure_typedb_portfolio_world_projection_rebuilt(candidate):
-            return {"status": "candidate-portfolio-rebuild-failed", "candidate": candidate}
-        if not typedb_driver_ready(candidate):
-            return {"status": "candidate-validation-failed", "candidate": candidate}
+        validated_databases = []
+        validated_inference_modes = {}
+        for database_spec in typedb_blue_green_database_specs(candidate):
+            database_name = str(database_spec.get("typedbDatabase") or "")
+            if not ensure_typedb_seeded(database_spec):
+                return {
+                    "status": "candidate-seed-failed",
+                    "database": database_name,
+                    "candidate": candidate,
+                }
+            inference_readiness = validate_typedb_candidate_inference_runtime(database_spec)
+            if not bool(inference_readiness.get("ready")):
+                return {
+                    "status": "candidate-inference-readiness-failed",
+                    "database": database_name,
+                    "inferenceReadiness": inference_readiness,
+                    "candidate": candidate,
+                }
+            if not ensure_typedb_shared_world_projection_rebuilt(database_spec, force=True):
+                return {
+                    "status": "candidate-world-rebuild-failed",
+                    "database": database_name,
+                    "candidate": candidate,
+                }
+            if not ensure_typedb_portfolio_world_projection_rebuilt(database_spec):
+                return {
+                    "status": "candidate-portfolio-rebuild-failed",
+                    "database": database_name,
+                    "candidate": candidate,
+                }
+            if not typedb_driver_ready(database_spec):
+                return {
+                    "status": "candidate-validation-failed",
+                    "database": database_name,
+                    "candidate": candidate,
+                }
+            validated_databases.append(database_name)
+            validated_inference_modes[database_name] = str(
+                inference_readiness.get("mode") or "unknown"
+            )
         return {
             "status": "prepared",
             "candidate": candidate,
             "candidateSizeBytes": directory_size_bytes(candidate_path),
+            "validatedDatabases": validated_databases,
+            "validatedInferenceModes": validated_inference_modes,
         }
     except Exception as error:  # noqa: BLE001 - active store stays untouched.
         return {
@@ -2579,13 +2833,20 @@ def typedb_rotate(
     services_stopped = False
     restart_attempted = False
     try:
-        if supervisor_owned:
-            record_typedb_auto_rotation_state(
-                lastAutoRotationAttemptAt=iso_now(),
-                lastAutoRotationAttemptEpoch=time.time(),
-                lastAutoRotationReason=str(rotation_reason or decision.get("reason") or "capacity"),
-                lastAutoRotationStatus="running",
-            )
+        # Manual and supervisor-owned rotations share one cooldown/status
+        # contract. Omitting a successful manual cutover here lets the
+        # supervisor immediately launch another expensive candidate because
+        # it still sees the preceding failed attempt.
+        record_typedb_auto_rotation_state(
+            lastAutoRotationAttemptAt=iso_now(),
+            lastAutoRotationAttemptEpoch=time.time(),
+            lastAutoRotationReason=str(
+                rotation_reason
+                or decision.get("reason")
+                or ("capacity" if supervisor_owned else "manual")
+            ),
+            lastAutoRotationStatus="running",
+        )
         if truthy(spec.get("blueGreenRotationEnabled")):
             prepared = prepare_typedb_blue_green_candidate(spec)
             candidate = dict(prepared.get("candidate") or {})
@@ -2594,14 +2855,14 @@ def typedb_rotate(
                 result = {
                     "status": "candidate-failed-active-preserved",
                     "reason": str(prepared.get("reason") or prepared.get("status") or "candidate validation failed"),
+                    "database": str(prepared.get("database") or ""),
                     "activeStorePreserved": True,
                 }
-                if supervisor_owned:
-                    record_typedb_auto_rotation_state(
-                        lastAutoRotationFinishedAt=iso_now(),
-                        lastAutoRotationStatus="candidate-failed-active-preserved",
-                        lastAutoRotationResult=result,
-                    )
+                record_typedb_auto_rotation_state(
+                    lastAutoRotationFinishedAt=iso_now(),
+                    lastAutoRotationStatus="candidate-failed-active-preserved",
+                    lastAutoRotationResult=result,
+                )
                 result["failureIncident"] = record_typedb_auto_rotation_incident(
                     spec,
                     decision,
@@ -2628,12 +2889,11 @@ def typedb_rotate(
             recovery_status = start()
             restart_attempted = True
             result["restartStatus"] = "ok" if recovery_status == 0 else "failed"
-            if supervisor_owned:
-                record_typedb_auto_rotation_state(
-                    lastAutoRotationFinishedAt=iso_now(),
-                    lastAutoRotationStatus="reset-failed",
-                    lastAutoRotationResult=dict(result),
-                )
+            record_typedb_auto_rotation_state(
+                lastAutoRotationFinishedAt=iso_now(),
+                lastAutoRotationStatus="reset-failed",
+                lastAutoRotationResult=dict(result),
+            )
             result["failureIncident"] = record_typedb_auto_rotation_incident(
                 spec,
                 decision,
@@ -2655,16 +2915,15 @@ def typedb_rotate(
             start_status = 1
         if start_status == 0 and result.get("status") == "swapped":
             result["retiredPathsRemoved"] = prune_retired_typedb_data_paths(spec)
-        if supervisor_owned:
-            record_typedb_auto_rotation_state(
-                lastAutoRotationFinishedAt=iso_now(),
-                lastAutoRotationStatus="ok" if start_status == 0 else "restart-failed",
-                lastAutoRotationResult={
-                    "status": result.get("status"),
-                    "restartStatus": result.get("restartStatus"),
-                    "previousSizeBytes": result.get("previousSizeBytes"),
-                },
-            )
+        record_typedb_auto_rotation_state(
+            lastAutoRotationFinishedAt=iso_now(),
+            lastAutoRotationStatus="ok" if start_status == 0 else "restart-failed",
+            lastAutoRotationResult={
+                "status": result.get("status"),
+                "restartStatus": result.get("restartStatus"),
+                "previousSizeBytes": result.get("previousSizeBytes"),
+            },
+        )
         if start_status != 0:
             result["failureIncident"] = record_typedb_auto_rotation_incident(
                 spec,

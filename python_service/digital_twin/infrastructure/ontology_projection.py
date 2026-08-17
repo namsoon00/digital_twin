@@ -1321,11 +1321,41 @@ class PortfolioOntologyProjectionRecorder:
                     # the merged active manifest, not facts intentionally held
                     # for their own target cycle.
                     incoming_planner_topology = dict(planner_topology or {})
-                    topology_merge = merge_native_rule_planner_topology(
-                        active_abox.get("nativeRulePlannerTopology"),
-                        incoming_planner_topology,
-                        target_scoped_patch.get("targetSymbols") or [],
+                    semantic_noop_patch = bool(
+                        not applied_target_patch.get("selectedIncomingScopeIds")
+                        and not applied_target_patch.get("retiredScopeIds")
                     )
+                    active_planner_topology = dict(
+                        active_abox.get("nativeRulePlannerTopology") or {}
+                    )
+                    if semantic_noop_patch and str(
+                        active_planner_topology.get("status") or ""
+                    ) == "ok":
+                        topology_merge = {
+                            "status": "ok",
+                            "reason": "No semantic scope changed; the verified active planner topology is reusable.",
+                            "topology": active_planner_topology,
+                            "replacedSymbols": [],
+                            "retainedSymbols": list(
+                                active_planner_topology.get("symbols") or []
+                            ),
+                            "activeSymbolCount": int(
+                                active_planner_topology.get("symbolCount") or 0
+                            ),
+                            "incomingSymbolCount": int(
+                                incoming_planner_topology.get("symbolCount") or 0
+                            ),
+                            "mergedSymbolCount": int(
+                                active_planner_topology.get("symbolCount") or 0
+                            ),
+                            "semanticNoopReuse": True,
+                        }
+                    else:
+                        topology_merge = merge_native_rule_planner_topology(
+                            active_planner_topology,
+                            incoming_planner_topology,
+                            target_scoped_patch.get("targetSymbols") or [],
+                        )
                     merged_topology_available = str(topology_merge.get("status") or "") == "ok"
                     planner_topology = dict(
                         topology_merge.get("topology") if merged_topology_available else incoming_planner_topology
@@ -1344,6 +1374,7 @@ class PortfolioOntologyProjectionRecorder:
                         for key in [
                             "status", "reason", "replacedSymbols", "retainedSymbols",
                             "activeSymbolCount", "incomingSymbolCount", "mergedSymbolCount",
+                            "semanticNoopReuse",
                         ]
                     }
                     material_fingerprint = native_rule_planner_manifest_fingerprint(
@@ -1383,6 +1414,7 @@ class PortfolioOntologyProjectionRecorder:
                         "selectedIncomingScopeCount": len(
                             applied_target_patch.get("selectedIncomingScopeIds") or []
                         ),
+                        "semanticNoop": semantic_noop_patch,
                         "reusedActiveScopeCount": len(
                             applied_target_patch.get("reusedActiveScopeIds") or []
                         ),

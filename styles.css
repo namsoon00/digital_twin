@@ -86,6 +86,356 @@
   --bottom-tabs-height: 66px;
 }
 
+/* Settings are organized by ownership scope before exposing edit controls. */
+.settings-scope-shell {
+  display: grid;
+  min-width: 0;
+  overflow: hidden;
+  border: 1px solid var(--oa-surface-border);
+  border-radius: 7px;
+  background: var(--panel);
+}
+
+.settings-scope-heading {
+  display: grid;
+  grid-template-columns: minmax(0, 1fr) auto;
+  align-items: center;
+  gap: 16px;
+  padding: 16px 18px;
+  border-bottom: 1px solid var(--oa-row-border);
+  background: color-mix(in srgb, var(--panel) 94%, var(--blue-soft) 6%);
+}
+
+.settings-scope-heading > div {
+  display: grid;
+  gap: 3px;
+  min-width: 0;
+}
+
+.settings-scope-heading span,
+.settings-scope-heading > em {
+  color: var(--muted);
+  font-size: 10px;
+  font-style: normal;
+  font-weight: 900;
+}
+
+.settings-scope-heading span {
+  color: var(--blue);
+  text-transform: uppercase;
+}
+
+.settings-scope-heading strong {
+  color: var(--ink);
+  font-size: 17px;
+  font-weight: 900;
+}
+
+.settings-scope-heading p {
+  margin: 0;
+  color: var(--muted);
+  font-size: 12px;
+  font-weight: 700;
+  line-height: 1.45;
+}
+
+.settings-scope-heading > em {
+  padding: 5px 8px;
+  border: 1px solid var(--line);
+  border-radius: 4px;
+  background: var(--panel);
+  white-space: nowrap;
+}
+
+.settings-scope-tabs {
+  display: grid;
+  grid-template-columns: repeat(3, minmax(0, 1fr));
+  min-width: 0;
+}
+
+.settings-scope-tabs button {
+  display: grid;
+  grid-template-columns: minmax(0, 1fr) auto;
+  align-items: center;
+  gap: 10px;
+  min-width: 0;
+  min-height: 76px;
+  padding: 12px 16px;
+  border: 0;
+  border-right: 1px solid var(--oa-row-border);
+  border-bottom: 3px solid transparent;
+  border-radius: 0;
+  background: var(--panel);
+  color: var(--ink);
+  text-align: left;
+  cursor: pointer;
+}
+
+.settings-scope-tabs button:last-child {
+  border-right: 0;
+}
+
+.settings-scope-tabs button:hover {
+  background: var(--oa-row-hover);
+}
+
+.settings-scope-tabs button.active {
+  border-bottom-color: var(--blue);
+  background: color-mix(in srgb, var(--panel) 90%, var(--blue-soft) 10%);
+}
+
+.settings-scope-tabs button > span {
+  display: grid;
+  gap: 3px;
+  min-width: 0;
+}
+
+.settings-scope-tabs strong,
+.settings-scope-tabs em {
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+
+.settings-scope-tabs strong {
+  font-size: 13px;
+  font-weight: 900;
+}
+
+.settings-scope-tabs em,
+.settings-scope-tabs small {
+  color: var(--muted);
+  font-size: 10px;
+  font-style: normal;
+  font-weight: 750;
+}
+
+.settings-scope-tabs small {
+  white-space: nowrap;
+}
+
+.settings-scope-content {
+  grid-template-columns: minmax(300px, 0.85fr) minmax(0, 2.15fr);
+}
+
+.settings-preference-scope {
+  grid-template-columns: repeat(2, minmax(0, 1fr));
+}
+
+.settings-operations-scope .settings-governance-surface {
+  grid-column: 1 / -1;
+}
+
+.settings-account-context {
+  display: grid;
+}
+
+.settings-account-context > label,
+.settings-account-context > div {
+  display: grid;
+  gap: 6px;
+  min-width: 0;
+  padding: 16px 18px;
+  border-bottom: 1px solid var(--oa-row-border);
+}
+
+.settings-account-context > div:last-child {
+  border-bottom: 0;
+}
+
+.settings-account-context label > span,
+.settings-boundary-list span {
+  color: var(--muted);
+  font-size: 11px;
+  font-weight: 850;
+}
+
+.settings-account-context select {
+  width: 100%;
+  min-width: 0;
+  min-height: 42px;
+  border: 1px solid var(--line);
+  border-radius: 5px;
+  background: var(--input);
+  color: var(--ink);
+  font: inherit;
+  font-weight: 800;
+}
+
+.settings-account-context > div strong,
+.settings-account-context > div em {
+  min-width: 0;
+  overflow-wrap: anywhere;
+}
+
+.settings-account-context > div strong {
+  font-size: 15px;
+}
+
+.settings-account-context > div em {
+  color: var(--muted);
+  font-size: 11px;
+  font-style: normal;
+  font-weight: 700;
+}
+
+.settings-scope-chip {
+  width: fit-content;
+  padding: 3px 6px;
+  border: 1px solid color-mix(in srgb, var(--line) 82%, transparent);
+  border-radius: 4px;
+  background: var(--chip);
+  color: var(--muted);
+  font-size: 9px;
+  font-weight: 900;
+  line-height: 1.2;
+}
+
+.settings-scope-chip.account {
+  border-color: color-mix(in srgb, var(--blue) 38%, var(--line));
+  color: var(--blue);
+}
+
+.settings-scope-chip.preferences {
+  border-color: color-mix(in srgb, var(--green) 38%, var(--line));
+  color: var(--green);
+}
+
+.settings-scope-chip.operations,
+.settings-scope-chip.governance {
+  border-color: color-mix(in srgb, var(--amber) 42%, var(--line));
+  color: var(--amber);
+}
+
+.scoped-settings-list > button {
+  min-height: 94px;
+}
+
+.scoped-settings-list > button > span {
+  align-content: center;
+}
+
+.scoped-settings-list > button > span > em {
+  margin-top: 1px;
+  line-height: 1.4;
+  white-space: normal;
+}
+
+.settings-boundary-list {
+  display: grid;
+}
+
+.settings-boundary-list > div {
+  display: grid;
+  grid-template-columns: 150px minmax(0, 1fr);
+  align-items: center;
+  gap: 16px;
+  min-height: 58px;
+  padding: 10px 18px;
+  border-bottom: 1px solid var(--oa-row-border);
+}
+
+.settings-boundary-list > div:last-child {
+  border-bottom: 0;
+}
+
+.settings-boundary-list strong {
+  color: var(--ink);
+  font-size: 12px;
+  line-height: 1.45;
+}
+
+.settings-editor-scope {
+  display: grid;
+  grid-template-columns: auto minmax(0, 1fr);
+  align-items: start;
+  gap: 12px;
+  margin-bottom: 16px;
+  padding: 14px 16px;
+  border: 1px solid var(--line);
+  border-left: 3px solid var(--blue);
+  border-radius: 6px;
+  background: color-mix(in srgb, var(--panel) 93%, var(--blue-soft) 7%);
+}
+
+.settings-editor-scope > div {
+  display: grid;
+  gap: 3px;
+  min-width: 0;
+}
+
+.settings-editor-scope strong {
+  color: var(--ink);
+  font-size: 14px;
+}
+
+.settings-editor-scope p {
+  margin: 0;
+  color: var(--muted);
+  font-size: 12px;
+  line-height: 1.5;
+}
+
+@media (max-width: 1180px) {
+  .settings-scope-content,
+  .settings-preference-scope {
+    grid-template-columns: minmax(0, 1fr);
+  }
+
+  .settings-operations-scope .settings-governance-surface {
+    grid-column: auto;
+  }
+}
+
+@media (max-width: 720px) {
+  .settings-scope-heading {
+    padding: 13px 14px;
+  }
+
+  .settings-scope-heading p {
+    display: none;
+  }
+
+  .settings-scope-tabs button {
+    grid-template-columns: minmax(0, 1fr);
+    justify-items: center;
+    gap: 4px;
+    min-height: 66px;
+    padding: 9px 5px;
+    text-align: center;
+  }
+
+  .settings-scope-tabs button > span {
+    justify-items: center;
+  }
+
+  .settings-scope-tabs em {
+    display: none;
+  }
+
+  .settings-scope-tabs small {
+    max-width: 100%;
+    overflow: hidden;
+    text-overflow: ellipsis;
+  }
+
+  .scoped-settings-list > button {
+    min-height: 88px;
+  }
+
+  .settings-boundary-list > div {
+    grid-template-columns: minmax(0, 1fr);
+    gap: 3px;
+    padding: 12px 14px;
+  }
+
+  .settings-editor-scope {
+    grid-template-columns: minmax(0, 1fr);
+    margin-bottom: 12px;
+    padding: 12px;
+  }
+}
+
 /* App-like web shell: installability, connectivity, touch navigation and
    visual-viewport stability shared by browser and standalone display modes. */
 :root {
@@ -34255,5 +34605,45 @@ body.oa-overlay-open {
   .command-palette-backdrop {
     height: var(--oa-visual-viewport-height) !important;
     max-height: var(--oa-visual-viewport-height) !important;
+  }
+}
+
+/* Final settings-scope overrides must remain after legacy console rules. */
+.scoped-settings-list > button {
+  min-height: 94px;
+}
+
+html[data-theme="dark"] {
+  --oa-surface-border: var(--line);
+  --oa-row-border: var(--line);
+  --oa-surface-soft: var(--panel-soft);
+  --oa-row-hover: var(--panel-soft);
+}
+
+html[data-theme="dark"] :where(
+  .oa-metric-strip,
+  .oa-surface,
+  .oa-surface-head,
+  .oa-operation-row,
+  .oa-settings-list > button
+) {
+  background-color: var(--panel);
+}
+
+@media (max-width: 1180px) {
+  .settings-scope-content,
+  .settings-preference-scope,
+  .settings-operations-scope {
+    grid-template-columns: minmax(0, 1fr);
+  }
+
+  .settings-operations-scope .settings-governance-surface {
+    grid-column: auto;
+  }
+}
+
+@media (max-width: 720px) {
+  .scoped-settings-list > button {
+    min-height: 88px;
   }
 }

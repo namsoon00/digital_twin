@@ -422,6 +422,19 @@ function checkWorkflowConsoleContract() {
   );
   assertOk(code.indexOf('data-console-workspace="') >= 0 && code.indexOf("renderConsoleMetricStrip") >= 0 && code.indexOf("renderConsoleSurface") >= 0, "공통 콘솔 화면 계약이 없습니다.");
   assertOk(
+    code.indexOf("consoleMetricTargetAttributes") >= 0 &&
+      code.indexOf("activateConsoleMetricTarget") >= 0 &&
+      code.indexOf('data-console-metric-target="') >= 0 &&
+      code.indexOf('data-console-monitor-destination="market"') >= 0 &&
+      code.indexOf('data-console-monitor-destination="decisions"') >= 0 &&
+      code.indexOf('data-console-monitor-destination="alerts"') >= 0 &&
+      code.indexOf('data-console-monitor-destination="calendar-events"') >= 0 &&
+      styles.indexOf("Linked monitoring metrics") >= 0 &&
+      styles.indexOf(".oa-metric.is-link") >= 0 &&
+      styles.indexOf(".investment-calendar-kpi.is-link") >= 0,
+    "상단 모니터링 지표에서 해당 목록과 상세로 이동하는 계약이 없습니다."
+  );
+  assertOk(
     code.indexOf('params.set("limit", String(state.notificationJobsPageSize || 20))') >= 0 &&
       code.indexOf('params.set("offset", String(state.notificationJobsOffset || 0))') >= 0 &&
       code.indexOf("renderNotificationJobPager") >= 0 &&

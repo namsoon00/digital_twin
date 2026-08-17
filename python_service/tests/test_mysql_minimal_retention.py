@@ -411,6 +411,25 @@ class MySQLMinimalRetentionTests(unittest.TestCase):
 
         self.assertNotIn("notification_jobs", tables)
         self.assertNotIn("model_review_jobs", tables)
+        self.assertNotIn("verified_reasoning_source_snapshots", tables)
+
+    def test_reasoning_source_retention_protects_nonterminal_job_inputs(self):
+        connection = ApplyConnection()
+        repository = MySQLMinimalRetentionRepository(connection)
+        policy = mysql_minimal_retention_policy({
+            "mysqlMinimalRetentionEnabled": "1",
+            "mysqlMinimalRetentionMode": "apply",
+        })
+
+        repository.apply(policy, now=datetime(2026, 7, 30, tzinfo=timezone.utc))
+
+        source_queries = [
+            sql for sql, _params in connection.calls
+            if "verified_reasoning_source_snapshots" in sql
+        ]
+        self.assertTrue(source_queries)
+        self.assertTrue(any("NOT EXISTS" in sql for sql in source_queries))
+        self.assertTrue(any("job_status IN ('queued', 'retry', 'processing')" in sql for sql in source_queries))
 
     def test_legacy_cleanup_limits_job_deletes_to_terminal_statuses(self):
         connection = ApplyConnection()

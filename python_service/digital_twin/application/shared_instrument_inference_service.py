@@ -4,7 +4,13 @@ from __future__ import annotations
 
 from typing import Dict, Iterable, Mapping
 
-from ..domain.shared_instrument_inference import build_shared_instrument_inference
+from ..domain.shared_instrument_inference import (
+    build_shared_instrument_inference,
+    market_shared_rule_ids,
+    market_snapshot_input_fingerprint,
+    market_source_revision_fingerprint,
+)
+from ..domain.portfolio import account_snapshot_from_monitor_state
 
 
 def _text(value: object) -> str:
@@ -51,11 +57,97 @@ class SharedInstrumentInferenceService:
     investment result into a different action.
     """
 
-    def __init__(self, store, deployment_id: str, release_fingerprint: str = ""):
+    def __init__(
+        self,
+        store,
+        deployment_id: str,
+        release_fingerprint: str = "",
+        rule_catalog_provider=None,
+    ):
         self.store = store
         self.deployment_id = _text(deployment_id)
         self.release_fingerprint = _text(release_fingerprint)
+        self.rule_catalog_provider = rule_catalog_provider
         self._subscription_index_reconciled = False
+
+    def market_rule_catalog_ids(self) -> list:
+        if not callable(self.rule_catalog_provider):
+            return []
+        try:
+            rules = list(self.rule_catalog_provider() or [])
+        except Exception:
+            return []
+        return market_shared_rule_ids(rules)
+
+    def execution_reuse_proof(
+        self,
+        reasoning_context: Mapping[str, object],
+        symbols: Iterable[str],
+        snapshot: object = None,
+    ) -> Dict[str, object]:
+        """Read an exact-revision market proof for account-local rule selection."""
+
+        selected = sorted({_symbol(value) for value in symbols or [] if _symbol(value)})
+        reader = getattr(self.store, "latest", None)
+        if not selected or not callable(reader):
+            return {"status": "unavailable", "reuseEligible": False, "symbols": {}}
+        expected_catalog = self.market_rule_catalog_ids()
+        if not expected_catalog:
+            return {
+                "status": "unavailable-rule-ownership",
+                "reuseEligible": False,
+                "symbols": {},
+            }
+        symbol_proofs = {}
+        for symbol in selected:
+            expected_revision = market_source_revision_fingerprint(reasoning_context, symbol)
+            expected_market_input = market_snapshot_input_fingerprint(snapshot, symbol)
+            if not expected_revision or not expected_market_input:
+                continue
+            try:
+                row = dict(reader(self.deployment_id, symbol) or {})
+            except Exception:
+                row = {}
+            payload = dict(row.get("payload") or {}) if isinstance(row.get("payload"), Mapping) else {}
+            catalog = sorted({_text(value) for value in payload.get("marketRuleCatalogIds") or [] if _text(value)})
+            if (
+                not row
+                or _text(row.get("release_fingerprint")) != self.release_fingerprint
+                or _text(payload.get("sourceRevisionFingerprint")) != expected_revision
+                or _text(payload.get("marketInputFingerprint")) != expected_market_input
+                or catalog != expected_catalog
+                or _text(row.get("consistency_status")) != "equivalent"
+            ):
+                continue
+            symbol_proofs[symbol] = {
+                "snapshotId": _text(row.get("snapshot_id")),
+                "semanticFingerprint": _text(row.get("semantic_fingerprint")),
+                "sourceRevisionFingerprint": expected_revision,
+                "marketInputFingerprint": expected_market_input,
+                "sourceAsOf": _text(row.get("source_as_of")),
+                "marketRuleCatalogIds": catalog,
+                "matchedMarketRuleIds": sorted({
+                    _text(value)
+                    for value in payload.get("matchedMarketRuleIds") or []
+                    if _text(value) in set(catalog)
+                }),
+            }
+        ready = bool(symbol_proofs) and set(symbol_proofs) == set(selected)
+        return {
+            "contractVersion": "shared-instrument-execution-reuse-v1",
+            "status": "ready" if ready else "revision-miss",
+            "reuseEligible": ready,
+            "deploymentId": self.deployment_id,
+            "releaseFingerprint": self.release_fingerprint,
+            "targetSymbols": selected,
+            "marketRuleCatalogIds": expected_catalog if ready else [],
+            "matchedMarketRuleIds": sorted({
+                rule_id
+                for proof in symbol_proofs.values()
+                for rule_id in proof.get("matchedMarketRuleIds") or []
+            }) if ready else [],
+            "symbols": symbol_proofs,
+        }
 
     def account_ids_for_symbols(self, symbols: Iterable[str]):
         reader = getattr(self.store, "account_ids_for_symbols", None)
@@ -170,17 +262,42 @@ class SharedInstrumentInferenceService:
         states: Mapping[str, object] = None,
         observed_at: str = "",
     ) -> Dict[str, object]:
+        snapshot_rows = list(snapshots or [])
         subscription_receipt = (
             self.reconcile_state_subscriptions(states)
             if states
-            else self.reconcile_snapshot_subscriptions(snapshots)
+            else self.reconcile_snapshot_subscriptions(snapshot_rows)
         )
+        snapshots_by_account = {
+            _text(getattr(snapshot, "account_id", "")): snapshot
+            for snapshot in snapshot_rows
+            if _text(getattr(snapshot, "account_id", ""))
+        }
+        for account_id, state in dict(states or {}).items():
+            if _text(account_id) in snapshots_by_account:
+                continue
+            snapshot = account_snapshot_from_monitor_state(
+                dict(state or {}) if isinstance(state, Mapping) else {}
+            )
+            if snapshot is not None:
+                snapshots_by_account[_text(account_id)] = snapshot
+        market_input_fingerprints = {
+            account_id: {
+                symbol: fingerprint
+                for symbol in {_symbol(value) for value in symbols or [] if _symbol(value)}
+                for fingerprint in [market_snapshot_input_fingerprint(snapshot, symbol)]
+                if fingerprint
+            }
+            for account_id, snapshot in snapshots_by_account.items()
+        }
         report = build_shared_instrument_inference(
             projection_results,
             symbols,
             deployment_id=self.deployment_id,
             release_fingerprint=self.release_fingerprint,
             observed_at=observed_at,
+            market_rule_ids=self.market_rule_catalog_ids(),
+            market_input_fingerprints=market_input_fingerprints,
         )
         persistence = dict(self.store.publish(report) or {})
         overlays = list(report.get("overlays") or [])
@@ -214,7 +331,7 @@ class SharedInstrumentInferenceService:
                 "inferenceGenerationId": overlay.inference_generation_id,
                 "sourceAboxSnapshotId": overlay.source_abox_snapshot_id,
             }
-        self.attach_context(projection_results, snapshots, context_by_account)
+        self.attach_context(projection_results, snapshot_rows, context_by_account)
         return {
             **persistence,
             "contractVersion": report.get("contractVersion"),

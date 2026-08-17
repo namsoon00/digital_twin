@@ -476,6 +476,47 @@ class MySQLOntologyWorldProjectionOutboxStore(MySQLOperationalConnection):
             )
         return int(getattr(cursor, "rowcount", 0) or 0) == 1
 
+    def defer(
+        self,
+        job_id: str,
+        worker_id: str,
+        reason: object,
+        retry_after_seconds: int = 10,
+    ) -> Dict[str, object]:
+        """Postpone a healthy contention state without consuming failure attempts."""
+
+        clean_job_id = _clean(job_id)
+        clean_worker = _clean(worker_id)
+        delay_seconds = max(5, min(300, int(retry_after_seconds or 10)))
+        stamp = utc_now()
+        available_at = _timestamp_after(delay_seconds)
+        with self.transaction() as connection:
+            cursor = connection.execute(
+                """
+                UPDATE ontology_world_projection_outbox
+                SET status = %s, attempts = GREATEST(attempts - 1, 0),
+                    available_at = %s, lease_owner = '', lease_expires_at = '',
+                    last_error = %s, updated_at = %s
+                WHERE job_id = %s AND status = %s AND lease_owner = %s
+                """,
+                (
+                    PENDING,
+                    available_at,
+                    _clean(reason)[:1000],
+                    stamp,
+                    clean_job_id,
+                    PROCESSING,
+                    clean_worker,
+                ),
+            )
+        applied = int(getattr(cursor, "rowcount", 0) or 0) == 1
+        return {
+            "status": "deferred" if applied else "lease-lost",
+            "jobId": clean_job_id,
+            "retryAfterSeconds": delay_seconds if applied else 0,
+            "failureAttemptCharged": False,
+        }
+
     def retry(
         self,
         job_id: str,

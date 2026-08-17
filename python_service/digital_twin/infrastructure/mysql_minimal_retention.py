@@ -208,6 +208,18 @@ class MySQLMinimalRetentionRepository:
                 "AND updated_at < " + _cutoff_sql(),
                 (cutoffs["reasoningEngineJobs"],),
             ),
+            "reasoningSourceSnapshots": self._summary(
+                "SELECT COUNT(*) AS candidate_count, COALESCE(SUM(OCTET_LENGTH(payload_json)), 0) AS candidate_bytes "
+                "FROM `verified_reasoning_source_snapshots` source WHERE source.created_at < "
+                + _cutoff_sql()
+                + " AND NOT EXISTS (SELECT 1 FROM `reasoning_engine_jobs` job "
+                "WHERE job.source_snapshot_id = source.snapshot_id "
+                "AND job.job_status IN ('queued', 'retry', 'processing')) "
+                "AND NOT EXISTS (SELECT 1 FROM `ontology_reasoning_mailbox_events` mailbox "
+                "WHERE mailbox.source_snapshot_id = source.snapshot_id "
+                "AND mailbox.state IN ('pending', 'direct-pending'))",
+                (cutoffs["reasoningEngineJobs"],),
+            ),
             "investmentReasoningCases": self._summary(
                 "SELECT COUNT(*) AS candidate_count, COALESCE(SUM(OCTET_LENGTH(payload_json)), 0) AS candidate_bytes "
                 "FROM `investment_reasoning_cases` WHERE "
@@ -305,6 +317,11 @@ class MySQLMinimalRetentionRepository:
                 (
                     "reasoningEngineJobs:terminal",
                     self._delete_reasoning_engine_jobs,
+                    (cutoffs["reasoningEngineJobs"],),
+                ),
+                (
+                    "reasoningSourceSnapshots:terminal",
+                    self._delete_reasoning_source_snapshots,
                     (cutoffs["reasoningEngineJobs"],),
                 ),
                 (
@@ -550,6 +567,39 @@ class MySQLMinimalRetentionRepository:
             budget,
         )
         return self._result("reasoning_engine_jobs", deleted, bytes_deleted)
+
+    def _delete_reasoning_source_snapshots(self, policy, budget, cutoff_iso) -> Dict[str, object]:
+        candidates = self._byte_bounded_candidates(
+            "SELECT source.snapshot_id, OCTET_LENGTH(source.payload_json) AS payload_bytes "
+            "FROM `verified_reasoning_source_snapshots` source WHERE source.created_at < "
+            + _cutoff_sql()
+            + " AND NOT EXISTS (SELECT 1 FROM `reasoning_engine_jobs` job "
+            "WHERE job.source_snapshot_id = source.snapshot_id "
+            "AND job.job_status IN ('queued', 'retry', 'processing')) "
+            "AND NOT EXISTS (SELECT 1 FROM `ontology_reasoning_mailbox_events` mailbox "
+            "WHERE mailbox.source_snapshot_id = source.snapshot_id "
+            "AND mailbox.state IN ('pending', 'direct-pending')) "
+            "ORDER BY source.created_at, source.snapshot_id LIMIT %s",
+            (cutoff_iso, policy.batch_size),
+            "snapshot_id",
+            policy,
+            budget,
+        )
+        deleted, bytes_deleted = self._delete_candidates(
+            "verified_reasoning_source_snapshots",
+            "snapshot_id",
+            candidates,
+            "created_at < " + _cutoff_sql()
+            + " AND NOT EXISTS (SELECT 1 FROM `reasoning_engine_jobs` job "
+            "WHERE job.source_snapshot_id = `verified_reasoning_source_snapshots`.snapshot_id "
+            "AND job.job_status IN ('queued', 'retry', 'processing')) "
+            "AND NOT EXISTS (SELECT 1 FROM `ontology_reasoning_mailbox_events` mailbox "
+            "WHERE mailbox.source_snapshot_id = `verified_reasoning_source_snapshots`.snapshot_id "
+            "AND mailbox.state IN ('pending', 'direct-pending'))",
+            (cutoff_iso,),
+            budget,
+        )
+        return self._result("verified_reasoning_source_snapshots", deleted, bytes_deleted)
 
     def _delete_reasoning_comparisons(self, policy, budget, cutoff_iso) -> Dict[str, object]:
         candidates = self._byte_bounded_candidates(

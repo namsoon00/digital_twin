@@ -278,7 +278,7 @@ def reasoning_request_provenance(
             candidate = {
                 key: barrier.get(key)
                 for key in [
-                    "version", "generatedAt", "accountId", "positionChangedCount",
+                    "version", "snapshotId", "generatedAt", "accountId", "positionChangedCount",
                     "portfolioContextChanged", "externalSignalGroups", "cryptoTransitionTargetSymbols",
                 ]
                 if barrier.get(key) not in (None, "", [], {})

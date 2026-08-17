@@ -1194,6 +1194,98 @@ class PortfolioOntologyProjectionRecorder:
                     target_scoped_patch.get("targetSymbols") or [],
                     fact_slot_plan=target_scoped_patch.get("factSlotPlan") or {},
                 )
+                repair_input_fallback = {}
+                if (
+                    not applied_target_patch.get("applied")
+                    and str(graph_input.get("mode") or "") == "target-scoped"
+                ):
+                    # A scoped source can legitimately omit a shared endpoint
+                    # that is retained by the active Manifest. Reassemble the
+                    # complete source in memory once, then persist only the
+                    # originally requested target patch. This repairs the
+                    # source boundary without turning local work into a full
+                    # TypeDB world rewrite.
+                    emit_progress(
+                        "target_manifest_repair_input.start",
+                        status=str(applied_target_patch.get("status") or "repair-required"),
+                    )
+                    repair_input_started = time.perf_counter()
+                    first_patch_failure = dict(applied_target_patch or {})
+                    repair_projection_graph = self.build_projection_graph(
+                        snapshot,
+                        rulebox_bootstrap,
+                        portfolio_world_context,
+                        market_world_context=market_world_context,
+                        target_symbols=target_symbols,
+                        target_scoped_input=False,
+                    )
+                    graph = repair_projection_graph["graph"]
+                    persistence_graph = repair_projection_graph["persistenceGraph"]
+                    graph_assembly = repair_projection_graph["assembly"]
+                    planner_topology = repair_projection_graph["plannerTopology"]
+                    material_fingerprint = repair_projection_graph["materialFingerprint"]
+                    material_snapshot_id = repair_projection_graph["materialSnapshotId"]
+                    scoped_identity = repair_projection_graph["scopedIdentity"]
+                    persistence_graph.worldview["targetScopeRetentionMode"] = (
+                        "observation-followup"
+                        if observation_followup_targets
+                        else "incremental-target-patch"
+                    )
+                    if observation_followup_targets:
+                        persistence_graph.worldview["observationFollowupTargets"] = list(
+                            observation_followup_targets
+                        )
+                    target_scoped_patch = self.target_scoped_patch_targets(
+                        snapshot,
+                        active_abox,
+                        scoped_identity,
+                        target_symbols,
+                        reasoning_context=compact_reasoning_context,
+                    )
+                    scope_repair = apply_scoped_abox_repair_epochs(
+                        persistence_graph,
+                        active_abox,
+                        compact_reasoning_context.get("scopeRepairRequestsBySymbol") or {},
+                    )
+                    applied_target_patch = merge_target_scoped_abox_manifest(
+                        persistence_graph,
+                        active_abox,
+                        target_scoped_patch.get("targetSymbols") or [],
+                        fact_slot_plan=target_scoped_patch.get("factSlotPlan") or {},
+                    )
+                    repair_runtime_stages = dict(
+                        repair_projection_graph.get("runtimeStages") or {}
+                    )
+                    for stage, value in repair_runtime_stages.items():
+                        runtime_stages[
+                            "targetManifestRepairInput" + stage[:1].upper() + stage[1:]
+                        ] = value
+                    runtime_stages["targetManifestRepairInputMs"] = int(
+                        (time.perf_counter() - repair_input_started) * 1000
+                    )
+                    repair_input_fallback = {
+                        "attempted": True,
+                        "mode": "complete-source-assembly-target-persist",
+                        "firstStatus": str(first_patch_failure.get("status") or ""),
+                        "firstMissingEndpointScopeIds": list(
+                            first_patch_failure.get("missingEndpointScopeIds") or []
+                        )[:50],
+                        "finalStatus": str(applied_target_patch.get("status") or ""),
+                        "applied": bool(applied_target_patch.get("applied")),
+                        "runtimeMs": runtime_stages["targetManifestRepairInputMs"],
+                        "automaticFullProjectionBlocked": True,
+                    }
+                    graph_input.update({
+                        "repairInputFallback": True,
+                        "repairInputMode": "complete-source-assembly-target-persist",
+                        "repairInputStatus": str(applied_target_patch.get("status") or ""),
+                    })
+                    emit_progress(
+                        "target_manifest_repair_input.done",
+                        status=str(applied_target_patch.get("status") or ""),
+                        applied=bool(applied_target_patch.get("applied")),
+                        runtimeMs=runtime_stages["targetManifestRepairInputMs"],
+                    )
                 runtime_stages["targetScopedManifestPatchMs"] = int(
                     (time.perf_counter() - target_patch_started) * 1000
                 )
@@ -1338,6 +1430,7 @@ class PortfolioOntologyProjectionRecorder:
                             ]
                             if key in scope_repair
                         },
+                        "repairInputFallback": dict(repair_input_fallback),
                         "automaticFullProjectionBlocked": True,
                     }
                     persistence_graph.worldview["targetScopedManifestPatch"] = dict(target_scoped_patch)
@@ -1392,6 +1485,7 @@ class PortfolioOntologyProjectionRecorder:
                                 or applied_target_patch.get("status")
                                 or "target-scoped-manifest-patch-not-applied"
                             ),
+                            "repairInputFallback": dict(repair_input_fallback),
                             "automaticFullProjectionBlocked": True,
                         },
                     }
@@ -3988,6 +4082,24 @@ class PortfolioOntologyProjectionRecorder:
                     requested_fact_families=compact_impact_plan.get("requestedFactFamilies") or [],
                     requested_fact_families_by_symbol=compact_impact_plan.get("requestedFactFamiliesBySymbol") or {},
                 )
+                shared_selection_context = self.shared_inference_selection_context(
+                    compact_impact_plan,
+                    reasoning_context,
+                    inference_symbols,
+                    selection_context,
+                )
+                if bool(shared_selection_context.get("reusable")):
+                    selection_context = shared_selection_context
+                    result["sharedInferenceExecutionReuse"] = {
+                        key: value
+                        for key, value in shared_selection_context.items()
+                        if key in {
+                            "reusable", "proofSource", "targetSymbols",
+                            "sharedSnapshotIds", "marketRuleCatalogIds",
+                            "matchedRuleCount", "candidateRuleCount",
+                            "deferredMarketRuleCount", "fallbackReason",
+                        }
+                    }
                 if not selection_context:
                     selection_context = {
                         "reusable": False,
@@ -5019,6 +5131,128 @@ class PortfolioOntologyProjectionRecorder:
         # the state of every non-matching rule from one generation. Never use
         # that partial history as an incremental execution proof.
         return {}
+
+    def shared_inference_selection_context(
+        self,
+        impact_plan: Dict[str, object],
+        reasoning_context: Dict[str, object],
+        inference_symbols: List[str],
+        account_selection_context: Dict[str, object] = None,
+    ) -> Dict[str, object]:
+        """Combine exact market reuse proof with account-local rule coverage."""
+
+        proof = (
+            reasoning_context.get("sharedInferenceReuseProof")
+            if isinstance(reasoning_context, dict)
+            and isinstance(reasoning_context.get("sharedInferenceReuseProof"), dict)
+            else {}
+        )
+        targets = sorted({
+            str(symbol or "").upper().strip()
+            for symbol in inference_symbols or []
+            if str(symbol or "").strip()
+        })
+        proof_targets = sorted({
+            str(symbol or "").upper().strip()
+            for symbol in proof.get("targetSymbols") or []
+            if str(symbol or "").strip()
+        })
+        if not bool(proof.get("reuseEligible")) or not targets or proof_targets != targets:
+            return {}
+        enabled_rule_ids = [
+            str(rule.get("rule_id") or rule.get("ruleId") or "").strip()
+            for rule in self.rulebox_rules_for_impact()
+            if isinstance(rule, dict) and rule.get("enabled", True) is not False
+            and str(rule.get("rule_id") or rule.get("ruleId") or "").strip()
+        ]
+        if not enabled_rule_ids:
+            return {}
+        available = set(enabled_rule_ids)
+        market_rule_ids = {
+            str(rule_id or "").strip()
+            for rule_id in proof.get("marketRuleCatalogIds") or []
+            if str(rule_id or "").strip()
+        }
+        matched_market_rule_ids = {
+            str(rule_id or "").strip()
+            for rule_id in proof.get("matchedMarketRuleIds") or []
+            if str(rule_id or "").strip()
+        }
+        if (
+            not market_rule_ids
+            or not market_rule_ids.issubset(available)
+            or not matched_market_rule_ids.issubset(market_rule_ids)
+        ):
+            return {}
+        account_context = (
+            dict(account_selection_context or {})
+            if isinstance(account_selection_context, dict)
+            else {}
+        )
+        if bool(account_context.get("reusable")):
+            base_candidates = {
+                str(rule_id or "").strip()
+                for rule_id in account_context.get("candidateRuleIds") or []
+                if str(rule_id or "").strip() in available
+            }
+            if not base_candidates:
+                base_candidates = {
+                    str(rule_id or "").strip()
+                    for rule_id in impact_plan.get("candidateRuleIds") or []
+                    if str(rule_id or "").strip() in available
+                }
+            prior_matches = {
+                str(rule_id or "").strip()
+                for rule_id in account_context.get("matchedRuleIds") or []
+                if str(rule_id or "").strip() in available
+            }
+        else:
+            # Without an account proof every non-market rule is evaluated.
+            # Only the exact-revision market catalogue may be deferred.
+            base_candidates = set(available)
+            prior_matches = set()
+        candidate_ids = base_candidates.difference(market_rule_ids)
+        prior_matches.difference_update(market_rule_ids)
+        prior_matches.update(matched_market_rule_ids)
+        if not candidate_ids and matched_market_rule_ids:
+            # The native selector requires at least one candidate. Re-running
+            # one already matched market rule still avoids all known market
+            # non-matches while keeping TypeDB as the evaluator.
+            candidate_ids.add(sorted(matched_market_rule_ids)[0])
+        if not candidate_ids:
+            return {}
+        selected_ids = candidate_ids | prior_matches
+        if len(selected_ids) >= len(enabled_rule_ids):
+            return {}
+        symbols = proof.get("symbols") if isinstance(proof.get("symbols"), dict) else {}
+        snapshot_ids = sorted({
+            str(dict(value or {}).get("snapshotId") or "").strip()
+            for value in symbols.values()
+            if isinstance(value, dict) and str(value.get("snapshotId") or "").strip()
+        })
+        return {
+            "reusable": True,
+            "proofSource": (
+                "typedb-rule-result-slots+shared-market-head"
+                if bool(account_context.get("reusable"))
+                else "shared-market-head+complete-account-catalog"
+            ),
+            "targetSymbols": targets,
+            "sharedSnapshotIds": snapshot_ids,
+            "marketRuleCatalogIds": [
+                rule_id for rule_id in enabled_rule_ids if rule_id in market_rule_ids
+            ],
+            "matchedRuleIds": [
+                rule_id for rule_id in enabled_rule_ids if rule_id in prior_matches
+            ],
+            "matchedRuleCount": len(prior_matches),
+            "candidateRuleIds": [
+                rule_id for rule_id in enabled_rule_ids if rule_id in candidate_ids
+            ],
+            "candidateRuleCount": len(candidate_ids),
+            "deferredMarketRuleCount": len(market_rule_ids.difference(selected_ids)),
+            "fallbackReason": "",
+        }
 
     def combine_audited_target_rule_selection_contexts(
         self,

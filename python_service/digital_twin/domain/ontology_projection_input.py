@@ -1025,7 +1025,17 @@ def compact_monitor_state_for_ontology(
 
     source = state if isinstance(state, Mapping) else {}
     result: Dict[str, object] = {}
-    for key in ("generatedAt", "portfolio", "positions", "watchlist"):
+    for key in (
+        "accountId",
+        "accountLabel",
+        "provider",
+        "mode",
+        "status",
+        "generatedAt",
+        "portfolio",
+        "positions",
+        "watchlist",
+    ):
         value = source.get(key)
         if value not in (None, ""):
             result[key] = deepcopy(value)

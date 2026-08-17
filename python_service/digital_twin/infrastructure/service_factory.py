@@ -1399,10 +1399,23 @@ def build_ontology_reasoning_runner(settings=None, event_publisher=None) -> Onto
         )
     )
     reasoning_engine_registry = stores.reasoning_engine_registry_store(reasoning_store_settings)
+
+    def v1_rule_catalog():
+        try:
+            snapshot = dict(ontology_repository.rulebox_snapshot() or {})
+        except Exception:
+            return []
+        return [
+            dict(rule)
+            for rule in snapshot.get("rules") or []
+            if isinstance(rule, dict)
+        ]
+
     shared_inference_service = SharedInstrumentInferenceService(
         stores.shared_instrument_inference_store(reasoning_store_settings),
         v1_deployment_id,
         str(active_release_identity.get("releaseFingerprint") or ""),
+        rule_catalog_provider=v1_rule_catalog,
     )
 
     def publish_shared_inference(projection_results, symbols, runner):
@@ -1844,6 +1857,7 @@ def build_v2_reasoning_engine(settings=None) -> V2ReasoningEngine:
         shared_inference_store,
         descriptor.deployment_id,
         str(release_identity.get("releaseFingerprint") or ""),
+        rule_catalog_provider=projection_recorder.rulebox_rules_for_impact,
     )
     existing_health = dict((registry_store.get(descriptor.deployment_id) or {}).get("health") or {})
     existing_health.update({
@@ -1878,7 +1892,10 @@ def build_v2_reasoning_engine(settings=None) -> V2ReasoningEngine:
             instrument_subscription_index=shared_inference_service,
             instrument_subscription_state_source=subscription_state_store,
         ),
-        inference_executor=ScopedTypeDBInferenceExecutor(projection_recorder),
+        inference_executor=ScopedTypeDBInferenceExecutor(
+            projection_recorder,
+            shared_inference_service=shared_inference_service,
+        ),
         candidate_builder=GraphDecisionCandidateBuilder(
             RealtimeMonitor(candidate_settings),
             monitor_store,

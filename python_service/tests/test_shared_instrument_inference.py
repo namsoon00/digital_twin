@@ -7,7 +7,10 @@ from digital_twin.application.shared_instrument_inference_service import (
 )
 from digital_twin.domain.shared_instrument_inference import (
     build_shared_instrument_inference,
+    market_shared_rule_ids,
 )
+from digital_twin.domain.portfolio import AccountSnapshot, PortfolioSummary, Position
+from digital_twin.infrastructure.ontology_projection import PortfolioOntologyProjectionRecorder
 
 
 def projection(account_id, market_observed=226.17):
@@ -118,8 +121,87 @@ class FakeStore:
         self.reconciled.append((account_id, list(holdings), list(watchlist), kwargs))
         return {"activeCount": len(set(holdings) | set(watchlist))}
 
+    def latest(self, deployment_id, symbol):
+        for snapshot in (self.report or {}).get("snapshots") or []:
+            values = snapshot.to_dict()
+            if values["deployment_id"] == deployment_id and values["symbol"] == symbol:
+                return values
+        return {}
+
+
+def rule_catalog():
+    return [
+        {
+            "ruleId": "graph.market.recovery.v1",
+            "enabled": True,
+            "conditions": [{
+                "conditionId": "market-price",
+                "field": "currentPrice",
+                "operator": ">",
+                "value": 200,
+            }],
+        },
+        {
+            "ruleId": "graph.market.volume.v1",
+            "enabled": True,
+            "conditions": [{
+                "conditionId": "market-volume",
+                "field": "volumeRatio",
+                "operator": ">",
+                "value": 1.5,
+            }],
+        },
+        {
+            "ruleId": "graph.portfolio.concentration.v1",
+            "enabled": True,
+            "conditions": [{
+                "conditionId": "account-weight",
+                "field": "positionWeight",
+                "operator": ">",
+                "value": 25,
+            }],
+        },
+    ]
+
+
+def account_snapshot(price=226.17):
+    return AccountSnapshot(
+        account_id="a-1",
+        account_label="Account",
+        provider="test",
+        mode="live",
+        status="ok",
+        generated_at="2026-08-17T01:00:00Z",
+        portfolio=PortfolioSummary(1000.0, 500.0, 500.0, [], [], 50.0),
+        watchlist=[Position(
+            symbol="NVDA",
+            name="NVIDIA",
+            market="US",
+            currency="USD",
+            current_price=price,
+            source="watchlist",
+        )],
+        external_signals={},
+    )
+
+
+def authoritative_context():
+    return {
+        "eventFactBoundaryAuthoritative": True,
+        "requestedScopeFamilies": ["market"],
+        "requestedScopeFamiliesBySymbol": {"NVDA": ["market"]},
+        "factRevisionsBySymbol": {"NVDA": "quote:7"},
+        "revisionVectorsBySymbol": {"NVDA": {"quote": "7"}},
+    }
+
 
 class SharedInstrumentInferenceTest(unittest.TestCase):
+    def test_rule_ownership_partition_excludes_account_and_unknown_rules(self):
+        self.assertEqual(
+            ["graph.market.recovery.v1", "graph.market.volume.v1"],
+            market_shared_rule_ids(rule_catalog()),
+        )
+
     def test_equivalent_market_inference_is_shared_without_account_data(self):
         report = build_shared_instrument_inference(
             {"a-1": projection("a-1"), "a-2": projection("a-2")},
@@ -231,6 +313,76 @@ class SharedInstrumentInferenceTest(unittest.TestCase):
         self.assertEqual("immutable-reasoning-states", receipt["subscriptionIndex"]["source"])
         self.assertEqual(1, receipt["subscriptionIndex"]["accountCount"])
         self.assertEqual(("a-1", ["NVDA"], ["TSLA"]), store.reconciled[0][:3])
+
+    def test_execution_reuse_requires_matching_revision_and_market_input(self):
+        store = FakeStore()
+        service = SharedInstrumentInferenceService(
+            store,
+            "ontology-v2-shadow",
+            "release-1",
+            rule_catalog_provider=rule_catalog,
+        )
+        source = account_snapshot()
+        source_projection = projection("a-1")
+        source_projection["reasoningContext"] = authoritative_context()
+
+        service.publish_verified_results(
+            {"a-1": source_projection},
+            ["NVDA"],
+            snapshots=[source],
+            observed_at="2026-08-17T01:01:00Z",
+        )
+
+        ready = service.execution_reuse_proof(
+            authoritative_context(),
+            ["NVDA"],
+            snapshot=account_snapshot(),
+        )
+        changed = service.execution_reuse_proof(
+            authoritative_context(),
+            ["NVDA"],
+            snapshot=account_snapshot(227.0),
+        )
+
+        self.assertTrue(ready["reuseEligible"])
+        self.assertEqual(
+            ["graph.market.recovery.v1", "graph.market.volume.v1"],
+            ready["marketRuleCatalogIds"],
+        )
+        self.assertEqual(["graph.market.recovery.v1"], ready["matchedMarketRuleIds"])
+        self.assertFalse(changed["reuseEligible"])
+
+    def test_recorder_turns_shared_proof_into_a_smaller_native_rule_set(self):
+        recorder = PortfolioOntologyProjectionRecorder.__new__(
+            PortfolioOntologyProjectionRecorder
+        )
+        recorder.rulebox_rules_for_impact = rule_catalog
+        context = {
+            "sharedInferenceReuseProof": {
+                "reuseEligible": True,
+                "targetSymbols": ["NVDA"],
+                "marketRuleCatalogIds": [
+                    "graph.market.recovery.v1",
+                    "graph.market.volume.v1",
+                ],
+                "matchedMarketRuleIds": ["graph.market.recovery.v1"],
+                "symbols": {"NVDA": {"snapshotId": "shared:1"}},
+            },
+        }
+
+        result = recorder.shared_inference_selection_context(
+            {"candidateRuleIds": [item["ruleId"] for item in rule_catalog()]},
+            context,
+            ["NVDA"],
+        )
+
+        self.assertTrue(result["reusable"])
+        self.assertEqual(
+            ["graph.portfolio.concentration.v1"],
+            result["candidateRuleIds"],
+        )
+        self.assertEqual(["graph.market.recovery.v1"], result["matchedRuleIds"])
+        self.assertEqual(1, result["deferredMarketRuleCount"])
 
 
 if __name__ == "__main__":

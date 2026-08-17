@@ -1003,6 +1003,26 @@ MYSQL_SCHEMA = [
     ) ENGINE=InnoDB DEFAULT CHARSET=utf8mb4 COLLATE=utf8mb4_unicode_ci
     """,
     """
+    CREATE TABLE IF NOT EXISTS verified_reasoning_source_snapshots (
+        snapshot_id VARCHAR(191) PRIMARY KEY,
+        account_id VARCHAR(191) NOT NULL,
+        account_label VARCHAR(255) NOT NULL DEFAULT '',
+        provider VARCHAR(64) NOT NULL DEFAULT '',
+        mode VARCHAR(64) NOT NULL DEFAULT '',
+        status VARCHAR(255) NOT NULL DEFAULT '',
+        generated_at VARCHAR(40) NOT NULL DEFAULT '',
+        contract_version VARCHAR(64) NOT NULL DEFAULT '',
+        fingerprint CHAR(64) NOT NULL,
+        symbols_json TEXT NOT NULL,
+        payload_json LONGTEXT NOT NULL,
+        created_at VARCHAR(40) NOT NULL,
+        updated_at VARCHAR(40) NOT NULL,
+        UNIQUE KEY uq_reasoning_source_account_time (account_id, generated_at),
+        KEY idx_reasoning_source_created (created_at, snapshot_id),
+        KEY idx_reasoning_source_fingerprint (fingerprint, account_id)
+    ) ENGINE=InnoDB DEFAULT CHARSET=utf8mb4 COLLATE=utf8mb4_unicode_ci
+    """,
+    """
     CREATE TABLE IF NOT EXISTS monitor_sent (
         sent_key_hash CHAR(64) PRIMARY KEY,
         sent_key TEXT NOT NULL,
@@ -1415,6 +1435,8 @@ MYSQL_SCHEMA = [
         job_id VARCHAR(191) PRIMARY KEY,
         deployment_id VARCHAR(191) NOT NULL,
         source_event_id VARCHAR(191) NOT NULL,
+        source_snapshot_id VARCHAR(191) NOT NULL DEFAULT '',
+        source_snapshot_at VARCHAR(40) NOT NULL DEFAULT '',
         scope_key VARCHAR(191) NOT NULL,
         input_fingerprint VARCHAR(64) NOT NULL,
         request_json LONGTEXT NOT NULL,
@@ -1441,6 +1463,7 @@ MYSQL_SCHEMA = [
         UNIQUE KEY uq_reasoning_engine_job_event (deployment_id, source_event_id),
         KEY idx_reasoning_engine_job_ready (deployment_id, job_status, available_at, priority, created_at),
         KEY idx_reasoning_engine_job_scope (deployment_id, scope_key, job_status, created_at),
+        KEY idx_reasoning_engine_job_source_snapshot (source_snapshot_id, job_status, created_at),
         KEY idx_reasoning_engine_job_completed (deployment_id, completed_at),
         KEY idx_reasoning_engine_job_release (deployment_id, release_fingerprint, job_status, completed_at)
     ) ENGINE=InnoDB DEFAULT CHARSET=utf8mb4 COLLATE=utf8mb4_unicode_ci
@@ -2124,6 +2147,7 @@ MYSQL_SCHEMA = [
     """
     CREATE TABLE IF NOT EXISTS ontology_reasoning_mailbox_events (
         event_id VARCHAR(191) PRIMARY KEY,
+        source_snapshot_id VARCHAR(191) NOT NULL DEFAULT '',
         occurred_at VARCHAR(40) NOT NULL DEFAULT '',
         state VARCHAR(32) NOT NULL DEFAULT 'pending',
         unresolved_entry_count INT NOT NULL DEFAULT 0,
@@ -2131,7 +2155,8 @@ MYSQL_SCHEMA = [
         event_json LONGTEXT NOT NULL,
         created_at VARCHAR(40) NOT NULL,
         updated_at VARCHAR(40) NOT NULL,
-        KEY idx_reasoning_mailbox_events_state_time (state, updated_at, event_id)
+        KEY idx_reasoning_mailbox_events_state_time (state, updated_at, event_id),
+        KEY idx_reasoning_mailbox_events_source_snapshot (source_snapshot_id, state, event_id)
     ) ENGINE=InnoDB DEFAULT CHARSET=utf8mb4 COLLATE=utf8mb4_unicode_ci
     """,
     """

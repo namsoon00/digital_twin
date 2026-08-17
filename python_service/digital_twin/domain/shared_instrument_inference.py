@@ -14,7 +14,12 @@ import hashlib
 import json
 from typing import Dict, Iterable, List, Mapping, Sequence, Tuple
 
-from .hypothesis_scoping import MARKET_SHARED_SCOPE, inference_scope_assessment
+from .hypothesis_scoping import (
+    MARKET_SHARED_SCOPE,
+    condition_scope_profile,
+    inference_scope_assessment,
+)
+from .ontology_projection_input import compact_external_signals_for_ontology
 
 
 SHARED_INSTRUMENT_INFERENCE_VERSION = "shared-instrument-inference-v1"
@@ -52,6 +57,115 @@ def _utc(value: object = "") -> str:
 
 def _strings(values: Iterable[object]) -> List[str]:
     return sorted({_text(value) for value in values or [] if _text(value)})
+
+
+def market_source_revision_fingerprint(
+    reasoning_context: Mapping[str, object],
+    symbol: object,
+) -> str:
+    """Identify the exact market fact revision shared by account executions."""
+
+    context = dict(reasoning_context or {}) if isinstance(reasoning_context, Mapping) else {}
+    clean_symbol = _symbol(symbol)
+    if not clean_symbol or not bool(context.get("eventFactBoundaryAuthoritative")):
+        return ""
+    vector = dict((context.get("revisionVectorsBySymbol") or {}).get(clean_symbol) or {})
+    fact_revision = _text((context.get("factRevisionsBySymbol") or {}).get(clean_symbol))
+    families = _strings(
+        (context.get("requestedScopeFamiliesBySymbol") or {}).get(clean_symbol)
+        or context.get("requestedScopeFamilies")
+        or []
+    )
+    if not vector and not fact_revision:
+        return ""
+    return _hash({
+        "symbol": clean_symbol,
+        "factRevision": fact_revision,
+        "revisionVector": {
+            _text(key): _text(value)
+            for key, value in sorted(vector.items(), key=lambda item: _text(item[0]))
+            if _text(key) and _text(value)
+        },
+        "scopeFamilies": families,
+    })
+
+
+MARKET_POSITION_FIELDS = (
+    "symbol", "name", "market", "currency", "current_price", "change_rate",
+    "quote_source", "quote_status", "data_quality", "market_signal_coverage",
+    "source_as_of", "source_fetched_at", "source_timestamp_state",
+    "freshness_status", "freshness_age_minutes", "latency_status",
+    "market_session", "source_transport", "real_time", "indicator_as_of",
+    "trade_strength", "trading_value", "volume", "volume_ratio",
+    "buy_volume", "sell_volume", "orderbook_bid_volume", "orderbook_ask_volume",
+    "bid_ask_imbalance", "foreign_buy_volume", "foreign_sell_volume",
+    "foreign_net_volume", "foreign_net_amount", "institution_buy_volume",
+    "institution_sell_volume", "institution_net_volume", "institution_net_amount",
+    "individual_buy_volume", "individual_sell_volume", "individual_net_volume",
+    "individual_net_amount", "ma5", "ma20", "ma60", "ma120", "ma200",
+    "ma20_slope", "ma60_slope", "ma5_distance", "ma20_distance", "ma60_distance",
+    "sector",
+)
+
+
+def market_snapshot_input_fingerprint(snapshot: object, symbol: object) -> str:
+    """Hash market-owned ABox inputs while excluding every account position fact."""
+
+    clean_symbol = _symbol(symbol)
+    if not clean_symbol or snapshot is None:
+        return ""
+    rows = []
+    for position in list(getattr(snapshot, "positions", []) or []) + list(
+        getattr(snapshot, "watchlist", []) or []
+    ):
+        value = (
+            position.to_dict()
+            if callable(getattr(position, "to_dict", None))
+            else dict(position or {}) if isinstance(position, Mapping) else {}
+        )
+        if _symbol(value.get("symbol")) != clean_symbol:
+            continue
+        rows.append({key: value.get(key) for key in MARKET_POSITION_FIELDS if key in value})
+    external = compact_external_signals_for_ontology(
+        getattr(snapshot, "external_signals", {}) or {},
+        target_symbols=[clean_symbol],
+    )
+    if not rows and not external:
+        return ""
+    return _hash({
+        "symbol": clean_symbol,
+        "marketRows": rows,
+        "externalSignals": external,
+    })
+
+
+def market_shared_rule_ids(rules: Iterable[object]) -> List[str]:
+    """Return rules whose every configured condition is market-owned."""
+
+    result = []
+    for rule in rules or []:
+        if isinstance(rule, Mapping):
+            rule_id = _text(rule.get("rule_id") or rule.get("ruleId"))
+            conditions = list(rule.get("conditions") or [])
+            enabled = rule.get("enabled", True) is not False
+        else:
+            rule_id = _text(getattr(rule, "rule_id", ""))
+            conditions = list(getattr(rule, "conditions", []) or [])
+            enabled = getattr(rule, "enabled", True) is not False
+        if not rule_id or not enabled or not conditions:
+            continue
+        profiles = []
+        for index, condition in enumerate(conditions):
+            if isinstance(condition, Mapping):
+                payload = dict(condition)
+            elif callable(getattr(condition, "to_dict", None)):
+                payload = dict(condition.to_dict() or {})
+            else:
+                payload = dict(vars(condition)) if hasattr(condition, "__dict__") else {}
+            profiles.append(condition_scope_profile(payload, index))
+        if profiles and all(profile.get("scope") == "market" for profile in profiles):
+            result.append(rule_id)
+    return sorted(set(result))
 
 
 def _safe_condition(condition: Mapping[str, object]) -> Dict[str, object]:
@@ -189,6 +303,8 @@ def build_shared_instrument_inference(
     deployment_id: str,
     release_fingerprint: str = "",
     observed_at: str = "",
+    market_rule_ids: Iterable[str] = (),
+    market_input_fingerprints: Mapping[str, Mapping[str, str]] = None,
 ) -> Dict[str, object]:
     """Split verified TypeDB output into reusable market facts and overlays.
 
@@ -199,6 +315,7 @@ def build_shared_instrument_inference(
 
     symbols = _strings(_symbol(value) for value in requested_symbols or [])
     created_at = _utc(observed_at)
+    market_rule_catalog = _strings(market_rule_ids)
     candidates: Dict[str, List[Dict[str, object]]] = {}
     account_rows: List[Dict[str, object]] = []
     for account_id, raw_projection in dict(projection_results or {}).items():
@@ -206,6 +323,11 @@ def build_shared_instrument_inference(
         if not projection_is_verified(projection):
             continue
         inference = dict(projection.get("inferenceBox") or {})
+        reasoning_context = (
+            projection.get("reasoningContext")
+            if isinstance(projection.get("reasoningContext"), Mapping)
+            else {}
+        )
         traces = [dict(item) for item in inference.get("traces") or [] if isinstance(item, Mapping)]
         relations = [dict(item) for item in inference.get("relations") or [] if isinstance(item, Mapping)]
         inferred_symbols = _strings(
@@ -237,6 +359,10 @@ def build_shared_instrument_inference(
                 for relation in symbol_relations
                 if _text(relation.get("ruleId") or relation.get("semanticRuleId")) in market_rule_ids
             ]
+            source_revision_fingerprint = market_source_revision_fingerprint(
+                reasoning_context,
+                symbol,
+            )
             market_payload = {
                 "contractVersion": SHARED_INSTRUMENT_INFERENCE_VERSION,
                 "symbol": symbol,
@@ -246,10 +372,26 @@ def build_shared_instrument_inference(
                 "relations": market_relations,
                 "traces": market_traces,
                 "ruleIds": sorted(market_rule_ids),
+                "matchedMarketRuleIds": sorted(market_rule_ids),
+                "marketRuleCatalogIds": list(market_rule_catalog),
+                "sourceRevisionFingerprint": source_revision_fingerprint,
+                "marketInputFingerprint": _text(
+                    ((market_input_fingerprints or {}).get(_text(account_id)) or {}).get(symbol)
+                ),
                 "scopeState": MARKET_SHARED_SCOPE,
                 "decisionAuthority": "none",
             }
-            semantic_fingerprint = _hash(market_payload) if market_traces else ""
+            semantic_payload = {
+                key: value
+                for key, value in market_payload.items()
+                if key != "sourceRevisionFingerprint"
+                and key != "marketInputFingerprint"
+            }
+            semantic_fingerprint = (
+                _hash(semantic_payload)
+                if market_traces or (market_rule_catalog and source_revision_fingerprint)
+                else ""
+            )
             source_identity = {
                 "deploymentId": _text(deployment_id),
                 "accountId": _text(account_id),

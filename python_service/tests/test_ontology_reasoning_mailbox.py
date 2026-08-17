@@ -349,27 +349,30 @@ class MySQLMailboxConnection:
             return MySQLCursor({**slot, "event_json": event.get("event_json", "")})
         if query.startswith("INSERT INTO ontology_reasoning_mailbox_events"):
             self.events[str(values[0])] = {
+                "source_snapshot_id": str(values[1]),
+                "state": str(values[3]),
+                "unresolved": int(values[4]),
+                "reason": str(values[5]),
+                "event_json": str(values[6]),
+            }
+            return MySQLCursor()
+        if query.startswith("UPDATE ontology_reasoning_mailbox_events SET source_snapshot_id"):
+            event = self.events[str(values[7])]
+            event.update({
+                "source_snapshot_id": str(values[0]),
                 "state": str(values[2]),
                 "unresolved": int(values[3]),
                 "reason": str(values[4]),
                 "event_json": str(values[5]),
-            }
-            return MySQLCursor()
-        if query.startswith("UPDATE ontology_reasoning_mailbox_events SET occurred_at"):
-            event = self.events[str(values[6])]
-            event.update({
-                "state": str(values[1]),
-                "unresolved": int(values[2]),
-                "reason": str(values[3]),
-                "event_json": str(values[4]),
             })
             return MySQLCursor()
         if query.startswith("INSERT IGNORE INTO ontology_reasoning_mailbox_events"):
             self.events.setdefault(str(values[0]), {
-                "state": str(values[2]),
+                "source_snapshot_id": str(values[1]),
+                "state": str(values[3]),
                 "unresolved": 0,
-                "reason": str(values[3]),
-                "event_json": str(values[4]),
+                "reason": str(values[4]),
+                "event_json": str(values[5]),
             })
             return MySQLCursor()
         if query.startswith("INSERT INTO ontology_reasoning_work_items"):

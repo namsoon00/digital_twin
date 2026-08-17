@@ -314,6 +314,11 @@ class OntologyWorldProjectionRunner:
         reason = str((result or {}).get("reason") or "").strip()
         return (status + (": " + reason if reason else ""))[:1000]
 
+    @staticmethod
+    def deferred_result(result: Dict[str, object]) -> bool:
+        status = str((result or {}).get("status") or "").strip().lower()
+        return status.startswith("deferred-") or status == "staged-scoped-manifest"
+
     def full_rebuild_maintenance(self, world_id: str) -> Dict[str, object]:
         """Prune legacy generations after an explicit projection-contract rebuild."""
         repository = getattr(self.projection_recorder, "repository", None)
@@ -534,7 +539,7 @@ class OntologyWorldProjectionRunner:
                 ),
                 "durationMs": int((time.monotonic() - started) * 1000),
             }
-        completed, retried = [], []
+        completed, retried, postponed = [], [], []
         details = []
         for job in jobs:
             job_id = str(job.get("jobId") or "")
@@ -574,6 +579,16 @@ class OntologyWorldProjectionRunner:
                     completed.append(job_id)
                     details.append(kind + ":" + job_id[-10:] + "=" + str(result.get("status") or "ok"))
                     continue
+                if self.deferred_result(result) and callable(getattr(self.outbox, "defer", None)):
+                    deferred_result = self.outbox.defer(
+                        job_id,
+                        self.worker_id,
+                        self.retry_reason(result),
+                        retry_after_seconds=int(result.get("recommendedRetryAfterSeconds") or 10),
+                    )
+                    postponed.append({"jobId": job_id, **dict(deferred_result or {})})
+                    details.append(kind + ":" + job_id[-10:] + "=deferred")
+                    continue
                 retry = self.outbox.retry(
                     job_id,
                     self.worker_id,
@@ -606,8 +621,10 @@ class OntologyWorldProjectionRunner:
             "claimedCount": len(jobs),
             "completedCount": len(completed),
             "retryCount": len(retried),
+            "deferredCount": len(postponed),
             "completedJobIds": completed,
             "retries": retried,
+            "deferredJobs": postponed,
             "reasoningQueue": reasoning_queue,
             "reasoningQueueBypassed": bool(bypass_reasoning_queue),
             "prunedCompletedCount": pruned,

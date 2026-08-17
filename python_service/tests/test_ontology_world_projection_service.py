@@ -12,6 +12,7 @@ class FakeOutbox:
         self.jobs = list(jobs)
         self.completed = []
         self.retries = []
+        self.deferred = []
         self.yielded = []
         self.pruned = 0
         self.rebuild_requeue_result = None
@@ -39,6 +40,17 @@ class FakeOutbox:
             "maxAttempts": max_attempts,
         }
         self.retries.append((job_id, worker_id, payload))
+        return payload
+
+    def defer(self, job_id, worker_id, reason, retry_after_seconds=10):
+        payload = {
+            "status": "deferred",
+            "jobId": job_id,
+            "reason": reason,
+            "retryAfterSeconds": retry_after_seconds,
+            "failureAttemptCharged": False,
+        }
+        self.deferred.append((job_id, worker_id, payload))
         return payload
 
     def prune_completed(self, _hours):
@@ -336,7 +348,7 @@ class OntologyWorldProjectionRunnerTests(unittest.TestCase):
         stored = outbox.completed[0][2]
         self.assertEqual("ok", stored["postRebuildMaintenance"]["status"])
 
-    def test_deferred_shared_projection_is_retried_and_not_acknowledged(self):
+    def test_deferred_shared_projection_is_postponed_without_failure_attempt(self):
         outbox = FakeOutbox([projection_job()])
         recorder = FakeRecorder({
             "status": "deferred-market-world-write-lease",
@@ -347,9 +359,12 @@ class OntologyWorldProjectionRunnerTests(unittest.TestCase):
         result = runner.run_once(limit=1)
 
         self.assertEqual(0, result["completedCount"])
-        self.assertEqual(1, result["retryCount"])
+        self.assertEqual(0, result["retryCount"])
+        self.assertEqual(1, result["deferredCount"])
         self.assertEqual([], outbox.completed)
-        self.assertIn("deferred-market-world-write-lease", outbox.retries[0][2]["reason"])
+        self.assertEqual([], outbox.retries)
+        self.assertFalse(outbox.deferred[0][2]["failureAttemptCharged"])
+        self.assertIn("deferred-market-world-write-lease", outbox.deferred[0][2]["reason"])
 
     def test_unknown_projection_kind_is_retried_without_touching_the_recorder(self):
         outbox = FakeOutbox([projection_job("unsupported")])

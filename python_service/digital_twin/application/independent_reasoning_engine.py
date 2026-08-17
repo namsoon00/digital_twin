@@ -352,8 +352,9 @@ class IndependentReasoningInputAssembler:
 class ScopedTypeDBInferenceExecutor:
     """Project only the requested scope and read the resulting InferenceBox."""
 
-    def __init__(self, projection_recorder):
+    def __init__(self, projection_recorder, shared_inference_service=None):
         self.projection_recorder = projection_recorder
+        self.shared_inference_service = shared_inference_service
 
     def execute(self, request: IndependentReasoningRequest, snapshots, progress_callback=None):
         results = {}
@@ -364,11 +365,31 @@ class ScopedTypeDBInferenceExecutor:
                 if callable(progress_callback):
                     progress_callback(stage, {"accountId": account_id, **dict(payload or {})})
 
+            reasoning_context = dict(request.context)
+            reuse_proof = {"status": "not-configured", "reuseEligible": False}
+            if self.shared_inference_service is not None:
+                try:
+                    reuse_proof = dict(
+                        self.shared_inference_service.execution_reuse_proof(
+                            reasoning_context,
+                            request.symbols,
+                            snapshot=snapshot,
+                        ) or {}
+                    )
+                except Exception as error:
+                    reuse_proof = {
+                        "status": "error",
+                        "reuseEligible": False,
+                        "reason": str(error)[:180],
+                    }
+            if bool(reuse_proof.get("reuseEligible")):
+                reasoning_context["sharedInferenceReuseProof"] = reuse_proof
+
             recorder = self.projection_recorder.record_snapshot
             parameters = inspect.signature(recorder).parameters
             kwargs = {
                 "target_symbols": list(request.symbols),
-                "reasoning_context": dict(request.context),
+                "reasoning_context": reasoning_context,
             }
             if "progress_callback" in parameters:
                 kwargs["progress_callback"] = progress
@@ -384,6 +405,26 @@ class ScopedTypeDBInferenceExecutor:
                 }
                 snapshot.metadata.setdefault("ontology", {})["projection"] = result
             results[account_id] = result
+            if self.shared_inference_service is not None:
+                try:
+                    publication = dict(
+                        self.shared_inference_service.publish_verified_results(
+                            {account_id: result},
+                            request.symbols,
+                            snapshots=[snapshot],
+                            observed_at=request.source_observed_at,
+                        ) or {}
+                    )
+                except Exception as error:
+                    publication = {"status": "error", "reason": str(error)[:180]}
+                result["sharedInferenceExecution"] = {
+                    "reuseProofStatus": str(reuse_proof.get("status") or ""),
+                    "reuseEligible": bool(reuse_proof.get("reuseEligible")),
+                    "publicationStatus": str(publication.get("status") or ""),
+                    "publishedSharedSymbolCount": int(
+                        publication.get("sharedSymbolCount") or 0
+                    ),
+                }
         return results
 
 
@@ -827,6 +868,13 @@ class IndependentReasoningJobRunner:
                         int(result.get("retry_after_seconds") or result.get("retryAfterSeconds") or 15),
                     )
                 outcome = "deferred"
+            elif status == "rejected" and callable(getattr(self.queue, "supersede", None)):
+                for job_id in job_ids:
+                    self.queue.supersede(
+                        job_id,
+                        str(result.get("reason") or "The immutable reasoning source was rejected."),
+                    )
+                outcome = "superseded"
             else:
                 for job_id in job_ids:
                     parameters = inspect.signature(self.queue.complete).parameters
@@ -903,6 +951,7 @@ class IndependentReasoningJobRunner:
         return (
             account_ids,
             str(boundary.get("accountId") or ""),
+            str(boundary.get("snapshotId") or ""),
             str(boundary.get("generatedAt") or ""),
             IndependentReasoningJobRunner.reasoning_lane(job),
         )

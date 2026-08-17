@@ -124,6 +124,11 @@ MYSQL_OPERATIONAL_INDEXES: Dict[str, Sequence[MySQLIndexDefinition]] = {
             "idx_reasoning_engine_job_release",
             "`deployment_id`, `release_fingerprint`, `job_status`, `completed_at`",
         ),
+        MySQLIndexDefinition(
+            "reasoning_engine_jobs",
+            "idx_reasoning_engine_job_source_snapshot",
+            "`source_snapshot_id`, `job_status`, `created_at`",
+        ),
     ),
     "service_accounts": (
         MySQLIndexDefinition("service_accounts", "idx_service_accounts_enabled_created", "`enabled`, `created_at`, `id`"),
@@ -146,6 +151,11 @@ MYSQL_OPERATIONAL_INDEXES: Dict[str, Sequence[MySQLIndexDefinition]] = {
             "ontology_reasoning_mailbox_events",
             "idx_reasoning_mailbox_events_state_occurred",
             "`state`, `occurred_at`, `event_id`",
+        ),
+        MySQLIndexDefinition(
+            "ontology_reasoning_mailbox_events",
+            "idx_reasoning_mailbox_events_source_snapshot",
+            "`source_snapshot_id`, `state`, `event_id`",
         ),
     ),
     "ontology_reasoning_mailbox": (
@@ -459,8 +469,17 @@ MYSQL_OPERATIONAL_INDEXES: Dict[str, Sequence[MySQLIndexDefinition]] = {
 
 
 MYSQL_OPERATIONAL_COLUMNS: Dict[str, Sequence[MySQLColumnDefinition]] = {
+    "ontology_reasoning_mailbox_events": (
+        MySQLColumnDefinition(
+            "ontology_reasoning_mailbox_events",
+            "source_snapshot_id",
+            "VARCHAR(191) NOT NULL DEFAULT ''",
+        ),
+    ),
     "reasoning_engine_jobs": (
         MySQLColumnDefinition("reasoning_engine_jobs", "heartbeat_at", "VARCHAR(40) NOT NULL DEFAULT ''"),
+        MySQLColumnDefinition("reasoning_engine_jobs", "source_snapshot_id", "VARCHAR(191) NOT NULL DEFAULT ''"),
+        MySQLColumnDefinition("reasoning_engine_jobs", "source_snapshot_at", "VARCHAR(40) NOT NULL DEFAULT ''"),
         MySQLColumnDefinition("reasoning_engine_jobs", "release_fingerprint", "VARCHAR(64) NOT NULL DEFAULT ''"),
         MySQLColumnDefinition("reasoning_engine_jobs", "validation_cohort_id", "VARCHAR(96) NOT NULL DEFAULT ''"),
         MySQLColumnDefinition("reasoning_engine_jobs", "runtime_revision", "VARCHAR(64) NOT NULL DEFAULT ''"),

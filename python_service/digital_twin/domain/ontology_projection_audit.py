@@ -128,10 +128,43 @@ def compact_reasoning_request_context(
     compact_verified_source_snapshot = {
         key: verified_source_snapshot.get(key)
         for key in [
-            "version", "generatedAt", "accountId", "positionChangedCount", "portfolioContextChanged",
+            "version", "snapshotId", "generatedAt", "accountId", "positionChangedCount", "portfolioContextChanged",
             "externalSignalGroups", "cryptoTransitionTargetSymbols",
         ]
         if verified_source_snapshot.get(key) not in (None, "", [], {})
+    }
+    shared_reuse = values.get("sharedInferenceReuseProof")
+    shared_reuse = shared_reuse if isinstance(shared_reuse, Mapping) else {}
+    compact_shared_reuse = {
+        "contractVersion": str(shared_reuse.get("contractVersion") or "")[:80],
+        "status": str(shared_reuse.get("status") or "")[:80],
+        "reuseEligible": bool(shared_reuse.get("reuseEligible")),
+        "deploymentId": str(shared_reuse.get("deploymentId") or "")[:191],
+        "releaseFingerprint": str(shared_reuse.get("releaseFingerprint") or "")[:191],
+        "targetSymbols": _clean_symbols(shared_reuse.get("targetSymbols") or [])[:80],
+        "marketRuleCatalogIds": clean_list(
+            shared_reuse.get("marketRuleCatalogIds"), limit=160
+        ),
+        "matchedMarketRuleIds": clean_list(
+            shared_reuse.get("matchedMarketRuleIds"), limit=160
+        ),
+        "symbols": {
+            str(symbol or "").upper().strip(): {
+                "snapshotId": str(dict(proof or {}).get("snapshotId") or "")[:191],
+                "semanticFingerprint": str(
+                    dict(proof or {}).get("semanticFingerprint") or ""
+                )[:64],
+                "sourceRevisionFingerprint": str(
+                    dict(proof or {}).get("sourceRevisionFingerprint") or ""
+                )[:64],
+                "marketInputFingerprint": str(
+                    dict(proof or {}).get("marketInputFingerprint") or ""
+                )[:64],
+                "sourceAsOf": str(dict(proof or {}).get("sourceAsOf") or "")[:80],
+            }
+            for symbol, proof in dict(shared_reuse.get("symbols") or {}).items()
+            if str(symbol or "").strip() and isinstance(proof, Mapping)
+        },
     }
     return {
         "version": str(values.get("version") or REASONING_REQUEST_CONTEXT_VERSION),
@@ -285,6 +318,7 @@ def compact_reasoning_request_context(
         # current-state generation may be delivered, never a RuleBox rule.
         "cryptoTransitions": compact_crypto_transitions,
         "verifiedSourceSnapshot": compact_verified_source_snapshot,
+        "sharedInferenceReuseProof": compact_shared_reuse,
     }
 
 

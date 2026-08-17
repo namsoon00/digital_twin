@@ -8,6 +8,7 @@ from digital_twin.domain.ontology_projection_audit import projection_source_snap
 from digital_twin.domain.monitoring import RealtimeMonitor
 from digital_twin.domain.portfolio import AlertEvent, AccountSnapshot, PortfolioSummary, Position, account_snapshot_from_monitor_state
 from digital_twin.domain.repositories import MonitoringCycleRecordResult
+from digital_twin.domain.reasoning_source_snapshot import build_reasoning_source_snapshot
 from digital_twin.infrastructure.ontology_projection import PortfolioOntologyProjectionRecorder
 from digital_twin.infrastructure.reasoning_snapshot_source import LatestMonitorSnapshotReasoningSource
 from digital_twin.infrastructure.service_factory import FrozenReasoningSnapshotSource
@@ -86,6 +87,78 @@ def monitor_state(generated_at="2026-07-29T00:02:00Z"):
 
 
 class ReasoningSnapshotReplayTests(unittest.TestCase):
+    def test_reasoning_source_packet_is_deterministic_and_detached_from_live_state(self):
+        state = monitor_state()
+        first = build_reasoning_source_snapshot("acct", state)
+        second = build_reasoning_source_snapshot("acct", state)
+
+        self.assertEqual(first["snapshotId"], second["snapshotId"])
+        self.assertEqual(first["fingerprint"], second["fingerprint"])
+        self.assertTrue(first["payload"]["metadata"]["reasoningSnapshotReplay"]["immutableInput"])
+        first["payload"]["positions"]["AAPL"]["current_price"] = 1.0
+        self.assertEqual(100.0, state["positions"]["AAPL"]["current_price"])
+
+    def test_source_prefers_the_named_immutable_packet_over_a_newer_snapshot(self):
+        frozen = build_reasoning_source_snapshot("acct", monitor_state("2026-07-29T00:02:00Z"))
+
+        class PacketStore(SnapshotStore):
+            def reasoning_source_snapshot_metadata(self, snapshot_id):
+                self.assert_snapshot_id = snapshot_id
+                return {
+                    "snapshotId": snapshot_id,
+                    "accountId": "acct",
+                    "mode": "live",
+                    "status": "ok",
+                    "generatedAt": "2026-07-29T00:02:00Z",
+                }
+
+            def reasoning_source_snapshot_state(self, snapshot_id, target_symbols=None):
+                self.assert_snapshot_id = snapshot_id
+                self.target_symbols = list(target_symbols or [])
+                return deepcopy(frozen["payload"])
+
+        store = PacketStore(monitor_state("2026-07-29T00:09:00Z"))
+        source = LatestMonitorSnapshotReasoningSource(
+            store,
+            now_provider=lambda: datetime(2026, 7, 29, 0, 3, tzinfo=timezone.utc),
+        )
+        context = {
+            "sourceObservedAt": "2026-07-29T00:02:00Z",
+            "targetSymbols": ["AAPL"],
+            "verifiedSourceSnapshot": {
+                "snapshotId": frozen["snapshotId"],
+                "accountId": "acct",
+                "generatedAt": "2026-07-29T00:02:00Z",
+            },
+        }
+
+        self.assertTrue(source.preflight([account()], context)["ready"])
+        snapshot = source(account(), context)
+
+        self.assertEqual("2026-07-29T00:02:00Z", snapshot.generated_at)
+        self.assertEqual(["AAPL"], store.target_symbols)
+
+    def test_missing_named_packet_is_permanently_rejected(self):
+        class MissingPacketStore(SnapshotStore):
+            def reasoning_source_snapshot_metadata(self, _snapshot_id):
+                return {}
+
+            def reasoning_source_snapshot_state(self, _snapshot_id, target_symbols=None):
+                return {}
+
+        source = LatestMonitorSnapshotReasoningSource(MissingPacketStore(monitor_state()))
+        result = source.preflight([account()], {
+            "verifiedSourceSnapshot": {
+                "snapshotId": "reasoning-source:missing",
+                "accountId": "acct",
+                "generatedAt": "2026-07-29T00:02:00Z",
+            },
+        })
+
+        self.assertFalse(result["ready"])
+        self.assertTrue(result["permanent"])
+        self.assertEqual("rejected-source-snapshot", result["status"])
+
     def test_portfolio_scope_keeps_symbol_less_insight_for_the_matching_account(self):
         runner = MonitorRunner.__new__(MonitorRunner)
         portfolio_event = AlertEvent("acct", "Test", "warning", "portfolioOntologySignal", "portfolio", "Portfolio", [])

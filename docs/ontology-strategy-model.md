@@ -342,6 +342,19 @@ TypeDB를 쓰려면 런타임에 `typedb-driver` Python package와 TypeDB 서버
 
 그래프 저장소 스키마 준비가 실패해도 원본 수집 흐름은 막지 않으며, 결과에는 `schemaPrepared`와 `schemaReason`을 남긴다.
 
+## Immutable Reasoning Input And Shared Market Reuse
+
+모니터 스냅샷을 저장할 때 `ReasoningSourceSnapshot`을 같은 MySQL 트랜잭션에 함께 저장한다. 이 패킷은 계정 상태, 시세·외부 신호, 수집 기준 시각, 입력 지문을 묶은 불변 입력이다. V1 메일박스와 V2 엔진 작업은 모두 `sourceSnapshotId`를 참조해야 하며, 실행 시점의 최신 상태로 바꿔 읽지 않는다. 참조 패킷이 보존 기간 밖으로 사라진 오래된 작업은 영구 거절 후 `superseded`로 끝내고 재시도 대기열에 다시 넣지 않는다.
+
+시장 공통 추론은 다음 조건을 모두 만족할 때만 계정 간 재사용한다.
+
+- RuleBox 조건이 가격, 거래, 외부 시장 신호처럼 계정과 무관한 사실만 읽는다.
+- 종목의 원천 revision vector와 시장 입력 지문이 정확히 같다.
+- 이전 결과가 동일한 배포·RuleBox 버전에서 TypeDB native 추론을 완료했다.
+- 공유 결과는 후보 규칙 축소에만 사용하며, 보유 비중·손익·투자 성향 같은 계정 규칙은 계정 Overlay에서 다시 실행한다.
+
+첫 계정이 검증된 시장 결과를 게시하면 같은 micro-batch의 다음 계정부터 이를 사용할 수 있다. 어느 조건이든 맞지 않으면 최적화를 포기하고 해당 계정의 전체 대상 규칙을 실행한다. 공유 결과는 투자 판단 권한을 갖지 않으며, 최종 InferenceBox는 항상 계정 Overlay와 세대 정합성을 확인해야 한다.
+
 ## AI Prompt Contract
 
 AI에는 다음 데이터를 함께 전달한다.

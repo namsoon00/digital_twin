@@ -75,13 +75,17 @@ class LatestMonitorSnapshotReasoningSource:
         reasoning_context: Dict[str, object] = None,
     ) -> Dict[str, object]:
         context = reasoning_context if isinstance(reasoning_context, dict) else {}
-        for value in context.get("verifiedSourceSnapshots") or []:
+        candidates = list(context.get("verifiedSourceSnapshots") or [])
+        singular = context.get("verifiedSourceSnapshot")
+        if isinstance(singular, dict):
+            candidates.append(singular)
+        for value in candidates:
             if not isinstance(value, dict):
                 continue
             boundary_account = str(value.get("accountId") or "").strip()
             if boundary_account and boundary_account != str(account_id or "").strip():
                 continue
-            if str(value.get("generatedAt") or "").strip():
+            if str(value.get("snapshotId") or value.get("generatedAt") or "").strip():
                 return dict(value)
         return {}
 
@@ -91,6 +95,23 @@ class LatestMonitorSnapshotReasoningSource:
         reasoning_context: Dict[str, object] = None,
     ) -> Dict[str, object]:
         boundary = self.source_snapshot_boundary(account_id, reasoning_context)
+        boundary_snapshot_id = str(boundary.get("snapshotId") or "").strip()
+        source_packet_reader = getattr(
+            self.monitor_store,
+            "reasoning_source_snapshot_state",
+            None,
+        )
+        if boundary_snapshot_id and callable(source_packet_reader):
+            try:
+                state = source_packet_reader(
+                    boundary_snapshot_id,
+                    target_symbols=self.target_symbols(reasoning_context),
+                )
+            except Exception:
+                state = None
+            # Never replace an explicitly named immutable packet with a newer
+            # mutable snapshot. Missing packets are terminal replay gaps.
+            return copy.deepcopy(state) if isinstance(state, dict) else {}
         boundary_generated_at = str(boundary.get("generatedAt") or "").strip()
         point_in_time_reader = getattr(self.monitor_store, "reasoning_snapshot_state_at", None)
         if boundary_generated_at and callable(point_in_time_reader):
@@ -133,6 +154,27 @@ class LatestMonitorSnapshotReasoningSource:
         stores retain the in-memory fallback.
         """
         boundary = self.source_snapshot_boundary(account_id, reasoning_context)
+        boundary_snapshot_id = str(boundary.get("snapshotId") or "").strip()
+        source_packet_reader = getattr(
+            self.monitor_store,
+            "reasoning_source_snapshot_metadata",
+            None,
+        )
+        if boundary_snapshot_id and callable(source_packet_reader):
+            try:
+                value = source_packet_reader(boundary_snapshot_id)
+            except Exception:
+                value = None
+            if isinstance(value, dict) and value:
+                return dict(value)
+            return {
+                "snapshotId": boundary_snapshot_id,
+                "accountId": str(account_id or ""),
+                "mode": "missing",
+                "status": "Immutable reasoning source packet is unavailable",
+                "generatedAt": str(boundary.get("generatedAt") or ""),
+                "permanentMissing": True,
+            }
         boundary_generated_at = str(boundary.get("generatedAt") or "").strip()
         point_in_time_reader = getattr(self.monitor_store, "reasoning_snapshot_metadata_at", None)
         if boundary_generated_at and callable(point_in_time_reader):
@@ -147,6 +189,7 @@ class LatestMonitorSnapshotReasoningSource:
                 "mode": "missing",
                 "status": "Point-in-time monitor snapshot is unavailable",
                 "generatedAt": boundary_generated_at,
+                "permanentMissing": True,
             }
         reader = getattr(self.monitor_store, "snapshot_metadata", None)
         if callable(reader):
@@ -232,8 +275,13 @@ class LatestMonitorSnapshotReasoningSource:
             if not monitor_state_has_live_account_data(metadata):
                 account_rows.append({
                     "accountId": account_id,
-                    "status": "deferred",
-                    "reason": "No verified live monitor snapshot is available for this account.",
+                    "status": "rejected" if metadata.get("permanentMissing") else "deferred",
+                    "permanent": bool(metadata.get("permanentMissing")),
+                    "reason": (
+                        "The immutable reasoning source packet is unavailable and cannot be recreated safely."
+                        if metadata.get("permanentMissing")
+                        else "No verified live monitor snapshot is available for this account."
+                    ),
                     "retryAfterSeconds": self.retry_after_seconds(),
                     "sourceObservedAt": str((reasoning_context or {}).get("sourceObservedAt") or ""),
                     "snapshotGeneratedAt": str(metadata.get("generatedAt") or ""),
@@ -248,7 +296,12 @@ class LatestMonitorSnapshotReasoningSource:
             first = deferred[0]
             return {
                 "ready": False,
-                "status": "deferred-source-snapshot",
+                "permanent": bool(first.get("permanent")),
+                "status": (
+                    "rejected-source-snapshot"
+                    if first.get("permanent")
+                    else "deferred-source-snapshot"
+                ),
                 "reason": str(first.get("reason") or "The latest verified monitor snapshot is not ready."),
                 "retryAfterSeconds": max(1, int(first.get("retryAfterSeconds") or self.retry_after_seconds())),
                 "accounts": account_rows,

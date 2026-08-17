@@ -51,6 +51,7 @@ MYSQL_OPERATIONAL_COMPACTION_TABLES = frozenset({
     "domain_events",
     "monitor_snapshots",
     "monitor_snapshot_history",
+    "verified_reasoning_source_snapshots",
     "notification_jobs",
     "notification_article_delivery_ledger",
     "ai_inference_subject_heads",
@@ -418,6 +419,26 @@ def _delete_stale_rows(connection, target: MySQLRetentionTarget, cutoff_iso: str
         + " ORDER BY "
         + time_column
         + " LIMIT %s"
+    )
+    return _delete_one_batch(connection, sql, (cutoff_iso, batch_size))
+
+
+def _delete_stale_reasoning_source_snapshots(connection, cutoff_iso: str, batch_size: int) -> int:
+    """Delete replay packets only after every referencing job is terminal."""
+
+    sql = (
+        "DELETE FROM `verified_reasoning_source_snapshots` WHERE snapshot_id IN ("
+        "SELECT snapshot_id FROM (SELECT source.snapshot_id "
+        "FROM `verified_reasoning_source_snapshots` source "
+        "WHERE source.created_at < %s AND NOT EXISTS ("
+        "SELECT 1 FROM `reasoning_engine_jobs` job "
+        "WHERE job.source_snapshot_id = source.snapshot_id "
+        "AND job.job_status IN ('queued', 'retry', 'processing')"
+        ") AND NOT EXISTS ("
+        "SELECT 1 FROM `ontology_reasoning_mailbox_events` mailbox "
+        "WHERE mailbox.source_snapshot_id = source.snapshot_id "
+        "AND mailbox.state IN ('pending', 'direct-pending')"
+        ") ORDER BY source.created_at, source.snapshot_id LIMIT %s) stale_sources)"
     )
     return _delete_one_batch(connection, sql, (cutoff_iso, batch_size))
 
@@ -955,6 +976,14 @@ def apply_mysql_operational_history_retention(
             deleted = _delete_stale_rows(connection, target, cutoff_iso, batch_size)
             deleted_by_table[target.table] = deleted
             deleted_by_policy["time:" + target.table] = deleted
+
+        source_snapshot_deleted = _delete_stale_reasoning_source_snapshots(
+            connection,
+            cutoff_iso,
+            batch_size,
+        )
+        deleted_by_table["verified_reasoning_source_snapshots"] = source_snapshot_deleted
+        deleted_by_policy["terminal:verified_reasoning_source_snapshots"] = source_snapshot_deleted
 
         shared_inference_deleted = _delete_stale_shared_inference_rows(
             connection,

@@ -24,6 +24,7 @@ from .investment_research import research_evidence_from_payload
 from .materiality import market_change_materiality
 from .ontology_projection_input import compact_external_signals_for_ontology
 from .portfolio import AccountSnapshot, Position
+from .reasoning_source_snapshot import reasoning_source_snapshot_id
 
 
 VERIFIED_MONITOR_SNAPSHOT_TRIGGER = "verified-monitor-snapshot"
@@ -762,6 +763,10 @@ def verified_monitor_snapshot_reasoning_event(
         changed_fields_by_symbol=changed_fields_by_symbol,
         snapshot_barrier={
             "version": VERIFIED_MONITOR_SNAPSHOT_VERSION,
+            "snapshotId": reasoning_source_snapshot_id(
+                snapshot.account_id,
+                snapshot.generated_at,
+            ),
             "generatedAt": str(snapshot.generated_at or ""),
             "accountId": str(snapshot.account_id or ""),
             "positionChangedCount": position_changed_count,

@@ -46,6 +46,7 @@ from ..domain.ontology_projection_input import (
     reasoning_snapshot_symbols,
 )
 from ..domain.portfolio import AccountSnapshot, AlertEvent, monitor_state_has_live_account_data
+from ..domain.reasoning_source_snapshot import build_reasoning_source_snapshot
 from ..domain.repositories import MonitoringCycleRecordResult
 from ..domain.symbol_universe import ListedSymbol, normalize_market, normalize_symbol, utc_now_iso as symbol_utc_now_iso
 from ..domain.verified_snapshot_reasoning import verified_monitor_snapshot_reasoning_event
@@ -379,6 +380,52 @@ class MySQLMonitorStore(MySQLOperationalConnection):
             "generatedAt": str(state.get("generatedAt") or generated_at or ""),
         }
 
+    def reasoning_source_snapshot_state(
+        self,
+        snapshot_id: str,
+        target_symbols=None,
+    ) -> Dict[str, object]:
+        """Read one immutable, queue-owned reasoning source packet."""
+
+        del target_symbols  # The packet is already bounded and replayable.
+        with self.connect() as connection:
+            row = connection.execute(
+                """
+                SELECT payload_json
+                FROM verified_reasoning_source_snapshots
+                WHERE snapshot_id = %s
+                LIMIT 1
+                """,
+                (str(snapshot_id or ""),),
+            ).fetchone() or {}
+        payload = _json_loads(row.get("payload_json"), {})
+        return dict(payload or {}) if isinstance(payload, dict) else {}
+
+    def reasoning_source_snapshot_metadata(self, snapshot_id: str) -> Dict[str, object]:
+        with self.connect() as connection:
+            row = connection.execute(
+                """
+                SELECT snapshot_id, account_id, provider, mode, status,
+                       generated_at, contract_version, fingerprint
+                FROM verified_reasoning_source_snapshots
+                WHERE snapshot_id = %s
+                LIMIT 1
+                """,
+                (str(snapshot_id or ""),),
+            ).fetchone() or {}
+        if not row:
+            return {}
+        return {
+            "snapshotId": str(row.get("snapshot_id") or ""),
+            "accountId": str(row.get("account_id") or ""),
+            "provider": str(row.get("provider") or ""),
+            "mode": str(row.get("mode") or ""),
+            "status": str(row.get("status") or ""),
+            "generatedAt": str(row.get("generated_at") or ""),
+            "contractVersion": str(row.get("contract_version") or ""),
+            "fingerprint": str(row.get("fingerprint") or ""),
+        }
+
     def load_sent(self) -> Dict[str, object]:
         with self.connect() as connection:
             rows = connection.execute("SELECT sent_key, sent_at FROM monitor_sent").fetchall()
@@ -415,8 +462,16 @@ class MySQLMonitorStore(MySQLOperationalConnection):
     ) -> None:
         updated_at = stamp or utc_now()
         generated_at = str(state.get("generatedAt") or updated_at)
+        reasoning_state = dict(state or {})
+        reasoning_state["generatedAt"] = generated_at
         temporal_projection = compact_monitor_state_for_ontology(
             state,
+            settings=self.runtime_settings,
+        )
+        source_snapshot = build_reasoning_source_snapshot(
+            account_id,
+            reasoning_state,
+            previous_state=previous_state,
             settings=self.runtime_settings,
         )
         connection.execute(
@@ -458,6 +513,30 @@ class MySQLMonitorStore(MySQLOperationalConnection):
                 projection_payload_json = VALUES(projection_payload_json), created_at = VALUES(created_at)
             """,
             (account_id, generated_at, json_dumps(state), json_dumps(temporal_projection), updated_at),
+        )
+        connection.execute(
+            """
+            INSERT IGNORE INTO verified_reasoning_source_snapshots (
+                snapshot_id, account_id, account_label, provider, mode, status,
+                generated_at, contract_version, fingerprint, symbols_json,
+                payload_json, created_at, updated_at
+            ) VALUES (%s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s)
+            """,
+            (
+                source_snapshot["snapshotId"],
+                source_snapshot["accountId"],
+                source_snapshot["accountLabel"],
+                source_snapshot["provider"],
+                source_snapshot["mode"],
+                source_snapshot["status"],
+                source_snapshot["generatedAt"],
+                source_snapshot["contractVersion"],
+                source_snapshot["fingerprint"],
+                json_dumps(source_snapshot["symbols"]),
+                json_dumps(source_snapshot["payload"]),
+                updated_at,
+                updated_at,
+            ),
         )
 
     def upsert_reasoning_snapshot_inputs_with_connection(

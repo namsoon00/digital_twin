@@ -37,6 +37,14 @@ def direct_work_key(event_id: object) -> str:
     return DIRECT_WORK_PREFIX + clean if clean else ""
 
 
+def source_snapshot_id(source_event: Mapping[str, object]) -> str:
+    payload = source_event.get("payload") if isinstance(source_event, Mapping) else {}
+    payload = payload if isinstance(payload, Mapping) else {}
+    boundary = payload.get("verifiedSourceSnapshot")
+    boundary = boundary if isinstance(boundary, Mapping) else {}
+    return _text(boundary.get("snapshotId"))[:191]
+
+
 def local_reasoning_watch_pid(owner: object, hostname: str = "") -> int:
     """Return a local scheduler or one-shot PID encoded in a durable lease owner.
 
@@ -306,12 +314,13 @@ class MySQLOntologyReasoningMailboxStore(MySQLOperationalConnection):
         connection.execute(
             """
             INSERT IGNORE INTO ontology_reasoning_mailbox_events (
-                event_id, occurred_at, state, unresolved_entry_count, terminal_reason,
+                event_id, source_snapshot_id, occurred_at, state, unresolved_entry_count, terminal_reason,
                 event_json, created_at, updated_at
-            ) VALUES (%s, %s, %s, 0, %s, %s, %s, %s)
+            ) VALUES (%s, %s, %s, %s, 0, %s, %s, %s, %s)
             """,
             (
                 event_id,
+                source_snapshot_id(source_event),
                 _text(getattr(event, "occurred_at", "")),
                 _text(state) or "direct-pending",
                 _text(reason)[:255],
@@ -453,11 +462,12 @@ class MySQLOntologyReasoningMailboxStore(MySQLOperationalConnection):
                 connection.execute(
                     """
                     UPDATE ontology_reasoning_mailbox_events
-                    SET occurred_at = %s, state = %s, unresolved_entry_count = %s,
+                    SET source_snapshot_id = %s, occurred_at = %s, state = %s, unresolved_entry_count = %s,
                         terminal_reason = %s, event_json = %s, updated_at = %s
                     WHERE event_id = %s AND state = 'direct-pending'
                     """,
                     (
+                        source_snapshot_id(first.get("sourceEvent") or {}),
                         _text(first.get("occurredAt")), state, accepted, terminal_reason,
                         json_dumps(first.get("sourceEvent") or {}), stamp, event_id,
                     ),
@@ -466,12 +476,13 @@ class MySQLOntologyReasoningMailboxStore(MySQLOperationalConnection):
                 connection.execute(
                     """
                     INSERT INTO ontology_reasoning_mailbox_events (
-                        event_id, occurred_at, state, unresolved_entry_count, terminal_reason,
+                        event_id, source_snapshot_id, occurred_at, state, unresolved_entry_count, terminal_reason,
                         event_json, created_at, updated_at
-                    ) VALUES (%s, %s, %s, %s, %s, %s, %s, %s)
+                    ) VALUES (%s, %s, %s, %s, %s, %s, %s, %s, %s)
                     """,
                     (
                         event_id,
+                        source_snapshot_id(first.get("sourceEvent") or {}),
                         _text(first.get("occurredAt")),
                         state,
                         accepted,
@@ -1316,12 +1327,12 @@ class MySQLOntologyReasoningMailboxStore(MySQLOperationalConnection):
                     connection.execute(
                         """
                         INSERT IGNORE INTO ontology_reasoning_mailbox_events (
-                            event_id, occurred_at, state, unresolved_entry_count, terminal_reason,
+                            event_id, source_snapshot_id, occurred_at, state, unresolved_entry_count, terminal_reason,
                             event_json, created_at, updated_at
-                        ) VALUES (%s, %s, %s, 0, %s, %s, %s, %s)
+                        ) VALUES (%s, %s, %s, %s, 0, %s, %s, %s, %s)
                         """,
                         (
-                            event_id, occurred_at, terminal_state, _text(reason or terminal_state)[:255],
+                            event_id, source_snapshot_id(source_event), occurred_at, terminal_state, _text(reason or terminal_state)[:255],
                             json_dumps(source_event), stamp, stamp,
                         ),
                     )

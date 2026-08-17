@@ -4,6 +4,7 @@ from types import SimpleNamespace
 from digital_twin.application.independent_reasoning_engine import (
     IndependentReasoningInputAssembler,
     IndependentReasoningJobRunner,
+    ScopedTypeDBInferenceExecutor,
     V2ReasoningEngine,
     compact_projection_result,
 )
@@ -116,6 +117,61 @@ class FakeCycleRecorder:
 
 
 class IndependentReasoningEngineTests(unittest.TestCase):
+    def test_scoped_executor_reuses_verified_market_inference_within_batch(self):
+        class Recorder:
+            def __init__(self):
+                self.contexts = []
+
+            def record_snapshot(self, snapshot, target_symbols=None, reasoning_context=None):
+                del target_symbols
+                self.contexts.append(dict(reasoning_context or {}))
+                return {
+                    "status": "ok",
+                    "inferenceBox": {
+                        "nativeTypeDbReasoningCompleted": True,
+                        "generationAligned": True,
+                        "sourceAboxSnapshotId": "abox:" + str(snapshot.account_id),
+                        "inferenceGenerationId": "generation:" + str(snapshot.account_id),
+                        "relations": [],
+                        "traces": [],
+                    },
+                }
+
+        class SharedInference:
+            def __init__(self):
+                self.published = False
+
+            def execution_reuse_proof(self, _context, _symbols, snapshot=None):
+                del snapshot
+                return {
+                    "status": "ready" if self.published else "missing",
+                    "reuseEligible": self.published,
+                    "sharedMarketRuleIds": ["graph.market.recovery.v1"],
+                }
+
+            def publish_verified_results(self, *_args, **_kwargs):
+                self.published = True
+                return {"status": "ready", "sharedSymbolCount": 1}
+
+        recorder = Recorder()
+        executor = ScopedTypeDBInferenceExecutor(recorder, SharedInference())
+        request = independent_reasoning_request(
+            "ontology-v2-shadow",
+            [source_event("NVDA", ["a-1", "a-2"])],
+        )
+
+        results = executor.execute(
+            request,
+            [
+                SimpleNamespace(account_id="a-1", metadata={}),
+                SimpleNamespace(account_id="a-2", metadata={}),
+            ],
+        )
+
+        self.assertNotIn("sharedInferenceReuseProof", recorder.contexts[0])
+        self.assertTrue(recorder.contexts[1]["sharedInferenceReuseProof"]["reuseEligible"])
+        self.assertEqual("ready", results["a-2"]["sharedInferenceExecution"]["reuseProofStatus"])
+
     def test_request_scope_is_deterministic_and_symbol_bounded(self):
         event = source_event()
         first = independent_reasoning_request("ontology-v2-shadow", [event])
@@ -449,6 +505,57 @@ class IndependentReasoningEngineTests(unittest.TestCase):
         self.assertEqual("idle", result["status"])
         self.assertEqual(1, queue.claim_call["limit"])
         self.assertEqual("REALTIME", queue.claim_call["reasoningLane"])
+
+    def test_runner_supersedes_permanently_unrestorable_source_packet(self):
+        class Queue:
+            def __init__(self):
+                self.superseded = []
+
+            def claim(self, *_args, **_kwargs):
+                return [{"jobId": "job:old", "sourceEvent": source_event().to_dict()}]
+
+            def supersede(self, job_id, reason):
+                self.superseded.append((job_id, reason))
+
+            def defer(self, *_args):
+                raise AssertionError("permanent input loss must not be retried")
+
+            def complete(self, *_args, **_kwargs):
+                raise AssertionError("rejected input must not be completed")
+
+            def summary(self, _deployment_id):
+                return {"pendingCount": 0}
+
+        class Engine:
+            def descriptor(self):
+                return descriptor()
+
+            def consume(self, _events):
+                return {
+                    "request_id": "request:old",
+                    "status": "rejected",
+                    "retryable": False,
+                    "reason": "The immutable source packet is no longer available.",
+                }
+
+            def health(self):
+                return {"status": "degraded", "monitorRunnerUsed": False}
+
+        class Registry:
+            def get(self, _deployment_id):
+                return {"health": {}}
+
+            def update_health(self, _deployment_id, _health):
+                return None
+
+        queue = Queue()
+        runner = IndependentReasoningJobRunner(queue, Engine(), Registry())
+
+        result = runner.run_once()
+
+        self.assertEqual("superseded", result["status"])
+        self.assertEqual("job:old", queue.superseded[0][0])
+        self.assertIn("immutable source packet", queue.superseded[0][1])
 
 
 if __name__ == "__main__":

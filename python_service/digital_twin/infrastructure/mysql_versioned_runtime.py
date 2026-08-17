@@ -637,19 +637,25 @@ class MySQLReasoningEngineJobStore(MySQLOperationalConnection):
         superseded = 0
         for deployment_id in deployments:
             request = independent_reasoning_request(deployment_id, [event])
+            event_payload = dict(getattr(event, "payload", {}) or {})
+            source_boundary = event_payload.get("verifiedSourceSnapshot")
+            source_boundary = dict(source_boundary or {}) if isinstance(source_boundary, Mapping) else {}
             job_id = "reasoning-engine-job:" + uuid.uuid4().hex
             cursor = connection.execute(
                 """
                 INSERT IGNORE INTO reasoning_engine_jobs (
-                    job_id, deployment_id, source_event_id, scope_key,
+                    job_id, deployment_id, source_event_id, source_snapshot_id,
+                    source_snapshot_at, scope_key,
                     input_fingerprint, request_json, result_json, job_status,
                     priority, supersedable, reasoning_lane, available_at, created_at, updated_at
-                ) VALUES (%s, %s, %s, %s, %s, %s, '{}', 'queued', %s, %s, %s, %s, %s, %s)
+                ) VALUES (%s, %s, %s, %s, %s, %s, %s, %s, '{}', 'queued', %s, %s, %s, %s, %s, %s)
                 """,
                 (
                     job_id,
                     str(deployment_id or "")[:191],
                     str(getattr(event, "event_id", "") or "")[:191],
+                    str(source_boundary.get("snapshotId") or "")[:191],
+                    str(source_boundary.get("generatedAt") or "")[:40],
                     request.scope_id[:191],
                     request.input_fingerprint[:64],
                     canonical_json({
@@ -847,6 +853,20 @@ class MySQLReasoningEngineJobStore(MySQLOperationalConnection):
                 ),
             )
 
+    def supersede(self, job_id: str, reason: str) -> None:
+        stamp = iso_utc()
+        with self.connect() as connection:
+            connection.execute(
+                """
+                UPDATE reasoning_engine_jobs
+                SET job_status = 'superseded', lease_owner = '', lease_expires_at = '',
+                    heartbeat_at = '', available_at = '', last_error = %s,
+                    completed_at = %s, updated_at = %s
+                WHERE job_id = %s
+                """,
+                (str(reason or "")[:500], stamp, stamp, str(job_id or "")),
+            )
+
     def retry(self, job_id: str, error: str, max_attempts: int = 3) -> Dict[str, object]:
         with self.transaction() as connection:
             row = connection.execute(
@@ -1013,6 +1033,8 @@ class MySQLReasoningEngineJobStore(MySQLOperationalConnection):
             "jobId": str(values.get("job_id") or ""),
             "deploymentId": str(values.get("deployment_id") or ""),
             "sourceEventId": str(values.get("source_event_id") or ""),
+            "sourceSnapshotId": str(values.get("source_snapshot_id") or ""),
+            "sourceSnapshotAt": str(values.get("source_snapshot_at") or ""),
             "scopeKey": str(values.get("scope_key") or ""),
             "inputFingerprint": str(values.get("input_fingerprint") or ""),
             "request": dict(request.get("request") or {}),

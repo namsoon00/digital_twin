@@ -2284,6 +2284,8 @@ def install_supervisor() -> int:
         "KeepAlive": True,
         "ExitTimeOut": 180,
         "ProcessType": "Background",
+        "SoftResourceLimits": {"NumberOfFiles": 65536},
+        "HardResourceLimits": {"NumberOfFiles": 65536},
         "EnvironmentVariables": {"PYTHONUNBUFFERED": "1"},
         "StandardOutPath": str(supervisor_log_path()),
         "StandardErrorPath": str(supervisor_log_path()),

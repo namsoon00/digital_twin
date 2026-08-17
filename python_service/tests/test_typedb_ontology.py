@@ -10585,6 +10585,8 @@ class TypeDBOntologyRepositoryTests(unittest.TestCase):
         self.assertEqual(180, payload["ExitTimeOut"])
         self.assertTrue(payload["KeepAlive"])
         self.assertTrue(payload["RunAtLoad"])
+        self.assertEqual(65536, payload["SoftResourceLimits"]["NumberOfFiles"])
+        self.assertEqual(65536, payload["HardResourceLimits"]["NumberOfFiles"])
         self.assertEqual(
             ["launchctl", "kickstart", "gui/" + str(service_manager.os.getuid()) + "/com.orbitalpha.services"],
             run.call_args_list[-1].args[0],
